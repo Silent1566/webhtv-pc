@@ -1,0 +1,27 @@
+# Build outputs
+build/
+**/build/
+.dart_tool/
+.gradle/
+.idea/
+*.iml
+
+# Platform/generated outputs
+prototypes/flutter_media_kit/.flutter-plugins*
+prototypes/flutter_media_kit/linux/flutter/ephemeral/
+prototypes/flutter_media_kit/windows/flutter/ephemeral/
+prototypes/flutter_media_kit/macos/Flutter/ephemeral/
+
+# Test/runtime residue
+coverage/
+logs/
+tmp/
+*.log
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Locally provisioned Phase 0 toolchains
+.local/

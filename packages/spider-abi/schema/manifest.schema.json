@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webhtv.local/schema/spider-manifest.schema.json",
+  "title": "WebHTV Spider Manifest",
+  "type": "object",
+  "properties": {
+    "abi": { "const": "webhtv-ipc-v1" },
+    "abiMinor": { "type": "integer", "minimum": 0 },
+    "key": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "runtime": { "type": "string", "minLength": 1 },
+    "entry": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["home", "category", "detail", "search", "play", "proxy"] }
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "network": { "type": "boolean" },
+        "localProxy": { "type": "boolean" },
+        "ui": { "const": false },
+        "storage": { "enum": ["none", "cache-only"] },
+        "process": { "const": false },
+        "clipboard": { "const": false },
+        "browser": { "const": false }
+      },
+      "required": ["network", "localProxy", "ui", "storage", "process", "clipboard", "browser"],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "memoryMiB": { "type": "integer", "minimum": 16 },
+        "cpuSeconds": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "responseMiB": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["memoryMiB", "cpuSeconds", "concurrency", "responseMiB"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["abi", "abiMinor", "key", "name", "runtime", "entry", "capabilities", "permissions", "limits"],
+  "additionalProperties": true
+}

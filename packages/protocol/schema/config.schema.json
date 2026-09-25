@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webhtv.local/schema/config.schema.json",
+  "title": "WebHTV PC Configuration",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "spider": { "type": ["string", "null"] },
+    "wallpaper": { "type": ["string", "null"], "format": "uri-reference" },
+    "warningText": { "type": ["string", "null"] },
+    "msg": { "type": ["string", "null"] },
+    "sites": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/site" }
+    },
+    "parses": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parse" }
+    },
+    "flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lives": { "type": "array" },
+    "doh": { "type": "array" },
+    "rules": { "type": "array" },
+    "ads": { "type": "array" }
+  },
+  "required": ["sites"],
+  "additionalProperties": true,
+  "$defs": {
+    "site": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "integer", "minimum": 0 },
+        "api": { "type": "string", "minLength": 1 },
+        "searchable": { "type": ["integer", "boolean"] },
+        "quickSearch": { "type": ["integer", "boolean"] },
+        "filterable": { "type": ["integer", "boolean"] },
+        "changeable": { "type": ["integer", "boolean"] },
+        "jar": { "type": ["string", "null"] },
+        "ext": {},
+        "categories": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "header": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["key", "name", "type", "api"],
+      "additionalProperties": true
+    },
+    "parse": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "integer" },
+        "url": { "type": "string" },
+        "ext": {}
+      },
+      "required": ["name", "url"],
+      "additionalProperties": true
+    }
+  }
+}
