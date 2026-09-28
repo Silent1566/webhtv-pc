@@ -1,0 +1,881 @@
+/// WebHTV PC 核心协议模型：配置、站点、Result/Vod、解析器、播放结果。
+///
+/// 本文件只描述数据，不依赖 Flutter，也不发网络请求，便于单元测试直接覆盖
+/// 设计文档 §7、§8 的字段语义。
+library;
+
+// ---------------------------------------------------------------------------
+// JSON 取值工具：配置文件与站点数据大量使用字符串/数字混用字段（TVBox 生态
+// 常见），因此统一做宽松归一化，避免因类型差异导致整份配置导入失败。
+// ---------------------------------------------------------------------------
+
+/// 宽松读取字符串：数字、布尔、null 均按协议惯例转换。
+String? asString(Object? value) {
+  if (value == null) return null;
+  if (value is String) return value;
+  if (value is num || value is bool) return value.toString();
+  return null;
+}
+
+/// 读取字符串，缺失或空串返回 null。
+String? asNonEmptyString(Object? value) {
+  final text = asString(value);
+  if (text == null) return null;
+  final trimmed = text.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+int? asInt(Object? value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is bool) return value ? 1 : 0;
+  if (value is String) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    return int.tryParse(trimmed) ?? double.tryParse(trimmed)?.toInt();
+  }
+  return null;
+}
+
+/// TVBox 的 `0/1` 与 `true/false` 混用开关字段。
+bool asFlag(Object? value, {bool fallback = false}) {
+  final number = asInt(value);
+  if (number != null) return number != 0;
+  if (value is String) {
+    final lowered = value.trim().toLowerCase();
+    if (lowered == 'true') return true;
+    if (lowered == 'false') return false;
+  }
+  return fallback;
+}
+
+List<Object?> asList(Object? value) {
+  if (value is List) return value;
+  if (value == null) return const [];
+  return [value];
+}
+
+Map<String, Object?> asMap(Object? value) {
+  if (value is Map) {
+    return value.map((key, item) => MapEntry(key.toString(), item));
+  }
+  return const {};
+}
+
+/// 头部字段名大小写不敏感，输出时保留首次出现的原始键名（设计要求 §7.4.6）。
+class HeaderMap {
+  HeaderMap([Map<String, Object?> source = const {}]) {
+    for (final entry in source.entries) {
+      final value = asString(entry.value);
+      if (value == null || entry.key.trim().isEmpty) continue;
+      put(entry.key, value);
+    }
+  }
+
+  final Map<String, String> _byLowerCase = {};
+  final Map<String, String> _originalKeys = {};
+
+  /// 头部注入顺序固定为：全局 headers → 站点 header → 播放结果 header。
+  /// 后者覆盖前者的同名键（大小写不敏感）。
+  static HeaderMap merge(Iterable<HeaderMap?> layers) {
+    final merged = HeaderMap();
+    for (final layer in layers) {
+      if (layer == null) continue;
+      for (final entry in layer.entries) {
+        merged.put(entry.key, entry.value);
+      }
+    }
+    return merged;
+  }
+
+  void put(String key, String value) {
+    final normalized = key.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+    _byLowerCase[normalized] = value;
+    _originalKeys.putIfAbsent(normalized, () => key.trim());
+  }
+
+  String? operator [](String key) => _byLowerCase[key.trim().toLowerCase()];
+
+  bool containsKey(String key) => _byLowerCase.containsKey(key.trim().toLowerCase());
+
+  bool get isEmpty => _byLowerCase.isEmpty;
+
+  bool get isNotEmpty => _byLowerCase.isNotEmpty;
+
+  int get length => _byLowerCase.length;
+
+  Iterable<String> get keys => _originalKeys.values;
+
+  /// 遍历键值对，键为原始键名。用于合并与日志。
+  Iterable<MapEntry<String, String>> get entries => _byLowerCase.entries.map(
+    (entry) => MapEntry(_originalKeys[entry.key] ?? entry.key, entry.value),
+  );
+
+  /// 用于 HTTP 请求的键值对，保留原始键名。
+  Map<String, String> get asRequestHeaders {
+    final result = <String, String>{};
+    for (final entry in _byLowerCase.entries) {
+      result[_originalKeys[entry.key] ?? entry.key] = entry.value;
+    }
+    return result;
+  }
+
+  /// 只列出 header 名称，不含值，用于日志与诊断脱敏（§9.3.1、§11.3）。
+  List<String> get keyNames => _originalKeys.values.toList()..sort();
+
+  Map<String, String> toJson() => asRequestHeaders;
+
+  @override
+  String toString() => 'HeaderMap(keys=${keyNames.join(",")})';
+}
+
+// ---------------------------------------------------------------------------
+// 配置模型（§7.1、§7.2）
+// ---------------------------------------------------------------------------
+
+/// 顶层 `headers` 规则：按目标 host 匹配后注入请求 Header（§7.4.6）。
+class HeaderRule {
+  const HeaderRule({required this.host, required this.header});
+
+  final String host;
+  final HeaderMap header;
+
+  /// host 匹配支持 `*` 通配与包含规则；无通配时按“完全相同或作为子域后缀”匹配。
+  bool matches(String host) {
+    final pattern = this.host.trim().toLowerCase();
+    final target = host.trim().toLowerCase();
+    if (pattern.isEmpty) return false;
+    if (pattern == '*') return true;
+    if (pattern.contains('*')) {
+      final regex = RegExp(
+        '^${RegExp.escape(pattern).replaceAll(r'\*', '.*')}\$',
+      );
+      return regex.hasMatch(target);
+    }
+    return target == pattern || target.endsWith('.$pattern');
+  }
+
+  static HeaderRule? fromJson(Object? value) {
+    final map = asMap(value);
+    final host = asNonEmptyString(map['host']);
+    if (host == null) return null;
+    return HeaderRule(host: host, header: HeaderMap(asMap(map['header'])));
+  }
+}
+
+/// 解析器条目（§7.4.8、§12.1）。
+class ParseEntry {
+  const ParseEntry({
+    required this.name,
+    required this.type,
+    this.url,
+    this.ext,
+    this.flag,
+  });
+
+  final String name;
+
+  /// 0=JSON、1=Web 嗅探、2=JSON 扩展、3=Spider。
+  final int type;
+
+  final String? url;
+
+  /// `ext` 可以是 JSON 字符串或对象，按原始结构保留。
+  final Object? ext;
+
+  /// 可选标识，用于 `flag` 匹配。
+  final String? flag;
+
+  static ParseEntry? fromJson(Object? value) {
+    final map = asMap(value);
+    final name = asNonEmptyString(map['name']);
+    if (name == null) return null;
+    return ParseEntry(
+      name: name,
+      type: asInt(map['type']) ?? 0,
+      url: asNonEmptyString(map['url']),
+      ext: map.containsKey('ext') ? map['ext'] : null,
+      flag: asNonEmptyString(map['flag']),
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'name': name,
+    'type': type,
+    if (url != null) 'url': url,
+    if (ext != null) 'ext': ext,
+    if (flag != null) 'flag': flag,
+  };
+}
+
+/// 站点模型（§8.2）。未知字段通过 [extra] 原样保留，避免导入即丢字段。
+class Site {
+  Site({
+    required this.key,
+    required this.name,
+    required this.type,
+    required this.api,
+    this.jar,
+    this.ext,
+    HeaderMap? header,
+    this.timeoutSeconds,
+    this.searchable = false,
+    this.changeable = false,
+    this.quickSearch = false,
+    this.filterable = false,
+    this.categories = const [],
+    this.style,
+    this.hide = false,
+    this.indexs,
+    Map<String, Object?> extra = const {},
+  }) : header = header ?? HeaderMap(),
+       extra = Map.unmodifiable(extra);
+
+  final String key;
+  final String name;
+
+  /// 0=XML API、1=JSON API、2=JSON API 兼容、3=Spider、4=HTTP API + Base64 ext。
+  final int type;
+
+  final String api;
+  final String? jar;
+  final Object? ext;
+  final HeaderMap header;
+  final int? timeoutSeconds;
+  final bool searchable;
+  final bool changeable;
+  final bool quickSearch;
+  final bool filterable;
+  final List<String> categories;
+  final Object? style;
+  final bool hide;
+  final int? indexs;
+  final Map<String, Object?> extra;
+
+  static Site? fromJson(Object? value) {
+    final map = asMap(value);
+    final key = asNonEmptyString(map['key']) ?? asNonEmptyString(map['name']);
+    final name = asNonEmptyString(map['name']) ?? key;
+    if (key == null || name == null) return null;
+    final known = <String>{
+      'key',
+      'name',
+      'type',
+      'api',
+      'jar',
+      'ext',
+      'header',
+      'timeout',
+      'searchable',
+      'changeable',
+      'quickSearch',
+      'filterable',
+      'categories',
+      'style',
+      'hide',
+      'indexs',
+    };
+    final extra = <String, Object?>{};
+    for (final entry in map.entries) {
+      if (!known.contains(entry.key)) extra[entry.key] = entry.value;
+    }
+    return Site(
+      key: key,
+      name: name,
+      type: asInt(map['type']) ?? 0,
+      api: asString(map['api']) ?? '',
+      jar: asNonEmptyString(map['jar']),
+      ext: map.containsKey('ext') ? map['ext'] : null,
+      header: HeaderMap(asMap(map['header'])),
+      timeoutSeconds: asInt(map['timeout']),
+      searchable: asFlag(map['searchable']),
+      changeable: asFlag(map['changeable']),
+      quickSearch: asFlag(map['quickSearch']),
+      filterable: asFlag(map['filterable']),
+      categories: asList(map['categories'])
+          .map(asNonEmptyString)
+          .whereType<String>()
+          .toList(),
+      style: map['style'],
+      hide: asFlag(map['hide']),
+      indexs: asInt(map['indexs']),
+      extra: extra,
+    );
+  }
+
+  /// 解析优先级（§7.4.4）：站点 `jar` 优先，其次顶层 `spider`。
+  String? effectiveJar(String? globalSpider) {
+    final own = asNonEmptyString(jar);
+    if (own != null) return own;
+    return asNonEmptyString(globalSpider);
+  }
+
+  Map<String, Object?> toJson() => {
+    'key': key,
+    'name': name,
+    'type': type,
+    'api': api,
+    if (jar != null) 'jar': jar,
+    if (ext != null) 'ext': ext,
+    if (header.isNotEmpty) 'header': header.toJson(),
+    if (timeoutSeconds != null) 'timeout': timeoutSeconds,
+    'searchable': searchable ? 1 : 0,
+    'changeable': changeable ? 1 : 0,
+    'quickSearch': quickSearch ? 1 : 0,
+    if (filterable) 'filterable': 1,
+    if (categories.isNotEmpty) 'categories': categories,
+    if (style != null) 'style': style,
+    if (hide) 'hide': 1,
+    if (indexs != null) 'indexs': indexs,
+    ...extra,
+  };
+}
+
+/// 配置仓库条目（§7.4.2）。
+class ConfigRepositoryEntry {
+  const ConfigRepositoryEntry({this.name, required this.url});
+
+  final String? name;
+  final String url;
+
+  static ConfigRepositoryEntry? fromJson(Object? value) {
+    final direct = asNonEmptyString(value);
+    if (direct != null) return ConfigRepositoryEntry(url: direct);
+    final map = asMap(value);
+    final url = asNonEmptyString(map['url']) ?? asNonEmptyString(map['api']);
+    if (url == null) return null;
+    return ConfigRepositoryEntry(name: asNonEmptyString(map['name']), url: url);
+  }
+
+  Map<String, Object?> toJson() => {'name': name ?? url, 'url': url};
+}
+
+/// 顶层配置（§7.1）。未识别字段保存在 [extra] 中，导入后原样回写。
+class AppConfig {
+  AppConfig({
+    this.name,
+    this.spider,
+    this.sites = const [],
+    this.parses = const [],
+    this.flags = const [],
+    this.lives = const [],
+    this.doh = const [],
+    this.proxy = const [],
+    this.hosts = const [],
+    this.headers = const [],
+    this.rules = const [],
+    this.hlsRules = const [],
+    this.groupRules = const [],
+    this.ads = const [],
+    this.wallpaper,
+    this.logo,
+    this.notice,
+    this.home,
+    this.parse,
+    this.urls = const [],
+    this.msg,
+    this.hasMsgKey = false,
+    Map<String, Object?> extra = const {},
+  }) : extra = Map.unmodifiable(extra);
+
+  final String? name;
+  final String? spider;
+  final List<Site> sites;
+  final List<ParseEntry> parses;
+  final List<String> flags;
+  final List<Object?> lives;
+  final List<Object?> doh;
+  final List<Object?> proxy;
+  final List<Object?> hosts;
+  final List<HeaderRule> headers;
+  final List<Object?> rules;
+  final List<Object?> hlsRules;
+  final List<Object?> groupRules;
+  final List<Object?> ads;
+  final String? wallpaper;
+  final String? logo;
+  final String? notice;
+  final String? home;
+  final String? parse;
+  final List<ConfigRepositoryEntry> urls;
+
+  /// 配置对象自身声明的错误信息（§7.4.3）。
+  final String? msg;
+
+  /// 是否存在 `msg` 键。
+  ///
+  /// Android 当前实现在配置对象存在 `msg` 键时直接抛错，即使值是空串也一样；
+  /// 因此这里必须区分“键不存在”和“键存在但值为空”，不能只看 [msg] 是否为 null。
+  final bool hasMsgKey;
+
+  final Map<String, Object?> extra;
+
+  /// 配置仓库：没有 `sites` 但有 `urls`（§7.4.2）。
+  bool get isRepository => urls.isNotEmpty && sites.isEmpty;
+
+  Map<String, Object?> toJson() => {
+    ...extra,
+    if (name != null) 'name': name,
+    if (spider != null) 'spider': spider,
+    'sites': sites.map((site) => site.toJson()).toList(),
+    'parses': parses.map((entry) => entry.toJson()).toList(),
+    if (flags.isNotEmpty) 'flags': flags,
+    if (lives.isNotEmpty) 'lives': lives,
+    if (doh.isNotEmpty) 'doh': doh,
+    if (proxy.isNotEmpty) 'proxy': proxy,
+    if (hosts.isNotEmpty) 'hosts': hosts,
+    if (headers.isNotEmpty)
+      'headers': headers
+          .map((rule) => {'host': rule.host, 'header': rule.header.toJson()})
+          .toList(),
+    if (rules.isNotEmpty) 'rules': rules,
+    if (hlsRules.isNotEmpty) 'hlsRules': hlsRules,
+    if (groupRules.isNotEmpty) 'groupRules': groupRules,
+    if (ads.isNotEmpty) 'ads': ads,
+    if (wallpaper != null) 'wallpaper': wallpaper,
+    if (logo != null) 'logo': logo,
+    if (notice != null) 'notice': notice,
+    if (home != null) 'home': home,
+    if (parse != null) 'parse': parse,
+    if (urls.isNotEmpty) 'urls': urls.map((entry) => entry.toJson()).toList(),
+    if (msg != null) 'msg': msg,
+  };
+
+  /// 默认站点 key（§7.2 `home`）。
+  Site? defaultSite() {
+    final target = asNonEmptyString(home);
+    if (target != null) {
+      for (final site in sites) {
+        if (site.key == target || site.name == target) return site;
+      }
+    }
+    for (final site in sites) {
+      if (!site.hide) return site;
+    }
+    return sites.isEmpty ? null : sites.first;
+  }
+
+  AppConfig copyWith({
+    String? name,
+    String? spider,
+    List<Site>? sites,
+    List<ParseEntry>? parses,
+    String? notice,
+    String? home,
+    String? parse,
+    List<ConfigRepositoryEntry>? urls,
+    String? msg,
+    bool? hasMsgKey,
+  }) {
+    return AppConfig(
+      name: name ?? this.name,
+      spider: spider ?? this.spider,
+      sites: sites ?? this.sites,
+      parses: parses ?? this.parses,
+      flags: flags,
+      lives: lives,
+      doh: doh,
+      proxy: proxy,
+      hosts: hosts,
+      headers: headers,
+      rules: rules,
+      hlsRules: hlsRules,
+      groupRules: groupRules,
+      ads: ads,
+      wallpaper: wallpaper,
+      logo: logo,
+      notice: notice ?? this.notice,
+      home: home ?? this.home,
+      parse: parse ?? this.parse,
+      urls: urls ?? this.urls,
+      msg: msg ?? this.msg,
+      hasMsgKey: hasMsgKey ?? this.hasMsgKey,
+      extra: extra,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Result / Vod 模型（§8.3）
+// ---------------------------------------------------------------------------
+
+/// 分类条目。
+class VodClass {
+  const VodClass({required this.typeId, required this.typeName});
+
+  final String typeId;
+  final String typeName;
+
+  static VodClass? fromJson(Object? value) {
+    final map = asMap(value);
+    final id = asNonEmptyString(map['type_id']) ?? asNonEmptyString(map['typeId']);
+    final name =
+        asNonEmptyString(map['type_name']) ?? asNonEmptyString(map['typeName']);
+    if (id == null || name == null) return null;
+    return VodClass(typeId: id, typeName: name);
+  }
+}
+
+/// 分类筛选项（`type=1/2/4` 的 `filters`）。
+class VodFilterOption {
+  const VodFilterOption({required this.name, required this.value});
+
+  final String name;
+  final String value;
+
+  static VodFilterOption? fromJson(Object? value) {
+    final map = asMap(value);
+    final name = asNonEmptyString(map['n']) ?? asNonEmptyString(map['name']);
+    if (name == null) return null;
+    return VodFilterOption(name: name, value: asString(map['v']) ?? '');
+  }
+}
+
+class VodFilterGroup {
+  const VodFilterGroup({
+    required this.key,
+    required this.name,
+    required this.options,
+  });
+
+  final String key;
+  final String name;
+  final List<VodFilterOption> options;
+
+  static VodFilterGroup? fromJson(Object? value) {
+    final map = asMap(value);
+    final key = asNonEmptyString(map['key']);
+    if (key == null) return null;
+    return VodFilterGroup(
+      key: key,
+      name: asNonEmptyString(map['name']) ?? key,
+      options: asList(map['value'])
+          .map(VodFilterOption.fromJson)
+          .whereType<VodFilterOption>()
+          .toList(),
+    );
+  }
+}
+
+/// 影视条目。
+class Vod {
+  Vod({
+    required this.vodId,
+    required this.vodName,
+    this.vodPic,
+    this.vodRemarks,
+    this.vodContent,
+    this.vodArea,
+    this.vodYear,
+    this.vodDirector,
+    this.vodActor,
+    this.vodPlayFrom,
+    this.vodPlayUrl,
+    Map<String, Object?> extra = const {},
+  }) : extra = Map.unmodifiable(extra);
+
+  final String vodId;
+  final String vodName;
+  final String? vodPic;
+  final String? vodRemarks;
+  final String? vodContent;
+  final String? vodArea;
+  final String? vodYear;
+  final String? vodDirector;
+  final String? vodActor;
+
+  /// 线路标记，`$$$` 分隔。
+  final String? vodPlayFrom;
+
+  /// 剧集地址，`$$$` 分隔线路，`#` 分隔剧集，`剧集名$地址` 组成一部剧集。
+  final String? vodPlayUrl;
+
+  final Map<String, Object?> extra;
+
+  static Vod? fromJson(Object? value) {
+    final map = asMap(value);
+    final id = asNonEmptyString(map['vod_id']) ?? asNonEmptyString(map['vodId']);
+    final name =
+        asNonEmptyString(map['vod_name']) ?? asNonEmptyString(map['vodName']);
+    if (id == null || name == null) return null;
+    final known = <String>{
+      'vod_id',
+      'vodId',
+      'vod_name',
+      'vodName',
+      'vod_pic',
+      'vod_remarks',
+      'vod_content',
+      'vod_area',
+      'vod_year',
+      'vod_director',
+      'vod_actor',
+      'vod_play_from',
+      'vod_play_url',
+    };
+    final extra = <String, Object?>{};
+    for (final entry in map.entries) {
+      if (!known.contains(entry.key)) extra[entry.key] = entry.value;
+    }
+    return Vod(
+      vodId: id,
+      vodName: name,
+      vodPic: asNonEmptyString(map['vod_pic']),
+      vodRemarks: asNonEmptyString(map['vod_remarks']),
+      vodContent: asNonEmptyString(map['vod_content']),
+      vodArea: asNonEmptyString(map['vod_area']),
+      vodYear: asNonEmptyString(map['vod_year']),
+      vodDirector: asNonEmptyString(map['vod_director']),
+      vodActor: asNonEmptyString(map['vod_actor']),
+      vodPlayFrom: asNonEmptyString(map['vod_play_from']),
+      vodPlayUrl: asNonEmptyString(map['vod_play_url']),
+      extra: extra,
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    ...extra,
+    'vod_id': vodId,
+    'vod_name': vodName,
+    if (vodPic != null) 'vod_pic': vodPic,
+    if (vodRemarks != null) 'vod_remarks': vodRemarks,
+    if (vodContent != null) 'vod_content': vodContent,
+    if (vodArea != null) 'vod_area': vodArea,
+    if (vodYear != null) 'vod_year': vodYear,
+    if (vodDirector != null) 'vod_director': vodDirector,
+    if (vodActor != null) 'vod_actor': vodActor,
+    if (vodPlayFrom != null) 'vod_play_from': vodPlayFrom,
+    if (vodPlayUrl != null) 'vod_play_url': vodPlayUrl,
+  };
+}
+
+/// 一条线路及其剧集。
+class VodPlayLine {
+  const VodPlayLine({required this.flag, required this.episodes});
+
+  final String flag;
+  final List<VodEpisode> episodes;
+
+  String get displayName => flag.isEmpty ? '线路' : flag;
+
+  Map<String, Object?> toJson() => {
+    'flag': flag,
+    'episodes': episodes.map((episode) => episode.toJson()).toList(),
+  };
+}
+
+class VodEpisode {
+  const VodEpisode({required this.name, required this.url});
+
+  final String name;
+  final String url;
+
+  VodEpisode copyWith({String? name, String? url}) =>
+      VodEpisode(name: name ?? this.name, url: url ?? this.url);
+
+  Map<String, Object?> toJson() => {'name': name, 'url': url};
+}
+
+/// 统一的 Result 结构（首页/分类/详情/搜索/播放）。
+class SiteResult {
+  const SiteResult({
+    this.classes = const [],
+    this.filters = const {},
+    this.list = const [],
+    this.page,
+    this.pageCount,
+    this.total,
+    this.playUrl,
+    this.header,
+    this.format,
+    this.parse,
+    this.jx,
+    this.msg,
+    this.extra = const {},
+  });
+
+  final List<VodClass> classes;
+  final Map<String, List<VodFilterGroup>> filters;
+  final List<Vod> list;
+  final int? page;
+  final int? pageCount;
+  final int? total;
+
+  /// 播放结果 `url`。
+  final String? playUrl;
+  final HeaderMap? header;
+  final String? format;
+  final int? parse;
+  final int? jx;
+  final String? msg;
+  final Map<String, Object?> extra;
+
+  bool get isEmpty => classes.isEmpty && list.isEmpty && playUrl == null;
+
+  SiteResult copyWith({
+    List<VodClass>? classes,
+    Map<String, List<VodFilterGroup>>? filters,
+    List<Vod>? list,
+    int? page,
+    int? pageCount,
+    int? total,
+    String? playUrl,
+    HeaderMap? header,
+    String? format,
+    int? parse,
+    int? jx,
+    String? msg,
+  }) {
+    return SiteResult(
+      classes: classes ?? this.classes,
+      filters: filters ?? this.filters,
+      list: list ?? this.list,
+      page: page ?? this.page,
+      pageCount: pageCount ?? this.pageCount,
+      total: total ?? this.total,
+      playUrl: playUrl ?? this.playUrl,
+      header: header ?? this.header,
+      format: format ?? this.format,
+      parse: parse ?? this.parse,
+      jx: jx ?? this.jx,
+      msg: msg ?? this.msg,
+      extra: extra,
+    );
+  }
+}
+
+/// 播放决策：把 Result 里的 `url/parse/jx/playUrl/flag` 归一化为可执行动作（§7.4.8）。
+enum PlaybackAction {
+  /// 直接播放 [PlaybackDecision.url]。
+  direct,
+
+  /// 需要解析器：MVP-A 明确不支持，直接给出可定位错误，不静默成功。
+  needParser,
+
+  /// 需要 Spider 运行时（Phase 2+）。
+  needSpiderRuntime,
+}
+
+class PlaybackDecision {
+  const PlaybackDecision({
+    required this.action,
+    this.url,
+    this.headers,
+    this.format,
+    this.reason,
+    this.flag,
+  });
+
+  final PlaybackAction action;
+  final String? url;
+  final HeaderMap? headers;
+  final String? format;
+  final String? reason;
+  final String? flag;
+
+  String get logLine =>
+      'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} reason=${reason ?? ""}';
+}
+
+/// URL 脱敏：只保留 scheme + host + path，隐藏 query 与片段（§11.3.1）。
+String redactUrl(String? url) {
+  if (url == null || url.isEmpty) return '';
+  final uri = Uri.tryParse(url);
+  if (uri == null) return '<invalid-url>';
+  if (!uri.hasScheme) return uri.path.isEmpty ? '<relative>' : uri.path;
+  final buffer = StringBuffer('${uri.scheme}://');
+  if (uri.host.isNotEmpty) {
+    buffer.write(uri.host);
+    if (uri.hasPort) buffer.write(':${uri.port}');
+  }
+  buffer.write(uri.path.isEmpty ? '/' : uri.path);
+  if (uri.hasQuery) buffer.write('?...');
+  return buffer.toString();
+}
+
+/// 日志脱敏（§9.3.1、§11.3.1、§18.2）。
+final RegExp _sensitiveKeyPattern = RegExp(
+  r'(cookie|authorization|token|sign|signature|auth|password|passwd|'
+  r'secret|session|api[-_]?key|access[-_]?key)',
+  caseSensitive: false,
+);
+
+String redactHeadersForLog(Map<String, String> headers) {
+  final parts = <String>[];
+  for (final entry in headers.entries) {
+    final sensitive = _sensitiveKeyPattern.hasMatch(entry.key);
+    parts.add('${entry.key}=${sensitive ? "<redacted>" : entry.value}');
+  }
+  parts.sort();
+  return parts.join(', ');
+}
+
+/// 脱敏一行日志文本（§9.3.1「stderr 日志执行大小限制、轮转和脱敏」、
+/// §11.3.1「日志仅记录 token 指纹，不记录完整 token、签名 query、Cookie 或
+/// Authorization」）。
+///
+/// 与 [redactHeadersForLog] 的区别：这里处理的是 sidecar 自己打印的自由文本，
+/// 因此需要同时覆盖 `Key: value` 形式与 URL query 形式。
+String redactLogText(String line) {
+  var output = line;
+
+  // 1) `Cookie: xxx` / `Authorization: Bearer xxx` 这类头样式。
+  // 值要吃到行尾或 `;`，否则 `Authorization: Bearer abc` 只会隐掉 `Bearer`。
+  output = output.replaceAllMapped(
+    RegExp(
+      r'\b((?:cookie|set-cookie|authorization|proxy-authorization)'
+      r'\s*[:=]\s*)([^;\r\n]+)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>',
+  );
+
+  // 2) API key 类 Header（值不带空格）。
+  output = output.replaceAllMapped(
+    RegExp(
+      r'\b((?:x-api-key|x-auth-token|api[-_]?key)\s*[:=]\s*)([^\s,;]+)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>',
+  );
+
+  // 3) URL query 中的敏感键值（含签名参数）。
+  output = output.replaceAllMapped(
+    RegExp(
+      r'([?&](?:' + _sensitiveQueryNames + r')=)([^&#\s]*)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>',
+  );
+
+  // 4) `token=xxx` / `sign=xxx` 这类非 URL 形式的键值。
+  output = output.replaceAllMapped(
+    RegExp(
+      r'\b((?:token|sign|signature|secret|password|passwd|session|'
+      r'access[-_]?key)\s*=\s*)([^\s,;&]+)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>',
+  );
+
+  return output;
+}
+
+const String _sensitiveQueryNames =
+    r'cookie|authorization|token|sign|signature|auth|password|passwd|secret|'
+    r'session|api[-_]?key|access[-_]?key';
+
+/// 按 host 规则注入全局 header（§7.4.6 步骤 2）。
+HeaderMap globalHeadersFor(List<HeaderRule> rules, String host) {
+  final merged = HeaderMap();
+  for (final rule in rules) {
+    if (rule.matches(host)) {
+      for (final entry in rule.header.entries) {
+        merged.put(entry.key, entry.value);
+      }
+    }
+  }
+  return merged;
+}
