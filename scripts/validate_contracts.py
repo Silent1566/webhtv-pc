@@ -35,7 +35,7 @@ def validate(instance, schema_path: str, label: str) -> None:
 
 def main() -> None:
     validate(
-        load_json("packages/protocol/fixtures/config/minimal-tvbox.json"),
+        load_json("packages/test-fixtures/config/minimal-tvbox.json"),
         "packages/protocol/schema/config.schema.json",
         "最小 TVBox 配置",
     )

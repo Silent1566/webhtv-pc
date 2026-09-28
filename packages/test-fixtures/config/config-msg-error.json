@@ -1,0 +1,12 @@
+{
+  "name": "错误配置",
+  "msg": "该配置已停止维护，请更换其他配置",
+  "sites": [
+    {
+      "key": "unused",
+      "name": "unused",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/"
+    }
+  ]
+}

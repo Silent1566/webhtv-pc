@@ -1,0 +1,13 @@
+{
+  "name": "配置仓库 fixture",
+  "urls": [
+    {
+      "name": "可用条目",
+      "url": "http://127.0.0.1:18080/api/repository-a.json"
+    },
+    {
+      "name": "失效条目",
+      "url": "http://127.0.0.1:18080/api/does-not-exist.json"
+    }
+  ]
+}

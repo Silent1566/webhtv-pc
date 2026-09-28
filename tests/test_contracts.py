@@ -14,11 +14,11 @@ def load_json(path: str):
 class ContractTests(unittest.TestCase):
     def test_minimal_config_is_valid(self):
         schema = load_json("packages/protocol/schema/config.schema.json")
-        fixture = load_json("packages/protocol/fixtures/config/minimal-tvbox.json")
+        fixture = load_json("packages/test-fixtures/config/minimal-tvbox.json")
         Draft202012Validator(schema).validate(fixture)
 
     def test_unknown_config_fields_are_preserved_by_fixture(self):
-        fixture = load_json("packages/protocol/fixtures/config/minimal-tvbox.json")
+        fixture = load_json("packages/test-fixtures/config/minimal-tvbox.json")
         self.assertEqual({"must": "be preserved"}, fixture["futureTopLevel"])
         self.assertEqual("must-be-preserved", fixture["sites"][0]["futureField"])
 

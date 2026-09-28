@@ -15,4 +15,4 @@ python3 tools/fixture_server/server.py
 - `/api.php/provide/vod/?ac=play`
 - `/media/sample.m3u8` 及其分片，要求 `Referer: http://127.0.0.1:18080/` 和 `User-Agent: WebHTV-PC-Phase0`
 
-媒体 fixture 位于 `packages/protocol/fixtures/media`，仅用于 Phase 0 自动化播放验证。
+媒体 fixture 位于 `packages/test-fixtures/media`，仅用于 Phase 0 自动化播放验证。

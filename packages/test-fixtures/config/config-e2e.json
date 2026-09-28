@@ -1,0 +1,75 @@
+{
+  "name": "WebHTV PC 端到端 fixture 配置",
+  "notice": "仓库内置的本地 fixture 配置，不含任何真实站点；仅用于自动化验收。",
+  "home": "fixture-type1",
+  "headers": [
+    { "host": "127.0.0.1", "header": { "X-Fixture-Global": "product-e2e" } }
+  ],
+  "sites": [
+    {
+      "key": "fixture-type1",
+      "name": "Fixture JSON API (type=1)",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "header": {
+        "Referer": "http://127.0.0.1:18080/",
+        "User-Agent": "WebHTV-PC/0.1 (Windows)"
+      }
+    },
+    {
+      "key": "fixture-type0",
+      "name": "Fixture XML API (type=0)",
+      "type": 0,
+      "api": "http://127.0.0.1:18080/api/type0/",
+      "searchable": 1,
+      "header": {
+        "Referer": "http://127.0.0.1:18080/",
+        "User-Agent": "WebHTV-PC/0.1 (Windows)"
+      }
+    },
+    {
+      "key": "fixture-type2",
+      "name": "Fixture JSON API 兼容 (type=2)",
+      "type": 2,
+      "api": "http://127.0.0.1:18080/api/type2/",
+      "searchable": 1,
+      "header": {
+        "Referer": "http://127.0.0.1:18080/",
+        "User-Agent": "WebHTV-PC/0.1 (Windows)"
+      }
+    },
+    {
+      "key": "fixture-type4",
+      "name": "Fixture Base64 ext (type=4)",
+      "type": 4,
+      "api": "http://127.0.0.1:18080/api/type4/",
+      "searchable": 1,
+      "header": {
+        "Referer": "http://127.0.0.1:18080/",
+        "User-Agent": "WebHTV-PC/0.1 (Windows)"
+      }
+    },
+    {
+      "key": "fixture-broken",
+      "name": "Fixture 失效站点（HTML 错误页）",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/error-html"
+    },
+    {
+      "key": "fixture-multi",
+      "name": "Fixture 多线路站点",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "searchable": 1,
+      "header": {
+        "Referer": "http://127.0.0.1:18080/",
+        "User-Agent": "WebHTV-PC/0.1 (Windows)"
+      }
+    }
+  ],
+  "parses": [
+    { "name": "json解析", "type": 0, "url": "https://example.invalid/parse/json" }
+  ]
+}

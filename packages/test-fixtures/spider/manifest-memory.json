@@ -1,0 +1,37 @@
+{
+  "abi": "webhtv-ipc-v1",
+  "abiMinor": 0,
+  "key": "spider-test-memory",
+  "name": "Phase 2 memory spider",
+  "runtime": "python-3",
+  "entry": "spiders/fault_spiders.py",
+  "capabilities": [
+    "home",
+    "category",
+    "detail",
+    "search",
+    "play"
+  ],
+  "permissions": {
+    "network": true,
+    "localProxy": false,
+    "ui": false,
+    "storage": "cache-only",
+    "process": false,
+    "clipboard": false,
+    "browser": false
+  },
+  "limits": {
+    "memoryMiB": 64,
+    "cpuSeconds": 30,
+    "concurrency": 1,
+    "responseMiB": 1
+  },
+  "hashes": {
+    "entrySha256": ""
+  },
+  "signature": null,
+  "config": {
+    "scenario": "memory"
+  }
+}

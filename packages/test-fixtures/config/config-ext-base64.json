@@ -1,0 +1,9 @@
+{
+  "name": "Base64 ext fixture",
+  "ext": {
+    "area": "大陆",
+    "year": "2026",
+    "note": "含 +/ 字符以验证 URL-Safe"
+  },
+  "message": "该文件描述 type=4 的筛选对象编码，供契约测试使用"
+}

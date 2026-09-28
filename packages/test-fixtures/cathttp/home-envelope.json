@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "class": [
+      {
+        "type_id": "1",
+        "type_name": "电影"
+      }
+    ],
+    "list": [
+      {
+        "vod_id": "cat-env-1",
+        "vod_name": "信封样本影片",
+        "vod_play_from": "cat",
+        "vod_play_url": "第 1 集$http://127.0.0.1:18080/media/sample.m3u8"
+      }
+    ]
+  }
+}
