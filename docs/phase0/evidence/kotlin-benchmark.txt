@@ -1,0 +1,180 @@
+== Kotlin/JVM + libmpv 重复采样 iterations=10 ==
+time=2026-09-27T03:22:27.0575313+08:00
+run=1 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=1 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=1 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=27ms
+run=1 PHASE0-EVIDENCE headless first-frame=57ms
+run=2 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=2 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=2 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=13ms
+run=2 PHASE0-EVIDENCE headless first-frame=36ms
+run=3 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=3 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=3 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=15ms
+run=3 PHASE0-EVIDENCE headless first-frame=33ms
+run=4 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=4 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=4 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=24ms
+run=4 PHASE0-EVIDENCE headless first-frame=48ms
+run=5 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=5 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=5 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=14ms
+run=5 PHASE0-EVIDENCE headless first-frame=35ms
+run=6 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=6 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=6 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=14ms
+run=6 PHASE0-EVIDENCE headless first-frame=33ms
+run=7 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=7 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=7 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=14ms
+run=7 PHASE0-EVIDENCE headless first-frame=33ms
+run=8 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=8 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=8 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=27ms
+run=8 PHASE0-EVIDENCE headless first-frame=50ms
+run=9 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=9 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=9 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=20ms
+run=9 PHASE0-EVIDENCE headless first-frame=51ms
+run=10 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.mp4 referer= user-agent=WebHTV-PC-Phase0
+run=10 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=10 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=14ms
+run=10 PHASE0-EVIDENCE headless first-frame=34ms
+summary local-mp4 load n=10 min=13 median=14 p95=27 max=27 mean=18.2
+summary local-mp4 first-frame n=10 min=33 median=35 p95=57 max=57 mean=41
+run=1 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=1 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=1 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=17ms
+run=1 PHASE0-EVIDENCE headless first-frame=38ms
+run=2 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=2 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=2 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=18ms
+run=2 PHASE0-EVIDENCE headless first-frame=39ms
+run=3 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=3 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=3 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=16ms
+run=3 PHASE0-EVIDENCE headless first-frame=38ms
+run=4 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=4 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=4 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=21ms
+run=4 PHASE0-EVIDENCE headless first-frame=43ms
+run=5 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=5 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=5 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=20ms
+run=5 PHASE0-EVIDENCE headless first-frame=42ms
+run=6 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=6 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=6 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=19ms
+run=6 PHASE0-EVIDENCE headless first-frame=36ms
+run=7 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=7 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=7 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=37ms
+run=7 PHASE0-EVIDENCE headless first-frame=60ms
+run=8 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=8 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=8 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=18ms
+run=8 PHASE0-EVIDENCE headless first-frame=36ms
+run=9 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=9 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=9 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=28ms
+run=9 PHASE0-EVIDENCE headless first-frame=62ms
+run=10 PHASE0-EVIDENCE headless url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\packages\protocol\fixtures\media\sample.m3u8 referer= user-agent=WebHTV-PC-Phase0
+run=10 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=10 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=20ms
+run=10 PHASE0-EVIDENCE headless first-frame=44ms
+summary local-hls load n=10 min=16 median=19 p95=37 max=37 mean=21.4
+summary local-hls first-frame n=10 min=36 median=39 p95=62 max=62 mean=43.8
+run=1 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=1 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=1 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=44ms
+run=1 PHASE0-EVIDENCE headless first-frame=66ms
+run=2 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=2 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=2 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=45ms
+run=2 PHASE0-EVIDENCE headless first-frame=68ms
+run=3 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=3 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=3 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=33ms
+run=3 PHASE0-EVIDENCE headless first-frame=52ms
+run=4 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=4 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=4 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=47ms
+run=4 PHASE0-EVIDENCE headless first-frame=94ms
+run=5 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=5 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=5 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=33ms
+run=5 PHASE0-EVIDENCE headless first-frame=52ms
+run=6 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=6 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=6 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=43ms
+run=6 PHASE0-EVIDENCE headless first-frame=62ms
+run=7 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=7 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=7 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=35ms
+run=7 PHASE0-EVIDENCE headless first-frame=54ms
+run=8 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=8 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=8 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=42ms
+run=8 PHASE0-EVIDENCE headless first-frame=61ms
+run=9 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=9 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=9 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=41ms
+run=9 PHASE0-EVIDENCE headless first-frame=63ms
+run=10 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=10 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=10 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=41ms
+run=10 PHASE0-EVIDENCE headless first-frame=61ms
+summary header-hls load n=10 min=33 median=41 p95=47 max=47 mean=40.4
+summary header-hls first-frame n=10 min=52 median=61 p95=94 max=94 mean=63.3
+run=1 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=1 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=1 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=32ms
+run=1 PHASE0-EVIDENCE headless first-frame=58ms
+run=1 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=16ms
+run=2 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=2 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=2 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=33ms
+run=2 PHASE0-EVIDENCE headless first-frame=54ms
+run=2 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=22ms
+run=3 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=3 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=3 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=34ms
+run=3 PHASE0-EVIDENCE headless first-frame=54ms
+run=3 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=22ms
+run=4 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=4 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=4 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=36ms
+run=4 PHASE0-EVIDENCE headless first-frame=87ms
+run=4 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=0ms
+run=5 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=5 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=5 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=35ms
+run=5 PHASE0-EVIDENCE headless first-frame=60ms
+run=5 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=18ms
+run=6 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=6 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=6 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=34ms
+run=6 PHASE0-EVIDENCE headless first-frame=63ms
+run=6 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=0ms
+run=7 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=7 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=7 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=49ms
+run=7 PHASE0-EVIDENCE headless first-frame=97ms
+run=7 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=11ms
+run=8 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=8 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=8 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=53ms
+run=8 PHASE0-EVIDENCE headless first-frame=99ms
+run=8 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=7ms
+run=9 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=9 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=9 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.016 load=44ms
+run=9 PHASE0-EVIDENCE headless first-frame=88ms
+run=9 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=5ms
+run=10 PHASE0-EVIDENCE headless url=http://127.0.0.1:18080/media/sample.m3u8 referer=http://127.0.0.1:18080/ user-agent=WebHTV-PC-Phase0
+run=10 PHASE0-EVIDENCE libmpv-client-api=2.5
+run=10 PHASE0-EVIDENCE headless result=file-loaded width=320 height=180 duration=6.000 load=28ms
+run=10 PHASE0-EVIDENCE headless first-frame=52ms
+run=10 PHASE0-EVIDENCE headless seek-target=3.000 playback-time=3.000 seek=20ms
+summary header-hls-seek load n=10 min=28 median=34 p95=53 max=53 mean=37.8
+summary header-hls-seek first-frame n=10 min=52 median=60 p95=99 max=99 mean=71.2
