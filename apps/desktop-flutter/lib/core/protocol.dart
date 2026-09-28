@@ -210,6 +210,201 @@ class ParseEntry {
   };
 }
 
+/// 直播源（§13.2 `LiveSource`）。
+///
+/// 对应配置顶层 `lives` 数组条目：声明一个直播资源（通常是 M3U/TXT/JSON 清单或
+/// 单个频道），由 [LiveLineType] 区分；`url` 可被 HTTP 拉取也可为本地文件。
+class LiveSource {
+  LiveSource({
+    required this.name,
+    required this.type,
+    this.url,
+    this.epg,
+    this.proxy,
+    this.referer,
+    this.userAgent,
+    Map<String, Object?> extra = const {},
+  }) : extra = Map.unmodifiable(extra);
+
+  final String name;
+
+  /// 直播清单/频道格式（见 [LiveLineType]）。
+  final int type;
+
+  final String? url;
+  final String? epg;
+  final String? proxy;
+  final String? referer;
+  final String? userAgent;
+
+  /// 未识别字段在导入后原样保留。
+  final Map<String, Object?> extra;
+
+  static LiveSource? fromJson(Object? value) {
+    final map = asMap(value);
+    final name = asNonEmptyString(map['name']);
+    if (name == null) return null;
+    return LiveSource(
+      name: name,
+      type: asInt(map['type']) ?? LiveLineType.m3u,
+      url: asNonEmptyString(map['url']),
+      epg: asNonEmptyString(map['epg']),
+      proxy: asNonEmptyString(map['proxy']),
+      referer: asNonEmptyString(map['referer']),
+      userAgent: asNonEmptyString(map['userAgent']),
+      extra: {
+        for (final entry in map.entries)
+          if (!{'name', 'type', 'url', 'epg', 'proxy', 'referer', 'userAgent'}
+              .contains(entry.key))
+            entry.key: entry.value,
+      },
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    ...extra,
+    'name': name,
+    'type': type,
+    if (url != null) 'url': url,
+    if (epg != null) 'epg': epg,
+    if (proxy != null) 'proxy': proxy,
+    if (referer != null) 'referer': referer,
+    if (userAgent != null) 'userAgent': userAgent,
+  };
+}
+
+/// 直播清单/频道格式标识（§13.3「直播格式」）。
+///
+/// 与 TVBox `lives[].type` 和设计文档 `LiveLineType` 对齐：
+/// `1`=M3U、`2`=TXT、`3`=JSON。
+abstract final class LiveLineType {
+  static const int m3u = 1;
+  static const int txt = 2;
+  static const int json = 3;
+}
+
+/// 直播频道（§13.2 `LiveChannel`）。
+///
+/// 一个频道可有多个线路 [urls]；播放失败时由上层按顺序尝试（§13.3
+/// 「播放失败可切线路」、§10.3 换源）。
+class LiveChannel {
+  LiveChannel({
+    required this.name,
+    this.number,
+    this.logo,
+    this.epgId,
+    List<String> urls = const [],
+    this.group = '未分组',
+    HeaderMap? header,
+    Map<String, Object?> extra = const {},
+  }) : urls = List.unmodifiable(urls),
+       header = header ?? HeaderMap(),
+       extra = Map.unmodifiable(extra);
+
+  final String name;
+  final int? number;
+  final String? logo;
+  final String? epgId;
+
+  /// 频道线路（按声明顺序，第一个为默认）。
+  final List<String> urls;
+
+  /// 所属分组名（TXT/M3U 的 `group-title`）。
+  final String group;
+
+  /// 频道级请求头（来自 `#EXTVLCOPT`/`url|header`/JSON `header`）。
+  final HeaderMap header;
+
+  final Map<String, Object?> extra;
+
+  static LiveChannel fromJson(Object? value) {
+    final map = asMap(value);
+    return LiveChannel(
+      name: asNonEmptyString(map['name']) ?? '未知频道',
+      number: asInt(map['number']),
+      logo: asNonEmptyString(map['logo']),
+      epgId: asNonEmptyString(map['epgId']),
+      urls: asList(map['urls']).map((item) => asString(item) ?? '').toList(),
+      group: asNonEmptyString(map['group']) ?? '未分组',
+      header: HeaderMap(asMap(map['header'])),
+      extra: {
+        for (final entry in map.entries)
+          if (!{'name', 'number', 'logo', 'epgId', 'urls', 'group', 'header'}
+              .contains(entry.key))
+            entry.key: entry.value,
+      },
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    ...extra,
+    'name': name,
+    if (number != null) 'number': number,
+    if (logo != null) 'logo': logo,
+    if (epgId != null) 'epgId': epgId,
+    if (urls.isNotEmpty) 'urls': urls,
+    'group': group,
+    if (header.isNotEmpty) 'header': header.toJson(),
+  };
+}
+
+/// 直播分组（§13.2 `LiveGroup`）。
+///
+/// 频道按 `group-title`（M3U）/ 分组行（TXT）分组；未指定分组的频道进入
+/// `未分组`。[groupName] 之外的频道由各 [LiveChannel.group] 携带，解析时聚拢。
+class LiveGroup {
+  LiveGroup({required this.name, List<LiveChannel> channels = const []})
+    : channels = List.unmodifiable(channels);
+
+  final String name;
+  final List<LiveChannel> channels;
+
+  Map<String, Object?> toJson() => {
+    'name': name,
+    'channels': channels.map((channel) => channel.toJson()).toList(),
+  };
+}
+
+/// 直播清单解析结果：分组树 + 原始源引用。
+///
+/// 由直播解析器（§13.3）产出，供直播页分组展示与频道播放。
+class LivePlaylist {
+  LivePlaylist({
+    required this.sourceName,
+    List<LiveGroup> groups = const [],
+    this.rawLines = 0,
+    this.epg,
+  }) : groups = List.unmodifiable(groups);
+
+  /// 清单来源（配置 `lives[].name` 或文件名）。
+  final String sourceName;
+
+  /// 有序分组；未分组频道聚集在 `未分组` 组。
+  final List<LiveGroup> groups;
+
+  /// 原始清单行数（诊断用）。
+  final int rawLines;
+
+  /// 清单内申明的 EPG 地址（`#EXTM3U url-tvg`，§13.1 EPG）。
+  final String? epg;
+
+  int get channelCount => groups.fold(0, (sum, group) => sum + group.channels.length);
+
+  /// 全部频道（展平），按分组顺序。
+  List<LiveChannel> get allChannels => groups
+      .expand((group) => group.channels)
+      .toList();
+
+  /// 按频道名分区查找（忽略大小写）。
+  LiveChannel? channelById(String id) {
+    final lowered = id.trim().toLowerCase();
+    for (final channel in allChannels) {
+      if (channel.name.toLowerCase() == lowered) return channel;
+    }
+    return null;
+  }
+}
+
 /// 站点模型（§8.2）。未知字段通过 [extra] 原样保留，避免导入即丢字段。
 class Site {
   Site({
@@ -385,7 +580,7 @@ class AppConfig {
   final List<Site> sites;
   final List<ParseEntry> parses;
   final List<String> flags;
-  final List<Object?> lives;
+  final List<LiveSource> lives;
   final List<Object?> doh;
   final List<Object?> proxy;
   final List<Object?> hosts;
@@ -422,7 +617,8 @@ class AppConfig {
     'sites': sites.map((site) => site.toJson()).toList(),
     'parses': parses.map((entry) => entry.toJson()).toList(),
     if (flags.isNotEmpty) 'flags': flags,
-    if (lives.isNotEmpty) 'lives': lives,
+    if (lives.isNotEmpty)
+      'lives': lives.map((source) => source.toJson()).toList(),
     if (doh.isNotEmpty) 'doh': doh,
     if (proxy.isNotEmpty) 'proxy': proxy,
     if (hosts.isNotEmpty) 'hosts': hosts,

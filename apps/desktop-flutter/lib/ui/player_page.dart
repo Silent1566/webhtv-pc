@@ -31,6 +31,7 @@ class PlaybackRequest {
     this.playLines = const [],
     this.episodeIndex = 0,
     this.vodPic,
+    this.directUrl = false,
   });
 
   final String url;
@@ -47,6 +48,12 @@ class PlaybackRequest {
   final List<VodPlayLine> playLines;
   final int episodeIndex;
   final String? vodPic;
+
+  /// 地址已是最终可播地址（直播频道），无需经站点播放入口解析。
+  ///
+  /// 直播源的 `urls` 直接在本地就是媒体地址，走解析器只会多余地请求站点；
+  /// 同时直播需要「失败按顺序切线路」（§13.3），与点播的剧集切换语义不同。
+  final bool directUrl;
 
   PlaybackRequest copyWith({
     String? url,
@@ -70,6 +77,7 @@ class PlaybackRequest {
       playLines: playLines,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
+      directUrl: directUrl,
     );
   }
 }
@@ -116,6 +124,8 @@ class _PlayerPageState extends State<PlayerPage> {
     );
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
     if (!outcome.succeeded) {
+      // 直播：当前线路失败时按顺序自动切到下一个线路（§13.3 播放失败可切线路）。
+      if (_request.directUrl && await _fallbackLiveLine()) return;
       setState(() {
         _loadError = outcome.failureKind == null
             ? '播放失败'
@@ -134,6 +144,38 @@ class _PlayerPageState extends State<PlayerPage> {
       );
     }
     _startProgressSaver();
+  }
+
+  /// 直播线路回退（§13.3）：按顺序尝试当前频道剩余的线路。
+  ///
+  /// 返回 true 表示已切换到另一条线路并重新加载。
+  Future<bool> _fallbackLiveLine() async {
+    final lines = _episodes;
+    if (lines.length <= 1) return false;
+    final next = _request.episodeIndex + 1;
+    if (next >= lines.length) {
+      widget.state.log.info(
+        '直播全部线路均失败 channel=${_request.episodeName} tried=${lines.length}',
+        scope: 'live',
+      );
+      return false;
+    }
+    widget.state.log.info(
+      '直播线路失败，自动切换 channel=${_request.episodeName} '
+      'from=${_request.episodeIndex} to=$next',
+      scope: 'live',
+    );
+    final episode = lines[next];
+    setState(() {
+      _request = _request.copyWith(
+        url: episode.url,
+        episodeName: episode.name,
+        episodeIndex: next,
+        clearStartPosition: true,
+      );
+    });
+    await _load();
+    return true;
   }
 
   /// 播放中周期性写入进度（§15.2 “播放中写入进度”）。
@@ -220,25 +262,34 @@ class _PlayerPageState extends State<PlayerPage> {
   }) async {
     final state = widget.state;
     try {
-      final decision = await state.resolvePlayback(
-        episodeTarget: episode.url,
-        flag: flag,
-        vodId: _request.vodId,
-      );
-      if (decision == null || decision.url == null) {
-        throw AppError(
-          AppErrorKind.playbackUrlMissing,
-          '播放决策没有返回可用地址',
-          detail: 'flag=$flag episode=${episode.name}',
+      // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
+      final String url;
+      if (_request.directUrl) {
+        url = episode.url;
+      } else {
+        final decision = await state.resolvePlayback(
+          episodeTarget: episode.url,
+          flag: flag,
+          vodId: _request.vodId,
         );
+        if (decision == null || decision.url == null) {
+          throw AppError(
+            AppErrorKind.playbackUrlMissing,
+            '播放决策没有返回可用地址',
+            detail: 'flag=$flag episode=${episode.name}',
+          );
+        }
+        url = decision.url!;
       }
       setState(() {
         _loadError = null;
         _request = _request.copyWith(
-          url: decision.url,
+          url: url,
           episodeName: episode.name,
           flag: flag,
-          headers: decision.headers?.asRequestHeaders ?? const {},
+          headers: _request.directUrl
+              ? _request.headers
+              : null,
           episodeIndex: episodeIndex,
           clearStartPosition: true,
         );

@@ -120,6 +120,21 @@ List<Site> _parseSites(Object? value, List<String> diagnostics) {
   return sites;
 }
 
+/// 直播源列表（§13.2 `lives`）。名称缺失的条目跳过并记诊断；
+/// 直播源是可选能力（7.2 后置字段），空列表不视为错误。
+List<LiveSource> _parseLives(Object? value, List<String> diagnostics) {
+  final lives = <LiveSource>[];
+  for (final item in asList(value)) {
+    final source = LiveSource.fromJson(item);
+    if (source == null) {
+      diagnostics.add('跳过缺少 name 的直播源条目');
+      continue;
+    }
+    lives.add(source);
+  }
+  return lives;
+}
+
 List<ConfigRepositoryEntry> _parseRepositoryEntries(
   Object? value,
   List<String> diagnostics,
@@ -207,7 +222,7 @@ AppConfig _buildConfig(
     sites: sites,
     parses: parses,
     flags: flags,
-    lives: asList(map['lives']),
+    lives: _parseLives(map['lives'], diagnostics),
     doh: asList(map['doh']),
     proxy: asList(map['proxy']),
     hosts: asList(map['hosts']),

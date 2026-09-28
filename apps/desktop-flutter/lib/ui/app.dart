@@ -19,6 +19,7 @@ import 'browse_pages.dart';
 import 'config_pages.dart';
 import 'diagnostics_pages.dart';
 import 'library_pages.dart';
+import 'live_page.dart';
 import 'player_page.dart';
 import 'search_page.dart';
 import 'spider_page.dart';
@@ -248,7 +249,7 @@ class _SplashPage extends StatelessWidget {
 /// 侧栏入口。
 ///
 /// §17.2 的「搜索页」在 MVP-B 是必须项，因此与首页同级放在侧栏。
-enum ShellSection { browse, search, history, favorites, spiders, settings, logs }
+enum ShellSection { browse, live, search, history, favorites, spiders, settings, logs }
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.state, required this.startup});
@@ -406,6 +407,8 @@ class _AppShellState extends State<AppShell> {
     switch (_section) {
       case ShellSection.browse:
         return BrowsePage(state: _state);
+      case ShellSection.live:
+        return LivePage(state: _state);
       case ShellSection.search:
         return SearchPage(state: _state);
       case ShellSection.history:
@@ -495,6 +498,10 @@ class _SideBar extends StatelessWidget {
         NavigationRailDestination(
           icon: Icon(Icons.grid_view),
           label: Text('首页'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(Icons.live_tv),
+          label: Text('直播'),
         ),
         NavigationRailDestination(
           icon: Icon(Icons.search),

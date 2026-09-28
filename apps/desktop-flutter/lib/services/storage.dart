@@ -827,6 +827,11 @@ AppConfig parseConfigRecord(Map<String, Object?> json) {
     final entry = ConfigRepositoryEntry.fromJson(item);
     if (entry != null) urls.add(entry);
   }
+  final lives = <LiveSource>[];
+  for (final item in asList(json['lives'])) {
+    final source = LiveSource.fromJson(item);
+    if (source != null) lives.add(source);
+  }
 
   final known = <String>{
     'name',
@@ -862,7 +867,7 @@ AppConfig parseConfigRecord(Map<String, Object?> json) {
     sites: sites,
     parses: parses,
     flags: asList(json['flags']).map(asNonEmptyString).whereType<String>().toList(),
-    lives: asList(json['lives']),
+    lives: lives,
     doh: asList(json['doh']),
     proxy: asList(json['proxy']),
     hosts: asList(json['hosts']),

@@ -37,6 +37,13 @@ enum AppErrorKind {
   playbackParserRequired,
   playbackUnsupportedScheme,
 
+  // 直播（§13）
+  liveInvalid,
+  liveNetwork,
+  liveHttp,
+  liveDecode,
+  liveUnsupported,
+
   // 系统
   storage,
   unknown,
@@ -87,6 +94,16 @@ String describeErrorKind(AppErrorKind kind) {
       return '该剧集需要解析器或 Spider 运行时（MVP-A 未实现）';
     case AppErrorKind.playbackUnsupportedScheme:
       return '播放地址协议不受支持';
+    case AppErrorKind.liveInvalid:
+      return '直播源内容非法：无法解析为 M3U/TXT/JSON';
+    case AppErrorKind.liveNetwork:
+      return '直播源下载失败：网络不可达或 DNS 失败';
+    case AppErrorKind.liveHttp:
+      return '直播源下载失败：服务器返回非 2xx 状态';
+    case AppErrorKind.liveDecode:
+      return '直播源解码失败：编码不受支持';
+    case AppErrorKind.liveUnsupported:
+      return '直播源格式不受支持';
     case AppErrorKind.storage:
       return '本地存储读写失败';
     case AppErrorKind.unknown:

@@ -85,6 +85,15 @@ class TestFixtureServer {
       await _serveMedia(request, path.substring('/media/'.length));
       return;
     }
+    if (path.startsWith('/live/')) {
+      await _serveLive(request, path.substring('/live/'.length));
+      return;
+    }
+    if (path.startsWith('/live.') &&
+        path.split('/').last.startsWith('live.')) {
+      await _serveLive(request, path.substring(1));
+      return;
+    }
     switch (path) {
       case '/health':
         await _json(request, {'status': 'ok'});
@@ -465,6 +474,30 @@ class TestFixtureServer {
       charset: 'utf-8',
     );
     request.response.add(utf8.encode(jsonEncode(value)));
+  }
+
+  /// 直播清单 fixture（§13.3）：重放 `packages/test-fixtures/live/`。
+  Future<void> _serveLive(HttpRequest request, String relative) async {
+    final candidate = p.normalize(p.join(fixturePath('live'), relative));
+    final root = p.normalize(fixturePath('live'));
+    if (!p.isWithin(root, candidate)) {
+      request.response.statusCode = HttpStatus.notFound;
+      await _json(request, {'status': 404, 'msg': 'live fixture not found'});
+      return;
+    }
+    final file = File(candidate);
+    if (!await file.exists()) {
+      request.response.statusCode = HttpStatus.notFound;
+      await _json(request, {'status': 404, 'msg': 'live fixture not found'});
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    request.response.headers.contentType = ContentType(
+      'audio',
+      'x-mpegurl',
+      charset: 'utf-8',
+    );
+    request.response.add(bytes);
   }
 
   Future<void> _serveMedia(HttpRequest request, String relative) async {

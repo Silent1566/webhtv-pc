@@ -1,0 +1,19 @@
+#EXTM3U url-tvg="http://127.0.0.1:18080/live/epg.xml"
+#EXTINF:-1 tvg-id="cctv1" tvg-name="CCTV1" tvg-logo="http://127.0.0.1:18080/live/logo/cctv1.png" tvg-chno="1" group-title="央视",CCTV-1 综合
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="cctv2" tvg-name="CCTV2" tvg-logo="http://127.0.0.1:18080/live/logo/cctv2.png" tvg-chno="2" group-title="央视",CCTV-2 财经
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="cctv5" tvg-chno="5" group-title="央视",CCTV-5 体育
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="hunan" tvg-chno="10" group-title="卫视",湖南卫视
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="hunan" group-title="卫视",湖南卫视
+http://127.0.0.1:18080/media/sample.mp4
+#EXTINF:-1 group-title="卫视",浙江卫视
+#EXTVLCOPT:http-referrer=http://127.0.0.1:18080/
+#EXTVLCOPT:http-user-agent=WebHTV-PC/0.1 (Windows)
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 group-title="其他",更新时间 2026-09-28
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1,无分组测试频道
+http://127.0.0.1:18080/media/sample.m3u8

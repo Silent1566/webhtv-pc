@@ -19,6 +19,7 @@
 - `/api/type1` 等路由在带 `ids` 时返回详情，带 `wd` 时返回搜索结果
 
 - `/media/...`  本地媒体 fixture，要求 `Referer` 与 `User-Agent`
+- `/live/live.m3u`、`/live/live.txt`、`/live/live.json`  直播清单 fixture（§13.3）
 
 服务只允许监听回环地址。
 """
@@ -38,6 +39,7 @@ FIXTURES = ROOT / "packages" / "test-fixtures" / "http"
 CONFIGS = ROOT / "packages" / "test-fixtures" / "config"
 MEDIA = ROOT / "packages" / "test-fixtures" / "media"
 CATHTTP = ROOT / "packages" / "test-fixtures" / "cathttp"
+LIVE = ROOT / "packages" / "test-fixtures" / "live"
 REQUIRED_REFERER = "http://127.0.0.1:18080/"
 REQUIRED_USER_AGENT = "WebHTV-PC/0.1 (Windows)"
 LEGACY_USER_AGENT = "WebHTV-PC-Phase0"
@@ -164,6 +166,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path.startswith("/media/"):
             self._send_media(path.removeprefix("/media/"))
+            return
+        # 直播清单 fixture（§13.3、§19.2 `live.m3u`/`live.txt`）。
+        # 清单本身不要求媒体 Header；清单内的播放地址仍指向受 Header 门禁
+        # 保护的 `/media/`，从而能同时验证解析与“带 Header 起播”。
+        # 兼容两种路径形态：`/live/live.m3u`（约定目录）与 `/live.m3u`
+        # （config-full.json 历史写法）。
+        if path.startswith("/live/"):
+            self._send_live(path.removeprefix("/live/"))
+            return
+        if path.startswith("/live.") and path.rsplit("/", 1)[-1].startswith("live."):
+            self._send_live(path.removeprefix("/"))
             return
         if path == "/health":
             self._send_json({"status": "ok"})
@@ -319,6 +332,19 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._send_error_json(404, "cat http 路由未实现")
             return
         self._send_json_bytes(_catjson(fixture))
+
+    def _send_live(self, relative_path: str) -> None:
+        candidate = (LIVE / relative_path).resolve()
+        if LIVE.resolve() not in candidate.parents or not candidate.is_file():
+            self._send_error_json(404, "live fixture not found")
+            return
+        payload = candidate.read_bytes()
+        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if candidate.suffix in (".m3u", ".txt"):
+            content_type = "audio/x-mpegurl; charset=utf-8"
+        if candidate.suffix == ".json":
+            content_type = "application/json; charset=utf-8"
+        self._send_bytes(payload, content_type)
 
     def _send_media(self, relative_path: str) -> None:
         referer = self.headers.get("Referer")

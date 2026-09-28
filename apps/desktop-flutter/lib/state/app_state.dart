@@ -21,6 +21,7 @@ import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
 import '../services/app_paths.dart';
 import '../services/log_service.dart';
+import '../services/live_service.dart';
 import '../services/proxy_server.dart';
 import '../services/site_service.dart';
 import '../services/spider_process.dart';
@@ -97,8 +98,10 @@ class AppState extends ChangeNotifier {
     AppPaths? paths,
     LogService? log,
     String? sidecarHostPath,
+    LiveService? liveService,
   }) : paths = paths ?? AppPaths.resolve(),
-       log = log ?? LogService() {
+       log = log ?? LogService(),
+       _injectedLiveService = liveService {
     final cacheDir = this.paths.cacheDir;
     _supervisor = SpiderHostSupervisor(
       workRoot: p.join(cacheDir, 'sidecars'),
@@ -127,6 +130,12 @@ class AppState extends ChangeNotifier {
   final HttpApiClient _httpClient = HttpApiClient();
   final CatHttpClient _catHttpClient = CatHttpClient();
   late final SpiderRouter _router;
+
+  /// 测试注入的直播服务（用于避免 UI 测试在 fake-async 区做真实 socket I/O）。
+  final LiveService? _injectedLiveService;
+
+  /// 直播源加载服务（§13.1）。懒加载：未打开直播页前不建立连接。
+  LiveService? _liveService;
 
   /// sidecar 宿主（§9.8）。按站点隔离进程、限制资源并按指数退避重试。
   late final SpiderHostSupervisor _supervisor;
@@ -178,6 +187,12 @@ class AppState extends ChangeNotifier {
   String? get notice => _notice;
   AppConfig? get config => _config;
   SiteService? get siteService => _siteService;
+
+  /// 当前配置声明的直播源（§7.1 `lives`）。
+  List<LiveSource> get liveSources => _config?.lives ?? const [];
+
+  /// 直播服务（§13.1）。首次访问时构造，复用同一个 HttpClient 与缓存。
+  LiveService get liveService => _liveService ??= _injectedLiveService ?? LiveService();
   AppDatabase? get database => _database;
   ConfigRecord? get activeRecord => _activeRecord;
   List<ConfigRecord> get configs => _configs;
@@ -1183,6 +1198,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _router.dispose();
     _importService.close();
+    _liveService?.close();
     // §22.2:退出后 sidecar 与代理端口全部释放。
     unawaited(_supervisor.shutdownAll());
     unawaited(_proxy.stop());
