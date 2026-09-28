@@ -1,0 +1,413 @@
+WebHTV PC Windows 验收日志
+开始时间：2026-09-27T19:49:15.5065532+08:00
+仓库：C:\Users\Maple\orca\workspaces\webhtv-pc\dev1
+
+PHASE1-ACCEPT fixture-server already-running port=18080
+PHASE1-ACCEPT step: media-fixture-preflight
+PHASE1-ACCEPT media-preflight with-headers status=200
+PHASE1-ACCEPT media-preflight without-headers status=403
+PHASE1-ACCEPT media-fixture-preflight ok elapsed=830ms
+PHASE1-ACCEPT step: python-contract-tests
+test_forbidden_spider_permissions_are_rejected (tests.test_contracts.ContractTests.test_forbidden_spider_permissions_are_rejected) ... ok
+test_minimal_config_is_valid (tests.test_contracts.ContractTests.test_minimal_config_is_valid) ... ok
+test_request_requires_deadline (tests.test_contracts.ContractTests.test_request_requires_deadline) ... ok
+test_unknown_config_fields_are_preserved_by_fixture (tests.test_contracts.ContractTests.test_unknown_config_fields_are_preserved_by_fixture) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.009s
+
+OK
+PHASE1-ACCEPT python-contract-tests ok elapsed=9277ms
+PHASE1-ACCEPT step: python-validate-contracts
+通过：最小 TVBox 配置
+通过：Spider manifest
+通过：IPC 请求
+通过：IPC 成功响应
+通过：IPC 错误响应
+通过：IPC 取消请求
+全部 Phase 0 契约验证通过。
+PHASE1-ACCEPT python-validate-contracts ok elapsed=9191ms
+PHASE1-ACCEPT step: dart-analyze
+Analyzing desktop-flutter...
+No issues found!
+PHASE1-ACCEPT dart-analyze ok elapsed=32316ms
+PHASE1-ACCEPT step: flutter-unit-tests
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart
+00:00 +0: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 三种入口：JSON 文本、本地文件、HTTP URL
+00:00 +1: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 配置解析（§7.1–§7.4） 最小配置解析出站点与未知字段保留
+00:00 +2: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） gzip 传输编码与 UTF-8 BOM 都能导入
+00:00 +3: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 配置解析（§7.1–§7.4） msg 键存在即拒绝加载（含空值），错误码为 configMsg
+00:00 +4: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +5: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +6: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +7: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +8: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +9: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +10: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +11: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +12: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +13: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +14: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +15: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +16: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +17: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 声明 charset=gbk 的配置可解码（§7.4.1）
+00:00 +18: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: HTTP API 请求编码（§7.4.7） Header 注入顺序：全局规则匹配 host 后由站点 header 覆盖同名键
+00:00 +19: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 重定向循环与降级到 file:// 都被拒绝
+00:00 +20: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: HTTP API 请求编码（§7.4.7） 搜索请求带 wd/pg，quick 仅在站点声明 quickSearch 时生效
+00:00 +21: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +22: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +23: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +24: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +25: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +26: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） 分类 JSON：分页字段与筛选项解析正确
+00:00 +27: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） HTTP 非 2xx 映射为 configHttp，网络不可达映射为 configNetwork
+00:00 +28: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
+00:00 +29: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
+00:00 +30: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
+00:00 +31: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
+00:00 +32: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 仓库条目的内容仍是仓库时停止递归展开（§7.4.2）
+00:00 +33: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 仓库条目的内容仍是仓库时停止递归展开（§7.4.2）
+00:00 +34: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 仓库条目的内容仍是仓库时停止递归展开（§7.4.2）
+00:00 +35: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） code/data 信封解包，数组 data 包装为 list（§9.4）
+00:00 +36: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 仓库条目内容非法或站点为空时给出可定位错误
+00:00 +37: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 仓库条目内容非法或站点为空时给出可定位错误
+00:00 +38: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） 业务错误 msg 不转换为空列表（§7.4.3）
+00:00 +39: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +40: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +41: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +42: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +43: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +44: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +45: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +46: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +47: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +48: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +49: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 首页 → 分类 → 详情 → 播放 闭环
+00:00 +50: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 播放决策（§7.4.8） playUrl 前缀形态拼接（目标不是直链时）
+00:00 +51: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +52: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +53: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +54: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +55: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +56: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +57: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +58: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +59: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +60: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +61: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +62: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7
+00:00 +63: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） BOM 去除与 charset 识别
+00:00 +64: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +65: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +66: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
+00:01 +67: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
+00:01 +68: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
+00:01 +69: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
+00:01 +70: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
+00:01 +71: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +72: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +73: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +74: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +75: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +76: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +77: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +78: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +79: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +80: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +81: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +82: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +83: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 存储（§15、§16.3） 收藏增删查
+00:01 +84: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 存储（§15、§16.3） 数据库打开失败返回错误而不抛出（§16.3）
+00:01 +85: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 单站点失败不影响其他站点（§8.4、§14.3）
+00:01 +86: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 单站点失败不影响其他站点（§8.4、§14.3）
+00:01 +87: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 多线路/多剧集详情能解析出全部线路（§8.4）
+00:02 +88: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 详情业务错误 msg 上报为 siteBusiness，不变成空列表
+00:02 +89: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 播放决策记录健康统计与耗时（§14.2）
+00:02 +90: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 需要解析器的剧集给出明确错误而不是静默成功（§7.4.8）
+00:02 +91: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 播放结果 parse=1 时明确报需要解析器（§7.4.8）
+00:02 +92: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置记录持久化与恢复（§7.5、§16） 导入 → 保存 → 重启恢复 得到同样的模型与未知字段
+00:02 +93: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置记录持久化与恢复（§7.5、§16） 重复导入同一来源覆盖而不是新增版本
+00:02 +94: All tests passed!
+PHASE1-ACCEPT flutter-unit-tests ok elapsed=24917ms
+PHASE1-ACCEPT step: flutter-windows-integration-tests
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/mvp_a_flow_test.dart
+Building Windows application...                                   125.4s
+√ Built build\windows\x64\runner\Debug\webhtv_pc.exe
+00:00 +0: (setUpAll)
+00:00 +0: 主界面可交互且包含 §17.1 的桌面布局
+00:01 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/mvp_a_flow_test.dart
+media_kit: NativeReferenceHolder: Allocated 1895704748576
+00:16 +0: 主界面可交互且包含 §17.1 的桌面布局
+PHASE1-EVIDENCE shell-ready topbar=true sidebar=5
+00:16 +1: 首次启动展示使用边界提示，且可确认（§22.4）
+PHASE1-EVIDENCE usage-boundary-notice=present
+PHASE1-EVIDENCE usage-boundary-notice=accepted
+00:18 +2: 配置导入 → 首页 → 分类 → 详情 → 播放 闭环
+PHASE1-EVIDENCE config-imported sites=6 origin=inline://json/
+PHASE1-EVIDENCE home-ok classes=1 list=1 site=fixture-type1
+PHASE1-EVIDENCE category-ok t=1 list=1 page=1 pagecount=1
+PHASE1-EVIDENCE detail-ok vod=demo-1 lines=1 episodes=1
+PHASE1-EVIDENCE playback-decision action=direct url=http://127.0.0.1:18080/media/sample.m3u8 flag=fixture reason=
+VideoOutput.Resize
+{handle: 1895709229456, id: 1895955948832, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 1895955948832
+VideoOutput.Resize
+{handle: 1895709229456, id: 1896205295312, rect: {height: 180, left: 0, top: 0, width: 320}}
+PHASE1-EVIDENCE playback succeeded=true duration=6016ms load=1413ms firstFrame=1413ms
+PHASE1-EVIDENCE seek reached=true position=3021ms
+PHASE1-EVIDENCE history-persisted vod=demo-1 progress=50% completed=true
+00:21 +3: 单站点失败不影响其他站点，UI 不卡死（§8.1、§8.4）
+PHASE1-EVIDENCE good-site home-ok list=1
+PHASE1-EVIDENCE broken-site error=siteHttp: 上游返回 HTTP 502 | detail=broken home | status=502
+PHASE1-EVIDENCE unavailable-site runtime=Node/QuickJS Spider stage=Phase 3
+PHASE1-EVIDENCE recovery after-failure home-ok
+00:23 +4: 渲染 UI 页面：配置页、浏览页、详情页、历史页、设置页、日志页
+PHASE1-EVIDENCE config-page-rendered saved-records=1
+PHASE1-EVIDENCE browse-page-rendered cards=1
+PHASE1-EVIDENCE detail-page-rendered lines=1 episodes=1
+PHASE1-EVIDENCE pages-rendered history/favorites/settings/logs logs=8
+00:27 +5: 窗口缩放与全屏切换后布局稳定（§17.5）
+PHASE1-EVIDENCE layout-1280x720 ok
+PHASE1-EVIDENCE layout-1920x1080 ok
+PHASE1-EVIDENCE layout-1024x640 ok
+PHASE1-EVIDENCE fullscreen-entered=true
+PHASE1-EVIDENCE fullscreen-restored=true
+00:43 +6: 数据库删除后可初始化默认库（§16.3）
+PHASE1-EVIDENCE database-rebuild-after-delete ok
+PHASE1-EVIDENCE cache-rebuild-after-delete ok
+00:44 +7: (tearDownAll)
+00:44 +7: All tests passed!
+PHASE1-ACCEPT flutter-windows-integration-tests ok elapsed=190684ms
+PHASE1-ACCEPT flutter-build-windows-release skipped
+PHASE1-ACCEPT step: release-bundle-inspection
+PHASE1-ACCEPT release bundle dir=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\apps\desktop-flutter\build\windows\x64\runner\Release size=78.3MB files=27
+PHASE1-ACCEPT release required-present libmpv-2.dll
+PHASE1-ACCEPT release required-present sqlite3.dll
+PHASE1-ACCEPT release required-present flutter_windows.dll
+PHASE1-ACCEPT release required-present webhtv_pc.exe
+PHASE1-ACCEPT release forbidden-content none
+PHASE1-ACCEPT release-bundle-inspection ok elapsed=5383ms
+PHASE1-ACCEPT step: render-evidence-shell
+{
+  "mode": "shell",
+  "command_args": [
+    "--screenshot-ready-file=F:\\temp\\webhtv-ready-30820-1790510035810747300.txt"
+  ],
+  "ready_file_written": true,
+PHASE1-ACCEPT shell ready=true
+  "ready_file_content": "ready 2026-09-27T19:54:01.626820\nWebHTV PC 0.1.0 (MVP-A (Windows)) platform=windows arch=x64 player=media-kit (libmpv) dart=3.13.4 (stable) (Tue Sep 15 01:01:15 2026 -0700) on \"windows_x64\" startup=48ms\nentry=0ms binding=0ms media-kit=0ms window-manager=0ms args-parsed=0ms run-app=0ms first-frame=11ms interactive=66ms",
+  "capture_method": "print-window-render-full-content",
+  "window_size": [
+    1280,
+    800
+  ],
+  "sampled_region": [
+    1280,
+    800
+  ],
+  "distinct_colors": 170,
+PHASE1-ACCEPT shell distinct_colors=170
+  "non_black_ratio": 0.9781,
+PHASE1-ACCEPT shell non_black_ratio=0.9781
+  "mean_luma": 30.57,
+  "extrema": [
+    0,
+    243
+  ],
+  "screenshot": "docs/phase1/evidence/windows-shell.png",
+  "media": null,
+  "seek_seconds": null,
+  "fullscreen": false,
+  "exit_code": null
+}
+PHASE1-ACCEPT render-evidence-shell ok elapsed=26371ms
+PHASE1-ACCEPT step: render-evidence-local-mp4
+{
+  "mode": "player",
+  "command_args": [
+    "--screenshot-ready-file=F:\\temp\\webhtv-ready-44904-1790510061222291800.txt",
+    "--media=http://127.0.0.1:18080/media/sample.mp4",
+    "--header=Referer:http://127.0.0.1:18080/",
+    "--header=User-Agent:WebHTV-PC/0.1 (Windows)"
+  ],
+  "ready_file_written": true,
+PHASE1-ACCEPT local-mp4 ready=true
+  "ready_file_content": "ready 2026-09-27T19:54:26.373371\nWebHTV PC 0.1.0 (MVP-A (Windows)) platform=windows arch=x64 player=media-kit (libmpv) dart=3.13.4 (stable) (Tue Sep 15 01:01:15 2026 -0700) on \"windows_x64\" startup=34ms\nentry=0ms binding=0ms media-kit=0ms window-manager=1ms args-parsed=1ms run-app=1ms first-frame=12ms interactive=50ms",
+  "capture_method": "print-window-render-full-content",
+  "window_size": [
+    1280,
+    800
+  ],
+  "sampled_region": [
+    1280,
+    480
+  ],
+  "distinct_colors": 62548,
+PHASE1-ACCEPT local-mp4 distinct_colors=62548
+  "non_black_ratio": 0.8258,
+PHASE1-ACCEPT local-mp4 non_black_ratio=0.8258
+  "mean_luma": 100.8,
+  "extrema": [
+    0,
+    227
+  ],
+  "screenshot": "docs/phase1/evidence/windows-mp4.png",
+  "media": "http://127.0.0.1:18080/media/sample.mp4",
+  "seek_seconds": null,
+  "fullscreen": false,
+  "exit_code": null
+}
+PHASE1-ACCEPT render-evidence-local-mp4 ok elapsed=35585ms
+PHASE1-ACCEPT step: render-evidence-header-hls
+{
+  "mode": "player",
+  "command_args": [
+    "--screenshot-ready-file=F:\\temp\\webhtv-ready-47712-1790510096617764600.txt",
+    "--media=http://127.0.0.1:18080/media/sample.m3u8",
+    "--header=Referer:http://127.0.0.1:18080/",
+    "--header=User-Agent:WebHTV-PC/0.1 (Windows)"
+  ],
+  "ready_file_written": true,
+PHASE1-ACCEPT header-hls ready=true
+  "ready_file_content": "ready 2026-09-27T19:55:00.810923\nWebHTV PC 0.1.0 (MVP-A (Windows)) platform=windows arch=x64 player=media-kit (libmpv) dart=3.13.4 (stable) (Tue Sep 15 01:01:15 2026 -0700) on \"windows_x64\" startup=41ms\nentry=0ms binding=0ms media-kit=0ms window-manager=0ms args-parsed=0ms run-app=0ms first-frame=10ms interactive=60ms",
+  "capture_method": "print-window-render-full-content",
+  "window_size": [
+    1280,
+    800
+  ],
+  "sampled_region": [
+    1280,
+    480
+  ],
+  "distinct_colors": 62548,
+PHASE1-ACCEPT header-hls distinct_colors=62548
+  "non_black_ratio": 0.8258,
+PHASE1-ACCEPT header-hls non_black_ratio=0.8258
+  "mean_luma": 100.8,
+  "extrema": [
+    0,
+    227
+  ],
+  "screenshot": "docs/phase1/evidence/windows-header-hls.png",
+  "media": "http://127.0.0.1:18080/media/sample.m3u8",
+  "seek_seconds": null,
+  "fullscreen": false,
+  "exit_code": null
+}
+PHASE1-ACCEPT render-evidence-header-hls ok elapsed=34437ms
+PHASE1-ACCEPT step: render-evidence-seek
+{
+  "mode": "player",
+  "command_args": [
+    "--screenshot-ready-file=F:\\temp\\webhtv-ready-36136-1790510131078886800.txt",
+    "--media=http://127.0.0.1:18080/media/sample.m3u8",
+    "--header=Referer:http://127.0.0.1:18080/",
+    "--header=User-Agent:WebHTV-PC/0.1 (Windows)",
+    "--seek=3.0"
+  ],
+  "ready_file_written": true,
+PHASE1-ACCEPT seek ready=true
+  "ready_file_content": "ready 2026-09-27T19:55:35.542550\nWebHTV PC 0.1.0 (MVP-A (Windows)) platform=windows arch=x64 player=media-kit (libmpv) dart=3.13.4 (stable) (Tue Sep 15 01:01:15 2026 -0700) on \"windows_x64\" startup=33ms\nentry=0ms binding=0ms media-kit=0ms window-manager=1ms args-parsed=1ms run-app=1ms first-frame=12ms interactive=52ms",
+  "capture_method": "print-window-render-full-content",
+  "window_size": [
+    1280,
+    800
+  ],
+  "sampled_region": [
+    1280,
+    480
+  ],
+  "distinct_colors": 62548,
+PHASE1-ACCEPT seek distinct_colors=62548
+  "non_black_ratio": 0.8258,
+PHASE1-ACCEPT seek non_black_ratio=0.8258
+  "mean_luma": 100.8,
+  "extrema": [
+    0,
+    227
+  ],
+  "screenshot": "docs/phase1/evidence/windows-seek.png",
+  "media": "http://127.0.0.1:18080/media/sample.m3u8",
+  "seek_seconds": 3.0,
+  "fullscreen": false,
+  "exit_code": null
+}
+PHASE1-ACCEPT render-evidence-seek ok elapsed=34685ms
+PHASE1-ACCEPT step: render-evidence-fullscreen
+{
+  "mode": "player",
+  "command_args": [
+    "--screenshot-ready-file=F:\\temp\\webhtv-ready-34908-1790510165905392000.txt",
+    "--media=http://127.0.0.1:18080/media/sample.m3u8",
+    "--header=Referer:http://127.0.0.1:18080/",
+    "--header=User-Agent:WebHTV-PC/0.1 (Windows)",
+    "--fullscreen=true"
+  ],
+  "ready_file_written": true,
+PHASE1-ACCEPT fullscreen ready=true
+  "ready_file_content": "ready 2026-09-27T19:56:11.737209\nWebHTV PC 0.1.0 (MVP-A (Windows)) platform=windows arch=x64 player=media-kit (libmpv) dart=3.13.4 (stable) (Tue Sep 15 01:01:15 2026 -0700) on \"windows_x64\" startup=32ms\nentry=0ms binding=0ms media-kit=0ms window-manager=1ms args-parsed=1ms run-app=2ms first-frame=13ms interactive=52ms",
+  "capture_method": "print-window-render-full-content",
+  "window_size": [
+    2560,
+    1080
+  ],
+  "sampled_region": [
+    2560,
+    648
+  ],
+  "distinct_colors": 99890,
+PHASE1-ACCEPT fullscreen distinct_colors=99890
+  "non_black_ratio": 0.6336,
+PHASE1-ACCEPT fullscreen non_black_ratio=0.6336
+  "mean_luma": 79.41,
+  "extrema": [
+    0,
+    227
+  ],
+  "screenshot": "docs/phase1/evidence/windows-fullscreen.png",
+  "media": "http://127.0.0.1:18080/media/sample.m3u8",
+  "seek_seconds": null,
+  "fullscreen": true,
+  "exit_code": null
+}
+PHASE1-ACCEPT render-evidence-fullscreen ok elapsed=28149ms
+PHASE1-ACCEPT step: environment-startup-baseline
+PHASE1-ACCEPT environment-baseline dart-aot-hello samples=209,68,50,51,67,219,105,138,282,103 n=10 median=105ms p95=282ms
+PHASE1-ACCEPT environment-baseline 参考值：健康机器上 Dart AOT hello 冷启动约 80ms；本机中位数 105ms
+PHASE1-ACCEPT environment-startup-baseline ok elapsed=1405ms
+PHASE1-ACCEPT step: cold-start-and-first-frame-sampling
+PHASE1-ACCEPT cold-start run=1 total=4432ms engine-floor=4135ms app=186ms bootstrap=70ms
+PHASE1-ACCEPT cold-start run=2 total=4837ms engine-floor=4595ms app=139ms bootstrap=53ms
+PHASE1-ACCEPT cold-start run=3 total=4802ms engine-floor=4498ms app=157ms bootstrap=50ms
+PHASE1-ACCEPT cold-start run=4 total=4934ms engine-floor=4592ms app=226ms bootstrap=89ms
+PHASE1-ACCEPT cold-start run=5 total=5075ms engine-floor=4758ms app=ms bootstrap=ms
+PHASE1-ACCEPT cold-start run=6 total=4492ms engine-floor=4257ms app=146ms bootstrap=51ms
+PHASE1-ACCEPT cold-start run=7 total=5083ms engine-floor=4629ms app=286ms bootstrap=95ms
+PHASE1-ACCEPT cold-start run=8 total=4871ms engine-floor=4391ms app=247ms bootstrap=110ms
+PHASE1-ACCEPT cold-start run=9 total=4753ms engine-floor=4249ms app=233ms bootstrap=96ms
+PHASE1-ACCEPT cold-start run=10 total=4992ms engine-floor=4571ms app=280ms bootstrap=153ms
+PHASE1-ACCEPT cold-start samples=4432,4837,4802,4934,5075,4492,5083,4871,4753,4992
+PHASE1-ACCEPT cold-start summary n=10 min=4432ms median=4871ms p95=5083ms max=5083ms
+PHASE1-ACCEPT cold-start engine-floor n=10 median=4571ms p95=4758ms
+PHASE1-ACCEPT cold-start app-attributable n=9 samples=186,139,157,226,146,286,247,233,280 median=226ms p95=286ms
+PHASE1-ACCEPT cold-start §22.2-total p95=5083ms 超过 3 秒：环境受限（见 environment-baseline 与 cold-start engine-floor），应用自身 p95=286ms
+PHASE1-ACCEPT cold-start app-budget ok p95=286ms < 1000ms
+PHASE1-ACCEPT first-frame run=1 firstFrame=1077ms load=601ms
+PHASE1-ACCEPT first-frame run=2 firstFrame=1257ms load=762ms
+PHASE1-ACCEPT first-frame run=3 firstFrame=1203ms load=601ms
+PHASE1-ACCEPT first-frame run=4 firstFrame=2293ms load=1267ms
+PHASE1-ACCEPT first-frame run=5 firstFrame=1315ms load=952ms
+PHASE1-ACCEPT first-frame run=6 firstFrame=1255ms load=741ms
+PHASE1-ACCEPT first-frame run=7 firstFrame=1184ms load=679ms
+PHASE1-ACCEPT first-frame run=8 firstFrame=1258ms load=650ms
+PHASE1-ACCEPT first-frame run=9 firstFrame=1503ms load=1022ms
+PHASE1-ACCEPT first-frame run=10 firstFrame=1798ms load=1038ms
+PHASE1-ACCEPT first-frame samples=1077,1257,1203,2293,1315,1255,1184,1258,1503,1798
+PHASE1-ACCEPT first-frame summary n=10 median=1258ms p95=2293ms max=2293ms
+PHASE1-ACCEPT first-frame load n=10 median=762ms max=1267ms
+PHASE1-ACCEPT first-frame budget ok p95=2293ms <= 5000ms
+PHASE1-ACCEPT cold-start-and-first-frame-sampling ok elapsed=124777ms
+
+结束时间：2026-09-27T19:58:40.0942881+08:00
+WebHTV PC Windows 验收完成：0 个失败项
+PHASE1-ACCEPT summary failures=0 list=
