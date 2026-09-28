@@ -1,0 +1,32 @@
+{
+  "abi": "webhtv-ipc-v1",
+  "abiMinor": 0,
+  "key": "sidecar-fixture",
+  "name": "Sidecar Fixture Spider",
+  "runtime": "python-3",
+  "entry": "spiders/fixture_spider.py",
+  "capabilities": ["home", "category", "detail", "search", "play"],
+  "permissions": {
+    "network": true,
+    "localProxy": false,
+    "ui": false,
+    "storage": "cache-only",
+    "process": false,
+    "clipboard": false,
+    "browser": false
+  },
+  "limits": {
+    "memoryMiB": 128,
+    "cpuSeconds": 15,
+    "concurrency": 2,
+    "responseMiB": 4
+  },
+  "hashes": {
+    "entrySha256": ""
+  },
+  "signature": null,
+  "config": {
+    "base": "http://127.0.0.1:18080",
+    "playMedia": "/media/sample.m3u8"
+  }
+}
