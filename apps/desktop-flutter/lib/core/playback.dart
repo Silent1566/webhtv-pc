@@ -102,6 +102,7 @@ class PlaybackResolutionInput {
     this.resultHeader,
     this.globalHeaders = const [],
     this.subs = const [],
+    this.danmaku = const [],
   });
 
   final Site site;
@@ -118,6 +119,9 @@ class PlaybackResolutionInput {
 
   /// 播放结果携带的外挂字幕（§10.3），原样透传到决策。
   final List<SubtitleInfo> subs;
+
+  /// 播放结果携带的弹幕源（§21 Phase 3），原样透传到决策。
+  final List<DanmakuSource> danmaku;
 }
 
 /// 播放决策器：只根据输入决定动作，不执行网络。
@@ -158,6 +162,7 @@ abstract final class PlaybackResolver {
         headers: headers,
         flag: input.flag,
         subs: input.subs,
+        danmaku: input.danmaku,
       );
     }
 
@@ -170,6 +175,7 @@ abstract final class PlaybackResolver {
         headers: headers,
         flag: input.flag,
         subs: input.subs,
+        danmaku: input.danmaku,
       );
     }
 
@@ -184,6 +190,7 @@ abstract final class PlaybackResolver {
           headers: headers,
           flag: input.flag,
           subs: input.subs,
+        danmaku: input.danmaku,
         );
       }
       throw AppError(

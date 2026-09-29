@@ -179,8 +179,9 @@ class _HistoryPageState extends State<HistoryPage> {
               flag: item.flag,
               startPosition: Duration(milliseconds: item.positionMs),
               vodPic: item.vodPic,
-              // 外挂字幕（§10.3）：历史恢复同样带入，避免续播后字幕丢失。
+              // 外挂字幕（§10.3）/弹幕（§21 Phase 3）：历史恢复同样带入。
               subtitles: decision.subs,
+              danmaku: decision.danmaku,
               subtitleHeaders:
                   decision.assetHeaders?.asRequestHeaders ?? const {},
             ),

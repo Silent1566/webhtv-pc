@@ -963,6 +963,98 @@ class SubtitleInfo {
       'SubtitleInfo(name=$name lang=$lang format=$format flag=$flag url=${redactUrl(url)})';
 }
 
+/// 弹幕源类型（与 Android `DanmakuUrlPolicy.classify` 语义对齐）。
+enum DanmakuSourceKind {
+  /// 静态弹幕文件（`http(s)` 弹幕文件、本地文件）。
+  staticFile,
+
+  /// 直播弹幕（`ws`/`wss`）：需要 WebSocket 会话，本阶段不支持。
+  live,
+
+  /// 协议不受支持。
+  unsupported,
+}
+
+/// 一个弹幕源（播放结果里的 `danmaku` 条目）。
+///
+/// 字段与 WebHTV Android 的 `com.fongmi.android.tv.bean.Danmaku` 对齐：
+/// `name`、`url`，外加 `source`/`from`/`site` 等来源标记。
+/// 解析细节见 `lib/core/danmaku.dart`。
+class DanmakuSource {
+  const DanmakuSource({
+    required this.url,
+    this.name = '',
+    this.source = '',
+    this.selected = false,
+  });
+
+  final String url;
+  final String name;
+
+  /// 来源标记（`source`/`from`/`site`/`provider`/`platform` 任一）。
+  final String source;
+
+  final bool selected;
+
+  /// 展示名：名称 → 来源 → 地址末段（对齐 Android `Danmaku.getName`）。
+  String get displayName {
+    if (name.isNotEmpty) return name;
+    if (source.isNotEmpty) return source;
+    return url.isEmpty ? '弹幕' : url.split('/').last;
+  }
+
+  /// 地址是否是直播弹幕（`ws`/`wss`）。
+  bool get isLive => classify() == DanmakuSourceKind.live;
+
+  Map<String, Object?> toJson() => {
+    'name': name,
+    'url': url,
+    'source': source,
+    'selected': selected,
+  };
+
+  /// 判定源类型（与 Android `DanmakuUrlPolicy.classify` 取舍一致）：
+  /// `http/https/file` → 静态；`ws/wss` → 直播；其余 → 不支持。
+  DanmakuSourceKind classify() {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return DanmakuSourceKind.unsupported;
+    // Windows 盘符路径（`C:\...`）先于 URI 解析判定，否则会被当成 scheme。
+    if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(trimmed)) {
+      return DanmakuSourceKind.staticFile;
+    }
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return DanmakuSourceKind.unsupported;
+    final scheme = uri.scheme.toLowerCase();
+    if (scheme == 'http' || scheme == 'https') {
+      return uri.host.isEmpty
+          ? DanmakuSourceKind.unsupported
+          : DanmakuSourceKind.staticFile;
+    }
+    if (scheme == 'file') return DanmakuSourceKind.staticFile;
+    if (scheme == 'ws' || scheme == 'wss') {
+      return uri.host.isEmpty
+          ? DanmakuSourceKind.unsupported
+          : DanmakuSourceKind.live;
+    }
+    if (scheme.isEmpty) return DanmakuSourceKind.staticFile;
+    return DanmakuSourceKind.unsupported;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is DanmakuSource &&
+      other.url == url &&
+      other.name == name &&
+      other.source == source;
+
+  @override
+  int get hashCode => Object.hash(url, name, source);
+
+  @override
+  String toString() =>
+      'DanmakuSource(name=$displayName source=$source url=${redactUrl(url)})';
+}
+
 /// 统一的 Result 结构（首页/分类/详情/搜索/播放）。
 class SiteResult {
   const SiteResult({
@@ -979,6 +1071,7 @@ class SiteResult {
     this.jx,
     this.msg,
     this.subs = const [],
+    this.danmaku = const [],
     this.extra = const {},
   });
 
@@ -999,6 +1092,9 @@ class SiteResult {
 
   /// 播放结果携带的外挂字幕（§10.3）。非播放结果通常为空。
   final List<SubtitleInfo> subs;
+
+  /// 播放结果携带的弹幕源（§21 Phase 3「弹幕可开启和关闭」）。
+  final List<DanmakuSource> danmaku;
   final Map<String, Object?> extra;
 
   bool get isEmpty => classes.isEmpty && list.isEmpty && playUrl == null;
@@ -1017,6 +1113,7 @@ class SiteResult {
     int? jx,
     String? msg,
     List<SubtitleInfo>? subs,
+    List<DanmakuSource>? danmaku,
   }) {
     return SiteResult(
       classes: classes ?? this.classes,
@@ -1032,6 +1129,7 @@ class SiteResult {
       jx: jx ?? this.jx,
       msg: msg ?? this.msg,
       subs: subs ?? this.subs,
+      danmaku: danmaku ?? this.danmaku,
       extra: extra,
     );
   }
@@ -1058,6 +1156,7 @@ class PlaybackDecision {
     this.reason,
     this.flag,
     this.subs = const [],
+    this.danmaku = const [],
     this.upstreamHeaders,
   });
 
@@ -1071,19 +1170,22 @@ class PlaybackDecision {
   /// 播放结果携带的外挂字幕（§10.3）：随决策一起传到播放器。
   final List<SubtitleInfo> subs;
 
+  /// 播放结果携带的弹幕源（§21 Phase 3）：随决策一起传到播放器。
+  final List<DanmakuSource> danmaku;
+
   /// 代理**之前**合并出的媒体 Header（§7.4.6）。
   ///
   /// 走本地代理时 [headers] 会被清空（Header 由代理注入，避免泄漏到直连请求），
-  /// 但外挂字幕由宿主自己发请求，必须用代理前的原始 Header，否则丢 Referer/UA。
+  /// 但外挂字幕/弹幕由宿主自己发请求，必须用代理前的原始 Header，否则丢 Referer/UA。
   final HeaderMap? upstreamHeaders;
 
-  /// 宿主自行发起的附加资源请求（外挂字幕）应使用的 Header。
+  /// 宿主自行发起的附加资源请求（外挂字幕、弹幕）应使用的 Header。
   HeaderMap? get assetHeaders =>
       (upstreamHeaders?.isNotEmpty ?? false) ? upstreamHeaders : headers;
 
   String get logLine =>
       'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} '
-      'subs=${subs.length} reason=${reason ?? ""}';
+      'subs=${subs.length} danmaku=${danmaku.length} reason=${reason ?? ""}';
 }
 
 /// URL 脱敏：只保留 scheme + host + path，隐藏 query 与片段（§11.3.1）。

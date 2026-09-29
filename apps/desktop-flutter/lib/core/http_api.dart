@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
 import 'app_error.dart';
+import 'danmaku.dart';
 import 'protocol.dart';
 
 /// 站点类型常量。
@@ -386,6 +387,8 @@ abstract final class HttpApiResponseParser {
       playUrl: asNonEmptyString(map['url']) ?? asNonEmptyString(map['playUrl']),
       // 外挂字幕（§10.3）：`subs` 数组仅在播放结果里有意义，其他结果为空。
       subs: SubtitleInfo.listFromJson(map['subs']),
+      // 弹幕源（§21 Phase 3）：形态极宽松，由 danmaku.dart 的兼容层解析。
+      danmaku: danmakuSourcesFromJson(map['danmaku']),
     );
   }
 

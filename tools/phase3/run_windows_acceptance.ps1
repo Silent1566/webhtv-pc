@@ -1,11 +1,11 @@
-# WebHTV PC Phase 3 验收脚本（直播 + 字幕 · Windows）
+# WebHTV PC Phase 3 验收脚本（直播 + 字幕 + 弹幕 · Windows）
 #
 # 一条命令跑完 Phase 3 验收门禁（docs/phase3/README.md §3）：
-#   0. 直播清单 + 字幕 fixture 预检（Content-Type 正确、越权 403/404）
+#   0. 直播清单 + 字幕 + 弹幕 fixture 预检（Content-Type 正确、越权 403/404）
 #   1. 契约与 fixture 测试（Python）+ 直播清单 Schema 校验
 #   2. 静态检查（dart analyze）
-#   3. 单元测试（flutter test，含 phase3_* 直播/诊断/字幕门禁套件）
-#   4. Windows 集成测试（真实窗口 + 真实播放器 + 直播直链 + 外挂字幕，-d windows）
+#   3. 单元测试（flutter test，含 phase3_* 直播/诊断/字幕/弹幕门禁套件）
+#   4. Windows 集成测试（真实窗口 + 真实播放器 + 直播/字幕/弹幕，-d windows）
 #   5. 汇总并输出 PHASE3-ACCEPT 可复查事实行
 #
 # 设计原则与 Phase 1/2 保持一致：
@@ -143,7 +143,7 @@ function Stop-FixtureServer {
 try {
     Start-FixtureServer
 
-    # 0) fixture 预检：直播清单三格式与字幕（含 Header 门禁）形态正确。
+    # 0) fixture 预检：直播清单三格式、字幕与弹幕（含 Header 门禁）形态正确。
     Invoke-Checked 'live-fixture-preflight' {
         function Fetch($path) {
             & curl.exe -s -o NUL -w '%{http_code}|%{content_type}' "http://127.0.0.1:$FixturePort$path"
@@ -162,8 +162,15 @@ try {
         $srtDenied = Fetch '/media/sample.srt'
         $srt = FetchWithMediaHeaders '/media/sample.srt'
         $playSubs = Fetch '/api/play-with-subs'
+        # 弹幕（§21 Phase 3）：与媒体/字幕同一道 Header 门禁。
+        $dXmlDenied = Fetch '/danmaku/sample.xml'
+        $dXml = FetchWithMediaHeaders '/danmaku/sample.xml'
+        $dTxt = FetchWithMediaHeaders '/danmaku/sample.txt'
+        $playDanmaku = Fetch '/api/play-with-danmaku'
         $log = "preflight m3u=$m3u txt=$txt json=$json missing=$missing " +
-               "srt-denied=$srtDenied srt=$srt play-with-subs=$playSubs"
+               "srt-denied=$srtDenied srt=$srt play-with-subs=$playSubs " +
+               "danmaku-denied=$dXmlDenied danmaku-xml=$dXml danmaku-txt=$dTxt " +
+               "play-with-danmaku=$playDanmaku"
         if (-not $m3u.StartsWith('200|')) { throw "M3U live 应 200，实际 $m3u" }
         if (-not $txt.StartsWith('200|')) { throw "TXT live 应 200，实际 $txt" }
         if (-not $json.StartsWith('200|')) { throw "JSON live 应 200，实际 $json" }
@@ -171,6 +178,10 @@ try {
         if (-not $srtDenied.StartsWith('403')) { throw "缺 Header 的字幕应 403，实际 $srtDenied" }
         if (-not $srt.StartsWith('200|application/x-subrip')) { throw "带 Header 的 SRT 应 200 且为 application/x-subrip，实际 $srt" }
         if (-not $playSubs.StartsWith('200|')) { throw "带 subs 的播放结果应 200，实际 $playSubs" }
+        if (-not $dXmlDenied.StartsWith('403')) { throw "缺 Header 的弹幕应 403，实际 $dXmlDenied" }
+        if (-not $dXml.StartsWith('200|application/xml')) { throw "带 Header 的弹幕 XML 应 200 且为 application/xml，实际 $dXml" }
+        if (-not $dTxt.StartsWith('200|')) { throw "带 Header 的弹幕 TXT 应 200，实际 $dTxt" }
+        if (-not $playDanmaku.StartsWith('200|')) { throw "带 danmaku 的播放结果应 200，实际 $playDanmaku" }
         Write-Host $log
     }
 
@@ -215,6 +226,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/live_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/subtitle_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/danmaku_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }

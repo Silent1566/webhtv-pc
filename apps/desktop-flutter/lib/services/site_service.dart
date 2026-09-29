@@ -232,6 +232,7 @@ class SiteService {
           resultHeader: playResult.header,
           globalHeaders: _globalHeaders,
           subs: playResult.subs,
+          danmaku: playResult.danmaku,
         ),
       );
       _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);

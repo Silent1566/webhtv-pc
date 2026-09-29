@@ -46,6 +46,16 @@ enum AppErrorKind {
   subtitleUnsupported,
   subtitleEmpty,
 
+  // 弹幕（§21 Phase 3「字幕/弹幕可开启和关闭」）
+  // 同样不得升级为播放失败，只用于提示与日志。
+  danmakuNetwork,
+  danmakuHttp,
+  danmakuTooLarge,
+  danmakuDecode,
+  danmakuInvalid,
+  danmakuEmpty,
+  danmakuUnsupported,
+
   // 直播（§13）
   liveInvalid,
   liveNetwork,
@@ -115,6 +125,20 @@ String describeErrorKind(AppErrorKind kind) {
       return '字幕格式不受支持（不影响视频播放）';
     case AppErrorKind.subtitleEmpty:
       return '字幕文件为空（不影响视频播放）';
+    case AppErrorKind.danmakuNetwork:
+      return '弹幕下载失败：网络不可达或 DNS 失败（不影响视频播放）';
+    case AppErrorKind.danmakuHttp:
+      return '弹幕下载失败：服务器返回非 2xx 状态（不影响视频播放）';
+    case AppErrorKind.danmakuTooLarge:
+      return '弹幕文件超过大小上限，已跳过（不影响视频播放）';
+    case AppErrorKind.danmakuDecode:
+      return '弹幕解码失败：编码不受支持（不影响视频播放）';
+    case AppErrorKind.danmakuInvalid:
+      return '弹幕内容非法：既不是 Bilibili XML 也不是行式文本（不影响视频播放）';
+    case AppErrorKind.danmakuEmpty:
+      return '弹幕文件为空（不影响视频播放）';
+    case AppErrorKind.danmakuUnsupported:
+      return '弹幕格式不受支持（不影响视频播放）';
     case AppErrorKind.liveInvalid:
       return '直播源内容非法：无法解析为 M3U/TXT/JSON';
     case AppErrorKind.liveNetwork:

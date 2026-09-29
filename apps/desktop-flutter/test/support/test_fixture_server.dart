@@ -85,6 +85,11 @@ class TestFixtureServer {
       await _serveMedia(request, path.substring('/media/'.length));
       return;
     }
+    // 弹幕 fixture（§21 Phase 3）：与媒体共用 Header 门禁，与 Python 服务一致。
+    if (path.startsWith('/danmaku/')) {
+      await _serveDanmaku(request, path.substring('/danmaku/'.length));
+      return;
+    }
     if (path.startsWith('/live/')) {
       await _serveLive(request, path.substring('/live/'.length));
       return;
@@ -111,6 +116,10 @@ class TestFixtureServer {
       // 带外挂字幕的播放结果（§10.3），与 Python fixture 服务保持一致。
       case '/api/play-with-subs':
         await _fixtureJson(request, 'http/play-with-subs.json');
+        return;
+      // 带弹幕源的播放结果（§21 Phase 3）。
+      case '/api/play-with-danmaku':
+        await _fixtureJson(request, 'http/play-with-danmaku.json');
         return;
       case '/api/repository-a.json':
         await _json(request, {
@@ -501,6 +510,32 @@ class TestFixtureServer {
       'x-mpegurl',
       charset: 'utf-8',
     );
+    request.response.add(bytes);
+  }
+
+  /// 弹幕文件与媒体同样要求 Referer/UA：弹幕常与视频同源，必须验证这一点。
+  Future<void> _serveDanmaku(HttpRequest request, String relative) async {
+    final referer = request.headers.value('referer');
+    final userAgent = request.headers.value('user-agent');
+    if (referer != requiredReferer || !acceptedUserAgents.contains(userAgent)) {
+      request.response.statusCode = HttpStatus.forbidden;
+      await _json(request, {'status': 403, 'msg': 'header requirement not met'});
+      return;
+    }
+    final candidate = File(p.join(fixturePath('danmaku'), relative));
+    if (!candidate.existsSync()) {
+      request.response.statusCode = HttpStatus.notFound;
+      await _json(request, {'status': 404});
+      return;
+    }
+    final bytes = candidate.readAsBytesSync();
+    request.response.headers.set(
+      HttpHeaders.contentTypeHeader,
+      candidate.path.endsWith('.xml')
+          ? 'application/xml; charset=utf-8'
+          : 'text/plain; charset=utf-8',
+    );
+    request.response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
     request.response.add(bytes);
   }
 

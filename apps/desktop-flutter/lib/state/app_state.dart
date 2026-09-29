@@ -1183,7 +1183,9 @@ class AppState extends ChangeNotifier {
       flag: decision.flag,
       // 字幕不随代理地址变化：原样透传（§10.3）。
       subs: decision.subs,
-      // 代理前的原始 Header 留给宿主自己的附加请求（外挂字幕）使用。
+      // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。
+      danmaku: decision.danmaku,
+      // 代理前的原始 Header 留给宿主自己的附加请求（外挂字幕/弹幕）使用。
       upstreamHeaders: decision.headers,
     );
   }

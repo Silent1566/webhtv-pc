@@ -12,11 +12,14 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/app_error.dart';
+import '../core/danmaku.dart';
 import '../core/protocol.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/subtitle.dart';
+import '../services/danmaku_service.dart';
 import '../state/app_state.dart';
 import 'app.dart';
+import 'danmaku_overlay.dart';
 import 'player_controller.dart';
 
 /// 一次播放请求（由详情页或命令行构造）。
@@ -37,6 +40,7 @@ class PlaybackRequest {
     this.directUrl = false,
     this.subtitles = const [],
     this.subtitleHeaders = const {},
+    this.danmaku = const [],
   });
 
   final String url;
@@ -58,6 +62,9 @@ class PlaybackRequest {
   /// 宿主自己请求，必须用代理前的原始 Header（§11.3.1）。
   final Map<String, String> subtitleHeaders;
 
+  /// 播放结果携带的弹幕源（§21 Phase 3）。拉取弹幕同样使用 [subtitleHeaders]。
+  final List<DanmakuSource> danmaku;
+
   /// 详情页给出的全部线路，用于线路切换与上下集。
   final List<VodPlayLine> playLines;
   final int episodeIndex;
@@ -78,6 +85,7 @@ class PlaybackRequest {
     Duration? startPosition,
     bool clearStartPosition = false,
     List<SubtitleInfo>? subtitles,
+    List<DanmakuSource>? danmaku,
   }) {
     return PlaybackRequest(
       url: url ?? this.url,
@@ -95,6 +103,7 @@ class PlaybackRequest {
       directUrl: directUrl,
       subtitles: subtitles ?? this.subtitles,
       subtitleHeaders: subtitleHeaders,
+      danmaku: danmaku ?? this.danmaku,
     );
   }
 }
@@ -104,10 +113,14 @@ class PlayerPage extends StatefulWidget {
     super.key,
     required this.state,
     required this.request,
+    this.danmakuLoader,
   });
 
   final AppState state;
   final PlaybackRequest request;
+
+  /// 弹幕加载器；测试可注入替身，默认自建 [DanmakuService]。
+  final DanmakuLoader? danmakuLoader;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -124,6 +137,20 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 最近一次字幕错误提示是否已展示，避免每次 setState 重复弹提示。
   String? _lastShownSubtitleError;
 
+  // ---------------------------------------------------------------- 弹幕
+
+  /// 弹幕加载器（§21 Phase 3）。
+  late final DanmakuLoader _danmakuLoader;
+
+  /// 当前集已加载的弹幕（按时间排序）。
+  List<DanmakuItem> _danmakuItems = const [];
+
+  /// 弹幕显示设置（开关/透明度/字号）。
+  DanmakuStyle _danmakuStyle = const DanmakuStyle();
+
+  String? _danmakuError;
+  String? _lastShownDanmakuError;
+
   /// 最近一次播放诊断快照（§23），用于播放器内展示与复制。
   PlaybackDiagnostics? _diagnostics;
 
@@ -131,6 +158,7 @@ class _PlayerPageState extends State<PlayerPage> {
   void initState() {
     super.initState();
     _request = widget.request;
+    _danmakuLoader = widget.danmakuLoader ?? DanmakuService();
     _controller = PlayerController()..addListener(_onControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
@@ -172,6 +200,8 @@ class _PlayerPageState extends State<PlayerPage> {
     // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
     // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
     await _configureSubtitles();
+    // 弹幕（§21 Phase 3）：拉取并启用弹幕。同样不得阻断播放。
+    await _configureDanmaku();
     // 进度恢复：仅对同一剧集且位置有效时执行（§10.3 播放恢复）。
     final start = _request.startPosition;
     if (start != null && start > Duration.zero && start < _controller.duration) {
@@ -267,6 +297,218 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
     );
   }
+
+  // ---------------------------------------------------------------- 弹幕
+
+  /// 装配弹幕（§21 Phase 3「字幕/弹幕可开启和关闭」）。
+  ///
+  /// 自动启用第一个可用的弹幕源；直播弹幕（`ws`/`wss`）明确不支持。
+  /// 任何失败都只记日志/提示，绝不影响视频播放（§10.4 同语义）。
+  Future<void> _configureDanmaku() async {
+    final sources = _request.danmaku;
+    if (sources.isEmpty) return;
+    // 优先用户显式选择的源，其次第一个可用静态源。
+    var selected = sources.firstWhere(
+      (source) => source.selected,
+      orElse: () => sources.firstWhere(
+        (source) => !source.isLive,
+        orElse: () => sources.first,
+      ),
+    );
+    if (selected.isLive) {
+      widget.state.log.warning(
+        '弹幕源是直播弹幕，本阶段不支持 name=${selected.name} '
+        'url=${redactUrl(selected.url)}',
+        scope: 'danmaku',
+      );
+      _danmakuError = '直播弹幕本阶段尚未支持';
+      return;
+    }
+    await _loadDanmakuSource(selected);
+  }
+
+  /// 拉取并启用一个弹幕源；失败只提示，不影响播放。
+  Future<void> _loadDanmakuSource(DanmakuSource source) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final document = await _danmakuLoader.load(
+        source,
+        headers: _request.subtitleHeaders,
+      );
+      _danmakuItems = document.items;
+      _danmakuError = null;
+      widget.state.log.info(
+        '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms',
+        scope: 'danmaku',
+      );
+      if (mounted) setState(() {});
+    } catch (error) {
+      _danmakuItems = const [];
+      _danmakuError = describeDanmakuFailure(error);
+      widget.state.log.warning(
+        '弹幕加载失败 source=${source.displayName} $_danmakuError',
+        scope: 'danmaku',
+      );
+      if (!mounted) return;
+      setState(() {});
+      _showDanmakuError(_danmakuError!);
+    }
+  }
+
+  /// 弹幕失败提示：不阻断播放（§10.4 同语义）。
+  void _showDanmakuError(String message) {
+    if (_lastShownDanmakuError == message) return;
+    _lastShownDanmakuError = message;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
+  /// 弹幕总开关（§13.3「弹幕可开启和关闭」）。
+  void _toggleDanmaku() {
+    _danmakuStyle = _danmakuStyle.copyWith(
+      enabled: !_danmakuStyle.enabled,
+    );
+    widget.state.log.info(
+      '弹幕 ${_danmakuStyle.enabled ? "开启" : "关闭"} '
+      'items=${_danmakuItems.length}',
+      scope: 'danmaku',
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// 弹幕设置菜单（§17.5）：透明度 / 字号 / 滚动 / 顶部 / 底部。
+  Future<void> _showDanmakuSettings() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.text_fields),
+              title: const Text('弹幕设置'),
+              titleTextStyle: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            _settingTile(
+              '弹幕开关',
+              subtitle: _danmakuStyle.enabled ? '已开启' : '已关闭',
+              onTap: () async {
+                Navigator.of(context).pop('toggle');
+              },
+            ),
+            _settingTile(
+              '透明度 ${( _danmakuStyle.opacity * 100).round()}%',
+              onTap: () async {
+                Navigator.of(context).pop('opacity');
+              },
+            ),
+            _settingTile(
+              '字号 ${( _danmakuStyle.textScale * 100).round()}%',
+              onTap: () async {
+                Navigator.of(context).pop('scale');
+              },
+            ),
+            _settingTile(
+              '滚动弹幕',
+              subtitle: _danmakuStyle.showScroll ? '显示' : '隐藏',
+              onTap: () async {
+                Navigator.of(context).pop('scroll');
+              },
+            ),
+            _settingTile(
+              '顶部弹幕',
+              subtitle: _danmakuStyle.showTop ? '显示' : '隐藏',
+              onTap: () async {
+                Navigator.of(context).pop('top');
+              },
+            ),
+            _settingTile(
+              '底部弹幕',
+              subtitle: _danmakuStyle.showBottom ? '显示' : '隐藏',
+              onTap: () async {
+                Navigator.of(context).pop('bottom');
+              },
+            ),
+            _settingTile(
+              '重新加载弹幕',
+              onTap: () async {
+                Navigator.of(context).pop('reload');
+              },
+            ),
+            ListTile(
+              onTap: () => Navigator.of(context).pop('close'),
+              title: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null) return;
+    switch (action) {
+      case 'toggle':
+        _toggleDanmaku();
+      case 'opacity':
+        _danmakuStyle = _danmakuStyle.copyWith(
+          opacity: _nextStep(_danmakuStyle.opacity, 0.1, 0.3, 1.0),
+        );
+        if (mounted) setState(() {});
+      case 'scale':
+        _danmakuStyle = _danmakuStyle.copyWith(
+          textScale: _nextStep(_danmakuStyle.textScale, 0.25, 0.5, 2.0),
+        );
+        if (mounted) setState(() {});
+      case 'scroll':
+        _danmakuStyle = _danmakuStyle.copyWith(
+          showScroll: !_danmakuStyle.showScroll,
+        );
+        if (mounted) setState(() {});
+      case 'top':
+        _danmakuStyle = _danmakuStyle.copyWith(
+          showTop: !_danmakuStyle.showTop,
+        );
+        if (mounted) setState(() {});
+      case 'bottom':
+        _danmakuStyle = _danmakuStyle.copyWith(
+          showBottom: !_danmakuStyle.showBottom,
+        );
+        if (mounted) setState(() {});
+      case 'reload':
+        // 重新拉取时绕过缓存，否则“重新加载”会命中旧结果。
+        DanmakuSource? source;
+        for (final candidate in _request.danmaku) {
+          if (!candidate.isLive) {
+            source = candidate;
+            break;
+          }
+        }
+        source ??= _request.danmaku.isEmpty ? null : _request.danmaku.first;
+        if (source != null) await _loadDanmakuSource(source);
+    }
+  }
+
+  /// 步进到下一个可选值（循环）。
+  double _nextStep(double current, double step, double min, double max) {
+    final next = current + step;
+    return next > max ? min : next;
+  }
+
+  Widget _settingTile(
+    String title, {
+    String? subtitle,
+    required VoidCallback onTap,
+  }) => ListTile(
+    leading: const Icon(Icons.tune),
+    title: Text(title),
+    trailing: subtitle == null
+        ? null
+        : Text(subtitle, style: const TextStyle(fontSize: 13)),
+    onTap: onTap,
+  );
 
   /// 字幕菜单：外挂 / 内嵌 / 关闭（§13.3「字幕可开启和关闭」）。
   Future<void> _showSubtitleMenu() async {
@@ -418,9 +660,11 @@ class _PlayerPageState extends State<PlayerPage> {
       // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
       final String url;
       final List<SubtitleInfo> subtitles;
+      final List<DanmakuSource> danmaku;
       if (_request.directUrl) {
         url = episode.url;
         subtitles = _request.subtitles;
+        danmaku = _request.danmaku;
       } else {
         final decision = await state.resolvePlayback(
           episodeTarget: episode.url,
@@ -435,8 +679,9 @@ class _PlayerPageState extends State<PlayerPage> {
           );
         }
         url = decision.url!;
-        // 换集后字幕也要换成该集结果里的 subs（§10.3）。
+        // 换集后字幕/弹幕也要换成该集结果里的 subs/danmaku（§10.3、Phase 3）。
         subtitles = decision.subs;
+        danmaku = decision.danmaku;
       }
       setState(() {
         _loadError = null;
@@ -450,8 +695,12 @@ class _PlayerPageState extends State<PlayerPage> {
           episodeIndex: episodeIndex,
           clearStartPosition: true,
           subtitles: subtitles,
+          danmaku: danmaku,
         );
         _episodesCache = const [];
+        // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕。
+        _danmakuItems = const [];
+        _danmakuError = null;
       });
       _persistProgress();
       await _load();
@@ -530,6 +779,15 @@ class _PlayerPageState extends State<PlayerPage> {
                       onPressed: _showSubtitleMenu,
                     ),
                     IconButton(
+                      tooltip: _danmakuStyle.enabled ? '弹幕（开启）' : '弹幕（关闭）',
+                      icon: Icon(
+                        _danmakuStyle.enabled
+                            ? Icons.comment
+                            : Icons.comment_bank_outlined,
+                      ),
+                      onPressed: _toggleDanmaku,
+                    ),
+                    IconButton(
                       tooltip: '播放诊断',
                       icon: const Icon(Icons.monitor_heart_outlined),
                       onPressed: _diagnostics == null ? null : _showDiagnostics,
@@ -560,6 +818,15 @@ class _PlayerPageState extends State<PlayerPage> {
                         child: Video(
                           controller: _controller.videoController,
                           controls: NoVideoControls,
+                        ),
+                      ),
+                      // 弹幕叠加层（§21 Phase 3）：绘制在视频上方、控制层下方。
+                      // 关闭时（style.enabled=false）不绘制任何内容。
+                      Positioned.fill(
+                        child: DanmakuOverlay(
+                          items: _danmakuItems,
+                          position: _controller.position,
+                          style: _danmakuStyle,
                         ),
                       ),
                       if (_controller.isLoading)
@@ -595,6 +862,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   onSelectEpisode: (index) => _playEpisode(index),
                   onSelectLine: (flag) => _playEpisode(0, overrideFlag: flag),
                   onSelectSubtitle: _showSubtitleMenu,
+                  onSelectDanmaku: _showDanmakuSettings,
                 ),
             ],
           ),
@@ -747,6 +1015,7 @@ class _ControlBar extends StatelessWidget {
     required this.onSelectEpisode,
     required this.onSelectLine,
     required this.onSelectSubtitle,
+    required this.onSelectDanmaku,
   });
 
   final PlayerController controller;
@@ -757,6 +1026,7 @@ class _ControlBar extends StatelessWidget {
   final ValueChanged<int> onSelectEpisode;
   final ValueChanged<String> onSelectLine;
   final VoidCallback onSelectSubtitle;
+  final VoidCallback onSelectDanmaku;
 
   String _formatDuration(Duration value) {
     final total = value.inSeconds;
@@ -897,6 +1167,12 @@ class _ControlBar extends StatelessWidget {
                       ? Icons.subtitles_off_outlined
                       : Icons.subtitles_outlined,
                 ),
+              ),
+              // 弹幕设置（§21 Phase 3）；开关本身在 AppBar 与设置面板内。
+              IconButton(
+                tooltip: '弹幕设置',
+                onPressed: onSelectDanmaku,
+                icon: const Icon(Icons.comment_outlined),
               ),
               IconButton(
                 tooltip: '全屏（F11）',

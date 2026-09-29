@@ -26,6 +26,8 @@
 - `/media/sample.srt`  外挂字幕样本，与媒体共用同一道 Header 门禁
   （字幕与视频同源时通常需要同样的 Referer/UA/Cookie，缺 Header 必须 403）
 - `/api/play-with-subs`  携带 `subs` 的播放结果（含缺地址条目，用于验证丢弃）
+- `/api/play-with-danmaku`  携带 `danmaku` 的播放结果（含 ws 直播弹幕与缺失文件）
+- `/danmaku/sample.xml`、`/danmaku/sample.txt`  弹幕文件样本（与媒体同一道 Header 门禁）
 
 服务只允许监听回环地址。
 """
@@ -46,6 +48,7 @@ CONFIGS = ROOT / "packages" / "test-fixtures" / "config"
 MEDIA = ROOT / "packages" / "test-fixtures" / "media"
 CATHTTP = ROOT / "packages" / "test-fixtures" / "cathttp"
 LIVE = ROOT / "packages" / "test-fixtures" / "live"
+DANMAKU = ROOT / "packages" / "test-fixtures" / "danmaku"
 REQUIRED_REFERER = "http://127.0.0.1:18080/"
 REQUIRED_USER_AGENT = "WebHTV-PC/0.1 (Windows)"
 LEGACY_USER_AGENT = "WebHTV-PC-Phase0"
@@ -178,6 +181,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
         # 保护的 `/media/`，从而能同时验证解析与“带 Header 起播”。
         # 兼容两种路径形态：`/live/live.m3u`（约定目录）与 `/live.m3u`
         # （config-full.json 历史写法）。
+        # 弹幕 fixture（§21 Phase 3）：与媒体共用一道 Header 门禁，
+        # 用于验证「弹幕与视频同源时需要同样的 Referer/UA」。
+        if path.startswith("/danmaku/"):
+            self._send_danmaku(path.removeprefix("/danmaku/"))
+            return
         if path.startswith("/live/"):
             self._send_live(path.removeprefix("/live/"))
             return
@@ -206,6 +214,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
         # 带外挂字幕的播放结果（§10.3）：用于验证 subs 解析/默认选择/丢弃。
         if path == "/api/play-with-subs":
             self._send_json_bytes(_json("play-with-subs.json"))
+            return
+        # 带弹幕源的播放结果（§21 Phase 3）。
+        if path == "/api/play-with-danmaku":
+            self._send_json_bytes(_json("play-with-danmaku.json"))
             return
         if path == "/api/repository-a.json":
             self._send_json(REPOSITORY_A)
@@ -263,6 +275,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "detail": "detail.json",
                 "play": "play.json",
                 "play-with-subs": "play-with-subs.json",
+                "play-with-danmaku": "play-with-danmaku.json",
             }
             fixture = fixture_by_action.get(action)
             if fixture is None:
@@ -300,6 +313,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 return
             if vod_id == "subs-1":
                 self._send_json_bytes(_json("play-with-subs.json"))
+                return
+            if vod_id == "danmaku-1":
+                self._send_json_bytes(_json("play-with-danmaku.json"))
                 return
             self._send_json_bytes(_json("detail.json"))
             return
@@ -358,6 +374,26 @@ class FixtureHandler(BaseHTTPRequestHandler):
             content_type = "audio/x-mpegurl; charset=utf-8"
         if candidate.suffix == ".json":
             content_type = "application/json; charset=utf-8"
+        self._send_bytes(payload, content_type)
+
+    def _send_danmaku(self, relative_path: str) -> None:
+        referer = self.headers.get("Referer")
+        user_agent = self.headers.get("User-Agent")
+        if referer != REQUIRED_REFERER:
+            self._send_error_json(403, "required Referer header missing")
+            return
+        if user_agent not in (REQUIRED_USER_AGENT, LEGACY_USER_AGENT):
+            self._send_error_json(403, "required User-Agent header missing")
+            return
+        candidate = (DANMAKU / relative_path).resolve()
+        if DANMAKU.resolve() not in candidate.parents or not candidate.is_file():
+            self._send_error_json(404, "danmaku fixture not found")
+            return
+        payload = candidate.read_bytes()
+        if candidate.suffix == ".xml":
+            content_type = "application/xml; charset=utf-8"
+        else:
+            content_type = "text/plain; charset=utf-8"
         self._send_bytes(payload, content_type)
 
     def _send_media(self, relative_path: str) -> None:
