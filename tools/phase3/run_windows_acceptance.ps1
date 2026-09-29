@@ -4,8 +4,8 @@
 #   0. 直播清单 + 字幕 + 弹幕 fixture 预检（Content-Type 正确、越权 403/404）
 #   1. 契约与 fixture 测试（Python）+ 直播清单 Schema 校验
 #   2. 静态检查（dart analyze）
-#   3. 单元测试（flutter test，含 phase3_* 直播/诊断/字幕/弹幕门禁套件）
-#   4. Windows 集成测试（真实窗口 + 真实播放器 + 直播/字幕/弹幕，-d windows）
+#   3. 单元测试（flutter test，含 phase3_* 直播/诊断/字幕/弹幕/直播弹幕门禁套件）
+#   4. Windows 集成测试（真实窗口 + 真实播放器；直播/字幕/弹幕/直播弹幕，-d windows）
 #   5. 汇总并输出 PHASE3-ACCEPT 可复查事实行
 #
 # 设计原则与 Phase 1/2 保持一致：
@@ -208,7 +208,7 @@ try {
         }
     }
 
-    # 3) 单元测试（含 phase3_* 直播/诊断/字幕门禁套件；自带进程内 fixture 服务，可独立运行）。
+    # 3) 单元测试（含 phase3_* 直播/诊断/字幕/弹幕门禁套件；自带进程内 fixture 服务，可独立运行）。
     Invoke-Checked 'flutter-unit-tests' {
         Push-Location $AppDir
         try {
@@ -218,7 +218,7 @@ try {
         }
     }
 
-    # 4) Windows 集成测试（真实窗口 + 真实播放器 + 直播直链 + 外挂字幕）。
+    # 4) Windows 集成测试（真实窗口 + 真实播放器 + 直播直链 + 外挂字幕 + 静态/直播弹幕）。
     if (-not $SkipIntegrationTests) {
         Invoke-Checked 'windows-integration-tests' {
             Push-Location $AppDir
@@ -228,6 +228,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/subtitle_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/danmaku_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/live_danmaku_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }

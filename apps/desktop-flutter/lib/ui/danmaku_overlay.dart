@@ -112,15 +112,26 @@ class DanmakuOverlay extends StatelessWidget {
     required this.items,
     required this.position,
     required this.style,
+    this.liveItems = const [],
+    this.liveNowMs,
     this.scrollDuration = const Duration(milliseconds: 8000),
     this.fixedDuration = const Duration(milliseconds: 4000),
   });
 
-  /// 全部弹幕（已按时间排序；未排序时本层会自行排序）。
+  /// 全部静态弹幕（按时间轴驱动：位置 = [position]）。
   final List<DanmakuItem> items;
 
-  /// 当前播放位置。
+  /// 当前播放位置（驱动静态弹幕）。
   final Duration position;
+
+  /// 直播弹幕（实时追加：位置 = 当前时刻 [liveNowMs] − 接收时刻）。
+  ///
+  /// [DanmakuItem.timeMs] 即直播弹幕的接收时刻（ms），
+  /// 渲染时用「当前时刻」作为位置，弹幕在 [scrollDurationMs] 内完成移动后自然消失。
+  final List<DanmakuItem> liveItems;
+
+  /// 直播弹幕的当前时刻（ms）。null 时退化为 0，直播弹幕立即全部显示一次。
+  final int? liveNowMs;
 
   final DanmakuStyle style;
   final Duration scrollDuration;
@@ -128,7 +139,7 @@ class DanmakuOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!style.enabled || items.isEmpty) {
+    if (!style.enabled || (items.isEmpty && liveItems.isEmpty)) {
       return const SizedBox.shrink();
     }
     return IgnorePointer(
@@ -138,20 +149,41 @@ class DanmakuOverlay extends StatelessWidget {
           final height = constraints.maxHeight;
           if (width <= 0 || height <= 0) return const SizedBox.shrink();
 
+          final visible = <VisibleDanmaku>[];
+          // 静态弹幕：按播放位置驱动。
           final filtered = filterDanmakuItems(items, style);
-          final visible = DanmakuTrackAllocator.visibleAt(
-            items: filtered,
-            positionMs: position.inMilliseconds,
-            enabled: style.enabled,
-            scrollDurationMs: scrollDuration.inMilliseconds,
-            fixedDurationMs: fixedDuration.inMilliseconds,
-            width: width,
-            height: height,
-            trackHeight: danmakuTrackHeight * style.textScale,
-            gap: danmakuTrackGap,
+          visible.addAll(
+            DanmakuTrackAllocator.visibleAt(
+              items: filtered,
+              positionMs: position.inMilliseconds,
+              enabled: style.enabled,
+              scrollDurationMs: scrollDuration.inMilliseconds,
+              fixedDurationMs: fixedDuration.inMilliseconds,
+              width: width,
+              height: height,
+              trackHeight: danmakuTrackHeight * style.textScale,
+              gap: danmakuTrackGap,
+            ),
           );
-          if (visible.isEmpty) return const SizedBox.shrink();
 
+          // 直播弹幕：按当前时刻驱动（接收时刻作为开始时刻）。
+          final nowMs = liveNowMs ?? 0;
+          if (liveItems.isNotEmpty && nowMs > 0) {
+            final liveVisible = DanmakuTrackAllocator.visibleAt(
+              items: filterDanmakuItems(liveItems, style),
+              positionMs: nowMs,
+              enabled: style.enabled,
+              scrollDurationMs: scrollDuration.inMilliseconds,
+              fixedDurationMs: fixedDuration.inMilliseconds,
+              width: width,
+              height: height,
+              trackHeight: danmakuTrackHeight * style.textScale,
+              gap: danmakuTrackGap,
+            );
+            visible.addAll(liveVisible);
+          }
+
+          if (visible.isEmpty) return const SizedBox.shrink();
           return CustomPaint(
             size: Size(width, height),
             painter: DanmakuPainter(

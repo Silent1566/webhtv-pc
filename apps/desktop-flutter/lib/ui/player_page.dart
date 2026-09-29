@@ -17,6 +17,7 @@ import '../core/protocol.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/subtitle.dart';
 import '../services/danmaku_service.dart';
+import '../services/live_danmaku_session.dart';
 import '../state/app_state.dart';
 import 'app.dart';
 import 'danmaku_overlay.dart';
@@ -150,6 +151,25 @@ class _PlayerPageState extends State<PlayerPage> {
 
   String? _danmakuError;
   String? _lastShownDanmakuError;
+
+  /// 直播弹幕会话（§13.1「直播弹幕」）。仅当弹幕源是 `ws://`/`wss://` 时建立。
+  LiveDanmakuSession? _liveSession;
+
+  /// 已收到的直播弹幕（保留最近一段时间，过期条目会被修剪）。
+  List<DanmakuItem> _liveItems = const [];
+
+  /// 每条直播弹幕的接收时刻（ms）；与 `_liveItems` 一一对应，驱动生命周期。
+  final Map<DanmakuItem, int> _liveReceivedAt = {};
+
+  /// 最近一批直播弹幕到达的墙钟时刻（ms），作为渲染时钟。
+  int _liveNowMs = 0;
+
+  /// 直播弹幕连接状态与在线人数（用于 UI 展示）。
+  String? _liveStatus;
+  int? _liveOnline;
+
+  /// 驱动直播弹幕逐帧重绘的定时器（仅在会话存活期间运行）。
+  Timer? _liveTicker;
 
   /// 最近一次播放诊断快照（§23），用于播放器内展示与复制。
   PlaybackDiagnostics? _diagnostics;
@@ -302,29 +322,142 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 装配弹幕（§21 Phase 3「字幕/弹幕可开启和关闭」）。
   ///
-  /// 自动启用第一个可用的弹幕源；直播弹幕（`ws`/`wss`）明确不支持。
+  /// 自动启用第一个可用的弹幕源；直播弹幕（`ws`/`wss`）走 WebSocket 会话（§13.1）。
   /// 任何失败都只记日志/提示，绝不影响视频播放（§10.4 同语义）。
   Future<void> _configureDanmaku() async {
     final sources = _request.danmaku;
     if (sources.isEmpty) return;
-    // 优先用户显式选择的源，其次第一个可用静态源。
+    // 优先用户显式选择的源，其次第一个源（静态或直播均可）。
     var selected = sources.firstWhere(
       (source) => source.selected,
-      orElse: () => sources.firstWhere(
-        (source) => !source.isLive,
-        orElse: () => sources.first,
-      ),
+      orElse: () => sources.first,
     );
     if (selected.isLive) {
-      widget.state.log.warning(
-        '弹幕源是直播弹幕，本阶段不支持 name=${selected.name} '
-        'url=${redactUrl(selected.url)}',
-        scope: 'danmaku',
-      );
-      _danmakuError = '直播弹幕本阶段尚未支持';
+      await _connectLiveDanmaku(selected);
       return;
     }
     await _loadDanmakuSource(selected);
+  }
+
+  /// 连接直播弹幕（§13.1「直播弹幕」）。
+  Future<void> _connectLiveDanmaku(DanmakuSource source) async {
+    await _teardownLiveSession('replace');
+    widget.state.log.info(
+      '直播弹幕连接 url=${redactUrl(source.url)} name=${source.displayName}',
+      scope: 'danmaku',
+    );
+    final session = LiveDanmakuSession(
+      onEvent: _onLiveEvent,
+      onMessage: _onLiveMessage,
+    );
+    _liveSession = session;
+    _liveStatus = '连接中';
+    if (mounted) setState(() {});
+    try {
+      await session.connect(source.url);
+      // 渲染时钟：让屏幕上已有的弹幕在没有新消息时也能继续移动、到期消失。
+      _startLiveTicker();
+    } catch (error) {
+      _liveStatus = null;
+      _danmakuError = describeDanmakuFailure(error);
+      widget.state.log.warning(
+        '直播弹幕连接失败 source=${source.displayName} $_danmakuError',
+        scope: 'danmaku',
+      );
+      if (mounted) {
+        setState(() {});
+        _showDanmakuError(_danmakuError!);
+      }
+    }
+  }
+
+  /// 直播弹幕会话状态回调：更新连接状态与在线人数。
+  ///
+  /// 连接失败（进入重连等待/停止）且从未成功时，提示一次（不反复打扰）。
+  void _onLiveEvent(LiveDanmakuSessionEvent event) {
+    switch (event.state) {
+      case LiveDanmakuSessionState.open:
+        _liveStatus = '已连接';
+        break;
+      case LiveDanmakuSessionState.connecting:
+        _liveStatus = '连接中';
+        break;
+      case LiveDanmakuSessionState.retryWait:
+        _liveStatus = '重连中（${(event.retryMs ?? 0) ~/ 1000}s）';
+        // 首次失败提示一次；已经提示过就不重复弹。
+        _danmakuError ??= '直播弹幕连接失败，正在重连';
+        widget.state.log.warning(
+          '直播弹幕连接失败，重连中 retry=${event.retryMs}ms '
+          'detail=${event.detail ?? ""}',
+          scope: 'danmaku',
+        );
+        if (mounted) _showDanmakuError(_danmakuError!);
+        break;
+      case LiveDanmakuSessionState.stopped:
+        if (_liveStatus != null) _liveStatus = '已断开';
+        break;
+      case LiveDanmakuSessionState.idle:
+      case LiveDanmakuSessionState.released:
+        break;
+    }
+    if (event.online != null) _liveOnline = event.online;
+    if (mounted) setState(() {});
+  }
+
+  /// 直播弹幕消息回调：入队实时弹幕（带接收时刻）。
+  void _onLiveMessage(LiveDanmakuIncoming incoming) {
+    final item = DanmakuItem(
+      timeMs: incoming.receivedAtMs,
+      text: incoming.text,
+      type: DanmakuType.scroll,
+      color: incoming.color,
+      textSizeSp: incoming.textSizeSp,
+    );
+    _liveReceivedAt[item] = incoming.receivedAtMs;
+    _liveNowMs = incoming.receivedAtMs;
+    _liveItems = [..._liveItems, item];
+    _pruneLiveItems();
+    if (mounted) setState(() {});
+  }
+
+  /// 修剪直播弹幕：超过 [scrollDurationMs] + 余量的条目不再显示（回收内存）。
+  void _pruneLiveItems() {
+    final cutoff = _liveNowMs - 15000;
+    _liveItems = _liveItems.where((item) {
+      final receivedAt = _liveReceivedAt[item];
+      return receivedAt != null && receivedAt >= cutoff;
+    }).toList();
+    _liveReceivedAt.removeWhere((item, receivedAt) => receivedAt < cutoff);
+  }
+
+  /// 直播弹幕渲染时钟：定时推进 [liveNowMs]，使已过期的弹幕逐帧淡出。
+  /// 会话断开时停止（没有新消息就不需要重绘）。
+  void _startLiveTicker() {
+    _liveTicker?.cancel();
+    _liveTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      // 渲染时钟用真实墙钟：即使没有新消息，也要让屏幕上已有的弹幕继续移动。
+      _liveNowMs = DateTime.now().millisecondsSinceEpoch;
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// 关闭直播弹幕会话（请求销毁/切集时调用）。
+  Future<void> _teardownLiveSession(String reason) async {
+    final session = _liveSession;
+    _liveSession = null;
+    _liveTicker?.cancel();
+    _liveTicker = null;
+    _liveItems = const [];
+    _liveReceivedAt.clear();
+    _liveOnline = null;
+    _liveStatus = null;
+    if (session != null) {
+      try {
+        await session.dispose();
+      } catch (_) {
+        // 销毁失败不抛出；会话是尽力而为的附加资源。
+      }
+    }
   }
 
   /// 拉取并启用一个弹幕源；失败只提示，不影响播放。
@@ -598,6 +731,8 @@ class _PlayerPageState extends State<PlayerPage> {
   void dispose() {
     _saveTimer?.cancel();
     _persistProgress();
+    // 直播弹幕会话是网络资源，必须显式关闭（§20 资源释放）。
+    unawaited(_teardownLiveSession('dispose'));
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
@@ -698,10 +833,12 @@ class _PlayerPageState extends State<PlayerPage> {
           danmaku: danmaku,
         );
         _episodesCache = const [];
-        // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕。
+        // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕；
+        // 直播弹幕连接也必须断开，否则切集后旧会话会继续推流到新画面上。
         _danmakuItems = const [];
         _danmakuError = null;
       });
+      await _teardownLiveSession('episode-change');
       _persistProgress();
       await _load();
     } catch (error) {
@@ -820,13 +957,15 @@ class _PlayerPageState extends State<PlayerPage> {
                           controls: NoVideoControls,
                         ),
                       ),
-                      // 弹幕叠加层（§21 Phase 3）：绘制在视频上方、控制层下方。
-                      // 关闭时（style.enabled=false）不绘制任何内容。
+                      // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
+                      // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
                       Positioned.fill(
                         child: DanmakuOverlay(
                           items: _danmakuItems,
                           position: _controller.position,
                           style: _danmakuStyle,
+                          liveItems: _liveItems,
+                          liveNowMs: _liveNowMs,
                         ),
                       ),
                       if (_controller.isLoading)
@@ -863,6 +1002,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   onSelectLine: (flag) => _playEpisode(0, overrideFlag: flag),
                   onSelectSubtitle: _showSubtitleMenu,
                   onSelectDanmaku: _showDanmakuSettings,
+                  liveStatus: _liveStatus,
+                  liveOnline: _liveOnline,
                 ),
             ],
           ),
@@ -1016,6 +1157,8 @@ class _ControlBar extends StatelessWidget {
     required this.onSelectLine,
     required this.onSelectSubtitle,
     required this.onSelectDanmaku,
+    this.liveStatus,
+    this.liveOnline,
   });
 
   final PlayerController controller;
@@ -1027,6 +1170,12 @@ class _ControlBar extends StatelessWidget {
   final ValueChanged<String> onSelectLine;
   final VoidCallback onSelectSubtitle;
   final VoidCallback onSelectDanmaku;
+
+  /// 直播弹幕连接状态（仅直播弹幕时非空）。
+  final String? liveStatus;
+
+  /// 直播弹幕在线人数（收到 `online` 帧后非空）。
+  final int? liveOnline;
 
   String _formatDuration(Duration value) {
     final total = value.inSeconds;
@@ -1179,6 +1328,24 @@ class _ControlBar extends StatelessWidget {
                 onPressed: onToggleFullscreen,
                 icon: const Icon(Icons.fullscreen),
               ),
+              if (liveStatus != null || liveOnline != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.podcasts, size: 16),
+                      const SizedBox(width: 4),
+                      Text(
+                        [
+                          ?liveStatus,
+                          if (liveOnline != null) '在线 $liveOnline',
+                        ].join(' · '),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
               Text(
                 '缓冲 ${_formatDuration(controller.buffered)}',
                 style: Theme.of(context).textTheme.bodySmall,

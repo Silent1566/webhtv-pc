@@ -19,6 +19,10 @@ dependencies:
 
   # 网络与协议
   http: ^1.6.0
+  # 直播弹幕（§13.1）需要 WebSocket；选 web_socket_channel 是因为它支持
+  # 自定义 headers（Referer/Cookie）与 pingInterval/connectTimeout，
+  # 而 dart:io 的裸 WebSocket 与 web_socket 包都不带 headers 参数。
+  web_socket_channel: ^3.0.3
   xml: ^7.0.1
   crypto: ^3.0.7
   path: ^1.9.1

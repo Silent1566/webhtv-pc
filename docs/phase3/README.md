@@ -1,6 +1,6 @@
 # Phase 3 计划(直播 · 字幕 · Windows)
 
-- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕**已完成,见 §3.1)
+- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕**已完成,见 §3.1)
 - 日期:2026-09-29
 - 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
@@ -81,6 +81,9 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 弹幕 3 | 弹幕加载服务(HTTP/本地 + 编码 + 上限 + 缓存) | `lib/services/danmaku_service.dart` | 带 Header 拉取;GBK 兜底;大小上限;缓存 TTL;错误归一化为 `danmaku*` |
 | 弹幕 4 | 渲染层(滚动/顶部/底部轨道 + 开关/透明度/字号) | `lib/ui/danmaku_overlay.dart` | 轨道在活动窗口内独占防重叠;关闭时不绘制任何内容 |
 | 弹幕 5 | 播放器接入(开关 + 设置菜单 + 失败隔离) | `lib/ui/player_page.dart` + `PlaybackRequest.danmaku` | AppBar 一键开关;设置面板;失败 SnackBar 提示且视频照常播 |
+| 直播弹幕 1 | 帧解析与重连策略(纯逻辑) | `lib/core/live_danmaku.dart` | 对齐 Android `LiveDanmakuParser`/`RetryPolicy`:chat/superchat/online、文本规范化、`#RRGGBB` 颜色、64KiB/120 码点上限、250ms~30s 指数退避 |
+| 直播弹幕 2 | WebSocket 会话(连接/重连/生命周期) | `lib/services/live_danmaku_session.dart` | 代次防串帧;指数退避重连;待机停止;释放时关连接;失败不阻断 |
+| 直播弹幕 3 | 播放器接入(实时上屏 + 在线人数 + 状态) | `lib/ui/player_page.dart` + `DanmakuOverlay.liveItems` | 收到即上屏;online 帧更新人数;控制栏连接状态;失败只提示 |
 
 ## 3. 验收门禁(本阶段完成判据)
 
@@ -108,7 +111,9 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 弹幕渲染 | widget 层绘制/开关/类型过滤/样式夹紧 | `test/phase3_danmaku_overlay_test.dart` | 开启渲染 CustomPaint;关闭零绘制;滚动/顶部/底部可分别隐藏 |
 | 弹幕失败隔离 | §10.4 同语义:弹幕失败不得升级为播放失败 | `test/phase3_danmaku_test.dart`「弹幕失败隔离」 | `isDanmakuError` 只认 `danmaku*`;提示文案含「不影响视频播放」 |
 | 弹幕集成 | 真实窗口 + 真实播放器 + 真实弹幕渲染 | `integration_test/danmaku_flow_test.dart` (-d windows) | 加载→渲染→关闭→重开;失败时视频照常出画 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **329** 个用例全绿;analyze 无问题 |
+| 直播弹幕解析 | 帧解析/文本规范化/颜色/重连退避逐条对齐 Android | `test/phase3_live_danmaku_test.dart` | chat/superchat/online/非法帧四类;控制字符丢弃/空白折叠/码点截断;`#RRGGBB` 补 alpha;退避有界且随尝试增长 |
+| 直播弹幕集成 | 真实窗口 + 真实播放器 + 真实 WS 连接 | `integration_test/live_danmaku_flow_test.dart` (-d windows) | 收到 chat/superchat 上屏;online 更新在线;非法帧丢弃;关闭弹幕;连接失败不影响播放 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **343** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -119,8 +124,8 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-09-29,含弹幕)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **329** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35),
-三个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **7** 个用例全绿,
+`flutter test` 共 **343** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14),
+四个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **9** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -145,6 +150,14 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - `PHASE3-EVIDENCE danmaku-resumed enabled=true`
 - `PHASE3-EVIDENCE danmaku-playback-kept playing=true`
 - `PHASE3-EVIDENCE danmaku-failure isolated=true items=0 playing=true`
+
+直播弹幕(`integration_test/live_danmaku_flow_test.dart`,WS 由测试内 Dart 服务提供):
+
+- `PHASE3-EVIDENCE live-danmaku-received chat=yes`
+- `PHASE3-EVIDENCE live-danmaku-valid items=4 invalid-dropped=true`
+- `PHASE3-EVIDENCE live-danmaku-off enabled=false`
+- `PHASE3-EVIDENCE live-danmaku-playback-kept playing=true`
+- `PHASE3-EVIDENCE live-danmaku-failure isolated=true playing=true`
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -183,7 +196,14 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 **c) 颜色必须补 alpha。** WebHTV/TVBox 弹幕文件的颜色字段是 RGB 十进制
 (如 `16777215` = `0xFFFFFF`)。Android 侧 `DanmakuData.param` 用
 `(0x00000000FF000000L | value) & 0xFFFFFFFF` 强制补上不透明 alpha;若不补,
-`Color(0x00FFFFFF)` 是全透明,表现为「弹幕加载成功但什么都看不见」。
+`Color(0x00FFFFFF)` 是全透明,表现为「弹幕加载成功但什么都看不见」。直播弹幕
+的 `#RRGGBB` 同理(`LiveDanmakuParser.parseColor` 补 `0xFF000000`)。
+
+**d) 直播弹幕渲染不做播放位置过滤。** 静态弹幕按播放进度驱动;直播弹幕是实时
+流,没有起点——收到即入队,用**墙钟接收时刻**作为伪时间轴,叠加层每 250ms
+重绘(通过会话建立的 ticker),弹幕在滚动窗口内完成后自然消失。切集/切线时
+必须断开旧会话(`generation` 代次递增防串帧),否则上一路的弹幕会继续推到新画面上。
+
 
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
@@ -238,13 +258,15 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
    因为 media-kit 未暴露 `forced` 位(已在外挂字幕上支持 `forced`)。
 6. **弹幕范围(§21 Phase 3)**:`字幕/弹幕可开启和关闭` 已完成——支持 XML(Bilibili
    格式)与行式文本两种弹幕文件的**静态**弹幕加载、渲染(滚动/顶部/底部/反向)、
-   一键开关、透明度/字号/分类开关与失败隔离。**未实现**:直播弹幕(`ws`/`wss`
-   需 WebSocket 会话与增量渲染,现明确报 `danmakuUnsupported`)、弹幕发送、
-   弹幕屏蔽词/举报、以及「按标题自动搜索弹幕源」的在线匹配。
+   一键开关、透明度/字号/分类开关与失败隔离;也支持 **`ws`/`wss` 直播弹幕**
+   (§13.1):WebSocket 会话按指数退避重连,chat/superchat 实时上屏,
+   online 帧更新在线人数,非法帧丢弃,连接失败只提示不影响播放。
+   **未实现**:弹幕发送、弹幕屏蔽词/举报、以及「按标题自动搜索弹幕源」的
+   在线匹配。
 7. **解析器(§12)**:`parse=1`/`jx=1` 目前仍明确报「需要解析器」而不执行;
    本阶段不做解析器运行时(属 Phase 3 剩余项)。
 
 ## 6. 平台范围声明
 
-本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕与弹幕验证不在范围内;
+本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕与直播弹幕验证不在范围内;
 发布文案不得声称已支持直播、字幕或弹幕。
