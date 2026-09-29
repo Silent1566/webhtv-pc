@@ -101,6 +101,7 @@ class PlaybackResolutionInput {
     this.jx,
     this.resultHeader,
     this.globalHeaders = const [],
+    this.subs = const [],
   });
 
   final Site site;
@@ -114,6 +115,9 @@ class PlaybackResolutionInput {
 
   /// 顶层 `headers` 规则，用于在媒体请求上按 host 注入（§7.4.6 步骤 2）。
   final List<HeaderRule> globalHeaders;
+
+  /// 播放结果携带的外挂字幕（§10.3），原样透传到决策。
+  final List<SubtitleInfo> subs;
 }
 
 /// 播放决策器：只根据输入决定动作，不执行网络。
@@ -153,6 +157,7 @@ abstract final class PlaybackResolver {
         url: target,
         headers: headers,
         flag: input.flag,
+        subs: input.subs,
       );
     }
 
@@ -164,6 +169,7 @@ abstract final class PlaybackResolver {
         url: resolved,
         headers: headers,
         flag: input.flag,
+        subs: input.subs,
       );
     }
 
@@ -177,6 +183,7 @@ abstract final class PlaybackResolver {
           url: joined,
           headers: headers,
           flag: input.flag,
+          subs: input.subs,
         );
       }
       throw AppError(

@@ -108,6 +108,10 @@ class TestFixtureServer {
       case '/api/play':
         await _fixtureJson(request, 'http/play.json');
         return;
+      // 带外挂字幕的播放结果（§10.3），与 Python fixture 服务保持一致。
+      case '/api/play-with-subs':
+        await _fixtureJson(request, 'http/play-with-subs.json');
+        return;
       case '/api/repository-a.json':
         await _json(request, {
           'name': '仓库条目 A',
@@ -515,7 +519,15 @@ class TestFixtureServer {
       return;
     }
     final bytes = candidate.readAsBytesSync();
-    request.response.headers.contentType = ContentType.binary;
+    // 与 Python fixture 服务一致：SubRip 用自己的 MIME，而非 text/plain。
+    if (candidate.path.endsWith('.srt')) {
+      request.response.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'application/x-subrip; charset=utf-8',
+      );
+    } else {
+      request.response.headers.contentType = ContentType.binary;
+    }
     request.response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
     request.response.add(bytes);
   }

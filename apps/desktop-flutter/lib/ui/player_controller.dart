@@ -11,8 +11,12 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'dart:io';
+
 import '../core/playback_diagnostics.dart';
 import '../core/protocol.dart';
+import '../core/subtitle.dart';
+import '../services/subtitle_service.dart';
 
 /// 播放错误分类（§10.4）。
 enum PlayerFailureKind {
@@ -110,13 +114,19 @@ class PlayerLoadOutcome {
 
 /// 播放器控制器。
 class PlayerController extends ChangeNotifier {
-  PlayerController({Player? player}) : _player = player ?? Player() {
+  PlayerController({Player? player, SubtitleLoader? subtitleLoader})
+    : _player = player ?? Player(),
+      _subtitleLoader = subtitleLoader ?? SubtitleService() {
     _videoController = VideoController(_player);
     _bind();
   }
 
   final Player _player;
   late final VideoController _videoController;
+
+  /// 字幕加载器（§10.3）：用宿主自己的 HTTP 客户端携带 Header 拉取，
+  /// 再把文本交给播放器，避免字幕请求丢失 Referer/UA/Cookie。
+  final SubtitleLoader _subtitleLoader;
 
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _lastEngineError;
@@ -158,6 +168,173 @@ class PlayerController extends ChangeNotifier {
   /// 最近一次播放的诊断快照（§23）。未开始播放时为 null。
   PlaybackDiagnostics? get diagnostics => _diagnostics;
 
+  // ---------------------------------------------------------------- 字幕
+
+  /// 外挂字幕候选（由播放结果的 `subs` 构建，§10.3）。
+  List<SubtitleOption> _externalSubtitleOptions = const [];
+
+  /// 内嵌字幕候选（由播放器上报的字幕轨构建）。
+  List<SubtitleOption> _embeddedSubtitleOptions = const [];
+
+  SubtitleOption? _selectedSubtitle;
+  String? _subtitleError;
+  bool _subtitleBusy = false;
+
+  /// 外挂字幕落盘后的临时文件路径 → 对应菜单条目。
+  ///
+  /// 为什么落盘而不是用 `SubtitleTrack.data`：media-kit 的 `.data` 会写一个
+  /// **没有扩展名**的临时文件（`TempFile` 用 UUID 命名），mpv 只能靠内容嗅探
+  /// 识别格式，并出现“轨已加入但 `tracks`/`track` 状态迟迟不刷新”的观测不一致；
+  /// 写成带真实扩展名（`.srt`/`.ass`/…）的临时文件后 libass 能直接按扩展名解析，
+  /// 轨表也能立即反映出来（Windows 实测，见 phase3 字幕集成测试）。
+  /// 宿主先自己带 Header 拉取文本再落盘，因此不会把 Header 泄漏给播放器。
+  final Map<String, SubtitleOption> _externalTrackFiles = {};
+
+  /// 字幕菜单（外挂 + 内嵌 + 关闭），供播放器页展示（§17.3）。
+  List<SubtitleOption> get subtitleOptions =>
+      subtitleMenu(_externalSubtitleOptions, _embeddedSubtitleOptions);
+
+  /// 外挂字幕候选（供页面做丢弃统计/展示）。
+  List<SubtitleOption> get externalOptions => _externalSubtitleOptions;
+
+  /// 内嵌字幕轨候选。
+  List<SubtitleOption> get embeddedOptions => _embeddedSubtitleOptions;
+
+  /// 当前选中的字幕；null 表示未显式选择（交给播放器默认行为）。
+  SubtitleOption? get selectedSubtitle => _selectedSubtitle;
+
+  /// 最近一次字幕错误（§10.4：字幕失败只提示，不影响视频播放）。
+  String? get subtitleError => _subtitleError;
+  bool get subtitleBusy => _subtitleBusy;
+  bool get hasSubtitles => subtitleOptions.length > 1;
+
+  /// 设置本次播放结果携带的外挂字幕。
+  ///
+  /// [onDiscard] 用于上报被丢弃的条目（缺地址/格式不支持），避免静默丢弃。
+  void setExternalSubtitles(
+    List<SubtitleInfo> subs, {
+    void Function(SubtitleInfo sub, String reason)? onDiscard,
+  }) {
+    final options = externalSubtitleOptions(subs, onDiscard: onDiscard);
+    if (listEquals(options, _externalSubtitleOptions)) return;
+    _externalSubtitleOptions = options;
+    notifyListeners();
+  }
+
+  /// 自动启用默认/强制外挂字幕（§10.3）。
+  ///
+  /// 内嵌轨的默认选择由 mpv 自己处理（`default` 标记）；这里只负责外挂字幕，
+  /// 因为引擎无从知道它们的存在。返回 true 表示已启用。
+  Future<bool> applyDefaultSubtitle({
+    Map<String, String> headers = const {},
+  }) async {
+    if (_selectedSubtitle != null) return false;
+    final option = defaultSubtitleOption(_externalSubtitleOptions);
+    if (option == null) return false;
+    return selectSubtitle(option, headers: headers);
+  }
+
+  /// 选择字幕轨（关闭 / 内嵌 / 外挂）。
+  ///
+  /// 任何失败都只落到 [subtitleError]，**不抛出、不影响视频播放**（§10.4）。
+  Future<bool> selectSubtitle(
+    SubtitleOption option, {
+    Map<String, String> headers = const {},
+  }) async {
+    _subtitleBusy = true;
+    _subtitleError = null;
+    notifyListeners();
+    try {
+      if (option.id == SubtitleOption.offId) {
+        await _player.setSubtitleTrack(SubtitleTrack.no());
+        _selectedSubtitle = SubtitleOption.off;
+        return true;
+      }
+      if (option.isExternal) {
+        final document = await _subtitleLoader.load(
+          SubtitleInfo(
+            url: option.url ?? '',
+            name: option.label,
+            lang: option.language,
+            format: option.format,
+          ),
+          headers: headers,
+        );
+        final file = await _writeSubtitleFile(document);
+        await _player.setSubtitleTrack(
+          SubtitleTrack.uri(
+            file.path,
+            title: option.label,
+            language: option.language.isEmpty ? 'auto' : option.language,
+          ),
+        );
+        _externalTrackFiles[file.path] = option;
+        _selectedSubtitle = option;
+        // 上一份外挂字幕文件已不再需要：保留当前这一份即可。
+        await _pruneSubtitleFiles(option);
+        return true;
+      }
+      final trackId = option.id.substring('embedded:'.length);
+      await _player.setSubtitleTrack(
+        SubtitleTrack(
+          trackId,
+          option.label,
+          option.language.isEmpty ? null : option.language,
+        ),
+      );
+      _selectedSubtitle = option;
+      return true;
+    } catch (error) {
+      _subtitleError = describeSubtitleFailure(error);
+      return false;
+    } finally {
+      _subtitleBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 清空字幕错误（用户重新选择时）。
+  void clearSubtitleError() {
+    if (_subtitleError == null) return;
+    _subtitleError = null;
+    notifyListeners();
+  }
+
+  /// 把字幕文本写入带正确扩展名的临时文件（§10.3）。
+  Future<File> _writeSubtitleFile(SubtitleDocument document) async {
+    final directory = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}webhtv-pc-subtitles',
+    );
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    final extension = document.format.isEmpty ? 'srt' : document.format;
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}'
+      'sub-${DateTime.now().microsecondsSinceEpoch}.$extension',
+    );
+    await file.writeAsString(document.text);
+    return file;
+  }
+
+  /// 清理不再使用的外挂字幕临时文件（避免临时目录持续增长）。
+  ///
+  /// [keep] 为需要保留的条目（通常是当前选择），传 null 表示全部删除（销毁时）。
+  Future<void> _pruneSubtitleFiles(SubtitleOption? keep) async {
+    final stale = _externalTrackFiles.entries
+        .where((entry) => entry.value != keep)
+        .toList();
+    for (final entry in stale) {
+      _externalTrackFiles.remove(entry.key);
+      try {
+        final file = File(entry.key);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // 临时文件清理失败不应影响播放（§20 资源释放是尽力而为）。
+      }
+    }
+  }
+
   double get progress {
     if (_duration.inMilliseconds <= 0) return 0;
     return (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
@@ -198,7 +375,67 @@ class PlayerController extends ChangeNotifier {
         // 非致命告警（无声卡/无 GPU）不应被当成加载失败：加载结果以 duration 判定。
         notifyListeners();
       }),
+      _player.stream.tracks.listen((tracks) {
+        _updateEmbeddedSubtitles(tracks.subtitle);
+      }),
+      _player.stream.track.listen((track) {
+        _syncSelectedSubtitle(track.subtitle);
+      }),
     ]);
+  }
+
+  /// 播放器上报的内嵌字幕轨变化（切集/换片后重新计算菜单）。
+  void _updateEmbeddedSubtitles(List<SubtitleTrack> tracks) {
+    final options = embeddedSubtitleOptions(
+      tracks.map(
+        (track) => (
+          id: track.id,
+          title: track.title ?? '',
+          language: track.language ?? '',
+          isDefault: track.isDefault ?? false,
+        ),
+      ),
+    );
+    if (listEquals(options, _embeddedSubtitleOptions)) return;
+    _embeddedSubtitleOptions = options;
+    notifyListeners();
+  }
+
+  /// 播放器当前字幕轨 → 菜单选中态。
+  ///
+  /// 外挂字幕由本控制器自己发起（`uri/data` 形态），不能被引擎回写覆盖，
+  /// 否则 `sub-add` 后 `state.track` 的 `id` 是临时文件路径，菜单会显示成内嵌轨。
+  /// 同时把外部字幕轨同步到菜单候选里：mpv 加载完外挂字幕后会把它列入轨道表。
+  void _syncSelectedSubtitle(SubtitleTrack track) {
+    if (track.uri || track.data) {
+      // 外挂字幕由本控制器落盘后交给引擎，id 即我们生成的临时文件路径。
+      final external = _externalTrackFiles[track.id];
+      if (external != null) {
+        if (_selectedSubtitle != external) {
+          _selectedSubtitle = external;
+          notifyListeners();
+        }
+      }
+      return;
+    }
+    if (!isRealSubtitleTrackId(track.id)) {
+      // `no`：关闭；`auto`：未显式选择。
+      final next = track.id.trim() == 'no' ? SubtitleOption.off : null;
+      if (_selectedSubtitle != next) {
+        _selectedSubtitle = next;
+        notifyListeners();
+      }
+      return;
+    }
+    final matched = _embeddedSubtitleOptions.firstWhere(
+      (option) => option.id == 'embedded:${track.id}',
+      orElse: () => SubtitleOption.off,
+    );
+    final next = matched.id == SubtitleOption.offId ? null : matched;
+    if (_selectedSubtitle != next) {
+      _selectedSubtitle = next;
+      notifyListeners();
+    }
   }
 
   /// 加载媒体。
@@ -472,6 +709,8 @@ class PlayerController extends ChangeNotifier {
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
+    // 清理外挂字幕临时文件（§20 资源释放）。
+    _pruneSubtitleFiles(null);
     _player.dispose();
     super.dispose();
   }

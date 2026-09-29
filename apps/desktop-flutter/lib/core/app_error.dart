@@ -37,6 +37,15 @@ enum AppErrorKind {
   playbackParserRequired,
   playbackUnsupportedScheme,
 
+  // 字幕（§10.3「外挂字幕」「字幕轨选择」）
+  // 字幕失败不影响视频播放，因此这些分类只用于提示与日志（§10.4）。
+  subtitleNetwork,
+  subtitleHttp,
+  subtitleTooLarge,
+  subtitleDecode,
+  subtitleUnsupported,
+  subtitleEmpty,
+
   // 直播（§13）
   liveInvalid,
   liveNetwork,
@@ -94,6 +103,18 @@ String describeErrorKind(AppErrorKind kind) {
       return '该剧集需要解析器或 Spider 运行时（MVP-A 未实现）';
     case AppErrorKind.playbackUnsupportedScheme:
       return '播放地址协议不受支持';
+    case AppErrorKind.subtitleNetwork:
+      return '字幕下载失败：网络不可达或 DNS 失败（不影响视频播放）';
+    case AppErrorKind.subtitleHttp:
+      return '字幕下载失败：服务器返回非 2xx 状态（不影响视频播放）';
+    case AppErrorKind.subtitleTooLarge:
+      return '字幕文件超过大小上限，已跳过（不影响视频播放）';
+    case AppErrorKind.subtitleDecode:
+      return '字幕解码失败：编码不受支持（不影响视频播放）';
+    case AppErrorKind.subtitleUnsupported:
+      return '字幕格式不受支持（不影响视频播放）';
+    case AppErrorKind.subtitleEmpty:
+      return '字幕文件为空（不影响视频播放）';
     case AppErrorKind.liveInvalid:
       return '直播源内容非法：无法解析为 M3U/TXT/JSON';
     case AppErrorKind.liveNetwork:

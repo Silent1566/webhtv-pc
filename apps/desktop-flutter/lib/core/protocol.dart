@@ -874,6 +874,95 @@ class VodEpisode {
   Map<String, Object?> toJson() => {'name': name, 'url': url};
 }
 
+/// 外挂字幕（§10.3「外挂字幕」「字幕轨选择」）。
+///
+/// 字段与 WebHTV/TVBox 播放结果里的 `subs` 数组逐一对齐（Android 侧为
+/// `com.fongmi.android.tv.bean.Sub`）：`url`、`name`、`lang`、`format`、`flag`。
+/// `flag` 沿用 media3 的 `C.SELECTION_FLAG_*` 位语义，`0` 视为默认字幕。
+class SubtitleInfo {
+  const SubtitleInfo({
+    required this.url,
+    this.name = '',
+    this.lang = '',
+    this.format = '',
+    this.flag = 0,
+  });
+
+  final String url;
+  final String name;
+  final String lang;
+  final String format;
+
+  /// 选择标志位（media3 语义）：`flag == 0` 视为 [selectionFlagDefault]。
+  final int flag;
+
+  /// media3 `C.SELECTION_FLAG_DEFAULT`。
+  static const int selectionFlagDefault = 1;
+
+  /// media3 `C.SELECTION_FLAG_FORCED`。
+  static const int selectionFlagForced = 2;
+
+  /// media3 `C.SELECTION_FLAG_AUTOSELECT`。
+  static const int selectionFlagAutoSelect = 4;
+
+  /// `flag == 0` 时按媒体生态惯例视为“默认字幕”。
+  int get effectiveFlag => flag == 0 ? selectionFlagDefault : flag;
+
+  bool get isDefault => (effectiveFlag & selectionFlagDefault) != 0;
+  bool get isForced => (flag & selectionFlagForced) != 0;
+  bool get isAutoSelect => (effectiveFlag & selectionFlagAutoSelect) != 0;
+
+  /// 播放器菜单里的展示名：名称 → 语言 → 地址末段。
+  String get displayName {
+    if (name.isNotEmpty) return name;
+    if (lang.isNotEmpty) return lang;
+    return url.isEmpty ? '外挂字幕' : url.split('/').last;
+  }
+
+  static SubtitleInfo? fromJson(Object? value) {
+    final map = asMap(value);
+    final url = asNonEmptyString(map['url']);
+    if (url == null) return null;
+    return SubtitleInfo(
+      url: url,
+      name: asNonEmptyString(map['name']) ?? '',
+      lang: asNonEmptyString(map['lang']) ?? '',
+      format: asNonEmptyString(map['format']) ?? '',
+      flag: asInt(map['flag']) ?? 0,
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'url': url,
+    'name': name,
+    'lang': lang,
+    'format': format,
+    'flag': flag,
+  };
+
+  /// 解析 `subs` 数组：缺 `url` 的条目丢弃（与 `Vod` 缺 id 同语义，§8.4）。
+  static List<SubtitleInfo> listFromJson(Object? value) => asList(value)
+      .map(SubtitleInfo.fromJson)
+      .whereType<SubtitleInfo>()
+      .toList();
+
+  @override
+  bool operator ==(Object other) =>
+      other is SubtitleInfo &&
+      other.url == url &&
+      other.name == name &&
+      other.lang == lang &&
+      other.format == format &&
+      other.flag == flag;
+
+  @override
+  int get hashCode => Object.hash(url, name, lang, format, flag);
+
+  @override
+  String toString() =>
+      'SubtitleInfo(name=$name lang=$lang format=$format flag=$flag url=${redactUrl(url)})';
+}
+
 /// 统一的 Result 结构（首页/分类/详情/搜索/播放）。
 class SiteResult {
   const SiteResult({
@@ -889,6 +978,7 @@ class SiteResult {
     this.parse,
     this.jx,
     this.msg,
+    this.subs = const [],
     this.extra = const {},
   });
 
@@ -906,6 +996,9 @@ class SiteResult {
   final int? parse;
   final int? jx;
   final String? msg;
+
+  /// 播放结果携带的外挂字幕（§10.3）。非播放结果通常为空。
+  final List<SubtitleInfo> subs;
   final Map<String, Object?> extra;
 
   bool get isEmpty => classes.isEmpty && list.isEmpty && playUrl == null;
@@ -923,6 +1016,7 @@ class SiteResult {
     int? parse,
     int? jx,
     String? msg,
+    List<SubtitleInfo>? subs,
   }) {
     return SiteResult(
       classes: classes ?? this.classes,
@@ -937,6 +1031,7 @@ class SiteResult {
       parse: parse ?? this.parse,
       jx: jx ?? this.jx,
       msg: msg ?? this.msg,
+      subs: subs ?? this.subs,
       extra: extra,
     );
   }
@@ -962,6 +1057,8 @@ class PlaybackDecision {
     this.format,
     this.reason,
     this.flag,
+    this.subs = const [],
+    this.upstreamHeaders,
   });
 
   final PlaybackAction action;
@@ -971,8 +1068,22 @@ class PlaybackDecision {
   final String? reason;
   final String? flag;
 
+  /// 播放结果携带的外挂字幕（§10.3）：随决策一起传到播放器。
+  final List<SubtitleInfo> subs;
+
+  /// 代理**之前**合并出的媒体 Header（§7.4.6）。
+  ///
+  /// 走本地代理时 [headers] 会被清空（Header 由代理注入，避免泄漏到直连请求），
+  /// 但外挂字幕由宿主自己发请求，必须用代理前的原始 Header，否则丢 Referer/UA。
+  final HeaderMap? upstreamHeaders;
+
+  /// 宿主自行发起的附加资源请求（外挂字幕）应使用的 Header。
+  HeaderMap? get assetHeaders =>
+      (upstreamHeaders?.isNotEmpty ?? false) ? upstreamHeaders : headers;
+
   String get logLine =>
-      'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} reason=${reason ?? ""}';
+      'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} '
+      'subs=${subs.length} reason=${reason ?? ""}';
 }
 
 /// URL 脱敏：只保留 scheme + host + path，隐藏 query 与片段（§11.3.1）。

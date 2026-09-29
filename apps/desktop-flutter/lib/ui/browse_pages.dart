@@ -343,6 +343,10 @@ class _DetailPageState extends State<DetailPage> {
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
               startPosition: resume,
+              // 外挂字幕（§10.3）：播放结果里的 subs + 代理前的原始 Header。
+              subtitles: decision.subs,
+              subtitleHeaders:
+                  decision.assetHeaders?.asRequestHeaders ?? const {},
             ),
           ),
         ),

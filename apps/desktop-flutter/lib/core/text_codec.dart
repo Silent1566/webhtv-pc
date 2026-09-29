@@ -110,11 +110,12 @@ String? charsetFromContentType(String? contentType) {
   return match?.group(1)?.toLowerCase();
 }
 
-/// 把字节解码为文本。
+/// 把字节解码为文本，并返回实际使用的字符集。
 ///
 /// 顺序固定为：BOM 优先 → 显式声明的 charset → UTF-8 严格解码 → GBK 兜底。
-/// 任何一步失败都返回可定位的 [AppError]，不静默替换成乱码文本。
-String decodeConfigText(
+/// 与 [decodeConfigText] 是同一套规则，区别只是把“用了哪个字符集”也返回，
+/// 供字幕等需要把编码写进日志/诊断的调用方使用。
+({String text, String charset}) decodeTextAndCharset(
   List<int> input, {
   String? declaredCharset,
 }) {
@@ -122,13 +123,9 @@ String decodeConfigText(
   final charset = (declaredCharset ?? stripped.charset)?.trim().toLowerCase();
   final bytes = stripped.bytes;
 
-  if (bytes.isEmpty) {
-    throw AppError(AppErrorKind.configInvalid, '配置内容为空');
-  }
-
   if (charset != null && charset.isNotEmpty) {
     final decoded = _decodeWithCharset(bytes, charset);
-    if (decoded != null) return decoded;
+    if (decoded != null) return (text: decoded, charset: charset);
     throw AppError(
       AppErrorKind.configDecode,
       '不支持的配置字符集：$charset',
@@ -137,12 +134,11 @@ String decodeConfigText(
   }
 
   try {
-    return utf8.decode(bytes);
+    return (text: utf8.decode(bytes), charset: 'utf-8');
   } on FormatException {
     // 未声明编码但包含非 UTF-8 字节：按兼容目标尝试 GBK。
     try {
-      final text = gbk.decode(bytes, allowMalformed: false);
-      return text;
+      return (text: gbk.decode(bytes, allowMalformed: false), charset: 'gbk');
     } on FormatException {
       throw AppError(
         AppErrorKind.configDecode,
@@ -151,6 +147,20 @@ String decodeConfigText(
       );
     }
   }
+}
+
+/// 把字节解码为文本。
+///
+/// 顺序固定为：BOM 优先 → 显式声明的 charset → UTF-8 严格解码 → GBK 兜底。
+/// 任何一步失败都返回可定位的 [AppError]，不静默替换成乱码文本。
+String decodeConfigText(
+  List<int> input, {
+  String? declaredCharset,
+}) {
+  if (input.isEmpty) {
+    throw AppError(AppErrorKind.configInvalid, '配置内容为空');
+  }
+  return decodeTextAndCharset(input, declaredCharset: declaredCharset).text;
 }
 
 String? _decodeWithCharset(Uint8List bytes, String charset) {

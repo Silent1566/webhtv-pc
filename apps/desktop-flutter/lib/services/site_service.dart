@@ -231,6 +231,7 @@ class SiteService {
           jx: playResult.jx,
           resultHeader: playResult.header,
           globalHeaders: _globalHeaders,
+          subs: playResult.subs,
         ),
       );
       _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);

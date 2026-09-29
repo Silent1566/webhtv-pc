@@ -14,6 +14,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/app_error.dart';
 import '../core/protocol.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/subtitle.dart';
 import '../state/app_state.dart';
 import 'app.dart';
 import 'player_controller.dart';
@@ -34,6 +35,8 @@ class PlaybackRequest {
     this.episodeIndex = 0,
     this.vodPic,
     this.directUrl = false,
+    this.subtitles = const [],
+    this.subtitleHeaders = const {},
   });
 
   final String url;
@@ -45,6 +48,15 @@ class PlaybackRequest {
   final String flag;
   final Map<String, String> headers;
   final Duration? startPosition;
+
+  /// 播放结果携带的外挂字幕（§10.3）。
+  final List<SubtitleInfo> subtitles;
+
+  /// 拉取外挂字幕时使用的 Header（与媒体一致，含 Referer/UA/Cookie）。
+  ///
+  /// 与 [headers] 分开：走本地代理时 [headers] 被清空（由代理注入），而字幕由
+  /// 宿主自己请求，必须用代理前的原始 Header（§11.3.1）。
+  final Map<String, String> subtitleHeaders;
 
   /// 详情页给出的全部线路，用于线路切换与上下集。
   final List<VodPlayLine> playLines;
@@ -65,6 +77,7 @@ class PlaybackRequest {
     int? episodeIndex,
     Duration? startPosition,
     bool clearStartPosition = false,
+    List<SubtitleInfo>? subtitles,
   }) {
     return PlaybackRequest(
       url: url ?? this.url,
@@ -80,6 +93,8 @@ class PlaybackRequest {
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
       directUrl: directUrl,
+      subtitles: subtitles ?? this.subtitles,
+      subtitleHeaders: subtitleHeaders,
     );
   }
 }
@@ -105,6 +120,9 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _controlsVisible = true;
   Timer? _saveTimer;
   String? _loadError;
+
+  /// 最近一次字幕错误提示是否已展示，避免每次 setState 重复弹提示。
+  String? _lastShownSubtitleError;
 
   /// 最近一次播放诊断快照（§23），用于播放器内展示与复制。
   PlaybackDiagnostics? _diagnostics;
@@ -151,6 +169,9 @@ class _PlayerPageState extends State<PlayerPage> {
       });
       return;
     }
+    // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
+    // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
+    await _configureSubtitles();
     // 进度恢复：仅对同一剧集且位置有效时执行（§10.3 播放恢复）。
     final start = _request.startPosition;
     if (start != null && start > Duration.zero && start < _controller.duration) {
@@ -194,6 +215,120 @@ class _PlayerPageState extends State<PlayerPage> {
     });
     await _load();
     return true;
+  }
+
+  /// 装配字幕（§10.3「外挂字幕」「字幕轨选择」）。
+  ///
+  /// 顺序：先登记播放结果里的 `subs`，再自动启用默认/强制外挂字幕。
+  /// 任何失败都只记日志/提示，绝不影响视频播放（§10.4）。
+  Future<void> _configureSubtitles() async {
+    final subtitles = _request.subtitles;
+    if (subtitles.isEmpty) return;
+    _controller.setExternalSubtitles(
+      subtitles,
+      onDiscard: (sub, reason) => widget.state.log.warning(
+        '字幕条目已丢弃 name=${sub.name} reason=$reason',
+        scope: 'subtitle',
+      ),
+    );
+    if (_controller.externalOptions.isEmpty) return;
+    final enabled = await _controller.applyDefaultSubtitle(
+      headers: _request.subtitleHeaders,
+    );
+    final error = _controller.subtitleError;
+    if (error != null) {
+      widget.state.log.warning(
+        '默认字幕加载失败 sub=${_controller.selectedSubtitle?.label ?? ""} $error',
+        scope: 'subtitle',
+      );
+      _showSubtitleError(error);
+      return;
+    }
+    if (enabled) {
+      widget.state.log.info(
+        '默认字幕已启用 sub=${_controller.selectedSubtitle?.label ?? ""}',
+        scope: 'subtitle',
+      );
+    }
+  }
+
+  /// 字幕失败提示：不阻断播放，只用 SnackBar 告知（§10.4）。
+  void _showSubtitleError(String message) {
+    if (!mounted || _lastShownSubtitleError == message) return;
+    _lastShownSubtitleError = message;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: '字幕设置',
+          onPressed: _showSubtitleMenu,
+        ),
+      ),
+    );
+  }
+
+  /// 字幕菜单：外挂 / 内嵌 / 关闭（§13.3「字幕可开启和关闭」）。
+  Future<void> _showSubtitleMenu() async {
+    final options = _controller.subtitleOptions;
+    if (options.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前视频没有可用字幕轨')),
+      );
+      return;
+    }
+    final selected = await showModalBottomSheet<SubtitleOption>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final option in options)
+              ListTile(
+                leading: Icon(
+                  option.id == SubtitleOption.offId
+                      ? Icons.subtitles_off_outlined
+                      : (option.isExternal
+                            ? Icons.description_outlined
+                            : Icons.subtitles_outlined),
+                ),
+                title: Text(option.label),
+                subtitle: option.isExternal
+                    ? Text(
+                        '外挂 · ${option.format.toUpperCase()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : const Text('内嵌'),
+                trailing: _controller.selectedSubtitle == option
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.of(context).pop(option),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null) return;
+    _controller.clearSubtitleError();
+    final ok = await _controller.selectSubtitle(
+      selected,
+      headers: _request.subtitleHeaders,
+    );
+    final error = _controller.subtitleError;
+    if (ok) {
+      widget.state.log.info(
+        '字幕已切换 sub=${selected.label} kind=${selected.kind.name}',
+        scope: 'subtitle',
+      );
+      return;
+    }
+    widget.state.log.warning(
+      '字幕切换失败 sub=${selected.label} ${error ?? "未知错误"}',
+      scope: 'subtitle',
+    );
+    if (error != null) _showSubtitleError(error);
   }
 
   /// 播放中周期性写入进度（§15.2 “播放中写入进度”）。
@@ -282,8 +417,10 @@ class _PlayerPageState extends State<PlayerPage> {
     try {
       // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
       final String url;
+      final List<SubtitleInfo> subtitles;
       if (_request.directUrl) {
         url = episode.url;
+        subtitles = _request.subtitles;
       } else {
         final decision = await state.resolvePlayback(
           episodeTarget: episode.url,
@@ -298,6 +435,8 @@ class _PlayerPageState extends State<PlayerPage> {
           );
         }
         url = decision.url!;
+        // 换集后字幕也要换成该集结果里的 subs（§10.3）。
+        subtitles = decision.subs;
       }
       setState(() {
         _loadError = null;
@@ -310,6 +449,7 @@ class _PlayerPageState extends State<PlayerPage> {
               : null,
           episodeIndex: episodeIndex,
           clearStartPosition: true,
+          subtitles: subtitles,
         );
         _episodesCache = const [];
       });
@@ -385,6 +525,11 @@ class _PlayerPageState extends State<PlayerPage> {
                   ),
                   actions: [
                     IconButton(
+                      tooltip: '字幕',
+                      icon: const Icon(Icons.subtitles_outlined),
+                      onPressed: _showSubtitleMenu,
+                    ),
+                    IconButton(
                       tooltip: '播放诊断',
                       icon: const Icon(Icons.monitor_heart_outlined),
                       onPressed: _diagnostics == null ? null : _showDiagnostics,
@@ -449,6 +594,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   onNext: _playNext,
                   onSelectEpisode: (index) => _playEpisode(index),
                   onSelectLine: (flag) => _playEpisode(0, overrideFlag: flag),
+                  onSelectSubtitle: _showSubtitleMenu,
                 ),
             ],
           ),
@@ -600,6 +746,7 @@ class _ControlBar extends StatelessWidget {
     required this.onNext,
     required this.onSelectEpisode,
     required this.onSelectLine,
+    required this.onSelectSubtitle,
   });
 
   final PlayerController controller;
@@ -609,6 +756,7 @@ class _ControlBar extends StatelessWidget {
   final VoidCallback onNext;
   final ValueChanged<int> onSelectEpisode;
   final ValueChanged<String> onSelectLine;
+  final VoidCallback onSelectSubtitle;
 
   String _formatDuration(Duration value) {
     final total = value.inSeconds;
@@ -738,6 +886,18 @@ class _ControlBar extends StatelessWidget {
                   icon: const Icon(Icons.list, size: 18),
                   label: Text('剧集（${episodes.length}）'),
                 ),
+              IconButton(
+                tooltip: controller.hasSubtitles
+                    ? '字幕（${controller.selectedSubtitle?.label ?? '未选择'}）'
+                    : '字幕（无可选字幕轨）',
+                onPressed: onSelectSubtitle,
+                icon: Icon(
+                  controller.selectedSubtitle == null ||
+                          controller.selectedSubtitle?.id == SubtitleOption.offId
+                      ? Icons.subtitles_off_outlined
+                      : Icons.subtitles_outlined,
+                ),
+              ),
               IconButton(
                 tooltip: '全屏（F11）',
                 onPressed: onToggleFullscreen,

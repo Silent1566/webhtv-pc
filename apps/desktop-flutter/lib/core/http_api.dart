@@ -384,6 +384,8 @@ abstract final class HttpApiResponseParser {
       parse: asInt(map['parse']),
       jx: asInt(map['jx']),
       playUrl: asNonEmptyString(map['url']) ?? asNonEmptyString(map['playUrl']),
+      // 外挂字幕（§10.3）：`subs` 数组仅在播放结果里有意义，其他结果为空。
+      subs: SubtitleInfo.listFromJson(map['subs']),
     );
   }
 

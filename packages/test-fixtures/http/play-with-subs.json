@@ -1,0 +1,25 @@
+{
+  "parse": 0,
+  "url": "http://127.0.0.1:18080/media/sample.m3u8",
+  "header": { "Referer": "http://127.0.0.1:18080/", "User-Agent": "WebHTV-PC/0.1 (Windows)" },
+  "subs": [
+    {
+      "url": "http://127.0.0.1:18080/media/sample.srt",
+      "name": "简体中文",
+      "lang": "zh",
+      "format": "srt",
+      "flag": 1
+    },
+    {
+      "url": "http://127.0.0.1:18080/media/nope.ass",
+      "name": "缺失外挂字幕",
+      "lang": "en",
+      "format": "ass",
+      "flag": 0
+    },
+    {
+      "name": "无地址条目",
+      "lang": "ja"
+    }
+  ]
+}

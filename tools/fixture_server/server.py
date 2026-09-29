@@ -21,6 +21,12 @@
 - `/media/...`  本地媒体 fixture，要求 `Referer` 与 `User-Agent`
 - `/live/live.m3u`、`/live/live.txt`、`/live/live.json`  直播清单 fixture（§13.3）
 
+字幕 fixture（§10.3「外挂字幕」）：
+
+- `/media/sample.srt`  外挂字幕样本，与媒体共用同一道 Header 门禁
+  （字幕与视频同源时通常需要同样的 Referer/UA/Cookie，缺 Header 必须 403）
+- `/api/play-with-subs`  携带 `subs` 的播放结果（含缺地址条目，用于验证丢弃）
+
 服务只允许监听回环地址。
 """
 
@@ -197,6 +203,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if path == "/api/play":
             self._send_json_bytes(_json("play.json"))
             return
+        # 带外挂字幕的播放结果（§10.3）：用于验证 subs 解析/默认选择/丢弃。
+        if path == "/api/play-with-subs":
+            self._send_json_bytes(_json("play-with-subs.json"))
+            return
         if path == "/api/repository-a.json":
             self._send_json(REPOSITORY_A)
             return
@@ -252,6 +262,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "category": "category.json",
                 "detail": "detail.json",
                 "play": "play.json",
+                "play-with-subs": "play-with-subs.json",
             }
             fixture = fixture_by_action.get(action)
             if fixture is None:
@@ -286,6 +297,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 return
             if vod_id == "msg-1":
                 self._send_json_bytes(_json("result-msg.json"))
+                return
+            if vod_id == "subs-1":
+                self._send_json_bytes(_json("play-with-subs.json"))
                 return
             self._send_json_bytes(_json("detail.json"))
             return
@@ -361,6 +375,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         payload = candidate.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if candidate.suffix == ".srt":
+            # Python 的 mimetypes 把 .srt 当 text/plain；SubRip 有自己的类型，
+            # 这里显式声明，让客户端能验证 Content-Type → 格式推断这条分支。
+            content_type = "application/x-subrip; charset=utf-8"
+        if candidate.suffix == ".ass" or candidate.suffix == ".ssa":
+            content_type = "text/x-ssa; charset=utf-8"
         self._send_bytes(payload, content_type)
 
     def log_message(self, format_string: str, *args) -> None:
