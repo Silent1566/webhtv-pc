@@ -1,6 +1,6 @@
 # Phase 3 计划(直播 · Windows)
 
-- 状态:进行中(直播核心闭环已完成,见 §3.1)
+- 状态:进行中(直播核心闭环 + 播放诊断已完成,见 §3.1)
 - 日期:2026-09-28
 - 对应设计文档章节:§13(直播功能设计)、§21 Phase 3、§17.2
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
@@ -64,9 +64,10 @@
 | 错误路径 | §8.4 不许把错误页当成功 | `test/phase3_live_test.dart`「错误路径」 | 申明 JSON 内容非法→`liveInvalid`,不空列表化 |
 | 加载服务 | HTTP/本地/编码/缓存/错误 | `test/phase3_live_service_test.dart` | GBK 兜底中文不乱码;缓存命中不重复请求;`liveHttp`/`liveUnsupported`;单源失败不阻塞其他源 |
 | 直播页 UI | 渲染+交互+单源隔离 | `test/phase3_live_page_test.dart` | 空态;源/分组/频道渲染;多线路展示;失败源错误态+重试;其他源不受影响 |
-| 直播播放 | 直链 + 多线路 + 失败切线路 | `test/phase3_live_page_test.dart` `requestForChannel` + 纯函数 | `directUrl=true`、线路映射、越界安全 |
-| 直播集成 | 真实窗口 + 真实播放器 + 直播直链出画 | `integration_test/live_flow_test.dart` (-d windows) | 直播页渲染;失效源隔离;带 Header 频道真实出画(PHASE3-EVIDENCE) |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | 255 个用例全绿;analyze 无问题 |
+| 直播播放 | 直链 + 多线路 + 失败切线路 + 频道 Header | `test/phase3_live_page_test.dart` `requestForChannel` + 纯函数 | `directUrl=true`、线路映射、越界安全、频道级 Header 注入直链 |
+| 播放诊断 | 引擎/格式/网络/错误 + 阶段耗时（§23） | `test/phase3_diagnostics_test.dart` | 格式识别、地址脱敏、错误分类与提示、敏感 Header 脱敏、JSON 往返 |
+| 直播集成 | 真实窗口 + 真实播放器 + 直播直链出画 + 诊断落定 | `integration_test/live_flow_test.dart` (-d windows) | 直播页渲染;失效源隔离;带 Header 频道真实出画;播放后诊断含引擎/格式/主机/结果 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | 268 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/live_flow_test.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -77,7 +78,7 @@
 ### 3.1 门禁落地状态(2026-09-28)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **255** 个用例(Phase 2 的 203 + 直播 52),
+`flutter test` 共 **268** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12),
 `integration_test/live_flow_test.dart` 在 Windows 真实窗口 + 真实 media-kit
 播放器上 **3** 个用例全绿,并产出可复查事实行:
 
@@ -85,6 +86,7 @@
 - `PHASE3-EVIDENCE live-source-fail isolated=true retry-visible=true`
 - `PHASE3-EVIDENCE live-request direct=true lines=1`
 - `PHASE3-EVIDENCE live-playback first-frame=yes`
+- `PHASE3-EVIDENCE live-diagnostics engine=media-kit/mpv format=hls host=127.0.0.1 succeeded=true`
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -102,6 +104,10 @@
    `testWidgets`(fake-async 区)无法安全初始化原生库。已将直播播放请求构造
    提取为 `LivePage.requestForChannel` 纯函数,UI 测试覆盖渲染与交互,
    播放请求逻辑由纯函数测试覆盖。
+4. `lib/ui/live_page.dart`:`requestForChannel` 未把**频道级 Header** 写入
+   `PlaybackRequest.headers`,使 M3U `#EXTVLCOPT` / TXT `url|header` 声明的
+   Referer/UA 全部丢失,需鉴权的直播线路无法播放(§13.1 直播 Header)。
+   已修复并由 `phase3_live_page_test.dart` 断言锁定(负向对照证实有判别力)。
 
 ## 5. 风险与开放问题
 
@@ -113,6 +119,12 @@
 3. **直播 JSON 的真实形态**:WebHTV/TVBox 直播 JSON 既有 `groups[].channel[]`
    (当前实现的主形态),也有 `{code,data}`、`{data:{groups:[...]}}` 信封。
    本阶段兼容数组/信封/顶层 map 三态;发现其他形态应在兼容性样本库记录。
+4. **播放诊断增强(§23)**:已实现引擎/格式/网络/错误与阶段耗时的诊断快照,
+   并在播放器页与日志页提供可复制报告。**硬解/软解切换、网络缓存、截图、
+   画面比例、音轨/字幕轨选择**等 §10.3 后置播放能力仍未实现;
+   诊断已预留字段位,但未接入这些开关。
+5. **解析器(§12)**:`parse=1`/`jx=1` 目前仍明确报「需要解析器」而不执行;
+   本阶段不做解析器运行时(属 Phase 3 剩余项)。
 
 ## 6. 平台范围声明
 

@@ -7,11 +7,13 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/app_error.dart';
 import '../core/protocol.dart';
+import '../core/playback_diagnostics.dart';
 import '../state/app_state.dart';
 import 'app.dart';
 import 'player_controller.dart';
@@ -104,6 +106,9 @@ class _PlayerPageState extends State<PlayerPage> {
   Timer? _saveTimer;
   String? _loadError;
 
+  /// 最近一次播放诊断快照（§23），用于播放器内展示与复制。
+  PlaybackDiagnostics? _diagnostics;
+
   @override
   void initState() {
     super.initState();
@@ -121,8 +126,21 @@ class _PlayerPageState extends State<PlayerPage> {
     final outcome = await _controller.openWithRetry(
       _request.url,
       headers: _request.headers,
+      siteKey: _request.siteKey,
+      flag: _request.flag,
+      episodeName: _request.episodeName,
     );
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
+    // 诊断：落定快照并写入日志（§23 输出引擎/格式/网络/错误）。
+    final diagnostics = _controller.diagnostics;
+    if (diagnostics != null) {
+      widget.state.log.info(
+        '播放诊断 ${diagnostics.logLine}',
+        scope: 'diagnostics',
+      );
+      _diagnostics = diagnostics;
+      widget.state.recordPlaybackDiagnostics(diagnostics);
+    }
     if (!outcome.succeeded) {
       // 直播：当前线路失败时按顺序自动切到下一个线路（§13.3 播放失败可切线路）。
       if (_request.directUrl && await _fallbackLiveLine()) return;
@@ -367,6 +385,11 @@ class _PlayerPageState extends State<PlayerPage> {
                   ),
                   actions: [
                     IconButton(
+                      tooltip: '播放诊断',
+                      icon: const Icon(Icons.monitor_heart_outlined),
+                      onPressed: _diagnostics == null ? null : _showDiagnostics,
+                    ),
+                    IconButton(
                       tooltip: '快捷键说明',
                       icon: const Icon(Icons.keyboard),
                       onPressed: _showShortcutHelp,
@@ -430,6 +453,40 @@ class _PlayerPageState extends State<PlayerPage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 展示播放诊断（§23）：引擎/格式/网络/错误与阶段耗时，可一键复制。
+  void _showDiagnostics() {
+    final diagnostics = _diagnostics;
+    if (diagnostics == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('播放诊断'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              diagnostics.report,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: diagnostics.report));
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('复制'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }

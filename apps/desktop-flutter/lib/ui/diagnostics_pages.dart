@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/playback_diagnostics.dart';
 import '../services/log_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
@@ -166,6 +167,8 @@ class _LogsPageState extends State<LogsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.state.lastDiagnostics != null)
+          _PlaybackDiagnosticsCard(diagnostics: widget.state.lastDiagnostics!),
         Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
@@ -234,4 +237,111 @@ class _LogsPageState extends State<LogsPage> {
       ],
     );
   }
+}
+
+/// 最近一次播放诊断卡片（§23：输出引擎/格式/网络/错误）。
+///
+/// 在日志页顶部展示，提供“一眼可定位”的关键字段与完整的可复制报告。
+class _PlaybackDiagnosticsCard extends StatelessWidget {
+  const _PlaybackDiagnosticsCard({required this.diagnostics});
+
+  final PlaybackDiagnostics diagnostics;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final failed = diagnostics.succeeded == false;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: failed
+              ? theme.colorScheme.error
+              : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                failed ? Icons.error_outline : Icons.monitor_heart_outlined,
+                size: 18,
+                color: failed ? theme.colorScheme.error : null,
+              ),
+              const SizedBox(width: 8),
+              Text('最近播放诊断', style: theme.textTheme.titleSmall),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(
+                    ClipboardData(text: diagnostics.report),
+                  );
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已复制播放诊断')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.copy_all_outlined, size: 16),
+                label: const Text('复制'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 16,
+            runSpacing: 4,
+            children: [
+              _chip('引擎', PlaybackEngine.displayName(diagnostics.engine)),
+              _chip('格式', diagnostics.format.label),
+              if (diagnostics.target.host.isNotEmpty)
+                _chip('主机', diagnostics.target.host),
+              if (diagnostics.flag != null && diagnostics.flag!.isNotEmpty)
+                _chip('线路', diagnostics.flag!),
+              _chip(
+                '网络',
+                diagnostics.target.scheme.isEmpty
+                    ? '未知'
+                    : '${diagnostics.target.scheme}'
+                        '${diagnostics.target.isSecure ? '（加密）' : ''}',
+              ),
+              _chip(
+                '结果',
+                switch (diagnostics.succeeded) {
+                  true => '成功',
+                  false => '失败',
+                  null => '进行中',
+                },
+              ),
+              for (final stage in PlaybackStage.values)
+                if (diagnostics.elapsedOf(stage) != null)
+                  _chip(
+                    stage.label,
+                    '${diagnostics.elapsedOf(stage)!.inMilliseconds}ms',
+                  ),
+            ],
+          ),
+          if (failed) ...[
+            const SizedBox(height: 8),
+            Text(
+              diagnostics.failureHint ?? '播放失败',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String label, String value) => Padding(
+    padding: const EdgeInsets.only(right: 4),
+    child: Text('$label：$value'),
+  );
 }

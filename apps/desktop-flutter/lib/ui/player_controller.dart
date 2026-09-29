@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../core/playback_diagnostics.dart';
 import '../core/protocol.dart';
 
 /// 播放错误分类（§10.4）。
@@ -135,6 +136,10 @@ class PlayerController extends ChangeNotifier {
   String? _currentUrl;
   PlayerLoadOutcome? _lastOutcome;
 
+  /// 本次播放的诊断信息（§23）。每次 [open] 重建，包含引擎/格式/网络/错误与阶段耗时。
+  PlaybackDiagnostics? _diagnostics;
+  PlaybackDiagnosticsBuilder? _diagnosticsBuilder;
+
   VideoController get videoController => _videoController;
   Player get player => _player;
   Duration get position => _position;
@@ -149,6 +154,9 @@ class PlayerController extends ChangeNotifier {
   String? get currentUrl => _currentUrl;
   PlayerLoadOutcome? get lastOutcome => _lastOutcome;
   String? get lastEngineError => _lastEngineError;
+
+  /// 最近一次播放的诊断快照（§23）。未开始播放时为 null。
+  PlaybackDiagnostics? get diagnostics => _diagnostics;
 
   double get progress {
     if (_duration.inMilliseconds <= 0) return 0;
@@ -196,17 +204,34 @@ class PlayerController extends ChangeNotifier {
   /// 加载媒体。
   ///
   /// [headers] 由 PlaybackResolver 给出，已经完成全局 → 站点 → 播放结果优先级合并。
+  /// [diagnosticsBuilder] 由 [openWithRetry] 传入以跨重试累积阶段；直接调用时为 null，
+  /// 本次加载自建。
   Future<PlayerLoadOutcome> open(
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 20),
     Duration firstFrameTimeout = const Duration(seconds: 5),
     bool awaitFirstFrame = true,
+    PlaybackDiagnosticsBuilder? diagnosticsBuilder,
+    String? siteKey,
+    String? flag,
+    String? episodeName,
   }) async {
     _loading = true;
     _completed = false;
     _lastEngineError = null;
     _currentUrl = url;
+
+    // 诊断：记录入口地址与注入 Header（输出时统一脱敏，§23）。
+    final builder = diagnosticsBuilder ??
+        PlaybackDiagnosticsBuilder(
+          siteKey: siteKey,
+          flag: flag,
+          episodeName: episodeName,
+        );
+    _diagnosticsBuilder = builder;
+    builder.setFinalUrl(url);
+    builder.setHeaders(headers);
     notifyListeners();
 
     final stopwatch = Stopwatch()..start();
@@ -273,18 +298,21 @@ class PlayerController extends ChangeNotifier {
       _lastOutcome = outcome;
       _loading = false;
       _retryCount = 0;
+      _finishDiagnostics(succeeded: true, loadElapsed: loadElapsed, firstFrame: firstFrame);
       notifyListeners();
       return outcome;
     } on TimeoutException catch (error) {
       final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
       _lastOutcome = outcome;
       _loading = false;
+      _finishFailureDiagnostics(outcome);
       notifyListeners();
       return outcome;
     } catch (error) {
       final outcome = _failure(url, loadError ?? '$error', stopwatch);
       _lastOutcome = outcome;
       _loading = false;
+      _finishFailureDiagnostics(outcome);
       notifyListeners();
       return outcome;
     } finally {
@@ -305,13 +333,66 @@ class PlayerController extends ChangeNotifier {
     );
   }
 
+  /// 成功时补齐阶段耗时并落定诊断快照（§23）。
+  void _finishDiagnostics({
+    required bool succeeded,
+    required Duration loadElapsed,
+    Duration? firstFrame,
+  }) {
+    final builder = _diagnosticsBuilder;
+    if (builder == null) return;
+    builder.addStage(PlaybackStage.load, loadElapsed);
+    if (firstFrame != null) {
+      builder.addStage(PlaybackStage.firstFrame, firstFrame);
+    } else if (succeeded) {
+      builder.addStage(
+        PlaybackStage.firstFrame,
+        loadElapsed,
+        note: '首帧未单独观测到',
+      );
+    }
+    builder.addStage(PlaybackStage.playing, Duration.zero);
+    builder.succeed();
+    _diagnostics = builder.build();
+  }
+
+  /// 失败时记录失败分类、引擎错误与用户提示，并落定诊断快照（§10.4、§23）。
+  void _finishFailureDiagnostics(PlayerLoadOutcome outcome) {
+    final builder = _diagnosticsBuilder;
+    if (builder == null) return;
+    builder.addStage(PlaybackStage.load, outcome.loadElapsed);
+    builder.addStage(PlaybackStage.failed, outcome.loadElapsed);
+    final kind = outcome.failureKind;
+    builder.fail(
+      kind: kind ?? PlayerFailureKind.loadFailed,
+      message: outcome.errorMessage,
+      hint: kind == null ? null : describePlayerFailure(kind),
+    );
+    _diagnostics = builder.build();
+  }
+
   /// 超时场景只重试一次（§10.4）。
+  ///
+  /// 诊断阶段跨重试累积到同一个快照，便于区分「首次失败」与「重试后失败/成功」。
   Future<PlayerLoadOutcome> openWithRetry(
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 20),
+    String? siteKey,
+    String? flag,
+    String? episodeName,
   }) async {
-    var outcome = await open(url, headers: headers, timeout: timeout);
+    final builder = PlaybackDiagnosticsBuilder(
+      siteKey: siteKey,
+      flag: flag,
+      episodeName: episodeName,
+    );
+    var outcome = await open(
+      url,
+      headers: headers,
+      timeout: timeout,
+      diagnosticsBuilder: builder,
+    );
     if (outcome.succeeded) return outcome;
     if (outcome.failureKind != PlayerFailureKind.timeout &&
         outcome.failureKind != PlayerFailureKind.network) {
@@ -319,8 +400,15 @@ class PlayerController extends ChangeNotifier {
     }
     if (_retryCount >= 1) return outcome;
     _retryCount++;
+    final retryStopwatch = Stopwatch()..start();
     await Future<void>.delayed(const Duration(milliseconds: 600));
-    outcome = await open(url, headers: headers, timeout: timeout);
+    builder.addStage(PlaybackStage.retry, retryStopwatch.elapsed);
+    outcome = await open(
+      url,
+      headers: headers,
+      timeout: timeout,
+      diagnosticsBuilder: builder,
+    );
     return outcome;
   }
 

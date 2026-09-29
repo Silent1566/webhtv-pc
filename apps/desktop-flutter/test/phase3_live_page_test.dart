@@ -226,4 +226,23 @@ void main() {
     expect(request.url, '');
     expect(request.playLines.single.episodes, isEmpty);
   });
+
+  test('直播播放请求携带频道级 Header（§13.1 直播 Header）', () {
+    // 频道 Header 来自 M3U #EXTVLCOPT / TXT url|header，必须随直链注入，
+    // 否则需鉴权的直播线路会因缺 Header 播放失败。
+    final channel = LiveChannel.fromJson({
+      'name': '浙江卫视',
+      'urls': ['http://h/a.m3u8'],
+      'header': {
+        'Referer': 'http://h/',
+        'User-Agent': 'WebHTV-PC/0.1 (Windows)',
+      },
+    });
+    final request = LivePage.requestForChannel(
+      channel,
+      sourceName: 'M3U 直播',
+    );
+    expect(request.headers['Referer'], 'http://h/');
+    expect(request.headers['User-Agent'], 'WebHTV-PC/0.1 (Windows)');
+  });
 }

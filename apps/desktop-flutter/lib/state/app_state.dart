@@ -17,6 +17,7 @@ import '../core/cat_http.dart';
 import '../core/config_loader.dart';
 import '../core/http_api.dart';
 import '../core/playback.dart';
+import '../core/playback_diagnostics.dart';
 import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
 import '../services/app_paths.dart';
@@ -179,6 +180,9 @@ class AppState extends ChangeNotifier {
   /// 最近一次播放决策，供播放器页与日志页展示。
   PlaybackDecision? _lastDecision;
 
+  /// 最近一次播放诊断（§23），供日志页展示与复制。
+  PlaybackDiagnostics? _lastDiagnostics;
+
   StartupInfo? get startupInfo => _startupInfo;
   LoadPhase get configPhase => _configPhase;
   LoadPhase get contentPhase => _contentPhase;
@@ -204,6 +208,15 @@ class AppState extends ChangeNotifier {
   String? get selectedTypeId => _selectedTypeId;
   String? get importDiagnosticsSummary => _importDiagnosticsSummary;
   PlaybackDecision? get lastDecision => _lastDecision;
+
+  /// 最近一次播放诊断快照（§23）。
+  PlaybackDiagnostics? get lastDiagnostics => _lastDiagnostics;
+
+  /// 记录一次播放诊断（由播放器页在加载完成后调用），供日志页展示。
+  void recordPlaybackDiagnostics(PlaybackDiagnostics diagnostics) {
+    _lastDiagnostics = diagnostics;
+    notifyListeners();
+  }
 
   /// 当前（或最近一次）并发搜索批次。
   MultiSiteSearchOutcome? get activeSearch => _activeSearch;

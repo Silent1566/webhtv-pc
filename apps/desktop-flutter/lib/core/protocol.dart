@@ -998,11 +998,16 @@ final RegExp _sensitiveKeyPattern = RegExp(
   caseSensitive: false,
 );
 
+/// 判断一个 Header 名称是否为敏感键（Cookie/Authorization/Token 等，§9.3.1）。
+///
+/// 提取为公共函数，供日志与播放诊断（§23）复用同一套判定，避免两处规则分叉。
+bool isSensitiveHeaderKey(String key) =>
+    _sensitiveKeyPattern.hasMatch(key.trim());
+
 String redactHeadersForLog(Map<String, String> headers) {
   final parts = <String>[];
   for (final entry in headers.entries) {
-    final sensitive = _sensitiveKeyPattern.hasMatch(entry.key);
-    parts.add('${entry.key}=${sensitive ? "<redacted>" : entry.value}');
+    parts.add('${entry.key}=${isSensitiveHeaderKey(entry.key) ? "<redacted>" : entry.value}');
   }
   parts.sort();
   return parts.join(', ');

@@ -47,6 +47,9 @@ class LivePage extends StatefulWidget {
       vodName: channel.name,
       episodeName: channel.name,
       flag: '直播线路',
+      // 频道级 Header（M3U #EXTVLCOPT / TXT url|header）必须随直链一起注入，
+      // 否则需鉴权的直播线路会因缺 Header 无法播放（§13.1 直播 Header）。
+      headers: channel.header.asRequestHeaders,
       playLines: lines,
       episodeIndex: safeStart,
       directUrl: true,

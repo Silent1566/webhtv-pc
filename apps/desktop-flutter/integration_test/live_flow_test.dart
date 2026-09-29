@@ -23,6 +23,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/playback_diagnostics.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -179,5 +180,26 @@ void main() {
     }
     expect(errorVisible, isFalse, reason: '直播播放不应失败');
     evidence('live-playback first-frame=yes');
+
+    // 播放诊断（§23）：真实播放后落定快照，能输出引擎/格式/网络/结果。
+    // 等诊断写入（加载完成后由 PlayerPage 调用 recordPlaybackDiagnostics）。
+    for (var attempt = 0;
+        attempt < 20 && state.lastDiagnostics == null;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 250));
+    }
+    final diagnostics = state.lastDiagnostics;
+    expect(diagnostics, isNotNull, reason: '真实播放后应产生播放诊断');
+    expect(diagnostics!.engine, PlaybackEngine.mediaKit);
+    expect(diagnostics.format, MediaFormat.hls);
+    expect(diagnostics.target.host, '127.0.0.1');
+    expect(diagnostics.succeeded, isTrue);
+    // 敏感 Header 不得出现在可复制报告里。
+    expect(diagnostics.report, isNot(contains('SECRET')));
+    evidence(
+      'live-diagnostics engine=${diagnostics.engine} '
+      'format=${diagnostics.format.name} host=${diagnostics.target.host} '
+      'succeeded=${diagnostics.succeeded}',
+    );
   });
 }
