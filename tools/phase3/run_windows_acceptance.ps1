@@ -99,7 +99,40 @@ function Invoke-Checked {
 if (-not (Get-Command puro -ErrorAction SilentlyContinue)) {
     throw '未找到 puro，无法解析 Flutter/Dart 工具链。'
 }
-$python = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
+
+# 选择 Python 解释器。
+#
+# 契约测试（tests/test_contracts.py）与 schema 校验（scripts/validate_contracts.py）
+# 依赖 `jsonschema`。本机 `py` 启动器的默认版本可能没装该模块（实测：`py` → 3.14
+# 无 jsonschema，`py -3.13` 有 4.26.0），此时门禁会以 ImportError 失败——那是
+# 环境漂移而不是代码缺陷，但一键验收脚本的可复现性不应依赖启动器默认值。
+# 因此这里主动探测「能 import jsonschema」的解释器并钉住它；
+# 探测全部失败时退回原行为（裸 `py`），由门禁自己报错，不静默跳过。
+function Resolve-PythonWithJsonschema {
+    $attempts = @(
+        @{ Exe = 'py'; Args = @('-3.13') },
+        @{ Exe = 'py'; Args = @('-3.12') },
+        @{ Exe = 'py'; Args = @('-3.11') },
+        @{ Exe = 'py'; Args = @('-3.10') },
+        @{ Exe = 'python'; Args = @() },
+        @{ Exe = 'python3'; Args = @() }
+    )
+    foreach ($attempt in $attempts) {
+        if (-not (Get-Command $attempt.Exe -ErrorAction SilentlyContinue)) { continue }
+        $probe = & $attempt.Exe @($attempt.Args + @('-c', 'import sys, jsonschema; print(sys.executable)')) 2>$null
+        if ($LASTEXITCODE -eq 0 -and $probe) { return $probe.Trim() }
+    }
+    return $null
+}
+
+$resolvedPython = Resolve-PythonWithJsonschema
+if ($resolvedPython) {
+    $python = $resolvedPython
+    Write-Fact "python interpreter with-jsonschema=$python"
+} else {
+    $python = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
+    Write-Fact "python interpreter fallback=$python (未找到带 jsonschema 的解释器)"
+}
 
 function Test-FixtureServer {
     try {
@@ -171,11 +204,16 @@ try {
         $parseType1 = Fetch '/api/parse/type1'
         $parseRequired = Fetch '/api/play-parse-required'
         $parseError = Fetch '/api/parse/always-error'
+        # EPG（§13.3）：XMLTV fixture 必须 200 且为 XML 类型；坏 EPG 地址 404。
+        $epg = Fetch '/live/epg.xml'
+        $epgMissing = Fetch '/live/nope-epg.xml'
+        $liveBrokenEpg = Fetch '/live/live-broken-epg.m3u'
         $log = "preflight m3u=$m3u txt=$txt json=$json missing=$missing " +
                "srt-denied=$srtDenied srt=$srt play-with-subs=$playSubs " +
                "danmaku-denied=$dXmlDenied danmaku-xml=$dXml danmaku-txt=$dTxt " +
                "play-with-danmaku=$playDanmaku parse-type1=$parseType1 " +
-               "play-parse-required=$parseRequired parse-error=$parseError"
+               "play-parse-required=$parseRequired parse-error=$parseError " +
+               "epg=$epg epg-missing=$epgMissing live-broken-epg=$liveBrokenEpg"
         if (-not $m3u.StartsWith('200|')) { throw "M3U live 应 200，实际 $m3u" }
         if (-not $txt.StartsWith('200|')) { throw "TXT live 应 200，实际 $txt" }
         if (-not $json.StartsWith('200|')) { throw "JSON live 应 200，实际 $json" }
@@ -190,6 +228,9 @@ try {
         if (-not $parseType1.StartsWith('200|')) { throw "解析器端点应 200，实际 $parseType1" }
         if (-not $parseRequired.StartsWith('200|')) { throw "parse=1 播放结果应 200，实际 $parseRequired" }
         if (-not $parseError.StartsWith('500')) { throw "解析服务故障应 500（不静默），实际 $parseError" }
+        if (-not $epg.StartsWith('200|application/xml')) { throw "EPG XMLTV 应 200 且为 application/xml，实际 $epg" }
+        if (-not $epgMissing.StartsWith('404')) { throw "缺失 EPG 应 404，实际 $epgMissing" }
+        if (-not $liveBrokenEpg.StartsWith('200|')) { throw "坏 EPG 地址的直播清单应 200（清单本身可用），实际 $liveBrokenEpg" }
         Write-Host $log
     }
 
@@ -240,6 +281,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/live_danmaku_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/parser_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/epg_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }
