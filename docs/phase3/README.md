@@ -1,7 +1,7 @@
 # Phase 3 计划(直播 · 字幕 · Windows)
 
-- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时**已完成,见 §3.1)
-- 日期:2026-09-29
+- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时** + **EPG**已完成,见 §3.1)
+- 日期:2026-09-30
 - 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
 
@@ -18,7 +18,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - JSON 可解析(模型转换正确)。
 - 频道支持多线路。
 - 播放失败可切线路。
-- EPG 可加载(本阶段:清单级 `url-tvg` 解析 + 字段保留)。
+- EPG 可加载、刷新、显示当前节目(§13.3)。
 - 关闭应用后释放播放资源。
 
 §10.3(播放器,完整版必须项):
@@ -33,9 +33,10 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 
 > 本阶段已实现**字幕(外挂字幕 + 字幕轨选择与开关)**、**弹幕(可开启和关闭)**与
 > **直播弹幕**(`ws://`/`wss://` 实时弹幕,§13.1)、**解析器运行时**(§12 JSON 类
-> `type=1/2/3`)。EPG 展示、回看、直播代理的单独 HLS 会话管理属于后续增强
-> (§13.1 完整版能力),不在本阶段验收范围。Web 嗅探(`type=0`)与 Super(`type=4`)
-> 需浏览器内核,PC 端**明确不支持**(见 §5.8)。
+> `type=1/2/3`)、**EPG**(清单 `url-tvg`/源 `epg` → XMLTV 抓取、解析、缓存与刷新,
+> 频道当前节目与节目单展示,§13.1、§13.3)。回看、直播代理的单独 HLS 会话管理
+> 属于后续增强(§13.1 完整版能力),不在本阶段验收范围。Web 嗅探(`type=0`)与
+> Super(`type=4`)需浏览器内核,PC 端**明确不支持**(见 §5.8)。
 
 ## 1. 现状盘点
 
@@ -89,6 +90,9 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 解析器 1 | 解析器选择与类型策略(纯逻辑) | `lib/core/parse_runtime.dart` | type 0/1/2/3/4 映射;flag 匹配;`preferName`;不支持类型的明确错误 |
 | 解析器 2 | JSON 解析运行时(type=1/2/3) | `lib/services/parse_service.dart` | 对齐 Android `ParseJob`:`url+webUrl`、`{url,data.url}`、完整 Result、响应头注入、超时、上限、错误归一化 |
 | 解析器 3 | 播放链路接入(parse=1/jx=1 → 解析器) | `lib/core/playback.dart` + `lib/services/site_service.dart` | `needParser` 决策;解析后校验媒体类型;失败可回退换源 |
+| EPG 1 | XMLTV 解析与节目模型(纯逻辑) | `lib/core/epg.dart` | `<tv>`/`<channel>`/`<programme>` 解析;频道三级匹配(epgId/tvgName/name→display-name);时间戳 4 种形态;当前/下一个/进度;异常条目丢弃并计数 |
+| EPG 2 | EPG 加载服务(HTTP/本地 + gzip + 编码 + 缓存) | `lib/services/epg_service.dart` | `.xml.gz` 魔数解压;GBK 兜底;缓存当天 + 6h TTL;`forceRefresh`;错误归一化为 `epg*` |
+| EPG 3 | 直播页接入(当前节目 + 节目单 + 刷新) | `lib/ui/live_page.dart` + `AppState.epgService` | 列表显示当前/下一节目;详情「节目单/线路」页签;刷新按钮;EPG 失败只提示不影响直播 |
 
 ## 3. 验收门禁(本阶段完成判据)
 
@@ -121,7 +125,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 解析器端到端 | 配置 parses → resolvePlayback → 真实调解析器 | `test/config_and_site_test.dart`「§12 全链路」+ `integration_test/parser_flow_test.dart` | 解析出可播放地址并真实出画;失败可定位且可回退 |
 | 直播弹幕解析 | 帧解析/文本规范化/颜色/重连退避逐条对齐 Android | `test/phase3_live_danmaku_test.dart` | chat/superchat/online/非法帧四类;控制字符丢弃/空白折叠/码点截断;`#RRGGBB` 补 alpha;退避有界且随尝试增长 |
 | 直播弹幕集成 | 真实窗口 + 真实播放器 + 真实 WS 连接 | `integration_test/live_danmaku_flow_test.dart` (-d windows) | 收到 chat/superchat 上屏;online 更新在线;非法帧丢弃;关闭弹幕;连接失败不影响播放 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **365** 个用例全绿;analyze 无问题 |
+| EPG 解析 | XMLTV 时间/频道三级匹配/当前节目/边界/异常条目 | `test/phase3_epg_test.dart`「XMLTV 时间解析」「XMLTV 解析与频道匹配」「当前节目判定」 | 4 种时间形态;`epgId`→`tvgName`→`name`→`display-name`;未匹配丢弃计数;`<tv>` 外根元素→`epgInvalid`;左闭右开边界 |
+| EPG 加载 | HTTP/本地/gzip/GBK/缓存 TTL/刷新/错误分类 | `test/phase3_epg_test.dart`「EpgService 加载与缓存」 | `.xml.gz` 魔数解压;GBK 中文不乱码;缓存当天 + 6h;`forceRefresh` 绕过缓存;404→`epgHttp`、坏内容→`epgInvalid`、空→`epgEmpty`、超限→`epgDecode`;清理递归删 `epg/` 子目录 |
+| EPG 展示 | 直播页当前节目 + 节目单页签 + 刷新 + 失败隔离 | `test/phase3_live_page_test.dart`「EPG…」 | 清单 `url-tvg` 自动拉取;列表显示当前节目（不伪造）;详情「节目单/线路」页签;刷新重拉;`epgInvalid`/`epgHttp` 只提示且频道与播放入口照常 |
+| EPG 集成 | 真实窗口 + 真实 HTTP + 真实 XMLTV | `integration_test/epg_flow_test.dart` (-d windows) | 真实拉取 EPG 并显示当前节目;点击频道展示节目单;刷新;坏 EPG 地址不影响直播频道 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **400** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -129,11 +137,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 > 单元测试自带进程内 fixture 服务(随机端口),可独立运行;集成测试需要先启动
 > 外部 fixture 服务:`py -3 -m tools.fixture_server.server --port 18080`(脚本会自动启动)。
 
-### 3.1 门禁落地状态(2026-09-29,含弹幕)
+### 3.1 门禁落地状态(2026-09-30,含 EPG)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **365** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22),
-五个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **11** 个用例全绿,
+`flutter test` 共 **400** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4),
+六个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **14** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -172,6 +180,13 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - `PHASE3-EVIDENCE parser-resolved url=sample.m3u8 media-ok=true source=parsed-by:Fixture JSON 解析器`
 - `PHASE3-EVIDENCE parser-playback first-frame=yes`
 - `PHASE3-EVIDENCE parser-failure isolated=true kind=parseHttp`
+
+EPG(`integration_test/epg_flow_test.dart`):
+
+- `PHASE3-EVIDENCE epg-loaded channels=yes now-playing=新闻直播间`
+- `PHASE3-EVIDENCE epg-detail programs=yes tab=节目单`
+- `PHASE3-EVIDENCE epg-refresh ok=true`
+- `PHASE3-EVIDENCE epg-failure isolated=true channel-visible=true`
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -218,6 +233,27 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 重绘(通过会话建立的 ticker),弹幕在滚动窗口内完成后自然消失。切集/切线时
 必须断开旧会话(`generation` 代次递增防串帧),否则上一路的弹幕会继续推到新画面上。
 
+### 3.4 EPG 实现要点
+
+**a) 频道匹配键必须与解析期一致。** XMLTV 的 `<programme channel="x">` 先按直播频道的
+`epgId`(`tvg-id`)→ `tvgName`(`tvg-name`)→ 频道名依次匹配;都匹配不上再用
+XML 侧 `<channel id>` 的 `<display-name>` 反查直播频道名。**匹配成功时存的键**
+是 `epgId`(非空)否则频道名,因此 UI 侧 `epgGuideForChannel` 必须用同一规则
+查表,否则会出现「节目单已加载但列表看不到当前节目」。
+
+**b) 缓存目录必须递归删。** 缓存文件落在 `<cacheDir>/epg/<hash>.epg`,而
+`clearCache()` 最初只列了 `<cacheDir>` 一层,导致清理是**空操作**(测试直接暴露)。
+已改为 `list(recursive: true)`,只删本服务写的 `.epg`。
+
+**c) 当前节目判定左闭右开。** `isLiveAt(t)` 为 `start <= t < stop`,相邻节目
+不会同时算作当前;数据重叠时取开始时间最晚的(更符合「现在在放什么」)。
+列表对**无当前节目**的频道不伪造标题(已结束节目只出现在节目单并置灰)。
+
+**d) EPG 失败是增强项失败。** 所有 `epg*` 错误在直播页只写入状态条提示 +
+日志,频道列表与播放入口完全不受影响——与字幕/弹幕的失败隔离同一语义(§10.4)。
+`_loadGuideFor` 捕 `catch (error)` 而非仅 `on AppError`,避免任何非预期异常
+升级为未捕获错误。
+
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
 1. `lib/core/protocol.dart`:`LiveChannel` 缺 `header` 字段、`LivePlaylist` 缺 `epg`
@@ -234,6 +270,12 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
    `PlaybackRequest.headers`,使 M3U `#EXTVLCOPT` / TXT `url|header` 声明的
    Referer/UA 全部丢失,需鉴权的直播线路无法播放(§13.1 直播 Header)。
    已修复并由 `phase3_live_page_test.dart` 断言锁定(负向对照证实有判别力)。
+5. `lib/services/epg_service.dart`:`clearCache()` 只列了 `<cacheDir>` 一层,而缓存
+   落在 `<cacheDir>/epg/`,导致清理**恒为空操作**。已改为递归列举(`phase3_epg_test.dart`
+   「缓存清理」直接锁定:清理前后 `epg/` 下文件从非空变空)。
+6. `tools/fixture_server/server.py` 与 Dart 测试 fixture server:`/live/` 路由对**所有**
+   文件固定返回 `audio/x-mpegurl`(`.xml` 的 EPG 也如此)。已按扩展名分派
+   (`.xml`→`application/xml`、`.json`→`application/json`、`.gz`→`application/gzip`)。
 5. `lib/core/protocol.dart` / `lib/core/http_api.dart`:播放结果里的 `subs`
    (外挂字幕)完全被丢弃,`AppErrorKind` 也没有字幕分类——字幕无法表达也无法
    提示。现已新增 `SubtitleInfo` + `subs` 解析与六个 `subtitle*` 错误分类。
@@ -256,8 +298,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 1. **直播 Header 语义(§13.1 直播 Header)**:本阶段支持 M3U `#EXTVLCOPT`/`#EXTHTTP`
    与 TXT `url|header` 的**频道级** Header(经 `LiveChannel.header` 携带,播放时注入)。
    「直播源级默认 Header 合并」「直播代理 HLS 会话」尚未实现,放入直播增强。
-2. **EPG(§13.1)**:清单级 `url-tvg` 已解析到 `LivePlaylist.epg`,频道 `epgId` 已保留;
-   但 EPG 抓取、解析、显示当前节目**不在本阶段**范围。
+2. **EPG(§13.1)**:已实现——清单级 `url-tvg`(M3U)与直播源 `epg` 字段作为 EPG 地址,
+   拉取 XMLTV(`.xml`/`.xml.gz`,HTTP/本地)、按频道三级匹配节目、当天 + 6 小时缓存与
+   手动刷新,直播页列表显示当前/下一节目、详情展示节目单页签。
+   **未实现**:频道 logo 之外的 EPG 图标、回看(`catchup`)、多日节目导航、
+   以及 XMLTV 之外的 EPG 格式(如 TVBox 的独立 EPG 接口)。
 3. **直播 JSON 的真实形态**:WebHTV/TVBox 直播 JSON 既有 `groups[].channel[]`
    (当前实现的主形态),也有 `{code,data}`、`{data:{groups:[...]}}` 信封。
    本阶段兼容数组/信封/顶层 map 三态;发现其他形态应在兼容性样本库记录。
