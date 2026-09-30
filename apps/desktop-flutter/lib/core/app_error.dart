@@ -63,6 +63,15 @@ enum AppErrorKind {
   liveDecode,
   liveUnsupported,
 
+  // 解析器（§12「解析器设计」）
+  // 解析失败不影响直接换源（§12.3），这些分类只用于提示与日志。
+  parseNetwork,
+  parseHttp,
+  parseDecode,
+  parseInvalid,
+  parseEmpty,
+  parseUnsupportedType,
+
   // 系统
   storage,
   unknown,
@@ -149,6 +158,18 @@ String describeErrorKind(AppErrorKind kind) {
       return '直播源解码失败：编码不受支持';
     case AppErrorKind.liveUnsupported:
       return '直播源格式不受支持';
+    case AppErrorKind.parseNetwork:
+      return '解析失败：网络不可达或 DNS 失败';
+    case AppErrorKind.parseHttp:
+      return '解析失败：解析服务返回非 2xx 状态';
+    case AppErrorKind.parseDecode:
+      return '解析失败：响应编码或压缩不受支持';
+    case AppErrorKind.parseInvalid:
+      return '解析失败：解析服务响应非法';
+    case AppErrorKind.parseEmpty:
+      return '解析失败：解析服务没有返回可用地址';
+    case AppErrorKind.parseUnsupportedType:
+      return '该解析器类型在 PC 端不支持（支持 type=1/2/3 JSON 类）';
     case AppErrorKind.storage:
       return '本地存储读写失败';
     case AppErrorKind.unknown:

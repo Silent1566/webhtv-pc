@@ -532,13 +532,16 @@ void main() {
       header: header,
     );
 
-    test('parse=1 或 jx=1 明确报需要解析器', () {
+    test('parse=1 或 jx=1 返回 needParser 决策（携带目标与触发原因）', () {
       for (final input in [
         PlaybackResolutionInput(site: site(), episodeTarget: 'http://a/b.m3u8', parse: 1),
         PlaybackResolutionInput(site: site(), episodeTarget: 'http://a/b.m3u8', jx: 1),
       ]) {
-        final error = _captureError(() => PlaybackResolver.decide(input));
-        expect(error.kind, AppErrorKind.playbackParserRequired);
+        final decision = PlaybackResolver.decide(input);
+        expect(decision.action, PlaybackAction.needParser);
+        // 目标与触发原因必须保留，供 site_service 调解析器（§12.2）。
+        expect(decision.url, 'http://a/b.m3u8');
+        expect(decision.parse == 1 || decision.jx == 1, isTrue);
       }
     });
 

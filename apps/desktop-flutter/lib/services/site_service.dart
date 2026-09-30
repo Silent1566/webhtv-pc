@@ -10,8 +10,10 @@ import 'dart:async';
 
 import '../core/app_error.dart';
 import '../core/http_api.dart';
+import '../core/parse_runtime.dart';
 import '../core/playback.dart';
 import '../core/protocol.dart';
+import 'parse_service.dart';
 import 'spider_router.dart';
 import 'storage.dart';
 
@@ -181,15 +183,17 @@ class SiteService {
     return outcome;
   }
 
-  /// 解析一次剧集播放（§7.4.8、§10.2）。
+  /// 解析一次剧集播放（§7.4.8、§10.2、§12）。
   ///
-  /// 返回的 [PlaybackDecision] 只可能是 [PlaybackAction.direct]；
-  /// 需要解析器或 Spider 时抛出 [AppErrorKind.playbackParserRequired]。
+  /// 返回的 [PlaybackDecision] 只可能是 [PlaybackAction.direct] 或
+  /// [PlaybackAction.needParser]（后者已由解析器解析完成，仍是直接可播放的 url）；
+  /// 真正无法解析时抛出 [AppErrorKind.playbackParserRequired]。
   Future<SiteCallResult<PlaybackDecision>> resolvePlayback({
     required Site site,
     required String episodeTarget,
     String? flag,
     String? vodId,
+    ParseService? parseService,
   }) async {
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
@@ -210,6 +214,19 @@ class SiteService {
     }
 
     if (preliminary != null) {
+      // §12：parse=1/jx=1 的目标 → 执行解析器；否则直接播放。
+      if (preliminary.action == PlaybackAction.needParser) {
+        final resolved = await _runParser(
+          site: site,
+          target: preliminary.url ?? episodeTarget,
+          flag: flag,
+          parse: preliminary.parse,
+          jx: preliminary.jx,
+          parseService: parseService,
+          stopwatch: stopwatch,
+        );
+        return SiteCallResult(value: resolved, latency: stopwatch.elapsed);
+      }
       _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
       return SiteCallResult(value: preliminary, latency: stopwatch.elapsed);
     }
@@ -222,7 +239,7 @@ class SiteService {
         flag: flag,
         vodId: vodId,
       );
-      final decision = PlaybackResolver.decide(
+      var decision = PlaybackResolver.decide(
         PlaybackResolutionInput(
           site: site,
           episodeTarget: playResult.playUrl ?? episodeTarget,
@@ -235,6 +252,17 @@ class SiteService {
           danmaku: playResult.danmaku,
         ),
       );
+      if (decision.action == PlaybackAction.needParser) {
+        decision = await _runParser(
+          site: site,
+          target: decision.url ?? episodeTarget,
+          flag: flag,
+          parse: decision.parse,
+          jx: decision.jx,
+          parseService: parseService,
+          stopwatch: stopwatch,
+        );
+      }
       _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
       return SiteCallResult(value: decision, latency: stopwatch.elapsed);
     } catch (error) {
@@ -244,6 +272,53 @@ class SiteService {
       _record(site.key, HealthAction.play, false, stopwatch.elapsed, failure.logLine);
       throw failure;
     }
+  }
+
+  /// 执行一次解析（§12.2→§12.3）。
+  ///
+  /// 解析失败抛 [AppErrorKind.parse*]，由调用方决定是否回退直接换源（不静默）。
+  /// 成功则返回 [PlaybackAction.direct] 的解析结果（携带解析出的 Header/字幕/弹幕）。
+  Future<PlaybackDecision> _runParser({
+    required Site site,
+    required String target,
+    String? flag,
+    int? parse,
+    int? jx,
+    ParseService? parseService,
+    required Stopwatch stopwatch,
+  }) async {
+    final service = parseService ?? (parseService = ParseService());
+    final selection = ParseRuntime.select(
+      appConfig.parses,
+      flag: flag,
+    );
+    final outcome = await service.run(
+      selection: selection,
+      entries: appConfig.parses,
+      webUrl: target,
+      flag: flag,
+      source: (jx ?? 0) == 1 ? 'jx' : 'parse',
+    );
+    // 解析结果应当是真实媒体地址（m3u8/mp4/dash…，§12.3「解析结果必须校验媒体
+    // 类型」）。若解析器返回的是另一个待解析目标（对齐 Android
+    // `Result.needParse()` 反向语义），判为循环（超限），不得无限嗅探（§12.3）。
+    if (!looksLikeMediaUrl(outcome.url)) {
+      throw AppError(
+        AppErrorKind.parseInvalid,
+        '解析结果不是媒体地址，疑似循环解析（最多 1 层）',
+        detail: 'url=${redactUrl(outcome.url)}',
+      );
+    }
+    return PlaybackDecision(
+      action: PlaybackAction.direct,
+      url: outcome.url,
+      headers: outcome.headers.isEmpty ? null : HeaderMap(outcome.headers),
+      format: outcome.format,
+      flag: flag,
+      reason: 'parsed-by:${outcome.entryName}',
+      subs: outcome.subs,
+      danmaku: outcome.danmaku,
+    );
   }
 
   /// 解析详情里的多线路/多剧集（§8.3、§8.4）。

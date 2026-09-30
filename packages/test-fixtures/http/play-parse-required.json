@@ -1,0 +1,6 @@
+{
+  "parse": 1,
+  "jx": 0,
+  "url": "http://127.0.0.1:18080/media/sample.mp4",
+  "header": { "Referer": "http://127.0.0.1:18080/" }
+}

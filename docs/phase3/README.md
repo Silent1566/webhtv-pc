@@ -1,6 +1,6 @@
 # Phase 3 计划(直播 · 字幕 · Windows)
 
-- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕**已完成,见 §3.1)
+- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时**已完成,见 §3.1)
 - 日期:2026-09-29
 - 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
@@ -31,9 +31,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - 字幕/弹幕可开启和关闭。
 - 播放诊断能输出引擎、格式、网络和错误。
 
-> 本阶段已实现**字幕(外挂字幕 + 字幕轨选择与开关)**与**弹幕(可开启和关闭)**。
-> EPG 展示、回看、**直播弹幕**(需 WebSocket 会话)、直播代理的单独 HLS 会话管理
-> 属于后续增强(§13.1 完整版能力),不在本阶段验收范围。
+> 本阶段已实现**字幕(外挂字幕 + 字幕轨选择与开关)**、**弹幕(可开启和关闭)**与
+> **直播弹幕**(`ws://`/`wss://` 实时弹幕,§13.1)、**解析器运行时**(§12 JSON 类
+> `type=1/2/3`)。EPG 展示、回看、直播代理的单独 HLS 会话管理属于后续增强
+> (§13.1 完整版能力),不在本阶段验收范围。Web 嗅探(`type=0`)与 Super(`type=4`)
+> 需浏览器内核,PC 端**明确不支持**(见 §5.8)。
 
 ## 1. 现状盘点
 
@@ -84,6 +86,9 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 直播弹幕 1 | 帧解析与重连策略(纯逻辑) | `lib/core/live_danmaku.dart` | 对齐 Android `LiveDanmakuParser`/`RetryPolicy`:chat/superchat/online、文本规范化、`#RRGGBB` 颜色、64KiB/120 码点上限、250ms~30s 指数退避 |
 | 直播弹幕 2 | WebSocket 会话(连接/重连/生命周期) | `lib/services/live_danmaku_session.dart` | 代次防串帧;指数退避重连;待机停止;释放时关连接;失败不阻断 |
 | 直播弹幕 3 | 播放器接入(实时上屏 + 在线人数 + 状态) | `lib/ui/player_page.dart` + `DanmakuOverlay.liveItems` | 收到即上屏;online 帧更新人数;控制栏连接状态;失败只提示 |
+| 解析器 1 | 解析器选择与类型策略(纯逻辑) | `lib/core/parse_runtime.dart` | type 0/1/2/3/4 映射;flag 匹配;`preferName`;不支持类型的明确错误 |
+| 解析器 2 | JSON 解析运行时(type=1/2/3) | `lib/services/parse_service.dart` | 对齐 Android `ParseJob`:`url+webUrl`、`{url,data.url}`、完整 Result、响应头注入、超时、上限、错误归一化 |
+| 解析器 3 | 播放链路接入(parse=1/jx=1 → 解析器) | `lib/core/playback.dart` + `lib/services/site_service.dart` | `needParser` 决策;解析后校验媒体类型;失败可回退换源 |
 
 ## 3. 验收门禁(本阶段完成判据)
 
@@ -111,9 +116,12 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 弹幕渲染 | widget 层绘制/开关/类型过滤/样式夹紧 | `test/phase3_danmaku_overlay_test.dart` | 开启渲染 CustomPaint;关闭零绘制;滚动/顶部/底部可分别隐藏 |
 | 弹幕失败隔离 | §10.4 同语义:弹幕失败不得升级为播放失败 | `test/phase3_danmaku_test.dart`「弹幕失败隔离」 | `isDanmakuError` 只认 `danmaku*`;提示文案含「不影响视频播放」 |
 | 弹幕集成 | 真实窗口 + 真实播放器 + 真实弹幕渲染 | `integration_test/danmaku_flow_test.dart` (-d windows) | 加载→渲染→关闭→重开;失败时视频照常出画 |
+| 解析器选择 | type 映射/flag 匹配/默认选择/不支持类型报错 | `test/phase3_parser_test.dart`「解析器类型映射」「解析器选择」 | 仅 type=1/2/3 支持;flag 命中优先;noneConfigured/unsupportedOnly/selectedUnsupported |
+| 解析器执行 | type=1/2/3 响应解析/响应头/错误/超时/上限 | `test/phase3_parser_test.dart`「JSON 解析执行」 | `{url}`/`{data.url}`/完整 Result;parseHttp/parseInvalid/parseEmpty/parseNetwork;超时可定位 |
+| 解析器端到端 | 配置 parses → resolvePlayback → 真实调解析器 | `test/config_and_site_test.dart`「§12 全链路」+ `integration_test/parser_flow_test.dart` | 解析出可播放地址并真实出画;失败可定位且可回退 |
 | 直播弹幕解析 | 帧解析/文本规范化/颜色/重连退避逐条对齐 Android | `test/phase3_live_danmaku_test.dart` | chat/superchat/online/非法帧四类;控制字符丢弃/空白折叠/码点截断;`#RRGGBB` 补 alpha;退避有界且随尝试增长 |
 | 直播弹幕集成 | 真实窗口 + 真实播放器 + 真实 WS 连接 | `integration_test/live_danmaku_flow_test.dart` (-d windows) | 收到 chat/superchat 上屏;online 更新在线;非法帧丢弃;关闭弹幕;连接失败不影响播放 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **343** 个用例全绿;analyze 无问题 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **365** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -124,8 +132,8 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-09-29,含弹幕)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **343** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14),
-四个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **9** 个用例全绿,
+`flutter test` 共 **365** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22),
+五个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **11** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -158,6 +166,12 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - `PHASE3-EVIDENCE live-danmaku-off enabled=false`
 - `PHASE3-EVIDENCE live-danmaku-playback-kept playing=true`
 - `PHASE3-EVIDENCE live-danmaku-failure isolated=true playing=true`
+
+解析器(`integration_test/parser_flow_test.dart`):
+
+- `PHASE3-EVIDENCE parser-resolved url=sample.m3u8 media-ok=true source=parsed-by:Fixture JSON 解析器`
+- `PHASE3-EVIDENCE parser-playback first-frame=yes`
+- `PHASE3-EVIDENCE parser-failure isolated=true kind=parseHttp`
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -203,7 +217,6 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 流,没有起点——收到即入队,用**墙钟接收时刻**作为伪时间轴,叠加层每 250ms
 重绘(通过会话建立的 ticker),弹幕在滚动窗口内完成后自然消失。切集/切线时
 必须断开旧会话(`generation` 代次递增防串帧),否则上一路的弹幕会继续推到新画面上。
-
 
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
@@ -263,10 +276,28 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
    online 帧更新在线人数,非法帧丢弃,连接失败只提示不影响播放。
    **未实现**:弹幕发送、弹幕屏蔽词/举报、以及「按标题自动搜索弹幕源」的
    在线匹配。
-7. **解析器(§12)**:`parse=1`/`jx=1` 目前仍明确报「需要解析器」而不执行;
-   本阶段不做解析器运行时(属 Phase 3 剩余项)。
+7. **解析器范围(§12)**:已实现 JSON 类解析器运行时——`parse=1`/`jx=1` 会按 §12.2
+   选择解析器并真实执行:`type=1`(`GET url+webUrl`,取 `{url}`/`{data.url}`)、
+   `type=2`(JSON 扩展,携带全部 type=1 解析器)、`type=3`(JSON Mix,携带 flag);
+   `flag` 可命中解析器;解析结果校验媒体类型;超时/失败归一化为 `parse*` 错误,
+   由上层回退换源。**未实现**:`type=0` Web 嗅探与 `type=4` Super——两者都需
+   浏览器内核/WebView 嗅探页面(Android 用 `CustomWebView`,PC 端无等价物),
+   选中时给出明确错误(不静默)。
+
+### 5.8 解析器不支持类型(§12.1)
+
+| 类型 | 名称 | PC 端 | 原因 |
+| --- | --- | --- | --- |
+| 0 | Web 嗅探 | ❌ | 需浏览器内核/WebView 嗅探页面(Android `CustomWebView`),桌面环境无等价物 |
+| 1 | JSON | ✅ | 纯 HTTP + JSON,已实现 |
+| 2 | JSON 扩展 | ✅ | 纯 HTTP + JSON,已实现 |
+| 3 | JSON Mix | ✅ | 纯 HTTP + JSON,已实现 |
+| 4 | Super | ❌ | 多解析器并发含 Web 嗅探竞争,依赖 WebView |
+
+选择到不支持类型时抛 `ParseSelectionException`(unsupportedOnly/
+selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
 
 ## 6. 平台范围声明
 
-本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕与直播弹幕验证不在范围内;
-发布文案不得声称已支持直播、字幕或弹幕。
+本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕、直播弹幕与解析器运行时验证不在范围内;
+发布文案不得声称已支持直播、字幕、弹幕或解析器。

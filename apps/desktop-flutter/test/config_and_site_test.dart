@@ -13,6 +13,7 @@ import 'package:webhtv_pc/core/config_loader.dart';
 import 'package:webhtv_pc/core/http_api.dart';
 import 'package:webhtv_pc/core/playback.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/services/parse_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/spider_router.dart';
 import 'package:webhtv_pc/services/storage.dart';
@@ -646,19 +647,72 @@ void main() {
       expect(error.kind, AppErrorKind.playbackParserRequired);
     });
 
-    test('播放结果 parse=1 时明确报需要解析器（§7.4.8）', () async {
+    test('播放结果 parse=1 时返回 needParser 决策（§7.4.8、§12）', () async {
       // 站点 playUrl 指向返回 parse=0 的播放入口，这里改用一个显式返回
       // parse=1 的场景：直接构造结果集合并走 resolver。
-      final error = _captureSync(
-        () => PlaybackResolver.decide(
-          PlaybackResolutionInput(
-            site: site(),
-            episodeTarget: 'token',
-            parse: 1,
-          ),
+      final decision = PlaybackResolver.decide(
+        PlaybackResolutionInput(
+          site: site(),
+          episodeTarget: 'token',
+          parse: 1,
         ),
       );
-      expect(error.kind, AppErrorKind.playbackParserRequired);
+      // §12：parse=1 不再直接报错，而是给出待解析决策，由 site_service 调解析器。
+      expect(decision.action, PlaybackAction.needParser);
+      expect(decision.url, 'token');
+      expect(decision.parse, 1);
+    });
+
+    test('§12 全链路：配置 parses → resolvePlayback 真实调解析器 → 可播放地址', () async {
+      // 重建一个带 parses 的配置与站点服务（播放入口返回 parse=1）。
+      final parseConfig = AppConfig(
+        name: '解析器闭环',
+        sites: [
+          Site(
+            key: 'parse-site',
+            name: '解析站点',
+            type: 1,
+            api: '${server.baseUrl}/api/type1/',
+            extra: {
+              // playUrl 指向返回 parse=1 的播放入口。
+              'playUrl': '${server.baseUrl}/api/play-parse-required',
+            },
+          ),
+        ],
+        parses: [
+          ParseEntry(
+            name: 'Fixture 解析器',
+            type: 1,
+            url: '${server.baseUrl}/api/parse/type1',
+          ),
+        ],
+      );
+      final parseRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(parseRouter.dispose);
+      final parseService = ParseService();
+      addTearDown(parseService.close);
+      final parseSiteService = SiteService(
+        appConfig: parseConfig,
+        router: parseRouter,
+        database: database,
+      );
+
+      final outcome = await parseSiteService.resolvePlayback(
+        site: parseConfig.sites.first,
+        episodeTarget: 'token',
+        flag: 'line',
+        parseService: parseService,
+      );
+
+      // 解析器返回的媒体地址必须成为最终可播放决策。
+      expect(outcome.value.action, PlaybackAction.direct);
+      expect(outcome.value.url, endsWith('/media/sample.mp4'));
+      expect(outcome.value.reason, contains('parsed-by'));
+      // 响应头注入（§8.4）：解析器返回的 UA/Referer 随决策传入。
+      expect(outcome.value.headers?['User-Agent'], isNotNull);
     });
   });
 
@@ -749,18 +803,6 @@ void main() {
 Future<AppError> _capture(Future<void> Function() action) async {
   try {
     await action();
-  } on AppError catch (error) {
-    return error;
-  } catch (error) {
-    fail('期望 AppError，实际抛出 ${error.runtimeType}: $error');
-  }
-  fail('期望抛出 AppError，但没有抛出');
-}
-
-/// 捕获同步 [AppError]。
-AppError _captureSync(void Function() action) {
-  try {
-    action();
   } on AppError catch (error) {
     return error;
   } catch (error) {

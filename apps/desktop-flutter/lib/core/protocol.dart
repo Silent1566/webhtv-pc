@@ -1140,7 +1140,10 @@ enum PlaybackAction {
   /// 直接播放 [PlaybackDecision.url]。
   direct,
 
-  /// 需要解析器：MVP-A 明确不支持，直接给出可定位错误，不静默成功。
+  /// 需要解析器：交由 `ParseService` 执行（§12）。
+  ///
+  /// [PlaybackDecision.url] 为待解析的目标地址，[PlaybackDecision.parse] /
+  /// [PlaybackDecision.jx] 标明触发原因。
   needParser,
 
   /// 需要 Spider 运行时（Phase 2+）。
@@ -1158,6 +1161,8 @@ class PlaybackDecision {
     this.subs = const [],
     this.danmaku = const [],
     this.upstreamHeaders,
+    this.parse,
+    this.jx,
   });
 
   final PlaybackAction action;
@@ -1166,6 +1171,13 @@ class PlaybackDecision {
   final String? format;
   final String? reason;
   final String? flag;
+
+  /// 播放结果的 `parse` / `jx` 标记（§7.4.8）。
+  ///
+  /// 仅当 [action] 为 [PlaybackAction.needParser] 时有意义：`site_service` 据此
+  /// 决定是否调用解析器，以及按 `flag` 匹配哪个解析器（§12.2）。
+  final int? parse;
+  final int? jx;
 
   /// 播放结果携带的外挂字幕（§10.3）：随决策一起传到播放器。
   final List<SubtitleInfo> subs;

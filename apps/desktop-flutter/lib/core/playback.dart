@@ -126,7 +126,8 @@ class PlaybackResolutionInput {
 
 /// 播放决策器：只根据输入决定动作，不执行网络。
 abstract final class PlaybackResolver {
-  /// 返回直接播放决策，或抛出 [AppErrorKind.playbackParserRequired]。
+  /// 返回直接播放决策，或返回 [PlaybackAction.needParser]（§12）供上层调用解析器，
+  /// 或抛出 [AppErrorKind.playbackParserRequired]（目标既非直链也无法解析）。
   ///
   /// 规则（§7.4.8）：
   /// 1. `parse=1` 或 `jx=1` → 需要解析器，MVP-A 明确报错；
@@ -137,10 +138,14 @@ abstract final class PlaybackResolver {
   static PlaybackDecision decide(PlaybackResolutionInput input) {
     final parseRequested = (input.parse ?? 0) == 1 || (input.jx ?? 0) == 1;
     if (parseRequested) {
-      throw AppError(
-        AppErrorKind.playbackParserRequired,
-        '站点 ${input.site.key} 的剧集要求解析（parse=${input.parse} jx=${input.jx}）',
-        detail: 'flag=${input.flag ?? ""}',
+      // §12.2：parse=1/jx=1 → 走解析器。此处返回待解析决策（保留目标与触发原因），
+      // 由 site_service 调 ParseService 解析后再次 decide。不再抛错。
+      return PlaybackDecision(
+        action: PlaybackAction.needParser,
+        url: input.episodeTarget,
+        flag: input.flag,
+        parse: input.parse,
+        jx: input.jx,
       );
     }
 

@@ -219,6 +219,38 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if path == "/api/play-with-danmaku":
             self._send_json_bytes(_json("play-with-danmaku.json"))
             return
+        # 播放结果需要解析器（§12）：parse=1，验证走解析器。
+        if path == "/api/play-parse-required":
+            self._send_json_bytes(_json("play-parse-required.json"))
+            return
+        # 解析器端点（§12）：webUrl 拼接在路径后（对齐 Android url+webUrl）。
+        if path.startswith("/api/parse/always-error"):
+            self._send_bytes(
+                b'{"msg": "parse service down"}',
+                "application/json; charset=utf-8",
+                status=500,
+            )
+            return
+        if path.startswith("/api/parse/type1"):
+            suffix = path[len("/api/parse/type1"):]
+            if suffix.endswith("/error"):
+                self._send_bytes(
+                    b'{"msg": "parse service boom"}',
+                    "application/json; charset=utf-8",
+                    status=500,
+                )
+                return
+            if suffix.endswith("/not-json"):
+                self._send_bytes(b"this is not json", "application/json")
+                return
+            if suffix.endswith("/bad"):
+                self._send_json_bytes(b'{"url": ""}')
+                return
+            self._send_json_bytes(_json("parse-type1.json"))
+            return
+        if path.startswith("/api/parse/type2"):
+            self._send_json_bytes(_json("parse-type1.json"))
+            return
         if path == "/api/repository-a.json":
             self._send_json(REPOSITORY_A)
             return

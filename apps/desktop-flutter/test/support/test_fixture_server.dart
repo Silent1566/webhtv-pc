@@ -99,6 +99,60 @@ class TestFixtureServer {
       await _serveLive(request, path.substring(1));
       return;
     }
+    // 解析器专用端点（§12）：webUrl 会拼接在路径后，因此用 startsWith 匹配
+    // （type1/ep2 等），与 Android `url + webUrl` 语义一致。
+    //   parse/type1 → `{url,data:{url}}` + UA/Referer header；
+    //   parse/type1/bad →  200 但 {url:""} → parseEmpty；
+    //   parse/type1/missing-url → 200 但无 url → parseEmpty；
+    //   parse/type1/error → 500 → 错误归一化；
+    //   parse/type1/not-json → 200 非 JSON → parseInvalid。
+    //   parse/always-error → 无论后缀均 500（用于“解析服务整体不可用”场景，
+    //    因为 webUrl 会被拼接到路径后，无法用固定后缀匹配）。
+    if (path.startsWith('/api/parse/always-error')) {
+      request.response.statusCode = HttpStatus.internalServerError;
+      await _json(request, {'msg': 'parse service down'});
+      return;
+    }
+    if (path.startsWith('/api/parse/type1')) {
+      final suffix = path.substring('/api/parse/type1'.length);
+      if (suffix.endsWith('/error')) {
+        request.response.statusCode = HttpStatus.internalServerError;
+        await _json(request, {'msg': 'parse service boom'});
+        return;
+      }
+      if (suffix.endsWith('/not-json')) {
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write('this is not json');
+        return;
+      }
+      if (suffix.endsWith('/bad')) {
+        await _json(request, {'url': ''});
+        return;
+      }
+      if (suffix.endsWith('/missing-url')) {
+        await _json(request, {'data': {'why': 'no url field'}});
+        return;
+      }
+      await _json(request, {
+        'url': '$baseUrl/media/sample.mp4',
+        'data': {'url': '$baseUrl/media/sample.mp4'},
+        'User-Agent': 'WebHTV-PC-Phase0',
+        'Referer': 'http://127.0.0.1:18080/',
+      });
+      return;
+    }
+    // type=2/3 完整 Result（url/header）。
+    if (path.startsWith('/api/parse/type2')) {
+      await _json(request, {
+        'url': '$baseUrl/media/sample.mp4',
+        'header': {
+          'User-Agent': 'WebHTV-PC-Phase0',
+          'Referer': 'http://127.0.0.1:18080/',
+        },
+      });
+      return;
+    }
     switch (path) {
       case '/health':
         await _json(request, {'status': 'ok'});
@@ -120,6 +174,10 @@ class TestFixtureServer {
       // 带弹幕源的播放结果（§21 Phase 3）。
       case '/api/play-with-danmaku':
         await _fixtureJson(request, 'http/play-with-danmaku.json');
+        return;
+      // 播放结果需要解析器（§12）：parse=1，验证走解析器。
+      case '/api/play-parse-required':
+        await _fixtureJson(request, 'http/play-parse-required.json');
         return;
       case '/api/repository-a.json':
         await _json(request, {

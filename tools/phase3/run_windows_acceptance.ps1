@@ -5,7 +5,7 @@
 #   1. 契约与 fixture 测试（Python）+ 直播清单 Schema 校验
 #   2. 静态检查（dart analyze）
 #   3. 单元测试（flutter test，含 phase3_* 直播/诊断/字幕/弹幕/直播弹幕门禁套件）
-#   4. Windows 集成测试（真实窗口 + 真实播放器；直播/字幕/弹幕/直播弹幕，-d windows）
+#   4. Windows 集成测试（真实窗口 + 真实播放器；直播/字幕/弹幕/直播弹幕/解析器，-d windows）
 #   5. 汇总并输出 PHASE3-ACCEPT 可复查事实行
 #
 # 设计原则与 Phase 1/2 保持一致：
@@ -167,10 +167,15 @@ try {
         $dXml = FetchWithMediaHeaders '/danmaku/sample.xml'
         $dTxt = FetchWithMediaHeaders '/danmaku/sample.txt'
         $playDanmaku = Fetch '/api/play-with-danmaku'
+        # 解析器（§12）：解析器端点必须 200，解析服务故障必须 500（不静默）。
+        $parseType1 = Fetch '/api/parse/type1'
+        $parseRequired = Fetch '/api/play-parse-required'
+        $parseError = Fetch '/api/parse/always-error'
         $log = "preflight m3u=$m3u txt=$txt json=$json missing=$missing " +
                "srt-denied=$srtDenied srt=$srt play-with-subs=$playSubs " +
                "danmaku-denied=$dXmlDenied danmaku-xml=$dXml danmaku-txt=$dTxt " +
-               "play-with-danmaku=$playDanmaku"
+               "play-with-danmaku=$playDanmaku parse-type1=$parseType1 " +
+               "play-parse-required=$parseRequired parse-error=$parseError"
         if (-not $m3u.StartsWith('200|')) { throw "M3U live 应 200，实际 $m3u" }
         if (-not $txt.StartsWith('200|')) { throw "TXT live 应 200，实际 $txt" }
         if (-not $json.StartsWith('200|')) { throw "JSON live 应 200，实际 $json" }
@@ -182,6 +187,9 @@ try {
         if (-not $dXml.StartsWith('200|application/xml')) { throw "带 Header 的弹幕 XML 应 200 且为 application/xml，实际 $dXml" }
         if (-not $dTxt.StartsWith('200|')) { throw "带 Header 的弹幕 TXT 应 200，实际 $dTxt" }
         if (-not $playDanmaku.StartsWith('200|')) { throw "带 danmaku 的播放结果应 200，实际 $playDanmaku" }
+        if (-not $parseType1.StartsWith('200|')) { throw "解析器端点应 200，实际 $parseType1" }
+        if (-not $parseRequired.StartsWith('200|')) { throw "parse=1 播放结果应 200，实际 $parseRequired" }
+        if (-not $parseError.StartsWith('500')) { throw "解析服务故障应 500（不静默），实际 $parseError" }
         Write-Host $log
     }
 
@@ -230,6 +238,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/danmaku_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/live_danmaku_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/parser_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }
