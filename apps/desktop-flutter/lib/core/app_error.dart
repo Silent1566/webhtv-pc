@@ -72,6 +72,15 @@ enum AppErrorKind {
   parseEmpty,
   parseUnsupportedType,
 
+  // EPG（§13.1「EPG」、§13.3）
+  // EPG 失败不影响直播播放，这些分类只用于提示与日志。
+  epgNetwork,
+  epgHttp,
+  epgDecode,
+  epgInvalid,
+  epgEmpty,
+  epgUnsupported,
+
   // 系统
   storage,
   unknown,
@@ -170,6 +179,18 @@ String describeErrorKind(AppErrorKind kind) {
       return '解析失败：解析服务没有返回可用地址';
     case AppErrorKind.parseUnsupportedType:
       return '该解析器类型在 PC 端不支持（支持 type=1/2/3 JSON 类）';
+    case AppErrorKind.epgNetwork:
+      return 'EPG 下载失败：网络不可达或 DNS 失败（不影响直播播放）';
+    case AppErrorKind.epgHttp:
+      return 'EPG 下载失败：服务器返回非 2xx 状态（不影响直播播放）';
+    case AppErrorKind.epgDecode:
+      return 'EPG 解码失败：编码或压缩不受支持（不影响直播播放）';
+    case AppErrorKind.epgInvalid:
+      return 'EPG 内容非法：不是有效的 XMLTV（不影响直播播放）';
+    case AppErrorKind.epgEmpty:
+      return 'EPG 没有可用节目数据（不影响直播播放）';
+    case AppErrorKind.epgUnsupported:
+      return 'EPG 地址协议不受支持（不影响直播播放）';
     case AppErrorKind.storage:
       return '本地存储读写失败';
     case AppErrorKind.unknown:
