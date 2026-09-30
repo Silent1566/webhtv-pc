@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv generator-info-name="WebHTV-PC fixture">
+  <channel id="cctv1">
+    <display-name>CCTV-1 综合</display-name>
+    <display-name>CCTV1</display-name>
+    <icon src="http://127.0.0.1:18080/live/logo/cctv1.png"/>
+  </channel>
+  <channel id="cctv2">
+    <display-name>CCTV-2 财经</display-name>
+  </channel>
+  <channel id="hunan">
+    <display-name>湖南卫视</display-name>
+  </channel>
+  <channel id="unknown-channel">
+    <display-name>不存在的频道</display-name>
+  </channel>
+
+  <programme start="20260929060000 +0800" stop="20260929090000 +0800" channel="cctv1">
+    <title>朝闻天下</title>
+    <desc>早间新闻节目</desc>
+  </programme>
+  <programme start="20260929090000 +0800" stop="20260929120000 +0800" channel="cctv1">
+    <title>新闻直播间</title>
+  </programme>
+  <programme start="20260929120000 +0800" stop="20260929130000 +0800" channel="cctv1">
+    <title>午间新闻</title>
+  </programme>
+  <programme start="20260929080000 +0800" stop="20260929100000 +0800" channel="cctv2">
+    <title>财经早班车</title>
+  </programme>
+  <programme start="20260929073000 +0800" stop="20260929100000 +0800" channel="hunan">
+    <title>湖南新闻联播</title>
+  </programme>
+  <!-- 无时区形态（应可用本地时区解析）。 -->
+  <programme start="20260929100000" stop="20260929110000" channel="cctv2">
+    <title>无时区节目</title>
+  </programme>
+  <!-- 频道匹配不上 → 丢弃（计入 skipped）。 -->
+  <programme start="20260929090000 +0800" stop="20260929100000 +0800" channel="unknown-channel">
+    <title>孤儿节目</title>
+  </programme>
+  <!-- 缺 stop → 按 +1 小时兜底。 -->
+  <programme start="20260929130000 +0800" channel="cctv1">
+    <title>缺 stop 的节目</title>
+  </programme>
+  <!-- 缺 title → 丢弃。 -->
+  <programme start="20260929090000 +0800" stop="20260929100000 +0800" channel="cctv1"/>
+</tv>

@@ -1,0 +1,7 @@
+#EXTM3U url-tvg="http://127.0.0.1:18080/live/nope-epg.xml"
+#EXTINF:-1 tvg-id="cctv1" tvg-name="CCTV1" tvg-chno="1" group-title="央视",CCTV-1 综合
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="cctv2" tvg-name="CCTV2" tvg-chno="2" group-title="央视",CCTV-2 财经
+http://127.0.0.1:18080/media/sample.m3u8
+#EXTINF:-1 tvg-id="hunan" tvg-chno="10" group-title="卫视",湖南卫视
+http://127.0.0.1:18080/media/sample.m3u8

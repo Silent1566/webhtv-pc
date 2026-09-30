@@ -563,12 +563,22 @@ class TestFixtureServer {
       return;
     }
     final bytes = await file.readAsBytes();
-    request.response.headers.contentType = ContentType(
-      'audio',
-      'x-mpegurl',
-      charset: 'utf-8',
-    );
+    // Content-Type 必须按扩展名区分：直播清单是 m3u/txt，而 EPG（§13.3）是
+    // XMLTV；若一律返回 x-mpegurl，EPG 响应的类型就是错的（虽然服务端解析
+    // 只看字节，但契约层面的类型必须正确）。
+    request.response.headers.contentType = _liveContentType(candidate);
     request.response.add(bytes);
+  }
+
+  static ContentType _liveContentType(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.xml')) {
+      return ContentType('application', 'xml', charset: 'utf-8');
+    }
+    if (lower.endsWith('.json')) {
+      return ContentType('application', 'json', charset: 'utf-8');
+    }
+    return ContentType('audio', 'x-mpegurl', charset: 'utf-8');
   }
 
   /// 弹幕文件与媒体同样要求 Referer/UA：弹幕常与视频同源，必须验证这一点。

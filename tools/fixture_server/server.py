@@ -406,6 +406,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
             content_type = "audio/x-mpegurl; charset=utf-8"
         if candidate.suffix == ".json":
             content_type = "application/json; charset=utf-8"
+        # EPG（§13.3）是 XMLTV；.xml.gz 按 gzip 分发（客户端靠魔数解压）。
+        if candidate.suffix == ".xml":
+            content_type = "application/xml; charset=utf-8"
+        if candidate.suffix == ".gz":
+            content_type = "application/gzip"
         self._send_bytes(payload, content_type)
 
     def _send_danmaku(self, relative_path: str) -> None:
