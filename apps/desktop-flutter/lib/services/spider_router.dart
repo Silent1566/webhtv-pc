@@ -3,10 +3,15 @@
 /// 已实现运行时：
 /// - HTTP API（`type=0/1/2/4`，MVP-A）；
 /// - `webhtv-cat-http-v1` / CatSpider HTTP（MVP-B，§9.4）；
-/// - 本地 `webhtv-ipc-v1` sidecar（`api` 形如 `spider-local:<key>`，§9.3、§9.8）。
+/// - 本地 `webhtv-ipc-v1` sidecar（`api` 形如 `spider-local:<key>`，§9.3、§9.8），
+///   manifest 的 `runtime` 决定具体宿主机：`python*` → `spider-host-python/host.py`，
+///   `node*` → `spider-host-js/host.js`（`tvbox-js-v1`，§9.1）。
 ///
-/// 未实现形态（`*.js`、`*.py`、`csp_*`、Android JAR）继续返回结构化不可用结论，
+/// 未实现形态（`*.py`、`csp_*`、Android JAR）继续返回结构化不可用结论，
 /// UI 显示运行时未安装/未支持，不得显示空列表（§8.1、§9.9）。
+///
+/// 注意：`api` 直接指向 `*.js` 的站点仍不可用——JS 站源必须经
+/// `spider-local:<key>` 注册（manifest 声明 runtime/权限/限制，§9.7、§9.8）。
 library;
 
 import 'dart:async';
@@ -248,6 +253,7 @@ class SpiderRouter {
     this.supervisor,
     this.log,
     this.hostPath,
+    this.jsHostPath,
   });
 
   final HttpApiClient client;
@@ -265,8 +271,11 @@ class SpiderRouter {
 
   final LogService? log;
 
-  /// sidecar 宿主路径覆盖（测试用）。
+  /// sidecar 宿主路径覆盖（测试用）。Python 宿主路径。
   final String? hostPath;
+
+  /// JS（Node）sidecar 宿主路径覆盖（测试用）；为空时由 [hostPath] 推导。
+  final String? jsHostPath;
 
   final Map<String, SiteRuntime> _cache = {};
 
@@ -300,6 +309,7 @@ class SpiderRouter {
     final command = LocalSpiderCommand.resolve(
       spider: local,
       hostPath: _hostPath(),
+      jsHostPath: jsHostPath,
       log: log,
     );
     if (command == null) {
@@ -446,6 +456,7 @@ class SpiderRouter {
       final command = LocalSpiderCommand.resolve(
         spider: local,
         hostPath: _hostPath(),
+        jsHostPath: jsHostPath,
         log: log,
       );
       if (command == null) {

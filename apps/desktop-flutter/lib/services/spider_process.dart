@@ -1032,11 +1032,16 @@ class SidecarRuntimeResolver {
       return _resolvePython();
     }
     if (normalized.startsWith('node')) {
-      return _resolveFromPath('node', (path) => [
-        '--version',
-      ]) == null
+      // Windows 上可执行文件是 `node.exe`；只找 `node` 会永远落空（§9.8）。
+      final node = _resolveFromPath(
+        Platform.isWindows ? 'node.exe' : 'node',
+      );      if (node != null) {
+        return SidecarCommand(executable: node, arguments: const []);
+      }
+      final fallback = _resolveFromPath('node');
+      return fallback == null
           ? null
-          : SidecarCommand(executable: 'node', arguments: const []);
+          : SidecarCommand(executable: fallback, arguments: const []);
     }
     // 允许直接给出可执行文件路径（测试与本地调试）。
     if (runtime.contains(Platform.pathSeparator) ||
@@ -1065,7 +1070,7 @@ class SidecarRuntimeResolver {
     return null;
   }
 
-  static String? _resolveFromPath(String name, [void Function(String)? _]) {
+  static String? _resolveFromPath(String name) {
     // `py.exe` 位于 Windows 目录（通常不在被裁剪过的 PATH 中），因此显式补充。
     final candidates = <String>[];
     if (name == 'py.exe') {

@@ -100,6 +100,7 @@ class AppState extends ChangeNotifier {
     AppPaths? paths,
     LogService? log,
     String? sidecarHostPath,
+    String? jsSidecarHostPath,
     LiveService? liveService,
     EpgService? epgService,
   }) : paths = paths ?? AppPaths.resolve(),
@@ -124,6 +125,7 @@ class AppState extends ChangeNotifier {
       supervisor: _supervisor,
       log: this.log,
       hostPath: sidecarHostPath ?? defaultSidecarHostPath(),
+      jsHostPath: jsSidecarHostPath ?? defaultJsSidecarHostPath(),
     );
   }
 
@@ -363,6 +365,7 @@ class AppState extends ChangeNotifier {
         supervisor: _supervisor,
         log: log,
         hostPath: _router.hostPath ?? defaultSidecarHostPath(),
+        jsHostPath: defaultJsSidecarHostPath(),
       ),
       database: _database,
     );

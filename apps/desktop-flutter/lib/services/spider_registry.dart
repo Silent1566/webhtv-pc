@@ -198,42 +198,107 @@ class LocalSpiderCommand {
 
   static const String _hostRelative = 'host.py';
 
-  /// 解析成可执行命令。
+  /// 解析成可执行命令（§9.7 `runtime` 字段）。
   ///
-  /// `python-3` 使用本机 Python 启动 `sidecars/spider-host-python/host.py`；
-  /// 其他运行时返回 null，调用方必须显示「运行时未安装」而不是静默失败。
+  /// - `python*` 用本机 Python 启动 `sidecars/spider-host-python/host.py`；
+  /// - `node*` 用本机 Node 启动 `sidecars/spider-host-js/host.js`（§9.1
+  ///   `tvbox-js-v1` 沙箱，与 Python 宿主同一份 `webhtv-ipc-v1` 帧契约）。
+  ///
+  /// [hostPath] 是 Python 宿主路径（`defaultSidecarHostPath()` 或测试覆盖）；
+  /// [jsHostPath] 是 JS 宿主路径。未显式给出时按发行包布局从 [hostPath]
+  /// 推导（`sidecars/` 下两个兄弟运行时目录），使单一路径参数在仓库与发行包
+  /// 两种布局下都成立。
+  ///
+  /// 运行时未安装/不受支持时返回 null，调用方必须显示「运行时未安装」
+  /// 而不是静默失败。
   static LocalSpiderCommand? resolve({
     required LocalSpider spider,
     required String hostPath,
+    String? jsHostPath,
     LogService? log,
   }) {
-    if (!File(hostPath).existsSync()) {
-      log?.error('sidecar 宿主不存在：$hostPath', scope: 'spider');
-      return null;
-    }
     final runtime = spider.manifest.runtime.toLowerCase();
-    if (!runtime.startsWith('python')) {
-      log?.warning(
-        'Phase 2 只内置 Python sidecar 宿主，runtime=${spider.manifest.runtime} 暂不支持',
-        scope: 'spider',
+
+    if (runtime.startsWith('python')) {
+      if (!File(hostPath).existsSync()) {
+        log?.error('sidecar 宿主不存在：$hostPath', scope: 'spider');
+        return null;
+      }
+      // Python 命令统一由 host.py 决定具体解释器，避免宿主与 sidecar 猜测不一致；
+      // 这里用宿主自身的解释器探测逻辑（`py -3` 优先，其次 `python3`/`python`）。
+      final python = _pythonCommand();
+      if (python == null) {
+        log?.warning('未找到 Python 运行时，无法启动 sidecar', scope: 'spider');
+        return null;
+      }
+      return LocalSpiderCommand(
+        executable: python.executable,
+        arguments: [
+          ...python.arguments,
+          hostPath,
+          '--entry',
+          spider.entryPath,
+          '--manifest',
+          spider.manifestPath,
+        ],
       );
-      return null;
     }
-    // Python 命令统一由 host.py 决定具体解释器，避免宿主与 sidecar 猜测不一致；
-    // 这里用宿主自身的解释器探测逻辑（`py -3` 优先，其次 `python3`/`python`）。
-    final python = _pythonCommand();
-    if (python == null) return null;
-    return LocalSpiderCommand(
-      executable: python.executable,
-      arguments: [
-        ...python.arguments,
-        hostPath,
-        '--entry',
-        spider.entryPath,
-        '--manifest',
-        spider.manifestPath,
-      ],
+
+    if (runtime.startsWith('node')) {
+      // 显式给出的 JS 宿主优先；否则由 Python 宿主路径推导（兄弟目录）。
+      final resolvedJsHost = (jsHostPath != null && jsHostPath.isNotEmpty)
+          ? jsHostPath
+          : (hostPath.isNotEmpty ? jsHostPathFor(hostPath) : '');
+      if (resolvedJsHost.isEmpty || !File(resolvedJsHost).existsSync()) {
+        log?.error('JS sidecar 宿主不存在：$resolvedJsHost', scope: 'spider');
+        return null;
+      }
+      final node = _nodeCommand();
+      if (node == null) {
+        log?.warning('未找到 Node 运行时，无法启动 JS sidecar', scope: 'spider');
+        return null;
+      }
+      return LocalSpiderCommand(
+        executable: node.executable,
+        arguments: [
+          ...node.arguments,
+          resolvedJsHost,
+          '--entry',
+          spider.entryPath,
+          '--manifest',
+          spider.manifestPath,
+        ],
+      );
+    }
+
+    log?.warning(
+      'runtime=${spider.manifest.runtime} 不受支持（已实现 python*/node*）',
+      scope: 'spider',
     );
+    return null;
+  }
+
+  /// 由 Python 宿主路径推导 JS 宿主路径：`sidecars/` 下两个兄弟运行时目录。
+  ///
+  /// `.../sidecars/spider-host-python/host.py` →
+  /// `.../sidecars/spider-host-js/host.js`
+  static String jsHostPathFor(String pythonHostPath) {
+    final sidecarsDir = p.dirname(p.dirname(pythonHostPath));
+    return p.join(sidecarsDir, 'spider-host-js', 'host.js');
+  }
+
+  /// 查找本机 Node。返回 null 表示未安装，UI 必须提示而不是静默跳过。
+  static SidecarCommand? _nodeCommand() {
+    final names = Platform.isWindows ? ['node.exe', 'node'] : ['node'];
+    for (final name in names) {
+      for (final dir in platformSearchDirs()) {
+        final candidate = p.join(dir, name);
+        if (File(candidate).existsSync()) {
+          return SidecarCommand(executable: candidate, arguments: const []);
+        }
+      }
+    }
+    return null;
   }
 
   /// 查找本机 Python。返回 null 表示未安装，UI 必须提示而不是静默跳过。
@@ -293,8 +358,26 @@ class LocalSpiderCommand {
 ///
 /// 找不到时返回空串；调用方必须显示「sidecar 宿主缺失」而不是静默跳过站点。
 String defaultSidecarHostPath() {
-  const relative = 'sidecars/spider-host-python/host.py';
-  final override = Platform.environment['WEBHTV_SIDECAR_HOST'];
+  return _locateSidecarHost(
+    const ['sidecars', 'spider-host-python', 'host.py'],
+    'WEBHTV_SIDECAR_HOST',
+  );
+}
+
+/// 定位仓库/发行包内的 JS（Node）sidecar 宿主脚本（§9.1 `tvbox-js-v1`）。
+///
+/// 与 [defaultSidecarHostPath] 同语义：`node*` 运行时需要 `spider-host-js/host.js`。
+/// 发行包可能只带其中一种运行时，因此两个入口各自独立解析。
+String defaultJsSidecarHostPath() {
+  return _locateSidecarHost(
+    const ['sidecars', 'spider-host-js', 'host.js'],
+    'WEBHTV_SIDECAR_JS_HOST',
+  );
+}
+
+/// 共享的宿主脚本定位逻辑（环境变量覆盖 → 可执行文件同级 → 向上查找仓库）。
+String _locateSidecarHost(List<String> relative, String envVar) {
+  final override = Platform.environment[envVar];
   if (override != null && override.trim().isNotEmpty) {
     final candidate = p.normalize(override.trim());
     if (File(candidate).existsSync()) return candidate;
@@ -302,10 +385,7 @@ String defaultSidecarHostPath() {
 
   try {
     final executableDir = p.dirname(Platform.resolvedExecutable);
-    final candidate = p.joinAll([
-      executableDir,
-      ...relative.split('/'),
-    ]);
+    final candidate = p.joinAll([executableDir, ...relative]);
     if (File(candidate).existsSync()) return candidate;
   } catch (_) {
     // Platform.resolvedExecutable 在极端环境下可能不可用。
@@ -313,7 +393,7 @@ String defaultSidecarHostPath() {
 
   var current = Directory.current;
   for (var hop = 0; hop < 6; hop++) {
-    final candidate = p.joinAll([current.path, ...relative.split('/')]);
+    final candidate = p.joinAll([current.path, ...relative]);
     if (File(candidate).existsSync()) return candidate;
     final parent = current.parent;
     if (parent.path == current.path) break;
