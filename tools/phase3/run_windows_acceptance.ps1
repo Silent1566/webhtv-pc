@@ -283,6 +283,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/parser_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/epg_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/js_spider_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }
