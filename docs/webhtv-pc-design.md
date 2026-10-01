@@ -544,7 +544,7 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 | --- | --- | --- |
 | `http.../spider/...` | CatSpider HTTP | MVP-B 候选，必须先通过 Phase 0 契约测试 |
 | `*.py` | Python Spider | Phase 3 |
-| `*.js` | Node/QuickJS Spider | Phase 3 |
+| `*.js` | Node/QuickJS Spider（PC 端已实现 Node 运行时 + `tvbox-js-v1` 沙箱；仍需用户确认后才加载远程脚本） | Phase 3 ✅ |
 | `csp_*` | PC Java Spider | Phase 3 |
 | 其他 | SpiderNull | 必须，返回明确“不支持”错误 |
 
@@ -720,7 +720,7 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 | --- | --- | --- |
 | `webhtv-ipc-v1` | 宿主与 sidecar 的 stdio JSON-RPC 通信 | Phase 2 |
 | `webhtv-cat-http-v1` | 兼容 `POST <api>/home/category/detail/play/search` 的 HTTP 子集；兼容标签为 `tvbox-http-v1` | MVP-B 候选 |
-| `tvbox-js-v1` | Node/QuickJS 脚本协议 | Phase 3 |
+| `tvbox-js-v1` | Node/QuickJS 脚本协议（PC 端已实现 Node `vm` 沙箱；QuickJS 内核未实现） | Phase 3 ✅ |
 | `tvbox-python-v1` | Python 脚本协议 | Phase 3 |
 | `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名 | Phase 3 |
 

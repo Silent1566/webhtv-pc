@@ -1,8 +1,8 @@
 # Phase 3 计划(直播 · 字幕 · Windows)
 
-- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时** + **EPG**已完成,见 §3.1)
-- 日期:2026-09-30
-- 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23
+- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时** + **EPG** + **JS Spider 运行时**已完成,见 §3.1)
+- 日期:2026-10-01
+- 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23、§9(Spider 运行时设计)
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
 
 ## 0. 本阶段目标
@@ -93,6 +93,10 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | EPG 1 | XMLTV 解析与节目模型(纯逻辑) | `lib/core/epg.dart` | `<tv>`/`<channel>`/`<programme>` 解析;频道三级匹配(epgId/tvgName/name→display-name);时间戳 4 种形态;当前/下一个/进度;异常条目丢弃并计数 |
 | EPG 2 | EPG 加载服务(HTTP/本地 + gzip + 编码 + 缓存) | `lib/services/epg_service.dart` | `.xml.gz` 魔数解压;GBK 兜底;缓存当天 + 6h TTL;`forceRefresh`;错误归一化为 `epg*` |
 | EPG 3 | 直播页接入(当前节目 + 节目单 + 刷新) | `lib/ui/live_page.dart` + `AppState.epgService` | 列表显示当前/下一节目;详情「节目单/线路」页签;刷新按钮;EPG 失败只提示不影响直播 |
+| JS 1 | Node sidecar 传输层(`webhtv-ipc-v1` 第三份实现) | `sidecars/spider-host-js/host.js` | 帧编解码/握手(initialize)/取消/capability 校验/错误信封/并发控制;stdout 只走协议帧 |
+| JS 2 | TVBox 脚本沙箱(`tvbox-js-v1`) | `sidecars/spider-host-js/sandbox_worker.js` | `node:vm` + worker 线程;同步 `req` 阻塞沙箱、宿主主线程做 HTTP;`homeContent`/`categoryContent`/`detailContent`/`searchContent`/`playerContent` 桥接;未实现全局明确报错 |
+| JS 3 | 宿主接线(`runtime=node` 命令解析与站点判定) | `lib/services/spider_registry.dart` + `lib/services/spider_router.dart` + `lib/state/app_state.dart` | `node host.js --entry … --manifest …`;Windows 用 `node.exe`;JS 宿主路径可显式覆盖或按发行包布局推导;`spider-local:` + `runtime=node` 判为可用 |
+| JS 4 | JS fixture、门禁测试与集成测试 | `sidecars/spider-host-js/` + `test/phase3_js_spider_test.dart` + `integration_test/js_spider_flow_test.dart` | 真实 Node 子进程 + 真实帧握手 + 真实 fixture 浏览;启动失败隔离;证据写入 `docs/phase3/evidence/` |
 
 ## 3. 验收门禁(本阶段完成判据)
 
@@ -129,7 +133,10 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | EPG 加载 | HTTP/本地/gzip/GBK/缓存 TTL/刷新/错误分类 | `test/phase3_epg_test.dart`「EpgService 加载与缓存」 | `.xml.gz` 魔数解压;GBK 中文不乱码;缓存当天 + 6h;`forceRefresh` 绕过缓存;404→`epgHttp`、坏内容→`epgInvalid`、空→`epgEmpty`、超限→`epgDecode`;清理递归删 `epg/` 子目录 |
 | EPG 展示 | 直播页当前节目 + 节目单页签 + 刷新 + 失败隔离 | `test/phase3_live_page_test.dart`「EPG…」 | 清单 `url-tvg` 自动拉取;列表显示当前节目（不伪造）;详情「节目单/线路」页签;刷新重拉;`epgInvalid`/`epgHttp` 只提示且频道与播放入口照常 |
 | EPG 集成 | 真实窗口 + 真实 HTTP + 真实 XMLTV | `integration_test/epg_flow_test.dart` (-d windows) | 真实拉取 EPG 并显示当前节目;点击频道展示节目单;刷新;坏 EPG 地址不影响直播频道 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **400** 个用例全绿;analyze 无问题 |
+| JS Spider 宿主 | `runtime=node` 命令解析（node/node.exe、JS 宿主缺失不静默） | `test/phase3_js_spider_test.dart`「resolve…」 | 解析出 `node host.js --entry … --manifest …`;Windows 严格 `node.exe`;JS 宿主缺失→null;`jsHostPath` 缺省时按发行包布局推导 |
+| JS Spider 契约 | 真实 Node 子进程 + `webhtv-ipc-v1` 帧/握手/capability/错误信封 | `test/phase3_js_spider_test.dart`「Node sidecar 可用」「home…」「五方法…」「站源异常…」 | ABI major 兼容;capabilities 含 home/play;未声明 capability→`SPIDER_UNSUPPORTED`;home/category/detail/search/play 返回结构化 Result;站源异常→`SPIDER_PARSE_ERROR`;启动失败隔离(主程序存活) |
+| JS Spider 集成 | 真实窗口 + 真实 Node 侧车 + 真实 fixture 服务 | `integration_test/js_spider_flow_test.dart` (-d windows) | `spider-local:` + `runtime=node` 真实启动握手;home/category/detail/search 返回真实数据;入口缺失→可用性明确原因;失败站点隔离且主程序存活 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **408** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -137,11 +144,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 > 单元测试自带进程内 fixture 服务(随机端口),可独立运行;集成测试需要先启动
 > 外部 fixture 服务:`py -3 -m tools.fixture_server.server --port 18080`(脚本会自动启动)。
 
-### 3.1 门禁落地状态(2026-09-30,含 EPG)
+### 3.1 门禁落地状态(2026-10-01,含 EPG 与 JS Spider)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **400** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4),
-六个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **14** 个用例全绿,
+`flutter test` 共 **408** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8),
+七个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **16** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -188,11 +195,47 @@ EPG(`integration_test/epg_flow_test.dart`):
 - `PHASE3-EVIDENCE epg-refresh ok=true`
 - `PHASE3-EVIDENCE epg-failure isolated=true channel-visible=true`
 
+JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + 真实 fixture):
+
+- `PHASE3-EVIDENCE js-unavailable isolated=true runtime=本地 Spider (webhtv-ipc-v1)`
+- `PHASE3-EVIDENCE js-manifest runtime=node capabilities=category,detail,home,play,search`
+- `PHASE3-EVIDENCE js-available runtime=本地 Spider (webhtv-ipc-v1)`
+- `PHASE3-EVIDENCE js-home list=1`
+- `PHASE3-EVIDENCE js-category list=1`
+- `PHASE3-EVIDENCE js-detail episodes=1`
+- `PHASE3-EVIDENCE js-search sites=1`
+- `PHASE3-EVIDENCE js-runtime running isolation=Instance of 'ProcessIsolationReport'`
+- `PHASE3-EVIDENCE js-stopped state=stopped`
+- `PHASE3-EVIDENCE js-broken isolated=true reason=entry-missing`
+- `PHASE3-EVIDENCE js-ok-after-failure list=1`
+
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
 `dart-analyze`、`flutter-unit-tests`、`windows-integration-tests`。
 
-### 3.2 字幕实现要点(Windows 实测结论)
+### 3.2 JS Spider 实现要点(实测结论)
+
+**a) 沙箱必须跑在 worker 线程,HTTP 必须在宿主主线程。** TVBox 站源把 `req()`
+当**同步**函数用(`var html = req(url)`),而 Dart 宿主发来的 `$/cancelRequest`
+和心跳都靠同一事件循环处理。若沙箱在主线程阻塞,取消/超时/心跳全部失效。
+因此:沙箱跑在 worker 线程(`Atomics.wait` 只阻塞它自己),HTTP 由宿主主线程
+异步完成,再 `Atomics.notify` 唤醒沙箱。
+
+**b) `Atomics` 只能存 32 位整数,状态码必须用整数。** 最初用字符串状态码
+(`'ok'`/`'network-error'`)存入 `Int32Array`,`ToInt32('ok')` 静默得到 `0`,
+表现为**所有 `req` 都报「未知状态：0」**——空手回一个成功响应都做不到。
+这是本次端到端实测直接抓到的真实缺陷(单看代码不会发现)。
+
+**c) `main()` 的返回值必须转成 `process.exit(code)`。** 否则站源入口不存在 /
+manifest 非法时 Node 以 **exit 0** 结束,被宿主判为「正常退出」而非启动失败,
+把真实的启动错误伪装成成功(§8.4 禁止把错误当成功)。
+
+**d) JS 宿主路径不能从 manifest 目录解析 entry。** 随包 fixture 的 `manifest.json`
+在 `manifests/` 而 `entry` 写作 `spiders/fixture_spider.js`(与 Python fixture 同布局);
+产品路径下 manifest 与 `spiders/` 同目录。测试需显式给出服务器级 `entryPath`,
+产品路径由 `SpiderManifestRegistry` 按 manifest 目录解析。
+
+### 3.3 字幕实现要点(Windows 实测结论)
 
 `SubtitleTrack.data` 在本项目环境下不可靠:media-kit 的 `TempFile` 用 UUID 命名、
 **没有扩展名**,mpv 只能靠内容嗅探识别,实测出现「轨已加入但
@@ -205,7 +248,7 @@ EPG(`integration_test/epg_flow_test.dart`):
 切集/切线会重新拉取,旧的临时文件在选择成功后清理,`dispose` 时全部清理
 (§20 资源释放)。
 
-### 3.3 弹幕实现要点(两处非显然结论)
+### 3.4 弹幕实现要点(两处非显然结论)
 
 **a) `testWidgets` 与真实 HTTP 不能同文件。** `testWidgets` 会初始化 flutter_test
 的 binding,而该 binding 会拦截**本进程内所有 HTTP 请求**并统一返回 400,报错文本
@@ -233,7 +276,7 @@ EPG(`integration_test/epg_flow_test.dart`):
 重绘(通过会话建立的 ticker),弹幕在滚动窗口内完成后自然消失。切集/切线时
 必须断开旧会话(`generation` 代次递增防串帧),否则上一路的弹幕会继续推到新画面上。
 
-### 3.4 EPG 实现要点
+### 3.5 EPG 实现要点
 
 **a) 频道匹配键必须与解析期一致。** XMLTV 的 `<programme channel="x">` 先按直播频道的
 `epgId`(`tvg-id`)→ `tvgName`(`tvg-name`)→ 频道名依次匹配;都匹配不上再用
@@ -282,7 +325,7 @@ XML 侧 `<channel id>` 的 `<display-name>` 反查直播频道名。**匹配成�
 6. `lib/ui/player_controller.dart`:直接使用 media-kit 的 `SubtitleTrack.data`
    在本项目环境下不可靠(临时文件无扩展名 → mpv 仅靠嗅探 → 轨状态延迟刷新),
    导致「默认字幕已启用」但菜单轨表为空。改为写入带真实扩展名的临时文件 +
-   `SubtitleTrack.uri` 后稳定可靠(实测结论见 §3.2)。
+   `SubtitleTrack.uri` 后稳定可靠(实测结论见 §3.3)。
 7. `lib/core/protocol.dart#PlaybackDecision`:走本地代理时 `headers` 会被清空
    (Header 由代理注入),而字幕/弹幕是宿主自己发请求,必须用**代理前**的原始
    Header。已新增 `upstreamHeaders`/`assetHeaders`,避免字幕/弹幕请求丢
@@ -342,7 +385,26 @@ XML 侧 `<channel id>` 的 `<display-name>` 反查直播频道名。**匹配成�
 选择到不支持类型时抛 `ParseSelectionException`(unsupportedOnly/
 selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
 
+8. **JS Spider 范围(§9.1、§9.3、§9.7、§9.8)**:已实现 `tvbox-js-v1` 的
+   **Node 运行时**——`runtime=node` 的本地 manifest 会真启动
+   `sidecars/spider-host-js/host.js`,在 `node:vm` 沙箱内以 worker 线程执行
+   TVBox 站源(`homeContent`/`categoryContent`/`detailContent`/`searchContent`/
+   `playerContent` 与同步 `req`/`log`/`setItem`/`getItem`),由宿主主线程
+   异步完成 HTTP 并唤醒沙箱(因此取消/超时/心跳仍可用)。它是 `webhtv-ipc-v1`
+   的第三份实现,与 Dart 侧 `ipc_protocol.dart`、Python 侧 `webhtv_ipc.py`
+   帧格式/握手/错误信封一致。
+   **未实现**:`*.js` 站点地址的**远程脚本自动下载**(§9.8 要求下载前由用户
+   确认来源与权限,该确认流程待做;当前只加载本机已存在的 manifest 与脚本);
+   **QuickJS 编译器内核**(当前只用 Node `vm` 做隔离,不是安全沙箱);
+   沙箱内**定时器**(`setTimeout` 等不注入,异步站源会明确报错);
+   本地代理会话(`getProxyUrl`/`js2Proxy`)未开放给 JS 站源(同 Python 侧)。
+   已实测**:同一个 JS sidecar 在原生驱动与 Dart 宿主下行为一致(16 项驱动器断言 + 8 项 Dart 门禁用例全绿)。   **重点缺陷修复**:`host.js` 原先用字符串作 `Atomics` 状态码(ToInt32('ok')=0),
+   导致所有 `req` 都报「未知状态」;且 `main()` 的退出码未传给 `process.exit`,
+   使站源入口/manifest 非法被误报为「正常退出」(exit 0)。两者均已修复并由
+   `test/phase3_js_spider_test.dart` 锁定。
+
 ## 6. 平台范围声明
 
-本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕、直播弹幕与解析器运行时验证不在范围内;
-发布文案不得声称已支持直播、字幕、弹幕或解析器。
+本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕、直播弹幕、
+解析器与 JS Spider 运行时验证不在范围内;
+发布文案不得声称已支持直播、字幕、弹幕、解析器或 JS Spider。
