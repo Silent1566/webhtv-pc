@@ -267,11 +267,31 @@ try {
         }
     }
 
-    # 4) Windows 集成测试（真实窗口 + 真实播放器 + 直播直链 + 外挂字幕 + 静态/直播弹幕）。
+    # 3.5) 猫源真实 bundle 端到端（导入 → 站点 → 搜索 → 播放）。
+    #
+    # 只有在 `CAT_PACKAGE`（或默认 F:\temp\catpkg）存在时才跑：本机没准备真实
+    # bundle 时跳过并记事实行，而不是把门禁判死（真实 bundle 属于验收环境，不入库）。
+    $catPackage = if ($env:CAT_PACKAGE) { $env:CAT_PACKAGE } else { 'F:\temp\catpkg' }
+    if (Test-Path (Join-Path $catPackage 'index.js')) {
+        Invoke-Checked 'cat-source-real-bundle' {
+            & $python (Join-Path $RepoRoot 'tools\phase3\verify_cat_source.py') --package $catPackage --timeout 90
+        }
+    } else {
+        Write-Step 'cat-source-real-bundle (跳过)'
+        Write-Fact "cat-source-real-bundle skipped package=$catPackage"
+    }
+
+    # 4) Windows 集成测试（真实窗口 + 真实播放器 + 直播直链 + 外挂字幕 + 静态/直播弹幕
+    #    + 解析器 + EPG + JS Spider + 猫源 bundle）。
     if (-not $SkipIntegrationTests) {
         Invoke-Checked 'windows-integration-tests' {
             Push-Location $AppDir
             try {
+                # 猫源集成测试需要真实 bundle 目录（CAT_PACKAGE）；未准备时整组用例
+                # 自重跳过并记证据行，不会把门禁判死。
+                if (-not $env:CAT_PACKAGE -and (Test-Path (Join-Path $catPackage 'index.js'))) {
+                    $env:CAT_PACKAGE = $catPackage
+                }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/live_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/subtitle_flow_test.dart -d windows
@@ -285,6 +305,8 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/epg_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/js_spider_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                & puro -e $PuroEnvironment -p . flutter test integration_test/cat_source_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }
