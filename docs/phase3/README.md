@@ -144,7 +144,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 猫源识别与整形 | bundle 地址识别、配置整形、基址与 `searchable` 默认 | `test/cat_source_test.dart` | URL 形态(`.js.md5`/`index.js`)、本地包目录/zip 均判为 bundle 而普通配置不误判;裸站点数组/`{video:{sites}}`→`{sites}`;相对 `api` 补基址且绝对地址不改写;错误信封明确报错;缺 `searchable` 补 `1` 而显式 `0` 保留 |
 | 猫源 bundle 缓存 | 地址推导/本地目录/zip/校验不一致/稳定指纹 | `test/cat_bundle_test.dart` | `bundleUrl` 去 `.md5`;`md5Url` 不重复补;`configUrl` 指向同目录;内容指纹稳定;缺 `index.config.js` 明确报错;zip 内 `index.js.md5` 不符时报错 |
 | 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **432** 个用例全绿;analyze 无问题 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **441** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **432** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 24),
+`flutter test` 共 **441** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 33),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -222,18 +222,24 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
 - `PHASE3-EVIDENCE cat-import sites=126`
 - `PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)`
-- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=392`
-- `PHASE3-EVIDENCE cat-search-total items=392`
+- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=609`
+- `PHASE3-EVIDENCE cat-search-total items=609`
 
 猫源真实 bundle 端到端脚本(`tools/phase3/verify_cat_source.py`,与 Dart 侧同一份 boot 语义):
 
-- `[cat-verify] OK 猫源服务 port=5839 candidates=[5839]`
+- `[cat-verify] OK 猫源服务 port=3709 candidates=[3709]`
 - `[cat-verify] OK /config sites=126`
 - `[cat-verify] OK 站点 api 已补基址 searchable=126/126`
-- `[cat-verify] OK init HTTP=200` / `OK home HTTP=200 classes=3`
-- `[cat-verify] OK search wd=寒战 HTTP=200 items=1`
-- `[cat-verify] OK detail id=… flags=线路1` / `OK play flag=线路1 HTTP=200 url=[…]`
+- `[cat-verify] OK [try=1/5] init HTTP=200` / `home HTTP=200 classes=4`
+- `[cat-verify] FAIL [try=1/5] search wd=寒战 items=0`(单站点数据波动)
+- `[cat-verify] OK [try=2/5] search wd=寒战 HTTP=200 items=12`
+- `[cat-verify] OK detail id=/v/hanzhan6.html HTTP=200 flags=线路168$$$…`
+- `[cat-verify] OK play flag=线路168 HTTP=200 url=['默认', 'https://play.xluuss.com/play/ejR09Gle/index.m3u8']`
 - `[cat-verify] RESULT OK 猫源导入 / 站点 / 搜索 / 播放 全链路通过`
+
+> 脚本对搜索/播放做**站点轮换**:单个站点对某关键词返回空列表(HTTP 200 但
+> items=0)属于上游站点数据波动,不应当作协议失败;最多依次尝试 5 个可搜索站点,
+> 任一命中即继续 detail → play,全部试完仍无命中才判 FAIL。
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(7 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -368,6 +374,32 @@ start() 抛 `Cannot read properties of undefined (reading 'url')`(实测)。因�
 目录、`.zip` 文件),且**只对本地输入做**(避免把远端地址当本地路径去 stat)。
 远端探测后由 `CatBundle._localDir`/`_localZip` 二次确认(zip 还要校验内含 `index.js.md5` 标记)。
 
+**g) 校验值必须从 `.md5` 地址取,不能从去掉 `.md5` 的地址取。** 远端导入第一版写成
+`_remoteMd5(bundleUrl(url))`,而 `bundleUrl` 是**去掉** `.md5` 的地址——那返回的是
+1~10 MB 的**JS 源码**而非 32 字节校验值,`isMd5` 恒假,于是**所有**远端猫源都报
+「猫源校验值不可用,且没有该地址的本地缓存」。正确写法是 `_remoteMd5(md5Url(bundleUrl(url)))`
+与 `_remoteMd5(configMd5Url(url))`(参考实现 `remoteMd5()` 内部同样用 `md5Url(url)`)。
+本地包路径不经过这段,所以只有**真实远端源**才能暴露它——已由
+`cat_bundle_test.dart`「校验值取自 .md5 地址」在本地 HTTP 夹具上锁定。
+
+**h) `dart:io`/`package:http` 都不解码 URI userinfo,必须自己解码。** 猫源地址大量
+写作 `user:pass@host`,而密码里含 `:` 时按 URL 规则编码为 `%3A`(用户实测的四个源全部
+如此)。**curl 会先解码再发**(`root:eXi6S:jgdv22!N6` → 200),但 Dart 把 userinfo
+**原样**塞进 Basic 凭据,发的是字面 `%3A` → 服务端 401(实测:同一地址 Dart 401 /
+curl 200,抓包确认两者 base64 不同)。修复:`protocol.dart` 新增
+`basicAuthHeader`(先 `Uri.decodeComponent(userInfo)` 再 base64)与
+`uriWithoutUserInfo`,凡走 `HttpClient`/`package:http` 的出站请求
+(`CatBundle`、`ConfigLoader`、`HttpApiRequestBuilder`、`CatHttpRequestBuilder`)
+都改成「解码后显式设 Authorization 头 + 请求 URI 去掉 userinfo」;
+只在站点未自行声明 `Authorization` 时注入,不覆盖用户显式凭据。
+加速镜像的 302 由 `CatBundle._openGet` 自己跟随(**跨主机时丢弃凭据**,
+避免把账号密码泄给镜像站),`ghfast.top` 这类地址因此可用。
+
+> 附注:用户实测的四个源中有一个(`.../catvod/index.js.md5`)其服务端
+> `index.config.js.md5` 声明值与实际内容不符(实测 8809 字节,md5
+> `b95c…` ≠ 声明 `497a…`)。这是**服务端数据不一致**,参考实现同样硬校验并报错,
+> 不属于本仓库缺陷;其余三个源修复后均能真实启动并拉到站点(69/57/42 个)。
+
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
 1. `lib/core/protocol.dart`:`LiveChannel` 缺 `header` 字段、`LivePlaylist` 缺 `epg`
@@ -406,6 +438,24 @@ start() 抛 `Cannot read properties of undefined (reading 'url')`(实测)。因�
    使中英混排的防重叠判定失真。已改为全角 1.0 / 半角 0.5,
    并由 `phase3_danmaku_test.dart` 的「宽度估算遵循全角:半角 = 2:1」用例锁定
    (该断言在 0.55 下会失败,负向对照证实有判别力)。
+9. `lib/services/cat_bundle.dart#_ensureRemote`:**远端校验值取错了地址**——写成
+   `_remoteMd5(bundleUrl(url))`(去掉 `.md5`,拿到的是 1~10 MB 的 JS 源码),
+   于是 `isMd5` 恒假,**所有**远端猫源都报「猫源校验值不可用,且没有该地址的
+   本地缓存」(用户实测四个源全部无法导入)。本地包路径不经过这段,所以过去的
+   本地包验收掩盖了它。已改为 `md5Url(bundleUrl(url))` / `configMd5Url(url)`
+   (与参考实现 `remoteMd5()` 内部用 `md5Url(url)` 一致),并由 `cat_bundle_test.dart`
+   「校验值取自 .md5 地址」在本地 HTTP 夹具上锁定请求路径。
+10. `lib/core/protocol.dart` + 四处出站请求(`cat_bundle`/`config_loader`/
+    `http_api`/`cat_http`):**URI userinfo 的百分号编码未解码**。`dart:io` 的
+    `HttpClient` 与 `package:http` 都把 `userInfo` 原样塞进 Basic 凭据,而猫源
+    地址的密码常含 `:`(按 URL 规则编码为 `%3A`)——curl 先解码再发(200),
+    Dart 发字面 `%3A` → 401(实测同一地址 Dart 401 / curl 200,抓包确认 base64
+    不同)。已新增 `basicAuthHeader`(先解码再 base64)与 `uriWithoutUserInfo`,
+    并在四处统一改为「显式设 Authorization 头 + 请求 URI 去掉 userinfo」;
+    站点未自行声明 Authorization 时不注入。同时 `CatBundle._openGet` 自己跟随
+    302(跨主机丢弃凭据),使 `ghfast.top` 一类加速镜像可用。由 `cat_source_test.dart`
+    「userinfo 凭据」与 `cat_bundle_test.dart`「userinfo 凭据被百分号解码后以
+    Basic 头发出」锁定。
 
 ## 5. 风险与开放问题
 
