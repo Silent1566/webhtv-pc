@@ -15,6 +15,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'app_error.dart';
+import 'cat_source.dart';
 import 'config_parser.dart';
 import 'protocol.dart';
 import 'text_codec.dart';
@@ -343,6 +344,7 @@ class ImportedConfig {
     required this.fetchedAt,
     this.contentType,
     this.contentEncoding = 'identity',
+    this.catRuntimeOrigin,
   });
 
   final String origin;
@@ -350,6 +352,9 @@ class ImportedConfig {
   final DateTime fetchedAt;
   final String? contentType;
   final String contentEncoding;
+
+  /// 猫源本机运行时地址（`http://127.0.0.1:port`）；非猫源导入为 null。
+  final String? catRuntimeOrigin;
 
   AppConfig? get config => document.config;
   List<ConfigRepositoryEntry> get repositoryEntries =>
@@ -363,12 +368,39 @@ class ImportedConfig {
       document.config?.lives.length ?? document.repositoryEntries.length;
 }
 
+/// 猫源 bundle 解析结果：已归一化的标准 TVBox 配置文本 + 展示用来源。
+///
+/// 由 services 层（`CatImportPipeline`）产出，core 层不依赖进程管理，
+/// 因此这里只描述数据。
+class ResolvedCatConfig {
+  const ResolvedCatConfig({required this.configJson, required this.origin});
+
+  /// 已归一化的标准 TVBox 配置 JSON 文本（顶层带 `sites`），可直接 `parseConfigDocument`。
+  final String configJson;
+
+  /// 展示/日志用来源（本机 `/config` 地址）。
+  final String origin;
+}
+
+/// 猫源 bundle 解析钩子：把 `.../index.js.md5` 一类地址变成可解析的配置文本。
+///
+/// 返回 `null` 表示该地址不是猫源 bundle（回退常规配置抓取）。
+typedef CatConfigResolver =
+    Future<ResolvedCatConfig?> Function(
+      String url, {
+      void Function(String message)? onProgress,
+    });
+
 /// 配置导入服务：抓取 + 解析，并在仓库形态下展开默认条目。
 class ConfigImportService {
-  ConfigImportService({ConfigLoader? loader})
+  ConfigImportService({ConfigLoader? loader, this.catResolver})
     : _loader = loader ?? ConfigLoader();
 
   final ConfigLoader _loader;
+
+  /// 猫源解析钩子（§9 猫源 bundle）。未注入时猫源地址走常规抓取，会因 32 字节
+  /// md5 不是 JSON 而明确报错，而不是静默失败。
+  final CatConfigResolver? catResolver;
 
   void close() => _loader.close();
 
@@ -376,7 +408,25 @@ class ConfigImportService {
   ///
   /// 返回的 [ImportedConfig] 若 `isRepository` 为真，调用方应让用户选择条目，
   /// 或直接使用 [ImportedConfig.repositoryEntries] 的第一项作为默认（§7.4.2）。
+  ///
+  /// 猫源 bundle 地址（`.../index.js.md5`、`.../index.js`）先经 [_catResolver] 在本机
+  /// 跑起 bundle 并读 `/config`，再进同一套解析路径；`origin` 保留**原始猫源地址**，
+  /// 以便重启后按同一地址重新拉起 bundle。
   Future<ImportedConfig> import(ConfigSource source) async {
+    final resolver = catResolver;
+    if (resolver != null && CatSource.isBundle(source.value)) {
+      final resolved = await resolver(source.value);
+      if (resolved != null) {
+        final document = parseConfigDocument(resolved.configJson);
+        return ImportedConfig(
+          origin: source.value,
+          document: document,
+          fetchedAt: DateTime.now(),
+          contentType: 'application/json',
+          catRuntimeOrigin: resolved.origin,
+        );
+      }
+    }
     final fetched = await _loader.fetch(source);
     final document = parseConfigDocument(fetched.text);
     return ImportedConfig(

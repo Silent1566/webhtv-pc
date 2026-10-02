@@ -14,13 +14,17 @@ import 'package:path/path.dart' as p;
 
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
+import '../core/cat_source.dart';
 import '../core/config_loader.dart';
+import '../core/config_parser.dart';
 import '../core/http_api.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
 import '../services/app_paths.dart';
+import '../services/cat_bundle.dart';
+import '../services/cat_runtime.dart';
 import '../services/epg_service.dart';
 import '../services/log_service.dart';
 import '../services/live_service.dart';
@@ -117,6 +121,19 @@ class AppState extends ChangeNotifier {
       log: this.log,
     );
     _proxy = LocalProxyServer(log: this.log);
+    _catBundle = CatBundle(rootDir: p.join(this.paths.dataDir, 'catbundle'));
+    final node = SidecarRuntimeResolver.resolve('node');
+    if (node != null) {
+      _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
+      _catPipeline = CatImportPipeline(
+        bundle: _catBundle,
+        runtime: _catRuntime!,
+        log: this.log,
+      );
+      _importService = ConfigImportService(
+        catResolver: _catPipeline!.resolve,
+      );
+    }
     _router = SpiderRouter(
       client: _httpClient,
       globalHeaders: const [],
@@ -132,7 +149,16 @@ class AppState extends ChangeNotifier {
   final AppPaths paths;
   final LogService log;
 
-  final ConfigImportService _importService = ConfigImportService();
+  /// 猫源 bundle 下载/缓存（§9 猫源）。
+  late final CatBundle _catBundle;
+
+  /// 猫源 Node 运行时；未安装 Node 时为 null（UI 如实报错，不静默跳过）。
+  CatNodeRuntime? _catRuntime;
+
+  /// 猫源导入门面；未安装 Node 时为 null。
+  CatImportPipeline? _catPipeline;
+
+  late final ConfigImportService _importService;
   final HttpApiClient _httpClient = HttpApiClient();
   final CatHttpClient _catHttpClient = CatHttpClient();
   late final SpiderRouter _router;
@@ -296,11 +322,14 @@ class AppState extends ChangeNotifier {
         _activeRecord = _database!.activeConfig();
         final record = _activeRecord;
         if (record != null && record.json.isNotEmpty) {
-          _config = parseConfigRecord(record.json);
+          // 猫源配置的站点 `api` 指向本机随机端口，重启后端口已变；必须按保存的
+          // 原始猫源地址重新拉起 bundle，而不是直接复用旧 JSON。
+          final reserved = await _reserveCatConfig(record.origin);
+          _config = reserved ?? parseConfigRecord(record.json);
           _attachSiteService();
           log.info(
             '恢复配置：${record.name} sites=${_config!.sites.length} '
-            'origin=${redactUrl(record.origin)}',
+            'cat=${reserved != null} origin=${redactUrl(record.origin)}',
           );
         }
       } catch (error) {
@@ -333,8 +362,6 @@ class AppState extends ChangeNotifier {
   }
 
   String _windowsArchitecture() {
-    // 64 位 Windows 上 Dart 只提供 x64/arm64 两种主要形态；用 PROCESSOR_ARCHITECTURE
-    // 覆盖并保留 Dart 的兜底结果。
     final env = Platform.environment['PROCESSOR_ARCHITECTURE'];
     if (env == null || env.isEmpty) return 'x64';
     switch (env.toLowerCase()) {
@@ -370,6 +397,28 @@ class AppState extends ChangeNotifier {
       database: _database,
     );
     _selectedSite ??= config.defaultSite();
+  }
+
+  /// 若保存的配置来源是猫源 bundle，则按原始地址重新拉起本机 Node 并取回新端口配置。
+  ///
+  /// 猫源站点 `api` 指向本机随机端口，重启后端口必变，因此**不能**直接复用旧 JSON
+  /// 里的 api（会指向已经关掉的旧端口）。重拉失败时返回 null，调用方回退到旧 JSON，
+  /// 由站点页如实报告不可用，而不是把整次启动拖垮。
+  Future<AppConfig?> _reserveCatConfig(String origin) async {
+    final pipeline = _catPipeline;
+    if (pipeline == null || !CatSource.isBundle(origin)) return null;
+    try {
+      final resolved = await pipeline.resolve(origin);
+      if (resolved == null) return null;
+      final document = parseConfigDocument(resolved.configJson);
+      return document.config;
+    } catch (error) {
+      log.warning(
+        '猫源重启失败，回退到已保存配置：$error',
+        scope: 'cat',
+      );
+      return null;
+    }
   }
 
   void clearError() {
@@ -494,13 +543,17 @@ class AppState extends ChangeNotifier {
       if (record == null || record.json.isEmpty) {
         throw AppError(AppErrorKind.configInvalid, '该配置记录没有可恢复内容');
       }
-      _config = parseConfigRecord(record.json);
+      // 换源时先终止上一个猫源进程树，再按新记录的原始地址重拉（§9）。
+      await _catPipeline?.stop();
+      _selectedSite = null;
+      final reserved = await _reserveCatConfig(record.origin);
+      _config = reserved ?? parseConfigRecord(record.json);
       _attachSiteService();
       _homeResult = null;
       _categoryResult = null;
       _detailResult = null;
       _configPhase = LoadPhase.ready;
-      log.info('切换配置：${record.name}', scope: 'config');
+      log.info('切换配置：${record.name} cat=${reserved != null}', scope: 'config');
       notifyListeners();
       final site = _selectedSite;
       if (site != null) await loadHome(site);
@@ -1239,6 +1292,8 @@ class AppState extends ChangeNotifier {
     // §22.2:退出后 sidecar 与代理端口全部释放。
     unawaited(_supervisor.shutdownAll());
     unawaited(_proxy.stop());
+    // 猫源 Node 进程树与 bundle 句柄同样必须随退出释放（§9.8）。
+    _catPipeline?.close();
     _database?.dispose();
     log.dispose();
     super.dispose();
