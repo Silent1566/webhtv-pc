@@ -1,8 +1,8 @@
 # Phase 3 计划(直播 · 字幕 · Windows)
 
-- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时** + **EPG** + **JS Spider 运行时**已完成,见 §3.1)
+- 状态:进行中(直播核心闭环 + 播放诊断 + **外挂字幕** + **弹幕** + **直播弹幕** + **解析器运行时** + **EPG** + **JS Spider 运行时** + **猫源**已完成,见 §3.1)
 - 日期:2026-10-01
-- 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23、§9(Spider 运行时设计)
+- 对应设计文档章节:§13(直播功能设计)、§10.3(字幕轨选择/外挂字幕)、§21 Phase 3、§17.2、§23、§9(Spider 运行时设计与猫源)
 - 上游:`docs/phase2/README.md`(MVP-B 已完成,6 项门禁全绿)
 
 ## 0. 本阶段目标
@@ -97,6 +97,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | JS 2 | TVBox 脚本沙箱(`tvbox-js-v1`) | `sidecars/spider-host-js/sandbox_worker.js` | `node:vm` + worker 线程;同步 `req` 阻塞沙箱、宿主主线程做 HTTP;`homeContent`/`categoryContent`/`detailContent`/`searchContent`/`playerContent` 桥接;未实现全局明确报错 |
 | JS 3 | 宿主接线(`runtime=node` 命令解析与站点判定) | `lib/services/spider_registry.dart` + `lib/services/spider_router.dart` + `lib/state/app_state.dart` | `node host.js --entry … --manifest …`;Windows 用 `node.exe`;JS 宿主路径可显式覆盖或按发行包布局推导;`spider-local:` + `runtime=node` 判为可用 |
 | JS 4 | JS fixture、门禁测试与集成测试 | `sidecars/spider-host-js/` + `test/phase3_js_spider_test.dart` + `integration_test/js_spider_flow_test.dart` | 真实 Node 子进程 + 真实帧握手 + 真实 fixture 浏览;启动失败隔离;证据写入 `docs/phase3/evidence/` |
+| 猫源 1 | 猫源地址识别与配置整形 | `lib/core/cat_source.dart` | `.../index.js.md5`、`.../index.js`、本地包目录/zip 判为 bundle;裸站点数组 / `{video:{sites}}` → 标准 `{sites}`;相对 `api` 补基址;错误信封明确报错;缺 `searchable` 补 `1` |
+| 猫源 2 | bundle 下载、校验与本地缓存 | `lib/services/cat_bundle.dart` | `.md5` 先取校验值(32 字节,短超时)再决定是否下载 1.6 MB bundle;本地目录/zip 安装;内容指纹与缓存标记;缺 `index.config.js` 报可定位错误 |
+| 猫源 3 | Node 运行时(boot.js 注入 + 端口认准 + 进程树回收) | `lib/services/cat_runtime.dart` | 注入 `catServerFactory`/`catDartServerPort` 后 `require(bundle).start(config)`;轮询候选端口用配置形状(`/config` 非 401/欢迎页)认准猫源服务;换源与退出终止进程树 |
+| 猫源 4 | 导入门面接线与重启重拉 | `lib/services/cat_runtime.dart#CatImportPipeline` + `lib/core/config_loader.dart` + `lib/state/app_state.dart` | 猫源地址先跑 bundle 取 `/config` 再进同一套解析;`origin` 保留原始猫源地址,重启/换源时按原地址重拉新端口;Node 缺失时如实报错不静默跳过 |
+| 猫源 5 | 门禁测试与真实 bundle 端到端 | `test/cat_source_test.dart` + `test/cat_bundle_test.dart` + `integration_test/cat_source_flow_test.dart` + `tools/phase3/verify_cat_source.py` | 真实 bundle + 真实 Node 子进程:导入 → 站点 → home/search/detail/play 全链路;证据写入 `docs/phase3/evidence/` |
 
 ## 3. 验收门禁(本阶段完成判据)
 
@@ -136,7 +141,10 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | JS Spider 宿主 | `runtime=node` 命令解析（node/node.exe、JS 宿主缺失不静默） | `test/phase3_js_spider_test.dart`「resolve…」 | 解析出 `node host.js --entry … --manifest …`;Windows 严格 `node.exe`;JS 宿主缺失→null;`jsHostPath` 缺省时按发行包布局推导 |
 | JS Spider 契约 | 真实 Node 子进程 + `webhtv-ipc-v1` 帧/握手/capability/错误信封 | `test/phase3_js_spider_test.dart`「Node sidecar 可用」「home…」「五方法…」「站源异常…」 | ABI major 兼容;capabilities 含 home/play;未声明 capability→`SPIDER_UNSUPPORTED`;home/category/detail/search/play 返回结构化 Result;站源异常→`SPIDER_PARSE_ERROR`;启动失败隔离(主程序存活) |
 | JS Spider 集成 | 真实窗口 + 真实 Node 侧车 + 真实 fixture 服务 | `integration_test/js_spider_flow_test.dart` (-d windows) | `spider-local:` + `runtime=node` 真实启动握手;home/category/detail/search 返回真实数据;入口缺失→可用性明确原因;失败站点隔离且主程序存活 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **408** 个用例全绿;analyze 无问题 |
+| 猫源识别与整形 | bundle 地址识别、配置整形、基址与 `searchable` 默认 | `test/cat_source_test.dart` | URL 形态(`.js.md5`/`index.js`)、本地包目录/zip 均判为 bundle 而普通配置不误判;裸站点数组/`{video:{sites}}`→`{sites}`;相对 `api` 补基址且绝对地址不改写;错误信封明确报错;缺 `searchable` 补 `1` 而显式 `0` 保留 |
+| 猫源 bundle 缓存 | 地址推导/本地目录/zip/校验不一致/稳定指纹 | `test/cat_bundle_test.dart` | `bundleUrl` 去 `.md5`;`md5Url` 不重复补;`configUrl` 指向同目录;内容指纹稳定;缺 `index.config.js` 明确报错;zip 内 `index.js.md5` 不符时报错 |
+| 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **432** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -144,11 +152,11 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 > 单元测试自带进程内 fixture 服务(随机端口),可独立运行;集成测试需要先启动
 > 外部 fixture 服务:`py -3 -m tools.fixture_server.server --port 18080`(脚本会自动启动)。
 
-### 3.1 门禁落地状态(2026-10-01,含 EPG 与 JS Spider)
+### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **408** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8),
-七个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **16** 个用例全绿,
+`flutter test` 共 **432** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 24),
+八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -209,9 +217,28 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE js-broken isolated=true reason=entry-missing`
 - `PHASE3-EVIDENCE js-ok-after-failure list=1`
 
-一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(6 道门禁全部通过):
+猫源(`integration_test/cat_source_flow_test.dart`,真实本地 bundle + 真实 Node 子进程):
+
+- `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
+- `PHASE3-EVIDENCE cat-import sites=126`
+- `PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)`
+- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=392`
+- `PHASE3-EVIDENCE cat-search-total items=392`
+
+猫源真实 bundle 端到端脚本(`tools/phase3/verify_cat_source.py`,与 Dart 侧同一份 boot 语义):
+
+- `[cat-verify] OK 猫源服务 port=5839 candidates=[5839]`
+- `[cat-verify] OK /config sites=126`
+- `[cat-verify] OK 站点 api 已补基址 searchable=126/126`
+- `[cat-verify] OK init HTTP=200` / `OK home HTTP=200 classes=3`
+- `[cat-verify] OK search wd=寒战 HTTP=200 items=1`
+- `[cat-verify] OK detail id=… flags=线路1` / `OK play flag=线路1 HTTP=200 url=[…]`
+- `[cat-verify] RESULT OK 猫源导入 / 站点 / 搜索 / 播放 全链路通过`
+
+一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(7 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
-`dart-analyze`、`flutter-unit-tests`、`windows-integration-tests`。
+`dart-analyze`、`flutter-unit-tests`、`cat-source-real-bundle`、
+`windows-integration-tests`。
 
 ### 3.2 JS Spider 实现要点(实测结论)
 
@@ -296,6 +323,50 @@ XML 侧 `<channel id>` 的 `<display-name>` 反查直播频道名。**匹配成�
 日志,频道列表与播放入口完全不受影响——与字幕/弹幕的失败隔离同一语义(§10.4)。
 `_loadGuideFor` 捕 `catch (error)` 而非仅 `on AppError`,避免任何非预期异常
 升级为未捕获错误。
+
+### 3.6 猫源实现要点(真实 bundle 实测结论)
+
+**a) 猫源不是「配置地址」,而是「自起服务的 Node 包」,必须先跑起来再取配置。**
+用户填的 `.../index.js.md5` 只返回 32 字节校验值,真正的 bundle 在去掉 `.md5` 的地址上
+(实测 1.6 MB)。因此导入顺序是:**拉 md5 比对 → 命中缓存就不重复下载 → 写 boot.js →
+`Process.start(node,[boot.js])` → 轮询候选端口 → 取 `/config` → `CatSource.normalize`**。
+直接把 `index.js.md5` 当配置文本抓会因「不是 JSON」失败(所以未注入 resolver 时
+报错而非静默空站点)。
+
+**b) bundle 靠注入的全局与 `index.config.js` 才能 start()。** bundle 自己起 HTTP 服务,
+需要宿主提供 `globalThis.catServerFactory=(handler)=>http.createServer(handler)` 与
+`process.env.DEV_HTTP_PORT`;并且**必须有** `index.config.js`(脚本形态
+`var index_config = {...}`,内含 `server.url` 与 `authorization`)——缺失时 bundle
+start() 抛 `Cannot read properties of undefined (reading 'url')`(实测)。因此
+`CatBundle._ensureLocal` 对缺 `index.config.js` 的目录报可定位错误,不落入
+「地址不可访问」的兜底文案。
+
+**c) 端口必须落盘且要**逐个探测**——一见端口就收工是错的。** 魔改 bundle 会额外起
+自己的 HTTP 服务(如内置弹幕服务器),那些服务对 `/config` 返回 401 信封或欢迎页——
+**都是非空响应**,只判空会把它们当成就绪。所以:boot.js 把所有候选端口写入
+`<bundleDir>/port`,Dart 侧逐个探 `/config` 并用 `CatSource.isConfig`(按配置形状)
+认准猫源服务(附带服务可能比猫源晚绑定,不能一见端口就收工)。
+
+**d) 站点 `api` 指向本机随机端口,重启后必变,所以持久化必须存原始猫源地址。**
+猫源站点 `api` 形如 `http://127.0.0.1:9505/spider/omnibox_4KVM/3`;端口每次不同,
+**禁止**把 `127.0.0.1:<port>` 写进站点持久化并直接复用。参考实现 VodConfig 正是
+存用户填的**原始猫源 URL**,每次配置加载时重跑 bundle 再读 `/config`。因此
+`ImportedConfig.origin` 保留原始猫源地址,`AppState._reserveCatConfig` 在启动恢复
+与换源时按原地址重拉新端口;重拉失败才回退到旧 JSON(由站点页如实报不可用,
+不把整次启动拖垮)。
+
+**e) 猫源站点缺 `searchable` 默认**可搜**。** TVBox 生态(含参考实现
+`Site.searchable == null ? 1 : …`)按可搜索处理,而本仓库标准配置路径对缺失字段
+默认**不可**搜索(§8.4),两者语义相反。所以只在 `CatSource.normalize` 里补
+(缺失就写 `1`,站点自己声明的值包括 `0` 一律保留),不改 `Site.fromJson` 的默认值
+——既符合猫源生态,也不破坏标准配置语义。
+
+**f) 本地包与远端走同一套链路,但 `isBundle` 要同时认两者。** 门禁
+`ConfigImportService.import()` 只用 `CatSource.isBundle(source.value)` 判是否走猫源分支,
+而它最初只认 URL 形态(`.js.md5`/`index.js`),导致本地目录包(如 `F:\temp\catpkg`)
+被漏判而走普通抓取路径失败。已补齐:非 http(s) 输入额外做磁盘探测(含 `index.js` 的
+目录、`.zip` 文件),且**只对本地输入做**(避免把远端地址当本地路径去 stat)。
+远端探测后由 `CatBundle._localDir`/`_localZip` 二次确认(zip 还要校验内含 `index.js.md5` 标记)。
 
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
@@ -403,8 +474,25 @@ selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
    使站源入口/manifest 非法被误报为「正常退出」(exit 0)。两者均已修复并由
    `test/phase3_js_spider_test.dart` 锁定。
 
+9. **猫源范围(§9 猫源、§9.7、§9.8)**:已实现 CatVod T4 bundle(`index.js` 自起
+   Node HTTP 服务)的**完整导入链路**——`.../index.js.md5` / `.../index.js` /
+   本地包目录 / 本地 zip 四态识别;md5 比对 + 本地缓存;写 boot.js 注入
+   `catServerFactory`/`catDartServerPort` 后起真实 Node 子进程;候选端口逐个探测并用
+   配置形状认准猫源服务;取 `/config` → `CatSource.normalize`(裸站点数组 /
+   `{video:{sites}}` → 标准 `{sites}`,相对 `api` 补基址,缺 `searchable` 补 1)
+   → 与标准 TVBox 配置同一套解析/站点/搜索/播放路径。实测本机真实 bundle:
+   `/config` 126 站点全可用(CatSpider HTTP),搜索命中真实数据(如「寒战」440 条)。
+   **未实现**:猫源的**远程脚本自动下载确认流程**(§9.8 要求下载前由用户确认
+   来源与权限,当前只加载本机已存在/已缓存的 bundle);**非点播分组**(小说/漫画/
+   音乐/网盘,`read`/`comic`/`music` 等分组当前不接入点播列表);**QuickJS 内核**
+   (与 JS Spider 同,当前仅用 Node `vm` 隔离,不是安全沙箱)。
+   **重点缺陷修复**:`CatSource.isBundle` 原先只认 URL 形态,本地目录包被漏判导致
+   `ConfigImportService` 走普通抓取路径失败(集成测试直接暴露,参考实现
+   `NodeBundle.isLocal` 也检查本地包);已补齐本地目录/zip 探测并由
+   `cat_source_test.dart` 锁定。
+
 ## 6. 平台范围声明
 
 本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕、直播弹幕、
-解析器与 JS Spider 运行时验证不在范围内;
-发布文案不得声称已支持直播、字幕、弹幕、解析器或 JS Spider。
+解析器、JS Spider 与猫源运行时验证不在范围内;
+发布文案不得声称已支持直播、字幕、弹幕、解析器、JS Spider 或猫源。
