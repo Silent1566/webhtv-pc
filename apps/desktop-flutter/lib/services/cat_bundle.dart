@@ -20,6 +20,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/app_error.dart';
+import '../core/protocol.dart';
 
 /// bundle 安装结果：成功时 [error] 为空，磁盘上 `index.js`/`index.config.js` 可用。
 class CatBundleResult {
@@ -61,6 +62,9 @@ class CatBundle {
   static const String configMarker = 'index.config.js.md5';
   static const String sourceStamp = 'source.key';
   static const int _maxMetadataBytes = 4096;
+
+  /// 自行跟随重定向的上限（加速镜像 302 → 真实源）。
+  static const int maxRedirects = 5;
 
   void close() => _client.close(force: true);
 
@@ -243,9 +247,11 @@ class CatBundle {
     String url, {
     void Function(String message)? onProgress,
   }) async {
-    // 一次取齐校验值：来源键、缓存判定、下载校验全都用这两个值，避免重复请求。
-    final expectedBundle = await _remoteMd5(bundleUrl(url));
-    final expectedConfig = await _remoteMd5(configUrl(url));
+    // 校验值在 **.md5** 地址上（`index.js.md5` / `index.config.js.md5`，各 32 字节）；
+    // 去掉 `.md5` 的地址是真正的 bundle（1~10 MB JS 源码）。这里必须取 `.md5`，
+    // 否则会把 JS 源码当校验值 → `isMd5` 判假 → 误报「校验值不可用，且没有本地缓存」。
+    final expectedBundle = await _remoteMd5(md5Url(bundleUrl(url)));
+    final expectedConfig = await _remoteMd5(configMd5Url(url));
     final key = _remoteSourceKey(url, expectedBundle, expectedConfig);
     // 两个校验值缺任何一个都算不出完整身份，此时只能靠已装好的缓存服务，不能下载未校验内容。
     if (!isMd5(expectedBundle) || !isMd5(expectedConfig)) {
@@ -343,13 +349,57 @@ class CatBundle {
     return true;
   }
 
+  /// 发一个 GET 请求（自行处理重定向与 userinfo 凭据）。
+  ///
+  /// 两处必须统一，才能同时满足远端猫源的两种现实写法：
+  /// 1. **userinfo 凭据**：`HttpClient` 不会解码 URI userinfo 的百分号编码，
+  ///    密码里的 `%3A` 会被字面发出导致 401；这里改成解码后显式设 `Authorization`
+  ///    头，并把 URI 里的 userinfo 去掉（[basicAuthHeader]/[uriWithoutUserInfo]）。
+  /// 2. **加速镜像 302**：`ghfast.top` 一类地址会 302 到真实源；`followRedirects=false`
+  ///    会把 302 当成失败。重定向由我们自己跟（上限 [maxRedirects]），
+  ///    且**跨主机时不带 Authorization**，避免把凭据泄给镜像站。
+  Future<HttpClientResponse> _openGet(
+    String url,
+    Duration timeout, {
+    String accept = '*/*',
+  }) async {
+    var uri = Uri.parse(url);
+    final auth = basicAuthHeader(uri);
+    var sendAuth = auth != null;
+    uri = uriWithoutUserInfo(uri);
+
+    for (var hop = 0; hop <= maxRedirects; hop++) {
+      final request = await _client.getUrl(uri).timeout(timeout);
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.acceptHeader, accept);
+      if (sendAuth && auth != null) {
+        request.headers.set(HttpHeaders.authorizationHeader, auth);
+      }
+      final response = await request.close().timeout(timeout);
+      final status = response.statusCode;
+      if (status < 300 || status >= 400) return response;
+
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      await response.drain<void>();
+      if (location == null || location.isEmpty) {
+        throw const _BundleException('猫源地址重定向缺少 Location 头');
+      }
+      final next = uri.resolve(location);
+      final scheme = next.scheme.toLowerCase();
+      if (scheme != 'http' && scheme != 'https') {
+        throw _BundleException('猫源地址重定向到不支持的协议：$scheme');
+      }
+      // 跨主机（含换端口）时丢弃凭据：加速镜像不应拿到原始账号密码。
+      if (next.host != uri.host || next.port != uri.port) sendAuth = false;
+      uri = next;
+    }
+    throw _BundleException('猫源地址重定向超过 $maxRedirects 次');
+  }
+
   /// 读取 32 字节校验值；任何失败都返回空串（调用方按「校验值不可用」降级）。
   Future<String> _remoteMd5(String url) async {
     try {
-      final request = await _client.getUrl(Uri.parse(url)).timeout(metadataTimeout);
-      request.headers.set(HttpHeaders.acceptHeader, 'text/plain,*/*');
-      request.followRedirects = false;
-      final response = await request.close().timeout(metadataTimeout);
+      final response = await _openGet(url, metadataTimeout, accept: 'text/plain,*/*');
       if (response.statusCode < 200 || response.statusCode >= 300) {
         await response.drain<void>();
         return '';
@@ -368,10 +418,7 @@ class CatBundle {
 
   Future<_PreparedFile> _download(String url, File target, String expected) async {
     if (!isMd5(expected)) throw const _BundleException('bundle 校验值不可用');
-    final request = await _client.getUrl(Uri.parse(url)).timeout(downloadTimeout);
-    request.headers.set(HttpHeaders.acceptHeader, '*/*');
-    request.followRedirects = false;
-    final response = await request.close().timeout(downloadTimeout);
+    final response = await _openGet(url, downloadTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       await response.drain<void>();
       throw _BundleException('bundle 下载失败 HTTP ${response.statusCode}');

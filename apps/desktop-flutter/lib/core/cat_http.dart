@@ -118,6 +118,13 @@ class CatHttpRequestBuilder {
     if (!merged.containsKey('User-Agent')) {
       merged.put('User-Agent', userAgent);
     }
+    // 猫源站点 `api` 带 `user:pass@host` 凭据时，`package:http` 不会解码 userinfo 的
+    // 百分号编码（密码里的 `%3A` 被字面发出 → 401）。解码后显式注入 Basic 头，
+    // 请求 URI 则由 [build] 去掉 userinfo。
+    if (!merged.containsKey('Authorization')) {
+      final auth = basicAuthHeader(endpoint);
+      if (auth != null) merged.put('Authorization', auth);
+    }
     return merged.asRequestHeaders;
   }
 
@@ -170,7 +177,9 @@ class CatHttpRequestBuilder {
     }
     return CatHttpCall(
       route: route,
-      uri: endpoint,
+      // 凭据已由 headersFor 注入 Authorization 头；URI 里不带 userinfo，
+      // 避免 package:http 再发一次错误编码的凭据。
+      uri: uriWithoutUserInfo(endpoint),
       body: body,
       headers: headersFor(endpoint),
     );

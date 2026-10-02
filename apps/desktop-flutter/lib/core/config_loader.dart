@@ -256,7 +256,15 @@ class ConfigLoader {
 
   Future<HttpClientResponse> _once(Uri uri) async {
     try {
-      final request = await _client.getUrl(uri).timeout(timeout);
+      // `HttpClient` 不会解码 URI userinfo 的百分号编码（如密码里的 `%3A`），
+      // 而大量订阅地址带 `user:pass@host` 凭据；这里解码后显式设 Authorization 头，
+      // 并把 URI 里的 userinfo 去掉，与 `CatBundle` 的出站请求同一套规则。
+      final auth = basicAuthHeader(uri);
+      final target = uriWithoutUserInfo(uri);
+      final request = await _client.getUrl(target).timeout(timeout);
+      if (auth != null) {
+        request.headers.set(HttpHeaders.authorizationHeader, auth);
+      }
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
       // 必须自己处理 3xx：否则 dart:io 会用默认上限自动跟随，既无法按设计
       // 文档报告 `configRedirect`，也无法校验“禁止降级到 file:// 等非 HTTP(S)

@@ -4,6 +4,8 @@
 /// 设计文档 §7、§8 的字段语义。
 library;
 
+import 'dart:convert';
+
 // ---------------------------------------------------------------------------
 // JSON 取值工具：配置文件与站点数据大量使用字符串/数字混用字段（TVBox 生态
 // 常见），因此统一做宽松归一化，避免因类型差异导致整份配置导入失败。
@@ -1198,6 +1200,31 @@ class PlaybackDecision {
   String get logLine =>
       'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} '
       'subs=${subs.length} danmaku=${danmaku.length} reason=${reason ?? ""}';
+}
+
+/// 从 URL 的 userinfo（`scheme://user:pass@host`）生成 `Authorization: Basic` 头值。
+///
+/// **为什么需要它**：dart:io 的 `HttpClient` 会把 `Uri.userInfo` **原样**塞进 Basic 凭据，
+/// **不做百分号解码**。而台面上的猫源/TVBox 订阅大量使用 `user:eXi6S%3Axxx@host` 这种
+/// 「密码里含 `:`，按 URL 规则编码成 `%3A`」的写法：curl 会先解码再发送（实测
+/// `root:eXi6S:jgdv22!N6` → 200），Dart 发送字面 `%3A` → 服务端 401。
+/// 因此凡走 [HttpClient] 的出站请求都要用本函数解码 userinfo 并显式设置 Basic 头，
+/// 同时把请求 URI 换成不带 userinfo 的 [uriWithoutUserInfo]。
+///
+/// 返回 `null` 表示该 URI 没有 userinfo，调用方无需设置任何头。
+String? basicAuthHeader(Uri uri) {
+  if (uri.userInfo.isEmpty) return null;
+  final decoded = Uri.decodeComponent(uri.userInfo);
+  return 'Basic ${base64Encode(utf8.encode(decoded))}';
+}
+
+/// 去掉 userinfo 的同一 URI。
+///
+/// 与 [basicAuthHeader] 配对使用：凭据改由 Authorization 头携带后，URI 里再留一份
+/// userinfo 只会让 `HttpClient` 再发一次（错误编码的）凭据，并可能把密码写进日志/诊断。
+Uri uriWithoutUserInfo(Uri uri) {
+  if (uri.userInfo.isEmpty) return uri;
+  return uri.replace(userInfo: '');
 }
 
 /// URL 脱敏：只保留 scheme + host + path，隐藏 query 与片段（§11.3.1）。

@@ -190,10 +190,13 @@ class HttpApiRequestBuilder {
         ...parameters,
       },
     );
+    // 请求走不带 userinfo 的 URI：凭据已由 [_headersFor] 注入 Authorization 头，
+    // URI 里再留一份只会让 package:http 再发一次错误编码的凭据（并可能进入日志）。
+    final target = uriWithoutUserInfo(uri);
 
     return HttpApiCall(
       method: form.isEmpty ? 'GET' : 'POST',
-      uri: uri,
+      uri: target,
       formBody: form.isEmpty ? null : form,
       headers: headers,
       action: action.name,
@@ -202,6 +205,11 @@ class HttpApiRequestBuilder {
 
   /// Header 注入顺序固定（§7.4.6）：
   /// 1) 全局 `headers` 按目标 host 匹配；2) 站点 `header` 覆盖同名键。
+  ///
+  /// 另外：站点 `api` 可能带 `user:pass@host` 凭据（TVBox/猫源生态常见）。
+  /// `package:http` 与 `dart:io` 一样**不解码** URI userinfo 的百分号编码
+  /// （密码里的 `%3A` 会被字面发出 → 401），因此这里解码后显式注入 Basic 头。
+  /// 仅在站点未自行声明 Authorization 时注入，不覆盖用户显式配置的凭据。
   Map<String, String> _headersFor(Uri endpoint) {
     final merged = HeaderMap.merge([
       globalHeadersFor(globalHeaders, endpoint.host),
@@ -209,6 +217,10 @@ class HttpApiRequestBuilder {
     ]);
     if (!merged.containsKey('User-Agent')) {
       merged.put('User-Agent', userAgent);
+    }
+    if (!merged.containsKey('Authorization')) {
+      final auth = basicAuthHeader(endpoint);
+      if (auth != null) merged.put('Authorization', auth);
     }
     return merged.asRequestHeaders;
   }
@@ -252,7 +264,7 @@ class HttpApiRequestBuilder {
     );
     return HttpApiCall(
       method: 'GET',
-      uri: uri,
+      uri: uriWithoutUserInfo(uri),
       headers: _headersFor(endpoint),
       action: 'play',
     );
