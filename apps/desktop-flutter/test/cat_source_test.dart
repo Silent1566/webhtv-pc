@@ -16,6 +16,7 @@ import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/cat_source.dart';
 import 'package:webhtv_pc/core/config_parser.dart';
+import 'package:webhtv_pc/core/protocol.dart';
 
 void main() {
   group('isBundle 地址识别', () {
@@ -156,6 +157,37 @@ void main() {
       expect(document.config!.sites.first.searchable, isTrue);
       expect(document.config!.sites.first.api, 'http://127.0.0.1:8080/spider/k/3');
       expect(document.config!.sites.first.type, 3);
+    });
+  });
+
+  group('userinfo 凭据（§9.7）', () {
+    test('密码里的 %3A 被解码后用于 Basic 头', () {
+      final uri = Uri.parse('http://root:pa%3Ass@h:3000/index.js.md5');
+      final auth = basicAuthHeader(uri);
+      expect(auth, 'Basic ${base64Encode(utf8.encode('root:pa:ss'))}');
+    });
+
+    test('无 userinfo 时不生成 Authorization 头', () {
+      expect(basicAuthHeader(Uri.parse('http://h/index.js.md5')), isNull);
+    });
+
+    test('uriWithoutUserInfo 去掉凭据且保留其余部分', () {
+      final uri = Uri.parse('http://u:p@h:3000/a/b?x=1');
+      final clean = uriWithoutUserInfo(uri);
+      expect(clean.userInfo, isEmpty);
+      expect(clean.host, 'h');
+      expect(clean.port, 3000);
+      expect(clean.path, '/a/b');
+      expect(clean.query, 'x=1');
+      // 原本无 userinfo 的 URI 原样返回。
+      final plain = Uri.parse('http://h/a');
+      expect(identical(uriWithoutUserInfo(plain), plain), isTrue);
+    });
+
+    test('凭据里的百分号编码与 `:` 按 URL 规则解码', () {
+      // 用户名也带编码时同样要解码。
+      final uri = Uri.parse('http://a%40b:p%3Aw@h/index.js.md5');
+      expect(basicAuthHeader(uri), 'Basic ${base64Encode(utf8.encode('a@b:p:w'))}');
     });
   });
 }

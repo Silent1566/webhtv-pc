@@ -126,6 +126,114 @@ void main() {
     });
   });
 
+  group('远端包（本地 HTTP 夹具）', () {
+    // 夹具服务：按真实猫源约定发布 4 个文件，并把收到的 Authorization 记下来。
+    late HttpServer server;
+    late String base;
+    final seenAuth = <String>[];
+    final requestedPaths = <String>[];
+    late List<int> jsBytes;
+    late List<int> cfgBytes;
+    late String jsMd5;
+    late String cfgMd5;
+    String? requireAuth; // 非空时要求该 Basic 值，否则 401
+
+    setUp(() async {
+      seenAuth.clear();
+      requestedPaths.clear();
+      jsBytes = utf8.encode('module.exports={start(){}}');
+      cfgBytes = utf8.encode('var index_config={};');
+      jsMd5 = md5.convert(jsBytes).toString();
+      cfgMd5 = md5.convert(cfgBytes).toString();
+      requireAuth = null;
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) async {
+        requestedPaths.add(req.uri.path);
+        final auth = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+        seenAuth.add(auth);
+        if (requireAuth != null && auth != requireAuth) {
+          req.response.statusCode = 401;
+          req.response.write('{"message":"Unauthorized"}');
+          await req.response.close();
+          return;
+        }
+        switch (req.uri.path) {
+          case '/index.js.md5':
+            req.response.write(jsMd5);
+          case '/index.config.js.md5':
+            req.response.write(cfgMd5);
+          case '/index.js':
+            req.response.add(jsBytes);
+          case '/index.config.js':
+            req.response.add(cfgBytes);
+          default:
+            req.response.statusCode = 404;
+        }
+        await req.response.close();
+      });
+      base = 'http://127.0.0.1:${server.port}';
+    });
+
+    tearDown(() async => server.close(force: true));
+
+    test('校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址', () async {
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('$base/index.js.md5');
+      bundle.close();
+      expect(result.ok, isTrue, reason: result.error);
+      // 关键断言：必须请求过 .md5（否则会把 1.6MB 的 JS 当校验值）。
+      expect(requestedPaths, contains('/index.js.md5'));
+      expect(requestedPaths, contains('/index.config.js.md5'));
+      expect(requestedPaths, contains('/index.js'));
+      expect(requestedPaths, contains('/index.config.js'));
+    });
+
+    test('校验值与内容不符时明确报错，不静默装上坏包', () async {
+      cfgMd5 = md5.convert(utf8.encode('declared-but-wrong')).toString();
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('$base/index.js.md5');
+      bundle.close();
+      expect(result.ok, isFalse);
+      expect(result.error, contains('校验失败'));
+      expect(File(result.entryPath).existsSync(), isFalse);
+    });
+
+    test('userinfo 凭据被百分号解码后以 Basic 头发出', () async {
+      // 密码里含 `:`（按 URL 规则编码为 %3A），与用户反馈的真实地址同形态。
+      final expected = 'Basic ${base64Encode(utf8.encode('root:pa:ss'))}';
+      requireAuth = expected;
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('http://root:pa%3Ass@127.0.0.1:${server.port}/index.js.md5');
+      bundle.close();
+      expect(result.ok, isTrue, reason: result.error);
+      expect(seenAuth, isNotEmpty);
+      expect(seenAuth.every((a) => a == expected), isTrue,
+          reason: '每个请求都应带解码后的 Basic 凭据，实际：$seenAuth');
+    });
+
+    test('不带凭据的地址不发 Authorization 头', () async {
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('$base/index.js.md5');
+      bundle.close();
+      expect(result.ok, isTrue, reason: result.error);
+      expect(seenAuth.every((a) => a.isEmpty), isTrue);
+    });
+
+    test('302 重定向被跟随（加速镜像）', () async {
+      final mirror = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      mirror.listen((req) async {
+        req.response.statusCode = 302;
+        req.response.headers.set(HttpHeaders.locationHeader, '$base${req.uri.path}');
+        await req.response.close();
+      });
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('http://127.0.0.1:${mirror.port}/index.js.md5');
+      bundle.close();
+      await mirror.close(force: true);
+      expect(result.ok, isTrue, reason: result.error);
+    });
+  });
+
   group('本地 zip 包', () {
     test('zip 内 index.js.md5 与内容一致时可安装', () async {
       // 用 STORED 方式构造最小 zip（避免依赖 archive 包）。
