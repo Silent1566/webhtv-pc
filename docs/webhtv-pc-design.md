@@ -553,6 +553,7 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 1. 先按 `api` 判定具体运行时，而不是只按 `type`。
 2. 未匹配的 `type=3` 站点使用 `SpiderNull`，UI 显示“运行时未安装/未支持”，不得显示空列表。
 3. 同一配置中存在不可运行站点时，其他站点必须继续加载。
+4. **`type=3` 的剧集目标必须先送播放入口（`/play`），不做“直链初判”短路。** 详情 `vod_play_url` 中该集 `$` 之后的值是**播放入口的输入**（`/play` 的 `id`），而不是媒体地址：网盘线路形如 `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 `https`，若按普通 HTTP API 站点那样先判“像直链”就直接给播放器，会把分享页 HTML 当媒体流（实测 `Failed to recognize file format`）。参考实现对 `type=3` 在 `playerContent` 里**无条件**先调 `/play`（`site.recent().spider().playerContent(flag, id, …)`），从不短路；`type=0/1/2/4` 保留初判以避免多余网络请求。运行时不可用时必须如实报错，不得把剧集目标当直链返回。
 
 ### 8.2 站点字段
 
@@ -780,6 +781,8 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 - `filters` 是分类扩展条件的对象，字段名和值按上游配置原样传递。
 - `page` 统一为整数；空值或非法值按 1 处理，但应记录诊断。
 - `/play` 的 `id` 是**剧集目标串**，即 `/detail` 返回的 `vod_play_url` 中该集 `$` 之后的值（猫源形如 URL 编码 JSON `%7B%22vodId%22...%7D`）；`flag` 是该集所属线路（`vod_play_from` 的对应段）。**不得**把纯 `vod_id` 当 `id` 传——实测猫源部分子站（如 jinpai/muou/huban）只会返回空 `url`（§9.4 契约，PC 端 `CatHttpSiteRuntime.play` 与 sidecar 运行时一致）。
+- **该目标必须先送 `/play`，不得被“直链初判”短路**（§8.1 分发顺序 4）。剧集目标是播放入口的输入，不是媒体地址；网盘线路裸 scheme 为 `https` 会被误判成直链，导致分享页 HTML 被当流（`Failed to recognize file format`）。
+- 播放入口返回的多码率列表形态极宽松：`url` 可为**「名称/地址」交替的平铺数组**（对齐 CatVod `UrlAdapter`，如 `["RAW","https://…","super","https://…"]`，网盘线路实测即此形态），也可为 `{ "values": [{"n":"RAW","v":"…"}] }` 对象形态。宿主取**第一个**可播放地址，`RAW` 优先；纯字符串 `url`/`playUrl` 保持兼容。
 - 未实现的 `/live`、`/proxy`、`/action` 不伪装成功。HTTP 客户端应把 404/501 或明确的业务错误映射为 `SPIDER_UNSUPPORTED`，不得把它转换为空列表。
 
 当前 WebHTV Android 客户端只覆盖上述 HTTP 子集，不包含 live、proxy、action。PC 端如需扩展，必须新开 ABI 版本或 capability，不能悄悄改变 `tvbox-http-v1` 语义。

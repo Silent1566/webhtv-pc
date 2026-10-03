@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **448** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 38),
+`flutter test` 共 **452** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 42),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -222,17 +222,19 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
 - `PHASE3-EVIDENCE cat-import sites=126`
 - `PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)`
-- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=426`(单站点数据波动,历史上曾 609)
-- `PHASE3-EVIDENCE cat-search-total items=426`
+- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=419`(单站点数据波动,历史上曾 609/426)
+- `PHASE3-EVIDENCE cat-search-total items=419`
 - `PHASE3-EVIDENCE cat-detail-pick site=nodejs_omnibox_木偶 vod=/index.php/vod/detail/id/8346.html`
 - `PHASE3-EVIDENCE cat-detail lines=1 flags=百度网盘`
-- `PHASE3-EVIDENCE cat-play flag=百度网盘 url=https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`
+- `PHASE3-EVIDENCE cat-play flag=百度网盘 url=http://127.0.0.1:<proxy>/p/<base64>/aHR0cHM6Ly9kLnBjcy5iYWlkdS5jb20vZmlsZS8…`
 - `PHASE3-EVIDENCE cat-play-ok kind=direct`
 
-> 本用例此前只跑到搜索,标题却声称覆盖 play——因此 `CatHttpSiteRuntime.play` 的
-> `vodId ?? episodeTarget` 传参缺陷躲过了 Windows 验收证据(只被真实 bundle
-> 端到端脚本偶然放过)。现已补齐 detail → play 真实链路并锁定:播放决策必须回传
-> 非空 `url`(传纯 `vod_id` 会让部分子站返回空)。
+> `cat-play` 行是本次修复(缺陷 16)在**真实 bundle**上的直接证据:剧集目标是
+> 网盘分享页 `https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`,修复前它会被
+> 「直链初判」当成媒体地址直接交给播放器(mpv 把分享页 HTML 当流 →
+> `Failed to recognize file format`);修复后先经猫源 `/play` 拿到真实地址
+> (`d.pcs.baidu.com/file/…` 网盘直链,带时效签名),再经本地代理改写为
+> `http://127.0.0.1:<proxy>/p/<base64>/…` 注入 Header。
 
 猫源真实 bundle 端到端脚本(`tools/phase3/verify_cat_source.py`,与 Dart 侧同一份 boot 语义):
 
@@ -447,7 +449,37 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
 (`CatHttpRequestBuilder` 新增 `playId` 参数表达该语义,`vodId` 仅作回退);
 单测用 fixture 服务捕获**实际发出的 JSON body** 断言 `id == episodeTarget`,
 `verify_cat_source.py` 同步改为从 `vod_play_url` 解析真实剧集目标串。
-15. `lib/services/cat_bundle.dart#_download`:**`index.config.js` 的 md5 被硬校验**——
+
+**l) `type=3` 的剧集目标必须先送 `/play`,不能做「直链初判」短路。** 宿主
+`SiteService.resolvePlayback` 原先对**所有**站点先跑 `PlaybackResolver.decide`:它
+用 `looksLikeMediaUrl` 判定目标是否「看起来像直链」`scheme ∈ {http,https,rtsp,
+rtmp,rtmps,file}` 就直接返回 `direct`。对 `type=0/1/2/4` 的 HTTP API 站点这是合理
+优化(避免多余网络请求),但对 `type=3` 是错的——**剧集目标是播放入口的输入,
+不是媒体地址**。网盘线路尤其明显:`vod_play_url` 里该集形如
+`https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`(裸 scheme 是 `https`),
+于是宿主把它当直链交给 media-kit,mpv 把网盘**分享页 HTML** 当媒体流,实测报
+`Failed to recognize file format`。参考实现(Silent1566/webhtv)对 `type=3` 在
+`playerContent` 里**无条件**先调 `/play`(`site.recent().spider().playerContent(
+flag,id,…)`),从不做这种短路。修复:`resolvePlayback` 对 `site.type ==
+SiteType.spider` 跳过直链初判,一律先向播放入口取真实地址;`type=0/1/2/4` 保留
+初判。两条用例锁定:①`test/config_and_site_test.dart`「§9.4 type=3 必须真实进
+/play,不把「长得像直链」的剧集目标短路」——用与真实网盘线路同形的
+`https://pan.baidu.com/s/…|用户:pwd|<base64>` 作剧集目标,断言 fixture 服务确实
+收到 `/play`(旧代码在此短路,captured 里没有它)、`/play` 的 `id` 是剧集目标串而
+非数字 `vod_id`、最终地址来自 `/play` 返回且不等于剧集目标;②同文件「§9.4
+`type=3` 运行时不可用时不伪装成直链成功」作反向对照,未接 cat http 客户端时必须报
+`siteUnsupported`。反向验证:把 `mustCallPlay` 改回 `false`,两条用例均失败,证实
+有判别力。同时 `SidecarRuntime`(JS/Python sidecar)天然先调 `/play`,不受影响。
+
+> 附注:`TestFixtureServer` 的 cat http 样本族路由原先按**整段剩余路径**判定
+> 动作(`/ok/<action>`),而真实猫源 `api` 是多段路径(如 `/spider/omnibox_4KVM/3`),
+> 追加路由后为 `/spider/omnibox_4KVM/3/play` → 样本族匹配后 action 不是单段而
+> 落 404。已改为**按末段**判定动作(`_catHttpAction`,并保留 `/home-envelope`
+> 等多段动作),使测试可直接用真实 `api` 形态。
+
+> 附注:该 `type=3` 短路缺陷的记录同时见 §4 缺陷 16 与设计文档 §8.1 分发顺序 4。
+
+**k) `index.config.js` 的 md5 不能硬校验,只当版本标识;`index.js` 才严格校验。**
 `_download`/`_extractZipEntry` 对 `index.js` 与 `index.config.js` 一视同仁地
 校验声明 md5,但猫源生态里 `index.config.js.md5` 只是**版本标识**,常与内容不符
 (实测 omnibox 源:`index.js.md5`=`907d5419…` 一致,而 `index.config.js.md5` 声明
@@ -459,6 +491,29 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
 「bundle 校验值与内容不符时明确报错」(确保 bundle 仍严格)两个用例锁定。
 真实远端 omnibox 源走**应用层** `AppState.importConfig` 验证:`imported=true`、
 `sites=126`、`available=126`(修复前 `配置导入失败 configInvalid: bundle 校验失败`)。
+16. `lib/services/site_service.dart#resolvePlayback`:**`type=3` 的剧集目标被「直链初判」短路**——
+`resolvePlayback` 原先对**所有**站点先跑 `PlaybackResolver.decide`,`looksLikeMediaUrl`
+判定目标「看起来像直链」(`scheme ∈ {http,https,rtsp,rtmp,rtmps,file}`)就直接返回
+`direct`。对 `type=0/1/2/4` 是合理优化(避免多余网络请求),对 `type=3` 是错的——
+**剧集目标是播放入口的输入,不是媒体地址**。网盘线路该集形如
+`https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`(`scheme=https`),宿主据此当直链
+交给 media-kit,mpv 把网盘**分享页 HTML** 当媒体流,实测报
+`Failed to recognize file format`。参考实现(Silent1566/webhtv)对 `type=3` 在
+`playerContent` 里**无条件**先调 `/play`(`site.recent().spider().playerContent(
+flag,id,…)`),从不做这种短路。修复:`resolvePlayback` 对 `site.type == SiteType.spider`
+跳过直链初判,一律先向播放入口取真实地址;`type=0/1/2/4` 保留初判。
+由 `test/config_and_site_test.dart` 两条用例锁定:
+「§9.4 type=3 必须真实进 /play,不把「长得像直链」的剧集目标短路」——用与真实网盘
+线路同形的 `https://pan.baidu.com/s/…|用户:pwd|<base64>` 作剧集目标,断言 fixture 服务
+确实收到 `/play`(`captured` 里存在该请求)、`/play` 的 `id` 是剧集目标串而非数字
+`vod_id`、最终地址来自 `/play` 返回且不等于剧集目标;「§9.4 type=3 运行时不可用时不
+伪装成直链成功」作反向对照,未接 cat http 客户端时必须报 `siteUnsupported`。
+反向验证:把 `mustCallPlay` 改回 `false`,两条用例均失败(旧行为下前者在直链初判处
+短路、`captured` 里没有 `/play`;后者把网盘 URL 当直链返回),证实有判别力。
+同时 JS/Python sidecar 路径(`SidecarRuntime.play`)天然先调 `/play`,不受影响。
+另修 `TestFixtureServer`:cat http 样本族路由原先按**整段剩余路径**判定动作,而真实
+猫源 `api` 是多段路径(如 `/spider/omnibox_4KVM/3`),追加路由后落 404;已改为按**末段**
+判定(`_catHttpAction`,并保留 `/home-envelope` 等多段动作),使测试可直接用真实 `api` 形态。
 
 **k) `index.config.js` 的 md5 不能硬校验,只当版本标识;`index.js` 才严格校验。**
 猫源生态里服务端的 `index.config.js.md5` 经常与内容不符(实测 omnibox 源:
@@ -660,8 +715,12 @@ selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
    40 个如此)——按「有无分类」区分两种文案;④猫源 `/play` 的 `id` 被写成
    `vodId ?? episodeTarget`,而宿主总会带上数字 `vodId`,导致 `jinpai`/`muou`/
    `huban` 等子站返回空 `url`(实测 8 站点中 episodeTarget 8/8 成功、vod_id 3 个
-   失败)——改为按 bundle 契约传**剧集目标串**(与 `SidecarRuntime` 对齐)。
-   后三者由 `test/phase3_cat_switch_test.dart` 与 `test/phase2_cathttp_test.dart` 锁定。
+   失败)——改为按 bundle 契约传**剧集目标串**(与 `SidecarRuntime` 对齐);
+   ⑤`type=3` 的剧集目标被「直链初判」短路(网盘分享页 HTML 被当媒体流 →
+   `Failed to recognize file format`)——改为 `SiteType.spider` 一律先向播放入口取
+   真实地址(参考实现对 `type=3` 无条件先调 `/play`)。
+   后四条由 `test/phase3_cat_switch_test.dart`、`test/phase2_cathttp_test.dart`
+   与 `test/config_and_site_test.dart` 锁定(第四条已反向验证判别力)。
 
 ## 6. 平台范围声明
 

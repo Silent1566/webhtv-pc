@@ -1,11 +1,11 @@
 WebHTV PC Phase 3 验收日志
-开始时间：2026-10-03T01:30:43.0847657+08:00
+开始时间：2026-10-04T04:20:59.0782209+08:00
 仓库：C:\Users\Maple\orca\workspaces\webhtv-pc\dev1
 
 PHASE3-ACCEPT python interpreter with-jsonschema=C:\Users\Maple\AppData\Local\Programs\Python\Python313\python.exe
-PHASE3-ACCEPT fixture-server started pid=40624 port=18080
+PHASE3-ACCEPT fixture-server started pid=42724 port=18080
 PHASE3-ACCEPT step: live-fixture-preflight
-PHASE3-ACCEPT live-fixture-preflight ok elapsed=1650ms
+PHASE3-ACCEPT live-fixture-preflight ok elapsed=1158ms
 PHASE3-ACCEPT step: python-contract-tests
 test_forbidden_spider_permissions_are_rejected (tests.test_contracts.ContractTests.test_forbidden_spider_permissions_are_rejected) ... ok
 test_minimal_config_is_valid (tests.test_contracts.ContractTests.test_minimal_config_is_valid) ... ok
@@ -13,10 +13,10 @@ test_request_requires_deadline (tests.test_contracts.ContractTests.test_request_
 test_unknown_config_fields_are_preserved_by_fixture (tests.test_contracts.ContractTests.test_unknown_config_fields_are_preserved_by_fixture) ... ok
 
 ----------------------------------------------------------------------
-Ran 4 tests in 0.005s
+Ran 4 tests in 0.043s
 
 OK
-PHASE3-ACCEPT python-contract-tests ok elapsed=3620ms
+PHASE3-ACCEPT python-contract-tests ok elapsed=3782ms
 PHASE3-ACCEPT step: schema-validation
 通过：最小 TVBox 配置
 通过：Spider manifest
@@ -25,541 +25,552 @@ PHASE3-ACCEPT step: schema-validation
 通过：IPC 错误响应
 通过：IPC 取消请求
 全部 Phase 0 契约验证通过。
-PHASE3-ACCEPT schema-validation ok elapsed=3265ms
+PHASE3-ACCEPT schema-validation ok elapsed=3254ms
 PHASE3-ACCEPT step: dart-analyze
 Analyzing desktop-flutter...
 No issues found!
-PHASE3-ACCEPT dart-analyze ok elapsed=7949ms
+PHASE3-ACCEPT dart-analyze ok elapsed=6566ms
 PHASE3-ACCEPT step: flutter-unit-tests
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart
-00:00 +0: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isBundle 地址识别 index.js.md5 / index.js 判为 bundle
-00:00 +1: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isBundle 地址识别 普通配置地址不误判
-00:00 +2: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isBundle 地址识别 本地包路径：含 index.js 的目录、index.js 本身、zip 都判为 bundle
-00:00 +3: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isBundle 地址识别 远端地址不做磁盘探测（避免误判与多余 stat）
-00:00 +4: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isConfig 形状判定 裸站点数组与 video.sites 都算配置
-00:00 +5: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: isConfig 形状判定 401 信封、欢迎页、空响应都不算配置
-00:00 +6: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: normalize 配置整形 裸站点数组补 sites 字段并补基址
-00:00 +7: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: normalize 配置整形 video.sites 提升为顶层 sites，其余分组不接入
-00:00 +8: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: normalize 配置整形 绝对 api 不被改写
-00:00 +9: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: normalize 配置整形 错误信封明确报错，而不是解析出空站点
-00:00 +10: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: normalize 配置整形 保留 userinfo 的基址（避免每请求吃 401）
-00:00 +11: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: searchable 默认值（对齐 TVBox 生态） 缺失 searchable 的猫源站点补 1
-00:00 +12: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: searchable 默认值（对齐 TVBox 生态） 站点自己声明的 searchable=0 保留
-00:00 +13: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: searchable 默认值（对齐 TVBox 生态） 补齐后能被 parseConfigDocument 解析为可搜索站点
-00:00 +14: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: userinfo 凭据（§9.7） 密码里的 %3A 被解码后用于 Basic 头
-00:00 +15: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: userinfo 凭据（§9.7） 无 userinfo 时不生成 Authorization 头
-00:00 +16: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: userinfo 凭据（§9.7） uriWithoutUserInfo 去掉凭据且保留其余部分
-00:00 +17: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_source_test.dart: userinfo 凭据（§9.7） 凭据里的百分号编码与 `:` 按 URL 规则解码
-00:00 +18: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 bundleUrl 去掉 .md5 后缀（大小写不敏感）
-00:00 +19: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 md5Url 补 .md5 后缀且不重复补
-00:00 +20: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 configUrl 指向同目录 index.config.js
-00:00 +21: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 isMd5 只认 32 位十六进制
+00:00 +0: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 bundleUrl 去掉 .md5 后缀（大小写不敏感）
+00:00 +1: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 md5Url 补 .md5 后缀且不重复补
+00:00 +2: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 configUrl 指向同目录 index.config.js
+00:00 +3: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 isMd5 只认 32 位十六进制
+00:00 +4: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +5: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +6: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +7: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +8: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +9: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +10: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +11: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +12: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +13: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +14: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +15: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +16: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +17: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +18: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +19: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +20: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +21: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
 00:00 +22: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
-00:01 +23: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 三种入口：JSON 文本、本地文件、HTTP URL
-00:01 +24: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 三种入口：JSON 文本、本地文件、HTTP URL
-00:01 +25: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
-00:01 +26: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
-00:01 +27: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
-00:01 +28: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
-00:01 +29: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 配置解析（§7.1–§7.4） 最小配置解析出站点与未知字段保留
-00:01 +30: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
-00:01 +31: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
-00:01 +32: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 超过大小上限的响应被拒绝且保留已有配置（§7.4.1）
+00:00 +23: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 缺少 index.config.js 明确报错
+00:00 +24: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:00 +25: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 三种入口：JSON 文本、本地文件、HTTP URL
+00:00 +26: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 三种入口：JSON 文本、本地文件、HTTP URL
+00:00 +27: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:00 +28: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:01 +29: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:01 +30: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:01 +31: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:01 +32: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
 00:01 +33: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +34: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +35: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +36: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +37: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +38: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +39: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +40: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +41: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +42: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +43: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +44: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +45: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +46: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +47: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +48: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +49: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +50: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +51: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +52: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +53: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +54: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +55: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +56: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +57: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +58: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:01 +59: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:02 +60: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:02 +61: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
-00:02 +62: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
-00:02 +63: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +64: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +65: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +66: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +67: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +68: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +69: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +70: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +71: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +72: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +73: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +74: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +75: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +76: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +77: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +78: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +79: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +80: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
-00:02 +81: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +82: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +83: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +84: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +85: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +86: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +87: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +88: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +89: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +90: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +91: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +92: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +93: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +94: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +95: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +96: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +97: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
-00:02 +98: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
-00:02 +99: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
-00:02 +100: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: 文本解码（§7.4.1） UTF-8 与 GBK 解码
-00:02 +101: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +102: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +103: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +104: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +105: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +106: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +107: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
-00:02 +108: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +109: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +110: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +111: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +112: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +113: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +114: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +115: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +116: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +117: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +118: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +119: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +120: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +121: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +122: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +123: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +124: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +125: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +126: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
-00:02 +127: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
-00:02 +128: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
-00:02 +129: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
-00:02 +130: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
-00:02 +131: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
-00:02 +132: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 单站点失败不影响其他站点（§8.4、§14.3）
-00:02 +133: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 单站点失败不影响其他站点（§8.4、§14.3）
-00:02 +134: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +135: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +136: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +137: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +138: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +139: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +140: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +141: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +142: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +143: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +144: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:02 +145: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
-00:03 +146: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
-00:04 +147: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 解码结果带 Content-Length 与空行分隔符
-00:04 +148: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） Content-Length 按 UTF-8 字节数而非字符数计算
-00:04 +149: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝缺失 Content-Length 的帧
-00:04 +150: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝 Content-Length 与实际长度不一致
-00:04 +151: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝非 JSON payload
-00:04 +152: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 超过单帧上限抛 IpcFrameTooLarge 且不读取 payload
-00:04 +153: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 增量解码支持任意切分（禁止依赖“一行一个 JSON”）
-00:04 +154: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） stdout 出现非协议数据判定为协议污染
-00:04 +155: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） LF 分隔符同样被接受（兼容宽松实现）
-00:04 +156: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 请求信封校验：id/method 必须非空，deadlineMs 必须为正整数
-00:04 +157: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 统一错误对象包含全部必需字段
-00:04 +158: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 错误码集合覆盖 §9.5 全部定义
-00:04 +159: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） ABI major 不匹配必须被识别
-00:04 +160: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） cancel 通知两种名字都被接受
-00:04 +161: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 校验拒绝禁止权限与错误 ABI
-00:04 +162: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 缺少必需方法时给出缺失清单
-00:04 +163: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 环境变量白名单：凭据与开发机 PATH 不传给 sidecar
-00:04 +164: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +165: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +166: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +167: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +168: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +169: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +170: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +171: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +172: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +173: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +174: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +175: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +176: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +177: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +178: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +179: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:04 +180: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +181: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +182: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +183: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +184: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +185: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +186: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +187: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +188: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +189: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +190: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:05 +191: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:06 +192: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:07 +193: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:07 +194: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:08 +195: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:08 +196: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:08 +197: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:09 +198: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
-00:09 +199: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
-00:09 +200: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
-00:10 +201: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
-00:10 +202: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:10 +203: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:11 +204: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:11 +205: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:11 +206: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:11 +207: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:12 +208: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:12 +209: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
-00:12 +210: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消后不再投递任何在途结果
-00:13 +211: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: recordProgress 端到端（§15.2） 写入进度后可读回并用于续播
-00:13 +212: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
-00:14 +213: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
-00:15 +214: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
-00:16 +215: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
-00:16 +216: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 空状态：本地 Spider 与运行时都为 0
-00:17 +217: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:17 +218: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:17 +219: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:17 +220: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:17 +221: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:18 +222: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:19 +223: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
-00:19 +224: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
-00:19 +225: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
-00:19 +226: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +227: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +228: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +229: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +230: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +231: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +232: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +233: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +234: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +235: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +236: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +237: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +238: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +239: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +240: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +241: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +242: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +243: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +244: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +245: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +246: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +247: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +248: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +249: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +250: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +251: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +252: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +253: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +254: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +255: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +256: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +257: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:20 +258: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +259: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +260: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +261: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +262: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +263: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +264: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +265: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +266: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +267: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +268: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +269: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +270: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:21 +271: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 超时隔离：不响应取消的请求被进程级超时兜底
-00:22 +272: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +273: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +274: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +275: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +276: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +277: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:22 +278: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +279: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +280: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +281: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +282: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +283: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +284: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +285: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +286: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +287: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +288: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +289: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +290: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +291: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +292: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +293: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:23 +294: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +295: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +296: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +297: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +298: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +299: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +300: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +301: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +302: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:24 +303: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:25 +304: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:25 +305: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:25 +306: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:25 +307: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
-00:25 +308: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +309: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +310: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +311: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +312: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +313: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +314: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +315: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +316: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +317: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +318: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +319: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +320: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +321: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +322: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +323: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +324: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:26 +325: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:01 +34: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） msg 非空的配置导入失败且不覆盖已有配置记录
+00:01 +35: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） bundle 校验值与内容不符时明确报错，不静默装上坏包
+00:01 +36: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） 配置仓库：默认第一项、失败回退、不覆盖已有配置（§7.4.2）
+00:01 +37: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:01 +38: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:01 +39: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:01 +40: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:01 +41: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:01 +42: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +43: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +44: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +45: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +46: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +47: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） type=0 XML 站点首页与详情解析
+00:01 +48: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +49: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +50: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +51: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +52: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +53: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +54: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +55: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +56: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +57: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +58: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +59: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +60: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:01 +61: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 播出错：HTML 错误页与非 2xx 都是可定位错误
+00:01 +62: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: HTTP API 请求编码（§7.4.7） ext 对象按稳定 JSON 文本传递，不做 Base64（§7.4.5）
+00:01 +63: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +64: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +65: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +66: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +67: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +68: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +69: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +70: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +71: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +72: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +73: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +74: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:01 +75: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +76: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +77: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +78: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +79: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +80: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +81: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +82: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +83: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +84: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +85: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +86: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:01 +87: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +88: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +89: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +90: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +91: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +92: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +93: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +94: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +95: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +96: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:02 +97: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +98: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +99: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +100: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +101: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +102: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +103: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +104: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +105: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +106: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:02 +107: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +108: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +109: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +110: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +111: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +112: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +113: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +114: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +115: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +116: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +117: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +118: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +119: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 样本 A 成功：home/search/play 均返回结构化 Result
+00:02 +120: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +121: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +122: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +123: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +124: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +125: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +126: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +127: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +128: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +129: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +130: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +131: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +132: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:02 +133: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 未实现路由 404 → SPIDER_UNSUPPORTED（不转空列表）
+00:02 +134: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: CatSpider HTTP 三族样本（§9.4 门禁） 未实现路由 404 → SPIDER_UNSUPPORTED（不转空列表）
+00:02 +135: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
+00:02 +136: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
+00:02 +137: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
+00:02 +138: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
+00:02 +139: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） api 末尾 / 先归一化再追加路由（不留双斜杠）
+00:02 +140: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） 请求体字段：category(id/page/filters) search(wd/page) play(flag/id)
+00:02 +141: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） page 非法值按 1 处理并给出诊断标记
+00:02 +142: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） api 非法（空 / 非 http(s)）抛 SPIDER_BAD_REQUEST
+00:02 +143: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） 默认注入 Content-Type 与 User-Agent
+00:02 +144: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 路由构造与归一化（§9.4） 所有路由都在 §9.4 定义的方法集内
+00:02 +145: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 响应解包边界（§9.4） 空响应与非 JSON → SPIDER_PARSE_ERROR
+00:02 +146: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 响应解包边界（§9.4） {code:0,data:null} → 空 Result；非 0 code → 业务错误
+00:02 +147: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 响应解包边界（§9.4） {code:0,data:[...]} 被包装为 list
+00:02 +148: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 响应解包边界（§9.4） 平铺 {list:[...]} 与 {url:...} 播放结果直接解析
+00:02 +149: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 运行时绑定与能力判定（§9.4、§8.1） spider_router 把 /spider/ 形态判为可用（MVP-B CatSpider HTTP）
+00:02 +150: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 运行时绑定与能力判定（§9.4、§8.1） JS/Python/CSP/JAR 形态仍判为不可用（Phase 3，不伪装成功）
+00:02 +151: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: 运行时绑定与能力判定（§9.4、§8.1） CatHttpRuntime.looksLikeCatHttp 只认 /spider/ 与 catspider
+00:02 +152: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: play 请求体的 id 语义（§9.4） builder：playId 优先，vodId 仅作回退
+00:02 +153: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_cathttp_test.dart: play 请求体的 id 语义（§9.4） 运行时：/play 实际发出的 id 是 episodeTarget 而不是纯 vod_id
+00:03 +154: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 解码结果带 Content-Length 与空行分隔符
+00:03 +155: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） Content-Length 按 UTF-8 字节数而非字符数计算
+00:03 +156: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝缺失 Content-Length 的帧
+00:03 +157: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝 Content-Length 与实际长度不一致
+00:03 +158: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝非 JSON payload
+00:03 +159: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 超过单帧上限抛 IpcFrameTooLarge 且不读取 payload
+00:03 +160: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 增量解码支持任意切分（禁止依赖“一行一个 JSON”）
+00:03 +161: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） stdout 出现非协议数据判定为协议污染
+00:03 +162: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） LF 分隔符同样被接受（兼容宽松实现）
+00:03 +163: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 请求信封校验：id/method 必须非空，deadlineMs 必须为正整数
+00:03 +164: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 统一错误对象包含全部必需字段
+00:03 +165: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 错误码集合覆盖 §9.5 全部定义
+00:03 +166: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） ABI major 不匹配必须被识别
+00:03 +167: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） cancel 通知两种名字都被接受
+00:03 +168: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 校验拒绝禁止权限与错误 ABI
+00:03 +169: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 缺少必需方法时给出缺失清单
+00:03 +170: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 环境变量白名单：凭据与开发机 PATH 不传给 sidecar
+00:03 +171: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +172: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +173: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +174: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +175: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +176: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +177: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +178: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +179: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +180: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +181: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +182: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +183: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +184: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:03 +185: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +186: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +187: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +188: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +189: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +190: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +191: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +192: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +193: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +194: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +195: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +196: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +197: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +198: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:04 +199: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:05 +200: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:05 +201: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:06 +202: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:06 +203: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:07 +204: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:07 +205: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:08 +206: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
+00:08 +207: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
+00:08 +208: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 单站点失败不阻塞其他站点，失败站点保留错误状态
+00:09 +209: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:09 +210: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:09 +211: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:09 +212: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:09 +213: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:10 +214: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:10 +215: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:11 +216: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:11 +217: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消后不再投递任何在途结果
+00:11 +218: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: recordProgress 端到端（§15.2） 写入进度后可读回并用于续播
+00:12 +219: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:12 +220: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:13 +221: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:15 +222: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:15 +223: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:15 +224: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 导入新配置后选中站点必须换成新配置的默认站点
+00:16 +225: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
+00:17 +226: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
+00:17 +227: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
+00:18 +228: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 切回旧配置时选中站点同样跟着配置走
+00:18 +229: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 切回旧配置时选中站点同样跟着配置走
+00:18 +230: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 切回旧配置时选中站点同样跟着配置走
+00:19 +231: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:19 +232: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:21 +233: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:21 +234: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +235: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +236: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +237: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +238: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +239: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:22 +240: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +241: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +242: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +243: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +244: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +245: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +246: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +247: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +248: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +249: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +250: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +251: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +252: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +253: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +254: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +255: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +256: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +257: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +258: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +259: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +260: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +261: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +262: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +263: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +264: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +265: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +266: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +267: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +268: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +269: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +270: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +271: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +272: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +273: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +274: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +275: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +276: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +277: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +278: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +279: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +280: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +281: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +282: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +283: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:24 +284: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:25 +285: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:26 +286: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +287: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +288: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +289: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +290: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +291: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +292: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +293: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +294: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +295: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +296: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +297: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +298: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +299: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +300: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +301: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +302: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +303: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +304: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +305: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +306: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +307: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +308: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +309: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +310: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +311: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +312: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +313: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +314: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +315: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +316: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +317: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +318: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +319: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +320: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +321: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +322: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +323: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +324: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +325: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
 00:27 +326: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
 00:27 +327: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:30 +328: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:31 +329: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:32 +330: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:32 +331: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:32 +332: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:32 +333: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +334: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +335: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +336: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +337: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +338: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +339: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +340: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:33 +341: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
-00:34 +342: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
-00:34 +343: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +344: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +345: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +346: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +347: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +348: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +349: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +350: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +351: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +352: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +353: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +354: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +355: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +356: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +357: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +358: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +359: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +360: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +361: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:34 +362: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +363: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +364: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +365: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +366: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +367: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +368: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +369: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +370: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +371: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +372: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +373: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +374: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +375: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +376: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +377: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +378: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +379: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +380: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +381: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +382: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +383: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +384: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:35 +385: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +386: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +387: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +388: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +389: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +390: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +391: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +392: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +393: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:36 +394: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:37 +395: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:39 +396: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:39 +397: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:39 +398: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:39 +399: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:40 +400: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:41 +401: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
-00:41 +402: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +403: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +404: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +405: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +406: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +407: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +408: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +409: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +410: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +411: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +412: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +413: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +414: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +415: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +416: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +417: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +418: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +419: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +420: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:41 +421: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
-00:42 +422: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +423: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +424: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +425: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +426: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +427: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +428: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +429: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:42 +430: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:44 +431: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:45 +432: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 协议污染：stdout 出现非协议数据时终止运行时
-00:45 +433: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
-00:47 +434: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 进程树终止：sidecar 崩溃时孙进程被一并终止（§18.2.1）
-00:48 +435: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 进程树终止：sidecar 崩溃时孙进程被一并终止（§18.2.1）
-00:50 +436: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 清理遗留工作目录
-00:52 +437: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
-00:58 +438: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 日志脱敏（§18.3） Cookie/Authorization/签名 query 被替换
-00:58 +439: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 日志脱敏（§18.3） Header 键名保留但值被脱敏
-00:58 +440: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 日志脱敏（§18.3） URL 脱敏隐藏 query 但保留 host 与 path
-00:58 +441: All tests passed!
-PHASE3-ACCEPT flutter-unit-tests ok elapsed=80351ms
+00:27 +328: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:27 +329: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:28 +330: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:28 +331: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:28 +332: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:28 +333: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+00:28 +334: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+00:28 +335: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+00:28 +336: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+00:28 +337: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+00:28 +338: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:29 +339: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:29 +340: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +341: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +342: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +343: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +344: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +345: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +346: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +347: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +348: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +349: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +350: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +351: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +352: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:30 +353: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +354: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +355: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +356: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +357: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +358: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +359: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +360: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +361: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +362: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +363: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +364: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +365: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +366: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +367: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +368: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +369: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +370: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +371: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +372: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +373: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +374: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +375: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +376: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +377: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +378: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +379: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +380: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +381: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +382: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +383: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +384: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +385: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +386: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +387: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +388: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +389: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +390: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +391: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +392: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +393: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +394: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +395: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +396: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +397: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +398: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +399: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +400: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +401: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +402: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +403: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:31 +404: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 资源限制：响应超过 responseMiB 被拒绝为 SPIDER_RESOURCE_LIMIT
+00:32 +405: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+00:32 +406: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +407: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +408: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +409: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +410: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +411: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +412: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +413: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +414: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +415: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +416: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +417: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +418: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +419: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +420: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +421: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +422: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +423: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +424: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +425: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +426: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +427: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +428: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +429: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +430: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +431: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +432: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +433: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:33 +434: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:34 +435: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+00:34 +436: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+00:34 +437: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+00:34 +438: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+00:34 +439: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+00:35 +440: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+00:35 +441: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
+00:35 +442: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
+00:36 +443: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
+00:37 +444: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
+00:38 +445: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） stderr 日志按大小轮转且内容脱敏
+00:38 +446: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+00:38 +447: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+00:38 +448: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+00:38 +449: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+00:39 +450: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+00:40 +451: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+00:41 +452: All tests passed!
+PHASE3-ACCEPT flutter-unit-tests ok elapsed=58076ms
 PHASE3-ACCEPT step: cat-source-real-bundle
 [cat-verify] package=F:\temp\catpkg entryBytes=1676448
-[cat-verify] starting node=node hostPort=3707
+[cat-verify] starting node=node hostPort=6145
 [cat-verify] waiting for candidate ports ...
-[cat-verify] OK 猫源服务 port=3709 candidates=[3709]
+[cat-verify] OK 猫源服务 port=6154 candidates=[6154]
 [cat-verify] OK /config sites=126
 [cat-verify] OK 站点 api 已补基址 searchable=126/126
-[cat-verify] target site key=nodejs_omnibox_4KVM name=4KVM api=http://127.0.0.1:3709/spider/omnibox_4KVM/3
+[cat-verify] target site key=nodejs_omnibox_4KVM name=4KVM api=http://127.0.0.1:6154/spider/omnibox_4KVM/3
 [cat-verify] OK [try=1/5] init HTTP=200
 [cat-verify] OK [try=1/5] home HTTP=200 classes=4
 [cat-verify] FAIL [try=1/5] search wd=寒战 HTTP=200 items=0
-[cat-verify] target site key=nodejs_omnibox_123TV name=123TV api=http://127.0.0.1:3709/spider/omnibox_123TV/3
+[cat-verify] target site key=nodejs_omnibox_123TV name=123TV api=http://127.0.0.1:6154/spider/omnibox_123TV/3
 [cat-verify] OK [try=2/5] init HTTP=200
 [cat-verify] OK [try=2/5] home HTTP=200 classes=4
 [cat-verify] OK [try=2/5] search wd=寒战 HTTP=200 items=12
 [cat-verify] OK detail id=/v/hanzhan6.html HTTP=200 flags=线路168$$$线路148$$$线路170$$$线路190$$$线路219$$$线路210$$$线路201$$$线路220$$$线路224$$$线路167$$$线路134$$$线路208$$$线路154$$$线路25$$$线路148$$$线路147$$$线路146$$$线路228$$$线路163$$$线路228$$$线路25$$$线路225$$$线路147$$$线路164$$$线路170$$$线路187$$$线路160$$$线路22$$$线路149$$$线路166$$$线路31$$$线路168$$$线路21$$$线路210$$$线路222$$$线路180$$$线路207$$$线路219$$$线路222$$$线路166$$$线路150$$$线路149$$$线路167$$$线路205$$$线路32$$$线路211$$$线路8$$$线路220
-[cat-verify] OK play flag=线路168 HTTP=200 url=['默认', 'https://play.xluuss.com/play/ejR09Gle/index.m3u8']
+[cat-verify] OK play flag=线路168 idKind=episodeTarget HTTP=200 url=['默认', 'https://play.xluuss.com/play/ejR09Gle/index.m3u8']
 [cat-verify] node stopped code=1
 [cat-verify] RESULT OK 猫源导入 / 站点 / 搜索 / 播放 全链路通过
-PHASE3-ACCEPT cat-source-real-bundle ok elapsed=24236ms
+PHASE3-ACCEPT cat-source-real-bundle ok elapsed=30819ms
 PHASE3-ACCEPT step: windows-integration-tests
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/live_flow_test.dart
-Building Windows application...                                    71.4s
+Building Windows application...                                    56.9s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 直播页：源列表 → 分组 → 频道渲染（§13）
-00:02 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/live_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 1962807722736
-00:13 +0: 直播页：源列表 → 分组 → 频道渲染（§13）
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/live_flow_test.dart
+media_kit: NativeReferenceHolder: Allocated 2598893126048
+00:12 +0: 直播页：源列表 → 分组 → 频道渲染（§13）
 PHASE3-EVIDENCE live-page rendered sources=2 channels=yes live-configured=2
-00:13 +1: 直播失败源不阻塞可用源（§14.3）
+00:12 +1: 直播失败源不阻塞可用源（§14.3）
 PHASE3-EVIDENCE live-source-fail isolated=true retry-visible=true
-00:31 +2: 直播频道真实播放（带 Header 直链出画）
+00:29 +2: 直播频道真实播放（带 Header 直链出画）
 PHASE3-EVIDENCE live-request direct=true lines=1
-00:33 +2: 直播页：源列表 → 分组 → 频道渲染（§13）
+00:30 +2: 直播页：源列表 → 分组 → 频道渲染（§13）
 VideoOutput.Resize
-{handle: 1962806461088, id: 1962813446768, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1962813446768
+{handle: 2598893206688, id: 2599204871856, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2599204871856
 VideoOutput.Resize
-{handle: 1962806461088, id: 1962934982016, rect: {height: 180, left: 0, top: 0, width: 320}}
-00:34 +2: 直播频道真实播放（带 Header 直链出画）
+{handle: 2598893206688, id: 2598895216592, rect: {height: 180, left: 0, top: 0, width: 320}}
+00:31 +2: 直播频道真实播放（带 Header 直链出画）
 PHASE3-EVIDENCE live-playback first-frame=yes
 PHASE3-EVIDENCE live-diagnostics engine=media-kit/mpv format=hls host=127.0.0.1 succeeded=true
-00:34 +3: (tearDownAll)
-00:34 +3: All tests passed!
+00:31 +3: (tearDownAll)
+00:31 +3: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/subtitle_flow_test.dart
-Building Windows application...                                    63.0s
+Building Windows application...                                    50.4s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 外挂字幕默认启用 → 关闭 → 重新开启（§10.3、§13.3）
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/subtitle_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 1740162531584
+media_kit: NativeReferenceHolder: Allocated 3093149048288
 00:02 +0: 外挂字幕默认启用 → 关闭 → 重新开启（§10.3、§13.3）
 VideoOutput.Resize
-{handle: 1740216965808, id: 1740486284848, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1740486284848
+{handle: 3093206611808, id: 3093483805424, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 3093483805424
 VideoOutput.Resize
-{handle: 1740216965808, id: 1740689343744, rect: {height: 180, left: 0, top: 0, width: 320}}
+{handle: 3093206611808, id: 3093486402864, rect: {height: 180, left: 0, top: 0, width: 320}}
 PHASE3-EVIDENCE subtitle-default-on uri=true title=简体中文（zh） lines=1
 PHASE3-EVIDENCE subtitle-off id=no
 PHASE3-EVIDENCE subtitle-reselected uri=true
 00:07 +1: 字幕加载失败不影响视频播放（§10.4）
-00:08 +1: 外挂字幕默认启用 → 关闭 → 重新开启（§10.3、§13.3）
+00:07 +1: 外挂字幕默认启用 → 关闭 → 重新开启（§10.3、§13.3）
 VideoOutput.Resize
-{handle: 1740488411008, id: 1740489975024, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1740489975024
+{handle: 3093485437152, id: 3093486402864, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 3093486402864
 VideoOutput.Resize
-{handle: 1740488411008, id: 1740481104080, rect: {height: 180, left: 0, top: 0, width: 320}}
-00:09 +1: 字幕加载失败不影响视频播放（§10.4）
+{handle: 3093485437152, id: 3093486403440, rect: {height: 180, left: 0, top: 0, width: 320}}
+00:08 +1: 字幕加载失败不影响视频播放（§10.4）
 PHASE3-EVIDENCE subtitle-failure isolated=true playing=true
-00:10 +2: (tearDownAll)
-00:10 +2: All tests passed!
+00:09 +2: (tearDownAll)
+00:09 +2: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/danmaku_flow_test.dart
-Building Windows application...                                    52.2s
+Building Windows application...                                    48.4s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 弹幕加载 → 渲染 → 关闭 → 重新开启（§21 Phase 3）
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/danmaku_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 1744463329584
+media_kit: NativeReferenceHolder: Allocated 2689597143824
 00:02 +0: 弹幕加载 → 渲染 → 关闭 → 重新开启（§21 Phase 3）
 VideoOutput.Resize
-{handle: 1744514346048, id: 1744521653488, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1744521653488
+{handle: 2689596545136, id: 2689606730224, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2689606730224
 VideoOutput.Resize
-{handle: 1744514346048, id: 1744985371440, rect: {height: 180, left: 0, top: 0, width: 320}}
+{handle: 2689596545136, id: 2689593718784, rect: {height: 180, left: 0, top: 0, width: 320}}
 PHASE3-EVIDENCE danmaku-rendered items=8 selected=true
 PHASE3-EVIDENCE danmaku-off enabled=false painted=false
 PHASE3-EVIDENCE danmaku-resumed enabled=true
@@ -567,27 +578,27 @@ PHASE3-EVIDENCE danmaku-playback-kept playing=true
 00:06 +1: 弹幕加载失败不影响视频播放（§10.4 同语义）
 00:07 +1: 弹幕加载 → 渲染 → 关闭 → 重新开启（§21 Phase 3）
 VideoOutput.Resize
-{handle: 1744524232256, id: 1744524216736, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1744524216736
+{handle: 2689880145040, id: 2689882145744, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2689882145744
 VideoOutput.Resize
-{handle: 1744524232256, id: 1744521683776, rect: {height: 180, left: 0, top: 0, width: 320}}
+{handle: 2689880145040, id: 2690087734000, rect: {height: 180, left: 0, top: 0, width: 320}}
 00:08 +1: 弹幕加载失败不影响视频播放（§10.4 同语义）
 PHASE3-EVIDENCE danmaku-failure isolated=true items=0 playing=true
-00:09 +2: (tearDownAll)
-00:09 +2: All tests passed!
+00:08 +2: (tearDownAll)
+00:08 +2: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/live_danmaku_flow_test.dart
-Building Windows application...                                    61.8s
+Building Windows application...                                    49.1s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 直播弹幕：连接 → 收到弹幕上屏 → 在线人数更新 → 非法帧丢弃 → 关闭（§13.1）
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/live_danmaku_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 2863775612640
+media_kit: NativeReferenceHolder: Allocated 2372621555072
 00:02 +0: 直播弹幕：连接 → 收到弹幕上屏 → 在线人数更新 → 非法帧丢弃 → 关闭（§13.1）
 VideoOutput.Resize
-{handle: 2863832091856, id: 2864101622384, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 2864101622384
+{handle: 2372680943696, id: 2372688513056, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2372688513056
 VideoOutput.Resize
-{handle: 2863832091856, id: 2864097392512, rect: {height: 180, left: 0, top: 0, width: 320}}
+{handle: 2372680943696, id: 2372625603984, rect: {height: 180, left: 0, top: 0, width: 320}}
 PHASE3-EVIDENCE live-danmaku-received chat=yes
 PHASE3-EVIDENCE live-danmaku-valid items=4 invalid-dropped=true
 PHASE3-EVIDENCE live-danmaku-off enabled=false
@@ -595,35 +606,35 @@ PHASE3-EVIDENCE live-danmaku-playback-kept playing=true
 00:05 +1: 直播弹幕连接失败不影响视频播放（§10.4 同语义）
 00:06 +1: 直播弹幕：连接 → 收到弹幕上屏 → 在线人数更新 → 非法帧丢弃 → 关闭（§13.1）
 VideoOutput.Resize
-{handle: 2864101175408, id: 2863834142176, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 2863834142176
+{handle: 2372688236336, id: 2372689215776, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2372689215776
 VideoOutput.Resize
-{handle: 2864101175408, id: 2863834145824, rect: {height: 180, left: 0, top: 0, width: 320}}
-00:09 +1: 直播弹幕连接失败不影响视频播放（§10.4 同语义）
+{handle: 2372688236336, id: 2371018238160, rect: {height: 180, left: 0, top: 0, width: 320}}
+00:08 +1: 直播弹幕连接失败不影响视频播放（§10.4 同语义）
 PHASE3-EVIDENCE live-danmaku-failure isolated=true playing=true
-00:09 +2: (tearDownAll)
+00:08 +2: (tearDownAll)
 00:09 +2: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/parser_flow_test.dart
-Building Windows application...                                    58.8s
+Building Windows application...                                    49.4s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 真实解析器：parse=1 → 解析出地址 → 真实出画（§12.3）
-00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/parser_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 1988748824256
-00:00 +0: 真实解析器：parse=1 → 解析出地址 → 真实出画（§12.3）
 PHASE3-EVIDENCE parser-resolved url=sample.m3u8 media-ok=true source=parsed-by:Fixture JSON 解析器
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/parser_flow_test.dart
+media_kit: NativeReferenceHolder: Allocated 2058617913712
+00:02 +0: 真实解析器：parse=1 → 解析出地址 → 真实出画（§12.3）
 VideoOutput.Resize
-{handle: 1988784602944, id: 1988866568960, rect: {height: 0, left: 0, top: 0, width: 0}}
-NativeVideoController: Texture ID: 1988866568960
+{handle: 2058606778848, id: 2058776207408, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2058776207408
 VideoOutput.Resize
-{handle: 1988784602944, id: 1988868465168, rect: {height: 180, left: 0, top: 0, width: 320}}
+{handle: 2058606778848, id: 2058613003680, rect: {height: 180, left: 0, top: 0, width: 320}}
 PHASE3-EVIDENCE parser-playback first-frame=yes
-00:04 +1: 解析失败可定位且不影响直接换源（§12.3）
+00:03 +1: 解析失败可定位且不影响直接换源（§12.3）
 PHASE3-EVIDENCE parser-failure isolated=true kind=parseHttp
-00:04 +2: (tearDownAll)
-00:04 +2: All tests passed!
+00:03 +2: (tearDownAll)
+00:03 +2: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/epg_flow_test.dart
-Building Windows application...                                    54.5s
+Building Windows application...                                    49.5s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: (setUpAll)
 00:00 +0: 直播页真实拉取 EPG，列表显示当前节目（§13.3）
@@ -631,18 +642,18 @@ PHASE3-EVIDENCE epg-loaded channels=yes now-playing=新闻直播间
 00:12 +1: 点击频道展示节目单，刷新会重新拉取（§13.3）
 PHASE3-EVIDENCE epg-detail programs=yes tab=节目单
 PHASE3-EVIDENCE epg-refresh ok=true
-00:33 +2: EPG 失败只提示，直播频道照常（§13.3）
+00:32 +2: EPG 失败只提示，直播频道照常（§13.3）
 PHASE3-EVIDENCE epg-failure isolated=true channel-visible=true
 00:43 +3: (tearDownAll)
 00:43 +3: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/js_spider_flow_test.dart
-Building Windows application...                                    53.1s
+Building Windows application...                                    48.5s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: JS Spider：真实 Node 侧车浏览闭环（§21 Phase 3）
-00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/js_spider_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 2493394385648
-00:00 +0: JS Spider：真实 Node 侧车浏览闭环（§21 Phase 3）
 PHASE3-EVIDENCE js-unavailable isolated=true runtime=本地 Spider (webhtv-ipc-v1)
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/js_spider_flow_test.dart
+media_kit: NativeReferenceHolder: Allocated 2453491675712
+00:01 +0: JS Spider：真实 Node 侧车浏览闭环（§21 Phase 3）
 PHASE3-EVIDENCE js-manifest runtime=node capabilities=category,detail,home,play,search
 PHASE3-EVIDENCE js-available runtime=本地 Spider (webhtv-ipc-v1)
 PHASE3-EVIDENCE js-home list=1
@@ -651,26 +662,30 @@ PHASE3-EVIDENCE js-detail episodes=1
 PHASE3-EVIDENCE js-search sites=1
 PHASE3-EVIDENCE js-runtime running isolation=Instance of 'ProcessIsolationReport'
 PHASE3-EVIDENCE js-stopped state=stopped
-00:02 +1: JS Spider：站点失败被隔离，主程序存活（§9.8）
+00:01 +1: JS Spider：站点失败被隔离，主程序存活（§9.8）
 PHASE3-EVIDENCE js-broken isolated=true reason=entry-missing
 PHASE3-EVIDENCE js-ok-after-failure list=1
-00:03 +2: (tearDownAll)
-00:03 +2: All tests passed!
+00:02 +2: (tearDownAll)
+00:02 +2: All tests passed!
 00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/cat_source_flow_test.dart
-Building Windows application...                                    53.1s
+Building Windows application...                                    48.9s
 √ Built build\windows\x64\runner\Debug\webhtv_pc.exe
 00:00 +0: 猫源：导入 → 站点 → 搜索 → 播放 真实闭环（§9 猫源）
-00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/cat_source_flow_test.dart
-media_kit: NativeReferenceHolder: Allocated 2326763509872
-00:00 +0: 猫源：导入 → 站点 → 搜索 → 播放 真实闭环（§9 猫源）
 PHASE3-EVIDENCE cat-package package=F:\temp\catpkg
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/cat_source_flow_test.dart
+media_kit: NativeReferenceHolder: Allocated 1944706842144
+00:08 +0: 猫源：导入 → 站点 → 搜索 → 播放 真实闭环（§9 猫源）
 PHASE3-EVIDENCE cat-import sites=126
 PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)
-PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=609
-PHASE3-EVIDENCE cat-search-total items=609
-01:38 +1: (tearDownAll)
-01:38 +1: All tests passed!
-PHASE3-ACCEPT windows-integration-tests ok elapsed=758785ms
+PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=419
+PHASE3-EVIDENCE cat-search-total items=419
+PHASE3-EVIDENCE cat-detail-pick site=nodejs_omnibox_木偶 vod=/index.php/vod/detail/id/8346.html
+PHASE3-EVIDENCE cat-detail lines=1 flags=百度网盘
+PHASE3-EVIDENCE cat-play flag=百度网盘 url=http://127.0.0.1:3318/p/o5x7f-hNvRRTGWg1KXFnQP37Uk567Zz1tg3Gemw_OSs/aHR0cHM6Ly9kLnBjcy5iYWlkdS5jb20vZmlsZS9hNGFkM2Q3OWRyMmI5NDNjZDI1YTdlMjdlNTMxMzAxOT9maWQ9MTEwMDgzMDIzNjUxOS0yNTA1MjgtODMyNjE2ODgxNTgxODkzJmRzdGltZT0xNzkxMDU5NjYxJnJ0PXNoJnNpZ249RkR0QUVSSm9nSy1EQ2I3NDBjY2M1NTExZTVlOGZlZGNmZjA2YjA4MTIwMy1PeEJmQW8xY0JhWU5YU1Q4WXhsSExqWnhJJTJCMCUzRCZleHBpcmVzPThoJmNoa3Y9MCZjaGtiZD0wJmNoa3BjPSZkcC1sb2dpZD04NzExNDgwOTUxMzcyNzAwNzE2JmRwLWNhbGxpZD0wJnI9NzU1NTIxMTIxJm9yaWdpbj1kbG5hJnZ1az0yNDE3MzY3NDgyJmZpbGVfdHlwZT0wJmRldnVpZD03M0NFRDk4MUQwRjE4NkQxMkJDMThDQUUxNjg0RkZENSU3Q1ZTUkNRVEY2VyZjbGllbnR0eXBlPTEmc2g9MQ
+PHASE3-EVIDENCE cat-play-ok kind=direct
+01:57 +1: (tearDownAll)
+01:58 +1: All tests passed!
+PHASE3-ACCEPT windows-integration-tests ok elapsed=695602ms
 PHASE3-ACCEPT step: summary
 PHASE3-ACCEPT result=PASS gates=all
-PHASE3-ACCEPT fixture-server stopped pid=40624
+PHASE3-ACCEPT fixture-server stopped pid=42724
