@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **447** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 37),
+`flutter test` 共 **448** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 38),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -418,10 +418,13 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
 读到请求头结束(`\r\n\r\n`)即回 `200 {"success":true}` 并关闭连接。
 真实 `F:\temp\catpkg` 实测 `POST /msg` = `HTTP 200 {"success":true}`。
 
-> 附注:用户实测的四个源中有一个(`.../catvod/index.js.md5`)其服务端
+> 附注(已修正):用户实测的四个源中有一个(`.../catvod/index.js.md5`)其服务端
 > `index.config.js.md5` 声明值与实际内容不符(实测 8809 字节,md5
-> `b95c…` ≠ 声明 `497a…`)。这是**服务端数据不一致**,参考实现同样硬校验并报错,
-> 不属于本仓库缺陷;其余三个源修复后均能真实启动并拉到站点(69/57/42 个)。
+> `b95c…` ≠ 声明 `497a…`)。早先本文档把它定为「服务端数据不一致、参考实现
+> 同样硬校验并报错、不属于本仓库缺陷」——**这个结论是错的**:用户实测参考项目
+> (Silent1566/webhtv 等)**能正常导入并播放**该源。说明 `index.config.js.md5`
+> 在猫源生态里只是**版本标识**,不是内容保证;只有 `index.js`(可执行主体)
+> 才需要严格校验。本仓库已按此修正(见要点 k)。
 
 **j) 猫源 `/play` 的 `id` 必须是「剧集目标串」,不是纯 `vod_id`。** 猫源子站的
 `vod_play_url` 里每集形如 `第1集 蓝光$%7B%22vodId%22%3A%22147243%22%2C%22nid%22
@@ -444,6 +447,29 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
 (`CatHttpRequestBuilder` 新增 `playId` 参数表达该语义,`vodId` 仅作回退);
 单测用 fixture 服务捕获**实际发出的 JSON body** 断言 `id == episodeTarget`,
 `verify_cat_source.py` 同步改为从 `vod_play_url` 解析真实剧集目标串。
+15. `lib/services/cat_bundle.dart#_download`:**`index.config.js` 的 md5 被硬校验**——
+`_download`/`_extractZipEntry` 对 `index.js` 与 `index.config.js` 一视同仁地
+校验声明 md5,但猫源生态里 `index.config.js.md5` 只是**版本标识**,常与内容不符
+(实测 omnibox 源:`index.js.md5`=`907d5419…` 一致,而 `index.config.js.md5` 声明
+`497a4a2f…` ≠ 内容 `b95c3742…`),于是把可导入的源误判为
+`configInvalid: bundle 校验失败`(用户实测导入失败;参考项目能正常导播)。
+已新增 `strict` 参数:`index.js` 仍 `strict: true`(不符绝不安装,不跑坏包),
+`index.config.js` 用 `strict: false`(接受实际内容,以声明值作缓存版本键)。
+由 `cat_bundle_test.dart`「config 声明值与内容不符时不阻断,以实际内容安装」与
+「bundle 校验值与内容不符时明确报错」(确保 bundle 仍严格)两个用例锁定。
+真实远端 omnibox 源走**应用层** `AppState.importConfig` 验证:`imported=true`、
+`sites=126`、`available=126`(修复前 `配置导入失败 configInvalid: bundle 校验失败`)。
+
+**k) `index.config.js` 的 md5 不能硬校验,只当版本标识;`index.js` 才严格校验。**
+猫源生态里服务端的 `index.config.js.md5` 经常与内容不符(实测 omnibox 源:
+`index.js.md5` = `907d5419…` 与内容一致,但 `index.config.js.md5` 声明
+`497a4a2f…` ≠ 内容 `b95c3742…`);参考项目能正常导入播放,即它们**不以该值校验内容**。
+早先本仓库对两个文件一视同仁地硬校验,于是把这类可导入的源误判为
+`configInvalid: bundle 校验失败`(用户实测)。修正:`CatBundle._download`/`_extractZipEntry`
+新增 `strict` 参数——`index.js` 仍 `strict: true`(不符绝不安装,不跑坏包);
+`index.config.js` 用 `strict: false`(接受实际内容,命中同一地址缓存后不重复下载)。
+验证:真实远端 omnibox 源走**应用层** `AppState.importConfig` → `imported=true`、
+`sites=126`、`available=126`(修复前 `配置导入失败 configInvalid: bundle 校验失败`)。
 
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
