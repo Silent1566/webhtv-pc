@@ -196,6 +196,7 @@ class CatHttpSiteRuntime implements SiteRuntime {
     String? typeId,
     Object? page,
     String? vodId,
+    String? playId,
     String? keyword,
     Map<String, String> filters = const {},
     String? flag,
@@ -210,6 +211,7 @@ class CatHttpSiteRuntime implements SiteRuntime {
       typeId: typeId,
       page: page,
       vodId: vodId,
+      playId: playId,
       keyword: keyword,
       filters: filters,
       flag: flag,
@@ -273,7 +275,10 @@ class CatHttpSiteRuntime implements SiteRuntime {
   }) => _call(
     site,
     CatHttpRoute.play,
-    vodId: vodId ?? episodeTarget,
+    // §9.4：猫源 `/play` 的 `id` 是剧集目标串（`episodeTarget`），与
+    // `SidecarRuntime` 及 CatPawOpen bundle 的 `/play` 契约一致。传纯 `vod_id`
+    // 会让 jinpai/muou/huban 等子站返回空 `url`（实测缺陷，见 docs）。
+    playId: episodeTarget,
     flag: flag,
   );
 }

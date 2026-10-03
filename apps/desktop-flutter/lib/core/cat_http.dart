@@ -140,6 +140,7 @@ class CatHttpRequestBuilder {
     String? typeId,
     Object? page,
     String? vodId,
+    String? playId,
     String? keyword,
     Map<String, String> filters = const {},
     String? flag,
@@ -166,8 +167,12 @@ class CatHttpRequestBuilder {
         body['page'] = pageValue;
         break;
       case CatHttpRoute.play:
+        // §9.4：`/play` 的 `id` 是**剧集目标串**（`vod_play_url` 里该集的值，
+        // 猫源形如 URL 编码 JSON `%7B%22vodId%22...%7D`），不是纯 `vod_id`。
+        // 实测：把数字 `vod_id` 当 `id` 传给 jinpai/muou/huban 等猫源子站会返回
+        // 空 `url`，而传剧集目标串能拿到真实 m3u8。故优先用 [playId]。
         body['flag'] = flag ?? '';
-        body['id'] = vodId ?? '';
+        body['id'] = playId ?? vodId ?? '';
         break;
       default:
         throw SpiderError(
