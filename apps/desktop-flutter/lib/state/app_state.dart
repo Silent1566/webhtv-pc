@@ -396,7 +396,24 @@ class AppState extends ChangeNotifier {
       ),
       database: _database,
     );
+    // 选中站点必须属于当前配置：`??=` 会在导入新配置时保留上一个配置的站点
+    // （实测：导入猫源后仍选中旧配置的 `csp_PianDan`，首页直接 siteUnsupported，
+    // 用户看到「一个站点都加载不出数据」）。因此按 key 校验归属，不属于当前配置
+    // 的选中项一律作废，退回当前配置的默认站点。
+    final selected = _selectedSite;
+    if (selected != null && !_configContainsSite(config, selected)) {
+      _selectedSite = null;
+    }
     _selectedSite ??= config.defaultSite();
+  }
+
+  /// 当前配置里是否存在同一个站点（按 key 比对；key 为空时按 name）。
+  static bool _configContainsSite(AppConfig config, Site site) {
+    for (final candidate in config.sites) {
+      if (candidate.key.isNotEmpty && candidate.key == site.key) return true;
+      if (candidate.key.isEmpty && candidate.name == site.name) return true;
+    }
+    return false;
   }
 
   /// 若保存的配置来源是猫源 bundle，则按原始地址重新拉起本机 Node 并取回新端口配置。
@@ -474,7 +491,22 @@ class AppState extends ChangeNotifier {
       _importDiagnosticsSummary = imported.diagnostics.isEmpty
           ? null
           : imported.diagnostics.join('；');
+      // 选中站点必须属于新配置（§7.4.1 导入即切换）：`_attachSiteService` 会按 key
+      // 校验归属，不属于当前配置的选中项退回新配置的默认站点。
+      //
+      // 注意不能无条件置空：用户重新导入**同一份**配置（刷新）时应留在原站点；
+      // 也不能继续用 `??=`：实测导入猫源后仍选中旧配置的 `csp_PianDan`，首页直接
+      // siteUnsupported，用户看到「一个站点都加载不出数据」。
+      final previousSiteKey = _selectedSite?.key;
       _attachSiteService();
+      // 浏览结果绑定在选中站点上：站点换了就必须丢弃，否则拿旧站点列表渲染新配置。
+      if (_selectedSite?.key != previousSiteKey) {
+        _selectedTypeId = null;
+        _homeResult = null;
+        _categoryResult = null;
+        _detailResult = null;
+        _activeSearch = null;
+      }
 
       final name =
           displayName ?? config.name ?? source.displayName;

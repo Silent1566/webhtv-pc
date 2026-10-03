@@ -145,6 +145,10 @@ class _VodGrid extends StatelessWidget {
         ? state.homeResult
         : state.categoryResult;
     final vods = result?.list ?? const <Vod>[];
+    // 猫源/部分站点首页只返回分类（`class` 非空）而 `list` 为空，需要用户先点分类。
+    // 直接显示「没有内容」会把正常站点误报成空站（实测 126 站点里 40 个如此），
+    // 因此按“有无分类”区分两种空态文案。
+    final hasClasses = result?.classes.isNotEmpty ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -169,10 +173,16 @@ class _VodGrid extends StatelessWidget {
           child: state.contentPhase == LoadPhase.loading && vods.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : vods.isEmpty
-                  ? const _EmptyHint(
-                      title: '没有内容',
-                      message: '该分类返回空列表。若站点不可用，请切换站点或更新配置。',
-                    )
+                  ? (hasClasses
+                      ? const _EmptyHint(
+                          title: '请选择左侧分类',
+                          message: '该站点首页只返回分类列表（未提供推荐内容）。'
+                              '点左侧任一分类即可加载影片；若分类也为空，再切换站点或更新配置。',
+                        )
+                      : const _EmptyHint(
+                          title: '没有内容',
+                          message: '该分类返回空列表。若站点不可用，请切换站点或更新配置。',
+                        ))
                   : GridView.builder(
                       padding: const EdgeInsets.all(16),
                       gridDelegate:

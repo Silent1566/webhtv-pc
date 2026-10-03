@@ -282,8 +282,14 @@ class CatNodeRuntime {
     await Directory(data).create(recursive: true);
     final portFile = p.join(bundleDir, 'port');
 
-    // 宿主占位服务：bundle 拿到端口后只用于构造 /msg 回调 URL，多数包不真正 POST；
-    // 我们并不实现消息语义，启动一个 404 服务只为不让端口悬空。
+    // 宿主占位服务：bundle 拿到端口后用 `catDartServerPort()` 构造 `/msg` 回调，
+    // 用来读写它自己的 profile（选线路/设置等，见 bundle 内 `saveProfile`/`queryProfile`）。
+    //
+    // 这里必须**正常应答 HTTP**：早先的实现是接受连接就 `socket.destroy()`，
+    // bundle 每次 `POST /msg` 都拿到 `read ECONNRESET`，日志里刷错误、且 profile
+    // 读写必然落空（实测 5908b22c 包每导入配置就报两次）。回 200 + `{}` 即可：
+    // bundle 对空对象会跳过应用（`Object.keys(c).length > 0` 才写入），语义上等同
+    // 「宿主没存过任何 profile」，但不再制造连接错误。
     final backing = await _startBacking();
 
     final script = _bootSource(
@@ -298,17 +304,62 @@ class CatNodeRuntime {
     return bootPath;
   }
 
-  /// 启动宿主占位服务，返回其端口。
+  /// 启动宿主 `/msg` 占位服务，返回其端口。
+  ///
+  /// 这是一个最小 HTTP 服务：读弃请求体，回 `200 {"success":true}`。
+  /// 不解析 bundle 的消息语义（那是 bundle 自己的 profile 机制），但**不能掐断连接**
+  /// ——掐断会让 bundle 端抛 `read ECONNRESET`（见 [_writeBoot] 注释）。
   Future<int> _startBacking() async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
     _backingSub = server.listen((socket) async {
       try {
-        socket.destroy();
-      } catch (_) {}
+        // 读到请求头结束（`\r\n\r\n`）就足够判断这是一个完整请求，
+        // 再连同可能跟随的 body 一起丢弃，避免为 bundle 的消息写完整 HTTP 解析。
+        final done = Completer<void>();
+        socket.listen(
+          (chunk) {
+            if (!done.isCompleted && _containsHeaderEnd(chunk)) done.complete();
+          },
+          onDone: () {
+            if (!done.isCompleted) done.complete();
+          },
+          onError: (_) {
+            if (!done.isCompleted) done.complete();
+          },
+          cancelOnError: true,
+        );
+        await done.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {},
+        );
+        const body = '{"success":true}';
+        socket.write(
+          'HTTP/1.1 200 OK\r\n'
+          'Content-Type: application/json; charset=utf-8\r\n'
+          'Content-Length: ${body.length}\r\n'
+          'Connection: close\r\n'
+          '\r\n'
+          '$body',
+        );
+        await socket.flush();
+        await socket.close();
+      } catch (_) {
+        // bundle 随时可能断开；占位服务的失败不影响猫源服务本身。
+      }
     });
     _backingServer = server;
     return port;
+  }
+
+  /// 收到的分片里是否已包含 HTTP 头结束标记。
+  static bool _containsHeaderEnd(List<int> chunk) {
+    for (var i = 0; i + 3 < chunk.length; i++) {
+      if (chunk[i] == 13 && chunk[i + 1] == 10 && chunk[i + 2] == 13 && chunk[i + 3] == 10) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// boot.js 源码（严格对应 NodeBoot.java 的 source()）。
