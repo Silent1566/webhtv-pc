@@ -355,7 +355,9 @@ def main() -> int:
             vod_id = items[0].get("vod_id")
             status, text = http_post(f"{target['api']}/detail", {"id": vod_id})
             detail = json.loads(text or "{}")
-            play_flags = (detail.get("list") or [{}])[0].get("vod_play_from") or ""
+            vod = (detail.get("list") or [{}])[0]
+            play_flags = vod.get("vod_play_from") or ""
+            play_urls = vod.get("vod_play_url") or ""
             log(
                 f"{'OK' if status == 200 and play_flags else 'FAIL'} "
                 f"detail id={vod_id} HTTP={status} flags={play_flags}"
@@ -364,13 +366,20 @@ def main() -> int:
                 failures.append("detail")
 
             first_flag = play_flags.split("$$$")[0] if play_flags else ""
+            # §9.4：`/play` 的 `id` 是剧集目标串（`vod_play_url` 里该集 `$` 之后的值），
+            # 不是纯 `vod_id`。宿主 `CatHttpSiteRuntime.play` 即按此传参；
+            # 用纯 `vod_id` 会让 jinpai/muou/huban 等子站返回空 `url`（实测缺陷）。
+            first_line = play_urls.split("$$$")[0] if play_urls else ""
+            first_episode = first_line.split("$")[-1] if first_line else ""
+            play_id = first_episode or vod_id
             status, text = http_post(
-                f"{target['api']}/play", {"flag": first_flag, "id": vod_id}
+                f"{target['api']}/play", {"flag": first_flag, "id": play_id}
             )
             play_url = _json_field(text, "url") or ""
             log(
                 f"{'OK' if status == 200 and play_url else 'FAIL'} "
-                f"play flag={first_flag} HTTP={status} url={(play_url or '')[:80]}"
+                f"play flag={first_flag} idKind={'episodeTarget' if first_episode else 'vodId'} "
+                f"HTTP={status} url={(play_url or '')[:80]}"
             )
             if not play_url:
                 failures.append("play")

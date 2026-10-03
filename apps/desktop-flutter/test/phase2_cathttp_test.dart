@@ -10,6 +10,8 @@
 /// 的样本族路由 `/cathttp/<family>/<route>` 提供，保证 fixture 与预期结果不分叉（§19）。
 library;
 
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/cat_http.dart';
 import 'package:webhtv_pc/core/http_api.dart';
@@ -372,6 +374,62 @@ void main() {
         isFalse,
         reason: '.js 必须判为独立运行时，而不是 cat http',
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // `/play` 的 `id` 语义（§9.4）：必须是剧集目标串，不是纯 vod_id
+  // ---------------------------------------------------------------------------
+  group('play 请求体的 id 语义（§9.4）', () {
+    test('builder：playId 优先，vodId 仅作回退', () {
+      final builder = CatHttpRequestBuilder(api: 'http://h:1/spider');
+      // 剧集目标串（猫源形如 URL 编码 JSON）必须原样进入 `id`。
+      expect(
+        builder.build(
+          CatHttpRoute.play,
+          playId: '%7B%22vodId%22%3A%221%22%7D',
+          flag: 'f',
+        ).body,
+        {'flag': 'f', 'id': '%7B%22vodId%22%3A%221%22%7D'},
+      );
+      // 未传 playId 时保持向后兼容（旧调用点仍按 vodId 发出）。
+      expect(
+        builder.build(CatHttpRoute.play, vodId: 'v', flag: 'f').body,
+        {'flag': 'f', 'id': 'v'},
+      );
+    });
+
+    test('运行时：/play 实际发出的 id 是 episodeTarget 而不是纯 vod_id', () async {
+      // 模拟宿主真实调用路径：detail 得到剧集目标串后，带 vodId 调 play。
+      // 曾经 `vodId ?? episodeTarget` 会把数字 vodId 当 `id` 发出，
+      // 使 jinpai/muou/huban 等猫源子站返回空 url（实测缺陷）。
+      final runtime = CatHttpSiteRuntime(client: client, siteKey: 'cat-play');
+      final site = Site(
+        key: 'cat-play',
+        name: 'play 样本',
+        type: SiteType.spider,
+        api: apiOf('ok'),
+      );
+      const episodeTarget =
+          '%7B%22vodId%22%3A%22147243%22%2C%22nid%22%3A%221321769%22%7D';
+      server.captured.clear();
+      await runtime.play(
+        site,
+        episodeTarget: episodeTarget,
+        flag: '金牌线路',
+        vodId: '147243',
+      );
+      final request = server.captured.lastWhere(
+        (item) => item.path.endsWith('/play'),
+      );
+      final body = jsonDecode(request.body) as Map<String, Object?>;
+      expect(body['id'], episodeTarget);
+      expect(
+        body['id'],
+        isNot('147243'),
+        reason: '传纯 vod_id 会让部分猫源子站返回空 url',
+      );
+      expect(body['flag'], '金牌线路');
     });
   });
 }

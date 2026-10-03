@@ -519,8 +519,14 @@ class TestFixtureServer {
   }
 
   Future<String> _readBody(HttpRequest request) async {
-    // 表单已在 _readForm 中读取；这里只处理其他 body。
-    return '';
+    final contentType = request.headers.contentType;
+    // 表单已被 _readForm 消费，不能重复读取。
+    if (contentType != null &&
+        contentType.mimeType == 'application/x-www-form-urlencoded') {
+      return '';
+    }
+    // cat http（§9.4）等使用 JSON body；保留原文供契约测试断言实际发出的字段。
+    return utf8.decoder.bind(request).join();
   }
 
   /// 返回 fixture 文件，并把其中的 18080 端口替换为实际测试端口。

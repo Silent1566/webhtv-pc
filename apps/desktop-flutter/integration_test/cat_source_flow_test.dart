@@ -22,9 +22,11 @@ import 'package:integration_test/integration_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
+import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/spider_process.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/state/search_state.dart';
 
 void evidence(String message) => debugPrint('PHASE3-EVIDENCE $message');
 
@@ -112,5 +114,62 @@ void main() {
     }
     expect(searched, greaterThan(0), reason: '猫源搜索应能命中结果');
     evidence('cat-search-total items=$searched');
+
+    // 4) 详情 → 播放：从搜索命中的第一个条目走真实 detail 与 play，
+    //    验证宿主把 `episode.url`（剧集目标串）作为 `/play` 的 `id`。
+    //    此前本用例只跑到搜索，标题却声称覆盖 play，使 `vodId ?? episodeTarget`
+    //    的传参缺陷躲过了 Windows 验收证据（已由单测与 verify_cat_source.py 锁定）。
+    Vod? picked;
+    for (final entry in state.activeSearch?.results ?? const <SiteSearchEntry>[]) {
+      final first = entry.result?.list.isNotEmpty == true
+          ? entry.result!.list.first
+          : null;
+      if (first != null) {
+        picked = first;
+        evidence('cat-detail-pick site=${entry.siteKey} vod=${first.vodId}');
+        break;
+      }
+    }
+    expect(picked, isNotNull, reason: '搜索命中后应能取到可进详情的条目');
+
+    // `loadDetail` 依赖当前选中站点：切到该条目所属站点再拉详情。
+    final pickedSite = available
+        .firstWhere((i) => i.site.key == state.activeSearch!.results
+            .firstWhere((e) => e.result?.list.isNotEmpty == true)
+            .siteKey)
+        .site;
+    await state.selectSite(pickedSite);
+    await state.loadDetail(picked!);
+    final detailVod = state.detailResult?.list.isNotEmpty == true
+        ? state.detailResult!.list.first
+        : picked;
+    final lines = state.playLinesOf(detailVod);
+    evidence(
+      'cat-detail lines=${lines.length} '
+      'flags=${lines.map((l) => l.flag).join("|")}',
+    );
+    expect(lines, isNotEmpty, reason: '猫源详情应至少有一条播放线路');
+    final line = lines.first;
+    expect(line.episodes, isNotEmpty);
+    final episode = line.episodes.first;
+
+    // 4a) 生产路径：resolvePlayback 带 `vodId`（宿主真实调用形态）。
+    //     修复前会把数字 `vodId` 当作 `/play` 的 `id` → 部分猫源子站返回空 url。
+    final decision = await state.resolvePlayback(
+      episodeTarget: episode.url,
+      flag: line.flag,
+      vodId: detailVod.vodId,
+    );
+    evidence(
+      'cat-play flag=${line.flag} url=${(decision?.url ?? "").split("?").first}',
+    );
+    expect(decision, isNotNull, reason: state.lastError?.message);
+    expect(
+      decision!.url,
+      isNotNull,
+      reason: '猫源 /play 必须回传真实播放地址（传纯 vod_id 会返回空 url）',
+    );
+    expect(decision.url, isNotEmpty);
+    evidence('cat-play-ok kind=${decision.action.name}');
   }, timeout: const Timeout(Duration(minutes: 5)));
 }
