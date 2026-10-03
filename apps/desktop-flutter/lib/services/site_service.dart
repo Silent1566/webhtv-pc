@@ -254,10 +254,24 @@ class SiteService {
         flag: flag,
         vodId: vodId,
       );
+      // `type=3` 的剧集目标是**播放入口的输入**（网盘分享页等），不是媒体地址。
+      // 播放入口没给出地址时**不得回退到 episodeTarget**——那会把分享页 HTML
+      // 交给播放器（`Failed to recognize file format`）。实测上游对部分网盘线路
+      // （如夸克）就是返回 `{urls:[], header:{}}`，属**上游没有地址**，应如实报错
+      // 以便 UI 引导换源，而不是伪装成可播放。
+      // 普通 HTTP API 站点（`type=0/1/2/4`）的 `playUrl` 前缀回退语义不受影响。
+      final playTarget = playResult.playUrl;
+      if (playTarget == null && mustCallPlay) {
+        throw AppError(
+          AppErrorKind.playbackUrlMissing,
+          '播放入口未返回播放地址',
+          detail: '站点=${site.key} 线路=${flag ?? ""} 目标=${redactUrl(episodeTarget)}',
+        );
+      }
       var decision = PlaybackResolver.decide(
         PlaybackResolutionInput(
           site: site,
-          episodeTarget: playResult.playUrl ?? episodeTarget,
+          episodeTarget: playTarget ?? episodeTarget,
           flag: flag,
           parse: playResult.parse,
           jx: playResult.jx,

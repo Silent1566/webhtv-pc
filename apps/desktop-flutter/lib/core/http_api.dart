@@ -404,13 +404,18 @@ abstract final class HttpApiResponseParser {
     );
   }
 
-  /// 从播放结果的 `url`/`urls`/`playUrl` 字段提取第一个可播放地址。
+  /// 从播放结果的 `url`/`playUrl` 字段提取第一个可播放地址。
   ///
   /// 猫源 bundle 的播放入口（`/play`）会返回**多码率列表**，`url` 是
   /// 「名称/地址」交替的平铺数组（对齐 CatVod 生态与参考实现的 `UrlAdapter`）：
   ///   ["RAW", "https://…", "super", "https://…", "high", "https://…"]
   /// 也兼容参考实现 Result 的 `url` 对象形态 `{"values":[{n,v},…]}` 与
   /// 数组对象形态 `[{name,url},…]`。取**第一个**作为可播放地址（RAW 优先）。
+  ///
+  /// 注意：顶层 `urls`（复数）**不是**播放入口字段——它是配置仓库键（§7.4.2），
+  /// 猫源 bundle 只在无法产出地址时回 `{urls:[], header:{}}`，永不填充。
+  /// 因此这里不从 `urls` 取值，取不到就交给调用方按「上游没给地址」处理
+  /// （`site_service.resolvePlayback` 对 `type=3` 会明确报错，不回退到分享页）。
   static String? _playUrlFrom(Map<String, Object?> map) {
     final url = map['url'];
     if (url is List) {
