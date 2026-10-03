@@ -777,6 +777,55 @@ void main() {
       expect(decision.value.url, isNot(episodeTarget));
     });
 
+    test('§9.4 type=3 的 /play 没给地址时如实报错，不回退到网盘分享页', () async {
+      // 实测上游行为：部分网盘线路（如夸克）的 `/play` 就是不返回地址——
+      // 猫源 bundle 回 {urls:[], header:{}}（playUrl 为空）。
+      // 此时**不得**回退到 `episodeTarget`：那是网盘分享页，mpv 会当 HTML 流而
+      // 报 `Failed to recognize file format`（比明确报错更难排查）。
+      final catClient = CatHttpClient();
+      final catRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        catHttpClient: catClient,
+      );
+      addTearDown(catRouter.dispose);
+      final catConfig = AppConfig(
+        name: '无地址形态',
+        sites: [
+          Site(
+            key: 'cat-nourl',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/nourl/spider/demo',
+          ),
+        ],
+      );
+      final catService = SiteService(
+        appConfig: catConfig,
+        router: catRouter,
+        database: database,
+      );
+
+      const episodeTarget =
+          'https://pan.quark.cn/s/47243bc44841|84ade034|eyJzaWQiOiJhYmMifQ==';
+      server.captured.clear();
+      final error = await _capture(
+        () => catService.resolvePlayback(
+          site: catConfig.sites.first,
+          episodeTarget: episodeTarget,
+          flag: '夸克网盘',
+          vodId: '147243',
+        ),
+      );
+      expect(error.kind, AppErrorKind.playbackUrlMissing);
+      // 确认走的是播放入口（而不是靠 episodeTarget 恒成功），且没有把分享页当结果。
+      expect(
+        server.captured.where((item) => item.path.endsWith('/play')),
+        isNotEmpty,
+      );
+      expect(error.detail, contains('cat-nourl'));
+    });
+
     test('§9.4 type=3 运行时不可用时不伪装成直链成功', () async {
       // 反向对照：没有 cat http 客户端时，`type=3` 必须报「运行时不可用」，
       // 而不是把剧集目标当直链返回（旧行为会给播放器一个网盘分享页 URL）。

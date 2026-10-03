@@ -314,7 +314,7 @@ class TestFixtureServer {
   ///
   /// 支持两种寻址：
   /// - 扁平路由 `/cathttp/<route>`（下方 switch，供单点行为断言）；
-  /// - 样本族路由 `/cathttp/<family>/<route>`，`family ∈ {ok,biz,http,unsupported}`，
+  /// - 样本族路由 `/cathttp/<family>/<route>`，`family ∈ {ok,biz,http,unsupported,envelope,page,nourl}`，
   ///   用于「≥3 个可重复样本各走完整 home/search/play」的门禁（§9.4）。
   ///   `<route>` 允许带前缀段（真实猫源 `api` 形如 `/spider/<name>/<id>`，
   ///   路由追加后是多段路径），按**末段**判定动作。
@@ -324,7 +324,7 @@ class TestFixtureServer {
         .replaceFirst(RegExp(r'/$'), '');
 
     final family = RegExp(
-      r'^/(ok|biz|http|unsupported|envelope|page)/(.+)$',
+      r'^/(ok|biz|http|unsupported|envelope|page|nourl)/(.+)$',
     ).firstMatch(route);
     if (family != null) {
       await _serveCatHttpFamily(
@@ -442,6 +442,11 @@ class TestFixtureServer {
       case 'page':
         // page 兜底回显：服务端能看到客户端实际发出的 page。
         await _fixtureJson(request, 'cathttp/page-echo.json');
+      case 'nourl':
+        // 播放入口**不给出地址**（实测夸克线路的上游行为）：
+        // 猫源 bundle 对 `urls` 为空的上游回 {urls:[], header:{}}，
+        // 即 playUrl 为空。宿主必须如实报错，不得回退到网盘分享页。
+        await _json(request, {'urls': <Object>[], 'header': <String, String>{}});
       case 'http':
         request.response.statusCode = HttpStatus.badGateway;
         await _json(request, {'status': 502, 'msg': '上游网关错误'});
