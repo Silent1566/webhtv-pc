@@ -782,7 +782,8 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 - `page` 统一为整数；空值或非法值按 1 处理，但应记录诊断。
 - `/play` 的 `id` 是**剧集目标串**，即 `/detail` 返回的 `vod_play_url` 中该集 `$` 之后的值（猫源形如 URL 编码 JSON `%7B%22vodId%22...%7D`）；`flag` 是该集所属线路（`vod_play_from` 的对应段）。**不得**把纯 `vod_id` 当 `id` 传——实测猫源部分子站（如 jinpai/muou/huban）只会返回空 `url`（§9.4 契约，PC 端 `CatHttpSiteRuntime.play` 与 sidecar 运行时一致）。
 - **该目标必须先送 `/play`，不得被“直链初判”短路**（§8.1 分发顺序 4）。剧集目标是播放入口的输入，不是媒体地址；网盘线路裸 scheme 为 `https` 会被误判成直链，导致分享页 HTML 被当流（`Failed to recognize file format`）。
-- 播放入口返回的多码率列表形态极宽松：`url` 可为**「名称/地址」交替的平铺数组**（对齐 CatVod `UrlAdapter`，如 `["RAW","https://…","super","https://…"]`，网盘线路实测即此形态），也可为 `{ "values": [{"n":"RAW","v":"…"}] }` 对象形态。宿主取**第一个**可播放地址，`RAW` 优先；纯字符串 `url`/`playUrl` 保持兼容。
+- **播放入口未返回地址时必须如实报错，不得回退到剧集目标。** 上游对部分网盘线路（如夸克）就是返回空地址（bundle 回 `{urls:[], header:{}}`），回退会把分享页 HTML 交给播放器，且比直接报错更难排查。宿主抛 `playbackUrlMissing`，UI 据此引导换源。
+- 播放入口返回的多码率列表形态极宽松：`url` 可为**「名称/地址」交替的平铺数组**（对齐 CatVod `UrlAdapter`，如 `["RAW","https://…","super","https://…"]`，网盘线路实测即此形态），也可为 `{ "values": [{"n":"RAW","v":"…"}] }` 对象形态。宿主取**第一个**可播放地址，`RAW` 优先；纯字符串 `url`/`playUrl` 保持兼容。顶层 `urls`（复数）不是播放入口字段（它是配置仓库键，§7.4.2），不参与地址提取。
 - 未实现的 `/live`、`/proxy`、`/action` 不伪装成功。HTTP 客户端应把 404/501 或明确的业务错误映射为 `SPIDER_UNSUPPORTED`，不得把它转换为空列表。
 
 当前 WebHTV Android 客户端只覆盖上述 HTTP 子集，不包含 live、proxy、action。PC 端如需扩展，必须新开 ABI 版本或 capability，不能悄悄改变 `tvbox-http-v1` 语义。

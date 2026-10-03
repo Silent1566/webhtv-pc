@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **452** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 42),
+`flutter test` 共 **453** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -222,8 +222,8 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
 - `PHASE3-EVIDENCE cat-import sites=126`
 - `PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)`
-- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=419`(单站点数据波动,历史上曾 609/426)
-- `PHASE3-EVIDENCE cat-search-total items=419`
+- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=423`(单站点数据波动,历史上曾 609/426/419)
+- `PHASE3-EVIDENCE cat-search-total items=423`
 - `PHASE3-EVIDENCE cat-detail-pick site=nodejs_omnibox_木偶 vod=/index.php/vod/detail/id/8346.html`
 - `PHASE3-EVIDENCE cat-detail lines=1 flags=百度网盘`
 - `PHASE3-EVIDENCE cat-play flag=百度网盘 url=http://127.0.0.1:<proxy>/p/<base64>/aHR0cHM6Ly9kLnBjcy5iYWlkdS5jb20vZmlsZS8…`
@@ -477,6 +477,38 @@ SiteType.spider` 跳过直链初判,一律先向播放入口取真实地址;`typ
 > 落 404。已改为**按末段**判定动作(`_catHttpAction`,并保留 `/home-envelope`
 > 等多段动作),使测试可直接用真实 `api` 形态。
 
+**m) 网盘线路的三种响应形态与「上游无地址」的如实报错。** 猫源 `/play` 对网盘线路的
+上游形态实测有三种,宿主必须分别处理(修复见 §4 缺陷 16、17):
+
+| 线路 | 播放入口响应 | 宿主行为 |
+| --- | --- | --- |
+| 百度网盘 | `url: ["RAW", "https://d.pcs.baidu.com/file/…"]` + `header:{"User-Agent":"netdisk;12.24.6;"}` | ✅ 取数组首个地址(实测为经本地代理改写的直链) |
+| UC 网盘 | `url: ["RAW","…m3u8","super","…","high","…"]`(标签/地址交替) | ✅ 取 RAW |
+| **夸克网盘** | `{urls: [], header: {}}`——**上游就是不返回地址** | ⢕ 如实报 `playbackUrlMissing`(不回退分享页) |
+
+夸克返回空数组是**上游服务端行为**,不是本仓库缺陷:直接向上游(绕过 bundle)查
+`/play` 同样是空 `urls`,参考项目播放夸克线路同样拿不到地址。bundle 的
+`Ume`(play 处理器)只在 `s.urls && s.urls.length > 0` 时把
+`[name, L(url, port), …]` 作为 `url` 数组返回,否则 `return {urls:[],header:{}}`;
+`L(e,t)` 仅把硬编码端口 `5575` 重写为 bundle 实际端口,不是代理前缀。
+**但宿主此前的 `playResult.playUrl ?? episodeTarget` 会把「上游无地址」静默退化成
+剧集目标(网盘分享页)** → mpv 拿到 HTML → 又回到 `Failed to recognize file format`,
+且比直接报错更难排查(用户看到的仍是一个 http(s) 地址)。已改为:`type=3` 下播放入口
+未返回地址时招 `playbackUrlMissing`(带站点/线路/目标详情),便于 UI 引导换源;
+`type=0/1/2/4` 的 `playUrl` 前缀回退语义不受影响。另修正 `_playUrlFrom`
+的 docstring——顶层 `urls`(复数)是**配置仓库键**(§7.4.2),不是播放入口字段,
+猫源 bundle 永不填充它,因此不从 `urls` 取值(旧注释声称支持而不支持)。
+由 `test/config_and_site_test.dart`「§9.4 type=3 的 /play 没给地址时如实报错,
+不回退到网盘分享页」(fixture 新增 `nourl` 样本族模拟夸克形态)锁定;反向验证:
+去掉该报错分支后用例失败(旧行为静默返回分享页 URL),证实有判别力。
+
+> 用户曾问「网盘类全部播放失败是不是没透传请求头？」——**不是请求头问题**。日志里
+> 失败的 URL 是**网盘分享页**(`pan.baidu.com/s/…`、`pan.quark.cn/s/…`、
+> `drive.uc.cn/s/…`),它们本身就是 HTML 页面、不是媒体流,请求头再多也没用。真正
+> 原因是上面两处代码缺陷(直链短路 + 数组形态未解析);修复后百度/UC 均能拿到真实
+> 直链(百度直链确实还需要 `User-Agent: netdisk;12.24.6;`,由 `/play` 的 `header` 携带,
+> 宿主已透传)。
+>
 > 附注:该 `type=3` 短路缺陷的记录同时见 §4 缺陷 16 与设计文档 §8.1 分发顺序 4。
 
 **k) `index.config.js` 的 md5 不能硬校验,只当版本标识;`index.js` 才严格校验。**
@@ -514,6 +546,20 @@ flag,id,…)`),从不做这种短路。修复:`resolvePlayback` 对 `site.type =
 另修 `TestFixtureServer`:cat http 样本族路由原先按**整段剩余路径**判定动作,而真实
 猫源 `api` 是多段路径(如 `/spider/omnibox_4KVM/3`),追加路由后落 404;已改为按**末段**
 判定(`_catHttpAction`,并保留 `/home-envelope` 等多段动作),使测试可直接用真实 `api` 形态。
+17. `lib/services/site_service.dart#resolvePlayback`:**「上游无地址」被静默退化成网盘分享页**——
+修复 16 后 `type=3` 会真实进 `/play`,但代码写的是
+`episodeTarget: playResult.playUrl ?? episodeTarget`。当播放入口**没有返回地址**时
+(实测夸克线路:上游 `/play` 就是 `urls:[]` 空,与本仓库无关),该回退把
+`episodeTarget`(网盘分享页)当结果返回。日志里表现为「又回到把 HTML 交给 mpv」
+的 `Failed to recognize file format`,且比直接报错更难排查——用户看到的仍是一个
+http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerContent`)不依赖这种回退。
+修复:`type=3` 下未拿到地址时招 `AppError(playbackUrlMissing, '播放入口未返回播放地址')`,
+带站点/线路/目标详情,便于 UI 引导换源;`type=0/1/2/4` 的 `playUrl` 前缀回退语义不变
+(它们本就没走「无条件调入口」分支)。同时修正 `_playUrlFrom` 的 docstring——顶层
+`urls`(复数)是配置仓库键(§7.4.2)而非播放入口字段,猫源 bundle 永不填充
+(旧注释声称支持却不支持,属误导)。由 `test/config_and_site_test.dart`「§9.4 type=3
+的 /play 没给地址时如实报错,不回退到网盘分享页」锁定,fixture 新增 `nourl` 样本族
+模拟夸克形态;反向验证:去掉报错分支后用例失败(静默返回分享页 URL),证实有判别力。
 
 **k) `index.config.js` 的 md5 不能硬校验,只当版本标识;`index.js` 才严格校验。**
 猫源生态里服务端的 `index.config.js.md5` 经常与内容不符(实测 omnibox 源:
