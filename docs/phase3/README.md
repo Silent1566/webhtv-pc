@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **441** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 33),
+`flutter test` 共 **445** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 37),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -395,6 +395,15 @@ curl 200,抓包确认两者 base64 不同)。修复:`protocol.dart` 新增
 加速镜像的 302 由 `CatBundle._openGet` 自己跟随(**跨主机时丢弃凭据**,
 避免把账号密码泄给镜像站),`ghfast.top` 这类地址因此可用。
 
+**i) 宿主 `catDartServerPort()` 对应的 `/msg` 服务必须真实应答,不能只 bind 端口。**
+bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `messageToDart`
+读写自己的 profile(`saveProfile`/`queryProfile`)。早先只 `ServerSocket.bind(0)` 后
+对每个连接 `socket.destroy()`(以为「bundle 多数不真正 POST,只为端口不悬空」),
+结果 bundle 每次 POST 都 `read ECONNRESET`(被 `try/catch` 吞掉返回 `null`,
+不崩但 profile 永远读不回来),Node 日志刷错误。已改为**最小 HTTP 服务**:
+读到请求头结束(`\r\n\r\n`)即回 `200 {"success":true}` 并关闭连接。
+真实 `F:\temp\catpkg` 实测 `POST /msg` = `HTTP 200 {"success":true}`。
+
 > 附注:用户实测的四个源中有一个(`.../catvod/index.js.md5`)其服务端
 > `index.config.js.md5` 声明值与实际内容不符(实测 8809 字节,md5
 > `b95c…` ≠ 声明 `497a…`)。这是**服务端数据不一致**,参考实现同样硬校验并报错,
@@ -456,6 +465,29 @@ curl 200,抓包确认两者 base64 不同)。修复:`protocol.dart` 新增
     302(跨主机丢弃凭据),使 `ghfast.top` 一类加速镜像可用。由 `cat_source_test.dart`
     「userinfo 凭据」与 `cat_bundle_test.dart`「userinfo 凭据被百分号解码后以
     Basic 头发出」锁定。
+11. `lib/services/cat_runtime.dart#_startBacking`:**宿主 `/msg` 占位服务掐断连接**——
+    早先实现接受 socket 后直接 `socket.destroy()`,只求「端口不悬空」。但 CatVod
+    bundle 用 `catDartServerPort()` 构造 `http://127.0.0.1:<port>/msg` 回调,靠它
+    读写自己的 profile(`messageToDart` → `saveProfile`/`queryProfile`);连接被掐
+    断后 bundle 每次 POST 都拿到 `read ECONNRESET`(`try/catch` 吞掉返回 `null`,
+    所以不崩,只是 profile 永远拿不回来),Node 日志刷错误。实测 5908b22c 包每导入
+    一次配置就报两次。已改为**正常应答的最小 HTTP 服务**:读到请求头结束即回
+    `200 {"success":true}`;`Object.keys(c).length > 0` 才应用 profile,空对象
+    语义等同「宿主没存过任何 profile」。真实 F:\temp\catpkg 实测 `POST /msg`
+    返回 `HTTP 200 {"success":true}`(修复前 ECONNRESET)。
+12. `lib/state/app_state.dart#_attachSiteService`:**导入新配置后选中站点串到旧配置**
+    ——原用 `_selectedSite ??= config.defaultSite()`,只在选中为 null 时补默认值,于是
+    导入新配置仍选中上一个配置的站点。实测导入猫源(57 个 catHttp 站点)后仍选中旧
+    配置的 `csp_PianDan`(JVM Spider,Phase 3 未实现),首页直接 `siteUnsupported`,
+    用户看到「一个站点都加载不出数据」。已改为按 key 校验选中站点是否属于当前配置
+    (不属于则退回新配置默认站点),并在站点变化时清掉上一个配置的首页/分类/详情/
+    搜索/选中分类结果(浏览结果绑定在选中站点上);重新导入**同一份**配置(站点未变)
+    时保留选中与结果。由 `test/phase3_cat_switch_test.dart` 四条不变量锁定。
+13. `lib/ui/browse_pages.dart#_VodGrid`:**「有分类、空列表」被误报成空站**——猫源/
+    部分站点首页只返回分类(`class` 非空)而 `list` 为空,需用户先点分类。原空态
+    无条件显示「没有内容」,把正常站点误报成空站(实测 126 站点里 40 个如此)。已按
+    「有无分类」区分两种空态文案:有分类提示「请选择左侧分类」,无分类才提示
+    「没有内容」。
 
 ## 5. 风险与开放问题
 
@@ -539,7 +571,14 @@ selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
    **重点缺陷修复**:`CatSource.isBundle` 原先只认 URL 形态,本地目录包被漏判导致
    `ConfigImportService` 走普通抓取路径失败(集成测试直接暴露,参考实现
    `NodeBundle.isLocal` 也检查本地包);已补齐本地目录/zip 探测并由
-   `cat_source_test.dart` 锁定。
+   `cat_source_test.dart` 锁定。另修复三处实测缺陷:①宿主 `/msg` 占位服务
+   接受连接就 `socket.destroy()`,bundle 每次 POST 拿 `read ECONNRESET`、profile
+   读写必落空——改为回 `200 {"success":true}` 的最小 HTTP 服务;②导入新配置后
+   仍选中上一个配置的站点(`_selectedSite ??= …`),实测导入猫源后仍选中旧配置的
+   `csp_PianDan`,首页直接 `siteUnsupported`——改为按 key 校验归属并在站点变化时
+   清掉旧浏览结果;③猫源首页「有分类、空列表」被空态文案误报成空站(126 站点里
+   40 个如此)——按「有无分类」区分两种文案。后两者由
+   `test/phase3_cat_switch_test.dart` 锁定。
 
 ## 6. 平台范围声明
 
