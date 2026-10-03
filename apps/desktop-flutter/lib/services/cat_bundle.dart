@@ -227,6 +227,7 @@ class CatBundle {
       );
       final preparedConfig = await _extractZipEntry(
         File(zipPath), 'index.config.js', File(p.join(staging, 'index.config.js')), expectedConfig,
+        strict: false,
       );
       // zip 形态保持硬校验（压缩包内容用户改不了，不符就是包损坏）。
       final key = 'local-zip:${preparedBundle.md5}:${preparedConfig.md5}';
@@ -272,7 +273,7 @@ class CatBundle {
           : await _download(bundleUrl(url), File(p.join(staging, 'index.js')), expectedBundle);
       final preparedConfig = cached[1]
           ? await _prepareFile(File(p.join(dir, 'index.config.js')), File(p.join(staging, 'index.config.js')))
-          : await _download(configUrl(url), File(p.join(staging, 'index.config.js')), expectedConfig);
+          : await _download(configUrl(url), File(p.join(staging, 'index.config.js')), expectedConfig, strict: false);
       return await _install(dir, preparedBundle, preparedConfig, key);
     } catch (error) {
       return CatBundleResult(bundleDir: dir, error: _message(error));
@@ -416,7 +417,12 @@ class CatBundle {
     }
   }
 
-  Future<_PreparedFile> _download(String url, File target, String expected) async {
+  Future<_PreparedFile> _download(
+    String url,
+    File target,
+    String expected, {
+    bool strict = true,
+  }) async {
     if (!isMd5(expected)) throw const _BundleException('bundle 校验值不可用');
     final response = await _openGet(url, downloadTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -424,10 +430,15 @@ class CatBundle {
       throw _BundleException('bundle 下载失败 HTTP ${response.statusCode}');
     }
     final actual = await _copyAndDigest(response, target, limit: maxEntryBytes);
-    if (actual.toLowerCase() != expected.toLowerCase()) {
+    // `index.js`（可执行主体）严格校验：不符绝不安装，避免跑坏包。
+    // `index.config.js`（站点列表）宽松处理：服务端常只把它当版本标识，
+    // 声明值可能与实际内容不一致（实测 omnibox 源声明 497a4a2f… 实际 b95c3742…），
+    // 参考实现也以实际下发内容为准。故 strict=false 时不因声明不符而失败，
+    // 仍以**声明值**作为缓存版本键（预期下一次还会拿到同一声明）。
+    if (strict && actual.toLowerCase() != expected.toLowerCase()) {
       throw const _BundleException('bundle 校验失败');
     }
-    return _PreparedFile(target: target, md5: actual);
+    return _PreparedFile(target: target, md5: strict ? actual : expected);
   }
 
   // ---------------------------------------------------------------------------
@@ -544,17 +555,20 @@ class CatBundle {
     File zip,
     String name,
     File target,
-    String expected,
-  ) async {
+    String expected, {
+    bool strict = true,
+  }) async {
     final bytes = await _readZipBytes(zip, name);
     if (bytes == null) throw _BundleException('本地包缺少 $name');
     if (bytes.length > maxEntryBytes) throw _BundleException('本地包 $name 超过大小限制');
     await target.writeAsBytes(bytes, flush: true);
     final actual = md5.convert(bytes).toString();
-    if (isMd5(expected) && expected.toLowerCase() != actual.toLowerCase()) {
+    // bundle（index.js）严格校验；config（index.config.js）与远端同语义：
+    // 标记只作版本标识，声明值与内容不符不阻断（用户改 config 换源是合法用法）。
+    if (strict && isMd5(expected) && expected.toLowerCase() != actual.toLowerCase()) {
       throw _BundleException('本地包 $name 校验失败');
     }
-    return _PreparedFile(target: target, md5: actual);
+    return _PreparedFile(target: target, md5: strict ? actual : (isMd5(expected) ? expected : actual));
   }
 
   Future<String> _copyAndDigest(
