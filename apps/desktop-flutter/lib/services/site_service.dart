@@ -198,22 +198,37 @@ class SiteService {
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
 
-    // 先按直链/相对路径/前缀判定，避免不必要的网络请求。
+    // 站点播放入口回调（如猫源 `/play`）必须真实参与解析的站点：
+    // `type=3` Spider 站点（含猫源 / JS）的剧集目标常是**站点播放入口的输入**（详情
+    // `vod_play_url` 里该集 `$` 之后的值），而不是可直连的媒体地址。以网盘线路为例：
+    //   episodeTarget；=`https://pan.baidu.com/s/...|...|<base64>`
+    // 裸 scheme 是 https，若按普通 HTTP API 站点的「直链初判」会把它当成直链直接给
+    // 播放器，于是网盘分享页被当 html 流 → `Failed to recognize file format`（实测）。
+    // 参考实现（Silent1566/webhtv）对 `type=3` 在 `playerContent` 里**无条件**先调
+    // `/play`（`site.recent().spider().playerContent(flag, id, ...)`），从不做这种短路。
+    // 因此这里对 `type=3` 跳过直链初判，一律先向播放入口取真实地址；普通 HTTP API
+    // 站点（`type=0/1/2/4`）保留原有初判，避免多余网络请求。
+    // 注意：SpiderNull / Unsupported 站点的 runtime 会在 `/play` 时如实报错，
+    // 不会伪装成直链成功。
+    final mustCallPlay = site.type == SiteType.spider;
+
     PlaybackDecision? preliminary;
-    try {
-      preliminary = PlaybackResolver.decide(
-        PlaybackResolutionInput(
-          site: site,
-          episodeTarget: episodeTarget,
-          flag: flag,
-          globalHeaders: _globalHeaders,
-        ),
-      );
-    } on AppError {
-      preliminary = null;
+    if (!mustCallPlay) {
+      try {
+        preliminary = PlaybackResolver.decide(
+          PlaybackResolutionInput(
+            site: site,
+            episodeTarget: episodeTarget,
+            flag: flag,
+            globalHeaders: _globalHeaders,
+          ),
+        );
+      } on AppError {
+        preliminary = null;
+      }
     }
 
-    if (preliminary != null) {
+    if (!mustCallPlay && preliminary != null) {
       // §12：parse=1/jx=1 的目标 → 执行解析器；否则直接播放。
       if (preliminary.action == PlaybackAction.needParser) {
         final resolved = await _runParser(

@@ -396,12 +396,57 @@ abstract final class HttpApiResponseParser {
       format: asNonEmptyString(map['format']),
       parse: asInt(map['parse']),
       jx: asInt(map['jx']),
-      playUrl: asNonEmptyString(map['url']) ?? asNonEmptyString(map['playUrl']),
+      playUrl: _playUrlFrom(map),
       // 外挂字幕（§10.3）：`subs` 数组仅在播放结果里有意义，其他结果为空。
       subs: SubtitleInfo.listFromJson(map['subs']),
       // 弹幕源（§21 Phase 3）：形态极宽松，由 danmaku.dart 的兼容层解析。
       danmaku: danmakuSourcesFromJson(map['danmaku']),
     );
+  }
+
+  /// 从播放结果的 `url`/`urls`/`playUrl` 字段提取第一个可播放地址。
+  ///
+  /// 猫源 bundle 的播放入口（`/play`）会返回**多码率列表**，`url` 是
+  /// 「名称/地址」交替的平铺数组（对齐 CatVod 生态与参考实现的 `UrlAdapter`）：
+  ///   ["RAW", "https://…", "super", "https://…", "high", "https://…"]
+  /// 也兼容参考实现 Result 的 `url` 对象形态 `{"values":[{n,v},…]}` 与
+  /// 数组对象形态 `[{name,url},…]`。取**第一个**作为可播放地址（RAW 优先）。
+  static String? _playUrlFrom(Map<String, Object?> map) {
+    final url = map['url'];
+    if (url is List) {
+      // 平铺数组：两两配对（名称/地址），先找裸地址（RAW）；否则用第一个。
+      final names = <String>[];
+      final values = <String>[];
+      for (var i = 0; i + 1 < url.length; i += 2) {
+        final name = asNonEmptyString(url[i]);
+        final value = asNonEmptyString(url[i + 1]);
+        if (name != null && value != null) {
+          names.add(name);
+          values.add(value);
+        }
+      }
+      if (values.isNotEmpty) {
+        final rawIndex = names.indexWhere((n) => n.toLowerCase() == 'raw');
+        return rawIndex >= 0 ? values[rawIndex] : values.first;
+      }
+      // 退化为纯地址数组（无名称）：取第一个非空 http(s)。
+      for (final item in url) {
+        final text = asNonEmptyString(item);
+        if (text != null && text.startsWith('http')) return text;
+      }
+      return null;
+    }
+    if (url is Map) {
+      // 参考实现 Result 形态：`{"values":[{"n":"RAW","v":"…"},…]}`。
+      final values = asList(url['values']);
+      for (final item in values) {
+        final map2 = asMap(item);
+        final value = asNonEmptyString(map2['v']) ?? asNonEmptyString(map2['url']);
+        if (value != null) return value;
+      }
+      return null;
+    }
+    return asNonEmptyString(url) ?? asNonEmptyString(map['playUrl']);
   }
 
   static Map<String, List<VodFilterGroup>> _parseFilters(Object? value) {
