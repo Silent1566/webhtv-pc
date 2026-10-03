@@ -188,14 +188,31 @@ void main() {
       expect(requestedPaths, contains('/index.config.js'));
     });
 
-    test('校验值与内容不符时明确报错，不静默装上坏包', () async {
-      cfgMd5 = md5.convert(utf8.encode('declared-but-wrong')).toString();
+    test('bundle 校验值与内容不符时明确报错，不静默装上坏包', () async {
+      // `index.js`（可执行主体）保持严格校验：不符绝不安装。
+      jsMd5 = md5.convert(utf8.encode('declared-but-wrong')).toString();
       final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
       final result = await bundle.ensure('$base/index.js.md5');
       bundle.close();
       expect(result.ok, isFalse);
       expect(result.error, contains('校验失败'));
       expect(File(result.entryPath).existsSync(), isFalse);
+    });
+
+    test('config 声明值与内容不符时不阻断，以实际内容安装', () async {
+      // `index.config.js`（站点列表）的 md5 只是版本标识：服务端常声明值与实际
+      // 内容不一致（实测 omnibox 源声明 497a4a2f… 实际 b95c3742…），参考实现
+      // 也以实际下发内容为准。故 config 不符不报错、改用实际内容。
+      cfgMd5 = md5.convert(utf8.encode('declared-but-wrong')).toString();
+      final bundle = CatBundle(rootDir: p.join(root.path, 'cache'));
+      final result = await bundle.ensure('$base/index.js.md5');
+      bundle.close();
+      expect(result.ok, isTrue, reason: result.error);
+      expect(
+        File(p.join(result.bundleDir, 'index.config.js')).readAsStringSync(),
+        'var index_config={};',
+        reason: '应安装实际下载的 config 内容，而不是因声明不符而失败',
+      );
     });
 
     test('userinfo 凭据被百分号解码后以 Basic 头发出', () async {
