@@ -316,6 +316,8 @@ class TestFixtureServer {
   /// - 扁平路由 `/cathttp/<route>`（下方 switch，供单点行为断言）；
   /// - 样本族路由 `/cathttp/<family>/<route>`，`family ∈ {ok,biz,http,unsupported}`，
   ///   用于「≥3 个可重复样本各走完整 home/search/play」的门禁（§9.4）。
+  ///   `<route>` 允许带前缀段（真实猫源 `api` 形如 `/spider/<name>/<id>`，
+  ///   路由追加后是多段路径），按**末段**判定动作。
   Future<void> _serveCatHttp(HttpRequest request, String path) async {
     final route = path
         .replaceFirst('/cathttp', '')
@@ -328,7 +330,7 @@ class TestFixtureServer {
       await _serveCatHttpFamily(
         request,
         family.group(1)!,
-        '/${family.group(2)}',
+        _catHttpAction('/${family.group(2)!}'),
       );
       return;
     }
@@ -375,6 +377,22 @@ class TestFixtureServer {
     // 未实现的 cat http 路由返回 404，必须映射为 SPIDER_UNSUPPORTED（§9.4）。
     request.response.statusCode = HttpStatus.notFound;
     await _json(request, {'status': 404, 'msg': 'cat http 路由未实现'});
+  }
+
+  /// 样本族动作归一化：真实猫源 `api` 是多段路径（如 `/spider/omnibox_4KVM/3`），
+  /// 追加 `/play` 后为 `/spider/omnibox_4KVM/3/play`。取**末段**得到动作，
+  /// 但保留已知的多段动作（`/home-envelope`、`/search-array`、`/server-error`、
+  /// `/page-echo`）以免归一化后落到 404。
+  static String _catHttpAction(String action) {
+    const multiSegment = {
+      '/home-envelope',
+      '/search-array',
+      '/server-error',
+      '/page-echo',
+    };
+    if (multiSegment.contains(action)) return action;
+    final segments = action.split('/').where((s) => s.isNotEmpty).toList();
+    return segments.isEmpty ? action : '/${segments.last}';
   }
 
   /// 样本族：同一族下 home/search/play 行为一致，便于「三族各自跑完整链路」。

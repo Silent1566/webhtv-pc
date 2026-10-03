@@ -393,6 +393,44 @@ void main() {
       expect(result.playUrl, 'https://example.invalid/a.m3u8');
     });
 
+    test('播放入口 url 为「名称/地址交替数组」时取 RAW（§9.4 猫源）', () {
+      // 猫源 bundle 的 /play 把多码率列表写成平铺数组（对齐 CatVod `UrlAdapter`）：
+      // ["RAW","https://…","super","https://…","high","https://…"]。
+      // 实测百度/UC 网盘即此形态；旧实现只认字符串 url，List 被丢弃 → 拿到空地址。
+      final result = HttpApiResponseParser.parse(
+        jsonEncode({
+          'url': [
+            'super',
+            'https://cdn.example.com/super.m3u8',
+            'RAW',
+            'https://cdn.example.com/raw.m3u8',
+            'high',
+            'https://cdn.example.com/high.m3u8',
+          ],
+          'header': {'User-Agent': 'netdisk;12.24.6;'},
+          'parse': 0,
+        }),
+        siteKey: 'k',
+      );
+      expect(result.playUrl, 'https://cdn.example.com/raw.m3u8');
+      expect(result.header?['User-Agent'], 'netdisk;12.24.6;');
+    });
+
+    test('播放入口 url 对象形态（参考实现 values/n·v）也能解析', () {
+      final result = HttpApiResponseParser.parse(
+        jsonEncode({
+          'url': {
+            'values': [
+              {'n': 'RAW', 'v': 'https://cdn.example.com/raw.m3u8'},
+              {'n': 'super', 'v': 'https://cdn.example.com/super.m3u8'},
+            ],
+          },
+        }),
+        siteKey: 'k',
+      );
+      expect(result.playUrl, 'https://cdn.example.com/raw.m3u8');
+    });
+
     test('code/data 信封解包，数组 data 包装为 list（§9.4）', () {
       final wrapped = HttpApiResponseParser.parse(
         jsonEncode({

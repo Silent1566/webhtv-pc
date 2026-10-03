@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
+import 'package:webhtv_pc/core/cat_http.dart';
 import 'package:webhtv_pc/core/config_loader.dart';
 import 'package:webhtv_pc/core/http_api.dart';
 import 'package:webhtv_pc/core/playback.dart';
@@ -713,6 +714,103 @@ void main() {
       expect(outcome.value.reason, contains('parsed-by'));
       // 响应头注入（§8.4）：解析器返回的 UA/Referer 随决策传入。
       expect(outcome.value.headers?['User-Agent'], isNotNull);
+    });
+
+    test('§9.4 type=3 必须真实进 /play，不把「长得像直链」的剧集目标短路', () async {
+      // 实测缺陷：`type=3`（Spider/猫源）剧集目标常是**播放入口的输入**
+      // （`vod_play_url` 中 `$` 之后的值）。网盘线路形如
+      // `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 https，若先做
+      // 「直链初判」就会把它当媒体地址交给播放器 → 网盘分享页（html）被当流
+      // → `Failed to recognize file format`。参考实现对 `type=3` 无条件先调
+      // `/play`，因此这里断言 `/play` 真的被请求、且返回地址来自 `/play`。
+      final catClient = CatHttpClient();
+      final catRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        catHttpClient: catClient,
+      );
+      addTearDown(catRouter.dispose);
+      final catConfig = AppConfig(
+        name: '猫源形态',
+        sites: [
+          Site(
+            key: 'cat-play-gate',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/ok/spider/demo',
+          ),
+        ],
+      );
+      final catService = SiteService(
+        appConfig: catConfig,
+        router: catRouter,
+        database: database,
+      );
+
+      // 与真实网盘线路同形：绝对 https + `|` + base64 段（不含任何媒体扩展名）。
+      const episodeTarget =
+          'https://pan.baidu.com/s/1AbCdEf?pwd=1234|用户:pwd|aHR0cHM6Ly9wYW4uYmFpZHUuY29tL3MvMQ==';
+      server.captured.clear();
+      final decision = await catService.resolvePlayback(
+        site: catConfig.sites.first,
+        episodeTarget: episodeTarget,
+        flag: '网盘',
+        vodId: '147243',
+      );
+
+      // 1) `/play` 必须被真实请求（旧的直链初判会在这里短路，captured 里没有它）。
+      final playRequests = server.captured
+          .where((item) => item.path.endsWith('/play'))
+          .toList();
+      expect(
+        playRequests,
+        isNotEmpty,
+        reason: 'type=3 的剧集目标必须先经播放入口，不能按直链初判短路',
+      );
+      // `/play` 的 `id` 是剧集目标串，不是纯 vod_id（§9.4）。
+      final body = jsonDecode(playRequests.last.body) as Map<String, Object?>;
+      expect(body['id'], episodeTarget);
+      expect(body['id'], isNot('147243'));
+      // 2) 最终地址来自 `/play` 的返回，而不是把剧集目标原样当媒体地址。
+      expect(decision.value.action, PlaybackAction.direct);
+      expect(decision.value.url, contains('/media/sample.m3u8'));
+      expect(decision.value.url, isNot(episodeTarget));
+    });
+
+    test('§9.4 type=3 运行时不可用时不伪装成直链成功', () async {
+      // 反向对照：没有 cat http 客户端时，`type=3` 必须报「运行时不可用」，
+      // 而不是把剧集目标当直链返回（旧行为会给播放器一个网盘分享页 URL）。
+      final bareRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(bareRouter.dispose);
+      final bareConfig = AppConfig(
+        name: '无 cat 客户端',
+        sites: [
+          Site(
+            key: 'cat-no-client',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/ok/spider/demo',
+          ),
+        ],
+      );
+      final bareService = SiteService(
+        appConfig: bareConfig,
+        router: bareRouter,
+        database: database,
+      );
+
+      final error = await _capture(
+        () => bareService.resolvePlayback(
+          site: bareConfig.sites.first,
+          episodeTarget: 'https://pan.baidu.com/s/1AbCdEf|pwd|base64==',
+          flag: '网盘',
+          vodId: '147243',
+        ),
+      );
+      expect(error.kind, AppErrorKind.siteUnsupported);
     });
   });
 
