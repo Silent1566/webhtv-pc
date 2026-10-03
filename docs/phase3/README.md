@@ -144,7 +144,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 猫源识别与整形 | bundle 地址识别、配置整形、基址与 `searchable` 默认 | `test/cat_source_test.dart` | URL 形态(`.js.md5`/`index.js`)、本地包目录/zip 均判为 bundle 而普通配置不误判;裸站点数组/`{video:{sites}}`→`{sites}`;相对 `api` 补基址且绝对地址不改写;错误信封明确报错;缺 `searchable` 补 `1` 而显式 `0` 保留 |
 | 猫源 bundle 缓存 | 地址推导/本地目录/zip/校验不一致/稳定指纹 | `test/cat_bundle_test.dart` | `bundleUrl` 去 `.md5`;`md5Url` 不重复补;`configUrl` 指向同目录;内容指纹稳定;缺 `index.config.js` 明确报错;zip 内 `index.js.md5` 不符时报错 |
 | 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **441** 个用例全绿;analyze 无问题 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **447** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -155,7 +155,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **445** 个用例(Phase 2 的 203 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 37),
+`flutter test` 共 **447** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 37),
 八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
 并产出可复查事实行:
 
@@ -222,8 +222,17 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
 - `PHASE3-EVIDENCE cat-import sites=126`
 - `PHASE3-EVIDENCE cat-available available=126 runtime=CatSpider HTTP (webhtv-cat-http-v1)`
-- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=609`
-- `PHASE3-EVIDENCE cat-search-total items=609`
+- `PHASE3-EVIDENCE cat-search site=nodejs_omnibox_豆瓣推荐 keyword=寒战 items=426`(单站点数据波动,历史上曾 609)
+- `PHASE3-EVIDENCE cat-search-total items=426`
+- `PHASE3-EVIDENCE cat-detail-pick site=nodejs_omnibox_木偶 vod=/index.php/vod/detail/id/8346.html`
+- `PHASE3-EVIDENCE cat-detail lines=1 flags=百度网盘`
+- `PHASE3-EVIDENCE cat-play flag=百度网盘 url=https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`
+- `PHASE3-EVIDENCE cat-play-ok kind=direct`
+
+> 本用例此前只跑到搜索,标题却声称覆盖 play——因此 `CatHttpSiteRuntime.play` 的
+> `vodId ?? episodeTarget` 传参缺陷躲过了 Windows 验收证据(只被真实 bundle
+> 端到端脚本偶然放过)。现已补齐 detail → play 真实链路并锁定:播放决策必须回传
+> 非空 `url`(传纯 `vod_id` 会让部分子站返回空)。
 
 猫源真实 bundle 端到端脚本(`tools/phase3/verify_cat_source.py`,与 Dart 侧同一份 boot 语义):
 
@@ -234,12 +243,17 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `[cat-verify] FAIL [try=1/5] search wd=寒战 items=0`(单站点数据波动)
 - `[cat-verify] OK [try=2/5] search wd=寒战 HTTP=200 items=12`
 - `[cat-verify] OK detail id=/v/hanzhan6.html HTTP=200 flags=线路168$$$…`
-- `[cat-verify] OK play flag=线路168 HTTP=200 url=['默认', 'https://play.xluuss.com/play/ejR09Gle/index.m3u8']`
+- `[cat-verify] OK play flag=线路168 idKind=episodeTarget HTTP=200 url=['默认', 'https://play.xluuss.com/play/ejR09Gle/index.m3u8']`
 - `[cat-verify] RESULT OK 猫源导入 / 站点 / 搜索 / 播放 全链路通过`
 
 > 脚本对搜索/播放做**站点轮换**:单个站点对某关键词返回空列表(HTTP 200 但
 > items=0)属于上游站点数据波动,不应当作协议失败;最多依次尝试 5 个可搜索站点,
 > 任一命中即继续 detail → play,全部试完仍无命中才判 FAIL。
+> **`/play` 的 `id` 语义**:脚本现从 `vod_play_url` 解析该集目标串传入 `id`
+> (`idKind=episodeTarget`,与宿主 `CatHttpSiteRuntime` 契约一致)。此前用纯 `vod_id`,
+> 而选中站点恰好两种传参都对,因而**掩盖了 `vodId ?? episodeTarget` 缺陷**。
+> 用真实 bundle 5908b22c 的 `nodejs_jinpai` 单独复验:`play idKind=episodeTarget
+> HTTP=200 url=https://ppvod01.kqgfbs.com/…`,而传纯 `vod_id` 返回空 `url`。
 
 一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(7 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
@@ -409,6 +423,28 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
 > `b95c…` ≠ 声明 `497a…`)。这是**服务端数据不一致**,参考实现同样硬校验并报错,
 > 不属于本仓库缺陷;其余三个源修复后均能真实启动并拉到站点(69/57/42 个)。
 
+**j) 猫源 `/play` 的 `id` 必须是「剧集目标串」,不是纯 `vod_id`。** 猫源子站的
+`vod_play_url` 里每集形如 `第1集 蓝光$%7B%22vodId%22%3A%22147243%22%2C%22nid%22
+%3A%221321769%22%2C…%7D`——即 `$` 之后是一串 **URL 编码 JSON**(带 `vodId`/`nid`/
+`episodeName`/`sourceName`),这才是 `/play` 要的 `id`。宿主原先
+`CatHttpSiteRuntime.play` 写成 `vodId ?? episodeTarget`,而 `DetailPage` 总会带上
+非空数字 `vodId`,于是 `/play` 拿到的是 `147243` 而不是那串 JSON。真实 bundle
+5908b22c 实测对照:
+
+| 站点 | `id=vod_id` | `id=episodeTarget` |
+| --- | --- | --- |
+| nodejs_jinpai | ❌ 空 url | ✅ 真实 m3u8 |
+| nodejs_muou | ❌ 空 url | ✅ 原画直链 |
+| nodejs_huban | ❌ 空 url | ✅ 原画直链 |
+| wanou/labi/duoduo/ouge/huajuan/xiaoban | ✅ | ✅ |
+
+多站点轮测 8/8 在 `episodeTarget` 下成功;`vod_id` 在 3 个子站返回空。根因是它与
+同文件 `SidecarRuntime.play`(`'id': episodeTarget`)以及与 CatPawOpen bundle 的
+`/play` 契约不一致(见 §9.4)。修复:把 `episodeTarget` 作为 `/play` 的 `id`
+(`CatHttpRequestBuilder` 新增 `playId` 参数表达该语义,`vodId` 仅作回退);
+单测用 fixture 服务捕获**实际发出的 JSON body** 断言 `id == episodeTarget`,
+`verify_cat_source.py` 同步改为从 `vod_play_url` 解析真实剧集目标串。
+
 ## 4. 本轮修复的缺陷(均有测试锁定)
 
 1. `lib/core/protocol.dart`:`LiveChannel` 缺 `header` 字段、`LivePlaylist` 缺 `epg`
@@ -488,6 +524,24 @@ bundle 用 `catDartServerPort()` 拼出 `http://127.0.0.1:<port>/msg`,通过 `me
     无条件显示「没有内容」,把正常站点误报成空站(实测 126 站点里 40 个如此)。已按
     「有无分类」区分两种空态文案:有分类提示「请选择左侧分类」,无分类才提示
     「没有内容」。
+14. `lib/services/sidecar_runtime.dart#CatHttpSiteRuntime.play`:**猫源 `/play` 的
+    `id` 传错**——写成 `vodId ?? episodeTarget`,而宿主调用 `resolvePlayback` 时
+    总会带上非空数字 `vodId`,于是 `/play` 拿到的是纯 `vod_id` 而不是**剧集目标串**
+    (`vod_play_url` 里该集 `$` 之后的值,猫源形如 URL 编码 JSON
+    `%7B%22vodId%22...%7D`)。实测决定性对照(真实 bundle 5908b22c):
+    `nodejs_jinpai` 传 `id=147243`(vod_id)返回 `url=""`,传
+    `id=%7B%22vodId%22%3A%22147243%22...%7D`(episodeTarget)返回真实 m3u8;
+    多站点轮测 8 个猫源子站,`episodeTarget` **8/8 全成功**,`vod_id` 在
+    `jinpai`/`muou`/`huban` 上返回空。根因是它与同文件中
+    `SidecarRuntime.play`(`'id': episodeTarget`)以及 CatPawOpen bundle 的
+    `/play` 契约不一致。已改为把 `episodeTarget` 作为 `/play` 的 `id`
+    (新增 `CatHttpRequestBuilder` 的 `playId` 参数表达该语义,`vodId` 仅作回退),
+    并由 `test/phase2_cathttp_test.dart`「play 请求体的 id 语义」两个用例锁定——
+    其中一个用 fixture 服务捕获**实际发出的 JSON body**并断言 `id == episodeTarget`
+    且不等于数字 `vodId`,在旧代码下必然失败。同步修正 `tools/phase3/
+    verify_cat_source.py`:它原先用纯 `vod_id` 调 `/play`(且选中站点恰好两种传参
+    都对),**掩盖了该缺陷**;现改为从 `vod_play_url` 解析真实剧集目标串,与宿主
+    契约一致(实测 `idKind=episodeTarget`、真实 m3u8、`RESULT OK`)。
 
 ## 5. 风险与开放问题
 
@@ -571,14 +625,17 @@ selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
    **重点缺陷修复**:`CatSource.isBundle` 原先只认 URL 形态,本地目录包被漏判导致
    `ConfigImportService` 走普通抓取路径失败(集成测试直接暴露,参考实现
    `NodeBundle.isLocal` 也检查本地包);已补齐本地目录/zip 探测并由
-   `cat_source_test.dart` 锁定。另修复三处实测缺陷:①宿主 `/msg` 占位服务
+   `cat_source_test.dart` 锁定。另修复四处实测缺陷:①宿主 `/msg` 占位服务
    接受连接就 `socket.destroy()`,bundle 每次 POST 拿 `read ECONNRESET`、profile
    读写必落空——改为回 `200 {"success":true}` 的最小 HTTP 服务;②导入新配置后
    仍选中上一个配置的站点(`_selectedSite ??= …`),实测导入猫源后仍选中旧配置的
    `csp_PianDan`,首页直接 `siteUnsupported`——改为按 key 校验归属并在站点变化时
    清掉旧浏览结果;③猫源首页「有分类、空列表」被空态文案误报成空站(126 站点里
-   40 个如此)——按「有无分类」区分两种文案。后两者由
-   `test/phase3_cat_switch_test.dart` 锁定。
+   40 个如此)——按「有无分类」区分两种文案;④猫源 `/play` 的 `id` 被写成
+   `vodId ?? episodeTarget`,而宿主总会带上数字 `vodId`,导致 `jinpai`/`muou`/
+   `huban` 等子站返回空 `url`(实测 8 站点中 episodeTarget 8/8 成功、vod_id 3 个
+   失败)——改为按 bundle 契约传**剧集目标串**(与 `SidecarRuntime` 对齐)。
+   后三者由 `test/phase3_cat_switch_test.dart` 与 `test/phase2_cathttp_test.dart` 锁定。
 
 ## 6. 平台范围声明
 
