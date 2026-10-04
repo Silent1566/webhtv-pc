@@ -144,7 +144,9 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 猫源识别与整形 | bundle 地址识别、配置整形、基址与 `searchable` 默认 | `test/cat_source_test.dart` | URL 形态(`.js.md5`/`index.js`)、本地包目录/zip 均判为 bundle 而普通配置不误判;裸站点数组/`{video:{sites}}`→`{sites}`;相对 `api` 补基址且绝对地址不改写;错误信封明确报错;缺 `searchable` 补 `1` 而显式 `0` 保留 |
 | 猫源 bundle 缓存 | 地址推导/本地目录/zip/校验不一致/稳定指纹 | `test/cat_bundle_test.dart` | `bundleUrl` 去 `.md5`;`md5Url` 不重复补;`configUrl` 指向同目录;内容指纹稳定;缺 `index.config.js` 明确报错;zip 内 `index.js.md5` 不符时报错 |
 | 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **447** 个用例全绿;analyze 无问题 |
+| 详情竞态与归属 | 迟到响应不覆盖新请求、离开清空、页面自动重建、错误隔离 | `test/phase3_detail_race_test.dart`(真实 HTTP) + `test/phase3_detail_page_test.dart`(widget) | 旧响应按运行号丢弃;新请求先清旧结果;`clearDetail` 清空结果/影片/错误/阶段;`detailError` 不污染 `lastError`;页面监听状态并自动重建(不再停转圈);不属于本页的残留结果不渲染 |
+| 详情竞态集成 | 真实窗口复现「详情 A → 返回 → 立刻详情 B」 | `integration_test/detail_race_flow_test.dart` (-d windows) | A 的迟到响应不覆盖 B;B 页无 A 内容且有可用线路;离开两次均清空状态 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **463** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -155,8 +157,8 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **453** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43),
-八个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **17** 个用例全绿,
+`flutter test` 共 **463** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10),
+十个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **26** 个用例全绿,
 并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
@@ -228,6 +230,31 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE cat-detail lines=1 flags=百度网盘`
 - `PHASE3-EVIDENCE cat-play flag=百度网盘 url=http://127.0.0.1:<proxy>/p/<base64>/aHR0cHM6Ly9kLnBjcy5iYWlkdS5jb20vZmlsZS8…`
 - `PHASE3-EVIDENCE cat-play-ok kind=direct`
+
+详情竞态(`integration_test/detail_race_flow_test.dart`,真实窗口 + 真实 `AppState` + 真实 HTTP):
+
+- `PHASE3-EVIDENCE detail-race leave-a cleared=true`
+- `PHASE3-EVIDENCE detail-race render-b vod=demo-1 lines=1 episodes=1 no-stale-a=true`
+- `PHASE3-EVIDENCE detail-race leave-b cleared=true`
+
+> `render-b` 行是本次修复(缺陷 18)在**真实窗口**上的直接证据:操作序列为
+> 「打开 A 剧(慢详情,1.2s)→ 点返回 → 立刻打开 B 剧」,与用户实测的「返回后点
+> 其他剧还是上一部剧」同形。修复前该用例在渲染断言处失败(B 页拿不到自己的详情,
+> 页面卡在转圈);修复后 B 的内容正确落定且无 A 的残留。反向验证:分别移除
+> 运行号校验 / 归属校验 / `addListener`,对应用例均失败。
+
+MVP-A 全链路(`integration_test/mvp_a_flow_test.dart`):
+
+- `PHASE1-EVIDENCE config-imported sites=6 origin=inline://json/`
+- `PHASE1-EVIDENCE home-ok classes=1 list=1 site=fixture-type1`
+- `PHASE1-EVIDENCE category-ok t=1 list=1 page=1 pagecount=1`
+- `PHASE1-EVIDENCE detail-ok vod=demo-1 lines=1 episodes=1`
+- `PHASE1-EVIDENCE playback succeeded=true duration=6016ms load=1694ms firstFrame=1666ms`
+- `PHASE1-EVIDENCE resume-ui vod=demo-1 episode=第 1 集 startPosition=12s`
+- `PHASE1-EVIDENCE detail-page-rendered lines=1 episodes=1`
+- `PHASE1-EVIDENCE layout-1280x720 ok` / `layout-1920x1080 ok` / `layout-1024x640 ok`
+- `PHASE1-EVIDENCE fullscreen-entered=true` / `fullscreen-restored=true`
+- `PHASE1-EVIDENCE database-rebuild-after-delete ok` / `cache-rebuild-after-delete ok`
 
 > `cat-play` 行是本次修复(缺陷 16)在**真实 bundle**上的直接证据:剧集目标是
 > 网盘分享页 `https://pan.baidu.com/s/1oPC9hVsmBgO8Qo4QQg1Etg`,修复前它会被
@@ -669,6 +696,44 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
     verify_cat_source.py`:它原先用纯 `vod_id` 调 `/play`(且选中站点恰好两种传参
     都对),**掩盖了该缺陷**;现改为从 `vod_play_url` 解析真实剧集目标串,与宿主
     契约一致(实测 `idKind=episodeTarget`、真实 m3u8、`RESULT OK`)。
+18. `lib/state/app_state.dart#loadDetail` + `lib/ui/browse_pages.dart#DetailPage`:**详情页竞态与状态串号**——
+    用户实测「一部剧点三次才进得去,第一次说没有线路,第二次一直转圈,第三次
+    才看到线路和简介;返回后点其他剧看到的还是上一部剧的信息」。三个独立根因:
+
+    **a) 详情页从不监听 `AppState`。** `DetailPage` 在 `initState` 里发请求,但
+    请求是**异步**的,完成时页面不会重建——必须手动返回再进才看得到结果,这正是
+    「点三次才进去」与「一直转圈」的直接成因(对比:搜索页、Spider 管理页都
+    在 `initState` 里 `addListener`)。已补 `addListener`/`removeListener` 与
+    `setState`。
+
+    **b) 详情请求没有运行号,且详情页不校验结果归属。** 详情是**唯一一处把页面
+    状态放在全局 `AppState`** 的地方,用户又经常「返回列表 → 立刻点另一部剧」,
+    于是详情请求天然并发。本机实测单次 detail 3.9~7.1s,前一个请求往往还在飞行;
+    先返回的旧响应被后返回的覆盖,而详情页直接取 `detailResult.list.first`,
+    根本不分这是哪部剧的数据 → 点播串剧。修复:新增 `_detailRunId`,只有**最新**
+    请求允许写回状态(换站点/换配置/离开详情页都会递增作废在途请求);详情页按
+    `vod_id` 判归属,不属于本页就退回列表页传入的条目。
+
+    **c) 详情状态不清理,且错误位与浏览页共用。** 详情失败写进 `lastError`,而
+    浏览页会渲染它,用户返回时看到一条与当前列表无关的详情错误横幅;离开详情页
+    也不清空结果。修复:新增独立的 `detailError`(与 `clearDetail` 配套)与
+    `clearDetail()`,由返回按钮调用;新请求开始时先清掉上一次结果,避免「正在
+    加载」时把上一个条目的线路当成当前条目的线路显示。
+
+    由 `test/phase3_detail_race_test.dart`(5 例)、`test/phase3_detail_page_test.dart`
+    (5 例)与 `integration_test/detail_race_flow_test.dart` 锁定。反向验证:
+    分别移除运行号校验、归属校验、`addListener` 后,对应用例均失败——其中移除
+    运行号校验时「迟到响应」用例的实际值变成 `slow-A`(旧响应覆盖新响应),
+    与用户实测串剧现象完全一致,证实有判别力。
+
+    > 顺带修 `TestFixtureServer`:**请求串行处理**。早先它 `await _handle(request)`,
+    > 一个慢样本(`ids=slow-*` 的详情)会阻塞后续请求,使「先发后到」这类竞态在
+    > 测试里根本无法复现——反向验证时正是这一点先暴露了出来。现改为每请求
+    > 独立处理(真实服务端即并发语义)。fixture 新增 `ids=slow-*` 慢详情样本
+    > (Dart 与 Python 两份一致),供竞态用例构造「先发后到」。
+    >
+    > 另注:`testWidgets` 会把**同文件所有** `HttpClient` 请求固定返回 400,因此
+    > 纯状态竞态用例(真实 HTTP)与 widget 渲染用例必须分文件放置。
 
 ## 5. 风险与开放问题
 

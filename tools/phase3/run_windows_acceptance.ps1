@@ -307,6 +307,12 @@ try {
                 & puro -e $PuroEnvironment -p . flutter test integration_test/js_spider_flow_test.dart -d windows
                 if ($LASTEXITCODE -ne 0) { return }
                 & puro -e $PuroEnvironment -p . flutter test integration_test/cat_source_flow_test.dart -d windows
+                if ($LASTEXITCODE -ne 0) { return }
+                # 详情页竞态（§8.3、§17.2）：真实窗口复现「详情 A → 返回 → 立刻详情 B」，
+                # 锁定「迟到的 A 不得覆盖 B」「离开详情页清空状态」。
+                & puro -e $PuroEnvironment -p . flutter test integration_test/detail_race_flow_test.dart -d windows
+                # MVP-A 全链路（§21 Phase 1）：配置导入 → 首页 → 分类 → 详情 → 播放 → 历史。
+                & puro -e $PuroEnvironment -p . flutter test integration_test/mvp_a_flow_test.dart -d windows
             } finally {
                 Pop-Location
             }
