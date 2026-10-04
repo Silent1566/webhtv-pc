@@ -263,6 +263,11 @@ class ProxySession {
   /// 该会话已确立的来源（首次请求的目标 host:port），用于同源凭据传播。
   String? establishedOrigin;
 
+  /// 重定向派生出的主机（同一播放请求的重定向目标，§11.3.1）。
+  /// 302 到 CDN 是媒资分发常态（如百度 `d.pcs.baidu.com` → `appall01.baidupcs.com`），
+  /// 这些主机需要被授权以继续代理 HLS 子清单/分片。
+  final Set<String> derivedHosts = {};
+
   bool get expired => DateTime.now().isAfter(expiresAt);
 
   bool get usable => !revoked && !expired;

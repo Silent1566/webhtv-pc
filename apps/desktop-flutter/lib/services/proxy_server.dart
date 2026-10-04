@@ -199,12 +199,18 @@ class LocalProxyServer {
     final stopwatch = Stopwatch()..start();
     final range = request.headers.value(HttpHeaders.rangeHeader);
     // 会话级白名单优先于全局策略（§11.3.1「token 只授权当前站点与当前播放请求」）。
-    final effectivePolicy = ProxyTargetPolicy(
+    // 主机白名单：站点授权主机 + 本次播放已派生的重定向主机（§11.3.1）。
+    // 媒资分发常见 302 到 CDN（百度 `d.pcs.baidu.com` → `appall01.baidupcs.com`），
+    // 派生主机只在通过 scheme/IP 安全校验后才被授权。
+    ProxyTargetPolicy hopPolicy() => ProxyTargetPolicy(
       allowPrivate: policy.allowPrivate,
       allowLoopback: policy.allowLoopback,
-      allowedHosts: session.allowedHosts.isEmpty
-          ? policy.allowedHosts
-          : session.allowedHosts,
+      allowedHosts: {
+        ...(session.allowedHosts.isEmpty
+            ? policy.allowedHosts
+            : session.allowedHosts),
+        ...session.derivedHosts,
+      },
       allowedSchemes: policy.allowedSchemes,
       maxRedirects: policy.maxRedirects,
     );
@@ -216,6 +222,7 @@ class LocalProxyServer {
     int denyCode = 403;
 
     while (true) {
+      final effectivePolicy = hopPolicy();
       final staticDecision = effectivePolicy.evaluateStatic(current);
       if (!staticDecision.allowed) {
         denyReason = staticDecision.reason;
@@ -248,17 +255,27 @@ class LocalProxyServer {
         denyCode = 502;
         break;
       }
+      // 必须关闭自动重定向：`HttpClient` 自动跟随会**丢弃自定义请求头**
+      // （回落为 `Dart/3.x (dart:io)` 的 UA 与 `gzip` 的 Accept-Encoding），
+      // 导致网盘 CDN（如百度 `appall01.baidupcs.com`）校验 UA 失败而返回
+      // 403 `sign error`。手工逐跳跟随才能在每一跳重新注入会话 Header
+      // （§11.3.1）。
+      outbound.followRedirects = false;
 
-      for (final entry in _forwardHeaders(
+      // 必须在构造转发 Header **之前**确立来源：否则首跳的 origin 会退化为
+      // 代理自身地址（与目标永远不同源），导致站点 Cookie/Authorization
+      // 在首跳就被当作跨域凭据剥离（§11.3.1）。
+      if (current == target && session.establishedOrigin == null) {
+        session.establishedOrigin = '${current.host}:${current.port}';
+      }
+      final forwardHeaders = _forwardHeaders(
         session: session,
         request: request,
         target: current,
         range: range,
-      ).entries) {
+      );
+      for (final entry in forwardHeaders.entries) {
         outbound.headers.set(entry.key, entry.value);
-      }
-      if (current == target && session.establishedOrigin == null) {
-        session.establishedOrigin = '${current.host}:${current.port}';
       }
 
       final HttpClientResponse response;
@@ -286,6 +303,21 @@ class LocalProxyServer {
           break;
         }
         final next = current.resolve(location);
+        // 重定向目标是同一播放请求的派生目标：先做 scheme 与字面 IP 安全校验，
+        // 通过后记入派生主机，使下一跳（含 HLS 子资源）可继续代理（§11.3.1）。
+        final probePolicy = ProxyTargetPolicy(
+          allowPrivate: policy.allowPrivate,
+          allowLoopback: policy.allowLoopback,
+          allowedSchemes: policy.allowedSchemes,
+          maxRedirects: policy.maxRedirects,
+        );
+        final probe = probePolicy.evaluateStatic(next);
+        if (!probe.allowed) {
+          denyReason = probe.reason;
+          denyCode = probe.code;
+          break;
+        }
+        session.derivedHosts.add(next.host.toLowerCase());
         log.debug(
           '代理跟随重定向 href=${redactProxyTarget(next)} redirects=$redirects',
           scope: 'proxy',
@@ -421,6 +453,9 @@ class LocalProxyServer {
               entry.toLowerCase() == host ||
               host.endsWith('.${entry.toLowerCase()}'),
         ) ||
+        session.derivedHosts.any(
+          (entry) => entry == host || host.endsWith('.$entry'),
+        ) ||
         (established != null && established == host);
     if (!allowed) return null;
     return urlFor(session, child);
@@ -447,12 +482,14 @@ class LocalProxyServer {
       ),
     };
 
-    // 会话内允许继承 User-Agent 与 Referer（§11.3.1）。
+    // User-Agent 可在会话内继承（§11.3.1）。
     final userAgent = session.userAgent ??
         request.headers.value(HttpHeaders.userAgentHeader);
     if (userAgent != null) headers[HttpHeaders.userAgentHeader] = userAgent;
-    final referer = session.referer ??
-        request.headers.value(HttpHeaders.refererHeader);
+    // Referer 只在站点显式声明（会话注入）或与目标同主机时传播。
+    // 播放器的 Referer 指向本地代理，跨域转发会触发防盗链 CDN 的 403
+    // （§11.3.1「Referer 按显式域名授权传播」）。
+    final referer = session.referer ?? _sameHostReferer(request, target);
     if (referer != null) headers[HttpHeaders.refererHeader] = referer;
 
     // 凭据只同源传播；跨 origin 重定向已由 origin/targetOrigin 差异覆盖。
@@ -470,6 +507,17 @@ class LocalProxyServer {
       ),
     );
     return headers;
+  }
+
+  /// 播放器携带的 Referer 只有与目标同主机时才可继承。
+  static String? _sameHostReferer(HttpRequest request, Uri target) {
+    final inherited = request.headers.value(HttpHeaders.refererHeader);
+    if (inherited == null) return null;
+    final parsed = Uri.tryParse(inherited);
+    if (parsed == null || parsed.host.isEmpty) return null;
+    return parsed.host.toLowerCase() == target.host.toLowerCase()
+        ? inherited
+        : null;
   }
 
   void _copySafeHeaders(
