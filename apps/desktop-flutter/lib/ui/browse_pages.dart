@@ -307,9 +307,31 @@ class _DetailPageState extends State<DetailPage> {
   @override
   void initState() {
     super.initState();
+    // 必须监听 AppState：详情请求在页面挂载后才完成，不重建就永远停在加载中
+    // （实测「第一次进去说没有线路、第二次一直转圈」的直接成因）。
+    // 搜索页、Spider 管理页同样监听了各自的状态变更。
+    widget.state.addListener(_onStateChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       widget.state.loadDetail(widget.vod);
     });
+  }
+
+  @override
+  void dispose() {
+    widget.state.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _closeDetail() {
+    // 离开详情页时清掉全局详情状态（§8.3）：结果与所选影片是页面级临时状态，
+    // 不清理会让下一次进入详情页先渲染上一部剧的线路（实测串剧）。
+    widget.state.clearDetail();
+    Navigator.of(context).pop();
   }
 
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
@@ -376,14 +398,28 @@ class _DetailPageState extends State<DetailPage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final vod = state.detailResult?.list.isNotEmpty == true
-        ? state.detailResult!.list.first
-        : widget.vod;
+    // 只有「结果属于本页影片」才允许渲染（§8.3）。
+    //
+    // 详情结果是 AppState 上的全局字段，用户「返回列表 → 点另一部剧」时，前一个
+    // 请求可能还在飞行（本机实测 3.9~7.1s），若直接取 `detailResult.list.first`，
+    // 新页面会先套用上一部剧的线路与简介，点播即串剧。这里以 vod_id 判归属，
+    // 不属于本页时退回列表页传入的条目（其线路可能已由列表数据携带）。
+    final result = state.detailResult;
+    final belongs = result != null &&
+        result.list.isNotEmpty &&
+        result.list.first.vodId == widget.vod.vodId;
+    final vod = belongs ? result.list.first : widget.vod;
     final lines = state.playLinesOf(vod);
+    final loading = state.detailPhase == LoadPhase.loading;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(vod.vodName),
+        leading: IconButton(
+          tooltip: '返回',
+          onPressed: _closeDetail,
+          icon: const Icon(Icons.arrow_back),
+        ),
         actions: [
           IconButton(
             tooltip: state.isFavorite(kind: 'vod', targetId: vod.vodId)
@@ -408,15 +444,17 @@ class _DetailPageState extends State<DetailPage> {
           ),
         ],
       ),
-      body: state.detailPhase == LoadPhase.loading && lines.isEmpty
+      body: loading && lines.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                if (state.lastError != null)
+                // 详情错误只在「确实是在拉本页详情且没有可用线路」时提示，
+                // 避免上一个条目的失败信息干扰当前页面（§8.3、§8.4）。
+                if (state.detailError != null && lines.isEmpty)
                   ErrorBanner(
-                    error: state.lastError!,
-                    onDismiss: state.clearError,
+                    error: state.detailError!,
+                    onDismiss: state.clearDetailError,
                   ),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -457,7 +495,12 @@ class _DetailPageState extends State<DetailPage> {
                   ],
                 ),
                 const Divider(height: 32),
-                if (lines.isEmpty)
+                if (loading && lines.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (lines.isEmpty)
                   const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
                 else
                   for (final line in lines) ...[

@@ -197,6 +197,7 @@ class AppState extends ChangeNotifier {
   LoadPhase _contentPhase = LoadPhase.idle;
   LoadPhase _detailPhase = LoadPhase.idle;
   AppError? _lastError;
+  AppError? _detailError;
   String? _notice;
 
   Site? _selectedSite;
@@ -211,6 +212,14 @@ class AppState extends ChangeNotifier {
 
   /// 并发搜索：递增的运行号，用于丢弃被取代批次的结果。
   int _searchRunId = 0;
+
+  /// 详情请求：递增的运行号，用于丢弃被取代请求的结果（§8.3）。
+  ///
+  /// 详情页是唯一一处把**页面状态放在全局 AppState** 里的地方，用户又经常
+  /// 「返回列表 → 立刻点另一部剧」，于是详情请求天然会并发。没有运行号时，
+  /// 先返回的响应会被后返回的覆盖，而详情页读的是全局结果，用户就会看到
+  /// 上一部剧的信息。
+  int _detailRunId = 0;
   MultiSiteSearchOutcome? _activeSearch;
   List<String> _searchHistory = const [];
 
@@ -248,6 +257,12 @@ class AppState extends ChangeNotifier {
   SiteResult? get detailResult => _detailResult;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
+
+  /// 详情错误（与首页/分类/搜索共用的 [lastError] 分开）。
+  ///
+  /// 详情页可能叠在浏览页之上，而浏览页会渲染 `lastError`：详情失败若写进
+  /// 同一个字段，用户返回列表时会看到一条与当前列表无关的详情错误横幅。
+  AppError? get detailError => _detailError;
   String? get importDiagnosticsSummary => _importDiagnosticsSummary;
   PlaybackDecision? get lastDecision => _lastDecision;
 
@@ -448,6 +463,24 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 注入一份详情状态，仅供 widget 测试使用（fake-async 区无法跑真实网络）。
+  ///
+  /// 详情页渲染归属的 UI 门禁需要「全局残留一份属于别的剧的结果」或「正在加载」
+  /// 这类前提，而 `testWidgets` 的 fake-async 区推不动真实 HTTP（框架会把请求
+  /// 固定返回 400），因此提供一个显式的测试注入点，而不是让生产代码为测试妥协。
+  @visibleForTesting
+  void seedDetailForTest({
+    Vod? vod,
+    LoadPhase phase = LoadPhase.ready,
+    AppError? error,
+  }) {
+    _detailResult = vod == null ? null : SiteResult(list: [vod]);
+    _selectedVod = vod;
+    _detailPhase = phase;
+    _detailError = error;
+    notifyListeners();
+  }
+
   /// 回到站点首页的“默认推荐”列表：清空当前分类筛选，显示首页结果。
   void selectDefaultListing() {
     _selectedTypeId = null;
@@ -491,6 +524,9 @@ class AppState extends ChangeNotifier {
       _importDiagnosticsSummary = imported.diagnostics.isEmpty
           ? null
           : imported.diagnostics.join('；');
+      // 旧配置的详情请求必须作废：配置换了之后返回的详情属于另一个站点
+      // （§7.4.1 导入即切换）。
+      _detailRunId++;
       // 选中站点必须属于新配置（§7.4.1 导入即切换）：`_attachSiteService` 会按 key
       // 校验归属，不属于当前配置的选中项退回新配置的默认站点。
       //
@@ -505,6 +541,7 @@ class AppState extends ChangeNotifier {
         _homeResult = null;
         _categoryResult = null;
         _detailResult = null;
+        _detailError = null;
         _activeSearch = null;
       }
 
@@ -581,9 +618,11 @@ class AppState extends ChangeNotifier {
       final reserved = await _reserveCatConfig(record.origin);
       _config = reserved ?? parseConfigRecord(record.json);
       _attachSiteService();
+      _detailRunId++;
       _homeResult = null;
       _categoryResult = null;
       _detailResult = null;
+      _detailError = null;
       _configPhase = LoadPhase.ready;
       log.info('切换配置：${record.name} cat=${reserved != null}', scope: 'config');
       notifyListeners();
@@ -612,6 +651,9 @@ class AppState extends ChangeNotifier {
       if (record != null && record.json.isNotEmpty) {
         _config = parseConfigRecord(record.json);
         _attachSiteService();
+        _detailRunId++;
+        _detailResult = null;
+        _detailError = null;
       } else {
         _config = null;
         _siteService = null;
@@ -619,6 +661,7 @@ class AppState extends ChangeNotifier {
         _homeResult = null;
         _categoryResult = null;
         _detailResult = null;
+        _detailError = null;
         _configPhase = LoadPhase.idle;
       }
     }
@@ -627,12 +670,31 @@ class AppState extends ChangeNotifier {
 
   /// 选择站点并加载首页。
   Future<void> selectSite(Site site) async {
+    // 换站点时作废在途详情请求：旧站点的响应不得覆盖新站点的详情（§8.3）。
+    _detailRunId++;
     _selectedSite = site;
     _categoryResult = null;
     _detailResult = null;
+    _detailError = null;
+    _selectedVod = null;
     _selectedTypeId = null;
     notifyListeners();
     await loadHome(site);
+  }
+
+  /// 清空详情页状态（离开详情页时调用，§8.3）。
+  ///
+  /// 详情结果与所选影片是**绑定在详情页上的临时状态**：不清理的话，用户返回
+  /// 列表后再点另一部剧，详情页会先渲染上一个条目的线路，点播即串剧（实测：
+  /// 「返回后点其他剧看到的还是这部剧的信息」）。这里同时作废在途请求，避免
+  /// 刚离开页面时返回的响应又把状态写回去。
+  void clearDetail() {
+    _detailRunId++;
+    _detailPhase = LoadPhase.idle;
+    _detailResult = null;
+    _detailError = null;
+    _selectedVod = null;
+    notifyListeners();
   }
 
   /// 加载首页（§8.1、§8.4）。
@@ -883,16 +945,36 @@ class AppState extends ChangeNotifier {
   }
 
   /// 加载详情（§8.3）。
+  ///
+  /// 并发安全性（实测缺陷：详情页「点三次才进得去」、返回后点其他剧仍显示
+  /// 上一部剧的信息）：
+  /// - 每次调用取一个新的 [_detailRunId]，只有**最新**请求的结果才允许写回状态。
+  ///   详情页在 `initState` 的 post-frame 回调里发请求，用户「返回 → 立刻点
+  ///   另一部剧」时前一个请求往往还没回来（本机实测 3.9~7.1s），旧响应覆盖
+  ///   新响应就会把 A 剧的线路渲染到 B 剧的页面上，点播即串剧；
+  /// - 失败写入独立的 [detailError]，不污染浏览页共用的 [lastError]；
+  /// - 新请求一律先清掉上一次的详情结果，避免「正在加载」时把上一个条目的
+  ///   线路当成当前条目的线路显示出来。
   Future<void> loadDetail(Vod vod) async {
     final service = _siteService;
     final site = _selectedSite;
     if (service == null || site == null) return;
+    final runId = ++_detailRunId;
     _selectedVod = vod;
+    _detailResult = null;
+    _detailError = null;
     _detailPhase = LoadPhase.loading;
-    _lastError = null;
     notifyListeners();
     try {
       final outcome = await service.detail(site, vod.vodId);
+      if (runId != _detailRunId) {
+        // 已被更新的请求（或已离开详情页）取代：结果直接丢弃，不写回状态。
+        log.debug(
+          '详情结果已作废 site=${site.key} vod=${vod.vodId} run=$runId',
+          scope: 'site',
+        );
+        return;
+      }
       _detailResult = outcome.value;
       _detailPhase = LoadPhase.ready;
       final first = outcome.value.list.isEmpty ? null : outcome.value.list.first;
@@ -904,14 +986,22 @@ class AppState extends ChangeNotifier {
         scope: 'site',
       );
     } catch (error) {
+      if (runId != _detailRunId) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
-      _lastError = failure;
+      _detailError = failure;
       _detailPhase = LoadPhase.failed;
       log.error('详情加载失败 site=${site.key} vod=${vod.vodId} ${failure.logLine}',
           scope: 'site');
     }
+    notifyListeners();
+  }
+
+  /// 清空详情错误（详情页「重试」后的提示关闭）。
+  void clearDetailError() {
+    if (_detailError == null) return;
+    _detailError = null;
     notifyListeners();
   }
 
