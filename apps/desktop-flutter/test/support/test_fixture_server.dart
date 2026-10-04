@@ -40,25 +40,33 @@ class TestFixtureServer {
 
   Future<void> _listen() async {
     await for (final request in _server) {
+      // 每个请求独立处理：真实服务端是并发的，若在这里 `await _handle`，
+      // 一个慢样本（如 `ids=slow-*` 的详情）会阻塞后续请求，使「先发后到」
+      // 这类竞态在测试里根本无法复现（且 `_handle` 内部已有独立的
+      // try/catch 与响应关闭，并发处理不会泄漏未关闭的连接）。
+      unawaited(_handleSafely(request));
+    }
+  }
+
+  Future<void> _handleSafely(HttpRequest request) async {
+    try {
+      await _handle(request);
+    } catch (error, stackTrace) {
+      stderr.writeln(
+        '[test_fixture_server] ${request.method} ${request.uri} '
+        'failed: $error\n$stackTrace',
+      );
       try {
-        await _handle(request);
-      } catch (error, stackTrace) {
-        stderr.writeln(
-          '[test_fixture_server] ${request.method} ${request.uri} '
-          'failed: $error\n$stackTrace',
-        );
-        try {
-          request.response.statusCode = HttpStatus.internalServerError;
-          request.response.write('fixture error: $error');
-        } catch (_) {
-          // 连接可能已关闭。
-        }
-      } finally {
-        try {
-          await request.response.close();
-        } catch (_) {
-          // 客户端可能已断开（例如超限后主动取消订阅）。
-        }
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write('fixture error: $error');
+      } catch (_) {
+        // 连接可能已关闭。
+      }
+    } finally {
+      try {
+        await request.response.close();
+      } catch (_) {
+        // 客户端可能已断开（例如超限后主动取消订阅）。
       }
     }
   }
@@ -466,6 +474,28 @@ class TestFixtureServer {
       return;
     }
     if (parameters.containsKey('ids')) {
+      // 慢详情样本（用于构造「先发后到」的请求竞态，§8.3）。
+      // `ids` 以 `slow-` 开头时延迟返回，并把请求的 id 回显到 `vod_id`/`vod_name`，
+      // 使测试能分辨「返回的到底是哪一次请求的结果」。
+      final ids = parameters['ids'] ?? '';
+      if (ids.startsWith('slow-')) {
+        final delay = double.tryParse(parameters['delay'] ?? '1.2') ?? 1.2;
+        await Future<void>.delayed(
+          Duration(milliseconds: (delay * 1000).round().clamp(0, 30000)),
+        );
+        await _json(request, {
+          'list': [
+            {
+              'vod_id': ids,
+              'vod_name': '慢详情 $ids',
+              'vod_content': '迟到的详情结果',
+              'vod_play_from': '慢线路',
+              'vod_play_url': '第1集\$$baseUrl/media/sample.mp4',
+            },
+          ],
+        });
+        return;
+      }
       if (route == '/api/type0') {
         request.response.headers.contentType = ContentType('application', 'xml', charset: 'utf-8');
         request.response.write(_xmlDetail);

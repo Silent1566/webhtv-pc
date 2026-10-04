@@ -38,6 +38,7 @@ import argparse
 import json
 import mimetypes
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -329,6 +330,24 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if params.get("ids"):
             vod_id = params["ids"]
+            # 慢详情样本（用于「先发后到」的请求竞态，§8.3）：`ids=slow-<x>` 延迟
+            # 返回，并把 id 回显到 `vod_id`，便于分辨返回的是哪一次请求。
+            if vod_id.startswith("slow-"):
+                try:
+                    delay = float(params.get("delay") or 1.2)
+                except (TypeError, ValueError):
+                    delay = 1.2
+                time.sleep(min(max(delay, 0.0), 30.0))
+                self._send_json({
+                    "list": [{
+                        "vod_id": vod_id,
+                        "vod_name": f"慢详情 {vod_id}",
+                        "vod_content": "迟到的详情结果",
+                        "vod_play_from": "慢线路",
+                        "vod_play_url": "第1集$" + MEDIA_MP4_URL,
+                    }],
+                })
+                return
             if route == "/api/type0":
                 self._send_bytes(
                     XML_DETAIL.encode("utf-8"), XML_CONTENT_TYPE
