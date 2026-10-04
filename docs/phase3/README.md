@@ -146,7 +146,8 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
 | 详情竞态与归属 | 迟到响应不覆盖新请求、离开清空、页面自动重建、错误隔离 | `test/phase3_detail_race_test.dart`(真实 HTTP) + `test/phase3_detail_page_test.dart`(widget) | 旧响应按运行号丢弃;新请求先清旧结果;`clearDetail` 清空结果/影片/错误/阶段;`detailError` 不污染 `lastError`;页面监听状态并自动重建(不再停转圈);不属于本页的残留结果不渲染 |
 | 详情竞态集成 | 真实窗口复现「详情 A → 返回 → 立刻详情 B」 | `integration_test/detail_race_flow_test.dart` (-d windows) | A 的迟到响应不覆盖 B;B 页无 A 内容且有可用线路;离开两次均清空状态 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **463** 个用例全绿;analyze 无问题 |
+| 代理重定向 Header（缺陷 19） | 手工逐跳跟随 302,每跳重新注入会话 Header;派生主机授权;跨域 Referer 剥离;首跳凭据同源传播 | `test/phase2_proxy_test.dart`「手工跟随 302…」「重定向派生主机…」「跨域 Referer…」「首跳即注入…」 | 重定向后 UA 仍为站点 UA（非 `Dart/3.x`）;302 目标主机被授权且可继续;云元数据重定向仍拒绝;跨域 Referer 剥离、同主机保留;首跳 Cookie/Authorization 注入、跨 origin 移除 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **470** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -157,7 +158,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **463** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10),
+`flutter test` 共 **470** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10 + 代理重定向 Header 7),
 十个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **26** 个用例全绿,
 并产出可复查事实行:
 
@@ -242,6 +243,23 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 > 其他剧还是上一部剧」同形。修复前该用例在渲染断言处失败(B 页拿不到自己的详情,
 > 页面卡在转圈);修复后 B 的内容正确落定且无 A 的残留。反向验证:分别移除
 > 运行号校验 / 归属校验 / `addListener`,对应用例均失败。
+
+代理重定向 Header(缺陷 19,真实百度网盘直链 + 真实 `LocalProxyServer`,探针实测):
+
+- 修复前:`status=403 bytes=94 body={"error_code":31362,"error_msg":"sign error",…}`
+- 修复后:`status=206 bytes=1024 body=ftypisom…mdat…`(真实 MP4 字节)
+- 代理日志:`代理跟随重定向 href=https://appall01.baidupcs.com/file/… redirects=1`
+  紧随 `代理 token=… host=d.pcs.baidu.com:443 status=206 bytes=1024`
+
+> 该证据链用真实猫源 `nodejs_omnibox_木偶` 的 `百度网盘` 线路直链(时效签名),
+> 经应用同一份 `LocalProxyServer` 代理。**上游对照矩阵**(同一 URL、逐项改一个头):
+> `UA=netdisk;12.24.6;` → 206;`UA=Dart/3.13 (dart:io)` → 403/31362;无 UA → 403/31362;
+> `UA=netdisk` + 跨域 `Referer` → 403/31326(`user is not authorized`)。
+> 三处根因均已由 `test/phase2_proxy_test.dart` 的 7 个新用例锁定,并逐一反向验证:
+> 注释掉 `outbound.followRedirects = false` → 「手工跟随 302 保留 UA」等 3 例失败;
+> 去掉 `session.derivedHosts` 授权 → 「派生主机被授权」失败;
+> 改回无条件转发 `Referer` → 「跨域 Referer 被剥离」失败;
+> 把 `establishedOrigin` 赋值移回 `_forwardHeaders` 之后 → 「首跳即注入凭据」等 2 例失败。
 
 MVP-A 全链路(`integration_test/mvp_a_flow_test.dart`):
 
@@ -734,6 +752,46 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
     >
     > 另注:`testWidgets` 会把**同文件所有** `HttpClient` 请求固定返回 400,因此
     > 纯状态竞态用例(真实 HTTP)与 widget 渲染用例必须分文件放置。
+
+19. `lib/services/proxy_server.dart#_forward` + `_forwardHeaders` + `lib/core/proxy_policy.dart#ProxySession`:**网盘播放失败——代理自动跟随重定向丢弃请求头,且跨域 Referer 被无条件转发**。
+    用户实测「大部分网盘还是播放失败」:百度网盘经本地代理请求
+    `d.pcs.baidu.com` 返回 `403 bytes=94`(日志中的直接现象)。四个独立根因:
+
+    **a) `HttpClient` 自动跟随 302 会丢弃自定义请求头。** 代码注释写着「重定向
+    必须手工跟随:每一跳都要重新校验」,但**从未设置 `followRedirects = false`**
+    (`HttpClient` 默认 `true`)。于是 `outbound.close()` 时 Dart 已自动跟随 302,
+    且自动跟随会**重置请求头**:站点注入的 `User-Agent: netdisk;12.24.6;` 回落为
+    `Dart/3.13 (dart:io)`、`Accept-Encoding: identity` 回落为 `gzip`。百度 CDN
+    (`appall01.baidupcs.com`,302 的第二跳)会校验 UA:`netdisk;12.24.6;` → 206,
+    `Dart/3.13 (dart:io)` 或无 UA → 403 `31362 sign error`。这正是 94 字节响应的
+    真正来源(早先按字节数误判为 31326 的 Referer 问题,实际 94B 是含
+    `error_info` 字段的 31362)。已改为 `outbound.followRedirects = false`,手工
+    逐跳跟随并在每一跳重新注入会话 Header。
+
+    **b) 手工跟随 302 后,派生主机被会话白名单拦截。** 会话 `allowedHosts` 只含
+    初始主机(`d.pcs.baidu.com`),而 302 目标是 CDN(`appall01.baidupcs.com`),
+    导致 `403 主机不在授权列表`。已新增 `ProxySession.derivedHosts`:重定向目标
+    先过 scheme/字面 IP 安全校验,通过后记入派生主机;`_proxify`(HLS 子资源)
+    与逐跳策略均认可派生主机。云元数据/私网等地址的重定向仍被拒绝。
+
+    **c) 跨域 `Referer` 被无条件转发。** `_forwardHeaders` 在凭据过滤**之前**就
+    直接 `headers[Referer] = session.referer ?? request Referer`,而
+    `SensitiveHeaders.names` 不含 `referer`,于是播放器的跨域 Referer
+    (指向站点/本地代理)被泄露到 `d.pcs.baidu.com`,触发 403 `31326 user is not
+    authorized`(实测:`UA=netdisk` + 跨域 Referer → 403/31326;无 Referer 或
+    `pan.baidu.com` Referer → 206)。已改为**站点显式声明优先,否则只继承与目标
+    同主机的 Referer**(§11.3.1「`Referer` 按显式域名授权传播」)。
+
+    **d) 首跳凭据被误当作跨域剥离。** `establishedOrigin` 在 `_forwardHeaders`
+    **之后**才赋值,首跳 `origin` 退化为代理自身地址(与目标永远不同源),
+    使 `session.cookie`/`authorization` 成为死代码——站点 Cookie/Authorization
+    在首跳就被剥离。已把赋值移到构造转发 Header **之前**。
+
+    由 `test/phase2_proxy_test.dart` 新增 7 例锁定(手工跟随保留 UA、派生主机
+    授权、云元数据重定向仍拒绝、跨域 Referer 剥离/同主机保留、站点 Referer 优先、
+    首跳注入凭据、跨 origin 重定向移除凭据)。反向验证:逐一移除上述修复后
+    对应用例均失败(3 例 / 1 例 / 1 例 / 2 例)。真实百度直链端到端实测:
+    修复前 `403 bytes=94`,修复后 `206 bytes=1024`(真实 MP4 字节)。
 
 ## 5. 风险与开放问题
 
