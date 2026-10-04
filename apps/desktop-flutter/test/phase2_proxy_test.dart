@@ -470,6 +470,131 @@ void main() {
       expect(rebound.port, port);
       await rebound.close(force: true);
     });
+
+    // 缺陷 19：`HttpClient` 自动跟随重定向会丢弃自定义 Header（回落为
+    // `Dart/3.x (dart:io)`），导致百度网盘 CDN 校验 UA 失败返回 403 `sign error`。
+    // 代理必须手工逐跳跟随，并在每一跳重新注入会话 Header。
+    test('手工跟随 302 时保留会话 User-Agent（缺陷 19，§11.3.1）', () async {
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+        userAgent: 'netdisk;12.24.6;',
+      );
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/redirect.bin')),
+      );
+      expect(response.status, 200);
+      expect(response.body.length, 64 * 1024);
+      // 关键断言：重定向后的第二跳仍带着站点 UA，而不是 `Dart/3.x (dart:io)`。
+      expect(upstream.hits.last['user-agent'], 'netdisk;12.24.6;');
+      expect(upstream.hits.last['user-agent'], isNot(contains('Dart/')));
+    });
+
+    test('重定向派生主机被授权，可继续代理（缺陷 19，§11.3.1）', () async {
+      // 白名单只含 127.0.0.1；302 目标是 localhost（不同主机名）。
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+        userAgent: 'netdisk;12.24.6;',
+      );
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/redirect-cdn.bin')),
+      );
+      expect(response.status, 200, reason: '重定向派生主机应被授权' );
+      expect(session.derivedHosts, contains('localhost'));
+    });
+
+    test('重定向到云元数据地址仍被拒绝（§11.3.1）', () async {
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+      );
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/redirect-meta.bin')),
+      );
+      expect(response.status, 403);
+      expect(session.derivedHosts, isNot(contains('169.254.169.254')));
+    });
+
+    test('跨域 Referer 被剥离，同主机 Referer 保留（§11.3.1）', () async {
+      final session = newSession();
+      // 播放器携带一个与目标不同主机的 Referer：必须被剥离。
+      await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/media.bin')),
+        referer: 'https://123.666291.xyz/',
+      );
+      expect(
+        upstream.hits.last['referer'],
+        isEmpty,
+        reason: '跨域 Referer 会触发防盗链 CDN 的 403，必须剥离',
+      );
+
+      // 同主机 Referer 保留。
+      await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/media.bin')),
+        referer: 'http://127.0.0.1:${upstream.port}/page',
+      );
+      expect(
+        upstream.hits.last['referer'],
+        'http://127.0.0.1:${upstream.port}/page',
+      );
+    });
+
+    test('站点声明的 Referer 优先于播放器 Referer（§11.3.1）', () async {
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+        referer: 'http://127.0.0.1:18080/',
+      );
+      await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/media.bin')),
+        referer: 'https://evil.example.com/',
+      );
+      expect(upstream.hits.last['referer'], 'http://127.0.0.1:18080/');
+    });
+
+    test('首跳即注入会话 Cookie 与 Authorization（缺陷 19，§11.3.1）', () async {
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+        cookie: 'sid=SAME-ORIGIN',
+        authorization: 'Bearer SAME-ORIGIN',
+      );
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/media.bin')),
+      );
+      expect(response.status, 200);
+      // 首跳 origin 必须在构造 Header 前确立，否则凭据会被误当作跨域剥离。
+      expect(upstream.hits.last['cookie'], 'sid=SAME-ORIGIN');
+      expect(upstream.hits.last['authorization'], 'Bearer SAME-ORIGIN');
+    });
+
+    test('跨 origin 重定向移除 Cookie 与 Authorization（§11.3.1）', () async {
+      // 白名单同时授权 127.0.0.1 与 localhost，让重定向能继续；
+      // 但凭据只能同源传播，跨主机名必须被移除。
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1', 'localhost'},
+        cookie: 'sid=SECRET',
+        authorization: 'Bearer SECRET',
+      );
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/redirect-cdn.bin')),
+      );
+      expect(response.status, 200);
+      // 第一跳（127.0.0.1）带凭据，第二跳（localhost）必须剥离。
+      expect(upstream.hits.first['cookie'], 'sid=SECRET');
+      expect(upstream.hits.last['cookie'], isEmpty);
+      expect(upstream.hits.last['authorization'], isEmpty);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -603,9 +728,11 @@ Future<_Response> _get(
   HttpClient client,
   String url, {
   String? range,
+  String? referer,
 }) async {
   final request = await client.getUrl(Uri.parse(url));
   if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
+  if (referer != null) request.headers.set(HttpHeaders.refererHeader, referer);
   final response = await request.close();
   final builder = BytesBuilder(copy: false);
   await for (final chunk in response) {
@@ -670,11 +797,34 @@ class _Upstream {
       'referer': request.headers.value(HttpHeaders.refererHeader) ?? '',
       'range': request.headers.value(HttpHeaders.rangeHeader) ?? '',
       'cookie': request.headers.value(HttpHeaders.cookieHeader) ?? '',
+      'authorization':
+          request.headers.value(HttpHeaders.authorizationHeader) ?? '',
     });
 
     switch (request.uri.path) {
       case '/media.bin':
         await _serveBytes(request, 64 * 1024, 'video/mp4');
+      case '/redirect.bin':
+        // 同主机 302：验证手工跟随重定向后会话 Header 仍然保留（缺陷 19）。
+        request.response.statusCode = HttpStatus.found;
+        request.response.headers.set(
+          HttpHeaders.locationHeader,
+          'http://127.0.0.1:$port/media.bin',
+        );
+      case '/redirect-cdn.bin':
+        // 跨主机名 302（localhost 不在会话白名单）：验证派生主机被授权。
+        request.response.statusCode = HttpStatus.found;
+        request.response.headers.set(
+          HttpHeaders.locationHeader,
+          'http://localhost:$port/media.bin',
+        );
+      case '/redirect-meta.bin':
+        // 重定向到云元数据地址必须被拒绝（§11.3.1）。
+        request.response.statusCode = HttpStatus.found;
+        request.response.headers.set(
+          HttpHeaders.locationHeader,
+          'http://169.254.169.254/latest/meta-data/',
+        );
       case '/broken-range.bin':
         // 故意返回 206 但不带 Content-Range，验证代理会补齐。
         final body = Uint8List(128);
