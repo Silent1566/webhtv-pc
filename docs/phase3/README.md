@@ -146,8 +146,8 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 猫源真实端到端 | 真实 bundle + 真实 Node 子进程 + 真实站点浏览 | `tools/phase3/verify_cat_source.py` + `integration_test/cat_source_flow_test.dart` (-d windows) | 本地包安装→起 Node→认准 `/config`→126 站点全可用;`init`/`home`/`search`/`detail`/`play` 全链路 HTTP 200 且返回真实数据;证据写入 `docs/phase3/evidence/` |
 | 详情竞态与归属 | 迟到响应不覆盖新请求、离开清空、页面自动重建、错误隔离 | `test/phase3_detail_race_test.dart`(真实 HTTP) + `test/phase3_detail_page_test.dart`(widget) | 旧响应按运行号丢弃;新请求先清旧结果;`clearDetail` 清空结果/影片/错误/阶段;`detailError` 不污染 `lastError`;页面监听状态并自动重建(不再停转圈);不属于本页的残留结果不渲染 |
 | 详情竞态集成 | 真实窗口复现「详情 A → 返回 → 立刻详情 B」 | `integration_test/detail_race_flow_test.dart` (-d windows) | A 的迟到响应不覆盖 B;B 页无 A 内容且有可用线路;离开两次均清空状态 |
-| 代理重定向 Header（缺陷 19） | 手工逐跳跟随 302,每跳重新注入会话 Header;派生主机授权;跨域 Referer 剥离;首跳凭据同源传播 | `test/phase2_proxy_test.dart`「手工跟随 302…」「重定向派生主机…」「跨域 Referer…」「首跳即注入…」 | 重定向后 UA 仍为站点 UA（非 `Dart/3.x`）;302 目标主机被授权且可继续;云元数据重定向仍拒绝;跨域 Referer 剥离、同主机保留;首跳 Cookie/Authorization 注入、跨 origin 移除 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **470** 个用例全绿;analyze 无问题 |
+| 代理重定向 Header（缺陷 19） | 手工逐跳跟随 302,每跳重新注入会话 Header;派生主机授权;跨域 Referer 剥离;首跳凭据同源传播;GB 级媒资不被误判超限且拒绝时中止上游 | `test/phase2_proxy_test.dart`「手工跟随 302…」「重定向派生主机…」「跨域 Referer…」「首跳即注入…」「默认会话上限…」「超限拒绝中止…」 | 重定向后 UA 仍为站点 UA（非 `Dart/3.x`）;302 目标主机被授权且可继续;云元数据重定向仍拒绝;跨域 Referer 剥离、同主机保留;首跳 Cookie/Authorization 注入、跨 origin 移除;默认上限覆盖 1.9 GB 单集;超限拒绝在 1.5s 内返回且上游未被写完 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **472** 个用例全绿;analyze 无问题 |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -158,7 +158,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **470** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10 + 代理重定向 Header 7),
+`flutter test` 共 **472** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10 + 代理重定向 Header 9),
 十个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **26** 个用例全绿,
 并产出可复查事实行:
 
@@ -787,11 +787,25 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
     使 `session.cookie`/`authorization` 成为死代码——站点 Cookie/Authorization
     在首跳就被剥离。已把赋值移到构造转发 Header **之前**。
 
-    由 `test/phase2_proxy_test.dart` 新增 7 例锁定(手工跟随保留 UA、派生主机
+    **e) 会话流量上限 512 MiB 误杀 GB 级整文件流。** 修好 a~d 后真机仍
+    `loadFailed`。实测该集文件 **1882 MB**,而会话默认 `maxBytes` 为 512 MiB,
+    `accountRequest` 直接判超限 → 429。网盘点播是 GB 级**整文件**流(非 HLS
+    小分片),这正是「**大部分**网盘失败」而 UC 网盘(小分片)正常的原因。
+    已将默认上限提到 `ProxySession.defaultMaxBytes = 64 GiB`(会话已由高熵
+    token、站点绑定与 30 分钟 TTL 限范围,64 GiB 既覆盖 4K 原盘又仍有界)。
+
+    **f) 超限拒绝路径排空整个上游响应。** 拒绝时 `await upstream.drain<void>()`
+    会读完整个 body:实测排空 1882 MB 耗时 **170 秒**,而 mpv 的打开超时是
+    20 秒——客户端在拿到 429 之前就已报 `loadFailed`(应用日志
+    `status=429 elapsed=129585ms note=session-limit`)。已新增 `_abort()`
+    (取消订阅以关闭连接),HTML 错误页与超限两条拒绝路径均改用中止。
+
+    由 `test/phase2_proxy_test.dart` 新增 9 例锁定(手工跟随保留 UA、派生主机
     授权、云元数据重定向仍拒绝、跨域 Referer 剥离/同主机保留、站点 Referer 优先、
-    首跳注入凭据、跨 origin 重定向移除凭据)。反向验证:逐一移除上述修复后
-    对应用例均失败(3 例 / 1 例 / 1 例 / 2 例)。真实百度直链端到端实测:
-    修复前 `403 bytes=94`,修复后 `206 bytes=1024`(真实 MP4 字节)。
+    首跳注入凭据、跨 origin 重定向移除凭据、默认上限覆盖 GB 级媒资、超限拒绝中止上游)。
+    反向验证:逐一移除上述修复后对应用例均失败(3 例 / 1 例 / 1 例 / 2 例 / 1 例 / 1 例)。
+    真实百度直链端到端实测:修复前 `403 bytes=94`(UA 丢失)、
+    修 a~d 后 `429 elapsed=170049ms`(上限+排空),修复 e~f 后 `206 elapsed=826ms`(真实 MP4)。
 
 ## 5. 风险与开放问题
 
