@@ -347,7 +347,7 @@ class LocalProxyServer {
     final contentType = upstream.headers.value(HttpHeaders.contentTypeHeader) ?? '';
     final looksHtml = contentType.toLowerCase().contains('text/html');
     if (looksHtml && upstream.statusCode >= 200 && upstream.statusCode < 300) {
-      await upstream.drain<void>();
+      await _abort(upstream);
       _record(
         session,
         target,
@@ -363,7 +363,9 @@ class LocalProxyServer {
     if (!session.accountRequest(
       upstream.contentLength >= 0 ? upstream.contentLength : 0,
     )) {
-      await upstream.drain<void>();
+      // 不能 drain：上游可能是 GB 级整文件流，排空会耗时上百秒，
+      // 使客户端（mpv 20s 超时）在拿到 429 之前就报 `loadFailed`。
+      await _abort(upstream);
       _record(
         session,
         target,
@@ -555,6 +557,18 @@ class LocalProxyServer {
       statusCode == 303 ||
       statusCode == 307 ||
       statusCode == 308;
+
+  /// 主动中止上游响应（不读完 body）。
+  ///
+  /// `drain()` 会读完整个 body；对 GB 级媒资流而言，这意味着连接会持续
+  /// 占用几十秒到上百秒，调用方（mpv）早已超时。取消订阅会关闭底层连接。
+  static Future<void> _abort(HttpClientResponse response) async {
+    try {
+      await response.listen(null).cancel();
+    } catch (_) {
+      // 连接可能已关闭。
+    }
+  }
 
   Future<List<int>> _readAll(HttpClientResponse response) async {
     final builder = BytesBuilder(copy: false);

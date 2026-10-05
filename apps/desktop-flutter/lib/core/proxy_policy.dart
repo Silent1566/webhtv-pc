@@ -219,7 +219,7 @@ class ProxySession {
     required this.siteKey,
     required this.createdAt,
     required this.expiresAt,
-    this.maxBytes = 512 * 1024 * 1024,
+    this.maxBytes = defaultMaxBytes,
     this.maxRequests = 4096,
     this.allowedHosts = const {},
     this.userAgent,
@@ -228,6 +228,14 @@ class ProxySession {
     this.authorization,
     this.extraHeaders = const {},
   });
+
+  /// 单会话累计字节上限默认值。
+  ///
+  /// 网盘点播是 GB 级**整文件**流（实测百度网盘单集 1882 MB），而非 HLS 小分片，
+  /// 因此 512 MiB 这类小上限会把正常播放判成超限并返回 429。会话本身已由
+  /// 高熵 token、站点绑定与短 TTL（默认 30 分钟）限定范围，64 GiB 既覆盖 4K 原盘，
+  /// 又仍是有界上限（§11.3「限制单请求大小和总并发」）。
+  static const int defaultMaxBytes = 64 * 1024 * 1024 * 1024;
 
   final String id;
 
@@ -306,7 +314,7 @@ class ProxySessionManager {
     required String siteKey,
     Set<String> allowedHosts = const {},
     Duration? ttl,
-    int maxBytes = 512 * 1024 * 1024,
+    int maxBytes = ProxySession.defaultMaxBytes,
     int maxRequests = 4096,
     String? userAgent,
     String? referer,
