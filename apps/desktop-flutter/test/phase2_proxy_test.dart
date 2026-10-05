@@ -386,6 +386,42 @@ void main() {
       expect(response.status, 429);
     });
 
+    // 缺陷 19：网盘点播是 GB 级**整文件**流（实测百度网盘单集 1882 MB），
+    // 原先 512 MiB 的会话上限会把正常播放判成超限并返回 429。
+    test('默认会话上限能覆盖 GB 级媒资（缺陷 19，§11.3）', () {
+      // 不传 maxBytes，用 ProxySessionManager 的真实默认值。
+      final session = proxy.sessions.create(
+        siteKey: 'site-a',
+        allowedHosts: {'127.0.0.1'},
+      );
+      // 1.9 GB 的单集必须不被默认上限拒绝。
+      const singleEpisode = 1882 * 1024 * 1024;
+      expect(session.accountRequest(singleEpisode), isTrue);
+      expect(ProxySession.defaultMaxBytes, greaterThan(singleEpisode));
+    });
+
+    // 缺陷 19：超限拒绝路径原先 `await upstream.drain<void>()` 排空整个 body；
+    // 对 GB 级流会耗时上百秒，mpv 20s 超时→`loadFailed`。必须中止上游。
+    test('超限拒绝中止上游流，不排空 GB 级响应（缺陷 19，§11.3）', () async {
+      final session = newSession(maxBytes: 1024);
+      final stopwatch = Stopwatch()..start();
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/slow-big.bin')),
+      );
+      stopwatch.stop();
+      expect(response.status, 429);
+      // 完整写出需 3.2s；中止上游应远快于此。
+      expect(
+        stopwatch.elapsedMilliseconds,
+        lessThan(1500),
+        reason: '拒绝必须先返回 429，而不是排空整个上游响应',
+      );
+      // 上游未被完整写出，证明代理确实中止了连接。
+      await _waitUntil(() => !upstream.slowBigCompleted);
+      expect(upstream.slowBigCompleted, isFalse);
+    });
+
     test('20 并发分片请求不崩溃且全部成功（门禁）', () async {
       final session = newSession();
       final futures = [
@@ -762,6 +798,9 @@ class _Upstream {
   /// 每次请求记录代理转发过来的关键 Header（用于断言注入与同源传播）。
   final List<Map<String, String>> hits = [];
 
+  /// `/slow-big.bin` 是否被上游完整写出（false 说明代理中止了上游流）。
+  bool slowBigCompleted = false;
+
   int get port => _server.port;
 
   Uri uri(String path) => Uri.parse('http://127.0.0.1:$port$path');
@@ -837,6 +876,10 @@ class _Upstream {
         request.response.add(body);
       case '/huge.bin':
         await _serveBytes(request, 4 * 1024 * 1024, 'video/mp4');
+      case '/slow-big.bin':
+        // 声明 8 MiB 并**慢速**分块写出：若代理用 drain() 排空整个 body，
+        // 会耗时数秒；若代理中止上游，则能很快返回 429。
+        await _serveSlowBig(request);
       case '/error.html':
         request.response.statusCode = 200;
         request.response.headers.contentType = ContentType(
@@ -854,6 +897,27 @@ class _Upstream {
         request.response.write(_playlist());
       default:
         request.response.statusCode = 404;
+    }
+  }
+
+  /// 慢速大响应：8 MiB，32 块 × 256 KiB，每块 100ms（完整写出约 3.2s）。
+  Future<void> _serveSlowBig(HttpRequest request) async {
+    const total = 8 * 1024 * 1024;
+    const chunk = 256 * 1024;
+    slowBigCompleted = false;
+    request.response.statusCode = 200;
+    request.response.headers.contentType = ContentType('video', 'mp4');
+    request.response.headers.set(HttpHeaders.contentLengthHeader, '$total');
+    try {
+      for (var sent = 0; sent < total; sent += chunk) {
+        request.response.add(Uint8List(chunk));
+        await request.response.flush();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      slowBigCompleted = true;
+    } catch (_) {
+      // 代理中止了上游流：视为未完整写出。
+      slowBigCompleted = false;
     }
   }
 
