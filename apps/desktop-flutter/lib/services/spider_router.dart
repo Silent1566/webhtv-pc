@@ -5,9 +5,14 @@
 /// - `webhtv-cat-http-v1` / CatSpider HTTP（MVP-B，§9.4）；
 /// - 本地 `webhtv-ipc-v1` sidecar（`api` 形如 `spider-local:<key>`，§9.3、§9.8），
 ///   manifest 的 `runtime` 决定具体宿主机：`python*` → `spider-host-python/host.py`，
-///   `node*` → `spider-host-js/host.js`（`tvbox-js-v1`，§9.1）。
+///   `node*` → `spider-host-js/host.js`（`tvbox-js-v1`，§9.1），
+///   `jvm*`/`java*` → `spider-host-jvm/host.jar`（`tvbox-java-v1`，§9.3）。
 ///
-/// 未实现形态（`*.py`、`csp_*`、Android JAR）继续返回结构化不可用结论，
+/// `csp_*` 站点（TVBox 生态的 Java 站源类名形态）在 PC 端映射到 `jvm` 运行时，
+/// 但**只接受无 Android Context 的桌面 jar**；含 `classes.dex` 的 Android 站源
+/// 在 JVM 上无法加载，必须如实报不可用（ADR-0002 §1.1）。
+///
+/// 未实现形态（`*.py`、Android JAR）继续返回结构化不可用结论，
 /// UI 显示运行时未安装/未支持，不得显示空列表（§8.1、§9.9）。
 ///
 /// 注意：`api` 直接指向 `*.js` 的站点仍不可用——JS 站源必须经
@@ -16,9 +21,12 @@ library;
 
 import 'dart:async';
 
+import 'package:path/path.dart' as p;
+
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
 import '../core/http_api.dart';
+import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import 'log_service.dart';
 import 'sidecar_runtime.dart';
@@ -234,7 +242,7 @@ class HttpApiRuntime implements SiteRuntime {
       site: site,
       globalHeaders: globalHeaders,
       userAgent: userAgent,
-    ).buildPlayRequest(episodeTarget);
+    ).buildPlayRequest(episodeTarget, flag: flag);
     return client.execute(call, siteKey: site.key);
   }
 }
@@ -254,6 +262,8 @@ class SpiderRouter {
     this.log,
     this.hostPath,
     this.jsHostPath,
+    this.jvmHostPath,
+    this.cspBinding,
   });
 
   final HttpApiClient client;
@@ -277,6 +287,15 @@ class SpiderRouter {
   /// JS（Node）sidecar 宿主路径覆盖（测试用）；为空时由 [hostPath] 推导。
   final String? jsHostPath;
 
+  /// JVM（Java）sidecar 宿主路径覆盖（测试用）；为空时由 [hostPath] 推导。
+  ///
+  /// `jvm*`/`java*` 运行时需要 `sidecars/spider-host-jvm/host.jar`（§9.3
+  /// `tvbox-java-v1`）。该路径**不**用于加载 Android jar（见 ADR-0002 §1.1）。
+  final String? jvmHostPath;
+
+  /// `csp_*` 站点的本地缓存绑定；为空时按注册表根目录推导（`<root>/csp`）。
+  final CspJvmBinding? cspBinding;
+
   final Map<String, SiteRuntime> _cache = {};
 
   /// 运行时缓存键：同一 `type` 可能有不同 ABI，不能只用 type 做键。
@@ -285,8 +304,10 @@ class SpiderRouter {
   /// 带注册表的可用性判定（§8.1）。
   ///
   /// 本地 `spider-local:` 站点必须能在注册表中找到合法 manifest 才可用；
-  /// 未安装运行时（无 Python）也必须如实报告而不是静默失败。
+  /// `csp_*` 站点需要本地缓存的**桌面** jar（含 dex 的 Android jar 明确不支持）；
+  /// 未安装运行时（无 Python/Node/Java）也必须如实报告而不是静默失败。
   SiteAvailability classifySite(Site site) {
+    if (CspJvmBinding.matches(site.api)) return _classifyCsp(site);
     if (!SpiderLocalBinding.matches(site.api)) return classify(site);
 
     final local = SpiderLocalBinding(registry: registry!).resolve(site.api);
@@ -310,6 +331,7 @@ class SpiderRouter {
       spider: local,
       hostPath: _hostPath(),
       jsHostPath: jsHostPath,
+      jvmHostPath: jvmHostPath,
       log: log,
     );
     if (command == null) {
@@ -332,6 +354,91 @@ class SpiderRouter {
   String _hostPath() =>
       hostPath ??
       (supervisor == null ? '' : '');
+
+  /// `csp_*` 站点的可用性判定（§9.3 `tvbox-java-v1`）。
+  ///
+  /// 判定顺序：本地缓存入口 → 是否 Android jar（含 dex）→ Java 运行时与宿主。
+  /// 每一步失败都给出**可定位**的原因，不得静默降级为空列表（§8.1、§9.9）。
+  SiteAvailability _classifyCsp(Site site) {
+    final binding = cspBinding;
+    if (binding == null) {
+      return const SiteAvailability(
+        available: false,
+        runtimeName: 'PC Java Spider',
+        stage: 'Phase 3',
+        reason: '需要本地 Spider 注册表才能判定',
+      );
+    }
+    final entry = binding.entryFor(site.key);
+    if (entry == null) {
+      return SiteAvailability(
+        available: false,
+        runtimeName: 'PC Java Spider',
+        stage: 'Phase 3',
+        reason: '缺少桌面 JVM 站源：请把**无 Android Context** 的 jar 放到 '
+            '${binding.directoryFor(site.key)}（Android jar 内含 classes.dex，JVM 无法加载）',
+      );
+    }
+    if (CspJvmBinding.isAndroidJar(entry)) {
+      return SiteAvailability(
+        available: false,
+        runtimeName: 'Android/JAR Spider',
+        stage: 'Phase 3',
+        reason: '该 jar 是 Android 站源（内含 classes.dex），JVM 无法加载；'
+            '需桌面版 jar，或按 ADR-0002 启用 Android 兼容层',
+      );
+    }
+    final local = cspLocalSpider(
+      site: site,
+      entryPath: entry,
+      binding: binding,
+    );
+    final command = LocalSpiderCommand.resolve(
+      spider: local,
+      hostPath: _hostPath(),
+      jsHostPath: jsHostPath,
+      jvmHostPath: jvmHostPath,
+      log: log,
+    );
+    if (command == null) {
+      return const SiteAvailability(
+        available: false,
+        runtimeName: 'PC Java Spider',
+        stage: 'Phase 3',
+        reason: '未找到 Java 运行时（JDK/JRE）或 spider-host-jvm/host.jar',
+      );
+    }
+    return SiteAvailability(
+      available: true,
+      runtimeName: 'PC Java Spider (tvbox-java-v1)',
+      stage: 'Phase 3',
+      reason: 'runtime=jvm entry=${p.basename(entry)} '
+          'capabilities=${local.manifest.capabilities.sorted.join(",")}',
+    );
+  }
+
+  /// 为 `csp_*` 站点构造合成 [LocalSpider]（复用 `webhtv-ipc-v1` sidecar 运行时）。
+  static LocalSpider cspLocalSpider({
+    required Site site,
+    required String entryPath,
+    required CspJvmBinding binding,
+  }) {
+    final manifest = SpiderManifest(
+      key: site.key,
+      name: site.name,
+      runtime: 'jvm',
+      entry: entryPath,
+      capabilities: const ['home', 'category', 'detail', 'search', 'play'],
+      permissions: const SpiderPermissions(),
+      limits: const SpiderLimits(),
+    );
+    return LocalSpider(
+      manifest: manifest,
+      manifestPath: p.join(binding.directoryFor(site.key), 'manifest.json'),
+      rootDir: binding.directoryFor(site.key),
+      entryPath: entryPath,
+    );
+  }
 
   /// `type=3` 的 `api` 形态判定（§8.1）。
   static SiteAvailability classify(Site site) {
@@ -398,11 +505,14 @@ class SpiderRouter {
       );
     }
     if (api.contains('csp_')) {
+      // 有注册表时走 `classifySite` → `_classifyCsp`（会检查本地缓存 jar 与
+      // Java 运行时）；无注册表时只能给出静态结论。
       return const SiteAvailability(
         available: false,
         runtimeName: 'PC Java Spider',
         stage: 'Phase 3',
-        reason: '需要独立 JVM sidecar，主进程不得加载不可信 JAR',
+        reason: '需要本地桌面 JVM 站源（tvbox-java-v1）与独立 JVM sidecar，'
+            '主进程不得加载不可信 JAR',
       );
     }
     if (api.contains('/spider/') || api.endsWith('/spider')) {
@@ -444,6 +554,41 @@ class SpiderRouter {
   }
 
   SiteRuntime _create(Site site) {
+    // `csp_*`：桌面 JVM 站源，复用同一份 `webhtv-ipc-v1` sidecar 运行时（§9.3）。
+    if (CspJvmBinding.matches(site.api)) {
+      final binding = cspBinding;
+      final entry = binding?.entryFor(site.key);
+      if (binding == null || entry == null || supervisor == null) {
+        return UnsupportedRuntime(
+          runtimeName: 'PC Java Spider',
+          reason: '缺少本地桌面 JVM 站源或 sidecar 宿主不可用',
+          stage: 'Phase 3',
+        );
+      }
+      final local = cspLocalSpider(site: site, entryPath: entry, binding: binding);
+      final command = LocalSpiderCommand.resolve(
+        spider: local,
+        hostPath: _hostPath(),
+        jsHostPath: jsHostPath,
+        jvmHostPath: jvmHostPath,
+        log: log,
+      );
+      if (command == null) {
+        return const UnsupportedRuntime(
+          runtimeName: 'PC Java Spider',
+          reason: '未找到 Java 运行时（JDK/JRE）或 spider-host-jvm/host.jar',
+          stage: 'Phase 3',
+        );
+      }
+      return SidecarRuntime(
+        site: site,
+        spider: local,
+        command: command,
+        supervisor: supervisor!,
+        log: log,
+      );
+    }
+
     if (SpiderLocalBinding.matches(site.api)) {
       final local = SpiderLocalBinding(registry: registry!).resolve(site.api);
       if (local == null || supervisor == null) {
@@ -457,6 +602,7 @@ class SpiderRouter {
         spider: local,
         hostPath: _hostPath(),
         jsHostPath: jsHostPath,
+        jvmHostPath: jvmHostPath,
         log: log,
       );
       if (command == null) {

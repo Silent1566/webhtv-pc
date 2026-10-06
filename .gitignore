@@ -23,5 +23,10 @@ tmp/
 __pycache__/
 *.py[cod]
 
+# JVM Spider sidecar：编译中间产物
+# （host.jar 提交入库，理由见 sidecars/spider-host-jvm/README.md §2）
+sidecars/spider-host-jvm/.build/
+*.class
+
 # Locally provisioned Phase 0 toolchains
 .local/

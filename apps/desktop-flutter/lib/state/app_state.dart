@@ -105,6 +105,7 @@ class AppState extends ChangeNotifier {
     LogService? log,
     String? sidecarHostPath,
     String? jsSidecarHostPath,
+    String? jvmSidecarHostPath,
     LiveService? liveService,
     EpgService? epgService,
   }) : paths = paths ?? AppPaths.resolve(),
@@ -120,6 +121,9 @@ class AppState extends ChangeNotifier {
       root: p.join(this.paths.configDir, 'spiders'),
       log: this.log,
     );
+    // `csp_*` 站点的桌面 jar 缓存：`<config>/spiders/csp/<siteKey>/`（§9.3、ADR-0002）。
+    // 与 manifest 注册表同根，但独立子目录：两种站源形态的入口解析规则不同。
+    _cspBinding = CspJvmBinding(root: p.join(this.paths.configDir, 'spiders', 'csp'));
     _proxy = LocalProxyServer(log: this.log);
     _catBundle = CatBundle(rootDir: p.join(this.paths.dataDir, 'catbundle'));
     final node = SidecarRuntimeResolver.resolve('node');
@@ -143,6 +147,8 @@ class AppState extends ChangeNotifier {
       log: this.log,
       hostPath: sidecarHostPath ?? defaultSidecarHostPath(),
       jsHostPath: jsSidecarHostPath ?? defaultJsSidecarHostPath(),
+      jvmHostPath: jvmSidecarHostPath ?? defaultJvmSidecarHostPath(),
+      cspBinding: _cspBinding,
     );
   }
 
@@ -180,6 +186,9 @@ class AppState extends ChangeNotifier {
 
   /// 本地 Spider manifest 注册表（§9.7）。
   late final SpiderManifestRegistry _spiderRegistry;
+
+  /// `csp_*` 站点的桌面 jar 缓存绑定（§9.3 `tvbox-java-v1`、ADR-0002）。
+  late final CspJvmBinding _cspBinding;
 
   /// 本地代理(§11)。默认只监听 127.0.0.1,按需启动。
   late final LocalProxyServer _proxy;
@@ -408,6 +417,8 @@ class AppState extends ChangeNotifier {
         log: log,
         hostPath: _router.hostPath ?? defaultSidecarHostPath(),
         jsHostPath: defaultJsSidecarHostPath(),
+        jvmHostPath: defaultJvmSidecarHostPath(),
+        cspBinding: _cspBinding,
       ),
       database: _database,
     );
