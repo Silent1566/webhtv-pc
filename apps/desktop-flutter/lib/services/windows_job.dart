@@ -95,6 +95,8 @@ class WindowsJobObject {
     required int cpuSeconds,
   }) {
     if (!Platform.isWindows) return null;
+    // `cpuSeconds > 0` 才代表需要 CPU 上限；0 表示「不限 CPU」。
+    final hasCpuLimit = cpuSeconds > 0;
     try {
       final kernel32 = _kernel32 ??= ffi.DynamicLibrary.open('kernel32.dll');
       final create = kernel32.lookupFunction<
@@ -118,19 +120,24 @@ class WindowsJobObject {
       try {
         final bytes = buffer.asTypedList(_extendedLimitSize);
         final data = ByteData.view(bytes.buffer, bytes.offsetInBytes);
-        data.setUint32(
-          _basicLimitFlagsOffset,
-          _limitKillOnJobClose |
-              _limitDieOnUnhandledException |
-              _limitProcessMemory |
-              _limitJobMemory |
-              _limitJobTime,
-          Endian.little,
-        );
+        // `JOB_OBJECT_LIMIT_JOB_TIME` 必须配一个**非零**的 `PerJobUserTimeLimit`：
+        // 内核把 0 视为非法参数，`SetInformationJobObject` 会整体失败（实测
+        // Win10/11 返回 ERROR_INVALID_PARAMETER），于是 `create()` 返回 null，
+        // 调用方静默退化成「无作业」——子进程既不受限也**不会**随宿主退出被
+        // 回收，正是「历史进程杀不干净」的根因。
+        //
+        // 因此只有确实需要 CPU 上限时才带上该标志；`cpuSeconds == 0` 表示
+        // 「不限 CPU」（长驻服务如猫源 bundle），此时不能设置该标志。
+        var limitFlags = _limitKillOnJobClose |
+            _limitDieOnUnhandledException |
+            _limitProcessMemory |
+            _limitJobMemory;
+        if (hasCpuLimit) limitFlags |= _limitJobTime;
+        data.setUint32(_basicLimitFlagsOffset, limitFlags, Endian.little);
         // 100ns 单位；只统计作业内进程的用户态 CPU 时间。
         data.setUint64(
           _perJobUserTimeLimitOffset,
-          cpuSeconds * 10000000,
+          hasCpuLimit ? cpuSeconds * 10000000 : 0,
           Endian.little,
         );
         data.setUint64(
@@ -162,7 +169,8 @@ class WindowsJobObject {
           mechanisms: [
             'job-object:kill-on-close',
             'job-object:process-memory-limit',
-            'job-object:cpu-time-limit',
+            // 只有在确实设置上限时才宣称该机制，否则属于虚假隔离声明。
+            if (hasCpuLimit) 'job-object:cpu-time-limit',
           ],
           limitations: [
             '不提供文件系统沙箱：sidecar 仍可读取同一用户可访问的文件',

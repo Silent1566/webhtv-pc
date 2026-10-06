@@ -110,7 +110,12 @@ class SidecarProcess {
   int _sequence = 0;
   int _cumulativeStdoutBytes = 0;
   bool _stopping = false;
+  bool _stdinClosed = false;
   bool _stdoutPolluted = false;
+  String? _lastStdinError;
+
+  /// stdin 写失败的最近一条错误（诊断用；不影响主流程）。
+  String? get lastStdinError => _lastStdinError;
   String? _lastStderrError;
 
   /// 心跳间隔（§9.3.1「支持 cancel、shutdown 和心跳」）。
@@ -188,6 +193,11 @@ class SidecarProcess {
     );
     _process.exitCode.then(_onExit, onError: (Object error) {
       _onExit(-1);
+    });
+    // 对端退出后写 stdin 会异步失败；这里先挂兜底，避免未捕获的管道写错误
+    // 被测试框架记到无关用例上。
+    _process.stdin.done.catchError((Object error) {
+      _lastStdinError = '$error';
     });
     _heartbeatTimer = Timer.periodic(heartbeatInterval, (_) => _sendHeartbeat());
   }
@@ -418,12 +428,28 @@ class SidecarProcess {
   }
 
   void _send(Map<String, Object?> envelope) {
-    if (_exitCompleter.isCompleted) return;
+    if (_exitCompleter.isCompleted || _stdinClosed) return;
     try {
       _process.stdin.add(IpcFrameCodec.encode(envelope));
     } catch (_) {
       // 管道已关闭；退出处理会完成在途请求。
     }
+  }
+
+  /// 关闭 stdin 并吞掉写失败的异步错误。
+  ///
+  /// `IOSink.add` 的写错误是**异步**投递的：对端已退出时 `add` 不抛，
+  /// 随后在事件循环里报 `SocketException: Write failed (OS Error: 管道正在被关闭。, errno = 232)`。
+  /// 该错误若无人处理会升级为未捕获异常——在 `flutter test` 里会被记到
+  /// **当时正在跑的那个用例**上（表现为互不相关的用例随机失败）。
+  /// 因此写入前必须判断进程是否已退出，关闭 stdin 时也必须显式兜底
+  /// （§9.3.1「destroy/进程退出、资源释放」）。
+  void _closeStdin() {
+    if (_stdinClosed) return;
+    _stdinClosed = true;
+    final sink = _process.stdin;
+    sink.done.catchError((Object _) {});
+    sink.close().catchError((Object _) {});
   }
 
   /// 发起一次 ABI 调用。
@@ -568,9 +594,7 @@ class SidecarProcess {
         // 继续释放其它资源。
       }
     }
-    try {
-      await _process.stdin.close();
-    } catch (_) {}
+    _closeStdin();
     _job?.dispose();
     _job = null;
     if (removeWorkingDirectory) {
