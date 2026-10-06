@@ -132,6 +132,7 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 解析器选择 | type 映射/flag 匹配/默认选择/不支持类型报错 | `test/phase3_parser_test.dart`「解析器类型映射」「解析器选择」 | 仅 type=1/2/3 支持;flag 命中优先;noneConfigured/unsupportedOnly/selectedUnsupported |
 | 解析器执行 | type=1/2/3 响应解析/响应头/错误/超时/上限 | `test/phase3_parser_test.dart`「JSON 解析执行」 | `{url}`/`{data.url}`/完整 Result;parseHttp/parseInvalid/parseEmpty/parseNetwork;超时可定位 |
 | 解析器端到端 | 配置 parses → resolvePlayback → 真实调解析器 | `test/config_and_site_test.dart`「§12 全链路」+ `integration_test/parser_flow_test.dart` | 解析出可播放地址并真实出画;失败可定位且可回退 |
+| T4 播放入口（缺陷 22） | `type=4` 站点必须先调 `api?play=<剧集目标>&flag=<线路>`;`parse=0` 直链带媒体 Header;`parse=1` 进解析器;无地址/占位串如实报错且文案不得声称「未声明 playUrl」 | `test/config_and_site_test.dart`「type=4 播放入口」9 例 + `integration_test/t4_play_flow_test.dart` + `integration_test/t4_sweep_flow_test.dart` (-d windows) | 请求参数为 `play`/`flag`（不是 `id`）;站点 `header`(token) 随请求发出;`extend` 按 1000 字节分 query/表单;`parse=0` 决策带播放入口返回的 UA;`parse=1` 先播放入口再解析器;播放入口无地址→`playbackUrlMissing`、业务错误→`siteBusiness`、占位串→如实文案（均不回退到剧集目标）;`type=0/1/2` 直链不多打请求;真实 AT 配置木偶/HanXiaoQuanNight 均拿到可播地址并**字节级取流**（206）;**全站扫描** 68 个 `type=4` 站点 `playbackParserRequired=0`（反向验证：还原缺陷后 `playbackParserRequired=20`，含 `木偶#a115`） |
 | 直播弹幕解析 | 帧解析/文本规范化/颜色/重连退避逐条对齐 Android | `test/phase3_live_danmaku_test.dart` | chat/superchat/online/非法帧四类;控制字符丢弃/空白折叠/码点截断;`#RRGGBB` 补 alpha;退避有界且随尝试增长 |
 | 直播弹幕集成 | 真实窗口 + 真实播放器 + 真实 WS 连接 | `integration_test/live_danmaku_flow_test.dart` (-d windows) | 收到 chat/superchat 上屏;online 更新在线;非法帧丢弃;关闭弹幕;连接失败不影响播放 |
 | EPG 解析 | XMLTV 时间/频道三级匹配/当前节目/边界/异常条目 | `test/phase3_epg_test.dart`「XMLTV 时间解析」「XMLTV 解析与频道匹配」「当前节目判定」 | 4 种时间形态;`epgId`→`tvgName`→`name`→`display-name`;未匹配丢弃计数;`<tv>` 外根元素→`epgInvalid`;左闭右开边界 |
@@ -147,7 +148,13 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 详情竞态与归属 | 迟到响应不覆盖新请求、离开清空、页面自动重建、错误隔离 | `test/phase3_detail_race_test.dart`(真实 HTTP) + `test/phase3_detail_page_test.dart`(widget) | 旧响应按运行号丢弃;新请求先清旧结果;`clearDetail` 清空结果/影片/错误/阶段;`detailError` 不污染 `lastError`;页面监听状态并自动重建(不再停转圈);不属于本页的残留结果不渲染 |
 | 详情竞态集成 | 真实窗口复现「详情 A → 返回 → 立刻详情 B」 | `integration_test/detail_race_flow_test.dart` (-d windows) | A 的迟到响应不覆盖 B;B 页无 A 内容且有可用线路;离开两次均清空状态 |
 | 代理重定向 Header（缺陷 19） | 手工逐跳跟随 302,每跳重新注入会话 Header;派生主机授权;跨域 Referer 剥离;首跳凭据同源传播;GB 级媒资不被误判超限且拒绝时中止上游 | `test/phase2_proxy_test.dart`「手工跟随 302…」「重定向派生主机…」「跨域 Referer…」「首跳即注入…」「默认会话上限…」「超限拒绝中止…」 | 重定向后 UA 仍为站点 UA（非 `Dart/3.x`）;302 目标主机被授权且可继续;云元数据重定向仍拒绝;跨域 Referer 剥离、同主机保留;首跳 Cookie/Authorization 注入、跨 origin 移除;默认上限覆盖 1.9 GB 单集;超限拒绝在 1.5s 内返回且上游未被写完 |
-| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **472** 个用例全绿;analyze 无问题 |
+| PC Java Spider 宿主 | `runtime=jvm`/`java` 命令解析（java/java.exe、按版本探测、堆参数、宿主缺失不静默） | `test/phase3_jvm_spider_test.dart`「resolve…」「JVM 运行时探测与堆参数」 | 解析出 `java -Xmx… -jar host.jar --entry … --manifest …`;Windows 严格 `java.exe`;宿主缺失→null;`jvmHostPath` 缺省时按发行包布局推导;`parseJavaMajor` 兼容 `1.8.0_501`/`17.0.2`/`21.0.12`;选中的 Java 必须带 `javac` 且 major >= 17;`jvmHeapFlags` 的 `-Xmx` 严格小于作业限制 |
+| PC Java Spider 契约 | 真实 JVM 子进程 + `webhtv-ipc-v1` 帧/握手/capability/错误信封/EOF 排空 | `test/phase3_jvm_spider_test.dart`「JVM sidecar 可用」「home…」「五方法…」「参数非法…」「侧车崩溃隔离」「stdin 一次性喂帧…」 | ABI major 兼容;capabilities 含 home/category/detail/search/play;未声明 capability→`SPIDER_UNSUPPORTED`;五方法返回结构化 Result;缺 `keyword`→`SPIDER_BAD_REQUEST`;坏 entry 启动失败只影响该站点;stdin EOF 前派发的请求必须写回响应（回归：曾因 EOF 立即退出而丢响应） |
+| PC Java Spider 集成 | 真实窗口 + 真实 JVM 侧车 + 真实 fixture 服务 | `integration_test/jvm_spider_flow_test.dart` (-d windows) | `spider-local:` + `runtime=jvm` 真实启动握手;home/category/detail/search/play 返回真实数据;入口缺失→可用性明确原因;失败站点隔离且主程序存活;`csp_*` 缺 jar/Android jar 均给出可定位原因 |
+| PC Java Spider 预检 | `host.jar` 存在 + 本机 JDK 17+ + 真实握手 | `tools/phase3/run_windows_acceptance.ps1` `jvm-host-preflight` | 只接受带 `javac` 且 major >= 17 的候选（实测 PATH 上 `jre1.8.0_501` 排在 JDK 21 之前）;握手响应必须含 `webhtv-ipc-v1` 与 `initialize` 结果 |
+| 无回归 | 全量单测 + 静态检查 | `flutter test` + `dart analyze` | **504** 个用例全绿;analyze 无问题 |
+| 进程隔离与回收（缺陷 20） | Windows Job Object 在「不限 CPU」下仍必须创建成功,且子进程随宿主退出被回收 | `test/windows_job_test.dart` 5 例 | `cpuSeconds=0` 创建成功;未设上限不宣称 `cpu-time-limit`;`cpuSeconds>0` 如实宣称;仅 `dispose()` 的 kill-on-close 终止子进程;`terminate()` 立即终止（反向验证：还原缺陷后 4/5 失败） |
+| 交付产物可运行（缺陷 21） | Debug 产物必须是应用入口而非测试壳 | `tools/phase3/run_windows_acceptance.ps1` `restore-debug-artifacts` + `debug-artifact-runnable` | 集成测试后重建;`kernel_blob.bin` 必须含 `lib/main.dart` 入口且 `integration_test` 符号为 0（污染态判 FAIL 并记入 `Failures`） |
 
 > 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 > 为可复现入口,并已封装为一键验收脚本 `tools/phase3/run_windows_acceptance.ps1`
@@ -155,12 +162,12 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 > 单元测试自带进程内 fixture 服务(随机端口),可独立运行;集成测试需要先启动
 > 外部 fixture 服务:`py -3 -m tools.fixture_server.server --port 18080`(脚本会自动启动)。
 
-### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider 与猫源)
+### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider、猫源与 PC Java Spider)
 
 自动化测试已覆盖上表全部门禁。除 `dart analyze` 外,`apps/desktop-flutter` 的
-`flutter test` 共 **472** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10 + 代理重定向 Header 9),
-十个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **26** 个用例全绿,
-并产出可复查事实行:
+`flutter test` 共 **504** 个用例(Phase 2 的 205 + 直播 53 + 播放诊断 12 + 字幕 26 + 弹幕 35 + 直播弹幕 14 + 解析器 22 + EPG 31 + 直播页 EPG 4 + JS Spider 8 + 猫源 43 + 详情竞态/归属 10 + 代理重定向 Header 9 + PC Java Spider 18 + Windows Job Object 5 + **T4 播放入口 9**),
+十三个集成套件在 Windows 真实窗口 + 真实 media-kit 播放器上 **31** 个用例全绿
+(实测 `PHASE3-ACCEPT windows-integration-tests ok`),并产出可复查事实行:
 
 直播(`integration_test/live_flow_test.dart`):
 
@@ -220,6 +227,27 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE js-broken isolated=true reason=entry-missing`
 - `PHASE3-EVIDENCE js-ok-after-failure list=1`
 
+PC Java Spider(`integration_test/jvm_spider_flow_test.dart`,真实 JVM 子进程 + 真实 fixture,§9.3 `tvbox-java-v1`、ADR-0002):
+
+- `PHASE3-EVIDENCE jvm-unavailable isolated=true runtime=本地 Spider (webhtv-ipc-v1)`
+- `PHASE3-EVIDENCE jvm-manifest runtime=jvm capabilities=category,detail,home,play,search`
+- `PHASE3-EVIDENCE jvm-available runtime=本地 Spider (webhtv-ipc-v1)`
+- `PHASE3-EVIDENCE jvm-home list=1`
+- `PHASE3-EVIDENCE jvm-category list=1`
+- `PHASE3-EVIDENCE jvm-detail episodes=1`
+- `PHASE3-EVIDENCE jvm-search sites=1`
+- `PHASE3-EVIDENCE jvm-play action=direct url=http://127.0.0.1:18080/media/sample.m3u8 flag=sidecar`
+- `PHASE3-EVIDENCE jvm-runtime running isolation=Instance of 'ProcessIsolationReport'`
+- `PHASE3-EVIDENCE jvm-stopped state=stopped`
+- `PHASE3-EVIDENCE jvm-broken isolated=true reason=entry-missing`
+- `PHASE3-EVIDENCE jvm-ok-after-failure list=1`
+- `PHASE3-EVIDENCE csp-unavailable runtime=PC Java Spider reason-has-dex-hint=true`
+- `PHASE3-EVIDENCE csp-android-jar runtime=Android/JAR Spider isolated=true`
+
+> `csp_*` 站点在 PC 端映射到桌面 JVM 运行时:先找本地缓存的桌面 jar,缺 jar 时给出
+> 缓存目录与「Android jar 含 `classes.dex`,JVM 无法加载」说明,含 dex 时明确报
+> `Android/JAR Spider`(ADR-0002),而不是启动后崩溃或返回空列表。
+
 猫源(`integration_test/cat_source_flow_test.dart`,真实本地 bundle + 真实 Node 子进程):
 
 - `PHASE3-EVIDENCE cat-package package=F:\temp\catpkg`
@@ -238,6 +266,69 @@ JS Spider(`integration_test/js_spider_flow_test.dart`,真实 Node 子进程 + �
 - `PHASE3-EVIDENCE detail-race render-b vod=demo-1 lines=1 episodes=1 no-stale-a=true`
 - `PHASE3-EVIDENCE detail-race leave-b cleared=true`
 
+T4（`type=4`）播放入口端到端（`integration_test/t4_play_flow_test.dart`，**真实 AT 配置**，
+缺陷 22）:
+
+- `PHASE3-EVIDENCE t4-config url=http://192.168.50.50:4567/sub/2024/buye-0`
+- `PHASE3-EVIDENCE t4-import sites=163 type4=68 parses=11`
+- `PHASE3-EVIDENCE t4-available available=68/68`
+- `PHASE3-EVIDENCE t4-home site=木偶 classes=5 list=0`
+- `PHASE3-EVIDENCE t4-category site=木偶 t=25 list=72`
+- `PHASE3-EVIDENCE t4-detail site=木偶 vod=8698 lines=1 flags=a115`
+- `PHASE3-EVIDENCE t4-play site=木偶 flag=a115 url=http://127.0.0.1:<proxy>/p/<base64>/aHR0cHM6Ly9jZG5maG5maWxlLjExNWNkbi5uZXQv… headers=token,user-agent`
+- `PHASE3-EVIDENCE t4-play site=HanXiaoQuanNight flag=默认线路 url=http://127.0.0.1:<proxy>/p/<base64>/aHR0cHM6Ly9jZG4ueXp6eTMzLXBsYXkuY29tLw… headers=token,User-Agent,Referer,Origin`
+- `PHASE3-EVIDENCE t4-stream site=木偶 flag=a115 status=206 bytes=2048 reason=content-type=application/octet-stream`
+- `PHASE3-EVIDENCE t4-stream site=HanXiaoQuanNight flag=默认线路 status=206 bytes=241 reason=content-type=application/vnd.apple.mpegurl; charset=utf-8`
+- `PHASE3-EVIDENCE t4-sites-ok count=2`
+
+一键验收（缺陷 22 修复后，最终一轮）:`PHASE3-ACCEPT result=PASS gates=all`。
+本轮额外修掉两处**门禁自身的稳定性缺陷**（都不是产品代码问题，但会让门禁随机假红）:
+
+1. **`WEBHTV_FIXTURE_BASE` 环境残留**。`test/fixture_support.dart` 的
+   `fixtureBaseUrl` 优先读该环境变量，而 `flutter test` 启动的 Windows 测试进程会继承
+   父进程环境。外层 shell 若残留指向**已停止的旧 fixture 实例**的值（实测
+   `http://127.0.0.1:7975`），直播/弹幕等集成用例会去连那个死端口并报
+   `SocketException: 远程计算机拒绝网络连接 … port = 7975`，而验收脚本自己启动的
+   fixture 服务完全健康。修复:`run_windows_acceptance.ps1` 在启动 fixture 服务与预检
+   前显式设置 `$env:WEBHTV_FIXTURE_BASE = "http://127.0.0.1:$FixturePort"`。
+2. **`flutter_tools` 临时目录竞态**。偶发出现「用例体一行未执行（时间戳停在 `00:00`、
+   无任何 `PHASE3-EVIDENCE` 输出）+ `PathNotFoundException: Deletion failed,
+   path = 'F:\temp\flutter_tools.<hash>\flutter_test_listener.<hash>'`」——
+   是工具链在 finalize 阶段删不掉自己的监听目录（本项目 `TEMP` 在 F:，易与清理并发）。
+   修复:验收脚本新增 `Test-FlutterToolsTempRace`，**只**对这种特征重跑一次并在证据里
+   记 `retry reason=flutter-tools-temp-race` / `retry-ok`；任何真实断言失败一律不重试。
+   最终一轮实测正好命中一次（`js_spider_flow_test.dart`），重跑即通过。
+
+3. **远端猫源/AT 站点的当天数据波动**不再让门禁假红:
+   - `tools/phase3/verify_cat_source.py`:候选站点上限 5 → 12，且 **`play` 也轮换**
+     （站点 × 线路），任一组合拿到真实地址即通过。实测 `nodejs_omnibox_4KVM` 会
+     间歇性对 `寒战` 回 `items=0`、其 `线路1` 也会间歇性回空 `url`，而同一 bundle 的
+     `nodejs_omnibox_123TV` 一直正常；连续 4 轮实测修复后全绿（修复前 3 轮里 1 轮
+     `RESULT FAIL steps=play`）。判别力不受影响:若 `/play` 的 `id` 传参语义错了，
+     **所有**候选站点都会回空地址，轮换救不回来（该语义由 `phase2_cathttp_test.dart`
+     的「play 请求体的 id 语义」两例锁定，其中一例直接断言**实际发出的 JSON body**）。
+   - `integration_test/cat_source_flow_test.dart`:原先假设「搜索第一个命中必有播放线路、
+     第一条线路必回地址」，实测 `nodejs_omnibox_木偶` 的 `百度网盘` 线路当天会回空地址。
+     改为**逐层轮换**（条目 × 线路），全部失败才判 FAIL，并在失败原因里列出空样本与
+     失败样本。判别力同样不受影响（`id` 语义错 → 全部线路失败）。
+   - `integration_test/t4_play_flow_test.dart`:断言**每个**候选站点都成功，而不是
+     「至少一个成功」——反向验证实测证明后者会被「剧集目标恰好是直链」的站点掩盖。
+
+> `t4-play` 行是本次修复(缺陷 22)在**真实 T4 站点**上的直接证据:`木偶` 的剧集目标是
+> URL 编码 JSON(`7b2273686172654964223a…`,不是直链),修复前会落
+> `playbackParserRequired`(与用户报告逐字一致);修复后先调
+> `GET /video/%E6%9C%A8%E5%81%B6?play=<剧集目标>&flag=a115`,拿到 115 CDN 直链
+> 与其必需的 `user-agent: Mozilla/5.0 115Browser/23.9.3.2`,再经本地代理改写为
+> `http://127.0.0.1:<proxy>/p/<base64>/…` 注入 Header。`headers=` 列即决策携带的
+> 媒体 Header 键(含站点 `token` 与播放入口返回的 `user-agent`)。
+> `t4-stream` 行是**字节级**证据:用宿主真实取流路径(决策地址 + 决策 Header)
+> 做一次 `Range: bytes=0-2047`,115 CDN 回 `206`/2048 字节(MP4),
+> `HanXiaoQuanNight` 回 `206`/241 字节(`application/vnd.apple.mpegurl`),
+> 即两个站点都真的能取到流,而不只是“解析出了一个地址”。
+> **反向验证**:同时还原两处修复后,同一用例下 `木偶` 报出用户原报错,
+> `HanXiaoQuanNight`(剧集目标恰好是绝对 https 直链)却仍通过——所以用例断言的是
+> **每个**候选站点都成功,而不是「至少一个成功」。
+>
 > `render-b` 行是本次修复(缺陷 18)在**真实窗口**上的直接证据:操作序列为
 > 「打开 A 剧(慢详情,1.2s)→ 点返回 → 立刻打开 B 剧」,与用户实测的「返回后点
 > 其他剧还是上一部剧」同形。修复前该用例在渲染断言处失败(B 页拿不到自己的详情,
@@ -302,10 +393,14 @@ MVP-A 全链路(`integration_test/mvp_a_flow_test.dart`):
 > 用真实 bundle 5908b22c 的 `nodejs_jinpai` 单独复验:`play idKind=episodeTarget
 > HTTP=200 url=https://ppvod01.kqgfbs.com/…`,而传纯 `vod_id` 返回空 `url`。
 
-一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(7 道门禁全部通过):
+一键验收脚本输出 `PHASE3-ACCEPT result=PASS gates=all`(8 道门禁全部通过):
 `live-fixture-preflight`、`python-contract-tests`、`schema-validation`、
 `dart-analyze`、`flutter-unit-tests`、`cat-source-real-bundle`、
-`windows-integration-tests`。
+`windows-integration-tests`、`jvm-host-preflight`。
+
+> `live-fixture-preflight` 自缺陷 22 起额外校验 T4 播放入口四个样本族
+> (`t4-direct` / `t4-parse` / `t4-nourl` / `t4-bizerr`) 均真实可达,避免
+> 「测试用的是打桩响应、真实服务端根本不支持该路由」这类假绿。
 
 ### 3.2 JS Spider 实现要点(实测结论)
 
@@ -807,6 +902,201 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
     真实百度直链端到端实测:修复前 `403 bytes=94`(UA 丢失)、
     修 a~d 后 `429 elapsed=170049ms`(上限+排空),修复 e~f 后 `206 elapsed=826ms`(真实 MP4)。
 
+20. `lib/services/windows_job.dart`:**`JOB_OBJECT_LIMIT_JOB_TIME` 搭配 0 值导致整个作业创建失败**,
+    猫源 Node 进程因此完全失去隔离与回收能力(用户报告「历史进程没杀干净」)。
+
+    内核把 `PerJobUserTimeLimit = 0` 判为非法参数,`SetInformationJobObject` **整体**
+    返回失败(实测 Win10/11 返回 `ERROR_INVALID_PARAMETER`),于是 `create()` 返回
+    `null`,调用方静默退化为「无作业」:子进程既不受内存/CPU 限制,也**不会**随宿主
+    退出被内核回收(`KILL_ON_JOB_CLOSE` 根本没生效)。
+
+    命中路径正是猫源运行时:`CatNodeRuntime` 用 `maxCpuSeconds = 0` 表示「长驻服务不限
+    CPU」(bundle 是常驻 HTTP 服务,不能像一次性 sidecar 那样限 CPU 时间),因此**每次**
+    启动猫源都拿到 `null` 作业。实测枚举历史进程发现 8 个孤儿 `node.exe`(父进程早已
+    退出),最久的已存活 7 小时,并仍占用 4179 端口。
+
+    修复:仅在 `cpuSeconds > 0` 时才设置 `JOB_OBJECT_LIMIT_JOB_TIME`;`cpuSeconds == 0`
+    表示不限 CPU,不带该标志。同时 `ProcessIsolationReport.mechanisms` 改为按实际设置的
+    标志动态声明,避免未生效的机制出现在隔离声明里(§18.2.1 禁止虚假隔离声明)。
+
+    由新增 `test/windows_job_test.dart` 5 例锁定:`cpuSeconds=0` 必须创建成功、
+    未设上限时不得声明 `cpu-time-limit`、`cpuSeconds>0` 时如实声明、
+    以及两条真实回收用例(仅 `dispose()` 的 kill-on-close、`terminate()` 立即终止)。
+    反向验证:把代码还原为缺陷版本后 5 例中 **4 例失败**。
+
+    端到端实测(修复后,真实 exe 三轮):优雅关闭与强杀两种退出方式下,catbundle 子进程
+    均在 **1 秒内**被回收,`webhtv_pc`/孤儿 `node`/4179 端口残留均为 0。
+    修复前同样的优雅关闭会留下子进程继续存活(实测 10 秒后仍 ALIVE)。
+
+21. `tools/phase3/run_windows_acceptance.ps1`:**集成测试会把测试内核快照写进应用输出目录,
+    使交付目录里的 `webhtv_pc.exe` 变成「测试壳」**(用户报告「打开没界面出来」)。
+
+    `flutter test <file> -d windows` 把**测试**的 `kernel_blob.bin` 写入
+    `build/windows/x64/runner/Debug/data/flutter_assets/`,而 `webhtv_pc.exe` 仍指向同一
+    目录。跑完第 4 步集成测试后,双击该 exe 启动的是集成测试入口:不执行 `lib/main.dart`
+    (Dart 侧 `startup-trace` **一行都不写**)、窗口创建后因首帧永不到达而从不显示、
+    且不报任何错。实测对照:健康产物含 `lib/main.dart` 入口且 `integration_test` 符号 0 处;
+    跑一次集成测试后被换成 **75 处** `integration_test` 符号、`lib/main.dart` 入口消失。
+
+    排查要点(已固化到本轮证据):该症状下原生 trace 只写到 `window-created` 就停住,
+    没有 `native-first-frame`;`MainWindowHandle` 有效但 `IsWindowVisible` 为假。
+    可用 Dart VM Service(`getVM` → isolate 列表)确认 isolate 名与入口,或直接对
+    `kernel_blob.bin` 做符号断言。
+
+    修复:验收脚本新增第 4.5 步「重建 Debug 产物」与第 4.6 步门禁
+    `debug-artifact-runnable`——正向断言 `kernel_blob.bin` 必须含 `lib/main.dart` 入口
+    且 `integration_test` 符号为 0。门禁失败路径用 `throw` 而非 `exit`(实测 `exit` 会
+    终止整个脚本、跳过 `Invoke-Checked` 的失败记录与第 5 步汇总,造成「静默失败」)。
+    双向实测:污染产物判 FAIL 并记入 `Failures`;重建后判 PASS。
+
+22. `lib/services/site_service.dart#resolvePlayback` + `lib/core/http_api.dart#buildPlayRequest`:**`type=4` 站点从未调播放入口，所有 T4 站点播放失败**（用户报告「T4 接口为什么无法播放」，日志：
+    `site=木偶 playbackParserRequired: 站点 木偶 未声明 playUrl，且剧集目标不是直链 | detail=需要解析器或 Spider 运行时（MVP-A 未实现）`）。
+
+    **两个独立根因：**
+
+    **a) `resolvePlayback` 的「先调播放入口」名单里没有 `type=4`。** 名单只有
+    `site.type == SiteType.spider`（`type=3`），注释明确写着「普通 HTTP API 站点
+    （`type=0/1/2/4`）保留原有初判」。于是 `type=4` 走 [PlaybackResolver.decide]：
+    剧集目标若不是 `http/https/rtsp/rtmp/file` 绝对地址、也不是 `/` 开头的相对路径，
+    就落到「站点未声明 `playUrl` 前缀」→ 抛 `playbackParserRequired`。
+
+    **b) `buildPlayRequest` 只认站点 `playUrl`，不认 `type=4` 的 `api` 播放入口。**
+    它读 `site.extra['playUrl']`，为空即抛 `playbackParserRequired`（detail 与 a 同文案）。
+    实测 AT 配置 163 站点里 **68 个 `type=4` 全部没有 `playUrl`**，因此即便修好 a，
+    b 仍会抛同样的错。
+
+    **复现用户日志的原始场景（`site=木偶 vod=8604`）**：该剧详情线路为
+    `baidu$$$quark$$$uc`，第一条线路 `baidu` 的剧集目标是 URL 编码 JSON
+    （`7b226964223a22…`，不含 scheme）。修复前必然报用户那条错；修复后:
+
+    ```text
+    GET /video/%E6%9C%A8%E5%81%B6?play=<剧集目标>&flag=baidu
+    → {"parse":0,"jx":0,"url":"https://d.pcs.baidu.com/file/244a6346bu1a483844231c691d414439?fid=…",
+       "header":{"user-agent":"netdisk;P2SP;2.2.91.136;android-android;"}}
+    取流探针（Range: bytes=0-2047）→ 206 / 2048 字节 / content-type=video/mp4
+                            / content-range: bytes 0-2047/5467054514
+    ```
+
+    即该剧集（5.47 GB 的 MP4）真实可取流。另两条线路（`quark`/`uc`）当天在
+    播放入口就返回空地址——那是 §9.4 已记录的**上游行为**（夸克网盘上游就是不
+    返回地址），宿主如实报 `playbackUrlMissing` 让 UI 引导换源，不回退到分享页。
+
+    **两个根因叠在一起，把 `type=4` 这条链完全堵死**：木偶站点详情里的剧集目标是
+    `7b2273686172654964223a…`（URL 编码 JSON，**不含** scheme），不是直链，
+    也没有 `playUrl` → 必然报错。而同一个站点的播放入口实际能返回真实可播地址：
+
+    ```text
+    GET http://192.168.50.50:3000/video/%E6%9C%A8%E5%81%B6?play=<剧集目标>&flag=a115
+    → {"url":["RAW","https://cdnfhnfile.115cdn.net/…S01E01-….mp4?t=1791247889&…"],
+       "header":{"user-agent":"Mozilla/5.0 115Browser/23.9.3.2"},"parse":0,"jx":0}
+    ```
+
+    该地址经探针实测可取流（`Range: bytes=0-2047` → `206`，`content-range:
+    bytes 0-2047/916447950`）。详见上方「复现用户日志的原始场景」。
+
+    **契约来源**：Android 参考实现 `SiteApi.playerContent` 对 `site.getType() == 4`
+    构造 `params.put("play", id)` / `params.put("flag", flag)` 后调站点 `api`，
+    **从不做直链初判**——与 `type=3` 的 `/play` 同义。
+
+    **修复**：
+
+    - `HttpApiRequestBuilder.buildBase64ExtPlayRequest(target, flag:)`：新增 `type=4`
+      播放入口构造，`GET <site.api>?play=<剧集目标>&flag=<线路>`，站点 `ext` 仍按
+      ≤1000 字节进 query、>1000 进表单 body（§7.4.7）；`buildPlayRequest` 对 `type=4`
+      分流到它；
+    - `HttpApiRuntime.play` 透传 `flag`；
+    - `resolvePlayback` 的 `mustCallPlay` 加入 `SiteType.jsonApiBase64Ext`，`type=4`
+      与 `type=3` 一样跳过直链初判、一律先向播放入口取真实地址；`type=0/1/2` 保持
+      原有初判（不为直链多打一次请求）。
+
+    **实测 T4 播放入口返回形态（真实 AT 配置，68 个 `type=4` 里 38 个可抽样站点）：**
+
+    | 形态 | 站点例 | 宿主行为 |
+    | --- | --- | --- |
+    | `parse=0` + 真实地址 + 媒体 Header | `木偶`(115)、`HanXiaoQuanNight`、`YingHuaDM`、`hema`、`ppnix_night` | 直链播放，Header 经决策透传（`木偶` 的 `user-agent: Mozilla/5.0 115Browser/…`） |
+    | `parse=0` + 真实地址、无 Header | `dytt`、`duanju_youxuan`、`hanju7` | 直链播放 |
+    | `parse=1` + 解析器地址 | `movie360`、`iqiyi`、`mgtv`、`youku`、`zxzjhd`、`rebozj`、`muxi_night` | 继续走 §12 解析器（`flag` 同时用于解析器匹配） |
+    | `url` 为数组（多码率） | `木偶`、`bilibili`、`HuyaLive`、`pan_4kzn` | 取 `RAW`（已由 `_playUrlFrom` 支持） |
+    | `{url:"1",parse:1,jx:1,msg:"Request failed with status code 403"}` | 缺 `flag` 时的兜底响应 | 如实报业务错误，不把占位 `1` 当播放地址 |
+    | HTTP 400（`分享不存在`/`登陆超时，请重新登陆。`） | 过期网盘分享 | `siteHttp`，可定位到站点/线路/目标 |
+
+    由 `test/config_and_site_test.dart` 新增「type=4 播放入口」8 例锁定：请求构造（`play`/`flag`
+    参数、缺 `flag` 不伪造、`extend` 按长度分 query/表单、站点 `header` 随请求发出）、
+    `parse=0` 直链 + 媒体 Header 进入决策、`parse=1` 先播放入口再解析器、播放入口无地址
+    → `playbackUrlMissing`、业务错误 → `siteBusiness`、`type=0/1/2` 直链不多打请求。
+    另由 `integration_test/t4_play_flow_test.dart` 用**真实 AT 配置**端到端锁定。
+
+    **反向验证（两步都有判别力）：**
+
+    - 只还原 `mustCallPlay`（保留 `buildPlayRequest` 分流）→ 单测 8 例中 **1 例失败**
+      （「播放入口没给地址时如实报错」）——因为 `playUrl` 分流仍会把请求打到播放入口；
+    - 同时还原 `buildPlayRequest` 的 `type=4` 分流 → 单测 **7 例失败**；
+    - 同时还原两处后跑真实集成测试：`木偶` 报出**与用户日志逐字一致**的
+      `playbackParserRequired: 站点 木偶 未声明 playUrl，且剧集目标不是直链 | detail=需要解析器或 Spider 运行时（MVP-A 未实现）`，
+      而 `HanXiaoQuanNight`（剧集目标恰好是绝对 https 直链）仍通过——正是这个“部分站点恰好能过”
+      的效果掩盖了缺陷，也证明集成用例必须要求**每个**候选站点都成功，不能只要求「至少一个」。
+      修复后两个站点均通过（证据：`t4-play site=木偶 … headers=token,user-agent`）。
+
+    **b) 第二处（全站扫描才暴露）：播放入口给了地址但地址不可播时，错误文案错位。**
+
+    缺陷 22 的 a/b 修好后，用**全站扫描**（见下方门禁）逐个跑 68 个 `type=4` 站点，
+    发现仍有 1 个站点落 `playbackParserRequired`，且文案仍是那句错的：
+
+    ```text
+    site=tvb_yunbao 线路=剧情简介 目标=/vod/play/id/115414/sid/3/nid/1.html
+    播放入口返回 {"parse":0,"url":"vwnet-07cd11391cc93d80a28dd165df84d7fe","header":{…}}
+    → playbackParserRequired: 剧集目标不是直链，且站点未声明 playUrl 前缀
+    ```
+
+    实测该站点有两条线路，同一部剧集：
+
+    | 线路 | 播放入口返回 | 结果 |
+    | --- | --- | --- |
+    | `剧情简介` | `parse=0` + `url:"vwnet-07cd…"`（站点内 ID，不是媒体地址） | 不可播（占位串） |
+    | `国内高速新` | `parse=0` + 真实 `https://yzzy.play-cdn6.com/…/index.m3u8` | ✅ 可播 |
+
+    **文案错在哪**：`type=4` 没有 `playUrl` 概念，且播放入口**已经调过并返回了地址**，
+    问题出在「返回的东西不可播」，不是「站点缺 playUrl」。这正是用户报告里那句话
+    把排查方向引偏的同一类错位。
+
+    **修复**：`site_service.dart` 新增 `_resolvePlayEntryTarget`，把「播放入口返回值 →
+    播放决策」这一步包起来；当 [PlaybackResolver] 抛 `playbackParserRequired` /
+    `playbackUrlMissing` 时，换成**如实**的错误：
+
+    ```text
+    playbackParserRequired: 播放入口返回的目标不是可播放地址
+      | detail=站点=tvb_yunbao 线路=剧情简介 播放入口返回 vwnet-07cd…
+    ```
+
+    其它错误分类（解析器、网络…）原样上抛，不掩盖真实原因。由
+    `test/config_and_site_test.dart`「播放入口返回占位串时，错误文案不得声称「未声明 playUrl」」
+    锁定（fixture 新增 `t4-placeholder` 样本族，复刻 `vwnet-…` 形态）。
+    反向验证：还原为原始代码（直接 `decide`）后，实际值正是
+    `剧集目标不是直链，且站点未声明 playUrl 前缀 站点=t4 目标=vwnet-07cd…`，用例失败。
+
+    **c) 全站扫描门禁（`integration_test/t4_sweep_flow_test.dart`）。**
+
+    本缺陷能躲过先前 8 例单测与 2 站点集成用例，是因为它们只抽查了少数站点，
+    而 `type=4` 剧集目标形态极多（站点内 ID、URL 编码 JSON、相对路径、绝对直链、
+    平台页地址…）。因此新增一个**否定不变量**门禁：
+
+    > 真实 AT 配置里的**每一个** `type=4` 站点，走宿主真实播放路径后，
+    > **都不得**产出 `playbackParserRequired`。
+
+    它同时把允许出现的非缺陷结论逐条落证据（不得当成通过）：`playbackUrlMissing`
+    （上游确实没给地址）、`parserUnsupportedType`（AT 配置的 11 个解析器**全部**是
+    `type=0` Web 嗅探，PC 端明确不支持，§5.8）、`noContent`（上游当天无分类/无内容）。
+
+    实测（真实 AT 配置，68 个 `type=4` 站点）：
+
+    | 轮次 | 结果 |
+    | --- | --- |
+    | 修复前（还原 a+b 两处） | `resolved=21 playbackParserRequired=20`，命中包含 `木偶#a115`（用户报告的站点） |
+    | 修复后 | `resolved=35 playbackParserRequired=0 playbackUrlMissing=0 parserUnsupportedType=5 otherError=0 noContent=28` |
+
+    `otherError=0` 是关键：除「上游无内容 / 解析器类型不支持」外，没有任何无法归类的失败。
+    该门禁已接入一键验收（第 13 个集成套件）。
+
 ## 5. 风险与开放问题
 
 1. **直播 Header 语义(§13.1 直播 Header)**:本阶段支持 M3U `#EXTVLCOPT`/`#EXTHTTP`
@@ -905,8 +1195,45 @@ selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
    后四条由 `test/phase3_cat_switch_test.dart`、`test/phase2_cathttp_test.dart`
    与 `test/config_and_site_test.dart` 锁定(第四条已反向验证判别力)。
 
-## 6. 平台范围声明
+## 6. 兼容层：Android `csp_*.jar`（ADR-0002）
+
+Phase 3 的「PC Java Spider」在 §9.3 中定义为 **无 Android Context 的桌面 JVM ABI**
+（`tvbox-java-v1`），因此它**不能**直接运行生态里现成的 Android `csp_*.jar`——
+那些 jar 内是 `classes.dex`，且依赖 `Context`、`DexClassLoader`、`okhttp3`。
+
+针对「让存量 Android jar 也能用」这一诉求，`docs/adr/0002-android-csp-jar-compat.md`
+另设**可选兼容层**，并给出方案对比与验收要求。要点：
+
+| 方案 | 载体 | 能跑现成 jar | 状态 |
+| --- | --- | --- | --- |
+| **D** 桌面 JVM ABI | `sidecars/spider-host-jvm` | ❌（需桌面版 jar） | ✅ 本阶段实施 |
+| **E** 远程 Android 设备 sidecar | 用户手机/盒子 | ✅ | 未实施（性价比最高） |
+| **A1** Android Emulator | 本机 `emulator.exe` + AVD | ✅ | ⚠️ 未实施，仅「单机自足」时启用 |
+| **A2** Redroid 容器 | WSL2 + Docker | ✅ | ⚠️ 未实施，同上 |
+| **A4** WSA | Windows 子系统 | ✅ | ❌ 2025-03-05 已下架，不作产品依赖 |
+| **B** dex→class 转译 | 纯 JVM | ⚠️ 不可行 | ❌ 仅适合逆向分析 |
+
+兼容层的边界（ADR-0002 §2.2）：
+
+1. **默认关闭**，未开启时 `csp_*`/`jar` 站点仍显示结构化不可用结论，不得静默启动模拟器。
+2. **非主路线**，桌面 JVM ABI 才是 Phase 3 承诺的 PC Java 运行时。
+3. **独立 sidecar 进程**，符合 §9.8；主进程不加载任何不可信代码。
+4. **走既有 HTTP 契约**：Android 侧实现 §9.4 `webhtv-cat-http-v1` 的六个路由
+   （`/init` `/home` `/category` `/detail` `/search` `/play`），宿主复用 `CatHttpClient`，
+   不新增 ABI 版本；`/live` `/proxy` `/action` 保持未实现并如实报错。
+5. **不进入安装包**：镜像与桥接 APK 由用户按需安装；缺失时 UI 显示可定位原因。
+6. **合规边界不变**：只执行用户自行导入的站源，不随包分发任何 jar/镜像/站源。
+
+A1/A2 的**主要成本不是「启动模拟器」，而是自建桥接 APK**（复刻 CatVod `Spider` 基类 +
+`DexClassLoader` + Result/Vod 模型 + 六路由 HTTP 服务），另需约 30 行宿主适配把
+`csp_<类名>` + `jar` 转发为桥接地址。已知风险：ARM `.so` 需转译、模拟器冷启 30–90 s
+与 §22.2 的 P95 < 3 s 门禁冲突、常驻 1.5–4 GB、网盘线路可能仍不可用。
+
+实施 A1/A2 时必须同时满足 ADR-0002 §3.3 的五项验收（可用性如实上报、进程隔离、
+桥接门禁测试、性能事实行、默认关闭），否则不得标记为可用。
+
+## 7. 平台范围声明
 
 本阶段仍**只交付 Windows**。Linux/macOS 的直播、字幕、弹幕、直播弹幕、
-解析器、JS Spider 与猫源运行时验证不在范围内;
-发布文案不得声称已支持直播、字幕、弹幕、解析器、JS Spider 或猫源。
+解析器、JS Spider、PC Java Spider 与猫源运行时验证不在范围内;
+发布文案不得声称已支持直播、字幕、弹幕、解析器、JS Spider、PC Java Spider 或猫源。

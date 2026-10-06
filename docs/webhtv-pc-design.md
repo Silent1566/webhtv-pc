@@ -293,6 +293,12 @@ Phase 0 分为两个连续门禁，避免两套候选方案重复实现完整业
 | Android 模拟器包装 | 非真正 PC 版，体验和维护差 |
 | 在 UI 主进程加载不可信 JAR/JS/Python | 无法建立可靠安全边界 |
 
+> **补充（ADR-0002）**：上表拒绝的是把 Android 运行时当作**产品形态**（PC 版≈模拟器壳）。
+> 对于「运行存量 Android `csp_*.jar`」这一具体诉求，ADR-0002 另设**可选兼容层**：
+> 默认关闭、非主路线、走 §9.4 `webhtv-cat-http-v1` 六路由、不进入安装包。
+> 主路线仍为 §9.3 的桌面 JVM ABI（`tvbox-java-v1`）。
+> 关键事实：**能执行 dex 的只有 ART，不是 JVM**；JVM 只能运行无 Android Context 的桌面 jar。
+
 ---
 
 ## 6. 项目结构设计
@@ -511,6 +517,11 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 4. `flag` 参与解析器匹配和线路标识，不单独等同于直链或解析指令。
 5. `playUrl` 可能是解析入口、前缀或备用地址，语义必须按站点类型和实际样本验证。
 6. 所有冲突组合都要有请求捕获和播放决策测试，测试名称需明确站点类型。
+7. **`type=4` 不看 `playUrl`，播放入口就是站点 `api`，参数固定为 `play=<剧集目标>&flag=<线路>`**（对齐 Android `SiteApi.playerContent` 的 `type==4` 分支）。因此：
+   - `type=4` 的剧集目标必须先送播放入口（同 §8.1 分发顺序 5），不做直链初判；
+   - 播放入口返回的 `parse`/`jx` 决定后续是直链还是进解析流程（`flag` 同时用于解析器匹配，§12.2）；
+   - 播放入口返回的 `header` 是**媒体请求 Header**（§7.4.6 步骤 4），必须随决策进入播放请求；
+   - 播放入口未给出地址时如实报错，不得回退到剧集目标。
 
 ### 7.5 配置验收
 
@@ -545,7 +556,7 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 | `http.../spider/...` | CatSpider HTTP | MVP-B 候选，必须先通过 Phase 0 契约测试 |
 | `*.py` | Python Spider | Phase 3 |
 | `*.js` | Node/QuickJS Spider（PC 端已实现 Node 运行时 + `tvbox-js-v1` 沙箱；仍需用户确认后才加载远程脚本） | Phase 3 ✅ |
-| `csp_*` | PC Java Spider | Phase 3 |
+| `csp_*` | PC Java Spider（桌面 JVM ABI `tvbox-java-v1`） | Phase 3 |
 | 其他 | SpiderNull | 必须，返回明确“不支持”错误 |
 
 分发顺序：
@@ -553,7 +564,24 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 1. 先按 `api` 判定具体运行时，而不是只按 `type`。
 2. 未匹配的 `type=3` 站点使用 `SpiderNull`，UI 显示“运行时未安装/未支持”，不得显示空列表。
 3. 同一配置中存在不可运行站点时，其他站点必须继续加载。
-4. **`type=3` 的剧集目标必须先送播放入口（`/play`），不做“直链初判”短路。** 详情 `vod_play_url` 中该集 `$` 之后的值是**播放入口的输入**（`/play` 的 `id`），而不是媒体地址：网盘线路形如 `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 `https`，若按普通 HTTP API 站点那样先判“像直链”就直接给播放器，会把分享页 HTML 当媒体流（实测 `Failed to recognize file format`）。参考实现对 `type=3` 在 `playerContent` 里**无条件**先调 `/play`（`site.recent().spider().playerContent(flag, id, …)`），从不短路；`type=0/1/2/4` 保留初判以避免多余网络请求。运行时不可用时必须如实报错，不得把剧集目标当直链返回。
+4. **`type=3` 的剧集目标必须先送播放入口（`/play`），不做“直链初判”短路。** 详情 `vod_play_url` 中该集 `$` 之后的值是**播放入口的输入**（`/play` 的 `id`），而不是媒体地址：网盘线路形如 `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 `https`，若按普通 HTTP API 站点那样先判“像直链”就直接给播放器，会把分享页 HTML 当媒体流（实测 `Failed to recognize file format`）。参考实现对 `type=3` 在 `playerContent` 里**无条件**先调 `/play`（`site.recent().spider().playerContent(flag, id, …)`），从不短路；`type=0/1/2` 保留初判以避免多余网络请求。运行时不可用时必须如实报错，不得把剧集目标当直链返回。
+5. **`type=4`（HTTP API + Base64 ext）同样必须先送播放入口，且播放入口就是站点 `api` 自身。** 参考实现 `SiteApi.playerContent` 对 `site.getType() == 4` 构造 `play=<剧集目标>` 与 `flag=<线路>` 后调用站点 `api`：
+
+   ```java
+   ArrayMap<String, String> params = new ArrayMap<>();
+   params.put("play", id);
+   params.put("flag", flag);
+   String playerContent = call(site, params);   // GET <site.api>?play=…&flag=…
+   ```
+
+   要点：
+
+   - **`type=4` 没有 `playUrl` 字段**：实测一份 163 站点配置里 68 个 `type=4` 站点**全部**没有 `playUrl`，播放入口永远是 `api`。宿主不得因 `playUrl` 为空就跳过播放入口（PC 端曾如此，导致**所有** T4 站点播放落 `playbackParserRequired`，用户实测日志 `site=木偶 playbackParserRequired: 站点 木偶 未声明 playUrl，且剧集目标不是直链`）。
+   - 剧集目标是**播放入口的输入**，不是媒体地址：既可能是 URL 编码 JSON（网盘：`7b22696422…`）、也可能是形如 `111136494@851839@1` 的站点内 ID。不得用“看起来像直链”来短路。
+   - 播放入口返回值必须整体参与决策：`parse=1`/`jx=1` → 继续走 §12 解析器；`parse=0` + 真实地址 → 直链播放；**播放结果 `header` 必须进入媒体请求**（实测 115 CDN 直链靠 `user-agent: Mozilla/5.0 115Browser/…` 取流）。
+   - 播放入口没给出地址（或只给出 `url:"1"` 一类占位符 + `msg` 业务错误）时**如实报错**（`playbackUrlMissing` / `siteBusiness`），不得把剧集目标当直链返回。
+
+   实测 T4 站点播放形态分布（真实 AT 配置，68 个 `type=4` 站点抽样 38 个可播站点）：直链 + 媒体 Header 22 个、`parse=1` 走解析器 6 个、平台页/JSON 直链其余；播放入口返回 `url` 为**数组**（多码率/多线路）与字符串两种形态均需兼容。
 
 ### 8.2 站点字段
 
@@ -723,7 +751,8 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 | `webhtv-cat-http-v1` | 兼容 `POST <api>/home/category/detail/play/search` 的 HTTP 子集；兼容标签为 `tvbox-http-v1` | MVP-B 候选 |
 | `tvbox-js-v1` | Node/QuickJS 脚本协议（PC 端已实现 Node `vm` 沙箱；QuickJS 内核未实现） | Phase 3 ✅ |
 | `tvbox-python-v1` | Python 脚本协议 | Phase 3 |
-| `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名 | Phase 3 |
+| `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名（已实现：`sidecars/spider-host-jvm/host.jar`，纯 JDK、零第三方依赖，支持 jar / 类目录 / `.java` / 源码目录四态入口） | Phase 3 ✅ |
+| `webhtv-cat-http-v1`（Android 桥接） | Android `csp_*.jar` 兼容层：桥接 APK 暴露 §9.4 六路由，宿主按 cat http 调用；默认关闭、非主路线 | 可选（ADR-0002） |
 
 `major` 不兼容，`minor` 只增加可选能力。宿主和 Spider 必须在初始化时交换版本与 capability，禁止靠方法是否抛异常猜测能力。
 
@@ -941,6 +970,26 @@ init()
 - 只有能在独立 JVM sidecar 中加载的 JAR 才允许进入桌面兼容路径。
 - 任何 JAR 都不得在 UI 主进程中反射加载。
 
+**已实现（Phase 3）**：桌面 JVM 路径由 `sidecars/spider-host-jvm/host.jar` 承担
+（§9.3 `tvbox-java-v1`），主程序按 manifest 的 `runtime` 为 `jvm*`/`java*` 时启动
+`java -jar host.jar --entry … --manifest …`。要点：
+
+- 入口支持 `.jar` / 类目录 / `.java` / 源码目录；`.java` 用 JDK 自带
+  `javax.tools` 编译器，因此需要 **JDK 17+**（不是 JRE）；
+- **JVM 堆参数必须显式给出**：宿主用 Windows 作业对象把内存限制为 manifest 的
+  `limits.memoryMiB`（默认 256 MiB），而 JVM 默认按物理内存 1/4 预留堆（实测
+  640 MiB）会直接 `os::commit_memory failed` 退出。主程序按 manifest 推导
+  `-Xmx{memoryMiB/2}` 等参数；
+- **Java 运行时按版本探测，不按 PATH 顺序取第一个**：实测本机 PATH 上
+  `jre1.8.0_501` 排在 JDK 21 之前，直接取第一个会因
+  `UnsupportedClassVersionError` 启动即崩；探测同时要求同目录有 `javac`；
+- `csp_*` 站点（TVBox 生态的 Java 站源类名形态）映射到 `jvm` 运行时，但只接受
+  **无 Android Context 的桌面 jar**；含 `classes.dex` 的 Android jar 会明确报
+  「JVM 无法加载」，而不是启动后崩溃（ADR-0002 §1.1）。
+
+Android `csp_*.jar` 本身仍不在桌面路径内（dex 只能由 ART 执行），如需运行存量
+Android 站源请走 ADR-0002 的可选兼容层（默认关闭、非主路线）。
+
 ### 9.10 Spider 验收
 
 | 能力 | 验收 |
@@ -1130,14 +1179,19 @@ PlayerEngine.load()
 
 ### 12.1 支持类型
 
-必须兼容：
+必须兼容的类型与 PC 端支持情况（与 §5.8、`lib/core/parse_runtime.dart` 一致）：
 
-| 类型 | 说明 |
-| --- | --- |
-| `type=0` | JSON 解析 |
-| `type=1` | Web 嗅探/解析 |
-| `type=2` | JSON 扩展解析 |
-| `type=3` | Spider 解析 |
+| 类型 | 说明 | PC 端 |
+| --- | --- | --- |
+| `type=0` | Web 嗅探（需浏览器内核/WebView 嗅探页面） | ❌ 明确报错 |
+| `type=1` | JSON 解析（`GET 解析器url + 目标url`，取 `{url}`/`{data.url}`） | ✅ |
+| `type=2` | JSON 扩展解析（携带全部 type=1 解析器为查找表） | ✅ |
+| `type=3` | JSON Mix（携带 flag 与全部解析器 `ext`） | ✅ |
+| `type=4` | Super（多解析器并发，含 Web 嗅探竞争，依赖 WebView） | ❌ 明确报错 |
+
+> 类型编号以 TVBox/WebHTV 生态与 Android 参考实现为准（`type=0` 为 Web 嗅探、
+> `type=1` 为 JSON 解析）。选中 PC 端不支持的 `type=0`/`type=4` 时抛
+> `ParseSelectionException`，UI 展示可定位文案，**不静默降级**为直链（§5.8）。
 
 ### 12.2 解析流程
 
