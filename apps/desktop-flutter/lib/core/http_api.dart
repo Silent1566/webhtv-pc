@@ -233,7 +233,14 @@ class HttpApiRequestBuilder {
   /// - 否则按**播放接口**处理，保留原有 query 并追加 `id=<剧集目标>`。
   ///
   /// 两种形态的最终结果都必须经 [PlaybackResolver] 校验，缺 URL 时明确报错。
-  HttpApiCall buildPlayRequest(String target) {
+  ///
+  /// `type=4`（HTTP API + Base64 ext）没有 `playUrl` 概念：播放入口**就是站点
+  /// `api` 本身**，按 `play=<剧集目标>&flag=<线路>` 调用（见
+  /// [buildBase64ExtPlayRequest]）。
+  HttpApiCall buildPlayRequest(String target, {String? flag}) {
+    if (site.type == SiteType.jsonApiBase64Ext) {
+      return buildBase64ExtPlayRequest(target, flag: flag);
+    }
     final playUrl = asNonEmptyString(site.extra['playUrl']) ??
         asNonEmptyString(site.extra['playurl']);
     if (playUrl == null) {
@@ -266,6 +273,68 @@ class HttpApiRequestBuilder {
       method: 'GET',
       uri: uriWithoutUserInfo(uri),
       headers: _headersFor(endpoint),
+      action: 'play',
+    );
+  }
+
+  /// 构造 `type=4`（HTTP API + Base64 ext）的播放入口请求。
+  ///
+  /// **契约来源**（Android 参考实现 `SiteApi.playerContent`，`site.getType() == 4`
+  /// 分支）：
+  ///
+  /// ```java
+  /// ArrayMap<String, String> params = new ArrayMap<>();
+  /// params.put("play", id);
+  /// params.put("flag", flag);
+  /// String playerContent = call(site, params);   // 即 GET <site.api>?play=…&flag=…
+  /// ```
+  ///
+  /// 也就是说 `type=4` 的剧集目标是**播放入口的输入**，播放入口是站点 `api` 自身
+  /// （`?play=<剧集目标>&flag=<线路>`），与 `type=3` 的 `/play` 路由同义。宿主**必须**
+  /// 调用它才能拿到真实媒体地址与媒体 Header：
+  ///
+  /// - 实测 T4 站点（`http://192.168.50.50:3000/video/木偶`）`play=<剧集目标>&flag=a115`
+  ///   返回 `{parse:0, jx:0, url:"https://cdnfhnfile.115cdn.net/…mp4",
+  ///   header:{"user-agent":"Mozilla/5.0 115Browser/23.9.3.2"}}`——**该 UA 是 115 CDN
+  ///   放行的必要条件**，只看详情里的剧集目标（纯 https 直链）拿不到它；
+  /// - 平台型 T4 站点（`movie360`/`iqiyi`/`mgtv`/`youku`）播放入口返回 `parse=1` +
+  ///   解析器地址，必须继续走 §12 解析器；
+  /// - `HanXiaoQuanNight`/`YingHuaDM` 等返回 `parse=0` + 真实 m3u8 + `Referer`/`Origin`。
+  ///
+  /// 站点 `ext` 的编码规则与 [build] 一致（≤1000 放 query，>1000 放表单 body）。
+  /// 缺少 `flag` 时不发送该参数（实测服务端按「无线路」处理，多数站点返回解析器地址
+  /// 或业务错误，不会静默成功）。
+  HttpApiCall buildBase64ExtPlayRequest(String target, {String? flag}) {
+    final endpoint = _endpoint();
+    final parameters = <String, String>{};
+    final form = <String, String>{};
+
+    final ext = normalizedExt;
+    if (ext != null) {
+      if (ext.length > extQueryLimit) {
+        form['extend'] = ext;
+      } else {
+        parameters['extend'] = ext;
+      }
+    }
+    parameters['play'] = target;
+    final line = flag?.trim() ?? '';
+    if (line.isNotEmpty) parameters['flag'] = line;
+
+    final headers = _headersFor(endpoint);
+    if (form.isNotEmpty) {
+      headers['Content-Type'] =
+          'application/x-www-form-urlencoded; charset=utf-8';
+    }
+
+    final uri = endpoint.replace(
+      queryParameters: {...endpoint.queryParameters, ...parameters},
+    );
+    return HttpApiCall(
+      method: form.isEmpty ? 'GET' : 'POST',
+      uri: uriWithoutUserInfo(uri),
+      formBody: form.isEmpty ? null : form,
+      headers: headers,
       action: 'play',
     );
   }

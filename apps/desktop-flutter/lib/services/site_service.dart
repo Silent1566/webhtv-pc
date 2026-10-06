@@ -198,19 +198,32 @@ class SiteService {
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
 
-    // 站点播放入口回调（如猫源 `/play`）必须真实参与解析的站点：
-    // `type=3` Spider 站点（含猫源 / JS）的剧集目标常是**站点播放入口的输入**（详情
-    // `vod_play_url` 里该集 `$` 之后的值），而不是可直连的媒体地址。以网盘线路为例：
-    //   episodeTarget；=`https://pan.baidu.com/s/...|...|<base64>`
-    // 裸 scheme 是 https，若按普通 HTTP API 站点的「直链初判」会把它当成直链直接给
-    // 播放器，于是网盘分享页被当 html 流 → `Failed to recognize file format`（实测）。
-    // 参考实现（Silent1566/webhtv）对 `type=3` 在 `playerContent` 里**无条件**先调
-    // `/play`（`site.recent().spider().playerContent(flag, id, ...)`），从不做这种短路。
-    // 因此这里对 `type=3` 跳过直链初判，一律先向播放入口取真实地址；普通 HTTP API
-    // 站点（`type=0/1/2/4`）保留原有初判，避免多余网络请求。
-    // 注意：SpiderNull / Unsupported 站点的 runtime 会在 `/play` 时如实报错，
+    // 站点播放入口回调必须真实参与解析的站点：
+    // - `type=3` Spider 站点（含猫源 / JS / PC Java）的剧集目标常是**站点播放入口的
+    //   输入**（详情 `vod_play_url` 里该集 `$` 之后的值），而不是可直连的媒体地址。
+    //   以网盘线路为例：
+    //     episodeTarget = `https://pan.baidu.com/s/...|...|<base64>`
+    //   裸 scheme 是 https，若按普通 HTTP API 站点的「直链初判」会把它当成直链直接给
+    //   播放器，于是网盘分享页被当 html 流 → `Failed to recognize file format`（实测）。
+    //   参考实现（Silent1566/webhtv）对 `type=3` 在 `playerContent` 里**无条件**先调
+    //   `/play`（`site.recent().spider().playerContent(flag, id, ...)`），从不做这种短路。
+    // - `type=4`（HTTP API + Base64 ext）同理：参考实现在 `playerContent` 里对
+    //   `site.getType() == 4` **无条件**用 `play=<剧集目标>&flag=<线路>` 调站点 `api`，
+    //   从不先做直链初判。实测 T4 站点（`http://192.168.50.50:3000/video/木偶`）的
+    //   剧集目标本身就是**带时效签名的 CDN 直链**，但它只有在播放入口返回的
+    //   `header`（如 115 CDN 必需的 `user-agent: Mozilla/5.0 115Browser/…`）下才可取流；
+    //   平台型 T4 站点（`movie360`/`iqiyi`/`mgtv`/`youku`）更依赖播放入口的 `parse=1`
+    //   才能拿到解析器地址。此前 PC 端把 `type=4` 当普通 HTTP API 站点处理，只对
+    //   **站点自身声明的 `playUrl`** 才调播放入口，而 T4 站点的播放入口就是 `api`，
+    //   于是**所有** T4 站点都落到「目标不是直链且未声明 playUrl」→
+    //   `playbackParserRequired`（用户实测日志：`site=木偶 playbackParserRequired`）。
+    //   因此这里对 `type=3`/`type=4` 跳过直链初判，一律先向播放入口取真实地址；普通
+    //   HTTP API 站点（`type=0/1/2`）保留原有初判，避免多余网络请求。
+    // 注意：SpiderNull / Unsupported 站点的 runtime 会在播放入口如实报错，
     // 不会伪装成直链成功。
-    final mustCallPlay = site.type == SiteType.spider;
+    final mustCallPlay =
+        site.type == SiteType.spider ||
+        site.type == SiteType.jsonApiBase64Ext;
 
     PlaybackDecision? preliminary;
     if (!mustCallPlay) {
@@ -268,19 +281,23 @@ class SiteService {
           detail: '站点=${site.key} 线路=${flag ?? ""} 目标=${redactUrl(episodeTarget)}',
         );
       }
-      var decision = PlaybackResolver.decide(
-        PlaybackResolutionInput(
-          site: site,
-          episodeTarget: playTarget ?? episodeTarget,
-          flag: flag,
-          parse: playResult.parse,
-          jx: playResult.jx,
-          resultHeader: playResult.header,
-          globalHeaders: _globalHeaders,
-          subs: playResult.subs,
-          danmaku: playResult.danmaku,
-        ),
+      // 播放入口给了地址但该地址仍不可播（如 `tvb_yunbao` 的「剧情简介」线路回
+      // `parse=0` + `url:"vwnet-07cd…"` 这类站点内占位串）。此时 [PlaybackResolver]
+      // 会抛「剧集目标不是直链，且站点未声明 playUrl 前缀」——对 `type=4` 这句话是
+      // **错的**：T4 根本没有 `playUrl` 概念，播放入口就是 `api` 且已经调过了。
+      // 实测该文案把排查方向引向「站点缺 playUrl」（用户报告的同一类困惑）。
+      // 因此这里把兜底错误换成**如实描述实际发生了什么**并带上播放入口返回值。
+      final resolved = _resolvePlayEntryTarget(
+        site: site,
+        playResult: playResult,
+        playTarget: playTarget,
+        episodeTarget: episodeTarget,
+        flag: flag,
+        globalHeaders: _globalHeaders,
       );
+      final failure = resolved.failure;
+      if (failure != null) throw failure;
+      var decision = resolved.decision;
       if (decision.action == PlaybackAction.needParser) {
         decision = await _runParser(
           site: site,
@@ -300,6 +317,63 @@ class SiteService {
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       _record(site.key, HealthAction.play, false, stopwatch.elapsed, failure.logLine);
       throw failure;
+    }
+  }
+
+  /// 把播放入口返回值变成播放决策；不可播时给出**如实**的错误。
+  ///
+  /// 为什么需要它：对 `type=3`/`type=4` 这类「剧集目标必须先送播放入口」的站点，
+  /// [PlaybackResolver] 的兜底文案（「站点未声明 playUrl 前缀」）在语义上是错的——
+  /// 播放入口**已经调过**，问题由在播放入口返回的东西不可播。用户报告的缺陷正是
+  /// 被这类错位文案误导（`site=木偶 playbackParserRequired: 站点 木偶 未声明 playUrl`）。
+  _PlayEntryResolution _resolvePlayEntryTarget({
+    required Site site,
+    required SiteResult playResult,
+    required String? playTarget,
+    required String episodeTarget,
+    String? flag,
+    required List<HeaderRule> globalHeaders,
+  }) {
+    final target = playTarget ?? episodeTarget;
+    try {
+      return _PlayEntryResolution(
+        decision: PlaybackResolver.decide(
+          PlaybackResolutionInput(
+            site: site,
+            episodeTarget: target,
+            flag: flag,
+            parse: playResult.parse,
+            jx: playResult.jx,
+            resultHeader: playResult.header,
+            globalHeaders: globalHeaders,
+            subs: playResult.subs,
+            danmaku: playResult.danmaku,
+          ),
+        ),
+      );
+    } on AppError catch (error) {
+      // 只重写「目标不可播」这一类；解析器/其它分类原样上抛（它们已可定位）。
+      if (error.kind != AppErrorKind.playbackParserRequired &&
+          error.kind != AppErrorKind.playbackUrlMissing) {
+        rethrow;
+      }
+      final entryField = playTarget != null
+          ? '播放入口返回 ${redactUrl(playTarget)}'
+          : '播放入口未给出地址，剧集目标 ${redactUrl(episodeTarget)}';
+      return _PlayEntryResolution(
+        // `decision` 在 failure 非空时不会被使用；这里保留原错误对应的动作以
+        // 避免引入无意义的占位值。
+        decision: PlaybackDecision(
+          action: error.kind == AppErrorKind.playbackUrlMissing
+              ? PlaybackAction.direct
+              : PlaybackAction.needParser,
+        ),
+        failure: AppError(
+          AppErrorKind.playbackParserRequired,
+          '播放入口返回的目标不是可播放地址',
+          detail: '站点=${site.key} 线路=${flag ?? ""} $entryField',
+        ),
+      );
     }
   }
 
@@ -405,4 +479,14 @@ class SiteService {
     buffer.write('"');
     return buffer.toString();
   }
+}
+
+/// 播放入口返回值的解析结果：要么是可用决策，要么是**如实**的失败。
+class _PlayEntryResolution {
+  const _PlayEntryResolution({required this.decision, this.failure});
+
+  final PlaybackDecision decision;
+
+  /// 非空表示播放入口返回的目标不可播；调用方必须上抛，不得继续使用 [decision]。
+  final AppError? failure;
 }

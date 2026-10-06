@@ -187,6 +187,14 @@ class TestFixtureServer {
       case '/api/play-parse-required':
         await _fixtureJson(request, 'http/play-parse-required.json');
         return;
+      // `type=4` 播放入口（`?play=<剧集目标>&flag=<线路>`）样本族（§8.1 分发顺序 4）：
+      //   目标 `t4-direct` → 播放入口返回 parse=0 的真实媒体地址 + 媒体 Header；
+      //   目标 `t4-parse`  → 播放入口返回 parse=1（须继续走 §12 解析器）；
+      //   目标 `t4-nourl`  → 播放入口只回业务错误，不带 url（如实报错，不回退目标）；
+      //   其余（含目标缺失/flag 缺失）→ 服务端回 `{ac,play,flag,extend}` 回显，
+      //   使测试能断言**实际发出的请求参数**。
+      // 注意：T4 站点的 `api` 常带末尾斜杠（`.../video/木偶` 除外），路由归一化后
+      // 落到 `/api/type4`，因此这里在 `_serveApi` 内按 `play` 参数分派。
       case '/api/repository-a.json':
         await _json(request, {
           'name': '仓库条目 A',
@@ -387,6 +395,66 @@ class TestFixtureServer {
     await _json(request, {'status': 404, 'msg': 'cat http 路由未实现'});
   }
 
+  /// `type=4` 播放入口 fixture（§8.1 分发顺序 4）。
+  ///
+  /// 真实服务端契约（Android `SiteApi.playerContent` 的 `type==4` 分支）：
+  /// `GET <site.api>?play=<剧集目标>&flag=<线路>`，返回播放入口结果。这里按
+  /// **剧集目标**分派样本，使测试既能量到「请求确实打到播放入口、参数是
+  /// play/flag」，又能分别验证 `parse=0`（直链 + 媒体 Header）、`parse=1`
+  /// （须继续走解析器）与「播放入口没给地址」三条路径。
+  Future<void> _serveType4Play(
+    HttpRequest request,
+    Map<String, String> parameters,
+  ) async {
+    final target = parameters['play'] ?? '';
+    switch (target) {
+      case 't4-direct':
+        await _fixtureJson(request, 'http/t4-play-direct.json');
+        return;
+      case 't4-parse':
+        await _fixtureJson(request, 'http/t4-play-parse.json');
+        return;
+      case 't4-nourl':
+        // 播放入口没给出地址（上游行为，对齐猫源夸克线路回 `{urls:[],header:{}}`）：
+        // 不得回退到剧集目标，应如实报错。
+        await _json(request, {'parse': 0, 'jx': 0});
+        return;
+      case 't4-bizerr':
+        // 实测真实 T4 服务端在取不到地址时回 `{"url":"1","parse":1,"jx":1,
+        // "msg":"Request failed with status code 403"}`：业务错误必须原样上报，
+        // 同样不得回退到剧集目标。
+        await _json(request, {
+          'url': '1',
+          'parse': 1,
+          'jx': 1,
+          'msg': 'Request failed with status code 403',
+        });
+        return;
+      case 't4-placeholder':
+        // 播放入口**给出了地址**，但该地址不是可播放地址（实测 `tvb_yunbao` 的
+        // 「剧情简介」线路回 `parse=0` + `url:"vwnet-07cd…"` 这类站点内 ID）。
+        // 宿主必须如实说明「播放入口返回的目标不是可播放地址」，
+        // 不得报「站点未声明 playUrl」（`type=4` 根本没有 playUrl 概念）。
+        await _json(request, {
+          'parse': 0,
+          'jx': 0,
+          'url': 'vwnet-07cd11391cc93d80a28dd165df84d7fe',
+          'header': {'User-Agent': 'WebHTV-PC-Phase0'},
+        });
+        return;
+      default:
+        // 回显：断言实际发出的 `play`/`flag`/`extend` 参数与编码方式。
+        await _json(request, {
+          'ac': parameters['ac'],
+          'play': target,
+          'flag': parameters['flag'],
+          'extend': parameters['extend'],
+          'form': parameters.containsKey('play') &&
+              !request.uri.queryParameters.containsKey('play'),
+        });
+    }
+  }
+
   /// 样本族动作归一化：真实猫源 `api` 是多段路径（如 `/spider/omnibox_4KVM/3`），
   /// 追加 `/play` 后为 `/spider/omnibox_4KVM/3/play`。取**末段**得到动作，
   /// 但保留已知的多段动作（`/home-envelope`、`/search-array`、`/server-error`、
@@ -469,6 +537,10 @@ class TestFixtureServer {
     String route,
     Map<String, String> parameters,
   ) async {
+    if (route == '/api/type4' && parameters.containsKey('play')) {
+      await _serveType4Play(request, parameters);
+      return;
+    }
     if (parameters.containsKey('wd')) {
       await _fixtureJson(request, 'http/category.json');
       return;

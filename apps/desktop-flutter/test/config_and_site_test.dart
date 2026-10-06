@@ -863,6 +863,242 @@ void main() {
     });
   });
 
+  group('type=4 播放入口（§8.1 分发顺序 4、§7.4.8）', () {
+    late AppDatabase database;
+
+    setUp(() {
+      database = AppDatabase.inMemory();
+    });
+    tearDown(() {
+      database.dispose();
+    });
+
+    // 与真实 AT 配置同形的 T4 站点：`type=4` + `api` + 站点级 `header`（token），
+    // 且**没有** `playUrl`（实测 163 站点里 68 个 type=4 全部没有 playUrl）。
+    Site t4Site({Object? ext}) => Site(
+      key: 't4',
+      name: 'T4 站点',
+      type: SiteType.jsonApiBase64Ext,
+      api: '${server.baseUrl}/api/type4/',
+      header: HeaderMap({'token': '872141dcd4e66e8a'}),
+      ext: ext,
+    );
+
+    SiteService t4Service(AppConfig config) {
+      final router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(router.dispose);
+      return SiteService(
+        appConfig: config,
+        router: router,
+        database: database,
+      );
+    }
+
+    test('播放入口是站点 api 自身：`play=<剧集目标>&flag=<线路>`（§7.4.8）', () {
+      // 契约来源：Android `SiteApi.playerContent` 的 `site.getType() == 4` 分支
+      // 构造 `params.play = id` / `params.flag = flag` 后调站点 `api`。
+      // 旧实现只对**站点自身声明的 playUrl** 才调播放入口，而 T4 站点没有
+      // playUrl → 所有 T4 站点播放都落 `playbackParserRequired`（用户实测）。
+      final builder = HttpApiRequestBuilder(site: t4Site());
+      final call = builder.buildPlayRequest('剧集目标串', flag: 'a115');
+      expect(call.method, 'GET');
+      expect(call.uri.path, '/api/type4/');
+      expect(call.uri.queryParameters['play'], '剧集目标串');
+      expect(call.uri.queryParameters['flag'], 'a115');
+      // 站点 header（token）必须随请求发出，否则 T4 服务端 401。
+      expect(call.headers['token'], '872141dcd4e66e8a');
+    });
+
+    test('缺少 flag 时不发送 flag 参数（不伪造线路）', () {
+      final call = HttpApiRequestBuilder(
+        site: t4Site(),
+      ).buildPlayRequest('剧集目标串');
+      expect(call.uri.queryParameters['play'], '剧集目标串');
+      expect(call.uri.queryParameters.containsKey('flag'), isFalse);
+    });
+
+    test('站点 ext 长度决定 extend 走 query 还是表单 body（§7.4.7）', () {
+      final short = HttpApiRequestBuilder(
+        site: t4Site(ext: '{"a":1}'),
+      ).buildPlayRequest('t', flag: 'f');
+      expect(short.formBody, isNull);
+      expect(short.uri.queryParameters['extend'], '{"a":1}');
+
+      final long = HttpApiRequestBuilder(
+        site: t4Site(ext: 'x' * 1001),
+      ).buildPlayRequest('t', flag: 'f');
+      expect(long.method, 'POST');
+      expect(long.formBody?['extend']?.length, 1001);
+      // 超长 ext 不能进入 URL query（§7.4.7 不允许请求头/URL 过大）。
+      expect(long.uri.queryParameters.containsKey('extend'), isFalse);
+      expect(long.uri.queryParameters['play'], 't');
+    });
+
+    test('parse=0：播放入口直链 + 媒体 Header 真实进入播放决策', () async {
+      final config = AppConfig(name: 'T4 直链', sites: [t4Site()]);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: 't4-direct',
+        flag: 'a115',
+      );
+      final decision = outcome.value;
+      expect(decision.action, PlaybackAction.direct);
+      expect(decision.url, '${server.baseUrl}/media/sample.mp4');
+      // 播放入口返回的媒体 Header（实测 115 CDN 必需 UA）必须带上。
+      expect(
+        decision.headers?['user-agent'],
+        'Mozilla/5.0 115Browser/23.9.3.2',
+      );
+
+      // 必须**真实**请求过播放入口（而不是把剧集目标当直链短路）。
+      final playCall = server.captured.firstWhere(
+        (item) => item.path.startsWith('/api/type4'),
+      );
+      expect(playCall.query['play'], 't4-direct');
+      expect(playCall.query['flag'], 'a115');
+      expect(playCall.headers['token'], '872141dcd4e66e8a');
+    });
+
+    test('parse=1：播放入口要求解析器时继续走 §12 解析器', () async {
+      final config = AppConfig(
+        name: 'T4 解析器',
+        sites: [t4Site()],
+        parses: [
+          ParseEntry(
+            name: 'Fixture 解析器',
+            type: 1,
+            url: '${server.baseUrl}/api/parse/type1',
+          ),
+        ],
+      );
+      final parseService = ParseService();
+      addTearDown(parseService.close);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: 't4-parse',
+        flag: 'a115',
+        parseService: parseService,
+      );
+      final decision = outcome.value;
+      expect(decision.action, PlaybackAction.direct);
+      expect(decision.url, '${server.baseUrl}/media/sample.mp4');
+      expect(decision.reason, contains('parsed-by'));
+
+      // 顺序：先播放入口，再解析器；两者都必须真实发生。
+      final paths = server.captured.map((item) => item.path).toList();
+      expect(paths.any((path) => path.startsWith('/api/type4')), isTrue);
+      expect(
+        paths.any((path) => path.startsWith('/api/parse/type1')),
+        isTrue,
+      );
+    });
+
+    test('播放入口没给地址时如实报错，不回退到剧集目标', () async {
+      final config = AppConfig(name: 'T4 无地址', sites: [t4Site()]);
+      final service = t4Service(config);
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-nourl',
+          flag: 'a115',
+        ),
+      );
+      // 不得把 `t4-nourl` 当直链返回（那会让播放器去放一个不存在的地址）。
+      expect(error.kind, AppErrorKind.playbackUrlMissing);
+    });
+
+    test('播放入口回业务错误时原样上报，不得把占位 url 当播放地址', () async {
+      // 实测真实 T4 服务端在取不到地址时回
+      // `{"url":"1","parse":1,"jx":1,"msg":"Request failed with status code 403"}`。
+      // 该 `url` 是占位符（不是地址），必须报业务错误；若当成地址交给播放器，
+      // 用户看到的会是一个“像地址但放不了”的 1，比直接报错更难排查。
+      final config = AppConfig(name: 'T4 业务错误', sites: [t4Site()]);
+      final service = t4Service(config);
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-bizerr',
+          flag: 'a115',
+        ),
+      );
+      expect(error.kind, AppErrorKind.siteBusiness);
+      expect(error.message, contains('403'));
+    });
+
+    test('播放入口返回占位串时，错误文案不得声称「未声明 playUrl」', () async {
+      // 实测 `tvb_yunbao` 的「剧情简介」线路：播放入口确实**调了**、也**返回了地址**
+      // （`parse=0` + `url:"vwnet-07cd…"`），但那是站点内 ID、不是媒体地址。
+      // 此时 [PlaybackResolver] 的兜底文案「站点未声明 playUrl 前缀」对 `type=4` 是
+      // **错的**（T4 没有 playUrl 概念，播放入口就是 api）——正是用户报告里那句话
+      // 把排查方向引偏的同一类问题。文案必须如实说明“播放入口返回的目标不可播”。
+      final config = AppConfig(name: 'T4 占位串', sites: [t4Site()]);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-placeholder',
+          flag: '剧情简介',
+        ),
+      );
+      expect(error.kind, AppErrorKind.playbackParserRequired);
+      final text = '${error.message} ${error.detail ?? ""}';
+      expect(
+        text,
+        isNot(contains('未声明 playUrl')),
+        reason: 'type=4 没有 playUrl 概念，不得再用该文案误导排查方向',
+      );
+      expect(text, contains('播放入口返回的目标不是可播放地址'));
+      expect(text, contains('t4'));
+      expect(text, contains('剧情简介'));
+      // 必须真实请求过播放入口（这是缺陷 22 修复的核心）。
+      final playCall = server.captured.firstWhere(
+        (item) => item.path.startsWith('/api/type4'),
+      );
+      expect(playCall.query['play'], 't4-placeholder');
+      expect(playCall.query['flag'], '剧情简介');
+    });
+
+    test('type=0/1/2 保持直链初判：不为直链多打一次播放入口', () async {
+      // 回归保护：本次修改只应把 `type=3`/`type=4` 改为「先调播放入口」，
+      // 普通 HTTP API 站点（type=0/1/2）的直链不得产生多余网络请求。
+      final config = AppConfig(
+        name: 'type1 直链',
+        sites: [
+          Site(
+            key: 'type1',
+            name: 'JSON API 站点',
+            type: SiteType.jsonApi,
+            api: '${server.baseUrl}/api/type1/',
+          ),
+        ],
+      );
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: '${server.baseUrl}/media/sample.m3u8',
+        flag: 'line',
+      );
+      expect(outcome.value.action, PlaybackAction.direct);
+      expect(outcome.value.url, '${server.baseUrl}/media/sample.m3u8');
+      expect(server.captured, isEmpty);
+    });
+  });
+
   group('配置记录持久化与恢复（§7.5、§16）', () {
     test('导入 → 保存 → 重启恢复 得到同样的模型与未知字段', () async {
       final database = AppDatabase.inMemory();
