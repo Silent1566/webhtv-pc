@@ -325,6 +325,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
         所有类型都返回同一份语义数据，差异只在请求编码与响应格式：
         type=0 返回 XML，其余返回 JSON。特殊 ids 返回多线路/多剧集/业务错误样本。
         """
+        # `type=4` 播放入口（§8.1 分发顺序 4）：`GET <api>?play=<剧集目标>&flag=<线路>`。
+        # 真实服务端契约与 Android `SiteApi.playerContent` 的 `type==4` 分支一致。
+        if route == "/api/type4" and params.get("play") is not None:
+            self._send_type4_play(params)
+            return
         if params.get("wd"):
             self._send_json_bytes(_json("category.json"))
             return
@@ -377,6 +382,39 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._send_bytes(XML_HOME.encode("utf-8"), XML_CONTENT_TYPE)
             return
         self._send_json_bytes(_json("home.json"))
+
+    def _send_type4_play(self, params: dict) -> None:
+        """`type=4` 播放入口样本族（按剧集目标分派）。
+
+        - `t4-direct` → `parse=0` 的真实媒体地址 + 媒体 Header；
+        - `t4-parse`  → `parse=1`（须继续走 §12 解析器）；
+        - `t4-nourl`  → 播放入口没给地址（不得回退到剧集目标，应如实报错）；
+        - 其余 → 回显 `play`/`flag`/`extend`，供断言实际发出的参数。
+        """
+        target = params.get("play", "")
+        if target == "t4-direct":
+            self._send_json_bytes(_json("t4-play-direct.json"))
+            return
+        if target == "t4-parse":
+            self._send_json_bytes(_json("t4-play-parse.json"))
+            return
+        if target == "t4-nourl":
+            self._send_json({"parse": 0, "jx": 0})
+            return
+        if target == "t4-bizerr":
+            self._send_json({
+                "url": "1",
+                "parse": 1,
+                "jx": 1,
+                "msg": "Request failed with status code 403",
+            })
+            return
+        self._send_json({
+            "ac": params.get("ac"),
+            "play": target,
+            "flag": params.get("flag"),
+            "extend": params.get("extend"),
+        })
 
     def _send_cathttp(self, path: str, params: dict) -> None:
         """`webhtv-cat-http-v1` fixture（§9.4）。

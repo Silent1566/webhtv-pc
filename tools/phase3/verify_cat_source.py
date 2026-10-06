@@ -288,10 +288,24 @@ def main() -> int:
 
         # 4) 选站点做 home / search / play。
         #
-        # 远端猫源的站点是真实服务，个别站点可能对某个关键词临时返回空列表
-        # （HTTP 200 但 items=0，属于站点数据波动而非协议失败）。因此搜索/播放
-        # 不依赖单个站点：最多依次尝试 MAX_SITE_TRIES 个可搜索站点，任一站点
-        # 命中搜索即继续 detail → play；全部试完仍无命中才判 FAIL。
+        # 远端猫源的站点是真实服务，个别站点可能临时返回空结果：
+        # - 搜索：HTTP 200 但 `items=0`；
+        # - 播放：HTTP 200 但 `url` 为空（实测 `nodejs_omnibox_4KVM` 的 `线路1` 会
+        #   间歇性回空 `url`，而同一 bundle 的 `nodejs_omnibox_123TV` 每次都正常）。
+        # 两者都属**上游站点数据波动**，不是本仓库协议失败（本脚本要验的是
+        # 「宿主传参与 bundle 契约一致」，而不是某个远端站点的当天可用性）。
+        # 因此 search **与 play** 都做站点轮换：最多依次尝试 MAX_SITE_TRIES 个
+        # 可搜索站点，任一站点同时拿到 search 命中与真实 play 地址即通过；
+        # 全部试完仍失败才判 FAIL。
+        #
+        # 反向验证的判别力不受影响：若宿主/bundle 的 `/play` 传参语义错了
+        # （如把 `id` 传成纯 `vod_id`），则**所有**候选站点的 play 都会失败
+        # （实测 jinpai/muou/huban 等子站均回空 `url`），不会被轮换掩盖。
+        # 候选站点上限：单个远端站点当天可能临时全空（搜索空列表/播放空地址/
+        # 请求超时），上限太小会在「刚好抽到几个空站点」时把门禁判死。
+        # 实测同一 bundle 里可搜站点数远超 5（如 123TV / PPnix / AListTvbox /
+        # HDmoli / StreamingCommunity…），放宽到 12 后连续多轮均能稳定通过。
+        max_site_tries = 12
         candidates: list[dict] = []
         if args.site:
             target = next((s for s in sites if s.get("key") == args.site), None)
@@ -310,12 +324,13 @@ def main() -> int:
                     status, text = 0, f"<{error}>"
                 if status == 200 and (json.loads(text or "{}").get("class")):
                     candidates.append(site)
-                if len(candidates) >= 5:
+                if len(candidates) >= max_site_tries:
                     break
             if not candidates:
                 candidates = [sites[0]]
 
         chosen = None
+        play_failures: list[str] = []
         for idx, target in enumerate(candidates):
             tag = f"try={idx + 1}/{len(candidates)}"
             log(f"target site key={target.get('key')} name={target.get('name')} api={target.get('api')}")
@@ -331,6 +346,7 @@ def main() -> int:
             if status != 200:
                 continue
 
+            items: list = []
             for keyword in keywords:
                 status, text = http_post(
                     f"{target['api']}/search", {"wd": keyword, "page": 1}
@@ -341,17 +357,12 @@ def main() -> int:
                     f"search wd={keyword} HTTP={status} items={len(items)}"
                 )
                 if status == 200 and items:
-                    chosen = (target, items)
                     break
                 # 单站点单关键词空列表是数据波动，换下一个关键词继续；
                 # 全部关键词都不再换站点（外层换别的站点）。
-            if chosen is not None:
-                break
+            if not items:
+                continue
 
-        if chosen is None:
-            failures.append("search")
-        else:
-            target, items = chosen
             vod_id = items[0].get("vod_id")
             status, text = http_post(f"{target['api']}/detail", {"id": vod_id})
             detail = json.loads(text or "{}")
@@ -359,30 +370,47 @@ def main() -> int:
             play_flags = vod.get("vod_play_from") or ""
             play_urls = vod.get("vod_play_url") or ""
             log(
-                f"{'OK' if status == 200 and play_flags else 'FAIL'} "
+                f"{'OK' if status == 200 and play_flags else 'FAIL'} [{tag}] "
                 f"detail id={vod_id} HTTP={status} flags={play_flags}"
             )
             if not play_flags:
-                failures.append("detail")
+                continue
 
-            first_flag = play_flags.split("$$$")[0] if play_flags else ""
             # §9.4：`/play` 的 `id` 是剧集目标串（`vod_play_url` 里该集 `$` 之后的值），
             # 不是纯 `vod_id`。宿主 `CatHttpSiteRuntime.play` 即按此传参；
             # 用纯 `vod_id` 会让 jinpai/muou/huban 等子站返回空 `url`（实测缺陷）。
-            first_line = play_urls.split("$$$")[0] if play_urls else ""
-            first_episode = first_line.split("$")[-1] if first_line else ""
-            play_id = first_episode or vod_id
-            status, text = http_post(
-                f"{target['api']}/play", {"flag": first_flag, "id": play_id}
-            )
-            play_url = _json_field(text, "url") or ""
-            log(
-                f"{'OK' if status == 200 and play_url else 'FAIL'} "
-                f"play flag={first_flag} idKind={'episodeTarget' if first_episode else 'vodId'} "
-                f"HTTP={status} url={(play_url or '')[:80]}"
-            )
-            if not play_url:
-                failures.append("play")
+            #
+            # 线路也轮换：某条线路的上游可能当天失效/临时回空，换下一条线路继续
+            # （宿主侧本来就支持「播放失败换线路」，§8.3）。
+            flags = [f for f in play_flags.split("$$$") if f]
+            urls = play_urls.split("$$$")
+            play_url = ""
+            for line_index, flag in enumerate(flags):
+                line_text = urls[line_index] if line_index < len(urls) else ""
+                episodes = [e for e in line_text.split("#") if e.strip()]
+                episode_target = episodes[0].split("$")[-1] if episodes else ""
+                play_id = episode_target or vod_id
+                status, text = http_post(
+                    f"{target['api']}/play", {"flag": flag, "id": play_id}
+                )
+                play_url = _json_field(text, "url") or ""
+                log(
+                    f"{'OK' if status == 200 and play_url else 'FAIL'} [{tag}] "
+                    f"play line={line_index} flag={flag} "
+                    f"idKind={'episodeTarget' if episode_target else 'vodId'} "
+                    f"HTTP={status} url={(play_url or '')[:80]}"
+                )
+                if play_url:
+                    chosen = (target, items)
+                    break
+                play_failures.append(f"{target.get('key')}#{flag}")
+            if chosen is not None:
+                break
+
+        if chosen is None:
+            failures.append("play" if play_failures else "search")
+            if play_failures:
+                log(f"FAIL 所有候选站点的 play 均未回地址：{', '.join(play_failures[:8])}")
 
     finally:
         with contextlib.suppress(Exception):
