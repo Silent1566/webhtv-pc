@@ -1,6 +1,6 @@
 # Phase 4 计划（TMDB 元数据增强）
 
-- 状态：**实施已完成，待一键验收取证**（T1–T18 全部落地；门禁见 §3）
+- 状态：**已实施并验收**（T1–T18 全部落地；门禁全绿，证据 `PHASE4-ACCEPT result=PASS gates=all`，见 `docs/phase4/evidence/windows-acceptance.txt`；门禁表见 §3）
 - 日期：2026-10-07
 - 对应设计文档章节：本目录 `design/00`–`design/05`、`docs/webhtv-pc-design.md` §27（TMDB 元数据增强）、§21 Phase 4
 - 上游：`docs/phase3/README.md`（Phase 3 已完成：直播 / 字幕 / 弹幕 / 解析器 / EPG / JS Spider / PC Java Spider / 猫源）
@@ -233,6 +233,30 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 
 发布文案不得声称已支持 TMDB 增强，除非 §3 门禁全绿且证据写入
 `docs/phase4/evidence/windows-acceptance.txt`。
+
+### 5.1 AOT（profile）端到端补充验证
+
+`flutter test` 没有 `--release` 开关；Windows 桌面的 AOT 端到端验证只能走
+`flutter drive`。而 `flutter drive` 明确拒绝 `--release`
+（`Flutter Driver (non-web) does not support running in release mode`），
+因此用 **`--profile`** 代替：Windows 桌面上 profile 与 release 同为 **AOT 编译**，
+能覆盖 `flutter test`（JIT/debug）无法覆盖的 AOT 编译差异与代码剔除风险。
+
+```powershell
+flutter drive --driver=test_driver/integration_test.dart `
+  --target=integration_test/tmdb_detail_flow_test.dart -d windows --profile
+```
+
+驱动文件 `apps/desktop-flutter/test_driver/integration_test.dart` 只回传结果、不含断言。
+实测结果（证据见 `evidence/windows-acceptance.txt` 的 `aot-e2e` 行）：
+
+| 事实 | 值 |
+| --- | --- |
+| fixture 真实 HTTP 命中 | 19 次（`/3/tv/1399`×4、季 1 详情/视频、search 等） |
+| 匹配链 | 匹配成功，简介补位长度 26 |
+| 季度渲染 | S1=12 项、S2=10 项、线路二=8 项 |
+| 幽灵剧集 | `phantom-extra=0`（TMDB 有 S2E10 而线路只有 8 集时不外溢） |
+| 结果 | `result=PASS tests=all elapsed=41s` |
 
 ---
 

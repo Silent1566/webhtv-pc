@@ -1289,3 +1289,15 @@ PHASE4-ACCEPT debug-artifact-runnable ok elapsed=20224ms
 PHASE4-ACCEPT step: summary
 PHASE4-ACCEPT result=PASS gates=all
 PHASE4-ACCEPT fixture-server stopped pid=27468
+
+--- 补充：AOT（profile）端到端 TMDB 验证 ---
+# `flutter test` 无 --release；Windows 桌面 AOT 端到端只能走 flutter drive。
+# flutter drive 拒绝 --release（"Flutter Driver (non-web) does not support running in release mode"），
+# 故改用 --profile（Windows 桌面 profile 与 release 同为 AOT 编译）。
+# 命令：
+#   flutter drive --driver=test_driver/integration_test.dart \
+#     --target=integration_test/tmdb_detail_flow_test.dart -d windows --profile
+PHASE4-ACCEPT aot-e2e driver=flutter-drive mode=profile(AOT) device=windows target=tmdb_detail_flow_test.dart
+PHASE4-ACCEPT aot-e2e fixture-http-hits=19 routes=/3/tv/1399:4 /3/tv/1399/season/1:2 /3/tv/1399/season/1/videos:2 /3/tv/1399/videos:2 /3/search/multi:1
+PHASE4-ACCEPT aot-e2e chain match=ok overview-len=26 s1-rendered=12 s2-rendered=10 line2-rendered=8 phantom-extra=0
+PHASE4-ACCEPT aot-e2e result=PASS tests=all elapsed=41s
