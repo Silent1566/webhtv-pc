@@ -12,6 +12,7 @@ library;
 
 import 'protocol.dart';
 import 'tmdb_identity.dart';
+import 'tmdb_title.dart';
 
 /// 播放入口透传的季度身份（`04` §8.1）。
 ///
@@ -192,11 +193,18 @@ abstract final class TmdbAutoPlay {
     return -1;
   }
 
-  /// 单集所在季度（`-1` 未分类）。
+  /// 单集所在季度。
+  ///
+  /// 优先取 TMDB 富集写入的 `tmdb_season_number`，否则回退到**来源集名**里的
+  /// 季度信号（`第 N 季` / `SxxExx`）；无法判定返回 `-1`（未分类）。
+  ///
+  /// 回退是必要的：富集只为当前选中季度标记集，其余季度的集不会被标记，
+  /// 若只看 `extra` 就无法在季度边界处停止连播（`04` §8.4）。
   static int _seasonOf(VodEpisode episode) {
     final raw = episode.extra['tmdb_season_number'];
-    final number = raw is int ? raw : (raw is num ? raw.toInt() : null);
-    return number ?? -1;
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return sourceSeasonNumber(episode.name);
   }
 }
 

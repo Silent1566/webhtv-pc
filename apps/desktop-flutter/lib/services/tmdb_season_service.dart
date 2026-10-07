@@ -417,17 +417,11 @@ class TmdbSeasonService {
       ),
     );
 
-    final available = resolveAvailableSeasons(
-      sourceSeasonNumbers:
-          request.line.sourceSeasonNumbers ??
-          List<int>.filled(request.line.episodeCount, -1),
-      titleSeason: sourceSeasonNumber(request.sourceTitle),
-      firstSeason: request.tmdbSeasons.isEmpty ? -1 : request.tmdbSeasons.first,
-      tmdbSeasons: request.tmdbSeasons,
-      seasonCounts: request.seasonCounts,
-      sourceEpisodeNumbers: request.line.sourceEpisodeNumbers,
+    final available = _availableFor(
+      request: request,
+      binding: effective,
+      resolution: resolution,
     );
-
     // 自动落盘：仅结果唯一，且不覆盖已有的手动绑定（`02` §3.4）。
     var persisted = false;
     if (resolution.canPersist &&
@@ -444,6 +438,72 @@ class TmdbSeasonService {
       resolution: resolution,
       availableSeasons: available,
       persisted: persisted,
+    );
+  }
+
+  /// 可播放季度（`02` §4.3）。
+  ///
+  /// 自动解析按 A–G 六级顺序从**线路**推导；但用户的手动绑定是显式决策，
+  /// 必须优先（`02` §5.3「线路级季度绑定」、`04` §5.3「仅选季度」）：
+  /// - `manualSeason` → 只保留该季（不在 TMDB 季度列表时退化为空）；
+  /// - `manualMultiSlice` → 分段所属季度（需分段仍有效）；
+  /// - `manualFlat` → 空（扁平列表，无季度导航）。
+  ///
+  /// 不这样做的话，「仅选季度」只会改绑定记录，而详情页仍按线路推导出的
+  /// 旧季度渲染，用户看不到任何变化。
+  List<int> _availableFor({
+    required TmdbSeasonResolveRequest request,
+    required SeasonBinding? binding,
+    required Resolution resolution,
+  }) {
+    if (binding != null &&
+        binding.matches(request.tmdbId) &&
+        binding.mode != SeasonBindingMode.manualFlat) {
+      switch (binding.mode) {
+        case SeasonBindingMode.manualSeason:
+          final season = binding.seasonNumber;
+          if (season != null &&
+              season >= 0 &&
+              request.tmdbSeasons.contains(season)) {
+            return [season];
+          }
+          return const [];
+        case SeasonBindingMode.manualMultiSlice:
+          if (hasValidPersistedSegments(
+            segments: binding.segments,
+            tmdbSeasons: request.tmdbSeasons,
+            seasonCounts: request.seasonCounts,
+            sourceEpisodeCount: request.line.episodeCount,
+          )) {
+            final seasons = <int>[];
+            for (final segment in binding.segments) {
+              if (!seasons.contains(segment.seasonNumber)) {
+                seasons.add(segment.seasonNumber);
+              }
+            }
+            return seasons;
+          }
+          // 分段失效 → 回退到自动推导（`02` §3.3 第 4 步语义）
+          break;
+        case SeasonBindingMode.manualFlat:
+          return const [];
+      }
+    }
+    // 自动落盘绑定（`02` §3.4）也是权威来源：解析结论已确证时直接采用。
+    if (binding != null &&
+        binding.matches(request.tmdbId) &&
+        resolution.scope.isKnown) {
+      return resolution.scope.seasons;
+    }
+    return resolveAvailableSeasons(
+      sourceSeasonNumbers:
+          request.line.sourceSeasonNumbers ??
+          List<int>.filled(request.line.episodeCount, -1),
+      titleSeason: sourceSeasonNumber(request.sourceTitle),
+      firstSeason: request.tmdbSeasons.isEmpty ? -1 : request.tmdbSeasons.first,
+      tmdbSeasons: request.tmdbSeasons,
+      seasonCounts: request.seasonCounts,
+      sourceEpisodeNumbers: request.line.sourceEpisodeNumbers,
     );
   }
 

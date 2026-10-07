@@ -483,8 +483,12 @@ class TmdbState extends ChangeNotifier {
         _resolution = outcome.resolution;
         _availableSeasons = outcome.availableSeasons;
         if (_selectedSeason < 0 && _availableSeasons.isNotEmpty) {
-          // 默认选第一项，使多季作品无需手动切换即有内容（`04` §4.1）。
-          _selectedSeason = _availableSeasons.first;
+          // 默认选中第一项，使多季作品无需手动切换即有内容（`04` §4.1）。
+          //
+          // 但**特别篇（0）不作为默认**：特别篇是附加内容，默认打开「特别篇」
+          // 会让用户以为正片只有几集。`availableSeasons` 由 `02` §4.3 的可播放
+          // 季度解析器确证，因此从其中挑第一个正片季度不是猜测。
+          _selectedSeason = _defaultSeasonOf(_availableSeasons);
         }
       }
       _phase = TmdbLoadPhase.ready;
@@ -585,17 +589,36 @@ class TmdbState extends ChangeNotifier {
   }
 
   /// 应用剧集元数据到线路（`02` §9）。
+  ///
+  /// **只作用于当前季度**（`02` §9.4）：一条线路可能同时包含多季的集
+  /// （例如 S1 12 集 + S2 10 集且未做分段绑定），此时把 S2 的元数据写到 S1 的
+  /// 集上会让标题串季。因此先筛出「属于当前季度的集」与「未分类的集」
+  /// （未分类不得被静默丢弃，`02` §9.4 末条），只对它们应用。
   TmdbEpisodeEnrichmentResult applyEpisodesToLine(VodPlayLine line) {
+    TmdbEpisodeEnrichmentResult unchanged(String reason) =>
+        TmdbEpisodeEnrichmentResult(
+          line: line,
+          changed: false,
+          appliedCount: 0,
+          rejectedReason: reason,
+        );
     if (_disposed || _selectedSeason < 0 || _episodes.isEmpty) {
-      return TmdbEpisodeEnrichmentResult(
-        line: line,
-        changed: false,
-        appliedCount: 0,
-        rejectedReason: 'no_metadata',
-      );
+      return unchanged('no_metadata');
     }
-    return _enrichmentService.applyEpisodeMetadata(
-      line: line,
+
+    final applicable = <int>[];
+    for (var index = 0; index < line.episodes.length; index++) {
+      final season = sourceSeasonNumber(line.episodes[index].name);
+      if (season < 0 || season == _selectedSeason) applicable.add(index);
+    }
+    if (applicable.isEmpty) return unchanged('no_applicable_episode');
+
+    final subset = VodPlayLine(
+      flag: line.flag,
+      episodes: applicable.map((index) => line.episodes[index]).toList(),
+    );
+    final result = _enrichmentService.applyEpisodeMetadata(
+      line: subset,
       request: TmdbEpisodeEnrichment(
         seasonNumber: _selectedSeason,
         tmdbEpisodes: _episodes,
@@ -605,6 +628,17 @@ class TmdbState extends ChangeNotifier {
       ),
       currentGeneration: _generation,
       currentMetadataGeneration: _metadataGeneration,
+    );
+    if (!result.changed) return unchanged(result.rejectedReason ?? 'no_change');
+
+    final merged = List<VodEpisode>.from(line.episodes);
+    for (var offset = 0; offset < applicable.length; offset++) {
+      merged[applicable[offset]] = result.line.episodes[offset];
+    }
+    return TmdbEpisodeEnrichmentResult(
+      line: VodPlayLine(flag: line.flag, episodes: merged),
+      changed: true,
+      appliedCount: result.appliedCount,
     );
   }
 
@@ -661,6 +695,16 @@ class TmdbState extends ChangeNotifier {
     _generation++;
     _metadataGeneration++;
     super.dispose();
+  }
+
+  /// 默认选中季度（`04` §4.1）：优先第一个**非特别篇**季度。
+  ///
+  /// 仅当可播放季度只有特别篇时才回退到 `0`。
+  static int _defaultSeasonOf(List<int> availableSeasons) {
+    for (final season in availableSeasons) {
+      if (season > 0) return season;
+    }
+    return availableSeasons.first;
   }
 
   Map<int, int> _seasonCountsFromDetail(

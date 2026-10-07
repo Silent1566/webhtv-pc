@@ -12,6 +12,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:sqlite3/sqlite3.dart' show Row;
+
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
 import '../core/cat_source.dart';
@@ -40,6 +42,7 @@ import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/tmdb_config_store.dart';
 import '../services/tmdb_enrichment_service.dart';
+import '../services/tmdb_history.dart';
 import '../services/tmdb_identity_service.dart';
 import '../services/tmdb_season_service.dart';
 import '../services/tmdb_service.dart';
@@ -460,6 +463,9 @@ class AppState extends ChangeNotifier {
   /// 当前 TMDB 加载归属的详情运行号（`loadDetail` 每次自增）。
   int _tmdbRunId = 0;
 
+  /// 清除鉴权熔断（仅供测试：注入 401 后需要先清掉上一次的熔断窗口）。
+  void clearAuthBlocksForTest() => _tmdbService.clearAuthBlocks();
+
   /// 用当前详情页上下文重新加载 TMDB 区块（手动匹配 / 重新匹配后调用）。
   Future<void> reloadTmdb() async {
     final vod = _selectedVod;
@@ -747,6 +753,39 @@ class AppState extends ChangeNotifier {
       return const [];
     }
   }
+
+  /// 当前配置下的全部季度历史卡片（历史页展示，`02` §7.1）。
+  List<SeasonHistoryCard> seasonHistoryCards() {
+    final database = _database;
+    if (database == null) return const [];
+    try {
+      final records = database
+          .tmdbSeasonProgressAll(configId: tmdbConfigId)
+          .map((row) => _seasonProgressFromRow(row))
+          .toList();
+      return projectSeasonHistory(records);
+    } catch (error) {
+      log.warning('读取季度历史失败：$error', scope: 'tmdb');
+      return const [];
+    }
+  }
+
+  static TmdbSeasonProgressRecord _seasonProgressFromRow(Row row) =>
+      TmdbSeasonProgressRecord(
+        configId: row['config_id'] as int? ?? 0,
+        mediaType: row['media_type'] as String? ?? 'tv',
+        tmdbId: row['tmdb_id'] as int? ?? 0,
+        seasonNumber: row['season_number'] as int? ?? 0,
+        episodeNumber: row['episode_number'] as int? ?? 0,
+        positionMs: row['position_ms'] as int? ?? 0,
+        durationMs: row['duration_ms'] as int? ?? 0,
+        sourceFlag: row['source_flag'] as String? ?? '',
+        sourceEpisodeName: row['source_episode_name'] as String? ?? '',
+        sourceEpisodeUrl: row['source_episode_url'] as String? ?? '',
+        sourceHistoryKey: row['source_history_key'] as String? ?? '',
+        sourceBindingKey: row['source_binding_key'] as String? ?? '',
+        updatedAt: row['updated_at'] as int? ?? 0,
+      );
 
   /// 同季度换源候选（`02` §7.3）。
   List<RouteBinding> seasonRouteCandidates({
@@ -1585,6 +1624,8 @@ class AppState extends ChangeNotifier {
 
   void clearHistory() {
     _database?.clearHistory();
+    // 「清空历史」同时清季度进度，但**保留**匹配与绑定（`03` §6.5）。
+    _database?.clearTmdbSeasonProgress();
     log.info('已清空播放历史（配置未受影响）', scope: 'history');
     notifyListeners();
   }

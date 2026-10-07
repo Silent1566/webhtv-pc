@@ -5,22 +5,17 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
-import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/core/tmdb_playback.dart';
 
-VodEpisode _episode(
-  String name,
-  String url, {
-  int? season,
-  int? number,
-}) => VodEpisode(
-  name: name,
-  url: url,
-  extra: {
-    if (season != null) 'tmdb_season_number': season,
-    if (number != null) 'tmdb_episode_number': number,
-  },
-);
+VodEpisode _episode(String name, String url, {int? season, int? number}) =>
+    VodEpisode(
+      name: name,
+      url: url,
+      extra: {
+        'tmdb_season_number': ?season,
+        'tmdb_episode_number': ?number,
+      },
+    );
 
 void main() {
   group('播放入口 7 参数（§8.1）', () {

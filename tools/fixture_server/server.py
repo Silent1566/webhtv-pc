@@ -50,12 +50,110 @@ MEDIA = ROOT / "packages" / "test-fixtures" / "media"
 CATHTTP = ROOT / "packages" / "test-fixtures" / "cathttp"
 LIVE = ROOT / "packages" / "test-fixtures" / "live"
 DANMAKU = ROOT / "packages" / "test-fixtures" / "danmaku"
+# TMDB fixture 根目录（`docs/phase4/design/05` §2.1）。
+TMDB_FIXTURES = ROOT / "packages" / "test-fixtures" / "tmdb"
+# TMDB 路由命中计数（`/tmdb/__stats`，`01` §12 第 9 项）。
+TMDB_STATS: dict[str, int] = {}
+# TMDB 故障注入模式（`/tmdb/__mode`）：
+#   `auth=401` 使全部 `/3/**` 返回 401（验证鉴权失败隔离与熔断）；
+#   `auth=off` 恢复正常。只影响后续请求，不改任何 fixture 文件。
+TMDB_MODE: dict[str, str] = {}
 REQUIRED_REFERER = "http://127.0.0.1:18080/"
 REQUIRED_USER_AGENT = "WebHTV-PC/0.1 (Windows)"
 LEGACY_USER_AGENT = "WebHTV-PC-Phase0"
 
 MEDIA_URL = "http://127.0.0.1:18080/media/sample.m3u8"
 MEDIA_MP4_URL = "http://127.0.0.1:18080/media/sample.mp4"
+
+
+# ---------------------------------------------------------------------- TMDB
+
+
+def _episode_url(index: int) -> str:
+    """给每集一个**互不相同**的地址。
+
+    同一 TMDB 集内区分版本的唯一可靠标识是 URL（`docs/phase4/design/04` §8.2）；
+    集成测试要断言 `episodeUrl` 优先，就必须让各集地址不同。
+    """
+    return f"{MEDIA_MP4_URL}?ep={index}"
+
+
+def _line(flag: str, count: int, offset: int = 0) -> tuple[str, str]:
+    episodes = [
+        f"第 {i} 集${_episode_url(offset + i)}" for i in range(1, count + 1)
+    ]
+    return flag, "#".join(episodes)
+
+
+def _season_line(
+    flag: str,
+    seasons: list[tuple[int, int]],
+    offset: int = 0,
+) -> tuple[str, str]:
+    """带**显式季度标记**的线路（`第 N 季第 M 集`）。
+
+    季度信号显式存在时，`02` §4.3 的 A1 分支会返回 TMDB 顺序的季度子集，
+    使集成测试能稳定构造「第 1 季 12 集 / 第 2 季 10 集」与
+    「线路第 2 季只有 8 集」两个场景。
+    """
+    episodes = []
+    index = offset
+    for season, count in seasons:
+        for number in range(1, count + 1):
+            index += 1
+            episodes.append(f"第 {season} 季第 {number} 集${_episode_url(index)}")
+    return flag, "#".join(episodes)
+
+
+# 线路一：S1 12 集 + S2 10 集（显式季度标记）。
+_TMDB_LINE_1 = _season_line("线路一", [(1, 12), (2, 10)])
+# 线路二：S2 只有 8 集（用于断言「TMDB 有 10 集但线路只有 8 集」不补集）。
+_TMDB_LINE_2 = _season_line("线路二", [(2, 8)], offset=100)
+
+# 与 `packages/test-fixtures/tmdb/detail-tv.json` 的 `name` 一致 → 自动匹配命中。
+TMDB_DETAIL = {
+    "list": [
+        {
+            "vod_id": "tmdb-demo",
+            "vod_name": "示例剧集",
+            "vod_pic": "",
+            "vod_remarks": "S1 12 集 / S2 10 集",
+            "vod_content": "站点简介（短）",
+            "vod_play_from": "$$$".join([_TMDB_LINE_1[0], _TMDB_LINE_2[0]]),
+            "vod_play_url": "$$$".join([_TMDB_LINE_1[1], _TMDB_LINE_2[1]]),
+        }
+    ],
+}
+
+# 集名不含季度信号（无 `第N季`/`SxxExx`），季度必须保持「未确定」。
+TMDB_UNKNOWN_DETAIL = {
+    "list": [
+        {
+            "vod_id": "tmdb-unknown",
+            "vod_name": "示例剧集",
+            "vod_pic": "",
+            "vod_play_from": "线路一",
+            "vod_play_url": "#".join(
+                f"剧集{chr(64 + i)}${_episode_url(i)}" for i in range(1, 6)
+            ),
+        }
+    ],
+}
+
+# 标题与 TMDB fixture 无关 → 自动匹配失败，用于手动匹配流程（`04` §5）。
+TMDB_NOMATCH_DETAIL = {
+    "list": [
+        {
+            "vod_id": "tmdb-nomatch",
+            "vod_name": "无法自动匹配的剧集标题",
+            "vod_pic": "",
+            "vod_play_from": "线路一",
+            "vod_play_url": "#".join(
+                f"第 1 季第 {i} 集${_episode_url(i)}" for i in range(1, 7)
+            ),
+        }
+    ],
+}
 
 XML_HOME = """<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0">
@@ -124,10 +222,22 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------------ 输出
 
-    def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+    def _send_bytes(
+        self,
+        payload: bytes,
+        content_type: str,
+        status: int = 200,
+        extra_headers: dict | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        for key, value in (extra_headers or {}).items():
+            # Header 值不能含非 Latin-1（中文站点名等），做安全降级。
+            try:
+                self.send_header(key, value)
+            except UnicodeEncodeError:
+                self.send_header(key, value.encode("utf-8").decode("latin-1"))
         self.end_headers()
         self.wfile.write(payload)
 
@@ -142,6 +252,162 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def _send_error_json(self, status: int, message: str) -> None:
         payload = json.dumps({"status": status, "msg": message}).encode("utf-8")
         self._send_bytes(payload, "application/json; charset=utf-8", status=status)
+
+    # ------------------------------------------------------------------ TMDB
+
+    def _send_tmdb(self, path: str, parsed) -> None:
+        """TMDB fixture 路由（`docs/phase4/design/05` §2.2）。
+
+        关键设计：把收到的 `api_key` / `Authorization` / `language` /
+        `include_image_language` 写入响应头 `X-Fixture-Seen-*`，供 L2 请求捕获
+        断言，而不用抓包。
+
+        另提供 `GET /tmdb/__stats` 返回各路由命中次数（JSON），
+        供「未配置 / 站点禁用时零请求」的断言使用（`01` §12 第 9 项）。
+        """
+        route = path.removeprefix("/tmdb").rstrip("/") or "/"
+        params = {
+            key: values[0]
+            for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
+
+        if route == "/__stats":
+            self._send_json({
+                "counts": dict(TMDB_STATS),
+                "total": sum(TMDB_STATS.values()),
+            })
+            return
+        if route == "/__reset":
+            TMDB_STATS.clear()
+            self._send_json({"counts": {}})
+            return
+        if route == "/__mode":
+            # 故障注入开关（集成测试用）：`/tmdb/__mode?auth=401`。
+            auth = params.get("auth")
+            if auth in ("401", "off"):
+                TMDB_MODE["auth"] = auth
+            self._send_json({"mode": dict(TMDB_MODE)})
+            return
+
+        TMDB_STATS[route] = TMDB_STATS.get(route, 0) + 1
+
+        headers = {
+            "X-Fixture-Seen-ApiKey": params.get("api_key", ""),
+            "X-Fixture-Seen-Authorization": self.headers.get("Authorization", ""),
+            "X-Fixture-Seen-Language": params.get("language", ""),
+            "X-Fixture-Seen-IncludeImageLanguage": params.get(
+                "include_image_language", ""
+            ),
+            "X-Fixture-Seen-Route": route,
+        }
+
+        # 故障注入：模拟「所有 TMDB 请求都 401」（验证失败隔离与熔断）。
+        if TMDB_MODE.get("auth") == "401" and route.startswith("/3/"):
+            self._send_tmdb_error(401, "Invalid API key (injected)", headers)
+            return
+
+        if route == "/auth-fail":
+            self._send_tmdb_error(401, "Invalid API key", headers)
+            return
+        if route == "/server-error":
+            self._send_tmdb_error(500, "Internal error", headers)
+            return
+        if route == "/malformed":
+            self._send_bytes(
+                b"{not-json",
+                "application/json; charset=utf-8",
+                status=200,
+                extra_headers=headers,
+            )
+            return
+        if route == "/configuration":
+            self._send_tmdb_fixture("configuration.json", headers)
+            return
+        if route == "/3/search/multi":
+            query = params.get("query", "")
+            if query == "empty":
+                self._send_tmdb_fixture("search-empty.json", headers)
+            elif query == "split":
+                self._send_tmdb_fixture("search-split-season.json", headers)
+            else:
+                self._send_tmdb_fixture("search-multi.json", headers)
+            return
+
+        parts = [segment for segment in route.split("/") if segment]
+        # /3/tv/{id}/season/{n}/episode/{e} → 7 段
+        if (
+            len(parts) == 7
+            and parts[0] == "3"
+            and parts[3] == "season"
+            and parts[5] == "episode"
+        ):
+            self._send_tmdb_fixture("episode-s1e1.json", headers)
+            return
+        # /3/tv/{id}/season/{n} → 5 段
+        if len(parts) == 5 and parts[0] == "3" and parts[3] == "season":
+            season = parts[4]
+            if season == "9":
+                self._send_tmdb_fixture("season-empty.json", headers)
+            else:
+                self._send_tmdb_fixture(f"season-{season}.json", headers)
+            return
+        # /3/tv/{id}/videos 与 /3/tv/{id}/season/{n}/videos
+        if parts and parts[-1] == "videos":
+            self._send_tmdb_fixture("videos-tv.json", headers)
+            return
+        # /3/{type}/{id}/recommendations|similar?page=N
+        if len(parts) == 4 and parts[0] == "3" and parts[3] in (
+            "recommendations",
+            "similar",
+        ):
+            page = params.get("page", "1")
+            if page == "9":
+                self._send_tmdb_fixture("recommendations-empty.json", headers)
+            elif page == "2":
+                self._send_tmdb_fixture("recommendations-page2.json", headers)
+            else:
+                self._send_tmdb_fixture("recommendations-page1.json", headers)
+            return
+        # /3/person/{id}
+        if len(parts) == 3 and parts[0] == "3" and parts[1] == "person":
+            self._send_tmdb_fixture("person.json", headers)
+            return
+        # /3/movie/{id}
+        if len(parts) == 3 and parts[0] == "3" and parts[1] == "movie":
+            self._send_tmdb_fixture("detail-movie.json", headers)
+            return
+        # /3/tv/{id}
+        if len(parts) == 3 and parts[0] == "3" and parts[1] == "tv":
+            if parts[2] == "2":
+                self._send_tmdb_fixture("detail-tv-next-air.json", headers)
+            else:
+                self._send_tmdb_fixture("detail-tv.json", headers)
+            return
+
+        self._send_tmdb_error(404, f"tmdb fixture route not found: {route}", headers)
+
+    def _send_tmdb_fixture(self, name: str, headers: dict) -> None:
+        file = TMDB_FIXTURES / name
+        if not file.exists():
+            self._send_tmdb_error(404, f"missing fixture: {name}", headers)
+            return
+        self._send_bytes(
+            file.read_bytes(),
+            "application/json; charset=utf-8",
+            extra_headers=headers,
+        )
+
+    def _send_tmdb_error(self, status: int, message: str, headers: dict) -> None:
+        payload = json.dumps(
+            {"status_code": status, "status_message": message, "success": False},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self._send_bytes(
+            payload,
+            "application/json; charset=utf-8",
+            status=status,
+            extra_headers=headers,
+        )
 
     # ------------------------------------------------------------ 请求解析
 
@@ -195,6 +461,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if path == "/health":
             self._send_json({"status": "ok"})
+            return
+        # TMDB fixture 路由（`docs/phase4/design/05` §2.2）。
+        if path.startswith("/tmdb"):
+            self._send_tmdb(path, parsed)
             return
         if path == "/api/echo":
             # 回显请求，供契约测试断言 query/form 编码与 Header 注入。
@@ -286,6 +556,23 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 delay = 3.0
             self.server.shutdown_event.wait(delay)  # type: ignore[attr-defined]
             self._send_json_bytes(_json("home.json"))
+            return
+
+        # TMDB 集成测试专用详情（`docs/phase4/design/05` §5）。
+        #
+        # 为什么需要它：既有 `/api/type1` 的详情只有 1 集且名字不含季度信号，
+        # 无法构造「多季线路」「TMDB 有 10 集而线路只有 8 集」这类 L3 断言。
+        # 这里提供一个**名字与 TMDB fixture 搜索结果一致**的条目，
+        # 使自动匹配能命中（`detail-tv.json` 的 `name` 为「示例剧集」）。
+        if path == "/api/tmdb-detail":
+            self._send_json(TMDB_DETAIL)
+            return
+        # 季度信号缺失的详情：季度必须保持「未确定」，不得猜测（`02` §2.3）。
+        if path == "/api/tmdb-unknown-detail":
+            self._send_json(TMDB_UNKNOWN_DETAIL)
+            return
+        if path == "/api/tmdb-nomatch":
+            self._send_json(TMDB_NOMATCH_DETAIL)
             return
 
         route = path.rstrip("/")
@@ -499,6 +786,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if user_agent not in (REQUIRED_USER_AGENT, LEGACY_USER_AGENT):
             self._send_error_json(403, "required User-Agent header missing")
             return
+        # 允许带 query（真实站源的签名 URL / cache buster 很常见；TMDB 集成测试
+        # 用 `?ep=N` 给每集一个互不相同的地址，以验证 `episodeUrl` 优先定位）。
+        # 只按**路径部分**映射到 fixture 文件，不做任何其他解释。
+        relative_path = urlparse(relative_path).path
         candidate = (MEDIA / relative_path).resolve()
         if MEDIA.resolve() not in candidate.parents or not candidate.is_file():
             self._send_error_json(404, "media fixture not found")

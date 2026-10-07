@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
 import '../services/storage.dart';
+import '../services/tmdb_history.dart';
 import '../state/app_state.dart';
 import 'app.dart';
 import 'player_page.dart';
@@ -85,6 +86,54 @@ class _HistoryPageState extends State<HistoryPage> {
             child: Text('本地存储不可用，播放历史暂不记录。'),
           ),
         const Divider(height: 1),
+        // 季度历史卡片（`02` §7.1）：同一节目的每季一张卡片。
+        // 删除语义按 §7.4 分级：删季度卡片不删同节目其他季度；
+        // 「删除整部节目」是独立二级操作，需二次确认。
+        if (_state.seasonHistoryCards().isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
+            child: Text('季度进度'),
+          ),
+          for (final card in _state.seasonHistoryCards())
+            ListTile(
+              key: ValueKey('season-card-${card.displayKey}'),
+              dense: true,
+              leading: const Icon(Icons.playlist_play),
+              title: Text(
+                '${card.identity?.key ?? '?'} · ${card.seasonLabel} · '
+                '第 ${card.episodeNumber} 集',
+              ),
+              subtitle: Text(
+                '${card.representative.sourceEpisodeName} · '
+                '${card.progressPercent}% · 来源 ${card.representative.sourceFlag}'
+                '${card.sources.length > 1 ? ' （共 ${card.sources.length} 个来源）' : ''}',
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '删除该季度进度（不影响同节目其他季度）',
+                    onPressed: () {
+                      final identity = card.identity;
+                      if (identity == null) return;
+                      _state.deleteSeasonProgress(
+                        media: identity,
+                        seasonNumber: card.seasonNumber,
+                      );
+                      setState(() {});
+                    },
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                  ),
+                  IconButton(
+                    tooltip: '删除整部节目的全部季度进度（二级操作）',
+                    onPressed: () => _confirmDeleteMedia(card),
+                    icon: const Icon(Icons.delete_forever_outlined, size: 18),
+                  ),
+                ],
+              ),
+            ),
+          const Divider(height: 1),
+        ],
         Expanded(
           child: items.isEmpty
               ? const Center(child: Text('暂无播放记录。播放任意剧集后会自动记录进度。'))
@@ -131,6 +180,38 @@ class _HistoryPageState extends State<HistoryPage> {
         ),
       ],
     );
+  }
+
+  /// 「删除整部节目」二级操作（`02` §7.4）：必须先明确告知将删除的季度数量。
+  Future<void> _confirmDeleteMedia(SeasonHistoryCard card) async {
+    final identity = card.identity;
+    if (identity == null) return;
+    final count = _state.seasonProgressFor(identity).length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const ValueKey('season-delete-media-confirm'),
+        title: const Text('删除整部节目的播放进度'),
+        content: Text(
+          '将删除「${identity.key}」下全部 $count 个季度的播放进度。\n'
+          '该操作不可撤销；同季度的其他来源也会被删除。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('season-delete-media-confirm-ok'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除全部'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    _state.deleteMediaProgress(identity);
+    if (mounted) setState(() {});
   }
 
   /// 从历史恢复播放。

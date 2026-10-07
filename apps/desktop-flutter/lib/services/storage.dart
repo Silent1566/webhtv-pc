@@ -1283,6 +1283,13 @@ class AppDatabase {
     return _db.updatedRows;
   }
 
+  /// 列出某配置下的**全部**季度进度（历史投影，`02` §7.1）。
+  List<Row> tmdbSeasonProgressAll({required int configId}) => _db.select(
+    'SELECT * FROM tmdb_season_progress WHERE config_id=? '
+    'ORDER BY updated_at DESC;',
+    [configId],
+  );
+
   /// 按关联的来源历史键查找季度进度（续播恢复用，`02` §6.3）。
   List<Row> tmdbSeasonProgressByHistory({
     required int configId,

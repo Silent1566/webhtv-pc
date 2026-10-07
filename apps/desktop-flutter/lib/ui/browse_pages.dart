@@ -9,6 +9,7 @@ import '../core/app_error.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
+import '../core/tmdb_title.dart';
 import '../services/spider_router.dart';import '../state/app_state.dart';
 import '../state/tmdb_state.dart';
 import 'app.dart';
@@ -840,11 +841,20 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
+  /// 剧集所在季度。
+  ///
+  /// 优先取 TMDB 富集写入的 `tmdb_season_number`；否则回退到**来源集名**里的
+  /// 季度信号（`第 N 季` / `SxxExx`）。
+  ///
+  /// 为什么必须回退：富集只为**当前选中季度**写 `tmdb_season_number`，其余
+  /// 季度的集不会被标记。若只看 `extra`，多季线路的季度过滤就会失效
+  /// （所有集都被当成「未分类」而保留，选集数永不缩小）。
+  /// 来源集名是**事实源**（§27 原则 1），用它分类不引入任何猜测。
   static int _seasonOfEpisode(VodEpisode episode) {
     final raw = episode.extra['tmdb_season_number'];
     if (raw is int) return raw;
     if (raw is num) return raw.toInt();
-    return -1;
+    return sourceSeasonNumber(episode.name);
   }
 
   /// 打开纯 TMDB 详情页（`04` §6）。
