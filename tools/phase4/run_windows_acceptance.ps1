@@ -22,6 +22,7 @@
 param(
     [string]$PuroEnvironment = 'webhtv',
     [switch]$SkipIntegrationTests,
+    [switch]$BuildReleaseForSymbols,
     [int]$FixturePort = 18080
 )
 
@@ -348,20 +349,13 @@ try {
     # release AOT 剔除 → 正式版 exe 里 TMDB 整块消失」只能靠 release 产物发现。
     # 2026-10-07 真实事故：`TmdbSettingsPage` / `tmdb-api-key` / 「TMDB 设置」
     # 全被剔除，而当时所有门禁全绿。
+    #
+    # ⚠️ 本仓库约定「不打正式包」：默认**只校验已存在的 release 产物**，不主动构建。
+    #    需要连构建一起跑时显式加 `-BuildReleaseForSymbols`（或打包流程里调用
+    #    `py -3 tools/phase4/verify_release_symbols.py`）。
     Invoke-Checked 'release-symbols' {
         $appSo = Join-Path $AppDir 'build\windows\x64\runner\Release\data\app.so'
-        $needsBuild = -not (Test-Path $appSo)
-        if (-not $needsBuild) {
-            # 新鲜度：release 产物必须晚于 lib/ 下最新的 .dart，否则先重建。
-            $soTime = (Get-Item $appSo).LastWriteTimeUtc
-            $newestDart = Get-ChildItem -Path (Join-Path $AppDir 'lib') -Recurse -Filter '*.dart' |
-                Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-            if ($newestDart -and $newestDart.LastWriteTimeUtc -gt $soTime) {
-                Write-Fact "release-artifact stale so=$($soTime.ToString('o')) newest-dart=$($newestDart.LastWriteTimeUtc.ToString('o'))"
-                $needsBuild = $true
-            }
-        }
-        if ($needsBuild) {
+        if ($BuildReleaseForSymbols) {
             Push-Location $AppDir
             try {
                 & puro -e $PuroEnvironment -p . flutter build windows --release
@@ -373,8 +367,13 @@ try {
             } finally {
                 Pop-Location
             }
-        } else {
-            Write-Fact 'release-artifact fresh（跳过重建）'
+        }
+        if (-not (Test-Path $appSo)) {
+            # 未构建 release：不在此处自动构建（尊重「不打正式包」约定），
+            # 但必须把「本次未覆盖」显式写进证据，不能静默当作通过。
+            Write-Fact 'release-symbols skipped reason=no-release-artifact（加 -BuildReleaseForSymbols 或打包后单独跑 verify_release_symbols.py）'
+            $global:LASTEXITCODE = 0
+            return
         }
         Invoke-Python @((Join-Path $RepoRoot 'tools\phase4\verify_release_symbols.py'))
     }
