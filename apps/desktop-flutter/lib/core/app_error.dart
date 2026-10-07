@@ -81,6 +81,16 @@ enum AppErrorKind {
   epgEmpty,
   epgUnsupported,
 
+  // TMDB 元数据增强（§27）。全部属**非致命**类别：失败不得升级为浏览或播放失败。
+  // 对齐 Phase 3 字幕/弹幕/EPG 的 `is*Error` 隔离模式（§10.4）。
+  tmdbNotConfigured,
+  tmdbAuth,
+  tmdbNetwork,
+  tmdbHttp,
+  tmdbDecode,
+  tmdbEmpty,
+  tmdbUnsupported,
+
   // 系统
   storage,
   unknown,
@@ -191,6 +201,20 @@ String describeErrorKind(AppErrorKind kind) {
       return 'EPG 没有可用节目数据（不影响直播播放）';
     case AppErrorKind.epgUnsupported:
       return 'EPG 地址协议不受支持（不影响直播播放）';
+    case AppErrorKind.tmdbNotConfigured:
+      return '未配置 TMDB，请在设置中填写 API Key 或 Access Token（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbAuth:
+      return 'TMDB 鉴权失败，请检查 API Key / Access Token（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbNetwork:
+      return 'TMDB 请求失败：网络不可达或 DNS 失败（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbHttp:
+      return 'TMDB 请求失败：服务器返回非 2xx 状态（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbDecode:
+      return 'TMDB 响应解析失败（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbEmpty:
+      return 'TMDB 没有返回可用数据（不影响站源浏览与播放）';
+    case AppErrorKind.tmdbUnsupported:
+      return '该站点未启用 TMDB 增强（不影响站源浏览与播放）';
     case AppErrorKind.storage:
       return '本地存储读写失败';
     case AppErrorKind.unknown:
@@ -246,4 +270,31 @@ class AppError implements Exception {
 
   @override
   String toString() => logLine;
+}
+
+// ---------------------------------------------------------------------------
+// TMDB 失败隔离（§27.9）
+// ---------------------------------------------------------------------------
+
+/// 全部 `tmdb*` 错误类别（均属**非致命**）。
+const Set<AppErrorKind> tmdbErrorKinds = {
+  AppErrorKind.tmdbNotConfigured,
+  AppErrorKind.tmdbAuth,
+  AppErrorKind.tmdbNetwork,
+  AppErrorKind.tmdbHttp,
+  AppErrorKind.tmdbDecode,
+  AppErrorKind.tmdbEmpty,
+  AppErrorKind.tmdbUnsupported,
+};
+
+/// 判断一个错误是否为 TMDB 错误（用于“TMDB 失败不阻断浏览/播放”的隔离判定）。
+///
+/// 沿用 Phase 3 字幕/弹幕/EPG 的同一模式：**只认前缀**。
+bool isTmdbError(Object? error) =>
+    error is AppError && tmdbErrorKinds.contains(error.kind);
+
+/// TMDB 失败的用户提示文案（必须说明不影响站源浏览与播放）。
+String describeTmdbFailure(Object? error) {
+  if (error is AppError) return describeErrorKind(error.kind);
+  return 'TMDB 加载失败：${error ?? "未知错误"}（不影响站源浏览与播放）';
 }

@@ -22,6 +22,10 @@ import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
+import '../core/tmdb_config.dart';
+import '../core/tmdb_identity.dart';
+import '../core/tmdb_playback.dart';
+import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
 import '../services/cat_bundle.dart';
 import '../services/cat_runtime.dart';
@@ -34,7 +38,14 @@ import '../services/spider_process.dart';
 import '../services/spider_registry.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
+import '../services/tmdb_config_store.dart';
+import '../services/tmdb_enrichment_service.dart';
+import '../services/tmdb_identity_service.dart';
+import '../services/tmdb_season_service.dart';
+import '../services/tmdb_service.dart';
+import '../services/tmdb_stores.dart';
 import 'search_state.dart';
+import 'tmdb_state.dart';
 
 const String appVersion = '0.1.0';
 const String appBuildFlavor = 'MVP-A (Windows)';
@@ -126,6 +137,8 @@ class AppState extends ChangeNotifier {
     _cspBinding = CspJvmBinding(root: p.join(this.paths.configDir, 'spiders', 'csp'));
     _proxy = LocalProxyServer(log: this.log);
     _catBundle = CatBundle(rootDir: p.join(this.paths.dataDir, 'catbundle'));
+    // TMDB 服务：配置引用是函数（设置页保存后无需重建服务）。
+    _tmdbService = TmdbService(config: () => _tmdbConfigStore.config);
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
       _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
@@ -238,6 +251,34 @@ class AppState extends ChangeNotifier {
   /// 最近一次播放诊断（§23），供日志页展示与复制。
   PlaybackDiagnostics? _lastDiagnostics;
 
+  // ---------------------------------------------------------------- TMDB
+  //
+  // 模块边界（`docs/phase4/design/04` §2）：UI 不直接发 TMDB 请求，全部经此处。
+  // TMDB 配置落在 `<configDir>/settings.json`（`03` §5.3），**不进配置 JSON**。
+
+  late final TmdbConfigStore _tmdbConfigStore;
+  late final TmdbService _tmdbService;
+  TmdbIdentityService? _tmdbIdentityService;
+  TmdbSeasonService? _tmdbSeasonService;
+  TmdbEnrichmentService? _tmdbEnrichmentService;
+  TmdbState? _tmdbState;
+
+  /// TMDB 设置（当前生效）。
+  TmdbConfig get tmdbConfig => _tmdbConfigStore.config;
+
+  /// TMDB 服务（纯 TMDB 详情页直接使用，`04` §6）。
+  TmdbService get tmdbService => _tmdbService;
+
+  /// 设置文件路径（设置页展示用）。
+  String get tmdbSettingsPath => paths.settingsPath;
+
+  /// TMDB 配置版本号（设置变更时递增，供 UI 重建）。
+  int _tmdbConfigRevision = 0;
+  int get tmdbConfigRevision => _tmdbConfigRevision;
+
+  /// 当前生效的 TMDB 配置 ID（多配置隔离，`02` §14 Q2）。
+  int get tmdbConfigId => _activeRecord?.id ?? 0;
+
   StartupInfo? get startupInfo => _startupInfo;
   LoadPhase get configPhase => _configPhase;
   LoadPhase get contentPhase => _contentPhase;
@@ -327,6 +368,10 @@ class AppState extends ChangeNotifier {
     LogService.logDirectoryOverride = paths.logDir;
     await log.open(paths.logDir);
 
+    // TMDB 设置（`03` §5.3）：读取失败不阻塞启动，退回默认配置。
+    _tmdbConfigStore = TmdbConfigStore(path: paths.settingsPath, log: log);
+    await _tmdbConfigStore.load();
+
     final openResult = AppDatabase.open(paths.databasePath);
     _database = openResult.database;
     if (!openResult.succeeded) {
@@ -398,6 +443,355 @@ class AppState extends ChangeNotifier {
       default:
         return env.toLowerCase();
     }
+  }
+
+  /// TMDB 状态（`04` §2.2）。首次访问时构造；未配置时构造出的实例
+  /// 会进入 `disabled` 阶段，不发起任何请求。
+  TmdbState get tmdb =>
+      _tmdbState ??= TmdbState(
+        config: () => _tmdbConfigStore.config,
+        service: _tmdbService,
+        identityService: _ensureTmdbIdentityService(),
+        seasonService: _ensureTmdbSeasonService(),
+        enrichmentService: _ensureTmdbEnrichmentService(),
+        isCurrentRun: () => _tmdbRunId == _detailRunId,
+      );
+
+  /// 当前 TMDB 加载归属的详情运行号（`loadDetail` 每次自增）。
+  int _tmdbRunId = 0;
+
+  /// 用当前详情页上下文重新加载 TMDB 区块（手动匹配 / 重新匹配后调用）。
+  Future<void> reloadTmdb() async {
+    final vod = _selectedVod;
+    final site = _selectedSite;
+    if (vod == null || site == null || _database == null) return;
+    _tmdbRunId = _detailRunId;
+    await tmdb.loadForVod(
+      vod,
+      siteKey: site.key,
+      siteName: site.name,
+      configId: tmdbConfigId,
+      lines: playLinesOf(vod),
+    );
+  }
+
+  TmdbIdentityService _ensureTmdbIdentityService() =>
+      _tmdbIdentityService ??= TmdbIdentityService(
+        config: () => _tmdbConfigStore.config,
+        service: _tmdbService,
+        store: DatabaseTmdbMatchStore(
+          database: _database!,
+          configId: tmdbConfigId,
+        ),
+      );
+
+  TmdbSeasonService _ensureTmdbSeasonService() =>
+      _tmdbSeasonService ??= TmdbSeasonService(
+        store: DatabaseTmdbSeasonStore(database: _database!),
+      );
+
+  TmdbEnrichmentService _ensureTmdbEnrichmentService() =>
+      _tmdbEnrichmentService ??= TmdbEnrichmentService(
+        service: _tmdbService,
+        config: () => _tmdbConfigStore.config,
+      );
+
+  /// 切换配置后重建 TMDB 服务，使 `config_id` 隔离生效（`02` §14 Q2）。
+  void _resetTmdbServices() {
+    _tmdbIdentityService = null;
+    _tmdbSeasonService = null;
+    _tmdbEnrichmentService = null;
+    _tmdbState?.clear();
+    _tmdbState = null;
+  }
+
+  /// 保存 TMDB 设置（设置页「保存」；原子写，`03` §5.5）。
+  Future<bool> saveTmdbConfig(TmdbConfig config) async {
+    final saved = await _tmdbConfigStore.save(config);
+    if (saved) {
+      _tmdbConfigRevision++;
+      log.info(
+        'TMDB 设置已更新 enabled=${config.enabled} ready=${config.isReady} '
+        'lang=${config.language} '
+        'key=${config.redactedApiKey} token=${config.redactedAccessToken}',
+        scope: 'tmdb',
+      );
+    } else {
+      _lastError = AppError(AppErrorKind.storage, 'TMDB 设置保存失败');
+    }
+    notifyListeners();
+    return saved;
+  }
+
+  /// 测试连接（`04` §10.2）：调 `/configuration`，返回结构化结果。
+  Future<String> testTmdbConnection() async {
+    final config = _tmdbConfigStore.config;
+    if (!config.isReady) return '请先填写 API Key 或 Access Token';
+    try {
+      final detail = await _tmdbService.configuration();
+      final images = detail['images'];
+      final hasImages = images is Map && images.isNotEmpty;
+      return '连接正常（配置字段 ${detail.length} 项'
+          '${hasImages ? '，含图片主机配置' : ''}）';
+    } on TmdbAuthException catch (error) {
+      return '鉴权失败（HTTP ${error.statusCode}）：请检查 Key/Token';
+    } on AppError catch (error) {
+      return '连接失败：${error.userMessage}';
+    } catch (error) {
+      return '连接失败：$error';
+    }
+  }
+
+  /// 手动匹配（`01` §7、`04` §5.1）。成功后刷新详情页 TMDB 区块。
+  Future<TmdbMatchOutcome?> matchTmdbManual({
+    required TmdbItem item,
+    String? sourceTitle,
+  }) async {
+    final identityService = _tmdbIdentityService;
+    final vod = _selectedVod;
+    final site = _selectedSite;
+    if (identityService == null || vod == null || site == null) return null;
+    try {
+      final outcome = await identityService.matchManual(
+        request: TmdbMatchRequest(
+          siteKey: site.key,
+          vodId: vod.vodId,
+          sourceTitle: sourceTitle ?? vod.vodName,
+        ),
+        item: item,
+      );
+      // 重新加载详情页 TMDB 区块（手动结论必须立刻可见）。
+      await reloadTmdb();
+      return outcome;
+    } catch (error) {
+      log.warning('手动匹配失败：$error', scope: 'tmdb');
+      return null;
+    }
+  }
+
+  /// 手动季度绑定（`04` §5.2、`02` §8.4）。
+  ///
+  /// 返回是否真的写入了绑定（参数非法时为 `false`）。
+  Future<bool> bindTmdbSeason(TmdbSeasonChoice choice) async {
+    final seasonService = _tmdbSeasonService;
+    final tmdb = _tmdbState;
+    final site = _selectedSite;
+    if (seasonService == null || tmdb == null || site == null) return false;
+    final item = tmdb.item;
+    final line = tmdb.sourceLine;
+    final vod = tmdb.vod;
+    if (item == null || line == null || vod == null) return false;
+
+    final configId = tmdbConfigId;
+    void clear() => seasonService.clearBinding(
+      configId: configId,
+      siteKey: site.key,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+      flagKey: line.flagKey,
+    );
+
+    if (choice is TmdbSeasonAuto) {
+      clear();
+      log.info('TMDB 季度绑定已清除（回到自动解析）', scope: 'tmdb');
+      return true;
+    }
+
+    final decoded = bindingModeOf(choice);
+    if (decoded == null) {
+      clear();
+      return true;
+    }
+    final mode = decoded.mode;
+    final seasonNumber = decoded.seasonNumber;
+    final binding = seasonService.bindSeason(
+      configId: configId,
+      siteKey: site.key,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+      flagKey: line.flagKey,
+      sourceFlag: line.sourceFlag,
+      tmdbId: item.tmdbId,
+      mediaType: item.mediaType,
+      mode: mode,
+      seasonNumber: seasonNumber,
+      line: line,
+      seasonCounts: tmdb.seasonEpisodeCounts,
+      tmdbSeasonEpisodeCount: seasonNumber == null
+          ? 0
+          : (tmdb.seasonEpisodeCounts[seasonNumber] ?? 0),
+    );
+    if (binding == null) {
+      log.warning('TMDB 季度绑定参数非法，已忽略', scope: 'tmdb');
+      return false;
+    }
+    log.info(
+      'TMDB 季度绑定已写入 mode=${mode.name} season=$seasonNumber',
+      scope: 'tmdb',
+    );
+    return true;
+  }
+
+  /// 用系统默认浏览器打开外部链接（相关视频，`04` §7.2）。
+  ///
+  /// 用 `explorer.exe` 而不是 `url_launcher`：后者会为 Windows 引入
+  /// `url_launcher_windows` 插件（C++ 插件工程 + CMake 变更），而本阶段
+  /// 只需「打开一个 http(s) 地址」，Windows 自带的 `explorer.exe <url>`
+  /// 已由系统处理默认浏览器与协议。返回是否成功发起。
+  Future<bool> openExternalUrl(String url) async {
+    if (!Platform.isWindows) return false;
+    try {
+      await Process.start('explorer.exe', [url], mode: ProcessStartMode.detached);
+      return true;
+    } catch (error) {
+      log.warning('打开外部链接失败：$error', scope: 'tmdb');
+      return false;
+    }
+  }
+
+  /// TMDB 搜索（手动匹配弹窗用）。
+  Future<List<TmdbItem>> searchTmdb(String keyword) async {
+    final identityService = _tmdbIdentityService;
+    if (identityService == null) return const [];
+    try {
+      return await identityService.searchCandidates(keyword);
+    } catch (error) {
+      log.warning('TMDB 搜索失败：$error', scope: 'tmdb');
+      return const [];
+    }
+  }
+
+  /// Provider ID 直达（`tmdb:12345` / `movie:12345` / `tv:12345`）。
+  Future<TmdbItem?> resolveTmdbProviderId(String input) async {
+    final identityService = _tmdbIdentityService;
+    if (identityService == null) return null;
+    try {
+      return await identityService.resolveProviderId(input);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 写入季度进度（`02` §6.2）。
+  ///
+  /// 来源 `history` 永远写（既有行为不变）；季度投影只在已确证季度时写。
+  void recordSeasonProgress({
+    required TmdbPlaybackIdentity identity,
+    required SeasonScope scope,
+    required String siteKey,
+    required String vodId,
+    required String sourceFlag,
+    required String sourceEpisodeName,
+    required String sourceEpisodeUrl,
+    required int positionMs,
+    required int durationMs,
+    int segmentSeason = -1,
+  }) {
+    final seasonService = _tmdbSeasonService;
+    final media = identity.identity;
+    if (seasonService == null || media == null) return;
+    try {
+      seasonService.recordProgress(
+        configId: tmdbConfigId,
+        identity: media,
+        scope: scope,
+        episodeNumber: identity.episodeNumber,
+        positionMs: positionMs,
+        durationMs: durationMs,
+        sourceFlag: sourceFlag,
+        sourceEpisodeName: sourceEpisodeName,
+        sourceEpisodeUrl: sourceEpisodeUrl,
+        sourceHistoryKey: TmdbHistoryKey.of(
+          siteKey: siteKey,
+          vodId: vodId,
+          flag: sourceFlag,
+          episodeUrl: sourceEpisodeUrl,
+        ),
+        sourceBindingKey: identity.flagKey,
+        segmentSeason: segmentSeason < 0 ? null : segmentSeason,
+      );
+    } catch (error) {
+      // 进度写失败不影响播放（§15.2）
+      log.warning('写入季度进度失败：$error', scope: 'tmdb');
+    }
+  }
+
+  /// 读取季度进度（续播，`02` §6.3）。
+  TmdbSeasonProgressRecord? findSeasonProgress({
+    required TmdbIdentity media,
+    required int seasonNumber,
+  }) {
+    final seasonService = _tmdbSeasonService;
+    if (seasonService == null) return null;
+    try {
+      return seasonService.progressFor(
+        configId: tmdbConfigId,
+        identity: media,
+        seasonNumber: seasonNumber,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 全部季度进度（历史投影，`02` §7.1）。
+  List<TmdbSeasonProgressRecord> seasonProgressFor(TmdbIdentity media) {
+    final seasonService = _tmdbSeasonService;
+    if (seasonService == null) return const [];
+    try {
+      return seasonService.progressList(
+        configId: tmdbConfigId,
+        identity: media,
+      );
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 同季度换源候选（`02` §7.3）。
+  List<RouteBinding> seasonRouteCandidates({
+    required TmdbIdentity media,
+    required int seasonNumber,
+  }) {
+    final seasonService = _tmdbSeasonService;
+    if (seasonService == null) return const [];
+    try {
+      return seasonService.candidatesForSeason(
+        configId: tmdbConfigId,
+        identity: media,
+        seasonNumber: seasonNumber,
+      );
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 删除某一季度历史（`02` §7.4 一级操作）。
+  int deleteSeasonProgress({
+    required TmdbIdentity media,
+    required int seasonNumber,
+  }) {
+    final seasonService = _tmdbSeasonService;
+    if (seasonService == null) return 0;
+    final removed = seasonService.deleteSeasonHistory(
+      configId: tmdbConfigId,
+      identity: media,
+      seasonNumber: seasonNumber,
+    );
+    notifyListeners();
+    return removed;
+  }
+
+  /// 删除整部节目历史（`02` §7.4 **二级操作**）。
+  int deleteMediaProgress(TmdbIdentity media) {
+    final seasonService = _tmdbSeasonService;
+    if (seasonService == null) return 0;
+    final removed = seasonService.deleteMediaHistory(
+      configId: tmdbConfigId,
+      identity: media,
+    );
+    notifyListeners();
+    return removed;
   }
 
   void _attachSiteService() {
@@ -635,6 +1029,8 @@ class AppState extends ChangeNotifier {
       _detailResult = null;
       _detailError = null;
       _configPhase = LoadPhase.ready;
+      // 切换配置 → 重建 TMDB 服务，使 `config_id` 隔离生效（`02` §14 Q2）。
+      _resetTmdbServices();
       log.info('切换配置：${record.name} cat=${reserved != null}', scope: 'config');
       notifyListeners();
       final site = _selectedSite;
@@ -701,6 +1097,9 @@ class AppState extends ChangeNotifier {
   /// 刚离开页面时返回的响应又把状态写回去。
   void clearDetail() {
     _detailRunId++;
+    _tmdbRunId = _detailRunId;
+    // TMDB 状态是页面级临时状态：不清会让下一次进入详情页先渲染上一部剧的元数据。
+    _tmdbState?.clear();
     _detailPhase = LoadPhase.idle;
     _detailResult = null;
     _detailError = null;
@@ -990,6 +1389,20 @@ class AppState extends ChangeNotifier {
       _detailPhase = LoadPhase.ready;
       final first = outcome.value.list.isEmpty ? null : outcome.value.list.first;
       if (first != null) _selectedVod = first;
+      if (first != null) {
+        // TMDB 增强：详情就绪后异步加载。失败**不影响**线路与选集（§27 原则 3），
+        // 因此不 await，也不把异常传播到详情加载。
+        _tmdbRunId = runId;
+        unawaited(
+          tmdb.loadForVod(
+            first,
+            siteKey: site.key,
+            siteName: site.name,
+            configId: tmdbConfigId,
+            lines: playLinesOf(first),
+          ),
+        );
+      }
       log.info(
         '详情加载成功 site=${site.key} vod=${vod.vodId} '
         'lines=${first == null ? 0 : playLinesOf(first).length} '
@@ -1422,6 +1835,7 @@ class AppState extends ChangeNotifier {
     _importService.close();
     _liveService?.close();
     _epgService?.close();
+    _tmdbService.close();
     // §22.2:退出后 sidecar 与代理端口全部释放。
     unawaited(_supervisor.shutdownAll());
     unawaited(_proxy.stop());

@@ -1327,6 +1327,16 @@ data class LiveChannel(
 | `avg_latency` | 平均耗时 |
 | `last_error` | 最近错误 |
 
+TMDB 元数据增强（§27）额外记录：
+
+| 指标 | 说明 |
+| --- | --- |
+| `tmdb_match_ok / tmdb_match_total` | TMDB 媒体身份匹配成功率 |
+| `tmdb_season_resolved / tmdb_season_total` | 季度可确证率（`ambiguous` 不计入成功） |
+| `tmdb_cache_hit / tmdb_cache_total` | 缓存命中率（含陈旧兜底命中） |
+| `tmdb_auth_blocks` | 鉴权熔断开启次数 |
+| `tmdb_stale_fallback` | 陈旧缓存兜底次数 |
+
 ### 14.3 搜索验收
 
 - 一个站点失败不影响其他站点。
@@ -1406,6 +1416,10 @@ Windows/macOS 使用平台标准目录。
 | `search_cache` | 搜索缓存 |
 | `site_health` | 健康统计 |
 | `spider_logs` | Spider 日志摘要 |
+| `tmdb_matches` | TMDB 媒体身份匹配结论（§27.4） |
+| `tmdb_season_bindings` | 线路级季度绑定（§27.5） |
+| `tmdb_route_bindings` | 季度→线路索引（换源候选） |
+| `tmdb_season_progress` | 季度进度快照（§27.6） |
 
 ### 16.3 验收
 
@@ -1454,7 +1468,8 @@ Windows/macOS 使用平台标准目录。
 | 直播页 | 后置 | 后置 | 必须 |
 | 站点健康页 | 后置 | 后置 | 必须 |
 | Spider 管理页 | 后置 | 必须 | 必须 |
-
+| TMDB 详情页 | 后置 | 后置 | 必须 |
+| TMDB 设置页 | 后置 | 后置 | 必须 |
 ### 17.3 播放器界面
 
 包含：
@@ -1586,6 +1601,19 @@ Windows/macOS 使用平台标准目录。
 | `live.txt` | TXT 直播源 |
 | `hls/index.m3u8` | 本地 HLS |
 | `media/sample.mp4` | 本地 MP4 |
+| `tmdb/config/tmdb-config-full.json` | TMDB 配置全字段（§27） |
+| `tmdb/config/tmdb-config-alias.json` | TMDB 配置兼容别名键 |
+| `tmdb/config/tmdb-config-invalid.json` | TMDB 非法配置（反向校验） |
+| `tmdb/detail-tv.json` | TMDB 剧集详情 |
+| `tmdb/detail-tv-next-air.json` | 含未播集的剧集详情（动态 TTL） |
+| `tmdb/detail-movie.json` | TMDB 电影详情 |
+| `tmdb/season-{0,1,2}.json` | TMDB 分季（特别篇/第 1 季/第 2 季） |
+| `tmdb/season-empty.json` | 空季度（退化用例） |
+| `tmdb/search-multi.json` | TMDB 多类型搜索 |
+| `tmdb/search-split-season.json` | 含分季变体的搜索（防护用例） |
+| `tmdb/videos-tv.json` | 相关视频（含非法 key） |
+| `tmdb/error-{401,500}.json` | TMDB 鉴权/服务端错误 |
+| `tmdb/malformed.json` | TMDB 非法 JSON 响应 |
 
 ### 19.3 自动化测试范围
 
@@ -1608,6 +1636,14 @@ Windows/macOS 使用平台标准目录。
 - `ext` Base64 URL-Safe 编解码。
 - 解析优先级 `parse`/`jx`/`flag`/`playUrl`。
 - Spider ABI 版本协商、capability、取消和错误码。
+- TMDB 标题清洗、年份与季度信号解析。
+- TMDB 匹配评分与分季变体防护。
+- TMDB 站点策略（黑/白/启用三张规则表与括号归一）。
+- TMDB 匹配缓存三层键与手动选择排他性。
+- TMDB 季度解析优先级与可播放季度退化。
+- TMDB 季度绑定分段校验与失效。
+- TMDB 季度进度写入/读取/换源/删除语义。
+- TMDB 缓存 TTL、陈旧兜底、鉴权熔断与错误分类。
 
 ### 19.4 兼容性样本库
 
@@ -1621,6 +1657,7 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | JS Spider | 3 | 运行时版本、权限、验证结果 |
 | Python Spider | 3 | 运行时版本、依赖、验证结果 |
 | Java Spider | 3 | JVM 版本、Android 依赖情况、结果 |
+| TMDB 真实作品 | 10 | TMDB 作品 ID、匹配来源标题、季度解析结论、验证时间 |
 
 规则：
 
@@ -1710,7 +1747,7 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - **Phase 0 原型**：不发布，仅用于技术路线比较和 ADR 冻结。
 - **MVP-A 内部预览版**：仅供内部验证 HTTP API 配置导入、浏览、详情和播放闭环，不作为首个公开版本。
 - **MVP-B 首个公开测试版**：加入搜索、历史、进度恢复、CatSpider HTTP 子集、基本代理和 Spider 安全边界。
-- **正式版**：满足 22.5 节发布门禁；不要求 Phase 4 同步能力全部完成，但所有未支持能力必须明确披露。
+- **正式版**：满足 22.5 节发布门禁；不要求 Phase 5 同步能力全部完成，但所有未支持能力必须明确披露。
 
 后续章节中的“首版”统一指 MVP-B；“内部预览版”专指 MVP-A。
 
@@ -1820,7 +1857,38 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 直播 M3U/TXT/JSON 可播放。
 - 播放诊断能输出引擎、格式、网络和错误。
 
-### Phase 4：生态与同步
+### Phase 4：TMDB 元数据增强
+
+目标：参考 `webhtv/默影视` 的 TMDB 能力，用 TMDB 作为**元数据源**（而非播放事实源）
+完成「匹配 → 详情 → 季度/选集 → 续播 → 换源」闭环。
+
+功能：
+
+- TMDB 配置与鉴权（API Key / v4 Access Token，站点规则）。
+- 媒体身份匹配与持久化缓存（含手动匹配）。
+- 标题清洗、年份与季度信号解析、匹配评分与分季变体防护。
+- 季度解析与线路级绑定（显式三态 `SeasonScope`）。
+- 可播放季度解析与选集过滤（不创建播放项）。
+- 季度进度快照与跨源续播。
+- 详情页元数据增强（头部补位、季度选择器、剧集标题/剧照）。
+- 演职人员、剧照墙、相关推荐与相关视频。
+- 纯 TMDB 详情页（无播放能力，可跳搜索站源）。
+
+验收：
+
+- TMDB 匹配、季度解析、可播放季度、季度进度的自动化门禁全绿。
+- 真实窗口集成：详情增强、季度切换、续播、换源续播、手动匹配持久化。
+- TMDB 失败不影响站源浏览与播放，且不阻塞 UI。
+- 选集区不出现无线路地址的播放项；未确证季度不伪造“第一季”。
+- TMDB 凭据在日志与诊断导出中脱敏。
+- 门禁与证据写入 `docs/phase4/evidence/windows-acceptance.txt`。
+
+> 详细设计指导见 `docs/phase4/design/00`–`design/05`，阶段计划见 `docs/phase4/README.md`，
+> 主设计文档摘要见 §27。
+
+---
+
+### Phase 5：生态与同步
 
 目标：建立与 WebHTV 和其他设备的可选协同能力。
 
@@ -1841,8 +1909,6 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 删除有墓碑机制。
 - 同步失败不破坏本地数据。
 - 所有同步默认关闭并需要用户明确开启。
-
----
 
 ## 22. 总验收清单
 
@@ -1880,7 +1946,16 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | 播放器 | 弹幕 | 3 |
 | 直播 | M3U/TXT/JSON | 3 |
 | 直播 | EPG | 3 |
-| 同步 | 配置/历史/收藏同步 | 4 |
+| TMDB | 配置与鉴权 | 4 |
+| TMDB | 媒体身份匹配与缓存 | 4 |
+| TMDB | 手动匹配与持久化 | 4 |
+| TMDB | 季度解析与线路级绑定 | 4 |
+| TMDB | 可播放季度与选集过滤 | 4 |
+| TMDB | 季度进度与跨源续播 | 4 |
+| TMDB | 详情页元数据增强 | 4 |
+| TMDB | 相关推荐与相关视频 | 4 |
+| TMDB | 纯 TMDB 详情页 | 4 |
+| 同步 | 配置/历史/收藏同步 | 5 |
 
 ### 22.2 质量验收
 
@@ -1947,6 +2022,16 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | PiliPala | 只参考交互 | GPL 与产品定位限制 |
 | atv-player | 只参考设计 | 授权不明确且绑定 alist-tvbox |
 | 双路线维护 | 禁止长期并存 | Phase 0 结束必须冻结并清理 |
+| TMDB 定位 | 元数据增强，不改变播放事实源 | §27 设计指导评审通过 |
+| TMDB 配置位置 | 应用设置（`settings.json` 的 `tmdb` 段），**不进配置 JSON** | §27.3 |
+| TMDB 凭据导出 | 不导出、不写日志、不入诊断包 | §22.3、§27.3 |
+| 季度身份表达 | 显式三态 `SeasonScope`，禁止整数默认值兼表 | §27.5 |
+| 季度绑定粒度 | 线路级（`siteKey + vodId + flagKey`） | §27.5 |
+| 自动季度落盘 | 仅结果唯一时落盘；多候选进入手动匹配 | §27.5 |
+| 历史展示键 | 已确证季度按季度聚合，未确证按来源键隔离 | §27.6 |
+| 详情页形态 | 新建 TMDB 详情页，不改造成站点详情页 | §27.7 |
+| 相关视频入口 | 浏览器打开 + 复制链接，不做应用内播放 | §27.7 |
+| 未知季度处理 | 不默认第一季、不伪造季度标签 | §27.5 |
 
 ---
 
@@ -1964,8 +2049,9 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 9. 实现 ABI v1、sidecar、CatSpider HTTP 和代理
 10. 实现 JS/Python/Java Spider
 11. 实现字幕/弹幕/解析器/直播/EPG
-12. 实现同步与生态能力
-13. 执行发布门禁和兼容性报告
+12. 实现 TMDB 元数据增强（匹配/季度/进度/详情页）
+13. 实现同步与生态能力
+14. 执行发布门禁和兼容性报告
 ```
 
 ---
@@ -1981,11 +2067,13 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 5. 本地代理和 Spider 安全测试通过，无越权文件、网络和日志泄露。
 6. 搜索、详情、播放、历史闭环可用。
 7. 字幕、弹幕、解析器、直播、EPG 完整版验收通过，或明确列为未支持能力。
-8. Linux/Windows/macOS 打包可安装、可运行，签名和公证状态明确。
-9. 自动化测试、手动验收和兼容性报告全部记录并可复查。
-10. 无 P0/P1 缺陷。
-11. 不内置资源，合规边界清晰。
-12. 发布包通过 22.5 节全部门禁。
+8. TMDB 元数据增强的匹配/季度/进度/详情页验收通过，或明确列为未支持能力；
+   未确证季度不得被降级为第一季，选集区不得出现无线路地址的播放项。
+9. Linux/Windows/macOS 打包可安装、可运行，签名和公证状态明确。
+10. 自动化测试、手动验收和兼容性报告全部记录并可复查。
+11. 无 P0/P1 缺陷。
+12. 不内置资源，合规边界清晰。
+13. 发布包通过 22.5 节全部门禁。
 
 ---
 
@@ -2003,3 +2091,186 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 | HLS | HTTP Live Streaming，M3U8 清单和分片 |
 | Range | HTTP 分段请求 |
 | EPG | 电子节目指南 |
+| 媒体身份（MediaIdentity） | `mediaType + tmdbId`；同一剧集的不同季度共享该身份 |
+| 季度身份（SeasonIdentity） | `MediaIdentity + KnownSeasonNumber`；用于历史展示、续播、进度与删除边界 |
+| 季度范围（SeasonScope） | 显式三态：`Known(n)` / `Multi(segments)` / `Unknown` |
+| 来源线路绑定（SourceBinding） | `siteKey + vodId + flagKey` → `SeasonScope` |
+| 元数据季度 | TMDB 返回的完整季度，仅用于标题/剧照/日期等丰富 |
+| 可播放季度 | 依据当前线路剧集能可靠确证的季度，用于季度导航与选集过滤 |
+| 季度进度快照 | 按 `mediaType + tmdbId + seasonNumber` 记录的可恢复播放位置 |
+| 来源指纹（SourceFingerprint） | 线路剧集结构的稳定摘要，用于判断旧绑定是否失效 |
+| 分季变体（SplitSeasonVariant） | TMDB 中把一部剧拆成多个独立条目的形态，需惩罚以避免误匹配 |
+| 元数据源 vs 播放事实源 | TMDB 只丰富线路已有的播放项，不创建播放项 |
+
+---
+
+## 27. TMDB 元数据增强
+
+- 定位：参考 `webhtv/默影视` 的 TMDB 能力，在 PC 端提供**元数据增强**，不改变播放事实源。
+- 状态：设计指导已补齐（`docs/phase4/design/00`–`design/05`），实施见 §21 Phase 4。
+- 完整设计指导：`docs/phase4/design/00-tmdb-design-index.md`（索引）、
+  `01`（身份与匹配）、`02`（季度与进度）、`03`（服务/配置/存储）、
+  `04`（详情页与播放）、`05`（测试与验收）。
+- 阶段计划：`docs/phase4/README.md`。
+
+### 27.1 四条不可退让的原则
+
+1. **元数据源 ≠ 播放事实源**：选集区只展示当前线路真实存在的剧集；TMDB 只丰富播放项，
+   **不创建播放项**。TMDB 有某集而线路没有时，不生成该集卡片。
+2. **不确定即未知**：季度用显式三态 `SeasonScope = Known(n) | Multi(segments) | Unknown`
+   表达，禁止用整数默认值兼表“特别篇”和“未解析”，禁止默认第一季。
+3. **安全退化优先**：TMDB 失败时保留来源标题、来源历史与原线路，不改变已保存绑定；
+   可以暂时重复展示，但不能跨季度恢复错误进度。
+4. **主进程不加载不可信代码，凭据不外泄**：TMDB 只走主进程 HTTP 客户端，不进 sidecar、
+   不新增 ABI；API Key / Access Token 在日志与诊断导出中必须脱敏。
+
+### 27.2 分层与模块边界
+
+| 层 | 模块 | 职责 |
+| --- | --- | --- |
+| 纯逻辑 | `lib/core/tmdb_title.dart` | 标题清洗、年份、季度信号、匹配评分 |
+| 纯逻辑 | `lib/core/tmdb_identity.dart` | 媒体身份、匹配记录、缓存三层键 |
+| 纯逻辑 | `lib/core/tmdb_config.dart` | 配置归一化、站点策略 |
+| 纯逻辑 | `lib/core/tmdb_season.dart` | `SeasonScope`、季度解析、可播放季度、分段校验、指纹 |
+| 纯逻辑 | `lib/core/tmdb_media.dart` | 剧集/人物/图片/相关视频模型 |
+| 服务 | `lib/services/tmdb_service.dart` | 端点封装、TTL、熔断、错误映射 |
+| 服务 | `lib/services/tmdb_cache.dart` | 文件缓存与陈旧兜底 |
+| 服务 | `lib/services/tmdb_identity_service.dart` | 匹配编排 + 缓存读写 |
+| 服务 | `lib/services/tmdb_season_service.dart` | 季度解析编排 + 绑定读写 |
+| 服务 | `lib/services/tmdb_enrichment_service.dart` | 元数据应用到 `Vod`/线路/剧集 |
+| 状态 | `lib/state/tmdb_state.dart` | `ChangeNotifier`，含代际防迟到响应 |
+| UI | `lib/ui/tmdb_widgets.dart`、`lib/ui/tmdb_detail_page.dart` | 详情增强、季度选择器、手动匹配、纯 TMDB 详情页 |
+
+约束：`lib/core/**` 不得依赖 Flutter 或 `dart:io`（纯逻辑必须可在 `flutter test` 无副作用运行）。
+不继承上游 `TmdbDetailActivity`（12667 行）与 `TmdbUIAdapter`（2451 行）的单体结构。
+
+### 27.3 配置与凭据
+
+TMDB 配置放在应用设置 `<configDir>/settings.json` 的 `tmdb` 段，**不进入站源配置 JSON**。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 总开关 |
+| `apiBase` | `https://api.tmdb.org/3` | 归一化为以 `/3` 结尾 |
+| `apiKey` | `""` | v3 Key；与 `accessToken` 至少其一非空 |
+| `accessToken` | `""` | v4 Token；非空时用 `Authorization: Bearer`，不再附加 `api_key` |
+| `language` | `zh-CN` | |
+| `imageBase` / `backdropBase` | `w342` / `w780` | 图片基址 |
+| `enabledSites` / `allowedSites` / `disabledSites` | 见 §27.4 | 站点规则三张表 |
+| `smartMatch` | `true` | 智能匹配开关 |
+| `heuristicSeasonGuessing` | `true` | 启发式季度推断开关 |
+
+凭据保护：日志只输出末 4 位；诊断包内替换为 `<redacted>`；不随配置同步/导出；
+设置页默认掩码。凭据泄露即视为发布门禁不通过（§22.5 第 3 项）。
+
+### 27.4 媒体身份匹配
+
+```text
+MediaIdentity = mediaType + tmdbId
+```
+
+匹配流程：缓存查询 → 标题清洗 → 候选查询（上限 3）→ 结果过滤 → 三级选择
+（`strict` → `containedYear` → `smart`）→ 年份拆分重试（仅一次）→ 落盘。
+
+- **分季变体防护**：TMDB 详情标题含“分季”且源文本不允许分季时，该候选**直接丢弃**；
+  四档得分 `+140 / 0 / +160 / -240` 用于多候选裁决。
+- **站点策略**判定顺序：`disabledSites` 精确 → `allowedSites` 精确 → `enabledSites` 精确
+  → `disabledSites` 子串 → `enabledSites` 为空则允许 → `enabledSites` 子串 → 拒绝。
+- **括号归一**：`「」【】〔〕［］` 统一为 `[]`；不做归一则猫源（全角括号）默认规则一条也匹配不上。
+- **匹配缓存三层键**：条目级 / 条目+标题 / 全局标题域；**手动结论不被自动匹配覆盖**。
+- **手动匹配**：支持 `tmdb:12345` / `movie:12345` / `tv:12345` 直达；剧集需继续选择季度。
+
+未配置或站点被禁用时**零网络请求**。
+
+### 27.5 季度解析、绑定与可播放季度
+
+```text
+SeasonIdentity = MediaIdentity + KnownSeasonNumber
+SourceBinding  = siteKey + vodId + flagKey  →  SeasonScope
+```
+
+- 绑定粒度必须下沉到**线路**（`flagKey`），否则同详情多季线路会互相污染进度。
+- 季度解析按固定优先级（请求 → 手动 → 显式 → 标题 → 单季 → 集数 → 扁平集号 → 未知），
+  **后级不得覆盖前级**；只有结果**唯一**时才允许自动落盘，多候选进入手动匹配。
+- 可播放季度按 6 级顺序解析（显式完整映射 → 标题 → 唯一 TMDB 季 → 精确切片 → 扁平集号 →
+  单季兼容），无法可靠映射时返回空并**退化为扁平列表**。
+- `MultiSeason` 分段必须通过 8 条有效性校验（连续无空洞、完整覆盖、不越界等）。
+- 未知季度**不应用** TMDB 剧集元数据（不默认第 1 季、不尝试第 0 季兜底）。
+
+### 27.6 季度进度、历史与换源
+
+```text
+TmdbSeasonProgressKey = mediaType + tmdbId + seasonNumber
+```
+
+- 只有已确证季度（`Known` 或 `Multi` 的实际段）才写季度进度；`Unknown` 只更新来源历史。
+- 播放另一季度**不覆盖**当前季度快照。
+- 历史展示键：已确证季度按 `mediaType:tmdbId:season:N` 聚合；未知按来源键隔离；
+  电影按 `mediaType:tmdbId`。同一节目的不同季度生成**不同**历史卡片。
+- 自动换源必须通过季度兼容判定：`Known(N)` 接受 `Known(N)` 与含 N 的 `Multi`，
+  拒绝其他 `Known(M)` 与 `Unknown`。
+- 删除分级：删除季度历史不影响同节目其他季度；删除整部节目是独立的二级操作。
+- 现有 `history` 表**主键与字段不变**，季度进度是新增的加法式结构。
+
+### 27.7 详情页与播放入口
+
+- 站点详情页新增 TMDB 区块，按 6 种状态渲染（未配置 / 站点禁用 / 未匹配 / 匹配中 /
+  已匹配 / 失败）；站点禁用时整块不渲染。
+- 头部增强严格遵守“**仅补位不覆盖**”：来源已有非空字段一律不改。
+- 季度选择器与选集联动，**强制断言** `episodesToRender.length == 该季线路剧集数`。
+- 纯 TMDB 详情页（无站源）的剧集卡片**不可播**，点击跳转到按标题搜索站源。
+- 相关视频用浏览器打开 + 复制链接，**不做应用内播放**（避免隐式内置站源与合规风险）。
+- 播放入口透传季度身份（`tmdbId`/`mediaType`/`seasonNumber`/`episodeNumber`/`flagKey`）
+  与 `episodeUrl`；剧集匹配优先级固定为 `episodeUrl` → `episodeName` → TMDB 季集号。
+  季度身份**不进入** `PlaybackDecision`，`PlaybackDecision` 的产生逻辑不变。
+
+### 27.8 存储
+
+新增四张表（全部为加法式，不改动既有表）：
+
+| 表 | 用途 |
+| --- | --- |
+| `tmdb_matches` | 媒体身份匹配结论（含手动标记与标题别名） |
+| `tmdb_season_bindings` | 线路级季度绑定（含指纹与分段） |
+| `tmdb_route_bindings` | 季度→线路索引（换源候选，上限 512） |
+| `tmdb_season_progress` | 季度进度快照 |
+
+- `schemaVersion` 由 `1` 升至 `2`；`CREATE TABLE IF NOT EXISTS` 保证迁移幂等。
+- 文件缓存位于 `<cacheDir>/tmdb/<type>_<md5>.json`；目录不可写时降级为不缓存。
+- 清理边界：重置缓存不动 SQLite；“清空历史”清季度进度但保留匹配与绑定。
+
+### 27.9 错误分类与失败隔离
+
+新增 `AppErrorKind`：`tmdbNotConfigured` / `tmdbAuth` / `tmdbNetwork` / `tmdbHttp` /
+`tmdbDecode` / `tmdbEmpty` / `tmdbUnsupported`。
+
+- 全部 `tmdb*` 错误均为**非致命**类别，用户文案必须含“不影响站源浏览与播放”。
+- `isTmdbError` 只认 `tmdb*` 前缀，沿用 Phase 3 字幕/弹幕的失败隔离模式。
+- 鉴权失败触发 5 分钟熔断，熔断期内**零请求**；熔断按凭据隔离，换 Key 后立即可用。
+
+### 27.10 验收
+
+门禁表见 `docs/phase4/README.md` §3 与 `docs/phase4/design/05` §6，一键验收入口：
+
+```powershell
+pwsh -File tools/phase4/run_windows_acceptance.ps1
+```
+
+证据写入 `docs/phase4/evidence/windows-acceptance.txt`。至少包含三条**反向验证**：
+
+1. 把未知季度的元数据候选改回 `[1, 0]` → 对应用例必须失败；
+2. 把分季惩罚改为 `0` → 分季变体用例必须失败；
+3. 去掉括号归一 → 猫源站点策略用例必须失败。
+
+### 27.11 与上游 `webhtv/默影视` 的取舍
+
+**复用**：`TmdbConfig` 归一化与默认禁用规则、`TmdbService` 的 TTL 与陈旧兜底、
+鉴权熔断、`TmdbMatcher` 评分公式、`TmdbMatchPolicy` 分季四档、`TmdbSeasonResolver`
+解析优先级、可播放季度 6 级顺序、标题三态模型。
+
+**改写**：OkHttp/Gson → `package:http` + `dart:convert`；`Prefers` → `settings.json`；
+Room → SQLite 新表；`TmdbUIAdapter` 上帝类 → 分层服务与纯逻辑模块。
+
+**不抄**：`TmdbDetailActivity` 单体、AI 刮削与 AI 推荐、豆瓣评分富集、
+个人推荐画像、WebHome 内联/短剧/小说/漫画路由、应用内 YouTube 播放、
+Android 特有的多套详情页形态。

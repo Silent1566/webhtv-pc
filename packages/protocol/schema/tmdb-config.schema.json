@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webhtv.local/schema/tmdb-config.schema.json",
+  "title": "WebHTV PC TMDB Configuration",
+  "description": "TMDB 元数据增强配置（docs/phase4/design/03-tmdb-service-config-storage.md §5）。存放在 <configDir>/settings.json 的 tmdb 段，不进入站源配置 JSON。",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "总开关；false 时等同未配置。"
+    },
+    "apiBase": {
+      "type": "string",
+      "minLength": 1,
+      "description": "TMDB API 基址，归一化为以 /3 结尾。"
+    },
+    "apiKey": {
+      "type": "string",
+      "description": "TMDB v3 API Key。与 accessToken 至少其一非空。"
+    },
+    "apikey": { "type": "string" },
+    "api_key": { "type": "string" },
+    "tmdbApiKey": { "type": "string" },
+    "key": { "type": "string" },
+    "accessToken": {
+      "type": "string",
+      "description": "TMDB v4 Read Access Token（JWT）。非空时使用 Authorization: Bearer。"
+    },
+    "token": { "type": "string" },
+    "readAccessToken": { "type": "string" },
+    "bearerToken": { "type": "string" },
+    "omdbApiKey": {
+      "type": "string",
+      "description": "保留字段；PC 端不发起 OMDB 请求。"
+    },
+    "omdbKey": { "type": "string" },
+    "imdbApiKey": { "type": "string" },
+    "language": {
+      "type": "string",
+      "minLength": 2,
+      "default": "zh-CN",
+      "description": "TMDB 语言参数（BCP-47 形态）。"
+    },
+    "imageBase": {
+      "type": "string",
+      "description": "海报基址，归一化为 .../t/p/w342 形态。"
+    },
+    "backdropBase": {
+      "type": "string",
+      "description": "背景图基址，归一化为 .../t/p/w780 形态。"
+    },
+    "enabledSites": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "启用站点规则（精确优先，其次子串）。"
+    },
+    "siteKeys": { "type": "array", "items": { "type": "string" } },
+    "sites": { "type": "array", "items": { "type": "string" } },
+    "matchSites": { "type": "array", "items": { "type": "string" } },
+    "allowedSites": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "白名单站点规则，优先级高于 enabledSites。"
+    },
+    "includeSites": { "type": "array", "items": { "type": "string" } },
+    "whitelistSites": { "type": "array", "items": { "type": "string" } },
+    "disabledSites": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "黑名单站点规则，优先级最高。为空且未显式配置时使用默认规则。"
+    },
+    "excludeKeywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "兼容旧版字段，合并进 disabledSites。"
+    },
+    "exclude": { "type": "array", "items": { "type": "string" } },
+    "blockedKeywords": { "type": "array", "items": { "type": "string" } },
+    "skipKeywords": { "type": "array", "items": { "type": "string" } },
+    "excludeKeywordsConfigured": {
+      "type": "boolean",
+      "description": "是否显式配置过排除规则；缺省时按 disabledSites 是否为空推导。"
+    },
+    "smartMatch": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用智能匹配（±1 年、同名回退）。"
+    },
+    "heuristicSeasonGuessing": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否允许启发式季度推断（单普通季度、集数切片）。"
+    }
+  },
+  "additionalProperties": true
+}

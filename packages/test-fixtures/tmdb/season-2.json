@@ -1,0 +1,158 @@
+{
+  "id": 2002,
+  "season_number": 2,
+  "name": "第 2 季",
+  "overview": "第 2 季",
+  "air_date": "2025-04-05",
+  "poster_path": "/s2.jpg",
+  "episodes": [
+    {
+      "id": 100201,
+      "episode_number": 1,
+      "season_number": 2,
+      "name": "第 1 集",
+      "overview": "第 2 季第 1 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e1.jpg",
+      "vote_average": 7.3,
+      "runtime": 45
+    },
+    {
+      "id": 100202,
+      "episode_number": 2,
+      "season_number": 2,
+      "name": "第 2 集",
+      "overview": "第 2 季第 2 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e2.jpg",
+      "vote_average": 7.6,
+      "runtime": 45
+    },
+    {
+      "id": 100203,
+      "episode_number": 3,
+      "season_number": 2,
+      "name": "第 3 集",
+      "overview": "第 2 季第 3 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e3.jpg",
+      "vote_average": 7.0,
+      "runtime": 45
+    },
+    {
+      "id": 100204,
+      "episode_number": 4,
+      "season_number": 2,
+      "name": "第 4 集",
+      "overview": "第 2 季第 4 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e4.jpg",
+      "vote_average": 7.3,
+      "runtime": 45
+    },
+    {
+      "id": 100205,
+      "episode_number": 5,
+      "season_number": 2,
+      "name": "第 5 集",
+      "overview": "第 2 季第 5 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e5.jpg",
+      "vote_average": 7.6,
+      "runtime": 45
+    },
+    {
+      "id": 100206,
+      "episode_number": 6,
+      "season_number": 2,
+      "name": "第 6 集",
+      "overview": "第 2 季第 6 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e6.jpg",
+      "vote_average": 7.0,
+      "runtime": 45
+    },
+    {
+      "id": 100207,
+      "episode_number": 7,
+      "season_number": 2,
+      "name": "第 7 集",
+      "overview": "第 2 季第 7 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e7.jpg",
+      "vote_average": 7.3,
+      "runtime": 45
+    },
+    {
+      "id": 100208,
+      "episode_number": 8,
+      "season_number": 2,
+      "name": "第 8 集",
+      "overview": "第 2 季第 8 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e8.jpg",
+      "vote_average": 7.6,
+      "runtime": 45
+    },
+    {
+      "id": 100209,
+      "episode_number": 9,
+      "season_number": 2,
+      "name": "第 9 集",
+      "overview": "第 2 季第 9 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e9.jpg",
+      "vote_average": 7.0,
+      "runtime": 45
+    },
+    {
+      "id": 100210,
+      "episode_number": 10,
+      "season_number": 2,
+      "name": "第 10 集",
+      "overview": "第 2 季第 10 集简介",
+      "air_date": "2025-04-05",
+      "still_path": "/s2e10.jpg",
+      "vote_average": 7.3,
+      "runtime": 45
+    }
+  ],
+  "credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "character": "主角",
+        "profile_path": "/person.jpg",
+        "known_for_department": "Acting",
+        "order": 0
+      }
+    ],
+    "crew": [
+      {
+        "id": 500,
+        "name": "示例导演",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/crew.jpg"
+      }
+    ]
+  },
+  "aggregate_credits": {
+    "cast": []
+  },
+  "images": {
+    "posters": [
+      {
+        "file_path": "/sp2.jpg",
+        "width": 680,
+        "height": 1020,
+        "vote_average": 5.0,
+        "vote_count": 2
+      }
+    ]
+  },
+  "translations": {
+    "translations": []
+  }
+}

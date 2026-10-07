@@ -1,0 +1,82 @@
+{
+  "id": 287,
+  "name": "示例演员",
+  "known_for_department": "Acting",
+  "biography": "示例演员传记",
+  "profile_path": "/person.jpg",
+  "combined_credits": {
+    "cast": [
+      {
+        "id": 1399,
+        "media_type": "tv",
+        "name": "示例剧集",
+        "character": "主角",
+        "poster_path": "/tv-poster.jpg",
+        "first_air_date": "2024-03-01",
+        "vote_average": 8.2,
+        "original_language": "zh",
+        "origin_country": [
+          "CN"
+        ],
+        "genre_ids": [
+          18
+        ],
+        "overview": "示例剧集简介"
+      },
+      {
+        "id": 550,
+        "media_type": "movie",
+        "title": "示例电影",
+        "character": "配角",
+        "poster_path": "/movie-poster.jpg",
+        "release_date": "2023-06-15",
+        "vote_average": 7.9,
+        "original_language": "en",
+        "origin_country": [
+          "US"
+        ],
+        "genre_ids": [
+          28
+        ],
+        "overview": "示例电影简介"
+      }
+    ],
+    "crew": [
+      {
+        "id": 550,
+        "media_type": "movie",
+        "title": "示例电影",
+        "job": "Writer",
+        "department": "Writing",
+        "poster_path": "/movie-poster.jpg",
+        "release_date": "2023-06-15",
+        "vote_average": 7.9,
+        "original_language": "en",
+        "origin_country": [
+          "US"
+        ],
+        "genre_ids": [
+          28
+        ],
+        "overview": "示例电影简介"
+      }
+    ]
+  },
+  "images": {
+    "profiles": [
+      {
+        "file_path": "/profile1.jpg",
+        "width": 300,
+        "height": 450,
+        "vote_average": 5.0,
+        "vote_count": 3
+      }
+    ]
+  },
+  "translations": {
+    "translations": []
+  },
+  "external_ids": {
+    "imdb_id": "nm0000001"
+  }
+}

@@ -236,7 +236,7 @@ class AppDatabase {
 
   final Database _db;
 
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -361,9 +361,118 @@ class AppDatabase {
         created_at INTEGER NOT NULL
       );
     ''');
+    _migrateTmdb();
     _db.execute(
       "INSERT INTO meta(key, value) VALUES('schema_version', '$schemaVersion') "
       'ON CONFLICT(key) DO UPDATE SET value=excluded.value;',
+    );
+  }
+
+  /// Phase 4 · TMDB 元数据增强的四张新表（`docs/phase4/design/03` §6.1）。
+  ///
+  /// 全部为**加法式**新增：不改动任何既有表的列或主键，因此无需分支式迁移，
+  /// 旧数据库打开后自动获得新表且不丢数据（§6.2）。
+  void _migrateTmdb() {
+    // 媒体匹配（`01` §2.3）
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS tmdb_matches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_id INTEGER NOT NULL DEFAULT 0,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        source_title TEXT NOT NULL DEFAULT '',
+        scope TEXT NOT NULL,
+        tmdb_id INTEGER NOT NULL,
+        media_type TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        subtitle TEXT,
+        overview TEXT,
+        poster_url TEXT,
+        backdrop_url TEXT,
+        credit TEXT,
+        rating REAL NOT NULL DEFAULT 0,
+        original_language TEXT NOT NULL DEFAULT '',
+        origin_country TEXT NOT NULL DEFAULT '',
+        manual INTEGER NOT NULL DEFAULT 0,
+        manual_titles TEXT,
+        matched_at INTEGER NOT NULL,
+        UNIQUE(config_id, site_key, vod_id, source_title, scope)
+      );
+    ''');
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tmdb_matches_identity '
+      'ON tmdb_matches(config_id, media_type, tmdb_id);',
+    );
+
+    // 线路级季度绑定（`02` §5.1）
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS tmdb_season_bindings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_id INTEGER NOT NULL DEFAULT 0,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        source_title TEXT NOT NULL DEFAULT '',
+        flag_key TEXT NOT NULL DEFAULT '',
+        tmdb_id INTEGER NOT NULL,
+        media_type TEXT NOT NULL DEFAULT 'tv',
+        mode TEXT NOT NULL,
+        season_number INTEGER,
+        source_fingerprint TEXT NOT NULL DEFAULT '',
+        source_episode_count INTEGER NOT NULL DEFAULT 0,
+        tmdb_season_episode_count INTEGER NOT NULL DEFAULT 0,
+        segments TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(config_id, site_key, vod_id, source_title, flag_key)
+      );
+    ''');
+
+    // 季度→线路索引（`02` §5.5）
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS tmdb_route_bindings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_id INTEGER NOT NULL DEFAULT 0,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        flag_key TEXT NOT NULL,
+        source_flag TEXT NOT NULL DEFAULT '',
+        source_fingerprint TEXT NOT NULL DEFAULT '',
+        tmdb_id INTEGER NOT NULL,
+        media_type TEXT NOT NULL DEFAULT 'tv',
+        scope_kind TEXT NOT NULL,
+        season_numbers TEXT NOT NULL DEFAULT '',
+        segments TEXT,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(config_id, site_key, vod_id, flag_key)
+      );
+    ''');
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tmdb_route_identity '
+      'ON tmdb_route_bindings(config_id, tmdb_id, media_type);',
+    );
+
+    // 季度进度（`02` §6.1）
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS tmdb_season_progress (
+        config_id INTEGER NOT NULL DEFAULT 0,
+        media_type TEXT NOT NULL DEFAULT 'tv',
+        tmdb_id INTEGER NOT NULL,
+        season_number INTEGER NOT NULL,
+        episode_number INTEGER NOT NULL DEFAULT 0,
+        position_ms INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        source_flag TEXT NOT NULL DEFAULT '',
+        source_episode_name TEXT NOT NULL DEFAULT '',
+        source_episode_url TEXT NOT NULL DEFAULT '',
+        source_history_key TEXT NOT NULL DEFAULT '',
+        source_binding_key TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (config_id, media_type, tmdb_id, season_number)
+      );
+    ''');
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_tmdb_season_progress_history '
+      'ON tmdb_season_progress(config_id, source_history_key);',
     );
   }
 
@@ -764,6 +873,10 @@ class AppDatabase {
       'search_cache',
       'site_health',
       'spider_logs',
+      'tmdb_matches',
+      'tmdb_season_bindings',
+      'tmdb_route_bindings',
+      'tmdb_season_progress',
     ]) {
       result[table] =
           _db.select('SELECT COUNT(*) AS c FROM $table;').first['c'] as int;
@@ -771,9 +884,427 @@ class AppDatabase {
     return result;
   }
 
+  // -------------------------------------------------------------------------
+  // TMDB 元数据增强（§27）
+  // -------------------------------------------------------------------------
+
+  /// 读取匹配结论。`scope = 'entry'` 表示条目级键（`source_title` 为 `''`）。
+  Row? findTmdbMatch({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String scope,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM tmdb_matches WHERE config_id=? AND site_key=? AND vod_id=? '
+      'AND source_title=? AND scope=? LIMIT 1;',
+      [configId, siteKey, vodId, sourceTitle, scope],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入匹配结论（按唯一键 upsert）。
+  void upsertTmdbMatch({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String scope,
+    required int tmdbId,
+    required String mediaType,
+    required String title,
+    String? subtitle,
+    String? overview,
+    String? posterUrl,
+    String? backdropUrl,
+    String? credit,
+    double rating = 0,
+    String originalLanguage = '',
+    String originCountry = '',
+    bool manual = false,
+    List<String> manualTitles = const [],
+    int? matchedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO tmdb_matches(config_id, site_key, vod_id, source_title, scope, '
+      'tmdb_id, media_type, title, subtitle, overview, poster_url, backdrop_url, '
+      'credit, rating, original_language, origin_country, manual, manual_titles, '
+      'matched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, site_key, vod_id, source_title, scope) DO UPDATE SET '
+      'tmdb_id=excluded.tmdb_id, media_type=excluded.media_type, '
+      'title=excluded.title, subtitle=excluded.subtitle, overview=excluded.overview, '
+      'poster_url=excluded.poster_url, backdrop_url=excluded.backdrop_url, '
+      'credit=excluded.credit, rating=excluded.rating, '
+      'original_language=excluded.original_language, '
+      'origin_country=excluded.origin_country, manual=excluded.manual, '
+      'manual_titles=excluded.manual_titles, matched_at=excluded.matched_at;',
+      [
+        configId,
+        siteKey,
+        vodId,
+        sourceTitle,
+        scope,
+        tmdbId,
+        mediaType,
+        title,
+        subtitle,
+        overview,
+        posterUrl,
+        backdropUrl,
+        credit,
+        rating,
+        originalLanguage,
+        originCountry,
+        manual ? 1 : 0,
+        manualTitles.isEmpty ? null : manualTitles.join('\u0001'),
+        matchedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 删除某条目（含全部标题键）的匹配结论。
+  int removeTmdbMatches({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+  }) {
+    _db.execute(
+      'DELETE FROM tmdb_matches WHERE config_id=? AND site_key=? AND vod_id=?;',
+      [configId, siteKey, vodId],
+    );
+    return _db.updatedRows;
+  }
+
+  /// 读取季度绑定。
+  Row? findTmdbSeasonBinding({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM tmdb_season_bindings WHERE config_id=? AND site_key=? '
+      'AND vod_id=? AND source_title=? AND flag_key=? LIMIT 1;',
+      [configId, siteKey, vodId, sourceTitle, flagKey],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入季度绑定（按唯一键 upsert）。
+  void upsertTmdbSeasonBinding({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+    required int tmdbId,
+    required String mediaType,
+    required String mode,
+    int? seasonNumber,
+    String sourceFingerprint = '',
+    int sourceEpisodeCount = 0,
+    int tmdbSeasonEpisodeCount = 0,
+    String? segments,
+    int version = 1,
+    int? updatedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO tmdb_season_bindings(config_id, site_key, vod_id, source_title, '
+      'flag_key, tmdb_id, media_type, mode, season_number, source_fingerprint, '
+      'source_episode_count, tmdb_season_episode_count, segments, version, updated_at) '
+      'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, site_key, vod_id, source_title, flag_key) DO UPDATE SET '
+      'tmdb_id=excluded.tmdb_id, media_type=excluded.media_type, mode=excluded.mode, '
+      'season_number=excluded.season_number, '
+      'source_fingerprint=excluded.source_fingerprint, '
+      'source_episode_count=excluded.source_episode_count, '
+      'tmdb_season_episode_count=excluded.tmdb_season_episode_count, '
+      'segments=excluded.segments, version=excluded.version, '
+      'updated_at=excluded.updated_at;',
+      [
+        configId,
+        siteKey,
+        vodId,
+        sourceTitle,
+        flagKey,
+        tmdbId,
+        mediaType,
+        mode,
+        seasonNumber,
+        sourceFingerprint,
+        sourceEpisodeCount,
+        tmdbSeasonEpisodeCount,
+        segments,
+        version,
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 删除季度绑定（可指定线路；`flagKey` 为空时删除该条目的全部线路）。
+  int removeTmdbSeasonBindings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    String? sourceTitle,
+    String? flagKey,
+  }) {
+    final clauses = <String>['config_id=?', 'site_key=?', 'vod_id=?'];
+    final args = <Object?>[configId, siteKey, vodId];
+    if (sourceTitle != null) {
+      clauses.add('source_title=?');
+      args.add(sourceTitle);
+    }
+    if (flagKey != null) {
+      clauses.add('flag_key=?');
+      args.add(flagKey);
+    }
+    _db.execute(
+      'DELETE FROM tmdb_season_bindings WHERE ${clauses.join(" AND ")};',
+      args,
+    );
+    return _db.updatedRows;
+  }
+
+  /// 读取线路绑定索引。
+  Row? findTmdbRouteBinding({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String flagKey,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM tmdb_route_bindings WHERE config_id=? AND site_key=? '
+      'AND vod_id=? AND flag_key=? LIMIT 1;',
+      [configId, siteKey, vodId, flagKey],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入线路绑定索引。
+  void upsertTmdbRouteBinding({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String flagKey,
+    required String sourceFlag,
+    required String sourceFingerprint,
+    required int tmdbId,
+    required String mediaType,
+    required String scopeKind,
+    required String seasonNumbers,
+    String? segments,
+    int? updatedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO tmdb_route_bindings(config_id, site_key, vod_id, flag_key, '
+      'source_flag, source_fingerprint, tmdb_id, media_type, scope_kind, '
+      'season_numbers, segments, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, site_key, vod_id, flag_key) DO UPDATE SET '
+      'source_flag=excluded.source_flag, '
+      'source_fingerprint=excluded.source_fingerprint, tmdb_id=excluded.tmdb_id, '
+      'media_type=excluded.media_type, scope_kind=excluded.scope_kind, '
+      'season_numbers=excluded.season_numbers, segments=excluded.segments, '
+      'updated_at=excluded.updated_at;',
+      [
+        configId,
+        siteKey,
+        vodId,
+        flagKey,
+        sourceFlag,
+        sourceFingerprint,
+        tmdbId,
+        mediaType,
+        scopeKind,
+        seasonNumbers,
+        segments,
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 删除线路绑定索引。
+  int removeTmdbRouteBinding({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String flagKey,
+  }) {
+    _db.execute(
+      'DELETE FROM tmdb_route_bindings WHERE config_id=? AND site_key=? '
+      'AND vod_id=? AND flag_key=?;',
+      [configId, siteKey, vodId, flagKey],
+    );
+    return _db.updatedRows;
+  }
+
+  /// 按 TMDB 身份 + 季度列出全部线路绑定（换源候选，`02` §5.5）。
+  List<Row> tmdbRouteBindingsFor({
+    required int configId,
+    required int tmdbId,
+    required String mediaType,
+    required int seasonNumber,
+  }) {
+    // season_numbers 是 JSON 数组文本；用 LIKE 粗筛后在 Dart 侧精确判定。
+    return _db.select(
+      'SELECT * FROM tmdb_route_bindings WHERE config_id=? AND tmdb_id=? '
+      'AND media_type=? ORDER BY updated_at DESC;',
+      [configId, tmdbId, mediaType],
+    );
+  }
+
+  /// 列出某配置下的**全部**线路绑定（容量淘汰用，`02` §5.5）。
+  List<Row> tmdbRouteBindingsAll({required int configId}) => _db.select(
+    'SELECT * FROM tmdb_route_bindings WHERE config_id=? ORDER BY updated_at ASC;',
+    [configId],
+  );
+
+  /// 线路绑定索引容量上限（`02` §5.5）：超出时按 `updated_at` 淘汰最旧。
+  int trimTmdbRouteBindings({int max = 512}) {
+    final total =
+        _db.select('SELECT COUNT(*) AS c FROM tmdb_route_bindings;').first['c']
+            as int;
+    if (total <= max) return 0;
+    _db.execute(
+      'DELETE FROM tmdb_route_bindings WHERE id IN ('
+      'SELECT id FROM tmdb_route_bindings ORDER BY updated_at ASC LIMIT ?);',
+      [total - max],
+    );
+    return _db.updatedRows;
+  }
+
+  /// 读取季度进度。
+  Row? findTmdbSeasonProgress({
+    required int configId,
+    required String mediaType,
+    required int tmdbId,
+    required int seasonNumber,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM tmdb_season_progress WHERE config_id=? AND media_type=? '
+      'AND tmdb_id=? AND season_number=? LIMIT 1;',
+      [configId, mediaType, tmdbId, seasonNumber],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入季度进度（主键覆盖，`02` §6.2）。
+  void upsertTmdbSeasonProgress({
+    required int configId,
+    required String mediaType,
+    required int tmdbId,
+    required int seasonNumber,
+    int episodeNumber = 0,
+    int positionMs = 0,
+    int durationMs = 0,
+    String sourceFlag = '',
+    String sourceEpisodeName = '',
+    String sourceEpisodeUrl = '',
+    String sourceHistoryKey = '',
+    String sourceBindingKey = '',
+    int? updatedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO tmdb_season_progress(config_id, media_type, tmdb_id, '
+      'season_number, episode_number, position_ms, duration_ms, source_flag, '
+      'source_episode_name, source_episode_url, source_history_key, '
+      'source_binding_key, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, media_type, tmdb_id, season_number) DO UPDATE SET '
+      'episode_number=excluded.episode_number, position_ms=excluded.position_ms, '
+      'duration_ms=excluded.duration_ms, source_flag=excluded.source_flag, '
+      'source_episode_name=excluded.source_episode_name, '
+      'source_episode_url=excluded.source_episode_url, '
+      'source_history_key=excluded.source_history_key, '
+      'source_binding_key=excluded.source_binding_key, '
+      'updated_at=excluded.updated_at;',
+      [
+        configId,
+        mediaType,
+        tmdbId,
+        seasonNumber,
+        episodeNumber,
+        positionMs,
+        durationMs,
+        sourceFlag,
+        sourceEpisodeName,
+        sourceEpisodeUrl,
+        sourceHistoryKey,
+        sourceBindingKey,
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 列出某节目的全部季度进度（历史投影用，`02` §7.1）。
+  List<Row> tmdbSeasonProgressFor({
+    required int configId,
+    required String mediaType,
+    required int tmdbId,
+  }) => _db.select(
+    'SELECT * FROM tmdb_season_progress WHERE config_id=? AND media_type=? '
+    'AND tmdb_id=? ORDER BY season_number ASC;',
+    [configId, mediaType, tmdbId],
+  );
+
+  /// 删除单个季度进度（删除某季历史时使用，`02` §7.4）。
+  int removeTmdbSeasonProgress({
+    required int configId,
+    required String mediaType,
+    required int tmdbId,
+    required int seasonNumber,
+  }) {
+    _db.execute(
+      'DELETE FROM tmdb_season_progress WHERE config_id=? AND media_type=? '
+      'AND tmdb_id=? AND season_number=?;',
+      [configId, mediaType, tmdbId, seasonNumber],
+    );
+    return _db.updatedRows;
+  }
+
+  /// 删除整部节目的全部季度进度（「删除整部节目」二级操作，`02` §7.4）。
+  int removeTmdbSeasonProgressForMedia({
+    required int configId,
+    required String mediaType,
+    required int tmdbId,
+  }) {
+    _db.execute(
+      'DELETE FROM tmdb_season_progress WHERE config_id=? AND media_type=? '
+      'AND tmdb_id=?;',
+      [configId, mediaType, tmdbId],
+    );
+    return _db.updatedRows;
+  }
+
+  /// 清空全部季度进度（「清空历史」使用；**保留**匹配与绑定，`03` §6.5）。
+  int clearTmdbSeasonProgress() {
+    _db.execute('DELETE FROM tmdb_season_progress;');
+    return _db.updatedRows;
+  }
+
+  /// 按关联的来源历史键查找季度进度（续播恢复用，`02` §6.3）。
+  List<Row> tmdbSeasonProgressByHistory({
+    required int configId,
+    required String sourceHistoryKey,
+  }) => _db.select(
+    'SELECT * FROM tmdb_season_progress WHERE config_id=? AND '
+    'source_history_key=? ORDER BY updated_at DESC;',
+    [configId, sourceHistoryKey],
+  );
+
   /// 原生 SQL 计数（健康度检查、集成测试使用）。
   int count(String table) =>
       _db.select('SELECT COUNT(*) AS c FROM $table;').first['c'] as int;
+
+  /// `meta` 表中的 `schema_version` 值（迁移校验用）。
+  String? get schemaVersionValue {
+    final rows = _db.select(
+      'SELECT value FROM meta WHERE key=?;',
+      ['schema_version'],
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String?;
+  }
 
   /// 删除数据目录后重建：关闭并重新打开同一路径由调用方负责。
   bool get isHealthy {

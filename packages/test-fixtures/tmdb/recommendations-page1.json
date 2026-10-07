@@ -1,0 +1,43 @@
+{
+  "page": 1,
+  "total_pages": 2,
+  "total_results": 4,
+  "results": [
+    {
+      "id": 1400,
+      "media_type": "tv",
+      "name": "R1400",
+      "original_name": "R1400",
+      "poster_path": "/R1400.jpg",
+      "backdrop_path": "/R1400b.jpg",
+      "first_air_date": "2022-01-01",
+      "vote_average": 7.0,
+      "original_language": "zh",
+      "origin_country": [
+        "CN"
+      ],
+      "genre_ids": [
+        18
+      ],
+      "overview": "R1400 简介"
+    },
+    {
+      "id": 1401,
+      "media_type": "tv",
+      "name": "R1401",
+      "original_name": "R1401",
+      "poster_path": "/R1401.jpg",
+      "backdrop_path": "/R1401b.jpg",
+      "first_air_date": "2022-01-01",
+      "vote_average": 7.0,
+      "original_language": "zh",
+      "origin_country": [
+        "CN"
+      ],
+      "genre_ids": [
+        18
+      ],
+      "overview": "R1401 简介"
+    }
+  ]
+}

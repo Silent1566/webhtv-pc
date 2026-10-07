@@ -16,6 +16,8 @@ import '../core/danmaku.dart';
 import '../core/protocol.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/subtitle.dart';
+import '../core/tmdb_playback.dart';
+import '../core/tmdb_season.dart';
 import '../services/danmaku_service.dart';
 import '../services/live_danmaku_session.dart';
 import '../state/app_state.dart';
@@ -42,6 +44,7 @@ class PlaybackRequest {
     this.subtitles = const [],
     this.subtitleHeaders = const {},
     this.danmaku = const [],
+    this.tmdb,
   });
 
   final String url;
@@ -65,6 +68,12 @@ class PlaybackRequest {
 
   /// 播放结果携带的弹幕源（§21 Phase 3）。拉取弹幕同样使用 [subtitleHeaders]。
   final List<DanmakuSource> danmaku;
+
+  /// TMDB 季度身份（`docs/phase4/design/04` §8.1）。
+  ///
+  /// 为 `null` 时表示未携带季度身份（历史恢复、直播、命令行），
+  /// 此时只写来源 `history`，不写季度进度（`02` §6.2）。
+  final TmdbPlaybackIdentity? tmdb;
 
   /// 详情页给出的全部线路，用于线路切换与上下集。
   final List<VodPlayLine> playLines;
@@ -105,6 +114,7 @@ class PlaybackRequest {
       subtitles: subtitles ?? this.subtitles,
       subtitleHeaders: subtitleHeaders,
       danmaku: danmaku ?? this.danmaku,
+      tmdb: tmdb,
     );
   }
 }
@@ -716,15 +726,35 @@ class _PlayerPageState extends State<PlayerPage> {
 
   void _persistProgress() {
     if (_controller.duration <= Duration.zero) return;
+    final position = _controller.position;
+    final duration = _controller.duration;
     widget.state.recordProgress(
       vod: Vod(vodId: _request.vodId, vodName: _request.vodName),
       flag: _request.flag,
       episodeName: _request.episodeName,
       episodeId: _request.url,
-      position: _controller.position,
-      duration: _controller.duration,
+      position: position,
+      duration: duration,
       siteKey: _request.siteKey,
     );
+    // 季度进度（`02` §6.2）：`UnknownSeason` 不写，电影不写。
+    // 来源 `history` 无论如何都写（既有行为不变）。
+    final identity = _request.tmdb;
+    if (identity != null && identity.hasIdentity) {
+      widget.state.recordSeasonProgress(
+        identity: identity,
+        scope: identity.hasSeason
+            ? KnownSeason(identity.seasonNumber)
+            : const UnknownSeason(),
+        siteKey: _request.siteKey,
+        vodId: _request.vodId,
+        sourceFlag: _request.flag,
+        sourceEpisodeName: _request.episodeName,
+        sourceEpisodeUrl: _request.url,
+        positionMs: position.inMilliseconds,
+        durationMs: duration.inMilliseconds,
+      );
+    }
   }
 
   @override
@@ -853,8 +883,19 @@ class _PlayerPageState extends State<PlayerPage> {
   Future<void> _playNext() async {
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
-    final next = _request.episodeIndex + 1;
-    if (next >= episodes.length) return;
+    final identity = _request.tmdb;
+    // 自动连播**不跨季度**（`04` §8.4）：季度边界处停止。
+    final next = identity == null || !identity.hasSeason
+        ? (_request.episodeIndex + 1 < episodes.length
+              ? _request.episodeIndex + 1
+              : -1)
+        : TmdbAutoPlay.nextIndex(
+            episodes: episodes,
+            currentIndex: _request.episodeIndex,
+            availableSeasons: [identity.seasonNumber],
+            selectedSeason: identity.seasonNumber,
+          );
+    if (next < 0) return;
     await _openTarget(episodes[next], flag: _request.flag, episodeIndex: next);
   }
 

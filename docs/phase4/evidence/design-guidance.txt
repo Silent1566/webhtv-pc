@@ -1,0 +1,76 @@
+Phase 4 · TMDB 元数据增强 · 设计指导文档交付证据
+范围：docs/phase4/**（设计指导）、docs/webhtv-pc-design.md（主设计文档回填）、
+      packages/protocol/schema/tmdb-config.schema.json、packages/test-fixtures/tmdb/**、
+      tests/test_contracts.py（新增 5 例）、tools/phase4/**（校验与 fixture 生成）
+
+说明：本文件是「设计指导文档阶段」的证据。产品级门禁（flutter test / 集成测试 /
+      一键验收脚本）属于实施阶段，见 docs/phase4/design/05-tmdb-test-and-acceptance.md §6。
+
+== 1. 交付物清单 ==
+PHASE4-DOC file docs/phase4/README.md lines=208 exists=True
+PHASE4-DOC file docs/phase4/design/00-tmdb-design-index.md lines=199 exists=True
+PHASE4-DOC file docs/phase4/design/01-tmdb-identity-and-matching.md lines=567 exists=True
+PHASE4-DOC file docs/phase4/design/02-tmdb-season-resolution-and-progress.md lines=718 exists=True
+PHASE4-DOC file docs/phase4/design/03-tmdb-service-config-storage.md lines=583 exists=True
+PHASE4-DOC file docs/phase4/design/04-tmdb-detail-ui-and-playback.md lines=572 exists=True
+PHASE4-DOC file docs/phase4/design/05-tmdb-test-and-acceptance.md lines=495 exists=True
+PHASE4-DOC file packages/protocol/schema/tmdb-config.schema.json lines=97 exists=True
+PHASE4-DOC file packages/test-fixtures/tmdb/config/tmdb-config-full.json lines=16 exists=True
+PHASE4-DOC file packages/test-fixtures/tmdb/config/tmdb-config-alias.json lines=11 exists=True
+PHASE4-DOC file packages/test-fixtures/tmdb/config/tmdb-config-invalid.json lines=7 exists=True
+PHASE4-DOC file tools/phase4/verify_design_docs.py lines=380 exists=True
+PHASE4-DOC file tools/phase4/generate_tmdb_fixtures.py lines=271 exists=True
+PHASE4-DOC file tools/phase4/write_design_evidence.py lines=127 exists=True
+PHASE4-DOC tmdb-fixtures count=23
+PHASE4-DOC deliverable-lines total=4251
+PHASE4-DOC main-design-doc lines=2276
+
+== 2. 设计文档自洽性校验（tools/phase4/verify_design_docs.py）==
+PHASE4-DESIGN ok  设计指导文档 7 份全部存在
+PHASE4-DESIGN ok  主设计文档顶层章节 1..27 连续
+PHASE4-DESIGN ok  主设计文档包含 §27 TMDB 元数据增强
+PHASE4-DESIGN ok  主设计文档子章节 101 个，最深 §9.9
+PHASE4-DESIGN ok  主设计文档引用的 5 条 docs/phase4 路径全部可解析
+PHASE4-DESIGN ok  §21 包含 Phase 4：TMDB 元数据增强
+PHASE4-DESIGN ok  §16.2 已登记 TMDB 四张表
+PHASE4-DESIGN ok  §27 关键术语与错误类别已写入主设计文档
+PHASE4-DESIGN ok  设计文档引用的仓库路径全部存在（另有 17 条登记为实施阶段产出）
+PHASE4-DESIGN ok  上游文档引用 6 条全部存在于 F:\Workspace\webhtv
+PHASE4-DESIGN ok  章节引用全部可解析（文档池含 155 个标题号）
+PHASE4-DESIGN ok  docs/phase4/design/05 §2.1 声明的 23 个 fixture 全部存在
+PHASE4-DESIGN ok  tmdb-config-full.json 通过 TMDB 配置 Schema
+PHASE4-DESIGN ok  tmdb-config-alias.json 通过 TMDB 配置 Schema
+PHASE4-DESIGN ok  tmdb-config-invalid.json 被 Schema 正确拒绝（反向验证）
+PHASE4-DOC verify_design_docs exit=0
+
+== 3. 契约测试（python -m unittest tests.test_contracts）==
+PHASE4-CONTRACT test_forbidden_spider_permissions_are_rejected (tests.test_contracts.ContractTests.test_forbidden_spider_permissions_are_rejected) ... ok
+PHASE4-CONTRACT test_minimal_config_is_valid (tests.test_contracts.ContractTests.test_minimal_config_is_valid) ... ok
+PHASE4-CONTRACT test_request_requires_deadline (tests.test_contracts.ContractTests.test_request_requires_deadline) ... ok
+PHASE4-CONTRACT test_tmdb_config_alias_keys_are_valid (tests.test_contracts.ContractTests.test_tmdb_config_alias_keys_are_valid) ... ok
+PHASE4-CONTRACT test_tmdb_config_full_is_valid (tests.test_contracts.ContractTests.test_tmdb_config_full_is_valid) ... ok
+PHASE4-CONTRACT 反向验证：非法配置必须校验失败，否则 schema 形同虚设。 ... ok
+PHASE4-CONTRACT 未知字段必须保留（与 config.schema.json 同一契约）。 ... ok
+PHASE4-CONTRACT docs/phase4/design/05 §2.1 列出的 fixture 必须全部存在。 ... ok
+PHASE4-CONTRACT test_unknown_config_fields_are_preserved_by_fixture (tests.test_contracts.ContractTests.test_unknown_config_fields_are_preserved_by_fixture) ... ok
+PHASE4-CONTRACT Ran 9 tests in 0.007s
+PHASE4-CONTRACT OK
+PHASE4-CONTRACT exit=0
+
+== 4. 反向验证（证明校验不是空转）==
+A. 把 docs/phase4/design/05 §2.1 的 episode-s1e1.json 改为不存在的名字：
+   verify_design_docs.py exit=1，并报出缺失的 fixture（实测通过）。
+B. 把 01 文档中的 `00` §3.4 改为 `00` §99.99：
+   verify_design_docs.py exit=1，并报出无法解析的章节引用（实测通过）。
+C. tmdb-config-invalid.json 必须被 Schema 拒绝：见第 2 节输出（实测通过）。
+
+== 5. 工具链基线（供实施阶段复用）==
+flutter 3.47.5 / Dart 3.13.4（puro -e webhtv，位于 apps/desktop-flutter）
+python：py -3.13 是本机唯一带 jsonschema 的解释器（jsonschema 4.26.0）；
+        py 默认 3.14 无 jsonschema，门禁脚本必须主动探测解释器。
+
+== 6. 未完成项声明 ==
+本阶段只交付设计指导文档与配套 Schema / fixture / 校验脚本。
+代码实现（lib/core/tmdb_*.dart、lib/services/tmdb_*.dart、lib/ui/tmdb_*.dart、
+存储迁移、播放入口透传、设置页）与产品级门禁属于 docs/phase4/README.md §2.2 的 T1–T18，
+尚未开始；实施完成后需另写 docs/phase4/evidence/windows-acceptance.txt。

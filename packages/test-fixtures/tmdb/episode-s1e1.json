@@ -1,0 +1,54 @@
+{
+  "id": 100101,
+  "episode_number": 1,
+  "season_number": 1,
+  "name": "第 1 集",
+  "overview": "第 1 季第 1 集简介",
+  "air_date": "2024-03-01",
+  "still_path": "/s1e1.jpg",
+  "vote_average": 7.3,
+  "runtime": 45,
+  "credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "character": "主角",
+        "profile_path": "/person.jpg",
+        "known_for_department": "Acting",
+        "order": 0
+      }
+    ],
+    "crew": [
+      {
+        "id": 500,
+        "name": "示例导演",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/crew.jpg"
+      }
+    ]
+  },
+  "guest_stars": [
+    {
+      "id": 288,
+      "name": "客串演员",
+      "character": "客串",
+      "profile_path": "/guest.jpg"
+    }
+  ],
+  "images": {
+    "stills": [
+      {
+        "file_path": "/still1.jpg",
+        "width": 1920,
+        "height": 1080,
+        "vote_average": 5.0,
+        "vote_count": 1
+      }
+    ]
+  },
+  "translations": {
+    "translations": []
+  }
+}

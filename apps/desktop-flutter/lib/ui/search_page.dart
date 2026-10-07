@@ -10,15 +10,27 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/protocol.dart';
+import '../core/tmdb_identity.dart';
 import '../state/app_state.dart';
 import '../state/search_state.dart';
 import 'app.dart';
 import 'browse_pages.dart';
 
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key, required this.state});
+  const SearchPage({
+    super.key,
+    required this.state,
+    this.initialKeyword,
+    this.identityHint,
+  });
 
   final AppState state;
+
+  /// 预填关键词（纯 TMDB 详情页「搜索站源」入口带入标题，`04` §6.2）。
+  final String? initialKeyword;
+
+  /// 身份提示（`tmdbId`），便于搜索结果自动匹配（`04` §6.2）。
+  final TmdbIdentity? identityHint;
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -32,6 +44,14 @@ class _SearchPageState extends State<SearchPage> {
   void initState() {
     super.initState();
     widget.state.addListener(_onStateChanged);
+    final keyword = widget.initialKeyword?.trim() ?? '';
+    if (keyword.isNotEmpty) {
+      // 带入标题后**自动执行一次搜索**（对齐手动匹配弹窗「打开即搜索」）。
+      _controller.text = keyword;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _submit();
+      });
+    }
   }
 
   @override

@@ -865,15 +865,33 @@ class VodPlayLine {
 }
 
 class VodEpisode {
-  const VodEpisode({required this.name, required this.url});
+  VodEpisode({
+    required this.name,
+    required this.url,
+    Map<String, Object?> extra = const {},
+  }) : extra = Map.unmodifiable(extra);
 
   final String name;
   final String url;
 
-  VodEpisode copyWith({String? name, String? url}) =>
-      VodEpisode(name: name ?? this.name, url: url ?? this.url);
+  /// 未知字段与 TMDB 富集结果的承载（§27）。
+  ///
+  /// TMDB 富集写入 `display_name` / `tmdb_season_number` / `tmdb_episode_number`；
+  /// 原始终源字段不受影响。
+  final Map<String, Object?> extra;
 
-  Map<String, Object?> toJson() => {'name': name, 'url': url};
+  VodEpisode copyWith({String? name, String? url, Map<String, Object?>? extra}) =>
+      VodEpisode(
+        name: name ?? this.name,
+        url: url ?? this.url,
+        extra: extra ?? this.extra,
+      );
+
+  Map<String, Object?> toJson() => {
+    ...extra,
+    'name': name,
+    'url': url,
+  };
 }
 
 /// 外挂字幕（§10.3「外挂字幕」「字幕轨选择」）。

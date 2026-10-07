@@ -1,14 +1,22 @@
 /// 浏览页：首页/分类 + 详情（§17.2 首页/分类页、详情页）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
 import '../core/protocol.dart';
-import '../services/spider_router.dart';
-import '../state/app_state.dart';
+import '../core/tmdb_identity.dart';
+import '../core/tmdb_playback.dart';
+import '../services/spider_router.dart';import '../state/app_state.dart';
+import '../state/tmdb_state.dart';
 import 'app.dart';
+import 'config_pages.dart';
 import 'player_page.dart';
+import 'search_page.dart';
+import 'tmdb_detail_page.dart';
+import 'tmdb_widgets.dart';
 
 class BrowsePage extends StatelessWidget {
   const BrowsePage({super.key, required this.state});
@@ -311,6 +319,8 @@ class _DetailPageState extends State<DetailPage> {
     // （实测「第一次进去说没有线路、第二次一直转圈」的直接成因）。
     // 搜索页、Spider 管理页同样监听了各自的状态变更。
     widget.state.addListener(_onStateChanged);
+    // TMDB 区块也需监听（异步匹配/详情完成后重建，`04` §3.3）。
+    widget.state.tmdb.addListener(_onStateChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.state.loadDetail(widget.vod);
@@ -320,6 +330,7 @@ class _DetailPageState extends State<DetailPage> {
   @override
   void dispose() {
     widget.state.removeListener(_onStateChanged);
+    widget.state.tmdb.removeListener(_onStateChanged);
     super.dispose();
   }
 
@@ -332,6 +343,61 @@ class _DetailPageState extends State<DetailPage> {
     // 不清理会让下一次进入详情页先渲染上一部剧的线路（实测串剧）。
     widget.state.clearDetail();
     Navigator.of(context).pop();
+  }
+
+  /// 打开手动匹配弹窗（`04` §5.1）。
+  Future<void> _openMatchDialog() async {
+    final state = widget.state;
+    final vod = _currentVod;
+    final item = await showDialog<TmdbItem>(
+      context: context,
+      builder: (_) => TmdbMatchDialog(
+        initialQuery: state.tmdb.item?.title ?? vod?.vodName ?? '',
+        search: state.searchTmdb,
+        resolveProviderId: state.resolveTmdbProviderId,
+      ),
+    );
+    if (item == null || !mounted) return;
+    await state.matchTmdbManual(item: item, sourceTitle: vod?.vodName);
+  }
+
+  /// 打开季度绑定弹窗（`04` §5.2）。
+  Future<void> _openSeasonDialog() async {
+    final state = widget.state;
+    final tmdb = state.tmdb;
+    final counts = tmdb.seasonEpisodeCounts;
+    final seasons = counts.keys.toList()..sort();
+    if (seasons.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('TMDB 未返回季度信息，暂时无法手动绑定季度')),
+      );
+      return;
+    }
+    final line = tmdb.sourceLine;
+    final choice = await showDialog<TmdbSeasonChoice>(
+      context: context,
+      builder: (_) => TmdbSeasonDialog(
+        tmdbSeasons: seasons,
+        seasonCounts: counts,
+        sourceEpisodeCount: line?.episodeCount ?? 0,
+        currentSeason: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
+        canAutoSlice: tmdb.canAutoSlice,
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await state.bindTmdbSeason(choice);
+    if (!mounted) return;
+    await state.reloadTmdb();
+  }
+
+  Vod? get _currentVod {
+    final result = widget.state.detailResult;
+    if (result != null &&
+        result.list.isNotEmpty &&
+        result.list.first.vodId == widget.vod.vodId) {
+      return result.list.first;
+    }
+    return widget.vod;
   }
 
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
@@ -358,6 +424,17 @@ class _DetailPageState extends State<DetailPage> {
         flag: line.flag,
         episodeId: episode.url,
       );
+      // TMDB 季度身份（`04` §8.1）：已确证季度时透传；未确证时只传 URL/集名。
+      final tmdb = state.tmdb;
+      final identity = TmdbPlaybackIdentity.of(
+        identity: tmdb.identity,
+        episode: episode,
+        flagKey: tmdb.sourceLine?.flagKey ?? line.flag,
+        seasonNumber: tmdb.hasMatch && tmdb.selectedSeason >= 0
+            ? tmdb.selectedSeason
+            : -1,
+        episodeNumber: _tmdbEpisodeNumberOf(episode),
+      );
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -380,6 +457,7 @@ class _DetailPageState extends State<DetailPage> {
               danmaku: decision.danmaku,
               subtitleHeaders:
                   decision.assetHeaders?.asRequestHeaders ?? const {},
+              tmdb: identity.hasIdentity ? identity : null,
             ),
           ),
         ),
@@ -393,6 +471,13 @@ class _DetailPageState extends State<DetailPage> {
         SnackBar(content: Text(failure.userMessage)),
       );
     }
+  }
+
+  static int _tmdbEpisodeNumberOf(VodEpisode episode) {
+    final raw = episode.extra['tmdb_episode_number'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return -1;
   }
 
   @override
@@ -411,6 +496,9 @@ class _DetailPageState extends State<DetailPage> {
     final vod = belongs ? result.list.first : widget.vod;
     final lines = state.playLinesOf(vod);
     final loading = state.detailPhase == LoadPhase.loading;
+    final tmdb = state.tmdb;
+    // 头部补位（`04` §3.2）：**仅补位不覆盖**来源已有字段。
+    final display = tmdb.hasMatch ? tmdb.enrich(vod).vod : vod;
 
     return Scaffold(
       appBar: AppBar(
@@ -456,13 +544,26 @@ class _DetailPageState extends State<DetailPage> {
                     error: state.detailError!,
                     onDismiss: state.clearDetailError,
                   ),
+                // TMDB 状态条（`04` §3.1 ②）：未配置 / 站点禁用时整块不渲染。
+                TmdbStatusBar(
+                  state: tmdb,
+                  onConfigure: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => TmdbSettingsPage(state: state),
+                    ),
+                  ),
+                  onMatch: _openMatchDialog,
+                  onRematch: _openMatchDialog,
+                  onSelectSeason: _openSeasonDialog,
+                  onRetry: () => state.reloadTmdb(),
+                ),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(6),
                       child: PosterImage(
-                        url: vod.vodPic,
+                        url: display.vodPic,
                         width: 160,
                         height: 220,
                       ),
@@ -473,19 +574,21 @@ class _DetailPageState extends State<DetailPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            vod.vodName,
+                            display.vodName,
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                           const SizedBox(height: 8),
-                          _MetaRow(label: '备注', value: vod.vodRemarks),
-                          _MetaRow(label: '年份', value: vod.vodYear),
-                          _MetaRow(label: '地区', value: vod.vodArea),
-                          _MetaRow(label: '导演', value: vod.vodDirector),
-                          _MetaRow(label: '演员', value: vod.vodActor),
+                          _MetaRow(label: '备注', value: display.vodRemarks),
+                          _MetaRow(label: '年份', value: display.vodYear),
+                          _MetaRow(label: '地区', value: display.vodArea),
+                          _MetaRow(label: '导演', value: display.vodDirector),
+                          _MetaRow(label: '演员', value: display.vodActor),
+                          if (tmdb.ratingText.isNotEmpty)
+                            _MetaRow(label: '评分', value: tmdb.ratingText),
                           const SizedBox(height: 8),
-                          if (vod.vodContent != null)
+                          if (display.vodContent != null)
                             Text(
-                              vod.vodContent!,
+                              display.vodContent!,
                               maxLines: 6,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -494,6 +597,26 @@ class _DetailPageState extends State<DetailPage> {
                     ),
                   ],
                 ),
+                // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
+                TmdbSeasonSelector(
+                  state: tmdb,
+                  onChanged: (season) {
+                    tmdb.selectSeason(season);
+                    unawaited(tmdb.loadEpisodes(generation: tmdb.generation));
+                  },
+                  onSelectManual: _openSeasonDialog,
+                ),
+                // 纯 TMDB 详情页入口（`04` §6.1）。
+                if (tmdb.hasMatch && tmdb.identity != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: const ValueKey('tmdb-open-detail'),
+                      onPressed: () => _openTmdbDetail(tmdb.identity!),
+                      icon: const Icon(Icons.movie_outlined, size: 18),
+                      label: const Text('在 TMDB 中查看'),
+                    ),
+                  ),
                 const Divider(height: 32),
                 if (loading && lines.isEmpty)
                   const Padding(
@@ -503,33 +626,267 @@ class _DetailPageState extends State<DetailPage> {
                 else if (lines.isEmpty)
                   const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
                 else
-                  for (final line in lines) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8, bottom: 4),
-                      child: Text(
-                        '${line.displayName}（${line.episodes.length} 集）',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (var index = 0; index < line.episodes.length; index++)
-                          OutlinedButton(
-                            onPressed: () => _play(vod, line, index),
-                            child: Text(
-                              line.episodes[index].name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
+                  for (var lineIndex = 0;
+                      lineIndex < lines.length;
+                      lineIndex++) ...[
+                    _buildLine(
+                      context,
+                      vod,
+                      lines[lineIndex],
+                      lineIndex,
+                      lines.length,
                     ),
                   ],
+                // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
+                ..._buildTmdbBlocks(context, tmdb),
               ],
             ),
     );
   }
+
+  /// 剧照墙 / 演职人员 / 相关推荐 / 相关视频（`04` §3.1 ⑥–⑨）。
+  List<Widget> _buildTmdbBlocks(BuildContext context, TmdbState tmdb) {
+    final theme = Theme.of(context);
+    return [
+      if (tmdb.photos.isNotEmpty) ...[
+        const Divider(height: 32),
+        const _TmdbSectionTitle(title: '剧照', keyValue: 'tmdb-photos'),
+        SizedBox(
+          height: 120,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: tmdb.photos.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (_, index) => SizedBox(
+              width: 200,
+              child: PosterImage(url: tmdb.photos[index]),
+            ),
+          ),
+        ),
+      ],
+      if (tmdb.cast.isNotEmpty || tmdb.creators.isNotEmpty) ...[
+        const Divider(height: 32),
+        _TmdbSectionTitle(
+          title: '演职人员（${tmdb.cast.length + tmdb.creators.length}）',
+          keyValue: 'tmdb-people',
+        ),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            for (final person in [...tmdb.creators, ...tmdb.cast].take(12))
+              SizedBox(
+                width: 96,
+                child: Column(
+                  children: [
+                    SizedBox(
+                      width: 64,
+                      height: 96,
+                      child: PosterImage(url: person.profileUrl),
+                    ),
+                    Text(
+                      person.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+      if (tmdb.recommendations.isNotEmpty) ...[
+        const Divider(height: 32),
+        _TmdbSectionTitle(
+          title: '相关推荐（${tmdb.recommendations.length}）',
+          keyValue: 'tmdb-recommendations',
+        ),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            for (final item in tmdb.recommendations.take(10))
+              SizedBox(
+                width: 120,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 120,
+                      height: 170,
+                      child: PosterImage(url: item.posterUrl),
+                    ),
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+      if (tmdb.videos.isNotEmpty) ...[
+        const Divider(height: 32),
+        _TmdbSectionTitle(
+          title: '相关视频（${tmdb.videos.length}）',
+          keyValue: 'tmdb-videos',
+        ),
+        for (final video in tmdb.videos.take(6))
+          TmdbVideoTile(
+            video: video,
+            onOpen: widget.state.openExternalUrl,
+            onCopy: copyToClipboard,
+          ),
+      ],
+    ];
+  }
+
+  /// 渲染一条线路（含 TMDB 剧集元数据增强，`04` §4.2）。
+  Widget _buildLine(
+    BuildContext context,
+    Vod vod,
+    VodPlayLine rawLine,
+    int lineIndex,
+    int lineCount,
+  ) {
+    final state = widget.state;
+    final tmdb = state.tmdb;
+    final flagKey = TmdbState.flagKeyOf(
+      rawLine,
+      lineIndex,
+      unique: lineCount == 1,
+    );
+    // 仅对**当前线路**应用 TMDB 剧集元数据（`04` §4.3 线路隔离）。
+    final isActiveLine = tmdb.sourceLine?.flagKey == flagKey;
+    final line = isActiveLine ? tmdb.applyEpisodesToLine(rawLine).line : rawLine;
+
+    final available = isActiveLine ? tmdb.availableSeasons : const <int>[];
+    final selected = isActiveLine ? tmdb.selectedSeason : -1;
+    final episodes = TmdbEpisodeRenderPolicy.filter(
+      episodes: line.episodes,
+      availableSeasons: available,
+      selectedSeason: selected,
+      seasonOf: _seasonOfEpisode,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: Row(
+            children: [
+              Text(
+                '${line.displayName}（${episodes.length} 集）',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              if (lineCount > 1 && !isActiveLine) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  key: ValueKey('tmdb-line-select-$flagKey'),
+                  onPressed: () async {
+                    // 切换线路必须重新解析该线路的可播放季度（`04` §4.3）。
+                    tmdb.selectLine(rawLine.flag);
+                    await state.reloadTmdb();
+                  },
+                  child: const Text('按此线路解析季度'),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var index = 0; index < episodes.length; index++)
+              _episodeButton(context, vod, rawLine, episodes[index], index),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _episodeButton(
+    BuildContext context,
+    Vod vod,
+    VodPlayLine line,
+    VodEpisode episode,
+    int index,
+  ) {
+    // 播放必须用**线路原始下标**（TMDB 只丰富展示，不改变播放事实源）。
+    final rawIndex = line.episodes.indexWhere(
+      (candidate) => identical(candidate, episode) || candidate.url == episode.url,
+    );
+    final subtitle = TmdbEpisodeRenderPolicy.subtitle(episode);
+    return OutlinedButton(
+      key: ValueKey('episode-${line.flag}-$index'),
+      onPressed: () => _play(vod, line, rawIndex < 0 ? index : rawIndex),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            TmdbEpisodeRenderPolicy.displayName(episode),
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (subtitle != null)
+            Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
+  static int _seasonOfEpisode(VodEpisode episode) {
+    final raw = episode.extra['tmdb_season_number'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return -1;
+  }
+
+  /// 打开纯 TMDB 详情页（`04` §6）。
+  ///
+  /// 该页面**没有播放按钮**；剧集卡片点击后跳搜索页并带入标题与身份提示。
+  Future<void> _openTmdbDetail(TmdbIdentity identity) async {
+    final state = widget.state;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdbDetailPage(
+          service: state.tmdbService,
+          identity: identity,
+          initialItem: state.tmdb.item,
+          onSearchSource: (title, hint) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => SearchPage(
+                  state: state,
+                  initialKeyword: title,
+                  identityHint: hint,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _TmdbSectionTitle extends StatelessWidget {
+  const _TmdbSectionTitle({required this.title, required this.keyValue});
+
+  final String title;
+  final String keyValue;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    key: ValueKey(keyValue),
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+  );
 }
 
 class _MetaRow extends StatelessWidget {

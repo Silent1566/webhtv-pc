@@ -1,0 +1,7 @@
+{
+  "enabled": "yes-please",
+  "language": 42,
+  "enabledSites": "csp_",
+  "disabledSites": [1, 2, 3],
+  "smartMatch": "maybe"
+}

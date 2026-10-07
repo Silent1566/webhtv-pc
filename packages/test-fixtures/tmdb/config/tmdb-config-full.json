@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "apiBase": "https://api.tmdb.org/3",
+  "apiKey": "",
+  "accessToken": "",
+  "language": "zh-CN",
+  "imageBase": "https://images.tmdb.org/t/p/w342",
+  "backdropBase": "https://images.tmdb.org/t/p/w780",
+  "enabledSites": ["csp_", "木偶"],
+  "allowedSites": ["csp_PianDan"],
+  "disabledSites": ["[音]", "[听]", "[书]", "[漫]", "[短]", "[设]", "[画]", "[漫画]", "[小说]", "配置", "[配]"],
+  "excludeKeywordsConfigured": true,
+  "smartMatch": true,
+  "heuristicSeasonGuessing": true,
+  "futureField": { "must": "be preserved" }
+}
