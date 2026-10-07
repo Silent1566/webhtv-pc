@@ -80,7 +80,8 @@ class TmdbStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 站点禁用 / 未配置 → 整块不渲染（`04` §3.1）
+    // 仅「站点被规则禁用」时整块不渲染（`04` §3.1）。
+    // 「未配置」必须渲染——否则用户没有进入 TMDB 设置页的入口。
     if (!state.shouldRender) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
@@ -105,8 +106,12 @@ class TmdbStatusBar extends StatelessWidget {
     final theme = Theme.of(context);
     switch (state.phase) {
       case TmdbLoadPhase.disabled:
-        // 理论上不会走到（shouldRender 已挡住），保底返回空。
-        return const SizedBox.shrink();
+        // 走到这里只可能是「未配置」（站点禁用已被 shouldRender 挡住）。
+        return Text(
+          '未配置 TMDB',
+          key: const ValueKey('tmdb-status-unconfigured'),
+          style: theme.textTheme.bodyMedium,
+        );
       case TmdbLoadPhase.loading:
         return const _SkeletonLine(width: 160);
       case TmdbLoadPhase.failed:
@@ -146,6 +151,13 @@ class TmdbStatusBar extends StatelessWidget {
   List<Widget> _buildActions(BuildContext context) {
     switch (state.phase) {
       case TmdbLoadPhase.disabled:
+        return [
+          FilledButton.tonal(
+            key: const ValueKey('tmdb-configure'),
+            onPressed: onConfigure,
+            child: const Text('去设置'),
+          ),
+        ];
       case TmdbLoadPhase.idle:
         return const [];
       case TmdbLoadPhase.loading:

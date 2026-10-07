@@ -305,7 +305,10 @@ try {
                     # 失败隔离集成（§5.4）：401 不阻塞播放 + 熔断计数不增。
                     'integration_test/tmdb_failure_isolation_flow_test.dart',
                     # 纯 TMDB 详情页（§5.5）：卡片不可播 + 跳搜索页。
-                    'integration_test/tmdb_tmdb_only_detail_flow_test.dart'
+                    'integration_test/tmdb_tmdb_only_detail_flow_test.dart',
+                    # 真实壳层入口（P4-7 回归）：设置页 → 打开 TMDB 设置。
+                    # 发布包缺陷：未配置时入口不可达 → 用户看不到 TMDB 设置。
+                    'integration_test/tmdb_shell_entry_flow_test.dart'
                 )
                 foreach ($suite in $suites) {
                     if (-not (Invoke-FlutterIntegrationSuite -Name $suite -File $suite)) {
@@ -336,6 +339,44 @@ try {
             (Join-Path $RepoRoot 'tools\phase4\verify_reverse_checks.py'),
             '--puro-env', $PuroEnvironment
         )
+    }
+
+    # 5.4) 发布包符号与入口可达性门禁（P4-7 回归）。
+    #
+    # 为什么必须有：`flutter test` 是 JIT/debug，不做 tree-shaking；集成用例还
+    # 直接写 `settings.json` 绕过 UI 入口。因此「UI 入口被条件渲染挡住 → 死代码被
+    # release AOT 剔除 → 正式版 exe 里 TMDB 整块消失」只能靠 release 产物发现。
+    # 2026-10-07 真实事故：`TmdbSettingsPage` / `tmdb-api-key` / 「TMDB 设置」
+    # 全被剔除，而当时所有门禁全绿。
+    Invoke-Checked 'release-symbols' {
+        $appSo = Join-Path $AppDir 'build\windows\x64\runner\Release\data\app.so'
+        $needsBuild = -not (Test-Path $appSo)
+        if (-not $needsBuild) {
+            # 新鲜度：release 产物必须晚于 lib/ 下最新的 .dart，否则先重建。
+            $soTime = (Get-Item $appSo).LastWriteTimeUtc
+            $newestDart = Get-ChildItem -Path (Join-Path $AppDir 'lib') -Recurse -Filter '*.dart' |
+                Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            if ($newestDart -and $newestDart.LastWriteTimeUtc -gt $soTime) {
+                Write-Fact "release-artifact stale so=$($soTime.ToString('o')) newest-dart=$($newestDart.LastWriteTimeUtc.ToString('o'))"
+                $needsBuild = $true
+            }
+        }
+        if ($needsBuild) {
+            Push-Location $AppDir
+            try {
+                & puro -e $PuroEnvironment -p . flutter build windows --release
+                if ($LASTEXITCODE -ne 0) {
+                    # 已知临时文件锁：app.so 可能已成功更新，重跑一次即可（见打包 skill）。
+                    Write-Fact 'release-build retry=1（MSB3073 临时文件锁）'
+                    & puro -e $PuroEnvironment -p . flutter build windows --release
+                }
+            } finally {
+                Pop-Location
+            }
+        } else {
+            Write-Fact 'release-artifact fresh（跳过重建）'
+        }
+        Invoke-Python @((Join-Path $RepoRoot 'tools\phase4\verify_release_symbols.py'))
     }
 
     # 5.5) 恢复 Debug 产物为「可运行的应用入口」。

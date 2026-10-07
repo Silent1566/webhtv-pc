@@ -122,7 +122,9 @@ void main() {
         (state.matchResult as TmdbMatchDisabled).reason,
         TmdbMissReason.notConfigured,
       );
-      expect(state.shouldRender, isFalse);
+      expect(state.shouldRender, isTrue, reason: '未配置必须渲染入口，否则无法进入设置页');
+      expect(state.notConfigured, isTrue);
+      expect(state.siteDisabled, isFalse);
       expect(client.count, 0);
       expect(generation, greaterThan(0));
       state.dispose();

@@ -162,6 +162,8 @@ T18（fixture 与验收）
 | 无回归 | `flutter test` + `dart analyze` 全绿 | 全量 |
 | 播放入口契约 | 7 参数透传、`episodeUrl` 三段优先级、自动连播不跨季 | `test/phase4_tmdb_playback_test.dart` |
 | 反向验证 | 三项契约逐项破坏后用例**必须失败**（机器校验，非人工说明） | `tools/phase4/verify_reverse_checks.py` |
+| 入口可达性 | 未配置时设置页与详情页都必须有可达的 TMDB 入口（站点禁用仍不渲染） | `test/phase4_tmdb_entry_reachability_test.dart` |
+| 发布包符号 | release AOT 产物中 TMDB 入口符号与中文串均存在、无测试壳污染 | `tools/phase4/verify_release_symbols.py` |
 
 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 为可复现入口，并封装为一键验收脚本 `tools/phase4/run_windows_acceptance.ps1`
@@ -188,6 +190,7 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 | P4-4 | 「仅选季度」改不动详情页 | `availableSeasons` 只按线路 A–G 推导，未优先采用手动/落盘绑定（`04` §5.3） | `tmdb_manual_match_flow_test` 步骤 6 |
 | P4-5 | 含特别篇时默认选中特别篇 | 默认取 `availableSeasons.first`；应优先第一个正片季度 | `tmdb_detail_flow_test` 步骤 4 |
 | P4-6 | 带 query 的媒体地址 404 | fixture 服务 `_send_media` 未剥离 query | `tmdb_detail_flow_test` 步骤 3（真实出画） |
+| P4-7 | **正式版 exe 完全没有 TMDB 设置与效果** | `TmdbState.shouldRender` 对「未配置」也返回 `false`，`TmdbStatusBar` 整块 `SizedBox.shrink()`；而全应用唯一引用 `TmdbSettingsPage` 的就是状态条上那个从未渲染的 `onConfigure` 回调 → 该页成为死代码，被 release AOT 整体剔除 | `phase4_tmdb_entry_reachability_test.dart` + `tools/phase4/verify_release_symbols.py` |
 
 ### 3.2 反向验证（机器校验）
 

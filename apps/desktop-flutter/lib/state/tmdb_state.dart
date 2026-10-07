@@ -173,9 +173,31 @@ class TmdbState extends ChangeNotifier {
   /// 是否已匹配（用于渲染 TMDB 区块）。
   bool get hasMatch => _matchResult is TmdbMatchHit;
 
-  /// TMDB 区块是否应渲染（未配置 / 站点禁用时不渲染，`04` §3.1）。
+  /// 站点是否被规则禁用（`01` §6.1）。
+  ///
+  /// 站点禁用时 TMDB 区块整块不渲染——用户明确表达了「这个站不要 TMDB」，
+  /// 再给入口只会是噪音。
+  bool get siteDisabled {
+    final result = _matchResult;
+    return result is TmdbMatchDisabled && result.isSiteDisabled;
+  }
+
+  /// 是否尚未配置凭据（`03` §5.2）。
+  ///
+  /// 未配置**必须仍然渲染入口**：这是用户第一次启用 TMDB 的唯一时机。
+  /// 早期版本把 notConfigured 与 siteDisabled 一起判为「不渲染」，导致
+  /// 全新安装的发布包里详情页没有任何 TMDB 区块、也没有进入设置页的入口。
+  bool get notConfigured {
+    final result = _matchResult;
+    return result is TmdbMatchDisabled && result.isNotConfigured;
+  }
+
+  /// TMDB 区块是否应渲染（`04` §3.1）。
+  ///
+  /// 只有「站点被禁用」不渲染；「未配置」渲染状态条 + [去设置] 入口，
+  /// 否则用户永远无法进入 TMDB 设置页。
   bool get shouldRender =>
-      _phase != TmdbLoadPhase.disabled && _phase != TmdbLoadPhase.idle;
+      _phase != TmdbLoadPhase.idle && !siteDisabled;
 
   /// 季度导航是否需要显示切换控件（> 1 季）。
   bool get hasSeasonSwitcher => _availableSeasons.length > 1;

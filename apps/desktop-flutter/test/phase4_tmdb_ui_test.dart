@@ -120,7 +120,8 @@ Widget _host(Widget child) => MaterialApp(
 
 void main() {
   group('TmdbStatusBar 六态（§3.1 ②）', () {
-    testWidgets('未配置 → 整块不渲染', (tester) async {
+    testWidgets('未配置 → 渲染「未配置 TMDB」与「去设置」入口', (tester) async {
+      var configured = 0;
       final state = _state(config: () => const TmdbConfig(), client: _FakeClient());
       state.beginLoad(
         siteKey: 's',
@@ -129,8 +130,18 @@ void main() {
         vod: _vod(),
         line: _line(),
       );
-      await tester.pumpWidget(_host(TmdbStatusBar(state: state)));
-      expect(find.byType(Row), findsNothing);
+      await tester.pumpWidget(
+        _host(
+          TmdbStatusBar(state: state, onConfigure: () => configured++),
+        ),
+      );
+      // 发布包实测缺陷：未配置时整块不渲染 → 用户永远进不了 TMDB 设置页。
+      expect(
+        find.byKey(const ValueKey('tmdb-status-unconfigured')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('tmdb-configure')));
+      expect(configured, 1, reason: '「去设置」必须可用');
       state.dispose();
     });
 

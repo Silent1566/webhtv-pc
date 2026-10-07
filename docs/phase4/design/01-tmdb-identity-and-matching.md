@@ -511,7 +511,8 @@ class TmdbMatchDisabled extends TmdbMatchResult { ... }   // 未配置 / 站点�
 
 | reason | UI 阶段 | 是否可重试 |
 | --- | --- | --- |
-| `notConfigured` / `siteDisabled` | `disabled`（整块不渲染） | — |
+| `notConfigured` | `disabled`（渲染「未配置 TMDB」+ **[去设置]** 入口） | — |
+| `siteDisabled` | `disabled`（**整块不渲染**） | — |
 | `noCandidates` / `ambiguous` | `ready`（显示“未匹配”+ 手动匹配入口） | 否 |
 | `networkFailure` | `failed`（错误文案 + 重试） | **是** |
 | `authFailure` | `failed`（鉴权文案 + 去设置） | 否 |

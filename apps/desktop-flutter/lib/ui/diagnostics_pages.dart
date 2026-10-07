@@ -9,8 +9,9 @@ import '../services/log_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'app.dart';
+import 'config_pages.dart';
 
-/// 设置页：运行信息、目录、缓存维护、合规说明。
+/// 设置页：TMDB、运行信息、目录、缓存维护、合规说明。
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.state});
 
@@ -19,9 +20,34 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final info = state.startupInfo;
+    final tmdb = state.tmdbConfig;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // TMDB 区块（`04` §10.3）：设置页必须有独立入口。
+        // 只靠详情页状态条会形成死锁——未配置时详情页也可能没有区块，
+        // 用户就永远进不来（发布包实测缺陷）。
+        Text('TMDB 元数据增强', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          tmdb.isReady
+              ? '已启用（站点规则 ${tmdb.disabledSites.length} 条禁用'
+                    '${tmdb.enabledSites.isEmpty ? '' : '、${tmdb.enabledSites.length} 条启用'}）'
+              : '未配置：填写 API Key 或 Access Token 后启用',
+          key: const ValueKey('settings-tmdb-summary'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-tmdb-open'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => TmdbSettingsPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.movie_filter_outlined),
+          label: const Text('打开 TMDB 设置'),
+        ),
+        const Divider(height: 32),
         Text('运行信息', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         if (info == null)
