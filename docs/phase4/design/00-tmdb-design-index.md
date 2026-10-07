@@ -1,6 +1,6 @@
 # TMDB 功能设计指导文档（总索引）
 
-- 状态：设计指导（Design Guidance），**待评审后进入实施**
+- 状态：设计指导（Design Guidance），**已实施并验收**（T1–T18 全部落地；`PHASE4-ACCEPT result=PASS gates=all`）
 - 日期：2026-10-06
 - 适用工程：`apps/desktop-flutter`（WebHTV PC，Flutter + media-kit 主线）
 - 上游参考：`webhtv/默影视`（Android 工程，仓库 `F:\Workspace\webhtv`）

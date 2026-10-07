@@ -1,6 +1,6 @@
 # 03 · TMDB 服务、配置与存储设计
 
-- 状态：设计指导，待评审
+- 状态：设计指导，**已实施**（见 `docs/phase4/README.md` §2.2、§3）
 - 日期：2026-10-06
 - 上游参考：`TmdbService`（1158 行）、`TmdbConfig`（308 行）、`Setting.getTmdbConfig`、`TmdbSourceDialog`、`TmdbImageSelector`、`docs/tmdb-related-video-playback-design.md` §3/§6
 - PC 端落点：`lib/core/tmdb_config.dart`、`lib/services/tmdb_service.dart`、`lib/services/tmdb_cache.dart`、`lib/services/storage.dart`（迁移）

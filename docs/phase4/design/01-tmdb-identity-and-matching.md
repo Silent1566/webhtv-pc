@@ -1,6 +1,6 @@
 # 01 · TMDB 媒体身份与匹配设计
 
-- 状态：设计指导，待评审
+- 状态：设计指导，**已实施**（见 `docs/phase4/README.md` §2.2、§3）
 - 日期：2026-10-06
 - 上游参考：`webhtv/默影视` 的 `TmdbMatcher`、`TmdbMatchPolicy`、`TmdbMatchCache`、`TmdbItem`、`TmdbSitePolicy`、`MediaTitleParser`、`docs/tmdb-season-manual-match-design.md` §3/§7/§9/§13
 - PC 端落点：`lib/core/tmdb_identity.dart`、`lib/core/tmdb_title.dart`、`lib/services/tmdb_identity_service.dart`

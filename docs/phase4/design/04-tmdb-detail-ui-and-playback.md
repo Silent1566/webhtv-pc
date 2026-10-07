@@ -1,6 +1,6 @@
 # 04 · TMDB 详情页、季集 UI 与播放入口设计
 
-- 状态：设计指导，待评审
+- 状态：设计指导，**已实施**（见 `docs/phase4/README.md` §2.2、§3）
 - 日期：2026-10-06
 - 上游参考：`TmdbDetailActivity`（12667 行，**只作功能清单参考**）、`TmdbUIAdapter`（2451 行）、`TmdbHeaderView`（2509 行）、`TmdbVideo`、`TmdbVideoPlayback`、`docs/tmdb-related-video-playback-design.md`、`docs/superpowers/specs/2026-08-18-tmdb-related-video-windowed-player-design.md`
 - PC 端落点：`lib/ui/tmdb_detail_page.dart`、`lib/ui/tmdb_widgets.dart`、`lib/state/tmdb_state.dart`、`lib/ui/player_page.dart`（季集身份透传）

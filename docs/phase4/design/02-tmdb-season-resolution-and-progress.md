@@ -1,6 +1,6 @@
 # 02 · TMDB 季度解析、可播放季度与季度进度设计
 
-- 状态：设计指导，待评审
+- 状态：设计指导，**已实施**（见 `docs/phase4/README.md` §2.2、§3）
 - 日期：2026-10-06
 - 上游参考：`docs/superpowers/specs/2026-08-17-tmdb-season-aware-aggregation-design.md`、`docs/tmdb-playable-episode-availability-design.md`、`docs/tmdb-season-manual-match-design.md` §7–§11、`TmdbSeasonResolver`、`TmdbSeasonMatchCache`、`TmdbSeasonProgress`、`TmdbSeasonSegment`、`TmdbSeasonScope`、`EpisodeSeasonPolicy`、`EpisodeSeasonSnapshot`
 - PC 端落点：`lib/core/tmdb_season.dart`、`lib/services/tmdb_season_service.dart`

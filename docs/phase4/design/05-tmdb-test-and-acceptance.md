@@ -1,6 +1,6 @@
 # 05 · TMDB 测试与验收设计
 
-- 状态：设计指导，待评审
+- 状态：设计指导，**已实施**（门禁见 `docs/phase4/README.md` §3，证据见 `docs/phase4/evidence/windows-acceptance.txt`）
 - 日期：2026-10-06
 - 上游参考：Phase 1/2/3 的门禁与证据机制（`docs/phase1/README.md` §7、`docs/phase2/README.md` §3、`docs/phase3/README.md` §3）
 - PC 端落点：`apps/desktop-flutter/test/phase4_*.dart`、`apps/desktop-flutter/integration_test/tmdb_*_flow_test.dart`、`packages/test-fixtures/tmdb/**`、`tools/phase4/**`
