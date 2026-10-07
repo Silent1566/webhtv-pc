@@ -1883,6 +1883,10 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - TMDB 凭据在日志与诊断导出中脱敏。
 - 门禁与证据写入 `docs/phase4/evidence/windows-acceptance.txt`。
 
+实施状态：**已完成**。一键验收 `PHASE4-ACCEPT result=PASS gates=all`
+（单元 1122 例 + 16 个 `phase4_tmdb_*` 套件 + 5 个 `-d windows` 集成套件 +
+契约 9 例 + 脱敏门禁；三项反向验证均按预期失败后还原）。
+
 > 详细设计指导见 `docs/phase4/design/00`–`design/05`，阶段计划见 `docs/phase4/README.md`，
 > 主设计文档摘要见 §27。
 
@@ -2107,7 +2111,8 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 ## 27. TMDB 元数据增强
 
 - 定位：参考 `webhtv/默影视` 的 TMDB 能力，在 PC 端提供**元数据增强**，不改变播放事实源。
-- 状态：设计指导已补齐（`docs/phase4/design/00`–`design/05`），实施见 §21 Phase 4。
+- 状态：设计指导已补齐（`docs/phase4/design/00`–`design/05`），**实施已完成**（T1–T18），
+  一键验收 `PHASE4-ACCEPT result=PASS gates=all`（`docs/phase4/evidence/windows-acceptance.txt`）。
 - 完整设计指导：`docs/phase4/design/00-tmdb-design-index.md`（索引）、
   `01`（身份与匹配）、`02`（季度与进度）、`03`（服务/配置/存储）、
   `04`（详情页与播放）、`05`（测试与验收）。
@@ -2261,6 +2266,12 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1
 1. 把未知季度的元数据候选改回 `[1, 0]` → 对应用例必须失败；
 2. 把分季惩罚改为 `0` → 分季变体用例必须失败；
 3. 去掉括号归一 → 猫源站点策略用例必须失败。
+
+**实施状态（2026-10-07）**：T1–T18 已全部落地；一键验收结果为
+`PHASE4-ACCEPT result=PASS gates=all`（事实行与三条反向验证记录见证据文件）。
+集成测试（L3）在真实窗口下额外暴露并修复了 6 个缺陷（含季度切换不刷新元数据、
+剧集元数据未按季度过滤、可播放季度未优先采用手动绑定、含特别篇时默认季度错误），
+详见 `docs/phase4/README.md` §3.1。
 
 ### 27.11 与上游 `webhtv/默影视` 的取舍
 
