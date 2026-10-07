@@ -1,7 +1,7 @@
 # Phase 4 计划（TMDB 元数据增强）
 
-- 状态：**设计指导已补齐，待实施**
-- 日期：2026-10-06
+- 状态：**实施已完成，待一键验收取证**（T1–T18 全部落地；门禁见 §3）
+- 日期：2026-10-07
 - 对应设计文档章节：本目录 `design/00`–`design/05`、`docs/webhtv-pc-design.md` §27（TMDB 元数据增强）、§21 Phase 4
 - 上游：`docs/phase3/README.md`（Phase 3 已完成：直播 / 字幕 / 弹幕 / 解析器 / EPG / JS Spider / PC Java Spider / 猫源）
 - 上游参考工程：`webhtv/默影视`（Android）
@@ -81,7 +81,9 @@
 | D7 | 主设计文档回填 | `docs/webhtv-pc-design.md` §27 + §21 Phase 4 + §17.2 + §22.1 + §23 + §26 | 章节号连续、交叉引用可解析 |
 | D8 | TMDB 配置 Schema | `packages/protocol/schema/tmdb-config.schema.json` | 三个 fixture 校验通过（含反向验证） |
 
-### 2.2 实施阶段（待评审通过后启动）
+### 2.2 实施阶段（已完成）
+
+> 全部 T1–T18 已落地并通过门禁；一键验收命令见 §3 末。
 
 | # | 任务 | 产出 | 验收 |
 | --- | --- | --- | --- |
@@ -158,10 +160,33 @@ T18（fixture 与验收）
 | 纯 TMDB 详情页 | 卡片不可播、跳搜索页 | `integration_test/tmdb_tmdb_only_detail_flow_test.dart` |
 | 凭据不泄露 | 日志与诊断导出脱敏 | `tools/phase4/verify_tmdb_redaction.py` |
 | 无回归 | `flutter test` + `dart analyze` 全绿 | 全量 |
+| 播放入口契约 | 7 参数透传、`episodeUrl` 三段优先级、自动连播不跨季 | `test/phase4_tmdb_playback_test.dart` |
 
 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 为可复现入口，并封装为一键验收脚本 `tools/phase4/run_windows_acceptance.ps1`
 （结果写入 `docs/phase4/evidence/windows-acceptance.txt`）。
+
+一键验收（需先启动 fixture 服务，脚本会自行确保）：
+
+```powershell
+pwsh -File tools/phase4/run_windows_acceptance.ps1
+# 快速回归（跳过 Windows 集成测试）：
+pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
+```
+
+### 3.1 实施期发现并修复的真实缺陷
+
+集成测试（L3）在真实窗口 + 真实 HTTP 下暴露了 6 个 L1/L2 无法发现的缺陷，
+均已修复并保留回归门禁：
+
+| # | 缺陷 | 根因 | 回归门禁 |
+| --- | --- | --- | --- |
+| P4-1 | 切换季度后选集元数据不再刷新 | `selectSeason` 清空 `_episodes`，但只有 UI 回调触发 `loadEpisodes`；直接调状态层的路径无人触发 | `tmdb_detail_flow_test` 步骤 6 |
+| P4-2 | 第 2 季的 TMDB 标题被写到第 1 季的集上 | `applyEpisodesToLine` 把整条线路交给按集号对齐的富集，未按季度过滤（`02` §9.4） | `tmdb_detail_flow_test` 步骤 5/6 |
+| P4-3 | 多季线路的季度过滤永不收窄 | 过滤只读 `extra['tmdb_season_number']`，而富集只为当前季标记集；未回退来源集名的季度信号 | `tmdb_detail_flow_test` 步骤 5–7 |
+| P4-4 | 「仅选季度」改不动详情页 | `availableSeasons` 只按线路 A–G 推导，未优先采用手动/落盘绑定（`04` §5.3） | `tmdb_manual_match_flow_test` 步骤 6 |
+| P4-5 | 含特别篇时默认选中特别篇 | 默认取 `availableSeasons.first`；应优先第一个正片季度 | `tmdb_detail_flow_test` 步骤 4 |
+| P4-6 | 带 query 的媒体地址 404 | fixture 服务 `_send_media` 未剥离 query | `tmdb_detail_flow_test` 步骤 3（真实出画） |
 
 ---
 

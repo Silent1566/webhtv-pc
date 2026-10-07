@@ -1,0 +1,1212 @@
+WebHTV PC Phase 4 验收日志
+开始时间：2026-10-07T11:18:58.5253742+08:00
+仓库：C:\Users\Maple\orca\workspaces\webhtv-pc\dev1
+
+PHASE4-ACCEPT python selected=py -3.13 exe=C:\Users\Maple\AppData\Local\Programs\Python\Python313\python.exe
+PHASE4-ACCEPT fixture-server started pid=14524 port=18080
+PHASE4-ACCEPT step: tmdb-fixture-preflight
+PHASE4-ACCEPT tmdb-fixture route /tmdb/configuration OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/search/multi?query=x OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/search/multi?query=empty OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/search/multi?query=split OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/2 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/movie/550 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/season/1 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/season/2 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/season/0 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/season/9 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/season/1/episode/1 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/person/1 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/videos OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/recommendations?page=1 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/recommendations?page=2 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/recommendations?page=9 OK status=200
+PHASE4-ACCEPT tmdb-fixture route /tmdb/3/tv/1399/similar?page=1 OK status=200
+PHASE4-ACCEPT tmdb-fixture error route /tmdb/auth-fail OK status=401
+PHASE4-ACCEPT tmdb-fixture error route /tmdb/server-error OK status=500
+PHASE4-ACCEPT tmdb-fixture error route /tmdb/nope OK status=404
+PHASE4-ACCEPT tmdb-fixture malformed 非法 JSON OK status=200 body={'__raw_bytes': 9}
+PHASE4-ACCEPT tmdb-fixture 请求捕获 api_key OK seen='ABC123'
+PHASE4-ACCEPT tmdb-fixture 请求捕获 language OK seen='zh-CN'
+PHASE4-ACCEPT tmdb-fixture 请求捕获 include_image_language OK seen='zh,en'
+PHASE4-ACCEPT tmdb-fixture __stats 可用 OK total=23
+PHASE4-ACCEPT tmdb-fixture __reset 清零 OK total=0
+PHASE4-ACCEPT tmdb-fixture routes=18 failures=0
+PHASE4-ACCEPT tmdb-fixture-preflight ok elapsed=1739ms
+PHASE4-ACCEPT step: python-contract-tests
+test_forbidden_spider_permissions_are_rejected (tests.test_contracts.ContractTests.test_forbidden_spider_permissions_are_rejected) ... ok
+test_minimal_config_is_valid (tests.test_contracts.ContractTests.test_minimal_config_is_valid) ... ok
+test_request_requires_deadline (tests.test_contracts.ContractTests.test_request_requires_deadline) ... ok
+test_tmdb_config_alias_keys_are_valid (tests.test_contracts.ContractTests.test_tmdb_config_alias_keys_are_valid) ... ok
+test_tmdb_config_full_is_valid (tests.test_contracts.ContractTests.test_tmdb_config_full_is_valid) ... ok
+test_tmdb_config_invalid_is_rejected (tests.test_contracts.ContractTests.test_tmdb_config_invalid_is_rejected)
+反向验证：非法配置必须校验失败，否则 schema 形同虚设。 ... ok
+test_tmdb_config_unknown_fields_are_preserved_by_fixture (tests.test_contracts.ContractTests.test_tmdb_config_unknown_fields_are_preserved_by_fixture)
+未知字段必须保留（与 config.schema.json 同一契约）。 ... ok
+test_tmdb_fixtures_are_complete (tests.test_contracts.ContractTests.test_tmdb_fixtures_are_complete)
+docs/phase4/design/05 §2.1 列出的 fixture 必须全部存在。 ... ok
+test_unknown_config_fields_are_preserved_by_fixture (tests.test_contracts.ContractTests.test_unknown_config_fields_are_preserved_by_fixture) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.013s
+
+OK
+PHASE4-ACCEPT python-contract-tests ok elapsed=6087ms
+PHASE4-ACCEPT step: schema-validation
+通过：最小 TVBox 配置
+通过：Spider manifest
+通过：IPC 请求
+通过：IPC 成功响应
+通过：IPC 错误响应
+通过：IPC 取消请求
+全部 Phase 0 契约验证通过。
+PHASE4-ACCEPT schema-validation ok elapsed=5504ms
+PHASE4-ACCEPT step: dart-analyze
+Analyzing desktop-flutter...
+No issues found!
+PHASE4-ACCEPT dart-analyze ok elapsed=10643ms
+PHASE4-ACCEPT step: flutter-unit-tests
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart
+00:00 +0: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 bundleUrl 去掉 .md5 后缀（大小写不敏感）
+00:00 +1: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 md5Url 补 .md5 后缀且不重复补
+00:00 +2: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 configUrl 指向同目录 index.config.js
+00:00 +3: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 地址推导 isMd5 只认 32 位十六进制
+00:00 +4: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 含 index.js + index.config.js 的目录可安装并生成缓存标记
+00:00 +5: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 缺少 index.config.js 明确报错
+00:00 +6: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +7: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +8: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +9: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +10: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +11: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +12: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +13: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +14: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +15: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +16: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +17: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +18: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +19: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +20: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +21: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +22: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +23: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +24: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地目录包 本地目录内容变化后重新 ensure 会反映新内容
+00:01 +25: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: dirFor 稳定指纹 同一地址得到同一目录，不同地址不同目录
+00:01 +26: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址
+00:02 +27: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） bundle 校验值与内容不符时明确报错，不静默装上坏包
+00:02 +28: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +29: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +30: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +31: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +32: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +33: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装
+00:03 +34: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 配置导入（§7.4.1、§7.5） HTTP 非 2xx 映射为 configHttp，网络不可达映射为 configNetwork
+00:03 +35: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +36: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +37: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +38: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +39: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +40: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +41: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +42: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +43: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +44: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +45: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +46: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +47: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出
+00:03 +48: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: 站点服务闭环（§8、§10.2） 超时映射为 siteTimeout 且标记可重试（§10.4）
+00:04 +49: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +50: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +51: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +52: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +53: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +54: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +55: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +56: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +57: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +58: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +59: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +60: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +61: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +62: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +63: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +64: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +65: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +66: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头
+00:04 +67: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/config_and_site_test.dart: type=4 播放入口（§8.1 分发顺序 4、§7.4.8） 播放入口返回占位串时，错误文案不得声称「未声明 playUrl」
+00:04 +68: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +69: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +70: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +71: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +72: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +73: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +74: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +75: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +76: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +77: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +78: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +79: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +80: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +81: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +82: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +83: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +84: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +85: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +86: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +87: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +88: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +89: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +90: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +91: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +92: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:04 +93: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像）
+00:05 +94: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/core_protocol_test.dart: Result / Vod 解析（§8.3、§8.4） XML API（type=0）解析 class 与 list
+00:05 +95: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +96: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +97: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +98: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +99: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +100: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +101: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +102: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +103: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +104: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +105: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +106: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +107: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +108: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +109: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +110: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +111: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +112: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +113: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +114: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +115: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +116: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +117: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +118: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +119: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +120: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +121: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +122: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +123: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +124: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +125: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +126: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +127: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +128: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +129: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +130: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +131: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +132: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +133: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +134: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +135: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +136: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +137: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +138: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +139: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +140: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +141: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +142: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +143: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +144: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +145: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +146: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +147: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +148: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +149: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +150: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +151: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +152: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +153: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +154: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +155: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +156: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +157: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +158: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +159: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +160: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +161: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:05 +162: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装
+00:06 +163: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错
+00:07 +164: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 解码结果带 Content-Length 与空行分隔符
+00:07 +165: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） Content-Length 按 UTF-8 字节数而非字符数计算
+00:07 +166: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝缺失 Content-Length 的帧
+00:07 +167: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝 Content-Length 与实际长度不一致
+00:07 +168: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） decode 拒绝非 JSON payload
+00:07 +169: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 超过单帧上限抛 IpcFrameTooLarge 且不读取 payload
+00:07 +170: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） 增量解码支持任意切分（禁止依赖“一行一个 JSON”）
+00:07 +171: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） stdout 出现非协议数据判定为协议污染
+00:07 +172: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: IPC 帧编解码（§9.3.1） LF 分隔符同样被接受（兼容宽松实现）
+00:07 +173: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 请求信封校验：id/method 必须非空，deadlineMs 必须为正整数
+00:07 +174: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 统一错误对象包含全部必需字段
+00:07 +175: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） 错误码集合覆盖 §9.5 全部定义
+00:07 +176: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） ABI major 不匹配必须被识别
+00:07 +177: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） cancel 通知两种名字都被接受
+00:07 +178: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 校验拒绝禁止权限与错误 ABI
+00:07 +179: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: 信封与 ABI 协商（§9.3、§9.5） manifest 缺少必需方法时给出缺失清单
+00:07 +180: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 环境变量白名单：凭据与开发机 PATH 不传给 sidecar
+00:07 +181: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +182: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +183: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +184: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +185: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +186: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +187: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +188: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +189: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +190: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +191: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +192: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +193: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +194: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +195: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +196: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +197: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +198: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +199: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +200: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +201: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:09 +202: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +203: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +204: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +205: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +206: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +207: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +208: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +209: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +210: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +211: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +212: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +213: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +214: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +215: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +216: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:10 +217: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:12 +218: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:12 +219: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） Python sidecar 可用；ABI/capability 协商成功
+00:14 +220: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 多站点并发搜索（§14.1、§14.3） 结果按配置顺序稳定排序，全部 searchable 站点都有条目
+00:14 +221: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 位置不足 5 秒 → 不续播
+00:15 +222: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_proxy_test.dart: 代理接线（§9.6、§11.3.1） 云元数据地址同样保持直连（§11.3.1）
+00:16 +223: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:16 +224: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:17 +225: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:17 +226: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） home 调用返回结构化 Result
+00:19 +227: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 已看完（completed）→ 不续播，从头播放
+00:19 +228: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 已看完（completed）→ 不续播，从头播放
+00:21 +229: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_proxy_test.dart: 代理接线（§9.6、§11.3.1） 无 Header 时保持直连（少一跳开销）
+00:22 +230: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_proxy_test.dart: 代理接线（§9.6、§11.3.1） 无 Header 时保持直连（少一跳开销）
+00:22 +231: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:24 +232: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 崩溃隔离：sidecar 崩溃后主程序存活并进入退避
+00:24 +233: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
+00:24 +234: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_search_test.dart: 取消与批次取代（§14.1） 取消只影响当前批次，之后可以正常发起新搜索
+00:25 +235: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 无历史记录 → 不续播
+00:25 +236: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 无历史记录 → 不续播
+00:27 +237: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 退避上限：连续失败达到上限后进入禁用状态
+00:27 +238: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_proxy_test.dart: 代理接线（§9.6、§11.3.1） 允许的目标被改写为代理 URL，并只在会话内授权该主机
+00:27 +239: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 按 flag 与 episodeId 精确匹配，不同剧集互不串扰
+00:29 +240: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: 续播位置判定（§15.2） 按 flag 与 episodeId 精确匹配，不同剧集互不串扰
+00:30 +241: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_proxy_test.dart: 代理接线（§9.6、§11.3.1） stopProxy 会使代理会话失效（§11.3.1）
+00:30 +242: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:31 +243: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:35 +244: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:37 +245: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 取消隔离：可取消调用返回 SPIDER_CANCELLED 且进程回到空闲
+00:39 +246: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 导入新配置后选中站点必须换成新配置的默认站点
+00:43 +247: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 导入新配置后选中站点必须换成新配置的默认站点
+00:43 +248: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 导入新配置后选中站点必须换成新配置的默认站点
+00:43 +249: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 导入新配置后选中站点必须换成新配置的默认站点
+00:44 +250: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 隔离等级如实标记为「尽力隔离」，不宣称沙箱（§18.2.1）
+00:44 +251: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 隔离等级如实标记为「尽力隔离」，不宣称沙箱（§18.2.1）
+00:44 +252: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: recordProgress 端到端（§15.2） 跨重启（重新打开数据库）后仍能续播
+00:45 +253: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_resume_test.dart: recordProgress 端到端（§15.2） 跨重启（重新打开数据库）后仍能续播
+00:46 +254: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 切回旧配置时选中站点同样跟着配置走
+00:48 +255: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:48 +256: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:48 +257: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:48 +258: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:48 +259: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: Spider 管理页渲染（§17.2） 本地 Spider 卡片展示 ABI、capability、权限与限制
+00:48 +260: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 选中站点变化时清掉上一个配置的浏览结果
+00:51 +261: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 选中站点变化时清掉上一个配置的浏览结果
+00:51 +262: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_danmaku_overlay_test.dart: 弹幕渲染层与开关（Phase 3） 开启时渲染 CustomPaint，关闭时完全不绘制
+00:52 +263: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:52 +264: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:52 +265: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:52 +266: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +267: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +268: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +269: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +270: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +271: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +272: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +273: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +274: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +275: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +276: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +277: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +278: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +279: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +280: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +281: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +282: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +283: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +284: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +285: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +286: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +287: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +288: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +289: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +290: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +291: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +292: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +293: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +294: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +295: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +296: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:53 +297: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理卡片（§11） 未启动时展示状态与启停按钮，停止按钮不可点
+00:55 +298: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_cat_switch_test.dart: 选中站点仍属于新配置时保留（重复导入同一份配置不打断用户）
+00:56 +299: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 运行时健康状态与启停（§17.2、§18.2） 真实 sidecar 启动后可强制停止并回到未启动
+01:01 +300: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +301: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +302: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +303: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +304: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +305: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +306: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +307: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +308: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +309: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +310: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +311: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:02 +312: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 结果不属于本页影片时退回列表条目，不套用别的剧
+01:04 +313: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 迟到的详情响应不得覆盖更新的请求
+01:05 +314: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 迟到的详情响应不得覆盖更新的请求
+01:05 +315: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +316: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +317: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +318: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +319: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +320: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:06 +321: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +322: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +323: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +324: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +325: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +326: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +327: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +328: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +329: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +330: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +331: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +332: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +333: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +334: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:07 +335: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:08 +336: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 详情结果属于本页影片时优先使用详情（含简介与线路）
+01:08 +337: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理启停与端口释放（§11） 启动后可停止并释放端口
+01:10 +338: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理启停与端口释放（§11） 启动后可停止并释放端口
+01:13 +339: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理启停与端口释放（§11） 启动后可停止并释放端口
+01:13 +340: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase2_spider_page_test.dart: 本地代理启停与端口释放（§11） 启动后可停止并释放端口
+01:14 +341: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:14 +342: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:14 +343: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:15 +344: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:15 +345: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:15 +346: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 新请求开始时先清掉上一次的详情结果
+01:16 +347: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 加载中且没有线路时显示进度指示，不显示「没有剧集」
+01:16 +348: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 加载中且没有线路时显示进度指示，不显示「没有剧集」
+01:16 +349: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 加载中且没有线路时显示进度指示，不显示「没有剧集」
+01:16 +350: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:20 +351: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:21 +352: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:21 +353: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:21 +354: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:22 +355: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:22 +356: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情请求运行号（§8.3） 换站点会作废在途详情请求
+01:23 +357: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_js_spider_test.dart: JS sidecar（Node 运行时，§9.7/§9.8） category/detail/search/play 五方法完整调用（§9.2 最小子集）
+01:24 +358: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:24 +359: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:26 +360: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:27 +361: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:27 +362: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:27 +363: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:27 +364: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:27 +365: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_page_test.dart: 返回按钮清空详情状态
+01:28 +366: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） JVM sidecar 可用；ABI/capability 协商成功
+01:30 +367: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_detail_race_test.dart: 详情错误与浏览页错误隔离（§8.4） 详情失败写 detailError，不污染浏览页的 lastError
+01:31 +368: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +369: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +370: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +371: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +372: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +373: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +374: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +375: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +376: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +377: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +378: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +379: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +380: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +381: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:31 +382: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） home 调用返回结构化 Result
+01:33 +383: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +384: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +385: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +386: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +387: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +388: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +389: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +390: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +391: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +392: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +393: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:35 +394: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:37 +395: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:37 +396: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +397: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +398: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +399: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +400: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +401: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +402: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +403: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +404: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +405: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +406: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +407: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +408: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +409: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:38 +410: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +411: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +412: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +413: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +414: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +415: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +416: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +417: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +418: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +419: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +420: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +421: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +422: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +423: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +424: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +425: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +426: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +427: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +428: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:40 +429: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +430: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +431: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +432: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +433: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +434: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +435: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +436: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +437: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +438: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +439: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +440: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +441: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +442: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +443: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +444: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +445: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +446: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +447: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +448: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 未配置直播源时显示空态说明（§13）
+01:41 +449: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_parser_test.dart: JSON 解析执行（§12.2、§12.3） 连接失败 → parseNetwork（可回退）
+01:43 +450: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） 侧车崩溃隔离：坏 entry 只影响该站点（§9.8）
+01:43 +451: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） 侧车崩溃隔离：坏 entry 只影响该站点（§9.8）
+01:43 +452: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） 侧车崩溃隔离：坏 entry 只影响该站点（§9.8）
+01:43 +453: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） 侧车崩溃隔离：坏 entry 只影响该站点（§9.8）
+01:47 +454: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） 侧车崩溃隔离：坏 entry 只影响该站点（§9.8）
+01:47 +455: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +456: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +457: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +458: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +459: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +460: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +461: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +462: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +463: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +464: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +465: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +466: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +467: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +468: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +469: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +470: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +471: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +472: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:47 +473: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +474: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +475: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +476: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +477: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +478: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +479: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +480: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +481: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +482: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +483: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +484: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +485: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +486: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +487: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +488: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +489: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +490: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +491: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +492: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +493: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +494: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +495: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +496: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +497: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +498: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:48 +499: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +500: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +501: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +502: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +503: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +504: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +505: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +506: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +507: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +508: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +509: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +510: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +511: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 渲染直播源列表、分组与频道（M3U）
+01:49 +512: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_jvm_spider_test.dart: JVM sidecar（Java 运行时，§9.3/§9.9） stdin 一次性喂帧后关闭：响应必须写完再退出（§9.3.1）
+01:50 +513: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +514: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +515: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +516: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +517: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +518: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +519: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +520: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +521: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +522: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +523: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +524: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +525: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +526: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +527: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +528: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +529: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +530: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +531: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +532: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +533: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +534: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +535: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +536: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +537: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +538: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +539: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +540: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +541: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +542: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +543: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +544: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +545: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +546: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +547: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +548: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +549: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +550: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +551: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +552: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +553: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +554: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +555: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +556: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +557: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +558: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +559: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +560: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:50 +561: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +562: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +563: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +564: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +565: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +566: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +567: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +568: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +569: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +570: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +571: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +572: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +573: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +574: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +575: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +576: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +577: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +578: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +579: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +580: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +581: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +582: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +583: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +584: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +585: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +586: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +587: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +588: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +589: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +590: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +591: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +592: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +593: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +594: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +595: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +596: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +597: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +598: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +599: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +600: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +601: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +602: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:51 +603: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 单源失败只影响该源，其他源仍可用（§14.3）
+01:53 +604: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_episode_metadata_test.dart: 头部补位 8 字段：仅补位不覆盖（§3.2） 来源全空 → 全部补位
+01:53 +605: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +606: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +607: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +608: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +609: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +610: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +611: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +612: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +613: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +614: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +615: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +616: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +617: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +618: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +619: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +620: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +621: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +622: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +623: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +624: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +625: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +626: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +627: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +628: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +629: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +630: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +631: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +632: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +633: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +634: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +635: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +636: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +637: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +638: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +639: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +640: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:53 +641: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +642: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +643: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +644: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +645: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +646: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +647: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +648: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +649: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +650: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +651: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +652: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +653: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +654: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +655: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +656: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +657: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +658: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +659: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +660: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +661: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +662: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +663: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +664: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +665: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +666: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +667: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +668: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +669: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +670: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +671: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +672: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +673: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +674: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +675: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +676: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +677: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +678: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +679: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +680: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +681: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +682: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +683: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +684: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +685: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +686: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +687: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +688: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +689: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +690: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +691: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +692: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +693: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +694: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +695: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +696: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +697: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:54 +698: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +699: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +700: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +701: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +702: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +703: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +704: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +705: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +706: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +707: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +708: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +709: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +710: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +711: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +712: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +713: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +714: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +715: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +716: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +717: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +718: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）
+01:56 +719: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +720: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +721: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +722: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +723: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +724: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +725: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +726: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +727: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +728: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +729: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +730: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +731: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +732: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +733: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +734: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +735: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +736: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +737: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +738: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +739: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +740: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +741: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +742: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +743: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +744: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +745: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +746: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +747: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +748: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +749: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +750: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +751: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +752: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:56 +753: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +754: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +755: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +756: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +757: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +758: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +759: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +760: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +761: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +762: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +763: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +764: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +765: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +766: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +767: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +768: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +769: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +770: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：多线路映射 + 直链（§13.3）
+01:57 +771: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +772: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +773: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +774: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +775: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +776: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +777: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +778: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +779: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +780: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +781: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +782: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +783: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +784: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +785: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +786: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +787: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +788: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +789: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +790: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +791: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +792: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +793: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +794: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +795: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +796: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +797: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +798: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +799: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +800: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +801: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +802: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求构造：无线路频道仍安全（不越界）
+01:59 +803: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播播放请求携带频道级 Header（§13.1 直播 Header）
+02:01 +804: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +805: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +806: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +807: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +808: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +809: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +810: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +811: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +812: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +813: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +814: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +815: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +816: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +817: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +818: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +819: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +820: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +821: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +822: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +823: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +824: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +825: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +826: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +827: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +828: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +829: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +830: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +831: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +832: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +833: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +834: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +835: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +836: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +837: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +838: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +839: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +840: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +841: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +842: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +843: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +844: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +845: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +846: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:01 +847: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +848: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +849: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +850: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +851: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +852: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +853: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +854: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +855: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +856: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +857: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +858: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +859: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +860: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +861: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +862: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +863: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +864: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +865: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +866: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +867: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +868: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +869: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +870: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +871: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +872: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:02 +873: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 直播页加载清单声明的 EPG，列表显示当前节目（§13.3）
+02:03 +874: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +875: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +876: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +877: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +878: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +879: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +880: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +881: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +882: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +883: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +884: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +885: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +886: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +887: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +888: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +889: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +890: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +891: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +892: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +893: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +894: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +895: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +896: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +897: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +898: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +899: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +900: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +901: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +902: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +903: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +904: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:03 +905: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 点击频道展示节目单，当前节目高亮（§13.3）
+02:05 +906: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +907: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +908: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +909: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +910: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +911: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +912: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +913: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +914: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +915: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +916: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +917: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +918: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +919: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +920: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +921: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +922: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +923: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +924: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +925: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +926: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +927: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +928: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +929: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +930: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +931: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +932: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +933: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +934: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +935: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:05 +936: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +937: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +938: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +939: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +940: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +941: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +942: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +943: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +944: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +945: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +946: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +947: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +948: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +949: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +950: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +951: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +952: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +953: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +954: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +955: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +956: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +957: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +958: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +959: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +960: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +961: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +962: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +963: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +964: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +965: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +966: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +967: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +968: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +969: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +970: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +971: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +972: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:06 +973: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:07 +974: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:07 +975: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:07 +976: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:07 +977: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: 刷新节目单会重新拉取（§13.3「可刷新」）
+02:07 +978: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +979: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +980: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +981: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +982: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +983: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +984: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +985: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +986: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +987: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +988: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +989: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +990: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +991: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +992: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +993: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +994: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +995: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +996: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +997: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +998: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +999: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1000: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1001: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1002: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1003: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1004: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1005: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1006: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1007: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1008: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1009: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1010: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:08 +1011: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:09 +1012: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:09 +1013: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:09 +1014: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:09 +1015: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase3_live_page_test.dart: EPG 失败只提示，直播频道与播放入口照常（§13.3）
+02:09 +1016: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1017: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1018: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1019: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1020: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1021: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1022: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1023: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1024: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1025: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1026: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1027: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1028: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1029: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1030: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1031: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1032: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1033: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1034: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1035: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1036: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1037: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1038: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1039: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1040: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1041: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1042: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1043: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1044: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1045: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1046: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1047: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1048: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1049: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1050: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1051: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:10 +1052: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 旧库（version 1）打开后获得新表且旧数据完好
+02:11 +1053: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_storage_test.dart: 迁移幂等（§6.2） 同路径重复打开不报错（幂等）
+02:12 +1054: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1055: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1056: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1057: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1058: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1059: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1060: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1061: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1062: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1063: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1064: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1065: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1066: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1067: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1068: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1069: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1070: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:12 +1071: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1072: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1073: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1074: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1075: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1076: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1077: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1078: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1079: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1080: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 未配置 → 整块不渲染
+02:13 +1081: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 站点禁用 → 整块不渲染
+02:13 +1082: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 创建（§9.8） cpuSeconds=0（不限 CPU）时仍必须创建成功
+02:13 +1083: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 匹配中 → 显示进度指示器
+02:13 +1084: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 匹配中 → 显示进度指示器
+02:13 +1085: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/phase4_tmdb_ui_test.dart: TmdbStatusBar 六态（§3.1 ②） 匹配中 → 显示进度指示器
+02:13 +1086: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1087: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1088: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1089: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1090: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1091: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1092: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1093: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:14 +1094: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1095: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1096: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1097: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1098: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1099: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1100: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1101: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1102: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1103: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1104: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1105: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1106: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:15 +1107: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1108: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1109: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1110: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1111: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1112: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1113: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1114: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1115: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:16 +1116: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:17 +1117: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:17 +1118: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:17 +1119: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:17 +1120: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） kill-on-close：仅关闭作业句柄即终止子进程
+02:19 +1121: C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/test/windows_job_test.dart: WindowsJobObject 进程树回收（§18.2.1） terminate() 立即终止作业内进程
+02:24 +1122: All tests passed!
+PHASE4-ACCEPT flutter-unit-tests ok elapsed=192575ms
+PHASE4-ACCEPT step: phase4-suite-presence
+PHASE4-ACCEPT phase4-suite-presence suites=16 missing=0
+PHASE4-ACCEPT phase4-suite-presence ok elapsed=79ms
+PHASE4-ACCEPT step: windows-integration-tests (跳过)
+PHASE4-ACCEPT windows-integration-tests skipped
+PHASE4-ACCEPT step: tmdb-redaction
+PHASE4-ACCEPT tmdb-redaction ok scanned=82 apiKey=****7890 accessToken=****cdef plaintext-leaks=0
+PHASE4-ACCEPT tmdb-redaction ok elapsed=1957ms
+PHASE4-ACCEPT step: restore-debug-artifacts
+Building Windows application...                                    48.0s
+√ Built build\windows\x64\runner\Debug\webhtv_pc.exe
+PHASE4-ACCEPT restore-debug-artifacts ok elapsed=95272ms
+PHASE4-ACCEPT step: debug-artifact-runnable
+PHASE4-ACCEPT debug-artifact-runnable kernel=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1\apps\desktop-flutter\build\windows\x64\runner\Debug\data\flutter_assets\kernel_blob.bin main-entry=True integration-test-markers=0
+PHASE4-ACCEPT debug-artifact-runnable ok elapsed=26270ms
+PHASE4-ACCEPT step: summary
+PHASE4-ACCEPT result=PASS gates=all-except-integration
+PHASE4-ACCEPT fixture-server stopped pid=14524

@@ -112,17 +112,30 @@ if (-not (Get-Command puro -ErrorAction SilentlyContinue)) {
     throw '未找到 puro，无法解析 Flutter/Dart 工具链。'
 }
 
-# 选择 Python 解释器：优先「能 import jsonschema」的那个（与 Phase 3 同规则）。
+# 选择 Python 解释器。
+#
+# 契约测试（tests/test_contracts.py）与 schema 校验（scripts/validate_contracts.py）
+# 依赖 `jsonschema`。本机 `py` 启动器的默认版本可能没装该模块（实测：`py` → 3.14
+# 无 jsonschema，`py -3.13` 有 4.26.0），此时门禁会以 ImportError 失败——那是
+# 环境漂移而不是代码缺陷，但一键验收脚本的可复现性不应依赖启动器默认值。
+# 因此这里主动探测「能 import jsonschema」的解释器并钉住它；探测全部失败时
+# 退回原行为（裸 `py`），由门禁自己报错，不静默跳过。
 function Resolve-PythonWithJsonschema {
-    $candidates = @('py -3', 'python', 'python3')
-    foreach ($candidate in $candidates) {
-        $parts = $candidate -split ' '
-        $command = $parts[0]
-        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { continue }
-        $probe = & $command @($parts[1..($parts.Length - 1)]) -c 'import jsonschema; print(jsonschema.__version__)' 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Fact "python selected=$candidate jsonschema=$probe"
-            return @{ Command = $command; Args = $parts[1..($parts.Length - 1)] }
+    $attempts = @(
+        @{ Exe = 'py'; Args = @('-3.13') },
+        @{ Exe = 'py'; Args = @('-3.12') },
+        @{ Exe = 'py'; Args = @('-3.11') },
+        @{ Exe = 'py'; Args = @('-3.10') },
+        @{ Exe = 'py'; Args = @('-3') },
+        @{ Exe = 'python'; Args = @() },
+        @{ Exe = 'python3'; Args = @() }
+    )
+    foreach ($attempt in $attempts) {
+        if (-not (Get-Command $attempt.Exe -ErrorAction SilentlyContinue)) { continue }
+        $probe = & $attempt.Exe @($attempt.Args + @('-c', 'import sys, jsonschema; print(sys.executable)')) 2>$null
+        if ($LASTEXITCODE -eq 0 -and $probe) {
+            Write-Fact "python selected=$($attempt.Exe) $($attempt.Args -join ' ') exe=$($probe.Trim())"
+            return @{ Command = $attempt.Exe; Args = $attempt.Args }
         }
     }
     Write-Fact 'python fallback=py -3（jsonschema 探测失败，由门禁自己报错）'
