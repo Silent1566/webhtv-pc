@@ -1884,8 +1884,8 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 门禁与证据写入 `docs/phase4/evidence/windows-acceptance.txt`。
 
 实施状态：**已完成**。一键验收 `PHASE4-ACCEPT result=PASS gates=all`
-（单元 1122 例 + 16 个 `phase4_tmdb_*` 套件 + 5 个 `-d windows` 集成套件 +
-契约 9 例 + 脱敏门禁；三项反向验证均按预期失败后还原）。
+（单元 1122 例 + 17 个 `phase4_tmdb_*` 套件（共 618 例）+ 5 个 `-d windows`
+集成套件 + 契约 9 例 + 脱敏门禁 + 三项反向验证机器校验）。
 
 > 详细设计指导见 `docs/phase4/design/00`–`design/05`，阶段计划见 `docs/phase4/README.md`，
 > 主设计文档摘要见 §27。
@@ -2267,8 +2267,12 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1
 2. 把分季惩罚改为 `0` → 分季变体用例必须失败；
 3. 去掉括号归一 → 猫源站点策略用例必须失败。
 
+这三项由 `tools/phase4/verify_reverse_checks.py` **机器校验**（已纳入一键验收脚本）：
+逐项临时破坏契约、断言用例确实失败、再无条件还原并校验工作区干净，
+不依赖人工在证据文件里写说明。
+
 **实施状态（2026-10-07）**：T1–T18 已全部落地；一键验收结果为
-`PHASE4-ACCEPT result=PASS gates=all`（事实行与三条反向验证记录见证据文件）。
+`PHASE4-ACCEPT result=PASS gates=all`（事实行与三项反向验证的机器校验记录见证据文件）。
 集成测试（L3）在真实窗口下额外暴露并修复了 6 个缺陷（含季度切换不刷新元数据、
 剧集元数据未按季度过滤、可播放季度未优先采用手动绑定、含特别篇时默认季度错误），
 详见 `docs/phase4/README.md` §3.1。

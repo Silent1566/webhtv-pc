@@ -257,7 +257,8 @@ try {
             'test/phase4_tmdb_storage_test.dart',
             'test/phase4_tmdb_ui_test.dart',
             'test/phase4_tmdb_playback_test.dart',
-            'test/phase4_tmdb_state_test.dart'
+            'test/phase4_tmdb_state_test.dart',
+            'test/phase4_tmdb_orchestration_test.dart'
         )
         $missing = @()
         foreach ($relative in $required) {
@@ -325,6 +326,16 @@ try {
     # 5) 凭据脱敏校验（design/05 §7.3）：日志与诊断导出不得出现凭据原文。
     Invoke-Checked 'tmdb-redaction' {
         Invoke-Python @((Join-Path $RepoRoot 'tools\phase4\verify_tmdb_redaction.py'))
+    }
+
+    # 5.2) 反向验证门禁（design/05 §10）：逐项临时破坏一个契约，断言对应用例
+    #      确实失败，然后无条件还原并校验工作区干净。这三项是「门禁真的锁住了
+    #      契约」的证据，不能只写在证据文件的说明文字里。
+    Invoke-Checked 'tmdb-reverse-checks' {
+        Invoke-Python @(
+            (Join-Path $RepoRoot 'tools\phase4\verify_reverse_checks.py'),
+            '--puro-env', $PuroEnvironment
+        )
     }
 
     # 5.5) 恢复 Debug 产物为「可运行的应用入口」。

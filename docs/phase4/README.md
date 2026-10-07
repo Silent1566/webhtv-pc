@@ -161,6 +161,7 @@ T18（fixture 与验收）
 | 凭据不泄露 | 日志与诊断导出脱敏 | `tools/phase4/verify_tmdb_redaction.py` |
 | 无回归 | `flutter test` + `dart analyze` 全绿 | 全量 |
 | 播放入口契约 | 7 参数透传、`episodeUrl` 三段优先级、自动连播不跨季 | `test/phase4_tmdb_playback_test.dart` |
+| 反向验证 | 三项契约逐项破坏后用例**必须失败**（机器校验，非人工说明） | `tools/phase4/verify_reverse_checks.py` |
 
 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 为可复现入口，并封装为一键验收脚本 `tools/phase4/run_windows_acceptance.ps1`
@@ -187,6 +188,17 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 | P4-4 | 「仅选季度」改不动详情页 | `availableSeasons` 只按线路 A–G 推导，未优先采用手动/落盘绑定（`04` §5.3） | `tmdb_manual_match_flow_test` 步骤 6 |
 | P4-5 | 含特别篇时默认选中特别篇 | 默认取 `availableSeasons.first`；应优先第一个正片季度 | `tmdb_detail_flow_test` 步骤 4 |
 | P4-6 | 带 query 的媒体地址 404 | fixture 服务 `_send_media` 未剥离 query | `tmdb_detail_flow_test` 步骤 3（真实出画） |
+
+### 3.2 反向验证（机器校验）
+
+`tools/phase4/verify_reverse_checks.py` 已纳入一键验收脚本，逐项临时破坏契约、
+断言对应用例确实失败、再无条件还原并校验工作区干净：
+
+| # | 破坏方式 | 必须失败的用例 | 实测 |
+| --- | --- | --- | --- |
+| 1 | 未知季度的元数据守卫改为不拦截（等价上游 `[1, 0]` 兜底） | `phase4_tmdb_episode_metadata_test.dart` | 失败 2 例 |
+| 2 | 分季惩罚 `-240` 改为 `0` | `phase4_tmdb_match_policy_test.dart` | 失败 1 例 |
+| 3 | 去掉 `normalizeBrackets` 的全角映射 | `phase4_tmdb_site_policy_test.dart` | 失败 1 例 |
 
 ---
 
