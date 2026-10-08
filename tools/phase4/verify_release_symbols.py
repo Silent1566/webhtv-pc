@@ -65,6 +65,7 @@ REQUIRED_ASCII = [
     "tmdb-episode-view-mode",
     "tmdb-info-table",
     "tmdb-section-posters",
+    "tmdb-crew-wall",
     "tmdb-backdrop-slideshow",
     "tmdb-detail-poster",
     "tmdb-detail-director",

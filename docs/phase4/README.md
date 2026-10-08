@@ -211,6 +211,10 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 | P4-12 | 同一集同时出现「海报卡片」与「文字集按钮」两套控件 | 加卡片时保留了原有按钮 Wrap，未做二选一 | `tmdb_detail_flow_test` 步骤 8（卡片数 = 线路集数 且文字集按钮 = 0） |
 | P4-13 | **点线路切换后剧集区空白** | 换线路会重置 `selectedSeason`；新线路若没有默认季的集（线路一 S1+S2 → 只有 S2 的线路二）就一集都渲染不出来 | `tmdb_detail_flow_test` 步骤 7/7.5（`selectLine(preferredSeason:)` + `reconcileSeasonWithLine`） |
 | P4-14 | **点线路后当前线路被改回第一条** | `reloadTmdb` → `loadForVod` 固定取 `playLines.first`，用户的选择被静默覆盖 | 同上（`loadForVod` 保留 `_selectedLineFlag`） |
+| P4-15 | **制作团队没有卡片**（只有纯文字列表） | 团队区块用 `_CrewGrid`（`Wrap` + 文本），而演员用卡片墙；上游两者共用 `adapter_tmdb_cast.xml` | `phase4_tmdb_detail_view_test.dart` 制作团队用例 + `tmdb_detail_visual_flow_test` 步骤 8.5 |
+| P4-16 | **切回线路后季度被重置**（「又转换一次」） | `loadDetail` 无条件用 `_defaultSeasonOf(availableSeasons)` 覆盖解析器确证的季度，忽略请求季度 | `phase4_tmdb_state_test.dart` 线路季度记忆 + `tmdb_detail_flow_test` 步骤 9 |
+| P4-17 | **多线路各拉一份 TMDB 数据** | `beginLoad` 每次清空作品维度数据，`loadForVod` 每次都重发详情/推荐/视频 | `phase4_tmdb_state_test.dart`「多线路共用」2 例 |
+| P4-18 | 首次进详情页打两次 `/tv/{id}` | 匹配阶段为分季裁决取 `includeRelated: false`，详情页需 `includeRelated: true`，缓存键只支持单向回退 | `TmdbService.detail` 双向回退 + 上述用例的请求计数断言 |
 
 修复后发布包符号门禁同步扩展（`TmdbDetailView` / `TmdbBackdropSlideshow` /
 `TmdbPhotoViewerDialog` / `TmdbPersonPage` / `TmdbEpisodeStrip` 等 + 中文串），

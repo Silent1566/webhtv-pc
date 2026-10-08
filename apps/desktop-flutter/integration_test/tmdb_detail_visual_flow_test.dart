@@ -583,6 +583,32 @@ void main() {
     expect(state.tmdb.videos, isNotEmpty, reason: 'fixture 必须提供相关视频');
     evidence('videos-section=present count=${state.tmdb.videos.length}');
 
+    // 8.5) 制作团队必须是**头像卡片**（用户反馈 2026-10-08：「没有导演卡片」）。
+    await ensureVisible(
+      tester,
+      find.byKey(const ValueKey('tmdb-section-crew')),
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-crew-wall')),
+      findsOneWidget,
+      reason: '制作团队必须是卡片墙（对齐上游 tmdbCrew），不是纯文字列表',
+    );
+    final crew = state.tmdb.detailData!.crew;
+    expect(crew, isNotEmpty, reason: 'fixture 必须提供制作团队');
+    expect(
+      find.byKey(ValueKey('tmdb-crew-${crew.first.personId}')),
+      findsOneWidget,
+      reason: '每个团队成员必须有卡片（可点击进人物页）',
+    );
+    await warmImages(tester, [
+      ...crew.map((p) => p.profileUrl).whereType<String>(),
+    ]);
+    evidence('crew-cards=${crew.length} first=${crew.first.name}');
+    await captureEvidence(
+      tester,
+      relativePath: 'docs/phase4/evidence/tmdb-crew-cards.png',
+    );
+
     // 9) 相关推荐：点击 → 该作品的 TMDB 详情页。
     await ensureVisible(
       tester,

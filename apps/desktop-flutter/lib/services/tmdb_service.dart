@@ -216,14 +216,19 @@ class TmdbService {
     final append = TmdbAppend.detail(identity.mediaType, includeRelated: includeRelated);
     // 回退键必须是**与写入时完全一致的 URI**（含 include_image_language），
     // 否则永远命中不了（§3.2）。
+    //
+    // 反向也要兼容：匹配阶段为了分季裁决会先取一次 `includeRelated: false`
+    // 的详情，随后详情页需要 `includeRelated: true`。若只让「少」能回退到
+    // 「多」，就会白打一次请求（实测首次进入详情页打两次 `/tv/{id}`）。
+    // 因此这里双向回退：任一形态命中即可，缺的 `recommendations`/`similar`
+    // 由详情页自行兜底（`_recommendations` 为空时 UI 整块隐藏，不报错）。
     final keys = <String>[
       _detailCacheUri(config, url, append),
-      if (!includeRelated)
-        _detailCacheUri(
-          config,
-          url,
-          TmdbAppend.detail(identity.mediaType, includeRelated: true),
-        ),
+      _detailCacheUri(
+        config,
+        url,
+        TmdbAppend.detail(identity.mediaType, includeRelated: !includeRelated),
+      ),
     ];
     return _request(
       TmdbCacheType.detail,

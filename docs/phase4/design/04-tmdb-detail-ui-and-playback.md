@@ -126,6 +126,9 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 | V9 | 剧集区块头：正序/倒序 + 列表/网格 | `TmdbEpisodeHeader` + `TmdbEpisodeStrip.gridMode`（对齐上游 `episodeReverse` / `episodeViewMode` / `episodeGrid`） | 同上 |
 | V10 | 信息表：类型/地区/年份/时长/季集/状态/导演/演员/评分/备注/语言 | `TmdbInfoTable`（两列对齐，空值行自动跳过；对齐上游 `site/year/area/type/director/actor` 元信息行） | 同上 |
 | V11 | 海报墙（与剧照区分） | `TmdbDetailSections` 的 `tmdb-section-posters`（对齐上游 `@id/tmdbPosters`） | `phase4_tmdb_detail_view_test.dart` |
+| V12 | **制作团队头像卡片**（导演/编剧/制片可点击） | `_CrewWall` 复用 `_PeopleWall`（对齐上游 `@id/tmdbCrew` + `adapter_tmdb_cast.xml`：头像 + 姓名 + 职务，可进人物页） | `phase4_tmdb_detail_view_test.dart`、`tmdb_detail_visual_flow_test.dart` |
+| V13 | **线路季度记忆**：切走再切回恢复该线路的季度 | `TmdbState._lineSeasonMemory`（`flag → season`，上限 64）+ `rememberedSeasonOfLine`；`selectSeason`/`selectLine`/解析完成三处写入 | `phase4_tmdb_state_test.dart`、`tmdb_detail_flow_test` 步骤 9 |
+| V14 | **多线路共用同一份 TMDB 数据** | `loadForVod` 判定「同一作品」后复用 `_detail`/`_cast`/`_creators`/`_photos`/`_recommendations`/`_videos`/`_seasonEpisodeCounts`；`loadDetail(reuseDetail:)` 零请求；`TmdbService.detail` 缓存键**双向**回退 | `phase4_tmdb_state_test.dart`「多线路共用」2 例 |
 
 **单线路单屏（V8 的关键约束）**：线路条是**切换器**，页面只渲染**当前线路**的
 剧集区。早期实现把每条线路各渲染一屏卡片，多线路站点会把详情页拉成几屏长，
@@ -144,6 +147,22 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 兜底：`reconcileSeasonWithLine()` 在季度解析后检查「当前季度在该线路上是否有
 集」，没有就换成 `availableSeasons` 里第一个真有集的季度；挑不到则保持原值
 （UI 显示空态，**不猜**）。
+
+**「作品维度」与「线路维度」的分界（V13/V14 的核心）**：
+
+| 维度 | 数据 | 换线路时 |
+| --- | --- | --- |
+| **作品维度** | 详情响应、演职人员、推荐/相似、剧照、相关视频、季集数 | **复用**（不重发请求）——上游 `TmdbUIAdapter` 同样只在作品维度加载一次 |
+| **线路维度** | 季度解析结果、可播放季度、剧集元数据、选中季度 | **重算**（季度是线路级的，`02` §2.2） |
+
+判定「同一作品」用 `vodId` + 源标题，**不能**用 `_detail != null`：`loadMatch`
+为了构造匹配记录快照会先请求一次详情（`includeRelated: false`），首次加载时
+`_detail` 尚未赋值，用它会把第二次调用误判成「换了作品」。
+
+**季度意图的优先级**：线路记忆 > 调用方给的当前季度 > 解析器默认。
+`loadDetail` 必须**采纳解析器确证的季度**（`KnownSeason(n)`），早期实现无条件用
+`_defaultSeasonOf(availableSeasons)` 覆盖，会把「记住的第 2 季」改回第 1 季
+（用户反馈的「切回线路后又会重新转换一次」）。
 
 **线路隔离（不得违反）**：剧集元数据只作用于**当前线路**（`04` §4.3）。
 判定必须用 `TmdbState.flagKeyForLine(line)` 与 `sourceLine?.flagKey` 比较，

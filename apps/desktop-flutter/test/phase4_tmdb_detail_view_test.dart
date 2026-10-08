@@ -89,6 +89,7 @@ TmdbDetailData _data() => TmdbDetailData.fromDetail(
           'name': '示例导演',
           'job': 'Director',
           'department': 'Directing',
+          'profile_path': '/crew.jpg',
         },
       ],
     },
@@ -777,6 +778,49 @@ void main() {
       );
       await tester.pump();
       expect(find.byKey(const ValueKey('tmdb-info-table')), findsNothing);
+    });
+  });
+
+  group('制作团队卡片（用户反馈：没有导演卡片）', () {
+    testWidgets('导演/主创以头像卡片渲染且可点击（对齐上游 tmdbCrew）', (tester) async {
+      TmdbPerson? tapped;
+      final data = _data();
+      expect(data.crew, isNotEmpty, reason: '前置：fixture 必须有 crew');
+      await tester.pumpWidget(
+        _host(
+          SizedBox(
+            width: 1200,
+            child: TmdbDetailSections(
+              data: data,
+              onPersonTap: (person) => tapped = person,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await _scrollTo(
+        tester,
+        find.byKey(const ValueKey('tmdb-section-crew')),
+      );
+
+      expect(
+        find.byKey(const ValueKey('tmdb-section-crew')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-crew-wall')),
+        findsOneWidget,
+        reason: '制作团队必须是卡片墙，不是纯文字列表',
+      );
+      // 头像卡片：必须真的渲染了头像图片（用户反馈的就是「没有卡片」）。
+      final crewId = data.crew.first.personId;
+      expect(
+        _posterUrlOf(tester, ValueKey('tmdb-crew-$crewId')),
+        isNotNull,
+        reason: '团队卡片必须有头像图片',
+      );
+      await tester.tap(find.byKey(ValueKey('tmdb-crew-$crewId')));
+      expect(tapped?.personId, crewId, reason: '团队卡片必须可点击进人物页');
     });
   });
 

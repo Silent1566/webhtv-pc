@@ -65,6 +65,27 @@
         "job": "Director",
         "department": "Directing",
         "profile_path": "/crew.jpg"
+      },
+      {
+        "id": 501,
+        "name": "示例编剧",
+        "job": "Screenplay",
+        "department": "Writing",
+        "profile_path": "/crew2.jpg"
+      },
+      {
+        "id": 502,
+        "name": "示例制片",
+        "job": "Producer",
+        "department": "Production",
+        "profile_path": "/crew3.jpg"
+      },
+      {
+        "id": 503,
+        "name": "示例监制",
+        "job": "Executive Producer",
+        "department": "Production",
+        "profile_path": "/crew4.jpg"
       }
     ]
   },

@@ -340,6 +340,49 @@ void main() {
       reason: '有剧集卡片时不得再渲染文字版集按钮（二者取其一）',
     );
     evidence('line2-cards=8 text-episode-buttons=0');
+
+    // 9) 线路季度记忆（用户反馈 2026-10-08：「选集卡片没有记忆，我切换到其他
+    // 线路后又会重新转换一次」）。
+    //
+    // 场景：线路一选到 S2 → 切到线路二（保持 S2）→ 切回线路一，必须仍停在 S2。
+    expect(
+      state.tmdb.rememberedSeasonOfLine('线路二'),
+      2,
+      reason: '线路二的季度记忆必须是第 2 季',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路一')));
+    await drainRealIo(
+      tester,
+      until: () => state.tmdb.sourceLine?.sourceFlag == '线路一',
+    );
+    await tester.pump();
+    expect(
+      state.tmdb.selectedSeason,
+      2,
+      reason: '切回线路一必须恢复该线路记住的第 2 季（不得重新转换到第 1 季）',
+    );
+    expect(
+      state.tmdb.rememberedSeasonOfLine('线路一'),
+      2,
+      reason: '线路一的季度记忆必须是第 2 季',
+    );
+    // 卡片必须是第 2 季的集（不是被重置回第 1 季），且立即可见（不得空白）。
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路一-0')),
+      findsOneWidget,
+      reason: '切回线路一后必须立即渲染卡片（不得空白）',
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路二-0')),
+      findsNothing,
+      reason: '切回线路一后线路二的卡片必须消失',
+    );
+    evidence(
+      'line-season-memory 线路一=${state.tmdb.rememberedSeasonOfLine('线路一')} '
+      '线路二=${state.tmdb.rememberedSeasonOfLine('线路二')} '
+      'selected=${state.tmdb.selectedSeason}',
+    );
   });
 }
 

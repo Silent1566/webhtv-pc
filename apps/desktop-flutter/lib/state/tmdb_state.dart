@@ -152,6 +152,8 @@ class TmdbState extends ChangeNotifier {
     final line = lineByFlag(flag);
     if (line == null) return;
     if (_activeLine?.flagKey == flag) return;
+    // 切走之前，把当前线路选定的季度记下来，回来时恢复（见 _lineSeasonMemory）。
+    _rememberLineSeason(_selectedLineFlag, _selectedSeason);
     _selectedLineFlag = flag;
     _activeLine = sourceLineOf(line, 0, unique: _isFlagUnique(flag));
     // 线路变了 → 旧季度的剧集元数据不再适用
@@ -159,12 +161,48 @@ class TmdbState extends ChangeNotifier {
     _selectedSeason = -1;
     _availableSeasons = const [];
     _resolution = null;
-    _preferredSeason = preferredSeason;
+    // 季度意图优先级：该线路的**记忆** > 调用方给的当前季度 > 无。
+    // 记忆优先，因为它是「用户在这条线路上上次看的那一季」，比「另一条线路
+    // 的当前季度」更贴合意图（两条线路可能覆盖不同季度）。
+    final remembered = rememberedSeasonOfLine(flag);
+    _preferredSeason = remembered >= 0 ? remembered : preferredSeason;
     notifyListeners();
   }
 
   /// 当前选定的线路 `flag`（供 `loadForVod` 在重新加载时保留选择）。
   String _selectedLineFlag = '';
+
+  /// **每条线路**上次选定的季度（`flag -> season`）。
+  ///
+  /// 为什么需要（用户反馈 2026-10-08：「选集卡片没有记忆，我切换到其他线路后
+  /// 又会重新转换一次」）：季度是**线路级**的（`02` §2.2），同一部剧的不同线路
+  /// 可能只覆盖不同季度。用户在线路 A 选了 S2、切到线路 B、再切回 A 时，
+  /// 期望仍停在 S2；早期实现每次换线路都重跑季度解析并回落到默认季（S1），
+  /// 于是「又转换一次」，选集卡片跳回第一季。
+  ///
+  /// 上限 [maxRememberedLineSeasons] 条：详情页线路数量有限（实测站点最多
+  /// 十几条），但防御异常配置导致的无限增长。
+  final Map<String, int> _lineSeasonMemory = {};
+
+  /// 线路季度记忆的上限。
+  static const int maxRememberedLineSeasons = 64;
+
+  /// 记录某条线路当前选定的季度。
+  void _rememberLineSeason(String flag, int season) {
+    if (flag.isEmpty || season < 0) return;
+    if (_lineSeasonMemory.length >= maxRememberedLineSeasons &&
+        !_lineSeasonMemory.containsKey(flag)) {
+      _lineSeasonMemory.remove(_lineSeasonMemory.keys.first);
+    }
+    _lineSeasonMemory[flag] = season;
+  }
+
+  /// 取某条线路上次选定的季度（`-1` 表示无记忆）。
+  int rememberedSeasonOfLine(String flag) =>
+      flag.isEmpty ? -1 : (_lineSeasonMemory[flag] ?? -1);
+
+  /// 线路季度记忆快照（测试与诊断用）。
+  Map<String, int> get lineSeasonMemory => Map.unmodifiable(_lineSeasonMemory);
 
   /// 切换线路时携带的**季度意图**（`-1` 表示无意图）。
   ///
@@ -334,6 +372,7 @@ class TmdbState extends ChangeNotifier {
     int configId = 0,
     String siteName = '',
     int requestSeason = -1,
+    bool keepTitleData = false,
   }) {
     if (_disposed) return _generation;
     _generation++;
@@ -345,14 +384,19 @@ class TmdbState extends ChangeNotifier {
     _vod = vod;
     _activeLine = line;
     _error = null;
-    _detail = null;
+    // 同一作品换线路：保留**作品维度**的数据（详情/演职人员/推荐/剧照/季集数），
+    // 只重置**线路维度**的数据（剧集元数据与季度解析结果）。
+    // 上游 `TmdbUIAdapter` 同样只在作品维度加载一次，换线路不重发请求。
+    if (!keepTitleData) {
+      _detail = null;
+      _cast = const [];
+      _creators = const [];
+      _recommendations = const [];
+      _videos = const [];
+      _photos = const [];
+      _seasonEpisodeCounts = const {};
+    }
     _episodes = const [];
-    _cast = const [];
-    _creators = const [];
-    _recommendations = const [];
-    _videos = const [];
-    _photos = const [];
-    _seasonEpisodeCounts = const {};
     _availableSeasons = const [];
     _selectedSeason = requestSeason;
 
@@ -512,8 +556,23 @@ class TmdbState extends ChangeNotifier {
             playLines.indexOf(keep),
             unique: _isFlagUnique(keep.flag),
           );
-    // 记录实际采用的线路，使后续 `reloadTmdb` 继续保留它。
-    _selectedLineFlag = keep?.flag ?? '';
+    // 记录实际采用的线路，使后续 `reloadTmdb` 继续保留它，
+    // 并让「季度记忆」能按线路归档（见 _lineSeasonMemory）。
+    //
+    // 首次加载时 `keep` 为 null（还没有用户选择），此时必须记为**实际使用的**
+    // 第一条线路，否则 `_selectedLineFlag` 为空 → 季度记忆归不到任何线路
+    // → 切走再切回时恢复不了（用户反馈的「又转换一次」）。
+    _selectedLineFlag = keep?.flag ?? playLines.first.flag;
+
+    // 同一部作品的 TMDB 数据在**所有线路之间共用**（用户反馈 2026-10-08：
+    // 「多线路貌似没共用同一份 tmdb 数据或缓存」）。
+    //
+    // 上游 `TmdbUIAdapter` 同样只在**作品维度**加载一次详情/演职人员/推荐，
+    // 换线路只重跑季度解析与选集（`seasonEpisodeCache` 按
+    // `tmdbId|mediaType|season` 缓存，也不随线路失效）。
+    //
+    // 因此区分「同一作品」与「换了作品」：同一作品复用已加载数据，不重发请求。
+    final sameTitle = _isSameTitle(vodId: vod.vodId, sourceTitle: vod.vodName);
     final generation = beginLoad(
       siteKey: siteKey,
       vodId: vod.vodId,
@@ -522,6 +581,7 @@ class TmdbState extends ChangeNotifier {
       line: line,
       configId: configId,
       siteName: siteName,
+      keepTitleData: sameTitle,
     );
     if (!_valid(generation)) return;
     // 未配置 / 站点禁用：beginLoad 已进入 disabled，不得发起任何请求
@@ -535,19 +595,40 @@ class TmdbState extends ChangeNotifier {
     );
     if (!_valid(generation) || !hasMatch) return;
 
+    // 详情已缓存且是同一作品 → 跳过详情请求，只重跑季度解析（零网络）。
+    final hasDetail = _detail != null && sameTitle;
     await loadDetail(
       generation: generation,
       // 季集数以详情响应为权威（`loadDetail` 会从 `seasons[]` 回填）
       tmdbSeasons: const [],
       seasonCounts: const {},
       allowHeuristicGuessing: config.heuristicSeasonGuessing,
+      reuseDetail: hasDetail,
     );
     if (!_valid(generation)) return;
 
     await loadEpisodes(generation: generation);
     if (!_valid(generation)) return;
 
-    await loadVideos(generation: generation);
+    // 相关视频也只在作品维度加载一次（换线路不重发）。
+    if (!hasDetail || _videos.isEmpty) {
+      await loadVideos(generation: generation);
+    }
+  }
+
+  /// 是否为**同一部作品**（决定 TMDB 数据能否跨线路复用）。
+  ///
+  /// 用 `vodId` + 源标题判定：换线路时两者都不变（线路是 `Vod` 内的字段），
+  /// 换作品时至少有一个变化。这是「作品维度」与「线路维度」的分界。
+  ///
+  /// 注意**不能用 `_detail != null`**：`loadMatch` 为了构造匹配记录快照，内部
+  /// 会先请求一次详情（`includeRelated: false`），因此首次加载时 `_detail`
+  /// 尚未赋值，用它会把自己的第二次调用误判成「换了作品」。
+  /// 这里以**已匹配的身份**为准：只要作品身份没变，就是同一部作品。
+  bool _isSameTitle({required String vodId, required String sourceTitle}) {
+    if (_vodId != vodId || _sourceTitle != sourceTitle) return false;
+    // 首次加载（还没有任何匹配结论）→ 不是「同一作品」，需要完整加载。
+    return _matchResult is TmdbMatchHit || _detail != null;
   }
 
   bool _valid(int generation) =>
@@ -591,24 +672,32 @@ class TmdbState extends ChangeNotifier {
     required Map<int, int> seasonCounts,
     int requestSeason = -1,
     bool allowHeuristicGuessing = true,
+    bool reuseDetail = false,
   }) async {
     if (_disposed || generation != _generation) return;
     final currentItem = item;
     if (currentItem == null) return;
 
-    _busy = true;
-    notifyListeners();
+    // 同一作品换线路：详情响应已在内存，**零请求**直接用。
+    // 上游 `TmdbUIAdapter` 的详情/演职人员/推荐同样只在作品维度加载一次。
+    final cached = reuseDetail ? _detail : null;
+    if (cached == null) {
+      _busy = true;
+      notifyListeners();
+    }
     try {
-      final detail = await _service.detail(currentItem);
+      final detail = cached ?? await _service.detail(currentItem);
       if (_disposed || generation != _generation) return;
-      _detail = detail;
-      _cast = _service.cast(detail);
-      _creators = _service.creators(detail);
-      _photos = _service.photos(detail, preferLandscape: true);
-      _recommendations = [
-        ..._service.recommendationsFromDetail(detail),
-        ..._service.similarFromDetail(detail),
-      ];
+      if (cached == null) {
+        _detail = detail;
+        _cast = _service.cast(detail);
+        _creators = _service.creators(detail);
+        _photos = _service.photos(detail, preferLandscape: true);
+        _recommendations = [
+          ..._service.recommendationsFromDetail(detail),
+          ..._service.similarFromDetail(detail),
+        ];
+      }
       _seasonEpisodeCounts = _seasonCountsFromDetail(detail, seasonCounts);
       // 季集数以详情响应为权威：调用方未给时从 `seasons[]` 回填（`02` §3）。
       final effectiveSeasons = tmdbSeasons.isNotEmpty
@@ -637,8 +726,18 @@ class TmdbState extends ChangeNotifier {
         if (_disposed || generation != _generation) return;
         _resolution = outcome.resolution;
         _availableSeasons = outcome.availableSeasons;
-        if (_selectedSeason < 0 && _availableSeasons.isNotEmpty) {
-          // 默认选中第一项，使多季作品无需手动切换即有内容（`04` §4.1）。
+        // 采纳**解析器确证的季度**（`02` §3.2）。
+        //
+        // 为什么必须优先采纳：请求季度（来自换线路的意图/记忆，或调用方）被
+        // 解析器接受后会体现为 `KnownSeason(n)`。早期实现无条件用
+        // `_defaultSeasonOf(availableSeasons)` 覆盖它，于是「记住的第 2 季」
+        // 被改回第 1 季（用户反馈的「切回线路后又会重新转换一次」）。
+        final scope = outcome.resolution.scope;
+        if (scope is KnownSeason) {
+          _selectedSeason = scope.seasonNumber;
+        } else if (_selectedSeason < 0 && _availableSeasons.isNotEmpty) {
+          // 无法确证单季（或调用方未指定）→ 默认选中第一项，使多季作品
+          // 无需手动切换即有内容（`04` §4.1）。
           //
           // 但**特别篇（0）不作为默认**：特别篇是附加内容，默认打开「特别篇」
           // 会让用户以为正片只有几集。`availableSeasons` 由 `02` §4.3 的可播放
@@ -648,6 +747,9 @@ class TmdbState extends ChangeNotifier {
         // 换线路后的自愈：解析出的季度若在该线路上**一集都没有**，
         // 换成该线路上真有集的那一季（否则剧集区空白，见 reconcileSeasonWithLine）。
         reconcileSeasonWithLine();
+        // 把最终选定的季度记入线路记忆（含首次自动选定的默认季），
+        // 使「切走 → 切回」能回到同一季。
+        _rememberLineSeason(_selectedLineFlag, _selectedSeason);
       }
       _phase = TmdbLoadPhase.ready;
     } on TmdbCancelledException {
@@ -778,6 +880,8 @@ class TmdbState extends ChangeNotifier {
     if (!_availableSeasons.contains(seasonNumber)) return;
     if (_selectedSeason == seasonNumber) return;
     _selectedSeason = seasonNumber;
+    // 记住本线路的选择，换走再回来时恢复（见 _lineSeasonMemory）。
+    _rememberLineSeason(_selectedLineFlag, seasonNumber);
     // 清空旧季度剧集，避免残留（`04` §4.3）
     _episodes = const [];
     notifyListeners();

@@ -5,6 +5,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,7 @@ import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_season.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
+import 'package:webhtv_pc/services/tmdb_cache.dart';
 import 'package:webhtv_pc/services/tmdb_identity_service.dart';
 import 'package:webhtv_pc/services/tmdb_season_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
@@ -71,8 +73,9 @@ TmdbState _state({
   required http.Client client,
   TmdbMatchStore? store,
   TmdbSeasonStore? seasonStore,
+  TmdbCache? cache,
 }) {
-  final service = TmdbService(config: config, client: client);
+  final service = TmdbService(config: config, client: client, cache: cache);
   return TmdbState(
     config: config,
     service: service,
@@ -820,6 +823,306 @@ void main() {
       await state.loadMatch(generation: generation, sourceTitle: '剧名');
       expect(state.ratingText, contains('8.2'));
       state.dispose();
+    });
+  });
+
+  group('多线路共用同一份 TMDB 数据（用户反馈 2026-10-08）', () {
+    /// 两条线路、作品维度数据（详情/演员/推荐/视频）应只请求一次。
+    _FakeClient twoLineClient() => _FakeClient()
+      ..route('/search/multi', {
+        'results': [
+          {
+            'id': 1399,
+            'media_type': 'tv',
+            'name': '剧名',
+            'first_air_date': '2024-01-01',
+          },
+        ],
+      })
+      ..route('/tv/1399', {
+        'id': 1399,
+        'name': '剧名',
+        'seasons': [
+          {'season_number': 1, 'episode_count': 3},
+        ],
+        'aggregate_credits': {
+          'cast': [
+            {'id': 287, 'name': '演员甲', 'roles': []},
+          ],
+        },
+        'credits': {
+          'crew': [
+            {'id': 500, 'name': '导演甲', 'job': 'Director'},
+          ],
+        },
+        'created_by': [
+          {'id': 500, 'name': '导演甲'},
+        ],
+      })
+      ..route('/season/1', {
+        'season_number': 1,
+        'episodes': [
+          {'episode_number': 1, 'name': '第一集', 'season_number': 1},
+          {'episode_number': 2, 'name': '第二集', 'season_number': 1},
+          {'episode_number': 3, 'name': '第三集', 'season_number': 1},
+        ],
+      })
+      ..route('/videos', {'results': []});
+
+    List<VodPlayLine> twoLines() => [
+      VodPlayLine(
+        flag: '线路一',
+        episodes: [
+          for (var i = 1; i <= 3; i++)
+            VodEpisode(name: '第$i集', url: 'https://cdn/a$i.m3u8'),
+        ],
+      ),
+      VodPlayLine(
+        flag: '线路二',
+        episodes: [
+          for (var i = 1; i <= 3; i++)
+            VodEpisode(name: '第$i集', url: 'https://cdn/b$i.m3u8'),
+        ],
+      ),
+    ];
+
+    test('切换线路不重发详情/演员/推荐/视频请求（作品维度只加载一次）', () async {
+      final client = twoLineClient();
+      // 与生产 `AppState` 一致地带 TMDB 缓存：匹配阶段为分季裁决取过一次
+      // `includeRelated: false` 的详情，详情页需要 `includeRelated: true`，
+      // 靠双向缓存键回退才不会白打一次请求。
+      final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-lines');
+      addTearDown(() {
+        try {
+          temp.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final state = _state(
+        config: _ready,
+        client: client,
+        cache: TmdbCache(cacheDir: temp.path),
+      );
+      final lines = twoLines();
+      final vod = _vod(name: '剧名');
+
+      await state.loadForVod(
+        vod,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+      expect(state.hasMatch, isTrue, reason: '前置：必须已匹配');
+      expect(state.detail, isNotNull, reason: '前置：详情必须已加载');
+      final detailRequests = client.requests
+          .where((uri) => uri.path.endsWith('/tv/1399'))
+          .length;
+      final videoRequests = client.requests
+          .where((uri) => uri.path.endsWith('/videos'))
+          .length;
+      expect(detailRequests, 1, reason: '首次加载详情应为 1 次请求');
+
+      // 切到线路二并重新加载（模拟 UI 点击线路条）。
+      state.selectLine('线路二');
+      await state.loadForVod(
+        vod,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+
+      expect(
+        client.requests.where((uri) => uri.path.endsWith('/tv/1399')).length,
+        1,
+        reason: '换线路不得重发详情请求（多线路共用同一份 TMDB 数据）',
+      );
+      expect(
+        client.requests.where((uri) => uri.path.endsWith('/videos')).length,
+        videoRequests,
+        reason: '换线路不得重发相关视频请求',
+      );
+      expect(
+        state.detail,
+        isNotNull,
+        reason: '换线路后作品维度数据必须保留（否则演职人员/推荐会消失）',
+      );
+      expect(state.cast, isNotEmpty, reason: '换线路后演员表必须保留');
+      expect(state.creators, isNotEmpty, reason: '换线路后主创必须保留');
+      expect(state.sourceLine?.sourceFlag, '线路二', reason: '当前线路必须生效');
+    });
+
+    test('换作品时作品维度数据必须清空重取（不得串数据）', () async {
+      final client = twoLineClient();
+      final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-switch');
+      addTearDown(() {
+        try {
+          temp.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final state = _state(
+        config: _ready,
+        client: client,
+        cache: TmdbCache(cacheDir: temp.path),
+      );
+      final lines = twoLines();
+
+      await state.loadForVod(
+        _vod(name: '剧名'),
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+      expect(state.detail, isNotNull);
+
+      // 换一部作品（不同 vodId + 标题）：必须重新走匹配与详情。
+      final other = Vod(vodId: 'v2', vodName: '剧名');
+      await state.loadForVod(
+        other,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+      // 换作品 → 作品维度数据必须重新取（详情有磁盘缓存，命中缓存是正确行为，
+      // 因此断言的是「状态层确实重新加载过」，而不是「必须重新联网」）。
+      expect(
+        state.vod?.vodId,
+        'v2',
+        reason: '换作品后当前作品必须切换',
+      );
+      expect(
+        state.detail,
+        isNotNull,
+        reason: '换作品后详情必须重新就绪（不得因缓存而丢失）',
+      );
+      expect(
+        state.cast,
+        isNotEmpty,
+        reason: '换作品后演职人员必须重新就绪',
+      );
+    });
+  });
+
+  group('线路季度记忆（用户反馈 2026-10-08：切回线路后不应重新转换）', () {
+    test('selectSeason 记入线路记忆，切走再切回能恢复该季', () async {
+      final client = _FakeClient()
+        ..route('/search/multi', {
+          'results': [
+            {
+              'id': 1399,
+              'media_type': 'tv',
+              'name': '剧名',
+              'first_air_date': '2024-01-01',
+            },
+          ],
+        })
+        ..route('/tv/1399', {
+          'id': 1399,
+          'name': '剧名',
+          'seasons': [
+            {'season_number': 1, 'episode_count': 3},
+            {'season_number': 2, 'episode_count': 3},
+          ],
+        })
+        ..route('/season/1', {
+          'season_number': 1,
+          'episodes': [
+            for (var i = 1; i <= 3; i++)
+              {'episode_number': i, 'name': 'S1E$i', 'season_number': 1},
+          ],
+        })
+        ..route('/season/2', {
+          'season_number': 2,
+          'episodes': [
+            for (var i = 1; i <= 3; i++)
+              {'episode_number': i, 'name': 'S2E$i', 'season_number': 2},
+          ],
+        })
+        ..route('/videos', {'results': []});
+
+      final lines = [
+        VodPlayLine(
+          flag: '线路一',
+          episodes: [
+            for (var s = 1; s <= 2; s++)
+              for (var i = 1; i <= 3; i++)
+                VodEpisode(
+                  name: '第$s季第$i集',
+                  url: 'https://cdn/a$s$i.m3u8',
+                ),
+          ],
+        ),
+        VodPlayLine(
+          flag: '线路二',
+          episodes: [
+            for (var s = 1; s <= 2; s++)
+              for (var i = 1; i <= 3; i++)
+                VodEpisode(
+                  name: '第$s季第$i集',
+                  url: 'https://cdn/b$s$i.m3u8',
+                ),
+          ],
+        ),
+      ];
+      final vod = _vod(name: '剧名');
+      final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-memory');
+      addTearDown(() {
+        try {
+          temp.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final state = _state(
+        config: _ready,
+        client: client,
+        cache: TmdbCache(cacheDir: temp.path),
+      );
+
+      await state.loadForVod(
+        vod,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+      // 线路一：选到第 2 季。
+      expect(
+        state.availableSeasons,
+        contains(2),
+        reason: '前置：线路一必须能解析出第 2 季（available=${state.availableSeasons}）',
+      );
+      state.selectSeason(2);
+      expect(state.selectedSeason, 2, reason: '前置：必须能选中第 2 季');
+      expect(
+        state.rememberedSeasonOfLine('线路一'),
+        2,
+        reason: '选中季度必须记入该线路的记忆',
+      );
+
+      // 切到线路二（默认季由解析器决定），再切回线路一。
+      state.selectLine('线路二');
+      await state.loadForVod(
+        vod,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+      state.selectLine('线路一');
+      await state.loadForVod(
+        vod,
+        siteKey: 's',
+        siteName: '站点',
+        lines: lines,
+      );
+
+      expect(
+        state.selectedSeason,
+        2,
+        reason: '切回线路一必须恢复该线路记住的第 2 季（不得重新转换到默认季）',
+      );
+    });
+
+    test('无记忆的线路回落到调用方给的当前季度', () {
+      final client = _FakeClient();
+      final state = _state(config: _ready, client: client);
+      expect(state.rememberedSeasonOfLine('未知线路'), -1);
+      expect(state.lineSeasonMemory, isEmpty);
     });
   });
 

@@ -338,7 +338,7 @@ class TmdbDetailSections extends StatelessWidget {
             title: '制作团队（${data.crew.length}）',
             keyValue: 'tmdb-section-crew',
           ),
-          _CrewGrid(crew: data.crew.take(24).toList()),
+          _CrewWall(crew: data.crew.take(24).toList(), onTap: onPersonTap),
         ],
       ],
     );
@@ -1635,10 +1635,22 @@ class _CloseIntent extends Intent {
 // ---------------------------------------------------------------------------
 
 class _PeopleWall extends StatelessWidget {
-  const _PeopleWall({required this.people, this.onTap});
+  const _PeopleWall({
+    required this.people,
+    this.onTap,
+    this.keyPrefix = 'tmdb-person',
+    this.keyValue = 'tmdb-people-wall',
+  });
 
   final List<TmdbPerson> people;
   final ValueChanged<TmdbPerson>? onTap;
+
+  /// 卡片 key 前缀。
+  ///
+  /// 演员墙与制作团队墙是两组不同的人，若共用 `tmdb-person-<id>` 会出现重复
+  /// key（同一个人可能既在 cast 又在 crew），点击回调也会歧义。
+  final String keyPrefix;
+  final String keyValue;
 
   @override
   Widget build(BuildContext context) {
@@ -1646,7 +1658,7 @@ class _PeopleWall extends StatelessWidget {
     return SizedBox(
       height: 178,
       child: ListView.separated(
-        key: const ValueKey('tmdb-people-wall'),
+        key: ValueKey(keyValue),
         scrollDirection: Axis.horizontal,
         itemCount: people.length,
         separatorBuilder: (_, _) => const SizedBox(width: 10),
@@ -1655,7 +1667,7 @@ class _PeopleWall extends StatelessWidget {
           return SizedBox(
             width: 104,
             child: InkWell(
-              key: ValueKey('tmdb-person-${person.personId}'),
+              key: ValueKey('$keyPrefix-${person.personId}'),
               onTap: onTap == null ? null : () => onTap!.call(person),
               borderRadius: BorderRadius.circular(8),
               child: Column(
@@ -1691,42 +1703,25 @@ class _PeopleWall extends StatelessWidget {
   }
 }
 
-class _CrewGrid extends StatelessWidget {
-  const _CrewGrid({required this.crew});
+/// 制作团队墙（导演/编剧/制片…）。
+///
+/// 用户反馈 2026-10-08：「没有导演卡片」。早期只渲染纯文字列表，没有头像卡片，
+/// 既看不到人，也无法点击进人物页。上游 `@id/tmdbCrew` 用的是**与演员同一套**
+/// 卡片（`adapter_tmdb_cast.xml`：头像 + 姓名 + 职务，可点击进 `TmdbPersonDialog`），
+/// 这里对齐该形态：复用 [_PeopleWall]，只是数据源换成 crew。
+class _CrewWall extends StatelessWidget {
+  const _CrewWall({required this.crew, this.onTap});
 
   final List<TmdbPerson> crew;
+  final ValueChanged<TmdbPerson>? onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Wrap(
-      spacing: 12,
-      runSpacing: 8,
-      children: [
-        for (final person in crew)
-          SizedBox(
-            width: 150,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  person.name,
-                  style: theme.textTheme.bodyMedium,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  person.subtitle,
-                  style: theme.textTheme.bodySmall,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => _PeopleWall(
+    people: crew,
+    onTap: onTap,
+    keyPrefix: 'tmdb-crew',
+    keyValue: 'tmdb-crew-wall',
+  );
 }
 
 // ---------------------------------------------------------------------------
