@@ -20,6 +20,9 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:webhtv_pc/core/android_sync.dart';
 import 'package:webhtv_pc/services/storage.dart';
 
+/// 合并矩阵用例内部的固定时间戳（只用于相互比较，不参与与 `now()` 的裁决）。
+const int kDefaultTime = 1791450000000;
+
 /// 造一条远端（安卓）历史 JSON。
 Map<String, Object?> remote({
   String siteKey = 'csp_Media',
@@ -144,7 +147,7 @@ void main() {
   group('同步写入的合并矩阵（design/02 §4.4）', () {
     test('本地无 → 插入；写入使用远端时间戳而不是 now()', () {
       final db = AppDatabase.inMemory();
-      final stats = sync(db, [remote(createTime: 1791450000000)]);
+      final stats = sync(db, [remote(createTime: kDefaultTime)]);
       expect(stats.applied, 1);
       expect(stats.total, 1);
       expect(stats.isConsistent, isTrue);
@@ -162,7 +165,7 @@ void main() {
 
     test('远端更新 → 覆盖；重复推送 → 幂等全部 skipped', () {
       final db = AppDatabase.inMemory();
-      sync(db, [remote(createTime: 1791450000000, position: 1000)]);
+      sync(db, [remote(createTime: kDefaultTime, position: 1000)]);
       final applied = sync(db, [
         remote(createTime: 1791460000000, position: 900000),
       ]);
@@ -244,8 +247,12 @@ void main() {
 
   group('删除标记（design/02 §4.5）', () {
     test('删单条后远端旧记录不复活；远端新记录可恢复', () {
+      // 时间戳必须**相对当前时刻**构造：删除标记写的是 `now()`，
+      // 用写死的绝对时间戳会让用例在某些时刻（绝对时间戳比 now 更晚时）假失败。
+      final now = DateTime.now().millisecondsSinceEpoch;
+      const day = 24 * 60 * 60 * 1000;
       final db = AppDatabase.inMemory();
-      sync(db, [remote(createTime: 1791450000000)]);
+      sync(db, [remote(createTime: now - day)]);
       final row = db.recentHistory().first;
       db.deleteHistory(row.id);
       expect(db.count('history'), 0);
@@ -253,14 +260,14 @@ void main() {
       expect(db.historyDeletionIndex(), hasLength(1));
 
       // 远端仍持有一条更旧的 → 不得复活。
-      final resurrect = sync(db, [remote(createTime: 1791440000000)]);
+      final resurrect = sync(db, [remote(createTime: now - 2 * day)]);
       expect(resurrect.applied, 0);
       expect(resurrect.skipped, 1);
       expect(db.count('history'), 0, reason: '被删除的记录不得复活');
 
       // 用户又在安卓上看了（时间戳更新）→ 应恢复。
       final revived = sync(db, [
-        remote(createTime: 1791460000000, position: 1500000),
+        remote(createTime: now + 60 * 1000, position: 1500000),
       ]);
       expect(revived.applied, 1);
       expect(db.count('history'), 1);
@@ -271,10 +278,12 @@ void main() {
     });
 
     test('清空历史同样留下标记，语义上等价于逐条删除', () {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      const day = 24 * 60 * 60 * 1000;
       final db = AppDatabase.inMemory();
       sync(db, [
-        remote(),
-        remote(episodeUrl: 'http://h/ep-2.m3u8'),
+        remote(createTime: now - day),
+        remote(createTime: now - day, episodeUrl: 'http://h/ep-2.m3u8'),
       ]);
       expect(db.count('history'), 2);
       db.clearHistory();
@@ -282,8 +291,8 @@ void main() {
       expect(db.historyDeletionCount, 2, reason: '清空后旧记录同样不得被同步复活');
 
       final resurrect = sync(db, [
-        remote(createTime: 1791000000000),
-        remote(createTime: 1791000000000, episodeUrl: 'http://h/ep-2.m3u8'),
+        remote(createTime: now - 2 * day),
+        remote(createTime: now - 2 * day, episodeUrl: 'http://h/ep-2.m3u8'),
       ]);
       expect(resurrect.applied, 0);
       expect(resurrect.skipped, 2);
@@ -316,14 +325,16 @@ void main() {
     });
 
     test('同步路径不产生任何 DELETE（P3：禁止清表式合并）', () {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      const day = 24 * 60 * 60 * 1000;
       final db = AppDatabase.inMemory();
       sync(db, [
-        remote(createTime: 1791460000000, position: 2000000),
-        remote(episodeUrl: 'http://h/ep-2.m3u8', createTime: 1791460000000),
+        remote(createTime: now + day, position: 2000000),
+        remote(episodeUrl: 'http://h/ep-2.m3u8', createTime: now + day),
       ]);
       // 推一批更旧的、以及两条无法解析的：都不应删除任何东西。
       final stats = sync(db, [
-        remote(createTime: 1791000000000, position: 1),
+        remote(createTime: now - day, position: 1),
         {'key': 'broken-1'},
         {'key': 'broken-2'},
       ]);

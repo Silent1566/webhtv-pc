@@ -104,6 +104,9 @@ class SyncServer {
   final String bindAddress;
   final String? lanIpOverride;
 
+  /// 绑定地址的展示文案（供 UI 在开启前告知用户监听范围）。
+  String get bindAddressHint => bindAddress;
+
   HttpServer? _server;
 
   /// 串行化请求处理（`design/02` §4.3）。

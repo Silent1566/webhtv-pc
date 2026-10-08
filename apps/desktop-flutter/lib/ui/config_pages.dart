@@ -4,9 +4,11 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/android_bridge.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_config.dart';
 import '../state/app_state.dart';
+import '../state/sync_state.dart';
 import 'app.dart';
 
 /// 配置导入页：URL / 本地文件 / JSON 文本三种入口。
@@ -585,6 +587,24 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
             '设置文件：${widget.state.tmdbSettingsPath}',
             style: theme.textTheme.bodySmall,
           ),
+          const Divider(height: 32),
+          Text('设备与同步', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          ListTile(
+            key: const ValueKey('settings-android-open'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.android_outlined),
+            title: const Text('打开安卓接入'),
+            subtitle: const Text(
+              '接入安卓的 T4 网关以间接使用它的全部站源，并双向共用播放历史',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => AndroidSettingsPage(state: widget.state),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -709,4 +729,317 @@ class _SavedConfigs extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 安卓设备接入与同步设置页（`docs/phase5/design/02` §5、设计文档 §28）。
+///
+/// 三条不可退让的 UI 约定（P3）：
+/// 1. 同步相关开关**全部默认关闭**，开启服务端前必须展示 [SyncState.serverBindHint]；
+/// 2. 导入站点**不切换**当前配置（`design/00` Q10），文案必须说清这一点；
+/// 3. 失败必须按类别展示（P5）：403/404/超时/空结果不得折叠成"0 个站点"或"成功"。
+class AndroidSettingsPage extends StatefulWidget {
+  const AndroidSettingsPage({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  State<AndroidSettingsPage> createState() => _AndroidSettingsPageState();
+}
+
+class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
+  final TextEditingController _address = TextEditingController();
+
+  SyncState get _sync => widget.state.syncState;
+
+  @override
+  void initState() {
+    super.initState();
+    _sync.addListener(_onSyncChanged);
+  }
+
+  void _onSyncChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _sync.removeListener(_onSyncChanged);
+    _address.dispose();
+    super.dispose();
+  }
+
+  Future<void> _probe() async {
+    final value = _address.text.trim();
+    if (value.isEmpty) {
+      _sync.clearMessages();
+      return;
+    }
+    await _sync.probe(value);
+  }
+
+  Future<void> _scan() => _sync.scan();
+
+  Future<void> _import(AndroidDevice device) =>
+      _sync.importSites(device.reachableBase);
+
+  Future<void> _push(SyncPeer peer) async {
+    final result = await _sync.pushHistoryTo(peer);
+    if (!mounted || result == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.describe())),
+    );
+  }
+
+  Future<void> _toggleServer(bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('开启局域网同步服务'),
+          content: Text(_sync.serverBindHint),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('开启'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    await _sync.setServerEnabled(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sync = _sync;
+    return Scaffold(
+      appBar: AppBar(title: const Text('安卓设备接入')),
+      body: ListView(
+        key: const ValueKey('android-bridge'),
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            '接入安卓的 T4 网关可以间接使用安卓上的全部站源（含 T3 爬虫、网盘、猫源），'
+            'PC 不复制这些爬虫，只做 HTTP 客户端。',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('android-device-input'),
+                  controller: _address,
+                  decoration: const InputDecoration(
+                    labelText: '手动输入地址',
+                    hintText: '例如 192.168.50.9:9978',
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _probe(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                key: const ValueKey('android-device-add'),
+                onPressed: sync.busy ? null : _probe,
+                icon: const Icon(Icons.cable_outlined),
+                label: const Text('接入设备'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                key: const ValueKey('android-scan'),
+                onPressed: sync.busy ? null : _scan,
+                icon: const Icon(Icons.wifi_find_outlined),
+                label: const Text('扫描局域网'),
+              ),
+            ],
+          ),
+          if (sync.scanTotal > 0) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: sync.scanDone / sync.scanTotal,
+            ),
+            const SizedBox(height: 4),
+            Text('已扫描 ${sync.scanDone}/${sync.scanTotal}'),
+          ],
+          if (sync.busy) ...[
+            const SizedBox(height: 8),
+            // 刻意不用 `LinearProgressIndicator`：不确定进度条是无限动画，
+            // 会让 widget 测试的 `pumpAndSettle` 永不收敛，也会让低配机器
+            // 持续重绘。文字提示已经足够。
+            const Row(
+              children: [
+                Icon(Icons.hourglass_top_outlined, size: 16),
+                SizedBox(width: 8),
+                Text('正在处理…'),
+              ],
+            ),
+          ],
+          if (sync.lastError != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              key: const ValueKey('android-error'),
+              color: theme.colorScheme.errorContainer,
+              child: ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: Text(sync.lastError!.userMessage),
+                subtitle: Text('类别：${sync.lastError!.kind.name}'),
+              ),
+            ),
+          ],
+          if (sync.notice != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              key: const ValueKey('android-notice'),
+              child: ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: Text(sync.notice!),
+              ),
+            ),
+          ],
+          const Divider(height: 32),
+          Text('安卓设备', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (sync.devices.isEmpty)
+            const Text('尚未接入设备：可手动输入地址，或扫描局域网。')
+          else
+            for (final device in sync.devices) _deviceCard(theme, device),
+          const Divider(height: 32),
+          Text('同步设置', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            key: const ValueKey('android-sync-server'),
+            title: const Text('接收安卓推送（本机服务端）'),
+            subtitle: Text(
+              sync.serverRunning
+                  ? '正在监听 ${sync.serverBaseUrl}（仅接受已授权对端）'
+                  : '默认关闭：开启后同局域网设备可访问本机',
+            ),
+            value: sync.serverEnabled,
+            onChanged: sync.busy ? null : _toggleServer,
+          ),
+          SwitchListTile(
+            key: const ValueKey('android-sync-push'),
+            title: const Text('向安卓推送'),
+            subtitle: const Text('默认关闭：把本机历史/收藏推送到已授权设备'),
+            value: sync.pushEnabled,
+            onChanged: sync.busy ? null : sync.setPushEnabled,
+          ),
+          SwitchListTile(
+            key: const ValueKey('android-sync-settings'),
+            title: const Text('同步设置项（含凭据）'),
+            subtitle: const Text('默认关闭：开启后会把 TMDB 等含凭据的设置推送到对端'),
+            value: sync.settingsSyncEnabled,
+            onChanged: sync.busy ? null : sync.setSettingsSyncEnabled,
+          ),
+          if (sync.lastStats != null) ...[
+            const SizedBox(height: 8),
+            SelectableText(
+              '最近一次同步：${sync.lastStats!.describe()}',
+              key: const ValueKey('sync-stats'),
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text('已授权对端', style: theme.textTheme.titleSmall),
+          if (sync.peers.isEmpty)
+            const Text('尚未授权任何对端：安卓推送历史前需先在此授权。')
+          else
+            for (final peer in sync.peers) _peerTile(theme, peer),
+          const SizedBox(height: 8),
+          SelectableText(
+            '本机设备标识：${sync.maskedDeviceUuid}（${sync.deviceName}）',
+            style: theme.textTheme.bodySmall,
+          ),
+          SelectableText(
+            '设置文件：${sync.settingsPath}',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _deviceCard(ThemeData theme, AndroidDevice device) {
+    final conversion = _sync.conversionFor(device.reachableBase);
+    return Card(
+      key: ValueKey('android-device-${device.uuid}'),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${device.name}（${device.typeLabel}）',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                ),
+                OutlinedButton.icon(
+                  key: const ValueKey('android-import'),
+                  onPressed: _sync.busy ? null : () => _import(device),
+                  icon: const Icon(Icons.cloud_download_outlined),
+                  label: const Text('导入站点'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              '可达地址 ${device.reachableBase} · '
+              '设备自报 ${device.reportedIp.isEmpty ? '(未提供)' : device.reportedIp} · '
+              '标识 ${device.maskedUuid}'
+              '${conversion == null ? '' : ' · 站点 ${conversion.siteCount}'}',
+              style: theme.textTheme.bodySmall,
+            ),
+            if (conversion != null && conversion.hostRewrites.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('站点地址已修正', style: theme.textTheme.labelLarge),
+              for (final rewrite in conversion.hostRewrites.take(5))
+                SelectableText(
+                  '${rewrite.from} → ${rewrite.to}',
+                  key: ValueKey('bridge-host-${rewrite.siteKey}'),
+                  style: theme.textTheme.bodySmall,
+                ),
+            ],
+            if (conversion != null && conversion.diagnostics.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              for (final line in conversion.diagnostics)
+                Text(line, style: theme.textTheme.bodySmall),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _peerTile(ThemeData theme, SyncPeer peer) => ListTile(
+    key: ValueKey('sync-peer-${peer.uuid}'),
+    leading: const Icon(Icons.devices_other_outlined),
+    title: Text(peer.name),
+    subtitle: Text('${peer.maskedUuid} · ${peer.address}'),
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FilledButton.tonal(
+          key: const ValueKey('android-sync-push-now'),
+          onPressed: _sync.busy ? null : () => _push(peer),
+          child: const Text('推送到设备'),
+        ),
+        IconButton(
+          key: ValueKey('sync-peer-revoke-${peer.uuid}'),
+          tooltip: '移除授权',
+          onPressed: () => _sync.revokePeer(peer.uuid),
+          icon: const Icon(Icons.link_off_outlined),
+        ),
+      ],
+    ),
+  );
 }

@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:sqlite3/sqlite3.dart' show Row;
 
+import '../core/android_sync.dart';
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
 import '../core/cat_source.dart';
@@ -29,6 +31,7 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
+import '../services/android_bridge_service.dart';
 import '../services/cat_bundle.dart';
 import '../services/cat_runtime.dart';
 import '../services/epg_service.dart';
@@ -40,6 +43,8 @@ import '../services/spider_process.dart';
 import '../services/spider_registry.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
+import '../services/sync_client.dart';
+import '../services/sync_server.dart';
 import '../services/tmdb_config_store.dart';
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_history.dart';
@@ -48,6 +53,7 @@ import '../services/tmdb_season_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/tmdb_stores.dart';
 import 'search_state.dart';
+import 'sync_state.dart';
 import 'tmdb_state.dart';
 
 const String appVersion = '0.1.0';
@@ -113,7 +119,7 @@ class SiteListItem {
 }
 
 /// 应用状态。
-class AppState extends ChangeNotifier {
+class AppState extends ChangeNotifier implements SyncStateHost {
   AppState({
     AppPaths? paths,
     LogService? log,
@@ -122,10 +128,16 @@ class AppState extends ChangeNotifier {
     String? jvmSidecarHostPath,
     LiveService? liveService,
     EpgService? epgService,
+    AndroidBridgeService? androidBridgeService,
+    SyncClient? syncClient,
+    SyncServer Function(SyncServerHost host)? syncServerFactory,
   }) : paths = paths ?? AppPaths.resolve(),
        log = log ?? LogService(),
        _injectedLiveService = liveService,
-       _injectedEpgService = epgService {
+       _injectedEpgService = epgService,
+       _injectedBridgeService = androidBridgeService,
+       _injectedSyncClient = syncClient,
+       _injectedSyncServerFactory = syncServerFactory {
     final cacheDir = this.paths.cacheDir;
     _supervisor = SpiderHostSupervisor(
       workRoot: p.join(cacheDir, 'sidecars'),
@@ -139,6 +151,15 @@ class AppState extends ChangeNotifier {
     // 与 manifest 注册表同根，但独立子目录：两种站源形态的入口解析规则不同。
     _cspBinding = CspJvmBinding(root: p.join(this.paths.configDir, 'spiders', 'csp'));
     _proxy = LocalProxyServer(log: this.log);
+    // 安卓接入与同步（Phase 5）：只装配，不自动启动服务端（P3 默认关闭）。
+    syncState = SyncState(
+      log: this.log,
+      host: this,
+      settingsPath: this.paths.settingsPath,
+      bridgeService: _injectedBridgeService,
+      client: _injectedSyncClient,
+      serverFactory: _injectedSyncServerFactory,
+    );
     _catBundle = CatBundle(rootDir: p.join(this.paths.dataDir, 'catbundle'));
     // TMDB 服务：配置引用是函数（设置页保存后无需重建服务）。
     _tmdbService = TmdbService(config: () => _tmdbConfigStore.config);
@@ -191,6 +212,15 @@ class AppState extends ChangeNotifier {
   /// 测试注入的 EPG 服务（同上：widget 测试不可做真实 socket I/O）。
   final EpgService? _injectedEpgService;
 
+  /// 测试注入的安卓桥接服务（widget 测试不可做真实 socket I/O）。
+  final AndroidBridgeService? _injectedBridgeService;
+
+  /// 测试注入的同步客户端（同上）。
+  final SyncClient? _injectedSyncClient;
+
+  /// 测试注入的服务端工厂（widget 测试需固定到回环与测试端口区间）。
+  final SyncServer Function(SyncServerHost host)? _injectedSyncServerFactory;
+
   /// 直播源加载服务（§13.1）。懒加载：未打开直播页前不建立连接。
   LiveService? _liveService;
 
@@ -216,6 +246,12 @@ class AppState extends ChangeNotifier {
   ConfigRecord? _activeRecord;
   AppConfig? _config;
   SiteService? _siteService;
+
+  /// 安卓接入与同步状态（`docs/phase5/design/02`）。
+  ///
+  /// 默认全部关闭（P3）；设置落在 `<configDir>/settings.json` 的 `sync` 段
+  /// （与 TMDB 同一份文件，各自保留对方的值）。
+  late final SyncState syncState;
 
   StartupInfo? _startupInfo;
   LoadPhase _configPhase = LoadPhase.idle;
@@ -370,6 +406,9 @@ class AppState extends ChangeNotifier {
 
     LogService.logDirectoryOverride = paths.logDir;
     await log.open(paths.logDir);
+
+    // 安卓接入与同步设置（Phase 5）：读取失败不阻塞启动，退回默认（全关）。
+    await syncState.load();
 
     // TMDB 设置（`03` §5.3）：读取失败不阻塞启动，退回默认配置。
     _tmdbConfigStore = TmdbConfigStore(path: paths.settingsPath, log: log);
@@ -1596,6 +1635,158 @@ class AppState extends ChangeNotifier {
   /// 续播位置下限：小于 5 秒不恢复，避免“刚打开就跳”。
   static const Duration resumeThreshold = Duration(seconds: 5);
 
+  // -------------------------------------------------------------------------
+  // Phase 5 · 安卓同步的宿主能力（`SyncStateHost`，`design/02` §2）
+  // -------------------------------------------------------------------------
+  //
+  // 这五个成员是“状态层 ↔ 同步层”的唯一接口：同步层不直接改 `AppState`，
+  // 而 `app_state.dart` 不 import `sync_state.dart` 的具体实现细节以外的网络层。
+
+  @override
+  AppDatabase? get syncDatabase => _database;
+
+  @override
+  List<SyncHistoryItem> syncHistoryItems({int limit = 2000}) => [
+    for (final row in recentHistory(limit: limit))
+      SyncHistoryItem.fromLocal(
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        vodName: row.vodName,
+        vodPic: row.vodPic,
+        flag: row.flag,
+        episodeName: row.episodeName,
+        episodeId: row.episodeId,
+        positionMs: row.positionMs,
+        durationMs: row.durationMs,
+        updatedAt: row.updatedAt,
+      ),
+  ];
+
+  @override
+  List<SyncFavoriteItem> syncFavoriteItems({int limit = 2000}) => [
+    for (final row in favorites().take(limit))
+      SyncFavoriteItem(
+        kind: row.kind,
+        siteKey: row.siteKey,
+        targetId: row.targetId,
+        title: row.title,
+        subtitle: row.subtitle,
+        updatedAt: row.updatedAt,
+      ),
+  ];
+
+  /// 保存安卓桥接配置为**新记录**，且 `makeActive: false`
+  /// （`design/00` Q10：导入**不**覆盖/切换当前配置）。
+  @override
+  Future<int?> saveBridgeConfig({
+    required String name,
+    required String origin,
+    required AppConfig config,
+    required List<String> diagnostics,
+  }) async {
+    final database = _database;
+    if (database == null) return null;
+    try {
+      final id = database.saveConfig(
+        name: name,
+        origin: origin,
+        json: config.toJson(),
+        contentType: 'android-t4-gateway',
+        siteCount: config.sites.length,
+        liveCount: config.lives.length,
+        makeActive: false,
+      );
+      database.saveConfigSites(id, config.sites);
+      _configs = database.listConfigs();
+      _importDiagnosticsSummary = diagnostics.isEmpty
+          ? null
+          : diagnostics.join('；');
+      log.info(
+        '安卓桥接配置已存为记录 #$id（未切换当前配置）'
+        ' sites=${config.sites.length} origin=${redactUrl(origin)}',
+        scope: 'bridge',
+      );
+      notifyListeners();
+      return id;
+    } catch (error) {
+      log.error('保存安卓桥接配置失败：$error', scope: 'bridge');
+      return null;
+    }
+  }
+
+  /// 与安卓当前配置对齐的配置 JSON（`design/02` §3.5）。
+  ///
+  /// **保守策略**：只有当当前生效配置的 `origin` 就是某台**已授权**安卓设备的
+  /// 地址时（即用户是通过安卓 T4 网关导入的站点）才返回它；否则返回 `null`。
+  ///
+  /// 为什么保守：`config.url` 为空或不匹配时，安卓会
+  /// `if (config.getUrl() == null) return;` **静默忽略**整批记录却仍返回 200；
+  /// 而不匹配时还会 `VodConfig.load(config)` **切换安卓当前配置**。
+  /// 宁可不发并把原因告诉用户，也不能发一个可能改掉安卓配置的值
+  /// （对齐 P3 + P5）。
+  @override
+  String? syncConfigJson() {
+    final record = _activeRecord;
+    if (record == null) return null;
+    final origin = record.origin.trim();
+    if (!origin.startsWith('http://') && !origin.startsWith('https://')) {
+      return null;
+    }
+    final uri = Uri.tryParse(origin);
+    if (uri == null || uri.host.isEmpty) return null;
+    if (!syncState.isPeerAuthorized(uri.host)) return null;
+    return jsonEncode({
+      'id': record.id,
+      'type': 0,
+      'name': record.name,
+      'url': origin,
+    });
+  }
+
+  /// 应用对端推来的设置（白名单子集，`design/02` §3.6）。
+  ///
+  /// 只有 `tmdb_enabled` 与 `tmdb_config` 在 PC 白名单内，其余键在解析阶段
+  /// 已被 `SyncSettings` 丢弃。凭据类字段若对端未提供，**保留本机原值**
+  /// ——把能用的凭据清空比不同步更糟。
+  @override
+  Future<void> applySyncedSettings(SyncSettings settings) async {
+    if (settings.isEmpty) return;
+    var next = tmdbConfig;
+
+    final enabled = settings.values['tmdb_enabled'];
+    if (enabled != null) next = next.copyWith(enabled: asFlag(enabled));
+
+    final raw = settings.values['tmdb_config'];
+    if (raw != null) {
+      Object? decoded = raw;
+      if (raw is String) {
+        try {
+          decoded = jsonDecode(raw);
+        } on FormatException {
+          decoded = null;
+        }
+      }
+      if (decoded is Map) {
+        final incoming = TmdbConfig.fromMap(
+          decoded.map((key, value) => MapEntry('$key', value)),
+        );
+        next = incoming.copyWith(
+          apiKey: incoming.apiKey.isEmpty ? next.apiKey : incoming.apiKey,
+          accessToken: incoming.accessToken.isEmpty
+              ? next.accessToken
+              : incoming.accessToken,
+        );
+      }
+    }
+
+    await saveTmdbConfig(next);
+    log.info(
+      '已应用中端同步设置（TMDB）：keys=${settings.values.keys.join(',')} '
+      'sensitive=${settings.sensitiveIncluded}',
+      scope: 'sync',
+    );
+  }
+
   List<PlaybackHistory> recentHistory({int limit = 100}) {
     final database = _database;
     if (database == null) return const [];
@@ -1882,6 +2073,8 @@ class AppState extends ChangeNotifier {
     unawaited(_proxy.stop());
     // 猫源 Node 进程树与 bundle 句柄同样必须随退出释放（§9.8）。
     _catPipeline?.close();
+    // 同步服务端必须先停：退出后不得继续监听局域网端口（§28.4）。
+    syncState.dispose();
     _database?.dispose();
     log.dispose();
     super.dispose();
