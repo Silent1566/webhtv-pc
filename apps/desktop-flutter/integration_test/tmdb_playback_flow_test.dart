@@ -193,9 +193,21 @@ void main() {
         ),
       ),
     );
+    // 等待真实出画。
+    //
+    // 为什么必须用 `tester.runAsync`：`tester.pump` 只推进 Flutter 的假时钟，
+    // 不会让 libmpv 的真实解码线程前进。实测（2026-10-08 一键验收）在本机
+    // 负载高时，纯 `pump` 循环会出现「视频组件已渲染、position 恒为 0」的
+    // 假失败；同一用例在负载低时通过。这里改成「真实等待 + 事件循环」，
+    // 并在 `runAsync` 之外补 `pump` 以驱动渲染，兼顾稳定性与断言强度
+    // （仍然要求 position 真的前进，不是只看组件存在）。
     var firstFrame = false;
-    for (var attempt = 0; attempt < 80; attempt++) {
-      await tester.pump(const Duration(milliseconds: 250));
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      });
+      await tester.pump(const Duration(milliseconds: 50));
       if (find.byType(Video).evaluate().isEmpty) continue;
       final video = tester.widget<Video>(find.byType(Video).first);
       if (video.controller.player.state.position > Duration.zero) {
