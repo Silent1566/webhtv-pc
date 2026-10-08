@@ -116,6 +116,9 @@ packages/test-fixtures/android/
 
 ### 3.1 `test/phase5_android_bridge_test.dart`
 
+> 实测用例数 **29**（本表列 23 项验收要点；实现期按边界补全）。
+
+
 | # | 用例 | 断言 |
 | --- | --- | --- |
 | 1 | 网关地址规范化 | `192.168.1.5` → `http://192.168.1.5:9978` |
@@ -144,6 +147,9 @@ packages/test-fixtures/android/
 
 ### 3.2 `test/phase5_android_sync_test.dart`
 
+> 实测用例数 **43**（本表列 22 项验收要点；实现期按边界补全）。
+
+
 | # | 用例 | 断言 |
 | --- | --- | --- |
 | 1 | `key` 切分 | `a@@@b@@@7` → `siteKey=a, vodId=b, cid=7` |
@@ -171,6 +177,9 @@ packages/test-fixtures/android/
 
 ### 3.3 `test/phase5_sync_server_test.dart`
 
+> 实测用例数 **30**（本表列 17 项验收要点；实现期按边界补全）。
+
+
 | # | 用例 | 断言 |
 | --- | --- | --- |
 | 1 | `GET /device` | 200 + 完整 Device JSON + `type=1` |
@@ -196,6 +205,9 @@ packages/test-fixtures/android/
 | 17 | 并发两次相同推送 | 第二次全 `skipped`（幂等） |
 
 ### 3.4 `test/phase5_sync_client_test.dart`
+
+> 实测用例数 **18**（本表列 9 项验收要点；实现期按边界补全）。
+
 
 | # | 用例 | 断言 |
 | --- | --- | --- |
@@ -225,6 +237,10 @@ packages/test-fixtures/android/
 | 6 | `device.json` 含全部 8 个字段 | 契约完整 |
 | 7 | `history-android.json` 含哨兵值用例 | 覆盖 `Long.MIN_VALUE` |
 | 8 | fixture 服务 `/android/**` 路由可达 | 与 TMDB fixture 预检同机制 |
+
+
+> **实测**：下表 8 项在实现中落成 **12 个 `test_*` 方法**（含 `7b`/`7c`/`7d`
+> 三个补充断言与一个未知字段保留用例）。全仓契约测试共 21 个用例全绿。
 
 ### 4.2 `tools/phase5/check_android_fixture.py`
 
@@ -299,16 +315,16 @@ PC 当客户端（fixture 充当 Android 的 `/action` 接收端）：
 
 | 门禁 | 命令 | 通过判据 |
 | --- | --- | --- |
-| G1 安卓 fixture 预检 | `py -3 tools/phase5/check_android_fixture.py --base <url>` | 6 项全通过 |
-| G2 Python 契约 | `py -3 -m unittest tests.test_contracts` | 8 个新增用例通过 |
+| G1 安卓 fixture 预检 | `py -3 tools/phase5/check_android_fixture.py --base <url>` | 路由 8 项 + 故障注入 8 项全通过 |
+| G2 Python 契约 | `py -3 -m unittest tests.test_contracts` | 12 个新增安卓用例通过（全仓 21 个） |
 | G3 Schema 校验 | `py -3 scripts/validate_contracts.py` | 无错误 |
 | G4 静态检查 | `dart analyze` | 无问题 |
-| G5 单元测试 | `flutter test` | 全绿（含 4 个 `phase5_*` 套件） |
-| G6 套件存在性 | 脚本内清单核对 | 4 个套件文件均存在 |
+| G5 单元测试 | `flutter test` | 全绿（含 7 个 `phase5_*` 套件，共 1338 例） |
+| G6 套件存在性 | 脚本内清单核对 | 7 个套件文件均存在 |
 | G7 Windows 集成 | `flutter test integration_test/phase5_*_flow_test.dart -d windows` | 3 个套件全绿 |
 | G8 反向验证 | `py -3 tools/phase5/verify_reverse_checks.py` | 6 项全部"按预期失败"且还原后工作区干净 |
-| G9 脱敏 | `py -3 tools/phase4/verify_tmdb_redaction.py` + 桥接脱敏断言 | 无凭据/指纹原文 |
-| G10 发布包符号 | `py -3 tools/phase5/verify_release_symbols.py` | 桥接入口符号与中文串存在，无测试壳污染 |
+| G9 脱敏 | `py -3 tools/phase4/verify_tmdb_redaction.py` + `py -3 tools/phase5/verify_bridge_redaction.py` | 无凭据/指纹原文（三层：源码日志实参 / 脱敏用例在位 / 证据文件） |
+| G10 发布包符号 | `py -3 tools/phase5/verify_release_symbols.py` | 12 个 ASCII 符号 + 9 个中文串存在，无测试壳污染；产物早于源码时报 `stale` |
 | G11 产物可运行 | 既有 `debug-artifact-runnable` | Debug 入口是 `lib/main.dart` |
 
 一键验收：
