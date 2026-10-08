@@ -529,32 +529,6 @@ void main() {
       );
     });
 
-    test('displayName 优先 TMDB 展示名', () {
-      expect(
-        TmdbEpisodeRenderPolicy.displayName(ep('第1集', displayName: 'E1 真相')),
-        'E1 真相',
-      );
-      expect(TmdbEpisodeRenderPolicy.displayName(ep('第1集')), '第1集');
-    });
-
-    test('subtitle / stillUrl 来自 TMDB 元数据', () {
-      final episode = VodEpisode(
-        name: '第1集',
-        url: 'u',
-        extra: {
-          'tmdb_episode': const TmdbEpisode(
-            number: 1,
-            title: '真相',
-            date: '2024-03-01',
-            stillUrl: 'https://img/s1e1.jpg',
-          ),
-        },
-      );
-      expect(TmdbEpisodeRenderPolicy.subtitle(episode), '2024-03-01');
-      expect(TmdbEpisodeRenderPolicy.stillUrl(episode), 'https://img/s1e1.jpg');
-      expect(TmdbEpisodeRenderPolicy.subtitle(ep('第1集')), isNull);
-      expect(TmdbEpisodeRenderPolicy.stillUrl(ep('第1集')), isNull);
-    });
   });
 
   group('TmdbSeasonDialog（§5.2）', () {

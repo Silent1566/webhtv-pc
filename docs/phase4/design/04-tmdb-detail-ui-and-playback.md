@@ -117,7 +117,7 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 | --- | --- | --- | --- |
 | V1 | **动态背景**用剧集海报/剧照 | `TmdbBackdropSlideshow`：`backdrops` 优先、无则回退海报；5 秒一张、环形、单张不轮播；只在路由可见时计时 | `phase4_tmdb_detail_view_test.dart`（假时钟推进后换图）、`tmdb_detail_visual_flow_test.dart`（真实图片解码） |
 | V2 | 头部有**海报 / 导演 / 评分 / 时长 / 季集数 / 类型 / 地区** | `TmdbDetailData` + `_HeaderContent`；时长缺失时用已加载剧集的**众数时长**回退 | 同上 + `phase4_tmdb_detail_model_test.dart` |
-| V3 | **每集都有海报卡片**（剧照 + 集号 + 标题 + 日期） | `TmdbEpisodeStrip` + `TmdbEpisodeCards.build`：不补集、不丢集；无剧照时用本剧剧照池按序回退 | `tmdb_detail_flow_test.dart`（按钮数）、`phase4_tmdb_detail_view_test.dart` |
+| V3 | **每集都有海报卡片**（剧照 + 集号 + 标题 + 日期），且**卡片是唯一选集入口** | `TmdbEpisodeStrip` + `TmdbEpisodeCards.build`：不补集、不丢集；无剧照时用本剧剧照池按序回退；**不再渲染文字版集按钮**（2026-10-08 用户反馈：二者取其一） | `tmdb_detail_flow_test.dart`（卡片数 + 文字按钮为 0）、`phase4_tmdb_detail_view_test.dart` |
 | V4 | 剧照**可点击** | `_PhotoWall` → `TmdbPhotoViewerDialog`（定位到被点击那张、左右翻页、`←/→/Esc`） | `phase4_tmdb_detail_view_test.dart`、`tmdb_detail_visual_flow_test.dart` |
 | V5 | 演职人员**可点击** | `_PeopleWall` → `TmdbPersonPage`（简介 / 照片 / 作品；作品可继续进入详情） | 同上 |
 | V6 | 相关推荐**可点击** | `_RecommendationWall` → 该作品的 TMDB 详情页（可递归进入） | 同上 |
@@ -157,7 +157,7 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 ├───────────────────────────────────────────────────────────┤
 │ ④ 线路选择                                                  │
 ├───────────────────────────────────────────────────────────┤
-│ ⑤ 选集区（剧集**海报卡片**条 + 既有集按钮）                   │
+│ ⑤ 选集区（剧集**海报卡片**条，唯一选集入口）                   │
 ├───────────────────────────────────────────────────────────┤
 │ ⑥ 剧照墙（点击 → 大图查看器）                                 │
 ├───────────────────────────────────────────────────────────┤
@@ -257,6 +257,15 @@ episodesToRender =
   scope is MultiSeason    → 当前选中季对应段内的线路剧集
 ```
 
+**选集入口只有一套**（用户反馈 2026-10-08）：渲染剧集海报卡片时**不再**渲染
+下方的文字版集按钮。两套控件既是重复信息，也让用户在「点哪个」上犹豫；
+卡片的信息量严格更大（剧照 / 集号 / 标题 / 播出日期 / 时长 / 单集评分）。
+实现上由 `_buildLine` 只渲染 `TmdbEpisodeStrip` 保证——不存在「先渲染卡片再
+按条件隐藏按钮」的分支，避免将来改动又长回两套控件。
+
+卡片宽度按集数自适应（`_episodeCardWidth`）：≤8 集一屏 5 列、≤20 集 7 列、
+更多 9 列，夹在 `[150, 300]`，使长剧集不必频繁横向滚动。
+
 每张剧集卡片（`TmdbEpisodeCardTile`）：
 
 | 元素 | 来源 |
@@ -266,7 +275,7 @@ episodesToRender =
 | 剧照 | `stillUrl`；该集**无剧照**时按序回退到本剧剧照池（`detailData.photoUrls`） |
 | 集号徽标 | `S{季}E{集}`（季未知时 `E{集}`） |
 | 评分 | 单集 `vote_average`（> 0 时） |
-| 播放 | 既有 `resolvePlayback`（**不因 TMDB 改变**）；卡片与下方集按钮共用同一份 `episodes`，按下标对应 |
+| 播放 | 既有 `resolvePlayback`（**不因 TMDB 改变**）；卡片下标与过滤后的 `episodes` 一一对应，播放时再映射回线路原始下标 |
 
 **线路隔离**：卡片只在**当前线路**上套用 TMDB 元数据
 （`TmdbState.flagKeyForLine(line) == sourceLine?.flagKey`）。非当前线路的卡片

@@ -332,7 +332,10 @@ class TmdbDetailSections extends StatelessWidget {
 
 /// 一条线路的**剧集海报卡片**条（横向滚动）。
 ///
-/// 站点详情页在剧集按钮之上渲染它，使「每集都有对应的海报卡片」（用户反馈 1）。
+/// 这是详情页**唯一**的选集入口（用户反馈 2026-10-08）：有卡片时不再渲染
+/// 下方的文字版集按钮，二者取其一。理由：同一集出现两种控件既是重复信息，
+/// 也让用户在「点哪个」上犹豫；卡片信息量更大（剧照/集号/标题/日期/时长）。
+///
 /// 卡片数量恒等于线路剧集数（不补集、不丢集）。
 class TmdbEpisodeStrip extends StatelessWidget {
   const TmdbEpisodeStrip({
@@ -341,6 +344,8 @@ class TmdbEpisodeStrip extends StatelessWidget {
     this.keyPrefix = 'tmdb-episode-card',
     this.actionLabel = '播放',
     this.onTap,
+    this.cardWidth = 260,
+    this.height = 196,
   });
 
   final List<TmdbEpisodeCard> cards;
@@ -348,18 +353,25 @@ class TmdbEpisodeStrip extends StatelessWidget {
   final String actionLabel;
   final void Function(int index, TmdbEpisodeCard card)? onTap;
 
+  /// 单卡宽度。
+  ///
+  /// 站点详情页会按「一屏能放下几列」动态计算（`04` §4.4 的列数策略）：
+  /// 集数多的线路把卡做窄一些，使一行能看到更多集，减少横向滚动。
+  final double cardWidth;
+  final double height;
+
   @override
   Widget build(BuildContext context) {
     if (cards.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 196,
+      height: height,
       child: ListView.separated(
         key: ValueKey('$keyPrefix-strip'),
         scrollDirection: Axis.horizontal,
         itemCount: cards.length,
         separatorBuilder: (_, _) => const SizedBox(width: 10),
         itemBuilder: (context, index) => SizedBox(
-          width: 260,
+          width: cardWidth,
           child: TmdbEpisodeCardTile(
             buttonKey: ValueKey('$keyPrefix-$index'),
             stillKey: ValueKey('$keyPrefix-still-${cards[index].number}'),

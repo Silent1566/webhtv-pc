@@ -298,9 +298,13 @@ void main() {
     );
     await tester.pumpAndSettle(const Duration(seconds: 5));
 
-    final episodeButton = find.widgetWithText(OutlinedButton, episode.name).first;
-    expect(episodeButton, findsOneWidget);
-    await tester.tap(episodeButton);
+    // 选集入口是**剧集海报卡片**（用户反馈 2026-10-08：卡片与文字按钮二者取一）。
+    // 仍走真实点击路径，因此这条用例继续锁定「UI → 播放页续播位置」的串联。
+    final episodeCard = find.byKey(
+      ValueKey('tmdb-episode-card-${line.flag}-0'),
+    );
+    expect(episodeCard, findsOneWidget, reason: '未找到剧集卡片入口');
+    await tester.tap(episodeCard);
     await tester.pumpAndSettle(const Duration(seconds: 10));
 
     // 断言：进入的播放器确实带上了历史续播位置（不是从头开始）。

@@ -776,10 +776,12 @@ class _DetailPageState extends State<DetailPage> {
             ],
           ),
         ),
-        // 剧集海报卡片（用户反馈 1：每集要有对应的海报卡片）。
+        // 剧集海报卡片（用户反馈 2026-10-07：每集要有对应的海报卡片）。
         //
-        // 卡片与下方的集按钮一一对应（同一份 `episodes`），数量等于本线路
-        // 渲染的集数；未匹配 TMDB 时用来源剧照/海报兑底，保证「每集有画面」。
+        // 这是本线路**唯一**的选集入口：有卡片就不再渲染文字版集按钮
+        // （用户反馈 2026-10-08：二者取其一，不要重复两套控件）。
+        // 卡片数量恒等于本线路渲染的集数；未匹配 TMDB 时用来源剧照/海报兑底，
+        // 保证「每集都有画面」。
         TmdbEpisodeStrip(
           key: ValueKey('tmdb-episode-strip-${line.flag}'),
           cards: tmdb.episodeCardsForEpisodes(
@@ -789,6 +791,7 @@ class _DetailPageState extends State<DetailPage> {
           ),
           keyPrefix: 'tmdb-episode-card-${line.flag}',
           actionLabel: '播放',
+          cardWidth: _episodeCardWidth(context, episodes.length),
           onTap: (index, _) => _playEpisodeAt(
             vod,
             rawLine,
@@ -797,17 +800,24 @@ class _DetailPageState extends State<DetailPage> {
             index,
           ),
         ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (var index = 0; index < episodes.length; index++)
-              _episodeButton(context, vod, rawLine, episodes[index], index),
-          ],
-        ),
       ],
     );
+  }
+
+  /// 剧集卡片宽度（`04` §4.4 列数策略的卡片版）。
+  ///
+  /// 集数多的线路把卡做窄，使一行能看到更多集，减少横向滚动；集数少时保持
+  /// 大卡以突出剧照。窗口很窄时兜底到最小宽度，不得为负或过小。
+  static double _episodeCardWidth(BuildContext context, int episodeCount) {
+    final width = MediaQuery.sizeOf(context).width;
+    final targetColumns = switch (episodeCount) {
+      <= 8 => 5,
+      <= 20 => 7,
+      _ => 9,
+    };
+    final available = width - 32 - (targetColumns - 1) * 10;
+    final raw = available / targetColumns;
+    return raw.clamp(150.0, 300.0);
   }
 
   /// 按**渲染下标**播放（卡片与按钮共用，保证「点哪一集就播哪一集」）。
@@ -826,35 +836,6 @@ class _DetailPageState extends State<DetailPage> {
           identical(candidate, episode) || candidate.url == episode.url,
     );
     _play(vod, rawLine, rawIndex < 0 ? index : rawIndex);
-  }
-
-  Widget _episodeButton(
-    BuildContext context,
-    Vod vod,
-    VodPlayLine line,
-    VodEpisode episode,
-    int index,
-  ) {
-    // 播放必须用**线路原始下标**（TMDB 只丰富展示，不改变播放事实源）。
-    final rawIndex = line.episodes.indexWhere(
-      (candidate) => identical(candidate, episode) || candidate.url == episode.url,
-    );
-    final subtitle = TmdbEpisodeRenderPolicy.subtitle(episode);
-    return OutlinedButton(
-      key: ValueKey('episode-${line.flag}-$index'),
-      onPressed: () => _play(vod, line, rawIndex < 0 ? index : rawIndex),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            TmdbEpisodeRenderPolicy.displayName(episode),
-            overflow: TextOverflow.ellipsis,
-          ),
-          if (subtitle != null)
-            Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-        ],
-      ),
-    );
   }
 
   /// 剧集所在季度。

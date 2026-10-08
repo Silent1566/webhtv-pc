@@ -332,30 +332,6 @@ abstract final class TmdbEpisodeRenderPolicy {
     return result;
   }
 
-  /// 剧集卡片主标题：优先 TMDB 展示名，否则来源集名（`04` §4.2）。
-  static String displayName(VodEpisode episode) {
-    final display = episode.extra['display_name'];
-    if (display is String && display.trim().isNotEmpty) return display;
-    return episode.name;
-  }
-
-  /// 剧集卡片副标题：TMDB 播出日期（有元数据时）。
-  static String? subtitle(VodEpisode episode) {
-    final metadata = episode.extra['tmdb_episode'];
-    if (metadata is TmdbEpisode) {
-      final date = metadata.date.trim();
-      if (date.isNotEmpty) return date;
-    }
-    return null;
-  }
-
-  /// 剧集缩略图：TMDB 剧照（有元数据时）。
-  static String? stillUrl(VodEpisode episode) {
-    final metadata = episode.extra['tmdb_episode'];
-    if (metadata is TmdbEpisode) return metadata.stillUrl;
-    return null;
-  }
-
   /// 强制断言辅助：渲染数量必须等于该季线路剧集数（不得补集）。
   static bool matchesSeasonEpisodeCount({
     required List<VodEpisode> rendered,

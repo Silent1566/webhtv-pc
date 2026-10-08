@@ -46,6 +46,44 @@ Future<void> drainRealIo(
   }
 }
 
+/// 横向滚动到底，收集某条线路**全部**剧集卡片的集号。
+///
+/// 为什么不能直接数当前渲染的卡片：卡片条是懒加载的横向 `ListView`，只构建
+/// 视口内的项（实测 8 集线路只建出 6 张）。直接数会得到「少渲染」的假失败。
+/// 这里逐屏滚动并累计集号，既覆盖全部卡片，又顺带证明「卡片能滚到最后一集」。
+Future<Set<int>> collectEpisodeCardNumbers(
+  WidgetTester tester,
+  String flagKey,
+) async {
+  final numbers = <int>{};
+  final strip = find.byKey(ValueKey('tmdb-episode-card-$flagKey-strip'));
+  expect(strip, findsOneWidget, reason: '未找到线路 $flagKey 的剧集卡片条');
+  final scrollable = find.descendant(
+    of: strip,
+    matching: find.byType(Scrollable),
+  );
+  for (var pass = 0; pass < 12; pass++) {
+    for (final element in find.byWidgetPredicate(
+      (widget) =>
+          widget is OutlinedButton &&
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith(
+            'tmdb-episode-card-$flagKey-',
+          ),
+    ).evaluate()) {
+      final key = ((element.widget as OutlinedButton).key! as ValueKey<String>)
+          .value;
+      final suffix = key.substring('tmdb-episode-card-$flagKey-'.length);
+      final index = int.tryParse(suffix);
+      if (index != null) numbers.add(index);
+    }
+    if (scrollable.evaluate().isEmpty) break;
+    await tester.drag(scrollable.first, const Offset(-400, 0));
+    await tester.pump();
+  }
+  return numbers;
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -245,20 +283,35 @@ void main() {
       'line2-source=8 rendered=8 tmdb-s2=10 extra-episodes=0',
     );
 
-    // 8) 渲染层断言：详情页上的集按钮数量等于线路二集数（不补集）。
+    // 8) 渲染层断言：详情页上的剧集卡片数量等于线路二集数（不补集）。
+    //
+    // 选集入口自 2026-10-08 起只有剧集卡片（用户反馈：卡片与文字按钮二者取一），
+    // 因此这里改为数卡片；卡片本身就是 `OutlinedButton`，计数口径不变。
     await tester.pump();
-    final buttons = find.byWidgetPredicate(
+    final cardIndexes = await collectEpisodeCardNumbers(tester, '线路二');
+    expect(
+      cardIndexes.length,
+      8,
+      reason: '线路二渲染了 ${cardIndexes.length} 张剧集卡片（应为 8）',
+    );
+    expect(
+      cardIndexes,
+      {0, 1, 2, 3, 4, 5, 6, 7},
+      reason: '卡片下标必须连续覆盖 0..7（不丢集）',
+    );
+    // 反向断言：不得同时存在文字版集按钮（否则就是「两套控件」回归）。
+    final textButtons = find.byWidgetPredicate(
       (widget) =>
           widget is OutlinedButton &&
           widget.key is ValueKey<String> &&
-          (widget.key! as ValueKey<String>).value.startsWith('episode-线路二-'),
+          (widget.key! as ValueKey<String>).value.startsWith('episode-'),
     );
     expect(
-      buttons.evaluate().length,
-      8,
-      reason: '线路二渲染了 ${buttons.evaluate().length} 个集按钮（应为 8）',
+      textButtons.evaluate(),
+      isEmpty,
+      reason: '有剧集卡片时不得再渲染文字版集按钮（二者取其一）',
     );
-    evidence('line2-buttons=8');
+    evidence('line2-cards=8 text-episode-buttons=0');
   });
 }
 
