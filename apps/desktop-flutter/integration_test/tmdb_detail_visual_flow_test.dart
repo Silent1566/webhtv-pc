@@ -149,6 +149,33 @@ Future<void> warmImages(WidgetTester tester, Iterable<String> urls) async {
   await tester.pump(const Duration(milliseconds: 120));
 }
 
+/// 等到动态背景停在**指定下标**再继续。
+///
+/// 为什么需要：背景每 5 秒轮播一次，而「走到截图那一步」的耗时随机器负载浮动，
+/// 因此直接截图会拍到不确定的那一张——证据文件每次运行都变，既不可复现，
+/// 也无法用「第 N 张是哪张图」做人工核对。这里等到 `tmdb-backdrop-<index>`
+/// 出现再拍，使证据**可复现**（轮播周期内必然等到）。
+///
+/// 只用公开的 widget key 判定，不给产品代码加测试专用开关。
+Future<void> waitForBackdropIndex(
+  WidgetTester tester,
+  int index, {
+  Duration timeout = const Duration(seconds: 15),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (find.byKey(ValueKey('tmdb-backdrop-$index')).evaluate().isNotEmpty) {
+      // 等淡入完成，避免拍到两张图叠加的中间态。
+      await tester.pump(const Duration(milliseconds: 700));
+      return;
+    }
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 /// 从当前目录向上找到仓库根（含 `docs/phase4` 的那一级）。
 Directory _repoRootOf(Directory start) {
   var current = start;
@@ -382,6 +409,8 @@ void main() {
     expect(networkImageCount(tester), greaterThan(0), reason: '页面必须有网络图片');
     evidence('header-poster-director-rating-runtime-seasons=present');
     // 截图 1：详情页顶部（动态背景 + 海报 + 导演 + 评分/时长/季集数）。
+    // 先等背景停在第 0 张，使证据可复现（见 waitForBackdropIndex 注释）。
+    await waitForBackdropIndex(tester, 0);
     await warmImages(tester, [
       if (data.posterUrl != null) data.posterUrl!,
       ...data.backdropUrls,
@@ -530,6 +559,7 @@ void main() {
     );
     evidence('recommendation-detail key=$firstKey');
     // 截图 4：推荐作品详情（证明相关推荐点击真的进入了作品详情）。
+    await waitForBackdropIndex(tester, 0);
     await warmImages(tester, [
       ...find
           .byType(Image)
