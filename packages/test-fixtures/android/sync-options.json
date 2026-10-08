@@ -1,0 +1,14 @@
+{
+  "config": true,
+  "spider": true,
+  "search": true,
+  "history": true,
+  "keep": true,
+  "follow": false,
+  "webHome": true,
+  "settings": false,
+  "loginState": true,
+  "remoteRelay": false,
+  "mpvConfig": false,
+  "paths": ""
+}

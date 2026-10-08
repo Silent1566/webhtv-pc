@@ -1896,6 +1896,9 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 
 目标：建立与 WebHTV 和其他设备的可选协同能力。
 
+> 完整设计指导见 `docs/phase5/design/00`–`design/03`，阶段计划见 `docs/phase5/README.md`，
+> 主设计文档摘要见 §28。
+
 功能：
 
 - 与 WebHTV 配置同步。
@@ -1905,6 +1908,17 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - WebHome/管理页复用。
 - 远程管理。
 - 多设备协同。
+
+本阶段落地范围（对齐上游 Android 已暴露的 T4 网关）：
+
+1. **安卓 T4 站点桥接**：导入 Android `/vod/api?ac=config` 暴露的全部站源
+   （实测 170 个 `type=4` 站点），PC 只做 HTTP 客户端，**不复制** Android 的爬虫实现。
+2. **历史双向同步**：PC 实现 `/device` 与 `/action?do=sync` 服务端以接收 Android 推送，
+   并可反向推送；**旧记录不覆盖新记录**。
+3. **设置同步（白名单子集）**：默认不含含凭据的设置项。
+
+不在本阶段范围：站点健康同步、WebHome/管理页复用、远程管理、
+删除墓碑传播（上游 `docs/playback-history-delete-sync-design.md` 仍为「待实现」）。
 
 验收：
 
@@ -1959,6 +1973,19 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | TMDB | 详情页元数据增强 | 4 |
 | TMDB | 相关推荐与相关视频 | 4 |
 | TMDB | 纯 TMDB 详情页 | 4 |
+| 桥接 | 安卓设备发现（`/device`） | 5 |
+| 桥接 | 安卓 T4 站点导入（`/vod/api?ac=config`） | 5 |
+| 桥接 | 桥接站点可播（`type=4` 播放入口） | 5 |
+| 桥接 | 站点地址主机一致性校验（P2） | 5 |
+| 桥接 | 导入不覆盖当前配置 | 5 |
+| 同步 | PC 侧服务端（`/device` + `/action?do=sync`） | 5 |
+| 同步 | 历史接收（Android → PC） | 5 |
+| 同步 | 历史推送（PC → Android） | 5 |
+| 同步 | 历史合并：旧不覆盖新、幂等、不复活 | 5 |
+| 同步 | 同步默认关闭 | 5 |
+| 同步 | 同步失败不破坏本地数据 | 5 |
+| 同步 | 对端 uuid 授权 | 5 |
+| 同步 | 设置同步白名单子集（默认不含凭据） | 5 |
 | 同步 | 配置/历史/收藏同步 | 5 |
 
 ### 22.2 质量验收
@@ -2036,6 +2063,18 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | 详情页形态 | 新建 TMDB 详情页，不改造成站点详情页 | §27.7 |
 | 相关视频入口 | 浏览器打开 + 复制链接，不做应用内播放 | §27.7 |
 | 未知季度处理 | 不默认第一季、不伪造季度标签 | §27.5 |
+| 安卓站源接入方式 | **桥接不复制**：Android 自己执行爬虫，PC 只做 HTTP 客户端 | §28.2 |
+| 桥接站点地址基准 | **以 PC 可达地址为基准**，并校验响应主机一致 | §28.2 |
+| 桥接配置导入语义 | 导入为**新配置记录**，不覆盖当前配置 | §28.2 |
+| 历史同步方向 | PC **自己实现服务端**接收推送（Android 无拉取接口） | §28.3 |
+| 历史合并裁决 | **旧不覆盖新**；相等则跳过（幂等）；禁止 `force` 清表 | §28.3 |
+| 历史删除 | 本地删除标记阻止旧数据复活；**不向 Android 传播** | §28.3 |
+| 同步默认状态 | **默认关闭**，需用户明确开启 | §28.4 |
+| 同步对端授权 | 按设备 `uuid` 白名单 | §28.4 |
+| 同步服务监听 | `0.0.0.0` 且端口 9978–9998 顺序探测；**不复用**回环专用本地代理 | §28.4 |
+| 设置同步范围 | `SyncOptions` 白名单子集，含凭据项**默认不同步** | §28.4 |
+| 设备发现 | 降级采用：本网段 + 9978–9998，并发 16，仅用户显式触发 | §28.2 |
+| 删除墓碑传播 | 本阶段不实现（上游仍「待实现」） | §28.3 |
 
 ---
 
@@ -2105,6 +2144,12 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 | 来源指纹（SourceFingerprint） | 线路剧集结构的稳定摘要，用于判断旧绑定是否失效 |
 | 分季变体（SplitSeasonVariant） | TMDB 中把一部剧拆成多个独立条目的形态，需惩罚以避免误匹配 |
 | 元数据源 vs 播放事实源 | TMDB 只丰富线路已有的播放项，不创建播放项 |
+| T4 / 网关 | Android 暴露的 `/vod/api` HTTP 站源网关；把 Android 当前加载的站源统一包装成 `type="4"` 站点 |
+| 桥接配置 | PC 侧由 T4 网关导入得到的配置记录，站点全部为 `type=4`，`api` 指向设备网关 |
+| 可达地址 | PC 能真正连上的设备服务地址（局域网 IP，或 `adb forward` 后的回环地址）；与 Android 自报的 `Device.ip` **可能不同** |
+| 推送 / 接收 | 同步方向：推送 = PC → Android（走 Android 的 `/action?do=sync&mode=1`）；接收 = Android → PC（走 PC 自己实现的服务端） |
+| 对端 | 用户显式添加并确认的一台 Android 设备（以 `uuid` 唯一标识） |
+| 快照（snapshot） | 一次同步传输的完整数据体（历史列表或备份 JSON），不是增量流 |
 
 ---
 
@@ -2290,3 +2335,165 @@ Room → SQLite 新表；`TmdbUIAdapter` 上帝类 → 分层服务与纯逻辑�
 **不抄**：`TmdbDetailActivity` 单体、AI 刮削与 AI 推荐、豆瓣评分富集、
 个人推荐画像、WebHome 内联/短剧/小说/漫画路由、应用内 YouTube 播放、
 Android 特有的多套详情页形态。
+
+---
+
+## 28. 安卓桥接（T4 站点接入 + 历史/设置同步）
+
+- 定位：把已经跑在 Android 上的 WebHTV 当作**局域网内的站源服务器与同步对端**，
+  用 T4 网关间接访问它加载的全部站源，并与它双向共用播放历史与相关设置。
+- 状态：设计指导已补齐（`docs/phase5/design/00`–`design/03`），**实施进行中**。
+- 完整设计指导：`docs/phase5/design/00-android-bridge-design-index.md`（索引）、
+  `01`（T4 站点桥接）、`02`（同步协议）、`03`（测试与验收）。
+- 阶段计划：`docs/phase5/README.md`。
+- 上游依据：Android `c388619629`
+  `feat(server): add local T3-to-T4 gateway with HTTP contract coverage`，
+  及其 `docs/C45-t4-api-gateway.md`。
+
+### 28.1 实测契约要点
+
+以下均在真实运行的 Android（`192.168.50.3:5559`，`versionName=5.6.0`）上实测：
+
+| 事实 | 含义 |
+| --- | --- |
+| 站点 `api` 由**请求的 `Host` 头**现算 | 拉配置必须用**可达地址**发请求 |
+| `ac=config` 返回 **170 个站点，`type` 全为字符串 `"4"`**，约 31 KB | PC 的 `asInt` 已能解析字符串 |
+| `ac=site` 与 `ac=config` 字节相同 | 两者等价 |
+| `/device` 无鉴权；`type` `0`=TV `1`=Mobile `2`=DLNA；相等性只比 `uuid` | 设备身份用 `uuid` |
+| 服务端口从 `9978` 顺序探测到 `9998` | 不能假设固定端口 |
+| `/action?do=sync` 的 `mode`：`0`=发送 `1`=接收 `2`=都做 | 方向语义从**被请求方**视角定义 |
+| `type=history` 缺 `config` → 500 NPE | PC 侧必须显式校验并返回 400 |
+| **Android 没有历史「拉取」接口** | PC 必须自己实现服务端 |
+| `POST /api/playback/progress` 默认 **403** | 不作为同步主路径 |
+| `History` 主键 = `siteKey@@@vodId@@@cid`；`position`/`duration`/`createTime` **均为毫秒** | **不存在秒/毫秒换算** |
+| `Backup.restore()` 默认 `clearAllTables()` | **禁止**直接调用 |
+| 设备自报地址在模拟器场景 PC 不可达 | 必须区分「可达地址」与「上报地址」 |
+
+### 28.2 五条不可退让的原则
+
+1. **桥接不复制**：Android 的站源由 Android 自己执行，PC 只做 HTTP 客户端；
+   不在 PC 侧加载 Android 的 DEX/猫源来实现同样的站点。
+2. **地址来自请求**：站点地址以 PC 可达地址为基准，且必须校验响应主机与请求主机一致；
+   被中间层改写为回环时必须修正并给出可见诊断，指向第三方主机时必须拒绝导入。
+3. **默认关闭、失败不破坏本地**：同步默认关闭；禁止 `force` 清表；
+   合并采用「旧不覆盖新、相等即跳过」。
+4. **不引入自引用**：拒绝把本机自己当作来源（对齐 Android 侧
+   `不能把本网关的配置作为本机源再次导入`）。
+5. **能力缺口必须披露**：403/404/超时/空结果必须分类呈现，不得折叠成「同步成功」或「0 个站点」。
+
+### 28.3 分层与模块边界
+
+| 层 | 文件 | 职责 |
+| --- | --- | --- |
+| 纯逻辑 | `lib/core/android_bridge.dart` | 设备 JSON 解析、网关地址规范化、T4 配置 → `AppConfig`、可达性校验、站点保真 |
+| 纯逻辑 | `lib/core/android_sync.dart` | `History`/`Backup`/`SyncOptions` 编解码、历史映射、新旧比较、合并裁决 |
+| 服务 | `lib/services/android_bridge_service.dart` | 探测、拉取、错误分类、脱敏日志 |
+| 服务 | `lib/services/sync_server.dart` | PC 侧 LAN 服务端（`/device`、`/action?do=sync`） |
+| 服务 | `lib/services/sync_client.dart` | 向 Android 推送历史/收藏/设置 |
+| 存储 | `lib/services/storage.dart` | 按项合并的历史写入、删除标记表（`schemaVersion` 2 → 3） |
+| UI | `lib/ui/config_pages.dart` | 设备卡片、扫描、导入、同步开关、错误分类展示 |
+
+关键模型：
+
+| 模型 | 所在层 | 要点 |
+| --- | --- | --- |
+| `AndroidDevice` | 纯逻辑 | `uuid`（唯一标识，相等性只比它）/ `name` / `reachableBase`（PC 视角可达地址）/ `reportedIp`（设备自报，仅展示）/ `type`（0=TV 1=Mobile 2=DLNA）/ `serial` / `wlan` / `eth` / `time` |
+| `PlaybackHistory` | 存储 | 已有模型；同步时新增按项合并写入路径，**不改主键** |
+| `SyncOptions` | 纯逻辑 | PC 只发/收白名单子集，其余显式写 `false` |
+
+> `reachableBase` 与 `reportedIp` **必须分开**：实测设备自报 `172.16.1.4:9978`，
+> 而模拟器场景下 PC 只能经 `adb forward` 得到 `127.0.0.1:<port>`（§28.1）。
+> 拿 `reportedIp` 当请求地址会直接不可达；拿请求地址当设备身份会因端口漂移而重复添加设备。
+
+### 28.4 同步协议
+
+PC 必须实现的端点（**路径必须与 Android 完全一致**，否则 Android 的发现与推送都失败）：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/device` | 让 Android 能发现 PC |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=history[&force=true]` | 接收历史（表单 `config` + `targets`） |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=keep` | 接收收藏（`targets` + `configs`） |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=backup` | 接收设置备份（`options` + `backup`） |
+
+字段映射要点：
+
+- `History.key` 切分为 `siteKey` / `vodId` / `cid`；反向映射写 `cid=0`，由 Android 侧重映射。
+- `position` / `duration` / `createTime` **毫秒直传，不做换算**。
+- `opening` / `ending` 的 `C.TIME_UNSET`（`Long.MIN_VALUE`）**必须过滤**，否则整数溢出。
+- PC 不理解的字段（`tmdbId`/`mediaType`/`sourceBindingKey`/`player` 等）**保留在 raw**，不丢弃。
+- `SyncOptions` 只发 PC 理解的子集，其余显式写 `false`。
+
+合并算法（P3 的核心）：
+
+```text
+本地无记录        → insert（applied）
+远端更新          → upsert（applied）
+时间戳相等        → skip（skipped，幂等）
+远端更旧          → skip（skipped，旧不覆盖新）
+远端旧于本地删除标记 → skip（不复活）
+```
+
+### 28.5 错误分类
+
+错误必须分类呈现，**不得**折叠成「导入失败」「同步成功」或「0 个站点」（P5）。
+
+桥接（`design/01` §6）：
+
+| 取值 | 触发 |
+| --- | --- |
+| `bridgeUnreachable` | 连接被拒 / 超时 / DNS 失败 |
+| `bridgeNotAndroid` | `/device` 返回 200 但不是合法设备 JSON |
+| `bridgeNoGateway` | `/device` 成功但 `/vod/api?ac=config` 返回 404（设备版本过旧） |
+| `bridgeEmptySites` | 配置合法但 `sites` 为空 |
+| `bridgeHostMismatch` | 站点主机既非请求主机也非回环 |
+| `bridgeSelfReference` | 目标是 PC 自己 |
+
+同步（`design/02` §6）：
+
+| 取值 | 触发 |
+| --- | --- |
+| `syncDisabled` | 功能未开启 |
+| `syncPeerUnauthorized` | `uuid` 不在白名单 |
+| `syncPeerUnreachable` | 推送时连不上 |
+| `syncPayloadInvalid` | JSON 非法 / 缺字段 |
+| `syncPayloadTooLarge` | 超 8 MiB |
+| `syncLocalWriteRejected` | Android 返回 403（本机 API 修改未开启） |
+| `syncPartialFailure` | 有记录失败，**必须报出 applied/skipped/failed 明细** |
+
+### 28.6 安全与隐私
+
+- 同步服务默认**关闭**；开启时监听 `0.0.0.0`，仅接受**已授权对端**（`uuid` 白名单）的推送。
+- **不复用** `LocalProxyServer`：后者硬性只允许回环且路径空间为 `/p/<token>/…`，
+  与 Android 的 `/device`、`/action` 路径契约不兼容。
+- 请求体上限 **8 MiB**；同步为低频串行操作，不做并发。
+- 设备指纹（`uuid`/`serial`/`wlan`）与历史片名**不写日志**；
+  含凭据的设置项（`tmdb_config` 等）**默认不同步**，日志中永不出现。
+
+### 28.7 验收
+
+门禁共 11 项（`docs/phase5/design/03` §6），一键验收：
+
+```powershell
+pwsh -File tools/phase5/run_windows_acceptance.ps1
+pwsh -File tools/phase5/run_windows_acceptance.ps1 -SkipIntegrationTests
+```
+
+结果写入 `docs/phase5/evidence/windows-acceptance.txt`。
+
+三项机器校验的反向验证（`tools/phase5/verify_reverse_checks.py`，共 6 项）必须存在并通过，
+其中两项是本阶段最容易悄悄写错的地方：
+
+- **毫秒换算**：在 `position` 映射里加 `/1000` 后，单位用例必须失败。
+- **删除复活**：移除删除标记检查后，不复活用例必须失败。
+
+### 28.8 与上游 `webhtv/默影视` 的取舍
+
+**采用**：`/vod/api` T4 网关、`/device` 身份端点、`/action?do=sync` 接收语义、
+`Backup` + `SyncOptions` 形态（受限子集）、端口 9978–9998 探测策略。
+
+**降级**：`ScanTask` 的全网段 × 21 端口 × 并发 64 → 本网段 × 21 端口 × 并发 16，
+且仅用户显式触发；手动地址始终可用且优先。
+
+**不采用**：`Backup.restore()` 的全量 `clearAllTables()`、`force=true` 清表作为默认行为、
+复制 Android 爬虫实现、`prefers` 全量同步、删除墓碑传播（上游仍「待实现」）。

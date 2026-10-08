@@ -1,0 +1,17 @@
+{
+  "spider": "",
+  "sites": [
+    {
+      "key": "csp_Media",
+      "name": "我的追剧",
+      "api": "http://127.0.0.1:9978/vod/api?key=csp_Media",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    }
+  ],
+  "doh": [],
+  "rules": [],
+  "lives": []
+}

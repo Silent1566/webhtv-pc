@@ -1,0 +1,28 @@
+{
+  "class": [
+    {
+      "type_id": "1",
+      "type_name": "电影"
+    },
+    {
+      "type_id": "2",
+      "type_name": "电视剧"
+    }
+  ],
+  "list": [
+    {
+      "vod_id": "demo-001",
+      "vod_name": "示例剧集",
+      "vod_pic": "http://__HOST__/media/poster-001.jpg",
+      "vod_remarks": "更新至 2 集",
+      "type_name": "电视剧"
+    },
+    {
+      "vod_id": "demo-002",
+      "vod_name": "示例电影【加长版】",
+      "vod_pic": "",
+      "vod_remarks": "HD",
+      "type_name": "电影"
+    }
+  ]
+}

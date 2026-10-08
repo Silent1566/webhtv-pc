@@ -1,0 +1,1557 @@
+{
+  "spider": "",
+  "wallpaper": "",
+  "warningText": "资源来自网络，仅供学习使用",
+  "sites": [
+    {
+      "key": "csp_PianDan",
+      "name": "片单导航[导]",
+      "api": "http://__HOST__/vod/api?key=csp_PianDan",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "csp_XiaoYa",
+      "name": "丫仙女[盘]",
+      "api": "http://__HOST__/vod/api?key=csp_XiaoYa",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_AList",
+      "name": "AList[盘]",
+      "api": "http://__HOST__/vod/api?key=csp_AList",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_Media",
+      "name": "我的追剧",
+      "api": "http://__HOST__/vod/api?key=csp_Media",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_BiliBili",
+      "name": "BiliBili[官]",
+      "api": "http://__HOST__/vod/api?key=csp_BiliBili",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_Emby",
+      "name": "Emby[4K]",
+      "api": "http://__HOST__/vod/api?key=csp_Emby",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_Live",
+      "name": "网络直播[官]",
+      "api": "http://__HOST__/vod/api?key=csp_Live",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_FishPanSou",
+      "name": "鱼佬盘搜[盘]",
+      "api": "http://__HOST__/vod/api?key=csp_FishPanSou",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "csp_FishPanSouGroup",
+      "name": "盘搜 • 分组[盘]",
+      "api": "http://__HOST__/vod/api?key=csp_FishPanSouGroup",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "8cdcaa4255534ca19aaa18948ea9c3524c1d",
+      "name": "片库[导]",
+      "api": "http://__HOST__/vod/api?key=8cdcaa4255534ca19aaa18948ea9c3524c1d",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4282ea1f62a24010845d2688490f41297c97",
+      "name": "新片预告",
+      "api": "http://__HOST__/vod/api?key=4282ea1f62a24010845d2688490f41297c97",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "3e8b4e64167c45f8b1f418f4ce6a3f31b8e8",
+      "name": "YouTube[官]",
+      "api": "http://__HOST__/vod/api?key=3e8b4e64167c45f8b1f418f4ce6a3f31b8e8",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "81be9f99a08a4df9bfcab958ab7a6c0109d0",
+      "name": "玩偶聚合[盘]",
+      "api": "http://__HOST__/vod/api?key=81be9f99a08a4df9bfcab958ab7a6c0109d0",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "02544b320a6d45de997bc0bd3975d0c060b8",
+      "name": "木偶[盘]",
+      "api": "http://__HOST__/vod/api?key=02544b320a6d45de997bc0bd3975d0c060b8",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "590101c873554b2283a66ae5a25cf4ff5fd1",
+      "name": "玩偶哥哥[盘]",
+      "api": "http://__HOST__/vod/api?key=590101c873554b2283a66ae5a25cf4ff5fd1",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "7b7695ec3332431595dc29b615810e39",
+      "name": "快映[盘]",
+      "api": "http://__HOST__/vod/api?key=7b7695ec3332431595dc29b615810e39",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "8cd93e226fe14d1ca6af8cf9ff9e66a10a1a",
+      "name": "蜗牛[盘]",
+      "api": "http://__HOST__/vod/api?key=8cd93e226fe14d1ca6af8cf9ff9e66a10a1a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "2c6a5679ff7741fabb09d828d2f3bb730996",
+      "name": "蜡笔[盘]",
+      "api": "http://__HOST__/vod/api?key=2c6a5679ff7741fabb09d828d2f3bb730996",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "782c1db3cd804e18ab218f3af46db267357a",
+      "name": "欧歌[盘]",
+      "api": "http://__HOST__/vod/api?key=782c1db3cd804e18ab218f3af46db267357a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "49be5d2a5930446782c18b8e43330ed706a9",
+      "name": "闪电[盘]",
+      "api": "http://__HOST__/vod/api?key=49be5d2a5930446782c18b8e43330ed706a9",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4b1f1aefbc184bdbb1056ed7ced60a9c",
+      "name": "花卷臻彩[盘]",
+      "api": "http://__HOST__/vod/api?key=4b1f1aefbc184bdbb1056ed7ced60a9c",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "b118a9b5de6c4fe0b02836bcb216784ada6f",
+      "name": "移动4K[盘]",
+      "api": "http://__HOST__/vod/api?key=b118a9b5de6c4fe0b02836bcb216784ada6f",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "6c5cf6e2ce2c4c2685576774bbfe94e21da6",
+      "name": "滴答影视[盘]",
+      "api": "http://__HOST__/vod/api?key=6c5cf6e2ce2c4c2685576774bbfe94e21da6",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "b9121041613241c6b0fec50cc59f85d12cfc",
+      "name": "不太灵[盘]",
+      "api": "http://__HOST__/vod/api?key=b9121041613241c6b0fec50cc59f85d12cfc",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "0a6aed7f6287495bb1990db6607ddd73ec9f",
+      "name": "双星[盘]",
+      "api": "http://__HOST__/vod/api?key=0a6aed7f6287495bb1990db6607ddd73ec9f",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "7aca69fd4e2046c4a34b383a6e93f215c99a",
+      "name": "盘聚[盘]",
+      "api": "http://__HOST__/vod/api?key=7aca69fd4e2046c4a34b383a6e93f215c99a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "30fc4e71f8924230aeb5f286876cf7ea225e",
+      "name": "Pomo[盘][磁]",
+      "api": "http://__HOST__/vod/api?key=30fc4e71f8924230aeb5f286876cf7ea225e",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cfa8752a1e3b41218227adbb311b93292ca6",
+      "name": "6V[磁]",
+      "api": "http://__HOST__/vod/api?key=cfa8752a1e3b41218227adbb311b93292ca6",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "c2d32e85ce0a4c43bba5eaa8765fa07a418b",
+      "name": "低端影视[盘][采]",
+      "api": "http://__HOST__/vod/api?key=c2d32e85ce0a4c43bba5eaa8765fa07a418b",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "f1f73ec405a54d42986089dc17a2c4aa2951",
+      "name": "Gimy剧迷[采]",
+      "api": "http://__HOST__/vod/api?key=f1f73ec405a54d42986089dc17a2c4aa2951",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "75acac086471437993adb4bfc1b198a933c5",
+      "name": "华数影视[采]",
+      "api": "http://__HOST__/vod/api?key=75acac086471437993adb4bfc1b198a933c5",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "47a068e9a2324b3398f5d4830760bcf7e250",
+      "name": "金牌[采]",
+      "api": "http://__HOST__/vod/api?key=47a068e9a2324b3398f5d4830760bcf7e250",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "c335ad0097944d47b030a08afc4b26515571",
+      "name": "凡客TV[采]",
+      "api": "http://__HOST__/vod/api?key=c335ad0097944d47b030a08afc4b26515571",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "c3aa5acd16624be0b69a0d1ed27830f6735a",
+      "name": "剧踪[采]",
+      "api": "http://__HOST__/vod/api?key=c3aa5acd16624be0b69a0d1ed27830f6735a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "7f586e6e0e824a52b47cf8407898f3e64e5d",
+      "name": "毒蛇[采]",
+      "api": "http://__HOST__/vod/api?key=7f586e6e0e824a52b47cf8407898f3e64e5d",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "95019f4810964ed2aba1a47e3c2c95c4babe",
+      "name": "王子4K[采]",
+      "api": "http://__HOST__/vod/api?key=95019f4810964ed2aba1a47e3c2c95c4babe",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "dfcc839ebe114b118e033b93a515f5648a00",
+      "name": "薯条[采]",
+      "api": "http://__HOST__/vod/api?key=dfcc839ebe114b118e033b93a515f5648a00",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "739e5e38ac774bcaaa573bb0c3547aa42681",
+      "name": "荐片[采][广]",
+      "api": "http://__HOST__/vod/api?key=739e5e38ac774bcaaa573bb0c3547aa42681",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "fb6e96459cdc401fa446f79ee74c4be2f2fb",
+      "name": "飞快TV[采][广]",
+      "api": "http://__HOST__/vod/api?key=fb6e96459cdc401fa446f79ee74c4be2f2fb",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "2e9e4c40aad443ceae8669cccc75d743c4c0",
+      "name": "小宝影院[采][广]",
+      "api": "http://__HOST__/vod/api?key=2e9e4c40aad443ceae8669cccc75d743c4c0",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "9e78d435b41847adb016634763bef39b7692",
+      "name": "悯善[采][广]",
+      "api": "http://__HOST__/vod/api?key=9e78d435b41847adb016634763bef39b7692",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "d5ec3ba8e6bc463bb1b5ec3c11b3c0169b69",
+      "name": "韩小圈[采][广]",
+      "api": "http://__HOST__/vod/api?key=d5ec3ba8e6bc463bb1b5ec3c11b3c0169b69",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "1ed49f52447d4db19840b6e9ced18227cdad",
+      "name": "如意[采][广]",
+      "api": "http://__HOST__/vod/api?key=1ed49f52447d4db19840b6e9ced18227cdad",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "3e1a65195fb34dbf8d3d4843280d6936a1d6",
+      "name": "瓜子[采][广]",
+      "api": "http://__HOST__/vod/api?key=3e1a65195fb34dbf8d3d4843280d6936a1d6",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "97f372e05dcc4a959d6c84cc092a90abae4e",
+      "name": "PPnix[采][广]",
+      "api": "http://__HOST__/vod/api?key=97f372e05dcc4a959d6c84cc092a90abae4e",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "9fd1dbed780446a88f5d445b7f0629c6253a",
+      "name": "热播[采][广]",
+      "api": "http://__HOST__/vod/api?key=9fd1dbed780446a88f5d445b7f0629c6253a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "531704f63b734792bb728cd84c56a75b960d",
+      "name": "橘子TV[采][广]",
+      "api": "http://__HOST__/vod/api?key=531704f63b734792bb728cd84c56a75b960d",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "df3d5d0b1e0249f292184f72d65e4a83df78",
+      "name": "猫猫[采][广]",
+      "api": "http://__HOST__/vod/api?key=df3d5d0b1e0249f292184f72d65e4a83df78",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "d6572ec2ade34d3b878f6afa31c11e664cf0",
+      "name": "布布影视[采][广]",
+      "api": "http://__HOST__/vod/api?key=d6572ec2ade34d3b878f6afa31c11e664cf0",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "d0a50f933a3b46ceaf152ef64f3d9771f260",
+      "name": "乌云影视[采][广]",
+      "api": "http://__HOST__/vod/api?key=d0a50f933a3b46ceaf152ef64f3d9771f260",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "8c4c10e0b13e49a9af2ca19dc08c0ebed94a",
+      "name": "潮流APP[采][广]",
+      "api": "http://__HOST__/vod/api?key=8c4c10e0b13e49a9af2ca19dc08c0ebed94a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cb7df1f4fc7c4c469472190907ae08c848bb",
+      "name": "袋鼠影视[采][广]",
+      "api": "http://__HOST__/vod/api?key=cb7df1f4fc7c4c469472190907ae08c848bb",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "94871e7499b24d76a8b1c46dfc4001cbcc81",
+      "name": "长泽[采][广]",
+      "api": "http://__HOST__/vod/api?key=94871e7499b24d76a8b1c46dfc4001cbcc81",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "6952d684d5cb41b18a805c49b2e55e088fc3",
+      "name": "路飞影视[采][广]",
+      "api": "http://__HOST__/vod/api?key=6952d684d5cb41b18a805c49b2e55e088fc3",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "42b94a0cb3e84c0ca90f727db0e8292aa1d5",
+      "name": "乐兔[采][广]",
+      "api": "http://__HOST__/vod/api?key=42b94a0cb3e84c0ca90f727db0e8292aa1d5",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "67f8f23ecb474431bcaeb2a542bdad5659b9",
+      "name": "麦田影院[采][广]",
+      "api": "http://__HOST__/vod/api?key=67f8f23ecb474431bcaeb2a542bdad5659b9",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "seedhub",
+      "name": "SeedHub[采][广]",
+      "api": "http://__HOST__/vod/api?key=seedhub",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "1804f3d8f7554631b83b22632a4120f3a640",
+      "name": "ZIP0[采][广]",
+      "api": "http://__HOST__/vod/api?key=1804f3d8f7554631b83b22632a4120f3a640",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "40aa92a3bc3b4ce3b186240157211669733c",
+      "name": "剧圈圈[采][广]",
+      "api": "http://__HOST__/vod/api?key=40aa92a3bc3b4ce3b186240157211669733c",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "c5d4e57eb53c4776ab9e30353de450bafcd2",
+      "name": "资源聚合[采][广]",
+      "api": "http://__HOST__/vod/api?key=c5d4e57eb53c4776ab9e30353de450bafcd2",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "aaff0ac7b1d64c468033af3d784c92bb236a",
+      "name": "新韩剧网[采][广]",
+      "api": "http://__HOST__/vod/api?key=aaff0ac7b1d64c468033af3d784c92bb236a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4ea2cceef3694c3ab7669b6965fcaa26c10c",
+      "name": "mifun[漫]",
+      "api": "http://__HOST__/vod/api?key=4ea2cceef3694c3ab7669b6965fcaa26c10c",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "3e8bad06edca467ca399fa45a2cd319373c9",
+      "name": "樱花动漫[漫][采][广]",
+      "api": "http://__HOST__/vod/api?key=3e8bad06edca467ca399fa45a2cd319373c9",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "1d22496fc030415d830c88cf220b09c5471e",
+      "name": "路漫漫[漫][采][广]",
+      "api": "http://__HOST__/vod/api?key=1d22496fc030415d830c88cf220b09c5471e",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "a564eaa16f58491488b4fab9e208c0c91f48",
+      "name": "红果短剧[短]",
+      "api": "http://__HOST__/vod/api?key=a564eaa16f58491488b4fab9e208c0c91f48",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "ff03a81ea2c940d4838e71fb21cf6651157d",
+      "name": "短剧优选[短]",
+      "api": "http://__HOST__/vod/api?key=ff03a81ea2c940d4838e71fb21cf6651157d",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "28b5eaecff3842f89b589a21332b47ad4567",
+      "name": "百度短剧[短]",
+      "api": "http://__HOST__/vod/api?key=28b5eaecff3842f89b589a21332b47ad4567",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "7a5bb02029754a3b9dcc23d82f321162",
+      "name": "七猫短剧[短]",
+      "api": "http://__HOST__/vod/api?key=7a5bb02029754a3b9dcc23d82f321162",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "7767c35c197d4230a21e83cd7179f5cace0f",
+      "name": "微观短剧[短]",
+      "api": "http://__HOST__/vod/api?key=7767c35c197d4230a21e83cd7179f5cace0f",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "ebb2c4b624754a3a94d281adebbea913b257",
+      "name": "喜福短剧[短]",
+      "api": "http://__HOST__/vod/api?key=ebb2c4b624754a3a94d281adebbea913b257",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "c432ac82d83e4445a8cac535ffe7487a",
+      "name": "短剧百科[短]",
+      "api": "http://__HOST__/vod/api?key=c432ac82d83e4445a8cac535ffe7487a",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "3fc244d4f9df44b792771561515f4ea50db8",
+      "name": "河马短剧[短]",
+      "api": "http://__HOST__/vod/api?key=3fc244d4f9df44b792771561515f4ea50db8",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "b9cdf9cce3a14adfab92bd4ff34adacf",
+      "name": "牛牛短剧[短]",
+      "api": "http://__HOST__/vod/api?key=b9cdf9cce3a14adfab92bd4ff34adacf",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "9ac0c059fe234467a334f2b6a2aadf62f48b",
+      "name": "牛牛短剧[短]",
+      "api": "http://__HOST__/vod/api?key=9ac0c059fe234467a334f2b6a2aadf62f48b",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "68d7d7f90b5542e89bf2f6a72b41e8a963d8",
+      "name": "星星短剧[短]",
+      "api": "http://__HOST__/vod/api?key=68d7d7f90b5542e89bf2f6a72b41e8a963d8",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "1b785db47f3a4132a61bc19b07ac2d52",
+      "name": "星芽短剧[短]",
+      "api": "http://__HOST__/vod/api?key=1b785db47f3a4132a61bc19b07ac2d52",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cc2b081b45fb4b60be161734fdeaf4743f79",
+      "name": "灯泡影视[短][盘][磁]",
+      "api": "http://__HOST__/vod/api?key=cc2b081b45fb4b60be161734fdeaf4743f79",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "ff7864bb3e1c4afe8129cdce3fe0739ad27e",
+      "name": "55短剧[短]",
+      "api": "http://__HOST__/vod/api?key=ff7864bb3e1c4afe8129cdce3fe0739ad27e",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "f886a4be72bd4c75ae8aecc53597a6726f38",
+      "name": "QQ音乐[音]",
+      "api": "http://__HOST__/vod/api?key=f886a4be72bd4c75ae8aecc53597a6726f38",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "bbb4ba561a3c421aa95e174c4217363bd5ce",
+      "name": "网易云[音]",
+      "api": "http://__HOST__/vod/api?key=bbb4ba561a3c421aa95e174c4217363bd5ce",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "d9d48d8c6e7a4370a7345c2b31ebd9cabdc0",
+      "name": "酷狗音乐[音]",
+      "api": "http://__HOST__/vod/api?key=d9d48d8c6e7a4370a7345c2b31ebd9cabdc0",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "1dfa5d55386a48d1a8f5a039cee0a37d98ce",
+      "name": "世纪音乐[音]",
+      "api": "http://__HOST__/vod/api?key=1dfa5d55386a48d1a8f5a039cee0a37d98ce",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "0b90bdbfa48947348411f7197e344d21d07e",
+      "name": "博看听书[听]",
+      "api": "http://__HOST__/vod/api?key=0b90bdbfa48947348411f7197e344d21d07e",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "70b55606d6f74f8493b7cc31ef50d11fc875",
+      "name": "酷我听书[听]",
+      "api": "http://__HOST__/vod/api?key=70b55606d6f74f8493b7cc31ef50d11fc875",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4550ce25226440359f351e214c7ad3266b0d",
+      "name": "飞卢听书[听]",
+      "api": "http://__HOST__/vod/api?key=4550ce25226440359f351e214c7ad3266b0d",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "be24c0bc92f3498888f2db1967feca6046bf",
+      "name": "听书[听]",
+      "api": "http://__HOST__/vod/api?key=be24c0bc92f3498888f2db1967feca6046bf",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "234dd74774e94762aecda074d99809a698bd",
+      "name": "275听书[听]",
+      "api": "http://__HOST__/vod/api?key=234dd74774e94762aecda074d99809a698bd",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "980b9847adf141378a264149b7dcfac637e2",
+      "name": "蜻蜓FM[听]",
+      "api": "http://__HOST__/vod/api?key=980b9847adf141378a264149b7dcfac637e2",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "push_agent",
+      "name": "AT推送",
+      "api": "http://__HOST__/vod/api?key=push_agent",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "douban_tmdb_follow_single",
+      "name": "豆瓣TMDB追更助手 v96",
+      "api": "http://__HOST__/vod/api?key=douban_tmdb_follow_single",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "d208576d5abf42d58a938f7b18cd5f50ac2f",
+      "name": "腾讯视频[官]",
+      "api": "http://__HOST__/vod/api?key=d208576d5abf42d58a938f7b18cd5f50ac2f",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "64888e3bc3cd46fdb4e4e7f5fa7527d1bc6c",
+      "name": "爱奇艺[官]",
+      "api": "http://__HOST__/vod/api?key=64888e3bc3cd46fdb4e4e7f5fa7527d1bc6c",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "Nostr",
+      "name": "Nostr推荐",
+      "api": "http://__HOST__/vod/api?key=Nostr",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "哔哩哔哩",
+      "name": "哔哩哔哩",
+      "api": "http://__HOST__/vod/api?key=%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "douban",
+      "name": "豆瓣电影",
+      "api": "http://__HOST__/vod/api?key=douban",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "zjyx_pansou",
+      "name": "📅 追剧优选[盘] ",
+      "api": "http://__HOST__/vod/api?key=zjyx_pansou",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "木偶",
+      "name": "木偶[盘]",
+      "api": "http://__HOST__/vod/api?key=%E6%9C%A8%E5%81%B6",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "玩偶",
+      "name": "玩偶[盘]",
+      "api": "http://__HOST__/vod/api?key=%E7%8E%A9%E5%81%B6",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "多多",
+      "name": "多多[盘]",
+      "api": "http://__HOST__/vod/api?key=%E5%A4%9A%E5%A4%9A",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "libo",
+      "name": "立播[盘]",
+      "api": "http://__HOST__/vod/api?key=libo",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "star2",
+      "name": "星剧社[盘]",
+      "api": "http://__HOST__/vod/api?key=star2",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "xiaoya",
+      "name": "小雅[盘]",
+      "api": "http://__HOST__/vod/api?key=xiaoya",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "pansou_grouping",
+      "name": "盘搜分组[盘]",
+      "api": "http://__HOST__/vod/api?key=pansou_grouping",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "rrdy_night",
+      "name": "人人电影[盘]",
+      "api": "http://__HOST__/vod/api?key=rrdy_night",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "bilibili_all",
+      "name": "哔哩大全[官]",
+      "api": "http://__HOST__/vod/api?key=bilibili_all",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "bilibili_edu",
+      "name": "哔哩教育[官]",
+      "api": "http://__HOST__/vod/api?key=bilibili_edu",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "movie360",
+      "name": "【影视】360影院",
+      "api": "http://__HOST__/vod/api?key=movie360",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "tengxun",
+      "name": "[官]腾讯视频",
+      "api": "http://__HOST__/vod/api?key=tengxun",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "mgtv",
+      "name": "[官]芒果",
+      "api": "http://__HOST__/vod/api?key=mgtv",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "iqiyi",
+      "name": "[官]爱奇艺",
+      "api": "http://__HOST__/vod/api?key=iqiyi",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "youku",
+      "name": "[官]优酷",
+      "api": "http://__HOST__/vod/api?key=youku",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "HuyaLive",
+      "name": "虎牙直播[官]",
+      "api": "http://__HOST__/vod/api?key=HuyaLive",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "DouyinLive",
+      "name": "抖音直播[官]",
+      "api": "http://__HOST__/vod/api?key=DouyinLive",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "douyu_live",
+      "name": "斗鱼直播[官]",
+      "api": "http://__HOST__/vod/api?key=douyu_live",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "youtube",
+      "name": "YouTube[官]",
+      "api": "http://__HOST__/vod/api?key=youtube",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "emby_opt",
+      "name": "Emby[优]",
+      "api": "http://__HOST__/vod/api?key=emby_opt",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "muxi_night",
+      "name": "木兮[采][优]",
+      "api": "http://__HOST__/vod/api?key=muxi_night",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "yongle",
+      "name": "永乐视频[采]",
+      "api": "http://__HOST__/vod/api?key=yongle",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "FengYe",
+      "name": "枫叶[采][优]",
+      "api": "http://__HOST__/vod/api?key=FengYe",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "wbbb_note",
+      "name": "歪比巴卜[采][优]",
+      "api": "http://__HOST__/vod/api?key=wbbb_note",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "huavod_night",
+      "name": "华视影院[采][优]",
+      "api": "http://__HOST__/vod/api?key=huavod_night",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "jianpian_app",
+      "name": "荐片[APP]",
+      "api": "http://__HOST__/vod/api?key=jianpian_app",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4kvm",
+      "name": "4KVM[采]",
+      "api": "http://__HOST__/vod/api?key=4kvm",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "JinPai",
+      "name": "金牌影视[采]",
+      "api": "http://__HOST__/vod/api?key=JinPai",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "dytt",
+      "name": "电影天堂[采]",
+      "api": "http://__HOST__/vod/api?key=dytt",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "zxzjhd",
+      "name": "在线之家[采][盘]",
+      "api": "http://__HOST__/vod/api?key=zxzjhd",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "ppnix_night",
+      "name": "PPnix[采]",
+      "api": "http://__HOST__/vod/api?key=ppnix_night",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "4KMP",
+      "name": "4KMP",
+      "api": "http://__HOST__/vod/api?key=4KMP",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "tvb_yunbao",
+      "name": "TVB云播[采]",
+      "api": "http://__HOST__/vod/api?key=tvb_yunbao",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "123tv",
+      "name": "123TV[采]",
+      "api": "http://__HOST__/vod/api?key=123tv",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "HanXiaoQuanNight",
+      "name": "韩小圈[采]",
+      "api": "http://__HOST__/vod/api?key=HanXiaoQuanNight",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cms_collect",
+      "name": "采集聚合",
+      "api": "http://__HOST__/vod/api?key=cms_collect",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "YingHuaDM",
+      "name": "樱花动漫[采]",
+      "api": "http://__HOST__/vod/api?key=YingHuaDM",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "FenghuangFM",
+      "name": "凤凰FM[听]",
+      "api": "http://__HOST__/vod/api?key=FenghuangFM",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "QingTingFM",
+      "name": "蜻蜓FM[听]",
+      "api": "http://__HOST__/vod/api?key=QingTingFM",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "KuWoTS",
+      "name": "酷我听书[听]",
+      "api": "http://__HOST__/vod/api?key=KuWoTS",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "duanju_youxuan",
+      "name": "短剧优选[短]",
+      "api": "http://__HOST__/vod/api?key=duanju_youxuan",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "duanju_pan",
+      "name": "短剧网[短][盘]",
+      "api": "http://__HOST__/vod/api?key=duanju_pan",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "beilehu",
+      "name": "贝乐虎[官]",
+      "api": "http://__HOST__/vod/api?key=beilehu",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "hema",
+      "name": "河马短剧[短]",
+      "api": "http://__HOST__/vod/api?key=hema",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "xiqu_daquan_night",
+      "name": "戏曲大全[采]",
+      "api": "http://__HOST__/vod/api?key=xiqu_daquan_night",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "tx_music_t4",
+      "name": "QQ音乐[音]",
+      "api": "http://__HOST__/vod/api?key=tx_music_t4",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "rebang",
+      "name": "热播[采]",
+      "api": "http://__HOST__/vod/api?key=rebang",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "mg_music_t4",
+      "name": "咪咕音乐[音]",
+      "api": "http://__HOST__/vod/api?key=mg_music_t4",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "kw_music_t4",
+      "name": "酷我音乐[音]",
+      "api": "http://__HOST__/vod/api?key=kw_music_t4",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "kg_music_t4",
+      "name": "酷狗音乐[音]",
+      "api": "http://__HOST__/vod/api?key=kg_music_t4",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "wy_music_t4",
+      "name": "网易云音乐[音]",
+      "api": "http://__HOST__/vod/api?key=wy_music_t4",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "rebozj",
+      "name": "热播之家[采]",
+      "api": "http://__HOST__/vod/api?key=rebozj",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "anime_rank",
+      "name": "[导]动漫榜单",
+      "api": "http://__HOST__/vod/api?key=anime_rank",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "tmdb_rank",
+      "name": "[导]观影榜单",
+      "api": "http://__HOST__/vod/api?key=tmdb_rank",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "hanju",
+      "name": "[导]韩剧推荐",
+      "api": "http://__HOST__/vod/api?key=hanju",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "maoyan_dashboard",
+      "name": "[导]猫眼榜单",
+      "api": "http://__HOST__/vod/api?key=maoyan_dashboard",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "qqzg",
+      "name": "[导]全球追更",
+      "api": "http://__HOST__/vod/api?key=qqzg",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "manjuhongguo",
+      "name": "[短]红果短剧",
+      "api": "http://__HOST__/vod/api?key=manjuhongguo",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "manjuhuolong",
+      "name": "[短]火龙漫剧",
+      "api": "http://__HOST__/vod/api?key=manjuhuolong",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "manjuqimao",
+      "name": "[短]七猫短剧",
+      "api": "http://__HOST__/vod/api?key=manjuqimao",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "manjuxifan",
+      "name": "[短]喜番短剧",
+      "api": "http://__HOST__/vod/api?key=manjuxifan",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "bilibili",
+      "name": "[官]哔哩影视",
+      "api": "http://__HOST__/vod/api?key=bilibili",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "pan123_zhencangge",
+      "name": "[盘]123臻藏",
+      "api": "http://__HOST__/vod/api?key=pan123_zhencangge",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "pan_4kzn",
+      "name": "[盘]4K指南",
+      "api": "http://__HOST__/vod/api?key=pan_4kzn",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "guangya_zhiyingshe",
+      "name": "[盘]光鸭臻影",
+      "api": "http://__HOST__/vod/api?key=guangya_zhiyingshe",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "yingtan4k",
+      "name": "[优]影探4K",
+      "api": "http://__HOST__/vod/api?key=yingtan4k",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 1
+    },
+    {
+      "key": "1234SP",
+      "name": "1234影视",
+      "api": "http://__HOST__/vod/api?key=1234SP",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "ChangZhangZY",
+      "name": "厂长资源",
+      "api": "http://__HOST__/vod/api?key=ChangZhangZY",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "GuLuGuLu",
+      "name": "咕噜咕噜4K",
+      "api": "http://__HOST__/vod/api?key=GuLuGuLu",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "JuXiaFan",
+      "name": "剧下饭影视",
+      "api": "http://__HOST__/vod/api?key=JuXiaFan",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "MaHuaSP",
+      "name": "麻花视频",
+      "api": "http://__HOST__/vod/api?key=MaHuaSP",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "QiWei",
+      "name": "七味",
+      "api": "http://__HOST__/vod/api?key=QiWei",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "hanju7",
+      "name": "新韩剧网[优]",
+      "api": "http://__HOST__/vod/api?key=hanju7",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "leo弹幕",
+      "name": "LEO|弹幕[配]",
+      "api": "http://__HOST__/vod/api?key=leo%E5%BC%B9%E5%B9%95",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    }
+  ],
+  "doh": [
+    {
+      "name": "系统",
+      "url": ""
+    },
+    {
+      "name": "腾讯",
+      "url": "https://doh.pub/dns-query"
+    },
+    {
+      "name": "阿里",
+      "url": "https://dns.alidns.com/dns-query"
+    },
+    {
+      "name": "360",
+      "url": "https://doh.360.cn/dns-query"
+    }
+  ],
+  "rules": [],
+  "lives": []
+}
