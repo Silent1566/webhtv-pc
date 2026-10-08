@@ -300,6 +300,36 @@ L2 用它断言"未配置 / 站点禁用时零请求"（`01` §12 第 9 项）�
 | 11 | 失败隔离 | `tmdb*` 错误只影响 TMDB 区块；文案含"不影响站源浏览与播放" |
 | 12 | 设置页 | Key 掩码与显示切换；测试连接；重置默认规则二次确认 |
 
+### 4.5 `test/phase4_tmdb_detail_model_test.dart`（纯逻辑）
+
+| # | 用例组 | 关键断言 |
+| --- | --- | --- |
+| 1 | 头部字段 | 海报/原名/标语/评分/年份/时长/季集数/类型/地区逐项断言 |
+| 2 | 导演来源 | `credits.crew` 的 `Director` 优先；无 crew 时回退 `created_by` |
+| 3 | 剧照语义 | `photoUrls` 取 `images.stills`；无剧照时回退背景图；`stillUrls` 不回退 |
+| 4 | 背景图 | `images.backdrops` 优先、按面积降序、再回退根级；无背景图时回退海报 |
+| 5 | 轮播策略 | 单张不轮播；环形推进；下标夹取；节奏 5 秒 |
+| 6 | 剧集卡片 | 按集号对齐；不补集（TMDB 10 集 / 线路 8 集 → 8 张）；不丢集（无元数据仍出卡片）；集号不可靠按位对齐 |
+| 7 | 剧照回退 | 该集无剧照时按序取回退池 |
+| 8 | 查看器 | 定位到被点击那张；首尾环绕；单张不可翻页；空列表安全 |
+| 9 | 人物作品 | `combined_credits` cast/crew 解析 + 按身份去重 + 非法条目过滤 |
+
+### 4.6 `test/phase4_tmdb_detail_view_test.dart`（widget，视觉回归）
+
+| # | 用例组 | 关键断言 |
+| --- | --- | --- |
+| 1 | 动态背景 | 渲染第一张；假时钟推进 5 秒后换第二张；再推进环形回第一张；单张不轮播；无背景图回退海报 |
+| 2 | 头部 | 海报 `Image.network` URL 正确；标题/导演/评分/年份/时长/季集数/类型均出现 |
+| 3 | 剧集卡片 | 每张卡片的剧照 URL 正确；集号徽标 `S1E1`；标题与日期；点击回调携带渲染下标 |
+| 4 | 单集弹窗 | 剧照/标题/简介渲染；动作按钮触发回调 |
+| 5 | 剧照墙 | 点第 N 张 → 查看器定位第 N 张；翻页环绕；关闭 |
+| 6 | 演职人员 | 点击回调携带该人物 |
+| 7 | 相关推荐 | 点击回调携带该作品 |
+| 8 | 纯 TMDB 约束 | 动作文案为「搜索站源」，无「播放」 |
+| 9 | 键盘 | 查看器 `←/→` 翻页、`Esc` 关闭 |
+| 10 | 布局 | 900 px 宽不溢出；1600×2600 整页渲染关键区块齐全且无溢出 |
+| 11 | 失败隔离 | 空数据时四个区块整块不渲染 |
+
 ---
 
 ## 5. L3 集成测试
@@ -366,6 +396,27 @@ L2 用它断言"未配置 / 站点禁用时零请求"（`01` §12 第 9 项）�
   5. 断言搜索结果中出现 fixture 站点条目
 ```
 
+### 5.6 `integration_test/tmdb_detail_visual_flow_test.dart`
+
+```text
+前置：fixture 服务（含 /tmdb 与 /tmdb-img 路由）+ 指向 fixture 站点的配置
+步骤：
+  1. 进入站点详情页，等待 TMDB 匹配 + 详情 + 剧集元数据
+  2. 断言动态背景有多张图，且全部来自 TMDB 图片主机
+  3. **真实解码**两张背景图（NetworkImage → 完成回调）证明图片真能加载
+  4. 断言当前线路的剧集卡片带 TMDB 剧照（key 含线路标识），并真实解码一张剧照
+  5. 断言头部有海报 / 导演 / 评分 / 时长 / 季集数
+  6. 点剧照第 2 张 → 查看器打开且定位到第 2 张 → Esc 关闭
+  7. 点演职人员 → 人物页（简介 / 作品列表）
+  8. 点相关推荐 → 进入该作品的 TMDB 详情页（同样有动态背景）
+  9. 断言相关视频区块存在
+  10. 每步落盘真实光栅化截图（docs/phase4/evidence/tmdb-*.png）
+```
+
+为什么必须真实解码图片：`PosterImage` 加载失败时显示占位图标，只断言
+widget 存在无法区分「图片真的加载了」与「全是占位」——而那正是用户反馈的
+「没有海报」。截图落盘进一步让「用户看到的样子」可直接人工复核。
+
 ---
 
 ## 6. 门禁（Phase 4 完成判据）
@@ -390,6 +441,9 @@ L2 用它断言"未配置 / 站点禁用时零请求"（`01` §12 第 9 项）�
 | 存储与迁移 | 建表/幂等/往返/上限/清理 | `phase4_tmdb_storage_test.dart` | 旧库打开后新表存在且旧数据不变 |
 | 契约 | Schema 校验 + fixture 完整 | `tests/test_contracts.py` | `invalid` fixture 必须校验失败（反向验证） |
 | UI 渲染 | 6 态 + 补位 + 骨架 + 键盘 | `phase4_tmdb_ui_test.dart` | 来源非空字段**不变**；失败隔离文案 |
+| 详情展示模型 | 头部字段 + 剧集卡片 + 查看器 + 轮播策略 | `phase4_tmdb_detail_model_test.dart` | 不补集/不丢集；导演回退；查看器定位被点击那张 |
+| 详情视觉回归 | 动态背景轮播 + 海报卡片 + 三处点击 + 键盘 + 布局 | `phase4_tmdb_detail_view_test.dart` | 5 秒换图；900 px 不溢出；空数据整块隐藏 |
+| 详情可视化集成 | 真实图片解码 + 截图证据 | `integration_test/tmdb_detail_visual_flow_test.dart` | 背景/剧照**真实解码成功**；剧照→查看器、人员→人物页、推荐→作品详情 |
 | 详情集成 | 真实窗口 + 真实 HTTP | `integration_test/tmdb_detail_flow_test.dart` | 季度切换后选集数量正确 |
 | 播放集成 | 真实播放器 + 季度身份透传 + 续播 | `integration_test/tmdb_playback_flow_test.dart` | `episodeUrl` 优先级；换源续播 |
 | 手动匹配集成 | 持久化 + 仅选季度 + 清除 | `integration_test/tmdb_manual_match_flow_test.dart` | 重进详情页结论仍生效 |
@@ -403,6 +457,15 @@ L2 用它断言"未配置 / 站点禁用时零请求"（`01` §12 第 9 项）�
 ## 7. 证据与一键验收
 
 ### 7.1 证据文件
+
+视觉证据（由 `tmdb_detail_visual_flow_test.dart` 真实光栅化落盘，可直接人工复核）：
+
+| 文件 | 证明 |
+| --- | --- |
+| `docs/phase4/evidence/tmdb-detail-header.png` | 动态背景（剧照/海报）+ 头部海报/导演/评分/时长/季集数 + 每集海报卡片 |
+| `docs/phase4/evidence/tmdb-photo-viewer.png` | 点击剧照真的打开大图查看器并定位到被点击那张 |
+| `docs/phase4/evidence/tmdb-person-page.png` | 点击演职人员真的打开人物页（简介/照片/作品） |
+| `docs/phase4/evidence/tmdb-recommendation-detail.png` | 点击相关推荐真的进入该作品详情（季度卡片 + 全部剧集） |
 
 ```text
 docs/phase4/evidence/windows-acceptance.txt

@@ -164,6 +164,10 @@ T18（fixture 与验收）
 | 反向验证 | 三项契约逐项破坏后用例**必须失败**（机器校验，非人工说明） | `tools/phase4/verify_reverse_checks.py` |
 | 入口可达性 | 未配置时设置页与详情页都必须有可达的 TMDB 入口（站点禁用仍不渲染） | `test/phase4_tmdb_entry_reachability_test.dart` |
 | 发布包符号 | release AOT 产物中 TMDB 入口符号与中文串均存在、无测试壳污染 | `tools/phase4/verify_release_symbols.py` |
+| 详情展示模型 | 头部字段、导演回退、剧集卡片不补集/不丢集、查看器定位、轮播策略 | `test/phase4_tmdb_detail_model_test.dart` |
+| 详情视觉回归 | 动态背景 5 秒轮播、每集海报卡片、剧照/人员/推荐点击、键盘、900 px 布局 | `test/phase4_tmdb_detail_view_test.dart` |
+| 详情可视化集成 | 真实图片解码（背景/剧照）+ 剧照→查看器、人员→人物页、推荐→作品详情 + 截图证据 | `integration_test/tmdb_detail_visual_flow_test.dart` |
+| 图片 fixture 路由 | `/tmdb-img/**` 返回真实 PNG、幂等、可区分 | `tools/phase4/check_tmdb_fixture.py` |
 
 门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
 为可复现入口，并封装为一键验收脚本 `tools/phase4/run_windows_acceptance.ps1`
@@ -191,6 +195,23 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 | P4-5 | 含特别篇时默认选中特别篇 | 默认取 `availableSeasons.first`；应优先第一个正片季度 | `tmdb_detail_flow_test` 步骤 4 |
 | P4-6 | 带 query 的媒体地址 404 | fixture 服务 `_send_media` 未剥离 query | `tmdb_detail_flow_test` 步骤 3（真实出画） |
 | P4-7 | **正式版 exe 完全没有 TMDB 设置与效果** | `TmdbState.shouldRender` 对「未配置」也返回 `false`，`TmdbStatusBar` 整块 `SizedBox.shrink()`；而全应用唯一引用 `TmdbSettingsPage` 的就是状态条上那个从未渲染的 `onConfigure` 回调 → 该页成为死代码，被 release AOT 整体剔除 | `phase4_tmdb_entry_reachability_test.dart` + `tools/phase4/verify_release_symbols.py` |
+
+### 3.3 视觉重设计（2026-10-07 用户反馈后）
+
+用户反馈四项：每集没有对应的海报卡片、没有海报与导演等信息、
+剧照/演职人员/相关推荐点击无效、详情页需要重新美化并用剧集海报/剧照当动态背景。
+本轮全部落地，并新增 4 个真实缺陷的回归门禁：
+
+| # | 缺陷 | 根因 | 回归门禁 |
+| --- | --- | --- | --- |
+| P4-8 | **剧集卡片不带 TMDB 剧照与集标题**（用户看到的「没有海报」） | UI 用 `sourceLine?.flagKey` 与页面自算的 `flagKey` 比较判断「是否当前线路」；绑定键在同 flag 重复时带 `#index` 后缀，两套规则不一致 → 永远判否，`applyEpisodesToLine` 从不生效 | `tmdb_detail_visual_flow_test` 步骤 4（断言卡片剧照 key 存在） |
+| P4-9 | 非当前线路被套用当前季度的集元数据 | 卡片渲染未做线路隔离，直接读全局 `_episodes` | `TmdbState.episodeCardsForEpisodes(includeMetadata:)` + 上述用例 |
+| P4-10 | 动态背景不铺满（图片按固有尺寸居中） | `AnimatedSwitcher` 以宽松约束布局子节点，`Image` 宽高为 null 时退回 160×160 | `phase4_tmdb_detail_view_test.dart` 背景用例 |
+| P4-11 | 剧集详情页「时长」永远为空 | TMDB 剧集详情的 `episode_run_time` 常为空，未用分季剧集的单集时长回退 | `phase4_tmdb_detail_model_test.dart` 时长用例 |
+
+修复后发布包符号门禁同步扩展（`TmdbDetailView` / `TmdbBackdropSlideshow` /
+`TmdbPhotoViewerDialog` / `TmdbPersonPage` / `TmdbEpisodeStrip` 等 + 中文串），
+防止 AOT 把重设计整体剔除。
 
 ### 3.2 反向验证（机器校验）
 
