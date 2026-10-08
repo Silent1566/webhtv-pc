@@ -691,6 +691,196 @@ class SyncSettings {
 }
 
 // ---------------------------------------------------------------------------
+// 收藏（`Keep`，`design/02` §8 Q3）
+// ---------------------------------------------------------------------------
+
+/// `Keep.type` 的语义（上游 `KeepDao.getVod()/getLive()` 源码确认）：
+/// `0` = 点播收藏，`1` = 直播收藏。
+const int androidKeepTypeVod = 0;
+const int androidKeepTypeLive = 1;
+
+/// 一条同步收藏（`design/02` §8 Q3：`Keep` 映射简单，4 个有效字段）。
+class SyncFavoriteItem {
+  const SyncFavoriteItem({
+    required this.kind,
+    required this.siteKey,
+    required this.targetId,
+    required this.title,
+    this.subtitle,
+    required this.updatedAt,
+    this.raw = const {},
+  });
+
+  /// PC 的收藏分类：`vod`（点播）或 `site`（上游的直播/站点收藏）。
+  ///
+  /// PC 没有直播收藏页面，因此 `type=1` 落到 `site` 级收藏
+  /// （`targetId` 取站点 key），保留“用户收藏了什么”这个事实。
+  final String kind;
+  final String siteKey;
+  final String targetId;
+  final String title;
+  final String? subtitle;
+
+  /// 安卓 `createTime`（**毫秒**，直传，同历史）。
+  final int updatedAt;
+
+  final Map<String, Object?> raw;
+
+  /// 本地匹配键：`(kind, siteKey, targetId)`，与 `favorites` 表的 `UNIQUE` 一致。
+  String get matchKey => '$kind\x00$siteKey\x00$targetId';
+
+  /// 从安卓 `Keep` JSON 解析（`design/02` §4.4 的同一套字段容错）。
+  static SyncFavoriteItem? tryFromJson(Object? value) {
+    final map = asMap(value);
+    if (map.isEmpty) return null;
+    final key = AndroidHistoryKey.tryParse(map['key']);
+    if (key == null) return null;
+    final type = asInt(map['type']) ?? androidKeepTypeVod;
+    final siteName = asString(map['siteName']) ?? '';
+    final vodName = asString(map['vodName']) ?? '';
+    final isVod = type == androidKeepTypeVod;
+    return SyncFavoriteItem(
+      kind: isVod ? 'vod' : 'site',
+      siteKey: key.siteKey,
+      targetId: isVod ? key.vodId : key.siteKey,
+      // 点播收藏用片名做标题；直播/站点收藏只有站点名。
+      title: isVod ? vodName : (siteName.isEmpty ? key.siteKey : siteName),
+      subtitle: isVod
+          ? (siteName.isEmpty ? null : siteName)
+          : (vodName.isEmpty ? null : vodName),
+      updatedAt: asInt(map['createTime']) ?? 0,
+      raw: map,
+    );
+  }
+
+  /// 反向映射成安卓 `Keep` JSON（`describe` 脱敏口径同历史）。
+  Map<String, Object?> toAndroidJson() => {
+    'key': '$siteKey$androidHistoryKeySeparator$targetId'
+        '${androidHistoryKeySeparator}0',
+    'siteName': subtitle ?? '',
+    'vodName': title,
+    'createTime': updatedAt,
+    // 点播收藏回写 0；站点级收藏回写 1（上游用 type 区分两张列表）。
+    'type': kind == 'vod' ? androidKeepTypeVod : androidKeepTypeLive,
+  };
+
+  /// 脱敏描述：不含片名与站点名（同 `design/02` §7）。
+  String describe() =>
+      'keep(kind=$kind, site=$siteKey, updated=$updatedAt)';
+
+  @override
+  String toString() => describe();
+}
+
+/// `Keep[]` 的解析结果。
+class SyncFavoriteParseResult {
+  const SyncFavoriteParseResult({
+    required this.items,
+    required this.failures,
+  });
+
+  final List<SyncFavoriteItem> items;
+  final List<SyncFailure> failures;
+
+  int get total => items.length + failures.length;
+
+  static SyncFavoriteParseResult parse(Object? value) {
+    final list = asList(value);
+    final items = <SyncFavoriteItem>[];
+    final failures = <SyncFailure>[];
+    for (var index = 0; index < list.length; index++) {
+      final item = SyncFavoriteItem.tryFromJson(list[index]);
+      if (item == null) {
+        failures.add(
+          SyncFailure(index: index, reason: '缺少 key 或 key 不成段（无法定位收藏）'),
+        );
+        continue;
+      }
+      items.add(item);
+    }
+    return SyncFavoriteParseResult(items: items, failures: failures);
+  }
+}
+
+/// 收藏的合并裁决：与历史同一套“旧不覆盖新”（`design/02` §4.4）。
+///
+/// 收藏没有删除标记（本阶段不给收藏做墓碑，`design/02` §4.5 只针对历史）。
+SyncMergeDecision decideFavoriteMerge({
+  required SyncFavoriteItem incoming,
+  int? localUpdatedAt,
+}) {
+  if (localUpdatedAt == null) {
+    return const SyncMergeDecision(SyncMergeAction.insert, '本地无该收藏');
+  }
+  if (incoming.updatedAt > localUpdatedAt) {
+    return const SyncMergeDecision(SyncMergeAction.upsert, '远端收藏更新');
+  }
+  if (incoming.updatedAt == localUpdatedAt) {
+    return const SyncMergeDecision(SyncMergeAction.skip, '时间戳相同（幂等）');
+  }
+  return const SyncMergeDecision(SyncMergeAction.skip, '本地收藏更新（旧不覆盖新）');
+}
+
+/// 收藏的合并计划。
+class SyncFavoriteMergePlan {
+  const SyncFavoriteMergePlan({
+    required this.inserts,
+    required this.upserts,
+    required this.skipped,
+    required this.failures,
+    required this.total,
+  });
+
+  final List<SyncFavoriteItem> inserts;
+  final List<SyncFavoriteItem> upserts;
+  final int skipped;
+  final List<SyncFailure> failures;
+  final int total;
+
+  List<SyncFavoriteItem> get applied => [...inserts, ...upserts];
+
+  SyncMergeStats get stats => SyncMergeStats(
+    applied: applied.length,
+    skipped: skipped,
+    failed: failures.length,
+    total: total,
+  );
+
+  String describe() => stats.describe();
+}
+
+/// 裁决一批收藏（`design/02` §4.4）。
+SyncFavoriteMergePlan buildFavoriteMergePlan({
+  required SyncFavoriteParseResult parsed,
+  required Map<String, int> localUpdatedAtByKey,
+}) {
+  final inserts = <SyncFavoriteItem>[];
+  final upserts = <SyncFavoriteItem>[];
+  var skipped = 0;
+  for (final incoming in parsed.items) {
+    final decision = decideFavoriteMerge(
+      incoming: incoming,
+      localUpdatedAt: localUpdatedAtByKey[incoming.matchKey],
+    );
+    switch (decision.action) {
+      case SyncMergeAction.insert:
+        inserts.add(incoming);
+      case SyncMergeAction.upsert:
+        upserts.add(incoming);
+      case SyncMergeAction.skip:
+        skipped++;
+    }
+  }
+  return SyncFavoriteMergePlan(
+    inserts: inserts,
+    upserts: upserts,
+    skipped: skipped,
+    failures: parsed.failures,
+    total: parsed.total,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // `/action?do=sync` 请求校验与路径构造
 // ---------------------------------------------------------------------------
 

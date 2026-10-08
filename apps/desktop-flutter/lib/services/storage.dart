@@ -929,6 +929,7 @@ class AppDatabase {
     required String targetId,
     required String title,
     String? subtitle,
+    int? updatedAt,
   }) {
     _db.execute(
       'INSERT INTO favorites(kind, site_key, target_id, title, subtitle, updated_at) '
@@ -942,8 +943,47 @@ class AppDatabase {
         targetId,
         title,
         subtitle,
-        DateTime.now().millisecondsSinceEpoch,
+        // 本地收藏用 `now()`；同步写入必须用远端 `createTime`
+        // （同 `upsertHistory` 的理由，`docs/phase5/design/02` §3.4）。
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
       ],
+    );
+  }
+
+  /// 收藏索引：合并匹配键 → 本地 `updated_at`（供
+  /// [buildFavoriteMergePlan] 使用）。
+  Map<String, int> favoriteSyncIndex() => {
+    for (final row in _db.select(
+      'SELECT kind, site_key, target_id, updated_at FROM favorites;',
+    ))
+      '${row['kind']}\x00${row['site_key']}\x00${row['target_id']}':
+          row['updated_at'] as int,
+  };
+
+  /// 执行收藏合并计划（`design/02` §4.4：“旧不覆盖新”）。
+  SyncMergeStats applyFavoriteMerge(SyncFavoriteMergePlan plan) {
+    var applied = 0;
+    var failed = plan.failures.length;
+    for (final item in plan.applied) {
+      try {
+        upsertFavorite(
+          kind: item.kind,
+          siteKey: item.siteKey,
+          targetId: item.targetId,
+          title: item.title,
+          subtitle: item.subtitle,
+          updatedAt: item.updatedAt,
+        );
+        applied++;
+      } catch (_) {
+        failed++;
+      }
+    }
+    return SyncMergeStats(
+      applied: applied,
+      skipped: plan.skipped,
+      failed: failed,
+      total: plan.total,
     );
   }
 

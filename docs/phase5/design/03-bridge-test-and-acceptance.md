@@ -178,6 +178,10 @@ packages/test-fixtures/android/
 | 3 | 关闭时端口释放 | `stop()` 后端口可再绑定 |
 | 4 | `POST /action` 缺 `type` | 400 + message |
 | 5 | 未知 `type` | 400 + message |
+| 5b | `mode=2` 缺 `device` | 400 + 指明需提供 `device`（对齐上游 `Manage.syncStart`） |
+| 5c | `mode=0` 与 `mode=1` 都落库 | 200 + 记录已写入（Android `Action.post` 用 `mode=0`） |
+| 5d | `mode=2` + `device` | 200，调用对端推送回调，且**不**写入请求体载荷 |
+| 5e | `mode=0` + `device` | 200，既落库又调用对端推送回调（双向） |
 | 6 | `type=history` 缺 `config` | 400 + `config 不能为空` |
 | 7 | `type=history` `config` 非法 JSON | 400 + message |
 | 8 | `type=history` 缺 `targets` | 400 + `targets 必须是 JSON 数组` |
@@ -195,7 +199,7 @@ packages/test-fixtures/android/
 
 | # | 用例 | 断言 |
 | --- | --- | --- |
-| 1 | 推送到 `/action?do=sync&mode=1&type=history` | 方法/路径/query 正确 |
+| 1 | 推送到 `/action?do=sync&mode=1&type=history` | 方法/路径/query 正确（`mode=1` = 对方接收） |
 | 2 | 表单字段 | `config` + `targets` 均存在且为合法 JSON |
 | 3 | `cid=0` | 每条记录的 `key` 以 `@@@0` 结尾 |
 | 4 | 不发送 `settings` | 默认请求体不含 `settings` |

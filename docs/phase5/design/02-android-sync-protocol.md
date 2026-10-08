@@ -85,11 +85,27 @@ PC 侧不能自创路径，否则 Android 的发现与推送都会失败。
 | 4 | `POST` | `/action?do=sync&mode=1&type=backup` | **推送**设置到 Android |
 | 5 | `POST` | `/action?do=sync&mode=0&device=<JSON>` | 请求 Android **主动推给** PC（可选便利路径） |
 
-> `mode` 语义（`Action.onSync` 源码）：
-> `0` = 只发送（若带 `device` 则先推给该设备）；`1` = 只接收；`2` = 两者都做。
-> PC 作为**发送方**时用 `mode=1`（"我要接收"是对方的视角；PC 用 `mode=1` 表示
-> "请接收我发的"）。**注意**：`mode` 是从**被请求方**视角定义的，因此
-> PC 调 Android 时 `mode=1` 让 Android 接收，`mode=0` 让 Android 发送。
+> `mode` 语义（`Action.onSync` 源码实证，**已纠正初稿**）：
+> `mode` 是从**被请求方**视角定义的：
+>
+> | `mode` | 被请求方的行为 | 调用方的意图 |
+> | --- | --- | --- |
+> | `0` | 若 query 带 `device` → 把自己的数据推给该 `device`；**并且**应用请求体载荷 | 双向（带 `device`） |
+> | `1` | 只应用请求体载荷（不推送） | **推送**（我把我的数据给你） |
+> | `2` | 只推送（必须带 `device`），**不**应用请求体载荷 | **拉取**（我要你的数据） |
+>
+> 三处上游实证：`SyncDialog.onItemClick` 发 `mode=<用户选择>` 且 body 里带
+> `device=<自己>`；`OneKeySyncDialog.startSync` 用 `toRemote ? "1" : "2"`；
+> `Manage.syncStart` 用 `pull ? "2" : "1"` 且缺 `device` 时直接
+> `400 Missing device`。
+>
+> **对 PC 的两条硬结论**：
+> 1. PC 作为**服务端**必须把 `mode=0` 与 `mode=1` 都当作“落库”——
+>    Android 自己的 `Action.post()`（投递历史/收藏/备份）用的就是 `mode=0`，
+>    只认 `mode=1` 会收不到推送；
+> 2. PC 作为**调用方**推送时用 `mode=1`（不是 `mode=0`）；
+>    拉取时用 `mode=2` + `device=<PC 自己的 Device JSON>`。
+>
 > 这条语义必须在实现与测试中显式锁定，否则方向会反。
 
 ### 3.3 必须校验的请求字段（PC 当服务端时）
@@ -114,6 +130,7 @@ PC 侧因此**必须**：
 | `type=history` 时 `config` 非空且是合法 JSON 对象 | `400` + `config 不能为空` |
 | `type=history` 时 `targets` 是合法 JSON 数组（可为空数组） | `400` + `targets 必须是 JSON 数组` |
 | `mode` 属于 `{0,1,2}` | `400` |
+| `mode=2` 时必须带 `device`（与上游 `Manage.syncStart` 一致） | `400` + 指明需提供 `device` |
 | 同步功能已开启 | `403` + `同步未开启`（P3） |
 | 请求来自允许的对端 | `403` + `对端未授权` |
 
@@ -178,8 +195,30 @@ PC `PlaybackHistory` → Android `History`：
 | — | `speed` | 固定 `1.0` |
 | — | `opening` / `ending` | **省略字段**，让 Android 用自身默认哨兵 |
 
-> `cid` 写 `0`：Android 的 `Backup.restoreConfig()` 会建立 `source → 实际 cid` 映射
-> 并重写 `history` 的 `cid`（`00` §3.6）。写真实 cid 反而会指向错误的配置。
+> `cid` 写 `0`：`History` 的 `@PrimaryKey` 就是 `key` 字符串，而
+> `History.sync()` 只把 `cid` **列**覆写为安卓当前 cid、**不改 key**
+> （`Action.syncHistory` → `History.sync` 源码）。发 `@@@0` 即落在 `@@@0` 这行；
+> 非聚合模式下安卓会先按 `vodName` 做 name-merge
+> （`History.shouldMerge` → `item.copyTo(this).delete()`）**物理替换**同名本地行，
+> 因此不会重复；但 `Setting.isHistoryAggregationEffective()` 为真时
+> `shouldMerge` 直接返回 `false`，同剧可能出现两行。这是安卓侧的策略，
+> PC 无法修正，因此推送是**用户显式触发**且需在文档中披露。
+>
+> ⚠️ **初稿勘误**：本节曾写“由安卓的 `Backup.restoreConfig()` 建立
+> `source → 实际 cid` 映射并重写 history 的 `cid`”——该机制只对 **backup
+> 路径**成立，对 `/action?do=sync` 路径**不成立**（后者走 `History.sync()`）。
+> 结论（`cid=0`）不变，但理由应以 `History.sync` 源码为准。
+>
+> ⚠️ **`config` 字段是推送的隐形前提**（源码实证）：
+> `Action.syncHistory` 第一行就是 `Config.find(Config.objectFrom(params.get("config")))`，
+> 紧接 `if (config.getUrl() == null) return;` —— **静默无操作，HTTP 仍返回 200 OK**。
+> 而且当 `config.url != VodConfig.getUrl()` 时会 `VodConfig.load(config)`，
+> **切换安卓当前配置**（推送的历史随之落到另一个 cid 下）。
+> 因此 PC 侧：
+> 1. 推送前**必须**校验 `config` 含非空 `url`，否则拒绝发送并提示用户
+>    （不能把“写入成功”报给用户，P5）；
+> 2. “选哪个配置”是用户决策（须与安卓当前配置一致），由 UI 层收集，
+>    `SyncClient` 只做 I/O 与校验。
 
 ### 3.6 `SyncOptions` 子集
 
@@ -340,7 +379,12 @@ for each incoming record:
 | `syncPayloadInvalid` | JSON 非法 / 缺字段 | 指出具体字段 |
 | `syncPayloadTooLarge` | 超 8 MiB | 建议减少同步范围 |
 | `syncLocalWriteRejected` | Android 返回 403（本机 API 修改未开启） | 指出 Android 侧开关位置 |
+| `syncPeerError` | 对端返回 4xx/5xx（已连上但被拒或出错） | **必须带状态码与响应正文**；不得折叠为“连不上” |
 | `syncPartialFailure` | 有记录失败 | **必须报出 applied/skipped/failed 明细** |
+
+> `syncPeerError` 是实施期新增的第 8 类：把“已连上但对端报错”归入
+> `syncPeerUnreachable` 会直接误导用户去查网络，而真实原因在安卓侧的响应里
+> （对齐 `design/00` P5：能力缺口与失败原因不得折叠）。
 
 **禁止**把 `syncPartialFailure` 折叠为"同步成功"（P5）。
 

@@ -105,6 +105,8 @@ enum AppErrorKind {
   syncDisabled,
   syncPeerUnauthorized,
   syncPeerUnreachable,
+  syncPeerError,
+  syncPortUnavailable,
   syncPayloadInvalid,
   syncPayloadTooLarge,
   syncLocalWriteRejected,
@@ -253,6 +255,10 @@ String describeErrorKind(AppErrorKind kind) {
       return '该设备未授权，请先在设置中添加并确认此设备';
     case AppErrorKind.syncPeerUnreachable:
       return '同步失败：无法连接对端设备（请检查地址与网络）';
+    case AppErrorKind.syncPeerError:
+      return '同步失败：对端返回错误（响应正文见详情）';
+    case AppErrorKind.syncPortUnavailable:
+      return '同步服务无法启动：9978–9998 端口全被占用（请先关闭占用该端口的程序）';
     case AppErrorKind.syncPayloadInvalid:
       return '同步数据非法：缺少必需字段或不是合法 JSON';
     case AppErrorKind.syncPayloadTooLarge:
