@@ -240,7 +240,7 @@ try {
         }
     }
 
-    # 3.5) phase4 套件清单核对：设计文档 §3 列出的套件必须都存在且被执行。
+    # 3.5) phase4 套件清单核对：设计文档 §3/§4 列出的套件必须都存在且被执行。
     Invoke-Checked 'phase4-suite-presence' {
         $required = @(
             'test/phase4_tmdb_title_test.dart',
@@ -257,6 +257,8 @@ try {
             'test/phase4_tmdb_service_test.dart',
             'test/phase4_tmdb_storage_test.dart',
             'test/phase4_tmdb_ui_test.dart',
+            'test/phase4_tmdb_detail_model_test.dart',
+            'test/phase4_tmdb_detail_view_test.dart',
             'test/phase4_tmdb_playback_test.dart',
             'test/phase4_tmdb_state_test.dart',
             'test/phase4_tmdb_orchestration_test.dart'
@@ -268,6 +270,11 @@ try {
         if ($missing.Count -gt 0) {
             throw "缺少 phase4 套件：$($missing -join ', ')"
         }
+        # 本步骤是纯 PowerShell 检查，没有原生命令。必须显式清零
+        # `$LASTEXITCODE`，否则 `Invoke-Checked` 会沿用**上一步**
+        # （flutter test）的退出码，把上一步的失败重复记到本步骤头上
+        # （实测：`suites=19 missing=0` 与 `FAILED` 同时出现）。
+        $global:LASTEXITCODE = 0
         Write-Fact "phase4-suite-presence suites=$($required.Count) missing=0"
     }
 
@@ -307,6 +314,9 @@ try {
                     'integration_test/tmdb_failure_isolation_flow_test.dart',
                     # 纯 TMDB 详情页（§5.5）：卡片不可播 + 跳搜索页。
                     'integration_test/tmdb_tmdb_only_detail_flow_test.dart',
+                    # 详情页可视化（用户反馈回归）：动态背景轮播 + 每集海报卡片 +
+                    # 剧照/演职人员/相关推荐可点击（真实图片解码）。
+                    'integration_test/tmdb_detail_visual_flow_test.dart',
                     # 真实壳层入口（P4-7 回归）：设置页 → 打开 TMDB 设置。
                     # 发布包缺陷：未配置时入口不可达 → 用户看不到 TMDB 设置。
                     'integration_test/tmdb_shell_entry_flow_test.dart'

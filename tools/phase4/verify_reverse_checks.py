@@ -94,6 +94,19 @@ def run_tests(puro_env: str, test_file: str) -> tuple[int, str]:
     return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
 
 
+def _status_snapshot() -> set[str]:
+    """当前 `apps/desktop-flutter` 下的 git 状态行集合（排序无关）。"""
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", "apps/desktop-flutter"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return {line for line in status.stdout.splitlines() if line.strip()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--puro-env", default="webhtv")
@@ -101,6 +114,9 @@ def main() -> int:
 
     failures: list[str] = []
     facts: list[str] = []
+
+    # 运行前快照：用于断言「反向验证没有留下自己的残留」。
+    before_status = _status_snapshot()
 
     for check in CHECKS:
         if not check.path.exists():
@@ -144,18 +160,20 @@ def main() -> int:
             if digest(check.path) != before:
                 failures.append(f"{check.name}: 还原后文件内容不一致")
 
-    # 工作区必须干净（不能把破坏后的文件留进仓库）。
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--", "apps/desktop-flutter"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    dirty = [line for line in status.stdout.splitlines() if line.strip()]
-    if dirty:
-        failures.append(f"工作区不干净（反向验证残留）：{dirty[:5]}")
+    # 反向验证不得留下**自己造成的**残留。
+    #
+    # 判定方式：对比「运行前快照」与「运行后现状」，而不是要求工作区绝对干净。
+    # 为什么不能要求绝对干净：本脚本既要在 CI 的干净检出上跑，也要在开发者
+    # 带着未提交改动时跑（本轮视觉重设计就是这种情形）。要求绝对干净会把
+    # 「开发者本来就有的改动」误报成「反向验证残留」，掩盖真正的问题。
+    # 而「本脚本破坏过的文件必须字节级还原」已在上面的循环里逐项断言，
+    # 这里只补一条更强的整体校验：运行前后 `git status` 集合必须完全一致。
+    after = _status_snapshot()
+    if after != before_status:
+        failures.append(
+            "反向验证改变了工作区状态（运行前后 git status 不一致）："
+            f"before={sorted(before_status)[:5]} after={sorted(after)[:5]}"
+        )
 
     for line in facts:
         print(line)

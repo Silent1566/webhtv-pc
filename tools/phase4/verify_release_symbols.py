@@ -42,6 +42,24 @@ REQUIRED_ASCII = [
     "_TmdbSettingsPageState",
     "TmdbStatusBar",
     "TmdbDetailPage",
+    # 详情页重设计（2026-10-07 用户反馈回归）：动态背景 / 每集海报卡片 /
+    # 可点击的剧照·演职人员·相关推荐。这些类必须真的被主路径引用，
+    # 否则 AOT 会把整个重设计剔除，发布包里又回到「纯文字按钮」的老样子。
+    "TmdbDetailView",
+    "TmdbDetailHeader",
+    "TmdbDetailSections",
+    "TmdbEpisodeStrip",
+    "TmdbEpisodeCardTile",
+    "TmdbPhotoViewerDialog",
+    "TmdbPersonPage",
+    "TmdbBackdropSlideshow",
+    "tmdb-backdrop-slideshow",
+    "tmdb-detail-poster",
+    "tmdb-detail-director",
+    "tmdb-episode-strip-",
+    "tmdb-photo-viewer",
+    "tmdb-person-page",
+    "tmdb-recommendation-",
     "tmdb-api-key",
     "tmdb-enabled",
     "tmdb-save",
@@ -57,6 +75,12 @@ REQUIRED_UTF16 = [
     "启用 TMDB 增强",
     "去设置",
     "打开 TMDB 设置",
+    # 详情页重设计的用户可见文案。
+    "搜索站源",
+    "相关推荐",
+    "演职人员",
+    "剧照",
+    "导演：",
 ]
 
 # 绝不能出现在发布包里的标记（测试壳污染）。

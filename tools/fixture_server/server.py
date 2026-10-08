@@ -35,10 +35,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
+import struct
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -64,6 +67,36 @@ LEGACY_USER_AGENT = "WebHTV-PC-Phase0"
 
 MEDIA_URL = "http://127.0.0.1:18080/media/sample.m3u8"
 MEDIA_MP4_URL = "http://127.0.0.1:18080/media/sample.mp4"
+
+
+def _image_size_for(relative: str) -> int:
+    """按图片类型选尺寸：背景图/剧照大一些，海报/头像小一些。"""
+    name = relative.lower()
+    if name.startswith(("w780", "h780", "original")):
+        return 160
+    if "backdrop" in name or name.endswith("b.jpg"):
+        return 160
+    return 96
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def _encode_png(width: int, height: int, raw_rows: bytes) -> bytes:
+    """把 `filter byte + RGB` 行数据编码为 PNG（仅用标准库）。"""
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(raw_rows, 6))
+        + _png_chunk(b"IEND", b"")
+    )
 
 
 # ---------------------------------------------------------------------- TMDB
@@ -409,6 +442,45 @@ class FixtureHandler(BaseHTTPRequestHandler):
             extra_headers=headers,
         )
 
+    # -------------------------------------------------------- TMDB 图片 fixture
+
+    def _send_tmdb_image(self, relative: str) -> None:
+        """返回一张确定性的占位图片（不依赖 PIL 等第三方库）。
+
+        路径形如 `w342/p1.jpg` 或 `w780/b1.jpg`（对应 `TmdbConfig.imageBase` /
+        `backdropBase`）。图片内容由路径哈希决定：同一路径永远得到同一张图，
+        不同路径颜色不同，使截图证据能区分「海报 / 剧照 / 头像」三类图。
+
+        为什么需要：`PosterImage` 在加载失败时显示占位图标，仅凭 widget 树
+        无法区分「图片真的加载了」与「全部是占位」。集成测试需要真实图片。
+        """
+        digest = hashlib.sha256(relative.encode("utf-8")).digest()
+        size = _image_size_for(relative)
+        # 主色由哈希决定；叠加对角亮带与竖向渐变，使图片不是纯色块
+        # （纯色块在截图里与占位图难以区分）。
+        base = (60 + digest[0] % 120, 60 + digest[1] % 120, 60 + digest[2] % 120)
+        accent = (
+            min(255, base[0] + 60),
+            min(255, base[1] + 60),
+            min(255, base[2] + 60),
+        )
+        rows = bytearray()
+        band = max(4, size // 6)
+        for y in range(size):
+            rows.append(0)  # PNG filter type 0
+            shade = y / max(1, size - 1)
+            row_base = tuple(
+                int(channel * (0.65 + 0.5 * shade)) for channel in base
+            )
+            row_accent = tuple(
+                int(channel * (0.65 + 0.5 * shade)) for channel in accent
+            )
+            for x in range(size):
+                color = row_accent if (x + y) % (band * 2) < band else row_base
+                rows.extend(min(255, channel) for channel in color)
+        payload = _encode_png(size, size, bytes(rows))
+        self._send_bytes(payload, "image/png")
+
     # ------------------------------------------------------------ 请求解析
 
     def _request_body(self) -> dict:
@@ -461,6 +533,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if path == "/health":
             self._send_json({"status": "ok"})
+            return
+        # TMDB 图片 fixture（`docs/phase4/design/05` §2.2 扩展）。
+        #
+        # 必须在 `/tmdb` 分支**之前**：`/tmdb-img/...` 也以 `/tmdb` 开头，
+        # 否则会被 TMDB API 路由吃掉并返回 404 JSON。
+        # 作用：让集成测试与截图证据里的海报/剧照/头像**真的能加载**，
+        # 而不是只命中 `PosterImage` 的占位图（占位图证明不了布局与背景）。
+        if path.startswith("/tmdb-img/"):
+            self._send_tmdb_image(path.removeprefix("/tmdb-img/"))
             return
         # TMDB fixture 路由（`docs/phase4/design/05` §2.2）。
         if path.startswith("/tmdb"):

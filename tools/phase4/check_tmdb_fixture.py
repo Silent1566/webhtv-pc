@@ -95,6 +95,38 @@ def main() -> int:
         status, body, _ = fetch(base, path)
         check(f"route {path}", status == 200 and bool(body), f"status={status}")
 
+    # 0.5 图片路由（详情页动态背景 / 剧照 / 头像的真实图片来源）。
+    #
+    # 为什么必须校验：图片路由若 404，`PosterImage` 会静默退化为占位图，
+    # widget 断言仍然全绿，但用户看到的是一堆占位——正是要防的回归。
+    # 这里额外断言返回的是**真实 PNG 字节**（魔数 + 可解码尺寸）。
+    for path in (
+        "/tmdb-img/w342/p1.jpg",
+        "/tmdb-img/w780/b1.jpg",
+        "/tmdb-img/w342/s1e1.jpg",
+        "/tmdb-img/w342/person.jpg",
+    ):
+        status, body, headers = fetch(base, path)
+        ok = status == 200 and headers.get("content-type", "").startswith("image/png")
+        check(f"image route {path}", ok, f"status={status} type={headers.get('content-type')!r}")
+
+    # 同一路径必须稳定返回同一张图（截图证据可复现）。
+    _, first_bytes, _ = fetch(base, "/tmdb-img/w780/b1.jpg")
+    _, second_bytes, _ = fetch(base, "/tmdb-img/w780/b1.jpg")
+    check(
+        "image route 幂等",
+        first_bytes == second_bytes,
+        "同一路径两次响应不一致（截图证据不可复现）",
+    )
+
+    # 不同路径必须是不同图片（截图里能区分海报/剧照/背景）。
+    _, poster_bytes, _ = fetch(base, "/tmdb-img/w342/p1.jpg")
+    check(
+        "image route 可区分",
+        poster_bytes != first_bytes,
+        "不同图片路径返回了相同内容",
+    )
+
     # 1. 错误路由
     for path, expected in (
         ("/tmdb/auth-fail", 401),
