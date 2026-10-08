@@ -14,6 +14,7 @@ import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import '../core/android_sync.dart';
 import '../core/app_error.dart';
 import '../core/protocol.dart';
 
@@ -236,7 +237,15 @@ class AppDatabase {
 
   final Database _db;
 
-  static const int schemaVersion = 2;
+  /// 当前 schema 版本。
+  ///
+  /// - `1` → `2`：Phase 4 新增四张 TMDB 表（`docs/phase4/design/03` §6.1）；
+  /// - `2` → `3`：Phase 5 新增 `history_deletions` 删除标记表
+  ///   （`docs/phase5/design/02` §4.5）。
+  ///
+  /// 两次升级都是**加法式**（`CREATE TABLE IF NOT EXISTS`）：旧库打开后
+  /// 自动获得新表且不丢数据，无需分支式升级逻辑。
+  static const int schemaVersion = 3;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -362,9 +371,38 @@ class AppDatabase {
       );
     ''');
     _migrateTmdb();
+    _migrateSync();
     _db.execute(
       "INSERT INTO meta(key, value) VALUES('schema_version', '$schemaVersion') "
       'ON CONFLICT(key) DO UPDATE SET value=excluded.value;',
+    );
+  }
+
+  /// Phase 5 · 删除标记表（`docs/phase5/design/02` §4.5）。
+  ///
+  /// 上游的删除墓碑同步仍是「待实现」，PC 侧本阶段只做**最小可行的墓碑
+  /// 替代方案**：记录「我删过这条，删除时刻是 T」。远端再推来
+  /// `updatedAt < T` 的旧记录时跳过插入，于是被删掉的记录**不会复活**。
+  ///
+  /// 为什么必须单独一张表：合并裁决（`design/02` §4.4）里
+  /// `local == null` 的分支是**插入**——这正是「复活」的路径。
+  /// 只有本地记得「我删过」，才能把它与「从没见过这条」区分开。
+  ///
+  /// 同样是加法式迁移，不需要分支升级逻辑。
+  void _migrateSync() {
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS history_deletions (
+        match_key TEXT PRIMARY KEY,
+        site_key TEXT NOT NULL DEFAULT '',
+        vod_id TEXT NOT NULL DEFAULT '',
+        flag TEXT NOT NULL DEFAULT '',
+        episode_id TEXT NOT NULL DEFAULT '',
+        deleted_at INTEGER NOT NULL
+      );
+    ''');
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_history_deletions_at '
+      'ON history_deletions(deleted_at DESC);',
     );
   }
 
@@ -637,6 +675,9 @@ class AppDatabase {
     required int positionMs,
     required int durationMs,
     bool? completed,
+    int? updatedAt,
+    int? openingMs,
+    int? endingMs,
   }) {
     final isCompleted =
         completed ??
@@ -661,8 +702,28 @@ class AppDatabase {
         positionMs,
         durationMs,
         isCompleted ? 1 : 0,
-        DateTime.now().millisecondsSinceEpoch,
+        // 本地播放写入用 `now()`；同步写入必须用**远端的时间戳**
+        // （`docs/phase5/design/02` §3.4：`createTime` 毫秒直传）。
+        // 写成 `now()` 会让一条 2024 年的安卓记录看起来比本地所有记录都新，
+        // 下一轮“旧不覆盖新”的裁决随之失真。
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
       ],
+    );
+    // 写入即意味着这条记录重新存在，删除标记不再有意义。
+    // `openingMs` / `endingMs` 目前只用于本地播放器行为，不入本表
+    // （PC 有独立的 open/end 设置），此处接收只为签名向后兼容与调用方对称。
+    _forgetHistoryDeletion(
+      SyncHistoryItem.fromLocal(
+        siteKey: siteKey,
+        vodId: vodId,
+        vodName: vodName,
+        flag: flag,
+        episodeName: episodeName,
+        episodeId: episodeId,
+        positionMs: positionMs,
+        durationMs: durationMs,
+        updatedAt: updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ).matchKey,
     );
   }
 
@@ -702,11 +763,161 @@ class AppDatabase {
     return rows.isEmpty ? null : PlaybackHistory.fromRow(rows.first);
   }
 
-  void deleteHistory(int id) =>
-      _db.execute('DELETE FROM history WHERE id = ?;', [id]);
+  void deleteHistory(int id) {
+    final rows = _db.select(
+      'SELECT site_key, vod_id, flag, episode_id FROM history WHERE id = ?;',
+      [id],
+    );
+    if (rows.isNotEmpty) _rememberDeletionOfRow(rows.first);
+    _db.execute('DELETE FROM history WHERE id = ?;', [id]);
+  }
 
   /// 清空历史：只删 history 表，不触碰 configs（§15.3）。
-  void clearHistory() => _db.execute('DELETE FROM history;');
+  ///
+  /// 同时为每条被删记录留删除标记：否则用户「清空历史」后，安卓再推来
+  /// 同一批旧记录就会把它们全部复活（`docs/phase5/design/02` §4.5）。
+  /// 标记是**本地行为**，不改变清空本身的可见结果。
+  void clearHistory() {
+    for (final row in _db.select(
+      'SELECT site_key, vod_id, flag, episode_id FROM history;',
+    )) {
+      _rememberDeletionOfRow(row);
+    }
+    _db.execute('DELETE FROM history;');
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 5 · 同步合并与删除标记（`docs/phase5/design/02` §4.4 / §4.5）
+  // -------------------------------------------------------------------------
+
+  /// 本地历史索引：合并匹配键 → 记录（供 [buildHistoryMergePlan] 使用）。
+  ///
+  /// 匹配键是 `(siteKey, vodId, flag, episodeId)`，**不含 `cid`**
+  /// （`design/02` §4.3）——这与 `history` 表的 `UNIQUE` 约束一致。
+  Map<String, SyncHistoryItem> historySyncIndex() {
+    final result = <String, SyncHistoryItem>{};
+    for (final history in recentHistory(limit: 100000)) {
+      final item = SyncHistoryItem.fromLocal(
+        siteKey: history.siteKey,
+        vodId: history.vodId,
+        vodName: history.vodName,
+        vodPic: history.vodPic,
+        flag: history.flag,
+        episodeName: history.episodeName,
+        episodeId: history.episodeId,
+        positionMs: history.positionMs,
+        durationMs: history.durationMs,
+        updatedAt: history.updatedAt,
+      );
+      result[item.matchKey] = item;
+    }
+    return result;
+  }
+
+  /// 删除标记索引：合并匹配键 → 删除时刻（毫秒）。
+  Map<String, int> historyDeletionIndex() => {
+    for (final row in _db.select(
+      'SELECT match_key, deleted_at FROM history_deletions;',
+    ))
+      row['match_key'] as String: row['deleted_at'] as int,
+  };
+
+  /// 删除标记条数（证据与门禁用）。
+  int get historyDeletionCount => count('history_deletions');
+
+  /// 执行合并计划（`design/02` §4.4）。
+  ///
+  /// 行为约束（P3）：
+  /// - **只增不改不删**：`skipped` 的条目不会导致任何 `DELETE`；
+  /// - 写入使用**远端时间戳**（不用 `now()`），保住“旧不覆盖新”的判据；
+  /// - 单条写入失败不回滚整批，只计入 `failed`（§4.3）；
+  /// - 返回值的不变式必须是 `applied + skipped + failed == total`。
+  SyncMergeStats applyHistoryMerge(SyncMergePlan plan) {
+    var applied = 0;
+    var failed = plan.failures.length;
+    for (final item in plan.applied) {
+      try {
+        _writeSyncHistory(item);
+        applied++;
+      } catch (_) {
+        failed++;
+      }
+    }
+    return SyncMergeStats(
+      applied: applied,
+      skipped: plan.skipped,
+      failed: failed,
+      total: plan.total,
+    );
+  }
+
+  /// 单条同步写入：时间戳用远端值，`completed` 按 PC 规则重算。
+  void _writeSyncHistory(SyncHistoryItem item) {
+    upsertHistory(
+      siteKey: item.siteKey,
+      vodId: item.vodId,
+      vodName: item.vodName,
+      vodPic: item.vodPic,
+      flag: item.flag,
+      episodeName: item.episodeName,
+      episodeId: item.episodeId,
+      positionMs: item.positionMs,
+      durationMs: item.durationMs,
+      completed: item.completed,
+      updatedAt: item.updatedAt,
+    );
+  }
+
+  void _rememberHistoryDeletion(
+    String matchKey, {
+    required String siteKey,
+    required String vodId,
+    required String flag,
+    required String episodeId,
+  }) {
+    _db.execute(
+      'INSERT INTO history_deletions(match_key, site_key, vod_id, flag, '
+      'episode_id, deleted_at) VALUES(?,?,?,?,?,?) '
+      'ON CONFLICT(match_key) DO UPDATE SET deleted_at=excluded.deleted_at;',
+      [
+        matchKey,
+        siteKey,
+        vodId,
+        flag,
+        episodeId,
+        DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 为一行（删除前的）历史记下删除标记。
+  void _rememberDeletionOfRow(Row row) {
+    final siteKey = row['site_key'] as String;
+    final vodId = row['vod_id'] as String;
+    final flag = row['flag'] as String;
+    final episodeId = row['episode_id'] as String;
+    _rememberHistoryDeletion(
+      SyncHistoryItem.fromLocal(
+        siteKey: siteKey,
+        vodId: vodId,
+        vodName: '',
+        flag: flag,
+        episodeName: '',
+        episodeId: episodeId,
+        positionMs: 0,
+        durationMs: 0,
+        updatedAt: 0,
+      ).matchKey,
+      siteKey: siteKey,
+      vodId: vodId,
+      flag: flag,
+      episodeId: episodeId,
+    );
+  }
+  void _forgetHistoryDeletion(String matchKey) => _db.execute(
+    'DELETE FROM history_deletions WHERE match_key = ?;',
+    [matchKey],
+  );
 
   // -------------------------------------------------------------------------
   // 收藏
@@ -869,6 +1080,7 @@ class AppDatabase {
       'configs',
       'config_sites',
       'history',
+      'history_deletions',
       'favorites',
       'search_cache',
       'site_health',

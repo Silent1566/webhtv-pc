@@ -13,8 +13,10 @@ import 'package:webhtv_pc/services/storage.dart';
 
 void main() {
   group('建表与版本（§6.1/§6.2）', () {
-    test('schemaVersion 为 2', () {
-      expect(AppDatabase.schemaVersion, 2);
+    test('schemaVersion 不低于 2（Phase 4 引入的迁移基线）', () {
+      // 具体版本号由引入该版本的那个阶段的套件断言：当前是 Phase 5
+      // （`2 → 3`，见 `test/phase5_sync_storage_test.dart`）。
+      expect(AppDatabase.schemaVersion, greaterThanOrEqualTo(2));
     });
 
     test('四张 TMDB 表全部存在', () {
@@ -45,9 +47,9 @@ void main() {
       db.dispose();
     });
 
-    test('meta 表记录 schema_version=2', () {
+    test('meta 表记录与 AppDatabase.schemaVersion 一致', () {
       final db = AppDatabase.inMemory();
-      expect(db.schemaVersionValue, '2');
+      expect(db.schemaVersionValue, '${AppDatabase.schemaVersion}');
       db.dispose();
     });
   });
@@ -130,7 +132,7 @@ void main() {
       ]) {
         expect(db.count(table), 0, reason: '$table 应已建立');
       }
-      expect(db.schemaVersionValue, '2');
+      expect(db.schemaVersionValue, '${AppDatabase.schemaVersion}');
       db.dispose();
 
       // 再打开一次：仍然幂等
