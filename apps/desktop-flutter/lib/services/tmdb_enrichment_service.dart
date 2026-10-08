@@ -492,28 +492,7 @@ int resolveEpisodeNumber({
 }) => usePosition ? position + 1 : episodeNumberFromName(episodeName);
 
 /// 从剧集名解析集号（`01` §3.5 的集数形态）。无法解析返回 `-1`。
-int episodeNumberFromName(String name) {
-  final text = name.trim();
-  if (text.isEmpty) return -1;
-  final patterns = <RegExp>[
-    RegExp(r'[Ss]\d{1,2}[-._\s]*[Ee](\d{1,3})'),
-    RegExp(r'第\s*([0-9零〇一二三四五六七八九十两百]+)\s*[集话話回期章节節]'),
-    RegExp(r'\b(?:EP|E|Episode)\s*0*(\d{1,5})\b', caseSensitive: false),
-  ];
-  for (final pattern in patterns) {
-    final match = pattern.firstMatch(text);
-    if (match == null) continue;
-    final number = parseChineseNumber(match.group(1)!);
-    if (number != null && number > 0) return number;
-  }
-  // 纯数字（如 "01" / "12"）
-  final plain = RegExp(r'^0*(\d{1,4})$').firstMatch(text);
-  if (plain != null) {
-    final number = int.tryParse(plain.group(1)!);
-    if (number != null && number > 0) return number;
-  }
-  return -1;
-}
+int episodeNumberFromName(String name) => sourceEpisodeNumber(name);
 
 /// 供上层复用：从详情对象取类型名拼接。
 String _genresText(Map<String, Object?> detail) {

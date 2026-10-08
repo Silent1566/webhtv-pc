@@ -7,15 +7,20 @@
 /// - **没有播放按钮**，改为 [搜索站源] 入口。
 ///
 /// 关键约束：剧集卡片**不得**显示为可播放（`04` §6.2）。
+/// 因此这里给卡片传入 `actionLabel: '搜索站源'`，点击后进入搜索页而非播放。
+///
+/// 渲染层复用 [TmdbDetailView]（动态背景 / 剧照墙 / 演职人员 / 相关推荐），
+/// 使两种详情页的视觉与交互保持一致。
 library;
 
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
+import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
-import 'app.dart' show PosterImage;
+import 'tmdb_detail_view.dart';
 import 'tmdb_widgets.dart';
 
 /// 纯 TMDB 详情页。
@@ -28,6 +33,7 @@ class TmdbDetailPage extends StatefulWidget {
     this.onSearchSource,
     this.onOpenVideo,
     this.onCopyVideo,
+    this.onOpenItem,
   });
 
   final TmdbService service;
@@ -45,6 +51,9 @@ class TmdbDetailPage extends StatefulWidget {
   final Future<bool> Function(String url)? onOpenVideo;
   final Future<void> Function(String url)? onCopyVideo;
 
+  /// 相关推荐 / 人物作品点击（默认在当前页内继续打开 TMDB 详情）。
+  final ValueChanged<TmdbItem>? onOpenItem;
+
   @override
   State<TmdbDetailPage> createState() => _TmdbDetailPageState();
 }
@@ -52,14 +61,12 @@ class TmdbDetailPage extends StatefulWidget {
 class _TmdbDetailPageState extends State<TmdbDetailPage> {
   TmdbLoadPhase _phase = TmdbLoadPhase.idle;
   AppError? _error;
-  TmdbItem? _item;
-  List<TmdbEpisode> _episodes = const [];
-  List<TmdbPerson> _cast = const [];
+  TmdbDetailData? _data;
+  List<TmdbEpisodeCard> _episodeCards = const [];
+  List<TmdbItem> _recommendations = const [];
   List<TmdbVideo> _videos = const [];
-  List<String> _photos = const [];
-  List<int> _seasons = const [];
-  Map<int, int> _seasonCounts = const {};
   int _selectedSeason = -1;
+  List<int> _tmdbSeasons = const [];
 
   int _generation = 0;
   bool _disposed = false;
@@ -67,7 +74,9 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   @override
   void initState() {
     super.initState();
-    _item = widget.initialItem;
+    if (widget.initialItem != null) {
+      _data = TmdbDetailData.fromItem(widget.initialItem!);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -87,57 +96,38 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
       _error = null;
     });
     try {
-      final item =
-          _item ??
+      final snapshot =
+          widget.initialItem ??
           TmdbItem(
             tmdbId: widget.identity.tmdbId,
             mediaType: widget.identity.mediaType,
             title: '',
           );
-      final detail = await widget.service.detail(item, includeRelated: true);
+      final detail = await widget.service.detail(snapshot, includeRelated: true);
       if (_disposed || generation != _generation) return;
-      final title = widget.identity.isTv
-          ? _string(detail['name']) ?? _string(detail['title']) ?? item.title
-          : _string(detail['title']) ?? _string(detail['name']) ?? item.title;
-      final vote = _double(detail['vote_average']);
-      final date = widget.identity.isTv
-          ? _string(detail['first_air_date'])
-          : _string(detail['release_date']);
-      final resolved = TmdbItem(
-        tmdbId: widget.identity.tmdbId,
-        mediaType: widget.identity.mediaType,
-        title: title,
-        subtitle: TmdbItem.buildSubtitle(date, vote),
-        overview: _string(detail['overview']),
-        posterUrl: widget.service.image(
-          _string(detail['poster_path']) == null ? '' : _imageBase,
-          _string(detail['poster_path']),
-        ),
-        backdropUrl: widget.service.image(
-          _imageBaseBackdrop,
-          _string(detail['backdrop_path']),
-        ),
-        rating: vote,
-        tmdbRating: vote,
-        originalLanguage: _string(detail['original_language']) ?? '',
+      final config = widget.service.config;
+      final data = TmdbDetailData.fromDetail(
+        detail,
+        imageBase: config.imageBase,
+        backdropBase: config.backdropBase,
+        item: snapshot,
       );
-      final seasons = _seasonsFromDetail(detail);
+      final seasons = data.seasons.map((season) => season.number).toList();
+      final selected = seasons.isEmpty ? -1 : _defaultSeasonOf(seasons);
       setState(() {
-        _item = resolved;
-        _cast = widget.service.cast(detail);
-        _photos = widget.service.photos(detail, preferLandscape: true);
-        _seasons = seasons.map((entry) => entry.$1).toList();
-        _seasonCounts = {
-          for (final entry in seasons) entry.$1: entry.$2,
-        };
-        // 默认选第一季（元数据季度，无播放约束）
-        _selectedSeason = _seasons.isEmpty ? -1 : _seasons.first;
+        _data = data;
+        _tmdbSeasons = seasons;
+        _selectedSeason = selected;
+        _recommendations = dedupeItems([
+          ...widget.service.recommendationsFromDetail(detail),
+          ...widget.service.similarFromDetail(detail),
+        ]);
         _phase = TmdbLoadPhase.ready;
       });
-      if (_selectedSeason >= 0) {
-        await _loadEpisodes(generation);
+      if (selected >= 0) {
+        await _loadEpisodes(generation, selected);
       }
-      await _loadVideos(generation);
+      await _loadVideos(generation, selected);
     } on TmdbCancelledException {
       if (_disposed || generation != _generation) return;
       setState(() => _phase = TmdbLoadPhase.idle);
@@ -172,27 +162,29 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
     }
   }
 
-  Future<void> _loadEpisodes(int generation) async {
-    final item = _item;
-    if (item == null || _selectedSeason < 0) return;
+  Future<void> _loadEpisodes(int generation, int season) async {
+    final item = widget.initialItem;
+    if (item == null || season < 0) return;
     try {
-      final episodes = await widget.service.seasonEpisodes(
-        item,
-        _selectedSeason,
-      );
+      final episodes = await widget.service.seasonEpisodes(item, season);
       if (_disposed || generation != _generation) return;
-      setState(() => _episodes = episodes);
+      setState(() {
+        _episodeCards = TmdbEpisodeCards.fromMetadata(episodes);
+      });
     } catch (_) {
       if (_disposed || generation != _generation) return;
-      setState(() => _episodes = const []);
+      setState(() => _episodeCards = const []);
     }
   }
 
-  Future<void> _loadVideos(int generation) async {
-    final item = _item;
+  Future<void> _loadVideos(int generation, int season) async {
+    final item = widget.initialItem;
     if (item == null) return;
     try {
-      final videos = await widget.service.videos(item);
+      final videos = await widget.service.videos(
+        item,
+        seasonNumber: season >= 0 ? season : null,
+      );
       if (_disposed || generation != _generation) return;
       setState(() => _videos = videos);
     } catch (_) {
@@ -202,40 +194,51 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   }
 
   Future<void> _selectSeason(int season) async {
-    if (_disposed || !_seasons.contains(season) || season == _selectedSeason) {
+    if (_disposed || !_tmdbSeasons.contains(season) || season == _selectedSeason) {
       return;
     }
     setState(() {
       _selectedSeason = season;
-      _episodes = const [];
+      _episodeCards = const [];
     });
-    await _loadEpisodes(_generation);
+    await _loadEpisodes(_generation, season);
+  }
+
+  /// 默认选中季度：优先第一个**正片**季度（特别篇不作为默认）。
+  static int _defaultSeasonOf(List<int> seasons) {
+    for (final season in seasons) {
+      if (season > 0) return season;
+    }
+    return seasons.first;
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final item = _item;
+    final data = _data;
     return Scaffold(
       appBar: AppBar(
-        title: Text(item?.title ?? 'TMDB 详情'),
+        title: Text(data?.title.isNotEmpty == true ? data!.title : 'TMDB 详情'),
         actions: [
           // 「搜索站源」入口（`04` §6.2）：TMDB 详情页没有播放按钮
           TextButton.icon(
             key: const ValueKey('tmdb-search-source'),
             icon: const Icon(Icons.search),
             label: const Text('搜索站源'),
-            onPressed: item == null || item.title.isEmpty
+            onPressed: data == null || data.title.isEmpty
                 ? null
-                : () => widget.onSearchSource?.call(item.title, widget.identity),
+                : () => widget.onSearchSource?.call(
+                    data.title,
+                    widget.identity,
+                  ),
           ),
         ],
       ),
       body: switch (_phase) {
         TmdbLoadPhase.idle ||
-        TmdbLoadPhase.loading => const Center(
-          child: CircularProgressIndicator(),
-        ),
+        TmdbLoadPhase.loading => data == null
+            ? const Center(child: CircularProgressIndicator())
+            : _buildContent(context, data),
         TmdbLoadPhase.disabled => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -268,247 +271,72 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             ),
           ),
         ),
-        TmdbLoadPhase.ready => _buildContent(context, item),
+        TmdbLoadPhase.ready => _buildContent(context, data),
       },
     );
   }
 
-  Widget _buildContent(BuildContext context, TmdbItem? item) {
-    final theme = Theme.of(context);
-    if (item == null) return const SizedBox.shrink();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // 头部
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 140,
-              height: 210,
-              child: PosterImage(url: item.posterUrl),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    key: const ValueKey('tmdb-only-title'),
-                    style: theme.textTheme.headlineSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  if (item.subtitle.isNotEmpty)
-                    Text(item.subtitle, style: theme.textTheme.bodyMedium),
-                  const SizedBox(height: 8),
-                  Text(
-                    TmdbEnrichmentRatingText.of(item.tmdbRating),
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  // 明确标注：这是元数据季度，不是可播放内容（`04` §6.3）
-                  Chip(
-                    key: const ValueKey('tmdb-only-metadata-badge'),
-                    avatar: const Icon(Icons.info_outline, size: 16),
-                    label: const Text('元数据季度 · 不可直接播放'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        if ((item.overview ?? '').trim().isNotEmpty) ...[
-          Text('简介', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(item.overview!, style: theme.textTheme.bodyMedium),
-          const SizedBox(height: 16),
-        ],
-        // 季度选择器：显示 TMDB 全部季度
-        if (_seasons.isNotEmpty) ...[
-          Text('季度', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final season in _seasons)
-                ChoiceChip(
-                  key: ValueKey('tmdb-only-season-$season'),
-                  label: Text(
-                    season == 0
-                        ? '特别篇 · ${_seasonCounts[season] ?? 0} 集'
-                        : '第 $season 季 · ${_seasonCounts[season] ?? 0} 集',
-                  ),
-                  selected: season == _selectedSeason,
-                  onSelected: (_) => _selectSeason(season),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-        ],
-        // 选集区：只读、不可播
-        Text(
-          _selectedSeason >= 0
-              ? '剧集（第 $_selectedSeason 季）'
-              : '剧集',
-          style: theme.textTheme.titleMedium,
-        ),
-        const SizedBox(height: 8),
-        if (_episodes.isEmpty)
-          Text('没有可展示的剧集', style: theme.textTheme.bodyMedium)
-        else
-          GridView.builder(
-            key: const ValueKey('tmdb-only-episodes'),
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisExtent: 64,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: _episodes.length,
-            itemBuilder: (context, index) {
-              final episode = _episodes[index];
-              return _ReadOnlyEpisodeTile(episode: episode);
-            },
-          ),
-        if (_cast.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text('演职人员', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final person in _cast.take(12))
-                Chip(
-                  avatar: person.profileUrl == null
-                      ? null
-                      : SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: PosterImage(url: person.profileUrl),
-                        ),
-                  label: Text(
-                    person.subtitle.isEmpty
-                        ? person.name
-                        : '${person.name} · ${person.subtitle}',
-                  ),
-                ),
-            ],
-          ),
-        ],
-        if (_photos.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text('剧照', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 120,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _photos.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) => SizedBox(
-                width: 200,
-                child: PosterImage(url: _photos[index]),
-              ),
-            ),
-          ),
-        ],
-        if (_videos.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text('相关视频', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          for (final video in _videos)
-            TmdbVideoTile(
-              video: video,
-              onOpen: widget.onOpenVideo,
-              onCopy: widget.onCopyVideo,
-            ),
-        ],
-      ],
+  Widget _buildContent(BuildContext context, TmdbDetailData? data) {
+    if (data == null) return const SizedBox.shrink();
+    return SingleChildScrollView(
+      child: TmdbDetailView(
+        data: data,
+        seasons: data.seasons,
+        selectedSeason: _selectedSeason,
+        selectableSeasons: _tmdbSeasons,
+        onSeasonChanged: (season) => _selectSeason(season),
+        seasonKeyPrefix: 'tmdb-only-season',
+        episodeKeyPrefix: 'tmdb-only-episode',
+        // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
+        episodeActionLabel: '搜索站源',
+        episodeCards: _episodeCards,
+        recommendations: _recommendations,
+        videos: _videos,
+        metadataBadge: '元数据季度 · 不可直接播放',
+        onEpisodeTap: (_, card) {
+          if (data.title.isEmpty) return;
+          widget.onSearchSource?.call(data.title, widget.identity);
+        },
+        onPersonTap: (person) => _openPerson(person),
+        onRecommendationTap: (item) => _openItem(item),
+        onOpenVideo: widget.onOpenVideo,
+        onCopyVideo: widget.onCopyVideo,
+      ),
     );
   }
 
-  static const String _imageBase = 'https://images.tmdb.org/t/p/w342';
-  static const String _imageBaseBackdrop = 'https://images.tmdb.org/t/p/w780';
-
-  List<(int, int)> _seasonsFromDetail(Map<String, Object?> detail) {
-    final raw = detail['seasons'];
-    if (raw is! List) return const [];
-    final result = <(int, int)>[];
-    for (final item in raw) {
-      if (item is! Map) continue;
-      final number = _int(item['season_number']);
-      final count = _int(item['episode_count']);
-      if (number == null || count == null || count <= 0) continue;
-      result.add((number, count));
-    }
-    return result;
-  }
-}
-
-/// 只读剧集卡片（`04` §6.2：**不得**显示为可播放）。
-class _ReadOnlyEpisodeTile extends StatelessWidget {
-  const _ReadOnlyEpisodeTile({required this.episode});
-
-  final TmdbEpisode episode;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      key: ValueKey('tmdb-only-episode-${episode.number}'),
-      // 明确不可播：无播放按钮、无点击行为
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(
-              Icons.article_outlined,
-              size: 18,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                episode.displayTitle,
-                style: theme.textTheme.bodyMedium,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+  void _openPerson(TmdbPerson person) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdbPersonPage(
+          service: widget.service,
+          person: person,
+          onOpenItem: (item) => _openItem(item),
         ),
       ),
     );
   }
-}
 
-/// 评分文案辅助（纯 TMDB 详情页用）。
-abstract final class TmdbEnrichmentRatingText {
-  static String of(double tmdbRating) => tmdbRating > 0
-      ? 'TMDB ${tmdbRating.toStringAsFixed(1)}'
-      : 'TMDB —';
-}
-
-int? _int(Object? value) {
-  if (value is int) return value;
-  if (value is num) return value.toInt();
-  if (value is String) return int.tryParse(value);
-  return null;
-}
-
-double _double(Object? value) {
-  if (value is num) return value.toDouble();
-  if (value is String) return double.tryParse(value) ?? 0;
-  return 0;
-}
-
-String? _string(Object? value) {
-  if (value == null) return null;
-  if (value is String) return value;
-  return value.toString();
+  void _openItem(TmdbItem item) {
+    final identity = item.identity;
+    if (identity == null) return;
+    final external = widget.onOpenItem;
+    if (external != null) {
+      external(item);
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdbDetailPage(
+          service: widget.service,
+          identity: identity,
+          initialItem: item,
+          onSearchSource: widget.onSearchSource,
+          onOpenVideo: widget.onOpenVideo,
+          onCopyVideo: widget.onCopyVideo,
+          onOpenItem: widget.onOpenItem,
+        ),
+      ),
+    );
+  }
 }

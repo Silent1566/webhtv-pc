@@ -17,6 +17,7 @@ import '../core/app_error.dart';
 import '../core/playback.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_config.dart';
+import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../core/tmdb_season.dart';
@@ -153,6 +154,14 @@ class TmdbState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 详情页某条线路对应的绑定键（`04` §2.3）。
+  ///
+  /// 与 [selectLine] / [sourceLineOf] 用**同一套唯一性判定**，因此 UI 可以
+  /// 直接用它判断「这一条线路是不是 TMDB 当前解析的线路」，不会因为
+  /// `#index` 后缀规则不一致而永远判否（实测缺陷：剧集剧照整块不生效）。
+  String flagKeyForLine(VodPlayLine line) =>
+      flagKeyOf(line, 0, unique: _isFlagUnique(line.flag));
+
   bool _isFlagUnique(String flag) {
     var count = 0;
     for (final line in _playLines) {
@@ -207,6 +216,82 @@ class TmdbState extends ChangeNotifier {
     tmdbRating: item?.tmdbRating ?? 0,
     matched: hasMatch,
   );
+
+  // -------------------------------------------------------------------------
+  // 展示模型（`04` §3、§4.2：海报 / 导演 / 剧照卡片 / 动态背景）
+  // -------------------------------------------------------------------------
+
+  /// 详情页展示模型（海报、背景图、剧照、演职人员、导演、类型…）。
+  ///
+  /// 未匹配或详情未就绪时退化为 `item` 快照（只有标题/海报/评分），
+  /// 使头部至少能渲染，不会因缺少详情而空白。
+  TmdbDetailData? get detailData {
+    final currentItem = item;
+    final config = _config();
+    if (currentItem == null) return null;
+    final detail = _detail;
+    if (detail == null) {
+      return TmdbDetailData.fromItem(currentItem);
+    }
+    return TmdbDetailData.fromDetail(
+      detail,
+      imageBase: config.imageBase,
+      backdropBase: config.backdropBase,
+      item: currentItem,
+      // 详情没给时长时，用已加载剧集的众数时长（用户反馈的「没有其他信息」）。
+      runtimeFallback: tmdbTypicalRuntime(_episodes),
+    );
+  }
+
+  /// 动态背景图列表（剧集海报/剧照）。
+  List<String> get backdropUrls => detailData?.backdropUrls ?? const [];
+
+  /// 展示用季度（含季海报与集数）。
+  List<TmdbSeasonInfo> get seasons => detailData?.seasons ?? const [];
+
+  /// 当前季度的 TMDB 集元数据（按集号索引）。
+  Map<int, TmdbEpisode> get episodeMetadataByNumber => {
+    for (final episode in _episodes) episode.number: episode,
+  };
+
+  /// 把**已过滤**的剧集列表渲染为海报卡片（季度过滤后的子集）。
+  ///
+  /// 与 [episodeCardsForLine] 的区别：季度过滤会先缩小集列表，卡片必须与
+  /// **实际渲染的集**一一对应，否则会出现「卡片比集多」的补集假象。
+  List<TmdbEpisodeCard> episodeCardsForEpisodes(
+    List<VodEpisode> episodes, {
+    int? seasonNumber,
+    bool includeMetadata = true,
+  }) {
+    // 线路隔离（`04` §4.3）：非当前线路不得套用当前季度的集元数据，
+    // 否则会把别的线路的剧照/集标题贴到这条线路上（跨线路串图）。
+    final metadata = includeMetadata
+        ? episodeMetadataByNumber
+        : const <int, TmdbEpisode>{};
+    final usePosition = metadata.isEmpty
+        ? false
+        : shouldUseEpisodePosition(
+            episodes.map((episode) => episode.name).toList(),
+            _episodes,
+          );
+    return TmdbEpisodeCards.build(
+      sourceNames: episodes.map((episode) => episode.name).toList(),
+      metadataByNumber: metadata,
+      usePosition: usePosition,
+      seasonNumber: seasonNumber ?? _selectedSeason,
+      // 剧照回退池：本剧的剧照（无剧照则用背景图）。
+      //
+      // 只在**该集没有 TMDB 剧照**时按顺序取用，因此不会覆盖真实剧照；
+      // 目的与上游 `TmdbEpisodeAdapter.fallbackStillUrl` 一致：
+      // 宁可给一张本剧的画面，也不要让用户看到一排灰色占位（实测用户
+      // 反馈就是「每集没有对应的海报卡片」）。
+      fallbackStills: detailData?.photoUrls ?? const <String>[],
+    );
+  }
+
+  /// 当前季度的 TMDB 剧集卡片（纯 TMDB 详情页用，不涉及线路）。
+  List<TmdbEpisodeCard> get episodeCards =>
+      TmdbEpisodeCards.fromMetadata(_episodes);
 
   // -------------------------------------------------------------------------
   // 加载

@@ -287,6 +287,32 @@ int sourceSeasonNumber(String? input) {
   return -1;
 }
 
+/// 来源集名中的集号（`01` §3.5）。无法解析返回 `-1`。
+///
+/// 形态与季度信号同源：`S01E02` / `第3集` / `EP12` / 纯数字 `07`。
+/// 该函数是**纯逻辑**版本，服务层与详情展示层共用，避免两套正则漂移。
+int sourceEpisodeNumber(String? input) {
+  final text = (input ?? '').trim();
+  if (text.isEmpty) return -1;
+  final patterns = <RegExp>[
+    RegExp(r'[Ss]\d{1,2}[-._\s]*[Ee](\d{1,3})'),
+    RegExp(r'第\s*([0-9零〇一二三四五六七八九十两百]+)\s*[集话話回期章节節]'),
+    RegExp(r'\b(?:EP|E|Episode)\s*0*(\d{1,5})\b', caseSensitive: false),
+  ];
+  for (final pattern in patterns) {
+    final match = pattern.firstMatch(text);
+    if (match == null) continue;
+    final number = parseChineseNumber(match.group(1)!);
+    if (number != null && number > 0) return number;
+  }
+  final plain = RegExp(r'^0*(\d{1,4})$').firstMatch(text);
+  if (plain != null) {
+    final number = int.tryParse(plain.group(1)!);
+    if (number != null && number > 0) return number;
+  }
+  return -1;
+}
+
 /// 标题是否提到「分季」（`01` §5.4）。
 bool mentionsSplitSeason(String? input) => normalizeTitle(input ?? '').contains('分季');
 

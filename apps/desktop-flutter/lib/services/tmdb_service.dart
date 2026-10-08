@@ -115,6 +115,12 @@ class TmdbService {
   final DateTime Function() _clock;
   final Duration timeout;
 
+  /// 当前 TMDB 配置（只读）。
+  ///
+  /// UI 层需要 `imageBase` / `backdropBase` 拼接图片地址，因此这里暴露一个
+  /// 只读快照；不得在服务外部修改配置（写入统一走设置页的 `saveTmdbConfig`）。
+  TmdbConfig get config => _config();
+
   /// 鉴权熔断表（`03` §3.4）：`authCircuitKey -> 解禁时间`。
   final Map<String, DateTime> _authBlocks = {};
 
