@@ -1,6 +1,6 @@
 # Phase 5 计划（安卓桥接：T4 站点接入 + 历史/设置同步）
 
-- 状态：**实施中**（设计指导 `design/00`–`design/03` 已完成；实现与门禁进行中）
+- 状态：**已完成**（设计 `design/00`–`design/03` + 实现 T1–T14 全部落地；`PHASE5-ACCEPT result=PASS gates=all`）
 - 日期：2026-10-08
 - 对应设计文档章节：本目录 `design/00`–`design/03`、`docs/webhtv-pc-design.md` §21（Phase 5 生态与同步）、§22.1
 - 上游：`docs/phase4/README.md`（Phase 4 已完成：TMDB 元数据增强）
@@ -82,22 +82,22 @@ Android 侧已经暴露出 **T4 本机网关**（`c388619629`：`feat(server): a
 
 ### 2.2 实施阶段
 
-| # | 任务 | 产出 | 验收 |
-| --- | --- | --- | --- |
-| T1 | 纯逻辑：桥接转换 | `lib/core/android_bridge.dart` | `phase5_android_bridge_test.dart`（23 例） |
-| T2 | 纯逻辑：同步编解码与合并 | `lib/core/android_sync.dart` | `phase5_android_sync_test.dart`（22 例） |
-| T3 | 服务：设备探测与配置拉取 | `lib/services/android_bridge_service.dart` | `phase5_android_bridge_service_test.dart` |
-| T4 | 服务：PC 同步服务端 | `lib/services/sync_server.dart` | `phase5_sync_server_test.dart`（17 例） |
-| T5 | 服务：同步客户端 | `lib/services/sync_client.dart` | `phase5_sync_client_test.dart`（9 例） |
-| T6 | 存储：合并路径与删除标记 | `lib/services/storage.dart` | `phase5_android_sync_test.dart` 合并矩阵 + `schemaVersion` 2→3 迁移 |
-| T7 | 状态层 | `lib/state/app_state.dart`、`lib/state/sync_state.dart` | 导入不覆盖当前配置、同步开关与统计 |
-| T8 | 设置页 UI | `lib/ui/config_pages.dart` | 设备卡片、扫描、导入、同步开关、错误分类展示 |
-| T9 | fixture 与预检 | `packages/test-fixtures/android/**`、`tools/fixture_server/server.py`、`tools/phase5/check_android_fixture.py` | 8 种故障注入逐一可触发 |
-| T10 | 反向验证 | `tools/phase5/verify_reverse_checks.py` | 6 项全部"按预期失败" |
-| T11 | 发布包符号门禁 | `tools/phase5/verify_release_symbols.py` | 9 个 ASCII 符号 + 9 个中文串存在 |
-| T12 | 一键验收脚本 | `tools/phase5/run_windows_acceptance.ps1` | 11 项门禁全绿 |
-| T13 | L3 集成 | `integration_test/phase5_bridge_flow_test.dart`、`phase5_sync_flow_test.dart`、`phase5_sync_push_flow_test.dart` | 真实窗口 + 真实 HTTP + 真实 SQLite |
-| T14 | 证据落盘 | `docs/phase5/evidence/**` | 6 份证据（含 2 张截图） |
+| # | 任务 | 产出 | 验收 | 状态 |
+| --- | --- | --- | --- | --- |
+| T1 | 纯逻辑：桥接转换 | `lib/core/android_bridge.dart` | `phase5_android_bridge_test.dart`（29 例） | ✅ |
+| T2 | 纯逻辑：同步编解码与合并 | `lib/core/android_sync.dart` | `phase5_android_sync_test.dart`（43 例） | ✅ |
+| T3 | 服务：设备探测与配置拉取 | `lib/services/android_bridge_service.dart` | `phase5_android_bridge_service_test.dart`（17 例） | ✅ |
+| T4 | 服务：PC 同步服务端 | `lib/services/sync_server.dart` | `phase5_sync_server_test.dart`（30 例，真实回环 HTTP） | ✅ |
+| T5 | 服务：同步客户端 | `lib/services/sync_client.dart` | `phase5_sync_client_test.dart`（18 例，请求捕获） | ✅ |
+| T6 | 存储：合并路径与删除标记 | `lib/services/storage.dart` | `phase5_sync_storage_test.dart`（15 例）+ `schemaVersion` 2→3 迁移 | ✅ |
+| T7 | 状态层 | `lib/state/app_state.dart`、`lib/state/sync_state.dart` | `SyncStateHost` 契约 + 设置持久化 + 三项开关默认关闭 | ✅ |
+| T8 | 设置页 UI | `lib/ui/config_pages.dart` | `phase5_sync_ui_test.dart`（14 例）+ G10 入口符号 | ✅ |
+| T9 | fixture 与预检 | `packages/test-fixtures/android/**`、`tools/fixture_server/server.py`、`tools/phase5/check_android_fixture.py` | 路由 8 项 + 8 种故障注入逐一可触发 | ✅ |
+| T10 | 反向验证 | `tools/phase5/verify_reverse_checks.py` | 6 项全部"按预期失败" | ✅ |
+| T11 | 发布包符号门禁 | `tools/phase5/verify_release_symbols.py` | 12 个 ASCII 符号 + 9 个中文串存在 | ✅ |
+| T12 | 一键验收脚本 | `tools/phase5/run_windows_acceptance.ps1` | 11 项门禁全绿 | ✅ |
+| T13 | L3 集成 | `integration_test/phase5_bridge_flow_test.dart`、`phase5_sync_flow_test.dart`、`phase5_sync_push_flow_test.dart` | 真实窗口 + 真实 HTTP + 真实 SQLite | ✅ |
+| T14 | 证据落盘 | `docs/phase5/evidence/**` | 6 份证据（含 2 张截图） | ✅ |
 
 依赖关系：
 
@@ -123,16 +123,16 @@ T9 → T10 T11 → T12 → T13 → T14
 
 | # | 门禁 | 命令 | 通过判据 |
 | --- | --- | --- | --- |
-| G1 | 安卓 fixture 预检 | `py -3 tools/phase5/check_android_fixture.py --base <url>` | 6 项全通过 |
+| G1 | 安卓 fixture 预检 | `py -3 tools/phase5/check_android_fixture.py --base <url>` | 路由 8 项 + 故障注入 8 项全通过 |
 | G2 | Python 契约 | `py -3 -m unittest tests.test_contracts` | 8 个新增用例通过 |
 | G3 | Schema 校验 | `py -3 scripts/validate_contracts.py` | 无错误 |
 | G4 | 静态检查 | `dart analyze` | 无问题 |
-| G5 | 单元测试 | `flutter test` | 全绿（含 5 个 `phase5_*` 套件） |
-| G6 | 套件存在性 | 脚本内清单核对 | 5 个套件文件均存在 |
+| G5 | 单元测试 | `flutter test` | 全绿（含 7 个 `phase5_*` 套件，共 1338 例） |
+| G6 | 套件存在性 | 脚本内清单核对 | 7 个套件文件均存在 |
 | G7 | Windows 集成 | `flutter test integration_test/phase5_*_flow_test.dart -d windows` | 3 个套件全绿 |
 | G8 | 反向验证 | `py -3 tools/phase5/verify_reverse_checks.py` | 6 项全部"按预期失败"且还原后工作区干净 |
-| G9 | 凭据与指纹脱敏 | `py -3 tools/phase4/verify_tmdb_redaction.py` + 桥接脱敏断言 | 无凭据/设备指纹原文 |
-| G10 | 发布包符号 | `py -3 tools/phase5/verify_release_symbols.py` | 符号与中文串存在，无测试壳污染 |
+| G9 | 凭据与指纹脱敏 | `py -3 tools/phase4/verify_tmdb_redaction.py` + `py -3 tools/phase5/verify_bridge_redaction.py` | 无凭据/设备指纹原文 |
+| G10 | 发布包符号 | `py -3 tools/phase5/verify_release_symbols.py` | 12 个 ASCII 符号 + 9 个中文串存在，无测试壳污染；产物早于源码时明确报 `stale` |
 | G11 | 产物可运行 | 既有 `debug-artifact-runnable` | Debug 入口是 `lib/main.dart` |
 
 一键验收（需先启动 fixture 服务，脚本会自行确保）：
@@ -147,17 +147,18 @@ pwsh -File tools/phase5/run_windows_acceptance.ps1 -ProbeRealDevice 192.168.50.3
 
 ### 3.1 测试套件
 
-| 层 | 套件 | 用例数 |
+| 层 | 套件 | 用例数（实测） |
 | --- | --- | --- |
-| L1 | `test/phase5_android_bridge_test.dart` | 23 |
-| L1 | `test/phase5_android_sync_test.dart` | 22 |
-| L2 | `test/phase5_android_bridge_service_test.dart` | 12 |
-| L2 | `test/phase5_sync_server_test.dart` | 17 |
-| L2 | `test/phase5_sync_client_test.dart` | 9 |
-| L2 | `test/phase5_sync_ui_test.dart` | 10 |
-| L3 | `integration_test/phase5_bridge_flow_test.dart` | 8 步 |
-| L3 | `integration_test/phase5_sync_flow_test.dart` | 8 步 |
-| L3 | `integration_test/phase5_sync_push_flow_test.dart` | 6 步 |
+| L1 | `test/phase5_android_bridge_test.dart` | 29 |
+| L1 | `test/phase5_android_sync_test.dart` | 43 |
+| L2 | `test/phase5_android_bridge_service_test.dart` | 17 |
+| L2 | `test/phase5_sync_storage_test.dart` | 15 |
+| L2 | `test/phase5_sync_server_test.dart` | 30 |
+| L2 | `test/phase5_sync_client_test.dart` | 18 |
+| L2 | `test/phase5_sync_ui_test.dart` | 14 |
+| L3 | `integration_test/phase5_bridge_flow_test.dart` | 4 个用例 / 8 步 |
+| L3 | `integration_test/phase5_sync_flow_test.dart` | 1 个用例 / 8 步 |
+| L3 | `integration_test/phase5_sync_push_flow_test.dart` | 1 个用例 / 6 步 |
 
 ### 3.2 反向验证（机器校验）
 
@@ -219,3 +220,37 @@ pwsh -File tools/phase5/run_windows_acceptance.ps1 -ProbeRealDevice 192.168.50.3
 | Q8 | `doh` 是否启用？ | **只保存不启用** | `design/01` §9 Q3 |
 | Q9 | 删除是否传播到 Android？ | **本阶段不传播**，只保证不复活 | `design/02` §4.5 |
 | Q10 | 是否做定时自动同步？ | **不做**，只手动触发 | `design/02` §8 Q1 |
+
+---
+
+## 6. 实测结论（2026-10-08）
+
+| 项 | 事实 |
+| --- | --- |
+| 一键验收 | `PHASE5-ACCEPT result=PASS gates=all`（11 项全绿，含 `-BuildReleaseForSymbols`） |
+| L1/L2 | `flutter test` 1338 例全绿；`dart analyze` 无问题 |
+| L3 | 桥接 8 步 / 同步 8 步 / 推送 6 步全部通过，均带 `PHASE5-EVIDENCE` 事实行 |
+| 反向验证 | 6 项全部"按预期失败"，还原后 `working-tree-clean=true` |
+| 发布包符号 | `ANDROID-SYMBOLS result=PASS ascii=12 utf16=9 leaked=0` |
+| 脱敏 | `sources=6 assertions=3 evidence=4`，无指纹/凭据原文 |
+| 站点保真 | 170 站点、170 个唯一 key；**161 个唯一名字（重名合法：比的是多重集）** |
+| 站点地址派生 | 改 `Host` 头后站点 `api` 主机随之变化（P2 的现场证据） |
+| 证据文件 | `docs/phase5/evidence/**` 共 6 份（4 文本 + 2 截图） |
+
+### 6.1 门禁抓到的真实问题（本阶段记录）
+
+1. **证据生成器泄漏指纹占位值**：`device-probe.txt` 曾原样写出 fixture 的 uuid
+   占位值。证据文件要交给用户看，而读者无法分辨 uuid 真假——G9 抓出后改为只写
+   "字段完整性"。
+2. **脱敏门禁的失败信息造成自指循环**：失败信息回显敏感字面量，字面量被写进
+   验收日志，下一次扫描又抓到它（日志因此反复失败，而真正的泄漏早已修掉）。
+   现在失败信息只报文件名与类别，不回显值。
+3. **发布包符号门禁的产品发现**：设计文档 §3.2 初稿把 `mode` 语义写反
+   （0/2 对调），按上游 `Action.onSync` 源码更正；`type=history` 的 `config.url`
+   隐形前提也是实现期才暴露（见 `design/02` §3.2/§3.5 的勘误块）。
+
+### 6.2 已知工具限制（非产品缺陷）
+
+一次 `flutter test` 传多个集成套件时，Windows 桌面设备只能承载一个应用实例，
+第二个套件会报 `Unable to start the app on the device`。验收脚本因此逐套件单独运行
+（与 Phase 1–4 一致）。

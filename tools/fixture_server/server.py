@@ -61,6 +61,32 @@ TMDB_STATS: dict[str, int] = {}
 #   `auth=401` 使全部 `/3/**` 返回 401（验证鉴权失败隔离与熔断）；
 #   `auth=off` 恢复正常。只影响后续请求，不改任何 fixture 文件。
 TMDB_MODE: dict[str, str] = {}
+# 安卓 T4 网关 fixture 根目录（`docs/phase5/design/03` §2.1）。
+ANDROID_FIXTURES = ROOT / "packages" / "test-fixtures" / "android"
+# 安卓路由命中计数与**最近一次**收到的表单字段（`/android/__stats`，§2.3）。
+# 为什么记表单字段：PC 推送给安卓时，断言点在"发出去的形态"
+# （`mode`/`type`/表单是否含 `settings`），记下来就不用抓包。
+ANDROID_STATS: dict[str, int] = {}
+ANDROID_LAST_FORM: dict[str, str] = {}
+ANDROID_LAST_QUERY: dict[str, str] = {}
+# 每条路由最近一次请求的 `Host` 头（P2 的现场证据：站点地址由请求的 Host 现算）。
+ANDROID_LAST_HOST: dict[str, str] = {}
+# 安卓故障注入模式（`/android/__mode?config=<mode>`，§2.3 表）。
+#   ok(默认) / 404 / empty / mismatch / loopback / repo / notandroid / slow / 403
+# `403` 专用于 `/action`：模拟安卓"本机 API 修改未开启"。
+ANDROID_MODE: dict[str, str] = {}
+ANDROID_MODES = {
+    "ok",
+    "404",
+    "empty",
+    "mismatch",
+    "loopback",
+    "repo",
+    "notandroid",
+    "slow",
+    "403",
+}
+
 REQUIRED_REFERER = "http://127.0.0.1:18080/"
 REQUIRED_USER_AGENT = "WebHTV-PC/0.1 (Windows)"
 LEGACY_USER_AGENT = "WebHTV-PC-Phase0"
@@ -218,6 +244,16 @@ XML_DETAIL = """<?xml version="1.0" encoding="utf-8"?>
 XML_CONTENT_TYPE = "application/xml; charset=utf-8"
 
 
+def _json_file(path: Path, host: str) -> bytes:
+    """读取 JSON fixture 并把 `__HOST__` 占位符替换为请求的 `Host`。
+
+    占位符机制（`docs/phase5/design/03` §2.2）：真实地址随环境变化，写死会让
+    同一份 fixture 无法同时服务"主机一致"与"主机不一致"两个用例。
+    """
+    text = path.read_text(encoding="utf-8").replace("http://__HOST__", f"http://{host}")
+    return text.encode("utf-8")
+
+
 def _json(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
 
@@ -285,6 +321,116 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def _send_error_json(self, status: int, message: str) -> None:
         payload = json.dumps({"status": status, "msg": message}).encode("utf-8")
         self._send_bytes(payload, "application/json; charset=utf-8", status=status)
+
+    # ---------------------------------------------------------------- 安卓
+
+    def _send_android(self, path: str, parsed, *, canonical: bool) -> None:
+        """安卓 T4 网关与服务端 fixture（`docs/phase5/design/03` §2.3）。
+
+        [canonical] 为真时是 `/android/**` 规范命名空间（含 `__stats` 等测试开关）；
+        为假时是根路径别名 `/device`、`/vod/api`、`/action`。
+        """
+        route = path.rstrip("/") or "/"
+        params = {
+            key: values[0]
+            for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
+
+        if canonical and route == "/__stats":
+            self._send_json({
+                "counts": dict(ANDROID_STATS),
+                "total": sum(ANDROID_STATS.values()),
+                "lastForm": dict(ANDROID_LAST_FORM),
+                "lastQuery": dict(ANDROID_LAST_QUERY),
+                "lastHost": dict(ANDROID_LAST_HOST),
+                "mode": dict(ANDROID_MODE),
+            })
+            return
+        if canonical and route == "/__reset":
+            ANDROID_STATS.clear()
+            ANDROID_LAST_FORM.clear()
+            ANDROID_LAST_QUERY.clear()
+            ANDROID_LAST_HOST.clear()
+            ANDROID_MODE.clear()
+            self._send_json({"counts": {}})
+            return
+        if canonical and route == "/__mode":
+            key = "content" if "content" in params else "config"
+            value = params.get(key, "ok")
+            if value in ANDROID_MODES:
+                ANDROID_MODE["config"] = value
+            self._send_json({"mode": dict(ANDROID_MODE)})
+            return
+
+        mode = ANDROID_MODE.get("config", "ok")
+        host = self.headers.get("Host") or "127.0.0.1:18080"
+
+        if route == "/device":
+            ANDROID_STATS["/device"] = ANDROID_STATS.get("/device", 0) + 1
+            ANDROID_LAST_HOST["/device"] = host
+            if mode == "notandroid":
+                self._send_json({"hello": "world"})
+                return
+            payload = json.loads(
+                (ANDROID_FIXTURES / "device.json").read_text(encoding="utf-8")
+            )
+            # `ip` 按请求的 `Host` 现算：真实网关与 `/device` 都报告"对端可达地址"，
+            # 写死会把 PC 引到一个不存在的地址上。
+            payload["ip"] = f"http://{host}"
+            self._send_json(payload)
+            return
+
+        if route == "/vod/api":
+            action = params.get("ac", "")
+            key = params.get("key", "")
+            name = f"/vod/api?ac={action}" if action else f"/vod/api?key={key}"
+            ANDROID_STATS[name] = ANDROID_STATS.get(name, 0) + 1
+            ANDROID_LAST_HOST[name] = host
+
+            if key:
+                self._send_json_bytes(
+                    _json_file(ANDROID_FIXTURES / "vod-home.json", host)
+                )
+                return
+            if mode == "404":
+                self._send_error_json(404, "not found")
+                return
+            if mode == "slow":
+                time.sleep(5)
+            fixture = {
+                "empty": "gateway-config-empty.json",
+                "mismatch": "gateway-config-mismatch.json",
+                "loopback": "gateway-config-loopback.json",
+                "repo": "gateway-config-repo.json",
+            }.get(mode, "gateway-config.json")
+            # 关键契约：站点 `api` 的主机由**请求的 `Host` 头**现算
+            # （`docs/phase5/design/00` §3.2 实测）。
+            # `ac=config` 与 `ac=site` 返回**字节相同**（§3.2 第 3 条）。
+            self._send_json_bytes(_json_file(ANDROID_FIXTURES / fixture, host))
+            return
+
+        if route == "/action":
+            ANDROID_STATS["/action"] = ANDROID_STATS.get("/action", 0) + 1
+            ANDROID_LAST_HOST["/action"] = host
+            ANDROID_LAST_QUERY.clear()
+            ANDROID_LAST_QUERY.update(params)
+            if self.command == "POST":
+                ANDROID_LAST_FORM.clear()
+                ANDROID_LAST_FORM.update(self._request_body())
+            if mode == "403":
+                self._send_bytes(
+                    "本机 API 修改未开启".encode("utf-8"),
+                    "text/plain; charset=utf-8",
+                    status=403,
+                )
+                return
+            self._send_bytes(
+                b"OK applied=3 skipped=0 failed=0 total=3",
+                "text/plain; charset=utf-8",
+            )
+            return
+
+        self._send_error_json(404, "android fixture route not found")
 
     # ------------------------------------------------------------------ TMDB
 
@@ -533,6 +679,19 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if path == "/health":
             self._send_json({"status": "ok"})
+            return
+        # 安卓 T4 网关 fixture（`docs/phase5/design/03` §2.3）。
+        #
+        # 两种挂载点都必须有：
+        # - `/android/**`：规范命名空间，供预检脚本与契约测试用；
+        # - 根路径别名 `/device`、`/vod/api`、`/action`：**PC 客户端实际请求的路径**。
+        #   PC 的 `normalizeBase` 只保留 scheme+host+port（`design/01` §4.2），
+        #   会把 `/android` 前缀丢掉，所以集成测试的 base 只能用根路径形态。
+        if path.startswith("/android"):
+            self._send_android(path.removeprefix("/android"), parsed, canonical=True)
+            return
+        if path in ("/device", "/vod/api", "/action"):
+            self._send_android(path, parsed, canonical=False)
             return
         # TMDB 图片 fixture（`docs/phase4/design/05` §2.2 扩展）。
         #
