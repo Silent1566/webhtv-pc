@@ -2286,7 +2286,9 @@ TmdbSeasonProgressKey = mediaType + tmdbId + seasonNumber
 | `tmdb_route_bindings` | 季度→线路索引（换源候选，上限 512） |
 | `tmdb_season_progress` | 季度进度快照 |
 
-- `schemaVersion` 由 `1` 升至 `2`；`CREATE TABLE IF NOT EXISTS` 保证迁移幂等。
+- `schemaVersion` 由 `1` 升至 `2`（Phase 4 新增 TMDB 四表），再由 `2` 升至 `3`
+  （Phase 5 新增 `history_deletions` 删除标记表）；两次均为加法式升级，
+  `CREATE TABLE IF NOT EXISTS` 保证迁移幂等。
 - 文件缓存位于 `<cacheDir>/tmdb/<type>_<md5>.json`；目录不可写时降级为不缓存。
 - 清理边界：重置缓存不动 SQLite；“清空历史”清季度进度但保留匹配与绑定。
 
@@ -2416,13 +2418,32 @@ PC 必须实现的端点（**路径必须与 Android 完全一致**，否则 And
 | `POST` | `/action?do=sync&mode=<0\|1\|2>&type=keep` | 接收收藏（`targets` + `configs`） |
 | `POST` | `/action?do=sync&mode=<0\|1\|2>&type=backup` | 接收设置备份（`options` + `backup`） |
 
+`mode` 语义（`Action.onSync` 源码实证，**从被请求方视角定义**）：
+
+| `mode` | 被请求方的行为 | 调用方意图 |
+| --- | --- | --- |
+| `1` | 只应用请求体载荷 | **推送**（我把我的数据给你） |
+| `2` | 只推送（必须带 `device`） | **拉取**（我要你的数据） |
+| `0` | 带 `device` 时先推给对方，**并且**应用载荷 | 双向 |
+
+> PC 作为服务端**必须把 `mode=0` 与 `mode=1` 都当作“落库”**：Android 自己的
+> `Action.post()`（投递历史/收藏/备份）用的就是 `mode=0`，只认 `mode=1` 会收不到推送。
+> `mode=2` 缺 `device` 一律 `400`（对齐上游 `Manage.syncStart`）。
+
 字段映射要点：
 
-- `History.key` 切分为 `siteKey` / `vodId` / `cid`；反向映射写 `cid=0`，由 Android 侧重映射。
+- `History.key` 切分为 `siteKey` / `vodId` / `cid`；反向映射写 `cid=0`。
+  `History` 的 `@PrimaryKey` 就是 `key` 字符串，而 `History.sync()` 只把 `cid` **列**
+  覆写为安卓当前 cid、**不改 `key`**；非聚合模式下安卓会先按 `vodName` 做 name-merge
+  物理替换同名本地行，因此不会重复（聚合模式可能同剧两行，属安卓侧策略）。
 - `position` / `duration` / `createTime` **毫秒直传，不做换算**。
 - `opening` / `ending` 的 `C.TIME_UNSET`（`Long.MIN_VALUE`）**必须过滤**，否则整数溢出。
 - PC 不理解的字段（`tmdbId`/`mediaType`/`sourceBindingKey`/`player` 等）**保留在 raw**，不丢弃。
 - `SyncOptions` 只发 PC 理解的子集，其余显式写 `false`。
+- `type=history` 的 `config` **必须含非空 `url`**：安卓 `syncHistory` 首行即
+  `if (config.getUrl() == null) return;`——静默无操作却返回 `200`；且 `url` 与安卓
+  当前配置不同时会 `VodConfig.load(config)` **切换安卓配置**。因此 PC 推送前
+  主动拒绝空 `url`，而不是报“成功”。
 
 合并算法（P3 的核心）：
 
@@ -2455,11 +2476,17 @@ PC 必须实现的端点（**路径必须与 Android 完全一致**，否则 And
 | --- | --- |
 | `syncDisabled` | 功能未开启 |
 | `syncPeerUnauthorized` | `uuid` 不在白名单 |
-| `syncPeerUnreachable` | 推送时连不上 |
-| `syncPayloadInvalid` | JSON 非法 / 缺字段 |
+| `syncPeerUnreachable` | 推送时连不上（连接被拒 / 超时 / DNS 失败） |
+| `syncPeerError` | 已连上但对端返回 4xx/5xx，**必须带状态码与响应正文** |
+| `syncPortUnavailable` | 本机服务端 9978–9998 端口全被占用 |
+| `syncPayloadInvalid` | JSON 非法 / 缺字段（含 `config.url` 为空这一安卓静默忽略的前提） |
 | `syncPayloadTooLarge` | 超 8 MiB |
 | `syncLocalWriteRejected` | Android 返回 403（本机 API 修改未开启） |
 | `syncPartialFailure` | 有记录失败，**必须报出 applied/skipped/failed 明细** |
+
+> `syncPeerError` 与 `syncPortUnavailable` 是实施期新增的两类（`design/02` §6）：
+> 把“已连上但对端报错”归入 `syncPeerUnreachable` 会直接误导用户去查网络，
+> 而真实原因在对端响应里；端口全占用若静默退到随机端口，用户按记忆填的地址会连不上。
 
 ### 28.6 安全与隐私
 
