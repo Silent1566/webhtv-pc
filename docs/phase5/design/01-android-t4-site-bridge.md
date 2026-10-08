@@ -284,6 +284,7 @@ AndroidBridgeConfig convertGatewayConfig({
 | `bridgeUnreachable` | 连接被拒 / 超时 / DNS 失败 | 地址不可达 + 建议检查设备是否在同一局域网、应用服务是否运行 |
 | `bridgeNotAndroid` | `/device` 返回 200 但不是合法设备 JSON | 该地址不是 WebHTV Android 服务 |
 | `bridgeNoGateway` | `/device` 成功但 `/vod/api?ac=config` 返回 404 | 设备版本过旧，缺少 T4 网关（需 `c388619629` 或更新） |
+| `bridgeNoGateway` | 响应带 `urls` 配置仓库（不是 T4 网关形态） | 该地址不是 T4 网关配置端点 |
 | `bridgeEmptySites` | 配置合法但 `sites` 为空 | 设备上尚未加载任何点播配置 |
 | `bridgeHostMismatch` | 站点主机既非请求主机也非回环 | 网关返回了异常地址，已拒绝导入 |
 | `bridgeSelfReference` | 目标是 PC 自己 | 不能把本机当作安卓设备 |

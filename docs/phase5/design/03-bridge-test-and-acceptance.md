@@ -95,7 +95,7 @@ packages/test-fixtures/android/
 | `empty` | 返回 `gateway-config-empty.json` | `bridgeEmptySites` |
 | `mismatch` | 返回 `gateway-config-mismatch.json` | `bridgeHostMismatch` |
 | `loopback` | 返回 `gateway-config-loopback.json` | 触发 P2 重写（成功 + 诊断） |
-| `repo` | 返回 `gateway-config-repo.json` | `bridgeHostMismatch`（网关不该返回仓库） |
+| `repo` | 返回 `gateway-config-repo.json` | `bridgeNoGateway`（网关不该返回配置仓库） |
 | `notandroid` | `/android/device` 返回 `{"hello":"world"}` | `bridgeNotAndroid` |
 | `slow` | 延迟 5 s | `bridgeUnreachable`（超时） |
 
@@ -134,7 +134,7 @@ packages/test-fixtures/android/
 | 14 | 响应回环 + 请求非回环 → 重写 + 诊断 | 地址被修正为请求主机，诊断计数 = 站点数 |
 | 15 | 响应第三方主机 → `bridgeHostMismatch` | 抛出且不返回配置 |
 | 16 | 空 sites → `bridgeEmptySites` | 抛出 |
-| 17 | 带 `urls` 仓库 → 拒绝 | 抛出 `bridgeHostMismatch` |
+| 17 | 带 `urls` 仓库 → 拒绝 | 抛出 `bridgeNoGateway`（该端点不是 T4 网关配置） |
 | 18 | `msg` 键 → 保留 `configMsg` | 类别不被折叠 |
 | 19 | 自引用：目标 = PC 自己 | `bridgeSelfReference` |
 | 20 | 自引用：单个站点指向 PC 自己 | 该站点被跳过 + 诊断，其余保留 |

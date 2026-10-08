@@ -91,6 +91,25 @@ enum AppErrorKind {
   tmdbEmpty,
   tmdbUnsupported,
 
+  // 安卓桥接（§28）。站点导入与同步都是**用户显式触发**的操作，
+  // 失败必须分类呈现（design/00 P5）：403/404/超时/空结果**不得**折叠成
+  // 「导入失败」或「0 个站点」。
+  bridgeUnreachable,
+  bridgeNotAndroid,
+  bridgeNoGateway,
+  bridgeEmptySites,
+  bridgeHostMismatch,
+  bridgeSelfReference,
+
+  // 同步（§28.4）。`syncPartialFailure` 必须携带 applied/skipped/failed 明细。
+  syncDisabled,
+  syncPeerUnauthorized,
+  syncPeerUnreachable,
+  syncPayloadInvalid,
+  syncPayloadTooLarge,
+  syncLocalWriteRejected,
+  syncPartialFailure,
+
   // 系统
   storage,
   unknown,
@@ -215,6 +234,33 @@ String describeErrorKind(AppErrorKind kind) {
       return 'TMDB 没有返回可用数据（不影响站源浏览与播放）';
     case AppErrorKind.tmdbUnsupported:
       return '该站点未启用 TMDB 增强（不影响站源浏览与播放）';
+    case AppErrorKind.bridgeUnreachable:
+      return '安卓设备不可达：连接被拒绝或超时。请确认设备与应用服务正在运行、'
+          '且与电脑处于同一局域网';
+    case AppErrorKind.bridgeNotAndroid:
+      return '该地址不是 WebHTV 安卓服务（/device 返回了非设备信息）';
+    case AppErrorKind.bridgeNoGateway:
+      return '安卓设备版本过旧：缺少 T4 网关（需要含 T4 网关的版本）';
+    case AppErrorKind.bridgeEmptySites:
+      return '安卓设备上尚未加载任何点播配置，没有可导入的站点';
+    case AppErrorKind.bridgeHostMismatch:
+      return '安卓返回的站点地址不属于该设备，已拒绝导入（请确认地址填写正确）';
+    case AppErrorKind.bridgeSelfReference:
+      return '不能把本机自己当作安卓设备导入';
+    case AppErrorKind.syncDisabled:
+      return '同步未开启，请先在设置中开启';
+    case AppErrorKind.syncPeerUnauthorized:
+      return '该设备未授权，请先在设置中添加并确认此设备';
+    case AppErrorKind.syncPeerUnreachable:
+      return '同步失败：无法连接对端设备（请检查地址与网络）';
+    case AppErrorKind.syncPayloadInvalid:
+      return '同步数据非法：缺少必需字段或不是合法 JSON';
+    case AppErrorKind.syncPayloadTooLarge:
+      return '同步数据超过大小上限（8 MiB），请减少同步范围';
+    case AppErrorKind.syncLocalWriteRejected:
+      return '安卓拒绝写入：需在安卓的「观影记录同步」中开启「本机 API 修改」';
+    case AppErrorKind.syncPartialFailure:
+      return '同步部分失败（本地数据未被破坏）';
     case AppErrorKind.storage:
       return '本地存储读写失败';
     case AppErrorKind.unknown:
