@@ -478,6 +478,7 @@ widget 存在无法区分「图片真的加载了」与「全是占位」——�
 | `docs/phase4/evidence/tmdb-photo-viewer.png` | 点击剧照真的打开大图查看器并定位到被点击那张 |
 | `docs/phase4/evidence/tmdb-person-page.png` | 点击演职人员真的打开人物页（简介/照片/作品） |
 | `docs/phase4/evidence/tmdb-recommendation-detail.png` | 点击相关推荐真的进入该作品详情（季度卡片 + 全部剧集） |
+| `docs/phase4/evidence/tmdb-line-switch.png` | 点击「线路二」后线路条选中态切换、剧集卡片只剩线路二的 8 集 |
 
 ```text
 docs/phase4/evidence/windows-acceptance.txt

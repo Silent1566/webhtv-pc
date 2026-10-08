@@ -424,6 +424,60 @@ void main() {
       relativePath: 'docs/phase4/evidence/tmdb-detail-header.png',
     );
 
+    // 5.5) 点击线路切换：剧集卡片必须换成该线路的集（用户要求
+    // 「点击切换线路显示对应的集数卡片」）。截图留证。
+    final lineChips = find.byWidgetPredicate(
+      (widget) =>
+          widget is ChoiceChip &&
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith('tmdb-line-'),
+    );
+    expect(lineChips.evaluate().length, greaterThan(1), reason: '线路条至少要有两条线路');
+    final line1Card = find.byKey(const ValueKey('tmdb-episode-card-线路一-0'));
+    expect(line1Card, findsOneWidget, reason: '初始必须是线路一的卡片');
+
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路二')));
+    await drainRealIo(
+      tester,
+      until: () => find
+          .byKey(const ValueKey('tmdb-episode-card-线路二-0'))
+          .evaluate()
+          .isNotEmpty,
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路一-0')),
+      findsNothing,
+      reason: '切到线路二后线路一的卡片必须消失',
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路二-0')),
+      findsOneWidget,
+      reason: '切到线路二后必须渲染线路二的卡片',
+    );
+    evidence('line-switch line=线路二 cards=only-线路二');
+    await warmImages(tester, [
+      ...find
+          .byType(Image)
+          .evaluate()
+          .map((element) => (element.widget as Image).image)
+          .whereType<NetworkImage>()
+          .map((provider) => provider.url),
+    ]);
+    await captureEvidence(
+      tester,
+      relativePath: 'docs/phase4/evidence/tmdb-line-switch.png',
+    );
+
+    // 切回线路一，后续断言仍在原线路上下文。
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路一')));
+    await drainRealIo(
+      tester,
+      until: () => find
+          .byKey(const ValueKey('tmdb-episode-card-线路一-0'))
+          .evaluate()
+          .isNotEmpty,
+    );
+
     // 6) 剧照墙：点击第 N 张 → 查看器定位到第 N 张。
     await ensureVisible(tester, find.byKey(const ValueKey('tmdb-section-photos')));
     expect(
