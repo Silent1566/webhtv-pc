@@ -140,18 +140,43 @@ class TmdbState extends ChangeNotifier {
   }
 
   /// 切换当前线路（`04` §4.3：切换线路必须重新解析可播放季度）。
-  void selectLine(String flag) {
+  ///
+  /// [preferredSeason] 是用户的**季度意图**（通常传切换前的 `selectedSeason`）。
+  /// 为什么必须传：换线路后 `_selectedSeason` 会被重置，若不给意图，
+  /// 解析器会回落到默认季（第一条正片季）。当新线路只有别的季度时
+  /// （例如「线路一 S1+S2」切到「只有 S2 的线路二」），默认季在该线路上
+  /// **一集都没有** → 剧集区空白。用户看到的就是「点了线路什么都不显示」。
+  /// 传意图后解析器会优先满足它，满足不了才回落。
+  void selectLine(String flag, {int preferredSeason = -1}) {
     if (_disposed) return;
     final line = lineByFlag(flag);
     if (line == null) return;
     if (_activeLine?.flagKey == flag) return;
+    _selectedLineFlag = flag;
     _activeLine = sourceLineOf(line, 0, unique: _isFlagUnique(flag));
     // 线路变了 → 旧季度的剧集元数据不再适用
     _episodes = const [];
     _selectedSeason = -1;
     _availableSeasons = const [];
     _resolution = null;
+    _preferredSeason = preferredSeason;
     notifyListeners();
+  }
+
+  /// 当前选定的线路 `flag`（供 `loadForVod` 在重新加载时保留选择）。
+  String _selectedLineFlag = '';
+
+  /// 切换线路时携带的**季度意图**（`-1` 表示无意图）。
+  ///
+  /// 由 [selectLine] 写入、由 [loadDetail] 消费后清零：它只在「换线路后
+  /// 那一次季度解析」里生效，不应污染后续的季度切换。
+  int _preferredSeason = -1;
+
+  /// 取出并清除季度意图（只生效一次）。
+  int takePreferredSeason() {
+    final value = _preferredSeason;
+    _preferredSeason = -1;
+    return value;
   }
 
   /// 详情页某条线路对应的绑定键（`04` §2.3）。
@@ -467,7 +492,28 @@ class TmdbState extends ChangeNotifier {
     if (playLines.isEmpty) return;
     _playLines = playLines;
 
-    final line = sourceLineOf(playLines.first, 0);
+    // 保持「换线路时选定的线路」（`04` §3.1 ④）。
+    //
+    // 为什么：`reloadTmdb` 会重跑整条加载链，早期实现固定取 `playLines.first`，
+    // 于是用户点了「线路二」→ 触发 reload → 当前线路被悄悄改回线路一，
+    // 剧集卡片又变回线路一的集（用户看到的「点了线路没反应」）。
+    // 这里保留已在列表里的当前线路，只在其失效时才回落到第一条。
+    VodPlayLine? keep;
+    for (final candidate in playLines) {
+      if (candidate.flag == _selectedLineFlag) {
+        keep = candidate;
+        break;
+      }
+    }
+    final line = keep == null
+        ? sourceLineOf(playLines.first, 0)
+        : sourceLineOf(
+            keep,
+            playLines.indexOf(keep),
+            unique: _isFlagUnique(keep.flag),
+          );
+    // 记录实际采用的线路，使后续 `reloadTmdb` 继续保留它。
+    _selectedLineFlag = keep?.flag ?? '';
     final generation = beginLoad(
       siteKey: siteKey,
       vodId: vod.vodId,
@@ -572,6 +618,8 @@ class TmdbState extends ChangeNotifier {
       // 季度解析（含落盘）
       final line = _activeLine;
       if (line != null) {
+        // 换线路时携带的季度意图优先于调用方默认值（见 selectLine 注释）。
+        final preferred = takePreferredSeason();
         final outcome = _seasonService.resolve(
           TmdbSeasonResolveRequest(
             siteKey: _siteKey,
@@ -581,7 +629,7 @@ class TmdbState extends ChangeNotifier {
             tmdbId: currentItem.tmdbId,
             tmdbSeasons: effectiveSeasons,
             seasonCounts: _seasonEpisodeCounts,
-            requestSeason: requestSeason,
+            requestSeason: preferred >= 0 ? preferred : requestSeason,
             allowHeuristicGuessing: allowHeuristicGuessing,
           ),
           configId: _configId,
@@ -597,6 +645,9 @@ class TmdbState extends ChangeNotifier {
           // 季度解析器确证，因此从其中挑第一个正片季度不是猜测。
           _selectedSeason = _defaultSeasonOf(_availableSeasons);
         }
+        // 换线路后的自愈：解析出的季度若在该线路上**一集都没有**，
+        // 换成该线路上真有集的那一季（否则剧集区空白，见 reconcileSeasonWithLine）。
+        reconcileSeasonWithLine();
       }
       _phase = TmdbLoadPhase.ready;
     } on TmdbCancelledException {
@@ -680,6 +731,43 @@ class TmdbState extends ChangeNotifier {
       _videos = const [];
       notifyListeners();
     }
+  }
+
+  /// 当前线路在某个季度下是否有可渲染的集（用于换线路后的季度自愈）。
+  ///
+  /// 只看**来源季度信号**（不依赖 TMDB 元数据，元数据是异步到的）：
+  /// 这正是用户能看到的「这条线路到底有没有这一季」。
+  bool lineHasEpisodesInSeason(int seasonNumber) {
+    final line = _activeLine;
+    if (line == null || seasonNumber < 0) return false;
+    for (final name in line.episodeNames) {
+      final season = sourceSeasonNumber(name);
+      // 未分类的集无法证明不属于该季 → 视为有集（不得丢集）
+      if (season < 0 || season == seasonNumber) return true;
+    }
+    return false;
+  }
+
+  /// 换线路后把季度调整到**该线路上真有集**的那一季。
+  ///
+  /// 为什么需要：用户从「线路一（S1+S2）」切到「线路二（只有 S2）」时，
+  /// 若仍停留在 S1，线路二在 S1 下一集都没有，剧集区会空白——用户看到的是
+  /// 「点了线路什么都不显示」。这里在 `availableSeasons` 里挑第一个**在该线路
+  /// 真有集**的季度；挑不到就保持原值（由 UI 显示空态，不猜）。
+  ///
+  /// 返回是否发生了调整（调用方据此决定要不要重新拉取剧集元数据）。
+  bool reconcileSeasonWithLine() {
+    if (_disposed || _activeLine == null) return false;
+    if (lineHasEpisodesInSeason(_selectedSeason)) return false;
+    for (final season in _availableSeasons) {
+      if (lineHasEpisodesInSeason(season)) {
+        _selectedSeason = season;
+        _episodes = const [];
+        notifyListeners();
+        return true;
+      }
+    }
+    return false;
   }
 
   /// 切换季度（`04` §4.3）。

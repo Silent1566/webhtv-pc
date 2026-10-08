@@ -67,6 +67,8 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   List<TmdbVideo> _videos = const [];
   int _selectedSeason = -1;
   List<int> _tmdbSeasons = const [];
+  bool _episodesReversed = false;
+  bool _episodeGridMode = false;
 
   int _generation = 0;
   bool _disposed = false;
@@ -118,6 +120,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
         _data = data;
         _tmdbSeasons = seasons;
         _selectedSeason = selected;
+        _episodesReversed = false;
         _recommendations = dedupeItems([
           ...widget.service.recommendationsFromDetail(detail),
           ...widget.service.similarFromDetail(detail),
@@ -287,9 +290,28 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
         onSeasonChanged: (season) => _selectSeason(season),
         seasonKeyPrefix: 'tmdb-only-season',
         episodeKeyPrefix: 'tmdb-only-episode',
+        episodeTitle: '剧集',
+        reversed: _episodesReversed,
+        gridMode: _episodeGridMode,
+        onToggleReversed: () =>
+            setState(() => _episodesReversed = !_episodesReversed),
+        onToggleGridMode: () =>
+            setState(() => _episodeGridMode = !_episodeGridMode),
         // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
         episodeActionLabel: '搜索站源',
         episodeCards: _episodeCards,
+        // 信息表：纯 TMDB 页的数据全部来自 TMDB，因此直接展示元数据。
+        infoRows: [
+          ('类型', data.genres.join(' / ')),
+          ('地区', data.countries.join(' / ')),
+          ('年份', data.yearLabel),
+          ('时长', data.runtimeLabel),
+          ('季集', data.seasonEpisodeLabel),
+          ('状态', data.status),
+          ('导演', data.directorLabel),
+          ('评分', data.ratingLabel),
+          ('语言', data.languages.join(' / ')),
+        ],
         recommendations: _recommendations,
         videos: _videos,
         metadataBadge: '元数据季度 · 不可直接播放',

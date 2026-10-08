@@ -31,6 +31,7 @@ import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import '../core/app_error.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
+import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
 import 'app.dart' show PosterImage;
@@ -283,6 +284,20 @@ class TmdbDetailSections extends StatelessWidget {
           _PhotoWall(urls: data.photoUrls, title: data.title),
           const SizedBox(height: 16),
         ],
+        // 海报墙（对齐上游 `@id/tmdbPosters` 的 Posters 区块）。
+        // 与剧照是**不同语义**的两组图：剧照是剧中画面，海报是宣发图。
+        if (data.posterUrls.length > 1) ...[
+          _SectionHeader(
+            title: '海报（${data.posterUrls.length}）',
+            keyValue: 'tmdb-section-posters',
+          ),
+          _PhotoWall(
+            urls: data.posterUrls,
+            title: data.title,
+            keyPrefix: 'tmdb-poster',
+          ),
+          const SizedBox(height: 16),
+        ],
         if (data.allPeople.isNotEmpty || data.directors.isNotEmpty) ...[
           _SectionHeader(
             title: '演职人员（${data.allPeople.length}）',
@@ -330,7 +345,209 @@ class TmdbDetailSections extends StatelessWidget {
   }
 }
 
-/// 一条线路的**剧集海报卡片**条（横向滚动）。
+/// 线路选择器（`04` §3.1 ④）。
+///
+/// 对齐上游 `activity_video.xml` 的 `@id/flag`（`HorizontalGridView` 线路条）：
+/// 点击一条线路就把该线路设为当前线路，下方剧集卡片随之切换成**该线路的集**。
+///
+/// 为什么必须是「点击切换」而不是「每条线路各渲染一屏卡片」：多线路站点动辄
+/// 3–5 条线路，各渲染一屏卡片会把详情页拉成几屏长，用户还要自己找哪一屏是
+/// 当前线路。上游同样只渲染当前线路的选集区。
+class TmdbLineSelector extends StatelessWidget {
+  const TmdbLineSelector({
+    super.key,
+    required this.lines,
+    required this.selectedFlag,
+    this.episodeCounts = const {},
+    this.onChanged,
+  });
+
+  /// 全部线路（按详情页顺序）。
+  final List<VodPlayLine> lines;
+
+  /// 当前线路的 `flag`（空串表示未选中）。
+  final String selectedFlag;
+
+  /// 每条线路的**渲染集数**（已按当前季度过滤）。
+  final Map<String, int> episodeCounts;
+
+  final ValueChanged<VodPlayLine>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    if (lines.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Padding(
+      key: const ValueKey('tmdb-line-selector'),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Text(
+            '线路',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final line in lines) ...[
+                    ChoiceChip(
+                      key: ValueKey('tmdb-line-${line.flag}'),
+                      label: Text(
+                        episodeCounts.containsKey(line.flag)
+                            ? '${line.displayName}（${episodeCounts[line.flag]} 集）'
+                            : line.displayName,
+                      ),
+                      selected: line.flag == selectedFlag,
+                      onSelected: onChanged == null
+                          ? null
+                          : (_) => onChanged!.call(line),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 剧集区块头：标题 + 集数 + 视图模式/正序倒序切换（`04` §3.1 ⑤）。
+///
+/// 对齐上游 `episodeHeader`（`episodeTitle` / `episodeReverse` /
+/// `episodeViewMode`）与 `TmdbEpisodeGridPolicy`（列数策略）。
+class TmdbEpisodeHeader extends StatelessWidget {
+  const TmdbEpisodeHeader({
+    super.key,
+    required this.episodeCount,
+    required this.reversed,
+    required this.gridMode,
+    this.onToggleReversed,
+    this.onToggleGridMode,
+    this.lineName,
+    this.title = '选集',
+  });
+
+  final int episodeCount;
+
+  /// 区块标题（站点页用「选集」，纯 TMDB 页用「剧集」）。
+  final String title;
+  final bool reversed;
+  final bool gridMode;
+  final VoidCallback? onToggleReversed;
+  final VoidCallback? onToggleGridMode;
+
+  /// 当前线路名（非空时拼进标题，使用户确认在看哪条线路）。
+  final String? lineName;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      key: const ValueKey('tmdb-episode-header'),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Text(
+            [
+              title,
+              if (lineName != null && lineName!.isNotEmpty) lineName!,
+              '$episodeCount 集',
+            ].join(' · '),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            key: const ValueKey('tmdb-episode-reverse'),
+            onPressed: onToggleReversed,
+            icon: Icon(
+              reversed ? Icons.swap_vert : Icons.swap_vert,
+              size: 16,
+            ),
+            label: Text(reversed ? '倒序' : '正序'),
+          ),
+          TextButton.icon(
+            key: const ValueKey('tmdb-episode-view-mode'),
+            onPressed: onToggleGridMode,
+            icon: Icon(
+              gridMode ? Icons.view_list : Icons.grid_view,
+              size: 16,
+            ),
+            label: Text(gridMode ? '网格' : '列表'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 剧集区块：区块头（选集/正序倒序/列表网格）+ 剧集海报卡片。
+///
+/// 站点详情页与纯 TMDB 详情页共用，避免两处各写一套导致行为漂移。
+class TmdbEpisodeSection extends StatelessWidget {
+  const TmdbEpisodeSection({
+    super.key,
+    required this.cards,
+    required this.keyPrefix,
+    this.actionLabel = '播放',
+    this.onTap,
+    this.lineName,
+    this.cardWidth = 260,
+    this.reversed = false,
+    this.gridMode = false,
+    this.onToggleReversed,
+    this.onToggleGridMode,
+    this.title = '选集',
+  });
+
+  final List<TmdbEpisodeCard> cards;
+  final String keyPrefix;
+  final String actionLabel;
+  final void Function(int index, TmdbEpisodeCard card)? onTap;
+  final String? lineName;
+  final double cardWidth;
+  final bool reversed;
+  final bool gridMode;
+  final VoidCallback? onToggleReversed;
+  final VoidCallback? onToggleGridMode;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      TmdbEpisodeHeader(
+        title: title,
+        episodeCount: cards.length,
+        reversed: reversed,
+        gridMode: gridMode,
+        lineName: lineName,
+        onToggleReversed: onToggleReversed,
+        onToggleGridMode: onToggleGridMode,
+      ),
+      TmdbEpisodeStrip(
+        key: ValueKey('$keyPrefix-section'),
+        cards: cards,
+        keyPrefix: keyPrefix,
+        actionLabel: actionLabel,
+        cardWidth: cardWidth,
+        gridMode: gridMode,
+        onTap: onTap,
+      ),
+    ],
+  );
+}
+
+/// 剧集海报卡片条（横向滚动）。
 ///
 /// 这是详情页**唯一**的选集入口（用户反馈 2026-10-08）：有卡片时不再渲染
 /// 下方的文字版集按钮，二者取其一。理由：同一集出现两种控件既是重复信息，
@@ -346,6 +563,7 @@ class TmdbEpisodeStrip extends StatelessWidget {
     this.onTap,
     this.cardWidth = 260,
     this.height = 196,
+    this.gridMode = false,
   });
 
   final List<TmdbEpisodeCard> cards;
@@ -360,9 +578,36 @@ class TmdbEpisodeStrip extends StatelessWidget {
   final double cardWidth;
   final double height;
 
+  /// 网格模式（对齐上游 `episodeGrid`）：换行铺满而不是横向滚动。
+  ///
+  /// 为什么需要：长剧集（几十集）在横向条里要滚很久，网格模式一屏能看到
+  /// 更多集；上游同样提供「列表/网格」两种模式切换。
+  final bool gridMode;
+
   @override
   Widget build(BuildContext context) {
     if (cards.isEmpty) return const SizedBox.shrink();
+    if (gridMode) {
+      return GridView.builder(
+        key: ValueKey('$keyPrefix-grid'),
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: cardWidth + 12,
+          mainAxisExtent: height,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+        ),
+        itemCount: cards.length,
+        itemBuilder: (context, index) => TmdbEpisodeCardTile(
+          buttonKey: ValueKey('$keyPrefix-$index'),
+          stillKey: ValueKey('$keyPrefix-still-${cards[index].number}'),
+          card: cards[index],
+          actionLabel: actionLabel,
+          onTap: onTap == null ? null : () => onTap!.call(index, cards[index]),
+        ),
+      );
+    }
     return SizedBox(
       height: height,
       child: ListView.separated(
@@ -411,6 +656,12 @@ class TmdbDetailView extends StatelessWidget {
     this.statusBar,
     this.metadataBadge,
     this.padding = const EdgeInsets.all(16),
+    this.infoRows = const [],
+    this.reversed = false,
+    this.gridMode = false,
+    this.onToggleReversed,
+    this.onToggleGridMode,
+    this.episodeTitle = '剧集',
   });
 
   final TmdbDetailData data;
@@ -450,6 +701,18 @@ class TmdbDetailView extends StatelessWidget {
   final String? metadataBadge;
 
   final EdgeInsets padding;
+
+  /// 信息表行（标签 → 值）；为空时不渲染信息表。
+  final List<(String, String?)> infoRows;
+
+  /// 剧集是否倒序 / 网格模式（对齐上游 `episodeReverse` / `episodeViewMode`）。
+  final bool reversed;
+  final bool gridMode;
+  final VoidCallback? onToggleReversed;
+  final VoidCallback? onToggleGridMode;
+
+  /// 剧集区块标题。
+  final String episodeTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -511,13 +774,11 @@ class TmdbDetailView extends StatelessWidget {
                   ),
                 ),
               ],
+              if (infoRows.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                TmdbInfoTable(rows: infoRows),
+              ],
               const SizedBox(height: 16),
-              _SectionHeader(
-                title: episodeCards.isEmpty
-                    ? '剧集'
-                    : '剧集（${episodeCards.length}）',
-                keyValue: 'tmdb-section-episodes',
-              ),
               if (episodeCards.isEmpty)
                 Text(
                   '没有可展示的剧集',
@@ -525,25 +786,17 @@ class TmdbDetailView extends StatelessWidget {
                   style: theme.textTheme.bodyMedium,
                 )
               else
-                GridView.builder(
-                  key: const ValueKey('tmdb-episode-grid'),
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 260,
-                    mainAxisExtent: 196,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                  ),
-                  itemCount: episodeCards.length,
-                  itemBuilder: (context, index) => TmdbEpisodeCardTile(
-                    buttonKey: ValueKey('$episodeKeyPrefix-$index'),
-                    card: episodeCards[index],
-                    actionLabel: episodeActionLabel,
-                    onTap: onEpisodeTap == null
-                        ? null
-                        : () => onEpisodeTap!.call(index, episodeCards[index]),
-                  ),
+                TmdbEpisodeSection(
+                  key: const ValueKey('tmdb-section-episodes'),
+                  title: episodeTitle,
+                  cards: episodeCards,
+                  keyPrefix: episodeKeyPrefix,
+                  actionLabel: episodeActionLabel,
+                  reversed: reversed,
+                  gridMode: gridMode,
+                  onToggleReversed: onToggleReversed,
+                  onToggleGridMode: onToggleGridMode,
+                  onTap: onEpisodeTap,
                 ),
               if (data.photoUrls.isNotEmpty ||
                   data.allPeople.isNotEmpty ||
@@ -773,6 +1026,103 @@ class _Chip extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // 区块通用
 // ---------------------------------------------------------------------------
+
+/// 详情信息表（`04` §3.1 ①）。
+///
+/// 为什么需要：上游 `activity_video.xml` 把 `site/year/area/type/director/actor`
+/// 排成独立的元信息行，信息密度高且一眼可扫。早期 PC 端只用单列文字行，
+/// 字段一多就显得「简陋」且占满纵向空间。这里改为两列对齐的表格：
+/// 标签定宽、值自动换行，同一行放两组，字段多也不散。
+class TmdbInfoTable extends StatelessWidget {
+  const TmdbInfoTable({super.key, required this.rows});
+
+  /// 标签 → 值；值为空或空串的行**自动跳过**（不留空行）。
+  final List<(String, String?)> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final visible = [
+      for (final (label, value) in rows)
+        if ((value ?? '').trim().isNotEmpty) (label, value!.trim()),
+    ];
+    if (visible.isEmpty) return const SizedBox.shrink();
+    // 两列排布：奇数项时最后一行只有一个格子，右侧留白。
+    final pairs = <List<(String, String?)>>[];
+    for (var i = 0; i < visible.length; i += 2) {
+      pairs.add([
+        visible[i],
+        if (i + 1 < visible.length) visible[i + 1],
+      ]);
+    }
+    return Container(
+      key: const ValueKey('tmdb-info-table'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < pairs.length; i++) ...[
+            if (i > 0) const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var slot = 0; slot < 2; slot++) ...[
+                  if (slot > 0) const SizedBox(width: 16),
+                  Expanded(
+                    child: pairs[i].length > slot
+                        ? _InfoCell(
+                            label: pairs[i][slot].$1,
+                            value: pairs[i][slot].$2 ?? '',
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoCell extends StatelessWidget {
+  const _InfoCell({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 52,
+          child: Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: theme.textTheme.bodyMedium,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({
@@ -1077,10 +1427,20 @@ class TmdbEpisodeCardTile extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _PhotoWall extends StatelessWidget {
-  const _PhotoWall({required this.urls, required this.title});
+  const _PhotoWall({
+    required this.urls,
+    required this.title,
+    this.keyPrefix = 'tmdb-photo',
+  });
 
   final List<String> urls;
   final String title;
+
+  /// 缩略图 key 前缀。
+  ///
+  /// 剧照墙与海报墙是两组不同的图，若共用 `tmdb-photo-N` 会出现重复 key，
+  /// 点击定位也会歧义。因此由调用方给出各自前缀。
+  final String keyPrefix;
 
   @override
   Widget build(BuildContext context) {
@@ -1092,7 +1452,7 @@ class _PhotoWall extends StatelessWidget {
         itemCount: urls.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) => InkWell(
-          key: ValueKey('tmdb-photo-$index'),
+          key: ValueKey('$keyPrefix-$index'),
           onTap: () => showTmdbPhotoViewer(
             context,
             urls: urls,

@@ -300,9 +300,22 @@ void main() {
 
     // 选集入口是**剧集海报卡片**（用户反馈 2026-10-08：卡片与文字按钮二者取一）。
     // 仍走真实点击路径，因此这条用例继续锁定「UI → 播放页续播位置」的串联。
+    //
+    // 必须先滚动到卡片：详情页顶部有 340px 动态背景 + 信息表 + 季度/线路条，
+    // 首屏看不到剧集区（实测 800x600 测试视口下卡片在视口外，`tap` 打不中）。
     final episodeCard = find.byKey(
       ValueKey('tmdb-episode-card-${line.flag}-0'),
     );
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if (episodeCard.evaluate().isNotEmpty) {
+        final rect = tester.getRect(episodeCard);
+        if (rect.top >= 0 && rect.bottom <= tester.view.physicalSize.height) {
+          break;
+        }
+      }
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+      await tester.pump();
+    }
     expect(episodeCard, findsOneWidget, reason: '未找到剧集卡片入口');
     await tester.tap(episodeCard);
     await tester.pumpAndSettle(const Duration(seconds: 10));

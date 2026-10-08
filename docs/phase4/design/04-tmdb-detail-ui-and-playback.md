@@ -122,6 +122,28 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 | V5 | 演职人员**可点击** | `_PeopleWall` → `TmdbPersonPage`（简介 / 照片 / 作品；作品可继续进入详情） | 同上 |
 | V6 | 相关推荐**可点击** | `_RecommendationWall` → 该作品的 TMDB 详情页（可递归进入） | 同上 |
 | V7 | 单集详情 | `TmdbEpisodeSheet`：剧照 + 标题 + 日期 + 时长 + 评分 + 简介 + 动作 | `phase4_tmdb_detail_view_test.dart` |
+| V8 | **点击线路切换集数卡片** | `TmdbLineSelector`（对齐上游 `@id/flag`）+ 单线路单屏剧集区；换线路保留「季度意图」并自愈到该线路真有集的季度 | `tmdb_detail_flow_test` 步骤 7/7.5、`phase4_tmdb_detail_view_test.dart` |
+| V9 | 剧集区块头：正序/倒序 + 列表/网格 | `TmdbEpisodeHeader` + `TmdbEpisodeStrip.gridMode`（对齐上游 `episodeReverse` / `episodeViewMode` / `episodeGrid`） | 同上 |
+| V10 | 信息表：类型/地区/年份/时长/季集/状态/导演/演员/评分/备注/语言 | `TmdbInfoTable`（两列对齐，空值行自动跳过；对齐上游 `site/year/area/type/director/actor` 元信息行） | 同上 |
+| V11 | 海报墙（与剧照区分） | `TmdbDetailSections` 的 `tmdb-section-posters`（对齐上游 `@id/tmdbPosters`） | `phase4_tmdb_detail_view_test.dart` |
+
+**单线路单屏（V8 的关键约束）**：线路条是**切换器**，页面只渲染**当前线路**的
+剧集区。早期实现把每条线路各渲染一屏卡片，多线路站点会把详情页拉成几屏长，
+用户还得自己找哪一屏是当前线路；上游同样只渲染当前线路的选集区。
+
+**换线路的两个硬约束**（都踩过）：
+
+1. **季度意图必须传递**：新线路可能没有当前季度的集（「线路一 S1+S2」→
+   「只有 S2 的线路二」）。不传意图就会回落到默认季（S1），线路二在 S1 下
+   **一集都没有** → 剧集区空白。`selectLine(flag, preferredSeason:)` 承载意图，
+   `loadDetail` 消费后清零（只生效一次）。
+2. **重新加载必须保留当前线路**：`reloadTmdb` 早期固定取 `playLines.first`，
+   于是点线路 → 触发 reload → 当前线路被悄悄改回线路一，卡片又变回线路一的集
+   （用户看到的「点了线路没反应」）。`loadForVod` 现在保留 `_selectedLineFlag`。
+
+兜底：`reconcileSeasonWithLine()` 在季度解析后检查「当前季度在该线路上是否有
+集」，没有就换成 `availableSeasons` 里第一个真有集的季度；挑不到则保持原值
+（UI 显示空态，**不猜**）。
 
 **线路隔离（不得违反）**：剧集元数据只作用于**当前线路**（`04` §4.3）。
 判定必须用 `TmdbState.flagKeyForLine(line)` 与 `sourceLine?.flagKey` 比较，
@@ -155,9 +177,10 @@ String flagKeyOf(VodPlayLine line, int index) => '${line.flag}#$index';
 │ ③ 季度选择器（仅 tv 且可播放季度非空）                        │
 │    [第 1 季] [第 2 季] …   或  「未确定季度」+ [选择季度]      │
 ├───────────────────────────────────────────────────────────┤
-│ ④ 线路选择                                                  │
+│ ④ 线路选择（点击切换；只渲染当前线路的剧集区）                  │
 ├───────────────────────────────────────────────────────────┤
-│ ⑤ 选集区（剧集**海报卡片**条，唯一选集入口）                   │
+│ ⑤ 选集区（区块头：选集·线路·集数 + 正序倒序 + 列表网格）        │
+│    └─ 剧集**海报卡片**条，唯一选集入口                         │
 ├───────────────────────────────────────────────────────────┤
 │ ⑥ 剧照墙（点击 → 大图查看器）                                 │
 ├───────────────────────────────────────────────────────────┤

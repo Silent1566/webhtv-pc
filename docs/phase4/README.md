@@ -209,6 +209,8 @@ pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
 | P4-10 | 动态背景不铺满（图片按固有尺寸居中） | `AnimatedSwitcher` 以宽松约束布局子节点，`Image` 宽高为 null 时退回 160×160 | `phase4_tmdb_detail_view_test.dart` 背景用例 |
 | P4-11 | 剧集详情页「时长」永远为空 | TMDB 剧集详情的 `episode_run_time` 常为空，未用分季剧集的单集时长回退 | `phase4_tmdb_detail_model_test.dart` 时长用例 |
 | P4-12 | 同一集同时出现「海报卡片」与「文字集按钮」两套控件 | 加卡片时保留了原有按钮 Wrap，未做二选一 | `tmdb_detail_flow_test` 步骤 8（卡片数 = 线路集数 且文字集按钮 = 0） |
+| P4-13 | **点线路切换后剧集区空白** | 换线路会重置 `selectedSeason`；新线路若没有默认季的集（线路一 S1+S2 → 只有 S2 的线路二）就一集都渲染不出来 | `tmdb_detail_flow_test` 步骤 7/7.5（`selectLine(preferredSeason:)` + `reconcileSeasonWithLine`） |
+| P4-14 | **点线路后当前线路被改回第一条** | `reloadTmdb` → `loadForVod` 固定取 `playLines.first`，用户的选择被静默覆盖 | 同上（`loadForVod` 保留 `_selectedLineFlag`） |
 
 修复后发布包符号门禁同步扩展（`TmdbDetailView` / `TmdbBackdropSlideshow` /
 `TmdbPhotoViewerDialog` / `TmdbPersonPage` / `TmdbEpisodeStrip` 等 + 中文串），

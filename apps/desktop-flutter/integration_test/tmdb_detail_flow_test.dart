@@ -12,7 +12,6 @@
 ///   7. 断言「TMDB 有 S2E10 但线路 S2 只有 8 集」时不出现第 9/10 项
 library;
 
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -203,11 +202,14 @@ void main() {
     evidence('s1-line-episodes=${s1Rendered.length} tmdb-s1=12');
 
     // 6) 切换到第 2 季：TMDB 季 2 有 10 集，线路一 S2 也是 10 集 → 渲染 10 项。
-    state.tmdb.selectSeason(2);
+    //
+    // 走**真实 UI 路径**：点季度条上的「第 2 季」。直接调 `selectSeason` 只会
+    // 改状态层，页面不会重建、也不会重新拉取剧集（`selectSeason` 会清空
+    // `_episodes`，`04` §4.3 第 3 步），后续断言就会基于过期数据。
+    final season2Chip = find.byKey(const ValueKey('tmdb-season-2'));
+    expect(season2Chip, findsOneWidget, reason: '详情页必须有第 2 季入口');
+    await tester.tap(season2Chip);
     await tester.pump();
-    // `selectSeason` 会清空旧季度剧集（`04` §4.3 第 3 步），必须重新拉取。
-    // 产品里由 `TmdbSeasonSelector.onChanged` 触发；测试直接调状态层时需自己触发。
-    unawaited(state.tmdb.loadEpisodes(generation: state.tmdb.generation));
     // 元数据是异步加载的：先等 TMDB 季 2 的剧集到位，再断言渲染数。
     await drainRealIo(
       tester,
@@ -233,10 +235,13 @@ void main() {
 
     // 7) 线路二 S2 只有 8 集，TMDB 季 2 有 10 集 → 渲染 8 项，不得出现第 9/10 项。
     //
-    // 先解析线路二（季度解析是**线路级**的，`02` §2.2），再断言渲染。
-    state.tmdb.selectLine('线路二');
+    // 走**真实 UI 路径**：点击线路条上的「线路二」（对齐上游 `@id/flag`）。
+    // 这里必须点 UI 而不是直接调状态层，否则锁不住「点击线路切换集数卡片」
+    // 这条用户可见行为（2026-10-08 用户要求：点击切换线路显示对应的集数卡片）。
     await tester.pump();
-    await state.reloadTmdb();
+    final line2Chip = find.byKey(const ValueKey('tmdb-line-线路二'));
+    expect(line2Chip, findsOneWidget, reason: '详情页必须有线路二的选择入口');
+    await tester.tap(line2Chip);
     await drainRealIo(
       tester,
       until: () =>
@@ -282,6 +287,29 @@ void main() {
     evidence(
       'line2-source=8 rendered=8 tmdb-s2=10 extra-episodes=0',
     );
+
+    // 7.5) 点击线路后，UI 上的剧集卡片必须**只剩线路二那 8 张**。
+    //
+    // 这是「点击切换线路显示对应的集数卡片」的核心断言：线路一有 22 集，
+    // 若切换无效，页面上仍会渲染线路一的卡片。
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路一-0')),
+      findsNothing,
+      reason: '切换到线路二后，线路一的剧集卡片必须消失',
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路二-0')),
+      findsOneWidget,
+      reason: '切换到线路二后，必须渲染线路二的剧集卡片',
+    );
+    // 线路条上的集数也必须反映当前季度（S2 → 8 集）。
+    expect(
+      find.textContaining('线路二（8 集）'),
+      findsOneWidget,
+      reason: '线路条必须显示线路二在当前季度下的集数',
+    );
+    evidence('line-switch-ui active=线路二 cards=线路二 only');
 
     // 8) 渲染层断言：详情页上的剧集卡片数量等于线路二集数（不补集）。
     //

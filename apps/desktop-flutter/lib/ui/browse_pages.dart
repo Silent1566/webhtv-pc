@@ -316,6 +316,18 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  /// 当前选中线路的 `flag`（`04` §3.1 ④）。
+  ///
+  /// 点击线路条即切换，下方剧集卡片随之变成该线路的集（对齐上游 `@id/flag`）。
+  /// 空串表示「尚未选定」，此时默认取第一条线路。
+  String _selectedLineFlag = '';
+
+  /// 剧集卡片是否倒序（对齐上游 `@id/episodeReverse`）。
+  bool _episodesReversed = false;
+
+  /// 剧集是否网格模式（对齐上游 `@id/episodeViewMode`）。
+  bool _episodeGridMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -503,6 +515,8 @@ class _DetailPageState extends State<DetailPage> {
     final tmdb = state.tmdb;
     // 头部补位（`04` §3.2）：**仅补位不覆盖**来源已有字段。
     final display = tmdb.hasMatch ? tmdb.enrich(vod).vod : vod;
+    // TMDB 展示模型（海报/背景/类型/时长/季集数/演职人员…）。
+    final tmdbData = tmdb.detailData;
 
     return Scaffold(
       appBar: AppBar(
@@ -575,34 +589,32 @@ class _DetailPageState extends State<DetailPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                // 来源事实行（不覆盖来源字段，§3.2）。
-                Wrap(
-                  spacing: 16,
-                  runSpacing: 4,
-                  children: [
-                    if ((display.vodRemarks ?? '').isNotEmpty)
-                      _MetaRow(label: '备注', value: display.vodRemarks),
-                    if ((display.vodYear ?? '').isNotEmpty)
-                      _MetaRow(label: '年份', value: display.vodYear),
-                    if ((display.vodArea ?? '').isNotEmpty)
-                      _MetaRow(label: '地区', value: display.vodArea),
-                    if ((display.vodDirector ?? '').isNotEmpty)
-                      _MetaRow(label: '导演', value: display.vodDirector),
-                    if ((display.vodActor ?? '').isNotEmpty)
-                      _MetaRow(label: '演员', value: display.vodActor),
-                    if (tmdb.ratingText.isNotEmpty)
-                      _MetaRow(label: '评分', value: tmdb.ratingText),
+                // 信息表（`04` §3.1 ①）：对齐上游 `site/year/area/type/
+                // director/actor` 的元信息行。**来源字段优先**，缺失处用 TMDB
+                // 补位值（§3.2「仅补位不覆盖」），因此这里直接读补位后的 `display`
+                // 与 `tmdbData`。
+                TmdbInfoTable(
+                  rows: [
+                    ('类型', tmdbData?.genres.join(' / ')),
+                    ('地区', display.vodArea),
+                    ('年份', display.vodYear),
+                    ('时长', tmdbData?.runtimeLabel),
+                    ('季集', tmdbData?.seasonEpisodeLabel),
+                    ('状态', tmdbData?.status),
+                    ('导演', display.vodDirector),
+                    ('演员', display.vodActor),
+                    ('评分', tmdb.ratingText),
+                    ('备注', display.vodRemarks),
+                    ('语言', tmdbData?.languages.join(' / ')),
                   ],
                 ),
                 if (display.vodContent != null &&
                     display.vodContent!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    display.vodContent!,
-                    maxLines: 6,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  const SizedBox(height: 12),
+                  // 简介：默认 4 行 + 「展开」（`04` §11 长文本要求）。
+                  _ExpandableOverview(text: display.vodContent!.trim()),
                 ],
+                const SizedBox(height: 12),
                 // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
                 TmdbSeasonSelector(
                   state: tmdb,
@@ -631,18 +643,17 @@ class _DetailPageState extends State<DetailPage> {
                   )
                 else if (lines.isEmpty)
                   const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
-                else
-                  for (var lineIndex = 0;
-                      lineIndex < lines.length;
-                      lineIndex++) ...[
-                    _buildLine(
-                      context,
-                      vod,
-                      lines[lineIndex],
-                      lineIndex,
-                      lines.length,
-                    ),
-                  ],
+                else ...[
+                  // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
+                  // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
+                  TmdbLineSelector(
+                    lines: lines,
+                    selectedFlag: _activeLine(lines).flag,
+                    episodeCounts: _episodeCountsByLine(lines),
+                    onChanged: (line) => _selectLine(line, lines),
+                  ),
+                  _buildEpisodes(context, vod, lines),
+                ],
                 // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
                 ..._buildTmdbBlocks(context, tmdb),
               ],
@@ -715,93 +726,145 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  /// 渲染一条线路（含 TMDB 剧集元数据增强，`04` §4.2）。
-  Widget _buildLine(
+  /// 当前线路（未选定时取第一条）。
+  ///
+  /// 必须先于任何渲染使用：线路决定「用哪条线路的集 + 哪个季度解析结果」。
+  VodPlayLine _activeLine(List<VodPlayLine> lines) {
+    for (final line in lines) {
+      if (line.flag == _selectedLineFlag) return line;
+    }
+    return lines.first;
+  }
+
+  /// 切换线路（`04` §4.3：切换线路必须重新解析该线路的可播放季度）。
+  ///
+  /// 必须把**当前季度作为意图**传给状态层：新线路可能没有当前季度的集
+  /// （例如「线路一 S1+S2」切到「只有 S2 的线路二」），不给意图就会回落到
+  /// 默认季（S1），线路二在 S1 下一集都没有 → 剧集区空白。
+  void _selectLine(VodPlayLine line, List<VodPlayLine> lines) {
+    if (line.flag == _activeLine(lines).flag) return;
+    final tmdb = widget.state.tmdb;
+    final preferred = tmdb.selectedSeason;
+    setState(() => _selectedLineFlag = line.flag);
+    tmdb.selectLine(line.flag, preferredSeason: preferred);
+    unawaited(widget.state.reloadTmdb());
+  }
+
+  /// 每条线路在当前季度下**渲染**的集数（供线路条展示）。
+  ///
+  /// 只有当前线路能拿到 TMDB 季度解析结果（季度是线路级的，`02` §2.2），
+  /// 因此其余线路只做**来源季度信号**过滤，不套用当前线路的季度。
+  Map<String, int> _episodeCountsByLine(List<VodPlayLine> lines) {
+    final active = _activeLine(lines);
+    final result = <String, int>{};
+    for (final line in lines) {
+      final isActive = line.flag == active.flag;
+      if (isActive) {
+        result[line.flag] = _renderEpisodes(line, active: true).length;
+        continue;
+      }
+      result[line.flag] = _renderEpisodes(line, active: false).length;
+    }
+    return result;
+  }
+
+  /// 某条线路在「当前季度」下要渲染的集（`04` §4.2）。
+  ///
+  /// - 当前线路：先应用 TMDB 剧集元数据，再按可播放季度过滤；
+  /// - 其他线路：不套用当前季度的元数据与过滤（避免跨线路串集），
+  ///   只保留来源集名自带的季度信号过滤。
+  List<VodEpisode> _renderEpisodes(VodPlayLine rawLine, {required bool active}) {
+    final tmdb = widget.state.tmdb;
+    if (!active) {
+      final selected = tmdb.selectedSeason;
+      if (selected < 0) return rawLine.episodes;
+      return TmdbEpisodeRenderPolicy.filter(
+        episodes: rawLine.episodes,
+        availableSeasons: const [],
+        selectedSeason: selected,
+        seasonOf: _seasonOfEpisode,
+      );
+    }
+    final line = tmdb.applyEpisodesToLine(rawLine).line;
+    return TmdbEpisodeRenderPolicy.filter(
+      episodes: line.episodes,
+      availableSeasons: tmdb.availableSeasons,
+      selectedSeason: tmdb.selectedSeason,
+      seasonOf: _seasonOfEpisode,
+    );
+  }
+
+  /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。
+  Widget _buildEpisodes(
     BuildContext context,
     Vod vod,
-    VodPlayLine rawLine,
-    int lineIndex,
-    int lineCount,
+    List<VodPlayLine> lines,
   ) {
     final state = widget.state;
     final tmdb = state.tmdb;
-    final flagKey = TmdbState.flagKeyOf(
-      rawLine,
-      lineIndex,
-      unique: lineCount == 1,
-    );
-    // 仅对**当前线路**应用 TMDB 剧集元数据（`04` §4.3 线路隔离）。
-    //
-    // `tmdb.sourceLine?.flagKey` 可能带 `#index` 后缀（同 flag 重复时），
-    // 而这里的 `flagKey` 只在「整页只有一条线路」时才不带后缀。用
-    // `selectLine` 的**同名判定规则**（`lineByFlag(flag)?.flagKey == 本条 flagKey`）
-    // 比较，否则「重新匹配 / 换源」后 TMDB 侧选中的线路与本条渲染线路对不上，
-    // 剧集剧照与 TMDB 集标题整块不生效（实测：卡片只剩来源集名 + 占位图）。
-    final isActiveLine =
-        tmdb.flagKeyForLine(rawLine) == (tmdb.sourceLine?.flagKey ?? '');
-    final line = isActiveLine ? tmdb.applyEpisodesToLine(rawLine).line : rawLine;
-
-    final available = isActiveLine ? tmdb.availableSeasons : const <int>[];
-    final selected = isActiveLine ? tmdb.selectedSeason : -1;
-    final episodes = TmdbEpisodeRenderPolicy.filter(
-      episodes: line.episodes,
-      availableSeasons: available,
-      selectedSeason: selected,
-      seasonOf: _seasonOfEpisode,
-    );
+    final rawLine = _activeLine(lines);
+    final line = tmdb.applyEpisodesToLine(rawLine).line;
+    final episodes = _renderEpisodes(rawLine, active: true);
+    final ordered = _episodesReversed
+        ? episodes.reversed.toList()
+        : episodes;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 8, bottom: 4),
-          child: Row(
-            children: [
-              Text(
-                '${line.displayName}（${episodes.length} 集）',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              if (lineCount > 1 && !isActiveLine) ...[
-                const SizedBox(width: 8),
-                TextButton(
-                  key: ValueKey('tmdb-line-select-$flagKey'),
-                  onPressed: () async {
-                    // 切换线路必须重新解析该线路的可播放季度（`04` §4.3）。
-                    tmdb.selectLine(rawLine.flag);
-                    await state.reloadTmdb();
-                  },
-                  child: const Text('按此线路解析季度'),
-                ),
-              ],
-            ],
-          ),
+        TmdbEpisodeHeader(
+          episodeCount: episodes.length,
+          reversed: _episodesReversed,
+          gridMode: _episodeGridMode,
+          lineName: rawLine.displayName,
+          onToggleReversed: () =>
+              setState(() => _episodesReversed = !_episodesReversed),
+          onToggleGridMode: () =>
+              setState(() => _episodeGridMode = !_episodeGridMode),
         ),
-        // 剧集海报卡片（用户反馈 2026-10-07：每集要有对应的海报卡片）。
-        //
-        // 这是本线路**唯一**的选集入口：有卡片就不再渲染文字版集按钮
-        // （用户反馈 2026-10-08：二者取其一，不要重复两套控件）。
+        // 剧集海报卡片：本线路**唯一**的选集入口（用户反馈 2026-10-08：
+        // 有卡片时不再渲染文字版集按钮，二者取其一）。
         // 卡片数量恒等于本线路渲染的集数；未匹配 TMDB 时用来源剧照/海报兑底，
         // 保证「每集都有画面」。
         TmdbEpisodeStrip(
-          key: ValueKey('tmdb-episode-strip-${line.flag}'),
+          key: ValueKey('tmdb-episode-strip-${rawLine.flag}'),
           cards: tmdb.episodeCardsForEpisodes(
-            episodes,
-            seasonNumber: selected >= 0 ? selected : null,
-            includeMetadata: isActiveLine,
+            ordered,
+            seasonNumber: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
+            includeMetadata: true,
           ),
-          keyPrefix: 'tmdb-episode-card-${line.flag}',
+          keyPrefix: 'tmdb-episode-card-${rawLine.flag}',
           actionLabel: '播放',
           cardWidth: _episodeCardWidth(context, episodes.length),
+          gridMode: _episodeGridMode,
           onTap: (index, _) => _playEpisodeAt(
             vod,
             rawLine,
             line,
-            episodes,
+            ordered,
             index,
           ),
         ),
       ],
     );
+  }
+
+  /// 按**渲染下标**播放（卡片下标 → 线路原始下标）。
+  void _playEpisodeAt(
+    Vod vod,
+    VodPlayLine rawLine,
+    VodPlayLine line,
+    List<VodEpisode> episodes,
+    int index,
+  ) {
+    if (index < 0 || index >= episodes.length) return;
+    final episode = episodes[index];
+    // 播放必须用**线路原始下标**（TMDB 只丰富展示，不改变播放事实源）。
+    final rawIndex = line.episodes.indexWhere(
+      (candidate) =>
+          identical(candidate, episode) || candidate.url == episode.url,
+    );
+    _play(vod, rawLine, rawIndex < 0 ? index : rawIndex);
   }
 
   /// 剧集卡片宽度（`04` §4.4 列数策略的卡片版）。
@@ -818,24 +881,6 @@ class _DetailPageState extends State<DetailPage> {
     final available = width - 32 - (targetColumns - 1) * 10;
     final raw = available / targetColumns;
     return raw.clamp(150.0, 300.0);
-  }
-
-  /// 按**渲染下标**播放（卡片与按钮共用，保证「点哪一集就播哪一集」）。
-  void _playEpisodeAt(
-    Vod vod,
-    VodPlayLine rawLine,
-    VodPlayLine line,
-    List<VodEpisode> episodes,
-    int index,
-  ) {
-    if (index < 0 || index >= episodes.length) return;
-    final episode = episodes[index];
-    // 播放必须用**线路原始下标**（TMDB 只丰富展示，不改变播放事实源）。
-    final rawIndex = line.episodes.indexWhere(
-      (candidate) =>
-          identical(candidate, episode) || candidate.url == episode.url,
-    );
-    _play(vod, rawLine, rawIndex < 0 ? index : rawIndex);
   }
 
   /// 剧集所在季度。
@@ -882,18 +927,42 @@ class _DetailPageState extends State<DetailPage> {
   }
 }
 
-class _MetaRow extends StatelessWidget {
-  const _MetaRow({required this.label, this.value});
+/// 简介：默认 4 行 + 「展开 / 收起」（`04` §11 长文本要求）。
+class _ExpandableOverview extends StatefulWidget {
+  const _ExpandableOverview({required this.text});
 
-  final String label;
-  final String? value;
+  final String text;
+
+  @override
+  State<_ExpandableOverview> createState() => _ExpandableOverviewState();
+}
+
+class _ExpandableOverviewState extends State<_ExpandableOverview> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
-    if (value == null || value!.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Text('$label：$value'),
+    final theme = Theme.of(context);
+    return Column(
+      key: const ValueKey('tmdb-overview'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.text,
+          style: theme.textTheme.bodyMedium,
+          maxLines: _expanded ? null : 4,
+          overflow: _expanded ? null : TextOverflow.ellipsis,
+        ),
+        if (widget.text.length > 120)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const ValueKey('tmdb-overview-toggle'),
+              onPressed: () => setState(() => _expanded = !_expanded),
+              child: Text(_expanded ? '收起' : '展开'),
+            ),
+          ),
+      ],
     );
   }
 }

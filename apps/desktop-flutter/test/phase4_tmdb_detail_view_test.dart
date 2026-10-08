@@ -13,6 +13,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
@@ -115,6 +116,32 @@ const List<TmdbEpisodeCard> _cards = [
     seasonNumber: 1,
   ),
 ];
+
+/// 让目标**真正进入视口**。
+///
+/// 两个坑都踩过：
+/// 1. `tester.scrollUntilVisible` 要求页面里只有一个 `Scrollable`，而详情页
+///    同时有纵向页面列表与剧集/剧照/人员的横向列表 → `Bad state: Too many
+///    elements`；
+/// 2. 只判断 `finder.evaluate().isNotEmpty` 不够：横向 `ListView` 会把项
+///    **构建**在视口外（缓存区），此时 widget 存在但 `tap` 打不中
+///    （实测 y=743 超出 600 高视口）。
+///
+/// 因此先用 `ensureVisible`（它走 `Scrollable.ensureVisible`，能正确处理嵌套
+/// 滚动），再断言目标矩形确实落在视口内，否则继续拖外层列表兜底。
+Future<void> _scrollTo(WidgetTester tester, Finder target) async {
+  for (var attempt = 0; attempt < 30; attempt++) {
+    if (target.evaluate().isNotEmpty) {
+      await tester.ensureVisible(target);
+      await tester.pump();
+      final rect = tester.getRect(target);
+      final view = tester.view.physicalSize / tester.view.devicePixelRatio;
+      if (rect.bottom > 0 && rect.top < view.height) return;
+    }
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+    await tester.pump();
+  }
+}
 
 Widget _host(Widget child) => MaterialApp(
   home: Scaffold(
@@ -358,6 +385,10 @@ void main() {
       );
       await tester.pump();
 
+      await _scrollTo(
+        tester,
+        find.byKey(const ValueKey('tmdb-section-photos')),
+      );
       expect(find.byKey(const ValueKey('tmdb-section-photos')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('tmdb-photo-1')));
       await tester.pumpAndSettle();
@@ -402,6 +433,10 @@ void main() {
       );
       await tester.pump();
 
+      await _scrollTo(
+        tester,
+        find.byKey(const ValueKey('tmdb-section-people')),
+      );
       expect(find.byKey(const ValueKey('tmdb-section-people')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('tmdb-person-287')));
       expect(tapped?.personId, 287);
@@ -432,11 +467,16 @@ void main() {
       );
       await tester.pump();
 
-      expect(
-        find.byKey(const ValueKey('tmdb-section-recommendations')),
-        findsOneWidget,
+      final section = find.byKey(
+        const ValueKey('tmdb-section-recommendations'),
       );
-      await tester.tap(find.byKey(const ValueKey('tmdb-recommendation-movie:550')));
+      await _scrollTo(tester, section);
+      expect(section, findsOneWidget);
+      final entry = find.byKey(
+        const ValueKey('tmdb-recommendation-movie:550'),
+      );
+      await _scrollTo(tester, entry);
+      await tester.tap(entry);
       expect(tapped?.tmdbId, 550);
       expect(tapped?.title, '推荐电影');
     });
@@ -474,6 +514,10 @@ void main() {
         ),
       );
       await tester.pump();
+      await _scrollTo(
+        tester,
+        find.byKey(const ValueKey('tmdb-section-photos')),
+      );
       await tester.tap(find.byKey(const ValueKey('tmdb-photo-0')));
       await tester.pumpAndSettle();
 
@@ -549,6 +593,7 @@ void main() {
                 episodeCards: _cards,
                 recommendations: const [item],
                 episodeKeyPrefix: 'tmdb-only-episode',
+                infoRows: const [('类型', '剧情 / 科幻'), ('时长', '45 分钟')],
               ),
             ),
           ),
@@ -556,19 +601,182 @@ void main() {
       );
       await tester.pump();
       expect(tester.takeException(), isNull, reason: '整页渲染不得溢出');
+      // 首屏区块（动态背景 / 头部 / 信息表 / 季度 / 剧集区块）。
       for (final key in const [
         'tmdb-backdrop-slideshow',
         'tmdb-detail-poster',
         'tmdb-detail-director',
+        'tmdb-info-table',
         'tmdb-section-seasons',
-        'tmdb-episode-grid',
-        'tmdb-section-photos',
-        'tmdb-section-people',
-        'tmdb-section-recommendations',
+        'tmdb-section-episodes',
+        'tmdb-episode-header',
       ]) {
         expect(find.byKey(ValueKey(key)), findsOneWidget, reason: '缺少区块 $key');
       }
-      expect(find.byKey(const ValueKey('tmdb-only-episode-0')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tmdb-only-episode-0')),
+        findsOneWidget,
+        reason: '剧集卡片必须渲染',
+      );
+      // 后续区块（剧照/海报/演职人员/推荐）在可滚动页面下方，逐段滚到可见。
+      // 页面变长后一次性断言会因懒加载而找不到，因此滚动收集。
+      for (final key in const [
+        'tmdb-section-photos',
+        'tmdb-section-posters',
+        'tmdb-section-people',
+        'tmdb-section-recommendations',
+      ]) {
+        await _scrollTo(tester, find.byKey(ValueKey(key)));
+        expect(
+          find.byKey(ValueKey(key)),
+          findsOneWidget,
+          reason: '滚动后仍缺少区块 $key',
+        );
+      }
+    });
+  });
+
+  group('线路选择（`04` §3.1 ④：点击切换线路显示对应的集数卡片）', () {
+    const lines = [
+      VodPlayLine(flag: '线路一', episodes: []),
+      VodPlayLine(flag: '线路二', episodes: []),
+    ];
+
+    testWidgets('渲染每条线路与各自集数，当前线路被选中', (tester) async {
+      VodPlayLine? tapped;
+      await tester.pumpWidget(
+        _host(
+          TmdbLineSelector(
+            lines: lines,
+            selectedFlag: '线路二',
+            episodeCounts: const {'线路一': 22, '线路二': 8},
+            onChanged: (line) => tapped = line,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('tmdb-line-selector')), findsOneWidget);
+      expect(find.text('线路一（22 集）'), findsOneWidget);
+      expect(find.text('线路二（8 集）'), findsOneWidget);
+      // 当前线路必须处于选中态（用户据此确认在看哪条线路）。
+      final chip = tester.widget<ChoiceChip>(
+        find.byKey(const ValueKey('tmdb-line-线路二')),
+      );
+      expect(chip.selected, isTrue);
+      final other = tester.widget<ChoiceChip>(
+        find.byKey(const ValueKey('tmdb-line-线路一')),
+      );
+      expect(other.selected, isFalse);
+
+      await tester.tap(find.byKey(const ValueKey('tmdb-line-线路一')));
+      expect(tapped?.flag, '线路一');
+    });
+
+    testWidgets('单线路也渲染（不隐藏，避免用户不知道有几条线路）', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          const TmdbLineSelector(
+            lines: [VodPlayLine(flag: '唯一线路', episodes: [])],
+            selectedFlag: '唯一线路',
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('tmdb-line-唯一线路')), findsOneWidget);
+    });
+  });
+
+  group('剧集区块头（`04` §3.1 ⑤：正序倒序 / 列表网格）', () {
+    testWidgets('显示集数与线路名，切换按钮回调生效', (tester) async {
+      var reversedToggles = 0;
+      var gridToggles = 0;
+      await tester.pumpWidget(
+        _host(
+          TmdbEpisodeHeader(
+            episodeCount: 12,
+            reversed: false,
+            gridMode: false,
+            lineName: '线路一',
+            onToggleReversed: () => reversedToggles++,
+            onToggleGridMode: () => gridToggles++,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.textContaining('选集'), findsOneWidget);
+      expect(find.textContaining('线路一'), findsOneWidget);
+      expect(find.textContaining('12 集'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('tmdb-episode-reverse')));
+      expect(reversedToggles, 1);
+      await tester.tap(find.byKey(const ValueKey('tmdb-episode-view-mode')));
+      expect(gridToggles, 1);
+    });
+
+    testWidgets('网格模式下剧集卡片换行铺满（不再是横向条）', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          SizedBox(
+            width: 1200,
+            child: TmdbEpisodeSection(
+              cards: _cards,
+              keyPrefix: 'tmdb-episode-card-线路一',
+              gridMode: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路一-grid')),
+        findsOneWidget,
+        reason: '网格模式必须用 GridView',
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路一-strip')),
+        findsNothing,
+        reason: '网格模式下不得再渲染横向条',
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路一-0')),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('信息表（`04` §3.1 ①：类型/地区/年份/时长/季集/导演…）', () {
+    testWidgets('两列排布，空值行自动跳过', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          const TmdbInfoTable(
+            rows: [
+              ('类型', '剧情 / 科幻'),
+              ('地区', '中国'),
+              ('年份', '2024'),
+              ('时长', ''),
+              ('导演', null),
+              ('评分', 'TMDB 8.2'),
+            ],
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('tmdb-info-table')), findsOneWidget);
+      expect(find.text('类型'), findsOneWidget);
+      expect(find.text('剧情 / 科幻'), findsOneWidget);
+      expect(find.text('评分'), findsOneWidget);
+      // 空值与 null 行必须整行跳过，不留空标签。
+      expect(find.text('时长'), findsNothing);
+      expect(find.text('导演'), findsNothing);
+    });
+
+    testWidgets('全部为空时不渲染整块', (tester) async {
+      await tester.pumpWidget(
+        _host(const TmdbInfoTable(rows: [('类型', ''), ('导演', null)])),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('tmdb-info-table')), findsNothing);
     });
   });
 
