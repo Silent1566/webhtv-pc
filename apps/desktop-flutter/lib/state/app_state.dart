@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import 'package:sqlite3/sqlite3.dart' show Row;
@@ -131,6 +132,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     AndroidBridgeService? androidBridgeService,
     SyncClient? syncClient,
     SyncServer Function(SyncServerHost host)? syncServerFactory,
+    /// 测试注入的站点 HTTP 客户端（widget/单测不可做真实 socket I/O）。
+    /// 与 [liveService]/[epgService] 同一模式：只为可测性开一个口子。
+    http.Client? httpClient,
   }) : paths = paths ?? AppPaths.resolve(),
        log = log ?? LogService(),
        _injectedLiveService = liveService,
@@ -138,6 +142,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _injectedBridgeService = androidBridgeService,
        _injectedSyncClient = syncClient,
        _injectedSyncServerFactory = syncServerFactory {
+    if (httpClient != null) _httpClient = HttpApiClient(client: httpClient);
     final cacheDir = this.paths.cacheDir;
     _supervisor = SpiderHostSupervisor(
       workRoot: p.join(cacheDir, 'sidecars'),
@@ -202,7 +207,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   CatImportPipeline? _catPipeline;
 
   late final ConfigImportService _importService;
-  final HttpApiClient _httpClient = HttpApiClient();
+  late HttpApiClient _httpClient = HttpApiClient();
   final CatHttpClient _catHttpClient = CatHttpClient();
   late final SpiderRouter _router;
 
@@ -267,6 +272,12 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SiteResult? _detailResult;
   Vod? _selectedVod;
   String? _selectedTypeId;
+
+  /// 当前分类的筛选条件（`filter.key → 选中值`，`§7.4.7`）。
+  ///
+  /// **切分类时保留**（TVBox/猫影视惯例）：用户选了「2024 年」，换一个分类后
+  /// 仍按 2024 筛，而不是让他重新选一遍。仅当**换站点**或**回首页**时清空。
+  Map<String, String> _categoryFilters = const {};
 
   List<ConfigRecord> _configs = const [];
   String? _importDiagnosticsSummary;
@@ -346,6 +357,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SiteResult? get detailResult => _detailResult;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
+
+  /// 当前生效的分类筛选条件（供 UI 高亮选中项）。
+  Map<String, String> get categoryFilters => _categoryFilters;
 
   /// 详情错误（与首页/分类/搜索共用的 [lastError] 分开）。
   ///
@@ -968,6 +982,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   void selectDefaultListing() {
     _selectedTypeId = null;
     _categoryResult = null;
+    // 回首页意味着离开分类上下文，筛选条件随之作废（否则回到首页再选分类会带着旧筛选）。
+    _categoryFilters = const {};
     notifyListeners();
   }
 
@@ -1214,15 +1230,20 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 加载分类（§7.4.7 分页与筛选）。
+  ///
+  /// [filters] 省略时沿用当前 [_categoryFilters]（**切分类保留筛选**）；
+  /// 显式传入（含空表）则覆盖。
   Future<void> loadCategory(
     String typeId, {
     int page = 1,
-    Map<String, String> filters = const {},
+    Map<String, String>? filters,
   }) async {
     final service = _siteService;
     final site = _selectedSite;
     if (service == null || site == null) return;
+    final effective = filters ?? _categoryFilters;
     _selectedTypeId = typeId;
+    _categoryFilters = effective;
     _contentPhase = LoadPhase.loading;
     _lastError = null;
     notifyListeners();
@@ -1231,12 +1252,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         site,
         typeId: typeId,
         page: page,
-        filters: filters,
+        filters: effective,
       );
       _categoryResult = outcome.value;
       _contentPhase = LoadPhase.ready;
       log.info(
         '分类加载成功 site=${site.key} t=$typeId page=$page '
+        'filters=${effective.isEmpty ? "-" : effective.length} '
         'list=${outcome.value.list.length} '
         'pagecount=${outcome.value.pageCount ?? "-"} '
         'elapsed=${outcome.latency.inMilliseconds}ms',
@@ -1254,6 +1276,37 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       );
     }
     notifyListeners();
+  }
+
+  /// 设置/清除单个筛选维度，并**立即重载当前分类**（筛选是即时生效的）。
+  ///
+  /// [value] 为空串表示清除该维度（对应「全部」选项）。
+  Future<void> setCategoryFilter(String key, String value) async {
+    final typeId = _selectedTypeId;
+    if (typeId == null) return;
+    final next = Map<String, String>.from(_categoryFilters);
+    if (value.isEmpty) {
+      next.remove(key);
+    } else {
+      next[key] = value;
+    }
+    if (_sameFilters(next, _categoryFilters)) return;
+    await loadCategory(typeId, filters: next);
+  }
+
+  /// 清空全部筛选并重载当前分类。
+  Future<void> clearCategoryFilters() async {
+    final typeId = _selectedTypeId;
+    if (typeId == null || _categoryFilters.isEmpty) return;
+    await loadCategory(typeId, filters: const {});
+  }
+
+  static bool _sameFilters(Map<String, String> a, Map<String, String> b) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (b[entry.key] != entry.value) return false;
+    }
+    return true;
   }
 
   /// 搜索（§14.1）。

@@ -81,6 +81,9 @@ class _CategoryPanel extends StatelessWidget {
     final home = state.homeResult;
     final classes = home?.classes ?? const <VodClass>[];
     final selected = state.selectedTypeId;
+    // 筛选维度来自**当前生效结果**：首页的 `filters` 是按 `type_id` 分组的
+    // （`{"1": [...], "2": [...]}`），因此取当前分类那一组。
+    final filters = _filtersFor(state, selected);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -128,6 +131,17 @@ class _CategoryPanel extends StatelessWidget {
                         state.selectDefaultListing();
                       },
                     ),
+                    // 筛选区（§7.4.7）：只在**已选分类**且该分类声明了 filters 时出现。
+                    // 放在分类列表**上方**（纯 A 方案：左侧栏垂直列表）。
+                    if (filters.isNotEmpty && selected != null) ...[
+                      const Divider(height: 1),
+                      _FilterSection(
+                        state: state,
+                        groups: filters,
+                        active: state.categoryFilters,
+                      ),
+                      const Divider(height: 1),
+                    ],
                     for (final item in classes)
                       ListTile(
                         dense: true,
@@ -140,6 +154,201 @@ class _CategoryPanel extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+
+  /// 取当前分类的筛选维度。
+  ///
+  /// 三个来源按优先级：分类结果 → 首页结果。
+  /// 首页的 `filters` 是按 `type_id` 分组的 map，所以必须用当前 `type_id` 取子集；
+  /// 分类请求返回的 `filters` 已经是**该分类自己的**一组（`map` 只有一个键或
+  /// 直接就是列表），因此优先用它，拿不到再回退首页。
+  static List<VodFilterGroup> _filtersFor(AppState state, String? typeId) {
+    if (typeId == null) return const [];
+    final fromCategory = _groupFor(state.categoryResult, typeId);
+    if (fromCategory.isNotEmpty) return fromCategory;
+    return _groupFor(state.homeResult, typeId);
+  }
+
+  static List<VodFilterGroup> _groupFor(SiteResult? result, String typeId) {
+    final filters = result?.filters;
+    if (filters == null || filters.isEmpty) return const [];
+    final direct = filters[typeId];
+    if (direct != null && direct.isNotEmpty) return direct;
+    // 某些站点把全部维度放在单个键下（或键名与 type_id 不一致）：
+    // 此时只要只有一组就直接用它，否则合并全部（宁多不少）。
+    if (filters.length == 1) return filters.values.first;
+    return [for (final group in filters.values) ...group];
+  }
+}
+
+/// 筛选区：每个维度一行标题 + 垂直选项列表（纯 A：左侧栏垂直布局）。
+///
+/// 交互对齐主流长视频站的筛选条：选中项高亮、「全部」清除该维度、
+/// 筛选**即时生效**（不额外点"应用"）。选项超过 [_collapsedCount] 个时
+/// 先收起，避免「剧情」这类 20+ 项的维度把侧栏撞得很长。
+class _FilterSection extends StatefulWidget {
+  const _FilterSection({
+    required this.state,
+    required this.groups,
+    required this.active,
+  });
+
+  final AppState state;
+  final List<VodFilterGroup> groups;
+  final Map<String, String> active;
+
+  @override
+  State<_FilterSection> createState() => _FilterSectionState();
+}
+
+class _FilterSectionState extends State<_FilterSection> {
+  /// 收起状态下每个维度最多展示的选项数。
+  static const int _collapsedCount = 6;
+
+  final Set<String> _expanded = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('筛选', style: theme.textTheme.titleSmall),
+              ),
+              if (widget.active.isNotEmpty)
+                TextButton(
+                  key: const ValueKey('category-filter-clear'),
+                  onPressed: widget.state.contentPhase == LoadPhase.loading
+                      ? null
+                      : widget.state.clearCategoryFilters,
+                  child: const Text('重置'),
+                ),
+            ],
+          ),
+          for (final group in widget.groups)
+            _buildGroup(context, theme, group),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroup(
+    BuildContext context,
+    ThemeData theme,
+    VodFilterGroup group,
+  ) {
+    final selectedValue = widget.active[group.key] ?? '';
+    final expanded = _expanded.contains(group.key);
+    final visible = expanded || group.options.length <= _collapsedCount
+        ? group.options
+        : group.options.take(_collapsedCount).toList();
+    final hasMore = group.options.length > _collapsedCount;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            group.name,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          // 纯 A：垂直列表（每个选项一行，选中高亮）。
+          for (final option in visible)
+            _FilterTile(
+              key: ValueKey('category-filter-${group.key}-${option.value}'),
+              label: option.name,
+              selected: option.value == selectedValue,
+              onTap: widget.state.contentPhase == LoadPhase.loading
+                  ? null
+                  : () => widget.state.setCategoryFilter(
+                        group.key,
+                        option.value,
+                      ),
+            ),
+          if (hasMore)
+            TextButton(
+              key: ValueKey('category-filter-more-${group.key}'),
+              onPressed: () => setState(() {
+                if (expanded) {
+                  _expanded.remove(group.key);
+                } else {
+                  _expanded.add(group.key);
+                }
+              }),
+              child: Text(
+                expanded
+                    ? '收起'
+                    : '更多（${group.options.length - _collapsedCount}）',
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 单个筛选项：紧凑单行，选中时高亮（对齐左侧分类列表的视觉语言）。
+class _FilterTile extends StatelessWidget {
+  const _FilterTile({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          color: selected
+              ? theme.colorScheme.primaryContainer
+              : Colors.transparent,
+        ),
+        child: Row(
+          children: [
+            if (selected) ...[
+              Icon(
+                Icons.check,
+                size: 13,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: selected
+                      ? theme.colorScheme.onPrimaryContainer
+                      : theme.colorScheme.onSurface,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
