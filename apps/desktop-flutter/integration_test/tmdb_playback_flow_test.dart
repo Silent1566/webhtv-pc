@@ -175,6 +175,10 @@ void main() {
           state: state,
           request: PlaybackRequest(
             url: decision!.url!,
+            // 季度进度的 `sourceEpisodeUrl` 存站点入口目标（`episode.url`），
+            // 而非解析后的代理地址；`TmdbEpisodeLocator` 拿它与 `VodEpisode.url`
+            // 精确比对定位集号，存代理地址永远匹配不上。
+            episodeTarget: episode.url,
             headers: decision.headers?.asRequestHeaders ?? const {},
             title: vod.vodName,
             siteKey: state.selectedSite?.key ?? '',
@@ -251,7 +255,8 @@ void main() {
     expect(
       seasonProgress.sourceEpisodeUrl,
       episode.url,
-      reason: '季度进度未记录来源剧集 URL',
+      reason: '季度进度应记录**站点入口目标**（与 episode.url 一致），'
+          '存解析后的代理地址会让 TmdbEpisodeLocator 永远匹配不上',
     );
     expect(seasonProgress.positionMs > 0, isTrue, reason: '季度进度位置未前进');
     evidence(

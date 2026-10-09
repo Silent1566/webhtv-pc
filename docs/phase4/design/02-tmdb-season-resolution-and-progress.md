@@ -480,7 +480,7 @@ PC 端字段（对齐上游 `TmdbSeasonProgress`，去掉 `cid`，改用 `config
 | `durationMs` | `int` | 时长 |
 | `sourceFlag` | `String` | 来源线路显示名 |
 | `sourceEpisodeName` | `String` | 来源剧集名 |
-| `sourceEpisodeUrl` | `String` | 来源剧集地址 |
+| `sourceEpisodeUrl` | `String` | 来源剧集**站点入口目标**（详情 `vod_play_url` 里 `$` 后的值；非解析后的可播地址） |
 | `sourceHistoryKey` | `String` | 关联的 `history` 键 |
 | `sourceBindingKey` | `String` | 关联的线路绑定键 |
 | `updatedAt` | `int` | |

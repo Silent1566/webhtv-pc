@@ -953,6 +953,9 @@ class _DetailPageState extends State<DetailPage> {
             state: state,
             request: PlaybackRequest(
               url: decision.url!,
+              // 历史里存**站点入口目标**（`episode.url`），而不是这个解析后的
+              // 可播地址（带时效签名，站点不认）。续播时要拿它回传站点重解析。
+              episodeTarget: episode.url,
               headers: decision.headers?.asRequestHeaders ?? const {},
               title: vod.vodName,
               siteKey: state.selectedSite?.key ?? '',
@@ -1253,6 +1256,9 @@ class _DetailPageState extends State<DetailPage> {
             state: state,
             request: PlaybackRequest(
               url: decision.url!,
+              // folder 条目的入口目标是分享链本身（`entry.vodId`），不是解析后的
+              // 代理/网盘直链；历史续播必须用它回传站点重解析。
+              episodeTarget: entry.vodId,
               headers: decision.headers?.asRequestHeaders ?? const {},
               title: vod.vodName,
               siteKey: state.selectedSite?.key ?? '',

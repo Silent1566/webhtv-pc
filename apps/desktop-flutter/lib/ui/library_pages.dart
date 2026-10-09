@@ -251,6 +251,9 @@ class _HistoryPageState extends State<HistoryPage> {
             state: state,
             request: PlaybackRequest(
               url: decision.url!,
+              // 续播后再次写进度时必须保留**同一个入口目标**，否则这一条历史会
+              // 被刚解析出的可播地址覆盖，下一次续播又失败。
+              episodeTarget: item.episodeId,
               headers: decision.headers?.asRequestHeaders ?? const {},
               title: item.vodName,
               siteKey: item.siteKey,

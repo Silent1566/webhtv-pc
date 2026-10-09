@@ -328,26 +328,60 @@ class _AppShellState extends State<AppShell> {
     if (!mounted) return;
     if (widget.startup.media != null) return;
     final sync = _state.syncState;
-    if (sync.deviceHistory.isEmpty) return;
+    if (sync.deviceHistory.isEmpty) {
+      // 没有接入历史（或自动接入不适用）时仍必须把当前站点的首页拉起来，
+      // 否则启动后停在「没有内容」空态，要用户手动点分类或刷新才有数据
+      // （用户反馈 2026-10-09：「刚启动时没有默认加载数据」）。
+      await _loadInitialHome();
+      return;
+    }
     final device = await sync.tryAutoConnect();
-    if (!mounted || device == null) return;
+    if (!mounted) return;
+    if (device == null) {
+      // 最近那条线路连不上：不影响用户用当前配置，照常加载首页。
+      await _loadInitialHome();
+      return;
+    }
     final ok = await sync.importSites(device.reachableBase);
-    if (!mounted || !ok) return;
+    if (!mounted) return;
+    if (!ok) {
+      await _loadInitialHome();
+      return;
+    }
     // 导入产生的是**新配置记录**（`makeActive: false`，Q10 不覆盖当前配置）。
     // 自动接入的目的是「开箱可用」，因此这里显式激活刚导入的那条记录。
     ConfigRecord? record;
     for (final item in _state.configs) {
       if (item.origin == device.reachableBase) record = item;
     }
-    if (record != null) {
-      await _state.activateConfigRecord(record.id);
-      if (!mounted) return;
-      setState(() => _section = ShellSection.browse);
-      _state.log.info(
-        '已自动接入最近使用的桥接线路并切换配置 #${record.id}',
-        scope: 'bridge',
-      );
+    if (record == null) {
+      await _loadInitialHome();
+      return;
     }
+    await _state.activateConfigRecord(record.id);
+    if (!mounted) return;
+    setState(() => _section = ShellSection.browse);
+    _state.log.info(
+      '已自动接入最近使用的桥接线路并切换配置 #${record.id}',
+      scope: 'bridge',
+    );
+    // `activateConfigRecord` 只恢复配置不拉首页（它是给「配置管理页」用的），
+    // 因此这里仍需显式加载，否则切过去还是空页。
+    await _loadInitialHome();
+  }
+
+  /// 启动时把当前站点的首页拉起来（幂等：已有内容或正在加载就不重复）。
+  ///
+  /// 为什么必须有：`bootstrap()` 只恢复配置与 `_selectedSite`（`config.defaultSite()`），
+  /// **从不发首页请求**；而浏览页在无 `homeResult` 时只渲染空态。
+  /// 于是冷启动后用户看到的是「没有内容」，必须手动点分类或刷新。
+  Future<void> _loadInitialHome() async {
+    if (!mounted) return;
+    final site = _state.selectedSite;
+    if (site == null) return;
+    if (_state.homeResult != null) return;
+    if (_state.contentPhase == LoadPhase.loading) return;
+    await _state.loadHome(site);
   }
 
   /// 自动播放命令行指定的媒体（冒烟验证路径）。

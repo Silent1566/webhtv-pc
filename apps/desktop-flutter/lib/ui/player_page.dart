@@ -35,6 +35,7 @@ class PlaybackRequest {
     required this.vodName,
     required this.episodeName,
     required this.flag,
+    String? episodeTarget,
     this.headers = const {},
     this.startPosition,
     this.playLines = const [],
@@ -45,7 +46,7 @@ class PlaybackRequest {
     this.subtitleHeaders = const {},
     this.danmaku = const [],
     this.tmdb,
-  });
+  }) : episodeTarget = episodeTarget ?? url;
 
   final String url;
   final String title;
@@ -56,6 +57,18 @@ class PlaybackRequest {
   final String flag;
   final Map<String, String> headers;
   final Duration? startPosition;
+
+  /// 站点播放入口的**输入目标**（详情 `vod_play_url` 里该集 `$` 之后的值）。
+  ///
+  /// 与 [url] 的区别很关键：
+  /// - [url] 是**解析后的可播地址**（T4 站点还要再经本地代理换成 `127.0.0.1/p/<token>/…`），
+  ///   带时效签名，**不能**当作再次解析的输入；
+  /// - [episodeTarget] 是站点能认的原始目标（网盘站是分享链，普通站是剧集地址）。
+  ///
+  /// 历史续播必须用 [episodeTarget] 重新解析：拿 [url] 去问站点只会得到
+  /// 「站点返回业务错误」（用户反馈 2026-10-09「无法从历史记录页面继续播放」）。
+  /// 为空时回退到 [url]（兼容命令行/直播等无需二次解析的场景）。
+  final String episodeTarget;
 
   /// 播放结果携带的外挂字幕（§10.3）。
   final List<SubtitleInfo> subtitles;
@@ -88,6 +101,7 @@ class PlaybackRequest {
 
   PlaybackRequest copyWith({
     String? url,
+    String? episodeTarget,
     String? episodeName,
     String? flag,
     Map<String, String>? headers,
@@ -99,6 +113,10 @@ class PlaybackRequest {
   }) {
     return PlaybackRequest(
       url: url ?? this.url,
+      // `episodeTarget` **不随 `url` 自动跟随**：两者语义不同（前者是站点入口
+      // 目标、后者是解析后的可播地址），若换 `url` 时把入口目标也顶成播放地址，
+      // 历史里存的就又是站点认不了的值。换集的调用点必须**显式**传 `episodeTarget`。
+      episodeTarget: episodeTarget ?? this.episodeTarget,
       title: title,
       siteKey: siteKey,
       vodId: vodId,
@@ -268,6 +286,8 @@ class _PlayerPageState extends State<PlayerPage> {
     setState(() {
       _request = _request.copyWith(
         url: episode.url,
+        // 直播的 `episode.url` 就是最终可播地址，入口目标与之一致。
+        episodeTarget: episode.url,
         episodeName: episode.name,
         episodeIndex: next,
         clearStartPosition: true,
@@ -732,7 +752,10 @@ class _PlayerPageState extends State<PlayerPage> {
       vod: Vod(vodId: _request.vodId, vodName: _request.vodName),
       flag: _request.flag,
       episodeName: _request.episodeName,
-      episodeId: _request.url,
+      // 存**站点入口目标**而不是解析后的播放地址：历史续播要把这个值回传给站点
+      // 重新解析（§15.2）。存播放地址会得到「站点返回业务错误」，因为那是带时效
+      // 签名的 CDN/代理地址，站点认不了（用户反馈 2026-10-09）。
+      episodeId: _request.episodeTarget,
       position: position,
       duration: duration,
       siteKey: _request.siteKey,
@@ -750,7 +773,11 @@ class _PlayerPageState extends State<PlayerPage> {
         vodId: _request.vodId,
         sourceFlag: _request.flag,
         sourceEpisodeName: _request.episodeName,
-        sourceEpisodeUrl: _request.url,
+        // 同样必须存**站点入口目标**：`TmdbEpisodeLocator` 拿它与 `VodEpisode.url`
+        // （详情里的入口目标）精确比对来定位集号，存解析后的可播地址（T4 站点是
+        // 本地代理 `127.0.0.1/p/<token>/…`）永远匹配不上，季度续播就定位不到集。
+        // 同时也让 `sourceHistoryKey` 与 `history.episodeId` 指向同一个值。
+        sourceEpisodeUrl: _request.episodeTarget,
         positionMs: position.inMilliseconds,
         durationMs: duration.inMilliseconds,
       );
@@ -852,6 +879,9 @@ class _PlayerPageState extends State<PlayerPage> {
         _loadError = null;
         _request = _request.copyWith(
           url: url,
+          // 换集必须把「站点入口目标」一起换成该集的输入值（`episode.url`），
+          // 否则历史里记的仍是上一集的入口，续播会跳回上一集。
+          episodeTarget: episode.url,
           episodeName: episode.name,
           flag: flag,
           headers: _request.directUrl
