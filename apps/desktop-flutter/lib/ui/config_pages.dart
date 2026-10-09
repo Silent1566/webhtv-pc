@@ -779,6 +779,14 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
 
   Future<void> _scan() => _sync.scan();
 
+  /// 从历史一键重连：先探测，探到就自动导入站点（用户点「接入」就是想用上）。
+  Future<void> _reconnect(DeviceHistoryEntry entry) async {
+    _address.text = entry.address;
+    final device = await _sync.probe(entry.address);
+    if (!mounted || device == null) return;
+    await _sync.importSites(device.reachableBase);
+  }
+
   Future<void> _import(AndroidDevice device) =>
       _sync.importSites(device.reachableBase);
 
@@ -903,6 +911,50 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
               ),
             ),
           ],
+          const Divider(height: 32),
+          Row(
+            children: [
+              Text('最近接入', style: theme.textTheme.titleMedium),
+              const SizedBox(width: 8),
+              // 用户反馈：设备接入需要历史记录方便再次使用。一键重连不用再输地址。
+              Text(
+                '（点一下就重新接入，不用再输地址）',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (sync.deviceHistory.isEmpty)
+            const Text('还没有接入过设备。')
+          else
+            for (final entry in sync.deviceHistory)
+              ListTile(
+                key: ValueKey('bridge-history-${entry.uuid}'),
+                dense: true,
+                leading: const Icon(Icons.history),
+                title: Text(entry.name),
+                subtitle: Text(entry.address),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      key: ValueKey('bridge-history-connect-${entry.uuid}'),
+                      onPressed: sync.busy
+                          ? null
+                          : () => _reconnect(entry),
+                      child: const Text('接入'),
+                    ),
+                    IconButton(
+                      key: ValueKey('bridge-history-forget-${entry.uuid}'),
+                      tooltip: '从历史中删除',
+                      onPressed: sync.busy
+                          ? null
+                          : () => _sync.forgetDevice(entry.uuid),
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  ],
+                ),
+              ),
           const Divider(height: 32),
           Text('安卓设备', style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),

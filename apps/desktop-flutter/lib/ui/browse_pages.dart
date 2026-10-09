@@ -109,7 +109,10 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final classes = state.homeResult?.classes ?? const <VodClass>[];
+    final home = state.homeResult;
+    final classes = home?.classes ?? const <VodClass>[];
+    // 首页有推荐内容才保留「默认推荐」标签（否则它只是个空态入口）。
+    final hasHomeList = home?.list.isNotEmpty ?? false;
     final selected = state.selectedTypeId;
     final loading = state.contentPhase == LoadPhase.loading;
     final hasFilters = state.categoryFilters.isNotEmpty;
@@ -134,12 +137,15 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    _BrowseTab(
-                      key: const ValueKey('browse-tab-default'),
-                      label: '默认推荐',
-                      selected: selected == null,
-                      onTap: loading ? null : state.selectDefaultListing,
-                    ),
+                    // 首页**没有推荐内容**时不显示「默认推荐」标签：那个标签点进去
+                    // 只有空态（实测 126 站点里 40 个如此），留在条上只会误导用户。
+                    if (hasHomeList)
+                      _BrowseTab(
+                        key: const ValueKey('browse-tab-default'),
+                        label: '默认推荐',
+                        selected: selected == null,
+                        onTap: loading ? null : state.selectDefaultListing,
+                      ),
                     for (final item in classes)
                       _BrowseTab(
                         key: ValueKey('browse-tab-${item.typeId}'),
@@ -1153,8 +1159,12 @@ class _DetailPageState extends State<DetailPage> {
                   _buildEpisodes(context, vod, lines),
                 ],
                 // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
-                // folder 展开结果不是单部作品，不做 TMDB 附加区块。
-                if (!_isFolderExpansion(result)) ..._buildTmdbBlocks(context, tmdb),
+                //
+                // folder 展开**也要**渲染：被点的 folder 条目本身就是一部作品
+                // （名称/海报/集数备注齐备），只是它没有线路而已（用户反馈
+                // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
+                // `TmdbInfoTable` 自行跳过空值行。
+                ..._buildTmdbBlocks(context, tmdb),
               ],
             ),
     );

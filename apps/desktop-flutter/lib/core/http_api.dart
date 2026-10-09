@@ -700,11 +700,22 @@ abstract final class HttpApiResponseParser {
   }
 }
 
+/// 站点请求超时（§9.8、§14.1）。
+///
+/// 用户要求从 20s 放宽到**最大 3 分钟**（2026-10-09）。原因：网盘聚合站的详情/分类
+/// 要走「分享链 → 网盘元数据」多跳，实测 0.3~4s 是常态，但共享链失效重试、网盘
+/// 限流时单个请求超 20s 很常见——超时即被当成失败，用户看到的是「站点不可用」，
+/// 而实际上再等十几秒就能拿到。
+///
+/// 3 分钟是**上限**：绝大多数请求仍在亚秒到几秒内返回，超时只影响真的卡死的请求；
+/// 用户随时可以取消搜索（§14.1），不会真被卡住 3 分钟。
+const Duration siteRequestTimeout = Duration(seconds: 180);
+
 /// 带 Header 注入与环境约束的 HTTP API 客户端。
 class HttpApiClient {
   HttpApiClient({
     http.Client? client,
-    this.timeout = const Duration(seconds: 20),
+    this.timeout = siteRequestTimeout,
     this.userAgent = HttpApiRequestBuilder.defaultUserAgent,
     this.maxResponseBytes = 16 * 1024 * 1024,
   }) : _client = client ?? http.Client();

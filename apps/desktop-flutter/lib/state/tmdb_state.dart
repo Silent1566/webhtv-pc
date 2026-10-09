@@ -368,7 +368,7 @@ class TmdbState extends ChangeNotifier {
     required String vodId,
     required String sourceTitle,
     required Vod vod,
-    required TmdbSourceLine line,
+    TmdbSourceLine? line,
     int configId = 0,
     String siteName = '',
     int requestSeason = -1,
@@ -521,6 +521,17 @@ class TmdbState extends ChangeNotifier {
   ///
   /// 流程：匹配 → 详情（含季度解析）→ 剧集元数据 → 相关视频。
   ///
+  /// **允许无线路**（`playLines` 为空）：网盘聚合站（实测 170 站点里 93 个共用
+  /// `spring.jar`）的详情是 `folder` 展开出来的一串分享链，被点的 `folder` 条目
+  /// 自身**没有** `vod_play_from`/`vod_play_url`，但它带着作品名/海报/集数备注
+  /// （如「山花烂漫时 / 全23集」），完全应该做 TMDB 匹配。
+  /// 早期实现第一行就是 `if (playLines.isEmpty) return;`，于是这些站点的详情页
+  /// 整块 TMDB 区块（背景/海报墙/演职人员/推荐）全部丢失（用户反馈
+  /// 「桥接站点还是没有 tmdb 详情页」）。
+  ///
+  /// 无线路时季度解析与剧集元数据不参与（它们本质是**线路维度**的：要把 TMDB
+  /// 季集映射到某条线路的集上），其余**作品维度**的数据照常加载。
+  ///
   /// 契约：
   /// - 任何一步失败只影响 TMDB 区块（`04` §3.4），不抛出、不阻塞浏览与播放；
   /// - 未配置 / 站点禁用时 `beginLoad` 直接进入 `disabled`，**零请求**；
@@ -533,7 +544,6 @@ class TmdbState extends ChangeNotifier {
     List<VodPlayLine>? lines,
   }) async {
     final playLines = lines ?? parsePlayLines(vod.vodPlayFrom, vod.vodPlayUrl);
-    if (playLines.isEmpty) return;
     _playLines = playLines;
 
     // 保持「换线路时选定的线路」（`04` §3.1 ④）。
@@ -549,20 +559,23 @@ class TmdbState extends ChangeNotifier {
         break;
       }
     }
-    final line = keep == null
-        ? sourceLineOf(playLines.first, 0)
-        : sourceLineOf(
-            keep,
-            playLines.indexOf(keep),
-            unique: _isFlagUnique(keep.flag),
-          );
+    // 无线路（folder 展开的分享链）→ `line` 为 null，跳过线路维度的一切。
+    final line = playLines.isEmpty
+        ? null
+        : (keep == null
+              ? sourceLineOf(playLines.first, 0)
+              : sourceLineOf(
+                  keep,
+                  playLines.indexOf(keep),
+                  unique: _isFlagUnique(keep.flag),
+                ));
     // 记录实际采用的线路，使后续 `reloadTmdb` 继续保留它，
     // 并让「季度记忆」能按线路归档（见 _lineSeasonMemory）。
     //
     // 首次加载时 `keep` 为 null（还没有用户选择），此时必须记为**实际使用的**
     // 第一条线路，否则 `_selectedLineFlag` 为空 → 季度记忆归不到任何线路
     // → 切走再切回时恢复不了（用户反馈的「又转换一次」）。
-    _selectedLineFlag = keep?.flag ?? playLines.first.flag;
+    _selectedLineFlag = keep?.flag ?? (playLines.isEmpty ? '' : playLines.first.flag);
 
     // 同一部作品的 TMDB 数据在**所有线路之间共用**（用户反馈 2026-10-08：
     // 「多线路貌似没共用同一份 tmdb 数据或缓存」）。

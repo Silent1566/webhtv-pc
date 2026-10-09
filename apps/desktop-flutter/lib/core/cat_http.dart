@@ -195,7 +195,7 @@ class CatHttpRequestBuilder {
 class CatHttpClient {
   CatHttpClient({
     http.Client? client,
-    this.timeout = const Duration(seconds: 20),
+    this.timeout = siteRequestTimeout,
     this.userAgent = HttpApiRequestBuilder.defaultUserAgent,
     this.maxResponseBytes = 8 * 1024 * 1024,
   }) : _client = client ?? http.Client();

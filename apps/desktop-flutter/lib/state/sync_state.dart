@@ -73,6 +73,60 @@ abstract class SyncStateHost {
   Future<void> applySyncedSettings(SyncSettings settings);
 }
 
+/// 一条设备接入历史（用户反馈 2026-10-09：设备接入需要历史记录方便再次使用）。
+///
+/// 与 [SyncPeer]（白名单，管**同步**授权）分开：设备历史记的是**接入过哪些地址**
+/// 及其最近使用时间，即使从未授权同步也要能一键重连（用户日常用法是「扫一次、
+/// 以后直接点历史」）。
+class DeviceHistoryEntry {
+  const DeviceHistoryEntry({
+    required this.uuid,
+    required this.name,
+    required this.address,
+    required this.lastUsedMs,
+  });
+
+  /// 设备 uuid；未知时用规范化地址兼作标识。
+  final String uuid;
+  final String name;
+
+  /// PC 视角的可达基址（已规范化，无尾随 `/`）。
+  final String address;
+
+  /// 最近一次成功接入的时间（毫秒时间戳），用于排序与「最近使用」判定。
+  final int lastUsedMs;
+
+  Map<String, Object?> toJson() => {
+    'uuid': uuid,
+    'name': name,
+    'address': address,
+    'lastUsed': lastUsedMs,
+  };
+
+  static DeviceHistoryEntry? fromJson(Object? value) {
+    final map = asMap(value);
+    final address = asNonEmptyString(map['address']);
+    if (address == null) return null;
+    return DeviceHistoryEntry(
+      uuid: asNonEmptyString(map['uuid']) ?? address,
+      name: asNonEmptyString(map['name']) ?? Uri.parse(address).host,
+      address: address,
+      lastUsedMs: asInt(map['lastUsed']) ?? 0,
+    );
+  }
+
+  DeviceHistoryEntry copyWith({String? name, String? address, int? lastUsedMs}) =>
+      DeviceHistoryEntry(
+        uuid: uuid,
+        name: name ?? this.name,
+        address: address ?? this.address,
+        lastUsedMs: lastUsedMs ?? this.lastUsedMs,
+      );
+
+  @override
+  String toString() => 'DeviceHistoryEntry($name @ $address)';
+}
+
 /// 一台已授权对端（按 `uuid` 区分，`design/01` §9 Q1）。
 class SyncPeer {
   const SyncPeer({
@@ -168,6 +222,15 @@ class SyncState extends ChangeNotifier {
   String _deviceUuid = '';
   String _deviceName = '';
   List<SyncPeer> _peers = const [];
+
+  /// 设备接入历史（按最近使用倒序，上限 [maxDeviceHistory] 条）。
+  List<DeviceHistoryEntry> _deviceHistory = const [];
+
+  /// 最近一次**成功接入**的地址（自动接入的候选，见 [tryAutoConnect]）。
+  String _lastBridgeAddress = '';
+
+  /// 设备历史上限：防异常配置把设置文件撞大。
+  static const int maxDeviceHistory = 20;
 
   // ------------------------------------------------------------ 运行期状态
 
@@ -277,6 +340,12 @@ class SyncState extends ChangeNotifier {
           .map(SyncPeer.fromJson)
           .whereType<SyncPeer>()
           .toList();
+      _deviceHistory = asList(section['devices'])
+          .map(DeviceHistoryEntry.fromJson)
+          .whereType<DeviceHistoryEntry>()
+          .toList()
+        ..sort((a, b) => b.lastUsedMs.compareTo(a.lastUsedMs));
+      _lastBridgeAddress = asNonEmptyString(section['lastBridge']) ?? '';
       _loaded = true;
       if (section.isEmpty) {
         // 首次运行：把生成的 uuid 落盘，保证重启后安卓仍认同一台设备。
@@ -286,7 +355,8 @@ class SyncState extends ChangeNotifier {
         '同步设置已读取：server=${_serverEnabled ? 'on' : 'off'} '
         'push=${_pushEnabled ? 'on' : 'off'} '
         'settings=${_settingsSyncEnabled ? 'on' : 'off'} '
-        'peers=${_peers.length}',
+        'peers=${_peers.length} devices=${_deviceHistory.length} '
+        'lastBridge=${redactUrl(_lastBridgeAddress)}',
         scope: 'sync',
       );
     } catch (error) {
@@ -418,6 +488,66 @@ class SyncState extends ChangeNotifier {
 
   // ------------------------------------------------------------- 设备探测
 
+  /// 设备接入历史（最近使用倒序）。
+  List<DeviceHistoryEntry> get deviceHistory =>
+      List.unmodifiable(_deviceHistory);
+
+  /// 最近一次成功接入的地址（未接入过时为空串）。
+  String get lastBridgeAddress => _lastBridgeAddress;
+
+  /// 记录一次**成功接入**（探测成功或导入成功时调用）。
+  ///
+  /// 同一设备（按 uuid，未知时按地址）只保留最新一条，并把它提到最前；
+  /// 同时把地址记为「最近使用的桥接线路」，供下次启动自动接入。
+  ///
+  /// [persist] 为 false 时只改内存（调用方随后会自己落盘，避免同一流程里连写两次
+  /// 设置文件——`_persist` 是「写 .tmp → 删旧 → rename」，连写会放大文件锁窗口）。
+  Future<void> _rememberDevice({
+    required String uuid,
+    required String name,
+    required String address,
+    bool persist = true,
+  }) async {
+    final base = normalizeBase(address);
+    if (base.isEmpty) return;
+    final id = uuid.trim().isEmpty ? base : uuid.trim();
+    final entry = DeviceHistoryEntry(
+      uuid: id,
+      name: name.trim().isEmpty ? Uri.parse(base).host : name.trim(),
+      address: base,
+      lastUsedMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    final next = <DeviceHistoryEntry>[
+      entry,
+      for (final item in _deviceHistory)
+        if (item.uuid != id && item.address != base) item,
+    ];
+    _deviceHistory = next.length > maxDeviceHistory
+        ? next.sublist(0, maxDeviceHistory)
+        : next;
+    _lastBridgeAddress = base;
+    log.info(
+      '已记录设备接入历史 name=${entry.name} address=${redactUrl(base)} '
+      'history=${_deviceHistory.length}',
+      scope: 'bridge',
+    );
+    if (persist) await _persist();
+  }
+
+  /// 删除一条设备历史（用户在接入页手动清理）。
+  Future<void> forgetDevice(String uuid) async {
+    final next = _deviceHistory.where((item) => item.uuid != uuid).toList();
+    if (next.length == _deviceHistory.length) return;
+    _deviceHistory = next;
+    // 删掉的正好是「最近使用」时，把指针移到新的第一条，避免自动接入一个
+    // 用户已经删掉的地址。
+    if (!next.any((item) => item.address == _lastBridgeAddress)) {
+      _lastBridgeAddress = next.isEmpty ? '' : next.first.address;
+    }
+    await _persist();
+    notifyListeners();
+  }
+
   /// 探测一个地址并（成功时）记录下来（`design/01` §4.3）。
   Future<AndroidDevice?> probe(String address) async {
     _busy = true;
@@ -430,6 +560,11 @@ class SyncState extends ChangeNotifier {
       if (!_devices.any((item) => item.uuid == device.uuid)) {
         _devices = [..._devices, device];
       }
+      await _rememberDevice(
+        uuid: device.uuid,
+        name: device.name,
+        address: device.reachableBase,
+      );
       _notice = '已识别设备 ${device.name}（${device.typeLabel}）';
       return device;
     } on AppError catch (error) {
@@ -442,6 +577,55 @@ class SyncState extends ChangeNotifier {
         '设备探测失败：$error',
         cause: error,
       );
+      return null;
+    } finally {
+      _busy = false;
+      _stage = null;
+      notifyListeners();
+    }
+  }
+
+  /// 启动时尝试自动接入最近使用的桥接线路。
+  ///
+  /// 用户需求（2026-10-09）：「如果最近使用的是桥接线路且该线路还能连上应该
+  /// 自动接入」。因此这里只**探测**一个地址（即历史里最近使用的那条），
+  /// 探不通就安静放弃——不扫描、不轮询、不打扰用户（扫描是用户显式动作，
+  /// `design/01` §4.4）。
+  ///
+  /// 返回探到的设备；未接入过、不可达或已在运行都返回 `null`。
+  /// 调用方（UI）拿到非空结果后再决定是否导入站点。
+  Future<AndroidDevice?> tryAutoConnect() async {
+    final target = _lastBridgeAddress.isNotEmpty
+        ? _lastBridgeAddress
+        : (_deviceHistory.isEmpty ? '' : _deviceHistory.first.address);
+    if (target.isEmpty) return null;
+    if (_busy) return null;
+    log.info(
+      '尝试自动接入最近使用的桥接线路 address=${redactUrl(target)}',
+      scope: 'bridge',
+    );
+    // 自动接入**不弹错误**：探不通只是「上次那台设备不在」，不应该在启动时
+    // 给用户一个红色错误横幅。因此这里不走 probe（它会写 _lastError）。
+    _busy = true;
+    _stage = BridgeStage.probingDevice;
+    notifyListeners();
+    try {
+      final device = await _bridge.probeDevice(target);
+      if (!_devices.any((item) => item.uuid == device.uuid)) {
+        _devices = [..._devices, device];
+      }
+      await _rememberDevice(
+        uuid: device.uuid,
+        name: device.name,
+        address: device.reachableBase,
+      );
+      log.info(
+        '自动接入成功 name=${device.name} address=${redactUrl(device.reachableBase)}',
+        scope: 'bridge',
+      );
+      return device;
+    } catch (error) {
+      log.info('自动接入未成功（按预期安静放弃）：$error', scope: 'bridge');
       return null;
     } finally {
       _busy = false;
@@ -538,7 +722,17 @@ class SyncState extends ChangeNotifier {
         );
       }
 
-      // 顺带把设备加入白名单：用户刚刚显式接入它。
+      // 先改内存里的设备历史与白名单，**最后只落一次盘**：
+      // `_persist` 是「写 .tmp → 删旧 → rename」，同一流程里连写两次会放大文件锁
+      // 窗口（测试环境下会让 `settleIo` 的固定帧数不够用）。
+      // 因此 `_rememberDevice` 不落盘，由随后的 `authorizePeer` 一并写入。
+      await _rememberDevice(
+        uuid: device.uuid,
+        name: device.name,
+        address: device.reachableBase,
+        persist: false,
+      );
+      // 顺带把设备加入白名单：用户刚刚显式接入它（并在这里落盘）。
       await authorizePeer(device);
 
       _notice = '已导入 ${conversion.siteCount} 个站点'
@@ -838,6 +1032,8 @@ class SyncState extends ChangeNotifier {
         'pushEnabled': _pushEnabled,
         'settingsSyncEnabled': _settingsSyncEnabled,
         'peers': _peers.map((peer) => peer.toJson()).toList(),
+        'devices': _deviceHistory.map((item) => item.toJson()).toList(),
+        'lastBridge': _lastBridgeAddress,
       };
       final temporary = File('$settingsPath.tmp');
       await temporary.writeAsString(

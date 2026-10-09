@@ -1238,6 +1238,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 加载首页（§8.1、§8.4）。
+  /// 加载首页（§8.1、§8.4）。
+  ///
+  /// 首页无推荐内容时**自动选第一个分类**（用户反馈 2026-10-09：「如果当前站点的
+  /// 默认推荐分类无数据时自动隐藏选中显示第一个分类即可」）。
+  ///
+  /// 为什么：实测 126 个站点里 40 个只返回 `class` 而不返回 `list`，用户进入站点后
+  /// 看到的是「请选择一个分类」的空态，必须先手动点一下才有内容——既然站点已经
+  /// 给了分类列表，帮用户选第一个是零风险的行为。
   Future<void> loadHome(Site site) async {
     final service = _siteService;
     if (service == null) return;
@@ -1254,6 +1262,20 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         'elapsed=${outcome.latency.inMilliseconds}ms',
         scope: 'site',
       );
+      // 只在「确实没有推荐内容」且「有分类可选」时才自动选：有推荐内容时不得
+      // 抢走用户看到的首页；无分类可退时也不得反复空请求。
+      final first = outcome.value.classes.isEmpty
+          ? null
+          : outcome.value.classes.first;
+      if (outcome.value.list.isEmpty && first != null) {
+        log.info(
+          '首页无推荐内容，自动进入第一个分类 '
+          't=${first.typeId} name=${first.typeName}',
+          scope: 'site',
+        );
+        await loadCategory(first.typeId);
+        return;
+      }
     } catch (error) {
       final failure = error is AppError
           ? error
@@ -1683,26 +1705,35 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       _detailResult = outcome.value;
       _detailPhase = LoadPhase.ready;
       final first = outcome.value.list.isEmpty ? null : outcome.value.list.first;
-      if (first != null) _selectedVod = first;
-      if (first != null && !first.isFolder) {
-        // TMDB 增强：详情就绪后异步加载。失败**不影响**线路与选集（§27 原则 3），
-        // 因此不 await，也不把异常传播到详情加载。
-        // folder 展开结果不是单部作品（而是资源列表），不做 TMDB 匹配。
-        _tmdbRunId = runId;
-        unawaited(
-          tmdb.loadForVod(
-            first,
-            siteKey: site.key,
-            siteName: site.name,
-            configId: tmdbConfigId,
-            lines: playLinesOf(first),
-          ),
-        );
-      }
+      // folder 展开的子条目是分享链（无 `vod_play_url`），而**作品信息在被点的
+      // folder 条目自身**（`vod_name`/`vod_pic`/`vod_remarks`，如「山花烂漫时 /
+      // 全23集」）。因此只有「子条目确实可播」时才把选中条目切到子条目，
+      // 否则保持 folder 条目——否则手动匹配会拿「百度#木偶」这种分享链名去搜 TMDB。
+      final childPlayable = first != null && playLinesOf(first).isNotEmpty;
+      final effective = vod.isFolder && !childPlayable ? vod : (first ?? vod);
+      _selectedVod = effective;
+      // TMDB 增强：详情就绪后异步加载。失败**不影响**线路与选集（§27 原则 3），
+      // 因此不 await，也不把异常传播到详情加载。
+      //
+      // folder 展开也做 TMDB 匹配（用户反馈「桥接站点还是没有 tmdb 详情页」）：
+      // 此时没有线路，`loadForVod` 会跳过季度解析与剧集元数据，只加载作品维度的
+      // 背景/海报墙/演职人员/推荐。信息表缺失字段留空（folder 条目只有
+      // 名称/海报/备注，没有年份/地区/演员/简介）。
+      _tmdbRunId = runId;
+      unawaited(
+        tmdb.loadForVod(
+          effective,
+          siteKey: site.key,
+          siteName: site.name,
+          configId: tmdbConfigId,
+          lines: playLinesOf(effective),
+        ),
+      );
       log.info(
         '详情加载成功 site=${site.key} vod=${vod.vodId} '
         'folder=${vod.isFolder} entries=${outcome.value.list.length} '
-        'lines=${first == null ? 0 : playLinesOf(first).length} '
+        'tmdbVod=${effective.vodId} '
+        'lines=${playLinesOf(effective).length} '
         'elapsed=${outcome.latency.inMilliseconds}ms',
         scope: 'site',
       );

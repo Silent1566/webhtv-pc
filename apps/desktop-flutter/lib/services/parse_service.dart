@@ -76,7 +76,7 @@ class ParseService {
   ParseService({
     http.Client? client,
     this.maxBytes = 8 * 1024 * 1024,
-    this.timeout = const Duration(seconds: 20),
+    this.timeout = siteRequestTimeout,
     this.userAgent = 'WebHTV-PC/0.1 (Windows)',
   }) : _client = client ?? http.Client();
 

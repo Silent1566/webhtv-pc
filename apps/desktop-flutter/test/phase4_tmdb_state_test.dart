@@ -1307,4 +1307,96 @@ void main() {
       state.dispose();
     });
   });
+
+  group('folder 展开（无线路）也做 TMDB 匹配（用户反馈 2026-10-09）', () {
+    /// 网盘聚合站的详情是 `folder` 展开出的一串分享链：被点的 folder 条目
+    /// 自身**没有** `vod_play_from`/`vod_play_url`，但带着作品名/海报/集数备注。
+    /// 早期实现 `loadForVod` 第一行 `if (playLines.isEmpty) return;` 让这些站点的
+    /// 详情页整块 TMDB 区块（背景/海报墙/演职人员/推荐）全部丢失。
+    _FakeClient folderClient() => _FakeClient()
+      ..route('/search/multi', {
+        'results': [
+          {
+            'id': 1399,
+            'media_type': 'tv',
+            'name': '山花烂漫时',
+            'first_air_date': '2024-01-01',
+          },
+        ],
+      })
+      ..route('/tv/1399', {
+        'id': 1399,
+        'name': '山花烂漫时',
+        'genres': [
+          {'name': '剧情'},
+        ],
+        'seasons': [
+          {'season_number': 1, 'episode_count': 23},
+        ],
+      })
+      ..route('/tv/1399/videos', {'results': []});
+
+    Vod folderVod() => Vod(
+      vodId: 'atvp_detail:131925',
+      vodName: '山花烂漫时',
+      vodPic: 'https://img/p.jpg',
+      vodRemarks: '全23集',
+      vodTag: 'folder',
+    );
+
+    test('无线路仍匹配并加载作品维度数据（背景/演员/推荐）', () async {
+      final client = folderClient();
+      final state = _state(config: _ready, client: client);
+
+      await state.loadForVod(folderVod(), siteKey: 's', siteName: '木偶');
+
+      expect(state.hasMatch, isTrue, reason: 'folder 条目应能按标题匹配到 TMDB');
+      expect(state.detail, isNotNull, reason: '详情必须加载（背景/信息表/推荐都靠它）');
+      expect(state.phase, isNot(TmdbLoadPhase.disabled));
+      expect(
+        state.sourceLine,
+        isNull,
+        reason: '无线路时不得伪造线路（季度解析是线路维度的事）',
+      );
+      state.dispose();
+    });
+
+    test('无线路时不发季度与剧集请求（只做作品维度）', () async {
+      final client = folderClient();
+      final state = _state(config: _ready, client: client);
+
+      await state.loadForVod(folderVod(), siteKey: 's', siteName: '木偶');
+
+      final seasonCalls =
+          client.requests.where((u) => u.path.contains('/season/')).length;
+      expect(
+        seasonCalls,
+        0,
+        reason: '没有线路可映射，拉季度只会白发请求',
+      );
+      expect(state.episodes, isEmpty);
+      state.dispose();
+    });
+
+    test('有线路时行为不变（回归保护）', () async {
+      final client = folderClient();
+      final state = _state(config: _ready, client: client);
+
+      await state.loadForVod(
+        Vod(vodId: 'v1', vodName: '山花烂漫时'),
+        siteKey: 's',
+        siteName: '木偶',
+        lines: [_playLine(count: 23)],
+      );
+
+      expect(state.hasMatch, isTrue);
+      expect(state.detail, isNotNull);
+      expect(
+        state.sourceLine,
+        isNotNull,
+        reason: '有线路时必须照常建立线路上下文（否则选集/季度记忆全失效）',
+      );
+      state.dispose();
+    });
+  });
 }

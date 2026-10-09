@@ -21,6 +21,7 @@ import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
+import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import 'log_service.dart';
@@ -456,7 +457,7 @@ class SidecarProcess {
   Future<Object?> request(
     String method,
     Map<String, Object?> params, {
-    Duration deadline = const Duration(seconds: 20),
+    Duration deadline = siteRequestTimeout,
     String? requestId,
   }) {
     if (_exitCompleter.isCompleted) {
@@ -614,7 +615,7 @@ class SpiderHost {
     required this.manifest,
     required this.process,
     required this.log,
-    this.callbackTimeout = const Duration(seconds: 20),
+    this.callbackTimeout = siteRequestTimeout,
   });
 
   final SpiderManifest manifest;
@@ -626,13 +627,14 @@ class SpiderHost {
   SpiderInitResult? get initResult => _init;
 
   static const Map<String, Duration> _methodTimeouts = {
+    // init 握手是本地 IPC，不需要给站点那么长（给长了会把真正的启动问题拖成 3 分钟）。
     SpiderMethod.init: Duration(seconds: 15),
-    SpiderMethod.home: Duration(seconds: 20),
-    SpiderMethod.category: Duration(seconds: 20),
-    SpiderMethod.detail: Duration(seconds: 20),
-    SpiderMethod.search: Duration(seconds: 20),
-    SpiderMethod.play: Duration(seconds: 20),
-    SpiderMethod.proxy: Duration(seconds: 20),
+    SpiderMethod.home: siteRequestTimeout,
+    SpiderMethod.category: siteRequestTimeout,
+    SpiderMethod.detail: siteRequestTimeout,
+    SpiderMethod.search: siteRequestTimeout,
+    SpiderMethod.play: siteRequestTimeout,
+    SpiderMethod.proxy: siteRequestTimeout,
   };
 
   /// `initialize` 握手：交换 ABI major/minor、capabilities、权限与限制（§9.3.1）。

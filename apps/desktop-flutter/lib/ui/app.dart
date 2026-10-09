@@ -13,7 +13,10 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/app_error.dart';
 import '../core/protocol.dart';
+import '../core/site_group.dart';
+import '../services/log_service.dart';
 import '../services/startup_trace.dart';
+import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'browse_pages.dart';
 import 'config_pages.dart';
@@ -272,6 +275,9 @@ class _AppShellState extends State<AppShell> {
     _state.addListener(_onStateChanged);
     _checkBoundary();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoPlayMedia());
+    // 启动时尝试自动接入最近使用的桥接线路（用户需求 2026-10-09）。
+    // 放到 post-frame 之后：不能在首帧前做网络请求，否则会把启动变慢。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoConnect());
   }
 
   AppState get _state => widget.state;
@@ -305,6 +311,43 @@ class _AppShellState extends State<AppShell> {
     }
     setState(() => _boundaryAccepted = true);
     _state.log.info('用户已确认使用边界提示', scope: 'compliance');
+  }
+
+  /// 启动时自动接入最近使用的桥接线路（用户需求 2026-10-09）。
+  ///
+  /// 只做一件事：**探测**历史里最近使用的地址。探不通就安静放弃——不扫描、
+  /// 不轮询、不弹错误（扫描是用户显式动作，`design/01` §4.4）。
+  ///
+  /// 探通后导入站点并切到该配置：用户上次用的就是这条线路，现在还能连上，
+  /// 直接给他可用状态而不需要重走一遍「选站点 → 接入 → 导入」。
+  ///
+  /// 两个必须的守卫：
+  /// - 命令行媒体冒烟路径不跑（那是无配置的截图/验证场景）；
+  /// - 不曾有历史时不跑。
+  Future<void> _maybeAutoConnect() async {
+    if (!mounted) return;
+    if (widget.startup.media != null) return;
+    final sync = _state.syncState;
+    if (sync.deviceHistory.isEmpty) return;
+    final device = await sync.tryAutoConnect();
+    if (!mounted || device == null) return;
+    final ok = await sync.importSites(device.reachableBase);
+    if (!mounted || !ok) return;
+    // 导入产生的是**新配置记录**（`makeActive: false`，Q10 不覆盖当前配置）。
+    // 自动接入的目的是「开箱可用」，因此这里显式激活刚导入的那条记录。
+    ConfigRecord? record;
+    for (final item in _state.configs) {
+      if (item.origin == device.reachableBase) record = item;
+    }
+    if (record != null) {
+      await _state.activateConfigRecord(record.id);
+      if (!mounted) return;
+      setState(() => _section = ShellSection.browse);
+      _state.log.info(
+        '已自动接入最近使用的桥接线路并切换配置 #${record.id}',
+        scope: 'bridge',
+      );
+    }
   }
 
   /// 自动播放命令行指定的媒体（冒烟验证路径）。
@@ -359,7 +402,10 @@ class _AppShellState extends State<AppShell> {
   Future<void> _openSitePicker() async {
     final selected = await showDialog<Site>(
       context: context,
-      builder: (_) => SitePickerDialog(items: _state.siteItems),
+      builder: (_) => SitePickerDialog(
+        items: _state.siteItems,
+        log: _state.log,
+      ),
     );
     if (selected != null) {
       _section = ShellSection.browse;
@@ -569,51 +615,208 @@ class _BoundarySheet extends StatelessWidget {
 }
 
 /// 站点选择对话框（§17.2 站点列表）。
-class SitePickerDialog extends StatelessWidget {
-  const SitePickerDialog({super.key, required this.items});
+/// 站点选择器：搜索 + 分组 chip + 站点列表（对齐上游「默影视」`SiteDialog`）。
+///
+/// 为什么需要搜索/分组（用户反馈 2026-10-09）：
+/// - 实测「安卓桥接」配置有 **170 个站点**，只能一路滚动找目标，效率极低；
+/// - 列表原先每行显示 `key=… type=… 运行时=… (MVP-A)` 这类**协议内部字段**，
+///   对用户毫无价值（用户原话：「名称即可提高易用性」）。
+/// 因此只展示站点名称 + 可用状态；key/type/运行时/阶段改为写日志，便于定位问题。
+class SitePickerDialog extends StatefulWidget {
+  const SitePickerDialog({super.key, required this.items, required this.log});
 
   final List<SiteListItem> items;
 
+  /// 站点清单的内部字段（key/type/运行时/阶段/不可用原因）不再上屏，
+  /// 改为写日志：排查「某站点为何不可用」时仍然拿得到。
+  final LogService log;
+
+  @override
+  State<SitePickerDialog> createState() => _SitePickerDialogState();
+}
+
+class _SitePickerDialogState extends State<SitePickerDialog> {
+  final TextEditingController _keyword = TextEditingController();
+
+  /// 当前选中的分组；空串 = 全部。
+  String _group = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // 打开时把站点清单（含运行时与不可用原因）写日志：UI 不再展示这些内部字段，
+    // 但排查「某站点为何不可用」时仍然需要它们。
+    _logInventory();
+  }
+
+  @override
+  void dispose() {
+    _keyword.dispose();
+    super.dispose();
+  }
+
+  void _logInventory() {
+    final unavailable = widget.items.where((i) => !i.availability.available);
+    widget.log.info(
+      '站点选择器打开：共 ${widget.items.length} 个站点，'
+      '可用 ${widget.items.length - unavailable.length}，'
+      '不可用 ${unavailable.length}',
+      scope: 'site',
+    );
+    for (final item in widget.items) {
+      final site = item.site;
+      final availability = item.availability;
+      widget.log.debug(
+        '站点 name=${site.name} key=${site.key} type=${site.type} '
+        'runtime=${availability.runtimeName} '
+        'stage=${availability.stage ?? "-"} '
+        'available=${availability.available} '
+        'searchable=${site.searchable} '
+        'groups=${siteGroupsOf(site.name).join("|")} '
+        'reason=${availability.reason ?? "-"}',
+        scope: 'site',
+      );
+    }
+  }
+
+  /// 当前可见的分组（按站点顺序去重，只统计当前关键字命中的站点）。
+  List<String> get _groups {
+    final seen = <String>[];
+    for (final item in _keywordMatched) {
+      for (final group in siteGroupsOf(item.site.name)) {
+        if (!seen.contains(group)) seen.add(group);
+      }
+    }
+    return seen;
+  }
+
+  List<SiteListItem> get _keywordMatched => [
+    for (final item in widget.items)
+      if (siteMatchesQuery(
+        name: item.site.name,
+        key: item.site.key,
+        query: _keyword.text,
+      ))
+        item,
+  ];
+
+  List<SiteListItem> get _visible {
+    if (_group.isEmpty) return _keywordMatched;
+    return [
+      for (final item in _keywordMatched)
+        if (siteInGroup(item.site.name, _group)) item,
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final items = _visible;
+    final groups = _groups;
+
     return AlertDialog(
       title: const Text('选择站点'),
       content: SizedBox(
-        width: 560,
-        height: 420,
-        child: items.isEmpty
-            ? const Center(child: Text('当前配置没有可用站点'))
-            : ListView.builder(
-                itemCount: items.length,
-                itemBuilder: (context, index) {
-                  final item = items[index];
-                  final availability = item.availability;
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(
-                      availability.available
-                          ? Icons.check_circle_outline
-                          : Icons.block,
-                      color: availability.available
-                          ? Colors.greenAccent
-                          : Theme.of(context).disabledColor,
-                    ),
-                    title: Text(item.site.name),
-                    subtitle: Text(
-                      'key=${item.site.key} type=${item.site.type} '
-                      '运行时=${availability.runtimeName}'
-                      '${availability.stage == null ? "" : " (${availability.stage})"}'
-                      '${availability.available ? "" : " · ${availability.reason ?? "未支持"}"}',
-                      maxLines: 2,
-                    ),
-                    trailing: Text(item.site.searchable ? '可搜索' : '不可搜索'),
-                    enabled: availability.available,
-                    onTap: availability.available
-                        ? () => Navigator.of(context).pop(item.site)
-                        : null,
-                  );
-                },
+        width: 640,
+        height: 480,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const ValueKey('site-search'),
+              controller: _keyword,
+              autofocus: true,
+              decoration: InputDecoration(
+                isDense: true,
+                prefixIcon: const Icon(Icons.search, size: 18),
+                hintText: '搜索站点名称',
+                suffixIcon: _keyword.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清空',
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () => setState(_keyword.clear),
+                      ),
+                border: const OutlineInputBorder(),
               ),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (groups.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              // 分组 chip 行：横向可滚，命中关键字时只列出现存的分组。
+              SizedBox(
+                height: 34,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _GroupChip(
+                        label: '全部',
+                        selected: _group.isEmpty,
+                        onTap: () => setState(() => _group = ''),
+                      ),
+                      for (final group in groups)
+                        _GroupChip(
+                          key: ValueKey('site-group-$group'),
+                          label: group,
+                          selected: _group == group,
+                          onTap: () => setState(() => _group = group),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Expanded(
+              child: items.isEmpty
+                  ? Center(
+                      child: Text(
+                        widget.items.isEmpty ? '当前配置没有可用站点' : '没有匹配的站点',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        final availability = item.availability;
+                        final available = availability.available;
+                        return ListTile(
+                          key: ValueKey('site-option-${item.site.key}'),
+                          dense: true,
+                          leading: Icon(
+                            available
+                                ? Icons.check_circle_outline
+                                : Icons.block,
+                            color: available
+                                ? Colors.greenAccent
+                                : theme.disabledColor,
+                          ),
+                          // 只显示名称：key/type/运行时属协议内部字段，已写日志。
+                          title: Text(item.site.name),
+                          subtitle: available
+                              ? null
+                              : Text(
+                                  availability.reason ?? '当前不可用',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                          trailing: item.site.searchable
+                              ? const Icon(Icons.search, size: 16)
+                              : null,
+                          enabled: available,
+                          onTap: available
+                              ? () => Navigator.of(context).pop(item.site)
+                              : null,
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -621,6 +824,51 @@ class SitePickerDialog extends StatelessWidget {
           child: const Text('关闭'),
         ),
       ],
+    );
+  }
+}
+
+/// 分组 chip（选中态主色淡底，与筛选条同一视觉语言）。
+class _GroupChip extends StatelessWidget {
+  const _GroupChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Material(
+        color: selected
+            ? scheme.primary.withValues(alpha: dark ? 0.22 : 0.12)
+            : scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontSize: 13,
+                color: selected ? scheme.primary : scheme.onSurfaceVariant,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

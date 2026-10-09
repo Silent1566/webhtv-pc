@@ -546,4 +546,67 @@ void main() {
       expect(filters.values.first.first.key, 'year');
     });
   });
+
+  group('首页无推荐内容时自动进入第一个分类（用户反馈 2026-10-09）', () {
+    /// 首页只回 `class` 不回 `list`（实测 126 站点里 40 个如此）：
+    /// 用户进站点看到的应是**有内容**的第一个分类，而不是「请选择一个分类」空态。
+    Map<String, Object?> emptyHomePayload() => {
+      'class': [
+        {'type_id': '1', 'type_name': '电影'},
+        {'type_id': '2', 'type_name': '电视剧'},
+      ],
+      'list': const [],
+      'page': 1,
+      'pagecount': 1,
+      'total': 0,
+    };
+
+    test('首页无 list → 自动加载并选中第一个分类', () async {
+      await boot(
+        handler: (uri, _) {
+          final q = uri.queryParameters;
+          if (!q.containsKey('t')) return emptyHomePayload();
+          return _pagedCategoryPayload(q['t']!, 1);
+        },
+      );
+      await state.loadHome(state.selectedSite!);
+
+      expect(
+        state.selectedTypeId,
+        '1',
+        reason: '应自动选中第一个分类，而不是停在空态',
+      );
+      expect(state.categoryResult!.list, isNotEmpty);
+      expect(state.homeResult!.list, isEmpty, reason: '首页本身确实没有推荐内容');
+    });
+
+    test('首页有推荐内容时不抢占（不得替用户跳走）', () async {
+      await boot(); // 默认 handler：首页带 1 条 list
+      await state.loadHome(state.selectedSite!);
+
+      expect(state.selectedTypeId, isNull, reason: '有推荐内容就应停在首页');
+      expect(state.homeResult!.list, isNotEmpty);
+    });
+
+    test('首页无 list 且无分类 → 不发多余请求，停在空态', () async {
+      await boot(
+        handler: (uri, _) => {
+          'class': const [],
+          'list': const [],
+          'page': 1,
+          'pagecount': 1,
+          'total': 0,
+        },
+      );
+      client.requests.clear();
+      await state.loadHome(state.selectedSite!);
+
+      expect(state.selectedTypeId, isNull);
+      expect(
+        client.requests.where((u) => u.queryParameters.containsKey('t')),
+        isEmpty,
+        reason: '没有分类可选时不得发分类请求',
+      );
+    });
+  });
 }

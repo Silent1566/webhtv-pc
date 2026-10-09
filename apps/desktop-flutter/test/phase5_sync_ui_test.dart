@@ -527,6 +527,101 @@ void main() {
       reopened.dispose();
     });
   });
+
+  group('设备接入历史与自动接入（用户反馈 2026-10-09）', () {
+    testWidgets('接入过的设备进入历史并展示在接入页', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+
+      expect(
+        state.syncState.deviceHistory,
+        hasLength(1),
+        reason: '探测成功即记入历史（用户要「方便再次使用」）',
+      );
+      expect(state.syncState.deviceHistory.first.address, 'http://192.168.50.9:9978');
+      expect(
+        state.syncState.lastBridgeAddress,
+        'http://192.168.50.9:9978',
+        reason: '最近使用的桥接线路是自动接入的候选',
+      );
+      expect(pageText(tester), contains('最近接入'));
+    });
+
+    test('历史落盘：重启后仍能读到（否则「再次使用」无从谈起）', () async {
+      // 用 `test` 而不是 `testWidgets`：重启要走真实的数据库与设置文件 I/O，
+      // 在 `testWidgets` 的假时钟里 `bootstrap()` 不会被推进，必然挂到 10 分钟超时。
+      final first = AppState(
+        paths: AppPaths.resolve(
+          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        ),
+        log: LogService(),
+        androidBridgeService: bridge,
+      );
+      await first.bootstrap();
+      await first.syncState.probe('192.168.50.9:9978');
+      final expected = first.syncState.deviceHistory.first.address;
+      expect(expected, 'http://192.168.50.9:9978');
+      first.dispose();
+
+      final reopened = AppState(
+        paths: AppPaths.resolve(
+          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        ),
+        log: LogService(),
+        androidBridgeService: FakeBridge(),
+      );
+      await reopened.bootstrap();
+      addTearDown(reopened.dispose);
+
+      expect(reopened.syncState.deviceHistory, hasLength(1));
+      expect(reopened.syncState.deviceHistory.first.address, expected);
+      expect(reopened.syncState.lastBridgeAddress, expected);
+    });
+
+    testWidgets('删除历史：条目消失且最近使用指针跟着迁移', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+      final entry = state.syncState.deviceHistory.first;
+
+      await tapIo(
+        tester,
+        find.byKey(ValueKey('bridge-history-forget-${entry.uuid}')),
+      );
+
+      expect(state.syncState.deviceHistory, isEmpty);
+      expect(
+        state.syncState.lastBridgeAddress,
+        isEmpty,
+        reason: '删掉的正好是最近使用项时，不得继续自动接入一个已删除的地址',
+      );
+    });
+
+    testWidgets('未接入过设备时 tryAutoConnect 不动（不扫局域网、零打扰）', (tester) async {
+      await openPage(tester);
+      expect(state.syncState.deviceHistory, isEmpty);
+      expect(await state.syncState.tryAutoConnect(), isNull);
+    });
+
+    testWidgets('自动接入：最近线路可达时探到设备；不可达时安静返回 null', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+
+      final device = await runIo(tester, state.syncState.tryAutoConnect);
+      expect(device, isNotNull, reason: '历史里的地址可达时应探到设备');
+
+      bridge.probeFailure = AppError(
+        AppErrorKind.bridgeUnreachable,
+        '设备不在线',
+      );
+      final again = await runIo(tester, state.syncState.tryAutoConnect);
+      expect(again, isNull, reason: '探不通必须安静放弃，不能抛错打断启动');
+      expect(
+        state.syncState.lastError,
+        isNull,
+        reason: '自动接入失败不得写 lastError（启动时不该弹红色错误）',
+      );
+    });
+  });
 }
 
 /// 页面可见文本（用于不依赖具体 widget 类型的断言）。
@@ -543,4 +638,5 @@ String pageText(WidgetTester tester) {
 
 extension<T> on T {
   R let<R>(R Function(T value) body) => body(this);
+
 }
