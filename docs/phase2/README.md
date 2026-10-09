@@ -124,6 +124,8 @@
 | CatSpider HTTP | ≥3 个可重复样本(成功/业务错误/非 2xx) |
 | 代理安全 | 非本机拒绝、token 校验、Range 206、并发 20 分片、日志脱敏 |
 | 进度恢复 UI | 集成测试断言「进入播放器自动从历史位置续播」 |
+| 启动加载首页 | 冷启动挂载真实 `AppShell` 后自动拉首页(不靠手动点分类/刷新) |
+| 播放入口目标语义 | 历史/季度进度存站点入口目标,续播拿它重解析(非解析后可播地址) |
 | 无阻塞式崩溃 | 全流程(导入→浏览→搜索→详情→播放→代理)无 UI 卡死 |
 
 `tools/` 下按 Phase 1 的方式扩展验收脚本,证据写入 `docs/phase2/evidence/`。
@@ -134,6 +136,11 @@
 `flutter test` 共 **203** 个用例,`integration_test/mvp_a_flow_test.dart` 在 Windows
 真实窗口 + 真实 media-kit 播放器上 **8** 个用例全绿。
 
+> 2026-10-09 追加:`phase2_*` 门禁套件由 6 个增至 **8** 个(新增
+> `phase2_playback_target_test.dart`、`phase2_startup_home_test.dart`),
+> 两套共 8 例;对应「启动加载首页」与「播放入口目标语义」两条新门禁。
+> 全仓 `flutter test` 用例数见最新一次验收输出(旧值 203 为 Phase 2 当时口径)。
+
 | 门禁 | 覆盖位置 | 关键断言 |
 | --- | --- | --- |
 | 搜索并发与取消 | `test/phase2_search_test.dart` | 并发峰值=2(真并发);取消/被取代批次**不投递**结果;单站点失败保留错误且不阻塞;结果按配置顺序稳定 |
@@ -142,6 +149,8 @@
 | CatSpider HTTP | `test/phase2_cathttp_test.dart` | 成功/业务错误/非 2xx/未实现四族各走完整 home+search+play;404→`SPIDER_UNSUPPORTED`、非 2xx→`SPIDER_HTTP_ERROR`,均不空列表化 |
 | 代理安全 | `test/phase2_proxy_test.dart` | 只监听回环、非本机拒绝、无/伪 token 401、Range 206+`Content-Range`、20 并发分片、日志无 token 明文与 Cookie、关闭后端口释放 |
 | 进度恢复 UI | `integration_test/mvp_a_flow_test.dart` 「进入播放器自动从历史位置续播」 | 真实点击剧集按钮进入 `PlayerPage`,`request.startPosition` 等于历史位置(证据 `resume-ui ... startPosition=12s`) |
+| 启动加载首页 | `test/phase2_startup_home_test.dart` | 冷启动(`bootstrap` 后 `homeResult==null`)挂载真实 `AppShell` 后**必须发出首页请求**并拿到内容;已有 `homeResult` 时**不得重复请求**(幂等)。反向验证:还原缺陷后该用例失败 |
+| 播放入口目标语义 | `test/phase2_playback_target_test.dart` | `PlaybackRequest.episodeTarget` 不传回退 `url`、显式传入时与 `url` 分离、`copyWith` 换 `url` 不漂移 `episodeTarget`(该漂移正是「无法从历史续播」的成因) |
 | 无阻塞式崩溃 | 同上 + `test/phase2_search_test.dart` | 全流程无卡死;单站点失败后其他站点仍可恢复 |
 
 本轮修复的缺陷(均有测试锁定):

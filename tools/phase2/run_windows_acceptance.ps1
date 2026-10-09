@@ -4,7 +4,7 @@
 #   0. 媒体 fixture 预检（确认 Header 门禁生效）
 #   1. 契约与 fixture 测试（Python）+ manifest/消息 Schema 校验
 #   2. 静态检查（dart analyze）
-#   3. 单元测试（flutter test，含 6 个 phase2_* 门禁套件）
+#   3. 单元测试（flutter test，含 8 个 phase2_* 门禁套件）
 #   4. Windows 集成测试（真实窗口 + 真实播放 + 进度恢复 UI 闭环，-d windows）
 #   5. 汇总并输出 PHASE2-ACCEPT 可复查事实行
 #
@@ -183,7 +183,7 @@ try {
         }
     }
 
-    # 3) 单元测试（含 6 个 phase2_* 门禁套件；自带进程内 fixture 服务，可独立运行）。
+    # 3) 单元测试（含 8 个 phase2_* 门禁套件；自带进程内 fixture 服务，可独立运行）。
     Invoke-Checked 'flutter-unit-tests' {
         Push-Location $AppDir
         try {
