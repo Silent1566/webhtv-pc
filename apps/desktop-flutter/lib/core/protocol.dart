@@ -771,6 +771,7 @@ class Vod {
     this.vodActor,
     this.vodPlayFrom,
     this.vodPlayUrl,
+    this.vodTag,
     Map<String, Object?> extra = const {},
   }) : extra = Map.unmodifiable(extra);
 
@@ -789,6 +790,18 @@ class Vod {
 
   /// 剧集地址，`$$$` 分隔线路，`#` 分隔剧集，`剧集名$地址` 组成一部剧集。
   final String? vodPlayUrl;
+
+  /// 条目类型（TVBox 约定）：`folder` = 目录（需用 `t=<vod_id>` 展开）、
+  /// `file` = 终态条目（可直接播）。
+  ///
+  /// **为什么必须单独建模**：网盘聚合类站源（实测 170 站点里 93 个共用
+  /// `spring.jar`）的分类只返回 `folder` 壳，真正的分享链接在展开后的
+  /// `file` 条目里。把 `folder` 当普通条目调 `ids=` 详情接口只会得到空壳
+  /// （实测 `vod_name` 为空、`vod_play_url` 为空）。
+  final String? vodTag;
+
+  /// 是否为目录条目（需展开而不是直接取详情）。
+  bool get isFolder => vodTag == 'folder';
 
   final Map<String, Object?> extra;
 
@@ -812,6 +825,8 @@ class Vod {
       'vod_actor',
       'vod_play_from',
       'vod_play_url',
+      'vod_tag',
+      'vodTag',
     };
     final extra = <String, Object?>{};
     for (final entry in map.entries) {
@@ -829,6 +844,7 @@ class Vod {
       vodActor: asNonEmptyString(map['vod_actor']),
       vodPlayFrom: asNonEmptyString(map['vod_play_from']),
       vodPlayUrl: asNonEmptyString(map['vod_play_url']),
+      vodTag: asNonEmptyString(map['vod_tag']) ?? asNonEmptyString(map['vodTag']),
       extra: extra,
     );
   }

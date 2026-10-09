@@ -850,6 +850,14 @@ class _DetailPageState extends State<DetailPage> {
                     padding: EdgeInsets.symmetric(vertical: 24),
                     child: Center(child: CircularProgressIndicator()),
                   )
+                // `folder` 展开结果：不是单部作品的线路，而是一串**资源条目**
+                // （百度/夸克/阿里分享链…），点一条即播。
+                //
+                // 为什么单独一个分支：网盘聚合站（实测 170 站点里 93 个共用
+                // `spring.jar`）的详情只能这样打开——把 `folder` 当普通条目
+                // 调 `ids=` 只会拿到空壳（`vod_name`/`vod_play_url` 均空）。
+                else if (_isFolderExpansion(result))
+                  _buildFolderEntries(context, vod, result!.list)
                 else if (lines.isEmpty)
                   const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
                 else ...[
@@ -864,10 +872,117 @@ class _DetailPageState extends State<DetailPage> {
                   _buildEpisodes(context, vod, lines),
                 ],
                 // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
-                ..._buildTmdbBlocks(context, tmdb),
+                // folder 展开结果不是单部作品，不做 TMDB 附加区块。
+                if (!_isFolderExpansion(result)) ..._buildTmdbBlocks(context, tmdb),
               ],
             ),
     );
+  }
+
+  /// 当前详情结果是否是 `folder` 展开产物（资源列表而非单部作品）。
+  ///
+  /// 判据：本页点开的条目是 `folder`，且返回的条目**自身不再有可播线路**
+  /// （它们是 `file` 类型的分享链，没有 `vod_play_from`/`vod_play_url`）。
+  /// 不用“结果条数”判：单部作品的详情也可能返回多条。
+  static bool _isFolderExpansion(SiteResult? result) {
+    if (result == null || result.list.isEmpty) return false;
+    return result.list.every(
+      (item) =>
+          item.vodTag == 'file' &&
+          (item.vodPlayUrl == null || item.vodPlayUrl!.isEmpty),
+    );
+  }
+
+  /// 渲染 `folder` 展开后的资源条目（点一条即播）。
+  Widget _buildFolderEntries(
+    BuildContext context,
+    Vod vod,
+    List<Vod> entries,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '选择资源（${entries.length}）',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '该站点是网盘聚合源：每个条目是一条分享链，点一条即开始播放。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        for (final entry in entries)
+          Card(
+            key: ValueKey('folder-entry-${entry.vodId}'),
+            child: ListTile(
+              leading: const Icon(Icons.cloud_download_outlined),
+              title: Text(entry.vodName),
+              subtitle: entry.vodRemarks == null || entry.vodRemarks!.isEmpty
+                  ? null
+                  : Text(entry.vodRemarks!),
+              trailing: const Icon(Icons.play_arrow),
+              onTap: () => _playFolderEntry(vod, entry),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 播放一条 folder 展开出来的资源条目。
+  ///
+  /// `flag` 取条目标题（实测插件接受任意非空 flag；它靠 `play=` 里的分享链
+  /// 自行判定网盘类型）。**不能留空**：空 flag 会被网关拒绝（实测返回
+  /// `缺少 flag 或 id 参数`）。
+  Future<void> _playFolderEntry(Vod vod, Vod entry) async {
+    final state = widget.state;
+    try {
+      final decision = await state.resolvePlayback(
+        episodeTarget: entry.vodId,
+        flag: entry.vodName.isEmpty ? '网盘' : entry.vodName,
+        vodId: vod.vodId,
+      );
+      if (decision == null || decision.url == null) {
+        throw AppError(
+          AppErrorKind.playbackUrlMissing,
+          '播放决策没有返回可用地址',
+          detail: 'entry=${entry.vodName}',
+        );
+      }
+      if (!mounted) return;
+      final resume = state.resumePositionFor(
+        siteKey: state.selectedSite?.key ?? '',
+        vodId: vod.vodId,
+        flag: entry.vodName,
+        episodeId: entry.vodId,
+      );
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PlayerPage(
+            state: state,
+            request: PlaybackRequest(
+              url: decision.url!,
+              headers: decision.headers?.asRequestHeaders ?? const {},
+              title: vod.vodName,
+              siteKey: state.selectedSite?.key ?? '',
+              vodId: vod.vodId,
+              vodName: vod.vodName,
+              episodeName: entry.vodName,
+              flag: entry.vodName,
+              startPosition: resume,
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final failure = error is AppError
+          ? error
+          : AppError(AppErrorKind.unknown, '$error', cause: error);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(failure.userMessage)),
+      );
+    }
   }
 
   /// 剧照墙 / 演职人员 / 相关推荐 / 相关视频（`04` §3.1 ⑥–⑨）。

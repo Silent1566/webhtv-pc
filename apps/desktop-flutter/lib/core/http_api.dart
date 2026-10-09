@@ -82,6 +82,49 @@ class HttpApiRequestBuilder {
   /// 站点 `ext` 超过该长度时改用表单 body。
   static const int extQueryLimit = 1000;
 
+  /// 构造 query 时**不**做百分号编码的字符（TVBox 生态实际契约）。
+  ///
+  /// 为什么必须保留：网关（NanoHTTPD）只解码 URL 路径，**不**解码 query 里的
+  /// 百分号转义（`VodApi.java` 注释原话：“NanoHTTPD 已解码 URI；不要再次解码”）。
+  /// 而 `Uri.replace(queryParameters:)` 会把 `:` 编成 `%3A`，到插件手里就变成
+  /// 字面量 `atvp_detail%3A131925`，使 `tid.startswith("atvp_detail:")` 判断失败。
+  ///
+  /// 实测（5559 真机，同一站点同一 id）：
+  /// - 冒号原样 → 插件收到 `atvp_detail:131925` → **返回 3 条**；
+  /// - 编码 `%3A` → 插件收到 `atvp_detail%3A131925` → **返回空**。
+  ///
+  /// 保留字符集对齐 Android 侧实际发出的形态：`:` 是网盘聚合 id 的分隔符，
+  /// `,` 是 `ids` 多值分隔符（`VodApi.ids()` 按逗号切分）。
+  static const String queryReservedChars = ':,';
+
+  /// 按 TVBox 契约拼接 query：保留 [queryReservedChars]，其余做百分号编码。
+  static String buildQueryString(Map<String, String> parameters) {
+    return parameters.entries
+        .map((entry) => '${entry.key}=${encodeQueryValue(entry.value)}')
+        .join('&');
+  }
+
+  /// 对单个 query 值做“保留字符不编码”的百分号编码。
+  static String encodeQueryValue(String value) {
+    var encoded = Uri.encodeQueryComponent(value);
+    for (final char in queryReservedChars.split('')) {
+      encoded = encoded.replaceAll(
+        '%${char.codeUnitAt(0).toRadixString(16).toUpperCase().padLeft(2, '0')}',
+        char,
+      );
+    }
+    return encoded;
+  }
+
+  /// 把参数拼到 `api` 的既有 query 后面（不重建整个 URI，保留原参数原样）。
+  static Uri appendQuery(Uri endpoint, Map<String, String> parameters) {
+    if (parameters.isEmpty) return endpoint;
+    final extra = buildQueryString(parameters);
+    final existing = endpoint.query;
+    final query = existing.isEmpty ? extra : '$existing&$extra';
+    return endpoint.replace(query: query);
+  }
+
   final Site site;
   final List<HeaderRule> globalHeaders;
   final String userAgent;
@@ -184,12 +227,7 @@ class HttpApiRequestBuilder {
       headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=utf-8';
     }
 
-    final uri = endpoint.replace(
-      queryParameters: {
-        ...endpoint.queryParameters,
-        ...parameters,
-      },
-    );
+    final uri = HttpApiRequestBuilder.appendQuery(endpoint, parameters);
     // 请求走不带 userinfo 的 URI：凭据已由 [_headersFor] 注入 Authorization 头，
     // URI 里再留一份只会让 package:http 再发一次错误编码的凭据（并可能进入日志）。
     final target = uriWithoutUserInfo(uri);
@@ -266,9 +304,7 @@ class HttpApiRequestBuilder {
         detail: redactUrl(playUrl),
       );
     }
-    final uri = endpoint.replace(
-      queryParameters: {...endpoint.queryParameters, 'id': target},
-    );
+    final uri = HttpApiRequestBuilder.appendQuery(endpoint, {'id': target});
     return HttpApiCall(
       method: 'GET',
       uri: uriWithoutUserInfo(uri),
@@ -327,9 +363,7 @@ class HttpApiRequestBuilder {
           'application/x-www-form-urlencoded; charset=utf-8';
     }
 
-    final uri = endpoint.replace(
-      queryParameters: {...endpoint.queryParameters, ...parameters},
-    );
+    final uri = HttpApiRequestBuilder.appendQuery(endpoint, parameters);
     return HttpApiCall(
       method: form.isEmpty ? 'GET' : 'POST',
       uri: uriWithoutUserInfo(uri),

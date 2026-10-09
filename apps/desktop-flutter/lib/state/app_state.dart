@@ -1507,7 +1507,18 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _detailPhase = LoadPhase.loading;
     notifyListeners();
     try {
-      final outcome = await service.detail(site, vod.vodId);
+      // `folder` 条目必须用 `t=<vod_id>` **展开**，不能走 `ids=` 详情接口。
+      //
+      // 实测（5559 真机，同一站点同一 id）：
+      // - `ids=atvp_detail:131925` → 空壳（`vod_name` 与 `vod_play_url` 均为空）；
+      // - `t=atvp_detail:131925`   → 返回 3 条真实资源（百度/夸克分享链）。
+      //
+      // 原因：`vod_id` 的 `atvp_detail:` 前缀是插件**分类阶段**自己加的
+      // （`_encode_category_id`），只有 `categoryContent` 会把它剥回去
+      // （插件第 1646 行）；详情接口没有这个语义。安卓 App 正是用 `t=` 展开的。
+      final outcome = vod.isFolder
+          ? await service.category(site, typeId: vod.vodId, page: 1)
+          : await service.detail(site, vod.vodId);
       if (runId != _detailRunId) {
         // 已被更新的请求（或已离开详情页）取代：结果直接丢弃，不写回状态。
         log.debug(
@@ -1520,9 +1531,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       _detailPhase = LoadPhase.ready;
       final first = outcome.value.list.isEmpty ? null : outcome.value.list.first;
       if (first != null) _selectedVod = first;
-      if (first != null) {
+      if (first != null && !first.isFolder) {
         // TMDB 增强：详情就绪后异步加载。失败**不影响**线路与选集（§27 原则 3），
         // 因此不 await，也不把异常传播到详情加载。
+        // folder 展开结果不是单部作品（而是资源列表），不做 TMDB 匹配。
         _tmdbRunId = runId;
         unawaited(
           tmdb.loadForVod(
@@ -1536,6 +1548,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       }
       log.info(
         '详情加载成功 site=${site.key} vod=${vod.vodId} '
+        'folder=${vod.isFolder} entries=${outcome.value.list.length} '
         'lines=${first == null ? 0 : playLinesOf(first).length} '
         'elapsed=${outcome.latency.inMilliseconds}ms',
         scope: 'site',
