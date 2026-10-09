@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
+import '../core/poster_badge.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
@@ -674,10 +675,14 @@ class _VodGrid extends StatelessWidget {
   }
 }
 
-/// 海报卡片：海报（2:3 圆角）+ 居中标题 + 备注。
+/// 海报卡片：海报（2:3 圆角，带年份/评分角标）+ 居中标题 + 备注。
 ///
 /// 标题居中、只用一档弱化色——参照实现的卡片就是「图 + 居中一行字」，不加边框
 /// 与卡片底色，密集排列时比带底色的卡片干净得多。
+///
+/// 角标（用户提供参考截图 2026-10-09）：左上角**年份**、右下角**评分**。
+/// 取值与判定在 `core/poster_badge.dart`（纯逻辑，含「remarks 不一定是评分」的
+/// 关键约束：网盘站给的是 `全29集`，那种情况不能当评分画角标）。
 class _VodCard extends StatelessWidget {
   const _VodCard({super.key, required this.vod, required this.onTap});
 
@@ -687,7 +692,9 @@ class _VodCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final remarks = vod.vodRemarks?.trim() ?? '';
+    final year = PosterBadge.yearOf(vod);
+    final score = PosterBadge.scoreOf(vod);
+    final remark = PosterBadge.textRemarkOf(vod);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
@@ -700,7 +707,31 @@ class _VodCard extends StatelessWidget {
             aspectRatio: 2 / 3,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: PosterImage(url: vod.vodPic),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  PosterImage(url: vod.vodPic),
+                  if (year != null)
+                    Positioned(
+                      left: 6,
+                      top: 6,
+                      child: _PosterBadge(
+                        text: year,
+                        key: const ValueKey('poster-badge-year'),
+                      ),
+                    ),
+                  if (score != null)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: _PosterBadge(
+                        text: score,
+                        highlight: true,
+                        key: const ValueKey('poster-badge-score'),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -720,10 +751,10 @@ class _VodCard extends StatelessWidget {
                       height: 1.2,
                     ),
                   ),
-                  if (remarks.isNotEmpty) ...[
+                  if (remark != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      remarks,
+                      remark,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
@@ -739,6 +770,41 @@ class _VodCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 海报角标（年份 / 评分）。
+///
+/// 用半透明黑底 + 白字而不是主题色：海报画面本身色彩不可控（实测有高饱和海报），
+/// 半透明黑底在任何海报上都能保证白字可读，且不与主色冲突。
+class _PosterBadge extends StatelessWidget {
+  const _PosterBadge({super.key, required this.text, this.highlight = false});
+
+  final String text;
+
+  /// 评分角标用暖色强调（年份是中性信息）。
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: highlight
+            ? const Color(0xCCE8830C)
+            : const Color(0x99000000),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          height: 1.2,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

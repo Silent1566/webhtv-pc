@@ -8,6 +8,7 @@ import '../core/playback_diagnostics.dart';
 import '../services/log_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import '../state/sync_state.dart';
 import 'app.dart';
 import 'config_pages.dart';
 
@@ -22,8 +23,7 @@ class SettingsPage extends StatelessWidget {
     final info = state.startupInfo;
     final tmdb = state.tmdbConfig;
     final sync = state.syncState;
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return ListView(      padding: const EdgeInsets.all(16),
       children: [
         // TMDB 区块（`04` §10.3）：设置页必须有独立入口。
         // 只靠详情页状态条会形成死锁——未配置时详情页也可能没有区块，
@@ -59,14 +59,16 @@ class SettingsPage extends StatelessWidget {
         // 元数据增强），寄生在 TMDB 页里会让人以为「先配好 TMDB 才能接安卓」。
         Text('安卓接入', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Text(
-          sync.devices.isEmpty
-              ? '未接入：可扫描局域网，或手动输入安卓设备地址'
-              : '已接入 ${sync.devices.length} 台设备'
-                    '${sync.peers.isEmpty ? '' : '，已授权 ${sync.peers.length} 台'}'
-                    '${sync.serverRunning ? '，同步服务已开启' : ''}',
-          key: const ValueKey('settings-android-summary'),
-        ),
+        // 摘要必须基于**持久化**证据，不能只看 `sync.devices`。
+        //
+        // `sync.devices` 是**内存态**（本次会话探测到的设备），`load()` 只恢复
+        // `deviceHistory`/`peers`，从不恢复它。所以只看 `devices` 时，用户明明
+        // 接入过、重启后也自动恢复到了桥接配置，设置页却永远写「未接入」
+        // （用户反馈 2026-10-09：「重新打开后是自动接入了但是设置页面的状态
+        // 没有及时更新」——实测其 `settings.json` 里 `peers` 已有 1 台，
+        // 但 `devices` 为空）。
+        // 因此取三者地址的**并集**：本次探测 + 历史接入 + 已授权对端。
+        Text(_androidSummary(sync), key: const ValueKey('settings-android-summary')),
         const SizedBox(height: 12),
         FilledButton.tonalIcon(
           key: const ValueKey('settings-android-open'),
@@ -142,6 +144,35 @@ class SettingsPage extends StatelessWidget {
         _HealthTable(items: state.siteHealth()),
       ],
     );
+  }
+
+  /// 安卓接入状态摘要。
+  ///
+  /// 取三种来源地址的**并集**，任一非空就算「已接入」：
+  /// - `devices`：本次会话探测到的设备（内存态）；
+  /// - `deviceHistory`：历史接入过的地址（**已落盘**，重启仍在）；
+  /// - `peers`：已授权同步的对端（**已落盘**）。
+  ///
+  /// 为何不能用单一来源：只看 `devices` 时重启后必然显示「未接入」（见 build 里
+  /// 的注释）；只看 `deviceHistory` 则用户刚扫到、还没导入时也不显示。
+  String _androidSummary(SyncState sync) {
+    final addresses = <String>{
+      for (final device in sync.devices) device.reachableBase,
+      for (final entry in sync.deviceHistory) entry.address,
+      for (final peer in sync.peers) peer.address,
+    }..removeWhere((value) => value.trim().isEmpty);
+
+    if (addresses.isEmpty) {
+      return '未接入：可扫描局域网，或手动输入安卓设备地址';
+    }
+    final buffer = StringBuffer('已接入 ${addresses.length} 台设备');
+    if (sync.peers.isNotEmpty) {
+      buffer.write('，已授权 ${sync.peers.length} 台');
+    }
+    if (sync.serverRunning) {
+      buffer.write('，同步服务已开启');
+    }
+    return buffer.toString();
   }
 }
 

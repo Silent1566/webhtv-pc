@@ -43,6 +43,13 @@ class FakeBridge extends AndroidBridgeService {
   AppError? probeFailure;
   AppError? fetchFailure;
   int siteCount = 3;
+
+  /// 导入时要带回的直播源（`fetchLiveSources` 的返回值）。
+  ///
+  /// 默认空列表：大多数用例只关心站点导入，不该被直播源干扰。
+  List<LiveSource> liveSources = const [];
+  int liveFetchCalls = 0;
+
   List<BridgeHostRewrite> rewrites = const [];
   List<String> diagnostics = const [];
   int probeCalls = 0;
@@ -82,6 +89,12 @@ class FakeBridge extends AndroidBridgeService {
       diagnostics: diagnostics,
       hostRewrites: rewrites,
     );
+  }
+
+  @override
+  Future<List<LiveSource>> fetchLiveSources(String base) async {
+    liveFetchCalls++;
+    return liveSources;
   }
 
   @override
@@ -285,6 +298,58 @@ void main() {
       // 接入过的设备自动进入白名单。
       expect(state.syncState.peers, hasLength(1));
       expect(state.syncState.lastOperation, contains('bridge-import'));
+    });
+
+    testWidgets('导入时带回直播源并落进配置记录（用户反馈：桥接没有同步直播源）',
+        (tester) async {
+      // T4 网关的 lives 恒为空，直播源必须另取（见 fetchLiveSources）。
+      // 本用例锁定**接线**：importSites 真的把取回的直播源写进保存的配置。
+      // （服务层自身的请求形态由 phase5_android_bridge_service_test 锁定。）
+      bridge.liveSources = [
+        LiveSource(
+          name: '裤佬',
+          type: LiveLineType.m3u,
+          url: 'https://iptv.example/live.m3u',
+        ),
+        LiveSource(
+          name: 'IPTV-联通',
+          type: LiveLineType.m3u,
+          url: 'http://a.example/sub?x=m3u',
+        ),
+      ];
+
+      await openPage(tester);
+      await addDevice(tester);
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+
+      expect(bridge.liveFetchCalls, 1, reason: '导入时应尝试取直播源');
+
+      final record = state.database!.listConfigs().single;
+      expect(
+        record.liveCount,
+        2,
+        reason: '取回的直播源必须落进配置记录（否则直播页仍是空的）',
+      );
+      final saved = record.json;
+      final lives = saved['lives'];
+      expect(lives, isA<List<Object?>>());
+      expect(
+        (lives as List).map((e) => (e as Map)['name']),
+        containsAll(<String>['裤佬', 'IPTV-联通']),
+        reason: '直播源条目必须真的写进配置 JSON',
+      );
+    });
+
+    testWidgets('取不到直播源时站点导入照常成功（直播源是增强而非必需）', (tester) async {
+      // 默认 liveSources 为空（模拟设备没启用直播配置 / 拉取失败）。
+      await openPage(tester);
+      await addDevice(tester);
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+
+      final record = state.database!.listConfigs().single;
+      expect(record.siteCount, 3, reason: '没有直播源不得影响站点导入');
+      expect(record.liveCount, 0);
+      expect(state.syncState.lastError, isNull);
     });
 
     testWidgets('主机修正必须用户可见（P2 + G10 的 bridge-host- 符号）', (tester) async {

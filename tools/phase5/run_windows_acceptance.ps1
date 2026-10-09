@@ -255,7 +255,8 @@ try {
             'test/phase5_sync_storage_test.dart',
             'test/phase5_sync_server_test.dart',
             'test/phase5_sync_client_test.dart',
-            'test/phase5_sync_ui_test.dart'
+            'test/phase5_sync_ui_test.dart',
+            'test/phase5_sync_refresh_test.dart'
         )
         $missing = @()
         foreach ($relative in $required) {

@@ -708,10 +708,18 @@ class SyncState extends ChangeNotifier {
       );
       _conversions = {..._conversions, base: conversion};
 
+      // 直播源：T4 网关的 `lives` 恒为空（`VodApi.java` 写死 `new JsonArray()`），
+      // 必须另从设备当前启用的直播配置里取（用户反馈 2026-10-09：
+      // 「安卓桥接没有同步直播源」）。取不到不报错——站点导入本身已成功。
+      final liveSources = await _bridge.fetchLiveSources(base);
+      final bridgedConfig = liveSources.isEmpty
+          ? conversion.config
+          : conversion.config.copyWith(lives: liveSources);
+
       final recordId = await host.saveBridgeConfig(
-        name: conversion.config.name ?? '安卓桥接（${Uri.parse(base).host}）',
+        name: bridgedConfig.name ?? '安卓桥接（${Uri.parse(base).host}）',
         origin: base,
-        config: conversion.config,
+        config: bridgedConfig,
         diagnostics: conversion.diagnostics,
       );
       if (recordId == null) {
@@ -736,14 +744,17 @@ class SyncState extends ChangeNotifier {
       await authorizePeer(device);
 
       _notice = '已导入 ${conversion.siteCount} 个站点'
+          '${liveSources.isEmpty ? '' : '、${liveSources.length} 个直播源'}'
           '（新配置记录 #$recordId，未切换当前配置）'
           '${conversion.diagnostics.isEmpty ? '' : '；${conversion.diagnostics.first}'}';
       _lastOperation =
           'bridge-import sites=${conversion.siteCount} '
+          'lives=${liveSources.length} '
           'skipped=${conversion.skippedSites.length} '
           'rewrites=${conversion.hostRewrites.length}';
       log.info(
         '安卓桥接导入完成 sites=${conversion.siteCount} '
+        'lives=${liveSources.length} '
         'skipped=${conversion.skippedSites.length} '
         'rewrites=${conversion.hostRewrites.length} record=$recordId',
         scope: 'bridge',

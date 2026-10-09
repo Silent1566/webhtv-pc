@@ -220,6 +220,60 @@ class BridgeConversion {
       diagnostics.isNotEmpty ||
       skippedSites.isNotEmpty ||
       ignoredTopLevelFields.isNotEmpty;
+
+  BridgeConversion copyWith({
+    AppConfig? config,
+    List<String>? diagnostics,
+    List<BridgeHostRewrite>? hostRewrites,
+    List<String>? skippedSites,
+    List<String>? ignoredTopLevelFields,
+  }) => BridgeConversion(
+    config: config ?? this.config,
+    diagnostics: diagnostics ?? this.diagnostics,
+    hostRewrites: hostRewrites ?? this.hostRewrites,
+    skippedSites: skippedSites ?? this.skippedSites,
+    ignoredTopLevelFields: ignoredTopLevelFields ?? this.ignoredTopLevelFields,
+  );
+}
+
+/// 从一份配置文档里抽取 `lives`（纯逻辑）。
+///
+/// **为什么需要**：T4 网关的 `configJson` 把 `lives` 写死为 `new JsonArray()`
+/// （`VodApi.java`），所以网关响应里的 `lives` **恒为空**，桥接过来的配置就没有
+/// 直播源（用户反馈 2026-10-09：「安卓桥接没有同步直播源」，直播页显示
+/// 「当前配置没有直播源」）。安卓的直播源实际存在它自己的直播配置文档里，
+/// 需要按文档地址单独取回（见 `AndroidBridgeService.fetchLiveSources`）。
+///
+/// 无名条目用 URL 主机名兜底：`LiveSource.fromJson` 对缺 `name` 的条目返回
+/// `null`（整条丢掉），而真实站点配置里确实存在只有 `url` 的条目。
+List<LiveSource> extractLiveSources(String jsonText) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(jsonText);
+  } on FormatException {
+    return const [];
+  }
+  if (decoded is! Map) return const [];
+  final raw = decoded['lives'];
+  if (raw is! List) return const [];
+
+  final sources = <LiveSource>[];
+  for (final item in raw) {
+    final parsed = LiveSource.fromJson(item);
+    if (parsed != null) {
+      sources.add(parsed);
+      continue;
+    }
+    // 缺 `name` 时用主机名兜底，避免整条直播源被丢掉。
+    final map = asMap(item);
+    final url = asNonEmptyString(map['url']);
+    if (url == null) continue;
+    final host = Uri.tryParse(url)?.host ?? '';
+    if (host.isEmpty) continue;
+    final patched = LiveSource.fromJson({...map, 'name': host});
+    if (patched != null) sources.add(patched);
+  }
+  return sources;
 }
 
 /// 把 T4 网关的配置 JSON 转成 PC 可用的 [AppConfig]（`design/01` §5）。

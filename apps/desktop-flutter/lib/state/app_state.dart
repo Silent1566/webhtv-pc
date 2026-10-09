@@ -165,6 +165,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       client: _injectedSyncClient,
       serverFactory: _injectedSyncServerFactory,
     );
+    // 把同步状态的变化**转发**到 AppState 自己的监听者。
+    //
+    // 为什么必须转发：`SettingsPage` 是 `StatelessWidget`，只读 `state.syncState`
+    // 但自身不监听；壳层只监听 `AppState`。若不同步，启动时的**自动接入**（在壳层
+    // post-frame 里异步完成）不会触发任何重建，用户看到的是设置页还写着「未接入」
+    // 而顶栏已经切到「安卓桥接」（用户反馈 2026-10-09：
+    // 「重新打开后是自动接入了但是设置页面的状态没有及时更新」）。
+    // `AndroidSettingsPage` 自己 `addListener` 所以它是新的，正是这个差异暴露了缺口。
+    syncState.addListener(notifyListeners);
     _catBundle = CatBundle(rootDir: p.join(this.paths.dataDir, 'catbundle'));
     // TMDB 服务：配置引用是函数（设置页保存后无需重建服务）。
     _tmdbService = TmdbService(config: () => _tmdbConfigStore.config);
@@ -999,6 +1008,19 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _selectedVod = vod;
     _detailPhase = phase;
     _detailError = error;
+    notifyListeners();
+  }
+
+  /// 注入一份首页/分类结果，仅供 widget 测试使用（同 [seedDetailForTest]）。
+  ///
+  /// 海报网格的门禁需要「给定一批条目 → 断言卡片渲染了什么」这类前提，
+  /// 而 fake-async 区拿不到真实站点数据，因此提供显式注入点。
+  @visibleForTesting
+  void seedListingForTest(List<Vod> list) {
+    _homeResult = SiteResult(list: list);
+    _selectedTypeId = null;
+    _contentPhase = LoadPhase.ready;
+    _lastError = null;
     notifyListeners();
   }
 
@@ -2324,6 +2346,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 猫源 Node 进程树与 bundle 句柄同样必须随退出释放（§9.8）。
     _catPipeline?.close();
     // 同步服务端必须先停：退出后不得继续监听局域网端口（§28.4）。
+    // 先摘掉转发监听再 dispose，避免 dispose 过程中的通知回调打到已释放的 AppState。
+    syncState.removeListener(notifyListeners);
     syncState.dispose();
     _database?.dispose();
     log.dispose();

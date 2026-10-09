@@ -128,7 +128,7 @@ T9 → T10 T11 → T12 → T13 → T14
 | G3 | Schema 校验 | `py -3 scripts/validate_contracts.py` | 无错误 |
 | G4 | 静态检查 | `dart analyze` | 无问题 |
 | G5 | 单元测试 | `flutter test` | 全绿（含 7 个 `phase5_*` 套件，共 1338 例） |
-| G6 | 套件存在性 | 脚本内清单核对 | 7 个套件文件均存在 |
+| G6 | 套件存在性 | 脚本内清单核对 | 8 个套件文件均存在 |
 | G7 | Windows 集成 | `flutter test integration_test/phase5_*_flow_test.dart -d windows` | 3 个套件全绿 |
 | G8 | 反向验证 | `py -3 tools/phase5/verify_reverse_checks.py` | 6 项全部"按预期失败"且还原后工作区干净 |
 | G9 | 凭据与指纹脱敏 | `py -3 tools/phase4/verify_tmdb_redaction.py` + `py -3 tools/phase5/verify_bridge_redaction.py` | 无凭据/设备指纹原文 |

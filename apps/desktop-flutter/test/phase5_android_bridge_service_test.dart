@@ -305,4 +305,98 @@ void main() {
       expect(joined, isNot(contains('片单导航')));
     });
   });
+
+  group('直播源拉取（用户反馈 2026-10-09「安卓桥接没有同步直播源」）', () {
+    /// `/manage/configs` 的最小响应：一条 active 的直播配置（type=1）。
+    Map<String, Object?> manageConfigs({required bool liveActive}) => {
+      'items': [
+        {
+          'type': 0,
+          'url': 'http://192.168.1.5:9978/vod/api?ac=config',
+          'active': true,
+        },
+        {
+          'type': 1,
+          'url': 'https://example.com/sub/live.json',
+          'active': liveActive,
+        },
+      ],
+    };
+
+    const liveJson =
+        '{"lives":['
+        '{"name":"裤佬","type":0,"url":"https://iptv.example/live.m3u"},'
+        '{"name":"IPTV-联通","type":0,"url":"http://a.example/sub?x=m3u"},'
+        '{"type":0,"url":"https://nohost.example/a.m3u"}'
+        ']}';
+
+    test('先从 /manage/configs 找 active 的 type=1，再拉其文档抽取 lives', () async {
+      client.route('/manage/configs', manageConfigs(liveActive: true));
+      client.route('/live.json', liveJson);
+
+      final sources = await service.fetchLiveSources(reachable);
+
+      // 三条都保留（第三条无 name → 用主机名兜底）。
+      expect(sources, hasLength(3));
+      expect(sources.map((s) => s.name), contains('裤佬'));
+      expect(
+        sources.map((s) => s.name),
+        contains('nohost.example'),
+        reason: '缺 name 的条目不得整条丢弃（真实站点配置里存在这种条目）',
+      );
+      expect(sources.first.url, 'https://iptv.example/live.m3u');
+
+      // 请求形态：先 /manage/configs，再直播文档。
+      expect(client.requests, hasLength(2));
+      expect(client.requests.first.path, endsWith('/manage/configs'));
+      expect(
+        client.requests.last.toString(),
+        'https://example.com/sub/live.json',
+      );
+    });
+
+    test('设备未启用直播配置 → 空列表，且不请求直播文档', () async {
+      client.route('/manage/configs', manageConfigs(liveActive: false));
+      client.route('/live.json', liveJson);
+
+      final sources = await service.fetchLiveSources(reachable);
+
+      expect(sources, isEmpty);
+      expect(
+        client.requests,
+        hasLength(1),
+        reason: '没有 active 的直播配置时不应多拉一个文档',
+      );
+    });
+
+    test('取直播源失败不影响调用方（返回空列表，不抛）', () async {
+      client.failure = const SocketException('device offline');
+
+      await expectLater(
+        service.fetchLiveSources(reachable),
+        completion(isEmpty),
+      );
+    });
+
+    test('直播文档不是 JSON → 空列表（不抛）', () async {
+      client.route('/manage/configs', manageConfigs(liveActive: true));
+      client.route('/live.json', 'not json at all');
+
+      await expectLater(
+        service.fetchLiveSources(reachable),
+        completion(isEmpty),
+      );
+    });
+
+    test('日志含直播源数量与配置地址', () async {
+      client.route('/manage/configs', manageConfigs(liveActive: true));
+      client.route('/live.json', liveJson);
+
+      await service.fetchLiveSources(reachable);
+
+      final joined = log.lines.join('\n');
+      expect(joined, contains('lives=3'));
+      expect(joined, contains('live.json'));
+    });
+  });
 }

@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/android_bridge.dart';
 import '../core/app_error.dart';
+import '../core/protocol.dart';
 import 'log_service.dart';
 
 /// 探测/拉取的进度事件（供 UI 展示）。
@@ -124,6 +125,70 @@ class AndroidBridgeService {
       'skipped=${conversion.skippedSites.length} base=$normalized',
     );
     return conversion;
+  }
+
+  /// 拉取安卓设备**当前启用的直播源**（`lives`）。
+  ///
+  /// 为什么要单独取：T4 网关的 `configJson` 把 `lives` 写死为 `new JsonArray()`
+  /// （`VodApi.java`），所以 `/vod/api?ac=config` 的 `lives` **恒为空**；而安卓的
+  /// 直播源实际存在它自己的直播配置（`Config.type=1`）里。
+  ///
+  /// 两条信息源，先试更直接的：
+  /// 1. `/manage/configs` 找出 `type==1 && active==true` 的直播配置地址；
+  /// 2. 直接拉那个地址（通常是站点订阅 JSON），从中抽取 `lives`。
+  ///
+  /// 任何一步失败都返回空列表：**直播源是增强而非必需**，不能因为它取不到就
+  /// 把整个桥接导入判为失败（站点导入本身已成功）。
+  Future<List<LiveSource>> fetchLiveSources(String base) async {
+    final normalized = normalizeBase(base);
+    try {
+      final activeUrl = await _activeLiveConfigUrl(normalized);
+      if (activeUrl == null) {
+        _logInfo('安卓桥接：设备未启用任何直播配置，跳过直播源同步');
+        return const [];
+      }
+      final text = await _getText(
+        Uri.parse(activeUrl),
+        base: normalized,
+        timeout: timeout,
+      );
+      final sources = extractLiveSources(text);
+      _logInfo(
+        '安卓桥接：拉取直播源 lives=${sources.length} '
+        'config=${redactUrl(activeUrl)}',
+      );
+      return sources;
+    } on AppError catch (error) {
+      _logWarning('安卓桥接：拉取直播源失败（不影响站点导入）：${error.logLine}');
+      return const [];
+    } catch (error) {
+      _logWarning('安卓桥接：拉取直播源失败（不影响站点导入）：$error');
+      return const [];
+    }
+  }
+
+  /// 从 `/manage/configs` 里找出当前启用的直播配置地址（`type=1 && active`）。
+  ///
+  /// 返回 `null` 表示设备没有启用直播配置（或该接口不可用）——两者都按「没有
+  /// 直播源」处理，不报错。
+  Future<String?> _activeLiveConfigUrl(String base) async {
+    final body = await _getText(
+      Uri.parse('$base/manage/configs'),
+      base: base,
+      timeout: timeout,
+    );
+    final decoded = _decodeJson(body, base);
+    if (decoded is! Map) return null;
+    final items = decoded['items'];
+    if (items is! List) return null;
+    for (final item in items) {
+      final map = item is Map ? item : const {};
+      if (asInt(map['type']) != 1) continue;
+      if (map['active'] != true) continue;
+      final url = asNonEmptyString(map['url']);
+      if (url != null) return url;
+    }
+    return null;
   }
 
   /// 扫描局域网（`design/01` §4.4）。
