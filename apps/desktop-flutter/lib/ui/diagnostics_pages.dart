@@ -21,6 +21,7 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final info = state.startupInfo;
     final tmdb = state.tmdbConfig;
+    final sync = state.syncState;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -46,6 +47,36 @@ class SettingsPage extends StatelessWidget {
           ),
           icon: const Icon(Icons.movie_filter_outlined),
           label: const Text('打开 TMDB 设置'),
+        ),
+        const Divider(height: 32),
+        // 安卓接入区块（Phase 5）。
+        //
+        // **必须与 TMDB 解耦**：该入口曾挂在 `TmdbSettingsPage` 底部，而 TMDB
+        // 设置页要先点「打开 TMDB 设置」再滚到底才能看到——发布包实测反馈
+        // 「没看到打开安卓接入」，用户以为功能没编进去。两层嵌套入口不可接受。
+        //
+        // 另一层原因：安卓接入与 TMDB 无任何语义关系（一个是站源接入，一个是
+        // 元数据增强），寄生在 TMDB 页里会让人以为「先配好 TMDB 才能接安卓」。
+        Text('安卓接入', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          sync.devices.isEmpty
+              ? '未接入：可扫描局域网，或手动输入安卓设备地址'
+              : '已接入 ${sync.devices.length} 台设备'
+                    '${sync.peers.isEmpty ? '' : '，已授权 ${sync.peers.length} 台'}'
+                    '${sync.serverRunning ? '，同步服务已开启' : ''}',
+          key: const ValueKey('settings-android-summary'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-android-open'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AndroidSettingsPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.android_outlined),
+          label: const Text('打开安卓接入'),
         ),
         const Divider(height: 32),
         Text('运行信息', style: Theme.of(context).textTheme.titleMedium),

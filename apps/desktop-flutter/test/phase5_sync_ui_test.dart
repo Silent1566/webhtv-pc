@@ -26,6 +26,7 @@ import 'package:webhtv_pc/services/sync_client.dart';
 import 'package:webhtv_pc/services/sync_server.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 
 /// 假桥接服务：不碰网络，行为由测试逐项设定。
 class FakeBridge extends AndroidBridgeService {
@@ -427,6 +428,68 @@ void main() {
       expect(request.url.queryParameters['do'], 'sync');
       expect(state.syncState.lastStats?.applied, 2);
       expect(pageText(tester), contains('applied=2'));
+    });
+  });
+
+  group('设置页入口可达性（发布包反馈回归）', () {
+    // 背景（真实用户反馈）：安卓接入入口原先挂在 `TmdbSettingsPage` 底部，
+    // 用户要先点「打开 TMDB 设置」再滚到底才能看到，于是以为"正式版没编进去"。
+    //
+    // 为什么既有门禁发现不了：`verify_release_symbols.py` 只断言符号存在于
+    // app.so（确实存在，类被保留了），断言不了"运行时能不能点到"；
+    // 而 widget 用例此前只测了 `AndroidSettingsPage` 自身，没测它怎么被进入。
+    //
+    // 本用例断言：设置页**一层**即可见安卓入口，且点击真正进入接入页。
+    testWidgets('设置页无条件可见「打开安卓接入」，点击进入接入页', (tester) async {
+      tester.view.physicalSize = const Size(1400, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+      );
+      await tester.pumpAndSettle();
+
+      final entry = find.byKey(const ValueKey('settings-android-open'));
+      expect(
+        entry,
+        findsOneWidget,
+        reason: '设置页必须有安卓接入入口（不得再嵌套进 TMDB 设置页）',
+      );
+      expect(find.text('安卓接入'), findsWidgets);
+      expect(
+        find.byKey(const ValueKey('settings-android-summary')),
+        findsOneWidget,
+        reason: '入口旁应有状态摘要（未接入/已接入 N 台）',
+      );
+
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+
+      // 真正进入接入页：断言页内特征控件，而非仅断言路由类型。
+      expect(find.text('安卓设备接入'), findsOneWidget);
+      expect(find.byKey(const ValueKey('android-bridge')), findsOneWidget);
+      expect(find.byKey(const ValueKey('android-scan')), findsOneWidget);
+      expect(find.byKey(const ValueKey('android-sync-server')), findsOneWidget);
+    });
+
+    testWidgets('入口与 TMDB 解耦：未配置 TMDB 也可见', (tester) async {
+      expect(state.tmdbConfig.isReady, isFalse, reason: '前置条件：未配置 TMDB');
+      tester.view.physicalSize = const Size(1400, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('settings-android-open')), findsOneWidget);
+      expect(
+        pageText(tester),
+        contains('未接入'),
+        reason: '未接入设备时摘要应说明可扫描或手动输入',
+      );
     });
   });
 
