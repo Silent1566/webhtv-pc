@@ -739,29 +739,39 @@ class PosterImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final target = url?.trim() ?? '';
-    if (target.isEmpty) return _placeholder(context);
-    return Image.network(
-      target,
-      width: width,
-      height: height,
-      fit: fit,
-      loadingBuilder: (context, child, progress) =>
-          progress == null ? child : _placeholder(context, loading: true),
-      errorBuilder: (context, error, stackTrace) => _placeholder(context),
-    );
-  }
-
-  Widget _placeholder(BuildContext context, {bool loading = false}) {
+    // 底层永远是占位底色 + 图标，图片叠在上面。
+    //
+    // 为什么不能只靠 `loadingBuilder` 兜底（实测 2026-10-09，网盘聚合站慢图床）：
+    // 慢速图床在**首帧产出之前**会走到 `progress == null` 分支，此时 `child` 是
+    // 一个还没有图像的 `RawImage`（什么都不画），而占位符已经被跳过——结果整个
+    // 格子与页面同色，看上去像「少了一部片」，实测要等 25s 图才出现。
+    // 把占位符当底而不是当分支，就不存在“两个分支都画空”的窗口。
     return Container(
       width: width,
       height: height,
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
       alignment: Alignment.center,
-      child: Icon(
-        loading ? Icons.downloading : Icons.image_not_supported_outlined,
-        size: 20,
-        color: Theme.of(context).disabledColor,
-      ),
+      child: target.isEmpty
+          ? _placeholderIcon(context)
+          : Image.network(
+              target,
+              width: width,
+              height: height,
+              fit: fit,
+              loadingBuilder: (context, child, progress) => progress == null
+                  ? child
+                  : _placeholderIcon(context, loading: true),
+              errorBuilder: (context, error, stackTrace) =>
+                  _placeholderIcon(context),
+            ),
+    );
+  }
+
+  Widget _placeholderIcon(BuildContext context, {bool loading = false}) {
+    return Icon(
+      loading ? Icons.downloading : Icons.image_not_supported_outlined,
+      size: 20,
+      color: Theme.of(context).disabledColor,
     );
   }
 }

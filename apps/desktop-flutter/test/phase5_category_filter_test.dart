@@ -14,6 +14,7 @@
 /// `ext=<base64url(json)>`——实测只有这一种编码会被网关接受（其余候选返回未筛选全量）。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -31,7 +32,7 @@ import 'package:webhtv_pc/state/app_state.dart';
 class _CapturingClient extends http.BaseClient {
   _CapturingClient(this._handler);
 
-  final Object? Function(Uri uri, String? body) _handler;
+  final FutureOr<Object?> Function(Uri uri, String? body) _handler;
   final List<Uri> requests = [];
   final List<String?> bodies = [];
 
@@ -44,7 +45,7 @@ class _CapturingClient extends http.BaseClient {
     String? body;
     if (request is http.Request) body = request.body;
     bodies.add(body);
-    final payload = _handler(request.url, body);
+    final payload = await _handler(request.url, body);
     if (payload is int) {
       return http.StreamedResponse(
         Stream<List<int>>.value(utf8.encode('{"code":-1,"msg":"injected"}')),
@@ -131,6 +132,42 @@ Map<String, Object?> _categoryPayload(String tid) => {
   'pagecount': 2,
   'total': 20,
 };
+
+/// 分类**分页**响应：按 `pg` 返回不同页，末页为空（真实站点行为）。
+///
+/// 刻意把 `pagecount` 回成 `当前页 + 1`，因为真机就是这样：实测
+/// `闪电[盘]` 同一分类连翻，pg=1→pagecount=2、pg=2→pagecount=3、pg=3→pagecount=4，
+/// `total` 同步从 92 涨到 112、132。用这种“不可信”的元数据才能拦住
+/// “以 pagecount 判到底”的错误实现。
+Map<String, Object?> _pagedCategoryPayload(String tid, int pg) {
+  if (pg > 2) {
+    return {
+      'class': [
+        {'type_id': '1', 'type_name': '电影'},
+      ],
+      'list': const [],
+      'page': pg,
+      'pagecount': pg + 1,
+      'total': 92 + pg * 20,
+    };
+  }
+  return {
+    'class': [
+      {'type_id': '1', 'type_name': '电影'},
+    ],
+    'list': [
+      for (var i = 0; i < 3; i++)
+        {
+          'vod_id': 'p$pg-v$i',
+          'vod_name': '第 $pg 页第 $i 部',
+          'vod_pic': '',
+        },
+    ],
+    'page': pg,
+    'pagecount': pg + 1,
+    'total': 92 + pg * 20,
+  };
+}
 
 void main() {
   late Directory temp;
@@ -239,6 +276,157 @@ void main() {
       expect(state.categoryFilters, isEmpty);
       // 清除后不再带 ext（空筛选不发送）。
       expect(client.lastQuery.containsKey('ext'), isFalse);
+    });
+  });
+
+  group('滚动加载下一页（§7.4.7 分页）', () {
+    /// 站点**忽略 `pg` 参数**、反复回同一页（实测存在）：必须以“没有新条目”停止，
+    /// 否则滚动到底会无休止地重发同一个请求。
+    Future<void> bootIgnoringPage() => boot(
+      handler: (uri, _) {
+        final pg = int.tryParse(uri.queryParameters['pg'] ?? '1') ?? 1;
+        // 无论 pg 是多少都回第一页的内容。
+        return _pagedCategoryPayload(uri.queryParameters['t']!, 1)
+          ..['page'] = pg;
+      },
+    );
+
+    test('loadCategory 重置分页状态，loadMoreCategory 追加而不是替换', () async {
+      await boot(
+        handler: (uri, _) {
+          final q = uri.queryParameters;
+          if (!q.containsKey('t')) return _homePayload();
+          return _pagedCategoryPayload(
+            q['t']!,
+            int.tryParse(q['pg'] ?? '1') ?? 1,
+          );
+        },
+      );
+
+      await state.loadCategory('1');
+      expect(state.categoryResult!.list, hasLength(3));
+      expect(state.categoryPage, 1);
+      expect(state.categoryHasMore, isTrue, reason: '第一页非空 → 先假定还有下一页');
+
+      await state.loadMoreCategory();
+      expect(
+        state.categoryResult!.list,
+        hasLength(6),
+        reason: '追加必须保留第一页（替换会让已看过的内容从列表里消失）',
+      );
+      expect(state.categoryPage, 2);
+      expect(
+        state.categoryResult!.list.map((v) => v.vodId),
+        ['p1-v0', 'p1-v1', 'p1-v2', 'p2-v0', 'p2-v1', 'p2-v2'],
+        reason: '顺序必须保持“旧页在前”',
+      );
+    });
+
+    test('末页为空 → categoryHasMore 收敛为 false（不会无限加载）', () async {
+      await boot(
+        handler: (uri, _) {
+          final q = uri.queryParameters;
+          if (!q.containsKey('t')) return _homePayload();
+          return _pagedCategoryPayload(
+            q['t']!,
+            int.tryParse(q['pg'] ?? '1') ?? 1,
+          );
+        },
+      );
+
+      await state.loadCategory('1');
+      await state.loadMoreCategory();
+      expect(state.categoryHasMore, isTrue);
+
+      // 第 3 页为空 → 到底。
+      await state.loadMoreCategory();
+      expect(
+        state.categoryHasMore,
+        isFalse,
+        reason: '空页是终止信号，否则滚动到底会一直请求下去',
+      );
+      expect(state.categoryResult!.list, hasLength(6), reason: '空页不得改变已有列表');
+    });
+
+    test('站点忽略 pg（反复回同一页）→ 无新条目即停止，不无限重发', () async {
+      await bootIgnoringPage();
+
+      await state.loadCategory('1');
+      expect(state.categoryResult!.list, hasLength(3));
+
+      await state.loadMoreCategory();
+      expect(
+        state.categoryHasMore,
+        isFalse,
+        reason: '第二页没有带来新条目 → 站点不支持分页或已到底',
+      );
+      expect(
+        state.categoryResult!.list,
+        hasLength(3),
+        reason: '重复条目必须被去重，不得在列表里出现两份',
+      );
+
+      // 再调也不会再发请求（hasMore 已收敛）。
+      final before = client.requests.length;
+      await state.loadMoreCategory();
+      expect(client.requests.length, before, reason: 'hasMore=false 时不得再发请求');
+    });
+
+    test('追加失败不写 lastError、不毁掉已加载列表', () async {
+      var failNext = false;
+      await boot(
+        handler: (uri, _) {
+          final q = uri.queryParameters;
+          if (!q.containsKey('t')) return _homePayload();
+          if (failNext) return 500;
+          return _pagedCategoryPayload(
+            q['t']!,
+            int.tryParse(q['pg'] ?? '1') ?? 1,
+          );
+        },
+      );
+
+      await state.loadCategory('1');
+      final firstPage = state.categoryResult!.list;
+      expect(firstPage, hasLength(3));
+
+      failNext = true;
+      await state.loadMoreCategory();
+      expect(state.lastError, isNull, reason: '追加失败不得用错误横幅换掉用户正在看的列表');
+      expect(state.categoryResult!.list, hasLength(3), reason: '失败后保留已加载内容');
+      expect(state.categoryHasMore, isFalse, reason: '失败后不再反复重试同一页');
+    });
+
+    test('切分类作废在途的下一页响应（不得拼到新分类后面）', () async {
+      // 第 2 页的响应挂起，直到切到分类 2 之后才返回。
+      final gate = Completer<void>();
+      await boot(
+        handler: (uri, _) async {
+          final q = uri.queryParameters;
+          if (!q.containsKey('t')) return _homePayload();
+          final tid = q['t']!;
+          final pg = int.tryParse(q['pg'] ?? '1') ?? 1;
+          if (tid == '1' && pg == 2) await gate.future;
+          return _pagedCategoryPayload(tid, pg);
+        },
+      );
+
+      await state.loadCategory('1');
+      final pending = state.loadMoreCategory();
+
+      // 在迟到响应到达前切到分类 2。
+      await state.loadCategory('2');
+      expect(state.selectedTypeId, '2');
+      final afterSwitch = state.categoryResult!.list.map((v) => v.vodId).toList();
+
+      gate.complete();
+      await pending;
+
+      expect(
+        state.categoryResult!.list.map((v) => v.vodId).toList(),
+        afterSwitch,
+        reason: '属于分类 1 的迟到页不得追加到分类 2 的列表里',
+      );
     });
   });
 

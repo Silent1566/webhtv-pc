@@ -279,6 +279,21 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 仍按 2024 筛，而不是让他重新选一遍。仅当**换站点**或**回首页**时清空。
   Map<String, String> _categoryFilters = const {};
 
+  /// 分类分页状态（滚动加载，§7.4.7 分页）。
+  ///
+  /// 早期实现用「上一页/下一页」按钮，每加载一页就把 `_categoryResult` **整体
+  /// 替换**；改成滚动加载后必须把多页**累加**在同一份结果里，否则滚到底加载第 2
+  /// 页会把第 1 页从屏幕上抹掉（用户看到列表“跳回顶部且内容变了”）。
+  int _categoryPage = 1;
+  bool _categoryHasMore = false;
+  bool _categoryLoadingMore = false;
+
+  /// 分类请求运行号：切分类 / 换筛选 / 换站点后，在途的下一页响应必须丢弃。
+  ///
+  /// 没有它时，用户「切到别的分类」与「上一分类第 2 页的响应」会赛跑：迟到
+  /// 的追加会把旧分类的内容拼到新分类列表后面。
+  int _categoryRunId = 0;
+
   List<ConfigRecord> _configs = const [];
   String? _importDiagnosticsSummary;
 
@@ -360,6 +375,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 当前生效的分类筛选条件（供 UI 高亮选中项）。
   Map<String, String> get categoryFilters => _categoryFilters;
+
+  /// 当前分类已加载到第几页（滚动加载下一页的基准）。
+  int get categoryPage => _categoryPage;
+
+  /// 当前分类是否还有下一页（false 时滚动到底不再请求）。
+  bool get categoryHasMore => _categoryHasMore;
+
+  /// 是否正在加载「下一页」（滚动时防止同一页码被并发请求多次）。
+  bool get categoryLoadingMore => _categoryLoadingMore;
 
   /// 详情错误（与首页/分类/搜索共用的 [lastError] 分开）。
   ///
@@ -982,6 +1006,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   void selectDefaultListing() {
     _selectedTypeId = null;
     _categoryResult = null;
+    _resetCategoryPaging();
     // 回首页意味着离开分类上下文，筛选条件随之作废（否则回到首页再选分类会带着旧筛选）。
     _categoryFilters = const {};
     notifyListeners();
@@ -1042,6 +1067,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         _detailResult = null;
         _detailError = null;
         _activeSearch = null;
+        // 筛选维度是**站点相关**的（不同站点的 key/取值完全不同），换站点必须
+        // 一并作废：留着旧站点的筛选会让新站点的第一个分类请求带着无效的 ext。
+        _categoryFilters = const {};
+        _resetCategoryPaging();
       }
 
       final name =
@@ -1122,6 +1151,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       _categoryResult = null;
       _detailResult = null;
       _detailError = null;
+      _categoryFilters = const {};
+      _resetCategoryPaging();
       _configPhase = LoadPhase.ready;
       // 切换配置 → 重建 TMDB 服务，使 `config_id` 隔离生效（`02` §14 Q2）。
       _resetTmdbServices();
@@ -1161,6 +1192,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         _selectedSite = null;
         _homeResult = null;
         _categoryResult = null;
+        _categoryFilters = const {};
+        _resetCategoryPaging();
         _detailResult = null;
         _detailError = null;
         _configPhase = LoadPhase.idle;
@@ -1179,6 +1212,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _detailError = null;
     _selectedVod = null;
     _selectedTypeId = null;
+    // 筛选与分页都是**站点/分类相关**的，换站点必须一起作废（见 _resetCategoryPaging）。
+    _categoryFilters = const {};
+    _resetCategoryPaging();
     notifyListeners();
     await loadHome(site);
   }
@@ -1229,7 +1265,21 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     notifyListeners();
   }
 
+  /// 作废分类分页状态（换站点 / 换配置 / 回首页时调用）。
+  ///
+  /// 递增运行号是必须的：不递增时，「上一个分类下一页」的迟到响应仍会被判定为
+  /// 当前请求，把旧列表写回 [_categoryResult]（用户在别的站点上看到旧站点的片单）。
+  void _resetCategoryPaging() {
+    _categoryRunId++;
+    _categoryPage = 1;
+    _categoryHasMore = false;
+    _categoryLoadingMore = false;
+  }
+
   /// 加载分类（§7.4.7 分页与筛选）。
+  ///
+  /// 这是「重新开始」路径（[page] 默认 1）：**清空并替换**已有结果。用户实际翻页
+  /// 走 [loadMoreCategory]（滚动到底自动追加）。
   ///
   /// [filters] 省略时沿用当前 [_categoryFilters]（**切分类保留筛选**）；
   /// 显式传入（含空表）则覆盖。
@@ -1242,8 +1292,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final site = _selectedSite;
     if (service == null || site == null) return;
     final effective = filters ?? _categoryFilters;
+    // 新一次加载：作废在途的“下一页”响应，避免把上一份列表追加到新列表后面。
+    final runId = ++_categoryRunId;
     _selectedTypeId = typeId;
     _categoryFilters = effective;
+    _categoryResult = null;
+    _categoryPage = page;
+    _categoryHasMore = false;
+    _categoryLoadingMore = false;
     _contentPhase = LoadPhase.loading;
     _lastError = null;
     notifyListeners();
@@ -1254,7 +1310,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         page: page,
         filters: effective,
       );
+      if (runId != _categoryRunId) return;
       _categoryResult = outcome.value;
+      _categoryPage = page;
+      _categoryHasMore = _hasNextPage(outcome.value);
       _contentPhase = LoadPhase.ready;
       log.info(
         '分类加载成功 site=${site.key} t=$typeId page=$page '
@@ -1265,6 +1324,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         scope: 'site',
       );
     } catch (error) {
+      if (runId != _categoryRunId) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -1276,6 +1336,99 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       );
     }
     notifyListeners();
+  }
+
+  /// 追加下一页（滚动到底自动触发，§7.4.7）。
+  ///
+  /// 与 [loadCategory] 的关键差异：
+  /// - 旧列表**保留**并追加新页（不先清空），滚动位置不会跳；
+  /// - 不加 `_contentPhase = loading`（那是页面级骨架屏），而是置
+  ///   [categoryLoadingMore]，避免滚到底时整个网格闪成空白；
+  /// - 失败**不写入** `lastError`（不把已经看得见的列表换成错误横幅），
+  ///   只记日志并把 `categoryHasMore` 收矮，避免滚动到底反复重试。
+  Future<void> loadMoreCategory() async {
+    if (_categoryLoadingMore || !_categoryHasMore) return;
+    if (_contentPhase == LoadPhase.loading) return;
+    final service = _siteService;
+    final site = _selectedSite;
+    final typeId = _selectedTypeId;
+    final current = _categoryResult;
+    if (service == null || site == null || typeId == null || current == null) {
+      return;
+    }
+    final runId = _categoryRunId;
+    final nextPage = _categoryPage + 1;
+    _categoryLoadingMore = true;
+    notifyListeners();
+    try {
+      final outcome = await service.category(
+        site,
+        typeId: typeId,
+        page: nextPage,
+        filters: _categoryFilters,
+      );
+      // 切分类 / 换筛选 / 换站点后到达的响应：直接丢弃（不得拼接）。
+      if (runId != _categoryRunId) return;
+      final merged = _mergeVods(current.list, outcome.value.list);
+      _categoryResult = outcome.value.copyWith(
+        list: merged,
+        // 分类没有筛选时，站点可能只在首页响应里给筛选维度。追加页的响应
+        // 不带 filters，套用会把已有的筛选条抹掉（用户看到“筛选行突然消失”）。
+        filters: outcome.value.filters.isEmpty
+            ? current.filters
+            : outcome.value.filters,
+      );
+      _categoryPage = nextPage;
+      // 到底的判据：本页为空，或本页没有带来任何**新**条目。后者是站点忽略
+      // `pg`（反复回同一页）的唯一可靠信号，不接就会无限循环请求同一页。
+      _categoryHasMore =
+          outcome.value.list.isNotEmpty && merged.length > current.list.length;
+      log.info(
+        '分类追加成功 site=${site.key} t=$typeId page=$nextPage '
+        'added=${outcome.value.list.length} total=${merged.length} '
+        'hasMore=$_categoryHasMore elapsed=${outcome.latency.inMilliseconds}ms',
+        scope: 'site',
+      );
+    } catch (error) {
+      if (runId != _categoryRunId) return;
+      // 追加失败不抛、不报警：把 hasMore 关掉，用户不再反复触发同一页。
+      _categoryHasMore = false;
+      log.warning(
+        '分类追加失败 site=${site.key} t=$typeId page=$nextPage $error',
+        scope: 'site',
+      );
+    } finally {
+      if (runId == _categoryRunId) {
+        _categoryLoadingMore = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// 分类响应是否还有下一页。
+  ///
+  /// **不得用 `pagecount` / `total`**（实测 2026-10-09，桥接的网盘聚合站
+  /// `闪电[盘]`）：同一个分类连续翻页，站点每次回的 `pagecount` 都是
+  /// `当前页 + 1`（pg=1 → 2、pg=2 → 3、pg=3 → 4），`total` 同步从 92 涨到
+  /// 112、132。这两个字段是上游插件**按当前页现算**的，不表示真实总页数；
+  /// 拿它们当判据会让「还有下一页」永远为真，滚动永远加载不完。
+  ///
+  /// 因此只信内容：拿到非空列表就先假定还有下一页，真正的终止由追加阶段的
+  /// 「页面为空 / 没有新增条目」负责。
+  static bool _hasNextPage(SiteResult result) => result.list.isNotEmpty;
+
+  /// 合并两页列表，按 `vod_id` 去重（保序：旧页在前）。
+  ///
+  /// 为什么必须去重：部分站点忽略 `pg` 参数、或末页与前一页有重叠，直接拼接会
+  /// 让同一部片重复出现（用户看到列表里“同一张海报连着两张”）。
+  static List<Vod> _mergeVods(List<Vod> existing, List<Vod> incoming) {
+    final seen = <String>{};
+    final merged = <Vod>[];
+    for (final vod in [...existing, ...incoming]) {
+      if (!seen.add(vod.vodId)) continue;
+      merged.add(vod);
+    }
+    return merged;
   }
 
   /// 设置/清除单个筛选维度，并**立即重载当前分类**（筛选是即时生效的）。
