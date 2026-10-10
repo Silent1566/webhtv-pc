@@ -29,6 +29,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
 import '../core/app_error.dart';
+import '../core/person_work_filters.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/protocol.dart';
@@ -324,6 +325,23 @@ class TmdbDetailSections extends StatelessWidget {
           ),
           const SizedBox(height: 16),
         ],
+        // 制作团队**紧跟演职人员**（用户反馈 2026-10-10：「制作团队应该放在演员
+        // 下方」）。对齐默影视 `activity_tmdb_detail.xml` 的区块顺序：
+        // `castTitle`（演员）→ `creatorTitle`（制作团队）→ `relatedTitle`（相关推荐）。
+        // 原先它排在相关视频之后，被两个大区块隔开，用户要滚很久才看得到。
+        if (data.creatorTeam.isNotEmpty) ...[
+          _SectionHeader(
+            title: '制作团队（${data.creatorTeam.length}）',
+            keyValue: 'tmdb-section-crew',
+          ),
+          _PeopleWall(
+            people: data.creatorTeam,
+            onTap: onPersonTap,
+            keyPrefix: 'tmdb-crew',
+            keyValue: 'tmdb-crew-wall',
+          ),
+          const SizedBox(height: 16),
+        ],
         if (recommendations.isNotEmpty) ...[
           _SectionHeader(
             title: '相关推荐（${recommendations.length}）',
@@ -346,14 +364,6 @@ class TmdbDetailSections extends StatelessWidget {
               onOpen: onOpenVideo,
               onCopy: onCopyVideo,
             ),
-          const SizedBox(height: 16),
-        ],
-        if (data.crew.isNotEmpty) ...[
-          _SectionHeader(
-            title: '制作团队（${data.crew.length}）',
-            keyValue: 'tmdb-section-crew',
-          ),
-          _CrewWall(crew: data.crew.take(24).toList(), onTap: onPersonTap),
         ],
       ],
     );
@@ -1734,27 +1744,6 @@ class _PeopleWall extends StatelessWidget {
   }
 }
 
-/// 制作团队墙（导演/编剧/制片…）。
-///
-/// 用户反馈 2026-10-08：「没有导演卡片」。早期只渲染纯文字列表，没有头像卡片，
-/// 既看不到人，也无法点击进人物页。上游 `@id/tmdbCrew` 用的是**与演员同一套**
-/// 卡片（`adapter_tmdb_cast.xml`：头像 + 姓名 + 职务，可点击进 `TmdbPersonDialog`），
-/// 这里对齐该形态：复用 [_PeopleWall]，只是数据源换成 crew。
-class _CrewWall extends StatelessWidget {
-  const _CrewWall({required this.crew, this.onTap});
-
-  final List<TmdbPerson> crew;
-  final ValueChanged<TmdbPerson>? onTap;
-
-  @override
-  Widget build(BuildContext context) => _PeopleWall(
-    people: crew,
-    onTap: onTap,
-    keyPrefix: 'tmdb-crew',
-    keyValue: 'tmdb-crew-wall',
-  );
-}
-
 // ---------------------------------------------------------------------------
 // 相关推荐墙（点击 → 进入该作品详情）
 // ---------------------------------------------------------------------------
@@ -1936,6 +1925,66 @@ class TmdbEpisodeSheet extends StatelessWidget {
 // 人物页（演职人员点击）
 // ---------------------------------------------------------------------------
 
+/// 人物页的一行筛选 chip（部门 / 类型）。
+///
+/// 横向可滚动：部门可能多达十几个（导演/编剧/制片/摄影/剪辑…），窄窗口下必须能滚。
+/// 选项带计数，选中态用主色淡底 + 主色文字（与浏览页筛选条同一视觉语言）。
+class PersonWorkFilterRow extends StatelessWidget {
+  const PersonWorkFilterRow({
+    super.key,
+    required this.keyValue,
+    required this.options,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String keyValue;
+  final List<PersonWorkFilterOption> options;
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return SizedBox(
+      height: 34,
+      child: ListView.separated(
+        key: ValueKey(keyValue),
+        scrollDirection: Axis.horizontal,
+        itemCount: options.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final option = options[index];
+          final isSelected = option.key == selected;
+          return InkWell(
+            key: ValueKey('$keyValue-${option.key}'),
+            onTap: () => onSelected(option.key),
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? scheme.primary.withValues(alpha: 0.18)
+                    : scheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                '${option.label} ${option.count}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: isSelected ? scheme.primary : scheme.onSurfaceVariant,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 /// 人物页：简介 + 照片 + 作品列表（`04` §6.1 的演职人员作品入口）。
 class TmdbPersonPage extends StatefulWidget {
   const TmdbPersonPage({
@@ -1965,6 +2014,14 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
   Map<String, Object?>? _detail;
   List<String> _photos = const [];
   List<TmdbPersonWork> _works = const [];
+
+  /// 作品筛选器（两个维度：部门 / 类型），对齐默影视 `TmdbPersonWorkFilters`。
+  ///
+  /// 用户反馈 2026-10-10：「人员介绍页也不支持按分类筛选：电视，电影，参演，
+  /// 导演等」。默认两个维度都是「全部」。
+  PersonWorkFilters? _workFilters;
+  String _departmentFilter = PersonWorkDepartment.all;
+  String _mediaFilter = PersonWorkMedia.all;
   bool _biographyExpanded = false;
 
   @override
@@ -1987,22 +2044,21 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
       final creditMap = credits is Map
           ? credits.cast<Object?, Object?>()
           : const <Object?, Object?>{};
-      final works = <TmdbPersonWork>[
-        ...TmdbPersonWork.listFrom(
-          creditMap['cast'],
-          image: TmdbImageSelector.image,
-          imageBase: config.imageBase,
-          backdropBase: config.backdropBase,
-          cast: true,
-        ),
-        ...TmdbPersonWork.listFrom(
-          creditMap['crew'],
-          image: TmdbImageSelector.image,
-          imageBase: config.imageBase,
-          backdropBase: config.backdropBase,
-          cast: false,
-        ),
-      ];
+      final castWorks = TmdbPersonWork.listFrom(
+        creditMap['cast'],
+        image: TmdbImageSelector.image,
+        imageBase: config.imageBase,
+        backdropBase: config.backdropBase,
+        cast: true,
+      );
+      final crewWorks = TmdbPersonWork.listFrom(
+        creditMap['crew'],
+        image: TmdbImageSelector.image,
+        imageBase: config.imageBase,
+        backdropBase: config.backdropBase,
+        cast: false,
+      );
+      final works = <TmdbPersonWork>[...castWorks, ...crewWorks];
       setState(() {
         _detail = detail;
         _photos = TmdbImageSelector.profiles(
@@ -2011,6 +2067,11 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
           limit: 12,
         );
         _works = works;
+        // 筛选器由 cast/crew **分开**构造：`cast` 一律算「出演」，`crew` 按
+        // job/department 归一后的中文身份归类（对齐默影视）。
+        _workFilters = PersonWorkFilters.from(castWorks, crewWorks);
+        _departmentFilter = PersonWorkDepartment.all;
+        _mediaFilter = PersonWorkMedia.all;
         _phase = TmdbLoadPhase.ready;
       });
     } on TmdbAuthException catch (error) {
@@ -2038,6 +2099,35 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
         _phase = TmdbLoadPhase.failed;
       });
     }
+  }
+
+  /// 当前筛选下的作品（筛选器未就绪时退化为全部）。
+  List<TmdbPersonWork> get _filteredWorks =>
+      _workFilters?.filter(
+        department: _departmentFilter,
+        media: _mediaFilter,
+      ) ??
+      _works;
+
+  /// 两行筛选 chip：部门 / 类型（对齐默影视 `filterGroup`）。
+  List<Widget> _buildWorkFilters(BuildContext context) {
+    final filters = _workFilters!;
+    return [
+      const SizedBox(height: 8),
+      PersonWorkFilterRow(
+        keyValue: 'tmdb-person-filter-department',
+        options: filters.departmentOptions(),
+        selected: _departmentFilter,
+        onSelected: (key) => setState(() => _departmentFilter = key),
+      ),
+      const SizedBox(height: 6),
+      PersonWorkFilterRow(
+        keyValue: 'tmdb-person-filter-media',
+        options: filters.mediaOptions(),
+        selected: _mediaFilter,
+        onSelected: (key) => setState(() => _mediaFilter = key),
+      ),
+    ];
   }
 
   @override
@@ -2200,60 +2290,77 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
         if (_works.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(
-            '作品（${_works.length}）',
+            '作品（${_filteredWorks.length}'
+            '${_filteredWorks.length == _works.length ? '' : ' / ${_works.length}'}）',
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w600,
             ),
           ),
+          // 筛选条（对齐默影视 `activity_tmdb_person.xml` 的 `filterGroup`）：
+          // 两行 chip——部门（全部部门/出演/导演/编剧/…）与类型（全部类型/电影/剧集）。
+          // 每个选项带计数，无作品的选项不出现（避免选了没结果）。
+          if (_workFilters != null) ..._buildWorkFilters(context),
           const SizedBox(height: 8),
-          GridView.builder(
-            key: const ValueKey('tmdb-person-works'),
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisExtent: 280,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-            ),
-            itemCount: _works.length,
-            itemBuilder: (context, index) {
-              final work = _works[index];
-              final key = work.item.identity?.key ?? 'work-$index';
-              return InkWell(
-                key: ValueKey('tmdb-person-work-$key'),
-                onTap: widget.onOpenItem == null
-                    ? null
-                    : () => widget.onOpenItem!.call(work.item),
-                borderRadius: BorderRadius.circular(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: SizedBox(
-                        height: 220,
-                        child: PosterImage(url: work.item.posterUrl),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      work.item.title,
-                      style: theme.textTheme.bodyMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      work.subtitle,
-                      style: theme.textTheme.bodySmall,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+          if (_filteredWorks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(
+                  '该筛选下没有作品',
+                  key: const ValueKey('tmdb-person-works-empty'),
+                  style: theme.textTheme.bodySmall,
                 ),
-              );
-            },
-          ),
+              ),
+            )
+          else
+            GridView.builder(
+              key: const ValueKey('tmdb-person-works'),
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 220,
+                mainAxisExtent: 280,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: _filteredWorks.length,
+              itemBuilder: (context, index) {
+                final work = _filteredWorks[index];
+                final key = work.item.identity?.key ?? 'work-$index';
+                return InkWell(
+                  key: ValueKey('tmdb-person-work-$key'),
+                  onTap: widget.onOpenItem == null
+                      ? null
+                      : () => widget.onOpenItem!.call(work.item),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: SizedBox(
+                          height: 220,
+                          child: PosterImage(url: work.item.posterUrl),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        work.item.title,
+                        style: theme.textTheme.bodyMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        work.subtitle,
+                        style: theme.textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
         ],
       ],
     );

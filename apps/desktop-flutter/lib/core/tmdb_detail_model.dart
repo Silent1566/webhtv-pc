@@ -160,6 +160,7 @@ class TmdbDetailData {
     this.cast = const [],
     this.creators = const [],
     this.crew = const [],
+    this.creatorTeam = const [],
     this.directors = const [],
     this.writers = const [],
     this.genres = const [],
@@ -203,6 +204,13 @@ class TmdbDetailData {
 
   /// 剧组（`credits.crew`，含导演/编剧/制片）。
   final List<TmdbPerson> crew;
+
+  /// 制作团队的**展示用**列表（身份已归一为「导演/编剧/制片」并排序）。
+  ///
+  /// 与 [crew] 分开：`crew` 是原始剧组（供头部「导演/编剧」字段用，不能丢信息），
+  /// 而这里是给「制作团队」区块用的——同一人合并多个身份、按导演→编剧→制片排序、
+  /// 丢掉没有可读身份的人（用户反馈：制作团队要标明身份，对齐默影视）。
+  final List<TmdbPerson> creatorTeam;
 
   /// 导演名（`crew.job == Director` 优先，缺失时回退 `created_by`）。
   final List<String> directors;
@@ -345,6 +353,11 @@ class TmdbDetailData {
       cast: _castOf(detail, imageBase),
       creators: creators,
       crew: crew,
+      creatorTeam: tmdbCreatorTeam(
+        crewRaw,
+        image: (base, path) => TmdbImageSelector.image(base, path),
+        imageBase: imageBase,
+      ),
       directors: _directorNames(crewRaw, creators),
       writers: _crewNamesByJobs(crewRaw, _writingJobs),
       genres: _namesOf(detail['genres']),
@@ -457,6 +470,119 @@ List<Map<Object?, Object?>> _crewRawOf(Map<String, Object?> detail) {
     for (final item in raw)
       if (item is Map) item.cast<Object?, Object?>(),
   ];
+}
+
+/// 把 TMDB 的 `job`/`department` 归一成**用户能看懂的中文身份**。
+///
+/// 对齐默影视 `TmdbService#creatorJob`：
+/// - `director*` 或 `directing` → 「导演」
+/// - `writer`/`screenplay`/`story`/`teleplay` 或 `writing` → 「编剧」
+/// - `producer*` 或 `production` → 「制片」
+/// - 其余返回 `null`（**不展示**：`Lighting`/`Camera` 这类原始英文对用户没意义）
+///
+/// 为什么必须做这一步：用户反馈「制作团队没有标明身份比如：导演，编剧等」。
+/// 原实现把 TMDB 的 `job` 原文（如 `Screenplay`）当副标题，甚至部分条目因为
+/// `_personSubtitle` 取不到值而**完全没有副标题**。
+String? tmdbCreatorJobLabel(String? job, String? department) {
+  final jobText = (job ?? '').trim();
+  final deptText = (department ?? '').trim();
+  if (jobText.isEmpty && deptText.isEmpty) return null;
+  final value = (jobText.isEmpty ? deptText : jobText).toLowerCase();
+  final group = '$deptText $jobText'.toLowerCase();
+  if (value.contains('director') || group.contains('directing')) return '导演';
+  if (value.contains('writer') ||
+      value.contains('screenplay') ||
+      value.contains('story') ||
+      value.contains('teleplay') ||
+      group.contains('writing')) {
+    return '编剧';
+  }
+  if (value.contains('producer') || group.contains('production')) return '制片';
+  return null;
+}
+
+/// 身份排序权重：导演 → 编剧 → 制片 → 其他（对齐默影视 `creatorJobOrder`）。
+int tmdbCreatorJobOrder(String? label) => switch (label) {
+  '导演' => 0,
+  '编剧' => 1,
+  '制片' => 2,
+  _ => 3,
+};
+
+/// 按**身份**归一化制作团队（`credits.crew`）——展示用列表。
+///
+/// 与 [TmdbDetailData.crew]（原始 `crew`，供头部「导演/编剧」字段用）分开：
+/// 这里是给「制作团队」区块用的——同一人合并多个身份（`导演 / 编剧`）、
+/// 按身份排序（导演在前）、丢掉没有可读身份的人，并对齐默影视的 12 条上限。
+///
+/// 返回的 `TmdbPerson.subtitle` 就是「导演」「编剧」「制片」这类中文身份。
+List<TmdbPerson> tmdbCreatorTeam(
+  List<Map<Object?, Object?>> crew, {
+  String Function(String base, String? path)? image,
+  String imageBase = '',
+  int limit = 12,
+}) {
+  final order = <int>[];
+  final labelsById = <int, List<String>>{};
+  final peopleById = <int, TmdbPerson>{};
+  for (final item in crew) {
+    final id = tmdbInt(item['id']);
+    final name = tmdbFirstNonEmpty([item['name']]);
+    // `tmdbInt` / `tmdbFirstNonEmpty` 都是非空返回（缺值时为 0 / 空串）。
+    if (id <= 0 || name.isEmpty) continue;
+    final label = tmdbCreatorJobLabel(
+      tmdbFirstNonEmpty([item['job']]),
+      tmdbFirstNonEmpty([item['department'], item['known_for_department']]),
+    );
+    if (label == null) continue;
+    final labels = labelsById.putIfAbsent(id, () {
+      order.add(id);
+      return <String>[];
+    });
+    if (!labels.contains(label)) labels.add(label);
+    peopleById.putIfAbsent(
+      id,
+      () => TmdbPerson(
+        personId: id,
+        name: name,
+        profileUrl: image?.call(
+          imageBase,
+          tmdbFirstNonEmpty([item['profile_path']]),
+        ),
+        knownForDepartment: tmdbFirstNonEmpty([
+          item['known_for_department'],
+          item['department'],
+        ]),
+      ),
+    );
+  }
+
+  final ranked = <(int, int, TmdbPerson)>[];
+  var index = 0;
+  for (final id in order) {
+    final labels = labelsById[id]!;
+    if (labels.isEmpty) continue;
+    labels.sort(
+      (a, b) => tmdbCreatorJobOrder(a).compareTo(tmdbCreatorJobOrder(b)),
+    );
+    final person = peopleById[id]!;
+    ranked.add((
+      tmdbCreatorJobOrder(labels.first),
+      index++,
+      TmdbPerson(
+        personId: person.personId,
+        name: person.name,
+        subtitle: labels.join(' / '),
+        profileUrl: person.profileUrl,
+        knownForDepartment: person.knownForDepartment,
+      ),
+    ));
+  }
+  // 整表按首身份权重排序（导演在前），同权重保持原顺序（稳定）。
+  ranked.sort(
+    (a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2),
+  );
+  return [for (final entry in ranked.take(limit)) entry.$3];
 }
 
 /// 导演职务（`job`）。

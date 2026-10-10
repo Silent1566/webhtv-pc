@@ -1619,6 +1619,48 @@ Windows/macOS 使用平台标准目录。
 `extendBodyBehindAppBar` + 透明 AppBar、海报墙 2:3、剧照墙 16:9、占位色不是
 `surfaceContainerHighest`）。
 
+### 17.1.6 制作团队与人物页筛选（对齐默影视）
+
+用户反馈 2026-10-10 三条，均以默影视（`F:/Workspace/webtv3/webhtv`）为基准：
+
+**① 制作团队紧跟演职人员**。原顺序是
+剧照 → 海报 → 演职人员 → **相关推荐 → 相关视频** → 制作团队，制作团队被两个大
+区块隔开，用户要滚很久才看得到。默影视 `activity_tmdb_detail.xml` 的顺序是
+`castTitle` → `creatorTitle` → `relatedTitle`，现对齐：制作团队排在演职人员**下方、
+相关推荐之前**。
+
+**② 制作团队必须标明身份**。原实现把 TMDB 的 `job` 原文（如 `Screenplay`）当副标题，
+甚至部分条目因 `_personSubtitle` 取不到值而**完全没有副标题**。对齐默影视
+`TmdbService#creatorJob`，在 `tmdbCreatorJobLabel` 里归一：
+
+| 命中 | 身份 |
+| --- | --- |
+| `director*` / `directing` | 导演 |
+| `writer` / `screenplay` / `story` / `teleplay` / `writing` | 编剧 |
+| `producer*` / `production` | 制片 |
+| 其余（如 `Lighting`） | **不展示**（原始英文对用户无意义） |
+
+`tmdbCreatorTeam` 负责：同一人合并多个身份（`导演 / 编剧`）、按身份排序
+（导演 0 → 编剧 1 → 制片 2，同权重保持原顺序）、丢掉无可读身份的人、上限 12 条。
+
+**③ 人物页作品按分类筛选**。对齐默影视 `TmdbPersonWorkFilters`：两个**正交维度**，
+选项带计数，取交集。
+
+| 维度 | 选项 |
+| --- | --- |
+| 部门 | 全部部门 / 出演 / 导演 / 编剧 / 制片 / … |
+| 类型 | 全部类型 / 电影 / 剧集 |
+
+纯逻辑在 `lib/core/person_work_filters.dart`（`PersonWorkFilters`）：按
+`(mediaType, tmdbId)` 去重（同一作品可能既在 `cast` 又在 `crew`）、无作品的选项
+不出现（避免选了没结果）、交集为空时返回空列表（UI 显示空态）。
+
+门禁：`test/phase4_tmdb_crew_and_person_filter_test.dart`（24 例）——身份归一、
+合并/排序/上限、筛选选项与计数、交集与空交集、去重、以及**用生产组件本身**
+（`PersonWorkFilterRow`）验证 chip 渲染与点击回调；区块顺序用
+`getTopLeft().dy` 比较真实渲染位置。反向验证：还原「不归一身份」与「制作团队挪回
+视频之后」两项，对应用例均如期失败。
+
 ### 17.2 页面清单
 
 | 页面 | MVP-A | MVP-B | 完整版 |
