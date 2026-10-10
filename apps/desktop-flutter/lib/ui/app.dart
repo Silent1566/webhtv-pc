@@ -1038,13 +1038,20 @@ class PosterImage extends StatelessWidget {
     // 一个还没有图像的 `RawImage`（什么都不画），而占位符已经被跳过——结果整个
     // 格子与页面同色，看上去像「少了一部片」，实测要等 25s 图才出现。
     // 把占位符当底而不是当分支，就不存在“两个分支都画空”的窗口。
+    //
+    // **绝不能给这个 Container 加 `alignment`**（2026-10-10 实测根因）：
+    // `Container(alignment:)` 会在子节点外包一层 `Align`，而 `Align` 给子节点的是
+    // **松约束**；`Image` 在松约束且未给 width/height 时会退回**图片固有尺寸**，
+    // 于是 `BoxFit.cover` 根本没有“盒子”可以铺——背景图与人物头像就变成
+    // 「按原始尺寸居中、两侧露底色」（用户反馈「都没铺满」的真实根因）。
+    // 去掉 alignment 后子节点拿到父级传入的**紧约束**，cover 才真正生效。
+    // 占位图标需要居中，各自用 `Center` 包。
     return Container(
       width: width,
       height: height,
       color: _posterPlaceholderColor(context),
-      alignment: Alignment.center,
       child: target.isEmpty
-          ? _placeholderIcon(context)
+          ? Center(child: _placeholderIcon(context))
           : Image.network(
               target,
               width: width,
@@ -1052,9 +1059,9 @@ class PosterImage extends StatelessWidget {
               fit: fit,
               loadingBuilder: (context, child, progress) => progress == null
                   ? child
-                  : _placeholderIcon(context, loading: true),
+                  : Center(child: _placeholderIcon(context, loading: true)),
               errorBuilder: (context, error, stackTrace) =>
-                  _placeholderIcon(context),
+                  Center(child: _placeholderIcon(context)),
             ),
     );
   }
