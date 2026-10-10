@@ -47,6 +47,16 @@ void main() {
 
   Vod vodOf(String id, String name) => Vod(vodId: id, vodName: name);
 
+  /// 滚过满屏 hero，让正文进入视口。
+  ///
+  /// 背景 hero 现在是**满屏**的（用户要求「全屏背景」），正文因此从第二屏开始。
+  /// 断言「正文内容」的用例必须先滚过去；断言「加载态」的用例不要用
+  /// （滚过之后进度指示也会离开视口）。
+  Future<void> scrollPastHero(WidgetTester tester) async {
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pump();
+  }
+
   Future<void> pumpDetail(WidgetTester tester, Vod vod) async {
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -78,6 +88,7 @@ void main() {
       vodPlayUrl: '第1集\$http://127.0.0.1:1/media/b.mp4',
     );
     await pumpDetail(tester, target);
+    await scrollPastHero(tester);
 
     expect(find.text('本页影片'), findsWidgets, reason: '必须显示本页传入的条目');
     expect(
@@ -105,6 +116,7 @@ void main() {
     // 列表条目只有基础字段：详情加载成功后应展示简介与两条剧集。
     await pumpDetail(tester, vodOf('demo-1', '列表条目'));
     await tester.pump();
+    await scrollPastHero(tester);
 
     expect(find.textContaining('来自详情的简介'), findsWidgets);
     expect(find.textContaining('详情线路'), findsWidgets);
@@ -140,6 +152,7 @@ void main() {
       ),
     );
     await tester.pump();
+    await scrollPastHero(tester);
 
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(find.textContaining('到达的简介'), findsWidgets);

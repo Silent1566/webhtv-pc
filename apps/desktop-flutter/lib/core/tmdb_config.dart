@@ -18,7 +18,17 @@ library;
 const String tmdbDefaultApiBase = 'https://api.tmdb.org/3';
 const String tmdbDefaultImageHost = 'https://images.tmdb.org';
 const String tmdbDefaultImageBase = 'https://images.tmdb.org/t/p/w342';
-const String tmdbDefaultBackdropBase = 'https://images.tmdb.org/t/p/w780';
+
+/// 后景（详情页全屏背景）默认尺寸。
+///
+/// 用 `w1280` 而不是 `w780`：TMDB 官方后景尺寸只有 `w300/w780/w1280/original`
+/// 四档，`w780` 在 1300+ 宽的窗口里被拉满会明显发虚（用户反馈 2026-10-10：
+/// 「清晰度不够没有选原画吗？」）。实测同一张后景：`w780` 48KB、`w1280` 121KB、
+/// `original` 983KB——`w1280` 在清晰度与流量之间最划算；用户想要更高清可在
+/// 设置里自己改成 `original`。
+const String tmdbDefaultBackdropSize = 'w1280';
+const String tmdbDefaultBackdropBase =
+    'https://images.tmdb.org/t/p/$tmdbDefaultBackdropSize';
 const String tmdbDefaultLanguage = 'zh-CN';
 
 /// 默认不富集 TMDB 的站点规则（`01` §6.2）。
@@ -387,12 +397,20 @@ class TmdbConfig {
     var image = _normalizeImageInput(_trimOr(imageBase, tmdbDefaultImageBase));
     var backdrop = _normalizeImageInput(_trimOr(backdropBase, ''));
     if (backdrop.isEmpty && _isImageHost(image)) {
-      backdrop = _imageBaseOf(image, 'w780');
+      backdrop = _imageBaseOf(image, tmdbDefaultBackdropSize);
     }
     if (_isImageHost(image)) image = _imageBaseOf(image, 'w342');
     backdrop = _trimOr(backdrop, tmdbDefaultBackdropBase);
     if (_isImageHost(backdrop) && !backdrop.contains('/t/p/')) {
-      backdrop = _imageBaseOf(backdrop, 'w780');
+      backdrop = _imageBaseOf(backdrop, tmdbDefaultBackdropSize);
+    }
+    // 存量配置升级：早期默认是 `w780`（仅 780px 宽），全屏铺开必然发虚
+    // （用户反馈 2026-10-10：「清晰度不够没有选原画吗？」）。TMDB 官方后景尺寸
+    // 只有 w300/w780/w1280/original 四档，`w780` 是最容易让人误以为“没选原画”的
+    // 那一档，因此把**官方图床上的 w780 后景**自动升到 w1280；用户显式指定的
+    // 其它尺寸（含 original、w300）与自建图床一律不动。
+    if (backdrop.contains('images.tmdb.org/t/p/w780')) {
+      backdrop = backdrop.replaceFirst('/w780', '/$tmdbDefaultBackdropSize');
     }
 
     // 9/10/11/12/13. 站点规则

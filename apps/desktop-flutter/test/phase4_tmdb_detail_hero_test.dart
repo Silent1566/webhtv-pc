@@ -102,8 +102,8 @@ void main() {
       );
       expect(
         rect.height,
-        greaterThan(340),
-        reason: '默认高度应从 340 提到按视口取值（约 0.52×视口）',
+        height,
+        reason: '默认高度应等于视口高度（满屏背景）',
       );
     });
   });
@@ -179,12 +179,13 @@ void main() {
       );
       expect(
         rect.height,
-        greaterThan(340),
-        reason: 'hero 高度应随视口自适应（大于旧的固定 340）',
+        900,
+        reason: '背景海报要**满屏**（用户反馈 2026-10-10：「我想要全屏的效果」），'
+            '高度应等于视口高度，而不是只占一半',
       );
     });
 
-    testWidgets('正文仍在 hero 之下且可滚动到（不被 hero 挤没）', (tester) async {
+    testWidgets('正文仍在 hero 之下（满屏后从第二屏开始，滚动可达）', (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -204,12 +205,32 @@ void main() {
       final heroRect = tester.getRect(
         find.byKey(const ValueKey('tmdb-backdrop-slideshow')),
       );
-      // 正文在 hero 下方（不重叠）。
-      final info = find.byType(TmdbInfoTable);
-      expect(info, findsOneWidget, reason: '信息表应渲染（正文区块存在）');
+      expect(heroRect.height, 900, reason: 'hero 应满屏');
+
+      // 正文在 hero **之下**：首屏（视口高度）内看不到，必须滚动才可见。
+      // 这正是「背景全屏」的代价与预期——首屏全是背景图。
       expect(
-        tester.getRect(info).top,
-        greaterThanOrEqualTo(heroRect.bottom),
+        find.byType(TmdbInfoTable),
+        findsNothing,
+        reason: 'hero 满屏时正文应在首屏之外（否则说明 hero 没满屏）',
+      );
+      await tester.drag(
+        find.byType(Scrollable).first,
+        const Offset(0, -900),
+      );
+      await tester.pump();
+      expect(
+        find.byType(TmdbInfoTable),
+        findsOneWidget,
+        reason: '向下滚动后应能看到正文（内容没有被 hero 挤没）',
+      );
+      // hero 会随列表一起滚动，因此比较**滚动后**的实时位置。
+      final heroAfter = tester.getRect(
+        find.byKey(const ValueKey('tmdb-backdrop-slideshow')),
+      );
+      expect(
+        tester.getRect(find.byType(TmdbInfoTable)).top,
+        greaterThanOrEqualTo(heroAfter.bottom - 1),
         reason: '正文必须在 hero 之下，不能被 hero 盖住',
       );
     });

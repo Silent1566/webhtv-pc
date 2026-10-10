@@ -1661,6 +1661,51 @@ Windows/macOS 使用平台标准目录。
 `getTopLeft().dy` 比较真实渲染位置。反向验证：还原「不归一身份」与「制作团队挪回
 视频之后」两项，对应用例均如期失败。
 
+### 17.1.7 记住最近使用的站点
+
+用户需求 2026-10-10：「记住用户最好一次使用的站点，重启应用后默认加载最近一次
+使用的，第一次使用才加载排第一个站点」。
+
+落点：`lib/services/ui_preferences_store.dart`（`settings.json` 的 `ui` 段，与
+`tmdb`/`sync` 段并列，各自读改写、互不覆盖）。
+
+- `AppState.selectSite` 把选中的站点 key（空 key 时用名称）写进 `ui.lastSiteKey`；
+  写盘是异步的，失败**不影响**当前会话（内存已生效）；
+- `bootstrap` 恢复配置后，若尚未选中站点则按该 key 找回并选中，否则退回
+  `config.defaultSite()`（首次使用即此分支）；
+- **守卫**：记住的 key 必须仍存在于**当前配置**，否则作废（换了配置/站点被删时
+  必须退回第一个，否则首页必然 `siteUnsupported`）；
+- `_uiPreferences` 声明为**可空**而非 `late final`：单元测试/工具可能不调
+  `bootstrap` 就直接 `importConfig` + `selectSite`（实测 `phase2_search_test.dart`
+  就是这样），用 `late final` 会抛 `LateInitializationError` 把选站点弄崩。
+
+门禁：`test/phase2_last_site_test.dart`（6 例：首次用第一个、选后落盘、重启恢复、
+记住的站点不存在时退回、读改写不破坏其它段、文件损坏降级）。
+
+### 17.1.8 全屏背景与后景清晰度
+
+用户反馈 2026-10-10 两条：
+
+**① 背景海报要全屏**。`TmdbDetailHeader.resolveHeight` 原为「视口 52%，夹
+340~560」，大窗口下只占屏幕一半。现改为**取整个视口高度**，首屏全是背景图，
+正文从第二屏开始，滚动时内容盖上来（渐变遮罩相应下调到 78%~100% 处收深，
+保证底部标题可读；内容底部留 44px 避免贴边）。
+
+**关键坑（踩过）**：`LayoutBuilder` 必须包在 `Column` **外层**。
+`Column` 的子项拿到的是**无界高度**（实测 `maxHeight=Infinity`），放在里面夹不到
+任何东西；调用方用 `SizedBox(height: 400)` 时会 `overflowed by 200 pixels`。
+现由外层 `LayoutBuilder` 取「视口高度」与「可用高度」的较小值。
+
+**② 清晰度不够（问「没选原画吗」）**。根因：后景默认 `w780`（TMDB 官方后景尺寸
+只有 `w300/w780/w1280/original` 四档），全屏铺开必然发虚。实测同一张后景：
+`w780` 48KB、`w1280` 121KB、`original` 983KB。默认改为 **`w1280`**，并把**存量的
+官方 `w780` 后景自动升到 `w1280`**（用户配置里已持久化成 w780，不升级就仍是糊的）。
+只升级「官方图床的 w780」这一档：用户自选的 `original`/`w300`/自建图床一律不动。
+
+门禁：`test/phase4_tmdb_config_test.dart` 新增 3 例（存量 w780 升级、用户自选尺寸
+不被改、自建图床不被改）；`test/phase4_tmdb_detail_hero_test.dart` 改为断言
+hero 高度 == 视口高度，并新增「满屏后正文在首屏之外、滚动可达」。
+
 ### 17.2 页面清单
 
 | 页面 | MVP-A | MVP-B | 完整版 |

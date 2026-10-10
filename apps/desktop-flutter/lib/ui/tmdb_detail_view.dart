@@ -163,6 +163,8 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           //
           // 上半部刻意保留较低不透明度（0.42）：用户要求「用剧集海报/剧照当动态
           // 背景」，遮罩太厚就把背景彻底洗成一片纯色，等于没有背景。
+          // 下半部压到接近不透明：hero 改成**满屏**后，标题/海报落在屏幕底部，
+          // 那里必须够暗才能保证白字可读。
           DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -170,17 +172,19 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
                 end: Alignment.bottomCenter,
                 colors: [
                   theme.colorScheme.surface.withValues(alpha: 0.42),
-                  theme.colorScheme.surface.withValues(alpha: 0.55),
-                  theme.colorScheme.surface.withValues(alpha: 0.82),
+                  theme.colorScheme.surface.withValues(alpha: 0.40),
+                  theme.colorScheme.surface.withValues(alpha: 0.78),
                   theme.colorScheme.surface,
                 ],
-                stops: const [0, 0.35, 0.68, 1],
+                stops: const [0, 0.45, 0.78, 1],
               ),
             ),
           ),
           if (widget.child != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              // 底部留出较多空间：hero 满屏后内容是屏幕最下方那一块，
+              // 贴边会显得被截断（用户截图里内容本来就靠底）。
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 44),
               // 内容贴底对齐：动态背景在上方露出更多画面，
               // 标题/海报靠近信息区，视觉上不会出现「背景里飘着一小块内容」。
               child: Align(
@@ -191,7 +195,10 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           if (TmdbBackdropRotation.shouldRotate(urls.length))
             Positioned(
               right: 16,
-              bottom: 10,
+              // 抬高到内容区之上：满屏 hero 后内容占屏幕底部，
+              // 指示器留在 bottom:10 会压在标题/标签行上。
+              bottom: 12,
+              top: null,
               child: Row(
                 key: const ValueKey('tmdb-backdrop-dots'),
                 children: [
@@ -234,31 +241,55 @@ class TmdbDetailHeader extends StatelessWidget {
   final Widget? statusBar;
   final String? metadataBadge;
 
-  /// 背景高度；为 `null` 时按视口自适应。
-  ///
-  /// 为什么要自适应而不是写死 340：用户反馈详情页「背景海报没有全屏显示」
-  /// （2026-10-09）。固定 340px 在大窗口下只占屏幕一小条，背景完全铺不开；
-  /// 按视口取值（52%，限制在 340~560）后大窗口更有「全屏背景」的观感，
-  /// 小窗口也不会把正文挤没。
+  /// 背景高度；为 `null` 时按视口自适应（见 [resolveHeight]）。
   final double? height;
 
-  /// 实际使用的背景高度。
+  /// 实际使用的背景高度（**仅按视口**）。
+  ///
+  /// **铺满整个视口**（用户反馈 2026-10-10：「背景海报我想要全屏的效果」）。
+  /// 早先是视口 52%（夹 340~560），在大窗口下只占屏幕一半，离「全屏」还有距离。
+  ///
+  /// 为什么取视口高度：详情页是 `ListView`，hero 是它的第一个子项；取视口高度
+  /// 就能「首屏全是背景图」，正文从第二屏开始，滚动时内容盖上来。
+  ///
+  /// 注意：本函数**不知道父级约束**。若调用方把 header 放进有界高度（如
+  /// `SizedBox(height: 400)`，测试与内嵌场景会这么用），需由 [build] 里的
+  /// `LayoutBuilder` 再夹一道，否则内容会溢出（实测 `overflowed by 200 pixels`）。
   static double resolveHeight(BuildContext context) =>
-      (MediaQuery.sizeOf(context).height * 0.52).clamp(340.0, 560.0);
+      MediaQuery.sizeOf(context).height;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      ?statusBar,
-      TmdbBackdropSlideshow(
-        urls: data.backdropUrls,
-        fallbackUrl: data.posterUrl,
-        height: height ?? resolveHeight(context),
-        child: _HeaderContent(data: data, metadataBadge: metadataBadge),
-      ),
-    ],
-  );
+  Widget build(BuildContext context) =>
+      // 在**本 widget 自身**拿到父级约束（而不是在 Column 的子项里）。
+      //
+      // 为什么不能把 LayoutBuilder 放在 Column 里面：`Column` 的子项拿到的是
+      // **无界高度**（实测 `maxHeight=Infinity`），夹不到任何东西；必须包在
+      // Column 外层，才能拿到调用方真正给的约束（如 `SizedBox(height: 400)`）。
+      // 实测：不夹的话在 400px 高的容器里会 `overflowed by 200 pixels`。
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final viewport = height ?? resolveHeight(context);
+          final available = constraints.maxHeight;
+          final resolved = available.isFinite && available < viewport
+              ? available
+              : viewport;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ?statusBar,
+              TmdbBackdropSlideshow(
+                urls: data.backdropUrls,
+                fallbackUrl: data.posterUrl,
+                height: resolved,
+                child: _HeaderContent(
+                  data: data,
+                  metadataBadge: metadataBadge,
+                ),
+              ),
+            ],
+          );
+        },
+      );
 }
 
 /// 详情页附加区块（剧照墙 / 演职人员 / 相关推荐 / 相关视频 / 制作团队）。

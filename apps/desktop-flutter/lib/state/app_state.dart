@@ -47,6 +47,7 @@ import '../services/storage.dart';
 import '../services/sync_client.dart';
 import '../services/sync_server.dart';
 import '../services/tmdb_config_store.dart';
+import '../services/ui_preferences_store.dart';
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_history.dart';
 import '../services/tmdb_identity_service.dart';
@@ -331,6 +332,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   // TMDB 配置落在 `<configDir>/settings.json`（`03` §5.3），**不进配置 JSON**。
 
   late final TmdbConfigStore _tmdbConfigStore;
+
+  /// UI 偏好（最近使用的站点）。在 [bootstrap] 里装配。
+  ///
+  /// 可空而不是 `late final`：单元测试/工具可能**不调 bootstrap** 就直接
+  /// `importConfig` + `selectSite`（实测 `phase2_search_test.dart` 就是这样），
+  /// 用 `late final` 会在 `selectSite` 里抛 `LateInitializationError`。
+  /// 记住站点只是**锦上添花**，它不可用时应安静降级，而不是把选站点弄崩。
+  UiPreferencesStore? _uiPreferences;
   late final TmdbService _tmdbService;
   TmdbIdentityService? _tmdbIdentityService;
   TmdbSeasonService? _tmdbSeasonService;
@@ -460,6 +469,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // TMDB 设置（`03` §5.3）：读取失败不阻塞启动，退回默认配置。
     _tmdbConfigStore = TmdbConfigStore(path: paths.settingsPath, log: log);
     await _tmdbConfigStore.load();
+
+    // UI 偏好（最近使用的站点）：同样不阻塞启动。
+    final uiPreferences = UiPreferencesStore(
+      path: paths.settingsPath,
+      log: log,
+    );
+    await uiPreferences.load();
+    _uiPreferences = uiPreferences;
 
     final openResult = AppDatabase.open(paths.databasePath);
     _database = openResult.database;
@@ -949,7 +966,35 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (selected != null && !_configContainsSite(config, selected)) {
       _selectedSite = null;
     }
+    // 恢复**最近一次使用的站点**（用户需求 2026-10-10）：重启后默认回到它，
+    // 而不是每次都被重置到配置里的第一个站点。
+    //
+    // 三重守卫，避免「恢复出一个不该用的站点」：
+    // - 该 key 必须仍存在于**当前配置**（换了配置就作废，否则首页必然 siteUnsupported）；
+    // - 只在尚未选中时生效（不抢已恢复的 `_selectedSite`）；
+    // - 找不到就退回 `config.defaultSite()`（首次使用即此分支）。
+    if (_selectedSite == null) {
+      final remembered = _siteByKey(config, _uiPreferences?.lastSiteKey ?? '');
+      if (remembered != null) {
+        _selectedSite = remembered;
+        log.info(
+          '恢复上次使用的站点 site=${remembered.key.isEmpty ? remembered.name : remembered.key}',
+          scope: 'site',
+        );
+      }
+    }
     _selectedSite ??= config.defaultSite();
+  }
+
+  /// 按 key（或名称兜底）在当前配置里找站点；找不到返回 `null`。
+  static Site? _siteByKey(AppConfig config, String key) {
+    final target = key.trim();
+    if (target.isEmpty) return null;
+    for (final candidate in config.sites) {
+      if (candidate.hide) continue;
+      if (candidate.key == target || candidate.name == target) return candidate;
+    }
+    return null;
   }
 
   /// 当前配置里是否存在同一个站点（按 key 比对；key 为空时按 name）。
@@ -1229,6 +1274,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 换站点时作废在途详情请求：旧站点的响应不得覆盖新站点的详情（§8.3）。
     _detailRunId++;
     _selectedSite = site;
+    // 记住本次选择：重启后默认回到这个站点（用户需求 2026-10-10）。
+    // 写盘失败不影响当前会话（内存已生效），因此不 await 结果。
+    // `_uiPreferences` 为 null（未 bootstrap）时安静跳过，不让选站点失败。
+    unawaited(
+      _uiPreferences?.rememberSite(
+            site.key.isEmpty ? site.name : site.key,
+          ) ??
+          Future<void>.value(),
+    );
     _categoryResult = null;
     _detailResult = null;
     _detailError = null;

@@ -52,12 +52,12 @@ void main() {
           'https://images.tmdb.org/t/p/w342');
     });
 
-    test('6. backdropBase 为空且 imageBase 是图片主机时推导 w780', () {
+    test('6. backdropBase 为空且 imageBase 是图片主机时推导 w1280', () {
       final config = const TmdbConfig(
         imageBase: 'https://images.tmdb.org/t/p/w500',
         backdropBase: '',
       ).sanitize();
-      expect(config.backdropBase, 'https://images.tmdb.org/t/p/w780');
+      expect(config.backdropBase, 'https://images.tmdb.org/t/p/w1280');
     });
 
     test('7. imageBase 是图片主机时补 /t/p/w342', () {
@@ -75,15 +75,46 @@ void main() {
       );
     });
 
-    test('8. backdropBase 是图片主机但不含 /t/p/ 时补 w780', () {
+    test('8. backdropBase 是图片主机但不含 /t/p/ 时补 w1280', () {
       expect(
         const TmdbConfig(backdropBase: 'https://images.tmdb.org').sanitize().backdropBase,
-        'https://images.tmdb.org/t/p/w780',
+        'https://images.tmdb.org/t/p/w1280',
       );
       // 已含 /t/p/ 时不重复拼接
       expect(
         const TmdbConfig(backdropBase: 'https://images.tmdb.org/t/p/w1280').sanitize().backdropBase,
         'https://images.tmdb.org/t/p/w1280',
+      );
+    });
+
+    test('14. 存量的官方 w780 后景自动升到 w1280（清晰度，用户反馈 2026-10-10）', () {
+      // 早期默认就是 w780，用户配置里已持久化成 w780；不升级的话全屏背景必然发虚。
+      expect(
+        const TmdbConfig(
+          backdropBase: 'https://images.tmdb.org/t/p/w780',
+        ).sanitize().backdropBase,
+        'https://images.tmdb.org/t/p/w1280',
+      );
+    });
+
+    test('14b. 用户显式选定的其它尺寸不被改动（含 original / w300）', () {
+      for (final size in const ['original', 'w300', 'w500']) {
+        expect(
+          TmdbConfig(backdropBase: 'https://images.tmdb.org/t/p/$size')
+              .sanitize()
+              .backdropBase,
+          'https://images.tmdb.org/t/p/$size',
+          reason: '只升级「官方图床的 w780」这一档，用户自选尺寸不得被改',
+        );
+      }
+    });
+
+    test('14c. 自建图床的 w780 不被改动（可能不是 TMDB 尺寸语义）', () {
+      expect(
+        const TmdbConfig(
+          backdropBase: 'https://my.mirror/t/p/w780',
+        ).sanitize().backdropBase,
+        'https://my.mirror/t/p/w780',
       );
     });
 
