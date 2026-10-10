@@ -1571,6 +1571,35 @@ Windows/macOS 使用平台标准目录。
 取值与判定集中在 `lib/core/poster_badge.dart`（纯逻辑），门禁
 `test/phase3_poster_badge_test.dart`（9 例纯逻辑 + 3 例 widget 级）。
 
+### 17.1.5 详情页 hero 与图片占位
+
+**全幅 hero（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有全屏显示」）**。
+原先是「不透明 AppBar + `ListView(padding: all(16))` 里一块 340px 的图」，背景既
+不铺满宽度、也不延伸到顶部，只占屏幕一小条。现改为：
+
+- `Scaffold.extendBodyBehindAppBar: true` + **透明 AppBar**：背景海报铺到屏幕最上边，
+  返回/收藏/刷新图标浮在背景上；
+- 列表**不加整体边距**（`padding: EdgeInsets.zero`），hero 左右铺满；正文各自留 16；
+- hero 高度**按视口自适应**（`TmdbDetailHeader.resolveHeight`：视口的 52%，夹在
+  340~560）：大窗口背景更铺得开，小窗口不把正文挤没；
+- AppBar 滚动时恢复不透明底色（`surfaceTintColor` 用页面底色），避免标题与正文重叠；
+- TMDB 状态条从 hero **上**移到 hero **下**：既不被悬浮图标遮住，也更靠近正文。
+
+**图片占位底色（用户反馈 2026-10-09：「大量地方存在这种无效的阴影或背景色区域太丑了」）**。
+根因是 `PosterImage` 给每个图格铺了一层不透明的 `surfaceContainerHigh`：
+深色主题下它比页面底色亮得多（实测 `#282a2f` 对 `#121318`），图未就绪时就是一块
+突兀的灰块（海报墙、缺失头像、网格里都是它）。现改为 `surfaceContainerLow`
+（实测 `#1a1b21`，仅比页面亮约 8）：占位仍然存在（不退化成「与页面同色的空洞」），
+但不再抢视线。
+
+另一处同类问题是**框比与素材不一致**：海报墙原用同一个 `220×140` **横框**装
+**竖版海报**，`BoxFit.cover` 无从铺满，竖图两侧露出大片底色。现按素材给框比：
+剧照 `16:9`（`220` 宽）、海报 `2:3`（`110` 宽）、人物照片 `2:3`。
+
+门禁：`test/phase4_tmdb_detail_hero_test.dart`（5 例：hero 铺满整宽、
+`extendBodyBehindAppBar` + 透明 AppBar、海报墙 2:3、剧照墙 16:9、占位色不是
+`surfaceContainerHighest`）。
+
 ### 17.2 页面清单
 
 | 页面 | MVP-A | MVP-B | 完整版 |
@@ -2674,6 +2703,24 @@ PC 必须实现的端点（**路径必须与 Android 完全一致**，否则 And
 
 门禁：`test/phase5_sync_refresh_test.dart` 三例（刷新、重启后仍显示已接入、移除转发
 后不再回调）。
+
+**导入成功后询问是否切换（用户反馈 2026-10-09）**：
+
+>「导入站点成功后应该自动切换或者弹出确认框让用户确认是否切换到该配置，
+> 现在还需要用户手动去操作一次」
+
+导入本身**仍然不切换**当前配置（Q10：不静默抢走用户正在用的配置），但导入成功后
+弹确认框，用户一键切过去，不必再回配置页手动点「启用」。两种情形**不弹框**：
+
+- 刚导入的记录已是当前配置（无需切换）；
+- 当前配置本来就指向**同一台设备**（重复导入只是刷新站点，没有可切的东西）。
+
+实现：`SyncState.lastImportRecordId` 暴露刚创建的记录 id；`AndroidSettingsPage._import`
+在成功后弹 `bridge-switch-confirm`，确认才 `activateConfigRecord`。
+「一键重连」（历史项）走同一条路径。
+
+门禁：`test/phase5_sync_ui_test.dart` 三例——弹框且**确认前不切换**、选「稍后再说」
+不切换（保留 Q10）、当前配置已指向该设备时不再弹框。
 
 ### 28.7 安全与隐私
 

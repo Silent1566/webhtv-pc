@@ -1084,7 +1084,18 @@ class _DetailPageState extends State<DetailPage> {
     final tmdbData = tmdb.detailData;
 
     return Scaffold(
+      // 头部是**全幅 hero**（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有
+      // 全屏显示」）：背景海报铺满整宽并延伸到 app bar 之下，app bar 自身透明，
+      // 只把返回/收藏/刷新浮在背景上。内容区不再整体加 16 边距（那样 hero 两侧会
+      // 露出底色，就没有「全屏」可言），改由正文各自留边。
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
+        // 顶部透明：hero 的背景海报能一直铺到屏幕最上边。
+        backgroundColor: Colors.transparent,
+        // 滚动到内容经过 app bar 下方时恢复不透明底色（用页面底色而非主题色
+        // 调），否则标题会与正文文字叠在一起。
+        surfaceTintColor: Theme.of(context).colorScheme.surface,
+        elevation: 0,
         title: Text(vod.vodName),
         leading: IconButton(
           tooltip: '返回',
@@ -1118,17 +1129,28 @@ class _DetailPageState extends State<DetailPage> {
       body: loading && lines.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.zero,
               children: [
                 // 详情错误只在「确实是在拉本页详情且没有可用线路」时提示，
                 // 避免上一个条目的失败信息干扰当前页面（§8.3、§8.4）。
+                // 内容已延伸到 app bar 之下，因此这条提示要让出 app bar 的高度，
+                // 否则会被悬浮的返回/收藏图标压住。
                 if (state.detailError != null && lines.isEmpty)
-                  ErrorBanner(
-                    error: state.detailError!,
-                    onDismiss: state.clearDetailError,
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                      16,
+                      8,
+                    ),
+                    child: ErrorBanner(
+                      error: state.detailError!,
+                      onDismiss: state.clearDetailError,
+                    ),
                   ),
                 // 动态背景头部（`04` §3.1 ①）：用 TMDB 海报/剧照当背景，
                 // 未匹配时回退到来源海报，保证头部不空白。
+                // 高度由组件按视口自适应（见 TmdbDetailHeader.resolveHeight）。
                 TmdbDetailHeader(
                   data: tmdb.detailData ??
                       TmdbDetailData(
@@ -1140,100 +1162,111 @@ class _DetailPageState extends State<DetailPage> {
                         ],
                         rating: 0,
                       ),
-                  statusBar: TmdbStatusBar(
+                ),
+                // 正文统一留 16 边距（hero 不加，才能左右铺满）。
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                    // TMDB 状态条原在 hero 之上（会被悬浮 app bar 遮住），
+                    // 改到 hero 下方：既不与图标重叠，也更靠近正文。
+                    TmdbStatusBar(
+                      state: tmdb,
+                      onConfigure: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TmdbSettingsPage(state: state),
+                        ),
+                      ),
+                      onMatch: _openMatchDialog,
+                      onRematch: _openMatchDialog,
+                      onSelectSeason: _openSeasonDialog,
+                      onRetry: () => state.reloadTmdb(),
+                    ),
+                  const SizedBox(height: 12),
+                  // 信息表（`04` §3.1 ①）：对齐上游 `site/year/area/type/
+                  // director/actor` 的元信息行。**来源字段优先**，缺失处用 TMDB
+                  // 补位值（§3.2「仅补位不覆盖」），因此这里直接读补位后的 `display`
+                  // 与 `tmdbData`。
+                  TmdbInfoTable(
+                    rows: [
+                      ('类型', tmdbData?.genres.join(' / ')),
+                      ('地区', display.vodArea),
+                      ('年份', display.vodYear),
+                      ('时长', tmdbData?.runtimeLabel),
+                      ('季集', tmdbData?.seasonEpisodeLabel),
+                      ('状态', tmdbData?.status),
+                      ('导演', display.vodDirector),
+                      ('演员', display.vodActor),
+                      ('评分', tmdb.ratingText),
+                      ('备注', display.vodRemarks),
+                      ('语言', tmdbData?.languages.join(' / ')),
+                    ],
+                  ),
+                  if (display.vodContent != null &&
+                      display.vodContent!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    // 简介：默认 4 行 + 「展开」（`04` §11 长文本要求）。
+                    _ExpandableOverview(text: display.vodContent!.trim()),
+                  ],
+                  const SizedBox(height: 12),
+                  // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
+                  TmdbSeasonSelector(
                     state: tmdb,
-                    onConfigure: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TmdbSettingsPage(state: state),
+                    onChanged: (season) {
+                      tmdb.selectSeason(season);
+                      unawaited(tmdb.loadEpisodes(generation: tmdb.generation));
+                    },
+                    onSelectManual: _openSeasonDialog,
+                  ),
+                  // 纯 TMDB 详情页入口（`04` §6.1）。
+                  if (tmdb.hasMatch && tmdb.identity != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('tmdb-open-detail'),
+                        onPressed: () => _openTmdbDetail(tmdb.identity!),
+                        icon: const Icon(Icons.movie_outlined, size: 18),
+                        label: const Text('在 TMDB 中查看'),
                       ),
                     ),
-                    onMatch: _openMatchDialog,
-                    onRematch: _openMatchDialog,
-                    onSelectSeason: _openSeasonDialog,
-                    onRetry: () => state.reloadTmdb(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                // 信息表（`04` §3.1 ①）：对齐上游 `site/year/area/type/
-                // director/actor` 的元信息行。**来源字段优先**，缺失处用 TMDB
-                // 补位值（§3.2「仅补位不覆盖」），因此这里直接读补位后的 `display`
-                // 与 `tmdbData`。
-                TmdbInfoTable(
-                  rows: [
-                    ('类型', tmdbData?.genres.join(' / ')),
-                    ('地区', display.vodArea),
-                    ('年份', display.vodYear),
-                    ('时长', tmdbData?.runtimeLabel),
-                    ('季集', tmdbData?.seasonEpisodeLabel),
-                    ('状态', tmdbData?.status),
-                    ('导演', display.vodDirector),
-                    ('演员', display.vodActor),
-                    ('评分', tmdb.ratingText),
-                    ('备注', display.vodRemarks),
-                    ('语言', tmdbData?.languages.join(' / ')),
-                  ],
-                ),
-                if (display.vodContent != null &&
-                    display.vodContent!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  // 简介：默认 4 行 + 「展开」（`04` §11 长文本要求）。
-                  _ExpandableOverview(text: display.vodContent!.trim()),
-                ],
-                const SizedBox(height: 12),
-                // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
-                TmdbSeasonSelector(
-                  state: tmdb,
-                  onChanged: (season) {
-                    tmdb.selectSeason(season);
-                    unawaited(tmdb.loadEpisodes(generation: tmdb.generation));
-                  },
-                  onSelectManual: _openSeasonDialog,
-                ),
-                // 纯 TMDB 详情页入口（`04` §6.1）。
-                if (tmdb.hasMatch && tmdb.identity != null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      key: const ValueKey('tmdb-open-detail'),
-                      onPressed: () => _openTmdbDetail(tmdb.identity!),
-                      icon: const Icon(Icons.movie_outlined, size: 18),
-                      label: const Text('在 TMDB 中查看'),
+                  const Divider(height: 32),
+                  if (loading && lines.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  // `folder` 展开结果：不是单部作品的线路，而是一串**资源条目**
+                  // （百度/夸克/阿里分享链…），点一条即播。
+                  //
+                  // 为什么单独一个分支：网盘聚合站（实测 170 站点里 93 个共用
+                  // `spring.jar`）的详情只能这样打开——把 `folder` 当普通条目
+                  // 调 `ids=` 只会拿到空壳（`vod_name`/`vod_play_url` 均空）。
+                  else if (_isFolderExpansion(result))
+                    _buildFolderEntries(context, vod, result!.list)
+                  else if (lines.isEmpty)
+                    const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
+                  else ...[
+                    // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
+                    // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
+                    TmdbLineSelector(
+                      lines: lines,
+                      selectedFlag: _activeLine(lines).flag,
+                      episodeCounts: _episodeCountsByLine(lines),
+                      onChanged: (line) => _selectLine(line, lines),
                     ),
+                    _buildEpisodes(context, vod, lines),
+                  ],
+                  // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
+                  //
+                  // folder 展开**也要**渲染：被点的 folder 条目本身就是一部作品
+                  // （名称/海报/集数备注齐备），只是它没有线路而已（用户反馈
+                  // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
+                  // `TmdbInfoTable` 自行跳过空值行。
+                  ..._buildTmdbBlocks(context, tmdb),
+                    ],
                   ),
-                const Divider(height: 32),
-                if (loading && lines.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                // `folder` 展开结果：不是单部作品的线路，而是一串**资源条目**
-                // （百度/夸克/阿里分享链…），点一条即播。
-                //
-                // 为什么单独一个分支：网盘聚合站（实测 170 站点里 93 个共用
-                // `spring.jar`）的详情只能这样打开——把 `folder` 当普通条目
-                // 调 `ids=` 只会拿到空壳（`vod_name`/`vod_play_url` 均空）。
-                else if (_isFolderExpansion(result))
-                  _buildFolderEntries(context, vod, result!.list)
-                else if (lines.isEmpty)
-                  const Text('该影片没有可播放的剧集（vod_play_url 为空）。')
-                else ...[
-                  // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
-                  // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
-                  TmdbLineSelector(
-                    lines: lines,
-                    selectedFlag: _activeLine(lines).flag,
-                    episodeCounts: _episodeCountsByLine(lines),
-                    onChanged: (line) => _selectLine(line, lines),
-                  ),
-                  _buildEpisodes(context, vod, lines),
-                ],
-                // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
-                //
-                // folder 展开**也要**渲染：被点的 folder 条目本身就是一部作品
-                // （名称/海报/集数备注齐备），只是它没有线路而已（用户反馈
-                // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
-                // `TmdbInfoTable` 自行跳过空值行。
-                ..._buildTmdbBlocks(context, tmdb),
+                ),
               ],
             ),
     );

@@ -240,6 +240,14 @@ class SyncState extends ChangeNotifier {
   String? _notice;
   SyncMergeStats? _lastStats;
   String? _lastOperation;
+
+  /// 最近一次成功导入桥接站点所创建的配置记录 id（无导入时为 `null`）。
+  ///
+  /// 供 UI 在导入成功后询问用户「是否切换到该配置」：
+  /// 导入本身受 Q10 约束**不**切换当前配置，但用户导入往往就是想用它，
+  /// 让他再去配置页手动点一次「启用」是多余的一步（用户反馈 2026-10-09：
+  /// 「导入站点成功后应该自动切换或者弹出确认框让用户确认是否切换到该配置」）。
+  int? _lastImportRecordId;
   List<AndroidDevice> _devices = const [];
   Map<String, BridgeConversion> _conversions = const {};
   BridgeStage? _stage;
@@ -298,6 +306,9 @@ class SyncState extends ChangeNotifier {
 
   /// 最近一次操作的机器可读摘要（证据落盘与 UI 展示共用）。
   String? get lastOperation => _lastOperation;
+
+  /// 最近一次成功导入桥接站点所创建的配置记录 id；无导入时为 `null`。
+  int? get lastImportRecordId => _lastImportRecordId;
 
   bool get busy => _busy;
   BridgeStage? get stage => _stage;
@@ -686,6 +697,7 @@ class SyncState extends ChangeNotifier {
     _stage = BridgeStage.fetchingConfig;
     _lastError = null;
     _notice = null;
+    _lastImportRecordId = null;
     notifyListeners();
     try {
       final base = normalizeBase(address);
@@ -729,6 +741,9 @@ class SyncState extends ChangeNotifier {
           detail: base,
         );
       }
+      // 供 UI 在导入后询问「是否切换到该配置」（用户反馈 2026-10-09：
+      // 「导入站点成功后应该自动切换或者弹出确认框」）。
+      _lastImportRecordId = recordId;
 
       // 先改内存里的设备历史与白名单，**最后只落一次盘**：
       // `_persist` 是「写 .tmp → 删旧 → rename」，同一流程里连写两次会放大文件锁

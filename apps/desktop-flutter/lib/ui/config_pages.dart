@@ -784,11 +784,68 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
     _address.text = entry.address;
     final device = await _sync.probe(entry.address);
     if (!mounted || device == null) return;
-    await _sync.importSites(device.reachableBase);
+    await _import(device);
   }
 
-  Future<void> _import(AndroidDevice device) =>
-      _sync.importSites(device.reachableBase);
+  /// 导入站点，并在成功后询问是否切换到该配置。
+  ///
+  /// 为什么要有这一步：导入受 Q10 约束**不**切换当前配置（不静默抢走用户正在用的
+  /// 配置是对的），但用户点「导入站点」的意图通常就是「我要用这台设备的站源」。
+  /// 原先导入完就停在原地，用户得自己回配置页再点一次「启用」——多一次无意义的
+  /// 导航（用户反馈 2026-10-09）。现在导入成功后弹确认框，用户一键切换。
+  ///
+  /// 两种情形**不弹框**（避免无意义的打扰）：
+  /// - 刚导入的记录已是当前配置（无需切换）；
+  /// - 当前配置本来就指向**同一台设备**（只是重复导入刷新站点，没有可切的东西）。
+  Future<void> _import(AndroidDevice device) async {
+    final state = widget.state;
+    final sitesBefore = state.configs.length;
+    final ok = await _sync.importSites(device.reachableBase);
+    if (!mounted) return;
+    if (!ok) return;
+
+    final recordId = _sync.lastImportRecordId;
+    if (recordId == null) return;
+
+    final active = state.activeRecord;
+    final sameDeviceActive =
+        active != null && normalizeBase(active.origin) == device.reachableBase;
+    if (active?.id == recordId || sameDeviceActive) return;
+
+    final liveCount = state.configs
+        .where((item) => item.id == recordId)
+        .map((item) => item.liveCount)
+        .firstOrNull;
+    final siteCount = _sync.conversionFor(device.reachableBase)?.siteCount ?? 0;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const ValueKey('bridge-switch-confirm'),
+        title: const Text('已导入站点，是否切换到该配置？'),
+        content: Text(
+          '设备：${device.name}\n'
+          '站点：$siteCount 个'
+          '${liveCount == null || liveCount == 0 ? '' : '，直播源 $liveCount 个'}\n\n'
+          '切换后浏览与直播将改用这台设备的站源。'
+          '${sitesBefore == 0 ? '' : '当前配置不会被删除，可随时在配置页切回。'}',
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('bridge-switch-cancel'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('稍后再说'),
+          ),
+          FilledButton(
+            key: const ValueKey('bridge-switch-confirm-ok'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('切换'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await state.activateConfigRecord(recordId);
+  }
 
   Future<void> _push(SyncPeer peer) async {
     final result = await _sync.pushHistoryTo(peer);

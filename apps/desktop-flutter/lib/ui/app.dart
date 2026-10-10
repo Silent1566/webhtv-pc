@@ -1004,6 +1004,16 @@ Map<ShortcutActivator, VoidCallback> buildPlayerShortcuts({
 }
 
 /// 图片加载：站点图床可能失效，用占位符而不是抛错。
+/// 图片占位底色。
+///
+/// 刻意选 `surfaceContainerLow`（紧贴页面底色）而**不是** `surfaceContainerHigh`：
+/// 后者在深色主题下比背景亮得多（≈#333 对 ≈#111），图上不来时就是一块突兀的
+/// 灰块（用户反馈 2026-10-09：「大量地方存在这种无效的阴影或背景色区域太丑了」，
+/// 截图里海报墙、缺失头像甚至网格里都是这种灰块）。换成低一档的容器色后，
+/// 占位仍然存在（不会退化成「与页面同色的空洞」），但不会再抢视线。
+Color _posterPlaceholderColor(BuildContext context) =>
+    Theme.of(context).colorScheme.surfaceContainerLow;
+
 class PosterImage extends StatelessWidget {
   const PosterImage({
     super.key,
@@ -1031,7 +1041,7 @@ class PosterImage extends StatelessWidget {
     return Container(
       width: width,
       height: height,
-      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      color: _posterPlaceholderColor(context),
       alignment: Alignment.center,
       child: target.isEmpty
           ? _placeholderIcon(context)

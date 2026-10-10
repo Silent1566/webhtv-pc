@@ -148,9 +148,10 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
             child: current == null
                 ? SizedBox.expand(
                     key: const ValueKey('tmdb-backdrop-empty'),
-                    child: ColoredBox(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                    ),
+                    // 无背景图时用**页面底色**而不是 `surfaceContainerHighest`：
+                    // 后者会在头部留一大块比页面亮得多的灰底（用户反馈
+                    // 「无效的背景色区域太丑」）。页面底色下直接与内容融为一体。
+                    child: ColoredBox(color: theme.colorScheme.surface),
                   )
                 : SizedBox.expand(
                     key: ValueKey('tmdb-backdrop-$index'),
@@ -225,13 +226,24 @@ class TmdbDetailHeader extends StatelessWidget {
     required this.data,
     this.statusBar,
     this.metadataBadge,
-    this.height = 340,
+    this.height,
   });
 
   final TmdbDetailData data;
   final Widget? statusBar;
   final String? metadataBadge;
-  final double height;
+
+  /// 背景高度；为 `null` 时按视口自适应。
+  ///
+  /// 为什么要自适应而不是写死 340：用户反馈详情页「背景海报没有全屏显示」
+  /// （2026-10-09）。固定 340px 在大窗口下只占屏幕一小条，背景完全铺不开；
+  /// 按视口取值（52%，限制在 340~560）后大窗口更有「全屏背景」的观感，
+  /// 小窗口也不会把正文挤没。
+  final double? height;
+
+  /// 实际使用的背景高度。
+  static double resolveHeight(BuildContext context) =>
+      (MediaQuery.sizeOf(context).height * 0.52).clamp(340.0, 560.0);
 
   @override
   Widget build(BuildContext context) => Column(
@@ -241,7 +253,7 @@ class TmdbDetailHeader extends StatelessWidget {
       TmdbBackdropSlideshow(
         urls: data.backdropUrls,
         fallbackUrl: data.posterUrl,
-        height: height,
+        height: height ?? resolveHeight(context),
         child: _HeaderContent(data: data, metadataBadge: metadataBadge),
       ),
     ],
@@ -295,6 +307,9 @@ class TmdbDetailSections extends StatelessWidget {
             urls: data.posterUrls,
             title: data.title,
             keyPrefix: 'tmdb-poster',
+            // 海报是 2:3 竖图：用窄框装竖图，避免横框里两侧露灰底。
+            itemWidth: 110,
+            aspectRatio: 2 / 3,
           ),
           const SizedBox(height: 16),
         ],
@@ -1431,6 +1446,8 @@ class _PhotoWall extends StatelessWidget {
     required this.urls,
     required this.title,
     this.keyPrefix = 'tmdb-photo',
+    this.itemWidth = 220,
+    this.aspectRatio = 16 / 9,
   });
 
   final List<String> urls;
@@ -1442,10 +1459,21 @@ class _PhotoWall extends StatelessWidget {
   /// 点击定位也会歧义。因此由调用方给出各自前缀。
   final String keyPrefix;
 
+  /// 单项宽度（高度由 [aspectRatio] 推出）。
+  final double itemWidth;
+
+  /// 单项宽高比。
+  ///
+  /// **必须按素材类型给**：剧照是 16:9 横图，海报是 2:3 竖图。早期实现对两者
+  /// 都用同一个 220×140 的横框，竖版海报在横框里被缩成一条窄图居中，两侧露出
+  /// 大片灰底——正是用户反馈「无效的背景色区域太丑」的来源之一
+  /// （2026-10-09）。现在框比与素材一致，`BoxFit.cover` 就能恰好铺满。
+  final double aspectRatio;
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 140,
+      height: itemWidth / aspectRatio,
       child: ListView.separated(
         key: const ValueKey('tmdb-photo-wall'),
         scrollDirection: Axis.horizontal,
@@ -1461,7 +1489,10 @@ class _PhotoWall extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(6),
-            child: SizedBox(width: 220, child: PosterImage(url: urls[index])),
+            child: SizedBox(
+              width: itemWidth,
+              child: PosterImage(url: urls[index], fit: BoxFit.cover),
+            ),
           ),
         ),
       ),
@@ -2133,7 +2164,7 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 140,
+            height: 150,
             child: ListView.separated(
               key: const ValueKey('tmdb-person-photos'),
               scrollDirection: Axis.horizontal,
@@ -2156,8 +2187,10 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: SizedBox(
+                    // 人物照片是 2:3 竖图：框比与素材一致，不让两侧露灰底。
                     width: 100,
-                    child: PosterImage(url: _photos[index]),
+                    height: 150,
+                    child: PosterImage(url: _photos[index], fit: BoxFit.cover),
                   ),
                 ),
               ),

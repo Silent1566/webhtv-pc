@@ -210,6 +210,16 @@ void main() {
     await tapIo(tester, find.text('接入设备'));
   }
 
+  /// 关掉导入成功后弹出的「是否切换到该配置」确认框（选「稍后再说」）。
+  ///
+  /// 只关心落库结果的用例用得上；关心切换行为的用例自行断言对话框内容。
+  Future<void> dismissSwitchDialog(WidgetTester tester) async {
+    final cancel = find.byKey(const ValueKey('bridge-switch-cancel'));
+    if (cancel.evaluate().isEmpty) return;
+    await tester.tap(cancel);
+    await settleIo(tester, rounds: 2);
+  }
+
   group('页面与默认值（design/02 §5）', () {
     testWidgets('页面标题与入口 key 存在（G10 符号）', (tester) async {
       await openPage(tester);
@@ -323,6 +333,7 @@ void main() {
       await tapIo(tester, find.byKey(const ValueKey('android-import')));
 
       expect(bridge.liveFetchCalls, 1, reason: '导入时应尝试取直播源');
+      await dismissSwitchDialog(tester);
 
       final record = state.database!.listConfigs().single;
       expect(
@@ -345,11 +356,97 @@ void main() {
       await openPage(tester);
       await addDevice(tester);
       await tapIo(tester, find.byKey(const ValueKey('android-import')));
+      // 导入后会弹「是否切换配置」确认框（见下一个 group）；本用例只看落库结果。
+      await dismissSwitchDialog(tester);
 
       final record = state.database!.listConfigs().single;
       expect(record.siteCount, 3, reason: '没有直播源不得影响站点导入');
       expect(record.liveCount, 0);
       expect(state.syncState.lastError, isNull);
+    });
+
+    // ------------------------------------------------------------------
+    // 导入后询问「是否切换到该配置」（用户反馈 2026-10-09：
+    // 「导入站点成功后应该自动切换或者弹出确认框让用户确认是否切换到该配置，
+    //   现在还需要用户手动去操作一次」）
+    // ------------------------------------------------------------------
+    testWidgets('导入成功后弹确认框；确认才切换，且真的切过去了', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+
+      // 先弹确认框，而不是静默切换（Q10：导入本身不切换）。
+      expect(
+        find.byKey(const ValueKey('bridge-switch-confirm')),
+        findsOneWidget,
+        reason: '导入成功后必须弹出「是否切换到该配置」确认框',
+      );
+      final recordId = state.syncState.lastImportRecordId;
+      expect(recordId, isNotNull, reason: '导入应记录新建的配置记录 id');
+      expect(
+        state.activeRecord?.id,
+        isNot(recordId),
+        reason: '弹框期间不得已经切换（切换必须发生在用户确认之后）',
+      );
+
+      await tapIo(
+        tester,
+        find.byKey(const ValueKey('bridge-switch-confirm-ok')),
+      );
+
+      expect(
+        state.activeRecord?.id,
+        recordId,
+        reason: '用户确认后必须真的切到刚导入的配置',
+      );
+    });
+
+    testWidgets('导入确认框选「稍后再说」→ 不切换（保留 Q10 语义）', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+
+      final before = state.activeRecord?.id;
+      await tapIo(tester, find.byKey(const ValueKey('bridge-switch-cancel')));
+
+      expect(
+        state.activeRecord?.id,
+        before,
+        reason: '取消后当前配置必须保持不变（导入本身不切换）',
+      );
+      expect(
+        find.byKey(const ValueKey('bridge-switch-confirm')),
+        findsNothing,
+        reason: '确认框应已关闭',
+      );
+    });
+
+    testWidgets('当前配置已指向同一台设备时不再弹框（不打扰无意义的确认）', (tester) async {
+      await openPage(tester);
+      await addDevice(tester);
+      // 第一次导入 → 弹框 → 确认切换。
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+      await tapIo(
+        tester,
+        find.byKey(const ValueKey('bridge-switch-confirm-ok')),
+      );
+      final active = state.activeRecord?.id;
+      expect(active, isNotNull, reason: '前置条件：首次导入并切换成功');
+
+      // 再导入一次（同一设备）：当前配置已指向另一条同源记录，无真正可切的东西，
+      // 不应再弹框（否则每次刷新站点都多一次确认）。
+      await tapIo(tester, find.byKey(const ValueKey('android-import')));
+
+      expect(
+        find.byKey(const ValueKey('bridge-switch-confirm')),
+        findsNothing,
+        reason: '当前配置已指向该设备时不应再弹切换确认',
+      );
+      expect(
+        state.activeRecord?.id,
+        active,
+        reason: '未弹框则当前配置应保持不变',
+      );
     });
 
     testWidgets('主机修正必须用户可见（P2 + G10 的 bridge-host- 符号）', (tester) async {
@@ -366,8 +463,7 @@ void main() {
       await tapIo(tester, find.byKey(const ValueKey('android-import')));
 
       expect(find.text('站点地址已修正'), findsOneWidget);
-      expect(find.byKey(const ValueKey('bridge-host-csp_0')), findsOneWidget);
-      expect(pageText(tester), contains('127.0.0.1:9978 → 192.168.50.9:9978'));
+      expect(find.byKey(const ValueKey('bridge-host-csp_0')), findsOneWidget);      expect(pageText(tester), contains('127.0.0.1:9978 → 192.168.50.9:9978'));
     });
   });
 
