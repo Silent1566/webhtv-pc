@@ -1692,11 +1692,25 @@ Windows/macOS 使用平台标准目录。
 `(mediaType, tmdbId)` 去重（同一作品可能既在 `cast` 又在 `crew`）、无作品的选项
 不出现（避免选了没结果）、交集为空时返回空列表（UI 显示空态）。
 
-门禁：`test/phase4_tmdb_crew_and_person_filter_test.dart`（24 例）——身份归一、
-合并/排序/上限、筛选选项与计数、交集与空交集、去重、以及**用生产组件本身**
-（`PersonWorkFilterRow`）验证 chip 渲染与点击回调；区块顺序用
-`getTopLeft().dy` 比较真实渲染位置。反向验证：还原「不归一身份」与「制作团队挪回
-视频之后」两项，对应用例均如期失败。
+**作品默认倒序**（用户需求 2026-10-13）。三种视图（全部 / 按部门 / 按类型）都按
+上映日期倒序，新作品在前。排序键是 `TmdbPersonWork.sortDate`——`release_date`
+（电影）/ `first_air_date`（剧集）的原始 ISO 字符串，由
+`TmdbPersonWork.listFrom` 从原始 JSON 直接取（`TmdbItem` 只留 `年份 · 评分`，
+拿不到月日）。实现要点（`PersonWorkFilters.sortByDateDesc`）：
+
+- ISO-8601 串的字典序即时间序，不解析 `DateTime`，省一次解析也免时区/DST 干扰。
+- 空日期是字典序最小值，倒序后落**末尾**；同为空时用原始下标做第二关键字，
+  保持 TMDB 返回顺序（Dart `List.sort` 不稳定，不能指望它自己保住）。
+- 比上游 `TmdbService.sortDate` 更细：上游只从 subtitle 提年份串比较，同一年的
+  作品顺序是随机的；这里同年内还比月日。
+
+门禁：`test/phase4_tmdb_crew_and_person_filter_test.dart`（28 例）——身份归一、
+合并/排序/上限、筛选选项与计数、交集与空交集、去重、作品倒序（同年比月日、
+筛选后仍倒序、无日期排末尾）、以及**用生产组件本身**（`PersonWorkFilterRow` /
+`TmdbPersonPage`）验证 chip 渲染、点击回调与作品真实渲染顺序；区块顺序用
+`getTopLeft()` 的 `(dy, dx)` 比较真实渲染位置（网格行优先）。
+`test/phase4_tmdb_detail_model_test.dart` 另守 `sortDate` 的取值来源。
+反向验证：还原「不归一身份」与「制作团队挪回视频之后」两项，对应用例均如期失败。
 
 ### 17.1.7 记住最近使用的站点
 

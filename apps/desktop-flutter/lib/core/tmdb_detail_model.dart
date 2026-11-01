@@ -897,6 +897,7 @@ class TmdbPersonWork {
     this.job = '',
     this.department = '',
     this.episodeCount = 0,
+    this.sortDate = '',
   });
 
   final TmdbItem item;
@@ -908,6 +909,14 @@ class TmdbPersonWork {
   final String job;
   final String department;
   final int episodeCount;
+
+  /// 上映（`release_date`）/ 首播（`first_air_date`）日期，形如 `2019-11-20`；
+  /// TMDB 未提供时为空串。
+  ///
+  /// 为什么单独存：`TmdbItem.subtitle` 只保留「年份 · 评分」，同年内无法分先后；
+  /// 人物页要按**完整日期**倒序（用户反馈「人员介绍页的作品默认应该倒序排列」），
+  /// 故保留原始 ISO 日期串——ISO 串的字典序即时间序，比较无需解析。
+  final String sortDate;
 
   bool get isCast => character.isNotEmpty || department == 'Acting';
 
@@ -950,6 +959,13 @@ class TmdbPersonWork {
           job: tmdbFirstNonEmpty([map['job']]),
           department: tmdbFirstNonEmpty([map['department']]),
           episodeCount: tmdbInt(map['episode_count']),
+          // 电影取 `release_date`、剧集取 `first_air_date`（与
+          // `TmdbItem.fromSearchResult` 取 subtitle 年份的口径一致），另一个兜底。
+          sortDate: tmdbFirstNonEmpty([
+            item.isMovie ? map['release_date'] : map['first_air_date'],
+            map['release_date'],
+            map['first_air_date'],
+          ]),
         ),
       );
     }

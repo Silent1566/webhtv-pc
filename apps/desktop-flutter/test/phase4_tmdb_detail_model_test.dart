@@ -482,5 +482,39 @@ void main() {
       expect(works[1].subtitle, contains('Director'));
       expect(works[1].isCast, isFalse);
     });
+
+    test('sortDate 取完整上映/首播日期（人物页倒序排序键）', () {
+      final works = TmdbPersonWork.listFrom(
+        [
+          {
+            'id': 550,
+            'media_type': 'movie',
+            'title': '电影甲',
+            'release_date': '2019-10-15',
+          },
+          {
+            'id': 1399,
+            'media_type': 'tv',
+            'name': '剧集甲',
+            'first_air_date': '2024-03-08',
+          },
+          {'id': 1398, 'media_type': 'tv', 'name': '无日期剧集'},
+          // 电影缺 release_date 时回退 first_air_date，反之亦然。
+          {
+            'id': 551,
+            'media_type': 'movie',
+            'title': '电影乙',
+            'first_air_date': '2021-05-01',
+          },
+        ],
+        imageBase: _imageBase,
+        backdropBase: _backdropBase,
+      );
+      expect(
+        works.map((w) => w.sortDate).toList(),
+        ['2019-10-15', '2024-03-08', '', '2021-05-01'],
+        reason: 'subtitle 只留年份（同年无法分先后），故必须单独保留 ISO 日期',
+      );
+    });
   });
 }

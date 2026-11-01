@@ -118,10 +118,40 @@ class PersonWorkFilters {
     }
 
     return PersonWorkFilters._(
-      all: all.values.toList(growable: false),
-      departmentWorks: byDepartment,
-      mediaWorks: byMedia,
+      all: sortByDateDesc(all.values),
+      departmentWorks: {
+        for (final entry in byDepartment.entries)
+          entry.key: sortByDateDesc(entry.value),
+      },
+      mediaWorks: {
+        for (final entry in byMedia.entries)
+          entry.key: sortByDateDesc(entry.value),
+      },
     );
+  }
+
+  /// 按上映/首播日期**倒序**（新 → 旧）排列，日期相同或缺失时保持原有顺序。
+  ///
+  /// 用户反馈 2026-10-13：「人员介绍页的作品默认应该倒序排列」。上游
+  /// `TmdbService` 用 `.sorted(Comparator.comparing(this::sortDate).reversed())`，
+  /// 但它只比较 subtitle 里的年份串；这里比较 [TmdbPersonWork.sortDate] 的完整
+  /// ISO 日期，同年内也能分出先后（用户要求比上游更细）。
+  ///
+  /// 两个细节：
+  /// - ISO-8601 日期串（`2019-11-20`）的字典序即时间序，直接比字符串即可，
+  ///   不必解析成 `DateTime`（也不为一份排序引入时区/容错分支）；
+  /// - 空日期是字典序最小值，倒序后自然落到**末尾**（无日期的排最后），
+  ///   且 Dart 的 `List.sort` 不保证稳定——用原始下标当第二关键字，
+  ///   让「日期相同 / 都没有日期」的条目保持 TMDB 返回顺序。
+  static List<TmdbPersonWork> sortByDateDesc(Iterable<TmdbPersonWork> works) {
+    final indexed = <(int, TmdbPersonWork)>[
+      for (final (index, work) in works.indexed) (index, work),
+    ];
+    indexed.sort((a, b) {
+      final byDate = b.$2.sortDate.compareTo(a.$2.sortDate);
+      return byDate != 0 ? byDate : a.$1.compareTo(b.$1);
+    });
+    return [for (final entry in indexed) entry.$2];
   }
 
   /// 部门选项（含「全部部门」，计数为全部作品数；无作品的选项不出现）。

@@ -13,11 +13,17 @@
 ///    选项带计数，取交集。
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/person_work_filters.dart';
+import 'package:webhtv_pc/core/tmdb_config.dart';
+import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
 
@@ -37,12 +43,30 @@ TmdbPersonWork _work(
   String character = '',
   String job = '',
   String department = '',
+  String sortDate = '',
 }) => TmdbPersonWork(
   item: TmdbItem(tmdbId: id, mediaType: type, title: title),
   character: character,
   job: job,
   department: department,
+  sortDate: sortDate,
 );
+
+/// 只回答 `/person/{id}` 的假客户端（人物页只发这一个请求）。
+class _PersonClient extends http.BaseClient {
+  _PersonClient(this.body);
+
+  final Map<String, Object?> body;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final text = jsonEncode(body);
+    return http.StreamedResponse(
+      Stream<List<int>>.value(utf8.encode(text)),
+      200,
+    );
+  }
+}
 
 void main() {
   group('制作团队身份归一（对齐默影视 creatorJob）', () {
@@ -450,6 +474,144 @@ void main() {
         selectedText.style?.color,
         isNot(unselectedText.style?.color),
         reason: '选中项应与未选中项视觉可辨（主色 vs onSurfaceVariant）',
+      );
+    });
+  });
+
+  group('人物页作品默认倒序（用户反馈 2026-10-13）', () {
+    test('按完整上映/首播日期倒序，同年内也比月日（比上游只比年份更细）', () {
+      final filters = PersonWorkFilters.from(
+        [
+          _work(1, TmdbMediaType.movie, title: '旧片', sortDate: '2016-07-01'),
+          _work(2, TmdbMediaType.tv, title: '新剧', sortDate: '2025-02-14'),
+          // 与「旧片」同年，但月日更晚：只比年份的上游实现排不出来。
+          _work(3, TmdbMediaType.movie, title: '同年后片', sortDate: '2016-12-25'),
+        ],
+        [
+          _work(
+            4,
+            TmdbMediaType.movie,
+            title: '中间片',
+            job: 'Director',
+            department: 'Directing',
+            sortDate: '2019-10-15',
+          ),
+        ],
+      );
+      expect(
+        filters.all.map((w) => w.item.title).toList(),
+        ['新剧', '中间片', '同年后片', '旧片'],
+        reason: '新 → 旧；2016-12-25 必须排在 2016-07-01 之前',
+      );
+    });
+
+    test('筛选后的任一维度同样倒序（切了 chip 顺序不能乱）', () {
+      final filters = PersonWorkFilters.from(
+        [
+          _work(1, TmdbMediaType.movie, title: '电影旧', sortDate: '2016-07-01'),
+          _work(2, TmdbMediaType.movie, title: '电影新', sortDate: '2025-02-14'),
+          _work(3, TmdbMediaType.tv, title: '剧集', sortDate: '2020-01-01'),
+        ],
+        [_work(4, TmdbMediaType.movie, title: '导演作品', job: 'Director', department: 'Directing', sortDate: '2018-05-05')],
+      );
+      expect(
+        filters.filter(media: PersonWorkMedia.movie).map((w) => w.item.title),
+        ['电影新', '导演作品', '电影旧'],
+        reason: '只看电影时仍是日期倒序（导演作品是 2018）',
+      );
+      expect(
+        filters.filter(department: PersonWorkDepartment.cast).map((w) => w.item.title),
+        ['电影新', '剧集', '电影旧'],
+      );
+    });
+
+    test('没有日期的作品排在最后，且保持原有顺序（不因排序丢条目）', () {
+      final filters = PersonWorkFilters.from(
+        [
+          _work(1, TmdbMediaType.movie, title: '无日期甲'),
+          _work(2, TmdbMediaType.movie, title: '有日期', sortDate: '2024-01-01'),
+          _work(3, TmdbMediaType.movie, title: '无日期乙'),
+        ],
+        const [],
+      );
+      expect(
+        filters.all.map((w) => w.item.title).toList(),
+        ['有日期', '无日期甲', '无日期乙'],
+        reason: '空日期是字典序最小值，倒序后落末尾；同为空时保持 TMDB 返回顺序',
+      );
+    });
+
+    testWidgets('人物页真的按倒序渲染（用生产 TmdbPersonPage，不是复刻）', (tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final service = TmdbService(
+        config: () => const TmdbConfig(apiKey: 'k'),
+        client: _PersonClient({
+          'id': 1,
+          'name': '示例演员',
+          'combined_credits': {
+            'cast': [
+              {
+                'id': 11,
+                'media_type': 'movie',
+                'title': '老电影',
+                'release_date': '2016-07-01',
+                'character': '主角',
+              },
+              {
+                'id': 12,
+                'media_type': 'tv',
+                'name': '新剧集',
+                'first_air_date': '2025-02-14',
+                'character': '配角',
+              },
+              {
+                'id': 13,
+                'media_type': 'movie',
+                'title': '同年后片',
+                'release_date': '2016-12-25',
+                'character': '客串',
+              },
+            ],
+            'crew': const [],
+          },
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(Brightness.dark),
+          // TmdbPersonPage 自带 Scaffold，必须是 home 的直接子树（外面再套滚动视图
+          // 会让 Scaffold 拿到无限高约束而布局失败）。
+          home: TmdbPersonPage(
+            service: service,
+            person: const TmdbPerson(personId: 1, name: '示例演员'),
+          ),
+        ),
+      );
+      // 首帧是 loading，_load() 走 postFrameCallback，需要把 Future 跑完。
+      await tester.pumpAndSettle();
+
+      // 作品卡 key 是 'tmdb-person-work-<identity.key>'，identity.key 形如 'movie:11'。
+      // 网格行优先布局，故 (dy, dx) 字典序就是屏幕上的先后顺序。
+      const keys = ['movie:11', 'tv:12', 'movie:13'];
+      final positioned = [
+        for (final key in keys)
+          (
+            key,
+            tester.getTopLeft(find.byKey(ValueKey('tmdb-person-work-$key'))),
+          ),
+      ]..sort((a, b) {
+          final byRow = a.$2.dy.compareTo(b.$2.dy);
+          return byRow != 0 ? byRow : a.$2.dx.compareTo(b.$2.dx);
+        });
+
+      expect(
+        positioned.map((entry) => entry.$1).toList(),
+        ['tv:12', 'movie:13', 'movie:11'],
+        reason: '新剧集(2025-02-14) → 同年后片(2016-12-25) → 老电影(2016-07-01)',
       );
     });
   });

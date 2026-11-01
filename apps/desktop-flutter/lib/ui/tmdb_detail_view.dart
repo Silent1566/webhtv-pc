@@ -2488,7 +2488,12 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
         backdropBase: config.backdropBase,
         cast: false,
       );
-      final works = <TmdbPersonWork>[...castWorks, ...crewWorks];
+      // 作品默认按上映/首播日期倒序（用户反馈「人员介绍页的作品默认应该倒序
+      // 排列」）；筛选器的每个维度也各自有序，故这里只影响 _works 本身。
+      final works = PersonWorkFilters.sortByDateDesc(<TmdbPersonWork>[
+        ...castWorks,
+        ...crewWorks,
+      ]);
       setState(() {
         _detail = detail;
         _photos = TmdbImageSelector.profiles(
