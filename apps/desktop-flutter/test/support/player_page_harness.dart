@@ -19,8 +19,8 @@
 /// 浮层/屏显/菜单都能被真实交互驱动（探针实测：`PlayerPage=1 AppBar=1 exc=null`）。
 ///
 /// **绝不用 `pumpAndSettle`**：加载态渲染 `LoadingBlock`（内含常驻
-/// `CircularProgressIndicator`），且 `PlayerController.open` 起了 20 秒重试定时器
-/// （`player_controller.dart:583`），`transientCallbackCount` 恒 ≥1
+/// `CircularProgressIndicator`），且 `PlayerController.open` 起了 180 秒加载超时定时器
+/// （`player_controller.dart:830`），`transientCallbackCount` 恒 ≥1
 /// （探针实测一路推进到 25 秒仍为 1），`pumpAndSettle` 必然超时。
 library;
 
@@ -90,7 +90,7 @@ void installMediaKitMocks(WidgetTester tester) {
 ///
 /// 默认 8×250ms：足够让 `postFrameCallback` 里的 `_touchControls()` 与
 /// `_load()` 跑起来、让 3 秒自动隐藏定时器到期（需要时传更大的 `times`），
-/// 又不会触发 20 秒重试。
+/// 又不会触发 180 秒加载超时。
 Future<void> settlePlayerPage(
   WidgetTester tester, {
   Duration step = const Duration(milliseconds: 250),

@@ -126,8 +126,9 @@ V1 与 V2 **同时变红**，并打印套件自带的提示：
 
 `PlayerPage` 的加载态常驻 `LoadingBlock`（内含 `CircularProgressIndicator`），
 `transientCallbackCount` **恒 ≥1**（实测推进到 25 秒仍为 1）；同时
-`PlayerController.open` 会起一个 20 秒重试定时器
-（`lib/ui/player_controller.dart:583`）。
+`PlayerController.open` 起播时会挂一个 180 秒加载超时
+（`lib/ui/player_controller.dart:830` 的 `loadCompleter.future.timeout`，
+预算来自同文件 `:30` 的 `playerLoadTimeout`）。
 
 因此本套件用**有界多帧推进**代替：
 

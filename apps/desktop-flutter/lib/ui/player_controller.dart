@@ -21,6 +21,14 @@ import '../core/protocol.dart';
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
 
+/// 起播加载超时的默认预算（180 秒）。
+///
+/// 与站点请求预算 `siteRequestTimeout`（`lib/core/http_api.dart:748`）对齐：
+/// 网盘点播是 GB 级**整文件**流，起播前还要经过解析接口、代理隧道与上游首字节，
+/// 20 秒会把「慢但真能播」的情况误判成超时（§10.4 只约束「重试一次」，
+/// 不约束单次等待时长）。
+const Duration playerLoadTimeout = Duration(seconds: 180);
+
 /// 播放错误分类（§10.4）。
 enum PlayerFailureKind {
   /// 403/404：链接失效，建议换线路。
@@ -757,7 +765,7 @@ class PlayerController extends ChangeNotifier {
   Future<PlayerLoadOutcome> open(
     String url, {
     Map<String, String> headers = const {},
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = playerLoadTimeout,
     Duration firstFrameTimeout = const Duration(seconds: 5),
     bool awaitFirstFrame = true,
     PlaybackDiagnosticsBuilder? diagnosticsBuilder,
@@ -925,7 +933,7 @@ class PlayerController extends ChangeNotifier {
   Future<PlayerLoadOutcome> openWithRetry(
     String url, {
     Map<String, String> headers = const {},
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = playerLoadTimeout,
     String? siteKey,
     String? flag,
     String? episodeName,

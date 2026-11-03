@@ -687,7 +687,7 @@ void main() {
         reason: '「更多」按钮本身不得删除（集成测试按此 tooltip 定位）',
       );
       // 不能用 \`pumpAndSettle\`：加载态有常驻 \`CircularProgressIndicator\`、
-      // 控制器还有 20 秒重试定时器，\`transientCallbackCount\` 恒 ≥1
+      // 控制器还有 180 秒加载超时定时器，\`transientCallbackCount\` 恒 ≥1
       // （\`test/support/player_page_harness.dart\` 文件头注释）。
       await tester.tap(find.byTooltip('更多'));
       await settlePlayerPage(tester, times: 4);
