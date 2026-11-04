@@ -1,7 +1,9 @@
 # Phase 11 逆向分析的产物：仅本地留存，不入库
-# 报告含第三方二进制的反汇编结论与站点样本信息；交付总结含 dex 路线的实测细节。
+# 报告含第三方二进制的反汇编结论与站点样本信息；交付总结与实现指导含
+# dex 路线的实测细节（入口类位置、依赖闭包、站点样本）。
 docs/reference/misatv-borrowings.md
 docs/phase11-delivery-summary.md
+docs/reference/p1-2-dex-implementation-guide.md
 
 # Build outputs
 build/
