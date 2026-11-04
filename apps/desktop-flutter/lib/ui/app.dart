@@ -1581,10 +1581,22 @@ class _GroupChip extends StatelessWidget {
 
 /// 统一错误提示条（§10.4、§17.3 错误提示）。
 class ErrorBanner extends StatelessWidget {
-  const ErrorBanner({super.key, required this.error, this.onDismiss});
+  const ErrorBanner({
+    super.key,
+    required this.error,
+    this.onDismiss,
+    this.action,
+  });
 
   final AppError error;
   final VoidCallback? onDismiss;
+
+  /// 错误信息里那条提示所对应的**动作**（可选）。
+  ///
+  /// 为什么放在这里而不是各页面自拼一条：错误文案里写着「请刷新重试或换源」，
+  /// 那个「换源」在界面上本不存在——提示必须能就地被执行，否则等于空话。
+  /// 默认 `null`，既有的两个调用点因此完全不渲染任何额外内容。
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -1627,6 +1639,11 @@ class ErrorBanner extends StatelessWidget {
                         .withValues(alpha: 0.72),
                   ),
                 ),
+                // 动作排在错误码之后：先把「错在哪」说完，再给「现在做什么」。
+                if (action != null) ...[
+                  const SizedBox(height: 4),
+                  action!,
+                ],
               ],
             ),
           ),

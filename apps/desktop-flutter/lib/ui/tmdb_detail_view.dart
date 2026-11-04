@@ -39,6 +39,7 @@ import '../services/tmdb_service.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
 import 'scroll_behavior.dart';
+import 'source_field.dart';
 import 'tokens.dart';
 import 'tmdb_widgets.dart'
     show TmdbLoadPhase, TmdbVideoTile, SeasonChipStrip;
@@ -553,6 +554,9 @@ class TmdbLineSelector extends StatelessWidget {
     this.episodeCounts = const {},
     this.onChanged,
     this.recentFlag = '',
+    this.externalOrigins = const <String, String>{},
+    this.externalStatus = const <String, SourceStatus>{},
+    this.onSwapSource,
   });
 
   /// 全部线路（按详情页顺序）。
@@ -572,6 +576,26 @@ class TmdbLineSelector extends StatelessWidget {
 
   final ValueChanged<VodPlayLine>? onChanged;
 
+  /// 线路 `flag` → 外部来源站点名。
+  ///
+  /// 只装**跨站合并**进来的线路：这些线路来自别的站点，用户需要知道
+  /// "这条线路是谁给的"，否则线路名只是一串站内自说自话的序号。
+  /// 不在表里的线路（本站原生线路）不渲染色点、Tooltip 也不加来源前缀。
+  final Map<String, String> externalOrigins;
+
+  /// 线路 `flag` → 该来源站点的健康态（色点用）。
+  ///
+  /// 缺记录时按 [SourceStatus.unknown] 上色——**未知不等于好**，
+  /// 与源场「没有采样记录就不假装它可用」同一套口径。
+  final Map<String, SourceStatus> externalStatus;
+
+  /// 换源入口的回调；为 `null` 时不渲染行尾按钮。
+  ///
+  /// 类型取 `VoidCallback?`，与本文件既有回调（[TmdbEpisodeHeader] 的
+  /// `onToggleReversed` / `onToggleGridMode`）一致：动的是**这条线路**，
+  /// 由调用方持有，不需要回传参数。
+  final VoidCallback? onSwapSource;
+
   @override
   Widget build(BuildContext context) {
     if (lines.isEmpty) return const SizedBox.shrink();
@@ -584,7 +608,7 @@ class TmdbLineSelector extends StatelessWidget {
           Text(
             '线路',
             style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(width: 12),
@@ -599,8 +623,14 @@ class TmdbLineSelector extends StatelessWidget {
                       Tooltip(
                         // `message` 是字符串，**不**产生 `Text` widget，
                         // 因此不会干扰按文本断言的既有门禁。
+                        //
+                        // 优先级：最近播放 > 外部来源 > 线路名。「最近播放」优先
+                        // 是因为它回答的是"我上次看到哪"这个更急的问题；来源
+                        // 已经在色点旁边，不必再抢一次 Tooltip。
                         message: line.flag == recentFlag
                             ? '最近播放'
+                            : externalOrigins.containsKey(line.flag)
+                            ? '来自 ${externalOrigins[line.flag]}'
                             : line.displayName,
                         child: ChoiceChip(
                           key: ValueKey('tmdb-line-${line.flag}'),
@@ -617,6 +647,28 @@ class TmdbLineSelector extends StatelessWidget {
                                   Icons.history,
                                   key: ValueKey('tmdb-line-recent-${line.flag}'),
                                   size: 14,
+                                ),
+                                const SizedBox(width: AppSpace.xs),
+                              ],
+                              // 外部来源色点：6px 方点，颜色是站点实测健康态。
+                              // key 挂在 `Container` 上（不是 `ChoiceChip` 上），
+                              // 与上面 `tmdb-line-recent-*` 同一套做法——既有
+                              // `tmdb-line-*` 门禁按「chip 本身是 ChoiceChip」计数。
+                              if (externalOrigins.containsKey(line.flag)) ...[
+                                Container(
+                                  key: ValueKey(
+                                    'tmdb-line-external-${line.flag}',
+                                  ),
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: sourceStatusColor(
+                                      context,
+                                      externalStatus[line.flag] ??
+                                          SourceStatus.unknown,
+                                    ),
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
                                 ),
                                 const SizedBox(width: AppSpace.xs),
                               ],
@@ -640,6 +692,14 @@ class TmdbLineSelector extends StatelessWidget {
               ),
             ),
           ),
+          // 换源入口：只在调用方给了回调时出现，因此既有调用点零改动。
+          if (onSwapSource != null)
+            TextButton.icon(
+              key: const ValueKey('tmdb-line-swap'),
+              onPressed: onSwapSource,
+              icon: const Icon(Icons.swap_horiz, size: 16),
+              label: const Text('换源'),
+            ),
         ],
       ),
     );

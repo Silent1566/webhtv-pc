@@ -27,6 +27,7 @@ import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/skip_segments.dart';
+import '../core/source_swap.dart';
 import '../core/sleep_timer.dart';
 import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
@@ -65,6 +66,7 @@ class PlaybackRequest {
     this.headers = const {},
     this.startPosition,
     this.playLines = const [],
+    this.lineRoutes = const {},
     this.episodeIndex = 0,
     this.vodPic,
     this.directUrl = false,
@@ -119,6 +121,13 @@ class PlaybackRequest {
 
   /// 详情页给出的全部线路，用于线路切换与上下集。
   final List<VodPlayLine> playLines;
+
+  /// 外部（换源并入）线路的来源路由：页面内 flag → 来源站点与它自己的 vodId。
+  ///
+  /// 为什么播放器也要收：换集、切线路都会重新解析地址，而外部线路必须**继续**
+  /// 定向到它自己的站点。只看 [siteKey] 不够——[siteKey] 记的是真来源站点，
+  /// 但 `vodId` 也得跟着换，否则会拿原站点的 vod 去问外部站点。
+  final Map<String, SwapLineRoute> lineRoutes;
   final int episodeIndex;
   final String? vodPic;
 
@@ -174,6 +183,8 @@ class PlaybackRequest {
       // 与 `startPosition` 一样是「一次性交接」：显式清除优先，其次是新值。
       resumeSeed: clearResumeSeed ? null : (resumeSeed ?? this.resumeSeed),
       playLines: playLines,
+      // 与 `playLines` / `siteKey` 一样原样带过：换集不能把外部线路的路由丢掉。
+      lineRoutes: lineRoutes,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
       directUrl: directUrl,
@@ -2397,28 +2408,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final next = !await windowManager.isFullScreen();
     try {
       if (next) {
-        // Windows 全屏失败时如果只更新 Flutter 状态，标题栏会残留；
-        // 先切无边框，再切系统全屏，最后用实际窗口状态回读确认。
+        // window_manager 在 Windows 上的全屏是「去边框 + 把窗口 SetWindowPos 到
+        // 显示器 rcMonitor 铺满」，而这段铺满逻辑只在插件内部 is_frameless_ 为
+        // false 时才执行（window_manager.cpp:593）。所以这里**不能**调
+        // setAsFrameless：它会把 is_frameless_ 置 true，铺满分支整体被跳过，
+        // 窗口停在原尺寸只是变成无边框小窗。标题栏设为 hidden 已足以让
+        // WM_NCCALCSIZE 在全屏时去掉边框。
         await windowManager.setTitleBarStyle(
           TitleBarStyle.hidden,
           windowButtonVisibility: false,
         );
-        await windowManager.setAsFrameless();
         await windowManager.setFullScreen(true);
         await windowManager.focus();
-        var actual = await windowManager.isFullScreen();
-        if (!actual) {
-          await Future<void>.delayed(const Duration(milliseconds: 80));
-          await windowManager.setFullScreen(true);
-          actual = await windowManager.isFullScreen();
-        }
-        if (!actual) {
-          await windowManager.setTitleBarStyle(
-            TitleBarStyle.normal,
-            windowButtonVisibility: true,
-          );
-          throw StateError('Windows 全屏状态未确认');
-        }
       } else {
         await windowManager.setFullScreen(false);
         await windowManager.setTitleBarStyle(
@@ -2531,10 +2532,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         subtitles = _request.subtitles;
         danmaku = _request.danmaku;
       } else {
+        // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
+        final route = _request.lineRoutes[flag];
         final decision = await state.resolvePlayback(
           episodeTarget: episode.url,
           flag: _playbackFlagFor(flag),
-          vodId: _request.vodId,
+          vodId: route?.vodId ?? _request.vodId,
+          siteOverride: route == null ? null : state.siteByKey(route.siteKey),
         );
         if (decision == null || decision.url == null) {
           throw AppError(

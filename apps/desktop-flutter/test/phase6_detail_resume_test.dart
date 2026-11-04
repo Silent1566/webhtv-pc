@@ -566,9 +566,17 @@ void main() {
       //
       // 怎么观察到「播了哪一集」：本用例没有站点服务，`resolvePlayback` 直接
       // 返回 null（`app_state.dart` 的 `service == null || site == null`），
-      // `_play` 因此抛 `playbackUrlMissing`，其 `detail` 是
-      // `line=<flag> episode=<集名>`，经 `AppError.userMessage` 渲染成 SnackBar。
-      // 于是断言 SnackBar 里的集名即可区分「命中第2集」与「硬编码第1集」。
+      // `_play` 因此抛 `playbackUrlMissing`（detail 是
+      // `line=<flag> episode=<集名>`）。
+      //
+      // 观测通道**不再是 SnackBar**：失败面已按用户要求改成先问要不要换源
+      // （`browse_pages.dart` 的 `_confirmSwapAfterPlayFailure`，:1998），
+      // 框 `key: ValueKey('detail-playback-failed')`、正文第一行就是
+      // `Text(episode.name)`。用户不确认就直接 return，SnackBar 那条路
+      // 不存在了。所以断言落在**确认框里的集名**上。
+      //
+      // 为什么必须用 `find.descendant`：页面选集区里也有「第2集」三个字，
+      // 全树 `find.text` 会撞车，反而失去区分力。
       appState.database!.upsertHistory(
         siteKey: appState.selectedSite?.key ?? '',
         vodId: 'demo-1',
@@ -582,11 +590,22 @@ void main() {
       await pump(tester);
 
       await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
-      await tester.pump();
-      await tester.pump();
+      // 确认框是异步弹的（`_play` 里 await 了 resolvePlayback 再 showDialog），
+      // 因此用**有界** pump 循环等它出现；`pumpAndSettle` 禁用（仓库里有
+      // 无限动画，会 timeout）。
+      final dialog = find.byKey(const ValueKey('detail-playback-failed'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (dialog.evaluate().isNotEmpty) break;
+      }
 
       expect(
-        find.textContaining('episode=第2集'),
+        dialog,
+        findsOneWidget,
+        reason: '播放失败必须弹出换源确认框（AppError 不再走 SnackBar）',
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.text('第2集')),
         findsOneWidget,
         reason: '必须播历史命中的第2集，而不是硬编码的第 0 集（第1集）',
       );

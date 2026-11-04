@@ -705,6 +705,33 @@ class SpiderRouter {
     return _cache.putIfAbsent(_cacheKey(site), () => _create(site));
   }
 
+  /// 执行一次站点搜索，可选择用**调用方给的**客户端发请求。
+  ///
+  /// 为什么需要它而不是直接 [runtimeFor]：缓存的运行时在构造时就把客户端
+  /// 引用拷了进去，而并发搜索需要一个批次专属的客户端——批次结束/取消时
+  /// 关掉它能立刻掐断在途连接。绝不能替换缓存里那份，否则详情页等其它
+  /// 请求会跟着被掐断。
+  ///
+  /// 只有 HTTP API 运行时能被换客户端：sidecar（js/py/jvm）与 cat-http 走
+  /// 各自的常驻进程或专属通道，换客户端对它们没有意义。
+  Future<SiteResult> search(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+    HttpApiClient? client,
+  }) {
+    final runtime = runtimeFor(site);
+    if (client == null || runtime is! HttpApiRuntime) {
+      return runtime.search(site, keyword: keyword, page: page, quick: quick);
+    }
+    return HttpApiRuntime(
+      client: client,
+      globalHeaders: globalHeaders,
+      userAgent: userAgent,
+    ).search(site, keyword: keyword, page: page, quick: quick);
+  }
+
   SiteRuntime _create(Site site) {
     // 直连 js/py：已自动注册则复用本地 spider 运行时。
     final direct = directSpiders[site.key];

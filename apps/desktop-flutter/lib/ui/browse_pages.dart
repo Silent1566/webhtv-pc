@@ -12,6 +12,7 @@ import '../core/episode_range.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
 import '../core/protocol.dart';
+import '../core/source_swap.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
@@ -31,6 +32,8 @@ import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
 import 'common.dart';
 import 'scroll_behavior.dart';
+import 'source_field.dart';
+import 'source_swap_sheet.dart';
 import 'tmdb_widgets.dart';
 import 'tokens.dart';
 
@@ -1255,6 +1258,59 @@ class _DetailPageState extends State<DetailPage> {
   /// 上一次渲染时的季度序号，用于检测切季（`design/03` §5.1）。
   int _lastSeasonEpoch = -1;
 
+  /// 换源并入的**外部线路**（页面级临时状态）。
+  ///
+  /// 三条集合按 `flag` 对齐，缺一不可：
+  /// - [_externalLines] 是渲染用的线路（`flag = 站点名 · 原线路名`）；
+  /// - [_externalRoutes] 记住它真正来自哪个站点/哪个 vod，播放时定向解析；
+  /// - [_externalStatus] 记住该站点的健康态，行尾色点用来源色。
+  ///
+  /// 全部**不写盘**：换源是「这一次看这部片」的临时选择，写盘会让下一次进别的
+  /// 剧也带着上一部剧的外部线路（串线路）。
+  final List<VodPlayLine> _externalLines = [];
+  final Map<String, SwapLineRoute> _externalRoutes = {};
+  final Map<String, SourceStatus> _externalStatus = {};
+
+  /// 「换源后自动续播」的待续播集号；-1 表示当前没有这个意图。
+  ///
+  /// 用户在一集**播不出来**时才需要它：换源并入后应当接着播刚才那一集，而不是
+  /// 回到第 1 集。这是一次性的意图，用过即复位（见 [_openSourceSwap]）。
+  ///
+  /// 注意它只是**原线路里的数组下标**（= 下面的 ordinal 减一），绝不能再拿去当
+  /// 新线路的下标：不同站点的剧集数组**不同构**（可能含预告/花絮、可能季集
+  /// 混排），下标相同不等于同一集。定位同一集靠下面两个「集号锚点」，
+  /// 见 [_locateResumeEpisode]。
+  int _pendingResumeEpisode = -1;
+
+  /// 被点那一集在**它自己那条线路**里的 1-based 序号（episodeIndex + 1）。
+  ///
+  /// 新线路没有 tmdb 集号时按集名里的数字回落到它（第06集 / EP06 / S01E06）。
+  int _pendingResumeOrdinal = -1;
+
+  /// 被点那一集的 extra['tmdb_episode_number']；取不到为 -1。
+  ///
+  /// 这是首选锚点：集号是**语义**身份，不随外部线路的数组形态（预告/花絮/季集
+  /// 混排）漂移。
+  int _pendingResumeEpisodeNumber = -1;
+
+  /// 自动续播那一次 [_play] 期间为 true：此时失败不再弹换源确认框。
+  ///
+  /// 否则「续播也失败」会再问一次换源，确认后又续播，形成自我递归的对话框。
+  bool _resumingAfterSwap = false;
+
+  /// 页面内已占用的线路 `flag`（原线路 + 已并入的外部线路）。
+  Set<String> get _takenFlags => {for (final line in _externalLines) line.flag};
+
+  /// 本页**全部**线路：来源线路在前，外部并入线路恒在其后。
+  ///
+  /// 合并顺序是定案：外部线路是「补充」，排在后面才不会让原本习惯的线路
+  /// 位置发生跳动；所有需要「全部线路」的地方都必须走这里，否则会出现
+  /// 「线路条有 4 条、hero 播的还是第 1 条」这类分裂。
+  List<VodPlayLine> _linesOf(Vod vod) => [
+    ...widget.state.playLinesOf(vod),
+    ..._externalLines,
+  ];
+
   /// **渲染归属门**：保留的 TMDB 数据是否属于本页影片。
   ///
   /// 为什么需要：`AppState.clearDetail()` 不再清 TMDB（否则第二次进同一部剧必然先
@@ -1303,6 +1359,11 @@ class _DetailPageState extends State<DetailPage> {
   void _closeDetail() {
     // 离开详情页时清掉全局详情状态（§8.3）：结果与所选影片是页面级临时状态，
     // 不清理会让下一次进入详情页先渲染上一部剧的线路（实测串剧）。
+    // 外部线路同样在这里失效（不写盘、不跨页残留）：它属于「这一次换源」，
+    // 而不是这部片的新身份。
+    _externalLines.clear();
+    _externalRoutes.clear();
+    _externalStatus.clear();
     widget.state.clearDetail();
     Navigator.of(context).pop();
   }
@@ -1789,7 +1850,7 @@ class _DetailPageState extends State<DetailPage> {
     VodPlayLine rawLine,
     List<VodEpisode> ordered,
   ) {
-    final lines = widget.state.playLinesOf(vod);
+    final lines = _linesOf(vod);
     final target = _resumeTarget(lines);
     if (!target.matched) return -1;
     if (rawLine.flag != target.flag) return -1;
@@ -1819,11 +1880,19 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
     final episode = line.episodes[episodeIndex];
     final state = widget.state;
+    // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
+    //
+    // 为什么不能只靠 `flag`：并入后的 `flag` 是本页的展示名（`站点名 · 原线路名`），
+    // 站点自己并不认识它；真正的线路标识在 `playbackFlag` 里。而 `vodId` 也得换成
+    // 来源站点的 vod，否则会拿原站点的 id 去问外部站点。
+    final route = _externalRoutes[line.flag];
     try {
       final decision = await state.resolvePlayback(
         episodeTarget: episode.url,
         flag: line.playbackFlag,
-        vodId: vod.vodId,
+        vodId: route?.vodId ?? vod.vodId,
+        // 非 null 时只解析这一次、不切全局站源（顶栏/设置里的 site 不许变）。
+        siteOverride: route == null ? null : state.siteByKey(route.siteKey),
       );
       if (decision == null || decision.url == null) {
         throw AppError(
@@ -1841,7 +1910,7 @@ class _DetailPageState extends State<DetailPage> {
       //
       // 跨源（`resumeSeed` 非空）时上面这条查询必然落空：它按当前站点的
       // `siteKey` 查本机历史。此时改用原记录的进度做迁移，见 [_resumeStartFor]。
-      final resume = _resumeStartFor(vod, state.playLinesOf(vod), line, episodeIndex);
+      final resume = _resumeStartFor(vod, _linesOf(vod), line, episodeIndex);
       // TMDB 季度身份（`04` §8.1）：已确证季度时透传；未确证时只传 URL/集名。
       // 归属门：不属于本页影片的 TMDB 数据不得带进播放器身份（会把进度写到错的季集上）。
       final tmdb = _ownedTmdb;
@@ -1865,13 +1934,17 @@ class _DetailPageState extends State<DetailPage> {
               episodeTarget: episode.url,
               headers: decision.headers?.asRequestHeaders ?? const {},
               title: vod.vodName,
-              siteKey: state.selectedSite?.key ?? '',
-              vodId: vod.vodId,
+              // 历史要记在**真正来源**站点上：外部线路播出来的那条记录属于
+              // 那个站点，记成「当前站源」会让历史页里的来源是错的。
+              siteKey: route?.siteKey ?? state.selectedSite?.key ?? '',
+              vodId: route?.vodId ?? vod.vodId,
               vodName: vod.vodName,
               episodeName: episode.name,
               flag: line.flag,
               playbackFlag: line.playbackFlag,
-              playLines: state.playLinesOf(vod),
+              playLines: _linesOf(vod),
+              // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
+              lineRoutes: _externalRoutes,
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
               startPosition: resume,
@@ -1893,9 +1966,347 @@ class _DetailPageState extends State<DetailPage> {
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(failure.userMessage)));
+      // 用户在站点里主动中断不是「这一集没有地址」，再问一次换源只会打断连播；
+      // 自动续播那一趟失败同样只回到 SnackBar（见 [_resumingAfterSwap]）。
+      if (failure.kind == AppErrorKind.siteCancelled || _resumingAfterSwap) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(failure.userMessage)));
+        return;
+      }
+      // 只闪一条 SnackBar，用户没有任何可执行动作（用户反馈：看到「没有集数
+      // 信息」的报错后不知道能干什么）。改成先问要不要换源：不换源就什么都不
+      // 做；确认了才记住这一集，并入后自动接着播（见 [_openSourceSwap]）。
+      final wantsSwap = await _confirmSwapAfterPlayFailure(episode, failure);
+      if (!mounted || !wantsSwap) return;
+      // 记下**三个**锚点：下标（原线路）、1-based 集号、tmdb 集号。续播定位
+      // 按「tmdb 集号 → 集名数字 → 下标」的顺序在新线路里找同一集（见
+      // [_locateResumeEpisode]），下标只是最后的兜底，不能单独用。
+      setState(() {
+        _pendingResumeEpisode = episodeIndex;
+        _pendingResumeOrdinal = episodeIndex + 1;
+        _pendingResumeEpisodeNumber = _tmdbEpisodeNumberOf(episode);
+      });
+      await _openSourceSwap();
     }
+  }
+
+  /// 播放失败时的换源确认框；返回 `true` 才继续换源。
+  ///
+  /// 文案说清两件事：这一集缺可播放地址、换源后会自动接着播这一集。
+  /// [RepaintBoundary] 的 key 与 :1530 同一约定——每个路由各有自己的
+  /// RepaintBoundary，证据截图只能按 key 指这一层，整窗截图不存在。
+  Future<bool> _confirmSwapAfterPlayFailure(
+    VodEpisode episode,
+    AppError failure,
+  ) async {
+    // 标题已经说明了「这一集没有可播放的地址」，正文只需要**具体原因**：
+    // [AppError.userMessage] 会把错误类别再拼一遍，遇到 detail 又重复同类描述
+    // 时就变成括号嵌套的重复噪音（见 buildPlayRequest 里的 detail），故优先取
+    // message；只有在 message 为空这种退化情况下才回落到 userMessage。
+    final message = failure.message.trim();
+    final reason = message.isNotEmpty ? message : failure.userMessage;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => RepaintBoundary(
+        key: const ValueKey('detail-playback-failed-boundary'),
+        child: AlertDialog(
+          key: const ValueKey('detail-playback-failed'),
+          title: const Text('这一集没有可播放的地址'),
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(episode.name),
+              const SizedBox(height: 6),
+              // 原始错误弱化处理：它是给用户判断「是站点挂了还是真没地址」的
+              // 线索，不该和标题抢注意力。
+              Text(
+                reason,
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              const Text('换到别的线路后，会自动接着播这一集。'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              key: const ValueKey('detail-playback-failed-dismiss'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('知道了'),
+            ),
+            FilledButton(
+              key: const ValueKey('detail-playback-failed-swap'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('换源'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  /// 站点 key → 来源健康态（浮层里的色点与并入后线路的行尾色点共用）。
+  ///
+  /// 走 [buildMagnitudes] 而不是自己算星等：星等与状态色的换算只该有一处实现，
+  /// 否则浮层与列表页会对同一个站点给出两种颜色。它逐条按 `item.site.key` 算，
+  /// 所以直接按 [SiteMagnitude.siteKey] 建表——**不要**用名称中转：重名的两个
+  /// 站点会在名称键上互相覆盖，一个站显示成另一个站的健康度。
+  Map<String, SourceStatus> _siteStatusByKey() {
+    final state = widget.state;
+    final items = state.siteItems;
+    final magnitudes = buildMagnitudes(
+      items: items,
+      health: {
+        for (final row in state.siteHealth()) row.siteKey: row,
+      },
+    );
+    final byKey = <String, SourceStatus>{
+      for (final magnitude in magnitudes) magnitude.siteKey: magnitude.status,
+    };
+    return {
+      for (final item in items)
+        item.site.key: byKey[item.site.key] ?? SourceStatus.unknown,
+    };
+  }
+
+  /// 清空换源并入的外部线路，回到默认线路。
+  void _clearExternalLines() {
+    if (_externalLines.isEmpty) return;
+    setState(() {
+      _externalLines.clear();
+      _externalRoutes.clear();
+      _externalStatus.clear();
+      // 选中态归零 = 回到默认（第一条 / 历史命中的那条），而不是停在一条
+      // 已经不存在的 flag 上（那会让 `_activeLine` 落到 `lines.first` 之外的猜测）。
+      _selectedLineFlag = '';
+    });
+  }
+
+  /// 打开换源浮层，并把选中的候选并入本页线路。
+  ///
+  /// 浮层负责搜索/勾选/解析（W1 已实现），这里只做三件事：把它需要的三个回调
+  /// 接到 [AppState]（UI 层不得直接发网络请求）、把结果包装成外部线路、把选择
+  /// 落到「集数最多」的那条线路上。
+  Future<void> _openSourceSwap() async {
+    final state = widget.state;
+    final vod = _currentVod;
+    if (vod == null) {
+      // 拿不到本片详情就无从换源：待续播意图跟着失效，别留给下一次。
+      _clearPendingResume();
+      return;
+    }
+    final statuses = _siteStatusByKey();
+    final rows = await showSourceSwapSheet(
+      context,
+      // 用**当前详情**到的片名搜：列表页传入的条目可能没有片名/是别名。
+      keyword: vod.vodName,
+      // 与大搜索共用同一套全局状态：浮层不再自建搜索、也不再等整批结果，
+      // 直接消费 activeSearch 的流式快照（每完成一个站点就刷新）。
+      searchListenable: state,
+      outcomeOf: () => state.activeSearch,
+      // 与安卓换源一致：仍然一次性提交范围内的全部站点，靠 quick=true 限流
+      // （安卓 TmdbDetailActivity.java:12255 的 startInlineSourceSearch 传的就是
+      // searchContent(sites, keyword, true)；这是既有语义，不是新发明）。
+      // 并发沿用用户设置 searchThread（默认 20），单站超时用默认 20 秒。
+      onSearch: (keyword) => state.searchAll(keyword, quick: true),
+      onProbe: (candidate) => state.swapProbe(
+        siteKey: candidate.siteKey,
+        vodId: candidate.vodId,
+        vodName: candidate.vodName,
+      ),
+      statusOf: (siteKey) => statuses[siteKey] ?? SourceStatus.unknown,
+    );
+    // 浮层一关，在途批次立刻作废：否则用户看到的是「关了还在打后端」。
+    // 放在这里而不是 dispose：此刻已彻底离开构建阶段，取消时触发的
+    // notifyListeners() 是安全的；对已完成的批次它是 no-op。
+    state.cancelSearch();
+    // 取消 = 什么都不做。绝不在这里清空已有外部线路：用户按 Esc 不该丢掉刚才的工作。
+    if (rows == null || rows.isEmpty || !mounted) {
+      // 浮层被关掉（返回 null）说明这次换源没发生：待续播意图必须失效，
+      // 否则它会让**下一次**换源并入后莫名自动开播。
+      _clearPendingResume();
+      return;
+    }
+    // 只取**原线路 + 已并入**的 flag 做占用集：外部 flag 必须页面内唯一。
+    final taken = <String>{
+      for (final line in state.playLinesOf(vod)) line.flag,
+      ..._takenFlags,
+    };
+    final mergedLines = <VodPlayLine>[];
+    final mergedRoutes = <String, SwapLineRoute>{};
+    final mergedStatus = <String, SourceStatus>{};
+    for (final row in rows) {
+      for (final line in row.lines) {
+        // 空线路没有任何可播的集，并入只会得到一条点不动的 chip。
+        if (line.episodes.isEmpty) continue;
+        final merged = externalPlayLine(
+          siteName: row.candidate.siteName,
+          line: line,
+          taken: taken,
+        );
+        mergedLines.add(merged);
+        mergedRoutes[merged.flag] = SwapLineRoute(
+          siteKey: row.candidate.siteKey,
+          siteName: row.candidate.siteName,
+          vodId: row.candidate.vodId,
+        );
+        mergedStatus[merged.flag] =
+            statuses[row.candidate.siteKey] ?? SourceStatus.unknown;
+      }
+    }
+    if (mergedLines.isEmpty) {
+      // 勾选的候选项全都没有集数：什么都没并入，意图一并失效。
+      _clearPendingResume();
+      return;
+    }
+    setState(() {
+      _externalLines.addAll(mergedLines);
+      _externalRoutes.addAll(mergedRoutes);
+      _externalStatus.addAll(mergedStatus);
+    });
+    // 选线的两套语义，按「本次有没有待续播意图」分开：
+    // - 没有意图（错误条 CTA 进来的普通换源）：默认选「集数最多」的那条，原线路
+    //   一起比；只在外部线路不少于当前线路时才切，全部更少就保持用户原来的
+    //   选择，不做无谓跳动。
+    // - 有意图（刚有一集播失败了）：必须落到外部线路上，见下。
+    final lines = _linesOf(vod);
+    final VodPlayLine best;
+    if (_pendingResumeEpisode >= 0 && _externalLines.isNotEmpty) {
+      // 有续播意图时，选中的线路与播的集必须是**同一条**，且必须是外部线路：
+      // 原线路刚刚被证明播不通，落回去等于换源没换（且续播那一趟抑制了确认框，
+      // 用户只会看到一条 SnackBar）。
+      best = _widestExternalLine();
+    } else {
+      // 没有待续播意图：语义与改造前逐字一致——并入后选「集数最多」的那条。
+      var widest = _activeLine(lines);
+      for (final line in _externalLines) {
+        if (line.episodes.length >= widest.episodes.length) widest = line;
+      }
+      best = widest;
+    }
+    _selectLine(best, lines);
+    await _resumeAfterSourceSwap(vod, best);
+  }
+
+  /// [_externalLines] 里集数最多的那条（并列取先并入的）。调用方保证非空。
+  ///
+  /// 为什么是它：续播必须落在**本次并入进来**的线路上。原线路刚刚被证明播不通，
+  /// 拿它续播只会再失败一次，用户除了 SnackBar 什么都看不到。
+  VodPlayLine _widestExternalLine() {
+    var widest = _externalLines.first;
+    for (final line in _externalLines.skip(1)) {
+      if (line.episodes.length > widest.episodes.length) widest = line;
+    }
+    return widest;
+  }
+
+  /// 在 [episodes] 里按**集号**定位待续播的那一集。
+  ///
+  /// 固定优先级，逐级回落（每一步都是「证据更强的身份优先」）：
+  /// 1. tmdb 集号相等——语义身份，最可靠；
+  /// 2. 集名里**最后一个**数字段等于 ordinal——`第06集`/`EP06`/`S01E06` 都命中 6；
+  /// 3. 原下标（`ordinal - 1`），仅当下标仍落在范围内时可用；
+  /// 4. 全落空 → 第 0 集，并把「发生了回退」带回去（调用方要提示用户）。
+  ///
+  /// 返回值是 (下标, 是否回退)。用私有结果类而不是 record：本仓库既有代码里
+  /// 没有 record 解构的用法，保持同一个风格。
+  _ResumeLocatorHit _locateResumeEpisode(
+    List<VodEpisode> episodes,
+    int episodeNumber,
+    int ordinal,
+  ) {
+    if (episodes.isEmpty) return const _ResumeLocatorHit(0, true);
+    if (episodeNumber >= 0) {
+      for (var i = 0; i < episodes.length; i += 1) {
+        if (_tmdbEpisodeNumberOf(episodes[i]) == episodeNumber) {
+          return _ResumeLocatorHit(i, false);
+        }
+      }
+    }
+    if (ordinal >= 1) {
+      for (var i = 0; i < episodes.length; i += 1) {
+        if (_episodeNameNumber(episodes[i].name) == ordinal) {
+          return _ResumeLocatorHit(i, false);
+        }
+      }
+      final byIndex = ordinal - 1;
+      if (byIndex < episodes.length) return _ResumeLocatorHit(byIndex, false);
+    }
+    return const _ResumeLocatorHit(0, true);
+  }
+
+  /// 集名里的**最后一个** 1~4 位数字段；整条名字里没有数字时返回 -1。
+  ///
+  /// 为什么取最后一个：`S01E06` 的最后一个数字才是集号，`第2季第6集` 同理；
+  /// 取第一个会在季集混排时稳定错位。
+  static int _episodeNameNumber(String name) {
+    var value = -1;
+    for (final match in _episodeNumberPattern.allMatches(name)) {
+      final parsed = int.tryParse(match.group(1) ?? '');
+      if (parsed != null) value = parsed;
+    }
+    return value;
+  }
+
+  static final RegExp _episodeNumberPattern = RegExp(r'(\d{1,4})');
+
+  /// 并入完成后自动续播换源前那一集（见 [_pendingResumeEpisode]）。
+  ///
+  /// [line] 必须是**新并入的外部线路**（见 [_openSourceSwap] 的选线分支）：
+  /// 原线路已经播不通，回到它上面续播等于这次换源白做。
+  ///
+  /// 定位按集号而不是下标（见 [_locateResumeEpisode]）；真的找不到同一集时从
+  /// 第 1 集开始，并说清为什么——否则用户只会觉得「换源把我的集数弄丢了」。
+  Future<void> _resumeAfterSourceSwap(Vod vod, VodPlayLine line) async {
+    final resumeIndex = _pendingResumeEpisode;
+    if (resumeIndex < 0) return;
+    final episodeNumber = _pendingResumeEpisodeNumber;
+    final ordinal = _pendingResumeOrdinal;
+    // **先复位再播**：这一次续播若再失败，不能把同一个意图带到下一次换源上。
+    // 这里不需要 setState：浮层刚关，页面上没有依赖它的渲染。
+    _pendingResumeEpisode = -1;
+    _pendingResumeOrdinal = -1;
+    _pendingResumeEpisodeNumber = -1;
+    if (line.episodes.isEmpty) return;
+    final hit = _locateResumeEpisode(line.episodes, episodeNumber, ordinal);
+    if (hit.fellBack) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('「${line.flag}」只有 ${line.episodes.length} 集，已从第 1 集开始播放'),
+        ),
+      );
+    }
+    // 续播这一趟不再问「要不要换源」：失败仍回到 SnackBar（见 [_play] 的 catch）。
+    _resumingAfterSwap = true;
+    try {
+      await _play(vod, line, hit.index);
+    } finally {
+      _resumingAfterSwap = false;
+    }
+  }
+
+  /// 清掉「换源后自动续播」的意图（浮层被取消、或什么都没并入时）。
+  ///
+  /// 三个锚点必须一起清：只清下标而留下集号，等于让一次被取消的意图从
+  /// 下一次换源里漏出来。
+  void _clearPendingResume() {
+    if (_pendingResumeEpisode < 0) {
+      _pendingResumeOrdinal = -1;
+      _pendingResumeEpisodeNumber = -1;
+      return;
+    }
+    if (!mounted) {
+      _pendingResumeEpisode = -1;
+      _pendingResumeOrdinal = -1;
+      _pendingResumeEpisodeNumber = -1;
+      return;
+    }
+    setState(() {
+      _pendingResumeEpisode = -1;
+      _pendingResumeOrdinal = -1;
+      _pendingResumeEpisodeNumber = -1;
+    });
   }
 
   static int _tmdbEpisodeNumberOf(VodEpisode episode) {
@@ -1920,7 +2331,8 @@ class _DetailPageState extends State<DetailPage> {
         result.list.isNotEmpty &&
         result.list.first.vodId == widget.vod.vodId;
     final vod = belongs ? result.list.first : widget.vod;
-    final lines = state.playLinesOf(vod);
+    // 原线路 + 换源并入的外部线路（外部恒在后，见 [_linesOf]）。
+    final lines = _linesOf(vod);
     // 详情到达后自动切到历史线路（`docs/phase6/design/02` §4、§4.1）。
     //
     // 为什么在 build 里而不是 initState：详情请求在页面挂载后才完成，
@@ -2086,6 +2498,13 @@ class _DetailPageState extends State<DetailPage> {
                     child: ErrorBanner(
                       error: state.detailError!,
                       onDismiss: state.clearDetailError,
+                      // 文案里写着「换源」，那这个动作就必须真的能点（否则是句空话）。
+                      action: FilledButton.icon(
+                        key: const ValueKey('detail-swap-source'),
+                        onPressed: _openSourceSwap,
+                        icon: const Icon(Icons.swap_horiz, size: 16),
+                        label: const Text('换源'),
+                      ),
                     ),
                   ),
                 // 动态背景头部（`04` §3.1 ①）：用 TMDB 海报/剧照当背景，
@@ -2192,7 +2611,29 @@ class _DetailPageState extends State<DetailPage> {
                               : '',
                           episodeCounts: _episodeCountsByLine(lines),
                           onChanged: (line) => _selectLine(line, lines),
+                          // 外部线路的来源站点与健康态（行尾色点 + Tooltip）。
+                          externalOrigins: {
+                            for (final entry in _externalRoutes.entries)
+                              entry.key: entry.value.siteName,
+                          },
+                          externalStatus: _externalStatus,
+                          // 换源的常驻次入口：即使没有报错也要能换。
+                          onSwapSource: _openSourceSwap,
                         ),
+                        // 清空是**显式**动作：外部线路是临时的，用户要能主动退回原线路，
+                        // 而不是只能靠离开详情页来丢弃它。
+                        if (_externalLines.isNotEmpty)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: AppSpace.xs),
+                              child: TextButton(
+                                key: const ValueKey('detail-clear-external'),
+                                onPressed: _clearExternalLines,
+                                child: const Text('清空外部线路'),
+                              ),
+                            ),
+                          ),
                         _buildEpisodes(context, vod, lines),
                       ],
                       // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
@@ -2576,6 +3017,20 @@ class _DetailPageState extends State<DetailPage> {
       ),
     );
   }
+}
+
+/// [_DetailPageState._locateResumeEpisode] 的返回值：命中的下标 + 是否发生了回退。
+///
+/// 用一个小类而不是 record：本仓库既有代码里没有 record 解构的用法，
+/// 而带名字的字段在调用处（读 `hit.index` / `hit.fellBack`）比 `$1`/`$2` 清楚。
+class _ResumeLocatorHit {
+  const _ResumeLocatorHit(this.index, this.fellBack);
+
+  /// 目标线路里该集的数组下标。
+  final int index;
+
+  /// true 表示没找到同一集、已回退到第 1 集（调用方应提示用户）。
+  final bool fellBack;
 }
 
 class _EmptyHint extends StatelessWidget {

@@ -25,18 +25,14 @@ import 'package:flutter/material.dart';
 import '../core/history_view.dart';
 import '../core/hot_rank_layout.dart';
 import '../core/protocol.dart';
-import '../core/search_result_filter.dart';
 import '../core/tmdb_identity.dart';
 import '../services/search_suggest_service.dart';
 import '../state/app_state.dart';
 import '../state/search_state.dart';
-import 'app.dart';
 import 'browse_pages.dart';
 import 'common.dart';
+import 'search_result_view.dart';
 import 'tokens.dart';
-
-/// 相似度预设档位（与「自定义…」滑块互补）。
-const List<int> _similarityPresets = [0, 30, 60, 100];
 
 /// 热门推荐区的头部高度（标题行 24 + 间距 8 + 类目 tab 32）。
 ///
@@ -44,12 +40,6 @@ const List<int> _similarityPresets = [0, 30, 60, 100];
 /// `maxHeight - _hotHeaderHeight` 算，而头部又被强制放在这个高度的盒子里，
 /// 两边一致才能保证「列 × 行」恰好铺满而不是溢出或空一行。
 const double _hotHeaderHeight = 64;
-
-/// 相似度自动续翻的最大跳数。
-///
-/// 为什么需要上限：上游未声明总页数（`pageCount == 0`）时页码没有硬上限，
-/// 若对端一直返回「新内容但都被过滤掉」的页，没有上限就会一直翻下去。
-const int _maxAutoPagingHops = 8;
 
 class SearchPage extends StatefulWidget {
   const SearchPage({
@@ -123,10 +113,10 @@ class _SearchPageState extends State<SearchPage> {
   String _scopeGroup = '';
 
   // ---- 结果筛选状态（对齐上游 CollectFragment）----
-
-  /// 当前选中的站点 key；[_allSitesKey] = 全部聚合视图。
-  static const String _allSitesKey = '__all__';
-  String _activeSiteKey = _allSitesKey;
+  //
+  // 站点选中态、滚动位置、自动续翻重入锁都归 `SearchResultView` 自己的
+  // State（它按 `outcome.runId` 换代重建）；页面只持有「跨批次要记住」的
+  // 两项：分组筛选与相似度阈值（后者持久化在 `AppState`）。
 
   /// 分组筛选；空串 = 全部分组。
   String _filterGroup = '';
@@ -134,19 +124,12 @@ class _SearchPageState extends State<SearchPage> {
   /// 相似度阈值（页面快照；保存走 `state.setSearchSimilarity`）。
   int _similarity = 30;
 
-  /// 结果区滚动控制器：滚动到底触发自动翻页。
-  final ScrollController _resultScroll = ScrollController();
-
-  /// 是否有自动续翻正在跑（防止滚动回调重入）。
-  bool _autoPaging = false;
-
   @override
   void initState() {
     super.initState();
     widget.state.addListener(_onStateChanged);
     _similarity = widget.state.searchSimilarity;
     _controller.addListener(_onInputChanged);
-    _resultScroll.addListener(_onResultScroll);
     final keyword = widget.initialKeyword?.trim() ?? '';
     if (keyword.isNotEmpty) {
       // 带入标题后**自动执行一次搜索**（对齐手动匹配弹窗「打开即搜索」）。
@@ -172,8 +155,6 @@ class _SearchPageState extends State<SearchPage> {
     widget.state.removeListener(_onStateChanged);
     widget.state.cancelSearch();
     _controller.removeListener(_onInputChanged);
-    _resultScroll.removeListener(_onResultScroll);
-    _resultScroll.dispose();
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -184,6 +165,8 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   AppState get _state => widget.state;
+
+  MultiSiteSearchOutcome? get _outcome => _state.activeSearch;
 
   // ---------------------------------------------------------------------------
   // 输入、联想、提交
@@ -252,10 +235,8 @@ class _SearchPageState extends State<SearchPage> {
     setState(() {
       _suggestVisible = false;
       _suggestions = null;
-      _activeSiteKey = _allSitesKey;
       _filterGroup = '';
     });
-    _scrollResultsToTop();
     await _state.searchAll(
       text,
       siteKey: _scopeSiteKey,
@@ -274,7 +255,6 @@ class _SearchPageState extends State<SearchPage> {
     setState(() {
       _suggestVisible = false;
       _suggestions = null;
-      _activeSiteKey = _allSitesKey;
       _filterGroup = '';
     });
   }
@@ -403,122 +383,6 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // 结果筛选（上游 CollectFragment 的 group / similarity / 站点侧栏）
-  // ---------------------------------------------------------------------------
-
-  MultiSiteSearchOutcome? get _outcome => _state.activeSearch;
-
-  /// 分组筛选后的站点条目。
-  List<SiteSearchEntry> get _groupFilteredEntries {
-    final outcome = _outcome;
-    if (outcome == null) return const [];
-    if (_filterGroup.isEmpty) return outcome.results;
-    return [
-      for (final entry in outcome.results)
-        if (entry.groups.contains(_filterGroup)) entry,
-    ];
-  }
-
-  /// 按当前相似度阈值过滤某站点的条目。
-  List<Vod> _visibleOf(SiteSearchEntry entry) => filterSearchResults(
-    entry.result?.list ?? const [],
-    _outcome?.keyword ?? '',
-    _similarity,
-    titleOf: (vod) => vod.vodName,
-  );
-
-  /// 侧栏/结果区用的「有原始条目的站点」（保留被相似度滤成空的站点，
-  /// 否则用户无法选中它继续翻页去找命中项）。
-  List<SiteSearchEntry> get _rawEntries => [
-    for (final entry in _groupFilteredEntries)
-      if (entry.succeeded && entry.itemCount > 0) entry,
-  ];
-
-  /// 结果里出现过的分组（按站点顺序去重；只统计**有结果**的站点，
-  /// 空分组 chip 没有意义——上游 `Site.getGroups(mSites)` 同样只列真实分组）。
-  List<String> get _resultGroups {
-    final seen = <String>[];
-    for (final entry in _groupFilteredEntries) {
-      if (!entry.succeeded || entry.itemCount == 0) continue;
-      for (final group in entry.groups) {
-        if (!seen.contains(group)) seen.add(group);
-      }
-    }
-    return seen;
-  }
-
-  /// 当前选中的站点条目（未过滤相似度的原始条目）；「全部」视图时为 null。
-  SiteSearchEntry? get _activeEntry {
-    if (_activeSiteKey == _allSitesKey) return null;
-    final outcome = _outcome;
-    if (outcome == null) return null;
-    for (final entry in _groupFilteredEntries) {
-      if (entry.siteKey == _activeSiteKey) return entry;
-    }
-    return null;
-  }
-
-  /// 「全部」视图聚合的可见条目（按站点顺序拼接）。
-  List<Vod> get _allViewVods => [
-    for (final entry in _rawEntries) ..._visibleOf(entry),
-  ];
-
-  // ---------------------------------------------------------------------------
-  // 结果分页（上游 CustomScroller + SearchPageState）
-  // ---------------------------------------------------------------------------
-
-  void _scrollResultsToTop() {
-    if (!_resultScroll.hasClients) return;
-    _resultScroll.jumpTo(0);
-  }
-
-  void _onResultScroll() {
-    if (!_resultScroll.hasClients) return;
-    final position = _resultScroll.position;
-    // 距底部不足 240px 就预取下一页（提前量让滚动不至于停顿）。
-    if (position.extentAfter > 240) return;
-    unawaited(_loadMore());
-  }
-
-  /// 翻一页结果。
-  ///
-  /// 三处调用：滚动到底（不限条件）、用户点「加载更多」（不限条件）、
-  /// 以及 [auto] 触发的「选中站点/改阈值」——后者必须等上游
-  /// `shouldContinue` 的条件成立才值得翻（相似度 > 0 且当前页过滤后全不可见），
-  /// 否则会在用户刚选中站点时就把在看的内容换掉、还白打网络请求。
-  ///
-  /// 翻完后若这一页「原始有条目但被相似度整页滤掉」，继续自动续翻
-  /// （上游 `CollectFragment.maybeLoadNextPage`），带上限防止无限翻。
-  Future<void> _loadMore({bool auto = false}) async {
-    if (_autoPaging) return;
-    _autoPaging = true;
-    try {
-      for (var hop = 0; hop < _maxAutoPagingHops; hop++) {
-        if (!mounted) return;
-        final entry = _activeEntry;
-        if (entry == null || entry.loadingMore || !entry.hasMore) return;
-        final rawBefore = entry.itemCount;
-        final visibleBefore = _visibleOf(entry).length;
-        if (auto && hop == 0 && !(_similarity > 0 && visibleBefore == 0)) {
-          return;
-        }
-        final accepted = await _state.loadMoreSearch(entry.siteKey);
-        if (!mounted || !accepted) return;
-        final after = _state.activeSearch?.entryOf(entry.siteKey);
-        if (after == null) return;
-        final rawGrew = after.itemCount > rawBefore;
-        final visibleGrew = _visibleOf(after).length > visibleBefore;
-        // 这一页有原始条目、但过滤后仍然一条都看不见 → 继续翻（否则用户看到
-        // 一个「非空却全被滤掉」的站点，只能手动一页页点）。
-        final shouldContinue =
-            _similarity > 0 && rawGrew && !visibleGrew && after.hasMore;
-        if (!shouldContinue) return;
-      }
-    } finally {
-      _autoPaging = false;
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // 构建
@@ -841,7 +705,7 @@ class _SearchPageState extends State<SearchPage> {
       itemCount: window.length,
       itemBuilder: (context, index) {
         final item = window[index];
-        return _PosterCard(
+        return PosterCard(
           key: ValueKey('search-hot-${_hotTab.name}-$index'),
           title: item.title,
           imageUrl: item.cover,
@@ -926,510 +790,36 @@ class _SearchPageState extends State<SearchPage> {
             : null,
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSummary(outcome),
-        const SizedBox(height: AppSpace.sm),
-        _buildFilterBar(),
-        const SizedBox(height: AppSpace.sm),
-        Expanded(child: _buildSiteSplit()),
-      ],
+    return SearchResultView(
+      // 关键词换代就重建：站点选中态与滚动位置不能跨批次留着，否则换词后
+      // 还停在上一批的站点上（这个 State 内的 `_activeSiteKey` 靠 key 换代复位）。
+      key: ValueKey('search-results-${outcome.runId}'),
+      outcome: outcome,
+      keyPrefix: 'search',
+      itemKeyOf: (siteKey, vodId) => 'search-result-$siteKey-$vodId',
+      subtitleOf: (siteKey, vod) => vod.vodRemarks,
+      siteNameOf: _siteNameOf,
+      group: _filterGroup,
+      onGroupChanged: (value) => setState(() => _filterGroup = value),
+      onLoadMore: _state.loadMoreSearch,
+      onSimilarityChanged: _persistSimilarity,
+      initialSimilarity: _similarity,
+      onTapItem: _openItem,
     );
   }
 
-  Widget _buildSummary(MultiSiteSearchOutcome outcome) {
-    final visibleTotal = _rawEntries.fold<int>(
-      0,
-      (sum, entry) => sum + _visibleOf(entry).length,
-    );
-    final parts = <String>[
-      '“${outcome.keyword}”',
-    ];
-    if (outcome.siteKey.isNotEmpty) {
-      parts.add('范围 站点：${_siteNameOf(outcome.siteKey) ?? outcome.siteKey}');
-    } else if (outcome.group.isNotEmpty) {
-      parts.add('范围 分组：${outcome.group}');
-    }
-    parts
-      ..add('命中站点 ${outcome.succeededCount}/${outcome.results.length}')
-      ..add('条目 $visibleTotal/${outcome.totalItems}');
-    if (outcome.failedCount > 0) parts.add('失败 ${outcome.failedCount}');
-    if (outcome.skippedUnsupported > 0) {
-      parts.add('跳过不可运行站点 ${outcome.skippedUnsupported}');
-    }
-    if (outcome.skippedNotSearchable > 0) {
-      parts.add('跳过不可搜索站点 ${outcome.skippedNotSearchable}');
-    }
-    if (outcome.cancelled) {
-      parts.add('已取消');
-    } else if (outcome.finished) {
-      parts.add('耗时 ${outcome.totalElapsed.inMilliseconds}ms');
-    } else {
-      parts.add('搜索中…');
-    }
-    return Text(
-      parts.join(' · '),
-      style: Theme.of(context).textTheme.bodySmall,
-    );
-  }
-
-  /// 筛选条：分组 chips + 相似度（预设 chips + 自定义滑块）。
-  Widget _buildFilterBar() {
-    final groups = _resultGroups;
-    final custom = !_similarityPresets.contains(_similarity);
-    return Wrap(
-      spacing: AppSpace.sm,
-      runSpacing: AppSpace.sm,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        const Text('分组:', style: TextStyle(fontWeight: FontWeight.w500)),
-        TagChip(
-          key: const ValueKey('search-group-all'),
-          label: '全部',
-          selected: _filterGroup.isEmpty,
-          onTap: () => setState(() => _filterGroup = ''),
-          selectable: true,
-        ),
-        for (final group in groups)
-          TagChip(
-            key: ValueKey('search-group-$group'),
-            label: group,
-            selected: _filterGroup == group,
-            onTap: () => setState(() => _filterGroup = group),
-            selectable: true,
-          ),
-        const SizedBox(width: AppSpace.md),
-        const Text('相似度:', style: TextStyle(fontWeight: FontWeight.w500)),
-        for (final value in _similarityPresets)
-          TagChip(
-            key: ValueKey('search-similarity-$value'),
-            label: _similarityLabel(value),
-            selected: _similarity == value,
-            onTap: () => _applySimilarity(value),
-            selectable: true,
-          ),
-        TagChip(
-          key: const ValueKey('search-similarity-custom'),
-          // 自定义档位时把当前值显示在 chip 上，否则默认文案是「自定义…」。
-          label: custom ? '≥$_similarity%' : '自定义…',
-          selected: custom,
-          onTap: _openSimilaritySlider,
-          selectable: true,
-        ),
-      ],
-    );
-  }
-
-  String _similarityLabel(int value) => switch (value) {
-    0 => '不限',
-    100 => '精确',
-    _ => '≥$value%',
-  };
-
-  Future<void> _applySimilarity(int value) async {
-    setState(() => _similarity = value);
+  /// 相似度阈值改了就落盘，同时更新页面侧快照——下一批搜索重建视图时
+  /// 要以用户刚选的档位初始化，而不是回到默认值。
+  Future<void> _persistSimilarity(int value) async {
     await _state.setSearchSimilarity(value);
-    if (!mounted) return;
-    // 阈值升高可能把当前站点整页滤掉：主动续翻下一页找命中项。
-    if (value > 0) unawaited(_loadMore(auto: true));
+    if (!mounted || _similarity == value) return;
+    setState(() => _similarity = value);
   }
 
-  /// 相似度滑块对话框（对齐上游 `SliderNumberDialog`：0~100、步进 1、
-  /// 实时显示数值 + 说明文字）。
-  Future<void> _openSimilaritySlider() async {
-    final value = await showSimilaritySliderDialog(
-      context,
-      current: _similarity,
-    );
-    if (value == null || !mounted) return;
-    await _applySimilarity(value);
-  }
-
-  /// 站点拆分布局：左侧站点列表（全部 + 各站点）+ 右侧结果区。
-  Widget _buildSiteSplit() {
-    final entries = _rawEntries;
-    if (entries.isEmpty) return _buildNoVisibleResults();
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(width: 200, child: _buildSiteList(entries)),
-        const SizedBox(width: AppSpace.md),
-        Expanded(child: _buildActiveResults()),
-      ],
-    );
-  }
-
-  /// 站点列表：全部 + 有原始条目的站点（点击切换右侧视图）。
-  Widget _buildSiteList(List<SiteSearchEntry> entries) {
-    final theme = Theme.of(context);
-    return ListView(
-      children: [
-        ListTile(
-          key: const ValueKey('search-site-all'),
-          dense: true,
-          selected: _activeSiteKey == _allSitesKey,
-          title: const Text('全部站点'),
-          trailing: Text('${_allViewVods.length}'),
-          onTap: () => _selectSite(_allSitesKey),
-        ),
-        for (final entry in entries)
-          Builder(
-            builder: (context) {
-              final visible = _visibleOf(entry).length;
-              return ListTile(
-                key: ValueKey('search-site-${entry.siteKey}'),
-                dense: true,
-                selected: _activeSiteKey == entry.siteKey,
-                title: Text(
-                  entry.siteName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: entry.fromCache
-                    ? const Text('缓存', style: TextStyle(fontSize: 11))
-                    : null,
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 被相似度整站滤掉时给出显式标记：这类站点保留在侧栏里
-                    // （否则用户无法选中它继续翻页找命中项）。
-                    if (visible == 0 && entry.itemCount > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(right: AppSpace.xs),
-                        child: Icon(
-                          Icons.filter_alt_off_outlined,
-                          size: 14,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    Text('$visible'),
-                  ],
-                ),
-                onTap: () => _selectSite(entry.siteKey),
-              );
-            },
-          ),
-      ],
-    );
-  }
-
-  void _selectSite(String siteKey) {
-    setState(() => _activeSiteKey = siteKey);
-    _scrollResultsToTop();
-    // 选中一个「非空但被整页滤掉」的站点时，主动续翻下一页找命中项
-    // （`auto: true` 带条件门槛，不会平白翻页）。
-    if (siteKey != _allSitesKey) unawaited(_loadMore(auto: true));
-  }
-
-  /// 右侧结果：单站点平铺（带分页）或「全部」聚合平铺。
-  Widget _buildActiveResults() {
-    final active = _activeEntry;
-    if (active == null) {
-      // 「全部」视图：聚合各站点当前已加载的可见条目（上游同样不分页）。
-      final vods = _allViewVods;
-      if (vods.isEmpty) return _buildNoVisibleResults();
-      return _buildResultPane(vods, footer: _buildAllViewPagingHint());
-    }
-    final visible = _visibleOf(active);
-    final footer = _buildPagingFooter(active);
-    if (visible.isEmpty) {
-      return _buildResultPane(
-        const [],
-        footer: footer,
-        placeholder: EmptyState(
-          icon: Icons.filter_alt_off_outlined,
-          title: '该站点当前筛选下没有可见结果',
-          message: _similarity > 0
-              ? '相似度阈值把这一页都过滤掉了，可放宽阈值或继续加载下一页。'
-              : null,
-        ),
-      );
-    }
-    return _buildResultPane(visible, footer: footer);
-  }
-
-  /// 结果窗格：可滚动海报墙 + **固定在底部**的分页页脚。
-  ///
-  /// 页脚为什么不放进 `ListView`：`ListView(children:)` 是懒构建的，屏幕外的
-  /// 页脚根本不会被创建（既无法断言，用户也得滚到底才知道能不能继续加载）。
-  /// 固定在底部后，加载能力始终可见，自动预取仍然由滚动位置触发。
-  Widget _buildResultPane(
-    List<Vod> vods, {
-    required Widget footer,
-    Widget? placeholder,
-  }) {
-    final active = _activeEntry;
-    return Column(
-      children: [
-        Expanded(
-          child: vods.isEmpty
-              ? (placeholder ?? const SizedBox.shrink())
-              : ListView(
-                  key: const ValueKey('search-result-list'),
-                  controller: _resultScroll,
-                  children: [
-                    Wrap(
-                      spacing: AppSpace.md,
-                      runSpacing: AppSpace.md,
-                      children: [
-                        for (final vod in vods)
-                          _buildResultCard(
-                            vod,
-                            active?.siteKey ?? _ownerSiteKeyOf(vod),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-        ),
-        footer,
-      ],
-    );
-  }
-
-  /// 条目所属站点（「全部」视图里点开详情时需要知道用哪个站点取详情）。
-  String _ownerSiteKeyOf(Vod vod) {
-    for (final entry in _rawEntries) {
-      if (entry.result?.list.any((item) => identical(item, vod)) ?? false) {
-        return entry.siteKey;
-      }
-    }
-    return '';
-  }
-
-  Widget _buildResultCard(Vod vod, String siteKey) {
-    return _PosterCard(
-      key: ValueKey('search-result-$siteKey-${vod.vodId}'),
-      title: vod.vodName,
-      imageUrl: vod.vodPic,
-      subtitle: vod.vodRemarks,
-      onTap: () async {
-        final entry = _state.activeSearch?.entryOf(siteKey);
-        if (entry != null) await _openResult(entry, vod);
-      },
-    );
-  }
-
-  /// 单站点视图的页脚：加载中 / 加载更多 / 已全部加载。
-  Widget _buildPagingFooter(SiteSearchEntry entry) {
-    final theme = Theme.of(context);
-    if (entry.loadingMore) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpace.lg),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: AppSpace.sm),
-            Text('正在加载第 ${entry.page + 1} 页…'),
-          ],
-        ),
-      );
-    }
-    if (entry.hasMore) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpace.lg),
-        child: FilledButton.tonalIcon(
-          key: const ValueKey('search-load-more'),
-          onPressed: () => _loadMore(),
-          icon: const Icon(Icons.expand_more),
-          label: Text('加载更多（第 ${entry.page + 1} 页）'),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpace.lg),
-      child: Text(
-        key: const ValueKey('search-no-more'),
-        entry.pageCount > 0
-            ? '已全部加载（${entry.page} 页 · ${entry.itemCount} 条）'
-            : '已全部加载（${entry.itemCount} 条）',
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
-  /// 「全部」视图的页脚说明：分页只在单站点视图里提供（对齐上游）。
-  Widget _buildAllViewPagingHint() => Padding(
-    key: const ValueKey('search-all-paging-hint'),
-    padding: const EdgeInsets.symmetric(vertical: AppSpace.lg),
-    child: Text(
-      '在左侧选择单个站点可继续加载下一页',
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-    ),
-  );
-
-  Widget _buildNoVisibleResults() {
-    final hasRaw = (_outcome?.totalItems ?? 0) > 0;
-    return EmptyState(
-      icon: Icons.filter_alt_off_outlined,
-      title: hasRaw ? '当前筛选下没有可见结果' : '没有搜索结果',
-      message: hasRaw
-          ? '相似度阈值或分组筛选把全部结果过滤掉了，可放宽筛选再试。'
-          : null,
-    );
+  /// 结果卡片点开：先按站点 key 取出条目，再走既有的「切站点 + 进详情」。
+  Future<void> _openItem(String siteKey, Vod vod) async {
+    final entry = _state.activeSearch?.entryOf(siteKey);
+    if (entry == null) return;
+    await _openResult(entry, vod);
   }
 }
-
-/// 海报卡片：搜索结果与热门推荐**共用**（140×190 竖版海报 + 标题 + 副标题）。
-///
-/// 为什么抽成一个：两者在同一个页面上相邻出现（结果区 / 落地页热门区），
-/// 各写一份必然分叉；而仓库已有的 `browse_pages._VodCard` 是私有且被网格
-/// 约束（文字区用 `Expanded` 撑满格子），直接搬过来会带上网格专用行为。
-///
-/// 角标：`rank` / `score` 只有热门榜单会传（结果条目的元信息走副标题）。
-class _PosterCard extends StatelessWidget {
-  const _PosterCard({
-    super.key,
-    required this.title,
-    required this.onTap,
-    this.imageUrl,
-    this.subtitle,
-    this.rank,
-    this.score,
-  });
-
-  static const double _width = 140;
-  static const double _posterHeight = 190;
-
-  final String title;
-  final VoidCallback onTap;
-  final String? imageUrl;
-  final String? subtitle;
-
-  /// 榜单名次角标（热门榜单用；搜索结果不传）。
-  final int? rank;
-
-  /// 评分角标（豆瓣分；榜单里多数条目为空）。
-  final String? score;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final rank = this.rank;
-    final score = this.score;
-    return SizedBox(
-      width: _width,
-      // 卡片总高**固定**（用户 2026-10-14：「自动基于高宽计算… 刚好铺满」）：
-      // 热门网格按 `mainAxisExtent` 恰好铺满，行高必须可预测；结果区（`Wrap`）
-      // 里的卡片也因此各行列对齐，不再因有无副标题而高低不齐。
-      height: HotRankMetrics.cardHeight,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: AppRadius.mdAll,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: AppRadius.mdAll,
-              child: Stack(
-                children: [
-                  PosterImage(
-                    url: imageUrl,
-                    width: _width,
-                    height: _posterHeight,
-                    // 限解码尺寸：榜单封面的原始分辨率从 150×200 到 770×1080
-                    // 都有（最大那张 PNG 1.6MB）。按 2 倍屏解码已经够清晰，
-                    // 再大只是白吃内存与解码时间。
-                    cacheWidth: (_width * 2).round(),
-                  ),
-                  if (rank != null)
-                    Positioned(
-                      left: 6,
-                      top: 6,
-                      child: _CornerBadge(text: 'TOP$rank'),
-                    ),
-                  if (score != null)
-                    Positioned(
-                      right: 6,
-                      bottom: 6,
-                      child: _CornerBadge(text: score, highlight: true),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpace.xs),
-            // 文字区吃掉剩余高度；放大字号时**只缩不放**，避免固定高的卡片溢出。
-            Expanded(
-              child: MediaQuery.withClampedTextScaling(
-                maxScaleFactor: 1.0,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    if (subtitle != null)
-                      Text(
-                        subtitle!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 海报角标（与 `browse_pages` 的卡片角标同一视觉语言）。
-class _CornerBadge extends StatelessWidget {
-  const _CornerBadge({required this.text, this.highlight = false});
-
-  final String text;
-
-  /// 评分/名次用暖色强调（中性信息则用半黑底）。
-  final bool highlight;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: highlight ? const Color(0xCCE8830C) : const Color(0x99000000),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          height: 1.2,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-/// 相似度滑块对话框（对齐上游安卓 `SliderNumberDialog`）。
-///
-/// 实现委托给共享的 [showNumberSliderDialog]：设置页的「搜索线程」是同一个
-/// 交互形态（上游也是同一个对话框服务两处），两份实现必然分叉。
-/// `keyPrefix` 保持 `similarity` 以免既有 widget 测试的 key 失效。
-///
-/// 返回用户确认的数值；取消时返回 null。
-Future<int?> showSimilaritySliderDialog(
-  BuildContext context, {
-  required int current,
-}) => showNumberSliderDialog(
-  context,
-  title: '相似度',
-  current: current,
-  minValue: 0,
-  maxValue: 100,
-  suffix: '%',
-  hint: '调整搜索结果的匹配宽松度，100为精确匹配，0为不限',
-  keyPrefix: 'similarity',
-);

@@ -2519,6 +2519,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 按 key（或名称兜底）在当前配置里找站点；找不到返回 `null`。
+  ///
+  /// 播放器与详情页的「定向换源」需要它：外部线路只带站点 key，播放时把那
+  /// 一个 [Site] 交给 [resolvePlayback] 的 `siteOverride`，**不**切换全局站源。
+  Site? siteByKey(String key) {
+    final config = effectiveConfig;
+    return config == null ? null : _siteByKey(config, key);
+  }
+
+  /// 按 key（或名称兜底）在当前配置里找站点；找不到返回 `null`。
   static Site? _siteByKey(AppConfig config, String key) {
     final target = key.trim();
     if (target.isEmpty) return null;
@@ -3318,6 +3327,32 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     }
   }
 
+  /// 换源解析：拿一个**指定站点**的详情，解析出它自己的线路。
+  ///
+  /// 找不到站点或详情里没有线路时如实抛错/返回空列表，由浮层显示「无分集」；
+  /// 绝不伪造一条线路——用户点下去播放会直接失败，比当下说清楚更难排查。
+  Future<List<VodPlayLine>> swapProbe({
+    required String siteKey,
+    required String vodId,
+    String vodName = '',
+  }) async {
+    final site = siteByKey(siteKey);
+    if (site == null) {
+      throw AppError(AppErrorKind.siteUnsupported, '换源目标站点不存在：$siteKey');
+    }
+    final service = _siteService;
+    if (service == null) {
+      throw AppError(AppErrorKind.siteUnsupported, '站点服务不可用：$siteKey');
+    }
+    final outcome = await service.detail(
+      site,
+      vodId,
+      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
+    );
+    if (outcome.value.list.isEmpty) return const [];
+    return playLinesOf(outcome.value.list.first);
+  }
+
   /// 多站点并发搜索（§14.1、§14.3）。
   ///
   /// 行为约束：
@@ -3330,6 +3365,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   ///
   /// [siteKey] / [group] 限定搜索范围（对齐上游 SearchFragment 的
   /// 「全部 / 当前站点 / 某分组」）：范围外的站点**既不参与也不算跳过**。
+  ///
+  /// [quick] 对齐上游「快速搜索」（安卓 searchContent(sites, keyword, true)）：
+  /// 站点声明了 quickSearch 时请求带上 quick=true，由站点侧少翻页/少解析。
+  /// 换源浮层走的就是这条路径——它是安卓既有的限流语义，不是新增开关。
   Future<MultiSiteSearchOutcome> searchAll(
     String keyword, {
     String? siteKey,
@@ -3498,6 +3537,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     outcome.totalElapsed = stopwatch.elapsed;
     log.info(
       '并发搜索完成 run=$runId wd=$keyword sites=${sites.length} '
+      'quick=$quick '
       'concurrency=$concurrencyApplied '
       'ok=${entries.where((item) => item.succeeded).length} '
       'failed=${entries.where((item) => !item.succeeded).length} '
@@ -3884,13 +3924,19 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   List<VodPlayLine> playLinesOf(Vod vod) => parseVodPlayLines(vod);
 
   /// 解析播放请求（§10.2）。
+  ///
+  /// [siteOverride] 只对**这一次调用**生效：给了就用它，不给仍用当前选中站点
+  /// （[selectedSite]）。「播放外部站点的线路」必须走这条路——[selectSite] 会
+  /// 连带改顶栏站源、触发整页重建，而调用方只想要一次定向解析。
   Future<PlaybackDecision?> resolvePlayback({
     required String episodeTarget,
     String? flag,
     String? vodId,
+    Site? siteOverride,
   }) async {
     final service = _siteService;
-    final site = _selectedSite;
+    // 本次解析用的站点：覆盖优先，之后所有分支（service/proxy/日志）共用它。
+    final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return null;
     try {
       final outcome = await service.resolvePlayback(

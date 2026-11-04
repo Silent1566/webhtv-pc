@@ -262,6 +262,10 @@ class SiteService {
   /// 2. 第 2 页的结果会被写进 `(关键词, 站点)` 这个键 → 之后重新搜同一关键词
   ///    时，第 1 页位置显示的是第 2 页内容。
   /// 因此 `page > 1` 的请求必须传 [cache] = false。
+  ///
+  /// [client] 是本次搜索专属的 HTTP 客户端（并发搜索用来支持「取消即掐断
+  /// 在途连接」）；为 null 时沿用路由缓存的运行时。只有 HTTP API 运行时
+  /// 会用到它，sidecar / cat-http 站点照旧。
   Future<SiteCallResult<SiteResult>> search(
     Site site, {
     required String keyword,
@@ -269,6 +273,7 @@ class SiteService {
     bool quick = false,
     bool useCache = true,
     bool cache = true,
+    HttpApiClient? client,
   }) async {
     final database = _database;
     if (cache && useCache && database != null) {
@@ -293,11 +298,16 @@ class SiteService {
       }
     }
 
-    final runtime = router.runtimeFor(site);
     final outcome = await _call(
       site.key,
       HealthAction.home,
-      () => runtime.search(site, keyword: keyword, page: page, quick: quick),
+      () => router.search(
+        site,
+        keyword: keyword,
+        page: page,
+        quick: quick,
+        client: client,
+      ),
     );
     if (cache && database != null) {
       try {
