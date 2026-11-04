@@ -238,8 +238,13 @@ class SidecarServer:
         stdin=None,
         stdout=None,
         max_workers: int = 4,
+        hold: bool = False,
     ):
         self.spider = spider
+        # `hold=True`：`destroy` 只释放站源，不结束服务循环（`--hold`）。
+        # 蜘蛛自起本地 HTTP 取流服务时，进程一退端口就没了，靠这个开关把侧车
+        # 留在原地，由宿主显式 `shutdown` 或 stdin EOF 收尾。
+        self.hold = bool(hold)
         self.manifest = dict(manifest or {})
         self.stdin = stdin if stdin is not None else sys.stdin.buffer
         self.stdout = stdout if stdout is not None else sys.stdout.buffer
@@ -274,7 +279,7 @@ class SidecarServer:
             "proxy": lambda params, ctx: self._invoke("proxy", params, ctx),
             "action": lambda params, ctx: self._invoke("action", params, ctx),
             "destroy": self._handle_destroy,
-            "shutdown": self._handle_destroy,
+            "shutdown": self._handle_shutdown,
             "heartbeat": lambda params, ctx: {"ok": True},
         }
 
@@ -405,6 +410,13 @@ class SidecarServer:
         }
 
     def _handle_destroy(self, params: Mapping[str, Any], context: CallContext) -> dict:
+        self._call_quietly("destroy")
+        if not self.hold:
+            self._stopping = True
+        return {"ok": True}
+
+    def _handle_shutdown(self, params: Mapping[str, Any], context: CallContext) -> dict:
+        """显式停机：无论 hold 与否都结束服务循环。"""
         self._stopping = True
         self._call_quietly("destroy")
         return {"ok": True}

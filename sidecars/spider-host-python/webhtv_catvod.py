@@ -185,6 +185,23 @@ def _restore_stdout() -> None:
         _stdout_redirected = False
 
 
+def _shim_spider_class() -> type | None:
+    """`base/spider.py` 垫片基类；站源没覆盖的方法就落在这里。"""
+    try:
+        from base.spider import Spider as ShimSpider  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - 垫片缺失时退化为「全部按站源自报」
+        return None
+    return ShimSpider
+
+
+def _declaring_class(cls: type, name: str) -> type | None:
+    """返回 MRO 上**真正定义** name 的类；用来区分「站源自实现」与「继承默认实现」。"""
+    for candidate in getattr(cls, "__mro__", (cls,)):
+        if name in candidate.__dict__:
+            return candidate
+    return None
+
+
 class CatVodSpider:
     """把 CatVod 方言蜘蛛包成 webhtv-ipc-v1 站源。"""
 
@@ -197,6 +214,11 @@ class CatVodSpider:
     # ------------------------------------------------------------ 生命周期
 
     def init(self, extend: str) -> Any:
+        # 纪律：站点 ext 必须以**原始字符串**透传，本模块不得把 base64 串 ext
+        # 归一化成 dict / JSON。CatVod 壳自己解码（Atvp.py:265 _decode_ext_payload
+        # 只做 base64 解码，Atvp.py:227 立刻 payload.get("t4_play_type")）；
+        # 一旦归一化，订阅里 91 个 py 站点会全灭
+        # （AttributeError: 'NoneType' object has no attribute 'get'）。
         handler = getattr(self._crawler, "init", None)
         if not callable(handler):
             return None
@@ -215,10 +237,24 @@ class CatVodSpider:
             _restore_stdout()
 
     def capabilities(self) -> list:
+        """如实自报能力：壳实现了 8 个方法，但只有底层蜘蛛真正实现的才算具备。
+
+        判据是静态的——方法存在、可调用，且**不是**垫片基类的默认实现——绝不靠
+        「调一次看是否抛异常」来猜（§9.3 反面）。声明了却没实现的能力会在运行期
+        变成 SPIDER_UNSUPPORTED，比一开始就不声明更难诊断。
+        """
+        shim = _shim_spider_class()
         supported = []
-        for method in ("home", "category", "detail", "search", "play"):
-            if callable(getattr(self._crawler, SHELL_TO_CATVOD[method], None)):
-                supported.append(method)
+        for method in SHELL_TO_CATVOD:
+            catvod_method = SHELL_TO_CATVOD[method]
+            if not callable(getattr(self._crawler, catvod_method, None)):
+                continue
+            owner = _declaring_class(type(self._crawler), catvod_method)
+            if owner is not None and owner is shim:
+                # 命中 base/spider.py 的默认实现（如 liveContent 返回空直播表、
+                # localProxy 抛 NotImplementedError）：站源并没有这个能力。
+                continue
+            supported.append(method)
         return supported
 
     # ------------------------------------------------------------ 壳方法

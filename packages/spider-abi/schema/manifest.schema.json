@@ -13,7 +13,7 @@
     "capabilities": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["home", "category", "detail", "search", "play", "proxy"] }
+      "items": { "enum": ["home", "category", "detail", "search", "play", "homeVod", "live", "proxy", "action"] }
     },
     "permissions": {
       "type": "object",

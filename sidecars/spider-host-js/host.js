@@ -241,7 +241,13 @@ function fetchOnce(url, options, maxBodyBytes) {
         },
         (response) => {
           const status = response.statusCode || 0;
-          if (status >= 300 && status < 400 && response.headers.location) {
+          // `redirect: 0`（TVBox 语义）把 3xx 原样交回站源，不跟随。
+          if (
+            status >= 300 &&
+            status < 400 &&
+            response.headers.location &&
+            options.followRedirect !== false
+          ) {
             response.resume();
             if (++redirects > MAX_REDIRECTS) {
               resolve({
@@ -332,7 +338,7 @@ class SidecarServer {
    * @param {string} options.workDir 每站点工作目录
    * @param {number} [options.maxWorkers] 并发上限
    */
-  constructor({ entryPath, manifest, workDir, maxWorkers = 4 }) {
+  constructor({ entryPath, manifest, workDir, maxWorkers = 4, tvboxAssets = null }) {
     this.entryPath = entryPath;
     this.manifest = manifest || {};
     this.workDir = workDir;
@@ -350,6 +356,15 @@ class SidecarServer {
     this.inflight = new Set();
     this.decodeErrors = 0;
 
+    // TVBox 全局面 + ESM 模块系统只在 `node-tvbox*` 上启用；`runtime: node` 下
+    // tvbox 为 false，沙箱线程既不装全局面也不解析 assets://，与旧版逐字一致。
+    this.runtime = String(this.manifest.runtime || 'node');
+    this.tvbox = this.runtime.startsWith('node-tvbox');
+    this.tvboxAssets = this.tvbox && tvboxAssets ? path.resolve(tvboxAssets) : null;
+    if (this.tvbox && !this.tvboxAssets) {
+      log('警告：运行时是 node-tvbox 但未提供 --tvbox-assets，站源的 assets:// 依赖会加载失败');
+    }
+
     // manifest 是分发契约：声明了 capabilities 时以 manifest 为准，
     // sidecar 自报的能力不得超出 manifest（§9.7）。
     const declared = this.manifest.capabilities;
@@ -360,7 +375,12 @@ class SidecarServer {
     );
 
     this.worker = new Worker(path.join(__dirname, 'sandbox_worker.js'), {
-      workerData: { workDir },
+      workerData: {
+        workDir,
+        runtime: this.runtime,
+        tvbox: this.tvbox,
+        assetsRoot: this.tvboxAssets,
+      },
     });
     this.worker.on('error', (error) => {
       log(`沙箱线程崩溃：${error.message}`);
@@ -672,12 +692,13 @@ class SidecarServer {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { entry: null, manifest: null, maxWorkers: 4 };
+  const args = { entry: null, manifest: null, maxWorkers: 4, tvboxAssets: null };
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === '--entry') args.entry = argv[++index];
     else if (token === '--manifest') args.manifest = argv[++index];
     else if (token === '--max-workers') args.maxWorkers = Number(argv[++index]) || 4;
+    else if (token === '--tvbox-assets') args.tvboxAssets = argv[++index];
   }
   return args;
 }
@@ -712,6 +733,7 @@ async function main() {
     manifest,
     workDir,
     maxWorkers: args.maxWorkers,
+    tvboxAssets: args.tvboxAssets,
   });
   try {
     await server.start();
