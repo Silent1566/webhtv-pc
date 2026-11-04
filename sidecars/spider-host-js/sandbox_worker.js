@@ -36,7 +36,9 @@
  *
  * # 已知限制（诚实记录，不静默）
  *
- * - `req` 返回响应体**字符串**（对齐 TVBox 语义），需要 JSON 时站源自行 `JSON.parse`；
+ * - `req` 返回**混合对象**：既能当响应体字符串用（`String(r)`、`JSON.parse(r)`、
+ *   `r.length`，对齐 `runtime: node` 的旧语义），又能读取 `r.content` / `r.status` /
+ *   `r.headers` / `r.url`（对齐 TVBox 生态）；`{buffer:true}` 直接返回 Buffer；
  * - Android/浏览器专有全局（`getWebViewUrl`、`startThunder`、`js2Proxy` 等）会抛出
  *   明确的「桌面端未实现」，而不是返回 `undefined` 让站源静默走错分支；
  * - 站源必须是**同步**的；返回 Promise 会被明确判错（异步站源需另开 ABI）。
@@ -46,9 +48,13 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parentPort, workerData } = require('node:worker_threads');
+const esmShim = require('./esm_shim');
 
 /** 默认 req 超时（与宿主侧上限同量级）。 */
 const DEFAULT_TIMEOUT_MS = 15000;
+
+/** 单个 req 的超时上限，与 host.js 的 `_deadlineOf` 上限（120s）对齐。 */
+const MAX_REQUEST_TIMEOUT_MS = 120000;
 
 // 与宿主 host.js 一致：Atomics 只能存取 32 位整数（字符串会被截断成 0）。
 const STATUS_OK = 1;
@@ -115,11 +121,87 @@ const log = (message) => {
 // 同步 req：阻塞本线程，等主线程完成异步 HTTP 后唤醒
 // ---------------------------------------------------------------------------
 
+/**
+ * TVBox 生态按**秒**传 `timeout`（`{timeout: 5}` 指 5 秒），宿主内部按毫秒。
+ * 判据：小于 1000 视为秒，否则视为毫秒（bili.js 传 10000 即 10 秒）。
+ * 结果夹在 [1s, 120s]：既不让 0.05 被当成 50ms，也不让站点写出天文数字。
+ */
+function resolveTimeoutMs(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_TIMEOUT_MS;
+  const ms = value < 1000 ? value * 1000 : value;
+  return Math.min(Math.max(Math.round(ms), 1000), MAX_REQUEST_TIMEOUT_MS);
+}
+
+/** 把 TVBox 的 `data` / `postType` 折成宿主认识的请求体字符串。 */
+function buildRequestBody(opts) {
+  const data = opts.data;
+  if (data === undefined || data === null) return opts.body;
+  if (typeof data === 'string') return data;
+  const postType = String(opts.postType || 'form').toLowerCase();
+  if (postType === 'json') return JSON.stringify(data);
+  if (postType === 'form') {
+    return Object.keys(data)
+      .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(data[key] ?? '')}`)
+      .join('&');
+  }
+  return String(data);
+}
+
+/** 按 `charset` 解码响应体；gbk 走 Node 内置 full-ICU 的 TextDecoder，不移植 gbk.js。 */
+function decodeBody(buffer, charset) {
+  const encoding = String(charset || '').trim().toLowerCase();
+  if (!encoding || encoding === 'utf-8' || encoding === 'utf8') {
+    return buffer.toString('utf8');
+  }
+  try {
+    return new TextDecoder(encoding).decode(buffer);
+  } catch {
+    // 不认识的编码退化为 UTF-8，留日志便于排查，不让站源整个失败。
+    log(`req 不认识的 charset=${encoding}，回退 UTF-8`);
+    return buffer.toString('utf8');
+  }
+}
+
+/**
+ * 构造 req 的返回值：**同一个对象**既要能当字符串用（fixture_spider 的裸字符串语义），
+ * 又要能当 TVBox 响应对象用（bili.js 读 `res.content`）。
+ * 关键在 `Symbol.toPrimitive`：`String(r)` 与 `JSON.parse(r)` 都拿到正文字符串。
+ */
+function buildResponse(buffer, opts, meta, target) {
+  // `buffer: true` 直接给 Buffer，站点要自己按二进制处理（TVBox 同语义）。
+  if (opts.buffer === true) return buffer;
+  const content = decodeBody(buffer, opts.charset);
+  const statusCode = Number(meta.statusCode) || 0;
+  const response = {
+    content,
+    body: content,
+    status: statusCode,
+    code: statusCode,
+    ok: statusCode >= 200 && statusCode < 400,
+    headers: meta.headers && typeof meta.headers === 'object' ? meta.headers : {},
+    url: meta.finalUrl || target,
+    length: content.length,
+    toString() {
+      return content;
+    },
+    valueOf() {
+      return content;
+    },
+  };
+  Object.defineProperty(response, Symbol.toPrimitive, {
+    value(hint) {
+      return hint === 'number' ? content.length : content;
+    },
+    enumerable: false,
+  });
+  return response;
+}
+
 function syncRequest(url, options) {
   const opts = options || {};
   const target = typeof url === 'string' ? url : String(url);
-  const timeoutMs =
-    Number(opts.timeout) > 0 ? Number(opts.timeout) : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = resolveTimeoutMs(opts.timeout);
   const id = `r${requestSequence++}`;
   const sab = new SharedArrayBuffer(4);
   const state = new Int32Array(sab);
@@ -137,8 +219,10 @@ function syncRequest(url, options) {
     options: {
       method: opts.method || 'GET',
       headers: opts.headers || {},
-      body: opts.body,
+      body: buildRequestBody(opts),
       timeoutMs,
+      // TVBox 的 `redirect: 0` 表示不跟随跳转，把 3xx 原样交回站源。
+      followRedirect: opts.redirect !== 0 && opts.redirect !== '0',
     },
   });
 
@@ -179,9 +263,9 @@ function syncRequest(url, options) {
     throw new ScriptError(`req 未知状态：${status}`, { stage: 'req' });
   }
 
-  let body = '';
+  let raw = Buffer.alloc(0);
   try {
-    body = fs.readFileSync(bodyPath, 'utf8');
+    raw = fs.readFileSync(bodyPath);
   } catch (error) {
     // 0 字节响应是合法的（例如 204），不算错误。
     if (error.code !== 'ENOENT') {
@@ -190,7 +274,7 @@ function syncRequest(url, options) {
     }
   }
   cleanup();
-  return body;
+  return buildResponse(raw, opts, meta, target);
 }
 
 function cleanupFiles(...paths) {
@@ -216,7 +300,8 @@ function safeUrl(url) {
 // 沙箱
 // ---------------------------------------------------------------------------
 
-function createContext(sandboxName, storage) {
+function createContext(sandboxName, storage, options) {
+  const tvbox = Boolean(options && options.tvbox);
   const sandbox = {};
   const context = vm.createContext(sandbox, {
     name: `spider:${sandboxName}`,
@@ -266,18 +351,217 @@ function createContext(sandboxName, storage) {
   // `globalThis` 在沙箱里指向 context 自身，站源常用它挂全局。
   vm.runInContext('var globalThis = this;', context);
 
+  // TVBox 全局面只在 `node-tvbox` 运行时安装：`runtime: node` 的可见全局必须与
+  // 旧版逐字一致，多注入一个全局都算行为变化。惰性 require 同时保证 node 运行时
+  // 完全不加载 cheerio / crypto-js。
+  if (tvbox) {
+    const { installTvboxGlobals } = require('./tvbox_globals');
+    installTvboxGlobals(context, { log, storage });
+  }
+
   return context;
 }
 
-function loadSpider({ entryPath }) {
+// ---------------------------------------------------------------------------
+// node-tvbox 运行时：ESM 模块系统 + 站源入口发现
+// ---------------------------------------------------------------------------
+
+/** `__jsEvalReturn()` 返回的短名 → 脚本层规范名（`callMethod` 按规范名查找）。 */
+const SHORT_TO_SCRIPT = {
+  home: 'homeContent',
+  category: 'categoryContent',
+  detail: 'detailContent',
+  search: 'searchContent',
+  play: 'playerContent',
+};
+
+/** 合格蜘蛛至少要有一半的取数方法，否则说明入口找错了。 */
+const SPIDER_METHODS = ['home', 'homeVod', 'category', 'detail', 'search', 'play'];
+
+function isSpiderLike(value) {
+  if (!value || typeof value !== 'object') return false;
+  const hits = SPIDER_METHODS.filter((name) => typeof value[name] === 'function');
+  return hits.length >= 3;
+}
+
+/**
+ * 四级入口发现，顺序固定，前一级命中就不再看后面：
+ *   1. `module.exports.__jsEvalReturn()` —— CatVod/TVBox 生态的标准出口；
+ *   2. `module.exports.default` —— ESM 默认导出；
+ *   3. 名字里含 `spider` 的导出 —— 常见命名习惯；
+ *   4. 模块内唯一函数 —— 兜底：只有一个可调用导出时它就是入口。
+ * 每一级都要过 `isSpiderLike` 判定，避免把工具函数误当站源。
+ */
+function pickSpider(exported) {
+  const candidates = [];
+  if (exported && typeof exported === 'object') {
+    if (typeof exported.__jsEvalReturn === 'function') {
+      candidates.push(['module.exports.__jsEvalReturn', exported.__jsEvalReturn]);
+    }
+    if (exported.default !== undefined) {
+      candidates.push(['module.exports.default', exported.default]);
+    }
+    for (const [name, value] of Object.entries(exported)) {
+      if (name === '__jsEvalReturn' || name === 'default') continue;
+      if (/spider/i.test(name)) candidates.push([`module.exports.${name}`, value]);
+    }
+    const functions = Object.entries(exported).filter(
+      ([, value]) => typeof value === 'function',
+    );
+    if (functions.length === 1) {
+      candidates.push([`模块内唯一函数 ${functions[0][0]}`, functions[0][1]]);
+    }
+  }
+
+  for (const [via, value] of candidates) {
+    let resolved;
+    try {
+      resolved = typeof value === 'function' ? value() : value;
+    } catch (error) {
+      throw new ScriptError(`站源入口 ${via} 调用失败：${error.message}`, {
+        stage: 'load',
+        entry: via,
+      });
+    }
+    if (isSpiderLike(resolved)) return { spider: resolved, via };
+    // `export default { default: spider }` 这类双层包装。
+    if (resolved && typeof resolved === 'object' && isSpiderLike(resolved.default)) {
+      return { spider: resolved.default, via: `${via}.default` };
+    }
+  }
+
+  throw new ScriptError(
+    '找不到 TVBox 站源入口：module.exports.__jsEvalReturn / default / 含 spider 的导出 / 唯一函数 都没有返回含 home、category、detail 的对象',
+    { stage: 'load' },
+  );
+}
+
+/**
+ * 站源模块加载器：ESM 源码 → `esm_shim.transform` → `vm.compileFunction`。
+ * 改写后的 `__require(...)` 是**每个模块自己的**局部函数，所以相对路径按模块目录解析，
+ * 而不是按站点工作目录。
+ */
+function createModuleLoader(context, options) {
+  const assetsDir = options.assetsDir ? path.resolve(options.assetsDir) : null;
+  const cache = new Map();
+
+  function requireFrom(spec, fromDir) {
+    const raw = String(spec == null ? '' : spec);
+    const resolved = esmShim.resolveSpec(raw, { assetsDir, fromDir });
+    if (resolved) return loadFile(resolved);
+    // assets:// 缺目录、越界访问都由 resolveSpec 抛出明确错误；走到这里是裸模块名。
+    throw new ScriptError(
+      `站源 import 了宿主模块 "${raw}"：桌面端不向沙箱开放 require，请改用 req / pdfh / CryptoJS / cheerio 全局面`,
+      { stage: 'load', spec: raw },
+    );
+  }
+
+  function loadFile(filePath) {
+    const absolute = path.resolve(filePath);
+    const cached = cache.get(absolute);
+    if (cached) return cached.exports;
+
+    let source;
+    try {
+      source = fs.readFileSync(absolute, 'utf8');
+    } catch (error) {
+      throw new ScriptError(`站源模块无法读取：${absolute}`, {
+        stage: 'load',
+        filename: absolute,
+      });
+    }
+    let code;
+    try {
+      code = esmShim.transform(source);
+    } catch (error) {
+      throw new ScriptError(`站源模块 ESM 改写失败：${absolute}：${error.message}`, {
+        stage: 'load',
+        filename: absolute,
+      });
+    }
+
+    const module = { exports: {} };
+    // 先入缓存：ESM 循环依赖会拿到半成品导出，比无限递归好。
+    cache.set(absolute, module);
+    const moduleDir = path.dirname(absolute);
+    // 用 `__require` 作形参名，改写出来的 `__require("...")` 自然命中模块局部解析。
+    let wrapper;
+    try {
+      wrapper = vm.compileFunction(
+        code,
+        ['exports', '__require', 'module', '__filename', '__dirname'],
+        { filename: absolute, parsingContext: context },
+      );
+    } catch (error) {
+      throw new ScriptError(`站源模块语法错误：${absolute}：${error.message}`, {
+        stage: 'load',
+        filename: absolute,
+      });
+    }
+    try {
+      wrapper(
+        module.exports,
+        (spec) => requireFrom(spec, moduleDir),
+        module,
+        absolute,
+        moduleDir,
+      );
+    } catch (error) {
+      if (error && (error.name === 'ScriptError' || error.name === 'UnsupportedGlobalError')) {
+        throw error;
+      }
+      throw new ScriptError(
+        `站源模块加载失败：${absolute}：${error && error.message ? error.message : String(error)}`,
+        {
+          stage: 'load',
+          filename: absolute,
+          scriptStack:
+            error && error.stack
+              ? String(error.stack).split('\n').slice(0, 6).join(' | ')
+              : undefined,
+        },
+      );
+    }
+    return module.exports;
+  }
+
+  // `import d from 'x'` 的默认导入互操作（改写产物里用 `__interop`）。
+  context.__interop = (value) =>
+    value && typeof value === 'object' && value.default !== undefined
+      ? value.default
+      : value;
+
+  return { loadEntry: (entryPath) => loadFile(path.resolve(entryPath)) };
+}
+
+function loadSpider({ entryPath, tvbox, assetsDir }) {
+  const storage = new Map();
+  const context = createContext(spiderKey, storage, { tvbox });
+
+  if (tvbox) {
+    const loader = createModuleLoader(context, { assetsDir });
+    const exported = loader.loadEntry(entryPath);
+    const { spider, via } = pickSpider(exported);
+    // 把蜘蛛对象上的方法提升到全局：`callMethod` 仍按 `SCRIPT_METHODS` 找规范名，
+    // 而 `__jsEvalReturn()` 返回的是短名，这里顺带做一次别名映射。
+    let hoisted = 0;
+    for (const [name, value] of Object.entries(spider)) {
+      if (typeof value !== 'function') continue;
+      context[name] = value;
+      const canonical = SHORT_TO_SCRIPT[name];
+      if (canonical && !(canonical in context)) context[canonical] = value;
+      hoisted += 1;
+    }
+    log(`TVBox 站源入口：${via}（提升 ${hoisted} 个方法）`);
+    return { context, storage, tvbox: true };
+  }
+
   let source;
   try {
     source = fs.readFileSync(entryPath, 'utf8');
   } catch (error) {
     throw new ScriptError(`站源文件无法读取：${entryPath}`, { cause: error.message });
   }
-  const storage = new Map();
-  const context = createContext(spiderKey, storage);
   try {
     // 与 TVBox 一致：脚本在全局作用域执行，导出的函数成为 context 属性。
     new vm.Script(source, { filename: entryPath }).runInContext(context);
@@ -296,7 +580,7 @@ function loadSpider({ entryPath }) {
       }
     }
   }
-  return { context, storage };
+  return { context, storage, tvbox: false };
 }
 
 let spiderContext = null;
@@ -304,6 +588,9 @@ let spiderStorage = null;
 
 /// 站点 key（来自 manifest），仅用于诊断名称。
 let spiderKey = 'js-spider';
+
+/// 当前站源是否走 `node-tvbox` 运行时（决定返回值字符串是否按 JSON 解析）。
+let spiderTvbox = false;
 
 function scriptArgs(hostMethod, params) {
   const p = params || {};
@@ -384,7 +671,7 @@ function wrapError(error, hostMethod) {
   );
 }
 
-function callMethod(hostMethod, params) {
+async function callMethod(hostMethod, params) {
   const scriptMethod = SCRIPT_METHODS[hostMethod];
   if (!scriptMethod) throw new ScriptError(`未实现的方法：${hostMethod}`);
   const fn = spiderContext[scriptMethod];
@@ -397,15 +684,37 @@ function callMethod(hostMethod, params) {
   let result;
   try {
     result = fn.apply(spiderContext, scriptArgs(hostMethod, params));
+    if (result && typeof result.then === 'function') {
+      // `node-tvbox` 的站源几乎全是 async（bili.js 12 个方法全 async）。沙箱没有注入
+      // 定时器，`await` 只依赖微任务，所以可以直接等——阻塞式 req 仍是同步的。
+      // `runtime: node` 保持旧语义：Promise 明确判错，不静默吞掉。
+      if (!spiderTvbox) {
+        throw new ScriptError(
+          `站源 ${scriptMethod}() 返回 Promise；桌面端只支持同步站源（异步站源需另开 ABI）`,
+          { hostMethod },
+        );
+      }
+      result = await result;
+    }
   } catch (error) {
     throw wrapError(error, hostMethod);
   }
-  // 只支持同步站源：把 Promise 当结果序列化会得到 {}，那才是真正的静默失败。
-  if (result && typeof result.then === 'function') {
-    throw new ScriptError(
-      `站源 ${scriptMethod}() 返回 Promise；桌面端只支持同步站源（异步站源需另开 ABI）`,
-      { hostMethod },
-    );
+  // TVBox 站源习惯返回 `JSON.stringify(...)` 字符串（bili.js 每个方法都是），
+  // 这里只在 node-tvbox 运行时解析：`runtime: node` 下字符串结果仍按旧语义报错。
+  if (spiderTvbox && typeof result === 'string') {
+    const text = result.trim();
+    if (text.length === 0) {
+      result = null;
+    } else {
+      try {
+        result = JSON.parse(text);
+      } catch {
+        throw new ScriptError(
+          `站源 ${scriptMethod}() 返回了无法解析的 JSON 字符串：${text.slice(0, 120)}`,
+          { hostMethod },
+        );
+      }
+    }
   }
   return normalizeResult(result, hostMethod);
 }
@@ -414,15 +723,38 @@ function callMethod(hostMethod, params) {
 // 与宿主主线程的消息循环
 // ---------------------------------------------------------------------------
 
+/**
+ * 异步站源的调用串行化：同一个 context 里不允许两条调用交错执行。
+ * 同步站源走同一条链（`then` 立即执行），行为与直接调用等价。
+ */
+let callChain = Promise.resolve();
+function serialize(task) {
+  const run = callChain.then(task, task);
+  callChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
 parentPort.on('message', (message) => {
   if (!message || typeof message !== 'object') return;
   if (message.type === 'load') {
     try {
       const manifest = message.manifest || {};
       spiderKey = String(manifest.key || 'js-spider');
-      const { context, storage } = loadSpider({ entryPath: message.entryPath });
+      // `node-tvbox` 才装 TVBox 全局面 + ESM 模块系统；`node` 走旧路径。
+      const runtime = String(manifest.runtime || workerData.runtime || 'node');
+      const tvbox = workerData.tvbox === true || runtime.startsWith('node-tvbox');
+      const assetsRoot = message.assetsRoot || workerData.assetsRoot || null;
+      const { context, storage } = loadSpider({
+        entryPath: message.entryPath,
+        tvbox,
+        assetsDir: assetsRoot,
+      });
       spiderContext = context;
       spiderStorage = storage;
+      spiderTvbox = tvbox;
       if (typeof context.init === 'function') {
         context.__spiderInit = context.init;
       }
@@ -439,37 +771,43 @@ parentPort.on('message', (message) => {
   }
 
   if (message.type === 'init') {
-    try {
-      const extend = message.extend == null ? '' : String(message.extend);
-      if (typeof spiderContext.__spiderInit === 'function') {
-        spiderContext.__spiderInit.call(spiderContext, extend);
+    void serialize(async () => {
+      try {
+        const extend = message.extend == null ? '' : String(message.extend);
+        if (typeof spiderContext.__spiderInit === 'function') {
+          const outcome = spiderContext.__spiderInit.call(spiderContext, extend);
+          // TVBox 站源的 init 常是 async；等它完成再放行后续调用（同步 init 是 no-op）。
+          if (outcome && typeof outcome.then === 'function') await outcome;
+        }
+        parentPort.postMessage({ type: 'init-result', ok: true });
+      } catch (error) {
+        parentPort.postMessage({
+          type: 'init-result',
+          ok: false,
+          error: error.message,
+        });
       }
-      parentPort.postMessage({ type: 'init-result', ok: true });
-    } catch (error) {
-      parentPort.postMessage({
-        type: 'init-result',
-        ok: false,
-        error: error.message,
-      });
-    }
+    });
     return;
   }
 
   if (message.type === 'call') {
     const { id, method, params } = message;
-    try {
-      const result = callMethod(method, params);
-      parentPort.postMessage({ type: 'call-result', id, ok: true, result });
-    } catch (error) {
-      parentPort.postMessage({
-        type: 'call-result',
-        id,
-        ok: false,
-        error: error.message,
-        details: error.details || {},
-        scriptError: error instanceof ScriptError,
-      });
-    }
+    void serialize(async () => {
+      try {
+        const result = await callMethod(method, params);
+        parentPort.postMessage({ type: 'call-result', id, ok: true, result });
+      } catch (error) {
+        parentPort.postMessage({
+          type: 'call-result',
+          id,
+          ok: false,
+          error: error.message,
+          details: error.details || {},
+          scriptError: error instanceof ScriptError,
+        });
+      }
+    });
     return;
   }
 

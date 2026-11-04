@@ -1,0 +1,12 @@
+{
+  "name": "webhtv-spider-host-js",
+  "private": true,
+  "version": "0.1.0",
+  "description": "WebHTV 的 TVBox / CatVod JS 站源 sidecar。host.js 负责帧协议与主线程 HTTP，sandbox_worker.js 是零第三方依赖的沙箱线程，tvbox_globals.js 惰性加载 cheerio / crypto-js 注入 TVBox 全局面，esm_shim.js 把 ESM 站源改写成 vm.Script 可执行的脚本。",
+  "license": "MIT",
+  "main": "host.js",
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "crypto-js": "^4.2.0"
+  }
+}

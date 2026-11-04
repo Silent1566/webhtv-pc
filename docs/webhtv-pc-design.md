@@ -297,7 +297,9 @@ Phase 0 分为两个连续门禁，避免两套候选方案重复实现完整业
 > 对于「运行存量 Android `csp_*.jar`」这一具体诉求，ADR-0002 另设**可选兼容层**：
 > 默认关闭、非主路线、走 §9.4 `webhtv-cat-http-v1` 六路由、不进入安装包。
 > 主路线仍为 §9.3 的桌面 JVM ABI（`tvbox-java-v1`）。
-> 关键事实：**能执行 dex 的只有 ART，不是 JVM**；JVM 只能运行无 Android Context 的桌面 jar。
+> 关键事实：**能直接执行 dex 的只有 ART，不是 JVM**；JVM 只能运行 class 文件。
+> 把 dex 翻译成 class 再交给 `URLClassLoader` 属另一条路线，技术上成立，但需要额外的
+> 转译链与 Android 垫片，且受混淆与现代 dex 特性限制，不在产品主线内（见 §9.9 末段）。
 
 ---
 
@@ -750,7 +752,9 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 | `webhtv-ipc-v1` | 宿主与 sidecar 的 stdio JSON-RPC 通信 | Phase 2 |
 | `webhtv-cat-http-v1` | 兼容 `POST <api>/home/category/detail/play/search` 的 HTTP 子集；兼容标签为 `tvbox-http-v1` | MVP-B 候选 |
 | `tvbox-js-v1` | Node/QuickJS 脚本协议（PC 端已实现 Node `vm` 沙箱；QuickJS 内核未实现） | Phase 3 ✅ |
+| `tvbox-js-v1`（TVBox 方言） | 同一沙箱的 TVBox 兼容模式：`runtime: node-tvbox` 时补 ESM→CJS 改写、`assets://` 解析、`pdfh`/`pdfa`/`pd` 全局面、`__jsEvalReturn` 入口发现 | Phase 11 ✅ |
 | `tvbox-python-v1` | Python 脚本协议 | Phase 3 |
+| `webhtv-catvod-python-v1` | CatVod 方言 Python 壳：`homeContent`/`searchContent` 等映射为宿主方法名，`runtime: python-catvod` 且站点目录含 `loader.json` 时启用 | Phase 11 ✅ |
 | `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名（已实现：`sidecars/spider-host-jvm/host.jar`，纯 JDK、零第三方依赖，支持 jar / 类目录 / `.java` / 源码目录四态入口） | Phase 3 ✅ |
 | `webhtv-cat-http-v1`（Android 桥接） | Android `csp_*.jar` 兼容层：桥接 APK 暴露 §9.4 六路由，宿主按 cat http 调用；默认关闭、非主路线 | 可选（ADR-0002） |
 
@@ -987,8 +991,21 @@ init()
   **无 Android Context 的桌面 jar**；含 `classes.dex` 的 Android jar 会明确报
   「JVM 无法加载」，而不是启动后崩溃（ADR-0002 §1.1）。
 
-Android `csp_*.jar` 本身仍不在桌面路径内（dex 只能由 ART 执行），如需运行存量
-Android 站源请走 ADR-0002 的可选兼容层（默认关闭、非主路线）。
+Android `csp_*.jar` 本身仍不在**已接线的**桌面路径内。措辞需要精确：能直接执行 dex
+的确实只有 ART，JVM 不能加载 `classes.dex`；但把 dex 翻译成 class 之后交给普通
+`URLClassLoader` 是另一条技术路线。ADR-0002 §1.1 与 §3 中「dex→class 转译不可行」
+的判断偏保守，应更正为「技术可行、尚未接线」。
+
+当前版本的取舍仍是不接线，理由有三条：
+
+1. 转译链本身要引入额外依赖（dex 转译器及其闭包约 1.4 MB），并需要正版许可确认；
+2. 转译产物仍需 Android 垫片（`Context`、`SharedPreferences`、`SQLiteDatabase` 等），
+   而垫片只覆盖被验证过的调用路径——依赖 Activity / UI 的站源会因垫片类层级不完整
+   在字节码校验阶段失败，补齐成本不可预估；
+3. 部分 jar 的类并不在随包的 `classes.dex` 内（站源另有下载源），dex 路线对它们无效。
+
+因此该路线只能覆盖**纯 dex 且不重度依赖 Android UI** 的一小部分站源。如需运行存量
+Android 站源，现阶段仍请走 ADR-0002 的可选兼容层（默认关闭、非主路线）。
 
 ### 9.10 Spider 验收
 
