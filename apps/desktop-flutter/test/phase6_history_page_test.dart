@@ -14,12 +14,15 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/library_pages.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 void main() {
   late Directory tempDir;
   late AppState state;
 
   setUp(() async {
+    // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+    dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-history-page');
     state = AppState(
       paths: AppPaths.resolve(
@@ -36,6 +39,8 @@ void main() {
   });
 
   tearDown(() async {
+    // 先收通知再销毁状态（通知的 `onDismiss` 会回调状态层）。
+    dismissAllToasts();
     state.dispose();
     try {
       await tempDir.delete(recursive: true);
@@ -159,15 +164,24 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: inShell
-              ? Row(
-                  children: [
-                    const SizedBox(width: 76),
-                    const VerticalDivider(width: 1),
-                    Expanded(child: page),
-                  ],
-                )
-              : page,
+          // 通知宿主挂在 `home:` 里（Navigator 的 Overlay 内），不是
+          // `MaterialApp.builder`：后者在 Overlay 之外，且会吃掉下方内容的命中
+          // 测试。挂法与层级由 `test/toast_host_test.dart` 单独锁定。
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              inShell
+                  ? Row(
+                      children: [
+                        const SizedBox(width: 76),
+                        const VerticalDivider(width: 1),
+                        Expanded(child: page),
+                      ],
+                    )
+                  : page,
+              const ToastHost(),
+            ],
+          ),
         ),
       ),
     );
@@ -816,7 +830,11 @@ void main() {
       await pumpHistory(tester);
 
       await tester.tap(find.byKey(const ValueKey('history-row-1')));
-      await tester.pumpAndSettle();
+      // 不能用 `pumpAndSettle`：错误通知带 15 秒倒计时动画，settle 会一路把它
+      // 推到自动关闭，断言就没东西可看了（这正是本文件当初按「错误永不关闭」
+      // 规避的那个陷阱，错误改成 15 秒后该规避失效）。显式推两帧即可。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.textContaining('已不在当前配置中'), findsOneWidget);
       expect(find.byType(DetailPage), findsNothing);

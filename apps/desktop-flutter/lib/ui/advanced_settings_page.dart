@@ -20,6 +20,7 @@ import 'backup_page.dart';
 import 'injected_sites_page.dart';
 import 'pan_check_page.dart';
 import 'subtitle_settings_page.dart';
+import 'toast.dart';
 
 class AdvancedSettingsPage extends StatelessWidget {
   const AdvancedSettingsPage({super.key, required this.state});
@@ -583,9 +584,7 @@ class AdvancedSettingsPage extends StatelessWidget {
     final text = value.trim();
     if (text.isNotEmpty && !isUsableDohUrl(text)) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('DoH 端点必须是 https 地址')),
-      );
+      showToast('DoH 端点必须是 https 地址', kind: ToastKind.error);
       return;
     }
     await state.setDohSettings(state.dohSettings.copyWith(url: text));

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'common.dart';
+import 'toast.dart';
 
 class InjectedSitesPage extends StatefulWidget {
   const InjectedSitesPage({super.key, required this.state});
@@ -172,15 +173,9 @@ class _InjectedSitesPageState extends State<InjectedSitesPage> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (count == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('没有识别到可用站点：需要包含 key、name 与非空 api'),
-        ),
-      );
+      showToast('没有识别到可用站点：需要包含 key、name 与非空 api', kind: ToastKind.error);
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加/更新 $count 个注入站点')),
-    );
+    showToast('已添加/更新 $count 个注入站点', kind: ToastKind.success);
   }
 }

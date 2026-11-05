@@ -23,6 +23,7 @@ import 'common.dart';
 import 'image_header_scope.dart';
 import 'player_page.dart';
 import 'tokens.dart';
+import 'toast.dart';
 
 class LivePage extends StatefulWidget {
   const LivePage({super.key, required this.state, this.clock});
@@ -305,9 +306,7 @@ class _LivePageState extends State<LivePage> {
     );
     if (url == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该节目无法回看：回看参数不完整')),
-      );
+      showToast('该节目无法回看：回看参数不完整', kind: ToastKind.error);
       _state.log.warning(
         '回看地址生成失败 channel=${channel.name} program=${program.title}',
         scope: 'live',

@@ -35,6 +35,7 @@ import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
 import 'tmdb_widgets.dart';
+import 'toast.dart';
 import 'tokens.dart';
 
 class BrowsePage extends StatelessWidget {
@@ -835,22 +836,8 @@ class _VodGrid extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (state.lastError != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: ErrorBanner(
-              error: state.lastError!,
-              onDismiss: state.clearError,
-            ),
-          ),
-        if (state.notice != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: _NoticeBanner(
-              message: state.notice!,
-              onDismiss: state.clearNotice,
-            ),
-          ),
+        // 错误与通知不再在页面内拼横幅：它们由 `app.dart` 的全局投影推成右下角
+        // 通知（见 `ui/toast.dart`），页面只负责海报网格本身。
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) =>
@@ -1298,6 +1285,16 @@ class _DetailPageState extends State<DetailPage> {
   /// 否则「续播也失败」会再问一次换源，确认后又续播，形成自我递归的对话框。
   bool _resumingAfterSwap = false;
 
+  /// 上一次已经推成通知的详情错误。
+  ///
+  /// 与 `app.dart` 的 `_shownLastError` 同一做法：拿上一次投影过的值做比较，只在
+  /// 值**变成另一个错误**时推一条，因此同一个错误不会重复弹。比较用 [identical]，
+  /// 所以「清掉后再来一个新错误」会重新推——按「非空与否」比较就做不到这一点。
+  AppError? _shownDetailError;
+
+  /// 当前由详情错误推出去的那条通知的 id（没有则为 null）。
+  int? _detailErrorToastId;
+
   /// 页面内已占用的线路 `flag`（原线路 + 已并入的外部线路）。
   Set<String> get _takenFlags => {for (final line in _externalLines) line.flag};
 
@@ -1340,6 +1337,10 @@ class _DetailPageState extends State<DetailPage> {
     widget.state.tmdb.addListener(_onStateChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // 详情错误的投影也排在首帧之后：`showToast` 会 `notifyListeners`，在
+      // `initState` 里直接推等于把已挂载的全局 `ToastHost` 在构建期标脏
+      // （与 `app.dart` 首次投影同样的理由）。
+      _syncDetailErrorToast();
       widget.state.loadDetail(widget.vod);
     });
   }
@@ -1348,12 +1349,66 @@ class _DetailPageState extends State<DetailPage> {
   void dispose() {
     widget.state.removeListener(_onStateChanged);
     widget.state.tmdb.removeListener(_onStateChanged);
+    // 详情错误通知的动作指向本页的 `_openSourceSwap`，页面销毁后那条通知必须一起
+    // 收走：否则用户返回列表后点「换源」，回调会拿一个已失效的 context 去开浮层。
+    // 放到首帧之后而不是就地调用，理由同上——构建期不能标脏 `ToastHost`。
+    final toastId = _detailErrorToastId;
+    _detailErrorToastId = null;
+    if (toastId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => dismissToast(toastId));
+    }
     super.dispose();
   }
 
   void _onStateChanged() {
     if (!mounted) return;
+    _syncDetailErrorToast();
     setState(() {});
+  }
+
+  /// 把 [AppState.detailError] 投影成一条带「换源」动作的右下角通知。
+  ///
+  /// 为什么在这里而不是 `app.dart`：这条错误的动作是 `_openSourceSwap`——本页的
+  /// 私有方法，全局投影够不着它。此前把横幅换成全局通知时，那个按钮就此丢失，
+  /// 而文案里还写着「换源」，等于一句空话。**谁拥有动作，谁就拥有这条通知。**
+  ///
+  /// 按 [identical] 比较上一次投影过的错误：同一个错误只会推一条；清掉之后再出现
+  /// 一个新错误（新的 `AppError` 实例）会重新推。
+  void _syncDetailErrorToast() {
+    final error = widget.state.detailError;
+    if (identical(error, _shownDetailError)) return;
+    _shownDetailError = error;
+    if (error == null) {
+      // 状态被别处清掉（刷新详情、离开页面）：那条通知不该留在屏幕上。已经不在
+      // 栈里的 id 是空操作，所以重复走这里也不会出错。
+      final staleId = _detailErrorToastId;
+      _detailErrorToastId = null;
+      if (staleId != null) dismissToast(staleId);
+      return;
+    }
+    _detailErrorToastId = showToast(
+      error.userMessage,
+      kind: ToastKind.error,
+      detail: '错误码：${error.kind.name}${error.retryable ? " · 可重试" : ""}',
+      action: AppToastAction(
+        // 测试契约（5 个文件按这个 key 定位「换源」入口），随按钮一起搬进通知。
+        key: const ValueKey('detail-swap-source'),
+        label: '换源',
+        icon: Icons.swap_horiz,
+        onPressed: _openSourceSwap,
+      ),
+      onDismiss: _onDetailErrorToastDismissed,
+    );
+  }
+
+  /// 详情错误通知被收走（计时器/×）时清状态。
+  ///
+  /// [mounted] 这层门是必需的：通知挂在**全局**宿主上，页面先于它消失时
+  /// （见 [dispose] 里的收尾）状态层可能已经被销毁，此时再清就是
+  /// 「A AppState was used after being disposed」。
+  void _onDetailErrorToastDismissed() {
+    if (!mounted) return;
+    widget.state.clearDetailError();
   }
 
   void _closeDetail() {
@@ -1392,9 +1447,7 @@ class _DetailPageState extends State<DetailPage> {
     final counts = tmdb?.seasonEpisodeCounts ?? const <int, int>{};
     final seasons = counts.keys.toList()..sort();
     if (seasons.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('TMDB 未返回季度信息，暂时无法手动绑定季度')));
+      showToast('TMDB 未返回季度信息，暂时无法手动绑定季度', kind: ToastKind.error);
       return;
     }
     final line = tmdb?.sourceLine;
@@ -1453,9 +1506,7 @@ class _DetailPageState extends State<DetailPage> {
     final vod = _currentVod;
     final tmdbLine = tmdb?.sourceLine;
     if (vod == null || tmdbLine == null || tmdbLine.episodeCount == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前线路没有可分析的剧集')),
-      );
+      showToast('当前线路没有可分析的剧集', kind: ToastKind.error);
       return;
     }
 
@@ -1532,8 +1583,13 @@ class _DetailPageState extends State<DetailPage> {
     if (canceled || !mounted) return;
 
     if (!result.success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_aiFailureText(result.reason))),
+      // 「已取消」是用户自己的选择，不是故障：按 info 推，否则错误通知永不自动
+      // 关闭，用户取消一次分析就会留下一条要手动收走的提示。
+      showToast(
+        _aiFailureText(result.reason),
+        kind: result.reason == AiSeasonFailure.canceled
+            ? ToastKind.info
+            : ToastKind.error,
       );
       return;
     }
@@ -1626,9 +1682,7 @@ class _DetailPageState extends State<DetailPage> {
     if (current == null ||
         current.flagKey != snapshotFlagKey ||
         current.episodeCount != snapshotCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('线路已变化，AI 建议不再适用，请重新分析')),
-      );
+      showToast('线路已变化，AI 建议不再适用，请重新分析', kind: ToastKind.error);
       return;
     }
 
@@ -1643,10 +1697,9 @@ class _DetailPageState extends State<DetailPage> {
         // 应用前**再校验一次**（`04` §7.4）：AI 说可以，本地校验不过就拒绝。
         if (!(_ownedTmdb?.canAutoSlice ?? false)) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('当前线路集数与 TMDB 季集数不匹配，无法安全自动切分'),
-            ),
+          showToast(
+            '当前线路集数与 TMDB 季集数不匹配，无法安全自动切分',
+            kind: ToastKind.error,
           );
           return;
         }
@@ -1967,10 +2020,9 @@ class _DetailPageState extends State<DetailPage> {
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       if (!mounted) return;
       // 用户在站点里主动中断不是「这一集没有地址」，再问一次换源只会打断连播；
-      // 自动续播那一趟失败同样只回到 SnackBar（见 [_resumingAfterSwap]）。
+      // 自动续播那一趟失败同样只回到 通知（见 [_resumingAfterSwap]）。
       if (failure.kind == AppErrorKind.siteCancelled || _resumingAfterSwap) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(failure.userMessage)));
+        showToast(failure.userMessage, kind: ToastKind.error);
         return;
       }
       // 只闪一条 SnackBar，用户没有任何可执行动作（用户反馈：看到「没有集数
@@ -2271,13 +2323,9 @@ class _DetailPageState extends State<DetailPage> {
     if (line.episodes.isEmpty) return;
     final hit = _locateResumeEpisode(line.episodes, episodeNumber, ordinal);
     if (hit.fellBack) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('「${line.flag}」只有 ${line.episodes.length} 集，已从第 1 集开始播放'),
-        ),
-      );
+      showToast('「${line.flag}」只有 ${line.episodes.length} 集，已从第 1 集开始播放');
     }
-    // 续播这一趟不再问「要不要换源」：失败仍回到 SnackBar（见 [_play] 的 catch）。
+    // 续播这一趟不再问「要不要换源」：失败仍回到 通知（见 [_play] 的 catch）。
     _resumingAfterSwap = true;
     try {
       await _play(vod, line, hit.index);
@@ -2436,9 +2484,7 @@ class _DetailPageState extends State<DetailPage> {
                 onPressed: () {
                   if (followed) {
                     unawaited(state.unfollowFollowing(existing));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已取消追番')),
-                    );
+                    showToast('已取消追番', kind: ToastKind.success);
                     return;
                   }
                   final line = lines.isEmpty ? null : _activeLine(lines);
@@ -2449,9 +2495,7 @@ class _DetailPageState extends State<DetailPage> {
                     sourceFlag: line?.sourceFlag ?? line?.playbackFlag ?? '',
                     releasedEpisode: line?.episodes.length ?? 0,
                   );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('已加入追番')),
-                  );
+                  showToast('已加入追番', kind: ToastKind.success);
                 },
                 icon: Icon(followed ? Icons.star : Icons.star_border),
               );
@@ -2483,30 +2527,9 @@ class _DetailPageState extends State<DetailPage> {
             ListView(
               padding: EdgeInsets.zero,
               children: [
-                // 详情错误只在「确实是在拉本页详情且没有可用线路」时提示，
-                // 避免上一个条目的失败信息干扰当前页面（§8.3、§8.4）。
-                // 内容已延伸到 app bar 之下，因此这条提示要让出 app bar 的高度，
-                // 否则会被悬浮的返回/收藏图标压住。
-                if (state.detailError != null)
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      16,
-                      MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
-                      16,
-                      8,
-                    ),
-                    child: ErrorBanner(
-                      error: state.detailError!,
-                      onDismiss: state.clearDetailError,
-                      // 文案里写着「换源」，那这个动作就必须真的能点（否则是句空话）。
-                      action: FilledButton.icon(
-                        key: const ValueKey('detail-swap-source'),
-                        onPressed: _openSourceSwap,
-                        icon: const Icon(Icons.swap_horiz, size: 16),
-                        label: const Text('换源'),
-                      ),
-                    ),
-                  ),
+                // 详情错误不再在页面里拼横幅：它由 [_syncDetailErrorToast] 推成
+                // 右下角通知，动作（「换源」）随通知一起走——页面内没有第二个
+                // 渲染点，同一条错误只会出现在一处。
                 // 动态背景头部（`04` §3.1 ①）：用 TMDB 海报/剧照当背景，
                 // 未匹配时回退到来源海报，保证头部不空白。
                 // 高度由组件按视口自适应：图片框取整屏，内容贴它的底部
@@ -3061,64 +3084,6 @@ class _UnsupportedSiteHint extends StatelessWidget {
           '${availability.stage == null ? "" : "（计划阶段：${availability.stage}）"}。\n'
           '${availability.reason ?? ""}\n'
           '请在站点列表中选择其他可运行站点。',
-    );
-  }
-}
-
-class _NoticeBanner extends StatelessWidget {
-  const _NoticeBanner({required this.message, required this.onDismiss});
-
-  final String message;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.md,
-        vertical: AppSpace.xs,
-      ),
-      decoration: BoxDecoration(
-        // 通知是**信息**，不是警报：不铺满色块，只用一层极淡的底 + 发丝边，
-        // 让它在层级上明显轻于错误横幅（后者用 errorContainer 实底）。
-        // 原实现用 `secondaryContainer` 实底满宽，与错误横幅同等重量，
-        // 两条叠在一起时读者分不清哪条更要紧。
-        color: scheme.surfaceContainerHigh.withValues(alpha: 0.5),
-        borderRadius: AppRadius.smAll,
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.6),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_outline, size: 16, color: scheme.onSurfaceVariant),
-          const SizedBox(width: AppSpace.sm),
-          Expanded(
-            child: Text(
-              message,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          // 用收紧的 IconButton 而不是默认尺寸：默认最小点击区会把这条
-          // 信息条撑到 60px 以上，与"轻量通知"的意图相反。
-          // 保留 IconButton 类型：测试按类型统计 InkWell / GestureDetector，
-          // 换成它们会引入无谓风险。
-          IconButton(
-            tooltip: '关闭提示',
-            onPressed: onDismiss,
-            icon: const Icon(Icons.close, size: 15),
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-            color: scheme.onSurfaceVariant,
-          ),
-        ],
-      ),
     );
   }
 }
