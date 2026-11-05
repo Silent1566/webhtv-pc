@@ -9,8 +9,10 @@
 ///   `jvm*`/`java*` → `spider-host-jvm/host.jar`（`tvbox-java-v1`，§9.3）。
 ///
 /// `csp_*` 站点（TVBox 生态的 Java 站源类名形态）在 PC 端映射到 `jvm` 运行时，
-/// 但**只接受无 Android Context 的桌面 jar**；含 `classes.dex` 的 Android 站源
-/// 在 JVM 上无法加载，必须如实报不可用（ADR-0002 §1.1）。
+/// 但**只接受无 Android Context 的桌面 jar**：含**原生库**（`lib/*.so`）或 zip 结构
+/// 损坏、无法确认原生库的入口一律如实报不可用；含 `classes.dex` 且**无**原生库的
+/// 入口可先转译成桌面 class jar（导入期 `DexTranslate`），可用性按转译结论分级
+/// （ADR-0002 §1.1）。
 ///
 /// 未实现形态（`*.py`、Android JAR）继续返回结构化不可用结论，
 /// UI 显示运行时未安装/未支持，不得显示空列表（§8.1、§9.9）。
@@ -492,7 +494,8 @@ class SpiderRouter {
 
   /// `csp_*` 站点的可用性判定（§9.3 `tvbox-java-v1`）。
   ///
-  /// 判定顺序：本地缓存入口 → 是否 Android jar（含 dex）→ Java 运行时与宿主。
+  /// 判定顺序：本地缓存入口 → 原生库 → 不可转译的 Android jar → 「可转译 dex」的
+  /// 导入期预转译结论 → Java 运行时与宿主。
   /// 每一步失败都给出**可定位**的原因，不得静默降级为空列表（§8.1、§9.9）。
   SiteAvailability _classifyCsp(Site site) {
     final binding = cspBinding;
@@ -531,15 +534,67 @@ class SpiderRouter {
             '${binding.directoryFor(site.key)}（Android jar 内含 classes.dex，JVM 无法加载）',
       );
     }
+    // 静态结论只取一次：原生库判定必须显式在这里拒绝——`isAndroidJar` 现在只覆盖
+    // 「zip 解析失败、按字节兜底看到 classes.dex」那一种（无法确认有无 lib/*.so），
+    // 不含 [JarVerdict.nativeLibrary]；漏掉的话「dex + 原生库」的 jar 会一路滑到
+    // 下面的「可加载」分支，被谎报成可用（§12.6.4 ①、ADR-0002）。
+    final inspection = JarIntake.inspectPath(
+      entry,
+      expectedClass: JarIntake.classNameFor(site.key),
+    );
+    if (inspection.verdict == JarVerdict.nativeLibrary) {
+      final native = inspection.nativeEntries.take(3).join('、');
+      return SiteAvailability(
+        available: false,
+        runtimeName: 'Android/JAR Spider',
+        stage: 'Phase 3',
+        reason: '该 jar 含原生库（$native），桌面 JVM 无法加载；'
+            'dex 预转译只解决字节码形态，不解决原生实现（ADR-0002）',
+      );
+    }
     if (CspJvmBinding.isAndroidJar(entry)) {
       return SiteAvailability(
         available: false,
         runtimeName: 'Android/JAR Spider',
         stage: 'Phase 3',
-        reason: '该 jar 是 Android 站源（内含 classes.dex），JVM 无法加载；'
-            '需桌面版 jar，或按 ADR-0002 启用 Android 兼容层',
+        reason: '该 jar 看起来是 Android 站源（内含 classes.dex），但 zip 结构已损坏、'
+            '无法确认是否还含原生库（lib/*.so），因此不自动转译；JVM 无法加载。'
+            '请重新获取完整的 jar（或桌面版 jar），或按 ADR-0002 启用 Android 兼容层',
       );
     }
+    // 「可转译 dex」：可用性取决于导入期预转译的结论（`intake.json` 的
+    // `dexTranslation`）。三种情形必须分开说，不能一律谎称已就绪：
+    // 已转译 → 可用；转译失败 → 不可用；没有记录 → 可用但首次加载要现场转译。
+    String? dexNote;
+    if (inspection.verdict == JarVerdict.translatableDex) {
+      final translation =
+          JarIntake.intakeRecord(binding.directoryFor(site.key))?['dexTranslation'];
+      if (translation is! Map) {
+        dexNote = '该站点为 Android 站源（内含 classes.dex），尚未预转译，'
+            '首次加载时会转译（约数秒）';
+      } else if (translation['ok'] == true) {
+        dexNote = '该站点为 Android 站源，dex 已转译 classCount='
+            '${translation['classCount'] ?? 0}';
+      } else {
+        final stage = '${translation['stage'] ?? ''}'.trim();
+        final message = '${translation['message'] ?? ''}'.trim();
+        return SiteAvailability(
+          available: false,
+          runtimeName: 'Android/JAR Spider',
+          stage: 'Phase 3',
+          reason: '该站点为 Android 站源，dex 预转译失败'
+              '${stage.isEmpty ? '' : '（$stage）'}'
+              '${message.isEmpty ? '' : '：$message'}',
+        );
+      }
+    }
+    // 自愈：P1-2 前期导入的站点目录里没有 manifest.json（当时只有 index.jar +
+    // intake.json），而 JVM 宿主对缺失的 manifest 直接退出码 2。判定前补写一次，
+    // 避免用户必须删目录重导才能恢复。
+    JarIntake.ensureLaunchManifest(
+      targetDir: binding.directoryFor(site.key),
+      siteKey: site.key,
+    );
     final local = cspLocalSpider(
       site: site,
       entryPath: entry,
@@ -564,7 +619,8 @@ class SpiderRouter {
       available: true,
       runtimeName: 'PC Java Spider (tvbox-java-v1)',
       stage: 'Phase 3',
-      reason: 'runtime=jvm entry=${p.basename(entry)} '
+      reason: '${dexNote == null ? '' : '$dexNote；'}'
+          'runtime=jvm entry=${p.basename(entry)} '
           'capabilities=${local.manifest.capabilities.sorted.join(",")}',
     );
   }

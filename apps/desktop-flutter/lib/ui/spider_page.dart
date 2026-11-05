@@ -402,7 +402,9 @@ class _ProxyCard extends StatelessWidget {
 ///
 /// 两条路径共用的纪律：
 /// - 导入前先静态检测（zip 目录项 + 文件树，不加载类、不执行代码）；
-/// - 含 `classes.dex` 或原生库的入口**一律拒绝且不落盘**，文案指向 ADR-0002；
+/// - 含**原生库**（`lib/*.so`）或无法解析的入口**一律拒绝且不落盘**；
+///   含 `classes.dex` 且**无**原生库的入口**可以导入**，导入时先做预转译
+///   （首次可能数秒，之后命中缓存）；两类结论的文案都指向 ADR-0002；
 /// - 已导入条目可一键移除（回滚到「缺少桌面 JVM 站源」）。
 ///
 /// 诚实预期（§12.6.5）：社区 T3 jar 里绝大多数含 dex 或继承 Android/CatVod 基类，
@@ -424,6 +426,9 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
   CspProbeReport? _report;
   String? _message;
   bool _busy = false;
+
+  /// `_busy` 期间的可见提示：让用户知道在做什么（导入含 dex 的入口会预转译数秒）。
+  String _busyNote = '';
 
   @override
   void dispose() {
@@ -459,6 +464,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
     }
     setState(() {
       _busy = true;
+      _busyNote = '正在导入并预转译 dex（可能数秒）…';
       _message = null;
     });
     final result = await _state.importCspJar(siteKey: key, sourcePath: path);
@@ -466,9 +472,28 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
     setState(() {
       _busy = false;
       _preview = result.inspection ?? _preview;
-      _message = result.ok
-          ? '已导入到 ${result.targetPath}'
-          : '未导入：${result.error}';
+      if (!result.ok) {
+        _message = '未导入：${result.error}';
+        return;
+      }
+      final dex = result.dexTranslation;
+      if (dex == null) {
+        // 非 dex 入口（桌面 jar / 类目录）：没有转译这一步，文案不变。
+        _message = '已导入到 ${result.targetPath}';
+      } else if (dex['ok'] == true) {
+        final classes = dex['classCount']?.toString() ?? '?';
+        final cached = dex['cached'] == true ? '（命中缓存）' : '';
+        _message = '已导入到 ${result.targetPath}；dex 已转译 $classes 个类$cached';
+      } else {
+        // 落盘成功但预转译失败：如实报告，不谎称可用。
+        final stage = dex['stage']?.toString().trim() ?? '';
+        final detail = dex['message']?.toString().trim() ?? '';
+        _message =
+            '已导入到 ${result.targetPath}，但 dex 预转译失败'
+            '${stage.isEmpty ? '' : '（$stage）'}：'
+            '${detail.isEmpty ? '未给出原因' : detail}；'
+            '站点可能不可用，详见 ${result.targetPath} 下的 intake.json。';
+      }
     });
   }
 
@@ -476,6 +501,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
   Future<void> _onProbe() async {
     setState(() {
       _busy = true;
+      _busyNote = '正在取回并静态检测配置里的 jar…';
       _message = null;
     });
     final report = await _state.probeCspJars();
@@ -492,6 +518,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
   Future<void> _onRemove(String siteKey) async {
     setState(() {
       _busy = true;
+      _busyNote = '正在移除站源…';
       _message = null;
     });
     final removed = await _state.removeCspJar(siteKey);
@@ -524,7 +551,9 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
             Text(
               '配置里把 jar 写成远端地址时（如 spring.jar），点「自动探测」由程序取回并静态检测：'
               '能加载的自动装到 ${_state.cspRoot}，不能加载的原因直接显示在站点列表。'
-              '也可手工导入本机已有的 jar / 类目录。含 dex 的 Android 站源一律如实拒绝（ADR-0002）。',
+              '也可手工导入本机已有的 jar / 类目录。含 classes.dex 的 Android 站源可以导入，'
+              '导入时会预转译（首次约数秒）；只支持不依赖 Android UI 的站源，'
+              '依赖 UI 的会被拒绝并指出缺失的类（ADR-0002）。',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -581,6 +610,15 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                     height: 16,
                     child: LoadingBlock(center: false, size: 16),
                   ),
+                  if (_busyNote.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _busyNote,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
                 ],
               ],
             ),

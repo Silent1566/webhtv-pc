@@ -8,8 +8,9 @@
 /// - home/category/detail/search/play 五方法返回结构化 Result（§9.2 最小子集）；
 /// - capability 门禁：未声明的方法返回 `SPIDER_UNSUPPORTED`（§9.7）；
 /// - 参数非法归一化为 `SPIDER_BAD_REQUEST`（§9.5 错误信封）；
-/// - `csp_*` 站点判定：无本地 jar → 不可用；Android jar（含 classes.dex）→ 明确
-///   报「JVM 无法加载」而不是启动后崩溃（ADR-0002 §1.1）；
+/// - `csp_*` 站点判定：无本地 jar → 不可用；含原生库 → 明确报「桌面 JVM 无法加载」；
+///   「可转译 dex」按 `intake.json` 的 `dexTranslation` 分级（未转译 → 可用且说明首次
+///   加载会转译；转译失败 → 不可用并带上 stage/message）（ADR-0002 §1.1）；
 /// - 侧车崩溃隔离：坏 entry 只影响该站点，主程序存活并进入退避（§9.8）。
 ///
 /// 与 `phase2_ipc_test.dart`（Python）、`phase3_js_spider_test.dart`（Node）对称：
@@ -472,7 +473,7 @@ void main() {
       expect(availability.reason, contains(p.join('csp', 'csp_Demo')));
     });
 
-    test('Android jar（含 classes.dex）报「JVM 无法加载」而不是启动后崩溃', () async {
+    test('可转译 dex（无原生库、无转译记录）判定为可用，并说明首次加载会转译', () async {
       final directory = Directory(p.join(spidersRoot, 'csp', 'csp_Demo'));
       await directory.create(recursive: true);
       // 构造最小 zip：只需目录项里出现 `classes.dex` 明文即可被识别。
@@ -483,10 +484,92 @@ void main() {
 
       final router = routerWith(spidersRoot);
       final availability = router.classifySite(cspSite());
+      expect(availability.available, isTrue, reason: availability.reason ?? '');
+      expect(availability.runtimeName, contains('tvbox-java-v1'));
+      // 没有 intake.json 时必须如实说「尚未预转译」，不能谎称已就绪。
+      expect(availability.reason, contains('转译'));
+      expect(availability.reason, contains('尚未预转译'));
+    });
+
+    test('dex 已转译（intake.json 记录 ok=true）判定为可用，reason 带 classCount',
+        () async {
+      final directory = Directory(p.join(spidersRoot, 'csp', 'csp_Demo'));
+      await directory.create(recursive: true);
+      await _writeMinimalZip(
+        File(p.join(directory.path, 'index.jar')),
+        const ['classes.dex'],
+      );
+      // 直接写结论文件，不起 JVM：可用性只读 intake.json，不需要真转译。
+      await File(p.join(directory.path, 'intake.json')).writeAsString(
+        jsonEncode({
+          'siteKey': 'csp_Demo',
+          'entry': 'index.jar',
+          'verdict': 'translatableDex',
+          'dexTranslation': {
+            'ok': true,
+            'stage': 'dex-转译',
+            'message': '完成',
+            'classCount': 42,
+            'cached': false,
+          },
+        }),
+        flush: true,
+      );
+
+      final router = routerWith(spidersRoot);
+      final availability = router.classifySite(cspSite());
+      expect(availability.available, isTrue, reason: availability.reason ?? '');
+      expect(availability.runtimeName, contains('tvbox-java-v1'));
+      expect(availability.reason, contains('dex 已转译'));
+      expect(availability.reason, contains('classCount=42'));
+    });
+
+    test('dex 预转译失败（intake.json 记录 ok=false）判定为不可用并带上 stage/message',
+        () async {
+      final directory = Directory(p.join(spidersRoot, 'csp', 'csp_Demo'));
+      await directory.create(recursive: true);
+      await _writeMinimalZip(
+        File(p.join(directory.path, 'index.jar')),
+        const ['classes.dex'],
+      );
+      await File(p.join(directory.path, 'intake.json')).writeAsString(
+        jsonEncode({
+          'siteKey': 'csp_Demo',
+          'entry': 'index.jar',
+          'verdict': 'translatableDex',
+          'dexTranslation': {
+            'ok': false,
+            'stage': 'dex-转译',
+            'message': 'dex2jar 无法解析 classes.dex',
+          },
+        }),
+        flush: true,
+      );
+
+      final router = routerWith(spidersRoot);
+      final availability = router.classifySite(cspSite());
+      expect(availability.available, isFalse);
+      expect(availability.reason, contains('预转译失败'));
+      expect(availability.reason, contains('dex-转译'));
+      expect(availability.reason, contains('dex2jar 无法解析 classes.dex'));
+    });
+
+    test('含原生库（lib/*.so）的入口判定为不可用，并指出原生库', () async {
+      final directory = Directory(p.join(spidersRoot, 'csp', 'csp_Demo'));
+      await directory.create(recursive: true);
+      // 原生库的拒绝优先于 dex：dex 预转译解决不了只能在 Android/ARM 上跑的
+      // 原生实现（§12.6.4 ①）。
+      await _writeMinimalZip(
+        File(p.join(directory.path, 'index.jar')),
+        const ['classes.dex', 'lib/arm64-v8a/libdemo.so'],
+      );
+
+      final router = routerWith(spidersRoot);
+      final availability = router.classifySite(cspSite());
       expect(availability.available, isFalse);
       expect(availability.runtimeName, 'Android/JAR Spider');
-      expect(availability.reason, contains('classes.dex'));
-      expect(availability.reason, contains('ADR-0002'));
+      expect(availability.reason, contains('原生库'));
+      expect(availability.reason, contains('lib/arm64-v8a/libdemo.so'));
     });
 
     test('桌面 jar 存在且 Java 可用时判定为可用', () async {

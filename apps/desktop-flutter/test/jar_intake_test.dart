@@ -2,11 +2,13 @@
 /// docs/reference/win-box-borrowings.md §12.6.4 验收口径）。
 ///
 /// 覆盖点：
-/// - 含 `classes.dex` 的 jar / 类目录 → 拒绝，且**不落盘**（验收① ②）；
+/// - 含 `classes.dex`、**无原生库** → `translatableDex`，可落盘并在导入期预转译；
+/// - 含 `classes.dex` **且**含 `lib/**.so` → `nativeLibrary`（原生库拒绝优先于 dex），
+///   拒绝且**不落盘**（验收① ②）；
 /// - 桌面 jar（无 dex、无 .so、入口类存在）→ 落盘 `index.jar`，站点转为可用（验收③）；
 /// - 损坏 / 非 zip → 明确失败且不覆盖既有文件（验收④）；
 /// - 移除后回到「缺少桌面 JVM 站源」（验收⑤）；
-/// - 全程不启动 JVM、不执行站源代码（验收⑥）；
+/// - 全程不启动 JVM、不执行站源代码（验收⑥）：转译走 `translateDex` 注入的假实现；
 /// - 文件内容里只是**出现** `classes.dex` 字样（不是 zip 条目）→ 不得误判（验收⑦）。
 library;
 
@@ -42,7 +44,7 @@ void main() {
   });
 
   group('静态检测：结论分级', () {
-    test('含 classes.dex 的 jar 判为 androidJar，且不可安装', () async {
+    test('含 classes.dex 且无原生库的 jar 判为 translatableDex，可安装', () async {
       final jar = File(p.join(tempRoot.path, 'android.jar'));
       await _writeZip(jar, {
         'classes.dex': const [0x64, 0x65, 0x78],
@@ -50,23 +52,38 @@ void main() {
       });
 
       final inspection = JarIntake.inspectPath(jar.path, expectedClass: 'Demo');
-      expect(inspection.verdict, JarVerdict.androidJar);
-      expect(inspection.installable, isFalse);
+      expect(inspection.verdict, JarVerdict.translatableDex);
+      expect(inspection.installable, isTrue);
       expect(inspection.dexEntries, contains('classes.dex'));
-      expect(inspection.summary, contains('ADR-0002'));
+      expect(inspection.summary, contains('可在导入时转译'));
     });
 
-    test('含 classes.dex 的**类目录**同样判为 androidJar（旧实现漏判）', () async {
+    test('含 classes.dex 的**类目录**同样判为 translatableDex（旧实现漏判）', () async {
       final dir = Directory(p.join(tempRoot.path, 'android-classes'))
         ..createSync(recursive: true);
       File(p.join(dir.path, 'classes.dex')).writeAsBytesSync(const [0x64]);
       File(p.join(dir.path, 'Demo.class')).writeAsBytesSync(const [0xca, 0xfe]);
 
       final inspection = JarIntake.inspectPath(dir.path, expectedClass: 'Demo');
-      expect(inspection.verdict, JarVerdict.androidJar);
+      expect(inspection.verdict, JarVerdict.translatableDex);
+      expect(inspection.installable, isTrue);
+      // 与站点页共用同一判定：可转译的 dex 不再算「不可转译的 Android jar」。
+      expect(CspJvmBinding.isAndroidJar(dir.path), isFalse);
+    });
+
+    test('dex 与原生库并存时判为 nativeLibrary（原生库拒绝优先于 dex）', () async {
+      final jar = File(p.join(tempRoot.path, 'android-native.jar'));
+      await _writeZip(jar, {
+        'classes.dex': const [0x64, 0x65, 0x78],
+        'lib/arm64-v8a/libx.so': const [0x7f, 0x45, 0x4c, 0x46],
+      });
+
+      final inspection = JarIntake.inspectPath(jar.path, expectedClass: 'Demo');
+      expect(inspection.verdict, JarVerdict.nativeLibrary);
       expect(inspection.installable, isFalse);
-      // 与站点页共用同一判定：CspJvmBinding.isAndroidJar 也必须为真。
-      expect(CspJvmBinding.isAndroidJar(dir.path), isTrue);
+      expect(inspection.dexEntries, isNotEmpty);
+      expect(inspection.nativeEntries, contains('lib/arm64-v8a/libx.so'));
+      expect(inspection.summary, contains('原生库'));
     });
 
     test('桌面 jar（无 dex、无原生库）判为 desktopReady，并识别入口类', () async {
@@ -157,10 +174,11 @@ void main() {
   });
 
   group('导入 / 回滚', () {
-    test('Android jar 被拒绝且**不落盘**（验收①②）', () async {
+    test('含原生库的入口被拒绝且**不落盘**（验收①②）', () async {
       final jar = File(p.join(tempRoot.path, 'android.jar'));
       await _writeZip(jar, {
         'classes.dex': const [0x64],
+        'lib/armeabi-v7a/libspider.so': const [0x7f, 0x45, 0x4c, 0x46],
       });
       final target = p.join(cspRoot, 'csp_Demo');
 
@@ -172,7 +190,7 @@ void main() {
       );
 
       expect(result.ok, isFalse);
-      expect(result.error, contains('ADR-0002'));
+      expect(result.error, contains('原生库'));
       expect(
         Directory(target).existsSync(),
         isFalse,
@@ -280,6 +298,66 @@ void main() {
       expect((record['sourceSha256']! as String).length, 64);
     });
 
+    test('导入必须写出可启动的 manifest.json（缺失会让 JVM 宿主以退出码 2 结束）', () async {
+      final jar = File(p.join(tempRoot.path, 'launch.jar'));
+      await _writeZip(jar, {
+        'fixture/Demo.class': const [0xca, 0xfe],
+      });
+      final target = p.join(cspRoot, 'csp_Launch');
+
+      await JarIntake.install(
+        sourcePath: jar.path,
+        targetDir: target,
+        siteKey: 'csp_Launch',
+        log: log,
+      );
+
+      final manifest = File(p.join(target, 'manifest.json'));
+      expect(manifest.existsSync(), isTrue, reason: '缺 manifest 会导致 code=2');
+      final decoded =
+          jsonDecode(manifest.readAsStringSync()) as Map<String, Object?>;
+      // 与 SpiderManifest.problems 的校验对齐：abi 必须是 webhtv-ipc-v1、key 非空。
+      expect(decoded['abi'], 'webhtv-ipc-v1');
+      expect(decoded['key'], 'csp_Launch');
+      expect(decoded['runtime'], 'jvm');
+      expect(decoded['entry'], 'index.jar');
+    });
+
+    test('ensureLaunchManifest 自愈旧导入：补写缺失的 manifest 且不覆盖已有内容', () async {
+      final target = p.join(cspRoot, 'csp_Legacy');
+      await Directory(target).create(recursive: true);
+      File(p.join(target, 'index.jar')).writeAsBytesSync(const [0x50, 0x4b]);
+
+      expect(File(p.join(target, 'manifest.json')).existsSync(), isFalse);
+      JarIntake.ensureLaunchManifest(targetDir: target, siteKey: 'csp_Legacy');
+
+      final manifest = File(p.join(target, 'manifest.json'));
+      expect(manifest.existsSync(), isTrue);
+      expect(
+        (jsonDecode(manifest.readAsStringSync())
+            as Map<String, Object?>)['key'],
+        'csp_Legacy',
+      );
+
+      // 已有内容不得被覆盖（避免每次判定都产生写入）。
+      manifest.writeAsStringSync('{"abi":"webhtv-ipc-v1","key":"csp_Manual"}');
+      JarIntake.ensureLaunchManifest(targetDir: target, siteKey: 'csp_Legacy');
+      expect(
+        (jsonDecode(manifest.readAsStringSync())
+            as Map<String, Object?>)['key'],
+        'csp_Manual',
+      );
+    });
+
+    test('ensureLaunchManifest 对没有入口的目录不生成 manifest', () async {
+      final target = p.join(cspRoot, 'csp_Empty');
+      await Directory(target).create(recursive: true);
+
+      JarIntake.ensureLaunchManifest(targetDir: target, siteKey: 'csp_Empty');
+
+      expect(File(p.join(target, 'manifest.json')).existsSync(), isFalse);
+    });
+
     test('类目录入口导入为 classes/ 目录，entryFor 能定位', () async {
       final source = Directory(p.join(tempRoot.path, 'classes-src'))
         ..createSync(recursive: true);
@@ -324,6 +402,115 @@ void main() {
         await JarIntake.remove(targetDir: p.join(cspRoot, 'csp_None'), log: log),
         isFalse,
       );
+    });
+  });
+
+  group('导入期预转译（translateDex 注入）', () {
+    Future<File> dexJar() async {
+      final jar = File(p.join(tempRoot.path, 'android.jar'));
+      await _writeZip(jar, {
+        'classes.dex': const [0x64, 0x65, 0x78],
+      });
+      return jar;
+    }
+
+    test('转译成功：落盘成功，结论写进 intake.json 的 dexTranslation', () async {
+      final jar = await dexJar();
+      final target = p.join(cspRoot, 'csp_Demo');
+      String? seenSiteDir;
+      String? seenArchive;
+
+      final result = await JarIntake.install(
+        sourcePath: jar.path,
+        targetDir: target,
+        siteKey: 'csp_Demo',
+        log: log,
+        translateDex: ({required String siteDir, required String archive}) async {
+          seenSiteDir = siteDir;
+          seenArchive = archive;
+          return {
+            'ok': true,
+            'bundle': 'dex-bundle',
+            'classCount': 1227,
+            'cached': false,
+            'sourceSha256': 'a' * 64,
+          };
+        },
+      );
+
+      expect(result.ok, isTrue, reason: result.error ?? '');
+      expect(result.inspection!.verdict, JarVerdict.translatableDex);
+      expect(result.dexTranslation?['ok'], isTrue);
+      expect(File(p.join(target, 'index.jar')).existsSync(), isTrue);
+      expect(seenSiteDir, target);
+      expect(seenArchive, p.join(target, 'index.jar'));
+
+      final record = JarIntake.intakeRecord(target)!;
+      final translation = record['dexTranslation']! as Map<String, Object?>;
+      expect(translation['ok'], isTrue);
+      expect(translation['classCount'], 1227);
+    });
+
+    test('转译失败：ok 仍为 true（落盘成功），dexTranslation 记录失败原因', () async {
+      final jar = await dexJar();
+      final target = p.join(cspRoot, 'csp_Demo');
+
+      final result = await JarIntake.install(
+        sourcePath: jar.path,
+        targetDir: target,
+        siteKey: 'csp_Demo',
+        log: log,
+        translateDex: ({required String siteDir, required String archive}) async {
+          return {'ok': false, 'stage': 'dex-转译', 'message': 'boom'};
+        },
+      );
+
+      expect(result.ok, isTrue, reason: '落盘成功就不算导入失败');
+      expect(result.dexTranslation?['ok'], isFalse);
+      expect(result.dexTranslation?['stage'], 'dex-转译');
+      expect(File(p.join(target, 'index.jar')).existsSync(), isTrue);
+
+      final record = JarIntake.intakeRecord(target)!;
+      final translation = record['dexTranslation']! as Map<String, Object?>;
+      expect(translation['ok'], isFalse);
+      expect(translation['stage'], 'dex-转译');
+    });
+
+    test('转译抛异常：install 不抛，结论兜底为 ok:false', () async {
+      final jar = await dexJar();
+      final target = p.join(cspRoot, 'csp_Demo');
+
+      final result = await JarIntake.install(
+        sourcePath: jar.path,
+        targetDir: target,
+        siteKey: 'csp_Demo',
+        log: log,
+        translateDex: ({required String siteDir, required String archive}) async {
+          throw Exception('jvm 不可用');
+        },
+      );
+
+      expect(result.ok, isTrue);
+      expect(result.dexTranslation?['ok'], isFalse);
+      expect('${result.dexTranslation?['message']}', contains('jvm 不可用'));
+      expect(JarIntake.intakeRecord(target)!['dexTranslation'], isNotNull);
+    });
+
+    test('省略 translateDex：跳过转译，dexTranslation 为 null 且仍能落盘', () async {
+      final jar = await dexJar();
+      final target = p.join(cspRoot, 'csp_Demo');
+
+      final result = await JarIntake.install(
+        sourcePath: jar.path,
+        targetDir: target,
+        siteKey: 'csp_Demo',
+        log: log,
+      );
+
+      expect(result.ok, isTrue, reason: result.error ?? '');
+      expect(result.dexTranslation, isNull);
+      expect(File(p.join(target, 'index.jar')).existsSync(), isTrue);
+      expect(JarIntake.intakeRecord(target)!.containsKey('dexTranslation'), isFalse);
     });
   });
 }

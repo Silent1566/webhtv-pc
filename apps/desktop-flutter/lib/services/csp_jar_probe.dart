@@ -9,11 +9,13 @@
 /// 本类只做三件安全的事：
 /// 1. 按配置里已存在的 URL 取回 jar（用户配置本身就指向它，没有新增信任）；
 /// 2. 用 [JarIntake] 做**纯静态**检测（只读 zip 目录项，绝不加载类）；
-/// 3. 检测通过的**桌面**入口才落盘（复用 [JarIntake.install] 的原子导入）；
-///    含 dex / 原生库的入口**一律不落盘**，只把结论写进 `probe.json`。
+/// 3. 检测通过的入口才落盘（复用 [JarIntake.install] 的原子导入）：桌面入口直接装；
+///    「可转译 dex」（含 `classes.dex`、**无**原生库）落盘并注入 [DexTranslate]
+///    做导入期预转译；含原生库 / 不可转译 dex / 损坏的入口**仍然不落盘**，
+///    只把结论写进 `probe.json`。
 ///
-/// 因此「自动迁移」的真实边界是：能加载的自动装好；不能加载的自动说清原因，
-/// 而不是让用户对着一句「缺少 jar」反复试。
+/// 因此「自动迁移」的真实边界是：能加载（或能转译成能加载）的自动装好；不能的
+/// 自动说清原因，而不是让用户对着一句「缺少 jar」反复试。
 library;
 
 import 'dart:convert';
@@ -24,6 +26,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../core/protocol.dart';
+import 'dex_translate.dart';
 import 'direct_spider_registrar.dart';
 import 'jar_intake.dart';
 import 'log_service.dart';
@@ -37,7 +40,7 @@ enum CspProbeOutcome {
   /// 取回并静态检测通过，已自动导入。
   installed,
 
-  /// 取回但静态检测不通过（含 dex / 原生库 / 损坏），**未落盘**。
+  /// 取回但静态检测不通过（含**原生库** / 不可转译的 dex / 损坏），**未落盘**。
   rejected,
 
   /// 取回失败（网络 / 非 2xx / 超限）。
@@ -127,6 +130,7 @@ class CspJarProbe {
     this.maxBytes = 8 * 1024 * 1024,
     this.timeout = const Duration(seconds: 30),
     this.retryAfter = const Duration(minutes: 10),
+    this.dexTranslate,
   }) : _client = client ?? http.Client();
 
   /// Spider 根目录（`<configDir>/spiders`）；下载缓存放 `<root>/probe-cache/`。
@@ -145,10 +149,32 @@ class CspJarProbe {
   /// 取回失败后的冷却：期间不重复下载（避免每次装配都打一遍死链）。
   final Duration retryAfter;
 
+  /// 导入期预转译钩子（签名与 `JarIntake.install` 的 `translateDex` 一致）。
+  ///
+  /// 缺省用真实的 [DexTranslate.run]（起一次 `java -cp host.jar;lib/* … DexIntakeCli`）；
+  /// 单测注入假实现，避免测试里真的起 JVM。
+  final Future<Map<String, Object?>> Function({
+    required String siteDir,
+    required String archive,
+  })?
+  dexTranslate;
+
   final http.Client _client;
 
   /// 单轮探测的下载缓存（URL → 字节或 null=失败）。
   final Map<String, List<int>?> _downloadCache = {};
+
+  /// 探测结论的语义版本。**静态判定的口径一变就必须加一**。
+  ///
+  /// 为什么需要它：`probe.json` 里存的是「按当时的判定口径得出的结论」，而
+  /// [_shouldSkip] 会把任何静态结论当作永久有效、不再重新下载。一旦判定口径
+  /// 改变（P1-2 把「含 classes.dex」从 `androidJar` 拆出 `translatableDex`），
+  /// 旧结论就是按已废弃的判据得出的，继续照用会把本该可用的站点永久卡在
+  /// 「不可用」——用户只能手动删 probe.json 才能恢复。
+  ///
+  /// 这与 [checksumMismatch][_shouldSkip] 是同一个教训：判据变了，结论就失效。
+  /// 用一个版本号统一处理，比每次新增一个「某 verdict 已失效」的特判更可靠。
+  static const int probeSemanticsVersion = 2;
 
   /// 扫描配置里所有 `csp_*` 站点并逐个探测（幂等；不抛异常）。
   ///
@@ -169,10 +195,7 @@ class CspJarProbe {
         if (entry != null) entries.add(entry);
       } catch (error) {
         // 单个站点失败不得影响其它站点与启动。
-        log?.warning(
-          'CSP jar 自动探测失败 site=${site.key} $error',
-          scope: 'spider',
-        );
+        log?.warning('CSP jar 自动探测失败 site=${site.key} $error', scope: 'spider');
       }
     }
     if (entries.isNotEmpty) {
@@ -235,7 +258,9 @@ class CspJarProbe {
     // 游标 2026-10-25 用户原话：「能下载但 md5 不符，这个不校验」。
     // 只把两份值记进 probe.json 供诊断，真正的判据仍然是 [JarIntake] 的静态检测。
     final declaredMd5 = spec.md5;
-    final actualMd5 = declaredMd5 == null ? null : md5.convert(bytes).toString();
+    final actualMd5 = declaredMd5 == null
+        ? null
+        : md5.convert(bytes).toString();
     final md5Note = (declaredMd5 != null && declaredMd5 != actualMd5)
         ? '配置声明的 md5 与实际内容不一致（期望 $declaredMd5，实际 $actualMd5），已忽略'
         : null;
@@ -251,7 +276,9 @@ class CspJarProbe {
     final cacheDir = Directory(p.join(root, 'probe-cache'));
     await cacheDir.create(recursive: true);
     final urlKey = sha256.convert(utf8.encode(spec.url)).toString();
-    final staged = File(p.join(cacheDir.path, '${urlKey.substring(0, 16)}.jar'));
+    final staged = File(
+      p.join(cacheDir.path, '${urlKey.substring(0, 16)}.jar'),
+    );
     if (!await staged.exists() || await staged.length() != bytes.length) {
       await staged.writeAsBytes(bytes, flush: true);
     }
@@ -261,13 +288,30 @@ class CspJarProbe {
       expectedClass: JarIntake.classNameFor(siteKey),
     );
 
+    // 可落盘：桌面入口（无 dex / 无原生库）直接装；**可转译 dex**（含 classes.dex、
+    // 无原生库）落盘后立刻做导入期预转译，CLI 结论随 intake.json 一起留下。
+    // 含原生库的入口走下面的拒绝分支——dex 预转译解决不了原生实现只能在
+    // Android/ARM 上跑这件事（§12.6.4 ①）。
     if (inspection.installable) {
       final result = await JarIntake.install(
         sourcePath: staged.path,
         targetDir: targetDir,
         siteKey: siteKey,
         log: log,
+        translateDex: inspection.verdict == JarVerdict.translatableDex
+            ? _translateDex
+            : null,
       );
+      // 分工：落盘成功与转译成败互不影响（`ok` 只表示落盘）。转译失败在这里
+      // 记一条 warning 供诊断，落盘结果不回滚；面向用户的文案由 spider_router 决定。
+      final translation = result.dexTranslation;
+      if (translation != null && translation['ok'] != true) {
+        log?.warning(
+          'CSP jar 已落盘但预转译失败 site=$siteKey '
+          'stage=${translation['stage']} message=${translation['message']}',
+          scope: 'spider',
+        );
+      }
       await _writeRecord(
         targetDir,
         siteKey,
@@ -290,7 +334,9 @@ class CspJarProbe {
       );
     }
 
-    // 不可加载：**不落盘到 csp 目录**，只记结论（含 dex 的入口永不落盘）。
+    // 不可加载：**不落盘到 csp 目录**，只记结论。含原生库（dex + lib/*.so）与
+    // zip 结构损坏、无法确认无原生库的入口都在这里——dex 预转译只解决字节码形态，
+    // 解决不了原生依赖；需要转译的 dex 已在上面那条分支落盘并预转译过。
     await _writeRecord(
       targetDir,
       siteKey,
@@ -312,9 +358,24 @@ class CspJarProbe {
     );
   }
 
+  /// 导入期预转译：缺省走真实 [DexTranslate.run]，测试可注入假实现（不起 JVM）。
+  Future<Map<String, Object?>> _translateDex({
+    required String siteDir,
+    required String archive,
+  }) {
+    final injected = dexTranslate;
+    if (injected != null) return injected(siteDir: siteDir, archive: archive);
+    return DexTranslate.run(siteDir: siteDir, archive: archive, log: log);
+  }
+
   /// 有结论且无需重试时跳过下载。
   bool _shouldSkip(Map<String, Object?> record, String url) {
     if (record['sourceUrl'] != url) return false;
+    // 结论是按旧判定口径得出的（或早于版本号引入）→ 立刻重下重判。
+    final recordedVersion = record['semanticsVersion'];
+    if (recordedVersion is! int || recordedVersion != probeSemanticsVersion) {
+      return false;
+    }
     final verdict = '${record['verdict'] ?? ''}';
     // 旧版本曾按 md5 拒绝（verdict=checksumMismatch）。去掉该判据后这些结论
     // 已经失效，必须立刻重下重判，否则用户还得手动删 probe.json 才能恢复。
@@ -377,6 +438,7 @@ class CspJarProbe {
       await JarIntake.writeProbe(targetDir, {
         'siteKey': siteKey,
         'sourceUrl': spec.url,
+        'semanticsVersion': probeSemanticsVersion,
         'declaredMd5': spec.md5,
         'actualMd5': actualMd5,
         'fetchedAt': DateTime.now().toIso8601String(),
@@ -392,8 +454,10 @@ class CspJarProbe {
   }
 
   /// 读取某个站点上次的探测结论（供路由判定与 UI 展示）。
-  static Map<String, Object?>? recordFor(CspJvmBinding binding, String siteKey) =>
-      JarIntake.probeRecord(binding.directoryFor(siteKey));
+  static Map<String, Object?>? recordFor(
+    CspJvmBinding binding,
+    String siteKey,
+  ) => JarIntake.probeRecord(binding.directoryFor(siteKey));
 
   static String? _sha256Of(File file) {
     try {

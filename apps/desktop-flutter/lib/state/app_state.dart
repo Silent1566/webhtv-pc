@@ -74,6 +74,7 @@ import '../services/android_read_client.dart';
 import '../services/cat_bundle.dart';
 import '../services/cat_runtime.dart';
 import '../services/csp_jar_probe.dart';
+import '../services/dex_translate.dart';
 import '../services/direct_spider_registrar.dart';
 import '../services/epg_service.dart';
 import '../services/jar_intake.dart';
@@ -4668,8 +4669,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 导入 T3 桌面站源：静态检测 → 通过才落盘到 `<config>/spiders/csp/<siteKey>/`。
   ///
-  /// 纪律：含 `classes.dex` / 原生库 / 无法解析的入口**一律不落盘**，
-  /// 也不覆盖既有文件；不启动 JVM、不执行站源代码（PRODUCT.md）。
+  /// 纪律：含**原生库**（`lib/*.so`）或无法解析的入口**一律不落盘**，也不覆盖
+  /// 既有文件。含 `classes.dex` 且**无**原生库的入口**可以落盘**，落盘后由
+  /// [DexTranslate] 在**独立进程**里做字节码预转译（`webhtv.spider.DexIntakeCli`）：
+  /// 不加载类、不调用站源方法、不联网，因此不违反 PRODUCT.md 的「UI 层不得直接
+  /// 执行网络请求、Spider 或代理逻辑」——转译不执行 Spider。预转译不做的话，首次
+  /// sidecar 加载要现场转译（实测 4.6–9.2 s），会撞上 `initialize` 的 15 s 截止
+  /// （spider_process.dart）；导入期做一次，之后命中缓存（约 0.4 s）。
+  /// 依据：PRODUCT.md、ADR-0002。
   Future<JarInstallResult> importCspJar({
     required String siteKey,
     required String sourcePath,
@@ -4679,6 +4686,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       targetDir: _cspBinding.directoryFor(siteKey),
       siteKey: siteKey,
       log: log,
+      // 转译失败不影响落盘结论（`ok` 只表示落盘）：结论写进 intake.json 的
+      // `dexTranslation`，可用性文案由 spider_router 的 `_classifyCsp` 决定。
+      translateDex: ({required siteDir, required archive}) =>
+          DexTranslate.run(siteDir: siteDir, archive: archive, log: log),
     );
     // 分类结果不经过 SpiderRouter 的 _cache，磁盘变化后 classifySite 立即反映；
     // 这里只需刷新 UI（站点列表的可用性文案会跟着变）。
@@ -4693,8 +4704,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 「取回 → 静态检测 → 允许才导入」自动化：**能加载的自动装好，不能加载的
   /// 自动说清原因**，不再让用户自己去「迁移」。
   ///
-  /// 纪律不变：含 `classes.dex` / 原生库的入口一律**不落盘**，只写结论
-  /// （`probe.json`）；不启动 JVM、不加载类（PRODUCT.md、ADR-0002）。
+  /// 纪律不变：含**原生库**（`lib/*.so`）或无法解析的入口一律**不落盘**，只写结论
+  /// （`probe.json`）；含 `classes.dex` 且无原生库的入口可以落盘，并在这里顺带做
+  /// 导入期字节码预转译（[DexTranslate]，独立进程、不加载类、不调用站源方法、不联网；
+  /// 因此不违反 PRODUCT.md 的「UI 层不得直接执行网络请求、Spider 或代理逻辑」）。
+  /// 依据：PRODUCT.md、ADR-0002。
   Future<CspProbeReport> probeCspJars() async {
     final config = effectiveConfig;
     if (config == null) return const CspProbeReport();
