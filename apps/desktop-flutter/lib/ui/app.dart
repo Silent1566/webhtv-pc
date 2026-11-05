@@ -41,6 +41,7 @@ import 'scroll_behavior.dart';
 import 'search_page.dart';
 import 'spider_page.dart';
 import 'theme.dart';
+import 'toast.dart';
 import 'tokens.dart';
 
 /// 把状态层存的主题字符串映射成 `ThemeMode`。
@@ -330,7 +331,19 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
         listenable: _state,
         builder: (context, _) => ImageHeaderScope(
           rules: _state.effectiveConfig?.headers ?? const <HeaderRule>[],
-          child: child ?? const SizedBox.shrink(),
+          child: Stack(
+            // 通知宿主是 `builder` 的第二个孩子：它因此位于 **Navigator 之上**，
+            // 任何 push 出来的路由与弹出层都盖不住它——"浮在所有页面与对话框之上"
+            // 只有这一个位置成立。
+            //
+            // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
+            // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
+            fit: StackFit.expand,
+            children: [
+              child ?? const SizedBox.shrink(),
+              const ToastHost(),
+            ],
+          ),
         ),
       ),
       home: !_bootstrapped
@@ -413,10 +426,26 @@ class _AppShellState extends State<AppShell> {
   /// 「重试」进行中：按钮置忙，避免连点触发重复探测。
   bool _restoringBridge = false;
 
+  /// 两条横幅通道上一次"已经推成通知"的值。
+  ///
+  /// 状态层是唯一事实来源，通知只是它的投影：拿上一次投影过的值做对比，
+  /// 只在值**变成另一个非 null 值**时推一条，因此状态不变时不会重复弹。
+  ///
+  /// `detailError` 不在这里：它的动作（「换源」）是详情页的私有方法，只能由
+  /// `_DetailPageState` 自己投影——见 `browse_pages.dart` 的 `_syncDetailErrorToast`。
+  AppError? _shownLastError;
+  String? _shownNotice;
+
   @override
   void initState() {
     super.initState();
     _state.addListener(_onStateChanged);
+    // 首次投影放在首帧之后：`initState` 跑在本 State 的挂载过程里，
+    // 此时 `notifyListeners` 会去标记一个**已经建好**的 `ToastHost` 元素为脏，
+    // 那属于 build 期间的重入。首帧后再投影没有这个风险，也不会漏掉启动期的错误。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncToasts();
+    });
     _checkBoundary();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoPlayMedia());
     // 启动时恢复「上一次使用的配置」（Phase 10）。
@@ -427,8 +456,36 @@ class _AppShellState extends State<AppShell> {
   AppState get _state => widget.state;
 
   void _onStateChanged() {
+    _syncToasts();
     if (mounted) setState(() {});
     _maybeAutoPlayMedia();
+  }
+
+  /// 把状态层的两条横幅通道投影成右下角通知。
+  ///
+  /// 通知的 `onDismiss` 负责清状态（计时器超时或用户点 ×），**反过来不成立**：
+  /// 推通知时不清状态——错误仍然在状态里，页面读它做别的判断时不该看到空洞。
+  void _syncToasts() {
+    final lastError = _state.lastError;
+    if (lastError != _shownLastError) {
+      _shownLastError = lastError;
+      if (lastError != null) {
+        showToast(
+          lastError.userMessage,
+          kind: ToastKind.error,
+          detail: '错误码：${lastError.kind.name}'
+              '${lastError.retryable ? " · 可重试" : ""}',
+          onDismiss: _state.clearError,
+        );
+      }
+    }
+    final notice = _state.notice;
+    if (notice != _shownNotice) {
+      _shownNotice = notice;
+      if (notice != null) {
+        showToast(notice, kind: ToastKind.info, onDismiss: _state.clearNotice);
+      }
+    }
   }
 
   /// 首次启动展示使用边界提示，确认结果写入配置目录（§22.4）。
@@ -1575,86 +1632,6 @@ class _GroupChip extends StatelessWidget {
       onTap: onTap,
       // 站点分组同样是可选控件：禁用时保留选中态。
       selectable: true,
-    );
-  }
-}
-
-/// 统一错误提示条（§10.4、§17.3 错误提示）。
-class ErrorBanner extends StatelessWidget {
-  const ErrorBanner({
-    super.key,
-    required this.error,
-    this.onDismiss,
-    this.action,
-  });
-
-  final AppError error;
-  final VoidCallback? onDismiss;
-
-  /// 错误信息里那条提示所对应的**动作**（可选）。
-  ///
-  /// 为什么放在这里而不是各页面自拼一条：错误文案里写着「请刷新重试或换源」，
-  /// 那个「换源」在界面上本不存在——提示必须能就地被执行，否则等于空话。
-  /// 默认 `null`，既有的两个调用点因此完全不渲染任何额外内容。
-  final Widget? action;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.error_outline,
-            color: Theme.of(context).colorScheme.onErrorContainer,
-            size: 20,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(
-                  error.userMessage,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  '错误码：${error.kind.name}'
-                  '${error.retryable ? " · 可重试" : ""}',
-                  // 彩色表面上的次级文字必须**从该色相染色**，不能用底色的墨
-                  // （craft-floor：never gray / tint from that hue）。
-                  // 原来这里用裸 `bodySmall`，拿到的是 `onSurface`。
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onErrorContainer
-                        .withValues(alpha: 0.72),
-                  ),
-                ),
-                // 动作排在错误码之后：先把「错在哪」说完，再给「现在做什么」。
-                if (action != null) ...[
-                  const SizedBox(height: 4),
-                  action!,
-                ],
-              ],
-            ),
-          ),
-          if (onDismiss != null)
-            IconButton(
-              tooltip: '关闭提示',
-              onPressed: onDismiss,
-              icon: const Icon(Icons.close, size: 18),
-            ),
-        ],
-      ),
     );
   }
 }

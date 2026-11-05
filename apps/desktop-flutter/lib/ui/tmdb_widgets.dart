@@ -25,6 +25,7 @@ import '../state/tmdb_state.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
 import 'scroll_behavior.dart';
+import 'toast.dart';
 
 /// 季度绑定的语义化选择类型定义在纯逻辑层（`lib/core/tmdb_season.dart`），
 /// 此处重导出，使 UI 层与既有门禁用例只需依赖一个模块。
@@ -900,9 +901,7 @@ class TmdbVideoTile extends StatelessWidget {
                 if (!opened) {
                   await onCopy?.call(url);
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('无法打开浏览器，已复制链接')),
-                    );
+                    showToast('无法打开浏览器，已复制链接');
                   }
                 }
               },
@@ -914,9 +913,7 @@ class TmdbVideoTile extends StatelessWidget {
               onPressed: () async {
                 await onCopy?.call(video.watchUrl);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('已复制链接')),
-                  );
+                  showToast('已复制链接', kind: ToastKind.success);
                 }
               },
             ),

@@ -21,6 +21,7 @@ import 'package:webhtv_pc/services/tmdb_season_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/tmdb_state.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 // ---------------------------------------------------------------------------
 // fake HTTP
@@ -119,6 +120,9 @@ Widget _host(Widget child) => MaterialApp(
 );
 
 void main() {
+  // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+  setUp(dismissAllToasts);
+
   group('TmdbStatusBar 六态（§3.1 ②）', () {
     testWidgets('未配置 → 渲染「未配置 TMDB」与「去设置」入口', (tester) async {
       var configured = 0;
@@ -857,6 +861,12 @@ void main() {
       var copied = 0;
       await tester.pumpWidget(
         MaterialApp(
+          // 提示现在走右下角通知，宿主不挂上就看不到任何东西。
+          // 与生产同一位置：`MaterialApp.builder`（见 `lib/ui/app.dart`）。
+          builder: (context, child) => Stack(
+            fit: StackFit.expand,
+            children: [child ?? const SizedBox.shrink(), const ToastHost()],
+          ),
           home: Scaffold(
             body: TmdbVideoTile(
               video: video,
@@ -869,9 +879,19 @@ void main() {
       await tester.tap(
         find.byKey(const ValueKey('tmdb-video-open-YouTube|abc123')),
       );
-      await tester.pumpAndSettle();
+      // 不能用 `pumpAndSettle`：通知自带 ~4 秒倒计时，settle 会一路推到它自己
+      // 关掉，断言就没东西可看了。推两帧即可（microtask + 入场动画）。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
       expect(copied, 1, reason: '打开失败应复制链接兜底');
-      expect(find.textContaining('已复制链接'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('toast-host')),
+          matching: find.textContaining('已复制链接'),
+        ),
+        findsOneWidget,
+        reason: '兜底复制必须以通知的形式到达用户',
+      );
     });
 
     testWidgets('复制按钮复制 watchUrl', (tester) async {

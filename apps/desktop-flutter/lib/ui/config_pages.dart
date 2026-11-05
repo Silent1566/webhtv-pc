@@ -11,8 +11,8 @@ import '../core/tmdb_config.dart';
 import '../services/realtime_sync_engine.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
-import 'app.dart';
 import 'common.dart';
+import 'toast.dart';
 
 /// 配置导入页：URL / 本地文件 / JSON 文本三种入口。
 class ConfigPage extends StatefulWidget {
@@ -198,13 +198,7 @@ class _ConfigPageState extends State<ConfigPage> {
                 ),
               ),
             ],
-            if (state.lastError != null) ...[
-              const SizedBox(height: 12),
-              ErrorBanner(
-                error: state.lastError!,
-                onDismiss: state.clearError,
-              ),
-            ],
+
             const Divider(height: 32),
             _SavedConfigs(
               state: state,
@@ -915,9 +909,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   Future<void> _push(SyncPeer peer) async {
     final result = await _sync.pushHistoryTo(peer);
     if (!mounted || result == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(result.describe())),
-    );
+    showToast(result.describe(), kind: ToastKind.success);
   }
 
   Future<void> _toggleServer(bool value) async {

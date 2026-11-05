@@ -30,12 +30,22 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 import 'fixture_ai.dart';
 import 'phase5_evidence.dart';
 
 void evidence(String message) =>
     debugPrint('PHASE6-AI-EVIDENCE $message');
+
+/// 通知宿主（与生产 `MaterialApp.builder` 同一个 key）。
+final Finder toastHostFinder = find.byKey(const ValueKey('toast-host'));
+
+/// 浮层栈里是否已经有一条含 [text] 的通知。
+bool toastShows(String text) => find
+    .descendant(of: toastHostFinder, matching: find.textContaining(text))
+    .evaluate()
+    .isNotEmpty;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +59,9 @@ void main() {
   late AppState state;
 
   setUp(() async {
+    // 通知中心是进程级单例：上一条用例留下的通知会活到这一条里，把「失败必须
+    // 给用户提示」变成假绿。每条用例开始前清空。
+    dismissAllToasts();
     fake = await FakeAiServer.start();
     tempDir = await Directory.systemTemp.createTemp('webhtv-ai-season-flow');
     state = AppState(
@@ -111,6 +124,10 @@ void main() {
   });
 
   tearDown(() async {
+    // 顺序不能反：通知的 `onDismiss` 会回调 `AppState.clearDetailError()`，
+    // 状态层先销毁、通知后收，就会抛「A AppState was used after being disposed」。
+    // 在页面仍挂载时先收通知，回调走的是「页面还在」的那条正常路径。
+    dismissAllToasts();
     state.dispose();
     await fake.stop();
     try {
@@ -145,7 +162,24 @@ void main() {
 
     final vod = Vod(vodId: 'tmdb-demo', vodName: '示例剧集');
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: vod)),
+      MaterialApp(
+        // 通知宿主挂在 `home:` 里（= Navigator/Overlay **之内**），与仓库既有
+        // `test/toast_host_test.dart`、`test/detail_source_swap_test.dart` 同一挂法。
+        //
+        // 不用 `MaterialApp.builder`：它的 child 就是 Navigator，宿主因此在
+        // Overlay 之外，任何依赖 Overlay 的控件（`RawTooltip` 无条件断言
+        // `debugCheckHasOverlay`）会抛 `No Overlay widget found`。
+        //
+        // 代价（如实记录）：这只能证明「消息以通知形式到达用户」，**不能**证明
+        // 「浮在所有路由与对话框之上」那层——在 `home:` 里，后压的路由会盖住它。
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            DetailPage(state: state, vod: vod),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     await tester.pump();
 
@@ -158,11 +192,21 @@ void main() {
       tester,
       until: () => state.tmdb.seasonEpisodeCounts.isNotEmpty,
     );
+    // 必须再等 `sourceLine`：季集数先到、线路匹配后到，两者的间隔里
+    // `selectedSeason` 还是 -1。只等季集数的写法会让每条用例都在竞态上取
+    // 前后置快照（实测 `Expected: <1> Actual: <-1>`），而这里的每条断言
+    // 比的都是绑定有没有被改动，快照取错就等于没验证。
+    await drainReal(tester, until: () => state.tmdb.sourceLine != null);
     expect(state.tmdb.hasMatch, isTrue, reason: 'TMDB 未匹配');
     expect(
       state.tmdb.seasonEpisodeCounts.isNotEmpty,
       isTrue,
       reason: 'AI 分析的输入（季集数）必须就绪',
+    );
+    expect(
+      state.tmdb.sourceLine,
+      isNotNull,
+      reason: '前后置快照必须在线路匹配完成后取（否则绑定断言比的是竞态）',
     );
     evidence(
       'matched=${state.tmdb.item?.title} counts=${state.tmdb.seasonEpisodeCounts} '
@@ -328,13 +372,10 @@ void main() {
     );
 
     await tester.tap(find.byKey(const ValueKey('ai-season-apply')));
-    await drainReal(
-      tester,
-      until: () => find.byType(SnackBar).evaluate().isNotEmpty,
-    );
+    await drainReal(tester, until: () => toastShows('无法安全自动切分'));
     expect(
       find.descendant(
-        of: find.byType(SnackBar),
+        of: toastHostFinder,
         matching: find.textContaining('无法安全自动切分'),
       ),
       findsOneWidget,
@@ -354,16 +395,24 @@ void main() {
     final before = state.tmdb.selectedSeason;
 
     await tapAiSeasonItem(tester);
-    await drainReal(tester, until: () => find.byType(SnackBar).evaluate().isNotEmpty);
+    await drainReal(tester, until: () => toastShows('AI 接口返回错误'));
 
-    expect(find.byType(SnackBar), findsOneWidget, reason: '失败必须给用户提示');
+    // 500 → `AiSeasonFailure.http` → `_aiFailureText` = 「AI 接口返回错误」。
+    expect(
+      find.descendant(
+        of: toastHostFinder,
+        matching: find.textContaining('AI 接口返回错误'),
+      ),
+      findsOneWidget,
+      reason: '失败必须给用户提示',
+    );
     expect(
       find.byKey(const ValueKey('ai-season-preview')),
       findsNothing,
       reason: '失败时不得进入预览',
     );
     expect(state.tmdb.selectedSeason, before, reason: '绑定不得改变');
-    evidence('http-failure snackbar=${find.byType(SnackBar).evaluate().length}');
+    evidence('http-failure toasts=${toastHostFinder.evaluate().length}');
   });
 
   testWidgets('分析失败（硬校验拒绝）→ 提示且不落盘', (tester) async {
@@ -372,9 +421,17 @@ void main() {
     final before = state.tmdb.selectedSeason;
 
     await tapAiSeasonItem(tester);
-    await drainReal(tester, until: () => find.byType(SnackBar).evaluate().isNotEmpty);
+    await drainReal(tester, until: () => toastShows('AI 给出的季度与 TMDB 不符'));
 
-    expect(find.byType(SnackBar), findsOneWidget);
+    // 预置 `invalid_season`（SINGLE_SEASON + seasonNumber 99）→ 硬校验拒绝。
+    expect(
+      find.descendant(
+        of: toastHostFinder,
+        matching: find.textContaining('AI 给出的季度与 TMDB 不符'),
+      ),
+      findsOneWidget,
+      reason: '硬校验拒绝必须明确报出原因',
+    );
     expect(find.byKey(const ValueKey('ai-season-preview')), findsNothing);
     expect(state.tmdb.selectedSeason, before, reason: '硬校验失败不得落盘');
   });

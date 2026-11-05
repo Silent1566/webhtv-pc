@@ -33,6 +33,7 @@ import '../state/app_state.dart';
 import 'browse_pages.dart';
 import 'history_resume_seed.dart';
 import 'search_page.dart';
+import 'toast.dart';
 
 /// 从一条**非当前源**的历史恢复播放。
 Future<void> openHistoryFromOtherSource(
@@ -42,7 +43,7 @@ Future<void> openHistoryFromOtherSource(
 ) async {
   final config = state.config;
   if (config == null || config.sites.isEmpty) {
-    _toast(context, '当前没有生效的播放源配置，无法续播');
+    _toast(context, '当前没有生效的播放源配置，无法续播', kind: ToastKind.error);
     return;
   }
 
@@ -64,13 +65,13 @@ Future<void> openHistoryFromOtherSource(
       if (!site.hide && site.searchable) site,
   ];
   if (sites.isEmpty) {
-    _toast(context, '当前播放源没有可搜索的站点，请切换播放源后重试');
+    _toast(context, '当前播放源没有可搜索的站点，请切换播放源后重试', kind: ToastKind.error);
     return;
   }
 
   final keyword = _searchKeywordOf(item);
   if (keyword.isEmpty) {
-    _toast(context, '该记录缺少片名，无法在当前源中匹配：${item.vodName}');
+    _toast(context, '该记录缺少片名，无法在当前源中匹配：${item.vodName}', kind: ToastKind.error);
     return;
   }
 
@@ -81,22 +82,19 @@ Future<void> openHistoryFromOtherSource(
     mediaType: item.mediaType,
   );
 
-  // 加载态不可自动消失的 Toast 在这里不适用（桌面端用对话框），
-  // 但必须让用户知道「正在找」，否则搜索 20s 期间界面像卡死。
+  // 搜索期间必须让用户知道「正在找」，否则 20s 里界面像卡死：
+  // 先挂一条加载态提示，结束时按 id 收掉，不留残余。
   if (!context.mounted) return;
-  final messenger = ScaffoldMessenger.of(context);
-  messenger.showSnackBar(
-    const SnackBar(
-      duration: Duration(seconds: 20),
-      content: Text('该记录不在当前播放源，正在当前源中匹配可续播站点…'),
-    ),
+  final loadingToast = showToast(
+    '该记录不在当前播放源，正在当前源中匹配可续播站点…',
+    duration: const Duration(seconds: 20),
   );
   try {
     final outcome = await state.searchAll(
       keyword,
       timeout: const Duration(seconds: 12),
     );
-    messenger.hideCurrentSnackBar();
+    dismissToast(loadingToast);
     if (!context.mounted) return;
 
     // 第一阶段：列表阶段只能拿到片名/年份，先按它们粗筛（安卓 §11 两阶段
@@ -160,8 +158,8 @@ Future<void> openHistoryFromOtherSource(
     // 没有高置信候选：让用户自己选，不猜。
     if (context.mounted) await _offerGlobalSearch(context, state, item);
   } catch (error) {
-    messenger.hideCurrentSnackBar();
-    if (context.mounted) _toast(context, '自动匹配失败：$error');
+    dismissToast(loadingToast);
+    if (context.mounted) _toast(context, '自动匹配失败：$error', kind: ToastKind.error);
   }
 }
 
@@ -337,9 +335,12 @@ Future<void> _offerGlobalSearch(
   );
 }
 
-void _toast(BuildContext context, String message) {
+/// 文件内的通知入口：统一走全局浮动通知（右下角），不再依赖 `ScaffoldMessenger`。
+void _toast(
+  BuildContext context,
+  String message, {
+  ToastKind kind = ToastKind.info,
+}) {
   if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message)),
-  );
+  showToast(message, kind: kind);
 }

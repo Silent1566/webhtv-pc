@@ -35,6 +35,7 @@ import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 void evidence(String message) => debugPrint('UI-REDESIGN-EVIDENCE $message');
 
@@ -317,9 +318,26 @@ void expectInsideVisualRoot(String overlayKey) {
   );
 }
 
+/// 先收通知、再销毁 `AppState`（顺序不能反）。
+///
+/// 错误通知的 `onDismiss` 会调 `AppState.clearDetailError()`：状态层先销毁、
+/// 通知后收（例如被下一条用例的 `setUp` 收走），那条回调就会抛
+/// 「A AppState was used after being disposed」。在这里先收通知，回调走的是
+/// 「页面还挂着」的正常路径；页面已经销毁时回调自己 `mounted` 短路，也安全。
+void teardownToastsThenState(AppState state) {
+  addTearDown(() {
+    dismissAllToasts();
+    state.dispose();
+  });
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+
+  // 通知中心是进程级单例：上一条用例留下的通知（错误通知会驻留 15 秒，足够跨过去）
+  // 会活到下一条用例里，把「用户被告知失败」变成假绿。每条用例前清空。
+  setUp(dismissAllToasts);
 
   testWidgets('详情页换源：错误条 → 浮层 → 解析 → 并入外部线路', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-swap-evidence');
@@ -330,7 +348,7 @@ void main() {
     });
     final client = SwapSiteClient();
     final state = await bootAppState(temp, client, acceptUsageBoundary: false);
-    addTearDown(state.dispose);
+    teardownToastsThenState(state);
 
     useViewport(tester, const Size(1440, 900));
     addTearDown(() {
@@ -345,7 +363,22 @@ void main() {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: buildAppTheme(Brightness.dark),
-          home: DetailPage(state: state, vod: detailVod()),
+          // 通知宿主挂在 `home:` 里（= Navigator/Overlay **之内**），与仓库既有
+          // `test/toast_host_test.dart`、`test/detail_source_swap_test.dart` 同一挂法。
+          //
+          // 不用 `MaterialApp.builder`：它的 child 就是 Navigator，宿主因此在
+          // Overlay 之外，任何依赖 Overlay 的控件（`RawTooltip` 无条件断言
+          // `debugCheckHasOverlay`）会抛 `No Overlay widget found`。
+          //
+          // 代价（如实记录）：这只能证明「错误以通知形式到达用户」，**不能**证明
+          // 「浮在所有路由与对话框之上」那层——在 `home:` 里后压的路由会盖住它。
+          home: Stack(
+            fit: StackFit.expand,
+            children: [
+              DetailPage(state: state, vod: detailVod()),
+              const ToastHost(),
+            ],
+          ),
         ),
       ),
     );
@@ -489,7 +522,7 @@ void main() {
     });
     final client = SwapSiteClient();
     final state = await bootAppState(temp, client, acceptUsageBoundary: true);
-    addTearDown(state.dispose);
+    teardownToastsThenState(state);
 
     useViewport(tester, const Size(1440, 900));
     addTearDown(() {
@@ -504,6 +537,23 @@ void main() {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: buildAppTheme(Brightness.dark),
+          // 【这一处**必须**用 builder，与其余两处不同】实测依据：
+          // 本用例在 `home: AppShell` 之后 `navigator.push(DetailPage)`，随后点
+          // `detail-swap-source`——那是详情错误通知上的动作按钮。宿主若挂在
+          // `home:`（= 下层路由的 Overlay 内），上层不透明路由会把它盖住，
+          // 点击当场失败："Found 0 widgets with key [<'detail-swap-source'>]"。
+          // 只有位于 Navigator **之上**的 builder 位置，跨路由才对用户可见/可点。
+          //
+          // 这里不会踩 `No Overlay widget found`：`lib/ui/toast.dart` 的关闭按钮
+          // 已把 `tooltip:` 换成 `Icon.semanticLabel`，不再依赖祖先 Overlay。
+          // 本文件 frame 1/5/6 三例均实测通过。
+          builder: (context, child) => Stack(
+            fit: StackFit.expand,
+            children: [
+              child ?? const SizedBox.shrink(),
+              const ToastHost(),
+            ],
+          ),
           home: AppShell(state: state, startup: const StartupArguments()),
         ),
       ),
@@ -611,7 +661,7 @@ void main() {
     });
     final client = SwapSiteClient();
     final state = await bootAppState(temp, client, acceptUsageBoundary: false);
-    addTearDown(state.dispose);
+    teardownToastsThenState(state);
 
     useViewport(tester, const Size(1440, 900));
     addTearDown(() {
@@ -626,7 +676,14 @@ void main() {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: buildAppTheme(Brightness.dark),
-          home: DetailPage(state: state, vod: playbackFailedVod()),
+          // 同上：播放失败也会推一条错误通知，宿主挂在 `home:` 里。
+          home: Stack(
+            fit: StackFit.expand,
+            children: [
+              DetailPage(state: state, vod: playbackFailedVod()),
+              const ToastHost(),
+            ],
+          ),
         ),
       ),
     );

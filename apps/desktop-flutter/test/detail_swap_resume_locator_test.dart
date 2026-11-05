@@ -33,6 +33,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 import 'support/player_page_harness.dart';
 
@@ -53,6 +54,8 @@ void main() {
   late _LocatorSiteClient siteClient;
 
   setUp(() async {
+    // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+    dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-locator');
     siteClient = _LocatorSiteClient();
     state = AppState(
@@ -67,6 +70,8 @@ void main() {
   });
 
   tearDown(() async {
+    // 先收通知再销毁状态（通知的 `onDismiss` 会回调状态层）。
+    dismissAllToasts();
     state.dispose();
     try {
       await tempDir.delete(recursive: true);
@@ -112,10 +117,29 @@ void main() {
     });
     await tester.pumpWidget(
       MaterialApp(
-        home: DetailPage(state: state, vod: detailVod(count: episodeCount)),
+        // 通知宿主挂在 `home:` 的 `Stack` 里（在 Navigator 的 Overlay 内），
+        // 而不是 `MaterialApp.builder`：后者在 Overlay 之外，且会吃掉下方内容的
+        // 命中测试。挂法与层级由 `test/toast_host_test.dart` 单独锁定。
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            DetailPage(state: state, vod: detailVod(count: episodeCount)),
+            const ToastHost(),
+          ],
+        ),
       ),
     );
     await pumpFrames(tester);
+  }
+
+  /// 收走当前所有通知，等同用户点「×」。
+  ///
+  /// 错误通知驻留右下角 15 秒，而详情页的错误通知正好压住右下角的集数卡片与
+  /// 浮层底部的「并入」按钮：测试里不能等那 15 秒自己过去，先收走，
+  /// 否则 `tap` 会落在通知卡片上（`derived an Offset that would not hit test`）。
+  Future<void> clearToasts(WidgetTester tester) async {
+    dismissAllToasts();
+    await pumpFrames(tester, times: 2);
   }
 
   Future<void> scrollPastHero(WidgetTester tester) async {
@@ -130,6 +154,7 @@ void main() {
     expect(card, findsOneWidget, reason: '详情页自己的线路应有第 ${index + 1} 张集数卡片');
     await tester.ensureVisible(card);
     await pumpFrames(tester, times: 4);
+    await clearToasts(tester);
     await tester.tap(card);
     await pumpFrames(tester);
   }
@@ -171,6 +196,8 @@ void main() {
       findsWidgets,
       reason: '解析后该候选显示集数',
     );
+    // 第二次「并入」前必须收走常驻的错误通知（它压在浮层底部那颗按钮上）。
+    await clearToasts(tester);
     await tester.tap(find.byKey(const ValueKey('source-swap-commit')));
     await pumpFrames(tester);
   }
@@ -180,6 +207,16 @@ void main() {
     expect(page, findsOneWidget, reason: '并入后必须自动续播');
     return tester.widget<PlayerPage>(page);
   }
+
+  /// 在当前树里找「通知渲染出的文案」，**包含 offstage 子树**。
+  ///
+  /// 为什么需要 `skipOffstage: false`：续播会 push `PlayerPage`（不透明路由），
+  /// 路由盖住之后它下面的 `home:` 路由（本 harness 的宿住在那里）就被 Overlay
+  /// 标成 offstage，默认 finder 会整片跳过——但那条通知确实被 `ToastHost`
+  /// 画出来了（生产把宿主挂在 `MaterialApp.builder`，本就在所有路由之上，
+  /// 用 `builder` 会吃掉下方内容的命中测试，见 `test/toast_host_test.dart`）。
+  Finder toastText(String text) =>
+      find.textContaining(text, skipOffstage: false);
 
   testWidgets('换源目标比原线路短时，续播落在外部线路第 1 集并提示回退', (tester) async {
     // 外部线路只有 2 集，比原线路的 5 集短。旧实现里 `best` 会留在这条已经
@@ -208,12 +245,12 @@ void main() {
     );
     expect(request.episodeTarget, 'http://127.0.0.1:1/media/s1.mp4');
     expect(
-      find.textContaining('已从第 1 集开始播放'),
+      toastText('已从第 1 集开始播放'),
       findsWidgets,
       reason: '回退必须告诉用户为什么没接着看第 5 集',
     );
     expect(
-      find.textContaining('只有 2 集'),
+      toastText('只有 2 集'),
       findsWidgets,
       reason: '提示要带上目标线路的实际集数',
     );
@@ -246,7 +283,7 @@ void main() {
     );
     expect(request.episodeTarget, 'http://127.0.0.1:1/media/e02.mp4');
     expect(
-      find.textContaining('已从第 1 集开始播放'),
+      toastText('已从第 1 集开始播放'),
       findsNothing,
       reason: '命中了同一集就不该提示回退',
     );

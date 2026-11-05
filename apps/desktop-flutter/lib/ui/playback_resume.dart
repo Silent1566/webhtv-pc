@@ -18,6 +18,7 @@ import '../services/proxy_server.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'player_page.dart';
+import 'toast.dart';
 
 Future<void> resumeHistoryEntry(
   BuildContext context,
@@ -30,9 +31,7 @@ Future<void> resumeHistoryEntry(
       .where((candidate) => candidate.key == item.siteKey)
       .firstOrNull;
   if (site == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('该记录所属站点已不在当前配置中：${item.siteKey}')),
-    );
+    showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
     return;
   }
   await state.selectSite(site);
@@ -83,8 +82,6 @@ Future<void> resumeHistoryEntry(
         ? error
         : AppError(AppErrorKind.unknown, '$error', cause: error);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(failure.userMessage)));
+    showToast(failure.userMessage, kind: ToastKind.error);
   }
 }
