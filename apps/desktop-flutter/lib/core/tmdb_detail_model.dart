@@ -772,7 +772,12 @@ abstract final class TmdbEpisodeCards {
   /// 把线路剧集映射为卡片列表。
   ///
   /// - `metadataByNumber`：TMDB 集号 → 集元数据（当前季度的 `episodes[]`）；
-  /// - `usePosition`：集号不可靠时按**原始顺序**对齐（`02` §9.3）；
+  /// - `usePosition`：仅为兼容既有调用点保留的形参。集号语义已统一为
+  ///   「源集号优先、缺号回退线路位置」（对齐上游 `linearEpisodeNumber`），
+  ///   按号/按位不再分成两条路径；
+  /// - `sourceIndices`：每张卡片对应剧集在**原始线路**中的下标。渲染时常传入
+  ///   已季度过滤、可能已倒序的子集，此时 `index` 只是子集下标，拿它推断集号
+  ///   会让反转后的集号与元数据错位；缺省时退化为子集下标；
   /// - 未匹配到元数据的集仍产出卡片（只有来源集名，不丢集）。
   static List<TmdbEpisodeCard> build({
     required List<String> sourceNames,
@@ -780,13 +785,15 @@ abstract final class TmdbEpisodeCards {
     bool usePosition = false,
     int seasonNumber = 0,
     List<String> fallbackStills = const [],
+    List<int>? sourceIndices,
   }) {
     final cards = <TmdbEpisodeCard>[];
     for (var index = 0; index < sourceNames.length; index++) {
       final name = sourceNames[index];
-      final number = usePosition
-          ? index + 1
-          : _numberOrFallback(name, index);
+      final position = sourceIndices != null && index < sourceIndices.length
+          ? sourceIndices[index]
+          : index;
+      final number = _numberOrFallback(name, position);
       final metadata = metadataByNumber[number];
       // 元数据缺失剧照时才按顺序回退；回退只影响**图片**，
       // 不影响集号与标题（标题仍用来源集名，不猜测）。
@@ -818,9 +825,12 @@ abstract final class TmdbEpisodeCards {
   static List<TmdbEpisodeCard> fromMetadata(List<TmdbEpisode> episodes) =>
       episodes.map(TmdbEpisodeCard.fromEpisode).toList();
 
-  static int _numberOrFallback(String name, int index) {
+  /// 源集号优先；只有解析不出集号时才用**线路位置**推断（上游
+  /// `EpisodeSeasonPolicy.linearEpisodeNumber` 的同一语义）。
+  static int _numberOrFallback(String name, int position) {
     final number = sourceEpisodeNumber(name);
-    return number > 0 ? number : index + 1;
+    if (number > 0) return number;
+    return position >= 0 ? position + 1 : -1;
   }
 }
 

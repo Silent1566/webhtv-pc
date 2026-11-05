@@ -473,7 +473,10 @@ void main() {
       );
     });
 
-    test('集号重复 → 按位对齐', () {
+    // 旧语义（本次变更前）：集号重复即判定「按位对齐」，把两集强行改成 E1/E2。
+    // 新语义对齐上游 `linearEpisodeNumber`：源集号优先，重复也不重排——重排
+    // 反而会给第 2 集贴上不属于它的集标题。
+    test('集号重复 → 保持源集号（不按位重排）', () {
       final result = _service().applyEpisodeMetadata(
         line: _line(['第1集', '第1集']),
         request: const TmdbEpisodeEnrichment(
@@ -490,11 +493,18 @@ void main() {
       );
       expect(
         result.line.episodes.map((e) => e.extra['tmdb_episode_number']),
-        [1, 2],
+        [1, 1],
+      );
+      expect(
+        result.line.episodes.map((e) => e.extra['display_name']),
+        ['E1 A', 'E1 A'],
       );
     });
 
-    test('集号越界 → 按位对齐', () {
+    // 旧语义（本次变更前）：集号越界即判定「按位对齐」，把 `第99集` 改成 E2，
+    // 等于凭空给它安上别的集标题。新语义对齐上游：越界集保留源集号，取不到
+    // 元数据就不应用（不丢集、不伪造）。
+    test('集号越界 → 保留源集号且不套用他人元数据', () {
       final result = _service().applyEpisodeMetadata(
         line: _line(['第1集', '第99集']),
         request: const TmdbEpisodeEnrichment(
@@ -511,8 +521,11 @@ void main() {
       );
       expect(
         result.line.episodes.map((e) => e.extra['tmdb_episode_number']),
-        [1, 2],
+        [1, null],
       );
+      expect(result.line.episodes[1].name, '第99集');
+      expect(result.line.episodes[1].extra, isEmpty);
+      expect(result.appliedCount, 1);
     });
 
     test('无法匹配的集保留原始名（不丢集、不伪造）', () {
@@ -569,14 +582,37 @@ void main() {
       expect(episodeNumberFromName(''), -1);
     });
 
-    test('resolveEpisodeNumber 按位 / 按号', () {
+    // 旧语义（本次变更前）：`usePosition: true` 时返回 position + 1，把 `第5集`
+    // 的明确集号 5 覆盖成 1。新语义对齐上游 `linearEpisodeNumber`：源集号优先，
+    // position 只在源集号缺失时兜底。
+    test('resolveEpisodeNumber 源集号优先', () {
       expect(
         resolveEpisodeNumber(episodeName: '第5集', position: 0, usePosition: true),
-        1,
+        5,
       );
       expect(
         resolveEpisodeNumber(episodeName: '第5集', position: 0, usePosition: false),
         5,
+      );
+      expect(
+        resolveEpisodeNumber(episodeName: '上', position: 0, usePosition: true),
+        1,
+      );
+    });
+
+    test('resolveEpisodeNumber：position 不覆盖源集号', () {
+      expect(
+        resolveEpisodeNumber(
+          episodeName: '第13集',
+          position: 10,
+          usePosition: true,
+        ),
+        13,
+      );
+      // 无集号且不允许按位 → 不猜测
+      expect(
+        resolveEpisodeNumber(episodeName: '上', position: 3, usePosition: false),
+        -1,
       );
     });
   });

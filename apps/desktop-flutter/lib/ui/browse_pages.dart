@@ -2820,6 +2820,28 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
+  /// 每集在**原始线路**中的下标（对应上游 `episodes.indexOf(episode)`）。
+  ///
+  /// `rendered` 是季度过滤后（可能还倒序过）的子集，它的下标不能用来推断集号。
+  /// 匹配不上时返回 `-1`，由下游决定如何退化。
+  List<int> _sourceEpisodeIndices(
+    List<VodEpisode> source,
+    List<VodEpisode> rendered,
+  ) {
+    final indices = <int>[];
+    for (final episode in rendered) {
+      var index = -1;
+      for (var i = 0; i < source.length; i++) {
+        if (identical(source[i], episode) || source[i].url == episode.url) {
+          index = i;
+          break;
+        }
+      }
+      indices.add(index);
+    }
+    return indices;
+  }
+
   /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。
   Widget _buildEpisodes(
     BuildContext context,
@@ -2837,6 +2859,9 @@ class _DetailPageState extends State<DetailPage> {
         ? TmdbEpisodeCards.build(
             sourceNames: ordered.map((episode) => episode.name).toList(),
             metadataByNumber: const <int, TmdbEpisode>{},
+            // 本分支没有 TMDB 元数据可用，缺号集的集号只能按线路位置推断；
+            // `ordered` 可能已倒序，用它的下标会让缺号集整体错位，故取原始线路下标。
+            sourceIndices: _sourceEpisodeIndices(rawLine.episodes, ordered),
           )
         : tmdb.episodeCardsForEpisodes(
             ordered,
@@ -2844,6 +2869,10 @@ class _DetailPageState extends State<DetailPage> {
                 ? tmdb.selectedSeason
                 : null,
             includeMetadata: true,
+            // 集号只能按**原始线路**的位置推断：`ordered` 已季度过滤、可能已
+            // 倒序，用它的下标会让缺号集的编号整体错位（上游同样用
+            // `episodes.indexOf(episode)`）。
+            sourceIndices: _sourceEpisodeIndices(line.episodes, ordered),
           );
 
     // 切季 → 区间回到该季第一集所在区间（`docs/phase6/design/03` §5.1）。
