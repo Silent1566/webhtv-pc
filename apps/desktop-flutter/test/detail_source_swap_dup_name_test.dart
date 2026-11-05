@@ -25,6 +25,7 @@ import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/source_field.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 /// 两个可搜站点**共用**同一个显示名：这正是缺陷的触发条件。
 const String _dupName = '同名站[盘]';
@@ -52,6 +53,8 @@ void main() {
   late _DupNameSiteClient siteClient;
 
   setUp(() async {
+    // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+    dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-dup-name');
     siteClient = _DupNameSiteClient();
     state = AppState(
@@ -66,6 +69,8 @@ void main() {
   });
 
   tearDown(() async {
+    // 先收通知再销毁状态（通知的 `onDismiss` 会回调 `clearDetailError()`）。
+    dismissAllToasts();
     state.dispose();
     try {
       await tempDir.delete(recursive: true);
@@ -131,7 +136,15 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: detailVod())),
+      MaterialApp(
+        // 通知宿主按生产同一位置挂：`builder` 在 Navigator 之上，错误通知
+        // （带「换源」动作）因此盖在所有路由与浮层之上（见 `lib/ui/app.dart`）。
+        builder: (context, child) => Stack(
+          fit: StackFit.expand,
+          children: [child ?? const SizedBox.shrink(), const ToastHost()],
+        ),
+        home: DetailPage(state: state, vod: detailVod()),
+      ),
     );
     await pumpFrames(tester);
   }

@@ -36,6 +36,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 import 'support/player_page_harness.dart';
 
@@ -56,6 +57,8 @@ void main() {
   late _ResumeSiteClient siteClient;
 
   setUp(() async {
+    // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+    dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-resume');
     siteClient = _ResumeSiteClient();
     state = AppState(
@@ -70,6 +73,8 @@ void main() {
   });
 
   tearDown(() async {
+    // 先收通知再销毁状态（通知的 `onDismiss` 会回调 `clearDetailError()`）。
+    dismissAllToasts();
     state.dispose();
     try {
       await tempDir.delete(recursive: true);
@@ -109,7 +114,20 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: detailVod())),
+      MaterialApp(
+        // 通知宿主挂在 `home:` 的 `Stack` 里，而不是生产的 `MaterialApp.builder`。
+        // 原因（实测）：`builder` 把宿主放在 Navigator **之上**，浮层底部那颗
+        // 「并入」按钮的点击会落到通知层（tap 报 "derived an Offset that would not
+        // hit test"，命中链里是通知卡片）。本文件只验证「消息以通知形式到达用户」，
+        // 不验证层级；生产挂法与层级由 `test/toast_host_test.dart` 锁定。
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            DetailPage(state: state, vod: detailVod()),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     await pumpFrames(tester);
   }
@@ -148,6 +166,10 @@ void main() {
       findsWidgets,
       reason: '解析后该候选显示集数',
     );
+    // 错误通知驻留右下角 15 秒，正好压在浮层底部的「并入」按钮上：测试里不能等
+    // 它自己过去，先按用户会做的动作（点 ×）收走，否则这次点击落在通知卡片上。
+    dismissAllToasts();
+    await pumpFrames(tester, times: 2);
     await tester.tap(find.byKey(const ValueKey('source-swap-commit')));
     await pumpFrames(tester);
   }
@@ -272,20 +294,32 @@ void main() {
       reason: '关掉浮层不得播放',
     );
 
-    // 再走一次换源：这次入口是错误条 CTA，没有失败确认，也就没有续播意图。
-    // 若浮层关闭时没清掉 `_pendingResumeEpisode`，这里会被残留的意图自动播放。
-    // 回到页面顶部：错误条在首屏（`ensureVisible` 会把它贴到 AppBar 底下，
-    // 命中测试被 AppBar 吃掉，所以这里只整段回滚）。
+    // 再走一次换源：这次入口是线路行上常驻的「换源」次入口，没有失败确认，
+    // 也就没有续播意图。若浮层关闭时没清掉 `_pendingResumeEpisode`，这里会被
+    // 残留的意图自动播放。
+    //
+    // 不能用错误条 CTA（`detail-swap-source`）：`showSourceSwapSheet()` 打开浮层
+    // 前会 `dismissAllToasts()`，那条通知连同 `detailError` 一起被清掉。
+    //
+    // 线路行在 hero 之后（hero 占满整屏），而正文是**惰性** ListView：停在第 0 屏
+    // 时它根本没挂载，所以先回到顶部，再往下滚到它出现为止。`ensureVisible` 会把它
+    // 贴到 AppBar 底下（命中测试被 AppBar 吃掉），滚出来的位置在视口内，可直接点。
     await tester.drag(find.byType(Scrollable).first, const Offset(0, 3000));
     await pumpFrames(tester, times: 6);
-    final bannerCta = find.byKey(const ValueKey('detail-swap-source'));
-    expect(bannerCta, findsOneWidget, reason: '错误条上的换源入口应在页面顶部');
-    await tester.tap(bannerCta);
+    final lineSwap = find.byKey(const ValueKey('tmdb-line-swap'));
+    await tester.scrollUntilVisible(
+      lineSwap,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await pumpFrames(tester, times: 6);
+    expect(lineSwap, findsOneWidget, reason: '线路行上的常驻换源入口应在页面顶部区域内');
+    await tester.tap(lineSwap);
     await pumpFrames(tester);
     expect(
       find.byKey(const ValueKey('source-swap-sheet')),
       findsOneWidget,
-      reason: '错误条 CTA 必须升起换源浮层（这一轮不带续播意图）',
+      reason: '常驻换源入口必须升起换源浮层（这一轮不带续播意图）',
     );
     await pumpFrames(tester);
     await commitSwap(tester);

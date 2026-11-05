@@ -17,6 +17,7 @@ import 'app.dart';
 import 'browse_pages.dart';
 import 'playback_resume.dart';
 import 'tokens.dart';
+import 'toast.dart';
 
 class FollowingPage extends StatefulWidget {
   const FollowingPage({super.key, required this.state});
@@ -114,9 +115,7 @@ class _FollowingPageState extends State<FollowingPage> {
         .where((candidate) => candidate.key == item.siteKey)
         .firstOrNull;
     if (site == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('该追番所属站点已不在当前配置中：${item.siteKey}')),
-      );
+      showToast('该追番所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
       return;
     }
     await _state.selectSite(site);

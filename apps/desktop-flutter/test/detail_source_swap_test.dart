@@ -18,8 +18,8 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 /// 站点配置：`主站[盘]` 承载详情页自己的线路（不可搜），`换源站[盘]` 可搜。
 const String _configJson = '''
@@ -38,6 +38,8 @@ void main() {
   late _SwapSiteClient siteClient;
 
   setUp(() async {
+    // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
+    dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-swap');
     siteClient = _SwapSiteClient();
     state = AppState(
@@ -52,6 +54,9 @@ void main() {
   });
 
   tearDown(() async {
+    // 先收通知再销毁状态：通知的 `onDismiss` 会回调 `clearDetailError()`，
+    // 状态先死就会炸「A AppState was used after being disposed」。
+    dismissAllToasts();
     state.dispose();
     try {
       await tempDir.delete(recursive: true);
@@ -89,7 +94,16 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: detailVod())),
+      MaterialApp(
+        // 通知宿主按生产同一位置挂：`builder` 在 Navigator 之上，错误通知
+        // （带「换源」动作）因此盖在所有路由与浮层之上（见 `lib/ui/app.dart`）。
+        // 不挂宿主，详情错误与「换源」入口在测试里根本不存在。
+        builder: (context, child) => Stack(
+          fit: StackFit.expand,
+          children: [child ?? const SizedBox.shrink(), const ToastHost()],
+        ),
+        home: DetailPage(state: state, vod: detailVod()),
+      ),
     );
     await pumpFrames(tester);
   }
@@ -133,7 +147,15 @@ void main() {
     await pumpDetail(tester);
 
     expect(state.detailError, isNotNull, reason: '主站详情失败 → 应该出现错误条');
-    expect(find.byType(ErrorBanner), findsOneWidget);
+    // 错误不再画在页面里，而是推到右下角通知：用户看到的东西必须还在。
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('toast-host')),
+        matching: find.textContaining('需要登录'),
+      ),
+      findsOneWidget,
+      reason: '详情错误必须以通知的形式到达用户',
+    );
     expect(
       find.byKey(const ValueKey('detail-swap-source')),
       findsOneWidget,

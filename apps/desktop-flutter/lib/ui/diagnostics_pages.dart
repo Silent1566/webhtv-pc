@@ -20,6 +20,7 @@ import 'player_button_config_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'tokens.dart';
+import 'toast.dart';
 
 /// 设置页：TMDB、运行信息、目录、缓存维护、合规说明。
 class SettingsPage extends StatelessWidget {
@@ -244,9 +245,7 @@ class SettingsPage extends StatelessWidget {
               onPressed: () async {
                 await state.resetCache();
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('缓存目录已重建')),
-                  );
+                  showToast('缓存目录已重建', kind: ToastKind.success);
                 }
               },
               icon: const Icon(Icons.cleaning_services_outlined),
@@ -259,9 +258,7 @@ class SettingsPage extends StatelessWidget {
                   ClipboardData(text: state.log.export()),
                 );
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('已复制脱敏日志')),
-                  );
+                  showToast('已复制脱敏日志', kind: ToastKind.success);
                 }
               },
               icon: const Icon(Icons.copy_all_outlined),
@@ -631,9 +628,7 @@ class _LogsPageState extends State<LogsPage> {
                     ClipboardData(text: widget.state.log.export()),
                   );
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制脱敏日志')),
-                    );
+                    showToast('已复制脱敏日志', kind: ToastKind.success);
                   }
                 },
                 icon: const Icon(Icons.copy_all_outlined, size: 18),
@@ -720,9 +715,7 @@ class _PlaybackDiagnosticsCard extends StatelessWidget {
                     ClipboardData(text: diagnostics.report),
                   );
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制播放诊断')),
-                    );
+                    showToast('已复制播放诊断', kind: ToastKind.success);
                   }
                 },
                 icon: const Icon(Icons.copy_all_outlined, size: 16),

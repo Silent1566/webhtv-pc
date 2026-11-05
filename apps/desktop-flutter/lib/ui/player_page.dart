@@ -50,6 +50,7 @@ import 'player_osd.dart';
 import 'player_overlay.dart';
 import 'theme.dart';
 import 'tokens.dart';
+import 'toast.dart';
 
 /// 一次播放请求（由详情页或命令行构造）。
 class PlaybackRequest {
@@ -540,7 +541,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<void> _markSkipSegment(SkipAction action) async {
     final position = _controller.position.inMilliseconds;
     if (position <= 0) {
-      _showPlayerMessage('当前位置为 0，无法标记');
+      _showPlayerMessage('当前位置为 0，无法标记', kind: ToastKind.error);
       return;
     }
     final next = action == SkipAction.intro
@@ -554,7 +555,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     if (!mounted) return;
     if (!saved) {
-      _showPlayerMessage('保存标记失败（数据库不可用）');
+      _showPlayerMessage('保存标记失败（数据库不可用）', kind: ToastKind.error);
       return;
     }
     setState(() {
@@ -566,6 +567,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       action == SkipAction.intro
           ? '已标记片头：${_formatMs(position)}'
           : '已标记片尾：${_formatMs(position)}',
+      kind: ToastKind.success,
     );
   }
 
@@ -577,7 +579,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     if (!mounted) return;
     if (!saved) {
-      _showPlayerMessage('清除标记失败（数据库不可用）');
+      _showPlayerMessage('清除标记失败（数据库不可用）', kind: ToastKind.error);
       return;
     }
     setState(() {
@@ -585,7 +587,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _introSkipped = false;
       _outroSkipped = false;
     });
-    _showPlayerMessage('已清除本片的片头/片尾标记');
+    _showPlayerMessage('已清除本片的片头/片尾标记', kind: ToastKind.success);
   }
 
   String _formatMs(int value) {
@@ -595,10 +597,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     return '$minutes:$seconds';
   }
 
-  void _showPlayerMessage(String text) {
+  void _showPlayerMessage(String text, {ToastKind kind = ToastKind.info}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text), duration: const Duration(seconds: 3)),
+    // 错误给足阅读时间但不赖着：不传 duration，让 toast.dart 按类型取默认值
+    // （error -> 15s，info/success -> 4s）。只有信息/成功在播放器里收窄到 3s：
+    // 播放页的操作反馈更频繁，4s 会让右下角一直有东西。
+    showToast(
+      text,
+      kind: kind,
+      duration: kind == ToastKind.error ? null : const Duration(seconds: 3),
     );
   }
 
@@ -721,7 +728,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     setState(() => _sleepTimer = const SleepTimerPlan.idle());
     unawaited(_controller.pause());
     widget.state.log.info('定时关闭生效，已暂停', scope: 'player');
-    _showPlayerMessage('定时关闭已生效');
+    _showPlayerMessage('定时关闭已生效', kind: ToastKind.success);
   }
 
   /// 「真播完」判定（`design/03` §4.1 D2、P5）。
@@ -877,16 +884,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           'LUT 解析失败 ${parsed.error} path=$lut',
           scope: 'player',
         );
-        _showPlayerMessage('LUT 不可用：${parsed.error}');
+        _showPlayerMessage('LUT 不可用：${parsed.error}', kind: ToastKind.error);
         return;
       }
       final ok = await _controller.applyLut(lut);
       if (!ok) {
-        _showPlayerMessage('当前播放内核不支持 LUT');
+        _showPlayerMessage('当前播放内核不支持 LUT', kind: ToastKind.error);
       }
     } catch (error) {
       widget.state.log.warning('LUT 加载失败 $error path=$lut', scope: 'player');
-      _showPlayerMessage('LUT 加载失败：$error');
+      _showPlayerMessage('LUT 加载失败：$error', kind: ToastKind.error);
     }
   }
 
@@ -1101,7 +1108,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<void> _showSubtitleSearch() async {
     final settings = widget.state.subtitleSettings;
     if (!settings.hasAnyProvider) {
-      _showPlayerMessage('未配置字幕源：请先在设置页填写字幕目录或 HTTP 源');
+      _showPlayerMessage('未配置字幕源：请先在设置页填写字幕目录或 HTTP 源', kind: ToastKind.error);
       return;
     }
     final query = _subtitleQuery();
@@ -1218,16 +1225,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await _applySubtitleCandidate(candidate, remember: true);
   }
 
-  /// 字幕失败提示：不阻断播放，只用 SnackBar 告知（§10.4）。
+  /// 字幕失败提示：不阻断播放，只用浮动提示告知（§10.4）。
   void _showSubtitleError(String message) {
     if (!mounted || _lastShownSubtitleError == message) return;
     _lastShownSubtitleError = message;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 6),
-        action: SnackBarAction(label: '字幕设置', onPressed: _showSubtitleMenu),
-      ),
+    // 不传 duration：走 error 默认的 15s，`字幕设置` 动作在这段时间内都可点。
+    // 去重闸门 [_lastShownSubtitleError] 必须保留：同一条失败只提示一次。
+    showToast(
+      message,
+      kind: ToastKind.error,
+      action: AppToastAction(label: '字幕设置', onPressed: _showSubtitleMenu),
     );
   }
 
@@ -1316,7 +1323,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<void> _showDanmakuSearch() async {
     final settings = widget.state.danmakuSettings;
     if (!settings.hasLibrary) {
-      _showPlayerMessage('未配置弹幕库地址：请先在设置页填写');
+      _showPlayerMessage('未配置弹幕库地址：请先在设置页填写', kind: ToastKind.error);
       return;
     }
     final query = _danmakuQuery();
@@ -1555,9 +1562,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void _showDanmakuError(String message) {
     if (_lastShownDanmakuError == message) return;
     _lastShownDanmakuError = message;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 6)),
-    );
+    // 不传 duration：走 error 默认的 15s。
+    showToast(message, kind: ToastKind.error);
   }
 
   /// 弹幕总开关（§13.3「弹幕可开启和关闭」）。
@@ -2027,7 +2033,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         ? await _controller.selectAudioTrack(selected)
         : await _controller.selectVideoTrack(selected);
     if (!ok) {
-      _showPlayerMessage('${kind.label}切换失败');
+      _showPlayerMessage('${kind.label}切换失败', kind: ToastKind.error);
       return;
     }
     widget.state.log.info('切换${kind.label} id=$selected', scope: 'player');
@@ -2184,7 +2190,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (path.isEmpty) {
       final applied = await _controller.applyLut(null);
       if (!applied) {
-        _showPlayerMessage('当前播放内核不支持 LUT');
+        _showPlayerMessage('当前播放内核不支持 LUT', kind: ToastKind.error);
         return;
       }
       await _persistOptions(_options.copyWith(lutPath: ''));
@@ -2195,19 +2201,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final text = await File(path).readAsString();
       final parsed = parseCube(text, path: path);
       if (!parsed.ok) {
-        _showPlayerMessage('LUT 不可用：${parsed.error}');
+        _showPlayerMessage('LUT 不可用：${parsed.error}', kind: ToastKind.error);
         return;
       }
       final applied = await _controller.applyLut(path);
       if (!applied) {
-        _showPlayerMessage('当前播放内核不支持 LUT');
+        _showPlayerMessage('当前播放内核不支持 LUT', kind: ToastKind.error);
         return;
       }
       await _persistOptions(_options.copyWith(lutPath: path));
       if (mounted) setState(() {});
-      _showPlayerMessage('已应用 LUT：${parsed.preset!.name}');
+      _showPlayerMessage('已应用 LUT：${parsed.preset!.name}', kind: ToastKind.success);
     } catch (error) {
-      _showPlayerMessage('LUT 读取失败：$error');
+      _showPlayerMessage('LUT 读取失败：$error', kind: ToastKind.error);
     }
   }
 
@@ -2430,8 +2436,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     } catch (error) {
       widget.state.log.warning('切换全屏失败：$error', scope: 'player');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('全屏切换失败，请再试一次')));
+        showToast('全屏切换失败，请再试一次', kind: ToastKind.error);
       }
       return;
     }

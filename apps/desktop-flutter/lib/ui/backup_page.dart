@@ -10,6 +10,7 @@ import '../core/backup_manifest.dart';
 import '../state/app_state.dart';
 import 'common.dart';
 import 'tokens.dart';
+import 'toast.dart';
 
 class BackupPage extends StatefulWidget {
   const BackupPage({super.key, required this.state});
@@ -110,9 +111,7 @@ class _BackupPageState extends State<BackupPage> {
       _message = error ?? '恢复完成：设置与数据库已替换。';
     });
     if (error == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('备份已恢复')),
-      );
+      showToast('备份已恢复', kind: ToastKind.success);
     }
   }
 
@@ -153,9 +152,7 @@ class _BackupPageState extends State<BackupPage> {
       _message = error ?? '本地数据已重置。';
     });
     if (error == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('本地数据已重置')),
-      );
+      showToast('本地数据已重置', kind: ToastKind.success);
     }
   }
 

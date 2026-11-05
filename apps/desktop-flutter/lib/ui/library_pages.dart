@@ -24,6 +24,7 @@ import 'history_resume_seed.dart';
 import 'playback_resume.dart';
 import 'tokens.dart';
 import 'viewing_report_page.dart';
+import 'toast.dart';
 
 // `restoreHistoryPlaybackTarget` 已下沉到服务层（`proxy_server.dart`）；
 // 这里重新导出，保持既有测试与调用方的 import 不变。
@@ -902,9 +903,7 @@ class _HistoryPageState extends State<HistoryPage> {
         .firstOrNull;
     if (site == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('该记录所属站点已不在当前配置中：${item.siteKey}')),
-      );
+      showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
       return;
     }
     await state.selectSite(site);
