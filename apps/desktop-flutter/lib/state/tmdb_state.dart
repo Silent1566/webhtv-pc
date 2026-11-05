@@ -332,27 +332,26 @@ class TmdbState extends ChangeNotifier {
   ///
   /// 与 [episodeCardsForLine] 的区别：季度过滤会先缩小集列表，卡片必须与
   /// **实际渲染的集**一一对应，否则会出现「卡片比集多」的补集假象。
+  ///
+  /// `sourceIndices` 是每集在**原始线路**中的下标。传进来的 `episodes` 往往是
+  /// 过滤过、甚至倒序过的子集，拿子集下标推断集号会让缺号集的编号整体前移，
+  /// 因此调用方应把它一并传下来。
   List<TmdbEpisodeCard> episodeCardsForEpisodes(
     List<VodEpisode> episodes, {
     int? seasonNumber,
     bool includeMetadata = true,
+    List<int>? sourceIndices,
   }) {
     // 线路隔离（`04` §4.3）：非当前线路不得套用当前季度的集元数据，
     // 否则会把别的线路的剧照/集标题贴到这条线路上（跨线路串图）。
     final metadata = includeMetadata
         ? episodeMetadataByNumber
         : const <int, TmdbEpisode>{};
-    final usePosition = metadata.isEmpty
-        ? false
-        : shouldUseEpisodePosition(
-            episodes.map((episode) => episode.name).toList(),
-            _episodes,
-          );
     return TmdbEpisodeCards.build(
       sourceNames: episodes.map((episode) => episode.name).toList(),
       metadataByNumber: metadata,
-      usePosition: usePosition,
       seasonNumber: seasonNumber ?? _selectedSeason,
+      sourceIndices: sourceIndices,
       // 剧照回退池：本剧的剧照（无剧照则用背景图）。
       //
       // 只在**该集没有 TMDB 剧照**时按顺序取用，因此不会覆盖真实剧照；
