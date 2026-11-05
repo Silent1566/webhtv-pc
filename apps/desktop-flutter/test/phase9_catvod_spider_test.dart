@@ -190,7 +190,7 @@ void main() {
       expect(File(p.join(dir, 'loader.py')).existsSync(), isTrue);
       final entry = File(p.join(dir, 'spider.py')).readAsStringSync();
       expect(entry, contains('create_catvod_spider'));
-      expect(spider.manifest.runtime, 'python');
+      expect(spider.manifest.runtime, 'python-catvod');
     });
 
     test('启动后五方法经 CatVod 签名适配返回结构化 Result', () async {

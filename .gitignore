@@ -1,3 +1,8 @@
+# 逆向/探针产物的本地目录（整体不入库）
+# 内容含第三方二进制的反汇编结论、依赖闭包与站点样本信息，只在本机留存。
+# 放一个专属目录而不是逐条列文件，是为了一次性挡住后续新增的同类文档。
+docs/reverse-probe/
+
 # Build outputs
 build/
 **/build/
@@ -39,9 +44,21 @@ sidecars/spider-host-jvm/.build/
 # 只锚定仓库根下的 runtime/node/，不写宽泛的 runtime/：其他 runtime 目录可能需入库。
 /runtime/node/
 
+# JS Spider sidecar 的第三方依赖（构建产物，不入库）
+# 入库的是 package.json + package-lock.json；node_modules/ 由
+# `npm install --omit=dev` 在 sidecars/spider-host-js 下重放，打包脚本
+# scripts/package_windows.ps1 会校验该目录存在并整目录拷进发行包。
+node_modules/
+
 # Phase 7 验收脚本的临时输出（不应入库）
 tools/phase7/_run.out
 tools/phase7/_run.err
+
+# 逆向/探针工作区（本地过程产物，不入库）
+# 里面是 venv、下载的三方 jar、从 MisaTV 解包出来的资产，以及订阅站点 ext 的
+# 解码结果——后者含真实 token/secret/uid。一旦入库既是几十 MB 的二进制历史，
+# 也是把订阅凭据推到远端。要用其中的脚本请另存到 tools/ 下再提交。
+.probe/
 
 # DSH 会话临时日志与 flutter 工具状态（本地过程产物，不入库）
 .dsh/

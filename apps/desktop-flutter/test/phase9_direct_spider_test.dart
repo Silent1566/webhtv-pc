@@ -40,6 +40,19 @@ void main() {
     'token': '2024',
   };
 
+  /// CatVod 壳样本：`class Spider` + `*Content` 方法，没有 `create_spider`。
+  const catVodShellSource = '''
+class Spider:
+    def init(self, extend=""):
+        pass
+
+    def homeContent(self, filter):
+        return {}
+
+    def categoryContent(self, tid, pg, filter, extend):
+        return {}
+''';
+
   group('P1-7 形态判定（README §4.2）', () {
     test('只认 type=3 且 .js/.py', () {
       expect(directSpiderKind(site('https://x.test/a.js')), DirectSpiderKind.js);
@@ -128,7 +141,9 @@ void main() {
 
       expect(downloads, 1);
       final local = result['shell-a']!;
-      expect(local.manifest.runtime, 'python');
+      // csp_* 壳站点就是 CatVod 方言：runtime 必须写 `python-catvod`，
+      // host.py 据此自动进入 CatVod 模式（把 homeContent 等映射成宿主方法名）。
+      expect(local.manifest.runtime, 'python-catvod');
       expect(local.manifest.entry, 'spider.py');
       expect(local.entryExists, isTrue);
 
@@ -140,7 +155,7 @@ void main() {
 
       final stored = jsonDecode(File(local.manifestPath).readAsStringSync());
       expect(stored['key'], 'shell-a');
-      expect(stored['runtime'], 'python');
+      expect(stored['runtime'], 'python-catvod');
     });
 
     test('同一 api 的多个壳站点互不覆盖', () async {
@@ -218,7 +233,7 @@ void main() {
       expect(downloads, 1);
 
       final local = result['direct-a']!;
-      expect(local.manifest.runtime, 'node');
+      expect(local.manifest.runtime, 'node-tvbox');
       expect(local.manifest.entry, 'spider.js');
       expect(local.entryExists, isTrue);
       expect(File(local.manifestPath).existsSync(), isTrue);
@@ -228,7 +243,7 @@ void main() {
       expect((stored['hashes'] as Map)['entrySha256'], isNotEmpty);
     });
 
-    test('py 站点用 python 运行时', () async {
+    test('非 CatVod 形态的 py 站点保持 python 运行时', () async {
       final registrar = DirectSpiderRegistrar(
         root: temp.path,
         registry: registry,
@@ -239,6 +254,11 @@ void main() {
       );
       expect(result['py-a']!.manifest.runtime, 'python');
       expect(result['py-a']!.manifest.entry, 'spider.py');
+
+      // 没包壳就不许出现 loader.json：分发层把它当「需要 requests/Crypto/lxml
+      // 的解释器」的标记，写了会换掉一个本来能跑的解释器。
+      final dir = p.dirname(result['py-a']!.manifestPath);
+      expect(File(p.join(dir, 'loader.json')).existsSync(), isFalse);
     });
 
     test('哈希一致时不重复下载', () async {
@@ -294,5 +314,124 @@ void main() {
       );
       expect(result, isEmpty);
     });
+  });
+
+  group('`.py` 站点的 CatVod 包壳判定', () {
+    test('只看方法面：CatVod 语义才包壳', () {
+      expect(looksLikeCatVodShell(catVodShellSource), isTrue);
+      // WebHTV 宿主 ABI：`create_spider(manifest)` 是原生入口，不需要壳。
+      expect(
+        looksLikeCatVodShell('def create_spider(manifest=None):\n    pass\n'),
+        isFalse,
+      );
+      // 宿主侧方法名（home/category/search），不是 CatVod 的 *Content。
+      expect(
+        looksLikeCatVodShell(
+          'class Spider:\n    def home(self, params, context):\n        pass\n',
+        ),
+        isFalse,
+      );
+      // 有 CatVod 方法但没有 Spider 类：create_catvod_spider 会直接 ValueError。
+      expect(
+        looksLikeCatVodShell('def homeContent(self, filter):\n    return {}\n'),
+        isFalse,
+      );
+      expect(looksLikeCatVodShell('pass'), isFalse);
+    });
+
+    test('CatVod 形态的 py 站点包壳并写 loader.json', () async {
+      var downloads = 0;
+      final registrar = DirectSpiderRegistrar(
+        root: temp.path,
+        registry: registry,
+        log: LogService(),
+        client: MockClient((_) async {
+          downloads += 1;
+          return http.Response(catVodShellSource, 200);
+        }),
+      );
+
+      final result = await registrar.materialize(
+        AppConfig(
+          sites: [site('https://x.test/Atvp.py?v=1', key: 'py-shell')],
+        ),
+      );
+
+      expect(downloads, 1);
+      final local = result['py-shell']!;
+      expect(local.manifest.runtime, 'python-catvod');
+      expect(local.manifest.entry, 'spider.py');
+      expect(local.entryExists, isTrue);
+
+      final dir = p.dirname(local.manifestPath);
+      expect(
+        File(p.join(dir, 'loader.py')).readAsStringSync(),
+        catVodShellSource,
+      );
+      final entry = File(p.join(dir, 'spider.py')).readAsStringSync();
+      expect(entry, contains('create_catvod_spider'));
+      expect(entry, contains('entry="loader.py"'));
+
+      final meta =
+          jsonDecode(File(p.join(dir, 'loader.json')).readAsStringSync())
+              as Map;
+      expect(meta['loaderUrl'], 'https://x.test/Atvp.py?v=1');
+      expect((meta['loaderSha256'] as String).length, 64);
+
+      final stored = jsonDecode(File(local.manifestPath).readAsStringSync());
+      expect(stored['runtime'], 'python-catvod');
+    });
+
+    test('包壳目录哈希一致时不重复下载', () async {
+      var downloads = 0;
+      DirectSpiderRegistrar build() => DirectSpiderRegistrar(
+        root: temp.path,
+        registry: registry,
+        client: MockClient((_) async {
+          downloads += 1;
+          return http.Response(catVodShellSource, 200);
+        }),
+      );
+      final config = AppConfig(
+        sites: [site('https://x.test/Atvp.py?v=1', key: 'py-shell')],
+      );
+      await build().materialize(config);
+      await build().materialize(config);
+      expect(downloads, 1, reason: 'loader.json 里记的 loaderSha256 应命中');
+    });
+
+    // 91 是订阅里的真实规模，不缩减——缩到几个站点就测不到目录塌缩这个事故。
+    // 每个站点要落 3~4 个文件，而 `_materializePy` 沿用既有的 `flush: true`
+    // （每次写都 fsync），单机实测约 23s；全量测试并发压满时会被默认的 30s
+    // 超时打掉，因此这里显式放宽——放宽的是时限，断言强度不变。
+    test(
+      '91 个 api 相同的 py 站点各占一个目录',
+      () async {
+        final registrar = DirectSpiderRegistrar(
+          root: temp.path,
+          registry: registry,
+          client: MockClient((_) async => http.Response('pass', 200)),
+        );
+        // 生产事故复现：整份订阅里这 91 个站点的 api 逐字相同，只有 ext 不同。
+        const sharedApi = 'http://192.168.50.50:4567/Atvp.py?v=t4-direct-v1';
+        final result = await registrar.materialize(
+          AppConfig(
+            sites: [
+              for (var i = 0; i < 91; i++)
+                site(sharedApi, key: 'py-$i', ext: 'ext-$i'),
+            ],
+          ),
+        );
+
+        expect(result.length, 91);
+        final dirs = {
+          for (final local in result.values) p.dirname(local.manifestPath),
+        };
+        expect(dirs.length, 91, reason: '目录键必须含站点 key，不能只用 api');
+        expect(registry.byKey('py-0'), isNotNull);
+        expect(registry.byKey('py-90'), isNotNull);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
   });
 }

@@ -30,6 +30,14 @@ public final class Host {
     private Host() {}
 
     public static void main(String[] args) {
+        // stderr 编码修复：本机 native.encoding=GBK，System.err.charset() 默认也是 GBK，
+        // 而 Dart 宿主用 utf8.decode(..., allowMalformed: true) 严格解码——中文日志到用户侧
+        // 就是乱码。实测 -Dfile.encoding=UTF-8 对本机 stderr 无效、-Dstderr.encoding=UTF-8
+        // 有效，但依赖启动参数不如进程内自设可靠，因此在这里固定 UTF-8。
+        // stdout 不动：协议帧由 Ipc 显式按 UTF-8 编码，且 stdout 被协议独占（§9.3.1）。
+        System.setErr(new java.io.PrintStream(
+                new java.io.FileOutputStream(java.io.FileDescriptor.err), true,
+                java.nio.charset.StandardCharsets.UTF_8));
         int code = run(args);
         System.exit(code);
     }
@@ -76,8 +84,12 @@ public final class Host {
         EntryLoader.Loaded loaded;
         try {
             loaded = EntryLoader.load(entry, options.get("class"), manifest);
-        } catch (Exception error) {
+        } catch (Throwable error) {
+            // 必须 catch Throwable：NoClassDefFoundError 一类链接错误是 Error 而不是 Exception，
+            // 漏掉它们会让异常穿透 main、进程以退出码 1 结束，违反「初始化失败必须 3」的契约。
+            // 先打一行可读摘要（用户/宿主日志），再打完整栈（定位到缺失的类/方法）。
             Ipc.log("站源初始化失败：" + error.getClass().getSimpleName() + ": " + error.getMessage());
+            error.printStackTrace();
             return 3;
         }
 

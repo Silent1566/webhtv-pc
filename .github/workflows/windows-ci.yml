@@ -63,6 +63,14 @@ jobs:
         with:
           node-version: "22"
 
+      # node_modules 不入库（.gitignore:51），但 scripts/package_windows.ps1 要求
+      # sidecars/spider-host-js/node_modules 存在，缺失即打包失败。必须在打包前安装；
+      # 用 npm ci 按已入库的 package-lock.json 精确还原，--omit=dev 避免把开发依赖打进包。
+      - name: Install JS sidecar dependencies
+        working-directory: sidecars/spider-host-js
+        shell: pwsh
+        run: npm ci --omit=dev
+
       - name: Set up Python 3.12 (Python sidecar tests)
         uses: actions/setup-python@v5
         with:

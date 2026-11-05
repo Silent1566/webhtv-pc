@@ -39,7 +39,17 @@ enum JarVerdict {
   /// 因此源码入口**不落盘**，如实提示改用 manifest（spider-local:）。
   sourceReady,
 
-  /// 含 *.dex：Android 站源，JVM 无法加载（ADR-0002）。
+  /// 含 *.dex、且**不含**任何原生库（*.so）：可在导入期预转译为桌面 JVM 可加载的
+  /// class jar（sidecar 的 `webhtv.spider.DexIntakeCli`）。
+  ///
+  /// 只在正常解析路径上给出——兜底字节扫描无法确认有没有 lib/*.so，见 [androidJar]。
+  translatableDex,
+
+  /// 含 *.dex、但**无法确认**是否也能转译的 Android 站源：JVM 无法加载（ADR-0002）。
+  ///
+  /// 当前只有一条产生路径：zip 中央目录解析失败后的字节扫描兜底——该路径只看到
+  /// 「内容里出现过 classes.dex」，看不到完整条目名清单，因此无法排除 lib/*.so，
+  /// 不能当作可转译入口。
   androidJar,
 
   /// 含 *.so：依赖 Android/ARM 原生库，桌面 JVM 无法加载。
@@ -90,9 +100,13 @@ class JarInspection {
 
   /// 是否可落盘到 `<config>/spiders/csp/<siteKey>/`。
   ///
-  /// 只有 [JarVerdict.desktopReady] 可以通过：含 dex/原生库的一律拒绝且不落盘
-  /// （§12.6.4 ①②），源码入口不由本绑定承接。
-  bool get installable => verdict == JarVerdict.desktopReady;
+  /// 两种情况可以通过：[JarVerdict.desktopReady]（桌面 jar 直接可加载）与
+  /// [JarVerdict.translatableDex]（导入期预转译成桌面 class jar，见 [JarIntake.install]
+  /// 的 translateDex）。含原生库、无类条目、损坏、不可转译的 dex 一律拒绝且不落盘
+  /// （§12.6.4 ①②）。
+  bool get installable =>
+      verdict == JarVerdict.desktopReady ||
+      verdict == JarVerdict.translatableDex;
 
   bool get isAndroid => verdict == JarVerdict.androidJar;
 
@@ -107,9 +121,13 @@ class JarInspection {
       case JarVerdict.sourceReady:
         return '这是源码入口（${sourceEntries.length} 个 .java）：需要 JDK 编译，'
             '当前 csp_ 绑定只解析 index.jar / 类目录，请改用 manifest（spider-local:）。';
+      case JarVerdict.translatableDex:
+        return '这是 Android 站源入口（内含 classes.dex，共 ${dexEntries.length} 个 dex 条目）：'
+            '无原生库，可在导入时转译为桌面可加载的 class jar。';
       case JarVerdict.androidJar:
-        return '该入口是 Android 站源（内含 ${dexEntries.take(3).join('、')}），'
-            'JVM 无法加载；需桌面版 jar，或按 ADR-0002 启用 Android 兼容层。';
+        return '该入口看起来含 classes.dex（${dexEntries.take(3).join('、')}），'
+            '但 zip 结构已损坏、无法确认是否还含原生库（lib/*.so），'
+            '因此不做自动转译；JVM 无法加载（ADR-0002）。';
       case JarVerdict.nativeLibrary:
         return '该入口含原生库（${nativeEntries.take(3).join('、')}），'
             '依赖 Android/ARM 原生实现，桌面 JVM 无法加载（Win-box 用 unidbg 属另一条路线）。';
@@ -132,13 +150,24 @@ class JarInstallResult {
     this.targetPath,
     this.error,
     this.inspection,
+    this.dexTranslation,
   });
 
+  /// 是否**落盘成功**。与转译成败**无关**：转译结果单独看 [dexTranslation]，
+  /// 文案由上层（spider_router）决定。落盘成功而转译失败时本字段仍为 true。
   final bool ok;
   final String siteKey;
   final String? targetPath;
   final String? error;
   final JarInspection? inspection;
+
+  /// 导入期预转译（DexIntakeCli）的一行 JSON 结果，原样来自 CLI：
+  /// 成功 `{'ok': true, 'bundle': …, 'classCount': …, 'cached': …, 'sourceSha256': …, 'archive': …}`，
+  /// 失败 `{'ok': false, 'stage': …, 'message': …}`。
+  ///
+  /// 为 null 表示**没有转译**（调用方未注入 translateDex，或入口本来不是 dex）。
+  /// 分工：本文件只负责记录，可用性/文案由上层按 `dexTranslation['ok']` 决定。
+  final Map<String, Object?>? dexTranslation;
 }
 
 /// 已安装到缓存目录的一个 csp_* 条目（含当前磁盘内容的静态结论）。
@@ -170,13 +199,13 @@ class JarIntake {
     return trimmed;
   }
 
-  /// 入口是否为含 classes.dex 的 Android 站源。
+  /// 入口是否为**不可转译**的 Android jar（即判为 [JarVerdict.androidJar]）。
   ///
   /// 供 `CspJvmBinding.isAndroidJar`（services/spider_registry.dart）委托调用，
   /// 保证站点列表文案与设置页检测结论来自**同一处判定**（§12.6.2 缺陷③）。
   ///
-  /// 边界：只有「含 *.dex」算 Android 站源。含原生库（*.so）的入口在 `spider_router`
-  /// 里由 hosted sidecar 另行判为 Android 站源，不走本 csp 绑定。
+  /// 边界：含 dex 且无原生库的入口现在是 [JarVerdict.translatableDex]（可转译），
+  /// **不再**算「Android 站源」；只有兜底字节扫描出来的结论才算。
   static bool hasAndroidDex(String path) =>
       inspectPath(path).verdict == JarVerdict.androidJar;
 
@@ -222,6 +251,9 @@ class JarIntake {
     if (names == null) {
       // 兜底：只有**确实是 zip**（魔数 50 4B 03 04）却解析失败时才做字节扫描，
       // 避免「文件里恰好出现 classes.dex 字样」被误判（§12.6.4 ⑦）。
+      //
+      // 这条分支只能看到字节流，看不到条目名清单，因此**无法确认**有没有原生库
+      // （lib/*.so）：不能当作可转译入口，仍判 androidJar（拒绝落盘）。
       if (_hasZipMagic(file) && _containsAscii(file, 'classes.dex')) {
         return JarInspection(
           verdict: JarVerdict.androidJar,
@@ -307,9 +339,13 @@ class JarIntake {
         expected.isNotEmpty &&
         classes.any((c) => p.basename(c) == '$expected.class');
 
-    if (dex.isNotEmpty) {
+    // 判定顺序：**原生库的拒绝优先于 dex**。项目纪律要求含 lib/*.so 的 jar 一律
+    // 拒绝落盘——dex 预转译只解决「JVM 不认 dalvik 字节码」，不解决原生实现只能
+    // 在 Android/ARM 上跑的依赖（§12.6.4 ①、ADR-0002）。若先判 dex，「dex + 原生库」
+    // 会被错报成可转译的 dex 入口，转译成功后依然加载不出原生实现。
+    if (native.isNotEmpty) {
       return JarInspection(
-        verdict: JarVerdict.androidJar,
+        verdict: JarVerdict.nativeLibrary,
         sourcePath: sourcePath,
         entryCount: names.length,
         dexEntries: dex,
@@ -320,9 +356,10 @@ class JarIntake {
         entryClassFound: found,
       );
     }
-    if (native.isNotEmpty) {
+    if (dex.isNotEmpty) {
+      // 走到这里说明已确认**没有任何原生库**，dex 可以在导入期转译。
       return JarInspection(
-        verdict: JarVerdict.nativeLibrary,
+        verdict: JarVerdict.translatableDex,
         sourcePath: sourcePath,
         entryCount: names.length,
         dexEntries: dex,
@@ -496,15 +533,25 @@ class JarIntake {
   /// 静态检测 + 落盘到 [targetDir]。
   ///
   /// 纪律：
-  /// - 检测不通过（含 dex / 原生库 / 损坏）**一律不落盘**，也不覆盖既有文件；
+  /// - 检测不通过（原生库 / 损坏 / 不可转译的 dex 等）**一律不落盘**，也不覆盖既有文件；
   /// - 落盘采用「暂存名 → 原子 rename」，与 backup_service.dart 同一范式；
   /// - 写入 intake.json 记录来源 / SHA-256 / 时间，供回滚与诊断（§12.6.2）。
+  ///
+  /// [translateDex]：导入期的预转译钩子（由调用方注入，通常是 sidecar 的
+  /// `webhtv.spider.DexIntakeCli`），用依赖注入而非直接 import，避免引入 import 环。
+  /// 只有 [JarVerdict.translatableDex] 且钩子非 null 时才调用；失败**不影响** `ok`
+  /// （`ok` 表示落盘成功），结果放进 [JarInstallResult.dexTranslation] 与 intake.json
+  /// 的 `dexTranslation` 字段。省略时完全跳过转译（既有调用方行为不变）。
   static Future<JarInstallResult> install({
     required String sourcePath,
     required String targetDir,
     required String siteKey,
     String? className,
     LogService? log,
+    Future<Map<String, Object?>> Function({
+      required String siteDir,
+      required String archive,
+    })? translateDex,
   }) async {
     final expected = className?.trim().isNotEmpty == true
         ? className!.trim()
@@ -560,6 +607,21 @@ class JarIntake {
       final digest = isJar
           ? await _fileSha256(source)
           : await _directorySha256(Directory(sourcePath));
+
+      // 落盘成功后才转译：转译读的就是刚就位的入口，且失败不回滚落盘结果。
+      Map<String, Object?>? dexTranslation;
+      if (inspection.verdict == JarVerdict.translatableDex &&
+          translateDex != null) {
+        dexTranslation = await _translateDex(
+          translate: translateDex,
+          siteKey: siteKey,
+          // 目录入口没有 jar，按入口路径传入，由 CLI 自行判定并如实报失败。
+          archive: p.join(targetDir, entryName),
+          siteDir: targetDir,
+          log: log,
+        );
+      }
+
       await File(p.join(targetDir, 'intake.json')).writeAsString(
         const JsonEncoder.withIndent('  ').convert({
           'siteKey': siteKey,
@@ -571,8 +633,19 @@ class JarIntake {
           'verdict': inspection.verdict.name,
           'entryCount': inspection.entryCount,
           'note': inspection.note,
+          'dexTranslation': ?dexTranslation,
         }),
         flush: true,
+      );
+
+      // `manifest.json` 是**启动 sidecar 的必需输入**（`Host.java` 在文件缺失时直接
+      // 以退出码 2 结束，宿主侧只会看到「sidecar 意外退出（code=2）」）。此前这里
+      // 只写 intake.json，`spider_router.cspLocalSpider` 却按约定指向
+      // `<站点目录>/manifest.json`，两者对不上，dex 站点于是每次启动都崩在 2。
+      await _writeLaunchManifest(
+        targetDir: targetDir,
+        siteKey: siteKey,
+        entryName: entryName,
       );
 
       log?.info(
@@ -585,6 +658,7 @@ class JarIntake {
         siteKey: siteKey,
         targetPath: targetDir,
         inspection: inspection,
+        dexTranslation: dexTranslation,
       );
     } catch (error) {
       log?.error('导入 T3 桌面站源失败 site=$siteKey：$error', scope: 'spider');
@@ -595,6 +669,151 @@ class JarIntake {
         inspection: inspection,
       );
     }
+  }
+
+  /// 调用注入的预转译钩子，**绝不抛出**：异常兜底成 `ok:false` 结论。
+  ///
+  /// 日志只写 siteKey / cached / classCount / stage / message，不写站点凭据。
+  static Future<Map<String, Object?>> _translateDex({
+    required Future<Map<String, Object?>> Function({
+      required String siteDir,
+      required String archive,
+    }) translate,
+    required String siteKey,
+    required String siteDir,
+    required String archive,
+    LogService? log,
+  }) async {
+    try {
+      final result = await translate(siteDir: siteDir, archive: archive);
+      if (result['ok'] == true) {
+        log?.info(
+          '导入期预转译完成 site=$siteKey cached=${result['cached']} '
+          'classCount=${result['classCount']}',
+          scope: 'spider',
+        );
+      } else {
+        log?.warning(
+          '导入期预转译失败 site=$siteKey stage=${result['stage']} '
+          'message=${result['message']}',
+          scope: 'spider',
+        );
+      }
+      return result;
+    } on Exception catch (error) {
+      log?.warning('导入期预转译异常 site=$siteKey：$error', scope: 'spider');
+      return {'ok': false, 'stage': '', 'message': '$error'};
+    }
+  }
+
+  /// 同步确保 `<targetDir>/manifest.json` 存在（自愈旧导入）。
+  ///
+  /// 为什么需要自愈：`manifest.json` 的写入是 P1-2 后期才补上的，此前导入的站点
+  /// 目录里只有 `index.jar` + `intake.json`，而 `Host.java` 对缺失的 manifest 直接
+  /// 退出码 2。不补写的话，用户必须删掉站点目录重新导入才能恢复——那等于把内部
+  /// 实现变更的成本转嫁给用户。
+  ///
+  /// 只在文件缺失时写一次，已有内容不覆盖（避免每次判定都产生磁盘写入）。
+  static void ensureLaunchManifest({
+    required String targetDir,
+    required String siteKey,
+  }) {
+    final manifest = File(p.join(targetDir, 'manifest.json'));
+    if (manifest.existsSync()) return;
+    final entry = File(p.join(targetDir, 'index.jar')).existsSync()
+        ? 'index.jar'
+        : (Directory(p.join(targetDir, 'classes')).existsSync()
+              ? 'classes'
+              : null);
+    if (entry == null) return;
+    try {
+      manifest.writeAsStringSync(
+        const JsonEncoder.withIndent('  ').convert({
+          'abi': 'webhtv-ipc-v1',
+          'abiMinor': 0,
+          'key': siteKey,
+          'name': siteKey,
+          'runtime': 'jvm',
+          'entry': entry,
+          'capabilities': const [
+            'home',
+            'category',
+            'detail',
+            'search',
+            'play',
+          ],
+          'permissions': const {
+            'network': true,
+            'localProxy': false,
+            'ui': false,
+            'storage': 'cache-only',
+            'process': false,
+            'clipboard': false,
+            'browser': false,
+          },
+          'limits': const {
+            'memoryMiB': 256,
+            'cpuSeconds': 30,
+            'concurrency': 1,
+            'responseMiB': 8,
+          },
+          'hashes': const {'entrySha256': ''},
+          'signature': null,
+        }),
+        flush: true,
+      );
+    } catch (_) {
+      // 写失败不阻断判定：让后续启动照旧报出可诊断的错误，而不是在这里静默改状态。
+    }
+  }
+
+  /// 写启动 sidecar 用的 `manifest.json`（`webhtv-ipc-v1` 分发契约）。
+  ///
+  /// 字段对齐 `SpiderManifest.fromJson` 与 `SpiderManifest.problems` 的校验要求：
+  /// `abi` 必须是 `webhtv-ipc-v1`、`key` 非空、`entry` 指向站点目录内的入口（必须是
+  /// **相对路径**，`SpiderManifestRegistry._load` 会按 manifest 所在目录解析并校验
+  /// 是否越界）。能力集按 dex 站源的实际可得范围声明；真实能力仍由 sidecar 在
+  /// 握手时用反射自报，这里不夸大。
+  static Future<void> _writeLaunchManifest({
+    required String targetDir,
+    required String siteKey,
+    required String entryName,
+  }) async {
+    await File(p.join(targetDir, 'manifest.json')).writeAsString(
+      const JsonEncoder.withIndent('  ').convert({
+        'abi': 'webhtv-ipc-v1',
+        'abiMinor': 0,
+        'key': siteKey,
+        'name': siteKey,
+        'runtime': 'jvm',
+        'entry': entryName,
+        'capabilities': const [
+          'home',
+          'category',
+          'detail',
+          'search',
+          'play',
+        ],
+        'permissions': const {
+          'network': true,
+          'localProxy': false,
+          'ui': false,
+          'storage': 'cache-only',
+          'process': false,
+          'clipboard': false,
+          'browser': false,
+        },
+        'limits': const {
+          'memoryMiB': 256,
+          'cpuSeconds': 30,
+          'concurrency': 1,
+          'responseMiB': 8,
+        },
+        'hashes': const {'entrySha256': ''},
+        'signature': null,
+      }),
+      flush: true,
+    );
   }
 
   /// 移除已导入的站源（回滚）。不存在时返回 false。

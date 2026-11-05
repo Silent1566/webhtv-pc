@@ -198,12 +198,31 @@ $sidecarFiles = @(
     'sidecars/spider-host-python/base/spider.py',
     'sidecars/spider-host-js/host.js',
     'sidecars/spider-host-js/sandbox_worker.js',
+    'sidecars/spider-host-js/esm_shim.js',
+    'sidecars/spider-host-js/tvbox_globals.js',
+    'sidecars/spider-host-js/package.json',
     'sidecars/spider-host-jvm/host.jar'
 )
 foreach ($relative in $sidecarFiles) {
     $source = Join-Path $RepoRoot $relative
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         Fail "缺少 sidecar 宿主文件：$relative（发行包必须能定位到 sidecar 宿主）。"
+    }
+}
+
+# TVBox JS 站源的第三方依赖（cheerio / crypto-js，均为 MIT）随包以目录分发。
+# 只有 `runtime: node-tvbox` 才会惰性 require，`runtime: node` 完全不加载。
+# JVM 宿主 host.jar 的 MANIFEST Class-Path 全部按相对 host.jar 所在目录解析到同级 lib/，
+# 缺件时 JVM 静默忽略缺失 jar（纯 jar 站源照旧可跑，含 classes.dex 的站源必然失败），
+# 所以 lib/ 也必须随包，且缺失提示要按目录给出各自的生成方式。
+$sidecarDependencyDirs = [ordered]@{
+    'sidecars/spider-host-js/node_modules' = '先在 sidecars/spider-host-js 下执行 npm install --omit=dev'
+    'sidecars/spider-host-jvm/lib'         = '运行 sidecars/spider-host-jvm/build.ps1 生成 lib/'
+}
+foreach ($relative in $sidecarDependencyDirs.Keys) {
+    $source = Join-Path $RepoRoot $relative
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        Fail "缺少 sidecar 依赖目录：$relative（$($sidecarDependencyDirs[$relative])）。"
     }
 }
 
@@ -259,6 +278,66 @@ try {
         $destination = Join-Path $staging $relative
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
         Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $destination -Force
+    }
+    foreach ($relative in $sidecarDependencyDirs.Keys) {
+        $destination = Join-Path $staging $relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $RepoRoot $relative) -Destination $destination -Recurse -Force
+    }
+
+    # 2.5 JVM 依赖闭包自检：host.jar 的 MANIFEST Class-Path 是按相对 host.jar 所在目录解析的，
+    # 而缺失 jar 只会被 JVM 静默忽略，所以必须在打包阶段逐条断言其真实落到 staging，
+    # 否则会产出「纯 jar 站源能跑、含 classes.dex 的站源必失败」的隐性降级包。
+    $jvmRelative = 'sidecars/spider-host-jvm'
+    $jvmJarStaged = Join-Path $staging "$jvmRelative/host.jar"
+    $jvmLibSource = Join-Path $RepoRoot "$jvmRelative/lib"
+    $jvmLibStaged = Join-Path $staging "$jvmRelative/lib"
+    if (-not (Test-Path -LiteralPath $jvmLibStaged -PathType Container)) {
+        Fail "staging 缺少 JVM 依赖目录：$jvmRelative/lib"
+    }
+    $jvmLibSourceNames = @(Get-ChildItem -LiteralPath $jvmLibSource -File -Filter '*.jar').Name
+    $jvmLibStagedNames = @(Get-ChildItem -LiteralPath $jvmLibStaged -File -Filter '*.jar').Name
+    $jvmLibMissingNames = @($jvmLibSourceNames | Where-Object { $_ -notin $jvmLibStagedNames })
+    $jvmLibExtraNames = @($jvmLibStagedNames | Where-Object { $_ -notin $jvmLibSourceNames })
+    if ($jvmLibMissingNames.Count -gt 0 -or $jvmLibExtraNames.Count -gt 0) {
+        Fail ("JVM 依赖目录与源目录不一致（$jvmRelative/lib）：源 $($jvmLibSourceNames.Count) 个、staging $($jvmLibStagedNames.Count) 个；" +
+            "缺失 $($jvmLibMissingNames -join '、')；多出 $($jvmLibExtraNames -join '、')")
+    }
+
+    # MANIFEST 折行以「换行 + 单个空格」续行，先展开再按空白切分，才能拿到完整相对路径列表。
+    $jvmZip = [IO.Compression.ZipFile]::OpenRead($jvmJarStaged)
+    try {
+        $jvmManifestEntry = $jvmZip.GetEntry('META-INF/MANIFEST.MF')
+        if ($null -eq $jvmManifestEntry) {
+            Fail "host.jar 缺少 META-INF/MANIFEST.MF：$jvmRelative/host.jar"
+        }
+        $jvmManifestReader = [IO.StreamReader]::new($jvmManifestEntry.Open())
+        try {
+            $jvmManifestText = $jvmManifestReader.ReadToEnd()
+        } finally {
+            $jvmManifestReader.Dispose()
+        }
+    } finally {
+        $jvmZip.Dispose()
+    }
+    $jvmManifestUnfolded = ($jvmManifestText -replace "`r`n", "`n") -replace "`n ", ''
+    $jvmClassPathLine = $jvmManifestUnfolded -split "`n" |
+        Where-Object { $_ -match '^Class-Path:' } |
+        Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($jvmClassPathLine)) {
+        Fail "host.jar 的 MANIFEST 没有 Class-Path，无法校验 JVM 依赖闭包：$jvmRelative/host.jar"
+    }
+    $jvmClassPathEntries = ($jvmClassPathLine -replace '^Class-Path:\s*', '') -split '\s+' |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $jvmJarDirStaged = Split-Path -Parent $jvmJarStaged
+    $jvmMissing = [System.Collections.Generic.List[string]]::new()
+    foreach ($entryPath in $jvmClassPathEntries) {
+        if (-not (Test-Path -LiteralPath (Join-Path $jvmJarDirStaged ($entryPath -replace '/', '\')) -PathType Leaf)) {
+            $jvmMissing.Add("$jvmRelative/$entryPath")
+        }
+    }
+    if ($jvmMissing.Count -gt 0) {
+        Fail "host.jar 的 MANIFEST Class-Path 有 $($jvmMissing.Count) 个依赖未随包落地：$($jvmMissing -join '、')"
     }
 
     # 3. 内置 Node 运行时（spider_registry.dart 在 exe 同级 runtime/node/ 下查找 node.exe）
@@ -333,6 +412,9 @@ Sidecar 宿主（随包）：Python / Node / JVM
         $targets.Add((Get-Item -LiteralPath (Join-Path $staging $relative)))
     }
     $targets.Add((Get-Item -LiteralPath (Join-Path $staging $nodeRelativePath)))
+    # 依赖目录逐文件入清单会让清单膨胀到 1200+ 行，这里按目录汇总许可与版本来源。
+    $inventory.Add('sidecars/spider-host-js/node_modules/  第三方依赖目录：cheerio (MIT)、crypto-js (MIT)；逐包版本见 sidecars/spider-host-js/package-lock.json')
+    $inventory.Add('sidecars/spider-host-jvm/lib/  第三方依赖目录：host.jar 的 MANIFEST Class-Path 闭包，逐 jar 版本见文件名')
 
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($file in ($targets | Sort-Object -Property FullName)) {

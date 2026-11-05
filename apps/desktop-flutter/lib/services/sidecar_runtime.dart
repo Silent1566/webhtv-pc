@@ -70,6 +70,11 @@ class SidecarRuntime implements SiteRuntime {
   }
 
   /// `extend` 传递站点 `ext`（对象按稳定 JSON 文本传递，§7.4.5）。
+  ///
+  /// **字符串一律原样透传，严禁归一化成对象**：订阅里大量 py 站点的 `ext` 是
+  /// Base64 字符串，由站源自己解码（如 `Atvp.py` 先 base64 解码、随后立刻
+  /// `.get("t4_play_type")`）。把它归一化成对象，这些站点会直接毁在
+  /// `AttributeError: 'NoneType' object has no attribute 'get'`。
   static String _extendFor(Site site) {
     final ext = site.ext;
     if (ext == null) return '';

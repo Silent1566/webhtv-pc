@@ -9,6 +9,10 @@
 /// 下载 `loader.py` 后生成一个 CatVod 壳入口 `spider.py`，由 sidecar 里的
 /// `webhtv_catvod.py` 把 CatVod 语义方法适配成 `webhtv-ipc-v1` 宿主契约。
 ///
+/// `.py` 直连站点如果本身就是 CatVod 壳（探测规则见 [looksLikeCatVodShell]），
+/// 也会生成同样的入口，`runtime` 记 `python-catvod`；`.js` 站点的 `runtime`
+/// 记 `node-tvbox`（TVBox 保真沙箱）。
+///
 /// 安全与正确性：
 /// - 只接受 `http(s)`；
 /// - 单文件上限 [maxBytes]（默认 2 MiB），超限拒绝；
@@ -81,50 +85,180 @@ class DirectSpiderRegistrar {
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
       return null;
     }
-    final digest = sha256.convert(utf8.encode(api)).toString();
+    // 目录键必须带上站点 key：同一份配置里几十上百个站点的 api 完全一样（如
+    // `Atvp.py?v=t4-direct-v1`），只有 `ext` 不同；只用 api 做键会让它们全落到
+    // 同一个目录，manifest 互相覆盖、注册表按 key 覆盖 `_spiders`，最后只剩一个
+    // 站点能用。口径与 `_materializeCatVod` 完全一致。
+    final digest = sha256.convert(utf8.encode('${site.key}\n$api')).toString();
     final dir = Directory(p.join(root, 'direct', digest.substring(0, 16)));
-    final fileName = kind == DirectSpiderKind.js ? 'spider.js' : 'spider.py';
-    final entryPath = p.join(dir.path, fileName);
+    await dir.create(recursive: true);
     final manifestPath = p.join(dir.path, 'manifest.json');
 
-    await dir.create(recursive: true);
-
-    String? existingHash;
-    final manifestFile = File(manifestPath);
-    if (await manifestFile.exists() && await File(entryPath).exists()) {
-      final loaded = SpiderManifest.fromJson(
-        jsonDecode(await manifestFile.readAsString()),
-      );
-      existingHash = loaded.entrySha256;
+    if (kind == DirectSpiderKind.js) {
+      return _materializeJs(site, uri, dir, manifestPath);
     }
+    return _materializePy(site, uri, dir, manifestPath);
+  }
 
-    List<int>? bytes;
-    if (await File(entryPath).exists()) {
-      bytes = await File(entryPath).readAsBytes();
+  /// `.js` 直连站点：下载物本身就是入口，运行时交给 TVBox 保真沙箱。
+  ///
+  /// `runtime` 写 `node-tvbox`（`node*` 前缀由分发层按前缀识别，见
+  /// `spider_registry.dart` 的 `runtime.startsWith('node')`）。
+  Future<LocalSpider?> _materializeJs(
+    Site site,
+    Uri uri,
+    Directory dir,
+    String manifestPath,
+  ) async {
+    final previousSha256 = await _recordedEntrySha256(manifestPath);
+    final entrySha256 = await _syncEntry(
+      uri: uri,
+      path: p.join(dir.path, 'spider.js'),
+      recordedSha256: previousSha256,
+    );
+    if (entrySha256 == null) return null;
+    await _writeManifest(
+      manifestPath,
+      site: site,
+      runtime: 'node-tvbox',
+      entry: 'spider.js',
+      entrySha256: entrySha256,
+    );
+    return registry.register(manifestPath);
+  }
+
+  /// `.py` 直连站点：下载物先落 `loader.py`，再按内容决定要不要包 CatVod 壳。
+  ///
+  /// 只有包壳时才写 `loader.json`：它是分发层的目录标记（`spider_registry.dart`
+  /// 的 `isCatVodShell` 见到它就改挑「带 requests/Crypto/lxml」的解释器），给
+  /// 不包壳的站点写它，等于把一个本来能跑的解释器换成要求依赖的那个。
+  /// 判定规则与理由见 [looksLikeCatVodShell]。
+  Future<LocalSpider?> _materializePy(
+    Site site,
+    Uri uri,
+    Directory dir,
+    String manifestPath,
+  ) async {
+    final loaderFile = File(p.join(dir.path, 'loader.py'));
+    final metaFile = File(p.join(dir.path, 'loader.json'));
+    final entryPath = p.join(dir.path, _catVodEntryName);
+
+    // 复用判定：`loader.py` 的哈希对上「上次写下的任一哈希」就不再下载。
+    // - 包过壳的目录记在 `loader.json` 的 `loaderSha256`；
+    // - 没包壳的目录记在 manifest 的 `entrySha256`（下载物就是入口本体）；
+    // - 升级前的旧目录（下载物直接落在 `spider.py`、没有 `loader.py`）两者都对
+    //   不上，只多下载这一次。
+    final metaSha256 = _nonEmpty((await _readJson(metaFile))['loaderSha256']);
+    final manifestSha256 = await _recordedEntrySha256(manifestPath);
+    final existingSha256 = await _fileSha256(loaderFile);
+    final reusable = existingSha256 != null &&
+        (existingSha256 == metaSha256 || existingSha256 == manifestSha256);
+
+    final List<int> bytes;
+    if (reusable) {
+      bytes = await loaderFile.readAsBytes();
+    } else {
+      final downloaded = await _download(uri);
+      if (downloaded == null) return null;
+      await loaderFile.writeAsBytes(downloaded, flush: true);
+      bytes = downloaded;
     }
-    final currentHash =
-        (bytes == null || bytes.isEmpty) ? '' : sha256.convert(bytes).toString();
+    final loaderSha256 = sha256.convert(bytes).toString();
 
-    if (bytes == null || bytes.isEmpty || currentHash != existingHash) {
-      bytes = await _download(uri);
-      if (bytes == null) return null;
+    if (!looksLikeCatVodShell(utf8.decode(bytes, allowMalformed: true))) {
+      // 原生 WebHTV 蜘蛛：下载物就是入口，行为与改造前完全一致。
       await File(entryPath).writeAsBytes(bytes, flush: true);
+      if (await metaFile.exists()) await metaFile.delete();
+      await _writeManifest(
+        manifestPath,
+        site: site,
+        runtime: 'python',
+        entry: _catVodEntryName,
+        entrySha256: loaderSha256,
+      );
+      return registry.register(manifestPath);
     }
 
-    final hash = sha256.convert(bytes).toString();
+    await metaFile.writeAsString(
+      jsonEncode({'loaderUrl': uri.toString(), 'loaderSha256': loaderSha256}),
+      flush: true,
+    );
+    await _writeShellEntry(entryPath);
+    await _writeManifest(
+      manifestPath,
+      site: site,
+      runtime: 'python-catvod',
+      entry: _catVodEntryName,
+      entrySha256: sha256.convert(utf8.encode(_catVodEntry)).toString(),
+    );
+    return registry.register(manifestPath);
+  }
+
+  /// 保证 [path] 是 [uri] 的最新内容，返回其 SHA-256；下载失败返回 null。
+  ///
+  /// 文件已存在且哈希等于 [recordedSha256]（本注册器上次写下的值）时不重下。
+  Future<String?> _syncEntry({
+    required Uri uri,
+    required String path,
+    required String? recordedSha256,
+  }) async {
+    final file = File(path);
+    final existing = await _fileSha256(file);
+    if (existing != null && existing == recordedSha256) return existing;
+    final bytes = await _download(uri);
+    if (bytes == null) return null;
+    await file.writeAsBytes(bytes, flush: true);
+    return sha256.convert(bytes).toString();
+  }
+
+  /// 读 manifest 里记录的入口哈希（`hashes.entrySha256`，见 `toJson`）。
+  Future<String?> _recordedEntrySha256(String manifestPath) async {
+    final json = await _readJson(File(manifestPath));
+    if (json.isEmpty) return null;
+    return _nonEmpty(SpiderManifest.fromJson(json).entrySha256);
+  }
+
+  Future<String?> _fileSha256(File file) async {
+    if (!await file.exists()) return null;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return null;
+    return sha256.convert(bytes).toString();
+  }
+
+  /// 写 CatVod 壳入口；内容一致时不重写。
+  Future<void> _writeShellEntry(String entryPath) async {
+    final entry = File(entryPath);
+    if (await entry.exists()) {
+      // 上一轮可能是没包壳的原始 py 字节（不保证是合法 UTF-8），用容错解码比对，
+      // 别为了一次比较把整站判失败。
+      final existing = utf8.decode(
+        await entry.readAsBytes(),
+        allowMalformed: true,
+      );
+      if (existing == _catVodEntry) return;
+    }
+    await entry.writeAsString(_catVodEntry, flush: true);
+  }
+
+  Future<void> _writeManifest(
+    String manifestPath, {
+    required Site site,
+    required String runtime,
+    required String entry,
+    required String entrySha256,
+  }) async {
     final manifest = SpiderManifest(
       key: site.key,
       name: site.name,
-      runtime: kind == DirectSpiderKind.js ? 'node' : 'python',
-      entry: fileName,
+      runtime: runtime,
+      entry: entry,
       capabilities: const ['home', 'category', 'detail', 'search', 'play'],
-      entrySha256: hash,
+      entrySha256: entrySha256,
     );
-    await manifestFile.writeAsString(
+    await File(manifestPath).writeAsString(
       const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
       flush: true,
     );
-    return registry.register(manifestPath);
   }
 
   /// CatVod 壳（api 只写壳名、真正地址在 ext.loader）。
@@ -186,7 +320,7 @@ class DirectSpiderRegistrar {
     final manifest = SpiderManifest(
       key: site.key,
       name: site.name,
-      runtime: 'python',
+      runtime: 'python-catvod',
       entry: _catVodEntryName,
       capabilities: const ['home', 'category', 'detail', 'search', 'play'],
       entrySha256: hash,
@@ -273,6 +407,55 @@ String? catVodLoaderUrl(Site site) {
   if (uri == null) return null;
   if (uri.scheme != 'http' && uri.scheme != 'https') return null;
   return url;
+}
+
+/// 读一个 JSON 对象；文件不存在、解析失败或内容不是对象时返回空表。
+Future<Map<String, Object?>> _readJson(File file) async {
+  if (!await file.exists()) return const <String, Object?>{};
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is Map<String, Object?>) return decoded;
+  } catch (_) {
+    // 半写坏的文件当作没有记录：最多多下载一次。
+  }
+  return const <String, Object?>{};
+}
+
+/// 只接受非空字符串，其余（null / 空串 / 非字符串）统一返回 null。
+String? _nonEmpty(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
+/// CatVod 语义方法名（`webhtv_catvod.py` 的 `SHELL_TO_CATVOD` 右列）。
+final RegExp _catVodMethodPattern = RegExp(
+  r'def\s+(homeContent|homeVideoContent|categoryContent|detailContent'
+  r'|searchContent|playerContent)\s*\(',
+);
+
+/// 判断下载来的 `.py` 是不是 CatVod 壳（**只做文本探测，绝不执行**）。
+///
+/// 为什么不无条件包壳：两套 ABI 共用 `Spider` 这个名字，方法名却完全不同——
+/// WebHTV 宿主按 `home`/`category`/`search` 调用（`host.py` 的 `build_spider`
+/// 只认 `create_spider(manifest)` 或 `Spider` 类），CatVod 壳写的是
+/// `homeContent`/`categoryContent`/`searchContent`。而
+/// `webhtv_catvod.create_catvod_spider` 只会 `getattr(module, "Spider")`，
+/// 拿不到就 `raise ValueError(f"CatVod 壳未导出 Spider 类：{entry_path.name}")`
+/// （`sidecars/spider-host-python/webhtv_catvod.py:334-336`），**没有**回退到
+/// `create_spider` 的分支。所以包壳并不幂等：把 WebHTV 风格的 py 源包起来，
+/// `CatVodSpider` 会去找 `homeContent` 而目标只有 `home`，站点直接不可用。
+///
+/// 因此按内容判断，三条同时成立才包壳：
+/// 1. 定义了至少一个 `*Content` CatVod 方法（壳的语义面）；
+/// 2. 有 `class Spider`（`create_catvod_spider` 需要它）；
+/// 3. 没有导出 `create_spider`（那是 WebHTV 宿主原生 ABI，不需要壳）。
+///
+/// 实测样例：订阅里 91 个 py 站点指向的 `Atvp.py` 三条全中——`class
+/// Spider(HostSpider)`、`def homeContent` 等六个 `*Content` 方法、无
+/// `create_spider`，且模块顶层 `import requests` / `Crypto` / `lxml`，正需要
+/// 包壳后才会挑中带依赖的解释器。
+bool looksLikeCatVodShell(String source) {
+  if (source.contains('create_spider')) return false;
+  if (!source.contains('class Spider')) return false;
+  return _catVodMethodPattern.hasMatch(source);
 }
 
 Object? _tryJson(String text) {
