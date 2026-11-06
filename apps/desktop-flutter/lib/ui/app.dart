@@ -802,6 +802,31 @@ class _AppShellState extends State<AppShell> {
     super.dispose();
   }
 
+  /// 顶栏「配置：xxx」的点击：**换配置**，不是管理配置。
+  ///
+  /// 用户点这几个字的意图几乎总是「我要用另一个源」（用户反馈 2026-11-05）。
+  /// 原来它直接冲进配置管理页，而那一页首屏是一大块导入表单，换配置的列表
+  /// 被压到下面——想做最常做的事，反而要先在管理页里找到列表。
+  ///
+  /// 只有一条配置时没有可换的东西，直接进管理页（那里才有「导入」）。
+  Future<void> _openConfigSwitcher() async {
+    if (_state.savedConfigs.length <= 1) {
+      await _openConfigPage();
+      return;
+    }
+    final targetId = await showDialog<int>(
+      context: context,
+      builder: (_) => ConfigSwitcherDialog(
+        records: _state.savedConfigs,
+        activeId: _state.activeRecord?.id,
+      ),
+    );
+    if (targetId == null || !mounted) return;
+    if (targetId == _state.activeRecord?.id) return;
+    await _state.activateConfigRecord(targetId);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _openConfigPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)),
@@ -886,7 +911,8 @@ class _AppShellState extends State<AppShell> {
         children: [
           _TopBar(
             state: _state,
-            onOpenConfig: _openConfigPage,
+            onOpenConfig: _openConfigSwitcher,
+            onManageConfig: _openConfigPage,
             onOpenSitePicker: _openSitePicker,
           ),
           if (_state.storageWarnings.isNotEmpty)
@@ -1103,11 +1129,13 @@ class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.state,
     required this.onOpenConfig,
+    required this.onManageConfig,
     required this.onOpenSitePicker,
   });
 
   final AppState state;
   final VoidCallback onOpenConfig;
+  final VoidCallback onManageConfig;
   final VoidCallback onOpenSitePicker;
 
   @override
@@ -1132,10 +1160,34 @@ class _TopBar extends StatelessWidget {
           const SizedBox(width: AppSpace.md),
           Text('WebHTV', style: theme.textTheme.titleMedium),
           const SizedBox(width: AppSpace.xl),
+          // 配置名可能很长，顶栏不能被它挤爆：限宽 + 省略号，
+          // 完整名字走 Tooltip。
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Tooltip(
+              message: record == null ? '未导入配置' : '当前配置：${record.name}',
+              child: TextButton.icon(
+                onPressed: onOpenConfig,
+                icon: const Icon(Icons.swap_horiz, size: 18),
+                label: Text(
+                  record == null ? '导入配置' : '配置：${record.name}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ),
+          // 管理（导入/编辑/刷新/删除）与换配置分开两个入口：前者低频且是
+          // 「维护」心智，后者高频且是「使用」心智，混在一个按钮里必然有一方
+          // 被埋（用户反馈 2026-11-05）。
+          //
+          // 这里**必须带文字**：初版只放了一个无标签图标，用户截图反馈
+          // 「不太明显」——纯图标在顶栏一排字形中间分不出它是入口还是装饰。
           TextButton.icon(
-            onPressed: onOpenConfig,
+            key: const ValueKey('topbar-manage-config'),
+            onPressed: onManageConfig,
             icon: const Icon(Icons.settings_ethernet, size: 18),
-            label: Text(record == null ? '导入配置' : '配置：${record.name}'),
+            label: const Text('管理'),
           ),
           const SizedBox(width: AppSpace.xs),
           TextButton.icon(

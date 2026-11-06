@@ -9,10 +9,12 @@ import '../core/protocol.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
 import '../services/realtime_sync_engine.dart';
+import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'common.dart';
 import 'toast.dart';
+import 'tokens.dart';
 
 /// 配置导入页：URL / 本地文件 / JSON 文本三种入口。
 class ConfigPage extends StatefulWidget {
@@ -30,6 +32,30 @@ class _ConfigPageState extends State<ConfigPage> {
   bool _busy = false;
   String? _resultMessage;
   bool _resultIsError = false;
+
+  /// 导入区是否展开。
+  ///
+  /// 默认收起：用户每次进这一页的**主要目的**是换配置或改一条记录，导入是
+  /// 低频动作。一块 180px 的空输入框长期占据首屏，等于把最常用的列表挤到
+  /// 折线以下（用户反馈 2026-11-05：「导入部分能默认收起来嘛」）。
+  ///
+  /// 例外：一条配置都没有时没有可管理的东西，唯一有意义的就是导入，
+  /// 此时必须展开，否则用户进来看见一句"还没有保存的配置"却找不到入口。
+  bool _importExpanded = false;
+
+  /// 正在刷新/保存的记录 id。
+  ///
+  /// 存在的理由不是"好看"：刷新一条要真的打网络，用户完全可能在等待期间再
+  /// 点一次同一行，或者点「全部刷新」——两路同时写同一条记录会让"最后写入"
+  /// 变成随机的。这里把同一条记录的在途操作锁住。
+  final Set<int> _busyIds = <int>{};
+  bool _busyAll = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _importExpanded = widget.state.savedConfigs.isEmpty;
+  }
 
   @override
   void dispose() {
@@ -120,73 +146,89 @@ class _ConfigPageState extends State<ConfigPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              '支持三种导入方式：HTTP(S) 配置地址、本地文件路径、直接粘贴 JSON 文本。'
-              '导入失败不会覆盖已有配置。',
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _name,
-              decoration: const InputDecoration(
-                labelText: '配置名称（可选）',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            // 输入框给**固定高度**，不再用 `Expanded` + `expands` 吃掉整窗剩余空间。
+            // 整行可点：标题本身就是开关，不必把指针精确移到右侧小按钮上
+            // （用户反馈 2026-11-05）。
             //
-            // 原来它是 `Expanded(child: TextField(expands: true))`，于是窗口多高
-            // 它就多高——1440x900 下约 270px 的**空**输入框成了整页最重的东西，
-            // 而它喂的「导入」按钮只有小小一颗，层级是反的（截图复核时发现，
-            // 2026-10-11）。固定高度让"输入区"和"动作"回到应有的主次。
-            SizedBox(
-              height: 180,
-              child: TextField(
-                controller: _input,
-                maxLines: null,
-                expands: true,
-                textAlignVertical: TextAlignVertical.top,
+            // 标题前**不放图标**：图标会把文字整体右推 26px，于是它与下方
+            // 「已保存的配置」对不齐，看起来像缩进了一级的子菜单。两个区块是
+            // 平级关系，左边缘必须落在同一条竖线上。
+            _CollapsibleSectionHeader(
+              keyValue: 'config-import-toggle',
+              title: '导入新配置',
+              expanded: _importExpanded,
+              onTap: () => setState(() => _importExpanded = !_importExpanded),
+            ),
+            if (_importExpanded) ...[
+              const Text(
+                '支持三种导入方式：HTTP(S) 配置地址、本地文件路径、直接粘贴 JSON 文本。'
+                '导入失败不会覆盖已有配置。',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _name,
                 decoration: const InputDecoration(
-                  labelText: '配置 URL / 文件路径 / JSON 文本',
+                  labelText: '配置名称（可选）',
                   border: OutlineInputBorder(),
-                  alignLabelWithHint: true,
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            // 「导入」与它真正服务的两个来源放**同一行**。
-            //
-            // 原来两个来源按钮被放在「配置名称」那一行的右端，与它们服务的
-            // 导入动作隔了一整个输入框；现在它们紧挨着导入按钮，读起来是
-            // 「导入（从文件 / 从 fixture / 从上面的内容）」。
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilledButton.icon(
-                  onPressed: _busy ? null : _import,
-                  icon: _busy
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: LoadingBlock(center: false, size: 16),
-                        )
-                      : const Icon(Icons.playlist_add_check),
-                  label: const Text('导入'),
+              const SizedBox(height: 12),
+              // 输入框给**固定高度**，不再用 `Expanded` + `expands` 吃掉整窗剩余空间。
+              //
+              // 原来它是 `Expanded(child: TextField(expands: true))`，于是窗口多高
+              // 它就多高——1440x900 下约 270px 的**空**输入框成了整页最重的东西，
+              // 而它喂的「导入」按钮只有小小一颗，层级是反的（截图复核时发现，
+              // 2026-10-11）。固定高度让"输入区"和"动作"回到应有的主次。
+              SizedBox(
+                height: 180,
+                child: TextField(
+                  controller: _input,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  decoration: const InputDecoration(
+                    labelText: '配置 URL / 文件路径 / JSON 文本',
+                    border: OutlineInputBorder(),
+                    alignLabelWithHint: true,
+                  ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _pickFile,
-                  icon: const Icon(Icons.folder_open),
-                  label: const Text('选择本地文件'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _importFixture,
-                  icon: const Icon(Icons.science_outlined),
-                  label: const Text('使用仓库 fixture'),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 12),
+              // 「导入」与它真正服务的两个来源放**同一行**。
+              //
+              // 原来两个来源按钮被放在「配置名称」那一行的右端，与它们服务的
+              // 导入动作隔了一整个输入框；现在它们紧挨着导入按钮，读起来是
+              // 「导入（从文件 / 从 fixture / 从上面的内容）」。
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _import,
+                    icon: _busy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: LoadingBlock(center: false, size: 16),
+                          )
+                        : const Icon(Icons.playlist_add_check),
+                    label: const Text('导入'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _pickFile,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('选择本地文件'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _importFixture,
+                    icon: const Icon(Icons.science_outlined),
+                    label: const Text('使用仓库 fixture'),
+                  ),
+                ],
+              ),
+            ],
+            // 导入结果留在折叠区**外面**：收起之后仍然要能看到刚才那次导入
+            // 成功还是失败，否则用户收起面板就丢失了唯一的反馈。
             if (_resultMessage != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -202,13 +244,97 @@ class _ConfigPageState extends State<ConfigPage> {
             const Divider(height: 32),
             _SavedConfigs(
               state: state,
+              busyIds: _busyIds,
+              busyAll: _busyAll,
               onActivate: (id) async {
                 await state.activateConfigRecord(id);
                 if (mounted) setState(() {});
               },
               onDelete: (id) async {
+                final record = state.configRecordById(id);
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    key: const ValueKey('config-delete-confirm'),
+                    title: const Text('删除配置记录'),
+                    content: Text(
+                      '将删除「${record?.name ?? '该配置'}」这条本地记录。'
+                      '只删除记录，不删除站点源文件，也不影响安卓设备上的配置。',
+                    ),
+                    actions: [
+                      TextButton(
+                        key: const ValueKey('config-delete-cancel'),
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        key: const ValueKey('config-delete-ok'),
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        child: const Text('删除'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true) return;
                 await state.deleteConfigRecord(id);
                 if (mounted) setState(() {});
+              },
+              onRefresh: (id) async {
+                if (_busyIds.contains(id)) return;
+                setState(() => _busyIds.add(id));
+                final ok = await state.refreshConfigRecord(id);
+                if (!mounted) return;
+                final record = state.configRecordById(id);
+                setState(() => _busyIds.remove(id));
+                showToast(
+                  ok
+                      ? '已刷新：${record?.name ?? '配置'}（${record?.siteCount ?? 0} 个站点）'
+                      : '刷新失败：${state.lastError?.userMessage ?? '未知错误'}',
+                  kind: ok ? ToastKind.success : ToastKind.error,
+                );
+                setState(() {});
+              },
+              onRefreshAll: () async {
+                if (_busyAll) return;
+                setState(() => _busyAll = true);
+                final failures = await state.refreshAllConfigs();
+                if (!mounted) return;
+                final total = state.savedConfigs.length;
+                setState(() => _busyAll = false);
+                showToast(
+                  failures.isEmpty
+                      ? '已刷新全部 $total 个配置'
+                      : '刷新完成：${total - failures.length} 个成功，'
+                          '${failures.length} 个失败（${failures.join('、')}）',
+                  kind: failures.isEmpty ? ToastKind.success : ToastKind.error,
+                );
+                setState(() {});
+              },
+              onEdit: (id) async {
+                if (_busyIds.contains(id)) return;
+                final record = state.configRecordById(id);
+                if (record == null) return;
+                final result = await _showEditConfigDialog(context, record);
+                if (result == null || !mounted) return;
+                if (result.name == record.name.trim() &&
+                    result.origin == record.origin.trim()) {
+                  return;
+                }
+                setState(() => _busyIds.add(id));
+                final ok = await state.editConfigRecord(
+                  id,
+                  name: result.name,
+                  origin: result.origin,
+                );
+                if (!mounted) return;
+                setState(() => _busyIds.remove(id));
+                showToast(
+                  ok
+                      ? '已保存：${result.name.isEmpty ? record.name : result.name}'
+                      : '保存失败：${state.lastError?.userMessage ?? '未知错误'}',
+                  kind: ok ? ToastKind.success : ToastKind.error,
+                );
+                setState(() {});
               },
               onCopyOrigin: (value) async {
                 await Clipboard.setData(ClipboardData(text: value));
@@ -672,67 +798,418 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   }
 }
 
+/// 换配置选择器：只做一件事——切到另一条已保存的配置。
+///
+/// 与 [ConfigPage] 刻意分开：那是"维护配置"的地方（导入、编辑、刷新、删除），
+/// 而用户点顶栏「配置：xxx」想要的是"换一个源"。两件事混在一页时，换配置这个
+/// 高频动作会被 180px 的导入表单挤到首屏之外（用户反馈 2026-11-05）。
+///
+/// 返回被选中的记录 id；取消返回 `null`。
+class ConfigSwitcherDialog extends StatelessWidget {
+  const ConfigSwitcherDialog({
+    super.key,
+    required this.records,
+    required this.activeId,
+  });
+
+  final List<ConfigRecord> records;
+  final int? activeId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      key: const ValueKey('config-switcher'),
+      title: const Text('切换配置'),
+      content: SizedBox(
+        width: 560,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '选择一个配置后，浏览与直播会改用它的站点。当前配置不会被删除。',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: records.length,
+                itemBuilder: (context, index) {
+                  final record = records[index];
+                  final isActive = record.id == activeId;
+                  return ListTile(
+                    key: ValueKey('config-switch-option-${record.id}'),
+                    dense: true,
+                    selected: isActive,
+                    // 已经是它就没有可切的，直接禁用；这与列表页保持一致。
+                    onTap: isActive
+                        ? null
+                        : () => Navigator.of(context).pop(record.id),
+                    title: Text(record.name),
+                    subtitle: Text(
+                      '站点 ${record.siteCount} · 直播 ${record.liveCount}'
+                      '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
+                    ),
+                    trailing: isActive
+                        ? TagChip(
+                            keyValue: 'config-switch-current-${record.id}',
+                            label: '使用中',
+                            emphasized: true,
+                          )
+                        : const Icon(Icons.chevron_right, size: 18),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('config-switcher-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 可折叠区块的标题行：整行就是开关。
+///
+/// 用户反馈（2026-11-05）：「最好是点击整行就能折叠和展开」。只让右侧那个小
+/// 按钮可点，等于要求用户把指针精确移到一颗 18px 的图标上——在桌面端这比
+/// 点一个整行长条费劲得多。
+///
+/// 标题**不带前导图标**：带了之后文字右移，与下方「已保存的配置」左边缘对不
+/// 齐，看起来像缩进了一级的子菜单，而两者本是平级区块。
+class _CollapsibleSectionHeader extends StatelessWidget {
+  const _CollapsibleSectionHeader({
+    required this.title,
+    required this.expanded,
+    required this.onTap,
+    this.keyValue,
+  });
+
+  final String title;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  /// 测试定位用的 key（例如 `config-import-toggle`）。
+  final String? keyValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final value = keyValue;
+    return InkWell(
+      key: value == null ? null : ValueKey(value),
+      onTap: onTap,
+      borderRadius: AppRadius.smAll,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Text(title, style: theme.textTheme.titleMedium),
+            const Spacer(),
+            Text(
+              expanded ? '收起' : '展开',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              expanded ? Icons.expand_less : Icons.expand_more,
+              size: 20,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 编辑弹窗的返回值。
+class _EditResult {
+  const _EditResult({required this.name, required this.origin});
+
+  final String name;
+  final String origin;
+}
+
+/// 配置编辑弹窗：名称 + 源地址。
+///
+/// 桥接源（`bridgeInterfaceKey` 非空）的地址是安卓设备网关地址，改它没有意义
+/// 也不受 PC 控制，因此只给它改名权限。
+///
+/// **控制器交给 StatefulWidget 自己管**（不在这里 new/dispose）：
+/// `showDialog` 的 future 在路由**开始退场**时就完成，若那时 dispose 控制器，
+/// 退场动画里的 `TextField` 会访问已释放的 `EditableTextState`，测试直接抛
+/// "Looking up a deactivated widget's ancestor is unsafe"。
+Future<_EditResult?> _showEditConfigDialog(
+  BuildContext context,
+  ConfigRecord record,
+) {
+  return showDialog<_EditResult>(
+    context: context,
+    builder: (dialogContext) => _EditConfigDialog(record: record),
+  );
+}
+
+class _EditConfigDialog extends StatefulWidget {
+  const _EditConfigDialog({required this.record});
+
+  final ConfigRecord record;
+
+  @override
+  State<_EditConfigDialog> createState() => _EditConfigDialogState();
+}
+
+class _EditConfigDialogState extends State<_EditConfigDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _origin;
+
+  bool get _isBridge => widget.record.bridgeInterfaceKey.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.record.name);
+    _origin = TextEditingController(text: widget.record.origin);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _origin.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(
+      _EditResult(name: _name.text.trim(), origin: _origin.text.trim()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: const ValueKey('config-edit-dialog'),
+      title: const Text('编辑配置'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const ValueKey('config-edit-name'),
+              controller: _name,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '配置名称',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('config-edit-origin'),
+              controller: _origin,
+              enabled: !_isBridge,
+              maxLines: 3,
+              minLines: 1,
+              decoration: InputDecoration(
+                labelText: '配置源地址',
+                border: const OutlineInputBorder(),
+                helperText: _isBridge
+                    ? '地址由安卓设备决定，不能在这里修改'
+                    : '改地址会立即按新地址重新拉取，失败则保留原配置',
+                helperMaxLines: 2,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('config-edit-save'),
+          onPressed: _submit,
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
 class _SavedConfigs extends StatelessWidget {
   const _SavedConfigs({
     required this.state,
+    required this.busyIds,
+    required this.busyAll,
     required this.onActivate,
     required this.onDelete,
+    required this.onEdit,
+    required this.onRefresh,
+    required this.onRefreshAll,
     required this.onCopyOrigin,
   });
 
   final AppState state;
+
+  /// 正在刷新的记录 id（行内显示忙碌态并禁用按钮）。
+  final Set<int> busyIds;
+
+  /// 「全部刷新」在途。
+  final bool busyAll;
+
   final Future<void> Function(int id) onActivate;
   final Future<void> Function(int id) onDelete;
+  final Future<void> Function(int id) onEdit;
+  final Future<void> Function(int id) onRefresh;
+  final Future<void> Function() onRefreshAll;
   final Future<void> Function(String value) onCopyOrigin;
 
   @override
   Widget build(BuildContext context) {
-    if (state.configs.isEmpty) {
+    final theme = Theme.of(context);
+    final records = state.savedConfigs;
+    if (records.isEmpty) {
       return const Align(
         alignment: Alignment.centerLeft,
         child: Text('还没有保存的配置。'),
       );
     }
     return Expanded(
-      child: ListView.builder(
-        itemCount: state.configs.length,
-        itemBuilder: (context, index) {
-          final record = state.configs[index];
-          return ListTile(
-            dense: true,
-            leading: Icon(
-              record.isActive ? Icons.radio_button_checked : Icons.circle_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text('已保存的配置', style: theme.textTheme.titleMedium),
+              const Spacer(),
+              TextButton.icon(
+                key: const ValueKey('config-refresh-all'),
+                onPressed: busyAll ? null : onRefreshAll,
+                icon: busyAll
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 18),
+                label: Text(busyAll ? '刷新中…' : '全部刷新'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '点击任意一行即可切换配置。',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
             ),
-            title: Text('${record.name}${record.isActive ? "（当前）" : ""}'),
-            subtitle: SelectableText(
-              '站点 ${record.siteCount} · 直播 ${record.liveCount} · '
-              '更新 ${record.updatedAt.toLocal()} · '
-              // 桥接源多条记录的 origin 都是同一台设备的网关地址，
-              // 只显示它会让用户分不清谁是谁 → 补上源自己的订阅地址。
-              '${record.bridgeInterfaceKey.isEmpty ? '来源 ${redactUrl(record.origin)}' : '该设备的播放源 · ${record.bridgeConfigUrl.trim().isEmpty ? redactUrl(record.origin) : redactUrl(record.bridgeConfigUrl)}'}',
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: '复制来源',
-                  onPressed: () => onCopyOrigin(record.origin),
-                  icon: const Icon(Icons.copy, size: 18),
-                ),
-                if (!record.isActive)
-                  TextButton(
-                    onPressed: () => onActivate(record.id),
-                    child: const Text('启用'),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView.builder(
+              itemCount: records.length,
+              itemBuilder: (context, index) {
+                final record = records[index];
+                final busy = busyIds.contains(record.id);
+                return ListTile(
+                  key: ValueKey('config-row-${record.id}'),
+                  dense: true,
+                  selected: record.isActive,
+                  // 当前生效项再点一次没有意义，置空让指针反馈也不出现。
+                  onTap: record.isActive ? null : () => onActivate(record.id),
+                  title: Row(
+                    children: [
+                      Flexible(child: Text(record.name)),
+                      if (record.isActive) ...[
+                        const SizedBox(width: 8),
+                        TagChip(
+                          keyValue: 'config-active-badge-${record.id}',
+                          label: '使用中',
+                          emphasized: true,
+                        ),
+                      ],
+                    ],
                   ),
-                IconButton(
-                  tooltip: '删除该配置记录（不删除站点源文件）',
-                  onPressed: () => onDelete(record.id),
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                ),
-              ],
+                  // 用 Text 而不是 SelectableText：可选文本自带手势识别，
+                  // 会和整行的 onTap 抢点击——实测点副标题区域切不动配置，
+                  // 而那块正是用户抱怨「能点的区域太小」的地方。
+                  subtitle: Text(
+                    '站点 ${record.siteCount} · 直播 ${record.liveCount} · '
+                    '更新 ${record.updatedAt.toLocal()} · '
+                    // 桥接源多条记录的 origin 都是同一台设备的网关地址，
+                    // 只显示它会让用户分不清谁是谁 → 补上源自己的订阅地址。
+                    '${record.bridgeInterfaceKey.isEmpty ? '来源 ${redactUrl(record.origin)}' : '该设备的播放源 · ${record.bridgeConfigUrl.trim().isEmpty ? redactUrl(record.origin) : redactUrl(record.bridgeConfigUrl)}'}',
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (busy)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 26),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      else ...[
+                        IconButton(
+                          key: ValueKey('config-edit-${record.id}'),
+                          tooltip: '编辑名称与地址',
+                          onPressed: () => onEdit(record.id),
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                        ),
+                        IconButton(
+                          key: ValueKey('config-refresh-${record.id}'),
+                          tooltip: '重新拉取该配置的站点',
+                          onPressed: () => onRefresh(record.id),
+                          icon: const Icon(Icons.refresh, size: 18),
+                        ),
+                      ],
+                      PopupMenuButton<String>(
+                        key: ValueKey('config-menu-${record.id}'),
+                        tooltip: '更多',
+                        enabled: !busy,
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'copy':
+                              onCopyOrigin(record.origin);
+                            case 'delete':
+                              onDelete(record.id);
+                          }
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'copy',
+                            child: Text('复制来源地址'),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text('删除'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }
