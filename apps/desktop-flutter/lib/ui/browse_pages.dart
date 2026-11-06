@@ -22,6 +22,7 @@ import '../services/ai_episode_season_service.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
 import 'ai_settings_page.dart';
 import 'app.dart';
@@ -1190,10 +1191,22 @@ class DetailPage extends StatefulWidget {
     this.historyFlag = '',
     this.historyEpisodeId = '',
     this.resumeSeed,
+    this.sourceContext,
+    this.sourceSiteKey = '',
   });
 
   final AppState state;
   final Vod vod;
+
+  /// 用**哪一份配置**看这一页（`null` = 生效配置，既有行为）。
+  ///
+  /// 只有「历史记录来自其它配置」时才非空：那种记录必须用原配置的站点与请求头
+  /// 加载详情、播放，而**不能**为此切换生效配置（用户决定：不切配置，也不改
+  /// 顶栏选中的站点）。取值见 `AppState.playbackContextFor`。
+  final PlaybackSourceContext? sourceContext;
+
+  /// 原来源配置里这条记录所属站点的 key（[sourceContext] 非空时才有意义）。
+  final String sourceSiteKey;
 
   /// 历史命中的线路 flag（空串 = 未传入）。
   ///
@@ -1218,6 +1231,21 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  /// 本页加载详情/播放用的**站点**。
+  ///
+  /// 原来源记录要落在它自己那份配置的站点上；普通记录仍是当前选中站点
+  /// （既有行为）。这里**不**调用 `selectSite`，顶栏与生效配置不受影响。
+  Site? get _pageSite =>
+      widget.sourceContext?.siteByKey(widget.sourceSiteKey) ??
+      widget.state.selectedSite;
+
+  /// 本页查询/写入历史用的来源 key（`null` = 沿用当前历史范围）。
+  String? get _pageSourceKey {
+    final context = widget.sourceContext;
+    if (context == null) return null;
+    return context.sourceKey;
+  }
+
   /// 当前选中线路的 `flag`（`04` §3.1 ④）。
   ///
   /// 点击线路条即切换，下方剧集卡片随之变成该线路的集（对齐上游 `@id/flag`）。
@@ -1341,7 +1369,12 @@ class _DetailPageState extends State<DetailPage> {
       // `initState` 里直接推等于把已挂载的全局 `ToastHost` 在构建期标脏
       // （与 `app.dart` 首次投影同样的理由）。
       _syncDetailErrorToast();
-      widget.state.loadDetail(widget.vod);
+      widget.state.loadDetail(
+        widget.vod,
+        // 原来源记录用那份配置自己的站点与服务（不切生效配置）。
+        siteOverride: _pageSite,
+        serviceOverride: widget.sourceContext?.service,
+      );
     });
   }
 
@@ -1746,7 +1779,7 @@ class _DetailPageState extends State<DetailPage> {
       // 原记录的 `episodeId` 可能是安卓哈希，只有集名还能对上目标站点。
       return PlaybackHistory(
         id: 0,
-        siteKey: widget.state.selectedSite?.key ?? '',
+        siteKey: _pageSite?.key ?? '',
         vodId: widget.vod.vodId,
         vodName: widget.vod.vodName,
         vodPic: widget.vod.vodPic,
@@ -1762,7 +1795,7 @@ class _DetailPageState extends State<DetailPage> {
     if (widget.historyFlag.isNotEmpty || widget.historyEpisodeId.isNotEmpty) {
       return PlaybackHistory(
         id: 0,
-        siteKey: widget.state.selectedSite?.key ?? '',
+        siteKey: _pageSite?.key ?? '',
         vodId: widget.vod.vodId,
         vodName: widget.vod.vodName,
         vodPic: widget.vod.vodPic,
@@ -1775,8 +1808,10 @@ class _DetailPageState extends State<DetailPage> {
       );
     }
     return widget.state.findHistory(
-      siteKey: widget.state.selectedSite?.key ?? '',
+      siteKey: _pageSite?.key ?? '',
       vodId: widget.vod.vodId,
+      // 原来源记录必须查它自己那条源的行。
+      sourceKey: _pageSourceKey,
     );
   }
 
@@ -1859,11 +1894,12 @@ class _DetailPageState extends State<DetailPage> {
   ) {
     final episode = line.episodes[episodeIndex];
     final fallback = widget.state.resumePositionFor(
-      siteKey: widget.state.selectedSite?.key ?? '',
+      siteKey: _pageSite?.key ?? '',
       vodId: vod.vodId,
       flag: line.playbackFlag,
       episodeId: episode.url,
       episodeName: episode.name,
+      sourceKey: _pageSourceKey,
     );
     // `targetDurationMs` 传 0：详情页拿不到目标集的真实时长（要 `open()` 成功
     // 才有），纯逻辑层对 0 的约定是「走绝对毫秒」。真正的比例换算交给播放器
@@ -1945,7 +1981,14 @@ class _DetailPageState extends State<DetailPage> {
         flag: line.playbackFlag,
         vodId: route?.vodId ?? vod.vodId,
         // 非 null 时只解析这一次、不切全局站源（顶栏/设置里的 site 不许变）。
-        siteOverride: route == null ? null : state.siteByKey(route.siteKey),
+        siteOverride: route == null
+            ? (widget.sourceContext == null ? null : _pageSite)
+            : state.siteByKey(route.siteKey),
+        // 原来源记录：解析走它自己那份配置的服务（请求头/规则/运行时都不串）。
+        //
+        // 外部并入线路是个例外：那条线路的站点属于**当前配置**，用原配置的
+        // 服务去问会拿错请求头/运行时。两条来源不能混着用，按线路各自的归属走。
+        serviceOverride: route == null ? widget.sourceContext?.service : null,
       );
       if (decision == null || decision.url == null) {
         throw AppError(
@@ -1989,7 +2032,8 @@ class _DetailPageState extends State<DetailPage> {
               title: vod.vodName,
               // 历史要记在**真正来源**站点上：外部线路播出来的那条记录属于
               // 那个站点，记成「当前站源」会让历史页里的来源是错的。
-              siteKey: route?.siteKey ?? state.selectedSite?.key ?? '',
+              // 原来源播放时 `_pageSite` 就是那份配置里的站点。
+              siteKey: route?.siteKey ?? _pageSite?.key ?? '',
               vodId: route?.vodId ?? vod.vodId,
               vodName: vod.vodName,
               episodeName: episode.name,
@@ -2010,6 +2054,13 @@ class _DetailPageState extends State<DetailPage> {
               // 种子随请求一起下去，由播放器拿到目标集真实时长后重算比例
               // （见 `_resumeStartFor` 注释与 `PlaybackRequest.resumeSeed`）。
               resumeSeed: widget.resumeSeed,
+              // 播放源归属：原来源播放时进度要写回那条记录自己的源。
+              //
+              // 外部并入线路例外：那条线路的站点属于**当前配置**，把它们记到
+              // 原来源下会造出一条源与站点不匹配的历史（历史页点开会失败）。
+              sourceKey: route == null
+                  ? (widget.sourceContext?.sourceKey ?? '')
+                  : '',
             ),
           ),
         ),

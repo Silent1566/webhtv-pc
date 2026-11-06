@@ -103,6 +103,7 @@ import '../services/tmdb_identity_service.dart';
 import '../services/tmdb_season_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/tmdb_stores.dart';
+import 'playback_source_context.dart';
 import 'search_state.dart';
 import 'sync_state.dart';
 import 'tmdb_state.dart';
@@ -220,7 +221,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _injectedSyncClient = syncClient,
        _injectedSyncServerFactory = syncServerFactory,
        _injectedReadClient = androidReadClient,
-       _injectedSearchSuggestService = searchSuggestService {
+       _injectedSearchSuggestService = searchSuggestService,
+       // 宿主路径在这里定一次：生效配置与**其它配置**（原来源续播）的
+       // `SpiderRouter` 必须用同一套宿主，否则同一站点在两条路径下会落到
+       // 两个不同的 sidecar 入口。
+       _sidecarHostPath = sidecarHostPath ?? defaultSidecarHostPath(),
+       _jsSidecarHostPath = jsSidecarHostPath ?? defaultJsSidecarHostPath(),
+       _jvmSidecarHostPath = jvmSidecarHostPath ?? defaultJvmSidecarHostPath() {
     if (httpClient != null) {
       // 记住注入的客户端：`bootstrap()` 里的 `_applyOutboundProxy()` 过去会无条件
       // 重建 `_httpClient`，把测试注入的捕获客户端丢掉，导致真实 400。
@@ -298,15 +305,20 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       registry: _spiderRegistry,
       supervisor: _supervisor,
       log: this.log,
-      hostPath: sidecarHostPath ?? defaultSidecarHostPath(),
-      jsHostPath: jsSidecarHostPath ?? defaultJsSidecarHostPath(),
-      jvmHostPath: jvmSidecarHostPath ?? defaultJvmSidecarHostPath(),
+      hostPath: _sidecarHostPath,
+      jsHostPath: _jsSidecarHostPath,
+      jvmHostPath: _jvmSidecarHostPath,
       cspBinding: _cspBinding,
     );
   }
 
   final AppPaths paths;
   final LogService log;
+
+  /// sidecar 宿主路径（构造时定死，供生效配置与其它配置的路由共用）。
+  final String _sidecarHostPath;
+  final String _jsSidecarHostPath;
+  final String _jvmSidecarHostPath;
 
   /// 猫源 bundle 下载/缓存（§9 猫源）。
   late final CatBundle _catBundle;
@@ -2693,6 +2705,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         siteCount: config.sites.length,
         liveCount: config.lives.length,
         makeActive: true,
+        // 本机源的身份必须在导入时就写进去：历史行一直按 `local|<origin>`
+        // 记录来源，配置这边不带身份就永远查不到「这条记录属于哪份配置」，
+        // 表现为来源标成「其他来源」、点进去还被告知原播放源已删除
+        // （用户 2026-11 反馈）。
+        sourceKey: LocalSourceKey.of(imported.origin),
       );
       if (recordId != null) {
         _database!.saveConfigSites(recordId, config.sites);
@@ -3781,9 +3798,16 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// - 失败写入独立的 [detailError]，不污染浏览页共用的 [lastError]；
   /// - 新请求一律先清掉上一次的详情结果，避免「正在加载」时把上一个条目的
   ///   线路当成当前条目的线路显示出来。
-  Future<void> loadDetail(Vod vod) async {
-    final service = _siteService;
-    final site = _selectedSite;
+  Future<void> loadDetail(
+    Vod vod, {
+    /// 用哪份配置的服务与站点取详情。都给 `null` 时用生效配置与当前选中站点
+    /// （既有行为）。历史记录按「原来源配置」看详情时传
+    /// [playbackContextFor] 里的这一对——**不**切换生效配置，也不改选中站点。
+    SiteService? serviceOverride,
+    Site? siteOverride,
+  }) async {
+    final service = serviceOverride ?? _siteService;
+    final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return;
     final runId = ++_detailRunId;
     _selectedVod = vod;
@@ -3934,8 +3958,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     String? flag,
     String? vodId,
     Site? siteOverride,
+
+    /// 用哪份配置的服务解析。`null` = 生效配置（既有行为）；原来源续播时传
+    /// 那份配置自己的服务（见 [playbackContextFor]），这样请求头/解析规则/
+    /// 运行时都来自它，不会串到当前配置。
+    SiteService? serviceOverride,
   }) async {
-    final service = _siteService;
+    final service = serviceOverride ?? _siteService;
     // 本次解析用的站点：覆盖优先，之后所有分支（service/proxy/日志）共用它。
     final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return null;
@@ -4030,10 +4059,145 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 原来源播放上下文（历史记录按「它所属的那份配置」解析，不切配置）
+  // ---------------------------------------------------------------------------
+
+  /// `sourceKey` → 该配置的播放上下文。按记录 id 与更新时间做签名，
+  /// 配置被重新导入/删除后自动重建，不会拿旧站点去请求。
+  final Map<String, PlaybackSourceContext> _playbackContexts = {};
+
+  /// 取一份**非生效配置**的播放上下文；配置不存在或无法解析时返回 `null`。
+  ///
+  /// 调用方（历史页）据 `null` 决定回退到「当前源匹配」的老路径，所以这里
+  /// **不抛异常**，只把原因写进日志。
+  ///
+  /// 上下文里的 [SiteService] 与生效配置的服务**互不共享可变状态**：
+  /// - 请求头/解析规则来自那份配置自己的 `AppConfig`；
+  /// - 直连 spider 注册结果按那份配置重新 materialize；
+  /// - 运行时走它自己的 [SpiderRouter]，因此同名站点 key 不会命中当前配置的
+  ///   运行时（`_cache` 键含 api，且 headers 快照也来自本路由）。
+  PlaybackSourceContext? playbackContextFor(String sourceKey) {
+    final key = sourceKey.trim();
+    if (key.isEmpty) return null;
+    final database = _database;
+    if (database == null) return null;
+    final ConfigRecord record;
+    try {
+      final found = database.configBySourceKey(key);
+      if (found == null) {
+        _playbackContexts.remove(key);
+        return null;
+      }
+      record = found;
+    } catch (error) {
+      log.warning('读取来源配置失败 source=$key error=$error', scope: 'history');
+      return null;
+    }
+    final cached = _playbackContexts[key];
+    if (cached != null &&
+        cached.record.id == record.id &&
+        cached.record.updatedAt == record.updatedAt) {
+      return cached;
+    }
+    final config = record.config;
+    if (config == null || config.sites.isEmpty) {
+      _playbackContexts.remove(key);
+      return null;
+    }
+    // 独立路由：生效配置的 `_router` 会被 `updateTransport` 改写
+    // （换源/换出站代理时 `_attachSiteService` 直接覆盖 globalHeaders），
+    // 复用它会让「原来源」的请求带上当前配置的头。
+    final router = SpiderRouter(
+      client: _httpClient,
+      globalHeaders: config.headers,
+      catHttpClient: _catHttpClient,
+      registry: _spiderRegistry,
+      supervisor: _supervisor,
+      log: log,
+      hostPath: _sidecarHostPath,
+      jsHostPath: _jsSidecarHostPath,
+      jvmHostPath: _jvmSidecarHostPath,
+      cspBinding: _cspBinding,
+    );
+    final context = PlaybackSourceContext(
+      sourceKey: key,
+      record: record,
+      config: config,
+      service: SiteService(
+        appConfig: config,
+        playbackBridge: _androidPlaybackBridge,
+        router: router,
+        database: _database,
+      ),
+    );
+    _playbackContexts[key] = context;
+    // 直连 js/py 站点要按**这份配置**注册：生效配置那次注册的结果只对生效配置
+    // 的站点有效，直接借过来会把同 key 的站点认错。
+    unawaited(_registerDirectSpidersFor(config, router));
+    return context;
+  }
+
+  /// 为任意配置补一次直连 spider 注册（失败只记日志，不阻塞调用）。
+  Future<void> _registerDirectSpidersFor(
+    AppConfig config,
+    SpiderRouter router,
+  ) async {
+    try {
+      final hasDirect = config.sites.any((site) => directSpiderKind(site) != null);
+      if (!hasDirect) return;
+      final result = await _directRegistrar().materialize(config);
+      router.setDirectSpiders(result);
+    } catch (error) {
+      log.warning('原来源配置的直连站源注册失败：$error', scope: 'spider');
+    }
+  }
+
+  /// 某条历史所属配置里的站点（找不到返回 `null`，调用方据此回退）。
+  Site? siteForSourceKey(String sourceKey, String siteKey) =>
+      playbackContextFor(sourceKey)?.siteByKey(siteKey);
+
+  /// 用**记录所属配置**解析播放（原来源续播）。
+  ///
+  /// 与 [resolvePlayback] 的区别只有一处：站点服务换成那份配置自己的，
+  /// 生效配置、选中站点、[activeSourceKey] 全程不动。返回 `null` 表示
+  /// 「这份配置里没有这个站点 / 配置已不可用」，由调用方回退。
+  Future<PlaybackDecision?> resolvePlaybackForSource({
+    required String sourceKey,
+    required String siteKey,
+    required String episodeTarget,
+    String? flag,
+    String? vodId,
+  }) async {
+    final context = playbackContextFor(sourceKey);
+    final site = context?.siteByKey(siteKey);
+    if (context == null || site == null) return null;
+    final outcome = await context.service.resolvePlayback(
+      site: site,
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      parseFailover: parseFailoverSettings,
+    );
+    revokeProxySession();
+    final decision = await proxyDecision(outcome.value, siteKey: site.key);
+    log.info(
+      '原来源播放决策 ${decision.logLine} source=$sourceKey site=${site.key} '
+      'elapsed=${outcome.latency.inMilliseconds}ms',
+      scope: 'playback',
+    );
+    return decision;
+  }
+
   /// 记录播放进度（§15.2）。
   ///
   /// `siteKey` 显式传入而不依赖当前选中站点：命令行播放、历史恢复等场景下
   /// 并不存在“当前站点”，但仍应记录进度。
+  ///
+  /// [sourceKey] 同理：用**原来源配置**播放（历史记录来自别的配置）时必须把
+  /// 进度写回那条记录自己的源，否则用户点开一条「其他来源」的记录续播一次，
+  /// 进度就会分裂到当前源上（历史页从此同一集出现两条）。默认 `null` 保持
+  /// 既有行为——写当前生效源。
   void recordProgress({
     required Vod vod,
     required String flag,
@@ -4042,6 +4206,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     required Duration position,
     required Duration duration,
     String? siteKey,
+    String? sourceKey,
     // TMDB 身份（movie / tv 与数字 ID）。历史同名聚合优先用它分组，
     // 缺失时回退按片名。由播放器从 PlaybackRequest.tmdb 透传。
     int tmdbId = 0,
@@ -4072,7 +4237,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         durationMs: duration.inMilliseconds,
         // 写入永远带**具体源**：全局历史只是读视图，不能把新进度写成
         // "无源"的老记录（否则切回按源隔离时就看不见了）。
-        sourceKey: activeSourceKey,
+        // 用原来源配置播放时以调用方给的 sourceKey 为准（见参数注释）。
+        sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
+            ? sourceKey.trim()
+            : activeSourceKey,
         // 作品身份：年份来自站点条目（可能为空），TMDB 身份来自播放请求。
         // 三者都「有值才生效」：upsert 的 ON CONFLICT 分支只在非空/非 0 时
         // 覆盖，因此同步来的无身份记录不会抹掉这里刚写好的身份。
@@ -4100,12 +4268,17 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// [episodeName] 可选：同步来的记录 `episode_id` 存的是安卓哈希
   /// （`episodeUrl` 的 SHA-256），用站点入口 URL 查不到，需要集名兜底。
   /// 详见 `AppDatabase.findHistory` 的三级匹配说明。
+  ///
+  /// [sourceKey] 默认按当前历史范围过滤；用原来源配置看一部作品的详情时传
+  /// 那条记录自己的 `sourceKey`，否则会去查当前源的行、结果永远是「没有历史」
+  /// （详情页于是从 0 开始，用户点的「继续观看」被丢掉）。
   PlaybackHistory? findHistory({
     required String siteKey,
     required String vodId,
     String? flag,
     String? episodeId,
     String? episodeName,
+    String? sourceKey,
   }) {
     final database = _database;
     if (database == null) return null;
@@ -4116,7 +4289,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         flag: flag,
         episodeId: episodeId,
         episodeName: episodeName,
-        sourceKey: historySourceFilter,
+        sourceKey: sourceKey ?? historySourceFilter,
       );
     } catch (error) {
       log.warning('读取播放进度失败:$error', scope: 'history');
@@ -4135,6 +4308,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     String? flag,
     String? episodeId,
     String? episodeName,
+    String? sourceKey,
   }) {
     final record = findHistory(
       siteKey: siteKey,
@@ -4142,6 +4316,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       flag: flag,
       episodeId: episodeId,
       episodeName: episodeName,
+      sourceKey: sourceKey,
     );
     if (record == null || record.completed) return null;
     if (record.positionMs < resumeThreshold.inMilliseconds) return null;
@@ -4526,19 +4701,36 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   ///
   /// 空串（迁移前的老记录）返回 `null`：那不是「别的源」，而是「不知道来源」，
   /// 由调用方单独标注为「来源未知」。
+  ///
+  /// **只给可读名称**（用户 2026-11 反馈：「应该显示其他线路的名称，现在显示的是
+  /// URL」）。布局名/来源地址（`origin`、`bridge|<uuid>|<key>` 的裸标识）都不是
+  /// 名称：前者是给设置页排查用的长串，后者对用户没有意义。两者一律归到
+  /// 「其他来源」，且**绝不**回落到 `origin`——那正是这次要修的表现。
   String? historySourceLabel(String sourceKey) {
-    if (sourceKey.isEmpty) return null;
-    if (sourceKey == activeSourceKey) return null;
-    final record = _database?.configBySourceKey(sourceKey);
+    final key = sourceKey.trim();
+    if (key.isEmpty) return null;
+    if (key == activeSourceKey) return null;
+    final record = _database?.configBySourceKey(key);
     if (record != null) {
       final name = record.name.trim();
-      if (name.isNotEmpty) return name;
-      final origin = record.origin.trim();
-      if (origin.isNotEmpty) return origin;
+      if (name.isNotEmpty && !_looksLikeUrl(name)) return name;
     }
-    // 配置已删除 / 未桥接：只能用标识尾部标示（不暴露完整 origin）。
-    final parsed = parseSourceKey(sourceKey);
-    return parsed.isKnown ? parsed.shortLabel : '其他来源';
+    return '其他来源';
+  }
+
+  /// 名称是否其实是地址（导入时把 URL 当名字存下的老记录）。
+  ///
+  /// 只认「带 scheme」与「像主机:端口/路径」两类：中文配置名、带空格的名字
+  /// 一律不判成地址（`配置名称` 里出现点与斜杠并不稀奇）。
+  static bool _looksLikeUrl(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return false;
+    if (text.contains('://')) return true;
+    final uri = Uri.tryParse(text);
+    if (uri != null && uri.hasScheme) return true;
+    return RegExp(r'^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/|$)').hasMatch(text) ||
+        RegExp(r'^[\w.-]+\.[a-z]{2,}(:\d+)?(/|$)', caseSensitive: false)
+            .hasMatch(text);
   }
 
   /// 某条历史是否属于**非当前播放源**。
