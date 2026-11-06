@@ -70,7 +70,8 @@ class PlaybackRequest {
     this.startPosition,
     this.playLines = const [],
     this.lineRoutes = const {},
-    this.episodeCards = const [],
+    this.episodeCardsByFlag = const {},
+    this.episodesReversed = false,
     this.episodeIndex = 0,
     this.vodPic,
     this.directUrl = false,
@@ -134,16 +135,29 @@ class PlaybackRequest {
   /// 但 `vodId` 也得跟着换，否则会拿原站点的 vod 去问外部站点。
   final Map<String, SwapLineRoute> lineRoutes;
 
-  /// 详情页为**本次这条线路、当前季度**渲染的剧集卡片（`tmdb_detail_model.dart`）。
+  /// 详情页为**每一条线路**各算一次的剧集卡片（`tmdb_detail_model.dart`），
+  /// 按线路展示标识（[flag]）分组。
   ///
   /// 为什么播放器还要收一次：浮层里的选集面板要显示详情页那套海报卡片
   /// （集号/集标题/剧照），而播放器手上只有 [playLines] 里的来源集名。
   /// 卡片只能由详情页算好传下来——集号推断依赖季过滤后的渲染顺序与
   /// `sourceIndices`（见 `TmdbEpisodeCards.build`），播放器没有这些上下文。
   ///
-  /// 空列表 = 这次播放没有卡片可用（未匹配 TMDB、历史恢复、直播、命令行），
+  /// 为什么是 **Map 而不是单个列表**：卡片以前只给「详情页当时选中的那条线路」，
+  /// 播放器切到别的线路时 `copyWith` 会把旧卡片原样带过；两条线路集数恰好相等时，
+  /// 旧线路的剧照会被贴到新线路的集上，长度校验根本查不出来。按线路分组后，
+  /// 切到哪条线路就取哪条线路自己的卡片。
+  ///
+  /// 空 Map = 这次播放没有卡片可用（未匹配 TMDB、历史恢复、直播、命令行），
   /// 不是「暂时还没传」：调用方不得为它编造占位卡片。
-  final List<TmdbEpisodeCard> episodeCards;
+  final Map<String, List<TmdbEpisodeCard>> episodeCardsByFlag;
+
+  /// 详情页当时的页面级「倒序」开关状态（`browse_pages.dart` 的 `_episodesReversed`）。
+  ///
+  /// 卡片顺序由详情页按它当时的倒序状态算好，播放器的选集面板必须跟着同一个方向
+  /// 排列，否则集列表、区间标签与卡片三者会互相错位。这是**页面级临时状态**，
+  /// 只在用户点播那一刻快照一次，播放器不再翻它。
+  final bool episodesReversed;
 
   final int episodeIndex;
   final String? vodPic;
@@ -213,8 +227,11 @@ class PlaybackRequest {
       // 与 `playLines` / `siteKey` 一样原样带过：换集不能把外部线路的路由丢掉。
       lineRoutes: lineRoutes,
       // 卡片同属「详情页一次性算好」的上下文：换集不带过来，选集面板就退回裸集名，
-      // 而播放器自己再也算不回来（缺选中季度与季过滤后的渲染顺序）。
-      episodeCards: episodeCards,
+      // 而播放器自己再也算不回来（缺选中季度与季过滤后的渲染顺序）。按线路分组后
+      // 切线路也能取到**那条线路自己**的卡片，不必等详情页重新算。
+      episodeCardsByFlag: episodeCardsByFlag,
+      // 倒序是详情页那一刻的展示顺序，与卡片同属一次性快照：换集不能把它翻回去。
+      episodesReversed: episodesReversed,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
       directUrl: directUrl,
@@ -3313,7 +3330,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           playLines: _request.playLines,
           lineFlag: _request.flag,
           episodes: episodes,
-          episodeCards: _request.episodeCards,
+          // 只取**当前线路**那一份：切线路后 `_request.flag` 已经换过，
+          // 拿别的线路的卡片会串图（长度相等时连错位都查不出来）。
+          episodeCards:
+              _request.episodeCardsByFlag[_request.flag] ?? const [],
+          // 详情页那一刻是倒序的话，面板的排列方向、区间标签与当前集定位都要跟着倒。
+          reversed: _request.episodesReversed,
           episodeIndex: _request.episodeIndex,
           onSelectEpisode: (index) => unawaited(_playEpisode(index)),
           onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),

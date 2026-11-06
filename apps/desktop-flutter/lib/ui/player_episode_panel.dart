@@ -89,6 +89,7 @@ class PlayerEpisodePanel extends StatefulWidget {
     required this.onSelectEpisode,
     required this.onSelectLine,
     this.episodeCards = const [],
+    this.reversed = false,
   });
 
   /// 片名（面板标题区第一行）。
@@ -106,11 +107,21 @@ class PlayerEpisodePanel extends StatefulWidget {
   /// **当前线路**的剧集（面板的集数、分组与下标都以它为准）。
   final List<VodEpisode> episodes;
 
-  /// 详情页为这条线路渲染的卡片（`PlaybackRequest.episodeCards`）。
+  /// 详情页为这条线路渲染的卡片（`PlaybackRequest.episodeCardsByFlag[flag]`）。
+  ///
+  /// 顺序是**展示顺序**：与面板渲染的集列表一一对应（详情页倒序时它也是倒序的），
+  /// 所以取卡片只能用展示下标，不能用 [episodes] 的原始下标。
   ///
   /// 允许比 [episodes] 短，甚至为空（未匹配 TMDB / 历史续播 / 换源）：
   /// 缺卡片的集退化为「集名文字卡」，**不补集、不编造剧照**。
   final List<TmdbEpisodeCard> episodeCards;
+
+  /// 详情页的页面级「倒序」开关状态（`browse_pages.dart` 的 `_episodesReversed`）。
+  ///
+  /// 面板不解释这个开关的业务含义，只**跟随详情页那一刻的展示顺序**：详情页倒序时
+  /// 它下发的卡片是按倒序排的，面板必须把集列表一起倒过来，否则区间标签会与详情页
+  /// 相反、卡片会贴到别的集上。
+  final bool reversed;
 
   /// 当前集在 [episodes] 里的下标。
   final int episodeIndex;
@@ -139,13 +150,32 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     super.initState();
     _ranges = EpisodeRangePolicy.build(
       widget.episodes.length,
-      widget.episodeIndex,
-      // 播放器没有倒序开关：线路给的顺序就是集号顺序，分组按正序算。
-      // 详情页的 `_episodesReversed` 是页面级临时状态，播放器拿不到也不该猜。
-      false,
+      // 区间与标签都按**展示顺序**算：详情页倒序时区间方向必须一起倒过来，
+      // 否则面板第一个区间标的是「1-20」而里面装的是最后的 20 集。
+      _displayEpisodeIndex,
+      widget.reversed,
     );
     _rangeIndex = EpisodeRangePolicy.selectedPosition(_ranges);
   }
+
+  /// 当前集在**展示顺序**里的下标。
+  ///
+  /// 倒序时集列表被整体翻过来，当前集的原始下标 `i` 对应展示下标
+  /// `length - 1 - i`；区间、滚动定位与卡片取用都必须用展示下标。
+  int get _displayEpisodeIndex {
+    final count = widget.episodes.length;
+    if (count <= 0) return 0;
+    final mapped = widget.reversed
+        ? count - 1 - widget.episodeIndex
+        : widget.episodeIndex;
+    return mapped.clamp(0, count - 1);
+  }
+
+  /// 展示下标 → 原始下标（[episodes] 里的绝对下标）。
+  ///
+  /// 卡片 key 与切集回调都必须用原始下标，否则倒序下点第一张卡会播成第 1 集。
+  int _originalIndex(int displayIndex) =>
+      widget.reversed ? widget.episodes.length - 1 - displayIndex : displayIndex;
 
   @override
   void dispose() {
@@ -156,29 +186,38 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   int get _safeRangeIndex =>
       _ranges.isEmpty ? 0 : _rangeIndex.clamp(0, _ranges.length - 1);
 
-  /// 当前区间要渲染的 `(绝对下标, 剧集)`。
+  /// 当前区间要渲染的 `(展示下标, 剧集)`。
   ///
-  /// 为什么把绝对下标一路带走：卡片 key、切集回调都必须是绝对下标，
-  /// 否则第 2 区间的第 1 张卡会播成第 1 区间的第 1 集。
+  /// 为什么把展示下标一路带走：卡片元数据是按展示顺序下发的，只有展示下标能取对
+  /// 卡片；而切集回调必须收到**原始下标**（[_originalIndex]），否则倒序下点第一张
+  /// 卡会播成第 1 集。两者在正序时恰好相等，所以正序路径的行为一字未变。
   List<(int, VodEpisode)> get _visibleEntries {
     if (widget.episodes.isEmpty || _ranges.isEmpty) return const [];
     final range = _ranges[_safeRangeIndex];
     // 与 `EpisodeRangePolicy.slice` 同一套夹取规则，保证下标与切片一一对应。
     final start = range.start.clamp(0, widget.episodes.length);
     final end = range.end.clamp(start, widget.episodes.length);
-    return [for (var i = start; i < end; i++) (i, widget.episodes[i])];
+    return [
+      for (var i = start; i < end; i++)
+        (i, widget.episodes[_originalIndex(i)]),
+    ];
   }
 
-  /// 取第 [index] 集的卡片元数据；没有可信卡片时返回 `null`（退化为文字卡）。
+  /// 取**展示顺序**第 [displayIndex] 张卡片；没有可信卡片时返回 `null`（退化为文字卡）。
   ///
-  /// 为什么卡片数必须与集数**相等**才认：`episodeCards` 是详情页按**原线路**
-  /// 算好的一次性快照，换集、切线路只会原样带过（`PlaybackRequest.copyWith`），
-  /// 播放器自己算不回来。切到集数不同的线路后，按下标对齐会把第 3 集的剧照
-  /// 贴到第 5 集上——宁可全部退回集名文字卡，也不给错的信息。
-  TmdbEpisodeCard? _cardAt(int index) {
+  /// 为什么按展示顺序取：详情页下发的卡片与它自己的渲染顺序一一对应（倒序时卡片
+  /// 也是倒序的），按原始下标取会把第 1 张卡的剧照贴到最后一集上。
+  ///
+  /// 为什么卡片数必须与集数**相等**才认：`episodeCards` 是详情页按**那条线路**
+  /// 算好的一次性快照，播放器自己算不回来（缺选中季度与季过滤后的渲染顺序）。
+  /// 切到集数不同的线路后，按下标对齐会把第 3 集的剧照贴到第 5 集上——
+  /// 宁可全部退回集名文字卡，也不给错的信息。
+  TmdbEpisodeCard? _cardAt(int displayIndex) {
     if (widget.episodeCards.length != widget.episodes.length) return null;
-    if (index < 0 || index >= widget.episodeCards.length) return null;
-    return widget.episodeCards[index];
+    if (displayIndex < 0 || displayIndex >= widget.episodeCards.length) {
+      return null;
+    }
+    return widget.episodeCards[displayIndex];
   }
 
   void _close() {
@@ -228,7 +267,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       if (!mounted || !_gridScroll.hasClients) return;
       final range = _ranges[_safeRangeIndex];
       final span = math.max(1, range.end - range.start);
-      final local = (widget.episodeIndex - range.start).clamp(0, span - 1);
+      final local = (_displayEpisodeIndex - range.start).clamp(0, span - 1);
       final row = local ~/ columns;
       // 上留半行余量：贴顶会让人以为面板是从这一集开始的。
       final target = (row * rowExtent - rowExtent * 0.5).clamp(
@@ -444,12 +483,13 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
           ),
           itemCount: entries.length,
           itemBuilder: (context, index) {
-            final (absoluteIndex, episode) = entries[index];
+            final (displayIndex, episode) = entries[index];
             return _tile(
               theme: theme,
-              index: absoluteIndex,
+              // 卡片 key、高亮判定与切集回调都用**原始下标**，卡片元数据用展示下标。
+              index: _originalIndex(displayIndex),
               episode: episode,
-              card: _cardAt(absoluteIndex),
+              card: _cardAt(displayIndex),
             );
           },
         );

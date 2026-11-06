@@ -33,6 +33,7 @@ PlayerEpisodePanel _panel({
   List<VodPlayLine>? lines,
   List<TmdbEpisodeCard> cards = const [],
   int episodeIndex = 0,
+  bool reversed = false,
   ValueChanged<int>? onSelectEpisode,
   ValueChanged<String>? onSelectLine,
   String title = '测试剧',
@@ -47,6 +48,7 @@ PlayerEpisodePanel _panel({
     lineFlag: lineFlag,
     episodes: playLines.firstWhere((line) => line.flag == lineFlag).episodes,
     episodeCards: cards,
+    reversed: reversed,
     episodeIndex: episodeIndex,
     onSelectEpisode: onSelectEpisode ?? (_) {},
     onSelectLine: onSelectLine ?? (_) {},
@@ -238,6 +240,119 @@ void main() {
     // 无剧照：占位块中央显示集号，不放假图。
     expect(find.byType(Image), findsNothing);
     expect(find.text('E1'), findsOneWidget);
+  });
+
+  testWidgets('倒序：第一张卡是最后一集，区间标签方向跟着倒', (tester) async {
+    // 45 集、当前集是原始下标 44（第 45 集）→ 倒序后它就是展示顺序的第 1 张。
+    await _open(
+      tester,
+      _panel(lines: _lines([45]), reversed: true, episodeIndex: 44),
+    );
+
+    // 分组算法本身复用 `EpisodeRangePolicy`（倒序时余数段在最前），
+    // 这里锁的是面板**真的**把 reversed 传下去了：标签方向与正序相反。
+    expect(find.text('45-41'), findsOneWidget);
+    expect(find.text('40-21'), findsOneWidget);
+    expect(find.text('20-1'), findsOneWidget);
+    expect(find.text('1-20'), findsNothing);
+
+    // 当前集所在的区间被选中，网格里只有该区间的 5 张卡。
+    expect(_gridItemCount(tester), 5);
+    // 第一张卡的 key 是**原始下标** 44，文案是第 45 集（不是第 1 集）。
+    expect(
+      find.byKey(const ValueKey('player-episode-card-44')),
+      findsOneWidget,
+    );
+    expect(find.text('第45集'), findsOneWidget);
+
+    final tile = tester.widget<Container>(
+      find.byKey(const ValueKey('player-episode-card-44')),
+    );
+    final border = (tile.decoration! as BoxDecoration).border! as Border;
+    expect(border.top.width, 2, reason: '当前集在倒序下也必须强高亮');
+  });
+
+  testWidgets('倒序：点第一张卡，回调拿到的是原始下标（length-1）而不是 0', (tester) async {
+    final tapped = <int>[];
+    await _open(
+      tester,
+      _panel(
+        lines: _lines([45]),
+        reversed: true,
+        episodeIndex: 44,
+        onSelectEpisode: tapped.add,
+      ),
+    );
+
+    // 展示顺序第 1 张 = 原始列表最后一张：映射漏了就会播成第 1 集。
+    await tester.tap(find.byKey(const ValueKey('player-episode-card-44')));
+    await tester.pumpAndSettle();
+
+    expect(tapped, [44]);
+    expect(tapped.first, isNot(0));
+    expect(find.byKey(_panelKey), findsNothing);
+  });
+
+  testWidgets('倒序：卡片按展示顺序取（第 1 张用 cards[0]）', (tester) async {
+    await _open(
+      tester,
+      _panel(
+        lines: _lines([3]),
+        reversed: true,
+        episodeIndex: 0,
+        // 详情页下发的是**展示顺序**的卡片：cards[0] 属于倒序后的第 1 张。
+        cards: const [
+          TmdbEpisodeCard(number: 3, title: '最终话'),
+          TmdbEpisodeCard(number: 2, title: '第二集'),
+          TmdbEpisodeCard(number: 1, title: '首播集'),
+        ],
+      ),
+    );
+
+    expect(_gridItemCount(tester), 3);
+    // 原始下标 2 的卡排在最前，它的标题必须来自 cards[0]。
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-episode-card-2')),
+        matching: find.text('最终话'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-episode-card-0')),
+        matching: find.text('首播集'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('按线路分组的卡片：面板只渲染当前线路那一份', (tester) async {
+    // 播放器侧取卡片的方式就是这张 Map（`_request.episodeCardsByFlag[flag]`）：
+    // 切到线路2 后拿到的必须是线路2 自己的卡片，而不是线路1 的旧快照。
+    final cardsByFlag = <String, List<TmdbEpisodeCard>>{
+      '线路1': const [
+        TmdbEpisodeCard(number: 1, title: '线路一首集'),
+        TmdbEpisodeCard(number: 2, title: '线路一第二集'),
+      ],
+      '线路2': const [
+        TmdbEpisodeCard(number: 1, title: '线路二首集'),
+        TmdbEpisodeCard(number: 2, title: '线路二第二集'),
+      ],
+    };
+    const flag = '线路2';
+    await _open(
+      tester,
+      _panel(
+        lines: _lines([2, 2]),
+        lineFlag: flag,
+        lineLabel: flag,
+        cards: cardsByFlag[flag] ?? const [],
+      ),
+    );
+
+    expect(find.text('线路二首集'), findsOneWidget);
+    expect(find.text('线路一首集'), findsNothing);
   });
 
   group('切线路续同集的定位顺序', () {
