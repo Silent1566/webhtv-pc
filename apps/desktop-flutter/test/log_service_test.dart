@@ -141,4 +141,71 @@ void main() {
       await log.dispose();
     });
   });
+
+  group('导出与清理（日志页「下载」「清理」按钮的文件层）', () {
+    test('导出汇总轮转历史与主文件，旧内容在前', () async {
+      final log = LogService(maxFileBytes: 1);
+      await log.open(temp.path);
+      log.info('第一代内容');
+      log.flush();
+      await log.open(temp.path); // 主文件超过 1 字节 → 轮转为 .1
+      log.info('第二代内容');
+      log.flush();
+      final target = await log.exportToDirectory(temp.path, fileName: 'dump.log');
+      expect(target.path, endsWith('dump.log'));
+      final text = File('${temp.path}/dump.log').readAsStringSync();
+      final first = text.indexOf('第一代内容');
+      final second = text.indexOf('第二代内容');
+      expect(first, greaterThanOrEqualTo(0));
+      expect(second, greaterThan(first), reason: '导出顺序必须是旧 → 新');
+      await log.dispose();
+    });
+
+    test('默认文件名带时间戳', () async {
+      final log = await openService();
+      log.info('给导出的内容');
+      final target = await log.exportToDirectory('${temp.path}/exports');
+      expect(
+        RegExp(r'webhtv-pc-\d{8}-\d{6}\.log$').hasMatch(target.path),
+        isTrue,
+        reason: '实际文件名：${target.path}',
+      );
+      expect(target.readAsStringSync(), contains('给导出的内容'));
+      await log.dispose();
+    });
+
+    test('清理删除落盘文件与轮转历史，并清空内存视图', () async {
+      final log = LogService(maxFileBytes: 1);
+      await log.open(temp.path);
+      log.info('清理前的内存行');
+      log.flush();
+      await log.open(temp.path);
+      log.info('轮转后的内存行');
+      log.flush();
+      final main = File('${temp.path}/webhtv-pc.log');
+      final rotated = File('${main.path}.1');
+      expect(rotated.existsSync(), isTrue);
+
+      await log.clear();
+
+      expect(log.entries, isEmpty);
+      expect(log.export(), isEmpty);
+      expect(main.existsSync(), isFalse);
+      expect(rotated.existsSync(), isFalse);
+      await log.dispose();
+    });
+
+    test('清理后继续记录仍会落盘（文件被重建）', () async {
+      final log = await openService();
+      log.info('清理之前');
+      log.flush();
+      await log.clear();
+      log.info('清理之后');
+      log.flush();
+      final text = readLog();
+      expect(text, contains('清理之后'));
+      expect(text, isNot(contains('清理之前')));
+      await log.dispose();
+    });
+  });
 }
