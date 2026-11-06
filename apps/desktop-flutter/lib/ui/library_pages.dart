@@ -143,12 +143,14 @@ class _HistorySourceChip extends StatelessWidget {
             color: theme.colorScheme.onTertiaryContainer,
           ),
           const SizedBox(width: 2),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onTertiaryContainer,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onTertiaryContainer,
+              ),
             ),
           ),
         ],
@@ -560,7 +562,6 @@ class _HistoryPageState extends State<HistoryPage> {
     } else {
       sourceLabel = null;
     }
-    final isOtherSource = otherSources.isNotEmpty;
     return InkWell(
       key: ValueKey('history-row-${item.id}'),
       onTap: () => _onCardTap(group),
@@ -615,15 +616,22 @@ class _HistoryPageState extends State<HistoryPage> {
                             : '已看 ${item.progressPercent}%',
                       ),
                     ),
-                  // 来源标注（非当前源才显示）：右上角一枚 chip。
+                  // 来源（含未知来源）仅在海报左上标注，副标题只显示集名。
                   if (_view.mode != HistoryViewMode.singleDelete &&
-                      isOtherSource)
+                      sourceLabel != null)
                     Positioned(
+                      left: 6,
+                      // 多选态的勾选框占住左上角，chip 让到它下方，避免叠字。
+                      top: _view.mode == HistoryViewMode.multiSelect ? 30 : 6,
+                      // 同时给 right：chip 的宽度必须被海报宽约束住，否则长
+                      // 来源名会撑出海报（`Positioned` 只给 left 时是不定宽）。
                       right: 6,
-                      top: 6,
-                      child: _HistorySourceChip(
-                        key: ValueKey('history-source-chip-${item.id}'),
-                        label: sourceLabel ?? '其他来源',
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _HistorySourceChip(
+                          key: ValueKey('history-source-chip-${item.id}'),
+                          label: sourceLabel,
+                        ),
                       ),
                     ),
                   // 聚合数量：组内多于一条时显示「N 集」，
@@ -680,20 +688,14 @@ class _HistoryPageState extends State<HistoryPage> {
                     ),
                   ),
                   Text(
-                    // 非当前源时把来源名并进副标题：用户需要知道「这条是哪个源
-                    // 的进度」，而 chip 空间只够写很短的名字。
-                    sourceLabel == null
-                        ? item.episodeName
-                        : '${item.episodeName} · $sourceLabel',
+                    item.episodeName,
                     textAlign: TextAlign.center,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       fontSize: 11,
                       height: 1.2,
-                      color: isOtherSource
-                          ? theme.colorScheme.tertiary
-                          : theme.colorScheme.onSurfaceVariant,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],

@@ -76,6 +76,7 @@ class PlaybackRequest {
     this.danmaku = const [],
     this.tmdb,
     this.resumeSeed,
+    this.sourceKey = '',
   }) : episodeTarget = episodeTarget ?? url,
        playbackFlag = playbackFlag ?? flag;
 
@@ -143,6 +144,14 @@ class PlaybackRequest {
   /// 「从最新进度续播」也必须清掉，否则会把上一集的种子套到新集上。
   final ResumeSeed? resumeSeed;
 
+  /// 这一次播放用的**播放源标识**（`core/source_key.dart`）。
+  ///
+  /// 空串 = 当前生效源（既有语义）。非空且与生效源不同时，说明这次播放来自
+  /// 「其它配置的历史」：换集/切线路必须继续用**那份配置**解析
+  /// （[AppState.resolvePlaybackForSource]），进度也必须写回它自己的
+  /// `source_key`，否则一次续播就会在当前源里多出一条同名历史。
+  final String sourceKey;
+
   /// 地址已是最终可播地址（直播频道），无需经站点播放入口解析。
   ///
   /// 直播源的 `urls` 直接在本地就是媒体地址，走解析器只会多余地请求站点；
@@ -163,6 +172,8 @@ class PlaybackRequest {
     List<DanmakuSource>? danmaku,
     ResumeSeed? resumeSeed,
     bool clearResumeSeed = false,
+    String? sourceKey,
+    bool clearSourceKey = false,
   }) {
     return PlaybackRequest(
       url: url ?? this.url,
@@ -193,6 +204,10 @@ class PlaybackRequest {
       subtitleHeaders: subtitleHeaders,
       danmaku: danmaku ?? this.danmaku,
       tmdb: tmdb,
+      // 播放源归属默认原样带过：换集后进度仍要写回同一条来源。
+      // 切到**外部并入线路**（属于当前配置）时必须显式清空，否则进度会被
+      // 写回原来源，历史页从此多出一条挂错源的记录。
+      sourceKey: clearSourceKey ? '' : (sourceKey ?? this.sourceKey),
     );
   }
 }
@@ -2343,6 +2358,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       position: position,
       duration: duration,
       siteKey: _request.siteKey,
+      // 原来源播放（其它配置的历史）必须写回它自己的源：留空时
+      // `recordProgress` 按生效源写入，那会让同一条记录在当前源里裂出第二条。
+      sourceKey: _request.sourceKey,
       // 作品身份（历史同名聚合用，见 `core/history_grouping.dart`）：
       // 有 TMDB 身份就带上，没有则留空由聚合按片名回退。
       tmdbId: _request.tmdb?.tmdbId ?? 0,
@@ -2521,6 +2539,39 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  /// 本次播放的解析入口（换集/切线路/失败重试都走它）。
+  ///
+  /// 为什么不让调用点各写一遍：原来源播放（`_request.sourceKey` 是**别的**
+  /// 配置）必须一直用那份配置解析，任何一处漏掉就会回落到当前配置的同名站点上，
+  /// 表现为「换集后播的是当前源的另一部片」。
+  Future<PlaybackDecision?> _resolvePlayback({
+    required String episodeTarget,
+    required String flag,
+    required String vodId,
+    Site? siteOverride,
+    bool isExternalRoute = false,
+  }) {
+    final state = widget.state;
+    final source = _request.sourceKey.trim();
+    // 外部并入线路属于**当前配置**：那条线路必须用当前配置解析，不能借原配置的
+    // 服务去问（站点在两份配置里是两回事）。
+    if (!isExternalRoute && source.isNotEmpty && source != state.activeSourceKey) {
+      return state.resolvePlaybackForSource(
+        sourceKey: source,
+        siteKey: _request.siteKey,
+        episodeTarget: episodeTarget,
+        flag: flag,
+        vodId: vodId,
+      );
+    }
+    return state.resolvePlayback(
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      siteOverride: siteOverride,
+    );
+  }
+
   Future<void> _openTarget(
     VodEpisode episode, {
     required String flag,
@@ -2532,18 +2583,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final String url;
       final List<SubtitleInfo> subtitles;
       final List<DanmakuSource> danmaku;
+      // 提到外层：下面写进度归属时要判断「这一集是不是外部并入线路」。
+      final route = _request.lineRoutes[flag];
       if (_request.directUrl) {
         url = episode.url;
         subtitles = _request.subtitles;
         danmaku = _request.danmaku;
       } else {
         // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
-        final route = _request.lineRoutes[flag];
-        final decision = await state.resolvePlayback(
+        final decision = await _resolvePlayback(
           episodeTarget: episode.url,
           flag: _playbackFlagFor(flag),
           vodId: route?.vodId ?? _request.vodId,
           siteOverride: route == null ? null : state.siteByKey(route.siteKey),
+          isExternalRoute: route != null,
         );
         if (decision == null || decision.url == null) {
           throw AppError(
@@ -2575,6 +2628,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           clearResumeSeed: true,
           subtitles: subtitles,
           danmaku: danmaku,
+          // 切到外部并入线路时，这条线路属于**当前配置**：进度不能再写回
+          // 原来源（否则历史里多出一条挂错源的记录）。
+          clearSourceKey: route != null,
         );
         _episodesCache = const [];
         // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕；
@@ -2613,6 +2669,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 同步来的历史 `episode_id` 是安卓哈希，与 `episodeTarget` 不同源，
       // 需要集名兜底（详见 `AppDatabase.findHistory` 的三级匹配）。
       episodeName: _request.episodeName,
+      // 原来源播放要查它自己那条源的行，否则查不到任何进度。
+      sourceKey: _request.sourceKey.trim().isEmpty
+          ? null
+          : _request.sourceKey,
     );
     // 查不到（已看完 / 无记录 / 低于续播下限）时退回「重试本集」语义，
     // 而不是静默无动作——用户点了按钮就必须有反馈。
