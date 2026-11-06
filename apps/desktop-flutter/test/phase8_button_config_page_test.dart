@@ -95,14 +95,14 @@ void main() {
   }
 
   const defaultPreview =
-      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  倍速  ·  线路  ·  剧集  ·  全屏';
+      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  倍速  ·  剧集  ·  全屏';
 
-  testWidgets('列出全部 9 个按钮与中文名', (tester) async {
+  testWidgets('列出全部 8 个按钮与中文名', (tester) async {
     await pumpPage(tester);
     for (final spec in kPlayerButtons) {
       expect(find.text(spec.label), findsWidgets, reason: '缺少「${spec.label}」');
     }
-    // 9 行都真的建出来了，而不是只建了视口内那几行。
+    // 8 行都真的建出来了，而不是只建了视口内那几行。
     for (final spec in kPlayerButtons) {
       expect(rowOf(spec.id), findsOneWidget, reason: '缺少 ${spec.id} 行');
     }
@@ -113,7 +113,6 @@ void main() {
     const reversed = [
       'fullscreen',
       'episodes',
-      'line',
       'speed',
       'volume',
       'mute',
@@ -127,7 +126,7 @@ void main() {
     final tops = [
       for (final id in state.playerButtonOrder) tester.getRect(rowOf(id)).top,
     ];
-    expect(tops.length, 9);
+    expect(tops.length, 8);
     for (var i = 1; i < tops.length; i++) {
       expect(tops[i], greaterThan(tops[i - 1]), reason: '第 $i 行应排在上一行下方');
     }
@@ -168,7 +167,7 @@ void main() {
     try {
       await pumpPage(tester);
       final rows = tester.widgetList(find.byType(ListTile)).length;
-      expect(rows, 9);
+      expect(rows, 8);
       // `ReorderableListView.buildDefaultDragHandles` 默认 true，会在**行尾**再插一个
       // 无 key 的手柄，正好压在 trailing 的开关上。那个手柄不会让任何 byKey 断言失败，
       // 所以必须用总数把它抓出来。
@@ -203,7 +202,10 @@ void main() {
   });
 
   testWidgets('开关反映已存的隐藏集', (tester) async {
-    await configure(tester, () => state.setPlayerButtonHidden({'speed', 'line'}));
+    await configure(
+      tester,
+      () => state.setPlayerButtonHidden({'speed', 'fullscreen'}),
+    );
     await pumpPage(tester);
     for (final spec in kPlayerButtons) {
       expect(
@@ -250,7 +252,7 @@ void main() {
     expect(state.playerButtonHidden, {'speed'});
     expect(
       previewText(tester),
-      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  线路  ·  剧集  ·  全屏',
+      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  剧集  ·  全屏',
     );
   });
 
@@ -320,7 +322,7 @@ void main() {
     // 字面量断言：顺序与分隔符都被锁住。
     expect(
       previewText(tester),
-      '下一集  ·  播放/暂停  ·  上一集  ·  静音  ·  音量  ·  倍速  ·  线路  ·  剧集  ·  全屏',
+      '下一集  ·  播放/暂停  ·  上一集  ·  静音  ·  音量  ·  倍速  ·  剧集  ·  全屏',
     );
   });
 
@@ -329,7 +331,7 @@ void main() {
     await pumpPage(tester);
     expect(
       previewText(tester),
-      '上一集  ·  播放/暂停  ·  下一集  ·  音量  ·  倍速  ·  线路  ·  剧集  ·  全屏',
+      '上一集  ·  播放/暂停  ·  下一集  ·  音量  ·  倍速  ·  剧集  ·  全屏',
     );
   });
 
@@ -362,7 +364,6 @@ void main() {
       'mute',
       'volume',
       'speed',
-      'line',
       'episodes',
       'fullscreen',
     ]);
@@ -394,7 +395,6 @@ void main() {
       'mute',
       'volume',
       'speed',
-      'line',
       'episodes',
       'fullscreen',
     ]);

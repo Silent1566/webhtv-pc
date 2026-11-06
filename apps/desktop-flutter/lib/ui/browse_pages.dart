@@ -2051,6 +2051,11 @@ class _DetailPageState extends State<DetailPage> {
             : -1,
         episodeNumber: _tmdbEpisodeNumberOf(episode),
       );
+      // 选集卡片数据（阶段 A）：与 [_buildEpisodes] 的 `cards` 用**同一套构造**，
+      // 否则播放器浮层里的卡片会与详情页选集对不上——两者都按「当前季度过滤 →
+      // 可能倒序 → 按原始线路下标推断缺号集编号」得出，任一环节走样都会错位。
+      // 每条线路各算一份：播放器切线路时要取那条线路自己的卡片。
+      final episodeCardsByFlag = _episodeCardsByFlag(vod);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -2074,6 +2079,10 @@ class _DetailPageState extends State<DetailPage> {
               playLines: _playableLines(vod),
               // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
               lineRoutes: _externalRoutes,
+              episodeCardsByFlag: episodeCardsByFlag,
+              // 面板的排列方向必须与详情页这一刻一致（用户看到的第 0 张 =
+              // 播放器里的第 0 张），否则区间标签方向反着来。
+              episodesReversed: _episodesReversed,
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
               startPosition: resume,
@@ -2933,6 +2942,52 @@ class _DetailPageState extends State<DetailPage> {
       indices.add(index);
     }
     return indices;
+  }
+
+  /// 交给播放器的剧集卡片：**每条线路各一份**，按线路展示标识分组。
+  ///
+  /// 构造规则必须与 [_buildEpisodes] 里的 `cards` **逐条一致**，否则卡片与集对不上：
+  /// - 当前线路取 `_renderEpisodes(rawLine, active: true)`（当前季度过滤后的渲染集）；
+  /// - 尊重页面的倒序开关（用户看到的第 0 张必须就是播放器里的第 0 张）；
+  /// - 缺号集的集号按**原始线路**下标推断（`sourceIndices`），不能用渲染下标。
+  ///
+  /// 为什么每条线路都算：卡片原先只给「当前选中的线路」，播放器切到别的线路后
+  /// `PlaybackRequest.copyWith` 会把旧卡片原样带过——两条线路集数恰好相等时，
+  /// 旧线路的剧照会被贴到新线路的集上，长度校验根本查不出来。
+  ///
+  /// 为什么非当前线路走 `active: false`：季度元数据是线路级的（`04` §4.3），
+  /// 把当前线路的季度集标题/剧照套到另一条线路的集上就是串图串集
+  /// （`_renderEpisodes` 的 `active: false` 分支正是为此存在）。非当前线路只按
+  /// **来源集名**出自己的卡（集号 + 本剧通用剧照），不借用别条线路的集标题。
+  ///
+  /// 没有 TMDB 数据（未匹配/不属于本页影片）时返回空 Map：宁可没有卡片，
+  /// 也不得用占位图或假简介冒充（`PRODUCT.md` §Product Principles 第 5 条）。
+  Map<String, List<TmdbEpisodeCard>> _episodeCardsByFlag(Vod vod) {
+    final tmdb = _ownedTmdb;
+    if (tmdb == null) return const {};
+    final lines = _linesOf(vod);
+    if (lines.isEmpty) return const {};
+    final activeFlag = _activeLine(lines).flag;
+    final seasonNumber = tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null;
+    final cards = <String, List<TmdbEpisodeCard>>{};
+    for (final rawLine in lines) {
+      final isActive = rawLine.flag == activeFlag;
+      // `_buildEpisodes` 的 `sourceIndices` 取自 TMDB 应用元数据**之后**的线路集，
+      // 这里必须用同一个来源，否则同一个缺号集会被算出两个集号。
+      final enriched = tmdb.applyEpisodesToLine(rawLine).line;
+      final episodes = _renderEpisodes(rawLine, active: isActive);
+      final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
+      cards[rawLine.flag] = tmdb.episodeCardsForEpisodes(
+        ordered,
+        seasonNumber: seasonNumber,
+        includeMetadata: isActive,
+        sourceIndices: _sourceEpisodeIndices(
+          isActive ? enriched.episodes : rawLine.episodes,
+          ordered,
+        ),
+      );
+    }
+    return cards;
   }
 
   /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。

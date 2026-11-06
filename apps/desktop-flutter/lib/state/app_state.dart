@@ -2822,6 +2822,281 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     }
   }
 
+  /// 配置管理页要展示的记录列表。
+  ///
+  /// 与 [configs] 的差别只在**数据来源**：`_configs` 是内存快照，桥接导入、
+  /// 安卓恢复等路径直接写库时它不会跟着变。配置页是「用户来核对库里到底有
+  /// 哪几条」的地方，必须读库；sqlite 是同步接口，一页几十行不构成负担。
+  List<ConfigRecord> get savedConfigs =>
+      _database?.listConfigs() ?? _configs;
+
+  /// 在已保存的配置记录里按 id 找一条。
+  ///
+  /// 内存列表可能落后于库（桥接导入、其它页面直接写库都会绕过它），所以
+  /// 查不到时回读一次数据库：编辑/刷新这类「按 id 精确操作」的入口绝不能
+  /// 因为一个陈旧的缓存就报「记录已不存在」。
+  ConfigRecord? configRecordById(int id) {
+    for (final item in _configs) {
+      if (item.id == id) return item;
+    }
+    for (final item in _database?.listConfigs() ?? const <ConfigRecord>[]) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  /// 编辑一条配置的名称/地址。
+  ///
+  /// 本地源**改了地址时必须先按新地址完整拉取一遍**再落库：地址写错时用户
+  /// 期望的是"改失败、原来那条还在"，而不是库里出现一条拉不下来的坏记录。
+  /// 拉取成功后直接用新内容覆盖这一条 —— 改地址本身就等于一次刷新，
+  /// 再让用户额外点一次刷新是没有意义的动作。
+  ///
+  /// 桥接源的地址由安卓设备决定（网关地址），只允许改名。
+  Future<bool> editConfigRecord(
+    int id, {
+    required String name,
+    required String origin,
+  }) async {
+    final database = _database;
+    if (database == null) {
+      _lastError = AppError(AppErrorKind.storage, '本地存储不可用，无法编辑配置');
+      notifyListeners();
+      return false;
+    }
+    final record = configRecordById(id) ??
+        (_activeRecord?.id == id ? _activeRecord : null);
+    if (record == null) {
+      _lastError = AppError(AppErrorKind.storage, '该配置记录已不存在');
+      notifyListeners();
+      return false;
+    }
+    final trimmedName = name.trim();
+    final trimmedOrigin = origin.trim();
+    _lastError = null;
+
+    final isBridge = record.bridgeInterfaceKey.trim().isNotEmpty;
+    if (isBridge) {
+      if (trimmedName.isEmpty) {
+        _lastError = AppError(AppErrorKind.storage, '配置名称不能为空');
+        notifyListeners();
+        return false;
+      }
+      database.updateConfigIdentity(id, name: trimmedName);
+      _configs = database.listConfigs();
+      if (_activeRecord?.id == id) _activeRecord = database.activeConfig();
+      notifyListeners();
+      return true;
+    }
+
+    if (trimmedOrigin.isEmpty) {
+      _lastError = AppError(AppErrorKind.configInvalid, '配置地址不能为空');
+      notifyListeners();
+      return false;
+    }
+    // 名称留空时保留原名：改地址不该顺手把用户起的名也抹掉。
+    final nextName = trimmedName.isEmpty ? record.name : trimmedName;
+    if (trimmedOrigin == record.origin.trim()) {
+      database.updateConfigIdentity(id, name: nextName);
+      _configs = database.listConfigs();
+      if (_activeRecord?.id == id) _activeRecord = database.activeConfig();
+      notifyListeners();
+      return true;
+    }
+
+    // 地址变了：先验证，验证通过才动库。
+    final imported = await _fetchConfigForRefresh(trimmedOrigin);
+    if (imported == null) return false;
+    final config = imported.config;
+    if (config == null) {
+      _lastError = AppError(
+        AppErrorKind.configInvalid,
+        '新地址没有可用配置',
+        detail: redactUrl(trimmedOrigin),
+      );
+      notifyListeners();
+      return false;
+    }
+    final sourceKey = LocalSourceKey.of(imported.origin);
+    database.updateConfigIdentity(
+      id,
+      name: nextName,
+      origin: imported.origin,
+      sourceKey: sourceKey,
+    );
+    database.refreshConfigContent(
+      id,
+      json: config.toJson(),
+      siteCount: config.sites.length,
+      liveCount: config.lives.length,
+      contentType: imported.contentType,
+      origin: imported.origin,
+      sourceKey: sourceKey,
+    );
+    database.saveConfigSites(id, config.sites);
+    _configs = database.listConfigs();
+    _activeRecord = database.activeConfig();
+    if (_activeRecord?.id == id) {
+      _rememberLastConfig(_activeRecord!);
+      await _reloadActiveConfigContent(config);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  /// 重新拉取一条配置的内容（不落库）。失败时把错误写进 [lastError] 并返回 null。
+  Future<ImportedConfig?> _fetchConfigForRefresh(String input) async {
+    try {
+      final source = ConfigSource.parse(input);
+      var imported = await _importService.import(source);
+      if (imported.isRepository) {
+        // 与导入路径一致：仓库默认用第一项（§7.4.2）。
+        imported = await _importService.expandRepository(imported);
+      }
+      return imported;
+    } catch (error) {
+      _lastError = error is AppError
+          ? error
+          : AppError(AppErrorKind.unknown, '$error', cause: error);
+      log.warning('刷新配置失败：${_lastError!.logLine}', scope: 'config');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// 刷新一条已保存配置的内容，**原地更新同一条记录**（id 不变）。
+  ///
+  /// 为什么必须原地更新：刷新是"让这条记录追上它的来源"，不是"再导入一份"。
+  /// 走导入路径会按 origin/sourceKey 去重并在地址变更时新插一条，用户每点一次
+  /// 刷新列表就长一条重复配置。
+  Future<bool> refreshConfigRecord(int id) async {
+    final database = _database;
+    if (database == null) {
+      _lastError = AppError(AppErrorKind.storage, '本地存储不可用，无法刷新配置');
+      notifyListeners();
+      return false;
+    }
+    final record = configRecordById(id);
+    if (record == null) {
+      _lastError = AppError(AppErrorKind.storage, '该配置记录已不存在');
+      notifyListeners();
+      return false;
+    }
+    _lastError = null;
+
+    final interfaceKey = record.bridgeInterfaceKey.trim();
+    if (interfaceKey.isNotEmpty) {
+      // 桥接源的内容在安卓设备上：先找设备地址，再按 interfaceKey 精确重拉。
+      // 不探测整台设备的全部源，否则刷新一条会顺带改写别的源。
+      final deviceUuid = record.bridgeDevice.trim();
+      final address = deviceUuid.isEmpty
+          ? ''
+          : deviceAddressForUuid(deviceUuid);
+      if (address.isEmpty) {
+        _lastError = AppError(
+          AppErrorKind.bridgeUnreachable,
+          '找不到该源所属设备的接入地址，请先在「安卓设备接入」里连一次',
+          detail: redactUrl(record.origin),
+        );
+        notifyListeners();
+        return false;
+      }
+      final ok = await syncState.importSites(address, interfaceKey: interfaceKey);
+      if (!ok) {
+        // 失败时数据库里那条记录仍然完好（importSites 只在成功时才 upsert）。
+        _lastError = syncState.lastError ??
+            AppError(
+              AppErrorKind.bridgeUnreachable,
+              '该播放源刷新失败',
+              detail: redactUrl(address),
+            );
+        notifyListeners();
+        return false;
+      }
+      _configs = database.listConfigs();
+      _activeRecord = database.activeConfig();
+      if (_activeRecord?.id == id) {
+        final refreshed = configRecordById(id);
+        final json = refreshed?.json ?? const <String, Object?>{};
+        if (json.isNotEmpty) {
+          await _reloadActiveConfigContent(parseConfigRecord(json));
+        }
+      }
+      notifyListeners();
+      return true;
+    }
+
+    final imported = await _fetchConfigForRefresh(record.origin);
+    if (imported == null) return false;
+    final config = imported.config;
+    if (config == null) {
+      _lastError = AppError(
+        AppErrorKind.configInvalid,
+        '来源没有可用配置',
+        detail: redactUrl(record.origin),
+      );
+      notifyListeners();
+      return false;
+    }
+    database.refreshConfigContent(
+      id,
+      json: config.toJson(),
+      siteCount: config.sites.length,
+      liveCount: config.lives.length,
+      contentType: imported.contentType,
+      origin: imported.origin,
+      sourceKey: LocalSourceKey.of(imported.origin),
+    );
+    database.saveConfigSites(id, config.sites);
+    _configs = database.listConfigs();
+    _activeRecord = database.activeConfig();
+    if (_activeRecord?.id == id) {
+      await _reloadActiveConfigContent(config);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  /// 刷新全部配置；返回失败条目（空表示全部成功）。
+  ///
+  /// 串行而不是并发：这些来源可能指向同一台安卓设备或同一个订阅站，
+  /// 并发只会让设备侧排队超时，还会把失败原因搅成一团。
+  Future<List<String>> refreshAllConfigs() async {
+    // 以数据库为准而不是内存列表：桥接导入等路径会直接写库，
+    // 用陈旧的 `_configs` 会让「全部刷新」漏掉刚导入的那几条。
+    final targets = _database?.listConfigs() ?? [..._configs];
+    final failures = <String>[];
+    for (final record in targets) {
+      final ok = await refreshConfigRecord(record.id);
+      if (!ok) {
+        failures.add('${record.name}（${_lastError?.message ?? '刷新失败'}）');
+      }
+    }
+    return failures;
+  }
+
+  /// 当前生效配置的内容变了：重建配置与站点服务，并重挂首页。
+  ///
+  /// 只在**改动打到生效记录**时调用——否则会把用户正在看的站点列表清空。
+  Future<void> _reloadActiveConfigContent(AppConfig config) async {
+    _config = config;
+    // 交给 _attachSiteService 收尾：它会按 key 校验选中站点仍属于新配置，
+    // 并优先恢复用户上次使用的站点，找不到才退回默认站点。
+    _attachSiteService();
+    _detailRunId++;
+    _homeResult = null;
+    _categoryResult = null;
+    _detailResult = null;
+    _detailError = null;
+    _categoryFilters = const {};
+    _resetCategoryPaging();
+    _configPhase = LoadPhase.ready;
+    _resetTmdbServices();
+    notifyListeners();
+    final site = _selectedSite;
+    if (site != null) await loadHome(site);
+  }
+
   /// 记住「最后一次使用的配置」（写 `<data>/last-config.json`）。
   ///
   /// 只记身份不记内容：内容已在 `configs` 表里，再存一份就是两份真相。

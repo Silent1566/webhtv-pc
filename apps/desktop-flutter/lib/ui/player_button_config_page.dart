@@ -163,10 +163,10 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
           ),
           const Divider(height: 1),
           Expanded(
-            // 外层滚动 + `shrinkWrap`：9 行在 600px 高的测试视口里放不下，
-            // 惰性列表只会建出视口内那几行，于是「列出全部 9 个按钮」这类
+            // 外层滚动 + `shrinkWrap`：8 行在 600px 高的测试视口里放不下，
+            // 惰性列表只会建出视口内那几行，于是「列出全部 8 个按钮」这类
             // 断言会假失败。`ShrinkWrappingViewport` 给 sliver 无限
-            // `remainingPaintExtent`，9 行全部建出来，页面整体滚动。
+            // `remainingPaintExtent`，8 行全部建出来，页面整体滚动。
             child: SingleChildScrollView(
               child: ReorderableListView.builder(
                 // 关掉默认手柄：它不带 key、落在行尾并盖住开关（见文件头注释）。

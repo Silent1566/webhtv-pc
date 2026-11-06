@@ -31,6 +31,7 @@ import '../core/source_swap.dart';
 import '../core/sleep_timer.dart';
 import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
+import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/danmaku_library_service.dart';
@@ -46,6 +47,7 @@ import 'danmaku_overlay.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
 import 'player_controller.dart';
+import 'player_episode_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
 import 'theme.dart';
@@ -68,6 +70,8 @@ class PlaybackRequest {
     this.startPosition,
     this.playLines = const [],
     this.lineRoutes = const {},
+    this.episodeCardsByFlag = const {},
+    this.episodesReversed = false,
     this.episodeIndex = 0,
     this.vodPic,
     this.directUrl = false,
@@ -130,6 +134,31 @@ class PlaybackRequest {
   /// 定向到它自己的站点。只看 [siteKey] 不够——[siteKey] 记的是真来源站点，
   /// 但 `vodId` 也得跟着换，否则会拿原站点的 vod 去问外部站点。
   final Map<String, SwapLineRoute> lineRoutes;
+
+  /// 详情页为**每一条线路**各算一次的剧集卡片（`tmdb_detail_model.dart`），
+  /// 按线路展示标识（[flag]）分组。
+  ///
+  /// 为什么播放器还要收一次：浮层里的选集面板要显示详情页那套海报卡片
+  /// （集号/集标题/剧照），而播放器手上只有 [playLines] 里的来源集名。
+  /// 卡片只能由详情页算好传下来——集号推断依赖季过滤后的渲染顺序与
+  /// `sourceIndices`（见 `TmdbEpisodeCards.build`），播放器没有这些上下文。
+  ///
+  /// 为什么是 **Map 而不是单个列表**：卡片以前只给「详情页当时选中的那条线路」，
+  /// 播放器切到别的线路时 `copyWith` 会把旧卡片原样带过；两条线路集数恰好相等时，
+  /// 旧线路的剧照会被贴到新线路的集上，长度校验根本查不出来。按线路分组后，
+  /// 切到哪条线路就取哪条线路自己的卡片。
+  ///
+  /// 空 Map = 这次播放没有卡片可用（未匹配 TMDB、历史恢复、直播、命令行），
+  /// 不是「暂时还没传」：调用方不得为它编造占位卡片。
+  final Map<String, List<TmdbEpisodeCard>> episodeCardsByFlag;
+
+  /// 详情页当时的页面级「倒序」开关状态（`browse_pages.dart` 的 `_episodesReversed`）。
+  ///
+  /// 卡片顺序由详情页按它当时的倒序状态算好，播放器的选集面板必须跟着同一个方向
+  /// 排列，否则集列表、区间标签与卡片三者会互相错位。这是**页面级临时状态**，
+  /// 只在用户点播那一刻快照一次，播放器不再翻它。
+  final bool episodesReversed;
+
   final int episodeIndex;
   final String? vodPic;
 
@@ -197,6 +226,12 @@ class PlaybackRequest {
       playLines: playLines,
       // 与 `playLines` / `siteKey` 一样原样带过：换集不能把外部线路的路由丢掉。
       lineRoutes: lineRoutes,
+      // 卡片同属「详情页一次性算好」的上下文：换集不带过来，选集面板就退回裸集名，
+      // 而播放器自己再也算不回来（缺选中季度与季过滤后的渲染顺序）。按线路分组后
+      // 切线路也能取到**那条线路自己**的卡片，不必等详情页重新算。
+      episodeCardsByFlag: episodeCardsByFlag,
+      // 倒序是详情页那一刻的展示顺序，与卡片同属一次性快照：换集不能把它翻回去。
+      episodesReversed: episodesReversed,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
       directUrl: directUrl,
@@ -3146,7 +3181,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 用户将无法得知直播弹幕为什么没有弹幕。
         //
         // 放在进度行而不是动作行：动作行是**可配置按钮**的集合
-        // （`resolveVisibleButtons` 的 9 个 id，`PlayerOverlayActionRow`
+        // （`resolveVisibleButtons` 的 8 个 id，`PlayerOverlayActionRow`
         // 还断言 buttons 与 groups 一一对应），状态指示器不是按钮，
         // 混进去会破坏那个一一对应。
         //
@@ -3241,33 +3276,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               ),
             ],
           ),
-          'line' when _request.playLines.length > 1 => DropdownButton<String>(
-            underline: const SizedBox.shrink(),
-            value: _request.flag,
-            hint: const Text('线路'),
-            items: _request.playLines
-                .map(
-                  (line) => DropdownMenuItem(
-                    value: line.flag,
-                    child: Text(line.displayName),
-                  ),
-                )
-                .toList(),
-            onChanged: (flag) {
-              if (flag != null) _playEpisode(0, overrideFlag: flag);
-            },
-          ),
           'episodes' when episodes.isNotEmpty => OutlinedButton.icon(
             onPressed: () => _showEpisodes(context, episodes),
             icon: const Icon(Icons.list, size: 18),
-            label: Text('剧集（${episodes.length}）'),
+            label: Text('选集（${episodes.length}）'),
           ),
           'fullscreen' => IconButton(
             tooltip: '全屏（F11）',
             onPressed: _toggleFullscreen,
             icon: const Icon(Icons.fullscreen),
           ),
-          // 条件不成立的项（如单线路时的 `line`）不渲染。
+          // 条件不成立的项（如没有剧集时的 `episodes`）不渲染。
+          // 占位仍在：`_actionGroups` 是按 `resolveVisibleButtons` 的长度配平的。
           _ => const SizedBox.shrink(),
         },
     ];
@@ -3291,35 +3311,55 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     return best;
   }
 
-  /// 剧集选择面板（从原 `_ControlBar._showEpisodes` 迁入，行为不变）。
+  /// 选集面板（对齐安卓 `EpisodeListDialog`）。
   ///
-  /// 保留 `OutlinedButton` 作为剧集卡：这是测试锁死的结构
-  /// （`DESIGN.md`：「剧集卡就是 `OutlinedButton`——这是测试锁死的结构，不可替换」）。
+  /// 与上一版 `showModalBottomSheet` 的区别：面板要容纳「线路行 + 区间行 +
+  /// 16:9 剧照网格」，底部抽屉的高度放不下，改为居中弹窗。
+  /// 面板本身不碰播放状态：切集、切线路都回调回这里。
   void _showEpisodes(BuildContext context, List<VodEpisode> episodes) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SizedBox(
-        height: 320,
-        child: GridView.builder(
-          padding: const EdgeInsets.all(AppSpace.md),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 180,
-            mainAxisExtent: 40,
-            crossAxisSpacing: AppSpace.sm,
-            mainAxisSpacing: AppSpace.sm,
-          ),
-          itemCount: episodes.length,
-          itemBuilder: (context, index) => OutlinedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _playEpisode(index);
-            },
-            child: Text(episodes[index].name, overflow: TextOverflow.ellipsis),
-          ),
+    final line = _lineOf(_request.flag);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierColor: Colors.black.withValues(alpha: 0.62),
+        builder: (_) => PlayerEpisodePanel(
+          title: _request.vodName.isNotEmpty
+              ? _request.vodName
+              : _request.title,
+          lineLabel: line?.displayName ?? _request.flag,
+          playLines: _request.playLines,
+          lineFlag: _request.flag,
+          episodes: episodes,
+          // 只取**当前线路**那一份：切线路后 `_request.flag` 已经换过，
+          // 拿别的线路的卡片会串图（长度相等时连错位都查不出来）。
+          episodeCards:
+              _request.episodeCardsByFlag[_request.flag] ?? const [],
+          // 详情页那一刻是倒序的话，面板的排列方向、区间标签与当前集定位都要跟着倒。
+          reversed: _request.episodesReversed,
+          episodeIndex: _request.episodeIndex,
+          onSelectEpisode: (index) => unawaited(_playEpisode(index)),
+          onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
         ),
       ),
     );
+  }
+
+  /// 切线路：尽量续播**同一集**（对齐安卓 `VideoActivity.java:3684-3687`）。
+  ///
+  /// 定位规则见 [locateEpisodeInLine]：集名精确匹配 → 集号匹配 → 第 1 集。
+  ///
+  /// 为什么不改 [_playEpisode]：它的 `overrideFlag` 分支已经负责「按新线路
+  /// 解析地址 + 写 `_episodesCache`」，续同集只是换一个下标传进去；动那条分支
+  /// 等于重写既有的换集路径，而阶段 B 要求这里的改动保守。
+  Future<void> _switchLineResumingEpisode(String flag) async {
+    if (flag == _request.flag) return;
+    final target = _lineOf(flag)?.episodes ?? const <VodEpisode>[];
+    if (target.isEmpty) return;
+    final index = locateEpisodeInLine(
+      episodes: target,
+      currentName: _request.episodeName,
+    );
+    await _playEpisode(index, overrideFlag: flag);
   }
 
   /// 屏显诊断主列（`design/02` §3.2）。
@@ -4113,7 +4153,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             label: '控制栏按钮',
             icon: Icons.view_week_outlined,
             children: [
-              // 9 项（`kPlayerButtons`）：selected = **未隐藏**。
+              // 8 项（`kPlayerButtons`）：selected = **未隐藏**。
               // 用「显示中」而不是「已隐藏」做勾选态，是因为用户找的是
               // 「这个按钮还在不在控制栏上」。
               for (final spec in kPlayerButtons)
@@ -4197,7 +4237,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   //    驱动，`await` 之后的那次 `setState` 可能永远等不到
   //    （`player_button_config_page.dart:71-75` 记录过同一个坑）。
   //
-  // 为什么**不关菜单**：这一层里有 5 个开关 + 9 个控制栏按钮，用户的真实
+  // 为什么**不关菜单**：这一层里有 5 个开关 + 8 个控制栏按钮，用户的真实
   // 动作是「连着改几项再对比效果」。每改一项就关菜单，等于每一项都要重新
   // 右键、重新走两三层——那正是这次要消灭的负担。
 
