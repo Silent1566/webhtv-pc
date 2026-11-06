@@ -375,15 +375,18 @@ void main() {
       expect(cards[2].stillUrl, isNull);
     });
 
-    test('集号不可靠时按原始顺序对齐（02 §9.3）', () {
+    // 旧语义（本次变更前）：`usePosition: true` 会覆盖源集号，三张卡片被改成
+    // E1/E2/E3。新语义对齐上游 `linearEpisodeNumber`：源集号优先，只有缺号集
+    // 才回退位置——否则重复集名的第 2、3 集会拿到别人的集标题。
+    test('集号可靠时不被 usePosition 覆盖', () {
       final cards = TmdbEpisodeCards.build(
         sourceNames: const ['第1集', '第1集', '第1集'],
         metadataByNumber: metadata(),
         usePosition: true,
         seasonNumber: 1,
       );
-      expect(cards.map((c) => c.number), [1, 2, 3]);
-      expect(cards[1].title, 'E2 发展');
+      expect(cards.map((c) => c.number), [1, 1, 1]);
+      expect(cards[1].title, 'E1 开端');
     });
 
     test('元数据缺失剧照时按顺序回退（每集仍有画面）', () {
@@ -401,6 +404,55 @@ void main() {
       final cards = TmdbEpisodeCards.fromMetadata(metadata().values.toList());
       expect(cards, hasLength(2));
       expect(cards.first.seasonNumber, 1);
+    });
+
+    // 倒序 / 季度过滤后渲染的是**子集**，子集下标不等于线路下标。集号若按
+    // 子集下标的相对位置推断，反转后集号与元数据会整体错位（本次修复的缺陷 2）。
+    test('倒序渲染：集号 3/2/1，且各取自己的元数据', () {
+      final cards = TmdbEpisodeCards.build(
+        sourceNames: const ['第3集', '第2集', '第1集'],
+        metadataByNumber: {
+          for (var i = 1; i <= 3; i++)
+            i: TmdbEpisode(
+              number: i,
+              title: 'T$i',
+              stillUrl: '$_imageBase/s1e$i.jpg',
+              seasonNumber: 1,
+            ),
+        },
+        seasonNumber: 1,
+        sourceIndices: const [2, 1, 0],
+      );
+      expect(cards.map((c) => c.number), [3, 2, 1]);
+      expect(cards.map((c) => c.title), ['E3 T3', 'E2 T2', 'E1 T1']);
+    });
+
+    test('缺号集按原始线路位置回退，而不是子集位置', () {
+      // 原始线路 4 集；季度过滤后只剩后 3 集（原始下标 1、2、3）。
+      final cards = TmdbEpisodeCards.build(
+        sourceNames: const ['上', '第3集', '第4集'],
+        metadataByNumber: {
+          for (var i = 1; i <= 4; i++) i: TmdbEpisode(number: i, title: 'T$i'),
+        },
+        seasonNumber: 1,
+        sourceIndices: const [1, 2, 3],
+      );
+      expect(cards.map((c) => c.number), [2, 3, 4]);
+    });
+
+    test('季度过滤出的子集不重新从 1 编号', () {
+      // 旧实现会判定「需按位」并把 S1 的两集改成 E1/E2。
+      final cards = TmdbEpisodeCards.build(
+        sourceNames: const ['第7集', '第8集'],
+        metadataByNumber: {
+          for (var i = 7; i <= 8; i++) i: TmdbEpisode(number: i, title: 'T$i'),
+        },
+        seasonNumber: 1,
+        usePosition: true,
+        sourceIndices: const [0, 1],
+      );
+      expect(cards.map((c) => c.number), [7, 8]);
+      expect(cards.map((c) => c.title), ['E7 T7', 'E8 T8']);
     });
   });
 

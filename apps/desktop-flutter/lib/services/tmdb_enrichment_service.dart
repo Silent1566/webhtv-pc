@@ -490,12 +490,24 @@ bool shouldUseEpisodePosition(
   return false;
 }
 
-/// `resolveEpisodeNumber`（`02` §9.3）：按位或按号取 TMDB 集号。
+/// `resolveEpisodeNumber`（`02` §9.3）：取 TMDB 集号。
+///
+/// 对齐上游 `EpisodeSeasonPolicy.linearEpisodeNumber`：**源集名能解析出集号就
+/// 保留它**，只有解析不出时才回退到列表位置（`position + 1`）。反过来做会让
+/// 文件名里的明确集号被列表顺序覆盖——例如 `第13集` 排在 11 位就成了 E13→E11，
+/// 元数据整体错位。
+///
+/// `usePosition` 只决定「源集号缺失时是否允许按位置回退」，不再覆盖源集号。
 int resolveEpisodeNumber({
   required String episodeName,
   required int position,
   required bool usePosition,
-}) => usePosition ? position + 1 : episodeNumberFromName(episodeName);
+}) {
+  final sourceNumber = episodeNumberFromName(episodeName);
+  if (sourceNumber > 0) return sourceNumber;
+  if (!usePosition) return -1;
+  return position >= 0 ? position + 1 : -1;
+}
 
 /// 从剧集名解析集号（`01` §3.5 的集数形态）。无法解析返回 `-1`。
 int episodeNumberFromName(String name) => sourceEpisodeNumber(name);
