@@ -16,8 +16,11 @@ enum PlayerButtonGroup {
   /// 音量：静音 / 音量滑杆。
   volume('音量'),
 
-  /// 速率与线路：倍速 / 线路 / 剧集。
-  rate('速率与线路'),
+  /// 速率与选集：倍速 / 剧集。
+  ///
+  /// 「线路」曾是这一组的第三个成员，现已移除：切线路并入选集面板——
+  /// 用户在选集时本来就在看「哪条线路的哪一集」，单独一条线路下拉只是重复入口。
+  rate('速率与选集'),
 
   /// 显示：全屏。
   display('显示');
@@ -44,9 +47,9 @@ class PlayerButtonSpec {
   final PlayerButtonGroup group;
 }
 
-/// PC 端**可配置**的按钮全集（9 个）。
+/// PC 端**可配置**的按钮全集（8 个）。
 ///
-/// ## 为什么是 9 个而不是上游的 32 个
+/// ## 为什么是 8 个而不是上游的 32 个
 ///
 /// 上游 `PlayerButtonSetting.java:21-52` 定义 32 个 id。PC 端只沿用其中 5 个
 /// （`speed` / `prev` / `next` / `episodes` / `fullscreen`），其余 27 个全部排除，
@@ -63,7 +66,7 @@ class PlayerButtonSpec {
 /// - `opening` / `ending`：无片头片尾跳过
 /// - `parse`：解析线路由站点配置决定，不暴露手动切换
 /// - `multi_thread_proxy`：代理是站点级配置，不是播放器按钮
-/// - `quality`：无多清晰度（站点给的是线路，已由 `line` 覆盖）
+/// - `quality`：无多清晰度（站点给的是线路，切线路归详情页与选集面板）
 /// - `scale`：画面比例归顶栏菜单与右键菜单，不占控制栏按钮位
 /// - `reset`：PC 端「重置」语义不明确
 /// - `search`：播放中搜索是独立流程，不在播放器浮层
@@ -74,13 +77,11 @@ class PlayerButtonSpec {
 ///   PC 端无独立音轨/视频轨选择 UI
 /// - `danmaku`：顶栏常驻（被测试锁定），见下一节
 ///
-/// ## PC 端新增的 4 个 id（上游没有）
+/// ## PC 端新增的 3 个 id（上游没有）
 ///
 /// - `play`：上游的播放键是**中央大按钮**（`view_control_vod.xml:219-226`），
 ///   不在动作行里；PC 端把它放进动作行，因为它是最常碰的按钮。
 /// - `mute` / `volume`：上游音量走手势（`PlayerGesture` 的滑动），PC 无手势。
-/// - `line`：上游线路切换在详情页；PC 端播放中切线路是高频动作
-///   （`_playEpisode(0, overrideFlag:)` 已实现）。
 ///
 /// ## 为什么 `subtitle` / `danmaku` 也不在里面
 ///
@@ -121,11 +122,6 @@ const List<PlayerButtonSpec> kPlayerButtons = [
   PlayerButtonSpec(
     id: 'speed',
     label: '倍速',
-    group: PlayerButtonGroup.rate,
-  ),
-  PlayerButtonSpec(
-    id: 'line',
-    label: '线路',
     group: PlayerButtonGroup.rate,
   ),
   PlayerButtonSpec(
@@ -205,7 +201,7 @@ List<String> normalizeButtonOrder(Object? raw) {
 ///
 /// **只接受 `List` 与逗号分隔 `String`**，不认 `Set`——传 `Set` 会静默返回空集
 /// （`_splitIds` 对非 List/String 返回 `const []`）。调用方持 `Set` 时必须先
-/// `.toList()`。实测确认：`normalizeButtonHidden({'speed','line'})` → `{}`。
+/// `.toList()`。实测确认：`normalizeButtonHidden({'speed','fullscreen'})` → `{}`。
 Set<String> normalizeButtonHidden(Object? raw) => {
   for (final id in _splitIds(raw))
     if (_isKnownId(id)) id,

@@ -216,14 +216,14 @@ added/removed 配对不变式。**同一个 API 在 widget 测试里可靠、在
 | 文件 | 层 | 覆盖 |
 | --- | --- | --- |
 | `test/phase8_osd_config_test.dart` | L1 | 7 项开关默认值、归一化（未知键/缺失键/非法类型/非 Map）、`anyOsdEnabled` |
-| `test/phase8_player_buttons_test.dart` | L1 | 9 项定义、默认顺序、顺序归一化（`List`/`String` 双形态）、隐藏集归一化、可见列表解析 |
+| `test/phase8_player_buttons_test.dart` | L1 | 8 项定义、默认顺序、顺序归一化（`List`/`String` 双形态）、隐藏集归一化、可见列表解析 |
 | `test/phase8_osd_diagnostics_test.dart` | L1 | 诊断主列 6 行、未知字段显示「未知」、直播不显示 `00:00 / 00:00`、附加列拿不到的行不出现 |
 | `test/phase8_overlay_layout_test.dart` | L2 | 浮层不占布局、贴顶贴底、分组分隔线、单行溢出滚动、无 elevation |
 | `test/phase8_context_menu_test.dart` | L2 | 位置 clamp（三边界）、分组渲染、禁用项、选中态琥珀、点击回调、无 elevation |
 | `test/phase8_osd_persistence_test.dart` | L2 | `settings.json` 往返、缺席不写盘、非法值回落、`sync` 段保留、字符串格式兼容 |
 | `test/phase8_app_state_config_test.dart` | L2 | `AppState` 的屏显与按钮配置读写、立即生效、恢复默认 |
 | `test/phase8_osd_layer_test.dart` | L2 | 四角渲染与隐藏条件、控制栏联动、`IgnorePointer`、直播/`duration<=0`、字号与描边 |
-| `test/phase8_button_config_page_test.dart` | L2 | 列出 9 项与分组、开关持久化、恢复默认二次确认、预览行、拖动重排 |
+| `test/phase8_button_config_page_test.dart` | L2 | 列出 8 项与分组、开关持久化、恢复默认二次确认、预览行、拖动重排 |
 | `test/phase8_settings_entries_test.dart` | L2 | 设置页两个入口、7 项开关齐全、`traffic` **可点**（原文「置灰」，能力落地后更正）、切换持久化 |
 | `test/phase8_player_page_overlay_test.dart` | L2 | 四层结构、`AppBar` 保留、四个 tooltip、`IgnorePointer`、右键菜单开关与 `Esc`、按钮配置生效、无 elevation |
 | `integration_test/phase8_overlay_flow_test.dart` | L3 | **视频区几何不变式**、顶栏不占 56px |
@@ -276,7 +276,7 @@ added/removed 配对不变式。**同一个 API 在 widget 测试里可靠、在
 
 | # | 用例 | 层 | 断言 |
 | --- | --- | --- | --- |
-| D1 | `kPlayerButtons` 恰好 9 项 | L1 | 长度 + id 集合 |
+| D1 | `kPlayerButtons` 恰好 8 项 | L1 | 长度 + id 集合 |
 | D2 | 默认顺序 = `prev,play,next,mute,volume,speed,line,episodes,fullscreen` | L1 | 逐项 |
 | D3 | 顺序归一化：非法 id 过滤 | L1 | 结果不含 |
 | D4 | 顺序归一化：去重 | L1 | 无重复 |
@@ -525,7 +525,7 @@ The Metric-Neutral Rule 记录了实测：`bodySmall` 行高 1.33→1.65 会让
 | 2 | 网速屏显 | `PlaybackSpeedMeter` 按秒采样 | **已实现**：双数据源——首选 `demuxer-cache-state` 内解析 `raw-input-rate` 字段，解析不到同拍回退 `cache-speed`；取不到显示 `—`（`02` §3.6） | **更正（两轮）**：①原文写「本轮不实现 / PC 端无字节级吞吐量 / 只覆盖代理流量会误导」，前提错在「media-kit 未暴露吞吐量」——`NativePlayer.getProperty` 能读 mpv 属性，它统计的是播放器输入流，不限于代理流量；②原实现直接读 `raw-input-rate` 也是错的——**它不是属性**（`dart:ffi` 直连 libmpv 实测 `mpv_get_property` 回 `rc = -8`，`property-list` 827 项里没有它），它只是 `demuxer-cache-state` 的 JSON 键，所以必须首选 JSON、回退 `cache-speed`。运行时验证已完成，见 `02` §3.6.4；已知局限随之改写为「仅桌面可用 / 起播首秒短暂 `—` / 是最近一次采样不是流量计」，同在该节 |
 | 3 | 控制栏可见时的强制显示 | 强制显示 标题 + 分辨率 + 时钟 | **只强制时钟** | PC 顶栏已显示标题，重复是噪音（`02` §4.2） |
 | 4 | 按钮配置格式 | 逗号分隔字符串 | JSON 数组（**兼容读字符串**） | PC 已有 JSON 设置文件（`03` §4.2） |
-| 5 | 默认隐藏播种 | 首次运行播种 | **不播种** | PC 端 9 个可配置按钮无默认隐藏项，播种是空操作（`03` §4.5） |
+| 5 | 默认隐藏播种 | 首次运行播种 | **不播种** | PC 端 8 个可配置按钮无默认隐藏项，播种是空操作（`03` §4.5） |
 | 6 | 可配置按钮数 | 32 | **9** | 只保留 PC 端有真实实现的（`03` §3.3） |
 | 7 | 右键菜单 | 无 | **新增** | 桌面专属交互（`04` §2） |
 | 8 | 屏显内边距 | 14dp | `AppSpace.lg` = 16px | 不引入全站第 17 个间距值（`02` §3.4） |
@@ -544,7 +544,7 @@ The Metric-Neutral Rule 记录了实测：`bodySmall` 行高 1.33→1.65 会让
 | --- | --- |
 | `01-overlay-layout.md` | 根因结构对照、V1/V2 实测矩形、**变异验证**（808 vs 900）、`pumpAndSettle` 为何不可用 |
 | `02-osd.md` | 7 项开关源码、落盘原文、控制栏联动矩阵、迷你条裁剪坑、刷新循环观测缝、框架免费覆盖的部分、诊断面板实拍内容 |
-| `03-button-config.md` | 9 个可配置按钮、27 个排除 id、归一化输入/输出对照、`Set` 被静默吞掉、落盘格式、配置页实测、拖动方向差异 |
+| `03-button-config.md` | 8 个可配置按钮、27 个排除 id、归一化输入/输出对照、`Set` 被静默吞掉、落盘格式、配置页实测、拖动方向差异 |
 | `04-context-menu.md` | 为什么必须页内 `Stack`（`Overlay` 拍不到）、**已废弃的旧判据留痕**、位置 clamp 边界值、`Esc` 机制修正与 SDK 引证 |
 | `05-differences.md` | §7 的 9 条差异逐条留痕 + 2 条本轮新增差异 |
 | `windows-acceptance.txt` | 一键验收**完整**原始输出（约 547 KB，含 `dart analyze`、2503 个单测、两套集成、G5/G6/G8/G9/G10/G12 全部子步骤） |

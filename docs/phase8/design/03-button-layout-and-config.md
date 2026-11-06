@@ -43,7 +43,7 @@
 （"不承诺能力范围"）与 `DESIGN.md` 关于筛选按钮的教训（"一个点了什么也没有的按钮
 比没有按钮更糟"）都指向同一条：**不得为了对齐上游而伪造入口**。
 
-### 3.2 保留的按钮（14 个存在，其中 9 个可配置）
+### 3.2 保留的按钮（13 个存在，其中 8 个可配置）
 
 | id | 中文名 | 现状来源 | 默认 | 分组 | **可配置** |
 | --- | --- | --- | --- | --- | --- |
@@ -52,9 +52,8 @@
 | `next` | 下一集 | `2156-2160` | ✅ | 传输 | ✅ |
 | `mute` | 静音 | `2164-2174` | ✅ | 音量 | ✅ |
 | `volume` | 音量滑杆 | `2175-2182` | ✅ | 音量 | ✅ |
-| `speed` | 倍速 | `2184-2202` | ✅ | 速率/线路 | ✅ |
-| `line` | 线路 | `2203-2219` | ✅ | 速率/线路 | ✅ |
-| `episodes` | 剧集 | `2220-2225` | ✅ | 速率/线路 | ✅ |
+| `speed` | 倍速 | `2184-2202` | ✅ | 速率/选集 | ✅ |
+| `episodes` | 剧集 | `2220-2225` | ✅ | 速率/选集 | ✅ |
 | `fullscreen` | 全屏 | `2235-2239` | ✅ | 显示 | ✅ |
 | `subtitle` | 字幕轨 | 顶栏 `1314-1318` | ✅ | 轨道 | ❌ |
 | `danmaku` | 弹幕开关 | 顶栏 `1319-1327` | ✅ | 轨道 | ❌ |
@@ -62,12 +61,16 @@
 | `media_info` | 媒体信息 | 顶栏菜单 `1375-1379` | ✅ | 显示 | ❌ |
 | `diagnostics` | 播放诊断 | 顶栏菜单 `1382-1390` | ✅ | 显示 | ❌ |
 
-**这张表的读法**：14 个是"PC 端存在的按钮"，其中 5 个
+**这张表的读法**：13 个是"PC 端存在的按钮"，其中 5 个
 （`subtitle` / `danmaku` / `video_fit` / `media_info` / `diagnostics`）**不进入
 可配置集合**——它们要么在顶栏常驻（被测试锁定），要么是菜单项。
 
-**`kPlayerButtons` 恰好 9 项**，理由见 §5.3。实现时若按 14 项去做，
-`phase8_player_buttons_test.dart` 的 D1（长度 = 9）会直接失败。
+**`kPlayerButtons` 恰好 8 项**，理由见 §5.3。实现时若按 13 项去做，
+`phase8_player_buttons_test.dart` 的 D1（长度 = 8）会直接失败。
+
+**`line`（线路下拉）已删除**：动作行里那条线路下拉是重复入口——切线路并入了
+选集面板（那一屏本来就要回答「哪条线路的哪一集」）。删除后 `line` 不再属于
+任何集合，老配置里存过的 `line` 会被 `normalizeButtonOrder` 当非法 id 过滤掉。
 
 ### 3.3 明确排除的上游 id（27 个）
 
@@ -89,7 +92,7 @@
 | `player` | 无引擎切换 |
 | `play_params` | 无播放参数面板 |
 | `multi_thread_proxy` | 代理是站点级配置，不是播放器按钮 |
-| `quality` | 无多清晰度（站点给的是线路，已由 `line` 覆盖） |
+| `quality` | 无多清晰度（站点给的是线路，切线路归详情页与选集面板，`line` 也已移除） |
 | `scale` | 画面比例归顶栏菜单与右键菜单（`02` §6、`04` §4.1），不占控制栏按钮位 |
 | `reset` | PC 端的"重置"语义不明确（重置什么？），排除 |
 | `search` | 播放中搜索是独立流程，不在播放器浮层 |
@@ -100,14 +103,16 @@
 | `text` / `audio` / `video` | 轨道选择归顶栏（字幕轨）与右键菜单；PC 端无独立音轨/视频轨选择 UI |
 | `danmaku` | 顶栏常驻（被测试锁定），不参与可配置集合（§5.3） |
 
-**PC 端新增的 4 个 id（上游没有）**：
+**PC 端新增的 3 个 id（上游没有）**：
 
 | id | 中文名 | 为什么上游没有 |
 | --- | --- | --- |
 | `play` | 播放/暂停 | 上游的播放键是**中央大按钮**（`view_control_vod.xml:219-226`），不在动作行里；PC 端把它放进动作行，因为它是最常碰的按钮 |
 | `mute` | 静音 | 上游音量走手势（`PlayerGesture` 的滑动），PC 无手势 |
 | `volume` | 音量滑杆 | 同上 |
-| `line` | 线路 | 上游线路切换在详情页；PC 端播放中切线路是高频动作（`_playEpisode(0, overrideFlag:)` 已实现） |
+
+**PC 端曾有第 4 个新增 id `line`（线路下拉），现已移除**：切线路并入选集面板，
+动作行里不再保留重复入口（见 §3.2 末段）。
 
 **这 27 个的排除理由必须写在代码注释里**，否则后续会有人"顺手补上"。
 `kPlayerButtons` 的文档注释已逐条列出（见实现计划 Task 2）。
@@ -115,7 +120,7 @@
 ### 3.4 默认顺序
 
 ```
-prev, play, next, │ mute, volume, │ speed, line, episodes, │ fullscreen
+prev, play, next, │ mute, volume, │ speed, episodes, │ fullscreen
 ```
 
 与现状一致（`player_page.dart:2144-2239`），**不改变用户已经熟悉的排布**。
@@ -158,7 +163,6 @@ const List<PlayerButtonSpec> kPlayerButtons = [
   PlayerButtonSpec(id: 'mute',       label: '静音',     group: PlayerButtonGroup.volume),
   PlayerButtonSpec(id: 'volume',     label: '音量',     group: PlayerButtonGroup.volume),
   PlayerButtonSpec(id: 'speed',      label: '倍速',     group: PlayerButtonGroup.rate),
-  PlayerButtonSpec(id: 'line',       label: '线路',     group: PlayerButtonGroup.rate),
   PlayerButtonSpec(id: 'episodes',   label: '剧集',     group: PlayerButtonGroup.rate),
   PlayerButtonSpec(id: 'fullscreen', label: '全屏',     group: PlayerButtonGroup.display),
   PlayerButtonSpec(id: 'subtitle',   label: '字幕轨',   group: PlayerButtonGroup.track),
@@ -177,7 +181,7 @@ const List<PlayerButtonSpec> kPlayerButtons = [
 {
   "ui": {
     "playerButtons": {
-      "order": ["play", "prev", "next", "mute", "volume", "speed", "line", "episodes", "fullscreen"],
+      "order": ["play", "prev", "next", "mute", "volume", "speed", "episodes", "fullscreen"],
       "hidden": ["media_info", "diagnostics"]
     }
   }
@@ -186,7 +190,7 @@ const List<PlayerButtonSpec> kPlayerButtons = [
 
 **与上游的差异**：上游用逗号分隔字符串（`"a,b,c"`），PC 端用 **JSON 数组**。
 理由：PC 端已有 JSON 设置文件，数组可读性更好、无需处理转义；
-且 id 里不含逗号（§3.2 的 9 个**可配置** id 全部是下划线/小写字母），两种格式等价。
+且 id 里不含逗号（§3.2 的 8 个**可配置** id 全部是下划线/小写字母），两种格式等价。
 **但必须处理上游格式的兼容**——见 §4.5。
 
 ### 4.3 读取时的归一化（纯函数）
@@ -221,7 +225,7 @@ List<PlayerButtonSpec> resolveVisibleButtons({
 
 | 差异 | 上游 | PC 端 | 理由 |
 | --- | --- | --- | --- |
-| 播种默认隐藏 | 首次运行把 `DEFAULT` 中 `visible=false` 的项写入 `player_button_hidden`（`PlayerButtonSetting.java:220-225`） | **不播种** | PC 端 9 个可配置按钮默认全可见（§3.2），没有默认隐藏项，播种是空操作。保留机制只会引入一个"用户删了隐藏项但它又回来"的困惑 |
+| 播种默认隐藏 | 首次运行把 `DEFAULT` 中 `visible=false` 的项写入 `player_button_hidden`（`PlayerButtonSetting.java:220-225`） | **不播种** | PC 端 8 个可配置按钮默认全可见（§3.2），没有默认隐藏项，播种是空操作。保留机制只会引入一个"用户删了隐藏项但它又回来"的困惑 |
 | 格式 | 逗号分隔字符串 | JSON 数组 | §4.2 |
 
 **兼容性**：如果 `order` 的值是**字符串**（用户从安卓迁移设置，或手改了文件），
@@ -254,7 +258,6 @@ for spec in resolveVisibleButtons(order, hidden):
 | `danmaku` | `IconButton` | `'弹幕（开启）'` / `'弹幕（关闭）'` |
 | `volume` | `SizedBox(width:120, child: Slider)` | 无 |
 | `speed` | `DropdownButton<double>` | 无 |
-| `line` | `DropdownButton<String>` | 无 |
 | `episodes` | `OutlinedButton.icon` | 无 |
 
 **`'字幕轨'` 与 `'弹幕（开启）'` 的处置是本子系统的最大风险点**，见 §5.3。
@@ -273,16 +276,16 @@ for spec in resolveVisibleButtons(order, hidden):
 | `danmaku` | **顶栏常驻** | ❌ |
 | `video_fit` / `media_info` / `diagnostics` | 顶栏「更多」菜单 + 右键菜单 | ❌（菜单项，不是按钮） |
 
-**因此 `kPlayerButtons` 实际只有 9 个可配置项**：
+**因此 `kPlayerButtons` 实际只有 8 个可配置项**：
 
 ```
-prev, play, next, mute, volume, speed, line, episodes, fullscreen
+prev, play, next, mute, volume, speed, episodes, fullscreen
 ```
 
-§3.2 表格里的 14 个是"PC 端存在的按钮"，其中 5 个（`subtitle`/`danmaku`/
+§3.2 表格里的 13 个是"PC 端存在的按钮"，其中 5 个（`subtitle`/`danmaku`/
 `video_fit`/`media_info`/`diagnostics`）**不进入配置集合**。
 
-**这个修正必须同步到 §3.2 的表格与代码注释**，否则实现者会按 14 个去做。
+**这个修正必须同步到 §3.2 的表格与代码注释**，否则实现者会按 13 个去做。
 
 **为什么不把顶栏按钮也做成可配置**：
 
@@ -347,9 +350,8 @@ SingleChildScrollView(
 │ ≡  [✓] 下一集            传输                │
 │ ≡  [✓] 静音              音量                │
 │ ≡  [✓] 音量              音量                │
-│ ≡  [✓] 倍速              速率与线路           │
-│ ≡  [✓] 线路              速率与线路           │
-│ ≡  [✓] 剧集              速率与线路           │
+│ ≡  [✓] 倍速              速率与选集           │
+│ ≡  [✓] 剧集              速率与选集           │
 │ ≡  [✓] 全屏              显示                │
 │                                             │
 │                        [恢复默认]  [完成]    │
@@ -380,8 +382,8 @@ SingleChildScrollView(
 
 | # | 检查项 | 方式 |
 | --- | --- | --- |
-| D1 | `kPlayerButtons` 恰好 9 项，id 与 §5.3 一致 | L1 单测 |
-| D2 | 默认顺序 = §3.4 的 9 项顺序 | L1 单测 |
+| D1 | `kPlayerButtons` 恰好 8 项，id 与 §5.3 一致 | L1 单测 |
+| D2 | 默认顺序 = §3.4 的 8 项顺序 | L1 单测 |
 | D3 | 归一化：非法 id 过滤、去重、缺失项追加到末尾 | L1 单测 |
 | D4 | 归一化：接受 `List` 与逗号分隔 `String` 两种输入 | L1 单测 |
 | D5 | 隐藏集归一化：非法 id 过滤、去重 | L1 单测 |

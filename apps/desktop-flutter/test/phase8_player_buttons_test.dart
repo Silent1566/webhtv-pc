@@ -3,11 +3,11 @@ import 'package:webhtv_pc/core/player_buttons.dart';
 
 void main() {
   group('按钮定义（design/03 §3.2、§5.3）', () {
-    test('恰好 9 项，id 集合精确', () {
-      expect(kPlayerButtons.length, 9);
+    test('恰好 8 项，id 集合精确', () {
+      expect(kPlayerButtons.length, 8);
       expect(
         kPlayerButtons.map((b) => b.id).toList(),
-        ['prev', 'play', 'next', 'mute', 'volume', 'speed', 'line', 'episodes', 'fullscreen'],
+        ['prev', 'play', 'next', 'mute', 'volume', 'speed', 'episodes', 'fullscreen'],
       );
     });
 
@@ -47,7 +47,7 @@ void main() {
 
     test('缺失项追加到末尾（老配置 + 新按钮）', () {
       final order = normalizeButtonOrder(['play', 'prev']);
-      expect(order.length, 9);
+      expect(order.length, 8);
       expect(order[0], 'play');
       expect(order[1], 'prev');
       // 其余按默认顺序补齐在末尾。
@@ -73,8 +73,8 @@ void main() {
       final fromClean = normalizeButtonOrder(['play', 'prev', 'next']);
       expect(fromSpaced, fromClean);
 
-      final hiddenSpaced = normalizeButtonHidden(' speed , line ');
-      expect(hiddenSpaced, {'speed', 'line'});
+      final hiddenSpaced = normalizeButtonHidden(' speed , fullscreen ');
+      expect(hiddenSpaced, {'speed', 'fullscreen'});
 
       // 断言 3 守 **List 分支**的 trim（`_splitIds` 的 `item.trim()`）。
       // 为什么必须单独有这一条：上面两条只喂 String 输入，
@@ -83,7 +83,10 @@ void main() {
         normalizeButtonOrder([' play ', 'prev']),
         normalizeButtonOrder(['play', 'prev']),
       );
-      expect(normalizeButtonHidden([' speed ', 'line']), {'speed', 'line'});
+      expect(
+        normalizeButtonHidden([' speed ', 'fullscreen']),
+        {'speed', 'fullscreen'},
+      );
 
       // 只有空白的项必须被丢弃，而不是变成一个空 id。
       final withBlank = normalizeButtonOrder('play,  ,prev');
