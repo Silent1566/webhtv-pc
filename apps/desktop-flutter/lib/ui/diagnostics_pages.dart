@@ -1,8 +1,11 @@
 /// 设置页、日志页与站点健康页（§17.2 设置页 / 日志页 / 站点健康页）。
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/history_view.dart';
 import '../core/osd_config.dart';
@@ -585,12 +588,33 @@ class LogsPage extends StatefulWidget {
 }
 
 class _LogsPageState extends State<LogsPage> {
+  /// 等宽字体：日志行要对齐，比例字体会让同名列错位。
+  static const TextStyle _mono = TextStyle(
+    fontFamily: 'Consolas',
+    fontFamilyFallback: ['monospace'],
+    fontSize: 12,
+  );
+
   LogLevel? _filter;
+  final TextEditingController _keyword = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _keyword.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  String get _query => _keyword.text.trim().toLowerCase();
 
   @override
   Widget build(BuildContext context) {
-    final entries = widget.state.log.entries
+    final all = widget.state.log.entries;
+    final entries = all
         .where((entry) => _filter == null || entry.level == _filter)
+        .where((entry) => _query.isEmpty || entry.line.toLowerCase().contains(_query))
         .toList()
         .reversed
         .toList();
@@ -619,8 +643,34 @@ class _LogsPageState extends State<LogsPage> {
                 ],
                 onChanged: (value) => setState(() => _filter = value),
               ),
-              const Spacer(),
-              Text('${entries.length} 条'),
+              const SizedBox(width: 20),
+              // 用 `Expanded` 而不是固定宽度：窗口收到最小宽度（1024）时搜索框
+              // 先收缩，工具栏不会溢出。
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 280),
+                    child: TextField(
+                      key: const ValueKey('logs-search'),
+                      controller: _keyword,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: '搜索关键字',
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                entries.length == all.length
+                    ? '${entries.length} 条'
+                    : '${entries.length} / ${all.length} 条',
+              ),
               const SizedBox(width: 12),
               OutlinedButton.icon(
                 onPressed: () async {
@@ -634,41 +684,160 @@ class _LogsPageState extends State<LogsPage> {
                 icon: const Icon(Icons.copy_all_outlined, size: 18),
                 label: const Text('复制全部'),
               ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                key: const ValueKey('logs-download'),
+                onPressed: _busy ? null : _download,
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('下载'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                key: const ValueKey('logs-clear'),
+                onPressed: _busy ? null : _clear,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('清理'),
+              ),
             ],
           ),
         ),
         const Divider(height: 1),
         Expanded(
           child: entries.isEmpty
-              ? const EmptyState(
+              ? EmptyState(
                   icon: Icons.receipt_long_outlined,
-                  title: '暂无日志',
+                  title: all.isEmpty ? '暂无日志' : '没有匹配的日志',
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: entries.length,
-                  itemBuilder: (context, index) {
-                    final entry = entries[index];
-                    return SelectableText(
-                      entry.line,
-                      style: TextStyle(
-                        fontFamily: 'Consolas',
-                        fontFamilyFallback: const ['monospace'],
-                        fontSize: 12,
-                        color: switch (entry.level) {
-                          LogLevel.error => Theme.of(context).colorScheme.error,
-                          LogLevel.warning => Colors.orangeAccent,
-                          LogLevel.info => Theme.of(context).colorScheme.primary,
-                          LogLevel.debug => Theme.of(context).textTheme.bodySmall
-                              ?.color,
-                        },
-                      ),
-                    );
-                  },
+              : Scrollbar(
+                  controller: _scroll,
+                  thumbVisibility: true,
+                  // 整块日志是**一个**可选中文本：跨行拖拽即可选中任意多行，
+                  // 逐行 `SelectableText` 只能选中一行（用户反馈 2026-11-06）。
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                    child: SelectableText.rich(_logSpan(context, entries)),
+                  ),
                 ),
         ),
       ],
     );
+  }
+
+  /// 把当前可见日志拼成一个富文本：按级别着色，搜索命中处加底色。
+  TextSpan _logSpan(BuildContext context, List<LogEntry> entries) {
+    final theme = Theme.of(context);
+    final highlight = theme.colorScheme.primary.withValues(alpha: 0.28);
+    final children = <TextSpan>[];
+    for (var index = 0; index < entries.length; index++) {
+      final entry = entries[index];
+      final style = _mono.copyWith(
+        color: switch (entry.level) {
+          LogLevel.error => theme.colorScheme.error,
+          LogLevel.warning => Colors.orangeAccent,
+          LogLevel.info => theme.colorScheme.primary,
+          LogLevel.debug => theme.textTheme.bodySmall?.color,
+        },
+      );
+      _appendLine(children, entry.line, style, highlight);
+      if (index != entries.length - 1) children.add(const TextSpan(text: '\n'));
+    }
+    return TextSpan(style: _mono, children: children);
+  }
+
+  void _appendLine(
+    List<TextSpan> out,
+    String line,
+    TextStyle style,
+    Color highlight,
+  ) {
+    final needle = _query;
+    final lower = line.toLowerCase();
+    // `toLowerCase` 可能改变长度（如 'İ'），索引就会错位：此时放弃高亮而不是截错字。
+    if (needle.isEmpty || lower.length != line.length) {
+      out.add(TextSpan(text: line, style: style));
+      return;
+    }
+    var cursor = 0;
+    while (true) {
+      final hit = lower.indexOf(needle, cursor);
+      if (hit < 0) break;
+      if (hit > cursor) {
+        out.add(TextSpan(text: line.substring(cursor, hit), style: style));
+      }
+      out.add(
+        TextSpan(
+          text: line.substring(hit, hit + needle.length),
+          style: style.copyWith(backgroundColor: highlight),
+        ),
+      );
+      cursor = hit + needle.length;
+    }
+    if (cursor == 0) {
+      out.add(TextSpan(text: line, style: style));
+    } else if (cursor < line.length) {
+      out.add(TextSpan(text: line.substring(cursor), style: style));
+    }
+  }
+
+  /// 下载目录：优先系统「下载」，取不到时退回日志目录。
+  Future<String> _downloadDirectory() async {
+    try {
+      final downloads = await getDownloadsDirectory();
+      if (downloads != null) return downloads.path;
+    } catch (_) {
+      // 无平台实现（测试/精简构建）时静默降级。
+    }
+    return widget.state.log.directory ?? Directory.systemTemp.path;
+  }
+
+  Future<void> _download() async {
+    setState(() => _busy = true);
+    try {
+      final file = await widget.state.log.exportToDirectory(
+        await _downloadDirectory(),
+      );
+      if (!mounted) return;
+      showToast('日志已导出', detail: file.path, kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showToast('导出日志失败：$error', kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _clear() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清理日志？'),
+        content: const Text('会删除内存中的日志与已落盘的日志文件（含轮转历史），无法撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('logs-clear-confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清理'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.state.log.clear();
+      if (!mounted) return;
+      showToast('日志已清理', kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showToast('清理日志失败：$error', kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
