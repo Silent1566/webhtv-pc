@@ -81,6 +81,26 @@ abstract final class UiThemeMode {
   }
 }
 
+/// 选集视图模式取值：网格 / 列表。
+///
+/// 与 [UiThemeMode] 同一分层理由：存字符串，不依赖 UI 框架。
+/// 默认网格——剧集条目多时网格扫读更快，列表是可选项。
+abstract final class UiEpisodeViewMode {
+  static const String grid = 'grid';
+  static const String list = 'list';
+
+  static const List<String> values = [grid, list];
+
+  /// 默认值：未设置或非法值都回落到网格。
+  static const String fallback = grid;
+
+  /// 把任意输入归一化成合法值；不认识的值回落到默认。
+  static String normalize(String? raw) {
+    final value = raw?.trim().toLowerCase() ?? '';
+    return values.contains(value) ? value : fallback;
+  }
+}
+
 class UiPreferencesStore {
   UiPreferencesStore({required this.path, LogService? log}) : _log = log;
 
@@ -120,6 +140,9 @@ class UiPreferencesStore {
 
   /// 历史记录同名聚合模式。`null` = 从未设置过，用默认 [UiHistoryAggregation.tmdb]。
   String? _historyAggregation;
+
+  /// 选集视图模式。`null` = 从未设置过，用默认 [UiEpisodeViewMode.fallback]。
+  String? _episodeViewMode;
 
   /// 屏显开关的**显式**设置；缺席的 id 用 [defaultOsdFlags] 补齐。
   ///
@@ -244,6 +267,12 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过聚合模式。
   bool get hasExplicitHistoryAggregation => _historyAggregation != null;
+
+  /// 生效的选集视图模式：用户选过就用选的，否则默认网格。
+  String get episodeViewMode => UiEpisodeViewMode.normalize(_episodeViewMode);
+
+  /// 用户是否显式设置过选集视图模式。
+  bool get hasExplicitEpisodeViewMode => _episodeViewMode != null;
 
   /// 生效的屏显开关：显式设置过的项用用户值，其余用默认。
   Map<String, bool> get osdFlags => normalizeOsdFlags(_osdFlags);
@@ -439,6 +468,15 @@ class UiPreferencesStore {
               aggregation.trim().toLowerCase(),
             )) {
               _historyAggregation = aggregation.trim().toLowerCase();
+            }
+          }
+          final viewMode = ui['episodeViewMode'];
+          if (viewMode is String) {
+            // 只接受合法值；手改成别的字符串时回落到默认（网格）。
+            if (UiEpisodeViewMode.values.contains(
+              viewMode.trim().toLowerCase(),
+            )) {
+              _episodeViewMode = viewMode.trim().toLowerCase();
             }
           }
           // 屏显开关：只接受 bool；非法值忽略（该项回落默认）。
@@ -650,6 +688,14 @@ class UiPreferencesStore {
     if (normalized == _historyAggregation) return Future.value(true);
     _historyAggregation = normalized;
     return _persist();
+  }
+
+  /// 记住选集视图模式。非法值归一化为默认（网格）。
+  Future<void> rememberEpisodeViewMode(String mode) async {
+    final normalized = UiEpisodeViewMode.normalize(mode);
+    if (normalized == _episodeViewMode) return;
+    _episodeViewMode = normalized;
+    await _persist();
   }
 
   /// 记住单项屏显开关。非法 id 忽略（不写坏状态）。
@@ -910,6 +956,9 @@ class UiPreferencesStore {
         // 历史聚合：只有显式设置过才写，缺席 = 默认 tmdb（优先 TMDB）。
         final aggregation = _historyAggregation;
         if (aggregation != null) ui['historyAggregation'] = aggregation;
+        // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
+        final viewMode = _episodeViewMode;
+        if (viewMode != null) ui['episodeViewMode'] = viewMode;
         // 屏显：只有显式设置过的项才写（缺席 = 默认）。
         if (_osdFlags.isNotEmpty) ui['osd'] = _osdFlags;
         // 按钮排版：两个键各自独立；都缺席时整个 playerButtons 不写。
