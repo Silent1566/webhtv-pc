@@ -1200,6 +1200,86 @@ class AppDatabase {
     _db.execute('DELETE FROM configs WHERE id = ?;', [id]);
   }
 
+  /// 只改名称/地址，不碰配置内容（`json`、站点数、更新时间都不动）。
+  ///
+  /// 为什么不复用 [saveConfig]：那个方法按 `source_key`/`origin` 去重，
+  /// 改地址时会**查不到原记录**而新插一条，等于用户改个地址就多出一份配置。
+  /// 编辑是「就地修改这一条」，必须按主键 id 直达。
+  ///
+  /// [origin] 为 null 表示只改名。改地址必须调用方先验证成功再传——
+  /// 这里不做网络请求，也不回滚，写完就是新的真相。
+  void updateConfigIdentity(
+    int id, {
+    required String name,
+    String? origin,
+    String? sourceKey,
+  }) {
+    _db.execute('BEGIN IMMEDIATE;');
+    try {
+      if (origin == null) {
+        _db.execute('UPDATE configs SET name=? WHERE id=?;', [name, id]);
+      } else {
+        _db.execute(
+          'UPDATE configs SET name=?, origin=?, source_key=? '
+          'WHERE id=?;',
+          [name, origin, sourceKey ?? LocalSourceKey.of(origin), id],
+        );
+      }
+      _db.execute('COMMIT;');
+    } catch (error) {
+      _db.execute('ROLLBACK;');
+      throw AppError(
+        AppErrorKind.storage,
+        '更新配置记录失败',
+        detail: '$error',
+        cause: error,
+      );
+    }
+  }
+
+  /// 用重新拉取到的内容覆盖同一条记录（刷新）。
+  ///
+  /// 与 [saveConfig] 的区别同样是「按 id 直达」：刷新是让**现有这条**记录
+  /// 换上最新内容，绝不能因为地址变了就另起一条，否则用户每刷新一次列表就
+  /// 长一条。`updated_at` 由这里统一刷新，调用方不必自己算时间。
+  void refreshConfigContent(
+    int id, {
+    required Map<String, Object?> json,
+    required int siteCount,
+    required int liveCount,
+    String? contentType,
+    String? origin,
+    String? sourceKey,
+  }) {
+    _db.execute('BEGIN IMMEDIATE;');
+    try {
+      _db.execute(
+        'UPDATE configs SET json=?, site_count=?, live_count=?, '
+        'content_type=?, origin=COALESCE(?, origin), '
+        'source_key=COALESCE(?, source_key), updated_at=? WHERE id=?;',
+        [
+          jsonEncode(json),
+          siteCount,
+          liveCount,
+          contentType,
+          origin,
+          sourceKey,
+          DateTime.now().millisecondsSinceEpoch,
+          id,
+        ],
+      );
+      _db.execute('COMMIT;');
+    } catch (error) {
+      _db.execute('ROLLBACK;');
+      throw AppError(
+        AppErrorKind.storage,
+        '保存刷新结果失败',
+        detail: '$error',
+        cause: error,
+      );
+    }
+  }
+
   /// 按 `source_key` 查配置记录（桥接源的身份查询）。
   ///
   /// ## 为什么还要按 `origin` 兜底

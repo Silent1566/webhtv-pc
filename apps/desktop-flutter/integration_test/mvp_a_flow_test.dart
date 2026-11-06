@@ -484,6 +484,12 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: ConfigPage(state: state)));
     await tester.pumpAndSettle();
     expect(find.text('配置导入与管理'), findsOneWidget);
+    // 已有配置时导入区默认收起（用户反馈 2026-11-05）：三个导入按钮不再直接
+    // 上屏，必须先点「展开」。这里断言收起后的真实首屏，再验证展开后入口齐全。
+    expect(find.byKey(const ValueKey('config-import-toggle')), findsOneWidget);
+    expect(find.text('选择本地文件'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('config-import-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('选择本地文件'), findsOneWidget);
     expect(find.text('使用仓库 fixture'), findsOneWidget);
     expect(find.textContaining('ui-test'), findsWidgets);
