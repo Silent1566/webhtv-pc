@@ -1,42 +1,179 @@
-/// 跨源历史续播：在**当前播放源**内找一个能接上的站点，并把进度迁移过去。
+/// 跨源历史续播：先用**记录自己那份配置**播，不行才在当前播放源里找替代站点。
 ///
 /// 对应上游安卓 `HistoryResumeCoordinator` + `VodSourceResolver`
-/// （`docs/global-history-resume-design.md` §11、§14），按用户 2026-10-27 的
-/// 决定做了两处**刻意的收窄**：
+/// （`docs/global-history-resume-design.md` §11、§14）与用户 2026-11 的决定：
 ///
-/// 1. **绝不切换当前配置**：找不到可替代站点时只提示用户手动切源，
-///    不擅自 `activateConfigRecord`（那会把用户整个 App 弹到另一个源上）。
-/// 2. **不静默失败**：解析不出目标时给出可执行的动作（打开全局搜索 / 切源），
+/// 1. **原来源优先**：历史记录属于哪个配置，就用那个配置的站点、请求头与解析
+///    规则去播/看详情。**绝不** `activateConfigRecord`——那会把整个 App 弹到
+///    另一个源上；顶栏选中的站点也保持不变。
+/// 2. **失败才回退**：原配置已删除、原配置里没有该站点、播放地址解析失败
+///    这几种情况，先提示原因，再走既有的「在当前源内找替代站点 → 迁移进度」。
+///    播放器已经打开之后的失败不在这里处理（播放器有自己的重试/报错）。
+/// 3. **不静默失败**：解析不出目标时给出可执行的动作（打开全局搜索 / 切源），
 ///    而不是像 v7 那样只弹一句「站点已不在当前配置中」就结束。
 ///
-/// ## 两条路径
+/// ## 入口顺序
 ///
-/// | 入口 | 行为 |
-/// | --- | --- |
-/// | 该记录所属站点**仍在当前配置**里 | 直接走既有续播（切站点 → 解析 → 播放），进度用原记录 |
-/// | 站点已不在当前配置 | 按 TMDB / 片名在当前源内找可替代站点 → 迁移进度 → 播放 |
+/// | 顺序 | 条件 | 行为 |
+/// | --- | --- | --- |
+/// | 1 | 原配置可读且有该站点，点击设置为「播放」 | 用原配置解析 → 直接起播 |
+/// | 2 | 原配置可读且有该站点，点击设置为「详情」 | 用原配置打开详情页（站点/线路/集都来自它） |
+/// | 3 | 原配置缺失 / 无该站点 / 解析失败 | 提示原因 → 当前源内找替代站点 → 迁移进度 |
 ///
-/// 第二条路径找不到高置信候选时**不自动播放**，而是让用户选：
+/// 第 3 步找不到高置信候选时**不自动播放**，而是让用户选：
 /// 「打开全局搜索」或「取消」。这是「宁可不续播，不可错续播」的落地
 /// （`docs/phase6/design/01` §4.1）。
 library;
 
 import 'package:flutter/material.dart';
 
+import '../core/app_error.dart';
 import '../core/history_view.dart';
 import '../core/protocol.dart';
 import '../core/resume_matching.dart';
 import '../core/resume_migration.dart';
+import '../services/proxy_server.dart';
 import '../services/site_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import '../state/playback_source_context.dart';
 import 'browse_pages.dart';
 import 'history_resume_seed.dart';
+import 'player_page.dart';
 import 'search_page.dart';
 import 'toast.dart';
 
-/// 从一条**非当前源**的历史恢复播放。
+/// 从一条**非当前源**的历史恢复播放 / 看详情。
 Future<void> openHistoryFromOtherSource(
+  BuildContext context,
+  AppState state,
+  PlaybackHistory item,
+) async {
+  // 用户设定：点历史是进详情还是直接播。原来源与当前源**同一套语义**。
+  final wantsPlay = state.historyClickAction == UiHistoryClickAction.play;
+
+  // ── 第一步：原配置优先 ──
+  final fallbackReason = await _tryOriginalSource(
+    context,
+    state,
+    item,
+    wantsPlay: wantsPlay,
+  );
+  if (!context.mounted) return;
+  if (fallbackReason == null) return;
+
+  // ── 第二步：原配置不可用 → 提示原因，再走既有的当前源匹配 ──
+  _toast(context, '$fallbackReason，改为在当前播放源中匹配');
+  await _matchInCurrentSource(context, state, item);
+}
+
+/// 尝试用记录自己的配置播放/看详情。
+///
+/// 返回 `null` 表示「已经处理完了（起播或推了详情页）」；返回非空字符串表示
+/// 原来源不可用，字符串是给用户看的原因，调用方据此回退。
+Future<String?> _tryOriginalSource(
+  BuildContext context,
+  AppState state,
+  PlaybackHistory item, {
+  required bool wantsPlay,
+}) async {
+  final sourceContext = state.playbackContextFor(item.sourceKey);
+  if (sourceContext == null) {
+    return '原播放源「${_sourceNameOf(state, item)}」已删除或无法读取';
+  }
+  final site = sourceContext.siteByKey(item.siteKey);
+  if (site == null) {
+    return '原播放源「${_sourceNameOf(state, item)}」里已没有该站点';
+  }
+
+  if (!wantsPlay) {
+    await _openDetailFromSource(context, state, item, sourceContext, site);
+    return null;
+  }
+
+  try {
+    final episodeTarget = restoreHistoryPlaybackTarget(item.episodeId);
+    final decision = await state.resolvePlaybackForSource(
+      sourceKey: sourceContext.sourceKey,
+      siteKey: item.siteKey,
+      episodeTarget: episodeTarget,
+      flag: item.flag,
+      vodId: item.vodId,
+    );
+    if (decision == null || decision.url == null) {
+      return '原播放源「${_sourceNameOf(state, item)}」没有返回可用播放地址';
+    }
+    if (!context.mounted) return null;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerPage(
+          state: state,
+          request: PlaybackRequest(
+            url: decision.url!,
+            episodeTarget: episodeTarget,
+            headers: decision.headers?.asRequestHeaders ?? const {},
+            title: item.vodName,
+            siteKey: item.siteKey,
+            vodId: item.vodId,
+            vodName: item.vodName,
+            episodeName: item.episodeName,
+            flag: item.flag,
+            // 续播后再写进度必须保留同一个入口目标，否则这条历史会被刚解析出的
+            // 可播地址覆盖（下一次续播又失败）。
+            startPosition: Duration(milliseconds: item.positionMs),
+            vodPic: item.vodPic,
+            subtitles: decision.subs,
+            danmaku: decision.danmaku,
+            subtitleHeaders:
+                decision.assetHeaders?.asRequestHeaders ?? const {},
+            // 来源归属：播放器换集、写进度都继续按这份配置走。
+            sourceKey: sourceContext.sourceKey,
+          ),
+        ),
+      ),
+    );
+    return null;
+  } catch (error) {
+    final failure = error is AppError
+        ? error
+        : AppError(AppErrorKind.unknown, '$error', cause: error);
+    return '原播放源「${_sourceNameOf(state, item)}」${failure.userMessage}';
+  }
+}
+
+/// 用原配置打开详情页：站点、线路、集入口都来自那份配置，**不**切生效配置。
+Future<void> _openDetailFromSource(
+  BuildContext context,
+  AppState state,
+  PlaybackHistory item,
+  PlaybackSourceContext sourceContext,
+  Site site,
+) async {
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => DetailPage(
+        state: state,
+        vod: Vod(
+          vodId: item.vodId,
+          vodName: item.vodName,
+          vodPic: item.vodPic,
+        ),
+        historyFlag: item.flag,
+        historyEpisodeId: item.episodeId,
+        resumeSeed: resumeSeedOf(item),
+        sourceContext: sourceContext,
+        sourceSiteKey: site.key,
+      ),
+    ),
+  );
+}
+
+/// 历史来源的可读名称（内部提示用）；不知道名字时不暴露 URL。
+String _sourceNameOf(AppState state, PlaybackHistory item) =>
+    state.historySourceLabel(item.sourceKey) ?? '其他来源';
+
+/// 既有机制：在**当前播放源**内找一个能接上的站点，并把进度迁移过去。
+Future<void> _matchInCurrentSource(
   BuildContext context,
   AppState state,
   PlaybackHistory item,

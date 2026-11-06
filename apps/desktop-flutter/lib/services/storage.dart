@@ -21,6 +21,7 @@ import '../core/following.dart';
 import '../core/protocol.dart';
 import '../core/site_injection.dart';
 import '../core/skip_segments.dart';
+import '../core/source_key.dart';
 import '../core/subtitle_provider.dart';
 
 /// 归一化媒体类型：只认 `movie` / `tv`，其余回空串。
@@ -1059,22 +1060,21 @@ class AppDatabase {
     final now = DateTime.now().millisecondsSinceEpoch;
     _db.execute('BEGIN IMMEDIATE;');
     try {
-      final existing = sourceKey.isEmpty
-          ? _db.select(
-              'SELECT id FROM configs WHERE origin = ? LIMIT 1;',
-              [origin],
-            )
-          : _db.select(
-              'SELECT id FROM configs WHERE source_key = ? LIMIT 1;',
-              [sourceKey],
-            );
+      final existing = _existingConfigIdForWrite(
+        sourceKey: sourceKey,
+        origin: origin,
+      );
       int id;
-      if (existing.isNotEmpty) {
-        id = existing.first['id'] as int;
+      if (existing != null) {
+        id = existing;
         _db.execute(
           'UPDATE configs SET name=?, origin=?, content_type=?, '
           'repository_index=?, repository_entries=?, json=?, site_count=?, '
-          'live_count=?, updated_at=?, source_key=?, bridge_device=?, '
+          'live_count=?, updated_at=?, '
+          // 空 `source_key` 不清掉已有的值：本机源以前存过空串，后来补上了
+          // `local|<origin>`，任何一次「按 origin 覆盖写」都不该把这层身份抹回去。
+          'source_key=COALESCE(NULLIF(?, \'\'), source_key), '
+          'bridge_device=?, '
           'bridge_interface_key=?, bridge_config_url=? WHERE id=?;',
           [
             name,
@@ -1142,6 +1142,33 @@ class AppDatabase {
     }
   }
 
+  /// 写入前的去重查找：给出 [sourceKey] 时按它查，否则按 [origin] 查。
+  ///
+  /// 为什么本机源还要多看一眼 `origin`：老记录的 `source_key` 是空串，光按
+  /// `source_key` 查会把「重新导入同一份配置」变成**新增一条**，用户会在配置
+  /// 列表里看到两份一样的源。
+  ///
+  /// **桥接源绝不按 origin 回退**：同一台设备上的多个源 origin 全是设备网关
+  /// 地址，按它兜底会让第二个源覆盖掉第一个（`saveConfig` 注释里记过的坑）。
+  int? _existingConfigIdForWrite({
+    required String sourceKey,
+    required String origin,
+  }) {
+    if (sourceKey.isNotEmpty) {
+      final byKey = _db.select(
+        'SELECT id FROM configs WHERE source_key = ? LIMIT 1;',
+        [sourceKey],
+      );
+      if (byKey.isNotEmpty) return byKey.first['id'] as int;
+      if (!parseSourceKey(sourceKey).isLocal) return null;
+    }
+    final byOrigin = _db.select(
+      'SELECT id FROM configs WHERE origin = ? LIMIT 1;',
+      [origin],
+    );
+    return byOrigin.isEmpty ? null : byOrigin.first['id'] as int;
+  }
+
   List<ConfigRecord> listConfigs() {
     final rows = _db.select(
       'SELECT * FROM configs ORDER BY updated_at DESC;',
@@ -1174,13 +1201,33 @@ class AppDatabase {
   }
 
   /// 按 `source_key` 查配置记录（桥接源的身份查询）。
+  ///
+  /// ## 为什么还要按 `origin` 兜底
+  ///
+  /// 早期版本导入**本机配置**时没有写 `source_key`（那一列是加法式加的），
+  /// 但历史行的 `source_key` 一直是按「本机源 = `local|<origin>`」推导写入的。
+  /// 于是老数据上 `configs.source_key` 是空串、历史里却是 `local|http://…`，
+  /// 两边永远对不上——用户看到的表现就是来源标成「其他来源」、点进去还被告知
+  /// 「原播放源已删除」（用户 2026-11 反馈）。
+  ///
+  /// 所以这里在精确查询落空后，用 `local|<origin>` 反解 origin 再查一次。
+  /// 只对**本机源**这样做：桥接源多个配置共用一个设备 origin，按 origin 兜底
+  /// 会把它们混成一个（那正是 `saveConfig` 注释里记过的坑）。
   ConfigRecord? configBySourceKey(String sourceKey) {
-    if (sourceKey.isEmpty) return null;
+    final key = sourceKey.trim();
+    if (key.isEmpty) return null;
     final rows = _db.select(
       'SELECT * FROM configs WHERE source_key = ? LIMIT 1;',
-      [sourceKey],
+      [key],
     );
-    return rows.isEmpty ? null : ConfigRecord.fromRow(rows.first);
+    if (rows.isNotEmpty) return ConfigRecord.fromRow(rows.first);
+    final parsed = parseSourceKey(key);
+    if (!parsed.isLocal) return null;
+    final byOrigin = _db.select(
+      'SELECT * FROM configs WHERE origin = ? LIMIT 1;',
+      [parsed.origin],
+    );
+    return byOrigin.isEmpty ? null : ConfigRecord.fromRow(byOrigin.first);
   }
 
   /// 站点状态：只保存 header 键名，不保存值（§16.3 敏感 Header 不明文入库）。
