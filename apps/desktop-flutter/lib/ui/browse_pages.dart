@@ -2019,6 +2019,10 @@ class _DetailPageState extends State<DetailPage> {
             : -1,
         episodeNumber: _tmdbEpisodeNumberOf(episode),
       );
+      // 选集卡片数据（阶段 A）：与 [_buildEpisodes] 的 `cards` 用**同一套构造**，
+      // 否则播放器浮层里的卡片会与详情页选集对不上——两者都按「当前季度过滤 →
+      // 可能倒序 → 按原始线路下标推断缺号集编号」得出，任一环节走样都会错位。
+      final episodeCards = _episodeCardsForPlayback(vod, line);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -2042,6 +2046,7 @@ class _DetailPageState extends State<DetailPage> {
               playLines: _linesOf(vod),
               // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
               lineRoutes: _externalRoutes,
+              episodeCards: episodeCards,
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
               startPosition: resume,
@@ -2891,6 +2896,37 @@ class _DetailPageState extends State<DetailPage> {
       indices.add(index);
     }
     return indices;
+  }
+
+  /// 交给播放器的剧集卡片（阶段 A：详情页 → 浮层的卡片数据通路）。
+  ///
+  /// 构造规则必须与 [_buildEpisodes] 里的 `cards` **逐条一致**，否则卡片与集对不上：
+  /// - 集列表取 `_renderEpisodes(rawLine, active: true)`（当前季度过滤后的渲染集）；
+  /// - 尊重页面的倒序开关（用户看到的第 0 张必须就是播放器里的第 0 张）；
+  /// - 缺号集的集号按**原始线路**下标推断（`sourceIndices`），不能用渲染下标。
+  ///
+  /// 只在**当前线路**上给卡片：季度元数据是线路级的（`04` §4.3），把它套到另一条
+  /// 线路的集上会串图串集（`_renderEpisodes` 的 `active: false` 分支正是为此存在）。
+  /// 换源续播会拿新并入的外部线路直接开播，那条线路此刻不一定被选中——此时返回
+  /// 空列表，比给出一份对不上的卡片诚实。
+  ///
+  /// 没有 TMDB 数据（未匹配/不属于本页影片）时同样返回空列表：宁可没有卡片，
+  /// 也不得用占位图或假简介冒充（`PRODUCT.md` §Product Principles 第 5 条）。
+  List<TmdbEpisodeCard> _episodeCardsForPlayback(Vod vod, VodPlayLine rawLine) {
+    final tmdb = _ownedTmdb;
+    if (tmdb == null) return const [];
+    if (_activeLine(_linesOf(vod)).flag != rawLine.flag) return const [];
+    // `_buildEpisodes` 的 `sourceIndices` 取自 TMDB 应用元数据**之后**的线路集，
+    // 这里必须用同一个来源，否则同一个缺号集会被算出两个集号。
+    final enriched = tmdb.applyEpisodesToLine(rawLine).line;
+    final episodes = _renderEpisodes(rawLine, active: true);
+    final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
+    return tmdb.episodeCardsForEpisodes(
+      ordered,
+      seasonNumber: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
+      includeMetadata: true,
+      sourceIndices: _sourceEpisodeIndices(enriched.episodes, ordered),
+    );
   }
 
   /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。

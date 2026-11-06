@@ -143,13 +143,13 @@ void main() {
       final store = UiPreferencesStore(path: settingsPath);
       await store.load();
       await store.rememberButtonOrder(['next', 'play', 'prev']);
-      await store.rememberButtonHidden({'speed', 'line'});
+      await store.rememberButtonHidden({'speed', 'fullscreen'});
 
       final reloaded = UiPreferencesStore(path: settingsPath);
       await reloaded.load();
       expect(reloaded.buttonOrder.take(3).toList(), ['next', 'play', 'prev']);
-      expect(reloaded.buttonOrder.length, 9, reason: '缺失项补全到末尾');
-      expect(reloaded.buttonHidden, {'speed', 'line'});
+      expect(reloaded.buttonOrder.length, 8, reason: '缺失项补全到末尾');
+      expect(reloaded.buttonHidden, {'speed', 'fullscreen'});
       expect(reloaded.hasExplicitPlayerButtons, isTrue);
     });
 
@@ -180,17 +180,17 @@ void main() {
     test('只设置 hidden 时 order 键缺席（null-aware 值的真实分支）', () async {
       final store = UiPreferencesStore(path: settingsPath);
       await store.load();
-      await store.rememberButtonHidden({'speed', 'line'});
+      await store.rememberButtonHidden({'speed', 'fullscreen'});
 
       final raw = readRaw();
       final pb = (raw['ui'] as Map)['playerButtons'] as Map;
       expect(pb.containsKey('order'), isFalse, reason: 'order 为 null 时必须缺席');
-      expect(pb['hidden'], ['line', 'speed'], reason: 'hidden 落盘时排序');
+      expect(pb['hidden'], ['fullscreen', 'speed'], reason: 'hidden 落盘时排序');
 
       final reloaded = UiPreferencesStore(path: settingsPath);
       await reloaded.load();
       expect(reloaded.hasExplicitPlayerButtons, isTrue);
-      expect(reloaded.buttonHidden, {'speed', 'line'});
+      expect(reloaded.buttonHidden, {'speed', 'fullscreen'});
       expect(reloaded.buttonOrder, defaultButtonOrder(), reason: '缺席 = 默认顺序');
     });
 
@@ -199,7 +199,7 @@ void main() {
     // 为什么必须有这一条：`buttonOrder` getter 自己会补全缺失项，
     // 所以只断言 getter 分不清「写盘时补全」与「读取时补全」——
     // 变异测试实测确认：去掉 `rememberButtonOrder` 的补全，用例仍绿。
-    test('写入时即补全缺失项（文件里的 order 长度就是 9）', () async {
+    test('写入时即补全缺失项（文件里的 order 长度就是 8）', () async {
       final store = UiPreferencesStore(path: settingsPath);
       await store.load();
       await store.rememberButtonOrder(['next', 'play']);
@@ -207,7 +207,7 @@ void main() {
       final raw = readRaw();
       final pb = (raw['ui'] as Map)['playerButtons'] as Map;
       final persisted = (pb['order'] as List).cast<String>();
-      expect(persisted.length, 9, reason: '落盘的必须是补全后的完整顺序');
+      expect(persisted.length, 8, reason: '落盘的必须是补全后的完整顺序');
       expect(persisted.take(2).toList(), ['next', 'play']);
       expect(persisted.toSet(), defaultButtonOrder().toSet());
     });
