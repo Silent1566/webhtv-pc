@@ -2965,7 +2965,11 @@ class _DetailPageState extends State<DetailPage> {
   Map<String, List<TmdbEpisodeCard>> _episodeCardsByFlag(Vod vod) {
     final tmdb = _ownedTmdb;
     if (tmdb == null) return const {};
-    final lines = _linesOf(vod);
+    // 用 [_playableLines] 而不是 [_linesOf]：导航源的站源线路不可播放（用户
+    // 反馈 2026-10-22），它既不会成为播放目标、也不该出现在播放器的卡片映射里。
+    // 若用它，`activeFlag` 会落在站源线路上（`lines.first`），播放器面板据此
+    // 判定「当前线路」，与真正播放的那条外部线路不一致。
+    final lines = _playableLines(vod);
     if (lines.isEmpty) return const {};
     final activeFlag = _activeLine(lines).flag;
     final seasonNumber = tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null;
