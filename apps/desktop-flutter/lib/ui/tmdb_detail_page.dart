@@ -20,6 +20,7 @@ import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
+import '../services/ui_preferences_store.dart';
 import 'common.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_widgets.dart';
@@ -35,6 +36,8 @@ class TmdbDetailPage extends StatefulWidget {
     this.onOpenVideo,
     this.onCopyVideo,
     this.onOpenItem,
+    this.initialViewMode = UiEpisodeViewMode.fallback,
+    this.onViewModeChanged,
   });
 
   final TmdbService service;
@@ -55,6 +58,16 @@ class TmdbDetailPage extends StatefulWidget {
   /// 相关推荐 / 人物作品点击（默认在当前页内继续打开 TMDB 详情）。
   final ValueChanged<TmdbItem>? onOpenItem;
 
+  /// 选集视图模式的**初值**（`grid` / `list`，已归一化）。
+  ///
+  /// 本页不持有 `AppState`（构造参数只有 `service` / `identity` / 若干回调），
+  /// 按同一条依赖注入风格，偏好由调用方读出来传进来、切换时通过
+  /// [onViewModeChanged] 回调出去写盘——页面自己不认识偏好存储。
+  final String initialViewMode;
+
+  /// 视图模式切换回调（调用方写回偏好，`AppState.setEpisodeViewMode`）。
+  final ValueChanged<String>? onViewModeChanged;
+
   @override
   State<TmdbDetailPage> createState() => _TmdbDetailPageState();
 }
@@ -69,7 +82,13 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   int _selectedSeason = -1;
   List<int> _tmdbSeasons = const [];
   bool _episodesReversed = false;
-  bool _episodeGridMode = false;
+
+  /// 剧集是否网格模式，初值来自调用方给的偏好。
+  ///
+  /// `late` 初始化器在 `initState` 之后才求值，因此能读 `widget`
+  /// （与站点详情页同一写法）。
+  late bool _episodeGridMode =
+      widget.initialViewMode == UiEpisodeViewMode.grid;
 
   int _generation = 0;
   bool _disposed = false;
@@ -313,8 +332,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
         gridMode: _episodeGridMode,
         onToggleReversed: () =>
             setState(() => _episodesReversed = !_episodesReversed),
-        onToggleGridMode: () =>
-            setState(() => _episodeGridMode = !_episodeGridMode),
+        onToggleGridMode: _toggleEpisodeGridMode,
         // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
         episodeActionLabel: '搜索站源',
         episodeCards: _episodeCards,
@@ -333,6 +351,18 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 切换「列表 / 网格」，并把新值交给调用方写回偏好。
+  ///
+  /// 本页自己没有偏好存储（见 [TmdbDetailPage.initialViewMode]）：先本地生效，
+  /// 再回调写盘，两者顺序不能反过来——写盘是异步的，等它回来再切换会让点击有延迟感。
+  void _toggleEpisodeGridMode() {
+    final next = !_episodeGridMode;
+    setState(() => _episodeGridMode = next);
+    widget.onViewModeChanged?.call(
+      next ? UiEpisodeViewMode.grid : UiEpisodeViewMode.list,
     );
   }
 
@@ -366,6 +396,12 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
           onOpenVideo: widget.onOpenVideo,
           onCopyVideo: widget.onCopyVideo,
           onOpenItem: widget.onOpenItem,
+          // 页内继续打开下一部作品时沿用当前视图模式，并把写盘能力继续往下传：
+          // 否则用户在二级页切换后偏好不会落盘，返回后又被初值覆盖。
+          initialViewMode: _episodeGridMode
+              ? UiEpisodeViewMode.grid
+              : UiEpisodeViewMode.list,
+          onViewModeChanged: widget.onViewModeChanged,
         ),
       ),
     );

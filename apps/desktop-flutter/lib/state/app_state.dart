@@ -1622,6 +1622,23 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     return ok;
   }
 
+  /// 选集视图模式（[UiEpisodeViewMode]）：`grid` 网格 / `list` 列表。
+  ///
+  /// 全局一份，两个详情页（浏览页与 TMDB 详情页）共享；默认网格。
+  /// `_uiPreferences` 为 null（未 bootstrap）时退回默认，不让详情页崩。
+  String get episodeViewMode =>
+      _uiPreferences?.episodeViewMode ?? UiEpisodeViewMode.grid;
+
+  /// 持久化选集视图模式；归一化由 store 负责。
+  ///
+  /// 未装配偏好（单测未 bootstrap）时安静跳过，不抛异常。
+  Future<void> setEpisodeViewMode(String mode) async {
+    final store = _uiPreferences;
+    if (store == null) return;
+    await store.rememberEpisodeViewMode(mode);
+    notifyListeners();
+  }
+
   /// 当前生效配置的来源标识（见 `core/source_key.dart`）。
   ///
   /// 桥接源为 `bridge|<deviceUuid>|<interfaceKey>`，本地导入为
@@ -2102,6 +2119,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
+      navSource: site.indexs == 1,
     );
   }
 
@@ -4107,6 +4125,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
+      // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；其余站点一律
+      // 按普通站点加载，TMDB 区块行为与以前逐字一致。
+      navSource: site.indexs == 1,
     );
     notifyListeners();
     try {
@@ -4186,6 +4207,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
           siteName: site.name,
           configId: tmdbConfigId,
           lines: playLinesOf(effective),
+          navSource: site.indexs == 1,
         ),
       );
       log.info(

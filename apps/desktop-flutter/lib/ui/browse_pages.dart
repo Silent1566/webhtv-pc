@@ -21,6 +21,7 @@ import '../core/tmdb_title.dart';
 import '../services/ai_episode_season_service.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
+import '../services/ui_preferences_store.dart';
 import '../state/app_state.dart';
 import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
@@ -1256,7 +1257,12 @@ class _DetailPageState extends State<DetailPage> {
   bool _episodesReversed = false;
 
   /// 剧集是否网格模式（对齐上游 `@id/episodeViewMode`）。
-  bool _episodeGridMode = false;
+  ///
+  /// 初值取用户偏好（`UiEpisodeViewMode`，默认网格）：这是「上次怎么看的，
+  /// 这次还怎么看」的记忆，不再是每次进详情页都重置的临时状态。
+  /// 用 `late` 初始化器是为了能读 `widget`——它在 `initState` 之后才求值。
+  late bool _episodeGridMode =
+      widget.state.episodeViewMode == UiEpisodeViewMode.grid;
 
   /// 选集区间下标（`docs/phase6/design/03` §4.4）。
   ///
@@ -1272,6 +1278,12 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 上一次渲染时的季度序号，用于检测切季（`design/03` §5.1）。
   int _lastSeasonEpoch = -1;
+
+  /// 已触发过「按季聚合」的「作品 + 代际」键（导航源全集摊平用）。
+  ///
+  /// 记键而不是记 bool：换作品/重新加载会推进 `TmdbState.generation`，那时必须
+  /// 再拉一次；同一代际内重复触发只是白打一串季节请求。
+  String _aggregateRequestKey = '';
 
   /// 换源并入的**外部线路**（页面级临时状态）。
   ///
@@ -1336,6 +1348,18 @@ class _DetailPageState extends State<DetailPage> {
     ..._externalLines,
   ];
 
+  /// 本页**真正可渲染、可播放**的线路。
+  ///
+  /// 导航源（`indexs == 1`）的站源线路只是索引条目（例如「片单（4 集）」），
+  /// 站源在那一侧没有播放入口。用户反馈 2026-10-22：换源后线路条把这条
+  /// 不可播放的线路也一并列了出来，点它只会得到「这一集没有可播放的地址」。
+  /// 既然导航源的站源集数信息本来就一律丢弃，它也不该出现在线路条上——
+  /// 因此导航源只认换源并入的外部线路。
+  ///
+  /// 普通站点仍是「原线路 + 外部线路」，与 [_linesOf] 完全一致。
+  List<VodPlayLine> _playableLines(Vod vod) =>
+      _pageSite?.indexs == 1 ? [..._externalLines] : _linesOf(vod);
+
   /// **渲染归属门**：保留的 TMDB 数据是否属于本页影片。
   ///
   /// 为什么需要：`AppState.clearDetail()` 不再清 TMDB（否则第二次进同一部剧必然先
@@ -1353,6 +1377,14 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 属于本页影片的 TMDB 状态；`null` 表示按「无 TMDB」渲染。
   TmdbState? get _ownedTmdb => _tmdbOwnsThisPage ? widget.state.tmdb : null;
+
+  /// 是否走「导航源」的极简选集路径：本页站点是导航源（`indexs == 1`），
+  /// 且用户**还没有换源**。
+  ///
+  /// 换源并入外部线路后判据自然失效（[_externalLines] 非空），页面回到既有的
+  /// 「线路条 + 该线路的集」——那时才有真实线路与真实集可播（用户决策 5）。
+  /// 导航源本身没有播放线路（用户原话：「实际也没有播放线路」）。
+  bool get _navSourceMode => _pageSite?.indexs == 1 && _externalLines.isEmpty;
 
   @override
   void initState() {
@@ -1939,7 +1971,7 @@ class _DetailPageState extends State<DetailPage> {
     VodPlayLine rawLine,
     List<VodEpisode> ordered,
   ) {
-    final lines = _linesOf(vod);
+    final lines = _playableLines(vod);
     final target = _resumeTarget(lines);
     if (!target.matched) return -1;
     if (rawLine.flag != target.flag) return -1;
@@ -2044,7 +2076,7 @@ class _DetailPageState extends State<DetailPage> {
               episodeName: episode.name,
               flag: line.flag,
               playbackFlag: line.playbackFlag,
-              playLines: _linesOf(vod),
+              playLines: _playableLines(vod),
               // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
               lineRoutes: _externalRoutes,
               episodeCardsByFlag: episodeCardsByFlag,
@@ -2282,7 +2314,8 @@ class _DetailPageState extends State<DetailPage> {
     //   一起比；只在外部线路不少于当前线路时才切，全部更少就保持用户原来的
     //   选择，不做无谓跳动。
     // - 有意图（刚有一集播失败了）：必须落到外部线路上，见下。
-    final lines = _linesOf(vod);
+    // 导航源例外：站源线路不可播放，不参与选线（见 [_playableLines]）。
+    final lines = _playableLines(vod);
     final VodPlayLine best;
     if (_pendingResumeEpisode >= 0 && _externalLines.isNotEmpty) {
       // 有续播意图时，选中的线路与播的集必须是**同一条**，且必须是外部线路：
@@ -2440,7 +2473,8 @@ class _DetailPageState extends State<DetailPage> {
         result.list.first.vodId == widget.vod.vodId;
     final vod = belongs ? result.list.first : widget.vod;
     // 原线路 + 换源并入的外部线路（外部恒在后，见 [_linesOf]）。
-    final lines = _linesOf(vod);
+    // 导航源例外：站源线路不可播放，不进线路条（见 [_playableLines]）。
+    final lines = _playableLines(vod);
     // 详情到达后自动切到历史线路（`docs/phase6/design/02` §4、§4.1）。
     //
     // 为什么在 build 里而不是 initState：详情请求在页面挂载后才完成，
@@ -2646,7 +2680,9 @@ class _DetailPageState extends State<DetailPage> {
                       // `语言` 已进 hero 标签行，两行都不剩，空表不再渲染。
                       const SizedBox(height: 12),
                       // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
-                      if (owned)
+                      // 导航源例外：卡片是全季一次性摊平的，切季没有意义
+                      // （用户决策 6「不显示季度切换器」）。
+                      if (owned && !_navSourceMode)
                         TmdbSeasonSelector(
                           state: tmdb,
                           onChanged: (season) {
@@ -2669,7 +2705,13 @@ class _DetailPageState extends State<DetailPage> {
                           ),
                         ),
                       const Divider(height: 32),
-                      if (loading && lines.isEmpty)
+                      // 导航源模式**整段跳过**线路条、「没有可播放的剧集」提示与
+                      // 清空外部线路按钮（用户决策 4：导航站进来不显示线路，
+                      // 实际也没有播放线路），改渲染 TMDB 全集卡片。
+                      // 非导航源模式走下面原样的两条分支，行为一字不改。
+                      if (_navSourceMode)
+                        _buildNavSourceEpisodes(context, _ownedTmdb)
+                      else if (loading && lines.isEmpty)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 24),
                           child: LoadingBlock(),
@@ -2679,7 +2721,7 @@ class _DetailPageState extends State<DetailPage> {
                           state.detailError?.userMessage ??
                               '该影片没有可播放的剧集（vod_play_url 为空）。',
                         ),
-                      if (lines.isNotEmpty) ...[
+                      if (!_navSourceMode && lines.isNotEmpty) ...[
                         // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
                         // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
                         TmdbLineSelector(
@@ -2923,7 +2965,11 @@ class _DetailPageState extends State<DetailPage> {
   Map<String, List<TmdbEpisodeCard>> _episodeCardsByFlag(Vod vod) {
     final tmdb = _ownedTmdb;
     if (tmdb == null) return const {};
-    final lines = _linesOf(vod);
+    // 用 [_playableLines] 而不是 [_linesOf]：导航源的站源线路不可播放（用户
+    // 反馈 2026-10-22），它既不会成为播放目标、也不该出现在播放器的卡片映射里。
+    // 若用它，`activeFlag` 会落在站源线路上（`lines.first`），播放器面板据此
+    // 判定「当前线路」，与真正播放的那条外部线路不一致。
+    final lines = _playableLines(vod);
     if (lines.isEmpty) return const {};
     final activeFlag = _activeLine(lines).flag;
     final seasonNumber = tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null;
@@ -2982,15 +3028,7 @@ class _DetailPageState extends State<DetailPage> {
           );
 
     // 切季 → 区间回到该季第一集所在区间（`docs/phase6/design/03` §5.1）。
-    //
-    // 用季度序号检测而不是回调链：`build` 会被多次通知触发，回调容易
-    // 在时序上漏掉或多触发。
-    final seasonEpoch = tmdb?.seasonEpoch ?? -1;
-    if (_lastSeasonEpoch != seasonEpoch) {
-      _lastSeasonEpoch = seasonEpoch;
-      _rangeIndex = 0;
-      _manualRange = false;
-    }
+    _resetRangeOnSeasonChange(tmdb);
 
     // 区间分组（`docs/phase6/design/03` §4.1）。
     //
@@ -3020,8 +3058,7 @@ class _DetailPageState extends State<DetailPage> {
           lineName: rawLine.displayName,
           onToggleReversed: () =>
               setState(() => _episodesReversed = !_episodesReversed),
-          onToggleGridMode: () =>
-              setState(() => _episodeGridMode = !_episodeGridMode),
+          onToggleGridMode: _toggleEpisodeGridMode,
         ),
         // 剧集海报卡片：本线路**唯一**的选集入口（用户反馈 2026-10-08：
         // 有卡片时不再渲染文字版集按钮，二者取其一）。
@@ -3099,6 +3136,224 @@ class _DetailPageState extends State<DetailPage> {
     return number > 0 ? number : fallback;
   }
 
+  /// 切季时把区间回到该季第一集所在区间（`docs/phase6/design/03` §5.1）。
+  ///
+  /// 用季度序号检测而不是回调链：`build` 会被多次通知触发，回调容易
+  /// 在时序上漏掉或多触发。
+  void _resetRangeOnSeasonChange(TmdbState? tmdb) {
+    final seasonEpoch = tmdb?.seasonEpoch ?? -1;
+    if (_lastSeasonEpoch == seasonEpoch) return;
+    _lastSeasonEpoch = seasonEpoch;
+    _rangeIndex = 0;
+    _manualRange = false;
+  }
+
+  /// 切换「列表 / 网格」并把新值写回偏好。
+  ///
+  /// 只改本页状态、不写盘的话，用户的选择活不过一次返回；
+  /// `AppState.setEpisodeViewMode` 内部已做归一化与 notify + 落盘。
+  void _toggleEpisodeGridMode() {
+    final next = !_episodeGridMode;
+    setState(() => _episodeGridMode = next);
+    unawaited(
+      widget.state.setEpisodeViewMode(
+        next ? UiEpisodeViewMode.grid : UiEpisodeViewMode.list,
+      ),
+    );
+  }
+
+  /// 导航源选集区：卡片**只**来自 TMDB，站源的集名/集数/顺序一律不参与。
+  ///
+  /// 卡片 key 前缀另起 `tmdb-episode-card-nav-` 命名空间：既有集成门禁按
+  /// `tmdb-episode-card-<线路 flag>-` 前缀数卡来断言「不补集/不丢集」，两条
+  /// 路径的口径必须彻底隔开。
+  Widget _buildNavSourceEpisodes(BuildContext context, TmdbState? tmdb) {
+    // TMDB 未配置 / 未匹配：给一句说明 + 换源入口，**不**回退渲染站源集卡片
+    // （用户决策 7：站源没有可播地址，渲染出来只会误导）。
+    if (tmdb == null || !tmdb.hasMatch) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('该站点是导航源，只提供索引，不提供可直接播放的剧集。'),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('nav-source-swap-empty'),
+            onPressed: _openSourceSwap,
+            icon: const Icon(Icons.swap_horiz, size: 16),
+            label: const Text('换源'),
+          ),
+        ],
+      );
+    }
+    if (tmdb.episodesBySeason.isEmpty) {
+      // 聚合是**显式触发**的补充加载（`TmdbState` 不会自动调）：本帧先转圈，
+      // 聚合到达后 `notifyListeners` 会重建本页。
+      _ensureAllSeasonEpisodes(tmdb);
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: LoadingBlock(),
+      );
+    }
+    // 全部季一次性摊平：季号升序、季内集号升序（用户决策 6：铺出 TMDB 全部季
+    // 的全部集，不按季分组渲染）。
+    final seasons = tmdb.episodesBySeason.keys.toList()..sort();
+    final episodes = <TmdbEpisode>[
+      for (final season in seasons)
+        ...(tmdb.episodesBySeason[season]!.toList()
+          ..sort((a, b) => a.number.compareTo(b.number))),
+    ];
+    final cards = TmdbEpisodeCards.fromMetadata(episodes);
+    final ordered = _episodesReversed ? cards.reversed.toList() : cards;
+    // 没有季度切换器，也就没有「切季重置区间」；焦点固定在首页区间。
+    final ranges = _navRangeLabels(
+      ordered,
+      EpisodeRangePolicy.build(
+        ordered.length,
+        _manualRange
+            ? _rangeIndex * EpisodeRangePolicy.groupSize(ordered.length)
+            : 0,
+        _episodesReversed,
+      ),
+    );
+    final rangeIndex = _manualRange
+        ? _rangeIndex.clamp(0, ranges.length - 1)
+        : EpisodeRangePolicy.selectedPosition(ranges);
+    final base = 'nav-${widget.vod.vodId}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TmdbEpisodeHeader(
+          episodeCount: cards.length,
+          reversed: _episodesReversed,
+          gridMode: _episodeGridMode,
+          // 没有线路可言：`lineName` 留空（用户决策 4）。
+          onToggleReversed: () =>
+              setState(() => _episodesReversed = !_episodesReversed),
+          onToggleGridMode: _toggleEpisodeGridMode,
+        ),
+        TmdbEpisodeStrip(
+          key: ValueKey('tmdb-episode-strip-$base'),
+          cards: ordered,
+          keyPrefix: 'tmdb-episode-card-$base',
+          actionLabel: '换源播放',
+          cardWidth: _episodeCardWidth(context, ordered.length),
+          gridMode: _episodeGridMode,
+          ranges: ranges,
+          rangeIndex: rangeIndex,
+          onRangeChanged: (index) => setState(() {
+            _rangeIndex = index;
+            _manualRange = true;
+          }),
+          // 全部卡片都可点（用户决策 3）：导航源没有可播地址，点击只是换源的
+          // 入口，因此不把任何一张置灰。
+          //
+          // 「最近播放」标记不传：历史存的是**线路集下标**，卡片是 TMDB 摊平序，
+          // 两者不同构，按位置标注会在多季剧上标错卡。
+          onTap: (_, card) => unawaited(_showNavSourceSwapDialog(card)),
+        ),
+      ],
+    );
+  }
+
+  /// 导航源卡片的区间标签：用卡片自身的 TMDB 集号修正（与 [_rangeLabels] 同一
+  /// 目的）。跨季后集号会从 1 重新开始，取不到（`<= 0`）时退回下标口径。
+  List<EpisodeRange> _navRangeLabels(
+    List<TmdbEpisodeCard> ordered,
+    List<EpisodeRange> ranges,
+  ) {
+    final corrected = <EpisodeRange>[];
+    for (final range in ranges) {
+      final slice = EpisodeRangePolicy.slice(ordered, range);
+      if (slice.isEmpty) {
+        corrected.add(range);
+        continue;
+      }
+      final first = _cardNumberOr(slice.first, range.start + 1);
+      final last = _cardNumberOr(slice.last, range.end);
+      corrected.add(
+        EpisodeRange(
+          label: first == last ? '$first' : '$first-$last',
+          start: range.start,
+          end: range.end,
+          selected: range.selected,
+        ),
+      );
+    }
+    return corrected;
+  }
+
+  /// 卡片的 TMDB 集号；解析不出（0）时退回 [fallback]（列表下标口径）。
+  int _cardNumberOr(TmdbEpisodeCard card, int fallback) =>
+      card.number > 0 ? card.number : fallback;
+
+  /// 触发「按季聚合」，同一代际只触发一次。
+  ///
+  /// 不在 `build` 里 `await`：聚合要逐季多打几次请求，等它等于让选集区先空着。
+  void _ensureAllSeasonEpisodes(TmdbState tmdb) {
+    final key = '${tmdb.vodId}#${tmdb.generation}';
+    if (key == _aggregateRequestKey) return;
+    _aggregateRequestKey = key;
+    unawaited(tmdb.ensureAllSeasonEpisodes(generation: tmdb.generation));
+  }
+
+  /// 导航源卡片的点击：先弹出「需要换源」说明，确认后才打开换源浮层。
+  ///
+  /// 卡片不可直接播（用户决策 3）：导航源只提供索引，没有可播地址。这里也**不**
+  /// 记忆待续播意图——换源后线路与集都是另一套，按旧下标续播只会播错集。
+  Future<void> _showNavSourceSwapDialog(TmdbEpisodeCard card) async {
+    // `RepaintBoundary` 的 key 与 [DetailPageState._confirmSwapAfterPlayFailure]
+    // 同一约定：每个路由各有自己的 RepaintBoundary，截图证据只能按 key 指这一层。
+    final wantsSwap = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => RepaintBoundary(
+        key: const ValueKey('nav-source-swap-boundary'),
+        child: AlertDialog(
+          key: const ValueKey('nav-source-swap'),
+          title: const Text('导航源需要换源播放'),
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_navEpisodeLabel(card)),
+              const SizedBox(height: 6),
+              // 说明弱化处理：它是解释「为什么点了不播」的背景，不该和标题抢
+              // 注意力（与上面那条换源确认框同一口径）。
+              Text(
+                '当前站点是导航源，只提供索引，不提供可直接播放的地址。',
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              const Text('换到有播放线路的站点后，选集区即可正常播放。'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              key: const ValueKey('nav-source-swap-dismiss'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('知道了'),
+            ),
+            FilledButton(
+              key: const ValueKey('nav-source-swap-confirm'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('换源'),
+            ),
+          ],
+        ),
+      ),
+    );
+    // `showDialog` await 之后 context 可能已随页面销毁而失效。
+    if (!mounted || wantsSwap != true) return;
+    await _openSourceSwap();
+  }
+
+  /// 卡片在提示框里的集信息：`S2E5 · 标题`。
+  String _navEpisodeLabel(TmdbEpisodeCard card) {
+    final code = card.seasonNumber > 0
+        ? 'S${card.seasonNumber}E${card.number}'
+        : 'E${card.number}';
+    return card.title.isEmpty ? code : '$code · ${card.title}';
+  }
+
   /// 按**渲染下标**播放（卡片下标 → 线路原始下标）。
   void _playEpisodeAt(
     Vod vod,
@@ -3160,6 +3415,11 @@ class _DetailPageState extends State<DetailPage> {
           service: state.tmdbService,
           identity: identity,
           initialItem: state.tmdb.item,
+          // 选集视图模式是**全局偏好**：进页面时读出来给初值，页内切换时回调
+          // 写回。该页不持有 `AppState`（只有 service/identity/回调），所以按它
+          // 既有的依赖注入风格传两个参数，而不是把状态对象塞进去。
+          initialViewMode: state.episodeViewMode,
+          onViewModeChanged: state.setEpisodeViewMode,
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
