@@ -39,6 +39,19 @@ foreach ($relative in @(
     }
 }
 
+# Low 完整性标签会让非提权进程写不进 %APPDATA%，现场表现是「数据库打不开、历史与
+# 设置丢失」，而 icacls 看权限一切正常——本地构建产物常继承该标签。烟测前先归位，
+# 让本地构建也自动兜住。对目录本身设标签需要 WRITE_OWNER，权限不足时只告警不阻断。
+# 现场记录：docs/troubleshooting/readonly-storage-low-integrity.md
+$integrityOutput = icacls $exeDir /setintegritylevel "(OI)(CI)Medium" /T /C 2>&1
+$integrityFailed = 0
+foreach ($line in $integrityOutput) {
+    if ("$line" -match 'Failed processing\s+(\d+)\s+files') { $integrityFailed += [int]$Matches[1] }
+}
+if ($LASTEXITCODE -ne 0 -or $integrityFailed -gt 0) {
+    Write-Warning "完整性标签归位未完全成功（失败 $integrityFailed 项，退出码 $LASTEXITCODE），烟测继续"
+}
+
 $tempRoot = [IO.Path]::GetTempPath()
 $token = [Guid]::NewGuid().ToString('N')
 $readyFile = Join-Path $tempRoot "webhtv-ready-$token.txt"
