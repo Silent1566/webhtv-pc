@@ -111,8 +111,10 @@ import 'tmdb_state.dart';
 /// 版本号：CI 用 `--dart-define=APP_VERSION=<pubspec version>` 注入，
 /// 使 exe 文件版本、启动日志、备份/恢复清单与发布 tag 同一口径（§20.1）；
 /// 本地构建与测试保留默认值 `0.1.0`，行为不变。
-const String appVersion =
-    String.fromEnvironment('APP_VERSION', defaultValue: '0.1.0');
+const String appVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '0.1.0',
+);
 const String appBuildFlavor = 'MVP-A (Windows)';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
@@ -228,17 +230,23 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _sidecarHostPath = sidecarHostPath ?? defaultSidecarHostPath(),
        _jsSidecarHostPath = jsSidecarHostPath ?? defaultJsSidecarHostPath(),
        _jvmSidecarHostPath = jvmSidecarHostPath ?? defaultJvmSidecarHostPath() {
+    // 同一开关在客户端构造前就绪，HTTP 与 IPC 都持有共享引用。
+    _spiderDebugLog = SpiderDebugLog(log: this.log);
     if (httpClient != null) {
       // 记住注入的客户端：`bootstrap()` 里的 `_applyOutboundProxy()` 过去会无条件
       // 重建 `_httpClient`，把测试注入的捕获客户端丢掉，导致真实 400。
       // 出站代理未生效时必须保留它；生效时才按代理设置重建。
       _injectedHttpClient = httpClient;
-      _httpClient = HttpApiClient(client: httpClient);
+      _httpClient = HttpApiClient(
+        client: httpClient,
+        debugLog: _spiderDebugLog,
+      );
     }
     final cacheDir = this.paths.cacheDir;
     _supervisor = SpiderHostSupervisor(
       workRoot: p.join(cacheDir, 'sidecars'),
       log: this.log,
+      debugLog: _spiderDebugLog,
     );
     _spiderRegistry = SpiderManifestRegistry(
       root: p.join(this.paths.configDir, 'spiders'),
@@ -315,6 +323,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   final AppPaths paths;
   final LogService log;
 
+  /// 爬虫 IPC 详细调试日志（入参/出参）的开关载体。
+  ///
+  /// sidecar 进程持有同一个对象，所以切换开关即时生效，不需要重建进程。
+  late final SpiderDebugLog _spiderDebugLog;
+
   /// sidecar 宿主路径（构造时定死，供生效配置与其它配置的路由共用）。
   final String _sidecarHostPath;
   final String _jsSidecarHostPath;
@@ -332,7 +345,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 配置导入门面。构造时**无条件**创建——只有猫源 bundle 需要 Node，
   /// 普通 JSON / T4 配置直接走 HTTP 抓取或本地文件读取。
   late final ConfigImportService _importService;
-  late HttpApiClient _httpClient = HttpApiClient();
+  late HttpApiClient _httpClient = HttpApiClient(debugLog: _spiderDebugLog);
 
   /// 构造时注入的原始 HTTP 客户端（测试/诊断）。见 `_applyOutboundProxy`。
   http.Client? _injectedHttpClient;
@@ -372,7 +385,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   FollowingService? _followingService;
   Timer? _followingTimer;
   Timer? _followingKickTimer;
-  final CatHttpClient _catHttpClient = CatHttpClient();
+  late final CatHttpClient _catHttpClient = CatHttpClient(
+    debugLog: _spiderDebugLog,
+  );
   late final SpiderRouter _router;
   late final AndroidPlaybackBridge _androidPlaybackBridge;
 
@@ -500,6 +515,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 先返回的响应会被后返回的覆盖，而详情页读的是全局结果，用户就会看到
   /// 上一部剧的信息。
   int _detailRunId = 0;
+
+  /// 站源可能重写 vod_id，返回条目的 ID 不能作为页面归属依据；
+  /// 保留请求目标，只有本页发起的详情才认领，避免上一部剧串入。
+  String _detailRequestVodId = '';
   MultiSiteSearchOutcome? _activeSearch;
   List<String> _searchHistory = const [];
 
@@ -516,8 +535,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SearchSuggestService? _searchSuggestService;
 
   /// 联想/热搜服务（懒构造，测试可注入）。
-  SearchSuggestService get searchSuggestService =>
-      _searchSuggestService ??= _injectedSearchSuggestService ??
+  SearchSuggestService get searchSuggestService => _searchSuggestService ??=
+      _injectedSearchSuggestService ??
       SearchSuggestService(
         log: log,
         cacheDir: p.join(paths.cacheDir, 'search'),
@@ -669,6 +688,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SiteResult? get homeResult => _homeResult;
   SiteResult? get categoryResult => _categoryResult;
   SiteResult? get detailResult => _detailResult;
+  String get detailRequestVodId => _detailRequestVodId;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
 
@@ -934,8 +954,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     try {
       final config = effectiveConfig;
       if (config == null) return;
-      final needsCatVod =
-          config.sites.any((site) => catVodLoaderUrl(site) != null);
+      final needsCatVod = config.sites.any(
+        (site) => catVodLoaderUrl(site) != null,
+      );
       if (!needsCatVod) return;
       final root = managedPythonRoot(paths.cacheDir);
       final candidates = SidecarRuntimeResolver.pythonCandidates()
@@ -986,7 +1007,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     try {
       final config = effectiveConfig;
       if (config == null) return;
-      final hasDirect = config.sites.any((site) => directSpiderKind(site) != null);
+      final hasDirect = config.sites.any(
+        (site) => directSpiderKind(site) != null,
+      );
       if (!hasDirect) {
         _router.setDirectSpiders(const {});
         return;
@@ -1051,19 +1074,19 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final resolver = _buildDohResolver();
     _dohResolver = resolver;
     final injected = _injectedHttpClient;
-    final clientRebuilt =
-        settings.isEffective || (resolver?.isUsable ?? false);
+    final clientRebuilt = settings.isEffective || (resolver?.isUsable ?? false);
     if (!clientRebuilt && injected != null) {
       // 测试注入的客户端优先：不能因为一次 bootstrap 就换成真实 HttpClient。
       // 不调用 close()，否则会把注入的客户端一并关掉。
-      _httpClient = HttpApiClient(client: injected);
+      _httpClient = HttpApiClient(client: injected, debugLog: _spiderDebugLog);
     } else if (!clientRebuilt) {
       _httpClient.close();
-      _httpClient = HttpApiClient();
+      _httpClient = HttpApiClient(debugLog: _spiderDebugLog);
     } else {
       _httpClient.close();
       _httpClient = HttpApiClient(
         client: createOutboundHttpClient(settings, doh: resolver),
+        debugLog: _spiderDebugLog,
       );
     }
     log.info(
@@ -1130,6 +1153,30 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final ok = await store.rememberIncognito(value);
     notifyListeners();
     return ok;
+  }
+
+  /// 详细调试日志（爬虫入参/出参）开关；默认关闭。
+  bool get spiderDebugLog => _spiderDebugLog.enabled;
+
+  /// 切换详细调试日志：内存里立即生效，再异步写盘。
+  ///
+  /// 顺序是有意的：先应用后写盘，写盘失败也不会让开关看起来没生效。
+  Future<bool> setSpiderDebugLog(bool value) async {
+    _applySpiderDebugLog(value);
+    final store = _uiPreferences;
+    notifyListeners();
+    if (store == null) return false;
+    return store.rememberSpiderDebugLog(value);
+  }
+
+  /// 把开关落到两处：sidecar 日志旁路 + 日志单文件上限档位。
+  ///
+  /// 档位只在下次 `LogService._rotateIfNeeded` 判断时用新值，文件句柄不重建，
+  /// 因此切换不需要重启（见 `LogService.maxFileBytes`）。
+  void _applySpiderDebugLog(bool value) {
+    _spiderDebugLog.enabled = value;
+    log.maxFileBytes = LogService.maxFileBytesFor(verbose: value);
+    log.info(value ? '详细调试日志已开启（爬虫入参/出参全量打印）' : '详细调试日志已关闭', scope: 'spider');
   }
 
   // ------------------------------------------------------------ 崩溃恢复 P2-8
@@ -1243,9 +1290,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (sites.isEmpty) return 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final site in sites) {
-      db.upsertInjectedSite(
-        InjectedSiteEntry(site: site, updatedAt: now),
-      );
+      db.upsertInjectedSite(InjectedSiteEntry(site: site, updatedAt: now));
     }
     _reloadInjectedSites();
     log.info('站点注入：写入 ${sites.length} 个站点', scope: 'config');
@@ -1302,8 +1347,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 生效的解析接口失败切换设置（Phase 9）。
   ParseFailoverSettings get parseFailoverSettings =>
-      _uiPreferences?.parseFailover ??
-      const ParseFailoverSettings.defaults();
+      _uiPreferences?.parseFailover ?? const ParseFailoverSettings.defaults();
 
   /// 持久化解析接口失败切换设置。
   Future<bool> setParseFailoverSettings(ParseFailoverSettings settings) async {
@@ -1331,7 +1375,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     for (final health in db.siteHealth()) {
       final ok =
           health.homeOk + health.categoryOk + health.detailOk + health.playOk;
-      final total = health.homeTotal +
+      final total =
+          health.homeTotal +
           health.categoryTotal +
           health.detailTotal +
           health.playTotal;
@@ -1666,8 +1711,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 读历史时的来源过滤：空串表示**不**过滤（全局历史）。
-  String get historySourceFilter =>
-      historyScopeIsGlobal ? '' : activeSourceKey;
+  String get historySourceFilter => historyScopeIsGlobal ? '' : activeSourceKey;
 
   /// 测试口子：不经 bootstrap 直接装配 UI 偏好 store。
   ///
@@ -1749,8 +1793,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     LogService.logDirectoryOverride = paths.logDir;
     await log.open(paths.logDir);
     for (final failure in writeFailures) {
-      log.error('数据目录不可写，本次运行不会保存历史/设置：$failure',
-          scope: 'storage');
+      log.error('数据目录不可写，本次运行不会保存历史/设置：$failure', scope: 'storage');
     }
 
     // 崩溃恢复（Phase 9 P2-8）：读上一次会话标记，再写本次标记。
@@ -1796,6 +1839,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 搜索历史与偏好同源：启动时从磁盘恢复（上游安卓每次进搜索页都读
     // `Setting.getKeyword()`；PC 端在 bootstrap 恢复一次，后续增删走 store）。
     _searchHistory = uiPreferences.searchKeywords;
+    // 详细调试日志：从设置恢复后立即应用（含 2MB/20MB 档位）。
+    _applySpiderDebugLog(uiPreferences.spiderDebugLog);
     // 出站代理：从设置恢复后立即重建 HTTP 客户端（未开启时等价于默认客户端）。
     _applyOutboundProxy();
 
@@ -1828,16 +1873,16 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         // 只认**已存在的记录**：记忆指向已删除的记录时不改任何东西（静默回落）。
         final memory = _lastConfigRecord;
         if (memory != null) {
-          final remembered = _recordBySourceKey(memory.sourceKey, memory.recordId);
+          final remembered = _recordBySourceKey(
+            memory.sourceKey,
+            memory.recordId,
+          );
           if (remembered != null && remembered.id != _activeRecord?.id) {
             try {
               _database!.activateConfig(remembered.id);
               _configs = _database!.listConfigs();
               _activeRecord = _database!.activeConfig();
-              log.info(
-                '按上次使用的配置恢复当前配置 #${remembered.id}',
-                scope: 'config',
-              );
+              log.info('按上次使用的配置恢复当前配置 #${remembered.id}', scope: 'config');
             } catch (error) {
               log.warning('按上次使用的配置恢复失败：$error', scope: 'config');
             }
@@ -1902,18 +1947,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   );
 
   /// 生成备份（数据库用 `VACUUM INTO` 快照，避免复制到半个事务）。
-  Future<BackupCreateResult> createBackup({
-    String? outputPath,
-    DateTime? now,
-  }) {
+  Future<BackupCreateResult> createBackup({String? outputPath, DateTime? now}) {
     final database = _database;
     if (database == null) {
       return Future.value(
-        const BackupCreateResult(
-          ok: false,
-          path: '',
-          message: '本地存储不可用，无法备份',
-        ),
+        const BackupCreateResult(ok: false, path: '', message: '本地存储不可用，无法备份'),
       );
     }
     return backupService.createBackup(
@@ -1949,7 +1987,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final oldSettings = await settingsFile.exists()
         ? await settingsFile.readAsBytes()
         : null;
-    final oldDatabase = await dbFile.exists() ? await dbFile.readAsBytes() : null;
+    final oldDatabase = await dbFile.exists()
+        ? await dbFile.readAsBytes()
+        : null;
 
     await _prepareForDataSwap();
     try {
@@ -2511,10 +2551,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     //
     // 换代（出站代理/DoH/换配置）通过 [SpiderRouter.updateTransport] 完成，
     // 它会清空 runtime 缓存，等价于过去「新建 Router」的效果。
-    _router.updateTransport(
-      client: _httpClient,
-      globalHeaders: config.headers,
-    );
+    _router.updateTransport(client: _httpClient, globalHeaders: config.headers);
     _siteService = SiteService(
       appConfig: config,
       playbackBridge: _androidPlaybackBridge,
@@ -2619,6 +2656,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     AppError? error,
   }) {
     _detailResult = vod == null ? null : SiteResult(list: [vod]);
+    _detailRequestVodId = vod?.vodId ?? '';
     _selectedVod = vod;
     _detailPhase = phase;
     _detailError = error;
@@ -2827,8 +2865,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 与 [configs] 的差别只在**数据来源**：`_configs` 是内存快照，桥接导入、
   /// 安卓恢复等路径直接写库时它不会跟着变。配置页是「用户来核对库里到底有
   /// 哪几条」的地方，必须读库；sqlite 是同步接口，一页几十行不构成负担。
-  List<ConfigRecord> get savedConfigs =>
-      _database?.listConfigs() ?? _configs;
+  List<ConfigRecord> get savedConfigs => _database?.listConfigs() ?? _configs;
 
   /// 在已保存的配置记录里按 id 找一条。
   ///
@@ -2864,7 +2901,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       notifyListeners();
       return false;
     }
-    final record = configRecordById(id) ??
+    final record =
+        configRecordById(id) ??
         (_activeRecord?.id == id ? _activeRecord : null);
     if (record == null) {
       _lastError = AppError(AppErrorKind.storage, '该配置记录已不存在');
@@ -3001,10 +3039,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         notifyListeners();
         return false;
       }
-      final ok = await syncState.importSites(address, interfaceKey: interfaceKey);
+      final ok = await syncState.importSites(
+        address,
+        interfaceKey: interfaceKey,
+      );
       if (!ok) {
         // 失败时数据库里那条记录仍然完好（importSites 只在成功时才 upsert）。
-        _lastError = syncState.lastError ??
+        _lastError =
+            syncState.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '该播放源刷新失败',
@@ -3107,10 +3149,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final written = store.remember(sourceKey: sourceKey, recordId: record.id);
     _lastConfigRecord = written;
     if (written == null) {
-      log.warning(
-        '无法记住上次使用的配置 #${record.id}（来源标识无效或写盘失败）',
-        scope: 'config',
-      );
+      log.warning('无法记住上次使用的配置 #${record.id}（来源标识无效或写盘失败）', scope: 'config');
     }
   }
 
@@ -4093,6 +4132,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   ///   线路当成当前条目的线路显示出来。
   Future<void> loadDetail(
     Vod vod, {
+
     /// 用哪份配置的服务与站点取详情。都给 `null` 时用生效配置与当前选中站点
     /// （既有行为）。历史记录按「原来源配置」看详情时传
     /// [playbackContextFor] 里的这一对——**不**切换生效配置，也不改选中站点。
@@ -4103,6 +4143,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return;
     final runId = ++_detailRunId;
+    _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
     _detailError = null;
@@ -4345,7 +4386,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 跨配置读 TMDB 缓存海报（只读，不暴露数据库）。
-  String? cachedTmdbPosterUrl({required String siteKey, required String vodId}) {
+  String? cachedTmdbPosterUrl({
+    required String siteKey,
+    required String vodId,
+  }) {
     try {
       return _database?.tmdbPosterUrlAcrossConfigs(
         siteKey: siteKey,
@@ -4441,7 +4485,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     SpiderRouter router,
   ) async {
     try {
-      final hasDirect = config.sites.any((site) => directSpiderKind(site) != null);
+      final hasDirect = config.sites.any(
+        (site) => directSpiderKind(site) != null,
+      );
       if (!hasDirect) return;
       final result = await _directRegistrar().materialize(config);
       router.setDirectSpiders(result);
@@ -4951,7 +4997,6 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     notifyListeners();
   }
 
-
   // -------------------------------------------------------------------------
   // 历史同名聚合（读视图）
   // -------------------------------------------------------------------------
@@ -4964,13 +5009,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// - 组内代表记录取 `updatedAt` 最新（安卓 §8.1）；
   /// - 搜索关键词命中组内**任一成员**即保留该组（否则「搜某集搜不到」）。
   List<HistoryGroup> historyGroups({String keyword = ''}) {
-    final records = keyword.isEmpty
-        ? recentHistory()
-        : searchHistory(keyword);
-    return groupHistory(
-      [for (final record in records) _historyGroupInputOf(record)],
-      mode: historyAggregation,
-    );
+    final records = keyword.isEmpty ? recentHistory() : searchHistory(keyword);
+    return groupHistory([
+      for (final record in records) _historyGroupInputOf(record),
+    ], mode: historyAggregation);
   }
 
   /// 把一条历史映射成聚合投影的输入（补上作品身份）。
@@ -5026,8 +5068,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final uri = Uri.tryParse(text);
     if (uri != null && uri.hasScheme) return true;
     return RegExp(r'^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/|$)').hasMatch(text) ||
-        RegExp(r'^[\w.-]+\.[a-z]{2,}(:\d+)?(/|$)', caseSensitive: false)
-            .hasMatch(text);
+        RegExp(
+          r'^[\w.-]+\.[a-z]{2,}(:\d+)?(/|$)',
+          caseSensitive: false,
+        ).hasMatch(text);
   }
 
   /// 某条历史是否属于**非当前播放源**。
@@ -5035,6 +5079,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (record.sourceKey.isEmpty) return false;
     return record.sourceKey != activeSourceKey;
   }
+
   List<FavoriteEntry> favorites({String? kind}) {
     final database = _database;
     if (database == null) return const [];
@@ -5212,11 +5257,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   Map<String, Object?>? cspProbeRecordFor(String siteKey) =>
       CspJarProbe.recordFor(_cspBinding, siteKey);
 
-  CspJarProbe _cspProbe() => CspJarProbe(
-    root: _spiderRegistry.root,
-    binding: _cspBinding,
-    log: log,
-  );
+  CspJarProbe _cspProbe() =>
+      CspJarProbe(root: _spiderRegistry.root, binding: _cspBinding, log: log);
 
   /// 启动/换配置后异步探测（不阻塞首屏；失败只记日志）。
   Future<void> _probeCspJarsQuietly() async {

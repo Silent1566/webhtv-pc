@@ -17,6 +17,7 @@ import 'package:fast_gbk/fast_gbk.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
+import '../services/spider_process.dart';
 import 'app_error.dart';
 import 'danmaku.dart';
 import 'protocol.dart';
@@ -63,6 +64,7 @@ class HttpApiCall {
 
 /// 请求动作。
 enum HttpApiAction { home, category, detail, search, play }
+
 /// 请求构造器。
 ///
 /// 规则来源：
@@ -191,7 +193,9 @@ class HttpApiRequestBuilder {
         // 首页无额外参数；保留站点 ext。
         break;
       case HttpApiAction.category:
-        parameters['ac'] = site.type == SiteType.xmlApi ? 'videolist' : 'detail';
+        parameters['ac'] = site.type == SiteType.xmlApi
+            ? 'videolist'
+            : 'detail';
         if (typeId != null && typeId.isNotEmpty) parameters['t'] = typeId;
         parameters['pg'] = (page ?? 1).toString();
         if (filters.isNotEmpty) {
@@ -224,7 +228,8 @@ class HttpApiRequestBuilder {
 
     final headers = _headersFor(endpoint);
     if (form.isNotEmpty) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=utf-8';
+      headers['Content-Type'] =
+          'application/x-www-form-urlencoded; charset=utf-8';
     }
 
     final uri = HttpApiRequestBuilder.appendQuery(endpoint, parameters);
@@ -279,7 +284,8 @@ class HttpApiRequestBuilder {
     if (site.type == SiteType.jsonApiBase64Ext) {
       return buildBase64ExtPlayRequest(target, flag: flag);
     }
-    final playUrl = asNonEmptyString(site.extra['playUrl']) ??
+    final playUrl =
+        asNonEmptyString(site.extra['playUrl']) ??
         asNonEmptyString(site.extra['playurl']);
     if (playUrl == null) {
       throw AppError(
@@ -390,11 +396,7 @@ abstract final class HttpApiResponseParser {
   }) {
     final text = body.trimLeft();
     if (text.isEmpty) {
-      throw AppError(
-        AppErrorKind.siteParse,
-        '站点响应为空',
-        detail: siteKey,
-      );
+      throw AppError(AppErrorKind.siteParse, '站点响应为空', detail: siteKey);
     }
     if (_looksLikeHtml(text)) {
       throw AppError(
@@ -428,7 +430,8 @@ abstract final class HttpApiResponseParser {
     throw AppError(
       AppErrorKind.siteParse,
       '站点响应既不是 JSON 也不是 XML',
-      detail: '$siteKey: ${text.substring(0, text.length > 40 ? 40 : text.length)}',
+      detail:
+          '$siteKey: ${text.substring(0, text.length > 40 ? 40 : text.length)}',
     );
   }
 
@@ -485,18 +488,18 @@ abstract final class HttpApiResponseParser {
     final hasList = map.containsKey('list');
     final hasClass = map.containsKey('class');
     if (message != null && !hasList && !hasClass) {
-      throw AppError(
-        AppErrorKind.siteBusiness,
-        message,
-        detail: siteKey,
-      );
+      throw AppError(AppErrorKind.siteBusiness, message, detail: siteKey);
     }
 
     final classes = asList(map['class'])
         .map(VodClass.fromJson)
         .whereType<VodClass>()
         .toList();
-    final list = _parseVodList(map['list'], siteKey: siteKey, identity: identity);
+    final list = _parseVodList(
+      map['list'],
+      siteKey: siteKey,
+      identity: identity,
+    );
     final filters = _parseFilters(map['filters']);
 
     return SiteResult(
@@ -507,7 +510,9 @@ abstract final class HttpApiResponseParser {
       pageCount: asInt(map['pagecount']) ?? asInt(map['page_count']),
       total: asInt(map['total']),
       msg: message,
-      header: map.containsKey('header') ? HeaderMap(asMap(map['header'])) : null,
+      header: map.containsKey('header')
+          ? HeaderMap(asMap(map['header']))
+          : null,
       format: asNonEmptyString(map['format']),
       parse: asInt(map['parse']),
       jx: asInt(map['jx']),
@@ -561,7 +566,8 @@ abstract final class HttpApiResponseParser {
       final values = asList(url['values']);
       for (final item in values) {
         final map2 = asMap(item);
-        final value = asNonEmptyString(map2['v']) ?? asNonEmptyString(map2['url']);
+        final value =
+            asNonEmptyString(map2['v']) ?? asNonEmptyString(map2['url']);
         if (value != null) return value;
       }
       return null;
@@ -631,7 +637,8 @@ abstract final class HttpApiResponseParser {
 
     final root = document.rootElement;
     // 播放入口 XML：`<rss><url>…</url></rss>` 或 `<url>…</url>`。
-    final bareUrl = root.getElement('url')?.innerText.trim() ??
+    final bareUrl =
+        root.getElement('url')?.innerText.trim() ??
         (root.localName == 'url' ? root.innerText.trim() : null);
     if (bareUrl != null && bareUrl.isNotEmpty) {
       return SiteResult(playUrl: bareUrl);
@@ -660,7 +667,8 @@ abstract final class HttpApiResponseParser {
         'vod_name': element.getElement('name')?.innerText ?? element.innerText,
         'vod_pic': element.getElement('pic')?.innerText,
         'vod_remarks':
-            element.getElement('note')?.innerText ?? element.getElement('state')?.innerText,
+            element.getElement('note')?.innerText ??
+            element.getElement('state')?.innerText,
         'vod_content': element.getElement('des')?.innerText,
         'vod_year': element.getElement('year')?.innerText,
         'vod_area': element.getElement('area')?.innerText,
@@ -754,8 +762,10 @@ class HttpApiClient {
     this.timeout = siteRequestTimeout,
     this.userAgent = HttpApiRequestBuilder.defaultUserAgent,
     this.maxResponseBytes = 16 * 1024 * 1024,
+    this.debugLog,
   }) : _client = client ?? http.Client();
 
+  final SpiderDebugLog? debugLog;
   final http.Client _client;
   final Duration timeout;
   final String userAgent;
@@ -772,6 +782,16 @@ class HttpApiClient {
   }) async {
     // 只进日志的请求上下文：动作 + 脱敏 URL + 参数名（不含取值，§9.3.1）。
     final diagnostic = 'action=${call.action ?? "unknown"} ${call.summary}';
+    if (debugLog?.enabled ?? false) {
+      debugLog!.httpOutbound(
+        method: call.method,
+        action: call.action ?? 'unknown',
+        siteKey: siteKey,
+        uri: call.uri,
+        params: call.formBody,
+        headers: call.headers,
+      );
+    }
     final http.Response response;
     try {
       http.Response received;
@@ -780,10 +800,20 @@ class HttpApiClient {
             .post(call.uri, headers: call.headers, body: call.formBody)
             .timeout(timeout);
       } else {
-        received = await _client.get(call.uri, headers: call.headers).timeout(timeout);
+        received = await _client
+            .get(call.uri, headers: call.headers)
+            .timeout(timeout);
       }
       response = received;
     } on TimeoutException catch (error, stackTrace) {
+      if (debugLog?.enabled ?? false) {
+        debugLog!.httpFailure(
+          method: call.method,
+          action: call.action ?? 'unknown',
+          siteKey: siteKey,
+          error: error,
+        );
+      }
       throw AppError(
         AppErrorKind.siteTimeout,
         '站点请求超时（${timeout.inSeconds}s）',
@@ -794,6 +824,14 @@ class HttpApiClient {
         diagnostic: diagnostic,
       );
     } catch (error, stackTrace) {
+      if (debugLog?.enabled ?? false) {
+        debugLog!.httpFailure(
+          method: call.method,
+          action: call.action ?? 'unknown',
+          siteKey: siteKey,
+          error: error,
+        );
+      }
       throw AppError(
         AppErrorKind.siteNetwork,
         '站点请求失败：${error.runtimeType}',
@@ -805,6 +843,16 @@ class HttpApiClient {
       );
     }
 
+    if (debugLog?.enabled ?? false) {
+      debugLog!.httpInbound(
+        method: call.method,
+        action: call.action ?? 'unknown',
+        siteKey: siteKey,
+        statusCode: response.statusCode,
+        headers: response.headers,
+        body: () => _decodeResponseText(response),
+      );
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw AppError(
         AppErrorKind.siteHttp,

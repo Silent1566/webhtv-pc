@@ -66,16 +66,34 @@ class LogService {
   LogService({
     this.scope,
     this.maxEntries = 500,
-    this.maxFileBytes = 2 * 1024 * 1024,
+    this.maxFileBytes = standardMaxFileBytes,
     this.maxFiles = 3,
   });
+
+  /// 常规单文件上限（2MB）：详细调试日志关闭时的档位。
+  static const int standardMaxFileBytes = 2 * 1024 * 1024;
+
+  /// 详细调试日志打开时的单文件上限（20MB）。
+  ///
+  /// 入参/出参全量打印后 2MB 会被几小时内轮转掉，排查现场时正好缺那一段。
+  static const int verboseMaxFileBytes = 20 * 1024 * 1024;
+
+  /// 详细调试日志开关对应的档位值（单测按此断言档位）。
+  static int maxFileBytesFor({required bool verbose}) =>
+      verbose ? verboseMaxFileBytes : standardMaxFileBytes;
 
   /// 日志根目录（`~/.local/state/webhtv-pc/logs` 或平台等价目录）。
   static String? logDirectoryOverride;
 
   final String? scope;
   final int maxEntries;
-  final int maxFileBytes;
+
+  /// 单文件上限（字节）。
+  ///
+  /// 可变：详细调试日志开关在运行中切换档位。已打开的文件句柄不重建，
+  /// 下一次 [_rotateIfNeeded] 判断才用新档位，因此切换无需重启。
+  int maxFileBytes;
+
   final int maxFiles;
 
   final ListQueue<LogEntry> _entries = ListQueue<LogEntry>();
@@ -115,19 +133,47 @@ class LogService {
     if (file == null || !await file.exists()) return;
     final length = await file.length();
     if (length < maxFileBytes) return;
-    // 只保留最近 maxFiles 份历史，避免日志无限增长。
-    for (var index = maxFiles - 1; index >= 1; index--) {
-      final older = File('${file.path}.$index');
-      final newer = File('${file.path}.${index + 1}');
-      if (await older.exists()) {
+    _rotateSync(file);
+  }
+
+  /// 本批追加后将超过当前档位就先轮转（`flush()` 的运行期判断入口）。
+  ///
+  /// 为什么运行期也必须判断：`open()` 只在启动时判一次，而详细调试日志会在
+  /// 运行中把文件写大——没有调用点就等于「单份上限」这个语义失效（文件无限增长）。
+  ///
+  /// 读长度失败按 0 处理：读不到就当不需要轮转，绝不能因此丢掉本条日志。
+  void _rotateIfFullSync(File file, int incomingBytes) {
+    var length = 0;
+    try {
+      if (file.existsSync()) length = file.lengthSync();
+    } catch (_) {
+      return;
+    }
+    if (length + incomingBytes <= maxFileBytes) return;
+    _rotateSync(file);
+  }
+
+  /// 同步轮转：`.1` 最旧、按索引滚动，保留 [maxFiles] 份（含主文件）。
+  ///
+  /// 与异步路径共用同一套滚动规则，避免两份实现分叉。失败时**不抛**：
+  /// 轮转失败也要能照常追加，日志可以变大但不可以丢。
+  void _rotateSync(File file) {
+    try {
+      // 只保留最近 maxFiles 份历史，避免日志无限增长。
+      for (var index = maxFiles - 1; index >= 1; index--) {
+        final older = File('${file.path}.$index');
+        final newer = File('${file.path}.${index + 1}');
+        if (!older.existsSync()) continue;
         if (index + 1 > maxFiles - 1) {
-          await older.delete();
+          older.deleteSync();
         } else {
-          await older.rename(newer.path);
+          older.renameSync(newer.path);
         }
       }
+      file.renameSync('${file.path}.1');
+    } catch (_) {
+      // 轮转失败时继续追加：上限失守好过丢日志。
     }
-    await file.rename('${file.path}.1');
   }
 
   void log(LogLevel level, String message, {String? scope}) {
@@ -215,11 +261,13 @@ class LogService {
     final file = _file;
     if (file == null || _fileDisabled) return;
     if (_pending.isEmpty) return;
-    final batch = _pending.join('\n');
+    final batch = '${_pending.join('\n')}\n';
     _pending.clear();
     try {
+      // 把本批 UTF-8 字节也算进去，避免既有文件未满却被一次追加推过档位。
+      _rotateIfFullSync(file, utf8.encode(batch).length);
       // `flush: true` 保证数据已交给操作系统，进程被强杀时日志不丢。
-      file.writeAsStringSync('$batch\n', mode: FileMode.append, flush: true);
+      file.writeAsStringSync(batch, mode: FileMode.append, flush: true);
     } catch (_) {
       _fileDisabled = true;
     }

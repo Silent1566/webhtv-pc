@@ -20,6 +20,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:path/path.dart' as p;
+import 'package:xml/xml.dart';
 
 import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
@@ -91,12 +92,249 @@ class SidecarExit {
       'expected=$expected${reason == null ? "" : " reason=$reason"}';
 }
 
+/// 爬虫 IPC 详细调试日志（入参/出参）的开关与落点。
+///
+/// 为什么是**可变共享对象**而不是一个 bool 参数：开关要能在设置页切换后立即对
+/// 后续 RPC 生效，又不允许为了开关重建 sidecar 进程，因此进程持有的是这个对象
+/// 的引用，设置页改的是对象里的字段。
+///
+/// 为什么挂在帧出口（[_send]）与响应入口（[_onStdout]）而不是 `request()`：
+/// heartbeat、`$/cancelRequest` 这些帧不走 `request()`，只有帧层能覆盖全部方法。
+///
+/// 所有输出先抹掉敏感键、再经 [redactLogText]，并且吞掉写入异常——日志是旁路，
+/// 既不能改变 IPC 帧，也不能影响主流程。
+class SpiderDebugLog {
+  SpiderDebugLog({this.log, this.enabled = false});
+
+  /// 落盘用的日志服务；null 时只保留开关状态（不发任何日志）。
+  final LogService? log;
+
+  /// 是否记录入参/出参；默认关闭（关闭时日志量与既有版本完全一致）。
+  bool enabled;
+
+  /// 记录一条出站帧：请求帧写 method/id/完整 params，取消帧写目标 id。
+  void outbound(Map<String, Object?> envelope) {
+    if (!enabled) return;
+    final method = '${envelope['method'] ?? "-"}';
+    final params = envelope['params'];
+    final id = envelope['id'];
+    // `$/cancelRequest` 是通知帧：自身没有 id，被取消的 id 在 params 里。
+    final target = id == null
+        ? 'target=${_encode(params)}'
+        : 'id=$id params=${_encode(params)}';
+    _write('rpc→ method=$method $target');
+  }
+
+  /// 记录一条成功的响应出参（result 全量，不截断）。
+  void inboundOk(String method, String requestId, Object? result) {
+    if (!enabled) return;
+    _write('rpc← method=$method id=$requestId ok result=${_encode(result)}');
+  }
+
+  /// 记录一条失败的响应出参（含错误码与 message）。
+  void inboundError(String method, String requestId, SpiderError error) {
+    if (!enabled) return;
+    _write(
+      'rpc← method=$method id=$requestId error code=${error.code} '
+      'message=${error.message} retryable=${error.retryable} '
+      'details=${_encode(error.details)}',
+    );
+  }
+
+  void httpOutbound({
+    required String method,
+    required String action,
+    required String siteKey,
+    required Uri uri,
+    Object? params,
+    Map<String, String> headers = const {},
+  }) {
+    if (!enabled || log == null) return;
+    try {
+      log!.debug(
+        'http→ site=${redactLogText(siteKey)} method=${redactLogText(method)} '
+        'action=${redactLogText(action)} url=${_httpUrl(uri)} '
+        'params=${jsonEncode(_sanitizeHttp(params))} '
+        'headers=${jsonEncode(_sanitizeHttp(headers))}',
+        scope: 'spider',
+      );
+    } catch (_) {
+      // 脱敏、编码和写入都属于旁路，失败不能中断站点请求。
+    }
+  }
+
+  void httpInbound({
+    required String method,
+    required String action,
+    required String siteKey,
+    required int statusCode,
+    required String Function() body,
+    Map<String, String> headers = const {},
+  }) {
+    if (!enabled || log == null) return;
+    try {
+      log!.debug(
+        'http← site=${redactLogText(siteKey)} method=${redactLogText(method)} '
+        'action=${redactLogText(action)} status=$statusCode '
+        'headers=${jsonEncode(_sanitizeHttp(headers))} body=${_httpBody(body())}',
+        scope: 'spider',
+      );
+    } catch (_) {
+      // 延迟解码让关闭开关时没有额外的响应解码开销。
+    }
+  }
+
+  void httpFailure({
+    required String method,
+    required String action,
+    required String siteKey,
+    required Object error,
+  }) {
+    if (!enabled || log == null) return;
+    try {
+      log!.debug(
+        'http← site=${redactLogText(siteKey)} method=${redactLogText(method)} '
+        'action=${redactLogText(action)} status=network_error '
+        'error=${error.runtimeType}',
+        scope: 'spider',
+      );
+    } catch (_) {}
+  }
+
+  static String _httpUrl(Uri uri) {
+    final safe = uriWithoutUserInfo(uri);
+    if (!safe.hasQuery) return redactLogText(safe.toString());
+    return redactLogText(
+      safe
+          .replace(
+            queryParameters: {
+              for (final entry in safe.queryParametersAll.entries)
+                entry.key: isSensitiveHeaderKey(entry.key)
+                    ? ['<redacted>']
+                    : [
+                        for (final value in entry.value)
+                          _sanitizeHttp(value) as String,
+                      ],
+            },
+          )
+          .toString(),
+    );
+  }
+
+  static Object? _sanitizeHttp(Object? value) {
+    if (value is String) {
+      final text = value.trimLeft();
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          return jsonEncode(_sanitizeHttp(jsonDecode(value)));
+        } on FormatException {
+          // extend 等字段可能是 JSON 字符串，合法时也要抹掉其中的敏感键。
+        }
+      }
+      final uri = Uri.tryParse(value);
+      if (uri != null && (uri.isScheme('http') || uri.isScheme('https'))) {
+        return _httpUrl(uri);
+      }
+      return redactLogText(value);
+    }
+    if (value is Map) {
+      return <String, Object?>{
+        for (final entry in value.entries)
+          '${entry.key}': isSensitiveHeaderKey('${entry.key}')
+              ? '<redacted>'
+              : _sanitizeHttp(entry.value),
+      };
+    }
+    if (value is List) return [for (final item in value) _sanitizeHttp(item)];
+    return value;
+  }
+
+  static String _httpBody(String text) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      if (text.trimLeft().startsWith('<')) {
+        try {
+          final document = XmlDocument.parse(text);
+          for (final node in document.descendants) {
+            if (node is XmlAttribute) {
+              node.value = isSensitiveHeaderKey(node.localName)
+                  ? '<redacted>'
+                  : _sanitizeHttp(node.value) as String;
+            } else if (node is XmlText) {
+              node.value = _httpXmlValue(node, node.value);
+            } else if (node is XmlCDATA) {
+              node.value = _httpXmlValue(node, node.value);
+            }
+          }
+          return document.toXmlString();
+        } catch (_) {
+          // 解析或改写失败（非法 XML、超大文档、异常节点）一律降级为文本脱敏：
+          // 「没有日志」比「脱敏不彻底的日志」更难排查，因此绝不吞掉整条记录。
+        }
+      }
+      return redactLogText(text);
+    }
+    // 先逐值脱敏再序列化，否则自由文本规则会吞掉签名 URL 后面的 JSON 字段。
+    return jsonEncode(_sanitizeHttp(decoded));
+  }
+
+  static String _httpXmlValue(XmlNode node, String value) {
+    final parent = node.parent;
+    if (parent is XmlElement && isSensitiveHeaderKey(parent.localName)) {
+      return '<redacted>';
+    }
+    return _sanitizeHttp(value) as String;
+  }
+
+  void _write(String message) {
+    final target = log;
+    if (target == null) return;
+    try {
+      target.debug(redactLogText(message), scope: 'spider');
+    } catch (_) {
+      // 日志写入失败不得影响主流程。
+    }
+  }
+
+  /// JSON 编码；含不可编码对象时退回 `toString()`，绝不让日志抛异常。
+  static String _encode(Object? value) {
+    try {
+      return jsonEncode(_sanitize(value));
+    } catch (_) {
+      return '$value';
+    }
+  }
+
+  /// 递归把敏感键的值替换为占位符。
+  ///
+  /// 为什么还要这一层：[redactLogText] 处理的是自由文本形态（`Cookie: xxx`、
+  /// `?sign=xxx`），而入参是 JSON，敏感值形如 `"Cookie":"a=b"`，两者形态不同。
+  /// 判定复用 [isSensitiveHeaderKey]，与 HTTP 头脱敏同一套规则，避免规则分叉。
+  static Object? _sanitize(Object? value) {
+    if (value is Map) {
+      return <String, Object?>{
+        for (final entry in value.entries)
+          '${entry.key}': isSensitiveHeaderKey('${entry.key}')
+              ? '<redacted>'
+              : _sanitize(entry.value),
+      };
+    }
+    if (value is List) return [for (final item in value) _sanitize(item)];
+    return value;
+  }
+}
+
 /// 单个 sidecar 进程。
 class SidecarProcess {
-  SidecarProcess._(this._process, this._spec, this._job);
+  SidecarProcess._(this._process, this._spec, this._job, this._debugLog);
 
   final Process _process;
   final SidecarLaunchSpec _spec;
+
+  /// 详细调试日志旁路；null 表示调用点没注入（既有行为与日志量不变）。
+  final SpiderDebugLog? _debugLog;
 
   /// Windows Job Object；为 null 表示只能做进程级终止（§18.2.1）。
   WindowsJobObject? _job;
@@ -144,7 +382,10 @@ class SidecarProcess {
   Future<SidecarExit> get done => _exitCompleter.future;
 
   /// 启动子进程并接管 stdout/stderr。
-  static Future<SidecarProcess> start(SidecarLaunchSpec spec) async {
+  static Future<SidecarProcess> start(
+    SidecarLaunchSpec spec, {
+    SpiderDebugLog? debugLog,
+  }) async {
     await Directory(spec.workingDirectory).create(recursive: true);
     await Directory(p.dirname(spec.logFile)).create(recursive: true);
 
@@ -169,7 +410,7 @@ class SidecarProcess {
       }
     }
 
-    final instance = SidecarProcess._(process, spec, job);
+    final instance = SidecarProcess._(process, spec, job, debugLog);
     instance._wire();
     return instance;
   }
@@ -193,15 +434,21 @@ class SidecarProcess {
       },
       cancelOnError: false,
     );
-    _process.exitCode.then(_onExit, onError: (Object error) {
-      _onExit(-1);
-    });
+    _process.exitCode.then(
+      _onExit,
+      onError: (Object error) {
+        _onExit(-1);
+      },
+    );
     // 对端退出后写 stdin 会异步失败；这里先挂兜底，避免未捕获的管道写错误
     // 被测试框架记到无关用例上。
     _process.stdin.done.catchError((Object error) {
       _lastStdinError = '$error';
     });
-    _heartbeatTimer = Timer.periodic(heartbeatInterval, (_) => _sendHeartbeat());
+    _heartbeatTimer = Timer.periodic(
+      heartbeatInterval,
+      (_) => _sendHeartbeat(),
+    );
   }
 
   void _sendHeartbeat() {
@@ -226,10 +473,7 @@ class SidecarProcess {
           code: SpiderErrorCode.resourceLimit,
           message: 'sidecar 累计输出超过上限',
           siteKey: _spec.siteKey,
-          details: {
-            'bytes': _cumulativeStdoutBytes,
-            'limit': limit,
-          },
+          details: {'bytes': _cumulativeStdoutBytes, 'limit': limit},
         ),
       );
       return;
@@ -253,7 +497,8 @@ class SidecarProcess {
       _killWithProtocolError(
         SpiderError(
           code: SpiderErrorCode.protocolViolation,
-          message: '${error.message}'
+          message:
+              '${error.message}'
               '${error.raw == null ? "" : " raw=${error.raw}"}',
           siteKey: _spec.siteKey,
           details: {'pollutedStdout': true},
@@ -283,9 +528,12 @@ class SidecarProcess {
         // 否则会抛 `Bad state: Future already completed`，掩盖真正的
         // SPIDER_RESOURCE_LIMIT（§9.3.1「限制单响应大小」）。
         if (!_checkResponseSize(response.result, pending)) {
+          // 出参日志只记真正交付给调用方的那份结果，与下面的 complete 同条件。
+          _debugLog?.inboundOk(pending.method, pending.id, response.result);
           pending.completer.complete(response.result);
         }
       } else {
+        _debugLog?.inboundError(pending.method, pending.id, response.error!);
         pending.completer.completeError(
           response.error!.siteKey == null
               ? SpiderError(
@@ -342,7 +590,8 @@ class SidecarProcess {
   void _writeStderr(List<int> chunk) {
     try {
       final file = File(_spec.logFile);
-      if (file.existsSync() && file.lengthSync() + chunk.length > stderrRotateBytes) {
+      if (file.existsSync() &&
+          file.lengthSync() + chunk.length > stderrRotateBytes) {
         _rotateStderr(file);
       }
       file.writeAsBytesSync(chunk, mode: FileMode.append);
@@ -431,6 +680,9 @@ class SidecarProcess {
 
   void _send(Map<String, Object?> envelope) {
     if (_exitCompleter.isCompleted || _stdinClosed) return;
+    // 入参日志挂在帧出口：全部出站帧（request / heartbeat / cancel）都经过这里，
+    // 而帧内容一个字节都不改，日志纯旁路。
+    _debugLog?.outbound(envelope);
     try {
       _process.stdin.add(IpcFrameCodec.encode(envelope));
     } catch (_) {
@@ -563,7 +815,9 @@ class SidecarProcess {
   }
 
   /// 优雅停止：先 `shutdown`，宽限后强制终止（§9.3.1）。
-  Future<SidecarExit> stop({Duration grace = const Duration(seconds: 3)}) async {
+  Future<SidecarExit> stop({
+    Duration grace = const Duration(seconds: 3),
+  }) async {
     if (_exitCompleter.isCompleted) return _exitCompleter.future;
     _stopping = true;
     _heartbeatTimer?.cancel();
@@ -640,25 +894,21 @@ class SpiderHost {
 
   /// `initialize` 握手：交换 ABI major/minor、capabilities、权限与限制（§9.3.1）。
   Future<SpiderInitResult> initialize({String extend = ''}) async {
-    final result = await process.request(
-      SpiderMethod.initialize,
-      {
-        'abi': SpiderAbi.ipc,
-        'abiMajor': SpiderAbi.major,
-        'abiMinor': SpiderAbi.minor,
-        'siteKey': manifest.key,
-        'extend': extend,
-        'hostCapabilities': [
-          SpiderMethod.home,
-          SpiderMethod.category,
-          SpiderMethod.detail,
-          SpiderMethod.search,
-          SpiderMethod.play,
-        ],
-        'limits': manifest.limits.toJson(),
-      },
-      deadline: _methodTimeouts[SpiderMethod.init]!,
-    );
+    final result = await process.request(SpiderMethod.initialize, {
+      'abi': SpiderAbi.ipc,
+      'abiMajor': SpiderAbi.major,
+      'abiMinor': SpiderAbi.minor,
+      'siteKey': manifest.key,
+      'extend': extend,
+      'hostCapabilities': [
+        SpiderMethod.home,
+        SpiderMethod.category,
+        SpiderMethod.detail,
+        SpiderMethod.search,
+        SpiderMethod.play,
+      ],
+      'limits': manifest.limits.toJson(),
+    }, deadline: _methodTimeouts[SpiderMethod.init]!);
 
     final init = SpiderInitResult.fromJson(result);
     if (!init.majorCompatible) {
@@ -698,10 +948,7 @@ class SpiderHost {
         ),
       );
     }
-    final effective =
-        deadline ??
-        _methodTimeouts[method] ??
-        callbackTimeout;
+    final effective = deadline ?? _methodTimeouts[method] ?? callbackTimeout;
     return process.request(
       method,
       params,
@@ -714,10 +961,7 @@ class SpiderHost {
 
   Future<void> destroy() async {
     try {
-      await call(
-        SpiderMethod.destroy,
-        deadline: const Duration(seconds: 5),
-      );
+      await call(SpiderMethod.destroy, deadline: const Duration(seconds: 5));
     } catch (_) {
       // destroy 失败仍需释放进程资源。
     }
@@ -727,14 +971,7 @@ class SpiderHost {
 }
 
 /// 站点运行时状态（§17.2 Spider 管理页展示）。
-enum SpiderRuntimeState {
-  stopped,
-  running,
-  crashed,
-  backoff,
-  disabled,
-  failed,
-}
+enum SpiderRuntimeState { stopped, running, crashed, backoff, disabled, failed }
 
 /// 单个站点的 Spider 运行时记录。
 class SpiderRuntimeStatus {
@@ -779,6 +1016,7 @@ class SpiderHostSupervisor {
   SpiderHostSupervisor({
     required this.workRoot,
     required this.log,
+    this.debugLog,
     this.maxFailures = 5,
     this.baseBackoff = const Duration(seconds: 1),
     this.maxBackoff = const Duration(seconds: 60),
@@ -787,6 +1025,9 @@ class SpiderHostSupervisor {
   /// sidecar 临时工作目录根（`%LOCALAPPDATA%/webhtv-pc/cache/sidecars`）。
   final String workRoot;
   final LogService log;
+
+  /// 详细调试日志旁路；由 `AppState` 注入，缺省不影响既有行为。
+  final SpiderDebugLog? debugLog;
 
   /// 同一站点连续失败该次数后进入禁用状态，禁止无限快速重启（§9.3.1）。
   final int maxFailures;
@@ -868,6 +1109,7 @@ class SpiderHostSupervisor {
           limits: manifest.limits,
           extraEnvironment: environment,
         ),
+        debugLog: debugLog,
       );
       host = SpiderHost(manifest: manifest, process: process, log: log);
       await host.initialize(extend: extend);
@@ -982,23 +1224,24 @@ class SpiderHostSupervisor {
   SpiderHost? hostFor(String siteKey) => _runtimes[siteKey]?.host;
 
   /// 全部运行时状态，供 Spider 管理页展示（§17.2）。
-  List<SpiderRuntimeStatus> statuses() => _runtimes.values
-      .map(
-        (runtime) => SpiderRuntimeStatus(
-          siteKey: runtime.siteKey,
-          state: runtime.state,
-          manifest: runtime.process == null ? null : runtime.host?.manifest,
-          initResult: runtime.host?.initResult,
-          isolation: runtime.process?.isolation,
-          lastError: runtime.lastError,
-          failureCount: runtime.failureCount,
-          restartDelay: runtime.restartDelay,
-          nextRetryAt: runtime.nextRetryAt,
-          stderrLines: runtime.process?.stderrLines ?? const [],
-        ),
-      )
-      .toList()
-    ..sort((a, b) => a.siteKey.compareTo(b.siteKey));
+  List<SpiderRuntimeStatus> statuses() =>
+      _runtimes.values
+          .map(
+            (runtime) => SpiderRuntimeStatus(
+              siteKey: runtime.siteKey,
+              state: runtime.state,
+              manifest: runtime.process == null ? null : runtime.host?.manifest,
+              initResult: runtime.host?.initResult,
+              isolation: runtime.process?.isolation,
+              lastError: runtime.lastError,
+              failureCount: runtime.failureCount,
+              restartDelay: runtime.restartDelay,
+              nextRetryAt: runtime.nextRetryAt,
+              stderrLines: runtime.process?.stderrLines ?? const [],
+            ),
+          )
+          .toList()
+        ..sort((a, b) => a.siteKey.compareTo(b.siteKey));
 
   /// 应用退出时释放全部 sidecar 与端口（§22.2）。
   Future<void> shutdownAll() async {
@@ -1118,9 +1361,10 @@ class SidecarRuntimeResolver {
       final launcher = _resolveFromPath('py.exe');
       if (launcher != null) add(launcher, const ['-3']);
     }
-    for (final name in Platform.isWindows
-        ? const ['python.exe', 'python3.exe', 'python']
-        : const ['python3', 'python']) {
+    for (final name
+        in Platform.isWindows
+            ? const ['python.exe', 'python3.exe', 'python']
+            : const ['python3', 'python']) {
       final resolved = _resolveFromPath(name);
       if (resolved != null) add(resolved, const []);
     }

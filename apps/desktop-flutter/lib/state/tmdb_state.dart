@@ -894,9 +894,17 @@ class TmdbState extends ChangeNotifier {
   /// - **单季失败只跳过该季**：某季 404 不能让整块补卡失效，其余季照常填充；
   /// - 迟到响应丢弃（代际校验与 [loadEpisodes] 同一套写法）；
   /// - 不抛异常、不改 [_phase]、不产生错误横幅（补卡是锦上添花，`04` §3.4）。
-  Future<void> ensureAllSeasonEpisodes({required int generation}) async {
+  ///
+  /// [allowAnySource] 是给**第二类调用方**的：普通站点上「本片 `vod_play_url`
+  /// 为空」时，详情页同样要铺 TMDB 全集卡片（否则只剩一句「没有可播放的剧集」），
+  /// 而那批卡片的集名同样只能来自全季聚合。默认 `false` 保持既有行为——不显式
+  /// 声明时，非导航源仍然零请求。
+  Future<void> ensureAllSeasonEpisodes({
+    required int generation,
+    bool allowAnySource = false,
+  }) async {
     if (_disposed || generation != _generation) return;
-    if (!_navSource) return;
+    if (!_navSource && !allowAnySource) return;
     final currentItem = item;
     if (currentItem == null || !currentItem.isTv) return;
     final counts = _seasonEpisodeCounts;

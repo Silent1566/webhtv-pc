@@ -30,6 +30,8 @@
 ///   `tmdb` 优先 TMDB、缺失时按片名 / `title` 只按片名）。默认 `tmdb`，
 ///   对齐安卓 `history_aggregation_by_tmdb` 的聚合意图，但保留 `none`
 ///   让用户能切回 v7 的逐集形态。
+/// - `spiderDebugLog`：**详细调试日志开关**（爬虫 IPC 入参/出参）。默认关；
+///   打开时日志单文件上限放大到 20MB，见 `LogService.verboseMaxFileBytes`。
 ///
 /// 另外管理 `settings.json` **顶层** `player` 段（Phase 9）：
 /// 播放参数（缓冲/硬解/自动连播/失败回退/预加载/片头片尾开关/LUT）。
@@ -203,6 +205,9 @@ class UiPreferencesStore {
   /// 追番设置的**显式**设置；null 表示从未设置过（自动检查关闭）。
   FollowingSettings? _followingSettings;
 
+  /// 详细调试日志的**显式**设置；null 表示从未设置过（关闭）。
+  bool? _spiderDebugLog;
+
   bool _loaded = false;
 
   /// 搜索历史上限（上游安卓 `RecordAdapter.checkToAdd` 同为 10）。
@@ -362,6 +367,12 @@ class UiPreferencesStore {
 
   /// 是否显式设置过追番。
   bool get hasExplicitFollowingSettings => _followingSettings != null;
+
+  /// 详细调试日志（默认关闭；关闭时日志量与既有版本一致）。
+  bool get spiderDebugLog => _spiderDebugLog ?? false;
+
+  /// 是否显式设置过详细调试日志。
+  bool get hasExplicitSpiderDebugLog => _spiderDebugLog != null;
 
   /// 生效的解析接口失败切换设置。
   ParseFailoverSettings get parseFailover =>
@@ -554,6 +565,10 @@ class UiPreferencesStore {
         if (following is Map && following.isNotEmpty) {
           _followingSettings = FollowingSettings.fromJson(following);
         }
+        // 详细调试日志：只接受 bool；非法值忽略（回落默认「关闭」）。
+        // 注意它在 `ui` 段内，与上面顶层段不同源。
+        final spiderDebugLog = ui is Map ? ui['spiderDebugLog'] : null;
+        if (spiderDebugLog is bool) _spiderDebugLog = spiderDebugLog;
       }
       _loaded = true;
     } catch (error) {
@@ -752,6 +767,15 @@ class UiPreferencesStore {
   Future<bool> rememberFollowingSettings(FollowingSettings settings) {
     if (_followingSettings == settings) return Future.value(true);
     _followingSettings = settings;
+    return _persist();
+  }
+
+  /// 记住详细调试日志开关。
+  ///
+  /// 与其它偏好一样：写盘失败**不影响**当前会话（内存里已生效）。
+  Future<bool> rememberSpiderDebugLog(bool enabled) {
+    if (_spiderDebugLog == enabled) return Future.value(true);
+    _spiderDebugLog = enabled;
     return _persist();
   }
 
@@ -959,12 +983,14 @@ class UiPreferencesStore {
         // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
         final viewMode = _episodeViewMode;
         if (viewMode != null) ui['episodeViewMode'] = viewMode;
+        // 详细调试日志：显式切过就写（含 false），从未设置过则缺席 = 默认关闭。
+        final spiderDebugLog = _spiderDebugLog;
+        if (spiderDebugLog != null) ui['spiderDebugLog'] = spiderDebugLog;
         // 屏显：只有显式设置过的项才写（缺席 = 默认）。
         if (_osdFlags.isNotEmpty) ui['osd'] = _osdFlags;
         // 按钮排版：两个键各自独立；都缺席时整个 playerButtons 不写。
         final order = _buttonOrder;
-        final hidden = _buttonHidden;
-        if (order != null || hidden != null) {
+        final hidden = _buttonHidden;        if (order != null || hidden != null) {
           ui['playerButtons'] = <String, Object?>{
             // 用 null-aware 值 `?order` 而不是 `if (order != null) 'order': order,`：
             // 后者在本仓库工具链下触发 `use_null_aware_elements`（实测确认）。
