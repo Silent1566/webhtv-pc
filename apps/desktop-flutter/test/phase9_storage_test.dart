@@ -8,10 +8,10 @@ import 'package:webhtv_pc/services/storage.dart';
 
 void main() {
   group('Phase 9 schema v6', () {
-    test('schemaVersion 为 8 且五张新表存在', () {
+    test('schemaVersion 为 9 且五张新表存在', () {
       final db = AppDatabase.inMemory();
-      expect(AppDatabase.schemaVersion, 8);
-      expect(db.schemaVersionValue, '8');
+      expect(AppDatabase.schemaVersion, 9);
+      expect(db.schemaVersionValue, '9');
       for (final table in [
         'skip_segments',
         'subtitle_match',

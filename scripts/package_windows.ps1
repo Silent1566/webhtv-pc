@@ -370,7 +370,46 @@ try {
         default { "签名无效（$statusText）" }
     }
 
-    # 5. 构建信息（UTF-8 无 BOM，中文可读）
+    # 5. 完整性标签与网络锁定归位。
+    # exe 一旦继承 Low 完整性标签，双击启动的进程就是 Low IL，对 Medium 的
+    # %APPDATA% / %LOCALAPPDATA% 只读：用户看到「数据库打开失败、设置写不进去」，
+    # 而 icacls 显示权限一切正常。带 Zone.Identifier 的文件还会触发 SmartScreen。
+    # 现场记录：docs/troubleshooting/readonly-storage-low-integrity.md
+    # BuildDir 一并归位：用户经常直接双击 build 产物，而不是解压 zip。
+    # 对目录本身设标签需要 WRITE_OWNER，temp 目录常只继承到 Modify（会报 Access
+    # is denied），但子文件归位仍然成立，所以这里只告警、不阻断打包。
+    $integrityLabel = 'Medium'
+    $integrityFailures = [System.Collections.Generic.List[string]]::new()
+    foreach ($integrityTarget in @($BuildDir, $staging)) {
+        if (-not (Test-Path -LiteralPath $integrityTarget)) { continue }
+        $integrityOutput = icacls $integrityTarget /setintegritylevel "(OI)(CI)$integrityLabel" /T /C 2>&1
+        $failedCount = 0
+        foreach ($line in $integrityOutput) {
+            if ("$line" -match 'Failed processing\s+(\d+)\s+files') { $failedCount += [int]$Matches[1] }
+        }
+        if ($LASTEXITCODE -ne 0 -or $failedCount -gt 0) {
+            $integrityFailures.Add("$integrityTarget（失败 $failedCount 项，退出码 $LASTEXITCODE）")
+        }
+    }
+    $integritySummary = if ($integrityFailures.Count -eq 0) {
+        "$integrityLabel（已归位）"
+    } else {
+        "$integrityLabel（部分未归位：$($integrityFailures -join '；')）"
+    }
+    if ($integrityFailures.Count -gt 0) {
+        Write-Warning "完整性标签归位未完全成功：$($integrityFailures -join '；')"
+    }
+
+    $unblockedCount = 0
+    foreach ($stagedFile in (Get-ChildItem -LiteralPath $staging -Recurse -File -Force)) {
+        if (Get-Item -LiteralPath $stagedFile.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+            Unblock-File -LiteralPath $stagedFile.FullName -ErrorAction Stop
+            $unblockedCount++
+        }
+    }
+    $unblockSummary = if ($unblockedCount -eq 0) { '无需解除（无网络来源标记）' } else { "$unblockedCount 个文件已解除" }
+
+    # 6. 构建信息（UTF-8 无 BOM，中文可读）
     $buildInfo = @"
 WebHTV PC 构建信息
 ==================
@@ -382,6 +421,8 @@ Flutter：$FlutterVersion
 平台：Windows x64
 签名：$signatureLabel
 程序：$exeName
+完整性标签：$integritySummary
+网络锁定：$unblockSummary
 
 Sidecar 宿主（随包）：Python / Node / JVM
 - Node 运行时（随包内置）：$nodeRelativePath（约 $([Math]::Round($nodeFile.Length / 1MB, 1)) MiB）
@@ -392,9 +433,10 @@ Sidecar 宿主（随包）：Python / Node / JVM
 "@
     [IO.File]::WriteAllText((Join-Path $staging 'BUILD_INFO.txt'), $buildInfo + "`n", $utf8)
 
-    # 6. 随包文件清单（动态库版本 + SHA-256；不逐项列 flutter_assets）
+    # 7. 随包文件清单（动态库版本 + SHA-256；不逐项列 flutter_assets）
     $inventory = [System.Collections.Generic.List[string]]::new()
     $inventory.Add('随包文件清单（主程序 / 动态库 / Sidecar 宿主 / 内置 Node 运行时）')
+    $inventory.Add("完整性标签：$integritySummary；网络锁定：$unblockSummary")
     $inventory.Add('flutter_assets 内的资源与第三方许可不逐项列出；许可见 data/flutter_assets/NOTICES.Z。')
     $inventory.Add('')
 
@@ -431,7 +473,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
         $utf8
     )
 
-    # 7. zip（含顶层目录，解压即得可运行目录）
+    # 8. zip（含顶层目录，解压即得可运行目录）
     $zipPath = Join-Path $OutputDir $zipName
     Compress-Archive -LiteralPath $staging -DestinationPath $zipPath -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
@@ -439,14 +481,14 @@ Sidecar 宿主（随包）：Python / Node / JVM
     }
     $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-    # 8. 校验文件（LF 行尾，sha256sum -c 兼容）
+    # 9. 校验文件（LF 行尾，sha256sum -c 兼容）
     [IO.File]::WriteAllText(
         (Join-Path $OutputDir 'SHA256SUMS.txt'),
         "$zipHash  $zipName`n",
         $utf8
     )
 
-    # 9. 机器可读发布元数据（供未来 updater / 分发使用；当前应用不消费）
+    # 10. 机器可读发布元数据（供未来 updater / 分发使用；当前应用不消费）
     $notes = ''
     if (-not [string]::IsNullOrWhiteSpace($NotesFile) -and (Test-Path -LiteralPath $NotesFile -PathType Leaf)) {
         $notes = (Get-Content -LiteralPath $NotesFile -Raw -Encoding utf8)
@@ -467,6 +509,12 @@ Sidecar 宿主（随包）：Python / Node / JVM
         signature   = [ordered]@{
             status  = $signatureStatus
             subject = $signatureSubject
+        }
+        integrity   = [ordered]@{
+            label          = $integrityLabel
+            complete       = ($integrityFailures.Count -eq 0)
+            failures       = @($integrityFailures)
+            unblockedFiles = $unblockedCount
         }
         assets      = @(
             [ordered]@{
@@ -498,6 +546,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
     Write-Host "SHA256：$zipHash"
     Write-Host "校验文件：$(Join-Path $OutputDir 'SHA256SUMS.txt')"
     Write-Host "发布元数据：$(Join-Path $OutputDir 'release-info.json')"
+    Write-Host "完整性：$integrityLabel；网络锁定：$unblockSummary"
 } finally {
     if (Test-Path -LiteralPath $stagingRoot) {
         Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue

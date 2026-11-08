@@ -66,11 +66,11 @@ SyncMergeStats sync(
 }
 
 void main() {
-  group('schema 迁移（2 → 8；Phase 5 删除标记 + Phase 9 增强 + 播放源身份 + 历史作品身份）', () {
-    test('schemaVersion 为 8，且 history_deletions/following 表存在', () {
-      expect(AppDatabase.schemaVersion, 8);
+  group('schema 迁移（2 → 9；Phase 5 删除标记 + Phase 9 增强 + 播放源身份 + 历史作品身份 + 收藏海报）', () {
+    test('schemaVersion 为 9，且 history_deletions/following 表存在', () {
+      expect(AppDatabase.schemaVersion, 9);
       final db = AppDatabase.inMemory();
-      expect(db.schemaVersionValue, '8');
+      expect(db.schemaVersionValue, '9');
       expect(db.count('history_deletions'), 0);
       expect(db.rowCounts().containsKey('history_deletions'), isTrue);
       expect(db.rowCounts().containsKey('following'), isTrue);
@@ -88,7 +88,7 @@ void main() {
         final opened = AppDatabase.open(path);
         expect(opened.succeeded, isTrue, reason: opened.error);
         final db = opened.database!;
-        expect(db.schemaVersionValue, '8');
+        expect(db.schemaVersionValue, '9');
         expect(db.count('history_deletions'), 0);
         db.dispose();
       }
@@ -137,10 +137,54 @@ void main() {
       final db = opened.database!;
       expect(db.count('history'), 1, reason: '旧数据必须完好');
       expect(db.count('history_deletions'), 0);
-      expect(db.schemaVersionValue, '8');
+      expect(db.schemaVersionValue, '9');
 
       // 旧历史能正常参与合并（不是只建了表但索引不可用）。
       expect(db.historySyncIndex(), hasLength(1));
+      db.dispose();
+    });
+
+    test('v8 旧库的收藏表打开后补上 vod_pic 列，旧行海报为空串', () {
+      final tempDir = Directory.systemTemp.createTempSync('phase5-favorite-v8-');
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+      final path = p.join(tempDir.path, 'legacy-v8.sqlite3');
+
+      final legacy = sqlite3.open(path);
+      legacy.execute('''
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      ''');
+      legacy.execute('''
+        CREATE TABLE favorites (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL,
+          site_key TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          subtitle TEXT,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(kind, site_key, target_id)
+        );
+      ''');
+      legacy.execute(
+        "INSERT INTO meta(key, value) VALUES('schema_version', '8');",
+      );
+      legacy.execute(
+        'INSERT INTO favorites(kind, site_key, target_id, title, subtitle, '
+        "updated_at) VALUES('vod','k','v1','旧收藏','全12集',111);",
+      );
+      // ignore: deprecated_member_use
+      legacy.dispose();
+
+      final opened = AppDatabase.open(path);
+      expect(opened.succeeded, isTrue, reason: opened.error);
+      final db = opened.database!;
+      final favorites = db.listFavorites();
+      expect(favorites, hasLength(1), reason: '旧收藏不能丢');
+      expect(favorites.first.title, '旧收藏');
+      expect(favorites.first.vodPic, '', reason: 'v8 收藏没有海报，升级后为空串');
+      expect(db.schemaVersionValue, '9');
       db.dispose();
     });
   });
