@@ -32,499 +32,527 @@ class AdvancedSettingsPage extends StatelessWidget {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('高级设置')),
-      body: ListView(
-        padding: formPagePadding(context),
-        children: [
-          // ---------------------------------------------------------- 直播
-          Text('直播', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('settings-live-source-fallback'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('直播源失败时自动换源'),
-            subtitle: const Text('当前源所有线路都失败后，尝试其他源的同名频道'),
-            value: state.liveSettings.sourceFallback,
-            onChanged: (value) async {
-              await state.setLiveSettings(
-                state.liveSettings.copyWith(sourceFallback: value),
-              );
-            },
-          ),
-          SwitchListTile(
-            key: const ValueKey('settings-live-change-line'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('线路失败自动换线'),
-            subtitle: const Text('关闭后单条线路失败直接报错，不再尝试同频道其他线路'),
-            value: state.liveSettings.changeLine,
-            onChanged: (value) async {
-              await state.setLiveSettings(
-                state.liveSettings.copyWith(changeLine: value),
-              );
-            },
-          ),
-          const Divider(height: 32),
-          // ---------------------------------------------------------- 广告
-          Text('广告过滤', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('settings-ad-block'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('启用配置中的广告规则'),
-            subtitle: Text(
-              '${state.config?.ads.length ?? 0} 个广告主机 · '
-              '${state.config?.hlsRules.length ?? 0} 条 HLS 规则；'
-              '规则为空时无效果',
-            ),
-            value: state.adBlockEnabled,
-            onChanged: (value) async {
-              await state.setAdBlockEnabled(value);
-            },
-          ),
-          const Divider(height: 32),
-          // ------------------------------------------------------ 网盘检测
-          Text('网盘检测', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '粘贴分享链接检测有效性（有效 / 失效 / 需要提取码 / 无法判定）。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            key: const ValueKey('settings-pan-check-open'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => PanCheckPage(state: state),
-              ),
-            ),
-            icon: const Icon(Icons.link_outlined),
-            label: const Text('打开网盘检测'),
-          ),
-          const Divider(height: 32),
-          // ------------------------------------------------------ 出站代理
-          Text('出站代理', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '按域名把请求转发到 HTTP 代理（如 127.0.0.1:7890）。'
-            '只影响站点/解析/字幕等出站请求，不影响本地播放代理。',
-            style: TextStyle(fontSize: 12),
-          ),
-          SwitchListTile(
-            key: const ValueKey('settings-outbound-proxy-enabled'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('启用出站代理'),
-            subtitle: Text(
-              state.outboundProxy.isEffective
-                  ? '${state.outboundProxy.validRules.length} 条规则'
-                  : '未生效（没有规则或地址不合法）',
-            ),
-            value: state.outboundProxy.enabled,
-            onChanged: (value) async {
-              await state.setOutboundProxy(
-                state.outboundProxy.copyWith(enabled: value),
-              );
-            },
-          ),
-          ListTile(
-            key: const ValueKey('settings-outbound-proxy-default'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('默认代理'),
-            subtitle: Text(
-              state.outboundProxy.defaultProxyUrl.isEmpty
-                  ? '未设置（未命中的域名直连）'
-                  : state.outboundProxy.defaultProxyUrl,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: const Icon(Icons.edit_outlined, size: 18),
-            onTap: () => _editDefaultProxy(context),
-          ),
-          for (final rule in state.outboundProxy.rules)
-            ListTile(
-              key: ValueKey('settings-outbound-proxy-rule-${rule.proxyUrl}'),
+      // 为什么在这里再监听一次 AppState：本页由 `Navigator.push` 打开，是独立路由；
+      // `AppShell` 的监听管不到它，`MaterialApp.builder` 那层 `ListenableBuilder`
+      // 把 `child`（Navigator）原样透传，Flutter 对同一实例会跳过子树重建。
+      // 不包这一层，`SwitchListTile.value` 拿到的是进页那一刻的旧快照，拨动后
+      // 父级不重建 → 受控开关视觉回弹（整页所有开关同一根因）。
+      // 只包 body：`AppBar` 不进监听，避免重建导致滚动位置/焦点抖动。
+      body: ListenableBuilder(
+        listenable: state,
+        builder: (context, _) => ListView(
+          padding: formPagePadding(context),
+          children: [
+            // ---------------------------------------------------------- 直播
+            Text('直播', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-live-source-fallback'),
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: Text(rule.patterns.join('、')),
-              subtitle: Text(rule.proxyUrl),
-              trailing: IconButton(
-                tooltip: '删除规则',
-                icon: const Icon(Icons.delete_outline, size: 18),
-                onPressed: () => _removeOutboundRule(rule),
+              title: const Text('直播源失败时自动换源'),
+              subtitle: const Text('当前源所有线路都失败后，尝试其他源的同名频道'),
+              value: state.liveSettings.sourceFallback,
+              onChanged: (value) async {
+                await state.setLiveSettings(
+                  state.liveSettings.copyWith(sourceFallback: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              key: const ValueKey('settings-live-change-line'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('线路失败自动换线'),
+              subtitle: const Text('关闭后单条线路失败直接报错，不再尝试同频道其他线路'),
+              value: state.liveSettings.changeLine,
+              onChanged: (value) async {
+                await state.setLiveSettings(
+                  state.liveSettings.copyWith(changeLine: value),
+                );
+              },
+            ),
+            const Divider(height: 32),
+            // ---------------------------------------------------------- 广告
+            Text('广告过滤', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-ad-block'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用配置中的广告规则'),
+              subtitle: Text(
+                '${state.config?.ads.length ?? 0} 个广告主机 · '
+                '${state.config?.hlsRules.length ?? 0} 条 HLS 规则；'
+                '规则为空时无效果',
               ),
+              value: state.adBlockEnabled,
+              onChanged: (value) async {
+                await state.setAdBlockEnabled(value);
+              },
             ),
-          OutlinedButton.icon(
-            key: const ValueKey('settings-outbound-proxy-add'),
-            onPressed: () => _addOutboundRule(context),
-            icon: const Icon(Icons.add),
-            label: const Text('添加域名规则'),
-          ),
-          const Divider(height: 32),
-          // ------------------------------------------------------ 分组规则
-          Text('分组规则', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '从站点名抽取分组标记（如「木偶[盘]」→「盘」）。内置规则可单独关闭；'
-            '自定义规则须含一个捕获组。',
-            style: TextStyle(fontSize: 12),
-          ),
-          Column(
-            key: const ValueKey('settings-group-rules'),
-            children: [
-              for (final rule in state.siteGroupSettings.rules)
-                SwitchListTile(
-                  key: ValueKey('settings-group-rule-${rule.id}'),
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(rule.name),
-                  subtitle: Text(rule.pattern),
-                  value: rule.enabled,
-                  onChanged: (value) => _setGroupRuleEnabled(rule.id, value),
-                  secondary: rule.builtin
-                      ? null
-                      : IconButton(
-                          tooltip: '删除规则 ${rule.name}',
-                          icon: const Icon(Icons.delete_outline, size: 18),
-                          onPressed: () => _removeGroupRule(rule.id),
-                        ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('settings-group-rule-add'),
-            onPressed: () => _addGroupRule(context),
-            icon: const Icon(Icons.add),
-            label: const Text('添加自定义规则'),
-          ),
-          const Divider(height: 32),
-          // -------------------------------------------------------- 解析
-          Text('解析与搜索', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('settings-parse-failover'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('解析接口失败时尝试其他接口'),
-            subtitle: const Text('按配置顺序最多再试一个；只尝试 JSON 类接口'),
-            value: state.parseFailoverSettings.enabled,
-            onChanged: (value) async {
-              await state.setParseFailoverSettings(
-                state.parseFailoverSettings.copyWith(enabled: value),
-              );
-            },
-          ),
-          SwitchListTile(
-            key: const ValueKey('settings-site-health-sort'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('按站点健康排序搜索结果'),
-            subtitle: const Text('成功的站点优先；没有实测记录的站点排在最后'),
-            value: state.siteOrder.healthSort,
-            onChanged: (value) async {
-              await state.setSiteOrder(
-                state.siteOrder.copyWith(healthSort: value),
-              );
-            },
-          ),
-          const Divider(height: 32),
-          // --------------------------------------------------------- AI 辅助
-          Text('AI 辅助', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            state.aiReady
-                ? '已启用（协议 ${state.aiConfig.protocol}）：标题清洗 / 日志诊断 / 分组建议 / 广告分片判定'
-                : '未配置：这些能力不会发起任何请求',
-            key: const ValueKey('settings-ai-assist-summary'),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            key: const ValueKey('settings-ai-assist-open'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => AiAssistPage(state: state),
-              ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 网盘检测
+            Text('网盘检测', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              '粘贴分享链接检测有效性（有效 / 失效 / 需要提取码 / 无法判定）。',
+              style: TextStyle(fontSize: 12),
             ),
-            icon: const Icon(Icons.auto_awesome),
-            label: const Text('打开 AI 辅助'),
-          ),
-          const Divider(height: 32),
-          // -------------------------------------------------------- 弹幕源
-          Text('弹幕源', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('settings-danmaku-auto-search'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('没有弹幕时自动搜索弹幕库'),
-            subtitle: const Text('需要先配置弹幕库地址；失败只提示，不影响播放'),
-            value: state.danmakuSettings.autoSearch,
-            onChanged: (value) async {
-              await state.setDanmakuSettings(
-                state.danmakuSettings.copyWith(autoSearch: value),
-              );
-            },
-          ),
-          ListTile(
-            key: const ValueKey('settings-danmaku-api'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('弹幕库地址'),
-            subtitle: Text(
-              state.danmakuSettings.apiUrl.isEmpty
-                  ? '未配置'
-                  : state.danmakuSettings.apiUrl,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: const Icon(Icons.edit_outlined, size: 18),
-            onTap: () => _editDanmakuApi(context),
-          ),
-          const Divider(height: 32),
-          // -------------------------------------------------------- 字幕源
-          Text('字幕源', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            state.subtitleSettings.hasAnyProvider
-                ? '已配置${state.subtitleSettings.autoMatch ? " · 自动匹配已开" : ""}'
-                : '未配置：播放结果没有字幕时不会自动匹配',
-            key: const ValueKey('settings-subtitle-summary'),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            key: const ValueKey('settings-subtitle-open'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => SubtitleSettingsPage(
-                  state: state,
-                  paths: state.paths,
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('settings-pan-check-open'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PanCheckPage(state: state),
                 ),
               ),
+              icon: const Icon(Icons.link_outlined),
+              label: const Text('打开网盘检测'),
             ),
-            icon: const Icon(Icons.subtitles_outlined),
-            label: const Text('打开字幕源设置'),
-          ),
-          const Divider(height: 32),
-          // -------------------------------------------------------- 站点注入
-          Text('站点注入', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            state.injectedSites.isEmpty
-                ? '未注入站点：可粘贴站点 JSON 追加到站点列表'
-                : '已注入 ${state.injectedSites.length} 个站点'
-                      '（启用 ${state.injectedSites.where((e) => e.enabled).length}）',
-            key: const ValueKey('settings-injected-sites-summary'),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            key: const ValueKey('settings-injected-sites-open'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => InjectedSitesPage(state: state),
-              ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 出站代理
+            Text('出站代理', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              '按域名把请求转发到 HTTP 代理（如 127.0.0.1:7890）。'
+              '只影响站点/解析/字幕等出站请求，不影响本地播放代理。',
+              style: TextStyle(fontSize: 12),
             ),
-            icon: const Icon(Icons.extension_outlined),
-            label: const Text('管理注入站点'),
-          ),
-          const Divider(height: 32),
-          // ------------------------------------------------------ 播放参数
-          Text('播放参数', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Column(
-            key: const ValueKey('settings-player-options'),
-            children: [
-              _switch(
-                'settings-player-hardware-decoding',
-                '硬件解码',
-                '关闭后强制软解；花屏/绿屏时可作为排查手段',
-                state.playerOptions.hardwareDecoding,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(hardwareDecoding: value),
-                  );
-                },
+            SwitchListTile(
+              key: const ValueKey('settings-outbound-proxy-enabled'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用出站代理'),
+              subtitle: Text(
+                state.outboundProxy.isEffective
+                    ? '${state.outboundProxy.validRules.length} 条规则'
+                    : '未生效（没有规则或地址不合法）',
               ),
-              _switch(
-                'settings-player-auto-next',
-                '自动连播下一集',
-                '关闭后播完当前集会停住；循环模式优先于该开关',
-                state.playerOptions.autoNext,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(autoNext: value),
-                  );
-                },
+              value: state.outboundProxy.enabled,
+              onChanged: (value) async {
+                await state.setOutboundProxy(
+                  state.outboundProxy.copyWith(enabled: value),
+                );
+              },
+            ),
+            ListTile(
+              key: const ValueKey('settings-outbound-proxy-default'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('默认代理'),
+              subtitle: Text(
+                state.outboundProxy.defaultProxyUrl.isEmpty
+                    ? '未设置（未命中的域名直连）'
+                    : state.outboundProxy.defaultProxyUrl,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              _switch(
-                'settings-player-preload-next',
-                '预解析下一集地址',
-                '只提前解析播放地址，不下载媒体数据',
-                state.playerOptions.preloadNext,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(preloadNext: value),
-                  );
-                },
-              ),
-              _switch(
-                'settings-player-audio-passthrough',
-                '音频直通',
-                '交给功放/回音壁解码；接收端不支持时可能无声',
-                state.playerOptions.audioPassthrough,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(audioPassthrough: value),
-                  );
-                },
-              ),
-              _switch(
-                'settings-player-auto-skip-intro',
-                '自动跳过片头',
-                '需要在播放器菜单里标记过片头才生效',
-                state.playerOptions.autoSkipIntro,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(autoSkipIntro: value),
-                  );
-                },
-              ),
-              _switch(
-                'settings-player-auto-skip-outro',
-                '自动跳过片尾',
-                '需要在播放器菜单里标记过片尾才生效',
-                state.playerOptions.autoSkipOutro,
-                (value) async {
-                  await state.setPlayerOptions(
-                    state.playerOptions.copyWith(autoSkipOutro: value),
-                  );
-                },
-              ),
+              trailing: const Icon(Icons.edit_outlined, size: 18),
+              onTap: () => _editDefaultProxy(context),
+            ),
+            for (final rule in state.outboundProxy.rules)
               ListTile(
-                key: const ValueKey('settings-player-failure-fallback'),
+                key: ValueKey('settings-outbound-proxy-rule-${rule.proxyUrl}'),
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: const Text('失败回退'),
-                subtitle: Text(state.playerOptions.failureFallback.label),
-                trailing: DropdownButton<PlayerFailureFallback>(
-                  value: state.playerOptions.failureFallback,
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    for (final mode in PlayerFailureFallback.values)
-                      DropdownMenuItem(value: mode, child: Text(mode.label)),
-                  ],
-                  onChanged: (mode) async {
-                    if (mode == null) return;
+                title: Text(rule.patterns.join('、')),
+                subtitle: Text(rule.proxyUrl),
+                trailing: IconButton(
+                  tooltip: '删除规则',
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  onPressed: () => _removeOutboundRule(rule),
+                ),
+              ),
+            OutlinedButton.icon(
+              key: const ValueKey('settings-outbound-proxy-add'),
+              onPressed: () => _addOutboundRule(context),
+              icon: const Icon(Icons.add),
+              label: const Text('添加域名规则'),
+            ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 分组规则
+            Text('分组规则', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              '从站点名抽取分组标记（如「木偶[盘]」→「盘」）。内置规则可单独关闭；'
+              '自定义规则须含一个捕获组。',
+              style: TextStyle(fontSize: 12),
+            ),
+            Column(
+              key: const ValueKey('settings-group-rules'),
+              children: [
+                for (final rule in state.siteGroupSettings.rules)
+                  SwitchListTile(
+                    key: ValueKey('settings-group-rule-${rule.id}'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(rule.name),
+                    subtitle: Text(rule.pattern),
+                    value: rule.enabled,
+                    onChanged: (value) => _setGroupRuleEnabled(rule.id, value),
+                    secondary: rule.builtin
+                        ? null
+                        : IconButton(
+                            tooltip: '删除规则 ${rule.name}',
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: () => _removeGroupRule(rule.id),
+                          ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const ValueKey('settings-group-rule-add'),
+              onPressed: () => _addGroupRule(context),
+              icon: const Icon(Icons.add),
+              label: const Text('添加自定义规则'),
+            ),
+            const Divider(height: 32),
+            // -------------------------------------------------------- 解析
+            Text('解析与搜索', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-parse-failover'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('解析接口失败时尝试其他接口'),
+              subtitle: const Text('按配置顺序最多再试一个；只尝试 JSON 类接口'),
+              value: state.parseFailoverSettings.enabled,
+              onChanged: (value) async {
+                await state.setParseFailoverSettings(
+                  state.parseFailoverSettings.copyWith(enabled: value),
+                );
+              },
+            ),
+            SwitchListTile(
+              key: const ValueKey('settings-site-health-sort'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('按站点健康排序搜索结果'),
+              subtitle: const Text('成功的站点优先；没有实测记录的站点排在最后'),
+              value: state.siteOrder.healthSort,
+              onChanged: (value) async {
+                await state.setSiteOrder(
+                  state.siteOrder.copyWith(healthSort: value),
+                );
+              },
+            ),
+            const Divider(height: 32),
+            // --------------------------------------------------------- AI 辅助
+            Text('AI 辅助', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              state.aiReady
+                  ? '已启用（协议 ${state.aiConfig.protocol}）：标题清洗 / 日志诊断 / 分组建议 / 广告分片判定'
+                  : '未配置：这些能力不会发起任何请求',
+              key: const ValueKey('settings-ai-assist-summary'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('settings-ai-assist-open'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => AiAssistPage(state: state),
+                ),
+              ),
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('打开 AI 辅助'),
+            ),
+            const Divider(height: 32),
+            // -------------------------------------------------------- 弹幕源
+            Text('弹幕源', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-danmaku-auto-search'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('没有弹幕时自动搜索弹幕库'),
+              subtitle: const Text('需要先配置弹幕库地址；失败只提示，不影响播放'),
+              value: state.danmakuSettings.autoSearch,
+              onChanged: (value) async {
+                await state.setDanmakuSettings(
+                  state.danmakuSettings.copyWith(autoSearch: value),
+                );
+              },
+            ),
+            ListTile(
+              key: const ValueKey('settings-danmaku-api'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('弹幕库地址'),
+              subtitle: Text(
+                state.danmakuSettings.apiUrl.isEmpty
+                    ? '未配置'
+                    : state.danmakuSettings.apiUrl,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.edit_outlined, size: 18),
+              onTap: () => _editDanmakuApi(context),
+            ),
+            const Divider(height: 32),
+            // -------------------------------------------------------- 字幕源
+            Text('字幕源', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              state.subtitleSettings.hasAnyProvider
+                  ? '已配置${state.subtitleSettings.autoMatch ? " · 自动匹配已开" : ""}'
+                  : '未配置：播放结果没有字幕时不会自动匹配',
+              key: const ValueKey('settings-subtitle-summary'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('settings-subtitle-open'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SubtitleSettingsPage(
+                    state: state,
+                    paths: state.paths,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.subtitles_outlined),
+              label: const Text('打开字幕源设置'),
+            ),
+            const Divider(height: 32),
+            // -------------------------------------------------------- 站点注入
+            Text('站点注入', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              state.injectedSites.isEmpty
+                  ? '未注入站点：可粘贴站点 JSON 追加到站点列表'
+                  : '已注入 ${state.injectedSites.length} 个站点'
+                        '（启用 ${state.injectedSites.where((e) => e.enabled).length}）',
+              key: const ValueKey('settings-injected-sites-summary'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('settings-injected-sites-open'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => InjectedSitesPage(state: state),
+                ),
+              ),
+              icon: const Icon(Icons.extension_outlined),
+              label: const Text('管理注入站点'),
+            ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 播放参数
+            Text('播放参数', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Column(
+              key: const ValueKey('settings-player-options'),
+              children: [
+                _switch(
+                  'settings-player-hardware-decoding',
+                  '硬件解码',
+                  '关闭后强制软解；花屏/绿屏时可作为排查手段',
+                  state.playerOptions.hardwareDecoding,
+                  (value) async {
                     await state.setPlayerOptions(
-                      state.playerOptions.copyWith(failureFallback: mode),
+                      state.playerOptions.copyWith(hardwareDecoding: value),
                     );
                   },
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '缓存上限：${state.playerOptions.demuxerMaxBytesMiB} MiB'
-            '（前向）+ ${state.playerOptions.demuxerMaxBackBytesMiB} MiB（回看）',
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<int>(
-            key: const ValueKey('settings-player-cache-size'),
-            segments: const [
-              ButtonSegment(value: 128, label: Text('128 MiB')),
-              ButtonSegment(value: 256, label: Text('256 MiB')),
-              ButtonSegment(value: 512, label: Text('512 MiB')),
-            ],
-            selected: {state.playerOptions.demuxerMaxBytesMiB},
-            onSelectionChanged: (selection) async {
-              await state.setPlayerOptions(
-                state.playerOptions.copyWith(
-                  demuxerMaxBytesMiB: selection.first,
-                  demuxerMaxBackBytesMiB: (selection.first ~/ 4).clamp(8, 512),
+                _switch(
+                  'settings-player-auto-next',
+                  '自动连播下一集',
+                  '关闭后播完当前集会停住；循环模式优先于该开关',
+                  state.playerOptions.autoNext,
+                  (value) async {
+                    await state.setPlayerOptions(
+                      state.playerOptions.copyWith(autoNext: value),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-          const Divider(height: 32),
-          // ------------------------------------------------------ 备份与恢复
-          Text('备份与恢复', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '导出设置与数据库（配置记录/历史/收藏），或从备份恢复、重置本地数据。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            key: const ValueKey('settings-backup-open'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => BackupPage(state: state),
+                _switch(
+                  'settings-player-preload-next',
+                  '预解析下一集地址',
+                  '只提前解析播放地址，不下载媒体数据',
+                  state.playerOptions.preloadNext,
+                  (value) async {
+                    await state.setPlayerOptions(
+                      state.playerOptions.copyWith(preloadNext: value),
+                    );
+                  },
+                ),
+                _switch(
+                  'settings-player-audio-passthrough',
+                  '音频直通',
+                  '交给功放/回音壁解码；接收端不支持时可能无声',
+                  state.playerOptions.audioPassthrough,
+                  (value) async {
+                    await state.setPlayerOptions(
+                      state.playerOptions.copyWith(audioPassthrough: value),
+                    );
+                  },
+                ),
+                _switch(
+                  'settings-player-auto-skip-intro',
+                  '自动跳过片头',
+                  '需要在播放器菜单里标记过片头才生效',
+                  state.playerOptions.autoSkipIntro,
+                  (value) async {
+                    await state.setPlayerOptions(
+                      state.playerOptions.copyWith(autoSkipIntro: value),
+                    );
+                  },
+                ),
+                _switch(
+                  'settings-player-auto-skip-outro',
+                  '自动跳过片尾',
+                  '需要在播放器菜单里标记过片尾才生效',
+                  state.playerOptions.autoSkipOutro,
+                  (value) async {
+                    await state.setPlayerOptions(
+                      state.playerOptions.copyWith(autoSkipOutro: value),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('settings-player-failure-fallback'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('失败回退'),
+                  subtitle: Text(state.playerOptions.failureFallback.label),
+                  trailing: DropdownButton<PlayerFailureFallback>(
+                    value: state.playerOptions.failureFallback,
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      for (final mode in PlayerFailureFallback.values)
+                        DropdownMenuItem(value: mode, child: Text(mode.label)),
+                    ],
+                    onChanged: (mode) async {
+                      if (mode == null) return;
+                      await state.setPlayerOptions(
+                        state.playerOptions.copyWith(failureFallback: mode),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '缓存上限：${state.playerOptions.demuxerMaxBytesMiB} MiB'
+              '（前向）+ ${state.playerOptions.demuxerMaxBackBytesMiB} MiB（回看）',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<int>(
+              key: const ValueKey('settings-player-cache-size'),
+              segments: const [
+                ButtonSegment(value: 128, label: Text('128 MiB')),
+                ButtonSegment(value: 256, label: Text('256 MiB')),
+                ButtonSegment(value: 512, label: Text('512 MiB')),
+              ],
+              selected: {state.playerOptions.demuxerMaxBytesMiB},
+              onSelectionChanged: (selection) async {
+                await state.setPlayerOptions(
+                  state.playerOptions.copyWith(
+                    demuxerMaxBytesMiB: selection.first,
+                    demuxerMaxBackBytesMiB: (selection.first ~/ 4).clamp(8, 512),
+                  ),
+                );
+              },
+            ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 备份与恢复
+            Text('备份与恢复', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              '导出设置与数据库（配置记录/历史/收藏），或从备份恢复、重置本地数据。',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('settings-backup-open'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => BackupPage(state: state),
+                ),
               ),
+              icon: const Icon(Icons.settings_backup_restore),
+              label: const Text('打开备份与恢复'),
             ),
-            icon: const Icon(Icons.settings_backup_restore),
-            label: const Text('打开备份与恢复'),
-          ),
-          const Divider(height: 32),
-          // ---------------------------------------------------------- 隐私
-          Text('隐私', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('settings-incognito'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('隐身模式'),
-            subtitle: const Text('不写播放历史与搜索记录；季度进度等历史投影同样不写'),
-            value: state.incognito,
-            onChanged: (value) async {
-              await state.setIncognito(value);
-            },
-          ),
-          const Divider(height: 32),
-          // ---------------------------------------------------------- DoH
-          Text('加密 DNS（DoH）', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            _dohStatusText(),
-            style: const TextStyle(fontSize: 12),
-          ),
-          SwitchListTile(
-            key: const ValueKey('settings-doh-enabled'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('启用 DoH 解析'),
-            subtitle: const Text('只作用于站点/解析/字幕等出站请求；解析失败自动回落系统 DNS'),
-            value: state.dohSettings.enabled,
-            onChanged: (value) async {
-              await state.setDohSettings(
-                state.dohSettings.copyWith(enabled: value),
-              );
-            },
-          ),
-          ListTile(
-            key: const ValueKey('settings-doh-endpoint'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('DoH 端点'),
-            subtitle: Text(
-              state.dohSettings.hasCustomUrl
-                  ? redactDohUrl(state.dohSettings.url)
-                  : '使用配置中的第一个有效服务商',
+            const Divider(height: 32),
+            // ---------------------------------------------------------- 隐私
+            Text('隐私', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-incognito'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('隐身模式'),
+              subtitle: const Text('不写播放历史与搜索记录；季度进度等历史投影同样不写'),
+              value: state.incognito,
+              onChanged: (value) async {
+                await state.setIncognito(value);
+              },
             ),
-            onTap: () => _editDohEndpoint(context),
-          ),
-          ListTile(
-            key: const ValueKey('settings-doh-cache'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: const Text('缓存时长'),
-            subtitle: Text('${state.dohSettings.cacheMinutes} 分钟'),
-            onTap: () async {
-              final next = _nextDohCacheMinutes(state.dohSettings.cacheMinutes);
-              await state.setDohSettings(
-                state.dohSettings.copyWith(cacheMinutes: next),
-              );
-            },
-          ),
-        ],
+            const Divider(height: 32),
+            // ---------------------------------------------------------- DoH
+            Text('加密 DNS（DoH）', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              _dohStatusText(),
+              style: const TextStyle(fontSize: 12),
+            ),
+            SwitchListTile(
+              key: const ValueKey('settings-doh-enabled'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('启用 DoH 解析'),
+              subtitle: const Text('只作用于站点/解析/字幕等出站请求；解析失败自动回落系统 DNS'),
+              value: state.dohSettings.enabled,
+              onChanged: (value) async {
+                await state.setDohSettings(
+                  state.dohSettings.copyWith(enabled: value),
+                );
+              },
+            ),
+            ListTile(
+              key: const ValueKey('settings-doh-endpoint'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('DoH 端点'),
+              subtitle: Text(
+                state.dohSettings.hasCustomUrl
+                    ? redactDohUrl(state.dohSettings.url)
+                    : '使用配置中的第一个有效服务商',
+              ),
+              onTap: () => _editDohEndpoint(context),
+            ),
+            ListTile(
+              key: const ValueKey('settings-doh-cache'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('缓存时长'),
+              subtitle: Text('${state.dohSettings.cacheMinutes} 分钟'),
+              onTap: () async {
+                final next = _nextDohCacheMinutes(state.dohSettings.cacheMinutes);
+                await state.setDohSettings(
+                  state.dohSettings.copyWith(cacheMinutes: next),
+                );
+              },
+            ),
+            const Divider(height: 32),
+            // ------------------------------------------------------ 诊断日志
+            // 放在页面末尾：新增区块不移动既有控件的序号/滚动位置，避免
+            // 固定视口的既有设置页测试因为这一行而找不到下方控件。
+            Text('诊断', style: theme.textTheme.titleMedium),
+            SwitchListTile(
+              key: const ValueKey('settings-spider-debug-log'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('详细调试日志（爬虫入参/出参）'),
+              subtitle: const Text(
+                '记录每次爬虫 IPC 调用的完整请求参数与响应结果（落盘前脱敏），'
+                '单份日志上限放大到 20MB。切换即时生效；日志量很大，排查完请关掉',
+              ),
+              value: state.spiderDebugLog,
+              onChanged: (value) async {
+                await state.setSpiderDebugLog(value);
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

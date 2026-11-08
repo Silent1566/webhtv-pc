@@ -17,6 +17,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../services/spider_process.dart';
 import 'http_api.dart';
 import 'ipc_protocol.dart';
 import 'protocol.dart';
@@ -30,14 +31,7 @@ abstract final class CatHttpRoute {
   static const String search = '/search';
   static const String play = '/play';
 
-  static const List<String> all = [
-    init,
-    home,
-    category,
-    detail,
-    search,
-    play,
-  ];
+  static const List<String> all = [init, home, category, detail, search, play];
 }
 
 /// 一次请求的描述，便于契约测试断言路由与请求体（§19.3）。
@@ -198,8 +192,10 @@ class CatHttpClient {
     this.timeout = siteRequestTimeout,
     this.userAgent = HttpApiRequestBuilder.defaultUserAgent,
     this.maxResponseBytes = 8 * 1024 * 1024,
+    this.debugLog,
   }) : _client = client ?? http.Client();
 
+  final SpiderDebugLog? debugLog;
   final http.Client _client;
   final Duration timeout;
   final String userAgent;
@@ -216,16 +212,30 @@ class CatHttpClient {
     required String siteKey,
     VodIdentityHint? identity,
   }) async {
+    if (debugLog?.enabled ?? false) {
+      debugLog!.httpOutbound(
+        method: 'POST',
+        action: call.route,
+        siteKey: siteKey,
+        uri: call.uri,
+        params: call.body,
+        headers: call.headers,
+      );
+    }
     final http.Response response;
     try {
       response = await _client
-          .post(
-            call.uri,
-            headers: call.headers,
-            body: jsonEncode(call.body),
-          )
+          .post(call.uri, headers: call.headers, body: jsonEncode(call.body))
           .timeout(timeout);
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
+      if (debugLog?.enabled ?? false) {
+        debugLog!.httpFailure(
+          method: 'POST',
+          action: call.route,
+          siteKey: siteKey,
+          error: error,
+        );
+      }
       throw SpiderError(
         code: SpiderErrorCode.timeout,
         message: 'cat http 请求超时（${timeout.inSeconds}s）',
@@ -233,6 +243,14 @@ class CatHttpClient {
         requestId: call.route,
       );
     } catch (error) {
+      if (debugLog?.enabled ?? false) {
+        debugLog!.httpFailure(
+          method: 'POST',
+          action: call.route,
+          siteKey: siteKey,
+          error: error,
+        );
+      }
       throw SpiderError(
         code: SpiderErrorCode.httpError,
         message: 'cat http 请求失败：${error.runtimeType}',
@@ -241,6 +259,16 @@ class CatHttpClient {
       );
     }
 
+    if (debugLog?.enabled ?? false) {
+      debugLog!.httpInbound(
+        method: 'POST',
+        action: call.route,
+        siteKey: siteKey,
+        statusCode: response.statusCode,
+        headers: response.headers,
+        body: () => utf8.decode(response.bodyBytes, allowMalformed: true),
+      );
+    }
     if (response.bodyBytes.length > maxResponseBytes) {
       throw SpiderError(
         code: SpiderErrorCode.resourceLimit,
@@ -329,8 +357,8 @@ class CatHttpClient {
     final map = asMap(decoded);
     if (map.containsKey('code')) {
       final code = asInt(map['code']) ?? -1;
-      final message = asNonEmptyString(map['msg']) ??
-          asNonEmptyString(map['message']);
+      final message =
+          asNonEmptyString(map['msg']) ?? asNonEmptyString(map['message']);
       if (code != 0) {
         // §9.4：明确的业务错误 → 业务错误，不得空列表化。
         throw SpiderError(
@@ -365,12 +393,7 @@ class CatHttpClient {
         details: {'route': route},
       );
     }
-    return _toResult(
-      map,
-      siteKey: siteKey,
-      route: route,
-      identity: identity,
-    );
+    return _toResult(map, siteKey: siteKey, route: route, identity: identity);
   }
 
   SiteResult _toResult(
@@ -390,18 +413,13 @@ class CatHttpClient {
 
 /// 便捷门面：把一个站点 `api` 当作 cat http 端点使用。
 class CatHttpRuntime {
-  CatHttpRuntime({
-    required this.client,
-    this.globalHeaders = const [],
-  });
+  CatHttpRuntime({required this.client, this.globalHeaders = const []});
 
   final CatHttpClient client;
   final List<HeaderRule> globalHeaders;
 
-  CatHttpRequestBuilder builderFor(Site site) => CatHttpRequestBuilder(
-    api: site.api,
-    globalHeaders: globalHeaders,
-  );
+  CatHttpRequestBuilder builderFor(Site site) =>
+      CatHttpRequestBuilder(api: site.api, globalHeaders: globalHeaders);
 
   /// 判断站点是否属于 CatSpider HTTP（§9.4）。
   ///
