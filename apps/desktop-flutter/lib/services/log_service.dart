@@ -145,14 +145,15 @@ class LogService {
   ///
   /// 读长度失败按 0 处理：读不到就当不需要轮转，绝不能因此丢掉本条日志。
   void _rotateIfFullSync(File file, int incomingBytes) {
-    var length = 0;
     try {
-      if (file.existsSync()) length = file.lengthSync();
+      // 文件还不存在 = 没有任何落盘内容可轮转。若在这里按「0 + 本批 > 阈值」判定，
+      // 每次重启后的第一条日志都会把上一次的 `.1` 再推成 `.2`（测试实测过）。
+      if (!file.existsSync()) return;
+      if (file.lengthSync() + incomingBytes <= maxFileBytes) return;
+      _rotateSync(file);
     } catch (_) {
       return;
     }
-    if (length + incomingBytes <= maxFileBytes) return;
-    _rotateSync(file);
   }
 
   /// 同步轮转：`.1` 最旧、按索引滚动，保留 [maxFiles] 份（含主文件）。
