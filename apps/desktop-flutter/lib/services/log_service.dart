@@ -100,6 +100,7 @@ class LogService {
   final StreamController<LogEntry> _controller =
       StreamController<LogEntry>.broadcast();
   File? _file;
+  String? _directory;
   bool _fileDisabled = false;
 
   /// 待落盘的行（不含换行符）。
@@ -120,6 +121,7 @@ class LogService {
       if (!await folder.exists()) {
         await folder.create(recursive: true);
       }
+      _directory = folder.path;
       _file = File('${folder.path}${Platform.pathSeparator}webhtv-pc.log');
       await _rotateIfNeeded();
       flush();
@@ -278,6 +280,76 @@ class LogService {
 
   String exportJson() =>
       jsonEncode(_entries.map((entry) => entry.toJson()).toList());
+
+  /// 日志落盘目录；`open()` 之前或目录不可用时为 null。
+  String? get directory => _directory;
+
+  /// 轮转历史文件，**旧 → 新**（`.3` 最旧、主文件最新）。
+  List<File> _rotatedFiles(File file) => [
+    for (var index = maxFiles - 1; index >= 1; index--)
+      File('${file.path}.$index'),
+  ];
+
+  /// 汇总全部落盘日志（轮转历史 + 主文件，旧 → 新）。
+  ///
+  /// 文件不可用时退回内存视图（`export()`），保证「下载」永远有内容可给。
+  Future<String> readPersisted() async {
+    flush();
+    final file = _file;
+    if (file == null || _fileDisabled) return export();
+    final buffer = StringBuffer();
+    for (final rotated in _rotatedFiles(file)) {
+      if (await rotated.exists()) buffer.write(await rotated.readAsString());
+    }
+    if (await file.exists()) buffer.write(await file.readAsString());
+    final text = buffer.toString();
+    return text.isEmpty ? export() : text;
+  }
+
+  /// 把全部日志写到 [directory] 下的新文件，返回该文件。
+  ///
+  /// 文件名默认 `webhtv-pc-<yyyyMMdd-HHmmss>.log`（与备份文件同一口径），
+  /// 内容与日志页展示的同一份脱敏日志一致（§18.2）。
+  Future<File> exportToDirectory(String directory, {String? fileName}) async {
+    final text = await readPersisted();
+    final folder = Directory(directory);
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+    final target = File(
+      '${folder.path}${Platform.pathSeparator}'
+      '${fileName ?? 'webhtv-pc-${_stamp(DateTime.now())}.log'}',
+    );
+    await target.writeAsString(text, flush: true);
+    return target;
+  }
+
+  static String _stamp(DateTime time) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${time.year}${two(time.month)}${two(time.day)}'
+        '-${two(time.hour)}${two(time.minute)}${two(time.second)}';
+  }
+
+  /// 清理日志：丢弃待落盘队列、删除落盘文件（含轮转历史）、清空内存环形缓冲。
+  ///
+  /// 保留 `_file` 句柄：清理后继续产生的新日志照常落盘（下一次 `flush()` 会
+  /// 重新创建文件）。删除失败才降级为纯内存日志。
+  Future<void> clear() async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _pending.clear();
+    _entries.clear();
+    final file = _file;
+    if (file == null) return;
+    try {
+      for (final rotated in _rotatedFiles(file)) {
+        if (await rotated.exists()) await rotated.delete();
+      }
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      _fileDisabled = true;
+    }
+  }
 
   Future<void> dispose() async {
     _flushTimer?.cancel();
