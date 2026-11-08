@@ -5065,6 +5065,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     required String targetId,
     required String title,
     String? subtitle,
+    String vodPic = '',
   }) {
     final database = _database;
     final site = _selectedSite;
@@ -5082,6 +5083,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         targetId: targetId,
         title: title,
         subtitle: subtitle,
+        vodPic: vodPic,
       );
     }
     notifyListeners();

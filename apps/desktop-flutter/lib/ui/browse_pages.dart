@@ -2556,6 +2556,8 @@ class _DetailPageState extends State<DetailPage> {
               targetId: vod.vodId,
               title: vod.vodName,
               subtitle: vod.vodRemarks,
+              // 海报取 hero 用的那份（TMDB 补位后），收藏卡片才能和详情页对上。
+              vodPic: display.vodPic ?? '',
             ),
             icon: Icon(
               state.isFavorite(kind: 'vod', targetId: vod.vodId)

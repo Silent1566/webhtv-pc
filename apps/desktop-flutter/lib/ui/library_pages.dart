@@ -52,6 +52,29 @@ const double _historyCaptionHeight = 40;
 /// 与首页 `_VodCard` 同值同理由：文字区是固定高度，放大时不让步就会溢出格子。
 const double _historyTextScaleMax = 1.25;
 
+/// 海报格度量：最近观看与收藏共用（`DESIGN.md` 的「内容网格」一套尺度）。
+///
+/// 为什么不用 `SliverGridDelegateWithMaxCrossAxisExtent`：它的
+/// `mainAxisExtent` 是固定值，窗口变窄时列宽变小、高度不变，海报会被
+/// 压成非 2:3 或被裁切。这里列宽已知，格子高度就能精确算成
+/// 「海报 2:3 + 文字区」。
+///
+/// 与首页海报墙（`browse_pages.dart#_gridDelegate`）同一套算法：那份是文件
+/// 私有常量，改动时必须与 [_historyCardTargetWidth] 一起改。
+SliverGridDelegate _posterGridDelegate(double maxWidth) {
+  final usable = maxWidth - AppSpace.lg * 2;
+  final columns = (usable / (_historyCardTargetWidth + _historyCardSpacing))
+      .round()
+      .clamp(2, 12);
+  final cellWidth = (usable - (columns - 1) * _historyCardSpacing) / columns;
+  return SliverGridDelegateWithFixedCrossAxisCount(
+    crossAxisCount: columns,
+    crossAxisSpacing: _historyCardSpacing,
+    mainAxisSpacing: AppSpace.sm,
+    mainAxisExtent: cellWidth * 1.5 + AppSpace.sm + _historyCaptionHeight,
+  );
+}
+
 /// 历史范围开关：只看当前播放源 / 看全部源。
 ///
 /// 桥接后每台安卓设备上的每个源都是一条独立配置记录，站点 key 会重名
@@ -495,7 +518,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   builder: (context, constraints) => GridView.builder(
                     key: const ValueKey('history-grid'),
                     padding: const EdgeInsets.all(AppSpace.lg),
-                    gridDelegate: _historyGridDelegate(constraints.maxWidth),
+                    gridDelegate: _posterGridDelegate(constraints.maxWidth),
                     itemCount: groups.length,
                     itemBuilder: (context, index) =>
                         _buildHistoryCard(context, groups[index]),
@@ -505,26 +528,6 @@ class _HistoryPageState extends State<HistoryPage> {
           ],
         ),
       ),
-    );
-  }
-
-  /// 网格度量：与首页海报墙同一套算法（`browse_pages.dart#_gridDelegate`）。
-  ///
-  /// 为什么不用 `SliverGridDelegateWithMaxCrossAxisExtent`：它的
-  /// `mainAxisExtent` 是固定值，窗口变窄时列宽变小、高度不变，海报会被
-  /// 压成非 2:3 或被裁切。这里列宽已知，格子高度就能精确算成
-  /// 「海报 2:3 + 文字区」。
-  static SliverGridDelegate _historyGridDelegate(double maxWidth) {
-    final usable = maxWidth - AppSpace.lg * 2;
-    final columns = (usable / (_historyCardTargetWidth + _historyCardSpacing))
-        .round()
-        .clamp(2, 12);
-    final cellWidth = (usable - (columns - 1) * _historyCardSpacing) / columns;
-    return SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: columns,
-      crossAxisSpacing: _historyCardSpacing,
-      mainAxisSpacing: AppSpace.sm,
-      mainAxisExtent: cellWidth * 1.5 + AppSpace.sm + _historyCaptionHeight,
     );
   }
 
@@ -957,27 +960,130 @@ class _HistoryBadge extends StatelessWidget {
   }
 }
 
-class FavoritesPage extends StatelessWidget {
+/// 收藏页（§15）。
+///
+/// 形态对齐最近观看：同一套海报格（2:3 海报 + 两行文字区 + 同款列宽/间距），
+/// 交互对齐安卓 `KeepActivity`：点击打开影片详情，长按（或标题栏按钮）进入
+/// 删除态，删除态下「点谁删谁」。
+class FavoritesPage extends StatefulWidget {
   const FavoritesPage({super.key, required this.state});
 
   final AppState state;
 
   @override
+  State<FavoritesPage> createState() => _FavoritesPageState();
+}
+
+class _FavoritesPageState extends State<FavoritesPage> {
+  /// 删除态（对齐安卓 `KeepAdapter#setDelete`）：卡片盖删除遮罩，点击即删除。
+  bool _deleteMode = false;
+
+  AppState get _state => widget.state;
+
+  @override
+  void initState() {
+    super.initState();
+    // 收藏可能在别处变化（详情页取消收藏），页面必须跟着重建。
+    _state.addListener(_onStateChanged);
+  }
+
+  @override
+  void dispose() {
+    _state.removeListener(_onStateChanged);
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  List<FavoriteEntry> get _items => _state.favorites();
+
+  /// 站点名：收藏只存 `site_key`，换源或删站后站点可能已不在当前配置里，
+  /// 此时回退到 key 本身（原列表也是这么展示的）。
+  String _siteLabel(String siteKey) {
+    final sites = _state.config?.sites;
+    if (sites != null) {
+      for (final site in sites) {
+        if (site.key == siteKey) return site.name;
+      }
+    }
+    return siteKey;
+  }
+
+  /// 点击卡片：打开影片详情。
+  ///
+  /// 与追番页 `_openDetail` 同一条路径（换到该收藏所属站点 → 详情页），
+  /// 因为详情的线路/播放地址必须由站点自己回答。
+  Future<void> _open(FavoriteEntry item) async {
+    if (item.kind != 'vod') {
+      showToast('站点级收藏没有影片详情（类型=${item.kind}）');
+      return;
+    }
+    final site = _state.config?.sites
+        .where((candidate) => candidate.key == item.siteKey)
+        .firstOrNull;
+    if (site == null) {
+      showToast('该收藏所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
+      return;
+    }
+    await _state.selectSite(site);
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailPage(
+          state: _state,
+          vod: Vod(
+            vodId: item.targetId,
+            vodName: item.title,
+            vodPic: item.vodPic.isEmpty ? null : item.vodPic,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _delete(FavoriteEntry item) {
+    _state.database?.removeFavorite(
+      kind: item.kind,
+      siteKey: item.siteKey,
+      targetId: item.targetId,
+    );
+    setState(() {
+      // 空列表留在删除态没有意义，退出（对齐安卓：itemCount==0 时 setDelete(false)）。
+      if (_items.isEmpty) _deleteMode = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final items = state.favorites();
+    final theme = Theme.of(context);
+    final items = _items;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
             children: [
               Text(
                 '收藏（${items.length}）',
-                style: Theme.of(context).textTheme.titleMedium,
+                style: theme.textTheme.titleMedium,
               ),
-              const SizedBox(width: 12),
-              const Text('收藏站点、影片或分组；数据保存在本地数据库。'),
+              const Text('点击打开影片详情；长按可进入删除模式。'),
+              if (items.isNotEmpty)
+                OutlinedButton.icon(
+                  key: const ValueKey('favorites-delete-switch'),
+                  onPressed: () => setState(() => _deleteMode = !_deleteMode),
+                  icon: Icon(
+                    _deleteMode ? Icons.done : Icons.delete_outline,
+                    size: 18,
+                  ),
+                  label: Text(_deleteMode ? '完成' : '删除'),
+                ),
             ],
           ),
         ),
@@ -989,39 +1095,103 @@ class FavoritesPage extends StatelessWidget {
                   title: '暂无收藏',
                   message: '在详情页右上角可以收藏影片。',
                 )
-              : ListView.builder(
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    return ListTile(
-                      leading: Icon(
-                        item.kind == 'vod'
-                            ? Icons.movie_outlined
-                            : Icons.dns_outlined,
-                      ),
-                      title: Text(item.title),
-                      subtitle: Text(
-                        '类型=${item.kind} 站点=${item.siteKey} '
-                        '目标=${item.targetId}'
-                        '${item.subtitle == null ? "" : " · ${item.subtitle}"}',
-                      ),
-                      trailing: IconButton(
-                        tooltip: '取消收藏',
-                        onPressed: () {
-                          state.database?.removeFavorite(
-                            kind: item.kind,
-                            siteKey: item.siteKey,
-                            targetId: item.targetId,
-                          );
-                          (context as Element).markNeedsBuild();
-                        },
-                        icon: const Icon(Icons.bookmark_remove_outlined),
-                      ),
-                    );
-                  },
+              : LayoutBuilder(
+                  builder: (context, constraints) => GridView.builder(
+                    key: const ValueKey('favorites-grid'),
+                    padding: const EdgeInsets.all(AppSpace.lg),
+                    gridDelegate: _posterGridDelegate(constraints.maxWidth),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) =>
+                        _buildCard(context, items[index]),
+                  ),
                 ),
         ),
       ],
+    );
+  }
+
+  /// 单张收藏卡片：尺寸与文字排版**照抄**历史卡片（`_buildHistoryCard`），
+  /// 这样两块海报墙在同一个窗口下不会出现两种格宽/字高。
+  Widget _buildCard(BuildContext context, FavoriteEntry item) {
+    final theme = Theme.of(context);
+    final siteLabel = _siteLabel(item.siteKey);
+    final identity = '${item.kind}-${item.siteKey}-${item.targetId}';
+    return InkWell(
+      key: ValueKey('favorite-card-$identity'),
+      onTap: () =>
+          _deleteMode ? _delete(item) : unawaited(_open(item)),
+      onLongPress: () => setState(() => _deleteMode = !_deleteMode),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  PosterImage(url: item.vodPic.isEmpty ? null : item.vodPic),
+                  if (_deleteMode)
+                    Container(
+                      key: ValueKey('favorite-delete-overlay-$identity'),
+                      color: theme.colorScheme.surface.withValues(alpha: 0.72),
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.delete_outline,
+                        size: 32,
+                        color: theme.colorScheme.error,
+                      ),
+                    )
+                  else
+                    Positioned(
+                      left: 6,
+                      right: 6,
+                      top: 6,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _HistoryBadge(text: siteLabel),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpace.xs),
+          Expanded(
+            child: MediaQuery.withClampedTextScaling(
+              maxScaleFactor: _historyTextScaleMax,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    item.title,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontSize: 13,
+                      height: 1.2,
+                    ),
+                  ),
+                  Text(
+                    (item.subtitle ?? '').isEmpty ? siteLabel : item.subtitle!,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      height: 1.2,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
