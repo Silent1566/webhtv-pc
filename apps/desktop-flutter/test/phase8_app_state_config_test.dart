@@ -86,7 +86,11 @@ void main() {
   test('设置按钮顺序后立即生效', () async {
     await state.setPlayerButtonOrder(['next', 'play']);
     expect(state.playerButtonOrder.take(2).toList(), ['next', 'play']);
-    expect(state.playerButtonOrder.length, 9);
+    // 用 `kPlayerButtons.length` 而不是写死数字：这条断言验证的是「用户给的
+    // 两个 id 排在最前、其余按默认顺序补齐」，与按钮全集有几个无关。写死 9 会
+    // 在按钮增删时误红（`line` 按钮并入选集面板后全集由 9 变 8，本用例因此
+    // 在 beta 上失败了半天，而它要测的行为一直是对的）。
+    expect(state.playerButtonOrder.length, kPlayerButtons.length);
   });
 
   test('设置隐藏集后立即生效', () async {

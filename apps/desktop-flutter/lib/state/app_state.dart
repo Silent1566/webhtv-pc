@@ -238,17 +238,23 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _sidecarHostPath = sidecarHostPath ?? defaultSidecarHostPath(),
        _jsSidecarHostPath = jsSidecarHostPath ?? defaultJsSidecarHostPath(),
        _jvmSidecarHostPath = jvmSidecarHostPath ?? defaultJvmSidecarHostPath() {
+    // 同一开关在客户端构造前就绪，HTTP 与 IPC 都持有共享引用。
+    _spiderDebugLog = SpiderDebugLog(log: this.log);
     if (httpClient != null) {
       // 记住注入的客户端：`bootstrap()` 里的 `_applyOutboundProxy()` 过去会无条件
       // 重建 `_httpClient`，把测试注入的捕获客户端丢掉，导致真实 400。
       // 出站代理未生效时必须保留它；生效时才按代理设置重建。
       _injectedHttpClient = httpClient;
-      _httpClient = HttpApiClient(client: httpClient);
+      _httpClient = HttpApiClient(
+        client: httpClient,
+        debugLog: _spiderDebugLog,
+      );
     }
     final cacheDir = this.paths.cacheDir;
     _supervisor = SpiderHostSupervisor(
       workRoot: p.join(cacheDir, 'sidecars'),
       log: this.log,
+      debugLog: _spiderDebugLog,
     );
     _spiderRegistry = SpiderManifestRegistry(
       root: p.join(this.paths.configDir, 'spiders'),
@@ -325,6 +331,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   final AppPaths paths;
   final LogService log;
 
+  /// 爬虫 IPC 详细调试日志（入参/出参）的开关载体。
+  ///
+  /// sidecar 进程持有同一个对象，所以切换开关即时生效，不需要重建进程。
+  late final SpiderDebugLog _spiderDebugLog;
+
   /// sidecar 宿主路径（构造时定死，供生效配置与其它配置的路由共用）。
   final String _sidecarHostPath;
   final String _jsSidecarHostPath;
@@ -342,7 +353,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 配置导入门面。构造时**无条件**创建——只有猫源 bundle 需要 Node，
   /// 普通 JSON / T4 配置直接走 HTTP 抓取或本地文件读取。
   late final ConfigImportService _importService;
-  late HttpApiClient _httpClient = HttpApiClient();
+  late HttpApiClient _httpClient = HttpApiClient(debugLog: _spiderDebugLog);
 
   /// 构造时注入的原始 HTTP 客户端（测试/诊断）。见 `_applyOutboundProxy`。
   http.Client? _injectedHttpClient;
@@ -394,7 +405,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 点击系统通知后待打开的追番身份键（空 = 无待处理请求）。
   String _followingOpenRequestKey = '';
-  final CatHttpClient _catHttpClient = CatHttpClient();
+  late final CatHttpClient _catHttpClient = CatHttpClient(
+    debugLog: _spiderDebugLog,
+  );
   late final SpiderRouter _router;
   late final AndroidPlaybackBridge _androidPlaybackBridge;
 
@@ -525,6 +538,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 先返回的响应会被后返回的覆盖，而详情页读的是全局结果，用户就会看到
   /// 上一部剧的信息。
   int _detailRunId = 0;
+
+  /// 站源可能重写 vod_id，返回条目的 ID 不能作为页面归属依据；
+  /// 保留请求目标，只有本页发起的详情才认领，避免上一部剧串入。
+  String _detailRequestVodId = '';
   MultiSiteSearchOutcome? _activeSearch;
   List<String> _searchHistory = const [];
 
@@ -694,6 +711,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SiteResult? get homeResult => _homeResult;
   SiteResult? get categoryResult => _categoryResult;
   SiteResult? get detailResult => _detailResult;
+  String get detailRequestVodId => _detailRequestVodId;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
 
@@ -1083,14 +1101,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (!clientRebuilt && injected != null) {
       // 测试注入的客户端优先：不能因为一次 bootstrap 就换成真实 HttpClient。
       // 不调用 close()，否则会把注入的客户端一并关掉。
-      _httpClient = HttpApiClient(client: injected);
+      _httpClient = HttpApiClient(client: injected, debugLog: _spiderDebugLog);
     } else if (!clientRebuilt) {
       _httpClient.close();
-      _httpClient = HttpApiClient();
+      _httpClient = HttpApiClient(debugLog: _spiderDebugLog);
     } else {
       _httpClient.close();
       _httpClient = HttpApiClient(
         client: createOutboundHttpClient(settings, doh: resolver),
+        debugLog: _spiderDebugLog,
       );
     }
     log.info(
@@ -1157,6 +1176,30 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final ok = await store.rememberIncognito(value);
     notifyListeners();
     return ok;
+  }
+
+  /// 详细调试日志（爬虫入参/出参）开关；默认关闭。
+  bool get spiderDebugLog => _spiderDebugLog.enabled;
+
+  /// 切换详细调试日志：内存里立即生效，再异步写盘。
+  ///
+  /// 顺序是有意的：先应用后写盘，写盘失败也不会让开关看起来没生效。
+  Future<bool> setSpiderDebugLog(bool value) async {
+    _applySpiderDebugLog(value);
+    final store = _uiPreferences;
+    notifyListeners();
+    if (store == null) return false;
+    return store.rememberSpiderDebugLog(value);
+  }
+
+  /// 把开关落到两处：sidecar 日志旁路 + 日志单文件上限档位。
+  ///
+  /// 档位只在下次 `LogService._rotateIfNeeded` 判断时用新值，文件句柄不重建，
+  /// 因此切换不需要重启（见 `LogService.maxFileBytes`）。
+  void _applySpiderDebugLog(bool value) {
+    _spiderDebugLog.enabled = value;
+    log.maxFileBytes = LogService.maxFileBytesFor(verbose: value);
+    log.info(value ? '详细调试日志已开启（爬虫入参/出参全量打印）' : '详细调试日志已关闭', scope: 'spider');
   }
 
   // ------------------------------------------------------------ 崩溃恢复 P2-8
@@ -1647,6 +1690,23 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     return ok;
   }
 
+  /// 选集视图模式（[UiEpisodeViewMode]）：`grid` 网格 / `list` 列表。
+  ///
+  /// 全局一份，两个详情页（浏览页与 TMDB 详情页）共享；默认网格。
+  /// `_uiPreferences` 为 null（未 bootstrap）时退回默认，不让详情页崩。
+  String get episodeViewMode =>
+      _uiPreferences?.episodeViewMode ?? UiEpisodeViewMode.grid;
+
+  /// 持久化选集视图模式；归一化由 store 负责。
+  ///
+  /// 未装配偏好（单测未 bootstrap）时安静跳过，不抛异常。
+  Future<void> setEpisodeViewMode(String mode) async {
+    final store = _uiPreferences;
+    if (store == null) return;
+    await store.rememberEpisodeViewMode(mode);
+    notifyListeners();
+  }
+
   /// 当前生效配置的来源标识（见 `core/source_key.dart`）。
   ///
   /// 桥接源为 `bridge|<deviceUuid>|<interfaceKey>`，本地导入为
@@ -1802,6 +1862,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 搜索历史与偏好同源：启动时从磁盘恢复（上游安卓每次进搜索页都读
     // `Setting.getKeyword()`；PC 端在 bootstrap 恢复一次，后续增删走 store）。
     _searchHistory = uiPreferences.searchKeywords;
+    // 详细调试日志：从设置恢复后立即应用（含 2MB/20MB 档位）。
+    _applySpiderDebugLog(uiPreferences.spiderDebugLog);
     // 出站代理：从设置恢复后立即重建 HTTP 客户端（未开启时等价于默认客户端）。
     _applyOutboundProxy();
 
@@ -2121,6 +2183,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
+      navSource: site.indexs == 1,
     );
   }
 
@@ -2665,6 +2728,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     AppError? error,
   }) {
     _detailResult = vod == null ? null : SiteResult(list: [vod]);
+    _detailRequestVodId = vod?.vodId ?? '';
     _selectedVod = vod;
     _detailPhase = phase;
     _detailError = error;
@@ -4151,6 +4215,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return;
     final runId = ++_detailRunId;
+    _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
     _detailError = null;
@@ -4173,6 +4238,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
+      // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；其余站点一律
+      // 按普通站点加载，TMDB 区块行为与以前逐字一致。
+      navSource: site.indexs == 1,
     );
     notifyListeners();
     try {
@@ -4252,6 +4320,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
           siteName: site.name,
           configId: tmdbConfigId,
           lines: playLinesOf(effective),
+          navSource: site.indexs == 1,
         ),
       );
       log.info(
@@ -5158,6 +5227,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     required String targetId,
     required String title,
     String? subtitle,
+    String vodPic = '',
   }) {
     final database = _database;
     final site = _selectedSite;
@@ -5175,6 +5245,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         targetId: targetId,
         title: title,
         subtitle: subtitle,
+        vodPic: vodPic,
       );
     }
     notifyListeners();

@@ -1199,17 +1199,20 @@ void main() {
       );
     });
 
-    test('收藏增删查', () {
+    test('收藏增删查（含 v9 海报列）', () {
       database.upsertFavorite(
         kind: 'vod',
         siteKey: 'k',
         targetId: 'v1',
         title: '影片',
+        vodPic: 'http://img.example/a.jpg',
       );
       expect(
         database.isFavorite(kind: 'vod', siteKey: 'k', targetId: 'v1'),
         isTrue,
       );
+      expect(database.listFavorites().first.vodPic, 'http://img.example/a.jpg');
+      // 同步来的收藏不带海报（`type=keep` 协议里没有 pic）：空值不得清掉已存的海报。
       database.upsertFavorite(
         kind: 'vod',
         siteKey: 'k',
@@ -1218,6 +1221,7 @@ void main() {
       );
       expect(database.listFavorites().length, 1);
       expect(database.listFavorites().first.title, '影片改名');
+      expect(database.listFavorites().first.vodPic, 'http://img.example/a.jpg');
       database.removeFavorite(kind: 'vod', siteKey: 'k', targetId: 'v1');
       expect(database.listFavorites(), isEmpty);
     });

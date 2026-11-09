@@ -124,6 +124,7 @@ class FavoriteEntry {
     required this.targetId,
     required this.title,
     this.subtitle,
+    this.vodPic = '',
     required this.updatedAt,
   });
 
@@ -135,6 +136,10 @@ class FavoriteEntry {
   final String targetId;
   final String title;
   final String? subtitle;
+
+  /// 海报地址（v9 起）。旧收藏与安卓同步来的收藏为空串——同步协议里没有海报，
+  /// 卡片据此显示占位图。
+  final String vodPic;
   final int updatedAt;
 
   static FavoriteEntry fromRow(Row row) => FavoriteEntry(
@@ -144,6 +149,7 @@ class FavoriteEntry {
     targetId: row['target_id'] as String,
     title: row['title'] as String,
     subtitle: row['subtitle'] as String?,
+    vodPic: (row['vod_pic'] as String?) ?? '',
     updatedAt: row['updated_at'] as int,
   );
 }
@@ -321,11 +327,13 @@ class AppDatabase {
   /// - `7` → `8`：历史同名聚合所需的作品身份（`vod_year`、`tmdb_id`、
   ///   `media_type`）。**纯加法式**：三列默认值分别是空串 / 0 / 空串，
   ///   旧行升级后一律「身份未知」，聚合时自然回退到按片名分组。
+  /// - `8` → `9`：收藏卡片所需的海报（`favorites.vod_pic`）。**纯加法式**：
+  ///   默认空串，旧收藏与安卓同步来的收藏一律「无海报」，卡片渲染占位图。
   ///
   /// 除 v7 的两张表之外，升级都是**加法式**（`CREATE TABLE IF NOT EXISTS` 或
   /// `ALTER TABLE ADD COLUMN`）：旧库打开后自动获得新表/新列且不丢数据，
   /// 无需分支式升级逻辑。
-  static const int schemaVersion = 8;
+  static const int schemaVersion = 9;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -416,6 +424,7 @@ class AppDatabase {
         target_id TEXT NOT NULL,
         title TEXT NOT NULL,
         subtitle TEXT,
+        vod_pic TEXT NOT NULL DEFAULT '',
         updated_at INTEGER NOT NULL,
         UNIQUE(kind, site_key, target_id)
       );
@@ -461,6 +470,7 @@ class AppDatabase {
     _migrateFollowing();
     _migrateSources();
     _migrateHistoryIdentity();
+    _migrateFavorites();
     _db.execute(
       "INSERT INTO meta(key, value) VALUES('schema_version', '$schemaVersion') "
       'ON CONFLICT(key) DO UPDATE SET value=excluded.value;',
@@ -881,6 +891,17 @@ class AppDatabase {
     final columns = _columnsOf('history');
     if (columns.contains(name)) return;
     _db.execute('ALTER TABLE history ADD COLUMN $name $declaration;');
+  }
+
+  /// 收藏海报列（v9）。
+  ///
+  /// 卡片要把收藏渲染成和最近观看同一套海报格，而 v8 及以前的收藏只有
+  /// 片名与备注。加法式补列：旧行取默认空串，由 UI 决定占位表现。
+  void _migrateFavorites() {
+    if (_columnsOf('favorites').contains('vod_pic')) return;
+    _db.execute(
+      "ALTER TABLE favorites ADD COLUMN vod_pic TEXT NOT NULL DEFAULT '';",
+    );
   }
   // -------------------------------------------------------------------------
   // 追番（Phase 9 P2-1）
@@ -1789,13 +1810,18 @@ class AppDatabase {
     required String targetId,
     required String title,
     String? subtitle,
+    String vodPic = '',
     int? updatedAt,
   }) {
     _db.execute(
-      'INSERT INTO favorites(kind, site_key, target_id, title, subtitle, updated_at) '
-      'VALUES(?,?,?,?,?,?) '
+      'INSERT INTO favorites(kind, site_key, target_id, title, subtitle, vod_pic, updated_at) '
+      'VALUES(?,?,?,?,?,?,?) '
       'ON CONFLICT(kind, site_key, target_id) DO UPDATE SET '
       'title=excluded.title, subtitle=excluded.subtitle, '
+      // 空海报不覆盖已有海报：安卓同步（`type=keep`）不带海报，直接 SET
+      // 会把本地刚存下的海报清空。
+      "vod_pic=CASE WHEN excluded.vod_pic<>'' THEN excluded.vod_pic "
+      'ELSE favorites.vod_pic END, '
       'updated_at=excluded.updated_at;',
       [
         kind,
@@ -1803,6 +1829,7 @@ class AppDatabase {
         targetId,
         title,
         subtitle,
+        vodPic,
         // 本地收藏用 `now()`；同步写入必须用远端 `createTime`
         // （同 `upsertHistory` 的理由，`docs/phase5/design/02` §3.4）。
         updatedAt ?? DateTime.now().millisecondsSinceEpoch,

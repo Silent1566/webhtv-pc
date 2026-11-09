@@ -71,6 +71,21 @@ class TmdbState extends ChangeNotifier {
   int _selectedSeason = -1;
   Map<int, int> _seasonEpisodeCounts = const {};
   List<TmdbEpisode> _episodes = const [];
+
+  /// 已聚合的**各季**剧集元数据（`季号 -> 该季完整集列表`）。
+  ///
+  /// 为什么需要它：[_episodes] 只装**当前选中的那一季**，而导航源补卡
+  /// （`EpisodeSupplementPolicy.build`）要按季集号把站源集对到 TMDB 的
+  /// (季, 集) 上，必须拿到**每一季**的完整列表才判断得了「这一集落在哪一季」。
+  /// 它属**作品维度**（不随线路/选季变化），因此只在换作品时清空。
+  Map<int, List<TmdbEpisode>> _episodesBySeason = const {};
+
+  /// 本次加载的站点是否为**导航源**（`site.indexs == 1`）。
+  ///
+  /// 为什么状态层要知道这件事：导航源把一部剧摊平成一条线性线路，季集归属
+  /// 全靠集名文本，只有它走「以 TMDB 全集为准补卡」这条路径；普通站点一律
+  /// 保持既有出卡逻辑（线路有几集出几张卡），行为不得有任何变化。
+  bool _navSource = false;
   List<TmdbPerson> _cast = const [];
   List<TmdbPerson> _creators = const [];
   List<TmdbItem> _recommendations = const [];
@@ -99,6 +114,17 @@ class TmdbState extends ChangeNotifier {
   int get selectedSeason => _selectedSeason;
   Map<int, int> get seasonEpisodeCounts => _seasonEpisodeCounts;
   List<TmdbEpisode> get episodes => _episodes;
+
+  /// 已聚合的各季剧集元数据（`季号 -> 该季完整集列表`）。
+  ///
+  /// 未聚合（非导航源 / 尚未调用 [ensureAllSeasonEpisodes] / 全部季都失败）
+  /// 时为空 Map，**永不返回 null**：调用方要能无条件喂给补卡策略。
+  Map<int, List<TmdbEpisode>> get episodesBySeason => _episodesBySeason;
+
+  /// 本次加载的站点是否为导航源（`site.indexs == 1`）。
+  ///
+  /// 默认 `false`：没有调用方声明时，一切按普通站点处理。
+  bool get isNavSource => _navSource;
   List<TmdbPerson> get cast => _cast;
   List<TmdbPerson> get creators => _creators;
   List<TmdbItem> get recommendations => _recommendations;
@@ -383,6 +409,7 @@ class TmdbState extends ChangeNotifier {
     String siteName = '',
     int requestSeason = -1,
     bool keepTitleData = false,
+    bool navSource = false,
   }) {
     if (_disposed) return _generation;
     _generation++;
@@ -393,6 +420,7 @@ class TmdbState extends ChangeNotifier {
     _sourceTitle = sourceTitle;
     _vod = vod;
     _activeLine = line;
+    _navSource = navSource;
     _error = null;
     // 同一作品换线路：保留**作品维度**的数据（详情/演职人员/推荐/剧照/季集数），
     // 只重置**线路维度**的数据（剧集元数据与季度解析结果）。
@@ -410,6 +438,9 @@ class TmdbState extends ChangeNotifier {
       _videos = const [];
       _photos = const [];
       _seasonEpisodeCounts = const {};
+      // 聚合缓存同样是作品维度的：换作品必须清掉，否则新作品会拿到上一部剧的
+      // 季集元数据（补卡时会按旧剧的季集数出卡、点开播错集）。
+      _episodesBySeason = const {};
     }
     _episodes = const [];
     _availableSeasons = const [];
@@ -557,6 +588,7 @@ class TmdbState extends ChangeNotifier {
     String siteName = '',
     int configId = 0,
     List<VodPlayLine>? lines,
+    bool navSource = false,
   }) async {
     final playLines = lines ?? parsePlayLines(vod.vodPlayFrom, vod.vodPlayUrl);
     _playLines = playLines;
@@ -611,6 +643,9 @@ class TmdbState extends ChangeNotifier {
       configId: configId,
       siteName: siteName,
       keepTitleData: sameTitle,
+      // 站点性质是「本次加载」的一部分：换到普通站点必须立刻变回非导航源，
+      // 不能沿用上一次的导航源判定（那会让普通站点走进补卡路径）。
+      navSource: navSource,
     );
     if (!_valid(generation)) return;
     // 未配置 / 站点禁用：beginLoad 已进入 disabled，不得发起任何请求
@@ -844,6 +879,66 @@ class TmdbState extends ChangeNotifier {
     }
   }
 
+  /// 为**导航源**聚合全部季的剧集元数据（派生出 [episodesBySeason]）。
+  ///
+  /// 为什么单独一趟：补卡策略要按 TMDB 的 (季, 集) 反查站源集，输入是
+  /// `Map<int, List<TmdbEpisode>>`；单季的 [loadEpisodes] 给不了这个形状。
+  ///
+  /// **不阻塞主链**：这是既有加载链之后的补充加载，由调用方（详情页接线）
+  /// 在季度/选集就绪后显式触发，不在 [loadForVod] 内部 `await`——它要多打
+  /// 若干次请求，把它塞进主链等于让首屏等一串非必需数据。
+  ///
+  /// 契约：
+  /// - 非导航源 / 非剧集 / 无季集数快照 → 直接返回，**零请求**；
+  /// - 逐季拉取（`_service.seasonEpisodes` 自带按季缓存，重复季是缓存命中）；
+  /// - **单季失败只跳过该季**：某季 404 不能让整块补卡失效，其余季照常填充；
+  /// - 迟到响应丢弃（代际校验与 [loadEpisodes] 同一套写法）；
+  /// - 不抛异常、不改 [_phase]、不产生错误横幅（补卡是锦上添花，`04` §3.4）。
+  ///
+  /// [allowAnySource] 是给**第二类调用方**的：普通站点上「本片 `vod_play_url`
+  /// 为空」时，详情页同样要铺 TMDB 全集卡片（否则只剩一句「没有可播放的剧集」），
+  /// 而那批卡片的集名同样只能来自全季聚合。默认 `false` 保持既有行为——不显式
+  /// 声明时，非导航源仍然零请求。
+  Future<void> ensureAllSeasonEpisodes({
+    required int generation,
+    bool allowAnySource = false,
+  }) async {
+    if (_disposed || generation != _generation) return;
+    if (!_navSource && !allowAnySource) return;
+    final currentItem = item;
+    if (currentItem == null || !currentItem.isTv) return;
+    final counts = _seasonEpisodeCounts;
+    if (counts.isEmpty) return;
+
+    final seasons = counts.keys.toList()..sort();
+    // 已聚合且覆盖全部季 → 直接返回：换线路/重进详情不该白打这些请求。
+    if (seasons.every(_episodesBySeason.containsKey)) return;
+
+    var changed = false;
+    for (final seasonNumber in seasons) {
+      if (_disposed || generation != _generation) return;
+      if (_episodesBySeason.containsKey(seasonNumber)) continue;
+      try {
+        final episodes = await _service.seasonEpisodes(
+          currentItem,
+          seasonNumber,
+        );
+        if (_disposed || generation != _generation) return;
+        // 整体换新 Map 而不是原地写入：监听者可能正拿着上一份快照渲染，
+        // 原地改会让它读到「半季」状态。
+        _episodesBySeason = {..._episodesBySeason, seasonNumber: episodes};
+        changed = true;
+      } on TmdbCancelledException {
+        return;
+      } catch (_) {
+        // 单季失败只跳过：补卡策略按 [seasonEpisodeCounts] 仍能为该季补出
+        // 「不可播」的卡片，整块失效才是真正的回退。
+        continue;
+      }
+    }
+    if (changed && !_disposed && generation == _generation) notifyListeners();
+  }
+
   /// 加载相关视频（失败不影响其他区块）。
   Future<void> loadVideos({required int generation}) async {
     if (_disposed || generation != _generation) return;
@@ -1018,6 +1113,10 @@ class TmdbState extends ChangeNotifier {
     _selectedSeason = -1;
     _seasonEpisodeCounts = const {};
     _episodes = const [];
+    // 聚合缓存与导航源判定都属于「本次作品」：清状态时一并归零，
+    // 否则下一次进详情页会带着上一部剧的季集元数据或上一站的站点性质。
+    _episodesBySeason = const {};
+    _navSource = false;
     _cast = const [];
     _creators = const [];
     _recommendations = const [];

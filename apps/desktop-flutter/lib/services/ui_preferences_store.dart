@@ -30,6 +30,8 @@
 ///   `tmdb` 优先 TMDB、缺失时按片名 / `title` 只按片名）。默认 `tmdb`，
 ///   对齐安卓 `history_aggregation_by_tmdb` 的聚合意图，但保留 `none`
 ///   让用户能切回 v7 的逐集形态。
+/// - `spiderDebugLog`：**详细调试日志开关**（爬虫 IPC 入参/出参）。默认关；
+///   打开时日志单文件上限放大到 20MB，见 `LogService.verboseMaxFileBytes`。
 ///
 /// 另外管理 `settings.json` **顶层** `player` 段（Phase 9）：
 /// 播放参数（缓冲/硬解/自动连播/失败回退/预加载/片头片尾开关/LUT）。
@@ -81,6 +83,26 @@ abstract final class UiThemeMode {
   }
 }
 
+/// 选集视图模式取值：网格 / 列表。
+///
+/// 与 [UiThemeMode] 同一分层理由：存字符串，不依赖 UI 框架。
+/// 默认网格——剧集条目多时网格扫读更快，列表是可选项。
+abstract final class UiEpisodeViewMode {
+  static const String grid = 'grid';
+  static const String list = 'list';
+
+  static const List<String> values = [grid, list];
+
+  /// 默认值：未设置或非法值都回落到网格。
+  static const String fallback = grid;
+
+  /// 把任意输入归一化成合法值；不认识的值回落到默认。
+  static String normalize(String? raw) {
+    final value = raw?.trim().toLowerCase() ?? '';
+    return values.contains(value) ? value : fallback;
+  }
+}
+
 class UiPreferencesStore {
   UiPreferencesStore({required this.path, LogService? log}) : _log = log;
 
@@ -120,6 +142,9 @@ class UiPreferencesStore {
 
   /// 历史记录同名聚合模式。`null` = 从未设置过，用默认 [UiHistoryAggregation.tmdb]。
   String? _historyAggregation;
+
+  /// 选集视图模式。`null` = 从未设置过，用默认 [UiEpisodeViewMode.fallback]。
+  String? _episodeViewMode;
 
   /// 屏显开关的**显式**设置；缺席的 id 用 [defaultOsdFlags] 补齐。
   ///
@@ -179,6 +204,9 @@ class UiPreferencesStore {
 
   /// 追番设置的**显式**设置；null 表示从未设置过（按默认值：自动检查开启）。
   FollowingSettings? _followingSettings;
+
+  /// 详细调试日志的**显式**设置；null 表示从未设置过（关闭）。
+  bool? _spiderDebugLog;
 
   bool _loaded = false;
 
@@ -244,6 +272,12 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过聚合模式。
   bool get hasExplicitHistoryAggregation => _historyAggregation != null;
+
+  /// 生效的选集视图模式：用户选过就用选的，否则默认网格。
+  String get episodeViewMode => UiEpisodeViewMode.normalize(_episodeViewMode);
+
+  /// 用户是否显式设置过选集视图模式。
+  bool get hasExplicitEpisodeViewMode => _episodeViewMode != null;
 
   /// 生效的屏显开关：显式设置过的项用用户值，其余用默认。
   Map<String, bool> get osdFlags => normalizeOsdFlags(_osdFlags);
@@ -333,6 +367,12 @@ class UiPreferencesStore {
 
   /// 是否显式设置过追番。
   bool get hasExplicitFollowingSettings => _followingSettings != null;
+
+  /// 详细调试日志（默认关闭；关闭时日志量与既有版本一致）。
+  bool get spiderDebugLog => _spiderDebugLog ?? false;
+
+  /// 是否显式设置过详细调试日志。
+  bool get hasExplicitSpiderDebugLog => _spiderDebugLog != null;
 
   /// 生效的解析接口失败切换设置。
   ParseFailoverSettings get parseFailover =>
@@ -441,6 +481,15 @@ class UiPreferencesStore {
               _historyAggregation = aggregation.trim().toLowerCase();
             }
           }
+          final viewMode = ui['episodeViewMode'];
+          if (viewMode is String) {
+            // 只接受合法值；手改成别的字符串时回落到默认（网格）。
+            if (UiEpisodeViewMode.values.contains(
+              viewMode.trim().toLowerCase(),
+            )) {
+              _episodeViewMode = viewMode.trim().toLowerCase();
+            }
+          }
           // 屏显开关：只接受 bool；非法值忽略（该项回落默认）。
           final osd = ui['osd'];
           if (osd is Map) {
@@ -516,6 +565,10 @@ class UiPreferencesStore {
         if (following is Map && following.isNotEmpty) {
           _followingSettings = FollowingSettings.fromJson(following);
         }
+        // 详细调试日志：只接受 bool；非法值忽略（回落默认「关闭」）。
+        // 注意它在 `ui` 段内，与上面顶层段不同源。
+        final spiderDebugLog = ui is Map ? ui['spiderDebugLog'] : null;
+        if (spiderDebugLog is bool) _spiderDebugLog = spiderDebugLog;
       }
       _loaded = true;
     } catch (error) {
@@ -652,6 +705,14 @@ class UiPreferencesStore {
     return _persist();
   }
 
+  /// 记住选集视图模式。非法值归一化为默认（网格）。
+  Future<void> rememberEpisodeViewMode(String mode) async {
+    final normalized = UiEpisodeViewMode.normalize(mode);
+    if (normalized == _episodeViewMode) return;
+    _episodeViewMode = normalized;
+    await _persist();
+  }
+
   /// 记住单项屏显开关。非法 id 忽略（不写坏状态）。
   Future<bool> rememberOsdFlag(String id, bool enabled) {
     if (!OsdFlag.values.contains(id)) return Future.value(true);
@@ -706,6 +767,15 @@ class UiPreferencesStore {
   Future<bool> rememberFollowingSettings(FollowingSettings settings) {
     if (_followingSettings == settings) return Future.value(true);
     _followingSettings = settings;
+    return _persist();
+  }
+
+  /// 记住详细调试日志开关。
+  ///
+  /// 与其它偏好一样：写盘失败**不影响**当前会话（内存里已生效）。
+  Future<bool> rememberSpiderDebugLog(bool enabled) {
+    if (_spiderDebugLog == enabled) return Future.value(true);
+    _spiderDebugLog = enabled;
     return _persist();
   }
 
@@ -910,12 +980,17 @@ class UiPreferencesStore {
         // 历史聚合：只有显式设置过才写，缺席 = 默认 tmdb（优先 TMDB）。
         final aggregation = _historyAggregation;
         if (aggregation != null) ui['historyAggregation'] = aggregation;
+        // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
+        final viewMode = _episodeViewMode;
+        if (viewMode != null) ui['episodeViewMode'] = viewMode;
+        // 详细调试日志：显式切过就写（含 false），从未设置过则缺席 = 默认关闭。
+        final spiderDebugLog = _spiderDebugLog;
+        if (spiderDebugLog != null) ui['spiderDebugLog'] = spiderDebugLog;
         // 屏显：只有显式设置过的项才写（缺席 = 默认）。
         if (_osdFlags.isNotEmpty) ui['osd'] = _osdFlags;
         // 按钮排版：两个键各自独立；都缺席时整个 playerButtons 不写。
         final order = _buttonOrder;
-        final hidden = _buttonHidden;
-        if (order != null || hidden != null) {
+        final hidden = _buttonHidden;        if (order != null || hidden != null) {
           ui['playerButtons'] = <String, Object?>{
             // 用 null-aware 值 `?order` 而不是 `if (order != null) 'order': order,`：
             // 后者在本仓库工具链下触发 `use_null_aware_elements`（实测确认）。
