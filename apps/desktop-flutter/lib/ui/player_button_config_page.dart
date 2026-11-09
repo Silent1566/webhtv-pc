@@ -120,7 +120,11 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
   String get _previewText {
     final labels = [
       for (final spec in resolveVisibleButtons(order: _order, hidden: _hidden))
-        spec.label,
+        // 外部播放器在没配置播放器时**不会**出现在控制栏
+        // （`player_page._buildActionButtons` 的 `when` 分支），预览必须跟着
+        // 一起隐藏，否则预览说的是谎话。
+        if (spec.id != 'external_player' || widget.state.hasExternalPlayer)
+          spec.label,
     ];
     if (labels.isEmpty) return '（已隐藏全部按钮）';
     return labels.join('  ·  ');
@@ -163,10 +167,10 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
           ),
           const Divider(height: 1),
           Expanded(
-            // 外层滚动 + `shrinkWrap`：8 行在 600px 高的测试视口里放不下，
-            // 惰性列表只会建出视口内那几行，于是「列出全部 8 个按钮」这类
+            // 外层滚动 + `shrinkWrap`：9 行在 600px 高的测试视口里放不下，
+            // 惰性列表只会建出视口内那几行，于是「列出全部 9 个按钮」这类
             // 断言会假失败。`ShrinkWrappingViewport` 给 sliver 无限
-            // `remainingPaintExtent`，8 行全部建出来，页面整体滚动。
+            // `remainingPaintExtent`，9 行全部建出来，页面整体滚动。
             child: SingleChildScrollView(
               child: ReorderableListView.builder(
                 // 关掉默认手柄：它不带 key、落在行尾并盖住开关（见文件头注释）。
@@ -229,8 +233,18 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
     );
   }
 
-  Widget _row(BuildContext context, PlayerButtonSpec spec, int index) {
-    final theme = Theme.of(context);
+  /// 行副标题：分组名，外加「这一项当前为什么不在控制栏里」的实情。
+  ///
+  /// 外部播放器没配置时控制栏不渲染它，但这一行的开关照常可拨——不讲清楚
+  /// 的话，用户拨完回播放器找不到按钮，只会以为开关坏了。
+  String _subtitleFor(PlayerButtonSpec spec) {
+    if (spec.id == 'external_player' && !widget.state.hasExternalPlayer) {
+      return '${spec.group.label} · 未配置播放器，暂不显示';
+    }
+    return spec.group.label;
+  }
+
+  Widget _row(BuildContext context, PlayerButtonSpec spec, int index) {    final theme = Theme.of(context);
     final visible = !_hidden.contains(spec.id);
     return ListTile(
       key: ValueKey('button-row-${spec.id}'),
@@ -244,7 +258,7 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
       ),
       title: Text(spec.label),
       subtitle: Text(
-        spec.group.label,
+        _subtitleFor(spec),
         style: theme.textTheme.bodySmall?.copyWith(
           color: theme.colorScheme.onSurfaceVariant,
         ),

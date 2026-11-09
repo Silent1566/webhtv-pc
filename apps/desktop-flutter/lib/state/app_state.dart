@@ -11,6 +11,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import '../services/external_player.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -215,7 +217,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的联想/热搜服务（避免单测打真实外网）。
     SearchSuggestService? searchSuggestService,
+    List<ExternalPlayer> Function()? externalPlayerDetector,
   }) : paths = paths ?? AppPaths.resolve(),
+       _externalPlayerDetector = externalPlayerDetector ?? ExternalPlayers.detect,
        log = log ?? LogService(),
        _injectedLiveService = liveService,
        _injectedEpgService = epgService,
@@ -582,6 +586,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 用 `late final` 会在 `selectSite` 里抛 `LateInitializationError`。
   /// 记住站点只是**锦上添花**，它不可用时应安静降级，而不是把选站点弄崩。
   UiPreferencesStore? _uiPreferences;
+  final List<ExternalPlayer> Function() _externalPlayerDetector;
   late final TmdbService _tmdbService;
 
   /// TMDB 磁盘缓存（文件落在 `TmdbCache.directory` = `<cache>/tmdb`）。
@@ -844,6 +849,46 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberButtonHidden(hidden);
+    notifyListeners();
+    return ok;
+  }
+
+  /// 外部播放器可执行文件路径；`null` = 还没配置过。
+  ///
+  /// 配置过才认为「外部播放器」能力可用（控制栏按钮与菜单项都以此为准）。
+  String? get externalPlayerPath => _uiPreferences?.externalPlayerPath;
+
+  Future<List<ExternalPlayer>> listExternalPlayers() async {
+    final scanned = _externalPlayerDetector();
+    return _uiPreferences?.listExternalPlayers(scanned) ??
+        List<ExternalPlayer>.unmodifiable(scanned);
+  }
+
+  Future<bool> saveExternalPlayer({
+    String? originalExecutable,
+    required String name,
+    required String executable,
+  }) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.saveExternalPlayer(
+      originalExecutable: originalExecutable,
+      name: name,
+      executable: executable,
+      scanned: _externalPlayerDetector(),
+    );
+    if (ok) notifyListeners();
+    return ok;
+  }
+
+  /// 外部播放器是否已配置可用。
+  bool get hasExternalPlayer => externalPlayerPath != null;
+
+  /// 持久化外部播放器路径。传空串等于清除配置。
+  Future<bool> setExternalPlayerPath(String? path) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.rememberExternalPlayerPath(path);
     notifyListeners();
     return ok;
   }
