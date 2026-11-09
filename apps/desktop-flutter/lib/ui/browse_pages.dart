@@ -32,6 +32,7 @@ import 'player_page.dart';
 import 'search_page.dart';
 import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
+import 'tmdb_episode_detail.dart';
 import 'common.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
@@ -3126,8 +3127,48 @@ class _DetailPageState extends State<DetailPage> {
           }),
           onTap: (index, _) =>
               _playEpisodeAt(vod, rawLine, line, ordered, index),
+          onLongPress: (index, card) => _showEpisodeDetails(
+            _sourceCardForDetails(card, ordered[index]),
+            sourceName: ordered[index].name,
+            onAction: () => _playEpisodeAt(vod, rawLine, line, ordered, index),
+          ),
         ),
       ],
+    );
+  }
+
+  TmdbEpisodeCard _sourceCardForDetails(
+    TmdbEpisodeCard card,
+    VodEpisode episode,
+  ) {
+    if (sourceEpisodeNumber(episode.name) > 0) return card;
+    // 富集 extra 也可能由位置猜号生成，不能作为单集身份的证明。
+    return TmdbEpisodeCard(
+      number: 0,
+      title: episode.name,
+      seasonNumber: card.seasonNumber,
+      stillUrl: _ownedTmdb?.detailData?.posterUrl,
+    );
+  }
+
+  void _showEpisodeDetails(
+    TmdbEpisodeCard card, {
+    String sourceName = '',
+    String actionLabel = '播放',
+    VoidCallback? onAction,
+  }) {
+    final tmdb = _ownedTmdb;
+    unawaited(
+      showTmdbEpisodeDetails(
+        context,
+        card: card,
+        sourceName: sourceName,
+        service: widget.state.tmdbService,
+        item: tmdb?.hasMatch == true ? tmdb?.item : null,
+        actionLabel: actionLabel,
+        onAction: onAction,
+        onPersonTap: _openPerson,
+      ),
     );
   }
 
@@ -3466,6 +3507,11 @@ class _DetailPageState extends State<DetailPage> {
           // 「最近播放」标记不传：历史存的是**线路集下标**，卡片是 TMDB 摊平序，
           // 两者不同构，按位置标注会在多季剧上标错卡。
           onTap: (_, card) => unawaited(onCardTap(card)),
+          onLongPress: (_, card) => _showEpisodeDetails(
+            card,
+            actionLabel: '换源播放',
+            onAction: () => unawaited(onCardTap(card)),
+          ),
         ),
       ],
     );

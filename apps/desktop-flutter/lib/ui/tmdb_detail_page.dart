@@ -23,6 +23,7 @@ import '../services/tmdb_service.dart';
 import '../services/ui_preferences_store.dart';
 import 'common.dart';
 import 'tmdb_detail_view.dart';
+import 'tmdb_episode_detail.dart';
 import 'tmdb_widgets.dart';
 
 /// 纯 TMDB 详情页。
@@ -344,6 +345,22 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
           if (data.title.isEmpty) return;
           widget.onSearchSource?.call(data.title, widget.identity);
         },
+        onEpisodeLongPress: (_, card) => showTmdbEpisodeDetails(
+          context,
+          card: card,
+          service: widget.service,
+          item: TmdbItem(
+            tmdbId: widget.identity.tmdbId,
+            mediaType: widget.identity.mediaType,
+            title: data.title,
+          ),
+          actionLabel: '搜索站源',
+          onAction: () {
+            if (data.title.isEmpty) return;
+            widget.onSearchSource?.call(data.title, widget.identity);
+          },
+          onPersonTap: _openPerson,
+        ),
         onPersonTap: (person) => _openPerson(person),
         onRecommendationTap: (item) => _openItem(item),
         onOpenVideo: widget.onOpenVideo,
