@@ -2221,6 +2221,18 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     );
   }
 
+  /// 仅解析追番的剧集身份，不切换站点或当前详情的 TMDB 状态。
+  Future<TmdbItem?> followingTmdbItem(Following item) async {
+    final id = await _resolveFollowingTmdbId(item);
+    if (id == null || id <= 0) return null;
+    return TmdbItem(
+      tmdbId: id,
+      mediaType: TmdbMediaType.tv,
+      title: item.vodName,
+      posterUrl: item.vodPic,
+    );
+  }
+
   /// 追番 → TMDB 剧集 id：优先用已落盘的匹配结论（同步、零请求），
   /// 没命中再走身份服务的自动匹配；都失败返回 `null`。
   Future<int?> _resolveFollowingTmdbId(Following item) async {

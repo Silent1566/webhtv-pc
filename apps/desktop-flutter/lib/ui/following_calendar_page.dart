@@ -18,12 +18,14 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/protocol.dart';
+import '../core/tmdb_detail_model.dart';
 import '../services/following_air_time_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'app.dart';
 import 'browse_pages.dart';
 import 'playback_resume.dart';
+import 'tmdb_episode_detail.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
@@ -259,8 +261,47 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
           showSeriesInfo: leads.contains(index),
           releasedEpisode: _itemFor(entry)?.releasedEpisode ?? entry.episode,
           onPlay: _playEntry,
+          onShowDetails: (entry) => _showEntryDetails(entry, day.date),
         ),
     ];
+  }
+
+  Future<void> _showEntryDetails(CalendarEntry entry, DateTime day) async {
+    final item = _itemFor(entry);
+    var date = day;
+    for (final airTime in _airTimes) {
+      if (airTime.identityKey == entry.identityKey &&
+          airTime.episode == entry.episode) {
+        date = followingCalendarDateOf(airTime.airAtMs);
+        break;
+      }
+    }
+    final title = entry.episodeTitle.trim();
+    final sourceName =
+        item != null &&
+            entry.episode >= 1 &&
+            entry.season == item.latestReleasedSeason &&
+            entry.episode == item.releasedEpisode
+        ? item.latestEpisodeName
+        : '';
+    await showTmdbEpisodeDetails(
+      context,
+      card: TmdbEpisodeCard(
+        number: entry.episode >= 1 ? entry.episode : 0,
+        seasonNumber: entry.season < 0 ? 1 : entry.season + 1,
+        title: title.isEmpty ? '${entry.vodName} ${entry.code}' : title,
+        date:
+            '${date.year}-${date.month.toString().padLeft(2, '0')}-'
+            '${date.day.toString().padLeft(2, '0')}',
+        stillUrl: entry.vodPic,
+      ),
+      sourceName: sourceName,
+      service: _state.tmdbService,
+      resolveItem: item == null || entry.episode < 1
+          ? null
+          : () => _state.followingTmdbItem(item),
+      onAction: () => _playEntry(entry),
+    );
   }
 
   /// 播放某一条日历条目。
@@ -952,6 +993,7 @@ class _CalendarEntryCard extends StatelessWidget {
     required this.showSeriesInfo,
     required this.releasedEpisode,
     required this.onPlay,
+    required this.onShowDetails,
   });
 
   final CalendarEntry entry;
@@ -963,6 +1005,7 @@ class _CalendarEntryCard extends StatelessWidget {
   final int releasedEpisode;
 
   final ValueChanged<CalendarEntry> onPlay;
+  final ValueChanged<CalendarEntry> onShowDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -986,6 +1029,7 @@ class _CalendarEntryCard extends StatelessWidget {
         child: InkWell(
           key: ValueKey('calendar-entry-${entry.identityKey}-$suffix'),
           onTap: () => onPlay(entry),
+          onLongPress: () => onShowDetails(entry),
           borderRadius: AppRadius.lgAll,
           child: Padding(
             padding: const EdgeInsets.symmetric(
@@ -1043,7 +1087,9 @@ class _CalendarEntryCard extends StatelessWidget {
                                     // 三态：已播未看 / 已播已看 / 排期在未来。
                                     text: entry.episodePending
                                         ? '待播'
-                                        : (entry.episodeUnwatched ? '未看' : '已看'),
+                                        : (entry.episodeUnwatched
+                                              ? '未看'
+                                              : '已看'),
                                     emphasized: entry.episodeUnwatched,
                                   ),
                                 ],
@@ -1164,8 +1210,7 @@ String _airLine(CalendarEntry entry, int released) {
   // 只有跟踪季下标，不把下标误写成该剧总季数。
   final season = '第${entry.season + 1}季';
   final aired = switch (entry.totalSource) {
-    CalendarTotalSource.official =>
-      '线路已播 $released / ${entry.totalEpisodes} 集',
+    CalendarTotalSource.official => '线路已播 $released / ${entry.totalEpisodes} 集',
     CalendarTotalSource.line ||
     CalendarTotalSource.unknown => '线路已播 $released 集',
   };
