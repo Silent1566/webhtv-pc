@@ -81,24 +81,23 @@ void main() {
 
     test('R8 · 守卫在连播完成后复位（含失败路径）', () {
       // whenComplete 里必须复位，否则一次失败会永久堵死后续连播。
-      expect(
-        pageSource.contains('_advanceInFlight = false;'),
-        isTrue,
-      );
+      expect(pageSource.contains('_advanceInFlight = false;'), isTrue);
       // 复位必须发生在 whenComplete 内（而不是 await 之后），
       // 这样即使 _playNext 抛异常也会复位。
-      expect(
-        pageSource.contains('.whenComplete(() {'),
-        isTrue,
-      );
+      expect(pageSource.contains('.whenComplete(() {'), isTrue);
     });
 
     test('闸门第二、三道：isCompleted 与真播完判定', () {
-      expect(pageSource.contains('if (!_controller.isCompleted) return;'), isTrue);
+      expect(
+        pageSource.contains('if (!_controller.isCompleted) return;'),
+        isTrue,
+      );
       expect(pageSource.contains('if (!_isGenuineEnd()) return;'), isTrue);
       // 闸门顺序：守卫 → isCompleted → 真播完。
       final guard = pageSource.indexOf('if (_advanceInFlight) return;');
-      final completed = pageSource.indexOf('if (!_controller.isCompleted) return;');
+      final completed = pageSource.indexOf(
+        'if (!_controller.isCompleted) return;',
+      );
       final genuine = pageSource.indexOf('if (!_isGenuineEnd()) return;');
       expect(guard, lessThan(completed));
       expect(completed, lessThan(genuine));
@@ -187,18 +186,16 @@ void main() {
     });
 
     test('失败路径记录 nearEnd 诊断（design/03 §4.6）', () {
-      expect(
-        pageSource.contains('nearEnd='),
-        isTrue,
-        reason: '缓存耗尽在 PC 侧必须可见',
-      );
+      expect(pageSource.contains('nearEnd='), isTrue, reason: '缓存耗尽在 PC 侧必须可见');
       expect(pageSource.contains('buffered='), isTrue);
     });
   });
 
   group('R12/R13/R14 · 恢复路径与三出口（design/03 §4.4/§4.5）', () {
     test('R12 · 恢复路径不触发连播', () {
-      final start = pageSource.indexOf('Future<void> _resumeFromLatestProgress()');
+      final start = pageSource.indexOf(
+        'Future<void> _resumeFromLatestProgress()',
+      );
       expect(start, greaterThan(0), reason: '恢复入口必须存在');
       final end = pageSource.indexOf('Future<void> _playNext()');
       expect(end, greaterThan(start));
@@ -212,7 +209,9 @@ void main() {
     });
 
     test('R13 · 恢复路径重新查库拿最新进度', () {
-      final start = pageSource.indexOf('Future<void> _resumeFromLatestProgress()');
+      final start = pageSource.indexOf(
+        'Future<void> _resumeFromLatestProgress()',
+      );
       final end = pageSource.indexOf('Future<void> _playNext()');
       final resumeBlock = pageSource.substring(start, end);
       expect(
@@ -243,12 +242,17 @@ void main() {
 
     test('三出口各自接到正确的回调', () {
       expect(pageSource.contains('onRetry: _load,'), isTrue);
-      expect(pageSource.contains('onResume: _resumeFromLatestProgress,'), isTrue);
+      expect(
+        pageSource.contains('onResume: _resumeFromLatestProgress,'),
+        isTrue,
+      );
       expect(pageSource.contains('onNext: _playNext,'), isTrue);
     });
 
     test('恢复查不到进度时退化为重试本集（不能静默无动作）', () {
-      final start = pageSource.indexOf('Future<void> _resumeFromLatestProgress()');
+      final start = pageSource.indexOf(
+        'Future<void> _resumeFromLatestProgress()',
+      );
       final end = pageSource.indexOf('Future<void> _playNext()');
       final resumeBlock = pageSource.substring(start, end);
       expect(resumeBlock.contains('if (latest == null)'), isTrue);
@@ -265,19 +269,18 @@ void main() {
         isTrue,
         reason: '失败/回滚路径需要显式清除入口',
       );
+      // 幂等断言不绑死整行字面量：beta 的播放器生命周期改造在同一个
+      // 提前返回里补了 `_disposed` 保护（`if (_disposed || !_completed)
+      // return false;`），语义仍是「已完成才清、否则不产生通知」。
+      // 这里锁的是「以 `_completed` 短路提前返回」这个契约本身。
       expect(
-        controllerSource.contains('if (!_completed) return false;'),
+        RegExp(r'if \(\s*(?:_disposed \|\| )?!_completed\s*\)\s*return false;')
+            .hasMatch(controllerSource),
         isTrue,
         reason: '必须幂等（重复调用不产生多余通知）',
       );
-      expect(
-        controllerSource.contains('_completed = false;'),
-        isTrue,
-      );
-      expect(
-        controllerSource.contains('notifyListeners();'),
-        isTrue,
-      );
+      expect(controllerSource.contains('_completed = false;'), isTrue);
+      expect(controllerSource.contains('notifyListeners();'), isTrue);
       // 只清 completed，不得顺手清 position/duration（那会让 UI 跳回 0）。
       final start = controllerSource.indexOf('bool clearCompleted()');
       final end = controllerSource.indexOf('double get volume');
@@ -329,10 +332,7 @@ void main() {
       // UI 的 _isGenuineEnd 委托给 isGenuineEndDuration；
       // 这里直接验证该函数的边界，确认 UI 拿到的是同一套语义。
       expect(
-        isGenuineEndDuration(
-          duration: Duration.zero,
-          position: Duration.zero,
-        ),
+        isGenuineEndDuration(duration: Duration.zero, position: Duration.zero),
         isFalse,
       );
       const duration = Duration(minutes: 45);

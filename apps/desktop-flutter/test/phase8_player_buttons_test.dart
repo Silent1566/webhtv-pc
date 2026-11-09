@@ -3,11 +3,21 @@ import 'package:webhtv_pc/core/player_buttons.dart';
 
 void main() {
   group('按钮定义（design/03 §3.2、§5.3）', () {
-    test('恰好 8 项，id 集合精确', () {
-      expect(kPlayerButtons.length, 8);
+    test('恰好 9 项，id 集合精确', () {
+      expect(kPlayerButtons.length, 9);
       expect(
         kPlayerButtons.map((b) => b.id).toList(),
-        ['prev', 'play', 'next', 'mute', 'volume', 'speed', 'episodes', 'fullscreen'],
+        [
+          'prev',
+          'play',
+          'next',
+          'mute',
+          'volume',
+          'speed',
+          'episodes',
+          'fullscreen',
+          'external_player',
+        ],
       );
     });
 
@@ -47,7 +57,7 @@ void main() {
 
     test('缺失项追加到末尾（老配置 + 新按钮）', () {
       final order = normalizeButtonOrder(['play', 'prev']);
-      expect(order.length, 8);
+      expect(order.length, kPlayerButtons.length);
       expect(order[0], 'play');
       expect(order[1], 'prev');
       // 其余按默认顺序补齐在末尾。

@@ -22,7 +22,11 @@ enum PlayerButtonGroup {
   /// 用户在选集时本来就在看「哪条线路的哪一集」，单独一条线路下拉只是重复入口。
   rate('速率与选集'),
 
-  /// 显示：全屏。
+  /// 显示：全屏 / 外部播放器。
+  ///
+  /// 「外部播放器」归这里而不是「传输」：它和全屏一样是**换一种输出方式**，
+  /// 不是播放控制。不新开一组——分组的目的是缩短主列，而只有一项的组没有
+  /// 存在价值（本文件 `kPlayerButtons` 的既有取舍）。
   display('显示');
 
   const PlayerButtonGroup(this.label);
@@ -47,9 +51,9 @@ class PlayerButtonSpec {
   final PlayerButtonGroup group;
 }
 
-/// PC 端**可配置**的按钮全集（8 个）。
+/// PC 端**可配置**的按钮全集（9 个）。
 ///
-/// ## 为什么是 8 个而不是上游的 32 个
+/// ## 为什么是 9 个而不是上游的 32 个
 ///
 /// 上游 `PlayerButtonSetting.java:21-52` 定义 32 个 id。PC 端只沿用其中 5 个
 /// （`speed` / `prev` / `next` / `episodes` / `fullscreen`），其余 27 个全部排除，
@@ -132,6 +136,11 @@ const List<PlayerButtonSpec> kPlayerButtons = [
   PlayerButtonSpec(
     id: 'fullscreen',
     label: '全屏',
+    group: PlayerButtonGroup.display,
+  ),
+  PlayerButtonSpec(
+    id: 'external_player',
+    label: '外部播放器',
     group: PlayerButtonGroup.display,
   ),
 ];

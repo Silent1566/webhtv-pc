@@ -42,6 +42,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import '../core/external_player_catalog.dart';
+import 'external_player.dart';
 import '../core/history_aggregation.dart';
 import '../core/history_scope.dart';
 import '../core/history_view.dart';
@@ -157,6 +159,14 @@ class UiPreferencesStore {
 
   /// 按钮隐藏集的**显式**设置；null 表示从未设置过。
   Set<String>? _buttonHidden;
+
+  /// 外部播放器可执行文件的**显式**设置；null 表示从未设置过。
+  ///
+  /// 与 [_themeMode] 同一口径：缺省不写盘，避免把默认值固化进设置文件。
+  /// 「配置了路径」即「能力可用」——探测到的候选只有在用户选定后才写进来，
+  /// 所以不需要额外的启用开关。
+  String? _externalPlayerPath;
+  ExternalPlayerCatalog _externalPlayerCatalog = const ExternalPlayerCatalog();
 
   /// 播放参数的**显式**设置；null 表示从未设置过（用默认值）。
   ///
@@ -292,11 +302,24 @@ class UiPreferencesStore {
   ///
   /// 注意必须传 `List`：Task 2 的 [normalizeButtonHidden] 只认 `List` 与
   /// 逗号分隔 `String`（`_splitIds`），直接喂 `Set` 会静默落成空集。
-  Set<String> get buttonHidden => normalizeButtonHidden(_buttonHidden?.toList());
+  Set<String> get buttonHidden =>
+      normalizeButtonHidden(_buttonHidden?.toList());
 
   /// 用户是否显式设置过按钮排版（决定要不要写盘）。
   bool get hasExplicitPlayerButtons =>
       _buttonOrder != null || _buttonHidden != null;
+
+  /// 外部播放器路径；`null` = 从未设置过（还没探测或还没手选）。
+  String? get externalPlayerPath {
+    final path = _externalPlayerPath?.trim() ?? '';
+    return path.isEmpty ? null : _externalPlayerCatalog.resolveExecutable(path);
+  }
+
+  List<ExternalPlayer> listExternalPlayers(List<ExternalPlayer> scanned) =>
+      _externalPlayerCatalog.list(
+        scanned,
+        legacyExecutable: externalPlayerPath,
+      );
 
   /// 生效的播放参数。
   PlayerOptions get playerOptions =>
@@ -306,7 +329,8 @@ class UiPreferencesStore {
   bool get hasExplicitPlayerOptions => _playerOptions != null;
 
   /// 生效的直播设置。
-  LiveSettings get liveSettings => _liveSettings ?? const LiveSettings.defaults();
+  LiveSettings get liveSettings =>
+      _liveSettings ?? const LiveSettings.defaults();
 
   /// 用户是否显式设置过直播设置。
   bool get hasExplicitLiveSettings => _liveSettings != null;
@@ -513,6 +537,17 @@ class UiPreferencesStore {
               _buttonHidden = normalizeButtonHidden(hidden);
             }
           }
+          // 外部播放器：路径只接受非空字符串（空串 = 未设置）。
+          final externalPath = ui['externalPlayerPath'];
+          if (externalPath is String && externalPath.trim().isNotEmpty) {
+            _externalPlayerPath = externalPath.trim();
+          }
+          _externalPlayerCatalog = ExternalPlayerCatalog.fromJson(
+            ui['externalPlayers'],
+          );
+          _externalPlayerPath = _externalPlayerCatalog.resolveExecutable(
+            _externalPlayerPath,
+          );
         }
         // 顶层段（Phase 9）：与 `ui` 段同级，不能被 `ui` 是否存在影响。
         final player = decoded['player'];
@@ -742,6 +777,88 @@ class UiPreferencesStore {
     return _persist();
   }
 
+  /// 记住外部播放器路径。传空串等于清除（回到「未设置」）。
+  Future<bool> rememberExternalPlayerPath(String? path) {
+    final normalized =
+        _externalPlayerCatalog.resolveExecutable(path?.trim()) ?? '';
+    if (normalized == (_externalPlayerPath ?? '')) return Future.value(true);
+    _externalPlayerPath = normalized.isEmpty ? null : normalized;
+    return _persist();
+  }
+
+  /// 本次编辑后「上次所选」应指向哪里。
+  ///
+  /// 历史路径可能被多条记录共有（A→B 与 A→C 都留 A），按路径反查只能猜一条，
+  /// 且创建顺序不等于最后拥有者。因此预选只跟随**被编辑的那条记录**：编辑前
+  /// 预选解析到它，编辑后就指向本次目标；否则预选原样不动，不被历史夺走。
+  String? _selectedPathAfterEdit({
+    required ExternalPlayerCatalog previousCatalog,
+    required String? previousPath,
+    required String? originalExecutable,
+    required String target,
+    required ExternalPlayerCatalog next,
+  }) {
+    if (previousPath == null) return null;
+    if (originalExecutable == null) return next.resolveExecutable(previousPath);
+    // 比较必须走 Windows 路径归一化：`d:/players/A.EXE` 与
+    // `D:\Players\A.exe` 是同一条记录，裸字符串比较会把它们判成两条。
+    final wasSelected = _samePath(
+      previousCatalog.resolveExecutable(previousPath),
+      originalExecutable,
+    );
+    return wasSelected ? target.trim() : next.resolveExecutable(previousPath);
+  }
+
+  static bool _samePath(String? left, String? right) {
+    if (left == null || right == null) return false;
+    return ExternalPlayers.normalizeExecutablePath(left) ==
+        ExternalPlayers.normalizeExecutablePath(right);
+  }
+
+  Future<bool> saveExternalPlayer({
+    String? originalExecutable,
+    required String name,
+    required String executable,
+    required List<ExternalPlayer> scanned,
+    bool Function(String)? exists,
+  }) {
+    final result = _persistQueue.then((_) {
+      final next = _externalPlayerCatalog.save(
+        originalExecutable: originalExecutable,
+        name: name,
+        executable: executable,
+        scanned: scanned,
+        legacyExecutable: externalPlayerPath,
+      );
+      if (next == null) return false;
+      try {
+        if (!(exists ?? (path) => File(path).existsSync())(executable.trim())) {
+          return false;
+        }
+      } catch (_) {
+        return false;
+      }
+      final previous = _externalPlayerCatalog;
+      final previousPath = _externalPlayerPath;
+      _externalPlayerCatalog = next;
+      _externalPlayerPath = _selectedPathAfterEdit(
+        previousCatalog: previous,
+        previousPath: previousPath,
+        originalExecutable: originalExecutable,
+        target: executable,
+        next: next,
+      );
+      final ok = _doPersist();
+      if (!ok) {
+        _externalPlayerCatalog = previous;
+        _externalPlayerPath = previousPath;
+      }
+      return ok;
+    });
+    _persistQueue = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
   /// 记住出站代理设置。
   Future<bool> rememberOutboundProxy(OutboundProxySettings settings) {
     if (_outboundProxy == settings) return Future.value(true);
@@ -934,14 +1051,11 @@ class UiPreferencesStore {
   Future<bool> _persist() {
     final result = _persistQueue.then((_) => _doPersist());
     // 队列推进不能被单次失败阻塞：吞掉错误后继续接受下一次写盘。
-    _persistQueue = result.then<void>(
-      (_) {},
-      onError: (_) {},
-    );
+    _persistQueue = result.then<void>((_) {}, onError: (_) {});
     return result;
   }
 
-  Future<bool> _doPersist() async {
+  bool _doPersist() {
     // 写盘经共享工具（`settings_file.dart`）：
     // - **同步临界区**：`SyncState` 同时也在写同一个 `settings.json`。
     //   Dart 单线程，所以「读→改→写 tmp→rename」之间只要没有 `await`
@@ -990,13 +1104,20 @@ class UiPreferencesStore {
         if (_osdFlags.isNotEmpty) ui['osd'] = _osdFlags;
         // 按钮排版：两个键各自独立；都缺席时整个 playerButtons 不写。
         final order = _buttonOrder;
-        final hidden = _buttonHidden;        if (order != null || hidden != null) {
+        final hidden = _buttonHidden;
+        if (order != null || hidden != null) {
           ui['playerButtons'] = <String, Object?>{
             // 用 null-aware 值 `?order` 而不是 `if (order != null) 'order': order,`：
             // 后者在本仓库工具链下触发 `use_null_aware_elements`（实测确认）。
             'order': ?order,
             if (hidden != null) 'hidden': hidden.toList()..sort(),
           };
+        }
+        // 外部播放器：缺席 = 未配置（与按钮排版同一口径）。
+        final externalPath = _externalPlayerPath;
+        if (externalPath != null) ui['externalPlayerPath'] = externalPath;
+        if (!_externalPlayerCatalog.isEmpty) {
+          ui['externalPlayers'] = _externalPlayerCatalog.toJson();
         }
         root['ui'] = ui;
         // 播放参数：只有显式设置过才写（缺席 = 默认，与 ui 段同一口径）。

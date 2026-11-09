@@ -244,12 +244,12 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 43 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 44 项）', (tester) async {
       await _openMenu(tester);
 
       // 计数口径从「主列行数」改成「该组飞出列的行数」——数字一个没变。
       const expected = <String, int>{
-        '播放': 6,
+        '播放': 7,
         '速度': 6,
         '字幕': 4,
         '画面': 2,
@@ -267,8 +267,8 @@ void main() {
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        43,
-        reason: '十个分组的项数之和必须仍是 43（本轮只改渲染结构，不动内容）',
+        44,
+        reason: '十个分组的项数之和必须仍是 44（「播放」组多了「用外部播放器打开…」）',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -281,7 +281,7 @@ void main() {
     });
 
     // 死项检查现在要**走遍所有层级**：分组行把它们的孩子藏进了第 2 列，
-    // 只扫主列会漏掉全部 43 个叶子。
+    // 只扫主列会漏掉全部 44 个叶子。
     testWidgets('所有层级都没有死项：分组必有 children，叶子必须可点', (tester) async {
       await _openMenu(tester);
       const titles = [
@@ -334,7 +334,7 @@ void main() {
         ['音轨…', '跳过片头', '跳过片尾', '清除本片标记', '播放诊断'],
         reason: '不可点项集合变了：要么新增了死项，要么「该灰的」被藏起来了',
       );
-      // 43 项里减去 5 个不可点的叶子，其余叶子都必须真的能点
+      // 44 项里减去 5 个不可点的叶子，其余叶子都必须真的能点
       // （不是「有 children 就都以为能点」）。
       expect(sawLeaf, greaterThan(25), reason: '叶子项数量异常（$sawLeaf）');
     });
