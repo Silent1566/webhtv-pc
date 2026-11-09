@@ -12,6 +12,8 @@
 | `04-w3-backup.md` | W3 / P2-7 备份、恢复、重置：格式、安全边界、测试 | 已产出 |
 | `05-w3-privacy-doh-recovery.md` | W3 / P2-8 DoH、隐身、崩溃恢复：实现、边界、测试 | 已产出 |
 | `06-w3-following.md` | W3 / P2-1 追番：策略、存储、页面、测试与边界 | 已产出 |
+| `07-w3-following-runtime.md` | W3 / P2-1 追番运行期：默认开启、间隔设置、系统通知与降级、ADR 0006 | 已产出 |
+| `08-w3-following-calendar.md` | W3 / P2-1 追剧日历：归日策略、页面与导航、TMDB 真实播出日接入 | 已产出 |
 | `player-l3-run.txt` | `phase9_player_flow_test.dart -d windows` 原始输出 | 已产出 |
 | `screenshots/01-context-menu-skip-segments.png` | 右键菜单「片头片尾」截图（只裁菜单本体；两次运行 sha256 一致） | 已产出 |
 

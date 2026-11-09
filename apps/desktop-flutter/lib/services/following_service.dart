@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import '../core/following.dart';
 import 'log_service.dart';
@@ -79,6 +80,14 @@ class FollowingService {
       database.following(seriesKey, season);
 
   /// 添加追番：首次把已发布集数写进水位（避免刚追就提示更新）。
+  ///
+  /// 首次追番一律是「未开始看」：新条目的 `watchedEpisode` 保持 0，
+  /// 之后只由播放历史回写（见 `FollowingProgressService`）。
+  ///
+  /// 同时把调用方给的「该线路可播集数」落进 `latestReleasedEpisode` /
+  /// `seasonReleasedEpisodes`：否则首次检查前 `releasedEpisode` 为 0，
+  /// 列表会显示「已更新 0 集」。单调取大，重新追番不会把集数改小。
+  /// `seasonTotalEpisodes` 不在这里写——线路可播集数不等于官方总集数。
   Following add({
     required String siteKey,
     required String vodId,
@@ -108,12 +117,15 @@ class FollowingService {
           notifyEnabled: notifyEnabled,
           createdAtMs: nowMs,
         );
+    final released = math.max(0, releasedEpisode);
     final item = initializeFollowing(
       base.copyWith(
         vodName: vodName,
         vodPic: vodPic ?? base.vodPic,
         flag: flag.isEmpty ? base.flag : flag,
         sourceFlag: sourceFlag.isEmpty ? base.sourceFlag : sourceFlag,
+        latestReleasedEpisode: math.max(base.latestReleasedEpisode, released),
+        seasonReleasedEpisodes: math.max(base.seasonReleasedEpisodes, released),
       ),
       releasedEpisode: releasedEpisode,
       nowMs: nowMs,
@@ -124,23 +136,26 @@ class FollowingService {
 
   void remove(Following item) => database.deleteFollowing(item.seriesKey, item.season);
 
-  Following markRead(Following item) {
-    final next = markFollowingRead(
-      item,
-      nowMs: _now().millisecondsSinceEpoch,
-    );
+  /// per-item 新集通知开关：只改这一条记录并落库。
+  ///
+  /// 不改 `updatedAt`，否则列表顺序会被一次开关洗牌；值没变时不写库。
+  /// 全局 `FollowingSettings.notifyEnabled` 语义不变：真正发通知仍需两处都开
+  /// （见 `shouldNotifyFollowing`）。
+  Following setNotifyEnabled(Following item, bool enabled) {
+    final latest = byKey(item.seriesKey, item.season);
+    if (latest == null) return item;
+    if (latest.notifyEnabled == enabled) return latest;
+    final next = latest.copyWith(notifyEnabled: enabled);
     database.upsertFollowing(next);
     return next;
   }
 
-  Following markWatched(Following item) {
-    final nowMs = _now().millisecondsSinceEpoch;
+  Following markRead(Following item) {
+    final latest = byKey(item.seriesKey, item.season);
+    if (latest == null) return item;
     final next = markFollowingRead(
-      item.copyWith(
-        watchedEpisode: item.releasedEpisode,
-        readWatermarkEpisode: item.releasedEpisode,
-      ),
-      nowMs: nowMs,
+      latest,
+      nowMs: _now().millisecondsSinceEpoch,
     );
     database.upsertFollowing(next);
     return next;
@@ -154,14 +169,18 @@ class FollowingService {
       if (lines == null || lines.isEmpty) {
         throw StateError('详情里没有可用线路');
       }
+      final latest = byKey(item.seriesKey, item.season);
+      if (latest == null) {
+        return FollowingCheckOutcome(following: item, changed: false, error: '');
+      }
       final snapshot = followingSnapshotFromLines(
         lines,
-        flag: item.flag,
-        sourceFlag: item.sourceFlag,
+        flag: latest.flag,
+        sourceFlag: latest.sourceFlag,
         nowMs: nowMs,
       );
       if (snapshot == null) throw StateError('线路不存在');
-      final applied = applyFollowingSnapshot(item, snapshot, nowMs: nowMs);
+      final applied = applyFollowingSnapshot(latest, snapshot, nowMs: nowMs);
       final updated = _withNextCheck(applied.following, nowMs: nowMs);
       database.upsertFollowing(updated);
       return FollowingCheckOutcome(
@@ -170,12 +189,13 @@ class FollowingService {
         error: '',
       );
     } catch (error) {
+      final latest = byKey(item.seriesKey, item.season);
       final next = markFollowingFailure(
-        item,
+        latest ?? item,
         error: '$error',
         nowMs: nowMs,
       );
-      database.upsertFollowing(next);
+      if (latest != null) database.upsertFollowing(next);
       log?.warning(
         '追番检查失败 ${item.vodName}（${item.siteKey}）：$error',
         scope: 'following',

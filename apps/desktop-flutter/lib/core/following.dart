@@ -255,8 +255,14 @@ class Following {
   final int seasonReleasedEpisodes;
   final int seasonTotalEpisodes;
 
+  /// 已看集数：**只**由播放历史回写（`FollowingProgressService`），
+  /// 0 = 未开始看；历史被清理时也不回退。
   final int watchedEpisode;
+
+  /// 已读/已通知水位：只用于「新集提示」去重（刚追番时写成已发布集数，
+  /// 避免一追就提示有新集），**不代表已看**，不参与已看/未看计算。
   final int readWatermarkEpisode;
+
   final int lastNotifiedEpisode;
   final int lastNotifiedAtMs;
 
@@ -284,11 +290,19 @@ class Following {
       ? latestReleasedEpisode
       : seasonReleasedEpisodes;
 
+  /// 未看集数：已发布 − 已看（水位不参与），至少 0。
   int get unwatchedCount =>
       math.max(0, releasedEpisode - math.max(0, watchedEpisode)).toInt();
 
-  bool get hasUpdate =>
-      releasedEpisode > math.max(watchedEpisode, readWatermarkEpisode);
+  /// 是否有未确认的更新消息：发送通知不等于已读。
+  bool get hasUnreadUpdate =>
+      releasedEpisode > math.max(0, readWatermarkEpisode);
+
+  /// 是否有未看的发布集（只看已看，不看水位）。
+  ///
+  /// 「刚追番不提示新集」由水位在 `shouldNotifyFollowing` 里单独判断，
+  /// 与这里无关。
+  bool get hasUpdate => releasedEpisode > math.max(0, watchedEpisode);
 
   Following copyWith({
     String? seriesKey,
@@ -447,6 +461,9 @@ class Following {
 }
 
 /// 新追一部剧：把已发布集数写进水位，避免「刚追就提示有更新」。
+///
+/// 首次追番 = **未开始看**：`watchedEpisode` 这里不写（新条目本为 0，
+/// 老条目保留原值），已看只由播放历史回写推进。
 Following initializeFollowing(
   Following item, {
   required int releasedEpisode,
@@ -578,6 +595,7 @@ Following markFollowingNotified(Following item, {required int nowMs}) =>
       updatedAtMs: nowMs,
     );
 
+/// 标记已读：只把已读水位抬到已发布集数（抑制新集提示），不改已看集数。
 Following markFollowingRead(Following item, {required int nowMs}) =>
     refreshFollowingDerived(
       item.copyWith(
@@ -612,7 +630,7 @@ Following markFollowingFailure(
 /// 追番设置（顶层 `following`）。
 class FollowingSettings {
   const FollowingSettings({
-    this.enabled = false,
+    this.enabled = true,
     this.notifyEnabled = false,
     this.intervalMinutes = 360,
   });
@@ -620,13 +638,23 @@ class FollowingSettings {
   static const FollowingSettings defaults = FollowingSettings();
 
   /// 自动检查开关（应用运行期间生效；PC 没有后台服务）。
+  ///
+  /// 默认开启：从未显式设置过的用户（含老库升级、旧偏好里没有 `following`
+  /// 键）直接进入自动检查；曾显式关闭的用户由偏好里存下的 `false` 保持关闭。
   final bool enabled;
 
-  /// 发现新集时是否在应用内提示（系统级通知未实现）。
+  /// 发现新集时的通知开关（系统通知不可用时降级为应用内提示）。
   final bool notifyEnabled;
 
   /// 自动检查间隔（分钟），默认 6 小时，夹取 15–1440。
   final int intervalMinutes;
+
+  /// 「每 N 小时 / 每 N 分钟」文案（非整小时显示分钟）。
+  String get intervalLabel => formatInterval(intervalMinutes);
+
+  /// 分钟数的展示文案，与 [intervalLabel] 同规则。
+  static String formatInterval(int minutes) =>
+      minutes % 60 == 0 ? '每 ${minutes ~/ 60} 小时' : '每 $minutes 分钟';
 
   bool get isDefault => this == defaults;
 
@@ -655,13 +683,18 @@ class FollowingSettings {
   factory FollowingSettings.fromJson(Object? raw) {
     final map = raw is Map ? raw : const {};
     return FollowingSettings(
-      enabled: map['enabled'] is bool ? map['enabled'] as bool : false,
-      notifyEnabled:
-          map['notifyEnabled'] is bool ? map['notifyEnabled'] as bool : false,
+      // 缺键一律回落到默认值：默认开启，所以老偏好（没有 `following` 键或
+      // 旧版写下的键里缺 `enabled`）同样视为「从未设置过 → 开启」。
+      enabled: map['enabled'] is bool
+          ? map['enabled'] as bool
+          : defaults.enabled,
+      notifyEnabled: map['notifyEnabled'] is bool
+          ? map['notifyEnabled'] as bool
+          : defaults.notifyEnabled,
       intervalMinutes: _clamp(
         map['intervalMinutes'] is num
             ? (map['intervalMinutes'] as num).toInt()
-            : 360,
+            : defaults.intervalMinutes,
       ),
     );
   }
