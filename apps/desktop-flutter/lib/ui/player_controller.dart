@@ -143,6 +143,13 @@ class PlayerController extends ChangeNotifier {
   String? _lastEngineError;
   Timer? _retryTimer;
   int _retryCount = 0;
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -220,7 +227,7 @@ class PlayerController extends ChangeNotifier {
   ///
   /// 返回是否真的发生了变化，便于调用点与测试断言「失败路径确实清了」。
   bool clearCompleted() {
-    if (!_completed) return false;
+    if (_disposed || !_completed) return false;
     _completed = false;
     notifyListeners();
     return true;
@@ -320,6 +327,7 @@ class PlayerController extends ChangeNotifier {
 
   /// 切换音轨。`auto` 回到引擎默认；失败只记错误，不打断播放。
   Future<bool> selectAudioTrack(String id) async {
+    if (_disposed) return false;
     final target = id.trim();
     if (target.isEmpty) return false;
     try {
@@ -337,13 +345,14 @@ class PlayerController extends ChangeNotifier {
       }
       return true;
     } catch (error) {
-      _lastEngineError = '$error';
+      if (!_disposed) _lastEngineError = '$error';
       return false;
     }
   }
 
   /// 切换视频轨。语义与音轨一致。
   Future<bool> selectVideoTrack(String id) async {
+    if (_disposed) return false;
     final target = id.trim();
     if (target.isEmpty) return false;
     try {
@@ -361,22 +370,24 @@ class PlayerController extends ChangeNotifier {
       }
       return true;
     } catch (error) {
-      _lastEngineError = '$error';
+      if (!_disposed) _lastEngineError = '$error';
       return false;
     }
   }
 
   /// 注入 mpv 属性。返回 false 表示当前平台不是 NativePlayer 或属性被拒绝。
   Future<bool> applyMpvProperties(Map<String, String> properties) async {
+    if (_disposed) return false;
     final platform = _player.platform;
     if (platform is! NativePlayer) return false;
     try {
       for (final entry in properties.entries) {
+        if (_disposed) return false;
         await platform.setProperty(entry.key, entry.value);
       }
       return true;
     } catch (error) {
-      _lastEngineError = '$error';
+      if (!_disposed) _lastEngineError = '$error';
       return false;
     }
   }
@@ -403,6 +414,7 @@ class PlayerController extends ChangeNotifier {
   /// - 解析失败（mpv 在某些状态下会回 `"nan"` / `"inf"`）；
   /// - 值为负数或非有限。
   Future<double?> sampleNetworkRate() async {
+    if (_disposed) return null;
     final platform = _player.platform;
     if (platform is! NativePlayer) {
       _setBytesPerSecond(null);
@@ -412,17 +424,18 @@ class PlayerController extends ChangeNotifier {
     try {
       cacheState = await platform.getProperty('demuxer-cache-state');
     } catch (error) {
-      _lastEngineError = '$error';
+      if (!_disposed) _lastEngineError = '$error';
       cacheState = '';
     }
     var parsed = parseRawInputRateFromCacheState(cacheState);
+    if (_disposed) return parsed;
     String? cacheSpeed;
     // 首选真的失败才读回退属性：首选成功时多读一次纯属每秒一次的浪费。
     if (parsed == null) {
       try {
         cacheSpeed = await platform.getProperty('cache-speed');
       } catch (error) {
-        _lastEngineError = '$error';
+        if (!_disposed) _lastEngineError = '$error';
       }
     }
     parsed = resolveNetworkRate(parsed, cacheSpeed);
@@ -435,7 +448,7 @@ class PlayerController extends ChangeNotifier {
   /// 屏显的时钟本来就在每秒重建，但那是 `setState`（页面级）；这里多通知
   /// 一次会让 `_onControllerChanged` 里的连播判定也跟着每秒跑一遍。
   void _setBytesPerSecond(double? value) {
-    if (_bytesPerSecond == value) return;
+    if (_disposed || _bytesPerSecond == value) return;
     _bytesPerSecond = value;
     notifyListeners();
   }
@@ -498,7 +511,9 @@ class PlayerController extends ChangeNotifier {
     List<SubtitleInfo> subs, {
     void Function(SubtitleInfo sub, String reason)? onDiscard,
   }) {
+    if (_disposed) return;
     final options = externalSubtitleOptions(subs, onDiscard: onDiscard);
+    if (_disposed) return;
     if (listEquals(options, _externalSubtitleOptions)) return;
     _externalSubtitleOptions = options;
     notifyListeners();
@@ -511,7 +526,7 @@ class PlayerController extends ChangeNotifier {
   Future<bool> applyDefaultSubtitle({
     Map<String, String> headers = const {},
   }) async {
-    if (_selectedSubtitle != null) return false;
+    if (_disposed || _selectedSubtitle != null) return false;
     final option = defaultSubtitleOption(_externalSubtitleOptions);
     if (option == null) return false;
     return selectSubtitle(option, headers: headers);
@@ -524,13 +539,15 @@ class PlayerController extends ChangeNotifier {
     SubtitleOption option, {
     Map<String, String> headers = const {},
   }) async {
+    if (_disposed) return false;
     _subtitleBusy = true;
     _subtitleError = null;
     notifyListeners();
     try {
+      if (_disposed) return false;
       if (option.id == SubtitleOption.offId) {
         await _player.setSubtitleTrack(SubtitleTrack.no());
-        _selectedSubtitle = SubtitleOption.off;
+        if (!_disposed) _selectedSubtitle = SubtitleOption.off;
         return true;
       }
       if (option.isExternal) {
@@ -543,7 +560,12 @@ class PlayerController extends ChangeNotifier {
           ),
           headers: headers,
         );
+        if (_disposed) return false;
         final file = await _writeSubtitleFile(document);
+        if (_disposed) {
+          await file.delete();
+          return false;
+        }
         await _player.setSubtitleTrack(
           SubtitleTrack.uri(
             file.path,
@@ -551,6 +573,10 @@ class PlayerController extends ChangeNotifier {
             language: option.language.isEmpty ? 'auto' : option.language,
           ),
         );
+        if (_disposed) {
+          await file.delete();
+          return true;
+        }
         _externalTrackFiles[file.path] = option;
         _selectedSubtitle = option;
         // 上一份外挂字幕文件已不再需要：保留当前这一份即可。
@@ -565,20 +591,22 @@ class PlayerController extends ChangeNotifier {
           option.language.isEmpty ? null : option.language,
         ),
       );
-      _selectedSubtitle = option;
+      if (!_disposed) _selectedSubtitle = option;
       return true;
     } catch (error) {
-      _subtitleError = describeSubtitleFailure(error);
+      if (!_disposed) _subtitleError = describeSubtitleFailure(error);
       return false;
     } finally {
-      _subtitleBusy = false;
-      notifyListeners();
+      if (!_disposed) {
+        _subtitleBusy = false;
+        notifyListeners();
+      }
     }
   }
 
   /// 清空字幕错误（用户重新选择时）。
   void clearSubtitleError() {
-    if (_subtitleError == null) return;
+    if (_disposed || _subtitleError == null) return;
     _subtitleError = null;
     notifyListeners();
   }
@@ -626,18 +654,22 @@ class PlayerController extends ChangeNotifier {
   void _bind() {
     _subscriptions.addAll([
       _player.stream.position.listen((value) {
+        if (_disposed) return;
         _position = value;
         notifyListeners();
       }),
       _player.stream.duration.listen((value) {
+        if (_disposed) return;
         _duration = value;
         notifyListeners();
       }),
       _player.stream.buffer.listen((value) {
+        if (_disposed) return;
         _buffered = value;
         notifyListeners();
       }),
       _player.stream.buffering.listen((value) {
+        if (_disposed) return;
         _buffering = value;
         // 停止缓冲时把百分比清空：那是上一次卡顿留下的残值，留着会让
         // 下一次卡顿在引擎上报之前先闪一下旧数字。
@@ -645,59 +677,74 @@ class PlayerController extends ChangeNotifier {
         notifyListeners();
       }),
       _player.stream.bufferingPercentage.listen((value) {
+        if (_disposed) return;
         // mpv 在非缓冲期也会持续上报 0；0 是真实的"还没填"，不是"没数据"，
         // 这里照收，由界面决定怎么画。
         _bufferingPercent = value.clamp(0, 100).toDouble();
         notifyListeners();
       }),
       _player.stream.playing.listen((value) {
+        if (_disposed) return;
         _playing = value;
         notifyListeners();
       }),
       _player.stream.completed.listen((value) {
+        if (_disposed) return;
         _completed = value;
         notifyListeners();
       }),
       _player.stream.volume.listen((value) {
+        if (_disposed) return;
         _volume = value;
         notifyListeners();
       }),
       _player.stream.rate.listen((value) {
+        if (_disposed) return;
         _rate = value;
         notifyListeners();
       }),
       _player.stream.videoParams.listen((value) {
+        if (_disposed) return;
         _videoParams = value;
         notifyListeners();
       }),
       _player.stream.audioParams.listen((value) {
+        if (_disposed) return;
         _audioParams = value;
         notifyListeners();
       }),
       _player.stream.audioBitrate.listen((value) {
+        if (_disposed) return;
         _audioBitrate = value;
         notifyListeners();
       }),
       _player.stream.width.listen((value) {
+        if (_disposed) return;
         _videoWidth = value;
         notifyListeners();
       }),
       _player.stream.height.listen((value) {
+        if (_disposed) return;
         _videoHeight = value;
         notifyListeners();
       }),
       _player.stream.error.listen((message) {
+        if (_disposed) return;
         _lastEngineError = message;
         // 非致命告警（无声卡/无 GPU）不应被当成加载失败：加载结果以 duration 判定。
         notifyListeners();
       }),
       _player.stream.tracks.listen((tracks) {
+        if (_disposed) return;
         _tracks = tracks;
         _updateEmbeddedSubtitles(tracks.subtitle);
+        if (_disposed) return;
         notifyListeners();
       }),
       _player.stream.track.listen((track) {
+        if (_disposed) return;
         _syncSelectedSubtitle(track.subtitle);
+        if (_disposed) return;
         notifyListeners();
       }),
     ]);
@@ -705,6 +752,7 @@ class PlayerController extends ChangeNotifier {
 
   /// 播放器上报的内嵌字幕轨变化（切集/换片后重新计算菜单）。
   void _updateEmbeddedSubtitles(List<SubtitleTrack> tracks) {
+    if (_disposed) return;
     final options = embeddedSubtitleOptions(
       tracks.map(
         (track) => (
@@ -726,6 +774,7 @@ class PlayerController extends ChangeNotifier {
   /// 否则 `sub-add` 后 `state.track` 的 `id` 是临时文件路径，菜单会显示成内嵌轨。
   /// 同时把外部字幕轨同步到菜单候选里：mpv 加载完外挂字幕后会把它列入轨道表。
   void _syncSelectedSubtitle(SubtitleTrack track) {
+    if (_disposed) return;
     if (track.uri || track.data) {
       // 外挂字幕由本控制器落盘后交给引擎，id 即我们生成的临时文件路径。
       final external = _externalTrackFiles[track.id];
@@ -773,6 +822,9 @@ class PlayerController extends ChangeNotifier {
     String? flag,
     String? episodeName,
   }) async {
+    if (_disposed) {
+      return _failure(url, 'PlayerController is disposed', Stopwatch()..start());
+    }
     _loading = true;
     _completed = false;
     _lastEngineError = null;
@@ -790,6 +842,9 @@ class PlayerController extends ChangeNotifier {
     builder.setHeaders(headers);
     notifyListeners();
 
+    if (_disposed) {
+      return _failure(url, 'PlayerController is disposed', Stopwatch()..start());
+    }
     final stopwatch = Stopwatch()..start();
     final loadCompleter = Completer<Duration>();
     final localSubscriptions = <StreamSubscription<dynamic>>[];
@@ -851,25 +906,31 @@ class PlayerController extends ChangeNotifier {
         loadElapsed: loadElapsed,
         firstFrame: firstFrame,
       );
-      _lastOutcome = outcome;
-      _loading = false;
-      _retryCount = 0;
-      _finishDiagnostics(succeeded: true, loadElapsed: loadElapsed, firstFrame: firstFrame);
-      notifyListeners();
+      if (!_disposed) {
+        _lastOutcome = outcome;
+        _loading = false;
+        _retryCount = 0;
+        _finishDiagnostics(succeeded: true, loadElapsed: loadElapsed, firstFrame: firstFrame);
+        notifyListeners();
+      }
       return outcome;
     } on TimeoutException catch (error) {
       final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
-      _lastOutcome = outcome;
-      _loading = false;
-      _finishFailureDiagnostics(outcome);
-      notifyListeners();
+      if (!_disposed) {
+        _lastOutcome = outcome;
+        _loading = false;
+        _finishFailureDiagnostics(outcome);
+        notifyListeners();
+      }
       return outcome;
     } catch (error) {
       final outcome = _failure(url, loadError ?? '$error', stopwatch);
-      _lastOutcome = outcome;
-      _loading = false;
-      _finishFailureDiagnostics(outcome);
-      notifyListeners();
+      if (!_disposed) {
+        _lastOutcome = outcome;
+        _loading = false;
+        _finishFailureDiagnostics(outcome);
+        notifyListeners();
+      }
       return outcome;
     } finally {
       for (final subscription in localSubscriptions) {
@@ -949,7 +1010,7 @@ class PlayerController extends ChangeNotifier {
       timeout: timeout,
       diagnosticsBuilder: builder,
     );
-    if (outcome.succeeded) return outcome;
+    if (_disposed || outcome.succeeded) return outcome;
     if (outcome.failureKind != PlayerFailureKind.timeout &&
         outcome.failureKind != PlayerFailureKind.network) {
       return outcome;
@@ -958,6 +1019,7 @@ class PlayerController extends ChangeNotifier {
     _retryCount++;
     final retryStopwatch = Stopwatch()..start();
     await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (_disposed) return outcome;
     builder.addStage(PlaybackStage.retry, retryStopwatch.elapsed);
     outcome = await open(
       url,
@@ -992,15 +1054,18 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> setVolume(double value) async {
+    if (_disposed) return;
     final clamped = value.clamp(0.0, 100.0);
     if (clamped > 0) _volumeBeforeMute = clamped;
     _muted = clamped == 0;
     await _player.setVolume(clamped);
+    if (_disposed) return;
     notifyListeners();
   }
 
   /// 静音切换：静音时记住原音量，取消静音时恢复，不使用硬编码 100。
   Future<void> toggleMute() async {
+    if (_disposed) return;
     if (_muted || _volume <= 0) {
       _muted = false;
       final restored = _volumeBeforeMute <= 0 ? 100.0 : _volumeBeforeMute;
@@ -1010,6 +1075,7 @@ class PlayerController extends ChangeNotifier {
       _muted = true;
       await _player.setVolume(0);
     }
+    if (_disposed) return;
     notifyListeners();
   }
 
@@ -1024,6 +1090,8 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     cancelPendingRetries();
     for (final subscription in _subscriptions) {
       subscription.cancel();

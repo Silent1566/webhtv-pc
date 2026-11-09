@@ -30,6 +30,7 @@ import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
 import 'diagnostics_pages.dart';
+import 'following_calendar_page.dart';
 import 'following_page.dart';
 import 'image_header_scope.dart';
 import 'library_pages.dart';
@@ -394,6 +395,7 @@ enum ShellSection {
   history,
   favorites,
   following,
+  calendar,
   spiders,
   settings,
   logs,
@@ -457,8 +459,22 @@ class _AppShellState extends State<AppShell> {
 
   void _onStateChanged() {
     _syncToasts();
+    _syncFollowingOpenRequest();
     if (mounted) setState(() {});
     _maybeAutoPlayMedia();
+  }
+
+  /// 系统通知被点击时把侧栏切到「追番」页。
+  ///
+  /// **只切页，不清 `followingOpenRequest`**：真正的消费方是 `FollowingPage`
+  /// （`_consumeOpenRequest` 取到身份键后打开最新集，再原子地清空）。壳层要是
+  /// 提前清掉，追番页拿不到 key，点通知就只跳到列表、不打开那一集。
+  /// 只判「当前是否已在追番页」而不记历史值：清空不触发 notify，记历史值会让
+  /// 同一条通知的第二次点击失去跳转。
+  void _syncFollowingOpenRequest() {
+    if (_state.followingOpenRequest.isEmpty) return;
+    if (_section == ShellSection.following) return;
+    _section = ShellSection.following;
   }
 
   /// 把状态层的两条横幅通道投影成右下角通知。
@@ -975,6 +991,8 @@ class _AppShellState extends State<AppShell> {
         return FavoritesPage(state: _state);
       case ShellSection.following:
         return FollowingPage(state: _state);
+      case ShellSection.calendar:
+        return FollowingCalendarPage(state: _state);
       case ShellSection.spiders:
         return SpiderPage(state: _state);
       case ShellSection.settings:
@@ -1344,6 +1362,10 @@ class _SideBar extends StatelessWidget {
             child: const Icon(Icons.star_border),
           ),
           label: const Text('追番'),
+        ),
+        const NavigationRailDestination(
+          icon: Icon(Icons.calendar_month),
+          label: Text('追剧日历'),
         ),
         const NavigationRailDestination(
           icon: Icon(Icons.extension),

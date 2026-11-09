@@ -212,7 +212,7 @@ class UiPreferencesStore {
   /// 隐身模式的**显式**设置；null 表示从未设置过（关闭）。
   bool? _incognito;
 
-  /// 追番设置的**显式**设置；null 表示从未设置过（自动检查关闭）。
+  /// 追番设置的**显式**设置；null 表示从未设置过（按默认值：自动检查开启）。
   FollowingSettings? _followingSettings;
 
   /// 详细调试日志的**显式**设置；null 表示从未设置过（关闭）。

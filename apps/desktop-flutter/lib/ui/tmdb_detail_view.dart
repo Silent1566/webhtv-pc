@@ -38,6 +38,7 @@ import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
+import 'tmdb_episode_detail.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'tokens.dart';
@@ -787,6 +788,7 @@ class TmdbEpisodeSection extends StatelessWidget {
     required this.keyPrefix,
     this.actionLabel = '播放',
     this.onTap,
+    this.onLongPress,
     this.lineName,
     this.cardWidth = 260,
     this.reversed = false,
@@ -800,6 +802,7 @@ class TmdbEpisodeSection extends StatelessWidget {
   final String keyPrefix;
   final String actionLabel;
   final void Function(int index, TmdbEpisodeCard card)? onTap;
+  final void Function(int index, TmdbEpisodeCard card)? onLongPress;
   final String? lineName;
   final double cardWidth;
   final bool reversed;
@@ -829,6 +832,7 @@ class TmdbEpisodeSection extends StatelessWidget {
         cardWidth: cardWidth,
         gridMode: gridMode,
         onTap: onTap,
+        onLongPress: onLongPress,
       ),
     ],
   );
@@ -848,6 +852,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.keyPrefix = 'tmdb-episode-card',
     this.actionLabel = '播放',
     this.onTap,
+    this.onLongPress,
     this.cardWidth = 260,
     this.height = 196,
     this.gridMode = false,
@@ -867,6 +872,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 分页只切渲染（`docs/phase6/design/03` §4.5），调用方的「渲染下标 →
   /// 线路原始下标」换算必须拿到未切片的下标，否则会二次映射、静默播错集。
   final void Function(int index, TmdbEpisodeCard card)? onTap;
+  final void Function(int index, TmdbEpisodeCard card)? onLongPress;
 
   /// 「最近播放」的卡片下标（-1 = 无）。
   ///
@@ -1063,6 +1069,9 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     onTap: widget.onTap == null
         ? null
         : () => widget.onTap!.call(originalIndex, card),
+    onLongPress: widget.onLongPress == null
+        ? null
+        : () => widget.onLongPress!.call(originalIndex, card),
   );
 }
 
@@ -1082,6 +1091,7 @@ class TmdbDetailView extends StatelessWidget {
     this.episodeKeyPrefix = 'tmdb-episode-card',
     this.episodeActionLabel = '播放',
     this.onEpisodeTap,
+    this.onEpisodeLongPress,
     this.onPersonTap,
     this.onRecommendationTap,
     this.onOpenVideo,
@@ -1129,6 +1139,7 @@ class TmdbDetailView extends StatelessWidget {
   /// 剧集卡片的动作文案（`播放` / `搜索站源`）；空串表示无动作。
   final String episodeActionLabel;
   final void Function(int index, TmdbEpisodeCard card)? onEpisodeTap;
+  final void Function(int index, TmdbEpisodeCard card)? onEpisodeLongPress;
   final ValueChanged<TmdbPerson>? onPersonTap;
   final ValueChanged<TmdbItem>? onRecommendationTap;
   final Future<bool> Function(String url)? onOpenVideo;
@@ -1231,6 +1242,7 @@ class TmdbDetailView extends StatelessWidget {
                   onToggleReversed: onToggleReversed,
                   onToggleGridMode: onToggleGridMode,
                   onTap: onEpisodeTap,
+                  onLongPress: onEpisodeLongPress,
                 ),
               if (data.photoUrls.isNotEmpty ||
                   data.allPeople.isNotEmpty ||
@@ -1731,6 +1743,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     required this.card,
     this.actionLabel = '播放',
     this.onTap,
+    this.onLongPress,
     this.isRecent = false,
   });
 
@@ -1764,6 +1777,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   final TmdbEpisodeCard card;
   final String actionLabel;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -1776,6 +1790,16 @@ class TmdbEpisodeCardTile extends StatelessWidget {
       child: OutlinedButton(
         key: buttonKey,
         onPressed: onTap,
+        onLongPress:
+            onLongPress ??
+            () => unawaited(
+              showTmdbEpisodeDetails(
+                context,
+                card: card,
+                actionLabel: actionLabel,
+                onAction: onTap,
+              ),
+            ),
         style: OutlinedButton.styleFrom(
           padding: EdgeInsets.zero,
           minimumSize: const Size(0, 0),
