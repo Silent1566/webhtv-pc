@@ -369,6 +369,8 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> with WindowListener {
   late final PlayerController _controller;
   late PlaybackRequest _request;
+  bool _progressReady = false;
+  int _mediaGeneration = 0;
   bool _fullscreen = false;
   bool _controlsVisible = true;
   Timer? _saveTimer;
@@ -520,6 +522,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     });
   }
 
+  @override
+  void didUpdateWidget(covariant PlayerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.request == widget.request) return;
+    _beginMediaTransition();
+    _request = widget.request;
+    _episodesCache = const [];
+    unawaited(_load());
+  }
+
   void _onControllerChanged() {
     if (!mounted) return;
     setState(() {});
@@ -668,6 +680,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///    此时 `completed=true` 一定是误报。
   void _maybeAdvanceOnGenuineEnd() {
     if (_advanceInFlight) return;
+    if (!_progressReady) return;
     if (!_controller.isCompleted) return;
     if (!_isGenuineEnd()) return;
 
@@ -793,6 +806,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   );
 
   Future<void> _load() async {
+    if (!mounted) return;
+    final generation = _beginMediaTransition();
     // 记录本次加载的「意图」，失败时用它回滚 `_request`（`design/03` §4.3 D3）。
     //
     // 为什么必须回滚：`_openTarget` 在调 `_load()` **之前**就已经把 `_request`
@@ -813,6 +828,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       flag: _request.playbackFlag,
       episodeName: _request.episodeName,
     );
+    if (!mounted || generation != _mediaGeneration) return;
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
     // 诊断：落定快照并写入日志（§23 输出引擎/格式/网络/错误）。
     final diagnostics = _controller.diagnostics;
@@ -848,11 +864,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     // Phase 9：注入 mpv 播放参数与 LUT。失败不阻断播放，只提示能力不可用。
     await _applyPlaybackEnhancements();
+    if (!mounted || generation != _mediaGeneration) return;
     // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
     // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
     await _configureSubtitles();
+    if (!mounted || generation != _mediaGeneration) return;
     // 弹幕（§21 Phase 3）：拉取并启用弹幕。同样不得阻断播放。
     await _configureDanmaku();
+    if (!mounted || generation != _mediaGeneration) return;
     // 进度恢复：仅对同一剧集且位置有效时执行（§10.3 播放恢复）。
     final start = _effectiveStartPosition();
     // 种子是**一次性交接**：无论重算成功与否，落定后都要清掉，否则下一次
@@ -868,6 +887,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         start > Duration.zero &&
         start < _controller.duration) {
       await _controller.seek(start);
+      if (!mounted || generation != _mediaGeneration) return;
       widget.state.log.info(
         '恢复播放进度 episode=${_request.episodeName} '
         'position=${start.inMilliseconds}ms',
@@ -875,6 +895,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
     }
     // 续播 seek 完成之后才允许自动跳片头/片尾（design/01 §3.1）。
+    _progressReady = true;
     _skipArmed = true;
     _maybeAutoSkip();
     _startProgressSaver();
@@ -2366,8 +2387,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (error != null) _showSubtitleError(error);
   }
 
+  int _beginMediaTransition() {
+    // 在替换请求或打开媒体前，最后一次用仍配对的旧标识保存。
+    _persistProgress();
+    _progressReady = false;
+    _skipArmed = false;
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    return ++_mediaGeneration;
+  }
+
   /// 播放中周期性写入进度（§15.2 “播放中写入进度”）。
   void _startProgressSaver() {
+    if (!_progressReady) return;
     _saveTimer?.cancel();
     _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _persistProgress();
@@ -2375,6 +2407,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   void _persistProgress() {
+    if (!_progressReady) return;
     if (_controller.duration <= Duration.zero) return;
     final position = _controller.position;
     final duration = _controller.duration;
@@ -2434,6 +2467,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _osdTimer = null;
     _endGestureSpeed();
     _persistProgress();
+    _progressReady = false;
+    _mediaGeneration++;
     // 直播弹幕会话是网络资源，必须显式关闭（§20 资源释放）。
     unawaited(_teardownLiveSession('dispose'));
     _sleepTicker?.cancel();
@@ -2613,6 +2648,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     required int episodeIndex,
   }) async {
     final state = widget.state;
+    final generation = _beginMediaTransition();
     try {
       // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
       final String url;
@@ -2645,6 +2681,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         subtitles = decision.subs;
         danmaku = decision.danmaku;
       }
+      if (!mounted || generation != _mediaGeneration) return;
       setState(() {
         _loadError = null;
         _request = _request.copyWith(
@@ -2674,9 +2711,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         _danmakuError = null;
       });
       await _teardownLiveSession('episode-change');
-      _persistProgress();
+      if (!mounted || generation != _mediaGeneration) return;
       await _load();
     } catch (error) {
+      if (!mounted) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -2685,11 +2723,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
   }
 
-  /// 从**最新进度**续播（失败态三出口之二，`design/03` §4.4/§4.5）。
+  /// 从最近一次配对就绪时保存的进度续播（失败态三出口之二）。
   ///
-  /// **为什么必须重新查库**：失败期间进度仍在周期写入（[_persistProgress]），
-  /// 最新值可能比 `_request.startPosition` 更靠后。用旧值续播会让用户
-  /// 回到比失败点更早的位置。
+  /// 转换与失败窗口不再写入；重新查库避免沿用请求里较早的续播种子。
   ///
   /// 恢复路径**不得**触发连播（`design/03` §4.5 步骤 5、P5）：
   /// 这里只重建 `_request` 并重新 `_load()`；`_load()` 成功路径不调

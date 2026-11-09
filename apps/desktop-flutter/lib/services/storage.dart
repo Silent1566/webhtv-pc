@@ -938,6 +938,8 @@ class AppDatabase {
       'metadata_updated_at=excluded.metadata_updated_at, '
       'last_checked_at=excluded.last_checked_at, enabled=excluded.enabled, '
       'notify_enabled=excluded.notify_enabled, created_at=excluded.created_at, '
+      'latest_episode_name=excluded.latest_episode_name, '
+      'latest_episode_target=excluded.latest_episode_target, '
       'updated_at=excluded.updated_at;',
       [
         item.seriesKey,
@@ -1470,6 +1472,22 @@ class AppDatabase {
           )
           .map(PlaybackHistory.fromRow)
           .toList();
+
+  /// 某部剧的全部播放历史（追番「已看集数」回写用，最新在前）。
+  ///
+  /// 不按 `source_key` 过滤：追番本身没有源的概念，同一部剧的历史可能分散在
+  /// 多个源下，只看当前源会让已看集数凭空变少。
+  List<PlaybackHistory> historyForVod({
+    required String siteKey,
+    required String vodId,
+  }) => _db
+      .select(
+        'SELECT * FROM history WHERE site_key=? AND vod_id=? '
+        'ORDER BY updated_at DESC;',
+        [siteKey, vodId],
+      )
+      .map(PlaybackHistory.fromRow)
+      .toList();
 
   /// 历史行数（[sourceKey] 为空 = 全部；非空 = 只数该源）。
   ///

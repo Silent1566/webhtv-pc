@@ -32,11 +32,15 @@ import '../core/danmaku_style.dart';
 import '../core/doh.dart';
 import '../core/doh_settings.dart';
 import '../core/following.dart';
+import '../core/following_calendar.dart';
 import '../core/session_recovery.dart';
 import '../core/backup_manifest.dart';
 import '../services/backup_service.dart';
 import '../services/doh_resolver.dart';
+import '../services/following_progress_service.dart';
 import '../services/following_service.dart';
+import '../services/following_air_time_service.dart';
+import '../services/notification_service.dart';
 import '../services/session_recovery_store.dart';
 import '../core/history_aggregation.dart';
 import '../core/history_grouping.dart';
@@ -111,8 +115,10 @@ import 'tmdb_state.dart';
 /// 版本号：CI 用 `--dart-define=APP_VERSION=<pubspec version>` 注入，
 /// 使 exe 文件版本、启动日志、备份/恢复清单与发布 tag 同一口径（§20.1）；
 /// 本地构建与测试保留默认值 `0.1.0`，行为不变。
-const String appVersion =
-    String.fromEnvironment('APP_VERSION', defaultValue: '0.1.0');
+const String appVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '0.1.0',
+);
 const String appBuildFlavor = 'MVP-A (Windows)';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
@@ -213,6 +219,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的联想/热搜服务（避免单测打真实外网）。
     SearchSuggestService? searchSuggestService,
+
+    /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
+    FollowingNotifier? followingNotifier,
   }) : paths = paths ?? AppPaths.resolve(),
        log = log ?? LogService(),
        _injectedLiveService = liveService,
@@ -222,6 +231,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _injectedSyncServerFactory = syncServerFactory,
        _injectedReadClient = androidReadClient,
        _injectedSearchSuggestService = searchSuggestService,
+       _injectedFollowingNotifier = followingNotifier,
        // 宿主路径在这里定一次：生效配置与**其它配置**（原来源续播）的
        // `SpiderRouter` 必须用同一套宿主，否则同一站点在两条路径下会落到
        // 两个不同的 sidecar 入口。
@@ -370,8 +380,20 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 追番检查服务与调度定时器（Phase 9 P2-1）。
   FollowingService? _followingService;
+
+  /// 播放历史 → 已看集数回写（Phase 9 · 已看口径修正）。
+  FollowingProgressService? _followingProgressService;
   Timer? _followingTimer;
   Timer? _followingKickTimer;
+
+  /// 追番新集系统通知（懒建；首次发通知才初始化平台通道）。
+  FollowingNotifier? _followingNotifier;
+
+  /// 系统通知降级/发送结果提示（追番页提示条）。
+  String _followingNotice = '';
+
+  /// 点击系统通知后待打开的追番身份键（空 = 无待处理请求）。
+  String _followingOpenRequestKey = '';
   final CatHttpClient _catHttpClient = CatHttpClient();
   late final SpiderRouter _router;
   late final AndroidPlaybackBridge _androidPlaybackBridge;
@@ -393,6 +415,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 测试注入的安卓只读客户端（widget 测试不得做真实局域网 I/O）。
   final AndroidReadClient? _injectedReadClient;
+
+  /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
+  final FollowingNotifier? _injectedFollowingNotifier;
 
   /// 直播源加载服务（§13.1）。懒加载：未打开直播页前不建立连接。
   LiveService? _liveService;
@@ -516,8 +541,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   SearchSuggestService? _searchSuggestService;
 
   /// 联想/热搜服务（懒构造，测试可注入）。
-  SearchSuggestService get searchSuggestService =>
-      _searchSuggestService ??= _injectedSearchSuggestService ??
+  SearchSuggestService get searchSuggestService => _searchSuggestService ??=
+      _injectedSearchSuggestService ??
       SearchSuggestService(
         log: log,
         cacheDir: p.join(paths.cacheDir, 'search'),
@@ -934,8 +959,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     try {
       final config = effectiveConfig;
       if (config == null) return;
-      final needsCatVod =
-          config.sites.any((site) => catVodLoaderUrl(site) != null);
+      final needsCatVod = config.sites.any(
+        (site) => catVodLoaderUrl(site) != null,
+      );
       if (!needsCatVod) return;
       final root = managedPythonRoot(paths.cacheDir);
       final candidates = SidecarRuntimeResolver.pythonCandidates()
@@ -986,7 +1012,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     try {
       final config = effectiveConfig;
       if (config == null) return;
-      final hasDirect = config.sites.any((site) => directSpiderKind(site) != null);
+      final hasDirect = config.sites.any(
+        (site) => directSpiderKind(site) != null,
+      );
       if (!hasDirect) {
         _router.setDirectSpiders(const {});
         return;
@@ -1051,8 +1079,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final resolver = _buildDohResolver();
     _dohResolver = resolver;
     final injected = _injectedHttpClient;
-    final clientRebuilt =
-        settings.isEffective || (resolver?.isUsable ?? false);
+    final clientRebuilt = settings.isEffective || (resolver?.isUsable ?? false);
     if (!clientRebuilt && injected != null) {
       // 测试注入的客户端优先：不能因为一次 bootstrap 就换成真实 HttpClient。
       // 不调用 close()，否则会把注入的客户端一并关掉。
@@ -1243,9 +1270,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (sites.isEmpty) return 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final site in sites) {
-      db.upsertInjectedSite(
-        InjectedSiteEntry(site: site, updatedAt: now),
-      );
+      db.upsertInjectedSite(InjectedSiteEntry(site: site, updatedAt: now));
     }
     _reloadInjectedSites();
     log.info('站点注入：写入 ${sites.length} 个站点', scope: 'config');
@@ -1302,8 +1327,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 生效的解析接口失败切换设置（Phase 9）。
   ParseFailoverSettings get parseFailoverSettings =>
-      _uiPreferences?.parseFailover ??
-      const ParseFailoverSettings.defaults();
+      _uiPreferences?.parseFailover ?? const ParseFailoverSettings.defaults();
 
   /// 持久化解析接口失败切换设置。
   Future<bool> setParseFailoverSettings(ParseFailoverSettings settings) async {
@@ -1331,7 +1355,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     for (final health in db.siteHealth()) {
       final ok =
           health.homeOk + health.categoryOk + health.detailOk + health.playOk;
-      final total = health.homeTotal +
+      final total =
+          health.homeTotal +
           health.categoryTotal +
           health.detailTotal +
           health.playTotal;
@@ -1649,8 +1674,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 读历史时的来源过滤：空串表示**不**过滤（全局历史）。
-  String get historySourceFilter =>
-      historyScopeIsGlobal ? '' : activeSourceKey;
+  String get historySourceFilter => historyScopeIsGlobal ? '' : activeSourceKey;
 
   /// 测试口子：不经 bootstrap 直接装配 UI 偏好 store。
   ///
@@ -1732,8 +1756,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     LogService.logDirectoryOverride = paths.logDir;
     await log.open(paths.logDir);
     for (final failure in writeFailures) {
-      log.error('数据目录不可写，本次运行不会保存历史/设置：$failure',
-          scope: 'storage');
+      log.error('数据目录不可写，本次运行不会保存历史/设置：$failure', scope: 'storage');
     }
 
     // 崩溃恢复（Phase 9 P2-8）：读上一次会话标记，再写本次标记。
@@ -1811,16 +1834,16 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         // 只认**已存在的记录**：记忆指向已删除的记录时不改任何东西（静默回落）。
         final memory = _lastConfigRecord;
         if (memory != null) {
-          final remembered = _recordBySourceKey(memory.sourceKey, memory.recordId);
+          final remembered = _recordBySourceKey(
+            memory.sourceKey,
+            memory.recordId,
+          );
           if (remembered != null && remembered.id != _activeRecord?.id) {
             try {
               _database!.activateConfig(remembered.id);
               _configs = _database!.listConfigs();
               _activeRecord = _database!.activeConfig();
-              log.info(
-                '按上次使用的配置恢复当前配置 #${remembered.id}',
-                scope: 'config',
-              );
+              log.info('按上次使用的配置恢复当前配置 #${remembered.id}', scope: 'config');
             } catch (error) {
               log.warning('按上次使用的配置恢复失败：$error', scope: 'config');
             }
@@ -1885,18 +1908,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   );
 
   /// 生成备份（数据库用 `VACUUM INTO` 快照，避免复制到半个事务）。
-  Future<BackupCreateResult> createBackup({
-    String? outputPath,
-    DateTime? now,
-  }) {
+  Future<BackupCreateResult> createBackup({String? outputPath, DateTime? now}) {
     final database = _database;
     if (database == null) {
       return Future.value(
-        const BackupCreateResult(
-          ok: false,
-          path: '',
-          message: '本地存储不可用，无法备份',
-        ),
+        const BackupCreateResult(ok: false, path: '', message: '本地存储不可用，无法备份'),
       );
     }
     return backupService.createBackup(
@@ -1932,7 +1948,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final oldSettings = await settingsFile.exists()
         ? await settingsFile.readAsBytes()
         : null;
-    final oldDatabase = await dbFile.exists() ? await dbFile.readAsBytes() : null;
+    final oldDatabase = await dbFile.exists()
+        ? await dbFile.readAsBytes()
+        : null;
 
     await _prepareForDataSwap();
     try {
@@ -2014,6 +2032,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _followingTimer?.cancel();
     _followingKickTimer?.cancel();
     _followingService = null;
+    _followingProgressService = null;
     _database?.dispose();
     _database = null;
     _configs = const [];
@@ -2118,6 +2137,53 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   TmdbSeasonService _ensureTmdbSeasonService() => _tmdbSeasonService ??=
       TmdbSeasonService(store: DatabaseTmdbSeasonStore(database: _database!));
 
+  /// 追番真实播出时间服务（懒构造；测试可经 [attachFollowingAirTimeService] 替换）。
+  FollowingAirTimeService? _followingAirTimeService;
+
+  /// 测试口子：注入假服务，避免单测打真实 TMDB 网络。
+  @visibleForTesting
+  void attachFollowingAirTimeService(FollowingAirTimeService service) {
+    _followingAirTimeService = service;
+  }
+
+  FollowingAirTimeService? _ensureFollowingAirTimeService() {
+    if (_database == null) return null;
+    return _followingAirTimeService ??= FollowingAirTimeService(
+      isConfigured: () => _tmdbConfigStore.config.isReady,
+      resolveTmdbId: _resolveFollowingTmdbId,
+      fetchEpisodes: (tmdbId, seasonNumber) => _tmdbService.seasonEpisodes(
+        TmdbItem(tmdbId: tmdbId, mediaType: TmdbMediaType.tv, title: ''),
+        seasonNumber,
+      ),
+    );
+  }
+
+  /// 追番 → TMDB 剧集 id：优先用已落盘的匹配结论（同步、零请求），
+  /// 没命中再走身份服务的自动匹配；都失败返回 `null`。
+  Future<int?> _resolveFollowingTmdbId(Following item) async {
+    final database = _database;
+    if (database == null) return null;
+    final record = DatabaseTmdbMatchStore(
+      database: database,
+      configId: tmdbConfigId,
+    ).find(siteKey: item.siteKey, vodId: item.vodId, sourceTitle: item.vodName);
+    if (record != null) {
+      return record.identity.isTv ? record.identity.tmdbId : null;
+    }
+    final outcome = await _ensureTmdbIdentityService().match(
+      TmdbMatchRequest(
+        siteKey: item.siteKey,
+        vodId: item.vodId,
+        sourceTitle: item.vodName,
+        vodName: item.vodName,
+        expectedMediaType: TmdbMediaType.tv,
+      ),
+    );
+    final matched = outcome.item;
+    if (matched == null || !matched.isTv) return null;
+    return matched.tmdbId;
+  }
+
   TmdbEnrichmentService _ensureTmdbEnrichmentService() =>
       _tmdbEnrichmentService ??= TmdbEnrichmentService(
         service: _tmdbService,
@@ -2129,6 +2195,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _tmdbIdentityService = null;
     _tmdbSeasonService = null;
     _tmdbEnrichmentService = null;
+    _followingAirTimeService = null;
     _tmdbState?.clear();
     _tmdbState = null;
   }
@@ -2493,10 +2560,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     //
     // 换代（出站代理/DoH/换配置）通过 [SpiderRouter.updateTransport] 完成，
     // 它会清空 runtime 缓存，等价于过去「新建 Router」的效果。
-    _router.updateTransport(
-      client: _httpClient,
-      globalHeaders: config.headers,
-    );
+    _router.updateTransport(client: _httpClient, globalHeaders: config.headers);
     _siteService = SiteService(
       appConfig: config,
       playbackBridge: _androidPlaybackBridge,
@@ -2809,8 +2873,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 与 [configs] 的差别只在**数据来源**：`_configs` 是内存快照，桥接导入、
   /// 安卓恢复等路径直接写库时它不会跟着变。配置页是「用户来核对库里到底有
   /// 哪几条」的地方，必须读库；sqlite 是同步接口，一页几十行不构成负担。
-  List<ConfigRecord> get savedConfigs =>
-      _database?.listConfigs() ?? _configs;
+  List<ConfigRecord> get savedConfigs => _database?.listConfigs() ?? _configs;
 
   /// 在已保存的配置记录里按 id 找一条。
   ///
@@ -2846,7 +2909,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       notifyListeners();
       return false;
     }
-    final record = configRecordById(id) ??
+    final record =
+        configRecordById(id) ??
         (_activeRecord?.id == id ? _activeRecord : null);
     if (record == null) {
       _lastError = AppError(AppErrorKind.storage, '该配置记录已不存在');
@@ -2983,10 +3047,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         notifyListeners();
         return false;
       }
-      final ok = await syncState.importSites(address, interfaceKey: interfaceKey);
+      final ok = await syncState.importSites(
+        address,
+        interfaceKey: interfaceKey,
+      );
       if (!ok) {
         // 失败时数据库里那条记录仍然完好（importSites 只在成功时才 upsert）。
-        _lastError = syncState.lastError ??
+        _lastError =
+            syncState.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '该播放源刷新失败',
@@ -3089,10 +3157,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final written = store.remember(sourceKey: sourceKey, recordId: record.id);
     _lastConfigRecord = written;
     if (written == null) {
-      log.warning(
-        '无法记住上次使用的配置 #${record.id}（来源标识无效或写盘失败）',
-        scope: 'config',
-      );
+      log.warning('无法记住上次使用的配置 #${record.id}（来源标识无效或写盘失败）', scope: 'config');
     }
   }
 
@@ -4075,6 +4140,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   ///   线路当成当前条目的线路显示出来。
   Future<void> loadDetail(
     Vod vod, {
+
     /// 用哪份配置的服务与站点取详情。都给 `null` 时用生效配置与当前选中站点
     /// （既有行为）。历史记录按「原来源配置」看详情时传
     /// [playbackContextFor] 里的这一对——**不**切换生效配置，也不改选中站点。
@@ -4302,6 +4368,12 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         sourceKey: item.sourceKey,
       );
       notifyListeners();
+      // 历史刚以这条记录写回库：走同一条「播放历史 → 已看」回写入口，
+      // 免得补图成了唯一不触发已看回写的历史写入点。
+      _syncFollowingProgressAfterHistory(
+        siteKey: item.siteKey,
+        vodId: item.vodId,
+      );
     } catch (error) {
       log.warning('补齐历史海报失败：$error', scope: 'history');
     }
@@ -4323,7 +4395,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }
 
   /// 跨配置读 TMDB 缓存海报（只读，不暴露数据库）。
-  String? cachedTmdbPosterUrl({required String siteKey, required String vodId}) {
+  String? cachedTmdbPosterUrl({
+    required String siteKey,
+    required String vodId,
+  }) {
     try {
       return _database?.tmdbPosterUrlAcrossConfigs(
         siteKey: siteKey,
@@ -4419,7 +4494,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     SpiderRouter router,
   ) async {
     try {
-      final hasDirect = config.sites.any((site) => directSpiderKind(site) != null);
+      final hasDirect = config.sites.any(
+        (site) => directSpiderKind(site) != null,
+      );
       if (!hasDirect) return;
       final result = await _directRegistrar().materialize(config);
       router.setDirectSpiders(result);
@@ -4533,9 +4610,48 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         position: position,
         duration: duration,
       );
+      // 播放历史已经落库：针对**这一部剧**回写已看集数（见方法注释）。
+      _syncFollowingProgressAfterHistory(
+        siteKey: effectiveSiteKey,
+        vodId: vod.vodId,
+      );
     } catch (error) {
       log.warning('写入播放进度失败：$error', scope: 'history');
     }
+  }
+
+  /// 播放历史写入后的单剧已看回写。
+  ///
+  /// 三个约束：
+  /// - 只按 `siteKey + vodId` 查这一条追番，不做全量扫描：这个方法随每次进度
+  ///   写入（播放中每 5 秒一次）触发，全量扫库会把播放写盘拖慢；
+  /// - 排到下一次事件循环执行，播放/写库主流程不等它；
+  /// - 任何失败都只是「不推进」，异常在服务内被吞掉，不影响播放。
+  void _syncFollowingProgressAfterHistory({
+    required String siteKey,
+    required String vodId,
+  }) {
+    if (_disposed || _database == null) return;
+    unawaited(
+      Future<void>(() {
+        if (_disposed) return;
+        try {
+          final service = _followingProgress;
+          if (service == null) return;
+          final result = service.syncVod(siteKey: siteKey, vodId: vodId);
+          if (result.updated == 0 || _disposed) return;
+          log.info(
+            '播放历史回写已看：updated=${result.updated} site=$siteKey',
+            scope: 'following',
+          );
+          // 追番页/侧栏徽标都挂在 AppState 的监听上：回写后通知一次，
+          // 页面重建时就从库里读到新的「已看/未看」。
+          notifyListeners();
+        } catch (error) {
+          log.warning('播放历史回写已看失败：$error', scope: 'following');
+        }
+      }),
+    );
   }
 
   /// 查询某剧集的历史记录（用于进入播放器时自动续播，§15.2）。
@@ -4929,7 +5045,6 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     notifyListeners();
   }
 
-
   // -------------------------------------------------------------------------
   // 历史同名聚合（读视图）
   // -------------------------------------------------------------------------
@@ -4942,13 +5057,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// - 组内代表记录取 `updatedAt` 最新（安卓 §8.1）；
   /// - 搜索关键词命中组内**任一成员**即保留该组（否则「搜某集搜不到」）。
   List<HistoryGroup> historyGroups({String keyword = ''}) {
-    final records = keyword.isEmpty
-        ? recentHistory()
-        : searchHistory(keyword);
-    return groupHistory(
-      [for (final record in records) _historyGroupInputOf(record)],
-      mode: historyAggregation,
-    );
+    final records = keyword.isEmpty ? recentHistory() : searchHistory(keyword);
+    return groupHistory([
+      for (final record in records) _historyGroupInputOf(record),
+    ], mode: historyAggregation);
   }
 
   /// 把一条历史映射成聚合投影的输入（补上作品身份）。
@@ -5004,8 +5116,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final uri = Uri.tryParse(text);
     if (uri != null && uri.hasScheme) return true;
     return RegExp(r'^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/|$)').hasMatch(text) ||
-        RegExp(r'^[\w.-]+\.[a-z]{2,}(:\d+)?(/|$)', caseSensitive: false)
-            .hasMatch(text);
+        RegExp(
+          r'^[\w.-]+\.[a-z]{2,}(:\d+)?(/|$)',
+          caseSensitive: false,
+        ).hasMatch(text);
   }
 
   /// 某条历史是否属于**非当前播放源**。
@@ -5013,6 +5127,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (record.sourceKey.isEmpty) return false;
     return record.sourceKey != activeSourceKey;
   }
+
   List<FavoriteEntry> favorites({String? kind}) {
     final database = _database;
     if (database == null) return const [];
@@ -5188,11 +5303,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   Map<String, Object?>? cspProbeRecordFor(String siteKey) =>
       CspJarProbe.recordFor(_cspBinding, siteKey);
 
-  CspJarProbe _cspProbe() => CspJarProbe(
-    root: _spiderRegistry.root,
-    binding: _cspBinding,
-    log: log,
-  );
+  CspJarProbe _cspProbe() =>
+      CspJarProbe(root: _spiderRegistry.root, binding: _cspBinding, log: log);
 
   /// 启动/换配置后异步探测（不阻塞首屏；失败只记日志）。
   Future<void> _probeCspJarsQuietly() async {
@@ -5360,14 +5472,78 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   FollowingSettings get followingSettings =>
       _uiPreferences?.followingSettings ?? FollowingSettings.defaults;
 
-  /// 持久化追番设置并重启调度定时器。
+  /// 自动检查定时器是否在运行（默认开启语义的可观察出口）。
+  bool get followingAutoCheckActive => _followingTimer != null;
+
+  /// 系统通知降级/发送结果提示（空 = 无提示）。
+  String get followingNotice => _followingNotice;
+
+  /// 系统通知是否可用（首次尝试发通知后才有意义）。
+  bool get followingSystemNotificationAvailable =>
+      _followingNotifier?.systemAvailable ?? false;
+
+  /// 点击系统通知后待打开的追番身份键（空 = 无待处理请求）。
+  String get followingOpenRequest => _followingOpenRequestKey;
+
+  /// 消费待打开的追番请求（追番页处理完调用）。
+  void clearFollowingOpenRequest() => _followingOpenRequestKey = '';
+
+  /// TMDB 季服务只读入口（后续日历页使用；`null` = 数据库未就绪）。
+  TmdbSeasonService? get tmdbSeasonService =>
+      _database == null ? null : _ensureTmdbSeasonService();
+
+  /// 持久化追番设置并重启调度定时器（改间隔后立即补一次到期检查）。
   Future<bool> setFollowingSettings(FollowingSettings settings) async {
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberFollowingSettings(settings);
-    _restartFollowingTimer();
+    _restartFollowingTimer(
+      kickDelay: followingSettings.enabled ? Duration.zero : null,
+    );
     notifyListeners();
     return ok;
+  }
+
+  FollowingNotifier get _notifier => _followingNotifier ??=
+      _injectedFollowingNotifier ??
+      FollowingNotifier(log: log, onOpen: _onFollowingNotificationOpen);
+
+  /// 系统通知点击：记录待打开项，追番页据此打开最新集。
+  void _onFollowingNotificationOpen(String payload) {
+    final key = payload.trim();
+    if (key.isEmpty) return;
+    final item = _following?.all()
+        .where((candidate) => candidate.identityKey == key)
+        .firstOrNull;
+    if (item == null) return;
+    _following?.markRead(item);
+    _followingOpenRequestKey = key;
+    notifyListeners();
+  }
+
+  /// 新集 → 系统通知；系统侧失败自动降级为应用内提示（不影响检查结果）。
+  Future<void> _notifyFollowingNewEpisodes(List<Following> items) async {
+    if (items.isEmpty || !followingSettings.notifyEnabled) return;
+    final batch = await _notifier.notifyNewEpisodes(items);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // 通知（或降级提示）已经给过，写回水位避免下一轮重复提示。
+    for (final item in items) {
+      final latest = _database?.following(item.seriesKey, item.season);
+      if (latest == null) continue;
+      _database?.upsertFollowing(latest.copyWith(
+        lastNotifiedEpisode: latest.lastNotifiedEpisode > item.releasedEpisode
+            ? latest.lastNotifiedEpisode
+            : item.releasedEpisode,
+        lastNotifiedAtMs: nowMs,
+        updatedAtMs: nowMs,
+      ));
+    }
+    if (batch.notice.isNotEmpty) {
+      _followingNotice = batch.notice;
+    } else if (_followingNotice.isNotEmpty) {
+      // 发送恢复正常，清掉上一次的降级提示。
+      _followingNotice = '';
+    }
   }
 
   FollowingService? get _following {
@@ -5380,11 +5556,107 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     );
   }
 
-  List<Following> get followings => _following?.all() ?? const [];
+  /// 追番列表。
+  ///
+  /// 会话内**首次**读取时补一次全量回写（见 [_primeFollowingProgressOnce]）：
+  /// 上次运行留下的历史（含安卓同步写入的行）只有这一步能补成「已看」。
+  List<Following> get followings {
+    _primeFollowingProgressOnce();
+    return _following?.all() ?? const [];
+  }
 
-  /// 有更新的追番数量（侧栏徽标 / 页面标题）。
+  /// 会话内只跑一次的全量已看回写。
+  ///
+  /// 为什么放在「首次读列表」而不是每次 getter 都扫：这个 getter 每帧都会被
+  /// 调到，全表扫描就是每帧一次库查询；一次性闸门让整条链路只扫一次。
+  /// 为什么不用页面 `initState`：追番页不是唯一入口（侧栏徽标同样读列表），
+  /// 闸门放在状态层才覆盖得住，UI 也不需要知道这件事。
+  ///
+  /// 同步执行：调用方紧接着读到的就是回写后的行，不需要再通知一次重建。
+  bool _followingProgressPrimed = false;
+
+  void _primeFollowingProgressOnce() {
+    if (_followingProgressPrimed || _disposed || _database == null) return;
+    _followingProgressPrimed = true;
+    syncFollowingProgress();
+  }
+
+  /// 播放历史 → 已看集数回写服务（懒构造；只读本地库）。
+  FollowingProgressService? get _followingProgress {
+    final database = _database;
+    if (database == null) return null;
+    return _followingProgressService ??= FollowingProgressService(
+      database: database,
+      log: log,
+    );
+  }
+
+  /// 把播放历史反推的「已看到第几集」写回追番（只增不减，不联网、不抛）。
+  ///
+  /// 触发点：`checkAllFollowings`（检查/刷新按钮）、`followingAirTimes`
+  /// （追番列表、追剧日历读取前的刷新路径）、会话内首次读列表
+  /// （[_primeFollowingProgressOnce]）与播放写库后的单剧回写
+  /// （[_syncFollowingProgressAfterHistory]）。
+  /// **不要**让 `followings` 每次调用都走到这里——那是每帧扫库。
+  /// [items] 仅选择身份；回写前取最新库行，已删除的条目跳过。
+  FollowingProgressSyncResult syncFollowingProgress({List<Following>? items}) {
+    final service = _followingProgress;
+    if (service == null) return FollowingProgressSyncResult.empty;
+    final currentItems = items
+        ?.map((item) => _database?.following(item.seriesKey, item.season))
+        .whereType<Following>()
+        .toList();
+    final result = service.syncAll(items: currentItems);
+    if (result.updated > 0) {
+      log.info(
+        '追番已看回写：updated=${result.updated}/scanned=${result.scanned}',
+        scope: 'following',
+      );
+    }
+    return result;
+  }
+
+  /// 当前追番的真实播出时间（TMDB 每集 `air_date`），供追剧日历归日使用。
+  ///
+  /// 未配置 TMDB、数据库未就绪或任何查询失败时返回空列表（日历退回本地推算），
+  /// **不抛异常**；结果在服务内缓存，重复调用不会重复请求。
+  Future<List<FollowingAirTime>> followingAirTimes() async {
+    // 日历/列表读取前的刷新路径：先把历史里的已看进度落到库里，
+    // 页面这一次 build 就能看到正确的「已看/未看」。
+    syncFollowingProgress();
+    final items = followings;
+    if (items.isEmpty) return const [];
+    final service = _ensureFollowingAirTimeService();
+    if (service == null) return const [];
+    try {
+      return await service.airTimesFor(items);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 当前追番**官方该季总集数**（TMDB 该季剧集条数），供日历进度分母使用。
+  ///
+  /// 与 [followingAirTimes] 共享同一次取集请求与缓存；未配置 TMDB、数据库未
+  /// 就绪或任何失败时返回空列表（调用方退回「线路可播集数」并标注来源），
+  /// **不抛异常**。
+  Future<List<FollowingSeasonTotal>> followingSeasonTotals() async {
+    final items = followings;
+    if (items.isEmpty) return const [];
+    final service = _ensureFollowingAirTimeService();
+    if (service == null) return const [];
+    try {
+      return await service.seasonTotalsFor(items);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 有未读更新消息的追番数量（侧栏红点）；发送通知不算已读。
+  ///
+  /// 方法名保留兼容 UI；卡片未看集数仍按已发布 − 已看计算。
   int get followingUpdateCount =>
-      followings.where((item) => item.hasUpdate).length;
+      followings.where((item) => item.hasUnreadUpdate).length;
 
   bool isFollowing({required String siteKey, required String vodId}) =>
       _following?.byVod(siteKey, vodId) != null;
@@ -5432,9 +5704,22 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     notifyListeners();
   }
 
-  /// 用户从追番页打开最新集后调用：集数视为已看、标记已读。
+  /// per-item「新集通知」开关（UI 直接调用）。
+  ///
+  /// 只改这一条记录并落库；全局 `FollowingSettings.notifyEnabled` 的语义不变：
+  /// 真正发通知仍需全局与条目同时开启（见 `shouldNotifyFollowing`）。
+  Future<void> setFollowingNotifyEnabled(Following item, bool enabled) async {
+    _following?.setNotifyEnabled(item, enabled);
+    notifyListeners();
+  }
+
+  /// 用户从追番页/日历打开最新集后调用：只压已读水位，**不再冒充已看**。
+  ///
+  /// 已看集数改由播放历史回写（见 [syncFollowingProgress]）：真正播完会写
+  /// 历史，这里顺手立刻回写一次，让列表马上反映进度。
   Future<void> markFollowingWatched(Following item) async {
-    _following?.markWatched(item);
+    final read = _following?.markRead(item) ?? item;
+    syncFollowingProgress(items: [read]);
     notifyListeners();
   }
 
@@ -5442,6 +5727,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final service = _following;
     if (service == null) return null;
     final outcome = await service.check(item);
+    if (outcome.ok &&
+        outcome.changed &&
+        shouldNotifyFollowing(outcome.following)) {
+      await _notifyFollowingNewEpisodes([outcome.following]);
+    }
     notifyListeners();
     return outcome;
   }
@@ -5451,6 +5741,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }) async {
     final service = _following;
     if (service == null) return FollowingCheckSummary.empty;
+    // 检查流程本来就要读库：「检查更新」同时把历史里的已看进度回写，
+    // 用户点一次按钮就能看到「已看 N / 未看 M」刷新。
+    syncFollowingProgress();
+    // 检查前后比较已发布集数：`checkAll` 只回计数，通知需要具体条目。
+    final before = {
+      for (final item in service.all()) item.identityKey: item.releasedEpisode,
+    };
     final summary = await service.checkAll(onlyDue: onlyDue);
     if (summary.checked > 0) {
       log.info(
@@ -5458,6 +5755,12 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         'failed=${summary.failed}',
         scope: 'following',
       );
+      await _notifyFollowingNewEpisodes([
+        for (final item in service.all())
+          if (item.releasedEpisode > (before[item.identityKey] ?? 0) &&
+              shouldNotifyFollowing(item))
+            item,
+      ]);
     }
     notifyListeners();
     return summary;
@@ -5500,7 +5803,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 重启追番调度：应用运行期间按设置间隔检查到期条目。
   ///
   /// PC 没有后台服务/WorkManager，应用关闭后不会检查——这是与安卓的已知差异。
-  void _restartFollowingTimer() {
+  /// [kickDelay] 是启动后补一次到期检查的延迟；`null` 表示不补（关闭自动检查时）。
+  void _restartFollowingTimer({
+    Duration? kickDelay = const Duration(seconds: 10),
+  }) {
     _followingTimer?.cancel();
     _followingTimer = null;
     _followingKickTimer?.cancel();
@@ -5510,8 +5816,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _followingTimer = Timer.periodic(interval, (_) {
       unawaited(checkAllFollowings(onlyDue: true));
     });
-    // 启动后延迟 10s 补一次到期检查，不阻塞首屏。
-    _followingKickTimer = Timer(const Duration(seconds: 10), () {
+    if (kickDelay == null) return;
+    // 启动后延迟 10s 补一次到期检查，不阻塞首屏；改间隔时立即补。
+    _followingKickTimer = Timer(kickDelay, () {
       unawaited(checkAllFollowings(onlyDue: true));
     });
   }
@@ -5523,6 +5830,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _followingTimer?.cancel();
     _followingKickTimer?.cancel();
     _followingService = null;
+    _followingProgressService = null;
     _router.dispose();
     _importService.close();
     _liveService?.close();
