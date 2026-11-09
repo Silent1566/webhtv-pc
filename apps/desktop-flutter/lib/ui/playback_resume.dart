@@ -17,14 +17,17 @@ import '../core/app_error.dart';
 import '../services/proxy_server.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import 'async_action_feedback.dart';
 import 'player_page.dart';
 import 'toast.dart';
 
 Future<void> resumeHistoryEntry(
   BuildContext context,
   AppState state,
-  PlaybackHistory item,
-) async {
+  PlaybackHistory item, {
+  AsyncActionFeedback? feedback,
+}) async {
+  if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
   final episodeTarget = restoreHistoryPlaybackTarget(item.episodeId);
   final config = state.config;
   final site = config?.sites
@@ -34,9 +37,12 @@ Future<void> resumeHistoryEntry(
     showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
     return;
   }
-  await state.selectSite(site);
-  if (!context.mounted) return;
+  final action =
+      feedback ?? AsyncActionFeedback.begin(context, '正在准备播放：${item.vodName}');
+  if (action == null || !action.isCurrent) return;
   try {
+    await state.selectSite(site);
+    if (!context.mounted || !action.isCurrent) return;
     final decision = await state.resolvePlayback(
       episodeTarget: episodeTarget,
       flag: item.flag,
@@ -49,7 +55,8 @@ Future<void> resumeHistoryEntry(
         detail: episodeTarget,
       );
     }
-    if (!context.mounted) return;
+    if (!context.mounted || !action.isCurrent) return;
+    action.dismiss();
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(
@@ -81,7 +88,10 @@ Future<void> resumeHistoryEntry(
     final failure = error is AppError
         ? error
         : AppError(AppErrorKind.unknown, '$error', cause: error);
-    if (!context.mounted) return;
+    if (!context.mounted || !action.isCurrent) return;
+    action.dismiss();
     showToast(failure.userMessage, kind: ToastKind.error);
+  } finally {
+    if (feedback == null) action.close();
   }
 }

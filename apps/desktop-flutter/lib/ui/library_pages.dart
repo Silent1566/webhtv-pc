@@ -17,6 +17,7 @@ import '../services/tmdb_history.dart';
 import '../state/app_state.dart';
 import '../core/protocol.dart';
 import 'app.dart';
+import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'history_cross_source.dart';
@@ -901,6 +902,7 @@ class _HistoryPageState extends State<HistoryPage> {
   /// 站点已不在当前配置中时**不静默失败**：历史可能来自旧配置或安卓推送，
   /// 用户需要知道为什么没反应。
   Future<void> _openDetail(PlaybackHistory item) async {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
     final state = _state;
     final config = state.config;
     final site = config?.sites
@@ -911,28 +913,46 @@ class _HistoryPageState extends State<HistoryPage> {
       showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
       return;
     }
-    await state.selectSite(site);
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailPage(
-          state: state,
-          vod: Vod(
-            vodId: item.vodId,
-            vodName: item.vodName,
-            vodPic: item.vodPic,
-          ),
-          // **必须传用户点的那一条**的线路与集入口：同一部剧有多条历史时，
-          // 点旧记录却续新记录是错的（`docs/phase6/design/02` §7.1）。
-          historyFlag: item.flag,
-          historyEpisodeId: item.episodeId,
-          // 进度也要传：`_play` 里那条"查本机历史"的路子依赖当前站点，
-          // 站点被换过（同 url 不同 key、或配置重导入）就落空 → 从头播。
-          // 带上原记录进度后由 `resolveResumeStart` 判定同集再迁移。
-          resumeSeed: resumeSeedOf(item),
-        ),
-      ),
+    final feedback = AsyncActionFeedback.begin(
+      context,
+      '正在打开详情：${item.vodName}',
     );
+    if (feedback == null) return;
+    try {
+      await state.selectSite(site);
+      if (!mounted || !feedback.isCurrent) return;
+      feedback.dismiss();
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DetailPage(
+            state: state,
+            vod: Vod(
+              vodId: item.vodId,
+              vodName: item.vodName,
+              vodPic: item.vodPic,
+            ),
+            // **必须传用户点的那一条**的线路与集入口：同一部剧有多条历史时，
+            // 点旧记录却续新记录是错的（`docs/phase6/design/02` §7.1）。
+            historyFlag: item.flag,
+            historyEpisodeId: item.episodeId,
+            // 进度也要传：`_play` 里那条"查本机历史"的路子依赖当前站点，
+            // 站点被换过（同 url 不同 key、或配置重导入）就落空 → 从头播。
+            // 带上原记录进度后由 `resolveResumeStart` 判定同集再迁移。
+            resumeSeed: resumeSeedOf(item),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted && feedback.isCurrent) {
+        feedback.dismiss();
+        showToast(
+          error is AppError ? error.userMessage : '$error',
+          kind: ToastKind.error,
+        );
+      }
+    } finally {
+      feedback.close();
+    }
   }
 }
 

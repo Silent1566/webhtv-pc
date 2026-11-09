@@ -37,6 +37,7 @@ import '../services/site_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/playback_source_context.dart';
+import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'history_resume_seed.dart';
 import 'player_page.dart';
@@ -50,21 +51,39 @@ Future<void> openHistoryFromOtherSource(
   PlaybackHistory item,
 ) async {
   // 用户设定：点历史是进详情还是直接播。原来源与当前源**同一套语义**。
+  if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
   final wantsPlay = state.historyClickAction == UiHistoryClickAction.play;
+  final needsPreparation =
+      wantsPlay ||
+      state.playbackContextFor(item.sourceKey)?.siteByKey(item.siteKey) == null;
+  final feedback = needsPreparation
+      ? AsyncActionFeedback.begin(context, '正在准备续播：${item.vodName}')
+      : null;
+  if (needsPreparation && feedback == null) return;
+  try {
+    // ── 第一步：原配置优先 ──
+    final fallbackReason = await _tryOriginalSource(
+      context,
+      state,
+      item,
+      wantsPlay: wantsPlay,
+      feedback: feedback,
+    );
+    if (!context.mounted || (feedback != null && !feedback.isCurrent)) return;
+    if (fallbackReason == null) return;
 
-  // ── 第一步：原配置优先 ──
-  final fallbackReason = await _tryOriginalSource(
-    context,
-    state,
-    item,
-    wantsPlay: wantsPlay,
-  );
-  if (!context.mounted) return;
-  if (fallbackReason == null) return;
-
-  // ── 第二步：原配置不可用 → 提示原因，再走既有的当前源匹配 ──
-  _toast(context, '$fallbackReason，改为在当前播放源中匹配');
-  await _matchInCurrentSource(context, state, item);
+    // ── 第二步：原配置不可用 → 提示原因，再走既有的当前源匹配 ──
+    _toast(context, '$fallbackReason，改为在当前播放源中匹配');
+    await _matchInCurrentSource(context, state, item, feedback!);
+  } catch (error) {
+    if (context.mounted && feedback?.isCurrent == true) {
+      feedback!.dismiss();
+      final message = error is AppError ? error.userMessage : '$error';
+      _toast(context, '自动匹配失败：$message', kind: ToastKind.error);
+    }
+  } finally {
+    feedback?.close();
+  }
 }
 
 /// 尝试用记录自己的配置播放/看详情。
@@ -76,6 +95,7 @@ Future<String?> _tryOriginalSource(
   AppState state,
   PlaybackHistory item, {
   required bool wantsPlay,
+  required AsyncActionFeedback? feedback,
 }) async {
   final sourceContext = state.playbackContextFor(item.sourceKey);
   if (sourceContext == null) {
@@ -103,7 +123,8 @@ Future<String?> _tryOriginalSource(
     if (decision == null || decision.url == null) {
       return '原播放源「${_sourceNameOf(state, item)}」没有返回可用播放地址';
     }
-    if (!context.mounted) return null;
+    if (!context.mounted || !feedback!.isCurrent) return null;
+    feedback.dismiss();
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(
@@ -177,7 +198,9 @@ Future<void> _matchInCurrentSource(
   BuildContext context,
   AppState state,
   PlaybackHistory item,
+  AsyncActionFeedback feedback,
 ) async {
+  if (!context.mounted || !feedback.isCurrent) return;
   final config = state.config;
   if (config == null || config.sites.isEmpty) {
     _toast(context, '当前没有生效的播放源配置，无法续播', kind: ToastKind.error);
@@ -189,7 +212,14 @@ Future<void> _matchInCurrentSource(
       .where((candidate) => candidate.key == item.siteKey)
       .firstOrNull;
   if (sameSite != null) {
-    await _playOnSite(context, state, item, sameSite, item.episodeName);
+    await _playOnSite(
+      context,
+      state,
+      item,
+      sameSite,
+      item.episodeName,
+      feedback: feedback,
+    );
     return;
   }
 
@@ -219,20 +249,13 @@ Future<void> _matchInCurrentSource(
     mediaType: item.mediaType,
   );
 
-  // 搜索期间必须让用户知道「正在找」，否则 20s 里界面像卡死：
-  // 先挂一条加载态提示，结束时按 id 收掉，不留残余。
-  if (!context.mounted) return;
-  final loadingToast = showToast(
-    '该记录不在当前播放源，正在当前源中匹配可续播站点…',
-    duration: const Duration(seconds: 20),
-  );
+  if (!context.mounted || !feedback.isCurrent) return;
   try {
     final outcome = await state.searchAll(
       keyword,
       timeout: const Duration(seconds: 12),
     );
-    dismissToast(loadingToast);
-    if (!context.mounted) return;
+    if (!context.mounted || !feedback.isCurrent) return;
 
     // 第一阶段：列表阶段只能拿到片名/年份，先按它们粗筛（安卓 §11 两阶段
     // 解析）。`hasTargetEpisode` 此时一律为 false——**不能**预置成 true，
@@ -251,7 +274,10 @@ Future<void> _matchInCurrentSource(
     ];
     if (listed.isEmpty) {
       _toast(context, '未在当前播放源中找到「${item.vodName}」');
-      if (context.mounted) await _offerGlobalSearch(context, state, item);
+      if (context.mounted && feedback.isCurrent) {
+        feedback.dismiss();
+        await _offerGlobalSearch(context, state, item);
+      }
       return;
     }
 
@@ -263,7 +289,7 @@ Future<void> _matchInCurrentSource(
       listed,
       seed: resumeSeedOf(item),
     );
-    if (!context.mounted) return;
+    if (!context.mounted || !feedback.isCurrent) return;
 
     final ranked = rankCandidates(request, candidates);
     final pick = pickAutoPlayable(ranked);
@@ -286,6 +312,7 @@ Future<void> _matchInCurrentSource(
           item,
           site,
           item.episodeName,
+          feedback: feedback,
           vodIdOverride: pick.vodId,
           vodNameOverride: pick.vodName,
         );
@@ -293,10 +320,15 @@ Future<void> _matchInCurrentSource(
       }
     }
     // 没有高置信候选：让用户自己选，不猜。
-    if (context.mounted) await _offerGlobalSearch(context, state, item);
+    if (context.mounted && feedback.isCurrent) {
+      feedback.dismiss();
+      await _offerGlobalSearch(context, state, item);
+    }
   } catch (error) {
-    dismissToast(loadingToast);
-    if (context.mounted) _toast(context, '自动匹配失败：$error', kind: ToastKind.error);
+    if (context.mounted && feedback.isCurrent) {
+      feedback.dismiss();
+      _toast(context, '自动匹配失败：$error', kind: ToastKind.error);
+    }
   }
 }
 
@@ -310,12 +342,14 @@ Future<void> _playOnSite(
   PlaybackHistory item,
   Site site,
   String episodeName, {
+  required AsyncActionFeedback feedback,
   String? vodIdOverride,
   String? vodNameOverride,
 }) async {
-  if (!context.mounted) return;
+  if (!context.mounted || !feedback.isCurrent) return;
   await state.selectSite(site);
-  if (!context.mounted) return;
+  if (!context.mounted || !feedback.isCurrent) return;
+  feedback.dismiss();
   final vodId = vodIdOverride ?? item.vodId;
   final vodName = vodNameOverride ?? item.vodName;
   await Navigator.of(context).push(

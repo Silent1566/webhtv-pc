@@ -26,6 +26,7 @@ import '../services/session_recovery_store.dart';
 import '../services/startup_trace.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import 'app_motion.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
@@ -341,7 +342,7 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
             // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
             fit: StackFit.expand,
             children: [
-              child ?? const SizedBox.shrink(),
+              AppMotionScope(child: child ?? const SizedBox.shrink()),
               const ToastHost(),
             ],
           ),
@@ -962,7 +963,10 @@ class _AppShellState extends State<AppShell> {
                 Expanded(
                   child: _WallpaperBackdrop(
                     url: _state.config?.wallpaper,
-                    child: _buildContent(),
+                    child: AppShellTransition(
+                      sectionIndex: _section.index,
+                      child: _buildContent(),
+                    ),
                   ),
                 ),
               ],

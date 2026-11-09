@@ -27,6 +27,7 @@ import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
 import 'ai_settings_page.dart';
 import 'app.dart';
+import 'async_action_feedback.dart';
 import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
@@ -842,60 +843,73 @@ class _VodGrid extends StatelessWidget {
         // 错误与通知不再在页面内拼横幅：它们由 `app.dart` 的全局投影推成右下角
         // 通知（见 `ui/toast.dart`），页面只负责海报网格本身。
         Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) =>
-                NotificationListener<ScrollNotification>(
-                  onNotification: _onScroll,
-                  child: CustomScrollView(
-                    slivers: [
-                      // 筛选条**不再常驻**。
-                      //
-                      // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
-                      // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
-                      // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
-                      // 显示——不占布局、不推挤网格。
-                      if (vods.isEmpty)
-                        SliverFillRemaining(
-                          hasScrollBody: false,
-                          child: _emptyState(
-                            loading: loading,
-                            hasClasses: hasClasses,
-                          ),
-                        )
-                      else
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(
-                            _posterGridPadding,
-                            14,
-                            _posterGridPadding,
-                            8,
-                          ),
-                          sliver: SliverGrid(
-                            gridDelegate: _gridDelegate(constraints.maxWidth),
-                            delegate: SliverChildBuilderDelegate(
-                              (context, index) => _VodCard(
-                                key: ValueKey('vod-card-${vods[index].vodId}'),
-                                vod: vods[index],
-                                onTap: () => _openDetail(context, vods[index]),
+          child: Stack(
+            // 等待条贴在**视口顶部**而不是追加在滚动内容里：原实现是 slivers
+            // 的最后一项（网格之后），网格填满视口时它落在视口外，首页刷新
+            // 期间（`loadHome` 保留旧列表）用户看不到任何变化。
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) =>
+                    NotificationListener<ScrollNotification>(
+                      onNotification: _onScroll,
+                      child: CustomScrollView(
+                        slivers: [
+                          // 筛选条**不再常驻**。
+                          //
+                          // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
+                          // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
+                          // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
+                          // 显示——不占布局、不推挤网格。
+                          if (vods.isEmpty)
+                            SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: _emptyState(
+                                loading: loading,
+                                hasClasses: hasClasses,
                               ),
-                              childCount: vods.length,
+                            )
+                          else
+                            SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(
+                                _posterGridPadding,
+                                14,
+                                _posterGridPadding,
+                                8,
+                              ),
+                              sliver: SliverGrid(
+                                gridDelegate: _gridDelegate(
+                                  constraints.maxWidth,
+                                ),
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) => _VodCard(
+                                    key: ValueKey(
+                                      'vod-card-${vods[index].vodId}',
+                                    ),
+                                    vod: vods[index],
+                                    onTap: () =>
+                                        _openDetail(context, vods[index]),
+                                  ),
+                                  childCount: vods.length,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      // 刷新首页时旧列表**不被清空**（loadHome 保留 _homeResult），
-                      // 此时只压一条细进度条：整页闪成空白会让用户以为断网了。
-                      if (loading && vods.isNotEmpty)
-                        const SliverToBoxAdapter(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            child: LinearProgressIndicator(minHeight: 2),
-                          ),
-                        ),
-                      if (paged)
-                        SliverToBoxAdapter(child: _ScrollFooter(state: state)),
-                    ],
-                  ),
+                          if (paged)
+                            SliverToBoxAdapter(
+                              child: _ScrollFooter(state: state),
+                            ),
+                        ],
+                      ),
+                    ),
+              ),
+              // 覆盖层：不占布局、不遮挡海报（只有 2px），旧列表照常可见。
+              if (loading && vods.isNotEmpty)
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  child: _BrowseBusyBar(),
                 ),
+            ],
           ),
         ),
       ],
@@ -1003,6 +1017,40 @@ class _VodGrid extends StatelessWidget {
 /// 角标（用户提供参考截图 2026-10-09）：左上角**年份**、右下角**评分**。
 /// 取值与判定在 `core/poster_badge.dart`（纯逻辑，含「remarks 不一定是评分」的
 /// 关键约束：网盘站给的是 `全29集`，那种情况不能当评分画角标）。
+/// 列表重载期间贴在视口顶部的细等待条（覆盖层，不占布局、不遮挡海报）。
+///
+/// 减动态下换成静态色条而不是去掉：反馈是动作确认，不能因为减少动效就消失。
+class _BrowseBusyBar extends StatelessWidget {
+  const _BrowseBusyBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final reduced = media.disableAnimations || media.accessibleNavigation;
+    final theme = Theme.of(context);
+    return Semantics(
+      liveRegion: true,
+      label: '正在加载内容',
+      child: TweenAnimationBuilder<double>(
+        // 从「已经可见」出发：0.35 → 1 而不是 0 → 1。
+        tween: Tween(begin: reduced ? 1 : 0.35, end: 1),
+        duration: reduced ? Duration.zero : AppMotion.fast,
+        curve: AppMotion.ease,
+        builder: (context, value, child) =>
+            Opacity(opacity: value, child: child),
+        child: Container(
+          key: const ValueKey('browse-refresh-busy'),
+          height: 2,
+          color: reduced ? theme.colorScheme.primary : null,
+          child: reduced
+              ? null
+              : const LinearProgressIndicator(minHeight: 2),
+        ),
+      ),
+    );
+  }
+}
+
 class _VodCard extends StatelessWidget {
   const _VodCard({super.key, required this.vod, required this.onTap});
 
@@ -1332,6 +1380,13 @@ class _DetailPageState extends State<DetailPage> {
   ///
   /// 否则「续播也失败」会再问一次换源，确认后又续播，形成自我递归的对话框。
   bool _resumingAfterSwap = false;
+
+  /// 解析阶段是否在途；仅用于**显式**区分所有权，避免旧调用收掉后一次的反馈。
+  ///
+  /// 真正的防重入由 `AsyncActionFeedback` 按 owner（本页 context）判定：
+  /// 同一 owner 已有在途动作时 `begin` 返回 null。这个令牌只回答一件事——
+  /// 现在这个 feedback 是不是「我这一次调用」拿到的。
+  AsyncActionFeedback? _playFeedback;
 
   /// 上一次已经推成通知的详情错误。
   ///
@@ -2024,13 +2079,22 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
     final episode = line.episodes[episodeIndex];
     final state = widget.state;
-    // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
-    //
-    // 为什么不能只靠 `flag`：并入后的 `flag` 是本页的展示名（`站点名 · 原线路名`），
-    // 站点自己并不认识它；真正的线路标识在 `playbackFlag` 里。而 `vodId` 也得换成
-    // 来源站点的 vod，否则会拿原站点的 id 去问外部站点。
-    final route = _externalRoutes[line.flag];
+    // 解析是网络往返：在它回来之前不给反馈，用户看到的就是「点了没反应」。
+    // `begin` 返回 null 只有三种原因——页面已卸载、本页被别的路由覆盖、本页已有
+    // 在途动作。三种都不该继续解析（被覆盖的旧页更不许迟到 push/通知）。
+    final feedback = AsyncActionFeedback.begin(
+      context,
+      '正在准备播放：${episode.name}',
+    );
+    if (feedback == null) return;
+    _playFeedback = feedback;
     try {
+      // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
+      //
+      // 为什么不能只靠 `flag`：并入后的 `flag` 是本页的展示名（`站点名 · 原线路名`），
+      // 站点自己并不认识它；真正的线路标识在 `playbackFlag` 里。而 `vodId` 也得换成
+      // 来源站点的 vod，否则会拿原站点的 id 去问外部站点。
+      final route = _externalRoutes[line.flag];
       final decision = await state.resolvePlayback(
         episodeTarget: episode.url,
         flag: line.playbackFlag,
@@ -2045,6 +2109,8 @@ class _DetailPageState extends State<DetailPage> {
         // 服务去问会拿错请求头/运行时。两条来源不能混着用，按线路各自的归属走。
         serviceOverride: route == null ? widget.sourceContext?.service : null,
       );
+      // 离页/被别的路由覆盖：`isCurrent` 会顺手收掉反馈并返回 false。
+      if (!feedback.isCurrent) return;
       if (decision == null || decision.url == null) {
         throw AppError(
           AppErrorKind.playbackUrlMissing,
@@ -2079,6 +2145,9 @@ class _DetailPageState extends State<DetailPage> {
       // 可能倒序 → 按原始线路下标推断缺号集编号」得出，任一环节走样都会错位。
       // 每条线路各算一份：播放器切线路时要取那条线路自己的卡片。
       final episodeCardsByFlag = _episodeCardsByFlag(vod);
+      // 导航前收掉反馈：否则它会盖在播放器首帧上。owner 仍由本次调用持有到
+      // 播放器返回（`finally` 里 close），期间本页不再有第二个播放动作。
+      feedback.dismiss();
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -2133,6 +2202,14 @@ class _DetailPageState extends State<DetailPage> {
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
+      // 离页/被别的路由覆盖：这里必须放弃——被覆盖的旧页仍 `mounted`，
+      // 只看 `mounted` 会放行迟到 push 与迟到通知。
+      if (!feedback.isCurrent) return;
+      // 解析阶段到此结束：收起等待态并**交还 owner**。后面「确认换源 → 并入 →
+      // 自动续播」是同一次用户动作的后半段，续播那次 [_play] 需要重新拿到反馈；
+      // 占着 owner 不放到 `finally`，续播就会因为「本页已有在途动作」被挡掉。
+      feedback.dismiss();
+      feedback.close();
       if (!mounted) return;
       // 用户在站点里主动中断不是「这一集没有地址」，再问一次换源只会打断连播；
       // 自动续播那一趟失败同样只回到 通知（见 [_resumingAfterSwap]）。
@@ -2154,6 +2231,10 @@ class _DetailPageState extends State<DetailPage> {
         _pendingResumeEpisodeNumber = _tmdbEpisodeNumberOf(episode);
       });
       await _openSourceSwap();
+    } finally {
+      // 只收**自己**那一次：续播可能已经拿到新反馈，旧调用不得动它。
+      if (identical(_playFeedback, feedback)) _playFeedback = null;
+      feedback.close();
     }
   }
 

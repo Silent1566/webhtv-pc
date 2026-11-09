@@ -76,12 +76,9 @@ abstract final class AppRadius {
 /// 缓动是**指数缓出**：从"已经可见"的默认状态出发——入场动画藏起来的内容
 /// 会被读成"元素缺失"，然后在截图里被当成缺陷修掉，这是个真实的坑。
 ///
-/// **使用现状（如实标注，避免这套 token 自我夸大）**：
-/// - [base] 与 [ease]：有调用点——源场换源时选中环的过渡
-///   （`source_field.dart` 的 `_Star`），那是全系统唯一一处动效。
-/// - [fast]、[slow]、[emphasized]：**目前没有调用点**。它们是常规的
-///   快/慢档位与过冲曲线，留着备用；在有人真的用上之前，它们只是声明，
-///   不是既成事实（此点由 DESIGN.md 的 documenter 复核指出）。
+/// [base] 与 [ease] 用于源场选中环和外壳内容归位；
+/// [slow] 与 [fast] 分别用于桌面路由进入与退出。
+/// [emphasized] 仅保留给 signature move，不用于常规页面切换。
 abstract final class AppMotion {
   static const Duration fast = Duration(milliseconds: 120);
   static const Duration base = Duration(milliseconds: 200);

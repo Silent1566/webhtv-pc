@@ -17,6 +17,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'app_motion.dart';
 import 'tokens.dart';
 
 /// 中文字体优先的字体族回退链。
@@ -193,6 +194,7 @@ ThemeData buildAppTheme(Brightness brightness) {
   final text = _textTheme(base);
 
   return base.copyWith(
+    pageTransitionsTheme: appPageTransitionsTheme(),
     textTheme: text,
     primaryTextTheme: text.apply(fontFamilyFallback: _fontFallback),
     // ---- 顶栏：与内容同底，靠发丝线分隔，不靠 elevation ----
