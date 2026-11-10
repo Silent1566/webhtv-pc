@@ -144,6 +144,10 @@ class PlayerController extends ChangeNotifier {
   Timer? _retryTimer;
   int _retryCount = 0;
   bool _disposed = false;
+  bool _nativeOpenPending = false;
+  Timer? _nativeOpenTimer;
+  Completer<void>? _liveOpenCancellation;
+  bool get hasPendingNativeOpen => _nativeOpenPending;
 
   @override
   void notifyListeners() {
@@ -227,13 +231,17 @@ class PlayerController extends ChangeNotifier {
   ///
   /// 返回是否真的发生了变化，便于调用点与测试断言「失败路径确实清了」。
   bool clearCompleted() {
-    if (_disposed || !_completed) return false;
+    if (_disposed) return false;
+    if (!_completed) return false;
     _completed = false;
     notifyListeners();
     return true;
   }
   double get volume => _volume;
   bool get muted => _muted;
+  ({double volume, double resumeVolume, bool muted}) get volumeState => (
+    volume: _volume, resumeVolume: _volumeBeforeMute, muted: _muted,
+  );
   double get rate => _rate;
   String? get currentUrl => _currentUrl;
   PlayerLoadOutcome? get lastOutcome => _lastOutcome;
@@ -821,10 +829,12 @@ class PlayerController extends ChangeNotifier {
     String? siteKey,
     String? flag,
     String? episodeName,
+    bool Function()? isCurrent,
   }) async {
     if (_disposed) {
       return _failure(url, 'PlayerController is disposed', Stopwatch()..start());
     }
+    if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', Stopwatch()..start());
     _loading = true;
     _completed = false;
     _lastEngineError = null;
@@ -878,20 +888,31 @@ class PlayerController extends ChangeNotifier {
       }),
     );
 
+    final cancellation = isCurrent == null ? null : Completer<void>();
+    _liveOpenCancellation = cancellation;
     try {
-      await _player.open(Media(url, httpHeaders: headers));
+      _nativeOpenPending = true;
+      final nativeOpen = _player.open(Media(url, httpHeaders: headers)).whenComplete(() => _nativeOpenPending = false);
+      if (isCurrent == null) {
+        await nativeOpen;
+      } else {
+        await _awaitLiveOpen(nativeOpen, timeout, cancellation!);
+      }
+      if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', stopwatch);
       openIssued = true;
 
-      final loadElapsed = await loadCompleter.future.timeout(
-        timeout,
-        onTimeout: () => throw TimeoutException(
-          'load timeout after ${timeout.inSeconds}s',
-        ),
-      );
+      final loadElapsed = cancellation == null
+          ? await loadCompleter.future.timeout(
+              timeout,
+              onTimeout: () => throw TimeoutException(
+                'load timeout after ${timeout.inSeconds}s',
+              ),
+            )
+          : await _awaitLiveOpen(loadCompleter.future, timeout, cancellation);
 
       if (awaitFirstFrame && firstFrame == null) {
         final deadline = stopwatch.elapsed + firstFrameTimeout;
-        while (firstFrame == null && stopwatch.elapsed < deadline) {
+        while (firstFrame == null && stopwatch.elapsed < deadline && (isCurrent == null || (!_disposed && isCurrent()))) {
           await Future<void>.delayed(const Duration(milliseconds: 25));
           if (openIssued && _player.state.position > Duration.zero) {
             firstFrame ??= stopwatch.elapsed;
@@ -906,7 +927,7 @@ class PlayerController extends ChangeNotifier {
         loadElapsed: loadElapsed,
         firstFrame: firstFrame,
       );
-      if (!_disposed) {
+      if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
         _loading = false;
         _retryCount = 0;
@@ -916,7 +937,7 @@ class PlayerController extends ChangeNotifier {
       return outcome;
     } on TimeoutException catch (error) {
       final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
-      if (!_disposed) {
+      if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
         _loading = false;
         _finishFailureDiagnostics(outcome);
@@ -925,7 +946,7 @@ class PlayerController extends ChangeNotifier {
       return outcome;
     } catch (error) {
       final outcome = _failure(url, loadError ?? '$error', stopwatch);
-      if (!_disposed) {
+      if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
         _loading = false;
         _finishFailureDiagnostics(outcome);
@@ -933,12 +954,28 @@ class PlayerController extends ChangeNotifier {
       }
       return outcome;
     } finally {
+      if (identical(_liveOpenCancellation, cancellation)) _liveOpenCancellation = null;
       for (final subscription in localSubscriptions) {
         await subscription.cancel();
       }
     }
   }
 
+  Future<T> _awaitLiveOpen<T>(Future<T> operation, Duration timeout, Completer<void> cancellation) async {
+    final timeoutSignal = Completer<T>();
+    final timer = Timer(timeout, () => timeoutSignal.completeError(TimeoutException('live open timeout')));
+    _nativeOpenTimer = timer;
+    try {
+      return await Future.any<T>([
+        operation,
+        timeoutSignal.future,
+        cancellation.future.then<T>((_) => throw StateError('Playback superseded')),
+      ]);
+    } finally {
+      timer.cancel();
+      if (identical(_nativeOpenTimer, timer)) _nativeOpenTimer = null;
+    }
+  }
   PlayerLoadOutcome _failure(String url, String message, Stopwatch stopwatch) {
     final kind = classifyPlayerError(message);
     return PlayerLoadOutcome(
@@ -998,6 +1035,7 @@ class PlayerController extends ChangeNotifier {
     String? siteKey,
     String? flag,
     String? episodeName,
+    bool Function()? isCurrent,
   }) async {
     final builder = PlaybackDiagnosticsBuilder(
       siteKey: siteKey,
@@ -1009,8 +1047,9 @@ class PlayerController extends ChangeNotifier {
       headers: headers,
       timeout: timeout,
       diagnosticsBuilder: builder,
+      isCurrent: isCurrent,
     );
-    if (_disposed || outcome.succeeded) return outcome;
+    if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) return outcome;
     if (outcome.failureKind != PlayerFailureKind.timeout &&
         outcome.failureKind != PlayerFailureKind.network) {
       return outcome;
@@ -1019,13 +1058,14 @@ class PlayerController extends ChangeNotifier {
     _retryCount++;
     final retryStopwatch = Stopwatch()..start();
     await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (_disposed) return outcome;
+    if (_disposed || (isCurrent != null && !isCurrent())) return outcome;
     builder.addStage(PlaybackStage.retry, retryStopwatch.elapsed);
     outcome = await open(
       url,
       headers: headers,
       timeout: timeout,
       diagnosticsBuilder: builder,
+      isCurrent: isCurrent,
     );
     return outcome;
   }
@@ -1063,6 +1103,14 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> restoreVolumeState(({double volume, double resumeVolume, bool muted}) snapshot) async {
+    if (_disposed) return;
+    _volume = snapshot.volume;
+    _volumeBeforeMute = snapshot.resumeVolume;
+    _muted = snapshot.muted;
+    await _player.setVolume(snapshot.volume);
+    if (!_disposed) notifyListeners();
+  }
   /// 静音切换：静音时记住原音量，取消静音时恢复，不使用硬编码 100。
   Future<void> toggleMute() async {
     if (_disposed) return;
@@ -1092,6 +1140,11 @@ class PlayerController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    if (_liveOpenCancellation case final cancellation?) {
+      if (!cancellation.isCompleted) cancellation.complete();
+    }
+    _nativeOpenTimer?.cancel();
+    _nativeOpenTimer = null;
     cancelPendingRetries();
     for (final subscription in _subscriptions) {
       subscription.cancel();

@@ -21,17 +21,17 @@ import '../core/osd_config.dart';
 import '../core/osd_diagnostics.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_request.dart';
+export '../core/playback_request.dart';
 import '../core/playback_repeat.dart';
 import '../core/player_buttons.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/skip_segments.dart';
-import '../core/source_swap.dart';
 import '../core/sleep_timer.dart';
 import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
-import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/danmaku_library_service.dart';
@@ -48,209 +48,21 @@ import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
+import 'live_playback_session.dart';
+import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
 import 'theme.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
-/// 一次播放请求（由详情页或命令行构造）。
-class PlaybackRequest {
-  const PlaybackRequest({
-    required this.url,
-    required this.title,
-    required this.siteKey,
-    required this.vodId,
-    required this.vodName,
-    required this.episodeName,
-    required this.flag,
-    String? playbackFlag,
-    String? episodeTarget,
-    this.headers = const {},
-    this.startPosition,
-    this.playLines = const [],
-    this.lineRoutes = const {},
-    this.episodeCardsByFlag = const {},
-    this.episodesReversed = false,
-    this.episodeIndex = 0,
-    this.vodPic,
-    this.directUrl = false,
-    this.subtitles = const [],
-    this.subtitleHeaders = const {},
-    this.danmaku = const [],
-    this.tmdb,
-    this.resumeSeed,
-    this.sourceKey = '',
-  }) : episodeTarget = episodeTarget ?? url,
-       playbackFlag = playbackFlag ?? flag;
-
-  final String url;
-  final String title;
-  final String siteKey;
-  final String vodId;
-  final String vodName;
-  final String episodeName;
-  final String flag;
-  final String playbackFlag;
-  final Map<String, String> headers;
-  final Duration? startPosition;
-
-  /// 站点播放入口的**输入目标**（详情 `vod_play_url` 里该集 `$` 之后的值）。
-  ///
-  /// 与 [url] 的区别很关键：
-  /// - [url] 是**解析后的可播地址**（T4 站点还要再经本地代理换成 `127.0.0.1/p/<token>/…`），
-  ///   带时效签名，**不能**当作再次解析的输入；
-  /// - [episodeTarget] 是站点能认的原始目标（网盘站是分享链，普通站是剧集地址）。
-  ///
-  /// 历史续播必须用 [episodeTarget] 重新解析：拿 [url] 去问站点只会得到
-  /// 「站点返回业务错误」（用户反馈 2026-10-09「无法从历史记录页面继续播放」）。
-  /// 为空时回退到 [url]（兼容命令行/直播等无需二次解析的场景）。
-  final String episodeTarget;
-
-  /// 播放结果携带的外挂字幕（§10.3）。
-  final List<SubtitleInfo> subtitles;
-
-  /// 拉取外挂字幕时使用的 Header（与媒体一致，含 Referer/UA/Cookie）。
-  ///
-  /// 与 [headers] 分开：走本地代理时 [headers] 被清空（由代理注入），而字幕由
-  /// 宿主自己请求，必须用代理前的原始 Header（§11.3.1）。
-  final Map<String, String> subtitleHeaders;
-
-  /// 播放结果携带的弹幕源（§21 Phase 3）。拉取弹幕同样使用 [subtitleHeaders]。
-  final List<DanmakuSource> danmaku;
-
-  /// TMDB 季度身份（`docs/phase4/design/04` §8.1）。
-  ///
-  /// 为 `null` 时表示未携带季度身份（历史恢复、直播、命令行），
-  /// 此时只写来源 `history`，不写季度进度（`02` §6.2）。
-  final TmdbPlaybackIdentity? tmdb;
-
-  /// 详情页给出的全部线路，用于线路切换与上下集。
-  final List<VodPlayLine> playLines;
-
-  /// 外部（换源并入）线路的来源路由：页面内 flag → 来源站点与它自己的 vodId。
-  ///
-  /// 为什么播放器也要收：换集、切线路都会重新解析地址，而外部线路必须**继续**
-  /// 定向到它自己的站点。只看 [siteKey] 不够——[siteKey] 记的是真来源站点，
-  /// 但 `vodId` 也得跟着换，否则会拿原站点的 vod 去问外部站点。
-  final Map<String, SwapLineRoute> lineRoutes;
-
-  /// 详情页为**每一条线路**各算一次的剧集卡片（`tmdb_detail_model.dart`），
-  /// 按线路展示标识（[flag]）分组。
-  ///
-  /// 为什么播放器还要收一次：浮层里的选集面板要显示详情页那套海报卡片
-  /// （集号/集标题/剧照），而播放器手上只有 [playLines] 里的来源集名。
-  /// 卡片只能由详情页算好传下来——集号推断依赖季过滤后的渲染顺序与
-  /// `sourceIndices`（见 `TmdbEpisodeCards.build`），播放器没有这些上下文。
-  ///
-  /// 为什么是 **Map 而不是单个列表**：卡片以前只给「详情页当时选中的那条线路」，
-  /// 播放器切到别的线路时 `copyWith` 会把旧卡片原样带过；两条线路集数恰好相等时，
-  /// 旧线路的剧照会被贴到新线路的集上，长度校验根本查不出来。按线路分组后，
-  /// 切到哪条线路就取哪条线路自己的卡片。
-  ///
-  /// 空 Map = 这次播放没有卡片可用（未匹配 TMDB、历史恢复、直播、命令行），
-  /// 不是「暂时还没传」：调用方不得为它编造占位卡片。
-  final Map<String, List<TmdbEpisodeCard>> episodeCardsByFlag;
-
-  /// 详情页当时的页面级「倒序」开关状态（`browse_pages.dart` 的 `_episodesReversed`）。
-  ///
-  /// 卡片顺序由详情页按它当时的倒序状态算好，播放器的选集面板必须跟着同一个方向
-  /// 排列，否则集列表、区间标签与卡片三者会互相错位。这是**页面级临时状态**，
-  /// 只在用户点播那一刻快照一次，播放器不再翻它。
-  final bool episodesReversed;
-
-  final int episodeIndex;
-  final String? vodPic;
-
-  /// 待迁移的续播种子（跨源续播用，`docs/phase5/design/05` §7.3）。
-  ///
-  /// 为什么播放器还要收一次：比例换算需要**目标集的真实时长**，而目标集要
-  /// `open()` 成功后才拿得到（[_load] 里 `_controller.duration`）。详情页算出的
-  /// [startPosition] 只能按绝对毫秒给（它拿不到时长），两源同一集时长差很大时
-  /// 会落到中段甚至片尾。带上种子后由播放器用真实时长重算一遍。
-  ///
-  /// 这是**一次性交接**：首次恢复成功后即被清掉（见 [_load]），换集与
-  /// 「从最新进度续播」也必须清掉，否则会把上一集的种子套到新集上。
-  final ResumeSeed? resumeSeed;
-
-  /// 这一次播放用的**播放源标识**（`core/source_key.dart`）。
-  ///
-  /// 空串 = 当前生效源（既有语义）。非空且与生效源不同时，说明这次播放来自
-  /// 「其它配置的历史」：换集/切线路必须继续用**那份配置**解析
-  /// （[AppState.resolvePlaybackForSource]），进度也必须写回它自己的
-  /// `source_key`，否则一次续播就会在当前源里多出一条同名历史。
-  final String sourceKey;
-
-  /// 地址已是最终可播地址（直播频道），无需经站点播放入口解析。
-  ///
-  /// 直播源的 `urls` 直接在本地就是媒体地址，走解析器只会多余地请求站点；
-  /// 同时直播需要「失败按顺序切线路」（§13.3），与点播的剧集切换语义不同。
-  final bool directUrl;
-
-  PlaybackRequest copyWith({
-    String? url,
-    String? episodeTarget,
-    String? episodeName,
-    String? flag,
-    String? playbackFlag,
-    Map<String, String>? headers,
-    int? episodeIndex,
-    Duration? startPosition,
-    bool clearStartPosition = false,
-    List<SubtitleInfo>? subtitles,
-    List<DanmakuSource>? danmaku,
-    ResumeSeed? resumeSeed,
-    bool clearResumeSeed = false,
-    String? sourceKey,
-    bool clearSourceKey = false,
-  }) {
-    return PlaybackRequest(
-      url: url ?? this.url,
-      // `episodeTarget` **不随 `url` 自动跟随**：两者语义不同（前者是站点入口
-      // 目标、后者是解析后的可播地址），若换 `url` 时把入口目标也顶成播放地址，
-      // 历史里存的就又是站点认不了的值。换集的调用点必须**显式**传 `episodeTarget`。
-      episodeTarget: episodeTarget ?? this.episodeTarget,
-      title: title,
-      siteKey: siteKey,
-      vodId: vodId,
-      vodName: vodName,
-      episodeName: episodeName ?? this.episodeName,
-      flag: flag ?? this.flag,
-      playbackFlag: playbackFlag ?? this.playbackFlag,
-      headers: headers ?? this.headers,
-      startPosition: clearStartPosition
-          ? null
-          : (startPosition ?? this.startPosition),
-      // 与 `startPosition` 一样是「一次性交接」：显式清除优先，其次是新值。
-      resumeSeed: clearResumeSeed ? null : (resumeSeed ?? this.resumeSeed),
-      playLines: playLines,
-      // 与 `playLines` / `siteKey` 一样原样带过：换集不能把外部线路的路由丢掉。
-      lineRoutes: lineRoutes,
-      // 卡片同属「详情页一次性算好」的上下文：换集不带过来，选集面板就退回裸集名，
-      // 而播放器自己再也算不回来（缺选中季度与季过滤后的渲染顺序）。按线路分组后
-      // 切线路也能取到**那条线路自己**的卡片，不必等详情页重新算。
-      episodeCardsByFlag: episodeCardsByFlag,
-      // 倒序是详情页那一刻的展示顺序，与卡片同属一次性快照：换集不能把它翻回去。
-      episodesReversed: episodesReversed,
-      episodeIndex: episodeIndex ?? this.episodeIndex,
-      vodPic: vodPic,
-      directUrl: directUrl,
-      subtitles: subtitles ?? this.subtitles,
-      subtitleHeaders: subtitleHeaders,
-      danmaku: danmaku ?? this.danmaku,
-      tmdb: tmdb,
-      // 播放源归属默认原样带过：换集后进度仍要写回同一条来源。
-      // 切到**外部并入线路**（属于当前配置）时必须显式清空，否则进度会被
-      // 写回原来源，历史页从此多出一条挂错源的记录。
-      sourceKey: clearSourceKey ? '' : (sourceKey ?? this.sourceKey),
-    );
-  }
-}
-
 /// 画面显示模式：保留原始比例、裁切铺满、拉伸填充或固定常用比例。
 ///
 /// 这些模式直接映射到 media_kit_video 的 [BoxFit] / [Video.aspectRatio]，
 /// 不改变媒体流本身，只改变窗口内的显示方式。
+String formatPlayerLiveStatus({String? status, int? online}) =>
+    [?status, if (online != null) '在线 $online'].join(' · ');
+
 enum PlayerGestureAction { toggleControls, enterFullscreen, togglePlayback }
 
 PlayerGestureAction resolvePlayerGesture({
@@ -350,10 +162,12 @@ class PlayerPage extends StatefulWidget {
     required this.request,
     this.danmakuLoader,
     this.onLiveSourceFallback,
+    this.liveSession,
   });
 
   final AppState state;
   final PlaybackRequest request;
+  final LivePlaybackSession? liveSession;
 
   /// 直播源级回退（Phase 9）：当前源所有线路都失败时，向调用方要下一个
   /// 同名频道的播放请求；返回 null 表示没有可回退的源。
@@ -367,8 +181,19 @@ class PlayerPage extends StatefulWidget {
 }
 
 class _PlayerPageState extends State<PlayerPage> with WindowListener {
-  late final PlayerController _controller;
+  late PlayerController _controller;
   late PlaybackRequest _request;
+  final FocusNode _playerFocus = FocusNode(debugLabel: 'player');
+  bool _livePanelOpen = false;
+  LiveChannel? _linePanelChannel;
+  bool _linePanelFollowsPlaying = false;
+  int _sessionRevision = 0;
+  bool _liveOpenInFlight = false;
+  bool get _isLive =>
+      widget.liveSession != null && widget.liveSession!.requestProgram == null;
+  bool get _isCatchup =>
+      widget.liveSession?.requestProgram != null || _request.flag == '回看';
+  bool get _hasLivePanels => _livePanelOpen || _linePanelChannel != null;
   bool _progressReady = false;
   int _mediaGeneration = 0;
   bool _fullscreen = false;
@@ -489,6 +314,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void initState() {
     super.initState();
     _request = widget.request;
+    _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     final savedFit = widget.state.playerVideoFitModeFor(
       siteKey: _request.siteKey,
       vodId: _request.vodId,
@@ -510,6 +336,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     _controller = PlayerController()..addListener(_onControllerChanged);
     windowManager.addListener(this);
+    widget.liveSession?.addListener(_onPlaybackSessionChanged);
     _osdNow = debugOsdClockOverride ?? DateTime.now();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -525,11 +352,101 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   @override
   void didUpdateWidget(covariant PlayerPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.liveSession != widget.liveSession) {
+      oldWidget.liveSession?.removeListener(_onPlaybackSessionChanged);
+      widget.liveSession?.addListener(_onPlaybackSessionChanged);
+      _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
+    }
     if (oldWidget.request == widget.request) return;
     _beginMediaTransition();
     _request = widget.request;
+    _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     _episodesCache = const [];
     unawaited(_load());
+  }
+
+  void _onPlaybackSessionChanged() {
+    if (!mounted) return;
+    final session = widget.liveSession;
+    if (session == null) return;
+    if (_sessionRevision == session.playbackRevision) {
+      setState(() {
+        if (_linePanelFollowsPlaying && _linePanelChannel != null) {
+          _linePanelChannel = session.channel;
+        }
+      });
+      return;
+    }
+    _beginMediaTransition();
+    _sessionRevision = session.playbackRevision;
+    setState(() {
+      _request = session.request;
+      _episodesCache = const [];
+      _danmakuItems = const [];
+      _danmakuError = null;
+      _loadError = null;
+    });
+    final revision = _sessionRevision;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && revision == _sessionRevision) unawaited(_load());
+    });
+  }
+
+  bool get _canUseChannelKeys {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    final editing =
+        focusContext != null &&
+        (focusContext.widget is EditableText ||
+            focusContext.findAncestorWidgetOfExactType<EditableText>() != null);
+    return _isLive &&
+        !editing &&
+        _contextMenuAnchor == null &&
+        (ModalRoute.of(context)?.isCurrent ?? false);
+  }
+
+  void _stepChannelFromKeyboard(int delta) {
+    if (_canUseChannelKeys) widget.liveSession!.stepChannel(delta);
+  }
+
+  void _openLivePanel() {
+    final session = widget.liveSession;
+    if (session == null) return;
+    if (_livePanelOpen) {
+      _closeLivePanels();
+      return;
+    }
+    unawaited(session.browse(session.source));
+    session.selectGroup(session.channel.group);
+    setState(() {
+      _livePanelOpen = true;
+      _linePanelChannel = null;
+      _contextMenuAnchor = null;
+    });
+    _touchControls();
+  }
+
+  void _openLiveLines(LiveChannel channel) {
+    if (!_livePanelOpen) {
+      unawaited(widget.liveSession!.browse(widget.liveSession!.source));
+    }
+    setState(() {
+      _livePanelOpen = true;
+      _linePanelChannel = channel;
+      _linePanelFollowsPlaying = identical(
+        channel,
+        widget.liveSession!.channel,
+      );
+    });
+    _touchControls();
+  }
+
+  void _closeLivePanels() {
+    setState(() {
+      _linePanelChannel = null;
+      _livePanelOpen = false;
+    });
+    _playerFocus.requestFocus();
+    _touchControls();
   }
 
   void _onControllerChanged() {
@@ -591,7 +508,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _outroSkipped = true;
     }
     await _controller.seek(
-      Duration(milliseconds: action == SkipAction.intro ? target : duration.inMilliseconds),
+      Duration(
+        milliseconds: action == SkipAction.intro
+            ? target
+            : duration.inMilliseconds,
+      ),
     );
     widget.state.log.info(
       '手动跳过 ${action.name} target=$target ms',
@@ -680,6 +601,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///    此时 `completed=true` 一定是误报。
   void _maybeAdvanceOnGenuineEnd() {
     if (_advanceInFlight) return;
+    if (_isLive || _isCatchup) return;
     if (!_progressReady) return;
     if (!_controller.isCompleted) return;
     if (!_isGenuineEnd()) return;
@@ -815,23 +737,33 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 若加载失败而不回滚，续播上下文（原集 + 原进度）就已丢失，
     // 用户看到的是「上一集失败 → 已经切到下一集」。
     final intent = _request;
+    final sessionRevision = _sessionRevision;
     // 轨道记忆的键里含线路与集，换集/换线路后必须重读，上一集的记忆绝不能带过来。
     _loadRememberedTrackChoices();
     _skipArmed = false;
     _introSkipped = false;
     _outroSkipped = false;
     setState(() => _loadError = null);
-    final outcome = await _controller.openWithRetry(
-      _request.url,
-      headers: _request.headers,
-      siteKey: _request.siteKey,
-      flag: _request.playbackFlag,
-      episodeName: _request.episodeName,
-    );
+    final controller = _controller;
+    if (widget.liveSession != null) _liveOpenInFlight = true;
+    late PlayerLoadOutcome outcome;
+    try {
+      outcome = await controller.openWithRetry(
+        intent.url,
+        headers: intent.headers,
+        siteKey: intent.siteKey,
+        flag: intent.playbackFlag,
+        episodeName: intent.episodeName,
+        isCurrent: widget.liveSession == null
+            ? null
+            : () => mounted && generation == _mediaGeneration,
+      );
+    } finally {
+      if (identical(controller, _controller)) _liveOpenInFlight = false;
+    }
     if (!mounted || generation != _mediaGeneration) return;
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
-    // 诊断：落定快照并写入日志（§23 输出引擎/格式/网络/错误）。
-    final diagnostics = _controller.diagnostics;
+    final diagnostics = controller.diagnostics;
     if (diagnostics != null) {
       widget.state.log.info(
         '播放诊断 ${diagnostics.logLine}',
@@ -841,13 +773,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       widget.state.recordPlaybackDiagnostics(diagnostics);
     }
     if (!outcome.succeeded) {
-      // 直播：当前线路失败时按顺序自动切到下一个线路（§13.3 播放失败可切线路）。
-      // Phase 9：`changeLine` 关闭时不再自动换线（失败直接报错）。
-      if (_request.directUrl &&
+      if ((_isLive ||
+              (_request.directUrl &&
+                  widget.onLiveSourceFallback != null &&
+                  _request.flag == '直播线路')) &&
           widget.state.liveSettings.changeLine &&
           await _fallbackLiveLine()) {
         return;
       }
+      if (!mounted || generation != _mediaGeneration) return;
       // 失败路径的收尾（`design/03` §4.3）：
       // 1. 回滚 `_request` 到本次加载前的意图（保住续播上下文）；
       // 2. 清除残留的 `completed`，否则重建会再次触发连播（D1）；
@@ -862,6 +796,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controller.clearCompleted();
       return;
     }
+    widget.liveSession?.confirmPlayback(sessionRevision);
     // Phase 9：注入 mpv 播放参数与 LUT。失败不阻断播放，只提示能力不可用。
     await _applyPlaybackEnhancements();
     if (!mounted || generation != _mediaGeneration) return;
@@ -940,10 +875,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _options = widget.state.playerOptions;
     final applied = await _controller.applyPlayerOptions(_options);
     if (!applied) {
-      widget.state.log.warning(
-        '播放参数未生效（当前平台不是 NativePlayer）',
-        scope: 'player',
-      );
+      widget.state.log.warning('播放参数未生效（当前平台不是 NativePlayer）', scope: 'player');
     }
     final lut = _options.lutPath.trim();
     if (lut.isEmpty) return;
@@ -972,8 +904,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 返回 true 表示已切换到另一条线路并重新加载。
   Future<bool> _fallbackLiveLine() async {
+    final session = widget.liveSession;
+    if (session != null) {
+      return session.fallback(
+        changeLine: widget.state.liveSettings.changeLine,
+        sourceFallback: widget.state.liveSettings.sourceFallback,
+      );
+    }
+    final generation = _mediaGeneration;
     final lines = _episodes;
-    if (lines.length <= 1) return false;
+    if (lines.isEmpty) return false;
     final next = _request.episodeIndex + 1;
     if (next >= lines.length) {
       widget.state.log.info(
@@ -982,10 +922,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       // 源级回退（Phase 9）：只在当前源用尽、且调用方提供了回退入口时尝试一次。
       final fallback = widget.onLiveSourceFallback;
-      if (fallback != null && !_sourceFallbackTried) {
+      if (fallback != null &&
+          widget.state.liveSettings.sourceFallback &&
+          !_sourceFallbackTried) {
         _sourceFallbackTried = true;
         final nextRequest = await fallback();
-        if (nextRequest != null && mounted) {
+        if (nextRequest != null && mounted && generation == _mediaGeneration) {
           widget.state.log.info(
             '已切换直播源 channel=${nextRequest.episodeName} '
             'source=${nextRequest.siteKey}',
@@ -1267,7 +1209,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: r'C:\subtitles\movie.srt'),
+          decoration: const InputDecoration(
+            hintText: r'C:\subtitles\movie.srt',
+          ),
           onSubmitted: (value) => Navigator.of(context).pop(value),
         ),
         actions: [
@@ -1335,9 +1279,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 构造弹幕库查询。
   DanmakuQuery _danmakuQuery() => DanmakuQuery(
-    title: _request.vodName.trim().isEmpty
-        ? _request.title
-        : _request.vodName,
+    title: _request.vodName.trim().isEmpty ? _request.title : _request.vodName,
     episode: _request.episodeName,
     siteKey: _request.siteKey,
     vodId: _request.vodId,
@@ -1790,28 +1732,28 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       case 'tracks':
         _applyDanmakuStyle(
           _danmakuStyle.copyWith(
-            maxTracks: _nextOption(
-              _danmakuStyle.maxTracks,
-              const [0, 3, 5, 8],
-            ),
+            maxTracks: _nextOption(_danmakuStyle.maxTracks, const [0, 3, 5, 8]),
           ),
         );
       case 'area':
         _applyDanmakuStyle(
           _danmakuStyle.copyWith(
-            areaRatio: _nextOption(
-              _danmakuStyle.areaRatio,
-              const [0.3, 0.45, 0.6, 0.75],
-            ),
+            areaRatio: _nextOption(_danmakuStyle.areaRatio, const [
+              0.3,
+              0.45,
+              0.6,
+              0.75,
+            ]),
           ),
         );
       case 'stroke':
         _applyDanmakuStyle(
           _danmakuStyle.copyWith(
-            strokeWidth: _nextOption(
-              _danmakuStyle.strokeWidth,
-              const [0.0, 1.2, 2.0],
-            ),
+            strokeWidth: _nextOption(_danmakuStyle.strokeWidth, const [
+              0.0,
+              1.2,
+              2.0,
+            ]),
           ),
         );
       case 'offset':
@@ -2088,7 +2030,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             for (final option in options)
               ListTile(
                 leading: Icon(
-                  option.selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                  option.selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
                   size: 20,
                 ),
                 title: Text(option.label),
@@ -2133,7 +2077,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             for (final mode in PlaybackRepeat.values)
               ListTile(
                 leading: Icon(
-                  _repeat == mode ? Icons.radio_button_checked : Icons.radio_button_off,
+                  _repeat == mode
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
                   size: 20,
                 ),
                 title: Text(mode.label),
@@ -2156,7 +2102,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             ),
             ListTile(
               title: Text(
-                _sleepTimer.idle ? '取消定时（当前未开启）' : '取消定时（${_sleepTimer.summary}）',
+                _sleepTimer.idle
+                    ? '取消定时（当前未开启）'
+                    : '取消定时（${_sleepTimer.summary}）',
               ),
               enabled: !_sleepTimer.idle,
               onTap: () => Navigator.of(context).pop('sleep:off'),
@@ -2182,9 +2130,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     final minutes = int.tryParse(action.substring('sleep:'.length));
     if (minutes != null) {
-      _applySleepTimer(
-        SleepTimerPlan.forDuration(Duration(minutes: minutes)),
-      );
+      _applySleepTimer(SleepTimerPlan.forDuration(Duration(minutes: minutes)));
     }
   }
 
@@ -2282,7 +2228,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
       await _persistOptions(_options.copyWith(lutPath: path));
       if (mounted) setState(() {});
-      _showPlayerMessage('已应用 LUT：${parsed.preset!.name}', kind: ToastKind.success);
+      _showPlayerMessage(
+        '已应用 LUT：${parsed.preset!.name}',
+        kind: ToastKind.success,
+      );
     } catch (error) {
       _showPlayerMessage('LUT 读取失败：$error', kind: ToastKind.error);
     }
@@ -2394,6 +2343,22 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _skipArmed = false;
     _saveTimer?.cancel();
     _saveTimer = null;
+    if (widget.liveSession != null &&
+        (_liveOpenInFlight || _controller.hasPendingNativeOpen)) {
+      final previous = _controller;
+      final volume = previous.volumeState;
+      final rate = previous.rate;
+      previous.removeListener(_onControllerChanged);
+      _controller = PlayerController()..addListener(_onControllerChanged);
+      final replacement = _controller;
+      _liveOpenInFlight = false;
+      previous.dispose();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !identical(replacement, _controller)) return;
+        unawaited(replacement.restoreVolumeState(volume));
+        unawaited(replacement.setRate(rate));
+      });
+    }
     return ++_mediaGeneration;
   }
 
@@ -2461,6 +2426,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    widget.liveSession?.removeListener(_onPlaybackSessionChanged);
+    _playerFocus.dispose();
     _saveTimer?.cancel();
     _controlHideTimer?.cancel();
     _osdTimer?.cancel();
@@ -2541,7 +2508,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (await windowManager.isFullScreen()) await _toggleFullscreen();
   }
 
-  List<VodEpisode> get _episodes => _lineOf(_request.flag)?.episodes ?? const [];
+  List<VodEpisode> get _episodes =>
+      _lineOf(_request.flag)?.episodes ?? const [];
 
   /// 按**展示名**找线路（`_request.flag` 与线路下拉用的都是展示名）。
   VodPlayLine? _lineOf(String flag) {
@@ -2559,6 +2527,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   Future<void> _playEpisode(int index, {String? overrideFlag}) async {
+    if (_isLive) {
+      widget.liveSession!.selectLine(index);
+      return;
+    }
+    if (_isCatchup) return;
     final flag = overrideFlag ?? _request.flag;
     List<VodPlayLine> lines = _request.playLines;
     if (overrideFlag != null) {
@@ -2625,7 +2598,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final source = _request.sourceKey.trim();
     // 外部并入线路属于**当前配置**：那条线路必须用当前配置解析，不能借原配置的
     // 服务去问（站点在两份配置里是两回事）。
-    if (!isExternalRoute && source.isNotEmpty && source != state.activeSourceKey) {
+    if (!isExternalRoute &&
+        source.isNotEmpty &&
+        source != state.activeSourceKey) {
       return state.resolvePlaybackForSource(
         sourceKey: source,
         siteKey: _request.siteKey,
@@ -2714,7 +2689,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted || generation != _mediaGeneration) return;
       await _load();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _mediaGeneration) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -2741,9 +2716,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 需要集名兜底（详见 `AppDatabase.findHistory` 的三级匹配）。
       episodeName: _request.episodeName,
       // 原来源播放要查它自己那条源的行，否则查不到任何进度。
-      sourceKey: _request.sourceKey.trim().isEmpty
-          ? null
-          : _request.sourceKey,
+      sourceKey: _request.sourceKey.trim().isEmpty ? null : _request.sourceKey,
     );
     // 查不到（已看完 / 无记录 / 低于续播下限）时退回「重试本集」语义，
     // 而不是静默无动作——用户点了按钮就必须有反馈。
@@ -2773,6 +2746,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   Future<void> _playNext() async {
+    if (_isLive) {
+      widget.liveSession!.stepChannel(1);
+      return;
+    }
+    if (_isCatchup) return;
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
     final identity = _request.tmdb;
@@ -2792,6 +2770,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   Future<void> _playPrevious() async {
+    if (_isLive) {
+      widget.liveSession!.stepChannel(-1);
+      return;
+    }
+    if (_isCatchup) return;
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
     final previous = _request.episodeIndex - 1;
@@ -2817,6 +2800,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       toggleFullscreen: _toggleFullscreen,
       exitFullscreen: _exitFullscreen,
     );
+    if (_isLive || _isCatchup) {
+      shortcuts.removeWhere(
+        (activator, _) =>
+            activator is SingleActivator &&
+            (activator.trigger == LogicalKeyboardKey.bracketLeft ||
+                activator.trigger == LogicalKeyboardKey.bracketRight),
+      );
+    }
+    if (_isLive) {
+      shortcuts[const SingleActivator(LogicalKeyboardKey.pageUp)] = () =>
+          _stepChannelFromKeyboard(-1);
+      shortcuts[const SingleActivator(LogicalKeyboardKey.pageDown)] = () =>
+          _stepChannelFromKeyboard(1);
+    }
     // Phase 9：Alt+[ / Alt+] 手动跳过片头/片尾（避免占用已有的 [ / ]）。
     shortcuts[const SingleActivator(
       LogicalKeyboardKey.bracketLeft,
@@ -2871,174 +2868,222 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // `SingleActivator` 没有重写 `==`/`hashCode`，直接覆盖能否命中
     // 取决于 `const` 规范化这个实现细节；而 `CallbackShortcuts`
     // 取**首个**命中的绑定，漏掉旧绑定就会让 `exitFullscreen` 继续赢。
-    if (_contextMenuAnchor != null) {
+    if (_contextMenuAnchor != null || _hasLivePanels) {
       shortcuts.removeWhere(
         (activator, _) =>
             activator is SingleActivator &&
             activator.trigger == LogicalKeyboardKey.escape,
       );
       shortcuts[const SingleActivator(LogicalKeyboardKey.escape)] =
-          _closeContextMenu;
+          _hasLivePanels ? _closeLivePanels : _closeContextMenu;
     }
 
     return CallbackShortcuts(
       bindings: shortcuts,
       child: Focus(
+        focusNode: _playerFocus,
         autofocus: true,
         child: Scaffold(
-              backgroundColor: Colors.black,
-              // 顶栏改由浮层承载（`design/01` §4.2）：全屏时不再置 null，
-              // 于是进出全屏不再有 56px 跳变。
-              appBar: null,
-              body: Theme(
-                data: buildAppTheme(Brightness.dark),
-                child: Stack(
-                  children: [
-                    // 第 1 层：画面 + 弹幕 + 加载/错误。
-                    Positioned.fill(
-                      // 指针在画面上移动即唤醒（`design/01` §4.5）。
-                      // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
-                      // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
-                      child: MouseRegion(
-                        onHover: (_) {
-                          if (!_controlsVisible) _touchControls();
-                        },
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _toggleControlsByGesture,
-                          onDoubleTap: _handleDoubleTapGesture,
-                          onLongPressStart: (_) => _beginGestureSpeed(),
-                          onLongPressEnd: (_) => _endGestureSpeed(),
-                          onLongPressCancel: _endGestureSpeed,
-                          // 右键：打开菜单（`design/04` §5.1）。
-                          // 两个回调都指向同一方法，方法内部幂等。
-                          onSecondaryTapDown: (details) =>
-                              _openContextMenu(details.globalPosition),
-                          onSecondaryTap: () {},
-                          child: Stack(
-                            children: [
-                              Positioned.fill(
-                                child: Video(
-                                  controller: _controller.videoController,
-                                  fit: _videoFitMode.fit,
-                                  aspectRatio: _videoFitMode.aspectRatio,
-                                  controls: NoVideoControls,
-                                  subtitleViewConfiguration:
-                                      _subtitleStyle.configuration,
-                                ),
+          backgroundColor: Colors.black,
+          // 顶栏改由浮层承载（`design/01` §4.2）：全屏时不再置 null，
+          // 于是进出全屏不再有 56px 跳变。
+          appBar: null,
+          body: Theme(
+            data: buildAppTheme(Brightness.dark),
+            child: Stack(
+              children: [
+                // 第 1 层：画面 + 弹幕 + 加载/错误。
+                Positioned.fill(
+                  // 指针在画面上移动即唤醒（`design/01` §4.5）。
+                  // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
+                  // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
+                  child: MouseRegion(
+                    onHover: (_) {
+                      if (!_controlsVisible) _touchControls();
+                    },
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _toggleControlsByGesture,
+                      onDoubleTap: _handleDoubleTapGesture,
+                      onLongPressStart: (_) => _beginGestureSpeed(),
+                      onLongPressEnd: (_) => _endGestureSpeed(),
+                      onLongPressCancel: _endGestureSpeed,
+                      // 右键：打开菜单（`design/04` §5.1）。
+                      // 两个回调都指向同一方法，方法内部幂等。
+                      onSecondaryTapDown: (details) =>
+                          _openContextMenu(details.globalPosition),
+                      onSecondaryTap: () {},
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: Video(
+                              controller: _controller.videoController,
+                              fit: _videoFitMode.fit,
+                              aspectRatio: _videoFitMode.aspectRatio,
+                              controls: NoVideoControls,
+                              subtitleViewConfiguration:
+                                  _subtitleStyle.configuration,
+                            ),
+                          ),
+                          // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
+                          // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
+                          Positioned.fill(
+                            child: DanmakuOverlay(
+                              items: _danmakuItems,
+                              position: _controller.position,
+                              style: _danmakuStyle,
+                              liveItems: _liveItems,
+                              liveNowMs: _liveNowMs,
+                            ),
+                          ),
+                          if (_controller.isLoading)
+                            const Positioned.fill(child: LoadingBlock()),
+                          // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
+                          // 浮层之下），且判据互斥——加载阶段已经有上面那个
+                          // 全屏圈，再叠一个就是两个圈（判据见
+                          // [showBufferingIndicator]）。
+                          //
+                          // 放这一层而不是控制浮层里：浮层隐藏时（opacity 0 +
+                          // IgnorePointer）缓冲提示仍必须可见——卡顿时用户
+                          // 恰恰看不到控制栏。
+                          if (showBufferingIndicator(
+                            isBuffering: _controller.isBuffering,
+                            isLoading: _controller.isLoading,
+                          ))
+                            Positioned.fill(
+                              child: PlayerBufferingIndicator(
+                                percent: _controller.bufferingPercent,
                               ),
-                              // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
-                              // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
-                              Positioned.fill(
-                                child: DanmakuOverlay(
-                                  items: _danmakuItems,
-                                  position: _controller.position,
-                                  style: _danmakuStyle,
-                                  liveItems: _liveItems,
-                                  liveNowMs: _liveNowMs,
-                                ),
-                              ),
-                              if (_controller.isLoading)
-                                const Positioned.fill(child: LoadingBlock()),
-                              // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
-                              // 浮层之下），且判据互斥——加载阶段已经有上面那个
-                              // 全屏圈，再叠一个就是两个圈（判据见
-                              // [showBufferingIndicator]）。
-                              //
-                              // 放这一层而不是控制浮层里：浮层隐藏时（opacity 0 +
-                              // IgnorePointer）缓冲提示仍必须可见——卡顿时用户
-                              // 恰恰看不到控制栏。
-                              if (showBufferingIndicator(
-                                isBuffering: _controller.isBuffering,
-                                isLoading: _controller.isLoading,
-                              ))
-                                Positioned.fill(
-                                  child: PlayerBufferingIndicator(
-                                    percent: _controller.bufferingPercent,
-                                  ),
-                                ),
-                              if (_loadError != null)
-                                Positioned.fill(
-                                  child: Center(
-                                    child: _PlayerErrorOverlay(
-                                      message: _loadError!,
-                                      url: _request.url,
-                                      onRetry: _load,
-                                      onResume: _resumeFromLatestProgress,
-                                      onNext: _playNext,
-                                      canGoNext:
+                            ),
+                          if (_loadError != null)
+                            Positioned.fill(
+                              child: Center(
+                                child: _PlayerErrorOverlay(
+                                  message: _loadError!,
+                                  url: _request.url,
+                                  onRetry: _load,
+                                  onResume: _resumeFromLatestProgress,
+                                  onNext: _playNext,
+                                  canGoNext:
+                                      !_isCatchup &&
+                                      (_isLive ||
                                           (_episodesCache.isNotEmpty
-                                              ? _episodesCache.length
-                                              : _episodes.length) >
-                                          _request.episodeIndex + 1,
-                                    ),
-                                  ),
+                                                  ? _episodesCache.length
+                                                  : _episodes.length) >
+                                              _request.episodeIndex + 1),
                                 ),
-                            ],
-                          ),
-                        ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    // 第 2 层：屏显（`design/02`）。自身已 IgnorePointer。
-                    Positioned.fill(
-                      child: PlayerOsdLayer(
-                        flags: widget.state.osdFlags,
-                        controlsVisible: _controlsVisible,
-                        title: '${_request.vodName} · ${_request.episodeName}',
-                        resolution: _mediaResolution() == '未知'
-                            ? null
-                            : _mediaResolution(),
-                        position: _controller.position,
-                        duration: _controller.duration,
-                        isLive: _request.directUrl,
-                        now: _osdNow,
-                        bytesPerSecond: _controller.bytesPerSecond,
-                        diagnostics: _osdDiagnosticsRows(),
-                        environment: _osdEnvironmentRows(),
-                      ),
-                    ),
-                    // 第 3 层：控制浮层（`design/01`）。
-                    //
-                    // 用 AnimatedOpacity 而不是 `if (_controlsVisible)`：
-                    // 条件插入会改变子树结构，且 Positioned.fill 的命中测试范围
-                    // 会随之跳变。隐藏时必须 IgnorePointer，否则透明按钮仍可点。
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        ignoring: !_controlsVisible,
-                        child: AnimatedOpacity(
-                          opacity: _controlsVisible ? 1 : 0,
-                          duration: AppMotion.fast,
-                          curve: AppMotion.ease,
-                          child: PlayerControlOverlay(
-                            topBar: _buildPlayerAppBar(),
-                            progressRow: _buildProgressRow(),
-                            actionButtons: _buildActionButtons(),
-                            actionGroups: _actionGroups(),
-                          ),
-                        ),
-                      ),
-                    ),
-                    // 第 4 层：右键菜单（`design/04` §3）。
-                    if (_contextMenuAnchor != null) ...[
-                      // 全屏透明遮罩：点击菜单外关闭。
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _closeContextMenu,
-                        ),
-                      ),
-                      PlayerContextMenu(
-                        anchor: _contextMenuAnchor!,
-                        viewport: MediaQuery.sizeOf(context),
-                        sections: _contextMenuSections(),
-                        onDismiss: _closeContextMenu,
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
-              ),
+                // 第 2 层：屏显（`design/02`）。自身已 IgnorePointer。
+                Positioned.fill(
+                  child: PlayerOsdLayer(
+                    flags: widget.state.osdFlags,
+                    controlsVisible: _controlsVisible,
+                    title: _isLive || _isCatchup
+                        ? _request.title
+                        : '${_request.vodName} · ${_request.episodeName}',
+                    resolution: _mediaResolution() == '未知'
+                        ? null
+                        : _mediaResolution(),
+                    position: _controller.position,
+                    duration: _controller.duration,
+                    isLive: _isLive,
+                    now: _osdNow,
+                    bytesPerSecond: _controller.bytesPerSecond,
+                    diagnostics: _osdDiagnosticsRows(),
+                    environment: _osdEnvironmentRows(),
+                  ),
+                ),
+                // 第 3 层：控制浮层（`design/01`）。
+                //
+                // 用 AnimatedOpacity 而不是 `if (_controlsVisible)`：
+                // 条件插入会改变子树结构，且 Positioned.fill 的命中测试范围
+                // 会随之跳变。隐藏时必须 IgnorePointer，否则透明按钮仍可点。
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: !_controlsVisible,
+                    child: AnimatedOpacity(
+                      opacity: _controlsVisible ? 1 : 0,
+                      duration: AppMotion.fast,
+                      curve: AppMotion.ease,
+                      child: PlayerControlOverlay(
+                        topBar: _buildPlayerAppBar(),
+                        progressRow: _buildProgressRow(),
+                        actionButtons: _buildActionButtons(),
+                        actionGroups: _actionGroups(),
+                      ),
+                    ),
+                  ),
+                ),
+                if (widget.liveSession != null)
+                  Positioned(
+                    right: AppSpace.lg,
+                    top: kToolbarHeight + AppSpace.sm,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('player-live-panel-toggle'),
+                      onPressed: _openLivePanel,
+                      icon: const Icon(Icons.live_tv, size: 18),
+                      label: const Text('直播源 / 频道'),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerLow,
+                      ),
+                    ),
+                  ),
+                if (_hasLivePanels && widget.liveSession != null) ...[
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _closeLivePanels,
+                    ),
+                  ),
+                  // 贴右：面板贴住窗口右缘，左侧始终留出画面可见区域。
+                  // 半透明底由 PlayerLivePanel 自己给（不看这里的宽度）。
+                  Positioned(
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    width: (MediaQuery.sizeOf(context).width * .56).clamp(
+                      560.0,
+                      MediaQuery.sizeOf(context).width < 720
+                          ? MediaQuery.sizeOf(context).width
+                          : 720.0,
+                    ),
+                    child: PlayerLivePanel(
+                      session: widget.liveSession!,
+                      lineChannel: _linePanelChannel,
+                      onDismiss: _closeLivePanels,
+                      onLines: _openLiveLines,
+                    ),
+                  ),
+                ],
+                // 第 4 层：右键菜单（`design/04` §3）。
+                if (_contextMenuAnchor != null) ...[
+                  // 全屏透明遮罩：点击菜单外关闭。
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _closeContextMenu,
+                    ),
+                  ),
+                  PlayerContextMenu(
+                    anchor: _contextMenuAnchor!,
+                    viewport: MediaQuery.sizeOf(context),
+                    sections: _contextMenuSections(),
+                    onDismiss: _closeContextMenu,
+                  ),
+                ],
+              ],
             ),
+          ),
         ),
+      ),
     );
   }
 
@@ -3084,7 +3129,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       elevation: 0,
       scrolledUnderElevation: 0,
       title: Text(
-        '${_request.vodName} · ${_request.episodeName}',
+        _isLive || _isCatchup
+            ? _request.title
+            : '${_request.vodName} · ${_request.episodeName}',
         overflow: TextOverflow.ellipsis,
       ),
       actions: [
@@ -3166,16 +3213,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               Icons.aspect_ratio_outlined,
               '画面比例与缩放',
             ),
-            _menuItem(
-              _PlayerMenuAction.mediaInfo,
-              Icons.info_outline,
-              '媒体信息',
-            ),
-            _menuItem(
-              _PlayerMenuAction.shortcuts,
-              Icons.keyboard,
-              '快捷键说明',
-            ),
+            _menuItem(_PlayerMenuAction.mediaInfo, Icons.info_outline, '媒体信息'),
+            _menuItem(_PlayerMenuAction.shortcuts, Icons.keyboard, '快捷键说明'),
           ],
         ),
       ],
@@ -3230,9 +3269,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               const Icon(Icons.podcasts, size: 16),
               const SizedBox(width: AppSpace.xs),
               Text(
-                [?_liveStatus, if (_liveOnline != null) '在线 $_liveOnline'].join(
-                  ' · ',
-                ),                style: Theme.of(context).textTheme.bodySmall,
+                formatPlayerLiveStatus(
+                  status: _liveStatus,
+                  online: _liveOnline,
+                ),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ),
@@ -3255,8 +3296,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       for (final spec in specs)
         switch (spec.id) {
           'prev' => IconButton(
-            tooltip: '上一集（[）',
-            onPressed: _playPrevious,
+            tooltip: _isLive ? '上一台（PgUp）' : '上一集（[）',
+            onPressed: _isCatchup ? null : _playPrevious,
             icon: const Icon(Icons.skip_previous),
           ),
           'play' => IconButton(
@@ -3265,8 +3306,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             icon: Icon(_controller.isPlaying ? Icons.pause : Icons.play_arrow),
           ),
           'next' => IconButton(
-            tooltip: '下一集（]）',
-            onPressed: _playNext,
+            tooltip: _isLive ? '下一台（PgDn）' : '下一集（]）',
+            onPressed: _isCatchup ? null : _playNext,
             icon: const Icon(Icons.skip_next),
           ),
           'mute' => IconButton(
@@ -3312,11 +3353,23 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               ),
             ],
           ),
-          'episodes' when episodes.isNotEmpty => OutlinedButton.icon(
-            onPressed: () => _showEpisodes(context, episodes),
-            icon: const Icon(Icons.list, size: 18),
-            label: Text('选集（${episodes.length}）'),
+          'episodes' when _isCatchup && widget.liveSession != null =>
+            OutlinedButton.icon(
+              onPressed: widget.liveSession!.returnToLive,
+              icon: const Icon(Icons.live_tv, size: 18),
+              label: const Text('回到直播'),
+            ),
+          'episodes' when _isLive => OutlinedButton.icon(
+            onPressed: () => _openLiveLines(widget.liveSession!.channel),
+            icon: const Icon(Icons.alt_route, size: 18),
+            label: Text('线路（${widget.liveSession!.lines.length}）'),
           ),
+          'episodes' when !_isCatchup && episodes.isNotEmpty =>
+            OutlinedButton.icon(
+              onPressed: () => _showEpisodes(context, episodes),
+              icon: const Icon(Icons.list, size: 18),
+              label: Text('选集（${episodes.length}）'),
+            ),
           'fullscreen' => IconButton(
             tooltip: '全屏（F11）',
             onPressed: _toggleFullscreen,
@@ -3353,6 +3406,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 16:9 剧照网格」，底部抽屉的高度放不下，改为居中弹窗。
   /// 面板本身不碰播放状态：切集、切线路都回调回这里。
   void _showEpisodes(BuildContext context, List<VodEpisode> episodes) {
+    if (_isLive) {
+      _openLiveLines(widget.liveSession!.channel);
+      return;
+    }
+    if (_isCatchup) return;
     final line = _lineOf(_request.flag);
     unawaited(
       showDialog<void>(
@@ -3368,8 +3426,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           episodes: episodes,
           // 只取**当前线路**那一份：切线路后 `_request.flag` 已经换过，
           // 拿别的线路的卡片会串图（长度相等时连错位都查不出来）。
-          episodeCards:
-              _request.episodeCardsByFlag[_request.flag] ?? const [],
+          episodeCards: _request.episodeCardsByFlag[_request.flag] ?? const [],
           // 详情页那一刻是倒序的话，面板的排列方向、区间标签与当前集定位都要跟着倒。
           reversed: _request.episodesReversed,
           episodeIndex: _request.episodeIndex,
@@ -3493,10 +3550,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     _syncOsdTimer();
     // 菜单打开期间不排隐藏计时器（`design/04` §5.4）。
-    if (_contextMenuAnchor != null) return;
+    if (_contextMenuAnchor != null || _hasLivePanels) return;
     _controlHideTimer = Timer(const Duration(seconds: 3), () {
       if (!mounted) return;
-      if (_contextMenuAnchor != null) return;
+      if (_contextMenuAnchor != null || _hasLivePanels) return;
       setState(() => _controlsVisible = false);
       _syncOsdTimer();
     });
@@ -3623,13 +3680,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           ),
           PlayerMenuItem(
             id: 'prev',
-            label: '上一集',
+            label: _isLive ? '上一台' : '上一集',
             icon: Icons.skip_previous,
             onSelect: act(_playPrevious),
           ),
           PlayerMenuItem(
             id: 'next',
-            label: '下一集',
+            label: _isLive ? '下一台' : '下一集',
             icon: Icons.skip_next,
             onSelect: act(_playNext),
           ),
@@ -4102,10 +4159,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                       id: 'settings_cache_cap_$mib',
                       label: '$mib MiB',
                       selected: _options.demuxerMaxBytesMiB == mib,
-                      onSelect: () =>
-                          _livePatchOptions(_options.copyWith(
-                            demuxerMaxBytesMiB: mib,
-                          )),
+                      onSelect: () => _livePatchOptions(
+                        _options.copyWith(demuxerMaxBytesMiB: mib),
+                      ),
                     ),
                 ],
               ),
@@ -4129,9 +4185,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               ),
               PlayerMenuItem(
                 id: 'settings_subtitle_provider_status',
-                label: subtitleSettings.hasAnyProvider
-                    ? '字幕源：已配置'
-                    : '字幕源：未配置',
+                label: subtitleSettings.hasAnyProvider ? '字幕源：已配置' : '字幕源：未配置',
                 icon: subtitleSettings.hasAnyProvider
                     ? Icons.check_circle_outline
                     : Icons.new_releases_outlined,
@@ -4676,7 +4730,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (final (key, description) in [
-              ...playerShortcuts,
+              for (final entry in playerShortcuts)
+                if ((!_isLive && !_isCatchup) || entry.$1 != '[ / ]') entry,
+              if (_isLive) ('PgUp / PgDn', '上一台 / 下一台（跨分组）'),
               ..._contextMenuShortcutHelp,
             ])
               Padding(

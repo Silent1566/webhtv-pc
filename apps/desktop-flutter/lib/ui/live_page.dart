@@ -21,6 +21,7 @@ import '../services/live_service.dart';
 import '../state/app_state.dart';
 import 'common.dart';
 import 'image_header_scope.dart';
+import 'live_playback_session.dart';
 import 'player_page.dart';
 import 'tokens.dart';
 import 'toast.dart';
@@ -80,6 +81,7 @@ class _LivePageState extends State<LivePage> {
 
   /// 当前预览的频道（未即点即播时展示线路列表）。
   LiveChannel? _preview;
+  int? _previewLine;
 
   /// 已加载的节目单（按 EPG 地址缓存；同一地址只拉一次）。
   final Map<String, EpgGuide> _guides = {};
@@ -91,8 +93,7 @@ class _LivePageState extends State<LivePage> {
   /// 「现在」的滑动时刻，用于当前节目判定；EPG 刷新时推进一次。
   late int _nowMs;
 
-  int _readNow() =>
-      (widget.clock ?? DateTime.now)().millisecondsSinceEpoch;
+  int _readNow() => (widget.clock ?? DateTime.now)().millisecondsSinceEpoch;
 
   String? _selectedSourceName;
 
@@ -218,74 +219,58 @@ class _LivePageState extends State<LivePage> {
   Future<void> _play(LiveChannel channel, {int startLine = 0}) async {
     final urls = channel.urls.where((url) => url.trim().isNotEmpty).toList();
     if (urls.isEmpty) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PlayerPage(
-          state: _state,
-          request: LivePage.requestForChannel(
-            channel,
-            sourceName: _selectedSourceName ?? 'live',
-            startLine: startLine,
-          ),
-          onLiveSourceFallback: () => _fallbackSourceRequest(channel),
+    final source = _sources.firstWhere(
+      (source) => source.name == _selectedSourceName,
+    );
+    final result = _states[source.name]?.result;
+    if (result == null) return;
+    final request = LivePage.requestForChannel(
+      channel,
+      sourceName: source.name,
+      startLine: startLine,
+    );
+    final session = LivePlaybackSession(
+      state: _state,
+      source: source,
+      playlist: result.playlist,
+      channel: channel,
+      lineIndex: request.episodeIndex,
+      guide: _guideForSource(result),
+    );
+    setState(() {
+      _preview = channel;
+      _previewLine = request.episodeIndex;
+    });
+    await _openPlayer(request, session);
+  }
+
+  Future<void> _openPlayer(
+    PlaybackRequest request,
+    LivePlaybackSession session,
+  ) async {
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              PlayerPage(state: _state, request: request, liveSession: session),
         ),
-      ),
-    );
-  }
-
-  /// 源级回退：在其他已加载/可加载的直播源里找同名频道。
-  ///
-  /// 归一化只去掉常见清晰度后缀与标点，不做模糊匹配——宁可找不到，
-  /// 也不要把「CCTV5」切到「CCTV5+」。
-  Future<PlaybackRequest?> _fallbackSourceRequest(LiveChannel channel) async {
-    if (!_state.liveSettings.sourceFallback) return null;
-    final current = _selectedSourceName;
-    for (final source in _sources) {
-      if (source.name == current) continue;
-      var result = _states[source.name]?.result;
-      if (result == null) {
-        try {
-          result = await _state.liveService.load(source);
-          if (!mounted) return null;
-          setState(() {
-            _states[source.name] = _SourceState(result: result);
-          });
-        } catch (error) {
-          _state.log.warning(
-            '回退源加载失败 name=${source.name} $error',
-            scope: 'live',
-          );
-          continue;
-        }
-      }
-      final match = _findChannel(result.playlist, channel.name);
-      if (match == null) continue;
-      setState(() => _preview = match);
-      return LivePage.requestForChannel(match, sourceName: source.name);
+      );
+      if (!mounted) return;
+      final result = LiveLoadResult(
+        source: session.source,
+        playlist: session.playlist,
+        latency: Duration.zero,
+      );
+      setState(() {
+        _selectedSourceName = session.source.name;
+        _states[session.source.name] = _SourceState(result: result);
+        _preview = session.channel;
+        _previewLine = session.lineIndex;
+      });
+      unawaited(_loadGuideFor(result));
+    } finally {
+      session.dispose();
     }
-    return null;
-  }
-
-  LiveChannel? _findChannel(LivePlaylist playlist, String name) {
-    final target = _normalizeChannelName(name);
-    if (target.isEmpty) return null;
-    for (final group in playlist.groups) {
-      for (final channel in group.channels) {
-        if (channel.urls.isEmpty) continue;
-        if (_normalizeChannelName(channel.name) == target) return channel;
-      }
-    }
-    return null;
-  }
-
-  String _normalizeChannelName(String raw) {
-    var text = raw.trim().toLowerCase();
-    text = text.replaceAll(RegExp(r'[（(][^)）]*[)）]'), '');
-    text = text.replaceAll(
-      RegExp(r'高清|超清|蓝光|4k|8k|hd|fhd|uhd|频道'),
-      '',
-    );
-    return text.replaceAll(RegExp(r'[^0-9a-z一-鿿]'), '');
   }
 
   /// 回看：用节目单的起止时间 + catchup 模板生成地址。
@@ -337,9 +322,21 @@ class _LivePageState extends State<LivePage> {
       ),
       directUrl: true,
     );
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PlayerPage(state: _state, request: request),
+    final result = _states[source.name]?.result;
+    if (result == null) return;
+    setState(() {
+      _preview = channel;
+      _previewLine = null;
+    });
+    await _openPlayer(
+      request,
+      LivePlaybackSession(
+        state: _state,
+        source: source,
+        playlist: result.playlist,
+        channel: channel,
+        guide: _guideForSource(result),
+        initialProgram: program,
       ),
     );
   }
@@ -355,7 +352,7 @@ class _LivePageState extends State<LivePage> {
       (source) => source.name == _selectedSourceName,
       orElse: () => sources.first,
     );
-    _selectedSourceName = selected.name;
+
     final state = _states[selected.name];
     final result = state?.result;
     final guideUrl = result == null ? null : _epgUrlFor(result);
@@ -363,56 +360,60 @@ class _LivePageState extends State<LivePage> {
     final guideLoading = guideUrl != null && _guideLoading.contains(guideUrl);
     final guideError = guideUrl == null ? null : _guideErrors[guideUrl];
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          width: 260,
-          child: _SourceList(
-            sources: sources,
-            selected: selected,
-            states: _states,
-            onSelect: (source) {
-              setState(() {
-                _selectedSourceName = source.name;
-                _preview = null;
-              });
-              if (_states[source.name]?.result == null) unawaitedLoad(source);
-            },
-            onRefresh: () => unawaitedLoad(selected, refresh: true),
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: (constraints.maxWidth * .22).clamp(176.0, 240.0),
+            child: _SourceList(
+              sources: sources,
+              selected: selected,
+              states: _states,
+              onSelect: (source) {
+                setState(() {
+                  _selectedSourceName = source.name;
+                  _preview = null;
+                  _previewLine = null;
+                });
+                if (_states[source.name]?.result == null) unawaitedLoad(source);
+              },
+              onRefresh: () => unawaitedLoad(selected, refresh: true),
+            ),
           ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: switch (state) {
-            null => const LoadingBlock(),
-            _SourceState(loading: true) =>
-              const LoadingBlock(),
-            _SourceState(error: final error?) => _LiveErrorView(
-              error: error,
-              onRetry: () => unawaitedLoad(selected, refresh: true),
-            ),
-            _SourceState(result: final result?) => _PlaylistView(
-              playlist: result.playlist,
-              guide: guide,
-              nowMs: _nowMs,
-              epgLoading: guideLoading,
-              epgError: guideError,
-              onRefreshEpg: guideUrl == null
-                  ? null
-                  : () => unawaited(
-                      _loadGuideFor(result, refresh: true),
-                    ),
-              preview: _preview,
-              onPreview: (channel) => setState(() => _preview = channel),
-              onPlay: _play,
-              defaultCatchup: selected.catchup,
-              onCatchup: _playCatchup,
-            ),
-            _ => const SizedBox.shrink(),
-          },
-        ),
-      ],
+          const VerticalDivider(width: 1),
+          Expanded(
+            child: switch (state) {
+              null => const LoadingBlock(),
+              _SourceState(loading: true) => const LoadingBlock(),
+              _SourceState(error: final error?) => _LiveErrorView(
+                error: error,
+                onRetry: () => unawaitedLoad(selected, refresh: true),
+              ),
+              _SourceState(result: final result?) => _PlaylistView(
+                playlist: result.playlist,
+                guide: guide,
+                nowMs: _nowMs,
+                epgLoading: guideLoading,
+                epgError: guideError,
+                onRefreshEpg: guideUrl == null
+                    ? null
+                    : () => unawaited(_loadGuideFor(result, refresh: true)),
+                preview: _preview,
+                previewLine: _previewLine,
+                onPreview: (channel) => setState(() {
+                  _preview = channel;
+                  _previewLine = null;
+                }),
+                onPlay: _play,
+                defaultCatchup: selected.catchup,
+                onCatchup: _playCatchup,
+              ),
+              _ => const SizedBox.shrink(),
+            },
+          ),
+        ],
+      ),
     );
   }
 }
@@ -472,9 +473,18 @@ class _SourceList extends StatelessWidget {
                 dense: true,
                 selected: selectedHere,
                 leading: Icon(_iconForType(source.type), size: 18),
-                title: Text(source.name, overflow: TextOverflow.ellipsis),
+                title: Tooltip(
+                  message: source.name,
+                  child: Text(
+                    source.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
                 subtitle: Text(
                   _subtitleFor(state),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 trailing: state?.loading == true
@@ -515,7 +525,7 @@ class _SourceList extends StatelessWidget {
 }
 
 /// 右侧：分组/频道树 + 频道线路预览。
-class _PlaylistView extends StatelessWidget {
+class _PlaylistView extends StatefulWidget {
   const _PlaylistView({
     required this.playlist,
     required this.guide,
@@ -524,6 +534,7 @@ class _PlaylistView extends StatelessWidget {
     required this.epgError,
     required this.onRefreshEpg,
     required this.preview,
+    required this.previewLine,
     required this.onPreview,
     required this.onPlay,
     required this.defaultCatchup,
@@ -531,82 +542,285 @@ class _PlaylistView extends StatelessWidget {
   });
 
   final LivePlaylist playlist;
-
-  /// 当前源的节目单；未加载/无 EPG 地址时为 null。
   final EpgGuide? guide;
   final int nowMs;
   final bool epgLoading;
-
-  /// EPG 加载失败（只提示，不影响直播，§13.3）。
   final AppError? epgError;
-
-  /// 刷新 EPG（null 表示该源没有 EPG 地址）。
   final VoidCallback? onRefreshEpg;
-
   final LiveChannel? preview;
+  final int? previewLine;
   final ValueChanged<LiveChannel> onPreview;
   final void Function(LiveChannel channel, {int startLine}) onPlay;
-
-  /// 源级默认回看参数（频道未声明时继承）。
   final CatchupSpec defaultCatchup;
   final void Function(LiveChannel channel, EpgProgram program) onCatchup;
 
   @override
+  State<_PlaylistView> createState() => _PlaylistViewState();
+}
+
+class _PlaylistViewState extends State<_PlaylistView> {
+  final _scroll = ScrollController();
+  List<Object> _rows = [];
+  int _groupIndex = 0;
+
+  /// 分组以抽屉层级展示：点分组名在中间列展开分组列表，
+  /// 选完自动收起并定位到该分组的频道。
+  bool _groupDrawerOpen = false;
+  static const _rowHeight = 64.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateRows();
+  }
+
+  void _updateRows() {
+    _rows = [
+      for (final group in widget.playlist.groups) ...[group, ...group.channels],
+    ];
+    _groupIndex = 0;
+  }
+
+  @override
+  void didUpdateWidget(_PlaylistView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.playlist, widget.playlist)) _updateRows();
+    if (!identical(oldWidget.preview, widget.preview) ||
+        !identical(oldWidget.playlist, widget.playlist)) {
+      final index = _rows.indexOf(widget.preview ?? Object());
+      if (index >= 0) {
+        final group = widget.playlist.groups.indexWhere(
+          (group) => group.channels.contains(widget.preview),
+        );
+        if (group >= 0) _groupIndex = group;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scroll.hasClients) return;
+          final top = index * _rowHeight;
+          final position = _scroll.position;
+          if (top < position.pixels ||
+              top + _rowHeight > position.pixels + position.viewportDimension) {
+            _scroll.jumpTo(top.clamp(0.0, position.maxScrollExtent));
+          }
+        });
+      }
+    }
+  }
+
+  /// 分组抽屉里的一行：名字 + 频道数，当前分组高亮。
+  Widget _buildGroupDrawer(ThemeData theme) {
+    final groups = widget.playlist.groups;
+    return ListView.builder(
+      key: const ValueKey('live-group-list'),
+      itemExtent: 56,
+      itemCount: groups.length,
+      itemBuilder: (context, index) {
+        final group = groups[index];
+        final selected = index == _groupIndex;
+        return ListTile(
+          key: ValueKey('live-group-$index'),
+          dense: true,
+          selected: selected,
+          selectedTileColor: theme.colorScheme.surfaceContainerHigh,
+          leading: Icon(
+            selected ? Icons.folder_open : Icons.folder_outlined,
+            size: 18,
+            color: selected ? theme.colorScheme.primary : null,
+          ),
+          title: Text(
+            group.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: selected ? AppWeight.title : AppWeight.body,
+            ),
+          ),
+          subtitle: Text(
+            '${group.channels.length} 频道',
+            style: theme.textTheme.bodySmall,
+          ),
+          onTap: () => _locateGroup(index),
+        );
+      },
+    );
+  }
+
+  String _currentGroupLabel() {
+    final groups = widget.playlist.groups;
+    if (groups.isEmpty) return '无分组';
+    final group = groups[_groupIndex.clamp(0, groups.length - 1)];
+    return '${group.name}（${group.channels.length}）';
+  }
+
+  void _locateGroup(int index) {
+    setState(() {
+      _groupIndex = index;
+      // 选完分组就把抽屉收回去，频道列表随之重建，滚动才有控制器可跳。
+      _groupDrawerOpen = false;
+    });
+    final row = _rows.indexOf(widget.playlist.groups[index]);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(
+        (row * _rowHeight).clamp(0.0, _scroll.position.maxScrollExtent),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (playlist.groups.isEmpty) {
+    if (widget.playlist.groups.isEmpty) {
       return const EmptyState(
         icon: Icons.tv_off_outlined,
         title: '该直播源没有解析出任何频道',
       );
     }
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _EpgStatusBar(
-          guide: guide,
-          loading: epgLoading,
-          error: epgError,
-          sourceDeclared: playlist.epg != null || onRefreshEpg != null,
-          onRefresh: onRefreshEpg,
+          guide: widget.guide,
+          loading: widget.epgLoading,
+          error: widget.epgError,
+          sourceDeclared:
+              widget.playlist.epg != null || widget.onRefreshEpg != null,
+          onRefresh: widget.onRefreshEpg,
         ),
         const Divider(height: 1),
         Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                flex: 3,
-                child: ListView(
-                  children: [
-                    for (final group in playlist.groups)
-                      _GroupSection(
-                        group: group,
-                        guide: guide,
-                        nowMs: nowMs,
-                        preview: preview,
-                        onPreview: onPreview,
-                        onPlay: onPlay,
+          child: LayoutBuilder(
+            builder: (context, constraints) => Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.md,
+                        ),
+                        child: Tooltip(
+                          message: '定位分组',
+                          child: InkWell(
+                            key: const ValueKey('live-group-toggle'),
+                            onTap: () => setState(
+                              () => _groupDrawerOpen = !_groupDrawerOpen,
+                            ),
+                            child: SizedBox(
+                              height: 40,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    _groupDrawerOpen
+                                        ? Icons.folder_open
+                                        : Icons.folder_outlined,
+                                    size: 18,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: AppSpace.sm),
+                                  Expanded(
+                                    child: Text(
+                                      _currentGroupLabel(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.titleSmall,
+                                    ),
+                                  ),
+                                  Icon(
+                                    _groupDrawerOpen
+                                        ? Icons.expand_less
+                                        : Icons.expand_more,
+                                    size: 18,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                  ],
-                ),
-              ),
-              if (preview != null && preview!.urls.isNotEmpty) ...[
-                const VerticalDivider(width: 1),
-                SizedBox(
-                  width: 340,
-                  child: _ChannelDetail(
-                    channel: preview!,
-                    guide: guide,
-                    nowMs: nowMs,
-                    onPlay: (index) => onPlay(preview!, startLine: index),
-                    catchup: preview!.catchup.isEmpty
-                        ? defaultCatchup
-                        : preview!.catchup,
-                    onCatchup: (program) => onCatchup(preview!, program),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _groupDrawerOpen
+                            ? _buildGroupDrawer(theme)
+                            : ListView.builder(
+                                key: const ValueKey('live-channel-list'),
+                                controller: _scroll,
+                                itemExtent: _rowHeight,
+                                itemCount: _rows.length,
+                                itemBuilder: (context, index) {
+                                  final row = _rows[index];
+                                  if (row is LiveGroup) {
+                                    return Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        AppSpace.md,
+                                        AppSpace.xl,
+                                        AppSpace.md,
+                                        AppSpace.sm,
+                                      ),
+                                      child: Tooltip(
+                                        message: row.name,
+                                        child: Text(
+                                          '${row.name}（${row.channels.length}）',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.titleSmall,
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  final channel = row as LiveChannel;
+                                  return _ChannelRow(
+                                    channel: channel,
+                                    guide: widget.guide,
+                                    nowMs: widget.nowMs,
+                                    selected: identical(
+                                      channel,
+                                      widget.preview,
+                                    ),
+                                    onPreview: () => widget.onPreview(channel),
+                                    onPlay: () => widget.onPlay(channel),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
                   ),
                 ),
+                const VerticalDivider(width: 1),
+                SizedBox(
+                  width: (constraints.maxWidth * .46).clamp(232.0, 340.0),
+                  child: widget.preview == null
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(AppSpace.lg),
+                            child: Text(
+                              '单击频道播放\n使用详情按钮浏览线路与节目单',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        )
+                      : _ChannelDetail(
+                          channel: widget.preview!,
+                          guide: widget.guide,
+                          nowMs: widget.nowMs,
+                          selectedLine: widget.previewLine,
+                          onPlay: (index) =>
+                              widget.onPlay(widget.preview!, startLine: index),
+                          catchup: widget.preview!.catchup.isEmpty
+                              ? widget.defaultCatchup
+                              : widget.preview!.catchup,
+                          onCatchup: (program) =>
+                              widget.onCatchup(widget.preview!, program),
+                        ),
+                ),
               ],
-            ],
+            ),
           ),
         ),
       ],
@@ -647,10 +861,7 @@ class _EpgStatusBar extends StatelessWidget {
             '(${loaded.channels.length} 个频道)',
       ),
       _ when loading => (Icons.hourglass_empty, '节目单加载中…'),
-      _ when sourceDeclared => (
-        Icons.event_busy,
-        '该直播源声明了 EPG 地址，暂未加载',
-      ),
+      _ when sourceDeclared => (Icons.event_busy, '该直播源声明了 EPG 地址，暂未加载'),
       _ => (Icons.event_busy, '该直播源未声明 EPG 地址'),
     };
 
@@ -685,66 +896,97 @@ class _EpgStatusBar extends StatelessWidget {
   }
 }
 
-class _GroupSection extends StatelessWidget {
-  const _GroupSection({
-    required this.group,
+class _ChannelRow extends StatelessWidget {
+  const _ChannelRow({
+    required this.channel,
     required this.guide,
     required this.nowMs,
-    required this.preview,
+    required this.selected,
     required this.onPreview,
     required this.onPlay,
   });
 
-  final LiveGroup group;
+  final LiveChannel channel;
   final EpgGuide? guide;
   final int nowMs;
-  final LiveChannel? preview;
-  final ValueChanged<LiveChannel> onPreview;
-  final void Function(LiveChannel channel, {int startLine}) onPlay;
+  final bool selected;
+  final VoidCallback onPreview;
+  final VoidCallback onPlay;
 
   @override
   Widget build(BuildContext context) {
-    return ExpansionTile(
-      initiallyExpanded: true,
-      title: Text('${group.name}（${group.channels.length}）'),
-      children: [
-        for (final channel in group.channels)
-          ListTile(
-            dense: true,
-            selected: identical(channel, preview),
-            leading: channel.logo != null && channel.logo!.isNotEmpty
-                ? Image.network(
-                    channel.logo!,
-                    width: 28,
-                    height: 20,
-                    fit: BoxFit.contain,
-                    // 频道图标也是外部图片：按 host 注入顶层 `headers` 规则（§7.4.6）。
-                    headers: imageHeadersOrNull(context, channel.logo!),
-                    errorBuilder: (_, _, _) => const Icon(Icons.live_tv, size: 18),
-                  )
-                : const Icon(Icons.live_tv, size: 18),
-            title: Text(channel.name, overflow: TextOverflow.ellipsis),
-            subtitle: _ChannelSubtitle(
-              channel: channel,
-              nowLabel: epgNowLabel(guide, channel, nowMs),
-            ),
-            trailing: channel.urls.isEmpty
-                ? null
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (channel.urls.length > 1)
-                        Text('${channel.urls.length} 线路'),
-                      IconButton(
-                        tooltip: '播放 ${channel.name}',
-                        icon: const Icon(Icons.play_arrow, size: 18),
-                        onPressed: () => onPlay(channel),
+    final theme = Theme.of(context);
+    final canPlay = channel.urls.any((url) => url.trim().isNotEmpty);
+    return Material(
+      color: selected
+          ? theme.colorScheme.surfaceContainerHigh
+          : theme.colorScheme.surface,
+      child: InkWell(
+        onTap: canPlay ? onPlay : onPreview,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+          child: Row(
+            children: [
+              channel.logo != null && channel.logo!.isNotEmpty
+                  ? Image.network(
+                      channel.logo!,
+                      width: 24,
+                      height: 24,
+                      fit: BoxFit.contain,
+                      headers: imageHeadersOrNull(context, channel.logo!),
+                      errorBuilder: (_, _, _) =>
+                          const Icon(Icons.live_tv, size: 18),
+                    )
+                  : Icon(
+                      Icons.live_tv,
+                      size: 18,
+                      color: selected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+              const SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Tooltip(
+                      message: channel.name,
+                      child: Text(
+                        channel.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: selected
+                              ? AppWeight.title
+                              : AppWeight.body,
+                        ),
                       ),
-                    ],
-                  ),
-            onTap: () => onPreview(channel),
+                    ),
+                    _ChannelSubtitle(
+                      channel: channel,
+                      nowLabel: epgNowLabel(guide, channel, nowMs),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '详情与节目单 ${channel.name}',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.list_alt, size: 18),
+                onPressed: onPreview,
+              ),
+              if (canPlay)
+                IconButton(
+                  tooltip: '播放 ${channel.name}',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.play_arrow, size: 18),
+                  onPressed: onPlay,
+                ),
+            ],
           ),
-      ],
+        ),
+      ),
     );
   }
 }
@@ -759,21 +1001,36 @@ class _ChannelSubtitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final number = channel.number;
+    final count = channel.urls.where((url) => url.trim().isNotEmpty).length;
+    final lineLabel = count == 0 ? '无线路' : '$count 线路';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (number != null)
-          Text('频道 $number', style: theme.textTheme.bodySmall),
+        Row(
+          children: [
+            if (channel.number != null) ...[
+              Expanded(
+                child: Text(
+                  '频道 ${channel.number}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(width: AppSpace.xs),
+            ],
+            Text(lineLabel, style: theme.textTheme.bodySmall),
+          ],
+        ),
         if (nowLabel != null)
           Text(
             nowLabel!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.primary,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
       ],
     );
@@ -787,6 +1044,7 @@ class _ChannelDetail extends StatelessWidget {
     required this.guide,
     required this.nowMs,
     required this.onPlay,
+    required this.selectedLine,
     required this.catchup,
     required this.onCatchup,
   });
@@ -795,6 +1053,7 @@ class _ChannelDetail extends StatelessWidget {
   final EpgGuide? guide;
   final int nowMs;
   final ValueChanged<int> onPlay;
+  final int? selectedLine;
 
   /// 生效的回看参数（频道级优先，源级兜底）。
   final CatchupSpec catchup;
@@ -811,17 +1070,24 @@ class _ChannelDetail extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(channel.name, style: theme.textTheme.titleMedium),
+          Tooltip(
+            message: channel.name,
+            child: Text(
+              channel.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleMedium,
+            ),
+          ),
           const SizedBox(height: 4),
           Text(
             '${channel.group} · ${channel.urls.length} 条线路',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: theme.textTheme.bodySmall,
           ),
           if (channel.epgId != null)
-            Text(
-              'EPG: ${channel.epgId}',
-              style: theme.textTheme.bodySmall,
-            ),
+            Text('EPG: ${channel.epgId}', style: theme.textTheme.bodySmall),
         ],
       ),
     );
@@ -833,7 +1099,13 @@ class _ChannelDetail extends StatelessWidget {
         children: [
           header,
           const Divider(height: 1),
-          Expanded(child: _LineList(channel: channel, onPlay: onPlay)),
+          Expanded(
+            child: _LineList(
+              channel: channel,
+              onPlay: onPlay,
+              selectedLine: selectedLine,
+            ),
+          ),
         ],
       );
     }
@@ -862,7 +1134,11 @@ class _ChannelDetail extends StatelessWidget {
                   catchup: catchup,
                   onCatchup: onCatchup,
                 ),
-                _LineList(channel: channel, onPlay: onPlay),
+                _LineList(
+                  channel: channel,
+                  onPlay: onPlay,
+                  selectedLine: selectedLine,
+                ),
               ],
             ),
           ),
@@ -921,7 +1197,7 @@ class _ProgramList extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.bodyMedium?.copyWith(
               color: color,
-              fontWeight: live ? FontWeight.w600 : null,
+              fontWeight: live ? AppWeight.title : AppWeight.body,
             ),
           ),
           subtitle: Text(
@@ -936,29 +1212,37 @@ class _ProgramList extends StatelessWidget {
 
 /// 频道线路列表（多线路逐个可选，§13.3）。
 class _LineList extends StatelessWidget {
-  const _LineList({required this.channel, required this.onPlay});
+  const _LineList({
+    required this.channel,
+    required this.onPlay,
+    required this.selectedLine,
+  });
 
   final LiveChannel channel;
   final ValueChanged<int> onPlay;
+  final int? selectedLine;
 
   @override
   Widget build(BuildContext context) {
+    final urls = channel.urls.where((url) => url.trim().isNotEmpty).toList();
     return ListView.builder(
-      itemCount: channel.urls.length,
-      itemBuilder: (context, index) => ListTile(
-        dense: true,
-        leading: CircleAvatar(
-          radius: 12,
-          child: Text('${index + 1}', style: const TextStyle(fontSize: 11)),
+      itemCount: urls.length,
+      itemBuilder: (context, index) => Tooltip(
+        message: urls[index],
+        child: ListTile(
+          dense: true,
+          selected: selectedLine == index,
+          selectedTileColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+          title: Text('线路 ${index + 1}'),
+          subtitle: Text(
+            urls[index],
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          trailing: const Icon(Icons.play_arrow, size: 18),
+          onTap: () => onPlay(index),
         ),
-        title: Text(
-          channel.urls[index],
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        trailing: const Icon(Icons.play_arrow, size: 18),
-        onTap: () => onPlay(index),
       ),
     );
   }
