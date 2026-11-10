@@ -148,7 +148,7 @@ void main() {
       final reloaded = UiPreferencesStore(path: settingsPath);
       await reloaded.load();
       expect(reloaded.buttonOrder.take(3).toList(), ['next', 'play', 'prev']);
-      expect(reloaded.buttonOrder.length, 8, reason: '缺失项补全到末尾');
+      expect(reloaded.buttonOrder.length, kPlayerButtons.length, reason: '缺失项补全到末尾');
       expect(reloaded.buttonHidden, {'speed', 'fullscreen'});
       expect(reloaded.hasExplicitPlayerButtons, isTrue);
     });
@@ -207,7 +207,7 @@ void main() {
       final raw = readRaw();
       final pb = (raw['ui'] as Map)['playerButtons'] as Map;
       final persisted = (pb['order'] as List).cast<String>();
-      expect(persisted.length, 8, reason: '落盘的必须是补全后的完整顺序');
+      expect(persisted.length, kPlayerButtons.length, reason: '落盘的必须是补全后的完整顺序');
       expect(persisted.take(2).toList(), ['next', 'play']);
       expect(persisted.toSet(), defaultButtonOrder().toSet());
     });

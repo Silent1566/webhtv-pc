@@ -97,12 +97,12 @@ void main() {
   const defaultPreview =
       '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  倍速  ·  剧集  ·  全屏';
 
-  testWidgets('列出全部 8 个按钮与中文名', (tester) async {
+  testWidgets('列出全部 9 个按钮与中文名', (tester) async {
     await pumpPage(tester);
     for (final spec in kPlayerButtons) {
       expect(find.text(spec.label), findsWidgets, reason: '缺少「${spec.label}」');
     }
-    // 8 行都真的建出来了，而不是只建了视口内那几行。
+    // 9 行都真的建出来了，而不是只建了视口内那几行。
     for (final spec in kPlayerButtons) {
       expect(rowOf(spec.id), findsOneWidget, reason: '缺少 ${spec.id} 行');
     }
@@ -111,6 +111,7 @@ void main() {
   testWidgets('列表按当前顺序渲染，而不是定义顺序', (tester) async {
     // 反向顺序：任何「忽略 _order、直接按 kPlayerButtons 渲染」的实现都会失败。
     const reversed = [
+      'external_player',
       'fullscreen',
       'episodes',
       'speed',
@@ -126,7 +127,7 @@ void main() {
     final tops = [
       for (final id in state.playerButtonOrder) tester.getRect(rowOf(id)).top,
     ];
-    expect(tops.length, 8);
+    expect(tops.length, kPlayerButtons.length);
     for (var i = 1; i < tops.length; i++) {
       expect(tops[i], greaterThan(tops[i - 1]), reason: '第 $i 行应排在上一行下方');
     }
@@ -146,9 +147,15 @@ void main() {
       final tile = tester.widget<ListTile>(rowOf(spec.id));
       final subtitle = tile.subtitle;
       expect(subtitle, isA<Text>(), reason: '${spec.id} 行应有分组副标题');
+      // `external_player` 是唯一例外：控制栏在没配置播放器时不渲染它
+      // （`player_page._buildActionButtons` 的 `when` 分支），副标题要额外
+      // 说明「拨了开关也看不见」的原因。其余行仍然是纯粹的分组名。
+      final expected = spec.id == 'external_player'
+          ? '${spec.group.label} · 未配置播放器，暂不显示'
+          : spec.group.label;
       expect(
         (subtitle! as Text).data,
-        spec.group.label,
+        expected,
         reason: '${spec.id} 行的分组标签应为「${spec.group.label}」',
       );
     }
@@ -167,7 +174,7 @@ void main() {
     try {
       await pumpPage(tester);
       final rows = tester.widgetList(find.byType(ListTile)).length;
-      expect(rows, 8);
+      expect(rows, kPlayerButtons.length);
       // `ReorderableListView.buildDefaultDragHandles` 默认 true，会在**行尾**再插一个
       // 无 key 的手柄，正好压在 trailing 的开关上。那个手柄不会让任何 byKey 断言失败，
       // 所以必须用总数把它抓出来。
@@ -366,6 +373,7 @@ void main() {
       'speed',
       'episodes',
       'fullscreen',
+      'external_player',
     ]);
     // 页面自身也要跟着重排。
     expect(renderedOrder(tester).first, 'play');
@@ -397,6 +405,7 @@ void main() {
       'speed',
       'episodes',
       'fullscreen',
+      'external_player',
     ]);
     expect(renderedOrder(tester).take(2).toList(), ['play', 'prev']);
   });

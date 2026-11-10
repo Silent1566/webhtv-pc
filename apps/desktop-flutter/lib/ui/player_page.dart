@@ -36,6 +36,7 @@ import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/danmaku_library_service.dart';
 import '../services/danmaku_service.dart';
+import '../services/external_player.dart';
 import '../services/live_danmaku_session.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
@@ -46,6 +47,7 @@ import 'subtitle_settings_page.dart';
 import 'danmaku_overlay.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
+import 'external_player_picker_dialog.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
 import 'live_playback_session.dart';
@@ -163,11 +165,14 @@ class PlayerPage extends StatefulWidget {
     this.danmakuLoader,
     this.onLiveSourceFallback,
     this.liveSession,
+    this.externalPlayerStarter,
   });
 
   final AppState state;
   final PlaybackRequest request;
   final LivePlaybackSession? liveSession;
+  final Future<Process> Function(String executable, List<String> arguments)?
+  externalPlayerStarter;
 
   /// 直播源级回退（Phase 9）：当前源所有线路都失败时，向调用方要下一个
   /// 同名频道的播放请求；返回 null 表示没有可回退的源。
@@ -2617,12 +2622,98 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  // -------------------------------------------------------------- 外部播放器
+
+  /// 当前外调中的播放器；`null` 表示没有外调播放。
+  ///
+  /// 只在 UI 层记事：外部进程什么时候退出我们不知道，也不去轮询。它只用来
+  /// 回答一个问题——换集前要不要提醒用户「外部播放会断」。
+  String? _externalPlayerRunning;
+
+  /// 用外部本地播放器打开当前这一集。
+  ///
+  /// 入口只放在播放器页：外部播放器要的是**已经解析好的媒体地址**，而地址、
+  /// Header 注入与代理会话都只在这一层存在（详情页手里只有站点入口目标）。
+  Future<void> _openInExternalPlayer() async {
+    final previous = widget.state.externalPlayerPath;
+    final missing = previous != null && !File(previous).existsSync();
+    final executable = await _pickExternalPlayer(pathMissing: missing);
+    if (!mounted || executable == null) return;
+
+    final result = await ExternalPlayers.launch(
+      executable: executable,
+      url: _request.url,
+      starter: widget.externalPlayerStarter,
+    );
+    if (!mounted) return;
+    if (!result.ok) {
+      _showPlayerMessage(result.error ?? '外部播放器启动失败', kind: ToastKind.error);
+      return;
+    }
+    // 外调成功后暂停内置：否则两个播放器同时出声。
+    unawaited(_controller.pause());
+    setState(() => _externalPlayerRunning = executable);
+    _showPlayerMessage('已用外部播放器打开', kind: ToastKind.success);
+  }
+
+  /// 上次路径只预选，只有确认使用后才记录并外调。
+  Future<String?> _pickExternalPlayer({bool pathMissing = false}) async {
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (_) => ExternalPlayerPickerDialog(
+        loadPlayers: widget.state.listExternalPlayers,
+        savePlayer: widget.state.saveExternalPlayer,
+        selectedPath: widget.state.externalPlayerPath,
+        pathMissing: pathMissing,
+      ),
+    );
+    if (!mounted || chosen == null) return null;
+    final saved = await widget.state.setExternalPlayerPath(chosen);
+    if (!mounted) return null;
+    if (!saved) {
+      _showPlayerMessage('播放器选择保存失败，请重试。', kind: ToastKind.error);
+      return null;
+    }
+    return chosen;
+  }
+
+  /// 换集前确认：外部播放器拿的是本地代理地址，换集会让代理重建会话。
+  Future<bool> _confirmDropExternalPlayback() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('中断外部播放？'),
+        content: const Text('换集会切换本地代理会话，外部播放器里的这一集会立即中断。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('继续换集'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _openTarget(
     VodEpisode episode, {
     required String flag,
     required int episodeIndex,
   }) async {
     final state = widget.state;
+    // 外调播放依赖当前代理会话：换集会重建会话并撤掉 token，外部播放器随即
+    // 断流。撤之前先把话说清楚，别让用户以为播放器自己崩了。
+    // 顺序在 `_beginMediaTransition()` **之前**：用户取消换集时不应该已经
+    // 落了一次进度、并把旧一代的媒体回调判成过期。
+    if (_externalPlayerRunning != null) {
+      final proceed = await _confirmDropExternalPlayback();
+      if (!mounted || !proceed) return;
+      setState(() => _externalPlayerRunning = null);
+    }
     final generation = _beginMediaTransition();
     try {
       // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
@@ -2992,7 +3083,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         : _mediaResolution(),
                     position: _controller.position,
                     duration: _controller.duration,
-                    isLive: _isLive,
+                    isLive: _isLive || (_request.directUrl && !_isCatchup),
                     now: _osdNow,
                     bytesPerSecond: _controller.bytesPerSecond,
                     diagnostics: _osdDiagnosticsRows(),
@@ -3256,7 +3347,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 用户将无法得知直播弹幕为什么没有弹幕。
         //
         // 放在进度行而不是动作行：动作行是**可配置按钮**的集合
-        // （`resolveVisibleButtons` 的 8 个 id，`PlayerOverlayActionRow`
+        // （`resolveVisibleButtons` 的 9 个 id，`PlayerOverlayActionRow`
         // 还断言 buttons 与 groups 一一对应），状态指示器不是按钮，
         // 混进去会破坏那个一一对应。
         //
@@ -3374,6 +3465,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             tooltip: '全屏（F11）',
             onPressed: _toggleFullscreen,
             icon: const Icon(Icons.fullscreen),
+          ),
+          // 未配置外部播放器时落到下面的兜底占位：按钮默认不出现，配置过才有。
+          'external_player' when widget.state.hasExternalPlayer => IconButton(
+            tooltip: _externalPlayerRunning == null ? '用外部播放器打开' : '外部播放器播放中',
+            onPressed: () => unawaited(_openInExternalPlayer()),
+            icon: Icon(
+              _externalPlayerRunning == null
+                  ? Icons.open_in_new
+                  : Icons.play_circle_fill,
+            ),
           ),
           // 条件不成立的项（如没有剧集时的 `episodes`）不渲染。
           // 占位仍在：`_actionGroups` 是按 `resolveVisibleButtons` 的长度配平的。
@@ -3716,6 +3817,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             icon: Icons.repeat,
             selected: _repeat != PlaybackRepeat.off || !_sleepTimer.idle,
             onSelect: act(_showPlaybackModeSheet),
+          ),
+          // 外调：外部播放器要的是已解析地址，所以这个家只能在这里。
+          // 未配置播放器时也保留该项——点进去就是选择播放器，否则第一次
+          // 使用的人找不到任何入口（控制栏按钮在未配置时不渲染）。
+          PlayerMenuItem(
+            id: 'external_player',
+            label: '用外部播放器打开…',
+            icon: Icons.open_in_new,
+            selected: _externalPlayerRunning != null,
+            onSelect: act(() => unawaited(_openInExternalPlayer())),
           ),
         ],
       ),
@@ -4327,7 +4438,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   //    驱动，`await` 之后的那次 `setState` 可能永远等不到
   //    （`player_button_config_page.dart:71-75` 记录过同一个坑）。
   //
-  // 为什么**不关菜单**：这一层里有 5 个开关 + 8 个控制栏按钮，用户的真实
+  // 为什么**不关菜单**：这一层里有 5 个开关 + 9 个控制栏按钮，用户的真实
   // 动作是「连着改几项再对比效果」。每改一项就关菜单，等于每一项都要重新
   // 右键、重新走两三层——那正是这次要消灭的负担。
 
