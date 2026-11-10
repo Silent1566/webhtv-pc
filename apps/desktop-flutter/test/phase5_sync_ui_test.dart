@@ -29,6 +29,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 
+import 'support/settings_navigation.dart';
+
 /// 假桥接服务：不碰网络，行为由测试逐项设定。
 class FakeBridge extends AndroidBridgeService {
   FakeBridge() : super(log: LogService());
@@ -356,8 +358,7 @@ void main() {
       expect(state.syncState.lastOperation, contains('bridge-import'));
     });
 
-    testWidgets('导入时带回直播源并落进配置记录（用户反馈：桥接没有同步直播源）',
-        (tester) async {
+    testWidgets('导入时带回直播源并落进配置记录（用户反馈：桥接没有同步直播源）', (tester) async {
       // T4 网关的 lives 恒为空，直播源必须另取（见 fetchLiveSources）。
       // 本用例锁定**接线**：importSites 真的把取回的直播源写进保存的配置。
       // （服务层自身的请求形态由 phase5_android_bridge_service_test 锁定。）
@@ -382,11 +383,7 @@ void main() {
       await dismissSwitchDialog(tester);
 
       final record = state.database!.listConfigs().single;
-      expect(
-        record.liveCount,
-        2,
-        reason: '取回的直播源必须落进配置记录（否则直播页仍是空的）',
-      );
+      expect(record.liveCount, 2, reason: '取回的直播源必须落进配置记录（否则直播页仍是空的）');
       final saved = record.json;
       final lives = saved['lives'];
       expect(lives, isA<List<Object?>>());
@@ -440,11 +437,7 @@ void main() {
         find.byKey(const ValueKey('bridge-switch-confirm-ok')),
       );
 
-      expect(
-        state.activeRecord?.id,
-        recordId,
-        reason: '用户确认后必须真的切到刚导入的配置',
-      );
+      expect(state.activeRecord?.id, recordId, reason: '用户确认后必须真的切到刚导入的配置');
     });
 
     testWidgets('导入确认框选「稍后再说」→ 不切换（保留 Q10 语义）', (tester) async {
@@ -455,11 +448,7 @@ void main() {
       final before = state.activeRecord?.id;
       await tapIo(tester, find.byKey(const ValueKey('bridge-switch-cancel')));
 
-      expect(
-        state.activeRecord?.id,
-        before,
-        reason: '取消后当前配置必须保持不变（导入本身不切换）',
-      );
+      expect(state.activeRecord?.id, before, reason: '取消后当前配置必须保持不变（导入本身不切换）');
       expect(
         find.byKey(const ValueKey('bridge-switch-confirm')),
         findsNothing,
@@ -488,11 +477,7 @@ void main() {
         findsNothing,
         reason: '当前配置已指向该设备时不应再弹切换确认',
       );
-      expect(
-        state.activeRecord?.id,
-        active,
-        reason: '未弹框则当前配置应保持不变',
-      );
+      expect(state.activeRecord?.id, active, reason: '未弹框则当前配置应保持不变');
     });
 
     testWidgets('主机修正必须用户可见（P2 + G10 的 bridge-host- 符号）', (tester) async {
@@ -509,7 +494,8 @@ void main() {
       await tapIo(tester, find.byKey(const ValueKey('android-import')));
 
       expect(find.text('站点地址已修正'), findsOneWidget);
-      expect(find.byKey(const ValueKey('bridge-host-csp_0')), findsOneWidget);      expect(pageText(tester), contains('127.0.0.1:9978 → 192.168.50.9:9978'));
+      expect(find.byKey(const ValueKey('bridge-host-csp_0')), findsOneWidget);
+      expect(pageText(tester), contains('127.0.0.1:9978 → 192.168.50.9:9978'));
     });
   });
 
@@ -639,9 +625,9 @@ void main() {
       expect(request.url.queryParameters['type'], 'history');
       expect(request.url.queryParameters['do'], 'sync');
       // 载荷必须是「源标识 + 该源自己的订阅地址」，绝不能是网关地址。
-      final payload =
-          jsonDecode(Uri.splitQueryString(request.body)['config']!)
-              as Map<String, Object?>;
+      final payload = jsonDecode(
+        Uri.splitQueryString(request.body)['config']!,
+      ) as Map<String, Object?>;
       expect(payload['configKey'], 'source-a');
       expect(payload['url'], 'https://sub.example/a.json');
       expect(
@@ -655,6 +641,22 @@ void main() {
   });
 
   group('设置页入口可达性（发布包反馈回归）', () {
+    testWidgets('TMDB 设置不再包含安卓接入入口', (tester) async {
+      tester.view.physicalSize = const Size(1400, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(home: TmdbSettingsPage(state: state)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('tmdb-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-test')), findsOneWidget);
+      expect(find.byKey(const ValueKey('settings-android-open')), findsNothing);
+      expect(find.text('设备与同步'), findsNothing);
+    });
+
     // 背景（真实用户反馈）：安卓接入入口原先挂在 `TmdbSettingsPage` 底部，
     // 用户要先点「打开 TMDB 设置」再滚到底才能看到，于是以为"正式版没编进去"。
     //
@@ -662,23 +664,23 @@ void main() {
     // app.so（确实存在，类被保留了），断言不了"运行时能不能点到"；
     // 而 widget 用例此前只测了 `AndroidSettingsPage` 自身，没测它怎么被进入。
     //
-    // 本用例断言：设置页**一层**即可见安卓入口，且点击真正进入接入页。
-    testWidgets('设置页无条件可见「打开安卓接入」，点击进入接入页', (tester) async {
+    // 本用例断言：设置页选择连接类即可见安卓入口，且点击真正进入接入页。
+    testWidgets('选连接类后可见「打开安卓接入」，点击进入接入页', (tester) async {
       tester.view.physicalSize = const Size(1400, 2600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+        MaterialApp(
+          home: Scaffold(body: SettingsPage(state: state)),
+        ),
       );
       await tester.pumpAndSettle();
 
+      await selectSettingsCategory(tester, 'connections');
+
       final entry = find.byKey(const ValueKey('settings-android-open'));
-      expect(
-        entry,
-        findsOneWidget,
-        reason: '设置页必须有安卓接入入口（不得再嵌套进 TMDB 设置页）',
-      );
+      expect(entry, findsOneWidget, reason: '设置页必须有安卓接入入口（不得再嵌套进 TMDB 设置页）');
       expect(find.text('安卓接入'), findsWidgets);
       expect(
         find.byKey(const ValueKey('settings-android-summary')),
@@ -703,16 +705,19 @@ void main() {
       addTearDown(tester.view.reset);
 
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+        MaterialApp(
+          home: Scaffold(body: SettingsPage(state: state)),
+        ),
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('settings-android-open')), findsOneWidget);
+      await selectSettingsCategory(tester, 'connections');
+
       expect(
-        pageText(tester),
-        contains('未接入'),
-        reason: '未接入设备时摘要应说明可扫描或手动输入',
+        find.byKey(const ValueKey('settings-android-open')),
+        findsOneWidget,
       );
+      expect(pageText(tester), contains('未接入'), reason: '未接入设备时摘要应说明可扫描或手动输入');
     });
   });
 
@@ -761,7 +766,10 @@ void main() {
         hasLength(1),
         reason: '探测成功即记入历史（用户要「方便再次使用」）',
       );
-      expect(state.syncState.deviceHistory.first.address, 'http://192.168.50.9:9978');
+      expect(
+        state.syncState.deviceHistory.first.address,
+        'http://192.168.50.9:9978',
+      );
       expect(
         state.syncState.lastBridgeAddress,
         'http://192.168.50.9:9978',
@@ -832,10 +840,7 @@ void main() {
       final device = await runIo(tester, state.syncState.tryAutoConnect);
       expect(device, isNotNull, reason: '历史里的地址可达时应探到设备');
 
-      bridge.probeFailure = AppError(
-        AppErrorKind.bridgeUnreachable,
-        '设备不在线',
-      );
+      bridge.probeFailure = AppError(AppErrorKind.bridgeUnreachable, '设备不在线');
       final again = await runIo(tester, state.syncState.tryAutoConnect);
       expect(again, isNull, reason: '探不通必须安静放弃，不能抛错打断启动');
       expect(
@@ -861,5 +866,4 @@ String pageText(WidgetTester tester) {
 
 extension<T> on T {
   R let<R>(R Function(T value) body) => body(this);
-
 }

@@ -10,6 +10,7 @@ import '../core/ai_config.dart';
 import '../services/ai_completion_client.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
 import 'tokens.dart';
 
 class AiSettingsPage extends StatefulWidget {
@@ -81,6 +82,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   }
 
   Future<void> _save() async {
+    setState(() => _status = '正在保存…');
     final ok = await widget.state.saveAiConfig(_draft);
     if (!mounted) return;
     setState(() => _status = ok ? '已保存' : '保存失败（详见日志）');
@@ -94,7 +96,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     final client = AiCompletionClient();
     final result = await client.complete(
       config: _draft,
-      prompt: '这是 AI 服务连通性测试。请只返回 JSON: '
+      prompt:
+          '这是 AI 服务连通性测试。请只返回 JSON: '
           '{"ok":true,"message":"connected"}',
     );
     client.close();
@@ -133,123 +136,141 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           Text(
             'AI 仅用于季度弹窗的「AI 识别剧集/季度」，不会自动调用。'
             '未配置时其余季度选项照常可用。',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: AppSpace.lg),
-          SwitchListTile(
-            key: const ValueKey('ai-enabled'),
-            value: _enabled,
-            onChanged: (value) => setState(() => _enabled = value),
-            title: const Text('启用 AI 服务'),
-            contentPadding: EdgeInsets.zero,
-          ),
-          const SizedBox(height: AppSpace.md),
-          DropdownButtonFormField<String>(
-            key: const ValueKey('ai-protocol'),
-            initialValue: _protocol,
-            decoration: const InputDecoration(
-              labelText: '协议',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: AiProtocol.openAiResponses,
-                child: Text('OpenAI Responses'),
-              ),
-              DropdownMenuItem(
-                value: AiProtocol.openAiChat,
-                child: Text('OpenAI Chat Completions'),
-              ),
-              DropdownMenuItem(
-                value: AiProtocol.anthropicMessages,
-                child: Text('Anthropic Messages'),
-              ),
-              DropdownMenuItem(
-                value: AiProtocol.geminiNative,
-                child: Text('Gemini Native'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value != null) _changeProtocol(value);
-            },
-          ),
-          const SizedBox(height: AppSpace.md),
-          TextField(
-            key: const ValueKey('ai-endpoint'),
-            controller: _endpoint,
-            decoration: const InputDecoration(
-              labelText: '端点',
-              hintText: 'https://api.openai.com/v1/responses',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: AppSpace.md),
-          TextField(
-            key: const ValueKey('ai-api-key'),
-            controller: _apiKey,
-            obscureText: !_revealKey,
-            decoration: InputDecoration(
-              labelText: 'API Key',
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                tooltip: _revealKey ? '隐藏' : '显示',
-                onPressed: () => setState(() => _revealKey = !_revealKey),
-                icon: Icon(_revealKey ? Icons.visibility_off : Icons.visibility),
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpace.md),
-          TextField(
-            key: const ValueKey('ai-model'),
-            controller: _model,
-            decoration: const InputDecoration(
-              labelText: '模型',
-              hintText: 'gpt-4.1-mini',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: AppSpace.md),
-          TextField(
-            key: const ValueKey('ai-user-agent'),
-            controller: _userAgent,
-            decoration: const InputDecoration(
-              labelText: 'User-Agent（可选）',
-              border: OutlineInputBorder(),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: AppSpace.xl),
-          Wrap(
-            spacing: AppSpace.md,
-            runSpacing: AppSpace.sm,
+          SettingsSection(
+            title: '服务连接',
+            description: '协议决定请求形状，端点决定请求发往哪里；模型名留空时使用固定默认模型 gpt-4.1-mini。',
             children: [
-              OutlinedButton.icon(
-                key: const ValueKey('ai-test'),
-                onPressed: _busy ? null : _testConnection,
-                icon: const Icon(Icons.network_check),
-                label: const Text('测试连接'),
+              SwitchListTile(
+                key: const ValueKey('ai-enabled'),
+                value: _enabled,
+                onChanged: (value) => setState(() => _enabled = value),
+                title: const Text('启用 AI 服务'),
+                contentPadding: EdgeInsets.zero,
               ),
-              OutlinedButton.icon(
-                key: const ValueKey('ai-fetch-models'),
-                onPressed: _busy ? null : _fetchModels,
-                icon: const Icon(Icons.download_outlined),
-                label: const Text('拉取模型列表'),
+              const SizedBox(height: AppSpace.md),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('ai-protocol'),
+                initialValue: _protocol,
+                decoration: const InputDecoration(
+                  labelText: '协议',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: AiProtocol.openAiResponses,
+                    child: Text('OpenAI Responses'),
+                  ),
+                  DropdownMenuItem(
+                    value: AiProtocol.openAiChat,
+                    child: Text('OpenAI Chat Completions'),
+                  ),
+                  DropdownMenuItem(
+                    value: AiProtocol.anthropicMessages,
+                    child: Text('Anthropic Messages'),
+                  ),
+                  DropdownMenuItem(
+                    value: AiProtocol.geminiNative,
+                    child: Text('Gemini Native'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) _changeProtocol(value);
+                },
               ),
-              FilledButton.icon(
-                key: const ValueKey('ai-save'),
-                onPressed: _busy ? null : _save,
-                icon: const Icon(Icons.save_outlined),
-                label: const Text('保存'),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('ai-endpoint'),
+                controller: _endpoint,
+                decoration: const InputDecoration(
+                  labelText: '端点',
+                  hintText: 'https://api.openai.com/v1/responses',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('ai-model'),
+                controller: _model,
+                decoration: const InputDecoration(
+                  labelText: '模型',
+                  hintText: 'gpt-4.1-mini',
+                  border: OutlineInputBorder(),
+                ),
               ),
             ],
           ),
-          if (_status.isNotEmpty) ...[
-            const SizedBox(height: AppSpace.md),
-            Text(
-              _status,
-              key: const ValueKey('ai-settings-status'),
-              style: theme.textTheme.bodySmall,
-            ),
-          ],
+          SettingsSection(
+            title: '访问凭据',
+            description: '凭据只保存在本机 settings.json；默认遮蔽，显示只影响当前输入框。',
+            children: [
+              TextField(
+                key: const ValueKey('ai-api-key'),
+                controller: _apiKey,
+                obscureText: !_revealKey,
+                decoration: InputDecoration(
+                  labelText: 'API Key',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: _revealKey ? '隐藏' : '显示',
+                    onPressed: () => setState(() => _revealKey = !_revealKey),
+                    icon: Icon(
+                      _revealKey ? Icons.visibility_off : Icons.visibility,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('ai-user-agent'),
+                controller: _userAgent,
+                decoration: const InputDecoration(
+                  labelText: 'User-Agent（可选）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '操作与状态',
+            description: '测试与拉取只使用当前输入，不落盘；保存后才写入设置。',
+            children: [
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('ai-test'),
+                    onPressed: _busy ? null : _testConnection,
+                    icon: const Icon(Icons.network_check),
+                    label: const Text('测试连接'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('ai-fetch-models'),
+                    onPressed: _busy ? null : _fetchModels,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('拉取模型列表'),
+                  ),
+                  FilledButton.icon(
+                    key: const ValueKey('ai-save'),
+                    onPressed: _busy ? null : _save,
+                    icon: const Icon(Icons.save_outlined),
+                    label: const Text('保存'),
+                  ),
+                ],
+              ),
+              if (_status.isNotEmpty) ...[
+                const SizedBox(height: AppSpace.md),
+                Text(
+                  _status,
+                  key: const ValueKey('ai-settings-status'),
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ],
+          ),
         ],
       ),
     );

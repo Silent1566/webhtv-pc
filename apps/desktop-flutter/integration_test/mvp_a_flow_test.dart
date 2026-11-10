@@ -30,6 +30,7 @@ import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../test/fixture_support.dart';
+import '../test/support/settings_navigation.dart';
 import 'phase8_player_test_support.dart';
 
 /// 把可复查事实写入测试输出，供 Phase 1 验收报告引用。
@@ -102,7 +103,9 @@ void main() {
     await state.bootstrap();
 
     await tester.pumpWidget(
-      MaterialApp(home: AppShell(state: state, startup: const StartupArguments())),
+      MaterialApp(
+        home: AppShell(state: state, startup: const StartupArguments()),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -120,10 +123,8 @@ void main() {
     final fixtureBase = fixtureBaseUrl;
     final configJson = jsonDecode(readFixture('config/config-e2e.json'));
     // 把 fixture 中的固定端口替换为实际服务地址，便于自定义端口运行。
-    final configText = jsonEncode(configJson).replaceAll(
-      'http://127.0.0.1:18080',
-      fixtureBase,
-    );
+    final configText = jsonEncode(configJson)
+        .replaceAll('http://127.0.0.1:18080', fixtureBase);
 
     final temp = await Directory.systemTemp.createTemp('webhtv-e2e-test');
     final paths = AppPaths.resolve(
@@ -235,7 +236,9 @@ void main() {
 
     // 7) Seek。
     final seekReached = await _seekAndWait(player, const Duration(seconds: 3));
-    evidence('seek reached=$seekReached position=${player.state.position.inMilliseconds}ms');
+    evidence(
+      'seek reached=$seekReached position=${player.state.position.inMilliseconds}ms',
+    );
     expect(seekReached, isTrue);
 
     // 8) 进度写入与恢复（§15）。
@@ -284,7 +287,10 @@ void main() {
     });
     await state.bootstrap();
 
-    final imported = await state.importConfig(configText, displayName: 'resume');
+    final imported = await state.importConfig(
+      configText,
+      displayName: 'resume',
+    );
     expect(imported, isTrue, reason: state.lastError?.logLine);
 
     final home = state.homeResult!;
@@ -316,7 +322,9 @@ void main() {
 
     // 真实 UI 路径：渲染详情页并点击第一集。
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: vod)),
+      MaterialApp(
+        home: DetailPage(state: state, vod: vod),
+      ),
     );
     await tester.pumpAndSettle(const Duration(seconds: 5));
 
@@ -424,7 +432,9 @@ void main() {
     evidence('good-site home-ok list=${state.homeResult!.list.length}');
 
     // 失效站点的错误可定位，且 UI 状态回到 failed 而不是永久 loading。
-    final broken = state.siteItems.firstWhere((item) => item.site.key == 'broken');
+    final broken = state.siteItems.firstWhere(
+      (item) => item.site.key == 'broken',
+    );
     await state.selectSite(broken.site);
     expect(state.lastError, isNotNull);
     expect(state.lastError!.kind, AppErrorKind.siteHttp);
@@ -432,8 +442,9 @@ void main() {
     evidence('broken-site error=${state.lastError!.logLine}');
 
     // 未支持运行时：站点列表显示为不可运行，而不是空列表。
-    final unavailable = state.siteItems
-        .firstWhere((item) => item.site.key == 'unavailable');
+    final unavailable = state.siteItems.firstWhere(
+      (item) => item.site.key == 'unavailable',
+    );
     expect(unavailable.availability.available, isFalse);
     expect(unavailable.availability.runtimeName, contains('JS'));
     evidence(
@@ -467,7 +478,9 @@ void main() {
     await state.bootstrap();
 
     await tester.pumpWidget(
-      MaterialApp(home: AppShell(state: state, startup: const StartupArguments())),
+      MaterialApp(
+        home: AppShell(state: state, startup: const StartupArguments()),
+      ),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('我已了解并继续'));
@@ -475,10 +488,8 @@ void main() {
 
     // 配置页：三种导入入口与保存列表（页面自带 Scaffold）。
     await state.importConfig(
-      readFixture('config/config-e2e.json').replaceAll(
-        'http://127.0.0.1:18080',
-        fixtureBase,
-      ),
+      readFixture('config/config-e2e.json')
+          .replaceAll('http://127.0.0.1:18080', fixtureBase),
       displayName: 'ui-test',
     );
     await tester.pumpWidget(MaterialApp(home: ConfigPage(state: state)));
@@ -498,7 +509,9 @@ void main() {
     // 其余页面都是壳层 body 内容，必须放在 Scaffold 内，与产品真实结构一致。
     await state.selectSite(state.siteItems.first.site);
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: BrowsePage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: BrowsePage(state: state)),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.text('默认推荐'), findsOneWidget);
@@ -536,31 +549,42 @@ void main() {
 
     // 历史 / 收藏 / 设置 / 日志页（壳层 body 内容）。
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: HistoryPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: HistoryPage(state: state)),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.text('清空历史'), findsOneWidget);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: FavoritesPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: FavoritesPage(state: state)),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.textContaining('收藏'), findsWidgets);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: SettingsPage(state: state)),
+      ),
     );
     await tester.pumpAndSettle();
+    await selectSettingsCategory(tester, 'maintenance');
     expect(find.text('运行信息'), findsOneWidget);
     expect(find.text('清理缓存目录'), findsOneWidget);
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: LogsPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: LogsPage(state: state)),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.textContaining('复制全部'), findsOneWidget);
     expect(state.log.entries, isNotEmpty);
-    evidence('pages-rendered history/favorites/settings/logs logs=${state.log.entries.length}');
+    evidence(
+      'pages-rendered history/favorites/settings/logs logs=${state.log.entries.length}',
+    );
   });
 
   testWidgets('窗口缩放与全屏切换后布局稳定（§17.5）', (tester) async {

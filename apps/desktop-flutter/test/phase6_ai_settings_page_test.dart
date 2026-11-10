@@ -12,6 +12,8 @@ import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
 
+import 'support/settings_navigation.dart';
+
 void main() {
   late Directory tempDir;
   late AppState state;
@@ -42,9 +44,12 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: SettingsPage(state: state)),
+      ),
     );
     await tester.pump();
+    await selectSettingsCategory(tester, 'connections');
   }
 
   Future<void> pumpAiPage(WidgetTester tester) async {
@@ -231,5 +236,4 @@ void main() {
       expect(bindingModeOf(const TmdbSeasonAi()), isNull);
     });
   });
-
 }

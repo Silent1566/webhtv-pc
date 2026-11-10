@@ -10,6 +10,8 @@ import '../core/ai_assist.dart';
 import '../services/ai_assist_service.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
+import 'tokens.dart';
 
 class AiAssistPage extends StatefulWidget {
   const AiAssistPage({super.key, required this.state, this.service});
@@ -64,7 +66,7 @@ class _AiAssistPageState extends State<AiAssistPage> {
               key: const ValueKey('ai-assist-not-ready'),
               color: theme.colorScheme.errorContainer,
               child: Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(AppSpace.md),
                 child: Text(
                   '尚未配置 AI：请先在设置页填写端点/密钥/模型。'
                   '未配置时不会发起任何请求。',
@@ -72,55 +74,57 @@ class _AiAssistPageState extends State<AiAssistPage> {
                 ),
               ),
             ),
-          const SizedBox(height: 12),
-          Text('任务', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          SegmentedButton<AiAssistTask>(
-            key: const ValueKey('ai-assist-task'),
-            segments: [
-              for (final task in AiAssistTask.values)
-                ButtonSegment(value: task, label: Text(task.label)),
-            ],
-            selected: {_task},
-            onSelectionChanged: (selection) {
-              setState(() {
-                _task = selection.first;
-                _result = null;
-              });
-            },
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('ai-assist-input'),
-            controller: _input,
-            minLines: 5,
-            maxLines: 12,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              labelText: '输入',
-              hintText: _hintFor(_task),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
+          SettingsSection(
+            title: '任务',
             children: [
-              FilledButton.icon(
-                key: const ValueKey('ai-assist-run'),
-                onPressed: _busy || !_service.isReady ? null : _run,
-                icon: const Icon(Icons.auto_awesome),
-                label: Text(_busy ? '分析中…' : '运行'),
+              LayoutBuilder(
+                builder: (context, constraints) =>
+                    SegmentedButton<AiAssistTask>(
+                      key: const ValueKey('ai-assist-task'),
+                      direction: constraints.maxWidth < 600
+                          ? Axis.vertical
+                          : Axis.horizontal,
+                      segments: [
+                        for (final task in AiAssistTask.values)
+                          ButtonSegment(value: task, label: Text(task.label)),
+                      ],
+                      selected: {_task},
+                      onSelectionChanged: (selection) {
+                        setState(() {
+                          _task = selection.first;
+                          _result = null;
+                        });
+                      },
+                    ),
               ),
-              const SizedBox(width: 12),
-              const Flexible(
-                child: Text(
-                  '结果只展示，不会自动修改标题、分组或播放地址。',
-                  style: TextStyle(fontSize: 12),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('ai-assist-input'),
+                controller: _input,
+                minLines: 5,
+                maxLines: 12,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: '输入',
+                  hintText: _hintFor(_task),
                 ),
               ),
+              const SizedBox(height: AppSpace.md),
+              Text('结果只展示，不会自动修改标题、分组或播放地址。', style: theme.textTheme.bodySmall),
+              const SizedBox(height: AppSpace.sm),
+              SettingsActions(
+                children: [
+                  FilledButton.icon(
+                    key: const ValueKey('ai-assist-run'),
+                    onPressed: _busy || !_service.isReady ? null : _run,
+                    icon: const Icon(Icons.auto_awesome),
+                    label: Text(_busy ? '分析中…' : '运行'),
+                  ),
+                ],
+              ),
             ],
           ),
-          const Divider(height: 32),
-          _buildResult(theme),
+          SettingsSection(title: '结果', children: [_buildResult(theme)]),
         ],
       ),
     );
