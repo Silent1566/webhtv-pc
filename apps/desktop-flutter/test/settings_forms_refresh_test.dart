@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -10,23 +11,46 @@ import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:webhtv_pc/ui/subtitle_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+// Reject unsafe paths before bootstrap can access storage.
+void _requireIsolatedPaths(AppPaths paths, Directory temp) {
+  for (final dir in [
+    paths.configDir,
+    paths.dataDir,
+    paths.cacheDir,
+    paths.logDir,
+  ]) {
+    expect(
+      p.isWithin(temp.path, dir),
+      isTrue,
+      reason: 'Test directory must remain beneath its owned temp directory',
+    );
+  }
+}
+
 void main() {
   late Directory temp;
   late AppState state;
+  var stateCreated = false;
 
   setUp(() async {
+    stateCreated = false;
     temp = await Directory.systemTemp.createTemp('settings-forms-refresh');
-    state = AppState(
-      paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
-      ),
-      log: LogService(),
+    final paths = AppPaths.resolve(
+      overrides: {
+        'config': p.join(temp.path, 'config'),
+        'data': p.join(temp.path, 'data'),
+        'cache': p.join(temp.path, 'cache'),
+        'state': p.join(temp.path, 'logs'),
+      },
     );
+    _requireIsolatedPaths(paths, temp);
+    state = AppState(paths: paths, log: LogService());
+    stateCreated = true;
     await state.bootstrap();
   });
 
   tearDown(() async {
-    state.dispose();
+    if (stateCreated) state.dispose();
     try {
       await temp.delete(recursive: true);
     } catch (_) {}
