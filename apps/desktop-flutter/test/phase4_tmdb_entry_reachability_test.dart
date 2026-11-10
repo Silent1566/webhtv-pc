@@ -35,6 +35,8 @@ import 'package:webhtv_pc/state/tmdb_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
 
+import 'support/settings_navigation.dart';
+
 /// 不发任何请求的客户端：用于「零请求」类断言。
 class _NoNetworkClient extends http.BaseClient {
   @override
@@ -93,7 +95,7 @@ void main() {
       // 前置：全新安装没有凭据。
       expect(state.tmdbConfig.isReady, isFalse, reason: '前置条件：未配置');
 
-      // 放大测试窗口，让整个设置表单一次性渲染（默认 800x600 会截断）。
+      // 放大测试窗口，让连接类设置表单一次性渲染（默认 800x600 会截断）。
       tester.view.physicalSize = const Size(1400, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() {
@@ -102,15 +104,19 @@ void main() {
       });
 
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+        MaterialApp(
+          home: Scaffold(body: SettingsPage(state: state)),
+        ),
       );
       await tester.pumpAndSettle();
+
+      await selectSettingsCategory(tester, 'connections');
 
       final entry = find.byKey(const ValueKey('settings-tmdb-open'));
       expect(
         entry,
         findsOneWidget,
-        reason: '设置页必须有无条件可见的 TMDB 入口（否则全新安装无法启用 TMDB）',
+        reason: '选连接类后必须有无需凭据的 TMDB 入口（否则全新安装无法启用 TMDB）',
       );
 
       await tester.tap(entry);
@@ -140,11 +146,7 @@ void main() {
       // 未配置：零请求，但必须仍可渲染入口。
       expect(state.notConfigured, isTrue);
       expect(state.siteDisabled, isFalse);
-      expect(
-        state.shouldRender,
-        isTrue,
-        reason: '未配置必须渲染，否则用户永远进不了 TMDB 设置页',
-      );
+      expect(state.shouldRender, isTrue, reason: '未配置必须渲染，否则用户永远进不了 TMDB 设置页');
 
       var configured = 0;
       await tester.pumpWidget(
@@ -183,7 +185,9 @@ void main() {
       expect(state.shouldRender, isFalse);
 
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: TmdbStatusBar(state: state))),
+        MaterialApp(
+          home: Scaffold(body: TmdbStatusBar(state: state)),
+        ),
       );
       await tester.pumpAndSettle();
 

@@ -24,6 +24,8 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 
+import '../test/support/settings_navigation.dart';
+
 void evidence(String message) =>
     debugPrint('PHASE4-EVIDENCE tmdb-shell-entry $message');
 
@@ -45,11 +47,7 @@ void main() {
     await state.bootstrap();
 
     // 前置：全新安装，没有凭据。
-    expect(
-      state.tmdbConfig.isReady,
-      isFalse,
-      reason: '前置条件：未配置 TMDB',
-    );
+    expect(state.tmdbConfig.isReady, isFalse, reason: '前置条件：未配置 TMDB');
 
     tester.view.physicalSize = const Size(1600, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -59,7 +57,9 @@ void main() {
     });
 
     await tester.pumpWidget(
-      MaterialApp(home: AppShell(state: state, startup: const StartupArguments())),
+      MaterialApp(
+        home: AppShell(state: state, startup: const StartupArguments()),
+      ),
     );
     // 壳层要先完成边界确认读取（真实文件 I/O）。
     for (var i = 0; i < 60; i++) {
@@ -69,11 +69,7 @@ void main() {
       await tester.pump();
       if (find.byType(NavigationRail).evaluate().isNotEmpty) break;
     }
-    expect(
-      find.byType(NavigationRail),
-      findsOneWidget,
-      reason: '壳层侧栏未渲染',
-    );
+    expect(find.byType(NavigationRail), findsOneWidget, reason: '壳层侧栏未渲染');
 
     // 若首次启动的边界提示存在，先确认（否则它会遮挡交互）。
     final accept = find.text('我已了解并同意');
@@ -90,13 +86,10 @@ void main() {
     await tester.pumpAndSettle();
     evidence('section=settings');
 
-    // 2) 未配置时入口必须存在。
+    // 2) 选择连接分类，未配置时入口仍必须存在。
+    await selectSettingsCategory(tester, 'connections');
     final entry = find.byKey(const ValueKey('settings-tmdb-open'));
-    expect(
-      entry,
-      findsOneWidget,
-      reason: '设置页必须有无条件可见的 TMDB 入口（P4-7 回归）',
-    );
+    expect(entry, findsOneWidget, reason: '设置页必须有无条件可见的 TMDB 入口（P4-7 回归）');
     evidence('settings-entry=present');
 
     // 3) 点击入口 → 真正进入 TMDB 设置页。
@@ -107,8 +100,6 @@ void main() {
     expect(find.byKey(const ValueKey('tmdb-enabled')), findsOneWidget);
     expect(find.byKey(const ValueKey('tmdb-api-key')), findsOneWidget);
     expect(find.byKey(const ValueKey('tmdb-access-token')), findsOneWidget);
-    evidence(
-      'tmdb-settings=rendered keys=enabled,api-key,access-token',
-    );
+    evidence('tmdb-settings=rendered keys=enabled,api-key,access-token');
   });
 }

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../core/backup_manifest.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
@@ -172,65 +173,88 @@ class _BackupPageState extends State<BackupPage> {
       body: ListView(
         padding: formPagePadding(context),
         children: [
-          Text('备份', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpace.sm),
-          const Text(
-            '包含设置与数据库（配置记录、历史、收藏）。缓存与日志不进入备份。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          TextField(
-            key: const ValueKey('backup-output-path'),
-            controller: _backupPath,
-            decoration: const InputDecoration(
-              labelText: '备份文件路径',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          FilledButton.icon(
-            key: const ValueKey('backup-create'),
-            onPressed: _busy ? null : _createBackup,
-            icon: const Icon(Icons.save_alt),
-            label: Text(_busy ? '处理中…' : '立即备份'),
-          ),
-          const Divider(height: 32),
-          Text('恢复', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpace.sm),
-          const Text(
-            '先「检查备份」确认清单与校验和，再执行恢复。恢复会替换当前数据。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          TextField(
-            key: const ValueKey('backup-restore-path'),
-            controller: _restorePath,
-            decoration: const InputDecoration(
-              labelText: '备份文件路径',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          Wrap(
-            spacing: AppSpace.sm,
+          SettingsSection(
+            title: '备份',
+            description: '包含设置与数据库（配置记录、历史、收藏）。缓存与日志不进入备份。',
             children: [
-              OutlinedButton.icon(
-                key: const ValueKey('backup-inspect'),
-                onPressed: _busy ? null : _inspect,
-                icon: const Icon(Icons.fact_check_outlined),
-                label: const Text('检查备份'),
+              TextField(
+                key: const ValueKey('backup-output-path'),
+                controller: _backupPath,
+                decoration: const InputDecoration(
+                  labelText: '备份文件路径',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
               ),
-              FilledButton.tonalIcon(
-                key: const ValueKey('backup-restore'),
-                onPressed: _busy || _inspected == null ? null : _restore,
-                icon: const Icon(Icons.restore),
-                label: const Text('恢复'),
+              const SizedBox(height: AppSpace.md),
+              SettingsActions(
+                children: [
+                  FilledButton.icon(
+                    key: const ValueKey('backup-create'),
+                    onPressed: _busy ? null : _createBackup,
+                    icon: const Icon(Icons.save_alt),
+                    label: Text(_busy ? '处理中…' : '立即备份'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '恢复',
+            description: '先「检查备份」确认清单与校验和，再执行恢复。恢复会替换当前数据。',
+            children: [
+              TextField(
+                key: const ValueKey('backup-restore-path'),
+                controller: _restorePath,
+                decoration: const InputDecoration(
+                  labelText: '备份文件路径',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('backup-inspect'),
+                    onPressed: _busy ? null : _inspect,
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: const Text('检查备份'),
+                  ),
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('backup-restore'),
+                    onPressed: _busy || _inspected == null ? null : _restore,
+                    icon: const Icon(Icons.restore),
+                    label: const Text('恢复'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const Divider(height: AppSpace.xxl),
+          SettingsSection(
+            title: '重置',
+            description: '删除本机设置、配置记录、历史与收藏，回到未导入配置状态。',
+            children: [
+              const SizedBox(height: AppSpace.md),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('backup-reset'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: theme.colorScheme.error,
+                    ),
+                    onPressed: _busy ? null : _reset,
+                    icon: const Icon(Icons.delete_forever_outlined),
+                    label: const Text('重置全部本地数据'),
+                  ),
+                ],
               ),
             ],
           ),
           if (_message.isNotEmpty) ...[
+            const Divider(height: AppSpace.xl),
+            Text('操作结果', style: theme.textTheme.titleSmall),
             const SizedBox(height: AppSpace.sm),
             SelectableText(
               _message,
@@ -238,23 +262,6 @@ class _BackupPageState extends State<BackupPage> {
               style: theme.textTheme.bodySmall,
             ),
           ],
-          const Divider(height: 32),
-          Text('重置', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpace.sm),
-          const Text(
-            '删除本机设置、配置记录、历史与收藏，回到未导入配置状态。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          OutlinedButton.icon(
-            key: const ValueKey('backup-reset'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-            ),
-            onPressed: _busy ? null : _reset,
-            icon: const Icon(Icons.delete_forever_outlined),
-            label: const Text('重置全部本地数据'),
-          ),
         ],
       ),
     );
