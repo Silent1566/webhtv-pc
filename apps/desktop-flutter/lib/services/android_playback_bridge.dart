@@ -96,6 +96,8 @@ class AndroidPlaybackBridge {
       subs: decision.subs,
       danmaku: decision.danmaku,
       upstreamHeaders: decision.upstreamHeaders,
+      qualities: decision.qualities,
+      qualityIndex: decision.qualityIndex,
     );
   }
 

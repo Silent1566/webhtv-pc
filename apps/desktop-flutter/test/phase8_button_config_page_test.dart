@@ -95,9 +95,9 @@ void main() {
   }
 
   const defaultPreview =
-      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  倍速  ·  剧集  ·  全屏';
+      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  倍速  ·  画质  ·  剧集  ·  全屏';
 
-  testWidgets('列出全部 9 个按钮与中文名', (tester) async {
+  testWidgets('列出全部 10 个按钮与中文名', (tester) async {
     await pumpPage(tester);
     for (final spec in kPlayerButtons) {
       expect(find.text(spec.label), findsWidgets, reason: '缺少「${spec.label}」');
@@ -120,6 +120,7 @@ void main() {
       'next',
       'play',
       'prev',
+      'quality',
     ];
     await configure(tester, () => state.setPlayerButtonOrder(reversed));
     await pumpPage(tester);
@@ -259,7 +260,7 @@ void main() {
     expect(state.playerButtonHidden, {'speed'});
     expect(
       previewText(tester),
-      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  剧集  ·  全屏',
+      '上一集  ·  播放/暂停  ·  下一集  ·  静音  ·  音量  ·  画质  ·  剧集  ·  全屏',
     );
   });
 
@@ -329,7 +330,7 @@ void main() {
     // 字面量断言：顺序与分隔符都被锁住。
     expect(
       previewText(tester),
-      '下一集  ·  播放/暂停  ·  上一集  ·  静音  ·  音量  ·  倍速  ·  剧集  ·  全屏',
+      '下一集  ·  播放/暂停  ·  上一集  ·  静音  ·  音量  ·  倍速  ·  画质  ·  剧集  ·  全屏',
     );
   });
 
@@ -338,7 +339,7 @@ void main() {
     await pumpPage(tester);
     expect(
       previewText(tester),
-      '上一集  ·  播放/暂停  ·  下一集  ·  音量  ·  倍速  ·  剧集  ·  全屏',
+      '上一集  ·  播放/暂停  ·  下一集  ·  音量  ·  倍速  ·  画质  ·  剧集  ·  全屏',
     );
   });
 
@@ -371,6 +372,7 @@ void main() {
       'mute',
       'volume',
       'speed',
+      'quality',
       'episodes',
       'fullscreen',
       'external_player',
@@ -403,6 +405,7 @@ void main() {
       'mute',
       'volume',
       'speed',
+      'quality',
       'episodes',
       'fullscreen',
       'external_player',

@@ -85,6 +85,8 @@ class _ResolveState extends AppState {
     String? vodId,
     Site? siteOverride,
     SiteService? serviceOverride,
+    int? qualityIndex,
+    bool Function()? isCurrent,
   }) async {
     final gate = resolveGate;
     resolveGate = null;

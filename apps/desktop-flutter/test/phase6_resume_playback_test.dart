@@ -469,11 +469,12 @@ void main() {
   group('接线锁（源码级：详情页→播放器的一次性交接）', () {
     final playerSource = _readSourceCode('lib/ui/player_page.dart');
     final browseSource = _readSourceCode('lib/ui/browse_pages.dart');
+    final requestSource = _readSourceCode('lib/core/playback_request.dart');
 
     test('PlaybackRequest 带待迁移种子，且在 copyWith 里可清除', () {
-      expect(playerSource.contains('final ResumeSeed? resumeSeed;'), isTrue);
+      expect(requestSource.contains('final ResumeSeed? resumeSeed;'), isTrue);
       expect(
-        playerSource.contains('resumeSeed: clearResumeSeed ? null'),
+        requestSource.contains('resumeSeed: clearResumeSeed ? null'),
         isTrue,
         reason: '种子必须能被清除，否则换集/重载会一次次重放旧进度',
       );

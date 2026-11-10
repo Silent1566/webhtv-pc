@@ -333,6 +333,7 @@ class SiteService {
     required String episodeTarget,
     String? flag,
     String? vodId,
+    int? qualityIndex,
     ParseService? parseService,
     ParseFailoverSettings? parseFailover,
   }) async {
@@ -387,6 +388,7 @@ class SiteService {
         final resolved = await _runParser(
           site: site,
           target: preliminary.url ?? episodeTarget,
+          inputDecision: preliminary,
           flag: flag,
           parse: preliminary.parse,
           jx: preliminary.jx,
@@ -414,7 +416,21 @@ class SiteService {
       // （如夸克）就是返回 `{urls:[], header:{}}`，属**上游没有地址**，应如实报错
       // 以便 UI 引导换源，而不是伪装成可播放。
       // 普通 HTTP API 站点（`type=0/1/2/4`）的 `playUrl` 前缀回退语义不受影响。
-      final playTarget = playResult.playUrl;
+      final defaultIndex =
+          playResult.qualityIndex >= 0 &&
+              playResult.qualityIndex < playResult.qualities.length
+          ? playResult.qualityIndex
+          : 0;
+      final selectedIndex =
+          qualityIndex != null &&
+              qualityIndex >= 0 &&
+              qualityIndex < playResult.qualities.length
+          ? qualityIndex
+          : defaultIndex;
+      final selectedResult = playResult.copyWith(qualityIndex: selectedIndex);
+      final playTarget = playResult.qualities.isEmpty
+          ? playResult.playUrl
+          : playResult.qualities[selectedIndex].url;
       if (playTarget == null && mustCallPlay) {
         throw AppError(
           AppErrorKind.playbackUrlMissing,
@@ -431,7 +447,7 @@ class SiteService {
       // 因此这里把兜底错误换成**如实描述实际发生了什么**并带上播放入口返回值。
       final resolved = _resolvePlayEntryTarget(
         site: site,
-        playResult: playResult,
+        playResult: selectedResult,
         playTarget: playTarget,
         episodeTarget: episodeTarget,
         flag: flag,
@@ -444,6 +460,7 @@ class SiteService {
         decision = await _runParser(
           site: site,
           target: decision.url ?? episodeTarget,
+          inputDecision: decision,
           flag: flag,
           parse: decision.parse,
           jx: decision.jx,
@@ -500,6 +517,8 @@ class SiteService {
             globalHeaders: globalHeaders,
             subs: playResult.subs,
             danmaku: playResult.danmaku,
+            qualities: playResult.qualities,
+            qualityIndex: playResult.qualityIndex,
           ),
         ),
       );
@@ -536,6 +555,7 @@ class SiteService {
   Future<PlaybackDecision> _runParser({
     required Site site,
     required String target,
+    required PlaybackDecision inputDecision,
     String? flag,
     int? parse,
     int? jx,
@@ -566,12 +586,17 @@ class SiteService {
     return PlaybackDecision(
       action: PlaybackAction.direct,
       url: outcome.url,
-      headers: outcome.headers.isEmpty ? null : HeaderMap(outcome.headers),
-      format: outcome.format,
+      headers: HeaderMap.merge([
+        inputDecision.headers,
+        HeaderMap(outcome.headers),
+      ]),
+      format: outcome.format ?? inputDecision.format,
       flag: flag,
       reason: 'parsed-by:${outcome.entryName}',
-      subs: outcome.subs,
-      danmaku: outcome.danmaku,
+      subs: {...inputDecision.subs, ...outcome.subs}.toList(),
+      danmaku: {...inputDecision.danmaku, ...outcome.danmaku}.toList(),
+      qualities: inputDecision.qualities,
+      qualityIndex: inputDecision.qualityIndex,
     );
   }
 
