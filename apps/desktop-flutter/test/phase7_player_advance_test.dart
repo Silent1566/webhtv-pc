@@ -125,7 +125,7 @@ void main() {
       // （进度保存定时器），全局搜索会误命中。
       final start = pageSource.indexOf('bool _isGenuineEnd() =>');
       expect(start, greaterThan(0), reason: '闸门必须委托给 core');
-      final end = pageSource.indexOf('Future<void> _load() async {');
+      final end = pageSource.indexOf('Future<void> _load(');
       expect(end, greaterThan(start));
       final body = pageSource.substring(start, end);
       expect(body.contains('5000'), isFalse, reason: '余量必须来自 core 常量');

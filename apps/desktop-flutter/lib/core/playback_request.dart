@@ -17,6 +17,8 @@ class PlaybackRequest {
     String? playbackFlag,
     String? episodeTarget,
     this.headers = const {},
+    this.qualities = const [],
+    this.qualityIndex = 0,
     this.startPosition,
     this.playLines = const [],
     this.lineRoutes = const {},
@@ -43,6 +45,8 @@ class PlaybackRequest {
   final String flag;
   final String playbackFlag;
   final Map<String, String> headers;
+  final List<PlaybackQuality> qualities;
+  final int qualityIndex;
   final Duration? startPosition;
 
   /// 站点播放入口的**输入目标**（详情 `vod_play_url` 里该集 `$` 之后的值）。
@@ -144,6 +148,9 @@ class PlaybackRequest {
     String? flag,
     String? playbackFlag,
     Map<String, String>? headers,
+    Map<String, String>? subtitleHeaders,
+    List<PlaybackQuality>? qualities,
+    int? qualityIndex,
     int? episodeIndex,
     Duration? startPosition,
     bool clearStartPosition = false,
@@ -168,6 +175,8 @@ class PlaybackRequest {
       flag: flag ?? this.flag,
       playbackFlag: playbackFlag ?? this.playbackFlag,
       headers: headers ?? this.headers,
+      qualities: qualities ?? this.qualities,
+      qualityIndex: qualityIndex ?? this.qualityIndex,
       startPosition: clearStartPosition
           ? null
           : (startPosition ?? this.startPosition),
@@ -186,7 +195,7 @@ class PlaybackRequest {
       vodPic: vodPic,
       directUrl: directUrl,
       subtitles: subtitles ?? this.subtitles,
-      subtitleHeaders: subtitleHeaders,
+      subtitleHeaders: subtitleHeaders ?? this.subtitleHeaders,
       danmaku: danmaku ?? this.danmaku,
       tmdb: tmdb,
       // 播放源归属默认原样带过：换集后进度仍要写回同一条来源。

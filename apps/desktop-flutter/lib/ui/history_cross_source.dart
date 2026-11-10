@@ -110,6 +110,9 @@ Future<String?> _tryOriginalSource(
           state: state,
           request: PlaybackRequest(
             url: decision.url!,
+            // 当前集的多画质候选随请求下传：播放器据此显示入口、按索引重解析。
+            qualities: decision.qualities,
+            qualityIndex: decision.qualityIndex,
             episodeTarget: episodeTarget,
             headers: decision.headers?.asRequestHeaders ?? const {},
             title: item.vodName,

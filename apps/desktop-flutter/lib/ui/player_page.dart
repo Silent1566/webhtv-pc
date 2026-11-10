@@ -54,6 +54,7 @@ import 'live_playback_session.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
+import 'player_quality_panel.dart';
 import 'theme.dart';
 import 'tokens.dart';
 import 'toast.dart';
@@ -201,6 +202,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool get _hasLivePanels => _livePanelOpen || _linePanelChannel != null;
   bool _progressReady = false;
   int _mediaGeneration = 0;
+  int _qualitySelectionRevision = 0;
   bool _fullscreen = false;
   bool _controlsVisible = true;
   Timer? _saveTimer;
@@ -732,7 +734,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     position: _controller.position,
   );
 
-  Future<void> _load() async {
+  Future<void> _load({bool? restorePlaying}) async {
     if (!mounted) return;
     final generation = _beginMediaTransition();
     // 记录本次加载的「意图」，失败时用它回滚 `_request`（`design/03` §4.3 D3）。
@@ -759,9 +761,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         siteKey: intent.siteKey,
         flag: intent.playbackFlag,
         episodeName: intent.episodeName,
-        isCurrent: widget.liveSession == null
-            ? null
-            : () => mounted && generation == _mediaGeneration,
+        isCurrent: () => mounted && generation == _mediaGeneration,
       );
     } finally {
       if (identical(controller, _controller)) _liveOpenInFlight = false;
@@ -801,6 +801,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controller.clearCompleted();
       return;
     }
+    if (restorePlaying == false) {
+      await controller.pause();
+      if (!mounted || generation != _mediaGeneration) return;
+    }
     widget.liveSession?.confirmPlayback(sessionRevision);
     // Phase 9：注入 mpv 播放参数与 LUT。失败不阻断播放，只提示能力不可用。
     await _applyPlaybackEnhancements();
@@ -837,7 +841,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 续播 seek 完成之后才允许自动跳片头/片尾（design/01 §3.1）。
     _progressReady = true;
     _skipArmed = true;
-    _maybeAutoSkip();
+    if (restorePlaying == null) _maybeAutoSkip();
     _startProgressSaver();
   }
 
@@ -2598,6 +2602,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     required String vodId,
     Site? siteOverride,
     bool isExternalRoute = false,
+    int? qualityIndex,
+    bool Function()? isCurrent,
   }) {
     final state = widget.state;
     final source = _request.sourceKey.trim();
@@ -2609,6 +2615,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return state.resolvePlaybackForSource(
         sourceKey: source,
         siteKey: _request.siteKey,
+        qualityIndex: qualityIndex,
+        isCurrent: isCurrent,
         episodeTarget: episodeTarget,
         flag: flag,
         vodId: vodId,
@@ -2619,6 +2627,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       flag: flag,
       vodId: vodId,
       siteOverride: siteOverride,
+      qualityIndex: qualityIndex,
+      isCurrent: isCurrent,
     );
   }
 
@@ -2720,12 +2730,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final String url;
       final List<SubtitleInfo> subtitles;
       final List<DanmakuSource> danmaku;
+      final List<PlaybackQuality> qualities;
+      final int qualityIndex;
+      final Map<String, String> headers;
+      final Map<String, String> subtitleHeaders;
       // 提到外层：下面写进度归属时要判断「这一集是不是外部并入线路」。
       final route = _request.lineRoutes[flag];
       if (_request.directUrl) {
         url = episode.url;
         subtitles = _request.subtitles;
         danmaku = _request.danmaku;
+        qualities = const [];
+        qualityIndex = 0;
+        headers = _request.headers;
+        subtitleHeaders = _request.subtitleHeaders;
       } else {
         // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
         final decision = await _resolvePlayback(
@@ -2746,6 +2764,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 换集后字幕/弹幕也要换成该集结果里的 subs/danmaku（§10.3、Phase 3）。
         subtitles = decision.subs;
         danmaku = decision.danmaku;
+        qualities = decision.qualities;
+        qualityIndex = decision.qualityIndex;
+        headers = decision.headers?.asRequestHeaders ?? const {};
+        subtitleHeaders = decision.assetHeaders?.asRequestHeaders ?? const {};
       }
       if (!mounted || generation != _mediaGeneration) return;
       setState(() {
@@ -2758,7 +2780,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           episodeName: episode.name,
           flag: flag,
           playbackFlag: _playbackFlagFor(flag),
-          headers: _request.directUrl ? _request.headers : null,
+          headers: headers,
+          subtitleHeaders: subtitleHeaders,
+          qualities: qualities,
+          qualityIndex: qualityIndex,
           episodeIndex: episodeIndex,
           clearStartPosition: true,
           // 种子属于**原记录那一集**：换集后必须一起清掉，否则会被当成
@@ -3347,7 +3372,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 用户将无法得知直播弹幕为什么没有弹幕。
         //
         // 放在进度行而不是动作行：动作行是**可配置按钮**的集合
-        // （`resolveVisibleButtons` 的 9 个 id，`PlayerOverlayActionRow`
+        // （`resolveVisibleButtons` 的 10 个 id，`PlayerOverlayActionRow`
         // 还断言 buttons 与 groups 一一对应），状态指示器不是按钮，
         // 混进去会破坏那个一一对应。
         //
@@ -3450,6 +3475,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               icon: const Icon(Icons.live_tv, size: 18),
               label: const Text('回到直播'),
             ),
+          // 画质入口：只在**当前集返回多个候选**时出现（单地址/直播没有可选内容）。
+          // 当前值写在按钮上，用户不打开面板也能读到正在播哪一档。
+          'quality'
+              when !_request.directUrl &&
+                  !_isLive &&
+                  _request.qualities.length > 1 =>
+            OutlinedButton.icon(
+              key: const ValueKey('player-quality-button'),
+              onPressed: () => unawaited(_openQualityPanel()),
+              icon: const Icon(Icons.high_quality_outlined, size: 18),
+              label: Text('画质：${_qualityName(_request.qualityIndex)}'),
+            ),
           'episodes' when _isLive => OutlinedButton.icon(
             onPressed: () => _openLiveLines(widget.liveSession!.channel),
             icon: const Icon(Icons.alt_route, size: 18),
@@ -3499,6 +3536,96 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if ((candidate - rate).abs() < (best - rate).abs()) best = candidate;
     }
     return best;
+  }
+
+  String _qualityName(int index) {
+    if (index < 0 || index >= _request.qualities.length) return '默认';
+    final name = _request.qualities[index].name.trim();
+    return name.isEmpty ? '画质 ${index + 1}' : name;
+  }
+
+  /// 打开画质面板；选中当前项等于取消（不得重载媒体）。
+  Future<void> _openQualityPanel() async {
+    if (_request.directUrl || _isLive || _request.qualities.length <= 1) return;
+    final selected = await showPlayerQualityPanel(
+      context,
+      qualities: _request.qualities,
+      selectedIndex: _request.qualityIndex,
+    );
+    if (!mounted || selected == null) return;
+    await _selectQuality(selected);
+  }
+
+  /// 切画质：用当前集的入口目标重新解析同一候选，保留进度与播放状态。
+  ///
+  /// 不直接把候选原 URL 交给 media_kit：那会绕过 Header 注入、解析器与本地代理。
+  /// 换集/关闭页面后旧请求返回的决策一律丢弃（[_qualitySelectionRevision] +
+  /// [_mediaGeneration] + 请求身份三重判定），避免旧结果盖住新集状态。
+  Future<void> _selectQuality(int index) async {
+    if (_request.directUrl || _isLive || _request.qualities.length <= 1) return;
+    if (index < 0 || index >= _request.qualities.length) return;
+    if (index == _request.qualityIndex) return;
+    final selection = ++_qualitySelectionRevision;
+    final intent = _request;
+    final generation = _mediaGeneration;
+    int? restoreGeneration;
+    PlaybackRequest? restoreRequest;
+    bool isCurrent() =>
+        mounted &&
+        selection == _qualitySelectionRevision &&
+        generation == _mediaGeneration &&
+        identical(intent, _request);
+    try {
+      final route = intent.lineRoutes[intent.flag];
+      final decision = await _resolvePlayback(
+        episodeTarget: intent.episodeTarget,
+        flag: intent.playbackFlag,
+        vodId: route?.vodId ?? intent.vodId,
+        siteOverride: route == null
+            ? null
+            : widget.state.siteByKey(route.siteKey),
+        isExternalRoute: route != null,
+        qualityIndex: index,
+        isCurrent: isCurrent,
+      );
+      if (!isCurrent()) return;
+      if (decision == null || decision.url == null) {
+        throw AppError(AppErrorKind.playbackUrlMissing, '该画质没有可用播放地址');
+      }
+      final position = _controller.position;
+      final playing = _controller.isPlaying;
+      _beginMediaTransition();
+      setState(() {
+        _request = intent.copyWith(
+          url: decision.url!,
+          headers: decision.headers?.asRequestHeaders ?? const {},
+          subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
+          qualities: decision.qualities,
+          qualityIndex: decision.qualityIndex,
+          subtitles: decision.subs,
+          danmaku: decision.danmaku,
+          startPosition: position,
+          clearResumeSeed: true,
+        );
+        _danmakuItems = const [];
+        _danmakuError = null;
+      });
+      final restoring = _load(restorePlaying: playing);
+      restoreGeneration = _mediaGeneration;
+      restoreRequest = _request;
+      await restoring;
+    } catch (error) {
+      // 解析阶段属于旧请求，恢复阶段属于已打开的新画质；两者各用自己的代次。
+      final current = restoreGeneration == null
+          ? isCurrent()
+          : mounted &&
+                selection == _qualitySelectionRevision &&
+                restoreGeneration == _mediaGeneration &&
+                identical(restoreRequest, _request);
+      if (!current) return;
+      _showPlayerMessage('画质切换失败：$error', kind: ToastKind.error);
+      widget.state.log.error('画质切换失败 $error', scope: 'player');
+    }
   }
 
   /// 选集面板（对齐安卓 `EpisodeListDialog`）。
@@ -4354,7 +4481,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             label: '控制栏按钮',
             icon: Icons.view_week_outlined,
             children: [
-              // 8 项（`kPlayerButtons`）：selected = **未隐藏**。
+              // 10 项（`kPlayerButtons`）：selected = **未隐藏**。
               // 用「显示中」而不是「已隐藏」做勾选态，是因为用户找的是
               // 「这个按钮还在不在控制栏上」。
               for (final spec in kPlayerButtons)

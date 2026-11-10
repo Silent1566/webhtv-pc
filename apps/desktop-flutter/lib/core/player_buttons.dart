@@ -3,8 +3,8 @@
 /// 纯数据 + 纯函数：不依赖 Flutter，不碰磁盘。
 ///
 /// 上游依据：`PlayerButtonSetting.java`。**PC 端只取可用子集**——
-/// 上游 32 个按钮里，PC 端只沿用 5 个（`speed`/`prev`/`next`/`episodes`/
-/// `fullscreen`），其余 27 个全部排除——它们没有真实实现，不得为了对齐而伪造入口
+/// 上游 32 个按钮里，PC 端只沿用 6 个（`speed`/`quality`/`prev`/`next`/`episodes`/
+/// `fullscreen`），其余 26 个全部排除——它们没有真实实现，不得为了对齐而伪造入口
 /// （`PRODUCT.md` §Product Principles 第 5 条「不承诺能力范围」）。
 library;
 
@@ -51,12 +51,12 @@ class PlayerButtonSpec {
   final PlayerButtonGroup group;
 }
 
-/// PC 端**可配置**的按钮全集（9 个）。
+/// PC 端**可配置**的按钮全集（10 个）。
 ///
-/// ## 为什么是 9 个而不是上游的 32 个
+/// ## 为什么是 10 个而不是上游的 32 个
 ///
-/// 上游 `PlayerButtonSetting.java:21-52` 定义 32 个 id。PC 端只沿用其中 5 个
-/// （`speed` / `prev` / `next` / `episodes` / `fullscreen`），其余 27 个全部排除，
+/// 上游 `PlayerButtonSetting.java:21-52` 定义 32 个 id。PC 端只沿用其中 6 个
+/// （`speed` / `quality` / `prev` / `next` / `episodes` / `fullscreen`），其余 26 个全部排除，
 /// 因为它们**没有真实实现**——放一个点了没反应的按钮比不放更糟
 /// （`DESIGN.md` 关于筛选按钮的同类教训）。
 ///
@@ -70,7 +70,6 @@ class PlayerButtonSpec {
 /// - `opening` / `ending`：无片头片尾跳过
 /// - `parse`：解析线路由站点配置决定，不暴露手动切换
 /// - `multi_thread_proxy`：代理是站点级配置，不是播放器按钮
-/// - `quality`：无多清晰度（站点给的是线路，切线路归详情页与选集面板）
 /// - `scale`：画面比例归顶栏菜单与右键菜单，不占控制栏按钮位
 /// - `reset`：PC 端「重置」语义不明确
 /// - `search`：播放中搜索是独立流程，不在播放器浮层
@@ -126,6 +125,11 @@ const List<PlayerButtonSpec> kPlayerButtons = [
   PlayerButtonSpec(
     id: 'speed',
     label: '倍速',
+    group: PlayerButtonGroup.rate,
+  ),
+  PlayerButtonSpec(
+    id: 'quality',
+    label: '画质',
     group: PlayerButtonGroup.rate,
   ),
   PlayerButtonSpec(

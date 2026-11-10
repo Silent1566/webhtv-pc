@@ -1272,6 +1272,15 @@ class DanmakuSource {
       'DanmakuSource(name=$displayName source=$source url=${redactUrl(url)})';
 }
 
+/// 单个画质候选：当前集的**未代理**原始播放地址（对齐 Android `Url` 的 values）。
+class PlaybackQuality {
+  const PlaybackQuality({required this.name, required this.url});
+
+  final String name;
+  final String url;
+
+}
+
 /// 统一的 Result 结构（首页/分类/详情/搜索/播放）。
 class SiteResult {
   const SiteResult({
@@ -1282,6 +1291,8 @@ class SiteResult {
     this.pageCount,
     this.total,
     this.playUrl,
+    this.qualities = const [],
+    this.qualityIndex = 0,
     this.header,
     this.format,
     this.parse,
@@ -1301,6 +1312,12 @@ class SiteResult {
 
   /// 播放结果 `url`。
   final String? playUrl;
+
+  /// 当前集的多画质候选（未代理原始地址，`urls` 复数仓库键不含在内）。
+  final List<PlaybackQuality> qualities;
+
+  /// 当前选中画质下标（对象形态取上游 position）。
+  final int qualityIndex;
   final HeaderMap? header;
   final String? format;
   final int? parse;
@@ -1324,6 +1341,8 @@ class SiteResult {
     int? pageCount,
     int? total,
     String? playUrl,
+    List<PlaybackQuality>? qualities,
+    int? qualityIndex,
     HeaderMap? header,
     String? format,
     int? parse,
@@ -1340,6 +1359,8 @@ class SiteResult {
       pageCount: pageCount ?? this.pageCount,
       total: total ?? this.total,
       playUrl: playUrl ?? this.playUrl,
+      qualities: qualities ?? this.qualities,
+      qualityIndex: qualityIndex ?? this.qualityIndex,
       header: header ?? this.header,
       format: format ?? this.format,
       parse: parse ?? this.parse,
@@ -1377,6 +1398,8 @@ class PlaybackDecision {
     this.flag,
     this.subs = const [],
     this.danmaku = const [],
+    this.qualities = const [],
+    this.qualityIndex = 0,
     this.upstreamHeaders,
     this.parse,
     this.jx,
@@ -1384,6 +1407,12 @@ class PlaybackDecision {
 
   final PlaybackAction action;
   final String? url;
+
+  /// 当前集的多画质候选（未代理原始地址），随决策透传到 UI/代理/桥接。
+  final List<PlaybackQuality> qualities;
+
+  /// 当前选中画质下标；[url] 应对应该下标的候选（解析器已处理后的地址）。
+  final int qualityIndex;
   final HeaderMap? headers;
   final String? format;
   final String? reason;
@@ -1414,7 +1443,42 @@ class PlaybackDecision {
 
   String get logLine =>
       'action=${action.name} url=${redactUrl(url)} flag=${flag ?? ""} '
-      'subs=${subs.length} danmaku=${danmaku.length} reason=${reason ?? ""}';
+      'subs=${subs.length} danmaku=${danmaku.length} '
+      'qualities=${qualities.length} qualityIndex=$qualityIndex '
+      'reason=${reason ?? ""}';
+
+  /// 重建决策时保留候选与索引；`qualityIndex` 为 null 表示不切换（沿用原值）。
+  PlaybackDecision copyWith({
+    PlaybackAction? action,
+    String? url,
+    HeaderMap? headers,
+    String? format,
+    String? reason,
+    String? flag,
+    int? parse,
+    int? jx,
+    List<SubtitleInfo>? subs,
+    List<DanmakuSource>? danmaku,
+    List<PlaybackQuality>? qualities,
+    int? qualityIndex,
+    HeaderMap? upstreamHeaders,
+  }) {
+    return PlaybackDecision(
+      action: action ?? this.action,
+      url: url ?? this.url,
+      headers: headers ?? this.headers,
+      format: format ?? this.format,
+      reason: reason ?? this.reason,
+      flag: flag ?? this.flag,
+      parse: parse ?? this.parse,
+      jx: jx ?? this.jx,
+      subs: subs ?? this.subs,
+      danmaku: danmaku ?? this.danmaku,
+      qualities: qualities ?? this.qualities,
+      qualityIndex: qualityIndex ?? this.qualityIndex,
+      upstreamHeaders: upstreamHeaders ?? this.upstreamHeaders,
+    );
+  }
 }
 
 /// 从 URL 的 userinfo（`scheme://user:pass@host`）生成 `Authorization: Basic` 头值。

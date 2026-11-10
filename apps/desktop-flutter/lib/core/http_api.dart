@@ -424,7 +424,11 @@ abstract final class HttpApiResponseParser {
     }
     // 播放入口可能直接返回纯文本 URL。
     if (_looksLikeBareUrl(text)) {
-      return SiteResult(playUrl: text.split('\n').first.trim());
+      final address = text.split('\n').first.trim();
+      return SiteResult(
+        playUrl: address,
+        qualities: [PlaybackQuality(name: '画质1', url: address)],
+      );
     }
 
     throw AppError(
@@ -501,6 +505,7 @@ abstract final class HttpApiResponseParser {
       identity: identity,
     );
     final filters = _parseFilters(map['filters']);
+    final playback = _playbackUrlsFrom(map);
 
     return SiteResult(
       classes: classes,
@@ -516,7 +521,11 @@ abstract final class HttpApiResponseParser {
       format: asNonEmptyString(map['format']),
       parse: asInt(map['parse']),
       jx: asInt(map['jx']),
-      playUrl: _playUrlFrom(map),
+      playUrl: playback.qualities.isEmpty
+          ? null
+          : playback.qualities[playback.index].url,
+      qualities: playback.qualities,
+      qualityIndex: playback.index,
       // 外挂字幕（§10.3）：`subs` 数组仅在播放结果里有意义，其他结果为空。
       subs: SubtitleInfo.listFromJson(map['subs']),
       // 弹幕源（§21 Phase 3）：形态极宽松，由 danmaku.dart 的兼容层解析。
@@ -524,55 +533,94 @@ abstract final class HttpApiResponseParser {
     );
   }
 
-  /// 从播放结果的 `url`/`playUrl` 字段提取第一个可播放地址。
-  ///
-  /// 猫源 bundle 的播放入口（`/play`）会返回**多码率列表**，`url` 是
-  /// 「名称/地址」交替的平铺数组（对齐 CatVod 生态与参考实现的 `UrlAdapter`）：
-  ///   ["RAW", "https://…", "super", "https://…", "high", "https://…"]
-  /// 也兼容参考实现 Result 的 `url` 对象形态 `{"values":[{n,v},…]}` 与
-  /// 数组对象形态 `[{name,url},…]`。取**第一个**作为可播放地址（RAW 优先）。
-  ///
-  /// 注意：顶层 `urls`（复数）**不是**播放入口字段——它是配置仓库键（§7.4.2），
-  /// 猫源 bundle 只在无法产出地址时回 `{urls:[], header:{}}`，永不填充。
-  /// 因此这里不从 `urls` 取值，取不到就交给调用方按「上游没给地址」处理
-  /// （`site_service.resolvePlayback` 对 `type=3` 会明确报错，不回退到分享页）。
-  static String? _playUrlFrom(Map<String, Object?> map) {
+  /// 对象 position 对应原始 values 的位置，过滤后映射为有效下标。
+  /// `urls` 复数是配置仓库键，不从它取值。
+  static ({List<PlaybackQuality> qualities, int index}) _playbackUrlsFrom(
+    Map<String, Object?> map,
+  ) {
     final url = map['url'];
+    final qualities = <PlaybackQuality>[];
+    final positions = <int>[];
+    void add(
+      Object? name,
+      Object? value,
+      int position, {
+      bool addressOnly = false,
+    }) {
+      final address = addressOnly
+          ? _qualityUrl(value)
+          : value is String
+          ? asNonEmptyString(value)
+          : null;
+      if (address == null) return;
+      qualities.add(
+        PlaybackQuality(
+          name: asNonEmptyString(name) ?? '画质${position + 1}',
+          url: address,
+        ),
+      );
+      positions.add(position);
+    }
+
     if (url is List) {
-      // 平铺数组：两两配对（名称/地址），先找裸地址（RAW）；否则用第一个。
-      final names = <String>[];
-      final values = <String>[];
-      for (var i = 0; i + 1 < url.length; i += 2) {
-        final name = asNonEmptyString(url[i]);
-        final value = asNonEmptyString(url[i + 1]);
-        if (name != null && value != null) {
-          names.add(name);
-          values.add(value);
+      // 只有真正带候选字段的对象才把整数组当对象形态；空对象等坏项不能改变
+      // 其余条目的角色（否则纯地址数组里的 `{}` 会让两条 URL 全被丢掉）。
+      if (url.any(_isQualityObject)) {
+        for (var i = 0; i < url.length; i++) {
+          final item = asMap(url[i]);
+          add(item['name'] ?? item['n'], item['url'] ?? item['v'], i);
+        }
+      } else if (url.indexed.any(
+        (item) => item.$1.isEven && _qualityUrl(item.$2) != null,
+      )) {
+        for (var i = 0; i < url.length; i++) {
+          add(null, url[i], i, addressOnly: true);
+        }
+      } else {
+        for (var i = 0; i + 1 < url.length; i += 2) {
+          add(url[i], url[i + 1], i ~/ 2);
         }
       }
-      if (values.isNotEmpty) {
-        final rawIndex = names.indexWhere((n) => n.toLowerCase() == 'raw');
-        return rawIndex >= 0 ? values[rawIndex] : values.first;
-      }
-      // 退化为纯地址数组（无名称）：取第一个非空 http(s)。
-      for (final item in url) {
-        final text = asNonEmptyString(item);
-        if (text != null && text.startsWith('http')) return text;
-      }
-      return null;
-    }
-    if (url is Map) {
-      // 参考实现 Result 形态：`{"values":[{"n":"RAW","v":"…"},…]}`。
+    } else if (url is Map) {
       final values = asList(url['values']);
-      for (final item in values) {
-        final map2 = asMap(item);
-        final value =
-            asNonEmptyString(map2['v']) ?? asNonEmptyString(map2['url']);
-        if (value != null) return value;
+      for (var i = 0; i < values.length; i++) {
+        final item = asMap(values[i]);
+        add(item['n'] ?? item['name'], item['v'] ?? item['url'], i);
       }
-      return null;
+    } else {
+      // 单字符串兼容解析器输入（不一定是媒体地址）。
+      final single = asNonEmptyString(url) ?? asNonEmptyString(map['playUrl']);
+      if (single != null) {
+        qualities.add(PlaybackQuality(name: '画质1', url: single));
+      }
     }
-    return asNonEmptyString(url) ?? asNonEmptyString(map['playUrl']);
+    var index = 0;
+    if (url is Map) {
+      final mapped = positions.indexOf(asInt(url['position']) ?? 0);
+      if (mapped >= 0) index = mapped;
+    } else {
+      final raw = qualities.indexWhere((q) => q.name.toLowerCase() == 'raw');
+      if (raw >= 0) index = raw;
+    }
+    return (qualities: List.unmodifiable(qualities), index: index);
+  }
+
+  static bool _isQualityObject(Object? value) {
+    if (value is! Map) return false;
+    final map = asMap(value);
+    return [map['url'], map['v']].any(
+      (candidate) => candidate is String && candidate.trim().isNotEmpty,
+    );
+  }
+
+  static String? _qualityUrl(Object? value) {
+    if (value is! String) return null;
+    final text = asNonEmptyString(value);
+    if (text == null) return null;
+    if (text.startsWith('/')) return text;
+    final uri = Uri.tryParse(text);
+    if (uri == null || !uri.hasScheme) return null;
+    return uri.host.isNotEmpty || uri.scheme == 'file' ? text : null;
   }
 
   static Map<String, List<VodFilterGroup>> _parseFilters(Object? value) {
@@ -641,7 +689,10 @@ abstract final class HttpApiResponseParser {
         root.getElement('url')?.innerText.trim() ??
         (root.localName == 'url' ? root.innerText.trim() : null);
     if (bareUrl != null && bareUrl.isNotEmpty) {
-      return SiteResult(playUrl: bareUrl);
+      return SiteResult(
+        playUrl: bareUrl,
+        qualities: [PlaybackQuality(name: '画质1', url: bareUrl)],
+      );
     }
 
     final classes = <VodClass>[];

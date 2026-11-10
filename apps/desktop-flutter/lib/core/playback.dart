@@ -119,6 +119,8 @@ class PlaybackResolutionInput {
     this.globalHeaders = const [],
     this.subs = const [],
     this.danmaku = const [],
+    this.qualities = const [],
+    this.qualityIndex = 0,
   });
 
   final Site site;
@@ -138,6 +140,8 @@ class PlaybackResolutionInput {
 
   /// 播放结果携带的弹幕源（§21 Phase 3），原样透传到决策。
   final List<DanmakuSource> danmaku;
+  final List<PlaybackQuality> qualities;
+  final int qualityIndex;
 }
 
 /// 播放决策器：只根据输入决定动作，不执行网络。
@@ -152,20 +156,32 @@ abstract final class PlaybackResolver {
   /// 4. 站点 `playUrl` 前缀形态 → 拼接后判断；
   /// 5. 其余非 URL 目标 → 需要解析器/Spider，明确报错。
   static PlaybackDecision decide(PlaybackResolutionInput input) {
+    final qualityIndex =
+        input.qualityIndex >= 0 && input.qualityIndex < input.qualities.length
+        ? input.qualityIndex
+        : 0;
+    final selectedTarget = input.qualities.isEmpty
+        ? input.episodeTarget
+        : input.qualities[qualityIndex].url;
     final parseRequested = (input.parse ?? 0) == 1 || (input.jx ?? 0) == 1;
     if (parseRequested) {
       // §12.2：parse=1/jx=1 → 走解析器。此处返回待解析决策（保留目标与触发原因），
       // 由 site_service 调 ParseService 解析后再次 decide。不再抛错。
       return PlaybackDecision(
         action: PlaybackAction.needParser,
-        url: input.episodeTarget,
+        url: selectedTarget,
+        headers: _mediaHeaders(input, selectedTarget),
+        subs: input.subs,
+        danmaku: input.danmaku,
         flag: input.flag,
+        qualities: input.qualities,
+        qualityIndex: qualityIndex,
         parse: input.parse,
         jx: input.jx,
       );
     }
 
-    final target = input.episodeTarget.trim();
+    final target = selectedTarget.trim();
     if (target.isEmpty) {
       throw AppError(
         AppErrorKind.playbackUrlMissing,
@@ -174,7 +190,7 @@ abstract final class PlaybackResolver {
       );
     }
 
-    final headers = _mediaHeaders(input);
+    final headers = _mediaHeaders(input, target);
 
     if (looksLikeMediaUrl(target)) {
       return PlaybackDecision(
@@ -182,6 +198,8 @@ abstract final class PlaybackResolver {
         url: target,
         headers: headers,
         flag: input.flag,
+        qualities: input.qualities,
+        qualityIndex: qualityIndex,
         subs: input.subs,
         danmaku: input.danmaku,
       );
@@ -195,6 +213,8 @@ abstract final class PlaybackResolver {
         url: resolved,
         headers: headers,
         flag: input.flag,
+        qualities: input.qualities,
+        qualityIndex: qualityIndex,
         subs: input.subs,
         danmaku: input.danmaku,
       );
@@ -212,6 +232,8 @@ abstract final class PlaybackResolver {
           url: joined,
           headers: headers,
           flag: input.flag,
+          qualities: input.qualities,
+          qualityIndex: qualityIndex,
           subs: input.subs,
           danmaku: input.danmaku,
         );
@@ -232,10 +254,8 @@ abstract final class PlaybackResolver {
 
   /// 媒体请求 Header：全局 headers 规则（按目标 host 匹配）+ 站点 header，
   /// 最后是播放结果 header（最高优先级，§7.4.6 步骤 4）。
-  static HeaderMap _mediaHeaders(PlaybackResolutionInput input) {
-    final MediaRequestTarget target = MediaRequestTarget.of(
-      input.episodeTarget,
-    );
+  static HeaderMap _mediaHeaders(PlaybackResolutionInput input, String url) {
+    final MediaRequestTarget target = MediaRequestTarget.of(url);
     return HeaderMap.merge([
       target.host.isEmpty
           ? HeaderMap()
