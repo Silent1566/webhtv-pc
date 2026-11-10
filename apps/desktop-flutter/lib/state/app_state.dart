@@ -8,6 +8,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:isolate';
 
@@ -1933,6 +1934,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (Platform.isWindows) {
       platform = 'windows';
       architecture = _windowsArchitecture();
+    } else if (Platform.isLinux) {
+      architecture = switch (Abi.current()) {
+        Abi.linuxIA32 => 'x86',
+        final abi => abi.toString().split('_').last,
+      };
     }
 
     if (_database != null) {
