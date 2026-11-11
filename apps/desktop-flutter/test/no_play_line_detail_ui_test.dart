@@ -332,7 +332,12 @@ void main() {
     dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-noline-detail');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     plainClient = _tmdbClient();
     plainTmdb = _tmdbState(client: plainClient);

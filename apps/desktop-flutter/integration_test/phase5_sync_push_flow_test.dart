@@ -38,7 +38,12 @@ void main() {
     temp = Directory.systemTemp.createTempSync('webhtv-push-flow');
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
     );

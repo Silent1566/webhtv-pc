@@ -265,7 +265,12 @@ void main() {
       tempDir = await Directory.systemTemp.createTemp('webhtv-detail-resume');
       state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+          overrides: {
+            'config': '${tempDir.path}/webhtv-pc',
+            'data': '${tempDir.path}/webhtv-pc',
+            'cache': '${tempDir.path}/webhtv-pc/cache',
+            'state': '${tempDir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );
@@ -467,7 +472,12 @@ void main() {
       dir = await Directory.systemTemp.createTemp('webhtv-hero-play');
       appState = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': '${dir.path}/webhtv-pc',
+            'data': '${dir.path}/webhtv-pc',
+            'cache': '${dir.path}/webhtv-pc/cache',
+            'state': '${dir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );
@@ -668,7 +678,12 @@ void main() {
       dir = await Directory.systemTemp.createTemp('webhtv-line-recent');
       appState = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': '${dir.path}/webhtv-pc',
+            'data': '${dir.path}/webhtv-pc',
+            'cache': '${dir.path}/webhtv-pc/cache',
+            'state': '${dir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );
@@ -802,7 +817,12 @@ void main() {
       dir = await Directory.systemTemp.createTemp('webhtv-episode-recent');
       appState = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': '${dir.path}/webhtv-pc',
+            'data': '${dir.path}/webhtv-pc',
+            'cache': '${dir.path}/webhtv-pc/cache',
+            'state': '${dir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );
@@ -1164,7 +1184,12 @@ void main() {
       dir = await Directory.systemTemp.createTemp('webhtv-cross-source-resume');
       appState = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': '${dir.path}/webhtv-pc',
+            'data': '${dir.path}/webhtv-pc',
+            'cache': '${dir.path}/webhtv-pc/cache',
+            'state': '${dir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );

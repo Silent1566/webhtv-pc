@@ -148,7 +148,12 @@ void main() {
         } catch (_) {}
       });
       final paths = AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       );
       final state = AppState(paths: paths, log: LogService());
 
@@ -176,7 +181,12 @@ void main() {
         } catch (_) {}
       });
       final paths = AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       );
       final state = AppState(paths: paths, log: LogService());
       // TmdbState 的身份服务依赖已打开的数据库（`_database!`），必须先 bootstrap。

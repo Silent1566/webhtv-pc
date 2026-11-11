@@ -20,6 +20,7 @@ import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
+import '../core/tmdb_identity.dart';
 import '../services/following_air_time_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
@@ -28,6 +29,7 @@ import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'playback_resume.dart';
 import 'tmdb_episode_detail.dart';
+import 'search_page.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
@@ -299,10 +301,29 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
       ),
       sourceName: sourceName,
       service: _state.tmdbService,
+      recommendationDependencies: _state.recommendationDependencies,
+      onSearchTitle: (title) => _searchRecommendation(title),
+      onSearchSource: (title, identity) =>
+          _searchRecommendation(title, identityHint: identity),
       resolveItem: item == null || entry.episode < 1
           ? null
           : () => _state.followingTmdbItem(item),
       onAction: () => _playEntry(entry),
+    );
+  }
+
+  void _searchRecommendation(String title, {TmdbIdentity? identityHint}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('搜索站源')),
+          body: SearchPage(
+            state: _state,
+            initialKeyword: title,
+            identityHint: identityHint,
+          ),
+        ),
+      ),
     );
   }
 

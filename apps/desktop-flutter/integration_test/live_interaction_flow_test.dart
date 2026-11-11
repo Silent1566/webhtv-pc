@@ -479,7 +479,12 @@ void main() {
       expect(await tester.runAsync(() => _httpStatus('/health')), 200);
       final temp = Directory.systemTemp.createTempSync('webhtv-task-c-$tag-');
       final paths = AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       );
       final now = DateTime.now();
       final past = EpgProgram(

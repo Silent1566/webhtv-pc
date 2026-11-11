@@ -163,7 +163,12 @@ void seedHealth(AppDatabase database) {
 
 Future<AppState> _bootState(Directory temp) async {
   final paths = AppPaths.resolve(
-    overrides: {'roaming': temp.path, 'local': temp.path},
+    overrides: {
+      'config': '${temp.path}/webhtv-pc',
+      'data': '${temp.path}/webhtv-pc',
+      'cache': '${temp.path}/webhtv-pc/cache',
+      'state': '${temp.path}/webhtv-pc/logs',
+    },
   );
   final state = AppState(paths: paths, log: LogService());
   await state.bootstrap();
@@ -406,7 +411,12 @@ void main() {
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-srcdetail');
     final state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
     );
@@ -498,7 +508,12 @@ void main() {
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-browse');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {
@@ -680,7 +695,12 @@ void main() {
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-player');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {
@@ -806,7 +826,12 @@ void main() {
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-brand');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {

@@ -43,7 +43,12 @@ void main() {
     // 纯 `test()` 不受此限，这里统一放 setUp 更稳）。
     temp = await Directory.systemTemp.createTemp('webhtv-last-site');
     paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
   });
 

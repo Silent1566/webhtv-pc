@@ -76,7 +76,12 @@ void main() {
   testWidgets('TMDB 播放：季度身份透传 → 出画 → 写季度进度 → 换源续播', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-play-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {

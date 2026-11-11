@@ -7,6 +7,10 @@
 library;
 
 import 'dart:async';
+
+import '../core/detail_recommendation.dart';
+import 'detail_recommendation_state.dart';
+
 import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
@@ -1033,6 +1037,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     int configId = 0,
     List<VodPlayLine>? lines,
     bool navSource = false,
+    // beta 起 `TmdbState.loadForVod` 支持「已知身份」提示（导航源/无线路时
+    // 直接用站点声明的身份），这里原样透传上去。
+    TmdbIdentity? knownIdentity,
   }) async {
     final run = ++_aiLoadRun;
     _aiTmdbSiteKey = siteKey;
@@ -1043,6 +1050,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       configId: configId,
       lines: lines,
       navSource: navSource,
+      knownIdentity: knownIdentity,
     );
     final generation = tmdb.generation;
     final detailGeneration = _detailRunId;
@@ -1144,6 +1152,72 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// TMDB 服务（纯 TMDB 详情页直接使用，`04` §6）。
   TmdbService get tmdbService => _tmdbService;
+
+  DetailRecommendationDependencies? _recommendationDependencies;
+  DetailRecommendationDependencies get recommendationDependencies =>
+      _recommendationDependencies ??=
+          DetailRecommendationDependencies.fromServices(
+            service: tmdbService,
+            cacheDirectory: Directory(paths.cacheDir),
+            feedbackFile: File(
+              '${paths.configDir}/recommendation-feedback.json',
+            ),
+            historyChanges: this,
+            history: () => [
+              for (final row in recentHistory(sourceKey: ''))
+                _recommendationSeedForHistory(row),
+            ],
+          );
+
+  RecommendationSeed _recommendationSeedForHistory(PlaybackHistory row) {
+    final sourceConfig = configForSourceKey(row.sourceKey) ?? config;
+    final site = sourceConfig == null
+        ? null
+        : _siteByKey(sourceConfig, row.siteKey);
+    return _recommendationSeed(
+      title: row.vodName,
+      year: row.vodYear,
+      tmdbId: row.tmdbId,
+      mediaType: TmdbMediaType.parse(row.mediaType),
+      site: site,
+    );
+  }
+
+  RecommendationSeed recommendationSeedForVod(
+    Vod vod, {
+    Site? site,
+    TmdbItem? tmdbItem,
+  }) => _recommendationSeed(
+    title: vod.vodName,
+    year: vod.vodYear ?? '',
+    tmdbId: tmdbItem?.tmdbId ?? 0,
+    mediaType:
+        tmdbItem?.mediaType ?? TmdbMediaType.parse(vod.extra['media_type']),
+    site: site,
+    typeLabel: asString(vod.extra['type_name']) ?? '',
+  );
+
+  RecommendationSeed _recommendationSeed({
+    required String title,
+    required String year,
+    required int tmdbId,
+    required TmdbMediaType? mediaType,
+    Site? site,
+    String typeLabel = '',
+  }) {
+    // Canonical content tags and bracket forms come from tmdb_config.dart.
+    final labels = normalizeBrackets(
+      '${site?.key ?? ''} ${site?.name ?? ''} $typeLabel',
+    );
+    return RecommendationSeed(
+      title: title,
+      year: year,
+      tmdbId: tmdbId,
+      mediaType: mediaType,
+      isAudio: const ['[音]', '[听]', '[书]', '[小说]'].any(labels.contains),
+      isShortDrama: labels.contains('[短]'),
+    );
+  }
 
   /// 设置文件路径（设置页展示用）。
   String get tmdbSettingsPath => paths.settingsPath;
@@ -2735,8 +2809,37 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
-      navSource: site.indexs == 1,
+      navSource: _navSourceFor(site, vod),
+      knownIdentity: _knownIdentityWithoutPlayback(site, vod),
     );
+  }
+
+  /// 本次详情加载是否按「导航源」处理。
+  ///
+  /// 判据仍是 `site.indexs == 1`；推荐回退页的**合成条目**（`vodId` 为空）也走
+  /// 这一条：它本来就没有站点索引条目，剧集卡片只能来自 TMDB 全季聚合。
+  bool _navSourceFor(Site site, Vod vod) =>
+      site.indexs == 1 || vod.vodId.isEmpty;
+
+  TmdbIdentity? _knownIdentityWithoutPlayback(Site site, Vod vod) {
+    if (!_navSourceFor(site, vod) &&
+        playLinesOf(vod).any((line) => line.episodes.isNotEmpty)) {
+      return null;
+    }
+    final declared = TmdbIdentity.from(
+      vod.extra['media_type'],
+      vod.extra['tmdb_id'],
+    );
+    if (declared != null) return declared;
+    // 真实条目的权威响应可能不回传身份字段；只复用仍绑定于该条目的已验证身份。
+    return vod.vodId.isNotEmpty &&
+            tmdb.belongsTo(
+              vod.vodId,
+              siteKey: site.key,
+              sourceTitle: vod.vodName,
+            )
+        ? tmdb.identity
+        : null;
   }
 
   TmdbIdentityService _ensureTmdbIdentityService() =>
@@ -4784,7 +4887,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   }) async {
     final service = serviceOverride ?? _siteService;
     final site = siteOverride ?? _selectedSite;
-    if (service == null || site == null) return;
+    if (site == null) return;
+    // 合成条目（推荐回退页）没有任何站源身份：拿空 `vod_id` 去请求详情只会换来
+    // 一条业务错误，所以干脆不发请求，只跑 TMDB 链（见下面的 early return）。
+    final synthetic = vod.vodId.isEmpty;
+    if (service == null && !synthetic) return;
     final runId = ++_detailRunId;
     _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
@@ -4809,11 +4916,32 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       siteName: site.name,
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
-      // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；其余站点一律
-      // 按普通站点加载，TMDB 区块行为与以前逐字一致。
-      navSource: site.indexs == 1,
+      // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；合成条目另算，
+      // 见 [_navSourceFor]。其余站点一律按普通站点加载，行为与以前逐字一致。
+      navSource: _navSourceFor(site, vod),
+      knownIdentity: _knownIdentityWithoutPlayback(site, vod),
     );
     notifyListeners();
+    if (synthetic) {
+      // 只等并行的 TMDB 链落地：合成条目的剧集卡片、换源入口与播放入口全部来自它。
+      final pending = _pendingTmdbLoad;
+      _pendingTmdbLoad = null;
+      if (pending != null) {
+        try {
+          await pending;
+        } catch (error) {
+          log.debug(
+            '并行 TMDB 加载异常（已忽略）vod=${vod.vodId} error=$error',
+            scope: 'tmdb',
+          );
+        }
+      }
+      if (runId != _detailRunId) return;
+      _detailPhase = LoadPhase.ready;
+      notifyListeners();
+      return;
+    }
+    if (service == null) return;
     try {
       // folder 先取 t=<vod_id> 的资源，再逐个取 ids=<分享链> 的分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
@@ -4891,7 +5019,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
           siteName: site.name,
           configId: tmdbConfigId,
           lines: playLinesOf(effective),
-          navSource: site.indexs == 1,
+          navSource: _navSourceFor(site, vod),
+          knownIdentity:
+              _knownIdentityWithoutPlayback(site, effective) ??
+              _knownIdentityWithoutPlayback(site, vod),
         ),
       );
       log.info(
@@ -6543,6 +6674,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _importService.close();
     _liveService?.close();
     _epgService?.close();
+    _recommendationDependencies?.close();
     _tmdbService.close();
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();

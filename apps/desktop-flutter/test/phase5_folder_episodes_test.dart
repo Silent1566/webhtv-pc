@@ -77,7 +77,12 @@ void main() {
     });
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
       httpClient: client,

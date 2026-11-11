@@ -16,12 +16,15 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
+import '../core/detail_recommendation.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
 import '../services/ui_preferences_store.dart';
+import '../state/detail_recommendation_state.dart';
 import 'common.dart';
+import 'detail_recommendations.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
 import 'tmdb_widgets.dart';
@@ -40,9 +43,19 @@ class TmdbDetailPage extends StatefulWidget {
     this.initialViewMode = UiEpisodeViewMode.fallback,
     this.onViewModeChanged,
     this.aiRecommendations,
+
+    this.recommendationDependencies,
+    this.onSearchTitle,
   });
 
   final TmdbService service;
+
+  /// 底部推荐行的依赖（AppState 注入）；为空时本页自建一份最小组件
+  /// （仅 service + 默认缓存目录），保持既有构造调用方不用改。
+  final DetailRecommendationDependencies? recommendationDependencies;
+
+  /// 豆瓣作品没有 TMDB 身份时的按标题搜索回调。
+  final ValueChanged<String>? onSearchTitle;
 
   /// 媒体身份（唯一入口，无站源 `Vod`）。
   final TmdbIdentity identity;
@@ -81,6 +94,16 @@ class TmdbDetailPage extends StatefulWidget {
 }
 
 class _TmdbDetailPageState extends State<TmdbDetailPage> {
+  late final DetailRecommendationDependencies? _defaultRecommendations =
+      widget.recommendationDependencies == null
+      ? DetailRecommendationDependencies.fromServices(service: widget.service)
+      : null;
+  DetailRecommendationDependencies get _recommendationsDependencies =>
+      widget.recommendationDependencies ?? _defaultRecommendations!;
+
+  /// 当前作品的 TMDB 原始详情（喂给"猜你喜欢"的来源内嵌推荐）。
+  Map<String, Object?>? _recommendationDetail;
+
   TmdbLoadPhase _phase = TmdbLoadPhase.idle;
   AppError? _error;
   TmdbDetailData? _data;
@@ -95,8 +118,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   ///
   /// `late` 初始化器在 `initState` 之后才求值，因此能读 `widget`
   /// （与站点详情页同一写法）。
-  late bool _episodeGridMode =
-      widget.initialViewMode == UiEpisodeViewMode.grid;
+  late bool _episodeGridMode = widget.initialViewMode == UiEpisodeViewMode.grid;
 
   int _generation = 0;
   bool _disposed = false;
@@ -112,6 +134,10 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
 
   @override
   void dispose() {
+    // 自建的那份依赖随页面一起关闭，避免遗留速率闸计时器。
+    if (widget.recommendationDependencies == null) {
+      _defaultRecommendations?.close();
+    }
     _disposed = true;
     _generation++;
     super.dispose();
@@ -133,7 +159,10 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             mediaType: widget.identity.mediaType,
             title: '',
           );
-      final detail = await widget.service.detail(snapshot, includeRelated: true);
+      final detail = await widget.service.detail(
+        snapshot,
+        includeRelated: true,
+      );
       if (_disposed || generation != _generation) return;
       final config = widget.service.config;
       final data = TmdbDetailData.fromDetail(
@@ -146,6 +175,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
       final selected = seasons.isEmpty ? -1 : _defaultSeasonOf(seasons);
       setState(() {
         _data = data;
+        _recommendationDetail = detail;
         _tmdbSeasons = seasons;
         _selectedSeason = selected;
         _episodesReversed = false;
@@ -225,7 +255,9 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   }
 
   Future<void> _selectSeason(int season) async {
-    if (_disposed || !_tmdbSeasons.contains(season) || season == _selectedSeason) {
+    if (_disposed ||
+        !_tmdbSeasons.contains(season) ||
+        season == _selectedSeason) {
       return;
     }
     setState(() {
@@ -258,18 +290,19 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             label: const Text('搜索站源'),
             onPressed: data == null || data.title.isEmpty
                 ? null
-                : () => widget.onSearchSource?.call(
-                    data.title,
-                    widget.identity,
-                  ),
+                : () =>
+                      widget.onSearchSource?.call(data.title, widget.identity),
           ),
         ],
       ),
       body: switch (_phase) {
-        TmdbLoadPhase.idle ||
-        TmdbLoadPhase.loading => data == null
-            ? const LoadingBlock()
-            : _buildContent(context, data),
+        TmdbLoadPhase.idle || TmdbLoadPhase.loading =>
+          data == null ? const LoadingBlock() : _buildContent(context, data),
+        // 有首屏快照时仍渲染正文：底部推荐行（尤其豆瓣）不依赖 TMDB 凭据。
+        TmdbLoadPhase.disabled when data != null => _buildContent(
+          context,
+          data,
+        ),
         TmdbLoadPhase.disabled => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -280,6 +313,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             ),
           ),
         ),
+        TmdbLoadPhase.failed when data != null => _buildContent(context, data),
         TmdbLoadPhase.failed => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -330,48 +364,65 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             // 且两层同图不同框比会在交界处错位）。
             paintBackdrop: false,
             data: data,
-        seasons: data.seasons,
-        selectedSeason: _selectedSeason,
-        selectableSeasons: _tmdbSeasons,
-        onSeasonChanged: (season) => _selectSeason(season),
-        episodeKeyPrefix: 'tmdb-only-episode',
-        episodeTitle: '剧集',
-        reversed: _episodesReversed,
-        gridMode: _episodeGridMode,
-        onToggleReversed: () =>
-            setState(() => _episodesReversed = !_episodesReversed),
-        onToggleGridMode: _toggleEpisodeGridMode,
-        // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
-        episodeActionLabel: '搜索站源',
-        episodeCards: _episodeCards,
-        // 信息表退场（2026-10-22 用户反馈）：`语言` 已进 hero 标签行。
-        recommendations: _recommendations,
-        videos: _videos,
-        metadataBadge: '元数据季度 · 不可直接播放',
-        onEpisodeTap: (_, card) {
-          if (data.title.isEmpty) return;
-          widget.onSearchSource?.call(data.title, widget.identity);
-        },
-        onEpisodeLongPress: (_, card) => showTmdbEpisodeDetails(
-          context,
-          card: card,
-          service: widget.service,
-          item: TmdbItem(
-            tmdbId: widget.identity.tmdbId,
-            mediaType: widget.identity.mediaType,
-            title: data.title,
-          ),
-          actionLabel: '搜索站源',
-          onAction: () {
-            if (data.title.isEmpty) return;
-            widget.onSearchSource?.call(data.title, widget.identity);
-          },
-          onPersonTap: _openPerson,
-        ),
-        onPersonTap: (person) => _openPerson(person),
-        onRecommendationTap: (item) => _openItem(item),
-        onOpenVideo: widget.onOpenVideo,
-        onCopyVideo: widget.onCopyVideo,
+            seasons: data.seasons,
+            selectedSeason: _selectedSeason,
+            selectableSeasons: _tmdbSeasons,
+            onSeasonChanged: (season) => _selectSeason(season),
+            episodeKeyPrefix: 'tmdb-only-episode',
+            episodeTitle: '剧集',
+            reversed: _episodesReversed,
+            gridMode: _episodeGridMode,
+            onToggleReversed: () =>
+                setState(() => _episodesReversed = !_episodesReversed),
+            onToggleGridMode: _toggleEpisodeGridMode,
+            // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
+            episodeActionLabel: '搜索站源',
+            episodeCards: _episodeCards,
+            // 信息表退场（2026-10-22 用户反馈）：`语言` 已进 hero 标签行。
+            // 底部三行推荐（猜你喜欢 / 个性推荐·TMDB / 个性推荐·豆瓣）：
+            // 非空即接管旧的"相关推荐"海报墙，两处不会重复。
+            recommendationBottom: DetailRecommendations(
+              dependencies: _recommendationsDependencies,
+              current: RecommendationSeed(
+                title: data.title,
+                tmdbId: widget.identity.tmdbId,
+                mediaType: widget.identity.mediaType,
+              ),
+              detail: _recommendationDetail,
+              onOpenItem: _openItem,
+              onSearchTitle: widget.onSearchTitle,
+            ),
+            recommendations: _recommendations,
+            videos: _videos,
+            metadataBadge: '元数据季度 · 不可直接播放',
+            onEpisodeTap: (_, card) {
+              if (data.title.isEmpty) return;
+              widget.onSearchSource?.call(data.title, widget.identity);
+            },
+            onEpisodeLongPress: (_, card) => showTmdbEpisodeDetails(
+              context,
+              card: card,
+              recommendationDependencies: _recommendationsDependencies,
+              onSearchTitle: widget.onSearchTitle,
+              onSearchSource: widget.onSearchSource,
+              onOpenItem: _openItem,
+              service: widget.service,
+              item: TmdbItem(
+                tmdbId: widget.identity.tmdbId,
+                mediaType: widget.identity.mediaType,
+                title: data.title,
+              ),
+              actionLabel: '搜索站源',
+              onAction: () {
+                if (data.title.isEmpty) return;
+                widget.onSearchSource?.call(data.title, widget.identity);
+              },
+              onPersonTap: _openPerson,
+            ),
+            onPersonTap: (person) => _openPerson(person),
+            onRecommendationTap: (item) => _openItem(item),
+            onOpenVideo: widget.onOpenVideo,
+            onCopyVideo: widget.onCopyVideo,
           ),
         ),
         if (widget.aiRecommendations != null)
@@ -421,6 +472,8 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
           service: widget.service,
           identity: identity,
           initialItem: item,
+          recommendationDependencies: _recommendationsDependencies,
+          onSearchTitle: widget.onSearchTitle,
           onSearchSource: widget.onSearchSource,
           onOpenVideo: widget.onOpenVideo,
           onCopyVideo: widget.onCopyVideo,

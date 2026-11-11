@@ -50,7 +50,12 @@ void main() {
   setUp(() async {
     temp = Directory.systemTemp.createTempSync('webhtv-phase8-settings');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     state = AppState(paths: paths, log: LogService());
     await state.bootstrap();

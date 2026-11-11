@@ -77,11 +77,17 @@ void main() {
       temp = Directory.systemTemp.createTempSync('webhtv-tmdb-entry');
       state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': temp.path, 'local': temp.path},
+          overrides: {
+            'config': temp.path,
+            'data': temp.path,
+            'cache': temp.path,
+            'state': temp.path,
+          },
         ),
         log: LogService(),
       );
       await state.bootstrap();
+      await state.saveTmdbConfig(const TmdbConfig());
     });
 
     tearDown(() {

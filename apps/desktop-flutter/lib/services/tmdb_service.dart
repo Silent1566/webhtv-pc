@@ -33,10 +33,17 @@ class TmdbCancelledException implements Exception {
 /// 取消令牌（`03` §3.5）。
 class TmdbCancellationToken {
   bool _cancelled = false;
+  final _cancellation = StreamController<void>.broadcast(sync: true);
 
   bool get isCancelled => _cancelled;
+  Stream<void> get onCancel => _cancellation.stream;
 
-  void cancel() => _cancelled = true;
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _cancellation.add(null);
+    unawaited(_cancellation.close());
+  }
 
   void throwIfCancelled() {
     if (_cancelled) throw const TmdbCancelledException();
@@ -416,7 +423,11 @@ class TmdbService {
       requiredFields: const ['results'],
       cacheKeySuffix: 'p$page',
     );
-    return _itemsFromSearch(body, config);
+    return _itemsFromSearch(
+      body,
+      config,
+      fallbackMediaType: identity.mediaType,
+    );
   }
 
   /// 演职人员（`03` §4.2）：电影取 `credits.cast`，剧集取 `aggregate_credits.cast`。
@@ -619,7 +630,10 @@ class TmdbService {
           'Authorization': 'Bearer ${config.accessToken}',
         'Accept': 'application/json',
       };
-      final response = await _client.get(uri, headers: headers).timeout(timeout);
+      final response = await _awaitResponse(
+        () => _client.get(uri, headers: headers),
+        cancel,
+      );
       cancel?.throwIfCancelled();
 
       if (response.statusCode == 401 || response.statusCode == 403) {
@@ -664,6 +678,7 @@ class TmdbService {
       }
 
       // 写缓存（取消时不写；写失败不影响返回）。
+      cancel?.throwIfCancelled();
       if (cache != null) {
         cache.write(type, key, body);
       }
@@ -676,6 +691,7 @@ class TmdbService {
       rethrow;
     } catch (error) {
       // 3. 陈旧兜底（不看 TTL，`03` §3.3）
+      cancel?.throwIfCancelled();
       if (cache != null) {
         final stale = cache.readFirstAny(type, keys);
         if (stale != null) {
@@ -684,6 +700,48 @@ class TmdbService {
         }
       }
       throw _mapError(error);
+    }
+  }
+
+  Future<http.Response> _awaitResponse(
+    Future<http.Response> Function() request,
+    TmdbCancellationToken? cancel,
+  ) async {
+    cancel?.throwIfCancelled();
+    final result = Completer<http.Response>();
+    Timer? timer;
+    StreamSubscription<void>? subscription;
+    void fail(Object error, [StackTrace? stack]) {
+      if (result.isCompleted) return;
+      timer?.cancel();
+      result.completeError(error, stack);
+    }
+
+    subscription = cancel?.onCancel.listen((_) {
+      fail(const TmdbCancelledException());
+    });
+    timer = Timer(timeout, () {
+      fail(TimeoutException('TMDB request timed out', timeout));
+    });
+    try {
+      unawaited(
+        request().then(
+          (response) {
+            if (result.isCompleted) return;
+            timer?.cancel();
+            result.complete(response);
+          },
+          onError: (Object error, StackTrace stack) {
+            fail(error, stack);
+          },
+        ),
+      );
+      return await result.future;
+    } finally {
+      timer.cancel();
+      // Cancel detaches the listener immediately. Its cleanup future must not
+      // block HTTP completion (Flutter fake-async may settle it after teardown).
+      unawaited(subscription?.cancel());
     }
   }
 
@@ -709,29 +767,53 @@ class TmdbService {
   }
 
   /// 从详情对象的 `recommendations` 取推荐（`03` §4.2）。
-  List<TmdbItem> recommendationsFromDetail(Map<String, Object?> detail) =>
-      _itemsFromRelated(detail['recommendations']);
+  List<TmdbItem> recommendationsFromDetail(
+    Map<String, Object?> detail, {
+    TmdbMediaType? fallbackMediaType,
+  }) => _itemsFromRelated(
+    detail['recommendations'],
+    fallbackMediaType:
+        fallbackMediaType ?? TmdbMediaType.parse(detail['media_type']),
+  );
 
   /// 从详情对象的 `similar` 取相似（`03` §4.2）。
-  List<TmdbItem> similarFromDetail(Map<String, Object?> detail) =>
-      _itemsFromRelated(detail['similar']);
+  List<TmdbItem> similarFromDetail(
+    Map<String, Object?> detail, {
+    TmdbMediaType? fallbackMediaType,
+  }) => _itemsFromRelated(
+    detail['similar'],
+    fallbackMediaType:
+        fallbackMediaType ?? TmdbMediaType.parse(detail['media_type']),
+  );
 
-  List<TmdbItem> _itemsFromRelated(Object? section) {
+  List<TmdbItem> _itemsFromRelated(
+    Object? section, {
+    TmdbMediaType? fallbackMediaType,
+  }) {
     final config = _config();
     final map = _mapOf(section);
     if (map == null) return const [];
-    return _itemsFromSearch({'results': _listOf(map['results'])}, config);
+    return _itemsFromSearch(
+      {'results': _listOf(map['results'])},
+      config,
+      fallbackMediaType: fallbackMediaType,
+    );
   }
 
   List<TmdbItem> _itemsFromSearch(
     Map<String, Object?> body,
-    TmdbConfig config,
-  ) {
+    TmdbConfig config, {
+    TmdbMediaType? fallbackMediaType,
+  }) {
     final results = _listOf(body['results']);
     final items = <TmdbItem>[];
     for (final result in results) {
       final item = TmdbItem.fromSearchResult(
-        result,
+        result is Map &&
+                result['media_type'] == null &&
+                fallbackMediaType != null
+            ? {...result, 'media_type': fallbackMediaType.wireName}
+            : result,
         image: (base, path) => _image(base, path),
         imageBase: config.imageBase,
         backdropBase: config.backdropBase,
