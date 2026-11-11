@@ -45,6 +45,8 @@ import 'package:webhtv_pc/services/sync_server.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 
+import 'support/settings_navigation.dart';
+
 /// 假桥接：探测必定成功、导入返回固定配置，不碰网络。
 class _FakeBridge extends AndroidBridgeService {
   _FakeBridge() : super(log: LogService());
@@ -175,11 +177,13 @@ void main() {
       MaterialApp(
         home: ListenableBuilder(
           listenable: state,
-          builder: (context, child) => Scaffold(body: SettingsPage(state: state)),
+          builder: (context, child) =>
+              Scaffold(body: SettingsPage(state: state)),
         ),
       ),
     );
     await tester.pump();
+    await selectSettingsCategory(tester, 'connections');
   }
 
   String summaryOf(WidgetTester tester) =>
@@ -194,11 +198,7 @@ void main() {
     expect(fresh.syncState.peers, isEmpty);
 
     await mountSettings(tester, fresh);
-    expect(
-      summaryOf(tester),
-      contains('未接入'),
-      reason: '前置条件：初始应显示「未接入」',
-    );
+    expect(summaryOf(tester), contains('未接入'), reason: '前置条件：初始应显示「未接入」');
 
     // 关键：这一行必须真的会重建。用 AppState 的监听计数直接锁定转发关系
     // ——若 AppState 不转发 syncState 的通知，下面的计数永远为 0。
@@ -233,18 +233,15 @@ void main() {
       isEmpty,
       reason: '前置条件：重启后内存态设备列表必为空（这正是原缺陷的成因）',
     );
-    expect(
-      reopened.syncState.peers,
-      isNotEmpty,
-      reason: '前置条件：已授权对端应从磁盘恢复',
-    );
+    expect(reopened.syncState.peers, isNotEmpty, reason: '前置条件：已授权对端应从磁盘恢复');
 
     await mountSettings(tester, reopened);
 
     expect(
       summaryOf(tester),
       contains('已接入'),
-      reason: '重启后必须仍显示「已接入」——原实现只看内存态 devices，'
+      reason:
+          '重启后必须仍显示「已接入」——原实现只看内存态 devices，'
           '即使已授权对端也永远写「未接入」（用户反馈的缺陷点）',
     );
   });

@@ -23,35 +23,130 @@ import 'config_pages.dart';
 import 'player_button_config_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
+import 'settings_layout.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
+/// 设置分类的稳定标识与显示名。
+///
+/// 分类 key 是**公开契约**：宽窗左侧分类栏与窄窗顶部分类条使用同一组
+/// `settings-category-<id>` key，同一时刻只渲染其中一套，因此每个 key
+/// 始终恰好出现一次（测试与自动化按此定位）。
+///
+/// 分类只影响**显示**：切换分类不写 `settings.json`，不进 `AppState`。
+/// 每个类别下挂的业务分组沿用改造前的四组（偏好 / 播放 / 连接与增强 /
+/// 维护与说明），不重排信息架构。
+const List<_SettingsCategory> _settingsCategories = [
+  _SettingsCategory(
+    _SettingsCategory.preferences,
+    '偏好',
+    Icons.tune_outlined,
+  ),
+  _SettingsCategory(
+    _SettingsCategory.playback,
+    '播放',
+    Icons.play_circle_outline,
+  ),
+  _SettingsCategory(
+    _SettingsCategory.connections,
+    '连接与增强',
+    Icons.hub_outlined,
+  ),
+  _SettingsCategory(
+    _SettingsCategory.maintenance,
+    '维护与说明',
+    Icons.build_outlined,
+  ),
+];
+
+/// 一个设置分类：稳定 id + 显示名 + 图标。
+class _SettingsCategory {
+  const _SettingsCategory(this.id, this.label, this.icon);
+
+  static const String preferences = 'preferences';
+  static const String playback = 'playback';
+  static const String connections = 'connections';
+  static const String maintenance = 'maintenance';
+
+  final String id;
+  final String label;
+  final IconData icon;
+}
+
 /// 设置页：TMDB、运行信息、目录、缓存维护、合规说明。
-class SettingsPage extends StatelessWidget {
+///
+/// 布局（用户截图否定了「两张内容列并排堆叠」的旧形态）：宽窗是
+/// **左侧四类导航 + 右侧当前类别单列**，两者以一条发丝线分隔；内容区
+/// 窄到放不下分类栏时，分类条移到顶部、正文仍是单列。
+///
+/// 分类与各分类的滚动位置是本页自己的 **UI 状态**（[_SettingsPageState]），
+/// 不进 `AppState`、不落盘；返回子页后分类与滚动位置都还在。
+/// 本页仍然**不监听** `AppState`（旧契约不变：由外壳在 `notifyListeners`
+/// 后重建内容区）。
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.state});
 
   final AppState state;
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  /// 内容区宽度门槛：低于它就把分类栏挪到顶部（逻辑像素）。
+  ///
+  /// 取值理由：分类栏 196 + 两处 16 间距 + 1 发丝线 = 229。门槛 720 时
+  /// 正文还剩约 490，是设置表单还能读的下限；再窄就该把导航让出来。
+  /// 于是 1024 及以上的宽窗走左栏，720 与 480 走顶部分类条。
+  static const double _navMinWidth = 720;
+
+  /// 左侧分类栏宽度（设计稿 180–200）。
+  static const double _navWidth = 196;
+
+  String _category = _SettingsCategory.preferences;
+
+  /// 每类别一个滚动控制器：切走再回来时用它恢复位置。
+  final Map<String, ScrollController> _scrollControllers = {};
+
+  /// 每类别最后已知的滚动位置（控制器在列表被替换后会脱离，位置存这里）。
+  final Map<String, double> _scrollOffsets = {};
+
+  AppState get state => widget.state;
+
+  ScrollController _controllerFor(String id) => _scrollControllers.putIfAbsent(
+    id,
+    () {
+      final controller = ScrollController();
+      controller.addListener(() {
+        if (controller.hasClients) {
+          _scrollOffsets[id] = controller.offset;
+        }
+      });
+      return controller;
+    },
+  );
+
+  @override
+  void dispose() {
+    for (final controller in _scrollControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  void _selectCategory(String id) {
+    if (id == _category) return;
+    setState(() => _category = id);
+  }
 
   @override
   Widget build(BuildContext context) {
     final info = state.startupInfo;
     final tmdb = state.tmdbConfig;
     final sync = state.syncState;
-    // 设置页是**表单**：收进限宽内容列。
-    //
-    // 不这么做的话，1440px 窗口下 `SwitchListTile` 会把开关钉到最右边，
-    // 与它的标签相距约 1300px——"启用 TMDB 增强"和那个开关的关联就断了
-    // （截图复核时发现，2026-10-11）。内容网格与播放器**不用**这个约束。
-    return ListView(
-      padding: formPagePadding(context),
+    final preferences = SettingsSection(
+      title: '偏好',
       children: [
-        // 外观：主题模式。
-        //
-        // 星等星表以**暗色为主身份**（夜间、坐在电脑前的使用场景），
-        // 亮色是独立设计的「昼间星表」，不是暗色的自动反转。
-        //
-        // 本次改造之前这里根本没有开关：`app.dart` 曾硬编码
-        // `themeMode: ThemeMode.dark`，亮色主题对用户**完全不可达**。
         Text('外观', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         SegmentedButton<ThemeMode>(
@@ -78,11 +173,7 @@ class SettingsPage extends StatelessWidget {
             state.setThemeMode(themeModeName(selection.first));
           },
         ),
-        const Divider(height: 32),
-        // 历史记录区块（`docs/phase6/design/01` §4.3）。
-        //
-        // 为什么放在设置页而不是历史页顶部：这是**一次定好、长期生效**的
-        // 行为偏好，与主题、搜索线程同类；历史页顶部那排是每次操作的临时控件。
+        const SizedBox(height: AppSpace.lg),
         Text('历史记录', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         SegmentedButton<String>(
@@ -109,43 +200,7 @@ class SettingsPage extends StatelessWidget {
           '点击历史记录时的行为。长按卡片始终进入删除状态。',
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        const Divider(height: 32),
-        // AI 助手区块（`docs/phase6/design/04` §7.6）。
-        //
-        // 与 TMDB 区块同样**无条件可见**：未配置时也要有入口，
-        // 否则用户永远进不来（Phase 4 的发布包实测缺陷）。
-        Text('AI 助手', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          state.aiReady
-              ? '已启用（协议 ${state.aiConfig.protocol}）'
-              : '未配置：用于季度弹窗的「AI 识别剧集/季度」',
-          key: const ValueKey('settings-ai-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-ai-open'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => AiSettingsPage(state: state),
-            ),
-          ),
-          icon: const Icon(Icons.auto_awesome),
-          label: const Text('打开 AI 设置'),
-        ),
-        OutlinedButton.icon(
-          key: const ValueKey('settings-ai-business-open'),
-          onPressed: () => openAiBusiness(context, state),
-          icon: const Icon(Icons.auto_awesome_outlined),
-          label: const Text('AI业务与阅读器'),
-        ),
-        const Divider(height: 32),
-        // 搜索区块。
-        //
-        // 为什么放在设置页而不是搜索页：搜索页顶部那排筛选是**每次搜索临时调**
-        // 的（分组/相似度），而「并发线程数」是**一次定好、长期生效**的容量设置，
-        // 和主题一样属于配置项；上游也把它放在设置里
-        // （`Setting.getSearchThread()`，label「搜索线程」）。
+        const SizedBox(height: AppSpace.lg),
         Text('搜索', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Text(
@@ -176,10 +231,104 @@ class SettingsPage extends StatelessWidget {
           '下一次搜索立即生效；已经在跑的搜索不受影响。',
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        const Divider(height: 32),
-        // TMDB 区块（`04` §10.3）：设置页必须有独立入口。
-        // 只靠详情页状态条会形成死锁——未配置时详情页也可能没有区块，
-        // 用户就永远进不来（发布包实测缺陷）。
+      ],
+    );
+    final playback = SettingsSection(
+      title: '播放',
+      children: [
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-player-buttons'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PlayerButtonConfigPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.tune),
+          label: const Text('播放器按钮排版'),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '调整底部控制栏的按钮顺序与显示状态。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: AppSpace.lg),
+        Text('高级设置', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        const Text(
+          '直播回退、广告过滤、解析失败切换、站点排序、弹幕源、字幕源、'
+          '播放参数与站点注入。',
+          key: ValueKey('settings-advanced-summary'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-advanced-open'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AdvancedSettingsPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.tune),
+          label: const Text('打开高级设置'),
+        ),
+        const SizedBox(height: AppSpace.lg),
+        Text('播放器', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          '屏显（OSD）：播放画面上叠加的信息角标。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        Column(
+          key: const ValueKey('settings-osd'),
+          children: [
+            for (final id in OsdFlag.values)
+              SwitchListTile(
+                key: ValueKey('settings-osd-$id'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(_osdLabel(id)),
+                subtitle: id == OsdFlag.traffic
+                    ? const Text('取自播放引擎的网络输入速率；取不到时显示 —')
+                    : null,
+                value: state.osdFlags[id] ?? false,
+                onChanged: (value) => state.setOsdFlag(id, value),
+              ),
+          ],
+        ),
+      ],
+    );
+    final connections = SettingsSection(
+      title: '连接与增强',
+      children: [
+        Text('AI 助手', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          state.aiReady
+              ? '已启用（协议 ${state.aiConfig.protocol}）'
+              : '未配置：用于季度弹窗的「AI 识别剧集/季度」',
+          key: const ValueKey('settings-ai-summary'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-ai-open'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AiSettingsPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.auto_awesome),
+          label: const Text('打开 AI 设置'),
+        ),
+        const SizedBox(height: 8),
+        // AI 迁移新增：内容智能 / 推荐 / 阅读器 / 唱声评分都在这一个页面里。
+        OutlinedButton.icon(
+          key: const ValueKey('settings-ai-business-open'),
+          onPressed: () => openAiBusiness(context, state),
+          icon: const Icon(Icons.auto_awesome_outlined),
+          label: const Text('AI业务与阅读器'),
+        ),
+        const SizedBox(height: AppSpace.lg),
         Text('TMDB 元数据增强', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Text(
@@ -200,15 +349,7 @@ class SettingsPage extends StatelessWidget {
           icon: const Icon(Icons.movie_filter_outlined),
           label: const Text('打开 TMDB 设置'),
         ),
-        const Divider(height: 32),
-        // 安卓接入区块（Phase 5）。
-        //
-        // **必须与 TMDB 解耦**：该入口曾挂在 `TmdbSettingsPage` 底部，而 TMDB
-        // 设置页要先点「打开 TMDB 设置」再滚到底才能看到——发布包实测反馈
-        // 「没看到打开安卓接入」，用户以为功能没编进去。两层嵌套入口不可接受。
-        //
-        // 另一层原因：安卓接入与 TMDB 无任何语义关系（一个是站源接入，一个是
-        // 元数据增强），寄生在 TMDB 页里会让人以为「先配好 TMDB 才能接安卓」。
+        const SizedBox(height: AppSpace.lg),
         Text('安卓接入', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         // 摘要必须基于**持久化**证据，不能只看 `sync.devices`。
@@ -235,67 +376,11 @@ class SettingsPage extends StatelessWidget {
           icon: const Icon(Icons.android_outlined),
           label: const Text('打开安卓接入'),
         ),
-        const Divider(height: 32),
-        Text('运行信息', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        if (info == null)
-          const Text('启动信息尚未就绪。')
-        else
-          SelectableText(info.detailLines),
-        const Divider(height: 32),
-        Text('本地数据', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SelectableText(
-          '配置：${state.paths.configDir}\n'
-          '数据：${state.paths.dataDir}\n'
-          '缓存：${state.paths.cacheDir}\n'
-          '日志：${state.paths.logDir}',
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            OutlinedButton.icon(
-              onPressed: () async {
-                await state.resetCache();
-                if (context.mounted) {
-                  showToast('缓存目录已重建', kind: ToastKind.success);
-                }
-              },
-              icon: const Icon(Icons.cleaning_services_outlined),
-              label: const Text('清理缓存目录'),
-            ),
-            const SizedBox(width: 12),
-            OutlinedButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(
-                  ClipboardData(text: state.log.export()),
-                );
-                if (context.mounted) {
-                  showToast('已复制脱敏日志', kind: ToastKind.success);
-                }
-              },
-              icon: const Icon(Icons.copy_all_outlined),
-              label: const Text('复制脱敏日志'),
-            ),
-          ],
-        ),
-        const Divider(height: 32),
-        Text('隐私与合规', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        const SelectableText(usageBoundaryNotice),
-        const SizedBox(height: 12),
-        const Text(
-          '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
-          '• 站点配置同步：关闭（Phase 4 能力）\n'
-          '• 自动更新：不更新站源，仅更新应用本体',
-        ),
-        const Divider(height: 32),
-        // 站点健康：**独立页面**，不在这里铺开。
-        //
-        // 为什么搬出去（用户反馈 2026-10-12）：这块原本直接铺在设置页底部，
-        // 而它是一张 7 列的宽表，把设置页挤得又长又杂；同时它和「外观 / TMDB /
-        // 安卓接入」这些**设置项**语义不同——它是**诊断读数**，不是配置项。
-        // 现在按 TMDB / 安卓接入同样的模式给一个入口，进独立页看。
+      ],
+    );
+    final maintenance = SettingsSection(
+      title: '维护与说明',
+      children: [
         Text('站点健康', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         Text(_healthSummary(state)),
@@ -310,102 +395,243 @@ class SettingsPage extends StatelessWidget {
           icon: const Icon(Icons.monitor_heart_outlined),
           label: const Text('打开站点健康'),
         ),
-        const Divider(height: 32),
-        // 播放器区块（`docs/phase8/design/02` §5、`design/03` §6.1）。
-        //
-        // 为什么放在设置页：屏显开关与按钮排版是**一次定好、长期生效**的偏好，
-        // 与主题、历史点击行为同类。同时它们也是**非右键的等价路径**
-        // （`docs/phase8/design/00` §5 第 10 条：右键菜单不得成为唯一入口）。
-        //
-        // **位置必须在最末尾**（Task 11 回归时修正，实测）：
-        // 本页是**惰性 `ListView`**，只有进入视口（含 cacheExtent）的条目才会
-        // 被构建。新增区块插在中间会把后面所有既有入口整体下推，而
-        // `integration_test/ui_redesign_visual_flow_test.dart:991` 用
-        // `1440×2400` 视口断言 `settings-site-health-open` 必须被构建——
-        // 实测：插在搜索区块之后 → 内容总高 2000 → 2540，站点健康入口落到
-        // 视口外，`find` 直接找不到，既有集成测试红。
-        // 放到最末尾后，被下推的只有**本区块自己**，既有入口位置不变。
-        Text('播放器', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: AppSpace.lg),
+        Text('本地数据', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Text(
-          '屏显（OSD）：播放画面上叠加的信息角标。',
-          style: Theme.of(context).textTheme.bodySmall,
+        SelectableText(
+          '配置：${state.paths.configDir}\n'
+          '数据：${state.paths.dataDir}\n'
+          '缓存：${state.paths.cacheDir}\n'
+          '日志：${state.paths.logDir}',
         ),
-        const SizedBox(height: 8),
-        Column(
-          key: const ValueKey('settings-osd'),
+        const SizedBox(height: 12),
+        SettingsActions(
           children: [
-            // 网速已实现：`PlayerController.sampleNetworkRate` 读 mpv 的
-            // `raw-input-rate`，`player_page.dart` 的 `_sampleNetworkRate` 只在
-            // **本开关打开时**才去采样，`player_osd.dart` 只在打开时渲染。
-            // 所以它和其余 6 项一样可点，点下去真的有效果。
-            //
-            // 上一版这里是「未实现 → 置灰」，理由是「不得让开关可点却无效果」。
-            // 那条纪律继续有效，只是前提变了：能力已经落地，再置灰等于把一个
-            // 能用的功能藏起来。将来若要停用某项，先删能力再置灰，别留一个
-            // 点了没反应的开关。
-            for (final id in OsdFlag.values)
-              SwitchListTile(
-                key: ValueKey('settings-osd-$id'),
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(_osdLabel(id)),
-                // 副标题只解释**数据来源**，不承诺任何未实现的能力：
-                // 用户看到屏显上的 `—` 时需要知道那是「取不到」，而不是「卡了」。
-                //
-                // 不写具体属性名：数据源是 `demuxer-cache-state` 内含的字段
-                // 加 `cache-speed` 回退，对用户没有意义；写一个属性名反而会把
-                // 实现细节钉死在一个可能再变的名字上（上一版就写错过）。
-                subtitle: id == OsdFlag.traffic
-                    ? const Text('取自播放引擎的网络输入速率；取不到时显示 —')
-                    : null,
-                value: state.osdFlags[id] ?? false,
-                onChanged: (value) => state.setOsdFlag(id, value),
-              ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await state.resetCache();
+                if (context.mounted) {
+                  showToast('缓存目录已重建', kind: ToastKind.success);
+                }
+              },
+              icon: const Icon(Icons.cleaning_services_outlined),
+              label: const Text('清理缓存目录'),
+            ),
+
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(
+                  ClipboardData(text: state.log.export()),
+                );
+                if (context.mounted) {
+                  showToast('已复制脱敏日志', kind: ToastKind.success);
+                }
+              },
+              icon: const Icon(Icons.copy_all_outlined),
+              label: const Text('复制脱敏日志'),
+            ),
           ],
         ),
+        const SizedBox(height: AppSpace.lg),
+        Text('运行信息', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (info == null)
+          const Text('启动信息尚未就绪。')
+        else
+          SelectableText(info.detailLines),
+        const SizedBox(height: AppSpace.lg),
+        Text('隐私与合规', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        const SelectableText(usageBoundaryNotice),
         const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-player-buttons'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PlayerButtonConfigPage(state: state),
-            ),
-          ),
-          icon: const Icon(Icons.tune),
-          label: const Text('播放器按钮排版'),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '调整底部控制栏的按钮顺序与显示状态。',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const Divider(height: 32),
-        const Divider(height: 32),
-        // Phase 9：高级设置（直播/广告/解析/弹幕/字幕/播放参数/站点注入）。
-        //
-        // 独立成页而不是继续堆在这里：设置页是长表单，既有测试用固定视口且
-        // 不带 `ensureVisible`（`docs/phase8/design/05` §5）。收进独立页后
-        // 既有入口位置不变。
-        Text('高级设置', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
         const Text(
-          '直播回退、广告过滤、解析失败切换、站点排序、弹幕源、字幕源、'
-          '播放参数与站点注入。',
-          key: ValueKey('settings-advanced-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-advanced-open'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => AdvancedSettingsPage(state: state),
-            ),
-          ),
-          icon: const Icon(Icons.tune),
-          label: const Text('打开高级设置'),
+          '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
+          '• 站点配置同步：关闭（Phase 4 能力）\n'
+          '• 自动更新：不更新站源，仅更新应用本体',
         ),
       ],
+    );
+    final contents = <String, Widget>{
+      _SettingsCategory.preferences: preferences,
+      _SettingsCategory.playback: playback,
+      _SettingsCategory.connections: connections,
+      _SettingsCategory.maintenance: maintenance,
+    };
+
+    return LayoutBuilder(
+      builder: (context, constraints) => Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal:
+              AppSpace.lg +
+              (constraints.maxWidth > kFormMaxWidth
+                  ? (constraints.maxWidth - kFormMaxWidth) / 2
+                  : 0),
+          vertical: AppSpace.lg,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SettingsPageHeader(
+              title: '设置',
+              description: '调整日常偏好、播放体验与连接服务。',
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, inner) {
+                  // 只把**当前类别**放进树里：其余类别的内容不渲染，
+                  // 于是「两列内容同时展开」这个旧形态在结构上不可能出现。
+                  final body = _categoryContent(contents[_category]!);
+                  if (inner.maxWidth < _navMinWidth) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _categoryStrip(context),
+                        const SizedBox(height: AppSpace.md),
+                        const Divider(height: 1),
+                        const SizedBox(height: AppSpace.md),
+                        Expanded(child: body),
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(width: _navWidth, child: _categoryRail(context)),
+                      const SizedBox(width: AppSpace.lg),
+                      const VerticalDivider(width: 1, thickness: 1),
+                      const SizedBox(width: AppSpace.lg),
+                      Expanded(child: body),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 当前类别的单列内容区（滚动位置按类别恢复）。
+  Widget _categoryContent(Widget section) {
+    final id = _category;
+    final saved = _scrollOffsets[id] ?? 0;
+    final controller = _controllerFor(id);
+    if (saved > 0) {
+      // 列表是按类别重建的（key 随类别变化），滚动位置由自己记录后补回。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !controller.hasClients) return;
+        final position = controller.position;
+        final target = saved.clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        );
+        if ((position.pixels - target).abs() > 0.5) {
+          controller.jumpTo(target);
+        }
+      });
+    }
+    return ListView(
+      key: ValueKey('settings-category-content-$id'),
+      controller: controller,
+      padding: EdgeInsets.zero,
+      children: [section],
+    );
+  }
+
+  /// 宽窗：左侧分类栏（竖排）。
+  Widget _categoryRail(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (final category in _settingsCategories)
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppSpace.xs),
+          child: _categoryControl(context, category, compact: false),
+        ),
+    ],
+  );
+
+  /// 窄窗：顶部分类条（横向换行，仍用同一组 key）。
+  Widget _categoryStrip(BuildContext context) => Wrap(
+    spacing: AppSpace.sm,
+    runSpacing: AppSpace.sm,
+    children: [
+      for (final category in _settingsCategories)
+        _categoryControl(context, category, compact: true),
+    ],
+  );
+
+  /// 一个分类控件：原生可聚焦控件（Tab 可达、回车/空格激活），
+  /// 选中态同时体现在**表面层级**（填充）与**公开语义**（`selected`）上。
+  Widget _categoryControl(
+    BuildContext context,
+    _SettingsCategory category, {
+    required bool compact,
+  }) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final selected = category.id == _category;
+    // 星等琥珀是这个世界唯一强调色，选中态正是它该出现的地方。
+    final accent = selected
+        ? context.semanticColors.magnitude
+        : scheme.onSurfaceVariant;
+    final textStyle = (compact
+            ? theme.textTheme.labelLarge
+            : theme.textTheme.bodyLarge)
+        ?.copyWith(
+      color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+      fontWeight: selected ? AppWeight.title : AppWeight.body,
+    );
+    return Semantics(
+      key: ValueKey('settings-category-${category.id}'),
+      button: true,
+      selected: selected,
+      label: category.label,
+      onTap: () => _selectCategory(category.id),
+      excludeSemantics: true,
+      child: Material(
+        color: selected ? scheme.surfaceContainerHigh : Colors.transparent,
+        shape: compact
+            ? RoundedRectangleBorder(
+                borderRadius: AppRadius.pillAll,
+                side: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.72),
+                ),
+              )
+            : const RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _selectCategory(category.id),
+          child: Padding(
+            padding: compact
+                ? const EdgeInsets.symmetric(
+                    horizontal: AppSpace.md,
+                    vertical: AppSpace.sm,
+                  )
+                : const EdgeInsets.symmetric(
+                    horizontal: AppSpace.md,
+                    vertical: AppSpace.md,
+                  ),
+            child: Row(
+              mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+              children: [
+                Icon(category.icon, size: compact ? 16 : 18, color: accent),
+                const SizedBox(width: AppSpace.sm),
+                if (compact)
+                  Text(category.label, style: textStyle)
+                else
+                  Expanded(
+                    child: Text(
+                      category.label,
+                      style: textStyle,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -502,8 +728,12 @@ class SiteHealthPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('站点健康')),
       body: ListView(
-        padding: const EdgeInsets.all(AppSpace.lg),
+        padding: formPagePadding(context),
         children: [
+          const Padding(
+            padding: EdgeInsets.only(bottom: AppSpace.xl),
+            child: Text('浏览、搜索或播放之后会开始累计成功率。'),
+          ),
           if (magnitudes.isNotEmpty) ...[
             SourceField(magnitudes: magnitudes),
             const SizedBox(height: AppSpace.lg),
@@ -521,9 +751,10 @@ class SiteHealthPage extends StatelessWidget {
                 ),
               ),
             ),
-          Text('逐站明细', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpace.md),
-          _HealthTable(items: records),
+          SettingsSection(
+            title: '逐站明细',
+            children: [_HealthTable(items: records)],
+          ),
         ],
       ),
     );

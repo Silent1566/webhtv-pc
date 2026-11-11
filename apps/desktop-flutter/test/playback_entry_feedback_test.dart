@@ -36,6 +36,8 @@ class _PendingState extends AppState {
     String? vodId,
     Site? siteOverride,
     SiteService? serviceOverride,
+    bool Function()? isCurrent,
+    int? qualityIndex,
   }) {
     resolutions++;
     expect(episodeTarget, 'http://fixture/episode');

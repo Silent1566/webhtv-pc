@@ -13,6 +13,7 @@ import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
 
@@ -130,8 +131,7 @@ class _ConfigPageState extends State<ConfigPage> {
   }
 
   Future<void> _importFixture() async {
-    _input.text =
-        'packages/test-fixtures/config/minimal-tvbox.json';
+    _input.text = 'packages/test-fixtures/config/minimal-tvbox.json';
     await _import();
   }
 
@@ -305,7 +305,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   failures.isEmpty
                       ? '已刷新全部 $total 个配置'
                       : '刷新完成：${total - failures.length} 个成功，'
-                          '${failures.length} 个失败（${failures.join('、')}）',
+                            '${failures.length} 个失败（${failures.join('、')}）',
                   kind: failures.isEmpty ? ToastKind.success : ToastKind.error,
                 );
                 setState(() {});
@@ -447,9 +447,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       builder: (context) => AlertDialog(
         key: const ValueKey('tmdb-reset-confirm'),
         title: const Text('重置为默认站点规则'),
-        content: const Text(
-          '将把「禁用站点」恢复为默认的 11 条规则，并清空自定义的启用/白名单规则。',
-        ),
+        content: const Text('将把「禁用站点」恢复为默认的 11 条规则，并清空自定义的启用/白名单规则。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -464,14 +462,17 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     );
     if (confirmed != true) return;
     setState(() {
-      _draft = _draft.copyWith(
-        enabledSites: const [],
-        allowedSites: const [],
-      ).withDefaultDisabledRules();
+      _draft = _draft
+          .copyWith(enabledSites: const [], allowedSites: const [])
+          .withDefaultDisabledRules();
     });
   }
 
-  void _addRule(TextEditingController controller, List<String> current, void Function(List<String>) apply) {
+  void _addRule(
+    TextEditingController controller,
+    List<String> current,
+    void Function(List<String>) apply,
+  ) {
     final value = controller.text.trim();
     if (value.isEmpty) return;
     if (current.contains(value)) return;
@@ -493,190 +494,198 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
             title: const Text('启用 TMDB 增强'),
             subtitle: const Text('关闭后等同未配置：不发起任何 TMDB 请求'),
             value: _draft.enabled,
-            onChanged: (value) => setState(
-              () => _draft = _draft.copyWith(enabled: value),
-            ),
+            onChanged: (value) =>
+                setState(() => _draft = _draft.copyWith(enabled: value)),
           ),
-          const Divider(height: 32),
-          Text('凭据', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Row(
+          SettingsSection(
+            title: '凭据',
             children: [
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('tmdb-api-key'),
-                  controller: _apiKey,
-                  obscureText: !_showApiKey,
-                  decoration: const InputDecoration(
-                    labelText: 'API Key（v3）',
-                    border: OutlineInputBorder(),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('tmdb-api-key'),
+                      controller: _apiKey,
+                      obscureText: !_showApiKey,
+                      decoration: const InputDecoration(
+                        labelText: 'API Key（v3）',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    key: const ValueKey('tmdb-api-key-toggle'),
+                    onPressed: () => setState(() => _showApiKey = !_showApiKey),
+                    child: Text(_showApiKey ? '隐藏' : '显示'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('tmdb-access-token'),
+                      controller: _accessToken,
+                      obscureText: !_showAccessToken,
+                      decoration: const InputDecoration(
+                        labelText: 'Access Token（v4）',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    key: const ValueKey('tmdb-access-token-toggle'),
+                    onPressed: () =>
+                        setState(() => _showAccessToken = !_showAccessToken),
+                    child: Text(_showAccessToken ? '隐藏' : '显示'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SelectableText(
+                '日志与诊断中只出现掩码：key=${_draft.redactedApiKey} '
+                'token=${_draft.redactedAccessToken}',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '服务',
+            children: [
+              TextField(
+                key: const ValueKey('tmdb-api-base'),
+                controller: _apiBase,
+                decoration: const InputDecoration(
+                  labelText: 'API 主机',
+                  hintText: 'https://api.tmdb.org/3',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('tmdb-image-base'),
+                controller: _imageBase,
+                decoration: const InputDecoration(
+                  labelText: '图片主机',
+                  hintText: 'https://images.tmdb.org/t/p/w342',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('tmdb-language'),
+                controller: _language,
+                decoration: const InputDecoration(
+                  labelText: '语言',
+                  hintText: 'zh-CN',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '匹配',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('tmdb-smart-match'),
+                title: const Text('智能匹配'),
+                value: _draft.smartMatch,
+                onChanged: (value) =>
+                    setState(() => _draft = _draft.copyWith(smartMatch: value)),
+              ),
+              SwitchListTile(
+                key: const ValueKey('tmdb-heuristic'),
+                title: const Text('启发式季度推断'),
+                subtitle: const Text('关闭后证据不足时不再猜测季度（保持「未确定季度」）'),
+                value: _draft.heuristicSeasonGuessing,
+                onChanged: (value) => setState(
+                  () =>
+                      _draft = _draft.copyWith(heuristicSeasonGuessing: value),
+                ),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '站点规则',
+            children: [
+              _ruleSection(
+                label: '启用站点（留空 = 全部允许）',
+                keyPrefix: 'tmdb-enabled-sites',
+                controller: _siteRule,
+                values: _draft.enabledSites,
+                onAdd: () => _addRule(
+                  _siteRule,
+                  _draft.enabledSites,
+                  (next) => setState(
+                    () => _draft = _draft.copyWith(enabledSites: next),
+                  ),
+                ),
+                onRemove: (value) => setState(
+                  () => _draft = _draft.copyWith(
+                    enabledSites: [..._draft.enabledSites]..remove(value),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              TextButton(
-                key: const ValueKey('tmdb-api-key-toggle'),
-                onPressed: () => setState(() => _showApiKey = !_showApiKey),
-                child: Text(_showApiKey ? '隐藏' : '显示'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('tmdb-access-token'),
-                  controller: _accessToken,
-                  obscureText: !_showAccessToken,
-                  decoration: const InputDecoration(
-                    labelText: 'Access Token（v4）',
-                    border: OutlineInputBorder(),
+              const SizedBox(height: 12),
+              _ruleSection(
+                label: '白名单（精确命中优先于禁用规则）',
+                keyPrefix: 'tmdb-allowed-sites',
+                controller: _allowRule,
+                values: _draft.allowedSites,
+                onAdd: () => _addRule(
+                  _allowRule,
+                  _draft.allowedSites,
+                  (next) => setState(
+                    () => _draft = _draft.copyWith(allowedSites: next),
+                  ),
+                ),
+                onRemove: (value) => setState(
+                  () => _draft = _draft.copyWith(
+                    allowedSites: [..._draft.allowedSites]..remove(value),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              TextButton(
-                key: const ValueKey('tmdb-access-token-toggle'),
-                onPressed: () =>
-                    setState(() => _showAccessToken = !_showAccessToken),
-                child: Text(_showAccessToken ? '隐藏' : '显示'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SelectableText(
-            '日志与诊断中只出现掩码：key=${_draft.redactedApiKey} '
-            'token=${_draft.redactedAccessToken}',
-            style: theme.textTheme.bodySmall,
-          ),
-          const Divider(height: 32),
-          Text('服务', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          TextField(
-            key: const ValueKey('tmdb-api-base'),
-            controller: _apiBase,
-            decoration: const InputDecoration(
-              labelText: 'API 主机',
-              hintText: 'https://api.tmdb.org/3',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('tmdb-image-base'),
-            controller: _imageBase,
-            decoration: const InputDecoration(
-              labelText: '图片主机',
-              hintText: 'https://images.tmdb.org/t/p/w342',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('tmdb-language'),
-            controller: _language,
-            decoration: const InputDecoration(
-              labelText: '语言',
-              hintText: 'zh-CN',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const Divider(height: 32),
-          Text('匹配', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('tmdb-smart-match'),
-            title: const Text('智能匹配'),
-            value: _draft.smartMatch,
-            onChanged: (value) => setState(
-              () => _draft = _draft.copyWith(smartMatch: value),
-            ),
-          ),
-          SwitchListTile(
-            key: const ValueKey('tmdb-heuristic'),
-            title: const Text('启发式季度推断'),
-            subtitle: const Text('关闭后证据不足时不再猜测季度（保持「未确定季度」）'),
-            value: _draft.heuristicSeasonGuessing,
-            onChanged: (value) => setState(
-              () => _draft = _draft.copyWith(heuristicSeasonGuessing: value),
-            ),
-          ),
-          const Divider(height: 32),
-          Row(
-            children: [
-              Text('站点规则', style: theme.textTheme.titleMedium),
-              const Spacer(),
-              OutlinedButton.icon(
-                key: const ValueKey('tmdb-reset-rules'),
-                onPressed: _resetRules,
-                icon: const Icon(Icons.restart_alt),
-                label: const Text('重置为默认规则'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          _ruleSection(
-            label: '启用站点（留空 = 全部允许）',
-            keyPrefix: 'tmdb-enabled-sites',
-            controller: _siteRule,
-            values: _draft.enabledSites,
-            onAdd: () => _addRule(
-              _siteRule,
-              _draft.enabledSites,
-              (next) => setState(
-                () => _draft = _draft.copyWith(enabledSites: next),
-              ),
-            ),
-            onRemove: (value) => setState(
-              () => _draft = _draft.copyWith(
-                enabledSites: [..._draft.enabledSites]..remove(value),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _ruleSection(
-            label: '白名单（精确命中优先于禁用规则）',
-            keyPrefix: 'tmdb-allowed-sites',
-            controller: _allowRule,
-            values: _draft.allowedSites,
-            onAdd: () => _addRule(
-              _allowRule,
-              _draft.allowedSites,
-              (next) => setState(
-                () => _draft = _draft.copyWith(allowedSites: next),
-              ),
-            ),
-            onRemove: (value) => setState(
-              () => _draft = _draft.copyWith(
-                allowedSites: [..._draft.allowedSites]..remove(value),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _ruleSection(
-            label: '禁用站点',
-            keyPrefix: 'tmdb-disabled-sites',
-            controller: _denyRule,
-            values: _draft.disabledSites,
-            onAdd: () => _addRule(
-              _denyRule,
-              _draft.disabledSites,
-              (next) => setState(
-                () => _draft = _draft.copyWith(
-                  disabledSites: next,
-                  excludeKeywordsConfigured: true,
+              const SizedBox(height: 12),
+              _ruleSection(
+                label: '禁用站点',
+                keyPrefix: 'tmdb-disabled-sites',
+                controller: _denyRule,
+                values: _draft.disabledSites,
+                onAdd: () => _addRule(
+                  _denyRule,
+                  _draft.disabledSites,
+                  (next) => setState(
+                    () => _draft = _draft.copyWith(
+                      disabledSites: next,
+                      excludeKeywordsConfigured: true,
+                    ),
+                  ),
+                ),
+                onRemove: (value) => setState(
+                  () => _draft = _draft.copyWith(
+                    disabledSites: [..._draft.disabledSites]..remove(value),
+                    excludeKeywordsConfigured: true,
+                  ),
                 ),
               ),
-            ),
-            onRemove: (value) => setState(
-              () => _draft = _draft.copyWith(
-                disabledSites: [..._draft.disabledSites]..remove(value),
-                excludeKeywordsConfigured: true,
+              const Divider(),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('tmdb-reset-rules'),
+                    onPressed: _resetRules,
+                    icon: const Icon(Icons.restart_alt),
+                    label: const Text('重置为默认规则'),
+                  ),
+                ],
               ),
-            ),
+            ],
           ),
-          const Divider(height: 32),
-          Row(
+          const Divider(height: AppSpace.xl),
+          SettingsActions(
             children: [
               FilledButton.icon(
                 key: const ValueKey('tmdb-save'),
@@ -684,7 +693,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 icon: const Icon(Icons.save_outlined),
                 label: const Text('保存'),
               ),
-              const SizedBox(width: 12),
               OutlinedButton.icon(
                 key: const ValueKey('tmdb-test'),
                 onPressed: _busy ? null : _test,
@@ -692,7 +700,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 label: const Text('测试连接'),
               ),
               if (_busy) ...[
-                const SizedBox(width: 12),
                 const SizedBox(
                   width: 18,
                   height: 18,
@@ -717,24 +724,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
           SelectableText(
             '设置文件：${widget.state.tmdbSettingsPath}',
             style: theme.textTheme.bodySmall,
-          ),
-          const Divider(height: 32),
-          Text('设备与同步', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ListTile(
-            key: const ValueKey('settings-android-open'),
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.android_outlined),
-            title: const Text('打开安卓接入'),
-            subtitle: const Text(
-              '接入安卓的 T4 网关以间接使用它的全部站源，并双向共用播放历史',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => AndroidSettingsPage(state: widget.state),
-              ),
-            ),
           ),
         ],
       ),
@@ -992,9 +981,8 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
   }
 
   void _submit() {
-    Navigator.of(context).pop(
-      _EditResult(name: _name.text.trim(), origin: _origin.text.trim()),
-    );
+    Navigator.of(context)
+        .pop(_EditResult(name: _name.text.trim(), origin: _origin.text.trim()));
   }
 
   @override
@@ -1193,14 +1181,8 @@ class _SavedConfigs extends StatelessWidget {
                           }
                         },
                         itemBuilder: (context) => const [
-                          PopupMenuItem(
-                            value: 'copy',
-                            child: Text('复制来源地址'),
-                          ),
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text('删除'),
-                          ),
+                          PopupMenuItem(value: 'copy', child: Text('复制来源地址')),
+                          PopupMenuItem(value: 'delete', child: Text('删除')),
                         ],
                       ),
                     ],
@@ -1302,7 +1284,9 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         .where((item) => item.id == recordId)
         .map((item) => item.liveCount)
         .firstOrNull;
-    final record = state.configs.where((item) => item.id == recordId).firstOrNull;
+    final record = state.configs
+        .where((item) => item.id == recordId)
+        .firstOrNull;
     final siteCount = record?.siteCount ?? 0;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1421,185 +1405,189 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
       appBar: AppBar(title: const Text('安卓设备接入')),
       body: ListView(
         key: const ValueKey('android-bridge'),
-        padding: const EdgeInsets.all(16),
+        padding: formPagePadding(context),
         children: [
-          Text(
-            '接入安卓的 T4 网关可以间接使用安卓上的全部站源（含 T3 爬虫、网盘、猫源），'
-            'PC 不复制这些爬虫，只做 HTTP 客户端。',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 12),
-          Row(
+          SettingsSection(
+            title: '设备接入',
             children: [
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('android-device-input'),
-                  controller: _address,
-                  decoration: const InputDecoration(
-                    labelText: '手动输入地址',
-                    hintText: '例如 192.168.50.9:9978',
-                    border: OutlineInputBorder(),
-                  ),
-                  onSubmitted: (_) => _probe(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                key: const ValueKey('android-device-add'),
-                onPressed: sync.busy ? null : _probe,
-                icon: const Icon(Icons.cable_outlined),
-                label: const Text('接入设备'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                key: const ValueKey('android-scan'),
-                onPressed: sync.busy ? null : _scan,
-                icon: const Icon(Icons.wifi_find_outlined),
-                label: const Text('扫描局域网'),
-              ),
-            ],
-          ),
-          if (sync.scanTotal > 0) ...[
-            const SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: sync.scanDone / sync.scanTotal,
-            ),
-            const SizedBox(height: 4),
-            Text('已扫描 ${sync.scanDone}/${sync.scanTotal}'),
-          ],
-          if (sync.busy) ...[
-            const SizedBox(height: 8),
-            // 刻意不用 `LinearProgressIndicator`：不确定进度条是无限动画，
-            // 会让 widget 测试的 `pumpAndSettle` 永不收敛，也会让低配机器
-            // 持续重绘。文字提示已经足够。
-            const Row(
-              children: [
-                Icon(Icons.hourglass_top_outlined, size: 16),
-                SizedBox(width: 8),
-                Text('正在处理…'),
-              ],
-            ),
-          ],
-          if (sync.lastError != null) ...[
-            const SizedBox(height: 8),
-            Card(
-              key: const ValueKey('android-error'),
-              color: theme.colorScheme.errorContainer,
-              child: ListTile(
-                leading: const Icon(Icons.error_outline),
-                title: Text(sync.lastError!.userMessage),
-                subtitle: Text('类别：${sync.lastError!.kind.name}'),
-              ),
-            ),
-          ],
-          if (sync.notice != null) ...[
-            const SizedBox(height: 8),
-            Card(
-              key: const ValueKey('android-notice'),
-              child: ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: Text(sync.notice!),
-              ),
-            ),
-          ],
-          const Divider(height: 32),
-          Row(
-            children: [
-              Text('最近接入', style: theme.textTheme.titleMedium),
-              const SizedBox(width: 8),
-              // 用户反馈：设备接入需要历史记录方便再次使用。一键重连不用再输地址。
               Text(
-                '（点一下就重新接入，不用再输地址）',
-                style: theme.textTheme.bodySmall,
+                '接入安卓的 T4 网关可以间接使用安卓上的全部站源（含 T3 爬虫、网盘、猫源），'
+                'PC 不复制这些爬虫，只做 HTTP 客户端。',
+                style: theme.textTheme.bodyMedium,
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (sync.deviceHistory.isEmpty)
-            const Text('还没有接入过设备。')
-          else
-            for (final entry in sync.deviceHistory)
-              ListTile(
-                key: ValueKey('bridge-history-${entry.uuid}'),
-                dense: true,
-                leading: const Icon(Icons.history),
-                title: Text(entry.name),
-                subtitle: Text(entry.address),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+              const SizedBox(height: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    key: const ValueKey('android-device-input'),
+                    controller: _address,
+                    decoration: const InputDecoration(
+                      labelText: '手动输入地址',
+                      hintText: '例如 192.168.50.9:9978',
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _probe(),
+                  ),
+                  const SizedBox(height: AppSpace.md),
+                  SettingsActions(
+                    children: [
+                      FilledButton.icon(
+                        key: const ValueKey('android-device-add'),
+                        onPressed: sync.busy ? null : _probe,
+                        icon: const Icon(Icons.cable_outlined),
+                        label: const Text('接入设备'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const ValueKey('android-scan'),
+                        onPressed: sync.busy ? null : _scan,
+                        icon: const Icon(Icons.wifi_find_outlined),
+                        label: const Text('扫描局域网'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              if (sync.scanTotal > 0) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(value: sync.scanDone / sync.scanTotal),
+                const SizedBox(height: 4),
+                Text('已扫描 ${sync.scanDone}/${sync.scanTotal}'),
+              ],
+              if (sync.busy) ...[
+                const SizedBox(height: 8),
+                // 刻意不用 `LinearProgressIndicator`：不确定进度条是无限动画，
+                // 会让 widget 测试的 `pumpAndSettle` 永不收敛，也会让低配机器
+                // 持续重绘。文字提示已经足够。
+                const Row(
                   children: [
-                    TextButton(
-                      key: ValueKey('bridge-history-connect-${entry.uuid}'),
-                      onPressed: sync.busy
-                          ? null
-                          : () => _reconnect(entry),
-                      child: const Text('接入'),
-                    ),
-                    IconButton(
-                      key: ValueKey('bridge-history-forget-${entry.uuid}'),
-                      tooltip: '从历史中删除',
-                      onPressed: sync.busy
-                          ? null
-                          : () => _sync.forgetDevice(entry.uuid),
-                      icon: const Icon(Icons.close, size: 18),
-                    ),
+                    Icon(Icons.hourglass_top_outlined, size: 16),
+                    SizedBox(width: 8),
+                    Text('正在处理…'),
                   ],
                 ),
+              ],
+              if (sync.lastError != null) ...[
+                const SizedBox(height: 8),
+                Card(
+                  key: const ValueKey('android-error'),
+                  color: theme.colorScheme.errorContainer,
+                  child: ListTile(
+                    leading: const Icon(Icons.error_outline),
+                    title: Text(sync.lastError!.userMessage),
+                    subtitle: Text('类别：${sync.lastError!.kind.name}'),
+                  ),
+                ),
+              ],
+              if (sync.notice != null) ...[
+                const SizedBox(height: 8),
+                Card(
+                  key: const ValueKey('android-notice'),
+                  child: ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: Text(sync.notice!),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          SettingsSection(
+            title: '最近接入',
+            description: '（点一下就重新接入，不用再输地址）',
+            children: [
+              if (sync.deviceHistory.isEmpty)
+                const Text('还没有接入过设备。')
+              else
+                for (final entry in sync.deviceHistory)
+                  ListTile(
+                    key: ValueKey('bridge-history-${entry.uuid}'),
+                    dense: true,
+                    leading: const Icon(Icons.history),
+                    title: Text(entry.name),
+                    subtitle: Text(entry.address),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          key: ValueKey('bridge-history-connect-${entry.uuid}'),
+                          onPressed: sync.busy ? null : () => _reconnect(entry),
+                          child: const Text('接入'),
+                        ),
+                        IconButton(
+                          key: ValueKey('bridge-history-forget-${entry.uuid}'),
+                          tooltip: '从历史中删除',
+                          onPressed: sync.busy
+                              ? null
+                              : () => _sync.forgetDevice(entry.uuid),
+                          icon: const Icon(Icons.close, size: 18),
+                        ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+          SettingsSection(
+            title: '安卓设备',
+            children: [
+              if (sync.devices.isEmpty)
+                const Text('尚未接入设备：可手动输入地址，或扫描局域网。')
+              else
+                for (final device in sync.devices) _deviceCard(theme, device),
+            ],
+          ),
+          SettingsSection(
+            title: '同步设置',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('android-sync-server'),
+                title: const Text('接收安卓推送（本机服务端）'),
+                subtitle: Text(
+                  sync.serverRunning
+                      ? '正在监听 ${sync.serverBaseUrl}（仅接受已授权对端）'
+                      : '默认关闭：开启后同局域网设备可访问本机',
+                ),
+                value: sync.serverEnabled,
+                onChanged: sync.busy ? null : _toggleServer,
               ),
-          const Divider(height: 32),
-          Text('安卓设备', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          if (sync.devices.isEmpty)
-            const Text('尚未接入设备：可手动输入地址，或扫描局域网。')
-          else
-            for (final device in sync.devices) _deviceCard(theme, device),
-          const Divider(height: 32),
-          Text('同步设置', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 4),
-          SwitchListTile(
-            key: const ValueKey('android-sync-server'),
-            title: const Text('接收安卓推送（本机服务端）'),
-            subtitle: Text(
-              sync.serverRunning
-                  ? '正在监听 ${sync.serverBaseUrl}（仅接受已授权对端）'
-                  : '默认关闭：开启后同局域网设备可访问本机',
-            ),
-            value: sync.serverEnabled,
-            onChanged: sync.busy ? null : _toggleServer,
+              SwitchListTile(
+                key: const ValueKey('android-sync-push'),
+                title: const Text('向安卓推送'),
+                subtitle: const Text('默认关闭：把本机历史/收藏推送到已授权设备'),
+                value: sync.pushEnabled,
+                onChanged: sync.busy ? null : sync.setPushEnabled,
+              ),
+              SwitchListTile(
+                key: const ValueKey('android-sync-settings'),
+                title: const Text('同步设置项（含凭据）'),
+                subtitle: const Text('默认关闭：开启后会把 TMDB 等含凭据的设置推送到对端'),
+                value: sync.settingsSyncEnabled,
+                onChanged: sync.busy ? null : sync.setSettingsSyncEnabled,
+              ),
+              if (sync.lastStats != null) ...[
+                const SizedBox(height: 8),
+                SelectableText(
+                  '最近一次同步：${sync.lastStats!.describe()}',
+                  key: const ValueKey('sync-stats'),
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ],
           ),
-          SwitchListTile(
-            key: const ValueKey('android-sync-push'),
-            title: const Text('向安卓推送'),
-            subtitle: const Text('默认关闭：把本机历史/收藏推送到已授权设备'),
-            value: sync.pushEnabled,
-            onChanged: sync.busy ? null : sync.setPushEnabled,
+          SettingsSection(
+            title: '实时同步',
+            children: _realtimeSection(theme, sync),
           ),
-          SwitchListTile(
-            key: const ValueKey('android-sync-settings'),
-            title: const Text('同步设置项（含凭据）'),
-            subtitle: const Text('默认关闭：开启后会把 TMDB 等含凭据的设置推送到对端'),
-            value: sync.settingsSyncEnabled,
-            onChanged: sync.busy ? null : sync.setSettingsSyncEnabled,
+          SettingsSection(title: '手动操作', children: _manualSection(theme, sync)),
+          SettingsSection(
+            title: '已授权对端',
+            children: [
+              if (sync.peers.isEmpty)
+                const Text('尚未授权任何对端：安卓推送历史前需先在此授权。')
+              else
+                for (final peer in sync.peers) _peerTile(theme, peer),
+            ],
           ),
-          if (sync.lastStats != null) ...[
-            const SizedBox(height: 8),
-            SelectableText(
-              '最近一次同步：${sync.lastStats!.describe()}',
-              key: const ValueKey('sync-stats'),
-              style: theme.textTheme.bodySmall,
-            ),
-          ],
-          const Divider(height: 32),
-          ..._realtimeSection(theme, sync),
-          const Divider(height: 32),
-          ..._manualSection(theme, sync),
-          const Divider(height: 32),
-          Text('已授权对端', style: theme.textTheme.titleSmall),
-          if (sync.peers.isEmpty)
-            const Text('尚未授权任何对端：安卓推送历史前需先在此授权。')
-          else
-            for (final peer in sync.peers) _peerTile(theme, peer),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpace.md),
           SelectableText(
             '本机设备标识：${sync.maskedDeviceUuid}（${sync.deviceName}）',
             style: theme.textTheme.bodySmall,
@@ -1623,8 +1611,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
     final blocking = sync.busy;
     final subDisabled = blocking || !realtime.enabled;
     return [
-      Text('实时同步', style: theme.textTheme.titleMedium),
-      const SizedBox(height: 4),
       Text(
         '开启后按周期把安卓的观影记录拉到本机，并用心跳判断安卓是否还在线'
         '（默认关闭：每个方向都需要你显式开启）。',
@@ -1658,18 +1644,18 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
       SwitchListTile(
         key: const ValueKey('realtime-settings'),
         title: const Text('设置实时同步（含凭据）'),
-        subtitle: const Text(
-          '将以明文 HTTP 在局域网传输 API Key，需先开启下方「同步设置项」',
-        ),
+        subtitle: const Text('将以明文 HTTP 在局域网传输 API Key，需先开启下方「同步设置项」'),
         value: realtime.settingsEnabled,
         onChanged: subDisabled ? null : sync.setRealtimeSettings,
       ),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
+        child: Wrap(
+          spacing: AppSpace.md,
+          runSpacing: AppSpace.sm,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text('轮询周期'),
-            const SizedBox(width: 12),
             DropdownButton<int>(
               key: const ValueKey('realtime-interval'),
               value: realtime.intervalSeconds,
@@ -1685,7 +1671,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                   DropdownMenuItem(value: seconds, child: Text('$seconds s')),
               ],
             ),
-            const SizedBox(width: 12),
             Text(
               '心跳 ${realtime.heartbeatSeconds}s',
               style: theme.textTheme.bodySmall,
@@ -1722,9 +1707,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
             child: ListTile(
               leading: const Icon(Icons.warning_amber_outlined),
               title: const Text('自动同步已停止（重试不会自动恢复）'),
-              subtitle: Text(
-                snapshot.lastError?.userMessage ?? '点「立即重连」重新检测',
-              ),
+              subtitle: Text(snapshot.lastError?.userMessage ?? '点「立即重连」重新检测'),
               trailing: TextButton(
                 key: const ValueKey('realtime-retry'),
                 onPressed: blocking ? null : sync.retryRealtimeNow,
@@ -1784,16 +1767,12 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   List<Widget> _manualSection(ThemeData theme, SyncState sync) {
     final blocking = sync.busy;
     return [
-      Text('手动操作', style: theme.textTheme.titleMedium),
-      const SizedBox(height: 4),
       Text(
         '「拉取最近记录」不依赖本机服务端，实时同步关着也能用；'
         '「请求安卓推送全量」需要本机服务端在听且设备已授权。',
         style: theme.textTheme.bodySmall,
       ),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      SettingsActions(
         children: [
           OutlinedButton.icon(
             key: const ValueKey('realtime-manual-pull'),
@@ -1888,14 +1867,13 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Text(
+              '${device.name}（${device.typeLabel}）',
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: AppSpace.sm),
+            SettingsActions(
               children: [
-                Expanded(
-                  child: Text(
-                    '${device.name}（${device.typeLabel}）',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                ),
                 OutlinedButton.icon(
                   key: const ValueKey('android-import'),
                   onPressed: _sync.busy ? null : () => _import(device),
@@ -1937,20 +1915,25 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
     key: ValueKey('sync-peer-${peer.uuid}'),
     leading: const Icon(Icons.devices_other_outlined),
     title: Text(peer.name),
-    subtitle: Text('${peer.maskedUuid} · ${peer.address}'),
-    trailing: Row(
-      mainAxisSize: MainAxisSize.min,
+    subtitle: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        FilledButton.tonal(
-          key: const ValueKey('android-sync-push-now'),
-          onPressed: _sync.busy ? null : () => _push(peer),
-          child: const Text('推送到设备'),
-        ),
-        IconButton(
-          key: ValueKey('sync-peer-revoke-${peer.uuid}'),
-          tooltip: '移除授权',
-          onPressed: () => _sync.revokePeer(peer.uuid),
-          icon: const Icon(Icons.link_off_outlined),
+        Text('${peer.maskedUuid} · ${peer.address}'),
+        const SizedBox(height: AppSpace.sm),
+        SettingsActions(
+          children: [
+            FilledButton.tonal(
+              key: const ValueKey('android-sync-push-now'),
+              onPressed: _sync.busy ? null : () => _push(peer),
+              child: const Text('推送到设备'),
+            ),
+            IconButton(
+              key: ValueKey('sync-peer-revoke-${peer.uuid}'),
+              tooltip: '移除授权',
+              onPressed: () => _sync.revokePeer(peer.uuid),
+              icon: const Icon(Icons.link_off_outlined),
+            ),
+          ],
         ),
       ],
     ),

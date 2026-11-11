@@ -221,7 +221,7 @@ void main() {
     expect(find.text('CCTV-1 综合'), findsOneWidget);
   });
 
-  testWidgets('多线路频道在列表中展示线路数，点击后列出全部线路（§13.3）', (tester) async {
+  testWidgets('多线路频道在列表中展示线路数，详情入口列出全部线路（§13.3）', (tester) async {
     await importLiveConfig();
     await wrap(tester, LivePage(state: state));
     await tester.pumpAndSettle();
@@ -230,7 +230,7 @@ void main() {
     expect(find.text('2 线路'), findsOneWidget);
 
     // 点击频道后，右侧详情默认在「线路」页签，列出两条线路的地址与序号。
-    await tester.tap(find.text('湖南卫视'));
+    await tester.tap(find.byTooltip('详情与节目单 湖南卫视'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -239,25 +239,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('2 条线路'), findsOneWidget);
-    expect(find.text('1'), findsOneWidget);
-    expect(find.text('2'), findsOneWidget);
-    expect(
-      find.textContaining('media/sample.m3u8'),
-      findsWidgets,
-    );
-    expect(
-      find.textContaining('media/sample.mp4'),
-      findsWidgets,
-    );
+    expect(find.text('线路 1'), findsOneWidget);
+    expect(find.text('线路 2'), findsOneWidget);
+    expect(find.textContaining('media/sample.m3u8'), findsWidgets);
+    expect(find.textContaining('media/sample.mp4'), findsWidgets);
   });
 
   test('直播播放请求构造：多线路映射 + 直链（§13.3）', () {
     final channel = LiveChannel.fromJson({
       'name': '湖南卫视',
-      'urls': [
-        'http://h/a.m3u8',
-        'http://h/b.m3u8',
-      ],
+      'urls': ['http://h/a.m3u8', 'http://h/b.m3u8'],
     });
 
     final request = LivePage.requestForChannel(
@@ -297,10 +288,7 @@ void main() {
         'User-Agent': 'WebHTV-PC/0.1 (Windows)',
       },
     });
-    final request = LivePage.requestForChannel(
-      channel,
-      sourceName: 'M3U 直播',
-    );
+    final request = LivePage.requestForChannel(channel, sourceName: 'M3U 直播');
     expect(request.headers['Referer'], 'http://h/');
     expect(request.headers['User-Agent'], 'WebHTV-PC/0.1 (Windows)');
   });
@@ -323,12 +311,12 @@ void main() {
     expect(find.textContaining('湖南新闻联播'), findsNothing);
   });
 
-  testWidgets('点击频道展示节目单，当前节目高亮（§13.3）', (tester) async {
+  testWidgets('详情入口展示节目单，当前节目高亮（§13.3）', (tester) async {
     await importLiveConfig();
     await wrap(tester, LivePage(state: state, clock: fixedClock));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('CCTV-1 综合'));
+    await tester.tap(find.byTooltip('详情与节目单 CCTV-1 综合'));
     await tester.pumpAndSettle();
 
     // 有节目单的频道出现「节目单/线路」页签，默认展示节目单。

@@ -43,7 +43,7 @@
 （"不承诺能力范围"）与 `DESIGN.md` 关于筛选按钮的教训（"一个点了什么也没有的按钮
 比没有按钮更糟"）都指向同一条：**不得为了对齐上游而伪造入口**。
 
-### 3.2 保留的按钮（13 个存在，其中 8 个可配置）
+### 3.2 保留的按钮（15 个存在，其中 10 个可配置）
 
 | id | 中文名 | 现状来源 | 默认 | 分组 | **可配置** |
 | --- | --- | --- | --- | --- | --- |
@@ -53,29 +53,27 @@
 | `mute` | 静音 | `2164-2174` | ✅ | 音量 | ✅ |
 | `volume` | 音量滑杆 | `2175-2182` | ✅ | 音量 | ✅ |
 | `speed` | 倍速 | `2184-2202` | ✅ | 速率/选集 | ✅ |
+| `quality` | 画质 | 当前集多地址；单地址隐藏 | ✅ | 速率/选集 | ✅ |
 | `episodes` | 剧集 | `2220-2225` | ✅ | 速率/选集 | ✅ |
 | `fullscreen` | 全屏 | `2235-2239` | ✅ | 显示 | ✅ |
+| `external_player` | 外部播放器 | 当前已解析媒体的本地外调 | ✅ | 显示 | ✅ |
 | `subtitle` | 字幕轨 | 顶栏 `1314-1318` | ✅ | 轨道 | ❌ |
 | `danmaku` | 弹幕开关 | 顶栏 `1319-1327` | ✅ | 轨道 | ❌ |
 | `video_fit` | 画面比例 | 顶栏菜单 `1370-1374` | ✅ | 显示 | ❌ |
 | `media_info` | 媒体信息 | 顶栏菜单 `1375-1379` | ✅ | 显示 | ❌ |
 | `diagnostics` | 播放诊断 | 顶栏菜单 `1382-1390` | ✅ | 显示 | ❌ |
 
-**这张表的读法**：13 个是"PC 端存在的按钮"，其中 5 个
-（`subtitle` / `danmaku` / `video_fit` / `media_info` / `diagnostics`）**不进入
-可配置集合**——它们要么在顶栏常驻（被测试锁定），要么是菜单项。
-
-**`kPlayerButtons` 恰好 8 项**，理由见 §5.3。实现时若按 13 项去做，
-`phase8_player_buttons_test.dart` 的 D1（长度 = 8）会直接失败。
+15 个现有控件中，5 个顶栏常驻或菜单项不进入配置集合。
+`kPlayerButtons` 有 10 项。画质不同于剧集线路：切换保留当前进度及播放/暂停状态，换集重新取得候选，不新增全局画质记忆。
 
 **`line`（线路下拉）已删除**：动作行里那条线路下拉是重复入口——切线路并入了
 选集面板（那一屏本来就要回答「哪条线路的哪一集」）。删除后 `line` 不再属于
 任何集合，老配置里存过的 `line` 会被 `normalizeButtonOrder` 当非法 id 过滤掉。
 
-### 3.3 明确排除的上游 id（27 个）
+### 3.3 明确排除的上游 id（26 个）
 
-上游 32 个 id 里，PC 端**只沿用 5 个**（`speed` / `prev` / `next` / `episodes` /
-`fullscreen`），其余 **27 个全部排除**：
+上游 32 个 id 里，PC 端**只沿用 6 个**（`speed` / `quality` / `prev` / `next` / `episodes` /
+`fullscreen`），其余 **26 个全部排除**：
 
 | 上游 id | 排除理由 |
 | --- | --- |
@@ -92,7 +90,6 @@
 | `player` | 无引擎切换 |
 | `play_params` | 无播放参数面板 |
 | `multi_thread_proxy` | 代理是站点级配置，不是播放器按钮 |
-| `quality` | 无多清晰度（站点给的是线路，切线路归详情页与选集面板，`line` 也已移除） |
 | `scale` | 画面比例归顶栏菜单与右键菜单（`02` §6、`04` §4.1），不占控制栏按钮位 |
 | `reset` | PC 端的"重置"语义不明确（重置什么？），排除 |
 | `search` | 播放中搜索是独立流程，不在播放器浮层 |
@@ -114,13 +111,13 @@
 **PC 端曾有第 4 个新增 id `line`（线路下拉），现已移除**：切线路并入选集面板，
 动作行里不再保留重复入口（见 §3.2 末段）。
 
-**这 27 个的排除理由必须写在代码注释里**，否则后续会有人"顺手补上"。
+**这 26 个的排除理由必须写在代码注释里**，否则后续会有人"顺手补上"。
 `kPlayerButtons` 的文档注释已逐条列出（见实现计划 Task 2）。
 
 ### 3.4 默认顺序
 
 ```
-prev, play, next, │ mute, volume, │ speed, episodes, │ fullscreen
+prev, play, next, │ mute, volume, │ speed, quality, episodes, │ fullscreen, external_player
 ```
 
 与现状一致（`player_page.dart:2144-2239`），**不改变用户已经熟悉的排布**。
@@ -163,13 +160,10 @@ const List<PlayerButtonSpec> kPlayerButtons = [
   PlayerButtonSpec(id: 'mute',       label: '静音',     group: PlayerButtonGroup.volume),
   PlayerButtonSpec(id: 'volume',     label: '音量',     group: PlayerButtonGroup.volume),
   PlayerButtonSpec(id: 'speed',      label: '倍速',     group: PlayerButtonGroup.rate),
+  PlayerButtonSpec(id: 'quality',    label: '画质',     group: PlayerButtonGroup.rate),
   PlayerButtonSpec(id: 'episodes',   label: '剧集',     group: PlayerButtonGroup.rate),
   PlayerButtonSpec(id: 'fullscreen', label: '全屏',     group: PlayerButtonGroup.display),
-  PlayerButtonSpec(id: 'subtitle',   label: '字幕轨',   group: PlayerButtonGroup.track),
-  PlayerButtonSpec(id: 'danmaku',    label: '弹幕',     group: PlayerButtonGroup.track),
-  PlayerButtonSpec(id: 'video_fit',  label: '画面比例', group: PlayerButtonGroup.display),
-  PlayerButtonSpec(id: 'media_info', label: '媒体信息', group: PlayerButtonGroup.display),
-  PlayerButtonSpec(id: 'diagnostics',label: '播放诊断', group: PlayerButtonGroup.display),
+  PlayerButtonSpec(id: 'external_player', label: '外部播放器', group: PlayerButtonGroup.display),
 ];
 ```
 
@@ -190,7 +184,7 @@ const List<PlayerButtonSpec> kPlayerButtons = [
 
 **与上游的差异**：上游用逗号分隔字符串（`"a,b,c"`），PC 端用 **JSON 数组**。
 理由：PC 端已有 JSON 设置文件，数组可读性更好、无需处理转义；
-且 id 里不含逗号（§3.2 的 8 个**可配置** id 全部是下划线/小写字母），两种格式等价。
+且 id 里不含逗号（§3.2 的 10 个**可配置** id 全部是下划线/小写字母），两种格式等价。
 **但必须处理上游格式的兼容**——见 §4.5。
 
 ### 4.3 读取时的归一化（纯函数）
@@ -225,7 +219,7 @@ List<PlayerButtonSpec> resolveVisibleButtons({
 
 | 差异 | 上游 | PC 端 | 理由 |
 | --- | --- | --- | --- |
-| 播种默认隐藏 | 首次运行把 `DEFAULT` 中 `visible=false` 的项写入 `player_button_hidden`（`PlayerButtonSetting.java:220-225`） | **不播种** | PC 端 8 个可配置按钮默认全可见（§3.2），没有默认隐藏项，播种是空操作。保留机制只会引入一个"用户删了隐藏项但它又回来"的困惑 |
+| 播种默认隐藏 | 首次运行把 `DEFAULT` 中 `visible=false` 的项写入 `player_button_hidden`（`PlayerButtonSetting.java:220-225`） | **不播种** | PC 端 10 个可配置按钮默认全可见（§3.2），没有默认隐藏项，播种是空操作。保留机制只会引入一个"用户删了隐藏项但它又回来"的困惑 |
 | 格式 | 逗号分隔字符串 | JSON 数组 | §4.2 |
 
 **兼容性**：如果 `order` 的值是**字符串**（用户从安卓迁移设置，或手改了文件），
@@ -276,16 +270,16 @@ for spec in resolveVisibleButtons(order, hidden):
 | `danmaku` | **顶栏常驻** | ❌ |
 | `video_fit` / `media_info` / `diagnostics` | 顶栏「更多」菜单 + 右键菜单 | ❌（菜单项，不是按钮） |
 
-**因此 `kPlayerButtons` 实际只有 8 个可配置项**：
+**因此 `kPlayerButtons` 实际只有 10 个可配置项**：
 
 ```
-prev, play, next, mute, volume, speed, episodes, fullscreen
+prev, play, next, mute, volume, speed, quality, episodes, fullscreen, external_player
 ```
 
-§3.2 表格里的 13 个是"PC 端存在的按钮"，其中 5 个（`subtitle`/`danmaku`/
+§3.2 表格里的 15 个是"PC 端存在的按钮"，其中 5 个（`subtitle`/`danmaku`/
 `video_fit`/`media_info`/`diagnostics`）**不进入配置集合**。
 
-**这个修正必须同步到 §3.2 的表格与代码注释**，否则实现者会按 13 个去做。
+**这个修正必须同步到 §3.2 的表格与代码注释**，否则实现者会按 15 个去做。
 
 **为什么不把顶栏按钮也做成可配置**：
 

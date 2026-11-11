@@ -19,6 +19,13 @@
 ///
 /// `pumpAndSettle` 一律用**有界超时**（5s）：将来再出现挂起是几秒失败，
 /// 而不是 10 分钟。
+///
+/// ## 分类导航（设置页改为「左分类 + 右单列」之后）
+///
+/// 设置页默认落在 `preferences`（偏好），屏显与播放器按钮属于 `playback`
+/// （播放），因此每条用例在挂载后先经 `selectSettingsCategory` 显式选类，
+/// 再执行原有断言。旧写法里「不同类别的入口必须在同一个首屏同时可见」不再成立，
+/// 那条约束改为「选类后可达」；业务断言一条未删。
 library;
 
 import 'dart:convert';
@@ -33,6 +40,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/player_button_config_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/settings_navigation.dart';
 
 void main() {
   late Directory temp;
@@ -93,27 +102,11 @@ void main() {
     });
   }
 
-  /// 挂载设置页。
-  ///
-  /// 默认给一个**足够高**的视口，让整个表单一次性渲染——设置页是惰性
-  /// `ListView`，600px 高时底部条目根本不会被构建（`ensureVisible` 会直接报
-  /// `Bad state: No element`）。这与 `phase5_sync_ui_test.dart:622`、
-  /// `phase4_tmdb_entry_reachability_test.dart:97` 的既有做法一致。
-  ///
-  /// `Size(1500, 3400)` 而不是别的数：本页加入屏显区块后总高约 2.2k，
-  /// 3400 留出充足余量，使「入口是否被挤出视口」的断言不会因 1px 抖动而假红。
-  ///
-  /// **必须套 `ListenableBuilder`**：`SettingsPage` 是 `StatelessWidget`，它
-  /// 自己**不监听** `AppState`（`diagnostics_pages.dart` 的类注释与
-  /// `phase5_sync_refresh_test.dart:164-168` 都写明这一点）。真实应用里是
-  /// `AppShell._onStateChanged`（`app.dart:317-320`）在 `notifyListeners` 后
-  /// `setState` 重建内容区。裸 pump 一个 `SettingsPage` 会得到一个**永不重建**
-  /// 的页面：点开关后 `state` 变了、界面却停在旧值，于是第二次点击会用**陈旧的
-  /// `value`** 再次发出同一个方向的值（实测：往返断言因此失败）。
-  /// 这里复现产品结构，而不是为测试特制一个东西。
+  /// 保留真实应用的 AppState 监听装配；挂载后显式选择目标类别。
   Future<void> pumpSettings(
     WidgetTester tester, {
     Size size = const Size(1500, 3400),
+    String category = 'playback',
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -129,7 +122,15 @@ void main() {
       ),
     );
     await settle(tester);
+    await selectSettingsCategory(tester, category);
   }
+
+  Finder settingsScrollable() => find
+      .byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      )
+      .last;
 
   /// 屏显开关的中文名（`docs/phase8/design/02` §5.1 的表格逐字）。
   const osdLabels = <String, String>{
@@ -147,9 +148,9 @@ void main() {
 
   /// 读回 `settings.json` 的 `ui.osd` 段原文。
   Map<String, Object?> persistedOsd() {
-    final root =
-        jsonDecode(File(state.paths.settingsPath).readAsStringSync())
-            as Map<String, Object?>;
+    final root = jsonDecode(
+      File(state.paths.settingsPath).readAsStringSync(),
+    ) as Map<String, Object?>;
     final ui = (root['ui'] as Map?)?.cast<String, Object?>();
     return (ui?['osd'] as Map?)?.cast<String, Object?>() ?? const {};
   }
@@ -338,11 +339,7 @@ void main() {
 
     final osd = persistedOsd();
     expect(osd[OsdFlag.diagnostics], isTrue, reason: '诊断面板应已落盘');
-    expect(
-      osd[OsdFlag.mini],
-      isFalse,
-      reason: '「点开关 → 写盘」这条路径必须真的写下去（不是只改内存）',
-    );
+    expect(osd[OsdFlag.mini], isFalse, reason: '「点开关 → 写盘」这条路径必须真的写下去（不是只改内存）');
     // 精确键集：**只有显式设过的两项**落盘。
     //
     // 这是 `design/02` §5.2 的「缺席 = 默认，不把默认值固化进文件」纪律
@@ -350,11 +347,10 @@ void main() {
     // 断言「7 个键全在」是**错的**——那会把默认值固化进用户文件，
     // 让「从未选过」与「选过默认值」不可区分。
     // 反向断言（键集精确）同时抓出「把整张默认表写下去」的实现。
-    expect(
-      osd.keys.toSet(),
-      {OsdFlag.mini, OsdFlag.diagnostics},
-      reason: '只应写显式设过的键（缺席 = 默认）',
-    );
+    expect(osd.keys.toSet(), {
+      OsdFlag.mini,
+      OsdFlag.diagnostics,
+    }, reason: '只应写显式设过的键（缺席 = 默认）');
   });
 
   // 关键用例：**每个开关写的是自己的 id**，不是同一个 id 写 7 遍。
@@ -444,11 +440,12 @@ void main() {
       ),
     );
     await tester.pump();
+    await selectSettingsCategory(tester, 'playback');
 
     await tester.scrollUntilVisible(
       osdBlock(),
       200,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: settingsScrollable(),
     );
     expect(osdBlock(), findsOneWidget);
     for (final id in OsdFlag.values) {
@@ -458,7 +455,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('settings-player-buttons')),
       200,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: settingsScrollable(),
     );
     expect(
       find.byKey(const ValueKey('settings-player-buttons')),
@@ -466,19 +463,8 @@ void main() {
     );
   });
 
-  testWidgets('既有设置页入口没有被挤出既有测试的视口（design/05 §5 回归）', (tester) async {
-    // 本用例锁定的是**新增区块不得把既有目标挤出视口**这条约束
-    // （`design/05` §5：既有测试大量使用固定视口且不带 `ensureVisible`）。
-    //
-    // 视口逐字取自既有测试里**会碰设置页**的那几处，一个不多一个不少：
-    //   - 1400×2600：`phase5_sync_ui_test.dart:622,656`（tap 安卓入口）
-    //   - 1400×2400：`phase4_tmdb_entry_reachability_test.dart:97`（tap TMDB 入口）
-    //   - 1440×2400：`ui_redesign_visual_flow_test.dart:991`（断言站点健康入口）
-    //   - 1600×1600：`tmdb_shell_entry_flow_test.dart:54`（tap TMDB 入口）
-    //   - 1200×1600：`phase6_history_page_test.dart:46`（tap「直接播放」）
-    //   - 1200×1800：`phase6_ai_settings_page_test.dart:38`（断言 AI 入口）
-    //   - 1280×2000：`phase5_sync_refresh_test.dart:170`（读安卓摘要文本）
-    // 用**真实**视口而不是一个宽松的近似值，否则这条断言没有区分力。
+  testWidgets('既有设置页入口在各既有视口下选类后可达（design/05 §5 回归）', (tester) async {
+    // 保留七种既有真实视口；不同类别的入口改为选类后逐项可达。
     const viewports = <String, Size>{
       'phase5_sync_ui 1400x2600': Size(1400, 2600),
       'phase4_tmdb_entry 1400x2400': Size(1400, 2400),
@@ -489,10 +475,6 @@ void main() {
       'phase5_sync_refresh 1280x2000': Size(1280, 2000),
     };
 
-    // 每个视口下必须被构建、且完整落在可视区内的既有目标。
-    // 「必须被构建」与「必须在视口内」是两件事：惰性 `ListView` 在视口外
-    // 根本不建 widget（`find` 直接找不到），而**部分**越界时 widget 存在、
-    // `tap` 却会打空（`phase5_sync_ui_test.dart:200-213` 记录的坑）。
     const targets = <String, List<String>>{
       'phase5_sync_ui 1400x2600': [
         'settings-android-open',
@@ -509,57 +491,53 @@ void main() {
       'phase5_sync_refresh 1280x2000': ['settings-android-summary'],
     };
 
-    for (final entry in viewports.entries) {
-      await pumpSettings(tester, size: entry.value);
-      final height = entry.value.height;
+    const categories = <String, String>{
+      'settings-theme-mode': 'preferences',
+      'settings-history-click-action': 'preferences',
+      'settings-ai-open': 'connections',
+      'settings-tmdb-open': 'connections',
+      'settings-android-open': 'connections',
+      'settings-android-summary': 'connections',
+      'settings-site-health-open': 'maintenance',
+    };
 
+    for (final entry in viewports.entries) {
+      await pumpSettings(tester, size: entry.value, category: 'preferences');
+      final height = entry.value.height;
       for (final key in targets[entry.key]!) {
+        await selectSettingsCategory(tester, categories[key]!);
         final finder = find.byKey(ValueKey(key));
-        expect(
+        await tester.scrollUntilVisible(
           finder,
-          findsOneWidget,
-          reason: '${entry.key}：$key 必须被构建（不得被新增区块挤出惰性视口）',
+          200,
+          scrollable: settingsScrollable(),
         );
+        expect(finder, findsOneWidget, reason: '${entry.key}：$key 选类并滚动后必须可达');
         final rect = tester.getRect(finder);
         expect(
           rect.top,
           greaterThanOrEqualTo(0),
-          reason: '${entry.key}：$key 被推到视口上方',
+          reason: '${entry.key}：$key 滚动后仍在视口上方',
         );
         expect(
           rect.bottom,
           lessThanOrEqualTo(height),
-          reason: '${entry.key}：$key 被新增区块挤出视口（既有测试不带 ensureVisible）',
+          reason: '${entry.key}：$key 选类并滚动后仍在视口下方',
         );
       }
 
-    }
-
-    // 新增的两个入口也必须**可达**（否则新功能自己就不可达）。
-    //
-    // 判据是「**滚动后**可见」，不是「无需滚动就可见」：设置页是长表单
-    // （本页内容总高约 2540px），要求每个条目在任意视口下都免滚动可见
-    // 是不成立的要求——`1400×2400` 下最后两个条目必然在视口外。
-    // `design/00` §5 第 10 条要的是**存在非右键的等价路径**，
-    // 滚动即可满足；`design/03` §6.1 也只要求「设置页有入口」。
-    //
-    // **必须单独一轮**：`Scrollable` 会把偏移量存进 `PageStorage` 并在
-    // 重建同类型子树时恢复，所以上面那轮一旦滚动过，下一轮的
-    // `settings-theme-mode`（在顶部）就不再被构建——实测会红在
-    // `ui_redesign_visual 1440x2400：settings-theme-mode 必须被构建`。
-    for (final entry in viewports.entries) {
-      await pumpSettings(tester, size: entry.value);
+      await selectSettingsCategory(tester, 'playback');
       for (final key in const ['settings-osd', 'settings-player-buttons']) {
         final finder = find.byKey(ValueKey(key));
         await tester.scrollUntilVisible(
           finder,
           200,
-          scrollable: find.byType(Scrollable).first,
+          scrollable: settingsScrollable(),
         );
         expect(
           finder,
           findsOneWidget,
-          reason: '${entry.key}：新增入口 $key 滚动后仍不可达',
+          reason: '${entry.key}：新增入口 $key 选播放类并滚动后仍不可达',
         );
       }
     }
@@ -572,7 +550,7 @@ void main() {
     await tester.scrollUntilVisible(
       entry,
       200,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: settingsScrollable(),
     );
     await tester.tap(entry);
     await settle(tester);

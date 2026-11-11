@@ -92,6 +92,8 @@ class _PendingPlaybackState extends AppState {
     required String episodeTarget,
     String? flag,
     String? vodId,
+    bool Function()? isCurrent,
+    int? qualityIndex,
     Site? siteOverride,
     SiteService? serviceOverride,
   }) async {

@@ -63,6 +63,8 @@ Future<void> resumeHistoryEntry(
           state: state,
           request: PlaybackRequest(
             url: decision.url!,
+            qualities: decision.qualities,
+            qualityIndex: decision.qualityIndex,
             // 续播后再次写进度时必须保留**同一个入口目标**，否则这一条历史会
             // 被刚解析出的可播地址覆盖，下一次续播又失败。
             episodeTarget: episodeTarget,

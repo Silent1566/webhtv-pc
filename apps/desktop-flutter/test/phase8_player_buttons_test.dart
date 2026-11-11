@@ -3,8 +3,8 @@ import 'package:webhtv_pc/core/player_buttons.dart';
 
 void main() {
   group('按钮定义（design/03 §3.2、§5.3）', () {
-    test('恰好 9 项，id 集合精确', () {
-      expect(kPlayerButtons.length, 9);
+    test('恰好 10 项，包含可配置画质入口', () {
+      expect(kPlayerButtons.length, 10);
       expect(
         kPlayerButtons.map((b) => b.id).toList(),
         [
@@ -14,6 +14,7 @@ void main() {
           'mute',
           'volume',
           'speed',
+          'quality',
           'episodes',
           'fullscreen',
           'external_player',
@@ -62,6 +63,22 @@ void main() {
       expect(order[1], 'prev');
       // 其余按默认顺序补齐在末尾。
       expect(order.sublist(2), defaultButtonOrder().sublist(2));
+    });
+
+    test('旧九按钮顺序末尾补画质且可隐藏', () {
+      const old = [
+        'prev',
+        'play',
+        'next',
+        'mute',
+        'volume',
+        'speed',
+        'episodes',
+        'fullscreen',
+        'external_player',
+      ];
+      expect(normalizeButtonOrder(old), [...old, 'quality']);
+      expect(normalizeButtonHidden(['quality']), {'quality'});
     });
 
     test('接受逗号分隔字符串（兼容上游格式）', () {

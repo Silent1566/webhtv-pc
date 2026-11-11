@@ -41,8 +41,20 @@ void main() {
 
   testWidgets('设置真实入口打开统一AI业务页，未配置不启动AI', (tester) async {
     await tester.pumpWidget(host(SettingsPage(state: state)));
+    // 设置页自 beta 起是分类导航：AI 入口在「连接与增强」分类里，
+    // 必须先切到该分类，再在它的滚动区里找按钮。
+    await tester.tap(
+      find.byKey(const ValueKey('settings-category-connections')),
+    );
+    await tester.pumpAndSettle();
     final entry = find.byKey(const ValueKey('settings-ai-business-open'));
-    await tester.scrollUntilVisible(entry, 180);
+    final scrollable = find.descendant(
+      of: find.byKey(
+        const ValueKey('settings-category-content-connections'),
+      ),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(entry, 180, scrollable: scrollable);
     await tester.tap(entry);
     await tester.pumpAndSettle();
     expect(find.byType(AiBusinessPage), findsOneWidget);

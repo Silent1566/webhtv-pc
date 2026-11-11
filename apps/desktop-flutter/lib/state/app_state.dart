@@ -8,6 +8,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:isolate';
 
@@ -245,7 +246,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _externalPlayerDetector =
            externalPlayerDetector ?? ExternalPlayers.detect,
        // AI 调用日志的默认 sink：底座持有多处调用点，不能靠每处记得传 log。
-      log = AiCompletionClient.defaultLog = log ?? LogService(),
+       log = AiCompletionClient.defaultLog = log ?? LogService(),
        _injectedLiveService = liveService,
        _injectedEpgService = epgService,
        _injectedBridgeService = androidBridgeService,
@@ -2407,6 +2408,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (Platform.isWindows) {
       platform = 'windows';
       architecture = _windowsArchitecture();
+    } else if (Platform.isLinux) {
+      architecture = switch (Abi.current()) {
+        Abi.linuxIA32 => 'x86',
+        final abi => abi.toString().split('_').last,
+      };
     }
 
     if (_database != null) {
@@ -4932,6 +4938,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     required String episodeTarget,
     String? flag,
     String? vodId,
+    int? qualityIndex,
+    bool Function()? isCurrent,
     Site? siteOverride,
 
     /// 用哪份配置的服务解析。`null` = 生效配置（既有行为）；原来源续播时传
@@ -4949,11 +4957,20 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         episodeTarget: episodeTarget,
         flag: flag,
         vodId: vodId,
+        qualityIndex: qualityIndex,
         parseFailover: parseFailoverSettings,
       );
+      // 过期响应（用户已切到别的画质/线路）不得改动全局播放状态：撤销旧 token 会
+      // 连带把**新**会话作废，写 lastDecision 会把播放器指回旧画质。
+      if (_isStale(isCurrent)) return null;
       // 退出旧会话并接入本地代理：Header 注入与 Range 都经同一 token 校验（§9.6、§11.3.1）。
       revokeProxySession();
-      final decision = await proxyDecision(outcome.value, siteKey: site.key);
+      final decision = await proxyDecision(
+        outcome.value,
+        siteKey: site.key,
+        isCurrent: isCurrent,
+      );
+      if (_isStale(isCurrent)) return null;
       _lastDecision = decision;
       _lastError = null;
       log.info(
@@ -4964,6 +4981,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       notifyListeners();
       return decision;
     } catch (error) {
+      // 过期请求的失败同样不是「当前播放失败」，交给 UI 丢弃（不写 lastError）。
+      if (_isStale(isCurrent)) return null;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -4976,6 +4995,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       rethrow;
     }
   }
+
+  /// 调用方的时效检查（`null` = 无检查，保持既有行为）。
+  static bool _isStale(bool Function()? isCurrent) =>
+      isCurrent != null && !isCurrent();
 
   /// 用详情结果补齐旧历史记录缺失的海报，不改变进度和更新时间。
   void updateHistoryPoster(PlaybackHistory item, String posterUrl) {
@@ -5154,6 +5177,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     required String episodeTarget,
     String? flag,
     String? vodId,
+    int? qualityIndex,
+    bool Function()? isCurrent,
   }) async {
     final context = playbackContextFor(sourceKey);
     final site = context?.siteByKey(siteKey);
@@ -5163,10 +5188,17 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       episodeTarget: episodeTarget,
       flag: flag,
       vodId: vodId,
+      qualityIndex: qualityIndex,
       parseFailover: parseFailoverSettings,
     );
+    if (_isStale(isCurrent)) return null;
     revokeProxySession();
-    final decision = await proxyDecision(outcome.value, siteKey: site.key);
+    final decision = await proxyDecision(
+      outcome.value,
+      siteKey: site.key,
+      isCurrent: isCurrent,
+    );
+    if (_isStale(isCurrent)) return null;
     log.info(
       '原来源播放决策 ${decision.logLine} source=$sourceKey site=${site.key} '
       'elapsed=${outcome.latency.inMilliseconds}ms',
@@ -6033,6 +6065,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   Future<PlaybackDecision> proxyDecision(
     PlaybackDecision decision, {
     required String siteKey,
+    bool Function()? isCurrent,
   }) async {
     final url = decision.url;
     if (url == null || url.isEmpty) return decision;
@@ -6068,6 +6101,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     }
 
     const credentialKeys = {'user-agent', 'referer', 'cookie', 'authorization'};
+    // 启动代理是真实 await：期间用户可能已切画质，此时建会话会让新会话的 token
+    // 被后续 revoke 顶掉，且 notify 会把播放器指回旧画质。
+    if (_isStale(isCurrent)) return decision;
     final session = _proxy.sessions.create(
       siteKey: siteKey,
       allowedHosts: {target.host},
@@ -6101,6 +6137,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       subs: decision.subs,
       // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。
       danmaku: decision.danmaku,
+      // 候选画质是**未代理**原始列表，代理换 url 后仍保留，供 UI 切画质。
+      qualities: decision.qualities,
+      qualityIndex: decision.qualityIndex,
       // 代理前的原始 Header 留给宿主自己的附加请求（外挂字幕/弹幕）使用。
       upstreamHeaders: decision.headers,
     );

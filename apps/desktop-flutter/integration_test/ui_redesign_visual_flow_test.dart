@@ -47,10 +47,10 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
 import 'package:webhtv_pc/ui/tokens.dart';
 
+import '../test/support/settings_navigation.dart';
 import 'fixture_http.dart';
 
-void evidence(String message) =>
-    debugPrint('UI-REDESIGN-EVIDENCE $message');
+void evidence(String message) => debugPrint('UI-REDESIGN-EVIDENCE $message');
 
 /// 从当前目录向上找仓库根（以 `docs/` 存在为判据）。
 Directory repoRootOf(Directory start) {
@@ -105,7 +105,12 @@ Future<void> capture(
 /// 于是这些站点会如实显示成「失效（运行时不支持）」，这正是我们要验证的一态。
 const List<Map<String, Object>> _sites = [
   {'key': 'muou', 'name': '木偶', 'type': 1, 'api': 'http://127.0.0.1:9/muou'},
-  {'key': 'jinpai', 'name': '金牌', 'type': 1, 'api': 'http://127.0.0.1:9/jinpai'},
+  {
+    'key': 'jinpai',
+    'name': '金牌',
+    'type': 1,
+    'api': 'http://127.0.0.1:9/jinpai',
+  },
   {'key': 'huban', 'name': '湖班', 'type': 1, 'api': 'http://127.0.0.1:9/huban'},
   {'key': 'p115', 'name': '115', 'type': 1, 'api': 'http://127.0.0.1:9/p115'},
   {'key': 'kuake', 'name': '夸克', 'type': 1, 'api': 'http://127.0.0.1:9/kuake'},
@@ -164,9 +169,8 @@ Future<AppState> _bootState(Directory temp) async {
   await state.bootstrap();
   // 预先写下边界确认标记：否则首次启动的边界提示会盖住窗口底部，
   // 让截图里的内容区不完整。
-  File(
-    '${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted',
-  ).writeAsStringSync(DateTime.now().toIso8601String());
+  File('${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted')
+      .writeAsStringSync(DateTime.now().toIso8601String());
   final imported = await state.importConfig(
     jsonEncode({'name': '视觉证据 fixture', 'sites': _sites}),
   );
@@ -218,7 +222,12 @@ TmdbDetailData _detailData() => TmdbDetailData(
     TmdbPerson(personId: 2, name: '演员乙', subtitle: 'Actor', profileUrl: null),
   ],
   crew: [
-    TmdbPerson(personId: 3, name: '导演甲', subtitle: 'Director', profileUrl: null),
+    TmdbPerson(
+      personId: 3,
+      name: '导演甲',
+      subtitle: 'Director',
+      profileUrl: null,
+    ),
   ],
 );
 
@@ -230,8 +239,7 @@ TmdbDetailData _detailData() => TmdbDetailData(
 /// 是最容易误导后续判断的一种假信号。不可达就跳过并说明原因。
 Future<bool> _fixtureReachable() async {
   try {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 2);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
     final request = await client.getUrl(Uri.parse('$fixtureBaseUrl/health'));
     final response = await request.close();
     await response.drain<void>();
@@ -362,10 +370,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 120));
     }
 
-    await capture(
-      tester,
-      relativePath: '.impeccable/review/detail-dark.png',
-    );
+    await capture(tester, relativePath: '.impeccable/review/detail-dark.png');
 
     // 滚动后：正文必须**仍然浮在图片上**（用户反馈 2026-10-13
     // 「后续内容也应该显示在图片上」）。
@@ -455,7 +460,9 @@ void main() {
       // 内容看上去贴顶（差点被误判成"内容带跨比例漂移"的产品缺陷）。
       final scrollable = find.byType(Scrollable);
       if (scrollable.evaluate().isNotEmpty) {
-        final position = tester.state<ScrollableState>(scrollable.first).position;
+        final position = tester
+            .state<ScrollableState>(scrollable.first)
+            .position;
         if (position.pixels != 0) {
           position.jumpTo(0);
           await tester.pumpAndSettle();
@@ -483,8 +490,10 @@ void main() {
 
   testWidgets('浏览页：源场 + 分类条 + 海报网格（dark，1440x900）', (tester) async {
     if (!await _fixtureReachable()) {
-      markTestSkipped('fixture 服务不可达（$fixtureBaseUrl）：'
-          '先运行 `python tools/fixture_server/server.py`');
+      markTestSkipped(
+        'fixture 服务不可达（$fixtureBaseUrl）：'
+        '先运行 `python tools/fixture_server/server.py`',
+      );
       return;
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-browse');
@@ -499,9 +508,8 @@ void main() {
       } catch (_) {}
     });
     await state.bootstrap();
-    File(
-      '${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted',
-    ).writeAsStringSync(DateTime.now().toIso8601String());
+    File('${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted')
+        .writeAsStringSync(DateTime.now().toIso8601String());
 
     // 这一个站点指向**本机 fixture 服务**（`tools/fixture_server/server.py`），
     // 因此首页是真实加载出来的，不是空态。
@@ -553,10 +561,7 @@ void main() {
     }
     await tester.pump(const Duration(milliseconds: 300));
 
-    await capture(
-      tester,
-      relativePath: '.impeccable/review/browse-dark.png',
-    );
+    await capture(tester, relativePath: '.impeccable/review/browse-dark.png');
 
     expect(state.contentPhase, LoadPhase.ready, reason: '首页未就绪');
 
@@ -581,11 +586,7 @@ void main() {
 
     // 需求②：筛选区域**不再默认展示**，改为按钮点击后悬浮显示。
     final filterButton = find.byKey(const ValueKey('category-filter-menu'));
-    expect(
-      filterButton,
-      findsOneWidget,
-      reason: '分类有筛选维度时必须给出「筛选」入口',
-    );
+    expect(filterButton, findsOneWidget, reason: '分类有筛选维度时必须给出「筛选」入口');
     // 面板默认是关的：按钮在、面板内容不在。
     expect(find.text('重置筛选'), findsNothing, reason: '还没筛过，不该有重置入口');
 
@@ -671,8 +672,10 @@ void main() {
 
   testWidgets('播放器控制条（dark，1440x900）', (tester) async {
     if (!await _fixtureReachable()) {
-      markTestSkipped('fixture 服务不可达（$fixtureBaseUrl）：'
-          '先运行 `python tools/fixture_server/server.py`');
+      markTestSkipped(
+        'fixture 服务不可达（$fixtureBaseUrl）：'
+        '先运行 `python tools/fixture_server/server.py`',
+      );
       return;
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-player');
@@ -733,10 +736,7 @@ void main() {
     await tester.tap(find.byType(PlayerPage), warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 500));
 
-    await capture(
-      tester,
-      relativePath: '.impeccable/review/player-dark.png',
-    );
+    await capture(tester, relativePath: '.impeccable/review/player-dark.png');
 
     // 顶栏重组的**硬约束**：这两个 tooltip 被集成测试按精确串查找并直接 `tap`
     // （`subtitle_flow_test.dart:144`、`danmaku_flow_test.dart:156`，
@@ -776,13 +776,7 @@ void main() {
     // （新旧项并存），那些反向锁会红。
     await tester.tap(find.byTooltip('更多'));
     await tester.pumpAndSettle();
-    for (final label in [
-      '字幕样式',
-      '弹幕设置',
-      '画面比例与缩放',
-      '媒体信息',
-      '快捷键说明',
-    ]) {
+    for (final label in ['字幕样式', '弹幕设置', '画面比例与缩放', '媒体信息', '快捷键说明']) {
       expect(find.text(label), findsWidgets, reason: '溢出菜单缺少「$label」');
     }
     for (final label in ['播放诊断', '音轨', '视频轨', '循环与定时', 'LUT 滤镜']) {
@@ -804,8 +798,10 @@ void main() {
 
   testWidgets('配置的品牌字段：wallpaper + logo 真的生效（dark，1440x900）', (tester) async {
     if (!await _fixtureReachable()) {
-      markTestSkipped('fixture 服务不可达（$fixtureBaseUrl）：'
-          '先运行 `python tools/fixture_server/server.py`');
+      markTestSkipped(
+        'fixture 服务不可达（$fixtureBaseUrl）：'
+        '先运行 `python tools/fixture_server/server.py`',
+      );
       return;
     }
     final temp = Directory.systemTemp.createTempSync('webhtv-ui-brand');
@@ -820,9 +816,8 @@ void main() {
       } catch (_) {}
     });
     await state.bootstrap();
-    File(
-      '${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted',
-    ).writeAsStringSync(DateTime.now().toIso8601String());
+    File('${paths.configDir}${Platform.pathSeparator}usage-boundary-accepted')
+        .writeAsStringSync(DateTime.now().toIso8601String());
 
     // `wallpaper` 与 `logo` 是**配置协议自带的品牌字段**，此前被解析并持久化
     // 但 `lib/ui/` 从未呈现（用户确认必须让它们真正生效）。
@@ -946,14 +941,40 @@ void main() {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 row('可选 · 启用（选中 = 琥珀淡底，未选中 = 透明）', const [
-                  TagChip(keyValue: 'a1', label: '全部', onTap: _noop, selectable: true),
-                  TagChip(keyValue: 'a2', label: '喜剧', selected: true, onTap: _noop, selectable: true),
-                  TagChip(keyValue: 'a3', label: '爱情', onTap: _noop, selectable: true),
-                  TagChip(keyValue: 'a4', label: '恐怖', onTap: _noop, selectable: true),
+                  TagChip(
+                    keyValue: 'a1',
+                    label: '全部',
+                    onTap: _noop,
+                    selectable: true,
+                  ),
+                  TagChip(
+                    keyValue: 'a2',
+                    label: '喜剧',
+                    selected: true,
+                    onTap: _noop,
+                    selectable: true,
+                  ),
+                  TagChip(
+                    keyValue: 'a3',
+                    label: '爱情',
+                    onTap: _noop,
+                    selectable: true,
+                  ),
+                  TagChip(
+                    keyValue: 'a4',
+                    label: '恐怖',
+                    onTap: _noop,
+                    selectable: true,
+                  ),
                 ]),
                 row('可选 · 禁用（整体降透明，**选中态保留**）', const [
                   TagChip(keyValue: 'b1', label: '全部', selectable: true),
-                  TagChip(keyValue: 'b2', label: '喜剧', selected: true, selectable: true),
+                  TagChip(
+                    keyValue: 'b2',
+                    label: '喜剧',
+                    selected: true,
+                    selectable: true,
+                  ),
                   TagChip(keyValue: 'b3', label: '爱情', selectable: true),
                   TagChip(keyValue: 'b4', label: '恐怖', selectable: true),
                 ]),
@@ -977,8 +998,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('其余五个面：配置 / TMDB 设置 / 站点选择 / 直播 / Spider（dark，1440x900）',
-      (tester) async {
+  testWidgets('其余五个面：配置 / TMDB 设置 / 站点选择 / 直播 / Spider（dark，1440x900）', (
+    tester,
+  ) async {
     // 这五个面此前**从未被眼睛看过**——只有 widget 测试背书。
     // widget 测试能证明结构对，证明不了"看起来对"（层级、密度、对比度、
     // 有没有框架默认值漏进来），而后者恰恰是这次改造的主题。
@@ -1055,11 +1077,9 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 200));
+    await selectSettingsCategory(tester, 'preferences');
 
-    await capture(
-      tester,
-      relativePath: '.impeccable/review/settings-dark.png',
-    );
+    await capture(tester, relativePath: '.impeccable/review/settings-dark.png');
 
     expect(
       find.byKey(const ValueKey('settings-theme-mode')),
@@ -1071,20 +1091,11 @@ void main() {
     // 入口断掉的话，功能等于被删掉了——这正是本项目历史上踩过的坑
     // （`TmdbSettingsPage` 曾因为入口没被渲染而成为死代码）。
     //
-    // 注意：`SettingsPage` 是**惰性 `ListView`**，底部的条目在 900px 高度下
-    // 根本不会被构建，`ensureVisible` 会直接报 `Bad state: No element`。
-    // 因此按本项目既有做法（`phase4_tmdb_entry_reachability_test.dart:97`）
-    // 把视口调高，让整个表单一次性渲染。
-    tester.view.physicalSize = const Size(1440, 2400);
-    tester.view.devicePixelRatio = 1.0;
-    await tester.pumpAndSettle();
+    // 健康入口属于维护分类，不再要求和偏好同时出现在首屏。
+    await selectSettingsCategory(tester, 'maintenance');
 
     final healthEntry = find.byKey(const ValueKey('settings-site-health-open'));
-    expect(
-      healthEntry,
-      findsOneWidget,
-      reason: '设置页必须有站点健康入口（源场唯一入口）',
-    );
+    expect(healthEntry, findsOneWidget, reason: '设置页必须有站点健康入口（源场唯一入口）');
     await capture(
       tester,
       relativePath: '.impeccable/review/settings-health-entry-dark.png',

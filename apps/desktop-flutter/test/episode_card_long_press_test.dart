@@ -277,6 +277,8 @@ class _State extends AppState {
     required String episodeTarget,
     String? flag,
     String? vodId,
+    int? qualityIndex,
+    bool Function()? isCurrent,
     Site? siteOverride,
     SiteService? serviceOverride,
   }) async {

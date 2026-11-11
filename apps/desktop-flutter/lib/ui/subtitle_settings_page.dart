@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import '../services/app_paths.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
+import 'tokens.dart';
 
 class SubtitleSettingsPage extends StatefulWidget {
   const SubtitleSettingsPage({super.key, required this.state, this.paths});
@@ -95,90 +97,101 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
       body: ListView(
         padding: formPagePadding(context),
         children: [
-          Text('自动匹配', style: theme.textTheme.titleMedium),
-          SwitchListTile(
-            key: const ValueKey('subtitle-auto-match'),
-            contentPadding: EdgeInsets.zero,
-            title: const Text('播放结果没有字幕时自动匹配'),
-            subtitle: const Text('只在配置了至少一个字幕源时生效；失败不阻塞播放'),
-            value: _autoMatch,
-            onChanged: (value) => setState(() => _autoMatch = value),
-          ),
-          const Divider(height: 32),
-          Text('本地目录', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            '每行一个目录，递归两层；文件名包含片名即视为候选。',
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            key: const ValueKey('subtitle-local-directories'),
-            controller: _directories,
-            minLines: 3,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              hintText: r'C:\Users\you\Videos\subtitles',
-            ),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('subtitle-add-default-dir'),
-            onPressed: _addDefaultDirectory,
-            icon: const Icon(Icons.create_new_folder_outlined),
-            label: const Text('加入默认目录'),
-          ),
-          const Divider(height: 32),
-          Text('HTTP 字幕源', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '请求：GET <地址>?q=标题&season=&episode=&token=\n'
-            '响应：{"code":0,"data":[{"title","language","format","url"}]} 或数组。\n'
-            '未填写地址时该源完全不启用。',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            key: const ValueKey('subtitle-http-endpoint'),
-            controller: _endpoint,
-            decoration: const InputDecoration(
-              labelText: '搜索地址',
-              border: OutlineInputBorder(),
-              hintText: 'https://example.test/subtitles/search',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('subtitle-http-token'),
-            controller: _token,
-            obscureText: !_revealToken,
-            decoration: InputDecoration(
-              labelText: '令牌（可选）',
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                tooltip: _revealToken ? '隐藏令牌' : '显示令牌',
-                icon: Icon(
-                  _revealToken ? Icons.visibility_off : Icons.visibility,
-                ),
-                onPressed: () => setState(() => _revealToken = !_revealToken),
+          SettingsSection(
+            title: '自动匹配',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('subtitle-auto-match'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('播放结果没有字幕时自动匹配'),
+                subtitle: const Text('只在配置了至少一个字幕源时生效；失败不阻塞播放'),
+                value: _autoMatch,
+                onChanged: (value) => setState(() => _autoMatch = value),
               ),
-            ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            '令牌只保存在本机 settings.json，不写日志、不参与同步。',
-            style: theme.textTheme.bodySmall,
+          SettingsSection(
+            title: '本地目录',
+            children: [
+              Text(
+                '每行一个目录，递归两层；文件名包含片名即视为候选。',
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: AppSpace.sm),
+              TextField(
+                key: const ValueKey('subtitle-local-directories'),
+                controller: _directories,
+                minLines: 3,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: r'C:\Users\you\Videos\subtitles',
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('subtitle-add-default-dir'),
+                    onPressed: _addDefaultDirectory,
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    label: const Text('加入默认目录'),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-          Row(
+          SettingsSection(
+            title: 'HTTP 字幕源',
+            children: [
+              const Text(
+                '请求：GET <地址>?q=标题&season=&episode=&token=\n'
+                '响应：{"code":0,"data":[{"title","language","format","url"}]} 或数组。\n'
+                '未填写地址时该源完全不启用。',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: AppSpace.sm),
+              TextField(
+                key: const ValueKey('subtitle-http-endpoint'),
+                controller: _endpoint,
+                decoration: const InputDecoration(
+                  labelText: '搜索地址',
+                  border: OutlineInputBorder(),
+                  hintText: 'https://example.test/subtitles/search',
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('subtitle-http-token'),
+                controller: _token,
+                obscureText: !_revealToken,
+                decoration: InputDecoration(
+                  labelText: '令牌（可选）',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: _revealToken ? '隐藏令牌' : '显示令牌',
+                    icon: Icon(
+                      _revealToken ? Icons.visibility_off : Icons.visibility,
+                    ),
+                    onPressed: () =>
+                        setState(() => _revealToken = !_revealToken),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                '令牌只保存在本机 settings.json，不写日志、不参与同步。',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+          SettingsActions(
             children: [
               FilledButton(
                 key: const ValueKey('subtitle-save'),
                 onPressed: _busy ? null : _save,
                 child: const Text('保存'),
               ),
-              const SizedBox(width: 12),
               if (_message != null)
                 Text(
                   _message!,
@@ -187,13 +200,13 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpace.xl),
           Text(
             '当前状态：${widget.state.subtitleSettings.hasAnyProvider ? "已配置字幕源" : "未配置任何字幕源"}'
             '${widget.state.subtitleSettings.autoMatch ? " · 自动匹配已开" : ""}',
             style: theme.textTheme.bodySmall,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpace.sm),
           const Text(
             '字幕只增强观看，不改变播放事实：任何字幕失败都只提示，视频照常播。',
             style: TextStyle(fontSize: 12),

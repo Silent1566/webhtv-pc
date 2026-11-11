@@ -2170,6 +2170,9 @@ class _DetailPageState extends State<DetailPage> {
             state: state,
             request: PlaybackRequest(
               url: decision.url!,
+              // 当前集的多画质候选随请求下传：播放器据此显示入口、按索引重解析。
+              qualities: decision.qualities,
+              qualityIndex: decision.qualityIndex,
               // 历史里存**站点入口目标**（`episode.url`），而不是这个解析后的
               // 可播地址（带时效签名，站点不认）。续播时要拿它回传站点重解析。
               episodeTarget: episode.url,

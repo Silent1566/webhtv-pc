@@ -24,6 +24,7 @@ import 'package:fast_gbk/fast_gbk.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/app_error.dart';
+import '../core/danmaku.dart';
 import '../core/http_api.dart';
 import '../core/parse_failover.dart';
 import '../core/parse_runtime.dart';
@@ -211,6 +212,9 @@ class ParseService {
       parseKind: ParseKind.json,
       source: 'parse:${selection.entry.name}',
       entryName: selection.entry.name,
+      format: asNonEmptyString(map['format']),
+      subs: SubtitleInfo.listFromJson(map['subs']),
+      danmaku: danmakuSourcesFromJson(map['danmaku']),
       latency: stopwatch.elapsed,
     );
   }
@@ -309,7 +313,7 @@ class ParseService {
     Map map,
     ParseEntry fallback,
   ) {
-    final result = <String, String>{};
+    final result = HeaderMap(asMap(map['header'])).asRequestHeaders;
     for (final key in <String>['User-Agent', 'Referer', 'Cookie', 'ua']) {
       final value = asNonEmptyString(map[key]);
       if (value != null) result[key] = value;

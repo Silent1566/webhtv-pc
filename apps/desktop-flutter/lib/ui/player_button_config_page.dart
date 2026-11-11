@@ -26,6 +26,8 @@ import 'package:flutter/material.dart';
 
 import '../core/player_buttons.dart';
 import '../state/app_state.dart';
+import 'common.dart';
+import 'settings_layout.dart';
 import 'tokens.dart';
 
 class PlayerButtonConfigPage extends StatefulWidget {
@@ -136,99 +138,104 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
     final byId = _byId;
     return Scaffold(
       appBar: AppBar(title: const Text('播放器按钮')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.lg,
-              AppSpace.md,
-              AppSpace.lg,
-              AppSpace.sm,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '拖动调整顺序，开关控制是否显示。',
-                  style: theme.textTheme.bodySmall,
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kFormMaxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.lg,
+                  AppSpace.md,
+                  AppSpace.lg,
+                  AppSpace.sm,
                 ),
-                const SizedBox(height: AppSpace.sm),
-                // 预览行：不离开页面就能看到结果。
-                // 不做真实的控制栏预览——那需要把播放器状态搬进来，成本远超收益。
-                Text(
-                  _previewText,
-                  key: const ValueKey('player-buttons-preview'),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                child: SettingsSection(
+                  title: '控制栏预览',
+                  children: [
+                    Text('拖动调整顺序，开关控制是否显示。', style: theme.textTheme.bodySmall),
+                    const SizedBox(height: AppSpace.sm),
+                    // 预览行：不离开页面就能看到结果。
+                    // 不做真实的控制栏预览——那需要把播放器状态搬进来，成本远超收益。
+                    Text(
+                      _previewText,
+                      key: const ValueKey('player-buttons-preview'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                // 外层滚动 + `shrinkWrap`：9 行在 600px 高的测试视口里放不下，
+                // 惰性列表只会建出视口内那几行，于是「列出全部 9 个按钮」这类
+                // 断言会假失败。`ShrinkWrappingViewport` 给 sliver 无限
+                // `remainingPaintExtent`，9 行全部建出来，页面整体滚动。
+                child: SingleChildScrollView(
+                  child: ReorderableListView.builder(
+                    // 关掉默认手柄：它不带 key、落在行尾并盖住开关（见文件头注释）。
+                    buildDefaultDragHandles: false,
+                    // 默认 proxyDecorator 会把 elevation 从 0 动到 6，违反
+                    // The Zero-Elevation Rule；这里改用表面阶梯表达层级。
+                    proxyDecorator: (child, index, animation) => Material(
+                      elevation: 0,
+                      color: theme.colorScheme.surfaceContainerHigh,
+                      child: child,
+                    ),
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+                    itemCount: _order.length,
+                    // 用 `onReorderItem` 而不是已废弃的 `onReorder`：框架在
+                    // `_handleReorderItem`（`reorderable_list.dart:1022-1025`）里
+                    // 已经替 `onReorderItem` 做过「移除一项后下标左移」的 -1 调整，
+                    // 所以这里**直接插入**，再减一次会把行拖到错误位置。
+                    // `onReorder` 分支（同函数 1017-1020）不做调整，需要调用方自己减。
+                    onReorderItem: (oldIndex, newIndex) {
+                      setState(() {
+                        final moved = _order.removeAt(oldIndex);
+                        _order.insert(newIndex, moved);
+                      });
+                      _persistOrder();
+                    },
+                    itemBuilder: (context, index) {
+                      final id = _order[index];
+                      final spec = byId[id];
+                      if (spec == null) {
+                        return SizedBox.shrink(key: ValueKey('button-row-$id'));
+                      }
+                      return _row(context, spec, index);
+                    },
                   ),
                 ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            // 外层滚动 + `shrinkWrap`：9 行在 600px 高的测试视口里放不下，
-            // 惰性列表只会建出视口内那几行，于是「列出全部 9 个按钮」这类
-            // 断言会假失败。`ShrinkWrappingViewport` 给 sliver 无限
-            // `remainingPaintExtent`，9 行全部建出来，页面整体滚动。
-            child: SingleChildScrollView(
-              child: ReorderableListView.builder(
-                // 关掉默认手柄：它不带 key、落在行尾并盖住开关（见文件头注释）。
-                buildDefaultDragHandles: false,
-                // 默认 proxyDecorator 会把 elevation 从 0 动到 6，违反
-                // The Zero-Elevation Rule；这里改用表面阶梯表达层级。
-                proxyDecorator: (child, index, animation) => Material(
-                  elevation: 0,
-                  color: theme.colorScheme.surfaceContainerHigh,
-                  child: child,
-                ),
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
-                itemCount: _order.length,
-                // 用 `onReorderItem` 而不是已废弃的 `onReorder`：框架在
-                // `_handleReorderItem`（`reorderable_list.dart:1022-1025`）里
-                // 已经替 `onReorderItem` 做过「移除一项后下标左移」的 -1 调整，
-                // 所以这里**直接插入**，再减一次会把行拖到错误位置。
-                // `onReorder` 分支（同函数 1017-1020）不做调整，需要调用方自己减。
-                onReorderItem: (oldIndex, newIndex) {
-                  setState(() {
-                    final moved = _order.removeAt(oldIndex);
-                    _order.insert(newIndex, moved);
-                  });
-                  _persistOrder();
-                },
-                itemBuilder: (context, index) {
-                  final id = _order[index];
-                  final spec = byId[id];
-                  if (spec == null) {
-                    return SizedBox.shrink(key: ValueKey('button-row-$id'));
-                  }
-                  return _row(context, spec, index);
-                },
               ),
-            ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(AppSpace.lg),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                OutlinedButton(
-                  key: const ValueKey('player-buttons-reset'),
-                  onPressed: _confirmReset,
-                  child: const Text('恢复默认'),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(AppSpace.lg),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: SettingsActions(
+                    children: [
+                      OutlinedButton(
+                        key: const ValueKey('player-buttons-reset'),
+                        onPressed: _confirmReset,
+                        child: const Text('恢复默认'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        child: const Text('完成'),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(width: AppSpace.sm),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                  child: const Text('完成'),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -244,16 +251,23 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
     return spec.group.label;
   }
 
-  Widget _row(BuildContext context, PlayerButtonSpec spec, int index) {    final theme = Theme.of(context);
+  Widget _row(BuildContext context, PlayerButtonSpec spec, int index) {
+    final theme = Theme.of(context);
     final visible = !_hidden.contains(spec.id);
     return ListTile(
       key: ValueKey('button-row-${spec.id}'),
-      leading: ReorderableDragStartListener(
-        index: index,
-        child: Icon(
-          Icons.drag_handle,
-          key: ValueKey('button-handle-${spec.id}'),
-          color: theme.colorScheme.onSurfaceVariant,
+      leading: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        child: Tooltip(
+          message: '拖动调整顺序',
+          child: ReorderableDragStartListener(
+            index: index,
+            child: Icon(
+              Icons.drag_handle,
+              key: ValueKey('button-handle-${spec.id}'),
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
       ),
       title: Text(spec.label),

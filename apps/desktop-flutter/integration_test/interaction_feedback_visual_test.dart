@@ -42,6 +42,8 @@ class _PendingPlaybackState extends AppState {
     String? vodId,
     Site? siteOverride,
     SiteService? serviceOverride,
+    bool Function()? isCurrent,
+    int? qualityIndex,
   }) => playback.future;
 }
 
