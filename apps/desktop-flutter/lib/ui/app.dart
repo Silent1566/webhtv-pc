@@ -1822,6 +1822,8 @@ class PosterImage extends StatelessWidget {
     this.alignment = Alignment.center,
     this.cacheWidth,
     this.background = true,
+    this.fallbackUrl,
+    this.placeholder,
   });
 
   final String? url;
@@ -1859,6 +1861,17 @@ class PosterImage extends StatelessWidget {
   /// 所以全绿也没拦住它。
   final bool background;
 
+  /// 主图失败时**只重试一次**的后备图（剧集卡片的剧照 → 本剧海报）。
+  ///
+  /// 只在 [url] 加载失败、或 [url] 为空时换用；两者相同或后备为空时直接落占位，
+  /// 因此不会出现同址递归。默认 `null`，其余调用方行为不变。
+  final String? fallbackUrl;
+
+  /// 无图/坏图时替代默认图标的占位内容（人物头像用姓名字标）。
+  ///
+  /// 默认 `null` → 沿用既有「灰底 + 图标」，其余调用方观感不变。
+  final Widget? placeholder;
+
   @override
   Widget build(BuildContext context) {
     final target = url?.trim() ?? '';
@@ -1867,7 +1880,6 @@ class PosterImage extends StatelessWidget {
     // （`dart:io` 的 `Dart/x.y (dart:io)` 同样被边缘节点拦掉，见 `core/image_headers.dart`）。
     //
     // 没有作用域时（单测直接 pump）返回 null，与改造前行为完全一致。
-    final headers = imageHeadersOrNull(context, target);
     // 底层永远是占位底色 + 图标，图片叠在上面。
     //
     // 为什么不能只靠 `loadingBuilder` 兜底（实测 2026-10-09，网盘聚合站慢图床）：
@@ -1883,14 +1895,20 @@ class PosterImage extends StatelessWidget {
     // 「按原始尺寸居中、两侧露底色」（用户反馈「都没铺满」的真实根因）。
     // 去掉 alignment 后子节点拿到父级传入的**紧约束**，cover 才真正生效。
     // 占位图标需要居中，各自用 `Center` 包。
+    //
+    // 剧照缺失（空串）时**直接**用后备海报，不必先发一次注定失败的请求。
+    final fallback = fallbackUrl?.trim() ?? '';
+    final resolved = target.isEmpty ? fallback : target;
+    final canFallback = fallback.isNotEmpty && fallback != resolved;
+    final headers = imageHeadersOrNull(context, resolved);
     return Container(
       width: width,
       height: height,
       color: background ? _posterPlaceholderColor(context) : null,
-      child: target.isEmpty
-          ? Center(child: _placeholderIcon(context))
+      child: resolved.isEmpty
+          ? _emptyPlaceholder(context)
           : Image.network(
-              target,
+              resolved,
               width: width,
               height: height,
               fit: fit,
@@ -1900,9 +1918,34 @@ class PosterImage extends StatelessWidget {
               loadingBuilder: (context, child, progress) => progress == null
                   ? child
                   : Center(child: _placeholderIcon(context, loading: true)),
-              errorBuilder: (context, error, stackTrace) =>
-                  Center(child: _placeholderIcon(context)),
+              // 主图加载失败时换后备图**重试一次**；后备也没有（或与主图同址）
+              // 就落回占位。后备图的 errorBuilder 直接给占位，不再递归。
+              errorBuilder: (context, error, stackTrace) => canFallback
+                  ? _fallbackImage(context, fallback)
+                  : _emptyPlaceholder(context),
             ),
+    );
+  }
+
+  /// 无图/坏图的占位。默认是居中图标；调用方给了 [placeholder] 时
+  /// **原样**放进盒子（不包 `Center`），让人物字标这类整块面板能铺满。
+  Widget _emptyPlaceholder(BuildContext context) =>
+      placeholder ?? Center(child: _placeholderIcon(context));
+
+  Widget _fallbackImage(BuildContext context, String target) {
+    return Image.network(
+      target,
+      width: width,
+      height: height,
+      fit: fit,
+      alignment: alignment,
+      cacheWidth: cacheWidth,
+      headers: imageHeadersOrNull(context, target),
+      loadingBuilder: (context, child, progress) => progress == null
+          ? child
+          : Center(child: _placeholderIcon(context, loading: true)),
+      errorBuilder: (context, error, stackTrace) =>
+          _emptyPlaceholder(context),
     );
   }
 

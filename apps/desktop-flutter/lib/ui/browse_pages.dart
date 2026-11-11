@@ -3511,6 +3511,8 @@ class _DetailPageState extends State<DetailPage> {
           actionLabel: '播放',
           cardWidth: _episodeCardWidth(context, episodes.length),
           gridMode: _episodeGridMode,
+          // 剧照缺失/失败时回退本剧海报（TMDB 海报优先，否则来源海报）。
+          posterUrl: _ownedTmdb?.detailData?.posterUrl ?? vod.vodPic,
           recentIndex: _recentRenderedIndex(vod, rawLine, ordered),
           ranges: ranges,
           rangeIndex: rangeIndex,
@@ -3917,6 +3919,7 @@ class _DetailPageState extends State<DetailPage> {
           actionLabel: '换源播放',
           cardWidth: _episodeCardWidth(context, ordered.length),
           gridMode: _episodeGridMode,
+          posterUrl: _ownedTmdb?.detailData?.posterUrl ?? widget.vod.vodPic,
           ranges: ranges,
           rangeIndex: rangeIndex,
           onRangeChanged: (index) => setState(() {

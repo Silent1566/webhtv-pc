@@ -792,10 +792,14 @@ class TmdbEpisodeSection extends StatelessWidget {
     this.gridMode = false,
     this.onToggleReversed,
     this.onToggleGridMode,
+    this.posterUrl,
     this.title = '选集',
   });
 
   final List<TmdbEpisodeCard> cards;
+
+  /// 本剧海报：某集没有剧照（或剧照加载失败）时，卡片回退到它。
+  final String? posterUrl;
   final String keyPrefix;
   final String actionLabel;
   final void Function(int index, TmdbEpisodeCard card)? onTap;
@@ -828,6 +832,7 @@ class TmdbEpisodeSection extends StatelessWidget {
         actionLabel: actionLabel,
         cardWidth: cardWidth,
         gridMode: gridMode,
+        posterUrl: posterUrl,
         onTap: onTap,
         onLongPress: onLongPress,
       ),
@@ -857,11 +862,15 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.ranges = const [],
     this.rangeIndex = 0,
     this.onRangeChanged,
+    this.posterUrl,
   });
 
   final List<TmdbEpisodeCard> cards;
   final String keyPrefix;
   final String actionLabel;
+
+  /// 本剧海报（剧照缺失/失败时的回退图）。
+  final String? posterUrl;
 
   /// 卡片点击。
   ///
@@ -1058,6 +1067,7 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
         buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
         stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
         card: card,
+        posterUrl: widget.posterUrl,
         actionLabel: widget.actionLabel,
         isRecent: originalIndex == widget.recentIndex,
         recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
@@ -1242,6 +1252,7 @@ class TmdbDetailView extends StatelessWidget {
                   onToggleGridMode: onToggleGridMode,
                   onTap: onEpisodeTap,
                   onLongPress: onEpisodeLongPress,
+                  posterUrl: data.posterUrl,
                 ),
               if (data.photoUrls.isNotEmpty ||
                   data.allPeople.isNotEmpty ||
@@ -1736,7 +1747,11 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.isRecent = false,
+    this.posterUrl,
   });
+
+  /// 本剧海报：剧照缺失或加载失败时回退到它；它也不可用时保留占位。
+  final String? posterUrl;
 
   /// 剧照图片的 key。
   ///
@@ -1804,7 +1819,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 剧照（16:9）；无剧照时显示占位（不隐藏卡片，否则会丢集）。
+            // 剧照（16:9）优先，缺失/失败回退本剧海报；都不可用时占位，不丢集。
             SizedBox(
               height: 110,
               child: ClipRRect(
@@ -1819,6 +1834,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                           stillKey ??
                           ValueKey('tmdb-episode-still-${card.number}'),
                       url: card.stillUrl,
+                      fallbackUrl: posterUrl,
                     ),
                     Positioned(
                       left: 6,
@@ -2171,6 +2187,74 @@ class _CloseIntent extends Intent {
 // 演职人员墙（点击 → 人物页）
 // ---------------------------------------------------------------------------
 
+/// 演职人员与制作团队共用的姓名字标。
+///
+/// 中文等表意文字取首字，外文取首尾词的大写首字母；按 grapheme 切分。
+/// 空白或纯符号名称用人物图标，不生成虚构人像。
+class PersonMonogram extends StatelessWidget {
+  const PersonMonogram({super.key, required this.name});
+
+  final String? name;
+
+  static final RegExp _letter = RegExp(r'\p{L}', unicode: true);
+  static final RegExp _ideograph = RegExp(
+    r'[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]',
+    unicode: true,
+  );
+
+  /// 计算字标；返回空串表示「没有可用字母」（调用方改画人物图标）。
+  static String labelOf(String? name) {
+    final trimmed = (name ?? '').trim();
+    if (trimmed.isEmpty) return '';
+    final graphemes = trimmed.characters.toList();
+    // 中日韩表意文字/假名/谚文：首字本身就是「一个字」，不取首字母。
+    if (_ideograph.hasMatch(graphemes.first)) {
+      return graphemes.first.toUpperCase();
+    }
+    final words = trimmed
+        .split(RegExp(r'\s+'))
+        .map((word) => word.characters.toList())
+        .where((word) => word.isNotEmpty && _letter.hasMatch(word.first))
+        .toList();
+    if (words.isEmpty) {
+      // 没有词首字母（例如以数字/符号开头）：退到第一个真正的字母。
+      for (final grapheme in graphemes) {
+        if (_letter.hasMatch(grapheme)) return grapheme.toUpperCase();
+      }
+      return '';
+    }
+    final firstLetter = words.first.first.toUpperCase();
+    if (words.length == 1) return firstLetter;
+    final lastLetter = words.last.first.toUpperCase();
+    return firstLetter == lastLetter ? firstLetter : firstLetter + lastLetter;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final label = labelOf(name);
+    return Container(
+      key: const ValueKey('person-monogram'),
+      color: scheme.surfaceContainerHigh,
+      alignment: Alignment.center,
+      child: label.isEmpty
+          ? Icon(Icons.person_outline, size: 28, color: scheme.onSurfaceVariant)
+          : Text(
+              label,
+              style: theme.textTheme.headlineSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              textAlign: TextAlign.center,
+            ),
+    );
+  }
+}
+
 class _PeopleWall extends StatelessWidget {
   const _PeopleWall({
     required this.people,
@@ -2216,7 +2300,11 @@ class _PeopleWall extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                       child: SizedBox(
                         height: 116,
-                        child: PosterImage(url: person.profileUrl),
+                        child: PosterImage(
+                          url: person.profileUrl,
+                          // 缺图/坏图：演职人员与制作团队共用同一套姓名字标。
+                          placeholder: PersonMonogram(name: person.name),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 4),
