@@ -17,6 +17,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import '../services/external_player.dart';
+import '../services/external_url.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -2557,21 +2558,17 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 用系统默认浏览器打开外部链接（相关视频，`04` §7.2）。
   ///
-  /// 用 `explorer.exe` 而不是 `url_launcher`：后者会为 Windows 引入
-  /// `url_launcher_windows` 插件（C++ 插件工程 + CMake 变更），而本阶段
-  /// 只需「打开一个 http(s) 地址」，Windows 自带的 `explorer.exe <url>`
-  /// 已由系统处理默认浏览器与协议。返回是否成功发起。
+  /// 平台命令集中在 `ExternalUrl`：Windows `explorer.exe`、Linux `xdg-open`、
+  /// macOS `/usr/bin/open`。不用 `url_launcher` 是为了避开 Windows 插件工程
+  /// 与 CMake 变更（Windows 自带的 `explorer.exe <url>` 已处理默认浏览器）。
+  /// 返回是否已交给操作系统，不保证页面已加载；失败时 UI 复制链接兜底。
   Future<bool> openExternalUrl(String url) async {
-    if (!Platform.isWindows) return false;
-    try {
-      await Process.start('explorer.exe', [
-        url,
-      ], mode: ProcessStartMode.detached);
-      return true;
-    } catch (error) {
-      log.warning('打开外部链接失败：$error', scope: 'tmdb');
+    final result = await ExternalUrl.open(url);
+    if (!result.ok) {
+      log.warning('打开外部链接失败：${result.error ?? '未知原因'}', scope: 'tmdb');
       return false;
     }
+    return true;
   }
 
   /// TMDB 搜索（手动匹配弹窗用）。
