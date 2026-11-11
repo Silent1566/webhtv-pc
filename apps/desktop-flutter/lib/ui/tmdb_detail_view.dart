@@ -42,8 +42,7 @@ import 'tmdb_episode_detail.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'tokens.dart';
-import 'tmdb_widgets.dart'
-    show TmdbLoadPhase, TmdbVideoTile, SeasonChipStrip;
+import 'tmdb_widgets.dart' show TmdbLoadPhase, TmdbVideoTile, SeasonChipStrip;
 
 /// 动态背景轮播（`04` §3.1：用剧集海报/剧照当动态背景）。
 ///
@@ -189,42 +188,42 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           // （实测 160x160 的小方块居中，背景不铺满）。
           if (widget.paintImage)
             AnimatedSwitcher(
-            duration: const Duration(milliseconds: 600),
-            child: current == null
-                ? SizedBox.expand(
-                    key: const ValueKey('tmdb-backdrop-empty'),
-                    // 无背景图时用**页面底色**而不是 `surfaceContainerHighest`：
-                    // 后者会在头部留一大块比页面亮得多的灰底（用户反馈
-                    // 「无效的背景色区域太丑」）。页面底色下直接与内容融为一体。
-                    child: ColoredBox(color: theme.colorScheme.surface),
-                  )
-                : SizedBox.expand(
-                    key: ValueKey('tmdb-backdrop-$index'),
-                    // V1（用户选型 2026-10-13）：`cover` 铺满 + 渐变遮罩。
-                    //
-                    // 为什么回到单层 `cover`，而不是"模糊垫底 + contain 主体"：
-                    // 那个方案即使把色洗修对，锐利图与背景**缩放比不同**，
-                    // 交界处就必然有一道可见的竖直分界——几何上消不掉。
-                    // 而 `cover` 永远"看起来是有意的"：背景图被裁边是照片式的
-                    // 自然结果，Emby / Jellyfin / Netflix 都这么做。
-                    //
-                    // 当初"裁切很丑"的真正原因是**框太扁**：hero 只有 427px 高
-                    // （3.07:1），16:9 素材被迫纵向裁掉约 42%，把人的头顶从脸中间
-                    // 切掉。现在图片框是**整个视口**（见 [TmdbBackdropSlideshow.height]），
-                    // 用户的 2.35:1 窗口下只裁约 24%、16:9 窗口下只裁约 7%。
-                    // 同一个 `cover`，框比不同，观感完全不同。
-                    // 裁切重心取**顶部**：窗口比素材更宽（全屏 2.35:1 对 16:9
-                    // 素材）时 cover 纵向裁掉约 24%，居中裁＝上下各切一半，
-                    // 人物头顶常被切到（用户反馈 2026-10-23：「同一个海报背景
-                    // 全屏的时候被截取了不好看」）。顶部对齐后裁切全部落在下方，
-                    // 而下方本来就被渐变遮罩压到不透明、被标题/简介盖住。
-                    child: PosterImage(
-                      url: current,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.topCenter,
+              duration: const Duration(milliseconds: 600),
+              child: current == null
+                  ? SizedBox.expand(
+                      key: const ValueKey('tmdb-backdrop-empty'),
+                      // 无背景图时用**页面底色**而不是 `surfaceContainerHighest`：
+                      // 后者会在头部留一大块比页面亮得多的灰底（用户反馈
+                      // 「无效的背景色区域太丑」）。页面底色下直接与内容融为一体。
+                      child: ColoredBox(color: theme.colorScheme.surface),
+                    )
+                  : SizedBox.expand(
+                      key: ValueKey('tmdb-backdrop-$index'),
+                      // V1（用户选型 2026-10-13）：`cover` 铺满 + 渐变遮罩。
+                      //
+                      // 为什么回到单层 `cover`，而不是"模糊垫底 + contain 主体"：
+                      // 那个方案即使把色洗修对，锐利图与背景**缩放比不同**，
+                      // 交界处就必然有一道可见的竖直分界——几何上消不掉。
+                      // 而 `cover` 永远"看起来是有意的"：背景图被裁边是照片式的
+                      // 自然结果，Emby / Jellyfin / Netflix 都这么做。
+                      //
+                      // 当初"裁切很丑"的真正原因是**框太扁**：hero 只有 427px 高
+                      // （3.07:1），16:9 素材被迫纵向裁掉约 42%，把人的头顶从脸中间
+                      // 切掉。现在图片框是**整个视口**（见 [TmdbBackdropSlideshow.height]），
+                      // 用户的 2.35:1 窗口下只裁约 24%、16:9 窗口下只裁约 7%。
+                      // 同一个 `cover`，框比不同，观感完全不同。
+                      // 裁切重心取**顶部**：窗口比素材更宽（全屏 2.35:1 对 16:9
+                      // 素材）时 cover 纵向裁掉约 24%，居中裁＝上下各切一半，
+                      // 人物头顶常被切到（用户反馈 2026-10-23：「同一个海报背景
+                      // 全屏的时候被截取了不好看」）。顶部对齐后裁切全部落在下方，
+                      // 而下方本来就被渐变遮罩压到不透明、被标题/简介盖住。
+                      child: PosterImage(
+                        url: current,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.topCenter,
+                      ),
                     ),
-                  ),
-          ),
+            ),
           // 渐变遮罩：保证文字在任何图片上都可读（不依赖图片亮度）。
           //
           // 上半部刻意保留较低不透明度（0.42）：用户要求「用剧集海报/剧照当动态
@@ -233,29 +232,29 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           // 那里必须够暗才能保证白字可读。
           if (widget.paintImage)
             DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                // 两种力度见 [TmdbBackdropScrim]：头部要压到不透明保证标题可读；
-                // 页面级背景必须**轻且大体均匀**，否则正文滚到下半屏时图片就没了。
-                colors: widget.scrim == TmdbBackdropScrim.hero
-                    ? [
-                        theme.colorScheme.surface.withValues(alpha: 0.42),
-                        theme.colorScheme.surface.withValues(alpha: 0.40),
-                        theme.colorScheme.surface.withValues(alpha: 0.78),
-                        theme.colorScheme.surface,
-                      ]
-                    : [
-                        theme.colorScheme.surface.withValues(alpha: 0.62),
-                        theme.colorScheme.surface.withValues(alpha: 0.66),
-                        theme.colorScheme.surface.withValues(alpha: 0.74),
-                        theme.colorScheme.surface.withValues(alpha: 0.84),
-                      ],
-                stops: const [0, 0.45, 0.78, 1],
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  // 两种力度见 [TmdbBackdropScrim]：头部要压到不透明保证标题可读；
+                  // 页面级背景必须**轻且大体均匀**，否则正文滚到下半屏时图片就没了。
+                  colors: widget.scrim == TmdbBackdropScrim.hero
+                      ? [
+                          theme.colorScheme.surface.withValues(alpha: 0.42),
+                          theme.colorScheme.surface.withValues(alpha: 0.40),
+                          theme.colorScheme.surface.withValues(alpha: 0.78),
+                          theme.colorScheme.surface,
+                        ]
+                      : [
+                          theme.colorScheme.surface.withValues(alpha: 0.62),
+                          theme.colorScheme.surface.withValues(alpha: 0.66),
+                          theme.colorScheme.surface.withValues(alpha: 0.74),
+                          theme.colorScheme.surface.withValues(alpha: 0.84),
+                        ],
+                  stops: const [0, 0.45, 0.78, 1],
+                ),
               ),
             ),
-          ),
           if (widget.child != null)
             Padding(
               // 内容贴**图片框底部**（= 视口底部，窗口与全屏一致）。
@@ -270,30 +269,30 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
                 child: widget.child,
               ),
             ),
-            // 指示点放在**图片框底部**（= 视口右下角）。
-            //
-            // 历史：曾放在内容带底部＝屏幕正中间，用户反馈「跑马灯的小点点
-            // 显示在中间区域不好看」（2026-10-13）。图片框铺满整屏后，
-            // 底部才是常规位置；内容块也贴底，所以底部 44 的内边距就是
-            // 给它让出的空间。
-            if (widget.paintImage &&
-                TmdbBackdropRotation.shouldRotate(urls.length))
-              Positioned(
-                right: 20,
-                bottom: 16,
-                top: null,
-                child: Row(
-                  key: const ValueKey('tmdb-backdrop-dots'),
-                  children: [
-                    for (var i = 0; i < urls.length; i++)
-                      Container(
-                        width: 6,
-                        height: 6,
-                        margin: const EdgeInsets.only(left: 4),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: i == index
-                              ? theme.colorScheme.primary
+          // 指示点放在**图片框底部**（= 视口右下角）。
+          //
+          // 历史：曾放在内容带底部＝屏幕正中间，用户反馈「跑马灯的小点点
+          // 显示在中间区域不好看」（2026-10-13）。图片框铺满整屏后，
+          // 底部才是常规位置；内容块也贴底，所以底部 44 的内边距就是
+          // 给它让出的空间。
+          if (widget.paintImage &&
+              TmdbBackdropRotation.shouldRotate(urls.length))
+            Positioned(
+              right: 20,
+              bottom: 16,
+              top: null,
+              child: Row(
+                key: const ValueKey('tmdb-backdrop-dots'),
+                children: [
+                  for (var i = 0; i < urls.length; i++)
+                    Container(
+                      width: 6,
+                      height: 6,
+                      margin: const EdgeInsets.only(left: 4),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: i == index
+                            ? theme.colorScheme.primary
                             : theme.colorScheme.onSurface.withValues(
                                 alpha: 0.3,
                               ),
@@ -332,11 +331,7 @@ enum TmdbBackdropScrim {
 /// 尺寸取整个视口：`Positioned.fill` 给的是紧约束，但
 /// [TmdbBackdropSlideshow] 需要一个显式高度来决定内容带位置，所以这里传视口高。
 class TmdbDetailBackdrop extends StatelessWidget {
-  const TmdbDetailBackdrop({
-    super.key,
-    required this.urls,
-    this.fallbackUrl,
-  });
+  const TmdbDetailBackdrop({super.key, required this.urls, this.fallbackUrl});
 
   final List<String> urls;
 
@@ -438,6 +433,7 @@ class TmdbDetailSections extends StatelessWidget {
     super.key,
     required this.data,
     this.recommendations = const [],
+    this.recommendationBottom,
     this.videos = const [],
     this.onPersonTap,
     this.onRecommendationTap,
@@ -447,6 +443,10 @@ class TmdbDetailSections extends StatelessWidget {
 
   final TmdbDetailData data;
   final List<TmdbItem> recommendations;
+
+  /// 底部推荐行（猜你喜欢 / 个性推荐）。非空时替代旧的"相关推荐"海报墙，
+  /// 由调用方注入共享推荐组件（本视图不认识 controller / 反馈存储）。
+  final Widget? recommendationBottom;
   final List<TmdbVideo> videos;
   final ValueChanged<TmdbPerson>? onPersonTap;
   final ValueChanged<TmdbItem>? onRecommendationTap;
@@ -511,7 +511,7 @@ class TmdbDetailSections extends StatelessWidget {
           ),
           const SizedBox(height: 16),
         ],
-        if (recommendations.isNotEmpty) ...[
+        if (recommendationBottom == null && recommendations.isNotEmpty) ...[
           SectionHeader(
             title: '相关推荐（${recommendations.length}）',
             keyValue: 'tmdb-section-recommendations',
@@ -534,6 +534,7 @@ class TmdbDetailSections extends StatelessWidget {
               onCopy: onCopyVideo,
             ),
         ],
+        ?recommendationBottom,
       ],
     );
   }
@@ -646,7 +647,9 @@ class TmdbLineSelector extends StatelessWidget {
                               if (line.flag == recentFlag) ...[
                                 Icon(
                                   Icons.history,
-                                  key: ValueKey('tmdb-line-recent-${line.flag}'),
+                                  key: ValueKey(
+                                    'tmdb-line-recent-${line.flag}',
+                                  ),
                                   size: 14,
                                 ),
                                 const SizedBox(width: AppSpace.xs),
@@ -757,19 +760,13 @@ class TmdbEpisodeHeader extends StatelessWidget {
           TextButton.icon(
             key: const ValueKey('tmdb-episode-reverse'),
             onPressed: onToggleReversed,
-            icon: Icon(
-              reversed ? Icons.swap_vert : Icons.swap_vert,
-              size: 16,
-            ),
+            icon: Icon(reversed ? Icons.swap_vert : Icons.swap_vert, size: 16),
             label: Text(reversed ? '倒序' : '正序'),
           ),
           TextButton.icon(
             key: const ValueKey('tmdb-episode-view-mode'),
             onPressed: onToggleGridMode,
-            icon: Icon(
-              gridMode ? Icons.view_list : Icons.grid_view,
-              size: 16,
-            ),
+            icon: Icon(gridMode ? Icons.view_list : Icons.grid_view, size: 16),
             label: Text(gridMode ? '网格' : '列表'),
           ),
         ],
@@ -964,7 +961,9 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
   /// 否则第 2 区间会与第 1 区间撞 key、点卡会播错集。
   List<(int, TmdbEpisodeCard)> get _visibleEntries {
     if (widget.ranges.length <= 1) {
-      return [for (var i = 0; i < widget.cards.length; i++) (i, widget.cards[i])];
+      return [
+        for (var i = 0; i < widget.cards.length; i++) (i, widget.cards[i]),
+      ];
     }
     final range = widget.ranges[_safeRangeIndex];
     // 与 `EpisodeRangePolicy.slice` 同一套夹取规则，保证下标与它切出的
@@ -1028,10 +1027,8 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
           mainAxisSpacing: 10,
         ),
         itemCount: entries.length,
-        itemBuilder: (context, index) => _tile(
-          originalIndex: entries[index].$1,
-          card: entries[index].$2,
-        ),
+        itemBuilder: (context, index) =>
+            _tile(originalIndex: entries[index].$1, card: entries[index].$2),
       );
     }
     return SizedBox(
@@ -1056,23 +1053,21 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
   }
 
   /// 单张卡片。[originalIndex] 是 `cards` 里的下标（不是区间内下标）。
-  Widget _tile({
-    required int originalIndex,
-    required TmdbEpisodeCard card,
-  }) => TmdbEpisodeCardTile(
-    buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
-    stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
-    card: card,
-    actionLabel: widget.actionLabel,
-    isRecent: originalIndex == widget.recentIndex,
-    recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
-    onTap: widget.onTap == null
-        ? null
-        : () => widget.onTap!.call(originalIndex, card),
-    onLongPress: widget.onLongPress == null
-        ? null
-        : () => widget.onLongPress!.call(originalIndex, card),
-  );
+  Widget _tile({required int originalIndex, required TmdbEpisodeCard card}) =>
+      TmdbEpisodeCardTile(
+        buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
+        stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
+        card: card,
+        actionLabel: widget.actionLabel,
+        isRecent: originalIndex == widget.recentIndex,
+        recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
+        onTap: widget.onTap == null
+            ? null
+            : () => widget.onTap!.call(originalIndex, card),
+        onLongPress: widget.onLongPress == null
+            ? null
+            : () => widget.onLongPress!.call(originalIndex, card),
+      );
 }
 
 /// 详情页主体（站点页与纯 TMDB 页共用）。
@@ -1082,6 +1077,7 @@ class TmdbDetailView extends StatelessWidget {
     required this.data,
     this.episodeCards = const [],
     this.recommendations = const [],
+    this.recommendationBottom,
     this.videos = const [],
     this.seasons = const [],
     this.selectedSeason = -1,
@@ -1119,6 +1115,9 @@ class TmdbDetailView extends StatelessWidget {
 
   final List<TmdbEpisodeCard> episodeCards;
   final List<TmdbItem> recommendations;
+
+  /// 底部推荐行（猜你喜欢 / 个性推荐）。非空时替代旧的"相关推荐"海报墙。
+  final Widget? recommendationBottom;
   final List<TmdbVideo> videos;
 
   /// 展示用季度（含海报）；为空时不渲染季度区块。
@@ -1247,11 +1246,13 @@ class TmdbDetailView extends StatelessWidget {
               if (data.photoUrls.isNotEmpty ||
                   data.allPeople.isNotEmpty ||
                   recommendations.isNotEmpty ||
+                  recommendationBottom != null ||
                   videos.isNotEmpty ||
                   data.crew.isNotEmpty)
                 TmdbDetailSections(
                   data: data,
                   recommendations: recommendations,
+                  recommendationBottom: recommendationBottom,
                   videos: videos,
                   onPersonTap: onPersonTap,
                   onRecommendationTap: onRecommendationTap,
@@ -1365,9 +1366,8 @@ class _HeaderContent extends StatelessWidget {
                         );
                         // 行高口径必须与 Text 实际排版一致：TextScaler 作用在
                         // 字号上，`height` 再乘到行高上。
-                        final scaledFont = MediaQuery.textScalerOf(
-                          context,
-                        ).scale(style?.fontSize ?? 14);
+                        final scaledFont = MediaQuery.textScalerOf(context)
+                            .scale(style?.fontSize ?? 14);
                         final lineHeight = scaledFont * (style?.height ?? 1.35);
                         final maxLines = constraints.maxHeight.isFinite
                             ? (constraints.maxHeight / lineHeight)
@@ -1386,10 +1386,7 @@ class _HeaderContent extends StatelessWidget {
                   ),
                 ),
               ],
-              if (actions != null) ...[
-                const SizedBox(height: 12),
-                actions!,
-              ],
+              if (actions != null) ...[const SizedBox(height: 12), actions!],
             ],
           ),
         );
@@ -1534,10 +1531,7 @@ class TmdbInfoTable extends StatelessWidget {
     // 两列排布：奇数项时最后一行只有一个格子，右侧留白。
     final pairs = <List<(String, String?)>>[];
     for (var i = 0; i < visible.length; i += 2) {
-      pairs.add([
-        visible[i],
-        if (i + 1 < visible.length) visible[i + 1],
-      ]);
+      pairs.add([visible[i], if (i + 1 < visible.length) visible[i + 1]]);
     }
     return Container(
       key: const ValueKey('tmdb-info-table'),
@@ -1691,10 +1685,7 @@ class EpisodeDurationStrip extends StatelessWidget {
             ),
             if (unknownCount > 0) ...[
               const SizedBox(width: AppSpace.sm),
-              Text(
-                '（$unknownCount 集时长未知）',
-                style: theme.textTheme.labelSmall,
-              ),
+              Text('（$unknownCount 集时长未知）', style: theme.textTheme.labelSmall),
             ],
           ],
         ),
@@ -2486,7 +2477,9 @@ class PersonWorkFilterRow extends StatelessWidget {
                 child: Text(
                   '${option.label} ${option.count}',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: isSelected ? scheme.primary : scheme.onSurfaceVariant,
+                    color: isSelected
+                        ? scheme.primary
+                        : scheme.onSurfaceVariant,
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
@@ -2799,7 +2792,10 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
                       // 人物照片是 2:3 竖图：框比与素材一致，不让两侧露灰底。
                       width: 100,
                       height: 150,
-                      child: PosterImage(url: _photos[index], fit: BoxFit.cover),
+                      child: PosterImage(
+                        url: _photos[index],
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                 ),

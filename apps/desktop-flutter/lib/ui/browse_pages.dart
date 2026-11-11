@@ -12,6 +12,7 @@ import '../core/episode_range.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
 import '../core/protocol.dart';
+import '../core/recommendation_target.dart';
 import '../core/source_swap.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
@@ -30,6 +31,7 @@ import 'app.dart';
 import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
+import 'detail_recommendations.dart';
 import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
@@ -172,7 +174,9 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
                               key: const ValueKey('browse-tab-default'),
                               label: '默认推荐',
                               selected: selected == null,
-                              onTap: loading ? null : state.selectDefaultListing,
+                              onTap: loading
+                                  ? null
+                                  : state.selectDefaultListing,
                             ),
                           for (final item in classes)
                             _BrowseTab(
@@ -364,10 +368,7 @@ class _FilterToggleButton extends StatelessWidget {
               const SizedBox(width: AppSpace.xs),
               // 数字角标：面板收起后，这是"筛了几项"的唯一提示。
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 5,
-                  vertical: 1,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
                   color: semantic.magnitude,
                   borderRadius: AppRadius.pillAll,
@@ -417,10 +418,7 @@ class _FilterPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final maxHeight = math.max(
-      MediaQuery.sizeOf(context).height * 0.45,
-      340.0,
-    );
+    final maxHeight = math.max(MediaQuery.sizeOf(context).height * 0.45, 340.0);
     final active = state.categoryFilters;
     return Container(
       decoration: BoxDecoration(
@@ -450,7 +448,8 @@ class _FilterPanel extends StatelessWidget {
                 child: _FilterPanelBody(state: state, groups: groups),
               ),
             ),
-            if (active.isNotEmpty) _FilterResetBar(state: state, groups: groups),
+            if (active.isNotEmpty)
+              _FilterResetBar(state: state, groups: groups),
           ],
         ),
       ),
@@ -1233,6 +1232,10 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  Widget? _detailView;
+  bool _holdingRecommendationDetail = false;
+  bool _observingRecommendationExit = false;
+
   /// 本页加载详情/播放用的**站点**。
   ///
   /// 原来源记录要落在它自己那份配置的站点上；普通记录仍是当前选中站点
@@ -1377,7 +1380,9 @@ class _DetailPageState extends State<DetailPage> {
   /// 季集数字会串到本页（这正是当初 `clear()` 要解决的问题，不能为了秒开换回来）。
   ///
   /// `vodId` 为空（还没绑定过任何作品）时按「属于本页」处理：没有别人的数据可泄漏，
-  /// 而状态条/设置入口需要照常显示。
+  /// 而状态条/设置入口需要照常显示。**例外**是合成条目（推荐回退页，本页 `vodId`
+  /// 也为空）留下的 TMDB 数据：它只属于空 id 的页面，真实条目页从回退页返回时
+  /// 必须当作「没有 TMDB」，否则另一部作品的标题/海报/季集会串到本页。
   bool get _tmdbOwnsThisPage {
     final state = widget.state;
     final tmdb = state.tmdb;
@@ -1385,19 +1390,28 @@ class _DetailPageState extends State<DetailPage> {
     final vod = state.detailRequestVodId == widget.vod.vodId
         ? state.selectedVod ?? widget.vod
         : widget.vod;
-    return tmdb.vodId.isEmpty || tmdb.belongsTo(vod.vodId);
+    return (tmdb.vodId.isEmpty && widget.vod.vodId.isEmpty) ||
+        tmdb.belongsTo(vod.vodId);
   }
 
   /// 属于本页影片的 TMDB 状态；`null` 表示按「无 TMDB」渲染。
   TmdbState? get _ownedTmdb => _tmdbOwnsThisPage ? widget.state.tmdb : null;
 
-  /// 是否走「导航源」的极简选集路径：本页站点是导航源（`indexs == 1`），
-  /// 且用户**还没有换源**。
+  /// 本页是不是**推荐回退页**：条目没有站源身份（`vodId` 为空）。
+  ///
+  /// 推荐卡片在当前站点没命中时，用 [recommendationFallbackVod] 造一条只有 TMDB
+  /// 展示字段的合成条目：它没有可请求的 `vod_id`（[AppState.loadDetail] 因此跳过
+  /// 站源详情请求），页面按导航源形态渲染——TMDB 剧集卡片 + 换源入口。
+  bool get _navSourceFallback => widget.vod.vodId.isEmpty;
+
+  /// 是否走「导航源」的极简选集路径：本页站点是导航源（`indexs == 1`）或本页是
+  /// 推荐回退页，且用户**还没有换源**。
   ///
   /// 换源并入外部线路后判据自然失效（[_externalLines] 非空），页面回到既有的
   /// 「线路条 + 该线路的集」——那时才有真实线路与真实集可播（用户决策 5）。
   /// 导航源本身没有播放线路（用户原话：「实际也没有播放线路」）。
-  bool get _navSourceMode => _pageSite?.indexs == 1 && _externalLines.isEmpty;
+  bool get _navSourceMode =>
+      (_navSourceFallback || _pageSite?.indexs == 1) && _externalLines.isEmpty;
 
   /// 「本片没有可播放线路」的 TMDB 卡片路径：**非**导航源站点、本页真正可播放的
   /// 线路为空（`vod_play_url` 为空或解析不出集）、且 TMDB 已匹配本片。
@@ -1443,13 +1457,15 @@ class _DetailPageState extends State<DetailPage> {
     final toastId = _detailErrorToastId;
     _detailErrorToastId = null;
     if (toastId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => dismissToast(toastId));
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => dismissToast(toastId),
+      );
     }
     super.dispose();
   }
 
   void _onStateChanged() {
-    if (!mounted) return;
+    if (!mounted || _holdingRecommendationDetail) return;
     _syncDetailErrorToast();
     setState(() {});
   }
@@ -1507,6 +1523,7 @@ class _DetailPageState extends State<DetailPage> {
     _externalLines.clear();
     _externalRoutes.clear();
     _externalStatus.clear();
+    _holdingRecommendationDetail = false;
     widget.state.clearDetail();
     Navigator.of(context).pop();
   }
@@ -1785,10 +1802,7 @@ class _DetailPageState extends State<DetailPage> {
         // 应用前**再校验一次**（`04` §7.4）：AI 说可以，本地校验不过就拒绝。
         if (!(_ownedTmdb?.canAutoSlice ?? false)) {
           if (!mounted) return;
-          showToast(
-            '当前线路集数与 TMDB 季集数不匹配，无法安全自动切分',
-            kind: ToastKind.error,
-          );
+          showToast('当前线路集数与 TMDB 季集数不匹配，无法安全自动切分', kind: ToastKind.error);
           return;
         }
         await widget.state.bindTmdbSeason(const TmdbSeasonAutoSlice());
@@ -2190,10 +2204,7 @@ class _DetailPageState extends State<DetailPage> {
               const SizedBox(height: 6),
               // 原始错误弱化处理：它是给用户判断「是站点挂了还是真没地址」的
               // 线索，不该和标题抢注意力。
-              Text(
-                reason,
-                style: Theme.of(dialogContext).textTheme.bodySmall,
-              ),
+              Text(reason, style: Theme.of(dialogContext).textTheme.bodySmall),
               const SizedBox(height: 12),
               const Text('换到别的线路后，会自动接着播这一集。'),
             ],
@@ -2227,9 +2238,7 @@ class _DetailPageState extends State<DetailPage> {
     final items = state.siteItems;
     final magnitudes = buildMagnitudes(
       items: items,
-      health: {
-        for (final row in state.siteHealth()) row.siteKey: row,
-      },
+      health: {for (final row in state.siteHealth()) row.siteKey: row},
     );
     final byKey = <String, SourceStatus>{
       for (final magnitude in magnitudes) magnitude.siteKey: magnitude.status,
@@ -2485,6 +2494,14 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 推荐页共用全局详情槽；保留本页布局直到自己的详情恢复，避免滚动位置被短布局夹断。
+    if (_holdingRecommendationDetail && _detailView != null) {
+      return _detailView!;
+    }
+    return _detailView = _buildDetail(context);
+  }
+
+  Widget _buildDetail(BuildContext context) {
     final state = widget.state;
     // 只有「结果属于本页影片」才允许渲染（§8.3）。
     //
@@ -2589,26 +2606,31 @@ class _DetailPageState extends State<DetailPage> {
           icon: const Icon(Icons.arrow_back),
         ),
         actions: [
-          IconButton(
-            tooltip: state.isFavorite(kind: 'vod', targetId: vod.vodId)
-                ? '取消收藏'
-                : '收藏该影片',
-            onPressed: () => state.toggleFavorite(
-              kind: 'vod',
-              targetId: vod.vodId,
-              title: vod.vodName,
-              subtitle: vod.vodRemarks,
-              // 海报取 hero 用的那份（TMDB 补位后），收藏卡片才能和详情页对上。
-              vodPic: display.vodPic ?? '',
+          // 合成条目没有站源身份：收藏/追番都以 `vodId` 为键，写进去只会得到一条
+          // 点不开的空记录，因此回退页不给这两个入口（换源后落在真实条目上的页面照旧）。
+          if (!_navSourceFallback)
+            IconButton(
+              tooltip: state.isFavorite(kind: 'vod', targetId: vod.vodId)
+                  ? '取消收藏'
+                  : '收藏该影片',
+              onPressed: () => state.toggleFavorite(
+                kind: 'vod',
+                targetId: vod.vodId,
+                title: vod.vodName,
+                subtitle: vod.vodRemarks,
+                // 海报取 hero 用的那份（TMDB 补位后），收藏卡片才能和详情页对上。
+                vodPic: display.vodPic ?? '',
+              ),
+              icon: Icon(
+                state.isFavorite(kind: 'vod', targetId: vod.vodId)
+                    ? Icons.bookmark
+                    : Icons.bookmark_border,
+              ),
             ),
-            icon: Icon(
-              state.isFavorite(kind: 'vod', targetId: vod.vodId)
-                  ? Icons.bookmark
-                  : Icons.bookmark_border,
-            ),
-          ),
           Builder(
             builder: (context) {
+              // 同上：合成条目没有站源身份，追番记录只会是一条点不开的空数据。
+              if (_navSourceFallback) return const SizedBox.shrink();
               final site = state.selectedSite;
               if (site == null) return const SizedBox.shrink();
               final existing = state.followingForVod(
@@ -2818,6 +2840,7 @@ class _DetailPageState extends State<DetailPage> {
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
                       ..._buildTmdbBlocks(context, tmdb),
+                      _buildRecommendationBottom(vod),
                     ],
                   ),
                 ),
@@ -2846,7 +2869,9 @@ class _DetailPageState extends State<DetailPage> {
       const Divider(height: 32),
       TmdbDetailSections(
         data: data,
-        recommendations: tmdb.recommendations,
+        // 新的底部推荐行接管"猜你喜欢 / 个性推荐"，旧的"相关推荐"海报墙
+        // 不再重复渲染（同一批作品在页面上只出现一次）。
+        recommendations: const [],
         videos: tmdb.videos,
         onPersonTap: _openPerson,
         onRecommendationTap: _openItemDetail,
@@ -2854,6 +2879,141 @@ class _DetailPageState extends State<DetailPage> {
         onCopyVideo: copyToClipboard,
       ),
     ];
+  }
+
+  /// 底部推荐行（猜你喜欢 / 个性推荐·TMDB / 个性推荐·豆瓣）。
+  ///
+  /// 三行各自独立加载、各自失败，因此这里**不**复用 `_buildTmdbBlocks` 的
+  /// "TMDB 归属门"：没有 TMDB 匹配或未配置凭据时，豆瓣行与按标题搜索仍然可用。
+  /// `sourceOnly` 只表达"站源禁用了 TMDB 富集"，此时仅"猜你喜欢"用详情内嵌
+  /// 的 recommendations/similar，不额外打分页网络请求。
+  Widget _buildRecommendationBottom(Vod vod) {
+    final owned = _tmdbOwnsThisPage ? widget.state.tmdb : null;
+    final site = _pageSite;
+    final item = owned?.item;
+    return DetailRecommendations(
+      dependencies: widget.state.recommendationDependencies,
+      current: widget.state.recommendationSeedForVod(
+        vod,
+        site: site,
+        tmdbItem: item,
+      ),
+      embeddedRelated:
+          vod.extra.containsKey('recommendations') ||
+          vod.extra.containsKey('similar'),
+      // 来源详情内嵌的 recommendations/similar 优先（`sourceOnly` 下唯一的数据源），
+      // 没有内嵌 payload 时退回 TMDB 原始详情。
+      detail:
+          (vod.extra.containsKey('recommendations') ||
+              vod.extra.containsKey('similar'))
+          ? vod.extra
+          : owned?.detail,
+      sourceOnly:
+          site != null &&
+          !widget.state.tmdbConfig.isSiteEnabled(site.key, site.name),
+      onOpenItem: (item) => _openRecommendation(item, site: _pageSite),
+      onSearchTitle: _searchRecommendationTitle,
+    );
+  }
+
+  /// 豆瓣作品没有 TMDB 身份：只按标题走站源搜索，绝不伪造可播放身份。
+  void _searchRecommendationTitle(String title) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('搜索站源')),
+          body: SearchPage(state: widget.state, initialKeyword: title),
+        ),
+      ),
+    );
+  }
+
+  /// 推荐卡片点击：先在**本页所在站点**按标题搜一次，再交给纯逻辑判定去向。
+  ///
+  /// 规则只有一份（见 [resolveRecommendationTarget]），两个详情页共用：命中 →
+  /// 该站点的真实条目（可直接播放）；没命中 / 搜索失败 → 导航源形态的回退页
+  /// （TMDB 剧集卡片 + 换源）；没有 TMDB 身份的豆瓣条目 → 既有按标题搜索。
+  void _openRecommendation(TmdbItem item, {required Site? site}) {
+    unawaited(_navigateRecommendation(item, site: site));
+  }
+
+  /// 纯 TMDB 详情页上的推荐点击：站点是**生效配置的选中站点**。
+  ///
+  /// 那一页只有 `service/identity` 与若干回调，没有本页的 `_pageSite`，按 brief
+  /// 的口径「纯 TMDB 页用 state.selectedSite」。
+  void _openRecommendationOnSelectedSite(TmdbItem item) =>
+      _openRecommendation(item, site: widget.state.selectedSite);
+
+  Future<void> _navigateRecommendation(
+    TmdbItem item, {
+    required Site? site,
+  }) async {
+    final target = await resolveRecommendationTarget(
+      item: item,
+      site: site,
+      similarityPercent: widget.state.searchSimilarity,
+      // 快搜与换源浮层同一口径（安卓 `startInlineSourceSearch` 也是 quick）。
+      search: (site, keyword) async => (await widget.state.search(
+        site,
+        keyword: keyword,
+        quick: true,
+      ))?.list,
+    );
+    if (!mounted) return;
+    switch (target) {
+      case RecommendationSiteTarget(:final vod):
+        await _pushRecommendationDetail(vod);
+      case RecommendationNavSourceTarget(:final vod):
+        await _pushRecommendationDetail(vod);
+      case RecommendationTitleSearchTarget(:final title):
+        _searchRecommendationTitle(title);
+    }
+  }
+
+  /// 打开推荐作品在站源侧的详情页。
+  ///
+  /// 命中与回退只差 `vod` 本身：命中是站点真实条目（可直接播放），回退是合成
+  /// 条目（`vodId` 为空 → 页面按导航源形态渲染）。共用一个路由构造，避免长出
+  /// 第二条「推荐 → 详情」的跳转路径。
+  Future<void> _pushRecommendationDetail(Vod vod) async {
+    if (_holdingRecommendationDetail) return;
+    if (!_observingRecommendationExit) {
+      _observingRecommendationExit = true;
+      // 路由完成也覆盖 removeRoute；仅靠返回按钮/PopScope 会漏掉待恢复页被移除的情况。
+      unawaited(
+        ModalRoute.of(context)?.popped.then((_) {
+          if (!_holdingRecommendationDetail) return;
+          _holdingRecommendationDetail = false;
+          if (widget.state.detailRequestVodId == widget.vod.vodId) {
+            widget.state.clearDetail();
+          }
+        }),
+      );
+    }
+    _holdingRecommendationDetail = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DetailPage(
+            state: widget.state,
+            vod: vod,
+            // 原来源记录（另一份配置）看详情时，点进去的页面要落在同一个站点/服务上。
+            sourceContext: widget.sourceContext,
+            sourceSiteKey: widget.sourceSiteKey,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      await widget.state.loadDetail(
+        widget.vod,
+        siteOverride: _pageSite,
+        serviceOverride: widget.sourceContext?.service,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _holdingRecommendationDetail = false);
+      }
+    }
   }
 
   /// 打开人物页（演职人员点击）。
@@ -2877,15 +3037,24 @@ class _DetailPageState extends State<DetailPage> {
       MaterialPageRoute<void>(
         builder: (_) => TmdbDetailPage(
           service: widget.state.tmdbService,
+          recommendationDependencies: widget.state.recommendationDependencies,
+          onSearchTitle: _searchRecommendationTitle,
+          // 底部推荐与相关推荐/人物作品共用这一个 item 回调：纯页内部只有
+          // `_openItem` 一个入口（见 TmdbDetailPage），因此这里接的必须是
+          // 「先搜当前站点」的推荐规则，而不是再开一层纯 TMDB 页。
+          onOpenItem: _openRecommendationOnSelectedSite,
           identity: identity,
           initialItem: item,
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => SearchPage(
-                  state: widget.state,
-                  initialKeyword: title,
-                  identityHint: hint,
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('搜索站源')),
+                  body: SearchPage(
+                    state: widget.state,
+                    initialKeyword: title,
+                    identityHint: hint,
+                  ),
                 ),
               ),
             );
@@ -3067,9 +3236,7 @@ class _DetailPageState extends State<DetailPage> {
           )
         : tmdb.episodeCardsForEpisodes(
             ordered,
-            seasonNumber: tmdb.selectedSeason >= 0
-                ? tmdb.selectedSeason
-                : null,
+            seasonNumber: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
             includeMetadata: true,
             // 集号只能按**原始线路**的位置推断：`ordered` 已季度过滤、可能已
             // 倒序，用它的下标会让缺号集的编号整体错位（上游同样用
@@ -3166,6 +3333,20 @@ class _DetailPageState extends State<DetailPage> {
         context,
         card: card,
         sourceName: sourceName,
+        recommendationDependencies: widget.state.recommendationDependencies,
+        onSearchTitle: _searchRecommendationTitle,
+        onSearchSource: (title, identity) => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => Scaffold(
+              body: SearchPage(
+                state: widget.state,
+                initialKeyword: title,
+                identityHint: identity,
+              ),
+            ),
+          ),
+        ),
+        onOpenItem: _openItemDetail,
         service: widget.state.tmdbService,
         item: tmdb?.hasMatch == true ? tmdb?.item : null,
         actionLabel: actionLabel,
@@ -3257,25 +3438,40 @@ class _DetailPageState extends State<DetailPage> {
   /// 卡片 key 前缀另起 `tmdb-episode-card-nav-` 命名空间：既有集成门禁按
   /// `tmdb-episode-card-<线路 flag>-` 前缀数卡来断言「不补集/不丢集」，两条
   /// 路径的口径必须彻底隔开。
+  /// 导航源形态的「暂时没有可铺的剧集」空态：一句原因 + 换源入口。
+  ///
+  /// 两条来源共用（真实导航源 / 推荐回退页），原因分开说：回退页的站点并不是
+  /// 导航源，照搬「该站点是导航源」会是假话。
+  Widget _buildNavSourceSwapEmpty() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        _navSourceFallback
+            ? '这部作品在当前站点没有条目，暂时只能换源播放。'
+            : '该站点是导航源，只提供索引，不提供可直接播放的剧集。',
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        key: const ValueKey('nav-source-swap-empty'),
+        onPressed: _openSourceSwap,
+        icon: const Icon(Icons.swap_horiz, size: 16),
+        label: const Text('换源'),
+      ),
+    ],
+  );
+
   Widget _buildNavSourceEpisodes(BuildContext context, TmdbState? tmdb) {
     // TMDB 未配置 / 未匹配：给一句说明 + 换源入口，**不**回退渲染站源集卡片
     // （用户决策 7：站源没有可播地址，渲染出来只会误导）。
     if (tmdb == null || !tmdb.hasMatch) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('该站点是导航源，只提供索引，不提供可直接播放的剧集。'),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('nav-source-swap-empty'),
-            onPressed: _openSourceSwap,
-            icon: const Icon(Icons.swap_horiz, size: 16),
-            label: const Text('换源'),
-          ),
-        ],
-      );
+      return _buildNavSourceSwapEmpty();
     }
     if (tmdb.episodesBySeason.isEmpty) {
+      // 回退页可能是**电影**：TMDB 没有「集」可铺，继续转圈就是永久空态（这条
+      // 路径没有站源线路可退回），直接给换源入口。真实导航源的行为不变。
+      if (_navSourceFallback && tmdb.item?.isTv != true) {
+        return _buildNavSourceSwapEmpty();
+      }
       // 聚合是**显式触发**的补充加载（`TmdbState` 不会自动调）：本帧先转圈，
       // 聚合到达后 `notifyListeners` 会重建本页。
       _ensureAllSeasonEpisodes(tmdb);
@@ -3589,8 +3785,10 @@ class _DetailPageState extends State<DetailPage> {
         dialogKey: 'nav-source-swap',
         dismissKey: 'nav-source-swap-dismiss',
         confirmKey: 'nav-source-swap-confirm',
-        title: '导航源需要换源播放',
-        reason: '当前站点是导航源，只提供索引，不提供可直接播放的地址。',
+        title: _navSourceFallback ? '需要换源播放' : '导航源需要换源播放',
+        reason: _navSourceFallback
+            ? '当前站点没有这部作品，换到有播放线路的站点后即可播放。'
+            : '当前站点是导航源，只提供索引，不提供可直接播放的地址。',
       );
 
   /// 「本片没有可播放线路」的卡片点击：与导航源同一条换源链路，只换文案。
@@ -3730,6 +3928,16 @@ class _DetailPageState extends State<DetailPage> {
       MaterialPageRoute<void>(
         builder: (_) => TmdbDetailPage(
           service: state.tmdbService,
+          recommendationDependencies: state.recommendationDependencies,
+          onOpenItem: _openRecommendationOnSelectedSite,
+          onSearchTitle: (title) => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => Scaffold(
+                appBar: AppBar(title: const Text('搜索站源')),
+                body: SearchPage(state: state, initialKeyword: title),
+              ),
+            ),
+          ),
           identity: identity,
           initialItem: state.tmdb.item,
           // 选集视图模式是**全局偏好**：进页面时读出来给初值，页内切换时回调
@@ -3740,10 +3948,13 @@ class _DetailPageState extends State<DetailPage> {
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => SearchPage(
-                  state: state,
-                  initialKeyword: title,
-                  identityHint: hint,
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('搜索站源')),
+                  body: SearchPage(
+                    state: state,
+                    initialKeyword: title,
+                    identityHint: hint,
+                  ),
                 ),
               ),
             );
