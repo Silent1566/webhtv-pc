@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/temp_dirs.dart';
+import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
@@ -23,7 +26,6 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
 
 import 'detail_recommendations_test.dart' as fixtures;
-import 'support/visual_test_fonts.dart';
 
 const _recommended = TmdbItem(
   tmdbId: 1399,
@@ -316,8 +318,11 @@ Future<void> _capture(
 }
 
 void main() {
-  setUpAll(loadVisualTestFonts);
 
+  setUpAll(() async {
+    // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
+    await loadFixtureFonts();
+  });
   Future<GlobalKey> setup(WidgetTester tester, {bool routed = false}) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
@@ -325,7 +330,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final dir = Directory.systemTemp.createTempSync('task5-back');
     final state = _BackState(dir);
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     final key = GlobalKey();

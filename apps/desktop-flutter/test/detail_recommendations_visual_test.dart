@@ -18,12 +18,14 @@ import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/ui/detail_recommendations.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/temp_dirs.dart';
+import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
-import 'support/visual_test_fonts.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -179,8 +181,11 @@ Finder _fallbackCards() => find.byWidgetPredicate(
 );
 
 void main() {
-  setUpAll(loadVisualTestFonts);
-  const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
+
+  setUpAll(() async {
+    // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
+    await loadFixtureFonts();
+  });  const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
   for (final width in [1280.0, 420.0]) {
     testWidgets('horizontal paging capture $width', (tester) async {
       tester.view.physicalSize = Size(width, 1100);
@@ -456,7 +461,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final dir = Directory.systemTemp.createTempSync('task4-visual-fallback');
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     final tmdb = _fallbackTmdbState();
     final state = _FallbackState(
       dir,

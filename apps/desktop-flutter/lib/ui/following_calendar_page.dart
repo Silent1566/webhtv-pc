@@ -15,6 +15,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 
+import '../core/app_error.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/protocol.dart';
@@ -24,6 +25,7 @@ import '../services/following_air_time_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'app.dart';
+import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'playback_resume.dart';
 import 'tmdb_episode_detail.dart';
@@ -345,25 +347,35 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
       await _openDetail(item);
       return;
     }
-    final history = PlaybackHistory(
-      id: 0,
-      siteKey: item.siteKey,
-      vodId: item.vodId,
-      vodName: item.vodName,
-      vodPic: item.vodPic,
-      flag: item.sourceFlag.isEmpty ? item.flag : item.sourceFlag,
-      episodeName: item.latestEpisodeName,
-      episodeId: item.latestEpisodeTarget,
-      positionMs: 0,
-      durationMs: 0,
-      updatedAt: item.updatedAtMs,
+    final feedback = AsyncActionFeedback.begin(
+      context,
+      '正在准备播放：${item.vodName}',
     );
-    await resumeHistoryEntry(context, _state, history);
-    if (!mounted) return;
-    await _state.markFollowingWatched(item);
+    if (feedback == null) return;
+    try {
+      final history = PlaybackHistory(
+        id: 0,
+        siteKey: item.siteKey,
+        vodId: item.vodId,
+        vodName: item.vodName,
+        vodPic: item.vodPic,
+        flag: item.sourceFlag.isEmpty ? item.flag : item.sourceFlag,
+        episodeName: item.latestEpisodeName,
+        episodeId: item.latestEpisodeTarget,
+        positionMs: 0,
+        durationMs: 0,
+        updatedAt: item.updatedAtMs,
+      );
+      await resumeHistoryEntry(context, _state, history, feedback: feedback);
+      if (!mounted || !feedback.isCurrent) return;
+      await _state.markFollowingWatched(item);
+    } finally {
+      feedback.close();
+    }
   }
 
   Future<void> _openDetail(Following item) async {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
     final config = _state.config;
     final site = config?.sites
         .where((candidate) => candidate.key == item.siteKey)
@@ -372,21 +384,39 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
       showToast('该追番所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
       return;
     }
-    await _state.selectSite(site);
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailPage(
-          state: _state,
-          vod: Vod(
-            vodId: item.vodId,
-            vodName: item.vodName,
-            vodPic: item.vodPic,
-          ),
-          historyFlag: item.flag,
-        ),
-      ),
+    final feedback = AsyncActionFeedback.begin(
+      context,
+      '正在打开详情：${item.vodName}',
     );
+    if (feedback == null) return;
+    try {
+      await _state.selectSite(site);
+      if (!mounted || !feedback.isCurrent) return;
+      feedback.dismiss();
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DetailPage(
+            state: _state,
+            vod: Vod(
+              vodId: item.vodId,
+              vodName: item.vodName,
+              vodPic: item.vodPic,
+            ),
+            historyFlag: item.flag,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted && feedback.isCurrent) {
+        feedback.dismiss();
+        showToast(
+          error is AppError ? error.userMessage : '$error',
+          kind: ToastKind.error,
+        );
+      }
+    } finally {
+      feedback.close();
+    }
   }
 
   @override

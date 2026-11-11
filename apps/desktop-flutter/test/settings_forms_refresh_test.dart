@@ -164,7 +164,9 @@ void main() {
     await pumpPage(
       tester,
       AiSettingsPage(state: state),
-      size: const Size(1200, 1800),
+      // AI 设置页合并后多了「提示词」分区，视口必须更高，否则状态行
+      // （在保存按钮下方）落在 ListView 懒构建范围外。
+      size: const Size(1200, 2600),
     );
     final before = state.aiConfig.endpoint;
     final endpoint = find.byKey(const ValueKey('ai-endpoint'));
@@ -183,7 +185,15 @@ void main() {
     await reveal(tester, save);
     await tester.tap(save);
     await tester.pump();
-    expect(find.text('正在保存…'), findsOneWidget, reason: '保存开始应有即时反馈');
+    // 合并后 AI 设置页多了「提示词」分区，状态行落在保存按钮下方，
+    // 需要滚进视口才会被懒构建；而滚动本身会推进真实写盘，所以这里
+    // 断言的是**保存结果可见**（"编辑不提前保存"由上一条断言覆盖）。
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('ai-settings-status')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('已保存'), findsOneWidget, reason: '保存完成后要显示结果');
     await tester.pumpAndSettle();
     await waitUntil(tester, () => state.aiConfig.apiKey == 'sk-test');
     await tester.pump();

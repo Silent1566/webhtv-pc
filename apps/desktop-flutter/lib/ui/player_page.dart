@@ -44,6 +44,15 @@ import 'advanced_settings_page.dart';
 import 'app.dart';
 import 'common.dart';
 import 'subtitle_settings_page.dart';
+import 'ai_integration_widgets.dart';
+import 'audio_ai/audio_ai_controls.dart';
+import 'search_page.dart';
+import '../services/ai_integration.dart';
+import '../services/karaoke/track_repository.dart';
+import '../services/karaoke/karaoke_controller.dart';
+import '../core/audio_ai/audio_ai.dart';
+import '../services/subtitle_service.dart';
+import '../core/ai_content/recommendation.dart';
 import 'danmaku_overlay.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
@@ -202,6 +211,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool get _hasLivePanels => _livePanelOpen || _linePanelChannel != null;
   bool _progressReady = false;
   int _mediaGeneration = 0;
+  PlayerAudioAiSession? _audioAi;
+  StreamSubscription<RealtimeSubtitleState>? _audioStateSubscription;
+  Future<void> _aiSubtitleQueue = Future<void>.value();
+  SubtitleOption? _originalAiSubtitle;
+  bool _audioPanelVisible = false;
+  String _audioLanguage = 'en';
+  KaraokePitchTrack? _karaokeTrack;
+  List<TimedLyricLine> _karaokeLines = const [];
+  bool _karaokeVisible = false;
   int _qualitySelectionRevision = 0;
   bool _fullscreen = false;
   bool _controlsVisible = true;
@@ -341,7 +359,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       siteKey: _request.siteKey,
       vodId: _request.vodId,
     );
-    _controller = PlayerController()..addListener(_onControllerChanged);
+    _controller = PlayerController(
+      onSeek: (position) => _audioAi?.seek(position),
+    )..addListener(_onControllerChanged);
     windowManager.addListener(this);
     widget.liveSession?.addListener(_onPlaybackSessionChanged);
     _osdNow = debugOsdClockOverride ?? DateTime.now();
@@ -458,6 +478,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _onControllerChanged() {
     if (!mounted) return;
+    _audioAi?.update(
+      position: _controller.position,
+      playing: _controller.isPlaying && !_controller.isBuffering,
+      rate: _controller.rate,
+    );
     setState(() {});
     // 连播改为**事件驱动**（`design/03` §4.1 D1）：
     // 旧实现在 `build()` 里排 postFrameCallback，任何一次通知（position/
@@ -812,6 +837,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
     // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
     await _configureSubtitles();
+    await _audioAi?.karaoke.bindMedia(
+      _karaokeMedia,
+      lyrics: _currentSrtForAi == null
+          ? const []
+          : lyricLinesFromSrt(_currentSrtForAi!),
+    );
     if (!mounted || generation != _mediaGeneration) return;
     // 弹幕（§21 Phase 3）：拉取并启用弹幕。同样不得阻断播放。
     await _configureDanmaku();
@@ -1069,9 +1100,31 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
       return;
     }
+    final generation = _mediaGeneration;
     final service = SubtitleMatchService(log: widget.state.log);
-    final best = await service.autoMatch(query: query, settings: settings);
-    if (best == null) return;
+    var best = await service.autoMatch(query: query, settings: settings);
+    if (best == null && mounted && generation == _mediaGeneration) {
+      final title = await widget.state.resolveBusinessTitle(
+        query.title,
+        siteKey: query.siteKey,
+        vodId: query.vodId,
+      );
+      if (!mounted || generation != _mediaGeneration) return;
+      if (title != null && title != query.title) {
+        best = await service.autoMatch(
+          query: SubtitleQuery(
+            title: title,
+            season: query.season,
+            episode: query.episode,
+            siteKey: query.siteKey,
+            vodId: query.vodId,
+            episodeName: query.episodeName,
+          ),
+          settings: settings,
+        );
+      }
+    }
+    if (best == null || !mounted || generation != _mediaGeneration) return;
     await _applySubtitleCandidate(best, remember: true);
   }
 
@@ -1164,7 +1217,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
     setState(() {});
     final service = SubtitleMatchService(log: widget.state.log);
-    final results = await service.search(
+    final generation = _mediaGeneration;
+    var results = await service.search(
       query: SubtitleQuery(
         title: text,
         season: query.season,
@@ -1176,6 +1230,28 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       settings: settings,
     );
     if (!mounted) return;
+    if (results.isEmpty) {
+      final title = await widget.state.resolveBusinessTitle(
+        text,
+        siteKey: query.siteKey,
+        vodId: query.vodId,
+      );
+      if (!mounted || generation != _mediaGeneration) return;
+      if (title != null && title != text) {
+        results = await service.search(
+          query: SubtitleQuery(
+            title: title,
+            season: query.season,
+            episode: query.episode,
+            siteKey: query.siteKey,
+            vodId: query.vodId,
+            episodeName: query.episodeName,
+          ),
+          settings: settings,
+        );
+      }
+    }
+    if (!mounted || generation != _mediaGeneration) return;
     if (results.isEmpty) {
       _showPlayerMessage('没有找到字幕（可换关键词或检查字幕源）');
       return;
@@ -1205,7 +1281,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       ),
     );
     if (selected == null || !mounted) return;
-    await _applySubtitleCandidate(selected, remember: true);
+    final applied = await _applySubtitleCandidate(selected, remember: true);
+    if (applied) {
+      await widget.state.learnBusinessTitle(
+        rawTitle: _request.vodName,
+        confirmedTitle: selected.title,
+        siteKey: _request.siteKey,
+        vodId: _request.vodId,
+      );
+    }
   }
 
   /// 选择本地字幕文件：路径输入 → 加载并记忆。
@@ -1316,12 +1400,41 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     final service = DanmakuLibraryService();
-    final entries = await service.search(
+    final generation = _mediaGeneration;
+    var entries = await service.search(
       apiUrl: settings.apiUrl,
       title: query.title,
       episode: query.episode,
     );
-    final best = pickDanmakuEntry(entries: entries, query: query);
+    // 阈值必须比较**实际检索用的片名**：用 AI 改名重搜后仍拿旧名打分，
+    // 真名与原名不相似时真实命中会被 0.6 阈值丢掉。
+    var matchQuery = query;
+    if (entries.isEmpty) {
+      final title = await widget.state.resolveBusinessTitle(
+        query.title,
+        siteKey: query.siteKey,
+        vodId: query.vodId,
+      );
+      if (!mounted || generation != _mediaGeneration) return;
+      if (title != null && title != query.title) {
+        entries = await service.search(
+          apiUrl: settings.apiUrl,
+          title: title,
+          episode: query.episode,
+        );
+        if (entries.isNotEmpty) {
+          matchQuery = DanmakuQuery(
+            title: title,
+            episode: query.episode,
+            siteKey: query.siteKey,
+            vodId: query.vodId,
+            episodeName: query.episodeName,
+          );
+        }
+      }
+    }
+    if (!mounted || generation != _mediaGeneration) return;
+    final best = pickDanmakuEntry(entries: entries, query: matchQuery);
     if (best == null) return;
     await _loadDanmakuSource(
       DanmakuSource(url: best.url, name: best.title, source: best.providerId),
@@ -1377,17 +1490,44 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (text.isEmpty || !mounted) return;
 
     final service = DanmakuLibraryService();
-    final entries = await service.search(
+    final generation = _mediaGeneration;
+    var entries = await service.search(
       apiUrl: settings.apiUrl,
       title: text,
       episode: query.episode,
     );
     if (!mounted) return;
+    var matchQuery = query;
+    if (entries.isEmpty) {
+      final title = await widget.state.resolveBusinessTitle(
+        text,
+        siteKey: query.siteKey,
+        vodId: query.vodId,
+      );
+      if (!mounted || generation != _mediaGeneration) return;
+      if (title != null && title != text) {
+        entries = await service.search(
+          apiUrl: settings.apiUrl,
+          title: title,
+          episode: query.episode,
+        );
+        if (entries.isNotEmpty) {
+          matchQuery = DanmakuQuery(
+            title: title,
+            episode: query.episode,
+            siteKey: query.siteKey,
+            vodId: query.vodId,
+            episodeName: query.episodeName,
+          );
+        }
+      }
+    }
+    if (!mounted || generation != _mediaGeneration) return;
     if (entries.isEmpty) {
       _showPlayerMessage('没有找到弹幕（可换关键词或检查弹幕库）');
       return;
     }
-    final ranked = rankDanmakuEntries(entries: entries, query: query);
+    final ranked = rankDanmakuEntries(entries: entries, query: matchQuery);
     final selected = await showModalBottomSheet<DanmakuLibraryEntry>(
       context: context,
       showDragHandle: true,
@@ -1420,6 +1560,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         name: selected.title,
         source: selected.providerId,
       ),
+    );
+    await widget.state.learnBusinessTitle(
+      rawTitle: _request.vodName,
+      confirmedTitle: selected.title,
+      siteKey: _request.siteKey,
+      vodId: _request.vodId,
     );
     await widget.state.rememberDanmakuMatch(
       DanmakuMatchRecord.fromEntry(
@@ -2346,6 +2492,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   int _beginMediaTransition() {
+    widget.state.clearAiAdApplication();
+    _originalAiSubtitle = null;
+    _karaokeTrack = null;
+    _karaokeLines = const [];
+    _karaokeVisible = false;
+    _audioAi?.seek(Duration.zero);
+    if (_audioAi != null) unawaited(_audioAi!.stop());
     // 在替换请求或打开媒体前，最后一次用仍配对的旧标识保存。
     _persistProgress();
     _progressReady = false;
@@ -2449,6 +2602,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     unawaited(_teardownLiveSession('dispose'));
     _sleepTicker?.cancel();
     _sleepTicker = null;
+    _audioStateSubscription?.cancel();
+    if (_audioAi != null) unawaited(_audioAi!.dispose());
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
@@ -2709,6 +2864,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     return confirmed ?? false;
   }
 
+  TmdbPlaybackIdentity? _identityForEpisode(VodEpisode episode, String flag) =>
+      aiPlaybackIdentityForEpisode(_request.tmdb, episode, flag);
+
   Future<void> _openTarget(
     VodEpisode episode, {
     required String flag,
@@ -2778,6 +2936,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           // 否则历史里记的仍是上一集的入口，续播会跳回上一集。
           episodeTarget: episode.url,
           episodeName: episode.name,
+          tmdb: _identityForEpisode(episode, flag),
           flag: flag,
           playbackFlag: _playbackFlagFor(flag),
           headers: headers,
@@ -2904,6 +3063,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
+    final audioInputGeneration = _mediaGeneration;
     final shortcuts = buildPlayerShortcuts(
       togglePlay: _controller.playOrPause,
       seekBackward: () => _controller.seekBy(const Duration(seconds: -10)),
@@ -3052,6 +3212,103 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                               liveNowMs: _liveNowMs,
                             ),
                           ),
+                          if (_audioAi != null)
+                            Positioned(
+                              left: 32,
+                              right: 32,
+                              bottom: 100,
+                              child: RealtimeSubtitleOverlay(
+                                controller: _audioAi!.realtime,
+                                clock: _audioAi!.clock,
+                                onSearchText: (text) => Navigator.push(
+                                  context,
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => SearchPage(
+                                      state: widget.state,
+                                      initialKeyword: text,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (_karaokeVisible && _karaokeTrack != null)
+                            Positioned(
+                              left: 32,
+                              right: 32,
+                              bottom: 180,
+                              child: _karaokeOverlay(),
+                            ),
+                          if (_audioAi != null)
+                            Positioned(
+                              top: 16,
+                              right: 16,
+                              width: 480,
+                              child: Offstage(
+                                offstage: !_audioPanelVisible,
+                                child: Material(
+                                  elevation: 8,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainer,
+                                  child: SizedBox(
+                                    height: 580,
+                                    child: Column(
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Expanded(
+                                              child: Padding(
+                                                padding: EdgeInsets.all(8),
+                                                child: Text('音频AI控制'),
+                                              ),
+                                            ),
+                                            IconButton(
+                                              tooltip: '收起音频AI面板',
+                                              onPressed: () => setState(
+                                                () =>
+                                                    _audioPanelVisible = false,
+                                              ),
+                                              icon: const Icon(Icons.close),
+                                            ),
+                                          ],
+                                        ),
+                                        Expanded(
+                                          child: PlayerAudioAiPanel(
+                                            key: ValueKey(
+                                              '${identityHashCode(_audioAi)}-$audioInputGeneration',
+                                            ),
+                                            state: widget.state,
+                                            session: _audioAi!,
+                                            mediaUri: Uri.parse(_request.url),
+                                            headers: _request.headers,
+                                            title: _request.vodName,
+                                            language: _audioLanguage,
+                                            karaokeMedia: _karaokeMedia,
+                                            currentSrt: _currentSrtForAi,
+                                            onSettingsChanged:
+                                                _configureAudioAi,
+                                            onPickSrt: _pickSrtForAi,
+                                            onTranslated: (result) =>
+                                                _applyAiTranslation(
+                                                  result,
+                                                  inputGeneration:
+                                                      audioInputGeneration,
+                                                ),
+                                            onTrack: (track, lines) =>
+                                                _applyKaraokeTrack(
+                                                  track,
+                                                  lines,
+                                                  inputGeneration:
+                                                      audioInputGeneration,
+                                                ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                           if (_controller.isLoading)
                             const Positioned.fill(child: LoadingBlock()),
                           // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
@@ -3239,6 +3496,311 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 全屏时**不再置 null**：顶栏仍在浮层里，只是随浮层一起隐藏——
   /// 这样进出全屏不再有 56px 跳变（`design/01` §4.2）。
+  Future<void> _openAudioAi() async {
+    if (_audioAi == null) {
+      final settings = widget.state.audioAiSettings;
+      _audioLanguage = settings['audioLanguage'] as String? ?? 'en';
+      await _configureAudioAi(
+        settings['audioModelId'] as String?,
+        _audioLanguage,
+      );
+    }
+    if (mounted) setState(() => _audioPanelVisible = !_audioPanelVisible);
+  }
+
+  Future<void> _configureAudioAi(String? modelId, String language) async {
+    final old = _audioAi;
+    await _audioStateSubscription?.cancel();
+    if (old != null) {
+      await old.dispose();
+      await _restoreAiSubtitle();
+    }
+    if (!mounted) return;
+    _audioLanguage = language.isEmpty ? 'en' : language;
+    final session = PlayerAudioAiSession(
+      paths: widget.state.paths,
+      config: widget.state.aiConfig,
+      language: _audioLanguage,
+      modelId: modelId,
+    );
+    _audioAi = session;
+    await session.karaoke.bindMedia(_karaokeMedia);
+    session.update(
+      position: _controller.position,
+      playing: _controller.isPlaying && !_controller.isBuffering,
+      rate: _controller.rate,
+    );
+    _audioStateSubscription = session.realtime.states.listen((state) {
+      final generation = _mediaGeneration;
+      _aiSubtitleQueue = _aiSubtitleQueue.then((_) async {
+        if (!mounted ||
+            generation != _mediaGeneration ||
+            !identical(session, _audioAi)) {
+          return;
+        }
+        if (state == RealtimeSubtitleState.listening) {
+          _originalAiSubtitle ??=
+              _controller.selectedSubtitle ?? SubtitleOption.off;
+          await _controller.selectSubtitle(SubtitleOption.off);
+          if (mounted &&
+              generation == _mediaGeneration &&
+              session.realtime.state != RealtimeSubtitleState.listening) {
+            await _restoreAiSubtitle();
+          }
+        } else if (state == RealtimeSubtitleState.off ||
+            state == RealtimeSubtitleState.error) {
+          await _restoreAiSubtitle();
+        }
+        if (mounted) setState(() {});
+      });
+    });
+    await widget.state.saveAudioAiSettings({
+      'audioModelId': session.model.id,
+      'audioLanguage': _audioLanguage,
+    });
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _restoreAiSubtitle() async {
+    final original = _originalAiSubtitle;
+    _originalAiSubtitle = null;
+    if (!mounted ||
+        original == null ||
+        _controller.selectedSubtitle != SubtitleOption.off) {
+      return;
+    }
+    await _controller.selectSubtitle(
+      original,
+      headers: _request.subtitleHeaders,
+    );
+  }
+
+  SrtDocument? get _currentSrtForAi {
+    final doc = _controller.selectedSubtitleDocument;
+    if (doc == null ||
+        doc.format != 'srt' ||
+        _controller.selectedSubtitle?.isExternal != true) {
+      return null;
+    }
+    try {
+      return SrtDocument.parse(doc.text);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<SrtDocument?> _pickSrtForAi() async {
+    final generation = _mediaGeneration;
+    final choice = await showDialog<Object>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('选择原SRT（仅读取，不切换字幕轨）'),
+        children: [
+          for (final option in _controller.externalOptions)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, option),
+              child: Text(option.label),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 'search'),
+            child: const Text('搜索字幕候选…'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted || generation != _mediaGeneration) {
+      return null;
+    }
+    SubtitleInfo? sub;
+    if (choice is SubtitleOption) {
+      sub = SubtitleInfo(
+        url: choice.url ?? '',
+        name: choice.label,
+        lang: choice.language,
+        format: choice.format,
+      );
+    } else if (choice == 'search') {
+      final query = _subtitleQuery();
+      final candidates = await SubtitleMatchService(log: widget.state.log)
+          .search(query: query, settings: widget.state.subtitleSettings);
+      if (!mounted || generation != _mediaGeneration) return null;
+      final candidate = await showDialog<SubtitleCandidate>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('选择用于翻译的搜索候选'),
+          children: [
+            for (final item in candidates)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, item),
+                child: Text(item.title),
+              ),
+            if (candidates.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('没有真实字幕候选'),
+              ),
+          ],
+        ),
+      );
+      if (candidate == null) return null;
+      sub = SubtitleInfo(
+        url: candidate.url,
+        name: candidate.title,
+        lang: candidate.language,
+        format: candidate.format,
+      );
+    }
+    if (sub == null) return null;
+    final loader = SubtitleService();
+    try {
+      final doc = await loader.load(sub, headers: _request.subtitleHeaders);
+      if (!mounted || generation != _mediaGeneration) return null;
+      if (doc.format != 'srt') {
+        throw const FormatException('当前仅接受真实SRT，不能假装已转换其他字幕');
+      }
+      return SrtDocument.parse(doc.text);
+    } finally {
+      loader.close();
+    }
+  }
+
+  Future<void> _applyAiTranslation(
+    SrtTranslationResult result, {
+    required int inputGeneration,
+  }) async {
+    if (!result.ok || inputGeneration != _mediaGeneration) return;
+    final generation = _mediaGeneration;
+    final sub = aiTranslatedSubtitle(result, widget.state.paths, generation);
+    final file = File(Uri.parse(sub.url).toFilePath());
+    await file.parent.create(recursive: true);
+    await file.writeAsString(result.translatedSrt, flush: true);
+    if (!mounted || generation != _mediaGeneration) return;
+    _request = _request.copyWith(subtitles: [..._request.subtitles, sub]);
+    _controller.setExternalSubtitles(_request.subtitles);
+    final option = _controller.externalOptions.last;
+    await _controller.selectSubtitle(option);
+    if (mounted) setState(() {});
+  }
+
+  KaraokeMedia get _karaokeMedia => KaraokeMedia(
+    key:
+        '${widget.state.activeSourceKey}|${_request.siteKey}|${_request.vodId}|${_request.flag}|${_request.episodeName}',
+    url: _request.url,
+    headers: _request.headers,
+    title: _request.vodName,
+    artist: '',
+    durationMs: _controller.duration.inMilliseconds,
+  );
+
+  Future<void> _applyKaraokeTrack(
+    KaraokePitchTrack track,
+    List<TimedLyricLine> lines, {
+    required int inputGeneration,
+  }) async {
+    final audio = _audioAi;
+    if (inputGeneration != _mediaGeneration || audio == null) return;
+    final imported = await audio.karaokeRepository.importGenerated(
+      _karaokeMedia,
+      track,
+    );
+    if (!mounted ||
+        inputGeneration != _mediaGeneration ||
+        !identical(audio, _audioAi)) {
+      return;
+    }
+    if (!imported.success || imported.track == null) {
+      _showPlayerMessage('评分轨导入失败：${imported.error}', kind: ToastKind.error);
+      return;
+    }
+    audio.karaoke.selectTrack(imported.track);
+    audio.karaoke.updateLyrics(lines);
+    setState(() {
+      _karaokeTrack = track;
+      _karaokeLines = lines;
+      _karaokeVisible = true;
+    });
+  }
+
+  Widget _karaokeOverlay() {
+    final position = _controller.position.inMilliseconds;
+    final lines = _karaokeLines.where(
+      (line) => line.startMs <= position && line.endMs >= position,
+    );
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainer
+          .withValues(alpha: .9),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final line in lines)
+              Text(line.text, style: Theme.of(context).textTheme.titleLarge),
+            Text('参考音高轨 ${_karaokeTrack!.noteCount}个音符'),
+            if (_audioAi != null)
+              StreamBuilder<KaraokeState>(
+                stream: _audioAi!.karaoke.changes,
+                initialData: _audioAi!.karaoke.state,
+                builder: (context, snapshot) => Text(
+                  '${snapshot.data!.snapshot.scorePercent}分 · ${snapshot.data!.snapshot.grade} · ${snapshot.data!.status.name}',
+                ),
+              ),
+            TextButton(
+              onPressed: () => setState(() => _karaokeVisible = false),
+              child: const Text('关闭歌词音高轨'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAiBusinessMenu() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('当前播放AI业务'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            title: const Text('当前影片推荐'),
+            leading: const Icon(Icons.movie_outlined),
+            onTap: () {
+              Navigator.pop(context);
+              openAiBusiness(
+                this.context,
+                widget.state,
+                source: RecommendationSource.current,
+                title: _request.vodName,
+              );
+            },
+          ),
+          ListTile(
+            title: const Text('分析 / 复验广告候选'),
+            leading: const Icon(Icons.filter_alt_outlined),
+            onTap: () {
+              Navigator.pop(context);
+              openAiAdReview(
+                this.context,
+                widget.state,
+                siteKey: _request.siteKey,
+                title: _request.vodName,
+                flag: _request.flag,
+                episode: _request.episodeName,
+              );
+            },
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
+
   PreferredSizeWidget _buildPlayerAppBar() {
     return AppBar(
       backgroundColor: Colors.transparent,
@@ -3296,6 +3858,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // - LUT 滤镜 → 右键「画面 → LUT 滤镜…」；
         // - 播放诊断 → 设置 › 日志页顶部的「最近播放诊断」卡片
         //   （`diagnostics_pages.dart:676` 的 `_PlaybackDiagnosticsCard`）。
+        IconButton(
+          key: const ValueKey('player-audio-ai'),
+          tooltip: '实时字幕 / 翻译 / 卡拉OK',
+          onPressed: _openAudioAi,
+          icon: const Icon(Icons.record_voice_over_outlined),
+        ),
+        IconButton(
+          key: const ValueKey('player-ai-business'),
+          tooltip: 'AI推荐 / 广告规则',
+          icon: const Icon(Icons.auto_awesome_outlined),
+          onPressed: () => _showAiBusinessMenu(),
+        ),
         PopupMenuButton<_PlayerMenuAction>(
           tooltip: '更多',
           icon: const Icon(Icons.more_vert),

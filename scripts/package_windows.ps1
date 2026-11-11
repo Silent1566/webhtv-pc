@@ -246,6 +246,23 @@ if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
     Fail "构建目录缺少 $exeName：$BuildDir"
 }
 
+# 音频AI必须随包真实引擎；禁止把仅有Dart接口的包标成可用。
+foreach ($native in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'libLiteRt.dll')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $BuildDir $native) -PathType Leaf)) {
+        Fail "缺少官方音频AI/native运行时：$native"
+    }
+}
+$audioAsset = Join-Path $BuildDir 'data/flutter_assets/assets/models/basic_pitch_nmp.tflite'
+if (-not (Test-Path -LiteralPath $audioAsset -PathType Leaf)) { Fail '缺少BasicPitch源模型资产' }
+if ((Get-Item -LiteralPath $audioAsset).Length -ne 204448 -or
+    (Get-FileHash -LiteralPath $audioAsset -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3db297d54af8e01c6e5618245c956b1d71b6a2b978cb2dedb527173186552676') {
+    Fail 'BasicPitch源模型资产大小/SHA256不匹配'
+}
+if ((Get-FileHash -LiteralPath (Join-Path $BuildDir 'libLiteRt.dll') -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+    'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+    Fail '官方LiteRT Windows DLL SHA256不匹配'
+}
+
 # 发行包只带宿主入口及其同目录必需文件；manifests/spiders 是测试 fixture，不得入包。
 $sidecarFiles = @(
     'sidecars/spider-host-python/host.py',
@@ -637,3 +654,4 @@ Sidecar 宿主（随包）：Python / Node / JVM
         Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+

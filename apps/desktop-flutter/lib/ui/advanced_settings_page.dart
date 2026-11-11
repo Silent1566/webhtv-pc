@@ -15,7 +15,7 @@ import '../core/player_options.dart';
 import '../core/site_group_rules.dart';
 import '../state/app_state.dart';
 import 'common.dart';
-import 'ai_assist_page.dart';
+import 'ai_integration_widgets.dart';
 import 'backup_page.dart';
 import 'injected_sites_page.dart';
 import 'local_sources_page.dart';
@@ -420,7 +420,7 @@ class AdvancedSettingsPage extends StatelessWidget {
                       key: const ValueKey('settings-ai-assist-open'),
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => AiAssistPage(state: state),
+                          builder: (_) => AiBusinessPage(state: state),
                         ),
                       ),
                       icon: const Icon(Icons.auto_awesome),

@@ -1,14 +1,3 @@
-/// AI 配置持久化（`<configDir>/settings.json` 的 `ai` 段）。
-///
-/// 为什么独立成段（`docs/phase6/design/04` §4）：`settings.json` 已有
-/// `tmdb`（凭据）、`sync`（同步白名单）、`ui`（界面偏好）三段，各自有独立
-/// store。AI 配置含凭据，与 `ui` 的语义与生命周期都不同，混进去会让任何
-/// 一方保存时覆盖另一方的键。沿用同样的「读改写、只替换自己那一段」模式。
-///
-/// 与 `UiPreferencesStore` 相同的**串行化写盘队列**：`_persist` 是
-/// 「写 tmp → 删旧 → 改名」三步，并发时两个调用会在同一个 `.tmp` 上互相
-/// 踩（Windows 上 delete/rename 原子性比 POSIX 差），最终可能把整个
-/// `settings.json` 弄丢。
 library;
 
 import 'dart:convert';
@@ -16,6 +5,7 @@ import 'dart:io';
 
 import '../core/ai_config.dart';
 import 'log_service.dart';
+import 'settings_file.dart';
 
 class AiConfigStore {
   AiConfigStore({required this.path, LogService? log}) : _log = log;
@@ -66,44 +56,16 @@ class AiConfigStore {
     return _persist();
   }
 
-  /// 写盘队列尾：串行化所有 `_persist` 调用。
-  Future<void> _persistQueue = Future<void>.value();
-
-  Future<bool> _persist() {
-    final result = _persistQueue.then((_) => _doPersist());
-    // 队列推进不能被单次失败阻塞：吞掉错误后继续接受下一次写盘。
-    _persistQueue = result.then<void>((_) {}, onError: (_) {});
-    return result;
-  }
-
-  Future<bool> _doPersist() async {
-    try {
-      final file = File(path);
-      await file.parent.create(recursive: true);
-      final existing = <String, Object?>{};
-      if (await file.exists()) {
-        try {
-          final decoded = jsonDecode(await file.readAsString());
-          if (decoded is Map) {
-            existing.addAll(decoded.cast<String, Object?>());
-          }
-        } catch (_) {
-          // 旧文件损坏 → 直接覆盖，不把损坏内容带进新文件。
-        }
-      }
-      existing['ai'] = _config.toJson();
-
-      final temporary = File('$path.tmp');
-      await temporary.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(existing),
-        flush: true,
-      );
-      if (await file.exists()) await file.delete();
-      await temporary.rename(path);
-      return true;
-    } catch (error) {
-      _log?.error('保存 AI 配置失败：$error', scope: 'ai');
-      return false;
-    }
+  Future<bool> _persist() async {
+    final result = writeSettingsSectionSync(
+      path: path,
+      writer: SettingsWriter.aiConfig,
+      mutate: (root) {
+        root['ai'] = _config.toJson();
+        return true;
+      },
+    );
+    if (!result.ok) _log?.error('保存 AI 配置失败：${result.error}', scope: 'ai');
+    return result.ok;
   }
 }

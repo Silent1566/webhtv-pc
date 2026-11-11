@@ -26,10 +26,12 @@ import '../services/session_recovery_store.dart';
 import '../services/startup_trace.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import 'app_motion.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
 import 'diagnostics_pages.dart';
+import 'ai_integration_widgets.dart';
 import 'following_calendar_page.dart';
 import 'following_page.dart';
 import 'image_header_scope.dart';
@@ -351,7 +353,10 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
             // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
             // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
             fit: StackFit.expand,
-            children: [child ?? const SizedBox.shrink(), const ToastHost()],
+children: [
+              AppMotionScope(child: child ?? const SizedBox.shrink()),
+              const ToastHost(),
+            ],
           ),
         ),
       ),
@@ -407,6 +412,7 @@ enum ShellSection {
   spiders,
   settings,
   logs,
+  ai,
 }
 
 class AppShell extends StatefulWidget {
@@ -986,7 +992,10 @@ class _AppShellState extends State<AppShell> {
                 Expanded(
                   child: _WallpaperBackdrop(
                     url: _state.config?.wallpaper,
-                    child: _buildContent(),
+                    child: AppShellTransition(
+                      sectionIndex: _section.index,
+                      child: _buildContent(),
+                    ),
                   ),
                 ),
               ],
@@ -1023,6 +1032,8 @@ class _AppShellState extends State<AppShell> {
         return SettingsPage(state: _state);
       case ShellSection.logs:
         return LogsPage(state: _state);
+      case ShellSection.ai:
+        return AiBusinessPage(state: _state);
     }
   }
 }
@@ -1417,6 +1428,10 @@ class _SideBar extends StatelessWidget {
         const NavigationRailDestination(
           icon: Icon(Icons.receipt_long),
           label: Text('日志'),
+        ),
+        const NavigationRailDestination(
+          icon: Icon(Icons.auto_awesome_outlined),
+          label: Text('AI / 阅读器'),
         ),
       ],
     );

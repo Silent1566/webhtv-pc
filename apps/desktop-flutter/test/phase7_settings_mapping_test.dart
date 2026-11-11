@@ -77,13 +77,19 @@ void main() {
       }, allowSensitive: true);
 
       // 落库的：PC 有对应语义的键。
-      expect(settings.values.keys.toSet(), {'tmdb_enabled', 'ai_config'});
-      // 白名单内但 PC 不支持落库的。
-      expect(settings.unsupportedKeys.toSet(), {
-        'tmdb_model',
+      //
+      // `ai_title_extraction` / `ai_ad_detection` 现在**真的**被消费
+      // （迁移后 AI 片名与 AI 去广开关有实际业务接线），因此它们从
+      // 「白名单内但不落库」升级为落库键，只剩 `tmdb_model` 仍是
+      // 「安卓有、PC 无」。
+      expect(settings.values.keys.toSet(), {
+        'tmdb_enabled',
+        'ai_config',
         'ai_title_extraction',
         'ai_ad_detection',
       });
+      // 白名单内但 PC 仍不支持落库的。
+      expect(settings.unsupportedKeys.toSet(), {'tmdb_model'});
       // 白名单外的。
       expect(settings.skippedKeys, ['viewing_record_sync_enabled']);
 

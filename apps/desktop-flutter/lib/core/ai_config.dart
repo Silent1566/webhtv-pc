@@ -3,10 +3,13 @@
 /// 纯逻辑层：不依赖 Flutter，也不依赖 `dart:io`。上游对应实现是
 /// `AiConfig`（`app/src/main/java/com/fongmi/android/tv/bean/AiConfig.java`）。
 ///
-/// **不实现**上游的 5 套提示词版本管理（推荐 / 标题提取 / 观影报告 /
-/// 去广 / 分组规则）：那 5 套对应的是本轮不做的其他 AI 能力，
-/// 集季识别的提示词是固定内置的。
+/// 安卓 5 套提示词（推荐 / 标题提取 / 观影报告 / 去广 / 分组规则）的原文与
+/// 版本 3/2/2/2/2 在 `ai_prompts.dart`：已知旧内置升级到当前版，未知自定义
+/// 原样保留并标记 `*PromptCustom`。JSON 里不认识的键经 `additionalFields`
+/// 往返写回，避免旧版字段被本次读改写抹掉。
 library;
+
+import 'ai_prompts.dart';
 
 import 'tmdb_config.dart' show redactCredential;
 
@@ -74,7 +77,6 @@ bool _isDigit(int code) => code >= 0x30 && code <= 0x39;
 String _stripGeminiPrefix(String model) =>
     model.startsWith('models/') ? model.substring('models/'.length) : model;
 
-/// AI 配置（`docs/phase6/design/04` §3.1）。
 class AiConfig {
   const AiConfig({
     this.enabled = false,
@@ -83,8 +85,24 @@ class AiConfig {
     this.apiKey = '',
     this.model = '',
     this.customUserAgent = '',
+    this.timeoutSeconds = AiConfig.defaultTimeoutSeconds,
+    this.recommendPrompt = AiPrompts.defaultRecommendPrompt,
+    this.recommendPromptVersion = 3,
+    this.recommendPromptCustom = false,
+    this.titleExtractionPrompt = AiPrompts.defaultTitleExtractionPrompt,
+    this.titleExtractionPromptVersion = 2,
+    this.titleExtractionPromptCustom = false,
+    this.viewingReportPrompt = AiPrompts.defaultViewingReportPrompt,
+    this.viewingReportPromptVersion = 2,
+    this.viewingReportPromptCustom = false,
+    this.adDetectionPrompt = AiPrompts.defaultAdDetectionPrompt,
+    this.adDetectionPromptVersion = 2,
+    this.adDetectionPromptCustom = false,
+    this.groupRulePrompt = AiPrompts.defaultGroupRulePrompt,
+    this.groupRulePromptVersion = 2,
+    this.groupRulePromptCustom = false,
+    this.additionalFields = const {},
   });
-
   final bool enabled;
   final String protocol;
   final String endpoint;
@@ -92,23 +110,136 @@ class AiConfig {
   final String model;
   final String customUserAgent;
 
-  /// 归一化后的副本：非法协议回落默认、空端点按协议填默认、空模型填默认。
+  /// 单次 AI 请求的超时（秒）。默认 5 分钟：推荐/画像这类任务输出较长，
+  /// 旧默认 105 秒在小模型或慢中转上会稳定超时。
+  final int timeoutSeconds;
+
+  static const int defaultTimeoutSeconds = 300;
+  static const int minTimeoutSeconds = 30;
+  static const int maxTimeoutSeconds = 1800;
+
+  /// 生效的超时时长（已夹取到 [minTimeoutSeconds]..[maxTimeoutSeconds]）。
+  Duration get timeout => Duration(
+    seconds: timeoutSeconds < minTimeoutSeconds
+        ? minTimeoutSeconds
+        : (timeoutSeconds > maxTimeoutSeconds
+              ? maxTimeoutSeconds
+              : timeoutSeconds),
+  );
+
+  final Map<String, Object?> additionalFields;
+  final String recommendPrompt;
+  final int recommendPromptVersion;
+  final bool recommendPromptCustom;
+  final String titleExtractionPrompt;
+  final int titleExtractionPromptVersion;
+  final bool titleExtractionPromptCustom;
+  final String viewingReportPrompt;
+  final int viewingReportPromptVersion;
+  final bool viewingReportPromptCustom;
+  final String adDetectionPrompt;
+  final int adDetectionPromptVersion;
+  final bool adDetectionPromptCustom;
+  final String groupRulePrompt;
+  final int groupRulePromptVersion;
+  final bool groupRulePromptCustom;
   AiConfig sanitized() {
-    final safeProtocol = AiProtocol.isSupported(protocol)
-        ? protocol
+    final safeProtocol = AiProtocol.isSupported(protocol.trim())
+        ? protocol.trim()
         : AiProtocol.defaultProtocol;
-    final endpointText = endpoint.trim();
-    final modelText = model.trim();
-    return AiConfig(
-      enabled: enabled,
-      protocol: safeProtocol,
-      endpoint: endpointText.isEmpty
+    final values = <String, Object?>{};
+    final recommendPromptBuiltIn =
+        recommendPrompt.trim().isEmpty ||
+        [
+          AiPrompts.legacyRecommendPromptV1,
+          AiPrompts.defaultRecommendPrompt,
+          AiPrompts.legacyRecommendPromptV2,
+        ].contains(recommendPrompt.trim());
+    values['recommendPrompt'] = recommendPromptBuiltIn
+        ? AiPrompts.defaultRecommendPrompt
+        : recommendPrompt.trim();
+    values['recommendPromptVersion'] =
+        recommendPromptBuiltIn || recommendPromptVersion <= 0
+        ? 3
+        : recommendPromptVersion;
+    values['recommendPromptCustom'] = !recommendPromptBuiltIn;
+
+    final titleExtractionPromptBuiltIn =
+        titleExtractionPrompt.trim().isEmpty ||
+        [
+          AiPrompts.legacyTitleExtractionPromptV1,
+          AiPrompts.defaultTitleExtractionPrompt,
+        ].contains(titleExtractionPrompt.trim());
+    values['titleExtractionPrompt'] = titleExtractionPromptBuiltIn
+        ? AiPrompts.defaultTitleExtractionPrompt
+        : titleExtractionPrompt.trim();
+    values['titleExtractionPromptVersion'] =
+        titleExtractionPromptBuiltIn || titleExtractionPromptVersion <= 0
+        ? 2
+        : titleExtractionPromptVersion;
+    values['titleExtractionPromptCustom'] = !titleExtractionPromptBuiltIn;
+
+    final viewingReportPromptBuiltIn =
+        viewingReportPrompt.trim().isEmpty ||
+        [
+          AiPrompts.defaultViewingReportPrompt,
+          AiPrompts.legacyViewingReportPromptV1,
+        ].contains(viewingReportPrompt.trim());
+    values['viewingReportPrompt'] = viewingReportPromptBuiltIn
+        ? AiPrompts.defaultViewingReportPrompt
+        : viewingReportPrompt.trim();
+    values['viewingReportPromptVersion'] =
+        viewingReportPromptBuiltIn || viewingReportPromptVersion <= 0
+        ? 2
+        : viewingReportPromptVersion;
+    values['viewingReportPromptCustom'] = !viewingReportPromptBuiltIn;
+
+    final adDetectionPromptBuiltIn =
+        adDetectionPrompt.trim().isEmpty ||
+        [
+          AiPrompts.defaultAdDetectionPrompt,
+          AiPrompts.defaultAdDetectionPromptV1,
+        ].contains(adDetectionPrompt.trim());
+    values['adDetectionPrompt'] = adDetectionPromptBuiltIn
+        ? AiPrompts.defaultAdDetectionPrompt
+        : adDetectionPrompt.trim();
+    values['adDetectionPromptVersion'] =
+        adDetectionPromptBuiltIn || adDetectionPromptVersion <= 0
+        ? 2
+        : adDetectionPromptVersion;
+    values['adDetectionPromptCustom'] = !adDetectionPromptBuiltIn;
+
+    final groupRulePromptBuiltIn =
+        groupRulePrompt.trim().isEmpty ||
+        [
+          AiPrompts.legacyGroupRulePromptV1,
+          AiPrompts.defaultGroupRulePrompt,
+        ].contains(groupRulePrompt.trim());
+    values['groupRulePrompt'] = groupRulePromptBuiltIn
+        ? AiPrompts.defaultGroupRulePrompt
+        : groupRulePrompt.trim();
+    values['groupRulePromptVersion'] =
+        groupRulePromptBuiltIn || groupRulePromptVersion <= 0
+        ? 2
+        : groupRulePromptVersion;
+    values['groupRulePromptCustom'] = !groupRulePromptBuiltIn;
+    // 超时夹取放在净化里：存到磁盘/备份里的值本身就是合法范围内的值。
+    values['timeoutSeconds'] = timeoutSeconds < minTimeoutSeconds
+        ? minTimeoutSeconds
+        : (timeoutSeconds > maxTimeoutSeconds
+              ? maxTimeoutSeconds
+              : timeoutSeconds);
+    return _fromMap({
+      ..._rawJson(),
+      ...values,
+      'protocol': safeProtocol,
+      'endpoint': endpoint.trim().isEmpty
           ? AiProtocol.defaultEndpoint(safeProtocol)
-          : endpointText,
-      apiKey: apiKey.trim(),
-      model: modelText.isEmpty ? AiProtocol.defaultModel : modelText,
-      customUserAgent: customUserAgent.trim(),
-    );
+          : endpoint.trim(),
+      'apiKey': apiKey.trim(),
+      'model': model.trim().isEmpty ? AiProtocol.defaultModel : model.trim(),
+      'customUserAgent': customUserAgent.trim(),
+    });
   }
 
   /// 是否可用于补全（四项齐备）。
@@ -175,12 +306,28 @@ class AiConfig {
   }
 
   AiConfig copyWith({
+    int? timeoutSeconds,
     bool? enabled,
     String? protocol,
     String? endpoint,
     String? apiKey,
     String? model,
     String? customUserAgent,
+    String? recommendPrompt,
+    int? recommendPromptVersion,
+    bool? recommendPromptCustom,
+    String? titleExtractionPrompt,
+    int? titleExtractionPromptVersion,
+    bool? titleExtractionPromptCustom,
+    String? viewingReportPrompt,
+    int? viewingReportPromptVersion,
+    bool? viewingReportPromptCustom,
+    String? adDetectionPrompt,
+    int? adDetectionPromptVersion,
+    bool? adDetectionPromptCustom,
+    String? groupRulePrompt,
+    int? groupRulePromptVersion,
+    bool? groupRulePromptCustom,
   }) => AiConfig(
     enabled: enabled ?? this.enabled,
     protocol: protocol ?? this.protocol,
@@ -188,37 +335,131 @@ class AiConfig {
     apiKey: apiKey ?? this.apiKey,
     model: model ?? this.model,
     customUserAgent: customUserAgent ?? this.customUserAgent,
+    timeoutSeconds: timeoutSeconds ?? this.timeoutSeconds,
+    additionalFields: additionalFields,
+    recommendPrompt: recommendPrompt ?? this.recommendPrompt,
+    recommendPromptVersion:
+        recommendPromptVersion ?? this.recommendPromptVersion,
+    recommendPromptCustom: recommendPromptCustom ?? this.recommendPromptCustom,
+    titleExtractionPrompt: titleExtractionPrompt ?? this.titleExtractionPrompt,
+    titleExtractionPromptVersion:
+        titleExtractionPromptVersion ?? this.titleExtractionPromptVersion,
+    titleExtractionPromptCustom:
+        titleExtractionPromptCustom ?? this.titleExtractionPromptCustom,
+    viewingReportPrompt: viewingReportPrompt ?? this.viewingReportPrompt,
+    viewingReportPromptVersion:
+        viewingReportPromptVersion ?? this.viewingReportPromptVersion,
+    viewingReportPromptCustom:
+        viewingReportPromptCustom ?? this.viewingReportPromptCustom,
+    adDetectionPrompt: adDetectionPrompt ?? this.adDetectionPrompt,
+    adDetectionPromptVersion:
+        adDetectionPromptVersion ?? this.adDetectionPromptVersion,
+    adDetectionPromptCustom:
+        adDetectionPromptCustom ?? this.adDetectionPromptCustom,
+    groupRulePrompt: groupRulePrompt ?? this.groupRulePrompt,
+    groupRulePromptVersion:
+        groupRulePromptVersion ?? this.groupRulePromptVersion,
+    groupRulePromptCustom: groupRulePromptCustom ?? this.groupRulePromptCustom,
   );
-
-  Map<String, Object?> toJson() => {
+  Map<String, Object?> toJson() => sanitized()._rawJson();
+  Map<String, Object?> _rawJson() => {
+    ...additionalFields,
     'enabled': enabled,
     'protocol': protocol,
     'endpoint': endpoint,
     'apiKey': apiKey,
     'model': model,
     'customUserAgent': customUserAgent,
+    'timeoutSeconds': timeoutSeconds,
+    'recommendPrompt': recommendPrompt,
+    'recommendPromptVersion': recommendPromptVersion,
+    'recommendPromptCustom': recommendPromptCustom,
+    'titleExtractionPrompt': titleExtractionPrompt,
+    'titleExtractionPromptVersion': titleExtractionPromptVersion,
+    'titleExtractionPromptCustom': titleExtractionPromptCustom,
+    'viewingReportPrompt': viewingReportPrompt,
+    'viewingReportPromptVersion': viewingReportPromptVersion,
+    'viewingReportPromptCustom': viewingReportPromptCustom,
+    'adDetectionPrompt': adDetectionPrompt,
+    'adDetectionPromptVersion': adDetectionPromptVersion,
+    'adDetectionPromptCustom': adDetectionPromptCustom,
+    'groupRulePrompt': groupRulePrompt,
+    'groupRulePromptVersion': groupRulePromptVersion,
+    'groupRulePromptCustom': groupRulePromptCustom,
   };
-
-  /// 容错读取：字段类型不对时用默认值，不抛异常。
   static AiConfig fromJson(Object? value) {
-    if (value is! Map) return const AiConfig();
-    final map = value.cast<Object?, Object?>();
-    return AiConfig(
-      enabled: map['enabled'] == true,
-      protocol: map['protocol'] is String
-          ? map['protocol']! as String
-          : AiProtocol.defaultProtocol,
-      endpoint: map['endpoint'] is String ? map['endpoint']! as String : '',
-      apiKey: map['apiKey'] is String ? map['apiKey']! as String : '',
-      model: map['model'] is String ? map['model']! as String : '',
-      customUserAgent: map['customUserAgent'] is String
-          ? map['customUserAgent']! as String
-          : '',
-    ).sanitized();
+    if (value is! Map) return const AiConfig().sanitized();
+    return _fromMap(value.map((key, value) => MapEntry('$key', value)))
+        .sanitized();
   }
 
+  static AiConfig _fromMap(Map<String, Object?> map) {
+    String text(String key, [String fallback = '']) =>
+        map[key] is String ? map[key]! as String : fallback;
+    int number(String key) => map[key] is int ? map[key]! as int : 0;
+    return AiConfig(
+      enabled: map['enabled'] == true,
+      protocol: text(
+        'protocol',
+        text('apiFormat', text('format', AiProtocol.defaultProtocol)),
+      ),
+      endpoint: text('endpoint'),
+      apiKey: text('apiKey'),
+      model: text('model'),
+      customUserAgent: text('customUserAgent', text('userAgent', text('ua'))),
+      timeoutSeconds: number('timeoutSeconds') > 0
+          ? number('timeoutSeconds')
+          : defaultTimeoutSeconds,
+      additionalFields: Map.unmodifiable(
+        {...map}..removeWhere((key, value) => _knownKeys.contains(key)),
+      ),
+      recommendPrompt: text('recommendPrompt'),
+      recommendPromptVersion: number('recommendPromptVersion'),
+      recommendPromptCustom: map['recommendPromptCustom'] == true,
+      titleExtractionPrompt: text('titleExtractionPrompt'),
+      titleExtractionPromptVersion: number('titleExtractionPromptVersion'),
+      titleExtractionPromptCustom: map['titleExtractionPromptCustom'] == true,
+      viewingReportPrompt: text('viewingReportPrompt'),
+      viewingReportPromptVersion: number('viewingReportPromptVersion'),
+      viewingReportPromptCustom: map['viewingReportPromptCustom'] == true,
+      adDetectionPrompt: text('adDetectionPrompt'),
+      adDetectionPromptVersion: number('adDetectionPromptVersion'),
+      adDetectionPromptCustom: map['adDetectionPromptCustom'] == true,
+      groupRulePrompt: text('groupRulePrompt'),
+      groupRulePromptVersion: number('groupRulePromptVersion'),
+      groupRulePromptCustom: map['groupRulePromptCustom'] == true,
+    );
+  }
+
+  static const _knownKeys = <String>{
+    'enabled',
+    'protocol',
+    'apiFormat',
+    'format',
+    'endpoint',
+    'apiKey',
+    'model',
+    'customUserAgent',
+    'userAgent',
+    'ua',
+    'timeoutSeconds',
+    'recommendPrompt',
+    'recommendPromptVersion',
+    'recommendPromptCustom',
+    'titleExtractionPrompt',
+    'titleExtractionPromptVersion',
+    'titleExtractionPromptCustom',
+    'viewingReportPrompt',
+    'viewingReportPromptVersion',
+    'viewingReportPromptCustom',
+    'adDetectionPrompt',
+    'adDetectionPromptVersion',
+    'adDetectionPromptCustom',
+    'groupRulePrompt',
+    'groupRulePromptVersion',
+    'groupRulePromptCustom',
+  };
   @override
   String toString() =>
-      'AiConfig(enabled=$enabled, protocol=$protocol, endpoint=$endpoint, '
-      'apiKey=$redactedApiKey, model=$model)';
+      'AiConfig(enabled=$enabled, protocol=$protocol, endpoint=$endpoint, apiKey=$redactedApiKey, model=$model)';
 }
