@@ -167,7 +167,12 @@ void main() {
     httpClient = FakeHttpClient();
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
       androidBridgeService: bridge,
@@ -742,7 +747,12 @@ void main() {
       await tester.runAsync(() async {
         reopened = AppState(
           paths: AppPaths.resolve(
-            overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+            overrides: {
+              'config': '${tempDir.path}/webhtv-pc',
+              'data': '${tempDir.path}/webhtv-pc',
+              'cache': '${tempDir.path}/webhtv-pc/cache',
+              'state': '${tempDir.path}/webhtv-pc/logs',
+            },
           ),
           log: LogService(),
           androidBridgeService: bridge,
@@ -783,7 +793,12 @@ void main() {
       // 在 `testWidgets` 的假时钟里 `bootstrap()` 不会被推进，必然挂到 10 分钟超时。
       final first = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+          overrides: {
+            'config': '${tempDir.path}/webhtv-pc',
+            'data': '${tempDir.path}/webhtv-pc',
+            'cache': '${tempDir.path}/webhtv-pc/cache',
+            'state': '${tempDir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
         androidBridgeService: bridge,
@@ -796,7 +811,12 @@ void main() {
 
       final reopened = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+          overrides: {
+            'config': '${tempDir.path}/webhtv-pc',
+            'data': '${tempDir.path}/webhtv-pc',
+            'cache': '${tempDir.path}/webhtv-pc/cache',
+            'state': '${tempDir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
         androidBridgeService: FakeBridge(),

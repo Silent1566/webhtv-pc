@@ -281,7 +281,12 @@ void main() {
 
     setUp(() {
       state = AppState(
-        paths: AppPaths.resolve(overrides: {'roaming': 'x', 'local': 'x'}),
+        paths: AppPaths.resolve(overrides: {
+          'config': '${'x'}/webhtv-pc',
+          'data': '${'x'}/webhtv-pc',
+          'cache': '${'x'}/webhtv-pc/cache',
+          'state': '${'x'}/webhtv-pc/logs',
+        }),
         log: LogService(),
       );
     });

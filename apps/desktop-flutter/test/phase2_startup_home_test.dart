@@ -117,7 +117,12 @@ void main() {
     // `setUp` 不在 fake-async 区内，这里的真实 I/O 可以正常 await 完成。
     temp = await Directory.systemTemp.createTemp('webhtv-startup-home');
     paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
 
     // 1) 先落盘一份配置（导入本身会拉一次首页，与冷启动无关）。
@@ -145,8 +150,10 @@ void main() {
     warmState = AppState(
       paths: AppPaths.resolve(
         overrides: {
-          'roaming': '${temp.path}${Platform.pathSeparator}warm',
-          'local': '${temp.path}${Platform.pathSeparator}warm',
+          'config': '${temp.path}${Platform.pathSeparator}warm/webhtv-pc',
+          'data': '${temp.path}${Platform.pathSeparator}warm/webhtv-pc',
+          'cache': '${temp.path}${Platform.pathSeparator}warm/webhtv-pc/cache',
+          'state': '${temp.path}${Platform.pathSeparator}warm/webhtv-pc/logs',
         },
       ),
       log: LogService(),

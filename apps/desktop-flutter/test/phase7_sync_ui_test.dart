@@ -156,7 +156,12 @@ void main() {
     readClient = _FakeReadClient();
     tempDir = await Directory.systemTemp.createTemp('webhtv-realtime-ui');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     // 预置一台已授权 + 最近接入的设备（实时同步的目标）。
     final file = File(paths.settingsPath);

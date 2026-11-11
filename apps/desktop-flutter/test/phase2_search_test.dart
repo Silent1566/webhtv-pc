@@ -35,7 +35,12 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('webhtv-search');
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
     );
@@ -466,7 +471,12 @@ void main() {
     test('有搜索缓存时翻页仍然追加下一页（回归）', () async {
       final cached = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+          overrides: {
+            'config': '${tempDir.path}/webhtv-pc',
+            'data': '${tempDir.path}/webhtv-pc',
+            'cache': '${tempDir.path}/webhtv-pc/cache',
+            'state': '${tempDir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
         httpClient: http.Client(),

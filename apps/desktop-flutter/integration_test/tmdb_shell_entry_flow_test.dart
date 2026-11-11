@@ -35,7 +35,12 @@ void main() {
   testWidgets('真实壳层：设置页 → 打开 TMDB 设置（未配置仍可达）', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-shell');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {

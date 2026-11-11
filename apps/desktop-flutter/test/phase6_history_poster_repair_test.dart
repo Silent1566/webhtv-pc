@@ -265,7 +265,12 @@ void main() {
       tempDir = await Directory.systemTemp.createTemp('webhtv-history-poster');
       state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+          overrides: {
+            'config': '${tempDir.path}/webhtv-pc',
+            'data': '${tempDir.path}/webhtv-pc',
+            'cache': '${tempDir.path}/webhtv-pc/cache',
+            'state': '${tempDir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
         // 历史页后台补图会发真实 HTTP；`testWidgets` 是假时钟，真实 socket

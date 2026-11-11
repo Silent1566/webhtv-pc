@@ -116,7 +116,12 @@ void main() {
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('webhtv-live-page');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     epgService = _FixtureEpgService(cacheDir: paths.cacheDir);
     // EpgService 构造即建 HttpClient；无论测试是否访问 EPG，退出前都要关掉，

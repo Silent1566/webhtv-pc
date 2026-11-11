@@ -212,7 +212,12 @@ void main() {
   testWidgets('TMDB 详情页：动态背景 + 每集海报卡片 + 可点击剧照/演职人员/推荐', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-visual-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {
