@@ -68,3 +68,6 @@ tools/phase7/_run.err
 # 注意：docs/phase6 与 docs/phase8 的 evidence 会引用其中的 progress.md 作为审计轨迹，
 # 删除本目录会让那些引用变成悬空指针——所以这里只忽略，不清理。
 .superpowers/
+
+# Verified offline Python bundle and dependency wheel cache (build outputs)
+/runtime/python/

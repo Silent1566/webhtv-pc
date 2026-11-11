@@ -318,6 +318,7 @@ Future<void> _capture(
 }
 
 void main() {
+
   setUpAll(() async {
     // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
     await loadFixtureFonts();

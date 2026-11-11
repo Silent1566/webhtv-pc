@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -182,6 +181,7 @@ Finder _fallbackCards() => find.byWidgetPredicate(
 );
 
 void main() {
+
   setUpAll(() async {
     // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
     await loadFixtureFonts();

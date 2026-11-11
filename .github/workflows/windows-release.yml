@@ -11,8 +11,8 @@ name: Windows Release
 #   - 便携 zip，不含 MSI 安装包；
 #   - 无自动更新（docs/phase9/README.md P2-7：更新签名通道未定）；
 #   - 代码签名为可选：配置 secrets 后签名，否则在 notes/BUILD_INFO/release-info.json 标注未签名；
-#   - 包内自带 Node 运行时（runtime/node/node.exe，v22.23.4）；Python/JDK 解释器不随包，
-#     只带 sidecar 宿主脚本，对应站源需要本机安装 Python 3 / JDK 17+。
+#   - 包内自带 Node 运行时（runtime/node/node.exe，v22.23.4）与经锁定校验的离线 Python；
+#     Python 运行/修复不联网；JVM 站源仍需要本机安装 JDK 17+。
 
 on:
   workflow_dispatch:
@@ -191,6 +191,11 @@ jobs:
       # media_kit_libs_windows_video 的 CMake 在原生构建时下载解压到
       # build/windows/x64/libmpv/。开发机 PATH 里恰好有 libmpv 才显得无关，
       # CI 必须显式补 PATH，不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh
@@ -273,7 +278,7 @@ jobs:
           if ($env:SIGNED -ne 'true') {
             $extra += '> **未签名包**：本可执行文件未做代码签名，Windows SmartScreen 可能提示「未知发布者」。这是当前发布形态，不是下载损坏。'
           }
-          $extra += '> **运行环境**：包内自带 Node 运行时（runtime/node/node.exe，v22.23.4），Node Spider 开箱即用，无需自行安装 Node。Python/JVM Spider 宿主仍只带入口脚本，对应站源需要本机安装 Python 3 或 JDK 17+，缺失时应用会明确提示「运行时未安装」。'
+          $extra += '> **运行环境**：包内自带 Node 运行时（runtime/node/node.exe，v22.23.4），Node Spider 开箱即用，无需自行安装 Node。Python 3.14.10 运行时与依赖已内置，可离线准备和修复，运行/修复不联网，无需安装系统 Python。只有 JVM Spider 对应站源仍需本机安装 JDK 17+。'
 
           $body = ($notes.TrimEnd() + "`n`n" + ($extra -join "`n`n") + "`n")
           New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'build') | Out-Null

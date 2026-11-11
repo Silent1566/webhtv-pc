@@ -46,6 +46,7 @@ import 'spider_page.dart';
 import 'theme.dart';
 import 'toast.dart';
 import 'tokens.dart';
+import 'web_home_page.dart';
 
 /// 把状态层存的主题字符串映射成 `ThemeMode`。
 ///
@@ -352,7 +353,7 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
             // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
             // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
             fit: StackFit.expand,
-            children: [
+children: [
               AppMotionScope(child: child ?? const SizedBox.shrink()),
               const ToastHost(),
             ],
@@ -787,7 +788,7 @@ class _AppShellState extends State<AppShell> {
   Future<void> _loadInitialHome() async {
     if (!mounted) return;
     final site = _state.selectedSite;
-    if (site == null) return;
+    if (site == null || _state.webHomeSourceForSite(site) != null) return;
     if (_state.homeResult != null) return;
     if (_state.contentPhase == LoadPhase.loading) return;
     await _state.loadHome(site);
@@ -878,10 +879,22 @@ class _AppShellState extends State<AppShell> {
         selectedKey: _state.selectedSite?.key,
       ),
     );
-    if (selected != null) {
-      _section = ShellSection.browse;
-      await _state.selectSite(selected);
+    if (selected == null) return;
+    // 本地/在线 HTML 首页条目：它不是爬虫，`selectSite` 会走 [AppState.loadHome]
+    // 并得到一次假「站点不可用」。这里直接打开页面宿主（WebView2）。
+    final webHome = _state.webHomeSourceForSite(selected);
+    if (webHome != null) {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => WebHomePage(state: _state, source: webHome),
+        ),
+      );
+      if (mounted) setState(() {});
+      return;
     }
+    _section = ShellSection.browse;
+    await _state.selectSite(selected);
   }
 
   /// 崩溃恢复：用标记里的标识信息按历史续播路径重新解析并播放。
@@ -1241,6 +1254,15 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.dns_outlined, size: 18),
             label: Text(site == null ? '选择站点' : '站点：${site.name}'),
           ),
+          if (state.webHomeLoadError != null)
+            Tooltip(
+              key: const ValueKey('webhome-load-error'),
+              message: state.webHomeLoadError!,
+              child: Text(
+                '载入HTML源失败',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
           const Spacer(),
           if (state.importDiagnosticsSummary != null)
             Tooltip(

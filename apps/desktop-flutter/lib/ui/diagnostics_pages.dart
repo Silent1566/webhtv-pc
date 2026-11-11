@@ -21,6 +21,7 @@ import 'common.dart';
 import 'advanced_settings_page.dart';
 import 'config_pages.dart';
 import 'player_button_config_page.dart';
+import 'python_environment_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'settings_layout.dart';
@@ -396,7 +397,25 @@ class _SettingsPageState extends State<SettingsPage> {
           label: const Text('打开站点健康'),
         ),
         const SizedBox(height: AppSpace.lg),
-        Text('本地数据', style: Theme.of(context).textTheme.titleMedium),
+        Text('运行环境', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(
+          '内置 Python 与依赖；可检测、离线修复、选择自定义解释器。',
+          key: const ValueKey('settings-python-environment-summary'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          key: const ValueKey('settings-python-environment-open'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PythonEnvironmentPage(state: state),
+            ),
+          ),
+          icon: const Icon(Icons.terminal_outlined),
+          label: const Text('打开运行环境设置'),
+        ),
+        const SizedBox(height: AppSpace.lg),        Text('本地数据', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         SelectableText(
           '配置：${state.paths.configDir}\n'

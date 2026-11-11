@@ -18,6 +18,7 @@ import 'common.dart';
 import 'ai_integration_widgets.dart';
 import 'backup_page.dart';
 import 'injected_sites_page.dart';
+import 'local_sources_page.dart';
 import 'pan_check_page.dart';
 import 'settings_layout.dart';
 import 'subtitle_settings_page.dart';
@@ -350,6 +351,16 @@ class AdvancedSettingsPage extends StatelessWidget {
                       ),
                       icon: const Icon(Icons.extension_outlined),
                       label: const Text('管理注入站点'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const ValueKey('settings-local-sources-open'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => LocalSourcesPage(state: state),
+                        ),
+                      ),
+                      icon: const Icon(Icons.folder_copy_outlined),
+                      label: const Text('本地爬虫源'),
                     ),
                   ],
                 ),

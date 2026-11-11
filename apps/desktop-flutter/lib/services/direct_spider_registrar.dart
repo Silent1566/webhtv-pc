@@ -384,6 +384,12 @@ def create_spider(manifest=None):
     )
 ''';
 
+/// [catVodShellEntrySource] 的对外只读副本。
+///
+/// 本地文件夹导入（`local_source_import.dart`）遇到 CatVod 壳时也要生成同一个
+/// 壳入口；共用一份模板，避免两处模板漂移导致「远端导入能跑、本地导入不能跑」。
+const String catVodShellEntrySource = _catVodEntry;
+
 /// 从 `ext` 里取 CatVod 壳地址（`ext.loader`）。
 ///
 /// 安卓生态里这类站点的 `api` 只是壳名（如 `csp_PyProxy`），真正的 Python

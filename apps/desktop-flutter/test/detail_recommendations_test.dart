@@ -6,7 +6,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/temp_dirs.dart';
@@ -319,6 +318,7 @@ Site _currentSite() => Site(
 );
 
 void main() {
+
   setUpAll(() async {
     // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
     await loadFixtureFonts();
@@ -598,6 +598,7 @@ void main() {
       log: LogService(),
     );
     await tester.runAsync(app.bootstrap);
+
     addTearDown(app.dispose);
     addTearDown(() => deleteTempDirBestEffortSync(dir));
     void history(String id, String title) => app.database!.upsertHistory(
@@ -768,6 +769,7 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('task3-type');
     final state = SourceState(dir, deps());
     await tester.runAsync(state.bootstrap);
+
     addTearDown(state.dispose);
     addTearDown(() => deleteTempDirBestEffortSync(dir));
     await tester.pumpWidget(
@@ -945,6 +947,7 @@ void main() {
         log: LogService(),
       );
       await tester.runAsync(app.bootstrap);
+
       addTearDown(app.dispose);
       addTearDown(() => deleteTempDirBestEffortSync(dir));
       final db = app.database!;
@@ -1071,6 +1074,7 @@ void main() {
       // 因此只能走既有的按标题搜索——这是唯一不会把用户送进空页的降级。
       final state = SourceState(dir, deps(), tmdbFixture: service);
       await tester.runAsync(state.bootstrap);
+
       addTearDown(state.dispose);
       addTearDown(() => deleteTempDirBestEffortSync(dir));
       await tester.pumpWidget(
@@ -1191,6 +1195,7 @@ void main() {
         tmdbFixture: service,
       );
       await tester.runAsync(state.bootstrap);
+
       addTearDown(state.dispose);
       addTearDown(() => deleteTempDirBestEffortSync(dir));
       final following = state.followFromDetail(

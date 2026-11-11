@@ -58,6 +58,25 @@ add_subdirectory("runner")
 include(flutter/generated_plugins.cmake)
 
 
+# Python is prepared explicitly before CMake; native builds never download it.
+get_filename_component(WEBHTV_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(PYTHON_RUNTIME_DIR "${WEBHTV_REPO_ROOT}/runtime/python")
+find_program(WEBHTV_PWSH NAMES pwsh)
+if(NOT WEBHTV_PWSH)
+  message(FATAL_ERROR "PowerShell 7 is required to validate the bundled Python runtime")
+endif()
+execute_process(
+  COMMAND "${WEBHTV_PWSH}" -NoProfile -File "${WEBHTV_REPO_ROOT}/scripts/prepare_python_runtime.ps1" -Offline -ValidateOnly
+  RESULT_VARIABLE PYTHON_RUNTIME_RESULT
+  OUTPUT_VARIABLE PYTHON_RUNTIME_OUTPUT
+  ERROR_VARIABLE PYTHON_RUNTIME_ERROR)
+if(NOT PYTHON_RUNTIME_RESULT EQUAL 0)
+  message(FATAL_ERROR "Python runtime missing or invalid. Run scripts/prepare_python_runtime.ps1 first. ${PYTHON_RUNTIME_ERROR}")
+endif()
+add_custom_target(verify_python_runtime
+  COMMAND "${WEBHTV_PWSH}" -NoProfile -File "${WEBHTV_REPO_ROOT}/scripts/prepare_python_runtime.ps1" -Offline -ValidateOnly
+  VERBATIM)
+add_dependencies(${BINARY_NAME} verify_python_runtime)
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
 # run in place. This is done instead of making a separate bundle (as on Linux)
@@ -108,3 +127,8 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
 
+install(FILES
+  "${PYTHON_RUNTIME_DIR}/python-runtime.zip"
+  "${PYTHON_RUNTIME_DIR}/bundle.json"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/runtime/python"
+  COMPONENT Runtime)
