@@ -23,6 +23,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
 
 import 'detail_recommendations_test.dart' as fixtures;
+import 'support/visual_test_fonts.dart';
 
 const _recommended = TmdbItem(
   tmdbId: 1399,
@@ -315,22 +316,7 @@ Future<void> _capture(
 }
 
 void main() {
-  setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then(ByteData.sublistView),
-      );
-    await cjk.load();
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then(ByteData.sublistView),
-      );
-    await icons.load();
-  });
+  setUpAll(loadVisualTestFonts);
 
   Future<GlobalKey> setup(WidgetTester tester, {bool routed = false}) async {
     tester.view.physicalSize = const Size(1280, 800);

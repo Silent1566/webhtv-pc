@@ -24,6 +24,7 @@ import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/following_air_time_service.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
+import 'support/visual_test_fonts.dart';
 import 'package:webhtv_pc/services/tmdb_identity_service.dart';
 import 'package:webhtv_pc/services/tmdb_recommendation_service.dart';
 import 'package:webhtv_pc/services/tmdb_season_service.dart';
@@ -316,22 +317,7 @@ Site _currentSite() => Site(
 );
 
 void main() {
-  setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await cjk.load();
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await icons.load();
-  });
+  setUpAll(loadVisualTestFonts);
   setUp(() {});
   Future<void> size(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
@@ -608,8 +594,8 @@ void main() {
       log: LogService(),
     );
     await tester.runAsync(app.bootstrap);
-    addTearDown(app.dispose);
     addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(app.dispose);
     void history(String id, String title) => app.database!.upsertHistory(
       siteKey: 'external-site',
       vodId: id,
@@ -778,8 +764,8 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('task3-type');
     final state = SourceState(dir, deps());
     await tester.runAsync(state.bootstrap);
-    addTearDown(state.dispose);
     addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(state.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: DetailPage(
@@ -955,8 +941,8 @@ void main() {
         log: LogService(),
       );
       await tester.runAsync(app.bootstrap);
-      addTearDown(app.dispose);
       addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(app.dispose);
       final db = app.database!;
       db.saveConfig(
         name: 'other audio source',
@@ -1081,8 +1067,8 @@ void main() {
       // 因此只能走既有的按标题搜索——这是唯一不会把用户送进空页的降级。
       final state = SourceState(dir, deps(), tmdbFixture: service);
       await tester.runAsync(state.bootstrap);
-      addTearDown(state.dispose);
       addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(state.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: DetailPage(
@@ -1201,8 +1187,8 @@ void main() {
         tmdbFixture: service,
       );
       await tester.runAsync(state.bootstrap);
-      addTearDown(state.dispose);
       addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(state.dispose);
       final following = state.followFromDetail(
         site: Site(
           key: 's',

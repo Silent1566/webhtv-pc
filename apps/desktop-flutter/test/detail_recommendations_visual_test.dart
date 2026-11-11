@@ -24,6 +24,7 @@ import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
+import 'support/visual_test_fonts.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -179,22 +180,7 @@ Finder _fallbackCards() => find.byWidgetPredicate(
 );
 
 void main() {
-  setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then((bytes) => ByteData.sublistView(bytes)),
-      );
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await cjk.load();
-    await icons.load();
-  });
+  setUpAll(loadVisualTestFonts);
   const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
   for (final width in [1280.0, 420.0]) {
     testWidgets('horizontal paging capture $width', (tester) async {
