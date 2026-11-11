@@ -329,11 +329,13 @@ class AppDatabase {
   ///   旧行升级后一律「身份未知」，聚合时自然回退到按片名分组。
   /// - `8` → `9`：收藏卡片所需的海报（`favorites.vod_pic`）。**纯加法式**：
   ///   默认空串，旧收藏与安卓同步来的收藏一律「无海报」，卡片渲染占位图。
+  /// - `9` → `10`：AI 季集逐集映射（`ai_season_episode_mappings`）。**纯加法式**：
+  ///   旧库打开后自动获得新表，既有绑定/进度行不受影响。
   ///
   /// 除 v7 的两张表之外，升级都是**加法式**（`CREATE TABLE IF NOT EXISTS` 或
   /// `ALTER TABLE ADD COLUMN`）：旧库打开后自动获得新表/新列且不丢数据，
   /// 无需分支式升级逻辑。
-  static const int schemaVersion = 9;
+  static const int schemaVersion = 10;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -464,6 +466,7 @@ class AppDatabase {
       );
     ''');
     _migrateTmdb();
+    _migrateAiSeasonMappings();
     _migrateSync();
     _migratePlaybackExtras();
     _migrateSiteInjection();
@@ -678,6 +681,58 @@ class AppDatabase {
     _db.execute(
       'CREATE INDEX IF NOT EXISTS idx_tmdb_season_progress_history '
       'ON tmdb_season_progress(config_id, source_history_key);',
+    );
+  }
+
+  /// Task5 · AI 季集逐集映射表（安卓 `AiEpisodeSeasonService` 应用结果持久化）。
+  ///
+  /// 加法式新增：不改动任何既有表，旧数据库打开后自动获得本表且不丢数据；
+  /// `mappings` 是 `[{sourceIndex, seasonNumber, episodeNumber}]` 的 JSON，
+  /// `snapshot` 是确认时的**顺序敏感**逐集指纹，读取时不一致即判 stale；
+  /// `status` / `skipped_source_indexes` 保真保存应用结果（partial 读回不能被
+  /// 谎报成完整 applied）。
+  void _migrateAiSeasonMappings() {
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_season_episode_mappings (
+        config_id INTEGER NOT NULL DEFAULT 0,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        source_title TEXT NOT NULL DEFAULT '',
+        flag_key TEXT NOT NULL DEFAULT '',
+        tmdb_id INTEGER NOT NULL DEFAULT 0,
+        media_type TEXT NOT NULL DEFAULT '',
+        mode TEXT NOT NULL,
+        season_number INTEGER NOT NULL DEFAULT -1,
+        confidence REAL NOT NULL DEFAULT 0,
+        mappings TEXT NOT NULL DEFAULT '[]',
+        snapshot TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'applied',
+        skipped_source_indexes TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL,
+        UNIQUE(config_id, site_key, vod_id, source_title, flag_key)
+      );
+    ''');
+    // v10 早期的表没有这两列：逐列补齐，不重建表、不丢行。
+    _addAiSeasonMappingColumn('status', "TEXT NOT NULL DEFAULT 'applied'");
+    _addAiSeasonMappingColumn(
+      'skipped_source_indexes',
+      "TEXT NOT NULL DEFAULT '[]'",
+    );
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_ai_season_mappings_scope '
+      'ON ai_season_episode_mappings(config_id, site_key, vod_id);',
+    );
+  }
+
+  /// 给 `ai_season_episode_mappings` 补列（幂等：已存在即跳过）。
+  void _addAiSeasonMappingColumn(String name, String declaration) {
+    final columns = _db
+        .select('PRAGMA table_info(ai_season_episode_mappings);')
+        .map((row) => row['name'] as String? ?? '')
+        .toSet();
+    if (columns.contains(name)) return;
+    _db.execute(
+      'ALTER TABLE ai_season_episode_mappings ADD COLUMN $name $declaration;',
     );
   }
 
@@ -2021,6 +2076,7 @@ class AppDatabase {
       'danmaku_match',
       'injected_sites',
       'following',
+      'ai_season_episode_mappings',
     ]) {
       result[table] =
           _db.select('SELECT COUNT(*) AS c FROM $table;').first['c'] as int;
@@ -2228,6 +2284,101 @@ class AppDatabase {
     }
     _db.execute(
       'DELETE FROM tmdb_season_bindings WHERE ${clauses.join(" AND ")};',
+      args,
+    );
+    return _db.updatedRows;
+  }
+
+  // -------------------------------------------------------------------------
+  // Task5 · AI 季集逐集映射（`ai_season_mapping_service` 的持久化原语）
+  // -------------------------------------------------------------------------
+
+  /// 读取一条线路的 AI 逐集映射行。
+  Row? findAiSeasonMappings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM ai_season_episode_mappings WHERE config_id=? AND '
+      'site_key=? AND vod_id=? AND source_title=? AND flag_key=? LIMIT 1;',
+      [configId, siteKey, vodId, sourceTitle, flagKey],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入（upsert）一条线路的 AI 逐集映射。
+  void upsertAiSeasonMappings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+    required int tmdbId,
+    required String mediaType,
+    required String mode,
+    required int seasonNumber,
+    required double confidence,
+    required List<Object?> mappings,
+    required String snapshot,
+    String status = 'applied',
+    List<int> skippedSourceIndexes = const [],
+    int? updatedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO ai_season_episode_mappings(config_id, site_key, vod_id, '
+      'source_title, flag_key, tmdb_id, media_type, mode, season_number, '
+      'confidence, mappings, snapshot, status, skipped_source_indexes, '
+      'updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, site_key, vod_id, source_title, flag_key) '
+      'DO UPDATE SET tmdb_id=excluded.tmdb_id, media_type=excluded.media_type, '
+      'mode=excluded.mode, season_number=excluded.season_number, '
+      'confidence=excluded.confidence, mappings=excluded.mappings, '
+      'snapshot=excluded.snapshot, status=excluded.status, '
+      'skipped_source_indexes=excluded.skipped_source_indexes, '
+      'updated_at=excluded.updated_at;',
+      [
+        configId,
+        siteKey,
+        vodId,
+        sourceTitle,
+        flagKey,
+        tmdbId,
+        mediaType,
+        mode,
+        seasonNumber,
+        confidence,
+        jsonEncode(mappings),
+        snapshot,
+        status,
+        jsonEncode(skippedSourceIndexes),
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 删除一条线路（或整条目的）的 AI 逐集映射。
+  int removeAiSeasonMappings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    String? sourceTitle,
+    String? flagKey,
+  }) {
+    final clauses = <String>['config_id=?', 'site_key=?', 'vod_id=?'];
+    final args = <Object?>[configId, siteKey, vodId];
+    if (sourceTitle != null) {
+      clauses.add('source_title=?');
+      args.add(sourceTitle);
+    }
+    if (flagKey != null) {
+      clauses.add('flag_key=?');
+      args.add(flagKey);
+    }
+    _db.execute(
+      'DELETE FROM ai_season_episode_mappings WHERE ${clauses.join(" AND ")};',
       args,
     );
     return _db.updatedRows;

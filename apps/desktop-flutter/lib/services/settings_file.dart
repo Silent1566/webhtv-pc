@@ -52,7 +52,9 @@ enum SettingsWriter {
   uiPreferences('ui'),
 
   /// `SyncState`（`sync` 段）。
-  sync('sync');
+  sync('sync'),
+
+  aiConfig('ai');
 
   const SettingsWriter(this.tag);
 

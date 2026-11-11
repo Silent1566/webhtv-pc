@@ -412,6 +412,19 @@ class UiPreferencesStore {
   TrackChoice? trackChoice(String key) => _trackChoices[key];
 
   /// 从磁盘读取。文件不存在或解析失败时保持默认值并记日志（不阻塞启动）。
+  Map<String, Object?> _aiIntegrationSettings = {};
+  bool get aiTitleExtractionEnabled =>
+      _aiIntegrationSettings['ai_title_extraction'] == true;
+  bool get aiAdDetectionEnabled =>
+      _aiIntegrationSettings['ai_ad_detection'] == true;
+  Map<String, Object?> get androidAiRaw =>
+      Map.unmodifiable(_aiIntegrationSettings);
+
+  Future<bool> rememberAiIntegrationSettings(Map<String, Object?> values) {
+    _aiIntegrationSettings = {..._aiIntegrationSettings, ...values};
+    return _persist();
+  }
+
   Future<void> load() async {
     try {
       final file = File(path);
@@ -426,6 +439,10 @@ class UiPreferencesStore {
       }
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
+        final aiSettings = decoded['aiIntegration'];
+        _aiIntegrationSettings = aiSettings is Map
+            ? Map<String, Object?>.from(aiSettings)
+            : {};
         final ui = decoded['ui'];
         if (ui is Map) {
           final value = ui['lastSiteKey'];
@@ -1120,6 +1137,9 @@ class UiPreferencesStore {
           ui['externalPlayers'] = _externalPlayerCatalog.toJson();
         }
         root['ui'] = ui;
+        if (_aiIntegrationSettings.isNotEmpty) {
+          root['aiIntegration'] = _aiIntegrationSettings;
+        }
         // 播放参数：只有显式设置过才写（缺席 = 默认，与 ui 段同一口径）。
         final player = _playerOptions;
         if (player != null) root['player'] = player.normalized().toJson();

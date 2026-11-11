@@ -46,3 +46,20 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Loaded on demand via Dart FFI, never attaches to normal playback by default.
+add_library(audio_ai_native SHARED "audio_ai_native.cpp")
+target_compile_features(audio_ai_native PRIVATE cxx_std_17)
+target_compile_definitions(audio_ai_native PRIVATE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+target_compile_options(audio_ai_native PRIVATE /utf-8)
+target_link_libraries(audio_ai_native PRIVATE mfplat mfreadwrite mfuuid ole32 propsys mmdevapi)
+add_dependencies(${BINARY_NAME} audio_ai_native)
+
+# Task7：卡拉OK 真实麦克风采集（独占新增，按需由 Dart FFI 加载，默认不打开）。
+add_library(karaoke_mic_native SHARED "karaoke_mic_native.cpp")
+target_compile_features(karaoke_mic_native PRIVATE cxx_std_17)
+target_compile_definitions(karaoke_mic_native PRIVATE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+target_compile_options(karaoke_mic_native PRIVATE /utf-8)
+target_link_libraries(karaoke_mic_native PRIVATE mmdevapi ole32)
+add_dependencies(${BINARY_NAME} karaoke_mic_native)
+

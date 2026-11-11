@@ -143,13 +143,16 @@ class DeviceHistoryEntry {
     );
   }
 
-  DeviceHistoryEntry copyWith({String? name, String? address, int? lastUsedMs}) =>
-      DeviceHistoryEntry(
-        uuid: uuid,
-        name: name ?? this.name,
-        address: address ?? this.address,
-        lastUsedMs: lastUsedMs ?? this.lastUsedMs,
-      );
+  DeviceHistoryEntry copyWith({
+    String? name,
+    String? address,
+    int? lastUsedMs,
+  }) => DeviceHistoryEntry(
+    uuid: uuid,
+    name: name ?? this.name,
+    address: address ?? this.address,
+    lastUsedMs: lastUsedMs ?? this.lastUsedMs,
+  );
 
   @override
   String toString() => 'DeviceHistoryEntry($name @ $address)';
@@ -214,6 +217,7 @@ class SyncState extends ChangeNotifier {
     required this.log,
     required this.host,
     required this.settingsPath,
+    this.settingsExporter,
     AndroidBridgeService? bridgeService,
     SyncClient? client,
     SyncServer Function(SyncServerHost host)? serverFactory,
@@ -236,6 +240,8 @@ class SyncState extends ChangeNotifier {
 
   /// `<configDir>/settings.json`（`sync` 段所在文件，与 TMDB 同一份）。
   final String settingsPath;
+  final Future<Map<String, Object?>> Function(bool allowSensitive)?
+  settingsExporter;
   final AndroidBridgeService _bridge;
   final SyncClient _client;
   final AndroidReadClient _readClient;
@@ -251,7 +257,8 @@ class SyncState extends ChangeNotifier {
 
   static SyncServer Function(SyncServerHost host) _defaultServerFactory(
     LogService log,
-  ) => (host) => SyncServer(log: log, host: host);
+  ) =>
+      (host) => SyncServer(log: log, host: host);
 
   // ------------------------------------------------------------ 持久化状态
 
@@ -295,8 +302,7 @@ class SyncState extends ChangeNotifier {
   int _realtimePullCursorMs = 0;
 
   /// 读取能力探测缓存（`design/01` §4.1：缓存 60 s）。
-  final RealtimeCapabilityCache _realtimeCapability =
-      RealtimeCapabilityCache();
+  final RealtimeCapabilityCache _realtimeCapability = RealtimeCapabilityCache();
 
   RealtimeSyncEngine? _realtimeEngine;
 
@@ -358,8 +364,7 @@ class SyncState extends ChangeNotifier {
   int get serverPort => _server?.port ?? 0;
 
   /// 服务端对外的可达基址。
-  String? get serverBaseUrl =>
-      serverRunning ? _server!.baseUrl : null;
+  String? get serverBaseUrl => serverRunning ? _server!.baseUrl : null;
 
   /// 开启服务端前必须向用户展示的提示（P3，`design/02` §5）。
   String get serverBindHint =>
@@ -449,11 +454,12 @@ class SyncState extends ChangeNotifier {
           .map(SyncPeer.fromJson)
           .whereType<SyncPeer>()
           .toList();
-      _deviceHistory = asList(section['devices'])
-          .map(DeviceHistoryEntry.fromJson)
-          .whereType<DeviceHistoryEntry>()
-          .toList()
-        ..sort((a, b) => b.lastUsedMs.compareTo(a.lastUsedMs));
+      _deviceHistory =
+          asList(section['devices'])
+              .map(DeviceHistoryEntry.fromJson)
+              .whereType<DeviceHistoryEntry>()
+              .toList()
+            ..sort((a, b) => b.lastUsedMs.compareTo(a.lastUsedMs));
       _lastBridgeAddress = asNonEmptyString(section['lastBridge']) ?? '';
       // 实时同步开关与游标（`design/01` §6.1、§9.1）。
       // 旧文件缺 `realtime` 段 → 全部默认关闭（“缺席 = 默认”，不写盘）。
@@ -529,7 +535,8 @@ class SyncState extends ChangeNotifier {
     try {
       final server = _server ??= _serverFactory(_buildServerHost());
       final port = await server.start();
-      _notice = '同步服务已启动：${server.baseUrl}'
+      _notice =
+          '同步服务已启动：${server.baseUrl}'
           '（仅接受已授权对端，可在设置中关闭）';
       log.info(
         '同步服务已启动 port=$port uuid=$maskedDeviceUuid'
@@ -571,13 +578,8 @@ class SyncState extends ChangeNotifier {
   /// 开启/关闭含凭据的设置同步（P3 + §19）。
   Future<void> setSettingsSyncEnabled(bool value) async {
     _settingsSyncEnabled = value;
-    _notice = value
-        ? '将同步包含凭据的设置项（TMDB 等），请确认对端可信'
-        : '已停止同步设置项';
-    log.warning(
-      '含凭据的设置同步：${value ? '已开启（用户显式确认）' : '已关闭'}',
-      scope: 'sync',
-    );
+    _notice = value ? '将同步包含凭据的设置项（TMDB 等），请确认对端可信' : '已停止同步设置项';
+    log.warning('含凭据的设置同步：${value ? '已开启（用户显式确认）' : '已关闭'}', scope: 'sync');
     await _persist();
     notifyListeners();
   }
@@ -660,10 +662,7 @@ class SyncState extends ChangeNotifier {
     if (decision.rejected) {
       _lastError = decision.error;
       _notice = decision.error?.message;
-      log.warning(
-        '实时同步开关被拒绝：${decision.error?.message}',
-        scope: 'realtime',
-      );
+      log.warning('实时同步开关被拒绝：${decision.error?.message}', scope: 'realtime');
       notifyListeners();
       return false;
     }
@@ -744,7 +743,8 @@ class SyncState extends ChangeNotifier {
     notifyListeners();
     final engine = _realtimeEngine;
     final temporary = engine == null;
-    final runner = engine ??
+    final runner =
+        engine ??
         RealtimeSyncEngine(
           log: log,
           host: _buildRealtimeHost(),
@@ -759,7 +759,7 @@ class SyncState extends ChangeNotifier {
       _notice = result == null
           ? '没有可拉取的站点（请先导入安卓站源）'
           : '手动拉取完成：${result.stats.describe()}'
-              '${result.degradedSites.isEmpty ? '' : '（${result.degradedSites.length} 个站点仅能取当前播放）'}';
+                '${result.degradedSites.isEmpty ? '' : '（${result.degradedSites.length} 个站点仅能取当前播放）'}';
       if (result?.error != null) _lastError = result!.error;
       return result;
     } on AppError catch (error) {
@@ -921,7 +921,10 @@ class SyncState extends ChangeNotifier {
       _realtimeCapability.write(probe.capability, DateTime.now());
       final disclosure = pullCapabilityError(probe.capability);
       if (disclosure != null) {
-        log.warning('${probe.describe()} ${disclosure.logLine}', scope: 'realtime');
+        log.warning(
+          '${probe.describe()} ${disclosure.logLine}',
+          scope: 'realtime',
+        );
       }
       return probe.capability;
     },
@@ -1011,8 +1014,10 @@ class SyncState extends ChangeNotifier {
   Future<void> revokePeer(String uuid) async {
     _peers = _peers.where((peer) => peer.uuid != uuid).toList();
     _notice = '已移除设备授权';
-    log.info('移除同步对端 ${SyncPeer(uuid: uuid, name: '', address: '').maskedUuid}',
-        scope: 'sync');
+    log.info(
+      '移除同步对端 ${SyncPeer(uuid: uuid, name: '', address: '').maskedUuid}',
+      scope: 'sync',
+    );
     await _persist();
     notifyListeners();
   }
@@ -1163,10 +1168,7 @@ class SyncState extends ChangeNotifier {
         : (_deviceHistory.isEmpty ? '' : _deviceHistory.first.address);
     if (target.isEmpty) return null;
     if (_busy) return null;
-    log.info(
-      '尝试自动接入最近使用的桥接线路 address=${redactUrl(target)}',
-      scope: 'bridge',
-    );
+    log.info('尝试自动接入最近使用的桥接线路 address=${redactUrl(target)}', scope: 'bridge');
     // 自动接入**不弹错误**：探不通只是「上次那台设备不在」，不应该在启动时
     // 给用户一个红色错误横幅。因此这里不写 _lastError。
     _busy = true;
@@ -1205,16 +1207,12 @@ class SyncState extends ChangeNotifier {
         '找不到上次使用的安卓设备地址（设备接入历史里没有这台设备）',
         detail: address,
       );
-      log.warning('自动接入无法定位设备地址：deviceHistory 里没有该设备',
-          scope: 'bridge');
+      log.warning('自动接入无法定位设备地址：deviceHistory 里没有该设备', scope: 'bridge');
       notifyListeners();
       return null;
     }
     if (_busy) return null;
-    log.info(
-      '尝试恢复上次使用的桥接源 address=${redactUrl(target)}',
-      scope: 'bridge',
-    );
+    log.info('尝试恢复上次使用的桥接源 address=${redactUrl(target)}', scope: 'bridge');
     _busy = true;
     _stage = BridgeStage.probingDevice;
     _lastError = null;
@@ -1485,7 +1483,8 @@ class SyncState extends ChangeNotifier {
       _importRecordIds = List.unmodifiable(savedIds);
       // 供 UI 在导入后询问「是否切换到该配置」（单源重拉时就是该源）。
       _lastImportRecordId = savedIds.first;
-      _notice = '已从 ${_hostOf(base)} 导入 ${savedIds.length} 个播放源'
+      _notice =
+          '已从 ${_hostOf(base)} 导入 ${savedIds.length} 个播放源'
           '（$totalSites 个站点${totalLive == 0 ? '' : '、$totalLive 个直播源'}）'
           '${failures.isEmpty ? '' : '；${failures.length} 个源失败：${failures.first}'}';
       _lastOperation =
@@ -1561,7 +1560,8 @@ class SyncState extends ChangeNotifier {
       persist: false,
     );
     await authorizePeer(device);
-    _notice = '已导入 ${conversion.siteCount} 个站点'
+    _notice =
+        '已导入 ${conversion.siteCount} 个站点'
         '${liveSources.isEmpty ? '' : '、${liveSources.length} 个直播源'}'
         '（新配置记录 #$recordId，未切换当前配置）'
         '${conversion.diagnostics.isEmpty ? '' : '；${conversion.diagnostics.first}'}';
@@ -1588,25 +1588,23 @@ class SyncState extends ChangeNotifier {
   // ------------------------------------------------------------------ 推送
 
   /// 推送本地历史到指定对端（`design/02` §3.5）。
-  Future<SyncPushResult?> pushHistoryTo(SyncPeer peer) => _guardedPush(
-    peer,
-    () {
-      final config = host.syncConfigJson();
-      if (config == null || config.trim().isEmpty) {
-        throw AppError(
-          AppErrorKind.syncPayloadInvalid,
-          '推送历史前必须选择与安卓当前一致的配置'
-          '（config.url 为空时安卓会静默忽略全部记录，却仍返回成功）',
-          detail: 'config.url',
+  Future<SyncPushResult?> pushHistoryTo(SyncPeer peer) =>
+      _guardedPush(peer, () {
+        final config = host.syncConfigJson();
+        if (config == null || config.trim().isEmpty) {
+          throw AppError(
+            AppErrorKind.syncPayloadInvalid,
+            '推送历史前必须选择与安卓当前一致的配置'
+            '（config.url 为空时安卓会静默忽略全部记录，却仍返回成功）',
+            detail: 'config.url',
+          );
+        }
+        return _client.pushHistory(
+          deviceBase: peer.address,
+          configJson: config,
+          items: host.syncHistoryItems(),
         );
-      }
-      return _client.pushHistory(
-        deviceBase: peer.address,
-        configJson: config,
-        items: host.syncHistoryItems(),
-      );
-    },
-  );
+      });
 
   /// 推送本地收藏到指定对端。
   Future<SyncPushResult?> pushKeepTo(SyncPeer peer) => _guardedPush(
@@ -1620,12 +1618,14 @@ class SyncState extends ChangeNotifier {
   /// 推送设置到指定对端（`settings` 未开启时不带凭据项）。
   Future<SyncPushResult?> pushSettingsTo(SyncPeer peer) => _guardedPush(
     peer,
-    () => _client.pushBackup(
+    () async => _client.pushBackup(
       deviceBase: peer.address,
-      backup: const {'prefers': <String, Object?>{}},
-      options: SyncOptions.pcDefault.copyWith(
-        settings: _settingsSyncEnabled,
-      ),
+      backup: {
+        'prefers':
+            await settingsExporter?.call(_settingsSyncEnabled) ??
+            const <String, Object?>{},
+      },
+      options: SyncOptions.pcDefault.copyWith(settings: _settingsSyncEnabled),
     ),
   );
 
@@ -1645,10 +1645,7 @@ class SyncState extends ChangeNotifier {
     Future<SyncPushResult> Function() action,
   ) async {
     if (!_pushEnabled) {
-      _lastError = AppError(
-        AppErrorKind.syncDisabled,
-        '向安卓推送未开启，请先在设置中开启',
-      );
+      _lastError = AppError(AppErrorKind.syncDisabled, '向安卓推送未开启，请先在设置中开启');
       notifyListeners();
       return null;
     }
@@ -1797,7 +1794,11 @@ class SyncState extends ChangeNotifier {
         if (deletedAt > nextSince) nextSince = deletedAt;
       }
     }
-    return (items: history.length, tombstones: tombstones, nextSince: nextSince);
+    return (
+      items: history.length,
+      tombstones: tombstones,
+      nextSince: nextSince,
+    );
   }
 
   /// 删除墓碑 → 安卓形态的 `historyKey`（`design/01` §3.2.2）。
@@ -1979,9 +1980,7 @@ class SyncState extends ChangeNotifier {
   /// 稳定 uuid：16 字节十六进制（重启后不变，`design/02` §8 Q5）。
   String _generateUuid() {
     final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
-    return bytes
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
 
   String _defaultDeviceName() {

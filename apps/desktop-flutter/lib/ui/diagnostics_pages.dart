@@ -15,6 +15,7 @@ import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'ai_settings_page.dart';
+import 'ai_integration_widgets.dart';
 import 'app.dart';
 import 'common.dart';
 import 'advanced_settings_page.dart';
@@ -319,6 +320,14 @@ class _SettingsPageState extends State<SettingsPage> {
           icon: const Icon(Icons.auto_awesome),
           label: const Text('打开 AI 设置'),
         ),
+        const SizedBox(height: 8),
+        // AI 迁移新增：内容智能 / 推荐 / 阅读器 / 唱声评分都在这一个页面里。
+        OutlinedButton.icon(
+          key: const ValueKey('settings-ai-business-open'),
+          onPressed: () => openAiBusiness(context, state),
+          icon: const Icon(Icons.auto_awesome_outlined),
+          label: const Text('AI业务与阅读器'),
+        ),
         const SizedBox(height: AppSpace.lg),
         Text('TMDB 元数据增强', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
@@ -343,6 +352,15 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: AppSpace.lg),
         Text('安卓接入', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
+        // 摘要必须基于**持久化**证据，不能只看 `sync.devices`。
+        //
+        // `sync.devices` 是**内存态**（本次会话探测到的设备），`load()` 只恢复
+        // `deviceHistory`/`peers`，从不恢复它。所以只看 `devices` 时，用户明明
+        // 接入过、重启后也自动恢复到了桥接配置，设置页却永远写「未接入」
+        // （用户反馈 2026-10-09：「重新打开后是自动接入了但是设置页面的状态
+        // 没有及时更新」——实测其 `settings.json` 里 `peers` 已有 1 台，
+        // 但 `devices` 为空）。
+        // 因此取三者地址的**并集**：本次探测 + 历史接入 + 已授权对端。
         Text(
           _androidSummary(sync),
           key: const ValueKey('settings-android-summary'),
@@ -837,7 +855,10 @@ class _LogsPageState extends State<LogsPage> {
     final all = widget.state.log.entries;
     final entries = all
         .where((entry) => _filter == null || entry.level == _filter)
-        .where((entry) => _query.isEmpty || entry.line.toLowerCase().contains(_query))
+        .where(
+          (entry) =>
+              _query.isEmpty || entry.line.toLowerCase().contains(_query),
+        )
         .toList()
         .reversed
         .toList();
@@ -889,6 +910,11 @@ class _LogsPageState extends State<LogsPage> {
                 ),
               ),
               const SizedBox(width: 12),
+              IconButton(
+                tooltip: 'AI日志诊断',
+                onPressed: () => openAiBusiness(context, widget.state),
+                icon: const Icon(Icons.auto_awesome_outlined),
+              ),
               Text(
                 entries.length == all.length
                     ? '${entries.length} 条'
@@ -1131,16 +1157,13 @@ class _PlaybackDiagnosticsCard extends StatelessWidget {
                 diagnostics.target.scheme.isEmpty
                     ? '未知'
                     : '${diagnostics.target.scheme}'
-                        '${diagnostics.target.isSecure ? '（加密）' : ''}',
+                          '${diagnostics.target.isSecure ? '（加密）' : ''}',
               ),
-              _chip(
-                '结果',
-                switch (diagnostics.succeeded) {
-                  true => '成功',
-                  false => '失败',
-                  null => '进行中',
-                },
-              ),
+              _chip('结果', switch (diagnostics.succeeded) {
+                true => '成功',
+                false => '失败',
+                null => '进行中',
+              }),
               for (final stage in PlaybackStage.values)
                 if (diagnostics.elapsedOf(stage) != null)
                   _chip(

@@ -34,6 +34,9 @@ const String backupDatabaseFile = 'webhtv-pc.sqlite3';
 const Set<String> backupRestorableFiles = {
   backupSettingsFile,
   backupDatabaseFile,
+  'ai-user-data.json',
+  'reader.json',
+  'karaoke-user-data.json',
 };
 
 class BackupEntry {

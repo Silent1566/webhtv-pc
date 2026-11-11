@@ -26,6 +26,9 @@ import '../core/history_view.dart';
 import '../core/hot_rank_layout.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_identity.dart';
+import '../core/ai_content/recommendation.dart';
+import 'speech_search_button.dart';
+import 'ai_integration_widgets.dart';
 import '../services/search_suggest_service.dart';
 import '../state/app_state.dart';
 import '../state/search_state.dart';
@@ -48,9 +51,11 @@ class SearchPage extends StatefulWidget {
     this.initialKeyword,
     this.identityHint,
     this.resumeSeed,
+    this.useExistingResults = false,
   });
 
   final AppState state;
+  final bool useExistingResults;
 
   /// 预填关键词（纯 TMDB 详情页「搜索站源」入口带入标题，`04` §6.2）。
   final String? initialKeyword;
@@ -135,7 +140,7 @@ class _SearchPageState extends State<SearchPage> {
       // 带入标题后**自动执行一次搜索**（对齐手动匹配弹窗「打开即搜索」）。
       _controller.text = keyword;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _submit();
+        if (mounted && !widget.useExistingResults) _submit();
       });
     } else {
       // 不带关键词进来（切回搜索页/首次进入）→ 把上一轮残留的结果丢掉，
@@ -215,8 +220,7 @@ class _SearchPageState extends State<SearchPage> {
     if (!mounted) return;
     setState(() {
       _hotRanks = {
-        for (var i = 0; i < categories.length; i++)
-          categories[i]: results[i],
+        for (var i = 0; i < categories.length; i++) categories[i]: results[i],
       };
     });
   }
@@ -237,11 +241,7 @@ class _SearchPageState extends State<SearchPage> {
       _suggestions = null;
       _filterGroup = '';
     });
-    await _state.searchAll(
-      text,
-      siteKey: _scopeSiteKey,
-      group: _scopeGroup,
-    );
+    await _state.searchAll(text, siteKey: _scopeSiteKey, group: _scopeGroup);
   }
 
   /// 搜索页回到「未搜索」状态：清空输入 → 收起联想 → 丢掉结果。
@@ -374,15 +374,11 @@ class _SearchPageState extends State<SearchPage> {
       MaterialPageRoute<void>(
         // 续播上下文原样带下去：没有它，从「未找到可可靠续播的播放源」
         // 走全局搜索选中的结果会从头播（`design/05` §7.4）。
-        builder: (_) => DetailPage(
-          state: _state,
-          vod: vod,
-          resumeSeed: widget.resumeSeed,
-        ),
+        builder: (_) =>
+            DetailPage(state: _state, vod: vod, resumeSeed: widget.resumeSeed),
       ),
     );
   }
-
 
   // ---------------------------------------------------------------------------
   // 构建
@@ -472,6 +468,23 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
         const SizedBox(width: AppSpace.md),
+        SpeechSearchButton(
+          onRecognized: (text) {
+            _controller.text = text;
+            _submit(text);
+          },
+        ),
+        IconButton(
+          key: const ValueKey('search-ai-recommendations'),
+          tooltip: 'AI关键词推荐',
+          onPressed: () => openAiBusiness(
+            context,
+            _state,
+            source: RecommendationSource.search,
+            keyword: _controller.text.trim(),
+          ),
+          icon: const Icon(Icons.auto_awesome_outlined),
+        ),
         _buildScopeButton(),
         const SizedBox(width: AppSpace.md),
         FilledButton.icon(
@@ -562,9 +575,9 @@ class _SearchPageState extends State<SearchPage> {
                     label: Text(keyword),
                     onPressed: () => _searchFrom(keyword),
                     onDeleted: () => _state.removeSearchKeyword(keyword),
-                    deleteIconColor: Theme.of(
-                      context,
-                    ).colorScheme.onSurfaceVariant,
+                    deleteIconColor: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant,
                   ),
               ],
             ),

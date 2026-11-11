@@ -8,6 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/temp_dirs.dart';
+import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
@@ -317,22 +320,9 @@ Site _currentSite() => Site(
 
 void main() {
   setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await cjk.load();
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await icons.load();
-  });
-  setUp(() {});
+    // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
+    await loadFixtureFonts();
+  });  setUp(() {});
   Future<void> size(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
@@ -389,7 +379,7 @@ void main() {
       await size(tester);
       final dir = Directory.systemTemp.createTempSync('task3-source');
       final state = SourceState(dir, deps(titleOnly: true));
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       addTearDown(state.dispose);
       await tester.runAsync(state.bootstrap);
       await tester.pumpWidget(
@@ -609,7 +599,7 @@ void main() {
     );
     await tester.runAsync(app.bootstrap);
     addTearDown(app.dispose);
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     void history(String id, String title) => app.database!.upsertHistory(
       siteKey: 'external-site',
       vodId: id,
@@ -721,7 +711,7 @@ void main() {
     (tester) async {
       await size(tester);
       final dir = Directory.systemTemp.createTempSync('task3-lease');
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       var tmdbRequests = 0;
       var doubanRequests = 0;
       final service = TmdbService(
@@ -779,7 +769,7 @@ void main() {
     final state = SourceState(dir, deps());
     await tester.runAsync(state.bootstrap);
     addTearDown(state.dispose);
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     await tester.pumpWidget(
       MaterialApp(
         home: DetailPage(
@@ -806,7 +796,7 @@ void main() {
     (tester) async {
       await size(tester);
       final dir = Directory.systemTemp.createTempSync('task3-embedded');
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       var relatedRequests = 0;
       final service = TmdbService(
         config: () => const TmdbConfig(apiKey: 'fixture'),
@@ -956,7 +946,7 @@ void main() {
       );
       await tester.runAsync(app.bootstrap);
       addTearDown(app.dispose);
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       final db = app.database!;
       db.saveConfig(
         name: 'other audio source',
@@ -1082,7 +1072,7 @@ void main() {
       final state = SourceState(dir, deps(), tmdbFixture: service);
       await tester.runAsync(state.bootstrap);
       addTearDown(state.dispose);
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       await tester.pumpWidget(
         MaterialApp(
           home: DetailPage(
@@ -1202,7 +1192,7 @@ void main() {
       );
       await tester.runAsync(state.bootstrap);
       addTearDown(state.dispose);
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => deleteTempDirBestEffortSync(dir));
       final following = state.followFromDetail(
         site: Site(
           key: 's',
@@ -1288,7 +1278,7 @@ void main() {
     await size(tester);
     final dir = Directory.systemTemp.createTempSync('task4-site-match');
     final state = SourceState(dir, deps(), site: _currentSite());
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     state.searchFixture = (site, keyword) async => SiteResult(
@@ -1328,7 +1318,7 @@ void main() {
     await size(tester);
     final dir = Directory.systemTemp.createTempSync('task4-site-miss');
     final state = SourceState(dir, deps(), site: _currentSite());
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     state.searchFixture = (site, keyword) async => SiteResult(
@@ -1364,7 +1354,7 @@ void main() {
     await size(tester);
     final dir = Directory.systemTemp.createTempSync('task4-site-error');
     final state = SourceState(dir, deps(), site: _currentSite());
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     state.searchFixture = (site, keyword) async => throw StateError('站点 500');
@@ -1402,7 +1392,7 @@ void main() {
       tmdbState: tmdb,
       overrideDetail: false,
     );
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     // 合成条目（vodId 为空）就是「当前站点没命中」的产物；本页必须跳过站源
@@ -1466,7 +1456,7 @@ void main() {
       site: _currentSite(),
       tmdbState: tmdb,
     );
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     // 内存里留着「导航剧」的 TMDB 数据：合成条目（推荐回退页）加载出来的产物。
@@ -1507,7 +1497,7 @@ void main() {
         client: recommendationTmdbClient(),
       ),
     );
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     await tmdb.loadForVod(
@@ -1654,7 +1644,7 @@ void main() {
             tmdbState: tmdb,
             overrideDetail: false,
           );
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     final capture = GlobalKey();

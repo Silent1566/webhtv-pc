@@ -20,6 +20,9 @@ import '../core/tmdb_media.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../services/ai_episode_season_service.dart';
+import '../services/ai_season_mapping_service.dart';
+import 'ai_integration_widgets.dart';
+import '../core/ai_content/recommendation.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/ui_preferences_store.dart';
@@ -28,6 +31,7 @@ import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
 import 'ai_settings_page.dart';
 import 'app.dart';
+import 'async_action_feedback.dart';
 import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
@@ -39,6 +43,7 @@ import 'common.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
+import 'ai_content/ai_recommendation_section.dart';
 import 'tmdb_widgets.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -841,60 +846,73 @@ class _VodGrid extends StatelessWidget {
         // 错误与通知不再在页面内拼横幅：它们由 `app.dart` 的全局投影推成右下角
         // 通知（见 `ui/toast.dart`），页面只负责海报网格本身。
         Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) =>
-                NotificationListener<ScrollNotification>(
-                  onNotification: _onScroll,
-                  child: CustomScrollView(
-                    slivers: [
-                      // 筛选条**不再常驻**。
-                      //
-                      // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
-                      // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
-                      // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
-                      // 显示——不占布局、不推挤网格。
-                      if (vods.isEmpty)
-                        SliverFillRemaining(
-                          hasScrollBody: false,
-                          child: _emptyState(
-                            loading: loading,
-                            hasClasses: hasClasses,
-                          ),
-                        )
-                      else
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(
-                            _posterGridPadding,
-                            14,
-                            _posterGridPadding,
-                            8,
-                          ),
-                          sliver: SliverGrid(
-                            gridDelegate: _gridDelegate(constraints.maxWidth),
-                            delegate: SliverChildBuilderDelegate(
-                              (context, index) => _VodCard(
-                                key: ValueKey('vod-card-${vods[index].vodId}'),
-                                vod: vods[index],
-                                onTap: () => _openDetail(context, vods[index]),
+          child: Stack(
+            // 等待条贴在**视口顶部**而不是追加在滚动内容里：原实现是 slivers
+            // 的最后一项（网格之后），网格填满视口时它落在视口外，首页刷新
+            // 期间（`loadHome` 保留旧列表）用户看不到任何变化。
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) =>
+                    NotificationListener<ScrollNotification>(
+                      onNotification: _onScroll,
+                      child: CustomScrollView(
+                        slivers: [
+                          // 筛选条**不再常驻**。
+                          //
+                          // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
+                          // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
+                          // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
+                          // 显示——不占布局、不推挤网格。
+                          if (vods.isEmpty)
+                            SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: _emptyState(
+                                loading: loading,
+                                hasClasses: hasClasses,
                               ),
-                              childCount: vods.length,
+                            )
+                          else
+                            SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(
+                                _posterGridPadding,
+                                14,
+                                _posterGridPadding,
+                                8,
+                              ),
+                              sliver: SliverGrid(
+                                gridDelegate: _gridDelegate(
+                                  constraints.maxWidth,
+                                ),
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) => _VodCard(
+                                    key: ValueKey(
+                                      'vod-card-${vods[index].vodId}',
+                                    ),
+                                    vod: vods[index],
+                                    onTap: () =>
+                                        _openDetail(context, vods[index]),
+                                  ),
+                                  childCount: vods.length,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      // 刷新首页时旧列表**不被清空**（loadHome 保留 _homeResult），
-                      // 此时只压一条细进度条：整页闪成空白会让用户以为断网了。
-                      if (loading && vods.isNotEmpty)
-                        const SliverToBoxAdapter(
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 16),
-                            child: LinearProgressIndicator(minHeight: 2),
-                          ),
-                        ),
-                      if (paged)
-                        SliverToBoxAdapter(child: _ScrollFooter(state: state)),
-                    ],
-                  ),
+                          if (paged)
+                            SliverToBoxAdapter(
+                              child: _ScrollFooter(state: state),
+                            ),
+                        ],
+                      ),
+                    ),
+              ),
+              // 覆盖层：不占布局、不遮挡海报（只有 2px），旧列表照常可见。
+              if (loading && vods.isNotEmpty)
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  child: _BrowseBusyBar(),
                 ),
+            ],
           ),
         ),
       ],
@@ -1002,6 +1020,38 @@ class _VodGrid extends StatelessWidget {
 /// 角标（用户提供参考截图 2026-10-09）：左上角**年份**、右下角**评分**。
 /// 取值与判定在 `core/poster_badge.dart`（纯逻辑，含「remarks 不一定是评分」的
 /// 关键约束：网盘站给的是 `全29集`，那种情况不能当评分画角标）。
+/// 列表重载期间贴在视口顶部的细等待条（覆盖层，不占布局、不遮挡海报）。
+///
+/// 减动态下换成静态色条而不是去掉：反馈是动作确认，不能因为减少动效就消失。
+class _BrowseBusyBar extends StatelessWidget {
+  const _BrowseBusyBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final reduced = media.disableAnimations || media.accessibleNavigation;
+    final theme = Theme.of(context);
+    return Semantics(
+      liveRegion: true,
+      label: '正在加载内容',
+      child: TweenAnimationBuilder<double>(
+        // 从「已经可见」出发：0.35 → 1 而不是 0 → 1。
+        tween: Tween(begin: reduced ? 1 : 0.35, end: 1),
+        duration: reduced ? Duration.zero : AppMotion.fast,
+        curve: AppMotion.ease,
+        builder: (context, value, child) =>
+            Opacity(opacity: value, child: child),
+        child: Container(
+          key: const ValueKey('browse-refresh-busy'),
+          height: 2,
+          color: reduced ? theme.colorScheme.primary : null,
+          child: reduced ? null : const LinearProgressIndicator(minHeight: 2),
+        ),
+      ),
+    );
+  }
+}
+
 class _VodCard extends StatelessWidget {
   const _VodCard({super.key, required this.vod, required this.onTap});
 
@@ -1336,6 +1386,13 @@ class _DetailPageState extends State<DetailPage> {
   /// 否则「续播也失败」会再问一次换源，确认后又续播，形成自我递归的对话框。
   bool _resumingAfterSwap = false;
 
+  /// 解析阶段是否在途；仅用于**显式**区分所有权，避免旧调用收掉后一次的反馈。
+  ///
+  /// 真正的防重入由 `AsyncActionFeedback` 按 owner（本页 context）判定：
+  /// 同一 owner 已有在途动作时 `begin` 返回 null。这个令牌只回答一件事——
+  /// 现在这个 feedback 是不是「我这一次调用」拿到的。
+  AsyncActionFeedback? _playFeedback;
+
   /// 上一次已经推成通知的详情错误。
   ///
   /// 与 `app.dart` 的 `_shownLastError` 同一做法：拿上一次投影过的值做比较，只在
@@ -1630,8 +1687,12 @@ class _DetailPageState extends State<DetailPage> {
     // 应用前必须比对，否则会把结果写到新线路上。
     final snapshotFlagKey = tmdbLine.flagKey;
     final snapshotCount = tmdbLine.episodeCount;
+    final snapshotCounts = Map<int, int>.from(tmdb!.seasonEpisodeCounts);
+    final orderedSnapshot = seasonBindingsSnapshot(episodes, snapshotCounts);
+    final identitySnapshot =
+        '${state.tmdbConfigId}|${state.tmdbSiteKeyForAi}|${tmdb.identity?.key}';
 
-    final service = AiEpisodeSeasonService(config: state.aiConfig);
+    final service = state.createAiSeasonService();
     var canceled = false;
     // 提前拿住 navigator：要等 `await` 之后才能关进度框，届时 `context` 可能已失效
     // （也因此不能用 `Navigator.of(context, ...)` 去做那件事）。
@@ -1663,7 +1724,7 @@ class _DetailPageState extends State<DetailPage> {
       title: vod.vodName,
       flagName: tmdbLine.sourceFlag,
       episodes: episodes,
-      seasonCounts: tmdb?.seasonEpisodeCounts ?? const <int, int>{},
+      seasonCounts: snapshotCounts,
     );
     service.dispose();
 
@@ -1703,6 +1764,10 @@ class _DetailPageState extends State<DetailPage> {
       result: result,
       snapshotFlagKey: snapshotFlagKey,
       snapshotCount: snapshotCount,
+      snapshotEpisodes: episodes,
+      snapshotCounts: snapshotCounts,
+      orderedSnapshot: orderedSnapshot,
+      identitySnapshot: identitySnapshot,
     );
   }
 
@@ -1711,108 +1776,115 @@ class _DetailPageState extends State<DetailPage> {
     required AiSeasonAnalysis result,
     required String snapshotFlagKey,
     required int snapshotCount,
+    required List<VodEpisode> snapshotEpisodes,
+    required Map<int, int> snapshotCounts,
+    required String orderedSnapshot,
+    required String identitySnapshot,
   }) async {
-    final previewOnly = result.mode == AiSeasonMode.explicitMapping;
+    final proposed = buildSeasonBindings(
+      analysis: result,
+      episodes: snapshotEpisodes,
+      seasonCounts: snapshotCounts,
+    );
+    final canApply =
+        proposed.status == AiSeasonApplyStatus.applied ||
+        proposed.status == AiSeasonApplyStatus.partial;
     final confirmed = await showDialog<bool>(
       context: context,
-      // 包一层**带 key 的** `RepaintBoundary`：证据截图必须能拍到这张对话框本身。
-      //
-      // 【为什么非加不可】每个路由（含 dialog）在 `Navigator` 里各有自己的
-      // `RepaintBoundary`，**没有任何一个** boundary 同时包含页面与对话框的
-      // 内容。所以「拍整窗」并不存在：默认取第一个 boundary 只会拍到详情页，
-      // 对话框完全不在图里（实测 173791 字节的图里没有预览框）。既有套件
-      // 用的是同一个办法：`tmdb_detail_visual_flow_test` 为图片查看器加了
-      // `tmdb-photo-viewer-boundary`，截图时按 key 指定这一层。
       builder: (context) => RepaintBoundary(
         key: const ValueKey('ai-season-preview-boundary'),
         child: AlertDialog(
           key: const ValueKey('ai-season-preview'),
-          title: const Text('AI 剧集 / 季度分析建议'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${_aiModeLabel(result.mode)} · '
-                  '${(result.confidence * 100).round()}%',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                if (result.seasonNumber >= 0)
+          title: const Text('AI剧集 / 季度分析建议'),
+          content: SizedBox(
+            width: 600,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    result.seasonNumber == 0
-                        ? '特别篇'
-                        : '第 ${result.seasonNumber} 季',
+                    '${_aiModeLabel(result.mode)} · ${(result.confidence * 100).round()}% · ${proposed.status.name}',
                   ),
-                if (result.summary.isNotEmpty) ...[
-                  const SizedBox(height: 8),
                   Text(result.summary),
-                ],
-                for (final warning in result.warnings) ...[
-                  const SizedBox(height: 4),
-                  Text('• $warning'),
-                ],
-                if (previewOnly) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    '本版本仅预览，不会写入绑定。',
-                    key: const ValueKey('ai-season-preview-only'),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+                  for (final warning in result.warnings) Text(warning),
+                  if (result.mode == AiSeasonMode.keepOriginal)
+                    const Text('清除本线路AI映射，恢复原始集列表'),
+                  for (final binding in proposed.bindings)
+                    Text(
+                      '源${binding.sourceIndex + 1} ${snapshotEpisodes[binding.sourceIndex].name} → S${binding.seasonNumber}E${binding.episodeNumber}',
                     ),
-                  ),
+                  if (proposed.skippedSourceIndexes.isNotEmpty)
+                    Text(
+                      '未映射，保留可播放：${proposed.skippedSourceIndexes.map((i) => snapshotEpisodes[i].name).join('、')}',
+                    ),
                 ],
-              ],
+              ),
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(previewOnly ? '知道了' : '取消'),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
             ),
-            if (!previewOnly)
-              FilledButton(
-                key: const ValueKey('ai-season-apply'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('应用建议'),
-              ),
+            FilledButton(
+              key: const ValueKey('ai-season-apply'),
+              onPressed: canApply ? () => Navigator.pop(context, true) : null,
+              child: const Text('确认落库并应用'),
+            ),
           ],
         ),
       ),
     );
-    if (confirmed != true || previewOnly || !mounted) return;
-
-    // 快照校验（`04` §7.5）。
-    final current = _ownedTmdb?.sourceLine;
-    if (current == null ||
-        current.flagKey != snapshotFlagKey ||
-        current.episodeCount != snapshotCount) {
-      showToast('线路已变化，AI 建议不再适用，请重新分析', kind: ToastKind.error);
+    if (confirmed != true || !mounted) return;
+    if (identitySnapshot !=
+        '${widget.state.tmdbConfigId}|${widget.state.tmdbSiteKeyForAi}|${_ownedTmdb?.identity?.key}') {
+      showToast('TMDB身份或来源已变化，请重新分析', kind: ToastKind.error);
       return;
     }
-
-    switch (result.mode) {
-      case AiSeasonMode.singleSeason:
-        await widget.state.bindTmdbSeason(
-          TmdbSeasonNumber(result.seasonNumber),
-        );
-      case AiSeasonMode.keepOriginal:
-        await widget.state.bindTmdbSeason(const TmdbSeasonKeepOriginal());
-      case AiSeasonMode.flatByCounts:
-        // 应用前**再校验一次**（`04` §7.4）：AI 说可以，本地校验不过就拒绝。
-        if (!(_ownedTmdb?.canAutoSlice ?? false)) {
-          if (!mounted) return;
-          showToast('当前线路集数与 TMDB 季集数不匹配，无法安全自动切分', kind: ToastKind.error);
-          return;
-        }
-        await widget.state.bindTmdbSeason(const TmdbSeasonAutoSlice());
-      case AiSeasonMode.explicitMapping:
-        return; // 上面已短路，这里只为穷尽 switch。
-      case null:
-        return;
+    final current = _ownedTmdb?.sourceLine;
+    final vod = _currentVod;
+    if (vod == null ||
+        current == null ||
+        current.flagKey != snapshotFlagKey ||
+        current.episodeCount != snapshotCount) {
+      showToast('线路已变化，建议作废，请重新分析', kind: ToastKind.error);
+      return;
+    }
+    final applied = await widget.state.confirmAiSeasonMapping(
+      analysis: result,
+      vod: vod,
+      flagKey: snapshotFlagKey,
+      episodes: snapshotEpisodes,
+      seasonCounts: snapshotCounts,
+      snapshot: orderedSnapshot,
+    );
+    if (!mounted) return;
+    if (applied == null ||
+        applied.status == AiSeasonApplyStatus.rejected ||
+        applied.status == AiSeasonApplyStatus.staleSnapshot) {
+      showToast(
+        '映射未应用：${applied?.status.name ?? '上下文已变化'}',
+        kind: ToastKind.error,
+      );
+      return;
+    }
+    if (result.mode == AiSeasonMode.keepOriginal) {
+      await widget.state.bindTmdbSeason(const TmdbSeasonKeepOriginal());
+    }
+    if (result.mode == AiSeasonMode.singleSeason) {
+      await widget.state.bindTmdbSeason(TmdbSeasonNumber(result.seasonNumber));
     }
     if (!mounted) return;
-    await widget.state.reloadTmdb();
+    await widget.state.refreshAiSeasonMappings(
+      vod,
+      siteKey: widget.state.tmdbSiteKeyForAi,
+    );
+    if (mounted) setState(() => _aiSelectedSeason = -1);
+    showToast(
+      '映射已落库：${applied.mappedCount}集，保留${applied.skippedSourceIndexes.length}集原行为',
+      kind: ToastKind.success,
+    );
   }
 
   static String _aiModeLabel(AiSeasonMode? mode) => switch (mode) {
@@ -2036,15 +2108,25 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
-    final episode = line.episodes[episodeIndex];
     final state = widget.state;
-    // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
-    //
-    // 为什么不能只靠 `flag`：并入后的 `flag` 是本页的展示名（`站点名 · 原线路名`），
-    // 站点自己并不认识它；真正的线路标识在 `playbackFlag` 里。而 `vodId` 也得换成
-    // 来源站点的 vod，否则会拿原站点的 id 去问外部站点。
-    final route = _externalRoutes[line.flag];
+    line = state.applyAiMappingsToLine(vod, line);
+    final episode = line.episodes[episodeIndex];
+    // 解析是网络往返：在它回来之前不给反馈，用户看到的就是「点了没反应」。
+    // `begin` 返回 null 只有三种原因——页面已卸载、本页被别的路由覆盖、本页已有
+    // 在途动作。三种都不该继续解析（被覆盖的旧页更不许迟到 push/通知）。
+    final feedback = AsyncActionFeedback.begin(
+      context,
+      '正在准备播放：${episode.name}',
+    );
+    if (feedback == null) return;
+    _playFeedback = feedback;
     try {
+      // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
+      //
+      // 为什么不能只靠 `flag`：并入后的 `flag` 是本页的展示名（`站点名 · 原线路名`），
+      // 站点自己并不认识它；真正的线路标识在 `playbackFlag` 里。而 `vodId` 也得换成
+      // 来源站点的 vod，否则会拿原站点的 id 去问外部站点。
+      final route = _externalRoutes[line.flag];
       final decision = await state.resolvePlayback(
         episodeTarget: episode.url,
         flag: line.playbackFlag,
@@ -2059,6 +2141,8 @@ class _DetailPageState extends State<DetailPage> {
         // 服务去问会拿错请求头/运行时。两条来源不能混着用，按线路各自的归属走。
         serviceOverride: route == null ? widget.sourceContext?.service : null,
       );
+      // 离页/被别的路由覆盖：`isCurrent` 会顺手收掉反馈并返回 false。
+      if (!feedback.isCurrent) return;
       if (decision == null || decision.url == null) {
         throw AppError(
           AppErrorKind.playbackUrlMissing,
@@ -2083,9 +2167,11 @@ class _DetailPageState extends State<DetailPage> {
         identity: tmdb?.identity,
         episode: episode,
         flagKey: tmdb?.sourceLine?.flagKey ?? line.flag,
-        seasonNumber: tmdb != null && tmdb.hasMatch && tmdb.selectedSeason >= 0
-            ? tmdb.selectedSeason
-            : -1,
+        seasonNumber:
+            episode.extra['tmdb_season_number'] as int? ??
+            (tmdb != null && tmdb.hasMatch && tmdb.selectedSeason >= 0
+                ? tmdb.selectedSeason
+                : -1),
         episodeNumber: _tmdbEpisodeNumberOf(episode),
       );
       // 选集卡片数据（阶段 A）：与 [_buildEpisodes] 的 `cards` 用**同一套构造**，
@@ -2093,6 +2179,9 @@ class _DetailPageState extends State<DetailPage> {
       // 可能倒序 → 按原始线路下标推断缺号集编号」得出，任一环节走样都会错位。
       // 每条线路各算一份：播放器切线路时要取那条线路自己的卡片。
       final episodeCardsByFlag = _episodeCardsByFlag(vod);
+      // 导航前收掉反馈：否则它会盖在播放器首帧上。owner 仍由本次调用持有到
+      // 播放器返回（`finally` 里 close），期间本页不再有第二个播放动作。
+      feedback.dismiss();
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -2116,7 +2205,9 @@ class _DetailPageState extends State<DetailPage> {
               episodeName: episode.name,
               flag: line.flag,
               playbackFlag: line.playbackFlag,
-              playLines: _playableLines(vod),
+              playLines: _playableLines(vod)
+                  .map((item) => state.applyAiMappingsToLine(vod, item))
+                  .toList(),
               // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
               lineRoutes: _externalRoutes,
               episodeCardsByFlag: episodeCardsByFlag,
@@ -2150,6 +2241,14 @@ class _DetailPageState extends State<DetailPage> {
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
+      // 离页/被别的路由覆盖：这里必须放弃——被覆盖的旧页仍 `mounted`，
+      // 只看 `mounted` 会放行迟到 push 与迟到通知。
+      if (!feedback.isCurrent) return;
+      // 解析阶段到此结束：收起等待态并**交还 owner**。后面「确认换源 → 并入 →
+      // 自动续播」是同一次用户动作的后半段，续播那次 [_play] 需要重新拿到反馈；
+      // 占着 owner 不放到 `finally`，续播就会因为「本页已有在途动作」被挡掉。
+      feedback.dismiss();
+      feedback.close();
       if (!mounted) return;
       // 用户在站点里主动中断不是「这一集没有地址」，再问一次换源只会打断连播；
       // 自动续播那一趟失败同样只回到 通知（见 [_resumingAfterSwap]）。
@@ -2171,6 +2270,10 @@ class _DetailPageState extends State<DetailPage> {
         _pendingResumeEpisodeNumber = _tmdbEpisodeNumberOf(episode);
       });
       await _openSourceSwap();
+    } finally {
+      // 只收**自己**那一次：续播可能已经拿到新反馈，旧调用不得动它。
+      if (identical(_playFeedback, feedback)) _playFeedback = null;
+      feedback.close();
     }
   }
 
@@ -2833,6 +2936,7 @@ class _DetailPageState extends State<DetailPage> {
                           ),
                         _buildEpisodes(context, vod, lines),
                       ],
+
                       // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
                       //
                       // folder 展开**也要**渲染：被点的 folder 条目本身就是一部作品
@@ -2840,6 +2944,17 @@ class _DetailPageState extends State<DetailPage> {
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
                       ..._buildTmdbBlocks(context, tmdb),
+                      // AI 推荐放在 TMDB 信息（简介/演职人员/制作团队等）**之下**，
+                      // 不插在剧集与详情之间。缓存优先、后台刷新；未配置 AI
+                      // 时区块自身返回 `SizedBox.shrink()`，不占位也不请求。
+                      Padding(
+                        padding: const EdgeInsets.only(top: AppSpace.lg),
+                        child: AiRecommendationSection(
+                          state: widget.state,
+                          seedTitle: vod.vodName,
+                        ),
+                      ),
+
                       _buildRecommendationBottom(vod),
                     ],
                   ),
@@ -3061,6 +3176,10 @@ class _DetailPageState extends State<DetailPage> {
           },
           onOpenVideo: widget.state.openExternalUrl,
           onCopyVideo: copyToClipboard,
+          aiRecommendations: AiRecommendationSection(
+            state: widget.state,
+            seedTitle: item.title,
+          ),
         ),
       ),
     );
@@ -3115,6 +3234,7 @@ class _DetailPageState extends State<DetailPage> {
   /// - 当前线路：先应用 TMDB 剧集元数据，再按可播放季度过滤；
   /// - 其他线路：不套用当前季度的元数据与过滤（避免跨线路串集），
   ///   只保留来源集名自带的季度信号过滤。
+  int _aiSelectedSeason = -1;
   List<VodEpisode> _renderEpisodes(
     VodPlayLine rawLine, {
     required bool active,
@@ -3122,6 +3242,19 @@ class _DetailPageState extends State<DetailPage> {
     // 归属门：不属于本页影片的 TMDB 数据一律不参与渲染，直接直通原集列表。
     final tmdb = _ownedTmdb;
     if (tmdb == null) return rawLine.episodes;
+    final vod = _currentVod;
+    if (vod != null && widget.state.hasAiMappings(vod, rawLine)) {
+      final mapped = widget.state.applyAiMappingsToLine(vod, rawLine).episodes;
+      return _aiSelectedSeason == -1
+          ? mapped
+          : mapped
+                .where(
+                  (e) => _aiSelectedSeason == -100
+                      ? e.extra['tmdb_season_number'] == null
+                      : e.extra['tmdb_season_number'] == _aiSelectedSeason,
+                )
+                .toList();
+    }
     if (!active) {
       final selected = tmdb.selectedSeason;
       if (selected < 0) return rawLine.episodes;
@@ -3195,6 +3328,13 @@ class _DetailPageState extends State<DetailPage> {
     final cards = <String, List<TmdbEpisodeCard>>{};
     for (final rawLine in lines) {
       final isActive = rawLine.flag == activeFlag;
+      if (widget.state.hasAiMappings(vod, rawLine)) {
+        final episodes = _renderEpisodes(rawLine, active: isActive);
+        cards[rawLine.flag] = _aiEpisodeCards(
+          _episodesReversed ? episodes.reversed.toList() : episodes,
+        );
+        continue;
+      }
       // `_buildEpisodes` 的 `sourceIndices` 取自 TMDB 应用元数据**之后**的线路集，
       // 这里必须用同一个来源，否则同一个缺号集会被算出两个集号。
       final enriched = tmdb.applyEpisodesToLine(rawLine).line;
@@ -3214,6 +3354,32 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。
+  List<TmdbEpisodeCard> _aiEpisodeCards(List<VodEpisode> episodes) => [
+    for (final episode in episodes) _aiEpisodeCard(episode),
+  ];
+  TmdbEpisodeCard _aiEpisodeCard(VodEpisode episode) {
+    final season = episode.extra['tmdb_season_number'] as int?;
+    final number = episode.extra['tmdb_episode_number'] as int?;
+    TmdbEpisode? metadata;
+    for (final candidate
+        in _ownedTmdb?.episodesBySeason[season] ?? const <TmdbEpisode>[]) {
+      if (candidate.number == number) {
+        metadata = candidate;
+        break;
+      }
+    }
+    return TmdbEpisodeCard(
+      number: number ?? 0,
+      title: metadata?.displayTitle ?? episode.name,
+      seasonNumber: season ?? -100,
+      date: metadata?.date ?? '',
+      overview: metadata?.overview,
+      stillUrl: metadata?.stillUrl,
+      runtime: metadata?.runtime ?? 0,
+      rating: metadata?.voteAverage ?? 0,
+    );
+  }
+
   Widget _buildEpisodes(
     BuildContext context,
     Vod vod,
@@ -3226,7 +3392,9 @@ class _DetailPageState extends State<DetailPage> {
     final line = tmdb?.applyEpisodesToLine(rawLine).line ?? rawLine;
     final episodes = _renderEpisodes(rawLine, active: true);
     final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
-    final cards = tmdb == null
+    final cards = widget.state.hasAiMappings(vod, rawLine)
+        ? _aiEpisodeCards(ordered)
+        : tmdb == null
         ? TmdbEpisodeCards.build(
             sourceNames: ordered.map((episode) => episode.name).toList(),
             metadataByNumber: const <int, TmdbEpisode>{},
@@ -3268,6 +3436,61 @@ class _DetailPageState extends State<DetailPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: const ValueKey('detail-ai-business'),
+              onPressed: () => openAiBusiness(
+                context,
+                widget.state,
+                source: RecommendationSource.current,
+                title: vod.vodName,
+              ),
+              icon: const Icon(Icons.auto_awesome_outlined),
+              label: const Text('AI影片推荐'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => openReaderInput(
+                context,
+                initialText: vod.vodContent ?? '',
+                title: vod.vodName,
+              ),
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('阅读简介'),
+            ),
+            if (widget.state.hasAiMappings(vod, rawLine)) ...[
+              ChoiceChip(
+                label: const Text('全部映射'),
+                selected: _aiSelectedSeason == -1,
+                onSelected: (_) => setState(() => _aiSelectedSeason = -1),
+              ),
+              for (final season
+                  in widget.state
+                      .aiMappingsFor(vod, rawLine)!
+                      .bindings
+                      .map((b) => b.seasonNumber)
+                      .toSet()
+                      .toList()
+                    ..sort())
+                ChoiceChip(
+                  label: Text('第$season季'),
+                  selected: _aiSelectedSeason == season,
+                  onSelected: (_) => setState(() => _aiSelectedSeason = season),
+                ),
+              if (widget.state
+                  .aiMappingsFor(vod, rawLine)!
+                  .skippedSourceIndexes
+                  .isNotEmpty)
+                ChoiceChip(
+                  label: const Text('其他 / 未映射'),
+                  selected: _aiSelectedSeason == -100,
+                  onSelected: (_) => setState(() => _aiSelectedSeason = -100),
+                ),
+            ],
+          ],
+        ),
         TmdbEpisodeHeader(
           episodeCount: episodes.length,
           reversed: _episodesReversed,
@@ -3945,6 +4168,10 @@ class _DetailPageState extends State<DetailPage> {
           // 既有的依赖注入风格传两个参数，而不是把状态对象塞进去。
           initialViewMode: state.episodeViewMode,
           onViewModeChanged: state.setEpisodeViewMode,
+          aiRecommendations: AiRecommendationSection(
+            state: state,
+            seedTitle: state.tmdb.item?.title ?? '',
+          ),
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(

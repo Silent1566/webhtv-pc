@@ -13,6 +13,8 @@
 /// - HTML 错误页不得伪装成 200 媒体响应（§11.3 第 8 条）。
 library;
 
+import 'ai_integration.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -59,11 +61,17 @@ class LocalProxyServer {
   ///
   /// 默认空集：没有配置规则时行为与 Phase 3–8 完全一致。
   AdRuleSet adRules = const AdRuleSet.empty();
+  final Map<String, AiPlaylistSnapshot> _mediaPlaylists = {};
+  String? aiSessionFingerprint;
+  AdRuleSet aiSessionRules = const AdRuleSet.empty();
+  AiPlaylistSnapshot? mediaPlaylistFor(String fingerprint) =>
+      _mediaPlaylists[fingerprint];
 
   /// 配置切换后更新规则（代理运行中也可安全替换）。
   void setAdRules(AdRuleSet rules) {
     adRules = rules;
   }
+
   final ProxySessionManager sessions;
   final HttpClient _upstream;
   final Duration requestTimeout;
@@ -131,9 +139,7 @@ class LocalProxyServer {
   static Uri? decodeTarget(String encoded) {
     try {
       final padding = (4 - encoded.length % 4) % 4;
-      final text = utf8.decode(
-        base64Url.decode('$encoded${'=' * padding}'),
-      );
+      final text = utf8.decode(base64Url.decode('$encoded${'=' * padding}'));
       final uri = Uri.tryParse(text);
       if (uri == null || !uri.hasScheme) return null;
       return uri;
@@ -271,7 +277,10 @@ class LocalProxyServer {
         denyCode = 502;
         break;
       }
-      final addressDecision = effectivePolicy.evaluateAll(addresses, current.host);
+      final addressDecision = effectivePolicy.evaluateAll(
+        addresses,
+        current.host,
+      );
       if (!addressDecision.allowed) {
         denyReason = addressDecision.reason;
         denyCode = addressDecision.code;
@@ -377,7 +386,8 @@ class LocalProxyServer {
     }
 
     // 4) HTML 错误页不得伪装成 200 媒体（§11.3 第 8 条）。
-    final contentType = upstream.headers.value(HttpHeaders.contentTypeHeader) ?? '';
+    final contentType =
+        upstream.headers.value(HttpHeaders.contentTypeHeader) ?? '';
     final looksHtml = contentType.toLowerCase().contains('text/html');
     if (looksHtml && upstream.statusCode >= 200 && upstream.statusCode < 300) {
       await _abort(upstream);
@@ -422,10 +432,29 @@ class LocalProxyServer {
     if (isPlaylist) {
       // 清单必须整体读取后重写，保证子清单/分片 URL 走同一会话（§11.4）。
       final body = await _readAll(upstream);
+      final originalText = utf8.decode(body, allowMalformed: true);
+      final evidence = collectAdPlaylistEvidence(originalText, current);
+      if (!evidence.isEmpty) {
+        _mediaPlaylists[session.fingerprint] = AiPlaylistSnapshot(
+          playlist: current,
+          evidence: evidence,
+          siteKey: session.siteKey,
+          sessionFingerprint: session.fingerprint,
+        );
+        while (_mediaPlaylists.length > 32) {
+          _mediaPlaylists.remove(_mediaPlaylists.keys.first);
+        }
+      }
+      final effectiveRules = session.fingerprint == aiSessionFingerprint
+          ? AdRuleSet(
+              adHosts: adRules.adHosts,
+              hlsRules: [...adRules.hlsRules, ...aiSessionRules.hlsRules],
+            )
+          : adRules;
       final cleaned = cleanHlsPlaylist(
-        text: utf8.decode(body, allowMalformed: true),
-        playlistUri: target,
-        rules: adRules,
+        text: originalText,
+        playlistUri: current,
+        rules: effectiveRules,
       );
       final rewritten = HlsPlaylistRewriter.rewrite(
         cleaned.text,
@@ -509,8 +538,8 @@ class LocalProxyServer {
     required Uri target,
     required String? range,
   }) {
-    final origin = session.establishedOrigin ??
-        '${request.uri.host}:${request.uri.port}';
+    final origin =
+        session.establishedOrigin ?? '${request.uri.host}:${request.uri.port}';
     final targetOrigin = '${target.host}:${target.port}';
 
     final headers = <String, String>{
@@ -525,8 +554,8 @@ class LocalProxyServer {
     };
 
     // User-Agent 可在会话内继承（§11.3.1）。
-    final userAgent = session.userAgent ??
-        request.headers.value(HttpHeaders.userAgentHeader);
+    final userAgent =
+        session.userAgent ?? request.headers.value(HttpHeaders.userAgentHeader);
     if (userAgent != null) headers[HttpHeaders.userAgentHeader] = userAgent;
     // Referer 只在站点显式声明（会话注入）或与目标同主机时传播。
     // 播放器的 Referer 指向本地代理，跨域转发会触发防盗链 CDN 的 403
@@ -621,7 +650,11 @@ class LocalProxyServer {
     return builder.takeBytes();
   }
 
-  Future<void> _fail(HttpRequest request, int statusCode, String message) async {
+  Future<void> _fail(
+    HttpRequest request,
+    int statusCode,
+    String message,
+  ) async {
     final response = request.response;
     response.statusCode = statusCode;
     response.headers.contentType = ContentType(
@@ -629,7 +662,9 @@ class LocalProxyServer {
       'json',
       charset: 'utf-8',
     );
-    final body = utf8.encode(jsonEncode({'status': statusCode, 'msg': message}));
+    final body = utf8.encode(
+      jsonEncode({'status': statusCode, 'msg': message}),
+    );
     response.headers.set(HttpHeaders.contentLengthHeader, '${body.length}');
     response.add(body);
     await response.close();

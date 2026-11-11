@@ -160,6 +160,9 @@ class PlaybackRequest {
     bool clearResumeSeed = false,
     String? sourceKey,
     bool clearSourceKey = false,
+    // 换集要同时换成该集的 TMDB 身份；缺这个参数会让 `copyWith(tmdb: …)`
+    // 在编译期就失败（beta 抽类时只留了构造实参，漏了形参）。
+    TmdbPlaybackIdentity? tmdb,
   }) {
     return PlaybackRequest(
       url: url ?? this.url,

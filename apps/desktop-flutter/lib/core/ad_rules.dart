@@ -30,6 +30,8 @@ class HlsAdRule {
     this.requireDiscontinuity = false,
     this.requireCrossDomain = false,
     this.minimumSignals = 1,
+    this.playlistPath,
+    this.excludeUrlRegex = const [],
   });
 
   final String id;
@@ -58,6 +60,8 @@ class HlsAdRule {
 
   /// 命中多少个信号才算广告（至少 1）。
   final int minimumSignals;
+  final String? playlistPath;
+  final List<String> excludeUrlRegex;
 
   bool get isEmpty =>
       hostSuffixes.isEmpty &&
@@ -294,6 +298,14 @@ bool _isAdBlock(_SegmentBlock block, Uri playlistUri, AdRuleSet rules) {
 
   for (final rule in rules.hlsRules) {
     if (!rule.appliesToPlaylist(playlistUri.host)) continue;
+    if (rule.playlistPath != null && rule.playlistPath != playlistUri.path) {
+      continue;
+    }
+    if (rule.excludeUrlRegex.any(
+      (pattern) => RegExp(pattern).hasMatch(segment.toString()),
+    )) {
+      continue;
+    }
     if (_matchesRule(block, segment, playlistUri, rule)) return true;
   }
   return false;

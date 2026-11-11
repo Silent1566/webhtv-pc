@@ -503,6 +503,8 @@ class _AiFixture extends AiCompletionClient {
   Future<AiCompletionResult> complete({
     required AiConfig config,
     required String prompt,
-    Duration timeout = AiCompletionClient.defaultTimeout,
+    Duration? timeout,
+    AiCancellationToken? cancellationToken,
+    String task = 'ai',
   }) => pending.future;
 }
