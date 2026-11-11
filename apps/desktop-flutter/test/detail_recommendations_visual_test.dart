@@ -19,6 +19,9 @@ import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/ui/detail_recommendations.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/temp_dirs.dart';
+import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
@@ -180,22 +183,9 @@ Finder _fallbackCards() => find.byWidgetPredicate(
 
 void main() {
   setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then((bytes) => ByteData.sublistView(bytes)),
-      );
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then((bytes) => ByteData.sublistView(bytes)),
-      );
-    await cjk.load();
-    await icons.load();
-  });
-  const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
+    // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
+    await loadFixtureFonts();
+  });  const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
   for (final width in [1280.0, 420.0]) {
     testWidgets('horizontal paging capture $width', (tester) async {
       tester.view.physicalSize = Size(width, 1100);
@@ -471,7 +461,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final dir = Directory.systemTemp.createTempSync('task4-visual-fallback');
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     final tmdb = _fallbackTmdbState();
     final state = _FallbackState(
       dir,

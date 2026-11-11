@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/temp_dirs.dart';
+import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
@@ -316,22 +319,9 @@ Future<void> _capture(
 
 void main() {
   setUpAll(() async {
-    final cjk = FontLoader('FixtureCJK')
-      ..addFont(
-        File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
-            .readAsBytes()
-            .then(ByteData.sublistView),
-      );
-    await cjk.load();
-    final icons = FontLoader('MaterialIcons')
-      ..addFont(
-        File(
-          '/tmp/webhtv-linux-sdk/flutter-3.47.5/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
-        ).readAsBytes().then(ByteData.sublistView),
-      );
-    await icons.load();
+    // 跨平台：字体路径按平台探测，缺失则跳过（见 test/support/test_fonts.dart）。
+    await loadFixtureFonts();
   });
-
   Future<GlobalKey> setup(WidgetTester tester, {bool routed = false}) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
@@ -339,7 +329,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final dir = Directory.systemTemp.createTempSync('task5-back');
     final state = _BackState(dir);
-    addTearDown(() => dir.deleteSync(recursive: true));
+    addTearDown(() => deleteTempDirBestEffortSync(dir));
     addTearDown(state.dispose);
     await tester.runAsync(state.bootstrap);
     final key = GlobalKey();
