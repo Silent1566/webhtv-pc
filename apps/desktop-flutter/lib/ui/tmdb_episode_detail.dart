@@ -7,6 +7,7 @@ import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
+import '../state/detail_recommendation_state.dart';
 import 'app.dart' show PosterImage;
 import 'tmdb_detail_page.dart';
 import 'tokens.dart';
@@ -23,6 +24,10 @@ Future<void> showTmdbEpisodeDetails(
   String actionLabel = '播放',
   VoidCallback? onAction,
   ValueChanged<TmdbPerson>? onPersonTap,
+  DetailRecommendationDependencies? recommendationDependencies,
+  ValueChanged<String>? onSearchTitle,
+  void Function(String title, TmdbIdentity identity)? onSearchSource,
+  ValueChanged<TmdbItem>? onOpenItem,
 }) => Navigator.of(context, rootNavigator: true).push<void>(
   MaterialPageRoute<void>(
     builder: (_) => _EpisodeDetailsPage(
@@ -34,6 +39,10 @@ Future<void> showTmdbEpisodeDetails(
       actionLabel: actionLabel,
       onAction: onAction,
       onPersonTap: onPersonTap,
+      recommendationDependencies: recommendationDependencies,
+      onSearchTitle: onSearchTitle,
+      onSearchSource: onSearchSource,
+      onOpenItem: onOpenItem,
     ),
   ),
 );
@@ -48,6 +57,10 @@ class _EpisodeDetailsPage extends StatefulWidget {
     required this.actionLabel,
     required this.onAction,
     required this.onPersonTap,
+    required this.recommendationDependencies,
+    required this.onSearchTitle,
+    required this.onSearchSource,
+    required this.onOpenItem,
   });
 
   final TmdbEpisodeCard card;
@@ -58,6 +71,10 @@ class _EpisodeDetailsPage extends StatefulWidget {
   final String actionLabel;
   final VoidCallback? onAction;
   final ValueChanged<TmdbPerson>? onPersonTap;
+  final DetailRecommendationDependencies? recommendationDependencies;
+  final ValueChanged<String>? onSearchTitle;
+  final void Function(String title, TmdbIdentity identity)? onSearchSource;
+  final ValueChanged<TmdbItem>? onOpenItem;
 
   @override
   State<_EpisodeDetailsPage> createState() => _EpisodeDetailsPageState();
@@ -199,6 +216,10 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
             service: service,
             person: person,
             onOpenItem: (item) {
+              if (widget.onOpenItem != null) {
+                widget.onOpenItem!(item);
+                return;
+              }
               final identity = item.identity;
               if (identity == null || !navigator.mounted) return;
               unawaited(
@@ -208,6 +229,11 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
                       service: service,
                       identity: identity,
                       initialItem: item,
+                      recommendationDependencies:
+                          widget.recommendationDependencies,
+                      onSearchTitle: widget.onSearchTitle,
+                      onSearchSource: widget.onSearchSource,
+                      onOpenItem: widget.onOpenItem,
                     ),
                   ),
                 ),

@@ -321,7 +321,12 @@ void main() {
       dir = await Directory.systemTemp.createTemp('webhtv-history-action');
       state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': '${dir.path}/webhtv-pc',
+            'data': '${dir.path}/webhtv-pc',
+            'cache': '${dir.path}/webhtv-pc/cache',
+            'state': '${dir.path}/webhtv-pc/logs',
+          },
         ),
         log: LogService(),
       );
@@ -337,7 +342,12 @@ void main() {
 
     AppState freshState() => AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': dir.path, 'local': dir.path},
+        overrides: {
+          'config': '${dir.path}/webhtv-pc',
+          'data': '${dir.path}/webhtv-pc',
+          'cache': '${dir.path}/webhtv-pc/cache',
+          'state': '${dir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
     );
@@ -400,7 +410,12 @@ void main() {
 
     test('getter 转发的是归一化后的落盘值（重启后仍生效）', () async {
       final settings = AppPaths.resolve(
-        overrides: {'roaming': dir.path, 'local': dir.path},
+        overrides: {
+          'config': '${dir.path}/webhtv-pc',
+          'data': '${dir.path}/webhtv-pc',
+          'cache': '${dir.path}/webhtv-pc/cache',
+          'state': '${dir.path}/webhtv-pc/logs',
+        },
       ).settingsPath;
       final file = File(settings);
       await file.create(recursive: true);

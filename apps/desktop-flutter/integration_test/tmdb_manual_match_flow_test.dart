@@ -53,7 +53,12 @@ void main() {
   testWidgets('TMDB 手动匹配：持久化 → 仅选季度 → 清除绑定', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-manual-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {

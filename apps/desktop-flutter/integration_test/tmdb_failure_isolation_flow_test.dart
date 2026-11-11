@@ -83,7 +83,12 @@ void main() {
   testWidgets('TMDB 401：不阻塞浏览与播放 + 熔断计数不增', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-fail-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() async {

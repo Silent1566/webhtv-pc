@@ -150,7 +150,10 @@ class TmdbState extends ChangeNotifier {
   String get vodId => _vodId;
 
   /// 保留的 TMDB 数据是否属于 [vodId] 这部作品（归属门的判据）。
-  bool belongsTo(String vodId) => _vodId == vodId;
+  bool belongsTo(String vodId, {String? siteKey, String? sourceTitle}) =>
+      _vodId == vodId &&
+      (siteKey == null || _siteKey == siteKey) &&
+      (sourceTitle == null || _sourceTitle == sourceTitle);
 
   /// 详情页全部线路（详情页切换线路时用）。
   List<VodPlayLine> _playLines = const [];
@@ -589,9 +592,13 @@ class TmdbState extends ChangeNotifier {
     int configId = 0,
     List<VodPlayLine>? lines,
     bool navSource = false,
+    TmdbIdentity? knownIdentity,
   }) async {
     final playLines = lines ?? parsePlayLines(vod.vodPlayFrom, vod.vodPlayUrl);
     _playLines = playLines;
+    final withoutPlayback =
+        navSource || playLines.every((line) => line.episodes.isEmpty);
+    final seededIdentity = withoutPlayback ? knownIdentity : null;
 
     // 保持「换线路时选定的线路」（`04` §3.1 ④）。
     //
@@ -633,7 +640,10 @@ class TmdbState extends ChangeNotifier {
     // `tmdbId|mediaType|season` 缓存，也不随线路失效）。
     //
     // 因此区分「同一作品」与「换了作品」：同一作品复用已加载数据，不重发请求。
-    final sameTitle = _isSameTitle(vodId: vod.vodId, sourceTitle: vod.vodName);
+    final sameTitle =
+        _isSameTitle(vodId: vod.vodId, sourceTitle: vod.vodName) &&
+        (seededIdentity == null ||
+            (seededIdentity == identity && _siteKey == siteKey));
     final generation = beginLoad(
       siteKey: siteKey,
       vodId: vod.vodId,
@@ -652,11 +662,18 @@ class TmdbState extends ChangeNotifier {
     if (_phase == TmdbLoadPhase.disabled) return;
 
     final config = _config();
-    await loadMatch(
-      generation: generation,
-      sourceTitle: vod.vodName,
-      siteName: siteName,
-    );
+    if (seededIdentity == null) {
+      await loadMatch(
+        generation: generation,
+        sourceTitle: vod.vodName,
+        siteName: siteName,
+      );
+    } else {
+      // 已知作品身份只用于本次加载，不写站源匹配缓存（合成条目没有 vodId）。
+      _matchResult = TmdbMatchHit(
+        TmdbMatchRecord(identity: seededIdentity, title: vod.vodName),
+      );
+    }
     if (!_valid(generation) || !hasMatch) return;
 
     // 详情已缓存且是同一作品 → 跳过详情请求，只重跑季度解析（零网络）。
@@ -668,11 +685,33 @@ class TmdbState extends ChangeNotifier {
       seasonCounts: const {},
       allowHeuristicGuessing: config.heuristicSeasonGuessing,
       reuseDetail: hasDetail,
+      expectedIdentity: seededIdentity,
     );
     if (!_valid(generation)) return;
+    if (seededIdentity != null &&
+        (_detail == null || _phase == TmdbLoadPhase.failed)) {
+      _matchResult = null;
+      _detail = null;
+      _episodesBySeason = const {};
+      _seasonEpisodeCounts = const {};
+      notifyListeners();
+      return;
+    }
 
     await loadEpisodes(generation: generation);
     if (!_valid(generation)) return;
+    if (seededIdentity?.isTv == true) {
+      await ensureAllSeasonEpisodes(
+        generation: generation,
+        allowAnySource: true,
+      );
+      if (!_valid(generation)) return;
+      if (_episodesBySeason.isEmpty) {
+        _matchResult = null;
+        notifyListeners();
+        return;
+      }
+    }
 
     // 相关视频也只在作品维度加载一次（换线路不重发）。
     if (!hasDetail || _videos.isEmpty) {
@@ -737,6 +776,7 @@ class TmdbState extends ChangeNotifier {
     int requestSeason = -1,
     bool allowHeuristicGuessing = true,
     bool reuseDetail = false,
+    TmdbIdentity? expectedIdentity,
   }) async {
     if (_disposed || generation != _generation) return;
     final currentItem = item;
@@ -752,6 +792,20 @@ class TmdbState extends ChangeNotifier {
     try {
       final detail = cached ?? await _service.detail(currentItem);
       if (_disposed || generation != _generation) return;
+      if (expectedIdentity != null) {
+        final endpointIdentity = currentItem.identity;
+        final titleField = expectedIdentity.isTv ? 'name' : 'title';
+        final title = detail[titleField];
+        if (endpointIdentity != expectedIdentity ||
+            detail['id'] != expectedIdentity.tmdbId ||
+            (detail.containsKey('media_type') &&
+                TmdbMediaType.parse(detail['media_type']) !=
+                    endpointIdentity?.mediaType) ||
+            title is! String ||
+            title.trim().isEmpty) {
+          throw AppError(AppErrorKind.tmdbEmpty, 'TMDB 详情身份与请求不一致');
+        }
+      }
       if (cached == null) {
         _detail = detail;
         _cast = _service.cast(detail);

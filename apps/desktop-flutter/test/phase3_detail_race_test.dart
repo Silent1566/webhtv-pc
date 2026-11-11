@@ -55,7 +55,12 @@ void main() {
     server = await TestFixtureServer.start();
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-race');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     state = AppState(paths: paths, log: LogService());
     await state.bootstrap();

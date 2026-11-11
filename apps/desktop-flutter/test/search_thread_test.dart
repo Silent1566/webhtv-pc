@@ -28,7 +28,12 @@ void main() {
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('webhtv-search-thread');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     // bootstrap 会装配 UiPreferencesStore（`setSearchThread` 依赖它），
     // 同时建出数据库；真实的临时目录 I/O 必须在这里做（testWidgets 体内是

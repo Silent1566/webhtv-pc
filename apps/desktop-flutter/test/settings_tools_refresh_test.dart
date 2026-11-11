@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ai_assist.dart';
 import 'package:webhtv_pc/core/ai_config.dart';
 import 'package:webhtv_pc/core/app_error.dart';
@@ -25,27 +26,53 @@ import 'package:webhtv_pc/ui/toast.dart';
 
 import 'phase5_sync_ui_test.dart' as fixture;
 
+// Reject unsafe paths before bootstrap can access storage.
+void _requireIsolatedPaths(AppPaths paths, Directory temp) {
+  for (final dir in [
+    paths.configDir,
+    paths.dataDir,
+    paths.cacheDir,
+    paths.logDir,
+  ]) {
+    expect(
+      p.isWithin(temp.path, dir),
+      isTrue,
+      reason: 'Test directory must remain beneath its owned temp directory',
+    );
+  }
+}
+
 void main() {
   late Directory temp;
   late AppState state;
+  var stateCreated = false;
   late fixture.FakeBridge bridge;
 
   setUp(() async {
+    stateCreated = false;
     temp = await Directory.systemTemp.createTemp('settings-tools-refresh-');
     bridge = fixture.FakeBridge();
+    final paths = AppPaths.resolve(
+      overrides: {
+        'config': p.join(temp.path, 'config'),
+        'data': p.join(temp.path, 'data'),
+        'cache': p.join(temp.path, 'cache'),
+        'state': p.join(temp.path, 'logs'),
+      },
+    );
+    _requireIsolatedPaths(paths, temp);
     state = AppState(
-      paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
-      ),
+      paths: paths,
       log: LogService(),
       androidBridgeService: bridge,
     );
+    stateCreated = true;
     await state.bootstrap();
   });
 
   tearDown(() async {
     dismissAllToasts();
-    state.dispose();
+    if (stateCreated) state.dispose();
     await temp.delete(recursive: true);
   });
 

@@ -81,7 +81,12 @@ void main() {
 
   Future<void> pump(WidgetTester tester, {String? preset}) async {
     final paths = AppPaths.resolve(
-      overrides: {'roaming': directory.path, 'local': directory.path},
+      overrides: {
+        'config': '${directory.path}/webhtv-pc',
+        'data': '${directory.path}/webhtv-pc',
+        'cache': '${directory.path}/webhtv-pc/cache',
+        'state': '${directory.path}/webhtv-pc/logs',
+      },
     );
     app = _PickerAppState(
       paths: paths,

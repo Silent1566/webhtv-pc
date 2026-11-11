@@ -32,7 +32,12 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('webhtv-history-scope');
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
       // 历史页点卡片会走 `resolvePlayback`（真实 HTTP + 本地代理链）。
@@ -301,7 +306,12 @@ void main() {
 
     final reopened = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
       httpClient: _NoNetworkClient(),

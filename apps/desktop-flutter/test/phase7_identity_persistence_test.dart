@@ -115,7 +115,12 @@ void main() {
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('webhtv-sync-identity');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     // 预置一台「已授权」的安卓对端（回环地址）：未配置 token 时只允许
     // 白名单对端，这是 `design/01` §3.2.2 的默认局域网形态。

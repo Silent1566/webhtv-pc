@@ -135,7 +135,12 @@ void main() {
     // `setUp` 不在 fake-async 区内，真实 I/O 可以正常 await 完成。
     tempDir = await Directory.systemTemp.createTemp('webhtv-sync-refresh');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
 
     // 1) 全新实例（未接入）。

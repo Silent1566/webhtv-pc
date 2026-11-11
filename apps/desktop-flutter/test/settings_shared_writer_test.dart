@@ -55,7 +55,12 @@ void main() {
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('webhtv-settings-race');
     paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     settingsPath = paths.settingsPath;
   });

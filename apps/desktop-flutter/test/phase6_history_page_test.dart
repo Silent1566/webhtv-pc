@@ -26,7 +26,12 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('webhtv-history-page');
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        },
       ),
       log: LogService(),
       // **必须注入假 client**：`play` 分流会走 `_resume` → `resolvePlayback`，

@@ -50,7 +50,12 @@ void main() {
   testWidgets('纯 TMDB 详情页：全部季度 / 卡片不可播 / 跳搜索页', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-tmdb-only-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {
