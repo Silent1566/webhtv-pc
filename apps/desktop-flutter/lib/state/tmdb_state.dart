@@ -381,13 +381,9 @@ class TmdbState extends ChangeNotifier {
       metadataByNumber: metadata,
       seasonNumber: seasonNumber ?? _selectedSeason,
       sourceIndices: sourceIndices,
-      // 剧照回退池：本剧的剧照（无剧照则用背景图）。
-      //
-      // 只在**该集没有 TMDB 剧照**时按顺序取用，因此不会覆盖真实剧照；
-      // 目的与上游 `TmdbEpisodeAdapter.fallbackStillUrl` 一致：
-      // 宁可给一张本剧的画面，也不要让用户看到一排灰色占位（实测用户
-      // 反馈就是「每集没有对应的海报卡片」）。
-      fallbackStills: detailData?.photoUrls ?? const <String>[],
+      // 不再按顺序把 `photoUrls`（本剧的零散剧照/背景）摊到每一集：那张图
+      // 不是该集剧照，贴上去等于把「无关剧照」标成集专属画面。缺图交给
+      // UI 回退到**本剧海报**（`PosterImage.fallbackUrl`），语义才是诚实的。
     );
   }
 
