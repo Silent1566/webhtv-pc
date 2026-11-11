@@ -51,17 +51,67 @@ param(
     [string]$NodeVersion = 'v22.23.4',
 
     # 离线/CI 旁路：直接指定已存在的 node.exe 所在目录，跳过下载与校验。
-    [string]$NodeRuntimeDir = ''
+    [string]$NodeRuntimeDir = '',
+
+    [string]$PythonRuntimeDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $ProgressPreference = 'SilentlyContinue'
 
+. (Join-Path $PSScriptRoot 'prepare_python_runtime.ps1') -OutputDir $OutputDir
+
 function Fail([string]$Message) {
     throw "打包失败：$Message"
 }
 
+function Assert-PackageWorkspacePath([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if (-not $full.StartsWith($RepoRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { Fail "路径必须位于工作区且不能是仓库根：$full" }
+    Assert-RuntimeRelativePath ([IO.Path]::GetRelativePath($RepoRoot, $full).Replace('\','/'))
+    $current = $full
+    while ($current -and $current -ne $RepoRoot) {
+        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Fail "拒绝 reparse 路径：$current" }
+        $current = Split-Path -Parent $current
+    }
+    return $full
+}
+
+function Assert-PackageMutationPath([string]$Path, [string]$Expected) {
+    $full = Assert-PackageWorkspacePath $Path
+    if ($full -ne [IO.Path]::GetFullPath($Expected).TrimEnd('\')) { Fail "删除/移动目标与预期不符：$full" }
+}
+function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
+    Assert-PackageWorkspacePath $Root | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $Root -Recurse -Force) {
+        $path = [IO.Path]::GetRelativePath($Root, $item.FullName).Replace('\','/')
+        Assert-RuntimeRelativePath $path
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail "Forbidden reparse build input: $path" }
+        if ($path -match '(?i)(^|/)(userdata|user-data|user_data|spiders|manifests|__pycache__|\.git)(/|$)' -or $item.Name -match '(?i)^user[-_](config|settings)(\.|$)' -or (-not $item.PSIsContainer -and $item.Extension -match '(?i)^\.(db|sqlite|sqlite3)$')) { Fail "Forbidden user source/config/database: $path" }
+        $allowed = $false
+        if ($item.PSIsContainer) {
+            $allowed = $path -in @('data','runtime','runtime/python','runtime/node','sidecars') -or $path -ceq 'data/flutter_assets' -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal)
+            if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
+                $allowed = @($sidecarFiles | Where-Object { $_.StartsWith($path+'/',[StringComparison]::Ordinal) }).Count -gt 0
+                foreach ($dir in $sidecarDependencyDirs.Keys) {
+                    if ($path -ceq $dir -or $dir.StartsWith($path+'/',[StringComparison]::Ordinal) -or ($path.StartsWith($dir+'/',[StringComparison]::Ordinal) -and (Test-Path -LiteralPath (Join-Path $RepoRoot $path) -PathType Container))) { $allowed = $true }
+                }
+            }
+        } else {
+            $allowed = $path -ceq 'webhtv_pc.exe' -or $path -ceq 'native_assets.json' -or $path -cmatch '^[^/]+\.(dll|pdb)$' -or $path -cin @('data/icudtl.dat','data/app.so') -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -or $path -cin @('runtime/node/node.exe','runtime/python/python-runtime.zip','runtime/python/bundle.json')
+            if ($path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -and $item.Extension -match '(?i)^\.(py|pyc|jar)$') { $allowed = $false }
+            if ($Staging -and $path -cin @('BUILD_INFO.txt','THIRD_PARTY.txt')) { $allowed = $true }
+            if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
+                $allowed = $path -cin $sidecarFiles
+                foreach ($dir in $sidecarDependencyDirs.Keys) { if ($path.StartsWith($dir+'/',[StringComparison]::Ordinal)) { $allowed = $true } }
+                $source = Join-Path $RepoRoot $path
+                if ($allowed -and (-not (Test-Path -LiteralPath $source -PathType Leaf) -or (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash)) { $allowed = $false }
+            }
+        }
+        if (-not $allowed) { Fail "Untrusted build/staging layout: $path" }
+    }
+}
 # 解析随包 node.exe：优先 -NodeRuntimeDir，其次校验通过的 .local 缓存，最后从 nodejs.org
 # 下载并按官方 SHASUMS256.txt 校验 SHA-256（并回写 .sha256 旁路文件）。命中缓存也校验，
 # 任何一步拿不到可信文件都 Fail，绝不产出降级包。
@@ -100,7 +150,9 @@ function Resolve-NodeRuntime {
         }
         $shownExpected = if ($cachedExpected -eq '') { '<缺失>' } else { $cachedExpected }
         Write-Host "缓存 sha256 不匹配（期望 $shownExpected，实际 $cachedActual），已丢弃缓存并重新下载"
+        Assert-PackageMutationPath $CachePath $CachePath
         Remove-Item -LiteralPath $CachePath -Force -ErrorAction SilentlyContinue
+        Assert-PackageMutationPath $cacheSumPath "$CachePath.sha256"
         Remove-Item -LiteralPath $cacheSumPath -Force -ErrorAction SilentlyContinue
     }
 
@@ -126,6 +178,7 @@ function Resolve-NodeRuntime {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $CachePath) | Out-Null
     $partial = "$CachePath.part"
     if (Test-Path -LiteralPath $partial) {
+        Assert-PackageMutationPath $partial "$CachePath.part"
         Remove-Item -LiteralPath $partial -Force
     }
 
@@ -134,10 +187,13 @@ function Resolve-NodeRuntime {
 
     $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {
+        Assert-PackageMutationPath $partial "$CachePath.part"
         Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
         Fail "Node 运行时 SHA-256 校验失败（期望 $expected，实际 $actual）：$nodeUrl。已删除下载的坏文件，请重试。"
     }
 
+    Assert-PackageMutationPath $partial "$CachePath.part"
+    Assert-PackageMutationPath $CachePath $CachePath
     Move-Item -LiteralPath $partial -Destination $CachePath -Force
     # 与缓存并列保存官方 sha256（一行小写 hex），供下次命中缓存时离线校验。
     Set-Content -LiteralPath $cacheSumPath -Value $actual -NoNewline -Encoding ascii
@@ -171,7 +227,8 @@ if (-not (Test-Path -LiteralPath $BuildDir -PathType Container)) {
 }
 $BuildDir = (Resolve-Path -LiteralPath $BuildDir).Path
 
-$OutputDir = [IO.Path]::GetFullPath($OutputDir)
+$OutputDir = Assert-PackageWorkspacePath $OutputDir
+if ((Test-Path -LiteralPath $OutputDir) -and @(Get-ChildItem -LiteralPath $OutputDir -Force).Count) { Fail "输出目录必须为新目录或空目录，不清理已有内容：$OutputDir" }
 $outputRoot = [IO.Path]::GetPathRoot($OutputDir).TrimEnd('\')
 if ($OutputDir.TrimEnd('\') -eq $outputRoot) {
     Fail "拒绝把输出目录设为盘符根：$OutputDir"
@@ -226,6 +283,13 @@ foreach ($relative in $sidecarDependencyDirs.Keys) {
     }
 }
 
+# Python 必须已在构建阶段准备好；打包阶段只做离线验证，绝不降级或联网修复。
+if (-not $PythonRuntimeDir) { $PythonRuntimeDir = Join-Path $RepoRoot 'runtime/python' }
+if (-not (Test-Path -LiteralPath (Join-Path $PythonRuntimeDir 'bundle.json') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $PythonRuntimeDir 'python-runtime.zip') -PathType Leaf)) { Fail "Python bundle missing：$PythonRuntimeDir；先执行 scripts/prepare_python_runtime.ps1" }
+$pythonLock = Read-RuntimeLock (Join-Path $PSScriptRoot 'python-runtime.lock.json')
+$pythonBundle = Test-PythonRuntimeBundle $PythonRuntimeDir $pythonLock
+Assert-PackageBuildTree $BuildDir
+
 # Node 运行时：Windows 发行包随包内置 node.exe（用户无需自备 Node）。
 if ($NodeVersion -notmatch '^v\d+\.\d+\.\d+$') {
     Fail "非法 Node 版本号 '$NodeVersion'，期望 vX.Y.Z（如 v22.23.4）。"
@@ -262,9 +326,10 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 Write-Host "WebHTV PC 打包：version=$Version build=$buildNumberValue channel=$Channel commit=$ShortCommit"
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-Get-ChildItem -LiteralPath $OutputDir -Force | Remove-Item -Recurse -Force
 
-$stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ('webhtv-pkg-' + [Guid]::NewGuid().ToString('N'))
+
+$stagingRoot = Join-Path $RepoRoot ('.local/webhtv-pkg-' + [Guid]::NewGuid().ToString('N'))
+$expectedStagingRoot = Assert-PackageWorkspacePath $stagingRoot
 $staging = Join-Path $stagingRoot $folderName
 
 try {
@@ -350,6 +415,13 @@ try {
     $nodeFile = Get-Item -LiteralPath $nodeDestination
     $nodeVersionText = $nodeFile.VersionInfo.FileVersion
 
+    $pythonDestination = Join-Path $staging 'runtime/python'
+    New-Item -ItemType Directory -Path $pythonDestination -Force | Out-Null
+    foreach ($name in @('python-runtime.zip','bundle.json')) {
+        Copy-Item -LiteralPath (Join-Path $PythonRuntimeDir $name) -Destination (Join-Path $pythonDestination $name) -Force
+    }
+    Test-PythonRuntimeBundle $pythonDestination $pythonLock | Out-Null
+
     # 4. 签名状态以 Authenticode 实测为准，不靠发布脚本开关猜。
     $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $staging $exeName)
     $statusText = if ($signature) { $signature.Status.ToString() } else { 'UnknownError' }
@@ -428,14 +500,15 @@ Sidecar 宿主（随包）：Python / Node / JVM
 - Node 运行时（随包内置）：$nodeRelativePath（约 $([Math]::Round($nodeFile.Length / 1MB, 1)) MiB）
   - 打包用版本：$NodeVersion；node.exe FileVersion：$(if ([string]::IsNullOrWhiteSpace($nodeVersionText)) { '未知' } else { $nodeVersionText })
   - 用户机器无需自行安装 Node。
-- Python 与 JVM 宿主仍只带入口脚本，不含解释器：对应站源需要本机安装 Python 3 或 JDK 17+，缺失时应用会明确提示「运行时未安装」。
+- Python $($pythonBundle.pythonVersion) 离线运行时随包：runtime/python/python-runtime.zip（许可证与 dist-info 在压缩包内）；无需本机安装，运行/修复不联网。
+- JVM 解释器仍需本机安装 JDK 17+。
 - 第三方许可见 data/flutter_assets/NOTICES.Z。
 "@
     [IO.File]::WriteAllText((Join-Path $staging 'BUILD_INFO.txt'), $buildInfo + "`n", $utf8)
 
     # 7. 随包文件清单（动态库版本 + SHA-256；不逐项列 flutter_assets）
     $inventory = [System.Collections.Generic.List[string]]::new()
-    $inventory.Add('随包文件清单（主程序 / 动态库 / Sidecar 宿主 / 内置 Node 运行时）')
+    $inventory.Add('随包文件清单（主程序 / 动态库 / Sidecar 宿主 / 内置 Node / Python 运行时）')
     $inventory.Add("完整性标签：$integritySummary；网络锁定：$unblockSummary")
     $inventory.Add('flutter_assets 内的资源与第三方许可不逐项列出；许可见 data/flutter_assets/NOTICES.Z。')
     $inventory.Add('')
@@ -454,6 +527,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
         $targets.Add((Get-Item -LiteralPath (Join-Path $staging $relative)))
     }
     $targets.Add((Get-Item -LiteralPath (Join-Path $staging $nodeRelativePath)))
+    foreach ($name in @('python-runtime.zip','bundle.json')) { $targets.Add((Get-Item -LiteralPath (Join-Path $pythonDestination $name))) }
     # 依赖目录逐文件入清单会让清单膨胀到 1200+ 行，这里按目录汇总许可与版本来源。
     $inventory.Add('sidecars/spider-host-js/node_modules/  第三方依赖目录：cheerio (MIT)、crypto-js (MIT)；逐包版本见 sidecars/spider-host-js/package-lock.json')
     $inventory.Add('sidecars/spider-host-jvm/lib/  第三方依赖目录：host.jar 的 MANIFEST Class-Path 闭包，逐 jar 版本见文件名')
@@ -472,6 +546,8 @@ Sidecar 宿主（随包）：Python / Node / JVM
         (($inventory -join "`n") + "`n"),
         $utf8
     )
+
+    Assert-PackageBuildTree $staging -Staging
 
     # 8. zip（含顶层目录，解压即得可运行目录）
     $zipPath = Join-Path $OutputDir $zipName
@@ -534,8 +610,16 @@ Sidecar 宿主（随包）：Python / Node / JVM
                     sha256      = (Get-FileHash -LiteralPath (Join-Path $staging $nodeRelativePath) -Algorithm SHA256).Hash.ToLowerInvariant()
                     fileVersion = if ([string]::IsNullOrWhiteSpace($nodeVersionText)) { $null } else { $nodeVersionText }
                 }
+                [ordered]@{
+                    id = 'python'
+                    version = $pythonBundle.pythonVersion
+                    path = 'runtime/python/python-runtime.zip'
+                    manifest = 'runtime/python/bundle.json'
+                    sha256 = $pythonBundle.archiveSha256
+                }
             )
-            requiresLocal = @('Python 3', 'JDK 17+')
+
+            requiresLocal = @('JDK 17+')
         }
         notes       = $notes
     }
@@ -549,6 +633,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
     Write-Host "完整性：$integrityLabel；网络锁定：$unblockSummary"
 } finally {
     if (Test-Path -LiteralPath $stagingRoot) {
+        Assert-PackageMutationPath $stagingRoot $expectedStagingRoot
         Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

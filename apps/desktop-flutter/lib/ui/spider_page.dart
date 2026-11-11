@@ -17,6 +17,7 @@ import '../services/spider_process.dart';
 import '../services/spider_registry.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'local_sources_page.dart';
 
 class SpiderPage extends StatefulWidget {
   const SpiderPage({super.key, required this.state});
@@ -79,6 +80,17 @@ class _SpiderPageState extends State<SpiderPage> {
                 width: 16,
                 height: 16,
                 child: LoadingBlock(center: false, size: 16),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                key: const ValueKey('spider-local-sources-open'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LocalSourcesPage(state: _state),
+                  ),
+                ),
+                icon: const Icon(Icons.folder_copy_outlined, size: 18),
+                label: const Text('本地源'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(

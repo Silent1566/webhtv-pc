@@ -44,6 +44,7 @@ import 'spider_page.dart';
 import 'theme.dart';
 import 'toast.dart';
 import 'tokens.dart';
+import 'web_home_page.dart';
 
 /// 把状态层存的主题字符串映射成 `ThemeMode`。
 ///
@@ -120,8 +121,9 @@ class StartupArguments {
         final header = argument.substring('--header='.length);
         final separator = header.indexOf(':');
         if (separator > 0) {
-          headers[header.substring(0, separator).trim()] =
-              header.substring(separator + 1).trim();
+          headers[header.substring(0, separator).trim()] = header
+              .substring(separator + 1)
+              .trim();
         }
       } else if (argument.startsWith('--seek=')) {
         seek = double.tryParse(argument.substring('--seek='.length));
@@ -186,7 +188,10 @@ Future<void> main(List<String> args) async {
   await windowManager.ensureInitialized();
   StartupTrace.mark('window-manager');
 
-  final startup = StartupArguments.parse([...args, ...Platform.executableArguments]);
+  final startup = StartupArguments.parse([
+    ...args,
+    ...Platform.executableArguments,
+  ]);
   StartupTrace.sinkPath = startup.traceFile;
   StartupTrace.mark('args-parsed');
 
@@ -201,12 +206,15 @@ Future<void> main(List<String> args) async {
   // 首帧回调后再执行 `then`，而原生 runner 的 `Show()` 也挂在首帧回调上。
   // 因此这里把 `runApp` 放在等待之前：先让 Flutter 开始构建首帧，避免
   // “等首帧 → 才 runApp → 再等首帧”的串行等待放大冷启动时间。
-  final readyToShow = windowManager.waitUntilReadyToShow(windowOptions, () async {
-    StartupTrace.mark('window-ready-to-show');
-    await windowManager.show();
-    await windowManager.focus();
-    StartupTrace.mark('window-shown');
-  });
+  final readyToShow = windowManager.waitUntilReadyToShow(
+    windowOptions,
+    () async {
+      StartupTrace.mark('window-ready-to-show');
+      await windowManager.show();
+      await windowManager.focus();
+      StartupTrace.mark('window-shown');
+    },
+  );
 
   runApp(WebHtvApp(startup: startup));
   StartupTrace.mark('run-app');
@@ -234,7 +242,10 @@ void recordCrashForPaths({
     stderr.writeln(entry);
   } catch (_) {}
   try {
-    SessionRecoveryStore.appendCrashForPaths(paths ?? AppPaths.resolve(), entry);
+    SessionRecoveryStore.appendCrashForPaths(
+      paths ?? AppPaths.resolve(),
+      entry,
+    );
   } catch (_) {}
 }
 
@@ -340,10 +351,7 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
             // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
             // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
             fit: StackFit.expand,
-            children: [
-              child ?? const SizedBox.shrink(),
-              const ToastHost(),
-            ],
+            children: [child ?? const SizedBox.shrink(), const ToastHost()],
           ),
         ),
       ),
@@ -489,7 +497,8 @@ class _AppShellState extends State<AppShell> {
         showToast(
           lastError.userMessage,
           kind: ToastKind.error,
-          detail: '错误码：${lastError.kind.name}'
+          detail:
+              '错误码：${lastError.kind.name}'
               '${lastError.retryable ? " · 可重试" : ""}',
           onDismiss: _state.clearError,
         );
@@ -632,7 +641,10 @@ class _AppShellState extends State<AppShell> {
   }
 
   /// 探测 + 重新导入 + 精确激活一条桥接源；失败时置横幅状态。
-  Future<void> _tryRestoreBridge(String address, LastConfigRecord memory) async {
+  Future<void> _tryRestoreBridge(
+    String address,
+    LastConfigRecord memory,
+  ) async {
     final sync = _state.syncState;
     final device = await sync.probeAutoConnectTarget(address);
     if (!mounted) return;
@@ -640,9 +652,11 @@ class _AppShellState extends State<AppShell> {
       _showBridgeBanner(
         memory,
         address: address,
-        deviceName: _state.lastConfigDevice?.name ??
+        deviceName:
+            _state.lastConfigDevice?.name ??
             _state.deviceNameForUuid(memory.deviceUuid),
-        error: sync.lastError ??
+        error:
+            sync.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '设备探测失败：$address',
@@ -664,7 +678,8 @@ class _AppShellState extends State<AppShell> {
         memory,
         address: device.reachableBase,
         deviceName: device.name,
-        error: sync.lastError ??
+        error:
+            sync.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '该播放源导入失败',
@@ -697,10 +712,7 @@ class _AppShellState extends State<AppShell> {
       _bridgeBanner = null;
       _bannerMemory = null;
     });
-    _state.log.info(
-      '已恢复上次使用的桥接配置（${memory.sourceKey}）',
-      scope: 'bridge',
-    );
+    _state.log.info('已恢复上次使用的桥接配置（${memory.sourceKey}）', scope: 'bridge');
   }
 
   void _showBridgeBanner(
@@ -770,7 +782,7 @@ class _AppShellState extends State<AppShell> {
   Future<void> _loadInitialHome() async {
     if (!mounted) return;
     final site = _state.selectedSite;
-    if (site == null) return;
+    if (site == null || _state.webHomeSourceForSite(site) != null) return;
     if (_state.homeResult != null) return;
     if (_state.contentPhase == LoadPhase.loading) return;
     await _state.loadHome(site);
@@ -802,8 +814,8 @@ class _AppShellState extends State<AppShell> {
               startPosition: widget.startup.seekSeconds == null
                   ? null
                   : Duration(
-                      milliseconds:
-                          (widget.startup.seekSeconds! * 1000).round(),
+                      milliseconds: (widget.startup.seekSeconds! * 1000)
+                          .round(),
                     ),
             ),
           ),
@@ -844,9 +856,9 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openConfigPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)));
     if (mounted) setState(() {});
   }
 
@@ -861,10 +873,22 @@ class _AppShellState extends State<AppShell> {
         selectedKey: _state.selectedSite?.key,
       ),
     );
-    if (selected != null) {
-      _section = ShellSection.browse;
-      await _state.selectSite(selected);
+    if (selected == null) return;
+    // 本地/在线 HTML 首页条目：它不是爬虫，`selectSite` 会走 [AppState.loadHome]
+    // 并得到一次假「站点不可用」。这里直接打开页面宿主（WebView2）。
+    final webHome = _state.webHomeSourceForSite(selected);
+    if (webHome != null) {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => WebHomePage(state: _state, source: webHome),
+        ),
+      );
+      if (mounted) setState(() {});
+      return;
     }
+    _section = ShellSection.browse;
+    await _state.selectSite(selected);
   }
 
   /// 崩溃恢复：用标记里的标识信息按历史续播路径重新解析并播放。
@@ -1128,7 +1152,11 @@ class _StorageWarningBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.folder_off_outlined, size: 18, color: scheme.onErrorContainer),
+          Icon(
+            Icons.folder_off_outlined,
+            size: 18,
+            color: scheme.onErrorContainer,
+          ),
           const SizedBox(width: AppSpace.sm),
           Expanded(
             child: SelectableText(
@@ -1169,7 +1197,9 @@ class _TopBar extends StatelessWidget {
         // 顶栏是世界的"外壳"：比内容低一档的表面，靠发丝线分隔。
         color: scheme.surfaceContainerLowest,
         border: Border(
-          bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.55)),
+          bottom: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: 0.55),
+          ),
         ),
       ),
       child: Row(
@@ -1213,6 +1243,15 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.dns_outlined, size: 18),
             label: Text(site == null ? '选择站点' : '站点：${site.name}'),
           ),
+          if (state.webHomeLoadError != null)
+            Tooltip(
+              key: const ValueKey('webhome-load-error'),
+              message: state.webHomeLoadError!,
+              child: Text(
+                '载入HTML源失败',
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ),
           const Spacer(),
           if (state.importDiagnosticsSummary != null)
             Tooltip(
@@ -1399,10 +1438,7 @@ class _BoundarySheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '使用边界提示',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
+            Text('使用边界提示', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
             const Text(usageBoundaryNotice),
             const SizedBox(height: 16),

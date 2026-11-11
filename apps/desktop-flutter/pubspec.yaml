@@ -39,6 +39,8 @@ dependencies:
   # 追番新集系统通知（Windows toast，经 local_notifier / WinToast）。
   # 选型、版本与失败降级见 docs/adr/0006-following-system-notification.md。
   local_notifier: ^0.1.6
+  file_picker: ^13.3.3
+  webview_windows: ^0.4.0
 
 dev_dependencies:
   flutter_test:

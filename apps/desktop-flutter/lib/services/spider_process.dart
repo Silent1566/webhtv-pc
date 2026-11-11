@@ -27,6 +27,7 @@ import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import 'log_service.dart';
 import 'node_runtime.dart';
+import 'python_environment.dart';
 import 'windows_job.dart';
 
 /// 启动参数。
@@ -35,6 +36,7 @@ class SidecarLaunchSpec {
     required this.siteKey,
     required this.executable,
     this.arguments = const [],
+    this.pythonRuntime = false,
     required this.workingDirectory,
     required this.logFile,
     this.limits = const SpiderLimits(),
@@ -44,6 +46,7 @@ class SidecarLaunchSpec {
   final String siteKey;
   final String executable;
   final List<String> arguments;
+  final bool pythonRuntime;
 
   /// 每站点独立临时工作目录（§9.8）。
   final String workingDirectory;
@@ -386,33 +389,52 @@ class SidecarProcess {
     SidecarLaunchSpec spec, {
     SpiderDebugLog? debugLog,
   }) async {
-    await Directory(spec.workingDirectory).create(recursive: true);
-    await Directory(p.dirname(spec.logFile)).create(recursive: true);
+    final pythonSidecar =
+        spec.pythonRuntime ||
+        RegExp(
+          r'^(python[0-9.]*|py)(\.exe)?$',
+          caseSensitive: false,
+        ).hasMatch(p.basename(spec.executable));
+    if (pythonSidecar) PythonEnvironment.acquireSidecar();
+    try {
+      await Directory(spec.workingDirectory).create(recursive: true);
+      await Directory(p.dirname(spec.logFile)).create(recursive: true);
 
-    final process = await Process.start(
-      spec.executable,
-      spec.arguments,
-      workingDirectory: spec.workingDirectory,
-      // §9.8：只传白名单变量，不继承宿主完整环境。
-      environment: spec.environment,
-      includeParentEnvironment: false,
-      runInShell: false,
-    );
-
-    WindowsJobObject? job;
-    if (Platform.isWindows) {
-      job = WindowsJobObject.create(
-        memoryBytes: spec.limits.memoryBytes,
-        cpuSeconds: spec.limits.cpuSeconds,
+      final process = await Process.start(
+        spec.executable,
+        spec.arguments,
+        workingDirectory: spec.workingDirectory,
+        // §9.8：只传白名单变量，不继承宿主完整环境。
+        environment: pythonSidecar
+            ? PythonEnvironment.sidecarEnvironment(spec.environment)
+            : spec.environment,
+        includeParentEnvironment: false,
+        runInShell: false,
       );
-      if (job != null && !job.assign(process.pid)) {
-        // 保留 job 引用以便 dispose，但隔离等级已被降级。
-      }
-    }
 
-    final instance = SidecarProcess._(process, spec, job, debugLog);
-    instance._wire();
-    return instance;
+      WindowsJobObject? job;
+      if (Platform.isWindows) {
+        job = WindowsJobObject.create(
+          memoryBytes: spec.limits.memoryBytes,
+          cpuSeconds: spec.limits.cpuSeconds,
+        );
+        if (job != null && !job.assign(process.pid)) {
+          // 保留 job 引用以便 dispose，但隔离等级已被降级。
+        }
+      }
+
+      final instance = SidecarProcess._(process, spec, job, debugLog);
+      instance._wire();
+      if (pythonSidecar) {
+        unawaited(
+          instance.done.then((_) => PythonEnvironment.releaseSidecar()),
+        );
+      }
+      return instance;
+    } catch (_) {
+      if (pythonSidecar) PythonEnvironment.releaseSidecar();
+      rethrow;
+    }
   }
 
   void _wire() {
@@ -1104,6 +1126,7 @@ class SpiderHostSupervisor {
           siteKey: siteKey,
           executable: executable,
           arguments: arguments,
+          pythonRuntime: manifest.runtime.toLowerCase().startsWith('python'),
           workingDirectory: workingDirectory,
           logFile: logFile,
           limits: manifest.limits,
@@ -1328,16 +1351,27 @@ class SidecarRuntimeResolver {
   /// 「缺依赖 → exit 3」。仍然要过 [pythonWorks] 验证，坏路径不会把整条链带崩。
   static String? _preferredPython;
 
-  static void preferPythonExecutable(String? path) {
+  static List<String> _preferredPythonArguments = const [];
+  static void preferPythonExecutable(
+    String? path, {
+    List<String> arguments = const [],
+    bool verified = false,
+  }) {
     final trimmed = path?.trim();
     final next = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-    if (_preferredPython == next) return;
     _preferredPython = next;
-    _pythonProbed = false;
-    _pythonResolved = null;
+    _preferredPythonArguments = List.unmodifiable(arguments);
+    _pythonProbed = verified;
+    _pythonResolved = verified && next != null
+        ? SidecarCommand(executable: next, arguments: _preferredPythonArguments)
+        : null;
   }
 
-  static List<SidecarCommand> pythonCandidates() {
+  static List<SidecarCommand> pythonCandidates({
+    bool queryLauncher = true,
+    String? launcherExecutable,
+    ProcessResult Function(String, List<String>)? synchronousLauncherRunner,
+  }) {
     final candidates = <SidecarCommand>[];
     void add(String executable, List<String> arguments) {
       if (candidates.any(
@@ -1354,11 +1388,11 @@ class SidecarRuntimeResolver {
 
     final preferred = _preferredPython;
     if (preferred != null && File(preferred).existsSync()) {
-      add(preferred, const []);
+      add(preferred, _preferredPythonArguments);
     }
 
     if (Platform.isWindows) {
-      final launcher = _resolveFromPath('py.exe');
+      final launcher = launcherExecutable ?? _resolveFromPath('py.exe');
       if (launcher != null) add(launcher, const ['-3']);
     }
     for (final name
@@ -1368,7 +1402,140 @@ class SidecarRuntimeResolver {
       final resolved = _resolveFromPath(name);
       if (resolved != null) add(resolved, const []);
     }
+    if (Platform.isWindows && queryLauncher) {
+      final launcher = launcherExecutable ?? _resolveFromPath('py.exe');
+      if (launcher != null) {
+        try {
+          final result = synchronousLauncherRunner == null
+              ? _boundedLauncherSync(launcher)
+              : synchronousLauncherRunner(launcher, const ['-0p']);
+          if (result.exitCode == 0) {
+            final output = '${result.stdout ?? ''}\n${result.stderr ?? ''}';
+            for (final executable in pythonExecutablesFromLauncherOutput(
+              output,
+            )) {
+              if (File(executable).existsSync()) add(executable, const []);
+            }
+          }
+        } catch (_) {
+          // launcher 不可用时保留 PATH 与显式解释器候选。
+        }
+      }
+    }
     return candidates;
+  }
+
+  static Future<List<SidecarCommand>> pythonCandidatesAsync({
+    String? launcherExecutable,
+    List<SidecarCommand>? pathCandidates,
+    Future<ProcessResult> Function(String, List<String>)? launcherRunner,
+    Duration launcherTimeout = const Duration(seconds: 5),
+    ProcessResult Function(String, List<String>)? synchronousLauncherRunner,
+  }) async {
+    final candidates = [...?pathCandidates];
+    if (pathCandidates == null) {
+      candidates.addAll(
+        pythonCandidates(
+          queryLauncher: false,
+          launcherExecutable: launcherExecutable,
+          synchronousLauncherRunner: synchronousLauncherRunner,
+        ),
+      );
+    }
+    final launcher =
+        launcherExecutable ??
+        (Platform.isWindows ? _resolveFromPath('py.exe') : null);
+    if (launcher == null) return candidates;
+    try {
+      final result = await (launcherRunner == null
+          ? _runLauncher(launcher, launcherTimeout)
+          : launcherRunner(launcher, const ['-0p']).timeout(launcherTimeout));
+      if (result.exitCode == 0) {
+        for (final executable in pythonExecutablesFromLauncherOutput(
+          '${result.stdout}\n${result.stderr}',
+        )) {
+          if (File(executable).existsSync() &&
+              !candidates.any(
+                (c) =>
+                    c.executable.toLowerCase() == executable.toLowerCase() &&
+                    c.arguments.isEmpty,
+              )) {
+            candidates.add(
+              SidecarCommand(executable: executable, arguments: const []),
+            );
+          }
+        }
+      }
+    } catch (_) {}
+    return candidates;
+  }
+
+  static Future<ProcessResult> _runLauncher(
+    String launcher,
+    Duration timeout,
+  ) async {
+    final process = await Process.start(launcher, const ['-0p']);
+    try {
+      final output = await Future.wait<Object>([
+        process.exitCode,
+        process.stdout.transform(systemEncoding.decoder).join(),
+        process.stderr.transform(systemEncoding.decoder).join(),
+      ]).timeout(timeout);
+      return ProcessResult(process.pid, output[0] as int, output[1], output[2]);
+    } catch (_) {
+      process.kill();
+      await process.exitCode.timeout(
+        const Duration(seconds: 1),
+        onTimeout: () => -1,
+      );
+      rethrow;
+    }
+  }
+
+  static ProcessResult _boundedLauncherSync(String launcher) {
+    final shell = p.join(
+      Platform.environment['SystemRoot'] ?? r'C:\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    final escaped = launcher.replaceAll("'", "''");
+    final command =
+        r'$s=[Diagnostics.ProcessStartInfo]::new();'
+        "\$s.FileName='$escaped';"
+        r'$s.Arguments="-0p";$s.UseShellExecute=$false;'
+        r'$s.RedirectStandardOutput=$true;$s.RedirectStandardError=$true;'
+        r'$p=[Diagnostics.Process]::new();$p.StartInfo=$s;[void]$p.Start();'
+        r'$o=$p.StandardOutput.ReadToEndAsync();$e=$p.StandardError.ReadToEndAsync();'
+        r'if(!$p.WaitForExit(5000)){$p.Kill();exit 124};'
+        r'if(!$o.Wait(500)){exit 124};$o.Result;exit $p.ExitCode';
+    return Process.runSync(shell, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      command,
+    ]);
+  }
+
+  static List<String> pythonExecutablesFromLauncherOutput(String output) {
+    final paths = <String>[];
+    final seen = <String>{};
+    final pattern = RegExp(
+      r'^\s*-(?:V:)?\S+\s+(?:\*\s+)?(.+\.exe)\s*$',
+      caseSensitive: false,
+    );
+    for (final line in const LineSplitter().convert(output)) {
+      final path = pattern.firstMatch(line)?.group(1)?.trim();
+      if (path == null ||
+          !p.windows.isAbsolute(path) ||
+          p.windows.basename(path).toLowerCase() != 'python.exe' ||
+          !seen.add(p.windows.normalize(path).toLowerCase())) {
+        continue;
+      }
+      paths.add(path);
+    }
+    return paths;
   }
 
   /// 候选是否**真的能启动**：`--version` 退出码为 0 且输出 `Python 3.x`。

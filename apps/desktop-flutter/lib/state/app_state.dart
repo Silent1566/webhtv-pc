@@ -9,7 +9,6 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 
 import '../services/external_player.dart';
 
@@ -85,11 +84,14 @@ import '../services/direct_spider_registrar.dart';
 import '../services/epg_service.dart';
 import '../services/jar_intake.dart';
 import '../services/last_config_store.dart';
+import '../services/local_source_import.dart';
+import '../services/local_spider_removal.dart';
+import '../services/local_spider_scanner.dart';
 import '../services/log_service.dart';
 import '../services/outbound_proxy.dart';
 import '../services/live_service.dart';
 import '../services/proxy_server.dart';
-import '../services/python_runtime_provision.dart';
+import '../services/python_environment.dart';
 import '../services/realtime_sync_engine.dart';
 import '../services/search_suggest_service.dart';
 import '../services/site_service.dart';
@@ -103,12 +105,14 @@ import '../services/sync_server.dart';
 import '../services/tmdb_cache.dart';
 import '../services/tmdb_config_store.dart';
 import '../services/ui_preferences_store.dart';
+import '../services/web_home_store.dart';
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_history.dart';
 import '../services/tmdb_identity_service.dart';
 import '../services/tmdb_season_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/tmdb_stores.dart';
+import 'local_site_sources.dart';
 import 'playback_source_context.dart';
 import 'search_state.dart';
 import 'sync_state.dart';
@@ -227,7 +231,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
     FollowingNotifier? followingNotifier,
+    PythonEnvironment? pythonEnvironment,
   }) : paths = paths ?? AppPaths.resolve(),
+       _injectedPythonEnvironment = pythonEnvironment,
        _externalPlayerDetector =
            externalPlayerDetector ?? ExternalPlayers.detect,
        log = log ?? LogService(),
@@ -272,6 +278,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _cspBinding = CspJvmBinding(
       root: p.join(this.paths.configDir, 'spiders', 'csp'),
     );
+    _webHomeStore = WebHomeStore(root: p.join(this.paths.configDir, 'webhome'));
     _proxy = LocalProxyServer(log: this.log);
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
@@ -454,6 +461,18 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// `csp_*` 站点的桌面 jar 缓存绑定（§9.3 `tvbox-java-v1`、ADR-0002）。
   late final CspJvmBinding _cspBinding;
 
+  /// 本地 HTML 首页注入（webHome）登记表：`<config>/webhome`。
+  ///
+  /// 与 `spiders/` 分开：webHome 由 WebView2 承载，不是 `webhtv-ipc-v1`
+  /// 运行时，混进 manifest 注册表会让站点可用性判定出现「未知 runtime」。
+  late final WebHomeStore _webHomeStore;
+
+  /// 本地源扫描器（只读、不执行）。无状态，参数取自 [LocalSpiderScanner] 默认值。
+  final LocalSpiderScanner _localScanner = const LocalSpiderScanner();
+
+  /// 上次扫描的文件夹（仅本次会话记忆，避免用户每次重新选）。
+  String _lastLocalScanFolder = '';
+
   /// 本地代理(§11)。默认只监听 127.0.0.1,按需启动。
   late final LocalProxyServer _proxy;
 
@@ -482,6 +501,38 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 注入站点（`README.md` P1-2）：与配置记录分开存放，读取时合并。
   List<InjectedSiteEntry> _injectedSites = const [];
+
+  /// 本地导入源（`spiders/local/<key>/` + 启用的 `webhome/<key>/`）构造出的站点
+  /// 条目缓存。注册表或 webHome 登记表变化时由 [_invalidateLocalSites] 置空。
+  List<Site>? _localSitesCache;
+  final Set<String> _pendingLocalImports = {};
+  Map<String, WebHomeSource>? _webHomeSourcesCache;
+  String? _webHomeLoadError;
+
+  /// 登记表严格读取失败的原因；内部降级不代表登记表为空，也不会写回。
+  String? get webHomeLoadError => _webHomeLoadError;
+
+  Map<String, WebHomeSource> _safeWebHomeSources() {
+    final cached = _webHomeSourcesCache;
+    if (cached != null) return cached;
+    try {
+      final sources = _webHomeStore.list();
+      _webHomeLoadError = null;
+      return _webHomeSourcesCache = {
+        for (final source in sources)
+          if (source.enabled) source.key: source,
+      };
+    } on FormatException catch (error) {
+      _webHomeLoadError = '载入HTML源失败：$error';
+    } on FileSystemException catch (error) {
+      _webHomeLoadError = '载入HTML源失败：$error';
+    }
+    log.error(_webHomeLoadError!, scope: 'site');
+    return _webHomeSourcesCache = const {};
+  }
+
+  /// 因同 key 冲突被拒绝的本地 key（用户配置 / JSON 注入优先），供界面如实报告。
+  List<String> _localSourceConflicts = const [];
 
   /// 合并后的配置缓存；配置或注入变化时置空。
   AppConfig? _effectiveConfigCache;
@@ -530,6 +581,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   ///
   /// 没有它时，用户「切到别的分类」与「上一分类第 2 页的响应」会赛跑：迟到
   /// 的追加会把旧分类的内容拼到新分类列表后面。
+  int _homeRunId = 0;
   int _categoryRunId = 0;
 
   List<ConfigRecord> _configs = const [];
@@ -1001,77 +1053,122 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     'lxml',
   ];
 
-  /// 托管运行时是否已经尝试过（无论成败，一次进程只尝试一次）。
-  bool _pythonRuntimeTried = false;
+  final PythonEnvironment? _injectedPythonEnvironment;
+  late final PythonEnvironment _pythonEnvironment =
+      _injectedPythonEnvironment ?? PythonEnvironment(paths: paths);
+  PythonEnvironmentStatus? get pythonEnvironmentStatus =>
+      _pythonEnvironment.status;
+  bool get pythonEnvironmentBusy => _pythonEnvironment.busy;
+  String? get pythonEnvironmentError => _pythonEnvironment.error;
 
+  Future<void>? _sidecarShutdown;
+
+  Future<void> get pythonEnvironmentIdle async {
+    final pending = _pythonReady;
+    if (pending != null) await pending;
+    await _pythonEnvironment.idle;
+    await _sidecarShutdown;
+  }
+
+  Future<void> refreshPythonEnvironment() async {
+    final pending = _pythonEnvironment.refresh();
+    if (!_disposed) notifyListeners();
+    await pending;
+    if (!_disposed) {
+      _applyPythonEnvironment();
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _changePythonEnvironment(Future<bool> Function() action) async {
+    final pending = action();
+    if (!_disposed) notifyListeners();
+    final ok = await pending;
+    if (!_disposed) {
+      if (ok) _applyPythonEnvironment();
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Future<bool> repairPythonEnvironment() =>
+      _changePythonEnvironment(_pythonEnvironment.repair);
+  Future<bool> setCustomPythonExecutable(String executable) =>
+      _changePythonEnvironment(() => _pythonEnvironment.setCustom(executable));
+  Future<bool> useDefaultPythonEnvironment() =>
+      _changePythonEnvironment(_pythonEnvironment.useDefault);
+
+  bool _pythonRuntimeTried = false;
+  Future<void>? _pythonReady;
   bool get _pythonProvisionDisabled =>
+      _injectedPythonEnvironment == null &&
       Platform.environment['WEBHTV_DISABLE_PYTHON_PROVISION'] == '1';
 
-  /// 后台准备带依赖的 Python 解释器（不阻塞首屏；失败只记日志）。
-  ///
-  /// 用户诉求（2026-10-24）：「如果需要迁移啥的不应该程序自己做嘛？」——技术栈
-  /// 迁移（CatVod 壳 → Python 运行时）本来就该由程序自己完成，不该让用户看到
-  /// 一句 code=3。
-  ///
-  /// 约束：
-  /// - 只在配置里**确实存在** CatVod 壳站点时触发（普通 js/py 站点零成本）；
-  /// - 本机解释器已带依赖时直接采用，不建 venv、不联网；
-  /// - 建 venv + pip 安装是分钟级同步操作，必须放后台 isolate；
-  /// - 永不抛异常、永不静默降级：失败只把原因写进日志，站点仍如实报不可用。
-  Future<void> _preparePythonRuntimeQuietly() async {
-    if (_pythonRuntimeTried) return;
-    _pythonRuntimeTried = true;
-    if (_pythonProvisionDisabled) return;
-    try {
-      final config = effectiveConfig;
-      if (config == null) return;
-      final needsCatVod = config.sites.any(
-        (site) => catVodLoaderUrl(site) != null,
-      );
-      if (!needsCatVod) return;
-      final root = managedPythonRoot(paths.cacheDir);
-      final candidates = SidecarRuntimeResolver.pythonCandidates()
-          .map(
-            (command) => PythonBaseCandidate(
-              executable: command.executable,
-              arguments: command.arguments,
-            ),
-          )
-          .toList(growable: false);
-      final result = await Isolate.run(
-        () => prepareCatVodPythonRuntimeSync(
-          runtimeRoot: root,
-          baseCandidates: candidates,
-        ),
-      );
-      if (_disposed) return;
-      if (!result.ok) {
-        // 不静默降级：站点仍会如实报「未找到带 CatVod 依赖的 Python 运行时」，
-        // 这里把程序化准备失败的原因写进日志，便于用户/后续排查。
-        log.warning(
-          'Python 运行时准备失败（${result.status.name}）：${result.message}',
-          scope: 'spider',
-        );
-        return;
-      }
-      if (result.status == ProvisionStatus.created) {
-        log.info('已创建托管 Python 运行时：${result.executable}', scope: 'spider');
-      }
-      // 命中的解释器（本机自带依赖的那个，或刚建好的 venv）优先：清掉解释器
-      // 选择缓存，让后续 `_pythonCommandForCatVod` 直接复用它；运行时的构造
-      // 命令是**快照**，所以还要让 Router 丢掉上一代 runtime。
-      LocalSpiderCommand.preferPythonExecutable(result.executable);
-      _router.invalidateRuntimes();
-      log.info(
-        'Python 运行时就绪：${result.executable}'
-        '${isManagedPythonExecutable(result.executable, root) ? '（托管）' : ''}',
-        scope: 'spider',
-      );
-      notifyListeners();
-    } catch (error) {
-      // Isolate.run 失败、路径不可写等：如实记日志，不打断首屏。
-      log.warning('Python 运行时准备失败：$error', scope: 'spider');
+  void _applyPythonEnvironment() {
+    if (_disposed) return;
+    final status = pythonEnvironmentStatus;
+    LocalSpiderCommand.preferPythonExecutable(
+      status != null && status.version.startsWith('3.')
+          ? status.executable
+          : null,
+      arguments: [..._pythonEnvironment.arguments, '-B'],
+      verified: status != null,
+      catVodReady: status?.ready ?? false,
+    );
+    _router.invalidateRuntimes();
+    for (final context in _playbackContexts.values) {
+      context.service.router.invalidateRuntimes();
     }
+    if (status?.ready ?? false) {
+      log.info('Python 运行时就绪：${status!.executable}', scope: 'spider');
+    } else if (status?.error != null) {
+      log.warning('Python 运行时准备失败：${status!.error}', scope: 'spider');
+    }
+  }
+
+  Future<void> _preparePythonRuntimeQuietly({bool force = false}) {
+    final pending = _pythonReady;
+    if (pending != null) return pending;
+    if (_pythonRuntimeTried || _pythonProvisionDisabled || _disposed) {
+      return Future.value();
+    }
+    final config = effectiveConfig;
+    final needsPython =
+        config?.sites.any((site) {
+              final kind = directSpiderKind(site);
+              return kind == DirectSpiderKind.py ||
+                  kind == DirectSpiderKind.catVod;
+            }) ==
+            true ||
+        _spiderRegistry.spiders.values.any(
+          (spider) =>
+              spider.manifest.runtime.toLowerCase().startsWith('python'),
+        );
+    if (!needsPython && !force) return Future.value();
+    _pythonRuntimeTried = true;
+    if (pythonEnvironmentStatus == null) {
+      LocalSpiderCommand.preferPythonExecutable(null, verified: true);
+      _router.invalidateRuntimes();
+    }
+    final future = refreshPythonEnvironment().whenComplete(() {
+      _pythonReady = null;
+    });
+    _pythonReady = future;
+    return future;
+  }
+
+  Future<void> _waitForPythonSite(Site site) async {
+    final kind = directSpiderKind(site);
+    final local = SpiderLocalBinding(registry: _spiderRegistry)
+        .resolve(site.api);
+    if (kind != DirectSpiderKind.py &&
+        kind != DirectSpiderKind.catVod &&
+        local?.manifest.runtime.toLowerCase().startsWith('python') != true) {
+      return;
+    }
+    if (kind != null) await _waitForDirectRegistration();
+    await _preparePythonRuntimeQuietly(force: true);
+    if (pythonEnvironmentBusy) await _pythonEnvironment.refresh();
   }
 
   Future<void> _registerDirectSpidersQuietly() async {
@@ -1344,9 +1441,69 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 写回配置记录时必须用 [_config]，否则会把注入固化进用户配置。
   AppConfig? get effectiveConfig {
     final config = _config;
-    if (config == null) return null;
-    if (_injectedSites.isEmpty) return config;
-    return _effectiveConfigCache ??= mergeInjectedSites(config, _injectedSites);
+    final local = localSourceSites;
+    // 没有任何配置、也没有本地源：保持既有语义（null = 还没配置）。
+    if (config == null && local.isEmpty) return null;
+    if (config != null && local.isEmpty && _injectedSites.isEmpty) {
+      return config;
+    }
+    final cached = _effectiveConfigCache;
+    if (cached != null) return cached;
+
+    // 合并链：用户配置 → JSON 注入 → 本地源。前两级沿用既有语义（注入同 key
+    // 覆盖配置），本地只**追加**、同 key 让位并记入 conflicts。
+    AppConfig? base = config;
+    if (base != null && _injectedSites.isNotEmpty) {
+      base = mergeInjectedSites(base, _injectedSites);
+    }
+    final merged = mergeLocalSourceSites(base, local);
+    _localSourceConflicts = merged.rejectedKeys;
+    if (_localSourceConflicts.isNotEmpty) {
+      log.warning(
+        '本地源与既有站点同 key，已保留既有站点并跳过：${_localSourceConflicts.join(", ")}',
+        scope: 'site',
+      );
+    }
+    return _effectiveConfigCache = merged.config;
+  }
+
+  /// 本地导入源对应的站点条目（py/js 用 `spider-local:`，html 用 `web-home:`）。
+  ///
+  /// 停用的 webHome 源不出现在这里（用户停用即从选择列表消失）。
+  List<Site> get localSourceSites => _localSitesCache ??= buildLocalSourceSites(
+    // 只认 `spiders/local/<key>/`：根级 manifest 是被配置/直连注册引用的
+    // 存在，自动变成站点会让站点集合与配置不一致（见 isImportedLocalSpider）。
+    spiders: _spiderRegistry.sortedSpiders.where(
+      (spider) => isImportedLocalSpider(spider, _spiderRegistry.root),
+    ),
+    webHomeSources: _safeWebHomeSources().values,
+  );
+
+  /// 被既有站点占用的本地 key（同 key 冲突的如实记录）。
+  List<String> get localSourceConflicts =>
+      List<String>.unmodifiable(_localSourceConflicts);
+
+  /// 站点对应的本地 HTML 首页源；不是 HTML 形态或已停用/已删除时返回 null。
+  ///
+  /// 这是「HTML 条目点击后打开页面而不是加载首页」的识别接缝：调用方只需
+  /// 判断返回值，不必自己解析 `api`。
+  WebHomeSource? webHomeSourceForSite(Site site) {
+    final key = webHomeKeyOfSite(site);
+    if (key == null) return null;
+    return _safeWebHomeSources()[key];
+  }
+
+  /// 本地源集合变化后统一失效缓存并重建站点服务/路由。
+  ///
+  /// 导入、刷新、启停、删除都必须走这里：只 `notifyListeners()` 不会让
+  /// [effectiveConfig]/[siteItems] 重新合并（缓存还在），用户看到的是导入前后一样的列表。
+  void _invalidateLocalSites() {
+    _localSitesCache = null;
+    _webHomeSourcesCache = null;
+    _effectiveConfigCache = null;
+    // 站点服务与分类判定都读 effectiveConfig：重建它，本地源才能立刻可选/可用。
+    _attachSiteService();
+    notifyListeners();
   }
 
   /// 当前注入站点（供设置页展示）。
@@ -1795,7 +1952,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _searchHistory = store.searchKeywords;
   }
 
-  bool get hasConfig => _config != null && _config!.sites.isNotEmpty;
+  bool get hasConfig => effectiveConfig?.sites.isNotEmpty ?? false;
 
   /// 站点列表(含运行时可用性),隐藏 `hide=1` 的站点。
   ///
@@ -1809,9 +1966,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         .map(
           (site) => SiteListItem(
             site: site,
-            // §8.1:可用性判定必须区分「运行时未安装」与「站点不可用」,
-            // 因此这里用带注册表的实例方法，而不是静态 `classify`。
-            availability: _router.classifySite(site),
+            // HTML 首页不是爬虫：不能交给路由判可用性（会报「manifest 未注册」，
+            // 而真实原因是它由 WebView2 承载）。走路由前先识别这一形态。
+            availability: webHomeSourceForSite(site) != null
+                ? webHomeSiteAvailability
+                // §8.1:可用性判定必须区分「运行时未安装」与「站点不可用」,
+                // 因此这里用带注册表的实例方法，而不是静态 `classify`。
+                : _router.classifySite(site),
           ),
         )
         .toList();
@@ -1883,6 +2044,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       );
     }
     recovery.beginSession(appVersion: appVersion);
+
+    // 本地导入源（`spiders/local/<key>/`，见 [SpiderManifestRegistry.scan]）必须在
+    // 恢复配置**之前**进注册表：`_attachSiteService` 用 effectiveConfig 建站点服务，
+    // 晚扫描会让重启后的首屏站点列表缺掉用户上次导入的本地源
+    // （用户看到的是「导入的源重启就不见了」）。
+    await _spiderRegistry.scan();
+    _localSitesCache = null;
+    _webHomeSourcesCache = null;
+    _effectiveConfigCache = null;
 
     // 「最后一次使用的配置」记忆（Phase 10）：必须早于设备历史读取之后的
     // 任何决定，但**读取本身不探测**——探测等 UI 首帧之后再做（不能拖慢启动）。
@@ -1976,6 +2146,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         _config = null;
         _activeRecord = null;
       }
+    }
+
+    if (_siteService == null && effectiveConfig != null) {
+      _attachSiteService();
     }
 
     stopwatch.stop();
@@ -2667,7 +2841,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // CatVod 壳站点（api=csp_PyProxy + ext.loader 指向 .py）在模块顶层就 import
     // requests/Crypto/lxml。用户诉求（2026-10-24）「如果需要迁移啥的不应该程序
     // 自己做嘛？」——让程序自己把带依赖的解释器准备好（本机已有就直接用，否则
-    // 后台建托管 venv），而不是让用户撞一句 code=3。同样不阻塞首屏。
+    // 从离线 ZIP 准备专用环境），而不是让用户撞一句 code=3。同样不阻塞首屏。
     unawaited(_preparePythonRuntimeQuietly());
     // csp_* 站点：配置里声明的 jar 若指向远端地址，自动取回并静态检测。
     // 能加载的自动装好；不能加载的把结论写进 probe.json，列表与详情直接回显
@@ -2707,7 +2881,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // - 找不到就退回 `config.defaultSite()`（首次使用即此分支）。
     if (_selectedSite == null) {
       final remembered = _siteByKey(config, _uiPreferences?.lastSiteKey ?? '');
-      if (remembered != null) {
+      if (remembered != null && webHomeKeyOfSite(remembered) == null) {
         _selectedSite = remembered;
         log.info(
           '恢复上次使用的站点 site=${remembered.key.isEmpty ? remembered.name : remembered.key}',
@@ -2715,7 +2889,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         );
       }
     }
-    _selectedSite ??= config.defaultSite();
+    final defaultSite = config.defaultSite();
+    _selectedSite ??=
+        defaultSite != null && webHomeKeyOfSite(defaultSite) == null
+        ? defaultSite
+        : config.sites
+              .where((site) => !site.hide && webHomeKeyOfSite(site) == null)
+              .firstOrNull;
   }
 
   /// 按 key（或名称兜底）在当前配置里找站点；找不到返回 `null`。
@@ -3475,16 +3655,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// 选择站点并加载首页。
   Future<void> selectSite(Site site) async {
+    _homeRunId++;
     // 换站点时作废在途详情请求：旧站点的响应不得覆盖新站点的详情（§8.3）。
     _detailRunId++;
     _selectedSite = site;
-    // 记住本次选择：重启后默认回到这个站点（用户需求 2026-10-10）。
-    // 写盘失败不影响当前会话（内存已生效），因此不 await 结果。
-    // `_uiPreferences` 为 null（未 bootstrap）时安静跳过，不让选站点失败。
-    unawaited(
-      _uiPreferences?.rememberSite(site.key.isEmpty ? site.name : site.key) ??
-          Future<void>.value(),
-    );
     _categoryResult = null;
     _detailResult = null;
     _detailError = null;
@@ -3493,6 +3667,21 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 筛选与分页都是**站点/分类相关**的，换站点必须一起作废（见 _resetCategoryPaging）。
     _categoryFilters = const {};
     _resetCategoryPaging();
+    // 本地 HTML 首页不是爬虫站点：内容由 `WebHomePage`（WebView2）承载，走
+    // [loadHome] 只会得到一次假「站点不可用」。这里只登记选中态，也**不**写
+    // 「最近使用站点」——否则下次启动会把一个不能加载首页的条目当成默认站点。
+    if (webHomeKeyOfSite(site) != null) {
+      _homeResult = null;
+      notifyListeners();
+      return;
+    }
+    // 记住本次选择：重启后默认回到这个站点（用户需求 2026-10-10）。
+    // 写盘失败不影响当前会话（内存已生效），因此不 await 结果。
+    // `_uiPreferences` 为 null（未 bootstrap）时安静跳过，不让选站点失败。
+    unawaited(
+      _uiPreferences?.rememberSite(site.key.isEmpty ? site.name : site.key) ??
+          Future<void>.value(),
+    );
     notifyListeners();
     await loadHome(site);
   }
@@ -3533,21 +3722,33 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 看到的是「请选择一个分类」的空态，必须先手动点一下才有内容——既然站点已经
   /// 给了分类列表，帮用户选第一个是零风险的行为。
   Future<void> loadHome(Site site) async {
+    if (webHomeKeyOfSite(site) != null) return;
     final service = _siteService;
     if (service == null) return;
+    final runId = ++_homeRunId;
+    bool current() =>
+        !_disposed &&
+        runId == _homeRunId &&
+        identical(service, _siteService) &&
+        _selectedSite?.key == site.key &&
+        _selectedSite?.api == site.api &&
+        _selectedSite?.name == site.name;
     // 直连站源（.js/.py/CatVod 壳）要先等注册落定，否则首页会拿到一次
     // 假「运行时未支持」（真实原因只是注册还没写完）。真 Android jar 不在
     // 这一集合里，仍然立即如实报「不支持」。
     if (directSpiderKind(site) != null &&
         _router.directSpiders[site.key] == null) {
       await _waitForDirectRegistration();
-      if (_disposed) return;
+      if (!current()) return;
     }
+    await _waitForPythonSite(site);
+    if (!current()) return;
     _contentPhase = LoadPhase.loading;
     _lastError = null;
-    notifyListeners();
+    if (current()) notifyListeners();
     try {
       final outcome = await service.home(site);
+      if (!current()) return;
       _homeResult = outcome.value;
       _contentPhase = LoadPhase.ready;
       log.info(
@@ -3561,7 +3762,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       final first = outcome.value.classes.isEmpty
           ? null
           : outcome.value.classes.first;
-      if (outcome.value.list.isEmpty && first != null) {
+      if (current() && outcome.value.list.isEmpty && first != null) {
         log.info(
           '首页无推荐内容，自动进入第一个分类 '
           't=${first.typeId} name=${first.typeName}',
@@ -3571,6 +3772,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         return;
       }
     } catch (error) {
+      if (!current()) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -3578,7 +3780,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       _contentPhase = LoadPhase.failed;
       log.error('首页加载失败 site=${site.key} ${failure.logLine}', scope: 'site');
     }
-    notifyListeners();
+    if (current()) notifyListeners();
   }
 
   /// 作废分类分页状态（换站点 / 换配置 / 回首页时调用）。
@@ -3607,9 +3809,11 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final service = _siteService;
     final site = _selectedSite;
     if (service == null || site == null) return;
+    final runId = ++_categoryRunId;
+    await _waitForPythonSite(site);
+    if (_disposed || runId != _categoryRunId) return;
     final effective = filters ?? _categoryFilters;
     // 新一次加载：作废在途的“下一页”响应，避免把上一份列表追加到新列表后面。
-    final runId = ++_categoryRunId;
     _selectedTypeId = typeId;
     _categoryFilters = effective;
     _categoryResult = null;
@@ -3788,6 +3992,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final service = _siteService;
     if (service == null) return null;
     try {
+      await _waitForPythonSite(site);
+      if (_disposed) return null;
       final outcome = await service.search(
         site,
         keyword: keyword,
@@ -3826,6 +4032,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     if (service == null) {
       throw AppError(AppErrorKind.siteUnsupported, '站点服务不可用：$siteKey');
     }
+    await _waitForPythonSite(site);
+    if (_disposed) return const [];
     final outcome = await service.detail(
       site,
       vodId,
@@ -4275,6 +4483,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return;
     final runId = ++_detailRunId;
+    await _waitForPythonSite(site);
+    if (_disposed || runId != _detailRunId) return;
     _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
@@ -4440,6 +4650,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 本次解析用的站点：覆盖优先，之后所有分支（service/proxy/日志）共用它。
     final site = siteOverride ?? _selectedSite;
     if (service == null || site == null) return null;
+    await _waitForPythonSite(site);
+    if (_disposed) return null;
     try {
       final outcome = await service.resolvePlayback(
         site: site,
@@ -4672,6 +4884,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final context = playbackContextFor(sourceKey);
     final site = context?.siteByKey(siteKey);
     if (context == null || site == null) return null;
+    await _waitForPythonSite(site);
+    if (_disposed || _isStale(isCurrent)) return null;
     final outcome = await context.service.resolvePlayback(
       site: site,
       episodeTarget: episodeTarget,
@@ -5363,7 +5577,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final found = await _spiderRegistry.scan();
     await _supervisor.cleanStaleWorkDirs();
     log.info('本地 Spider 已扫描：${found.length} 个', scope: 'spider');
-    notifyListeners();
+    // 手工往 `spiders/local/` 放源后重新扫描，站点列表也要跟着更新。
+    _invalidateLocalSites();
     return found;
   }
 
@@ -5484,6 +5699,166 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     );
     if (removed) notifyListeners();
     return removed;
+  }
+
+  // -------------------------------------------------------------------------
+  // 本地爬虫源（文件夹扫描 → 预览勾选 → 导入 → 长期保留）
+  // -------------------------------------------------------------------------
+
+  /// Spider 根目录（`<config>/spiders`）；本地源落在其 `local/` 子目录。
+  String get spiderRoot => _spiderRegistry.root;
+
+  /// 上次扫描的文件夹（本会话记忆，供页面回填）。
+  String get lastLocalScanFolder => _lastLocalScanFolder;
+
+  /// 已导入的 HTML 首页注入源（webHome）。
+  List<WebHomeSource> get webHomeSources => _webHomeStore.list();
+
+  /// 某个 webHome 源的资源目录（WebView2 虚拟主机映射用）。
+  String webHomeDirectory(String key) => _webHomeStore.directoryFor(key);
+
+  /// 扫描文件夹里的本地源候选。**只读，不执行任何被扫描文件。**
+  Future<LocalScanReport> scanLocalSources(String folder) async {
+    final report = await _localScanner.scan(folder);
+    if (report.folder.isNotEmpty) _lastLocalScanFolder = report.folder;
+    log.info(
+      '本地源扫描 folder=${report.folder} candidates=${report.candidates.length} '
+      'skipped=${report.skipped.length} truncated=${report.truncated}',
+      scope: 'spider',
+    );
+    return report;
+  }
+
+  /// 导入勾选的候选：`.py`/`.js` 落 `spiders/local/<key>/`，
+  /// `.html` 落 `webhome/<key>/` 并登记。同名 key 一律拒绝。
+  Future<LocalImportResult> importLocalSources(
+    List<LocalSourceCandidate> picked,
+  ) async {
+    final importer = LocalSourceImporter(
+      spiderRoot: _spiderRegistry.root,
+      registry: _spiderRegistry,
+      webHomeStore: _webHomeStore,
+      log: log,
+    );
+    final outcomes = <LocalImportOutcome>[];
+    for (final candidate in picked) {
+      if (!_pendingLocalImports.add(candidate.key)) {
+        outcomes.add(
+          LocalImportOutcome(
+            key: candidate.key,
+            kind: candidate.kind,
+            ok: false,
+            message: '源 key=${candidate.key} 正在导入，请等待完成后重试',
+          ),
+        );
+        continue;
+      }
+      try {
+        // 写盘前统一检查两套导入空间；逐个导入使同批次新占用也可见。
+        if (_spiderRegistry.byKey(candidate.key) != null ||
+            _webHomeStore.contains(candidate.key)) {
+          outcomes.add(
+            LocalImportOutcome(
+              key: candidate.key,
+              kind: candidate.kind,
+              ok: false,
+              message: '源 key=${candidate.key} 已被既有源占用，请改名后导入',
+            ),
+          );
+          continue;
+        }
+        outcomes.addAll((await importer.importSelected([candidate])).outcomes);
+      } on FormatException catch (error) {
+        outcomes.add(
+          LocalImportOutcome(
+            key: candidate.key,
+            kind: candidate.kind,
+            ok: false,
+            message: 'HTML登记表读取失败，未导入：$error',
+          ),
+        );
+      } on FileSystemException catch (error) {
+        outcomes.add(
+          LocalImportOutcome(
+            key: candidate.key,
+            kind: candidate.kind,
+            ok: false,
+            message: '登记表或源文件读取失败，未导入：$error',
+          ),
+        );
+      } finally {
+        _pendingLocalImports.remove(candidate.key);
+      }
+    }
+    final result = LocalImportResult(outcomes: outcomes);
+    // 导入成功后必须重建站点列表：注册表已多出条目，缓存还在的话首页依旧看不到
+    // 刚导入的源（用户视角就是「导入成功但列表没变化」）。
+    if (result.importedCount > 0) _invalidateLocalSites();
+    return result;
+  }
+
+  /// 重新载入已导入源（磁盘被手工改动后刷新界面）。
+  Future<void> reloadLocalSources() async {
+    await _spiderRegistry.scan();
+    _invalidateLocalSites();
+  }
+
+  /// 只删除已注册的 `local/<key>` 普通目录；运行中的源必须先由运行时页停止。
+  Future<bool> removeLocalSpider(String key) async {
+    if (!WebHomeStore.isValidKey(key)) return false;
+    final spider = _spiderRegistry.byKey(key);
+    if (spider == null) return false;
+    final root = p.normalize(p.absolute(spiderRoot));
+    final localRoot = p.join(root, 'local');
+    final target = p.join(localRoot, key);
+    if (!p.equals(p.normalize(p.absolute(spider.rootDir)), target) ||
+        !p.isWithin(localRoot, target)) {
+      return false;
+    }
+    // Supervisor 按配置站点 key 管理，同一 manifest 可能由多个站点引用。
+    if (_supervisor.statuses().any(
+      (status) =>
+          status.state == SpiderRuntimeState.running &&
+          (status.manifest?.key == key || status.siteKey == key),
+    )) {
+      log.warning('本地源仍在运行，拒绝删除 key=$key，请先停止运行时', scope: 'spider');
+      return false;
+    }
+    try {
+      if (!removeLocalSpiderDirectory(root: root, key: key)) return false;
+      await _spiderRegistry.scan();
+      _invalidateLocalSites();
+      return true;
+    } on FileSystemException catch (error) {
+      log.error('删除本地源失败 key=$key：$error', scope: 'spider');
+      return false;
+    }
+  }
+
+  /// 启用/停用某个 webHome 源。
+  Future<bool> setWebHomeEnabled(String key, bool enabled) async {
+    final ok = _webHomeStore.setEnabled(key, enabled);
+    if (ok) _invalidateLocalSites();
+    return ok;
+  }
+
+  /// 删除某个 webHome 源（连同其资源目录）。
+  Future<bool> removeWebHome(String key) async {
+    final ok = _webHomeStore.remove(key);
+    if (ok) _invalidateLocalSites();
+    return ok;
+  }
+
+  /// 增加一个在线 HTML 首页源（只登记网址，**不**抓取页面）。
+  ///
+  /// 供「本地源」设置页与站点选择流程共用；登记（URL 非法、key 冲突）失败会
+  /// 抛异常，调用方必须如实回显，不得当成成功。成功后立即刷新站点列表与路由，
+  /// 新条目与本地导入的 HTML 源同形态（`web-home:<key>`，不可搜索）。
+  Future<WebHomeSource> addOnlineWebHome(String url, {String? name}) async {
+    final source = _webHomeStore.addRemote(url, name: name);
+    _invalidateLocalSites();
+    log.info('在线 HTML 首页已登记 key=${source.key}', scope: 'site');
+    return source;
   }
 
   // -------------------------------------------------------------------------
@@ -5617,14 +5992,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       await resetCacheDirectory(paths.cacheDir);
       log.info('缓存目录已重建：${paths.cacheDir}', scope: 'storage');
       _notice = '缓存已清理';
-      // 托管 Python 运行时就在 `<cacheDir>/python` 下，清缓存会把它一起删掉。
-      // 不在这里重置标志，用户就会撞上「清一次缓存 → 所有 CatVod 站点 code=3」
-      // 的循环：程序自己重新准备一次（本机已有带依赖解释器时零成本，
-      // 否则重建 venv），而不是把问题留给用户。
-      _pythonRuntimeTried = false;
-      LocalSpiderCommand.invalidatePythonCache();
-      _router.invalidateRuntimes();
-      unawaited(_preparePythonRuntimeQuietly());
+      // The offline runtime lives in dataDir, independently of disposable cache.
+      _applyPythonEnvironment();
     } catch (error) {
       _lastError = AppError(AppErrorKind.storage, '清理缓存失败', detail: '$error');
     }
@@ -5944,6 +6313,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         .where((candidate) => candidate.key == item.siteKey)
         .firstOrNull;
     if (site == null) return null;
+    await _waitForPythonSite(site);
+    if (_disposed) return null;
     final result = await service.detail(
       site,
       item.vodId,
@@ -6006,7 +6377,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();
     // §22.2:退出后 sidecar 与代理端口全部释放。
-    unawaited(_supervisor.shutdownAll());
+    _sidecarShutdown = _supervisor.shutdownAll();
+    unawaited(_sidecarShutdown);
     unawaited(_androidPlaybackBridge.close());
     unawaited(_proxy.stop());
     // 猫源 Node 进程树与 bundle 句柄同样必须随退出释放（§9.8）。

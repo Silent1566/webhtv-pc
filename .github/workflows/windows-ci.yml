@@ -128,6 +128,11 @@ jobs:
       # 本地能跑通只是因为开发机 PATH 里恰好有 libmpv 目录（如 F:/Tools/libmpv），
       # CI runner 没有——这是一处真实的隐性环境依赖，必须在流水线里显式消除，
       # 不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh

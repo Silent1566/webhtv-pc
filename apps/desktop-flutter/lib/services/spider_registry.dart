@@ -60,11 +60,33 @@ class SpiderManifestRegistry {
   }
 
   /// 扫描根目录。每次调用都会重读 manifest，使手工编辑后无需重启。
+  ///
+  /// 两条路径，**根级优先**：
+  /// 1. 根部第一层目录的 `manifest.json` 与根部直接放的 `.json`（手工添加、
+  ///    远端直连注册的产物）；
+  /// 2. `root/local/<key>/manifest.json`——本地文件夹导入的落点
+  ///    （见 `LocalSourceImporter`）。
+  ///
+  /// 只多这一层，**不递归整棵树**：整树遍历会把 `local/<key>/` 里的资源目录、
+  /// 用户随手放的备份 JSON 也当成站点，扫出用户没导入过的东西。
   Future<List<LocalSpider>> scan() async {
     _spiders.clear();
     final directory = Directory(root);
     if (!await directory.exists()) return const [];
 
+    // 先扫根级：同 key 时根级占用，`local/` 里的重复项被拒绝（见 [_scanDirectory]）。
+    await _scanDirectory(directory);
+    await _scanDirectory(Directory(p.join(root, 'local')));
+    log.info(
+      'Spider manifest 扫描完成 root=$root found=${_spiders.length}',
+      scope: 'spider',
+    );
+    return sortedSpiders;
+  }
+
+  /// 扫描**一个**目录的第一层；先扫到的 key 占用该 key，后来的同 key 被拒绝。
+  Future<void> _scanDirectory(Directory directory) async {
+    if (!await directory.exists()) return;
     await for (final entity in directory.list(followLinks: false)) {
       final manifestFile = entity is Directory
           ? File(p.join(entity.path, 'manifest.json'))
@@ -83,17 +105,24 @@ class SpiderManifestRegistry {
       }
       _spiders[loaded.key] = loaded;
     }
-    log.info(
-      'Spider manifest 扫描完成 root=$root found=${_spiders.length}',
-      scope: 'spider',
-    );
-    return sortedSpiders;
   }
 
   /// 注册单个 manifest 文件；供测试与「手动添加」路径使用。
   Future<LocalSpider?> register(String manifestPath) async {
     final loaded = await _load(File(manifestPath));
     if (loaded == null) return null;
+    final existing = _spiders[loaded.key];
+    if (existing != null &&
+        !p.equals(
+          p.normalize(p.absolute(existing.manifestPath)),
+          p.normalize(p.absolute(loaded.manifestPath)),
+        )) {
+      log.warning(
+        '拒绝注册同 key 不同来源：key=${loaded.key} 已占用 ${existing.manifestPath}',
+        scope: 'spider',
+      );
+      return null;
+    }
     _spiders[loaded.key] = loaded;
     return loaded;
   }
@@ -205,7 +234,8 @@ class CspJvmBinding {
   final String root;
 
   /// `api` 是否为 `csp_*` 形态。
-  static bool matches(String api) => api.trim().toLowerCase().startsWith('csp_');
+  static bool matches(String api) =>
+      api.trim().toLowerCase().startsWith('csp_');
 
   /// 从 `api` 提取类名（去掉 `csp_` 前缀）。
   static String classNameOf(String api) {
@@ -225,12 +255,13 @@ class CspJvmBinding {
     final index = File(p.join(directory.path, 'index.jar'));
     if (index.existsSync()) return index.path;
 
-    final jars = directory
-        .listSync()
-        .whereType<File>()
-        .where((file) => file.path.toLowerCase().endsWith('.jar'))
-        .toList()
-      ..sort((a, b) => a.path.compareTo(b.path));
+    final jars =
+        directory
+            .listSync()
+            .whereType<File>()
+            .where((file) => file.path.toLowerCase().endsWith('.jar'))
+            .toList()
+          ..sort((a, b) => a.path.compareTo(b.path));
     if (jars.isNotEmpty) return jars.first.path;
 
     // 类目录：包含 `.class` 的目录。
@@ -242,8 +273,13 @@ class CspJvmBinding {
 
   static bool _containsClass(Directory directory) {
     try {
-      for (final entity in directory.listSync(recursive: true, followLinks: false)) {
-        if (entity is File && entity.path.toLowerCase().endsWith('.class')) return true;
+      for (final entity in directory.listSync(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File && entity.path.toLowerCase().endsWith('.class')) {
+          return true;
+        }
       }
     } catch (_) {
       // 无法读取时按「不含 class」处理。
@@ -298,10 +334,7 @@ class JavaRuntimeProbe {
 
 /// 本地 Spider 的运行命令解析（§9.7 `runtime` 字段）。
 class LocalSpiderCommand {
-  const LocalSpiderCommand({
-    required this.executable,
-    required this.arguments,
-  });
+  const LocalSpiderCommand({required this.executable, required this.arguments});
 
   final String executable;
   final List<String> arguments;
@@ -344,8 +377,8 @@ class LocalSpiderCommand {
       // 没有这些包的解释器，于是内层毁在 import 阶段、host.py 记一行 stderr 后 return 3，
       // 用户只看到「SPIDER_CRASHED sidecar 意外退出（code=3）」。按目录标记改走依赖
       // 感知的探测；普通 js/py 站点仍走原来的快路径。
-      final isCatVodShell =
-          File(p.join(spider.rootDir, 'loader.json')).existsSync();
+      final isCatVodShell = File(p.join(spider.rootDir, 'loader.json'))
+          .existsSync();
       final python = isCatVodShell
           ? _pythonCommandForCatVod(log: log)
           : _pythonCommand(log: log);
@@ -526,7 +559,8 @@ class LocalSpiderCommand {
     if (accepted.isEmpty) {
       return JavaRuntimeProbe(
         command: null,
-        issue: '未找到可用的 Java 运行时（需要 $minJavaMajor+）：'
+        issue:
+            '未找到可用的 Java 运行时（需要 $minJavaMajor+）：'
             '${rejected.isEmpty ? candidates.join(", ") : rejected.join("; ")}',
       );
     }
@@ -587,7 +621,10 @@ class LocalSpiderCommand {
       final probe = Process.runSync(executable, const ['-version']);
       output = '${probe.stdout}${probe.stderr}'.trim();
       if (probe.exitCode != 0 && output.isEmpty) {
-        return JavaRuntimeProbe(command: null, issue: '$executable 执行失败（exit=${probe.exitCode}）');
+        return JavaRuntimeProbe(
+          command: null,
+          issue: '$executable 执行失败（exit=${probe.exitCode}）',
+        );
       }
     } catch (error) {
       return JavaRuntimeProbe(command: null, issue: '$executable 无法执行：$error');
@@ -608,8 +645,10 @@ class LocalSpiderCommand {
     }
 
     final binDir = p.dirname(executable);
-    final hasCompiler = (Platform.isWindows ? ['javac.exe', 'javac'] : ['javac'])
-        .any((name) => File(p.join(binDir, name)).existsSync());
+    final hasCompiler =
+        (Platform.isWindows ? ['javac.exe', 'javac'] : ['javac']).any(
+          (name) => File(p.join(binDir, name)).existsSync(),
+        );
     return JavaRuntimeProbe(
       command: SidecarCommand(executable: executable, arguments: const []),
       major: major,
@@ -679,9 +718,30 @@ class LocalSpiderCommand {
   ///
   /// 传 null 恢复默认候选链。只影响解析顺序，不做正确性判断：候选仍要
   /// `--version` 验证通过才会被采用。
-  static void preferPythonExecutable(String? path) {
-    SidecarRuntimeResolver.preferPythonExecutable(path);
+  static void preferPythonExecutable(
+    String? path, {
+    List<String> arguments = const [],
+    bool verified = false,
+    bool catVodReady = false,
+  }) {
+    SidecarRuntimeResolver.preferPythonExecutable(
+      path,
+      arguments: arguments,
+      verified: verified,
+    );
     invalidatePythonCache();
+    if (verified) {
+      final command = path == null
+          ? null
+          : SidecarCommand(
+              executable: path,
+              arguments: List.unmodifiable(arguments),
+            );
+      _pythonProbed = true;
+      _pythonResolved = command;
+      _pythonCatVodProbed = true;
+      _pythonCatVodResolved = catVodReady ? command : null;
+    }
   }
 
   static bool _pythonCatVodProbed = false;
@@ -763,10 +823,15 @@ class LocalSpiderCommand {
 /// 3. 从当前目录向上查找的仓库布局。
 ///
 /// 找不到时返回空串；调用方必须显示「sidecar 宿主缺失」而不是静默跳过站点。
-String defaultSidecarHostPath() {
+String defaultSidecarHostPath({
+  String? executableDirectory,
+  String? workingDirectory,
+}) {
   return _locateSidecarHost(
     const ['sidecars', 'spider-host-python', 'host.py'],
     'WEBHTV_SIDECAR_HOST',
+    executableDirectory: executableDirectory,
+    workingDirectory: workingDirectory,
   );
 }
 
@@ -775,10 +840,11 @@ String defaultSidecarHostPath() {
 /// 与 [defaultSidecarHostPath] 同语义：`node*` 运行时需要 `spider-host-js/host.js`。
 /// 发行包可能只带其中一种运行时，因此三个入口各自独立解析。
 String defaultJsSidecarHostPath() {
-  return _locateSidecarHost(
-    const ['sidecars', 'spider-host-js', 'host.js'],
-    'WEBHTV_SIDECAR_JS_HOST',
-  );
+  return _locateSidecarHost(const [
+    'sidecars',
+    'spider-host-js',
+    'host.js',
+  ], 'WEBHTV_SIDECAR_JS_HOST');
 }
 
 /// 定位仓库/发行包内的 JVM（Java）sidecar 宿主（§9.3 `tvbox-java-v1`）。
@@ -787,38 +853,42 @@ String defaultJsSidecarHostPath() {
 /// `sidecars/spider-host-jvm/host.jar`。该 jar 由
 /// `sidecars/spider-host-jvm/build.ps1` 用 JDK 自带 javac/jar 产出（无第三方依赖）。
 String defaultJvmSidecarHostPath() {
-  return _locateSidecarHost(
-    const ['sidecars', 'spider-host-jvm', 'host.jar'],
-    'WEBHTV_SIDECAR_JVM_HOST',
-  );
+  return _locateSidecarHost(const [
+    'sidecars',
+    'spider-host-jvm',
+    'host.jar',
+  ], 'WEBHTV_SIDECAR_JVM_HOST');
 }
 
 /// 共享的宿主脚本定位逻辑（环境变量覆盖 → 可执行文件同级 → 向上查找仓库）。
-String _locateSidecarHost(List<String> relative, String envVar) {
+String _locateSidecarHost(
+  List<String> relative,
+  String envVar, {
+  String? executableDirectory,
+  String? workingDirectory,
+}) {
   final override = Platform.environment[envVar];
   if (override != null && override.trim().isNotEmpty) {
     final candidate = p.normalize(override.trim());
     if (File(candidate).existsSync()) return candidate;
   }
 
+  final roots = <String>[];
   try {
-    final executableDir = p.dirname(Platform.resolvedExecutable);
-    final candidate = p.joinAll([executableDir, ...relative]);
-    if (File(candidate).existsSync()) return candidate;
+    roots.add(executableDirectory ?? p.dirname(Platform.resolvedExecutable));
   } catch (_) {
     // Platform.resolvedExecutable 在极端环境下可能不可用。
   }
-
-  // 向上查找的跳数必须覆盖发布布局：可执行文件在
-  // `build/windows/x64/runner/Release`，到仓库根需要 7 跳，原先的 6 跳会
-  // 在开发机上返回空串（日志表现为「sidecar 宿主不存在：（空）」）。
-  var current = Directory.current;
-  for (var hop = 0; hop < 10; hop++) {
-    final candidate = p.joinAll([current.path, ...relative]);
-    if (File(candidate).existsSync()) return candidate;
-    final parent = current.parent;
-    if (parent.path == current.path) break;
-    current = parent;
+  roots.add(workingDirectory ?? Directory.current.path);
+  for (final root in roots) {
+    var current = Directory(root);
+    for (var hop = 0; hop < 10; hop++) {
+      final candidate = p.joinAll([current.path, ...relative]);
+      if (File(candidate).existsSync()) return candidate;
+      final parent = current.parent;
+      if (parent.path == current.path) break;
+      current = parent;
+    }
   }
   return '';
 }
