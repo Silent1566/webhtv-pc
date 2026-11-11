@@ -21,7 +21,12 @@ void main() {
 
   test('可写目录返回 null，且不留下探针文件', () async {
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     expect(await paths.ensureDirectories(), isEmpty);
 
@@ -37,7 +42,12 @@ void main() {
 
   test('目标被同名文件占住时返回错误而不是抛出', () async {
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     // 让 `probeWritable` 的目标「目录」其实是一个文件：创建必然失败。
     File(paths.dataDir).writeAsStringSync('not a directory');

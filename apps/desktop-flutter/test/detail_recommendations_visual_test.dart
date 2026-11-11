@@ -152,7 +152,7 @@ class _FallbackState extends AppState {
              'config': dir.path,
              'data': dir.path,
              'cache': dir.path,
-             'log': dir.path,
+             'state': dir.path,
            },
          ),
          log: LogService(),

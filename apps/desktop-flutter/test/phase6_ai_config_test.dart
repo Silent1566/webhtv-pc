@@ -482,7 +482,12 @@ void main() {
     setUp(() async {
       dir = await Directory.systemTemp.createTemp('webhtv-ai-appstate');
       paths = AppPaths.resolve(
-        overrides: {'roaming': dir.path, 'local': dir.path},
+        overrides: {
+          'config': '${dir.path}/webhtv-pc',
+          'data': '${dir.path}/webhtv-pc',
+          'cache': '${dir.path}/webhtv-pc/cache',
+          'state': '${dir.path}/webhtv-pc/logs',
+        },
       );
     });
 

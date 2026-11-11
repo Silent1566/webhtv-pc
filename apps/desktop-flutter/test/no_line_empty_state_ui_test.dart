@@ -279,7 +279,12 @@ void main() {
     dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-noline-empty');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
 
     unconfiguredClient = _FakeClient();

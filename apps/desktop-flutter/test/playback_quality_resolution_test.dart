@@ -62,7 +62,12 @@ void main() {
     final config = AppConfig(sites: [site]);
     final state = _SourceQualityState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
       context: PlaybackSourceContext(
         sourceKey: 'source',
@@ -117,7 +122,12 @@ void main() {
       );
       final state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': temp.path, 'local': temp.path},
+          overrides: {
+            'config': '${temp.path}/webhtv-pc',
+            'data': '${temp.path}/webhtv-pc',
+            'cache': '${temp.path}/webhtv-pc/cache',
+            'state': '${temp.path}/webhtv-pc/logs',
+          },
         ),
       );
       addTearDown(() async {
@@ -203,7 +213,12 @@ void main() {
     );
     final state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
     );
     addTearDown(() async {
@@ -235,7 +250,12 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('webhtv-quality-proxy-');
     final state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/webhtv-pc',
+          'data': '${temp.path}/webhtv-pc',
+          'cache': '${temp.path}/webhtv-pc/cache',
+          'state': '${temp.path}/webhtv-pc/logs',
+        },
       ),
     );
     addTearDown(() async {

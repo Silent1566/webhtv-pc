@@ -133,7 +133,12 @@ void seedHistory(
 /// 建一个已导入配置、已种入历史的状态。
 Future<AppState> _bootState(Directory temp, {required bool seed}) async {
   final paths = AppPaths.resolve(
-    overrides: {'roaming': temp.path, 'local': temp.path},
+    overrides: {
+      'config': '${temp.path}/webhtv-pc',
+      'data': '${temp.path}/webhtv-pc',
+      'cache': '${temp.path}/webhtv-pc/cache',
+      'state': '${temp.path}/webhtv-pc/logs',
+    },
   );
   final state = AppState(
     paths: paths,

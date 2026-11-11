@@ -330,12 +330,22 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('webhtv-nav-detail');
     listTempDir = await Directory.systemTemp.createTemp('webhtv-nav-detail-list');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+      overrides: {
+        'config': '${tempDir.path}/webhtv-pc',
+        'data': '${tempDir.path}/webhtv-pc',
+        'cache': '${tempDir.path}/webhtv-pc/cache',
+        'state': '${tempDir.path}/webhtv-pc/logs',
+      },
     );
     // 偏好存盘是**共享的** `settings.json`：视图模式用例单独占一份工作目录，
     // 免得「list」这条偏好渗进其它用例的渲染模式。
     final listPaths = AppPaths.resolve(
-      overrides: {'roaming': listTempDir.path, 'local': listTempDir.path},
+      overrides: {
+        'config': '${listTempDir.path}/webhtv-pc',
+        'data': '${listTempDir.path}/webhtv-pc',
+        'cache': '${listTempDir.path}/webhtv-pc/cache',
+        'state': '${listTempDir.path}/webhtv-pc/logs',
+      },
     );
     navTmdb = _tmdbState(client: _tmdbClient());
     plainTmdb = _tmdbState(client: _tmdbClient());

@@ -89,7 +89,12 @@ void main() {
   testWidgets('详情 A → 返回 → 立刻详情 B：B 的线路与简介不被 A 覆盖', (tester) async {
     final temp = Directory.systemTemp.createTempSync('webhtv-detail-race-e2e');
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': '${temp.path}/webhtv-pc',
+        'data': '${temp.path}/webhtv-pc',
+        'cache': '${temp.path}/webhtv-pc/cache',
+        'state': '${temp.path}/webhtv-pc/logs',
+      },
     );
     final state = AppState(paths: paths, log: LogService());
     addTearDown(() {

@@ -30,7 +30,12 @@ void main() {
     server = await TestFixtureServer.start();
     tempDir = await Directory.systemTemp.createTemp('webhtv-cat-switch');
     state = AppState(
-      paths: AppPaths.resolve(overrides: {'roaming': tempDir.path, 'local': tempDir.path}),
+      paths: AppPaths.resolve(overrides: {
+          'config': '${tempDir.path}/webhtv-pc',
+          'data': '${tempDir.path}/webhtv-pc',
+          'cache': '${tempDir.path}/webhtv-pc/cache',
+          'state': '${tempDir.path}/webhtv-pc/logs',
+        }),
       log: LogService(),
     );
     await state.bootstrap();
