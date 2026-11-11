@@ -195,6 +195,123 @@ void main() {
     await cjk.load();
     await icons.load();
   });
+  const pagingPhase = String.fromEnvironment('PAGING_CAPTURE_PHASE');
+  for (final width in [1280.0, 420.0]) {
+    testWidgets('horizontal paging capture $width', (tester) async {
+      tester.view.physicalSize = Size(width, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final capture = GlobalKey();
+      final offsets = <RecommendationRow, List<int>>{
+        for (final row in RecommendationRow.values) row: [],
+      };
+      final dependencies = DetailRecommendationDependencies(
+        feedback: RecommendationFeedbackStore(),
+        loaders: {
+          for (final row in RecommendationRow.values)
+            row: (request) async {
+              offsets[row]!.add(request.offset);
+              return RecommendationPage(
+                items: [
+                  for (var i = request.offset; i < request.offset + 12; i++)
+                    RecommendationEntry(
+                      item: TmdbItem(
+                        tmdbId: 100 + i,
+                        mediaType: TmdbMediaType.movie,
+                        title: '星空旅途 ${i + 1}',
+                        subtitle: '2024 · 8.4',
+                        rating: 8.4,
+                      ),
+                      source: row == RecommendationRow.douban
+                          ? RecommendationSource.douban
+                          : RecommendationSource.tmdb,
+                      doubanRating: 8.4,
+                    ),
+                ],
+                nextOffset: request.offset + 12,
+                hasMore: request.offset == 0,
+              );
+            },
+        },
+      );
+      final theme = buildAppTheme(Brightness.dark);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme.copyWith(
+            textTheme: theme.textTheme.apply(fontFamily: 'FixtureCJK'),
+            textButtonTheme: TextButtonThemeData(
+              style: theme.textButtonTheme.style?.copyWith(
+                textStyle: const WidgetStatePropertyAll(
+                  TextStyle(fontFamily: 'FixtureCJK', fontSize: 14),
+                ),
+              ),
+            ),
+          ),
+          home: RepaintBoundary(
+            key: capture,
+            child: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('详情推荐 · 横向浏览'),
+                      const Divider(),
+                      DetailRecommendations(
+                        dependencies: dependencies,
+                        current: const RecommendationSeed(title: '固定作品：星空'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> captureFrame(String position) async {
+        if (pagingPhase.isEmpty) return;
+        final boundary =
+            capture.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        await tester.runAsync(() async {
+          final image = await boundary.toImage(pixelRatio: 1);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final file = File(
+            '../../.local/recommendation-horizontal-paging/'
+            '$pagingPhase-$width-$position.png',
+          );
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+
+      await captureFrame('start');
+      for (final row in RecommendationRow.values) {
+        final list = find.byKey(ValueKey('recommendation-row-${row.name}'));
+        for (var i = 0; i < 2; i++) {
+          await tester.drag(list, const Offset(-2200, 0));
+          await tester.pumpAndSettle();
+        }
+        expect(offsets[row], pagingPhase == 'before' ? [0] : [0, 12]);
+        expect(
+          find.descendant(
+            of: list,
+            matching: find.text(
+              pagingPhase == 'before' ? '星空旅途 12' : '星空旅途 24',
+            ),
+          ),
+          findsOneWidget,
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await captureFrame('right');
+    });
+  }
   for (final position in ['first', 'bottom']) {
     for (final phase in ['before', 'after']) {
       for (final page in ['source', 'pure']) {
@@ -329,13 +446,10 @@ void main() {
           }
           await tester.pumpAndSettle();
           if (position == 'bottom' && phase == 'after') {
-            // 截取的这一帧必须真的含评分行与分页入口，不能只靠肉眼推断。
+            // 评分行必须仍完整落在横向卡片内。
             expect(find.textContaining('豆瓣 8.4'), findsWidgets);
-            expect(find.text('加载更多'), findsWidgets);
-            for (final finder in [
-              find.textContaining('豆瓣 8.4').first,
-              find.byKey(const ValueKey('recommendation-more-douban')),
-            ]) {
+            expect(find.text('加载更多'), findsNothing);
+            for (final finder in [find.textContaining('豆瓣 8.4').first]) {
               final rect = tester.getRect(finder);
               expect(rect.top, greaterThanOrEqualTo(0));
               expect(rect.bottom, lessThanOrEqualTo(784));
@@ -346,21 +460,6 @@ void main() {
             );
             expect(score.bottom, lessThanOrEqualTo(row.bottom));
           }
-          final boundary =
-              capture.currentContext!.findRenderObject()!
-                  as RenderRepaintBoundary;
-          await tester.runAsync(() async {
-            final image = await boundary.toImage(pixelRatio: 1);
-            final bytes = await image.toByteData(
-              format: ui.ImageByteFormat.png,
-            );
-            final file = File(
-              '../../docs/superpowers/evidence/detail-recommendations/$phase-$page${position == 'bottom' ? '-bottom' : ''}.png',
-            );
-            await file.parent.create(recursive: true);
-            await file.writeAsBytes(bytes!.buffer.asUint8List());
-            image.dispose();
-          });
         });
       }
     }
@@ -435,17 +534,5 @@ void main() {
       findsNWidgets(2),
       reason: '卡片是换源入口，不是播放入口',
     );
-    final boundary =
-        capture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-    await tester.runAsync(() async {
-      final image = await boundary.toImage(pixelRatio: 1);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      final file = File(
-        '../../docs/superpowers/evidence/detail-recommendations/task-4-nav-source-fallback.png',
-      );
-      await file.parent.create(recursive: true);
-      await file.writeAsBytes(bytes!.buffer.asUint8List());
-      image.dispose();
-    });
   });
 }

@@ -472,7 +472,7 @@ void main() {
     },
   );
   testWidgets(
-    'secondary tap opens metadata and explicit pagination uses offset 12',
+    'secondary tap opens metadata and horizontal pagination uses offset 12',
     (tester) async {
       var offset = -1;
       final dependencies = deps(
@@ -480,13 +480,20 @@ void main() {
           offset = r.offset;
           return RecommendationPage(
             items: [
-              RecommendationEntry(
-                item: item,
-                source: RecommendationSource.tmdb,
-              ),
+              for (var i = 0; i < 12; i++)
+                RecommendationEntry(
+                  item: i == 0 && r.offset == 0
+                      ? item
+                      : TmdbItem(
+                          tmdbId: 2 + r.offset + i,
+                          mediaType: TmdbMediaType.movie,
+                          title: '推荐作品${r.offset + i}',
+                        ),
+                  source: RecommendationSource.tmdb,
+                ),
             ],
             nextOffset: r.offset + 12,
-            hasMore: true,
+            hasMore: r.offset == 0,
           );
         },
       );
@@ -503,11 +510,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('recommendation-more-related')),
-      );
+      final row = find.byKey(const ValueKey('recommendation-row-related'));
+      await tester.drag(row, const Offset(-1400, 0));
       await tester.pumpAndSettle();
       expect(offset, 12);
+      expect(
+        tester.widget<ListView>(row).childrenDelegate.estimatedChildCount,
+        47,
+      );
+      await tester.drag(row, const Offset(2400, 0));
+      await tester.pumpAndSettle();
       final gesture = await tester.createGesture(
         kind: PointerDeviceKind.mouse,
         buttons: kSecondaryMouseButton,
@@ -901,10 +913,10 @@ void main() {
         lessThan(tester.getTopLeft(find.text('B')).dx),
       );
       for (var page = 0; page < 3; page++) {
-        final more = find.byKey(const ValueKey('recommendation-more-related'));
-        await tester.ensureVisible(more);
+        final row = find.byKey(const ValueKey('recommendation-row-related'));
+        await tester.ensureVisible(row);
         await tester.pumpAndSettle();
-        await tester.tap(more);
+        await tester.drag(row, const Offset(-3000, 0));
         await tester.pumpAndSettle();
       }
       final relatedRow = tester.widget<ListView>(
