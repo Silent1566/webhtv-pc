@@ -288,9 +288,17 @@ AiSeasonAnalysis parseAiSeasonResponse({
   }
 
   if (mode == AiSeasonMode.flatByCounts) {
-    final seasons = _sortedSeasons(seasonCounts);
+    // 普通季才参与扁平集号累计映射（season 0 是特别篇；把它算进累计会让每一集
+    // 都错位）。缺号/重复号/越界按安卓 `mapFlatEpisodeNumber` 语义跳过而不偏移，
+    // 因此只要**至少一个**集号能映射就允许（`canMapFlatEpisodeKeys`），
+    // 而不是要求全部可映射 —— 与 `buildSeasonBindings` 的应用语义保持一致。
+    final ordinarySeasons = _ordinarySeasons(seasonCounts);
     if (sourceNumbers.length != sourceEpisodeCount ||
-        !_canMapFlatEpisodeNumbers(sourceNumbers, seasons, seasonCounts)) {
+        !_hasAnyMappableFlatNumber(
+          sourceNumbers,
+          ordinarySeasons,
+          seasonCounts,
+        )) {
       return AiSeasonAnalysis.failure(AiSeasonFailure.unsafeFlatMapping);
     }
   }
@@ -427,19 +435,23 @@ bool _validExplicitMappings(
   return true;
 }
 
-/// 扁平集号能否完整映射到各季（与 `core/tmdb_season.dart` 同语义）。
-bool _canMapFlatEpisodeNumbers(
+/// 普通季保留非正容量作为累计屏障，不越过未知容量推断后续季。
+List<int> _ordinarySeasons(Map<int, int> seasonCounts) =>
+    seasonCounts.keys.where((season) => season > 0).toList()..sort();
+
+/// 至少一个集号能映射到普通季（安卓 `canMapFlatEpisodeKeys` 语义）。
+bool _hasAnyMappableFlatNumber(
   List<int> numbers,
-  List<int> seasons,
+  List<int> ordinarySeasons,
   Map<int, int> seasonCounts,
 ) {
-  if (numbers.isEmpty || seasons.isEmpty) return false;
+  if (numbers.isEmpty || ordinarySeasons.isEmpty) return false;
   for (final number in numbers) {
-    if (_mapFlatEpisodeNumber(number, seasons, seasonCounts) == null) {
-      return false;
+    if (_mapFlatEpisodeNumber(number, ordinarySeasons, seasonCounts) != null) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 ({int seasonNumber, int episodeNumber})? _mapFlatEpisodeNumber(
@@ -464,19 +476,26 @@ bool _canMapFlatEpisodeNumbers(
 ///
 /// **手动触发、必经确认**：不存在"自动应用 AI 判断"的路径。
 class AiEpisodeSeasonService {
-  AiEpisodeSeasonService({AiConfig? config, AiCompletionClient? client})
-    : _config = (config ?? const AiConfig()).sanitized(),
-      _client = client ?? AiCompletionClient(),
-      _ownsClient = client == null;
+  AiEpisodeSeasonService({
+    AiConfig? config,
+    AiCompletionClient? client,
+    AiCancellationToken? cancellationToken,
+  }) : _config = (config ?? const AiConfig()).sanitized(),
+       _client = client ?? AiCompletionClient(),
+       _ownsClient = client == null,
+       _token = cancellationToken ?? AiCancellationToken();
 
   final AiConfig _config;
   final AiCompletionClient _client;
   final bool _ownsClient;
+  final AiCancellationToken _token;
 
-  bool _canceled = false;
+  bool get isCancelled => _token.isCancelled;
 
-  /// 取消在途分析。取消后 [analyze] 立即短路，不改动任何绑定。
-  void cancel() => _canceled = true;
+  /// 取消在途分析。[cancel] 与注入的 [AiCancellationToken] 同效：取消后
+  /// 立即短路，且取消信号会传到底层 HTTP 请求（`complete` 的
+  /// `cancellationToken`），不写任何绑定。
+  void cancel() => _token.cancel();
 
   /// 分析一条线路的集季结构。
   Future<AiSeasonAnalysis> analyze({
@@ -485,7 +504,9 @@ class AiEpisodeSeasonService {
     required List<VodEpisode> episodes,
     required Map<int, int> seasonCounts,
   }) async {
-    if (_canceled) return AiSeasonAnalysis.failure(AiSeasonFailure.canceled);
+    if (_token.isCancelled) {
+      return AiSeasonAnalysis.failure(AiSeasonFailure.canceled);
+    }
     if (!_config.isReady) {
       return AiSeasonAnalysis.failure(AiSeasonFailure.configIncomplete);
     }
@@ -503,8 +524,14 @@ class AiEpisodeSeasonService {
       samples: samples,
     );
 
-    final result = await _client.complete(config: _config, prompt: prompt);
-    if (_canceled) return AiSeasonAnalysis.failure(AiSeasonFailure.canceled);
+    final result = await _client.complete(
+      config: _config,
+      prompt: prompt,
+      cancellationToken: _token,
+    );
+    if (_token.isCancelled) {
+      return AiSeasonAnalysis.failure(AiSeasonFailure.canceled);
+    }
     if (!result.ok) return AiSeasonAnalysis.failure(_failureOf(result));
     return parseAiSeasonResponse(
       text: result.text,

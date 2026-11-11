@@ -81,7 +81,9 @@ class _FakeClient extends AiCompletionClient {
   Future<AiCompletionResult> complete({
     required AiConfig config,
     required String prompt,
-    Duration timeout = AiCompletionClient.defaultTimeout,
+    Duration? timeout,
+    String task = 'ai',
+    AiCancellationToken? cancellationToken,
   }) async => AiCompletionResult(
     ok: true,
     statusCode: 200,

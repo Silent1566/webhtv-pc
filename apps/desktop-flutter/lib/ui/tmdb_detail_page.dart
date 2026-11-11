@@ -39,6 +39,7 @@ class TmdbDetailPage extends StatefulWidget {
     this.onOpenItem,
     this.initialViewMode = UiEpisodeViewMode.fallback,
     this.onViewModeChanged,
+    this.aiRecommendations,
   });
 
   final TmdbService service;
@@ -68,6 +69,12 @@ class TmdbDetailPage extends StatefulWidget {
 
   /// 视图模式切换回调（调用方写回偏好，`AppState.setEpisodeViewMode`）。
   final ValueChanged<String>? onViewModeChanged;
+
+  /// 详情页底部的 AI 推荐区块（由调用方注入 `AiRecommendationSection`）。
+  ///
+  /// 本页不持有 `AppState`，与 [onViewModeChanged] 同一种依赖注入风格：
+  /// 推荐需要的状态留在调用方，本页只负责把它排到剧集区之后。
+  final Widget? aiRecommendations;
 
   @override
   State<TmdbDetailPage> createState() => _TmdbDetailPageState();
@@ -367,6 +374,11 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
         onCopyVideo: widget.onCopyVideo,
           ),
         ),
+        if (widget.aiRecommendations != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            child: widget.aiRecommendations,
+          ),
       ],
     );
   }

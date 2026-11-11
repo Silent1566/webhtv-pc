@@ -15,6 +15,7 @@ import '../core/backup_manifest.dart';
 import 'app_paths.dart';
 import 'log_service.dart';
 import 'storage.dart';
+import 'ai_integration.dart';
 
 class BackupCreateResult {
   const BackupCreateResult({
@@ -48,11 +49,13 @@ class BackupContents {
     required this.manifest,
     required this.settingsBytes,
     required this.databaseBytes,
+    this.auxiliaryFiles = const {},
   });
 
   final BackupManifest manifest;
   final Uint8List settingsBytes;
   final Uint8List databaseBytes;
+  final Map<String, Uint8List> auxiliaryFiles;
 }
 
 class BackupService {
@@ -73,11 +76,7 @@ class BackupService {
     final timestamp = now ?? DateTime.now();
     final target = outputPath.trim();
     if (target.isEmpty) {
-      return const BackupCreateResult(
-        ok: false,
-        path: '',
-        message: '备份路径为空',
-      );
+      return const BackupCreateResult(ok: false, path: '', message: '备份路径为空');
     }
     final snapshot = p.join(
       paths.cacheDir,
@@ -91,10 +90,22 @@ class BackupService {
       final settingsBytes = await settingsFile.exists()
           ? await settingsFile.readAsBytes()
           : Uint8List(0);
+      final reader = File(p.join(paths.configDir, 'reader_tts.json'));
+      final auxiliary = <String, Uint8List>{
+        karaokeBackupUserDataFile: Uint8List.fromList(
+          utf8.encode(await exportKaraokeUserFiles(paths)),
+        ),
+        aiBackupUserDataFile: Uint8List.fromList(
+          utf8.encode(await exportAiUserFiles(paths)),
+        ),
+        if (await reader.exists())
+          aiBackupReaderFile: await reader.readAsBytes(),
+      };
       final manifest = buildBackupManifest(
         files: {
           backupSettingsFile: settingsBytes,
           backupDatabaseFile: databaseBytes,
+          ...auxiliary,
         },
         createdAt: timestamp.millisecondsSinceEpoch,
         appVersion: appVersion,
@@ -112,14 +123,15 @@ class BackupService {
             const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
           ),
         )
-        ..add(ArchiveFile(backupSettingsFile, settingsBytes.length, settingsBytes))
         ..add(
-          ArchiveFile(
-            backupDatabaseFile,
-            databaseBytes.length,
-            databaseBytes,
-          ),
+          ArchiveFile(backupSettingsFile, settingsBytes.length, settingsBytes),
+        )
+        ..add(
+          ArchiveFile(backupDatabaseFile, databaseBytes.length, databaseBytes),
         );
+      for (final entry in auxiliary.entries) {
+        archive.add(ArchiveFile(entry.key, entry.value.length, entry.value));
+      }
       final bytes = ZipEncoder().encodeBytes(archive);
       final output = File(target);
       await output.parent.create(recursive: true);
@@ -224,6 +236,30 @@ class BackupService {
       supportedSchema: AppDatabase.schemaVersion,
     );
     if (!check.ok) return _DecodedBackup(issue: check.issue);
+    final auxiliary = <String, Uint8List>{
+      for (final name in [
+        aiBackupUserDataFile,
+        aiBackupReaderFile,
+        karaokeBackupUserDataFile,
+      ])
+        if (files[name] != null && manifest.entries.any((e) => e.path == name))
+          name: files[name]!,
+    };
+    try {
+      if (auxiliary[karaokeBackupUserDataFile] case final bytes?) {
+        decodeKaraokeUserFiles(utf8.decode(bytes));
+      }
+      if (auxiliary[aiBackupUserDataFile] case final bytes?) {
+        decodeAiUserFiles(utf8.decode(bytes));
+      }
+      if (auxiliary[aiBackupReaderFile] case final bytes?) {
+        if (jsonDecode(utf8.decode(bytes)) is! Map) {
+          throw const FormatException('阅读器偏好损坏');
+        }
+      }
+    } catch (error) {
+      return _DecodedBackup(issue: 'AI用户数据校验失败：$error');
+    }
     final databaseBytes = files[backupDatabaseFile]!;
     final settingsBytes = files[backupSettingsFile] ?? Uint8List(0);
     return _DecodedBackup(
@@ -231,6 +267,7 @@ class BackupService {
         manifest: manifest,
         settingsBytes: settingsBytes,
         databaseBytes: databaseBytes,
+        auxiliaryFiles: auxiliary,
       ),
     );
   }

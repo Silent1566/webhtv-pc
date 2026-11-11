@@ -19,6 +19,9 @@ import '../core/tmdb_media.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../services/ai_episode_season_service.dart';
+import '../services/ai_season_mapping_service.dart';
+import 'ai_integration_widgets.dart';
+import '../core/ai_content/recommendation.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/ui_preferences_store.dart';
@@ -38,6 +41,7 @@ import 'common.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
+import 'ai_content/ai_recommendation_section.dart';
 import 'tmdb_widgets.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -173,7 +177,9 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
                               key: const ValueKey('browse-tab-default'),
                               label: '默认推荐',
                               selected: selected == null,
-                              onTap: loading ? null : state.selectDefaultListing,
+                              onTap: loading
+                                  ? null
+                                  : state.selectDefaultListing,
                             ),
                           for (final item in classes)
                             _BrowseTab(
@@ -365,10 +371,7 @@ class _FilterToggleButton extends StatelessWidget {
               const SizedBox(width: AppSpace.xs),
               // 数字角标：面板收起后，这是"筛了几项"的唯一提示。
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 5,
-                  vertical: 1,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
                   color: semantic.magnitude,
                   borderRadius: AppRadius.pillAll,
@@ -418,10 +421,7 @@ class _FilterPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final maxHeight = math.max(
-      MediaQuery.sizeOf(context).height * 0.45,
-      340.0,
-    );
+    final maxHeight = math.max(MediaQuery.sizeOf(context).height * 0.45, 340.0);
     final active = state.categoryFilters;
     return Container(
       decoration: BoxDecoration(
@@ -451,7 +451,8 @@ class _FilterPanel extends StatelessWidget {
                 child: _FilterPanelBody(state: state, groups: groups),
               ),
             ),
-            if (active.isNotEmpty) _FilterResetBar(state: state, groups: groups),
+            if (active.isNotEmpty)
+              _FilterResetBar(state: state, groups: groups),
           ],
         ),
       ),
@@ -1042,9 +1043,7 @@ class _BrowseBusyBar extends StatelessWidget {
           key: const ValueKey('browse-refresh-busy'),
           height: 2,
           color: reduced ? theme.colorScheme.primary : null,
-          child: reduced
-              ? null
-              : const LinearProgressIndicator(minHeight: 2),
+          child: reduced ? null : const LinearProgressIndicator(minHeight: 2),
         ),
       ),
     );
@@ -1498,7 +1497,9 @@ class _DetailPageState extends State<DetailPage> {
     final toastId = _detailErrorToastId;
     _detailErrorToastId = null;
     if (toastId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => dismissToast(toastId));
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => dismissToast(toastId),
+      );
     }
     super.dispose();
   }
@@ -1668,8 +1669,12 @@ class _DetailPageState extends State<DetailPage> {
     // 应用前必须比对，否则会把结果写到新线路上。
     final snapshotFlagKey = tmdbLine.flagKey;
     final snapshotCount = tmdbLine.episodeCount;
+    final snapshotCounts = Map<int, int>.from(tmdb!.seasonEpisodeCounts);
+    final orderedSnapshot = seasonBindingsSnapshot(episodes, snapshotCounts);
+    final identitySnapshot =
+        '${state.tmdbConfigId}|${state.tmdbSiteKeyForAi}|${tmdb.identity?.key}';
 
-    final service = AiEpisodeSeasonService(config: state.aiConfig);
+    final service = state.createAiSeasonService();
     var canceled = false;
     // 提前拿住 navigator：要等 `await` 之后才能关进度框，届时 `context` 可能已失效
     // （也因此不能用 `Navigator.of(context, ...)` 去做那件事）。
@@ -1701,7 +1706,7 @@ class _DetailPageState extends State<DetailPage> {
       title: vod.vodName,
       flagName: tmdbLine.sourceFlag,
       episodes: episodes,
-      seasonCounts: tmdb?.seasonEpisodeCounts ?? const <int, int>{},
+      seasonCounts: snapshotCounts,
     );
     service.dispose();
 
@@ -1741,6 +1746,10 @@ class _DetailPageState extends State<DetailPage> {
       result: result,
       snapshotFlagKey: snapshotFlagKey,
       snapshotCount: snapshotCount,
+      snapshotEpisodes: episodes,
+      snapshotCounts: snapshotCounts,
+      orderedSnapshot: orderedSnapshot,
+      identitySnapshot: identitySnapshot,
     );
   }
 
@@ -1749,111 +1758,115 @@ class _DetailPageState extends State<DetailPage> {
     required AiSeasonAnalysis result,
     required String snapshotFlagKey,
     required int snapshotCount,
+    required List<VodEpisode> snapshotEpisodes,
+    required Map<int, int> snapshotCounts,
+    required String orderedSnapshot,
+    required String identitySnapshot,
   }) async {
-    final previewOnly = result.mode == AiSeasonMode.explicitMapping;
+    final proposed = buildSeasonBindings(
+      analysis: result,
+      episodes: snapshotEpisodes,
+      seasonCounts: snapshotCounts,
+    );
+    final canApply =
+        proposed.status == AiSeasonApplyStatus.applied ||
+        proposed.status == AiSeasonApplyStatus.partial;
     final confirmed = await showDialog<bool>(
       context: context,
-      // 包一层**带 key 的** `RepaintBoundary`：证据截图必须能拍到这张对话框本身。
-      //
-      // 【为什么非加不可】每个路由（含 dialog）在 `Navigator` 里各有自己的
-      // `RepaintBoundary`，**没有任何一个** boundary 同时包含页面与对话框的
-      // 内容。所以「拍整窗」并不存在：默认取第一个 boundary 只会拍到详情页，
-      // 对话框完全不在图里（实测 173791 字节的图里没有预览框）。既有套件
-      // 用的是同一个办法：`tmdb_detail_visual_flow_test` 为图片查看器加了
-      // `tmdb-photo-viewer-boundary`，截图时按 key 指定这一层。
       builder: (context) => RepaintBoundary(
         key: const ValueKey('ai-season-preview-boundary'),
         child: AlertDialog(
           key: const ValueKey('ai-season-preview'),
-          title: const Text('AI 剧集 / 季度分析建议'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${_aiModeLabel(result.mode)} · '
-                  '${(result.confidence * 100).round()}%',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                if (result.seasonNumber >= 0)
+          title: const Text('AI剧集 / 季度分析建议'),
+          content: SizedBox(
+            width: 600,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    result.seasonNumber == 0
-                        ? '特别篇'
-                        : '第 ${result.seasonNumber} 季',
+                    '${_aiModeLabel(result.mode)} · ${(result.confidence * 100).round()}% · ${proposed.status.name}',
                   ),
-                if (result.summary.isNotEmpty) ...[
-                  const SizedBox(height: 8),
                   Text(result.summary),
-                ],
-                for (final warning in result.warnings) ...[
-                  const SizedBox(height: 4),
-                  Text('• $warning'),
-                ],
-                if (previewOnly) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    '本版本仅预览，不会写入绑定。',
-                    key: const ValueKey('ai-season-preview-only'),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+                  for (final warning in result.warnings) Text(warning),
+                  if (result.mode == AiSeasonMode.keepOriginal)
+                    const Text('清除本线路AI映射，恢复原始集列表'),
+                  for (final binding in proposed.bindings)
+                    Text(
+                      '源${binding.sourceIndex + 1} ${snapshotEpisodes[binding.sourceIndex].name} → S${binding.seasonNumber}E${binding.episodeNumber}',
                     ),
-                  ),
+                  if (proposed.skippedSourceIndexes.isNotEmpty)
+                    Text(
+                      '未映射，保留可播放：${proposed.skippedSourceIndexes.map((i) => snapshotEpisodes[i].name).join('、')}',
+                    ),
                 ],
-              ],
+              ),
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text(previewOnly ? '知道了' : '取消'),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
             ),
-            if (!previewOnly)
-              FilledButton(
-                key: const ValueKey('ai-season-apply'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('应用建议'),
-              ),
+            FilledButton(
+              key: const ValueKey('ai-season-apply'),
+              onPressed: canApply ? () => Navigator.pop(context, true) : null,
+              child: const Text('确认落库并应用'),
+            ),
           ],
         ),
       ),
     );
-    if (confirmed != true || previewOnly || !mounted) return;
-
-    // 快照校验（`04` §7.5）。
-    final current = _ownedTmdb?.sourceLine;
-    if (current == null ||
-        current.flagKey != snapshotFlagKey ||
-        current.episodeCount != snapshotCount) {
-      showToast('线路已变化，AI 建议不再适用，请重新分析', kind: ToastKind.error);
+    if (confirmed != true || !mounted) return;
+    if (identitySnapshot !=
+        '${widget.state.tmdbConfigId}|${widget.state.tmdbSiteKeyForAi}|${_ownedTmdb?.identity?.key}') {
+      showToast('TMDB身份或来源已变化，请重新分析', kind: ToastKind.error);
       return;
     }
-
-    switch (result.mode) {
-      case AiSeasonMode.singleSeason:
-        await widget.state.bindTmdbSeason(
-          TmdbSeasonNumber(result.seasonNumber),
-        );
-      case AiSeasonMode.keepOriginal:
-        await widget.state.bindTmdbSeason(const TmdbSeasonKeepOriginal());
-      case AiSeasonMode.flatByCounts:
-        // 应用前**再校验一次**（`04` §7.4）：AI 说可以，本地校验不过就拒绝。
-        if (!(_ownedTmdb?.canAutoSlice ?? false)) {
-          if (!mounted) return;
-          showToast(
-            '当前线路集数与 TMDB 季集数不匹配，无法安全自动切分',
-            kind: ToastKind.error,
-          );
-          return;
-        }
-        await widget.state.bindTmdbSeason(const TmdbSeasonAutoSlice());
-      case AiSeasonMode.explicitMapping:
-        return; // 上面已短路，这里只为穷尽 switch。
-      case null:
-        return;
+    final current = _ownedTmdb?.sourceLine;
+    final vod = _currentVod;
+    if (vod == null ||
+        current == null ||
+        current.flagKey != snapshotFlagKey ||
+        current.episodeCount != snapshotCount) {
+      showToast('线路已变化，建议作废，请重新分析', kind: ToastKind.error);
+      return;
+    }
+    final applied = await widget.state.confirmAiSeasonMapping(
+      analysis: result,
+      vod: vod,
+      flagKey: snapshotFlagKey,
+      episodes: snapshotEpisodes,
+      seasonCounts: snapshotCounts,
+      snapshot: orderedSnapshot,
+    );
+    if (!mounted) return;
+    if (applied == null ||
+        applied.status == AiSeasonApplyStatus.rejected ||
+        applied.status == AiSeasonApplyStatus.staleSnapshot) {
+      showToast(
+        '映射未应用：${applied?.status.name ?? '上下文已变化'}',
+        kind: ToastKind.error,
+      );
+      return;
+    }
+    if (result.mode == AiSeasonMode.keepOriginal) {
+      await widget.state.bindTmdbSeason(const TmdbSeasonKeepOriginal());
+    }
+    if (result.mode == AiSeasonMode.singleSeason) {
+      await widget.state.bindTmdbSeason(TmdbSeasonNumber(result.seasonNumber));
     }
     if (!mounted) return;
-    await widget.state.reloadTmdb();
+    await widget.state.refreshAiSeasonMappings(
+      vod,
+      siteKey: widget.state.tmdbSiteKeyForAi,
+    );
+    if (mounted) setState(() => _aiSelectedSeason = -1);
+    showToast(
+      '映射已落库：${applied.mappedCount}集，保留${applied.skippedSourceIndexes.length}集原行为',
+      kind: ToastKind.success,
+    );
   }
 
   static String _aiModeLabel(AiSeasonMode? mode) => switch (mode) {
@@ -2077,8 +2090,9 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
-    final episode = line.episodes[episodeIndex];
     final state = widget.state;
+    line = state.applyAiMappingsToLine(vod, line);
+    final episode = line.episodes[episodeIndex];
     // 解析是网络往返：在它回来之前不给反馈，用户看到的就是「点了没反应」。
     // `begin` 返回 null 只有三种原因——页面已卸载、本页被别的路由覆盖、本页已有
     // 在途动作。三种都不该继续解析（被覆盖的旧页更不许迟到 push/通知）。
@@ -2135,9 +2149,11 @@ class _DetailPageState extends State<DetailPage> {
         identity: tmdb?.identity,
         episode: episode,
         flagKey: tmdb?.sourceLine?.flagKey ?? line.flag,
-        seasonNumber: tmdb != null && tmdb.hasMatch && tmdb.selectedSeason >= 0
-            ? tmdb.selectedSeason
-            : -1,
+        seasonNumber:
+            episode.extra['tmdb_season_number'] as int? ??
+            (tmdb != null && tmdb.hasMatch && tmdb.selectedSeason >= 0
+                ? tmdb.selectedSeason
+                : -1),
         episodeNumber: _tmdbEpisodeNumberOf(episode),
       );
       // 选集卡片数据（阶段 A）：与 [_buildEpisodes] 的 `cards` 用**同一套构造**，
@@ -2168,7 +2184,9 @@ class _DetailPageState extends State<DetailPage> {
               episodeName: episode.name,
               flag: line.flag,
               playbackFlag: line.playbackFlag,
-              playLines: _playableLines(vod),
+              playLines: _playableLines(vod)
+                  .map((item) => state.applyAiMappingsToLine(vod, item))
+                  .toList(),
               // 播放器换集/切线路要重新解析，必须继续定向到同一条外部线路。
               lineRoutes: _externalRoutes,
               episodeCardsByFlag: episodeCardsByFlag,
@@ -2268,10 +2286,7 @@ class _DetailPageState extends State<DetailPage> {
               const SizedBox(height: 6),
               // 原始错误弱化处理：它是给用户判断「是站点挂了还是真没地址」的
               // 线索，不该和标题抢注意力。
-              Text(
-                reason,
-                style: Theme.of(dialogContext).textTheme.bodySmall,
-              ),
+              Text(reason, style: Theme.of(dialogContext).textTheme.bodySmall),
               const SizedBox(height: 12),
               const Text('换到别的线路后，会自动接着播这一集。'),
             ],
@@ -2305,9 +2320,7 @@ class _DetailPageState extends State<DetailPage> {
     final items = state.siteItems;
     final magnitudes = buildMagnitudes(
       items: items,
-      health: {
-        for (final row in state.siteHealth()) row.siteKey: row,
-      },
+      health: {for (final row in state.siteHealth()) row.siteKey: row},
     );
     final byKey = <String, SourceStatus>{
       for (final magnitude in magnitudes) magnitude.siteKey: magnitude.status,
@@ -2889,6 +2902,7 @@ class _DetailPageState extends State<DetailPage> {
                           ),
                         _buildEpisodes(context, vod, lines),
                       ],
+
                       // ⑥⑦⑧⑨ TMDB 附加区块（`04` §3.1）：失败时整块隐藏（不显示空态占位）。
                       //
                       // folder 展开**也要**渲染：被点的 folder 条目本身就是一部作品
@@ -2896,6 +2910,16 @@ class _DetailPageState extends State<DetailPage> {
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
                       ..._buildTmdbBlocks(context, tmdb),
+                      // AI 推荐放在 TMDB 信息（简介/演职人员/制作团队等）**之下**，
+                      // 不插在剧集与详情之间。缓存优先、后台刷新；未配置 AI
+                      // 时区块自身返回 `SizedBox.shrink()`，不占位也不请求。
+                      Padding(
+                        padding: const EdgeInsets.only(top: AppSpace.lg),
+                        child: AiRecommendationSection(
+                          state: widget.state,
+                          seedTitle: vod.vodName,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -2970,6 +2994,10 @@ class _DetailPageState extends State<DetailPage> {
           },
           onOpenVideo: widget.state.openExternalUrl,
           onCopyVideo: copyToClipboard,
+          aiRecommendations: AiRecommendationSection(
+            state: widget.state,
+            seedTitle: item.title,
+          ),
         ),
       ),
     );
@@ -3024,6 +3052,7 @@ class _DetailPageState extends State<DetailPage> {
   /// - 当前线路：先应用 TMDB 剧集元数据，再按可播放季度过滤；
   /// - 其他线路：不套用当前季度的元数据与过滤（避免跨线路串集），
   ///   只保留来源集名自带的季度信号过滤。
+  int _aiSelectedSeason = -1;
   List<VodEpisode> _renderEpisodes(
     VodPlayLine rawLine, {
     required bool active,
@@ -3031,6 +3060,19 @@ class _DetailPageState extends State<DetailPage> {
     // 归属门：不属于本页影片的 TMDB 数据一律不参与渲染，直接直通原集列表。
     final tmdb = _ownedTmdb;
     if (tmdb == null) return rawLine.episodes;
+    final vod = _currentVod;
+    if (vod != null && widget.state.hasAiMappings(vod, rawLine)) {
+      final mapped = widget.state.applyAiMappingsToLine(vod, rawLine).episodes;
+      return _aiSelectedSeason == -1
+          ? mapped
+          : mapped
+                .where(
+                  (e) => _aiSelectedSeason == -100
+                      ? e.extra['tmdb_season_number'] == null
+                      : e.extra['tmdb_season_number'] == _aiSelectedSeason,
+                )
+                .toList();
+    }
     if (!active) {
       final selected = tmdb.selectedSeason;
       if (selected < 0) return rawLine.episodes;
@@ -3104,6 +3146,13 @@ class _DetailPageState extends State<DetailPage> {
     final cards = <String, List<TmdbEpisodeCard>>{};
     for (final rawLine in lines) {
       final isActive = rawLine.flag == activeFlag;
+      if (widget.state.hasAiMappings(vod, rawLine)) {
+        final episodes = _renderEpisodes(rawLine, active: isActive);
+        cards[rawLine.flag] = _aiEpisodeCards(
+          _episodesReversed ? episodes.reversed.toList() : episodes,
+        );
+        continue;
+      }
       // `_buildEpisodes` 的 `sourceIndices` 取自 TMDB 应用元数据**之后**的线路集，
       // 这里必须用同一个来源，否则同一个缺号集会被算出两个集号。
       final enriched = tmdb.applyEpisodesToLine(rawLine).line;
@@ -3123,6 +3172,32 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。
+  List<TmdbEpisodeCard> _aiEpisodeCards(List<VodEpisode> episodes) => [
+    for (final episode in episodes) _aiEpisodeCard(episode),
+  ];
+  TmdbEpisodeCard _aiEpisodeCard(VodEpisode episode) {
+    final season = episode.extra['tmdb_season_number'] as int?;
+    final number = episode.extra['tmdb_episode_number'] as int?;
+    TmdbEpisode? metadata;
+    for (final candidate
+        in _ownedTmdb?.episodesBySeason[season] ?? const <TmdbEpisode>[]) {
+      if (candidate.number == number) {
+        metadata = candidate;
+        break;
+      }
+    }
+    return TmdbEpisodeCard(
+      number: number ?? 0,
+      title: metadata?.displayTitle ?? episode.name,
+      seasonNumber: season ?? -100,
+      date: metadata?.date ?? '',
+      overview: metadata?.overview,
+      stillUrl: metadata?.stillUrl,
+      runtime: metadata?.runtime ?? 0,
+      rating: metadata?.voteAverage ?? 0,
+    );
+  }
+
   Widget _buildEpisodes(
     BuildContext context,
     Vod vod,
@@ -3135,7 +3210,9 @@ class _DetailPageState extends State<DetailPage> {
     final line = tmdb?.applyEpisodesToLine(rawLine).line ?? rawLine;
     final episodes = _renderEpisodes(rawLine, active: true);
     final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
-    final cards = tmdb == null
+    final cards = widget.state.hasAiMappings(vod, rawLine)
+        ? _aiEpisodeCards(ordered)
+        : tmdb == null
         ? TmdbEpisodeCards.build(
             sourceNames: ordered.map((episode) => episode.name).toList(),
             metadataByNumber: const <int, TmdbEpisode>{},
@@ -3145,9 +3222,7 @@ class _DetailPageState extends State<DetailPage> {
           )
         : tmdb.episodeCardsForEpisodes(
             ordered,
-            seasonNumber: tmdb.selectedSeason >= 0
-                ? tmdb.selectedSeason
-                : null,
+            seasonNumber: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
             includeMetadata: true,
             // 集号只能按**原始线路**的位置推断：`ordered` 已季度过滤、可能已
             // 倒序，用它的下标会让缺号集的编号整体错位（上游同样用
@@ -3179,6 +3254,61 @@ class _DetailPageState extends State<DetailPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              key: const ValueKey('detail-ai-business'),
+              onPressed: () => openAiBusiness(
+                context,
+                widget.state,
+                source: RecommendationSource.current,
+                title: vod.vodName,
+              ),
+              icon: const Icon(Icons.auto_awesome_outlined),
+              label: const Text('AI影片推荐'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => openReaderInput(
+                context,
+                initialText: vod.vodContent ?? '',
+                title: vod.vodName,
+              ),
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('阅读简介'),
+            ),
+            if (widget.state.hasAiMappings(vod, rawLine)) ...[
+              ChoiceChip(
+                label: const Text('全部映射'),
+                selected: _aiSelectedSeason == -1,
+                onSelected: (_) => setState(() => _aiSelectedSeason = -1),
+              ),
+              for (final season
+                  in widget.state
+                      .aiMappingsFor(vod, rawLine)!
+                      .bindings
+                      .map((b) => b.seasonNumber)
+                      .toSet()
+                      .toList()
+                    ..sort())
+                ChoiceChip(
+                  label: Text('第$season季'),
+                  selected: _aiSelectedSeason == season,
+                  onSelected: (_) => setState(() => _aiSelectedSeason = season),
+                ),
+              if (widget.state
+                  .aiMappingsFor(vod, rawLine)!
+                  .skippedSourceIndexes
+                  .isNotEmpty)
+                ChoiceChip(
+                  label: const Text('其他 / 未映射'),
+                  selected: _aiSelectedSeason == -100,
+                  onSelected: (_) => setState(() => _aiSelectedSeason = -100),
+                ),
+            ],
+          ],
+        ),
         TmdbEpisodeHeader(
           episodeCount: episodes.length,
           reversed: _episodesReversed,
@@ -3815,6 +3945,10 @@ class _DetailPageState extends State<DetailPage> {
           // 既有的依赖注入风格传两个参数，而不是把状态对象塞进去。
           initialViewMode: state.episodeViewMode,
           onViewModeChanged: state.setEpisodeViewMode,
+          aiRecommendations: AiRecommendationSection(
+            state: state,
+            seedTitle: state.tmdb.item?.title ?? '',
+          ),
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(

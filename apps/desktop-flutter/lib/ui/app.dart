@@ -31,6 +31,7 @@ import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
 import 'diagnostics_pages.dart';
+import 'ai_integration_widgets.dart';
 import 'following_calendar_page.dart';
 import 'following_page.dart';
 import 'image_header_scope.dart';
@@ -121,8 +122,9 @@ class StartupArguments {
         final header = argument.substring('--header='.length);
         final separator = header.indexOf(':');
         if (separator > 0) {
-          headers[header.substring(0, separator).trim()] =
-              header.substring(separator + 1).trim();
+          headers[header.substring(0, separator).trim()] = header
+              .substring(separator + 1)
+              .trim();
         }
       } else if (argument.startsWith('--seek=')) {
         seek = double.tryParse(argument.substring('--seek='.length));
@@ -187,7 +189,10 @@ Future<void> main(List<String> args) async {
   await windowManager.ensureInitialized();
   StartupTrace.mark('window-manager');
 
-  final startup = StartupArguments.parse([...args, ...Platform.executableArguments]);
+  final startup = StartupArguments.parse([
+    ...args,
+    ...Platform.executableArguments,
+  ]);
   StartupTrace.sinkPath = startup.traceFile;
   StartupTrace.mark('args-parsed');
 
@@ -202,12 +207,15 @@ Future<void> main(List<String> args) async {
   // 首帧回调后再执行 `then`，而原生 runner 的 `Show()` 也挂在首帧回调上。
   // 因此这里把 `runApp` 放在等待之前：先让 Flutter 开始构建首帧，避免
   // “等首帧 → 才 runApp → 再等首帧”的串行等待放大冷启动时间。
-  final readyToShow = windowManager.waitUntilReadyToShow(windowOptions, () async {
-    StartupTrace.mark('window-ready-to-show');
-    await windowManager.show();
-    await windowManager.focus();
-    StartupTrace.mark('window-shown');
-  });
+  final readyToShow = windowManager.waitUntilReadyToShow(
+    windowOptions,
+    () async {
+      StartupTrace.mark('window-ready-to-show');
+      await windowManager.show();
+      await windowManager.focus();
+      StartupTrace.mark('window-shown');
+    },
+  );
 
   runApp(WebHtvApp(startup: startup));
   StartupTrace.mark('run-app');
@@ -235,7 +243,10 @@ void recordCrashForPaths({
     stderr.writeln(entry);
   } catch (_) {}
   try {
-    SessionRecoveryStore.appendCrashForPaths(paths ?? AppPaths.resolve(), entry);
+    SessionRecoveryStore.appendCrashForPaths(
+      paths ?? AppPaths.resolve(),
+      entry,
+    );
   } catch (_) {}
 }
 
@@ -400,6 +411,7 @@ enum ShellSection {
   spiders,
   settings,
   logs,
+  ai,
 }
 
 class AppShell extends StatefulWidget {
@@ -490,7 +502,8 @@ class _AppShellState extends State<AppShell> {
         showToast(
           lastError.userMessage,
           kind: ToastKind.error,
-          detail: '错误码：${lastError.kind.name}'
+          detail:
+              '错误码：${lastError.kind.name}'
               '${lastError.retryable ? " · 可重试" : ""}',
           onDismiss: _state.clearError,
         );
@@ -633,7 +646,10 @@ class _AppShellState extends State<AppShell> {
   }
 
   /// 探测 + 重新导入 + 精确激活一条桥接源；失败时置横幅状态。
-  Future<void> _tryRestoreBridge(String address, LastConfigRecord memory) async {
+  Future<void> _tryRestoreBridge(
+    String address,
+    LastConfigRecord memory,
+  ) async {
     final sync = _state.syncState;
     final device = await sync.probeAutoConnectTarget(address);
     if (!mounted) return;
@@ -641,9 +657,11 @@ class _AppShellState extends State<AppShell> {
       _showBridgeBanner(
         memory,
         address: address,
-        deviceName: _state.lastConfigDevice?.name ??
+        deviceName:
+            _state.lastConfigDevice?.name ??
             _state.deviceNameForUuid(memory.deviceUuid),
-        error: sync.lastError ??
+        error:
+            sync.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '设备探测失败：$address',
@@ -665,7 +683,8 @@ class _AppShellState extends State<AppShell> {
         memory,
         address: device.reachableBase,
         deviceName: device.name,
-        error: sync.lastError ??
+        error:
+            sync.lastError ??
             AppError(
               AppErrorKind.bridgeUnreachable,
               '该播放源导入失败',
@@ -698,10 +717,7 @@ class _AppShellState extends State<AppShell> {
       _bridgeBanner = null;
       _bannerMemory = null;
     });
-    _state.log.info(
-      '已恢复上次使用的桥接配置（${memory.sourceKey}）',
-      scope: 'bridge',
-    );
+    _state.log.info('已恢复上次使用的桥接配置（${memory.sourceKey}）', scope: 'bridge');
   }
 
   void _showBridgeBanner(
@@ -803,8 +819,8 @@ class _AppShellState extends State<AppShell> {
               startPosition: widget.startup.seekSeconds == null
                   ? null
                   : Duration(
-                      milliseconds:
-                          (widget.startup.seekSeconds! * 1000).round(),
+                      milliseconds: (widget.startup.seekSeconds! * 1000)
+                          .round(),
                     ),
             ),
           ),
@@ -845,9 +861,9 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openConfigPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)));
     if (mounted) setState(() {});
   }
 
@@ -1003,6 +1019,8 @@ class _AppShellState extends State<AppShell> {
         return SettingsPage(state: _state);
       case ShellSection.logs:
         return LogsPage(state: _state);
+      case ShellSection.ai:
+        return AiBusinessPage(state: _state);
     }
   }
 }
@@ -1132,7 +1150,11 @@ class _StorageWarningBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.folder_off_outlined, size: 18, color: scheme.onErrorContainer),
+          Icon(
+            Icons.folder_off_outlined,
+            size: 18,
+            color: scheme.onErrorContainer,
+          ),
           const SizedBox(width: AppSpace.sm),
           Expanded(
             child: SelectableText(
@@ -1173,7 +1195,9 @@ class _TopBar extends StatelessWidget {
         // 顶栏是世界的"外壳"：比内容低一档的表面，靠发丝线分隔。
         color: scheme.surfaceContainerLowest,
         border: Border(
-          bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.55)),
+          bottom: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: 0.55),
+          ),
         ),
       ),
       child: Row(
@@ -1383,6 +1407,10 @@ class _SideBar extends StatelessWidget {
           icon: Icon(Icons.receipt_long),
           label: Text('日志'),
         ),
+        const NavigationRailDestination(
+          icon: Icon(Icons.auto_awesome_outlined),
+          label: Text('AI / 阅读器'),
+        ),
       ],
     );
   }
@@ -1403,10 +1431,7 @@ class _BoundarySheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '使用边界提示',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
+            Text('使用边界提示', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
             const Text(usageBoundaryNotice),
             const SizedBox(height: 16),

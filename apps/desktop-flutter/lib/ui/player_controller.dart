@@ -125,14 +125,24 @@ class PlayerLoadOutcome {
 
 /// 播放器控制器。
 class PlayerController extends ChangeNotifier {
-  PlayerController({Player? player, SubtitleLoader? subtitleLoader})
-    : _player = player ?? Player(),
-      _subtitleLoader = subtitleLoader ?? SubtitleService() {
+  PlayerController({
+    Player? player,
+    SubtitleLoader? subtitleLoader,
+    this.onSeek,
+  }) : _player = player ?? Player(),
+       _subtitleLoader = subtitleLoader ?? SubtitleService() {
     _videoController = VideoController(_player);
     _bind();
   }
 
   final Player _player;
+  final ValueChanged<Duration>? onSeek;
+  SubtitleDocument? _selectedSubtitleDocument;
+  SubtitleDocument? get selectedSubtitleDocument =>
+      _selectedSubtitle?.isExternal == true &&
+          _selectedSubtitle?.url == _selectedSubtitleDocument?.sourceUrl
+      ? _selectedSubtitleDocument
+      : null;
   late final VideoController _videoController;
 
   /// 字幕加载器（§10.3）：用宿主自己的 HTTP 客户端携带 Header 拉取，
@@ -232,6 +242,7 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
     return true;
   }
+
   double get volume => _volume;
   bool get muted => _muted;
   double get rate => _rate;
@@ -254,7 +265,9 @@ class PlayerController extends ChangeNotifier {
     for (final track in _tracks.video) {
       if (track.id == id) return track;
     }
-    return _tracks.video.where((track) => track.id != 'auto' && track.id != 'no').firstOrNull;
+    return _tracks.video
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .firstOrNull;
   }
 
   AudioTrack? get _selectedAudioTrack {
@@ -262,7 +275,9 @@ class PlayerController extends ChangeNotifier {
     for (final track in _tracks.audio) {
       if (track.id == id) return track;
     }
-    return _tracks.audio.where((track) => track.id != 'auto' && track.id != 'no').firstOrNull;
+    return _tracks.audio
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .firstOrNull;
   }
 
   /// 引擎上报的原始音轨（标题未加工）。
@@ -577,6 +592,7 @@ class PlayerController extends ChangeNotifier {
           await file.delete();
           return true;
         }
+        _selectedSubtitleDocument = document;
         _externalTrackFiles[file.path] = option;
         _selectedSubtitle = option;
         // 上一份外挂字幕文件已不再需要：保留当前这一份即可。
@@ -648,7 +664,10 @@ class PlayerController extends ChangeNotifier {
 
   double get progress {
     if (_duration.inMilliseconds <= 0) return 0;
-    return (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
+    return (_position.inMilliseconds / _duration.inMilliseconds).clamp(
+      0.0,
+      1.0,
+    );
   }
 
   void _bind() {
@@ -823,7 +842,11 @@ class PlayerController extends ChangeNotifier {
     String? episodeName,
   }) async {
     if (_disposed) {
-      return _failure(url, 'PlayerController is disposed', Stopwatch()..start());
+      return _failure(
+        url,
+        'PlayerController is disposed',
+        Stopwatch()..start(),
+      );
     }
     _loading = true;
     _completed = false;
@@ -831,7 +854,8 @@ class PlayerController extends ChangeNotifier {
     _currentUrl = url;
 
     // 诊断：记录入口地址与注入 Header（输出时统一脱敏，§23）。
-    final builder = diagnosticsBuilder ??
+    final builder =
+        diagnosticsBuilder ??
         PlaybackDiagnosticsBuilder(
           siteKey: siteKey,
           flag: flag,
@@ -843,7 +867,11 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
 
     if (_disposed) {
-      return _failure(url, 'PlayerController is disposed', Stopwatch()..start());
+      return _failure(
+        url,
+        'PlayerController is disposed',
+        Stopwatch()..start(),
+      );
     }
     final stopwatch = Stopwatch()..start();
     final loadCompleter = Completer<Duration>();
@@ -884,9 +912,8 @@ class PlayerController extends ChangeNotifier {
 
       final loadElapsed = await loadCompleter.future.timeout(
         timeout,
-        onTimeout: () => throw TimeoutException(
-          'load timeout after ${timeout.inSeconds}s',
-        ),
+        onTimeout: () =>
+            throw TimeoutException('load timeout after ${timeout.inSeconds}s'),
       );
 
       if (awaitFirstFrame && firstFrame == null) {
@@ -910,12 +937,20 @@ class PlayerController extends ChangeNotifier {
         _lastOutcome = outcome;
         _loading = false;
         _retryCount = 0;
-        _finishDiagnostics(succeeded: true, loadElapsed: loadElapsed, firstFrame: firstFrame);
+        _finishDiagnostics(
+          succeeded: true,
+          loadElapsed: loadElapsed,
+          firstFrame: firstFrame,
+        );
         notifyListeners();
       }
       return outcome;
     } on TimeoutException catch (error) {
-      final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
+      final outcome = _failure(
+        url,
+        loadError ?? error.message ?? 'timeout',
+        stopwatch,
+      );
       if (!_disposed) {
         _lastOutcome = outcome;
         _loading = false;
@@ -962,11 +997,7 @@ class PlayerController extends ChangeNotifier {
     if (firstFrame != null) {
       builder.addStage(PlaybackStage.firstFrame, firstFrame);
     } else if (succeeded) {
-      builder.addStage(
-        PlaybackStage.firstFrame,
-        loadElapsed,
-        note: '首帧未单独观测到',
-      );
+      builder.addStage(PlaybackStage.firstFrame, loadElapsed, note: '首帧未单独观测到');
     }
     builder.addStage(PlaybackStage.playing, Duration.zero);
     builder.succeed();
@@ -1042,15 +1073,18 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
-  Future<void> seek(Duration target) => _player.seek(target);
+  Future<void> seek(Duration target) {
+    onSeek?.call(target);
+    return _player.seek(target);
+  }
 
   Future<void> seekBy(Duration delta) {
     final next = _position + delta;
-    if (next < Duration.zero) return _player.seek(Duration.zero);
+    if (next < Duration.zero) return seek(Duration.zero);
     if (_duration > Duration.zero && next > _duration) {
-      return _player.seek(_duration);
+      return seek(_duration);
     }
-    return _player.seek(next);
+    return seek(next);
   }
 
   Future<void> setVolume(double value) async {
@@ -1125,9 +1159,7 @@ double? parseRawInputRateFromCacheState(String? cacheStateJson) {
 ///
 /// 取到逗号/右花括号/空白为止：mpv 在该字段后面必然跟分隔符，这条边界
 /// 同时挡住了把后续字段一起吞进去。
-final RegExp _rawInputRateField = RegExp(
-  r'"raw-input-rate"\s*:\s*([^,}\s]+)',
-);
+final RegExp _rawInputRateField = RegExp(r'"raw-input-rate"\s*:\s*([^,}\s]+)');
 
 /// 双数据源的落定规则：首选优先，首选没值才看回退。
 ///
@@ -1162,12 +1194,16 @@ double? parseByteRate(String? raw) {
 /// - **KB/s 不带小数**：`860.3` 的精度是假的（mpv 自己就在抖），
 ///   而 MB/s 保留一位是因为那个量级下一位小数肉眼可见地有意义。
 String formatByteRate(double? bytesPerSecond) {
-  if (bytesPerSecond == null || !bytesPerSecond.isFinite || bytesPerSecond < 0) {
+  if (bytesPerSecond == null ||
+      !bytesPerSecond.isFinite ||
+      bytesPerSecond < 0) {
     return '—';
   }
   const kb = 1000.0;
   const mb = 1000.0 * 1000.0;
-  if (bytesPerSecond >= mb) return '${(bytesPerSecond / mb).toStringAsFixed(1)} MB/s';
+  if (bytesPerSecond >= mb) {
+    return '${(bytesPerSecond / mb).toStringAsFixed(1)} MB/s';
+  }
   if (bytesPerSecond >= kb) return '${(bytesPerSecond / kb).round()} KB/s';
   return '${bytesPerSecond.round()} B/s';
 }

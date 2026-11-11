@@ -47,10 +47,12 @@ const Set<String> syncModes = {'0', '1', '2'};
 /// 只包含 PC **有对应语义**的键。`viewing_record_sync_*` 等纯安卓运行时开关
 /// 不在其中——同步过去只会是无效设置。
 ///
-/// **Phase 7 追加的三个键**（`tmdb_model` / `ai_title_extraction` /
-/// `ai_ad_detection`）属于「安卓有、PC 无」：它们留在白名单内但**不落库**，
+/// **安卓有、PC 无的键**（当前仅 `tmdb_model`）留在白名单内但**不落库**，
 /// 目的是（a）推送时不丢（PC 能把收到的值原样回推）、
 /// （b）披露时能区分「PC 不支持」与「未授权同步」。
+///
+/// 注意：`ai_title_extraction` / `ai_ad_detection` 在 AI 功能迁移后已有真实
+/// 消费方（AI 片名提取与 AI 去广开关），因此**不再是** unsupported 键。
 /// 见 [pcUnsupportedSettingsKeys] 与 [SyncSettings.unsupportedKeys]。
 const List<String> pcSettingsWhitelist = [
   'tmdb_enabled',
@@ -59,6 +61,7 @@ const List<String> pcSettingsWhitelist = [
   'ai_config',
   'ai_title_extraction',
   'ai_ad_detection',
+  'ai_user_data',
 ];
 
 /// 含凭据的设置键：默认**不**同步，用户显式确认后才参与（P3、§19）。
@@ -66,18 +69,18 @@ const List<String> pcSettingsWhitelist = [
 /// `ai_config` 内含 `apiKey`（`design/00` §3.3 实测），因此与 `tmdb_config`
 /// 同列。`tmdb_model` / `ai_title_extraction` / `ai_ad_detection` 是标量开关，
 /// 不含凭据。
-const Set<String> pcSensitiveSettingsKeys = {'tmdb_config', 'ai_config'};
+const Set<String> pcSensitiveSettingsKeys = {
+  'tmdb_config',
+  'ai_config',
+  'ai_user_data',
+};
 
 /// 「安卓有、PC 无」的设置键（Phase 7 `design/01` §5.2 注）。
 ///
 /// 这些键**在白名单内**（推送时不丢）但**不落库**。与 [SyncSettings.skippedKeys]
 /// 的语义必须区分：`skippedKeys` = 白名单外或未授权，`unsupportedKeys` = 白名单内
 /// 但 PC 不支持。两个集合**互斥**（`design/04` S28）。
-const Set<String> pcUnsupportedSettingsKeys = {
-  'tmdb_model',
-  'ai_title_extraction',
-  'ai_ad_detection',
-};
+const Set<String> pcUnsupportedSettingsKeys = {'tmdb_model'};
 
 // ---------------------------------------------------------------------------
 // 哨兵值与单位归一化
@@ -138,7 +141,8 @@ class AndroidHistoryKey {
   }
 
   @override
-  String toString() => '$siteKey$androidHistoryKeySeparator$vodId'
+  String toString() =>
+      '$siteKey$androidHistoryKeySeparator$vodId'
       '$androidHistoryKeySeparator$cid';
 }
 
@@ -336,10 +340,7 @@ class SyncFailure {
 ///
 /// **失败必须可见**（P5）：不能把解析不了的条目静默丢弃后报"同步成功"。
 class SyncHistoryParseResult {
-  const SyncHistoryParseResult({
-    required this.items,
-    required this.failures,
-  });
+  const SyncHistoryParseResult({required this.items, required this.failures});
 
   final List<SyncHistoryItem> items;
   final List<SyncFailure> failures;
@@ -417,10 +418,7 @@ SyncMergeDecision decideHistoryMerge({
 }) {
   if (local == null) {
     if (localDeletedAt != null && incoming.updatedAt < localDeletedAt) {
-      return const SyncMergeDecision(
-        SyncMergeAction.skip,
-        '本地已删除且远端记录更旧（不复活）',
-      );
+      return const SyncMergeDecision(SyncMergeAction.skip, '本地已删除且远端记录更旧（不复活）');
     }
     return const SyncMergeDecision(SyncMergeAction.insert, '本地无该条记录');
   }
@@ -668,6 +666,7 @@ class SyncSettings {
     required this.sensitiveIncluded,
     this.unsupportedKeys = const [],
     this.raw = const {},
+    this.all = const {},
   });
 
   const SyncSettings.empty()
@@ -675,7 +674,8 @@ class SyncSettings {
       skippedKeys = const [],
       sensitiveIncluded = false,
       unsupportedKeys = const [],
-      raw = const {};
+      raw = const {},
+      all = const {};
 
   /// 白名单内的键值（键名保留安卓原名，便于回传）。
   final Map<String, Object?> values;
@@ -690,6 +690,13 @@ class SyncSettings {
   ///
   /// 与 [skippedKeys] **互斥**：一个键不可能同时出现在两个集合里。
   final List<String> unsupportedKeys;
+
+  /// 本次**已授权**的 `prefers` 全量键值（含白名单外的未知键）。
+  ///
+  /// 回推必须保真：安卓侧新增、PC 尚不认识的顶层设置键也要原样带回，
+  /// 不能因为不在 [pcSettingsWhitelist] 里就被丢掉。未授权时敏感键不进入
+  /// 这里，因此本机永远不会在未授权情况下留存/回推凭据。
+  final Map<String, Object?> all;
 
   /// 白名单内键的**原值**（含 [unsupportedKeys] 的键），用于回推保真。
   ///
@@ -711,13 +718,18 @@ class SyncSettings {
     final skipped = <String>[];
     final unsupported = <String>[];
     final raw = <String, Object?>{};
+    final all = <String, Object?>{};
     for (final entry in prefers.entries) {
       final key = entry.key;
-      if (!pcSettingsWhitelist.contains(key)) {
+      // 敏感且未授权：既不落库也不留存（本机不会在未授权时持有凭据）。
+      if (pcSensitiveSettingsKeys.contains(key) && !allowSensitive) {
         skipped.add(key);
         continue;
       }
-      if (pcSensitiveSettingsKeys.contains(key) && !allowSensitive) {
+      // `all` 收集**除敏感未授权外**的全部条目（含白名单外未知键），
+      // 用于回推保真；白名单只决定 values/unsupported/skipped 的分类。
+      all[key] = entry.value;
+      if (!pcSettingsWhitelist.contains(key)) {
         skipped.add(key);
         continue;
       }
@@ -734,8 +746,9 @@ class SyncSettings {
       skippedKeys: skipped,
       unsupportedKeys: unsupported,
       raw: raw,
-      sensitiveIncluded: allowSensitive &&
-          values.keys.any(pcSensitiveSettingsKeys.contains),
+      all: all,
+      sensitiveIncluded:
+          allowSensitive && values.keys.any(pcSensitiveSettingsKeys.contains),
     );
   }
 
@@ -821,7 +834,8 @@ class SyncFavoriteItem {
 
   /// 反向映射成安卓 `Keep` JSON（`describe` 脱敏口径同历史）。
   Map<String, Object?> toAndroidJson() => {
-    'key': '$siteKey$androidHistoryKeySeparator$targetId'
+    'key':
+        '$siteKey$androidHistoryKeySeparator$targetId'
         '${androidHistoryKeySeparator}0',
     'siteName': subtitle ?? '',
     'vodName': title,
@@ -831,8 +845,7 @@ class SyncFavoriteItem {
   };
 
   /// 脱敏描述：不含片名与站点名（同 `design/02` §7）。
-  String describe() =>
-      'keep(kind=$kind, site=$siteKey, updated=$updatedAt)';
+  String describe() => 'keep(kind=$kind, site=$siteKey, updated=$updatedAt)';
 
   @override
   String toString() => describe();
@@ -840,10 +853,7 @@ class SyncFavoriteItem {
 
 /// `Keep[]` 的解析结果。
 class SyncFavoriteParseResult {
-  const SyncFavoriteParseResult({
-    required this.items,
-    required this.failures,
-  });
+  const SyncFavoriteParseResult({required this.items, required this.failures});
 
   final List<SyncFavoriteItem> items;
   final List<SyncFailure> failures;
@@ -952,9 +962,7 @@ SyncFavoriteMergePlan buildFavoriteMergePlan({
 
 /// 校验结论：能直接翻译成 HTTP 状态码 + 对端可见的 message。
 class SyncRequestCheck {
-  const SyncRequestCheck.ok()
-    : status = 200,
-      message = null;
+  const SyncRequestCheck.ok() : status = 200, message = null;
 
   const SyncRequestCheck.rejected(this.status, this.message);
 
@@ -998,10 +1006,7 @@ SyncRequestCheck validateSyncAction({
     );
   }
   if (!enabled) {
-    return const SyncRequestCheck.rejected(
-      403,
-      '同步未开启（请在 WebHTV PC 设置中开启后重试）',
-    );
+    return const SyncRequestCheck.rejected(403, '同步未开启（请在 WebHTV PC 设置中开启后重试）');
   }
   if (!peerAuthorized) {
     return const SyncRequestCheck.rejected(403, '对端未授权');

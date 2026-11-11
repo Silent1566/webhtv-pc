@@ -23,6 +23,17 @@ import '../core/ad_rules.dart';
 import '../core/android_bridge.dart';
 import '../core/android_sync.dart';
 import '../core/ai_config.dart';
+import '../core/ai_content/ad_rule_validation.dart';
+import '../core/ai_content/group_rule_validation.dart';
+import '../core/ai_content/recommendation.dart';
+import '../core/ai_content/title_learning.dart';
+import '../services/ai_content/ad_rule_service.dart';
+import '../services/ai_content/ai_content_completion.dart';
+import '../services/ai_completion_client.dart';
+import '../services/ai_integration.dart';
+import '../services/ai_season_mapping_service.dart';
+import '../services/ai_content_title_bridge.dart';
+import '../services/ai_episode_season_service.dart';
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
 import '../core/cat_source.dart';
@@ -227,9 +238,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
     FollowingNotifier? followingNotifier,
+    AiContentCompletion? aiContentCompletion,
+    AiCompletionClient? aiSeasonClient,
+    TmdbService? tmdbService,
   }) : paths = paths ?? AppPaths.resolve(),
-       _externalPlayerDetector = externalPlayerDetector ?? ExternalPlayers.detect,
-       log = log ?? LogService(),
+       _externalPlayerDetector =
+           externalPlayerDetector ?? ExternalPlayers.detect,
+       // AI 调用日志的默认 sink：底座持有多处调用点，不能靠每处记得传 log。
+      log = AiCompletionClient.defaultLog = log ?? LogService(),
        _injectedLiveService = liveService,
        _injectedEpgService = epgService,
        _injectedBridgeService = androidBridgeService,
@@ -238,6 +254,10 @@ class AppState extends ChangeNotifier implements SyncStateHost {
        _injectedReadClient = androidReadClient,
        _injectedSearchSuggestService = searchSuggestService,
        _injectedFollowingNotifier = followingNotifier,
+       // ignore: prefer_initializing_formals
+       _aiContentCompletion = aiContentCompletion,
+       // ignore: prefer_initializing_formals
+       _aiSeasonClient = aiSeasonClient,
        // 宿主路径在这里定一次：生效配置与**其它配置**（原来源续播）的
        // `SpiderRouter` 必须用同一套宿主，否则同一站点在两条路径下会落到
        // 两个不同的 sidecar 入口。
@@ -279,6 +299,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       log: this.log,
       host: this,
       settingsPath: this.paths.settingsPath,
+      settingsExporter: (allowSensitive) =>
+          exportSyncedSettings(allowSensitive: allowSensitive),
       bridgeService: _injectedBridgeService,
       client: _injectedSyncClient,
       serverFactory: _injectedSyncServerFactory,
@@ -302,10 +324,9 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     // （用户反馈：「进入详情页貌似没有 TMDB 缓冲，感觉每次都重新查询了」）。
     // 存储根与 EPG 一致，都是 [AppPaths.cacheDir]。
     _tmdbCache = TmdbCache(cacheDir: cacheDir);
-    _tmdbService = TmdbService(
-      config: () => _tmdbConfigStore.config,
-      cache: _tmdbCache,
-    );
+    _tmdbService =
+        tmdbService ??
+        TmdbService(config: () => _tmdbConfigStore.config, cache: _tmdbCache);
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
       _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
@@ -637,6 +658,456 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   /// AI 服务是否就绪（季度弹窗据此决定 AI 项是分析还是引导去设置）。
   bool get aiReady => aiConfig.isReady;
+  bool get aiTitleExtractionEnabled =>
+      _uiPreferences?.aiTitleExtractionEnabled ?? false;
+  Map<String, Object?> get audioAiSettings =>
+      _uiPreferences?.androidAiRaw ?? const {};
+  Future<bool> saveAudioAiSettings(Map<String, Object?> values) async {
+    final ok =
+        await _uiPreferences?.rememberAiIntegrationSettings(values) ?? false;
+    notifyListeners();
+    return ok;
+  }
+
+  bool get aiAdDetectionEnabled =>
+      _uiPreferences?.aiAdDetectionEnabled ?? false;
+  final AiContentCompletion? _aiContentCompletion;
+  final AiCompletionClient? _aiSeasonClient;
+  AiEpisodeSeasonService createAiSeasonService() =>
+      AiEpisodeSeasonService(config: aiConfig, client: _aiSeasonClient);
+  AiIntegration? _aiIntegration;
+  AiIntegration get aiIntegration => _aiIntegration ??= AiIntegration(
+    paths: paths,
+    config: () => aiConfig,
+    titleEnabled: () => aiTitleExtractionEnabled,
+    completion: _aiContentCompletion,
+    log: log,
+    enricher: (items) async {
+      final result = <RecommendationEnrichment?>[];
+      for (final item in items) {
+        try {
+          final type = item.mediaType == RecommendationMediaType.tv
+              ? TmdbMediaType.tv
+              : TmdbMediaType.movie;
+          final match = pickRecommendationTmdbItem(
+            await _tmdbService.search(item.title),
+            item.title,
+            type,
+            item.year,
+          );
+          result.add(
+            match == null
+                ? null
+                : RecommendationEnrichment(
+                    tmdbId: match.tmdbId,
+                    mediaType: item.mediaType,
+                    posterUrl: match.posterUrl,
+                    overview: match.overview,
+                    rating: match.tmdbRating,
+                  ),
+          );
+        } catch (error) {
+          log.warning('推荐富集失败 title=${item.title} error=$error', scope: 'ai');
+          result.add(null);
+        }
+      }
+      return result;
+    },
+  );
+
+  Future<bool> setAiTitleExtractionEnabled(bool enabled) async {
+    final ok =
+        await _uiPreferences?.rememberAiIntegrationSettings({
+          'ai_title_extraction': enabled,
+        }) ??
+        false;
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> setAiAdDetectionEnabled(bool enabled) async {
+    final ok =
+        await _uiPreferences?.rememberAiIntegrationSettings({
+          'ai_ad_detection': enabled,
+        }) ??
+        false;
+    if (!enabled) clearAiAdApplication();
+    notifyListeners();
+    return ok;
+  }
+
+  Future<String?> resolveBusinessTitle(
+    String rawTitle, {
+    String siteKey = '',
+    String vodId = '',
+    String vodRemarks = '',
+  }) async {
+    if (!aiTitleExtractionEnabled || !aiReady) return null;
+    final result = await aiIntegration.title.resolve(
+      TitleQuery(
+        rawTitle: rawTitle,
+        siteKey: siteKey,
+        vodId: vodId,
+        vodRemarks: vodRemarks,
+      ),
+    );
+    final title = result.value;
+    return result.ok &&
+            title != null &&
+            title.confidence >= .8 &&
+            title.title.trim().isNotEmpty
+        ? title.title
+        : null;
+  }
+
+  Future<bool> learnBusinessTitle({
+    required String rawTitle,
+    required String confirmedTitle,
+    required String siteKey,
+    required String vodId,
+    String? mediaType,
+    int? year,
+  }) async {
+    if (rawTitle.trim().isEmpty || confirmedTitle.trim().isEmpty) return false;
+    final old = await aiIntegration.userData.loadLearning();
+    final query = TitleQuery(
+      rawTitle: rawTitle,
+      siteKey: siteKey,
+      vodId: vodId,
+    );
+    final updated = old.record(
+      query,
+      TitleLearningExample(
+        rawTitle: rawTitle,
+        resolvedTitle: confirmedTitle,
+        siteKey: siteKey,
+        vodId: vodId,
+        mediaType: TitleMediaTypeHint.parse(mediaType),
+        year: year,
+      ),
+      now: DateTime.now(),
+    );
+    return aiIntegration.userData.saveLearning(updated);
+  }
+
+  Future<bool> applyAiGroupRules(List<GroupRuleProposal> proposals) async {
+    final approved = await aiIntegration.group.approve(proposals);
+    if (!approved.ok || approved.value == null) return false;
+    return setSiteGroupSettings(
+      mergeAiGroupRules(siteGroupSettings, approved.value!),
+    );
+  }
+
+  List<AdRuleProposal> _sessionAiAdRules = const [];
+  void clearAiAdApplication() {
+    _aiAdApplyTicket++;
+    _sessionAiAdRules = const [];
+    _proxy.aiSessionFingerprint = null;
+    _proxy.aiSessionRules = const AdRuleSet.empty();
+    _applyAdRulesToProxy();
+  }
+
+  int _aiAdApplyTicket = 0;
+
+  /// 开始在途的广告确认提交；返回本次提交票据。
+  int startAiAdApply() => ++_aiAdApplyTicket;
+
+  /// 撤销所有在途提交（关闭/取消对话框时调用）。
+  void cancelAiAdApply() => _aiAdApplyTicket++;
+
+  bool _aiAdTicketValid(int ticket) => ticket == _aiAdApplyTicket;
+
+  AiPlaylistSnapshot? aiPlaylistFor(String siteKey) {
+    final fingerprint = _proxySession?.fingerprint;
+    if (fingerprint == null) return null;
+    final snapshot = _proxy.mediaPlaylistFor(fingerprint);
+    return snapshot?.siteKey == siteKey ? snapshot : null;
+  }
+
+  Future<void> importAiUserData(String raw) async {
+    await importAiUserFiles(paths, raw);
+    _aiIntegration = null;
+    clearAiAdApplication();
+    notifyListeners();
+  }
+
+  Future<MultiSiteSearchOutcome?> searchRecommendation(String title) async {
+    if (_siteService == null) return null;
+    final site = selectedSite;
+    if (site != null) {
+      final outcome = await searchAll(title, siteKey: site.key);
+      if (outcome.cancelled || !identical(outcome, _activeSearch)) {
+        return outcome;
+      }
+      if (outcome.totalItems > 0) return outcome;
+    }
+    return searchAll(title);
+  }
+
+  Future<bool> applyAiAdRule(
+    AdRuleAssessment assessment, {
+    required AdDetectionContext context,
+    required AdPlaylistEvidence evidence,
+    required Uri playlist,
+    required int ticket,
+  }) async {
+    if (!_aiAdTicketValid(ticket)) return false;
+    if (!aiAdDetectionEnabled ||
+        !aiReady ||
+        context.urlHost != playlist.host ||
+        context.urlPath != playlist.path) {
+      return false;
+    }
+    final snapshot = aiPlaylistFor(context.siteKey);
+    if (snapshot == null ||
+        snapshot.playlist != playlist ||
+        jsonEncode(snapshot.evidence.segments) !=
+            jsonEncode(evidence.segments)) {
+      return false;
+    }
+    final approved = await aiIntegration.ad.approve(
+      assessment,
+      context: context,
+      evidence: evidence,
+    );
+    // 用户在 approve 在途期间关闭/取消、换集或关掉开关：结果作废，
+    // 不得在 await 之后悄悄把规则装进代理。
+    if (!_aiAdTicketValid(ticket) ||
+        !aiAdDetectionEnabled ||
+        !aiReady ||
+        aiPlaylistFor(context.siteKey)?.signature != snapshot.signature) {
+      return false;
+    }
+    if (!approved.ok || approved.value == null) return false;
+    // Other stored candidates have not been approved for this playback.
+    final checked = aiIntegration.ad.assessForApplication(
+      assessment.proposal!,
+      context: context,
+      evidence: evidence,
+    );
+    if (!checked.applicable || !_aiAdTicketValid(ticket)) return false;
+    _sessionAiAdRules = [checked.proposal!];
+    _proxy.aiSessionFingerprint = snapshot.sessionFingerprint;
+    _proxy.aiSessionRules = mergeAiAdRules(
+      const AdRuleSet.empty(),
+      _sessionAiAdRules,
+      playlist,
+    );
+    _applyAdRulesToProxy();
+    return true;
+  }
+
+  String _aiTmdbSiteKey = '';
+  String get tmdbSiteKeyForAi => _aiTmdbSiteKey;
+  int _aiLoadRun = 0;
+  final Map<String, AiSeasonBindingsResult> _aiSeasonBindings = {};
+  final Map<String, String> _aiSeasonSnapshots = {};
+  String _aiLineKey(Vod vod, VodPlayLine line) =>
+      '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
+  VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) {
+    final result = aiMappingsFor(vod, line);
+    if (result == null) return line;
+    return applyAiEpisodeBindings(line, {
+      for (final binding in result.bindings)
+        binding.sourceIndex: (
+          season: binding.seasonNumber,
+          episode: binding.episodeNumber,
+        ),
+    });
+  }
+
+  bool hasAiMappings(Vod vod, VodPlayLine line) =>
+      aiMappingsFor(vod, line)?.bindings.isNotEmpty ?? false;
+  AiSeasonBindingsResult? aiMappingsFor(Vod vod, VodPlayLine line) {
+    final key = _aiLineKey(vod, line);
+    if (_aiSeasonSnapshots[key] !=
+        seasonBindingsSnapshot(line.episodes, tmdb.seasonEpisodeCounts)) {
+      return null;
+    }
+    return _aiSeasonBindings[key];
+  }
+
+  Future<void> refreshAiSeasonMappings(
+    Vod vod, {
+    required String siteKey,
+  }) async {
+    final db = _database;
+    if (db == null || !tmdb.belongsTo(vod.vodId)) return;
+    final generation = tmdb.generation;
+    final detailGeneration = _detailRunId;
+    final service = AiSeasonMappingService(database: db);
+    final lines = playLinesOf(vod);
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final flagKey = TmdbState.sourceLineOf(
+        line,
+        i,
+        unique: lines.where((l) => l.flag == line.flag).length == 1,
+      ).flagKey;
+      final row = db.findAiSeasonMappings(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      if (row != null &&
+          (row['tmdb_id'] != (tmdb.identity?.tmdbId ?? 0) ||
+              row['media_type'] != (tmdb.identity?.mediaType.name ?? ''))) {
+        service.clearMappings(
+          configId: tmdbConfigId,
+          siteKey: siteKey,
+          vodId: vod.vodId,
+          sourceTitle: vod.vodName,
+          flagKey: flagKey,
+        );
+      }
+      final result = await service.bindingsFor(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+        episodes: line.episodes,
+        seasonCounts: tmdb.seasonEpisodeCounts,
+      );
+      if (generation != tmdb.generation ||
+          detailGeneration != _detailRunId ||
+          _disposed) {
+        return;
+      }
+      _aiSeasonBindings[_aiLineKey(vod, line)] = result;
+      _aiSeasonSnapshots[_aiLineKey(vod, line)] = seasonBindingsSnapshot(
+        line.episodes,
+        tmdb.seasonEpisodeCounts,
+      );
+    }
+    notifyListeners();
+  }
+
+  Future<AiSeasonApplyResult?> confirmAiSeasonMapping({
+    required AiSeasonAnalysis analysis,
+    required Vod vod,
+    required String flagKey,
+    required List<VodEpisode> episodes,
+    required Map<int, int> seasonCounts,
+    required String snapshot,
+  }) async {
+    final db = _database;
+    if (db == null ||
+        !tmdb.belongsTo(vod.vodId) ||
+        tmdb.sourceLine?.flagKey != flagKey) {
+      return null;
+    }
+    final currentEpisodes = [
+      for (var i = 0; i < tmdb.sourceLine!.episodeNames.length; i++)
+        VodEpisode(
+          name: tmdb.sourceLine!.episodeNames[i],
+          url: i < tmdb.sourceLine!.episodeUrls.length
+              ? tmdb.sourceLine!.episodeUrls[i]
+              : '',
+        ),
+    ];
+    final result = await AiSeasonMappingService(database: db).confirmAndPersist(
+      configId: tmdbConfigId,
+      siteKey: _aiTmdbSiteKey,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+      flagKey: flagKey,
+      analysis: analysis,
+      episodes: currentEpisodes,
+      seasonCounts: tmdb.seasonEpisodeCounts,
+      recognitionSnapshot: snapshot,
+      tmdbId: tmdb.identity?.tmdbId ?? 0,
+      mediaType: tmdb.identity?.mediaType.name ?? '',
+    );
+    await refreshAiSeasonMappings(vod, siteKey: _aiTmdbSiteKey);
+    return result;
+  }
+
+  Future<void> _loadTmdbWithAi(
+    Vod vod, {
+    required String siteKey,
+    String siteName = '',
+    int configId = 0,
+    List<VodPlayLine>? lines,
+    bool navSource = false,
+  }) async {
+    final run = ++_aiLoadRun;
+    _aiTmdbSiteKey = siteKey;
+    await tmdb.loadForVod(
+      vod,
+      siteKey: siteKey,
+      siteName: siteName,
+      configId: configId,
+      lines: lines,
+      navSource: navSource,
+    );
+    final generation = tmdb.generation;
+    final detailGeneration = _detailRunId;
+    if (run != _aiLoadRun || !tmdb.belongsTo(vod.vodId)) return;
+    if (!tmdb.hasMatch &&
+        tmdbConfig.isReady &&
+        aiTitleExtractionEnabled &&
+        aiReady) {
+      final typed = await aiIntegration.title.resolve(
+        TitleQuery(
+          rawTitle: vod.vodName,
+          siteKey: siteKey,
+          vodId: vod.vodId,
+          vodRemarks: vod.vodRemarks ?? '',
+        ),
+      );
+      if (generation != tmdb.generation ||
+          detailGeneration != _detailRunId ||
+          _disposed) {
+        return;
+      }
+      final value = typed.value;
+      final keyword = identityFallbackRequest(
+        rawTitle: vod.vodName,
+        existingTmdbId: tmdb.identity?.tmdbId ?? 0,
+        existingIsManual: false,
+        resolution: value == null
+            ? null
+            : SeasonTitleResolution(
+                title: value.title,
+                confidence: value.confidence,
+                year: value.year,
+                mediaType: value.mediaType?.wireName,
+              ),
+      );
+      if (keyword != null) {
+        await tmdb.loadMatch(
+          generation: generation,
+          sourceTitle: vod.vodName,
+          siteName: siteName,
+          searchKeyword: keyword,
+          vodName: vod.vodName,
+          vodRemarks: vod.vodRemarks,
+          vodYear: vod.vodYear,
+        );
+        if (generation != tmdb.generation ||
+            detailGeneration != _detailRunId ||
+            _disposed) {
+          return;
+        }
+        if (tmdb.hasMatch) {
+          await tmdb.loadForVod(
+            vod,
+            siteKey: siteKey,
+            siteName: siteName,
+            configId: configId,
+            lines: lines,
+            navSource: navSource,
+          );
+        }
+      }
+    }
+    if (tmdb.belongsTo(vod.vodId)) {
+      await refreshAiSeasonMappings(vod, siteKey: siteKey);
+    }
+  }
 
   /// 持久化 AI 配置。
   ///
@@ -646,6 +1117,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// **API Key 不得进日志**（Global Constraints）：只记脱敏值与就绪状态。
   Future<bool> saveAiConfig(AiConfig config) async {
     final saved = await _aiConfigStore.save(config);
+    if (!config.isReady) clearAiAdApplication();
     if (saved) {
       log.info(
         'AI 设置已更新 enabled=${config.enabled} '
@@ -1408,11 +1880,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
   void _applyAdRulesToProxy() {
     final config = _config;
-    _proxy.setAdRules(
-      config == null || !adBlockEnabled
-          ? const AdRuleSet.empty()
-          : AdRuleSet.fromConfig(config),
-    );
+    final manual = config == null || !adBlockEnabled
+        ? const AdRuleSet.empty()
+        : AdRuleSet.fromConfig(config);
+    _proxy.setAdRules(manual);
+    if (!adBlockEnabled || !aiAdDetectionEnabled) {
+      _proxy.aiSessionRules = const AdRuleSet.empty();
+      _proxy.aiSessionFingerprint = null;
+    }
   }
 
   /// 生效的解析接口失败切换设置（Phase 9）。
@@ -2050,16 +2525,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       return '备份校验失败：$error';
     }
 
-    // 回滚副本：两个文件都可能被替换，任一写入失败要恢复原状。
+    // 回滚副本：逐域保存**原始字节**（settings/DB/AI 用户域/卡拉OK用户轨/
+    // Reader 偏好），这样旧数据即使已经损坏也能原样回来。快照同时落在缓存目录，
+    // 回滚本身失败时仍有可恢复副本。
+    final recovery = await captureBackupRecovery(paths);
     final dbPath = paths.databasePath;
     final settingsFile = File(paths.settingsPath);
     final dbFile = File(dbPath);
-    final oldSettings = await settingsFile.exists()
-        ? await settingsFile.readAsBytes()
-        : null;
-    final oldDatabase = await dbFile.exists()
-        ? await dbFile.readAsBytes()
-        : null;
+    final readerFile = File(p.join(paths.configDir, 'reader_tts.json'));
 
     await _prepareForDataSwap();
     try {
@@ -2070,26 +2543,37 @@ class AppState extends ChangeNotifier implements SyncStateHost {
         if (await sidecar.exists()) await sidecar.delete();
       }
       await _writeFileAtomic(dbFile, contents.databaseBytes);
+      if (contents.auxiliaryFiles[karaokeBackupUserDataFile]
+          case final bytes?) {
+        await importKaraokeUserFiles(paths, utf8.decode(bytes));
+      }
+      if (contents.auxiliaryFiles[aiBackupUserDataFile] case final bytes?) {
+        await importAiUserFiles(paths, utf8.decode(bytes), replace: true);
+      }
+      if (contents.auxiliaryFiles[aiBackupReaderFile] case final bytes?) {
+        await _writeFileAtomic(readerFile, bytes);
+      }
     } catch (error) {
       log.error('写入恢复文件失败，尝试回滚：$error', scope: 'backup');
-      try {
-        if (oldSettings != null) {
-          await _writeFileAtomic(settingsFile, oldSettings);
-        } else if (await settingsFile.exists()) {
-          await settingsFile.delete();
-        }
-        if (oldDatabase != null) {
-          await _writeFileAtomic(dbFile, oldDatabase);
-        } else if (await dbFile.exists()) {
-          await dbFile.delete();
-        }
-      } catch (rollbackError) {
-        log.error('回滚失败：$rollbackError', scope: 'backup');
+      // 逐域独立回滚：任一域失败（含读不了的旧用户轨）都不阻断其它域，
+      // 尤其不能阻断 settings/DB 的恢复。
+      final failures = await restoreBackupRecovery(paths, recovery);
+      if (failures.isEmpty) {
+        await recovery.delete();
+      } else {
+        log.error(
+          '回滚未完成：${failures.join(',')}；原始副本保留在 ${recovery.path}',
+          scope: 'backup',
+        );
       }
       await bootstrap();
       notifyListeners();
-      return '写入恢复文件失败：$error';
+      return failures.isEmpty
+          ? '写入恢复文件失败：$error'
+          : '写入恢复文件失败：$error；回滚未完成：${failures.join(',')}'
+                '（原始副本：${recovery.path}）';
     }
+    await recovery.delete();
 
     await bootstrap();
     notifyListeners();
@@ -2105,6 +2589,14 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   Future<String?> resetAllData() async {
     await _prepareForDataSwap();
     try {
+      await importAiUserFiles(
+        paths,
+        '{"schemaVersion":1,"files":{}}',
+        replace: true,
+      );
+      await importKaraokeUserFiles(paths, '{"schemaVersion":1,"files":{}}');
+      final reader = File(p.join(paths.configDir, 'reader_tts.json'));
+      if (await reader.exists()) await reader.delete();
       final dbPath = paths.databasePath;
       for (final path in [
         dbPath,
@@ -2142,6 +2634,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     _followingKickTimer?.cancel();
     _followingService = null;
     _followingProgressService = null;
+    _sessionAiAdRules = const [];
+    _aiLoadRun++;
+    _proxy.aiSessionFingerprint = null;
+    _proxy.aiSessionRules = const AdRuleSet.empty();
+    _aiSeasonBindings.clear();
+    _aiSeasonSnapshots.clear();
+    _aiIntegration = null;
     _database?.dispose();
     _database = null;
     _configs = const [];
@@ -2224,7 +2723,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     final site = _selectedSite;
     if (vod == null || site == null || _database == null) return;
     _tmdbRunId = _detailRunId;
-    await tmdb.loadForVod(
+    await _loadTmdbWithAi(
       vod,
       siteKey: site.key,
       siteName: site.name,
@@ -2376,6 +2875,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
           sourceTitle: sourceTitle ?? vod.vodName,
         ),
         item: item,
+      );
+      await learnBusinessTitle(
+        rawTitle: vod.vodName,
+        confirmedTitle: item.title,
+        siteKey: site.key,
+        vodId: vod.vodId,
+        mediaType: item.mediaType.name,
       );
       // 重新加载详情页 TMDB 区块（手动结论必须立刻可见）。
       await reloadTmdb();
@@ -4373,7 +4879,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
       // 同一作品 → 保留内存数据复用，详情/视频不会再打一次网络。
       _tmdbRunId = runId;
       unawaited(
-        tmdb.loadForVod(
+        _loadTmdbWithAi(
           effective,
           siteKey: site.key,
           siteName: site.name,
@@ -4994,6 +5500,33 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   /// 它们不在这里落库，只保留在 `settings.raw` 里供回推（`design/01` §5.2）。
   ///
   /// 凭据类字段若对端未提供，**保留本机原值**——把能用的凭据清空比不同步更糟。
+  Future<Map<String, Object?>> exportSyncedSettings({
+    required bool allowSensitive,
+  }) async {
+    final raw = _uiPreferences?.androidAiRaw ?? const <String, Object?>{};
+    final currentTmdb = tmdbConfig;
+    return {
+      // 先铺已授权 raw 的**全部**键（含 PC 尚不认识的顶层设置键），
+      // 只排除被下面本机当前值覆盖的键；敏感项仍受设置同步闸门约束。
+      for (final entry in raw.entries)
+        if (entry.key != 'tmdb_enabled' &&
+            entry.key != 'tmdb_config' &&
+            entry.key != 'ai_config' &&
+            entry.key != 'ai_user_data' &&
+            entry.key != 'ai_title_extraction' &&
+            entry.key != 'ai_ad_detection' &&
+            (allowSensitive || !pcSensitiveSettingsKeys.contains(entry.key)))
+          entry.key: entry.value,
+      // 本机当前值覆盖历史接收值：回推的是「现在生效的设置」。
+      'tmdb_enabled': currentTmdb.enabled,
+      if (allowSensitive) 'tmdb_config': jsonEncode(currentTmdb.toJson()),
+      'ai_title_extraction': aiTitleExtractionEnabled,
+      'ai_ad_detection': aiAdDetectionEnabled,
+      if (allowSensitive) 'ai_config': jsonEncode(aiConfig.toJson()),
+      if (allowSensitive) 'ai_user_data': await exportAiUserFiles(paths),
+    };
+  }
+
   @override
   Future<void> applySyncedSettings(SyncSettings settings) async {
     if (settings.isEmpty) return;
@@ -5020,32 +5553,35 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     await saveTmdbConfig(next);
 
-    // AI 段（Phase 7 新增）。同样先解 JSON 字符串再映射。
-    final aiRaw = settings.values['ai_config'];
+    // 已授权的全量 prefers（含 PC 未知的顶层键）都要留存，回推时原样带回。
+    final retained = {...settings.all};
+    await _uiPreferences?.rememberAiIntegrationSettings(retained);
+    final titleFlag = settings.values['ai_title_extraction'];
+    if (titleFlag != null) await setAiTitleExtractionEnabled(asFlag(titleFlag));
+    final adFlag = settings.values['ai_ad_detection'];
+    if (adFlag != null) await setAiAdDetectionEnabled(asFlag(adFlag));
+    final aiRaw = decodeAndroidJsonSetting(settings.values['ai_config']);
     if (aiRaw != null) {
       final local = aiConfig;
-      final mapped = mapAiConfigFromAndroid(
-        aiRaw,
-        local: AiConfigLike(
-          enabled: local.enabled,
-          protocol: local.protocol,
-          endpoint: local.endpoint,
-          apiKey: local.apiKey,
-          model: local.model,
-          customUserAgent: local.customUserAgent,
+      final incoming = AiConfig.fromJson({...local.toJson(), ...aiRaw});
+      await saveAiConfig(
+        incoming.copyWith(
+          apiKey: incoming.apiKey.isEmpty ? local.apiKey : incoming.apiKey,
         ),
       );
-      if (mapped != null) {
-        await saveAiConfig(
-          AiConfig(
-            enabled: mapped.enabled,
-            protocol: mapped.protocol,
-            endpoint: mapped.endpoint,
-            apiKey: mapped.apiKey,
-            model: mapped.model,
-            customUserAgent: mapped.customUserAgent,
-          ),
+    }
+    final userData = settings.values['ai_user_data'];
+    if (userData != null) {
+      try {
+        await importAiUserFiles(
+          paths,
+          userData is String ? userData : jsonEncode(userData),
         );
+        _aiIntegration = null;
+        clearAiAdApplication();
+      } catch (error) {
+        log.warning('AI用户数据导入失败：$error', scope: 'sync');
+        rethrow;
       }
     }
 
@@ -5642,7 +6178,8 @@ class AppState extends ChangeNotifier implements SyncStateHost {
   void _onFollowingNotificationOpen(String payload) {
     final key = payload.trim();
     if (key.isEmpty) return;
-    final item = _following?.all()
+    final item = _following
+        ?.all()
         .where((candidate) => candidate.identityKey == key)
         .firstOrNull;
     if (item == null) return;
@@ -5660,13 +6197,15 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     for (final item in items) {
       final latest = _database?.following(item.seriesKey, item.season);
       if (latest == null) continue;
-      _database?.upsertFollowing(latest.copyWith(
-        lastNotifiedEpisode: latest.lastNotifiedEpisode > item.releasedEpisode
-            ? latest.lastNotifiedEpisode
-            : item.releasedEpisode,
-        lastNotifiedAtMs: nowMs,
-        updatedAtMs: nowMs,
-      ));
+      _database?.upsertFollowing(
+        latest.copyWith(
+          lastNotifiedEpisode: latest.lastNotifiedEpisode > item.releasedEpisode
+              ? latest.lastNotifiedEpisode
+              : item.releasedEpisode,
+          lastNotifiedAtMs: nowMs,
+          updatedAtMs: nowMs,
+        ),
+      );
     }
     if (batch.notice.isNotEmpty) {
       _followingNotice = batch.notice;

@@ -10,6 +10,7 @@ import '../core/ai_config.dart';
 import '../core/viewing_report.dart';
 import '../services/storage.dart';
 import '../services/viewing_report_ai.dart';
+import 'viewing_report_ai_view.dart';
 import '../state/app_state.dart';
 import 'tokens.dart';
 
@@ -219,10 +220,7 @@ class _ViewingReportPageState extends State<ViewingReportPage> {
                       if (_aiResult != null) ...[
                         const SizedBox(height: AppSpace.sm),
                         if (_aiResult!.ok)
-                          SelectableText(
-                            _aiResult!.text,
-                            key: const ValueKey('viewing-report-ai-text'),
-                          )
+                          ViewingReportAiNarrativeView(text: _aiResult!.text)
                         else
                           Text(
                             'AI 解读失败：${_aiResult!.message}（基础报告不受影响）',

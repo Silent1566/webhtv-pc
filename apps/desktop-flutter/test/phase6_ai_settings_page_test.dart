@@ -107,6 +107,102 @@ void main() {
     expect(state.aiConfig.model, 'deepseek-chat');
   });
 
+  Future<void> pumpAiPageWithModels(
+    WidgetTester tester,
+    List<String> models,
+  ) async {
+    // 设置页很长（还有五个提示词编辑框），视口必须足够高，否则下拉候选项
+    // 会因为位于 ListView 视野外而根本没有被构建。
+    tester.view.physicalSize = const Size(1200, 3600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiSettingsPage(
+          state: state,
+          fetchModelList: (config, {cancellationToken}) async => models,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const ValueKey('ai-fetch-models')));
+    await tester.tap(find.byKey(const ValueKey('ai-fetch-models')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('ai-model')));
+  }
+
+  testWidgets('拉取模型后模型框变为可筛选下拉，点选回填并保存', (tester) async {
+    await pumpAiPageWithModels(tester, const [
+      'deepseek-v4.1-flash',
+      '1/MiniMax-M2.5',
+      '1/MiniMax-M3',
+    ]);
+    expect(find.byKey(const ValueKey('ai-model-options')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('ai-model-option-1/MiniMax-M3')),
+      findsOneWidget,
+    );
+
+    // 本地筛选：包含匹配、不区分大小写，非匹配项立即隐藏。
+    await tester.enterText(find.byKey(const ValueKey('ai-model')), 'minimax');
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('ai-model-option-1/MiniMax-M2.5')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('ai-model-option-1/MiniMax-M3')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('ai-model-option-deepseek-v4.1-flash')),
+      findsNothing,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('ai-model-option-1/MiniMax-M3')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('ai-model-options')),
+      findsNothing,
+      reason: '选中后下拉收起',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('ai-model')))
+          .controller
+          ?.text,
+      '1/MiniMax-M3',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('ai-save')));
+    await tester.pumpAndSettle();
+    expect(state.aiConfig.model, '1/MiniMax-M3');
+  });
+
+  testWidgets('筛选无匹配时给出提示，仍可保存自定义模型名', (tester) async {
+    await pumpAiPageWithModels(tester, const ['1/MiniMax-M3']);
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-model')),
+      'my-local-model',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('没有匹配的模型名'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('ai-save')));
+    await tester.pumpAndSettle();
+    expect(state.aiConfig.model, 'my-local-model');
+  });
+
+  testWidgets('未拉取模型时没有下拉面板，模型框仍可手动输入', (tester) async {
+    await pumpAiPage(tester);
+    expect(find.byKey(const ValueKey('ai-model-options')), findsNothing);
+    expect(find.byKey(const ValueKey('ai-model-toggle')), findsNothing);
+  });
   testWidgets('切换协议时自动填该协议的默认端点', (tester) async {
     await pumpAiPage(tester);
     await tester.tap(find.byKey(const ValueKey('ai-protocol')));

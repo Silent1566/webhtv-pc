@@ -15,7 +15,7 @@ import '../core/player_options.dart';
 import '../core/site_group_rules.dart';
 import '../state/app_state.dart';
 import 'common.dart';
-import 'ai_assist_page.dart';
+import 'ai_integration_widgets.dart';
 import 'backup_page.dart';
 import 'injected_sites_page.dart';
 import 'pan_check_page.dart';
@@ -250,7 +250,7 @@ class AdvancedSettingsPage extends StatelessWidget {
               key: const ValueKey('settings-ai-assist-open'),
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => AiAssistPage(state: state),
+                  builder: (_) => AiBusinessPage(state: state),
                 ),
               ),
               icon: const Icon(Icons.auto_awesome),
@@ -302,10 +302,8 @@ class AdvancedSettingsPage extends StatelessWidget {
               key: const ValueKey('settings-subtitle-open'),
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => SubtitleSettingsPage(
-                    state: state,
-                    paths: state.paths,
-                  ),
+                  builder: (_) =>
+                      SubtitleSettingsPage(state: state, paths: state.paths),
                 ),
               ),
               icon: const Icon(Icons.subtitles_outlined),
@@ -448,7 +446,10 @@ class AdvancedSettingsPage extends StatelessWidget {
                 await state.setPlayerOptions(
                   state.playerOptions.copyWith(
                     demuxerMaxBytesMiB: selection.first,
-                    demuxerMaxBackBytesMiB: (selection.first ~/ 4).clamp(8, 512),
+                    demuxerMaxBackBytesMiB: (selection.first ~/ 4).clamp(
+                      8,
+                      512,
+                    ),
                   ),
                 );
               },
@@ -490,10 +491,7 @@ class AdvancedSettingsPage extends StatelessWidget {
             // ---------------------------------------------------------- DoH
             Text('加密 DNS（DoH）', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            Text(
-              _dohStatusText(),
-              style: const TextStyle(fontSize: 12),
-            ),
+            Text(_dohStatusText(), style: const TextStyle(fontSize: 12)),
             SwitchListTile(
               key: const ValueKey('settings-doh-enabled'),
               dense: true,
@@ -526,7 +524,9 @@ class AdvancedSettingsPage extends StatelessWidget {
               title: const Text('缓存时长'),
               subtitle: Text('${state.dohSettings.cacheMinutes} 分钟'),
               onTap: () async {
-                final next = _nextDohCacheMinutes(state.dohSettings.cacheMinutes);
+                final next = _nextDohCacheMinutes(
+                  state.dohSettings.cacheMinutes,
+                );
                 await state.setDohSettings(
                   state.dohSettings.copyWith(cacheMinutes: next),
                 );
@@ -562,7 +562,9 @@ class AdvancedSettingsPage extends StatelessWidget {
     final hosts = DohHostMap.parse(state.config?.hosts);
     final buffer = StringBuffer('配置提供 ${endpoints.length} 个 DoH 服务商');
     if (endpoints.isNotEmpty) {
-      buffer.write('（${endpoints.map((e) => e.name.isEmpty ? redactDohUrl(e.url) : e.name).join("、")}）');
+      buffer.write(
+        '（${endpoints.map((e) => e.name.isEmpty ? redactDohUrl(e.url) : e.name).join("、")}）',
+      );
     }
     buffer.write('、${hosts.entries.length} 条 hosts 静态映射');
     if (endpoints.isEmpty && hosts.isEmpty && !state.dohSettings.hasCustomUrl) {
