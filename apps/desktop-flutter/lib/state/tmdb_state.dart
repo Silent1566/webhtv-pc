@@ -429,17 +429,7 @@ class TmdbState extends ChangeNotifier {
       // `hasMatch` 仍为真（旧作品的命中），详情页会把旧匹配的标题/海报/季度渲染
       // 到新作品上（串剧）。
       _matchResult = null;
-      _resolution = null;
-      _detail = null;
-      _cast = const [];
-      _creators = const [];
-      _recommendations = const [];
-      _videos = const [];
-      _photos = const [];
-      _seasonEpisodeCounts = const {};
-      // 聚合缓存同样是作品维度的：换作品必须清掉，否则新作品会拿到上一部剧的
-      // 季集元数据（补卡时会按旧剧的季集数出卡、点开播错集）。
-      _episodesBySeason = const {};
+      _clearWorkScoped();
     }
     _episodes = const [];
     _availableSeasons = const [];
@@ -463,6 +453,24 @@ class TmdbState extends ChangeNotifier {
     _phase = TmdbLoadPhase.loading;
     notifyListeners();
     return _generation;
+  }
+
+  /// 丢弃**作品维度**的缓存：详情、演职人员、推荐、剧照、视频、季集数与季度解析。
+  ///
+  /// 匹配结论是否一起清由调用方决定：[beginLoad] 换作品时连它一起清；而
+  /// 「手动匹配 / 重新匹配到另一部作品」时它已经换成新作品，只清其余部分。
+  void _clearWorkScoped() {
+    _resolution = null;
+    _detail = null;
+    _cast = const [];
+    _creators = const [];
+    _recommendations = const [];
+    _videos = const [];
+    _photos = const [];
+    _seasonEpisodeCounts = const {};
+    // 聚合缓存同样是作品维度的：换作品必须清掉，否则新作品会拿到上一部剧的
+    // 季集元数据（补卡时会按旧剧的季集数出卡、点开播错集）。
+    _episodesBySeason = const {};
   }
 
   /// 匹配（含缓存命中）。
@@ -636,6 +644,10 @@ class TmdbState extends ChangeNotifier {
     // `tmdbId|mediaType|season` 缓存，也不随线路失效）。
     //
     // 因此区分「同一作品」与「换了作品」：同一作品复用已加载数据，不重发请求。
+    //
+    // 本次加载前的命中身份。手动匹配 / 重新匹配会在 vodId 与源标题**都不变**的
+    // 情况下把作品换成另一部，`_isSameTitle` 看不出来，只能靠身份比对。
+    final previousIdentity = identity;
     final sameTitle =
         _isSameTitle(vodId: vod.vodId, sourceTitle: vod.vodName) &&
         (seededIdentity == null ||
@@ -677,8 +689,21 @@ class TmdbState extends ChangeNotifier {
     }
     if (!_valid(generation) || !hasMatch) return;
 
+    // 身份变化 = 换了作品：站源条目没变（vodId/源标题都相同），匹配结论换成了
+    // 另一部，作品维度缓存却全属于上一部。不清就会立刻渲染旧作品（用户反馈
+    // 2026-11-12：详情页点「重新匹配」手动选一部后，海报/背景/简介/演职人员/
+    // 剧照/推荐/季集数仍是原来那部，只有匹配记录变了）。
+    var workScopedReuse = sameTitle;
+    final currentIdentity = identity;
+    if (previousIdentity != null &&
+        currentIdentity != null &&
+        previousIdentity != currentIdentity) {
+      _clearWorkScoped();
+      workScopedReuse = false;
+    }
+
     // 详情已缓存且是同一作品 → 跳过详情请求，只重跑季度解析（零网络）。
-    final hasDetail = _detail != null && sameTitle;
+    final hasDetail = _detail != null && workScopedReuse;
     await loadDetail(
       generation: generation,
       // 季集数以详情响应为权威（`loadDetail` 会从 `seasons[]` 回填）
