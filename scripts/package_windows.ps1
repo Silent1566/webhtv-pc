@@ -53,7 +53,13 @@ param(
     # 离线/CI 旁路：直接指定已存在的 node.exe 所在目录，跳过下载与校验。
     [string]$NodeRuntimeDir = '',
 
-    [string]$PythonRuntimeDir = ''
+    [string]$PythonRuntimeDir = '',
+
+    # 仅给 scripts/test_python_runtime.ps1 的合成构建夹具用：那些夹具只放占位文件，
+    # 不可能具备不入库的原生引擎二进制（libLiteRt.dll 等）及其固定 SHA256。
+    # 真实发包（CI 与本地发布）一律不得传本开关，test_python_runtime.ps1 会把
+    # “workflow 不得出现本开关”当作契约断言，缺引擎仍然必须失败。
+    [switch]$SkipNativeAiAssetChecks
 )
 
 $ErrorActionPreference = 'Stop'
@@ -247,20 +253,23 @@ if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
 }
 
 # 音频AI必须随包真实引擎；禁止把仅有Dart接口的包标成可用。
-foreach ($native in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'libLiteRt.dll')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $BuildDir $native) -PathType Leaf)) {
-        Fail "缺少官方音频AI/native运行时：$native"
+# 唯一的例外是契约测试的合成夹具（见 -SkipNativeAiAssetChecks 参数说明）。
+if (-not $SkipNativeAiAssetChecks) {
+    foreach ($native in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'libLiteRt.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $BuildDir $native) -PathType Leaf)) {
+            Fail "缺少官方音频AI/native运行时：$native"
+        }
     }
-}
-$audioAsset = Join-Path $BuildDir 'data/flutter_assets/assets/models/basic_pitch_nmp.tflite'
-if (-not (Test-Path -LiteralPath $audioAsset -PathType Leaf)) { Fail '缺少BasicPitch源模型资产' }
-if ((Get-Item -LiteralPath $audioAsset).Length -ne 204448 -or
-    (Get-FileHash -LiteralPath $audioAsset -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3db297d54af8e01c6e5618245c956b1d71b6a2b978cb2dedb527173186552676') {
-    Fail 'BasicPitch源模型资产大小/SHA256不匹配'
-}
-if ((Get-FileHash -LiteralPath (Join-Path $BuildDir 'libLiteRt.dll') -Algorithm SHA256).Hash.ToLowerInvariant() -ne
-    'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
-    Fail '官方LiteRT Windows DLL SHA256不匹配'
+    $audioAsset = Join-Path $BuildDir 'data/flutter_assets/assets/models/basic_pitch_nmp.tflite'
+    if (-not (Test-Path -LiteralPath $audioAsset -PathType Leaf)) { Fail '缺少BasicPitch源模型资产' }
+    if ((Get-Item -LiteralPath $audioAsset).Length -ne 204448 -or
+        (Get-FileHash -LiteralPath $audioAsset -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3db297d54af8e01c6e5618245c956b1d71b6a2b978cb2dedb527173186552676') {
+        Fail 'BasicPitch源模型资产大小/SHA256不匹配'
+    }
+    if ((Get-FileHash -LiteralPath (Join-Path $BuildDir 'libLiteRt.dll') -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+        'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+        Fail '官方LiteRT Windows DLL SHA256不匹配'
+    }
 }
 
 # 发行包只带宿主入口及其同目录必需文件；manifests/spiders 是测试 fixture，不得入包。
