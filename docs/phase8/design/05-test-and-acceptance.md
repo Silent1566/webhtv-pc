@@ -178,7 +178,9 @@ final rect = tester.getRect(finder);
 
 `tester.tap` 默认只 `warnIfMissed` 打一句警告，断言随后以「找不到 / 状态没变」
 的形式失败，看不出真正原因。→ 点浮层上的按钮前先 `revealPlayerControls(tester)`；
-它先读 `debugPlayerControlsVisible` 再决定点不点，因为单击是**切换**语义。
+它先读 `debugPlayerControlsVisible` 再决定唤不唤醒，唤醒走 `debugRevealPlayerControls`
+（`_touchControls` 的测试缝）。**不能再点画面**：单击现在是暂停/播放（`01` §4.6），
+点一下会顺带把视频暂停，后续「仍在播」的断言就全变了。
 
 两个辅助都在 `integration_test/phase8_player_test_support.dart`。
 
@@ -205,9 +207,11 @@ G11 原稿写「含在 G2 里（全量 `flutter test`）」。但 `flutter test`
 原因：真实窗口已经在跟踪真实的鼠标设备，再加一个指针就破了 MouseTracker 的
 added/removed 配对不变式。**同一个 API 在 widget 测试里可靠、在集成测试里不可靠。**
 
-规则：集成测试不要模拟指针设备；用产品的主路径（这里就是「单击画面唤醒」），
-并配合 `@visibleForTesting` 状态观测缝（`debugPlayerControlsVisible`）来判断
-「该不该点」。仓库里既有的正确写法是 `ui_redesign_visual_flow_test.dart:659`。
+规则：集成测试不要模拟指针设备；用 `@visibleForTesting` 的唤醒缝
+（`debugRevealPlayerControls`，它调的就是产品自己的 `_touchControls()`），
+并用状态观测缝（`debugPlayerControlsVisible`）判断「该不该唤醒」。
+**不要用「单击画面」代替**：桌面语义下单击是暂停/播放（`01` §4.6），
+会顺带改掉播放状态。`revealPlayerControls` 已按这个口径实现。
 
 ---
 
@@ -308,7 +312,7 @@ added/removed 配对不变式。**同一个 API 在 widget 测试里可靠、在
 | C8 | 关闭菜单 → 3 秒后控制栏隐藏 | L2 | `pump(3s)` 后不可见 |
 | C9 | 倍速菜单标出当前档位 | L2 | 选中态在 `1.0×` 上 |
 | C10 | 屏显子菜单 7 项状态正确 | L2 | 逐项 |
-| C11 | 单击/双击/长按语义未变 | L1 | 沿用 `phase3_player_display_test.dart` 四分支 |
+| C11 | 单击暂停/播放、双击全屏、长按可配置倍速（默认 3×） | L1+L2 | `phase3_player_display_test.dart` + `player_click_gesture_test.dart` + `phase9_player_core_test.dart` |
 | C12 | 每一项都有非右键等价路径 | L1 | 源码扫描（§4） |
 | C13 | 设置页新增两个入口 | L2 | `ValueKey('settings-osd')` / `ValueKey('settings-player-buttons')` |
 

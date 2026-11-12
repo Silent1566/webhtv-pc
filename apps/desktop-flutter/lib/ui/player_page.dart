@@ -7,6 +7,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -76,16 +77,60 @@ import 'toast.dart';
 String formatPlayerLiveStatus({String? status, int? online}) =>
     [?status, if (online != null) '在线 $online'].join(' · ');
 
-enum PlayerGestureAction { toggleControls, enterFullscreen, togglePlayback }
+/// 双击判定窗，与 Flutter 自带的 [kDoubleTapTimeout] 对齐（300ms）。
+///
+/// **为什么不直接用 `GestureDetector.onDoubleTap`**：一旦注册它，Flutter 会把
+/// 单击挂起整整一个判定窗再落地——仓库里
+/// `integration_test/live_interaction_flow_test.dart` 记过这个坑（轮询里重复
+/// 点击被识别成双击）。桌面播放器（PotPlayer / VLC）里单击是高频的传输控制，
+/// 「点一下要等 0.3 秒才暂停」是明显迟滞。
+///
+/// 这里改为**每一击立即执行**，再自己判窗口：第 2 击把播放状态拨回第 1 击前
+/// 的值（而不是再翻转一次），同时切换全屏。净效果与 PotPlayer / VLC 一致：
+/// 双击不改变播放状态、只切全屏。
+const Duration kPlayerDoubleClickWindow = kDoubleTapTimeout;
 
-PlayerGestureAction resolvePlayerGesture({
-  required bool doubleTap,
-  required bool fullscreen,
-}) {
-  if (!doubleTap) return PlayerGestureAction.toggleControls;
-  return fullscreen
-      ? PlayerGestureAction.togglePlayback
-      : PlayerGestureAction.enterFullscreen;
+/// 画面点击的语义（桌面播放器惯例，`design/01` §4.6）。
+///
+/// 与上游安卓控制层**有意不同**：安卓里单击只显隐控制栏、双击才全屏；
+/// 桌面上控制栏由指针移动唤醒、静止 3 秒自动隐藏（`design/01` §4.4），
+/// 单击让给传输控制。这个差异是产品决策，不是疏漏。
+enum PlayerGestureAction { togglePlayback, togglePlaybackAndFullscreen }
+
+/// 距上一击不超过 [kPlayerDoubleClickWindow] 即视为双击。
+PlayerGestureAction resolvePlayerGesture({required bool doubleClick}) =>
+    doubleClick
+        ? PlayerGestureAction.togglePlaybackAndFullscreen
+        : PlayerGestureAction.togglePlayback;
+
+/// 画面双击判定器：只回答「这一击算不算双击」，不碰播放器。
+///
+/// 单独成类而不是塞进页面状态：判定窗是**有状态**的纯计时逻辑，抽出来之后
+/// L1 用例可以用假时钟直接推进（`testWidgets` 里的 [Timer] 就是假的），
+/// 不必挂一个真实播放器。
+class PlayerDoubleClickGate {
+  PlayerDoubleClickGate({this.window = kPlayerDoubleClickWindow});
+
+  /// 判定窗长度。
+  final Duration window;
+
+  Timer? _pending;
+
+  /// 登记一次点击，返回它是否构成双击。
+  ///
+  /// 双击成立后窗口立即重置：第 3 击属于新的一轮，不能继续被当成双击。
+  bool registerTap() {
+    final doubleClick = _pending?.isActive ?? false;
+    _pending?.cancel();
+    _pending = doubleClick ? null : Timer(window, () => _pending = null);
+    return doubleClick;
+  }
+
+  /// 释放计时器（页面 dispose 时调用，避免用例留下 pending timer）。
+  void dispose() {
+    _pending?.cancel();
+    _pending = null;
+  }
 }
 
 enum PlayerVideoFitMode {
@@ -235,6 +280,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool _controlsVisible = true;
   Timer? _saveTimer;
   Timer? _controlHideTimer;
+
+  /// 画面双击判定（见 [PlayerDoubleClickGate]）。
+  final PlayerDoubleClickGate _clickGate = PlayerDoubleClickGate();
+
+  /// 单击画面**之前**引擎是否在播放。
+  ///
+  /// 双击的第 2 击用它把播放状态拨回去（双击不改变播放状态）。不能改成
+  /// 再调一次 `playOrPause()`：`isPlaying` 由引擎事件流异步回传，同一 tick
+  /// 内两次读到的可能都是旧值，两次调用会发同一条命令，双击于是真的暂停了。
+  bool? _playingBeforeFirstTap;
   String? _loadError;
 
   /// 连播单次守卫（`design/03` §4.1 D1）。
@@ -329,6 +384,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   final Map<PlayerTrackSlot, List<String>> _lastTriedTrackIds = {};
   PlayerSubtitleStyle _subtitleStyle = const PlayerSubtitleStyle();
   double? _gestureRateBeforeLongPress;
+
+  /// 最近一次长按手势请求的倍速（仅供测试观测，生产代码不读）。
+  double? _lastGestureSpeed;
 
   /// 右键菜单的锚点；null 表示菜单关闭。
   Offset? _contextMenuAnchor;
@@ -2605,6 +2663,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _playerFocus.dispose();
     _saveTimer?.cancel();
     _controlHideTimer?.cancel();
+    _clickGate.dispose();
     _osdTimer?.cancel();
     _osdTimer = null;
     _endGestureSpeed();
@@ -3231,8 +3290,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                       },
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: _toggleControlsByGesture,
-                        onDoubleTap: _handleDoubleTapGesture,
+                        // 单击 = 暂停/播放；双击 = 全屏切换（`design/01` §4.6）。
+                        // **不注册 `onDoubleTap`**：那会把单击拖慢一个判定窗，
+                        // 判定改由 [_clickGate] 在 onTap 里完成（见 [_onVideoTap]）。
+                        onTap: _onVideoTap,
                         onLongPressStart: (_) => _beginGestureSpeed(),
                         onLongPressEnd: (_) => _endGestureSpeed(),
                         onLongPressCancel: _endGestureSpeed,
@@ -4081,8 +4142,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 // 在已经设计过的深色纱上像一条莫名的横线。
                 // craft-floor 点名的正是这一类"你没画的那些部分也在承载设计"。
                 underline: const SizedBox.shrink(),
-                value: _nearestRate(_controller.rate),
-                items: const [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+                // value 必须落在 items 里，否则 DropdownButton 直接断言。
+                // 长按快进会把速率临时抬到 3×（默认，可配置），那一档不在常规
+                // 档位表里：把当前真实速率并进候选，控制栏才不会把 3× 谎报成 2.0x。
+                value: _controller.rate,
+                items: _speedChoices(_controller.rate)
                     .map(
                       (rate) => DropdownMenuItem(
                         value: rate,
@@ -4156,14 +4220,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     return [for (final spec in specs) spec.group];
   }
 
-  double _nearestRate(double rate) {
-    const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-    var best = rates.first;
-    for (final candidate in rates) {
-      if ((candidate - rate).abs() < (best - rate).abs()) best = candidate;
-    }
-    return best;
-  }
+  /// 控制栏倍速下拉的候选：常规档位 + 当前真实速率（去重升序）。
+  ///
+  /// 常规档位只到 2×；长按快进（默认 3×）或右键菜单改快速率之后，控制栏必须
+  /// 显示真实值，而不是「最接近的常规档」。
+  static List<double> _speedChoices(double current) =>
+      <double>{0.5, 0.75, 1.0, 1.25, 1.5, 2.0, current}.toList()..sort();
+
+  /// 倍速文案：整数不带小数点（3× 而不是 3.0×）。
+  static String _speedText(double speed) =>
+      speed == speed.roundToDouble() ? '${speed.toInt()}×' : '$speed×';
 
   String _qualityName(int index) {
     if (index < 0 || index >= _request.qualities.length) return '默认';
@@ -4414,16 +4480,45 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     });
   }
 
-  void _toggleControlsByGesture() {
-    if (resolvePlayerGesture(doubleTap: false, fullscreen: _fullscreen) ==
-        PlayerGestureAction.toggleControls) {
-      if (_controlsVisible) {
-        _controlHideTimer?.cancel();
-        setState(() => _controlsVisible = false);
-        _syncOsdTimer();
+  /// 画面单击/双击（`design/01` §4.6）。
+  ///
+  /// 单击立即翻转播放并唤回控制栏；[PlayerDoubleClickGate] 判定为双击时，
+  /// 第 2 击把播放状态**拨回**第 1 击前的值，再切全屏。
+  void _onVideoTap() {
+    final action = resolvePlayerGesture(doubleClick: _clickGate.registerTap());
+    // 点击瞬间就把控制栏唤回来：暂停/播放是静默的状态变化，没有反馈会像没点上。
+    _touchControls();
+    switch (action) {
+      case PlayerGestureAction.togglePlaybackAndFullscreen:
+        // 第 2 击：把播放状态拨回第 1 击前的值（双击不改变播放），再切全屏。
+        final restore = _playingBeforeFirstTap;
+        _playingBeforeFirstTap = null;
+        if (restore != null) unawaited(_applyPlayerGesturePlayback(restore));
+        unawaited(_toggleFullscreen());
+      case PlayerGestureAction.togglePlayback:
+        _playingBeforeFirstTap = _controller.isPlaying;
+        unawaited(_applyPlayerGesturePlayback(null));
+    }
+  }
+
+  /// 画面点击的播放控制。
+  ///
+  /// [playing] 为 null 时反转当前状态；否则**显式**切到该状态——双击的第 2 击
+  /// 必须走这条确定路径（见 [_playingBeforeFirstTap]）。
+  ///
+  /// 失败只记日志：流未就绪/已断开时点一下画面不该让整页抛异常
+  /// （`play()` 在没有原生实现的环境里会抛 `MissingPluginException`）。
+  Future<void> _applyPlayerGesturePlayback(bool? playing) async {
+    try {
+      if (playing == null) {
+        await _controller.playOrPause();
+      } else if (playing) {
+        await _controller.play();
       } else {
-        _touchControls();
+        await _controller.pause();
       }
+    } catch (error) {
+      widget.state.log.warning('画面点击切换播放失败：$error', scope: 'player');
     }
   }
 
@@ -4991,6 +5086,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 onChanged: (value) =>
                     _livePatchOptions(_options.copyWith(autoNext: value)),
               ),
+              // 长按画面快进：同样是**互斥单选**，飞出子列天然只有一项打勾。
+              // 默认 3×；只影响长按手势，不改正常播放速率。
+              PlayerMenuItem(
+                id: 'settings_long_press_speed',
+                label: '长按画面倍速',
+                icon: Icons.fast_forward,
+                children: [
+                  for (final speed in PlayerOptions.longPressSpeedChoices)
+                    PlayerMenuItem(
+                      id:
+                          'settings_long_press_speed_${speed.toString().replaceAll('.', '_')}',
+                      label: _speedText(speed),
+                      selected: (_options.longPressSpeed - speed).abs() < 0.01,
+                      onSelect: () => _livePatchOptions(
+                        _options.copyWith(longPressSpeed: speed),
+                      ),
+                    ),
+                ],
+              ),
               // 第 3 层：失败回退阶梯。四档是**互斥单选**，摊成四条开关会让
               // 「当前是哪一档」看不出来；飞出子列则天然单选（只有一项打勾）。
               PlayerMenuItem(
@@ -5281,29 +5395,37 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  Future<void> _handleDoubleTapGesture() async {
-    switch (resolvePlayerGesture(doubleTap: true, fullscreen: _fullscreen)) {
-      case PlayerGestureAction.enterFullscreen:
-        await _toggleFullscreen();
-      case PlayerGestureAction.togglePlayback:
-        await _controller.playOrPause();
-        _touchControls();
-      case PlayerGestureAction.toggleControls:
-        _toggleControlsByGesture();
-    }
-  }
-
+  /// 长按画面开始快进：临时切到用户设置的长按倍速（默认 3×）。
+  ///
+  /// 倍速是播放参数的一部分（PlayerOptions.longPressSpeed），设置页与右键菜单
+  /// 改的是同一份值。
   void _beginGestureSpeed() {
     if (_gestureRateBeforeLongPress != null) return;
     _gestureRateBeforeLongPress = _controller.rate;
-    _controller.setRate(2.0);
+    // 直接读 AppState 而不是 [_options] 快照：在播放器里打开「完整设置页」
+    // 改完返回后，快照可能还是旧值，而长按必须用刚改的那一档。
+    final speed = widget.state.playerOptions.longPressSpeed;
+    _lastGestureSpeed = speed;
+    unawaited(_setGestureRate(speed));
     _touchControls();
+  }
+
+  /// 长按期间/松开后修改播放速率；失败只记日志。
+  ///
+  /// 手势不该让整页抛异常：流未就绪或平台拒绝改速时（无原生引擎的测试环境
+  /// 同样会走到这里）静默降级，画面上的长按仍然成立。
+  Future<void> _setGestureRate(double rate) async {
+    try {
+      await _controller.setRate(rate);
+    } catch (error) {
+      widget.state.log.warning('长按倍速切换失败：$error', scope: 'player');
+    }
   }
 
   void _endGestureSpeed() {
     final previous = _gestureRateBeforeLongPress;
     _gestureRateBeforeLongPress = null;
-    if (previous != null) _controller.setRate(previous);
+    if (previous != null) unawaited(_setGestureRate(previous));
   }
 
   Future<void> _showSubtitleStyleSettings() async {
@@ -5825,6 +5947,26 @@ bool debugOsdTickerRunning(State<PlayerPage> state) =>
 @visibleForTesting
 bool debugPlayerControlsVisible(State<PlayerPage> state) =>
     (state as _PlayerPageState)._controlsVisible;
+
+/// 仅供测试：最近一次长按画面请求的倍速（默认 3×，可在设置里改）。
+///
+/// 引擎在无原生实现的测试环境里不会回报真实速率，所以用请求值作为观测缝。
+@visibleForTesting
+double? debugLastGestureSpeed(State<PlayerPage> state) =>
+    (state as _PlayerPageState)._lastGestureSpeed;
+
+/// 仅供测试：把控制浮层唤回可见态。
+///
+/// **单击画面现在带传输语义**（暂停/播放）：测试若只想让控制栏出现，不能再点
+/// 画面——那会顺带暂停播放，字幕/弹幕等用例后续的「仍在播」断言就全变了。
+/// 这里复用的就是产品的唤醒路径 [_touchControls]，不另写一套状态。
+///
+/// 也**不要**改用模拟鼠标悬停：真实窗口下 `LiveTestWidgetsFlutterBinding`
+/// 已在跟踪真实鼠标设备，`tester.createGesture(kind: PointerDeviceKind.mouse)`
+/// 会让 `MouseTracker` 断言失败（`design/05` §1.7）。
+@visibleForTesting
+void debugRevealPlayerControls(State<PlayerPage> state) =>
+    (state as _PlayerPageState)._touchControls();
 
 /// 仅供测试：冻结屏显时钟（`design/05` §8.1）。
 ///

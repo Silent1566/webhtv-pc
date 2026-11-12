@@ -209,8 +209,8 @@ ad_feedback, title, prev, next, episodes, fullscreen, change, cast, timer
 11. **屏显与右键菜单都不得阻断播放。** 与字幕/弹幕同一口径（`docs/webhtv-pc-design.md` §10.4）。
 12. **不得改动测试锁死的结构**：`Video`、`DanmakuOverlay`、`PlayerPage` 的类型与
     `find.byType` 可达性；`phase3_player_display_test.dart` 锁定的
-    `PlayerVideoFitMode` 五个枚举值与 label 字面值、`resolvePlayerGesture` 四个分支、
-    `PlayerSubtitleStyle` 的默认值。
+    `PlayerVideoFitMode` 五个枚举值与 label 字面值、`resolvePlayerGesture` 的
+    **两个分支**（桌面语义，见 `01` §4.6）、`PlayerSubtitleStyle` 的默认值。
 
 ---
 

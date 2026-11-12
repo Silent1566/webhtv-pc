@@ -103,6 +103,26 @@ class AdvancedSettingsPage extends StatelessWidget {
                         );
                       },
                     ),
+                    ListTile(
+                      key: const ValueKey('settings-player-long-press-speed'),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('长按画面倍速'),
+                      subtitle: Text(
+                        '按住画面期间临时 ${_speedText(state.playerOptions.longPressSpeed)} 播放，松开恢复原速',
+                      ),
+                      trailing: DropdownButton<double>(
+                        value: state.playerOptions.longPressSpeed,
+                        underline: const SizedBox.shrink(),
+                        items: _speedItems(state.playerOptions.longPressSpeed),
+                        onChanged: (speed) async {
+                          if (speed == null) return;
+                          await state.setPlayerOptions(
+                            state.playerOptions.copyWith(longPressSpeed: speed),
+                          );
+                        },
+                      ),
+                    ),
                     _switch(
                       'settings-player-preload-next',
                       '预解析下一集地址',
@@ -927,6 +947,26 @@ class AdvancedSettingsPage extends StatelessWidget {
     value: value,
     onChanged: (next) => onChanged(next),
   );
+
+  /// 倍速文案：整数不带小数点（3× 而不是 3.0×）。
+  String _speedText(double speed) => speed == speed.roundToDouble()
+      ? '${speed.toInt()}×'
+      : '$speed×';
+
+  /// 长按倍速的下拉候选：常用档位 + 当前值。
+  ///
+  /// 当前值必须在候选里，否则 DropdownButton 直接断言（手改 settings.json
+  /// 成 3.5× 这类区间内的值时）。去重升序，常用档不会重复出现。
+  List<DropdownMenuItem<double>> _speedItems(double current) {
+    final speeds = <double>{
+      ...PlayerOptions.longPressSpeedChoices,
+      current,
+    }.toList()..sort();
+    return [
+      for (final speed in speeds)
+        DropdownMenuItem(value: speed, child: Text(_speedText(speed))),
+    ];
+  }
 
   Future<void> _editDanmakuApi(BuildContext context) async {
     final controller = TextEditingController(

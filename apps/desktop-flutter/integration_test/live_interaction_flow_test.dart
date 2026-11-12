@@ -325,12 +325,11 @@ Future<Player> _expectRealPlayback(
 /// 用**鼠标悬停**唤醒控制栏：这正是生产代码的唤醒路径
 /// （`player_page.dart` 第 1 层的 `MouseRegion.onHover`）。
 ///
-/// 为什么不能用「反复 tapAt」唤醒：画面那层 GestureDetector 同时挂了
-/// `onTap` 和 `onDoubleTap`（`player_page.dart:2869-2872`），而单次 tap 的
-/// `onTap` 要等双击判定窗（约 300ms）结束才落地。轮询里若因为「目标还没变」
-/// 就再点一次，两次点击会被识别为**双击** → `resolvePlayerGesture(doubleTap:true,
-/// fullscreen:false)` = `enterFullscreen` → 播放器真的进了全屏，随后测试点
-/// 「全屏」按钮就把全屏**退出**了，20 秒等待必然超时。
+/// 为什么不能用「反复 tapAt」唤醒：画面单击现在是**立即落地**的传输控制
+/// （`player_page.dart` 的 `_onVideoTap`，`design/01` §4.6）。轮询里因为
+/// 「目标还没变」再点一次，不只是多一次暂停/播放——两次点击落在 300ms
+/// 判定窗内还会被识别成**双击** → 切换全屏，随后测试点「全屏」按钮就把
+/// 全屏**退出**了，20 秒等待必然超时。
 Future<void> _hoverVideo(WidgetTester tester, Offset point) async {
   final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
   await mouse.addPointer(location: const Offset(1, 1));
@@ -366,18 +365,19 @@ Future<void> _showControls(WidgetTester tester) async {
         const point = Offset(100, 150);
         expect(tester.getRect(find.byType(Video)).contains(point), isTrue);
         wakeAttempts++;
-        // 悬停唤醒没有手势语义，永远不会被识别成双击；只在悬停无效时
-        // 才补**一次**真实点击，且绝不重复点（重复点就是双击）。
+        // 悬停唤醒没有手势语义；只在悬停无效时兜底走测试专用的唤醒缝。
+        // **不能补一次真实点击**：单击画面现在是暂停/播放（`design/01` §4.6），
+        // 会把这个用例后面「只浏览另一源不能暂停正在播放的媒体」的断言打破。
         if (wakeAttempts < 12) {
           await _hoverVideo(tester, point);
         } else if (!tapped) {
           tapped = true;
-          await tester.tapAt(point);
+          debugRevealPlayerControls(_playerState(tester));
         }
         await tester.pump();
         _evidence(
           'controls-wake attempt=$wakeAttempts hover=${!tapped} '
-          'singleTap=$tapped '
+          'fallbackWake=$tapped '
           'visibleAfter=${debugPlayerControlsVisible(_playerState(tester))} '
           'target=${tester.widget<AnimatedOpacity>(opacity).opacity} '
           'fullscreen=${await windowManager.isFullScreen()}',
@@ -400,7 +400,7 @@ Future<void> _showControls(WidgetTester tester) async {
     await windowManager.isFullScreen(),
     isFalse,
     reason:
-        '唤醒控制栏不得改变窗口的全屏状态：画面层单击是延迟落地的，'
+        '唤醒控制栏不得改变窗口的全屏状态：'
         '轮询里重复点击会被识别成双击（=进入全屏）',
   );
   expect(tester.takeException(), isNull);

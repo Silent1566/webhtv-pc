@@ -267,6 +267,38 @@ void main() {
       expect(options.preloadNext, isFalse);
       expect(options.failureFallback, PlayerFailureFallback.line);
       expect(options.autoSkipIntro, isFalse);
+      expect(options.longPressSpeed, 3, reason: '长按倍速默认 3×（2026-11 起）');
+    });
+
+    test('长按画面倍速：默认 3×、越界夹取、脏值回落、往返保留', () {
+      expect(PlayerOptions.defaults().longPressSpeed, 3);
+      expect(PlayerOptions.longPressSpeedChoices, [2, 2.5, 3, 4]);
+
+      expect(
+        PlayerOptions.fromJson({'longPressSpeed': 9}).longPressSpeed,
+        PlayerOptions.maxLongPressSpeed,
+        reason: '越界向上夹到 4×',
+      );
+      expect(
+        PlayerOptions.fromJson({'longPressSpeed': 0}).longPressSpeed,
+        PlayerOptions.minLongPressSpeed,
+        reason: '越界向下夹到 2×',
+      );
+      expect(
+        PlayerOptions.fromJson({'longPressSpeed': 'fast'}).longPressSpeed,
+        PlayerOptions.defaultLongPressSpeed,
+        reason: '脏类型回落默认，不抛异常',
+      );
+      expect(
+        PlayerOptions.fromJson({'longPressSpeed': double.nan}).longPressSpeed,
+        PlayerOptions.defaultLongPressSpeed,
+        reason: 'NaN 夹不了，直接回落默认',
+      );
+
+      // 区间内但不在常用档位表里的值必须保留：手改配置不该被静默改写。
+      const custom = PlayerOptions(longPressSpeed: 3.5);
+      expect(PlayerOptions.fromJson(custom.toJson()), custom);
+      expect(custom.copyWith(longPressSpeed: 2.5).longPressSpeed, 2.5);
     });
 
     test('mpv 属性映射', () {

@@ -188,9 +188,13 @@ class SleepTimer {
 | `autoNext` | bool | true | 应用层 |
 | `failureFallback` | `off` / `line` / `line+parse` / `line+parse+source` | `line` | 应用层 |
 | `preloadNext` | bool | false | 应用层 |
+| `longPressSpeed` | 2.0–4.0（常用档 2/2.5/3/4） | `3.0` | 应用层（长按画面手势） |
 
 - 非法值在 `normalize()` 阶段回落默认并记日志，**不抛异常**（设置页不应因历史脏数据打不开）。
 - 缺省值必须等价于当前行为；`autoNext=true` 与现状一致。
+- **例外**：`longPressSpeed` 默认 3×（此前在 `_beginGestureSpeed` 里写死 2×）。这是
+  2026-11 需求方明确要的默认值变更，不是漏改；区间内但不在常用档位表里的值（如
+  3.5）保留，不静默改写。
 
 ### 5.2 应用方式
 
@@ -262,6 +266,7 @@ class LutPreset {
     "autoNext": true,
     "failureFallback": "line",
     "preloadNext": false,
+    "longPressSpeed": 3.0,
     "autoSkipIntro": false,
     "autoSkipOutro": false,
     "repeat": "off",

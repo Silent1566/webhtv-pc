@@ -20,22 +20,17 @@ void main() {
     );
   });
 
-  test('播放器手势与安卓版控制层语义一致', () {
+  test('播放器手势与桌面播放器一致：单击播放/暂停，双击全屏', () {
+    // 上游安卓控制层是「单击显隐控制栏、双击全屏/播放」；桌面播放器
+    // （PotPlayer / VLC）把单击让给传输控制（`design/01` §4.6）。
+    // 这个差异是**产品决策**，不是疏漏——这里锁的就是新语义。
     expect(
-      resolvePlayerGesture(doubleTap: false, fullscreen: false),
-      PlayerGestureAction.toggleControls,
-    );
-    expect(
-      resolvePlayerGesture(doubleTap: false, fullscreen: true),
-      PlayerGestureAction.toggleControls,
-    );
-    expect(
-      resolvePlayerGesture(doubleTap: true, fullscreen: false),
-      PlayerGestureAction.enterFullscreen,
-    );
-    expect(
-      resolvePlayerGesture(doubleTap: true, fullscreen: true),
+      resolvePlayerGesture(doubleClick: false),
       PlayerGestureAction.togglePlayback,
+    );
+    expect(
+      resolvePlayerGesture(doubleClick: true),
+      PlayerGestureAction.togglePlaybackAndFullscreen,
     );
   });
 
