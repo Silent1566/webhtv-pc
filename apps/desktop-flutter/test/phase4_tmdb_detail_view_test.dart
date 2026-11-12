@@ -315,7 +315,9 @@ void main() {
         findsOneWidget,
         reason: '语言必须以标签形式出现（TMDB spoken_languages）',
       );
-      expect(find.byKey(const ValueKey('tmdb-detail-rating')), findsOneWidget);
+      // 评分自 2026-11-11 起由调用方注入到简介上方（`ratingTags`），不再混在
+      // 标签行里；本视图不注入时就没有评分标签。
+      expect(find.byKey(const ValueKey('tmdb-detail-rating')), findsNothing);
       expect(find.byKey(const ValueKey('tmdb-detail-year')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-detail-runtime')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-detail-seasons')), findsOneWidget);

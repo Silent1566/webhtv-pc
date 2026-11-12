@@ -366,6 +366,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   late TmdbConfig _draft;
   late final TextEditingController _apiKey;
   late final TextEditingController _accessToken;
+  late final TextEditingController _omdbKey;
   late final TextEditingController _apiBase;
   late final TextEditingController _imageBase;
   late final TextEditingController _language;
@@ -374,6 +375,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   final TextEditingController _denyRule = TextEditingController();
   bool _showApiKey = false;
   bool _showAccessToken = false;
+  bool _showOmdbKey = false;
   bool _busy = false;
   String? _testResult;
   String? _saveResult;
@@ -384,6 +386,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     _draft = widget.state.tmdbConfig;
     _apiKey = TextEditingController(text: _draft.apiKey);
     _accessToken = TextEditingController(text: _draft.accessToken);
+    _omdbKey = TextEditingController(text: _draft.omdbApiKey);
     _apiBase = TextEditingController(text: _draft.apiBase);
     _imageBase = TextEditingController(text: _draft.imageBase);
     _language = TextEditingController(text: _draft.language);
@@ -393,6 +396,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   void dispose() {
     _apiKey.dispose();
     _accessToken.dispose();
+    _omdbKey.dispose();
     _apiBase.dispose();
     _imageBase.dispose();
     _language.dispose();
@@ -405,6 +409,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   TmdbConfig _collect() => _draft.copyWith(
     apiKey: _apiKey.text.trim(),
     accessToken: _accessToken.text.trim(),
+    omdbApiKey: _omdbKey.text.trim(),
     apiBase: _apiBase.text.trim(),
     imageBase: _imageBase.text.trim(),
     language: _language.text.trim(),
@@ -544,10 +549,36 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('tmdb-omdb-key'),
+                      controller: _omdbKey,
+                      obscureText: !_showOmdbKey,
+                      decoration: const InputDecoration(
+                        labelText: 'OMDB API Key（可选）',
+                        helperText:
+                            '用于详情页 IMDb / 烂番茄 / Metacritic 评分；留空则不请求 OMDb',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    key: const ValueKey('tmdb-omdb-key-toggle'),
+                    onPressed: () =>
+                        setState(() => _showOmdbKey = !_showOmdbKey),
+                    child: Text(_showOmdbKey ? '隐藏' : '显示'),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               SelectableText(
                 '日志与诊断中只出现掩码：key=${_draft.redactedApiKey} '
-                'token=${_draft.redactedAccessToken}',
+                'token=${_draft.redactedAccessToken} '
+                'omdb=${_draft.redactedOmdbApiKey}',
                 style: theme.textTheme.bodySmall,
               ),
             ],

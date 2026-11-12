@@ -6,11 +6,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../core/app_error.dart';
 import '../core/episode_range.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
+import '../core/detail_ratings.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_swap.dart';
@@ -21,12 +23,11 @@ import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../services/ai_episode_season_service.dart';
 import '../services/ai_season_mapping_service.dart';
-import 'ai_integration_widgets.dart';
-import '../core/ai_content/recommendation.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/ui_preferences_store.dart';
 import '../state/app_state.dart';
+import '../state/detail_ratings_state.dart';
 import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
 import 'ai_settings_page.dart';
@@ -35,6 +36,7 @@ import 'async_action_feedback.dart';
 import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
+import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
 import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
@@ -43,7 +45,6 @@ import 'common.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
-import 'ai_content/ai_recommendation_section.dart';
 import 'tmdb_widgets.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -1504,8 +1505,41 @@ class _DetailPageState extends State<DetailPage> {
     });
   }
 
+  /// 评分标签与页尾外链共用这一份查询（页面只发一轮请求）。
+  DetailRatingsController? _ratingsController;
+
+  DetailRatings _syncRatings(DetailRatingRequest request) {
+    final controller = _ratingsController ??= DetailRatingsController(
+      service: widget.state.detailRatingService,
+      omdbApiKey: () => widget.state.tmdbConfig.omdbApiKey,
+    )..addListener(_onRatingsChanged);
+    if (controller.requestKey != request.cacheKey) {
+      // 换作品才重查：同一部作品的重建（滚动、主题切换）不得重发请求。
+      controller.begin(request);
+      unawaited(controller.load());
+    }
+    return controller.ratings;
+  }
+
+  void _onRatingsChanged() {
+    if (!mounted) return;
+    // 可能发生在 build 期间（begin 会通知一次）：构建中直接 setState 会抛错，
+    // 推到下一帧。
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    // 评分查询随页面一起收走：控制器会取消还在等限速间隔的请求。
+    _ratingsController?.dispose();
+    _ratingsController = null;
     widget.state.removeListener(_onStateChanged);
     widget.state.tmdb.removeListener(_onStateChanged);
     // 详情错误通知的动作指向本页的 `_openSourceSwap`，页面销毁后那条通知必须一起
@@ -2677,6 +2711,18 @@ class _DetailPageState extends State<DetailPage> {
     //
     // 提成局部变量是因为**页面级背景**要用同一份。两处各算一次的话，
     // 回退分支可能得出不同结果（背景与头部的图不一致）。
+    final ratingRequest = DetailRatingRules.fromDetailMap(
+      tmdb.detail,
+      tmdbId: tmdb.identity?.tmdbId ?? 0,
+      title: display.vodName,
+      mediaType: tmdb.identity?.mediaType ?? TmdbMediaType.movie,
+      fallbackTitle: vod.vodName,
+    );
+    // 评分要真的查外部站点：没有 TMDB 详情时整块不渲染（与安卓同一闸门），
+    // 因此也不必为它发请求。
+    final ratings = owned && tmdb.detail != null
+        ? _syncRatings(ratingRequest)
+        : const DetailRatings();
     final headerData =
         tmdbData ??
         TmdbDetailData(
@@ -2802,6 +2848,10 @@ class _DetailPageState extends State<DetailPage> {
                   paintImage: false,
                   data: headerData,
                   heroOverview: display.vodContent ?? tmdbData?.overview,
+                  ratingTags: DetailRatingTags(
+                    ratings: ratings,
+                    tmdbRating: headerData.rating,
+                  ),
                   // 只剩播放入口：简介已改为在 hero 内按剩余高度完整显示，
                   // 「查看简介」按钮及其对话框按 2026-10-22 用户反馈移除。
                   heroActions: lines.isEmpty
@@ -2844,7 +2894,8 @@ class _DetailPageState extends State<DetailPage> {
                         ),
                       // 信息表已退场（2026-10-22 用户反馈）：`备注` 去掉，
                       // `语言` 已进 hero 标签行，两行都不剩，空表不再渲染。
-                      const SizedBox(height: 12),
+                      // 间距按 DESIGN.md 标度：区块之间统一 `AppSpace.xl`。
+                      const SizedBox(height: AppSpace.xl),
                       // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
                       // 导航源例外：卡片是全季一次性摊平的，切季没有意义
                       // （用户决策 6「不显示季度切换器」）。
@@ -2859,18 +2910,7 @@ class _DetailPageState extends State<DetailPage> {
                           },
                           onSelectManual: _openSeasonDialog,
                         ),
-                      // 纯 TMDB 详情页入口（`04` §6.1）。
-                      if (owned && tmdb.hasMatch && tmdb.identity != null)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const ValueKey('tmdb-open-detail'),
-                            onPressed: () => _openTmdbDetail(tmdb.identity!),
-                            icon: const Icon(Icons.movie_outlined, size: 18),
-                            label: const Text('在 TMDB 中查看'),
-                          ),
-                        ),
-                      const Divider(height: 32),
+                      const Divider(height: AppSpace.xxl),
                       // 导航源模式**整段跳过**线路条、「没有可播放的剧集」提示与
                       // 清空外部线路按钮（用户决策 4：导航站进来不显示线路，
                       // 实际也没有播放线路），改渲染 TMDB 全集卡片。
@@ -2879,7 +2919,7 @@ class _DetailPageState extends State<DetailPage> {
                         _buildNavSourceEpisodes(context, _ownedTmdb)
                       else if (loading && lines.isEmpty)
                         const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
+                          padding: EdgeInsets.symmetric(vertical: AppSpace.xl),
                           child: LoadingBlock(),
                         )
                       // 普通站点但本片没有任何可播放线路：TMDB 已匹配时先等全季聚合
@@ -2887,7 +2927,7 @@ class _DetailPageState extends State<DetailPage> {
                       // 或摊不出剧集时才退回提示文字 + 换源入口。
                       else if (noLineAggregating)
                         const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
+                          padding: EdgeInsets.symmetric(vertical: AppSpace.xl),
                           child: LoadingBlock(),
                         )
                       else if (noLineEpisodes.isNotEmpty)
@@ -2944,18 +2984,21 @@ class _DetailPageState extends State<DetailPage> {
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
                       ..._buildTmdbBlocks(context, tmdb),
-                      // AI 推荐放在 TMDB 信息（简介/演职人员/制作团队等）**之下**，
-                      // 不插在剧集与详情之间。缓存优先、后台刷新；未配置 AI
-                      // 时区块自身返回 `SizedBox.shrink()`，不占位也不请求。
-                      Padding(
-                        padding: const EdgeInsets.only(top: AppSpace.lg),
-                        child: AiRecommendationSection(
-                          state: widget.state,
-                          seedTitle: vod.vodName,
-                        ),
-                      ),
-
                       _buildRecommendationBottom(vod),
+                      // 外部链接沉到页面最底部（用户决策 2026-11-11）：它是
+                      // 「去别的站继续查」的出口，不属于任何内容区块，放在推荐行
+                      // 之后才不会打断阅读。
+                      if (owned && tmdb.detail != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                          child: DetailRatingsSection(
+                            request: ratingRequest,
+                            ratings: ratings,
+                            onOpen: state.openExternalUrl,
+                            onCopy: copyToClipboard,
+                            keyPrefix: 'detail-ratings',
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -2981,7 +3024,8 @@ class _DetailPageState extends State<DetailPage> {
     final data = tmdb.detailData;
     if (data == null) return const [];
     return [
-      const Divider(height: 32),
+      // 边界统一：发丝线不占高度，间隔全部由 `SectionHeader` 的 24px 承担。
+      const Divider(height: 1),
       TmdbDetailSections(
         data: data,
         // 新的底部推荐行接管"猜你喜欢 / 个性推荐"，旧的"相关推荐"海报墙
@@ -3153,6 +3197,8 @@ class _DetailPageState extends State<DetailPage> {
         builder: (_) => TmdbDetailPage(
           service: widget.state.tmdbService,
           recommendationDependencies: widget.state.recommendationDependencies,
+          ratingService: widget.state.detailRatingService,
+          omdbApiKey: widget.state.tmdbConfig.omdbApiKey,
           onSearchTitle: _searchRecommendationTitle,
           // 底部推荐与相关推荐/人物作品共用这一个 item 回调：纯页内部只有
           // `_openItem` 一个入口（见 TmdbDetailPage），因此这里接的必须是
@@ -3176,10 +3222,6 @@ class _DetailPageState extends State<DetailPage> {
           },
           onOpenVideo: widget.state.openExternalUrl,
           onCopyVideo: copyToClipboard,
-          aiRecommendations: AiRecommendationSection(
-            state: widget.state,
-            seedTitle: item.title,
-          ),
         ),
       ),
     );
@@ -3436,31 +3478,11 @@ class _DetailPageState extends State<DetailPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OutlinedButton.icon(
-              key: const ValueKey('detail-ai-business'),
-              onPressed: () => openAiBusiness(
-                context,
-                widget.state,
-                source: RecommendationSource.current,
-                title: vod.vodName,
-              ),
-              icon: const Icon(Icons.auto_awesome_outlined),
-              label: const Text('AI影片推荐'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () => openReaderInput(
-                context,
-                initialText: vod.vodContent ?? '',
-                title: vod.vodName,
-              ),
-              icon: const Icon(Icons.menu_book_outlined),
-              label: const Text('阅读简介'),
-            ),
-            if (widget.state.hasAiMappings(vod, rawLine)) ...[
+        if (widget.state.hasAiMappings(vod, rawLine))
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
               ChoiceChip(
                 label: const Text('全部映射'),
                 selected: _aiSelectedSeason == -1,
@@ -3489,8 +3511,7 @@ class _DetailPageState extends State<DetailPage> {
                   onSelected: (_) => setState(() => _aiSelectedSeason = -100),
                 ),
             ],
-          ],
-        ),
+          ),
         TmdbEpisodeHeader(
           episodeCount: episodes.length,
           reversed: _episodesReversed,
@@ -3804,16 +3825,10 @@ class _DetailPageState extends State<DetailPage> {
   /// 的已经匹配上了，再匹配一次只会把用户送回同一个空态。
   Widget? _noLineTmdbAction(TmdbState? tmdb) {
     if (tmdb == null || !tmdb.shouldRender) return null;
-    if (tmdb.hasMatch) {
-      final identity = tmdb.identity;
-      if (identity == null) return null;
-      return TextButton.icon(
-        key: const ValueKey('detail-no-line-tmdb'),
-        onPressed: () => _openTmdbDetail(identity),
-        icon: const Icon(Icons.movie_outlined, size: 16),
-        label: const Text('在 TMDB 中查看'),
-      );
-    }
+    // 已匹配时**不再给入口**（用户决策 2026-11-11：去掉「在 TMDB 中查看」）。
+    // 该匹配的已经匹配上了，空态的出路只剩「换源」；纯 TMDB 详情页仍可从
+    // 推荐卡片与演职人员作品进入。
+    if (tmdb.hasMatch) return null;
     switch (tmdb.phase) {
       case TmdbLoadPhase.disabled:
         return FilledButton.tonal(
@@ -4143,55 +4158,6 @@ class _DetailPageState extends State<DetailPage> {
     if (raw is int) return raw;
     if (raw is num) return raw.toInt();
     return sourceSeasonNumber(episode.name);
-  }
-
-  /// 打开纯 TMDB 详情页（`04` §6）。
-  ///
-  /// 该页面**没有播放按钮**；剧集卡片点击后跳搜索页并带入标题与身份提示。
-  Future<void> _openTmdbDetail(TmdbIdentity identity) async {
-    final state = widget.state;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => TmdbDetailPage(
-          service: state.tmdbService,
-          recommendationDependencies: state.recommendationDependencies,
-          onOpenItem: _openRecommendationOnSelectedSite,
-          onSearchTitle: (title) => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => Scaffold(
-                appBar: AppBar(title: const Text('搜索站源')),
-                body: SearchPage(state: state, initialKeyword: title),
-              ),
-            ),
-          ),
-          identity: identity,
-          initialItem: state.tmdb.item,
-          // 选集视图模式是**全局偏好**：进页面时读出来给初值，页内切换时回调
-          // 写回。该页不持有 `AppState`（只有 service/identity/回调），所以按它
-          // 既有的依赖注入风格传两个参数，而不是把状态对象塞进去。
-          initialViewMode: state.episodeViewMode,
-          onViewModeChanged: state.setEpisodeViewMode,
-          aiRecommendations: AiRecommendationSection(
-            state: state,
-            seedTitle: state.tmdb.item?.title ?? '',
-          ),
-          onSearchSource: (title, hint) {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('搜索站源')),
-                  body: SearchPage(
-                    state: state,
-                    initialKeyword: title,
-                    identityHint: hint,
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
   }
 }
 

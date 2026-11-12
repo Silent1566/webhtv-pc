@@ -116,6 +116,7 @@ import '../services/spider_process.dart';
 import '../services/spider_registry.dart';
 import '../services/spider_router.dart';
 import '../services/ai_config_store.dart';
+import '../services/detail_rating_service.dart';
 import '../services/storage.dart';
 import '../services/sync_client.dart';
 import '../services/sync_server.dart';
@@ -1205,6 +1206,17 @@ AiContentCompletion? aiContentCompletion,
 
   /// TMDB 服务（纯 TMDB 详情页直接使用，`04` §6）。
   TmdbService get tmdbService => _tmdbService;
+
+  /// 详情页外部评分（豆瓣 + 可选 OMDb）。
+  ///
+  /// 惰性创建：没进过详情页的会话不持有任何评分客户端。
+  DetailRatingService get detailRatingService =>
+      _detailRatingService ??= DetailRatingService.fromServices(
+        cacheDirectory: Directory(paths.cacheDir),
+        log: log,
+      );
+
+  DetailRatingService? _detailRatingService;
 
   DetailRecommendationDependencies? _recommendationDependencies;
   DetailRecommendationDependencies get recommendationDependencies =>
@@ -7043,6 +7055,7 @@ AiContentCompletion? aiContentCompletion,
     _liveService?.close();
     _epgService?.close();
     _recommendationDependencies?.close();
+    _detailRatingService?.close();
     _tmdbService.close();
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();

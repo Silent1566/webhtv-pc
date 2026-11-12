@@ -13,6 +13,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/ai_content/ai_recommendation_section.dart';
 import 'package:webhtv_pc/ui/app.dart';
 
+import 'support/temp_dirs.dart';
+
 const _payload =
     '{"items":[{"title":"缓存里的片","mediaType":"movie","year":2020},'
     '{"title":"新片A","mediaType":"tv","year":2021},'
@@ -26,7 +28,11 @@ class _FakeCompletion {
 
   AiContentCompletion build() => AiContentCompletion(
     complete:
-        ({required AiConfig config, required String prompt, Duration timeout = Duration.zero}) async {
+        ({
+          required AiConfig config,
+          required String prompt,
+          Duration timeout = Duration.zero,
+        }) async {
           calls++;
           if (fail) {
             return const AiCompletionResult(
@@ -55,8 +61,17 @@ void main() {
     temp = await Directory.systemTemp.createTemp('ai-rec-section');
     completion = _FakeCompletion();
     state = AppState(
+      // 四个最终目录都必须显式给：Linux/macOS 分支只读 XDG_*，'roaming'/'local'
+      // 仅 Windows 生效，只传后两者会让各用例共用真实用户缓存（前一例写的
+      // ai_content/rec_*.json 会让后一例少发一次请求）。这里按每个用例自己的
+      // temp 目录给，Windows/macOS/Linux 都命中显式值。
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/config',
+          'data': '${temp.path}/data',
+          'cache': '${temp.path}/cache',
+          'state': '${temp.path}/logs',
+        },
       ),
       log: LogService(),
       aiContentCompletion: completion.build(),
@@ -74,9 +89,7 @@ void main() {
 
   tearDown(() async {
     state.dispose();
-    try {
-      await temp.delete(recursive: true);
-    } catch (_) {}
+    await deleteTempDirBestEffort(temp);
   });
 
   Future<void> pump(WidgetTester tester, {String seed = '当前影片'}) async {
@@ -127,7 +140,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.byType(PosterImage), findsWidgets);
-    expect(find.byKey(const ValueKey('ai-detail-recommendations-title')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('ai-detail-recommendations-title')),
+      findsOneWidget,
+    );
   });
   testWidgets('长按海报打开推荐详情：理由/简介/不感兴趣/关闭齐全', (tester) async {
     await pump(tester);
@@ -135,7 +151,10 @@ void main() {
     await tester.longPress(poster);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('ai-recommendation-details')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('ai-recommendation-details')),
+      findsOneWidget,
+    );
     expect(find.text('推荐详情'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('ai-recommendation-details-source')),
@@ -159,7 +178,10 @@ void main() {
       find.byKey(const ValueKey('ai-recommendation-details-confirm')),
     );
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('ai-recommendation-details')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('ai-recommendation-details')),
+      findsNothing,
+    );
     expect(
       find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
       findsOneWidget,
@@ -183,7 +205,10 @@ void main() {
     });
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('ai-recommendation-details')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('ai-recommendation-details')),
+      findsNothing,
+    );
     expect(
       find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
       findsNothing,
@@ -263,7 +288,10 @@ void main() {
   test('上下文内容变化会改变输入指纹（历史新增即刷新）', () {
     const base = RecommendationRequest(
       source: RecommendationSource.current,
-      seed: WatchContextItem(title: '当前影片', mediaType: RecommendationMediaType.movie),
+      seed: WatchContextItem(
+        title: '当前影片',
+        mediaType: RecommendationMediaType.movie,
+      ),
       contexts: [
         WatchContextItem(title: '看完的剧A', mediaType: RecommendationMediaType.tv),
       ],

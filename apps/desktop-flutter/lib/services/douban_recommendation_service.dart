@@ -43,6 +43,7 @@ class DoubanRecommendationService {
   final Future<void> Function(Duration)? _delay;
   Timer? _spacingTimer;
   Completer<void>? _spacingComplete;
+  bool _spacingCancelled = false;
   final _closedSignal = Completer<void>();
   final _tmdbCancel = TmdbCancellationToken();
   bool _closed = false;
@@ -190,6 +191,80 @@ class DoubanRecommendationService {
       nextOffset: start + selected.length,
       hasMore: end < ranked.length || loadedSeeds < seeds.length,
     );
+  }
+
+  /// 按标题查豆瓣评分（详情页评分区用，见 `core/detail_ratings.dart`）。
+  ///
+  /// 复用本服务已有的串行队列、7 天磁盘缓存、750ms 间隔与 403/418 冷却：
+  /// 详情页另起一个 HTTP 客户端会形成两条互不知情的限速链，更容易被豆瓣限流。
+  /// 取不到时返回 0（不抛异常）。
+  Future<double> lookupRating({
+    required String title,
+    required String mediaType,
+    int year = 0,
+  }) async {
+    final query = title.trim();
+    if (_closed || query.isEmpty) return 0;
+    final suggestions = _subjects(
+      await _request(
+        Uri.https('movie.douban.com', '/j/subject_suggest', {'q': query}),
+      ),
+    );
+    final ranked = _rankCandidates(query, mediaType, year, suggestions);
+    if (ranked.isEmpty || _closed) return 0;
+    final best = ranked.first;
+    if (best.rating > 0) return best.rating;
+    if (best.id.isEmpty) return 0;
+    final root = _map(
+      await _request(
+        Uri.https('movie.douban.com', '/j/subject_abstract', {
+          'subject_id': best.id,
+        }),
+      ),
+    );
+    return _rating(_map(root['subject'] ?? root));
+  }
+
+  /// 候选排序（对齐安卓 `rankDoubanSubjects` 的权重视角）。
+  ///
+  /// 为什么不直接用 [_matches]：那个方法要求标题**完全相等**，用来给推荐行做
+  /// 同一作品的识别是对的，但豆瓣候选常带副标题或年份后缀（`无间道 三部曲`），
+  /// 完全相等会直接漏掉正确的片子——安卓为此给了「包含」+40 的分支。
+  /// 这里复刻那套权重，并额外让**已有分**的候选优先：同一档里能直接拿分，
+  /// 就省掉一次 `subject_abstract` 请求。
+  List<_Subject> _rankCandidates(
+    String title,
+    String mediaType,
+    int year,
+    List<_Subject> subjects,
+  ) {
+    final normalized = recommendationTitleKey(title);
+    if (normalized.isEmpty) return const [];
+    final type = TmdbMediaType.parse(mediaType);
+    final scored = <({_Subject subject, int score, int order})>[];
+    for (var order = 0; order < subjects.length; order++) {
+      final subject = subjects[order];
+      final key = recommendationTitleKey(subject.title);
+      if (key.isEmpty) continue;
+      var score = -order;
+      if (key == normalized) {
+        score += 100;
+      } else if (key.contains(normalized) || normalized.contains(key)) {
+        score += 40;
+      } else {
+        // 既不完全相等也不互为子串：连名字都对不上，不能拿它的分数冒充本片。
+        continue;
+      }
+      if (type != null && subject.type == type) score += 20;
+      if (year > 0 && subject.year == year) score += 20;
+      if (subject.rating > 0) score += 5;
+      scored.add((subject: subject, score: score, order: order));
+    }
+    scored.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      return byScore != 0 ? byScore : a.order.compareTo(b.order);
+    });
+    return [for (final item in scored) item.subject];
   }
 
   Future<Object?> _related(String type, String id) => _request(
@@ -354,7 +429,11 @@ class DoubanRecommendationService {
         final wait = last
             .add(const Duration(milliseconds: 750))
             .difference(_clock());
-        if (wait > Duration.zero) await _waitForSpacing(wait);
+        // 间隔被取消 = 页面已经关掉，没人再等这次结果：直接回缓存，
+        // 不再发请求（否则关闭后仍会打一枪豆瓣，浪费限流预算）。
+        if (wait > Duration.zero && !await _waitForSpacing(wait)) {
+          return cached?.body;
+        }
       }
       if (_closed) return null;
       _lastRequest = _clock();
@@ -503,17 +582,38 @@ class DoubanRecommendationService {
     return created;
   }
 
-  Future<void> _waitForSpacing(Duration duration) async {
+  /// 返回是否正常等完间隔；`false` 表示这一枪被取消（`close` 或
+  /// [cancelPendingSpacing]），调用方应放弃本次请求。
+  Future<bool> _waitForSpacing(Duration duration) async {
     if (_delay != null) {
       await Future.any<void>([_delay(duration), _closedSignal.future]);
-      return;
+      return !_closed && !_spacingCancelled;
     }
     final complete = Completer<void>();
     _spacingComplete = complete;
+    _spacingCancelled = false;
     _spacingTimer = Timer(duration, complete.complete);
     await complete.future;
     _spacingComplete = null;
     _spacingTimer = null;
+    final cancelled = _spacingCancelled;
+    _spacingCancelled = false;
+    return !_closed && !cancelled;
+  }
+
+  /// 取消**正在等待的那段限速间隔**，但不关闭服务、不丢缓存。
+  ///
+  /// 为什么需要：详情页的评分请求在页面关闭后没人再等结果，可 750ms 的
+  /// `Timer` 仍挂着——`flutter_test` 会直接判「A Timer is still pending」失败
+  /// （推荐行早就踩过同一个坑）。这里只掐掉间隔，队列、冷却与缓存都原样保留。
+  void cancelPendingSpacing() {
+    if (_spacingTimer == null) return;
+    _spacingCancelled = true;
+    _spacingTimer?.cancel();
+    _spacingTimer = null;
+    final complete = _spacingComplete;
+    _spacingComplete = null;
+    if (complete != null && !complete.isCompleted) complete.complete();
   }
 
   void close() {

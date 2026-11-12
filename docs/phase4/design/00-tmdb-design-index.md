@@ -140,7 +140,7 @@ TMDB 请求失败、季度冲突、来源结构变化时：
 | --- | --- |
 | `TmdbDetailActivity` 的 12667 行单体 | 上游自己在 `docs/refactoring/TMDB_DETAIL_ACTIVITY_REFACTORING_ROADMAP.md` 中列为重构对象；PC 端不继承该技术债 |
 | AI 刮削 / AI 季集识别 / AI 推荐 | 需外部模型与用户密钥，超出本阶段；作为后续阶段候选，接口预留但不实现 |
-| 豆瓣评分富集 | 需额外第三方接口，合规与稳定性风险高；`TmdbItem.doubanRating` 字段保留但不填充 |
+| ~~豆瓣评分富集~~ **2026-11-11 已实现（仅详情页评分区）** | 复用既有 `DoubanRecommendationService`（7 天缓存 / 750ms 间隔 / 冷却），不再新增独立第三方链路；`TmdbItem.doubanRating` 仍不在列表项上填充 |
 | 个人推荐（`PersonalRecommendationService`，1768 行） | 依赖观看画像与云端推荐，PC 端不做用户画像 |
 | WebHome 内联站点 / 短剧 / 小说 / 漫画路由 | PC 端不支持（Phase 3 §5.8、Phase 3 §7） |
 | `youtube` 应用内播放（`TmdbVideoPlayback` → `PushParser`） | PC 端无 YouTube 播放链路；相关视频改为「浏览器打开 + 复制链接」（见 04 §7） |

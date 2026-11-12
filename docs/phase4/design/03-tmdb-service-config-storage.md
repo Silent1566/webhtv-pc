@@ -278,7 +278,7 @@ class TmdbService {
 | `apiBase` | `apiBase` | `https://api.tmdb.org/3` | 归一化为以 `/3` 结尾 |
 | `apiKey` | `apiKey` / `apikey` / `api_key` / `tmdbApiKey` / `key` | `""` | v3 Key |
 | `accessToken` | `accessToken` / `token` / `readAccessToken` / `bearerToken` | `""` | v4 Token |
-| `omdbApiKey` | `omdbApiKey` / `omdbKey` / `imdbApiKey` | `""` | 保留字段；PC 端**不发起 OMDB 请求** |
+| `omdbApiKey` | `omdbApiKey` / `omdbKey` / `imdbApiKey` | `""` | 详情页 IMDb / 烂番茄 / Metacritic 评分用；**为空时 PC 端一次都不请求 OMDb**（2026-11-11 起由设置页显式配置后启用） |
 | `language` | `language` | `zh-CN` | |
 | `imageBase` | `imageBase` | `https://images.tmdb.org/t/p/w342` | |
 | `backdropBase` | `backdropBase` | `https://images.tmdb.org/t/p/w780` | |
@@ -550,7 +550,7 @@ TMDB 只提供两件事给播放链路：
 | 缓存存储 | `Path.cache()/tmdb/*.json` | 同构：`<cacheDir>/tmdb/*.json` | 行为对齐 |
 | 匹配/绑定持久化 | Gson JSON 字符串 | SQLite 表 | 可查询、可索引、可迁移 |
 | 季度进度持久化 | Room `TmdbSeasonProgress` | SQLite `tmdb_season_progress` | 语义对齐，去掉 `cid` → `configId` |
-| OMDB 评分 | 支持 | 保留字段，不请求 | 合规与依赖控制 |
+| OMDB 评分 | 支持 | 同构：`OmdbService` + 设置页 `omdbApiKey`（2026-11-11） | 无 Key 不请求；评分失败只降级不报错 |
 | 错误分类 | `IllegalStateException` + 字符串 | 结构化 `AppErrorKind.tmdb*` | 对齐 Phase 3 的字幕/弹幕/EPG 模式 |
 | 取消语义 | 线程中断 + `CancellationException` | `CancellationToken` + `siteCancelled` | 对齐 PC 端既有机制 |
 | 日志 | `SpiderDebug.log` | `LogService` | 对齐 PC 端既有机制 |

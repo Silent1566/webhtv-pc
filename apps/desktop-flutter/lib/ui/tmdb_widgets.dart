@@ -24,6 +24,7 @@ import '../core/tmdb_season.dart';
 import '../state/tmdb_state.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
+import 'tokens.dart';
 import 'scroll_behavior.dart';
 import 'toast.dart';
 
@@ -235,21 +236,10 @@ String _seasonLabel(int season) => season == 0 ? '特别篇' : '第 $season 季'
 
 /// 季度按钮的文案（`docs/phase6/design/03` §2.2）。
 ///
-/// 对齐上游 `TmdbDetailActivity#detailSeasonButtonLabel`：先看当前季度上下文，
-/// 再看解析出的季度，都没有才用「选择季度」。
-///
-/// 【关于 §2.2 表格的中间一行】原文还列了一行
-/// 「`selectedSeason < 0` 但解析出季度 → 同『第 N 季』」。
-/// 该行**当前不可达**：`TmdbState` 在 `availableSeasons` 非空时总会把
-/// `_selectedSeason` 落定（`scope is KnownSeason` 或 `_defaultSeasonOf`），
-/// 因此「有季度而 `selectedSeason < 0`」不会出现。
-/// 这里**不写**那行分支（写了就是不可达的死代码）；
-/// 一旦状态机改了，`test/phase6_season_controls_test.dart` 的
-/// 「selectedSeason<0 而季度已解析 → 不可达（现状）」用例会失败并提醒补上。
-String tmdbSeasonButtonLabel(TmdbState state) {
+/// 季度区里那句「现在是什么季度」的说明文字。
+String tmdbSeasonStatusLabel(TmdbState state) {
   final season = state.selectedSeason;
-  if (season >= 0) return _seasonLabel(season);
-  return '选择季度';
+  return season >= 0 ? '当前季度：${_seasonLabel(season)}' : '未确定季度';
 }
 
 /// 季度 chip 条（`docs/phase6/design/03` §3）。
@@ -362,25 +352,12 @@ class TmdbSeasonSelector extends StatelessWidget {
   /// 但也不要把能力藏起来）。
   final bool showManualEntry;
 
-  /// 常驻的季度按钮（`docs/phase6/design/03` §2）。
+  /// 季度区只保留**一个**入口：chip 条 + 「选择季度」按钮（用户决策 2026-11-11）。
   ///
-  /// 为什么必须常驻：单季剧集原先只显示一行上下文文字，**没有任何改绑入口**
-  /// ——用户发现 TMDB 匹配错了季度也没法手动纠正。上游
-  /// `updateTmdbSeasonActionVisibility` 的条件里 `seasonNumbers` 非空即可见，
-  /// 不要求多季，正是这个理由。
-  ///
-  /// [labelKey] 用于把 `tmdb-season-context` 挂到按钮文字上：
-  /// 单季时按钮文字**就是**季度上下文，再另外渲染一行「第 1 季」会变成
-  /// 同一句话出现两次（`design/03` §2.3 的单季示意图里只有 `[ 第 1 季 ▾ ]`）。
-  Widget _seasonButton(BuildContext context, {Key? labelKey}) =>
-      TextButton.icon(
-        key: const ValueKey('tmdb-season-button'),
-        onPressed: showManualEntry ? onSelectManual : null,
-        iconAlignment: IconAlignment.end,
-        icon: const Icon(Icons.expand_more, size: 18),
-        label: Text(tmdbSeasonButtonLabel(state), key: labelKey),
-      );
-
+  /// 原先还有一个「第 N 季 ▾」下拉按钮，点它与点按钮都开同一个季度对话框，
+  /// 而它旁边又挂着 chip 条——同一件事三个控件，用户要先分辨点哪个。
+  /// 现在：**要切季就点 chip**（一步），需要手动改绑才点「选择季度」（开对话框）。
+  /// 单季没有 chip 条，按钮仍常驻，改绑入口不丢。
   @override
   Widget build(BuildContext context) {
     if (!state.shouldRender || !state.hasMatch) return const SizedBox.shrink();
@@ -388,83 +365,46 @@ class TmdbSeasonSelector extends StatelessWidget {
     if (item == null || !item.isTv) return const SizedBox.shrink();
 
     final seasons = state.availableSeasons;
-    if (seasons.isEmpty) {
-      // 无法可靠分季 → 显示「未确定季度」+ 选择入口（`04` §4.1）
-      return SizedBox(
-        height: tmdbSeasonSelectorHeight,
-        child: Padding(
-          padding: padding,
-          child: Row(
-            children: [
-              _seasonButton(context),
-              const SizedBox(width: 8),
-              Text('未确定季度', style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(width: 8),
-              TextButton(
-                key: const ValueKey('tmdb-choose-season'),
-                onPressed: onSelectManual,
-                child: const Text('选择季度'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (seasons.length == 1) {
-      // 单季：按钮本身就是季度上下文（`design/03` §2.3 的示意图里只有
-      // `[ 第 1 季 ▾ ]`）。
-      //
-      // 【裁定】`design/03` §2 正文说「保留既有 key `tmdb-season-context`」，
-      // 而 §2.3 的图只画了按钮——两者直接相加会出现**同一句话两次**
-      // （按钮「第 1 季」+ 上下文文字「第 1 季」），既违反图示也是可见冗余。
-      // 取图示（用户看到什么）+ 把该 key **移到按钮文字上**：
-      // key 仍存在（`phase4_tmdb_ui_test` 的 `findsOneWidget` 与
-      // `phase6_season_controls_test` 都按它断言），画面也不再重复。
-      return SizedBox(
-        height: tmdbSeasonSelectorHeight,
-        child: Padding(
-          padding: padding,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _seasonButton(
-              context,
-              labelKey: const ValueKey('tmdb-season-context'),
-            ),
-          ),
-        ),
-      );
-    }
-
-    // 多季：按钮在左，chip 条在右。
-    //
-    // 按钮单独包一层 `Padding`（只吃 `padding.left`）而不是给整行加 padding：
-    // chip 条自己带 `padding.horizontal / 2`，两边相加正好等于 `padding.horizontal`，
-    // 于是「按钮对齐内容列左沿」与「chip 条仍有呼吸」同时成立。
+    // `showManualEntry=false` 时**渲染但禁用**：与整块隐藏相比，禁用态仍能
+    // 告诉用户「这里可以换季」，只是当前上下文不允许（DESIGN.md：不给点了
+    // 没反应的假入口，但也不要把能力藏起来）。
+    final manual = TextButton(
+      key: const ValueKey('tmdb-choose-season'),
+      onPressed: showManualEntry ? onSelectManual : null,
+      child: const Text('选择季度'),
+    );
     return SizedBox(
       height: tmdbSeasonSelectorHeight,
       child: Row(
         children: [
-          Padding(
-            padding: EdgeInsets.only(left: padding.left),
-            child: _seasonButton(context),
-          ),
-          Expanded(
-            child: SeasonChipStrip(
-              seasons: seasons,
-              selectedSeason: state.selectedSeason,
-              // 站点页的季度**本来就都是可选的**（`availableSeasons` 已经过
-              // 可播放季度解析），因此显式传全量而不是留空——
-              // `SeasonChipStrip` 的空值语义是「只展示不可切换」。
-              selectableSeasons: seasons,
-              onChanged: onChanged,
-              padding: padding,
-              // 站点页沿用既有 key 字面值：`phase4_tmdb_ui_test` 按
-              // `tmdb-season-switcher` / `tmdb-season-<n>` 断言，不得改名。
-              switcherKey: 'tmdb-season-switcher',
-              chipKeyPrefix: 'tmdb-season',
+          if (seasons.length > 1)
+            Expanded(
+              child: SeasonChipStrip(
+                seasons: seasons,
+                selectedSeason: state.selectedSeason,
+                // 站点页的季度本来就都是可选的（`availableSeasons` 已过可播放季度
+                // 解析），因此显式传全量而不是留空——空值语义是「只展示不可切换」。
+                selectableSeasons: seasons,
+                onChanged: onChanged,
+                padding: padding,
+                switcherKey: 'tmdb-season-switcher',
+                chipKeyPrefix: 'tmdb-season',
+              ),
+            )
+          else
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(left: padding.left),
+                child: Text(
+                  // 单季/未确定季度时，用一句话说明当前状态（原先靠按钮文字承担）。
+                  tmdbSeasonStatusLabel(state),
+                  key: const ValueKey('tmdb-season-context'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
             ),
-          ),
+          const SizedBox(width: AppSpace.sm),
+          manual,
         ],
       ),
     );
@@ -510,12 +450,10 @@ abstract final class TmdbEpisodeRenderPolicy {
     required int Function(VodEpisode episode) seasonOf,
   }) {
     if (rendered.length > sourceEpisodes.length) return false;
-    final expected = sourceEpisodes
-        .where((e) {
-          final season = seasonOf(e);
-          return season < 0 || season == selectedSeason;
-        })
-        .length;
+    final expected = sourceEpisodes.where((e) {
+      final season = seasonOf(e);
+      return season < 0 || season == selectedSeason;
+    }).length;
     return rendered.length == expected;
   }
 }
@@ -760,7 +698,8 @@ class TmdbSeasonDialog extends StatelessWidget {
             ListTile(
               key: const ValueKey('tmdb-season-keep-original'),
               title: const Text('保持原始集列表'),
-              onTap: () => Navigator.of(context).pop(_SeasonChoice.keepOriginal),
+              onTap: () =>
+                  Navigator.of(context).pop(_SeasonChoice.keepOriginal),
             ),
             // AI 项（`docs/phase6/design/04` §7.1）。
             //
@@ -774,20 +713,15 @@ class TmdbSeasonDialog extends StatelessWidget {
               key: const ValueKey('tmdb-season-ai'),
               leading: const Icon(Icons.auto_awesome),
               title: const Text('AI 识别剧集/季度'),
-              subtitle: aiReady
-                  ? null
-                  : const Text('未配置 AI 服务，点击前往设置'),
-              onTap: () => Navigator.of(context).pop(
-                aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings,
-              ),
+              subtitle: aiReady ? null : const Text('未配置 AI 服务，点击前往设置'),
+              onTap: () => Navigator.of(context)
+                  .pop(aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings),
             ),
             const Divider(),
             for (final season in tmdbSeasons)
               ListTile(
                 key: ValueKey('tmdb-season-option-$season'),
-                title: Text(
-                  season == 0 ? '特别篇' : '第 $season 季',
-                ),
+                title: Text(season == 0 ? '特别篇' : '第 $season 季'),
                 subtitle: Text(
                   '${seasonCounts[season] ?? 0} 集'
                   '${needsRiskWarning(seasonEpisodeCount: seasonCounts[season] ?? 0, sourceEpisodeCount: sourceEpisodeCount) ? ' · ⚠ 与线路集数差异较大，请确认' : ''}',

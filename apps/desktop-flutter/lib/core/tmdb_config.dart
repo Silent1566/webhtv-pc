@@ -222,7 +222,7 @@ class TmdbConfig {
   final String apiKey;
   final String accessToken;
 
-  /// 保留字段；PC 端**不发起** OMDB 请求（`00` §4.3）。
+  /// 用于详情页 IMDb / 烂番茄 / Metacritic 评分；为空时 PC 端一次都不请求 OMDb。
   final String omdbApiKey;
   final String language;
   final String imageBase;
@@ -509,6 +509,7 @@ class TmdbConfig {
   /// 只保留末 4 位，其余替换为 `*`；长度 ≤ 4 时全部替换。
   String get redactedApiKey => redactCredential(apiKey);
   String get redactedAccessToken => redactCredential(accessToken);
+  String get redactedOmdbApiKey => redactCredential(omdbApiKey);
 
   @override
   String toString() =>

@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+
+import 'support/temp_dirs.dart';
+
 import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
@@ -975,6 +978,121 @@ void main() {
     final response = await client.get(Uri.https('movie.douban.com', '/health'));
     expect(response.statusCode, 200);
     expect(jsonDecode(response.body), isEmpty);
+  });
+
+  group('cancelPendingSpacing（页面关闭取消等待）', () {
+    test('取消等待中的间隔后立刻返回，且不再发第二次请求', () async {
+      final directory = await Directory.systemTemp.createTemp('douban_cancel_');
+      final requests = <String>[];
+      final live = DoubanRecommendationService(
+        client: MockClient((request) async {
+          requests.add(request.url.path);
+          return jsonResponse([
+            {
+              'title': '详情电影',
+              'id': '900',
+              'type': 'movie',
+              'year': '2020',
+              'rating': {'value': 8.9},
+            },
+          ]);
+        }),
+        cacheDirectory: directory,
+        // 故意不注入 delay：要测的正是真实 Timer 这条路径。
+      );
+
+      expect(await live.lookupRating(title: '详情电影', mediaType: 'movie'), 8.9);
+      expect(requests, hasLength(1));
+
+      final pending = live.lookupRating(title: '详情电影二', mediaType: 'movie');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      live.cancelPendingSpacing();
+      // 取消后的请求按「没拿到」处理，而不是把 750ms 的 Timer 挂到进程结束。
+      expect(await pending, 0);
+      expect(requests, hasLength(1), reason: '取消后不得再打一枪豆瓣');
+      live.close();
+      await deleteTempDirBestEffort(directory);
+    });
+  });
+
+  group('lookupRating（详情页评分）', () {
+    test('subject_suggest 命中带分候选直接返回分数且不请求 subject_abstract', () async {
+      fixture.suggestions['详情电影'] = [subject('900', '详情电影', rating: 8.9)];
+      final service = fixture.service();
+      final rating = await service.lookupRating(
+        title: '详情电影',
+        mediaType: 'movie',
+        year: 2020,
+      );
+      expect(rating, 8.9);
+      expect(fixture.requests.map((request) => request.url.path), [
+        '/j/subject_suggest',
+      ]);
+      expect(fixture.requests.single.url.queryParameters['q'], '详情电影');
+      service.close();
+    });
+
+    test('候选 rating 为 0 时回落 subject_abstract 取分', () async {
+      fixture.suggestions['无分详情'] = [subject('901', '无分详情', rating: 0)];
+      final service = fixture.service();
+      final rating = await service.lookupRating(
+        title: '无分详情',
+        mediaType: 'movie',
+      );
+      expect(rating, 8.6);
+      expect(fixture.requests.map((request) => request.url.path), [
+        '/j/subject_suggest',
+        '/j/subject_abstract',
+      ]);
+      expect(fixture.requests.last.url.queryParameters['subject_id'], '901');
+      service.close();
+    });
+
+    test('候选为空数组时返回 0', () async {
+      fixture.suggestions['查无此片'] = <Object>[];
+      final service = fixture.service();
+      final rating = await service.lookupRating(
+        title: '查无此片',
+        mediaType: 'movie',
+      );
+      expect(rating, 0);
+      expect(fixture.requests.map((request) => request.url.path), [
+        '/j/subject_suggest',
+      ]);
+      service.close();
+    });
+
+    test('空白标题直接返回 0 且不发任何请求', () async {
+      final service = fixture.service();
+      final rating = await service.lookupRating(
+        title: '   ',
+        mediaType: 'movie',
+      );
+      expect(rating, 0);
+      expect(fixture.requests, isEmpty);
+      expect(fixture.waits, isEmpty);
+      service.close();
+    });
+
+    test('标点差异与副标题后缀都能命中（对齐安卓 rankDoubanSubjects）', () async {
+      fixture.suggestions['归一电影'] = [subject('902', '归一·电影', rating: 8.1)];
+      fixture.suggestions['后缀电影'] = [subject('903', '后缀电影 副标题', rating: 8.2)];
+      // 名字完全对不上的候选不得被借来用：豆瓣按标题搜索常返回一批无关条目。
+      fixture.suggestions['无关键'] = [subject('904', '另一个故事', rating: 9.9)];
+      final service = fixture.service();
+      expect(
+        await service.lookupRating(title: '归一电影', mediaType: 'movie'),
+        8.1,
+      );
+      // 豆瓣的候选常带副标题或年份后缀；安卓用「互为子串 +40」兜住这种情况，
+      // 只认完全相等的标题会漏掉正确的片子。
+      expect(
+        await service.lookupRating(title: '后缀电影', mediaType: 'movie'),
+        8.2,
+      );
+      expect(await service.lookupRating(title: '无关键', mediaType: 'movie'), 0);
+      service.close();
+    });
   });
 }
 

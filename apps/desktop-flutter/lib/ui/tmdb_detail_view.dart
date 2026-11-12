@@ -359,6 +359,7 @@ class TmdbDetailHeader extends StatelessWidget {
     this.height,
     this.heroOverview,
     this.heroActions,
+    this.ratingTags,
     this.paintImage = true,
   });
 
@@ -371,6 +372,12 @@ class TmdbDetailHeader extends StatelessWidget {
 
   /// 首屏主动作（例如“播放第一集”）。
   final Widget? heroActions;
+
+  /// 简介上方的评分标签行（由调用方注入 `DetailRatingTags`）。
+  ///
+  /// 放这里而不是正文顶部：评分是「这部片子怎么样」的定性信息，紧挨简介读才连贯；
+  /// 也是用户 2026-11-11 明确要求的位置。
+  final Widget? ratingTags;
 
   /// 是否由本头部绘制背景图，默认 `true`。
   ///
@@ -417,6 +424,7 @@ class TmdbDetailHeader extends StatelessWidget {
                   metadataBadge: metadataBadge,
                   overview: heroOverview,
                   actions: heroActions,
+                  ratingTags: ratingTags,
                 ),
               ),
             ],
@@ -464,7 +472,7 @@ class TmdbDetailSections extends StatelessWidget {
             keyValue: 'tmdb-section-photos',
           ),
           _PhotoWall(urls: data.photoUrls, title: data.title),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.xl),
         ],
         // 海报墙（对齐上游 `@id/tmdbPosters` 的 Posters 区块）。
         // 与剧照是**不同语义**的两组图：剧照是剧中画面，海报是宣发图。
@@ -481,7 +489,7 @@ class TmdbDetailSections extends StatelessWidget {
             itemWidth: 110,
             aspectRatio: 2 / 3,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.xl),
         ],
         if (data.allPeople.isNotEmpty || data.directors.isNotEmpty) ...[
           SectionHeader(
@@ -492,7 +500,7 @@ class TmdbDetailSections extends StatelessWidget {
             people: data.allPeople.take(20).toList(),
             onTap: onPersonTap,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.xl),
         ],
         // 制作团队**紧跟演职人员**（用户反馈 2026-10-10：「制作团队应该放在演员
         // 下方」）。对齐默影视 `activity_tmdb_detail.xml` 的区块顺序：
@@ -509,7 +517,7 @@ class TmdbDetailSections extends StatelessWidget {
             keyPrefix: 'tmdb-crew',
             keyValue: 'tmdb-crew-wall',
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.xl),
         ],
         if (recommendationBottom == null && recommendations.isNotEmpty) ...[
           SectionHeader(
@@ -520,7 +528,7 @@ class TmdbDetailSections extends StatelessWidget {
             items: recommendations,
             onTap: onRecommendationTap,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.xl),
         ],
         if (videos.isNotEmpty) ...[
           SectionHeader(
@@ -1112,6 +1120,8 @@ class TmdbDetailView extends StatelessWidget {
     this.onToggleReversed,
     this.onToggleGridMode,
     this.episodeTitle = '剧集',
+    this.ratingTags,
+    this.ratingLinks,
   });
 
   final TmdbDetailData data;
@@ -1174,6 +1184,15 @@ class TmdbDetailView extends StatelessWidget {
   /// 剧集区块标题。
   final String episodeTitle;
 
+  /// 简介上方的评分标签行（`DetailRatingTags`）。
+  final Widget? ratingTags;
+
+  /// 页面最底部的外部链接区（`DetailRatingsSection`）。
+  ///
+  /// 与 [ratingTags] 分开：评分是「参考口碑」，外链是「去别的站查」，两者在
+  /// 页面上的位置和交互都不同（用户决策 2026-11-11）。
+  final Widget? ratingLinks;
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1186,6 +1205,7 @@ class TmdbDetailView extends StatelessWidget {
           statusBar: statusBar,
           metadataBadge: metadataBadge,
           heroOverview: data.overview,
+          ratingTags: ratingTags,
         ),
         Padding(
           padding: padding,
@@ -1193,7 +1213,7 @@ class TmdbDetailView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (_seasonSectionVisible) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpace.xl),
                 SectionHeader(
                   title: '季度',
                   keyValue: 'tmdb-section-seasons',
@@ -1222,10 +1242,10 @@ class TmdbDetailView extends StatelessWidget {
                 ),
               ],
               if (infoRows.isNotEmpty) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpace.lg),
                 TmdbInfoTable(rows: infoRows),
               ],
-              const SizedBox(height: 16),
+              const SizedBox(height: AppSpace.lg),
               if (episodeCards.isNotEmpty)
                 EpisodeDurationStrip(cards: episodeCards),
               if (episodeCards.isEmpty)
@@ -1270,6 +1290,7 @@ class TmdbDetailView extends StatelessWidget {
                   onOpenVideo: onOpenVideo,
                   onCopyVideo: onCopyVideo,
                 ),
+              ?ratingLinks,
             ],
           ),
         ),
@@ -1291,12 +1312,14 @@ class _HeaderContent extends StatelessWidget {
     this.metadataBadge,
     this.overview,
     this.actions,
+    this.ratingTags,
   });
 
   final TmdbDetailData data;
   final String? metadataBadge;
   final String? overview;
   final Widget? actions;
+  final Widget? ratingTags;
 
   @override
   Widget build(BuildContext context) {
@@ -1356,6 +1379,8 @@ class _HeaderContent extends StatelessWidget {
                 // 窄屏维持 5，避免把标题挤出内容带。
                 maxChips: compact ? 5 : 8,
               ),
+              const SizedBox(height: 8),
+              ?ratingTags,
               // 导演行已移除（2026-10-22 用户反馈：把这一行让给简介）。
               // 导演信息不丢：下方「制作团队」区块带头像与「导演」职务；
               // 来源侧的 vodDirector 与 TMDB 的导演仍由模型层保留。
@@ -1422,16 +1447,8 @@ class _MetaChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chips = <Widget>[];
-    if (data.ratingLabel.isNotEmpty) {
-      chips.add(
-        _Chip(
-          keyValue: 'tmdb-detail-rating',
-          icon: Icons.star,
-          label: data.ratingLabel,
-          emphasized: true,
-        ),
-      );
-    }
+    // 评分不在这里：它由 [TmdbDetailView.ratingTags] 在简介正上方单独成行
+    // （用户决策 2026-11-11「评分单独提出来」）。标签行只放「本片是什么」。
     if (data.yearLabel.isNotEmpty) {
       chips.add(_Chip(keyValue: 'tmdb-detail-year', label: data.yearLabel));
     }
@@ -1492,27 +1509,15 @@ class _MetaChips extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.keyValue,
-    required this.label,
-    this.icon,
-    this.emphasized = false,
-  });
+  const _Chip({required this.keyValue, required this.label, this.icon});
 
   final String keyValue;
   final String label;
   final IconData? icon;
-  final bool emphasized;
 
   @override
-  Widget build(BuildContext context) {
-    return TagChip(
-      keyValue: keyValue,
-      label: label,
-      icon: icon,
-      emphasized: emphasized,
-    );
-  }
+  Widget build(BuildContext context) =>
+      TagChip(keyValue: keyValue, label: label, icon: icon);
 }
 
 // ---------------------------------------------------------------------------
