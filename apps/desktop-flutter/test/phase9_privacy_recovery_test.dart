@@ -372,11 +372,24 @@ void main() {
         expect(finder, findsOneWidget, reason: '高级设置缺少区块：$key');
       }
 
-      await tester.tap(find.byKey(const ValueKey('settings-incognito')));
+      // 逐个滚过去之后视口停在 DoH 区块：本页新增「长按画面倍速」一行后更长，
+      // 隐身开关已被滚出视口（`tap` 会打在窗口外）。点之前先把它滚回来。
+      final incognito = find.byKey(const ValueKey('settings-incognito'));
+      await tester.scrollUntilVisible(
+        incognito,
+        -200,
+        scrollable: scrollable,
+      );
+      await tester.ensureVisible(incognito);
+      await tester.pumpAndSettle();
+      await tester.tap(incognito);
       await tester.pumpAndSettle();
       expect(state.incognito, isTrue);
 
-      await tester.tap(find.byKey(const ValueKey('settings-doh-enabled')));
+      final dohEnabled = find.byKey(const ValueKey('settings-doh-enabled'));
+      await tester.ensureVisible(dohEnabled);
+      await tester.pumpAndSettle();
+      await tester.tap(dohEnabled);
       await tester.pumpAndSettle();
       expect(state.dohSettings.enabled, isTrue);
     });

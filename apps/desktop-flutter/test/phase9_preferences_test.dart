@@ -77,6 +77,7 @@ void main() {
           'autoNext': 'nope',
           'demuxerMaxBytesMiB': 999999,
           'failureFallback': 'unknown',
+          'longPressSpeed': 'fast',
         },
       }));
       final store = UiPreferencesStore(path: settingsPath);
@@ -84,6 +85,11 @@ void main() {
       expect(store.playerOptions.autoNext, isTrue);
       expect(store.playerOptions.demuxerMaxBytesMiB, PlayerOptions.maxDemuxerMaxMiB);
       expect(store.playerOptions.failureFallback, PlayerFailureFallback.line);
+      expect(
+        store.playerOptions.longPressSpeed,
+        PlayerOptions.defaultLongPressSpeed,
+        reason: '长按倍速的脏值回落默认 3×，而不是写死 2×',
+      );
     });
 
     test('写入不覆盖既有 sync 段', () async {
@@ -97,6 +103,27 @@ void main() {
       );
       final raw = readRaw();
       expect((raw['sync'] as Map)['enabled'], isTrue);
+    });
+
+    test('长按画面倍速写盘并读回（默认 3×）', () async {
+      final store = UiPreferencesStore(path: settingsPath);
+      await store.load();
+      expect(
+        store.playerOptions.longPressSpeed,
+        PlayerOptions.defaultLongPressSpeed,
+        reason: '从未设置过时默认 3×',
+      );
+      expect(PlayerOptions.defaultLongPressSpeed, 3);
+
+      await store.rememberPlayerOptions(
+        store.playerOptions.copyWith(longPressSpeed: 2.5),
+      );
+      final player = readRaw()['player'] as Map<String, Object?>;
+      expect(player['longPressSpeed'], 2.5);
+
+      final reloaded = UiPreferencesStore(path: settingsPath);
+      await reloaded.load();
+      expect(reloaded.playerOptions.longPressSpeed, 2.5);
     });
   });
 

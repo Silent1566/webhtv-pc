@@ -4,6 +4,8 @@
 /// [failureFallback]；设置页只消费 `toJson`/`fromJson`。
 ///
 /// 缺省值**必须等价于当前行为**：缓存开、硬解自动、自动连播开、回退到线路。
+/// 唯一的例外是 [longPressSpeed]：2026-11 起默认 3×（此前写死 2×），这是需求方
+/// 明确要的默认值变更，不是漏改。
 library;
 
 /// 失败回退阶梯。
@@ -53,10 +55,11 @@ class PlayerOptions {
     this.preloadNext = false,
     this.autoSkipIntro = false,
     this.autoSkipOutro = false,
+    this.longPressSpeed = defaultLongPressSpeed,
     this.lutPath = '',
   });
 
-  /// 默认值：与 Phase 0–8 的行为一致。
+  /// 默认值：与 Phase 0–8 的行为一致（唯一例外见 [longPressSpeed]：默认 3×）。
   const PlayerOptions.defaults() : this();
 
   static const int defaultDemuxerMaxMiB = 256;
@@ -65,6 +68,17 @@ class PlayerOptions {
   static const int maxDemuxerMaxMiB = 2048;
   static const int minDemuxerBackMiB = 8;
   static const int maxDemuxerBackMiB = 512;
+
+  /// 长按画面期间的临时倍速（松开恢复）的默认值与合法区间。
+  ///
+  /// 2026-11 起可配置；默认 3×（此前在 `_beginGestureSpeed` 里写死 2×）。
+  /// 只影响长按手势，不改变正常播放速率，也不写 mpv 属性。
+  static const double defaultLongPressSpeed = 3;
+  static const double minLongPressSpeed = 2;
+  static const double maxLongPressSpeed = 4;
+
+  /// 设置页与右键菜单提供的常用档位（区间内还允许手改成别的值，见 [normalized]）。
+  static const List<double> longPressSpeedChoices = [2, 2.5, 3, 4];
 
   /// `hwdec=auto-safe`；关闭时 `no`。
   final bool hardwareDecoding;
@@ -94,6 +108,9 @@ class PlayerOptions {
   final bool autoSkipIntro;
   final bool autoSkipOutro;
 
+  /// 长按画面期间的临时倍速（松开恢复原速）。见 [defaultLongPressSpeed]。
+  final double longPressSpeed;
+
   /// 选中的 LUT 文件路径；空串表示未启用。
   final String lutPath;
 
@@ -109,6 +126,13 @@ class PlayerOptions {
       }
       return value;
     }
+
+    // 非有限值（NaN/Infinity）没有"夹"的意义，直接回落默认。
+    final speed = longPressSpeed.isFinite
+        ? longPressSpeed
+              .clamp(minLongPressSpeed, maxLongPressSpeed)
+              .toDouble()
+        : defaultLongPressSpeed;
 
     return PlayerOptions(
       hardwareDecoding: hardwareDecoding,
@@ -131,6 +155,7 @@ class PlayerOptions {
       preloadNext: preloadNext,
       autoSkipIntro: autoSkipIntro,
       autoSkipOutro: autoSkipOutro,
+      longPressSpeed: speed,
       lutPath: lutPath.trim(),
     );
   }
@@ -155,6 +180,7 @@ class PlayerOptions {
     bool? preloadNext,
     bool? autoSkipIntro,
     bool? autoSkipOutro,
+    double? longPressSpeed,
     String? lutPath,
   }) => PlayerOptions(
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
@@ -168,6 +194,7 @@ class PlayerOptions {
     preloadNext: preloadNext ?? this.preloadNext,
     autoSkipIntro: autoSkipIntro ?? this.autoSkipIntro,
     autoSkipOutro: autoSkipOutro ?? this.autoSkipOutro,
+    longPressSpeed: longPressSpeed ?? this.longPressSpeed,
     lutPath: lutPath ?? this.lutPath,
   );
 
@@ -182,6 +209,7 @@ class PlayerOptions {
     'preloadNext': preloadNext,
     'autoSkipIntro': autoSkipIntro,
     'autoSkipOutro': autoSkipOutro,
+    'longPressSpeed': longPressSpeed,
     'lutPath': lutPath,
   };
 
@@ -198,6 +226,11 @@ class PlayerOptions {
       return value is num ? value.toInt() : fallback;
     }
 
+    double doubleOf(String key, double fallback) {
+      final value = map[key];
+      return value is num && value.isFinite ? value.toDouble() : fallback;
+    }
+
     return PlayerOptions(
       hardwareDecoding: boolOf('hardwareDecoding', true),
       cache: boolOf('cache', true),
@@ -212,6 +245,7 @@ class PlayerOptions {
       preloadNext: boolOf('preloadNext', false),
       autoSkipIntro: boolOf('autoSkipIntro', false),
       autoSkipOutro: boolOf('autoSkipOutro', false),
+      longPressSpeed: doubleOf('longPressSpeed', defaultLongPressSpeed),
       lutPath: map['lutPath'] is String ? (map['lutPath'] as String).trim() : '',
     ).normalized();
   }
@@ -229,6 +263,7 @@ class PlayerOptions {
       other.preloadNext == preloadNext &&
       other.autoSkipIntro == autoSkipIntro &&
       other.autoSkipOutro == autoSkipOutro &&
+      other.longPressSpeed == longPressSpeed &&
       other.lutPath == lutPath;
 
   @override
@@ -243,6 +278,7 @@ class PlayerOptions {
     preloadNext,
     autoSkipIntro,
     autoSkipOutro,
+    longPressSpeed,
     lutPath,
   );
 
@@ -252,5 +288,5 @@ class PlayerOptions {
       'max=${demuxerMaxBytesMiB}MiB back=${demuxerMaxBackBytesMiB}MiB '
       'spdif=$audioPassthrough autoNext=$autoNext ${failureFallback.id} '
       'preload=$preloadNext skip=$autoSkipIntro/$autoSkipOutro '
-      'lut="${lutPath.isEmpty ? '' : 'set'}")';
+      'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}")';
 }

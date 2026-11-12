@@ -51,20 +51,20 @@ Future<void> settlePlayerPage(
 
 /// 让控制浮层回到可见态（`design/01` §4.4）。
 ///
-/// 用**单击画面**——也就是产品的主唤醒路径，而不是模拟鼠标移动：
-/// 真实窗口下 `LiveTestWidgetsFlutterBinding` 已经在跟踪真实的鼠标设备，
-/// `tester.createGesture(kind: PointerDeviceKind.mouse)` 再加一个指针会让
-/// `MouseTracker` 直接断言失败
+/// **不能再用「单击画面」**：桌面语义下单击画面是**暂停/播放**
+/// （`design/01` §4.6），用它唤醒控制栏会顺带暂停视频，字幕/弹幕用例
+/// 后续的「仍在播」断言就不再成立。这里走 `@visibleForTesting` 的唤醒缝，
+/// 它调用的就是产品自己的 `_touchControls()`。
+///
+/// 也**不能模拟鼠标悬停**：真实窗口下 `LiveTestWidgetsFlutterBinding`
+/// 已经在跟踪真实的鼠标设备，`tester.createGesture(kind: PointerDeviceKind.mouse)`
+/// 再加一个指针会让 `MouseTracker` 直接断言失败
 /// （`(event is PointerAddedEvent) == (lastEvent is PointerRemovedEvent)`，
 /// 实测在 `subtitle_flow_test.dart` 第一条用例就抛出）。
-///
-/// **先读状态再决定点不点**：`_toggleControlsByGesture` 是切换语义，
-/// 浮层已经可见时再点一次会把它关掉。仓库里已有同样的写法
-/// （`ui_redesign_visual_flow_test.dart:659`）。
 Future<void> revealPlayerControls(WidgetTester tester) async {
   final state = tester.state<State<PlayerPage>>(find.byType(PlayerPage));
   if (debugPlayerControlsVisible(state)) return;
-  await tester.tap(find.byType(PlayerPage), warnIfMissed: false);
+  debugRevealPlayerControls(state);
   await tester.pump();
   // AnimatedOpacity 需要一帧登记 ticker、再一帧推进；单次 pump 拍到的
   // 仍是 opacity 0（`design/05` §1.3 记过这个坑）。

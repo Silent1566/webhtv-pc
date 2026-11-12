@@ -78,6 +78,11 @@ void main() {
       const incognitoKey = 'settings-incognito';
       final incognito = find.byKey(const ValueKey(incognitoKey));
       await tester.scrollUntilVisible(incognito, 200, scrollable: scrollable);
+      // `scrollUntilVisible` 只保证目标进入构建范围，不保证整行落在视口内。
+      // 本页新增「长按画面倍速」一行后变长，实测它停在 y=736（视口 700）处，
+      // `tap` 于是打在窗口外。补一次 `ensureVisible` 把整行滚进来。
+      await tester.ensureVisible(incognito);
+      await tester.pumpAndSettle();
       expect(tile(incognitoKey).value, isFalse);
       await tapSwitch(incognito);
       expect(state.incognito, isTrue);
@@ -87,6 +92,8 @@ void main() {
       const logKey = 'settings-spider-debug-log';
       final logTile = find.byKey(const ValueKey(logKey));
       await tester.scrollUntilVisible(logTile, 200, scrollable: scrollable);
+      await tester.ensureVisible(logTile);
+      await tester.pumpAndSettle();
       expect(tile(logKey).value, isFalse);
       await tapSwitch(logTile);
       expect(state.spiderDebugLog, isTrue);
@@ -110,7 +117,82 @@ void main() {
       expect(state.spiderDebugLog, isFalse);
       expect(tile(logKey).value, isFalse, reason: '再拨一次必须回显为关');
     });
+
+    testWidgets('长按画面倍速：默认 3×，改档后回显并落盘', (tester) async {
+      tester.view.physicalSize = const Size(900, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(Brightness.dark),
+          home: AdvancedSettingsPage(state: state),
+        ),
+      );
+      await tester.pump();
+
+      expect(state.playerOptions.longPressSpeed, 3, reason: '默认必须是 3×');
+
+      final tile = find.byKey(
+        const ValueKey('settings-player-long-press-speed'),
+      );
+      await tester.scrollUntilVisible(
+        tile,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+
+      final dropdown = find.descendant(
+        of: tile,
+        matching: find.byType(DropdownButton<double>),
+      );
+      expect(dropdown, findsOneWidget);
+      expect(
+        find.descendant(of: tile, matching: find.text('3×')),
+        findsOneWidget,
+        reason: '关闭态必须回显当前档位',
+      );
+
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('4×').last);
+      await tester.pump();
+      // onChanged 里 await 真实写盘：假时钟等不到，放行真实 IO 再重建。
+      await tester.runAsync(() async {
+        final file = File(state.paths.settingsPath);
+        for (var i = 0; i < 100; i++) {
+          if (playerLongPressSpeed(file) == 4) return;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pumpAndSettle();
+
+      expect(state.playerOptions.longPressSpeed, 4);
+      expect(
+        find.descendant(of: tile, matching: find.text('4×')),
+        findsOneWidget,
+        reason: '改档后必须回显为 4×，不能弹回',
+      );
+      expect(
+        playerLongPressSpeed(File(state.paths.settingsPath)),
+        4,
+        reason: 'settings.json 的 player.longPressSpeed 必须写入',
+      );
+    });
   });
+}
+
+/// 读 `settings.json` 的 `player.longPressSpeed`；文件/段/键缺失都返回 null。
+double? playerLongPressSpeed(File file) {
+  if (!file.existsSync()) return null;
+  try {
+    final root = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+    final player = root['player'];
+    if (player is! Map) return null;
+    final value = player['longPressSpeed'];
+    return value is num ? value.toDouble() : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 /// 读 `settings.json` 的 `ui.spiderDebugLog`；文件/段/键缺失都返回 null。

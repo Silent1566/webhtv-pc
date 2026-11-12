@@ -533,13 +533,20 @@ void main() {
       await _drill(tester, '设置');
       await _drill(tester, '播放参数');
 
-      // 第 3 列 = 播放参数的下钻列：5 个就地开关 + 2 棵更深子树。
+      // 第 3 列 = 播放参数的下钻列：5 个就地开关 + 3 棵更深子树。
       final paramLabels = [
         for (final row in _rowsAt(tester, 2)) _labelOf(tester, row),
       ];
       expect(
         paramLabels,
-        containsAll(<String>['硬件解码', '缓存', '预加载下一集', '音频直通', '自动连播']),
+        containsAll(<String>[
+          '硬件解码',
+          '缓存',
+          '预加载下一集',
+          '音频直通',
+          '自动连播',
+          '长按画面倍速',
+        ]),
         reason: '播放参数下的 5 个就地开关必须都在',
       );
 
@@ -584,6 +591,33 @@ void main() {
         checked,
         ['${PlayerOptions.defaultDemuxerMaxMiB} MiB'],
         reason: '缓存上限当前值必须打勾（默认 ${PlayerOptions.defaultDemuxerMaxMiB} MiB）',
+      );
+    });
+
+    testWidgets('第三条新增第 4 层路径：设置 → 播放参数 → 长按画面倍速（4 档单选）', (
+      tester,
+    ) async {
+      await _openMenu(tester);
+      await _drill(tester, '设置');
+      await _drill(tester, '播放参数');
+      await _drill(tester, '长按画面倍速');
+
+      final rows = _rowsAt(tester, 3);
+      expect(
+        rows.length,
+        PlayerOptions.longPressSpeedChoices.length,
+        reason: '长按倍速必须是 ${PlayerOptions.longPressSpeedChoices.length} 档',
+      );
+      final labels = [for (final row in rows) _labelOf(tester, row)];
+      expect(labels, ['2×', '2.5×', '3×', '4×']);
+      final checked = [
+        for (var i = 0; i < rows.length; i++)
+          if (_isChecked(tester, rows[i])) labels[i],
+      ];
+      expect(
+        checked,
+        ['3×'],
+        reason: '默认 3×（PlayerOptions.defaultLongPressSpeed），且恰有一项打勾',
       );
     });
 
