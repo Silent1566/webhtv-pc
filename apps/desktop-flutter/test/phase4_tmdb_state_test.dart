@@ -1399,4 +1399,119 @@ void main() {
       state.dispose();
     });
   });
+
+  group('手动匹配 / 重新匹配到另一部作品（用户反馈 2026-11-12）', () {
+    /// 作品甲（1399）自动匹配成功后手动改选作品乙（2000），再跑一遍整条加载链
+    /// （= `AppState.reloadTmdb`）。详情/演职人员/季集数必须整体换成乙。
+    _FakeClient twoShowClient() => _FakeClient()
+      ..route('/search/multi', {
+        'results': [
+          {
+            'id': 1399,
+            'media_type': 'tv',
+            'name': '作品甲',
+            'first_air_date': '2024-01-01',
+          },
+        ],
+      })
+      ..route('/tv/1399', {
+        'id': 1399,
+        'name': '作品甲',
+        'poster_path': '/poster-a.jpg',
+        'overview': '作品甲简介',
+        'seasons': [
+          {'season_number': 1, 'episode_count': 3},
+        ],
+        'aggregate_credits': {
+          'cast': [
+            {'id': 11, 'name': '演员甲', 'roles': []},
+          ],
+        },
+      })
+      ..route('/tv/2000', {
+        'id': 2000,
+        'name': '作品乙',
+        'poster_path': '/poster-b.jpg',
+        'overview': '作品乙简介',
+        'seasons': [
+          {'season_number': 2, 'episode_count': 2},
+        ],
+        'aggregate_credits': {
+          'cast': [
+            {'id': 22, 'name': '演员乙', 'roles': []},
+          ],
+        },
+      })
+      ..route('/season/1', {
+        'season_number': 1,
+        'episodes': [
+          {'episode_number': 1, 'name': '甲1', 'season_number': 1},
+          {'episode_number': 2, 'name': '甲2', 'season_number': 1},
+          {'episode_number': 3, 'name': '甲3', 'season_number': 1},
+        ],
+      })
+      ..route('/season/2', {
+        'season_number': 2,
+        'episodes': [
+          {'episode_number': 1, 'name': '乙1', 'season_number': 2},
+          {'episode_number': 2, 'name': '乙2', 'season_number': 2},
+        ],
+      })
+      ..route('/videos', {'results': []});
+
+    test('匹配记录换作品后详情/演职人员/季集数必须整体重取', () async {
+      final client = twoShowClient();
+      final store = InMemoryTmdbMatchStore();
+      final state = _state(config: _ready, client: client, store: store);
+      addTearDown(state.dispose);
+
+      final vod = _vod(name: '作品甲');
+      final lines = [_playLine(count: 3)];
+      await state.loadForVod(vod, siteKey: 's', siteName: '站点', lines: lines);
+      expect(state.identity?.tmdbId, 1399, reason: '前置：自动匹配到作品甲');
+      expect(state.detail?['name'], '作品甲');
+
+      // 手动改选作品乙：等同于详情页「重新匹配 → 选一部」落库后 reloadTmdb。
+      store.putManual(
+        siteKey: 's',
+        vodId: vod.vodId,
+        sourceTitles: const ['作品甲'],
+        item: const TmdbItem(
+          tmdbId: 2000,
+          mediaType: TmdbMediaType.tv,
+          title: '作品乙',
+        ),
+        matchedAt: 1,
+      );
+      await state.loadForVod(vod, siteKey: 's', siteName: '站点', lines: lines);
+
+      expect(state.identity?.tmdbId, 2000, reason: '手动结论必须生效');
+      expect(state.detail?['name'], '作品乙', reason: '详情必须按新作品重取');
+      expect(
+        state.detailData?.posterUrl,
+        contains('poster-b.jpg'),
+        reason: '海报必须是新作品的',
+      );
+      expect(
+        state.cast.map((person) => person.name),
+        contains('演员乙'),
+        reason: '演职人员必须是新作品的',
+      );
+      expect(
+        state.cast.map((person) => person.name),
+        isNot(contains('演员甲')),
+        reason: '上一部作品的演职人员不得残留',
+      );
+      expect(
+        state.seasonEpisodeCounts.keys,
+        [2],
+        reason: '季集数必须按新作品重算（上一部的第 1 季不得残留）',
+      );
+      expect(
+        client.requests.where((uri) => uri.path.endsWith('/tv/2000')).length,
+        1,
+        reason: '新作品的详情必须真的重新请求一次',
+      );
+    });
+  });
 }
