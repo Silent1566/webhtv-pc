@@ -154,6 +154,8 @@ class TmdbMatchOutcome {
   final TmdbMatchResult result;
 
   /// 命中的选择级别（`strict` / `containedYear` / `smart`）。
+  ///
+  /// 年份拆分重试命中时加 `split.` 前缀（如 `split.strict`），便于诊断。
   final String? level;
 
   /// 实际使用的候选查询词数量（上限 3，`01` §4）。
@@ -235,11 +237,12 @@ class TmdbIdentityService {
     var requests = 0;
     // 记录最后一次可恢复错误，用于区分「无候选」与「网络失败」（`01` §8）。
     AppError? lastError;
-    for (final query in queries) {
+
+    /// 单次搜索：计数 + 可恢复错误返回 `null`（鉴权失败与取消向上传播）。
+    Future<List<TmdbItem>?> search(String query) async {
       requests++;
-      List<TmdbItem> results;
       try {
-        results = await _service.search(query);
+        return await _service.search(query);
       } on TmdbAuthException {
         rethrow;
       } on TmdbCancelledException {
@@ -248,20 +251,14 @@ class TmdbIdentityService {
         // 未配置/站点禁用之外的可恢复错误 → 记录后继续尝试下一个查询词
         if (error.kind == AppErrorKind.tmdbNotConfigured) rethrow;
         lastError = error;
-        continue;
+        return null;
       } catch (_) {
-        continue;
+        return null;
       }
+    }
 
-      // 步骤 4：过滤媒体类型
-      final filtered = _filterByMediaType(results, request.expectedMediaType);
-      if (filtered.isEmpty) continue;
-
-      // 步骤 5：三级选择
-      final picked = await _chooseBest(filtered, query, request);
-      if (picked == null) continue;
-
-      // 步骤 6：落盘（不覆盖手动）
+    /// 命中即落盘并返回（步骤 6，不覆盖手动）。
+    TmdbMatchOutcome hitOf(({TmdbItem item, String level}) picked) {
       _store.putAuto(
         siteKey: request.siteKey,
         vodId: request.vodId,
@@ -283,13 +280,76 @@ class TmdbIdentityService {
       );
     }
 
+    for (final candidate in queries) {
+      var results = await search(candidate.query);
+      if (results == null) continue;
+      // 清洗后一个结果都没有时，用**原始关键词**再搜一次（上游 `search(keyword, vod)`）。
+      if (results.isEmpty &&
+          candidate.raw.isNotEmpty &&
+          candidate.raw != candidate.query) {
+        results = await search(candidate.raw) ?? const <TmdbItem>[];
+      }
+
+      // 步骤 4：过滤媒体类型
+      final filtered = _filterByMediaType(results, request.expectedMediaType);
+      if (filtered.isEmpty) continue;
+
+      // 步骤 5：三级选择
+      final picked = await _chooseBest(filtered, candidate.query, request);
+      if (picked == null) continue;
+      return hitOf(picked);
+    }
+
+    // 步骤 5 收尾：年份拆分重试（§5.5）。候选查询**全部**失败后只做一次，
+    // 且不受「智能匹配」开关影响——开关只管 smart 一级，不管是否重试。
+    final primary = queries.isEmpty
+        ? (
+            query: cleanTitle(request.sourceTitle),
+            raw: request.sourceTitle.trim(),
+          )
+        : queries.first;
+    // 站源年份优先；但如果它与标题里的年份冲突（站源填了更新年份/当前年份），
+    // 第一轮会返回 null，此时退回「只用标题年份」再算一次——两者只搜索一次，
+    // 请求预算不变，但不会因为站源年份脏而整条重试消失。
+    final splitSource = request.vodName ?? request.sourceTitle;
+    final split =
+        splitYearQuery(
+          keyword: primary.query,
+          sourceTitle: splitSource,
+          expectedYear: firstYear(request.vodYear),
+        ) ??
+        splitYearQuery(keyword: primary.query, sourceTitle: splitSource);
+    // 拆分结果与已搜过的查询词相同时不重复请求：源年份本就取自同一组信号，
+    // 重跑结果不会变，白花一次请求。
+    final alreadySearched =
+        split != null && queries.any((entry) => entry.query == split.query);
+    if (split != null && !alreadySearched) {
+      final retried = await search(split.query);
+      final filtered = _filterByMediaType(
+        retried ?? const <TmdbItem>[],
+        request.expectedMediaType,
+      );
+      if (filtered.isNotEmpty) {
+        final picked = await _chooseBest(
+          filtered,
+          split.query,
+          request,
+          yearOverride: split.year,
+        );
+        if (picked != null) {
+          return hitOf((item: picked.item, level: 'split.${picked.level}'));
+        }
+      }
+    }
+
     // 全部失败 → 区分「网络失败」与「无候选」（`01` §8）
+    final recoverable = lastError;
     return TmdbMatchOutcome(
-      result: lastError == null
+      result: recoverable == null
           ? const TmdbMatchMiss(TmdbMissReason.noCandidates)
           : TmdbMatchMiss(
               TmdbMissReason.networkFailure,
-              detail: lastError.detail,
+              detail: recoverable.detail,
             ),
       queryCount: queries.length,
       requestCount: requests,
@@ -377,8 +437,14 @@ class TmdbIdentityService {
     final config = _config();
     if (!config.isReady) return const [];
     try {
-      final results = await _service.search(cleanTitle(keyword));
-      _sortSearchResults(results, keyword, config);
+      final raw = keyword.trim();
+      final cleaned = cleanTitle(raw);
+      var results = await _service.search(cleaned);
+      // 清洗后没有结果时用原始关键词再搜一次（上游 `search(keyword, vod)`）。
+      if (results.isEmpty && raw.isNotEmpty && raw != cleaned) {
+        results = await _service.search(raw);
+      }
+      _sortSearchResults(results, raw.isEmpty ? cleaned : raw, config);
       return results;
     } on TmdbAuthException {
       rethrow;
@@ -400,14 +466,19 @@ class TmdbIdentityService {
     final preferredLanguage = preferredLanguageOf(config.language);
     final preferredCountry = preferredCountryOf(config.language);
     items.sort((a, b) {
+      // 相似度先剥年份：查询「尚公主2026」时 TMDB 的「尚公主」才是第一名。
       var compare = titleSimilarityScore(
         b.title,
         keyword,
-      ).compareTo(titleSimilarityScore(a.title, keyword));
+        titleYear: b.year,
+      ).compareTo(titleSimilarityScore(a.title, keyword, titleYear: a.year));
       if (compare != 0) return compare;
-      compare = yearDistance(firstYear(a.subtitle), sourceYearValue).compareTo(
-        yearDistance(firstYear(b.subtitle), sourceYearValue),
+      // 年份二次加权：先比与源年份的距离，再让已知年份的新作品排前面。
+      compare = yearDistance(a.year, sourceYearValue).compareTo(
+        yearDistance(b.year, sourceYearValue),
       );
+      if (compare != 0) return compare;
+      compare = (b.year > 0 ? b.year : -1).compareTo(a.year > 0 ? a.year : -1);
       if (compare != 0) return compare;
       compare = localePreferenceScore(
         originalLanguage: b.originalLanguage,
@@ -474,14 +545,20 @@ class TmdbIdentityService {
   }
 
   /// 候选查询词（`01` §4 步骤 3，上限 [maxQueries]）。
-  List<String> _candidateQueries(TmdbMatchRequest request) {
-    final queries = <String>[];
-    void add(String? raw) {
+  ///
+  /// 每条都带原始输入：清洗后一个结果都没有时，还要用原始关键词再搜一次
+  /// （上游 `TmdbMatcher.search(keyword, vod)`）。
+  List<({String query, String raw})> _candidateQueries(
+    TmdbMatchRequest request,
+  ) {
+    final queries = <({String query, String raw})>[];
+    void add(String? input) {
       if (queries.length >= maxQueries) return;
-      final cleaned = cleanTitle(raw ?? '');
+      final raw = (input ?? '').trim();
+      final cleaned = cleanTitle(raw);
       if (cleaned.isEmpty) return;
-      if (queries.contains(cleaned)) return;
-      queries.add(cleaned);
+      if (queries.any((entry) => entry.query == cleaned)) return;
+      queries.add((query: cleaned, raw: raw));
     }
 
     add(request.searchKeyword);
@@ -499,18 +576,23 @@ class TmdbIdentityService {
     return items.where((item) => item.mediaType == expected).toList();
   }
 
-  /// 三级选择（`01` §5.3）+ 年份拆分重试（`01` §5.5）。
+  /// 三级选择（`01` §5.3）。
+  ///
+  /// [yearOverride] 供年份拆分重试用：重试查询已不含年份，必须用拆分出的年份
+  /// 做年份裁决（上游把 `split.year` 作为 `sourceYear` 传入 `chooseTmdbMatch`）。
   Future<({TmdbItem item, String level})?> _chooseBest(
     List<TmdbItem> items,
     String keyword,
-    TmdbMatchRequest request,
-  ) async {
+    TmdbMatchRequest request, {
+    int? yearOverride,
+  }) async {
     final config = _config();
-    final sourceYearValue = sourceYear(
-      vodYear: request.vodYear,
-      sourceTitle: request.sourceTitle,
-      keyword: keyword,
-    );
+    final sourceYearValue = yearOverride ??
+        sourceYear(
+          vodYear: request.vodYear,
+          sourceTitle: request.sourceTitle,
+          keyword: keyword,
+        );
     final matchText = request.matchSourceText;
 
     final strict = await _chooseStrict(items, keyword, matchText, sourceYearValue);
@@ -533,32 +615,7 @@ class TmdbIdentityService {
       sourceYearValue,
     );
     if (smart != null) return (item: smart, level: 'smart');
-
-    // 年份拆分重试（只做一次）
-    final split = splitYearQuery(
-      keyword: keyword,
-      sourceTitle: request.sourceTitle,
-    );
-    if (split == null) return null;
-    List<TmdbItem> retry;
-    try {
-      retry = await _service.search(split.query);
-    } on TmdbAuthException {
-      rethrow;
-    } on TmdbCancelledException {
-      rethrow;
-    } catch (_) {
-      return null;
-    }
-    final filtered = _filterByMediaType(retry, request.expectedMediaType);
-    if (filtered.isEmpty) return null;
-    final picked = await _chooseStrict(
-      filtered,
-      split.query,
-      matchText,
-      split.year,
-    );
-    return picked == null ? null : (item: picked, level: 'strict');
+    return null;
   }
 
   /// 1 级：strict（`01` §5.3）。
@@ -577,7 +634,7 @@ class TmdbIdentityService {
         matches.add(item);
         continue;
       }
-      final itemYear = firstYear(item.subtitle);
+      final itemYear = item.year;
       if (itemYear == sourceYearValue) {
         matches.add(item);
         continue;
@@ -611,7 +668,7 @@ class TmdbIdentityService {
     final normalized = normalizeTitle(keyword);
     if (normalized.length < 4) return null;
     for (final item in items) {
-      final itemYear = firstYear(item.subtitle);
+      final itemYear = item.year;
       if (itemYear != sourceYearValue) continue;
       final title = normalizeTitle(removeYearFromTitle(item.title, itemYear));
       if (title.length < 4 || normalized.length < 4) continue;
@@ -635,7 +692,7 @@ class TmdbIdentityService {
     for (final item in items) {
       final title = normalizeTitle(item.title);
       if (title.isEmpty || normalized.isEmpty) continue;
-      final itemYear = firstYear(item.subtitle);
+      final itemYear = item.year;
       final titleMatch = title == normalized;
       final cleanedMatch =
           normalizeTitle(removeYearFromTitle(item.title, itemYear)) ==

@@ -113,7 +113,14 @@ class TmdbIdentity {
 ```
 
 - 分隔符复用 `@@@`（与 `history` 表一致，见 `docs/webhtv-pc-design.md` §15）。
-- `normalizedSourceTitle` = `normalize(cleanTitle(sourceTitle))`（§4.3）。
+- `normalizedSourceTitle` = `stableCacheTitle(cleanTitle(sourceTitle))`（§4.3）。
+  - `stableCacheTitle` = **先剥掉全部括号段**再 `normalize`。缓存键是**持久化格式**，
+    必须与清洗规则解耦：清洗规则一演进（例如 §3.3 步骤 2 从"删全部括号"改成
+    "按噪声标签删"），`剧名 (2024)` 的清洗结果就从 `剧名` 变成 `剧名 (2024)`，
+    键随之漂移，升级前落盘的自动结论、尤其是**手动结论**会全部读不到。
+    固定按"剥全部括号"归一后，键形态跨版本稳定（代价：仅括号内容不同的两个标题共用一个键，
+    这是升级前既有行为，不是本次引入的）。标题整体就是一段括号（`【剧名】`）时，
+    剥完为空 → 回退为「只去括号符号、保留内容」，与升级前一致。
 - **读取顺序**：手动条目级锚点 → 条目+标题键 → 条目级键（需标题兼容）→ 全局标题域键（需标题兼容）。
 - **标题兼容**（`isCompatible`）：源标题与缓存标题归一后相等，或源标题为空。标题为空时不做兼容校验，直接读条目级键（Intent 可能不带 name）。
 - **全局标题域**用于"同名作品跨站沿用"；写入时遵守：
@@ -172,7 +179,13 @@ PC 端照抄该判定。
 对齐上游 `TmdbMatcher.cleanVideoName` 与 `MediaTitleParser.cleanTitle` 的并集。清洗步骤顺序固定，不可调换：
 
 1. 去文件扩展名：`(?i)\.(mkv|mp4|avi|mov|wmv|flv|rmvb|ts|m2ts)$`
-2. 去噪声括号段：`[...]`、`【...】`、`「...」`、`『...』`、`(...)`、`（...）` 内 1–60 字的段（`BRACKET_PATTERN`）。
+2. 去**噪声**括号段：`[...]`、`【...】`、`「...」`、`『...』`、`(...)`、`（...）` 内 1–60 字的段（`BRACKET_PATTERN`）。
+   逐段判定 `isNoiseBracket`（上游 `TmdbMatcher.isNoiseTag`）：括号内容的 `normalizeTitle`
+   命中清晰度/编码标记、质量词、版本/语言尾巴（PC 另补 `国产|国内`）才丢成空格；
+   `(上)`、`(剧场版)`、`(2024)` 这类信息段**保留**。
+   - 年份括号**故意保留**：年份是「年份拆分重试」（§5.5）与年份二次加权（§5.6）的输入，
+     清洗阶段把它删掉，后面就没有年份可用了。
+   - 清晰度词表在 `normalizeTitle` 之后判定，因此 `WEB-DL` 在这里是 `webdl`。
    **例外**：`《...》` 内的书名标题要被**提取**而不是丢弃（`BOOK_TITLE_PATTERN`）。
 3. 去季集标记：`S\d+E\d+`、`\b(S\d{1,2}|Season\s*\d{1,2})\b`、`第\d+季`、`第\d+集`、`第[一二三四五六七八九十百零〇两0-9]+[季部]`、`第[一二三四五六七八九十百零〇两0-9]+[集话話回期章节節]`、`\b(EP|E|Episode)\s*0*\d{1,5}\b`
 4. 去清晰度/编码标记：`HD|4K|8K|1080P|2160P|720P|HDR|HDR10|DV|BluRay|WEB[- ]?DL|HDTV|BDRip|Remux|HEVC|H\.?265|H\.?264|x265|x264|AAC|DTS|DDP|Atmos|NF|Netflix|AMZN|DSNP`
@@ -227,19 +240,25 @@ autoMatch(sourceTitle, vod, searchKeyword?)
    │      命中手动 → 直接使用
    │      命中自动 → 校验分季变体防护（§5.4）后使用
    │
-   ├─ 2. 标题清洗 → cleanTitle(sourceTitle)（§3.3）
+   ├─ 2. 标题清洗：每条候选各自 cleanTitle（§3.3），主查询取自 sourceTitle
+   │      调用方必须把整条 Vod 传进来（vodName / vodRemarks / vodYear）：
+   │      年份取 vodYear → sourceTitle → 关键词，备注参与季度与分季变体判定。
+   │      少传这几项，站源里的年份就只能靠标题串猜（上游拿到的是整个 Vod）。
    │
-   ├─ 3. 候选查询词生成
-   │      主查询：cleanTitle(sourceTitle)
-   │      备选：cleanTitle(searchKeyword)、cleanTitle(vod.name)、cleanTitle(vod.remarks)
-   │      任一查询返回非空即停止（不并发打多组请求）
+   ├─ 3. 候选查询词生成（每条同时记下**原始输入**）
+   │      顺序：searchKeyword → sourceTitle → vod.name → vod.remarks（各自 cleanTitle）
+   │      上限 3 条，去重按清洗后的查询词
+   │      单条查询清洗后**零结果**且原始输入与清洗结果不同 → 用原始输入再搜一次
+   │      （上游 `TmdbMatcher.search(keyword, vod)`）
    │
    ├─ 4. 搜索结果过滤
    │      只保留 mediaType ∈ {movie, tv}（§5.1）
    │      期望媒体类型已知时按类型过滤（§5.2）
    │
    ├─ 5. 选择最佳项（§5.3 三级：strict → containedYear → smart）
-   │      全部失败 → 年份拆分重试（§5.5）
+   │
+   ├─ 5b. 候选查询**全部**失败（含每条都零结果）→ 年份拆分重试（§5.5，只做一次）
+   │      重试命中同样走完整三级选择，年份用拆分出的 year
    │      仍失败 → 返回"未匹配"
    │
    └─ 6. 落盘
@@ -251,7 +270,9 @@ autoMatch(sourceTitle, vod, searchKeyword?)
 
 - **禁止**在未配置 Key 时发起任何 TMDB 请求（`00` §3.4）。
 - **禁止**在站点被禁用时发起任何 TMDB 请求。
-- 候选查询词数量上限 **3**，每个查询最多一次网络请求（失败后不做同参数重试）。
+- 候选查询词数量上限 **3**；每条候选最多两次请求（清洗词 + 原始词）。
+  加上 §5.5 的唯一一次重试，一次自动匹配的最坏请求预算为 **7** 次
+  （3 条候选 × 2 + 1 次年份拆分重试）；同参数不重复请求。
 - 匹配失败**不抛异常**，返回结构化"未匹配"结果，详情页继续使用站源数据。
 - `AuthException` 与取消异常必须**向上传播**，不得被"未匹配"吞掉（否则熔断与取消语义失效）。
 
@@ -293,6 +314,12 @@ autoMatch(sourceTitle, vod, searchKeyword?)
 
 `smart` 命中的优先级：年份精确 > ±1 年 > 同名。仍无法确定 → 未匹配。
 
+三级选择里的"条目年份"一律是 **副标题年份，缺省回退标题年份**（上游 `TmdbItem` 的 `year`）：
+搜索结果缺少上映日期时副标题只剩评分，只读副标题会把一个有年份的候选误判成未知年份。
+
+年份拆分重试（§5.5）命中时同样走这三级，源年份换成重试拆分出的年份；
+`TmdbMatchOutcome.level` 相应加 `split.` 前缀（`split.strict` / `split.containedYear` / `split.smart`）。
+
 ### 5.4 分季变体防护
 
 TMDB 中存在把一部剧拆成多个独立条目的形态（标题含"分季"）。必须惩罚，否则会把"第一季"匹配到"某剧 分季版"。
@@ -325,13 +352,23 @@ TMDB 中存在把一部剧拆成多个独立条目的形态（标题含"分季"�
 
 ### 5.5 年份拆分重试
 
-当源标题形如 `剧名 2024` 而 TMDB 主条目标题不含年份时，`strict` 会失败。重试规则：
+当源标题形如 `剧名2024` 而 TMDB 主条目标题不含年份时，主查询几乎必然**零结果**
+（TMDB 不会把尾随年份当标题的一部分）。因此重试的触发点是"候选查询全部失败"，
+而不是"有候选但三级选择都没选出来"：
+
+- 搜索零结果与有结果但选不出，走**同一条**重试路径；重试只做一次。
+- 重试**不受**「智能匹配」开关影响：开关只管第三级 `smart`，不管是否重试。
+- 重试命中后跑完整三级（§5.3），不是只跑 `strict`；年份用拆分出的年份。
+- 年份来源优先级：调用方显式传入 → `vod.year` → `vod.name` → 关键词。
+
+重试规则：
 
 ```text
-splitYearQuery(keyword, vod, expectedYear):
-  year = expectedYear > 0 ? expectedYear : sourceYear(keyword, vod)
+splitYearQuery(keyword, sourceTitle, expectedYear):   // sourceTitle = vodName ?? sourceTitle
+  year = expectedYear > 0 ? expectedYear : firstYear(sourceTitle)
+  if year <= 0: year = firstYear(keyword)
   if year <= 0: return null
-  source = (keyword 含该年份) ? keyword : (vod?.name ?? "")
+  source = (keyword 含该年份) ? keyword : sourceTitle
   if firstYear(source) != year: return null
   query = removeYearFromTitle(source, year)
   if query 为空 或 normalize(query) == normalize(source): return null
@@ -339,7 +376,10 @@ splitYearQuery(keyword, vod, expectedYear):
 ```
 
 - `removeYearFromTitle` 先删年份（前后非数字边界），再去空括号、`[._\-+]+` → 空格、压缩空白、去首尾标点，最后再走一次 `cleanTitle`。
-- 重试**只做一次**，且只在第一次匹配完全失败时触发。
+- 重试**至多一次**，且只在候选查询全部失败后触发（含每条都零结果）。
+- 站源年份（`vod.year`）与标题年份冲突时先按站源年份算，算不出来再退回只用标题年份重算一次；
+  两次计算共用这一次搜索请求。
+- 拆分出的查询词与已经搜过的候选查询词相同时**不重复请求**（结果等价，省一次）。
 
 ### 5.6 搜索列表排序（详情页搜索入口用）
 
@@ -347,16 +387,23 @@ splitYearQuery(keyword, vod, expectedYear):
 
 1. 标题相似度（降序）；
 2. 年份距离（升序，未知年份记 9999）；
-3. 语言/地区偏好得分（降序）；
-4. 评分（降序）。
+3. 已知年份（降序：同年份时新作品在前）；
+4. 语言/地区偏好得分（降序）；
+5. 评分（降序）。
 
-标题相似度：
+"条目年份"与 §5.3 一致：副标题年份优先，缺省回退标题年份。
+
+标题相似度（比较前两侧都先**剥掉年份记号**，其余结构不动）：
 
 | 条件 | 得分 |
 | --- | --- |
 | 归一后完全相等 | `1000` |
 | 一方包含另一方 | `800 + round(200 * min/max)` |
 | 其他 | `max(0, 700 - round(700 * levenshtein / max))` |
+
+剥年份让「尚公主2026」与 TMDB 的「尚公主」仍算完全相等（否则包含关系只得 800+，
+带无关后缀的候选反而可能靠长度占比反超）。上游用 `removeYearFromTitle`（会再清洗一遍）；
+PC 只删年份记号本身——再清洗会顺带删掉「第二季」等信号，把带季名的候选凭空抬成 `1000`。
 
 语言/地区偏好（由 `config.language` 推导 preferredLanguage / preferredCountry）：
 

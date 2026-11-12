@@ -663,6 +663,11 @@ class TmdbState extends ChangeNotifier {
         generation: generation,
         sourceTitle: vod.vodName,
         siteName: siteName,
+        // 对齐上游：自动匹配拿到的是整个 Vod，年份取 vod.year → vod.name → 关键词，
+        // 备注参与季度与分季变体判定。少传这几项，站源里的年份就只能靠标题串猜。
+        vodName: vod.vodName,
+        vodRemarks: vod.vodRemarks,
+        vodYear: vod.vodYear,
       );
     } else {
       // 已知作品身份只用于本次加载，不写站源匹配缓存（合成条目没有 vodId）。

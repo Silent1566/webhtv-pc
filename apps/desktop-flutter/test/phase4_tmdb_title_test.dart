@@ -21,13 +21,40 @@ void main() {
       expect(cleanTitle('剧名【国语】'), '剧名');
       expect(cleanTitle('剧名「高码」'), '剧名');
       expect(cleanTitle('剧名（臻彩）'), '剧名');
-      expect(cleanTitle('剧名 (2024)'), '剧名');
+      // 年份括号**不删**（上游 `isNoiseTag` 没有年份规则）：年份要留给
+      // 「年份拆分重试」做二次加权，删掉就等于提前丢掉了年份信号。
+      expect(cleanTitle('剧名 (2024)'), '剧名 (2024)');
     });
 
     test('步骤 2 例外：《书名》内容被提取而不是丢弃', () {
       expect(cleanTitle('《庆余年》 第1季'), '庆余年');
       expect(cleanTitle('《庆余年》第2季'), '庆余年');
       expect(cleanTitle('[国产]《庆余年》'), '庆余年');
+    });
+
+    // 契约锚点：`01` §3.3 步骤 2（逐段 `isNoiseBracket` 判定：只有清晰度/编码、
+    // 质量词、版本/语言尾巴才丢；`(2024)` 这类信息段保留，因为年份是 §5.5 重试
+    // 与 §5.6 二次加权的输入）+ §3.3 步骤 2 的 `《...》` 提取例外。
+    // 安卓同源：TmdbMatcher.java:480/486（isNoiseTag）。
+    test('括号契约回归：噪声括号丢、年份括号留、书名号提取', () {
+      expect(cleanTitle('剧名[1080P]'), '剧名');
+      expect(cleanTitle('剧名【国语】'), '剧名');
+      expect(cleanTitle('剧名「高码」'), '剧名');
+      expect(cleanTitle('剧名（臻彩）'), '剧名');
+      // 年份括号故意保留（§3.3 步骤 2 末条）。
+      expect(cleanTitle('剧名 (2024)'), '剧名 (2024)');
+      expect(
+        cleanTitle('【国产】庆余年 第二季 更新至 1080P 国语版.mkv'),
+        '庆余年',
+      );
+      expect(cleanTitle('《庆余年》 第1季'), '庆余年');
+      // 判定函数本身：三类噪声为真，年份与「上」这类信息段为假。
+      expect(isNoiseBracket('1080P'), isTrue);
+      expect(isNoiseBracket('国语'), isTrue);
+      expect(isNoiseBracket('臻彩'), isTrue);
+      expect(isNoiseBracket('国产'), isTrue);
+      expect(isNoiseBracket('2024'), isFalse);
+      expect(isNoiseBracket('上'), isFalse);
     });
 
     test('步骤 3：去掉季集标记', () {
@@ -245,6 +272,30 @@ void main() {
     test('完全相等 1000', () {
       expect(titleSimilarityScore('剧名', '剧名'), 1000);
       expect(titleSimilarityScore('剧 名', '剧名'), 1000);
+    });
+
+    // 契约锚点：`01` §5.6「标题相似度（比较前两侧都先剥掉年份记号，其余结构不动）」
+    // ——剥年份让「尚公主2026」与 TMDB 的「尚公主」仍算完全相等；
+    // 同时不得顺带清洗掉「第二季」（那会把带季名的候选凭空抬成 1000）。
+    // 安卓同源：TmdbMatcher.java:214-228。
+    test('相似度剥年份：尚公主 ↔ 尚公主2026 双向 1000，且不抬升带季名候选', () {
+      expect(titleSimilarityScore('尚公主', '尚公主2026'), 1000);
+      expect(titleSimilarityScore('尚公主2026', '尚公主'), 1000);
+      expect(titleSimilarityScore('尚公主2026', '尚公主 2026'), 1000);
+      // 回归：只删年份记号，不做二次清洗。
+      expect(titleSimilarityScore('剧名第二季', '剧名'), 880);
+      expect(titleSimilarityScore('剧名第二季', '剧名 2024'), 880);
+    });
+
+    // 契约锚点：`01` §5.6 「相似度比较前两侧先剥年份记号」——剥完为空必须回退原串，
+    // 否则《1917》《2012》这种「标题本身就是年份」的作品会拿到 0 分，被推荐
+    // （`>= 800` 硬过滤）与搜索排序整条筛掉。
+    test('标题本身是年份：1917 / 2012 仍算完全相等，且不吞掉编辑距离档', () {
+      expect(titleSimilarityScore('1917', '1917'), 1000);
+      expect(titleSimilarityScore('2012', '2012'), 1000);
+      // 回归：不同年份不得因剥年份而变成 1000。
+      // '1917' vs '1919'：编辑距离 1，max 4 → max(0, 700 - round(700/4)) = 525。
+      expect(titleSimilarityScore('1917', '1919'), 525);
     });
 
     test('包含关系 800 + round(200*min/max)', () {
