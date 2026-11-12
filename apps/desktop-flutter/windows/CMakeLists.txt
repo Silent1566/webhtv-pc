@@ -32,6 +32,12 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# GitHub 的 windows-latest 已升级到 VS 2026（MSVC 14.51）：<experimental/coroutine>
+# 与 /await 被移除，一编译就 C2338 static_assert 失败（webview_windows 插件仍带
+# /await 与 C++/WinRT 旧头）。错误消息给出的官方过渡开关就是下面这个宏；放在
+# add_subdirectory 之前，让插件与 runner 目录都继承到。
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
