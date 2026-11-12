@@ -14,6 +14,7 @@
 /// - 图片缺失时返回 `null`/空串，由 UI 决定占位，不得伪造地址。
 library;
 
+import 'detail_ratings.dart';
 import 'tmdb_identity.dart';
 import 'tmdb_media.dart';
 import 'tmdb_title.dart';
@@ -111,10 +112,7 @@ class TmdbSeasonInfo {
   /// 副标题：`12 集 · 2024`。
   String get subtitle {
     final year = firstYear(airDate);
-    final parts = <String>[
-      '$episodeCount 集',
-      if (year > 0) '$year',
-    ];
+    final parts = <String>['$episodeCount 集', if (year > 0) '$year'];
     return parts.join(' · ');
   }
 
@@ -240,7 +238,7 @@ class TmdbDetailData {
 
   /// 评分文案（`TMDB 8.2`）；无评分时为空串。
   String get ratingLabel =>
-      rating > 0 ? 'TMDB ${rating.toStringAsFixed(1)}' : '';
+      rating > 0 ? '${RatingBrand.tmdb} ${rating.toStringAsFixed(1)}' : '';
 
   /// 时长文案（`45 分钟` / `1 小时 52 分钟`）；为 0 时为空串。
   String get runtimeLabel {
@@ -336,7 +334,9 @@ class TmdbDetailData {
     );
 
     return TmdbDetailData(
-      tmdbId: tmdbInt(detail['id']) == 0 ? (item?.tmdbId ?? 0) : tmdbInt(detail['id']),
+      tmdbId: tmdbInt(detail['id']) == 0
+          ? (item?.tmdbId ?? 0)
+          : tmdbInt(detail['id']),
       mediaType: mediaType,
       title: title,
       originalTitle: originalTitle == title ? '' : originalTitle,
@@ -379,21 +379,16 @@ class TmdbDetailData {
   }
 
   /// 元数据季度（无响应时退化为 `item` 快照）。
-  static TmdbDetailData fromItem(TmdbItem item) =>
-      TmdbDetailData(
-        tmdbId: item.tmdbId,
-        mediaType: item.mediaType,
-        title: item.title,
-        overview: item.overview,
-        posterUrl: item.posterUrl,
-        backdropUrls: [
-          if ((item.backdropUrl ?? '').isNotEmpty) item.backdropUrl!,
-        ],
-        posterUrls: [
-          if ((item.posterUrl ?? '').isNotEmpty) item.posterUrl!,
-        ],
-        rating: item.tmdbRating,
-      );
+  static TmdbDetailData fromItem(TmdbItem item) => TmdbDetailData(
+    tmdbId: item.tmdbId,
+    mediaType: item.mediaType,
+    title: item.title,
+    overview: item.overview,
+    posterUrl: item.posterUrl,
+    backdropUrls: [if ((item.backdropUrl ?? '').isNotEmpty) item.backdropUrl!],
+    posterUrls: [if ((item.posterUrl ?? '').isNotEmpty) item.posterUrl!],
+    rating: item.tmdbRating,
+  );
 }
 
 String? _firstOrNull(List<String> values) =>
@@ -413,10 +408,7 @@ List<String> _backdropUrls(
   return TmdbImageSelector.posters(detail, imageBase, limit: 1);
 }
 
-List<TmdbSeasonInfo> _seasonsOf(
-  Map<String, Object?> detail,
-  String imageBase,
-) {
+List<TmdbSeasonInfo> _seasonsOf(Map<String, Object?> detail, String imageBase) {
   final raw = detail['seasons'];
   if (raw is! List) return const [];
   final seasons = <TmdbSeasonInfo>[];
@@ -432,10 +424,7 @@ List<TmdbSeasonInfo> _seasonsOf(
   return seasons;
 }
 
-List<TmdbPerson> _castOf(
-  Map<String, Object?> detail,
-  String imageBase,
-) {
+List<TmdbPerson> _castOf(Map<String, Object?> detail, String imageBase) {
   final aggregate = _mapOf(detail['aggregate_credits']);
   final credits = _mapOf(detail['credits']);
   final raw = _listOf(aggregate?['cast'] ?? credits?['cast']);
@@ -446,10 +435,7 @@ List<TmdbPerson> _castOf(
   );
 }
 
-List<TmdbPerson> _crewOf(
-  Map<String, Object?> detail,
-  String imageBase,
-) {
+List<TmdbPerson> _crewOf(Map<String, Object?> detail, String imageBase) {
   final credits = _mapOf(detail['credits']);
   return TmdbPerson.listFrom(
     _listOf(credits?['crew']),
@@ -797,7 +783,8 @@ abstract final class TmdbEpisodeCards {
       final metadata = metadataByNumber[number];
       // 元数据缺失剧照时才按顺序回退；回退只影响**图片**，
       // 不影响集号与标题（标题仍用来源集名，不猜测）。
-      final still = metadata?.stillUrl ??
+      final still =
+          metadata?.stillUrl ??
           (index < fallbackStills.length ? fallbackStills[index] : null);
       cards.add(
         TmdbEpisodeCard(
@@ -872,13 +859,11 @@ class TmdbPhotoViewer {
     title: title,
   );
 
-  TmdbPhotoViewer next() => count <= 0
-      ? this
-      : goTo(TmdbBackdropRotation.next(index, count));
+  TmdbPhotoViewer next() =>
+      count <= 0 ? this : goTo(TmdbBackdropRotation.next(index, count));
 
-  TmdbPhotoViewer previous() => count <= 0
-      ? this
-      : goTo((index - 1 + count) % count);
+  TmdbPhotoViewer previous() =>
+      count <= 0 ? this : goTo((index - 1 + count) % count);
 
   /// 点击某个 URL 时构造查看器；URL 不在列表时定位到第一张。
   static TmdbPhotoViewer open({
@@ -961,7 +946,9 @@ class TmdbPersonWork {
       if (item == null) continue;
       final key = item.identity?.key ?? item.title;
       if (!seen.add(key)) continue;
-      final map = raw is Map ? raw.cast<Object?, Object?>() : const <Object?, Object?>{};
+      final map = raw is Map
+          ? raw.cast<Object?, Object?>()
+          : const <Object?, Object?>{};
       result.add(
         TmdbPersonWork(
           item: item,

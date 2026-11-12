@@ -13,17 +13,24 @@
 /// 使两种详情页的视觉与交互保持一致。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../core/app_error.dart';
+import '../core/detail_ratings.dart';
 import '../core/detail_recommendation.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
+import '../services/detail_rating_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/ui_preferences_store.dart';
+import '../state/detail_ratings_state.dart';
 import '../state/detail_recommendation_state.dart';
 import 'common.dart';
+import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
@@ -39,10 +46,11 @@ class TmdbDetailPage extends StatefulWidget {
     this.onSearchSource,
     this.onOpenVideo,
     this.onCopyVideo,
+    this.ratingService,
+    this.omdbApiKey = '',
     this.onOpenItem,
     this.initialViewMode = UiEpisodeViewMode.fallback,
     this.onViewModeChanged,
-    this.aiRecommendations,
 
     this.recommendationDependencies,
     this.onSearchTitle,
@@ -70,6 +78,10 @@ class TmdbDetailPage extends StatefulWidget {
   final Future<bool> Function(String url)? onOpenVideo;
   final Future<void> Function(String url)? onCopyVideo;
 
+  /// 外部评分服务与 OMDb Key（本页不持有 AppState，沿用同一套依赖注入）。
+  final DetailRatingService? ratingService;
+  final String omdbApiKey;
+
   /// 相关推荐 / 人物作品点击（默认在当前页内继续打开 TMDB 详情）。
   final ValueChanged<TmdbItem>? onOpenItem;
 
@@ -82,12 +94,6 @@ class TmdbDetailPage extends StatefulWidget {
 
   /// 视图模式切换回调（调用方写回偏好，`AppState.setEpisodeViewMode`）。
   final ValueChanged<String>? onViewModeChanged;
-
-  /// 详情页底部的 AI 推荐区块（由调用方注入 `AiRecommendationSection`）。
-  ///
-  /// 本页不持有 `AppState`，与 [onViewModeChanged] 同一种依赖注入风格：
-  /// 推荐需要的状态留在调用方，本页只负责把它排到剧集区之后。
-  final Widget? aiRecommendations;
 
   @override
   State<TmdbDetailPage> createState() => _TmdbDetailPageState();
@@ -132,8 +138,38 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  /// 评分标签与页尾外链共用这一份查询。
+  DetailRatingsController? _ratingsController;
+
+  DetailRatings _syncRatings(DetailRatingRequest request) {
+    final controller = _ratingsController ??= DetailRatingsController(
+      service: widget.ratingService!,
+      omdbApiKey: () => widget.omdbApiKey,
+    )..addListener(_onRatingsChanged);
+    if (controller.requestKey != request.cacheKey) {
+      controller.begin(request);
+      unawaited(controller.load());
+    }
+    return controller.ratings;
+  }
+
+  void _onRatingsChanged() {
+    if (!mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {});
+  }
+
+  @override
   @override
   void dispose() {
+    _ratingsController?.dispose();
+    _ratingsController = null;
     // 自建的那份依赖随页面一起关闭，避免遗留速率闸计时器。
     if (widget.recommendationDependencies == null) {
       _defaultRecommendations?.close();
@@ -343,6 +379,15 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
 
   Widget _buildContent(BuildContext context, TmdbDetailData? data) {
     if (data == null) return const SizedBox.shrink();
+    final ratingRequest = DetailRatingRules.fromDetailMap(
+      _recommendationDetail,
+      tmdbId: data.tmdbId > 0 ? data.tmdbId : widget.identity.tmdbId,
+      title: data.title,
+      mediaType: data.mediaType,
+    );
+    final ratings = widget.ratingService == null
+        ? const DetailRatings()
+        : _syncRatings(ratingRequest);
     // 页面级**固定**背景 + 内层滚动（与源详情页 `DetailPage` 同构）。
     //
     // 为什么 Stack 放在**调用方**而不是 `TmdbDetailView` 内部：
@@ -360,6 +405,10 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
         ),
         SingleChildScrollView(
           child: TmdbDetailView(
+            ratingTags: DetailRatingTags(
+              ratings: ratings,
+              tmdbRating: data.rating,
+            ),
             // 图片由上面的固定背景负责，视图内部不再画（否则重复解码，
             // 且两层同图不同框比会在交界处错位）。
             paintBackdrop: false,
@@ -423,13 +472,15 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             onRecommendationTap: (item) => _openItem(item),
             onOpenVideo: widget.onOpenVideo,
             onCopyVideo: widget.onCopyVideo,
+            ratingLinks: DetailRatingsSection(
+              request: ratingRequest,
+              ratings: ratings,
+              onOpen: widget.onOpenVideo,
+              onCopy: widget.onCopyVideo,
+              keyPrefix: 'tmdb-only-ratings',
+            ),
           ),
         ),
-        if (widget.aiRecommendations != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            child: widget.aiRecommendations,
-          ),
       ],
     );
   }
@@ -472,6 +523,9 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
           service: widget.service,
           identity: identity,
           initialItem: item,
+          // 二级页沿用同一份评分服务与 Key：再 new 一个会让同一部作品查两次。
+          ratingService: widget.ratingService,
+          omdbApiKey: widget.omdbApiKey,
           recommendationDependencies: _recommendationsDependencies,
           onSearchTitle: widget.onSearchTitle,
           onSearchSource: widget.onSearchSource,

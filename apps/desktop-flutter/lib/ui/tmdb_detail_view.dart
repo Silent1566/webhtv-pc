@@ -359,6 +359,7 @@ class TmdbDetailHeader extends StatelessWidget {
     this.height,
     this.heroOverview,
     this.heroActions,
+    this.ratingTags,
     this.paintImage = true,
   });
 
@@ -371,6 +372,12 @@ class TmdbDetailHeader extends StatelessWidget {
 
   /// 首屏主动作（例如“播放第一集”）。
   final Widget? heroActions;
+
+  /// 简介上方的评分标签行（由调用方注入 `DetailRatingTags`）。
+  ///
+  /// 放这里而不是正文顶部：评分是「这部片子怎么样」的定性信息，紧挨简介读才连贯；
+  /// 也是用户 2026-11-11 明确要求的位置。
+  final Widget? ratingTags;
 
   /// 是否由本头部绘制背景图，默认 `true`。
   ///
@@ -417,6 +424,7 @@ class TmdbDetailHeader extends StatelessWidget {
                   metadataBadge: metadataBadge,
                   overview: heroOverview,
                   actions: heroActions,
+                  ratingTags: ratingTags,
                 ),
               ),
             ],
@@ -428,6 +436,10 @@ class TmdbDetailHeader extends StatelessWidget {
 /// 详情页附加区块（剧照墙 / 演职人员 / 相关推荐 / 相关视频 / 制作团队）。
 ///
 /// 每个区块在数据为空时**整块隐藏**（`04` §3.4），不留空态占位。
+///
+/// **区块之间不再各加一条 `SizedBox`**（2026-11-12 用户反馈「各行间距乱」）：
+/// 间隔统一由下一个区块的 `SectionHeader`（上 24 / 下 10）承担。两边都加得到
+/// 48、漏加得到 0，这正是同一个页面里间距忽大忽小的来源。
 class TmdbDetailSections extends StatelessWidget {
   const TmdbDetailSections({
     super.key,
@@ -464,7 +476,6 @@ class TmdbDetailSections extends StatelessWidget {
             keyValue: 'tmdb-section-photos',
           ),
           _PhotoWall(urls: data.photoUrls, title: data.title),
-          const SizedBox(height: 16),
         ],
         // 海报墙（对齐上游 `@id/tmdbPosters` 的 Posters 区块）。
         // 与剧照是**不同语义**的两组图：剧照是剧中画面，海报是宣发图。
@@ -481,7 +492,6 @@ class TmdbDetailSections extends StatelessWidget {
             itemWidth: 110,
             aspectRatio: 2 / 3,
           ),
-          const SizedBox(height: 16),
         ],
         if (data.allPeople.isNotEmpty || data.directors.isNotEmpty) ...[
           SectionHeader(
@@ -492,7 +502,6 @@ class TmdbDetailSections extends StatelessWidget {
             people: data.allPeople.take(20).toList(),
             onTap: onPersonTap,
           ),
-          const SizedBox(height: 16),
         ],
         // 制作团队**紧跟演职人员**（用户反馈 2026-10-10：「制作团队应该放在演员
         // 下方」）。对齐默影视 `activity_tmdb_detail.xml` 的区块顺序：
@@ -509,7 +518,6 @@ class TmdbDetailSections extends StatelessWidget {
             keyPrefix: 'tmdb-crew',
             keyValue: 'tmdb-crew-wall',
           ),
-          const SizedBox(height: 16),
         ],
         if (recommendationBottom == null && recommendations.isNotEmpty) ...[
           SectionHeader(
@@ -520,19 +528,23 @@ class TmdbDetailSections extends StatelessWidget {
             items: recommendations,
             onTap: onRecommendationTap,
           ),
-          const SizedBox(height: 16),
         ],
         if (videos.isNotEmpty) ...[
           SectionHeader(
             title: '相关视频（${videos.length}）',
             keyValue: 'tmdb-section-videos',
           ),
-          for (final video in videos.take(8))
+          // 卡片自己不带外边距：`Card` 默认 `margin: 4` 会让这一栏比
+          // 其它区块左右各缩 4px，也与「区块间距只有一种」冲突。
+          // 卡片之间的 8px 由这里显式给，最后一张不留尾巴。
+          for (final (index, video) in videos.take(8).indexed) ...[
+            if (index > 0) const SizedBox(height: AppSpace.sm),
             TmdbVideoTile(
               video: video,
               onOpen: onOpenVideo,
               onCopy: onCopyVideo,
             ),
+          ],
         ],
         ?recommendationBottom,
       ],
@@ -604,7 +616,9 @@ class TmdbLineSelector extends StatelessWidget {
     final theme = Theme.of(context);
     return Padding(
       key: const ValueKey('tmdb-line-selector'),
-      padding: const EdgeInsets.only(bottom: 8),
+      // 线路与选集**不是**一组：线路是一行，选集是下一区块，所以两者的缝
+      // 与其它区块一致为 24（用户 2026-11-12 反馈「这部分的间距和其他的不一样」）。
+      padding: const EdgeInsets.only(bottom: AppSpace.xl),
       child: Row(
         children: [
           Text(
@@ -710,6 +724,39 @@ class TmdbLineSelector extends StatelessWidget {
   }
 }
 
+/// 区块头里的小切换按钮（正序倒序 / 列表网格）。
+///
+/// 高度锁在 24（= 标题文字高度），而不是 Material 默认的 48 点击区：带上 48
+/// 点击区的按钮会把整行撑高，标题被垂直居中后上下各多出 12，区块头到内容的缝
+/// 就从 10 变成 22。桌面端鼠标点击 24 高足够，行高一致更要紧。
+class _HeaderToggle extends StatelessWidget {
+  const _HeaderToggle({
+    required this.buttonKey,
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+  });
+
+  final Key buttonKey;
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => TextButton.icon(
+    key: buttonKey,
+    onPressed: onPressed,
+    style: TextButton.styleFrom(
+      minimumSize: const Size(0, 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    ),
+    icon: Icon(icon, size: 16),
+    label: Text(label),
+  );
+}
+
 /// 剧集区块头：标题 + 集数 + 视图模式/正序倒序切换（`04` §3.1 ⑤）。
 ///
 /// 对齐上游 `episodeHeader`（`episodeTitle` / `episodeReverse` /
@@ -743,7 +790,8 @@ class TmdbEpisodeHeader extends StatelessWidget {
     final theme = Theme.of(context);
     return Padding(
       key: const ValueKey('tmdb-episode-header'),
-      padding: const EdgeInsets.only(bottom: 8),
+      // 与 `SectionHeader` 的下 10 对齐：区块头到自身内容只有一种间距。
+      padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
           Text(
@@ -757,17 +805,21 @@ class TmdbEpisodeHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          TextButton.icon(
-            key: const ValueKey('tmdb-episode-reverse'),
+          // 两个切换按钮**压到 24 高**（= 标题行高）：默认按钮带 48 的点击区，
+          // 会把整行撑到 48，标题被居中后上下各多出 12——「选集」到区间条/
+          // 卡片的缝就变成 22，而其它区块是 10（用户 2026-11-12 反馈
+          // 「这部分的间距和其他的不一样」）。
+          _HeaderToggle(
+            buttonKey: const ValueKey('tmdb-episode-reverse'),
             onPressed: onToggleReversed,
-            icon: Icon(reversed ? Icons.swap_vert : Icons.swap_vert, size: 16),
-            label: Text(reversed ? '倒序' : '正序'),
+            icon: reversed ? Icons.swap_vert : Icons.swap_vert,
+            label: reversed ? '倒序' : '正序',
           ),
-          TextButton.icon(
-            key: const ValueKey('tmdb-episode-view-mode'),
+          _HeaderToggle(
+            buttonKey: const ValueKey('tmdb-episode-view-mode'),
             onPressed: onToggleGridMode,
-            icon: Icon(gridMode ? Icons.view_list : Icons.grid_view, size: 16),
-            label: Text(gridMode ? '网格' : '列表'),
+            icon: gridMode ? Icons.view_list : Icons.grid_view,
+            label: gridMode ? '网格' : '列表',
           ),
         ],
       ),
@@ -856,7 +908,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.onTap,
     this.onLongPress,
     this.cardWidth = 260,
-    this.height = 196,
+    this.height,
     this.gridMode = false,
     this.recentIndex = -1,
     this.ranges = const [],
@@ -891,7 +943,12 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 站点详情页会按「一屏能放下几列」动态计算（`04` §4.4 的列数策略）：
   /// 集数多的线路把卡做窄一些，使一行能看到更多集，减少横向滚动。
   final double cardWidth;
-  final double height;
+
+  /// 卡片高度；为 `null` 时按**真实内容**算（见 [_episodeCardHeight]）。
+  ///
+  /// 曾经写死 196：卡片内容只有约 152，多出来的 44px 就成了「选集 → 剧照」
+  /// 之间凭空多出的一道缝（用户 2026-11-12 反馈「间距乱七八糟」）。
+  final double? height;
 
   /// 网格模式（对齐上游 `episodeGrid`）：换行铺满而不是横向滚动。
   ///
@@ -985,7 +1042,10 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
   /// 区间 chip 条。**只在区间数 > 1 时渲染**（否则白占一行高度，
   /// 把控件挤出 800×600 测试视口）。
   Widget _buildRangeBar(BuildContext context) => SizedBox(
-    height: 36,
+    // 32 = 紧凑 chip 的高度。原先条高 36、chip 带 48 的点击区：chip 被居中
+    // 夹住、条尾留下一段空白，区间条到卡片之间的缝看起来远大于下面的 8
+    // （用户 2026-11-12 反馈「选集分组按钮和选集卡片间隔太大」）。
+    height: 32,
     child: HorizontalMouseDrag(
       child: ListView.separated(
         key: ValueKey('${widget.keyPrefix}-range-strip'),
@@ -1000,6 +1060,11 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
           onSelected: widget.onRangeChanged == null
               ? null
               : (_) => widget.onRangeChanged!(index),
+          // 与「选集」区块头的小按钮同一套紧凑口径：不给 chip 塞 48 的
+          // 点击区，条高才能真的等于 chip 高度。
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          labelPadding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
         ),
       ),
     ),
@@ -1013,7 +1078,7 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     if (widget.ranges.length <= 1) return strip;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [_buildRangeBar(context), const SizedBox(height: 8), strip],
+      children: [_buildRangeBar(context), const SizedBox(height: AppSpace.xs), strip],
     );
   }
 
@@ -1027,11 +1092,17 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     if (widget.gridMode) {
       return GridView.builder(
         key: ValueKey('${widget.keyPrefix}-grid'),
+        // **必须显式清零**：垂直、无 controller 的 GridView 是「primary」滚动视图，
+        // 会把 `MediaQuery.padding` 当成自己的内边距。详情页在 AppBar 下，
+        // top padding 是 56——于是区间条与第一行卡片之间凭空多出 56px
+        // （用户 2026-11-12 反馈「分组按钮和卡片间隔太大」，量出来正是 60 = 56 + 4）。
+        padding: EdgeInsets.zero,
+        primary: false,
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
           maxCrossAxisExtent: widget.cardWidth + 12,
-          mainAxisExtent: widget.height,
+          mainAxisExtent: widget.height ?? _episodeCardHeight(context),
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
         ),
@@ -1041,7 +1112,7 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
       );
     }
     return SizedBox(
-      height: widget.height,
+      height: widget.height ?? _episodeCardHeight(context),
       // 集数多到溢出时用鼠标左右拖（用户反馈 2026-10-20）。
       child: HorizontalMouseDrag(
         child: ListView.separated(
@@ -1112,6 +1183,8 @@ class TmdbDetailView extends StatelessWidget {
     this.onToggleReversed,
     this.onToggleGridMode,
     this.episodeTitle = '剧集',
+    this.ratingTags,
+    this.ratingLinks,
   });
 
   final TmdbDetailData data;
@@ -1174,6 +1247,15 @@ class TmdbDetailView extends StatelessWidget {
   /// 剧集区块标题。
   final String episodeTitle;
 
+  /// 简介上方的评分标签行（`DetailRatingTags`）。
+  final Widget? ratingTags;
+
+  /// 页面最底部的外部链接区（`DetailRatingsSection`）。
+  ///
+  /// 与 [ratingTags] 分开：评分是「参考口碑」，外链是「去别的站查」，两者在
+  /// 页面上的位置和交互都不同（用户决策 2026-11-11）。
+  final Widget? ratingLinks;
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1186,6 +1268,7 @@ class TmdbDetailView extends StatelessWidget {
           statusBar: statusBar,
           metadataBadge: metadataBadge,
           heroOverview: data.overview,
+          ratingTags: ratingTags,
         ),
         Padding(
           padding: padding,
@@ -1193,7 +1276,7 @@ class TmdbDetailView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (_seasonSectionVisible) ...[
-                const SizedBox(height: 16),
+                // 区块间距由 `SectionHeader` 自己的上 24 承担，不再叠一层。
                 SectionHeader(
                   title: '季度',
                   keyValue: 'tmdb-section-seasons',
@@ -1222,12 +1305,16 @@ class TmdbDetailView extends StatelessWidget {
                 ),
               ],
               if (infoRows.isNotEmpty) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpace.lg),
                 TmdbInfoTable(rows: infoRows),
               ],
-              const SizedBox(height: 16),
-              if (episodeCards.isNotEmpty)
+              // 时长分布条是「选集」的引子：上面 24 与其它区块同一节奏，
+              // 下面 12 与区块头隔开（原先下面贴着 0，读起来挤成一团）。
+              const SizedBox(height: AppSpace.xl),
+              if (episodeCards.isNotEmpty) ...[
                 EpisodeDurationStrip(cards: episodeCards),
+                const SizedBox(height: AppSpace.md),
+              ],
               if (episodeCards.isEmpty)
                 // 与其他页面的空态同一套结构（图标 + 标题），而不是一行裸文本。
                 // 这是详情页截图里唯一看出来的不一致。
@@ -1270,6 +1357,7 @@ class TmdbDetailView extends StatelessWidget {
                   onOpenVideo: onOpenVideo,
                   onCopyVideo: onCopyVideo,
                 ),
+              ?ratingLinks,
             ],
           ),
         ),
@@ -1291,12 +1379,14 @@ class _HeaderContent extends StatelessWidget {
     this.metadataBadge,
     this.overview,
     this.actions,
+    this.ratingTags,
   });
 
   final TmdbDetailData data;
   final String? metadataBadge;
   final String? overview;
   final Widget? actions;
+  final Widget? ratingTags;
 
   @override
   Widget build(BuildContext context) {
@@ -1356,6 +1446,8 @@ class _HeaderContent extends StatelessWidget {
                 // 窄屏维持 5，避免把标题挤出内容带。
                 maxChips: compact ? 5 : 8,
               ),
+              const SizedBox(height: 8),
+              ?ratingTags,
               // 导演行已移除（2026-10-22 用户反馈：把这一行让给简介）。
               // 导演信息不丢：下方「制作团队」区块带头像与「导演」职务；
               // 来源侧的 vodDirector 与 TMDB 的导演仍由模型层保留。
@@ -1422,16 +1514,8 @@ class _MetaChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chips = <Widget>[];
-    if (data.ratingLabel.isNotEmpty) {
-      chips.add(
-        _Chip(
-          keyValue: 'tmdb-detail-rating',
-          icon: Icons.star,
-          label: data.ratingLabel,
-          emphasized: true,
-        ),
-      );
-    }
+    // 评分不在这里：它由 [TmdbDetailView.ratingTags] 在简介正上方单独成行
+    // （用户决策 2026-11-11「评分单独提出来」）。标签行只放「本片是什么」。
     if (data.yearLabel.isNotEmpty) {
       chips.add(_Chip(keyValue: 'tmdb-detail-year', label: data.yearLabel));
     }
@@ -1492,27 +1576,15 @@ class _MetaChips extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.keyValue,
-    required this.label,
-    this.icon,
-    this.emphasized = false,
-  });
+  const _Chip({required this.keyValue, required this.label, this.icon});
 
   final String keyValue;
   final String label;
   final IconData? icon;
-  final bool emphasized;
 
   @override
-  Widget build(BuildContext context) {
-    return TagChip(
-      keyValue: keyValue,
-      label: label,
-      icon: icon,
-      emphasized: emphasized,
-    );
-  }
+  Widget build(BuildContext context) =>
+      TagChip(keyValue: keyValue, label: label, icon: icon);
 }
 
 // ---------------------------------------------------------------------------
@@ -1956,6 +2028,42 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   }
 }
 
+/// 一行文字在当前主题 / 字号缩放下的**真实排版高度**。
+///
+/// 详情页有几条「固定高度」的横条（剧集卡、人物卡）：高度写死时，多出来的
+/// 那几十像素就是区块之间凭空多出的一道缝。用户 2026-11-12 反馈「各行间距
+/// 乱七八糟」，其中两处正是这里（剧集条多出约 44px、人物墙多出约 26px）。
+double _lineHeight(BuildContext context, TextStyle? style) {
+  final painter = TextPainter(
+    text: TextSpan(text: '剧', style: style),
+    maxLines: 1,
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout();
+  final height = painter.height;
+  painter.dispose();
+  return height;
+}
+
+/// 剧集卡片的自然高度：剧照 110 + 上下 6 的内边距 + 标题/摘要两行。
+double _episodeCardHeight(BuildContext context) {
+  final text = Theme.of(context).textTheme;
+  return 110 +
+      6 +
+      _lineHeight(context, text.bodyMedium) +
+      _lineHeight(context, text.bodySmall) +
+      6;
+}
+
+/// 人物卡的自然高度：头像 116 + 4 + 姓名/职务两行。
+double _peopleCardHeight(BuildContext context) {
+  final text = Theme.of(context).textTheme;
+  return 116 +
+      4 +
+      _lineHeight(context, text.bodySmall) +
+      _lineHeight(context, text.labelSmall);
+}
+
 // ---------------------------------------------------------------------------
 // 剧照墙（点击 → 大图查看器）
 // ---------------------------------------------------------------------------
@@ -2277,7 +2385,9 @@ class _PeopleWall extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return SizedBox(
-      height: 178,
+      // 高度按**真实内容**算，不用写死的 178：多出来的那 26px 会变成
+      // 「演职人员 → 制作团队」之间的一道宽缝（与剧集条同一类问题）。
+      height: _peopleCardHeight(context),
       // 人多到溢出时用鼠标左右拖。
       child: HorizontalMouseDrag(
         child: ListView.separated(

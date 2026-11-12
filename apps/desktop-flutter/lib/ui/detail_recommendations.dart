@@ -236,7 +236,6 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
                 ],
               ),
             ),

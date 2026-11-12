@@ -24,6 +24,7 @@ import '../core/tmdb_season.dart';
 import '../state/tmdb_state.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
+import 'tokens.dart';
 import 'scroll_behavior.dart';
 import 'toast.dart';
 
@@ -59,9 +60,32 @@ enum TmdbLoadPhase {
 }
 
 /// 骨架屏固定高度（`04` §3.3：与最终内容高度一致，避免布局跳动）。
-const double tmdbStatusBarHeight = 72;
+///
+/// 40 = 32 高的动作按钮 + 上下各 4。原来写死 72（当时行首有图标、内容更高），
+/// 去掉图标后行里只剩一行文字，文字居中于 72 会让它下方空出 26px——「状态条 →
+/// 线路」看起来就比「线路 → 选集」大一截（用户 2026-11-12 问「是不是我的错觉」，
+/// 实测是 58 vs 32，不是错觉）。
+const double tmdbStatusBarHeight = 40;
 const double tmdbSeasonSelectorHeight = 48;
 const double tmdbSkeletonBlockHeight = 96;
+
+/// 状态条动作按钮：**32 高**（= 行高），不用 Material 默认的 48 点击区。
+///
+/// 48 的点击区会把整行撑到 48，文字居中后行内下方多出 12px 空白，那一段会被
+/// 读成「状态条 → 线路」的额外间距（见 [tmdbStatusBarHeight]）。
+final ButtonStyle _statusTextStyle = TextButton.styleFrom(
+  minimumSize: const Size(0, 32),
+  padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  visualDensity: VisualDensity.compact,
+);
+
+final ButtonStyle _statusFilledStyle = FilledButton.styleFrom(
+  minimumSize: const Size(0, 32),
+  padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  visualDensity: VisualDensity.compact,
+);
 
 /// TMDB 状态条（`04` §3.1 ②）。
 ///
@@ -90,17 +114,20 @@ class TmdbStatusBar extends StatelessWidget {
     // 「未配置」必须渲染——否则用户没有进入 TMDB 设置页的入口。
     if (!state.shouldRender) return const SizedBox.shrink();
 
-    final theme = Theme.of(context);
     return SizedBox(
       height: tmdbStatusBarHeight,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        // 左右不再缩进：外层已经是正文的 16，再缩一次会让这一行的文字与
+        // 右侧按钮比「线路」「选集」右移 16px（用户 2026-11-12 反馈
+        // 「切换季度这一行开头和其他行没对齐」）。
+        //
+        // 行首的 `movie_filter` 图标也去掉（用户同一条反馈）：这一行要读的是
+        // 「片名 + 第几季」，图标既不增加信息量，又占掉 32px 的起始位。
+        padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Icon(Icons.movie_filter_outlined, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
             Expanded(child: _buildBody(context)),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpace.sm),
             ..._buildActions(context),
           ],
         ),
@@ -140,10 +167,12 @@ class TmdbStatusBar extends StatelessWidget {
             style: theme.textTheme.bodyMedium,
           );
         }
-        final title = state.item?.title ?? '';
-        final rating = state.ratingText;
         return Text(
-          'TMDB · $title${rating.isEmpty ? '' : ' · $rating'}',
+          tmdbStatusSummary(
+            title: state.item?.title ?? '',
+            isTv: state.item?.isTv == true,
+            selectedSeason: state.selectedSeason,
+          ),
           key: const ValueKey('tmdb-status-matched'),
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w600,
@@ -161,6 +190,7 @@ class TmdbStatusBar extends StatelessWidget {
           FilledButton.tonal(
             key: const ValueKey('tmdb-configure'),
             onPressed: onConfigure,
+            style: _statusFilledStyle,
             child: const Text('去设置'),
           ),
         ];
@@ -179,6 +209,7 @@ class TmdbStatusBar extends StatelessWidget {
           TextButton(
             key: const ValueKey('tmdb-retry'),
             onPressed: onRetry,
+            style: _statusTextStyle,
             child: const Text('重试'),
           ),
         ];
@@ -188,20 +219,27 @@ class TmdbStatusBar extends StatelessWidget {
             FilledButton.tonal(
               key: const ValueKey('tmdb-match'),
               onPressed: onMatch,
+              style: _statusFilledStyle,
               child: const Text('匹配 TMDB'),
             ),
           ];
         }
         return [
-          if (state.selectedSeason >= 0 && onSelectSeason != null)
+          // 站点页的季度区退场后，这里是**唯一**的季度入口，所以不再用
+          // `selectedSeason >= 0` 做条件——「季度未确定」恰恰最需要手动改绑
+          // （原先那个分支由季度区里的「选择季度」按钮承担，它已经退场）。
+          if (onSelectSeason != null && state.item?.isTv == true)
             TextButton(
               key: const ValueKey('tmdb-select-season'),
               onPressed: onSelectSeason,
-              child: const Text('仅选季度'),
+              style: _statusTextStyle,
+              // 文案直说它做什么（原「仅选季度」是给第二入口用的）。
+              child: const Text('切换季度'),
             ),
           TextButton(
             key: const ValueKey('tmdb-rematch'),
             onPressed: onRematch,
+            style: _statusTextStyle,
             child: const Text('重新匹配'),
           ),
         ];
@@ -233,23 +271,34 @@ class _SkeletonLine extends StatelessWidget {
 /// 顶层而不是私有静态：季度按钮与 chip 条都要用。
 String _seasonLabel(int season) => season == 0 ? '特别篇' : '第 $season 季';
 
+/// 状态条正文：**这是什么** + **现在看的是第几季**。
+///
+/// 这里**没有评分参数**，是刻意的：评分已经在简介上方的评分标签行里显示，
+/// 状态条再写一次就是同一屏两次同一个数（用户反馈 2026-11-12）。空出来的
+/// 位置放季度——站点页原来独占一行的季度选择器已整行退场，季度不能跟着消失。
+///
+/// 抽成纯函数（而不是内联在 `_buildBody`）是为了让这条约定有可断言的落点：
+/// 想加回评分就得改签名，而签名是被用例锁住的。
+String tmdbStatusSummary({
+  required String title,
+  required bool isTv,
+  required int selectedSeason,
+}) {
+  if (!isTv) return 'TMDB · $title';
+  // 未确定季度也要说出来：季度区退场后，这一行是页面上**唯一**的季度说明，
+  // 只写片名会让用户以为「这剧没有季度这回事」。
+  final season = selectedSeason >= 0
+      ? ' · ${_seasonLabel(selectedSeason)}'
+      : ' · 季度待定';
+  return 'TMDB · $title$season';
+}
+
 /// 季度按钮的文案（`docs/phase6/design/03` §2.2）。
 ///
-/// 对齐上游 `TmdbDetailActivity#detailSeasonButtonLabel`：先看当前季度上下文，
-/// 再看解析出的季度，都没有才用「选择季度」。
-///
-/// 【关于 §2.2 表格的中间一行】原文还列了一行
-/// 「`selectedSeason < 0` 但解析出季度 → 同『第 N 季』」。
-/// 该行**当前不可达**：`TmdbState` 在 `availableSeasons` 非空时总会把
-/// `_selectedSeason` 落定（`scope is KnownSeason` 或 `_defaultSeasonOf`），
-/// 因此「有季度而 `selectedSeason < 0`」不会出现。
-/// 这里**不写**那行分支（写了就是不可达的死代码）；
-/// 一旦状态机改了，`test/phase6_season_controls_test.dart` 的
-/// 「selectedSeason<0 而季度已解析 → 不可达（现状）」用例会失败并提醒补上。
-String tmdbSeasonButtonLabel(TmdbState state) {
+/// 季度区里那句「现在是什么季度」的说明文字。
+String tmdbSeasonStatusLabel(TmdbState state) {
   final season = state.selectedSeason;
-  if (season >= 0) return _seasonLabel(season);
-  return '选择季度';
+  return season >= 0 ? '当前季度：${_seasonLabel(season)}' : '未确定季度';
 }
 
 /// 季度 chip 条（`docs/phase6/design/03` §3）。
@@ -337,6 +386,11 @@ class SeasonChipStrip extends StatelessWidget {
 }
 
 /// 季度选择器（`04` §4.1）。
+///
+/// **2026-11-12 起没有运行时调用点**：站点详情页的季度整行退场（「第几季」写进
+/// TMDB 状态条），纯 TMDB 页用的是 [SeasonChipStrip]。保留它是因为季度用例
+/// （`phase6_season_controls_test`）用它锁定「哪些季度可选 / 未确定季度怎么说明」
+/// 这套规则；规则搬走时，这里与那些用例一起删。
 class TmdbSeasonSelector extends StatelessWidget {
   const TmdbSeasonSelector({
     super.key,
@@ -362,25 +416,12 @@ class TmdbSeasonSelector extends StatelessWidget {
   /// 但也不要把能力藏起来）。
   final bool showManualEntry;
 
-  /// 常驻的季度按钮（`docs/phase6/design/03` §2）。
+  /// 季度区只保留**一个**入口：chip 条 + 「选择季度」按钮（用户决策 2026-11-11）。
   ///
-  /// 为什么必须常驻：单季剧集原先只显示一行上下文文字，**没有任何改绑入口**
-  /// ——用户发现 TMDB 匹配错了季度也没法手动纠正。上游
-  /// `updateTmdbSeasonActionVisibility` 的条件里 `seasonNumbers` 非空即可见，
-  /// 不要求多季，正是这个理由。
-  ///
-  /// [labelKey] 用于把 `tmdb-season-context` 挂到按钮文字上：
-  /// 单季时按钮文字**就是**季度上下文，再另外渲染一行「第 1 季」会变成
-  /// 同一句话出现两次（`design/03` §2.3 的单季示意图里只有 `[ 第 1 季 ▾ ]`）。
-  Widget _seasonButton(BuildContext context, {Key? labelKey}) =>
-      TextButton.icon(
-        key: const ValueKey('tmdb-season-button'),
-        onPressed: showManualEntry ? onSelectManual : null,
-        iconAlignment: IconAlignment.end,
-        icon: const Icon(Icons.expand_more, size: 18),
-        label: Text(tmdbSeasonButtonLabel(state), key: labelKey),
-      );
-
+  /// 原先还有一个「第 N 季 ▾」下拉按钮，点它与点按钮都开同一个季度对话框，
+  /// 而它旁边又挂着 chip 条——同一件事三个控件，用户要先分辨点哪个。
+  /// 现在：**要切季就点 chip**（一步），需要手动改绑才点「选择季度」（开对话框）。
+  /// 单季没有 chip 条，按钮仍常驻，改绑入口不丢。
   @override
   Widget build(BuildContext context) {
     if (!state.shouldRender || !state.hasMatch) return const SizedBox.shrink();
@@ -388,83 +429,46 @@ class TmdbSeasonSelector extends StatelessWidget {
     if (item == null || !item.isTv) return const SizedBox.shrink();
 
     final seasons = state.availableSeasons;
-    if (seasons.isEmpty) {
-      // 无法可靠分季 → 显示「未确定季度」+ 选择入口（`04` §4.1）
-      return SizedBox(
-        height: tmdbSeasonSelectorHeight,
-        child: Padding(
-          padding: padding,
-          child: Row(
-            children: [
-              _seasonButton(context),
-              const SizedBox(width: 8),
-              Text('未确定季度', style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(width: 8),
-              TextButton(
-                key: const ValueKey('tmdb-choose-season'),
-                onPressed: onSelectManual,
-                child: const Text('选择季度'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (seasons.length == 1) {
-      // 单季：按钮本身就是季度上下文（`design/03` §2.3 的示意图里只有
-      // `[ 第 1 季 ▾ ]`）。
-      //
-      // 【裁定】`design/03` §2 正文说「保留既有 key `tmdb-season-context`」，
-      // 而 §2.3 的图只画了按钮——两者直接相加会出现**同一句话两次**
-      // （按钮「第 1 季」+ 上下文文字「第 1 季」），既违反图示也是可见冗余。
-      // 取图示（用户看到什么）+ 把该 key **移到按钮文字上**：
-      // key 仍存在（`phase4_tmdb_ui_test` 的 `findsOneWidget` 与
-      // `phase6_season_controls_test` 都按它断言），画面也不再重复。
-      return SizedBox(
-        height: tmdbSeasonSelectorHeight,
-        child: Padding(
-          padding: padding,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _seasonButton(
-              context,
-              labelKey: const ValueKey('tmdb-season-context'),
-            ),
-          ),
-        ),
-      );
-    }
-
-    // 多季：按钮在左，chip 条在右。
-    //
-    // 按钮单独包一层 `Padding`（只吃 `padding.left`）而不是给整行加 padding：
-    // chip 条自己带 `padding.horizontal / 2`，两边相加正好等于 `padding.horizontal`，
-    // 于是「按钮对齐内容列左沿」与「chip 条仍有呼吸」同时成立。
+    // `showManualEntry=false` 时**渲染但禁用**：与整块隐藏相比，禁用态仍能
+    // 告诉用户「这里可以换季」，只是当前上下文不允许（DESIGN.md：不给点了
+    // 没反应的假入口，但也不要把能力藏起来）。
+    final manual = TextButton(
+      key: const ValueKey('tmdb-choose-season'),
+      onPressed: showManualEntry ? onSelectManual : null,
+      child: const Text('选择季度'),
+    );
     return SizedBox(
       height: tmdbSeasonSelectorHeight,
       child: Row(
         children: [
-          Padding(
-            padding: EdgeInsets.only(left: padding.left),
-            child: _seasonButton(context),
-          ),
-          Expanded(
-            child: SeasonChipStrip(
-              seasons: seasons,
-              selectedSeason: state.selectedSeason,
-              // 站点页的季度**本来就都是可选的**（`availableSeasons` 已经过
-              // 可播放季度解析），因此显式传全量而不是留空——
-              // `SeasonChipStrip` 的空值语义是「只展示不可切换」。
-              selectableSeasons: seasons,
-              onChanged: onChanged,
-              padding: padding,
-              // 站点页沿用既有 key 字面值：`phase4_tmdb_ui_test` 按
-              // `tmdb-season-switcher` / `tmdb-season-<n>` 断言，不得改名。
-              switcherKey: 'tmdb-season-switcher',
-              chipKeyPrefix: 'tmdb-season',
+          if (seasons.length > 1)
+            Expanded(
+              child: SeasonChipStrip(
+                seasons: seasons,
+                selectedSeason: state.selectedSeason,
+                // 站点页的季度本来就都是可选的（`availableSeasons` 已过可播放季度
+                // 解析），因此显式传全量而不是留空——空值语义是「只展示不可切换」。
+                selectableSeasons: seasons,
+                onChanged: onChanged,
+                padding: padding,
+                switcherKey: 'tmdb-season-switcher',
+                chipKeyPrefix: 'tmdb-season',
+              ),
+            )
+          else
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(left: padding.left),
+                child: Text(
+                  // 单季/未确定季度时，用一句话说明当前状态（原先靠按钮文字承担）。
+                  tmdbSeasonStatusLabel(state),
+                  key: const ValueKey('tmdb-season-context'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
             ),
-          ),
+          const SizedBox(width: AppSpace.sm),
+          manual,
         ],
       ),
     );
@@ -510,12 +514,10 @@ abstract final class TmdbEpisodeRenderPolicy {
     required int Function(VodEpisode episode) seasonOf,
   }) {
     if (rendered.length > sourceEpisodes.length) return false;
-    final expected = sourceEpisodes
-        .where((e) {
-          final season = seasonOf(e);
-          return season < 0 || season == selectedSeason;
-        })
-        .length;
+    final expected = sourceEpisodes.where((e) {
+      final season = seasonOf(e);
+      return season < 0 || season == selectedSeason;
+    }).length;
     return rendered.length == expected;
   }
 }
@@ -760,7 +762,8 @@ class TmdbSeasonDialog extends StatelessWidget {
             ListTile(
               key: const ValueKey('tmdb-season-keep-original'),
               title: const Text('保持原始集列表'),
-              onTap: () => Navigator.of(context).pop(_SeasonChoice.keepOriginal),
+              onTap: () =>
+                  Navigator.of(context).pop(_SeasonChoice.keepOriginal),
             ),
             // AI 项（`docs/phase6/design/04` §7.1）。
             //
@@ -774,20 +777,15 @@ class TmdbSeasonDialog extends StatelessWidget {
               key: const ValueKey('tmdb-season-ai'),
               leading: const Icon(Icons.auto_awesome),
               title: const Text('AI 识别剧集/季度'),
-              subtitle: aiReady
-                  ? null
-                  : const Text('未配置 AI 服务，点击前往设置'),
-              onTap: () => Navigator.of(context).pop(
-                aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings,
-              ),
+              subtitle: aiReady ? null : const Text('未配置 AI 服务，点击前往设置'),
+              onTap: () => Navigator.of(context)
+                  .pop(aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings),
             ),
             const Divider(),
             for (final season in tmdbSeasons)
               ListTile(
                 key: ValueKey('tmdb-season-option-$season'),
-                title: Text(
-                  season == 0 ? '特别篇' : '第 $season 季',
-                ),
+                title: Text(season == 0 ? '特别篇' : '第 $season 季'),
                 subtitle: Text(
                   '${seasonCounts[season] ?? 0} 集'
                   '${needsRiskWarning(seasonEpisodeCount: seasonCounts[season] ?? 0, sourceEpisodeCount: sourceEpisodeCount) ? ' · ⚠ 与线路集数差异较大，请确认' : ''}',
@@ -860,6 +858,8 @@ class TmdbVideoTile extends StatelessWidget {
     final theme = Theme.of(context);
     return Card(
       key: ValueKey('tmdb-video-${video.identity}'),
+      // 默认 `margin` 是 4：会让「相关视频」比其它区块左右各缩 4px。
+      margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(

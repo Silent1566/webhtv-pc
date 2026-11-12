@@ -169,7 +169,9 @@ void main() {
   }
 
   group('季度按钮常驻（design/03 §2）', () {
-    testWidgets('多季：按钮 + chip 条并存', (tester) async {
+    // 用户决策 2026-11-11：季度区只留 chip 条 + 一个「选择季度」按钮，
+    // 原来的「第 N 季 ▾」下拉按钮去掉（三者点下去效果重叠）。
+    testWidgets('多季：只有 chip 条 + 选择季度，没有下拉按钮', (tester) async {
       final tmdb = await matchedState(
         episodeCount: 5,
         tmdbSeasons: const [1, 2],
@@ -177,10 +179,14 @@ void main() {
       );
       await pumpSelector(tester, tmdb, onChanged: (_) {});
 
-      expect(find.byKey(const ValueKey('tmdb-season-button')), findsOneWidget);
-      expect(find.byKey(const ValueKey('tmdb-season-switcher')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-season-button')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('tmdb-season-switcher')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('tmdb-season-1')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-season-2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-choose-season')), findsOneWidget);
       tmdb.dispose();
     });
 
@@ -231,15 +237,11 @@ void main() {
       final chip = tester.widget<ChoiceChip>(
         find.byKey(const ValueKey('tmdb-season-1')),
       );
-      expect(
-        chip.onSelected,
-        isNull,
-        reason: '没有回调就不应该显得可点（一个点了没反应的按钮比没有更糟）',
-      );
+      expect(chip.onSelected, isNull, reason: '没有回调就不应该显得可点（一个点了没反应的按钮比没有更糟）');
       tmdb.dispose();
     });
 
-    testWidgets('单季：按钮仍常驻（这是改绑的唯一入口）', (tester) async {
+    testWidgets('单季：无 chip 条，用一行文字说明当前季度并保留改绑入口', (tester) async {
       final tmdb = await matchedState(
         episodeCount: 3,
         tmdbSeasons: const [1],
@@ -247,13 +249,14 @@ void main() {
       );
       await pumpSelector(tester, tmdb);
 
-      expect(find.byKey(const ValueKey('tmdb-season-button')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-season-context')), findsOneWidget);
+      expect(find.text('当前季度：第 1 季'), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-season-switcher')), findsNothing);
+      expect(find.byKey(const ValueKey('tmdb-choose-season')), findsOneWidget);
       tmdb.dispose();
     });
 
-    testWidgets('未确定季度：按钮文案是「选择季度」', (tester) async {
+    testWidgets('未确定季度：文字说明 + 选择季度按钮', (tester) async {
       // 7 集，而 S1=3、S2=2：既不能切片（3+2≠7），单季兼容也不成立
       // （S1 的 3 集 < 7），因此 availableSeasons 为空。
       final tmdb = await matchedState(
@@ -263,12 +266,12 @@ void main() {
       );
       await pumpSelector(tester, tmdb);
 
-      expect(find.byKey(const ValueKey('tmdb-season-button')), findsOneWidget);
-      expect(find.text('选择季度'), findsWidgets);
+      expect(find.text('未确定季度'), findsOneWidget);
+      expect(find.text('选择季度'), findsOneWidget);
       tmdb.dispose();
     });
 
-    testWidgets('点季度按钮触发 onSelectManual', (tester) async {
+    testWidgets('点「选择季度」触发 onSelectManual', (tester) async {
       final tmdb = await matchedState(
         episodeCount: 3,
         tmdbSeasons: const [1],
@@ -277,7 +280,7 @@ void main() {
       var opened = 0;
       await pumpSelector(tester, tmdb, onSelectManual: () => opened++);
 
-      await tester.tap(find.byKey(const ValueKey('tmdb-season-button')));
+      await tester.tap(find.byKey(const ValueKey('tmdb-choose-season')));
       await tester.pump();
       expect(opened, 1);
       tmdb.dispose();
@@ -293,7 +296,7 @@ void main() {
       );
       await pumpSelector(tester, tmdb);
 
-      expect(find.byKey(const ValueKey('tmdb-season-button')), findsNothing);
+      expect(find.byKey(const ValueKey('tmdb-choose-season')), findsNothing);
       tmdb.dispose();
     });
 
@@ -317,17 +320,21 @@ void main() {
       tmdb.dispose();
     });
 
-    // `design/03` §2.3：按钮必须与既有 key **并存**（不替换、不改名）。
-    testWidgets('未确定季度时 tmdb-choose-season 与按钮并存', (tester) async {
+    // 下拉按钮已去掉（2026-11-11）；「选择季度」成为唯一的手动改绑入口，
+    // 因此它在多季与单季都必须存在——上面两条用例分别锁住了这两种情形。
+    testWidgets('没有下拉按钮后仍能手动改绑（按钮在，回调能通）', (tester) async {
       final tmdb = await matchedState(
         episodeCount: 7,
         tmdbSeasons: const [1, 2],
         seasonCounts: const {1: 3, 2: 2},
       );
-      await pumpSelector(tester, tmdb);
+      var opened = 0;
+      await pumpSelector(tester, tmdb, onSelectManual: () => opened++);
 
-      expect(find.byKey(const ValueKey('tmdb-season-button')), findsOneWidget);
-      expect(find.byKey(const ValueKey('tmdb-choose-season')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-season-button')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('tmdb-choose-season')));
+      await tester.pump();
+      expect(opened, 1);
       tmdb.dispose();
     });
 
@@ -342,7 +349,7 @@ void main() {
       await pumpSelector(tester, tmdb);
 
       final box = tester.getSize(
-        find.byKey(const ValueKey('tmdb-season-button')).first,
+        find.byKey(const ValueKey('tmdb-choose-season')).first,
       );
       expect(
         box.height,
@@ -370,7 +377,7 @@ void main() {
       );
 
       final button = tester.widget<TextButton>(
-        find.byKey(const ValueKey('tmdb-season-button')),
+        find.byKey(const ValueKey('tmdb-choose-season')),
       );
       expect(
         button.onPressed,
@@ -380,7 +387,7 @@ void main() {
 
       // 点一下也不应该触发（禁用态真的不透传）。
       await tester.tap(
-        find.byKey(const ValueKey('tmdb-season-button')),
+        find.byKey(const ValueKey('tmdb-choose-season')),
         warnIfMissed: false,
       );
       await tester.pump();
@@ -397,7 +404,7 @@ void main() {
       var opened = 0;
       await pumpSelector(tester, tmdb, onSelectManual: () => opened++);
 
-      await tester.tap(find.byKey(const ValueKey('tmdb-season-button')));
+      await tester.tap(find.byKey(const ValueKey('tmdb-choose-season')));
       await tester.pump();
       expect(opened, 1, reason: '默认（true）必须可点');
       tmdb.dispose();
@@ -415,48 +422,49 @@ void main() {
         padding: const EdgeInsets.symmetric(horizontal: 2),
       );
 
+      // 单季没有 chip 条，这行左沿由季度状态文字承担。
       final left = tester.getTopLeft(
-        find.byKey(const ValueKey('tmdb-season-button')).first,
+        find.byKey(const ValueKey('tmdb-season-context')).first,
       );
       expect(
         left.dx,
         lessThan(10),
-        reason: 'padding.left=2 时按钮应贴近左沿；写死 16 会让它偏移到 ~16',
+        reason: 'padding.left=2 时内容应贴近左沿；写死 16 会让它偏移到 ~16',
       );
       tmdb.dispose();
     });
   });
 
-  group('tmdbSeasonButtonLabel（纯函数）', () {
-    test('有选中季 → 第 N 季', () async {
+  group('tmdbSeasonStatusLabel（纯函数）', () {
+    test('有选中季 → 当前季度：第 N 季', () async {
       final tmdb = await matchedState(
         episodeCount: 3,
         tmdbSeasons: const [1],
         seasonCounts: const {1: 3},
       );
-      expect(tmdbSeasonButtonLabel(tmdb), '第 1 季');
+      expect(tmdbSeasonStatusLabel(tmdb), '当前季度：第 1 季');
       tmdb.dispose();
     });
 
-    test('特别篇 → 特别篇', () async {
+    test('特别篇 → 当前季度：特别篇', () async {
       final tmdb = await matchedState(
         episodeCount: 3,
         tmdbSeasons: const [0],
         seasonCounts: const {0: 3},
       );
-      expect(tmdbSeasonButtonLabel(tmdb), '特别篇');
+      expect(tmdbSeasonStatusLabel(tmdb), '当前季度：特别篇');
       tmdb.dispose();
     });
 
-    // `design/03` C3：解析不出季度 → 「选择季度」。
-    test('无法解析季度 → 选择季度', () async {
+    // `design/03` C3：解析不出季度 → 「未确定季度」。
+    test('无法解析季度 → 未确定季度', () async {
       final tmdb = await matchedState(
         episodeCount: 7,
         tmdbSeasons: const [1, 2],
         seasonCounts: const {1: 3, 2: 2},
       );
       expect(tmdb.selectedSeason, lessThan(0), reason: '前置：确实没解析出季度');
-      expect(tmdbSeasonButtonLabel(tmdb), '选择季度');
+      expect(tmdbSeasonStatusLabel(tmdb), '未确定季度');
       tmdb.dispose();
     });
 
@@ -554,8 +562,14 @@ void main() {
         findsOneWidget,
         reason: '改为 chip 条后必须有自己的容器 key',
       );
-      expect(find.byKey(const ValueKey('tmdb-detail-season-1')), findsOneWidget);
-      expect(find.byKey(const ValueKey('tmdb-detail-season-2')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tmdb-detail-season-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-detail-season-2')),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull, reason: '不得溢出');
     });
 
@@ -836,9 +850,7 @@ void main() {
     // 于是第 2 区间的第 0 张卡会播成**第 1 区间的第 0 集**：静默播错集。
     //
     // 本用例断言：切到区间 1 后点第一张卡，回调收到的是**原始下标 40**。
-    testWidgets('切到第 2 区间后点首张卡 → 回调收到原始下标 40（不是 0）', (
-      tester,
-    ) async {
+    testWidgets('切到第 2 区间后点首张卡 → 回调收到原始下标 40（不是 0）', (tester) async {
       final ranges = EpisodeRangePolicy.build(70, 0, false);
       int? tappedIndex;
       await pumpStrip(
@@ -851,9 +863,7 @@ void main() {
       );
 
       // 区间 1 = [40, 70) → 首卡的**原始下标**是 40。
-      await tester.tap(
-        find.byKey(const ValueKey('tmdb-episode-card-线路一-40')),
-      );
+      await tester.tap(find.byKey(const ValueKey('tmdb-episode-card-线路一-40')));
       await tester.pump();
       expect(
         tappedIndex,
