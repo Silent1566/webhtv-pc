@@ -135,6 +135,15 @@ class TmdbItem {
   bool get isTv => mediaType == TmdbMediaType.tv;
   bool get isMovie => mediaType == TmdbMediaType.movie;
 
+  /// 条目年份：副标题（`<年份> · <评分>`）优先，回退标题（上游 `tmdbItemYear`）。
+  ///
+  /// 选片与排序都必须用它：搜索结果缺少上映日期时副标题只剩评分，
+  /// 只读副标题会把一个有年份的候选当成未知年份。
+  int get year {
+    final fromSubtitle = firstYear(subtitle);
+    return fromSubtitle > 0 ? fromSubtitle : firstYear(title);
+  }
+
   /// 从 TMDB 搜索结果条目构造（`01` §5.1）。
   ///
   /// - 跳过 `media_type` 不属于 `{movie, tv}` 的条目；
@@ -527,12 +536,14 @@ abstract final class TmdbCacheKey {
   static String title(String normalizedTitle) =>
       normalizedTitle.isEmpty ? '' : '$titleScope$separator$normalizedTitle';
 
-  /// 归一化源标题：`normalize(cleanTitle(sourceTitle))`。
+  /// 归一化源标题：`stableCacheTitle(cleanTitle(sourceTitle))`。
   ///
   /// 结果中的分隔符会被替换为空格，避免键被撑开（对齐上游 `sourceKey`）。
+  /// 用 [stableCacheTitle] 而不是 [normalizeTitle]：缓存键是持久化格式，
+  /// 清洗规则演进时键形态必须保持不变，否则旧结论（含手动结论）会读不到。
   static String normalizeSourceTitle(String? sourceTitle) {
     final cleaned = cleanTitle(sourceTitle ?? '');
-    final normalized = normalizeTitle(cleaned);
+    final normalized = stableCacheTitle(cleaned);
     return normalized.replaceAll(separator, ' ').trim();
   }
 }

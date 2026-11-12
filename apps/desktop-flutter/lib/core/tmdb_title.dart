@@ -22,9 +22,31 @@ final RegExp _fileExtension = RegExp(
   caseSensitive: false,
 );
 
-/// 噪声括号段：`[...]`、`【...】`、`「...」`、`『...』`、`(...)`、`（...）`。
+/// 括号段：`[...]`、`【...】`、`「...」`、`『...』`、`(...)`、`（...）`。
 final RegExp _bracketPattern = RegExp(
   r'[\[【「『(（]([^\]】」』)）]{1,60})[\]】」』)）]',
+);
+
+// 括号内的**噪声标记**（上游 `TmdbMatcher.isNoiseTag`）。匹配对象是括号内容的
+// [normalizeTitle] 结果（已去分隔符并小写），因此 `WEB-DL` 在这里是 `webdl`。
+final RegExp _noiseCodeToken = RegExp(
+  r'.*(4k|8k|1080p|2160p|720p|hdr|hdr10|dv|webdl|bluray|bdrip|remux'
+  r'|hevc|h265|h264|x265|x264|aac|dts|ddp|atmos|nf|netflix|amzn|dsnp).*',
+);
+
+// 上游 `isNoiseTag` 的标签集合之外补 `国产`/`国内`：这两个产地标注在 PC 的站源里
+// 一出现就是纯噪声（`【国产】庆余年`），旧实现靠「删除全部括号」顺带吃掉它，
+// 改成按标签判定后必须显式列出，否则会把产地标注搜进查询词。
+final RegExp _noiseQualityWord = RegExp(
+  '.*(真彩|臻彩|高码率|高码|无水印|无台标|国语|国配|国粤|粤语|中字|字幕'
+  '|内封|简繁|双语|官中|杜比|合集|全集|完结|未删减|加长版|修复版|国产|国内).*',
+);
+
+final RegExp _noiseEdition = RegExp(
+  '.*(国语版|国配版|普通话版|粤语版|台语版|闽南语版|原声版|配音版|中字版|字幕版'
+  '|台版|台灣版|台湾版|港版|港澳版|大陆版|內地版|内地版|中国版|中國版'
+  '|泰版|泰国版|泰國版|韩版|韩国版|韓國版|日版|日本版|美版|美国版|美國版'
+  '|英版|英国版|英國版).*',
 );
 
 /// 书名号内的标题要被**提取**而不是丢弃（`01` §3.3 步骤 2 的例外）。
@@ -167,6 +189,24 @@ int? parseChineseNumber(String raw) {
   return total + current;
 }
 
+/// 括号内容是否为噪声标记（上游 `TmdbMatcher.isNoiseTag`）。
+///
+/// 只有版本/清晰度/编码/语言标记才丢弃；`(上)`、`(2024)` 这类信息段必须保留，
+/// 否则会把可搜索的标题信息一并删掉。
+bool isNoiseBracket(String inner) {
+  final value = normalizeTitle(inner);
+  if (value.isEmpty) return true;
+  return _noiseCodeToken.hasMatch(value) ||
+      _noiseQualityWord.hasMatch(value) ||
+      _noiseEdition.hasMatch(value);
+}
+
+/// 去噪声括号段：逐段判定，保留非噪声括号（上游 `TmdbMatcher.removeNoiseBrackets`）。
+String removeNoiseBrackets(String input) => input.replaceAllMapped(
+  _bracketPattern,
+  (match) => isNoiseBracket(match.group(1) ?? '') ? ' ' : match[0]!,
+);
+
 /// 标题清洗（`01` §3.3）。步骤顺序固定，不可调换。
 ///
 /// 兜底：清洗结果为空时返回**原始输入**，不得返回空串（否则搜索必失败）。
@@ -186,8 +226,8 @@ String cleanTitle(String input) {
     if (inner.isNotEmpty) text = inner;
   }
 
-  // 3. 去噪声括号段
-  text = text.replaceAll(_bracketPattern, ' ');
+  // 3. 去噪声括号段（非噪声内容保留）
+  text = removeNoiseBrackets(text);
 
   // 4. 去季集标记
   text = text.replaceAll(_seasonEpisodeMark, ' ');
@@ -230,6 +270,22 @@ String cleanTitle(String input) {
   text = text.trim();
 
   return text.isEmpty ? raw : text;
+}
+
+/// 缓存键用的稳定归一化：先剥掉**全部**括号段，再走 [normalizeTitle]。
+///
+/// 缓存键是**持久化格式**，不能跟着清洗规则漂移：`cleanTitle` 的括号判定从
+/// 「全部删除」改成「按噪声标签删除」之后，`剧名 (2024)` 的清洗结果从 `剧名`
+/// 变成 `剧名 (2024)`；键一变，升级前落盘的自动结论、尤其是**手动结论**
+/// 就全部读不到，会被当成未匹配重新自动匹配。
+///
+/// 因此缓存键固定按「剥全部括号」归一，与升级前的键形态保持一致。
+String stableCacheTitle(String input) {
+  final stripped = normalizeTitle(input.replaceAll(_bracketPattern, ' '));
+  // 整个标题就是一段括号（`【剧名】`、`(上)`）时，剥括号会得到空串。
+  // 旧规则下清洗结果为空会回退原始输入，等价于「只去括号符号、保留内容」，
+  // 这里必须照做，否则这类标题的缓存键会变成空串、旧结论读不回来。
+  return stripped.isEmpty ? normalizeTitle(input) : stripped;
 }
 
 /// 归一化：去掉 `[\s·•:：\-_/\\|()（）\[\]【】]+` 后小写（`01` §5.4）。
@@ -393,14 +449,34 @@ int levenshteinDistance(String first, String second) {
   return previous[second.length];
 }
 
+/// 去掉标题里的**年份记号**，其余结构（季集、括号信息）保持不变。
+///
+/// 上游 `titleSimilarityScore` 用 `removeYearFromTitle`（会再走一遍清洗）剥年份；
+/// PC 这里只删年份记号本身：再清洗会顺带删掉「第二季」等信号，
+/// 让带季名的候选相似度凭空变成 `1000`。
+String _stripYearToken(String input, int year) {
+  if (year <= 0) return input;
+  var text = input.replaceAll(RegExp('(?<!\\d)$year(?!\\d)'), ' ');
+  text = text.replaceAll(_separatorRun, ' ');
+  final stripped = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  // 标题本身就是年份（`1917` / `2012`）时不能剥空：剥成空串会让相似度直接归 0，
+  // 把整部作品从推荐（`>= 800` 硬过滤）和搜索排序里筛掉。
+  return stripped.isEmpty ? input : stripped;
+}
+
 /// 标题相似度得分（`01` §5.6）。
+///
+/// 比较前先剥掉两侧的年份记号，这样「尚公主2026」与 TMDB 的「尚公主」仍算完全相等。
+/// [titleYear] 是候选条目的年份（副标题 → 标题回退），缺省时从 [title] 自身提取。
 ///
 /// - 归一后完全相等 → `1000`
 /// - 一方包含另一方 → `800 + round(200 * min/max)`
 /// - 其他 → `max(0, 700 - round(700 * levenshtein / max))`
-int titleSimilarityScore(String title, String keyword) {
-  final query = normalizeTitle(keyword);
-  final target = normalizeTitle(title);
+int titleSimilarityScore(String title, String keyword, {int titleYear = 0}) {
+  final query = normalizeTitle(_stripYearToken(keyword, firstYear(keyword)));
+  final target = normalizeTitle(
+    _stripYearToken(title, titleYear > 0 ? titleYear : firstYear(title)),
+  );
   if (query.isEmpty || target.isEmpty) return 0;
   if (target == query) return 1000;
   if (target.contains(query) || query.contains(target)) {
