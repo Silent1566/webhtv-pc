@@ -92,7 +92,11 @@ void main() {
     await deleteTempDirBestEffort(temp);
   });
 
-  Future<void> pump(WidgetTester tester, {String seed = '当前影片'}) async {
+  Future<void> pump(
+    WidgetTester tester, {
+    String seed = '当前影片',
+    ValueChanged<String>? onSearchTitle,
+  }) async {
     tester.view.physicalSize = const Size(900, 1600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
@@ -106,7 +110,11 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SingleChildScrollView(
-              child: AiRecommendationSection(state: state, seedTitle: seed),
+              child: AiRecommendationSection(
+                state: state,
+                seedTitle: seed,
+                onSearchTitle: onSearchTitle,
+              ),
             ),
           ),
         ),
@@ -123,82 +131,100 @@ void main() {
     await pump(tester);
     expect(completion.calls, 1, reason: '无缓存 → 进详情页即刷新（B 方案）');
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
       findsOneWidget,
     );
   });
 
-  testWidgets('推荐区是横向海报条，可左右滑动且带海报与不感兴趣入口', (tester) async {
+  testWidgets('推荐区是横向海报条，与其它推荐行同宽同标题样式', (tester) async {
     await pump(tester);
     final strip = tester.widget<ListView>(
-      find.byKey(const ValueKey('ai-detail-recommendations-strip')),
+      find.byKey(const ValueKey('recommendation-row-ai')),
     );
     expect(strip.scrollDirection, Axis.horizontal, reason: '要和海报条一样横向展示');
-    // 每张卡是一个 160 宽的海报卡，带"不感兴趣"角标。
-    expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-hide-新片A')),
-      findsOneWidget,
-    );
     expect(find.byType(PosterImage), findsWidgets);
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendations-title')),
+      find.byKey(const ValueKey('recommendation-heading-ai')),
       findsOneWidget,
     );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('recommendation-ai-新片A'))).width,
+      130,
+      reason: '与猜你喜欢/个性推荐行同一张卡宽',
+    );
   });
-  testWidgets('长按海报打开推荐详情：理由/简介/不感兴趣/关闭齐全', (tester) async {
+  testWidgets('长按打开推荐说明：来源/信息/不感兴趣/关闭齐全', (tester) async {
     await pump(tester);
-    final poster = find.byKey(const ValueKey('ai-detail-recommendation-新片A'));
+    final poster = find.byKey(const ValueKey('recommendation-ai-新片A'));
     await tester.longPress(poster);
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('ai-recommendation-details')),
+      find.byKey(const ValueKey('recommendation-info-dialog')),
       findsOneWidget,
     );
-    expect(find.text('推荐详情'), findsOneWidget);
+    // 来源、海报、元信息胶囊、简介占位、详情主按钮、不感兴趣都在。
     expect(
-      find.byKey(const ValueKey('ai-recommendation-details-source')),
+      find.byKey(const ValueKey('recommendation-info-source')),
+      findsOneWidget,
+    );
+    expect(find.text('2021'), findsOneWidget);
+    expect(find.text('剧集'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('recommendation-info-poster')),
+      findsOneWidget,
+    );
+    expect(find.text('暂无可用简介'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('recommendation-info-open')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('ai-recommendation-details-title')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('ai-recommendation-details-overview')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('ai-recommendation-details-hide')),
+      find.byKey(const ValueKey('recommendation-info-hide')),
       findsOneWidget,
     );
 
     // 关闭按钮只关弹窗，不改列表。
-    await tester.tap(
-      find.byKey(const ValueKey('ai-recommendation-details-confirm')),
-    );
+    await tester.tap(find.byKey(const ValueKey('recommendation-info-close')));
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('ai-recommendation-details')),
+      find.byKey(const ValueKey('recommendation-info-dialog')),
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('「详情」按钮与卡片单击走同一个去向', (tester) async {
+    String? searched;
+    await pump(tester, onSearchTitle: (title) => searched = title);
+    await tester.longPress(
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('recommendation-info-open')));
+    await tester.pumpAndSettle();
+    expect(searched, '新片A', reason: '详情 = 卡片单击：无身份时按标题搜站源');
+    expect(
+      find.byKey(const ValueKey('recommendation-info-dialog')),
+      findsNothing,
+      reason: '点详情先把弹窗关掉再走卡片同一条去路',
     );
   });
 
   testWidgets('详情弹窗里的「不感兴趣」会写入负反馈并关闭弹窗', (tester) async {
     await pump(tester);
     await tester.longPress(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
     );
     await tester.pumpAndSettle();
     // 写负反馈是真实文件 IO：必须在真实时钟里点，否则 FakeAsync 里永不完成。
     RecommendationFeedbackCollection? feedback;
     await tester.runAsync(() async {
       await tester.tap(
-        find.byKey(const ValueKey('ai-recommendation-details-hide')),
+        find.byKey(const ValueKey('recommendation-info-hide')),
       );
       await Future<void>.delayed(const Duration(milliseconds: 400));
       feedback = await state.aiIntegration.recommendation.loadFeedback();
@@ -206,11 +232,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('ai-recommendation-details')),
+      find.byKey(const ValueKey('recommendation-info-dialog')),
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
       findsNothing,
       reason: '不感兴趣后该卡从条上移除',
     );
@@ -229,7 +255,7 @@ void main() {
     await pump(tester);
     expect(completion.calls, 1, reason: '输入没变 → 直接读缓存，省 token');
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
       findsOneWidget,
     );
   });
@@ -254,12 +280,12 @@ void main() {
     expect(completion.calls, 2);
     // 失败不清空：仍展示上一份缓存，并显示失败原因。
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendation-新片A')),
+      find.byKey(const ValueKey('recommendation-ai-新片A')),
       findsOneWidget,
       reason: '刷新失败不得清空已显示内容',
     );
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendations-message')),
+      find.byKey(const ValueKey('recommendation-ai-message')),
       findsOneWidget,
     );
   });
@@ -280,7 +306,7 @@ void main() {
     await tester.pump();
     expect(completion.calls, 0);
     expect(
-      find.byKey(const ValueKey('ai-detail-recommendations')),
+      find.byKey(const ValueKey('recommendation-section-ai')),
       findsNothing,
     );
   });

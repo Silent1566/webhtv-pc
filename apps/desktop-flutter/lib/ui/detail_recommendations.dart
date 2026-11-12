@@ -7,6 +7,7 @@ import '../core/tmdb_identity.dart';
 import '../state/detail_recommendation_state.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
+import 'recommendation_info_dialog.dart';
 import 'scroll_behavior.dart';
 
 class DetailRecommendations extends StatefulWidget {
@@ -19,6 +20,7 @@ class DetailRecommendations extends StatefulWidget {
     this.embeddedRelated = false,
     this.onOpenItem,
     this.onSearchTitle,
+    this.trailing,
   });
   final DetailRecommendationDependencies dependencies;
   final RecommendationSeed current;
@@ -26,6 +28,13 @@ class DetailRecommendations extends StatefulWidget {
   final bool sourceOnly, embeddedRelated;
   final ValueChanged<TmdbItem>? onOpenItem;
   final ValueChanged<String>? onSearchTitle;
+
+  /// 推荐行为后的附加区块（详情页用它挂 AI 推荐行）。
+  ///
+  /// 放在本组件内部而不是页面里拼：AI 行要占「推荐区最下方」这一格，
+  /// 并且和上面三行共用同一套区块节奏（[SectionHeader] 的上 24 留白）。
+  final Widget? trailing;
+
   @override
   State<DetailRecommendations> createState() => _DetailRecommendationsState();
 }
@@ -88,57 +97,31 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
     }
   }
 
-  Future<void> _info(RecommendationEntry entry) async {
-    final block = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(entry.item.title),
-        content: Text(
-          [
-            '来源：${entry.source == RecommendationSource.douban ? '豆瓣' : 'TMDB'}',
-            if (entry.reason.isNotEmpty) '推荐说明：${entry.reason}',
-            if (entry.item.rating > 0)
-              '评分：${entry.item.rating.toStringAsFixed(1)}',
-            if (entry.doubanRating > 0)
-              '豆瓣评分：${entry.doubanRating.toStringAsFixed(1)}',
-          ].join('\n'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('关闭'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('不感兴趣'),
-          ),
+  /// 长按 / 右键：与 AI 行共用同一个详情弹窗（海报、简介、理由、详情主按钮）。
+  Future<void> _info(RecommendationEntry entry) {
+    final item = entry.item;
+    return showRecommendationInfo(
+      context,
+      info: RecommendationInfo(
+        title: item.title,
+        sourceLabel: entry.source == RecommendationSource.douban
+            ? '豆瓣'
+            : 'TMDB',
+        posterUrl: item.posterUrl,
+        meta: [
+          ...item.subtitle.split(' · ').where((part) => part.trim().isNotEmpty),
+          if (entry.doubanRating > 0)
+            '豆瓣 ${entry.doubanRating.toStringAsFixed(1)}',
         ],
+        overview: item.overview,
+        reason: entry.reason,
+        credit: item.credit,
       ),
+      // 与卡片单击完全一致的去向。
+      onOpen: () => _open(entry),
+      onNotInterested: () async =>
+          widget.dependencies.feedback.block(item.title),
     );
-    if (block == true && mounted) {
-      widget.dependencies.feedback.block(entry.item.title);
-    }
-  }
-
-  double _rowHeight(BuildContext context) {
-    final theme = Theme.of(context);
-    double lineHeight(TextStyle? style) {
-      final painter = TextPainter(
-        text: TextSpan(text: '国', style: style),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
-        maxLines: 1,
-      )..layout();
-      final height = painter.height;
-      painter.dispose();
-      return height;
-    }
-
-    return (188 +
-            lineHeight(theme.textTheme.bodySmall) +
-            lineHeight(theme.textTheme.labelSmall))
-        .clamp(218.0, double.infinity)
-        .ceilToDouble();
   }
 
   @override
@@ -164,7 +147,7 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
                     keyValue: 'recommendation-heading-${row.name}',
                   ),
                   SizedBox(
-                    height: _rowHeight(context),
+                    height: detailRecommendationRowHeight(context),
                     child: _RecommendationPagination(
                       key: ObjectKey(_state.row(row)),
                       row: _state.row(row),
@@ -239,9 +222,35 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
                 ],
               ),
             ),
+        ?widget.trailing,
       ],
     ),
   );
+}
+
+/// 推荐行的固定高度：海报 180 + 标题/元信息两行。
+///
+/// 详情页所有推荐行（含最下面的 AI 行）共用同一个值，行与行之间才不会
+/// 因为字号/换行差出几像素。
+double detailRecommendationRowHeight(BuildContext context) {
+  final theme = Theme.of(context);
+  double lineHeight(TextStyle? style) {
+    final painter = TextPainter(
+      text: TextSpan(text: '国', style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final height = painter.height;
+    painter.dispose();
+    return height;
+  }
+
+  return (188 +
+          lineHeight(theme.textTheme.bodySmall) +
+          lineHeight(theme.textTheme.labelSmall))
+      .clamp(218.0, double.infinity)
+      .ceilToDouble();
 }
 
 class _RecommendationPagination extends StatefulWidget {
