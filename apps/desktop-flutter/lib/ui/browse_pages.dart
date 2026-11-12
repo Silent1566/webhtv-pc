@@ -30,6 +30,7 @@ import '../state/app_state.dart';
 import '../state/detail_ratings_state.dart';
 import '../state/playback_source_context.dart';
 import '../state/tmdb_state.dart';
+import 'ai_content/ai_recommendation_section.dart';
 import 'ai_settings_page.dart';
 import 'app.dart';
 import 'async_action_feedback.dart';
@@ -3072,6 +3073,14 @@ class _DetailPageState extends State<DetailPage> {
           !widget.state.tmdbConfig.isSiteEnabled(site.key, site.name),
       onOpenItem: (item) => _openRecommendation(item, site: _pageSite),
       onSearchTitle: _searchRecommendationTitle,
+      // AI 推荐行排在底部推荐区的最下方，与上面三行同一套卡片与点击去向；
+      // 未配置 AI 时区块自身返回 SizedBox.shrink()，不占位也不请求。
+      trailing: AiRecommendationSection(
+        state: widget.state,
+        seedTitle: vod.vodName,
+        onOpenItem: (item) => _openRecommendation(item, site: _pageSite),
+        onSearchTitle: _searchRecommendationTitle,
+      ),
     );
   }
 
@@ -3206,6 +3215,13 @@ class _DetailPageState extends State<DetailPage> {
           onOpenItem: _openRecommendationOnSelectedSite,
           identity: identity,
           initialItem: item,
+          // 纯 TMDB 页的推荐区同样以 AI 行收尾（种子是这部作品本身）。
+          aiRecommendations: AiRecommendationSection(
+            state: widget.state,
+            seedTitle: item.title,
+            onOpenItem: _openRecommendationOnSelectedSite,
+            onSearchTitle: _searchRecommendationTitle,
+          ),
           onSearchSource: (title, hint) {
             Navigator.of(context).push(
               MaterialPageRoute<void>(

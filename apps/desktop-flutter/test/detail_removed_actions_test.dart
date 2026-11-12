@@ -329,6 +329,11 @@ void main() {
             recommendationDependencies: state.recommendationDependencies,
             ratingService: state.ratings,
             omdbApiKey: '',
+            // 与生产接线一致：推荐区最下方带 AI 行（种子是这部作品）。
+            aiRecommendations: AiRecommendationSection(
+              state: state,
+              seedTitle: _title,
+            ),
           ),
         ),
       ),
@@ -442,7 +447,6 @@ void main() {
       if (phase.isEmpty) return;
       expect(['before', 'after'], contains(phase));
       if (phase == 'before') {
-        expect(find.text('AI影片推荐').hitTestable(), findsOneWidget);
         expect(find.text('阅读简介').hitTestable(), findsOneWidget);
       }
       await tester.runAsync(() async {
@@ -471,7 +475,8 @@ void main() {
       expect(find.textContaining('2 集'), findsWidgets);
       expect(find.textContaining('第1集'), findsWidgets);
       expect(find.textContaining('第2集'), findsWidgets);
-      expect(find.text('AI影片推荐'), findsNothing);
+      // AI 推荐行已恢复到推荐区最下方（用户 2026-11-12 要求）。
+      expect(find.byType(AiRecommendationSection), findsOneWidget);
       expect(find.byKey(const ValueKey('detail-ai-business')), findsNothing);
       expect(find.text('阅读简介'), findsNothing);
       final episodeBody = find
@@ -506,6 +511,7 @@ void main() {
       mappedCount: 2,
     );
     await pumpSource(tester);
+    final aiBefore = _DetailState.aiRequests;
     _scrollTo(tester, 900);
     await tester.pumpAndSettle();
     expect(find.text('全部映射'), findsOneWidget);
@@ -533,7 +539,7 @@ void main() {
           .episodeCount,
       2,
     );
-    expect(_DetailState.aiRequests, 0);
+    expect(_DetailState.aiRequests, aiBefore, reason: '切换季度不得重发 AI 推荐');
   });
 
   testWidgets('source rating links remain actionable', (tester) async {
@@ -549,16 +555,27 @@ void main() {
   });
 
   testWidgets(
-    'configured AI never builds or requests recommendations on source detail',
+    'source detail keeps AI row at the bottom of the recommendation area',
     (tester) async {
       await pumpSource(tester);
       _scrollTo(tester, 1600);
       await _settleIo(tester);
-      expect(_DetailState.aiRequests, 0);
-      expect(find.byType(AiRecommendationSection), findsNothing);
+      // 无缓存 → 进页面自动生成一次（与其它推荐行同时加载）。
+      expect(_DetailState.aiRequests, 1);
+      expect(find.byType(AiRecommendationSection), findsOneWidget);
       expect(find.byType(DetailRecommendations), findsOneWidget);
       expect(find.text('非AI推荐作品'), findsWidgets);
       expect(find.byType(DetailRatingsSection), findsOneWidget);
+      // AI 行必须排在推荐区内、其它推荐行之后。
+      final aiTop = tester
+          .getTopLeft(find.byKey(const ValueKey('recommendation-heading-ai')))
+          .dy;
+      final doubanTop = tester
+          .getTopLeft(
+            find.byKey(const ValueKey('recommendation-heading-douban')),
+          )
+          .dy;
+      expect(aiTop, greaterThan(doubanTop));
     },
   );
 
@@ -578,12 +595,12 @@ void main() {
       );
       _scrollTo(tester, 1600);
       await _settleIo(tester);
-      expect(find.byType(AiRecommendationSection), findsNothing);
-      expect(_DetailState.aiRequests, 0);
+      expect(find.byType(AiRecommendationSection), findsOneWidget);
+      expect(_DetailState.aiRequests, greaterThanOrEqualTo(1));
       expect(find.byType(DetailRecommendations), findsOneWidget);
       expect(find.text('非AI推荐作品'), findsWidgets);
       expect(find.byType(DetailRatingsSection), findsOneWidget);
-      expect(find.text('AI影片推荐'), findsNothing);
+      expect(find.text('AI 推荐'), findsWidgets);
       expect(find.text('阅读简介'), findsNothing);
     },
   );
