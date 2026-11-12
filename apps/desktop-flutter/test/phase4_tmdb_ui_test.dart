@@ -195,7 +195,7 @@ void main() {
       state.dispose();
     });
 
-    testWidgets('已匹配 → 显示标题与评分，以及重新匹配入口', (tester) async {
+    testWidgets('已匹配 → 显示标题与季度（不再重复评分），以及重新匹配入口', (tester) async {
       final client = _FakeClient()
         ..route('/search/multi', {
           'results': [
@@ -210,10 +210,22 @@ void main() {
         })
         ..route('/tv/1399', {'id': 1399, 'name': '剧名'});
       final state = await _matchedState(config: _ready, client: client);
-      await tester.pumpWidget(_host(TmdbStatusBar(state: state)));
+      // 站点页真实调用会带 `onSelectSeason`（季度区退场后它是唯一的季度入口）。
+      await tester.pumpWidget(
+        _host(TmdbStatusBar(state: state, onSelectSeason: () {})),
+      );
       expect(find.byKey(const ValueKey('tmdb-status-matched')), findsOneWidget);
-      expect(find.textContaining('8.2'), findsOneWidget);
+      // 2026-11-12：评分不再在状态条重复（它在简介上方的评分标签行里），
+      // 这一行改显示「现在看的是第几季」。夹具是 S1（10 集）→ 第 1 季。
+      final status = tester
+          .widget<Text>(find.byKey(const ValueKey('tmdb-status-matched')))
+          .data ?? '';
+      expect(status, startsWith('TMDB · 剧名'));
+      expect(status, contains('第 1 季'));
+      expect(status, isNot(contains('8.2')), reason: '评分只出现在评分标签行');
       expect(find.byKey(const ValueKey('tmdb-rematch')), findsOneWidget);
+      // 季度区退场后，状态条是**唯一**的季度入口（未确定季度时也要在）。
+      expect(find.byKey(const ValueKey('tmdb-select-season')), findsOneWidget);
       state.dispose();
     });
 
@@ -294,7 +306,9 @@ void main() {
       final state = await _matchedState(config: _ready, client: client);
       await tester.pumpWidget(_host(TmdbSeasonSelector(state: state)));
       expect(find.byKey(const ValueKey('tmdb-season-context')), findsOneWidget);
-      expect(find.text('第 1 季'), findsOneWidget);
+      // 单季的上下文文案（`tmdbSeasonStatusLabel`）一直是「当前季度：第 N 季」，
+      // 这里原来只写「第 1 季」，是 2026-11-11 改文案时漏改的陈旧期望。
+      expect(find.text('当前季度：第 1 季'), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-season-switcher')), findsNothing);
       state.dispose();
     });

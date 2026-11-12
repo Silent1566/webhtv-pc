@@ -105,8 +105,8 @@ class DetailRatingsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 与其它区块同一套边界：发丝线不占高度，间隔由 `SectionHeader` 的 24px 给。
-        const Divider(height: 1),
+        // 不发丝线（2026-11-12 用户反馈）：它把推荐行与外部链接切成两段。
+        // 间隔由 `SectionHeader` 的上 24 / 下 10 承担，与其它区块同一套节奏。
         SectionHeader(title: '外部链接', keyValue: '$keyPrefix-section'),
         Wrap(
           spacing: AppSpace.sm,

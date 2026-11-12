@@ -2894,23 +2894,19 @@ class _DetailPageState extends State<DetailPage> {
                         ),
                       // 信息表已退场（2026-10-22 用户反馈）：`备注` 去掉，
                       // `语言` 已进 hero 标签行，两行都不剩，空表不再渲染。
+                      //
+                      // 季度区**整行退场**（2026-11-12 用户反馈）：它与上面状态条
+                      // 右侧的「切换季度」本来就是同一个对话框的两个入口，却多占
+                      // 一整行，还要一条分隔线。现在「第几季」直接写进状态条，
+                      // 切季仍走那个按钮——行没了，能力没丢。
+                      //
+                      // 原来那条 `Divider(height: AppSpace.xxl)` 同时退场：
+                      // 它在深色底上是一条亮线，把季度/线路切成两段。
                       // 间距按 DESIGN.md 标度：区块之间统一 `AppSpace.xl`。
-                      const SizedBox(height: AppSpace.xl),
-                      // 季度选择器（`04` §4.1）：仅 tv 且已匹配时渲染。
-                      // 导航源例外：卡片是全季一次性摊平的，切季没有意义
-                      // （用户决策 6「不显示季度切换器」）。
-                      if (owned && !_navSourceMode)
-                        TmdbSeasonSelector(
-                          state: tmdb,
-                          onChanged: (season) {
-                            tmdb.selectSeason(season);
-                            unawaited(
-                              tmdb.loadEpisodes(generation: tmdb.generation),
-                            );
-                          },
-                          onSelectManual: _openSeasonDialog,
-                        ),
-                      const Divider(height: AppSpace.xxl),
+                      // 例外：状态条只有 40 高、文字在其中居中，视觉上自带约 10px
+                      // 下留白；这里只补 16，让「状态条 → 线路」看上去与其它区块
+                      // 一样是 ~32（用户 2026-11-12 反馈这一处偏大）。
+                      SizedBox(height: owned ? AppSpace.lg : AppSpace.xl),
                       // 导航源模式**整段跳过**线路条、「没有可播放的剧集」提示与
                       // 清空外部线路按钮（用户决策 4：导航站进来不显示线路，
                       // 实际也没有播放线路），改渲染 TMDB 全集卡片。
@@ -2966,7 +2962,12 @@ class _DetailPageState extends State<DetailPage> {
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Padding(
-                              padding: const EdgeInsets.only(top: AppSpace.xs),
+                              // 下 10 与区块头的下内边距同口径：这条按钮
+                              // 插在「线路」与「选集」之间，不能让选集贴着它。
+                              padding: const EdgeInsets.only(
+                                top: AppSpace.xs,
+                                bottom: 10,
+                              ),
                               child: TextButton(
                                 key: const ValueKey('detail-clear-external'),
                                 onPressed: _clearExternalLines,
@@ -2989,15 +2990,14 @@ class _DetailPageState extends State<DetailPage> {
                       // 「去别的站继续查」的出口，不属于任何内容区块，放在推荐行
                       // 之后才不会打断阅读。
                       if (owned && tmdb.detail != null)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                          child: DetailRatingsSection(
-                            request: ratingRequest,
-                            ratings: ratings,
-                            onOpen: state.openExternalUrl,
-                            onCopy: copyToClipboard,
-                            keyPrefix: 'detail-ratings',
-                          ),
+                        // 不再套第二层 16/24 内边距：外层已经是左右 16、底 24，
+                        // 再套一次会让「外部链接」比上面所有区块右缩 16px。
+                        DetailRatingsSection(
+                          request: ratingRequest,
+                          ratings: ratings,
+                          onOpen: state.openExternalUrl,
+                          onCopy: copyToClipboard,
+                          keyPrefix: 'detail-ratings',
                         ),
                     ],
                   ),
@@ -3024,8 +3024,8 @@ class _DetailPageState extends State<DetailPage> {
     final data = tmdb.detailData;
     if (data == null) return const [];
     return [
-      // 边界统一：发丝线不占高度，间隔全部由 `SectionHeader` 的 24px 承担。
-      const Divider(height: 1),
+      // 不发丝线（2026-11-12 用户反馈）：那条线让「选集」与「剧照」之间像被
+      // 撕开了一道。区块间隔全部由 `SectionHeader` 的上 24 承担。
       TmdbDetailSections(
         data: data,
         // 新的底部推荐行接管"猜你喜欢 / 个性推荐"，旧的"相关推荐"海报墙
