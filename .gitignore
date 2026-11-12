@@ -38,6 +38,9 @@ sidecars/spider-host-jvm/.build/
 # Locally provisioned Phase 0 toolchains
 .local/
 
+# 本地 Flutter SDK（验证用，不入库）
+.tools/
+
 # 开发态内置 Node 运行时（lib/services/node_runtime.dart 向上 10 跳查找的落点）
 # 打包脚本把 node.exe 下载到 .local/nodejs/（上面已忽略），再复制到仓库根的
 # runtime/node/ 以复现发行包布局；那是几十 MB 的二进制，不入库。

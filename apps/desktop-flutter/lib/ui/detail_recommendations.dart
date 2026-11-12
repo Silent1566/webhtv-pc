@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
+import '../core/recommendation_meta.dart';
 import '../core/tmdb_identity.dart';
 import '../state/detail_recommendation_state.dart';
 import 'app.dart' show PosterImage;
@@ -197,12 +198,12 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                       Text(
-                                        entry.source ==
-                                                    RecommendationSource
-                                                        .douban &&
-                                                entry.doubanRating > 0
-                                            ? '豆瓣 ${entry.doubanRating.toStringAsFixed(1)}'
-                                            : item.subtitle,
+                                        // 三条推荐行统一「年份 · 评分」；来源由区块
+                                        // 标题承担（见 core/recommendation_meta.dart）。
+                                        recommendationMeta(
+                                          item.subtitle,
+                                          doubanRating: entry.doubanRating,
+                                        ),
                                         style: Theme.of(context)
                                             .textTheme
                                             .labelSmall,

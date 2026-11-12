@@ -168,8 +168,17 @@ void main() {
       find.byKey(const ValueKey('recommendation-info-source')),
       findsOneWidget,
     );
-    expect(find.text('2021'), findsOneWidget);
-    expect(find.text('剧集'), findsOneWidget);
+    // 卡片副信息现在统一成「年份 · 评分」，无评分时就是裸的 `2021`——
+    // 与弹窗里的年份胶囊撞文案，所以这里必须限定在弹窗内。
+    final dialog = find.byKey(const ValueKey('recommendation-info-dialog'));
+    expect(
+      find.descendant(of: dialog, matching: find.text('2021')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text('剧集')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('recommendation-info-poster')),
       findsOneWidget,

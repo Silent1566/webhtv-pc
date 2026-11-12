@@ -366,7 +366,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.textContaining('根据观看历史'), findsOneWidget);
-      expect(find.textContaining('8.7'), findsNWidgets(2));
+      // 副信息统一成「年份 · 评分」后，两行的分数文案不再带来源前缀，
+      // 只能按行容器定位（两边都含 8.7）。
+      for (final row in ['tmdb', 'douban']) {
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey('recommendation-row-$row')),
+            matching: find.textContaining('8.7'),
+          ),
+          findsOneWidget,
+        );
+      }
       await tester.tap(find.text('不感兴趣'));
       await tester.pumpAndSettle();
       expect(find.text('猜你喜欢'), findsNothing);
@@ -1138,11 +1148,14 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      final score = tester.getRect(find.text('豆瓣 8.4'));
-      final row = tester.getRect(
-        find.byKey(const ValueKey('recommendation-row-douban')),
+      final row = find.byKey(const ValueKey('recommendation-row-douban'));
+      final scoreFinder = find.descendant(
+        of: row,
+        matching: find.textContaining('8.4'),
       );
-      expect(score.bottom, lessThanOrEqualTo(row.bottom));
+      final score = tester.getRect(scoreFinder);
+      final rowRect = tester.getRect(row);
+      expect(score.bottom, lessThanOrEqualTo(rowRect.bottom));
     });
   }
 

@@ -38,6 +38,7 @@ import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
 import 'app.dart' show PosterImage;
 import 'common.dart';
+import 'layout_scale.dart';
 import 'tmdb_episode_detail.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
@@ -489,7 +490,8 @@ class TmdbDetailSections extends StatelessWidget {
             title: data.title,
             keyPrefix: 'tmdb-poster',
             // 海报是 2:3 竖图：用窄框装竖图，避免横框里两侧露灰底。
-            itemWidth: 110,
+            // 110 → 132：与海报网格、选集卡同一档密度，避免同屏三种尺寸。
+            itemWidth: 132,
             aspectRatio: 2 / 3,
           ),
         ],
@@ -839,7 +841,7 @@ class TmdbEpisodeSection extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.lineName,
-    this.cardWidth = 260,
+    this.cardWidth,
     this.reversed = false,
     this.gridMode = false,
     this.onToggleReversed,
@@ -857,7 +859,7 @@ class TmdbEpisodeSection extends StatelessWidget {
   final void Function(int index, TmdbEpisodeCard card)? onTap;
   final void Function(int index, TmdbEpisodeCard card)? onLongPress;
   final String? lineName;
-  final double cardWidth;
+  final double? cardWidth;
   final bool reversed;
   final bool gridMode;
   final VoidCallback? onToggleReversed;
@@ -907,7 +909,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.actionLabel = '播放',
     this.onTap,
     this.onLongPress,
-    this.cardWidth = 260,
+    this.cardWidth,
     this.height,
     this.gridMode = false,
     this.recentIndex = -1,
@@ -938,11 +940,11 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 因此区间切片后仍能正确标中（`docs/phase6/design/02` §6）。
   final int recentIndex;
 
-  /// 单卡宽度。
+  /// 单卡宽度；`null` 时沿用 260 的大卡默认（按密度档只放大、不缩小）。
   ///
   /// 站点详情页会按「一屏能放下几列」动态计算（`04` §4.4 的列数策略）：
   /// 集数多的线路把卡做窄一些，使一行能看到更多集，减少横向滚动。
-  final double cardWidth;
+  final double? cardWidth;
 
   /// 卡片高度；为 `null` 时按**真实内容**算（见 [_episodeCardHeight]）。
   ///
@@ -1089,42 +1091,63 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     BuildContext context,
     List<(int, TmdbEpisodeCard)> entries,
   ) {
+    // 目标宽：调用方给了就用调用方的（站点详情页按集数定列）。
+    // 没给就是纯 TMDB 页：没有「集数策略」，沿用 260 的大卡默认——但只放大、
+    // 不缩小，全屏时跟着密度档一起长。
+    final target = widget.cardWidth ?? LayoutScale.upscale(context, 260);
     if (widget.gridMode) {
-      return GridView.builder(
-        key: ValueKey('${widget.keyPrefix}-grid'),
-        // **必须显式清零**：垂直、无 controller 的 GridView 是「primary」滚动视图，
-        // 会把 `MediaQuery.padding` 当成自己的内边距。详情页在 AppBar 下，
-        // top padding 是 56——于是区间条与第一行卡片之间凭空多出 56px
-        // （用户 2026-11-12 反馈「分组按钮和卡片间隔太大」，量出来正是 60 = 56 + 4）。
-        padding: EdgeInsets.zero,
-        primary: false,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: widget.cardWidth + 12,
-          mainAxisExtent: widget.height ?? _episodeCardHeight(context),
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-        ),
-        itemCount: entries.length,
-        itemBuilder: (context, index) =>
-            _tile(originalIndex: entries[index].$1, card: entries[index].$2),
+      final spacing = LayoutScale.gutter(context);
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = _gridColumns(constraints.maxWidth, target, spacing);
+          final cardWidth = _gridCardWidth(
+            constraints.maxWidth,
+            target,
+            spacing,
+          );
+          final cardHeight = _episodeCardHeight(context, cardWidth);
+          return GridView.builder(
+            key: ValueKey('${widget.keyPrefix}-grid'),
+            // **必须显式清零**：垂直、无 controller 的 GridView 是「primary」滚动视图，
+            // 会把 `MediaQuery.padding` 当成自己的内边距。详情页在 AppBar 下，
+            // top padding 是 56——于是区间条与第一行卡片之间凭空多出 56px
+            // （用户 2026-11-12 反馈「分组按钮和卡片间隔太大」，量出来正是 60 = 56 + 4）。
+            padding: EdgeInsets.zero,
+            primary: false,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              mainAxisExtent: widget.height ?? cardHeight,
+              crossAxisSpacing: spacing,
+              mainAxisSpacing: spacing,
+            ),
+            itemCount: entries.length,
+            itemBuilder: (context, index) => _tile(
+              originalIndex: entries[index].$1,
+              card: entries[index].$2,
+              width: cardWidth,
+            ),
+          );
+        },
       );
     }
     return SizedBox(
-      height: widget.height ?? _episodeCardHeight(context),
+      height: widget.height ?? _episodeCardHeight(context, target),
       // 集数多到溢出时用鼠标左右拖（用户反馈 2026-10-20）。
       child: HorizontalMouseDrag(
         child: ListView.separated(
           key: ValueKey('${widget.keyPrefix}-strip'),
           scrollDirection: Axis.horizontal,
           itemCount: entries.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          separatorBuilder: (_, _) =>
+              SizedBox(width: LayoutScale.gutter(context)),
           itemBuilder: (context, index) => SizedBox(
-            width: widget.cardWidth,
+            width: target,
             child: _tile(
               originalIndex: entries[index].$1,
               card: entries[index].$2,
+              width: target,
             ),
           ),
         ),
@@ -1133,11 +1156,15 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
   }
 
   /// 单张卡片。[originalIndex] 是 `cards` 里的下标（不是区间内下标）。
-  Widget _tile({required int originalIndex, required TmdbEpisodeCard card}) =>
-      TmdbEpisodeCardTile(
+  Widget _tile({
+    required int originalIndex,
+    required TmdbEpisodeCard card,
+    required double width,
+  }) => TmdbEpisodeCardTile(
         buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
         stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
         card: card,
+        width: width,
         posterUrl: widget.posterUrl,
         actionLabel: widget.actionLabel,
         isRecent: originalIndex == widget.recentIndex,
@@ -1394,12 +1421,15 @@ class _HeaderContent extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 720;
+        // 头图海报跟着密度档放大（只放大不缩小）：全屏下这块固定 150 的小海报
+        // 是全页最扎眼的「没跟上分辨率」的地方。
+        final posterWidth = LayoutScale.upscale(context, 150);
         final poster = ClipRRect(
           borderRadius: BorderRadius.circular(10),
           child: SizedBox(
             key: const ValueKey('tmdb-detail-poster'),
-            width: 150,
-            height: 225,
+            width: posterWidth,
+            height: posterWidth * 1.5,
             child: PosterImage(url: data.posterUrl),
           ),
         );
@@ -1815,6 +1845,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     this.stillKey,
     this.recentKey,
     required this.card,
+    required this.width,
     this.actionLabel = '播放',
     this.onTap,
     this.onLongPress,
@@ -1853,6 +1884,13 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   final bool isRecent;
 
   final TmdbEpisodeCard card;
+
+  /// 卡片宽度：剧照高度按 16:9 由它推出。
+  ///
+  /// 以前剧照写死 110 高：卡宽 150 时刚好是 16:9，卡宽 300 时成了 2.7:1，
+  /// 「把卡放大」实际是「把剧照裁得更狠」。宽度必须一路传到这张卡里。
+  final double width;
+
   final String actionLabel;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
@@ -1893,7 +1931,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
           children: [
             // 剧照（16:9）优先，缺失/失败回退本剧海报；都不可用时占位，不丢集。
             SizedBox(
-              height: 110,
+              height: width * 9 / 16,
               child: ClipRRect(
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(7),
@@ -2045,20 +2083,41 @@ double _lineHeight(BuildContext context, TextStyle? style) {
   return height;
 }
 
-/// 剧集卡片的自然高度：剧照 110 + 上下 6 的内边距 + 标题/摘要两行。
-double _episodeCardHeight(BuildContext context) {
+/// 剧集卡片的自然高度：剧照 16:9（高由卡宽推出）+ 上下 6 + 标题/摘要两行。
+///
+/// 剧照高度**必须**跟卡宽走：写死 110 时，150 宽的卡正好是 16:9，
+/// 300 宽的卡就成了 2.7:1——「放大卡片」会变成「把剧照裁得更狠」。
+double _episodeCardHeight(BuildContext context, double cardWidth) {
   final text = Theme.of(context).textTheme;
-  return 110 +
+  return cardWidth * 9 / 16 +
       6 +
       _lineHeight(context, text.bodyMedium) +
       _lineHeight(context, text.bodySmall) +
       6;
 }
 
-/// 人物卡的自然高度：头像 116 + 4 + 姓名/职务两行。
-double _peopleCardHeight(BuildContext context) {
+/// 网格列数：由可用宽度与目标卡宽反推，列宽不低于目标的 92%。
+int _gridColumns(double usable, double target, double spacing) {
+  final ideal = (usable / (target + spacing)).round();
+  final maxColumns = ((usable + spacing) / (target * 0.92 + spacing)).floor();
+  final capped = ideal > maxColumns ? maxColumns : ideal;
+  return capped < 1 ? 1 : capped;
+}
+
+/// 网格里的实际卡宽（列数定下来后由宽度平均）。
+double _gridCardWidth(double usable, double target, double spacing) {
+  final columns = _gridColumns(usable, target, spacing);
+  return (usable - (columns - 1) * spacing) / columns;
+}
+
+/// 人物卡的自然高度：头像 2:3（高由卡宽推出）+ 4 + 姓名/职务两行。
+///
+/// 头像框必须与 TMDB 的 2:3 profile 同比：原来是 104×116 的近方块，
+/// `cover` 会把 2:3 的竖图上下各裁一截，人脸正好被切掉（用户 2026-11-12
+/// 反馈「大部分人物头像都被截取显示不全」）。
+double _peopleCardHeight(BuildContext context, double cardWidth) {
   final text = Theme.of(context).textTheme;
-  return 116 +
+  return cardWidth * 3 / 2 +
       4 +
       _lineHeight(context, text.bodySmall) +
       _lineHeight(context, text.labelSmall);
@@ -2099,8 +2158,10 @@ class _PhotoWall extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 框高必须用**缩放后**的宽反推：只缩宽不缩高会把 16:9 / 2:3 的框拉横。
+    final width = LayoutScale.upscale(context, itemWidth);
     return SizedBox(
-      height: itemWidth / aspectRatio,
+      height: width / aspectRatio,
       // 剧照/海报同样用鼠标左右拖（用户反馈 2026-10-20）。
       child: HorizontalMouseDrag(
         child: ListView.separated(
@@ -2119,7 +2180,7 @@ class _PhotoWall extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: SizedBox(
-                width: itemWidth,
+                width: width,
                 child: PosterImage(url: urls[index], fit: BoxFit.cover),
               ),
             ),
@@ -2384,21 +2445,24 @@ class _PeopleWall extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 卡宽跟着密度档走：默认窗口 132，1440p 全屏 ≈ 178。
+    final cardWidth = LayoutScale.upscale(context, 132);
     return SizedBox(
       // 高度按**真实内容**算，不用写死的 178：多出来的那 26px 会变成
       // 「演职人员 → 制作团队」之间的一道宽缝（与剧集条同一类问题）。
-      height: _peopleCardHeight(context),
+      height: _peopleCardHeight(context, cardWidth),
       // 人多到溢出时用鼠标左右拖。
       child: HorizontalMouseDrag(
         child: ListView.separated(
           key: ValueKey(keyValue),
           scrollDirection: Axis.horizontal,
           itemCount: people.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          separatorBuilder: (_, _) =>
+              SizedBox(width: LayoutScale.gutter(context)),
           itemBuilder: (context, index) {
             final person = people[index];
             return SizedBox(
-              width: 104,
+              width: cardWidth,
               child: InkWell(
                 key: ValueKey('$keyPrefix-${person.personId}'),
                 onTap: onTap == null ? null : () => onTap!.call(person),
@@ -2409,9 +2473,12 @@ class _PeopleWall extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: SizedBox(
-                        height: 116,
+                        // 2:3 与 TMDB profile 同比 → cover 不再切人脸。
+                        height: cardWidth * 3 / 2,
                         child: PosterImage(
                           url: person.profileUrl,
+                          // 素材万一比 2:3 更高，也优先保住上半张脸。
+                          alignment: Alignment.topCenter,
                           // 缺图/坏图：演职人员与制作团队共用同一套姓名字标。
                           placeholder: PersonMonogram(name: person.name),
                         ),
@@ -2454,20 +2521,28 @@ class _RecommendationWall extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 130×180 是初版尺寸（比例 0.72，2:3 的海报还要被上下裁一点）。
+    // 现在改成 2:3 且跟密度档放大：默认窗口 168×252，1440p ≈ 227×340。
+    final cardWidth = LayoutScale.upscale(context, 168);
+    final posterHeight = cardWidth * 3 / 2;
     return SizedBox(
-      height: 218,
+      height: posterHeight +
+          4 +
+          _lineHeight(context, theme.textTheme.bodySmall) +
+          _lineHeight(context, theme.textTheme.labelSmall),
       // 推荐位多到溢出时用鼠标左右拖。
       child: HorizontalMouseDrag(
         child: ListView.separated(
           key: const ValueKey('tmdb-recommendation-wall'),
           scrollDirection: Axis.horizontal,
           itemCount: items.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          separatorBuilder: (_, _) =>
+              SizedBox(width: LayoutScale.gutter(context)),
           itemBuilder: (context, index) {
             final item = items[index];
             final key = item.identity?.key ?? 'item-$index';
             return SizedBox(
-              width: 130,
+              width: cardWidth,
               child: InkWell(
                 key: ValueKey('tmdb-recommendation-$key'),
                 onTap: onTap == null ? null : () => onTap!.call(item),
@@ -2478,7 +2553,8 @@ class _RecommendationWall extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: SizedBox(
-                        height: 180,
+                        // 2:3 与海报素材同比，不再纵向裁切。
+                        height: posterHeight,
                         child: PosterImage(url: item.posterUrl),
                       ),
                     ),

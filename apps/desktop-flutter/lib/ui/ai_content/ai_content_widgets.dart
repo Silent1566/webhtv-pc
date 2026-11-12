@@ -32,10 +32,11 @@ class AiRecommendationCardTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final semantic = theme.extension<AppSemanticColors>();
+    // 与详情页推荐行同一口径：只留「年份 · 分数」，类型与「评分」二字省掉。
     final meta = [
       if (card.year != null) '${card.year}',
-      card.mediaType.label,
-      if (card.rating != null) '评分 ${card.rating!.toStringAsFixed(1)}',
+      if (card.rating != null && card.rating! > 0)
+        card.rating!.toStringAsFixed(1),
     ].join(' · ');
     return Card(
       margin: const EdgeInsets.only(bottom: AppSpace.sm),
