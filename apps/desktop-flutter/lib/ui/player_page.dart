@@ -65,6 +65,7 @@ import 'player_osd.dart';
 import 'player_overlay.dart';
 import 'player_quality_panel.dart';
 import 'theme.dart';
+import 'window_mode.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
@@ -222,6 +223,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool _karaokeVisible = false;
   int _qualitySelectionRevision = 0;
   bool _fullscreen = false;
+
+  /// 本页是否亲手把窗口切进了全屏。
+  ///
+  /// 只有它为 true 时 dispose() 才恢复窗口——启动参数
+  /// --fullscreen=true 是应用级全屏，播放器并不拥有它。
+  bool _enteredFullscreen = false;
+
+  /// 返回被 PopScope 拦下后，恢复窗口期间忽略重复的返回请求。
+  bool _popAfterRestore = false;
   bool _controlsVisible = true;
   Timer? _saveTimer;
   Timer? _controlHideTimer;
@@ -2588,6 +2598,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    // 路由 pop / 页面被替换时，窗口级全屏必须成对收尾；
+    // 正常的返回路径已由 PopScope 处理，这里是最后兜底（幂等）。
+    unawaited(_restoreWindowedModeIfOwned());
     widget.liveSession?.removeListener(_onPlaybackSessionChanged);
     _playerFocus.dispose();
     _saveTimer?.cancel();
@@ -2614,6 +2627,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!mounted) return;
     setState(() {
       _fullscreen = true;
+      _enteredFullscreen = true;
       _controlsVisible = true;
     });
     _touchControls();
@@ -2624,35 +2638,32 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!mounted) return;
     setState(() {
       _fullscreen = false;
+      _enteredFullscreen = false;
       _controlsVisible = true;
     });
     _controlHideTimer?.cancel();
+    // 插件只通知「离开全屏」，不会把 hidden 的标题栏改回来；
+    // 若这次离开不是我们自己的 setFullScreen(false) 触发的，
+    // 标题栏会永远消失（与「关不掉窗口」是同一类问题）。
+    unawaited(restoreWindowTitleBar());
   }
 
   Future<void> _toggleFullscreen() async {
     final next = !await windowManager.isFullScreen();
     try {
       if (next) {
-        // window_manager 在 Windows 上的全屏是「去边框 + 把窗口 SetWindowPos 到
-        // 显示器 rcMonitor 铺满」，而这段铺满逻辑只在插件内部 is_frameless_ 为
-        // false 时才执行（window_manager.cpp:593）。所以这里**不能**调
-        // setAsFrameless：它会把 is_frameless_ 置 true，铺满分支整体被跳过，
-        // 窗口停在原尺寸只是变成无边框小窗。标题栏设为 hidden 已足以让
-        // WM_NCCALCSIZE 在全屏时去掉边框。
-        await windowManager.setTitleBarStyle(
-          TitleBarStyle.hidden,
-          windowButtonVisibility: false,
-        );
-        await windowManager.setFullScreen(true);
-        await windowManager.focus();
+        // 顺序与异常恢复统一交给 window_mode.dart：Windows 上必须先
+        // 把标题栏切到 hidden，铺满分支才会执行。
+        await enterPlayerFullscreen();
       } else {
-        await windowManager.setFullScreen(false);
-        await windowManager.setTitleBarStyle(
-          TitleBarStyle.normal,
-          windowButtonVisibility: true,
-        );
+        await restoreWindowedMode();
       }
+      _enteredFullscreen = next;
     } catch (error) {
+      // 进入失败时标题栏可能已经被隐藏，必须恢复，否则窗口会变成
+      // 没有标题栏按钮的小窗——用户同样关不掉。
+      await restoreWindowedMode();
+      _enteredFullscreen = false;
       widget.state.log.warning('切换全屏失败：$error', scope: 'player');
       if (mounted) {
         showToast('全屏切换失败，请再试一次', kind: ToastKind.error);
@@ -2666,6 +2677,44 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controlsVisible = true;
     });
     _touchControls();
+  }
+
+  /// 全屏状态下拦截返回：先恢复窗口，再真正 pop。
+  ///
+  /// 不能只靠 dispose()：dispose 时路由已经出栈，用户会先看到一帧
+  /// 「全屏的列表页」；而且 pop 之后页面没了，没有任何 UI 能提示失败。
+  Future<void> _onPopInvokedWithResult(bool didPop, Object? result) async {
+    if (didPop || _popAfterRestore) return;
+    _popAfterRestore = true;
+    await restoreWindowedMode();
+    _enteredFullscreen = false;
+    if (!mounted) return;
+    setState(() {
+      _fullscreen = false;
+      _controlsVisible = true;
+    });
+    // canPop 要等这一帧重建后才生效；postFrame 里再 pop，避免再次被
+    // 自己的 PopScope 拦下（那会形成「恢复 → 拦截」的循环）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route == null || !route.isCurrent) {
+        _popAfterRestore = false;
+        return;
+      }
+      Navigator.of(context).pop(result);
+    });
+  }
+
+  /// dispose() 兜底：只恢复**本页进入过**的全屏。
+  ///
+  /// 不能无条件 setFullScreen(false)：--fullscreen=true 是应用级启动参数
+  /// （app.dart），播放器并没有拥有那次全屏。
+  Future<void> _restoreWindowedModeIfOwned() async {
+    if (!_enteredFullscreen) return;
+    _enteredFullscreen = false;
+    _fullscreen = false;
+    await restoreWindowedMode();
   }
 
   Future<void> _exitFullscreen() async {
@@ -3154,305 +3203,309 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           _hasLivePanels ? _closeLivePanels : _closeContextMenu;
     }
 
-    return CallbackShortcuts(
-      bindings: shortcuts,
-      child: Focus(
-        focusNode: _playerFocus,
-        autofocus: true,
-        child: Scaffold(
-          backgroundColor: Colors.black,
-          // 顶栏改由浮层承载（`design/01` §4.2）：全屏时不再置 null，
-          // 于是进出全屏不再有 56px 跳变。
-          appBar: null,
-          body: Theme(
-            data: buildAppTheme(Brightness.dark),
-            child: Stack(
-              children: [
-                // 第 1 层：画面 + 弹幕 + 加载/错误。
-                Positioned.fill(
-                  // 指针在画面上移动即唤醒（`design/01` §4.5）。
-                  // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
-                  // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
-                  child: MouseRegion(
-                    onHover: (_) {
-                      if (!_controlsVisible) _touchControls();
-                    },
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _toggleControlsByGesture,
-                      onDoubleTap: _handleDoubleTapGesture,
-                      onLongPressStart: (_) => _beginGestureSpeed(),
-                      onLongPressEnd: (_) => _endGestureSpeed(),
-                      onLongPressCancel: _endGestureSpeed,
-                      // 右键：打开菜单（`design/04` §5.1）。
-                      // 两个回调都指向同一方法，方法内部幂等。
-                      onSecondaryTapDown: (details) =>
-                          _openContextMenu(details.globalPosition),
-                      onSecondaryTap: () {},
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: Video(
-                              controller: _controller.videoController,
-                              fit: _videoFitMode.fit,
-                              aspectRatio: _videoFitMode.aspectRatio,
-                              controls: NoVideoControls,
-                              subtitleViewConfiguration:
-                                  _subtitleStyle.configuration,
+    return PopScope<Object?>(
+      canPop: !_fullscreen,
+      onPopInvokedWithResult: _onPopInvokedWithResult,
+      child: CallbackShortcuts(
+        bindings: shortcuts,
+        child: Focus(
+          focusNode: _playerFocus,
+          autofocus: true,
+          child: Scaffold(
+            backgroundColor: Colors.black,
+            // 顶栏改由浮层承载（`design/01` §4.2）：全屏时不再置 null，
+            // 于是进出全屏不再有 56px 跳变。
+            appBar: null,
+            body: Theme(
+              data: buildAppTheme(Brightness.dark),
+              child: Stack(
+                children: [
+                  // 第 1 层：画面 + 弹幕 + 加载/错误。
+                  Positioned.fill(
+                    // 指针在画面上移动即唤醒（`design/01` §4.5）。
+                    // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
+                    // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
+                    child: MouseRegion(
+                      onHover: (_) {
+                        if (!_controlsVisible) _touchControls();
+                      },
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggleControlsByGesture,
+                        onDoubleTap: _handleDoubleTapGesture,
+                        onLongPressStart: (_) => _beginGestureSpeed(),
+                        onLongPressEnd: (_) => _endGestureSpeed(),
+                        onLongPressCancel: _endGestureSpeed,
+                        // 右键：打开菜单（`design/04` §5.1）。
+                        // 两个回调都指向同一方法，方法内部幂等。
+                        onSecondaryTapDown: (details) =>
+                            _openContextMenu(details.globalPosition),
+                        onSecondaryTap: () {},
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: Video(
+                                controller: _controller.videoController,
+                                fit: _videoFitMode.fit,
+                                aspectRatio: _videoFitMode.aspectRatio,
+                                controls: NoVideoControls,
+                                subtitleViewConfiguration:
+                                    _subtitleStyle.configuration,
+                              ),
                             ),
-                          ),
-                          // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
-                          // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
-                          Positioned.fill(
-                            child: DanmakuOverlay(
-                              items: _danmakuItems,
-                              position: _controller.position,
-                              style: _danmakuStyle,
-                              liveItems: _liveItems,
-                              liveNowMs: _liveNowMs,
+                            // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
+                            // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
+                            Positioned.fill(
+                              child: DanmakuOverlay(
+                                items: _danmakuItems,
+                                position: _controller.position,
+                                style: _danmakuStyle,
+                                liveItems: _liveItems,
+                                liveNowMs: _liveNowMs,
+                              ),
                             ),
-                          ),
-                          if (_audioAi != null)
-                            Positioned(
-                              left: 32,
-                              right: 32,
-                              bottom: 100,
-                              child: RealtimeSubtitleOverlay(
-                                controller: _audioAi!.realtime,
-                                clock: _audioAi!.clock,
-                                onSearchText: (text) => Navigator.push(
-                                  context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => SearchPage(
-                                      state: widget.state,
-                                      initialKeyword: text,
+                            if (_audioAi != null)
+                              Positioned(
+                                left: 32,
+                                right: 32,
+                                bottom: 100,
+                                child: RealtimeSubtitleOverlay(
+                                  controller: _audioAi!.realtime,
+                                  clock: _audioAi!.clock,
+                                  onSearchText: (text) => Navigator.push(
+                                    context,
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => SearchPage(
+                                        state: widget.state,
+                                        initialKeyword: text,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          if (_karaokeVisible && _karaokeTrack != null)
-                            Positioned(
-                              left: 32,
-                              right: 32,
-                              bottom: 180,
-                              child: _karaokeOverlay(),
-                            ),
-                          if (_audioAi != null)
-                            Positioned(
-                              top: 16,
-                              right: 16,
-                              width: 480,
-                              child: Offstage(
-                                offstage: !_audioPanelVisible,
-                                child: Material(
-                                  elevation: 8,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .surfaceContainer,
-                                  child: SizedBox(
-                                    height: 580,
-                                    child: Column(
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Expanded(
-                                              child: Padding(
-                                                padding: EdgeInsets.all(8),
-                                                child: Text('音频AI控制'),
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip: '收起音频AI面板',
-                                              onPressed: () => setState(
-                                                () =>
-                                                    _audioPanelVisible = false,
-                                              ),
-                                              icon: const Icon(Icons.close),
-                                            ),
-                                          ],
-                                        ),
-                                        Expanded(
-                                          child: PlayerAudioAiPanel(
-                                            key: ValueKey(
-                                              '${identityHashCode(_audioAi)}-$audioInputGeneration',
-                                            ),
-                                            state: widget.state,
-                                            session: _audioAi!,
-                                            mediaUri: Uri.parse(_request.url),
-                                            headers: _request.headers,
-                                            title: _request.vodName,
-                                            language: _audioLanguage,
-                                            karaokeMedia: _karaokeMedia,
-                                            currentSrt: _currentSrtForAi,
-                                            onSettingsChanged:
-                                                _configureAudioAi,
-                                            onPickSrt: _pickSrtForAi,
-                                            onTranslated: (result) =>
-                                                _applyAiTranslation(
-                                                  result,
-                                                  inputGeneration:
-                                                      audioInputGeneration,
+                            if (_karaokeVisible && _karaokeTrack != null)
+                              Positioned(
+                                left: 32,
+                                right: 32,
+                                bottom: 180,
+                                child: _karaokeOverlay(),
+                              ),
+                            if (_audioAi != null)
+                              Positioned(
+                                top: 16,
+                                right: 16,
+                                width: 480,
+                                child: Offstage(
+                                  offstage: !_audioPanelVisible,
+                                  child: Material(
+                                    elevation: 8,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainer,
+                                    child: SizedBox(
+                                      height: 580,
+                                      child: Column(
+                                        children: [
+                                          Row(
+                                            children: [
+                                              const Expanded(
+                                                child: Padding(
+                                                  padding: EdgeInsets.all(8),
+                                                  child: Text('音频AI控制'),
                                                 ),
-                                            onTrack: (track, lines) =>
-                                                _applyKaraokeTrack(
-                                                  track,
-                                                  lines,
-                                                  inputGeneration:
-                                                      audioInputGeneration,
+                                              ),
+                                              IconButton(
+                                                tooltip: '收起音频AI面板',
+                                                onPressed: () => setState(
+                                                  () => _audioPanelVisible =
+                                                      false,
                                                 ),
+                                                icon: const Icon(Icons.close),
+                                              ),
+                                            ],
                                           ),
-                                        ),
-                                      ],
+                                          Expanded(
+                                            child: PlayerAudioAiPanel(
+                                              key: ValueKey(
+                                                '${identityHashCode(_audioAi)}-$audioInputGeneration',
+                                              ),
+                                              state: widget.state,
+                                              session: _audioAi!,
+                                              mediaUri: Uri.parse(_request.url),
+                                              headers: _request.headers,
+                                              title: _request.vodName,
+                                              language: _audioLanguage,
+                                              karaokeMedia: _karaokeMedia,
+                                              currentSrt: _currentSrtForAi,
+                                              onSettingsChanged:
+                                                  _configureAudioAi,
+                                              onPickSrt: _pickSrtForAi,
+                                              onTranslated: (result) =>
+                                                  _applyAiTranslation(
+                                                    result,
+                                                    inputGeneration:
+                                                        audioInputGeneration,
+                                                  ),
+                                              onTrack: (track, lines) =>
+                                                  _applyKaraokeTrack(
+                                                    track,
+                                                    lines,
+                                                    inputGeneration:
+                                                        audioInputGeneration,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          if (_controller.isLoading)
-                            const Positioned.fill(child: LoadingBlock()),
-                          // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
-                          // 浮层之下），且判据互斥——加载阶段已经有上面那个
-                          // 全屏圈，再叠一个就是两个圈（判据见
-                          // [showBufferingIndicator]）。
-                          //
-                          // 放这一层而不是控制浮层里：浮层隐藏时（opacity 0 +
-                          // IgnorePointer）缓冲提示仍必须可见——卡顿时用户
-                          // 恰恰看不到控制栏。
-                          if (showBufferingIndicator(
-                            isBuffering: _controller.isBuffering,
-                            isLoading: _controller.isLoading,
-                          ))
-                            Positioned.fill(
-                              child: PlayerBufferingIndicator(
-                                percent: _controller.bufferingPercent,
-                              ),
-                            ),
-                          if (_loadError != null)
-                            Positioned.fill(
-                              child: Center(
-                                child: _PlayerErrorOverlay(
-                                  message: _loadError!,
-                                  url: _request.url,
-                                  onRetry: _load,
-                                  onResume: _resumeFromLatestProgress,
-                                  onNext: _playNext,
-                                  canGoNext:
-                                      !_isCatchup &&
-                                      (_isLive ||
-                                          (_episodesCache.isNotEmpty
-                                                  ? _episodesCache.length
-                                                  : _episodes.length) >
-                                              _request.episodeIndex + 1),
+                            if (_controller.isLoading)
+                              const Positioned.fill(child: LoadingBlock()),
+                            // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
+                            // 浮层之下），且判据互斥——加载阶段已经有上面那个
+                            // 全屏圈，再叠一个就是两个圈（判据见
+                            // [showBufferingIndicator]）。
+                            //
+                            // 放这一层而不是控制浮层里：浮层隐藏时（opacity 0 +
+                            // IgnorePointer）缓冲提示仍必须可见——卡顿时用户
+                            // 恰恰看不到控制栏。
+                            if (showBufferingIndicator(
+                              isBuffering: _controller.isBuffering,
+                              isLoading: _controller.isLoading,
+                            ))
+                              Positioned.fill(
+                                child: PlayerBufferingIndicator(
+                                  percent: _controller.bufferingPercent,
                                 ),
                               ),
-                            ),
-                        ],
+                            if (_loadError != null)
+                              Positioned.fill(
+                                child: Center(
+                                  child: _PlayerErrorOverlay(
+                                    message: _loadError!,
+                                    url: _request.url,
+                                    onRetry: _load,
+                                    onResume: _resumeFromLatestProgress,
+                                    onNext: _playNext,
+                                    canGoNext:
+                                        !_isCatchup &&
+                                        (_isLive ||
+                                            (_episodesCache.isNotEmpty
+                                                    ? _episodesCache.length
+                                                    : _episodes.length) >
+                                                _request.episodeIndex + 1),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-                // 第 2 层：屏显（`design/02`）。自身已 IgnorePointer。
-                Positioned.fill(
-                  child: PlayerOsdLayer(
-                    flags: widget.state.osdFlags,
-                    controlsVisible: _controlsVisible,
-                    title: _isLive || _isCatchup
-                        ? _request.title
-                        : '${_request.vodName} · ${_request.episodeName}',
-                    resolution: _mediaResolution() == '未知'
-                        ? null
-                        : _mediaResolution(),
-                    position: _controller.position,
-                    duration: _controller.duration,
-                    isLive: _isLive || (_request.directUrl && !_isCatchup),
-                    now: _osdNow,
-                    bytesPerSecond: _controller.bytesPerSecond,
-                    diagnostics: _osdDiagnosticsRows(),
-                    environment: _osdEnvironmentRows(),
-                  ),
-                ),
-                // 第 3 层：控制浮层（`design/01`）。
-                //
-                // 用 AnimatedOpacity 而不是 `if (_controlsVisible)`：
-                // 条件插入会改变子树结构，且 Positioned.fill 的命中测试范围
-                // 会随之跳变。隐藏时必须 IgnorePointer，否则透明按钮仍可点。
-                Positioned.fill(
-                  child: IgnorePointer(
-                    ignoring: !_controlsVisible,
-                    child: AnimatedOpacity(
-                      opacity: _controlsVisible ? 1 : 0,
-                      duration: AppMotion.fast,
-                      curve: AppMotion.ease,
-                      child: PlayerControlOverlay(
-                        topBar: _buildPlayerAppBar(),
-                        progressRow: _buildProgressRow(),
-                        actionButtons: _buildActionButtons(),
-                        actionGroups: _actionGroups(),
-                      ),
-                    ),
-                  ),
-                ),
-                if (widget.liveSession != null)
-                  Positioned(
-                    right: AppSpace.lg,
-                    top: kToolbarHeight + AppSpace.sm,
-                    child: OutlinedButton.icon(
-                      key: const ValueKey('player-live-panel-toggle'),
-                      onPressed: _openLivePanel,
-                      icon: const Icon(Icons.live_tv, size: 18),
-                      label: const Text('直播源 / 频道'),
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerLow,
-                      ),
-                    ),
-                  ),
-                if (_hasLivePanels && widget.liveSession != null) ...[
+                  // 第 2 层：屏显（`design/02`）。自身已 IgnorePointer。
                   Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _closeLivePanels,
+                    child: PlayerOsdLayer(
+                      flags: widget.state.osdFlags,
+                      controlsVisible: _controlsVisible,
+                      title: _isLive || _isCatchup
+                          ? _request.title
+                          : '${_request.vodName} · ${_request.episodeName}',
+                      resolution: _mediaResolution() == '未知'
+                          ? null
+                          : _mediaResolution(),
+                      position: _controller.position,
+                      duration: _controller.duration,
+                      isLive: _isLive || (_request.directUrl && !_isCatchup),
+                      now: _osdNow,
+                      bytesPerSecond: _controller.bytesPerSecond,
+                      diagnostics: _osdDiagnosticsRows(),
+                      environment: _osdEnvironmentRows(),
                     ),
                   ),
-                  // 贴右：面板贴住窗口右缘，左侧始终留出画面可见区域。
-                  // 半透明底由 PlayerLivePanel 自己给（不看这里的宽度）。
-                  Positioned(
-                    top: 0,
-                    bottom: 0,
-                    right: 0,
-                    width: (MediaQuery.sizeOf(context).width * .56).clamp(
-                      560.0,
-                      MediaQuery.sizeOf(context).width < 720
-                          ? MediaQuery.sizeOf(context).width
-                          : 720.0,
-                    ),
-                    child: PlayerLivePanel(
-                      session: widget.liveSession!,
-                      lineChannel: _linePanelChannel,
-                      onDismiss: _closeLivePanels,
-                      onLines: _openLiveLines,
-                    ),
-                  ),
-                ],
-                // 第 4 层：右键菜单（`design/04` §3）。
-                if (_contextMenuAnchor != null) ...[
-                  // 全屏透明遮罩：点击菜单外关闭。
+                  // 第 3 层：控制浮层（`design/01`）。
+                  //
+                  // 用 AnimatedOpacity 而不是 `if (_controlsVisible)`：
+                  // 条件插入会改变子树结构，且 Positioned.fill 的命中测试范围
+                  // 会随之跳变。隐藏时必须 IgnorePointer，否则透明按钮仍可点。
                   Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _closeContextMenu,
+                    child: IgnorePointer(
+                      ignoring: !_controlsVisible,
+                      child: AnimatedOpacity(
+                        opacity: _controlsVisible ? 1 : 0,
+                        duration: AppMotion.fast,
+                        curve: AppMotion.ease,
+                        child: PlayerControlOverlay(
+                          topBar: _buildPlayerAppBar(),
+                          progressRow: _buildProgressRow(),
+                          actionButtons: _buildActionButtons(),
+                          actionGroups: _actionGroups(),
+                        ),
+                      ),
                     ),
                   ),
-                  PlayerContextMenu(
-                    anchor: _contextMenuAnchor!,
-                    viewport: MediaQuery.sizeOf(context),
-                    sections: _contextMenuSections(),
-                    onDismiss: _closeContextMenu,
-                  ),
+                  if (widget.liveSession != null)
+                    Positioned(
+                      right: AppSpace.lg,
+                      top: kToolbarHeight + AppSpace.sm,
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('player-live-panel-toggle'),
+                        onPressed: _openLivePanel,
+                        icon: const Icon(Icons.live_tv, size: 18),
+                        label: const Text('直播源 / 频道'),
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerLow,
+                        ),
+                      ),
+                    ),
+                  if (_hasLivePanels && widget.liveSession != null) ...[
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _closeLivePanels,
+                      ),
+                    ),
+                    // 贴右：面板贴住窗口右缘，左侧始终留出画面可见区域。
+                    // 半透明底由 PlayerLivePanel 自己给（不看这里的宽度）。
+                    Positioned(
+                      top: 0,
+                      bottom: 0,
+                      right: 0,
+                      width: (MediaQuery.sizeOf(context).width * .56).clamp(
+                        560.0,
+                        MediaQuery.sizeOf(context).width < 720
+                            ? MediaQuery.sizeOf(context).width
+                            : 720.0,
+                      ),
+                      child: PlayerLivePanel(
+                        session: widget.liveSession!,
+                        lineChannel: _linePanelChannel,
+                        onDismiss: _closeLivePanels,
+                        onLines: _openLiveLines,
+                      ),
+                    ),
+                  ],
+                  // 第 4 层：右键菜单（`design/04` §3）。
+                  if (_contextMenuAnchor != null) ...[
+                    // 全屏透明遮罩：点击菜单外关闭。
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _closeContextMenu,
+                      ),
+                    ),
+                    PlayerContextMenu(
+                      anchor: _contextMenuAnchor!,
+                      viewport: MediaQuery.sizeOf(context),
+                      sections: _contextMenuSections(),
+                      onDismiss: _closeContextMenu,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

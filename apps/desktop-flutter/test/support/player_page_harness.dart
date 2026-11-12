@@ -52,20 +52,37 @@ const MethodChannel windowManagerChannel = MethodChannel('window_manager');
 /// 「整场没有发生过 `setFullScreen`」。
 final List<MethodCall> windowManagerCalls = <MethodCall>[];
 
+/// 平台侧当前是否全屏。`trackFullscreen` 打开后由 mock 维护，
+/// 让 `PlayerPage` 对 `isFullScreen()` 的回读拿到真实状态。
+bool windowManagerFullscreen = false;
+
 /// 把 `window_manager` 的平台调用 mock 成成功返回，并记录流水。
 ///
 /// 必须在 `pumpWidget` **之前**调用。默认 `isFullScreen` 返回 `false`
 /// （即「当前不是全屏」），于是 `_exitFullscreen()` 会走
 /// `if (await windowManager.isFullScreen())` 的假分支、什么都不做——
 /// 这正是我们要能观测到的差别。
-void installWindowManagerMocks(WidgetTester tester) {
+///
+/// [trackFullscreen] 为 true 时，`setFullScreen` 会更新状态并让
+/// `isFullScreen` 回读它——「退出播放要恢复窗口」的用例需要
+/// 「真的处于全屏」这个前提。
+void installWindowManagerMocks(
+  WidgetTester tester, {
+  bool trackFullscreen = false,
+}) {
   windowManagerCalls.clear();
+  windowManagerFullscreen = false;
   tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
     windowManagerChannel,
     (call) async {
       windowManagerCalls.add(call);
+      if (trackFullscreen && call.method == 'setFullScreen') {
+        windowManagerFullscreen =
+            (call.arguments as Map)['isFullScreen'] as bool;
+        return null;
+      }
       return switch (call.method) {
-        'isFullScreen' => false,
+        'isFullScreen' => trackFullscreen ? windowManagerFullscreen : false,
         'isFocused' => true,
         'isPreventClose' => false,
         _ => null,
@@ -120,6 +137,8 @@ Future<void> pumpPlayerPage(
   Set<String>? hiddenButtons,
   List<String>? buttonOrder,
   Size size = const Size(1280, 720),
+  bool pushRoute = false,
+  bool trackFullscreen = false,
 }) async {
   final temp = Directory.systemTemp.createTempSync('webhtv-phase8-page');
   addTearDown(() {
@@ -165,28 +184,44 @@ Future<void> pumpPlayerPage(
   });
 
   installMediaKitMocks(tester);
-  installWindowManagerMocks(tester);
+  installWindowManagerMocks(tester, trackFullscreen: trackFullscreen);
 
+  final player = PlayerPage(
+    state: state,
+    request: const PlaybackRequest(
+      url: 'http://127.0.0.1:9/never.m3u8',
+      title: '示例剧集',
+      siteKey: 'fixture',
+      vodId: 'demo-1',
+      vodName: '示例剧集',
+      episodeName: 'E3',
+      flag: '线路一',
+    ),
+  );
   await tester.pumpWidget(
     MaterialApp(
       theme: buildAppTheme(Brightness.dark),
-      home: Scaffold(
-        body: PlayerPage(
-          state: state,
-          request: const PlaybackRequest(
-            url: 'http://127.0.0.1:9/never.m3u8',
-            title: '示例剧集',
-            siteKey: 'fixture',
-            vodId: 'demo-1',
-            vodName: '示例剧集',
-            episodeName: 'E3',
-            flag: '线路一',
-          ),
-        ),
-      ),
+      home: pushRoute
+          ? Builder(
+              builder: (context) => Scaffold(
+                body: Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context)
+                        .push(MaterialPageRoute<void>(builder: (_) => player)),
+                    child: const Text('open-player'),
+                  ),
+                ),
+              ),
+            )
+          : Scaffold(body: player),
     ),
   );
   // 让 initState 的 postFrameCallback 跑起来，但不等真实网络。
   // 用显式 pump 而不是 pumpAndSettle（见文件头注释：永不 settle）。
   await settlePlayerPage(tester);
+  // 推一个真实路由，AppBar 才会注入 BackButton（无路由可 pop 时没有返回键）。
+  if (pushRoute) {
+    await tester.tap(find.text('open-player'));
+    await settlePlayerPage(tester);
+  }
 }

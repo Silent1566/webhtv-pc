@@ -47,6 +47,7 @@ import 'theme.dart';
 import 'toast.dart';
 import 'tokens.dart';
 import 'web_home_page.dart';
+import 'window_mode.dart';
 
 /// 把状态层存的主题字符串映射成 `ThemeMode`。
 ///
@@ -341,22 +342,24 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
       // 配置导入后 builder 不会重跑，规则永远是空表，图片依旧 418。
       // 代价可控：`child` 是 MaterialApp 传下来的同一个 Widget 实例，
       // Flutter 对同一实例会跳过子树重建。
-      builder: (context, child) => ListenableBuilder(
-        listenable: _state,
-        builder: (context, _) => ImageHeaderScope(
-          rules: _state.effectiveConfig?.headers ?? const <HeaderRule>[],
-          child: Stack(
-            // 通知宿主是 `builder` 的第二个孩子：它因此位于 **Navigator 之上**，
-            // 任何 push 出来的路由与弹出层都盖不住它——"浮在所有页面与对话框之上"
-            // 只有这一个位置成立。
-            //
-            // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
-            // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
-            fit: StackFit.expand,
-children: [
-              AppMotionScope(child: child ?? const SizedBox.shrink()),
-              const ToastHost(),
-            ],
+      builder: (context, child) => WindowEscapeShortcuts(
+        child: ListenableBuilder(
+          listenable: _state,
+          builder: (context, _) => ImageHeaderScope(
+            rules: _state.effectiveConfig?.headers ?? const <HeaderRule>[],
+            child: Stack(
+              // 通知宿主是 `builder` 的第二个孩子：它因此位于 **Navigator 之上**，
+              // 任何 push 出来的路由与弹出层都盖不住它——"浮在所有页面与对话框之上"
+              // 只有这一个位置成立。
+              //
+              // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
+              // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
+              fit: StackFit.expand,
+              children: [
+                AppMotionScope(child: child ?? const SizedBox.shrink()),
+                const ToastHost(),
+              ],
+            ),
           ),
         ),
       ),
