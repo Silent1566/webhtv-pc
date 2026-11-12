@@ -39,6 +39,7 @@ import 'player_page.dart';
 import 'search_page.dart';
 import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
+import 'layout_scale.dart';
 import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
@@ -89,9 +90,8 @@ class BrowsePage extends StatelessWidget {
 /// 海报网格度量。
 ///
 /// 竖版海报标准比例是 `2:3`，网格按这个比例反推格子高度（见
-/// [_VodGrid._gridDelegate]）。
-const double _posterTargetWidth = 150;
-const double _posterSpacing = 14;
+/// [_VodGrid._gridDelegate]）。目标列宽与列间距不再写死在这里：它们
+/// 跟着 `LayoutScale` 的密度档走（默认窗口 ≈ 185 / 11，1440p 全屏 ≈ 263 / 16）。
 const double _posterGridPadding = 16;
 
 /// 海报卡片文字区（标题 + 备注）的固定高度。
@@ -883,6 +883,7 @@ class _VodGrid extends StatelessWidget {
                               ),
                               sliver: SliverGrid(
                                 gridDelegate: _gridDelegate(
+                                  context,
                                   constraints.maxWidth,
                                 ),
                                 delegate: SliverChildBuilderDelegate(
@@ -961,17 +962,22 @@ class _VodGrid extends StatelessWidget {
   /// 是固定值，窗口变窄时列宽变小、高度不变，海报会被压成非 2:3 或被裁切。
   /// 这里列宽已知，格子高度就能精确算成「海报 2:3 + 文字区」，任何窗口宽度下
   /// 比例都稳定（§17.5 要求窗口缩放布局稳定）。
-  static SliverGridDelegate _gridDelegate(double maxWidth) {
+  static SliverGridDelegate _gridDelegate(
+    BuildContext context,
+    double maxWidth,
+  ) {
+    final target = LayoutScale.cardWidth(context);
+    final spacing = LayoutScale.gutter(context);
+    // 文字区不随密度档缩小：字号没变，缩它会溢出。
+    final caption = LayoutScale.caption(context, _posterCaptionHeight);
     final usable = maxWidth - _posterGridPadding * 2;
-    final columns = (usable / (_posterTargetWidth + _posterSpacing))
-        .round()
-        .clamp(2, 12);
-    final cellWidth = (usable - (columns - 1) * _posterSpacing) / columns;
+    final columns = LayoutScale.columnsFor(usable, target, spacing);
+    final cellWidth = (usable - (columns - 1) * spacing) / columns;
     return SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: columns,
-      crossAxisSpacing: _posterSpacing,
+      crossAxisSpacing: spacing,
       mainAxisSpacing: 8,
-      mainAxisExtent: cellWidth * 1.5 + 8 + _posterCaptionHeight,
+      mainAxisExtent: cellWidth * 1.5 + 8 + caption,
     );
   }
 
@@ -4155,9 +4161,14 @@ class _DetailPageState extends State<DetailPage> {
       <= 20 => 7,
       _ => 9,
     };
-    final available = width - 32 - (targetColumns - 1) * 10;
+    final spacing = LayoutScale.gutter(context);
+    final available = width - 32 - (targetColumns - 1) * spacing;
     final raw = available / targetColumns;
-    return raw.clamp(150.0, 300.0);
+    // 上下限跟着密度标度走：1280 的小窗不再卡在 150（那是「看着小」的直接
+    // 来源），2560 也不再吹到 300——宽度该换成列数，而不是变成巨卡。
+    final floor = LayoutScale.episodeCardWidth(context);
+    // 上界只留 1.15：超宽屏该长列数，不是长成 400px 的巨卡。
+    return raw.clamp(floor, floor * 1.15);
   }
 
   /// 剧集所在季度。

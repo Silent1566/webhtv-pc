@@ -326,13 +326,8 @@ void main() {
             findsOneWidget,
           );
         }
-        expect(
-          find.descendant(
-            of: find.byKey(ValueKey('$prefix-7')),
-            matching: find.byIcon(Icons.person_outline),
-          ),
-          findsOneWidget,
-        );
+        // 真实照片那张卡（第 1 张）此刻在视口内，先断言它的图；
+        // 下面的拖动会把它回收掉。
         final photo = tester.widget<RawImage>(
           find.descendant(
             of: find.byKey(ValueKey('$prefix-1')),
@@ -340,6 +335,26 @@ void main() {
           ),
         );
         expect(photo.image, isNotNull);
+        // 人像卡改成 2:3 并放大后（132×198），第 7 张落在 800×600 测试视口外，
+        // 惰性列表不会构建它——先把它拖进视口再断言。
+        final wallKey = prefix == 'tmdb-person'
+            ? 'tmdb-people-wall'
+            : 'tmdb-crew-wall';
+        if (find.byKey(ValueKey('$prefix-7')).evaluate().isEmpty) {
+          await tester.drag(
+            find.byKey(ValueKey(wallKey)),
+            const Offset(-420, 0),
+          );
+          await tester.pumpAndSettle();
+        }
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey('$prefix-7')),
+            matching: find.byIcon(Icons.person_outline),
+          ),
+          findsOneWidget,
+          reason: '$prefix 第 7 人（无姓名）应显示人物图标',
+        );
       }
       expect(tester.takeException(), isNull);
     },

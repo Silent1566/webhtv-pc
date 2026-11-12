@@ -864,10 +864,16 @@ class TmdbVideoTile extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
+            // 96×54 是初版的缩略图尺寸：比全站任何一张卡片都小一个量级，
+            // 整行 Card 成了详情页里唯一的「列表行」形态。放大到 16:9 的 168×95，
+            // 读起来才和上面的剧照墙是同一套语言。
             SizedBox(
-              width: 96,
-              height: 54,
-              child: PosterImage(url: video.thumbnailUrl),
+              width: 168,
+              height: 168 * 9 / 16,
+              child: ClipRRect(
+                borderRadius: AppRadius.smAll,
+                child: PosterImage(url: video.thumbnailUrl),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -876,8 +882,10 @@ class TmdbVideoTile extends StatelessWidget {
                 children: [
                   Text(
                     video.name,
+                    // w600 在中文字体上没有真 Medium，会走合成加粗（DESIGN.md
+                    // 的 Real-Weight Rule）；标题只用 400 / 700 两档。
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

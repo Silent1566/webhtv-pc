@@ -437,17 +437,22 @@ void main() {
           await tester.pumpAndSettle();
           if (position == 'bottom' && phase == 'after') {
             // 评分行必须仍完整落在横向卡片内。
-            expect(find.textContaining('豆瓣 8.4'), findsWidgets);
-            expect(find.text('加载更多'), findsNothing);
-            for (final finder in [find.textContaining('豆瓣 8.4').first]) {
-              final rect = tester.getRect(finder);
-              expect(rect.top, greaterThanOrEqualTo(0));
-              expect(rect.bottom, lessThanOrEqualTo(784));
-            }
-            final score = tester.getRect(find.textContaining('豆瓣 8.4').first);
-            final row = tester.getRect(
-              find.byKey(const ValueKey('recommendation-row-douban')),
+            // 副信息已统一成「年份 · 评分」，不再带「豆瓣」前缀——
+            // 按行容器定位，避免和 TMDB 行同文案的分数混淆。
+            final doubanRow = find.byKey(
+              const ValueKey('recommendation-row-douban'),
             );
+            final scoreFinder = find.descendant(
+              of: doubanRow,
+              matching: find.textContaining('8.4'),
+            );
+            expect(scoreFinder, findsWidgets);
+            expect(find.text('加载更多'), findsNothing);
+            final rect = tester.getRect(scoreFinder.first);
+            expect(rect.top, greaterThanOrEqualTo(0));
+            expect(rect.bottom, lessThanOrEqualTo(784));
+            final score = tester.getRect(scoreFinder.first);
+            final row = tester.getRect(doubanRow);
             expect(score.bottom, lessThanOrEqualTo(row.bottom));
           }
         });

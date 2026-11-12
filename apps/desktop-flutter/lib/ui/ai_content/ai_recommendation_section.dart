@@ -222,7 +222,16 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
       '评分 ${card.rating!.toStringAsFixed(1)}',
   ];
 
-  static String _meta(RecommendationCard card) => _metaParts(card).join(' · ');
+  /// 卡片副信息：只留 `年份 · 评分`（与详情页其它推荐行一致）。
+  ///
+  /// 类型（剧集/电影）与「评分」二字在卡片上属于冗余——区块标题已经说明
+  /// 这是「AI 推荐」，相邻两行也都只写「年份 · 分数」。
+  /// 详情弹窗仍用 [_metaParts] 的完整口径。
+  static String _meta(RecommendationCard card) => [
+    if (card.year != null) '${card.year}',
+    if (card.rating != null && card.rating! > 0)
+      card.rating!.toStringAsFixed(1),
+  ].join(' · ');
 
   /// 数据状态：只描述本端**已经拿到**的事实，不额外查询。
   static String? _status(RecommendationCard card) {

@@ -29,6 +29,7 @@ import 'package:flutter/material.dart';
 import '../core/episode_range.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
+import 'layout_scale.dart';
 import 'scroll_behavior.dart';
 import 'tokens.dart';
 
@@ -449,8 +450,9 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       builder: (context, constraints) {
         const spacing = AppSpace.md;
         // 卡片最小宽度：16:9 剧照 + 两行标题要放得下。列数由可用宽度决定，
-        // 不写死——面板宽度本身是 min(980, 屏宽*0.86)。
-        const minCardWidth = 190.0;
+        // 不写死——面板宽度本身是 min(980, 屏宽*0.86)。下界跟着密度标度走，
+        // 否则 1440p 全屏下面板里还是 190 的小格子。
+        final minCardWidth = 190 * LayoutScale.of(context);
         final columns =
             ((constraints.maxWidth + spacing) / (minCardWidth + spacing))
                 .floor()
