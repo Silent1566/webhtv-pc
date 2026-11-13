@@ -78,6 +78,18 @@ enum AppErrorKind {
   parseEmpty,
   parseUnsupportedType,
 
+  /// Web 嗅探在本机不可用：没有找到 Chromium 内核浏览器，或平台不支持。
+  ///
+  /// 这是**能力缺失**，不是解析失败：文案要说清「缺什么、怎么补」，
+  /// 不得静默降级成直链（§12.3）。
+  parseSniffUnavailable,
+
+  /// 解析页嗅探超时（`type=0` 的 30s，或 Super 内的单次 Web 尝试）。
+  parseSniffTimeout,
+
+  /// 解析页出现人机校验（Cloudflare 等）且未能通过。
+  parseSniffChallenge,
+
   // EPG（§13.1「EPG」、§13.3）
   // EPG 失败不影响直播播放，这些分类只用于提示与日志。
   epgNetwork,
@@ -240,7 +252,16 @@ String describeErrorKind(AppErrorKind kind) {
     case AppErrorKind.parseEmpty:
       return '解析失败：解析服务没有返回可用地址';
     case AppErrorKind.parseUnsupportedType:
-      return '该解析器类型在 PC 端不支持（支持 type=1/2/3 JSON 类）';
+      return '该解析器类型未知，无法执行（已知类型：type=0/1/2/3/4）';
+    case AppErrorKind.parseSniffUnavailable:
+      return 'Web 嗅探不可用：本机没有找到 Chromium 内核浏览器'
+          '（Microsoft Edge / Google Chrome / Chromium），或当前平台不支持。'
+          'type=0（Web 嗅探）与 type=4（Super）需要它；'
+          '可安装上述任一浏览器，或用 WEBHTV_SNIFF_BROWSER 指定浏览器路径';
+    case AppErrorKind.parseSniffTimeout:
+      return '解析页嗅探超时：页面在限定时间内没有产出媒体地址';
+    case AppErrorKind.parseSniffChallenge:
+      return '解析页出现人机校验（Cloudflare 等），未能通过验证';
     case AppErrorKind.epgNetwork:
       return 'EPG 下载失败：网络不可达或 DNS 失败（不影响直播播放）';
     case AppErrorKind.epgHttp:

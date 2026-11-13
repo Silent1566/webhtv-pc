@@ -263,4 +263,45 @@ void main() {
     );
     expect(page.resumeSeed!.episodeName, '第5集');
   });
+
+  testWidgets('搜索兜底路由自带 Material 宿主（不依赖外层 MaterialApp.builder）', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    // 故意不包 Material：SearchPage 自己不带 Scaffold，兜底路由必须自备宿主，
+    // 否则 TextField 在这里直接抛「No Material widget found」。
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
+    );
+    await tester.pump();
+
+    final context = tester.element(find.byType(Scaffold));
+    await runOpen(tester, context, itemAt('第5集', 'http://gone/e5', 3));
+
+    await tester.tap(
+      find.byKey(const ValueKey('history-cross-source-open-search')),
+    );
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: '搜索页缺少 Material 宿主时会抛 No Material widget found',
+    );
+    expect(find.byType(SearchPage), findsOneWidget);
+    expect(
+      tester.widget<SearchPage>(find.byType(SearchPage)).resumeSeed,
+      isNotNull,
+      reason: '自带宿主不能把续播种子丢掉',
+    );
+  });
 }

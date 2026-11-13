@@ -212,7 +212,8 @@ class ParseEntry {
 
   final String name;
 
-  /// 0=JSON、1=Web 嗅探、2=JSON 扩展、3=Spider。
+  /// 解析器类型（对齐安卓 Parse.type，映射见 parse_runtime.dart 的 parseKindOf）：
+  /// 0=Web 嗅探、1=JSON、2=JSON 扩展、3=JSON Mix（Spider）、4=Super 组合。
   final int type;
 
   final String? url;
@@ -243,6 +244,33 @@ class ParseEntry {
     if (ext != null) 'ext': ext,
     if (flag != null) 'flag': flag,
   };
+}
+
+/// 安卓 `R.string.parse_god` 的等价名字：UI 与配置里都以它显示。
+const String superParseEntryName = '超级解析';
+
+/// 合成的「超级解析」条目（安卓 `Parse.god()`：type=4）。
+///
+/// 它不属于用户配置：安卓在 `VodConfig.java:609` 把 `Parse.god()` 插到解析器
+/// 列表第 0 位，于是「没明确选解析器」时默认就是超级解析——这句话的另一种
+/// 说法就是「解析源有很多个，自动挑能用的那个」。
+///
+/// 放在 `protocol.dart` 而不是 `parse_runtime.dart`：`AppConfig.playbackParsers`
+/// 要用它，而 `parse_runtime.dart` 已经 import 了 `protocol.dart`；反过来再
+/// import 会形成两个库互相依赖的循环。
+const ParseEntry superParseEntry = ParseEntry(
+  name: superParseEntryName,
+  type: 4,
+);
+
+/// 把「超级解析」放在可选列表最前面（配置为空或已存在时原样返回）。
+List<ParseEntry> parsersWithSuperParse(List<ParseEntry> parses) {
+  if (parses.isEmpty) return parses;
+  final exists = parses.any(
+    (entry) => entry.type == 4 && entry.name == superParseEntryName,
+  );
+  if (exists) return parses;
+  return [superParseEntry, ...parses];
 }
 
 /// 直播源（§13.2 `LiveSource`）。
@@ -648,6 +676,12 @@ class AppConfig {
   final List<Object?> proxy;
   final List<Object?> hosts;
   final List<HeaderRule> headers;
+  /// 播放选解析器时用的列表：头部合成「超级解析」（安卓 `VodConfig.java:609`）。
+  ///
+  /// 与 [parses] 分开：`parses` 是配置原文（导入/导出/云端同步必须原样回写），
+  /// 合成条目只在选择解析器时出现，不能污染配置。
+  List<ParseEntry> get playbackParsers => parsersWithSuperParse(parses);
+
   final List<Object?> rules;
   final List<Object?> hlsRules;
   final List<Object?> groupRules;
@@ -1282,7 +1316,6 @@ class PlaybackQuality {
 
   final String name;
   final String url;
-
 }
 
 /// 统一的 Result 结构（首页/分类/详情/搜索/播放）。
@@ -1301,6 +1334,7 @@ class SiteResult {
     this.format,
     this.parse,
     this.jx,
+    this.click,
     this.msg,
     this.subs = const [],
     this.danmaku = const [],
@@ -1326,6 +1360,12 @@ class SiteResult {
   final String? format;
   final int? parse;
   final int? jx;
+
+  /// 结果级 click：解析页加载后注入的 JS（安卓 Result.getClick()）。
+  ///
+  /// 与站点级 site.extra['click'] 是两级来源：安卓 ParseJob.getClick 的顺序是
+  /// 「站点 click 优先，其次 Result.click」，PC 端（site_service.dart）同序。
+  final String? click;
   final String? msg;
 
   /// 播放结果携带的外挂字幕（§10.3）。非播放结果通常为空。
@@ -1351,6 +1391,7 @@ class SiteResult {
     String? format,
     int? parse,
     int? jx,
+    String? click,
     String? msg,
     List<SubtitleInfo>? subs,
     List<DanmakuSource>? danmaku,
@@ -1369,6 +1410,7 @@ class SiteResult {
       format: format ?? this.format,
       parse: parse ?? this.parse,
       jx: jx ?? this.jx,
+      click: click ?? this.click,
       msg: msg ?? this.msg,
       subs: subs ?? this.subs,
       danmaku: danmaku ?? this.danmaku,

@@ -35,6 +35,7 @@ import 'ai_content/ai_recommendation_section.dart';
 import 'ai_settings_page.dart';
 import 'app.dart';
 import 'async_action_feedback.dart';
+import 'browser_component_settings.dart';
 import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
@@ -2326,8 +2327,20 @@ class _DetailPageState extends State<DetailPage> {
       // 只闪一条 SnackBar，用户没有任何可执行动作（用户反馈：看到「没有集数
       // 信息」的报错后不知道能干什么）。改成先问要不要换源：不换源就什么都不
       // 做；确认了才记住这一集，并入后自动接着播（见 [_openSourceSwap]）。
-      final wantsSwap = await _confirmSwapAfterPlayFailure(episode, failure);
-      if (!mounted || !wantsSwap) return;
+      final choice = await _confirmSwapAfterPlayFailure(episode, failure);
+      if (!mounted || choice == _PlaybackFailureChoice.none) return;
+      if (choice == _PlaybackFailureChoice.installBrowser) {
+        // 装完直接重试这一集：用户点「安装浏览器内核」的意图是「让这一集能播」，
+        // 不是「回到详情页再点一次播放」。
+        final installed = await showBrowserComponentDialog(
+          context,
+          paths: state.paths,
+        );
+        if (!mounted || !installed) return;
+        showToast('已安装浏览器内核，正在重试…', kind: ToastKind.success);
+        await _play(vod, line, episodeIndex);
+        return;
+      }
       // 记下**三个**锚点：下标（原线路）、1-based 集号、tmdb 集号。续播定位
       // 按「tmdb 集号 → 集名数字 → 下标」的顺序在新线路里找同一集（见
       // [_locateResumeEpisode]），下标只是最后的兜底，不能单独用。
@@ -2344,12 +2357,12 @@ class _DetailPageState extends State<DetailPage> {
     }
   }
 
-  /// 播放失败时的换源确认框；返回 `true` 才继续换源。
+  /// 播放失败时的动作选择框。
   ///
   /// 文案说清两件事：这一集缺可播放地址、换源后会自动接着播这一集。
   /// [RepaintBoundary] 的 key 与 :1530 同一约定——每个路由各有自己的
   /// RepaintBoundary，证据截图只能按 key 指这一层，整窗截图不存在。
-  Future<bool> _confirmSwapAfterPlayFailure(
+  Future<_PlaybackFailureChoice> _confirmSwapAfterPlayFailure(
     VodEpisode episode,
     AppError failure,
   ) async {
@@ -2359,7 +2372,10 @@ class _DetailPageState extends State<DetailPage> {
     // message；只有在 message 为空这种退化情况下才回落到 userMessage。
     final message = failure.message.trim();
     final reason = message.isNotEmpty ? message : failure.userMessage;
-    final confirmed = await showDialog<bool>(
+    // 浏览器内核缺失是**能力缺失**，不是「这一集没地址」：给的动作应该是
+    // 「装浏览器」而不是「换源」（换到别的线路同样要解析，照样失败）。
+    final canInstallBrowser = failure.kind == AppErrorKind.parseSniffUnavailable;
+    final choice = await showDialog<_PlaybackFailureChoice>(
       context: context,
       builder: (dialogContext) => RepaintBoundary(
         key: const ValueKey('detail-playback-failed-boundary'),
@@ -2382,19 +2398,28 @@ class _DetailPageState extends State<DetailPage> {
           actions: [
             TextButton(
               key: const ValueKey('detail-playback-failed-dismiss'),
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(_PlaybackFailureChoice.none),
               child: const Text('知道了'),
             ),
+            if (canInstallBrowser)
+              FilledButton(
+                key: const ValueKey('detail-playback-failed-install-browser'),
+                onPressed: () => Navigator.of(dialogContext)
+                    .pop(_PlaybackFailureChoice.installBrowser),
+                child: const Text('安装浏览器内核'),
+              ),
             FilledButton(
               key: const ValueKey('detail-playback-failed-swap'),
-              onPressed: () => Navigator.of(dialogContext).pop(true),
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(_PlaybackFailureChoice.swap),
               child: const Text('换源'),
             ),
           ],
         ),
       ),
     );
-    return confirmed ?? false;
+    return choice ?? _PlaybackFailureChoice.none;
   }
 
   /// 站点 key → 来源健康态（浮层里的色点与并入后线路的行尾色点共用）。
@@ -4273,4 +4298,20 @@ extension _FirstWhereOrNull<T> on Iterable<T> {
     }
     return null;
   }
+}
+
+/// 播放失败后用户选择的动作。
+///
+/// 为什么不是 bool：浏览器内核缺失时正确动作既不是「知道了」也不是「换源」，
+/// 而是「装组件后重试这一集」——两种动作用一个布尔表达不了，硬塞会让调用方
+/// 用注释去猜语义。
+enum _PlaybackFailureChoice {
+  /// 什么都不做（关闭对话框）。
+  none,
+
+  /// 换到别的线路并续播这一集。
+  swap,
+
+  /// 先安装浏览器组件，装成功再重试这一集。
+  installBrowser,
 }

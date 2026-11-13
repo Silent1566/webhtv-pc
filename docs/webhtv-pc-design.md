@@ -1200,15 +1200,23 @@ PlayerEngine.load()
 
 | 类型 | 说明 | PC 端 |
 | --- | --- | --- |
-| `type=0` | Web 嗅探（需浏览器内核/WebView 嗅探页面） | ❌ 明确报错 |
+| `type=0` | Web 嗅探（用本机 Chromium 内核浏览器打开解析页，从它发出的网络请求里取媒体地址，§12.4） | ✅（本机需装 Edge/Chrome/Chromium） |
 | `type=1` | JSON 解析（`GET 解析器url + 目标url`，取 `{url}`/`{data.url}`） | ✅ |
 | `type=2` | JSON 扩展解析（携带全部 type=1 解析器为查找表） | ✅ |
 | `type=3` | JSON Mix（携带 flag 与全部解析器 `ext`） | ✅ |
-| `type=4` | Super（多解析器并发，含 Web 嗅探竞争，依赖 WebView） | ❌ 明确报错 |
+| `type=4` | Super（`type=1` 并发 + `type=0` 按优先级顺序竞速，第一个成功即胜出，§12.4） | ✅（同 `type=0`） |
 
+> **「超级解析」是合成条目**：安卓 `VodConfig.java:609` 把 `Parse.god()`（type=4）
+> 插在解析器列表第 0 位，于是「没显式选解析器时默认就是超级解析」。PC 端由
+> `AppConfig.playbackParsers` 做同一件事：选择用「超级解析 + 配置原文」，执行仍用
+> 配置原文（导入/导出/云端同步必须原样回写，不能被合成条目污染）。显式 `flag`
+> 命中仍然优先于超级解析。
+>
 > 类型编号以 TVBox/WebHTV 生态与 Android 参考实现为准（`type=0` 为 Web 嗅探、
-> `type=1` 为 JSON 解析）。选中 PC 端不支持的 `type=0`/`type=4` 时抛
-> `ParseSelectionException`，UI 展示可定位文案，**不静默降级**为直链（§5.8）。
+> `type=1` 为 JSON 解析）。`type=0`/`type=4` 由 §12.4 的浏览器嗅探内核执行；
+> 本机没有可用的 Chromium 内核浏览器时抛 `parseSniffUnavailable`，UI 展示「缺什么、
+> 怎么补」的可定位文案，**不静默降级**为直链（§5.8）。未知类型仍抛
+> `ParseSelectionException`。
 
 ### 12.2 解析流程
 
@@ -1248,6 +1256,124 @@ PlaybackRequest
 - 解析过程有超时。
 - 不允许无限嗅探。
 - 解析日志不记录完整 Cookie/Token。
+
+### 12.3.1 解析源切换（仅本次播放）
+
+播放器的剧集面板里增加一行解析源 chip（「超级解析」+ 配置里的每个解析器），
+只在解析源 >1 时出现。选中后**立刻用当前集重新解析**（不是改地址），并且：
+
+- **只对本次播放生效**，不落盘、不跨集/跨启动记忆——用户点一下通常是为了救
+  这一集；记住它会让下一部片悄悄用错源（安卓的解析源选择同样不持久化）；
+- 选中具体解析器时若失败，**不静默回落到超级解析**：错误照常进「播放失败」
+  弹窗，用户可再点一次换到别的源（诚实、可诊断）；
+- 接缝：`SiteService.resolvePlayback(preferredParseName:)` →
+  `resolveParseTarget(preferredParseName:)` → `ParseRuntime.select(preferName:)`；
+  `AppState.resolvePlayback/resolvePlaybackForSource` 原样透传，`json:`/`parse:`
+  前缀分支不受影响。
+
+### 12.4 浏览器嗅探内核（`type=0` / `type=4`）
+
+**为什么不是 WebView2、也不内嵌 Chromium**：`webview_windows` 只存在于 Windows，
+且不暴露顶层导航 Header 注入与 Cookie 管理；内嵌一份 CEF 会给每个安装包增加上百
+MB，并把浏览器的安全更新责任接到本项目身上。PC 端因此改为**驱动本机已安装的
+Chromium 内核浏览器**，经 Chrome DevTools Protocol 完成嗅探——三平台一套代码、
+零发布体积增量，代价是本机必须装浏览器（没装就如实报能力缺失）。
+
+| 层 | 文件（`apps/desktop-flutter/lib/core/sniff/`） | 职责 |
+| --- | --- | --- |
+| 契约 | `sniff_types.dart` | 请求/事件/结果/规则/会话、媒体判定（对齐 `Sniffer.isVideoFormat`）、超时档位 |
+| 传输契约 | `sniff_transport.dart` | 定位、启动、CDP 的抽象边界：`lib/core` 不直接碰 `Process`/`WebSocket`，编排可用假传输穷举测试 |
+| 实现 | `browser_locator.dart`、`browser_process.dart`、`cdp_connection.dart` | 平台浏览器定位（`WEBHTV_SNIFF_BROWSER` 优先）、`--remote-debugging-port=0` 启动与 `DevToolsActivePort` 端点发现、JSON-RPC over WebSocket |
+| 编排 | `chromium_sniffer.dart` | 请求拦截、UA/Referer/Cookie 注入、页面加载后注入 click 与规则脚本、DOM/performance 补采、人机校验时把离屏窗口拉回可见、会话结束回收进程与临时 profile |
+| 入口 | `sniff_engine_factory.dart` | 进程级引擎；本机无浏览器时由解析层抛 `parseSniffUnavailable` |
+
+与安卓 `CustomWebView` 的对应关系：
+
+| 安卓 | PC（CDP） |
+| --- | --- |
+| `shouldInterceptRequest` | `Network.requestWillBeSent` / `responseReceived` |
+| `loadUrl(url, headers)` | `Network.setExtraHTTPHeaders` + `setUserAgentOverride` + `setCookie` |
+| `onPageFinished` + `Sniffer.getScript` + `click` | `Page.loadEventFired` → `Runtime.evaluate` |
+| `probeDomMedia` | `performance.getEntriesByType('resource')` + `video.currentSrc` 轮询（最多 6 轮，每秒 1 次） |
+| `WebDialog`（Cloudflare 挑战） | `Browser.setWindowBounds` 把离屏窗口拉回可见，交给人操作 |
+
+硬边界（不得突破）：
+
+- **不内置、不分发浏览器**：本机没有 Edge/Chrome/Chromium 时如实报
+  `parseSniffUnavailable`，文案给出「安装浏览器」或「用 `WEBHTV_SNIFF_BROWSER`
+  指定可执行文件」两条出路；
+- **候选逐个探测、逐个启动**：定位器只回答「文件存在且可执行」，不等于「能跑」
+  （实测：snap 版 `chromium` 在受限环境里 `snap-confine` 直接失败）。引擎按优先级
+  对每个候选先跑一次 `--version` 探测，再启动 + 握手；任一环节失败就换下一个，
+  全部失败才报 `parseSniffUnavailable`，并把**每个候选的真实原因**（退出码 +
+  stderr 首条有意义行，例如 `snap-confine is packaged without necessary permissions`）
+  写进 detail——否则用户只看到「超时/解析失败」，无从自救；
+- **错误必须是单行**：探测输出压成一行（多余行折叠成「另有 N 行」），
+  `AppError.message`/`detail` 都不含换行——它们最终进日志行与提示条，
+  多行会把一条日志撕成五行；同一路径的探测结果缓存 30s，用户连续点集不会重复
+  起进程，装好浏览器后也无需重启应用；
+- **不替用户破解人机校验**（PRODUCT.md「不替用户绕过认证、验证码或访问控制」）：
+  挑战页面只把窗口拉回可见，不注入绕过脚本；
+- **不留残留**：每个会话结束必须关闭浏览器进程并删除临时 profile；
+- **子进程必须有短的 `TMPDIR`**：Chromium 把 `SingletonSocket` 放在 `$TMPDIR`，
+  UNIX socket 路径上限 108 字节。桌面应用继承的 TMPDIR 可能是很深的构建目录
+  （实测 73 字节的 worktree 路径直接触发 `FATAL: Socket path too long`，浏览器
+  一启动就退出，用户看到「浏览器都不可用」）。启动时按「`XDG_RUNTIME_DIR` →
+  `/tmp` → 系统临时目录」挑一个可写且 ≤40 字节的目录，并作为子进程 `TMPDIR`；
+- **不静默降级**：嗅探失败按 `parseSniffTimeout`/`parseInvalid`/`parseEmpty`
+  分类，可回退其它接口，但绝不把未解析的解析页地址当直链播；
+- **超时**：`type=0` **180s**、`type=4` **180s**、Super 内单次 Web **60s**、
+   JSON 类 **15s**（Android `TIMEOUT_PARSE_DEF` 对齐不变）。
+   180s 是用户 2026-11-13 指定的口径：真实解析页要跑签名脚本、多次 XHR 甚至播放器
+   初始化才产出地址，30s 对慢站会被误判成超时；Super 单次取 60s 而非
+   「180s − 5s」，否则 180s 预算只够试一条 web 腿，多解析器的优先级顺序失去意义。
+   这些是「页面产出地址」的预算，**不含浏览器冷启动**（冷启动另有 20s 端点就绪
+   上限 + 10s CDP 握手上限）；解析层自己守时，不依赖引擎不卡死；
+- **默认无头**：嗅探不弹任何窗口（`--headless=new`）。可见窗口的唯一价值是
+  人机校验，用 `WEBHTV_SNIFF_HEADED=1`（后续接设置项）才启动离屏可见窗口。
+  无头会话遇人机校验（Cloudflare 等）**立刻**报 `parseSniffChallenge` 并给出
+  「开可见模式或换线路」的处置——不会硬等到 180s 把能力缺失伪装成超时；
+- 嗅探页加载的 Header 只取 `ext.header` 的 UA/Referer/Cookie，日志不落完整
+  Cookie/Token（§12.3）。
+
+### 12.6 解析轨迹日志（两层）
+
+解析失败时用户唯一能自救的信息就是「用了哪个源、请求了哪个连接、结果是什么」，
+因此固定输出：
+
+| 层 | 内容 | 开关 |
+| --- | --- | --- |
+| 骨架（`trace`） | `解析源=<名称> type=<0-4> 连接=<解析器url> 目标=<待解析地址> flag= 来源=`；`解析成功 地址= 格式= 耗时=`；`解析失败 kind= message= detail= 耗时=`；`超级解析 腿 JSON=[..] Web=[..] 目标= 连接=[..]`；`超级解析胜出 源= 地址= 耗时=`；`解析回退候选=A → B` | **永远记录**，scope=`parse` |
+| 详细（`verbose`） | 逐请求 `HTTP <方法> 源= 连接=<完整连接> Header=[键名]`、`HTTP <状态码> 字节= 耗时=`；嗅探 `页面= 超时= 无头=` 与 `嗅探命中 via= 地址=` | 复用「详细调试日志」开关（`SpiderDebugLog.enabled`，默认关） |
+
+脱敏口径：骨架层的连接**去掉查询串**（`...?…`）；详细层给完整连接，但敏感键值
+（cookie/authorization/token/sign/api-key…）仍经 `redactLogText` 遮蔽；Header
+两层都只打**键名**。实现：`installParseTrace()`（`lib/services/parse_service.dart`）
+由 `AppState.bootstrap()` 接到 `LogService(scope: 'parse')`，测试可直接注入收集器。
+
+### 12.5 浏览器组件安装（可选，用户显式触发）
+
+§12.4 的嗅探依赖本机 Chromium 内核浏览器。Windows 上 Edge 天然存在，但精简
+Linux、容器、未装 Chrome 的 macOS 上「让用户自己找浏览器装」是一道真实门槛
+（本机实测只有 snap 包装脚本时，用户看到的是 `snap-confine` 权限错误）。
+因此提供**可选**的组件安装：不做默认路径，只在用户点的时候做事。
+
+| 项 | 约定 |
+| --- | --- |
+| 来源 | **仅**用户显式选择：本地/共享目录（含 `chrome`/`chromium`/`msedge` 的便携包）或 zip |
+| 不做 | 不内置、不随包分发、不静默联网下载、不改系统、不写注册表、不申请权限 |
+| 安装 | 复制到 `<dataDir>/components/browser/<label>-<version>/`（临时目录 + 原子 rename；失败回滚不留半装目录），写 `component.json` |
+| 校验 | 登记前必须 `--version` 成功（`probeChromiumBrowser`）；zip 解出后补 POSIX 执行位再读版本（zip 会丢 mode，否则会被误判成坏包） |
+| 同版本重装 | 覆盖，不产生第二个目录 |
+| 解析优先级 | 显式 `WEBHTV_SNIFF_BROWSER` → **已装组件** → 系统浏览器（用户点安装就是在表达偏好） |
+| 卸载 | 只删组件库内目录（`p.isWithin` 校验）；删掉后自动回落系统浏览器 |
+| 入口 | 设置 →「解析器嗅探」区块（状态 + 检测 + 安装/校验/卸载）；播放失败提示条提供同一入口 |
+| 失败语义 | 坏包/不可用逐条给出原因（单行），不塌缩成「安装失败」 |
+| 状态来源 | 探测只在**应用层快照**（`sniffBrowserStatus`）里进行，且默认路径跑在独立 isolate；UI 只读快照，检测由「检测 / 重新检测」按钮或安装/卸载/打开安装弹窗这类**用户动作**触发。**禁止在 widget 的 `initState`/`build` 里探测**：`Process` 与其超时定时器会留在测试的 FakeAsync 里，把 `pumpAndSettle` 挂死（仓库既有测试已多次踩到） |
+
+实现：`lib/services/browser_component_store.dart`（复制/校验/登记/卸载）+
+`lib/services/sniff_runtime.dart`（接线进进程级引擎）+
+`lib/ui/browser_component_settings.dart`（区块与弹窗）。
 
 ---
 
@@ -2309,6 +2435,7 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 目标：以 `webtv2` 为基准，清点 PC 端仍缺失的用户可见能力，逐项给出迁移方案与验收条件，
 并明确不可迁移项与对外披露口径。
 
+> **2026-11-12 复核已取代本节数字**：当前清单见 `docs/phase9/parity-2026-11-12/README.md`。
 > 完整矩阵见 `docs/phase9/README.md`；方法见 `docs/phase9/design/00-gap-method.md`；
 > P0 设计见 `design/01`–`03`；验收规范见 `design/04-acceptance.md`；
 > 上游映射见 `design/05-upstream-map.md`；门禁 `tools/phase9/verify_gap_matrix.py`。

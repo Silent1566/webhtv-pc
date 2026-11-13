@@ -150,11 +150,16 @@ abstract final class PlaybackResolver {
   /// 或抛出 [AppErrorKind.playbackParserRequired]（目标既非直链也无法解析）。
   ///
   /// 规则（§7.4.8）：
-  /// 1. `parse=1` 或 `jx=1` → 需要解析器，MVP-A 明确报错；
+  /// 1. `parse=1` 或 `jx=1` → 需要解析器；
   /// 2. 绝对媒体地址 → 直接播放；
   /// 3. 相对路径 → 相对站点 api 解析后判断；
-  /// 4. 站点 `playUrl` 前缀形态 → 拼接后判断；
+  /// 4. 站点 `playUrl` 前缀形态 → 拼接后判断：拼接结果是媒体地址则直连，
+  ///    否则是**解析页**，返回 needParser（安卓 `VodApi.java:185` 把「站点声明了
+  ///    playUrl」视为 `parse=1`，拼接结果是解析器入口而不是死路）；
   /// 5. 其余非 URL 目标 → 需要解析器/Spider，明确报错。
+  ///
+  /// 真正的「缺失地址」仍抛 [AppErrorKind.playbackUrlMissing]：目标为空时先判空，
+  /// 不因第 4 条被放宽成 needParser。
   static PlaybackDecision decide(PlaybackResolutionInput input) {
     final qualityIndex =
         input.qualityIndex >= 0 && input.qualityIndex < input.qualities.length
@@ -238,10 +243,18 @@ abstract final class PlaybackResolver {
           danmaku: input.danmaku,
         );
       }
-      throw AppError(
-        AppErrorKind.playbackUrlMissing,
-        '站点 ${input.site.key} 的 playUrl 前缀拼接结果不是有效地址',
-        detail: redactUrl(joined),
+      // 拼接结果不是媒体地址 = 站点声明的 playUrl 是**解析入口**。安卓
+      // `VodApi.java:185` 把「站点声明了 playUrl」直接视为 `parse=1`，因此这里
+      // 返回待解析决策（目标就是拼接结果），不能再抛「不是有效地址」把路堵死。
+      return PlaybackDecision(
+        action: PlaybackAction.needParser,
+        url: joined,
+        headers: _mediaHeaders(input, joined),
+        flag: input.flag,
+        qualities: input.qualities,
+        qualityIndex: qualityIndex,
+        subs: input.subs,
+        danmaku: input.danmaku,
       );
     }
 

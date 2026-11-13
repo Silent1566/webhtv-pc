@@ -9,10 +9,10 @@
 
 | 工作流 | 触发 | 作用 | 产物 |
 | --- | --- | --- | --- |
-| Windows CI | push `main`、PR 到 `main`、手动 `workflow_dispatch` | `dart analyze` + `flutter test` + Release 构建 + 打包 + 烟测 | workflow artifact（7 天） |
+| Windows CI | push `main` / `dev*`、PR 到 `main`、手动 `workflow_dispatch` | `dart analyze` + `flutter test` + Release 构建 + 打包 + 烟测 | workflow artifact（7 天） |
 | Windows Release | 手动 `workflow_dispatch` | 上述门禁 + 可选签名 + 打包 + 烟测 + GitHub Release | Release 资产 + workflow artifact（30 天） |
 
-单测约 13 分钟，CI 只在 `main`/PR/手动触发，避免每次 dev 分支推送都消耗 Windows runner。
+CI 在 `main` / `dev*` 推送、PR 到 `main` 与手动触发时运行；实际步骤与触发条件以工作流文件为准。
 
 本地开发仍用 puro：
 
@@ -58,7 +58,9 @@ WebHTV-PC-<version>[-beta]-windows-x64/
   webhtv_pc.exe
   *.dll
   data/...
-  sidecars/spider-host-python/{host.py,webhtv_ipc.py}
+  runtime/node/node.exe
+  runtime/python/{python-runtime.zip,bundle.json}
+  sidecars/spider-host-python/{host.py,webhtv_ipc.py,webhtv_catvod.py,base/}
   sidecars/spider-host-js/{host.js,sandbox_worker.js}
   sidecars/spider-host-jvm/host.jar
   BUILD_INFO.txt
@@ -67,7 +69,7 @@ WebHTV-PC-<version>[-beta]-windows-x64/
 
 说明：
 
-- 只带 sidecar **宿主脚本**；**Node 运行时随包内置**（`runtime/node/node.exe`）；Python / JDK 不随包，对应站源需要本机安装，缺失时应用按现有逻辑提示「运行时未安装」。
+- 随包带 sidecar 宿主、**Node 运行时**（`runtime/node/node.exe`）及**专用离线 Python 与依赖**（`runtime/python/python-runtime.zip`、`bundle.json`）；Python 环境页面支持检测与离线修复，无需安装系统 Python。JVM 站源仍需本机 JDK 17+。
 - 不带站点源、用户配置、日志、测试 fixture；`sidecars/*/manifests`、`sidecars/*/spiders` 是测试 fixture，不入包。
 - `THIRD_PARTY.txt` 列出主程序/动态库/sidecar 宿主的 SHA-256 与可获得的 FileVersion；第三方许可见 `data/flutter_assets/NOTICES.Z`。
 - 用户数据仍在 `%APPDATA%\webhtv-pc` 与 `%LOCALAPPDATA%\webhtv-pc`，替换解压目录即完成升级。
@@ -146,7 +148,7 @@ Get-FileHash (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName -Algor
 
 - **无 MSI**：当前只发便携 zip。MSI 需要先确定签名通道、安装范围、覆盖升级/卸载语义（设计文档 §20.4），本轮不做。
 - **无自动更新**：`docs/phase9/README.md` P2-7 明确更新需要签名通道与 ADR，本轮不生成更新清单。
-- **仅 Windows**：仓库只有 `apps/desktop-flutter/windows/` 平台工程；Linux/macOS 需要先补平台工程与 native 依赖验证。
+- **本指南仅覆盖 Windows x64**：仓库另有 Linux x86_64 平台工程与打包流程，见 [Linux 指南](../linux-packaging.md)；当前没有 macOS 发布流程。
 - **不跑集成测试**：需要真实窗口、播放器与 fixture 媒体，仍由 `tools/phase*` 的本地验收脚本覆盖。
-- **Node 随包、Python/JDK 需本机**：Node 运行时内置在 `runtime/node/node.exe`，无需用户安装；Python / JDK 由用户自备，缺失时如实提示。
-- **CI 成本**：单测约 13 分钟；默认只在 `main`/PR/手动触发。需要覆盖 `dev*` 推送时，在 `windows-ci.yml` 的 `on.push.branches` 加一项即可。
+- **Node / Python 随包、JDK 需本机**：Node 内置在 `runtime/node/node.exe`；专用 Python 与依赖以离线包随发行版提供，运行与修复不联网；JVM 站源需用户自备 JDK 17+。
+- **CI 触发范围**：当前覆盖 `main` / `dev*` 推送、PR 到 `main` 与手动触发，详见 `windows-ci.yml`。

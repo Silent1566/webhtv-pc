@@ -521,6 +521,8 @@ abstract final class HttpApiResponseParser {
       format: asNonEmptyString(map['format']),
       parse: asInt(map['parse']),
       jx: asInt(map['jx']),
+      // 结果级 click（安卓 `Result.getClick`）：解析页要注入的 JS，交给解析器执行。
+      click: asNonEmptyString(map['click']),
       playUrl: playback.qualities.isEmpty
           ? null
           : playback.qualities[playback.index].url,
@@ -608,9 +610,10 @@ abstract final class HttpApiResponseParser {
   static bool _isQualityObject(Object? value) {
     if (value is! Map) return false;
     final map = asMap(value);
-    return [map['url'], map['v']].any(
-      (candidate) => candidate is String && candidate.trim().isNotEmpty,
-    );
+    return [
+      map['url'],
+      map['v'],
+    ].any((candidate) => candidate is String && candidate.trim().isNotEmpty);
   }
 
   static String? _qualityUrl(Object? value) {
