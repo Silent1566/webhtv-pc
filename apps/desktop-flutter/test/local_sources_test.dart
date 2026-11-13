@@ -19,7 +19,8 @@ import 'package:webhtv_pc/services/spider_registry.dart';
 import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
-import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+import 'local_source_sites_test.dart'
+    show deleteTempWhenReleased, LocalSourceTestPythonEnvironment;
 
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
@@ -220,10 +221,17 @@ void main() {
     test('扫描并导入后，AppState 同时暴露本地 Spider 与 webHome 源', () async {
       final paths = tempPaths(temp);
       paths.ensureDirectories();
-      final state = AppState(paths: paths, log: LogService());
-      // 用例结束必须释放：否则 sidecar 回收/日志刷盘还持有 temp 下的句柄，
-      // tearDown 递归删除临时目录会偶发 `OS Error 32`。
-      addTearDown(state.dispose);
+      // 此用例只测扫描/登记/列表，不能在后台准备真实解释器。
+      final state = AppState(
+        paths: paths,
+        log: LogService(),
+        pythonEnvironment: LocalSourceTestPythonEnvironment(paths: paths),
+      );
+      addTearDown(() => LocalSpiderCommand.preferPythonExecutable(null));
+      addTearDown(() async {
+        state.dispose();
+        await state.pythonEnvironmentIdle;
+      });
 
       final sourceDir = Directory(
         '${temp.path}${Platform.pathSeparator}fixture',
