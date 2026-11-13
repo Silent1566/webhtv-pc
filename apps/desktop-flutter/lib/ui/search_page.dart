@@ -302,7 +302,11 @@ class _SearchPageState extends State<SearchPage> {
           value: 'all',
           child: Text('全部站点'),
         ),
-        if (selectedSite != null && selectedSite.searchable)
+        // 被屏蔽的当前站点不给「当前站点」选项：屏蔽站点不参与搜索，选了它
+        // 只会得到一个必然为空的搜索范围（没有可解释的失败）。
+        if (selectedSite != null &&
+            selectedSite.searchable &&
+            !_state.isSiteBlocked(selectedSite.key))
           PopupMenuItem(
             key: const ValueKey('search-scope-site'),
             value: 'site',

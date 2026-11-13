@@ -192,6 +192,12 @@ class UiPreferencesStore {
   /// 站点排序偏好的**显式**设置；null 表示从未设置过（配置顺序）。
   SiteOrderSettings? _siteOrder;
 
+  /// 站点列表治理（手动顺序 + 屏蔽）的**显式**设置，按配置作用域分开存。
+  ///
+  /// key 是作用域标识（生产环境是 `config:<配置记录 id>`），值为该配置下的手动
+  /// 顺序与屏蔽集合。空覆盖不写盘：缺席 = 从未设置过（配置顺序、无屏蔽）。
+  final Map<String, SiteListOverrides> _siteListOverrides = {};
+
   /// 解析接口失败切换的**显式**设置；null 表示从未设置过（关闭）。
   ParseFailoverSettings? _parseFailover;
 
@@ -361,6 +367,13 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过站点排序。
   bool get hasExplicitSiteOrder => _siteOrder != null;
+
+  /// 指定作用域下的站点列表覆盖（手动顺序 + 屏蔽）。
+  SiteListOverrides siteListOverrides(String scopeKey) =>
+      _siteListOverrides[scopeKey] ?? SiteListOverrides.empty;
+
+  /// 是否显式设置过任意一份配置的站点顺序或屏蔽。
+  bool get hasExplicitSiteListOverrides => _siteListOverrides.isNotEmpty;
 
   /// 生效的广告过滤开关（默认开启：配置里写了规则才生效，不写就无效果）。
   bool get adBlockEnabled => _adBlockEnabled ?? true;
@@ -590,6 +603,17 @@ class UiPreferencesStore {
         final siteOrder = decoded['siteOrder'];
         if (siteOrder is Map && siteOrder.isNotEmpty) {
           _siteOrder = SiteOrderSettings.fromJson(siteOrder);
+        }
+        // 站点列表治理：按配置作用域逐个解析；空覆盖不入内存（缺席 = 默认）。
+        final siteList = decoded['siteList'];
+        if (siteList is Map) {
+          for (final entry in siteList.entries) {
+            final scope = entry.key;
+            if (scope is! String || scope.trim().isEmpty) continue;
+            final overrides = SiteListOverrides.fromJson(entry.value);
+            if (overrides.isEmpty) continue;
+            _siteListOverrides[scope] = overrides;
+          }
         }
         final parseFailover = decoded['parseFailover'];
         if (parseFailover is Map && parseFailover.isNotEmpty) {
@@ -942,6 +966,25 @@ class UiPreferencesStore {
     return _persist();
   }
 
+  /// 记住一份配置的站点列表覆盖（手动顺序 + 屏蔽）。
+  ///
+  /// [scopeKey] 为空说明当前没有可归属的配置（例如还没导入配置）：拒绝写入，
+  /// 而不是把不同配置的顺序混到同一个桶里。
+  Future<bool> rememberSiteListOverrides(
+    String scopeKey,
+    SiteListOverrides overrides,
+  ) {
+    final key = scopeKey.trim();
+    if (key.isEmpty) return Future.value(false);
+    if (siteListOverrides(key) == overrides) return Future.value(true);
+    if (overrides.isEmpty) {
+      _siteListOverrides.remove(key);
+    } else {
+      _siteListOverrides[key] = overrides;
+    }
+    return _persist();
+  }
+
   /// 记住弹幕库设置。
   Future<bool> rememberDanmakuSettings(DanmakuSettings settings) {
     if (_danmakuSettings == settings) return Future.value(true);
@@ -1160,6 +1203,17 @@ class UiPreferencesStore {
         }
         final siteOrder = _siteOrder;
         if (siteOrder != null) root['siteOrder'] = siteOrder.toJson();
+        // 空覆盖在写入前过滤，并在整段为空时删键：删掉最后一项屏蔽后不留
+        // 「看起来设置过」的脏数据（与 danmakuDisplay 同口径）。
+        final siteList = <String, Object?>{
+          for (final entry in _siteListOverrides.entries)
+            if (!entry.value.isEmpty) entry.key: entry.value.toJson(),
+        };
+        if (siteList.isEmpty) {
+          root.remove('siteList');
+        } else {
+          root['siteList'] = siteList;
+        }
         final parseFailover = _parseFailover;
         if (parseFailover != null) {
           root['parseFailover'] = parseFailover.toJson();

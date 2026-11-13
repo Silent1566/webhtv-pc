@@ -4,6 +4,7 @@
 /// 不使用移动端竖屏布局。因此这里固定为「顶栏 + 侧栏 + 内容区」的桌面布局。
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
@@ -880,6 +881,12 @@ class _AppShellState extends State<AppShell> {
         rules: _state.siteGroupSettings.enabledRules,
         // 把"当前站点"传进去：换源对话框必须能标出你现在在哪个源上。
         selectedKey: _state.selectedSite?.key,
+        // 手动排序 + 屏蔽（参照安卓 SiteOrderStore / SiteBlockSetting）：
+        // 打开时带当前配置的状态进去，改动立刻回写并落盘。
+        blockedKeys: _state.blockedSiteKeys,
+        defaultOrderKeys: _state.siteConfigOrderKeys,
+        onReorder: _state.setSiteManualOrder,
+        onBlockedChanged: _state.setSiteBlocked,
       ),
     );
     if (selected == null) return;
@@ -1489,6 +1496,10 @@ class SitePickerDialog extends StatefulWidget {
     required this.log,
     this.selectedKey,
     this.rules = builtinSiteGroupRules,
+    this.blockedKeys = const <String>{},
+    this.defaultOrderKeys = const <String>[],
+    this.onReorder,
+    this.onBlockedChanged,
   });
 
   final List<SiteListItem> items;
@@ -1507,6 +1518,20 @@ class SitePickerDialog extends StatefulWidget {
   /// 生效的分组规则（Phase 9 P1-5）；默认 4 条内置规则。
   final List<SiteGroupRule> rules;
 
+  /// 当前配置下被屏蔽的站点 key（列表默认不显示它们）。
+  final Set<String> blockedKeys;
+
+  /// 配置原始顺序的站点 key：只给排序模式的「恢复默认」用。
+  ///
+  /// 不能从 [items] 反推：传进来的 [items] 已经按用户的手动顺序排过。
+  final List<String> defaultOrderKeys;
+
+  /// 拖动排序后回写（传空列表 = 恢复默认）。null 表示不提供排序入口。
+  final Future<bool> Function(List<String> orderedKeys)? onReorder;
+
+  /// 屏蔽/取消屏蔽回写。null 表示不提供屏蔽入口。
+  final Future<bool> Function(String siteKey, bool blocked)? onBlockedChanged;
+
   @override
   State<SitePickerDialog> createState() => _SitePickerDialogState();
 }
@@ -1517,9 +1542,30 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   /// 当前选中的分组；空串 = 全部。
   String _group = '';
 
+  /// 站点 key 的当前顺序（含被屏蔽站点）。
+  ///
+  /// 与 [widget.items] 分开存：排序模式拖动后必须立刻反映到网格，而
+  /// [widget.items] 是打开对话时的快照。被屏蔽站点也留在顺序里——解除屏蔽后
+  /// 它应该回到原来的位置，而不是排到最后。
+  late List<String> _order;
+
+  late final Map<String, SiteListItem> _byKey;
+
+  /// 本对话框内的屏蔽集合（初值来自 [SitePickerDialog.blockedKeys]）。
+  late Set<String> _blocked;
+
+  /// 排序模式：单列 + 拖动手柄。
+  bool _sorting = false;
+
+  /// 屏蔽管理：显示全部站点，点击一行即切换屏蔽。
+  bool _blockedEditing = false;
+
   @override
   void initState() {
     super.initState();
+    _byKey = {for (final item in widget.items) item.site.key: item};
+    _order = [for (final item in widget.items) item.site.key];
+    _blocked = {...widget.blockedKeys};
     // 打开时把站点清单（含运行时与不可用原因）写日志：UI 不再展示这些内部字段，
     // 但排查「某站点为何不可用」时仍然需要它们。
     _logInventory();
@@ -1556,9 +1602,13 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
   }
 
   /// 当前可见的分组（按站点顺序去重，只统计当前关键字命中的站点）。
+  ///
+  /// 屏蔽管理模式下被屏蔽的站点也在列——否则「把只属于该分组的所有站点都屏蔽了」
+  /// 之后，分组标签会先消失，用户没法在同一个界面里取消屏蔽。
   List<String> get _groups {
     final seen = <String>[];
     for (final item in _keywordMatched) {
+      if (!_blockedEditing && _blocked.contains(item.site.key)) continue;
       for (final group in siteGroupsOf(item.site.name, rules: widget.rules)) {
         if (!seen.contains(group)) seen.add(group);
       }
@@ -1566,22 +1616,99 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     return seen;
   }
 
-  List<SiteListItem> get _keywordMatched => [
-    for (final item in widget.items)
-      if (siteMatchesQuery(
+  List<SiteListItem> get _keywordMatched {
+    final items = <SiteListItem>[];
+    // 按 [_order] 走：手动顺序对搜索命中的结果同样生效。
+    for (final key in _order) {
+      final item = _byKey[key];
+      if (item == null) continue;
+      if (!siteMatchesQuery(
         name: item.site.name,
         key: item.site.key,
         query: _keyword.text,
-      ))
-        item,
+      )) {
+        continue;
+      }
+      items.add(item);
+    }
+    return items;
+  }
+
+  List<SiteListItem> get _visible => [
+    for (final item in _keywordMatched)
+      if (_group.isEmpty || siteInGroup(item.site.name, _group))
+        if (_blockedEditing || !_blocked.contains(item.site.key)) item,
   ];
 
-  List<SiteListItem> get _visible {
-    if (_group.isEmpty) return _keywordMatched;
-    return [
-      for (final item in _keywordMatched)
-        if (siteInGroup(item.site.name, _group)) item,
-    ];
+  /// 把顺序回写给 AppState（失败只记日志，不回滚界面：拖动已经发生）。
+  void _persistOrder([List<String>? keys]) {
+    final callback = widget.onReorder;
+    if (callback == null) return;
+    unawaited(
+      callback(keys ?? List<String>.of(_order)).then(
+        (_) => true,
+        onError: (Object error) {
+          widget.log.warning('保存站点顺序失败：$error', scope: 'site');
+          return false;
+        },
+      ),
+    );
+  }
+
+  /// 恢复默认顺序：界面回到配置顺序，并清掉已保存的手动顺序。
+  void _resetOrder() {
+    if (widget.defaultOrderKeys.isEmpty) return;
+    setState(() => _order = List<String>.of(widget.defaultOrderKeys));
+    _persistOrder(const <String>[]);
+  }
+
+  /// 分组在当前筛选结果里消失时复位（对齐安卓 `SiteDialog.setGroupView`）。
+  ///
+  /// 典型场景：在屏蔽管理里把某个分组的站点全屏蔽了，退出后那个 chip 已经不
+  /// 存在——继续按它过滤只会得到空列表，而且没有任何 chip 处于选中态可解释。
+  void _normalizeGroup() {
+    if (_group.isEmpty || _groups.contains(_group)) return;
+    _group = '';
+  }
+
+  void _toggleBlocked(SiteListItem item) {
+    final key = item.site.key;
+    final blocked = !_blocked.contains(key);
+    setState(() {
+      if (blocked) {
+        _blocked.add(key);
+      } else {
+        _blocked.remove(key);
+      }
+      _normalizeGroup();
+    });
+    final callback = widget.onBlockedChanged;
+    if (callback == null) return;
+    unawaited(
+      callback(key, blocked).then(
+        (_) => true,
+        onError: (Object error) {
+          widget.log.warning('保存站点屏蔽状态失败：$error', scope: 'site');
+          return false;
+        },
+      ),
+    );
+  }
+
+  void _toggleSorting() {
+    setState(() {
+      _sorting = !_sorting;
+      if (_sorting) _blockedEditing = false;
+    });
+  }
+
+  void _toggleBlockedEditing() {
+    setState(() {
+      _blockedEditing = !_blockedEditing;
+      if (_blockedEditing) _sorting = false;
+      // 进出屏蔽管理都会改变可见站点集合，分组候选随之变化。
+      _normalizeGroup();
+    });
   }
 
   /// 单个站点行（两列网格里的一格）。
@@ -1592,45 +1719,127 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final theme = Theme.of(context);
     final availability = item.availability;
     final available = availability.available;
+    final blocked = _blocked.contains(item.site.key);
     final isCurrent =
         widget.selectedKey != null && item.site.key == widget.selectedKey;
     final semantic = context.semanticColors;
-    return ListTile(
-      key: ValueKey('site-option-${item.site.key}'),
-      dense: true,
-      selected: isCurrent,
-      leading: Icon(
-        available ? Icons.check_circle_outline : Icons.block,
-        // 用设计系统的状态色，不用 `Colors.greenAccent` 与框架的
-        // `disabledColor`——那两个不属于这个世界（craft-floor：散落的框架默认值）。
-        color: available ? semantic.statusOk : semantic.statusUnknown,
-      ),
-      // 只显示名称：key/type/运行时属协议内部字段，已写日志。
-      title: Text(item.site.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: available
-          ? null
-          : Text(
-              availability.reason ?? '当前不可用',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (isCurrent) ...[
-            Text(
-              '当前',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: semantic.magnitude,
+    // 屏蔽管理模式下每一行的点击都是「切换屏蔽」，不再进入站点（对齐安卓
+    // `SiteDialog.onTextClick`：block 为真时只 toggle，不 dismiss）。
+    final onTap = _blockedEditing
+        ? () => _toggleBlocked(item)
+        : (available ? () => Navigator.of(context).pop(item.site) : null);
+    return Opacity(
+      // 被屏蔽但仍显示（屏蔽管理）的行压暗：与安卓 adapter 的 0.55 alpha 同一意图。
+      opacity: _blockedEditing && blocked ? 0.55 : 1,
+      child: ListTile(
+        key: ValueKey('site-option-${item.site.key}'),
+        dense: true,
+        selected: isCurrent,
+        leading: Icon(
+          available ? Icons.check_circle_outline : Icons.block,
+          // 用设计系统的状态色，不用 `Colors.greenAccent` 与框架的
+          // `disabledColor`——那两个不属于这个世界（craft-floor：散落的框架默认值）。
+          color: available ? semantic.statusOk : semantic.statusUnknown,
+        ),
+        // 只显示名称：key/type/运行时属协议内部字段，已写日志。
+        title: Text(
+          item.site.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: available
+            ? null
+            : Text(
+                availability.reason ?? '当前不可用',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            const SizedBox(width: AppSpace.sm),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (blocked && _blockedEditing) ...[
+              Text(
+                '已屏蔽',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: AppSpace.sm),
+            ],
+            if (isCurrent) ...[
+              Text(
+                '当前',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: semantic.magnitude,
+                ),
+              ),
+              const SizedBox(width: AppSpace.sm),
+            ],
+            if (item.site.searchable) const Icon(Icons.search, size: 16),
           ],
-          if (item.site.searchable) const Icon(Icons.search, size: 16),
-        ],
+        ),
+        enabled: _blockedEditing || available,
+        onTap: onTap,
       ),
-      enabled: available,
-      onTap: available ? () => Navigator.of(context).pop(item.site) : null,
+    );
+  }
+
+  /// 空列表提示：区分「配置里就没有站点」「都被屏蔽了」「只是没命中关键字」。
+  String _emptyHint() {
+    if (widget.items.isEmpty) return '当前配置没有可用站点';
+    if (_blocked.isNotEmpty && _keyword.text.trim().isEmpty && _group.isEmpty) {
+      return '站点都被屏蔽了：点右上角眼睛图标可管理屏蔽';
+    }
+    return '没有匹配的站点';
+  }
+
+  /// 排序模式：单列 + 拖动手柄。
+  ///
+  /// 为什么不在两列网格里直接拖：Flutter 的 `ReorderableListView` 只支持单列，
+  /// 网格拖动要自己维护 `Draggable`/`DragTarget` 交换与边缘滚动，而桌面鼠标也
+  /// 没有安卓「长按条目拖动」的心智。显式排序模式复用播放器按钮排版那套既有引擎
+  /// （`player_button_config_page`），行为可单测、鼠标可达。
+  Widget _sortPanel(BuildContext context) {
+    final theme = Theme.of(context);
+    return ReorderableListView.builder(
+      buildDefaultDragHandles: false,
+      itemCount: _order.length,
+      // 默认 proxyDecorator 会把 elevation 从 0 动到 6，违反 The Zero-Elevation
+      // Rule；这里改用表面阶梯表达层级。
+      proxyDecorator: (child, index, animation) => Material(
+        elevation: 0,
+        color: theme.colorScheme.surfaceContainerHigh,
+        child: child,
+      ),
+      // `onReorderItem` 已由框架做掉「移除一项后下标左移」的 -1 调整，直接插入即可。
+      onReorderItem: (oldIndex, newIndex) {
+        setState(() {
+          final moved = _order.removeAt(oldIndex);
+          _order.insert(newIndex, moved);
+        });
+        _persistOrder();
+      },
+      itemBuilder: (context, index) {
+        final key = _order[index];
+        final item = _byKey[key];
+        if (item == null) {
+          return SizedBox.shrink(key: ValueKey('site-sort-$key'));
+        }
+        return ListTile(
+          key: ValueKey('site-sort-row-$key'),
+          dense: true,
+          title: Text(
+            item.site.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: _blocked.contains(key) ? const Text('已屏蔽') : null,
+          trailing: ReorderableDragStartListener(
+            index: index,
+            child: const Icon(Icons.drag_handle, size: 18),
+          ),
+        );
+      },
     );
   }
 
@@ -1639,9 +1848,16 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final theme = Theme.of(context);
     final items = _visible;
     final groups = _groups;
+    final canSort = widget.onReorder != null;
 
     return AlertDialog(
-      title: const Text('选择站点'),
+      title: Text(
+        _sorting
+            ? '站点顺序'
+            : _blockedEditing
+            ? '管理屏蔽站点'
+            : '选择站点',
+      ),
       content: SizedBox(
         // 宽一点、高一点：站点数实测可达 170+。
         //
@@ -1653,59 +1869,97 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              key: const ValueKey('site-search'),
-              controller: _keyword,
-              autofocus: true,
-              decoration: InputDecoration(
-                isDense: true,
-                prefixIcon: const Icon(Icons.search, size: 18),
-                hintText: '搜索站点名称',
-                suffixIcon: _keyword.text.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: '清空',
-                        icon: const Icon(Icons.close, size: 18),
-                        onPressed: () => setState(_keyword.clear),
+            if (_sorting)
+              Text(
+                '拖动右侧手柄调整顺序，改动自动保存（共 ${_order.length} 个站点）',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              )
+            else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('site-search'),
+                      controller: _keyword,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        prefixIcon: const Icon(Icons.search, size: 18),
+                        hintText: '搜索站点名称',
+                        suffixIcon: _keyword.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: '清空',
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () => setState(_keyword.clear),
+                              ),
+                        border: const OutlineInputBorder(),
                       ),
-                border: const OutlineInputBorder(),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  if (canSort) ...[
+                    const SizedBox(width: AppSpace.xs),
+                    IconButton(
+                      key: const ValueKey('site-sort-toggle'),
+                      tooltip: '手动排序',
+                      icon: const Icon(Icons.swap_vert),
+                      onPressed: _toggleSorting,
+                    ),
+                  ],
+                  if (widget.onBlockedChanged != null)
+                    IconButton(
+                      key: const ValueKey('site-block-toggle'),
+                      tooltip: _blockedEditing ? '退出屏蔽管理' : '管理屏蔽站点',
+                      isSelected: _blockedEditing,
+                      icon: Icon(
+                        _blockedEditing
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: _toggleBlockedEditing,
+                    ),
+                ],
               ),
-              onChanged: (_) => setState(() {}),
-            ),
-            if (groups.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              // 分组 chip 行：横向可滚，命中关键字时只列出现存的分组。
-              SizedBox(
-                height: 34,
-                child: HorizontalMouseDrag(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _GroupChip(
-                          label: '全部',
-                          selected: _group.isEmpty,
-                          onTap: () => setState(() => _group = ''),
-                        ),
-                        for (final group in groups)
+              if (groups.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                // 分组 chip 行：横向可滚，命中关键字时只列出现存的分组。
+                SizedBox(
+                  height: 34,
+                  child: HorizontalMouseDrag(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
                           _GroupChip(
-                            key: ValueKey('site-group-$group'),
-                            label: group,
-                            selected: _group == group,
-                            onTap: () => setState(() => _group = group),
+                            label: '全部',
+                            selected: _group.isEmpty,
+                            onTap: () => setState(() => _group = ''),
                           ),
-                      ],
+                          for (final group in groups)
+                            _GroupChip(
+                              key: ValueKey('site-group-$group'),
+                              label: group,
+                              selected: _group == group,
+                              onTap: () => setState(() => _group = group),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
+              const SizedBox(height: 8),
             ],
-            const SizedBox(height: 8),
             Expanded(
-              child: items.isEmpty
+              child: _sorting
+                  ? _sortPanel(context)
+                  : items.isEmpty
                   ? Center(
                       child: Text(
-                        widget.items.isEmpty ? '当前配置没有可用站点' : '没有匹配的站点',
+                        _emptyHint(),
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -1730,9 +1984,19 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
         ),
       ),
       actions: [
+        if (_sorting)
+          TextButton(
+            key: const ValueKey('site-sort-reset'),
+            onPressed: _resetOrder,
+            child: const Text('恢复默认'),
+          ),
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭'),
+          // 排序模式只退出模式，不关对话框：关闭对话框会把用户刚排好的列表一起
+          // 藏起来，想接着选站点还得重新打开一次（单向门）。
+          onPressed: _sorting
+              ? () => setState(() => _sorting = false)
+              : () => Navigator.of(context).pop(),
+          child: Text(_sorting ? '完成排序' : '关闭'),
         ),
       ],
     );

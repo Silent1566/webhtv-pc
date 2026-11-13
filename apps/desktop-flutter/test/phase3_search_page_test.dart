@@ -512,6 +512,25 @@ void main() {
     expect(state.activeSearch!.results.map((e) => e.siteKey).toList(), ['ui-a']);
   });
 
+  testWidgets('范围选择器：当前站点被屏蔽时不给「当前站点」选项', (tester) async {
+    await prepare(tester, similarity: 0);
+    await pumpPage(tester);
+
+    // 屏蔽的是**当前站点**（ui-a）：这种组合下「当前站点」范围必然一个请求都不发，
+    // 给出来只会让用户以为搜索坏了（屏蔽站点不参与搜索，见 AppState.searchAll）。
+    await tester.runAsync(() => state.setSiteBlocked('ui-a', true));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('search-scope')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('search-scope-all')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-scope-site')),
+      findsNothing,
+      reason: '被屏蔽的当前站点不得出现在搜索范围里',
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // 结果分页（对齐上游 CustomScroller + SearchPageState）
   // ---------------------------------------------------------------------------
