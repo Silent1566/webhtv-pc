@@ -216,18 +216,23 @@ void main() {
     };
     final engine = ChromiumSniffEngine(transport: transport, headed: false);
     final session = await engine.start(request(clickScript: 'document.querySelector("#play").click()'));
-    final collected = <SniffEvent>[];
-    session.events.listen(collected.add);
+
+    // 等候选事件，而不是固定 sleep：DOM 探测是 1s 一次的定时器，固定 1.4s
+    // 在并发跑整套测试时会因为机器负载而偶发失败（实测踩到）。
+    final candidateFuture = session.events
+        .where((event) => event is SniffCandidate)
+        .cast<SniffCandidate>()
+        .first
+        .timeout(const Duration(seconds: 8));
 
     transport.connection.emit(CdpEvent(method: 'Page.loadEventFired', params: const {}));
-    await Future<void>.delayed(const Duration(milliseconds: 1400));
+    final candidate = await candidateFuture;
 
     expect(
       transport.connection.evaluated.any((expression) => expression.contains('document.querySelector("#play").click()')),
       isTrue,
       reason: 'click 脚本必须在页面加载后注入',
     );
-    final candidate = collected.whereType<SniffCandidate>().single;
     expect(candidate.via, 'dom');
     expect(candidate.url, 'https://cdn.example.com/vod/from-dom.m3u8');
     await session.stop();
