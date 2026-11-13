@@ -218,6 +218,7 @@ class _TestAppState extends AppState {
     bool Function()? isCurrent,
     Site? siteOverride,
     SiteService? serviceOverride,
+    String? preferredParseName,
   }) async {
     playedTargets.add(episodeTarget);
     throw AppError(AppErrorKind.siteCancelled, '测试：不真的解析播放地址');

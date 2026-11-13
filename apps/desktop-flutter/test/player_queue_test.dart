@@ -311,6 +311,7 @@ class QueueState extends AppState {
     SiteService? serviceOverride,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     targets.add((
       target: episodeTarget,
@@ -326,6 +327,7 @@ class QueueState extends AppState {
         vodId: vodId,
         qualityIndex: qualityIndex,
         isCurrent: isCurrent,
+        preferredParseName: preferredParseName,
         serviceOverride: realService,
         siteOverride: realSite,
       );
@@ -344,6 +346,7 @@ class QueueState extends AppState {
     String? vodId,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     targets.add((
       target: episodeTarget,
@@ -359,6 +362,7 @@ class QueueState extends AppState {
         vodId: vodId,
         qualityIndex: qualityIndex,
         isCurrent: isCurrent,
+        preferredParseName: preferredParseName,
         serviceOverride: realService,
         siteOverride: realSite,
       );

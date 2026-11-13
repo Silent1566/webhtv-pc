@@ -87,6 +87,7 @@ class _ResolveState extends AppState {
     SiteService? serviceOverride,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     final gate = resolveGate;
     resolveGate = null;
