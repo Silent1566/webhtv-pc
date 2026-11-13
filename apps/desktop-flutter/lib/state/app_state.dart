@@ -1561,6 +1561,41 @@ AiContentCompletion? aiContentCompletion,
   SiteOrderSettings get siteOrder =>
       _uiPreferences?.siteOrder ?? const SiteOrderSettings.defaults();
 
+  /// 站点列表覆盖（手动顺序 + 屏蔽）的持久化作用域。
+  ///
+  /// 用配置**记录 id**，与 `config_sites` / `tmdb_*` 等既有表同一口径：同一份
+  /// 配置重新拉取（刷新接口地址）后顺序与屏蔽仍然生效，换到另一份配置则各自一套。
+  /// 没有配置记录时（未 bootstrap、纯内存路径）落到 `default`，不同配置会共用——
+  /// 这只是降级路径，不是生产口径。
+  String get siteListScopeKey {
+    final record = _activeRecord;
+    if (record != null) return 'config:${record.id}';
+    return 'default';
+  }
+
+  /// 生效的站点列表覆盖（手动顺序 + 屏蔽）。
+  SiteListOverrides get siteListOverrides =>
+      _uiPreferences?.siteListOverrides(siteListScopeKey) ??
+      SiteListOverrides.empty;
+
+  /// 被屏蔽的站点 key：从站点列表隐去，且不参与搜索/换源候选。
+  Set<String> get blockedSiteKeys => siteListOverrides.blocked;
+
+  /// 配置原始顺序的站点 key（`hide=1` 的站点不算）。
+  ///
+  /// 只给「恢复默认排序」用：站点选择器收到的 [siteItems] 已经按手动顺序排过，
+  /// 没法从它反推默认顺序。
+  List<String> get siteConfigOrderKeys {
+    final config = effectiveConfig;
+    if (config == null) return const [];
+    return [
+      for (final site in config.sites)
+        if (!site.hide) site.key,
+    ];
+  }
+
+  bool isSiteBlocked(String siteKey) => siteListOverrides.isBlocked(siteKey);
+
   /// 直连站源注册的进行中 Future（null 表示未发起或已作废）。
   ///
   /// 首屏抢跑缺陷（2026-10-24 实测）：[_attachSiteService] 先 unawaited 发起注册，
@@ -2157,6 +2192,42 @@ AiContentCompletion? aiContentCompletion,
     return ok;
   }
 
+  /// 保存站点列表的手动顺序（当前配置全部站点 key 的先后）。
+  ///
+  /// 传空列表等于「恢复默认」：清掉手动顺序，列表回到配置顺序。屏蔽集合不受影响。
+  Future<bool> setSiteManualOrder(List<String> orderedKeys) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final current = siteListOverrides;
+    final next = SiteListOverrides(
+      order: normalizeSiteKeys(orderedKeys),
+      blocked: current.blocked,
+    );
+    final ok = await store.rememberSiteListOverrides(siteListScopeKey, next);
+    if (ok) notifyListeners();
+    return ok;
+  }
+
+  /// 屏蔽/取消屏蔽一个站点（[blocked] 为 true 表示屏蔽）。
+  ///
+  /// 被屏蔽站点从站点列表隐去，且不参与多站点搜索与换源候选；当前正在使用的
+  /// 站点被屏蔽时**本次会话照常使用**，只是下次选择时看不到它。
+  Future<bool> setSiteBlocked(String siteKey, bool blocked) async {
+    final store = _uiPreferences;
+    final key = siteKey.trim();
+    if (store == null || key.isEmpty) return false;
+    final current = siteListOverrides;
+    final next = {...current.blocked};
+    final changed = blocked ? next.add(key) : next.remove(key);
+    if (!changed) return true;
+    final ok = await store.rememberSiteListOverrides(
+      siteListScopeKey,
+      current.copyWith(blocked: next),
+    );
+    if (ok) notifyListeners();
+    return ok;
+  }
+
   /// 站点健康分：成功次数 / 总次数；没有样本的站点不出现在表里。
   Map<String, double> siteHealthScores() {
     final db = _database;
@@ -2523,10 +2594,10 @@ AiContentCompletion? aiContentCompletion,
   List<SiteListItem> get siteItems {
     final config = effectiveConfig;
     if (config == null) return const [];
-    return config.sites
-        .where((site) => !site.hide)
-        .map(
-          (site) => SiteListItem(
+    final items = <SiteListItem>[
+      for (final site in config.sites)
+        if (!site.hide)
+          SiteListItem(
             site: site,
             // HTML 首页不是爬虫：不能交给路由判可用性（会报「manifest 未注册」，
             // 而真实原因是它由 WebView2 承载）。走路由前先识别这一形态。
@@ -2536,8 +2607,19 @@ AiContentCompletion? aiContentCompletion,
                 // 因此这里用带注册表的实例方法，而不是静态 `classify`。
                 : _router.classifySite(site),
           ),
-        )
-        .toList();
+    ];
+    // 手动顺序是**本地覆盖**，不改配置文件：未列入顺序的站点保持配置顺序
+    // 追加在后，所以新增站点不会插队，列表也不会每次打开都换位置。
+    final order = siteListOverrides.order;
+    if (order.isEmpty || items.length <= 1) return items;
+    final byKey = {for (final item in items) item.site.key: item};
+    return [
+      for (final key in orderSiteKeysByManual(
+        keys: [for (final item in items) item.site.key],
+        savedOrder: order,
+      ))
+        byKey[key]!,
+    ];
   }
 
   /// 当前配置里可用于**搜索范围限定**的分组（按站点顺序去重）。
@@ -2549,6 +2631,9 @@ AiContentCompletion? aiContentCompletion,
     final seen = <String>[];
     for (final item in siteItems) {
       if (!item.site.searchable) continue;
+      // 被屏蔽站点不参与搜索：只剩屏蔽站点才存在的分组不该留在范围选择里，
+      // 否则用户会选中一个「一个站点都不会发请求」的范围。
+      if (isSiteBlocked(item.site.key)) continue;
       for (final group in siteGroupsOf(
         item.site.name,
         rules: siteGroupSettings.enabledRules,
@@ -3504,7 +3589,11 @@ AiContentCompletion? aiContentCompletion,
     // - 找不到就退回 `config.defaultSite()`（首次使用即此分支）。
     if (_selectedSite == null) {
       final remembered = _siteByKey(config, _uiPreferences?.lastSiteKey ?? '');
-      if (remembered != null && webHomeKeyOfSite(remembered) == null) {
+      // 被屏蔽的站点不当「下次选择的起点」：屏蔽的语义就是它不该再被选中。
+      // 本次会话里屏蔽当前站点仍然照常使用（见 setSiteBlocked），那是另一条路径。
+      if (remembered != null &&
+          !isSiteBlocked(remembered.key) &&
+          webHomeKeyOfSite(remembered) == null) {
         _selectedSite = remembered;
         log.info(
           '恢复上次使用的站点 site=${remembered.key.isEmpty ? remembered.name : remembered.key}',
@@ -3514,10 +3603,17 @@ AiContentCompletion? aiContentCompletion,
     }
     final defaultSite = config.defaultSite();
     _selectedSite ??=
-        defaultSite != null && webHomeKeyOfSite(defaultSite) == null
+        defaultSite != null &&
+            !isSiteBlocked(defaultSite.key) &&
+            webHomeKeyOfSite(defaultSite) == null
         ? defaultSite
         : config.sites
-              .where((site) => !site.hide && webHomeKeyOfSite(site) == null)
+              .where(
+                (site) =>
+                    !site.hide &&
+                    !isSiteBlocked(site.key) &&
+                    webHomeKeyOfSite(site) == null,
+              )
               .firstOrNull;
   }
 
@@ -3663,28 +3759,10 @@ AiContentCompletion? aiContentCompletion,
       // 旧配置的详情请求必须作废：配置换了之后返回的详情属于另一个站点
       // （§7.4.1 导入即切换）。
       _detailRunId++;
-      // 选中站点必须属于新配置（§7.4.1 导入即切换）：`_attachSiteService` 会按 key
-      // 校验归属，不属于当前配置的选中项退回新配置的默认站点。
-      //
-      // 注意不能无条件置空：用户重新导入**同一份**配置（刷新）时应留在原站点；
-      // 也不能继续用 `??=`：实测导入猫源后仍选中旧配置的 `csp_PianDan`，首页直接
-      // siteUnsupported，用户看到「一个站点都加载不出数据」。
-      final previousSiteKey = _selectedSite?.key;
-      _attachSiteService();
-      // 浏览结果绑定在选中站点上：站点换了就必须丢弃，否则拿旧站点列表渲染新配置。
-      if (_selectedSite?.key != previousSiteKey) {
-        _selectedTypeId = null;
-        _homeResult = null;
-        _categoryResult = null;
-        _detailResult = null;
-        _detailError = null;
-        _activeSearch = null;
-        // 筛选维度是**站点相关**的（不同站点的 key/取值完全不同），换站点必须
-        // 一并作废：留着旧站点的筛选会让新站点的第一个分类请求带着无效的 ext。
-        _categoryFilters = const {};
-        _resetCategoryPaging();
-      }
-
+      // 先落库、把生效记录切到新配置，再 attach 站点服务：`_attachSiteService`
+      // 选当前站点时会按**记录 id** 取本配置的手动顺序/屏蔽集合（`siteListScopeKey`），
+      // 记录还停在上一份时就会读到别人的屏蔽——表现为「刚导入的配置里，被屏蔽站点
+      // 被选成当前站点」，而且本次会话不会自愈。
       final name = displayName ?? config.name ?? source.displayName;
       final recordId = _database?.saveConfig(
         name: name,
@@ -3710,6 +3788,28 @@ AiContentCompletion? aiContentCompletion,
         // 下次启动会按旧记忆把用户刚导入的配置又换掉。
         final active = _activeRecord;
         if (active != null) _rememberLastConfig(active);
+      }
+
+      // 选中站点必须属于新配置（§7.4.1 导入即切换）：`_attachSiteService` 会按 key
+      // 校验归属，不属于当前配置的选中项退回新配置的默认站点。
+      //
+      // 注意不能无条件置空：用户重新导入**同一份**配置（刷新）时应留在原站点；
+      // 也不能继续用 `??=`：实测导入猫源后仍选中旧配置的 `csp_PianDan`，首页直接
+      // siteUnsupported，用户看到一个站点都加载不出数据。
+      final previousSiteKey = _selectedSite?.key;
+      _attachSiteService();
+      // 浏览结果绑定在选中站点上：站点换了就必须丢弃，否则拿旧站点列表渲染新配置。
+      if (_selectedSite?.key != previousSiteKey) {
+        _selectedTypeId = null;
+        _homeResult = null;
+        _categoryResult = null;
+        _detailResult = null;
+        _detailError = null;
+        _activeSearch = null;
+        // 筛选维度是**站点相关**的（不同站点的 key/取值完全不同），换站点必须
+        // 一并作废：留着旧站点的筛选会让新站点的第一个分类请求带着无效的 ext。
+        _categoryFilters = const {};
+        _resetCategoryPaging();
       }
 
       _notice = config.notice ?? '配置导入成功：${config.sites.length} 个站点';
@@ -4695,9 +4795,13 @@ AiContentCompletion? aiContentCompletion,
     final concurrency = maxConcurrency ?? searchThread;
     final scopeSiteKey = siteKey?.trim() ?? '';
     final scopeGroup = group?.trim() ?? '';
+    // 被屏蔽的站点不进「范围」：它们不发起请求，也不该被统计成「跳过」——
+    // 对用户来说它们已经不在列表里（与安卓 SiteBlockSetting.filter 同口径）。
     final allItems = [
       for (final item in siteItems)
-        if (_inSearchScope(item.site, scopeSiteKey, scopeGroup)) item,
+        if (_inSearchScope(item.site, scopeSiteKey, scopeGroup) &&
+            !isSiteBlocked(item.site.key))
+          item,
     ];
     var sites = allItems
         .where((item) => item.availability.available && item.site.searchable)

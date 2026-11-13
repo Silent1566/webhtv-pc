@@ -230,6 +230,9 @@ py -3 tools/phase9/verify_gap_matrix.py
 - 片头片尾存 **按影片** 的 `skip_segments` 表，而不是 `history` 两列（同一部剧各集片头片尾一致，按集存会强迫用户逐集标记）。
 - 直播「切台跨分组」与「列表皮肤/手势反转」暂不迁移：桌面输入模型不同，且当前直播页没有跨分组切台 UI，避免设置项无行为。
 - 预加载只做「下一集地址预解析」，不下载媒体数据（与设计稿一致，防止被误解为边下边播）。
+- 站点屏蔽比安卓**多管一层**：安卓 `SiteBlockSetting.filter` 只在站点选择弹窗生效（被屏蔽站点仍参与搜索），PC 按本仓 P1-3 的验收口径把它同时排除在多站点搜索/换源候选之外——否则用户会搜到列表里根本看不到的站点。搜索范围分组同步收窄（只剩被屏蔽站点的分组不再出现）。
+- 屏蔽集合的分桶口径与安卓**不同**：安卓 `SiteBlockSetting` 全局只用一个 `site_block_keys` 键（换配置照样继承），PC 按配置记录 id 分桶，与手动顺序（安卓 `site_dialog_order_ + cid`）一致。理由：同一站点 key 在不同配置里是不同站源，屏蔽不该跨配置传染。
+- 「隐去」的范围限定为**站点选择器**：被屏蔽站点仍留在 `siteItems` 里（当前站点、历史恢复、诊断页与 AI 源名照常显示），否则当前正在使用的站点会悬空。手动顺序/屏蔽都是本地覆盖，不写回配置文件；屏蔽也会让「上次使用的站点」不再作为下次启动的默认站点（本次会话仍照常使用）。
 
 ---
 
@@ -237,7 +240,7 @@ py -3 tools/phase9/verify_gap_matrix.py
 
 | 缺口 | 状态 | 落地内容 | 证据 |
 | --- | --- | --- | --- |
-| P1-3 健康排序 | **已实现** | `core/site_order.dart`（纯排序，无样本排最后、同分稳定）；`AppState.searchAll` 按健康分重排；设置页开关；顶层 `siteOrder` 持久化 | `test/phase9_site_order_test.dart`、`test/phase9_preferences_test.dart` |
+| P1-3 站点排序 + 屏蔽 | **已实现** | 健康排序：`core/site_order.dart`（无样本排最后、同分稳定）+ `AppState.searchAll` 重排 + 设置页开关 + 顶层 `siteOrder` 持久化。手动排序 + 屏蔽（参照安卓 `SiteOrderStore`/`SiteBlockSetting`）：站点选择器顶部「手动排序」进入单列拖拽模式（`ReorderableListView` + 拖动手柄 + 恢复默认），「眼睛」进入屏蔽管理模式（点行切换屏蔽、被屏蔽行压暗标注）；两者按配置记录 id 分桶存顶层 `siteList` 段（顺序的分桶口径与安卓一致；屏蔽安卓是全局单键，见已知偏差），被屏蔽站点从站点选择器隐去且不参与搜索/换源候选 | `test/phase9_site_order_test.dart`、`test/phase9_preferences_test.dart`、`test/site_list_manage_state_test.dart`、`test/site_picker_manage_test.dart` |
 | P1-4 接口失败切换 | **已实现（失败切换；自定义排序待续）** | `core/parse_failover.dart`（只收 JSON 类、排除首选、去重、上限）；`ParseService.runWithFallback` 重试链；`SiteService.resolvePlayback/_runParser` 接线；设置页开关；顶层 `parseFailover` 持久化 | `test/phase9_parse_failover_test.dart`、`test/phase9_preferences_test.dart`、`test/phase3_parser_test.dart` |
 | P1-5 分组规则 | **已实现（规则部分；站点改名待续）** | `core/site_group_rules.dart`：4 条内置规则可开关 + 自定义正则；`siteGroupsOf`/筛选/站点选择器全部接入；高级设置页可增删启停；顶层 `siteRules` 持久化 | `test/phase9_site_group_rules_test.dart`、`test/phase9_preferences_test.dart`、`test/phase8_settings_entries_test.dart` |
 | P1-6 CSP 预热 | **暂缓（避免假功能）** | PC 的 `csp_*` 走按次启动的 JVM sidecar，没有常驻进程池；现有 API 只能“启动后立刻结束”，无法产生可观测预热收益。需先做 sidecar 常驻池（另立设计），否则开关无行为 | — |
@@ -250,7 +253,8 @@ py -3 tools/phase9/verify_gap_matrix.py
 
 说明：
 
-- P1-3 只做「按健康度排序搜索结果」，**不做**没有 UI 的手动排序/屏蔽配置（避免假功能）；
+- P1-3 健康排序只影响搜索/换源顺序；手动顺序与屏蔽有独立 UI（站点选择器里的
+  「手动排序 / 管理屏蔽站点」），不再是「没有界面的隐藏配置」。
   换源对话框的展示排序仍沿用 `source_field.dart` 既有的星等排序。
 - P1-4 只做「解析失败后按配置顺序再试一个 JSON 类接口」，默认关闭；不做自定义接口排序
   （没有排序 UI 的配置等于假功能）。非解析错误不重试，避免掩盖调用方缺陷。

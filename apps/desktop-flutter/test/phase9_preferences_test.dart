@@ -7,6 +7,7 @@ import 'package:webhtv_pc/core/live_settings.dart';
 import 'package:webhtv_pc/core/outbound_proxy.dart';
 import 'package:webhtv_pc/core/parse_failover.dart';
 import 'package:webhtv_pc/core/site_group_rules.dart';
+import 'package:webhtv_pc/core/site_order.dart';
 import 'package:webhtv_pc/core/subtitle_settings.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/services/ui_preferences_store.dart';
@@ -203,6 +204,84 @@ void main() {
       final reloaded = UiPreferencesStore(path: settingsPath);
       await reloaded.load();
       expect(reloaded.siteOrder.healthSort, isTrue);
+    });
+  });
+
+  group('站点列表覆盖（手动顺序 + 屏蔽，P1-3）', () {
+    test('默认空覆盖且不写盘', () async {
+      final store = UiPreferencesStore(path: settingsPath);
+      await store.load();
+      expect(store.siteListOverrides('config:1'), SiteListOverrides.empty);
+      expect(store.hasExplicitSiteListOverrides, isFalse);
+      expect(readRaw().containsKey('siteList'), isFalse);
+    });
+
+    test('按配置作用域分别保存，互不影响', () async {
+      final store = UiPreferencesStore(path: settingsPath);
+      await store.load();
+      await store.rememberSiteListOverrides(
+        'config:1',
+        const SiteListOverrides(order: ['b', 'a'], blocked: {'a'}),
+      );
+      await store.rememberSiteListOverrides(
+        'config:2',
+        const SiteListOverrides(order: ['c']),
+      );
+
+      final siteList = readRaw()['siteList'] as Map<String, Object?>;
+      final first = siteList['config:1'] as Map<String, Object?>;
+      expect(first['order'], ['b', 'a']);
+      expect(first['blocked'], ['a']);
+      expect(
+        (siteList['config:2'] as Map<String, Object?>).containsKey('blocked'),
+        isFalse,
+        reason: '空屏蔽集合不写键',
+      );
+
+      final reloaded = UiPreferencesStore(path: settingsPath);
+      await reloaded.load();
+      expect(reloaded.siteListOverrides('config:1').order, ['b', 'a']);
+      expect(reloaded.siteListOverrides('config:1').blocked, {'a'});
+      expect(reloaded.siteListOverrides('config:2').order, ['c']);
+      expect(reloaded.siteListOverrides('config:2').blocked, isEmpty);
+      expect(reloaded.siteListOverrides('config:3').isEmpty, isTrue);
+    });
+
+    test('清空最后一项后整段消失', () async {
+      final store = UiPreferencesStore(path: settingsPath);
+      await store.load();
+      await store.rememberSiteListOverrides(
+        'config:1',
+        const SiteListOverrides(blocked: {'a'}),
+      );
+      expect(readRaw().containsKey('siteList'), isTrue);
+
+      await store.rememberSiteListOverrides(
+        'config:1',
+        SiteListOverrides.empty,
+      );
+      expect(
+        readRaw().containsKey('siteList'),
+        isFalse,
+        reason: '空覆盖不得留下空段',
+      );
+
+      final reloaded = UiPreferencesStore(path: settingsPath);
+      await reloaded.load();
+      expect(reloaded.siteListOverrides('config:1').isEmpty, isTrue);
+    });
+
+    test('空作用域拒绝写入', () async {
+      final store = UiPreferencesStore(path: settingsPath);
+      await store.load();
+      expect(
+        await store.rememberSiteListOverrides(
+          '  ',
+          const SiteListOverrides(order: ['a']),
+        ),
+        isFalse,
+      );
+      expect(readRaw().containsKey('siteList'), isFalse);
     });
   });
 
