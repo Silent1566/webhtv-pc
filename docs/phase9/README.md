@@ -16,6 +16,9 @@
 
 ## 1. 结论
 
+> **2026-11-12 复核（当前口径，取代下方历史数字）**：按 Android `webhtv @ 2d8b99775` 与 PC `@ b3c54d7e` 重新逐项核对 108 条用户可见能力，结果为**已迁移 43 / 部分迁移 30 / 未迁移 24 / 证据不足 7 / 平台专属 3 / 双方均无 1**。
+> 新清单、判定口径与逐条源码证据见 [`parity-2026-11-12/`](parity-2026-11-12/README.md)；下方「34 项」表格与 §4 矩阵是 2026-10 的历史记录（内含已落地项，不能直接当待办）。
+
 PC 端已完成 Phase 0–8，**配置 → 站点 → 浏览/搜索 → 详情 → 播放 → 直播/字幕/弹幕 → TMDB/AI 集季 → 安卓桥接/实时同步 → 播放器浮层**这条主闭环是通的，且有自己的安全边界（Spider 进程隔离、回环代理、能力披露）。
 
 与 `webtv2` 对比后，仍有 **34 项用户可见能力缺失**，分四档：
@@ -120,7 +123,7 @@ PC 端已完成 Phase 0–8，**配置 → 站点 → 浏览/搜索 → 详情 �
 
 | ID | 能力 | 安卓依据 | PC 现状 | 迁移方案 | 验收条件 |
 | --- | --- | --- | --- | --- | --- |
-| P3-1 | WebHome 自定义首页 + 扩展 + 主题 | `android/app/src/main/java/com/fongmi/android/tv/ui/web/CatWebActivity.java`、`android/app/src/main/java/com/fongmi/android/tv/web`、`android/app/src/main/assets/webhome`、`android/webhome-devkit` | 明确不支持；`apps/desktop-flutter/lib/core/parse_runtime.dart` 注明 type=0 需浏览器内核；`pubspec.yaml` 无 WebView 依赖 | **ADR-0003**：WebView2 独立进程/独立 profile + 受限 bridge（对齐 Android SDK 子集）；未通过 ADR 则保持「不迁移 + 披露」，不得用半成品占位 | L1：bridge 白名单；L2：首页加载与错误降级；L3：示例 homePage 可用；安全测试（无本地文件、无任意 IPC、无凭据外泄） |
+| P3-1 | WebHome 自定义首页 + 扩展 + 主题 | `android/app/src/main/java/com/fongmi/android/tv/ui/web/CatWebActivity.java`、`android/app/src/main/java/com/fongmi/android/tv/web`、`android/app/src/main/assets/webhome`、`android/webhome-devkit` | 明确不支持；但解析器的 `type=0` Web 嗅探已用「本机 Chromium 内核浏览器 + CDP」实现（设计文档 §12.4），不依赖 WebView2、也不新增任何 WebView 依赖 | **ADR-0003**：WebView2 独立进程/独立 profile + 受限 bridge（对齐 Android SDK 子集）；未通过 ADR 则保持「不迁移 + 披露」，不得用半成品占位 | L1：bridge 白名单；L2：首页加载与错误降级；L3：示例 homePage 可用；安全测试（无本地文件、无任意 IPC、无凭据外泄） |
 | P3-2 | 听书 / 音频模式 / TTS | `android/app/src/main/java/com/fongmi/android/tv/ui/activity/AudioActivity.java`、`android/app/src/main/java/com/fongmi/android/tv/ui/audio`、`android/app/src/main/java/com/fongmi/android/tv/tts` | 无；播放器只有视频面 | 音频模式（最小 UI）+ Windows SAPI/Edge TTS + 系统媒体键（SMTC）；落在 `PLANNED apps/desktop-flutter/lib/ui/audio_mode_page.dart` | L1：TTS 分段/缓存；L2：音频模式；L3：系统媒体键可控；失败静音回退 |
 | P3-3 | 小说/漫画阅读器 | `android/app/src/main/java/com/fongmi/android/tv/ui/web/WebReaderActivity.java`、`android/app/src/main/java/com/fongmi/android/tv/ui/novel` | 无；`apps/desktop-flutter/lib/core/cat_source.dart` 明示小说/漫画不接入 | 分页/进度/目录 + displayRules + 缓存；落在 `PLANNED apps/desktop-flutter/lib/ui/reader_page.dart` | L1：分页/进度；L2：阅读 UI；L3：fixture 源阅读并恢复 |
 | P3-4 | GitCloud 云备份 | `android/app/src/main/java/com/fongmi/android/tv/gitcloud` | 无 | Git provider（GitHub/Gitee/GitLab）+ 凭据加密 + 备份/恢复；落在 `PLANNED apps/desktop-flutter/lib/services/git_cloud_service.dart` | L1：provider 协议；L2：账号 UI；L3：往返备份；冲突提示 |

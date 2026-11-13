@@ -60,6 +60,7 @@ import '../services/following_service.dart';
 import '../services/following_air_time_service.dart';
 import '../services/notification_service.dart';
 import '../services/session_recovery_store.dart';
+import '../services/sniff_runtime.dart';
 import '../core/history_aggregation.dart';
 import '../core/history_grouping.dart';
 import '../core/history_scope.dart';
@@ -111,6 +112,7 @@ import '../services/proxy_server.dart';
 import '../services/python_environment.dart';
 import '../services/realtime_sync_engine.dart';
 import '../services/search_suggest_service.dart';
+import '../services/parse_service.dart';
 import '../services/site_service.dart';
 import '../services/spider_process.dart';
 import '../services/spider_registry.dart';
@@ -2671,6 +2673,18 @@ AiContentCompletion? aiContentCompletion,
 
     LogService.logDirectoryOverride = paths.logDir;
     await log.open(paths.logDir);
+
+    // 解析器 type=0/4 的浏览器组件接线：显式环境变量 → 已安装组件 → 系统浏览器。
+    // 只是登记引擎，不启动浏览器（每次嗅探起一个、结束即回收），启动耗时可忽略。
+    initializeSniffRuntime(paths);
+    // 解析轨迹：骨架永远记录（哪个源、什么目标、结果/失败）；逐请求细节复用
+    // 详细调试日志开关，关闭时只留骨架，不刷嗅探/HTTP 事件。
+    installParseTrace(
+      trace: (line) => log.info(line, scope: 'parse'),
+      verbose: (line) {
+        if (_spiderDebugLog.enabled) log.info(line, scope: 'parse');
+      },
+    );
     for (final failure in writeFailures) {
       log.error('数据目录不可写，本次运行不会保存历史/设置：$failure', scope: 'storage');
     }
@@ -5396,6 +5410,9 @@ AiContentCompletion? aiContentCompletion,
     bool Function()? isCurrent,
     Site? siteOverride,
 
+    /// 本次播放手动指定的解析源名称（播放器解析源切换栏，仅本次生效）。
+    String? preferredParseName,
+
     /// 用哪份配置的服务解析。`null` = 生效配置（既有行为）；原来源续播时传
     /// 那份配置自己的服务（见 [playbackContextFor]），这样请求头/解析规则/
     /// 运行时都来自它，不会串到当前配置。
@@ -5415,6 +5432,7 @@ AiContentCompletion? aiContentCompletion,
         vodId: vodId,
         qualityIndex: qualityIndex,
         parseFailover: parseFailoverSettings,
+        preferredParseName: preferredParseName,
       );
       // 过期响应（用户已切到别的画质/线路）不得改动全局播放状态：撤销旧 token 会
       // 连带把**新**会话作废，写 lastDecision 会把播放器指回旧画质。
@@ -5635,6 +5653,7 @@ AiContentCompletion? aiContentCompletion,
     String? vodId,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     final context = playbackContextFor(sourceKey);
     final site = context?.siteByKey(siteKey);
@@ -5648,6 +5667,7 @@ AiContentCompletion? aiContentCompletion,
       vodId: vodId,
       qualityIndex: qualityIndex,
       parseFailover: parseFailoverSettings,
+      preferredParseName: preferredParseName,
     );
     if (_isStale(isCurrent)) return null;
     revokeProxySession();

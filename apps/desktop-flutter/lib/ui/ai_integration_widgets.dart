@@ -10,6 +10,7 @@ import '../core/ai_content/group_rule_validation.dart';
 import '../core/ai_content/log_diagnosis.dart';
 import '../core/ai_content/recommendation.dart';
 import '../core/ai_content/viewing_profile.dart';
+import '../core/history_view.dart';
 import '../core/viewing_report.dart';
 import '../core/audio_ai/audio_ai.dart';
 import '../ui/audio_ai/audio_ai_controls.dart';
@@ -44,12 +45,18 @@ Future<void> openAiBusiness(
 
 /// SearchPage 自身不包含 Scaffold/Material（在应用里它由 shell 承载）。
 /// 任何**新路由**都必须自己给出真实宿主，否则 PopupMenu/TextField 会 No Material。
-Widget aiSearchRouteHost(AppState state, String keyword) => Scaffold(
+Widget aiSearchRouteHost(
+  AppState state,
+  String keyword, {
+  bool useExistingResults = true,
+  ResumeSeed? resumeSeed,
+}) => Scaffold(
   appBar: AppBar(title: const Text('搜索')),
   body: SearchPage(
     state: state,
     initialKeyword: keyword,
-    useExistingResults: true,
+    useExistingResults: useExistingResults,
+    resumeSeed: resumeSeed,
   ),
 );
 

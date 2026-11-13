@@ -12,7 +12,7 @@
 
 ---
 
-## 1. 屏幕（43 个 manifest 屏幕 + 播放宿主 PlaybackActivity，共 44）
+## 1. 屏幕（44 个 manifest 屏幕 + 播放宿主 PlaybackActivity，共 45）
 
 | 屏幕 | 归属 | 说明 |
 | --- | --- | --- |
@@ -41,6 +41,7 @@
 | FolderActivity | P2-9 | 文件夹浏览 |
 | ScanActivity | P3-6 | 扫码配对（远程托管信任） |
 | PushActivity | N4 | 接收推送/APK 推送 |
+| PluginManagerActivity | N/A（新增，未纳入） | 插件管理页；安卓后续新增，PC 无对应物；未纳入 2026-11-12 复核 |
 | CrashActivity | P2-8 | 崩溃页 |
 | PlaybackRecoveryActivity | P2-8 | 崩溃后播放恢复 |
 | AppBrandingActivity | N7 | 品牌设置 |
@@ -63,7 +64,7 @@
 
 ---
 
-## 2. 对话框（84）
+## 2. 对话框（86）
 
 | 对话框 | 归属 | 说明 |
 | --- | --- | --- |
@@ -119,6 +120,7 @@
 | PlaybackPerformanceDialog | N2 | 播放性能档位 |
 | PlaybackPerformanceModal | N2 | 性能档位弹层 |
 | PlaybackRemoteSyncDialog | P2-6 | 观影记录远端同步 |
+| PluginPanelDialog | N/A（新增，未纳入） | 插件面板；安卓后续新增，PC 无对应物；未纳入 2026-11-12 复核 |
 | PlaybackSpeedDialog | 已对齐 | 倍速 |
 | PlaybackWebhookDialog | P2-6 | Webhook 上报 |
 | PlayerButtonConfigDialog | 已对齐 | 按钮排版（Phase 8） |
@@ -171,7 +173,7 @@
 
 ---
 
-## 4. 顶层模块（34）
+## 4. 顶层模块（35）
 
 | 模块 | 归属 | 说明 |
 | --- | --- | --- |
@@ -194,6 +196,7 @@
 | node | 已对齐 | 猫源 Node 运行时（PC `cat_runtime.dart`） |
 | playback | 已对齐 + P2-6 | 播放 API/墓碑；远端同步缺失 |
 | player | 已对齐 + P0-1、P0-4、P0-5 | 播放器；轨道/参数/LUT 缺失 |
+| plugin | N/A（新增，未纳入） | 插件运行时；安卓后续新增，PC 无对应物；未纳入 2026-11-12 复核 |
 | receiver | N4 | 系统广播 |
 | remote | P3-6、P3-7 | 远程托管/遥控 |
 | server | P3-5 | 本地 HTTP 服务/管理页 |
@@ -216,11 +219,12 @@
 
 | 类别 | 行数 | 已对齐 | 缺口 | 不迁移/基础设施 |
 | --- | ---: | ---: | ---: | ---: |
-| 屏幕 | 44 | 14 | 19 | 11 |
-| 对话框 | 84 | 15 | 50 | 19 |
+| 屏幕 | 45 | 14 | 19 | 12 |
+| 对话框 | 86 | 15 | 50 | 21 |
 | 设置 Fragment | 9 | 3 | 6 | 0 |
-| 顶层模块 | 34 | 11 | 17 | 6 |
+| 顶层模块 | 35 | 11 | 17 | 7 |
 
 - 缺口行数为「映射到至少一个 P/N 编号」的条目数；`LiveActivity` 因 P0-8 计入缺口，但它的主体能力已对齐。
 - 统计随基准变化；本表的作用是**逐项有归属**，而不是数字本身。脚本 G9.3 以运行时清点结果校验「每个名字至少出现一次」。
 - 同一能力会跨多个类别重复出现（例如 P0-8 同时命中 LiveActivity、Catchup 模块与 3 个对话框），这是预期行为。
+- `PluginManagerActivity`、`PluginPanelDialog`、`plugin`（共 3 行）是安卓侧后续新增的能力，PC 无对应物且未纳入 2026-11-12 复核（见 `docs/phase9/parity-2026-11-12/`），暂计入「不迁移/基础设施」列；它们的归属要在做插件相关方案时重新判定，不能据此当作已对齐。
