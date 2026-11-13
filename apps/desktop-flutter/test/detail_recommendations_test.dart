@@ -217,48 +217,75 @@ class CalendarRecommendationState extends SourceState {
 /// Task4 回退页夹具：TMDB 侧「搜到 → 详情 → 全季剧集」的一整套假响应。
 ///
 /// 标题固定为 [title]：合成条目的名字就是它，匹配链按标题搜到同一部作品。
-http.Client recommendationTmdbClient({String title = '导航剧'}) =>
-    MockClient((request) async {
-      final path = request.url.path;
-      final Object body;
-      if (path.endsWith('/search/multi')) {
-        body = {
-          'results': [
-            {
-              'id': 1399,
-              'media_type': 'tv',
-              'name': title,
-              'first_air_date': '2024-01-01',
-            },
-          ],
-        };
-      } else if (path.endsWith('/tv/1399')) {
-        body = {
+///
+/// [withCast] 额外给详情挂一位演员（id=88）与 `/person/88`：`tmdb-open-detail`
+/// 按用户决策（2026-11-11）删除后，「演职人员 → 人物页 → 作品」是纯 TMDB 详情页
+/// 仅剩的生产入口，需要这条数据才能走进去。
+http.Client recommendationTmdbClient({
+  String title = '导航剧',
+  bool withCast = false,
+}) => MockClient((request) async {
+  final path = request.url.path;
+  final Object body;
+  if (path.endsWith('/search/multi')) {
+    body = {
+      'results': [
+        {
           'id': 1399,
+          'media_type': 'tv',
           'name': title,
-          'seasons': [
-            {'season_number': 1, 'episode_count': 2},
+          'first_air_date': '2024-01-01',
+        },
+      ],
+    };
+  } else if (path.endsWith('/tv/1399')) {
+    body = {
+      'id': 1399,
+      'name': title,
+      'seasons': [
+        {'season_number': 1, 'episode_count': 2},
+      ],
+      if (withCast)
+        'aggregate_credits': {
+          'cast': [
+            {'id': 88, 'name': '嘉宾', 'character': '本人'},
           ],
-        };
-      } else if (path.endsWith('/season/1')) {
-        body = {
-          'season_number': 1,
-          'episodes': [
-            {'episode_number': 1, 'name': 'E1', 'season_number': 1},
-            {'episode_number': 2, 'name': 'E2', 'season_number': 1},
-          ],
-        };
-      } else if (path.endsWith('/videos')) {
-        body = {'results': <Object>[]};
-      } else {
-        return http.Response('{"status_code":404}', 404);
-      }
-      return http.Response(
-        jsonEncode(body),
-        200,
-        headers: const {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+        },
+    };
+  } else if (path.endsWith('/person/88')) {
+    body = {
+      'id': 88,
+      'name': '嘉宾',
+      'combined_credits': {
+        'cast': [
+          {
+            'id': 1399,
+            'media_type': 'tv',
+            'name': title,
+            'first_air_date': '2024-01-01',
+          },
+        ],
+      },
+    };
+  } else if (path.endsWith('/season/1')) {
+    body = {
+      'season_number': 1,
+      'episodes': [
+        {'episode_number': 1, 'name': 'E1', 'season_number': 1},
+        {'episode_number': 2, 'name': 'E2', 'season_number': 1},
+      ],
+    };
+  } else if (path.endsWith('/videos')) {
+    body = {'results': <Object>[]};
+  } else {
+    return http.Response('{"status_code":404}', 404);
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: const {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 TmdbState recommendationTmdbState(
   http.Client client, {
@@ -1504,7 +1531,9 @@ void main() {
   testWidgets('纯 TMDB 页底部推荐同样先搜当前站点（无命中 → 导航源回退页）', (tester) async {
     await size(tester);
     final dir = Directory.systemTemp.createTempSync('task4-pure-page');
-    final tmdb = recommendationTmdbState(recommendationTmdbClient());
+    // 带演员的夹具：纯 TMDB 页要从「演职人员 → 人物页 → 作品」进去。
+    final client = recommendationTmdbClient(withCast: true);
+    final tmdb = recommendationTmdbState(client);
     final state = SourceState(
       dir,
       deps(),
@@ -1512,7 +1541,7 @@ void main() {
       tmdbState: tmdb,
       tmdbFixture: TmdbService(
         config: () => const TmdbConfig(apiKey: 'fixture'),
-        client: recommendationTmdbClient(),
+        client: client,
       ),
     );
     addTearDown(() => deleteTempDirBestEffortSync(dir));
@@ -1533,12 +1562,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final open = find.byKey(const ValueKey('tmdb-open-detail'));
-    // 入口在 hero 下方，ListView 懒建：必须先把它滚进视口再点。
-    await _revealInViewport(tester, open);
-    await tester.pumpAndSettle();
-    await tester.tap(open);
-    // 先把路由转场走完（300ms）：上一页此时仍有同名推荐卡，只按 key 找会命中两个。
+    // 状态条上的「在 TMDB 中查看」（`tmdb-open-detail`）已按用户决策
+    // （2026-11-11）删除，纯 TMDB 详情页现在只剩「演职人员 → 人物页 → 作品」
+    // 这一条生产入口（见 `browse_pages.dart` 的 `_noLineTmdbAction`）。
+    final person = find.byKey(const ValueKey('tmdb-person-88'));
+    await _revealInViewport(tester, person);
+    await tester.tap(person);
+    await _pumpRounds(tester, rounds: 30);
+    final work = find.byKey(const ValueKey('tmdb-person-work-tv:1399'));
+    await _revealInViewport(tester, work);
+    await tester.tap(work);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await _pumpRounds(tester, rounds: 30);

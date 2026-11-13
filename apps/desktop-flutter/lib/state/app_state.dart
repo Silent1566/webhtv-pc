@@ -5228,13 +5228,20 @@ AiContentCompletion? aiContentCompletion,
     final synthetic = vod.vodId.isEmpty;
     if (service == null && !synthetic) return;
     final runId = ++_detailRunId;
-    await _waitForPythonSite(site);
-    if (_disposed || runId != _detailRunId) return;
+    // 先清状态，**再**等站点运行时：python/catVod 的运行时重刷可能要几秒，
+    // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
+    // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
+    if (_disposed) return;
     _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
     _detailError = null;
     _detailPhase = LoadPhase.loading;
+    // 必须在这里推一次：等待运行时可能很长，不推的话监听方还停留在上一部剧的
+    // 渲染上，「正在加载」根本显示不出来。
+    notifyListeners();
+    await _waitForPythonSite(site);
+    if (_disposed || runId != _detailRunId) return;
     // TMDB 与站源详情**并行**启动：整条 TMDB 链（匹配→详情→季度→剧集→视频）以前排在
     // 站源详情之后（本机实测站源详情 3.9~7.1s），首屏必然是站源「原始模式」，用户要等
     // 两段时间相加才见到 TMDB 版本。元数据不依赖站源详情的结果，先跑起来。

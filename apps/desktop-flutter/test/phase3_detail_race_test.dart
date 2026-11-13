@@ -114,7 +114,8 @@ void main() {
       expect(state.detailResult, isNotNull);
 
       final pending = state.loadDetail(vodOf('slow-B', 'B 剧'));
-      // 加载中：不得把 A 剧的详情结果留在状态里，否则新页面先渲染 A 的线路。
+      // 同步断言（不额外 pump / 等待）：清空必须发生在发请求之前，调用返回时
+      // 状态里就不该再有 A 剧的结果，否则新页面先渲染 A 的线路。
       expect(state.detailResult, isNull, reason: '新请求开始时必须清掉上一次结果');
       expect(state.detailPhase, LoadPhase.loading);
 

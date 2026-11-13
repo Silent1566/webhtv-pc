@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
+import 'package:webhtv_pc/services/python_environment.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/state/local_site_sources.dart';
@@ -31,6 +32,28 @@ AppPaths tempPaths(Directory temp) => AppPaths.resolve(
 );
 
 Directory sub(Directory parent, String child) => Directory(join(parent, child));
+
+/// 删除用例的临时目录。
+///
+/// Windows 上「谁也没再打开这个文件」≠「句柄已经还给系统」：`AppState.dispose()`
+/// 是同步的，它名下的 sidecar 进程回收、日志刷盘、以及 Python 运行时准备都可能
+/// 还在跑，而 CI runner 的实时扫描也会短暂持有刚写过的文件。此时递归删除会报
+/// `OS Error 32`（另一个进程正在使用该文件）。这里只做**有界重试**：最多
+/// 10 秒（100 次 × 100ms）。重试用尽仍失败就原样抛出——既不用 try/catch 吞掉
+/// 失败，也不改动任何断言。
+Future<void> deleteTempWhenReleased(Directory temp) async {
+  const attempts = 100;
+  for (var attempt = 1; attempt <= attempts; attempt++) {
+    if (!temp.existsSync()) return;
+    try {
+      temp.deleteSync(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt == attempts) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+}
 
 String join(Directory dir, String name) =>
     '${dir.path}${Platform.pathSeparator}$name';
@@ -81,9 +104,7 @@ void main() {
     LogService.logDirectoryOverride = join(temp, 'logs');
   });
 
-  tearDown(() {
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
-  });
+  tearDown(() => deleteTempWhenReleased(temp));
 
   group('选择列表中可见', () {
     test(
@@ -212,55 +233,84 @@ void main() {
       }
     });
 
-    test('本地导入不能覆盖root路由，当前及重新扫描均保持root', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
-      addTearDown(state.dispose);
-      final root = sub(Directory(state.spiderRoot), 'a');
-      writeManifest(root, 'a', name: 'root-a');
-      final manifest = File(join(root, 'manifest.json'));
-      final bytes = manifest.readAsBytesSync();
-      await state.bootstrap();
-      await state.reloadLocalSources();
-      expect(
-        await state.importConfig(
-          '{"sites":[{"key":"configured","name":"root","type":3,"api":"spider-local:a"}]}',
-        ),
-        isTrue,
-      );
-      final report = await state.scanLocalSources(writeCandidates(temp).path);
-      final result = await state.importLocalSources(
-        report.candidates.where((c) => c.key == 'a').toList(),
-      );
-      expect(result.rejectedCount, 1);
-      expect(result.rejected.single.message, contains('占用'));
-      expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
-      expect(
-        sub(sub(Directory(state.spiderRoot), 'local'), 'a').existsSync(),
-        isFalse,
-      );
-      expect(manifest.readAsBytesSync(), bytes);
-      expect(state.effectiveConfig!.sites.single.api, 'spider-local:a');
-      await state.reloadLocalSources();
-      expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
-      expect(
-        await state.spiderRegistry.register(manifest.path),
-        isNotNull,
-        reason: '同路径合法重注册',
-      );
-      final duplicate = sub(temp, 'duplicate');
-      writeManifest(duplicate, 'a');
-      expect(
-        await state.spiderRegistry.register(join(duplicate, 'manifest.json')),
-        isNull,
-      );
-      expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
-      final restarted = AppState(paths: tempPaths(temp), log: LogService());
-      addTearDown(restarted.dispose);
-      await restarted.bootstrap();
-      expect(restarted.spiderRegistry.byKey('a')!.rootDir, root.path);
-      expect(restarted.effectiveConfig!.sites.single.api, 'spider-local:a');
-      expect(manifest.readAsBytesSync(), bytes);
-    });
+    // 此契约只验证注册表/磁盘/配置，不能让 importConfig 自动加载首页时
+    // 意外准备真实 Python。原生起停仍由“真实运行中sidecar”和 bundled 测试覆盖。
+    for (final probeDelay in [Duration.zero, const Duration(seconds: 1)]) {
+      final suffix = probeDelay == Duration.zero ? '' : '（Python探针延迟1秒）';
+      test('本地导入不能覆盖root路由，当前及重新扫描均保持root$suffix', () async {
+        final paths = tempPaths(temp);
+        AppState routingState() {
+          final state = AppState(
+            paths: paths,
+            log: LogService(),
+            pythonEnvironment: LocalSourceTestPythonEnvironment(
+              paths: paths,
+              probeDelay: probeDelay,
+            ),
+          );
+          addTearDown(() async {
+            state.dispose();
+            await state.pythonEnvironmentIdle;
+          });
+          return state;
+        }
+
+        addTearDown(() => LocalSpiderCommand.preferPythonExecutable(null));
+        final state = routingState();
+        final root = sub(Directory(state.spiderRoot), 'a');
+        writeManifest(root, 'a', name: 'root-a');
+        final manifest = File(join(root, 'manifest.json'));
+        final bytes = manifest.readAsBytesSync();
+        await state.bootstrap();
+        await state.reloadLocalSources();
+        expect(
+          await state.importConfig(
+            '{"sites":[{"key":"configured","name":"root","type":3,"api":"spider-local:a"}]}',
+          ),
+          isTrue,
+        );
+        final report = await state.scanLocalSources(writeCandidates(temp).path);
+        final picked = report.candidates.where((c) => c.key == 'a').toList();
+        expect(picked, hasLength(1));
+        final result = await state.importLocalSources(picked);
+        expect(result.importedCount, 0);
+        expect(result.rejectedCount, 1);
+        expect(result.rejected.single.message, contains('占用'));
+        expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
+        expect(
+          sub(sub(Directory(state.spiderRoot), 'local'), 'a').existsSync(),
+          isFalse,
+        );
+        expect(manifest.readAsBytesSync(), bytes);
+        expect(state.effectiveConfig!.sites.single.api, 'spider-local:a');
+        await state.reloadLocalSources();
+        expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
+        expect(
+          await state.spiderRegistry.register(manifest.path),
+          isNotNull,
+          reason: '同路径合法重注册',
+        );
+        final duplicate = sub(temp, 'duplicate');
+        writeManifest(duplicate, 'a');
+        expect(
+          await state.spiderRegistry.register(join(duplicate, 'manifest.json')),
+          isNull,
+        );
+        expect(state.spiderRegistry.byKey('a')!.rootDir, root.path);
+        expect(
+          state.pythonEnvironmentStatus?.source,
+          PythonEnvironmentSource.missing,
+        );
+        expect(state.spiderRuntimeStatuses(), isEmpty);
+        final restarted = routingState();
+        await restarted.bootstrap();
+        await restarted.pythonEnvironmentIdle;
+        expect(restarted.spiderRegistry.byKey('a')!.rootDir, root.path);
+        expect(restarted.effectiveConfig!.sites.single.api, 'spider-local:a');
+        expect(restarted.spiderRuntimeStatuses(), isEmpty);
+        expect(manifest.readAsBytesSync(), bytes);
+      });
+    }
 
     test('跨HTML与Spider命名空间导入双向拒绝，批次内也拒绝', () async {
       final state = AppState(paths: tempPaths(temp), log: LogService());
@@ -634,6 +684,33 @@ module.exports = {init, homeContent, categoryContent, detailContent, searchConte
       expect(beforeText.contains('web-home:'), isFalse);
     });
   });
+}
+
+// 不走真实环境的静态 _changing 锁：前序测试的后台准备不能使本探针被跳过，
+// 再因 status=null 退回系统解释器。只保留 AppState 等待/应用环境结果的链路。
+class LocalSourceTestPythonEnvironment extends PythonEnvironment {
+  LocalSourceTestPythonEnvironment({
+    required super.paths,
+    this.probeDelay = Duration.zero,
+  });
+
+  final Duration probeDelay;
+  Future<void>? _pendingProbe;
+
+  @override
+  Future<void> get idle => _pendingProbe ?? Future<void>.value();
+
+  @override
+  Future<void> refresh() => _pendingProbe ??= _probe();
+
+  Future<void> _probe() async {
+    busy = true;
+    await Future<void>.delayed(probeDelay);
+    status = const PythonEnvironmentStatus(
+      error: 'local source contract: native runtime intentionally unavailable',
+    );
+    busy = false;
+  }
 }
 
 /// 导入一份普通 JSON 配置（`key` 为其中的站点 key），模拟“用户已有配置”。

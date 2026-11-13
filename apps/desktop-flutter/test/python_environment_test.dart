@@ -806,15 +806,15 @@ void main() {
     expect(await env.setCustom(one.path), isTrue);
     final prefs = File(p.join(env.paths.configDir, 'python-environment.json'));
     final bytes = prefs.readAsBytesSync();
-    final identity = Platform.environment['USERNAME']!;
     expect(p.isWithin(root.path, prefs.path), isTrue);
+    // 用只读属性注入 rename 失败，而不是 ACL deny(DE)：CI runner 以
+    // Administrators 身份运行，SeBackupPrivilege/SeRestorePrivilege 会绕过
+    // delete-deny ACL（注入形同虚设，实测会静默变成成功），只读属性与账户
+    // 身份无关，管理员同样无法覆盖。
     expect(
-      Process.runSync('icacls', [
-        prefs.path,
-        '/deny',
-        '$identity:(DE)',
-      ]).exitCode,
+      Process.runSync('attrib', ['+R', prefs.path]).exitCode,
       0,
+      reason: '无法给配置文件加只读属性',
     );
     try {
       expect(await env.setCustom(two.path), isFalse);
@@ -825,8 +825,9 @@ void main() {
       expect(two.readAsStringSync(), 'two');
     } finally {
       expect(
-        Process.runSync('icacls', [prefs.path, '/remove:d', identity]).exitCode,
+        Process.runSync('attrib', ['-R', prefs.path]).exitCode,
         0,
+        reason: '无法恢复配置文件的只读属性',
       );
     }
   });
@@ -957,24 +958,16 @@ void main() {
       p.join(env.paths.dataDir, 'runtime', 'python', 'active.json'),
     );
     final pointerBytes = pointer.readAsBytesSync();
-    final identity = Platform.environment['USERNAME']!;
     expect(p.isWithin(root.path, pointer.path), isTrue);
-    final denied = Process.runSync('icacls', [
-      pointer.path,
-      '/deny',
-      '$identity:(DE)',
-    ]);
+    // 同上一处用例：只读属性注入；ACL deny(DE) 在 CI 的管理员账户下会被绕过。
+    final denied = Process.runSync('attrib', ['+R', pointer.path]);
     expect(denied.exitCode, 0, reason: '${denied.stdout}${denied.stderr}');
     try {
       expect(await env.repair(), isFalse);
       expect(env.error, contains('rename'));
       expect(env.status!.executable, old);
     } finally {
-      final restored = Process.runSync('icacls', [
-        pointer.path,
-        '/remove:d',
-        identity,
-      ]);
+      final restored = Process.runSync('attrib', ['-R', pointer.path]);
       expect(
         restored.exitCode,
         0,

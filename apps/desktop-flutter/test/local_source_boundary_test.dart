@@ -13,7 +13,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/local_sources_page.dart';
 
-import 'local_source_sites_test.dart' show tempPaths, writeManifest;
+import 'local_source_sites_test.dart'
+    show deleteTempWhenReleased, tempPaths, writeManifest;
 
 class _PausedScanState extends AppState {
   _PausedScanState(Directory temp)
@@ -35,9 +36,7 @@ void main() {
     temp = Directory.systemTemp.createTempSync('webhtv_boundaries_');
     LogService.logDirectoryOverride = p.join(temp.path, 'logs');
   });
-  tearDown(() {
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
-  });
+  tearDown(() => deleteTempWhenReleased(temp));
 
   testWidgets('纯本地源浏览不被主配置门禁拦截', (tester) async {
     final state = AppState(paths: tempPaths(temp), log: LogService());

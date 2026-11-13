@@ -19,6 +19,9 @@ import 'package:webhtv_pc/services/spider_registry.dart';
 import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
+import 'local_source_sites_test.dart'
+    show deleteTempWhenReleased, LocalSourceTestPythonEnvironment;
+
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
     'config': '${temp.path}${Platform.pathSeparator}config',
@@ -35,9 +38,7 @@ void main() {
     temp = Directory.systemTemp.createTempSync('webhtv_local_sources_');
   });
 
-  tearDown(() {
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
-  });
+  tearDown(() => deleteTempWhenReleased(temp));
 
   group('扫描', () {
     test('识别 py/js/html，跳过依赖目录与超大文件', () async {
@@ -220,7 +221,17 @@ void main() {
     test('扫描并导入后，AppState 同时暴露本地 Spider 与 webHome 源', () async {
       final paths = tempPaths(temp);
       paths.ensureDirectories();
-      final state = AppState(paths: paths, log: LogService());
+      // 此用例只测扫描/登记/列表，不能在后台准备真实解释器。
+      final state = AppState(
+        paths: paths,
+        log: LogService(),
+        pythonEnvironment: LocalSourceTestPythonEnvironment(paths: paths),
+      );
+      addTearDown(() => LocalSpiderCommand.preferPythonExecutable(null));
+      addTearDown(() async {
+        state.dispose();
+        await state.pythonEnvironmentIdle;
+      });
 
       final sourceDir = Directory(
         '${temp.path}${Platform.pathSeparator}fixture',

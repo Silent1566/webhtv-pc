@@ -70,18 +70,27 @@ Check 'packaging rejects missing Python without producing a degraded zip' {
     foreach ($relative in @('sidecars/spider-host-js/node_modules','sidecars/spider-host-jvm/lib')) { New-Item -ItemType Directory (Join-Path $fixture $relative) -Force | Out-Null }
     $script:packageFixture = $fixture
     $out = Join-Path $fixture 'dist'
-    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -Version 0.1.0 -Commit ('0' * 40) } 'Python bundle missing'
+    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -Version 0.1.0 -Commit ('0' * 40) -SkipNativeAiAssetChecks } 'Python bundle missing'
     if (Test-Path $out) { throw 'Missing Python changed output directory' }
 }
 Check 'packaging preserves existing output and sidecar mandatory checks' {
     $fixture = $script:packageFixture
     $out = Join-Path $fixture 'protected-output'; New-Item -ItemType Directory $out | Out-Null
     $sentinel = Join-Path $out 'user-config.json'; [IO.File]::WriteAllText($sentinel, 'do-not-delete')
-    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -Version 0.1.0 -Commit ('0' * 40) } '输出目录必须'
+    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -Version 0.1.0 -Commit ('0' * 40) -SkipNativeAiAssetChecks } '输出目录必须'
     if ((Get-Content $sentinel -Raw) -ne 'do-not-delete') { throw 'Packaging changed existing output' }
     $emptyRepo = Join-Path $testRoot 'no-sidecars'; New-Item -ItemType Directory (Join-Path $emptyRepo 'build') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $emptyRepo 'build/webhtv_pc.exe'), 'fixture')
-    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $emptyRepo -BuildDir (Join-Path $emptyRepo 'build') -OutputDir (Join-Path $emptyRepo 'dist') -Version 0.1.0 -Commit ('0' * 40) } '缺少 sidecar 宿主文件'
+    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $emptyRepo -BuildDir (Join-Path $emptyRepo 'build') -OutputDir (Join-Path $emptyRepo 'dist') -Version 0.1.0 -Commit ('0' * 40) -SkipNativeAiAssetChecks } '缺少 sidecar 宿主文件'
+}
+Check 'packaging refuses build without official audio AI runtime and workflows keep the gate on' {
+    $bareRepo = Join-Path $testRoot 'no-native'; New-Item -ItemType Directory (Join-Path $bareRepo 'build') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $bareRepo 'build/webhtv_pc.exe'), 'fixture')
+    Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $bareRepo -BuildDir (Join-Path $bareRepo 'build') -OutputDir (Join-Path $bareRepo 'dist') -Version 0.1.0 -Commit ('0' * 40) } '缺少官方音频AI/native运行时'
+    foreach ($workflow in @('.github/workflows/windows-ci.yml', '.github/workflows/windows-release.yml')) {
+        $text = Get-Content (Join-Path $repo $workflow) -Raw
+        if ($text -match 'SkipNativeAiAssetChecks') { throw "$workflow 不得用 -SkipNativeAiAssetChecks 旁路原生引擎门禁" }
+    }
 }
 if ($Review) {
     $reviewFailures = [Collections.Generic.List[string]]::new()
@@ -190,11 +199,33 @@ if ($Review) {
             Copy-Item (Join-Path $fixture 'build/webhtv_pc.exe') $build
             $sentinel=Join-Path $build $pollution; New-Item -ItemType Directory (Split-Path -Parent $sentinel) -Force | Out-Null; [IO.File]::WriteAllText($sentinel,'PRIVATE')
             $out=Join-Path $fixture ('dirty-dist-'+[guid]::NewGuid().ToString('N'))
-            try { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir $build -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir (Join-Path $repo 'runtime/python') -Version 0.1.0 -Commit ('0'*40) 6>$null; $missed+=$pollution } catch {if($_.Exception.Message -notmatch 'Untrusted|Forbidden|不允许'){throw}}
+            try { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir $build -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir (Join-Path $repo 'runtime/python') -Version 0.1.0 -Commit ('0'*40) -SkipNativeAiAssetChecks 6>$null; $missed+=$pollution } catch {if($_.Exception.Message -notmatch 'Untrusted|Forbidden|不允许'){throw}}
             if((Get-Content $sentinel -Raw) -ne 'PRIVATE'){throw 'Pollution rejection changed input'}
             if(-not ($pollution -in $missed) -and (Test-Path $out)){throw 'Rejected input created output'}
         }
         if($missed.Count){throw "Published user data: $($missed -join ',')"}
+    }
+    Review-Check 'F7 official audio AI license whitelist rejects unknown files and directories without publishing' {
+        $fixture=$script:packageFixture
+        foreach ($case in @(
+            @{path='data/audio_ai/private.json';directory=$false},
+            @{path='data/audio_ai/LICENSE.txt';directory=$false},
+            @{path='data/audio_ai/private';directory=$true},
+            @{path='data/audio_ai-extra';directory=$true}
+        )) {
+            $build=Join-Path $fixture ('audio-ai-dirty-build-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $build | Out-Null
+            Copy-Item (Join-Path $fixture 'build/webhtv_pc.exe') $build
+            $license=Join-Path $build 'data/audio_ai/LiteRT-LICENSE.txt'; New-Item -ItemType Directory (Split-Path -Parent $license) -Force | Out-Null
+            [IO.File]::WriteAllText($license,'official-license-fixture')
+            $sentinel=Join-Path $build $case.path
+            if ($case.directory) { New-Item -ItemType Directory $sentinel -Force | Out-Null } else { [IO.File]::WriteAllText($sentinel,'PRIVATE') }
+            $out=Join-Path $fixture ('audio-ai-dirty-dist-'+[guid]::NewGuid().ToString('N'))
+            Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir $build -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir (Join-Path $repo 'runtime/python') -Version 0.1.0 -Commit ('0'*40) -SkipNativeAiAssetChecks 6>$null } ('Untrusted build/staging layout: '+[regex]::Escape($case.path)+'$')
+            if (Test-Path $out) { throw "Rejected audio AI input created output: $($case.path)" }
+            if ((Get-Content $license -Raw) -ne 'official-license-fixture' -or -not (Test-Path $sentinel)) { throw 'Rejection changed build input or removed official license' }
+            if (-not $case.directory -and (Get-Content $sentinel -Raw) -ne 'PRIVATE') { throw 'Rejection changed private file' }
+            Write-Host "PASS rejected $($case.path) without output or input mutation"
+        }
     }
     if($reviewFailures.Count){throw "Review RED: $($reviewFailures.Count) cases failed: $($reviewFailures -join '; ')"}
 }
@@ -228,20 +259,28 @@ if ($Integration) {
         } finally { $jvm.Dispose() }
         Copy-Item -LiteralPath $jar -Destination (Join-Path $fixture 'sidecars/spider-host-jvm/host.jar') -Force
         Copy-Item -LiteralPath $jar -Destination (Join-Path $fixture 'sidecars/spider-host-jvm/lib/sample.jar')
-        foreach ($relative in @('flutter_windows.dll','webhtv_pc.pdb','native_assets.json','data/icudtl.dat','data/flutter_assets/FontManifest.json','data/flutter_assets/assets/public.json')) {
+        foreach ($relative in @('flutter_windows.dll','webhtv_pc.pdb','native_assets.json','data/icudtl.dat','data/flutter_assets/FontManifest.json','data/flutter_assets/assets/public.json','data/audio_ai/LiteRT-LICENSE.txt','audio_ai_native.exp','audio_ai_native.lib','audio_ai_native.ilk')) {
             $path=Join-Path $fixture ('build/'+$relative); New-Item -ItemType Directory (Split-Path -Parent $path) -Force | Out-Null
             [IO.File]::WriteAllText($path,'legitimate-build-fixture')
         }
-        & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir (Join-Path $fixture 'dist') -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir $output -Version 0.1.0 -Commit ('0' * 40)
+        & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir (Join-Path $fixture 'dist') -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir $output -Version 0.1.0 -Commit ('0' * 40) -SkipNativeAiAssetChecks
         $info = Get-Content (Join-Path $fixture 'dist/release-info.json') -Raw | ConvertFrom-Json
         if (($info.runtimes.bundled.id -join ',') -ne 'node,python' -or ($info.runtimes.requiresLocal -join ',') -ne 'JDK 17+') { throw 'Release metadata does not reflect bundled Python' }
         $release = Get-ChildItem (Join-Path $fixture 'dist') -Filter '*.zip' | Select-Object -First 1
         $zip = [IO.Compression.ZipFile]::OpenRead($release.FullName)
         try {
-            foreach ($relative in @('runtime/python/python-runtime.zip','runtime/python/bundle.json','runtime/node/node.exe','sidecars/spider-host-python/host.py','sidecars/spider-host-js/host.js','sidecars/spider-host-jvm/host.jar')) {
+            foreach ($relative in @('runtime/python/python-runtime.zip','runtime/python/bundle.json','runtime/node/node.exe','sidecars/spider-host-python/host.py','sidecars/spider-host-js/host.js','sidecars/spider-host-jvm/host.jar','data/audio_ai/LiteRT-LICENSE.txt')) {
                 if (-not @($zip.Entries | Where-Object {$_.FullName.EndsWith('/' + $relative)}).Count) { throw "Package omitted $relative" }
             }
+            $licenseEntry = @($zip.Entries | Where-Object {$_.FullName.EndsWith('/data/audio_ai/LiteRT-LICENSE.txt')})
+            $reader = [IO.StreamReader]::new($licenseEntry[0].Open())
+            try { if ($reader.ReadToEnd() -ne 'legitimate-build-fixture') { throw 'Package changed official license content' } } finally { $reader.Dispose() }
+            if (@($zip.Entries | Where-Object {$_.FullName -match '(?i)\.(exp|lib|ilk)$'}).Count) { throw 'Package contains MSVC build intermediates' }
         } finally { $zip.Dispose() }
+        foreach ($relative in @('data/audio_ai/LiteRT-LICENSE.txt','audio_ai_native.exp','audio_ai_native.lib','audio_ai_native.ilk')) {
+            if ((Get-Content (Join-Path $fixture ('build/'+$relative)) -Raw) -ne 'legitimate-build-fixture') { throw "Packaging changed build input: $relative" }
+        }
+        Write-Host 'PASS official LiteRT license preserved in ZIP; build exp/lib/ilk preserved in input and excluded from ZIP'
         if ($CmakeExecutable) {
             $cmakeRepo = Join-Path $testRoot 'cmake-fixture'
             $cmakeSource = Join-Path $cmakeRepo 'apps/desktop-flutter/windows'

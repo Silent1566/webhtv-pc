@@ -18,6 +18,8 @@ import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/local_sources_page.dart';
 
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 AppPaths _tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
     'config': p.join(temp.path, 'config'),
@@ -62,6 +64,9 @@ Future<void> _pumpPage(
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
+  // 每个用例的 AppState 都必须释放：否则它名下的定时器、日志与 sidecar
+  // 回收会在 tearDown 删临时目录时还持有句柄（Windows 报 OS Error 32）。
+  addTearDown(state.dispose);
   await tester.pumpWidget(MaterialApp(home: LocalSourcesPage(state: state)));
   // 必须等首帧路由转场结束：转场期间 Navigator 会吸收指针，此时 tap 会静默打空。
   await tester.pumpAndSettle();
@@ -143,9 +148,9 @@ void main() {
     state = AppState(paths: paths, log: LogService());
   });
 
-  tearDown(() {
+  tearDown(() async {
     LogService.logDirectoryOverride = null;
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
+    await deleteTempWhenReleased(temp);
   });
 
   Directory makeRoot(String name, {bool withCandidate = true}) {
