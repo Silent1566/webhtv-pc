@@ -16,16 +16,25 @@ bool removeLocalSpiderDirectory({required String root, required String key}) {
   try {
     for (final path in [normalizedRoot, local]) {
       parents.add(_LockedEntry.open(path, directory: true, deleting: false));
-      if (!p.equals(Directory(path).resolveSymbolicLinksSync(), path)) {
-        return false;
-      }
     }
+    // 系统解析回来的一律是**长名**路径，而调用方传入的可能是 8.3 短名
+    // （Windows CI 的临时目录就是 `C:\Users\RUNNER~1\...`）。拿规范路径和
+    // 传入字符串比相等，会把「自身没有重定向」的普通目录误判成越界，于是
+    // 删除被静默拒绝（用户视角：点了删除，目录还在）。两边都规范到同一口径
+    // 再比较，语义不变——仍然拒绝 junction/符号链接（那是 local 解析后与
+    // 「根规范路径/local」不一致的唯一情形）。
+    final canonicalRoot = _canonical(normalizedRoot);
+    if (!p.equals(canonicalRoot, _unredirectedCanonical(normalizedRoot))) {
+      return false;
+    }
+    final canonicalLocal = _canonical(local);
+    if (!p.equals(canonicalLocal, p.join(canonicalRoot, 'local'))) return false;
     void lockTree(String path, {required bool directory}) {
       entries.add(
         _LockedEntry.open(path, directory: directory, deleting: true),
       );
       if (!p.isWithin(
-        local,
+        canonicalLocal,
         FileSystemEntity.isDirectorySync(path)
             ? Directory(path).resolveSymbolicLinksSync()
             : File(path).resolveSymbolicLinksSync(),
@@ -58,6 +67,20 @@ bool removeLocalSpiderDirectory({required String root, required String key}) {
       entry.close();
     }
   }
+}
+
+/// 系统口径的规范路径（长名、大小写按磁盘记录）。
+String _canonical(String path) => Directory(path).resolveSymbolicLinksSync();
+
+/// `path` **自身不是重定向**时应得的规范路径。
+///
+/// 用「父目录的规范路径 + 自身字面名」表示，父目录可以是 8.3 短名也能对上；
+/// 一旦 `path` 本身被解析成别处（junction/符号链接），结果就与
+/// [_canonical] 不一致。
+String _unredirectedCanonical(String path) {
+  final parent = p.dirname(path);
+  if (p.equals(parent, path)) return _canonical(path);
+  return p.join(_canonical(parent), p.basename(path));
 }
 
 class _LockedEntry {

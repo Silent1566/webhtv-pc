@@ -19,6 +19,8 @@ import 'package:webhtv_pc/services/spider_registry.dart';
 import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
     'config': '${temp.path}${Platform.pathSeparator}config',
@@ -35,9 +37,7 @@ void main() {
     temp = Directory.systemTemp.createTempSync('webhtv_local_sources_');
   });
 
-  tearDown(() {
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
-  });
+  tearDown(() => deleteTempWhenReleased(temp));
 
   group('扫描', () {
     test('识别 py/js/html，跳过依赖目录与超大文件', () async {
@@ -221,6 +221,9 @@ void main() {
       final paths = tempPaths(temp);
       paths.ensureDirectories();
       final state = AppState(paths: paths, log: LogService());
+      // 用例结束必须释放：否则 sidecar 回收/日志刷盘还持有 temp 下的句柄，
+      // tearDown 递归删除临时目录会偶发 `OS Error 32`。
+      addTearDown(state.dispose);
 
       final sourceDir = Directory(
         '${temp.path}${Platform.pathSeparator}fixture',

@@ -32,6 +32,28 @@ AppPaths tempPaths(Directory temp) => AppPaths.resolve(
 
 Directory sub(Directory parent, String child) => Directory(join(parent, child));
 
+/// 删除用例的临时目录。
+///
+/// Windows 上「谁也没再打开这个文件」≠「句柄已经还给系统」：`AppState.dispose()`
+/// 是同步的，它名下的 sidecar 进程回收、日志刷盘、以及 Python 运行时准备都可能
+/// 还在跑，而 CI runner 的实时扫描也会短暂持有刚写过的文件。此时递归删除会报
+/// `OS Error 32`（另一个进程正在使用该文件）。这里只做**有界重试**：最多
+/// 10 秒（100 次 × 100ms）。重试用尽仍失败就原样抛出——既不用 try/catch 吞掉
+/// 失败，也不改动任何断言。
+Future<void> deleteTempWhenReleased(Directory temp) async {
+  const attempts = 100;
+  for (var attempt = 1; attempt <= attempts; attempt++) {
+    if (!temp.existsSync()) return;
+    try {
+      temp.deleteSync(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt == attempts) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+}
+
 String join(Directory dir, String name) =>
     '${dir.path}${Platform.pathSeparator}$name';
 
@@ -81,9 +103,7 @@ void main() {
     LogService.logDirectoryOverride = join(temp, 'logs');
   });
 
-  tearDown(() {
-    if (temp.existsSync()) temp.deleteSync(recursive: true);
-  });
+  tearDown(() => deleteTempWhenReleased(temp));
 
   group('选择列表中可见', () {
     test(

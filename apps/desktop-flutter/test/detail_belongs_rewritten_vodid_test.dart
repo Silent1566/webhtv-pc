@@ -34,11 +34,19 @@ class _SiteClient extends http.BaseClient {
   final Map<String, Completer<void>> gates = {};
   final List<String> detailIds = [];
 
+  /// 「请求已发出」的信号（按 `ids`）：用例要构造「迟到响应」，必须确实等到
+  /// 上一次的请求出门，而不是靠等一段固定时长去赌。
+  final Map<String, Completer<void>> started = {};
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final id = request.url.queryParameters['ids'];
     if (id == null) return _response({'list': []});
     detailIds.add(id);
+    final startedSignal = started.remove(id);
+    if (startedSignal != null && !startedSignal.isCompleted) {
+      startedSignal.complete();
+    }
     final gate = gates[id];
     if (gate != null) await gate.future;
     final previous = id == 'previous-list';
@@ -241,9 +249,17 @@ void main() {
   test('上一部剧的迟到响应不能覆盖最新请求的权威条目', () async {
     final gate = Completer<void>();
     client.gates['previous-list'] = gate;
+    final started = Completer<void>();
+    client.started['previous-list'] = started;
     final previous = state.loadDetail(
       Vod(vodId: 'previous-list', vodName: '上一部剧'),
     );
+    // 同步契约：调用返回时状态里已经不该有内容、阶段已经是「加载中」——
+    // 清空发生在发请求之前，不靠任何 pump/等待。
+    expect(state.detailPhase, LoadPhase.loading);
+    // 「迟到」这个前提必须成立：等上一次的请求真正出门（被 gate 挡住），
+    // 再用新请求顶掉它的运行号。这是对「请求已发出」的一次同步，不是等固定时长。
+    await started.future;
     await state.loadDetail(_listVod);
     expect(state.detailRequestVodId, _listId);
     expect(state.detailResult!.list.first.vodId, _detailId);
@@ -257,6 +273,9 @@ void main() {
       log.entries.any((entry) => entry.message.contains('详情结果已作废')),
       isTrue,
     );
+    // 放掉并行的 TMDB 收尾（它是 unawaited 的）：留到 tearDown 关库之后再跑，
+    // 会抛「This database has already been closed」，把用例判成失败。
+    await pumpEventQueue(times: 100);
   });
 
   test('详细调试开关切换写自检日志，启动恢复开启也写提示', () async {

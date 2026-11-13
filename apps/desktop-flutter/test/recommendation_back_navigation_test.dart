@@ -110,6 +110,31 @@ http.Client _tmdbClient() {
               {'id': 1399, 'media_type': 'tv', 'name': '导航剧'},
             ],
           },
+          // 纯 TMDB 详情页的生产入口只剩「演职人员 → 人物页 → 作品」
+          // （`tmdb-open-detail` 已按用户决策 2026-11-11 删除）。
+          'aggregate_credits': {
+            'cast': [
+              {'id': 88, 'name': '嘉宾', 'character': '本人'},
+            ],
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (path.endsWith('/person/88')) {
+      return http.Response(
+        jsonEncode({
+          'id': 88,
+          'name': '嘉宾',
+          'combined_credits': {
+            // 作品就是本页匹配到的同一部（tv 42「原作品」）：这样进来的纯 TMDB
+            // 详情页与旧入口（状态条「在 TMDB 中查看」）打开的是同一页，
+            // 它的相关推荐来自 /tv/42 内嵌的 recommendations（tv 1399）。
+            'cast': [
+              {'id': 42, 'media_type': 'tv', 'name': '原作品'},
+            ],
+          },
         }),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
@@ -262,8 +287,15 @@ Future<({double offset, Offset cardPosition})> _openFallback(
   bool pure = false,
 }) async {
   if (pure) {
-    await _reveal(tester, find.byKey(const ValueKey('tmdb-open-detail')));
-    await tester.tap(find.byKey(const ValueKey('tmdb-open-detail')));
+    // 纯 TMDB 详情页只剩这一条生产入口：演职人员 → 人物页 → 作品。
+    // 状态条上的「在 TMDB 中查看」（`tmdb-open-detail`）已按用户决策
+    // （2026-11-11）删除，见 `browse_pages.dart` 的 `_noLineTmdbAction`。
+    await _reveal(tester, find.byKey(const ValueKey('tmdb-person-88')));
+    await tester.tap(find.byKey(const ValueKey('tmdb-person-88')));
+    await _settle(tester);
+    final work = find.byKey(const ValueKey('tmdb-person-work-tv:42'));
+    await _reveal(tester, work);
+    await tester.tap(work);
     await _settle(tester);
     expect(find.byType(TmdbDetailPage), findsOneWidget);
   }

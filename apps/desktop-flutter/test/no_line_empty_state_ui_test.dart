@@ -1,7 +1,8 @@
 /// 「本片没有可播放线路」空态卡片的 UI 门禁。
 ///
 /// 覆盖用户决策里的四条：卡片式空态（边框 + 图标 + 标题 + 弱化说明）、
-/// TMDB 动作随状态变化（未配置 → 配置 / 未匹配 → 匹配 / 已匹配 → 在 TMDB 中查看）、
+/// TMDB 动作随状态变化（未配置 → 配置 / 未匹配 → 匹配 / 已匹配 → 无 TMDB 动作，
+/// 用户决策 2026-11-11 去掉了「在 TMDB 中查看」）、
 /// 「换源」三态常驻、以及「匹配成功后自动铺卡、不需要手动刷新」这条链路。
 ///
 /// 与 `no_play_line_detail_ui_test.dart` 的分工：那个文件钉的是「已匹配 → 铺卡片」
@@ -435,10 +436,10 @@ void main() {
     expect(find.byType(TmdbMatchDialog), findsOneWidget);
   });
 
-  testWidgets('TMDB 已匹配但摊不出剧集 → 「在 TMDB 中查看」，不给匹配入口', (tester) async {
+  testWidgets('TMDB 已匹配但摊不出剧集 → 不给 TMDB 入口，只剩换源', (tester) async {
     await loadTmdb(emptySeasonTmdb);
     expect(emptySeasonTmdb.hasMatch, isTrue, reason: '前置：已匹配');
-    expect(emptySeasonTmdb.identity, isNotNull, reason: '前置：有身份才能跳纯 TMDB 详情页');
+    expect(emptySeasonTmdb.identity, isNotNull, reason: '前置：有身份（纯 TMDB 页另有入口）');
     expect(
       emptySeasonTmdb.seasonEpisodeCounts,
       isEmpty,
@@ -447,17 +448,19 @@ void main() {
     await pumpDetail(tester, emptySeasonState);
 
     final swap = find.byKey(const ValueKey('detail-no-line-swap'));
-    final action = find.byKey(const ValueKey('detail-no-line-tmdb'));
     await _revealInViewport(tester, swap);
-    expect(action, findsOneWidget);
-    // 按 key 定位空态自己那个按钮：`tmdb-open-detail` 是状态条区的同名入口。
+    // 用户决策 2026-11-11 去掉了「在 TMDB 中查看」（见
+    // `browse_pages.dart` 的 `_noLineTmdbAction`）：已匹配的空态不再有 TMDB
+    // 动作，出路只剩「换源」；也不给匹配入口（再匹配还是同一结果）。
     expect(
-      find.descendant(of: action, matching: find.text('在 TMDB 中查看')),
-      findsOneWidget,
+      find.byKey(const ValueKey('detail-no-line-tmdb')),
+      findsNothing,
+      reason: '已匹配的空态不再给 TMDB 动作',
     );
+    expect(find.text('在 TMDB 中查看'), findsNothing);
     expect(find.text('匹配 TMDB'), findsNothing, reason: '已经匹配上了，再匹配还是同一结果');
     expect(find.text('配置 TMDB'), findsNothing);
-    expect(swap, findsOneWidget);
+    expect(swap, findsOneWidget, reason: '换源是空态唯一的出路，永远在');
     expect(_episodeCards('tmdb-episode-card-noline-'), findsNothing);
   });
 
