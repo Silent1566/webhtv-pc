@@ -106,6 +106,10 @@ function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
             }
         } else {
             $allowed = $path -ceq 'webhtv_pc.exe' -or $path -ceq 'native_assets.json' -or $path -cmatch '^[^/]+\.(dll|pdb)$' -or $path -cin @('data/icudtl.dat','data/app.so') -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -or $path -cin @('runtime/node/node.exe','runtime/python/python-runtime.zip','runtime/python/bundle.json')
+            # VS 2026（MSVC 14.51）链接自定义 DLL target 会在输出目录留下 .exp/.lib/.ilk
+            # 中间产物。它们只允许出现在构建目录，**不**允许出现在 staging：复制后会被
+            # 清掉（见下面的清理步骤），万一漏清也会在这里被判成 Untrusted 而不是静默进包。
+            if (-not $Staging -and $path -cmatch '^[^/]+\.(exp|lib|ilk)$') { $allowed = $true }
             if ($path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -and $item.Extension -match '(?i)^\.(py|pyc|jar)$') { $allowed = $false }
             if ($Staging -and $path -cin @('BUILD_INFO.txt','THIRD_PARTY.txt')) { $allowed = $true }
             if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
@@ -363,6 +367,12 @@ try {
 
     # 1. 主程序与播放器 native 库
     Copy-Item -Path (Join-Path $BuildDir '*') -Destination $staging -Recurse -Force
+    # MSVC 链接自定义 DLL target 会生成 .exp/.lib/.ilk：它们是构建中间产物，随整目录
+    # 复制一起过来了，发行包不带它们（staging 校验同样会拒绝，这里先清干净）。
+    foreach ($intermediate in @(Get-ChildItem -LiteralPath $staging -Recurse -File |
+            Where-Object { $_.Extension -match '^\.(exp|lib|ilk)$' })) {
+        Remove-Item -LiteralPath $intermediate.FullName -Force
+    }
 
     # 2. sidecar 宿主（与 exe 同级；spider_registry.dart 的发行包布局）
     foreach ($relative in $sidecarFiles) {
