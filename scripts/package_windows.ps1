@@ -97,7 +97,7 @@ function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
         if ($path -match '(?i)(^|/)(userdata|user-data|user_data|spiders|manifests|__pycache__|\.git)(/|$)' -or $item.Name -match '(?i)^user[-_](config|settings)(\.|$)' -or (-not $item.PSIsContainer -and $item.Extension -match '(?i)^\.(db|sqlite|sqlite3)$')) { Fail "Forbidden user source/config/database: $path" }
         $allowed = $false
         if ($item.PSIsContainer) {
-            $allowed = $path -in @('data','runtime','runtime/python','runtime/node','sidecars') -or $path -ceq 'data/flutter_assets' -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal)
+            $allowed = $path -in @('data','runtime','runtime/python','runtime/node','sidecars') -or $path -ceq 'data/audio_ai' -or $path -ceq 'data/flutter_assets' -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal)
             if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
                 $allowed = @($sidecarFiles | Where-Object { $_.StartsWith($path+'/',[StringComparison]::Ordinal) }).Count -gt 0
                 foreach ($dir in $sidecarDependencyDirs.Keys) {
@@ -105,7 +105,7 @@ function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
                 }
             }
         } else {
-            $allowed = $path -ceq 'webhtv_pc.exe' -or $path -ceq 'native_assets.json' -or $path -cmatch '^[^/]+\.(dll|pdb)$' -or $path -cin @('data/icudtl.dat','data/app.so') -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -or $path -cin @('runtime/node/node.exe','runtime/python/python-runtime.zip','runtime/python/bundle.json')
+            $allowed = $path -ceq 'webhtv_pc.exe' -or $path -ceq 'native_assets.json' -or $path -cmatch '^[^/]+\.(dll|pdb)$' -or $path -ceq 'data/audio_ai/LiteRT-LICENSE.txt' -or $path -cin @('data/icudtl.dat','data/app.so') -or $path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -or $path -cin @('runtime/node/node.exe','runtime/python/python-runtime.zip','runtime/python/bundle.json')
             # VS 2026（MSVC 14.51）链接自定义 DLL target 会在输出目录留下 .exp/.lib/.ilk
             # 中间产物。它们只允许出现在构建目录，**不**允许出现在 staging：复制后会被
             # 清掉（见下面的清理步骤），万一漏清也会在这里被判成 Untrusted 而不是静默进包。
