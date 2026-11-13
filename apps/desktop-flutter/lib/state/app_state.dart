@@ -5206,6 +5206,8 @@ AiContentCompletion? aiContentCompletion,
     SiteService? serviceOverride,
     Site? siteOverride,
   }) async {
+    // 普通目录由独立目录路由加载，不能占用全局影片详情槽。
+    if (vod.isFolder && !isBridgeFolderVodId(vod.vodId)) return;
     final service = serviceOverride ?? _siteService;
     final site = siteOverride ?? _selectedSite;
     if (site == null) return;
@@ -5273,7 +5275,7 @@ AiContentCompletion? aiContentCompletion,
     }
     if (service == null) return;
     try {
-      // folder 先取 t=<vod_id> 的资源，再逐个取 ids=<分享链> 的分集。
+      // 已知 atvp_detail 桥接协议先取资源，再逐个取分享链分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
       final outcome = vod.isFolder
           ? await service.folderDetail(

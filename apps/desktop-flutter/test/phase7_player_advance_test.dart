@@ -241,7 +241,12 @@ void main() {
     });
 
     test('三出口各自接到正确的回调', () {
-      expect(pageSource.contains('onRetry: _load,'), isTrue);
+      expect(pageSource.contains('onRetry: _retryPlayback,'), isTrue);
+      final retryStart = pageSource.indexOf('Future<void> _retryPlayback()');
+      final retryEnd = pageSource.indexOf('Future<void> _reloadQueueCurrent(');
+      final retryBlock = pageSource.substring(retryStart, retryEnd);
+      expect(retryBlock.contains('if (!_hasQueue)'), isTrue);
+      expect(retryBlock.contains('await _load();'), isTrue);
       expect(
         pageSource.contains('onResume: _resumeFromLatestProgress,'),
         isTrue,

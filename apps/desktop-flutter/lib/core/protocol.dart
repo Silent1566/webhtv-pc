@@ -956,7 +956,8 @@ class Vod {
   /// （实测 `vod_name` 为空、`vod_play_url` 为空）。
   final String? vodTag;
 
-  /// 是否为目录条目（需展开而不是直接取详情）。
+  /// 是否为目录条目：安卓协议的 `folder` 或非 null 的 `cate`。
+  /// `cate` 在 [extra] 中保留原样，包括 false、0、空串和结构化值。
   ///
   /// 除显式 `vod_tag: folder` 外，还认网盘聚合插件的 id 前缀
   /// （[bridgeFolderVodIdPrefix]）：历史记录只保存 `vod_id`，重建 [Vod] 时
@@ -964,7 +965,9 @@ class Vod {
   /// folder 壳去 `ids=` 详情接口，被站源判为业务错误（2026-10-20 用户反馈：
   /// 「点击历史记录无法进入详情」）。
   bool get isFolder =>
-      vodTag == 'folder' || (vodTag == null && isBridgeFolderVodId(vodId));
+      vodTag == 'folder' ||
+      extra['cate'] != null ||
+      (vodTag == null && isBridgeFolderVodId(vodId));
 
   final Map<String, Object?> extra;
 
@@ -1027,6 +1030,7 @@ class Vod {
     if (vodActor != null) 'vod_actor': vodActor,
     if (vodPlayFrom != null) 'vod_play_from': vodPlayFrom,
     if (vodPlayUrl != null) 'vod_play_url': vodPlayUrl,
+    if (vodTag != null) 'vod_tag': vodTag,
   };
 }
 
