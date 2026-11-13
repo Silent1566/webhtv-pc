@@ -96,6 +96,7 @@ class _PendingPlaybackState extends AppState {
     int? qualityIndex,
     Site? siteOverride,
     SiteService? serviceOverride,
+    String? preferredParseName,
   }) async {
     resolutions += 1;
     lastEpisodeTarget = episodeTarget;

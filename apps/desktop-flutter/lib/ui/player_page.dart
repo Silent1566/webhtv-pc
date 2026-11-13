@@ -23,6 +23,7 @@ import '../core/osd_diagnostics.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/playback_request.dart';
+import '../core/playback_queue.dart';
 export '../core/playback_request.dart';
 import '../core/playback_repeat.dart';
 import '../core/player_buttons.dart';
@@ -59,6 +60,7 @@ import 'player_context_menu.dart';
 import 'external_player_picker_dialog.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
+import 'player_queue_panel.dart';
 import 'live_playback_session.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
@@ -99,8 +101,8 @@ enum PlayerGestureAction { togglePlayback, togglePlaybackAndFullscreen }
 /// 距上一击不超过 [kPlayerDoubleClickWindow] 即视为双击。
 PlayerGestureAction resolvePlayerGesture({required bool doubleClick}) =>
     doubleClick
-        ? PlayerGestureAction.togglePlaybackAndFullscreen
-        : PlayerGestureAction.togglePlayback;
+    ? PlayerGestureAction.togglePlaybackAndFullscreen
+    : PlayerGestureAction.togglePlayback;
 
 /// 画面双击判定器：只回答「这一击算不算双击」，不碰播放器。
 ///
@@ -217,6 +219,8 @@ class PlayerPage extends StatefulWidget {
     super.key,
     required this.state,
     required this.request,
+    this.queue,
+    this.queueItemKey,
     this.danmakuLoader,
     this.onLiveSourceFallback,
     this.liveSession,
@@ -225,6 +229,8 @@ class PlayerPage extends StatefulWidget {
 
   final AppState state;
   final PlaybackRequest request;
+  final PlaybackQueue? queue;
+  final String? queueItemKey;
   final LivePlaybackSession? liveSession;
   final Future<Process> Function(String executable, List<String> arguments)?
   externalPlayerStarter;
@@ -243,6 +249,28 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> with WindowListener {
   late PlayerController _controller;
   late PlaybackRequest _request;
+  String? _queueItemKey;
+  String? _pendingQueueItemKey;
+  int? _pendingQueueStep;
+  bool _pendingQueueAutomatic = false;
+  Duration? _queueRestorePosition;
+  bool? _queueRestorePlaying;
+
+  bool get _hasQueue => widget.queue != null && !_isLive && !_isCatchup;
+  int get _queueIndex =>
+      widget.queue?.snapshot.items.indexWhere(
+        (item) => item.key == _queueItemKey,
+      ) ??
+      -1;
+  bool get _queueCanGoNext =>
+      _queueIndex >= 0 &&
+      (_queueIndex + 1 < widget.queue!.snapshot.items.length ||
+          widget.queue!.snapshot.hasMore);
+
+  void _onQueueChanged() {
+    if (mounted) setState(() {});
+  }
+
   final FocusNode _playerFocus = FocusNode(debugLabel: 'player');
   bool _livePanelOpen = false;
   LiveChannel? _linePanelChannel;
@@ -406,6 +434,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void initState() {
     super.initState();
     _request = widget.request;
+    _queueItemKey = widget.queueItemKey;
+    widget.queue?.addListener(_onQueueChanged);
     _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     final savedFit = widget.state.playerVideoFitModeFor(
       siteKey: _request.siteKey,
@@ -451,9 +481,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       widget.liveSession?.addListener(_onPlaybackSessionChanged);
       _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     }
-    if (oldWidget.request == widget.request) return;
+    final queueChanged = oldWidget.queue != widget.queue;
+    if (queueChanged) {
+      oldWidget.queue?.removeListener(_onQueueChanged);
+      widget.queue?.addListener(_onQueueChanged);
+    }
+    if (oldWidget.request == widget.request &&
+        !queueChanged &&
+        oldWidget.queueItemKey == widget.queueItemKey) {
+      return;
+    }
     _beginMediaTransition();
+    _queueItemKey = widget.queueItemKey;
+    _pendingQueueItemKey = null;
+    _pendingQueueStep = null;
     _request = widget.request;
+    if (_hasQueue) {
+      _queueRestorePosition = _request.startPosition;
+      _clearQueueMediaView();
+    }
     _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     _episodesCache = const [];
     unawaited(_load());
@@ -704,6 +750,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!_progressReady) return;
     if (!_controller.isCompleted) return;
     if (!_isGenuineEnd()) return;
+
+    if (_hasQueue) {
+      if (_repeat == PlaybackRepeat.off && !_options.autoNext) return;
+      _advanceInFlight = true;
+      unawaited(
+        _advanceQueue().whenComplete(() {
+          _advanceInFlight = false;
+          if (mounted) _controller.clearCompleted();
+        }),
+      );
+      return;
+    }
 
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     final decision = decidePlaybackAdvance(
@@ -1072,32 +1130,55 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 顺序：先登记播放结果里的 `subs`，再自动启用默认/强制外挂字幕。
   /// 任何失败都只记日志/提示，绝不影响视频播放（§10.4）。
   Future<void> _configureSubtitles() async {
+    final request = _request;
+    final controller = _controller;
+    final generation = _mediaGeneration;
+    final queueMedia = _hasQueue;
+    bool isCurrent() =>
+        !queueMedia ||
+        (mounted &&
+            generation == _mediaGeneration &&
+            identical(request, _request) &&
+            identical(controller, _controller));
     // 本集用户显式选过内嵌字幕轨，且那条轨真的在当前容器里：不再自动挂外挂字幕。
     // 两条路径都调 setSubtitleTrack，后到的会顶掉先到的，用户的选择不能赌时序。
     if (_hasResolvableRememberedSubtitle()) {
       widget.state.log.info('本集记过内嵌字幕，跳过自动挂载外挂字幕', scope: 'subtitle');
       return;
     }
-    final subtitles = _request.subtitles;
+    final subtitles = request.subtitles;
+    if (queueMedia) {
+      controller.setExternalSubtitles(subtitles);
+      await controller.selectSubtitle(SubtitleOption.off);
+      if (!isCurrent()) return;
+    }
     if (subtitles.isEmpty) {
       await _autoMatchSubtitle();
       return;
     }
-    _controller.setExternalSubtitles(
+    if (!isCurrent()) return;
+    controller.setExternalSubtitles(
       subtitles,
       onDiscard: (sub, reason) => widget.state.log.warning(
         '字幕条目已丢弃 name=${sub.name} reason=$reason',
         scope: 'subtitle',
       ),
     );
-    if (_controller.externalOptions.isEmpty) return;
-    final enabled = await _controller.applyDefaultSubtitle(
-      headers: _request.subtitleHeaders,
-    );
-    final error = _controller.subtitleError;
+    if (controller.externalOptions.isEmpty) return;
+    final defaultOption = defaultSubtitleOption(controller.externalOptions);
+    final enabled = queueMedia && defaultOption != null
+        ? await controller.selectSubtitle(
+            defaultOption,
+            headers: request.subtitleHeaders,
+          )
+        : await controller.applyDefaultSubtitle(
+            headers: request.subtitleHeaders,
+          );
+    if (!isCurrent()) return;
+    final error = controller.subtitleError;
     if (error != null) {
       widget.state.log.warning(
-        '默认字幕加载失败 sub=${_controller.selectedSubtitle?.label ?? ""} $error',
+        '默认字幕加载失败 sub=${controller.selectedSubtitle?.label ?? ""} $error',
         scope: 'subtitle',
       );
       _showSubtitleError(error);
@@ -1105,7 +1186,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     if (enabled) {
       widget.state.log.info(
-        '默认字幕已启用 sub=${_controller.selectedSubtitle?.label ?? ""}',
+        '默认字幕已启用 sub=${controller.selectedSubtitle?.label ?? ""}',
         scope: 'subtitle',
       );
     }
@@ -1200,6 +1281,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     SubtitleCandidate candidate, {
     required bool remember,
   }) async {
+    final generation = _mediaGeneration;
+    final controller = _controller;
     final info = SubtitleInfo(
       url: candidate.url,
       name: candidate.title,
@@ -1207,22 +1290,23 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       format: candidate.format,
       flag: SubtitleInfo.selectionFlagDefault,
     );
-    _controller.setExternalSubtitles(
+    controller.setExternalSubtitles(
       [info],
       onDiscard: (sub, reason) => widget.state.log.warning(
         '字幕候选被丢弃 name=${sub.name} reason=$reason',
         scope: 'subtitle',
       ),
     );
-    if (_controller.externalOptions.isEmpty) {
+    if (controller.externalOptions.isEmpty) {
       _showSubtitleError('字幕候选格式不受支持');
       return false;
     }
-    final ok = await _controller.selectSubtitle(
-      _controller.externalOptions.first,
+    final ok = await controller.selectSubtitle(
+      controller.externalOptions.first,
       headers: _request.subtitleHeaders,
     );
-    final error = _controller.subtitleError;
+    if (!mounted || generation != _mediaGeneration) return false;
+    final error = controller.subtitleError;
     if (!ok) {
       widget.state.log.warning('字幕加载失败 $error', scope: 'subtitle');
       if (error != null) _showSubtitleError(error);
@@ -1238,6 +1322,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         ),
       );
     }
+    if (!mounted || generation != _mediaGeneration) return false;
     widget.state.log.info(
       '字幕已启用 provider=${candidate.providerId} title=${candidate.title} '
       'lang=${candidate.language}',
@@ -1361,13 +1446,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 选择本地字幕文件：路径输入 → 加载并记忆。
   Future<void> _showLocalSubtitlePicker() async {
-    final controller = TextEditingController();
+    var input = '';
     final path = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('本地字幕文件'),
         content: TextField(
-          controller: controller,
+          onChanged: (value) => input = value,
           autofocus: true,
           decoration: const InputDecoration(
             hintText: r'C:\subtitles\movie.srt',
@@ -1380,13 +1465,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
+            onPressed: () => Navigator.of(context).pop(input),
             child: const Text('加载'),
           ),
         ],
       ),
     );
-    controller.dispose();
     final trimmed = path?.trim() ?? '';
     if (trimmed.isEmpty || !mounted) return;
     final candidate = SubtitleCandidate(
@@ -1767,12 +1851,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 拉取并启用一个弹幕源；失败只提示，不影响播放。
   Future<void> _loadDanmakuSource(DanmakuSource source) async {
+    final generation = _hasQueue ? _mediaGeneration : null;
+    bool isCurrent() =>
+        mounted && (generation == null || generation == _mediaGeneration);
     final stopwatch = Stopwatch()..start();
     try {
       final document = await _danmakuLoader.load(
         source,
         headers: _request.subtitleHeaders,
       );
+      if (!isCurrent()) return;
       _danmakuItems = document.items;
       _danmakuError = null;
       widget.state.log.info(
@@ -1781,6 +1869,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       if (mounted) setState(() {});
     } catch (error) {
+      if (!isCurrent()) return;
       _danmakuItems = const [];
       _danmakuError = describeDanmakuFailure(error);
       widget.state.log.warning(
@@ -2559,6 +2648,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   int _beginMediaTransition() {
+    if (_hasQueue) {
+      _pendingQueueItemKey = null;
+      _pendingQueueStep = null;
+    }
+    if (_hasQueue && _progressReady) {
+      _queueRestorePosition = _controller.position;
+      _queueRestorePlaying = _controller.isPlaying;
+    }
     widget.state.clearAiAdApplication();
     _originalAiSubtitle = null;
     _karaokeTrack = null;
@@ -2572,8 +2669,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _skipArmed = false;
     _saveTimer?.cancel();
     _saveTimer = null;
-    if (widget.liveSession != null &&
-        (_liveOpenInFlight || _controller.hasPendingNativeOpen)) {
+    if ((widget.liveSession != null || _hasQueue) &&
+        (_liveOpenInFlight ||
+            _controller.hasPendingNativeOpen ||
+            (_hasQueue && _controller.subtitleBusy))) {
       final previous = _controller;
       final volume = previous.volumeState;
       final rate = previous.rate;
@@ -2659,6 +2758,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 正常的返回路径已由 PopScope 处理，这里是最后兜底（幂等）。
     unawaited(_restoreWindowedModeIfOwned());
     widget.liveSession?.removeListener(_onPlaybackSessionChanged);
+    widget.queue?.removeListener(_onQueueChanged);
     _playerFocus.dispose();
     _saveTimer?.cancel();
     _controlHideTimer?.cancel();
@@ -2795,6 +2895,219 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (line.flag == displayFlag) return line.playbackFlag;
     }
     return displayFlag == _request.flag ? _request.playbackFlag : displayFlag;
+  }
+
+  void _clearQueueMediaView() {
+    _episodesCache = const [];
+    _danmakuItems = const [];
+    _danmakuError = null;
+    _lastShownDanmakuError = null;
+    _lastShownSubtitleError = null;
+    _diagnostics = null;
+    _controller.setExternalSubtitles(const []);
+    _controller.clearSubtitleError();
+    _skipSegments = widget.state.skipSegmentsFor(
+      siteKey: _request.siteKey,
+      vodId: _request.vodId,
+    );
+    final fit = widget.state.playerVideoFitModeFor(
+      siteKey: _request.siteKey,
+      vodId: _request.vodId,
+    );
+    _videoFitMode = PlayerVideoFitMode.values.firstWhere(
+      (mode) => mode.name == fit,
+      orElse: () => PlayerVideoFitMode.contain,
+    );
+  }
+
+  void _queueFailure(Object error) {
+    final failure = error is AppError
+        ? error
+        : AppError(AppErrorKind.unknown, '$error', cause: error);
+    setState(() => _loadError = failure.userMessage);
+    _controller.clearCompleted();
+    widget.state.log.error('目录队列播放失败 ${failure.logLine}', scope: 'player');
+  }
+
+  Future<void> _openQueueItem(String key) async {
+    final queue = widget.queue;
+    if (!_hasQueue || queue == null) return;
+    if (_externalPlayerRunning != null) {
+      if (!await _confirmDropExternalPlayback() || !mounted) return;
+      setState(() => _externalPlayerRunning = null);
+    }
+    final generation = _beginMediaTransition();
+    _pendingQueueItemKey = key;
+    _pendingQueueStep = null;
+    setState(() => _loadError = null);
+    bool isCurrent() =>
+        mounted &&
+        generation == _mediaGeneration &&
+        identical(queue, widget.queue);
+    try {
+      final request = await queue.resolve(key, isCurrent: isCurrent);
+      if (!isCurrent()) return;
+      setState(() {
+        _request = request;
+        _queueItemKey = key;
+        _pendingQueueItemKey = null;
+        _queueRestorePosition = request.startPosition;
+        _queueRestorePlaying = true;
+        _clearQueueMediaView();
+      });
+      await _teardownLiveSession('queue-file-change');
+      if (!isCurrent()) return;
+      await _load();
+    } catch (error) {
+      if (isCurrent()) _queueFailure(error);
+    }
+  }
+
+  Future<void> _advanceQueue() async {
+    if (_repeat == PlaybackRepeat.one) {
+      await _replayCurrent();
+      return;
+    }
+    await _stepQueue(1, automatic: true);
+  }
+
+  Future<void> _stepQueue(int delta, {bool automatic = false}) async {
+    final queue = widget.queue;
+    if (!_hasQueue || queue == null || _queueIndex < 0) return;
+    if (automatic && _repeat == PlaybackRepeat.off && !_options.autoNext) {
+      return;
+    }
+    if (!automatic &&
+        (_queueIndex + delta < 0 || (delta > 0 && !_queueCanGoNext))) {
+      return;
+    }
+    final key = _queueItemKey;
+    final generation = _beginMediaTransition();
+    _pendingQueueItemKey = null;
+    _pendingQueueStep = delta;
+    _pendingQueueAutomatic = automatic;
+    bool isCurrent() =>
+        mounted &&
+        generation == _mediaGeneration &&
+        identical(queue, widget.queue) &&
+        key == _queueItemKey;
+    try {
+      var snapshot = queue.snapshot;
+      var index = snapshot.items.indexWhere((item) => item.key == key);
+      while (delta > 0 &&
+          index + 1 >= snapshot.items.length &&
+          snapshot.hasMore) {
+        final count = snapshot.items.length;
+        await queue.loadMore();
+        if (!isCurrent()) return;
+        snapshot = queue.snapshot;
+        if (snapshot.error != null) throw snapshot.error!;
+        index = snapshot.items.indexWhere((item) => item.key == key);
+        if (snapshot.hasMore && snapshot.items.length == count) {
+          throw AppError(AppErrorKind.unknown, '目录暂无新增剧集，请重试加载');
+        }
+      }
+      if (!isCurrent()) return;
+      if (index < 0) throw AppError(AppErrorKind.unknown, '当前文件已不在目录队列中');
+      final int next;
+      if (automatic) {
+        final decision = decidePlaybackAdvance(
+          repeat: _repeat,
+          autoNext: _options.autoNext,
+          currentIndex: index,
+          episodeCount: snapshot.items.length,
+          genuineEnd: true,
+        );
+        if (decision.nextIndex == null) {
+          _pendingQueueStep = null;
+          if (_sleepTimer.shouldStopOnEpisodeEnd()) _stopBySleepTimer();
+          return;
+        }
+        next = decision.nextIndex!;
+      } else {
+        next = index + delta;
+      }
+      _pendingQueueStep = null;
+      if (next < 0 || next >= snapshot.items.length) return;
+      await _openQueueItem(snapshot.items[next].key);
+    } catch (error) {
+      if (isCurrent()) _queueFailure(error);
+    }
+  }
+
+  Future<void> _retryPlayback() async {
+    if (!_hasQueue) {
+      await _load();
+      return;
+    }
+    final key = _pendingQueueItemKey;
+    if (key != null) {
+      await _openQueueItem(key);
+      return;
+    }
+    final step = _pendingQueueStep;
+    if (step != null) {
+      await _stepQueue(step, automatic: _pendingQueueAutomatic);
+      return;
+    }
+    await _reloadQueueCurrent();
+  }
+
+  Future<void> _reloadQueueCurrent({Duration? position}) async {
+    final intent = _request;
+    final start =
+        position ??
+        (_progressReady
+            ? _controller.position
+            : _queueRestorePosition ?? intent.startPosition);
+    final playing = _progressReady
+        ? _controller.isPlaying
+        : _queueRestorePlaying ?? _controller.isPlaying;
+    final generation = _beginMediaTransition();
+    _pendingQueueItemKey = null;
+    _pendingQueueStep = null;
+    bool isCurrent() =>
+        mounted &&
+        generation == _mediaGeneration &&
+        identical(intent, _request);
+    try {
+      final route = intent.lineRoutes[intent.flag];
+      final decision = await _resolvePlayback(
+        episodeTarget: intent.episodeTarget,
+        flag: intent.playbackFlag,
+        vodId: route?.vodId ?? intent.vodId,
+        siteOverride: route == null
+            ? null
+            : widget.state.siteByKey(route.siteKey),
+        isExternalRoute: route != null,
+        qualityIndex: intent.qualityIndex,
+        isCurrent: isCurrent,
+      );
+      if (!isCurrent()) return;
+      if (decision?.url == null) {
+        throw AppError(AppErrorKind.playbackUrlMissing, '本文件没有可用播放地址');
+      }
+      setState(() {
+        _request = intent.copyWith(
+          url: decision!.url!,
+          headers: decision.headers?.asRequestHeaders ?? const {},
+          subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
+          qualities: decision.qualities,
+          qualityIndex: decision.qualityIndex,
+          subtitles: decision.subs,
+          danmaku: decision.danmaku,
+          startPosition: start,
+          clearStartPosition: start == null,
+          clearResumeSeed: true,
+        );
+        _clearQueueMediaView();
+      });
+      await _teardownLiveSession('queue-retry');
+      if (!mounted || generation != _mediaGeneration) return;
+      await _load(restorePlaying: playing);
+    } catch (error) {
+      if (isCurrent()) _queueFailure(error);
+    }
   }
 
   Future<void> _playEpisode(int index, {String? overrideFlag}) async {
@@ -3026,6 +3339,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           vodId: route?.vodId ?? _request.vodId,
           siteOverride: route == null ? null : state.siteByKey(route.siteKey),
           isExternalRoute: route != null,
+          isCurrent: _hasQueue
+              ? () => mounted && generation == _mediaGeneration
+              : null,
         );
         if (decision == null || decision.url == null) {
           throw AppError(
@@ -3109,6 +3425,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 原来源播放要查它自己那条源的行，否则查不到任何进度。
       sourceKey: _request.sourceKey.trim().isEmpty ? null : _request.sourceKey,
     );
+    if (_hasQueue) {
+      await _reloadQueueCurrent(position: latest);
+      return;
+    }
     // 查不到（已看完 / 无记录 / 低于续播下限）时退回「重试本集」语义，
     // 而不是静默无动作——用户点了按钮就必须有反馈。
     if (latest == null) {
@@ -3142,6 +3462,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     if (_isCatchup) return;
+    if (_hasQueue) {
+      await _stepQueue(1);
+      return;
+    }
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
     final identity = _request.tmdb;
@@ -3166,6 +3490,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     if (_isCatchup) return;
+    if (_hasQueue) {
+      await _stepQueue(-1);
+      return;
+    }
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
     final previous = _request.episodeIndex - 1;
@@ -3456,16 +3784,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                   child: _PlayerErrorOverlay(
                                     message: _loadError!,
                                     url: _request.url,
-                                    onRetry: _load,
+                                    onRetry: _retryPlayback,
                                     onResume: _resumeFromLatestProgress,
                                     onNext: _playNext,
                                     canGoNext:
                                         !_isCatchup &&
                                         (_isLive ||
-                                            (_episodesCache.isNotEmpty
-                                                    ? _episodesCache.length
-                                                    : _episodes.length) >
-                                                _request.episodeIndex + 1),
+                                            (_hasQueue
+                                                ? _queueCanGoNext
+                                                : (_episodesCache.isNotEmpty
+                                                          ? _episodesCache
+                                                                .length
+                                                          : _episodes.length) >
+                                                      _request.episodeIndex +
+                                                          1)),
                                   ),
                                 ),
                               ),
@@ -4192,6 +4524,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             icon: const Icon(Icons.alt_route, size: 18),
             label: Text('线路（${widget.liveSession!.lines.length}）'),
           ),
+          'episodes' when _hasQueue => OutlinedButton.icon(
+            onPressed: () => _showEpisodes(context, episodes),
+            icon: const Icon(Icons.list, size: 18),
+            label: Text('选集（${widget.queue!.snapshot.items.length}）'),
+          ),
           'episodes' when !_isCatchup && episodes.isNotEmpty =>
             OutlinedButton.icon(
               onPressed: () => _showEpisodes(context, episodes),
@@ -4341,6 +4678,26 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     if (_isCatchup) return;
+    if (_hasQueue) {
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierColor: Colors.black.withValues(alpha: 0.62),
+          builder: (_) => PlayerQueuePanel(
+            title: _request.vodName.isNotEmpty
+                ? _request.vodName
+                : _request.title,
+            queue: widget.queue!,
+            currentKey: _queueItemKey,
+            onSelect: (key) => unawaited(_openQueueItem(key)),
+            playLines: _request.playLines,
+            lineFlag: _request.flag,
+            onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
+          ),
+        ),
+      );
+      return;
+    }
     final line = _lineOf(_request.flag);
     unawaited(
       showDialog<void>(
@@ -5123,8 +5480,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 children: [
                   for (final speed in PlayerOptions.longPressSpeedChoices)
                     PlayerMenuItem(
-                      id:
-                          'settings_long_press_speed_${speed.toString().replaceAll('.', '_')}',
+                      id: 'settings_long_press_speed_${speed.toString().replaceAll('.', '_')}',
                       label: _speedText(speed),
                       selected: (_options.longPressSpeed - speed).abs() < 0.01,
                       onSelect: () => _livePatchOptions(
