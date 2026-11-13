@@ -37,11 +37,11 @@ import '../services/site_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/playback_source_context.dart';
+import 'ai_integration_widgets.dart';
 import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'history_resume_seed.dart';
 import 'player_page.dart';
-import 'search_page.dart';
 import 'toast.dart';
 
 /// 从一条**非当前源**的历史恢复播放 / 看详情。
@@ -499,9 +499,10 @@ Future<void> _offerGlobalSearch(
   if (confirmed != true || !context.mounted) return;
   await Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) => SearchPage(
-        state: state,
-        initialKeyword: _searchKeywordOf(item),
+      builder: (_) => aiSearchRouteHost(
+        state,
+        _searchKeywordOf(item),
+        useExistingResults: false,
         // 续播上下文一起带进全局搜索：用户挑中一条结果后仍按同一集迁移进度。
         resumeSeed: resumeSeedOf(item),
       ),

@@ -20,8 +20,10 @@
 ///
 /// 允许出现的非缺陷结论（必须如实记录，不得当成通过）：
 /// - `playbackUrlMissing`：播放入口确实没给地址（上游行为，§9.4）；
-/// - `parseUnsupportedType` / 解析器选择失败：AT 配置声明的 11 个解析器
-///   **全部是 `type=0`（Web 嗅探）**，PC 端明确不支持（§5.8），如实报错；
+/// - `parseSniffUnavailable`：AT 配置声明的解析器**全部是 `type=0`（Web 嗅探）**，
+///   需要本机 Chromium 内核浏览器（§12.4）；跑门禁的机器没装浏览器时如实报
+///   「本机不可用」而不是解析失败；
+/// - `parseSniffTimeout` / `parseInvalid`：嗅探执行了但没抓到地址（站点当天行为）；
 /// - 「无分类 / 分类无内容 / 详情无线路」：上游站点当天数据为空，与播放链路无关。
 ///
 /// 前置条件：可达 AT 配置地址（默认 `http://192.168.50.50:4567/sub/2024/buye-0`，
@@ -111,10 +113,12 @@ void main() {
     var parserRequired = 0;
     var noAddress = 0;
     var parserUnsupported = 0;
+    var sniffUnavailable = 0;
     var otherError = 0;
     var noContent = 0;
     final parserRequiredHits = <String>[];
     final unsupportedHits = <String>[];
+    final sniffHits = <String>[];
     final otherHits = <String>[];
 
     for (final site in t4Sites) {
@@ -180,9 +184,16 @@ void main() {
           parserRequired += 1;
         } else if (lastError.kind == AppErrorKind.playbackUrlMissing) {
           noAddress += 1;
+        } else if (lastError.kind == AppErrorKind.parseSniffUnavailable) {
+          // AT 配置的解析器全部是 type=0（Web 嗅探）：PC 现在会真的用本机浏览器
+          // 嗅探（§12.4），只有跑门禁的机器没装 Chromium 内核浏览器时才会落到这里。
+          sniffUnavailable += 1;
+          if (sniffHits.length < 3) {
+            sniffHits.add('${site.key}: ${lastError.logLine}');
+          }
         } else if (lastError.kind == AppErrorKind.parseUnsupportedType ||
             lastError.message.contains('解析器')) {
-          // AT 配置的解析器全部是 type=0（Web 嗅探），PC 端明确不支持（§5.8）。
+          // 未知解析器类型，或嗅探/JSON 解析执行失败（已分类，可诊断）。
           parserUnsupported += 1;
           if (unsupportedHits.length < 3) {
             unsupportedHits.add('${site.key}: ${lastError.logLine}');
@@ -202,12 +213,16 @@ void main() {
     evidence(
       't4-sweep-result type4=${t4Sites.length} resolved=$resolved '
       'playbackParserRequired=$parserRequired playbackUrlMissing=$noAddress '
-      'parserUnsupportedType=$parserUnsupported otherError=$otherError '
+      'parserUnsupportedType=$parserUnsupported '
+      'parseSniffUnavailable=$sniffUnavailable otherError=$otherError '
       'noContent=$noContent',
     );
     // 非缺陷类别也逐条落证据，避免「统计数字好看但没人看得到细节」。
     for (final hit in unsupportedHits) {
       evidence('t4-sweep-parser-unsupported $hit');
+    }
+    for (final hit in sniffHits) {
+      evidence('t4-sweep-parse-sniff-unavailable $hit');
     }
     for (final hit in otherHits) {
       evidence('t4-sweep-other $hit');

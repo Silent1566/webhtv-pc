@@ -336,6 +336,7 @@ class SiteService {
     int? qualityIndex,
     ParseService? parseService,
     ParseFailoverSettings? parseFailover,
+    String? preferredParseName,
   }) async {
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
@@ -374,6 +375,10 @@ class SiteService {
             site: site,
             episodeTarget: episodeTarget,
             flag: flag,
+            // `json:` / `parse:<名称>` 前缀本身就是「必须走解析器」的声明
+            // （安卓 `ParseJob.setParse`），按 parse=1 处理，免得被
+            // 「目标不是直链」拒绝。
+            parse: isParsePrefixedTarget(episodeTarget) ? 1 : null,
             globalHeaders: _globalHeaders,
           ),
         );
@@ -395,6 +400,7 @@ class SiteService {
           parseService: parseService,
           parseFailover: parseFailover,
           stopwatch: stopwatch,
+          preferredParseName: preferredParseName,
         );
         return SiteCallResult(value: resolved, latency: stopwatch.elapsed);
       }
@@ -457,9 +463,15 @@ class SiteService {
       if (failure != null) throw failure;
       var decision = resolved.decision;
       if (decision.action == PlaybackAction.needParser) {
+        final parseTarget = decision.url ?? episodeTarget;
         decision = await _runParser(
           site: site,
-          target: decision.url ?? episodeTarget,
+          target: parseTarget,
+          // 安卓 `Result.getRealUrl() = playUrl + url`：解析入口（可能带
+          // `json:`/`parse:` 前缀）来自播放入口时，要解析的目标仍是剧集自身地址。
+          targetSuffix: parseTarget == episodeTarget ? null : episodeTarget,
+          // 播放入口返回的 Result.click：站点没声明 click 时用它注入解析页。
+          resultClick: playResult.click,
           inputDecision: decision,
           flag: flag,
           parse: decision.parse,
@@ -467,6 +479,7 @@ class SiteService {
           parseService: parseService,
           parseFailover: parseFailover,
           stopwatch: stopwatch,
+          preferredParseName: preferredParseName,
         );
       }
       if (playbackBridge != null) {
@@ -511,7 +524,9 @@ class SiteService {
             site: site,
             episodeTarget: target,
             flag: flag,
-            parse: playResult.parse,
+            // 播放入口返回的地址带 `json:`/`parse:<名称>` 前缀时同样按 parse=1
+            // 处理（与剧集目标前缀同一语义）。
+            parse: isParsePrefixedTarget(target) ? 1 : playResult.parse,
             jx: playResult.jx,
             resultHeader: playResult.header,
             globalHeaders: globalHeaders,
@@ -552,6 +567,9 @@ class SiteService {
   ///
   /// 解析失败抛 [AppErrorKind.parse*]，由调用方决定是否回退直接换源（不静默）。
   /// 成功则返回 [PlaybackAction.direct] 的解析结果（携带解析出的 Header/字幕/弹幕）。
+  ///
+  /// [targetSuffix] 是安卓 `Result.getUrl().v()`（剧集自身地址）：只有 [target]
+  /// 是播放入口返回的 `playUrl`（可能带 `json:`/`parse:<名称>` 前缀）时才需要。
   Future<PlaybackDecision> _runParser({
     required Site site,
     required String target,
@@ -562,16 +580,47 @@ class SiteService {
     ParseService? parseService,
     ParseFailoverSettings? parseFailover,
     required Stopwatch stopwatch,
+    String? targetSuffix,
+    String? resultClick,
+    String? preferredParseName,
   }) async {
     final service = parseService ?? (parseService = ParseService());
-    final selection = ParseRuntime.select(appConfig.parses, flag: flag);
+    final ParseTargetSpec spec;
+    try {
+      spec = resolveParseTarget(
+        target: target,
+        targetSuffix: targetSuffix,
+        // 选择用「含超级解析」的列表（安卓把 Parse.god() 插在第 0 位）；
+        // 执行仍用配置原文，超级解析内部要的就是真实解析器清单。
+        parses: appConfig.playbackParsers,
+        flag: flag,
+        preferredParseName: preferredParseName,
+      );
+    } on ParseSelectionException catch (error) {
+      // 解析器选择失败（没配置解析器 / 选中的类型未知）原本是裸 Exception，
+      // 直接外抛会让「按 AppError 分类提示与回退」的调用链失去可诊断性。
+      // 这里统一成本层的解析错误，文案保持原样（它本来就指名了缺什么）。
+      throw AppError(
+        AppErrorKind.parseInvalid,
+        error.message,
+        detail: '站点=${site.key} 目标=${redactUrl(target)}',
+        cause: error,
+      );
+    }
     final outcome = await service.runWithFallback(
-      selection: selection,
+      selection: spec.selection,
       entries: appConfig.parses,
-      webUrl: target,
+      webUrl: spec.webUrl,
       flag: flag,
       source: (jx ?? 0) == 1 ? 'jx' : 'parse',
       failover: parseFailover ?? const ParseFailoverSettings.defaults(),
+      // 安卓 `ParseJob.setParse`/`getClick`：type=0/4 的页面注入脚本，取值顺序是
+      // **站点 `click` 优先，其次 Result.click**（`getClick` 的两级回退）；
+      // `config.rules` 决定哪些请求算媒体候选。
+      sniffClick:
+          asNonEmptyString(site.extra['click']) ??
+          asNonEmptyString(resultClick),
+      sniffRules: appConfig.rules,
     );
     // 解析结果应当是真实媒体地址（m3u8/mp4/dash…，§12.3「解析结果必须校验媒体
     // 类型」）。若解析器返回的是另一个待解析目标（对齐 Android
@@ -664,4 +713,84 @@ class _PlayEntryResolution {
 
   /// 非空表示播放入口返回的目标不可播；调用方必须上抛，不得继续使用 [decision]。
   final AppError? failure;
+}
+
+/// 播放地址是否带 `json:` / `parse:<名称>` 前缀（安卓 `ParseJob.setParse`）。
+bool isParsePrefixedTarget(String target) {
+  final trimmed = target.trim();
+  return trimmed.startsWith('json:') || trimmed.startsWith('parse:');
+}
+
+/// 一次解析的目标与前缀归一化结果。
+class ParseTargetSpec {
+  const ParseTargetSpec({required this.selection, required this.webUrl});
+
+  final ParseSelection selection;
+
+  /// 交给解析器的目标地址：type=1 拼在解析器 url 之后，type=0 拼在解析页之后。
+  final String webUrl;
+}
+
+/// 解析 `json:` / `parse:<名称>` 前缀（对齐安卓 `ParseJob.setParse` 第 71-72 行）。
+///
+/// - `json:<解析器url>`：余下部分当作 **type=1 解析接口**，目标地址是剧集自身；
+/// - `parse:<名称>`：用**指定名称**的解析器覆盖默认选择，目标地址是剧集自身；
+/// - 其余：按 flag/默认规则选择解析器，目标就是 [target] 本身。
+///
+/// [targetSuffix] 只在 [target] 是播放入口返回的 `playUrl` 时非空。
+ParseTargetSpec resolveParseTarget({
+  required String target,
+  required List<ParseEntry> parses,
+  String? targetSuffix,
+  String? flag,
+  /// 用户本次播放手动指定的解析源名称（解析源切换栏，仅本次播放生效）。
+  ///
+  /// 为 null 时按默认优先级（flag 命中 → 超级解析 → 第一个可用）。
+  String? preferredParseName,
+}) {
+  const jsonPrefix = 'json:';
+  const namePrefix = 'parse:';
+  final raw = target.trim();
+  if (raw.startsWith(jsonPrefix)) {
+    final parseUrl = raw.substring(jsonPrefix.length).trim();
+    return ParseTargetSpec(
+      selection: ParseSelection(
+        entry: ParseEntry(
+          name: _jsonTargetName(parseUrl),
+          type: 1,
+          url: parseUrl,
+        ),
+        kind: ParseKind.json,
+      ),
+      webUrl: targetSuffix ?? '',
+    );
+  }
+  if (raw.startsWith(namePrefix)) {
+    final name = raw.substring(namePrefix.length).trim();
+    final matched = parses.where((entry) => entry.name == name).toList();
+    if (matched.isEmpty) {
+      throw AppError(
+        AppErrorKind.parseInvalid,
+        '指定的解析器不存在：$name',
+        detail: '已配置：${parses.map((entry) => entry.name).join('、')}',
+      );
+    }
+    return ParseTargetSpec(
+      selection: ParseRuntime.select(parses, flag: flag, preferName: name),
+      webUrl: targetSuffix ?? '',
+    );
+  }
+  return ParseTargetSpec(
+    selection: ParseRuntime.select(
+      parses,
+      flag: flag,
+      preferName: preferredParseName,
+    ),
+    webUrl: target,
+  );
+}
+
+String _jsonTargetName(String parseUrl) {
+  final host = Uri.tryParse(parseUrl)?.host ?? '';
+  return host.isEmpty ? 'json' : 'json:$host';
 }

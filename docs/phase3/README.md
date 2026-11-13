@@ -32,11 +32,13 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 - 播放诊断能输出引擎、格式、网络和错误。
 
 > 本阶段已实现**字幕(外挂字幕 + 字幕轨选择与开关)**、**弹幕(可开启和关闭)**与
-> **直播弹幕**(`ws://`/`wss://` 实时弹幕,§13.1)、**解析器运行时**(§12 JSON 类
-> `type=1/2/3`)、**EPG**(清单 `url-tvg`/源 `epg` → XMLTV 抓取、解析、缓存与刷新,
+> **直播弹幕**(`ws://`/`wss://` 实时弹幕,§13.1)、**解析器运行时**(§12 全部
+> `type=0/1/2/3/4`)、**EPG**(清单 `url-tvg`/源 `epg` → XMLTV 抓取、解析、缓存与刷新,
 > 频道当前节目与节目单展示,§13.1、§13.3)。回看、直播代理的单独 HLS 会话管理
 > 属于后续增强(§13.1 完整版能力),不在本阶段验收范围。Web 嗅探(`type=0`)与
-> Super(`type=4`)需浏览器内核,PC 端**明确不支持**(见 §5.8)。
+> Super(`type=4`)由**本机 Chromium 内核浏览器 + CDP** 执行(设计文档 §12.4);
+> 本机没装 Edge/Chrome/Chromium 时如实报 `parseSniffUnavailable` 并给出补充指引,
+> 不静默降级为直链。
 
 ## 1. 现状盘点
 
@@ -129,8 +131,13 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 | 弹幕渲染 | widget 层绘制/开关/类型过滤/样式夹紧 | `test/phase3_danmaku_overlay_test.dart` | 开启渲染 CustomPaint;关闭零绘制;滚动/顶部/底部可分别隐藏 |
 | 弹幕失败隔离 | §10.4 同语义:弹幕失败不得升级为播放失败 | `test/phase3_danmaku_test.dart`「弹幕失败隔离」 | `isDanmakuError` 只认 `danmaku*`;提示文案含「不影响视频播放」 |
 | 弹幕集成 | 真实窗口 + 真实播放器 + 真实弹幕渲染 | `integration_test/danmaku_flow_test.dart` (-d windows) | 加载→渲染→关闭→重开;失败时视频照常出画 |
-| 解析器选择 | type 映射/flag 匹配/默认选择/不支持类型报错 | `test/phase3_parser_test.dart`「解析器类型映射」「解析器选择」 | 仅 type=1/2/3 支持;flag 命中优先;noneConfigured/unsupportedOnly/selectedUnsupported |
-| 解析器执行 | type=1/2/3 响应解析/响应头/错误/超时/上限 | `test/phase3_parser_test.dart`「JSON 解析执行」 | `{url}`/`{data.url}`/完整 Result;parseHttp/parseInvalid/parseEmpty/parseNetwork;超时可定位 |
+| 解析器选择 | type 映射/flag 匹配/默认选择/未知类型报错 | `test/phase3_parser_test.dart`「解析器类型映射」「解析器选择」 | type=0/1/2/3/4 均可选中;flag 命中优先;未知类型 unsupportedOnly/selectedUnsupported |
+| 解析器执行（JSON 类） | type=1/2/3 响应解析/响应头/错误/超时/上限 | `test/phase3_parser_test.dart`「JSON 解析执行」 | `{url}`/`{data.url}`/完整 Result;parseHttp/parseInvalid/parseEmpty/parseNetwork;超时可定位（type=1 收紧到安卓 15s） |
+| 解析器执行（Web 嗅探 type=0） | 本机浏览器打开解析页 → 拦截媒体请求 → 返回地址与 UA/Referer/Cookie | `test/chromium_sniffer_test.dart`（编排,假传输）+ `test/parse_sniff_chromium_test.dart`（真实浏览器）+ `test/parse_sniff_behavior_test.dart`（解析层） | 页面文档与普通资源不误判;规则 regex 可命中无后缀地址;click 注入与 DOM 补采;挑战只拉回窗口不绕过;任何失败路径都 `stop`（不泄漏浏览器进程） |
+| 解析器执行（Super type=4） | `type=1` 并发 + `type=0` 按 xmflv/hls.one/m3u8.tv 优先级顺序竞速 | `test/parse_sniff_behavior_test.dart`「Super」+ `test/parse_sniff_chromium_test.dart` | 第一个成功即胜出并取消落后会话;JSON 腿失败不判整体失败;解析器数为 0 → parseEmpty;目标地址解嵌（最多 4 层 url=/jx=） |
+| 解析器浏览器组件（§12.5） | 用户从本地目录/zip 安装 Chromium 内核组件，装后优先于系统浏览器 | `test/browser_component_store_test.dart` + 设置页 widget 测试 | 复制+原子 rename+失败回滚;坏包拒收;zip 补执行位;同版本重装覆盖;卸载范围防护;装完无需重启（组件候选排在系统候选前） |
+| 解析源切换（§12.3.1） | 播放器剧集面板一行解析源 chip（超级解析 + 各解析器），选中即重解析当前集 | `test/parse_sniff_behavior_test.dart`「超级解析默认遍历」 | 默认超级解析自动遍历；手动指定 `preferredParseName` 覆盖默认；仅本次播放生效、不落盘；指定源失败不静默回落 |
+| 解析器前缀 | 播放地址 `json:`/`parse:<名称>` | `test/parse_sniff_behavior_test.dart`「前缀」 | `json:` 余下部分当 type=1 接口; `parse:<名称>` 覆盖默认选择;名称不存在时可诊断;站点 `playUrl` 前缀拼出解析页时走解析而不是报死路 |
 | 解析器端到端 | 配置 parses → resolvePlayback → 真实调解析器 | `test/config_and_site_test.dart`「§12 全链路」+ `integration_test/parser_flow_test.dart` | 解析出可播放地址并真实出画;失败可定位且可回退 |
 | T4 播放入口（缺陷 22） | `type=4` 站点必须先调 `api?play=<剧集目标>&flag=<线路>`;`parse=0` 直链带媒体 Header;`parse=1` 进解析器;无地址/占位串如实报错且文案不得声称「未声明 playUrl」 | `test/config_and_site_test.dart`「type=4 播放入口」9 例 + `integration_test/t4_play_flow_test.dart` + `integration_test/t4_sweep_flow_test.dart` (-d windows) | 请求参数为 `play`/`flag`（不是 `id`）;站点 `header`(token) 随请求发出;`extend` 按 1000 字节分 query/表单;`parse=0` 决策带播放入口返回的 UA;`parse=1` 先播放入口再解析器;播放入口无地址→`playbackUrlMissing`、业务错误→`siteBusiness`、占位串→如实文案（均不回退到剧集目标）;`type=0/1/2` 直链不多打请求;真实 AT 配置木偶/HanXiaoQuanNight 均拿到可播地址并**字节级取流**（206）;**全站扫描** 68 个 `type=4` 站点 `playbackParserRequired=0`（反向验证：还原缺陷后 `playbackParserRequired=20`，含 `木偶#a115`） |
 | 直播弹幕解析 | 帧解析/文本规范化/颜色/重连退避逐条对齐 Android | `test/phase3_live_danmaku_test.dart` | chat/superchat/online/非法帧四类;控制字符丢弃/空白折叠/码点截断;`#RRGGBB` 补 alpha;退避有界且随尝试增长 |
@@ -161,6 +168,10 @@ M3U/TXT/JSON 解析与播放验收。设计文档相关验收原文:
 > (结果写入 `docs/phase3/evidence/windows-acceptance.txt`)。
 > 单元测试自带进程内 fixture 服务(随机端口),可独立运行;集成测试需要先启动
 > 外部 fixture 服务:`py -3 -m tools.fixture_server.server --port 18080`(脚本会自动启动)。
+>
+> 解析器 `type=0`/`type=4` 的浏览器嗅探另有独立验收证据(本机 Linux 真浏览器):
+> `docs/phase3/evidence/linux-sniff-acceptance.txt`;其 Windows 侧仍需真机复跑
+> (`integration_test/t4_sweep_flow_test.dart` 的 `parseSniffUnavailable` 分类桶)。
 
 ### 3.1 门禁落地状态(2026-10-02,含 EPG、JS Spider、猫源与 PC Java Spider)
 
@@ -1084,8 +1095,9 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
     > **都不得**产出 `playbackParserRequired`。
 
     它同时把允许出现的非缺陷结论逐条落证据（不得当成通过）：`playbackUrlMissing`
-    （上游确实没给地址）、`parserUnsupportedType`（AT 配置的 11 个解析器**全部**是
-    `type=0` Web 嗅探，PC 端明确不支持，§5.8）、`noContent`（上游当天无分类/无内容）。
+    （上游确实没给地址）、`parseSniffUnavailable`（AT 配置的 11 个解析器**全部**是
+    `type=0` Web 嗅探，需要本机 Chromium 内核浏览器，§12.4；跑门禁的机器没装浏览器时
+    才会落到这里，属于能力缺失而不是解析失败）、`noContent`（上游当天无分类/无内容）。
 
     实测（真实 AT 配置，68 个 `type=4` 站点）：
 
@@ -1125,25 +1137,28 @@ http(s) 地址,像是「直链但放不了」。参考实现(无条件 `playerCo
    online 帧更新在线人数,非法帧丢弃,连接失败只提示不影响播放。
    **未实现**:弹幕发送、弹幕屏蔽词/举报、以及「按标题自动搜索弹幕源」的
    在线匹配。
-7. **解析器范围(§12)**:已实现 JSON 类解析器运行时——`parse=1`/`jx=1` 会按 §12.2
+7. **解析器范围(§12)**:已实现**全部**解析器类型——`parse=1`/`jx=1` 会按 §12.2
    选择解析器并真实执行:`type=1`(`GET url+webUrl`,取 `{url}`/`{data.url}`)、
-   `type=2`(JSON 扩展,携带全部 type=1 解析器)、`type=3`(JSON Mix,携带 flag);
-   `flag` 可命中解析器;解析结果校验媒体类型;超时/失败归一化为 `parse*` 错误,
-   由上层回退换源。**未实现**:`type=0` Web 嗅探与 `type=4` Super——两者都需
-   浏览器内核/WebView 嗅探页面(Android 用 `CustomWebView`,PC 端无等价物),
-   选中时给出明确错误(不静默)。
+   `type=2`(JSON 扩展,携带全部 type=1 解析器)、`type=3`(JSON Mix,携带 flag),
+   以及 `type=0` Web 嗅探与 `type=4` Super(设计文档 §12.4:用**本机 Chromium
+   内核浏览器 + CDP** 打开解析页、拦截媒体请求;`type=4` 为 `type=1` 并发 +
+   `type=0` 按优先级顺序竞速)。`flag` 可命中解析器;站点 `click` 注入与
+   `config.rules` 嗅探规则透传;播放地址 `json:`/`parse:<名称>` 前缀按安卓
+   `ParseJob.setParse` 语义处理;解析结果校验媒体类型;超时/失败归一化为
+   `parse*` 错误,由上层回退换源。**能力前提**:本机没装 Edge/Chrome/Chromium 时
+   `type=0/4` 抛 `parseSniffUnavailable`(明确报错并给补充指引,不静默降级)。
 
-### 5.8 解析器不支持类型(§12.1)
+### 5.8 解析器类型支持(§12.1)
 
-| 类型 | 名称 | PC 端 | 原因 |
+| 类型 | 名称 | PC 端 | 实现方式 |
 | --- | --- | --- | --- |
-| 0 | Web 嗅探 | ❌ | 需浏览器内核/WebView 嗅探页面(Android `CustomWebView`),桌面环境无等价物 |
-| 1 | JSON | ✅ | 纯 HTTP + JSON,已实现 |
-| 2 | JSON 扩展 | ✅ | 纯 HTTP + JSON,已实现 |
-| 3 | JSON Mix | ✅ | 纯 HTTP + JSON,已实现 |
-| 4 | Super | ❌ | 多解析器并发含 Web 嗅探竞争,依赖 WebView |
+| 0 | Web 嗅探 | ✅ | 本机 Chromium 内核浏览器 + CDP(§12.4);无浏览器时 `parseSniffUnavailable` |
+| 1 | JSON | ✅ | 纯 HTTP + JSON |
+| 2 | JSON 扩展 | ✅ | 纯 HTTP + JSON |
+| 3 | JSON Mix | ✅ | 纯 HTTP + JSON |
+| 4 | Super | ✅ | `type=1` 并发 + `type=0` 顺序竞速,第一个成功即胜出 |
 
-选择到不支持类型时抛 `ParseSelectionException`(unsupportedOnly/
+未知类型(`type` 不在 0–4)抛 `ParseSelectionException`(unsupportedOnly/
 selectedUnsupported),UI 展示可定位文案,**不静默降级**为直链。
 
 8. **JS Spider 范围(§9.1、§9.3、§9.7、§9.8)**:已实现 `tvbox-js-v1` 的

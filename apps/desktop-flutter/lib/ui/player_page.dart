@@ -47,7 +47,6 @@ import 'common.dart';
 import 'subtitle_settings_page.dart';
 import 'ai_integration_widgets.dart';
 import 'audio_ai/audio_ai_controls.dart';
-import 'search_page.dart';
 import '../services/ai_integration.dart';
 import '../services/karaoke/track_repository.dart';
 import '../services/karaoke/karaoke_controller.dart';
@@ -2826,6 +2825,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   List<VodEpisode> _episodesCache = const [];
 
+  /// 本次播放手动指定的解析源（解析源切换栏）。
+  ///
+  /// `null` = 默认（超级解析，自动遍历所有解析器）。**刻意不落盘**：用户点一下
+  /// 只是为了救这一集，记住它会让下一部片悄悄用错源（安卓的解析源选择也不跨
+  /// 播放持久化）。
+  String? _parseSourceOverride;
+
   /// 失败时的可观测性（`design/03` §4.6）。
   ///
   /// 缓存耗尽（提前 EOF）当前在 PC 侧**不可见**：media_kit 很可能无法区分
@@ -2883,6 +2889,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         episodeTarget: episodeTarget,
         flag: flag,
         vodId: vodId,
+        preferredParseName: _parseSourceOverride,
       );
     }
     return state.resolvePlayback(
@@ -2892,6 +2899,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       siteOverride: siteOverride,
       qualityIndex: qualityIndex,
       isCurrent: isCurrent,
+      preferredParseName: _parseSourceOverride,
     );
   }
 
@@ -3336,9 +3344,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                   onSearchText: (text) => Navigator.push(
                                     context,
                                     MaterialPageRoute<void>(
-                                      builder: (_) => SearchPage(
-                                        state: widget.state,
-                                        initialKeyword: text,
+                                      builder: (_) => aiSearchRouteHost(
+                                        widget.state,
+                                        text,
+                                        useExistingResults: false,
                                       ),
                                     ),
                                   ),
@@ -4353,9 +4362,28 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           episodeIndex: _request.episodeIndex,
           onSelectEpisode: (index) => unawaited(_playEpisode(index)),
           onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
+          // 解析源不是每条配置都有多个；面板只在 >1 时渲染这一行。
+          parseSources: [
+            for (final entry in widget.state.config?.playbackParsers ??
+                const <ParseEntry>[])
+              entry.name,
+          ],
+          parseSource: _parseSourceOverride ?? superParseEntryName,
+          onSelectParseSource: (name) => unawaited(_switchParseSource(name)),
         ),
       ),
     );
+  }
+
+  /// 切解析源：只对本次播放生效，并立即用当前集重新解析。
+  ///
+  /// 为什么复用 [_playEpisode] 而不是直接改地址：解析源是「怎么拿到地址」的选择，
+  /// 换源必须重新走站点播放入口 + 解析器，否则播放器里还是旧源算出来的地址。
+  Future<void> _switchParseSource(String name) async {
+    final normalized = name == superParseEntryName ? null : name;
+    if (normalized == _parseSourceOverride) return;
+    setState(() => _parseSourceOverride = normalized);
+    await _playEpisode(_request.episodeIndex, overrideFlag: _request.flag);
   }
 
   /// 切线路：尽量续播**同一集**（对齐安卓 `VideoActivity.java:3684-3687`）。

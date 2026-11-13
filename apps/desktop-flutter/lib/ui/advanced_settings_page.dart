@@ -17,6 +17,7 @@ import '../state/app_state.dart';
 import 'common.dart';
 import 'ai_integration_widgets.dart';
 import 'backup_page.dart';
+import 'browser_component_settings.dart';
 import 'injected_sites_page.dart';
 import 'local_sources_page.dart';
 import 'pan_check_page.dart';
@@ -617,6 +618,14 @@ class AdvancedSettingsPage extends StatelessWidget {
                     await state.setSpiderDebugLog(value);
                   },
                 ),
+              ],
+            ),
+            SettingsSection(
+              title: '解析器嗅探',
+              description: 'Web 嗅探使用本机 Chromium 内核；仅安装你选择的本地目录或 zip，不联网下载。',
+              children: [
+                _subheading(context, '浏览器内核', first: true),
+                BrowserComponentSettingsSection(paths: state.paths),
               ],
             ),
           ],
