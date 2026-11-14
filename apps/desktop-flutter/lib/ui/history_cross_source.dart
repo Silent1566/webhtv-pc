@@ -134,6 +134,9 @@ Future<String?> _tryOriginalSource(
             // 当前集的多画质候选随请求下传：播放器据此显示入口、按索引重解析。
             qualities: decision.qualities,
             qualityIndex: decision.qualityIndex,
+            // 原来源续播必须带**那份配置**的解析选项，不能读当前配置。
+            parseSources: decision.parseSources,
+            parseSource: decision.parseSource,
             episodeTarget: episodeTarget,
             headers: decision.headers?.asRequestHeaders ?? const {},
             title: item.vodName,

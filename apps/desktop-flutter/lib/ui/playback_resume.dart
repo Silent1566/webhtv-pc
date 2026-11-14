@@ -65,6 +65,9 @@ Future<void> resumeHistoryEntry(
             url: decision.url!,
             qualities: decision.qualities,
             qualityIndex: decision.qualityIndex,
+            // 续播同样带解析选项（原来源续播用的是那份配置的解析器）。
+            parseSources: decision.parseSources,
+            parseSource: decision.parseSource,
             // 续播后再次写进度时必须保留**同一个入口目标**，否则这一条历史会
             // 被刚解析出的可播地址覆盖，下一次续播又失败。
             episodeTarget: episodeTarget,
