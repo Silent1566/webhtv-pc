@@ -1,0 +1,37 @@
+{
+  "spider": "",
+  "wallpaper": "",
+  "warningText": "资源来自网络，仅供学习使用",
+  "sites": [
+    {
+      "key": "cspB_Alpha",
+      "name": "乙源甲站[录]",
+      "api": "http://__HOST__/vod/api?key=cspB_Alpha",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cspB_Beta",
+      "name": "乙源乙站[盘]",
+      "api": "http://__HOST__/vod/api?key=cspB_Beta",
+      "type": "4",
+      "searchable": 1,
+      "quickSearch": 0,
+      "filterable": 0
+    },
+    {
+      "key": "cspB_Gamma",
+      "name": "乙源丙站[弹]",
+      "api": "http://__HOST__/vod/api?key=cspB_Gamma",
+      "type": "4",
+      "searchable": 0,
+      "quickSearch": 0,
+      "filterable": 1
+    }
+  ],
+  "doh": [],
+  "rules": [],
+  "lives": []
+}

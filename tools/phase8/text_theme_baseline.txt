@@ -1,0 +1,15 @@
+  final t = base.textTheme.apply(fontFamilyFallback: _fontFallback);
+  return t.copyWith(
+    displaySmall: t.displaySmall?.copyWith(fontWeight: AppWeight.display),
+    headlineMedium: t.headlineMedium?.copyWith(fontWeight: AppWeight.display),
+    headlineSmall: t.headlineSmall?.copyWith(fontWeight: AppWeight.display),
+    titleLarge: t.titleLarge?.copyWith(fontWeight: AppWeight.title),
+    titleMedium: t.titleMedium?.copyWith(fontWeight: AppWeight.title),
+    titleSmall: t.titleSmall?.copyWith(fontWeight: AppWeight.title),
+    bodyLarge: t.bodyLarge?.copyWith(fontWeight: AppWeight.body),
+    bodyMedium: t.bodyMedium?.copyWith(fontWeight: AppWeight.body),
+    bodySmall: t.bodySmall?.copyWith(fontWeight: AppWeight.body),
+    labelLarge: t.labelLarge?.copyWith(fontWeight: AppWeight.label),
+    labelMedium: t.labelMedium?.copyWith(fontWeight: AppWeight.label),
+    labelSmall: t.labelSmall?.copyWith(fontWeight: AppWeight.label),
+  );

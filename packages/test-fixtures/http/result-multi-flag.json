@@ -1,0 +1,10 @@
+{
+  "list": [
+    {
+      "vod_id": "multi-1",
+      "vod_name": "多线路样本",
+      "vod_play_from": "主线$$$备用线$$$线路三",
+      "vod_play_url": "第1集$http://127.0.0.1:18080/media/sample.m3u8#第2集$http://127.0.0.1:18080/media/sample.mp4$$$第1集$http://127.0.0.1:18080/media/sample.mp4$$$第1集$http://127.0.0.1:18080/media/sample.m3u8"
+    }
+  ]
+}

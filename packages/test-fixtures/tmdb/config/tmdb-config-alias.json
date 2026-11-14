@@ -1,0 +1,11 @@
+{
+  "apikey": "legacy-key-value",
+  "api_key": "ignored-because-apikey-wins",
+  "token": "a.b.c",
+  "omdbKey": "omdb-value",
+  "language": "zh-CN",
+  "imageBase": "images.tmdb.org",
+  "excludeKeywords": ["[短]"],
+  "matchSites": ["csp_"],
+  "whitelistSites": ["木偶"]
+}

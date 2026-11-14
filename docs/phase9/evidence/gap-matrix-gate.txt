@@ -1,0 +1,8 @@
+[PASS] G9.1 · 34 行，34 个唯一 ID
+[NOTE] 安卓基准：F:\Workspace\webtv2\webhtv @ 77e2fbefdc30
+[PASS] G9.2 · 95 条引用
+[PASS] G9.3 · activities=43 未映射=0，dialogs=84 未映射=0，fragments=9 未映射=0，modules=34 未映射=0
+[PASS] G9.4 · 48 条引用，34 个 PLANNED（lib/core/ad_rules.dart、lib/core/danmaku_match.dart、lib/core/live_catchup.dart、lib/core/live_settings.dart、lib/core/lut.dart、lib/core/parse_order.dart、lib/core/playback_repeat.dart、lib/core/player_options.dart、lib/core/player_tracks.dart、lib/core/site_injection.dart、lib/core/site_order.dart、lib/core/skip_segments.dart、lib/core/sleep_timer.dart、lib/core/subtitle_provider.dart、lib/core/viewing_report.dart、lib/services/ad_block_service.dart、lib/services/backup_service.dart、lib/services/csp_warmup.dart、lib/services/danmaku_library_service.dart、lib/services/following_service.dart、lib/services/git_cloud_service.dart、lib/services/login_state_bridge.dart、lib/services/lut_store.dart、lib/services/manage_server.dart、lib/services/outbound_proxy.dart、lib/services/pan_check_service.dart、lib/services/player_options_store.dart、lib/services/remote_relay.dart、lib/services/session_recovery.dart、lib/services/subtitle_providers/、lib/services/viewing_webhook.dart、lib/ui/audio_mode_page.dart、lib/ui/file_browser_page.dart、lib/ui/reader_page.dart）
+[PASS] G9.5 · 8 项
+
+PASSED · G9.1–G9.5 全绿

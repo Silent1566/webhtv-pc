@@ -1,0 +1,100 @@
+{
+  "id": 550,
+  "title": "示例电影",
+  "original_title": "Fixture Movie",
+  "overview": "示例电影简介",
+  "poster_path": "/movie-poster.jpg",
+  "backdrop_path": "/movie-backdrop.jpg",
+  "release_date": "2023-06-15",
+  "vote_average": 7.9,
+  "original_language": "en",
+  "origin_country": [
+    "US"
+  ],
+  "genres": [
+    {
+      "id": 28,
+      "name": "动作"
+    }
+  ],
+  "credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "character": "主角",
+        "profile_path": "/person.jpg",
+        "known_for_department": "Acting",
+        "order": 0
+      }
+    ],
+    "crew": [
+      {
+        "id": 500,
+        "name": "示例导演",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/crew.jpg"
+      }
+    ]
+  },
+  "created_by": [],
+  "translations": {
+    "translations": [
+      {
+        "iso_639_1": "zh",
+        "iso_3166_1": "CN",
+        "data": {
+          "overview": "示例电影简介（中文翻译版）"
+        }
+      }
+    ]
+  },
+  "images": {
+    "posters": [
+      {
+        "file_path": "/mp1.jpg",
+        "width": 680,
+        "height": 1020,
+        "vote_average": 5.1,
+        "vote_count": 4
+      }
+    ],
+    "backdrops": [
+      {
+        "file_path": "/mb1.jpg",
+        "width": 1920,
+        "height": 1080,
+        "vote_average": 5.0,
+        "vote_count": 2
+      }
+    ]
+  },
+  "external_ids": {
+    "imdb_id": "tt0000550"
+  },
+  "release_dates": {
+    "results": [
+      {
+        "iso_3166_1": "US",
+        "release_dates": [
+          {
+            "certification": "PG-13"
+          }
+        ]
+      }
+    ]
+  },
+  "recommendations": {
+    "page": 1,
+    "total_pages": 1,
+    "total_results": 0,
+    "results": []
+  },
+  "similar": {
+    "page": 1,
+    "total_pages": 1,
+    "total_results": 0,
+    "results": []
+  }
+}

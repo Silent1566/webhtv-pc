@@ -1,0 +1,9 @@
+PHASE5-EVIDENCE site-fidelity 170 站点保真（design/01 §5.4）
+PHASE5-EVIDENCE site-fidelity status=200 sites=170
+PHASE5-EVIDENCE site-fidelity keys-unique=True key-count=170
+PHASE5-EVIDENCE site-fidelity name-count=161 duplicate-names=9 note=比的是多重集，重名合法
+PHASE5-EVIDENCE site-fidelity api-hosts=['webhtv-fidelity.invalid:9978'] host-consistent=True
+PHASE5-EVIDENCE site-fidelity api-path-query-distinct=170
+PHASE5-EVIDENCE site-fidelity first-keys=['csp_PianDan', 'csp_XiaoYa', 'csp_AList', 'csp_Media', 'csp_BiliBili']
+PHASE5-EVIDENCE site-fidelity first-names=['片单导航[导]', '丫仙女[盘]', 'AList[盘]', '我的追剧', 'BiliBili[官]']
+PHASE5-EVIDENCE site-fidelity bracket-names=['片单导航[导]', '丫仙女[盘]', 'AList[盘]', 'BiliBili[官]', 'Emby[4K]']

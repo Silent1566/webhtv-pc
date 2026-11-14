@@ -1,0 +1,23 @@
+attempt=0 exit=3
+WAITING: no answer yet after 60s; run --wait --key eb31d3da again
+
+FINAL exit=3
+attempt=0 exit=3
+WAITING: no answer yet after 60s; run --wait --key eb31d3da again
+
+attempt=1 exit=3
+WAITING: no answer yet after 60s; run --wait --key eb31d3da again
+
+attempt=2 exit=2
+serve-question: the question server is gone with no answer. This is a server failure, not a user decision: restart it with --start --key eb31d3da and the same payload, reopen the URL for the user, and wait again. Never proceed without their choice while their browser session is open.
+
+FINAL exit=2
+attempt=0 exit=3
+WAITING: no answer yet after 60s; run --wait --key eb31d3da again
+
+attempt=1 exit=0
+ANSWER: {"optionId":"assigned","steer":"","html":".impeccable/mocks/decision/assigned.html","buildPath":"code","buildPathFlipped":false}
+CHOSEN SKETCH: the HTML sketch at that path is the composition the user picked. Build the real surface to match its arrangement, palette, type and density, lifting markup where it fits; it is a fixed first-viewport thumbnail, so the build owes the responsive page, the content below the fold and every state it skipped. The finish review audits the build against it.
+BUILD PATH: code (the round’s recorded default). Code-led: no comp is owed; a comp that already rendered rides at the finish review as the critique reference, and the ambition lives in the direction contract.
+
+FINAL exit=0

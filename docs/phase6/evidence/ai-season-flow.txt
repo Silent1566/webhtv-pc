@@ -1,0 +1,25 @@
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/apps/desktop-flutter/integration_test/phase6_ai_season_flow_test.dart
+Building Windows application...                                    39.2s
+√ Built build\windows\x64\runner\Debug\webhtv_pc.exe
+00:00 +0: D19：分析 → 预览 → 应用（KEEP_ORIGINAL 落盘）
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+PHASE6-AI-EVIDENCE screenshot path=docs/phase6/evidence/ai-season-preview.png bytes=26138 size=1400x2400 binding=IntegrationTestWidgetsFlutterBinding
+PHASE6-AI-EVIDENCE applied=KEEP_ORIGINAL selected=-1 paths=[/v1/chat/completions]
+00:12 +1: EXPLICIT_MAPPING 仅预览：没有「应用建议」
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+00:15 +2: FLAT_BY_COUNTS：应用前再校验 canAutoSlice（不匹配则拒绝落盘）
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+PHASE6-AI-EVIDENCE flat-by-counts refused: canAutoSlice=false, binding=1
+00:19 +3: HTTP 失败 → 只提示错误，绑定不变，不进预览
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+PHASE6-AI-EVIDENCE http-failure snackbar=1
+00:30 +4: 分析失败（硬校验拒绝）→ 提示且不落盘
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+00:33 +5: 取消分析 → 绑定不变，不进预览
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+00:43 +6: D12：未配置 AI → 弹窗引导，去设置且不误清绑定
+PHASE6-AI-EVIDENCE matched=示例剧集 counts={0: 3, 1: 12, 2: 10} line=线路一 episodes=22 selected=1 canAutoSlice=false
+PHASE6-AI-EVIDENCE screenshot path=docs/phase6/evidence/ai-settings.png bytes=46961 size=1400x2400 binding=IntegrationTestWidgetsFlutterBinding
+PHASE6-AI-EVIDENCE ai-settings-page opened, binding=1
+00:49 +7: (tearDownAll)
+00:49 +7: All tests passed!

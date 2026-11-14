@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>线路图 · 首屏</title>
+<style>
+  /* 线路图：世界只借字体、配色、密度、一个 signature move。
+     导航与控件保持平台标准。signature move ＝ 剧集条就是线路图本身，也是控件本身。 */
+  :root{
+    --ground:#0E1116; --s1:#161A21; --s2:#1D222B; --line:#262C36;
+    --ink:#F2F4F7; --ink2:#9BA6B4;
+    --r1:#E4572E; --r2:#17BEBB; --r3:#FFC914; --r4:#2E86AB; --r5:#76B041;
+    --down:#6B7280;
+    --cjk:"Microsoft YaHei UI","Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:900px;overflow:hidden}
+  body{width:1440px;height:900px;background:var(--ground);color:var(--ink);
+    font-family:var(--cjk);font-size:13px;line-height:1.5;font-feature-settings:"tnum" 1;
+    display:grid;grid-template-columns:84px 1fr 336px;grid-template-rows:56px 1fr}
+
+  .rail{grid-row:1/3;border-right:1px solid var(--line);display:flex;flex-direction:column;
+        align-items:center;padding:10px 0;gap:2px}
+  .rail .brand{width:34px;height:34px;border-radius:9px;background:var(--r1);color:#fff;
+        display:grid;place-items:center;font-weight:700;font-size:15px;margin-bottom:14px}
+  .nav{width:64px;height:54px;border-radius:9px;display:flex;flex-direction:column;
+       align-items:center;justify-content:center;gap:4px;color:var(--ink2)}
+  .nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;
+       stroke-linecap:round;stroke-linejoin:round}
+  .nav span{font-size:10.5px}
+  .nav.on{background:var(--s2);color:var(--ink)}
+  .nav.on svg{stroke:var(--r2)}
+
+  .top{grid-column:2/4;border-bottom:1px solid var(--line);display:flex;align-items:center;
+       gap:14px;padding:0 20px}
+  .cfg{display:flex;align-items:baseline;gap:9px}
+  .cfg b{font-size:14px;font-weight:700}
+  .cfg em{font-style:normal;font-size:12px;color:var(--ink2)}
+  .spacer{flex:1}
+  .btn{height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--line);
+       background:transparent;color:var(--ink);font-family:inherit;font-size:12.5px;
+       display:inline-flex;align-items:center;gap:7px}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+       stroke-linecap:round;stroke-linejoin:round}
+  .btn.pri{background:var(--r2);border-color:var(--r2);color:#06282A;font-weight:700}
+
+  .main{grid-column:2/3;padding:18px 20px 0;display:flex;flex-direction:column;gap:20px;overflow:hidden}
+  .h{font-size:15px;font-weight:700}
+  .h small{font-weight:400;font-size:12px;color:var(--ink2);margin-left:9px}
+
+  /* ---- signature move：换乘 ---- */
+  .map{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:20px 22px 16px}
+  .row{display:flex;align-items:center;gap:16px;height:62px}
+  .rl{width:132px;flex:none;display:flex;align-items:center;gap:9px}
+  .rl i{width:12px;height:12px;border-radius:3px;flex:none}
+  .rl b{font-size:12.5px;font-weight:700}
+  .rl em{font-style:normal;font-size:11px;color:var(--ink2);display:block;font-weight:400}
+  .track{position:relative;flex:1;height:44px;display:flex;align-items:center}
+  .route{position:absolute;left:0;right:0;height:4px;border-radius:2px}
+  .route.dash{background-image:repeating-linear-gradient(90deg,currentColor 0 9px,transparent 9px 17px);
+        height:4px;border-radius:0}
+  .st{position:relative;width:44px;flex:none;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;height:44px}
+  .st u{text-decoration:none;width:3px;height:13px;background:var(--ground);border-radius:1px;
+      position:relative;z-index:2}
+  .st b{position:absolute;top:31px;font-size:10.5px;color:var(--ink2);font-weight:400}
+  .st.cur u{width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 0 0 3px var(--ground)}
+  .st.cur b{color:var(--ink);font-weight:700;top:30px}
+  .st.past u{opacity:.45}
+  .xfer{position:relative;width:44px;height:44px;flex:none;display:grid;place-items:center}
+  .xfer span{width:22px;height:15px;border:2px solid var(--r3);border-radius:8px;background:var(--ground);
+      position:relative;z-index:2}
+  .terminus{width:5px;height:26px;background:currentColor;border-radius:2px;position:absolute;z-index:2}
+  .you{position:absolute;top:-1px;font-size:10.5px;color:#fff;background:var(--r1);
+      padding:2px 7px;border-radius:5px;white-space:nowrap;z-index:3}
+  .down .rl b,.down .rl em{color:var(--down)}
+  .down .route{color:var(--down);opacity:.5}
+
+  .status{display:flex;gap:20px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);
+      font-size:12px;color:var(--ink2);align-items:baseline}
+  .status i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:0}
+  .status b{color:var(--ink);font-weight:700}
+
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  .poster{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--s2)}
+  .poster .art{aspect-ratio:2/3;border-bottom:1px solid var(--line)}
+  .poster .meta{padding:8px 9px 10px}
+  .poster .meta b{display:block;font-size:12px;font-weight:700;margin-bottom:3px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .poster .meta span{font-size:11px;color:var(--ink2)}
+
+  .side{grid-column:3/4;border-left:1px solid var(--line);padding:18px 20px;display:flex;
+        flex-direction:column;gap:18px;overflow:hidden}
+  .card{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .kv{display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0}
+  .kv dt{color:var(--ink2)}.kv dd{font-variant-numeric:tabular-nums}
+  .legend{display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--ink2)}
+  .legend div{display:flex;align-items:center;gap:9px}
+  .legend i{width:16px;height:4px;border-radius:2px;flex:none}
+  .legend b{color:var(--ink);margin-left:auto;font-variant-numeric:tabular-nums}
+  .note{font-size:11px;color:var(--down);margin-top:auto}
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="brand">W</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>首页</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg><span>最近观看</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg><span>收藏</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 20V9M12 20V4M19 20v-7"/></svg><span>直播</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>搜索</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span>设置</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>日志</span></div>
+</nav>
+
+<header class="top">
+  <div class="cfg"><b>AT 配置</b><em>163 站点 · 38 直播 · 2 小时前更新</em></div>
+  <div class="spacer"></div>
+  <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 4v12"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/></svg>导入配置</button>
+  <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>选择站点</button>
+</header>
+
+<main class="main">
+  <div class="h">示例剧集 · 线路图<small>每一集是一个站点 · 换源是换乘 · 点站点直接播</small></div>
+
+  <section class="map">
+    <div class="row">
+      <div class="rl"><i style="background:var(--r1)"></i><div><b>线路一</b><em>木偶 · 12 集</em></div></div>
+      <div class="track" style="color:var(--r1)">
+        <div class="route" style="background:var(--r1)"></div>
+        <div class="st past"><u></u><b>E1</b></div>
+        <div class="st past"><u></u><b>E2</b></div>
+        <div class="st cur"><u></u><b>E3</b></div>
+        <div class="you" style="left:96px">您在此处</div>
+        <div class="st"><u></u><b>E4</b></div>
+        <div class="st"><u></u><b>E5</b></div>
+        <div class="xfer"><span></span></div>
+        <div class="st"><u></u><b>E6</b></div>
+        <div class="st"><u></u><b>E7</b></div>
+        <div class="st"><u></u><b>E8</b></div>
+        <div class="st"><u></u><b>E9</b></div>
+        <div class="terminus" style="right:0"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="rl"><i style="background:var(--r2)"></i><div><b>线路二</b><em>115 · 8 集</em></div></div>
+      <div class="track" style="color:var(--r2)">
+        <div class="route dash" style="background:transparent;color:var(--r2)"></div>
+        <div class="st"><u></u><b>E1</b></div>
+        <div class="st"><u></u><b>E2</b></div>
+        <div class="st"><u></u><b>E3</b></div>
+        <div class="st"><u></u><b>E4</b></div>
+        <div class="xfer"><span></span></div>
+        <div class="st"><u></u><b>E5</b></div>
+        <div class="st"><u></u><b>E6</b></div>
+        <div class="st"><u></u><b>E7</b></div>
+        <div class="st"><u></u><b>E8</b></div>
+        <div class="terminus" style="right:0"></div>
+      </div>
+    </div>
+
+    <div class="row down">
+      <div class="rl"><i style="background:var(--down)"></i><div><b>线路三</b><em>湖班 · 停运</em></div></div>
+      <div class="track" style="color:var(--down)">
+        <div class="route" style="background:var(--down)"></div>
+        <div class="st"><u></u><b>—</b></div>
+        <div class="st"><u></u><b>—</b></div>
+        <div class="st"><u></u><b>—</b></div>
+      </div>
+    </div>
+
+    <div class="status">
+      <span><i style="background:var(--r1)"></i>线路一 正常 <b>12 集</b></span>
+      <span><i style="background:var(--r2)"></i>线路二 降级（间歇超时） <b>8 集</b></span>
+      <span><i style="background:var(--down)"></i>线路三 已从面板移除</span>
+      <span style="margin-left:auto">换乘可省 <b style="color:var(--r2)">3h 08m</b></span>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">木偶 · 最近更新</div>
+    <div class="grid" style="margin-top:13px">
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A3A2A,#7A5A34)"></div><div class="meta"><b>Fallout</b><span>2024 · 8.2 · 8 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A3A4A,#345A7A)"></div><div class="meta"><b>三体</b><span>2023 · 8.7 · 30 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#3A2A3A,#6A3460)"></div><div class="meta"><b>繁花</b><span>2023 · 8.1 · 30 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A3A2A,#3E6B3A)"></div><div class="meta"><b>漫长的季节</b><span>2023 · 9.4 · 12 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A2A2A,#8A3A2A)"></div><div class="meta"><b>奥本海默</b><span>2023 · 8.8 · 正片</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A2A3A,#3A3A6A)"></div><div class="meta"><b>沙丘 2</b><span>2024 · 8.3 · 正片</span></div></div>
+    </div>
+  </section>
+</main>
+
+<aside class="side">
+  <div class="card">
+    <div class="h" style="font-size:13.5px">线路状态</div>
+    <div class="legend" style="margin-top:11px">
+      <div><i style="background:var(--r1)"></i>线路一 · 木偶<b>正常</b></div>
+      <div><i style="background:var(--r2)"></i>线路二 · 115<b>降级</b></div>
+      <div><i style="background:var(--r3)"></i>线路四 · 夸克<b>未知</b></div>
+      <div><i style="background:var(--down)"></i>线路三 · 湖班<b>停运</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="h" style="font-size:13.5px">示例剧集</div>
+    <dl style="margin-top:10px">
+      <div class="kv"><dt>年份 / 时长</dt><dd>2024 · 45 分钟</dd></div>
+      <div class="kv"><dt>地区 / 语言</dt><dd>CN · zh</dd></div>
+      <div class="kv"><dt>评分</dt><dd>8.2 / 10</dd></div>
+      <div class="kv"><dt>当前线路预算</dt><dd>9h 12m</dd></div>
+    </dl>
+  </div>
+
+  <div class="note">草图：构图与配色按真实产品内容绘制，海报为合成占位，非真实剧照。</div>
+</aside>
+
+</body>
+</html>

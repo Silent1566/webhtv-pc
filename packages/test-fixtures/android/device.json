@@ -1,0 +1,10 @@
+{
+  "eth": "",
+  "ip": "http://__HOST__",
+  "name": "vivo V1923A",
+  "serial": "fixture0",
+  "time": 0,
+  "type": 0,
+  "uuid": "fixture-device-uuid",
+  "wlan": "00:00:00:00:00:00"
+}

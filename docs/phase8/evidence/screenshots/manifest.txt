@@ -1,0 +1,20 @@
+# Phase 8 截图证据清单（G8 用）
+#
+# 由 tools/phase8/verify_screenshots.py 逐字节校验。
+# 为什么需要：屏显右上角是实时时钟、菜单滚动条会淡出，两者都曾让
+# 同一份代码跑出不同字节的 PNG（实测）。清单把「截图可复现」变成机器检查。
+# 重新生成：py -3 tools/phase8/verify_screenshots.py --write-manifest
+
+ee995bf13117f2a2b3f7bc115c18ee95d03fc55057a947e8d6b6575c7a51f2ef  player-controls-r16x10.png
+f96f63601fce0df25ac48ac3672a69a0f5571cb3e6e0ae3a6dbb2f055d215fe7  player-menu-r16x10.png
+075ec5d97b115184a949b24b77ee3c54ab3aa4ebccae640142a312b5f694b880  player-menu-bottom-r16x10.png
+2d6014cf02b958eab12b28f618913ee244d5a0774fd7c2bc942657d405f63dfb  player-osd-r16x10.png
+6c54487a6197fe79472ef309e481e1eead1830d91b44f14ce5374c83ffdd15e8  player-controls-r2x1.png
+eb453e6c80ddcdc92d112861471705517e7385ff572f9ffb5ce7f045141658ed  player-menu-r2x1.png
+bab3d093a9c82ccf9fad91f7916f14130261902f0e12052c70e55184397dee29  player-menu-bottom-r2x1.png
+7835c81a01b58a874c2acdd5e0213ce8fbc7433a214d67d5e050f01f7a9e35f7  player-osd-r2x1.png
+31054dd2d25d33a303ef0811a916dfb0f96c4af781d1f18ac6cd6c9b9f8dd45a  player-controls-r235x1.png
+b973f914e72004568c99e662fb0962eb8ac8f0266071ad79ad848f30e20b5426  player-menu-r235x1.png
+6e121b0ed6d39d53b6d2993aed1ce5fbffd9685f90246e8af1cdf86f5f35cf6c  player-menu-bottom-r235x1.png
+582175c8209c83d669cc892ff674bc208c7c693967a6d96ed92b005e6645e108  player-osd-r235x1.png
+d36dbd061a9965c39cd3a576b9ec6723aa9aa2fa789c3086a57de9f0672ab7e6  player-narrow-1024x640.png

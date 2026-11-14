@@ -1,0 +1,201 @@
+{
+  "id": 1399,
+  "name": "示例剧集",
+  "original_name": "Fixture Show",
+  "overview": "示例剧集简介",
+  "poster_path": "/tv-poster.jpg",
+  "backdrop_path": "/tv-backdrop.jpg",
+  "first_air_date": "2024-03-01",
+  "vote_average": 8.2,
+  "original_language": "zh",
+  "origin_country": [
+    "CN"
+  ],
+  "genres": [
+    {
+      "id": 18,
+      "name": "剧情"
+    },
+    {
+      "id": 10765,
+      "name": "科幻"
+    }
+  ],
+  "seasons": [
+    {
+      "season_number": 0,
+      "name": "特别篇",
+      "episode_count": 3,
+      "air_date": "2021-01-10",
+      "poster_path": "/s0.jpg",
+      "overview": "特别篇"
+    },
+    {
+      "season_number": 1,
+      "name": "第 1 季",
+      "episode_count": 12,
+      "air_date": "2024-03-01",
+      "poster_path": "/s1.jpg",
+      "overview": "第 1 季"
+    },
+    {
+      "season_number": 2,
+      "name": "第 2 季",
+      "episode_count": 10,
+      "air_date": "2025-04-05",
+      "poster_path": "/s2.jpg",
+      "overview": "第 2 季"
+    }
+  ],
+  "credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "character": "主角",
+        "profile_path": "/person.jpg",
+        "known_for_department": "Acting",
+        "order": 0
+      }
+    ],
+    "crew": [
+      {
+        "id": 500,
+        "name": "示例导演",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/crew.jpg"
+      }
+    ]
+  },
+  "aggregate_credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "roles": [
+          {
+            "character": "主角",
+            "episode_count": 12
+          }
+        ],
+        "profile_path": "/person.jpg"
+      }
+    ]
+  },
+  "created_by": [
+    {
+      "id": 500,
+      "name": "示例导演",
+      "profile_path": "/crew.jpg"
+    }
+  ],
+  "translations": {
+    "translations": [
+      {
+        "iso_639_1": "zh",
+        "iso_3166_1": "CN",
+        "data": {
+          "overview": "示例剧集简介（中文翻译版，长度更长以便验证替换规则）"
+        }
+      }
+    ]
+  },
+  "images": {
+    "posters": [
+      {
+        "file_path": "/p1.jpg",
+        "width": 680,
+        "height": 1020,
+        "vote_average": 5.6,
+        "vote_count": 12
+      },
+      {
+        "file_path": "/p2.jpg",
+        "width": 342,
+        "height": 513,
+        "vote_average": 5.6,
+        "vote_count": 3
+      }
+    ],
+    "backdrops": [
+      {
+        "file_path": "/b1.jpg",
+        "width": 1920,
+        "height": 1080,
+        "vote_average": 5.4,
+        "vote_count": 8
+      }
+    ]
+  },
+  "external_ids": {
+    "imdb_id": "tt0000001",
+    "tvdb_id": 81189
+  },
+  "content_ratings": {
+    "results": [
+      {
+        "iso_3166_1": "CN",
+        "rating": "TV-14"
+      }
+    ]
+  },
+  "recommendations": {
+    "page": 1,
+    "total_pages": 2,
+    "total_results": 3,
+    "results": [
+      {
+        "id": 1400,
+        "media_type": "tv",
+        "name": "推荐剧集",
+        "original_name": "Recommended",
+        "poster_path": "/r1.jpg",
+        "backdrop_path": "/rb1.jpg",
+        "first_air_date": "2022-01-01",
+        "vote_average": 7.1,
+        "original_language": "zh",
+        "origin_country": [
+          "CN"
+        ],
+        "genre_ids": [
+          18
+        ],
+        "overview": "推荐剧集简介"
+      }
+    ]
+  },
+  "similar": {
+    "page": 1,
+    "total_pages": 1,
+    "total_results": 1,
+    "results": [
+      {
+        "id": 1401,
+        "media_type": "tv",
+        "name": "相似剧集",
+        "original_name": "Similar",
+        "poster_path": "/s.jpg",
+        "backdrop_path": "/sb.jpg",
+        "first_air_date": "2021-01-01",
+        "vote_average": 6.8,
+        "original_language": "zh",
+        "origin_country": [
+          "CN"
+        ],
+        "genre_ids": [
+          18
+        ],
+        "overview": "相似剧集简介"
+      }
+    ]
+  },
+  "next_episode_to_air": {
+    "season_number": 2,
+    "episode_number": 1,
+    "air_date": "2099-01-01",
+    "name": "未播集",
+    "overview": "未播集"
+  },
+  "status": "Returning Series"
+}

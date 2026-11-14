@@ -1,0 +1,12 @@
+{
+  "name": "空 msg 配置",
+  "msg": "",
+  "sites": [
+    {
+      "key": "unused",
+      "name": "unused",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/"
+    }
+  ]
+}

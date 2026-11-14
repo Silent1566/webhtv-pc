@@ -1,0 +1,12 @@
+{
+  "urls": [
+    {
+      "name": "仓库条目 A",
+      "url": "http://__HOST__/sub/a"
+    },
+    {
+      "name": "仓库条目 B",
+      "url": "http://__HOST__/sub/b"
+    }
+  ]
+}

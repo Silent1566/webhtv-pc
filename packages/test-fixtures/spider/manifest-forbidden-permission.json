@@ -1,0 +1,33 @@
+{
+  "abi": "webhtv-ipc-v1",
+  "abiMinor": 0,
+  "key": "spider-test-forbidden",
+  "name": "Phase 2 crash spider",
+  "runtime": "python-3",
+  "entry": "spiders/fault_spiders.py",
+  "capabilities": [
+    "home"
+  ],
+  "permissions": {
+    "network": true,
+    "localProxy": false,
+    "ui": true,
+    "storage": "cache-only",
+    "process": false,
+    "clipboard": false,
+    "browser": false
+  },
+  "limits": {
+    "memoryMiB": 128,
+    "cpuSeconds": 10,
+    "concurrency": 2,
+    "responseMiB": 1
+  },
+  "hashes": {
+    "entrySha256": ""
+  },
+  "signature": null,
+  "config": {
+    "scenario": "crash"
+  }
+}

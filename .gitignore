@@ -1,0 +1,76 @@
+# 逆向/探针产物的本地目录（整体不入库）
+# 内容含第三方二进制的反汇编结论、依赖闭包与站点样本信息，只在本机留存。
+# 放一个专属目录而不是逐条列文件，是为了一次性挡住后续新增的同类文档。
+docs/reverse-probe/
+
+# Build outputs
+build/
+**/build/
+# CI/本地发布打包产物（scripts/package_windows.ps1）
+/dist/
+.dart_tool/
+.gradle/
+.idea/
+*.iml
+
+# Platform/generated outputs
+prototypes/flutter_media_kit/.flutter-plugins*
+prototypes/flutter_media_kit/linux/flutter/ephemeral/
+prototypes/flutter_media_kit/windows/flutter/ephemeral/
+prototypes/flutter_media_kit/macos/Flutter/ephemeral/
+
+# Test/runtime residue
+coverage/
+logs/
+tmp/
+*.log
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# JVM Spider sidecar：编译中间产物
+# （host.jar 提交入库，理由见 sidecars/spider-host-jvm/README.md §2）
+sidecars/spider-host-jvm/.build/
+*.class
+
+# Locally provisioned Phase 0 toolchains
+.local/
+
+# 本地 Flutter SDK（验证用，不入库）
+.tools/
+
+# 开发态内置 Node 运行时（lib/services/node_runtime.dart 向上 10 跳查找的落点）
+# 打包脚本把 node.exe 下载到 .local/nodejs/（上面已忽略），再复制到仓库根的
+# runtime/node/ 以复现发行包布局；那是几十 MB 的二进制，不入库。
+# 只锚定仓库根下的 runtime/node/，不写宽泛的 runtime/：其他 runtime 目录可能需入库。
+/runtime/node/
+
+# JS Spider sidecar 的第三方依赖（构建产物，不入库）
+# 入库的是 package.json + package-lock.json；node_modules/ 由
+# `npm install --omit=dev` 在 sidecars/spider-host-js 下重放，打包脚本
+# scripts/package_windows.ps1 会校验该目录存在并整目录拷进发行包。
+node_modules/
+
+# Phase 7 验收脚本的临时输出（不应入库）
+tools/phase7/_run.out
+tools/phase7/_run.err
+
+# 逆向/探针工作区（本地过程产物，不入库）
+# 里面是 venv、下载的三方 jar、从 MisaTV 解包出来的资产，以及订阅站点 ext 的
+# 解码结果——后者含真实 token/secret/uid。一旦入库既是几十 MB 的二进制历史，
+# 也是把订阅凭据推到远端。要用其中的脚本请另存到 tools/ 下再提交。
+.probe/
+
+# DSH 会话临时日志与 flutter 工具状态（本地过程产物，不入库）
+.dsh/
+**/.flutter_tool_state
+
+# superpowers sdd 工作区（本地过程产物，不入库）
+# 注意：docs/phase6 与 docs/phase8 的 evidence 会引用其中的 progress.md 作为审计轨迹，
+# 删除本目录会让那些引用变成悬空指针——所以这里只忽略，不清理。
+.superpowers/
+
+# Verified offline Python bundle and dependency wheel cache (build outputs)
+/runtime/python/

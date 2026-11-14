@@ -1,0 +1,77 @@
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/prototypes/flutter_media_kit/integration_test/phase0_benchmark_test.dart
+Building Windows application...                                    28.1s
+√ Built build\windows\x64\runner\Debug\webhtv_phase0.exe
+00:00 +0: 重复采样：本地 MP4 与 HLS 的加载与首帧
+00:00 +0: loading C:/Users/Maple/orca/workspaces/webhtv-pc/dev1/prototypes/flutter_media_kit/integration_test/phase0_benchmark_test.dart
+media_kit: NativeReferenceHolder: Allocated 2510450854080
+00:00 +0: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 2510723116192, id: 2510766437808, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2510766437808
+VideoOutput.Resize
+{handle: 2510723116192, id: 2510720874448, rect: {height: 180, left: 0, top: 0, width: 320}}
+PHASE0-EVIDENCE bench local-mp4 run=1 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=177ms first-frame=500ms
+PHASE0-EVIDENCE bench local-hls run=1 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=129ms first-frame=240ms
+PHASE0-EVIDENCE bench local-mp4 run=2 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=121ms first-frame=223ms
+PHASE0-EVIDENCE bench local-hls run=2 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=120ms first-frame=230ms
+PHASE0-EVIDENCE bench local-mp4 run=3 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=114ms first-frame=251ms
+PHASE0-EVIDENCE bench local-hls run=3 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=119ms first-frame=226ms
+PHASE0-EVIDENCE bench local-mp4 run=4 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=112ms first-frame=228ms
+PHASE0-EVIDENCE bench local-hls run=4 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=125ms first-frame=234ms
+PHASE0-EVIDENCE bench local-mp4 run=5 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=112ms first-frame=225ms
+PHASE0-EVIDENCE bench local-hls run=5 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=106ms first-frame=213ms
+PHASE0-EVIDENCE bench local-mp4 run=6 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=107ms first-frame=207ms
+PHASE0-EVIDENCE bench local-hls run=6 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=107ms first-frame=217ms
+PHASE0-EVIDENCE bench local-mp4 run=7 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=114ms first-frame=222ms
+PHASE0-EVIDENCE bench local-hls run=7 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=130ms first-frame=251ms
+PHASE0-EVIDENCE bench local-mp4 run=8 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=125ms first-frame=284ms
+PHASE0-EVIDENCE bench local-hls run=8 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=128ms first-frame=247ms
+PHASE0-EVIDENCE bench local-mp4 run=9 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=125ms first-frame=246ms
+PHASE0-EVIDENCE bench local-hls run=9 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=144ms first-frame=268ms
+PHASE0-EVIDENCE bench local-mp4 run=10 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.mp4 duration=6021ms position=40ms load=116ms first-frame=246ms
+PHASE0-EVIDENCE bench local-hls run=10 ok url=C:\Users\Maple\orca\workspaces\webhtv-pc\dev1/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=131ms first-frame=258ms
+PHASE0-EVIDENCE bench local-mp4 load n=10.0 min=107.0 median=116.0 p95=177.0 max=177.0 mean=122.3
+PHASE0-EVIDENCE bench local-mp4 first-frame n=10.0 min=207.0 median=246.0 p95=500.0 max=500.0 mean=263.2
+PHASE0-EVIDENCE bench local-hls load n=10.0 min=106.0 median=128.0 p95=144.0 max=144.0 mean=123.9
+PHASE0-EVIDENCE bench local-hls first-frame n=10.0 min=213.0 median=240.0 p95=268.0 max=268.0 mean=238.4
+00:06 +1: 重复采样：带 Header 的远程 HLS 与 Seek
+00:06 +1: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 2510772409984, id: 2510771696080, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2510771696080
+VideoOutput.Resize
+{handle: 2510772409984, id: 2510722433792, rect: {height: 180, left: 0, top: 0, width: 320}}
+00:07 +1: 重复采样：带 Header 的远程 HLS 与 Seek
+PHASE0-EVIDENCE bench header-hls run=1 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=102ms
+PHASE0-EVIDENCE bench header-hls seek run=1 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=2 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=145ms
+PHASE0-EVIDENCE bench header-hls seek run=2 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=3 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=146ms
+PHASE0-EVIDENCE bench header-hls seek run=3 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=4 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=129ms
+PHASE0-EVIDENCE bench header-hls seek run=4 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=5 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=129ms
+PHASE0-EVIDENCE bench header-hls seek run=5 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=6 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=154ms
+PHASE0-EVIDENCE bench header-hls seek run=6 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=7 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=169ms
+PHASE0-EVIDENCE bench header-hls seek run=7 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=8 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=152ms
+PHASE0-EVIDENCE bench header-hls seek run=8 reached=true elapsed=251ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=9 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=141ms
+PHASE0-EVIDENCE bench header-hls seek run=9 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=10 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=144ms
+PHASE0-EVIDENCE bench header-hls seek run=10 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls load n=10.0 min=102.0 median=145.0 p95=169.0 max=169.0 mean=141.1
+PHASE0-EVIDENCE bench header-hls first-frame n=10.0 min=228.0 median=262.0 p95=420.0 max=420.0 mean=269.7
+PHASE0-EVIDENCE bench header-hls seek n=10.0 min=251.0 median=252.0 p95=253.0 max=253.0 mean=252.2
+00:11 +2: 启动到可交互主界面耗时
+PHASE0-EVIDENCE app-launch start=2026-09-27T06:01:02.726157
+00:12 +2: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 2510772405504, id: 2510723819440, rect: {height: 0, left: 0, top: 0, width: 0}}
+NativeVideoController: Texture ID: 2510723819440
+00:12 +2: 启动到可交互主界面耗时
+PHASE0-EVIDENCE bench app-launch first-interactive=259ms
+00:12 +3: (tearDownAll)
+00:12 +3: All tests passed!

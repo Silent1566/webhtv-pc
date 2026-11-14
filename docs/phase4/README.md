@@ -1,0 +1,300 @@
+# Phase 4 计划（TMDB 元数据增强）
+
+- 状态：**已实施并验收**（T1–T18 全部落地；门禁全绿，证据 `PHASE4-ACCEPT result=PASS gates=all`，见 `docs/phase4/evidence/windows-acceptance.txt`；门禁表见 §3）
+- 日期：2026-10-07
+- 对应设计文档章节：本目录 `design/00`–`design/05`、`docs/webhtv-pc-design.md` §27（TMDB 元数据增强）、§21 Phase 4
+- 上游：`docs/phase3/README.md`（Phase 3 已完成：直播 / 字幕 / 弹幕 / 解析器 / EPG / JS Spider / PC Java Spider / 猫源）
+- 上游参考工程：`webhtv/默影视`（Android）
+
+---
+
+## 0. 本阶段目标
+
+把 TMDB 从「PC 端完全没有」升级为「与 `webhtv/默影视` 等价的**元数据增强**能力」，
+并**先把设计指导文档补齐**，再进入实施。设计文档是本阶段的第一等交付物。
+
+四项能力：
+
+1. **媒体身份匹配**：站源 `Vod` → TMDB 作品（`mediaType + tmdbId`），含手动匹配与持久化。
+2. **季度解析与可播放季度**：线路级季度绑定、显式三态 `SeasonScope`、可播放季度过滤。
+3. **季度进度与续播**：按季度保存/恢复播放位置，跨源换源续播。
+4. **详情页元数据增强**：头部补位、季度选择器、剧集标题/剧照、演职人员、相关推荐与相关视频。
+
+**不可退让的边界**（详见 `design/00` §3）：
+
+- 元数据源 ≠ 播放事实源：TMDB 只丰富播放项，**不创建播放项**。
+- 不确定即未知：`SeasonScope` 显式三态，**禁止默认第一季**。
+- 安全退化优先：TMDB 失败不阻塞浏览与播放，不覆盖已保存绑定，不跨季恢复错误进度。
+- 主进程不加载不可信代码；凭据不外泄。
+
+---
+
+## 1. 现状盘点
+
+### 1.1 缺口（TMDB 完全缺失）
+
+| 缺口 | 设计文档依据 | 现状 |
+| --- | --- | --- |
+| 无 TMDB 配置 | `design/03` §5 | `settings.json` 尚无用例；`TmdbConfig` 等价物不存在 |
+| 无 TMDB 服务 | `design/03` §4 | 无端点封装、无 TTL、无熔断、无错误分类 |
+| 无媒体身份 | `design/01` §2 | `Vod` 无 TMDB 字段；无匹配缓存 |
+| 无标题清洗/评分 | `design/01` §3/§5 | 无标题归一、无相似度评分、无分季变体防护 |
+| 无站点策略 | `design/01` §6 | 无 `enabledSites`/`disabledSites`/`allowedSites` |
+| 无季度模型 | `design/02` §2 | 无 `SeasonScope`、无 `SeasonSegment`、无来源指纹 |
+| 无季度解析 | `design/02` §3/§4 | 无解析器、无可播放季度、无切片 |
+| 无季度绑定 | `design/02` §5 | 无线路级绑定、无失效与升级策略 |
+| 无季度进度 | `design/02` §6 | `history` 只有来源维度，一个来源覆盖多季时只有一份进度 |
+| 无 TMDB 存储 | `design/03` §6 | `schemaVersion = 1`，无 TMDB 表 |
+| 无 TMDB UI | `design/04` | 详情页无 TMDB 区块、无季度选择器、无手动匹配入口 |
+| 无相关视频 | `design/04` §7 | 无 `TmdbVideo` 模型与打开方式 |
+| 无播放入口透传 | `design/04` §8 | 播放页不接收季度身份与 `episodeUrl` 消歧参数 |
+
+### 1.2 已具备（可复用的基础）
+
+| 能力 | 位置 | TMDB 如何复用 |
+| --- | --- | --- |
+| HTTP 客户端与错误模型 | `lib/core/http_api.dart`、`lib/core/app_error.dart` | 新增 `tmdb*` 错误类别，沿用同一归一化与脱敏机制 |
+| SQLite 与迁移机制 | `lib/services/storage.dart` | 新增 4 张表；`schemaVersion` 1 → 2，幂等建表 |
+| 缓存目录与平台路径 | `lib/services/app_paths.dart` | `<cacheDir>/tmdb/`；`settingsPath` 首次启用 |
+| 日志与脱敏 | `lib/services/log_service.dart` | 凭据脱敏、请求日志 |
+| 详情页与竞态处理 | `lib/ui/browse_pages.dart`、Phase 3 的详情竞态门禁 | TMDB 区块挂在既有详情页；沿用代际（generation）机制 |
+| 播放页与续播 | `lib/ui/player_page.dart`、`lib/state/app_state.dart` | 透传季度身份；沿用 `resumeThreshold` 与进度写入 |
+| 历史与收藏 | `lib/services/storage.dart`、`lib/ui/library_pages.dart` | 新增季度投影，**不改** `history` 主键 |
+| 搜索页 | `lib/ui/search_page.dart` | 纯 TMDB 详情页的"搜索站源"入口 |
+| fixture 服务 | `tools/fixture_server/server.py` | 新增 `/tmdb/**` 路由与 `/tmdb/__stats` 计数器 |
+| 一键验收脚本 | `tools/phase3/run_windows_acceptance.ps1` | 复制结构为 `tools/phase4/run_windows_acceptance.ps1` |
+
+---
+
+## 2. 实施顺序
+
+### 2.1 文档阶段（本阶段先行，已完成）
+
+| # | 任务 | 产出 | 验收 |
+| --- | --- | --- | --- |
+| D1 | 总索引与上游取舍 | `design/00-tmdb-design-index.md` | 四条原则、上游取舍表、章节映射、决策记录齐备 |
+| D2 | 身份与匹配 | `design/01-tmdb-identity-and-matching.md` | 三层键、13 步清洗、三级选择、分季四档、站点 7 条判定 |
+| D3 | 季度解析与进度 | `design/02-tmdb-season-resolution-and-progress.md` | 三态 `SeasonScope`、15 步解析、6 级可播放季度、8 条分段校验 |
+| D4 | 服务、配置与存储 | `design/03-tmdb-service-config-storage.md` | 端点清单、TTL 表、熔断、13 条归一化、4 张表、迁移策略 |
+| D5 | 详情页与播放 | `design/04-tmdb-detail-ui-and-playback.md` | 状态条 6 态、补位 8 字段、季集联动、播放入口 7 参数 |
+| D6 | 测试与验收 | `design/05-tmdb-test-and-acceptance.md` | L1/L2/L3 分层、fixture 清单、门禁表、一键验收 |
+| D7 | 主设计文档回填 | `docs/webhtv-pc-design.md` §27 + §21 Phase 4 + §17.2 + §22.1 + §23 + §26 | 章节号连续、交叉引用可解析 |
+| D8 | TMDB 配置 Schema | `packages/protocol/schema/tmdb-config.schema.json` | 三个 fixture 校验通过（含反向验证） |
+
+### 2.2 实施阶段（已完成）
+
+> 全部 T1–T18 已落地并通过门禁；一键验收命令见 §3 末。
+
+| # | 任务 | 产出 | 验收 |
+| --- | --- | --- | --- |
+| T1 | 纯逻辑：标题与评分 | `lib/core/tmdb_title.dart` | `phase4_tmdb_title_test.dart`、`phase4_tmdb_match_policy_test.dart` |
+| T2 | 纯逻辑：身份与缓存键 | `lib/core/tmdb_identity.dart` | `phase4_tmdb_cache_test.dart` |
+| T3 | 纯逻辑：站点策略 | `lib/core/tmdb_config.dart` | `phase4_tmdb_site_policy_test.dart`、`phase4_tmdb_config_test.dart` |
+| T4 | 纯逻辑：季度模型与解析 | `lib/core/tmdb_season.dart` | `phase4_tmdb_season_resolver_test.dart`、`phase4_tmdb_available_seasons_test.dart`、`phase4_tmdb_segment_test.dart` |
+| T5 | 纯逻辑：图片与视频模型 | `lib/core/tmdb_media.dart` | `phase4_tmdb_image_selector_test.dart` |
+| T6 | 服务：HTTP 与缓存 | `lib/services/tmdb_service.dart`、`lib/services/tmdb_cache.dart` | `phase4_tmdb_service_test.dart` |
+| T7 | 服务：匹配与季度编排 | `lib/services/tmdb_identity_service.dart`、`lib/services/tmdb_season_service.dart` | 组合用例 + 落盘断言 |
+| T8 | 服务：元数据应用 | `lib/services/tmdb_enrichment_service.dart` | `phase4_tmdb_episode_metadata_test.dart` |
+| T9 | 存储：4 张表与迁移 | `lib/services/storage.dart` | `phase4_tmdb_storage_test.dart` |
+| T10 | 状态层 | `lib/state/tmdb_state.dart` | 代际、加载阶段、错误隔离 |
+| T11 | 详情页 TMDB 区块 | `lib/ui/tmdb_widgets.dart` | `phase4_tmdb_ui_test.dart` 状态条与头部补位 |
+| T12 | 季度选择器与选集联动 | `lib/ui/tmdb_widgets.dart`、`lib/ui/browse_pages.dart` | 选集数量断言；不补集、不丢集 |
+| T13 | 手动匹配与季度绑定弹窗 | `lib/ui/tmdb_widgets.dart` | 弹窗用例 7/8 |
+| T14 | 纯 TMDB 详情页 | `lib/ui/tmdb_detail_page.dart` | 无播放按钮；跳搜索页 |
+| T15 | 播放入口透传与续播 | `lib/ui/player_page.dart`、`lib/state/app_state.dart` | `episodeUrl` 优先级；换源续播 |
+| T16 | 设置页 TMDB 区块 | `lib/ui/config_pages.dart` | Key 掩码、测试连接、重置默认规则 |
+| T17 | 历史/换源/删除的季度化 | `lib/ui/library_pages.dart`、`lib/state/app_state.dart` | `phase4_tmdb_progress_test.dart` |
+| T18 | fixture 与验收脚本 | `packages/test-fixtures/tmdb/**`、`tools/phase4/**` | 一键验收全绿 |
+
+依赖关系：
+
+```text
+D1–D8（文档）
+   ↓
+T1 T2 T3 T4 T5（纯逻辑，可并行）
+   ↓
+T6（服务）← T3
+   ↓
+T7（编排）← T2 T4 T6
+   ↓
+T9（存储）
+   ↓
+T8（元数据应用）← T4 T6 T9
+   ↓
+T10（状态）← T7 T8 T9
+   ↓
+T11 T12 T13 T14 T16（UI）
+   ↓
+T15 T17（播放与历史）
+   ↓
+T18（fixture 与验收）
+```
+
+---
+
+## 3. 验收门禁（本阶段完成判据）
+
+> 完整判据、覆盖位置与关键断言见 `design/05` §6。此处为汇总视图。
+
+| 门禁 | 判据 | 覆盖位置 |
+| --- | --- | --- |
+| 标题清洗与信号 | 13 步清洗、年份、季度信号、排序键、相似度公式 | `test/phase4_tmdb_title_test.dart` |
+| 分季变体防护 | 四档得分（`+140` / `0` / `+160` / `-240`）+ 直接丢弃 | `test/phase4_tmdb_match_policy_test.dart` |
+| 站点策略 | 7 条判定顺序、括号归一、`[书]` 不命中 `[小说]`、默认 11 条规则 | `test/phase4_tmdb_site_policy_test.dart` |
+| 匹配缓存 | 三层键读取顺序、同 `vodId` 多作品、手动排他、冲突显式化 | `test/phase4_tmdb_cache_test.dart` |
+| 季度解析 | 15 步顺序、三元组断言、`ambiguous` 零写入、不覆盖旧绑定 | `test/phase4_tmdb_season_resolver_test.dart` |
+| 可播放季度 | 6 级顺序、UI 矩阵 7 行、不补集、不丢集 | `test/phase4_tmdb_available_seasons_test.dart` |
+| 分段校验 | 8 条有效性（含不连续、未完整覆盖） | `test/phase4_tmdb_segment_test.dart` |
+| 季度进度 | 写入规则、不覆盖、读取顺序、历史投影、换源 5 条、删除 4 条 | `test/phase4_tmdb_progress_test.dart` |
+| 剧集元数据 | 未知季度**不应用**（反向验证）、代数校验、分段应用 | `test/phase4_tmdb_episode_metadata_test.dart` |
+| 配置归一化 | 13 条规则、别名键、JWT 判定、往返幂等 | `test/phase4_tmdb_config_test.dart` |
+| 图片选择 | 4 条排序键、方向回退、去重、`limit`、URL 拼接 | `test/phase4_tmdb_image_selector_test.dart` |
+| 服务可靠性 | 鉴权形态、TTL 三级读路径、熔断（零请求）、取消不落盘、7 类错误映射 | `test/phase4_tmdb_service_test.dart` |
+| 存储与迁移 | 4 张表、`schemaVersion` 1→2 幂等、往返、513→512 淘汰、清理边界 | `test/phase4_tmdb_storage_test.dart` |
+| 契约 | TMDB 配置 Schema 校验（含反向验证）、fixture 完整性 | `tests/test_contracts.py` |
+| UI 渲染 | 状态条 6 态、补位 8 字段、骨架尺寸、键盘全流程、失败隔离文案 | `test/phase4_tmdb_ui_test.dart` |
+| 详情集成 | 真实窗口 + 真实 HTTP + 季度切换 | `integration_test/tmdb_detail_flow_test.dart` |
+| 播放集成 | 真实播放器 + 季度身份透传 + 续播 + 换源续播 | `integration_test/tmdb_playback_flow_test.dart` |
+| 手动匹配集成 | 持久化、仅选季度、清除绑定 | `integration_test/tmdb_manual_match_flow_test.dart` |
+| 失败隔离集成 | 401 不阻塞播放、熔断生效（计数不增） | `integration_test/tmdb_failure_isolation_flow_test.dart` |
+| 纯 TMDB 详情页 | 卡片不可播、跳搜索页 | `integration_test/tmdb_tmdb_only_detail_flow_test.dart` |
+| 凭据不泄露 | 日志与诊断导出脱敏 | `tools/phase4/verify_tmdb_redaction.py` |
+| 无回归 | `flutter test` + `dart analyze` 全绿 | 全量 |
+| 播放入口契约 | 7 参数透传、`episodeUrl` 三段优先级、自动连播不跨季 | `test/phase4_tmdb_playback_test.dart` |
+| 反向验证 | 三项契约逐项破坏后用例**必须失败**（机器校验，非人工说明） | `tools/phase4/verify_reverse_checks.py` |
+| 入口可达性 | 未配置时设置页与详情页都必须有可达的 TMDB 入口（站点禁用仍不渲染） | `test/phase4_tmdb_entry_reachability_test.dart` |
+| 发布包符号 | release AOT 产物中 TMDB 入口符号与中文串均存在、无测试壳污染 | `tools/phase4/verify_release_symbols.py` |
+| 详情展示模型 | 头部字段、导演回退、剧集卡片不补集/不丢集、查看器定位、轮播策略 | `test/phase4_tmdb_detail_model_test.dart` |
+| 详情视觉回归 | 动态背景 5 秒轮播、每集海报卡片、剧照/人员/推荐点击、键盘、900 px 布局 | `test/phase4_tmdb_detail_view_test.dart` |
+| 详情可视化集成 | 真实图片解码（背景/剧照）+ 剧照→查看器、人员→人物页、推荐→作品详情 + 截图证据 | `integration_test/tmdb_detail_visual_flow_test.dart` |
+| 图片 fixture 路由 | `/tmdb-img/**` 返回真实 PNG、幂等、可区分 | `tools/phase4/check_tmdb_fixture.py` |
+
+门禁以 `flutter test` + `flutter test integration_test/*.dart -d windows`
+为可复现入口，并封装为一键验收脚本 `tools/phase4/run_windows_acceptance.ps1`
+（结果写入 `docs/phase4/evidence/windows-acceptance.txt`）。
+
+一键验收（需先启动 fixture 服务，脚本会自行确保）：
+
+```powershell
+pwsh -File tools/phase4/run_windows_acceptance.ps1
+# 快速回归（跳过 Windows 集成测试）：
+pwsh -File tools/phase4/run_windows_acceptance.ps1 -SkipIntegrationTests
+```
+
+### 3.1 实施期发现并修复的真实缺陷
+
+集成测试（L3）在真实窗口 + 真实 HTTP 下暴露了 6 个 L1/L2 无法发现的缺陷，
+均已修复并保留回归门禁：
+
+| # | 缺陷 | 根因 | 回归门禁 |
+| --- | --- | --- | --- |
+| P4-1 | 切换季度后选集元数据不再刷新 | `selectSeason` 清空 `_episodes`，但只有 UI 回调触发 `loadEpisodes`；直接调状态层的路径无人触发 | `tmdb_detail_flow_test` 步骤 6 |
+| P4-2 | 第 2 季的 TMDB 标题被写到第 1 季的集上 | `applyEpisodesToLine` 把整条线路交给按集号对齐的富集，未按季度过滤（`02` §9.4） | `tmdb_detail_flow_test` 步骤 5/6 |
+| P4-3 | 多季线路的季度过滤永不收窄 | 过滤只读 `extra['tmdb_season_number']`，而富集只为当前季标记集；未回退来源集名的季度信号 | `tmdb_detail_flow_test` 步骤 5–7 |
+| P4-4 | 「仅选季度」改不动详情页 | `availableSeasons` 只按线路 A–G 推导，未优先采用手动/落盘绑定（`04` §5.3） | `tmdb_manual_match_flow_test` 步骤 6 |
+| P4-5 | 含特别篇时默认选中特别篇 | 默认取 `availableSeasons.first`；应优先第一个正片季度 | `tmdb_detail_flow_test` 步骤 4 |
+| P4-6 | 带 query 的媒体地址 404 | fixture 服务 `_send_media` 未剥离 query | `tmdb_detail_flow_test` 步骤 3（真实出画） |
+| P4-7 | **正式版 exe 完全没有 TMDB 设置与效果** | `TmdbState.shouldRender` 对「未配置」也返回 `false`，`TmdbStatusBar` 整块 `SizedBox.shrink()`；而全应用唯一引用 `TmdbSettingsPage` 的就是状态条上那个从未渲染的 `onConfigure` 回调 → 该页成为死代码，被 release AOT 整体剔除 | `phase4_tmdb_entry_reachability_test.dart` + `tools/phase4/verify_release_symbols.py` |
+
+### 3.3 视觉重设计（2026-10-07 用户反馈后）
+
+用户反馈四项：每集没有对应的海报卡片、没有海报与导演等信息、
+剧照/演职人员/相关推荐点击无效、详情页需要重新美化并用剧集海报/剧照当动态背景。
+本轮全部落地，并新增 4 个真实缺陷的回归门禁：
+
+| # | 缺陷 | 根因 | 回归门禁 |
+| --- | --- | --- | --- |
+| P4-8 | **剧集卡片不带 TMDB 剧照与集标题**（用户看到的「没有海报」） | UI 用 `sourceLine?.flagKey` 与页面自算的 `flagKey` 比较判断「是否当前线路」；绑定键在同 flag 重复时带 `#index` 后缀，两套规则不一致 → 永远判否，`applyEpisodesToLine` 从不生效 | `tmdb_detail_visual_flow_test` 步骤 4（断言卡片剧照 key 存在） |
+| P4-9 | 非当前线路被套用当前季度的集元数据 | 卡片渲染未做线路隔离，直接读全局 `_episodes` | `TmdbState.episodeCardsForEpisodes(includeMetadata:)` + 上述用例 |
+| P4-10 | 动态背景不铺满（图片按固有尺寸居中） | `AnimatedSwitcher` 以宽松约束布局子节点，`Image` 宽高为 null 时退回 160×160 | `phase4_tmdb_detail_view_test.dart` 背景用例 |
+| P4-11 | 剧集详情页「时长」永远为空 | TMDB 剧集详情的 `episode_run_time` 常为空，未用分季剧集的单集时长回退 | `phase4_tmdb_detail_model_test.dart` 时长用例 |
+| P4-12 | 同一集同时出现「海报卡片」与「文字集按钮」两套控件 | 加卡片时保留了原有按钮 Wrap，未做二选一 | `tmdb_detail_flow_test` 步骤 8（卡片数 = 线路集数 且文字集按钮 = 0） |
+| P4-13 | **点线路切换后剧集区空白** | 换线路会重置 `selectedSeason`；新线路若没有默认季的集（线路一 S1+S2 → 只有 S2 的线路二）就一集都渲染不出来 | `tmdb_detail_flow_test` 步骤 7/7.5（`selectLine(preferredSeason:)` + `reconcileSeasonWithLine`） |
+| P4-14 | **点线路后当前线路被改回第一条** | `reloadTmdb` → `loadForVod` 固定取 `playLines.first`，用户的选择被静默覆盖 | 同上（`loadForVod` 保留 `_selectedLineFlag`） |
+| P4-15 | **制作团队没有卡片**（只有纯文字列表） | 团队区块用 `_CrewGrid`（`Wrap` + 文本），而演员用卡片墙；上游两者共用 `adapter_tmdb_cast.xml` | `phase4_tmdb_detail_view_test.dart` 制作团队用例 + `tmdb_detail_visual_flow_test` 步骤 8.5 |
+| P4-16 | **切回线路后季度被重置**（「又转换一次」） | `loadDetail` 无条件用 `_defaultSeasonOf(availableSeasons)` 覆盖解析器确证的季度，忽略请求季度 | `phase4_tmdb_state_test.dart` 线路季度记忆 + `tmdb_detail_flow_test` 步骤 9 |
+| P4-17 | **多线路各拉一份 TMDB 数据** | `beginLoad` 每次清空作品维度数据，`loadForVod` 每次都重发详情/推荐/视频 | `phase4_tmdb_state_test.dart`「多线路共用」2 例 |
+| P4-18 | 首次进详情页打两次 `/tv/{id}` | 匹配阶段为分季裁决取 `includeRelated: false`，详情页需 `includeRelated: true`，缓存键只支持单向回退 | `TmdbService.detail` 双向回退 + 上述用例的请求计数断言 |
+
+修复后发布包符号门禁同步扩展（`TmdbDetailView` / `TmdbBackdropSlideshow` /
+`TmdbPhotoViewerDialog` / `TmdbPersonPage` / `TmdbEpisodeStrip` 等 + 中文串），
+防止 AOT 把重设计整体剔除。
+
+### 3.2 反向验证（机器校验）
+
+`tools/phase4/verify_reverse_checks.py` 已纳入一键验收脚本，逐项临时破坏契约、
+断言对应用例确实失败、再无条件还原并校验工作区干净：
+
+| # | 破坏方式 | 必须失败的用例 | 实测 |
+| --- | --- | --- | --- |
+| 1 | 未知季度的元数据守卫改为不拦截（等价上游 `[1, 0]` 兜底） | `phase4_tmdb_episode_metadata_test.dart` | 失败 2 例 |
+| 2 | 分季惩罚 `-240` 改为 `0` | `phase4_tmdb_match_policy_test.dart` | 失败 1 例 |
+| 3 | 去掉 `normalizeBrackets` 的全角映射 | `phase4_tmdb_site_policy_test.dart` | 失败 1 例 |
+
+---
+
+## 4. 风险与开放问题
+
+| # | 风险 | 影响 | 缓解 |
+| --- | --- | --- | --- |
+| R1 | TMDB 响应形态与 fixture 偏差 | 上线后解析失败 | fixture 取自真实响应脱敏快照；保留 `malformed`/`error-*` |
+| R2 | 季度解析分支爆炸导致回归成本高 | 交付变慢 | 表驱动用例 + 统一三元组断言 |
+| R3 | 详情页信息量过大导致布局复杂 | 体验下降 | 区块可折叠；简介默认 4 行折叠 |
+| R4 | `settings.json` 首次引入带来的读写/并发问题 | 设置丢失 | 单写入点 + 原子写（临时文件 + rename）+ 单测覆盖往返 |
+| R5 | `url_launcher` 新依赖 | 打包与 CI 影响 | 打开器可注入；CI 用假 opener |
+| R6 | 多配置切换时 TMDB 绑定串号 | 进度错乱 | 所有 TMDB 表带 `config_id`；`02` §14 Q2 |
+| R7 | 与上游语义漂移（例如重新引入"未知→第一季"） | 违反核心原则 | 反向验证用例（`design/05` §10）必须存在并通过 |
+
+| # | 开放问题 | 结论 | 依据 |
+| --- | --- | --- | --- |
+| Q1 | TMDB 配置是否进配置 JSON？ | **不进**，放 `settings.json` | `design/03` §5.3 |
+| Q2 | 是否需要"跨站同名作品沿用"？ | **需要** | `design/01` §11 Q1 |
+| Q3 | 相关视频是否应用内播放？ | **不**，浏览器打开 | `design/04` §7.2 |
+| Q4 | 未知季度是否兜底第一季？ | **不兜底** | `design/02` §9.1 |
+| Q5 | 季度进度是否按配置隔离？ | **是**（`config_id`） | `design/02` §14 Q2 |
+| Q6 | 手动匹配结论是否随缓存清理消失？ | **不消失** | `design/01` §11 Q4 |
+| Q7 | 是否支持多套 TMDB 配置？ | **不支持** | `design/03` §10 Q5 |
+| Q8 | 是否需要 AI 刮削 / 个人推荐？ | **本阶段不做** | `design/00` §4.3 |
+
+---
+
+## 5. 平台范围声明
+
+本阶段仍**只交付 Windows**。Linux/macOS 的 TMDB 服务、存储与 UI 验证不在范围内。
+
+发布文案不得声称已支持 TMDB 增强，除非 §3 门禁全绿且证据写入
+`docs/phase4/evidence/windows-acceptance.txt`。
+
+### 5.1 AOT（profile）端到端补充验证
+
+`flutter test` 没有 `--release` 开关；Windows 桌面的 AOT 端到端验证只能走
+`flutter drive`。而 `flutter drive` 明确拒绝 `--release`
+（`Flutter Driver (non-web) does not support running in release mode`），
+因此用 **`--profile`** 代替：Windows 桌面上 profile 与 release 同为 **AOT 编译**，
+能覆盖 `flutter test`（JIT/debug）无法覆盖的 AOT 编译差异与代码剔除风险。
+
+```powershell
+flutter drive --driver=test_driver/integration_test.dart `
+  --target=integration_test/tmdb_detail_flow_test.dart -d windows --profile
+```
+
+驱动文件 `apps/desktop-flutter/test_driver/integration_test.dart` 只回传结果、不含断言。
+实测结果（证据见 `evidence/windows-acceptance.txt` 的 `aot-e2e` 行）：
+
+| 事实 | 值 |
+| --- | --- |
+| fixture 真实 HTTP 命中 | 19 次（`/3/tv/1399`×4、季 1 详情/视频、search 等） |
+| 匹配链 | 匹配成功，简介补位长度 26 |
+| 季度渲染 | S1=12 项、S2=10 项、线路二=8 项 |
+| 幽灵剧集 | `phantom-extra=0`（TMDB 有 S2E10 而线路只有 8 集时不外溢） |
+| 结果 | `result=PASS tests=all elapsed=41s` |
+
+---
+
+## 6. 与主设计文档的关系
+
+本阶段对应主设计文档新增的 **§27 TMDB 元数据增强** 与 **§21 Phase 4**：
+
+- §27 给出 TMDB 能力的定位、原则与模块边界（摘要级）；
+- 本目录 `design/00`–`design/05` 给出可实施的完整语义（细节级）；
+- 冲突时以本目录为准，并回填主设计文档。

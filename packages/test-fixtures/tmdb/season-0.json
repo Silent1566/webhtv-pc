@@ -1,0 +1,81 @@
+{
+  "id": 2000,
+  "season_number": 0,
+  "name": "特别篇",
+  "overview": "特别篇",
+  "air_date": "2021-01-10",
+  "poster_path": "/s0.jpg",
+  "episodes": [
+    {
+      "id": 100001,
+      "episode_number": 1,
+      "season_number": 0,
+      "name": "第 1 集",
+      "overview": "第 0 季第 1 集简介",
+      "air_date": "2021-01-10",
+      "still_path": "/s0e1.jpg",
+      "vote_average": 7.3,
+      "runtime": 45
+    },
+    {
+      "id": 100002,
+      "episode_number": 2,
+      "season_number": 0,
+      "name": "第 2 集",
+      "overview": "第 0 季第 2 集简介",
+      "air_date": "2021-01-10",
+      "still_path": "/s0e2.jpg",
+      "vote_average": 7.6,
+      "runtime": 45
+    },
+    {
+      "id": 100003,
+      "episode_number": 3,
+      "season_number": 0,
+      "name": "第 3 集",
+      "overview": "第 0 季第 3 集简介",
+      "air_date": "2021-01-10",
+      "still_path": "/s0e3.jpg",
+      "vote_average": 7.0,
+      "runtime": 45
+    }
+  ],
+  "credits": {
+    "cast": [
+      {
+        "id": 287,
+        "name": "示例演员",
+        "character": "主角",
+        "profile_path": "/person.jpg",
+        "known_for_department": "Acting",
+        "order": 0
+      }
+    ],
+    "crew": [
+      {
+        "id": 500,
+        "name": "示例导演",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/crew.jpg"
+      }
+    ]
+  },
+  "aggregate_credits": {
+    "cast": []
+  },
+  "images": {
+    "posters": [
+      {
+        "file_path": "/sp0.jpg",
+        "width": 680,
+        "height": 1020,
+        "vote_average": 5.0,
+        "vote_count": 2
+      }
+    ]
+  },
+  "translations": {
+    "translations": []
+  }
+}

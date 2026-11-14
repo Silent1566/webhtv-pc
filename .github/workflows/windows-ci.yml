@@ -1,0 +1,221 @@
+name: Windows CI
+
+# 普通提交的构建门禁：静态检查 + 单测 + Windows Release 构建 + 便携包 + 启动烟测。
+# 产物只作为 workflow artifact 保留，不发 Release（发布见 windows-release.yml）。
+#
+# 设计依据：docs/webhtv-pc-design.md §20（构建与打包）、§19.1（CI 矩阵）。
+#
+# 关于 dev* 分支：
+#   GitHub 只把**默认分支（main）**上的工作流登记到 Actions API，因此
+#   `workflow_dispatch` / `gh workflow list` 在 main 还没有本文件时不可用。
+#   而 push 事件只要求文件存在于被推送的那个 ref，所以 dev* 推送能正常触发。
+#   main 合入本文件后，workflow_dispatch 与 GitHub 页面的 Run workflow 即可用。
+#
+# 单测约 13 分钟、Windows runner 计费更高，因此不覆盖所有分支：
+# 只跑 main、dev* 与 PR，其它分支用 workflow_dispatch（main 具备后）。
+
+on:
+  push:
+    branches:
+      - main
+      - 'dev*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TZ: Asia/Shanghai
+  FLUTTER_VERSION: "3.47.5"
+
+jobs:
+  build:
+    name: Analyze, test, build and package (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up JDK 21 (JVM sidecar tests)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # 仅用于 JS sidecar 测试；发行包内置的 node.exe 由 scripts/package_windows.ps1 自行下载校验。
+      - name: Set up Node.js 22 (JS sidecar tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # node_modules 不入库（.gitignore:51），但 scripts/package_windows.ps1 要求
+      # sidecars/spider-host-js/node_modules 存在，缺失即打包失败。必须在打包前安装；
+      # 用 npm ci 按已入库的 package-lock.json 精确还原，--omit=dev 避免把开发依赖打进包。
+      - name: Install JS sidecar dependencies
+        working-directory: sidecars/spider-host-js
+        shell: pwsh
+        run: npm ci --omit=dev
+
+      - name: Set up Python 3.12 (Python sidecar tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enable Windows long paths and symlink support
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          git config --system core.longpaths true
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法写入 core.longpaths（非管理员）；路径较短时通常不影响构建。'
+          }
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法通过注册表启用开发者模式；若 flutter pub get 因插件符号链接失败，请检查 runner 权限。'
+          }
+
+      - name: Resolve build metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $pubspec = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop-flutter/pubspec.yaml'
+          $line = Select-String -Path $pubspec -Pattern '^version:\s*([^\s#]+)\s*$' | Select-Object -First 1
+          if (-not $line) { throw 'apps/desktop-flutter/pubspec.yaml 缺少 version 字段' }
+          $full = $line.Matches[0].Groups[1].Value
+          $parsed = [regex]::Match($full, '^(\d+\.\d+\.\d+)(?:\+(\d+))?$')
+          if (-not $parsed.Success) { throw "非法版本号：$full（期望 x.y.z 或 x.y.z+build）" }
+          $version = $parsed.Groups[1].Value
+          $build = if ($parsed.Groups[2].Success) { $parsed.Groups[2].Value } else { '0' }
+          $short = (git rev-parse --short=7 HEAD).Trim()
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "build=$build" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "channel=dev" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "short_sha=$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "WebHTV PC $version+$build（dev, $short）"
+
+      - name: Install Dart dependencies
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Static analysis
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: dart analyze
+
+      # 必须排在单测之前：13 个 phase8 播放器用例会真实实例化 media_kit 的
+      # NativePlayer，而 media_kit 在 Windows 上要求 `libmpv-2.dll` 位于
+      # `%PATH%`。该 DLL 由 media_kit_libs_windows_video 的 CMake 在**原生构建时**
+      # 下载并解压到 build/windows/x64/libmpv/，所以只有先构建才有它。
+      #
+      # 本地能跑通只是因为开发机 PATH 里恰好有 libmpv 目录（如 F:/Tools/libmpv），
+      # CI runner 没有——这是一处真实的隐性环境依赖，必须在流水线里显式消除，
+      # 不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
+      - name: Build Windows release
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter build windows --release "--dart-define=APP_VERSION=${{ steps.meta.outputs.version }}"
+
+      - name: Unit tests
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $libmpv = Get-ChildItem -Path 'build/windows/x64' -Filter 'libmpv-2.dll' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $libmpv) {
+            throw '未找到 libmpv-2.dll：media_kit 的播放器用例无法运行（Release 构建应已下载解压它）。'
+          }
+          Write-Host "libmpv：$($libmpv.FullName)"
+          $env:PATH = "$($libmpv.Directory.FullName);$env:PATH"
+          # audio_ai 用例直接加载真实 native（不做 mock）：代码按
+          # <repo>/.local/audio_ai/native/audio_ai_native.dll 与
+          # <cwd>/.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll 查找，
+          # 而 .local 被 .gitignore 忽略。这里从本次 Release 构建产物与 CMake 固定的
+          # 官方 LiteRT wheel 缓存准备，任一项缺失或校验不符都直接失败，不跳过、不降级。
+          $repoRoot = (Resolve-Path '../..').Path
+          $nativeDir = Join-Path $repoRoot '.local/audio_ai/native'
+          $litertDir = Join-Path (Get-Location) '.local/audio_ai/litert/ai_edge_litert'
+          New-Item -ItemType Directory -Force -Path $nativeDir, $litertDir | Out-Null
+          foreach ($dll in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll')) {
+            $source = Join-Path 'build/windows/x64/runner/Release' $dll
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "缺少原生库 $dll（build/windows/x64/runner/Release）：audio_ai 单元测试需要真实 native，不允许跳过或降级。"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $nativeDir $dll) -Force
+          }
+          # 两个等价来源（Release 产物与 CMake 解压的官方 wheel 缓存）必须是同一份
+          # pinned DLL，下面的 SHA256 校验对任一来源都成立；两者都缺失才算失败。
+          $litertSource = @(
+            (Join-Path 'build/windows/x64/runner/Release' 'libLiteRt.dll'),
+            (Join-Path $repoRoot '.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll')
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $litertSource) {
+            throw '缺少 pinned libLiteRt.dll：Release 构建产物与 audio_ai_runtime.cmake 缓存都没有它，不允许跳过或降级。'
+          }
+          $litertSha = (Get-FileHash -LiteralPath $litertSource -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($litertSha -ne 'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+            throw "libLiteRt.dll SHA256 与 audio_ai_runtime.cmake 固定的官方 wheel 不一致：$litertSha"
+          }
+          Copy-Item -LiteralPath $litertSource -Destination (Join-Path $litertDir 'libLiteRt.dll') -Force
+          Write-Host "audio_ai native：$nativeDir"
+          Write-Host "libLiteRt：$litertDir"
+          flutter test
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/package_windows.ps1 `
+            -BuildDir 'apps/desktop-flutter/build/windows/x64/runner/Release' `
+            -OutputDir 'dist' `
+            -Version '${{ steps.meta.outputs.version }}' `
+            -BuildNumber '${{ steps.meta.outputs.build }}' `
+            -Channel 'dev' `
+            -Commit "$env:GITHUB_SHA" `
+            -ShortCommit '${{ steps.meta.outputs.short_sha }}' `
+            -FlutterVersion "$env:FLUTTER_VERSION"
+
+      - name: Smoke test packaged client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem -LiteralPath 'dist' -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'dist 下没有 zip' }
+          $extract = Join-Path $env:RUNNER_TEMP ('webhtv-smoke-' + [guid]::NewGuid().ToString('N'))
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract -Force
+          $exe = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'webhtv_pc.exe' | Select-Object -First 1
+          if (-not $exe) { throw '解压后未找到 webhtv_pc.exe' }
+          ./scripts/smoke_windows.ps1 -ExePath $exe.FullName -ExpectedVersion '${{ steps.meta.outputs.version }}'
+
+      - name: Upload dev artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ steps.meta.outputs.version }}-dev-${{ steps.meta.outputs.short_sha }}-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7

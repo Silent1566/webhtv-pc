@@ -1,0 +1,60 @@
+{
+  "items": [
+    {
+      "type": 0,
+      "typeName": "点播",
+      "name": "片单导航",
+      "url": "https://sub.example/a.json",
+      "interfaceKey": "fixture-vod-a",
+      "urls": [],
+      "legacyConfigKeys": [],
+      "addressMatchAliases": [],
+      "identityResolutionState": "matched",
+      "desc": "",
+      "time": 1700000000000,
+      "active": true
+    },
+    {
+      "type": 0,
+      "typeName": "点播",
+      "name": "丫仙女",
+      "url": "https://sub.example/b.json",
+      "interfaceKey": "fixture-vod-b",
+      "urls": [],
+      "legacyConfigKeys": [],
+      "addressMatchAliases": [],
+      "identityResolutionState": "matched",
+      "desc": "",
+      "time": 1700000001000,
+      "active": false
+    },
+    {
+      "type": 1,
+      "typeName": "直播",
+      "name": "直播源",
+      "url": "http://__HOST__/live/live-config.json",
+      "interfaceKey": "fixture-live",
+      "urls": [],
+      "legacyConfigKeys": [],
+      "addressMatchAliases": [],
+      "identityResolutionState": "matched",
+      "desc": "",
+      "time": 1700000002000,
+      "active": true
+    },
+    {
+      "type": 2,
+      "typeName": "壁纸",
+      "name": "壁纸源",
+      "url": "https://sub.example/wall.json",
+      "interfaceKey": "fixture-wall",
+      "urls": [],
+      "legacyConfigKeys": [],
+      "addressMatchAliases": [],
+      "identityResolutionState": "matched",
+      "desc": "",
+      "time": 1700000003000,
+      "active": true
+    }
+  ]
+}
