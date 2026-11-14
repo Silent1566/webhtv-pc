@@ -4296,8 +4296,7 @@ class _UnsupportedSiteHint extends StatelessWidget {
     return _EmptyHint(
       title: '站点运行时未安装或不支持',
       message:
-          '站点「${site.name}」需要 ${availability.runtimeName} 运行时'
-          '${availability.stage == null ? "" : "（计划阶段：${availability.stage}）"}。\n'
+          '站点「${site.name}」需要 ${availability.runtimeName} 运行时。\n'
           '${availability.reason ?? ""}\n'
           '请在站点列表中选择其他可运行站点。',
     );

@@ -548,8 +548,9 @@ class SpiderRouter {
         available: false,
         runtimeName: 'Android/JAR Spider',
         stage: 'Phase 3',
-        reason: '该 jar 含原生库（$native），桌面 JVM 无法加载；'
-            'dex 预转译只解决字节码形态，不解决原生实现（ADR-0002）',
+        reason: '该 jar 含原生库（$native），只能在安卓端运行，桌面 JVM 无法加载。'
+            'dex 预转译只解决 Java 字节码形态，替代不了安卓原生库。'
+            '如需在 PC 上使用，请通过「安卓设备接入」交给安卓端运行。',
       );
     }
     if (CspJvmBinding.isAndroidJar(entry)) {
@@ -559,7 +560,7 @@ class SpiderRouter {
         stage: 'Phase 3',
         reason: '该 jar 看起来是 Android 站源（内含 classes.dex），但 zip 结构已损坏、'
             '无法确认是否还含原生库（lib/*.so），因此不自动转译；JVM 无法加载。'
-            '请重新获取完整的 jar（或桌面版 jar），或按 ADR-0002 启用 Android 兼容层',
+            '请重新获取完整的 jar，或改用桌面版 jar。',
       );
     }
     // 「可转译 dex」：可用性取决于导入期预转译的结论（`intake.json` 的

@@ -2713,6 +2713,13 @@ AiContentCompletion? aiContentCompletion,
 
   bool get hasConfig => effectiveConfig?.sites.isNotEmpty ?? false;
 
+  /// 当前配置里**真正能用**的站点数（与站点选择器同一套判定）。
+  ///
+  /// 只报总数会误导：一份 111 站点的配置可能全指向同一个带原生库的 jar，
+  /// 导入成功但一个都用不了（用户 2026-11 反馈）。
+  int get usableSiteCount =>
+      siteItems.where((item) => item.availability.available).length;
+
   /// 站点列表(含运行时可用性),隐藏 `hide=1` 的站点。
   ///
   /// 使用实例级 [SpiderRouter.classifySite] 而非静态 [SpiderRouter.classify],
@@ -3987,10 +3994,15 @@ AiContentCompletion? aiContentCompletion,
         _resetCategoryPaging();
       }
 
-      _notice = config.notice ?? '配置导入成功：${config.sites.length} 个站点';
+      // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
+      // 以为导入即可用，实际整份配置可能没有一个站点能跑。
+      final usableSites = usableSiteCount;
+      _notice = config.notice ??
+          '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
       _configPhase = LoadPhase.ready;
       log.info(
         '配置导入成功 name=$name sites=${config.sites.length} '
+        'usable=$usableSites '
         'lives=${config.lives.length} headers=${config.headers.length} '
         'origin=${redactUrl(imported.origin)}',
         scope: 'config',
