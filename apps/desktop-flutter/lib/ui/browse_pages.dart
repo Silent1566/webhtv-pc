@@ -31,6 +31,7 @@ import '../services/ui_preferences_store.dart';
 import '../state/app_state.dart';
 import '../state/detail_ratings_state.dart';
 import '../state/playback_source_context.dart';
+import 'folder_browser_page.dart';
 import '../state/tmdb_state.dart';
 import 'ai_content/ai_recommendation_section.dart';
 import 'ai_settings_page.dart';
@@ -1293,6 +1294,7 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  Widget? _folderPage;
   Widget? _detailView;
   bool _holdingRecommendationDetail = false;
   bool _observingRecommendationExit = false;
@@ -1494,6 +1496,26 @@ class _DetailPageState extends State<DetailPage> {
   @override
   void initState() {
     super.initState();
+    if (widget.vod.isFolder && !isBridgeFolderVodId(widget.vod.vodId)) {
+      final state = widget.state;
+      final source =
+          widget.sourceContext ??
+          state.playbackContextFor(state.activeSourceKey);
+      final siteKey = widget.sourceContext != null
+          ? widget.sourceSiteKey
+          : state.selectedSite?.key ?? '';
+      _folderPage = FolderBrowserPage(
+        state: state,
+        folder: widget.vod,
+        site:
+            source?.siteByKey(siteKey) ??
+            (widget.sourceContext == null ? state.selectedSite : null),
+        service: source?.service ?? state.siteService,
+        filters: Map.of(state.categoryFilters),
+        sourceContext: source,
+      );
+      return;
+    }
     // 必须监听 AppState：详情请求在页面挂载后才完成，不重建就永远停在加载中
     // （实测「第一次进去说没有线路、第二次一直转圈」的直接成因）。
     // 搜索页、Spider 管理页同样监听了各自的状态变更。
@@ -1547,6 +1569,10 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   void dispose() {
+    if (_folderPage != null) {
+      super.dispose();
+      return;
+    }
     // 评分查询随页面一起收走：控制器会取消还在等限速间隔的请求。
     _ratingsController?.dispose();
     _ratingsController = null;
@@ -2665,6 +2691,7 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_folderPage != null) return _folderPage!;
     // 推荐页共用全局详情槽；保留本页布局直到自己的详情恢复，避免滚动位置被短布局夹断。
     if (_holdingRecommendationDetail && _detailView != null) {
       return _detailView!;
@@ -2836,7 +2863,11 @@ class _DetailPageState extends State<DetailPage> {
           ),
           IconButton(
             tooltip: '刷新详情',
-            onPressed: () => state.loadDetail(widget.vod),
+            onPressed: () => state.loadDetail(
+              widget.vod,
+              siteOverride: _pageSite,
+              serviceOverride: widget.sourceContext?.service,
+            ),
             icon: const Icon(Icons.refresh),
           ),
         ],

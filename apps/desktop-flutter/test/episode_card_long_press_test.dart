@@ -282,6 +282,7 @@ class _State extends AppState {
     Site? siteOverride,
     String? preferredParseName,
     SiteService? serviceOverride,
+    String? preferredParseName,
   }) async {
     played.add(episodeTarget);
     throw AppError(AppErrorKind.siteCancelled, '测试取消播放');
