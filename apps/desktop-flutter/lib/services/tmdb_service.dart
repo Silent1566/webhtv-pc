@@ -251,6 +251,10 @@ class TmdbService {
     );
   }
 
+  /// Cached details only: no credentials check, HTTP, refresh or auth circuit.
+  Map<TmdbIdentity, List<Map<String, Object?>>> cachedDetails(Set<TmdbIdentity> identities) =>
+      _cache?.detailsFor(identities) ?? const {};
+
   /// Source enrichment requests only append groups missing from the payload.
   Future<Map<String, Object?>> sourceDetail(
     TmdbItem item, {

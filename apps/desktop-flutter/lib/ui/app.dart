@@ -31,6 +31,7 @@ import 'app_motion.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
+import 'config_source_status_view.dart';
 import 'diagnostics_pages.dart';
 import 'ai_integration_widgets.dart';
 import 'following_calendar_page.dart';
@@ -981,6 +982,12 @@ class _AppShellState extends State<AppShell> {
               onRetry: _retryBridgeRestore,
               onSwitchSource: _openSitePickerFromBanner,
               onDismiss: () => setState(() => _bridgeBanner = null),
+            ),
+          if (_state.restoredConfigSourceStatus?.needsAttention ?? false)
+            RestoredConfigSourceBanner(
+              status: _state.restoredConfigSourceStatus!,
+              onManage: _openConfigPage,
+              onDismiss: _state.dismissRestoredConfigSourceWarning,
             ),
           if (_state.pendingRecovery != null)
             RecoveryBanner(

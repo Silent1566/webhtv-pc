@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/android_bridge.dart';
-import '../core/protocol.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
 import '../services/realtime_sync_engine.dart';
@@ -13,6 +12,7 @@ import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'common.dart';
+import 'config_source_status_view.dart';
 import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -870,9 +870,11 @@ class ConfigSwitcherDialog extends StatelessWidget {
                         ? null
                         : () => Navigator.of(context).pop(record.id),
                     title: Text(record.name),
-                    subtitle: Text(
-                      '站点 ${record.siteCount} · 直播 ${record.liveCount}'
-                      '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
+                    subtitle: ConfigSourceStatusView(
+                      key: ValueKey('config-switch-source-${record.id}'),
+                      record: record,
+                      metadata: '站点 ${record.siteCount} · 直播 ${record.liveCount}'
+                          '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
                     ),
                     trailing: isActive
                         ? TagChip(
@@ -1166,12 +1168,11 @@ class _SavedConfigs extends StatelessWidget {
                   // 用 Text 而不是 SelectableText：可选文本自带手势识别，
                   // 会和整行的 onTap 抢点击——实测点副标题区域切不动配置，
                   // 而那块正是用户抱怨「能点的区域太小」的地方。
-                  subtitle: Text(
-                    '站点 ${record.siteCount} · 直播 ${record.liveCount} · '
-                    '更新 ${record.updatedAt.toLocal()} · '
-                    // 桥接源多条记录的 origin 都是同一台设备的网关地址，
-                    // 只显示它会让用户分不清谁是谁 → 补上源自己的订阅地址。
-                    '${record.bridgeInterfaceKey.isEmpty ? '来源 ${redactUrl(record.origin)}' : '该设备的播放源 · ${record.bridgeConfigUrl.trim().isEmpty ? redactUrl(record.origin) : redactUrl(record.bridgeConfigUrl)}'}',
+                  subtitle: ConfigSourceStatusView(
+                    key: ValueKey('config-list-source-${record.id}'),
+                    record: record,
+                    metadata: '站点 ${record.siteCount} · 直播 ${record.liveCount} · '
+                        '更新 ${record.updatedAt.toLocal()}',
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
