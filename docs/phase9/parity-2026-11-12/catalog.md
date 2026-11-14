@@ -22,10 +22,14 @@
 | 配置仓库（urls）条目 | 部分 | 按 urls 顺序回退到下一份 | config_loader.dart:402+ ImportedConfig.isRepository / expandRepository：越界回退第一项，失败抛错不覆盖，但条目由用户手选 | 条目失败不会自动回退下一项，需手动选 |
 | JS/Py/JVM 站源运行时分派 | 已迁移 | in-process：quickjs / chaquo / nodejs 随包捆绑 | spider_router.dart:270 classifySite：type=3 → CAT HTTP / sidecar(manifest runtime js|py|jvm) / CspJvmBinding；运行时缺失如实报不可用 | 需先装 Python/Node/Java 运行时，未装则站点不可用 |
 | CSP jar + DEX（Android 站源） | 部分 | 直接加载设备 jar（含 dex） | csp_jar_probe.dart:14-19 按配置 URL 取 jar + 静态检测 + 原子落盘，可转译 dex 注入 dex_translate.dart 做导入期转译；含原生库/不可转译 dex 拒装只写 probe.json | 含原生库或不可转译的 dex 站源无法使用（平台专属边界，非缺 UI） |
-| TMDB 内嵌 payload（Vod.tmdb） | 未迁移 | TmdbDetailActivity:2647-2686 直接消费 Vod.tmdb，无 API 也先显示 | tmdb_state.dart:438-444 独立配置未 ready → phase=disabled；tmdb_detail_page.dart:345 仅 data!=null（首屏快照）时仍渲染，注释明示只保底推荐行 | 未配 TMDB 时详情页无内嵌海报/简介/评分富集 |
-| 配置根字段 tmdb_api_key | 未迁移 | VodConfig:190-193 读取清理 + TmdbSourceCredentialIngress:14 按配置接收凭据 | core/tmdb_config.dart:348 pick 只认 apiKey/apikey/api_key/tmdbApiKey/key；lib 全仓搜 tmdb_api_key 零命中 | 配置自带的 tmdb_api_key 不生效，须在设置里另填 |
+| TMDB 内嵌 payload（Vod.tmdb） | 已迁移 | TmdbDetailActivity:2647-2686 直接消费 Vod.tmdb，无 API 也先显示 | protocol.dart:1006 类型化 getter；core/tmdb_source_payload.dart:41/169/190 验证/缺口规划/来源优先合并；tmdb_state.dart:475/937 首屏内嵌渲染，季集/视频/单集弹窗复用，完整组零请求；[2026-11-13 验证证据](../evidence/09-tmdb-source-payload-and-key.md) | 无（无凭据可渲染有效内嵌数据；身份型 payload 不伪装完整详情，显式禁用仍遵守） |
+| 配置根字段 tmdb_api_key | 已迁移 | VodConfig:190-193 读取清理 + TmdbSourceCredentialIngress:14 按配置接收凭据 | tmdb_credential_ingress.dart:27 → config_parser.dart:49 提取并剥离；app_state.dart:725/731 用户/有效配置分离，当前配置进程内存兜底；本地/Cat/桥接导入刷新、失败/迟到/切换/删除/换库隔离；[2026-11-13 验证证据](../evidence/09-tmdb-source-payload-and-key.md) | 无（用户凭据优先；订阅 key 不持久化/导出，重启或切换作用域后需重新导入/刷新获取） |
 
-## 检索范围 / 模式
+## 2026-11-13 补核
+
+本轮仅更新上述两项 TMDB 能力；已实现并通过确定性 fixture 的协议、状态、配置安全与 Before/After 验证。最后独立复跑凭据 24/24、合并回归 359/359；全仓分析 0 error / 0 warning，保留 95 条既有 info。未做真实 TMDB 联网、全量测试或 Windows 构建；其余行与下述未验证项仍属于原基线。
+
+## 原基线检索范围 / 模式
 - 只读。Android：/home/maple/Workspace/webhtv/dev1/webhtv（app/src/main/java 等，排除 .scratch-goal/）。
 - PC：/home/maple/.dsh/worktrees/webhtv-pc-d700b86c/dev3（apps/desktop-flutter/lib 的 core/ services/ state/ ui/）。
 - 模式：`grep -rn` 定点检索 + `sed -n` 读关键片段；未做全仓通读，未跑任何测试/构建。

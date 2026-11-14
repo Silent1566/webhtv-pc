@@ -57,7 +57,7 @@ class TmdbConfigStore {
       _loaded = true;
     } catch (error) {
       // 设置文件损坏不得阻塞启动（`03` §5.5）。
-      _log?.warning('读取 TMDB 设置失败，使用默认配置：$error', scope: 'tmdb');
+      _log?.warning('读取 TMDB 设置失败，使用默认配置（${error.runtimeType}）', scope: 'tmdb');
       _config = const TmdbConfig();
       _loaded = true;
     }
@@ -67,6 +67,7 @@ class TmdbConfigStore {
   ///
   /// 保留 `settings.json` 中其它顶层键（未来设置项），只替换 `tmdb` 段。
   Future<bool> save(TmdbConfig config) async {
+    config = config.userSettings;
     _config = config;
     try {
       final file = File(path);

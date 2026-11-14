@@ -23,6 +23,7 @@ import '../core/site_injection.dart';
 import '../core/skip_segments.dart';
 import '../core/source_key.dart';
 import '../core/subtitle_provider.dart';
+import '../core/tmdb_credential_ingress.dart';
 
 /// 归一化媒体类型：只认 `movie` / `tv`，其余回空串。
 ///
@@ -236,7 +237,7 @@ class ConfigRecord {
                 .toList(),
       json: rawJson == null || rawJson.isEmpty
           ? const {}
-          : (jsonDecode(rawJson) as Map).cast<String, Object?>(),
+          : TmdbCredentialIngress.stripRootField((jsonDecode(rawJson) as Map)),
       isActive: (row['is_active'] as int? ?? 0) != 0,
       sourceKey: (row['source_key'] as String?) ?? '',
       bridgeDevice: (row['bridge_device'] as String?) ?? '',
@@ -474,10 +475,24 @@ class AppDatabase {
     _migrateSources();
     _migrateHistoryIdentity();
     _migrateFavorites();
+    _stripLegacyTmdbRootCredentials();
     _db.execute(
       "INSERT INTO meta(key, value) VALUES('schema_version', '$schemaVersion') "
       'ON CONFLICT(key) DO UPDATE SET value=excluded.value;',
     );
+  }
+
+  /// 旧库里的根订阅 key 不再进入记录读取或数据库快照导出。
+  void _stripLegacyTmdbRootCredentials() {
+    for (final row in _db.select('SELECT id, json FROM configs;')) {
+      final raw = row['json'] as String;
+      final ingress = TmdbCredentialIngress.extractRootAndStrip(raw);
+      if (raw == ingress.sanitizedJson) continue;
+      _db.execute(
+        'UPDATE configs SET json=? WHERE id=?;',
+        [ingress.sanitizedJson, row['id']],
+      );
+    }
   }
 
   /// Phase 5 · 删除标记表（`docs/phase5/design/02` §4.5）。
@@ -1102,6 +1117,7 @@ class AppDatabase {
   /// 直接复制正在写入的 `.sqlite3` 可能拿到半个事务；`VACUUM INTO`
   /// 由 SQLite 自己保证快照一致。目标文件必须不存在，这里先删。
   void backupTo(String path) {
+    _stripLegacyTmdbRootCredentials();
     final target = File(path);
     if (target.existsSync()) target.deleteSync();
     final escaped = path.replaceAll("'", "''");
@@ -1135,6 +1151,7 @@ class AppDatabase {
     String bridgeInterfaceKey = '',
     String bridgeConfigUrl = '',
   }) {
+    final safeJson = TmdbCredentialIngress.stripRootField(json);
     final now = DateTime.now().millisecondsSinceEpoch;
     _db.execute('BEGIN IMMEDIATE;');
     try {
@@ -1164,7 +1181,7 @@ class AppDatabase {
                 : jsonEncode(
                     repositoryEntries.map((e) => e.toJson()).toList(),
                   ),
-            jsonEncode(json),
+            jsonEncode(safeJson),
             siteCount,
             liveCount,
             now,
@@ -1191,7 +1208,7 @@ class AppDatabase {
                 : jsonEncode(
                     repositoryEntries.map((e) => e.toJson()).toList(),
                   ),
-            jsonEncode(json),
+            jsonEncode(safeJson),
             siteCount,
             liveCount,
             now,
@@ -1329,6 +1346,7 @@ class AppDatabase {
     String? origin,
     String? sourceKey,
   }) {
+    final safeJson = TmdbCredentialIngress.stripRootField(json);
     _db.execute('BEGIN IMMEDIATE;');
     try {
       _db.execute(
@@ -1336,7 +1354,7 @@ class AppDatabase {
         'content_type=?, origin=COALESCE(?, origin), '
         'source_key=COALESCE(?, source_key), updated_at=? WHERE id=?;',
         [
-          jsonEncode(json),
+          jsonEncode(safeJson),
           siteCount,
           liveCount,
           contentType,
@@ -2857,6 +2875,7 @@ enum HealthAction { home, category, detail, play }
 /// 复用配置文件解析路径，保证“导入 → 保存 → 恢复”与“重新导入”得到同样的模型，
 /// 避免两套逻辑分叉。
 AppConfig parseConfigRecord(Map<String, Object?> json) {
+  json = TmdbCredentialIngress.stripRootField(json);
   final sites = <Site>[];
   for (final item in asList(json['sites'])) {
     final site = Site.fromJson(item);

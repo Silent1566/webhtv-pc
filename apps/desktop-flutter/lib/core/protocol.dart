@@ -7,6 +7,7 @@ library;
 import 'dart:convert';
 
 import 'live_catchup.dart';
+import 'tmdb_source_payload.dart';
 
 // ---------------------------------------------------------------------------
 // JSON 取值工具：配置文件与站点数据大量使用字符串/数字混用字段（TVBox 生态
@@ -1004,6 +1005,8 @@ class Vod {
       (vodTag == null && isBridgeFolderVodId(vodId));
 
   final Map<String, Object?> extra;
+
+  TmdbSourcePayload? get tmdb => TmdbSourcePayload.fromJson(extra['tmdb']);
 
   static Vod? fromJson(Object? value) {
     final map = asMap(value);

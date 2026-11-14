@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 
 import '../core/detail_recommendation.dart';
+import '../core/detail_source_merge.dart';
 import 'detail_recommendation_state.dart';
 
 import 'dart:convert';
@@ -87,6 +88,7 @@ import '../core/skip_segments.dart';
 import '../core/subtitle_provider.dart';
 import '../core/subtitle_settings.dart';
 import '../core/tmdb_config.dart';
+import '../core/tmdb_subscription.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
@@ -317,6 +319,11 @@ AiContentCompletion? aiContentCompletion,
       settingsPath: this.paths.settingsPath,
       settingsExporter: (allowSensitive) =>
           exportSyncedSettings(allowSensitive: allowSensitive),
+      beginConfigMutation: () {
+        final epoch = ++_configMutationEpoch;
+        return () => epoch == _configMutationEpoch;
+      },
+      onBridgeConfigSaved: _acceptCurrentBridgeTmdbCredential,
       bridgeService: _injectedBridgeService,
       client: _injectedSyncClient,
       serverFactory: _injectedSyncServerFactory,
@@ -342,7 +349,7 @@ AiContentCompletion? aiContentCompletion,
     _tmdbCache = TmdbCache(cacheDir: cacheDir);
     _tmdbService =
         tmdbService ??
-        TmdbService(config: () => _tmdbConfigStore.config, cache: _tmdbCache);
+        TmdbService(config: () => tmdbConfig, cache: _tmdbCache);
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
       _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
@@ -678,6 +685,10 @@ AiContentCompletion? aiContentCompletion,
 
   late TmdbConfigStore _tmdbConfigStore;
 
+  /// 订阅级 TMDB 凭据（仅进程内存，按配置身份/代际隔离）。
+  final TmdbSubscriptionCredentials _tmdbSubscription = TmdbSubscriptionCredentials();
+  int _configMutationEpoch = 0;
+
   /// AI 配置（`docs/phase6/design/04` §4）。
   ///
   /// 与 `_tmdbConfigStore` 同构（两者都是 `settings.json` 里带凭据的独立段）。
@@ -711,8 +722,63 @@ AiContentCompletion? aiContentCompletion,
   TmdbEnrichmentService? _tmdbEnrichmentService;
   TmdbState? _tmdbState;
 
-  /// TMDB 设置（当前生效）。
-  TmdbConfig get tmdbConfig => _tmdbConfigStore.config;
+  /// 用户设置中的 TMDB 配置；设置页、导出与同步只能读写这一份。
+  TmdbConfig get tmdbUserConfig => _tmdbConfigStore.config;
+
+  /// 所有实际 TMDB 消费者使用的有效配置。
+  ///
+  /// 用户 apiKey/accessToken 已就绪时完全优先；否则只读地叠加当前配置作用域内的
+  /// 订阅凭据。订阅凭据不进入设置、配置记录、导出或日志。
+  TmdbConfig get tmdbConfig {
+    final user = tmdbUserConfig;
+    if (user.apiKey.trim().isNotEmpty || user.accessToken.trim().isNotEmpty) return user;
+    final record = _activeRecord;
+    final key = _tmdbSubscription.snapshot(
+      record?.id ?? 0,
+      record == null ? '' : sourceKeyOfRecord(record),
+      _tmdbSubscription.epoch,
+    );
+    if (key.isEmpty) return user;
+    return user.withSubscriptionApiKey(key);
+  }
+
+  void _beginCurrentTmdbCredentialScope() {
+    final record = _activeRecord;
+    _tmdbSubscription.beginScope(
+      record?.id ?? 0,
+      record == null ? '' : sourceKeyOfRecord(record),
+    );
+  }
+
+  /// 只在配置已成功提交后接收候选；写入相同作用域后才对外可见。
+  void _acceptImportedTmdbCredential(ImportedConfig imported, int configId, String sourceKey) {
+    final epoch = _tmdbSubscription.beginScope(configId, sourceKey);
+    final accepted = _tmdbSubscription.accept(
+      imported.tmdbApiKeyCandidate,
+      configId,
+      sourceKey,
+      epoch,
+    );
+    if (imported.tmdbApiKeyCandidate.isNotEmpty) {
+      log.info('TMDB 订阅凭据已接收 accepted=$accepted scope=$configId', scope: 'tmdb');
+    }
+  }
+
+  void _acceptCurrentBridgeTmdbCredential(int recordId, String candidate) {
+    if (_activeRecord?.id != recordId) return;
+    final current = _database?.activeConfig();
+    if (current == null || current.id != recordId) return;
+    final sourceKey = sourceKeyOfRecord(current);
+    final epoch = _tmdbSubscription.beginScope(recordId, sourceKey);
+    _tmdbSubscription.accept(candidate, recordId, sourceKey, epoch);
+    _activeRecord = current;
+  }
+
+  AppError _staleConfigMutation() => AppError(
+    AppErrorKind.configInvalid,
+    '配置操作已被更新的操作取代',
+    retryable: true,
+  );
 
   /// AI 配置（`docs/phase6/design/04` §4）。
   AiConfig get aiConfig => _aiConfigStore.config;
@@ -2996,6 +3062,8 @@ AiContentCompletion? aiContentCompletion,
 
   /// 数据交换前清空所有引用旧库/旧配置的内存状态。
   Future<void> _prepareForDataSwap() async {
+    _tmdbSubscription.clear();
+    _configMutationEpoch++;
     _followingTimer?.cancel();
     _followingKickTimer?.cancel();
     _followingService = null;
@@ -3062,7 +3130,7 @@ AiContentCompletion? aiContentCompletion,
   /// TMDB 状态（`04` §2.2）。首次访问时构造；未配置时构造出的实例
   /// 会进入 `disabled` 阶段，不发起任何请求。
   TmdbState get tmdb => _tmdbState ??= TmdbState(
-    config: () => _tmdbConfigStore.config,
+    config: () => tmdbConfig,
     service: _tmdbService,
     identityService: _ensureTmdbIdentityService(),
     seasonService: _ensureTmdbSeasonService(),
@@ -3130,7 +3198,7 @@ AiContentCompletion? aiContentCompletion,
 
   TmdbIdentityService _ensureTmdbIdentityService() =>
       _tmdbIdentityService ??= TmdbIdentityService(
-        config: () => _tmdbConfigStore.config,
+        config: () => tmdbConfig,
         service: _tmdbService,
         store: DatabaseTmdbMatchStore(
           database: _database!,
@@ -3153,7 +3221,7 @@ AiContentCompletion? aiContentCompletion,
   FollowingAirTimeService? _ensureFollowingAirTimeService() {
     if (_database == null) return null;
     return _followingAirTimeService ??= FollowingAirTimeService(
-      isConfigured: () => _tmdbConfigStore.config.isReady,
+      isConfigured: () => tmdbConfig.isReady,
       resolveTmdbId: _resolveFollowingTmdbId,
       fetchEpisodes: (tmdbId, seasonNumber) => _tmdbService.seasonEpisodes(
         TmdbItem(tmdbId: tmdbId, mediaType: TmdbMediaType.tv, title: ''),
@@ -3203,7 +3271,7 @@ AiContentCompletion? aiContentCompletion,
   TmdbEnrichmentService _ensureTmdbEnrichmentService() =>
       _tmdbEnrichmentService ??= TmdbEnrichmentService(
         service: _tmdbService,
-        config: () => _tmdbConfigStore.config,
+        config: () => tmdbConfig,
       );
 
   /// 切换配置后重建 TMDB 服务，使 `config_id` 隔离生效（`02` §14 Q2）。
@@ -3218,13 +3286,14 @@ AiContentCompletion? aiContentCompletion,
 
   /// 保存 TMDB 设置（设置页「保存」；原子写，`03` §5.5）。
   Future<bool> saveTmdbConfig(TmdbConfig config) async {
-    final saved = await _tmdbConfigStore.save(config);
+    final safeConfig = config.userSettings;
+    final saved = await _tmdbConfigStore.save(safeConfig);
     if (saved) {
       _tmdbConfigRevision++;
       log.info(
-        'TMDB 设置已更新 enabled=${config.enabled} ready=${config.isReady} '
-        'lang=${config.language} '
-        'key=${config.redactedApiKey} token=${config.redactedAccessToken}',
+        'TMDB 设置已更新 enabled=${safeConfig.enabled} ready=${safeConfig.isReady} '
+        'lang=${safeConfig.language} '
+        'key=${safeConfig.redactedApiKey} token=${safeConfig.redactedAccessToken}',
         scope: 'tmdb',
       );
     } else {
@@ -3236,7 +3305,7 @@ AiContentCompletion? aiContentCompletion,
 
   /// 测试连接（`04` §10.2）：调 `/configuration`，返回结构化结果。
   Future<String> testTmdbConnection() async {
-    final config = _tmdbConfigStore.config;
+    final config = tmdbConfig;
     if (!config.isReady) return '请先填写 API Key 或 Access Token';
     try {
       final detail = await _tmdbService.configuration();
@@ -3741,6 +3810,7 @@ AiContentCompletion? aiContentCompletion,
     notifyListeners();
 
     try {
+      final mutationEpoch = ++_configMutationEpoch;
       // 这里**不再**做 Node 运行时门禁：缺 Node 只影响猫源 bundle，由
       // `ConfigImportService.import` 在猫源分支上单独报 configCatRuntimeMissing。
       final importService = _importService;
@@ -3765,6 +3835,7 @@ AiContentCompletion? aiContentCompletion,
           detail: redactUrl(imported.origin),
         );
       }
+      if (mutationEpoch != _configMutationEpoch) throw _staleConfigMutation();
 
       _config = config;
       _importDiagnosticsSummary = imported.diagnostics.isEmpty
@@ -3778,6 +3849,7 @@ AiContentCompletion? aiContentCompletion,
       // 记录还停在上一份时就会读到别人的屏蔽——表现为「刚导入的配置里，被屏蔽站点
       // 被选成当前站点」，而且本次会话不会自愈。
       final name = displayName ?? config.name ?? source.displayName;
+      final importSourceKey = LocalSourceKey.of(imported.origin);
       final recordId = _database?.saveConfig(
         name: name,
         origin: imported.origin,
@@ -3792,7 +3864,7 @@ AiContentCompletion? aiContentCompletion,
         // 记录来源，配置这边不带身份就永远查不到「这条记录属于哪份配置」，
         // 表现为来源标成「其他来源」、点进去还被告知原播放源已删除
         // （用户 2026-11 反馈）。
-        sourceKey: LocalSourceKey.of(imported.origin),
+        sourceKey: importSourceKey,
       );
       if (recordId != null) {
         _database!.saveConfigSites(recordId, config.sites);
@@ -3803,6 +3875,11 @@ AiContentCompletion? aiContentCompletion,
         final active = _activeRecord;
         if (active != null) _rememberLastConfig(active);
       }
+      _acceptImportedTmdbCredential(
+        imported,
+        recordId ?? _activeRecord?.id ?? 0,
+        importSourceKey,
+      );
 
       // 选中站点必须属于新配置（§7.4.1 导入即切换）：`_attachSiteService` 会按 key
       // 校验归属，不属于当前配置的选中项退回新配置的默认站点。
@@ -3866,6 +3943,7 @@ AiContentCompletion? aiContentCompletion,
       return false;
     }
     try {
+      final mutationEpoch = ++_configMutationEpoch;
       database.activateConfig(id);
       _configs = database.listConfigs();
       _activeRecord = database.activeConfig();
@@ -3877,6 +3955,7 @@ AiContentCompletion? aiContentCompletion,
       await _catPipeline?.stop();
       _selectedSite = null;
       final reserved = await _reserveCatConfig(record.origin);
+      if (mutationEpoch != _configMutationEpoch) throw _staleConfigMutation();
       _config = reserved ?? parseConfigRecord(record.json);
       _attachSiteService();
       _detailRunId++;
@@ -3887,6 +3966,7 @@ AiContentCompletion? aiContentCompletion,
       _categoryFilters = const {};
       _resetCategoryPaging();
       _configPhase = LoadPhase.ready;
+      _beginCurrentTmdbCredentialScope();
       // 切换配置 → 重建 TMDB 服务，使 `config_id` 隔离生效（`02` §14 Q2）。
       _resetTmdbServices();
       // 用户显式切换成功 = 「这次用的就是它」：只有这里（以及导入成功路径，
@@ -3983,6 +4063,7 @@ AiContentCompletion? aiContentCompletion,
     }
     // 名称留空时保留原名：改地址不该顺手把用户起的名也抹掉。
     final nextName = trimmedName.isEmpty ? record.name : trimmedName;
+    final mutationEpoch = ++_configMutationEpoch;
     if (trimmedOrigin == record.origin.trim()) {
       database.updateConfigIdentity(id, name: nextName);
       _configs = database.listConfigs();
@@ -3994,6 +4075,11 @@ AiContentCompletion? aiContentCompletion,
     // 地址变了：先验证，验证通过才动库。
     final imported = await _fetchConfigForRefresh(trimmedOrigin);
     if (imported == null) return false;
+    if (mutationEpoch != _configMutationEpoch) {
+      _lastError = _staleConfigMutation();
+      notifyListeners();
+      return false;
+    }
     final config = imported.config;
     if (config == null) {
       _lastError = AppError(
@@ -4025,6 +4111,7 @@ AiContentCompletion? aiContentCompletion,
     _activeRecord = database.activeConfig();
     if (_activeRecord?.id == id) {
       _rememberLastConfig(_activeRecord!);
+      _acceptImportedTmdbCredential(imported, id, sourceKey);
       await _reloadActiveConfigContent(config);
     }
     notifyListeners();
@@ -4070,14 +4157,15 @@ AiContentCompletion? aiContentCompletion,
       return false;
     }
     _lastError = null;
+    final mutationEpoch = ++_configMutationEpoch;
 
     final interfaceKey = record.bridgeInterfaceKey.trim();
-    if (interfaceKey.isNotEmpty) {
+    if (interfaceKey.isNotEmpty || record.contentType == 'android-t4-gateway') {
       // 桥接源的内容在安卓设备上：先找设备地址，再按 interfaceKey 精确重拉。
       // 不探测整台设备的全部源，否则刷新一条会顺带改写别的源。
       final deviceUuid = record.bridgeDevice.trim();
       final address = deviceUuid.isEmpty
-          ? ''
+          ? record.origin
           : deviceAddressForUuid(deviceUuid);
       if (address.isEmpty) {
         _lastError = AppError(
@@ -4090,8 +4178,11 @@ AiContentCompletion? aiContentCompletion,
       }
       final ok = await syncState.importSites(
         address,
-        interfaceKey: interfaceKey,
+        interfaceKey: interfaceKey.isEmpty ? null : interfaceKey,
+        isCurrent: () => mutationEpoch == _configMutationEpoch,
+        onSaved: _acceptCurrentBridgeTmdbCredential,
       );
+      if (mutationEpoch != _configMutationEpoch) return false;
       if (!ok) {
         // 失败时数据库里那条记录仍然完好（importSites 只在成功时才 upsert）。
         _lastError =
@@ -4119,6 +4210,11 @@ AiContentCompletion? aiContentCompletion,
 
     final imported = await _fetchConfigForRefresh(record.origin);
     if (imported == null) return false;
+    if (mutationEpoch != _configMutationEpoch) {
+      _lastError = _staleConfigMutation();
+      notifyListeners();
+      return false;
+    }
     final config = imported.config;
     if (config == null) {
       _lastError = AppError(
@@ -4142,6 +4238,12 @@ AiContentCompletion? aiContentCompletion,
     _configs = database.listConfigs();
     _activeRecord = database.activeConfig();
     if (_activeRecord?.id == id) {
+      final active = _activeRecord!;
+      _acceptImportedTmdbCredential(
+        imported,
+        active.id,
+        sourceKeyOfRecord(active),
+      );
       await _reloadActiveConfigContent(config);
     }
     notifyListeners();
@@ -4363,10 +4465,12 @@ AiContentCompletion? aiContentCompletion,
   Future<void> deleteConfigRecord(int id) async {
     final database = _database;
     if (database == null) return;
+    _configMutationEpoch++;
     database.deleteConfig(id);
     _configs = database.listConfigs();
     if (_activeRecord?.id == id) {
       _activeRecord = database.activeConfig();
+      _beginCurrentTmdbCredentialScope();
       final record = _activeRecord;
       if (record != null && record.json.isNotEmpty) {
         _config = parseConfigRecord(record.json);
@@ -5312,7 +5416,15 @@ AiContentCompletion? aiContentCompletion,
         );
         return;
       }
-      _detailResult = outcome.value;
+      final returnedDetail = outcome.value.list.firstOrNull;
+      final effective = returnedDetail == null
+          ? vod
+          : mergeSourceDetailDisplay(detail: returnedDetail, listing: vod);
+      _detailResult = returnedDetail == null
+          ? outcome.value
+          : outcome.value.copyWith(
+              list: [effective, ...outcome.value.list.skip(1)],
+            );
       _detailPhase = LoadPhase.ready;
       _detailError = outcome.warnings.isEmpty
           ? null
@@ -5328,7 +5440,6 @@ AiContentCompletion? aiContentCompletion,
           scope: 'site',
         );
       }
-      final effective = outcome.value.list.firstOrNull ?? vod;
       _selectedVod = effective;
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
@@ -6023,7 +6134,7 @@ AiContentCompletion? aiContentCompletion,
     required bool allowSensitive,
   }) async {
     final raw = _uiPreferences?.androidAiRaw ?? const <String, Object?>{};
-    final currentTmdb = tmdbConfig;
+    final currentTmdb = tmdbUserConfig;
     return {
       // 先铺已授权 raw 的**全部**键（含 PC 尚不认识的顶层设置键），
       // 只排除被下面本机当前值覆盖的键；敏感项仍受设置同步闸门约束。
@@ -6049,7 +6160,7 @@ AiContentCompletion? aiContentCompletion,
   @override
   Future<void> applySyncedSettings(SyncSettings settings) async {
     if (settings.isEmpty) return;
-    var next = tmdbConfig;
+    var next = tmdbUserConfig;
 
     final enabled = settings.values['tmdb_enabled'];
     if (enabled != null) next = next.copyWith(enabled: asFlag(enabled));

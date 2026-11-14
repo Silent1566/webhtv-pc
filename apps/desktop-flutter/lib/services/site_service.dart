@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 
 import '../core/app_error.dart';
+import '../core/detail_source_merge.dart';
 import '../core/http_api.dart';
 import '../core/parse_failover.dart';
 import '../core/parse_runtime.dart';
@@ -165,6 +166,7 @@ class SiteService {
       final entries = (await category(site, typeId: parent.vodId)).value.list;
       final names = <String>[];
       final urls = <String>[];
+      final displayEntries = <Vod>[];
       final sourceFlags = <String, String>{};
       // 顺序读取，兼容使用共享 Spider 上下文的网关；离开页面后不再发后续请求。
       for (final entry in entries) {
@@ -174,6 +176,7 @@ class SiteService {
               ? [entry]
               : (await detail(site, entry.vodId)).value.list;
           checkCurrent();
+          displayEntries.addAll(items);
           final lines = items.expand(playLinesOf).toList();
           if (lines.isEmpty) {
             throw AppError(AppErrorKind.playbackUrlMissing, '未返回可播放的分集');
@@ -222,8 +225,12 @@ class SiteService {
           retryable: true,
         );
       }
+      final merged = mergeFolderDisplay(
+        parent: parent,
+        entries: displayEntries,
+      );
       final vod = Vod.fromJson({
-        ...parent.toJson(),
+        ...merged.toJson(),
         'vod_tag': 'file',
         'vod_play_from': names.join(r'$$$'),
         'vod_play_url': urls.join(r'$$$'),

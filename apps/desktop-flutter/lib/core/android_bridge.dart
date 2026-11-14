@@ -82,6 +82,7 @@ class AndroidDevice {
   /// 脱敏后的设备标识，只保留前 4 位（`design/01` §7）。
   String get maskedUuid =>
       uuid.length <= 4 ? '****' : '${uuid.substring(0, 4)}****';
+
   /// 从 `/device` 响应解析（`design/01` §4.3）。
   ///
   /// [reachableBase] 由调用方提供（PC 视角可达地址），不来自响应。
@@ -144,11 +145,7 @@ String normalizeBase(String input) {
   if (!text.contains('://')) text = 'http://$text';
   final uri = Uri.tryParse(text);
   if (uri == null || uri.host.isEmpty) {
-    throw AppError(
-      AppErrorKind.bridgeUnreachable,
-      '设备地址无法解析',
-      detail: input,
-    );
+    throw AppError(AppErrorKind.bridgeUnreachable, '设备地址无法解析', detail: input);
   }
   if (uri.scheme != 'http' && uri.scheme != 'https') {
     throw AppError(
@@ -196,9 +193,13 @@ class BridgeConversion {
     this.hostRewrites = const [],
     this.skippedSites = const [],
     this.ignoredTopLevelFields = const [],
+    this.tmdbApiKeyCandidate = '',
   });
 
   final AppConfig config;
+
+  /// 成功导入后才由当前配置作用域接收；不进入 config/raw/数据库。
+  final String tmdbApiKeyCandidate;
 
   /// 用户可见的说明（跳过站点、主机修正、忽略字段等）。
   final List<String> diagnostics;
@@ -211,6 +212,15 @@ class BridgeConversion {
 
   /// 被忽略的顶层字段（`spider`/`lives` 等，`design/01` §3.2）。
   final List<String> ignoredTopLevelFields;
+
+  /// 不携带瞬时凭据的副本；供长期诊断/状态缓存保存。
+  BridgeConversion withoutTmdbApiKeyCandidate() => BridgeConversion(
+    config: config,
+    diagnostics: diagnostics,
+    hostRewrites: hostRewrites,
+    skippedSites: skippedSites,
+    ignoredTopLevelFields: ignoredTopLevelFields,
+  );
 
   /// 导入的站点数。
   int get siteCount => config.sites.length;
@@ -233,6 +243,7 @@ class BridgeConversion {
     hostRewrites: hostRewrites ?? this.hostRewrites,
     skippedSites: skippedSites ?? this.skippedSites,
     ignoredTopLevelFields: ignoredTopLevelFields ?? this.ignoredTopLevelFields,
+    tmdbApiKeyCandidate: tmdbApiKeyCandidate,
   );
 }
 
@@ -422,6 +433,7 @@ BridgeConversion convertGatewayConfig({
     hostRewrites: rewrites,
     skippedSites: skipped,
     ignoredTopLevelFields: ignored,
+    tmdbApiKeyCandidate: document.tmdbApiKeyCandidate,
   );
 }
 
@@ -451,10 +463,12 @@ Site? _resolveSiteApi({
   final uri = Uri.tryParse(api);
   if (uri == null || uri.host.isEmpty) {
     skipped.add(site.key);
-    diagnostics.add('跳过 api 无法解析的站点 ${site.key}');    return null;
+    diagnostics.add('跳过 api 无法解析的站点 ${site.key}');
+    return null;
   }
 
-  final siteHostPort = '${uri.host}:${uri.hasPort ? uri.port : androidDefaultPort}';
+  final siteHostPort =
+      '${uri.host}:${uri.hasPort ? uri.port : androidDefaultPort}';
 
   // P4：站点指向 PC 自己 → 跳过该站点（不因单个站点否定整份配置）。
   if (selfHostPort != null && siteHostPort == selfHostPort) {
@@ -468,12 +482,14 @@ Site? _resolveSiteApi({
   if (isLoopbackHost(uri.host)) {
     // 第二种情形：中间层把 Host 改写成了回环。path 与 query 完全正确，
     // 只有主机需要修正，因此重写是信息完备的（`design/01` §5.3）。
-    final rewritten = Uri.parse(base).replace(
-      path: uri.path,
-      query: uri.hasQuery ? uri.query : null,
-    );
+    final rewritten = Uri.parse(base)
+        .replace(path: uri.path, query: uri.hasQuery ? uri.query : null);
     rewrites.add(
-      BridgeHostRewrite(siteKey: site.key, from: siteHostPort, to: rewritten.authority),
+      BridgeHostRewrite(
+        siteKey: site.key,
+        from: siteHostPort,
+        to: rewritten.authority,
+      ),
     );
     return Site(
       key: site.key,

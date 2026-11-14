@@ -22,6 +22,7 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
 import '../core/tmdb_season.dart';
 import '../core/tmdb_title.dart';
+import '../core/tmdb_source_payload.dart';
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_identity_service.dart';
 import '../services/tmdb_season_service.dart';
@@ -104,11 +105,24 @@ class TmdbState extends ChangeNotifier {
   Vod? _vod;
   TmdbSourceLine? _activeLine;
   bool _disposed = false;
+  TmdbSourcePayload? _sourcePayload;
+  final Set<String> _sourceFilled = {};
+  TmdbConfig? _loadConfig;
+  static const _sourceInitial = {
+    'core',
+    'credits',
+    'images',
+    'external_ids',
+    'videos',
+    'recommendations',
+    'similar',
+  };
 
   TmdbLoadPhase get phase => _phase;
   AppError? get error => _error;
   TmdbMatchResult? get matchResult => _matchResult;
   Map<String, Object?>? get detail => _detail;
+  TmdbSourcePayload? get sourcePayload => _sourcePayload;
   Resolution? get resolution => _resolution;
   List<int> get availableSeasons => _availableSeasons;
   int get selectedSeason => _selectedSeason;
@@ -409,6 +423,7 @@ class TmdbState extends ChangeNotifier {
     int requestSeason = -1,
     bool keepTitleData = false,
     bool navSource = false,
+    TmdbMatchRecord? manualRecord,
   }) {
     if (_disposed) return _generation;
     _generation++;
@@ -435,8 +450,46 @@ class TmdbState extends ChangeNotifier {
     _availableSeasons = const [];
     _selectedSeason = requestSeason;
 
-    // 前置：未配置 / 站点禁用 → disabled，不发起请求
     final config = _config();
+    _loadConfig = config;
+    if (!config.enabled || !config.isSiteEnabled(siteKey, siteName)) {
+      _clearWorkScoped();
+      _phase = TmdbLoadPhase.disabled;
+      _matchResult = const TmdbMatchDisabled(TmdbMissReason.siteDisabled);
+      notifyListeners();
+      return _generation;
+    }
+    if (manualRecord != null) {
+      if (_detail?['id'] != manualRecord.identity.tmdbId ||
+          _sourcePayload != null) {
+        _clearWorkScoped();
+      }
+      _matchResult = TmdbMatchHit(manualRecord);
+    }
+    final manual =
+        _matchResult is TmdbMatchHit &&
+        (_matchResult as TmdbMatchHit).record.isManual;
+    if (manual) {
+      _sourcePayload = null;
+    } else {
+      final incomingPayload = vod.tmdb;
+      if (_sourcePayload?.identity != incomingPayload?.identity) {
+        _clearWorkScoped();
+      }
+      _sourcePayload = incomingPayload;
+    }
+    final payload = _sourcePayload;
+    if (payload != null && (_renderable(payload.detail) || config.isReady)) {
+      _matchResult = TmdbMatchHit(
+        TmdbMatchRecord(identity: payload.identity, title: sourceTitle),
+      );
+      if (_detail == null && _renderable(payload.detail)) {
+        _publishSource(payload.detail);
+      }
+      _phase = _detail == null ? TmdbLoadPhase.loading : TmdbLoadPhase.ready;
+      notifyListeners();
+      return _generation;
+    }
     if (!config.isReady) {
       _phase = TmdbLoadPhase.disabled;
       _matchResult = const TmdbMatchDisabled(TmdbMissReason.notConfigured);
@@ -471,6 +524,8 @@ class TmdbState extends ChangeNotifier {
     // 聚合缓存同样是作品维度的：换作品必须清掉，否则新作品会拿到上一部剧的
     // 季集元数据（补卡时会按旧剧的季集数出卡、点开播错集）。
     _episodesBySeason = const {};
+    _sourcePayload = null;
+    _sourceFilled.clear();
   }
 
   /// 匹配（含缓存命中）。
@@ -484,7 +539,7 @@ class TmdbState extends ChangeNotifier {
     TmdbMediaType? expectedMediaType,
     String siteName = '',
   }) async {
-    if (_disposed || generation != _generation) return;
+    if (!_valid(generation)) return;
     _busy = true;
     notifyListeners();
     try {
@@ -501,7 +556,7 @@ class TmdbState extends ChangeNotifier {
           expectedMediaType: expectedMediaType,
         ),
       );
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _matchResult = outcome.result;
       switch (outcome.result) {
         case TmdbMatchDisabled():
@@ -538,32 +593,36 @@ class TmdbState extends ChangeNotifier {
           _phase = TmdbLoadPhase.ready;
       }
     } on TmdbCancelledException {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _phase = TmdbLoadPhase.idle;
     } on TmdbAuthException catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = AppError(
         AppErrorKind.tmdbAuth,
         'TMDB 鉴权失败',
         detail: error.message,
         statusCode: error.statusCode,
       );
-      _phase = TmdbLoadPhase.failed;
+      _phase = _sourcePayload != null && _detail != null
+          ? TmdbLoadPhase.ready
+          : TmdbLoadPhase.failed;
     } on AppError catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = error;
       _phase = TmdbLoadPhase.failed;
     } catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = AppError(
         AppErrorKind.tmdbNetwork,
         'TMDB 请求失败',
         detail: '$error',
         retryable: true,
       );
-      _phase = TmdbLoadPhase.failed;
+      _phase = _sourcePayload != null && _detail != null
+          ? TmdbLoadPhase.ready
+          : TmdbLoadPhase.failed;
     } finally {
-      if (!_disposed && generation == _generation) {
+      if (_valid(generation)) {
         _busy = false;
         notifyListeners();
       }
@@ -648,7 +707,21 @@ class TmdbState extends ChangeNotifier {
     // 本次加载前的命中身份。手动匹配 / 重新匹配会在 vodId 与源标题**都不变**的
     // 情况下把作品换成另一部，`_isSameTitle` 看不出来，只能靠身份比对。
     final previousIdentity = identity;
+    final manualRecord = _identityService.cachedManual(
+      siteKey: siteKey,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+    );
+    if (manualRecord == null &&
+        _matchResult is TmdbMatchHit &&
+        (_matchResult as TmdbMatchHit).record.isManual) {
+      _matchResult = null;
+      _clearWorkScoped();
+    }
     final sameTitle =
+        _siteKey == siteKey &&
+        _configId == configId &&
+        _sameConfig(_loadConfig, _config()) &&
         _isSameTitle(vodId: vod.vodId, sourceTitle: vod.vodName) &&
         (seededIdentity == null ||
             (seededIdentity == identity && _siteKey == siteKey));
@@ -661,6 +734,7 @@ class TmdbState extends ChangeNotifier {
       configId: configId,
       siteName: siteName,
       keepTitleData: sameTitle,
+      manualRecord: manualRecord,
       // 站点性质是「本次加载」的一部分：换到普通站点必须立刻变回非导航源，
       // 不能沿用上一次的导航源判定（那会让普通站点走进补卡路径）。
       navSource: navSource,
@@ -670,6 +744,22 @@ class TmdbState extends ChangeNotifier {
     if (_phase == TmdbLoadPhase.disabled) return;
 
     final config = _config();
+    if (_sourcePayload != null) {
+      final missing = _sourceMissing(_sourceInitial);
+      await loadDetail(
+        generation: generation,
+        tmdbSeasons: const [],
+        seasonCounts: const {},
+        allowHeuristicGuessing: config.heuristicSeasonGuessing,
+        reuseDetail: missing.isEmpty || !config.isReady,
+        sourceMissing: missing,
+      );
+      if (!_valid(generation)) return;
+      await loadEpisodes(generation: generation);
+      if (!_valid(generation)) return;
+      await loadVideos(generation: generation);
+      return;
+    }
     if (seededIdentity == null) {
       await loadMatch(
         generation: generation,
@@ -761,7 +851,148 @@ class TmdbState extends ChangeNotifier {
   }
 
   bool _valid(int generation) =>
-      !_disposed && generation == _generation && _isCurrentRun();
+      !_disposed &&
+      generation == _generation &&
+      _isCurrentRun() &&
+      _sameConfig(_loadConfig, _config());
+
+  static bool _sameConfig(TmdbConfig? a, TmdbConfig b) =>
+      a == null ||
+      (a.enabled == b.enabled &&
+          a.apiKey == b.apiKey &&
+          a.accessToken == b.accessToken &&
+          a.apiBase == b.apiBase &&
+          a.language == b.language &&
+          a.imageBase == b.imageBase &&
+          a.backdropBase == b.backdropBase &&
+          listEquals(a.disabledSites, b.disabledSites) &&
+          listEquals(a.allowedSites, b.allowedSites) &&
+          listEquals(a.enabledSites, b.enabledSites));
+
+  static bool _renderable(Map<String, Object?> detail) {
+    bool text(Object? value) => value is String && value.trim().isNotEmpty;
+    bool positive(Object? value) => value is num && value > 0;
+    bool positiveText(Object? value) => text(value) || positive(value);
+    bool items(Object? value) => value is List && value.isNotEmpty;
+    bool nested(String field, Set<String> keys, bool Function(Object?) test) {
+      final value = detail[field];
+      if (value is! Map) return false;
+      return keys.any((key) => test(value[key]));
+    }
+
+    const texts = {
+      'title',
+      'name',
+      'original_title',
+      'original_name',
+      'overview',
+      'tagline',
+      'status',
+      'release_date',
+      'first_air_date',
+      'original_language',
+      'poster_path',
+      'backdrop_path',
+    };
+    const numbers = {
+      'vote_average',
+      'vote_count',
+      'runtime',
+      'number_of_seasons',
+      'number_of_episodes',
+    };
+    const arrays = {
+      'genres',
+      'origin_country',
+      'episode_run_time',
+      'seasons',
+      'episodes',
+    };
+    if (texts.any((field) => text(detail[field])) ||
+        numbers.any((field) => positive(detail[field])) ||
+        arrays.any((field) => items(detail[field])) ||
+        nested('images', const {'backdrops', 'posters', 'logos'}, items) ||
+        nested('credits', const {'cast', 'crew'}, items) ||
+        nested('aggregate_credits', const {'cast', 'crew'}, items) ||
+        nested('videos', const {'results'}, items) ||
+        nested('recommendations', const {'results'}, items) ||
+        nested('similar', const {'results'}, items)) {
+      return true;
+    }
+    final external = detail['external_ids'];
+    if (external is! Map) return false;
+    return external.values.any(positiveText);
+  }
+
+  Set<String> _sourceMissing(Set<String> required) {
+    final source = _sourcePayload;
+    if (source == null) return required;
+    return planTmdbSource(
+      source,
+      required: required,
+      targetLanguage: _config().language,
+    ).missing.difference(_sourceFilled);
+  }
+
+  void _publishSource(Map<String, Object?> detail) {
+    final payload = _sourcePayload!;
+    _detail = detail;
+    final parsed = TmdbItem.fromSearchResult(
+      {...detail, 'id': payload.id, 'media_type': payload.mediaType.name},
+      imageBase: _config().imageBase,
+      backdropBase: _config().backdropBase,
+      image: _sourceImage,
+    );
+    _matchResult = TmdbMatchHit(
+      parsed == null
+          ? TmdbMatchRecord(identity: payload.identity, title: _sourceTitle)
+          : TmdbMatchRecord.fromItem(parsed, manual: false, matchedAt: 0),
+    );
+    _cast = _service.cast(detail);
+    _creators = _service.creators(detail);
+    _photos = _service.photos(detail, preferLandscape: true);
+    _recommendations = [
+      ..._service.recommendationsFromDetail(detail),
+      ..._service.similarFromDetail(detail),
+    ];
+    _seasonEpisodeCounts = _seasonCountsFromDetail(detail, const {});
+    _videos = TmdbVideo.listFrom(
+      detail['videos'],
+      scope: payload.identity.isTv ? TmdbVideoScope.tv : TmdbVideoScope.movie,
+    );
+  }
+
+  static String _sourceImage(String base, String? path) {
+    if (path == null || path.isEmpty) return '';
+    if (path.startsWith('https://') || path.startsWith('http://')) return path;
+    return '$base$path';
+  }
+
+  Map<String, Object?>? _sourceSeason(int number) {
+    final detail = _detail;
+    if (detail == null) return null;
+    final seasons = detail['seasons'];
+    if (seasons is List) {
+      for (final season in seasons) {
+        if (season is Map && season['season_number'] == number) {
+          return Map<String, Object?>.from(season);
+        }
+      }
+    }
+    return null;
+  }
+
+  List<TmdbEpisode> _sourceEpisodes(int number) {
+    final detail = _detail;
+    final ownEpisodes =
+        _sourcePayload?.seasonNumber == number && detail?['episodes'] is List;
+    return TmdbEpisode.listFromSeason(
+      ownEpisodes ? detail : _sourceSeason(number),
+      image: _sourceImage,
+      imageBase: _config().imageBase,
+      fallbackSeasonNumber: number,
+    );
+  }
 
   /// 线路绑定键（`04` §2.3）。
   ///
@@ -803,8 +1034,9 @@ class TmdbState extends ChangeNotifier {
     bool allowHeuristicGuessing = true,
     bool reuseDetail = false,
     TmdbIdentity? expectedIdentity,
+    Set<String>? sourceMissing,
   }) async {
-    if (_disposed || generation != _generation) return;
+    if (!_valid(generation)) return;
     final currentItem = item;
     if (currentItem == null) return;
 
@@ -816,8 +1048,51 @@ class TmdbState extends ChangeNotifier {
       notifyListeners();
     }
     try {
-      final detail = cached ?? await _service.detail(currentItem);
-      if (_disposed || generation != _generation) return;
+      final source = _sourcePayload;
+      final lower =
+          cached ??
+          (sourceMissing != null
+              ? await _service.sourceDetail(currentItem, missing: sourceMissing)
+              : await _service.detail(currentItem));
+      if (!_valid(generation)) return;
+      if (source != null &&
+          cached == null &&
+          (lower['id'] != source.id ||
+              (lower.containsKey('media_type') &&
+                  TmdbMediaType.parse(lower['media_type']) !=
+                      source.mediaType))) {
+        throw AppError(AppErrorKind.tmdbEmpty, 'TMDB 详情身份与来源不一致');
+      }
+      final detail = source != null && cached == null
+          ? mergeTmdbSourceDetail(
+              source,
+              lower,
+              targetLanguage: _config().language,
+            )
+          : lower;
+      if (source != null && cached == null) {
+        _sourceFilled.addAll(
+          (sourceMissing ?? const <String>{}).where((group) {
+            if (group == 'credits') {
+              return lower['credits'] is Map ||
+                  lower['aggregate_credits'] is Map;
+            }
+            if (group == 'images') {
+              return lower['images'] is Map ||
+                  (lower['poster_path'] is String &&
+                      lower['backdrop_path'] is String);
+            }
+            if (group == 'core') {
+              return lower[currentItem.isTv ? 'name' : 'title'] is String &&
+                  lower['overview'] is String &&
+                  lower.containsKey('vote_average') &&
+                  lower['genres'] is List;
+            }
+            return lower[group] is Map;
+          }),
+        );
+        _publishSource(detail);
+      }
       if (expectedIdentity != null) {
         final endpointIdentity = currentItem.identity;
         final titleField = expectedIdentity.isTv ? 'name' : 'title';
@@ -867,7 +1142,7 @@ class TmdbState extends ChangeNotifier {
           ),
           configId: _configId,
         );
-        if (_disposed || generation != _generation) return;
+        if (!_valid(generation)) return;
         _resolution = outcome.resolution;
         _availableSeasons = outcome.availableSeasons;
         // 采纳**解析器确证的季度**（`02` §3.2）。
@@ -897,10 +1172,10 @@ class TmdbState extends ChangeNotifier {
       }
       _phase = TmdbLoadPhase.ready;
     } on TmdbCancelledException {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _phase = TmdbLoadPhase.idle;
     } on TmdbAuthException catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = AppError(
         AppErrorKind.tmdbAuth,
         'TMDB 鉴权失败',
@@ -909,11 +1184,11 @@ class TmdbState extends ChangeNotifier {
       );
       _phase = TmdbLoadPhase.failed;
     } on AppError catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = error;
       _phase = TmdbLoadPhase.failed;
     } catch (error) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       _error = AppError(
         AppErrorKind.tmdbNetwork,
         'TMDB 请求失败',
@@ -922,7 +1197,7 @@ class TmdbState extends ChangeNotifier {
       );
       _phase = TmdbLoadPhase.failed;
     } finally {
-      if (!_disposed && generation == _generation) {
+      if (_valid(generation)) {
         _busy = false;
         notifyListeners();
       }
@@ -931,10 +1206,27 @@ class TmdbState extends ChangeNotifier {
 
   /// 加载当前季度的剧集元数据（递增元数据代际）。
   Future<void> loadEpisodes({required int generation}) async {
-    if (_disposed || generation != _generation) return;
+    if (!_valid(generation)) return;
     final currentItem = item;
     if (currentItem == null || !currentItem.isTv || _selectedSeason < 0) return;
 
+    if (_sourcePayload != null) {
+      final sourceEpisodes =
+          _episodesBySeason[_selectedSeason] ??
+          _sourceEpisodes(_selectedSeason);
+      if (_sourceMissing({'season:$_selectedSeason'}).isEmpty ||
+          !_config().isReady) {
+        _episodes = sourceEpisodes;
+        if (_sourceMissing({'season:$_selectedSeason'}).isEmpty) {
+          _episodesBySeason = {
+            ..._episodesBySeason,
+            _selectedSeason: sourceEpisodes,
+          };
+        }
+        notifyListeners();
+        return;
+      }
+    }
     _metadataGeneration++;
     final metadataGeneration = _metadataGeneration;
     try {
@@ -942,19 +1234,23 @@ class TmdbState extends ChangeNotifier {
         currentItem,
         _selectedSeason,
       );
-      if (_disposed ||
-          generation != _generation ||
-          metadataGeneration != _metadataGeneration) {
+      if (!_valid(generation) || metadataGeneration != _metadataGeneration) {
         return;
       }
       _episodes = episodes;
+      if (_sourcePayload != null) {
+        _episodesBySeason = {..._episodesBySeason, _selectedSeason: episodes};
+        _sourceFilled.add('season:$_selectedSeason');
+      }
       notifyListeners();
     } on TmdbCancelledException {
       return;
     } catch (_) {
       // 剧集元数据失败不影响选集（保留来源集名，`04` §3.4）
-      if (_disposed || generation != _generation) return;
-      _episodes = const [];
+      if (!_valid(generation)) return;
+      _episodes = _sourcePayload == null
+          ? const []
+          : _sourceEpisodes(_selectedSeason);
       notifyListeners();
     }
   }
@@ -983,7 +1279,7 @@ class TmdbState extends ChangeNotifier {
     required int generation,
     bool allowAnySource = false,
   }) async {
-    if (_disposed || generation != _generation) return;
+    if (!_valid(generation)) return;
     if (!_navSource && !allowAnySource) return;
     final currentItem = item;
     if (currentItem == null || !currentItem.isTv) return;
@@ -996,14 +1292,25 @@ class TmdbState extends ChangeNotifier {
 
     var changed = false;
     for (final seasonNumber in seasons) {
-      if (_disposed || generation != _generation) return;
+      if (!_valid(generation)) return;
       if (_episodesBySeason.containsKey(seasonNumber)) continue;
+      if (_sourcePayload != null) {
+        if (_sourceMissing({'season:$seasonNumber'}).isEmpty) {
+          _episodesBySeason = {
+            ..._episodesBySeason,
+            seasonNumber: _sourceEpisodes(seasonNumber),
+          };
+          changed = true;
+          continue;
+        }
+        if (!_config().isReady) continue;
+      }
       try {
         final episodes = await _service.seasonEpisodes(
           currentItem,
           seasonNumber,
         );
-        if (_disposed || generation != _generation) return;
+        if (!_valid(generation)) return;
         // 整体换新 Map 而不是原地写入：监听者可能正拿着上一份快照渲染，
         // 原地改会让它读到「半季」状态。
         _episodesBySeason = {..._episodesBySeason, seasonNumber: episodes};
@@ -1021,20 +1328,59 @@ class TmdbState extends ChangeNotifier {
 
   /// 加载相关视频（失败不影响其他区块）。
   Future<void> loadVideos({required int generation}) async {
-    if (_disposed || generation != _generation) return;
+    if (!_valid(generation)) return;
     final currentItem = item;
     if (currentItem == null) return;
+    final source = _sourcePayload;
+    final detailVideos = source == null
+        ? const <TmdbVideo>[]
+        : TmdbVideo.listFrom(
+            _detail?['videos'],
+            scope: currentItem.isTv ? TmdbVideoScope.tv : TmdbVideoScope.movie,
+          );
+    final seasonVideos =
+        source == null || _selectedSeason < 0 || !currentItem.isTv
+        ? const <TmdbVideo>[]
+        : TmdbVideo.listFrom(
+            _sourceSeason(_selectedSeason)?['videos'],
+            scope: TmdbVideoScope.season,
+            seasonNumber: _selectedSeason,
+          );
+    final includeDetail =
+        source == null || _sourceMissing({'videos'}).isNotEmpty;
+    final includeSeason =
+        currentItem.isTv &&
+        _selectedSeason >= 0 &&
+        (source == null ||
+            _sourceMissing({'season_videos:$_selectedSeason'}).isNotEmpty);
+    if (source != null &&
+        (!_config().isReady || (!includeDetail && !includeSeason))) {
+      _videos = TmdbVideo.mergeAndRank([
+        ...detailVideos,
+        ...seasonVideos,
+      ], preferredLanguage: _config().language.split('-').first);
+      notifyListeners();
+      return;
+    }
     try {
       final videos = await _service.videos(
         currentItem,
-        seasonNumber: _selectedSeason >= 0 ? _selectedSeason : null,
+        seasonNumber: _selectedSeason >= 0 && currentItem.isTv
+            ? _selectedSeason
+            : null,
+        includeDetail: includeDetail,
+        includeSeason: includeSeason,
       );
-      if (_disposed || generation != _generation) return;
-      _videos = videos;
+      if (!_valid(generation)) return;
+      _videos = TmdbVideo.mergeAndRank([
+        ...detailVideos,
+        ...seasonVideos,
+        ...videos,
+      ], preferredLanguage: _config().language.split('-').first);
       notifyListeners();
     } catch (_) {
-      if (_disposed || generation != _generation) return;
-      _videos = const [];
+      if (!_valid(generation)) return;
+      _videos = [...detailVideos, ...seasonVideos];
       notifyListeners();
     }
   }
@@ -1197,6 +1543,8 @@ class TmdbState extends ChangeNotifier {
     // 否则下一次进详情页会带着上一部剧的季集元数据或上一站的站点性质。
     _episodesBySeason = const {};
     _navSource = false;
+    _sourcePayload = null;
+    _sourceFilled.clear();
     _cast = const [];
     _creators = const [];
     _recommendations = const [];
@@ -1239,9 +1587,8 @@ class TmdbState extends ChangeNotifier {
     Map<int, int> fallback,
   ) {
     final seasons = detail['seasons'];
-    if (seasons is! List) return fallback;
     final counts = <int, int>{};
-    for (final raw in seasons) {
+    for (final raw in seasons is List ? seasons : const <Object?>[]) {
       if (raw is! Map) continue;
       final number = raw['season_number'];
       final count = raw['episode_count'];
@@ -1252,8 +1599,15 @@ class TmdbState extends ChangeNotifier {
           ? count
           : (count is num ? count.toInt() : null);
       if (seasonNumber == null || episodeCount == null) continue;
-      if (episodeCount <= 0) continue;
+      if (episodeCount < 0 || (episodeCount == 0 && _sourcePayload == null)) {
+        continue;
+      }
       counts[seasonNumber] = episodeCount;
+    }
+    final payload = _sourcePayload;
+    final episodes = detail['episodes'];
+    if (payload?.identity.isTv == true && episodes is List) {
+      counts.putIfAbsent(payload!.seasonNumber, () => episodes.length);
     }
     return counts.isEmpty ? fallback : counts;
   }

@@ -192,6 +192,20 @@ class TmdbIdentityService {
   /// 候选查询词数量上限（`01` §4）。
   final int maxQueries;
 
+  /// Read a valid manual anchor without search or network.
+  TmdbMatchRecord? cachedManual({
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+  }) {
+    final record = _store.find(
+      siteKey: siteKey,
+      vodId: vodId,
+      sourceTitle: sourceTitle,
+    );
+    return record?.isManual == true ? record : null;
+  }
+
   /// 执行匹配（`01` §4）。
   ///
   /// 不抛网络异常：失败返回 `TmdbMatchMiss`。

@@ -368,6 +368,9 @@ class ImportedConfig {
   List<ConfigRepositoryEntry> get repositoryEntries =>
       document.repositoryEntries;
   List<String> get diagnostics => document.diagnostics;
+
+  /// 导入成功后才由状态层接收的瞬时订阅凭据。
+  String get tmdbApiKeyCandidate => document.tmdbApiKeyCandidate;
   bool get isRepository => document.isRepository;
 
   /// 站点与直播数量摘要（§7.5 “记录配置名称、URL、更新时间、站点数、直播数”）。
