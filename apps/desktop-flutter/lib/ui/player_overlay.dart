@@ -365,6 +365,7 @@ class PlayerControlOverlay extends StatelessWidget {
     required this.progressRow,
     required this.actionButtons,
     required this.actionGroups,
+    this.extraRow,
   });
 
   /// 顶栏。调用方传入 `AppBar`，类型必须保留（见本文件头注释）。
@@ -377,6 +378,14 @@ class PlayerControlOverlay extends StatelessWidget {
 
   /// 与 [actionButtons] 一一对应，用于在分组边界插分隔线。
   final List<PlayerButtonGroup> actionGroups;
+
+  /// 底栏之上的可选附加行（当前是解析源条）。
+  ///
+  /// 为什么放在底栏 Column 里而不是另起一层浮层：它属于「这一行控制」，
+  /// 必须跟控制栏一起显隐、一起被 `IgnorePointer` 关掉命中测试；独立成层会
+  /// 出现「控制栏已隐藏、解析条还能点」的错位。列高变化不影响视频区——整个
+  /// 浮层是 `Positioned.fill`，不参与布局（`DESIGN.md:391-410`）。
+  final Widget? extraRow;
 
   @override
   Widget build(BuildContext context) {
@@ -441,6 +450,10 @@ class PlayerControlOverlay extends StatelessWidget {
               // 让动作行自己拿到通栏宽度、自己决定内容怎么排。
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (extraRow != null) ...[
+                  extraRow!,
+                  const SizedBox(height: AppSpace.xs),
+                ],
                 progressRow,
                 const SizedBox(height: AppSpace.xs),
                 PlayerOverlayActionRow(

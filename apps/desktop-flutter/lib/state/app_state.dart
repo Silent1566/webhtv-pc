@@ -7002,6 +7002,10 @@ AiContentCompletion? aiContentCompletion,
       format: decision.format,
       reason: decision.reason,
       flag: decision.flag,
+      // 解析选项不是地址的一部分，代理换 url 后必须原样带过：丢了它，
+      // 走代理的解析播放就再也没有解析入口。
+      parseSources: decision.parseSources,
+      parseSource: decision.parseSource,
       // 字幕不随代理地址变化：原样透传（§10.3）。
       subs: decision.subs,
       // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。

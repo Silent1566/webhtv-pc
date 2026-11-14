@@ -91,9 +91,6 @@ class PlayerEpisodePanel extends StatefulWidget {
     required this.onSelectLine,
     this.episodeCards = const [],
     this.reversed = false,
-    this.parseSources = const <String>[],
-    this.parseSource = '',
-    this.onSelectParseSource,
   });
 
   /// 片名（面板标题区第一行）。
@@ -135,18 +132,6 @@ class PlayerEpisodePanel extends StatefulWidget {
 
   /// 点线路 chip：参数是线路的展示标识。
   final ValueChanged<String> onSelectLine;
-
-  /// 可选的解析源名称（第一个通常是「超级解析」）。
-  ///
-  /// 与线路不同：解析源是**本次播放**的选择，不跨集/跨启动记忆（见
-  /// `player_page._parseSourceOverride`）。
-  final List<String> parseSources;
-
-  /// 当前生效的解析源名称。
-  final String parseSource;
-
-  /// 切换解析源；为 `null` 表示该配置没有可切换的解析源（只有一个时不给选）。
-  final ValueChanged<String>? onSelectParseSource;
 
   @override
   State<PlayerEpisodePanel> createState() => _PlayerEpisodePanelState();
@@ -261,13 +246,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     widget.onSelectLine(line.flag);
   }
 
-  /// 点解析源：先关面板再切（与切线路同一顺序，切源会立刻重新解析当前集）。
-  void _selectParseSource(String name) {
-    if (name == widget.parseSource) return;
-    _close();
-    widget.onSelectParseSource?.call(name);
-  }
-
   void _selectRange(int index) {
     if (index == _safeRangeIndex) return;
     setState(() {
@@ -309,9 +287,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     final width = math.min(980.0, size.width * 0.86);
     final height = math.min(640.0, size.height * 0.82);
     final showLines = widget.playLines.length > 1;
-    // 只有一个解析源（通常就是「超级解析」）时不给选择：选不选都一样。
-    final showParseSources =
-        widget.onSelectParseSource != null && widget.parseSources.length > 1;
     final showRanges = _ranges.length > 1;
 
     return Dialog(
@@ -332,7 +307,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildHeader(theme),
-            if (showParseSources) _buildParseSourceRow(theme),
             if (showLines) _buildLineRow(theme),
             if (showRanges) _buildRangeRow(theme),
             Expanded(
@@ -399,30 +373,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       ),
     );
   }
-
-  /// 解析源行（超级解析 + 配置里的解析器）。
-  Widget _buildParseSourceRow(ThemeData theme) => SizedBox(
-    height: 40,
-    child: HorizontalMouseDrag(
-      child: ListView.separated(
-        key: const ValueKey('player-episode-parse-source-strip'),
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
-        itemCount: widget.parseSources.length,
-        separatorBuilder: (_, _) => const SizedBox(width: AppSpace.sm),
-        itemBuilder: (context, index) {
-          final name = widget.parseSources[index];
-          return _chip(
-            theme: theme,
-            key: ValueKey('player-episode-parse-source-$index'),
-            label: name,
-            selected: name == widget.parseSource,
-            onSelected: () => _selectParseSource(name),
-          );
-        },
-      ),
-    ),
-  );
 
   /// 线路行。
   Widget _buildLineRow(ThemeData theme) => SizedBox(

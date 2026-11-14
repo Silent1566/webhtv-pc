@@ -33,6 +33,8 @@ class PlaybackRequest {
     this.tmdb,
     this.resumeSeed,
     this.sourceKey = '',
+    this.parseSources = const <String>[],
+    this.parseSource = '',
   }) : episodeTarget = episodeTarget ?? url,
        playbackFlag = playbackFlag ?? flag;
 
@@ -135,6 +137,16 @@ class PlaybackRequest {
   /// `source_key`，否则一次续播就会在当前源里多出一条同名历史。
   final String sourceKey;
 
+  /// 本次播放**实际可选**的解析源名称（`PlaybackDecision.parseSources` 原样带过来）。
+  ///
+  /// 为什么由播放结果带过来而不是 UI 读全局配置：原来源续播用的是**那份配置**的
+  /// 解析器，读当前配置会把 A 配置的解析器列在 B 配置的播放上；而且直链播放
+  /// 根本没有可切换的解析源，读配置就会凭空多出一排无效入口。
+  final List<String> parseSources;
+
+  /// 当前生效的解析源名称；[parseSources] 为空时无意义。
+  final String parseSource;
+
   /// 地址已是最终可播地址（直播频道），无需经站点播放入口解析。
   ///
   /// 直播源的 `urls` 直接在本地就是媒体地址，走解析器只会多余地请求站点；
@@ -160,6 +172,8 @@ class PlaybackRequest {
     bool clearResumeSeed = false,
     String? sourceKey,
     bool clearSourceKey = false,
+    List<String>? parseSources,
+    String? parseSource,
     // 换集要同时换成该集的 TMDB 身份；缺这个参数会让 `copyWith(tmdb: …)`
     // 在编译期就失败（beta 抽类时只留了构造实参，漏了形参）。
     TmdbPlaybackIdentity? tmdb,
@@ -205,6 +219,8 @@ class PlaybackRequest {
       // 切到**外部并入线路**（属于当前配置）时必须显式清空，否则进度会被
       // 写回原来源，历史页从此多出一条挂错源的记录。
       sourceKey: clearSourceKey ? '' : (sourceKey ?? this.sourceKey),
+      parseSources: parseSources ?? this.parseSources,
+      parseSource: parseSource ?? this.parseSource,
     );
   }
 }

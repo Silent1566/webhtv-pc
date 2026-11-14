@@ -639,9 +639,20 @@ class SiteService {
         detail: 'url=${redactUrl(outcome.url)}',
       );
     }
+    // 可切换的解析源只对「由解析层自己挑解析器」的目标成立：`json:` /
+    // `parse:<名称>` 是源站写死的解析器，手动换源会被前缀忽略，给一排点了
+    // 无效的 chip 比不给更糟。
+    final selectable = !isParsePrefixedTarget(target);
     return PlaybackDecision(
       action: PlaybackAction.direct,
       url: outcome.url,
+      // 列**配置里**的解析器（含合成「超级解析」），选中态用本次**选择**
+      // 而不是竞速胜出者：超级解析的胜出者随集变化，用它当选中项会让高亮
+      // 每集乱跳。
+      parseSources: selectable
+          ? [for (final entry in appConfig.playbackParsers) entry.name]
+          : const [],
+      parseSource: spec.selection.entry.name,
       headers: HeaderMap.merge([
         inputDecision.headers,
         HeaderMap(outcome.headers),
