@@ -35,24 +35,16 @@ import 'toast.dart';
 /// 始终恰好出现一次（测试与自动化按此定位）。
 ///
 /// 分类只影响**显示**：切换分类不写 `settings.json`，不进 `AppState`。
-/// 每个类别下挂的业务分组沿用改造前的四组（偏好 / 播放 / 连接与增强 /
-/// 维护与说明），不重排信息架构。
+/// 四个类别（偏好 / 播放 / 连接与服务 / 维护与说明）沿用它之前的信息架构；
+/// 本次只重排**类别内的排版**：进入下一级的工具改成可扫描的行，字段仍是字段。
 const List<_SettingsCategory> _settingsCategories = [
-  _SettingsCategory(
-    _SettingsCategory.preferences,
-    '偏好',
-    Icons.tune_outlined,
-  ),
+  _SettingsCategory(_SettingsCategory.preferences, '偏好', Icons.tune_outlined),
   _SettingsCategory(
     _SettingsCategory.playback,
     '播放',
     Icons.play_circle_outline,
   ),
-  _SettingsCategory(
-    _SettingsCategory.connections,
-    '连接与增强',
-    Icons.hub_outlined,
-  ),
+  _SettingsCategory(_SettingsCategory.connections, '连接与服务', Icons.hub_outlined),
   _SettingsCategory(
     _SettingsCategory.maintenance,
     '维护与说明',
@@ -84,6 +76,9 @@ class _SettingsCategory {
 /// 不进 `AppState`、不落盘；返回子页后分类与滚动位置都还在。
 /// 本页仍然**不监听** `AppState`（旧契约不变：由外壳在 `notifyListeners`
 /// 后重建内容区）。
+///
+/// 类别内排版是行式入口：工具入口整行可点，字段用统一的标题—控件—脚注节奏。
+/// 字段、默认值、回调与保存时机都没有改。
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.state});
 
@@ -114,18 +109,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
   AppState get state => widget.state;
 
-  ScrollController _controllerFor(String id) => _scrollControllers.putIfAbsent(
-    id,
-    () {
-      final controller = ScrollController();
-      controller.addListener(() {
-        if (controller.hasClients) {
-          _scrollOffsets[id] = controller.offset;
-        }
+  ScrollController _controllerFor(String id) =>
+      _scrollControllers.putIfAbsent(id, () {
+        final controller = ScrollController();
+        controller.addListener(() {
+          if (controller.hasClients) {
+            _scrollOffsets[id] = controller.offset;
+          }
+        });
+        return controller;
       });
-      return controller;
-    },
-  );
 
   @override
   void dispose() {
@@ -145,214 +138,190 @@ class _SettingsPageState extends State<SettingsPage> {
     final info = state.startupInfo;
     final tmdb = state.tmdbConfig;
     final sync = state.syncState;
-    final preferences = SettingsSection(
-      title: '偏好',
+
+    // 每个类别的正文都直接从字段/行开始：类别名已经在左栏（或顶部分类条）
+    // 写过一次，正文再套一层同名 SettingsSection 只是把标题读两遍。
+    final preferences = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('外观', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SegmentedButton<ThemeMode>(
-          key: const ValueKey('settings-theme-mode'),
-          segments: const [
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.dark,
-              icon: Icon(Icons.dark_mode_outlined, size: 18),
-              label: Text('暗色'),
-            ),
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.light,
-              icon: Icon(Icons.light_mode_outlined, size: 18),
-              label: Text('亮色'),
-            ),
-            ButtonSegment<ThemeMode>(
-              value: ThemeMode.system,
-              icon: Icon(Icons.brightness_auto_outlined, size: 18),
-              label: Text('跟随系统'),
-            ),
-          ],
-          selected: {themeModeOf(state.themeMode)},
-          onSelectionChanged: (selection) {
-            state.setThemeMode(themeModeName(selection.first));
-          },
+        SettingsField(
+          label: '外观',
+          child: SegmentedButton<ThemeMode>(
+            key: const ValueKey('settings-theme-mode'),
+            segments: const [
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.dark,
+                icon: Icon(Icons.dark_mode_outlined, size: 18),
+                label: Text('暗色'),
+              ),
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.light,
+                icon: Icon(Icons.light_mode_outlined, size: 18),
+                label: Text('亮色'),
+              ),
+              ButtonSegment<ThemeMode>(
+                value: ThemeMode.system,
+                icon: Icon(Icons.brightness_auto_outlined, size: 18),
+                label: Text('跟随系统'),
+              ),
+            ],
+            selected: {themeModeOf(state.themeMode)},
+            onSelectionChanged: (selection) {
+              state.setThemeMode(themeModeName(selection.first));
+            },
+          ),
         ),
-        const SizedBox(height: AppSpace.lg),
-        Text('历史记录', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SegmentedButton<String>(
-          key: const ValueKey('settings-history-click-action'),
-          segments: const [
-            ButtonSegment<String>(
-              value: UiHistoryClickAction.detail,
-              icon: Icon(Icons.article_outlined, size: 18),
-              label: Text('进入详情页'),
-            ),
-            ButtonSegment<String>(
-              value: UiHistoryClickAction.play,
-              icon: Icon(Icons.play_arrow, size: 18),
-              label: Text('直接播放'),
-            ),
-          ],
-          selected: {state.historyClickAction},
-          onSelectionChanged: (selection) {
-            state.setHistoryClickAction(selection.first);
-          },
+        SettingsField(
+          label: '历史记录',
+          hint: '点击历史记录时的行为。长按卡片始终进入删除状态。',
+          child: SegmentedButton<String>(
+            key: const ValueKey('settings-history-click-action'),
+            segments: const [
+              ButtonSegment<String>(
+                value: UiHistoryClickAction.detail,
+                icon: Icon(Icons.article_outlined, size: 18),
+                label: Text('进入详情页'),
+              ),
+              ButtonSegment<String>(
+                value: UiHistoryClickAction.play,
+                icon: Icon(Icons.play_arrow, size: 18),
+                label: Text('直接播放'),
+              ),
+            ],
+            selected: {state.historyClickAction},
+            onSelectionChanged: (selection) {
+              state.setHistoryClickAction(selection.first);
+            },
+          ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          '点击历史记录时的行为。长按卡片始终进入删除状态。',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: AppSpace.lg),
-        Text('搜索', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          '并发线程：${state.searchThread}'
-          '（同时搜索的站点数上限，1~100；默认 20）',
-          key: const ValueKey('settings-search-thread-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-search-thread'),
-          onPressed: () async {
-            final value = await showNumberSliderDialog(
-              context,
-              title: '搜索线程',
-              current: state.searchThread,
-              minValue: 1,
-              maxValue: 100,
-              hint: '同时搜索的站点数量上限。调高更快，但更容易触发上游限流',
-              keyPrefix: 'search-thread',
-            );
-            if (value != null) await state.setSearchThread(value);
-          },
-          icon: const Icon(Icons.speed_outlined),
-          label: const Text('调整搜索线程'),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '下一次搜索立即生效；已经在跑的搜索不受影响。',
-          style: Theme.of(context).textTheme.bodySmall,
+        SettingsField(
+          label: '搜索',
+          hint: '下一次搜索立即生效；已经在跑的搜索不受影响。',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '并发线程：${state.searchThread}'
+                '（同时搜索的站点数上限，1~100；默认 20）',
+                key: const ValueKey('settings-search-thread-summary'),
+              ),
+              const SizedBox(height: AppSpace.md),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.tonalIcon(
+                  key: const ValueKey('settings-search-thread'),
+                  onPressed: () async {
+                    final value = await showNumberSliderDialog(
+                      context,
+                      title: '搜索线程',
+                      current: state.searchThread,
+                      minValue: 1,
+                      maxValue: 100,
+                      hint: '同时搜索的站点数量上限。调高更快，但更容易触发上游限流',
+                      keyPrefix: 'search-thread',
+                    );
+                    if (value != null) await state.setSearchThread(value);
+                  },
+                  icon: const Icon(Icons.speed_outlined),
+                  label: const Text('调整搜索线程'),
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
-    final playback = SettingsSection(
-      title: '播放',
+    final playback = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
+        SettingsNavRow(
           key: const ValueKey('settings-player-buttons'),
-          onPressed: () => Navigator.of(context).push(
+          icon: Icons.tune,
+          title: '播放器按钮排版',
+          subtitle: '调整底部控制栏的按钮顺序与显示状态。',
+          onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => PlayerButtonConfigPage(state: state),
             ),
           ),
-          icon: const Icon(Icons.tune),
-          label: const Text('播放器按钮排版'),
         ),
-        const SizedBox(height: 8),
-        Text(
-          '调整底部控制栏的按钮顺序与显示状态。',
-          style: Theme.of(context).textTheme.bodySmall,
+        const SizedBox(height: AppSpace.xl),
+        SettingsSection(
+          title: '屏显（OSD）',
+          description: '播放画面上叠加的信息角标。',
+          children: [
+            Column(
+              key: const ValueKey('settings-osd'),
+              children: [
+                for (final id in OsdFlag.values)
+                  SwitchListTile(
+                    key: ValueKey('settings-osd-$id'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(_osdLabel(id)),
+                    subtitle: id == OsdFlag.traffic
+                        ? const Text('取自播放引擎的网络输入速率；取不到时显示 —')
+                        : null,
+                    value: state.osdFlags[id] ?? false,
+                    onChanged: (value) => state.setOsdFlag(id, value),
+                  ),
+              ],
+            ),
+          ],
         ),
-        const SizedBox(height: AppSpace.lg),
-        Text('高级设置', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        const Text(
-          '直播回退、广告过滤、解析失败切换、站点排序、弹幕源、字幕源、'
-          '播放参数与站点注入。',
-          key: ValueKey('settings-advanced-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
+        SettingsNavRow(
           key: const ValueKey('settings-advanced-open'),
-          onPressed: () => Navigator.of(context).push(
+          icon: Icons.tune,
+          title: '高级设置',
+          subtitle: '直播、播放参数、弹幕与字幕、站点与网络、工具与维护。',
+          subtitleKey: const ValueKey('settings-advanced-summary'),
+          onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => AdvancedSettingsPage(state: state),
             ),
           ),
-          icon: const Icon(Icons.tune),
-          label: const Text('打开高级设置'),
-        ),
-        const SizedBox(height: AppSpace.lg),
-        Text('播放器', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          '屏显（OSD）：播放画面上叠加的信息角标。',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        Column(
-          key: const ValueKey('settings-osd'),
-          children: [
-            for (final id in OsdFlag.values)
-              SwitchListTile(
-                key: ValueKey('settings-osd-$id'),
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(_osdLabel(id)),
-                subtitle: id == OsdFlag.traffic
-                    ? const Text('取自播放引擎的网络输入速率；取不到时显示 —')
-                    : null,
-                value: state.osdFlags[id] ?? false,
-                onChanged: (value) => state.setOsdFlag(id, value),
-              ),
-          ],
         ),
       ],
     );
-    final connections = SettingsSection(
-      title: '连接与增强',
+    final connections = SettingsRowList(
       children: [
-        Text('AI 助手', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          state.aiReady
+        SettingsNavRow(
+          key: const ValueKey('settings-ai-open'),
+          icon: Icons.auto_awesome,
+          title: 'AI 助手',
+          subtitle: state.aiReady
               ? '已启用（协议 ${state.aiConfig.protocol}）'
               : '未配置：用于季度弹窗的「AI 识别剧集/季度」',
-          key: const ValueKey('settings-ai-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-ai-open'),
-          onPressed: () => Navigator.of(context).push(
+          subtitleKey: const ValueKey('settings-ai-summary'),
+          onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => AiSettingsPage(state: state),
             ),
           ),
-          icon: const Icon(Icons.auto_awesome),
-          label: const Text('打开 AI 设置'),
         ),
-        const SizedBox(height: 8),
         // AI 迁移新增：内容智能 / 推荐 / 阅读器 / 唱声评分都在这一个页面里。
-        OutlinedButton.icon(
+        SettingsNavRow(
           key: const ValueKey('settings-ai-business-open'),
-          onPressed: () => openAiBusiness(context, state),
-          icon: const Icon(Icons.auto_awesome_outlined),
-          label: const Text('AI业务与阅读器'),
+          icon: Icons.auto_awesome_outlined,
+          title: 'AI 业务与阅读器',
+          subtitle: '内容智能、推荐、阅读器与唱声评分',
+          onTap: () => openAiBusiness(context, state),
         ),
-        const SizedBox(height: AppSpace.lg),
-        Text('TMDB 元数据增强', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          tmdb.isReady
+        SettingsNavRow(
+          key: const ValueKey('settings-tmdb-open'),
+          icon: Icons.movie_filter_outlined,
+          title: 'TMDB 元数据增强',
+          subtitle: tmdb.isReady
               ? '已启用（站点规则 ${tmdb.disabledSites.length} 条禁用'
                     '${tmdb.enabledSites.isEmpty ? '' : '、${tmdb.enabledSites.length} 条启用'}）'
               : '未配置：填写 API Key 或 Access Token 后启用',
-          key: const ValueKey('settings-tmdb-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-tmdb-open'),
-          onPressed: () => Navigator.of(context).push(
+          subtitleKey: const ValueKey('settings-tmdb-summary'),
+          onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => TmdbSettingsPage(state: state),
             ),
           ),
-          icon: const Icon(Icons.movie_filter_outlined),
-          label: const Text('打开 TMDB 设置'),
         ),
-        const SizedBox(height: AppSpace.lg),
-        Text('安卓接入', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
         // 摘要必须基于**持久化**证据，不能只看 `sync.devices`。
         //
         // `sync.devices` 是**内存态**（本次会话探测到的设备），`load()` 只恢复
@@ -362,111 +331,112 @@ class _SettingsPageState extends State<SettingsPage> {
         // 没有及时更新」——实测其 `settings.json` 里 `peers` 已有 1 台，
         // 但 `devices` 为空）。
         // 因此取三者地址的**并集**：本次探测 + 历史接入 + 已授权对端。
-        Text(
-          _androidSummary(sync),
-          key: const ValueKey('settings-android-summary'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
+        SettingsNavRow(
           key: const ValueKey('settings-android-open'),
-          onPressed: () => Navigator.of(context).push(
+          icon: Icons.android_outlined,
+          title: '安卓接入',
+          subtitle: _androidSummary(sync),
+          subtitleKey: const ValueKey('settings-android-summary'),
+          onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => AndroidSettingsPage(state: state),
             ),
           ),
-          icon: const Icon(Icons.android_outlined),
-          label: const Text('打开安卓接入'),
         ),
       ],
     );
-    final maintenance = SettingsSection(
-      title: '维护与说明',
+    final maintenance = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('站点健康', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(_healthSummary(state)),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-site-health-open'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => SiteHealthPage(state: state),
-            ),
-          ),
-          icon: const Icon(Icons.monitor_heart_outlined),
-          label: const Text('打开站点健康'),
-        ),
-        const SizedBox(height: AppSpace.lg),
-        Text('运行环境', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Text(
-          '内置 Python 与依赖；可检测、离线修复、选择自定义解释器。',
-          key: const ValueKey('settings-python-environment-summary'),
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
-          key: const ValueKey('settings-python-environment-open'),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PythonEnvironmentPage(state: state),
-            ),
-          ),
-          icon: const Icon(Icons.terminal_outlined),
-          label: const Text('打开运行环境设置'),
-        ),
-        const SizedBox(height: AppSpace.lg),        Text('本地数据', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SelectableText(
-          '配置：${state.paths.configDir}\n'
-          '数据：${state.paths.dataDir}\n'
-          '缓存：${state.paths.cacheDir}\n'
-          '日志：${state.paths.logDir}',
-        ),
-        const SizedBox(height: 12),
-        SettingsActions(
+        SettingsRowList(
           children: [
-            OutlinedButton.icon(
-              onPressed: () async {
-                await state.resetCache();
-                if (context.mounted) {
-                  showToast('缓存目录已重建', kind: ToastKind.success);
-                }
-              },
-              icon: const Icon(Icons.cleaning_services_outlined),
-              label: const Text('清理缓存目录'),
+            SettingsNavRow(
+              key: const ValueKey('settings-site-health-open'),
+              icon: Icons.monitor_heart_outlined,
+              title: '站点健康',
+              subtitle: _healthSummary(state),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SiteHealthPage(state: state),
+                ),
+              ),
             ),
-
-            OutlinedButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(
-                  ClipboardData(text: state.log.export()),
-                );
-                if (context.mounted) {
-                  showToast('已复制脱敏日志', kind: ToastKind.success);
-                }
-              },
-              icon: const Icon(Icons.copy_all_outlined),
-              label: const Text('复制脱敏日志'),
+            SettingsNavRow(
+              key: const ValueKey('settings-python-environment-open'),
+              icon: Icons.terminal_outlined,
+              title: '运行环境',
+              subtitle: '内置 Python 与依赖；可检测、离线修复、选择自定义解释器。',
+              subtitleKey: const ValueKey(
+                'settings-python-environment-summary',
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PythonEnvironmentPage(state: state),
+                ),
+              ),
             ),
           ],
         ),
-        const SizedBox(height: AppSpace.lg),
-        Text('运行信息', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        if (info == null)
-          const Text('启动信息尚未就绪。')
-        else
-          SelectableText(info.detailLines),
-        const SizedBox(height: AppSpace.lg),
-        Text('隐私与合规', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        const SelectableText(usageBoundaryNotice),
-        const SizedBox(height: 12),
-        const Text(
-          '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
-          '• 站点配置同步：关闭（Phase 4 能力）\n'
-          '• 自动更新：不更新站源，仅更新应用本体',
+        const SizedBox(height: AppSpace.xl),
+        SettingsSection(
+          title: '本地数据',
+          children: [
+            SelectableText(
+              '配置：${state.paths.configDir}\n'
+              '数据：${state.paths.dataDir}\n'
+              '缓存：${state.paths.cacheDir}\n'
+              '日志：${state.paths.logDir}',
+            ),
+            const SizedBox(height: AppSpace.md),
+            SettingsActions(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await state.resetCache();
+                    if (context.mounted) {
+                      showToast('缓存目录已重建', kind: ToastKind.success);
+                    }
+                  },
+                  icon: const Icon(Icons.cleaning_services_outlined),
+                  label: const Text('清理缓存目录'),
+                ),
+
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: state.log.export()),
+                    );
+                    if (context.mounted) {
+                      showToast('已复制脱敏日志', kind: ToastKind.success);
+                    }
+                  },
+                  icon: const Icon(Icons.copy_all_outlined),
+                  label: const Text('复制脱敏日志'),
+                ),
+              ],
+            ),
+          ],
+        ),
+        SettingsSection(
+          title: '运行信息',
+          children: [
+            if (info == null)
+              const Text('启动信息尚未就绪。')
+            else
+              SelectableText(info.detailLines),
+          ],
+        ),
+        SettingsSection(
+          title: '隐私与合规',
+          children: [
+            const SelectableText(usageBoundaryNotice),
+            const SizedBox(height: AppSpace.sm),
+            const Text(
+              '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
+              '• 站点配置同步：关闭（Phase 4 能力）\n'
+              '• 自动更新：不更新站源，仅更新应用本体',
+            ),
+          ],
         ),
       ],
     );
@@ -594,13 +564,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final accent = selected
         ? context.semanticColors.magnitude
         : scheme.onSurfaceVariant;
-    final textStyle = (compact
-            ? theme.textTheme.labelLarge
-            : theme.textTheme.bodyLarge)
-        ?.copyWith(
-      color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
-      fontWeight: selected ? AppWeight.title : AppWeight.body,
-    );
+    final textStyle =
+        (compact ? theme.textTheme.labelLarge : theme.textTheme.bodyLarge)
+            ?.copyWith(
+              color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+              fontWeight: selected ? AppWeight.title : AppWeight.body,
+            );
     return Semantics(
       key: ValueKey('settings-category-${category.id}'),
       button: true,

@@ -357,8 +357,14 @@ void main() {
   });
 
   testWidgets('各分类滚动位置独立保留：切走再回来不回到顶部', (tester) async {
-    // 矮视口：播放与连接两类的内容都比它高，两个位置都可区分。
-    await pumpSettings(tester, size: const Size(1440, 420));
+    // 矮视口：播放与连接两类的内容都必须比它高，两个位置才都可区分。
+    //
+    // 340 是实测出来的档位（不是随便取的小数）：入口从「铺满整行的按钮」
+    // 改成「行」以后，连接类别只剩三行，内容高度约 275；420 高的视口下
+    // 内容区 304，连接类别根本滚不动（maxScrollExtent = 0），保留断言会变成
+    // 0 == 0 的空断言。340 高时内容区 224，播放类别可滚 220、连接类别可滚 51，
+    // 两者都非零且彼此不同；再矮（≤320）左侧分类栏会先溢出。
+    await pumpSettings(tester, size: const Size(1440, 340));
 
     await tester.tap(categoryFinder('settings-category-playback'));
     await settle(tester);
@@ -538,8 +544,8 @@ void main() {
   testWidgets('正文是限定宽度的单列，不是并列的两张表单', (tester) async {
     await pumpSettings(tester, size: const Size(1440, 1000));
 
-    // 同一类别内两块内容必须同左边界、同宽 —— 两列布局下它们的 left
-    // 会相差半个内容宽度，这条断言就是退化的检测器。
+    // 同一类别内两块内容必须同左边界 —— 两列布局下它们的 left 会相差半个
+    // 内容宽度，这条断言就是退化的检测器。
     final theme = tester.getRect(
       find.byKey(const ValueKey('settings-theme-mode')),
     );
@@ -547,10 +553,18 @@ void main() {
       find.byKey(const ValueKey('settings-search-thread')),
     );
     expect(search.left, theme.left, reason: '偏好类别内两块内容应同左对齐（单列）');
-    expect(search.width, theme.width, reason: '偏好类别内两块内容应同宽（单列）');
 
-    // 内容区本身也必须是单列宽度，而不是被切成两半。
+    // 不再断言「同宽」：搜索入口改回**固有宽度**（「调整搜索线程」是一枚按钮，
+    // 撑满整行会让它看起来像第二个表单区，而不是单列里的一个动作）。
+    // 单列的判据换成「都贴内容区左缘、且都不越过内容区右缘」——两列布局下
+    // 并列的第二块会从半个内容宽度处开始，仍然会被 left 断言抓到。
     final content = tester.getRect(contentFinder('preferences'));
+    expect(
+      search.right,
+      lessThanOrEqualTo(content.right),
+      reason: '搜索入口不得越过内容区右缘（越界即意味着被切成两列）',
+    );
+    expect(search.width, lessThan(content.width), reason: '按钮按内容取宽，不得撑满整个内容区');
     expect(
       theme.width,
       lessThanOrEqualTo(content.width),

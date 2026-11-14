@@ -17,6 +17,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/advanced_settings_navigation.dart';
+
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
     'config': '${temp.path}${Platform.pathSeparator}config',
@@ -44,9 +46,7 @@ void main() {
       } catch (_) {}
     });
 
-    testWidgets('既有开关与详细调试日志开关拨动后都回显，并落盘 settings.json', (
-      tester,
-    ) async {
+    testWidgets('既有开关与详细调试日志开关拨动后都回显，并落盘 settings.json', (tester) async {
       tester.view.physicalSize = const Size(900, 700);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -132,6 +132,20 @@ void main() {
 
       expect(state.playerOptions.longPressSpeed, 3, reason: '默认必须是 3×');
 
+      // 「长按画面倍速」已迁到「播放参数」三级明细页：业务断言原样保留，
+      // 前面只多一步——经中枢上的行真实进入该页（不直接 push、不碰私有状态）。
+      await tapAdvancedRow(tester, 'settings-player-options-open');
+      expect(
+        find.widgetWithText(AppBar, '播放参数'),
+        findsOneWidget,
+        reason: '必须先进入播放参数明细页',
+      );
+      expect(
+        find.byKey(const ValueKey('settings-player-options-open')),
+        findsNothing,
+        reason: '明细页必须盖住中枢（旧行长按倍速在明细页里）',
+      );
+
       final tile = find.byKey(
         const ValueKey('settings-player-long-press-speed'),
       );
@@ -140,6 +154,8 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
+      await tester.ensureVisible(tile);
+      await pumpAdvanced(tester);
 
       final dropdown = find.descendant(
         of: tile,

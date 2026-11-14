@@ -100,7 +100,8 @@ void main() {
           size: size,
           brightness: brightness,
         );
-        for (final title in ['播放与观看', '站点与搜索', '辅助工具', '网络连接', '隐私', '诊断']) {
+        // 分组标题按新版中枢逐字断言：五类，工具与隐私/诊断各自成段。
+        for (final title in const ['播放与观看', '站点与搜索', '网络', '工具', '隐私与诊断']) {
           await reveal(tester, find.text(title));
           expect(find.text(title).hitTestable(), findsOneWidget);
           expect(tester.takeException(), isNull);

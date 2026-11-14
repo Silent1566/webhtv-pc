@@ -41,6 +41,7 @@ import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/player_button_config_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/advanced_settings_navigation.dart';
 import 'support/settings_navigation.dart';
 
 void main() {
@@ -548,7 +549,10 @@ void main() {
     }
   });
 
-  testWidgets('高级设置入口可进入并渲染 Phase 9 区块', (tester) async {
+  // 高级设置已从「一页长表单」改为「中枢行 + 三级明细页」：这里锁的是
+  // 「原 Phase 9 的每一项业务控件都还在，只是从同一屏搬到了各自可达的位置」。
+  // 旧写法要求它们在中枢同一屏可见——那正是被改掉的旧形态。
+  testWidgets('高级设置入口可进入：中枢开关仍在，明细控件经各自路由可达', (tester) async {
     await pumpSettings(tester);
     final entry = find.byKey(const ValueKey('settings-advanced-open'));
     expect(entry, findsOneWidget, reason: '设置页必须有高级设置入口');
@@ -560,27 +564,60 @@ void main() {
     await tester.tap(entry);
     await settle(tester);
 
+    // 迁到三级页的控件：经中枢行真实进入 → 断言页内控件 → 返回，继续下一条。
+    // 行顺序与中枢自上而下一致，所以这一轮只往下滚。
+    const details = <String, List<String>>{
+      'settings-player-options-open': ['settings-player-options'],
+      'settings-danmaku-open': ['settings-danmaku-auto-search'],
+      'settings-group-rules-open': ['settings-group-rules'],
+      'settings-outbound-proxy-open': ['settings-outbound-proxy-enabled'],
+      'settings-doh-open': [
+        'settings-doh-enabled',
+        'settings-doh-endpoint',
+        'settings-doh-cache',
+      ],
+    };
+    for (final detail in details.entries) {
+      await tapAdvancedRow(tester, detail.key);
+      for (final key in detail.value) {
+        expect(
+          find.byKey(ValueKey(key)),
+          findsOneWidget,
+          reason: '明细页 ${detail.key} 缺少控件：$key',
+        );
+      }
+      // 对照组：同一批 key 在中枢里不得再挂载（否则等于把旧长页挂了回来）。
+      await backFromAdvancedDetail(tester);
+      for (final key in detail.value) {
+        expect(
+          find.byKey(ValueKey(key)),
+          findsNothing,
+          reason: '中枢不得再挂载明细控件：$key',
+        );
+      }
+    }
+
+    // 仍然就地生效 / 仍在中枢的入口：自上而下逐个滚到。
+    await scrollHubToTop(tester);
     for (final key in const [
       'settings-live-source-fallback',
       'settings-live-change-line',
-      'settings-ad-block',
+      'settings-subtitle-open',
       'settings-parse-failover',
       'settings-site-health-sort',
-      'settings-group-rules',
-      'settings-danmaku-auto-search',
-      'settings-subtitle-open',
       'settings-injected-sites-open',
+      'settings-ad-block',
       'settings-pan-check-open',
       'settings-ai-assist-open',
-      'settings-outbound-proxy-enabled',
-      'settings-player-options',
       'settings-backup-open',
     ]) {
-      expect(
-        find.byKey(ValueKey(key)),
-        findsOneWidget,
-        reason: '高级设置缺少区块：$key',
+      final finder = find.byKey(ValueKey(key));
+      await tester.scrollUntilVisible(
+        finder,
+        200,
+        scrollable: advancedHubScrollable(),
       );
+      expect(finder, findsOneWidget, reason: '高级设置中枢缺少：$key');
     }
   });
 }
