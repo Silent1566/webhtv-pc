@@ -383,7 +383,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   @override
   void initState() {
     super.initState();
-    _draft = widget.state.tmdbConfig;
+    _draft = widget.state.tmdbUserConfig;
     _apiKey = TextEditingController(text: _draft.apiKey);
     _accessToken = TextEditingController(text: _draft.accessToken);
     _omdbKey = TextEditingController(text: _draft.omdbApiKey);
@@ -425,7 +425,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _draft = widget.state.tmdbConfig;
+      _draft = widget.state.tmdbUserConfig;
       _saveResult = saved ? '已保存（凭据已写入本地设置文件）' : '保存失败';
     });
   }
@@ -442,7 +442,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     setState(() {
       _busy = false;
       _testResult = result;
-      _draft = widget.state.tmdbConfig;
+      _draft = widget.state.tmdbUserConfig;
     });
   }
 

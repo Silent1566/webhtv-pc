@@ -15,9 +15,11 @@ import '../core/poster_badge.dart';
 import '../core/detail_ratings.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
+import '../core/source_detail_meta.dart';
 import '../core/source_swap.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
+import '../core/tmdb_source_payload.dart';
 import '../core/tmdb_media.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
@@ -2755,17 +2757,7 @@ class _DetailPageState extends State<DetailPage> {
     final ratings = owned && tmdb.detail != null
         ? _syncRatings(ratingRequest)
         : const DetailRatings();
-    final headerData =
-        tmdbData ??
-        TmdbDetailData(
-          title: display.vodName,
-          overview: display.vodContent,
-          posterUrl: display.vodPic,
-          backdropUrls: [
-            if ((display.vodPic ?? '').isNotEmpty) display.vodPic!,
-          ],
-          rating: 0,
-        );
+    final headerData = tmdbData ?? sourceDetailMeta(display);
 
     return Scaffold(
       // 头部是**全幅 hero**（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有
@@ -3016,7 +3008,7 @@ class _DetailPageState extends State<DetailPage> {
                       // （名称/海报/集数备注齐备），只是它没有线路而已（用户反馈
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
-                      ..._buildTmdbBlocks(context, tmdb),
+                      ..._buildTmdbBlocks(context, tmdb, headerData),
                       _buildRecommendationBottom(vod),
                       // 外部链接沉到页面最底部（用户决策 2026-11-11）：它是
                       // 「去别的站继续查」的出口，不属于任何内容区块，放在推荐行
@@ -3050,11 +3042,16 @@ class _DetailPageState extends State<DetailPage> {
   /// - 演职人员 → 人物页（简介/照片/作品）；
   /// - 相关推荐 → 该作品的 TMDB 详情页；
   /// - 相关视频 → 浏览器打开 / 复制链接。
-  List<Widget> _buildTmdbBlocks(BuildContext context, TmdbState tmdb) {
+  List<Widget> _buildTmdbBlocks(
+    BuildContext context,
+    TmdbState tmdb,
+    TmdbDetailData fallback,
+  ) {
     // 归属门：不属于本页影片时整块（简介/演职人员/推荐/视频）都不渲染。
     if (!_tmdbOwnsThisPage) return const [];
-    final data = tmdb.detailData;
-    if (data == null) return const [];
+    final matched = tmdb.detailData;
+    final data = matched ?? fallback;
+    final sourceOnly = matched == null;
     return [
       // 不发丝线（2026-11-12 用户反馈）：那条线让「选集」与「剧照」之间像被
       // 撕开了一道。区块间隔全部由 `SectionHeader` 的上 24 承担。
@@ -3064,7 +3061,7 @@ class _DetailPageState extends State<DetailPage> {
         // 不再重复渲染（同一批作品在页面上只出现一次）。
         recommendations: const [],
         videos: tmdb.videos,
-        onPersonTap: _openPerson,
+        onPersonTap: sourceOnly ? null : _openPerson,
         onRecommendationTap: _openItemDetail,
         onOpenVideo: widget.state.openExternalUrl,
         onCopyVideo: copyToClipboard,
@@ -3642,6 +3639,19 @@ class _DetailPageState extends State<DetailPage> {
         onOpenItem: _openItemDetail,
         service: widget.state.tmdbService,
         item: tmdb?.hasMatch == true ? tmdb?.item : null,
+        sourcePayload: tmdb?.sourcePayload,
+        sourcePlan: tmdb?.sourcePayload == null
+            ? null
+            : planTmdbSource(
+                tmdb!.sourcePayload!,
+                required: tmdb.identity?.isMovie == true
+                    ? {'core', 'credits', 'images', 'videos'}
+                    : {
+                        'episode:${card.seasonNumber}:${card.number}',
+                        'episode_videos:${card.seasonNumber}:${card.number}',
+                      },
+                targetLanguage: widget.state.tmdbConfig.language,
+              ),
         actionLabel: actionLabel,
         onAction: onAction,
         onPersonTap: _openPerson,

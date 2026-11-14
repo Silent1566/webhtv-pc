@@ -251,6 +251,37 @@ class TmdbService {
     );
   }
 
+  /// Source enrichment requests only append groups missing from the payload.
+  Future<Map<String, Object?>> sourceDetail(
+    TmdbItem item, {
+    required Set<String> missing,
+    TmdbCancellationToken? cancel,
+  }) {
+    final config = _requireConfig();
+    final identity = item.identity;
+    if (identity == null) {
+      throw AppError(AppErrorKind.tmdbEmpty, 'TMDB 详情缺少有效身份');
+    }
+    final append = <String>{
+      for (final group in missing)
+        if (group != 'core' && !group.contains(':')) group,
+      if (missing.contains('credits') && identity.isTv) 'aggregate_credits',
+    }.toList()..sort();
+    return _request(
+      TmdbCacheType.detail,
+      TmdbEndpoint.detail(identity.mediaType, identity.tmdbId),
+      TmdbTtl.detail,
+      query: {if (append.isNotEmpty) 'append_to_response': append.join(',')},
+      cancel: cancel,
+      ttlOf: _detailTtl,
+      requiredFields: const ['id'],
+      extraHeaders: _languageHeaders(
+        config,
+        includeImages: missing.contains('images'),
+      ),
+    );
+  }
+
   Future<Map<String, Object?>> season(
     TmdbItem item,
     int seasonNumber, {
@@ -334,6 +365,8 @@ class TmdbService {
     TmdbItem item, {
     int? seasonNumber,
     int? episodeNumber,
+    bool includeDetail = true,
+    bool includeSeason = true,
     TmdbCancellationToken? cancel,
   }) async {
     final identity = item.identity;
@@ -377,7 +410,7 @@ class TmdbService {
         episodeNumber,
       );
     }
-    if (seasonNumber != null) {
+    if (seasonNumber != null && includeSeason) {
       await fetch(
         TmdbEndpoint.seasonVideos(identity.tmdbId, seasonNumber),
         TmdbVideoScope.season,
@@ -385,14 +418,16 @@ class TmdbService {
         0,
       );
     }
-    await fetch(
-      TmdbEndpoint.videos(identity.mediaType, identity.tmdbId),
-      identity.mediaType == TmdbMediaType.movie
-          ? TmdbVideoScope.movie
-          : TmdbVideoScope.tv,
-      0,
-      0,
-    );
+    if (includeDetail) {
+      await fetch(
+        TmdbEndpoint.videos(identity.mediaType, identity.tmdbId),
+        identity.mediaType == TmdbMediaType.movie
+            ? TmdbVideoScope.movie
+            : TmdbVideoScope.tv,
+        0,
+        0,
+      );
+    }
 
     return TmdbVideo.mergeAndRank(
       collected,

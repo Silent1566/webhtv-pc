@@ -218,6 +218,8 @@ class SyncState extends ChangeNotifier {
     required this.host,
     required this.settingsPath,
     this.settingsExporter,
+    this.beginConfigMutation,
+    this.onBridgeConfigSaved,
     AndroidBridgeService? bridgeService,
     SyncClient? client,
     SyncServer Function(SyncServerHost host)? serverFactory,
@@ -237,6 +239,10 @@ class SyncState extends ChangeNotifier {
 
   final LogService log;
   final SyncStateHost host;
+
+  /// 可选宿主配置代际门禁；既有独立同步宿主无需实现新接口。
+  final bool Function() Function()? beginConfigMutation;
+  final void Function(int recordId, String candidate)? onBridgeConfigSaved;
 
   /// `<configDir>/settings.json`（`sync` 段所在文件，与 TMDB 同一份）。
   final String settingsPath;
@@ -1339,7 +1345,15 @@ class SyncState extends ChangeNotifier {
   }
 
   /// [interfaceKey] 非空时只导入该源（单源重拉）。
-  Future<bool> importSites(String address, {String? interfaceKey}) async {
+  Future<bool> importSites(
+    String address, {
+    String? interfaceKey,
+    bool Function()? isCurrent,
+    void Function(int recordId, String candidate)? onSaved,
+  }) async {
+    final current = isCurrent ?? beginConfigMutation?.call() ?? () => true;
+    final saved = onSaved ?? onBridgeConfigSaved;
+
     _busy = true;
     _stage = BridgeStage.probingDevice;
     _lastError = null;
@@ -1380,7 +1394,14 @@ class SyncState extends ChangeNotifier {
           );
         }
         // 老安卓：没有 /manage/configs，退回只导入当前激活源。
-        return await _importActiveSourceOnly(base, device, selfBase, catalog);
+        return await _importActiveSourceOnly(
+          base,
+          device,
+          selfBase,
+          catalog,
+          current,
+          saved,
+        );
       }
 
       // 2) 直播源只取一次（设备级），每条源记录都共享它。
@@ -1411,14 +1432,17 @@ class SyncState extends ChangeNotifier {
               notifyListeners();
             },
           );
+          final candidate = conversion.tmdbApiKeyCandidate;
           _conversions = {
             ..._conversions,
-            '$base#${source.interfaceKey}': conversion,
+            '$base#${source.interfaceKey}': conversion
+                .withoutTmdbApiKeyCandidate(),
           };
           var bridgedConfig = conversion.config;
           if (liveSources.isNotEmpty && bridgedConfig.lives.isEmpty) {
             bridgedConfig = bridgedConfig.copyWith(lives: liveSources);
           }
+          if (!current()) return false;
           final recordId = await host.saveBridgeConfig(
             name: source.displayName,
             origin: base,
@@ -1431,10 +1455,12 @@ class SyncState extends ChangeNotifier {
             interfaceKey: source.interfaceKey,
             configUrl: source.url,
           );
+          if (!current()) return false;
           if (recordId == null) {
             failures.add('${source.displayName}：保存配置记录失败（数据库不可用）');
             continue;
           }
+          saved?.call(recordId, candidate);
           savedIds.add(recordId);
           totalSites += conversion.siteCount;
           totalLive += bridgedConfig.lives.length;
@@ -1469,6 +1495,7 @@ class SyncState extends ChangeNotifier {
         );
       }
 
+      if (!current()) return false;
       // 4) 设备历史与白名单：最后只落一次盘。
       // `_persist` 是「写 .tmp → 删旧 → rename」，同一流程里连写两次会放大文件锁
       // 窗口（测试环境下会让 `settleIo` 的固定帧数不够用）。
@@ -1479,6 +1506,7 @@ class SyncState extends ChangeNotifier {
         persist: false,
       );
       await authorizePeer(device);
+      if (!current()) return false;
 
       _importRecordIds = List.unmodifiable(savedIds);
       // 供 UI 在导入后询问「是否切换到该配置」（单源重拉时就是该源）。
@@ -1521,6 +1549,8 @@ class SyncState extends ChangeNotifier {
     AndroidDevice device,
     String? selfBase,
     AndroidSourceCatalog catalog,
+    bool Function() isCurrent,
+    void Function(int recordId, String candidate)? onSaved,
   ) async {
     _stage = BridgeStage.fetchingConfig;
     notifyListeners();
@@ -1532,18 +1562,24 @@ class SyncState extends ChangeNotifier {
         notifyListeners();
       },
     );
-    _conversions = {..._conversions, base: conversion};
+    final candidate = conversion.tmdbApiKeyCandidate;
+    _conversions = {
+      ..._conversions,
+      base: conversion.withoutTmdbApiKeyCandidate(),
+    };
     final liveSources = await _bridge.fetchLiveSources(base);
     final bridgedConfig = liveSources.isEmpty
         ? conversion.config
         : conversion.config.copyWith(lives: liveSources);
     // 老安卓拿不到 interfaceKey：记录不带 sourceKey，去重退回按 origin（老语义）。
+    if (!isCurrent()) return false;
     final recordId = await host.saveBridgeConfig(
       name: bridgedConfig.name ?? '安卓桥接（${_hostOf(base)}）',
       origin: base,
       config: bridgedConfig,
       diagnostics: [...catalog.diagnostics, ...conversion.diagnostics],
     );
+    if (!isCurrent()) return false;
     if (recordId == null) {
       throw AppError(
         AppErrorKind.storage,
@@ -1551,6 +1587,7 @@ class SyncState extends ChangeNotifier {
         detail: base,
       );
     }
+    onSaved?.call(recordId, candidate);
     _lastImportRecordId = recordId;
     _importRecordIds = List.unmodifiable([recordId]);
     await _rememberDevice(
@@ -1560,6 +1597,7 @@ class SyncState extends ChangeNotifier {
       persist: false,
     );
     await authorizePeer(device);
+    if (!isCurrent()) return false;
     _notice =
         '已导入 ${conversion.siteCount} 个站点'
         '${liveSources.isEmpty ? '' : '、${liveSources.length} 个直播源'}'

@@ -1,11 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey;
+import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/services.dart'
+    show LogicalKeyboardKey, Clipboard, ClipboardData;
 
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
+import '../core/tmdb_config.dart';
+import '../core/tmdb_source_payload.dart';
+import 'tmdb_widgets.dart' show TmdbVideoTile;
 import '../services/tmdb_service.dart';
 import '../state/detail_recommendation_state.dart';
 import 'app.dart' show PosterImage;
@@ -20,6 +25,8 @@ Future<void> showTmdbEpisodeDetails(
   String sourceName = '',
   TmdbService? service,
   TmdbItem? item,
+  TmdbSourcePayload? sourcePayload,
+  TmdbSourcePlan? sourcePlan,
   Future<TmdbItem?> Function()? resolveItem,
   String actionLabel = '播放',
   VoidCallback? onAction,
@@ -35,6 +42,8 @@ Future<void> showTmdbEpisodeDetails(
       sourceName: sourceName,
       service: service,
       item: item,
+      sourcePayload: sourcePayload,
+      sourcePlan: sourcePlan,
       resolveItem: resolveItem,
       actionLabel: actionLabel,
       onAction: onAction,
@@ -53,6 +62,8 @@ class _EpisodeDetailsPage extends StatefulWidget {
     required this.sourceName,
     required this.service,
     required this.item,
+    required this.sourcePayload,
+    required this.sourcePlan,
     required this.resolveItem,
     required this.actionLabel,
     required this.onAction,
@@ -67,6 +78,8 @@ class _EpisodeDetailsPage extends StatefulWidget {
   final String sourceName;
   final TmdbService? service;
   final TmdbItem? item;
+  final TmdbSourcePayload? sourcePayload;
+  final TmdbSourcePlan? sourcePlan;
   final Future<TmdbItem?> Function()? resolveItem;
   final String actionLabel;
   final VoidCallback? onAction;
@@ -88,6 +101,7 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
   Map<String, Object?>? _movieDetail;
   List<String> _photos = const [];
   List<TmdbPerson> _guests = const [];
+  List<TmdbVideo> _videos = const [];
   bool _loading = false;
   bool _closing = false;
 
@@ -97,6 +111,7 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
   @override
   void initState() {
     super.initState();
+    _applySource();
     _loading = widget.service != null;
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_load()));
   }
@@ -106,6 +121,127 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
     _cancel.cancel();
     _scroll.dispose();
     super.dispose();
+  }
+
+  TmdbSourcePayload? get _source =>
+      widget.service?.config.enabled != false &&
+          widget.sourcePayload?.identity == _item?.identity
+      ? widget.sourcePayload
+      : null;
+
+  Map<String, Object?>? _sourceEpisode(TmdbSourcePayload? payload) {
+    if (payload == null) return null;
+    final detail = payload.detail;
+    final seasons = detail['seasons'];
+    final lists = <Object?>[
+      if (payload.seasonNumber == _card.seasonNumber) detail['episodes'],
+    ];
+    if (seasons is List) {
+      for (final season in seasons) {
+        if (season is Map && season['season_number'] == _card.seasonNumber) {
+          lists.add(season['episodes']);
+        }
+      }
+    }
+    for (final list in lists) {
+      if (list is! List) continue;
+      for (final episode in list) {
+        if (episode is Map &&
+            episode['episode_number'] == _card.number &&
+            (episode['season_number'] == null ||
+                episode['season_number'] == _card.seasonNumber)) {
+          return Map<String, Object?>.from(episode);
+        }
+      }
+    }
+    return null;
+  }
+
+  TmdbSourcePlan? get _sourcePlan {
+    final source = _source;
+    if (source == null) return null;
+    return widget.sourcePlan ??
+        planTmdbSource(
+          source,
+          required: _isMovie
+              ? {'core', 'credits', 'images', 'videos'}
+              : {
+                  'episode:${_card.seasonNumber}:${_card.number}',
+                  'episode_videos:${_card.seasonNumber}:${_card.number}',
+                },
+          targetLanguage: widget.service?.config.language ?? '',
+        );
+  }
+
+  void _applySource() {
+    final source = _source;
+    if (_isMovie && source != null) {
+      _applyMovie(source.detail);
+      return;
+    }
+    final detail = _sourceEpisode(source);
+    if (detail == null) return;
+    _applyEpisode(detail);
+    _videos = TmdbVideo.listFrom(
+      detail['videos'],
+      scope: TmdbVideoScope.episode,
+      seasonNumber: _card.seasonNumber,
+      episodeNumber: _card.number,
+    );
+  }
+
+  void _applyMovie(Map<String, Object?> detail) {
+    _movieDetail = detail;
+    final service = widget.service;
+    if (service != null) {
+      _photos = service.photos(detail, preferLandscape: true);
+      _guests = service.cast(detail);
+    }
+    _videos = TmdbVideo.listFrom(detail['videos'], scope: TmdbVideoScope.movie);
+  }
+
+  bool _acceptsConfig(TmdbConfig snapshot) {
+    final current = widget.service?.config;
+    return _active &&
+        current != null &&
+        current.enabled == snapshot.enabled &&
+        current.apiKey == snapshot.apiKey &&
+        current.accessToken == snapshot.accessToken &&
+        current.apiBase == snapshot.apiBase &&
+        current.language == snapshot.language &&
+        current.imageBase == snapshot.imageBase &&
+        current.backdropBase == snapshot.backdropBase &&
+        listEquals(current.disabledSites, snapshot.disabledSites) &&
+        listEquals(current.allowedSites, snapshot.allowedSites) &&
+        listEquals(current.enabledSites, snapshot.enabledSites);
+  }
+
+  void _applyEpisode(Map<String, Object?> detail) {
+    final service = widget.service;
+    final config = service?.config ?? const TmdbConfig();
+    final episode = TmdbEpisode.fromJson(
+      detail,
+      image: TmdbImageSelector.image,
+      imageBase: config.backdropBase,
+      fallbackSeasonNumber: _card.seasonNumber,
+    );
+    if (episode == null ||
+        episode.number != _card.number ||
+        episode.seasonNumber != _card.seasonNumber) {
+      return;
+    }
+    _card = TmdbEpisodeCard(
+      number: _card.number,
+      seasonNumber: _card.seasonNumber,
+      title: episode.title.trim().isEmpty ? _card.title : episode.displayTitle,
+      date: episode.date.isEmpty ? _card.date : episode.date,
+      overview: _nonEmpty(detail['overview']) ?? _card.overview,
+      stillUrl: _nonEmpty(episode.stillUrl) ?? _card.stillUrl,
+      runtime: episode.runtime > 0 ? episode.runtime : _card.runtime,
+      rating: episode.voteAverage > 0 ? episode.voteAverage : _card.rating,
+    );
+    _photos = TmdbImageSelector.stills(detail, config.backdropBase);
+    _guests = service?.episodeGuests(detail) ?? const [];
   }
 
   Future<void> _load() async {
@@ -119,6 +255,31 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
       if (!_active || item?.identity == null) return;
       setState(() => _item = item);
       if (item!.isMovie) {
+        final source = _source;
+        if (source != null) {
+          final missing = _sourcePlan!.missing;
+          if (missing.isEmpty) return;
+          final snapshot = service.config;
+          final lower = await service.sourceDetail(
+            item,
+            missing: missing,
+            cancel: _cancel,
+          );
+          if (!_acceptsConfig(snapshot) ||
+              lower['id'] != source.id ||
+              (lower.containsKey('media_type') &&
+                  TmdbMediaType.parse(lower['media_type']) !=
+                      source.mediaType)) {
+            return;
+          }
+          final detail = mergeTmdbSourceDetail(
+            source,
+            lower,
+            targetLanguage: service.config.language,
+          );
+          setState(() => _applyMovie(detail));
+          return;
+        }
         final detail = await service.detail(
           item,
           includeRelated: false,
@@ -135,6 +296,10 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
       } else {
         // 0 在卡片中也代表未知季，不能擅自当成特辑或第一季。
         if (_card.seasonNumber <= 0 || _card.number <= 0) return;
+        if (_source != null) {
+          await _loadSourceEpisode(service, item);
+          return;
+        }
         final detail = await service.episode(
           item,
           _card.seasonNumber,
@@ -181,6 +346,74 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
       // 匹配、配置或网络失败只影响富媒体，已有基础信息始终保留。
     } finally {
       if (_active) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadSourceEpisode(TmdbService service, TmdbItem item) async {
+    final source = _source!;
+    final runConfig = service.config;
+    bool valid() => _acceptsConfig(runConfig);
+    final missing = _sourcePlan!.missing;
+    final season = _card.seasonNumber;
+    final number = _card.number;
+    final sourceEpisode =
+        _sourceEpisode(source) ??
+        {'season_number': season, 'episode_number': number};
+    if (missing.contains('episode:$season:$number')) {
+      try {
+        final lower = await service.episode(
+          item,
+          season,
+          number,
+          cancel: _cancel,
+        );
+        if (!valid()) return;
+        if (lower['season_number'] != season ||
+            lower['episode_number'] != number ||
+            (sourceEpisode['id'] is num &&
+                sourceEpisode['id'] != lower['id'])) {
+          return;
+        }
+        final viewPayload = TmdbSourcePayload.fromJson({
+          ...source.toJson(),
+          'season_number': season,
+          'detail': {
+            ...sourceEpisode,
+            'id': source.id,
+            'media_type': source.mediaType.name,
+          },
+        });
+        if (viewPayload == null) return;
+        final detail = mergeTmdbSourceDetail(viewPayload, {
+          ...lower,
+          'id': source.id,
+        }, targetLanguage: service.config.language);
+        setState(() => _applyEpisode(detail));
+      } catch (_) {
+        // Source first-paint remains available when this gap fails.
+      }
+    }
+    if (!valid()) return;
+    if (missing.contains('episode_videos:$season:$number')) {
+      try {
+        final lower = await service.videos(
+          item,
+          seasonNumber: season,
+          episodeNumber: number,
+          includeDetail: false,
+          includeSeason: false,
+          cancel: _cancel,
+        );
+        if (!valid()) return;
+        setState(
+          () => _videos = TmdbVideo.mergeAndRank([
+            ..._videos,
+            ...lower,
+          ], preferredLanguage: service.config.language.split('-').first),
+        );
+      } catch (_) {
+        // Video failure does not discard source detail or source videos.
+      }
     }
   }
 
@@ -420,6 +653,17 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
                       const LinearProgressIndicator(),
                       const SizedBox(height: 8),
                       const Text('正在加载详情与媒体…'),
+                    ],
+                    if (_videos.isNotEmpty) ...[
+                      const SizedBox(height: AppSpace.lg),
+                      Text('相关视频', style: theme.textTheme.titleMedium),
+                      const SizedBox(height: AppSpace.sm),
+                      for (final video in _videos)
+                        TmdbVideoTile(
+                          video: video,
+                          onCopy: (url) =>
+                              Clipboard.setData(ClipboardData(text: url)),
+                        ),
                     ],
                     if (_photos.isNotEmpty) ...[
                       const SizedBox(height: 24),

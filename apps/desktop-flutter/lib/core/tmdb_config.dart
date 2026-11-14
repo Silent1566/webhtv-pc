@@ -78,7 +78,9 @@ bool _isHttpUrl(String value) =>
 /// `looksLikeHost`：含 `.` 或 `localhost` 或 IP 形态，且不含 `://`、空格，不以 `/` 开头。
 bool _looksLikeHost(String value) {
   final text = _trimTrailingSlash(value);
-  if (text.isEmpty || text.contains('://') || text.contains(' ') ||
+  if (text.isEmpty ||
+      text.contains('://') ||
+      text.contains(' ') ||
       text.startsWith('/')) {
     return false;
   }
@@ -134,8 +136,7 @@ String _normalizeImageInput(String value) {
 }
 
 /// access token 形态判定：以 `.` 分成 ≥ 3 段（JWT）。
-bool _isAccessToken(String value) =>
-    value.trim().split('.').length >= 3;
+bool _isAccessToken(String value) => value.trim().split('.').length >= 3;
 
 List<String> _cleanList(List<String>? values) {
   final result = <String>[];
@@ -215,12 +216,46 @@ class TmdbConfig {
     this.smartMatch = true,
     this.heuristicSeasonGuessing = true,
     this._compatExcludeKeywords = const [],
+    this._subscriptionApiKey,
   });
 
   final bool enabled;
   final String apiBase;
   final String apiKey;
   final String accessToken;
+
+  /// 瞬时订阅凭据来源标记，copy/sanitize 保留，序列化永不包含。
+  final String? _subscriptionApiKey;
+
+  /// 仅用户配置可保存；延迟保存旧的有效快照也不能把订阅凭据写回。
+  TmdbConfig get userSettings {
+    final marker = _subscriptionApiKey?.trim();
+    if (marker == null) return this;
+    return TmdbConfig.fromMap({
+      ...toJson(),
+      'apiKey': apiKey.trim() == marker ? '' : apiKey,
+      'accessToken': accessToken.trim() == marker ? '' : accessToken,
+      'omdbApiKey': omdbApiKey.trim() == marker ? '' : omdbApiKey,
+    });
+  }
+
+  TmdbConfig withSubscriptionApiKey(String key) => TmdbConfig(
+    enabled: enabled,
+    apiBase: apiBase,
+    apiKey: key,
+    accessToken: '',
+    omdbApiKey: omdbApiKey,
+    language: language,
+    imageBase: imageBase,
+    backdropBase: backdropBase,
+    enabledSites: enabledSites,
+    disabledSites: disabledSites,
+    allowedSites: allowedSites,
+    excludeKeywordsConfigured: excludeKeywordsConfigured,
+    smartMatch: smartMatch,
+    heuristicSeasonGuessing: heuristicSeasonGuessing,
+    subscriptionApiKey: key,
+  );
 
   /// 用于详情页 IMDb / 烂番茄 / Metacritic 评分；为空时 PC 端一次都不请求 OMDb。
   final String omdbApiKey;
@@ -277,13 +312,11 @@ class TmdbConfig {
       return false;
     }
     // 2. 白名单精确命中 → 启用
-    if (_matchesExact(allowedSites, key) ||
-        _matchesExact(allowedSites, name)) {
+    if (_matchesExact(allowedSites, key) || _matchesExact(allowedSites, name)) {
       return true;
     }
     // 3. 启用规则精确命中 → 启用
-    if (_matchesExact(enabledSites, key) ||
-        _matchesExact(enabledSites, name)) {
+    if (_matchesExact(enabledSites, key) || _matchesExact(enabledSites, name)) {
       return true;
     }
     // 4. 黑名单子串命中 → 禁用
@@ -363,7 +396,8 @@ class TmdbConfig {
       allowedSites:
           pickList(['allowedSites', 'includeSites', 'whitelistSites']) ??
           const [],
-      excludeKeywordsConfigured: map.containsKey('excludeKeywordsConfigured') &&
+      excludeKeywordsConfigured:
+          map.containsKey('excludeKeywordsConfigured') &&
           pickBool('excludeKeywordsConfigured', false),
       smartMatch: pickBool('smartMatch', true),
       heuristicSeasonGuessing: pickBool('heuristicSeasonGuessing', true),
@@ -441,6 +475,7 @@ class TmdbConfig {
       excludeKeywordsConfigured: excludeConfigured,
       smartMatch: smartMatch,
       heuristicSeasonGuessing: heuristicSeasonGuessing,
+      subscriptionApiKey: _subscriptionApiKey?.trim(),
     );
   }
 
@@ -448,9 +483,15 @@ class TmdbConfig {
   Map<String, Object?> toJson({bool includeCredentials = true}) => {
     'enabled': enabled,
     'apiBase': apiBase,
-    if (includeCredentials) 'apiKey': apiKey,
-    if (includeCredentials) 'accessToken': accessToken,
-    if (includeCredentials && omdbApiKey.isNotEmpty) 'omdbApiKey': omdbApiKey,
+    if (includeCredentials) 'apiKey': _subscriptionApiKey == null ? apiKey : '',
+    if (includeCredentials)
+      'accessToken': _subscriptionApiKey == null ? accessToken : '',
+    if (includeCredentials && omdbApiKey.isNotEmpty)
+      'omdbApiKey':
+          _subscriptionApiKey?.trim() == omdbApiKey.trim() &&
+              _subscriptionApiKey != null
+          ? ''
+          : omdbApiKey,
     'language': language,
     'imageBase': imageBase,
     'backdropBase': backdropBase,
@@ -478,12 +519,16 @@ class TmdbConfig {
     bool? smartMatch,
     bool? heuristicSeasonGuessing,
   }) {
+    final marker = _subscriptionApiKey?.trim();
+    final nextApiKey = apiKey ?? this.apiKey;
+    final nextAccessToken = accessToken ?? this.accessToken;
+    final nextOmdbApiKey = omdbApiKey ?? this.omdbApiKey;
     return TmdbConfig(
       enabled: enabled ?? this.enabled,
       apiBase: apiBase ?? this.apiBase,
-      apiKey: apiKey ?? this.apiKey,
-      accessToken: accessToken ?? this.accessToken,
-      omdbApiKey: omdbApiKey ?? this.omdbApiKey,
+      apiKey: nextApiKey,
+      accessToken: nextAccessToken,
+      omdbApiKey: nextOmdbApiKey,
       language: language ?? this.language,
       imageBase: imageBase ?? this.imageBase,
       backdropBase: backdropBase ?? this.backdropBase,
@@ -495,6 +540,7 @@ class TmdbConfig {
       smartMatch: smartMatch ?? this.smartMatch,
       heuristicSeasonGuessing:
           heuristicSeasonGuessing ?? this.heuristicSeasonGuessing,
+      subscriptionApiKey: marker,
     );
   }
 

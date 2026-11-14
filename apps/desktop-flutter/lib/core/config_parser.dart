@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'app_error.dart';
 import 'protocol.dart';
+import 'tmdb_credential_ingress.dart';
 
 /// 一份 JSON 文本的解析结果。
 ///
@@ -22,6 +23,7 @@ class ConfigDocument {
     this.repositoryEntries = const [],
     this.diagnostics = const [],
     this.raw = const {},
+    this.tmdbApiKeyCandidate = '',
   });
 
   final AppConfig? config;
@@ -33,6 +35,9 @@ class ConfigDocument {
   /// 原始 JSON 对象，用于原样保存未知字段。
   final Map<String, Object?> raw;
 
+  /// 本次导入的瞬时订阅凭据；不在 [config]/[raw] 中持久化。
+  final String tmdbApiKeyCandidate;
+
   bool get isRepository => config == null && repositoryEntries.isNotEmpty;
 }
 
@@ -41,15 +46,16 @@ class ConfigDocument {
 /// 抛出 [AppError]，其中 `msg` 非空配置使用 [AppErrorKind.configMsg]，
 /// 以便 UI 展示配置自带的原始错误文本（§7.4.3）。
 ConfigDocument parseConfigDocument(String text) {
+  final ingress = TmdbCredentialIngress.extractRootAndStrip(text);
   Object? decoded;
   try {
-    decoded = jsonDecode(text);
+    decoded = jsonDecode(ingress.sanitizedJson);
   } on FormatException catch (error) {
     throw AppError(
       AppErrorKind.configInvalid,
       'JSON 解析失败',
       detail: '${error.message}（offset=${error.offset}）',
-      cause: error,
+      cause: FormatException(error.message, null, error.offset),
     );
   }
 
@@ -83,6 +89,7 @@ ConfigDocument parseConfigDocument(String text) {
       repositoryEntries: repositoryEntries,
       diagnostics: diagnostics,
       raw: map,
+      tmdbApiKeyCandidate: ingress.candidateKey,
     );
   }
 
@@ -99,6 +106,7 @@ ConfigDocument parseConfigDocument(String text) {
     repositoryEntries: repositoryEntries,
     diagnostics: diagnostics,
     raw: map,
+    tmdbApiKeyCandidate: ingress.candidateKey,
   );
 }
 
