@@ -20,10 +20,15 @@
 /// 区里它永远不会完成，用例会以超时收场。偏好写入一律在 `setUp`（真实 async 区）里做。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/app_error.dart';
@@ -41,6 +46,10 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/state/search_state.dart';
 import 'package:webhtv_pc/state/tmdb_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/common.dart';
+import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/tmdb_detail_view.dart' show TmdbEpisodeHeader;
+import 'package:webhtv_pc/ui/tmdb_widgets.dart' show TmdbLoadPhase;
 import 'package:webhtv_pc/ui/toast.dart';
 
 // ---------------------------------------------------------------------------
@@ -56,7 +65,8 @@ class _FakeClient extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     for (final (suffix, body) in routes) {
       if (request.url.path.endsWith(suffix)) {
-        final text = body is String ? body : jsonEncode(body);
+        final resolved = body is Future<Object?> ? await body : body;
+        final text = resolved is String ? resolved : jsonEncode(resolved);
         return http.StreamedResponse(
           Stream<List<int>>.value(utf8.encode(text)),
           200,
@@ -103,6 +113,26 @@ _FakeClient _tmdbClient() => _FakeClient()
       for (var i = 1; i <= 2; i++)
         {'episode_number': i, 'name': 'S2E$i', 'season_number': 2},
     ],
+  })
+  ..route('/videos', {'results': []});
+
+_FakeClient _movieClient() => _FakeClient()
+  ..route('/search/multi', {
+    'results': [
+      {
+        'id': 550,
+        'media_type': 'movie',
+        'title': '导航电影',
+        'release_date': '2024-01-01',
+      },
+    ],
+  })
+  ..route('/movie/550', {
+    'id': 550,
+    'title': '导航电影',
+    'overview': '导航站只提供影片索引，播放需要切换到有播放线路的来源。',
+    'release_date': '2024-01-01',
+    'runtime': 120,
   })
   ..route('/videos', {'results': []});
 
@@ -173,7 +203,8 @@ class _TestAppState extends AppState {
 
   /// 浮层读的是这个快照（不是 `searchAll` 的返回值）。
   @override
-  MultiSiteSearchOutcome? get activeSearch => _searchOutcome ?? super.activeSearch;
+  MultiSiteSearchOutcome? get activeSearch =>
+      _searchOutcome ?? super.activeSearch;
 
   @override
   Future<List<VodPlayLine>> swapProbe({
@@ -275,6 +306,32 @@ Vod _navVod() => Vod(
   vodPlayUrl: 'S01E03\$http://nav.example/e0#S02E02\$http://nav.example/e1',
 );
 
+Vod _navMovieVod() => Vod(
+  vodId: 'nav-movie-1',
+  vodName: '导航电影',
+  vodPlayFrom: '片单',
+  vodPlayUrl: '正片\$http://nav.example/movie',
+);
+
+Future<void> _captureNoEpisodes(GlobalKey boundaryKey) async {
+  final phase = Platform.environment['NAV_NO_EPISODES_CAPTURE_PHASE'] ?? '';
+  if (phase.isEmpty) return;
+  expect(phase, isIn(['before', 'after']));
+  final boundary =
+      boundaryKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  final image = await boundary.toImage(pixelRatio: 1);
+  try {
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    final dir = Directory('../../.local/nav-no-episodes');
+    await dir.create(recursive: true);
+    await File('${dir.path}/$phase.png').writeAsBytes(
+      data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
+  } finally {
+    image.dispose();
+  }
+}
+
 /// 普通站点的线路：集名不带季度信号，季度过滤不会缩减它（2 集就是 2 张卡）。
 Vod _plainVod() => Vod(
   vodId: 'plain-1',
@@ -324,12 +381,49 @@ void main() {
   late TmdbState navTmdb;
   late TmdbState plainTmdb;
   late TmdbState unmatchedTmdb;
+  final extraStates = <_TestAppState>[];
+
+  setUpAll(() async {
+    final font = File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc');
+    if (font.existsSync()) {
+      for (final family in [
+        'FixtureCJK',
+        'Microsoft YaHei UI',
+        'Noto Sans CJK SC',
+      ]) {
+        await (FontLoader(
+          family,
+        )..addFont(font.readAsBytes().then(ByteData.sublistView))).load();
+      }
+    }
+    // SDK 根目录：`flutter test` 不保证导出 FLUTTER_ROOT，所以默认值从当前
+    // 进程可执行文件反推（`<root>/bin/cache/dart-sdk/bin/dart`），不写死路径。
+    final root =
+        Platform.environment['FLUTTER_ROOT'] ??
+        File(Platform.resolvedExecutable)
+            .parent
+            .parent
+            .parent
+            .parent
+            .parent
+            .path;
+    final icons = File(
+      '$root/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
+    );
+    if (icons.existsSync()) {
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(icons.readAsBytes().then(ByteData.sublistView))).load();
+    }
+  });
 
   setUp(() async {
     // `toastCenter` 是进程级单例：上一条用例留下的通知会漏进这一条。
     dismissAllToasts();
     tempDir = await Directory.systemTemp.createTemp('webhtv-nav-detail');
-    listTempDir = await Directory.systemTemp.createTemp('webhtv-nav-detail-list');
+    listTempDir = await Directory.systemTemp.createTemp(
+      'webhtv-nav-detail-list',
+    );
     final paths = AppPaths.resolve(
       overrides: {
         'config': '${tempDir.path}/webhtv-pc',
@@ -388,6 +482,10 @@ void main() {
     plainState.dispose();
     unmatchedState.dispose();
     listState.dispose();
+    for (final state in extraStates) {
+      state.dispose();
+    }
+    extraStates.clear();
     for (final dir in [tempDir, listTempDir]) {
       try {
         await dir.delete(recursive: true);
@@ -396,11 +494,7 @@ void main() {
   });
 
   /// 把「已匹配 + 详情 + 选中季元数据」装进注入的 TMDB 状态。
-  Future<void> loadTmdb(
-    TmdbState tmdb,
-    Vod vod, {
-    required bool nav,
-  }) async {
+  Future<void> loadTmdb(TmdbState tmdb, Vod vod, {required bool nav}) async {
     await tmdb.loadForVod(
       vod,
       siteKey: 'nav-site',
@@ -409,18 +503,216 @@ void main() {
     );
   }
 
-  Future<void> pumpDetail(WidgetTester tester, AppState state, Vod vod) async {
-    tester.view.physicalSize = const Size(1400, 2400);
+  Future<void> pumpDetail(
+    WidgetTester tester,
+    AppState state,
+    Vod vod, {
+    Size viewport = const Size(1400, 2400),
+    GlobalKey? captureKey,
+  }) async {
+    tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
+    final detail = DetailPage(state: state, vod: vod);
+    final theme = buildAppTheme(Brightness.dark);
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: vod)),
+      MaterialApp(
+        theme: captureKey == null
+            ? null
+            : theme.copyWith(
+                textTheme: theme.textTheme.apply(fontFamily: 'FixtureCJK'),
+              ),
+        home: captureKey == null
+            ? detail
+            : RepaintBoundary(key: captureKey, child: detail),
+      ),
     );
     await tester.pump();
   }
+
+  /// 详情页 hero 占满整屏，且 `ListView` 只为可见子项建元素：选集区不滚到可见
+  /// 位置就根本不在树里，此时 `findsNothing` 是空洞断言。滚动位置与 Before 截图
+  /// 一致（600），保证「没渲染」说的是真实结果。
+  Future<void> revealEpisodeArea(WidgetTester tester) async {
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(600);
+    await tester.pump();
+  }
+
+  Future<_TestAppState> stateForClient(
+    WidgetTester tester,
+    http.Client client,
+  ) async {
+    final state = _TestAppState(
+      paths: navState.paths,
+      log: LogService(),
+      tmdb: _tmdbState(client: client),
+      site: _site(nav: true),
+    );
+    extraStates.add(state);
+    await tester.runAsync(state.bootstrap);
+    return state;
+  }
+
+  testWidgets('导航源电影元数据完成后停止转圈，说明和换源直达真实搜索浮层', (tester) async {
+    final state = await stateForClient(tester, _movieClient());
+    final tmdb = state.tmdb;
+    final vod = _navMovieVod();
+    await loadTmdb(tmdb, vod, nav: true);
+    expect(tmdb.hasMatch, isTrue);
+    expect(tmdb.item?.isTv, isFalse);
+    expect(tmdb.seasonEpisodeCounts, isEmpty);
+    final boundary = GlobalKey();
+    await pumpDetail(
+      tester,
+      state,
+      vod,
+      viewport: const Size(1280, 800),
+      captureKey: boundary,
+    );
+    // 固定经过时间与滚动位置：旧生产代码的加载动画也不能用 pumpAndSettle。
+    await tester.pump(const Duration(milliseconds: 600));
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(600);
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.runAsync(() => _captureNoEpisodes(boundary));
+
+    expect(tmdb.phase, TmdbLoadPhase.ready);
+    expect(
+      find.byType(LoadingBlock),
+      findsNothing,
+      reason: '电影没有季集请求，实际加载完成后选集区不能永久转圈',
+    );
+    final swap = find.byKey(const ValueKey('nav-source-swap-empty'));
+    expect(swap, findsOneWidget);
+    final explanation = find.text('该站点是导航源，只提供索引，不提供可直接播放的地址。');
+    expect(explanation, findsOneWidget);
+    for (final finder in [swap, explanation]) {
+      final rect = tester.getRect(finder);
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.bottom, lessThanOrEqualTo(800));
+    }
+    expect(_episodeCards('tmdb-episode-card-'), findsNothing);
+    expect(find.byKey(const ValueKey('tmdb-line-selector')), findsNothing);
+    await tester.tap(swap);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('source-swap-sheet')), findsOneWidget);
+    expect(state.searchedKeywords, ['导航电影']);
+    expect(state.playedTargets, isEmpty);
+  });
+
+  for (final scenario in ['没有季度集数', '全季返回空元数据', '全季请求失败']) {
+    testWidgets('导航源电视元数据完成：$scenario 不会永久加载', (tester) async {
+      final client = _tmdbClient();
+      if (scenario == '没有季度集数') {
+        client.routes.removeWhere((route) => route.$1 == '/tv/1399');
+        client.route('/tv/1399', {'id': 1399, 'name': '导航剧', 'seasons': []});
+      } else {
+        client.routes.removeWhere(
+          (route) => route.$1 == '/season/1' || route.$1 == '/season/2',
+        );
+        if (scenario == '全季返回空元数据') {
+          client
+            ..route('/season/1', {'season_number': 1, 'episodes': []})
+            ..route('/season/2', {'season_number': 2, 'episodes': []});
+        }
+      }
+      final state = await stateForClient(tester, client);
+      final tmdb = state.tmdb;
+      await loadTmdb(tmdb, _navVod(), nav: true);
+      expect(tmdb.hasMatch, isTrue);
+      expect(tmdb.item?.isTv, isTrue);
+      await pumpDetail(tester, state, _navVod());
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tmdb.phase, TmdbLoadPhase.ready);
+      await revealEpisodeArea(tester);
+      expect(
+        find.byType(LoadingBlock),
+        findsNothing,
+        reason: '真实季集请求已结束（或根本无请求），不能把没有数据当作仍在加载',
+      );
+      expect(find.byKey(const ValueKey('tmdb-line-selector')), findsNothing);
+      if (scenario == '全季请求失败') {
+        expect(tmdb.episodesBySeason, isEmpty);
+        expect(tmdb.seasonEpisodeCounts, {1: 3, 2: 2});
+        final cards = _episodeCards(_navCardPrefix);
+        await _revealInViewport(tester, cards);
+        expect(cards, findsNWidgets(5), reason: '失败后仍用真实季度集数补出占位卡片');
+        expect(
+          tester
+              .widget<TmdbEpisodeHeader>(find.byType(TmdbEpisodeHeader))
+              .episodeCount,
+          5,
+        );
+        expect(
+          find.byKey(const ValueKey('nav-source-swap-empty')),
+          findsNothing,
+        );
+      } else {
+        if (scenario == '没有季度集数') {
+          expect(tmdb.seasonEpisodeCounts, isEmpty);
+          expect(tmdb.episodesBySeason, isEmpty);
+        } else {
+          expect(tmdb.episodesBySeason, {1: isEmpty, 2: isEmpty});
+        }
+        final swap = find.byKey(const ValueKey('nav-source-swap-empty'));
+        await _revealInViewport(tester, swap);
+        expect(swap, findsOneWidget);
+        expect(_episodeCards('tmdb-episode-card-'), findsNothing);
+        expect(
+          find.byType(TmdbEpisodeHeader),
+          findsNothing,
+          reason: '零张卡片不进入卡片构建器',
+        );
+      }
+    });
+  }
+
+  testWidgets('导航源全季请求真实在途时保持加载，完成后显示完整季集', (tester) async {
+    final client = _tmdbClient();
+    final state = await stateForClient(tester, client);
+    final tmdb = state.tmdb;
+    await loadTmdb(tmdb, _navVod(), nav: true);
+    // 聚合按季**顺序**请求（逐季 await）：把第 2 季拦住、让第 1 季先落地，就得到
+    // 「只到了一半」的真实在途状态。只要还有半季没到就不能铺卡——否则用户会先看到
+    // 3 张、再跳成 5 张。
+    final gate = Completer<Object?>();
+    client.routes.removeWhere((route) => route.$1 == '/season/2');
+    client.route('/season/2', gate.future);
+    try {
+      await pumpDetail(tester, state, _navVod());
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tmdb.episodesBySeason.keys.toSet(), {
+        1,
+      }, reason: '前置：第 1 季已到、第 2 季仍在途');
+      await revealEpisodeArea(tester);
+      expect(find.byType(LoadingBlock), findsOneWidget);
+      expect(find.byKey(const ValueKey('nav-source-swap-empty')), findsNothing);
+      expect(_episodeCards(_navCardPrefix), findsNothing);
+    } finally {
+      gate.complete({
+        'season_number': 2,
+        'episodes': [
+          for (var i = 1; i <= 2; i++)
+            {'episode_number': i, 'name': 'S2E$i', 'season_number': 2},
+        ],
+      });
+    }
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(tmdb.episodesBySeason.keys.toSet(), {1, 2});
+    expect(find.byType(LoadingBlock), findsNothing);
+    final cards = _episodeCards(_navCardPrefix);
+    await _revealInViewport(tester, cards);
+    expect(cards, findsNWidgets(5));
+  });
 
   testWidgets('导航源 + TMDB 已匹配 → 卡片数等于 TMDB 全部季的全部集数', (tester) async {
     await loadTmdb(navTmdb, _navVod(), nav: true);
@@ -436,7 +728,10 @@ void main() {
     for (var i = 0; i < 60 && navTmdb.episodesBySeason.isEmpty; i++) {
       await tester.pump(const Duration(milliseconds: 10));
     }
-    expect(navTmdb.episodesBySeason.keys.toSet(), {1, 2}, reason: 'UI 必须显式触发按季聚合');
+    expect(navTmdb.episodesBySeason.keys.toSet(), {
+      1,
+      2,
+    }, reason: 'UI 必须显式触发按季聚合');
 
     final cards = _episodeCards(_navCardPrefix);
     await _revealInViewport(tester, cards);
@@ -487,8 +782,14 @@ void main() {
     await tester.tap(first);
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.byKey(const ValueKey('nav-source-swap')), findsOneWidget);
-    expect(find.byKey(const ValueKey('nav-source-swap-dismiss')), findsOneWidget);
-    expect(find.byKey(const ValueKey('nav-source-swap-confirm')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('nav-source-swap-dismiss')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('nav-source-swap-confirm')),
+      findsOneWidget,
+    );
     expect(find.text('知道了'), findsWidgets);
     expect(find.text('换源'), findsWidgets);
   });
@@ -531,11 +832,7 @@ void main() {
     expect(find.byKey(const ValueKey('nav-source-swap')), findsNothing);
     // 换源浮层出现 = `_openSourceSwap()` 真的被调用（说明框 → 换源入口的接线）。
     expect(find.byKey(const ValueKey('source-swap-sheet')), findsOneWidget);
-    expect(
-      navState.searchedKeywords,
-      ['导航剧'],
-      reason: '浮层用本页片名发起换源搜索',
-    );
+    expect(navState.searchedKeywords, ['导航剧'], reason: '浮层用本页片名发起换源搜索');
     expect(navState.playedTargets, isEmpty, reason: '换源不是播放');
   });
 
@@ -604,8 +901,7 @@ void main() {
     );
   });
 
-  testWidgets('换源并入外部线路后：线路条恢复，集数是该线路的真实集数，卡片换回既有前缀',
-      (tester) async {
+  testWidgets('换源并入外部线路后：线路条恢复，集数是该线路的真实集数，卡片换回既有前缀', (tester) async {
     // 外部线路 3 集：与 TMDB 全集（5）和导航源站源（2）都不相同，
     // 因此线路条上的数字能唯一指认它来自这条外部线路。
     navState.installSwap(
@@ -617,10 +913,7 @@ void main() {
           flag: 'ext',
           episodes: [
             for (var i = 1; i <= 3; i++)
-              VodEpisode(
-                name: '换源第$i集',
-                url: 'http://swap.example/e$i',
-              ),
+              VodEpisode(name: '换源第$i集', url: 'http://swap.example/e$i'),
           ],
         ),
       ],
@@ -641,11 +934,7 @@ void main() {
     );
     final beforeCards = _episodeCards(_navCardPrefix);
     await _revealInViewport(tester, beforeCards);
-    expect(
-      beforeCards,
-      findsNWidgets(5),
-      reason: '前置：卡片来自 TMDB 全集',
-    );
+    expect(beforeCards, findsNWidgets(5), reason: '前置：卡片来自 TMDB 全集');
 
     // ---- 走真实的换源提交链路：弹说明框 → 换源 → 浮层勾选/解析/并入 ----
     final firstCard = find.byKey(const ValueKey('$_navCardPrefix-0'));
@@ -711,11 +1000,7 @@ void main() {
     );
 
     // ---- 断言 3：卡片切回既有命名空间 ----
-    expect(
-      _episodeCards(_navCardPrefix),
-      findsNothing,
-      reason: '导航源卡片前缀必须消失',
-    );
+    expect(_episodeCards(_navCardPrefix), findsNothing, reason: '导航源卡片前缀必须消失');
     final externalCards = _episodeCards('tmdb-episode-card-换源站 · ext-');
     await _revealInViewport(tester, externalCards);
     expect(
@@ -735,10 +1020,8 @@ void main() {
       findsNothing,
       reason: '已换到真实播放源，卡片点击不再走导航源说明框',
     );
-    expect(
-      navState.playedTargets,
-      ['http://swap.example/e1'],
-      reason: '点击直接进入既有播放链路（用外部线路自己的集地址）',
-    );
+    expect(navState.playedTargets, [
+      'http://swap.example/e1',
+    ], reason: '点击直接进入既有播放链路（用外部线路自己的集地址）');
   });
 }

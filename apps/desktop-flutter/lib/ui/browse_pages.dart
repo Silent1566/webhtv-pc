@@ -3776,12 +3776,18 @@ class _DetailPageState extends State<DetailPage> {
   ///
   /// 两条来源共用（真实导航源 / 推荐回退页），原因分开说：回退页的站点并不是
   /// 导航源，照搬「该站点是导航源」会是假话。
-  Widget _buildNavSourceSwapEmpty() => Column(
+  ///
+  /// [isMovie] 只影响措辞：电影没有「集」可言，照搬「不提供可直接播放的剧集」
+  /// 会在用户点的正是一部电影时说一句不成立的话（导航源的空态里没有别的东西
+  /// 能纠正它）。其余情形（剧集、媒体类型未知）沿用原句。
+  Widget _buildNavSourceSwapEmpty({bool isMovie = false}) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
         _navSourceFallback
             ? '这部作品在当前站点没有条目，暂时只能换源播放。'
+            : isMovie
+            ? '该站点是导航源，只提供索引，不提供可直接播放的地址。'
             : '该站点是导航源，只提供索引，不提供可直接播放的剧集。',
       ),
       const SizedBox(height: 8),
@@ -3800,12 +3806,22 @@ class _DetailPageState extends State<DetailPage> {
     if (tmdb == null || !tmdb.hasMatch) {
       return _buildNavSourceSwapEmpty();
     }
-    if (tmdb.episodesBySeason.isEmpty) {
-      // 回退页可能是**电影**：TMDB 没有「集」可铺，继续转圈就是永久空态（这条
-      // 路径没有站源线路可退回），直接给换源入口。真实导航源的行为不变。
-      if (_navSourceFallback && tmdb.item?.isTv != true) {
-        return _buildNavSourceSwapEmpty();
-      }
+    final counts = tmdb.seasonEpisodeCounts;
+    final episodes = _allSeasonEpisodes(tmdb);
+    // 「数据已到齐」与「聚合已结束」是两件事：任一成立才有资格离开加载态。前者
+    // 覆盖普通剧（每季都回来了），后者覆盖全季失败（靠 [seasonEpisodeCounts]
+    // 补占位卡）与「一季都没回来」的真空态。
+    final allSeasonsArrived =
+        counts.isEmpty || counts.keys.every(tmdb.episodesBySeason.containsKey);
+    final settled = _aggregateSettledKey == _aggregateKey(tmdb);
+    // 电影、以及 TMDB 没给任何季度集数的剧：没有「集」可铺，也没有请求可发。
+    // 继续转圈就是永久空态（这条路径没有站源线路可退回），直接给换源入口。
+    final isMovie = tmdb.item?.isTv == false;
+    if (counts.isEmpty) return _buildNavSourceSwapEmpty(isMovie: isMovie);
+    if (episodes.isEmpty) {
+      // 请求确实结束了却一集也拿不到 → 诚实的空态，而不是把「没有数据」当成
+      // 「仍在加载」。
+      if (settled) return _buildNavSourceSwapEmpty(isMovie: isMovie);
       // 聚合是**显式触发**的补充加载（`TmdbState` 不会自动调）：本帧先转圈，
       // 聚合到达后 `notifyListeners` 会重建本页。
       _ensureAllSeasonEpisodes(tmdb);
@@ -3814,9 +3830,17 @@ class _DetailPageState extends State<DetailPage> {
         child: LoadingBlock(),
       );
     }
+    if (!allSeasonsArrived && !settled) {
+      // 只到了一部分季：此时铺卡会先出 3 张、再跳成 5 张。等整块聚合结束。
+      _ensureAllSeasonEpisodes(tmdb);
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: LoadingBlock(),
+      );
+    }
     return _buildTmdbOnlyEpisodes(
       context,
-      _allSeasonEpisodes(tmdb),
+      episodes,
       base: 'nav-${widget.vod.vodId}',
       onCardTap: _showNavSourceSwapDialog,
     );
