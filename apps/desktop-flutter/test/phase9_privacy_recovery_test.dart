@@ -14,6 +14,8 @@ import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/ui/recovery_banner.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/advanced_settings_navigation.dart';
+
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
     'config': '${temp.path}${Platform.pathSeparator}config',
@@ -321,7 +323,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('recovery-banner-text')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('recovery-banner-text')),
+        findsOneWidget,
+      );
       expect(find.textContaining('上次运行未正常退出'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('recovery-resume')));
       expect(resumed?.vodId, 'v');
@@ -348,7 +353,7 @@ void main() {
       } catch (_) {}
     });
 
-    testWidgets('隐身与 DoH 区块可达，并能改开关', (tester) async {
+    testWidgets('隐身开关在中枢、DoH 在独立明细页：都能进入并改开关', (tester) async {
       tester.view.physicalSize = const Size(900, 700);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -360,38 +365,50 @@ void main() {
       );
       await tester.pump();
 
-      final scrollable = find.byType(Scrollable).first;
+      // DoH 的三个控件已迁到独立明细页：先经中枢上的「加密 DNS（DoH）」行真实
+      // 进入，再逐个断言；写入后还要断言开关自己回显（写盘通知在真实事件循环上）。
+      await tapAdvancedRow(tester, 'settings-doh-open');
+      expect(
+        find.widgetWithText(AppBar, '加密 DNS（DoH）'),
+        findsOneWidget,
+        reason: '必须真的进入 DoH 明细页',
+      );
       for (final key in const [
-        'settings-incognito',
         'settings-doh-enabled',
         'settings-doh-endpoint',
         'settings-doh-cache',
       ]) {
         final finder = find.byKey(ValueKey(key));
-        await tester.scrollUntilVisible(finder, 200, scrollable: scrollable);
-        expect(finder, findsOneWidget, reason: '高级设置缺少区块：$key');
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+        expect(finder, findsOneWidget, reason: 'DoH 明细页缺少控件：$key');
       }
 
-      // 逐个滚过去之后视口停在 DoH 区块：本页新增「长按画面倍速」一行后更长，
-      // 隐身开关已被滚出视口（`tap` 会打在窗口外）。点之前先把它滚回来。
+      final dohEnabled = find.byKey(const ValueKey('settings-doh-enabled'));
+      await tester.tap(dohEnabled);
+      await settleAdvancedIo(tester);
+      expect(state.dohSettings.enabled, isTrue);
+      expect(
+        tester.widget<SwitchListTile>(dohEnabled).value,
+        isTrue,
+        reason: 'DoH 开关必须回显为开，不能弹回',
+      );
+      await backFromAdvancedDetail(tester);
+      expect(find.widgetWithText(AppBar, '高级设置'), findsOneWidget);
+
+      // 隐身开关仍在枢纽约「隐私与诊断」段里：滚过去真实点击。
       final incognito = find.byKey(const ValueKey('settings-incognito'));
       await tester.scrollUntilVisible(
         incognito,
-        -200,
-        scrollable: scrollable,
+        200,
+        scrollable: advancedHubScrollable(),
       );
       await tester.ensureVisible(incognito);
-      await tester.pumpAndSettle();
+      await pumpAdvanced(tester);
+      expect(incognito, findsOneWidget, reason: '中枢缺少区块：settings-incognito');
       await tester.tap(incognito);
       await tester.pumpAndSettle();
       expect(state.incognito, isTrue);
-
-      final dohEnabled = find.byKey(const ValueKey('settings-doh-enabled'));
-      await tester.ensureVisible(dohEnabled);
-      await tester.pumpAndSettle();
-      await tester.tap(dohEnabled);
-      await tester.pumpAndSettle();
-      expect(state.dohSettings.enabled, isTrue);
     });
   });
 }

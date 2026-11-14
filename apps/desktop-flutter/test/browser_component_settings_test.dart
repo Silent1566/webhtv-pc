@@ -16,6 +16,8 @@ import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 
+import 'support/advanced_settings_navigation.dart';
+
 class FakeTransport extends SniffTransport {
   FakeTransport(this.commands, {this.issues = const {}});
   final List<BrowserCommand> commands;
@@ -277,7 +279,10 @@ void main() {
     );
   });
 
-  testWidgets('高级设置页末视觉快照', (tester) async {
+  // 默认跳过（需要 `BROWSER_COMPONENT_CAPTURE` 指向输出路径才跑）。它锁的是
+  // 「浏览器内核区块自己渲染成什么样」：区块已从高级设置长页搬进独立路由，
+  // 所以这里真实点中枢上的「浏览器内核」行进入，再截这一页。
+  testWidgets('浏览器内核明细页视觉快照', (tester) async {
     final target = Platform.environment['BROWSER_COMPONENT_CAPTURE'];
     if (target == null) return;
     tester.view.physicalSize = const Size(900, 900);
@@ -313,17 +318,29 @@ void main() {
       await icons.load();
       await state.bootstrap();
       final theme = buildAppTheme(Brightness.dark);
+      // 截图根必须包在 Navigator **外面**：明细页是 push 出来的独立路由，
+      // RepaintBoundary 套在 `home` 上只能拍到被盖住的中枢。
       await tester.pumpWidget(
-        MaterialApp(
-          theme: theme,
-          home: RepaintBoundary(
-            key: boundary,
-            child: AdvancedSettingsPage(state: state),
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            theme: theme,
+            home: AdvancedSettingsPage(state: state),
           ),
         ),
       );
     });
     await tester.pumpAndSettle();
+
+    // 真实点击「浏览器内核」行进入明细页（不直接构造路由）。
+    await tapAdvancedRow(tester, 'settings-browser-open');
+    expect(
+      find.widgetWithText(AppBar, '浏览器内核'),
+      findsOneWidget,
+      reason: '必须先进入浏览器内核明细页再截图',
+    );
+    await tester.pumpAndSettle();
+
     final scrollable = tester.state<ScrollableState>(
       find.byType(Scrollable).first,
     );

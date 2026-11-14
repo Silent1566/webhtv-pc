@@ -82,7 +82,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('设置'), findsOneWidget);
-    for (final title in ['偏好', '播放', '连接与增强', '维护与说明']) {
+    for (final title in ['偏好', '播放', '连接与服务', '维护与说明']) {
       expect(find.text(title), findsWidgets);
     }
     for (final category in _categoryContent.keys) {
@@ -235,7 +235,9 @@ void main() {
           }
           for (final key in entry.value) {
             final target = find.byKey(ValueKey(key));
-            expect(tester.widget(target), isA<FilledButton>());
+            // 入口已从「铺满整行的 tonal 按钮」改为「图标 + 标题 + 摘要 + 箭头」的行：
+            // 类型断言跟着换成 SettingsNavRow，但「该 key 可达且是入口控件」的原意不变。
+            expect(tester.widget(target), isA<SettingsNavRow>());
             await tester.ensureVisible(target);
             await tester.pumpAndSettle();
             final rect = tester.getRect(target);
