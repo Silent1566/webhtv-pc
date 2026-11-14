@@ -88,11 +88,13 @@ import '../core/skip_segments.dart';
 import '../core/subtitle_provider.dart';
 import '../core/subtitle_settings.dart';
 import '../core/tmdb_config.dart';
+import '../core/viewing_metadata.dart';
 import '../core/tmdb_subscription.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
+import '../services/config_source_status.dart';
 import '../services/android_bridge_service.dart';
 import '../services/android_playback_bridge.dart';
 import '../services/android_read_client.dart';
@@ -122,6 +124,7 @@ import '../services/spider_router.dart';
 import '../services/ai_config_store.dart';
 import '../services/detail_rating_service.dart';
 import '../services/storage.dart';
+import '../services/viewing_report_metadata.dart';
 import '../services/sync_client.dart';
 import '../services/sync_server.dart';
 import '../services/tmdb_cache.dart';
@@ -1387,8 +1390,58 @@ AiContentCompletion? aiContentCompletion,
   /// EPG 服务（§13.1）。缓存落在 `paths.cacheDir/epg/`，与直播服务同域。
   EpgService get epgService => _epgService ??=
       _injectedEpgService ?? EpgService(cacheDir: paths.cacheDir);
+  /// Offline only; the provider tolerates absent stores and damaged cache rows.
+  Map<int, ViewingMetadata> viewingReportMetadata(List<PlaybackHistory> records) =>
+      ViewingReportMetadata(database: _database, tmdbService: _tmdbService)
+          .forRecords(records);
+
   AppDatabase? get database => _database;
   ConfigRecord? get activeRecord => _activeRecord;
+  ConfigSourceStatus? _restoredConfigSourceStatus;
+  int _restoredConfigSourceCheck = 0;
+  int? _restoredConfigSourceRecordId;
+  String? _restoredConfigSourceOrigin;
+
+  ConfigSourceStatus? get restoredConfigSourceStatus {
+    final status = _restoredConfigSourceStatus;
+    if (_disposed || status == null) return null;
+    final active = _database?.activeConfig();
+    return active?.id == status.recordId &&
+            active?.origin == _restoredConfigSourceOrigin
+        ? status
+        : null;
+  }
+
+  void dismissRestoredConfigSourceWarning() {
+    _clearRestoredConfigSourceWarning();
+    notifyListeners();
+  }
+
+  void _clearRestoredConfigSourceWarning({int? recordId}) {
+    if (recordId != null && recordId != _restoredConfigSourceRecordId) return;
+    _restoredConfigSourceCheck++;
+    _restoredConfigSourceRecordId = null;
+    _restoredConfigSourceOrigin = null;
+    _restoredConfigSourceStatus = null;
+  }
+
+  Future<void> _inspectRestoredConfigSource(ConfigRecord record) async {
+    final check = ++_restoredConfigSourceCheck;
+    _restoredConfigSourceRecordId = record.id;
+    _restoredConfigSourceOrigin = record.origin;
+    final status = await inspectConfigSource(record);
+    if (_disposed || check != _restoredConfigSourceCheck) return;
+    final active = _database?.activeConfig();
+    if (_activeRecord?.id != record.id ||
+        active?.id != record.id ||
+        active?.origin != record.origin) {
+      return;
+    }
+    if (!status.needsAttention) return;
+    _restoredConfigSourceStatus = status;
+    notifyListeners();
+  }
+
   List<ConfigRecord> get configs => _configs;
 
   /// bootstrap 读到的「最后一次使用的配置」记忆（没有记录时为 `null`）。
@@ -2716,6 +2769,7 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 任一步骤失败都记录日志并继续，保证“数据库异常不影响播放器启动”（§16.3）。
   Future<void> bootstrap() async {
+    _clearRestoredConfigSourceWarning();
     final stopwatch = Stopwatch()..start();
     final directoryFailures = await paths.ensureDirectories();
     if (directoryFailures.isNotEmpty) {
@@ -2907,6 +2961,10 @@ AiContentCompletion? aiContentCompletion,
     );
 
     _configPhase = hasConfig ? LoadPhase.ready : LoadPhase.idle;
+    final restoredRecord = _activeRecord;
+    if (_config != null && restoredRecord != null) {
+      unawaited(_inspectRestoredConfigSource(restoredRecord));
+    }
     // 追番调度：应用运行期间生效；关闭时不会创建定时器（测试也不会残留 Timer）。
     _restartFollowingTimer();
     notifyListeners();
@@ -3075,6 +3133,7 @@ AiContentCompletion? aiContentCompletion,
     _aiSeasonBindings.clear();
     _aiSeasonSnapshots.clear();
     _aiIntegration = null;
+    _clearRestoredConfigSourceWarning();
     _database?.dispose();
     _database = null;
     _configs = const [];
@@ -3837,6 +3896,7 @@ AiContentCompletion? aiContentCompletion,
       }
       if (mutationEpoch != _configMutationEpoch) throw _staleConfigMutation();
 
+      _clearRestoredConfigSourceWarning();
       _config = config;
       _importDiagnosticsSummary = imported.diagnostics.isEmpty
           ? null
@@ -3956,6 +4016,7 @@ AiContentCompletion? aiContentCompletion,
       _selectedSite = null;
       final reserved = await _reserveCatConfig(record.origin);
       if (mutationEpoch != _configMutationEpoch) throw _staleConfigMutation();
+      _clearRestoredConfigSourceWarning();
       _config = reserved ?? parseConfigRecord(record.json);
       _attachSiteService();
       _detailRunId++;
@@ -4272,6 +4333,7 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 只在**改动打到生效记录**时调用——否则会把用户正在看的站点列表清空。
   Future<void> _reloadActiveConfigContent(AppConfig config) async {
+    _clearRestoredConfigSourceWarning(recordId: _activeRecord?.id);
     _config = config;
     // 交给 _attachSiteService 收尾：它会按 key 校验选中站点仍属于新配置，
     // 并优先恢复用户上次使用的站点，找不到才退回默认站点。
@@ -4467,6 +4529,7 @@ AiContentCompletion? aiContentCompletion,
     if (database == null) return;
     _configMutationEpoch++;
     database.deleteConfig(id);
+    _clearRestoredConfigSourceWarning(recordId: id);
     _configs = database.listConfigs();
     if (_activeRecord?.id == id) {
       _activeRecord = database.activeConfig();
@@ -5332,6 +5395,13 @@ AiContentCompletion? aiContentCompletion,
     final synthetic = vod.vodId.isEmpty;
     if (service == null && !synthetic) return;
     final runId = ++_detailRunId;
+    final captureAllowed = !incognito;
+    final activeSourceAtStart = activeSourceKey;
+    final originalContext = _playbackContexts.values
+        .where((context) => identical(context.service, service))
+        .firstOrNull;
+    final captureSource = identical(service, _siteService)
+        ? activeSourceAtStart : originalContext?.sourceKey ?? '';
     // 先清状态，**再**等站点运行时：python/catVod 的运行时重刷可能要几秒，
     // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
     // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
@@ -5439,6 +5509,16 @@ AiContentCompletion? aiContentCompletion,
         );
       }
       _selectedVod = effective;
+      if (!_disposed && captureAllowed && !incognito &&
+          activeSourceAtStart == activeSourceKey && captureSource.isNotEmpty &&
+          returnedDetail != null && effective.vodId == vod.vodId &&
+          effective.vodName.trim().toLowerCase() == vod.vodName.trim().toLowerCase() &&
+          (identical(service, _siteService) ||
+              identical(_playbackContexts[captureSource], originalContext))) {
+        ViewingReportMetadata(database: _database).capture(
+          sourceKey: captureSource, siteKey: site.key, vod: effective,
+        );
+      }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
       notifyListeners();
@@ -5838,6 +5918,12 @@ AiContentCompletion? aiContentCompletion,
       }
       return;
     }
+    ViewingReportMetadata(database: database).capture(
+      sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
+          ? sourceKey.trim() : activeSourceKey,
+      siteKey: effectiveSiteKey,
+      vod: vod,
+    );
     try {
       database.upsertHistory(
         siteKey: effectiveSiteKey,

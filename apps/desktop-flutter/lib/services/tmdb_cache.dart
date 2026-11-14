@@ -18,6 +18,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import '../core/tmdb_identity.dart';
+
 /// 缓存类型 → 键前缀（`03` §3.1）。
 abstract final class TmdbCacheType {
   static const String configuration = 'configuration';
@@ -91,6 +93,10 @@ class TmdbCache {
   /// 最近一次失败原因（诊断用）。
   String? lastError;
 
+  /// Cache-only report I/O counters for diagnostics.
+  int detailScanCount = 0;
+  int detailFileReadCount = 0;
+
   /// 目录路径（`<cacheDir>/tmdb`）。`cacheDir` 为空时返回 `null`。
   String? get directory {
     final root = cacheDir;
@@ -136,6 +142,61 @@ class TmdbCache {
 
   /// 读取任意缓存（**不看 TTL**），用于网络失败时的陈旧兜底。
   TmdbCacheHit? readAny(String type, String key) => _read(type, key, null);
+
+  /// Read legacy detail files by verified identity when URI credentials changed.
+  /// This read-only path neither creates directories nor observes TTL.
+  Map<TmdbIdentity, List<Map<String, Object?>>> detailsFor(Set<TmdbIdentity> identities) {
+    final dir = directory;
+    if (dir == null || identities.isEmpty) return const {};
+    final result = <TmdbIdentity, List<Map<String, Object?>>>{};
+    try {
+      final handle = Directory(dir);
+      if (!handle.existsSync()) return const {};
+      detailScanCount++;
+      for (final entry in handle.listSync(followLinks: false)) {
+        if (entry is! File ||
+            !entry.path
+                .split(Platform.pathSeparator)
+                .last
+                .startsWith('detail_') ||
+            !entry.path.endsWith('.json')) {
+          continue;
+        }
+        try {
+          if (entry.lengthSync() > maxFileBytes) continue;
+          detailFileReadCount++;
+          final raw = jsonDecode(entry.readAsStringSync());
+          if (raw is! Map || raw['id'] is! int) continue;
+          final explicit = raw['media_type'];
+          final type = explicit is String
+              ? TmdbMediaType.parse(explicit)
+              : raw['title'] is String && raw['name'] == null
+              ? TmdbMediaType.movie
+              : raw['name'] is String && raw['title'] == null
+              ? TmdbMediaType.tv
+              : null;
+          final identity = TmdbIdentity.of(type, raw['id'] as int);
+          if (identity == null || !identities.contains(identity)) continue;
+          result.putIfAbsent(identity, () => []).add(raw.cast<String, Object?>());
+        } catch (_) {
+          // A corrupt file does not hide other cached identities.
+        }
+      }
+    } catch (_) {
+      return const {};
+    }
+    int savedAt(Map<String, Object?> value) =>
+        value[tmdbCacheSavedAtField] is int
+        ? value[tmdbCacheSavedAtField] as int
+        : 0;
+    for (final payloads in result.values) {
+      payloads.sort((a, b) => savedAt(b).compareTo(savedAt(a)));
+      for (final raw in payloads) {
+        raw.remove(tmdbCacheSavedAtField);
+      }
+    }
+    return result;
+  }
 
   /// 按顺序尝试多个键，返回第一个新鲜命中（`03` §3.2 的回退键）。
   ///

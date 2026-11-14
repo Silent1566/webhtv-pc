@@ -15,18 +15,18 @@ class AppPaths {
     required this.dataDir,
     required this.cacheDir,
     required this.logDir,
+    required this._hasExplicitProfile,
   });
 
   final String configDir;
   final String dataDir;
   final String cacheDir;
   final String logDir;
+  final bool _hasExplicitProfile;
 
-  String get databasePath =>
-      p.join(dataDir, 'webhtv-pc.sqlite3');
+  String get databasePath => p.join(dataDir, 'webhtv-pc.sqlite3');
 
-  String get configRecordsPath =>
-      p.join(configDir, 'configs.json');
+  String get configRecordsPath => p.join(configDir, 'configs.json');
 
   String get settingsPath => p.join(configDir, 'settings.json');
 
@@ -45,36 +45,60 @@ class AppPaths {
     String state;
 
     if (Platform.isWindows) {
-      final roaming = overrides['roaming'] ??
+      final roaming =
+          overrides['roaming'] ??
           _env('APPDATA').ifEmpty(() => p.join(_home(), 'AppData', 'Roaming'));
-      final local = overrides['local'] ??
-          _env('LOCALAPPDATA').ifEmpty(() => p.join(_home(), 'AppData', 'Local'));
+      final local =
+          overrides['local'] ??
+          _env('LOCALAPPDATA')
+              .ifEmpty(() => p.join(_home(), 'AppData', 'Local'));
       config = p.join(roaming, appName);
       data = p.join(local, appName);
       cache = p.join(local, appName, 'cache');
       state = p.join(local, appName, 'logs');
     } else {
       final home = _home();
-      final xdgConfig = overrides['xdgConfig'] ??
+      final roaming = overrides['roaming'];
+      final local = overrides['local'];
+      final xdgConfig =
+          overrides['xdgConfig'] ??
+          roaming ??
           _env('XDG_CONFIG_HOME').ifEmpty(() => p.join(home, '.config'));
-      final xdgData = overrides['xdgData'] ??
+      final xdgData =
+          overrides['xdgData'] ??
+          local ??
           _env('XDG_DATA_HOME').ifEmpty(() => p.join(home, '.local', 'share'));
-      final xdgCache = overrides['xdgCache'] ??
+      final xdgCache =
+          overrides['xdgCache'] ??
           _env('XDG_CACHE_HOME').ifEmpty(() => p.join(home, '.cache'));
-      final xdgState = overrides['xdgState'] ??
+      final xdgState =
+          overrides['xdgState'] ??
           _env('XDG_STATE_HOME').ifEmpty(() => p.join(home, '.local', 'state'));
       config = p.join(xdgConfig, appName);
       data = p.join(xdgData, appName);
-      cache = p.join(xdgCache, appName);
-      state = p.join(xdgState, appName, 'logs');
+      cache = local != null && overrides['xdgCache'] == null
+          ? p.join(local, appName, 'cache')
+          : p.join(xdgCache, appName);
+      state = local != null && overrides['xdgState'] == null
+          ? p.join(local, appName, 'logs')
+          : p.join(xdgState, appName, 'logs');
     }
 
     if (Platform.isMacOS) {
       final home = _home();
-      config = p.join(home, 'Library', 'Application Support', appName);
-      data = config;
-      cache = p.join(home, 'Library', 'Caches', appName);
-      state = p.join(home, 'Library', 'Logs', appName);
+      final support = p.join(home, 'Library', 'Application Support', appName);
+      if (overrides['xdgConfig'] == null && overrides['roaming'] == null) {
+        config = support;
+      }
+      if (overrides['xdgData'] == null && overrides['local'] == null) {
+        data = support;
+      }
+      if (overrides['xdgCache'] == null && overrides['local'] == null) {
+        cache = p.join(home, 'Library', 'Caches', appName);
+      }
+      if (overrides['xdgState'] == null && overrides['local'] == null) {
+        state = p.join(home, 'Library', 'Logs', appName);
+      }
     }
 
     return AppPaths._(
@@ -82,7 +106,39 @@ class AppPaths {
       dataDir: overrides['data'] ?? data,
       cacheDir: overrides['cache'] ?? cache,
       logDir: overrides['state'] ?? state,
+      hasExplicitProfile: _coversWritableDirectories(overrides),
     );
+  }
+
+  static bool _coversWritableDirectories(Map<String, String> overrides) {
+    const keys = {
+      'config',
+      'data',
+      'cache',
+      'state',
+      'roaming',
+      'local',
+      'xdgConfig',
+      'xdgData',
+      'xdgCache',
+      'xdgState',
+    };
+    if (overrides.entries.any(
+      (entry) =>
+          !keys.contains(entry.key) ||
+          entry.value.trim().isEmpty ||
+          !p.isAbsolute(entry.value),
+    )) {
+      return false;
+    }
+    bool covers(String directory, String xdgRoot, String windowsRoot) =>
+        overrides.containsKey(directory) ||
+        overrides.containsKey(windowsRoot) ||
+        (!Platform.isWindows && overrides.containsKey(xdgRoot));
+    return covers('config', 'xdgConfig', 'roaming') &&
+        covers('data', 'xdgData', 'local') &&
+        covers('cache', 'xdgCache', 'local') &&
+        covers('state', 'xdgState', 'local');
   }
 
   static String _home() {
@@ -93,8 +149,14 @@ class AppPaths {
     return Directory.current.path;
   }
 
-  /// 创建所有目录。任何一步失败都返回失败结果而不是抛出，让 UI 明确提示。
+  /// 测试必须显式隔离所有可写目录；生产环境的 IO 失败返回描述供 UI 提示。
   Future<List<String>> ensureDirectories() async {
+    if (_env('FLUTTER_TEST') == 'true' && !_hasExplicitProfile) {
+      throw StateError(
+        'FLUTTER_TEST requires explicit isolated directories: provide absolute '
+        'config/data/cache/state paths or complete roaming/local or XDG roots.',
+      );
+    }
     final failures = <String>[];
     for (final dir in [configDir, dataDir, cacheDir, logDir]) {
       try {
@@ -131,6 +193,5 @@ class AppPaths {
 }
 
 extension _IfEmpty on String {
-  String ifEmpty(String Function() fallback) =>
-      isEmpty ? fallback() : this;
+  String ifEmpty(String Function() fallback) => isEmpty ? fallback() : this;
 }
