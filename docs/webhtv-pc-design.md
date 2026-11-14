@@ -293,6 +293,14 @@ Phase 0 分为两个连续门禁，避免两套候选方案重复实现完整业
 | Android 模拟器包装 | 非真正 PC 版，体验和维护差 |
 | 在 UI 主进程加载不可信 JAR/JS/Python | 无法建立可靠安全边界 |
 
+> **补充（ADR-0002）**：上表拒绝的是把 Android 运行时当作**产品形态**（PC 版≈模拟器壳）。
+> 对于「运行存量 Android `csp_*.jar`」这一具体诉求，ADR-0002 另设**可选兼容层**：
+> 默认关闭、非主路线、走 §9.4 `webhtv-cat-http-v1` 六路由、不进入安装包。
+> 主路线仍为 §9.3 的桌面 JVM ABI（`tvbox-java-v1`）。
+> 关键事实：**能直接执行 dex 的只有 ART，不是 JVM**；JVM 只能运行 class 文件。
+> 把 dex 翻译成 class 再交给 `URLClassLoader` 属另一条路线，技术上成立，但需要额外的
+> 转译链与 Android 垫片，且受混淆与现代 dex 特性限制，不在产品主线内（见 §9.9 末段）。
+
 ---
 
 ## 6. 项目结构设计
@@ -511,6 +519,11 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 4. `flag` 参与解析器匹配和线路标识，不单独等同于直链或解析指令。
 5. `playUrl` 可能是解析入口、前缀或备用地址，语义必须按站点类型和实际样本验证。
 6. 所有冲突组合都要有请求捕获和播放决策测试，测试名称需明确站点类型。
+7. **`type=4` 不看 `playUrl`，播放入口就是站点 `api`，参数固定为 `play=<剧集目标>&flag=<线路>`**（对齐 Android `SiteApi.playerContent` 的 `type==4` 分支）。因此：
+   - `type=4` 的剧集目标必须先送播放入口（同 §8.1 分发顺序 5），不做直链初判；
+   - 播放入口返回的 `parse`/`jx` 决定后续是直链还是进解析流程（`flag` 同时用于解析器匹配，§12.2）；
+   - 播放入口返回的 `header` 是**媒体请求 Header**（§7.4.6 步骤 4），必须随决策进入播放请求；
+   - 播放入口未给出地址时如实报错，不得回退到剧集目标。
 
 ### 7.5 配置验收
 
@@ -544,8 +557,8 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 | --- | --- | --- |
 | `http.../spider/...` | CatSpider HTTP | MVP-B 候选，必须先通过 Phase 0 契约测试 |
 | `*.py` | Python Spider | Phase 3 |
-| `*.js` | Node/QuickJS Spider | Phase 3 |
-| `csp_*` | PC Java Spider | Phase 3 |
+| `*.js` | Node/QuickJS Spider（PC 端已实现 Node 运行时 + `tvbox-js-v1` 沙箱；仍需用户确认后才加载远程脚本） | Phase 3 ✅ |
+| `csp_*` | PC Java Spider（桌面 JVM ABI `tvbox-java-v1`） | Phase 3 |
 | 其他 | SpiderNull | 必须，返回明确“不支持”错误 |
 
 分发顺序：
@@ -553,6 +566,24 @@ Header 名称大小写不敏感，但输出诊断时应保留原始键用于排�
 1. 先按 `api` 判定具体运行时，而不是只按 `type`。
 2. 未匹配的 `type=3` 站点使用 `SpiderNull`，UI 显示“运行时未安装/未支持”，不得显示空列表。
 3. 同一配置中存在不可运行站点时，其他站点必须继续加载。
+4. **`type=3` 的剧集目标必须先送播放入口（`/play`），不做“直链初判”短路。** 详情 `vod_play_url` 中该集 `$` 之后的值是**播放入口的输入**（`/play` 的 `id`），而不是媒体地址：网盘线路形如 `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 `https`，若按普通 HTTP API 站点那样先判“像直链”就直接给播放器，会把分享页 HTML 当媒体流（实测 `Failed to recognize file format`）。参考实现对 `type=3` 在 `playerContent` 里**无条件**先调 `/play`（`site.recent().spider().playerContent(flag, id, …)`），从不短路；`type=0/1/2` 保留初判以避免多余网络请求。运行时不可用时必须如实报错，不得把剧集目标当直链返回。
+5. **`type=4`（HTTP API + Base64 ext）同样必须先送播放入口，且播放入口就是站点 `api` 自身。** 参考实现 `SiteApi.playerContent` 对 `site.getType() == 4` 构造 `play=<剧集目标>` 与 `flag=<线路>` 后调用站点 `api`：
+
+   ```java
+   ArrayMap<String, String> params = new ArrayMap<>();
+   params.put("play", id);
+   params.put("flag", flag);
+   String playerContent = call(site, params);   // GET <site.api>?play=…&flag=…
+   ```
+
+   要点：
+
+   - **`type=4` 没有 `playUrl` 字段**：实测一份 163 站点配置里 68 个 `type=4` 站点**全部**没有 `playUrl`，播放入口永远是 `api`。宿主不得因 `playUrl` 为空就跳过播放入口（PC 端曾如此，导致**所有** T4 站点播放落 `playbackParserRequired`，用户实测日志 `site=木偶 playbackParserRequired: 站点 木偶 未声明 playUrl，且剧集目标不是直链`）。
+   - 剧集目标是**播放入口的输入**，不是媒体地址：既可能是 URL 编码 JSON（网盘：`7b22696422…`）、也可能是形如 `111136494@851839@1` 的站点内 ID。不得用“看起来像直链”来短路。
+   - 播放入口返回值必须整体参与决策：`parse=1`/`jx=1` → 继续走 §12 解析器；`parse=0` + 真实地址 → 直链播放；**播放结果 `header` 必须进入媒体请求**（实测 115 CDN 直链靠 `user-agent: Mozilla/5.0 115Browser/…` 取流）。
+   - 播放入口没给出地址（或只给出 `url:"1"` 一类占位符 + `msg` 业务错误）时**如实报错**（`playbackUrlMissing` / `siteBusiness`），不得把剧集目标当直链返回。
+
+   实测 T4 站点播放形态分布（真实 AT 配置，68 个 `type=4` 站点抽样 38 个可播站点）：直链 + 媒体 Header 22 个、`parse=1` 走解析器 6 个、平台页/JSON 直链其余；播放入口返回 `url` 为**数组**（多码率/多线路）与字符串两种形态均需兼容。
 
 ### 8.2 站点字段
 
@@ -720,9 +751,12 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 | --- | --- | --- |
 | `webhtv-ipc-v1` | 宿主与 sidecar 的 stdio JSON-RPC 通信 | Phase 2 |
 | `webhtv-cat-http-v1` | 兼容 `POST <api>/home/category/detail/play/search` 的 HTTP 子集；兼容标签为 `tvbox-http-v1` | MVP-B 候选 |
-| `tvbox-js-v1` | Node/QuickJS 脚本协议 | Phase 3 |
+| `tvbox-js-v1` | Node/QuickJS 脚本协议（PC 端已实现 Node `vm` 沙箱；QuickJS 内核未实现） | Phase 3 ✅ |
+| `tvbox-js-v1`（TVBox 方言） | 同一沙箱的 TVBox 兼容模式：`runtime: node-tvbox` 时补 ESM→CJS 改写、`assets://` 解析、`pdfh`/`pdfa`/`pd` 全局面、`__jsEvalReturn` 入口发现 | Phase 11 ✅ |
 | `tvbox-python-v1` | Python 脚本协议 | Phase 3 |
-| `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名 | Phase 3 |
+| `webhtv-catvod-python-v1` | CatVod 方言 Python 壳：`homeContent`/`searchContent` 等映射为宿主方法名，`runtime: python-catvod` 且站点目录含 `loader.json` 时启用 | Phase 11 ✅ |
+| `tvbox-java-v1` | 无 Android Context 的桌面 JVM Spider 签名（已实现：`sidecars/spider-host-jvm/host.jar`，纯 JDK、零第三方依赖，支持 jar / 类目录 / `.java` / 源码目录四态入口） | Phase 3 ✅ |
+| `webhtv-cat-http-v1`（Android 桥接） | Android `csp_*.jar` 兼容层：桥接 APK 暴露 §9.4 六路由，宿主按 cat http 调用；默认关闭、非主路线 | 可选（ADR-0002） |
 
 `major` 不兼容，`minor` 只增加可选能力。宿主和 Spider 必须在初始化时交换版本与 capability，禁止靠方法是否抛异常猜测能力。
 
@@ -779,6 +813,10 @@ ABI 名称使用 `<domain>-<runtime>-v<major>`。当前规划：
 - 响应为 `{ "code": 非 0, "msg": "..." }` 时返回业务错误。
 - `filters` 是分类扩展条件的对象，字段名和值按上游配置原样传递。
 - `page` 统一为整数；空值或非法值按 1 处理，但应记录诊断。
+- `/play` 的 `id` 是**剧集目标串**，即 `/detail` 返回的 `vod_play_url` 中该集 `$` 之后的值（猫源形如 URL 编码 JSON `%7B%22vodId%22...%7D`）；`flag` 是该集所属线路（`vod_play_from` 的对应段）。**不得**把纯 `vod_id` 当 `id` 传——实测猫源部分子站（如 jinpai/muou/huban）只会返回空 `url`（§9.4 契约，PC 端 `CatHttpSiteRuntime.play` 与 sidecar 运行时一致）。
+- **该目标必须先送 `/play`，不得被“直链初判”短路**（§8.1 分发顺序 4）。剧集目标是播放入口的输入，不是媒体地址；网盘线路裸 scheme 为 `https` 会被误判成直链，导致分享页 HTML 被当流（`Failed to recognize file format`）。
+- **播放入口未返回地址时必须如实报错，不得回退到剧集目标。** 上游对部分网盘线路（如夸克）就是返回空地址（bundle 回 `{urls:[], header:{}}`），回退会把分享页 HTML 交给播放器，且比直接报错更难排查。宿主抛 `playbackUrlMissing`，UI 据此引导换源。
+- 播放入口返回的多码率列表形态极宽松：`url` 可为**「名称/地址」交替的平铺数组**（对齐 CatVod `UrlAdapter`，如 `["RAW","https://…","super","https://…"]`，网盘线路实测即此形态），也可为 `{ "values": [{"n":"RAW","v":"…"}] }` 对象形态。宿主取**第一个**可播放地址，`RAW` 优先；纯字符串 `url`/`playUrl` 保持兼容。顶层 `urls`（复数）不是播放入口字段（它是配置仓库键，§7.4.2），不参与地址提取。
 - 未实现的 `/live`、`/proxy`、`/action` 不伪装成功。HTTP 客户端应把 404/501 或明确的业务错误映射为 `SPIDER_UNSUPPORTED`，不得把它转换为空列表。
 
 当前 WebHTV Android 客户端只覆盖上述 HTTP 子集，不包含 live、proxy、action。PC 端如需扩展，必须新开 ABI 版本或 capability，不能悄悄改变 `tvbox-http-v1` 语义。
@@ -935,6 +973,39 @@ init()
 - 不得静默把失败站点显示为空列表。
 - 只有能在独立 JVM sidecar 中加载的 JAR 才允许进入桌面兼容路径。
 - 任何 JAR 都不得在 UI 主进程中反射加载。
+
+**已实现（Phase 3）**：桌面 JVM 路径由 `sidecars/spider-host-jvm/host.jar` 承担
+（§9.3 `tvbox-java-v1`），主程序按 manifest 的 `runtime` 为 `jvm*`/`java*` 时启动
+`java -jar host.jar --entry … --manifest …`。要点：
+
+- 入口支持 `.jar` / 类目录 / `.java` / 源码目录；`.java` 用 JDK 自带
+  `javax.tools` 编译器，因此需要 **JDK 17+**（不是 JRE）；
+- **JVM 堆参数必须显式给出**：宿主用 Windows 作业对象把内存限制为 manifest 的
+  `limits.memoryMiB`（默认 256 MiB），而 JVM 默认按物理内存 1/4 预留堆（实测
+  640 MiB）会直接 `os::commit_memory failed` 退出。主程序按 manifest 推导
+  `-Xmx{memoryMiB/2}` 等参数；
+- **Java 运行时按版本探测，不按 PATH 顺序取第一个**：实测本机 PATH 上
+  `jre1.8.0_501` 排在 JDK 21 之前，直接取第一个会因
+  `UnsupportedClassVersionError` 启动即崩；探测同时要求同目录有 `javac`；
+- `csp_*` 站点（TVBox 生态的 Java 站源类名形态）映射到 `jvm` 运行时，但只接受
+  **无 Android Context 的桌面 jar**；含 `classes.dex` 的 Android jar 会明确报
+  「JVM 无法加载」，而不是启动后崩溃（ADR-0002 §1.1）。
+
+Android `csp_*.jar` 本身仍不在**已接线的**桌面路径内。措辞需要精确：能直接执行 dex
+的确实只有 ART，JVM 不能加载 `classes.dex`；但把 dex 翻译成 class 之后交给普通
+`URLClassLoader` 是另一条技术路线。ADR-0002 §1.1 与 §3 中「dex→class 转译不可行」
+的判断偏保守，应更正为「技术可行、尚未接线」。
+
+当前版本的取舍仍是不接线，理由有三条：
+
+1. 转译链本身要引入额外依赖（dex 转译器及其闭包约 1.4 MB），并需要正版许可确认；
+2. 转译产物仍需 Android 垫片（`Context`、`SharedPreferences`、`SQLiteDatabase` 等），
+   而垫片只覆盖被验证过的调用路径——依赖 Activity / UI 的站源会因垫片类层级不完整
+   在字节码校验阶段失败，补齐成本不可预估；
+3. 部分 jar 的类并不在随包的 `classes.dex` 内（站源另有下载源），dex 路线对它们无效。
+
+因此该路线只能覆盖**纯 dex 且不重度依赖 Android UI** 的一小部分站源。如需运行存量
+Android 站源，现阶段仍请走 ADR-0002 的可选兼容层（默认关闭、非主路线）。
 
 ### 9.10 Spider 验收
 
@@ -1125,14 +1196,27 @@ PlayerEngine.load()
 
 ### 12.1 支持类型
 
-必须兼容：
+必须兼容的类型与 PC 端支持情况（与 §5.8、`lib/core/parse_runtime.dart` 一致）：
 
-| 类型 | 说明 |
-| --- | --- |
-| `type=0` | JSON 解析 |
-| `type=1` | Web 嗅探/解析 |
-| `type=2` | JSON 扩展解析 |
-| `type=3` | Spider 解析 |
+| 类型 | 说明 | PC 端 |
+| --- | --- | --- |
+| `type=0` | Web 嗅探（用本机 Chromium 内核浏览器打开解析页，从它发出的网络请求里取媒体地址，§12.4） | ✅（本机需装 Edge/Chrome/Chromium） |
+| `type=1` | JSON 解析（`GET 解析器url + 目标url`，取 `{url}`/`{data.url}`） | ✅ |
+| `type=2` | JSON 扩展解析（携带全部 type=1 解析器为查找表） | ✅ |
+| `type=3` | JSON Mix（携带 flag 与全部解析器 `ext`） | ✅ |
+| `type=4` | Super（`type=1` 并发 + `type=0` 按优先级顺序竞速，第一个成功即胜出，§12.4） | ✅（同 `type=0`） |
+
+> **「超级解析」是合成条目**：安卓 `VodConfig.java:609` 把 `Parse.god()`（type=4）
+> 插在解析器列表第 0 位，于是「没显式选解析器时默认就是超级解析」。PC 端由
+> `AppConfig.playbackParsers` 做同一件事：选择用「超级解析 + 配置原文」，执行仍用
+> 配置原文（导入/导出/云端同步必须原样回写，不能被合成条目污染）。显式 `flag`
+> 命中仍然优先于超级解析。
+>
+> 类型编号以 TVBox/WebHTV 生态与 Android 参考实现为准（`type=0` 为 Web 嗅探、
+> `type=1` 为 JSON 解析）。`type=0`/`type=4` 由 §12.4 的浏览器嗅探内核执行；
+> 本机没有可用的 Chromium 内核浏览器时抛 `parseSniffUnavailable`，UI 展示「缺什么、
+> 怎么补」的可定位文案，**不静默降级**为直链（§5.8）。未知类型仍抛
+> `ParseSelectionException`。
 
 ### 12.2 解析流程
 
@@ -1173,6 +1257,124 @@ PlaybackRequest
 - 不允许无限嗅探。
 - 解析日志不记录完整 Cookie/Token。
 
+### 12.3.1 解析源切换（仅本次播放）
+
+播放器的剧集面板里增加一行解析源 chip（「超级解析」+ 配置里的每个解析器），
+只在解析源 >1 时出现。选中后**立刻用当前集重新解析**（不是改地址），并且：
+
+- **只对本次播放生效**，不落盘、不跨集/跨启动记忆——用户点一下通常是为了救
+  这一集；记住它会让下一部片悄悄用错源（安卓的解析源选择同样不持久化）；
+- 选中具体解析器时若失败，**不静默回落到超级解析**：错误照常进「播放失败」
+  弹窗，用户可再点一次换到别的源（诚实、可诊断）；
+- 接缝：`SiteService.resolvePlayback(preferredParseName:)` →
+  `resolveParseTarget(preferredParseName:)` → `ParseRuntime.select(preferName:)`；
+  `AppState.resolvePlayback/resolvePlaybackForSource` 原样透传，`json:`/`parse:`
+  前缀分支不受影响。
+
+### 12.4 浏览器嗅探内核（`type=0` / `type=4`）
+
+**为什么不是 WebView2、也不内嵌 Chromium**：`webview_windows` 只存在于 Windows，
+且不暴露顶层导航 Header 注入与 Cookie 管理；内嵌一份 CEF 会给每个安装包增加上百
+MB，并把浏览器的安全更新责任接到本项目身上。PC 端因此改为**驱动本机已安装的
+Chromium 内核浏览器**，经 Chrome DevTools Protocol 完成嗅探——三平台一套代码、
+零发布体积增量，代价是本机必须装浏览器（没装就如实报能力缺失）。
+
+| 层 | 文件（`apps/desktop-flutter/lib/core/sniff/`） | 职责 |
+| --- | --- | --- |
+| 契约 | `sniff_types.dart` | 请求/事件/结果/规则/会话、媒体判定（对齐 `Sniffer.isVideoFormat`）、超时档位 |
+| 传输契约 | `sniff_transport.dart` | 定位、启动、CDP 的抽象边界：`lib/core` 不直接碰 `Process`/`WebSocket`，编排可用假传输穷举测试 |
+| 实现 | `browser_locator.dart`、`browser_process.dart`、`cdp_connection.dart` | 平台浏览器定位（`WEBHTV_SNIFF_BROWSER` 优先）、`--remote-debugging-port=0` 启动与 `DevToolsActivePort` 端点发现、JSON-RPC over WebSocket |
+| 编排 | `chromium_sniffer.dart` | 请求拦截、UA/Referer/Cookie 注入、页面加载后注入 click 与规则脚本、DOM/performance 补采、人机校验时把离屏窗口拉回可见、会话结束回收进程与临时 profile |
+| 入口 | `sniff_engine_factory.dart` | 进程级引擎；本机无浏览器时由解析层抛 `parseSniffUnavailable` |
+
+与安卓 `CustomWebView` 的对应关系：
+
+| 安卓 | PC（CDP） |
+| --- | --- |
+| `shouldInterceptRequest` | `Network.requestWillBeSent` / `responseReceived` |
+| `loadUrl(url, headers)` | `Network.setExtraHTTPHeaders` + `setUserAgentOverride` + `setCookie` |
+| `onPageFinished` + `Sniffer.getScript` + `click` | `Page.loadEventFired` → `Runtime.evaluate` |
+| `probeDomMedia` | `performance.getEntriesByType('resource')` + `video.currentSrc` 轮询（最多 6 轮，每秒 1 次） |
+| `WebDialog`（Cloudflare 挑战） | `Browser.setWindowBounds` 把离屏窗口拉回可见，交给人操作 |
+
+硬边界（不得突破）：
+
+- **不内置、不分发浏览器**：本机没有 Edge/Chrome/Chromium 时如实报
+  `parseSniffUnavailable`，文案给出「安装浏览器」或「用 `WEBHTV_SNIFF_BROWSER`
+  指定可执行文件」两条出路；
+- **候选逐个探测、逐个启动**：定位器只回答「文件存在且可执行」，不等于「能跑」
+  （实测：snap 版 `chromium` 在受限环境里 `snap-confine` 直接失败）。引擎按优先级
+  对每个候选先跑一次 `--version` 探测，再启动 + 握手；任一环节失败就换下一个，
+  全部失败才报 `parseSniffUnavailable`，并把**每个候选的真实原因**（退出码 +
+  stderr 首条有意义行，例如 `snap-confine is packaged without necessary permissions`）
+  写进 detail——否则用户只看到「超时/解析失败」，无从自救；
+- **错误必须是单行**：探测输出压成一行（多余行折叠成「另有 N 行」），
+  `AppError.message`/`detail` 都不含换行——它们最终进日志行与提示条，
+  多行会把一条日志撕成五行；同一路径的探测结果缓存 30s，用户连续点集不会重复
+  起进程，装好浏览器后也无需重启应用；
+- **不替用户破解人机校验**（PRODUCT.md「不替用户绕过认证、验证码或访问控制」）：
+  挑战页面只把窗口拉回可见，不注入绕过脚本；
+- **不留残留**：每个会话结束必须关闭浏览器进程并删除临时 profile；
+- **子进程必须有短的 `TMPDIR`**：Chromium 把 `SingletonSocket` 放在 `$TMPDIR`，
+  UNIX socket 路径上限 108 字节。桌面应用继承的 TMPDIR 可能是很深的构建目录
+  （实测 73 字节的 worktree 路径直接触发 `FATAL: Socket path too long`，浏览器
+  一启动就退出，用户看到「浏览器都不可用」）。启动时按「`XDG_RUNTIME_DIR` →
+  `/tmp` → 系统临时目录」挑一个可写且 ≤40 字节的目录，并作为子进程 `TMPDIR`；
+- **不静默降级**：嗅探失败按 `parseSniffTimeout`/`parseInvalid`/`parseEmpty`
+  分类，可回退其它接口，但绝不把未解析的解析页地址当直链播；
+- **超时**：`type=0` **180s**、`type=4` **180s**、Super 内单次 Web **60s**、
+   JSON 类 **15s**（Android `TIMEOUT_PARSE_DEF` 对齐不变）。
+   180s 是用户 2026-11-13 指定的口径：真实解析页要跑签名脚本、多次 XHR 甚至播放器
+   初始化才产出地址，30s 对慢站会被误判成超时；Super 单次取 60s 而非
+   「180s − 5s」，否则 180s 预算只够试一条 web 腿，多解析器的优先级顺序失去意义。
+   这些是「页面产出地址」的预算，**不含浏览器冷启动**（冷启动另有 20s 端点就绪
+   上限 + 10s CDP 握手上限）；解析层自己守时，不依赖引擎不卡死；
+- **默认无头**：嗅探不弹任何窗口（`--headless=new`）。可见窗口的唯一价值是
+  人机校验，用 `WEBHTV_SNIFF_HEADED=1`（后续接设置项）才启动离屏可见窗口。
+  无头会话遇人机校验（Cloudflare 等）**立刻**报 `parseSniffChallenge` 并给出
+  「开可见模式或换线路」的处置——不会硬等到 180s 把能力缺失伪装成超时；
+- 嗅探页加载的 Header 只取 `ext.header` 的 UA/Referer/Cookie，日志不落完整
+  Cookie/Token（§12.3）。
+
+### 12.6 解析轨迹日志（两层）
+
+解析失败时用户唯一能自救的信息就是「用了哪个源、请求了哪个连接、结果是什么」，
+因此固定输出：
+
+| 层 | 内容 | 开关 |
+| --- | --- | --- |
+| 骨架（`trace`） | `解析源=<名称> type=<0-4> 连接=<解析器url> 目标=<待解析地址> flag= 来源=`；`解析成功 地址= 格式= 耗时=`；`解析失败 kind= message= detail= 耗时=`；`超级解析 腿 JSON=[..] Web=[..] 目标= 连接=[..]`；`超级解析胜出 源= 地址= 耗时=`；`解析回退候选=A → B` | **永远记录**，scope=`parse` |
+| 详细（`verbose`） | 逐请求 `HTTP <方法> 源= 连接=<完整连接> Header=[键名]`、`HTTP <状态码> 字节= 耗时=`；嗅探 `页面= 超时= 无头=` 与 `嗅探命中 via= 地址=` | 复用「详细调试日志」开关（`SpiderDebugLog.enabled`，默认关） |
+
+脱敏口径：骨架层的连接**去掉查询串**（`...?…`）；详细层给完整连接，但敏感键值
+（cookie/authorization/token/sign/api-key…）仍经 `redactLogText` 遮蔽；Header
+两层都只打**键名**。实现：`installParseTrace()`（`lib/services/parse_service.dart`）
+由 `AppState.bootstrap()` 接到 `LogService(scope: 'parse')`，测试可直接注入收集器。
+
+### 12.5 浏览器组件安装（可选，用户显式触发）
+
+§12.4 的嗅探依赖本机 Chromium 内核浏览器。Windows 上 Edge 天然存在，但精简
+Linux、容器、未装 Chrome 的 macOS 上「让用户自己找浏览器装」是一道真实门槛
+（本机实测只有 snap 包装脚本时，用户看到的是 `snap-confine` 权限错误）。
+因此提供**可选**的组件安装：不做默认路径，只在用户点的时候做事。
+
+| 项 | 约定 |
+| --- | --- |
+| 来源 | **仅**用户显式选择：本地/共享目录（含 `chrome`/`chromium`/`msedge` 的便携包）或 zip |
+| 不做 | 不内置、不随包分发、不静默联网下载、不改系统、不写注册表、不申请权限 |
+| 安装 | 复制到 `<dataDir>/components/browser/<label>-<version>/`（临时目录 + 原子 rename；失败回滚不留半装目录），写 `component.json` |
+| 校验 | 登记前必须 `--version` 成功（`probeChromiumBrowser`）；zip 解出后补 POSIX 执行位再读版本（zip 会丢 mode，否则会被误判成坏包） |
+| 同版本重装 | 覆盖，不产生第二个目录 |
+| 解析优先级 | 显式 `WEBHTV_SNIFF_BROWSER` → **已装组件** → 系统浏览器（用户点安装就是在表达偏好） |
+| 卸载 | 只删组件库内目录（`p.isWithin` 校验）；删掉后自动回落系统浏览器 |
+| 入口 | 设置 →「解析器嗅探」区块（状态 + 检测 + 安装/校验/卸载）；播放失败提示条提供同一入口 |
+| 失败语义 | 坏包/不可用逐条给出原因（单行），不塌缩成「安装失败」 |
+| 状态来源 | 探测只在**应用层快照**（`sniffBrowserStatus`）里进行，且默认路径跑在独立 isolate；UI 只读快照，检测由「检测 / 重新检测」按钮或安装/卸载/打开安装弹窗这类**用户动作**触发。**禁止在 widget 的 `initState`/`build` 里探测**：`Process` 与其超时定时器会留在测试的 FakeAsync 里，把 `pumpAndSettle` 挂死（仓库既有测试已多次踩到） |
+
+实现：`lib/services/browser_component_store.dart`（复制/校验/登记/卸载）+
+`lib/services/sniff_runtime.dart`（接线进进程级引擎）+
+`lib/ui/browser_component_settings.dart`（区块与弹窗）。
+
 ---
 
 ## 13. 直播功能设计
@@ -1190,6 +1392,26 @@ PlaybackRequest
 - 直播 Header。
 - 直播代理。
 - 直播弹幕。
+
+**桥接站点的直播源同步（2026-10-09 新增）**：T4 网关的 `configJson` 把 `lives`
+写死为 `new JsonArray()`（`VodApi.java`），因此 `/vod/api?ac=config` 的 `lives`
+**恒为空**，桥接过来的配置没有直播源（用户反馈「安卓桥接没有同步直播源」，直播页
+显示「当前配置没有直播源」）。修法：安卓的直播源存在它自己的直播配置
+（`Config.type=1`）里，故导入时额外取一次：
+
+1. `GET /manage/configs` 找出 `type==1 && active==true` 的直播配置地址；
+2. `GET <该地址>`（通常是站点订阅 JSON），从中抽取顶层 `lives`。
+
+约束：
+
+- **取不到不影响站点导入**：直播源是增强而非必需，任何一步失败都返回空列表并记
+  警告日志，绝不因此把已成功的站点导入判为失败。
+- 缺 `name` 的条目用 URL 主机名兜底（`LiveSource.fromJson` 对无 `name` 返回 null
+  会整条丢弃，而真实配置里确实存在只有 `url` 的条目）。
+- 上游 `lives[].type` 常为 `0`（非 PC 的 1/2/3 枚举）；PC 解析器按内容嗅探格式
+  （`parseLivePlaylist` 看 `#EXTM3U` / `{` / `[`），因此不需要改写该字段。
+
+门禁：`test/phase5_android_bridge_service_test.dart` 的「直播源拉取」五例。
 
 ### 13.2 直播模型
 
@@ -1268,6 +1490,16 @@ data class LiveChannel(
 | `avg_latency` | 平均耗时 |
 | `last_error` | 最近错误 |
 
+TMDB 元数据增强（§27）额外记录：
+
+| 指标 | 说明 |
+| --- | --- |
+| `tmdb_match_ok / tmdb_match_total` | TMDB 媒体身份匹配成功率 |
+| `tmdb_season_resolved / tmdb_season_total` | 季度可确证率（`ambiguous` 不计入成功） |
+| `tmdb_cache_hit / tmdb_cache_total` | 缓存命中率（含陈旧兜底命中） |
+| `tmdb_auth_blocks` | 鉴权熔断开启次数 |
+| `tmdb_stale_fallback` | 陈旧缓存兜底次数 |
+
 ### 14.3 搜索验收
 
 - 一个站点失败不影响其他站点。
@@ -1311,6 +1543,21 @@ data class PlaybackHistory(
 - 收藏影片。
 - 收藏分组。
 
+**`history.episodeId` 的语义（2026-10-09 修订）**：存的是**站点播放入口的输入
+目标**（详情 `vod_play_url` 里该集 `$` 之后的值；网盘站是分享链，普通站是剧集
+地址），**不是**解析后的可播地址。
+
+理由：续播要拿这个值**回传站点重新解析**。解析后的可播地址带时效签名（T4 站点
+还会被换成本地代理 `127.0.0.1/p/<token>/…`），站点认不了，拿它重解析会得到
+「站点返回业务错误」，表现为「点继续播放没反应」（用户反馈 2026-10-09
+「无法从历史记录页面继续播放」）。
+
+因此播放器内部分成两个字段：`PlaybackRequest.url`（交给播放器的可播地址）与
+`PlaybackRequest.episodeTarget`（站点入口输入，写历史/续播用）；不传
+`episodeTarget` 时回退到 `url`（命令行媒体、直播等无需二次解析的场景）。
+`copyWith` 换 `url`（换集）时**不得**把 `episodeTarget` 顶成播放地址，
+必须由换集调用点显式传入该集的入口目标。
+
 ### 15.3 验收
 
 - 播放中写入进度。
@@ -1347,6 +1594,10 @@ Windows/macOS 使用平台标准目录。
 | `search_cache` | 搜索缓存 |
 | `site_health` | 健康统计 |
 | `spider_logs` | Spider 日志摘要 |
+| `tmdb_matches` | TMDB 媒体身份匹配结论（§27.4） |
+| `tmdb_season_bindings` | 线路级季度绑定（§27.5） |
+| `tmdb_route_bindings` | 季度→线路索引（换源候选） |
+| `tmdb_season_progress` | 季度进度快照（§27.6） |
 
 ### 16.3 验收
 
@@ -1355,6 +1606,40 @@ Windows/macOS 使用平台标准目录。
 - 日志自动轮转。
 - 敏感 Header 不明文入库。
 - 数据库损坏时启动不被阻塞。
+
+### 16.4 日志落盘策略（性能缺陷修复 2026-10-12）
+
+用户反馈「点击选择站点按钮每次都会卡一会才能看到弹出层」。实测根因不在站点
+列表渲染，而在 `LogService` 的**逐条同步落盘**：
+
+| 事实 | 数值 |
+| --- | --- |
+| 单条 `writeAsStringSync(mode: append)` 耗时 | 约 8.5ms |
+| 站点选择器打开时写入的站点明细 | 170 行 |
+| 逐条同步追加 170 行 | **1452ms** |
+| 一次性追加同一批 170 行 | **1ms** |
+| 真实日志中 21 次点击的写入区间 | **1.28~2.44s** |
+| 点击到弹层出现的实测（修复前 / 后） | **2009~2643ms / 236~291ms** |
+
+为什么慢：Windows 上每次 `FileMode.append` 都要重新打开文件、定位末尾、写入并
+关闭；170 次开关文件的系统调用开销远大于 28KB 数据本身。UI 线程在同一个
+`build` 流程里同步写完这 170 行，弹层因此要等 1~2 秒才能上屏。
+
+**策略：内存即时、文件异步批量。**
+
+- `LogService.log` 只做内存操作（环形缓冲 + 广播流），行进队列；
+- 由**单次**定时器按批追加：首条用 0 延迟立即刷出（日志时效性不退化，验收脚本
+  轮询日志文件、排查播放问题时不必等批次），后续同批合并，批次间隔 200ms；
+- 批次内只做一次「打开 → 追加 → `flush: true` → 关闭」；
+- 刷盘是**同步**的（单批 1ms）：不给进程留悬空的异步文件句柄，否则退出/删目录时
+  会出现 `OS Error 32 另一个程序正在使用此文件`（`AppState.dispose()` 不等待异步
+  写入，测试 `tearDown` 紧接着删目录）；
+- `dispose()` 自己收口补刷，退出不丢日志；
+- 写失败仍与早期一致：静默降级为纯内存日志，诊断设施不得成为阻断项。
+
+门禁：`test/log_service_test.dart`（8 例：170 条入队耗时上限、flush 后不丢不乱序、
+批次不重复写、首条即时可见、dispose 补刷、内存视图与文件一致、不可写静默降级、
+超阈值轮转）。
 
 ---
 
@@ -1366,15 +1651,254 @@ Windows/macOS 使用平台标准目录。
 ┌────────────────────────────────────────────────────┐
 │ 顶栏：配置 / 站点 / 搜索 / 设置                      │
 ├──────────────┬─────────────────────────────────────┤
-│              │ 分类筛选区                           │
+│              │ 分类条（横向标签，固定不滚）           │
 │  侧栏         │ ─────────────────────────────────── │
-│  首页         │ 海报网格                             │
-│  最近观看     │                                     │
-│  收藏         │                                     │
+│  首页         │ 筛选条（每维度一行 chip，随内容滚）    │
+│  最近观看     │ ─────────────────────────────────── │
+│  收藏         │ 海报网格（2:3，滚动到底自动加载下一页） │
 │  直播         │                                     │
 │  设置         │                                     │
 └──────────────┴─────────────────────────────────────┘
 ```
+
+分类与筛选的布局约束（依据 2026-10-09 用户反馈「分类/筛选整体界面太丑」修订）：
+
+- **分类用横向标签条，不用左侧栏垂直列表**。早期实现把分类列表与筛选维度一起塞进
+  内容区左侧的 280px 侧栏，而筛选维度会**吃掉整栏高度**——实测 `木偶[盘]` 的 6 个
+  维度里仅「剧情」一组就有 17 项，于是真正的分类列表被挤出可视区（用户看到的
+  「分类不见了」）。横排在内容区顶部还可以用满窗口宽度，窗口缩放时不挤压网格。
+- **筛选条每个维度一行，行首是等宽标签列**，右侧是自适应换行的 chip；选中态为主色
+  淡底 + 主色文字。选项**全量展开**，不折叠成「更多（N）」——折叠后用户不知道里
+  面有什么，而横向 chip 换行比垂直列表省一半以上高度。
+- **分类条固定，筛选条随内容滚动**。窄窗口（1280×720）下多个维度约占 150~200px，
+  固定住会永久吃掉近 1/3 的网格高度；分类是页面级上下文，保持始终可达。
+- **UI 不暴露协议内部字段**：站点 `type` / `key`、`type_id` 属于协议与诊断信息，
+  只在 Spider 页与日志页呈现，不进浏览页。
+- **站点选择器支持搜索与分组**（用户反馈 2026-10-09：「选择站点界面需要和默影视一样
+  支持搜索和分组按钮，数据上也不用显示什么 key=啥，名称即可」）：
+  - 顶部搜索框按**名称或 key** 子串匹配（大小写不敏感）；
+  - 下方横向分组 chip（全部 + 各分组）；分组从**站点名里的标记**抽取
+    （`木偶[盘]` → 「盘」、`BiliBili[官]` → 「官」、`影视 | 高清` → 「高清」），
+    对齐上游 `GroupRuleConfig` 的方括号/竖线两条内置规则；
+  - 列表行**只显示站点名称**与可用状态；`key` / `type` / 运行时 / 阶段 / 不可用原因
+    改在打开选择器时**写入日志**（排查「某站点为何不可用」仍然拿得到）。
+  - **打开耗时（2026-10-12 修复）**：这些明细日志原先逐条同步落盘，170 行要
+    1.45 秒，弹层因此延迟 2 秒才出现。日志改为「内存即时 + 文件异步批量」后
+    实测弹层出现耗时从 2009~2643ms 降到 236~291ms（详见 §16.4）。
+
+### 17.1.1 站点请求超时
+
+站点请求（首页 / 分类 / 详情 / 搜索 / 播放，含 HTTP API 与 Spider 回调）统一超时
+**180 秒**（`siteRequestTimeout`），早期为 20 秒。
+
+为什么放宽：网盘聚合站的详情要走「分享链 → 网盘元数据」多跳，实测 0.3~4s 是常态，
+但共享链失效重试、网盘限流时单请求超 20s 很常见——超时即被当成失败，用户看到的是
+「站点不可用」，而实际上再等十几秒就能拿到。3 分钟是**上限**，绝大多数请求仍在
+亚秒到几秒内返回；用户随时可以取消搜索（§14.1），不会真被卡住 3 分钟。
+`SpiderMethod.init` 握手仍为 15 秒（本地 IPC，给长了会把真正的启动问题拖成 3 分钟）。
+
+### 17.1.2 默认推荐无数据时自动进第一个分类
+
+站点首页只返回 `class` 而不返回 `list` 时（实测 126 个站点里 40 个如此），自动
+**隐藏「默认推荐」标签并选中第一个分类**，用户进站点直接看到内容。
+有推荐内容时不得抢占（不替用户跳走）；无分类可退时也不发多余请求。
+
+分类列表的分页方式是**滚动到底自动加载下一页**（不提供「上一页/下一页」按钮）：
+
+- 距底部一定距离即预取下一页，追加而非替换已有列表（替换会让已看过的内容从列表
+  里消失），并按 `vod_id` 去重（站点忽略 `pg` 时不得把重复条目拼进来）；
+- 首屏不足一屏时不会产生滚动事件，因此页脚必须同时提供「加载更多」按钮；
+- **不得用 `pagecount` / `total` 判断是否到底**：实测网盘聚合站的这两个字段是按当前
+  页现算的（pg=1→`pagecount=2`、pg=2→`3`，`total` 同步从 92 涨到 112），以它为准
+  会让「还有下一页」永远为真。终止信号只看内容：本页为空，或本页没有带来任何新条目。
+
+### 17.1.3 启动后加载首页
+
+`bootstrap()` 只恢复配置与选中站点（`config.defaultSite()`），**从不发首页请求**；
+浏览页在无 `homeResult` 时只渲染空态。因此壳层初始化后必须显式把当前站点的首页
+拉起来，否则冷启动看到的是「没有内容」，要用户手动点分类或刷新才有数据
+（用户反馈 2026-10-09：「刚启动时没有默认加载数据」）。
+
+加载时机与幂等约束：
+
+- 在**首帧之后的 post-frame 回调**里发起，不能在首帧前做网络请求（否则拖慢启动）；
+- 「自动接入最近桥接线路」的所有分支（无历史 / 探不通 / 导入失败 / 无对应配置记录）
+  都必须回落到加载当前站点首页，不得因为自动接入不适用就停在空态；
+- 幂等：已有 `homeResult` 或正处于 `loading` 时不重复请求；
+- 自动接入成功后也要显式加载：`activateConfigRecord` 只恢复配置、不拉首页。
+
+### 17.1.4 海报卡片角标（年份 / 评分）
+
+海报网格的卡片参照实现（用户提供截图 2026-10-09）：海报**左上角年份**、
+**右下角评分**，标题在图片下方。
+
+**关键约束：`vod_remarks` 不一定是评分。** 实测同一批桥接站点里它是两类东西：
+
+| 站点类型 | `vod_remarks` 实例 | 含义 |
+| --- | --- | --- |
+| 豆瓣类（`片单导航[导]`） | `7.2` / `7.5` / `8.7` | **评分** |
+| 网盘聚合类（`木偶[盘]`） | `全29集` / `已完结` / `更新至第10集` | **更新状态** |
+
+因此：
+
+- 评分角标**只在 remarks 确实解析为 0~10 数值时**渲染（统一一位小数，如 `8` → `8.0`）；
+- 非数值 remarks 保持原来的**文字备注**渲染（它本身是有用信息，不能丢）；
+- 评分已由角标呈现时不再重复渲染一行文字；
+- 年份角标只在 `vod_year` 能取出 4 位年份时渲染（兼容 `2024`/`2024年`/`2024-01-01`）；
+- 角标用半透黑底 + 白字（评分用暖色强调）：海报画面色彩不可控，半透黑底能保证
+  白字在任何海报上可读。
+
+取值与判定集中在 `lib/core/poster_badge.dart`（纯逻辑），门禁
+`test/phase3_poster_badge_test.dart`（9 例纯逻辑 + 3 例 widget 级）。
+
+### 17.1.5 详情页 hero 与图片占位
+
+**全幅 hero（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有全屏显示」）**。
+原先是「不透明 AppBar + `ListView(padding: all(16))` 里一块 340px 的图」，背景既
+不铺满宽度、也不延伸到顶部，只占屏幕一小条。现改为：
+
+- `Scaffold.extendBodyBehindAppBar: true` + **透明 AppBar**：背景海报铺到屏幕最上边，
+  返回/收藏/刷新图标浮在背景上；
+- 列表**不加整体边距**（`padding: EdgeInsets.zero`），hero 左右铺满；正文各自留 16；
+- hero 高度**按视口自适应**（`TmdbDetailHeader.resolveHeight`：视口的 52%，夹在
+  340~560）：大窗口背景更铺得开，小窗口不把正文挤没；
+- AppBar 滚动时恢复不透明底色（`surfaceTintColor` 用页面底色），避免标题与正文重叠；
+- TMDB 状态条从 hero **上**移到 hero **下**：既不被悬浮图标遮住，也更靠近正文。
+
+**图片必须真正铺满它的盒子（用户反馈 2026-10-10：「打包正式版测试还是都没铺满」）**。
+
+> 这条反馈**推翻了我上一轮的判断**。我当时把「灰色块」归因为占位底色太亮
+> （`surfaceContainerHigh` → `surfaceContainerLow`），那只改了颜色、**没改尺寸**，
+> 所以用户重新打包后看到的仍然是「图片按原始尺寸居中、两侧露底色」。
+
+**真实根因**：`PosterImage` 用 `Container(alignment: Alignment.center)` 包图。
+`Container` 一旦带 `alignment`，就会在子节点外包一层 `Align`，而 `Align` 传给
+子节点的是**松约束**（loose）；`Image` 在松约束且自身未给 `width`/`height` 时会
+退回**图片固有尺寸**——于是 `BoxFit.cover` 根本没有“盒子”可以铺。
+实测（780×439 的图放进 1280×468 的盒子）：带 `alignment` 时 `RawImage` 为 `0×0`
+（未定型），去掉后为 `1280×468`。
+
+同一根因解释了用户三张截图里的**全部**现象：浏览页海报只有左侧两张铺满、
+演职人员头像两侧露底色、详情页背景图只占中间一条——它们都走同一个 `PosterImage`。
+
+修法：去掉 `Container` 的 `alignment`，让子节点拿到父级传入的**紧约束**；占位图标
+各自用 `Center` 包住（否则会退化成左上角）。
+
+**框比与素材不一致**（同一次反馈里的第二个成因）：海报墙原用同一个 `220×140`
+**横框**装**竖版海报**，竖图两侧会露出大片底色。现按素材给框比：
+剧照 `16:9`（`220` 宽）、海报 `2:3`（`110` 宽）、人物照片 `2:3`。
+
+**占位底色**（上一轮的修正，保留）：不透明 `surfaceContainerHigh` 在深色主题下比
+页面底色亮得多（实测 `#282a2f` 对 `#121318`），图未就绪时就是一块突兀灰块。
+现为 `surfaceContainerLow`（实测 `#1a1b21`，仅比页面亮约 8）。
+
+门禁：`test/phase3_poster_fill_test.dart`（3 例：紧约束盒子里必须铺满、指定
+`width/height` 时铺满、无图时占位图标仍居中）——**这条是本次缺陷的直接回归门禁**，
+把 `alignment` 加回去会立刻失败（实测退化为 `780` 而非 `1280`）。
+另有 `test/phase4_tmdb_detail_hero_test.dart`（6 例：hero 铺满整宽、
+`extendBodyBehindAppBar` + 透明 AppBar、海报墙 2:3、剧照墙 16:9、占位色不是
+`surfaceContainerHighest`）。
+
+### 17.1.6 制作团队与人物页筛选（对齐默影视）
+
+用户反馈 2026-10-10 三条，均以默影视（`F:/Workspace/webtv3/webhtv`）为基准：
+
+**① 制作团队紧跟演职人员**。原顺序是
+剧照 → 海报 → 演职人员 → **相关推荐 → 相关视频** → 制作团队，制作团队被两个大
+区块隔开，用户要滚很久才看得到。默影视 `activity_tmdb_detail.xml` 的顺序是
+`castTitle` → `creatorTitle` → `relatedTitle`，现对齐：制作团队排在演职人员**下方、
+相关推荐之前**。
+
+**② 制作团队必须标明身份**。原实现把 TMDB 的 `job` 原文（如 `Screenplay`）当副标题，
+甚至部分条目因 `_personSubtitle` 取不到值而**完全没有副标题**。对齐默影视
+`TmdbService#creatorJob`，在 `tmdbCreatorJobLabel` 里归一：
+
+| 命中 | 身份 |
+| --- | --- |
+| `director*` / `directing` | 导演 |
+| `writer` / `screenplay` / `story` / `teleplay` / `writing` | 编剧 |
+| `producer*` / `production` | 制片 |
+| 其余（如 `Lighting`） | **不展示**（原始英文对用户无意义） |
+
+`tmdbCreatorTeam` 负责：同一人合并多个身份（`导演 / 编剧`）、按身份排序
+（导演 0 → 编剧 1 → 制片 2，同权重保持原顺序）、丢掉无可读身份的人、上限 12 条。
+
+**③ 人物页作品按分类筛选**。对齐默影视 `TmdbPersonWorkFilters`：两个**正交维度**，
+选项带计数，取交集。
+
+| 维度 | 选项 |
+| --- | --- |
+| 部门 | 全部部门 / 出演 / 导演 / 编剧 / 制片 / … |
+| 类型 | 全部类型 / 电影 / 剧集 |
+
+纯逻辑在 `lib/core/person_work_filters.dart`（`PersonWorkFilters`）：按
+`(mediaType, tmdbId)` 去重（同一作品可能既在 `cast` 又在 `crew`）、无作品的选项
+不出现（避免选了没结果）、交集为空时返回空列表（UI 显示空态）。
+
+**作品默认倒序**（用户需求 2026-10-13）。三种视图（全部 / 按部门 / 按类型）都按
+上映日期倒序，新作品在前。排序键是 `TmdbPersonWork.sortDate`——`release_date`
+（电影）/ `first_air_date`（剧集）的原始 ISO 字符串，由
+`TmdbPersonWork.listFrom` 从原始 JSON 直接取（`TmdbItem` 只留 `年份 · 评分`，
+拿不到月日）。实现要点（`PersonWorkFilters.sortByDateDesc`）：
+
+- ISO-8601 串的字典序即时间序，不解析 `DateTime`，省一次解析也免时区/DST 干扰。
+- 空日期是字典序最小值，倒序后落**末尾**；同为空时用原始下标做第二关键字，
+  保持 TMDB 返回顺序（Dart `List.sort` 不稳定，不能指望它自己保住）。
+- 比上游 `TmdbService.sortDate` 更细：上游只从 subtitle 提年份串比较，同一年的
+  作品顺序是随机的；这里同年内还比月日。
+
+门禁：`test/phase4_tmdb_crew_and_person_filter_test.dart`（28 例）——身份归一、
+合并/排序/上限、筛选选项与计数、交集与空交集、去重、作品倒序（同年比月日、
+筛选后仍倒序、无日期排末尾）、以及**用生产组件本身**（`PersonWorkFilterRow` /
+`TmdbPersonPage`）验证 chip 渲染、点击回调与作品真实渲染顺序；区块顺序用
+`getTopLeft()` 的 `(dy, dx)` 比较真实渲染位置（网格行优先）。
+`test/phase4_tmdb_detail_model_test.dart` 另守 `sortDate` 的取值来源。
+反向验证：还原「不归一身份」与「制作团队挪回视频之后」两项，对应用例均如期失败。
+
+### 17.1.7 记住最近使用的站点
+
+用户需求 2026-10-10：「记住用户最好一次使用的站点，重启应用后默认加载最近一次
+使用的，第一次使用才加载排第一个站点」。
+
+落点：`lib/services/ui_preferences_store.dart`（`settings.json` 的 `ui` 段，与
+`tmdb`/`sync` 段并列，各自读改写、互不覆盖）。
+
+- `AppState.selectSite` 把选中的站点 key（空 key 时用名称）写进 `ui.lastSiteKey`；
+  写盘是异步的，失败**不影响**当前会话（内存已生效）；
+- `bootstrap` 恢复配置后，若尚未选中站点则按该 key 找回并选中，否则退回
+  `config.defaultSite()`（首次使用即此分支）；
+- **守卫**：记住的 key 必须仍存在于**当前配置**，否则作废（换了配置/站点被删时
+  必须退回第一个，否则首页必然 `siteUnsupported`）；
+- `_uiPreferences` 声明为**可空**而非 `late final`：单元测试/工具可能不调
+  `bootstrap` 就直接 `importConfig` + `selectSite`（实测 `phase2_search_test.dart`
+  就是这样），用 `late final` 会抛 `LateInitializationError` 把选站点弄崩。
+
+门禁：`test/phase2_last_site_test.dart`（6 例：首次用第一个、选后落盘、重启恢复、
+记住的站点不存在时退回、读改写不破坏其它段、文件损坏降级）。
+
+### 17.1.8 全屏背景与后景清晰度
+
+用户反馈 2026-10-10 两条：
+
+**① 背景海报要全屏**。`TmdbDetailHeader.resolveHeight` 原为「视口 52%，夹
+340~560」，大窗口下只占屏幕一半。现改为**取整个视口高度**，首屏全是背景图，
+正文从第二屏开始，滚动时内容盖上来（渐变遮罩相应下调到 78%~100% 处收深，
+保证底部标题可读；内容底部留 44px 避免贴边）。
+
+**关键坑（踩过）**：`LayoutBuilder` 必须包在 `Column` **外层**。
+`Column` 的子项拿到的是**无界高度**（实测 `maxHeight=Infinity`），放在里面夹不到
+任何东西；调用方用 `SizedBox(height: 400)` 时会 `overflowed by 200 pixels`。
+现由外层 `LayoutBuilder` 取「视口高度」与「可用高度」的较小值。
+
+**② 清晰度不够（问「没选原画吗」）**。根因：后景默认 `w780`（TMDB 官方后景尺寸
+只有 `w300/w780/w1280/original` 四档），全屏铺开必然发虚。实测同一张后景：
+`w780` 48KB、`w1280` 121KB、`original` 983KB。默认改为 **`w1280`**，并把**存量的
+官方 `w780` 后景自动升到 `w1280`**（用户配置里已持久化成 w780，不升级就仍是糊的）。
+只升级「官方图床的 w780」这一档：用户自选的 `original`/`w300`/自建图床一律不动。
+
+门禁：`test/phase4_tmdb_config_test.dart` 新增 3 例（存量 w780 升级、用户自选尺寸
+不被改、自建图床不被改）；`test/phase4_tmdb_detail_hero_test.dart` 改为断言
+hero 高度 == 视口高度，并新增「满屏后正文在首屏之外、滚动可达」。
 
 ### 17.2 页面清单
 
@@ -1395,7 +1919,8 @@ Windows/macOS 使用平台标准目录。
 | 直播页 | 后置 | 后置 | 必须 |
 | 站点健康页 | 后置 | 后置 | 必须 |
 | Spider 管理页 | 后置 | 必须 | 必须 |
-
+| TMDB 详情页 | 后置 | 后置 | 必须 |
+| TMDB 设置页 | 后置 | 后置 | 必须 |
 ### 17.3 播放器界面
 
 包含：
@@ -1527,6 +2052,19 @@ Windows/macOS 使用平台标准目录。
 | `live.txt` | TXT 直播源 |
 | `hls/index.m3u8` | 本地 HLS |
 | `media/sample.mp4` | 本地 MP4 |
+| `tmdb/config/tmdb-config-full.json` | TMDB 配置全字段（§27） |
+| `tmdb/config/tmdb-config-alias.json` | TMDB 配置兼容别名键 |
+| `tmdb/config/tmdb-config-invalid.json` | TMDB 非法配置（反向校验） |
+| `tmdb/detail-tv.json` | TMDB 剧集详情 |
+| `tmdb/detail-tv-next-air.json` | 含未播集的剧集详情（动态 TTL） |
+| `tmdb/detail-movie.json` | TMDB 电影详情 |
+| `tmdb/season-{0,1,2}.json` | TMDB 分季（特别篇/第 1 季/第 2 季） |
+| `tmdb/season-empty.json` | 空季度（退化用例） |
+| `tmdb/search-multi.json` | TMDB 多类型搜索 |
+| `tmdb/search-split-season.json` | 含分季变体的搜索（防护用例） |
+| `tmdb/videos-tv.json` | 相关视频（含非法 key） |
+| `tmdb/error-{401,500}.json` | TMDB 鉴权/服务端错误 |
+| `tmdb/malformed.json` | TMDB 非法 JSON 响应 |
 
 ### 19.3 自动化测试范围
 
@@ -1549,6 +2087,14 @@ Windows/macOS 使用平台标准目录。
 - `ext` Base64 URL-Safe 编解码。
 - 解析优先级 `parse`/`jx`/`flag`/`playUrl`。
 - Spider ABI 版本协商、capability、取消和错误码。
+- TMDB 标题清洗、年份与季度信号解析。
+- TMDB 匹配评分与分季变体防护。
+- TMDB 站点策略（黑/白/启用三张规则表与括号归一）。
+- TMDB 匹配缓存三层键与手动选择排他性。
+- TMDB 季度解析优先级与可播放季度退化。
+- TMDB 季度绑定分段校验与失效。
+- TMDB 季度进度写入/读取/换源/删除语义。
+- TMDB 缓存 TTL、陈旧兜底、鉴权熔断与错误分类。
 
 ### 19.4 兼容性样本库
 
@@ -1562,6 +2108,7 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | JS Spider | 3 | 运行时版本、权限、验证结果 |
 | Python Spider | 3 | 运行时版本、依赖、验证结果 |
 | Java Spider | 3 | JVM 版本、Android 依赖情况、结果 |
+| TMDB 真实作品 | 10 | TMDB 作品 ID、匹配来源标题、季度解析结论、验证时间 |
 
 规则：
 
@@ -1607,6 +2154,10 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 主程序。
 - 选定播放器引擎及所需 native 库。
 - 按需下载或内置的 JS/Python/JVM sidecar。
+- Windows 发行包**自带 Node 运行时**：`<exe 同级>/runtime/node/node.exe`（官方 LTS v22.23.4，
+  打包时由 `scripts/package_windows.ps1` 下载并按官方 `SHASUMS256.txt` 校验 SHA-256，
+  缓存于开发机 `.local/nodejs/<version>/node.exe`），用户无需自行安装 Node。
+  Python/JVM 仅随包宿主入口脚本，对应站源仍需本机安装 Python 3 / JDK 17+。
 - 默认不打包站点源。
 - 默认不打包用户配置。
 - 许可证、第三方 NOTICE 和动态库版本清单。
@@ -1651,7 +2202,7 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - **Phase 0 原型**：不发布，仅用于技术路线比较和 ADR 冻结。
 - **MVP-A 内部预览版**：仅供内部验证 HTTP API 配置导入、浏览、详情和播放闭环，不作为首个公开版本。
 - **MVP-B 首个公开测试版**：加入搜索、历史、进度恢复、CatSpider HTTP 子集、基本代理和 Spider 安全边界。
-- **正式版**：满足 22.5 节发布门禁；不要求 Phase 4 同步能力全部完成，但所有未支持能力必须明确披露。
+- **正式版**：满足 22.5 节发布门禁；不要求 Phase 5 同步能力全部完成，但所有未支持能力必须明确披露。
 
 后续章节中的“首版”统一指 MVP-B；“内部预览版”专指 MVP-A。
 
@@ -1761,9 +2312,47 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 直播 M3U/TXT/JSON 可播放。
 - 播放诊断能输出引擎、格式、网络和错误。
 
-### Phase 4：生态与同步
+### Phase 4：TMDB 元数据增强
+
+目标：参考 `webhtv/默影视` 的 TMDB 能力，用 TMDB 作为**元数据源**（而非播放事实源）
+完成「匹配 → 详情 → 季度/选集 → 续播 → 换源」闭环。
+
+功能：
+
+- TMDB 配置与鉴权（API Key / v4 Access Token，站点规则）。
+- 媒体身份匹配与持久化缓存（含手动匹配）。
+- 标题清洗、年份与季度信号解析、匹配评分与分季变体防护。
+- 季度解析与线路级绑定（显式三态 `SeasonScope`）。
+- 可播放季度解析与选集过滤（不创建播放项）。
+- 季度进度快照与跨源续播。
+- 详情页元数据增强（头部补位、季度选择器、剧集标题/剧照）。
+- 演职人员、剧照墙、相关推荐与相关视频。
+- 纯 TMDB 详情页（无播放能力，可跳搜索站源）。
+
+验收：
+
+- TMDB 匹配、季度解析、可播放季度、季度进度的自动化门禁全绿。
+- 真实窗口集成：详情增强、季度切换、续播、换源续播、手动匹配持久化。
+- TMDB 失败不影响站源浏览与播放，且不阻塞 UI。
+- 选集区不出现无线路地址的播放项；未确证季度不伪造“第一季”。
+- TMDB 凭据在日志与诊断导出中脱敏。
+- 门禁与证据写入 `docs/phase4/evidence/windows-acceptance.txt`。
+
+实施状态：**已完成**。一键验收 `PHASE4-ACCEPT result=PASS gates=all`
+（单元 1122 例 + 17 个 `phase4_tmdb_*` 套件（共 618 例）+ 5 个 `-d windows`
+集成套件 + 契约 9 例 + 脱敏门禁 + 三项反向验证机器校验）。
+
+> 详细设计指导见 `docs/phase4/design/00`–`design/05`，阶段计划见 `docs/phase4/README.md`，
+> 主设计文档摘要见 §27。
+
+---
+
+### Phase 5：生态与同步
 
 目标：建立与 WebHTV 和其他设备的可选协同能力。
+
+> 完整设计指导见 `docs/phase5/design/00`–`design/04`，阶段计划见 `docs/phase5/README.md`，
+> 主设计文档摘要见 §28。
 
 功能：
 
@@ -1775,6 +2364,17 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 远程管理。
 - 多设备协同。
 
+本阶段落地范围（对齐上游 Android 已暴露的 T4 网关）：
+
+1. **安卓 T4 站点桥接**：导入 Android `/vod/api?ac=config` 暴露的全部站源
+   （实测 170 个 `type=4` 站点），PC 只做 HTTP 客户端，**不复制** Android 的爬虫实现。
+2. **历史双向同步**：PC 实现 `/device` 与 `/action?do=sync` 服务端以接收 Android 推送，
+   并可反向推送；**旧记录不覆盖新记录**。
+3. **设置同步（白名单子集）**：默认不含含凭据的设置项。
+
+不在本阶段范围：站点健康同步、WebHome/管理页复用、远程管理、
+删除墓碑传播（上游 `docs/playback-history-delete-sync-design.md` 仍为「待实现」）。
+
 验收：
 
 - PC 与 Android 配置可互导。
@@ -1783,7 +2383,74 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 - 同步失败不破坏本地数据。
 - 所有同步默认关闭并需要用户明确开启。
 
----
+### Phase 6：历史/详情页/季度控件/AI 集季识别
+
+目标：把历史记录页、详情页续播、季度与选集控件对齐上游安卓交互，
+并补上 AI 集季结构识别。
+
+> 完整设计指导见 `docs/phase6/design/00`–`design/05`，阶段计划见 `docs/phase6/README.md`。
+
+状态：**已完成**（2026-10-16）。
+
+### Phase 7：安卓实时同步与长连接保活
+
+目标：把 Phase 5 的「手动、一次性、快照式」同步升级为「可选的实时、增量、双向」，
+并修复两个用户实测痛点（息屏后失联、缓存耗尽后跳下一集）。
+
+> 完整设计指导见 `docs/phase7/design/00`–`design/04`，阶段计划见 `docs/phase7/README.md`，
+> 主设计文档摘要见 §29。
+
+功能：
+
+1. **实时同步**：历史 / TMDB / AI 设置按周期增量互通（默认 60 s，可关，开关粒度到方向）。
+2. **双向路径**：PC 轮询（路径 A）+ PC 暴露增量端点供安卓远端同步源消费（路径 B）。
+3. **保活与唤醒**：心跳（保活 + 可达性 + 状态采集）、三态判定、唤醒阶梯 L0–L5。
+4. **手动拉取/推送**：两种拉取语义分开 + 三种推送 + 编排。
+5. **续播修复**：提前 EOF 不再触发连播；失败保留续播上下文；恢复路径不连播。
+
+不在本阶段范围：WebSocket/SSE（安卓无端点）、收藏（`keep`）实时同步、
+配置/爬虫/WebHome 实时同步（会触发安卓换源）、多设备同时实时同步、
+在 PC 侧为安卓的提前 EOF 打补丁。
+
+验收：
+
+- 实时同步默认关闭，关闭后定时器与心跳全部停止。
+- 增量同步幂等：重复同步不产生重复记录，旧不覆盖新。
+- 失败不破坏本地，且错误可分类（`realtime*` / `keepAlive*`）。
+- 息屏后能区分「服务未开 / 进程冻结 / 网络不通」并给出可操作指引。
+- 播放失败后恢复播放**续播到原进度**，不跳下一集。
+
+### Phase 8：播放器浮层与屏显（已完成）
+
+目标：把播放器控制栏从挤占布局的兄弟节点改为叠在画面上的半透明浮层，并补屏显（OSD）、
+右键设置菜单、可配置按钮排版。
+
+> 完整设计指导见 `docs/phase8/design/00`–`05`，阶段计划见 `docs/phase8/plans/`，
+> 验收证据见 `docs/phase8/evidence/`。
+
+状态：**已验收**（2026-10-20，G1–G12 全绿）。
+
+### Phase 9：安卓功能差距分析与迁移（分析完成，待实施）
+
+目标：以 `webtv2` 为基准，清点 PC 端仍缺失的用户可见能力，逐项给出迁移方案与验收条件，
+并明确不可迁移项与对外披露口径。
+
+> **2026-11-12 复核已取代本节数字**：当前清单见 `docs/phase9/parity-2026-11-12/README.md`。
+> 完整矩阵见 `docs/phase9/README.md`；方法见 `docs/phase9/design/00-gap-method.md`；
+> P0 设计见 `design/01`–`03`；验收规范见 `design/04-acceptance.md`；
+> 上游映射见 `design/05-upstream-map.md`；门禁 `tools/phase9/verify_gap_matrix.py`。
+
+范围与结论：
+
+1. 缺失 34 项：P0 播放闭环 8、P1 站点与协议生态 10、P2 内容与同步 9、P3 平台决策 7。
+2. 明确不迁移 8 类（dex 站源、Exo/IJK 内核、TV/手势、Android 系统集成、Lab、游戏模式、
+   品牌页、内置内容），必须对外披露。
+3. 三大结构性缺口：WebHome 生态、内容形态（追番/短剧/听书/小说漫画）、局域网服务与远程托管。
+4. 判定口径：只解析字段、只有入口没有行为，一律算缺失；平台不适用单列「不迁移」，
+   不得混入「已对齐」抬高完成度。
+
+本阶段先交付分析与设计；实施按 P0 → P3 分波次推进，每波次的门禁与证据要求见
+`docs/phase9/design/04-acceptance.md`。
 
 ## 22. 总验收清单
 
@@ -1821,7 +2488,29 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | 播放器 | 弹幕 | 3 |
 | 直播 | M3U/TXT/JSON | 3 |
 | 直播 | EPG | 3 |
-| 同步 | 配置/历史/收藏同步 | 4 |
+| TMDB | 配置与鉴权 | 4 |
+| TMDB | 媒体身份匹配与缓存 | 4 |
+| TMDB | 手动匹配与持久化 | 4 |
+| TMDB | 季度解析与线路级绑定 | 4 |
+| TMDB | 可播放季度与选集过滤 | 4 |
+| TMDB | 季度进度与跨源续播 | 4 |
+| TMDB | 详情页元数据增强 | 4 |
+| TMDB | 相关推荐与相关视频 | 4 |
+| TMDB | 纯 TMDB 详情页 | 4 |
+| 桥接 | 安卓设备发现（`/device`） | 5 |
+| 桥接 | 安卓 T4 站点导入（`/vod/api?ac=config`） | 5 |
+| 桥接 | 桥接站点可播（`type=4` 播放入口） | 5 |
+| 桥接 | 站点地址主机一致性校验（P2） | 5 |
+| 桥接 | 导入不覆盖当前配置 | 5 |
+| 同步 | PC 侧服务端（`/device` + `/action?do=sync`） | 5 |
+| 同步 | 历史接收（Android → PC） | 5 |
+| 同步 | 历史推送（PC → Android） | 5 |
+| 同步 | 历史合并：旧不覆盖新、幂等、不复活 | 5 |
+| 同步 | 同步默认关闭 | 5 |
+| 同步 | 同步失败不破坏本地数据 | 5 |
+| 同步 | 对端 uuid 授权 | 5 |
+| 同步 | 设置同步白名单子集（默认不含凭据） | 5 |
+| 同步 | 配置/历史/收藏同步 | 5 |
 
 ### 22.2 质量验收
 
@@ -1888,6 +2577,38 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 | PiliPala | 只参考交互 | GPL 与产品定位限制 |
 | atv-player | 只参考设计 | 授权不明确且绑定 alist-tvbox |
 | 双路线维护 | 禁止长期并存 | Phase 0 结束必须冻结并清理 |
+| TMDB 定位 | 元数据增强，不改变播放事实源 | §27 设计指导评审通过 |
+| TMDB 配置位置 | 应用设置（`settings.json` 的 `tmdb` 段），**不进配置 JSON** | §27.3 |
+| TMDB 凭据导出 | 不导出、不写日志、不入诊断包 | §22.3、§27.3 |
+| 季度身份表达 | 显式三态 `SeasonScope`，禁止整数默认值兼表 | §27.5 |
+| 季度绑定粒度 | 线路级（`siteKey + vodId + flagKey`） | §27.5 |
+| 自动季度落盘 | 仅结果唯一时落盘；多候选进入手动匹配 | §27.5 |
+| 历史展示键 | 已确证季度按季度聚合，未确证按来源键隔离 | §27.6 |
+| 详情页形态 | 新建 TMDB 详情页，不改造成站点详情页 | §27.7 |
+| 相关视频入口 | 浏览器打开 + 复制链接，不做应用内播放 | §27.7 |
+| 未知季度处理 | 不默认第一季、不伪造季度标签 | §27.5 |
+| 安卓站源接入方式 | **桥接不复制**：Android 自己执行爬虫，PC 只做 HTTP 客户端 | §28.2 |
+| 桥接站点地址基准 | **以 PC 可达地址为基准**，并校验响应主机一致 | §28.2 |
+| 桥接配置导入语义 | 导入为**新配置记录**，不覆盖当前配置 | §28.2 |
+| 历史同步方向 | PC **自己实现服务端**接收推送（Android 无拉取接口） | §28.3 |
+| 历史合并裁决 | **旧不覆盖新**；相等则跳过（幂等）；禁止 `force` 清表 | §28.3 |
+| 历史删除 | 本地删除标记阻止旧数据复活；**不向 Android 传播** | §28.3 |
+| 同步默认状态 | **默认关闭**，需用户明确开启 | §28.4 |
+| 同步对端授权 | 按设备 `uuid` 白名单 | §28.4 |
+| 同步服务监听 | `0.0.0.0` 且端口 9978–9998 顺序探测；**不复用**回环专用本地代理 | §28.4 |
+| 设置同步范围 | `SyncOptions` 白名单子集，含凭据项**默认不同步** | §28.4 |
+| 设备发现 | 降级采用：本网段 + 9978–9998，并发 16，仅用户显式触发 | §28.2 |
+| 删除墓碑传播 | 本阶段不实现（上游仍「待实现」） | §28.3 |
+| 实时同步默认状态 | **默认关闭**，开关粒度到「方向」（拉取/推送/设置） | §29.2 |
+| 实时同步实现方式 | **轮询 + 反向拉取端点**（安卓无推送端点，不做 WebSocket） | §29.1、§29.4 |
+| 实时同步周期 | 轮询默认 **60 s**（15/30/60/300 四选一）；心跳默认 **30 s**（10–300） | §29.5 |
+| 设置同步范围（Phase 7） | 白名单**追加** `tmdb_model`/`ai_config`/`ai_title_extraction`/`ai_ad_detection`；`ai_config` 与 `tmdb_config` **同列为含凭据项** | §29.2、§29.7 |
+| 含凭据项实时同步 | **默认不参与**；用户显式开启后 UI 必须警告「明文 HTTP 传输」 | §29.7 |
+| 删除墓碑传播（Phase 7） | **改为传播**：逐条写墓碑、只读 `history_deletions`、不新增写入路径 | §29.2；`docs/phase6/README.md` §4 |
+| 手动拉取语义 | **两种分开**：「拉取最近记录」（逐站点，不依赖服务端）与「请求安卓推送全量」（需服务端+授权） | §29.4 |
+| 息屏失联 | **PC 不修**：只做三态判定 / 唤醒 / 引导；不静默改安卓系统设置 | §29.2、§29.5 |
+| 「跳下一集」修复重心 | **先修 PC 侧**（`_isGenuineEnd` + 单次守卫 + 失败回滚）；安卓侧只做证据与指引 | §29.6 |
+| `completed` 跨端语义 | PC **不采信**同步来的 `completed`，一律按 `duration>0 && position>=duration-5s` 重算 | §29.6 |
 
 ---
 
@@ -1905,8 +2626,9 @@ fixture 只能证明解析逻辑正确，不能证明现实站点可用。必须
 9. 实现 ABI v1、sidecar、CatSpider HTTP 和代理
 10. 实现 JS/Python/Java Spider
 11. 实现字幕/弹幕/解析器/直播/EPG
-12. 实现同步与生态能力
-13. 执行发布门禁和兼容性报告
+12. 实现 TMDB 元数据增强（匹配/季度/进度/详情页）
+13. 实现同步与生态能力
+14. 执行发布门禁和兼容性报告
 ```
 
 ---
@@ -1922,11 +2644,13 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 5. 本地代理和 Spider 安全测试通过，无越权文件、网络和日志泄露。
 6. 搜索、详情、播放、历史闭环可用。
 7. 字幕、弹幕、解析器、直播、EPG 完整版验收通过，或明确列为未支持能力。
-8. Linux/Windows/macOS 打包可安装、可运行，签名和公证状态明确。
-9. 自动化测试、手动验收和兼容性报告全部记录并可复查。
-10. 无 P0/P1 缺陷。
-11. 不内置资源，合规边界清晰。
-12. 发布包通过 22.5 节全部门禁。
+8. TMDB 元数据增强的匹配/季度/进度/详情页验收通过，或明确列为未支持能力；
+   未确证季度不得被降级为第一季，选集区不得出现无线路地址的播放项。
+9. Linux/Windows/macOS 打包可安装、可运行，签名和公证状态明确。
+10. 自动化测试、手动验收和兼容性报告全部记录并可复查。
+11. 无 P0/P1 缺陷。
+12. 不内置资源，合规边界清晰。
+13. 发布包通过 22.5 节全部门禁。
 
 ---
 
@@ -1944,3 +2668,648 @@ PC 播放器只有同时满足以下条件才可称为完整可发布：
 | HLS | HTTP Live Streaming，M3U8 清单和分片 |
 | Range | HTTP 分段请求 |
 | EPG | 电子节目指南 |
+| 媒体身份（MediaIdentity） | `mediaType + tmdbId`；同一剧集的不同季度共享该身份 |
+| 季度身份（SeasonIdentity） | `MediaIdentity + KnownSeasonNumber`；用于历史展示、续播、进度与删除边界 |
+| 季度范围（SeasonScope） | 显式三态：`Known(n)` / `Multi(segments)` / `Unknown` |
+| 来源线路绑定（SourceBinding） | `siteKey + vodId + flagKey` → `SeasonScope` |
+| 元数据季度 | TMDB 返回的完整季度，仅用于标题/剧照/日期等丰富 |
+| 可播放季度 | 依据当前线路剧集能可靠确证的季度，用于季度导航与选集过滤 |
+| 季度进度快照 | 按 `mediaType + tmdbId + seasonNumber` 记录的可恢复播放位置 |
+| 来源指纹（SourceFingerprint） | 线路剧集结构的稳定摘要，用于判断旧绑定是否失效 |
+| 分季变体（SplitSeasonVariant） | TMDB 中把一部剧拆成多个独立条目的形态，需惩罚以避免误匹配 |
+| 元数据源 vs 播放事实源 | TMDB 只丰富线路已有的播放项，不创建播放项 |
+| T4 / 网关 | Android 暴露的 `/vod/api` HTTP 站源网关；把 Android 当前加载的站源统一包装成 `type="4"` 站点 |
+| 桥接配置 | PC 侧由 T4 网关导入得到的配置记录，站点全部为 `type=4`，`api` 指向设备网关 |
+| 可达地址 | PC 能真正连上的设备服务地址（局域网 IP，或 `adb forward` 后的回环地址）；与 Android 自报的 `Device.ip` **可能不同** |
+| 推送 / 接收 | 同步方向：推送 = PC → Android（走 Android 的 `/action?do=sync&mode=1`）；接收 = Android → PC（走 PC 自己实现的服务端） |
+| 对端 | 用户显式添加并确认的一台 Android 设备（以 `uuid` 唯一标识） |
+| 快照（snapshot） | 一次同步传输的完整数据体（历史列表或备份 JSON），不是增量流 |
+
+---
+
+## 27. TMDB 元数据增强
+
+- 定位：参考 `webhtv/默影视` 的 TMDB 能力，在 PC 端提供**元数据增强**，不改变播放事实源。
+- 状态：设计指导已补齐（`docs/phase4/design/00`–`design/05`），**实施已完成**（T1–T18），
+  一键验收 `PHASE4-ACCEPT result=PASS gates=all`（`docs/phase4/evidence/windows-acceptance.txt`）。
+- 完整设计指导：`docs/phase4/design/00-tmdb-design-index.md`（索引）、
+  `01`（身份与匹配）、`02`（季度与进度）、`03`（服务/配置/存储）、
+  `04`（详情页与播放）、`05`（测试与验收）。
+- 阶段计划：`docs/phase4/README.md`。
+
+### 27.1 四条不可退让的原则
+
+1. **元数据源 ≠ 播放事实源**：选集区只展示当前线路真实存在的剧集；TMDB 只丰富播放项，
+   **不创建播放项**。TMDB 有某集而线路没有时，不生成该集卡片。
+2. **不确定即未知**：季度用显式三态 `SeasonScope = Known(n) | Multi(segments) | Unknown`
+   表达，禁止用整数默认值兼表“特别篇”和“未解析”，禁止默认第一季。
+3. **安全退化优先**：TMDB 失败时保留来源标题、来源历史与原线路，不改变已保存绑定；
+   可以暂时重复展示，但不能跨季度恢复错误进度。
+4. **主进程不加载不可信代码，凭据不外泄**：TMDB 只走主进程 HTTP 客户端，不进 sidecar、
+   不新增 ABI；API Key / Access Token 在日志与诊断导出中必须脱敏。
+
+### 27.2 分层与模块边界
+
+| 层 | 模块 | 职责 |
+| --- | --- | --- |
+| 纯逻辑 | `lib/core/tmdb_title.dart` | 标题清洗、年份、季度信号、匹配评分 |
+| 纯逻辑 | `lib/core/tmdb_identity.dart` | 媒体身份、匹配记录、缓存三层键 |
+| 纯逻辑 | `lib/core/tmdb_config.dart` | 配置归一化、站点策略 |
+| 纯逻辑 | `lib/core/tmdb_season.dart` | `SeasonScope`、季度解析、可播放季度、分段校验、指纹 |
+| 纯逻辑 | `lib/core/tmdb_media.dart` | 剧集/人物/图片/相关视频模型 |
+| 服务 | `lib/services/tmdb_service.dart` | 端点封装、TTL、熔断、错误映射 |
+| 服务 | `lib/services/tmdb_cache.dart` | 文件缓存与陈旧兜底 |
+| 服务 | `lib/services/tmdb_identity_service.dart` | 匹配编排 + 缓存读写 |
+| 服务 | `lib/services/tmdb_season_service.dart` | 季度解析编排 + 绑定读写 |
+| 服务 | `lib/services/tmdb_enrichment_service.dart` | 元数据应用到 `Vod`/线路/剧集 |
+| 状态 | `lib/state/tmdb_state.dart` | `ChangeNotifier`，含代际防迟到响应 |
+| UI | `lib/ui/tmdb_widgets.dart`、`lib/ui/tmdb_detail_page.dart` | 详情增强、季度选择器、手动匹配、纯 TMDB 详情页 |
+
+约束：`lib/core/**` 不得依赖 Flutter 或 `dart:io`（纯逻辑必须可在 `flutter test` 无副作用运行）。
+不继承上游 `TmdbDetailActivity`（12667 行）与 `TmdbUIAdapter`（2451 行）的单体结构。
+
+### 27.3 配置与凭据
+
+TMDB 配置放在应用设置 `<configDir>/settings.json` 的 `tmdb` 段，**不进入站源配置 JSON**。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 总开关 |
+| `apiBase` | `https://api.tmdb.org/3` | 归一化为以 `/3` 结尾 |
+| `apiKey` | `""` | v3 Key；与 `accessToken` 至少其一非空 |
+| `accessToken` | `""` | v4 Token；非空时用 `Authorization: Bearer`，不再附加 `api_key` |
+| `language` | `zh-CN` | |
+| `imageBase` / `backdropBase` | `w342` / `w780` | 图片基址 |
+| `enabledSites` / `allowedSites` / `disabledSites` | 见 §27.4 | 站点规则三张表 |
+| `smartMatch` | `true` | 智能匹配开关 |
+| `heuristicSeasonGuessing` | `true` | 启发式季度推断开关 |
+
+凭据保护：日志只输出末 4 位；诊断包内替换为 `<redacted>`；不随配置同步/导出；
+设置页默认掩码。凭据泄露即视为发布门禁不通过（§22.5 第 3 项）。
+
+### 27.4 媒体身份匹配
+
+```text
+MediaIdentity = mediaType + tmdbId
+```
+
+匹配流程：缓存查询 → 标题清洗 → 候选查询（上限 3）→ 结果过滤 → 三级选择
+（`strict` → `containedYear` → `smart`）→ 年份拆分重试（仅一次）→ 落盘。
+
+- **分季变体防护**：TMDB 详情标题含“分季”且源文本不允许分季时，该候选**直接丢弃**；
+  四档得分 `+140 / 0 / +160 / -240` 用于多候选裁决。
+- **站点策略**判定顺序：`disabledSites` 精确 → `allowedSites` 精确 → `enabledSites` 精确
+  → `disabledSites` 子串 → `enabledSites` 为空则允许 → `enabledSites` 子串 → 拒绝。
+- **括号归一**：`「」【】〔〕［］` 统一为 `[]`；不做归一则猫源（全角括号）默认规则一条也匹配不上。
+- **匹配缓存三层键**：条目级 / 条目+标题 / 全局标题域；**手动结论不被自动匹配覆盖**。
+- **手动匹配**：支持 `tmdb:12345` / `movie:12345` / `tv:12345` 直达；剧集需继续选择季度。
+
+未配置或站点被禁用时**零网络请求**。
+
+### 27.5 季度解析、绑定与可播放季度
+
+```text
+SeasonIdentity = MediaIdentity + KnownSeasonNumber
+SourceBinding  = siteKey + vodId + flagKey  →  SeasonScope
+```
+
+- 绑定粒度必须下沉到**线路**（`flagKey`），否则同详情多季线路会互相污染进度。
+- 季度解析按固定优先级（请求 → 手动 → 显式 → 标题 → 单季 → 集数 → 扁平集号 → 未知），
+  **后级不得覆盖前级**；只有结果**唯一**时才允许自动落盘，多候选进入手动匹配。
+- 可播放季度按 6 级顺序解析（显式完整映射 → 标题 → 唯一 TMDB 季 → 精确切片 → 扁平集号 →
+  单季兼容），无法可靠映射时返回空并**退化为扁平列表**。
+- `MultiSeason` 分段必须通过 8 条有效性校验（连续无空洞、完整覆盖、不越界等）。
+- 未知季度**不应用** TMDB 剧集元数据（不默认第 1 季、不尝试第 0 季兜底）。
+
+### 27.6 季度进度、历史与换源
+
+```text
+TmdbSeasonProgressKey = mediaType + tmdbId + seasonNumber
+```
+
+- 只有已确证季度（`Known` 或 `Multi` 的实际段）才写季度进度；`Unknown` 只更新来源历史。
+- 播放另一季度**不覆盖**当前季度快照。
+- 历史展示键：已确证季度按 `mediaType:tmdbId:season:N` 聚合；未知按来源键隔离；
+  电影按 `mediaType:tmdbId`。同一节目的不同季度生成**不同**历史卡片。
+- 自动换源必须通过季度兼容判定：`Known(N)` 接受 `Known(N)` 与含 N 的 `Multi`，
+  拒绝其他 `Known(M)` 与 `Unknown`。
+- 删除分级：删除季度历史不影响同节目其他季度；删除整部节目是独立的二级操作。
+- 现有 `history` 表**主键与字段不变**，季度进度是新增的加法式结构。
+
+### 27.7 详情页与播放入口
+
+- 站点详情页新增 TMDB 区块，按 6 种状态渲染（未配置 / 站点禁用 / 未匹配 / 匹配中 /
+  已匹配 / 失败）；**未配置时渲染「未配置 TMDB」+ [去设置] 入口**（否则全新安装
+  永远进不了 TMDB 设置页），仅站点禁用时整块不渲染。设置页另有独立的 TMDB 入口。
+- 头部增强严格遵守“**仅补位不覆盖**”：来源已有非空字段一律不改。
+- 季度选择器与选集联动，**强制断言** `episodesToRender.length == 该季线路剧集数`。
+- 纯 TMDB 详情页（无站源）的剧集卡片**不可播**，点击跳转到按标题搜索站源。
+- 相关视频用浏览器打开 + 复制链接，**不做应用内播放**（避免隐式内置站源与合规风险）。
+- 播放入口透传季度身份（`tmdbId`/`mediaType`/`seasonNumber`/`episodeNumber`/`flagKey`）
+  与 `episodeUrl`；剧集匹配优先级固定为 `episodeUrl` → `episodeName` → TMDB 季集号。
+  季度身份**不进入** `PlaybackDecision`，`PlaybackDecision` 的产生逻辑不变。
+
+### 27.8 存储
+
+新增四张表（全部为加法式，不改动既有表）：
+
+| 表 | 用途 |
+| --- | --- |
+| `tmdb_matches` | 媒体身份匹配结论（含手动标记与标题别名） |
+| `tmdb_season_bindings` | 线路级季度绑定（含指纹与分段） |
+| `tmdb_route_bindings` | 季度→线路索引（换源候选，上限 512） |
+| `tmdb_season_progress` | 季度进度快照 |
+
+- `schemaVersion` 由 `1` 升至 `2`（Phase 4 新增 TMDB 四表），再由 `2` 升至 `3`
+  （Phase 5 新增 `history_deletions` 删除标记表）；两次均为加法式升级，
+  `CREATE TABLE IF NOT EXISTS` 保证迁移幂等。
+- 文件缓存位于 `<cacheDir>/tmdb/<type>_<md5>.json`；目录不可写时降级为不缓存。
+- 清理边界：重置缓存不动 SQLite；“清空历史”清季度进度但保留匹配与绑定。
+
+### 27.9 错误分类与失败隔离
+新增 `AppErrorKind`：`tmdbNotConfigured` / `tmdbAuth` / `tmdbNetwork` / `tmdbHttp` /
+`tmdbDecode` / `tmdbEmpty` / `tmdbUnsupported`。
+
+- 全部 `tmdb*` 错误均为**非致命**类别，用户文案必须含“不影响站源浏览与播放”。
+- `isTmdbError` 只认 `tmdb*` 前缀，沿用 Phase 3 字幕/弹幕的失败隔离模式。
+- 鉴权失败触发 5 分钟熔断，熔断期内**零请求**；熔断按凭据隔离，换 Key 后立即可用。
+
+### 27.10 验收
+
+门禁表见 `docs/phase4/README.md` §3 与 `docs/phase4/design/05` §6，一键验收入口：
+
+```powershell
+pwsh -File tools/phase4/run_windows_acceptance.ps1
+```
+
+证据写入 `docs/phase4/evidence/windows-acceptance.txt`。至少包含三条**反向验证**：
+
+1. 把未知季度的元数据候选改回 `[1, 0]` → 对应用例必须失败；
+2. 把分季惩罚改为 `0` → 分季变体用例必须失败；
+3. 去掉括号归一 → 猫源站点策略用例必须失败。
+
+这三项由 `tools/phase4/verify_reverse_checks.py` **机器校验**（已纳入一键验收脚本）：
+逐项临时破坏契约、断言用例确实失败、再无条件还原并校验工作区干净，
+不依赖人工在证据文件里写说明。
+
+**实施状态（2026-10-07）**：T1–T18 已全部落地；一键验收结果为
+`PHASE4-ACCEPT result=PASS gates=all`（事实行与三项反向验证的机器校验记录见证据文件）。
+集成测试（L3）在真实窗口下额外暴露并修复了 6 个缺陷（含季度切换不刷新元数据、
+剧集元数据未按季度过滤、可播放季度未优先采用手动绑定、含特别篇时默认季度错误），
+详见 `docs/phase4/README.md` §3.1。
+
+### 27.11 `folder` 展开（网盘聚合站）也做 TMDB 增强
+
+**背景**：实测 170 个站点里 93 个共用 `spring.jar`（网盘聚合站），它们的详情页是
+`folder` 展开出的一串分享链。被点的 `folder` 条目**自身没有**
+`vod_play_from`/`vod_play_url`，但带着作品名/海报/集数备注（如「山花烂漫时 / 全23集」）。
+
+早期实现有两个缺口，导致这些站点的详情页整块 TMDB 区块（背景图/海报墙/演职人员/
+推荐/每集卡片）全部丢失（用户反馈「桥接站点还是没有 tmdb 详情页」）：
+
+1. `TmdbState.loadForVod` 第一行是 `if (playLines.isEmpty) return;`；
+2. 详情页用 `if (!_isFolderExpansion(result))` 把 TMDB 区块整个跳过。
+
+**约定**（对齐 §27.1 原则 1「TMDB 只丰富，不创建播放项」）：
+
+- `folder` 展开后**用被点的 folder 条目自身**做 TMDB 匹配（标题足够；
+  匹配链本来就靠标题 + 年份）。信息表缺失的字段（folder 条目只有
+  名称/海报/备注，没有年份/地区/演员/简介）由 `TmdbInfoTable` 自行跳过空值行。
+- 无线路时 `TmdbSourceLine` 为 `null`：**作品维度**的数据（详情/背景/海报墙/
+  演职人员/推荐/剧照）照常加载；**线路维度**的季度解析与剧集元数据一律跳过
+  （它们本质是「把 TMDB 季集映射到某条线路的集上」，没有线路就没有映射对象）。
+- 资源列表（「选择资源（N）」）与 TMDB 区块**共存**，不是二选一：
+  前者是播放事实源，后者是元数据增强。
+- 子条目确实可播时才把「当前选中条目」切到子条目；否则保持 folder 条目，
+  以免手动匹配拿「百度#木偶」这种分享链名去搜 TMDB。
+
+门禁：`test/phase4_tmdb_state_test.dart` 的「folder 展开（无线路）也做 TMDB 匹配」
+三例（无线路仍匹配并加载作品维度数据 / 无线路时不发季度与剧集请求 / 有线路时行为不变）。
+
+### 27.12 与上游 `webhtv/默影视` 的取舍
+
+**复用**：`TmdbConfig` 归一化与默认禁用规则、`TmdbService` 的 TTL 与陈旧兜底、
+鉴权熔断、`TmdbMatcher` 评分公式、`TmdbMatchPolicy` 分季四档、`TmdbSeasonResolver`
+解析优先级、可播放季度 6 级顺序、标题三态模型。
+
+**改写**：OkHttp/Gson → `package:http` + `dart:convert`；`Prefers` → `settings.json`；
+Room → SQLite 新表；`TmdbUIAdapter` 上帝类 → 分层服务与纯逻辑模块。
+
+**不抄**：`TmdbDetailActivity` 单体、AI 推荐、豆瓣评分富集、
+个人推荐画像、WebHome 内联/短剧/小说/漫画路由、应用内 YouTube 播放、
+Android 特有的多套详情页形态。
+
+> **2026-10-16 修订**：AI 集季结构识别**已实现**（Phase 6，见
+> `docs/phase6/design/04`）。原先「不抄 AI 刮削」一条收窄为「不抄 AI 推荐」——
+> 集季识别是季度绑定的辅助手段，与本轮之外的其他 AI 能力（推荐 / 标题提取 /
+> 去广 / 分组规则 / 观影报告）无关，那些仍不实现。
+> 与上游一致的两条硬边界：AI **可选**（未配置绝不阻塞任何现有路径）、
+> AI 结果**必经用户确认**才落盘（不存在自动应用的路径）。
+
+---
+
+## 28. 安卓桥接（T4 站点接入 + 历史/设置同步）
+
+- 定位：把已经跑在 Android 上的 WebHTV 当作**局域网内的站源服务器与同步对端**，
+  用 T4 网关间接访问它加载的全部站源，并与它双向共用播放历史与相关设置。
+- 状态：设计指导已补齐（`docs/phase5/design/00`–`design/04`），**实施进行中**。
+- 完整设计指导：`docs/phase5/design/00-android-bridge-design-index.md`（索引）、
+  `01`（T4 站点桥接）、`02`（同步协议）、`03`（测试与验收）、
+  `04`（多源化改造：拉取全部点播源、历史按源隔离 + 全局开关、推送落到目标源）。
+- 阶段计划：`docs/phase5/README.md`。
+- 上游依据：Android `c388619629`
+  `feat(server): add local T3-to-T4 gateway with HTTP contract coverage`，
+  及其 `docs/C45-t4-api-gateway.md`。
+
+### 28.1 实测契约要点
+
+以下均在真实运行的 Android（`192.168.50.3:5559`，`versionName=5.6.0`）上实测：
+
+| 事实 | 含义 |
+| --- | --- |
+| 站点 `api` 由**请求的 `Host` 头**现算 | 拉配置必须用**可达地址**发请求 |
+| `ac=config` 返回 **170 个站点，`type` 全为字符串 `"4"`**，约 31 KB | PC 的 `asInt` 已能解析字符串 |
+| `ac=site` 与 `ac=config` 字节相同 | 两者等价 |
+| `/device` 无鉴权；`type` `0`=TV `1`=Mobile `2`=DLNA；相等性只比 `uuid` | 设备身份用 `uuid` |
+| 服务端口从 `9978` 顺序探测到 `9998` | 不能假设固定端口 |
+| `/action?do=sync` 的 `mode`：`0`=发送 `1`=接收 `2`=都做 | 方向语义从**被请求方**视角定义 |
+| `type=history` 缺 `config` → 500 NPE | PC 侧必须显式校验并返回 400 |
+| **Android 没有历史「拉取」接口** | PC 必须自己实现服务端 |
+| `POST /api/playback/progress` 默认 **403** | 不作为同步主路径 |
+| `History` 主键 = `siteKey@@@vodId@@@cid`；`position`/`duration`/`createTime` **均为毫秒** | **不存在秒/毫秒换算** |
+| `Backup.restore()` 默认 `clearAllTables()` | **禁止**直接调用 |
+| 设备自报地址在模拟器场景 PC 不可达 | 必须区分「可达地址」与「上报地址」 |
+
+### 28.2 五条不可退让的原则
+
+1. **桥接不复制**：Android 的站源由 Android 自己执行，PC 只做 HTTP 客户端；
+   不在 PC 侧加载 Android 的 DEX/猫源来实现同样的站点。
+2. **地址来自请求**：站点地址以 PC 可达地址为基准，且必须校验响应主机与请求主机一致；
+   被中间层改写为回环时必须修正并给出可见诊断，指向第三方主机时必须拒绝导入。
+3. **默认关闭、失败不破坏本地**：同步默认关闭；禁止 `force` 清表；
+   合并采用「旧不覆盖新、相等即跳过」。
+4. **不引入自引用**：拒绝把本机自己当作来源（对齐 Android 侧
+   `不能把本网关的配置作为本机源再次导入`）。
+5. **能力缺口必须披露**：403/404/超时/空结果必须分类呈现，不得折叠成「同步成功」或「0 个站点」。
+
+### 28.3 分层与模块边界
+
+| 层 | 文件 | 职责 |
+| --- | --- | --- |
+| 纯逻辑 | `lib/core/android_bridge.dart` | 设备 JSON 解析、网关地址规范化、T4 配置 → `AppConfig`、可达性校验、站点保真 |
+| 纯逻辑 | `lib/core/android_sync.dart` | `History`/`Backup`/`SyncOptions` 编解码、历史映射、新旧比较、合并裁决 |
+| 服务 | `lib/services/android_bridge_service.dart` | 探测、拉取、错误分类、脱敏日志 |
+| 服务 | `lib/services/sync_server.dart` | PC 侧 LAN 服务端（`/device`、`/action?do=sync`） |
+| 服务 | `lib/services/sync_client.dart` | 向 Android 推送历史/收藏/设置 |
+| 存储 | `lib/services/storage.dart` | 按项合并的历史写入、删除标记表（`schemaVersion` 2 → 3） |
+| UI | `lib/ui/config_pages.dart` | 设备卡片、扫描、导入、同步开关、错误分类展示 |
+
+关键模型：
+
+| 模型 | 所在层 | 要点 |
+| --- | --- | --- |
+| `AndroidDevice` | 纯逻辑 | `uuid`（唯一标识，相等性只比它）/ `name` / `reachableBase`（PC 视角可达地址）/ `reportedIp`（设备自报，仅展示）/ `type`（0=TV 1=Mobile 2=DLNA）/ `serial` / `wlan` / `eth` / `time` |
+| `PlaybackHistory` | 存储 | 已有模型；同步时新增按项合并写入路径，**不改主键** |
+| `SyncOptions` | 纯逻辑 | PC 只发/收白名单子集，其余显式写 `false` |
+
+> `reachableBase` 与 `reportedIp` **必须分开**：实测设备自报 `172.16.1.4:9978`，
+> 而模拟器场景下 PC 只能经 `adb forward` 得到 `127.0.0.1:<port>`（§28.1）。
+> 拿 `reportedIp` 当请求地址会直接不可达；拿请求地址当设备身份会因端口漂移而重复添加设备。
+
+### 28.4 同步协议
+
+PC 必须实现的端点（**路径必须与 Android 完全一致**，否则 Android 的发现与推送都失败）：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/device` | 让 Android 能发现 PC |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=history[&force=true]` | 接收历史（表单 `config` + `targets`） |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=keep` | 接收收藏（`targets` + `configs`） |
+| `POST` | `/action?do=sync&mode=<0\|1\|2>&type=backup` | 接收设置备份（`options` + `backup`） |
+
+`mode` 语义（`Action.onSync` 源码实证，**从被请求方视角定义**）：
+
+| `mode` | 被请求方的行为 | 调用方意图 |
+| --- | --- | --- |
+| `1` | 只应用请求体载荷 | **推送**（我把我的数据给你） |
+| `2` | 只推送（必须带 `device`） | **拉取**（我要你的数据） |
+| `0` | 带 `device` 时先推给对方，**并且**应用载荷 | 双向 |
+
+> PC 作为服务端**必须把 `mode=0` 与 `mode=1` 都当作“落库”**：Android 自己的
+> `Action.post()`（投递历史/收藏/备份）用的就是 `mode=0`，只认 `mode=1` 会收不到推送。
+> `mode=2` 缺 `device` 一律 `400`（对齐上游 `Manage.syncStart`）。
+
+字段映射要点：
+
+- `History.key` 切分为 `siteKey` / `vodId` / `cid`；反向映射写 `cid=0`。
+  `History` 的 `@PrimaryKey` 就是 `key` 字符串，而 `History.sync()` 只把 `cid` **列**
+  覆写为安卓当前 cid、**不改 `key`**；非聚合模式下安卓会先按 `vodName` 做 name-merge
+  物理替换同名本地行，因此不会重复（聚合模式可能同剧两行，属安卓侧策略）。
+- `position` / `duration` / `createTime` **毫秒直传，不做换算**。
+- `opening` / `ending` 的 `C.TIME_UNSET`（`Long.MIN_VALUE`）**必须过滤**，否则整数溢出。
+- PC 不理解的字段（`tmdbId`/`mediaType`/`sourceBindingKey`/`player` 等）**保留在 raw**，不丢弃。
+- `SyncOptions` 只发 PC 理解的子集，其余显式写 `false`。
+- `type=history` 的 `config` **必须含非空 `url`**：安卓 `syncHistory` 首行即
+  `if (config.getUrl() == null) return;`——静默无操作却返回 `200`；且 `url` 与安卓
+  当前配置不同时会 `VodConfig.load(config)` **切换安卓配置**。因此 PC 推送前
+  主动拒绝空 `url`，而不是报“成功”。
+
+合并算法（P3 的核心）：
+
+```text
+本地无记录        → insert（applied）
+远端更新          → upsert（applied）
+时间戳相等        → skip（skipped，幂等）
+远端更旧          → skip（skipped，旧不覆盖新）
+远端旧于本地删除标记 → skip（不复活）
+```
+
+### 28.5 错误分类
+
+错误必须分类呈现，**不得**折叠成「导入失败」「同步成功」或「0 个站点」（P5）。
+
+桥接（`design/01` §6）：
+
+| 取值 | 触发 |
+| --- | --- |
+| `bridgeUnreachable` | 连接被拒 / 超时 / DNS 失败 |
+| `bridgeNotAndroid` | `/device` 返回 200 但不是合法设备 JSON |
+| `bridgeNoGateway` | `/device` 成功但 `/vod/api?ac=config` 返回 404（设备版本过旧） |
+| `bridgeEmptySites` | 配置合法但 `sites` 为空 |
+| `bridgeHostMismatch` | 站点主机既非请求主机也非回环 |
+| `bridgeSelfReference` | 目标是 PC 自己 |
+
+同步（`design/02` §6）：
+
+| 取值 | 触发 |
+| --- | --- |
+| `syncDisabled` | 功能未开启 |
+| `syncPeerUnauthorized` | `uuid` 不在白名单 |
+| `syncPeerUnreachable` | 推送时连不上（连接被拒 / 超时 / DNS 失败） |
+| `syncPeerError` | 已连上但对端返回 4xx/5xx，**必须带状态码与响应正文** |
+| `syncPortUnavailable` | 本机服务端 9978–9998 端口全被占用 |
+| `syncPayloadInvalid` | JSON 非法 / 缺字段（含 `config.url` 为空这一安卓静默忽略的前提） |
+| `syncPayloadTooLarge` | 超 8 MiB |
+| `syncLocalWriteRejected` | Android 返回 403（本机 API 修改未开启） |
+| `syncPartialFailure` | 有记录失败，**必须报出 applied/skipped/failed 明细** |
+
+> `syncPeerError` 与 `syncPortUnavailable` 是实施期新增的两类（`design/02` §6）：
+> 把“已连上但对端报错”归入 `syncPeerUnreachable` 会直接误导用户去查网络，
+> 而真实原因在对端响应里；端口全占用若静默退到随机端口，用户按记忆填的地址会连不上。
+
+### 28.6 设备接入历史与自动接入
+用户需求（2026-10-09）：「安卓设备接入功能需要有历史记录功能方便用户再次使用，
+如果最近使用的是桥接线路且该线路还能连上应该自动接入」。
+
+- **接入历史**与同步白名单（`peers`）**分开存**：`settings.json` 的 `sync.devices`
+  记的是「接入过哪些地址」及其最近使用时间（`lastUsed`，按倒序，上限 20 条）。
+  两者分开是因为**从未授权同步**的设备也要能一键重连（用户日常用法是
+  「扫一次、以后直接点历史」）。
+- 探测成功与导入成功都记入历史；接入页提供「接入」（重探 + 重新导入）与
+  「从历史中删除」。删除的正好是「最近使用」时，指针迁到新的第一条，
+  避免下次启动去连一个已被用户删掉的地址。
+- **自动接入**：启动后（首帧之后，不能在首帧前发请求）只**探测**历史里最近使用的
+  那个地址；探通则导入站点并激活该配置，探不通则**安静放弃**——不扫描、不轮询、
+  不写 `lastError`（启动时不该给用户一个红色错误横幅）。扫描仍是用户显式动作。
+- 命令行媒体冒烟路径（`--media=`）不跑自动接入：那是无配置的截图/验证场景。
+- 导入仍然只产生**新配置记录且不覆盖当前配置**（Q10）；自动接入因为目的是
+  「开箱可用」，所以在导入后**显式激活**刚导入的那条记录。
+
+门禁：`test/phase5_sync_ui_test.dart` 的「设备接入历史与自动接入」五例。
+
+**接入状态的持久化口径（2026-10-09 修订）**：设置页「安卓接入」摘要取
+`devices ∪ deviceHistory ∪ peers` 三种来源地址的**并集**，任一非空即算「已接入」。
+
+为什么不能只看 `devices`：它是**内存态**（本次会话探测到的设备），`load()` 只恢复
+`deviceHistory`/`peers`，**从不恢复** `_devices`。因此只看 `devices` 时，用户明明接入
+过、重启后配置也恢复成了桥接，设置页却永远写「未接入」——正是用户反馈
+「重新打开后是自动接入了但是设置页面的状态没有及时更新」的成因之一（实测其
+`settings.json` 里 `peers` 已有 1 台而 `devices` 为空）。
+
+另一个成因是**通知未转发**：`SettingsPage` 是 `StatelessWidget`，只读 `syncState`
+但自身不监听，靠上层（`AppShell`）监听 `AppState` 后重建；而 `AppState` 原先从未
+订阅 `syncState`，于是接入状态变化（探测/授权/自动接入完成）不会触发任何重建。
+现由 `AppState` 构造时 `syncState.addListener(notifyListeners)`、`dispose()` 时
+先 `removeListener` 再 `dispose`。
+
+门禁：`test/phase5_sync_refresh_test.dart` 三例（刷新、重启后仍显示已接入、移除转发
+后不再回调）。
+
+**导入成功后询问是否切换（用户反馈 2026-10-09）**：
+
+>「导入站点成功后应该自动切换或者弹出确认框让用户确认是否切换到该配置，
+> 现在还需要用户手动去操作一次」
+
+导入本身**仍然不切换**当前配置（Q10：不静默抢走用户正在用的配置），但导入成功后
+弹确认框，用户一键切过去，不必再回配置页手动点「启用」。两种情形**不弹框**：
+
+- 刚导入的记录已是当前配置（无需切换）；
+- 当前配置本来就指向**同一台设备**（重复导入只是刷新站点，没有可切的东西）。
+
+实现：`SyncState.lastImportRecordId` 暴露刚创建的记录 id；`AndroidSettingsPage._import`
+在成功后弹 `bridge-switch-confirm`，确认才 `activateConfigRecord`。
+「一键重连」（历史项）走同一条路径。
+
+门禁：`test/phase5_sync_ui_test.dart` 三例——弹框且**确认前不切换**、选「稍后再说」
+不切换（保留 Q10）、当前配置已指向该设备时不再弹框。
+
+### 28.7 安全与隐私
+
+- 同步服务默认**关闭**；开启时监听 `0.0.0.0`，仅接受**已授权对端**（`uuid` 白名单）的推送。
+- **不复用** `LocalProxyServer`：后者硬性只允许回环且路径空间为 `/p/<token>/…`，
+  与 Android 的 `/device`、`/action` 路径契约不兼容。
+- 请求体上限 **8 MiB**；同步为低频串行操作，不做并发。
+- 设备指纹（`uuid`/`serial`/`wlan`）与历史片名**不写日志**；
+  含凭据的设置项（`tmdb_config` 等）**默认不同步**，日志中永不出现。
+
+### 28.8 验收
+
+门禁共 11 项（`docs/phase5/design/03` §6），一键验收：
+
+```powershell
+pwsh -File tools/phase5/run_windows_acceptance.ps1
+pwsh -File tools/phase5/run_windows_acceptance.ps1 -SkipIntegrationTests
+```
+
+结果写入 `docs/phase5/evidence/windows-acceptance.txt`。
+
+三项机器校验的反向验证（`tools/phase5/verify_reverse_checks.py`，共 6 项）必须存在并通过，
+其中两项是本阶段最容易悄悄写错的地方：
+
+- **毫秒换算**：在 `position` 映射里加 `/1000` 后，单位用例必须失败。
+- **删除复活**：移除删除标记检查后，不复活用例必须失败。
+
+### 28.9 与上游 `webhtv/默影视` 的取舍
+
+**采用**：`/vod/api` T4 网关、`/device` 身份端点、`/action?do=sync` 接收语义、
+`Backup` + `SyncOptions` 形态（受限子集）、端口 9978–9998 探测策略。
+
+**降级**：`ScanTask` 的全网段 × 21 端口 × 并发 64 → 本网段 × 21 端口 × 并发 16，
+且仅用户显式触发；手动地址始终可用且优先。
+
+**不采用**：`Backup.restore()` 的全量 `clearAllTables()`、`force=true` 清表作为默认行为、
+复制 Android 爬虫实现、`prefers` 全量同步、删除墓碑传播（上游仍「待实现」）。
+
+---
+
+## 29. 安卓实时同步与长连接保活
+
+- 定位：把 Phase 5 的「手动、一次性、快照式」同步升级为「**可选的实时、增量、双向**」，
+  并解决两个用户实测痛点（息屏后失联、缓存耗尽后跳下一集）。
+- 状态：设计指导已补齐（`docs/phase7/design/00`–`design/04`），**待评审 → 实施**。
+  外部前置：安卓侧改动 A + C **已于 2026-10-17 交付**（见 §29.10）。
+- 完整设计指导：`docs/phase7/design/00-android-live-sync-design-index.md`（索引）、
+  `01`（实时同步协议）、`02`（保活与唤醒）、`03`（续播 vs 跳下一集）、`04`（测试与验收）。
+- 阶段计划：`docs/phase7/README.md`。
+- 上游依据：`PlaybackRemoteSyncer`、`PlaybackRemoteSyncPayload`、`RemoteSyncConfig`、
+  `PlaybackRecordApi`、`ManageService`、`Manage.session`、`PlaybackFieldPolicy`、
+  `Setting.getTmdbConfig/getAiConfig`。
+
+### 29.1 实测契约要点
+
+| 事实 | 含义 |
+| --- | --- |
+| 安卓**没有**推送端点（无 WebSocket / SSE / long-poll） | PC 不能等推；只能轮询或让安卓来拉 |
+| 安卓有「远端同步源」：**它自己**按 5 min 周期拉 HTTP 端点 | PC 暴露增量端点即可获得「安卓侧实时」 |
+| 拉取请求头 `X-WebHTV-Config-Key` / `X-WebHTV-Since` / `X-WebHTV-Limit` / `X-WebHTV-Token` | PC 端点必须兼容 |
+| 响应接受 `nextSince`/`next_since`/`nextCursor`/`cursor` 与 `items`/`records`/`list`/`upserts`/`changes`/`operations`/`data` | 别名兼容可降低耦合 |
+| `/api/playback/current?siteKey=` **无鉴权**，但 `apiSafe()` **不含** `episodeUrl` | PC 必须用 `episodeName` 兜底做集消歧 |
+| 安卓**没有**「列出全部历史」的读取端点 | 「手动拉取」只能是逐站点最近一条，或请求安卓推全量 |
+| `tmdb_config` / `ai_config` 的值是 **JSON 字符串** | 必须解字符串再映射，不能当对象读 |
+| `ManageService` 空闲 **600 s** 自动 `stopSelf()` | 心跳周期必须 < 600 s 才能保活 |
+| `ManageService` 只在用户打开「管理页」时启动；`touch()` 在服务未运行时直接返回 | 息屏失联**不能**由 PC 单方面修复 |
+| `/manage/session` 返回 `wakeLock`/`wifiLock`/`batteryOptimized`/`backgroundGuide` | 诊断与引导的数据来源 |
+| 安卓 `onError` 路径是「重置 + 换线路/换源」，**不**切下一集；`STATE_ENDED` 才切 | 「跳下一集」的嫌疑在 PC 侧 |
+| 安卓 `PlaybackRecord.completed` 用 `progress >= 0.95`，与 PC 的 5 s 余量**不等价** | PC 不采信同步来的 `completed` |
+
+### 29.2 五条不可退让的原则
+
+1. **实时同步默认关闭**，开关粒度到「方向」（拉取 / 推送 / 设置）；
+2. **增量优先**，全量必须显式，禁止 `force` 清表；
+3. **失败不破坏本地**，游标只在整批成功后推进；
+4. **保活不得越界**：不静默改安卓系统设置，只探测 / 唤醒 / 引导；
+5. **续播判定基于「未完成」**，且与「播完」可区分（两端 `END_MARGIN` 语义对齐）。
+
+### 29.3 分层与模块边界
+
+| 层 | 文件 | 职责 |
+| --- | --- | --- |
+| 纯逻辑 | `lib/core/realtime_sync.dart` | 游标、增量判定、方向归一化、周期校验、退避序列、三态判定、唤醒阶梯 |
+| 服务 | `lib/services/android_read_client.dart` | 安卓读取端点（`/api/playback/current`、`/manage/session`）+ 降级链 |
+| 服务 | `lib/services/realtime_sync_engine.dart` | 定时器 + 心跳编排 + 失败退避 + 游标推进 |
+| 服务 | `lib/services/sync_server.dart` | **扩展**：增量拉取端点 `/api/playback/sync` |
+| 服务 | `lib/services/sync_client.dart` | **扩展**：手动推送（含删除、AI 设置） |
+| 纯逻辑 | `lib/core/android_sync.dart` | **扩展**：设置白名单到 AI 段、`unsupportedKeys`、`raw` 保真 |
+| 状态 | `lib/state/sync_state.dart` | 开关矩阵、周期、联动规则、结果快照 |
+| UI | `lib/ui/config_pages.dart` | 实时同步区块、手动四按钮、披露文案 |
+| UI | `lib/ui/player_page.dart` | **修复**：连播事件驱动 + 单次守卫 + 失败回滚 + 恢复路径 |
+
+### 29.4 两条实时路径
+
+| 路径 | 谁发起 | 周期 | 谁存游标 | 适用 |
+| --- | --- | --- | --- | --- |
+| A（PC 轮询） | PC | 默认 60 s（可配 15/30/60/300） | PC（`settings.json` 的 `sync.realtime` 段） | PC 常开时 |
+| B（安卓拉取） | 安卓 | 安卓侧配置（默认 5 min） | 安卓（`RemoteSyncConfig.cursors`） | PC 不常开 |
+
+两条可同时开启：都是幂等合并（`updatedAt` 相等即 skip），重复不造成数据错乱。
+
+### 29.5 心跳与三态可达性
+
+心跳（默认 30 s，范围 10–300 s，必须 ≤ 轮询周期）三个作用：
+
+1. **保活**：刷新 `ManageService.lastAccess`，避免 600 s 空闲自杀；
+2. **可达性判定**：给实时同步提供「现在能不能发请求」的前置结论；
+3. **状态采集**：拿 `batteryOptimized` / `wakeLock` / `wifiLock` / `backgroundGuide`。
+
+三态判定（`/manage/session` → `/device` → TCP connect）：
+
+| 状态 | 判据 | 用户文案要点 |
+| --- | --- | --- |
+| `OK` | 任一 HTTP 端点 200 | — |
+| `SERVICE_STOPPED` | 连接被拒 | 「请在安卓打开管理页」 |
+| `PEER_FROZEN` | TCP 通但 HTTP 无响应 | 「允许本应用后台运行」+ 原样显示 `backgroundGuide` |
+| `NETWORK_UNREACHABLE` | TCP 超时 | 「确认同一局域网」 |
+
+唤醒阶梯 L0–L5：等 → `/manage/session` → `/device` → 提示打开管理页 → 提示点亮屏幕
+→ 用户点击「打开安卓后台设置」（唯一会改变安卓侧状态的动作，**必须用户点击**）。
+
+### 29.6 续播修复（PC 侧三个缺陷）
+
+| # | 缺陷 | 现状 | 修复 |
+| --- | --- | --- | --- |
+| D1 | 连播触发在 `build()` 里，是**重建驱动** | 每次重建都可能重排 `_onCompleted` | 改事件驱动 + `_advanceInFlight` 单次守卫 |
+| D2 | 直接采信 media_kit 的 `completed` | 提前 EOF 被当成播完 | 新增 `_isGenuineEnd`（`duration>0 && position>=duration-5s`） |
+| D3 | 失败路径不回滚 `_request`、不复位 `_completed` | 续播上下文丢失 + 继续触发连播 | 回滚 `_request` + `clearCompleted()` + 三个明确出口 |
+
+**安卓侧边界**：提前 EOF 是否报 `STATE_ENDED`、`completed` 的 0.95 阈值、
+缓存容量与重连上限，均属安卓工程；PC 只做证据采集与指引，**不打补丁掩盖**。
+
+### 29.7 安全与隐私
+
+- 实时同步默认**关闭**；含凭据项（`tmdb_config` / `ai_config`）默认**不参与实时**，
+  用户显式开启后 UI 必须警告「将以明文 HTTP 在局域网传输 API Key」；
+- 拉取端点必须校验 token；未配置 token 时只允许 `uuid` 白名单内的对端 IP；
+- 日志不含 API Key / token / 设备指纹 / 历史片名；
+- 心跳与轮询**不**携带任何凭据（只有拉取端点的 `X-WebHTV-Token` 由用户配置）。
+
+### 29.8 验收
+
+门禁共 12 项（`docs/phase7/design/04` §6），一键验收：
+
+```powershell
+pwsh -File tools/phase7/run_windows_acceptance.ps1
+pwsh -File tools/phase7/run_windows_acceptance.ps1 -SkipIntegrationTests
+```
+
+结果写入 `docs/phase7/evidence/windows-acceptance.txt`。
+
+八项机器校验的反向验证（`tools/phase7/verify_reverse_checks.py`）必须存在并通过，
+其中两项是本阶段最容易悄悄写错的地方：
+
+- **`_isGenuineEnd` 的 `duration <= 0` 检查**：去掉后「时长未知不连播」用例必须失败；
+- **`_advanceInFlight` 单次守卫**：改为恒 `false` 后「防重入」用例必须失败。
+
+### 29.9 与上游 `webhtv/默影视` 的取舍
+
+**采用**：`/api/playback/current` 读取端点、`/manage/session` 唤醒端点、
+`PlaybackRemoteSyncPayload` 的响应形态（含别名）、`RemoteSyncConfig` 的游标语义、
+`Backup.prefers` 的逐键形态。
+
+**降级**：安卓的 5 min 拉取周期 → PC 侧默认 60 s 轮询（可配）；
+安卓的全网段扫描 → 沿用 Phase 5 的降级策略。
+
+**不采用**：WebSocket / SSE（安卓无端点）、安卓 `PlaybackRecord.completed` 的 0.95 阈值
+（PC 用更严格的 5 s 余量）、`force=true` 清表、静默改安卓系统设置、
+在 PC 侧为安卓的提前 EOF 打补丁。
+
+### 29.10 外部前置的交付状态（2026-10-17）
+
+Phase 7 依赖的**安卓侧契约补齐**（任务 `PC-REALTIME-SYNC-01`，仓库
+`F:/Workspace/webtv4/webhtv`）已完成其中两项：
+
+| 改动 | 内容 | 状态 | PC 侧影响 |
+| --- | --- | --- | --- |
+| A | 新增 `GET /api/playback/history?siteKey=&limit=`（从数据库读） | ✅ **已交付** | 路径 A 可用；**降级分支仍必须保留** |
+| B | `identity/resolve` + `sync/status` | **勘误为 PC 侧职责** | 不是安卓改动，PC 必须自己实现（§29.4） |
+| C | `apiSafe()` 追加 `episodeId`（= `episodeUrl` 的 SHA-256） | ✅ **已交付** | 集消歧可用；`episodeName` 兜底仍必须保留 |
+| D | 统一 `completed` 阈值 | ⏸️ 暂缓 | PC 一律按自己公式重算（§29.6） |
+| E | `STATE_ENDED` 加「真播完」闸门 | 🔬 待实验 | PC 侧 `_isGenuineEnd` 仍必做（§29.6） |
+
+**交付证据**：安卓 `dev4` 提交 `e55f19276fb0a73bce3a47f9bda2c16923d318b3`，
+tag `recovery/PC-REALTIME-SYNC-01/20261017042235-e55f19276fb0`。
+合规证据：双 flavor 编译通过、`playback.*` + `server.*` 定向单测全绿、
+3 组变异探针如期转红、`192.168.50.3:5561` 覆盖安装后真机实测
+（缺 `siteKey`→400；无记录→`200 {"items":[],"total":0}`；有记录→200 且含
+`episodeId`、不含 `episodeUrl`）。详细记录见安卓侧文档
+`PC-REALTIME-SYNC-01-android-contract-gap.md` §10。
+
+**交付不解除的硬约束**（三条，必须在 PC 实现中体现）：
+
+1. **能力探测仍是运行时的**：`RemoteSyncConfig.url` 可指向任意第三方服务端，
+   也可能是未升级的安卓端。A/C 的可用性必须探测 + 缓存（60 s），
+   不得编译期假设「一定存在」。
+2. **`episodeId` 缺失时的 `episodeName` 兜底不得删除**；字段存在时
+   **不得**被兜底逻辑覆盖（`raw['_episodeIdSource']` 区分 `field` / `episodeName`）。
+3. **`/api/playback/history` 的空数组 ≠ 「该站点在安卓端从未播放」**。
+   该端点只查**当前 `VodConfig.getCid()`**（当前订阅配置），实测设备上历史
+   分散在多个 `cid`（`1`/`3`/`18`/`33`…）。PC 的状态机与文案不得做该推论。

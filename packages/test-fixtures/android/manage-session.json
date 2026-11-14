@@ -1,0 +1,13 @@
+{
+  "running": true,
+  "serverRunning": true,
+  "wakeLock": true,
+  "wifiLock": true,
+  "batteryOptimized": false,
+  "backgroundSettingsNeeded": false,
+  "backgroundGuided": false,
+  "backgroundGuide": "",
+  "lastAccess": 1791450600000,
+  "idleTimeout": 600,
+  "version": "5.6.0"
+}

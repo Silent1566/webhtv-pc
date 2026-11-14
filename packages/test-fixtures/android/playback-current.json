@@ -1,0 +1,23 @@
+{
+  "historyKey": "csp_Media@@@demo-001@@@1",
+  "siteKey": "csp_Media",
+  "vodId": "demo-001",
+  "vodName": "示例剧集",
+  "vodPic": "http://__HOST__/media/poster-001.jpg",
+  "flag": "线路一",
+  "sourceBindingKey": "线路一#0",
+  "episodeName": "第2集",
+  "episodeId": "episode-hash-001",
+  "mediaType": "video",
+  "tmdbId": 1399,
+  "state": "idle",
+  "positionMs": 754000,
+  "durationMs": 2700000,
+  "progress": 0.2792,
+  "speed": 1.0,
+  "speedOverride": false,
+  "completed": false,
+  "createTime": 1791450000000,
+  "timestamp": 1791450600000,
+  "cid": 1
+}

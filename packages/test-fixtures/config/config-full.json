@@ -1,0 +1,187 @@
+{
+  "name": "WebHTV PC 最小配置 fixture",
+  "notice": "这是仓库内置的本地 fixture 配置，不含任何真实站点。",
+  "sites": [
+    {
+      "key": "fixture-type0",
+      "name": "Fixture XML API (type=0)",
+      "type": 0,
+      "api": "http://127.0.0.1:18080/api/type0/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "timeout": 10
+    },
+    {
+      "key": "fixture-type1",
+      "name": "Fixture JSON API (type=1)",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "ext": {
+        "fixture": true
+      },
+      "header": {
+        "X-Fixture-Site": "type1"
+      }
+    },
+    {
+      "key": "fixture-type2",
+      "name": "Fixture JSON API 兼容 (type=2)",
+      "type": 2,
+      "api": "http://127.0.0.1:18080/api/type2/",
+      "searchable": 1,
+      "ext": "{\"fixture\":\"type2\"}"
+    },
+    {
+      "key": "fixture-type4",
+      "name": "Fixture Base64 ext (type=4)",
+      "type": 4,
+      "api": "http://127.0.0.1:18080/api/type4/",
+      "searchable": 1,
+      "quickSearch": 1
+    },
+    {
+      "key": "fixture-play",
+      "name": "Fixture 播放入口 (playUrl)",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "playUrl": "http://127.0.0.1:18080/api/play"
+    },
+    {
+      "key": "fixture-spider-js",
+      "name": "Fixture JS Spider（MVP-A 不支持）",
+      "type": 3,
+      "api": "http://127.0.0.1:18080/spider/demo.js"
+    },
+    {
+      "key": "fixture-spider-null",
+      "name": "Fixture 未知 Spider（SpiderNull）",
+      "type": 3,
+      "api": "demo"
+    },
+    {
+      "key": "fixture-hidden",
+      "name": "Fixture 隐藏站点",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "hide": 1
+    },
+    {
+      "key": "fixture-extra-fields",
+      "name": "Fixture 含可选保留字段",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api/type1/",
+      "homePage": "/home",
+      "chromeMode": 1,
+      "webHomeChrome": 0,
+      "extensions": {
+        "a": "b"
+      },
+      "click": "web",
+      "playUrl": "http://127.0.0.1:18080/api/play",
+      "categories": [
+        "1",
+        "2"
+      ],
+      "style": {
+        "type": "rect"
+      },
+      "indexs": 1,
+      "changeable": 1
+    }
+  ],
+  "parses": [
+    {
+      "name": "json解析",
+      "type": 0,
+      "url": "https://example.invalid/parse/json"
+    },
+    {
+      "name": "web嗅探",
+      "type": 1,
+      "url": "https://example.invalid/parse/web"
+    }
+  ],
+  "flags": [
+    "youku",
+    "qq",
+    "iqiyi"
+  ],
+  "headers": [
+    {
+      "host": "127.0.0.1",
+      "header": {
+        "X-Fixture-Global": "1"
+      }
+    }
+  ],
+  "home": "fixture-type1",
+  "futureTopLevel": {
+    "must": "be preserved"
+  },
+  "spider": "https://example.invalid/spider.jar",
+  "lives": [
+    {
+      "name": "fixture-live",
+      "url": "http://127.0.0.1:18080/live.m3u",
+      "type": 1
+    }
+  ],
+  "doh": [
+    {
+      "name": "fixture-doh",
+      "url": "https://example.invalid/dns-query"
+    }
+  ],
+  "proxy": [
+    {
+      "name": "fixture-proxy",
+      "host": "127.0.0.1",
+      "port": 7890,
+      "type": 1
+    }
+  ],
+  "hosts": [
+    "example.invalid"
+  ],
+  "rules": [
+    {
+      "name": "fixture-rule",
+      "host": "example.invalid",
+      "rule": [
+        "m3u8"
+      ]
+    }
+  ],
+  "hlsRules": [
+    {
+      "name": "fixture-hls",
+      "host": "example.invalid",
+      "regex": [
+        "#EXT-X-KEY"
+      ]
+    }
+  ],
+  "groupRules": [
+    "fixture-group"
+  ],
+  "ads": [
+    "example.invalid/ads"
+  ],
+  "wallpaper": "https://example.invalid/wallpaper.jpg",
+  "logo": "https://example.invalid/logo.png",
+  "parse": "json解析",
+  "urls": [
+    {
+      "name": "fixture-repo-a",
+      "url": "http://127.0.0.1:18080/api/repository-a.json"
+    },
+    {
+      "name": "fixture-repo-b",
+      "url": "http://127.0.0.1:18080/api/repository-b.json"
+    }
+  ]
+}

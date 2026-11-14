@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>机场导向带 · 首屏</title>
+<style>
+  /* 机场导向带：世界只借字体、配色、密度、一个 signature move。
+     导航与控件保持平台标准。黄色只留给真正在指路的地方。
+     翻译说明：原始世界的地面是饱和黄面板；这里译成夜间暗底导向带，
+     这是真实存在的形态（夜间/LED 导向），也让海报有立足之地。 */
+  :root{
+    --ground:#12151A; --s1:#1A1E25; --line:#262C36;
+    --ink:#FFFFFF; --ink2:#8A93A3;
+    --y:#F5C400; --yink:#0B0D10;
+    --ok:#3DD68C; --dead:#F0526B;
+    --cjk:"Microsoft YaHei UI","Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:900px;overflow:hidden}
+  body{width:1440px;height:900px;background:var(--ground);color:var(--ink);
+    font-family:var(--cjk);font-size:13px;line-height:1.5;font-feature-settings:"tnum" 1;
+    display:grid;grid-template-columns:84px 1fr;grid-template-rows:56px 1fr}
+
+  .rail{grid-row:1/3;border-right:1px solid var(--line);display:flex;flex-direction:column;
+        align-items:center;padding:10px 0;gap:2px}
+  .rail .brand{width:34px;height:34px;border-radius:9px;background:var(--y);color:var(--yink);
+        display:grid;place-items:center;font-weight:700;font-size:15px;margin-bottom:14px}
+  .nav{width:64px;height:54px;border-radius:9px;display:flex;flex-direction:column;
+       align-items:center;justify-content:center;gap:4px;color:var(--ink2)}
+  .nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;
+       stroke-linecap:round;stroke-linejoin:round}
+  .nav span{font-size:10.5px}
+  .nav.on{background:#22272F;color:var(--ink)}
+  .nav.on svg{stroke:var(--y)}
+
+  .top{grid-column:2/3;border-bottom:1px solid var(--line);display:flex;align-items:center;
+       gap:14px;padding:0 20px}
+  .cfg{display:flex;align-items:baseline;gap:9px}
+  .cfg b{font-size:14px;font-weight:700}
+  .cfg em{font-style:normal;font-size:12px;color:var(--ink2)}
+  .spacer{flex:1}
+  .btn{height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--line);
+       background:transparent;color:var(--ink);font-family:inherit;font-size:12.5px;
+       display:inline-flex;align-items:center;gap:7px}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+       stroke-linecap:round;stroke-linejoin:round}
+  .btn.pri{background:var(--y);border-color:var(--y);color:var(--yink);font-weight:700}
+
+  .main{grid-column:2/3;display:flex;flex-direction:column;overflow:hidden}
+
+  /* ---- signature move：决策点导向带。一次只给前方还能走的选择与时间预算。 ---- */
+  .band{display:flex;align-items:stretch;min-height:76px;position:relative}
+  .band.pri{background:var(--y);color:var(--yink)}
+  .band.alt{background:var(--s1);color:var(--ink);border-bottom:1px solid var(--line)}
+
+  .pict{width:76px;flex:none;display:grid;place-items:center}
+  .pict i{width:44px;height:44px;background:var(--yink);border-radius:8px;display:grid;place-items:center}
+  .band.alt .pict i{background:#0E1116;border:1px solid var(--line)}
+  .pict svg{width:26px;height:26px;stroke:#fff;fill:none;stroke-width:1.8;
+       stroke-linecap:round;stroke-linejoin:round}
+
+  .msg{flex:1;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:14px 0}
+  .msg b{font-size:21px;font-weight:700;letter-spacing:.005em}
+  .msg b u{text-decoration:none;font-variant-numeric:tabular-nums}
+  .msg span{font-size:12.5px;opacity:.82}
+  .band.alt .msg span{color:var(--ink2);opacity:1}
+
+  /* 箭头锁定在它指向的那条边 */
+  .arw{width:78px;flex:none;display:grid;place-items:center;border-left:1px solid rgba(11,13,16,.22)}
+  .band.alt .arw{border-left:1px solid var(--line)}
+  .arw svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:2.4;
+       stroke-linecap:round;stroke-linejoin:round}
+
+  /* 数字纪念性尺度 */
+  .num{width:196px;flex:none;display:flex;flex-direction:column;align-items:flex-end;
+       justify-content:center;padding-right:22px;border-left:1px solid rgba(11,13,16,.22)}
+  .band.alt .num{border-left:1px solid var(--line)}
+  .num b{font-size:44px;line-height:.9;font-weight:700;letter-spacing:-.03em;
+       font-variant-numeric:tabular-nums}
+  .num span{font-size:11px;letter-spacing:.06em;margin-top:5px;opacity:.78}
+  .band.alt .num span{color:var(--ink2);opacity:1}
+
+  /* ---- 内容区 ---- */
+  .body{flex:1;padding:22px 24px 0;overflow:hidden}
+  .h{font-size:15px;font-weight:700}
+  .h small{font-weight:400;font-size:12px;color:var(--ink2);margin-left:9px}
+  .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:14px;margin-top:14px}
+  .poster{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--s1)}
+  .poster .art{aspect-ratio:2/3;border-bottom:1px solid var(--line)}
+  .poster .meta{padding:8px 9px 10px}
+  .poster .meta b{display:block;font-size:12px;font-weight:700;margin-bottom:3px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .poster .meta span{font-size:11px;color:var(--ink2)}
+
+  /* 停运的路线从面板上消失，只留一行台账 */
+  .closed{display:flex;align-items:center;gap:11px;margin-top:20px;padding:12px 15px;
+      background:var(--s1);border:1px solid var(--line);border-radius:10px;font-size:12.5px;color:var(--ink2)}
+  .closed i{width:9px;height:9px;border-radius:50%;background:var(--dead);flex:none}
+  .closed b{color:var(--ink);font-weight:700}
+  .closed u{text-decoration:none;margin-left:auto}
+  .note{font-size:11px;color:#5A6069;margin-top:14px}
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="brand">W</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>首页</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg><span>最近观看</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg><span>收藏</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 20V9M12 20V4M19 20v-7"/></svg><span>直播</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>搜索</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span>设置</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>日志</span></div>
+</nav>
+
+<header class="top">
+  <div class="cfg"><b>AT 配置</b><em>163 站点 · 38 直播 · 2 小时前更新</em></div>
+  <div class="spacer"></div>
+  <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 4v12"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/></svg>导入配置</button>
+  <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>选择站点</button>
+</header>
+
+<main class="main">
+
+  <section class="band pri">
+    <div class="pict"><i><svg viewBox="0 0 24 24"><path d="M4 7h11l4 5-4 5H4z"/><path d="M8 12h9"/></svg></i></div>
+    <div class="msg">
+      <b>线路一 · 木偶 <u>→</u> 示例剧集 · 12 集</b>
+      <span>直行 · 继续播放第 3 集 · 本站源当前正常</span>
+    </div>
+    <div class="num"><b>9h12m</b><span>线路总时长</span></div>
+    <div class="arw"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></div>
+  </section>
+
+  <section class="band alt">
+    <div class="pict"><i><svg viewBox="0 0 24 24"><path d="M7 4v12"/><path d="m3.5 12.5 3.5 4 3.5-4"/><path d="M17 20V8"/><path d="m13.5 11.5 3.5-4 3.5 4"/></svg></i></div>
+    <div class="msg">
+      <b>换乘 · 线路二 115 · 8 集</b>
+      <span>右转 · 可省 3h 08m · 该线路当前降级（间歇超时）</span>
+    </div>
+    <div class="num"><b>6h04m</b><span>线路总时长</span></div>
+    <div class="arw"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></div>
+  </section>
+
+  <div class="body">
+    <div class="h">示例剧集 · 剧集索引<small>本站源只给前方还能走的选择</small></div>
+    <div class="grid">
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A3A2A,#7A5A34)"></div><div class="meta"><b>E1</b><span>45 分钟 · 已看</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#3F3226,#6B5030)"></div><div class="meta"><b>E2</b><span>44 分钟 · 已看</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#7A5A34,#A87A3E)"></div><div class="meta"><b>E3</b><span>47 分钟 · 当前</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A3A2A,#7A5A34)"></div><div class="meta"><b>E4</b><span>42 分钟</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#3F3226,#6B5030)"></div><div class="meta"><b>E5</b><span>46 分钟</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A3A2A,#7A5A34)"></div><div class="meta"><b>E6</b><span>40 分钟</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#3F3226,#6B5030)"></div><div class="meta"><b>E7</b><span>48 分钟</span></div></div>
+    </div>
+
+    <div class="closed">
+      <i></i>线路三 <b>湖班</b> 已停运 · 该路线已从面板移除
+      <u>查看诊断 →</u>
+    </div>
+
+    <div class="note">草图：构图与配色按真实产品内容绘制，海报为合成占位，非真实剧照。</div>
+  </div>
+</main>
+
+</body>
+</html>

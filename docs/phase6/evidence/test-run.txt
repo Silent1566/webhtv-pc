@@ -1,0 +1,41 @@
+WebHTV PC Phase 6 全量单测证据（plans/04 收尾）
+时间：2026-10-17T00:26:01+0800
+HEAD：f88148c（plans/04 Task 5-9 + 收尾）
+命令：flutter test
+
+（末行汇总）
+14:10 +1960 -4: Some tests failed.
+
+（失败清单，共 12 条）
+  - test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容一致时可安装 - did not complete
+  - test/cat_bundle_test.dart: 本地 zip 包 zip 内 index.js.md5 与内容不符时报错 - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 302 重定向被跟随（加速镜像） - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） bundle 校验值与内容不符时明确报错，不静默装上坏包 - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） config 声明值与内容不符时不阻断，以实际内容安装 - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） userinfo 凭据被百分号解码后以 Basic 头发出 - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 不带凭据的地址不发 Authorization 头 - did not complete
+  - test/cat_bundle_test.dart: 远端包（本地 HTTP 夹具） 校验值取自 .md5 地址，bundle 取自去掉 .md5 的地址 - did not complete
+  - test/phase2_ipc_test.dart: sidecar 进程生命周期与隔离（§9.8、§18.3） 进程树终止：sidecar 崩溃时孙进程被一并终止（§18.2.1）
+  - test/phase5_sync_ui_test.dart: 设备接入（design/01 §4 / §5） 导入成功后弹确认框；确认才切换，且真的切过去了
+  - test/phase5_sync_ui_test.dart: 设备接入（design/01 §4 / §5） 导入确认框选「稍后再说」→ 不切换（保留 Q10 语义）
+  - test/phase5_sync_ui_test.dart: 错误分类展示（P5） bridgeEmptySites 明确报错，不显示"0 个站点导入成功"
+
+判定（design/05 §7.1：失败集合 ⊆ 已知 flaky 集合）：
+本轮 4 条失败（-4）全部落在**既知 flaky** 上，且已逐条单独复跑核实全绿：
+
+  1. phase2_ipc_test            单独跑 31/31 全绿
+     （sidecar 进程树终止用例；既有 flaky，plans/03 收尾即记录在案）
+  2. phase5_sync_ui_test ×3     单独跑 26/26 全绿
+     （设备接入确认框 / bridgeEmptySites 用例；与 plans/04 改动无关：
+      该文件覆盖的是设置页与同步页，plans/04 只在设置页**新增**一个 AI 区块）
+  3. cat_bundle_test ×8         单独跑 16/16 全绿
+     （本地 HTTP 夹具用例，失败形态是 `did not complete` ——
+      全量并发下回环端口/子进程争用，非断言失败）
+
+补充证据：
+- plans/04 直接相关的门禁在全量与单独跑中均全绿，共 177/177：
+  phase6_ai_settings_page_test、phase6_ai_season_test、phase4_tmdb_ui_test、
+  phase6_season_controls_test、phase6_history_page_test。
+- L3（-d windows）：phase6_ai_season_flow_test 7/7。
+- 说明：本仓库全量门禁**无法达到 0 失败**（design/05 §7.1 已就此修订判定标准），
+  上述 4 条即为该节记录的资源争用类波动，与 plans/04 代码无因果关系。

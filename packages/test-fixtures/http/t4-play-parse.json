@@ -1,0 +1,9 @@
+{
+  "parse": 1,
+  "jx": 1,
+  "url": "http://127.0.0.1:18080/api/parse/type1",
+  "header": {
+    "User-Agent": "WebHTV-PC-Phase0",
+    "Referer": "http://127.0.0.1:18080/"
+  }
+}

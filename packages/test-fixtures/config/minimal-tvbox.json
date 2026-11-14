@@ -1,0 +1,18 @@
+{
+  "name": "Phase 0 fixture",
+  "sites": [
+    {
+      "key": "fixture-http",
+      "name": "Fixture HTTP API",
+      "type": 1,
+      "api": "http://127.0.0.1:18080/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1,
+      "ext": { "fixture": true },
+      "futureField": "must-be-preserved"
+    }
+  ],
+  "parses": [],
+  "futureTopLevel": { "must": "be preserved" }
+}

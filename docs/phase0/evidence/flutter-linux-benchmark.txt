@@ -1,0 +1,73 @@
+00:00 +0: loading /work/prototypes/flutter_media_kit/integration_test/phase0_benchmark_test.dart
+Building Linux application...                                   
+✓ Built build/linux/x64/debug/bundle/webhtv_phase0
+00:00 +0: 重复采样：本地 MP4 与 HLS 的加载与首帧
+00:00 +0: loading /work/prototypes/flutter_media_kit/integration_test/phase0_benchmark_test.dart
+media_kit: NativeReferenceHolder: Allocated 102047402891024
+00:00 +0: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 102047376793696, id: 102047379229584, rect: {left: 0, top: 0, width: 1, height: 1}}
+NativeVideoController: Texture ID: 102047379229584
+PHASE0-EVIDENCE bench local-mp4 run=1 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=40ms load=177ms first-frame=491ms
+PHASE0-EVIDENCE bench local-hls run=1 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=95ms first-frame=250ms
+PHASE0-EVIDENCE bench local-mp4 run=2 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=94ms first-frame=251ms
+PHASE0-EVIDENCE bench local-hls run=2 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=101ms first-frame=215ms
+PHASE0-EVIDENCE bench local-mp4 run=3 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=89ms first-frame=203ms
+PHASE0-EVIDENCE bench local-hls run=3 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=90ms first-frame=203ms
+PHASE0-EVIDENCE bench local-mp4 run=4 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=90ms first-frame=202ms
+PHASE0-EVIDENCE bench local-hls run=4 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=102ms first-frame=215ms
+PHASE0-EVIDENCE bench local-mp4 run=5 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=96ms first-frame=209ms
+PHASE0-EVIDENCE bench local-hls run=5 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=98ms first-frame=214ms
+PHASE0-EVIDENCE bench local-mp4 run=6 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=87ms first-frame=200ms
+PHASE0-EVIDENCE bench local-hls run=6 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=87ms first-frame=199ms
+PHASE0-EVIDENCE bench local-mp4 run=7 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=40ms load=78ms first-frame=191ms
+PHASE0-EVIDENCE bench local-hls run=7 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=88ms first-frame=240ms
+PHASE0-EVIDENCE bench local-mp4 run=8 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=87ms first-frame=243ms
+PHASE0-EVIDENCE bench local-hls run=8 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=101ms load=91ms first-frame=205ms
+PHASE0-EVIDENCE bench local-mp4 run=9 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=80ms load=80ms first-frame=192ms
+PHASE0-EVIDENCE bench local-hls run=9 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=85ms first-frame=197ms
+PHASE0-EVIDENCE bench local-mp4 run=10 ok url=/work/packages/protocol/fixtures/media/sample.mp4 duration=6000ms position=40ms load=77ms first-frame=189ms
+PHASE0-EVIDENCE bench local-hls run=10 ok url=/work/packages/protocol/fixtures/media/sample.m3u8 duration=6016ms position=61ms load=85ms first-frame=199ms
+PHASE0-EVIDENCE bench local-mp4 load n=10.0 min=77.0 median=89.0 p95=177.0 max=177.0 mean=95.5
+PHASE0-EVIDENCE bench local-mp4 first-frame n=10.0 min=189.0 median=203.0 p95=491.0 max=491.0 mean=237.1
+PHASE0-EVIDENCE bench local-hls load n=10.0 min=85.0 median=91.0 p95=102.0 max=102.0 mean=92.2
+PHASE0-EVIDENCE bench local-hls first-frame n=10.0 min=197.0 median=214.0 p95=250.0 max=250.0 mean=213.7
+00:06 +1: 重复采样：带 Header 的远程 HLS 与 Seek
+00:06 +1: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 102047403847072, id: 102047403585168, rect: {left: 0, top: 0, width: 1, height: 1}}
+NativeVideoController: Texture ID: 102047403585168
+00:07 +1: 重复采样：带 Header 的远程 HLS 与 Seek
+PHASE0-EVIDENCE bench header-hls run=1 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=138ms
+PHASE0-EVIDENCE bench header-hls seek run=1 reached=true elapsed=254ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=2 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=109ms
+PHASE0-EVIDENCE bench header-hls seek run=2 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=3 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=140ms
+PHASE0-EVIDENCE bench header-hls seek run=3 reached=true elapsed=252ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=4 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=110ms
+PHASE0-EVIDENCE bench header-hls seek run=4 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=5 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=166ms
+PHASE0-EVIDENCE bench header-hls seek run=5 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=6 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=119ms
+PHASE0-EVIDENCE bench header-hls seek run=6 reached=true elapsed=251ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=7 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=101ms load=118ms
+PHASE0-EVIDENCE bench header-hls seek run=7 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=8 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=123ms
+PHASE0-EVIDENCE bench header-hls seek run=8 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=9 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=101ms load=128ms
+PHASE0-EVIDENCE bench header-hls seek run=9 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls run=10 ok url=http://127.0.0.1:18080/media/sample.m3u8 duration=6016ms position=61ms load=106ms
+PHASE0-EVIDENCE bench header-hls seek run=10 reached=true elapsed=253ms final=3021ms
+PHASE0-EVIDENCE bench header-hls load n=10.0 min=106.0 median=123.0 p95=166.0 max=166.0 mean=125.7
+PHASE0-EVIDENCE bench header-hls first-frame n=10.0 min=218.0 median=253.0 p95=455.0 max=455.0 mean=267.3
+PHASE0-EVIDENCE bench header-hls seek n=10.0 min=251.0 median=253.0 p95=254.0 max=254.0 mean=252.7
+00:12 +2: 启动到可交互主界面耗时
+PHASE0-EVIDENCE app-launch start=2026-09-26T22:02:58.682583
+00:12 +2: 重复采样：本地 MP4 与 HLS 的加载与首帧
+VideoOutput.Resize
+{handle: 102047404432976, id: 102047403585616, rect: {left: 0, top: 0, width: 1, height: 1}}
+NativeVideoController: Texture ID: 102047403585616
+00:12 +2: 启动到可交互主界面耗时
+PHASE0-EVIDENCE bench app-launch first-interactive=361ms
+00:12 +3: (tearDownAll)
+00:12 +3: All tests passed!

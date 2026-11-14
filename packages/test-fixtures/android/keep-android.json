@@ -1,0 +1,20 @@
+[
+  {
+    "key": "csp_Media@@@demo-001@@@1",
+    "siteName": "我的追剧",
+    "vodName": "示例剧集",
+    "vodPic": "http://__HOST__/media/poster-001.jpg",
+    "createTime": 1791450000000,
+    "type": 0,
+    "cid": 1
+  },
+  {
+    "key": "csp_XiaoYa@@@demo-002@@@1",
+    "siteName": "丫仙女[盘]",
+    "vodName": "示例电影【加长版】",
+    "vodPic": "",
+    "createTime": 1791440000000,
+    "type": 0,
+    "cid": 1
+  }
+]

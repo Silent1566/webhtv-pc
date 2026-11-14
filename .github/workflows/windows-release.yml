@@ -11,7 +11,8 @@ name: Windows Release
 #   - 便携 zip，不含 MSI 安装包；
 #   - 无自动更新（docs/phase9/README.md P2-7：更新签名通道未定）；
 #   - 代码签名为可选：配置 secrets 后签名，否则在 notes/BUILD_INFO/release-info.json 标注未签名；
-#   - 不捆绑 Python/Node/JDK 运行时，只带 sidecar 宿主脚本。
+#   - 包内自带 Node 运行时（runtime/node/node.exe，v22.23.4）与经锁定校验的离线 Python；
+#     Python 运行/修复不联网；JVM 站源仍需要本机安装 JDK 17+。
 
 on:
   workflow_dispatch:
@@ -84,6 +85,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      # node_modules 不入库（.gitignore:51），但 scripts/package_windows.ps1 要求
+      # sidecars/spider-host-js/node_modules 存在，缺失即打包失败。必须在打包前安装；
+      # 用 npm ci 按已入库的 package-lock.json 精确还原，--omit=dev 避免把开发依赖打进包。
+      - name: Install JS sidecar dependencies
+        working-directory: sidecars/spider-host-js
+        shell: pwsh
+        run: npm ci --omit=dev
 
       - name: Set up Python 3.12 (Python sidecar tests)
         uses: actions/setup-python@v5
@@ -182,6 +191,11 @@ jobs:
       # media_kit_libs_windows_video 的 CMake 在原生构建时下载解压到
       # build/windows/x64/libmpv/。开发机 PATH 里恰好有 libmpv 才显得无关，
       # CI 必须显式补 PATH，不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh
@@ -201,6 +215,38 @@ jobs:
           }
           Write-Host "libmpv：$($libmpv.FullName)"
           $env:PATH = "$($libmpv.Directory.FullName);$env:PATH"
+          # audio_ai 用例直接加载真实 native（不做 mock）：代码按
+          # <repo>/.local/audio_ai/native/audio_ai_native.dll 与
+          # <cwd>/.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll 查找，
+          # 而 .local 被 .gitignore 忽略。这里从本次 Release 构建产物与 CMake 固定的
+          # 官方 LiteRT wheel 缓存准备，任一项缺失或校验不符都直接失败，不跳过、不降级。
+          $repoRoot = (Resolve-Path '../..').Path
+          $nativeDir = Join-Path $repoRoot '.local/audio_ai/native'
+          $litertDir = Join-Path (Get-Location) '.local/audio_ai/litert/ai_edge_litert'
+          New-Item -ItemType Directory -Force -Path $nativeDir, $litertDir | Out-Null
+          foreach ($dll in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll')) {
+            $source = Join-Path 'build/windows/x64/runner/Release' $dll
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "缺少原生库 $dll（build/windows/x64/runner/Release）：audio_ai 单元测试需要真实 native，不允许跳过或降级。"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $nativeDir $dll) -Force
+          }
+          # 两个等价来源（Release 产物与 CMake 解压的官方 wheel 缓存）必须是同一份
+          # pinned DLL，下面的 SHA256 校验对任一来源都成立；两者都缺失才算失败。
+          $litertSource = @(
+            (Join-Path 'build/windows/x64/runner/Release' 'libLiteRt.dll'),
+            (Join-Path $repoRoot '.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll')
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $litertSource) {
+            throw '缺少 pinned libLiteRt.dll：Release 构建产物与 audio_ai_runtime.cmake 缓存都没有它，不允许跳过或降级。'
+          }
+          $litertSha = (Get-FileHash -LiteralPath $litertSource -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($litertSha -ne 'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+            throw "libLiteRt.dll SHA256 与 audio_ai_runtime.cmake 固定的官方 wheel 不一致：$litertSha"
+          }
+          Copy-Item -LiteralPath $litertSource -Destination (Join-Path $litertDir 'libLiteRt.dll') -Force
+          Write-Host "audio_ai native：$nativeDir"
+          Write-Host "libLiteRt：$litertDir"
           flutter test
 
       # 可选代码签名：配置了 secrets 就必须成功，不静默降级成未签名。
@@ -264,7 +310,7 @@ jobs:
           if ($env:SIGNED -ne 'true') {
             $extra += '> **未签名包**：本可执行文件未做代码签名，Windows SmartScreen 可能提示「未知发布者」。这是当前发布形态，不是下载损坏。'
           }
-          $extra += '> **运行环境**：包内只带 Python/Node/JVM Spider 宿主脚本，不捆绑解释器；对应站源需要本机安装 Python 3、Node 或 JDK 17+，缺失时应用会明确提示「运行时未安装」。'
+          $extra += '> **运行环境**：包内自带 Node 运行时（runtime/node/node.exe，v22.23.4），Node Spider 开箱即用，无需自行安装 Node。Python 3.14.10 运行时与依赖已内置，可离线准备和修复，运行/修复不联网，无需安装系统 Python。只有 JVM Spider 对应站源仍需本机安装 JDK 17+。'
 
           $body = ($notes.TrimEnd() + "`n`n" + ($extra -join "`n`n") + "`n")
           New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'build') | Out-Null

@@ -1,0 +1,15 @@
+{
+  "lives": [
+    {
+      "name": "央视直播",
+      "type": 0,
+      "url": "http://__HOST__/live/live.m3u",
+      "epg": "http://__HOST__/live/epg.xml"
+    },
+    {
+      "name": "备用清单",
+      "type": 0,
+      "url": "http://__HOST__/live/live.txt"
+    }
+  ]
+}

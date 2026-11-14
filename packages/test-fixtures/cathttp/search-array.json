@@ -1,0 +1,11 @@
+{
+  "code": 0,
+  "data": [
+    {
+      "vod_id": "cat-arr-1",
+      "vod_name": "数组样本影片",
+      "vod_play_from": "cat",
+      "vod_play_url": "第 1 集$http://127.0.0.1:18080/media/sample.m3u8"
+    }
+  ]
+}

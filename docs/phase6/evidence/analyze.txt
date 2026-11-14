@@ -1,0 +1,16 @@
+WebHTV PC Phase 6 静态分析证据（plans/04 收尾）
+时间：2026-10-17T00:08:34+0800
+HEAD：f88148c（plans/04 Task 5-9 + 收尾）
+命令：flutter analyze
+
+（全量运行输出）
+Analyzing desktop-flutter...                                    
+
+warning - The value of the local variable 'tmdb' isn't used. Try removing the variable or using it - integration_test\phase6_history_visual_flow_test.dart:359:11 - unused_local_variable
+
+1 issue found. (ran in 4.1s)
+说明：
+- 唯一一条告警是 integration_test/phase6_history_visual_flow_test.dart:359 的
+  unused_local_variable，**既有**且该文件在 plans/04 全程未被改动
+  （文件内已就地注释说明：单季截图 harness 不发外网，用组件直渲染替代真实数据流）。
+- plans/04 改动的所有文件单独 analyze：No issues found!

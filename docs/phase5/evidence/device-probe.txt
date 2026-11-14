@@ -1,0 +1,5 @@
+PHASE5-EVIDENCE device-probe fixture=android（design/03 §7.1）
+PHASE5-EVIDENCE device-probe /device status=200 fields=['eth', 'ip', 'name', 'serial', 'time', 'type', 'uuid', 'wlan'] type=0 uuid=（不记录，仅记录字段完整性）
+PHASE5-EVIDENCE device-probe /vod/api?ac=config status=200 sites=170
+PHASE5-EVIDENCE device-probe /vod/api?key=<key> status=200 keys=['class', 'list']
+PHASE5-EVIDENCE device-probe host-derivation custom-host=webhtv-probe.invalid:9978 derived-hosts=['webhtv-probe.invalid:9978'] derived-by-host=True

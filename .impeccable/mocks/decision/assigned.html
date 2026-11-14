@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>星等星表 · 首屏</title>
+<style>
+  /* 星等星表：世界只借四样东西——字体、配色、密度、一个 signature move。
+     导航与控件保持平台标准（左导轨 + 顶栏 + 内容区）。 */
+  :root{
+    --ground:#0B0E1A; --s1:#141A2E; --s2:#1B2238; --s3:#232C46;
+    --ink:#E8ECF7; --ink2:#A8B2CC; --line:#232C46;
+    --amber:#F0B429; --ok:#3DD68C; --warn:#F5A623; --dead:#F0526B; --unk:#6B7A99;
+    --cjk:"Microsoft YaHei UI","Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
+    --mono:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:900px;overflow:hidden}
+  body{
+    width:1440px;height:900px;background:var(--ground);color:var(--ink);
+    font-family:var(--cjk);font-size:13px;line-height:1.5;
+    font-feature-settings:"tnum" 1;
+    display:grid;grid-template-columns:84px 1fr 348px;grid-template-rows:56px 1fr;
+  }
+
+  /* ---- 左导轨：平台标准导航，世界不碰它的结构 ---- */
+  .rail{grid-row:1/3;background:var(--ground);border-right:1px solid var(--line);
+        display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:2px}
+  .rail .brand{width:34px;height:34px;border-radius:9px;background:var(--amber);
+        color:#0B0E1A;display:grid;place-items:center;font-weight:700;font-size:15px;margin-bottom:14px}
+  .nav{width:64px;height:54px;border-radius:9px;display:flex;flex-direction:column;
+       align-items:center;justify-content:center;gap:4px;color:var(--ink2)}
+  .nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;
+       stroke-linecap:round;stroke-linejoin:round}
+  .nav span{font-size:10.5px;letter-spacing:.02em}
+  .nav.on{background:var(--s3);color:var(--ink)}
+  .nav.on svg{stroke:var(--amber)}
+
+  /* ---- 顶栏 ---- */
+  .top{grid-column:2/4;border-bottom:1px solid var(--line);display:flex;align-items:center;
+       gap:14px;padding:0 20px;background:var(--ground)}
+  .cfg{display:flex;align-items:baseline;gap:9px}
+  .cfg b{font-size:14px;font-weight:700}
+  .cfg em{font-style:normal;font-size:12px;color:var(--ink2)}
+  .spacer{flex:1}
+  .btn{height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--line);
+       background:transparent;color:var(--ink);font-family:inherit;font-size:12.5px;
+       display:inline-flex;align-items:center;gap:7px}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+       stroke-linecap:round;stroke-linejoin:round}
+  .btn.pri{background:var(--amber);border-color:var(--amber);color:#0B0E1A;font-weight:700}
+
+  /* ---- 主区 ---- */
+  .main{grid-column:2/3;overflow:hidden;padding:18px 20px 0;display:flex;flex-direction:column;gap:18px}
+  .h{font-size:15px;font-weight:700;letter-spacing:.01em}
+  .h small{font-weight:400;font-size:12px;color:var(--ink2);margin-left:9px;letter-spacing:0}
+
+  /* ---- signature move：源场。星等＝可用性，颜色＝健康状态。真实密度。 ---- */
+  .field{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:16px 18px 14px}
+  .legend{display:flex;gap:18px;align-items:baseline;margin-bottom:14px;font-size:12px;color:var(--ink2)}
+  .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  .legend b{color:var(--ink);font-weight:700;font-size:13.5px;margin-left:2px}
+  .dots{display:flex;flex-wrap:wrap;gap:11px 12px;align-items:flex-end;
+        height:118px;overflow:hidden;position:relative;padding-bottom:2px}
+  .dots i{display:block;border-radius:50%;width:calc(5px + var(--m)*1.35px);
+          height:calc(5px + var(--m)*1.35px);background:var(--c);opacity:.92}
+  .dots i.on{outline:1.5px solid var(--amber);outline-offset:2.5px;opacity:1}
+  .tag{position:absolute;bottom:-2px;font-size:11px;color:var(--ink2);
+       display:flex;flex-direction:column;align-items:center;gap:4px}
+  .tag b{color:var(--ink);font-weight:700;font-size:11.5px}
+  .sight{position:absolute;width:1px;background:var(--amber);opacity:.5;top:0}
+
+  /* ---- 内容区：固定比例可比（借自植物学图册的纪律） ---- */
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  .poster{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--s2)}
+  .poster .art{aspect-ratio:2/3;position:relative;border-bottom:1px solid var(--line)}
+  .poster .art em{position:absolute;left:0;right:0;bottom:0;padding:6px 8px;font-style:normal;
+       font-size:11px;color:var(--ink);background:linear-gradient(transparent,rgba(11,14,26,.92))}
+  .poster .meta{padding:8px 9px 10px}
+  .poster .meta b{display:block;font-size:12px;font-weight:700;margin-bottom:3px;
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .poster .meta span{font-size:11px;color:var(--ink2)}
+
+  /* ---- 右栏 ---- */
+  .side{grid-column:3/4;border-left:1px solid var(--line);padding:18px 20px;overflow:hidden;
+        display:flex;flex-direction:column;gap:20px}
+  .card{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .kv{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;padding:5px 0}
+  .kv dt{color:var(--ink2)}
+  .kv dd{color:var(--ink);font-variant-numeric:tabular-nums}
+  .budget{margin-top:11px;padding-top:11px;border-top:1px solid var(--line);
+          display:flex;justify-content:space-between;align-items:baseline}
+  .budget span{font-size:12px;color:var(--ink2)}
+  .budget b{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .flip{width:100%;height:38px;margin-top:12px;border-radius:9px;border:1px solid var(--amber);
+        background:transparent;color:var(--amber);font-family:inherit;font-size:13px;font-weight:700}
+
+  /* 长度编码时长（借自 Laban 舞谱的纪律） */
+  .eps{display:flex;flex-direction:column;gap:5px;margin-top:13px}
+  .ep{display:flex;align-items:center;gap:9px}
+  .ep b{width:26px;font-size:11.5px;color:var(--ink2);font-weight:400;font-variant-numeric:tabular-nums}
+  .bar{height:15px;border-radius:3px;background:var(--s3);flex:none}
+  .bar.cur{background:var(--amber)}
+  .bar.done{background:#39456B}
+  .ep u{text-decoration:none;font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
+
+  .note{font-size:11px;color:var(--unk);margin-top:auto}
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="brand">W</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>首页</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg><span>最近观看</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg><span>收藏</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 20V9M12 20V4M19 20v-7"/></svg><span>直播</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>搜索</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span>设置</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>日志</span></div>
+</nav>
+
+<header class="top">
+  <div class="cfg"><b>AT 配置</b><em>163 站点 · 38 直播 · 2 小时前更新</em></div>
+  <div class="spacer"></div>
+  <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 4v12"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/></svg>导入配置</button>
+  <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>选择站点</button>
+</header>
+
+<main class="main">
+  <div>
+    <div class="h">源场<small>星等＝可用性，颜色＝健康状态 · 163 个站源全部在场</small></div>
+  </div>
+
+  <section class="field">
+    <div class="legend">
+      <span><i style="background:var(--ok)"></i>可用<b>128</b></span>
+      <span><i style="background:var(--warn)"></i>降级<b>21</b></span>
+      <span><i style="background:var(--dead)"></i>失效<b>9</b></span>
+      <span><i style="background:var(--unk)"></i>未知<b>5</b></span>
+      <span style="margin-left:auto">当前基准星 <b style="color:var(--amber)">木偶</b></span>
+    </div>
+    <div class="dots">
+      <div class="sight" style="left:118px;height:118px"></div>
+      <i style="--m:9;--c:var(--ok)"></i><i style="--m:8;--c:var(--ok)"></i><i style="--m:8;--c:var(--ok)"></i>
+      <i style="--m:7;--c:var(--ok)"></i><i style="--m:7;--c:var(--ok)"></i><i style="--m:6;--c:var(--ok)"></i>
+      <i style="--m:6;--c:var(--warn)"></i><i style="--m:5;--c:var(--ok)"></i><i style="--m:5;--c:var(--ok)"></i>
+      <i style="--m:9;--c:var(--ok)"></i><i style="--m:7;--c:var(--ok)"></i><i style="--m:6;--c:var(--ok)"></i>
+      <i style="--m:5;--c:var(--ok)"></i><i style="--m:4;--c:var(--ok)"></i><i style="--m:4;--c:var(--warn)"></i>
+      <i style="--m:3;--c:var(--ok)"></i><i style="--m:3;--c:var(--ok)"></i><i style="--m:2;--c:var(--ok)"></i>
+      <i style="--m:8;--c:var(--ok)"></i><i style="--m:6;--c:var(--ok)"></i><i style="--m:5;--c:var(--dead)"></i>
+      <i style="--m:4;--c:var(--ok)"></i><i style="--m:4;--c:var(--ok)"></i><i style="--m:3;--c:var(--ok)"></i>
+      <i style="--m:2;--c:var(--ok)"></i><i style="--m:2;--c:var(--unk)"></i><i style="--m:1;--c:var(--ok)"></i>
+      <i style="--m:7;--c:var(--ok)"></i><i style="--m:6;--c:var(--warn)"></i><i style="--m:5;--c:var(--ok)"></i>
+      <i style="--m:4;--c:var(--ok)"></i><i style="--m:3;--c:var(--ok)"></i><i style="--m:3;--c:var(--ok)"></i>
+      <i style="--m:2;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i><i style="--m:1;--c:var(--dead)"></i>
+      <i style="--m:6;--c:var(--ok)"></i><i style="--m:5;--c:var(--ok)"></i><i style="--m:4;--c:var(--ok)"></i>
+      <i style="--m:4;--c:var(--warn)"></i><i style="--m:3;--c:var(--ok)"></i><i style="--m:2;--c:var(--ok)"></i>
+      <i style="--m:2;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i><i style="--m:1;--c:var(--unk)"></i>
+      <i style="--m:5;--c:var(--ok)"></i><i style="--m:4;--c:var(--ok)"></i><i style="--m:3;--c:var(--ok)"></i>
+      <i style="--m:3;--c:var(--ok)"></i><i style="--m:2;--c:var(--dead)"></i><i style="--m:2;--c:var(--ok)"></i>
+      <i style="--m:1;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i>
+      <i style="--m:4;--c:var(--ok)"></i><i style="--m:3;--c:var(--warn)"></i><i style="--m:2;--c:var(--ok)"></i>
+      <i style="--m:2;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i><i style="--m:1;--c:var(--ok)"></i>
+      <div class="tag" style="left:110px"><b>木偶</b>星等 9 · 可用</div>
+      <div class="tag" style="left:296px"><b>115</b>星等 7 · 可用</div>
+      <div class="tag" style="left:474px"><b>湖班</b>星等 5 · 失效</div>
+      <div class="tag" style="left:640px"><b>夸克</b>星等 3 · 降级</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="h">木偶 · 剧集列表<small>固定 2:3 比例 · 全站源同尺度，可直接比较</small></div>
+    <div class="grid" style="margin-top:13px">
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A3A2A,#7A5A34)"><em>Fallout</em></div><div class="meta"><b>Fallout</b><span>2024 · 8.2 · 更新至 8 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A3A4A,#345A7A)"><em>三体</em></div><div class="meta"><b>三体</b><span>2023 · 8.7 · 全 30 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#3A2A3A,#6A3460)"><em>繁花</em></div><div class="meta"><b>繁花</b><span>2023 · 8.1 · 全 30 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A3A2A,#3E6B3A)"><em>漫长的季节</em></div><div class="meta"><b>漫长的季节</b><span>2023 · 9.4 · 全 12 集</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#4A2A2A,#8A3A2A)"><em>奥本海默</em></div><div class="meta"><b>奥本海默</b><span>2023 · 8.8 · 正片</span></div></div>
+      <div class="poster"><div class="art" style="background:linear-gradient(150deg,#2A2A3A,#3A3A6A)"><em>沙丘 2</em></div><div class="meta"><b>沙丘 2</b><span>2024 · 8.3 · 正片</span></div></div>
+    </div>
+  </section>
+</main>
+
+<aside class="side">
+  <div class="card">
+    <div class="h" style="font-size:13.5px">示例剧集</div>
+    <dl style="margin-top:10px">
+      <div class="kv"><dt>线路</dt><dd>线路一 · 12 集</dd></div>
+      <div class="kv"><dt>年份 / 时长</dt><dd>2024 · 45 分钟</dd></div>
+      <div class="kv"><dt>地区 / 语言</dt><dd>CN · zh</dd></div>
+      <div class="kv"><dt>评分</dt><dd>8.2 / 10</dd></div>
+    </dl>
+    <div class="budget"><span>该线路总时长预算</span><b>9h 12m</b></div>
+    <button class="flip">换源 · 线路二（8 集 · 6h 04m）</button>
+  </div>
+
+  <div class="card">
+    <div class="h" style="font-size:13.5px">剧集索引<small>条宽＝真实时长</small></div>
+    <div class="eps">
+      <div class="ep"><b>E1</b><div class="bar done" style="width:172px"></div><u>45m</u></div>
+      <div class="ep"><b>E2</b><div class="bar done" style="width:168px"></div><u>44m</u></div>
+      <div class="ep"><b>E3</b><div class="bar cur" style="width:180px"></div><u>47m</u></div>
+      <div class="ep"><b>E4</b><div class="bar" style="width:160px"></div><u>42m</u></div>
+      <div class="ep"><b>E5</b><div class="bar" style="width:176px"></div><u>46m</u></div>
+      <div class="ep"><b>E6</b><div class="bar" style="width:152px"></div><u>40m</u></div>
+      <div class="ep"><b>E7</b><div class="bar" style="width:184px"></div><u>48m</u></div>
+      <div class="ep"><b>E8</b><div class="bar" style="width:164px"></div><u>43m</u></div>
+    </div>
+  </div>
+
+  <div class="note">草图：构图与配色按真实产品内容绘制，海报为合成占位，非真实剧照。</div>
+</aside>
+
+</body>
+</html>

@@ -1,0 +1,40 @@
+[
+  {
+    "name": "央视",
+    "channel": [
+      {
+        "name": "CCTV-1 综合",
+        "number": 1,
+        "logo": "http://127.0.0.1:18080/live/logo/cctv1.png",
+        "tvgId": "cctv1",
+        "urls": ["http://127.0.0.1:18080/media/sample.m3u8"]
+      },
+      {
+        "name": "CCTV-2 财经",
+        "number": 2,
+        "tvgId": "cctv2",
+        "urls": [
+          "http://127.0.0.1:18080/media/sample.m3u8",
+          "http://127.0.0.1:18080/media/sample.mp4"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "卫视",
+    "channel": [
+      {
+        "name": "湖南卫视",
+        "number": 10,
+        "urls": ["http://127.0.0.1:18080/media/sample.m3u8"]
+      },
+      {
+        "name": "浙江卫视",
+        "urls": [
+          "http://127.0.0.1:18080/media/sample.m3u8",
+          "not-a-url"
+        ]
+      }
+    ]
+  }
+]

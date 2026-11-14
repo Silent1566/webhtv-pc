@@ -1,0 +1,25 @@
+PHASE5-EVIDENCE sync-merge-matrix 合并裁决实测（design/02 §4.4/§4.5）
+PHASE5-EVIDENCE sync-merge-matrix exit=0 suite=test/phase5_android_sync_test.dart
+PHASE5-EVIDENCE sync-merge-matrix case index=1 status=pass name=字段映射与单位（design/02 §3.4） 3 · position/duration/createTime 毫秒直传，无任何换算
+PHASE5-EVIDENCE sync-merge-matrix case index=2 status=pass name=字段映射与单位（design/02 §3.4） 4 · opening/ending 哨兵值 Long.MIN_VALUE → null，不溢出
+PHASE5-EVIDENCE sync-merge-matrix case index=3 status=pass name=字段映射与单位（design/02 §3.4） 5 · opening 正常值保留
+PHASE5-EVIDENCE sync-merge-matrix case index=4 status=pass name=字段映射与单位（design/02 §3.4） 6 · vodPic 空串 → null；非空原样保留
+PHASE5-EVIDENCE sync-merge-matrix case index=5 status=pass name=字段映射与单位（design/02 §3.4） 7 · vodRemarks/vodFlag 空串保留为空串（不折叠成 null）
+PHASE5-EVIDENCE sync-merge-matrix case index=6 status=pass name=字段映射与单位（design/02 §3.4） 8 · TMDB 字段保留在 raw
+PHASE5-EVIDENCE sync-merge-matrix case index=7 status=pass name=字段映射与单位（design/02 §3.4） 缺少 vodName 的记录被判为非法而不是空串填充
+PHASE5-EVIDENCE sync-merge-matrix case index=8 status=pass name=合并裁决（design/02 §4.4） 12 · 本地无该条 → insert
+PHASE5-EVIDENCE sync-merge-matrix case index=9 status=pass name=合并裁决（design/02 §4.4） 13 · 远端更新 → upsert
+PHASE5-EVIDENCE sync-merge-matrix case index=10 status=pass name=合并裁决（design/02 §4.4） 14 · 时间戳相等 → skip（幂等）
+PHASE5-EVIDENCE sync-merge-matrix case index=11 status=pass name=合并裁决（design/02 §4.4） 15 · 远端更旧 → skip（旧不覆盖新）
+PHASE5-EVIDENCE sync-merge-matrix case index=12 status=pass name=合并裁决（design/02 §4.4） 匹配键不含 cid（安卓 cid 会随配置重映射）
+PHASE5-EVIDENCE sync-merge-matrix case index=13 status=pass name=合并裁决（design/02 §4.4） 线路不同不匹配（同一剧不同线路是不同记录）
+PHASE5-EVIDENCE sync-merge-matrix case index=14 status=pass name=合并裁决（design/02 §4.4） 合并计划逐条裁决，且 skipped 不产生任何删除动作
+PHASE5-EVIDENCE sync-merge-matrix case index=15 status=pass name=合并裁决（design/02 §4.4） 解析失败条目计入 failed，且 applied+skipped+failed == total
+PHASE5-EVIDENCE sync-merge-matrix case index=16 status=pass name=删除标记（design/02 §4.5） 16 · 远端旧于删除时间 → skip，不复活
+PHASE5-EVIDENCE sync-merge-matrix case index=17 status=pass name=删除标记（design/02 §4.5） 17 · 远端新于删除时间 → insert（用户重新观看后应恢复）
+PHASE5-EVIDENCE sync-merge-matrix case index=18 status=pass name=删除标记（design/02 §4.5） 删除时间与远端时间相等视为复活后的新记录
+PHASE5-EVIDENCE sync-merge-matrix case index=19 status=pass name=删除标记（design/02 §4.5） 本地仍有记录时删除标记不再拦截（用户后来又看了）
+PHASE5-EVIDENCE sync-merge-matrix case index=20 status=pass name=删除标记（design/02 §4.5） 计划层面：删除标记拦截的条目计入 skipped 而非 applied
+PHASE5-EVIDENCE sync-merge-matrix case index=21 status=pass name=统计明细（design/02 §4.3 / §6） 18 · applied+skipped+failed == total
+PHASE5-EVIDENCE sync-merge-matrix case index=22 status=pass name=脱敏（design/02 §7） 合并裁决理由不含片名
+PHASE5-EVIDENCE sync-merge-matrix cases=22 all-pass=True

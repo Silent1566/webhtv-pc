@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T05:39:50Z",
+  "title": "Design System: WebHTV PC",
+  "extensions": {
+    "colorMeta": {
+      "night-ground": {
+        "role": "neutral",
+        "displayName": "夜空底 Night Ground",
+        "canonical": "#0B0E1A",
+        "tonalRamp": ["#080A16", "#202331", "#3B3F4E", "#585D6D", "#787D8D", "#999EAF", "#BEC3D5", "#E5EBFD"]
+      },
+      "night-surface-lowest": {
+        "role": "neutral",
+        "displayName": "阶梯最低一级 Lowest Step",
+        "canonical": "#070911",
+        "tonalRamp": ["#080B13", "#21242D", "#3C3F4A", "#5A5D68", "#797D88", "#9A9EAA", "#C0C4D0", "#E7EBF8"]
+      },
+      "night-surface-1": {
+        "role": "neutral",
+        "displayName": "表面阶梯一 Surface Low",
+        "canonical": "#141A2E",
+        "tonalRamp": ["#06091C", "#1C2338", "#373F55", "#555D75", "#747D96", "#959EB8", "#BAC3DF", "#E4EBFE"]
+      },
+      "night-surface-2": {
+        "role": "neutral",
+        "displayName": "表面阶梯二 Surface Container",
+        "canonical": "#1B2238",
+        "tonalRamp": ["#05091D", "#1C2339", "#373F57", "#545D76", "#737D98", "#949EBA", "#B9C3E1", "#E3EBFF"]
+      },
+      "night-surface-3": {
+        "role": "neutral",
+        "displayName": "表面阶梯三 Surface High",
+        "canonical": "#232C46",
+        "tonalRamp": ["#040920", "#1A233C", "#353F5A", "#525D7A", "#717D9B", "#929EBE", "#B7C4E5", "#E3EBFE"]
+      },
+      "night-surface-highest": {
+        "role": "neutral",
+        "displayName": "阶梯最高一级 Highest Step",
+        "canonical": "#2C3654",
+        "tonalRamp": ["#040822", "#19223E", "#343E5D", "#515C7D", "#707C9F", "#909EC1", "#B6C3E9", "#E3EBFF"]
+      },
+      "night-ink": {
+        "role": "neutral",
+        "displayName": "星表墨 Night Ink",
+        "canonical": "#E8ECF7",
+        "tonalRamp": ["#090B12", "#21242C", "#3C4048", "#5A5D67", "#797D87", "#9A9EA8", "#C0C4CE", "#E7EBF6"]
+      },
+      "night-ink-muted": {
+        "role": "neutral",
+        "displayName": "染色副文本 Muted Ink",
+        "canonical": "#A8B2CC",
+        "tonalRamp": ["#050A1B", "#1C2337", "#373F55", "#545D74", "#747D95", "#949EB7", "#BAC4DE", "#E3EBFF"]
+      },
+      "night-line": {
+        "role": "neutral",
+        "displayName": "发丝线 Hairline",
+        "canonical": "#232C46",
+        "tonalRamp": ["#040920", "#1A233C", "#353F5A", "#525D7A", "#717D9B", "#929EBE", "#B7C4E5", "#E3EBFE"]
+      },
+      "night-outline": {
+        "role": "neutral",
+        "displayName": "轮廓 Outline",
+        "canonical": "#3A4560",
+        "tonalRamp": ["#04091F", "#19233B", "#343F5A", "#515D79", "#707D9B", "#919EBD", "#B6C4E4", "#E3EBFE"]
+      },
+      "day-ground": {
+        "role": "neutral",
+        "displayName": "昼间底 Day Ground",
+        "canonical": "#F4F6FB",
+        "tonalRamp": ["#0A0B0E", "#232428", "#3E4044", "#5C5D62", "#7B7D82", "#9C9EA3", "#C2C4C9", "#E9EBF0"]
+      },
+      "day-surface-1": {
+        "role": "neutral",
+        "displayName": "昼间表面一 Day Surface Low",
+        "canonical": "#FFFFFF",
+        "tonalRamp": ["#0B0B0B", "#242424", "#404040", "#5D5D5D", "#7D7D7D", "#9E9E9E", "#C4C4C4", "#EBEBEB"]
+      },
+      "day-surface-2": {
+        "role": "neutral",
+        "displayName": "昼间表面二 Day Surface Container",
+        "canonical": "#EAEEF7",
+        "tonalRamp": ["#090B11", "#21242A", "#3D4047", "#5A5E65", "#7A7D85", "#9B9EA7", "#C0C4CD", "#E7EBF4"]
+      },
+      "day-surface-3": {
+        "role": "neutral",
+        "displayName": "昼间表面三 Day Surface High",
+        "canonical": "#DDE3F0",
+        "tonalRamp": ["#080B13", "#20242D", "#3B404A", "#595E69", "#787D89", "#999EAB", "#BEC4D1", "#E5EBF8"]
+      },
+      "day-surface-highest": {
+        "role": "neutral",
+        "displayName": "昼间最高一级 Day Highest",
+        "canonical": "#CBD4E6",
+        "tonalRamp": ["#060B16", "#1D2431", "#39404E", "#565E6D", "#757D8E", "#969FB0", "#BBC4D6", "#E2EBFE"]
+      },
+      "day-ink": {
+        "role": "neutral",
+        "displayName": "昼间墨 Day Ink",
+        "canonical": "#101427",
+        "tonalRamp": ["#07091B", "#1E2337", "#393E54", "#565C74", "#757C95", "#969DB7", "#BCC3DE", "#E5EAFE"]
+      },
+      "day-ink-muted": {
+        "role": "neutral",
+        "displayName": "昼间副文本 Day Muted Ink",
+        "canonical": "#4E5A75",
+        "tonalRamp": ["#04091E", "#19233B", "#343F59", "#515D78", "#707D9A", "#919EBC", "#B6C4E3", "#E2EBFF"]
+      },
+      "day-line": {
+        "role": "neutral",
+        "displayName": "昼间发丝线 Day Hairline",
+        "canonical": "#D3DAE8",
+        "tonalRamp": ["#070B14", "#1F242E", "#3A404B", "#585E6A", "#777D8A", "#989FAC", "#BDC4D2", "#E4EBFA"]
+      },
+      "day-outline": {
+        "role": "neutral",
+        "displayName": "昼间轮廓 Day Outline",
+        "canonical": "#97A3BC",
+        "tonalRamp": ["#040A1B", "#1B2437", "#364055", "#535E74", "#727D95", "#939FB7", "#B8C4DE", "#E2EBFF"]
+      },
+      "magnitude": {
+        "role": "primary",
+        "displayName": "星等琥珀 Magnitude Amber",
+        "canonical": "#F0B429",
+        "tonalRamp": ["#250000", "#332000", "#543B00", "#78580B", "#A07501", "#CA9404", "#F5B931", "#FEE8C0"]
+      },
+      "magnitude-on-light": {
+        "role": "primary",
+        "displayName": "昼间星等 Magnitude on Light",
+        "canonical": "#8A5B00",
+        "tonalRamp": ["#220000", "#351F00", "#583802", "#7E5406", "#A37327", "#C6944C", "#EEBA72", "#FFE7C9"]
+      },
+      "magnitude-ink-dark": {
+        "role": "primary",
+        "displayName": "星等墨（暗）Magnitude Ink Dark",
+        "canonical": "#1A1200",
+        "tonalRamp": ["#120A00", "#2B230C", "#483F28", "#665D45", "#867D64", "#A89E84", "#CEC3A9", "#F5EBCF"]
+      },
+      "magnitude-ink-light": {
+        "role": "primary",
+        "displayName": "星等墨（亮）Magnitude Ink Light",
+        "canonical": "#FFFFFF",
+        "tonalRamp": ["#0B0B0B", "#242424", "#404040", "#5D5D5D", "#7D7D7D", "#9E9E9E", "#C4C4C4", "#EBEBEB"]
+      },
+      "magnitude-container-dark": {
+        "role": "primary",
+        "displayName": "星等容器（暗）Magnitude Container Dark",
+        "canonical": "#3A2A00",
+        "tonalRamp": ["#160800", "#312100", "#4E3D15", "#6D5B34", "#8D7B53", "#AF9C73", "#D6C298", "#FDE9BE"]
+      },
+      "magnitude-container-light": {
+        "role": "primary",
+        "displayName": "星等容器（亮）Magnitude Container Light",
+        "canonical": "#FFE7B0",
+        "tonalRamp": ["#180600", "#302200", "#513C01", "#705B27", "#907B47", "#B29C67", "#D9C28C", "#FFE9B7"]
+      },
+      "status-ok": {
+        "role": "status",
+        "displayName": "可用 Available",
+        "canonical": "#3DD68C",
+        "tonalRamp": ["#001103", "#002D17", "#054D2D", "#0E6F44", "#00955B", "#02BC74", "#4FE499", "#B7FFD3"]
+      },
+      "status-degraded": {
+        "role": "status",
+        "displayName": "降级 Degraded",
+        "canonical": "#F5A623",
+        "tonalRamp": ["#260000", "#361E00", "#593800", "#815200", "#A97008", "#D48E10", "#FDB449", "#FEE7CB"]
+      },
+      "status-failed": {
+        "role": "status",
+        "displayName": "失效 Failed",
+        "canonical": "#F0526B",
+        "tonalRamp": ["#240002", "#4B0012", "#7C0025", "#B00039", "#D73957", "#FF6077", "#FEAAAF", "#FEE4E5"]
+      },
+      "status-unknown": {
+        "role": "status",
+        "displayName": "未知 Unknown",
+        "canonical": "#6B7A99",
+        "tonalRamp": ["#030920", "#17233D", "#323F5B", "#4F5D7B", "#6E7D9C", "#8F9FBF", "#B4C4E6", "#E2EBFF"]
+      },
+      "status-ok-on-light": {
+        "role": "status",
+        "displayName": "可用（昼间）Available on Light",
+        "canonical": "#12734A",
+        "tonalRamp": ["#001104", "#002D18", "#034D2F", "#0A6F47", "#399065", "#5DB386", "#84DAAB", "#B7FED5"]
+      },
+      "status-degraded-on-light": {
+        "role": "status",
+        "displayName": "降级（昼间）Degraded on Light",
+        "canonical": "#8A5300",
+        "tonalRamp": ["#250000", "#391C00", "#5D3500", "#83510D", "#A86F2C", "#CC904F", "#F4B675", "#FEE7CF"]
+      },
+      "status-failed-on-light": {
+        "role": "status",
+        "displayName": "失效（昼间）Failed on Light",
+        "canonical": "#A3122C",
+        "tonalRamp": ["#240000", "#4B000C", "#7B011C", "#AA1C32", "#D14550", "#F86970", "#FDABAA", "#FFE4E3"]
+      },
+      "status-unknown-on-light": {
+        "role": "status",
+        "displayName": "未知（昼间）Unknown on Light",
+        "canonical": "#4E5A75",
+        "tonalRamp": ["#04091E", "#19233B", "#343F59", "#515D78", "#707D9A", "#919EBC", "#B6C4E3", "#E2EBFF"]
+      }
+    },
+    "typographyMeta": {
+      "display-small": { "displayName": "Display Small", "purpose": "页面级大标题。字重映射到真实存在的 w700。" },
+      "headline-medium": { "displayName": "Headline Medium", "purpose": "页面主标题。字重映射到真实存在的 w700。" },
+      "headline-small": { "displayName": "Headline Small", "purpose": "次级页面标题。字重映射到真实存在的 w700。" },
+      "title-large": { "displayName": "Title Large", "purpose": "对话框标题。字重 w700。" },
+      "title-medium": { "displayName": "Title Medium", "purpose": "区块标题与卡片标题的主力（SectionHeader、源场标题、顶栏应用名）。字重 w700。" },
+      "title-small": { "displayName": "Title Small", "purpose": "小标题。字重 w700。" },
+      "body-large": { "displayName": "Body Large", "purpose": "列表项标题与主正文。字重 w400。" },
+      "body-medium": { "displayName": "Body Medium", "purpose": "常规正文、输入框标签与提示、对话框内容。字重 w400。" },
+      "body-small": { "displayName": "Body Small", "purpose": "次要正文与标签文字（TagChip、源场图例、tooltip）。行高保持 M3 的 1.33 —— 提高它会挂测试，见 Open Items。" },
+      "label-large": { "displayName": "Label Large", "purpose": "按钮文字。FilledButton 在此之上把字重提到 w700。" },
+      "label-medium": { "displayName": "Label Medium", "purpose": "分段按钮文字。字重 w400。" },
+      "label-small": { "displayName": "Label Small", "purpose": "版本号与源场截断说明（「另有 N 个较暗的源未在此展开」）。字重 w400。" }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "duration-fast", "value": "120ms", "purpose": "AppMotion.fast —— 已在 tokens.dart 定义，但全仓零调用点（声明而非事实，见 DESIGN.md 的 Open Items）。" },
+      { "name": "duration-base", "value": "200ms", "purpose": "AppMotion.base —— 已在 tokens.dart 定义，但全仓零调用点。" },
+      { "name": "duration-slow", "value": "320ms", "purpose": "AppMotion.slow —— 已在 tokens.dart 定义，但全仓零调用点。" },
+      { "name": "ease-out-expo", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "AppMotion.ease —— 指数缓出。刻意从「已经可见」的默认状态出发：入场动画藏起来的内容会被读成「元素缺失」，然后在截图里被当成缺陷修掉。零调用点。" },
+      { "name": "emphasized", "value": "cubic-bezier(0.2, 0, 0, 1)", "purpose": "AppMotion.emphasized —— 状态切换用的轻微过冲，设计上只给 signature move。零调用点。" }
+    ],
+    "breakpoints": [
+      { "name": "window-min-width", "value": "1024px" },
+      { "name": "window-min-height", "value": "640px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Filled Button",
+      "kind": "button",
+      "refersTo": "button-filled",
+      "description": "主操作按钮。底色是唯一强调色星等琥珀，文字用星等墨。最小高度 42px，圆角 10px，文字 labelLarge 但字重提到 700。",
+      "html": "<button class=\"ds-btn-filled\">导入配置</button>",
+      "css": ".ds-btn-filled { background-color: #F0B429; color: #1A1200; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 700; line-height: 1.43; letter-spacing: 0.1px; min-height: 42px; padding: 11px 18px; border: none; border-radius: 10px; cursor: pointer; transition: background-image 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-filled:hover { background-image: linear-gradient(rgba(232,236,247,0.045), rgba(232,236,247,0.045)); } .ds-btn-filled:focus-visible { outline: none; background-image: linear-gradient(rgba(240,180,41,0.16), rgba(240,180,41,0.16)); } .ds-btn-filled:active { background-image: linear-gradient(rgba(240,180,41,0.09), rgba(240,180,41,0.09)); }"
+    },
+    {
+      "name": "Outlined Button",
+      "kind": "button",
+      "refersTo": "button-outlined",
+      "description": "次级操作按钮，也是剧集卡的形状（测试锁死为 OutlinedButton）。无底色，1px 发丝边，文字 labelLarge (400)。",
+      "html": "<button class=\"ds-btn-outlined\">第 1 集</button>",
+      "css": ".ds-btn-outlined { background-color: transparent; color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 400; line-height: 1.43; letter-spacing: 0.1px; min-height: 42px; padding: 10px 16px; border: 1px solid rgba(35,44,70,0.72); border-radius: 10px; cursor: pointer; transition: background-image 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-outlined:hover { background-image: linear-gradient(rgba(232,236,247,0.045), rgba(232,236,247,0.045)); } .ds-btn-outlined:focus-visible { outline: none; background-image: linear-gradient(rgba(240,180,41,0.16), rgba(240,180,41,0.16)); }"
+    },
+    {
+      "name": "Text Button",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "三级操作。前景用 onSurfaceVariant，靠颜色降级而不是字重。圆角 6px。",
+      "html": "<button class=\"ds-btn-text\">正序</button>",
+      "css": ".ds-btn-text { background-color: transparent; color: #A8B2CC; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 400; line-height: 1.43; letter-spacing: 0.1px; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; transition: background-image 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-text:hover { background-image: linear-gradient(rgba(232,236,247,0.045), rgba(232,236,247,0.045)); } .ds-btn-text:focus-visible { outline: none; background-image: linear-gradient(rgba(240,180,41,0.16), rgba(240,180,41,0.16)); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-text",
+      "description": "填充式输入框。底是表面阶梯第二级，1px 发丝边；聚焦时边线换成星等琥珀并加粗到 1.5px，没有发光——平坦的场上不允许光晕。",
+      "html": "<input class=\"ds-input-text\" type=\"text\" placeholder=\"配置地址或纯 JSON\">",
+      "css": ".ds-input-text { background-color: #1B2238; color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 400; line-height: 1.43; letter-spacing: 0.25px; padding: 12px 14px; border: 1px solid rgba(35,44,70,0.72); border-radius: 10px; outline: none; transition: border-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-input-text::placeholder { color: #A8B2CC; } .ds-input-text:hover { border-color: rgba(58,69,96,0.9); } .ds-input-text:focus-visible { border: 1.5px solid #F0B429; padding: 11.5px 13.5px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "常规容器。底 surfaceContainerLow，圆角 14px，内边距 16px，无外边距（间距由父级的 AppSpace 控制），elevation 0。",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">站源健康</div><div class=\"ds-card-body\">163 个</div></div>",
+      "css": ".ds-card { background-color: #141A2E; border-radius: 14px; padding: 16px; } .ds-card-title { color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 16px; font-weight: 700; line-height: 1.5; letter-spacing: 0.15px; } .ds-card-body { margin-top: 8px; color: #A8B2CC; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 12px; font-weight: 400; line-height: 1.33; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Tag Chip",
+      "kind": "chip",
+      "refersTo": "chip-tag",
+      "description": "胶囊标签，兼作可点筛选。选中态用星等琥珀的低透明度底，文字转为琥珀并提到 700。取代了三套圆角写死 14、内边距各不相同的私有实现。",
+      "html": "<div class=\"ds-chip-row\"><span class=\"ds-chip ds-chip-static\">2024</span><button class=\"ds-chip ds-chip-on\">地区</button><button class=\"ds-chip ds-chip-on ds-chip-selected\">科幻</button></div>",
+      "css": ".ds-chip-row { display: flex; gap: 4px; align-items: center; } .ds-chip { font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 12px; font-weight: 400; line-height: 1.33; letter-spacing: 0.4px; padding: 5px 11px; border-radius: 999px; border: none; white-space: nowrap; } .ds-chip-static { background-color: #2C3654; color: #E8ECF7; } .ds-chip-on { background-color: #232C46; color: #A8B2CC; cursor: pointer; transition: background-image 120ms cubic-bezier(0.16,1,0.3,1); } .ds-chip-on:hover { background-image: linear-gradient(rgba(240,180,41,0.10), rgba(240,180,41,0.10)); } .ds-chip-on:focus-visible { outline: none; background-image: linear-gradient(rgba(240,180,41,0.16), rgba(240,180,41,0.16)); } .ds-chip-selected { background-color: rgba(240,180,41,0.22); color: #F0B429; font-weight: 700; }"
+    },
+    {
+      "name": "Navigation Rail",
+      "kind": "nav",
+      "refersTo": "navigation-rail",
+      "description": "外壳侧栏，宽 76px，背景是表面阶梯最低一级。世界只把选中态染成星等琥珀；标签 11.5px，选中 700 / 未选中 400。必须是 NavigationRail，测试断言 findsOneWidget。",
+      "html": "<nav class=\"ds-rail\"><span class=\"ds-rail-item ds-rail-selected\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#F0B429\" stroke-width=\"2\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"/></svg><em>首页</em></span><span class=\"ds-rail-item\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#A8B2CC\" stroke-width=\"2\"><rect x=\"2\" y=\"7\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg><em>直播</em></span><span class=\"ds-rail-item\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#A8B2CC\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M20 20l-3.5-3.5\"/></svg><em>搜索</em></span></nav>",
+      "css": ".ds-rail { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 76px; padding: 12px 0; background-color: #070911; } .ds-rail-item { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 60px; padding: 6px 0; border-radius: 10px; background-color: transparent; cursor: pointer; } .ds-rail-item em { font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 11.5px; font-style: normal; font-weight: 400; color: #A8B2CC; } .ds-rail-selected { background-color: #232C46; } .ds-rail-selected em { font-weight: 700; color: #E8ECF7; } .ds-rail-item:hover { background-image: linear-gradient(rgba(232,236,247,0.045), rgba(232,236,247,0.045)); }"
+    },
+    {
+      "name": "Source Field",
+      "kind": "custom",
+      "refersTo": "source-field",
+      "description": "签名招式。每一个站源是一个点，直径就是实测成功率（7–22px），颜色是健康状态；选中源加一圈 1.5px 星等琥珀环。图例即计数，一行读完「多少源现在能用」。数据来自 site_health 表的 *_ok / *_total。",
+      "html": "<div class=\"ds-field\"><div class=\"ds-field-head\"><span class=\"ds-field-title\">站源健康</span><span class=\"ds-field-count\">163 个</span></div><div class=\"ds-field-legend\"><span class=\"ds-leg\"><i style=\"background:#3DD68C\"></i>可用 <b>128</b></span><span class=\"ds-leg\"><i style=\"background:#F5A623\"></i>降级 <b>21</b></span><span class=\"ds-leg\"><i style=\"background:#F0526B\"></i>失效 <b>9</b></span><span class=\"ds-leg\"><i style=\"background:#6B7A99\"></i>未知 <b>5</b></span></div><div class=\"ds-dots\"><span class=\"ds-star\" style=\"width:22px;height:22px;background:#3DD68C;border:1.5px solid #F0B429\"></span><span class=\"ds-star\" style=\"width:21.3px;height:21.3px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:20.5px;height:20.5px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:19.8px;height:19.8px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:19px;height:19px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:18.3px;height:18.3px;background:#F5A623\"></span><span class=\"ds-star\" style=\"width:17.5px;height:17.5px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:16.8px;height:16.8px;background:#F5A623\"></span><span class=\"ds-star\" style=\"width:16px;height:16px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:15.3px;height:15.3px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:14.5px;height:14.5px;background:#F5A623\"></span><span class=\"ds-star\" style=\"width:13.8px;height:13.8px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:13px;height:13px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:12.3px;height:12.3px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:11.5px;height:11.5px;background:#F5A623\"></span><span class=\"ds-star\" style=\"width:10.8px;height:10.8px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:10px;height:10px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:9.3px;height:9.3px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:8.5px;height:8.5px;background:#F0526B\"></span><span class=\"ds-star\" style=\"width:7.8px;height:7.8px;background:#3DD68C\"></span><span class=\"ds-star\" style=\"width:7px;height:7px;background:#F0526B\"></span><span class=\"ds-star\" style=\"width:7px;height:7px;background:#6B7A99\"></span><span class=\"ds-star\" style=\"width:7px;height:7px;background:#6B7A99\"></span><span class=\"ds-star\" style=\"width:7px;height:7px;background:#6B7A99\"></span></div></div>",
+      "css": ".ds-field { background-color: #141A2E; border: 1px solid rgba(35,44,70,0.72); border-radius: 14px; padding: 16px; } .ds-field-head { display: flex; align-items: baseline; gap: 8px; } .ds-field-title { color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 16px; font-weight: 700; line-height: 1.5; letter-spacing: 0.15px; } .ds-field-count { color: #A8B2CC; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 12px; font-weight: 400; line-height: 1.33; font-variant-numeric: tabular-nums; } .ds-field-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; } .ds-leg { display: inline-flex; align-items: center; gap: 6px; color: #A8B2CC; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 12px; font-weight: 400; line-height: 1.33; } .ds-leg i { width: 8px; height: 8px; border-radius: 50%; } .ds-leg b { color: #E8ECF7; font-weight: 700; font-variant-numeric: tabular-nums; } .ds-dots { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; } .ds-star { display: block; border-radius: 50%; box-sizing: content-box; }"
+    },
+    {
+      "name": "Dialog",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "模态容器。底是表面阶梯第三级，圆角 14px，elevation 0 —— 浮起来靠更亮的表面，不靠投影。",
+      "html": "<div class=\"ds-dialog\"><div class=\"ds-dialog-title\">导入配置</div><div class=\"ds-dialog-body\">支持 HTTP(S) URL、本地文件或纯 JSON 文本。</div><div class=\"ds-dialog-actions\"><button class=\"ds-dialog-btn\">取消</button><button class=\"ds-dialog-btn ds-dialog-btn-primary\">导入</button></div></div>",
+      "css": ".ds-dialog { background-color: #232C46; border-radius: 14px; padding: 24px; max-width: 420px; } .ds-dialog-title { color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 22px; font-weight: 700; line-height: 1.27; } .ds-dialog-body { margin-top: 12px; color: #E8ECF7; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 400; line-height: 1.43; letter-spacing: 0.25px; } .ds-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; } .ds-dialog-btn { background-color: transparent; color: #A8B2CC; font-family: 'Microsoft YaHei UI','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','PingFang SC','Segoe UI',Roboto,sans-serif; font-size: 14px; font-weight: 400; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; } .ds-dialog-btn-primary { color: #F0B429; font-weight: 700; } .ds-dialog-btn:hover { background-image: linear-gradient(rgba(232,236,247,0.045), rgba(232,236,247,0.045)); } .ds-dialog-btn:focus-visible { outline: none; background-image: linear-gradient(rgba(240,180,41,0.16), rgba(240,180,41,0.16)); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "星等星表 (The Magnitude Catalogue)",
+    "overview": "星等星表把天文星表与星等标度借来做一件具体的事：让「这个站源现在还能不能用」成为界面上第一个、也最容易读的信息。每一个站源是天上一颗星，**星等就是它的实测成功率**——点越大越亮，颜色是健康状态。产品对外只承诺「单个站源能否使用以实际测试为准」，所以界面不可以用一个绿点或一排空位去暗示「全都能播」；它必须把实测结果如实画出来，**包括「没测过」这一态**。\n\n本表面明确拒绝的类别默认排布是「深色海报墙 + 顶部主视觉横幅」：那会把「哪个源能用」沉到二级页面里去，而海报墙本身也无法表达健康度。源场初版放在首页内容区第一块，实测被推翻（170 个站源里 160 个没有采样记录，整片场基本是灰点），现移到独立页面 SiteHealthPage，首页回到分类条 + 海报网格的纯粹内容职责。密度是刻意的：源场画的是配置里的**真实全量站源**（实测有 163 个），不是三个装饰点。第一版把点画成 5–14px，实测截图里整片场缩成左上角一条 50px 的带子，读起来像附注而不是 signature move（正是方向卡自陈的风险：「点阵场一旦画得太小或太稀，就退化成装饰」）。现在点径 7–22px，一片场才有「场」的样子。\n\n暗色是主身份；亮色是**独立设计的「昼间星表」**，不是暗色的自动反转——亮色底上的星等与四个状态色都换成压深版本，因为原色在浅底上达不到 4.5:1。",
+    "keyCharacteristics": [
+      "深靛夜空底 + 三级色相偏移的表面阶梯；**没有任何中性灰**。",
+      "单一强调色：星等琥珀，只出现在真正是「星等」的地方。",
+      "四个语义状态色承担真实工作（站源健康是本产品的核心信息）。",
+      "平坦的场：发丝边代替阴影，全站 elevation 一律为 0。",
+      "中文优先：字重只用真实存在的 400 / 700，层级靠字号与颜色拉开。",
+      "数字用表格字形，且只在数字成列处启用。"
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "星等琥珀只出现在真正是「星等」的地方：基准星环、当前剧集、选中态。它不是品牌色，不可以用来「提亮」任何东西。当你想给它找第二个用途时，答案是不给。", "section": "colors" },
+      { "name": "The Never-Grey Rule", "body": "禁止中性灰。副文本、发丝线、表面阶梯全部从夜空底色按色相偏移取得。需要一个新的层级时，**偏移底色**，不要加一档灰。", "section": "colors" },
+      { "name": "The Unknown-Is-Not-Available Rule", "body": "「未知」有它自己的颜色、自己的图例计数、自己的星等（最小中性尺寸）。没有采样记录的源永远不可以被算进「可用」，也不可以借用「可用」的绿色。对外只承诺「以实测为准」，界面必须守同一条线。", "section": "colors" },
+      { "name": "The Explicit-Color Rule", "body": "状态色只能经 `context.semanticColors` 取得。`AppSemanticColors` 在扩展缺失时**按当前亮度回落到默认值，而不是抛异常**——测试大量用裸 `MaterialApp(home: ...)`（不传 `theme:`）pump 单个页面，此时扩展根本不存在，一个用 `!` 硬断言的取色器会让所有页面级测试直接崩掉。", "section": "colors" },
+      { "name": "The Real-Weight Rule", "body": "字重只用 400 与 700。微软雅黑只有 Light(300) / Regular(400) / Bold(700) 三个真实字重，**没有真 Medium**：改造前全站 18 处拿 `w600`、4 处拿 `w500` 当标题字重，在雅黑上不是真实字重，会走**合成加粗**（笔画粘连、小字号发糊），在 Linux/macOS 上又落到另一支字体、观感不一致。因此标题统一映射到真实存在的 `w700`，正文与标签用 `w400`。**永远不要为了「稍微强调一点」而使用 500 或 600。**", "section": "typography" },
+      { "name": "The Metric-Neutral Rule", "body": "字号与行高保持 Material 3 原值，只改字重与颜色。这是**实测出来的硬约束，不是保守**：测试大量使用 `tester.tap` **不带 `ensureVisible`**（例如 `phase5_sync_ui_test.dart:210`）——本次复核磁盘上 94 个 `*_test.dart`（69 单测 + 24 集成 + 1 driver）里有 **44 个**出现 `.tap(`，而只有 **2 个**出现 `ensureVisible`（`theme.dart` 与方向契约记录的盘点是「96 个测试文件」）。任何净高度变化都会把控件挤出 800×600 测试视口，点击打空并连锁失败。实测把 `bodySmall` 行高从 M3 的 1.33 提到 1.65，`phase5_sync_ui_test.dart` 会挂 3 个用例；还原 `theme.dart` 后该文件全绿（+26）。而**字重是度量中性的**——同一字族的 Light/Regular/Bold 字宽一致，所以 `w600 → w700` 不移动任何盒子，却修掉了合成加粗。这正是本次拿到的收益，且零布局风险。", "section": "typography" },
+      { "name": "The Tabular-Only-Where-Aligned Rule", "body": "表格字形只用在**数字成列**的地方（星等图例计数、时长、集数）。不给正文全局开启——中文夹数字时等宽字形会显得松散。", "section": "typography" },
+      { "name": "The Flat-Field Rule", "body": "不使用阴影，不使用 `surfaceTint`。需要层级时，移动到表面阶梯的下一级，或加一条发丝边。", "section": "elevation" },
+      { "name": "The Hairline Rule", "body": "分隔一律用 `outlineVariant @ 0.72`。发丝线是全站唯一的分隔语言——不用灰色、不用更粗的线、不用背景色块去「框住」东西。", "section": "elevation" },
+      { "name": "The Zero-Elevation Rule", "body": "新组件若需要「浮起来」，先问它是不是真的需要浮起来。对话框与菜单浮起来靠的是**更亮的表面**，不是投影。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 从 `context.semanticColors` 取状态色与星等琥珀，永不写死十六进制值。",
+      "Do 需要层级时移动表面阶梯（`surfaceContainerLow` → `surfaceContainer` → `surfaceContainerHigh`）或加一条 `outlineVariant @ 0.72` 发丝边。",
+      "Do 用 `AppSpace`（4/8/12/16/24/32/48）与 `AppRadius`（6/10/14/999）的标度值，不要引入新的散值。",
+      "Do 字重只用 `AppWeight.body`/`label` (400) 与 `AppWeight.title`/`display` (700)。",
+      "Do 只在数字成列处用 `tabular(style)` 套表格字形。",
+      "Do 让「未知」保持独立：自己的颜色、自己的图例计数、最小中性点径。",
+      "Do 保持 `SectionHeader` 上方留白大于下方（上 24px、下 10px）。",
+      "Do 保持海报 2:3、剧照 16:9，与全站共用同一尺度。",
+      "Do 尊重测试锁死的结构：`NavigationRail` 外壳、`OutlinedButton` 剧集卡、`ChoiceChip` 线路 chip、`SwitchListTile` 同步开关、`tmdbStatusBarHeight = 72`、`find.byKey` 的字面值与挂载 widget 类型。",
+      "Do 让文本保持 `Text`/`SelectableText` 且 `.data` 非空（`Text.rich` 会在遍历 `allWidgets` 取 `.data` 的测试里静默消失）。"
+    ],
+    "donts": [
+      "Don't 使用 `ColorScheme.fromSeed`。种子算法产出的是与主题无关的中性灰阶，也就是「灰底加一个强调色」——那正是这一类产品的默认值，不是克制。星等星表的表面必须**显式给出**。",
+      "Don't 使用阴影、`surfaceTint` 或任何非 0 的 elevation。星等星表是一片平坦的场。",
+      "Don't 使用中性灰。所有「灰」都必须从夜空底色按色相偏移取得。",
+      "Don't 使用 `w500` 或 `w600`。微软雅黑没有真 Medium，这两个字重会走合成加粗（笔画粘连、小字号发糊）。",
+      "Don't 改 Material 3 的字号或行高。任何净高度变化都会把控件挤出 800×600 测试视口，让不带 `ensureVisible` 的 `tester.tap` 打空。",
+      "Don't 把「未知」显示成「可用」，也不要因为没有采样就隐藏这个源。",
+      "Don't 在样本量 < 3 时把源标成「失效」。一次失败不是死亡的证明。",
+      "Don't 给星等琥珀找第二个用途。它不是品牌色。",
+      "Don't 把源场画成几个装饰点——一片场才有「场」的样子，几个点只是装饰。",
+        "Don't 把源场放回首页内容区。实测 170 个站源里 160 个没有采样记录，整片场基本是灰点，占掉首屏近三分之一高度却没有信息量（用户反馈 2026-10-12）。健康度是按需查看的诊断信息，现在它在 SiteHealthPage（设置 → 打开站点健康）。",
+      "Don't 用 `Text.rich` 替代 `Text`，也不要让 `.data` 为空。"
+    ]
+  }
+}

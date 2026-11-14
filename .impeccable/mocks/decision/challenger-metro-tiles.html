@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Metro 排版方块 · 首屏</title>
+<style>
+  /* Metro 排版方块：世界只借字体、配色、密度、一个 signature move。
+     导航与控件保持平台标准；内容区由平涂色块构成，色块就是唯一的门。 */
+  :root{
+    --ground:#000000; --ink:#FFFFFF; --ink2:#9AA0A6;
+    --cy:#00C8F0; --mg:#FF3DA6; --li:#B4FF39; --or:#FF7A18; --vi:#8A5CF6;
+    --cjk:"Microsoft YaHei UI","Microsoft YaHei","Noto Sans CJK SC","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:900px;overflow:hidden}
+  body{width:1440px;height:900px;background:var(--ground);color:var(--ink);
+    font-family:var(--cjk);font-size:13px;line-height:1.5;font-feature-settings:"tnum" 1;
+    display:grid;grid-template-columns:84px 1fr;grid-template-rows:56px 1fr}
+
+  .rail{grid-row:1/3;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:2px}
+  .rail .brand{width:34px;height:34px;background:var(--cy);color:#000;display:grid;
+        place-items:center;font-weight:700;font-size:15px;margin-bottom:14px}
+  .nav{width:64px;height:54px;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;gap:4px;color:var(--ink2)}
+  .nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;
+       stroke-linecap:round;stroke-linejoin:round}
+  .nav span{font-size:10.5px}
+  .nav.on{color:var(--ink)}
+  .nav.on svg{stroke:var(--cy)}
+
+  .top{grid-column:2/3;display:flex;align-items:center;gap:16px;padding:0 22px}
+  .cfg{display:flex;align-items:baseline;gap:10px}
+  .cfg b{font-size:14px;font-weight:700}
+  .cfg em{font-style:normal;font-size:12px;color:var(--ink2)}
+  .spacer{flex:1}
+  .btn{height:32px;padding:0 14px;border:0;background:#1A1A1A;color:var(--ink);
+       font-family:inherit;font-size:12.5px;display:inline-flex;align-items:center;gap:7px}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+       stroke-linecap:round;stroke-linejoin:round}
+  .btn.pri{background:var(--cy);color:#000;font-weight:700}
+
+  /* ---- 内容区：平涂色块长卷，色块就是唯一的门 ---- */
+  .pan{grid-column:2/3;display:grid;grid-template-columns:repeat(4,1fr);
+       grid-template-rows:repeat(2,1fr);gap:0;overflow:hidden}
+  .tile{position:relative;overflow:hidden;display:flex;flex-direction:column;
+        justify-content:flex-end;padding:22px 24px;cursor:default}
+  .tile .big{font-size:104px;line-height:.86;font-weight:300;letter-spacing:-.03em;
+        white-space:nowrap;margin-left:-6px}
+  .tile .sub{margin-top:14px;font-size:12.5px;font-weight:700;letter-spacing:.04em}
+  .tile .cnt{position:absolute;top:18px;right:22px;font-size:12px;font-weight:700;
+        font-variant-numeric:tabular-nums;opacity:.85}
+  .tile.on .big{font-weight:700}
+  .tile.on::after{content:"";position:absolute;inset:0;border:0}
+
+  /* 平涂：色块即内容，没有渐变、没有斜面、没有边框 */
+  .t1{background:var(--cy);color:#001B22}
+  .t2{background:var(--mg);color:#2B0016}
+  .t3{background:var(--li);color:#132000}
+  .t4{background:var(--or);color:#2B1000}
+  .t5{background:var(--vi);color:#150033}
+  .t6{background:#111111;color:var(--ink)}
+  .t7{background:#0A0A0A;color:var(--ink)}
+
+  /* 被选中的门：整块泛成强调色，字重随之加重 */
+  .t3.on{background:var(--ink);color:#000}
+
+  /* live 色块：翻面显示新鲜数据，而不是装饰 */
+  .live{display:flex;flex-direction:column;gap:10px}
+  .live .row{display:flex;align-items:baseline;gap:10px;font-size:12.5px}
+  .live .row b{font-variant-numeric:tabular-nums;font-weight:700}
+  .live .row i{width:9px;height:9px;flex:none;display:inline-block}
+  .live .row span{color:var(--ink2)}
+  .live .row u{text-decoration:none;margin-left:auto;font-variant-numeric:tabular-nums}
+
+  .foot{position:absolute;left:24px;bottom:10px;font-size:10.5px;color:#5A5F66}
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="brand">W</div>
+  <div class="nav on"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>首页</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></svg><span>最近观看</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg><span>收藏</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 20V9M12 20V4M19 20v-7"/></svg><span>直播</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>搜索</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span>设置</span></div>
+  <div class="nav"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>日志</span></div>
+</nav>
+
+<header class="top">
+  <div class="cfg"><b>AT 配置</b><em>163 站点 · 38 直播</em></div>
+  <div class="spacer"></div>
+  <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 4v12"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/></svg>导入配置</button>
+  <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>选择站点</button>
+</header>
+
+<main class="pan">
+  <section class="tile t1"><span class="cnt">42</span><div class="big">电影</div><div class="sub">木偶 · 金牌 · 天空</div></section>
+  <section class="tile t2"><span class="cnt">68</span><div class="big">剧集</div><div class="sub">115 · 夸克 · 湖班</div></section>
+  <section class="tile t3 on"><span class="cnt">31</span><div class="big">综艺</div><div class="sub">当前选择</div></section>
+  <section class="tile t4"><span class="cnt">22</span><div class="big">动漫</div><div class="sub">快看 · 风车</div></section>
+
+  <section class="tile t6 live">
+    <div class="sub" style="margin:0 0 4px">站点健康</div>
+    <div class="row"><i style="background:#3DD68C"></i><b>128</b><span>可用</span><u>木偶 9</u></div>
+    <div class="row"><i style="background:#F5A623"></i><b>21</b><span>降级</span><u>夸克 3</u></div>
+    <div class="row"><i style="background:#F0526B"></i><b>9</b><span>失效</span><u>湖班 5</u></div>
+    <div class="row"><i style="background:#6B7280"></i><b>5</b><span>未知</span><u>—</u></div>
+  </section>
+
+  <section class="tile t5"><span class="cnt">38</span><div class="big">直播</div><div class="sub">EPG · 弹幕</div></section>
+  <section class="tile t7"><span class="cnt">12</span><div class="big">最近</div><div class="sub">继续观看</div></section>
+
+  <div class="foot">草图：构图与配色按真实产品内容绘制，海报为合成占位，非真实剧照。</div>
+</main>
+
+</body>
+</html>

@@ -1,0 +1,51 @@
+{
+  "page": 1,
+  "total_pages": 1,
+  "total_results": 3,
+  "results": [
+    {
+      "id": 1399,
+      "media_type": "tv",
+      "name": "示例剧集",
+      "original_name": "Fixture Show",
+      "overview": "示例剧集简介",
+      "poster_path": "/tv-poster.jpg",
+      "backdrop_path": "/tv-backdrop.jpg",
+      "first_air_date": "2024-03-01",
+      "vote_average": 8.2,
+      "original_language": "zh",
+      "origin_country": [
+        "CN"
+      ],
+      "genre_ids": [
+        18,
+        10765
+      ]
+    },
+    {
+      "id": 550,
+      "media_type": "movie",
+      "title": "示例电影",
+      "original_title": "Fixture Movie",
+      "overview": "示例电影简介",
+      "poster_path": "/movie-poster.jpg",
+      "backdrop_path": "/movie-backdrop.jpg",
+      "release_date": "2023-06-15",
+      "vote_average": 7.9,
+      "original_language": "en",
+      "origin_country": [
+        "US"
+      ],
+      "genre_ids": [
+        28
+      ]
+    },
+    {
+      "id": 287,
+      "media_type": "person",
+      "name": "示例演员",
+      "profile_path": "/person.jpg",
+      "known_for_department": "Acting"
+    }
+  ]
+}

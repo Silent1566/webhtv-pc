@@ -1,0 +1,1240 @@
+/// 配置导入与站点服务集成测试（§7.4.1、§7.4.2、§7.5、§8、§10.2、§19.3）。
+///
+/// 使用本地 fixture 服务重放 `packages/test-fixtures` 的同一份数据，因此断言
+/// 对象是真实 HTTP 行为（编码、Header、错误码），而不是被打桩的返回值。
+library;
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/app_error.dart';
+import 'package:webhtv_pc/core/cat_http.dart';
+import 'package:webhtv_pc/core/config_loader.dart';
+import 'package:webhtv_pc/core/http_api.dart';
+import 'package:webhtv_pc/core/playback.dart';
+import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/services/parse_service.dart';
+import 'package:webhtv_pc/services/site_service.dart';
+import 'package:webhtv_pc/services/spider_router.dart';
+import 'package:webhtv_pc/services/storage.dart';
+
+import 'support/test_fixture_server.dart';
+
+void main() {
+  late TestFixtureServer server;
+  late ConfigLoader loader;
+  late ConfigImportService importService;
+
+  setUp(() async {
+    server = await TestFixtureServer.start();
+    loader = ConfigLoader();
+    importService = ConfigImportService(loader: loader);
+  });
+
+  tearDown(() async {
+    importService.close();
+    await server.stop();
+  });
+
+  String configFor(String sitePath, {int type = 1, String key = 'k'}) =>
+      jsonEncode({
+        'name': '集成测试配置',
+        'sites': [
+          {
+            'key': key,
+            'name': '站点 $key',
+            'type': type,
+            'api': '${server.baseUrl}$sitePath',
+            'searchable': 1,
+            'quickSearch': 1,
+          },
+        ],
+      });
+
+  group('配置导入（§7.4.1、§7.5）', () {
+    test('三种入口：JSON 文本、本地文件、HTTP URL', () async {
+      // 1) 纯 JSON 文本
+      final inline = await importService.import(
+        ConfigSource.parse(configFor('/api/type1/')),
+      );
+      expect(inline.config!.sites.length, 1);
+      expect(inline.origin, 'inline://json');
+
+      // 2) 本地文件（写一个临时文件，验证文件读取路径）
+      final temp = await Directory.systemTemp.createTemp('webhtv-config-test');
+      final file = File('${temp.path}${Platform.pathSeparator}config.json');
+      await file.writeAsString(configFor('/api/type1/'));
+      final fromFile = await importService.import(
+        ConfigSource.parse(file.path),
+      );
+      expect(fromFile.config!.sites.first.api, contains(server.baseUrl));
+      expect(fromFile.origin, contains('config.json'));
+
+      // 3) HTTP URL：重定向后仍能导入
+      final fromUrl = await importService.import(
+        ConfigSource.parse('${server.baseUrl}/api/redirect-to-config'),
+      );
+      expect(fromUrl.config!.sites, isNotEmpty);
+      expect(fromUrl.origin, contains('config.json'));
+
+      await temp.delete(recursive: true);
+    });
+
+    test('猫源 bundle 缺 Node 运行时只挡猫源，普通配置照常导入', () async {
+      // 用户实测 2026-10-31：没有解析到 node 时，连 T4 的 http JSON 配置都被
+      // 「未检测到 Node 运行时，无法导入配置」挡住。门禁现在只留在猫源分支。
+      expect(
+        importService.catResolver,
+        isNull,
+        reason: '本用例刻意不注入 catResolver，模拟未安装 Node 的机器',
+      );
+
+      final bundle = await _capture(
+        () => importService.import(
+          ConfigSource.parse('${server.baseUrl}/cat/index.js.md5'),
+        ),
+      );
+      expect(bundle.kind, AppErrorKind.configCatRuntimeMissing);
+      expect(
+        describeErrorKind(AppErrorKind.configCatRuntimeMissing),
+        contains('Node'),
+      );
+
+      // 同一台机器上，普通 http JSON 配置必须照常导入。
+      final plain = await importService.import(
+        ConfigSource.parse(configFor('/api/type1/')),
+      );
+      expect(plain.config!.sites, isNotEmpty);
+    });
+
+    test('gzip 传输编码与 UTF-8 BOM 都能导入', () async {
+      final gz = await importService.import(
+        ConfigSource.parse('${server.baseUrl}/api/gzip'),
+      );
+      expect(gz.contentEncoding, 'gzip');
+      expect(gz.config!.sites, isNotEmpty);
+
+      final bom = await importService.import(
+        ConfigSource.parse('${server.baseUrl}/api/bom'),
+      );
+      expect(bom.config!.sites, isNotEmpty);
+    });
+
+    test('声明 charset=gbk 的配置可解码（§7.4.1）', () async {
+      final gbk = await importService.import(
+        ConfigSource.parse('${server.baseUrl}/api/gbk'),
+      );
+      expect(gbk.config!.name, 'GBK 配置');
+      expect(gbk.config!.sites.first.name, '站点');
+    });
+
+    test('重定向循环与降级到 file:// 都被拒绝', () async {
+      final loop = await _capture(
+        () => importService.import(
+          ConfigSource.parse('${server.baseUrl}/api/redirect-loop'),
+        ),
+      );
+      expect(loop.kind, AppErrorKind.configRedirect);
+
+      final downgrade = await _capture(
+        () => importService.import(
+          ConfigSource.parse('${server.baseUrl}/api/redirect-to-file'),
+        ),
+      );
+      expect(downgrade.kind, AppErrorKind.configSchemeUnsupported);
+    });
+
+    test('超过大小上限的响应被拒绝且保留已有配置（§7.4.1）', () async {
+      final small = ConfigLoader(maxBytes: 64 * 1024);
+      final error = await _capture(
+        () => small.fetch(ConfigSource.parse('${server.baseUrl}/api/oversize')),
+      );
+      small.close();
+      expect(error.kind, AppErrorKind.configTooLarge);
+    });
+
+    test('HTTP 非 2xx 映射为 configHttp，网络不可达映射为 configNetwork', () async {
+      final http = await _capture(
+        () => importService.import(
+          ConfigSource.parse('${server.baseUrl}/api/does-not-exist'),
+        ),
+      );
+      expect(http.kind, AppErrorKind.configHttp);
+      expect(http.statusCode, 404);
+
+      // 关闭服务后请求同一端口应得到网络错误。
+      final deadUrl = 'http://127.0.0.1:${server.baseUrl.split(":").last}/api/type1/';
+      await server.stop();
+      final network = await _capture(
+        () => importService.import(ConfigSource.parse(deadUrl)),
+      );
+      expect(network.kind, AppErrorKind.configNetwork);
+      expect(network.retryable, isTrue);
+      // tearDown 会再次 stop，这里补一个新的服务避免重复关闭报错。
+      server = await TestFixtureServer.start();
+    });
+
+    test('文件不存在报 configNotFound', () async {
+      final error = await _capture(
+        () => importService.import(
+          ConfigSource.parse(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}missing-config.json',
+          ),
+        ),
+      );
+      expect(error.kind, AppErrorKind.configNotFound);
+    });
+
+    test('msg 非空的配置导入失败且不覆盖已有配置记录', () async {
+      final database = AppDatabase.inMemory();
+      addTearDown(database.dispose);
+
+      // 先保存一份可用配置。
+      final good = await importService.import(
+        ConfigSource.parse(configFor('/api/type1/')),
+      );
+      database.saveConfig(
+        name: 'good',
+        origin: good.origin,
+        json: good.config!.toJson(),
+        siteCount: good.config!.sites.length,
+      );
+
+      // 再导入 msg 配置，直接失败。
+      final error = await _capture(
+        () => importService.import(
+          ConfigSource.parse(
+            jsonEncode({'msg': '配置已下线', 'sites': []}),
+          ),
+        ),
+      );
+      expect(error.kind, AppErrorKind.configMsg);
+
+      // 已有记录仍然可用，没有被覆盖。
+      final records = database.listConfigs();
+      expect(records.length, 1);
+      expect(records.first.name, 'good');
+      expect(records.first.json['sites'], isNotEmpty);
+    });
+
+    test('配置仓库：默认第一项、失败回退、不覆盖已有配置（§7.4.2）', () async {
+      final repository = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'urls': [
+              {'name': 'A', 'url': '${server.baseUrl}/api/repository-a.json'},
+              {'name': 'B', 'url': '${server.baseUrl}/api/repository-b.json'},
+            ],
+          }),
+        ),
+      );
+      expect(repository.isRepository, isTrue);
+      expect(repository.siteCount, 0);
+
+      // 默认第一项。
+      final first = await importService.expandRepository(repository);
+      expect(first.config!.sites.first.key, 'repo-a');
+
+      // 显式选择第二项，条目各自独立配置记录。
+      final second = await importService.expandRepository(repository, index: 1);
+      expect(second.config!.sites.first.key, 'repo-b');
+
+      // index 越界回退到第一项。
+      final fallback = await importService.expandRepository(repository, index: 99);
+      expect(fallback.config!.sites.first.key, 'repo-a');
+
+      // 失效条目抛错，调用方保留已导入配置。
+      final broken = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'urls': [
+              {'name': '坏条目', 'url': '${server.baseUrl}/api/does-not-exist.json'},
+            ],
+          }),
+        ),
+      );
+      final error = await _capture(
+        () => importService.expandRepository(broken),
+      );
+      expect(error.kind, AppErrorKind.configHttp);
+    });
+
+    test('仓库条目的内容仍是仓库时停止递归展开（§7.4.2）', () async {
+      final nested = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'urls': [
+              {
+                'name': '嵌套仓库',
+                'url': '${server.baseUrl}/api/repository-nested.json',
+              },
+            ],
+          }),
+        ),
+      );
+      final error = await _capture(
+        () => importService.expandRepository(nested),
+      );
+      expect(error.kind, AppErrorKind.configRepository);
+      expect(error.message, contains('仍是仓库'));
+    });
+
+    test('仓库条目内容非法或站点为空时给出可定位错误', () async {
+      final emptyEntry = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'urls': [
+              {
+                'name': '空条目',
+                'url': '${server.baseUrl}/api/repository-broken.json',
+              },
+            ],
+          }),
+        ),
+      );
+      // 条目既没有 sites 也没有 urls：这是配置内容非法，保留原始错误码
+      // 比统一报“仓库展开失败”更能定位问题。
+      final error = await _capture(
+        () => importService.expandRepository(emptyEntry),
+      );
+      expect(error.kind, AppErrorKind.configInvalid);
+      expect(error.detail, contains('repository-broken'));
+    });
+  });
+
+  group('站点服务闭环（§8、§10.2）', () {
+    late SiteService service;
+    late AppDatabase database;
+    late SpiderRouter router;
+    late AppConfig config;
+
+    setUp(() async {
+      database = AppDatabase.inMemory();
+      final loaded = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'name': '闭环配置',
+            'headers': [
+              {
+                'host': '127.0.0.1',
+                'header': {'X-Global': 'yes'},
+              },
+            ],
+            'sites': [
+              {
+                'key': 'type1',
+                'name': 'JSON API 站点',
+                'type': 1,
+                'api': '${server.baseUrl}/api/type1/',
+                'searchable': 1,
+                'quickSearch': 1,
+                'header': {'X-Site': 'type1'},
+              },
+            ],
+          }),
+        ),
+      );
+      config = loaded.config!;
+      router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: config.headers,
+      );
+      service = SiteService(
+        appConfig: config,
+        router: router,
+        database: database,
+      );
+    });
+
+    tearDown(() {
+      database.dispose();
+      router.dispose();
+    });
+
+    Site site() => config.sites.first;
+
+    test('首页 → 分类 → 详情 → 播放 闭环', () async {
+      final home = await service.home(site());
+      expect(home.value.classes, isNotEmpty);
+      expect(home.value.list, isNotEmpty);
+
+      final category = await service.category(site(), typeId: '1', page: 1);
+      expect(category.value.list, isNotEmpty);
+      expect(category.value.pageCount, 1);
+
+      final detail = await service.detail(site(), 'demo-1');
+      final vod = detail.value.list.first;
+      expect(vod.vodPlayUrl, contains('sample.m3u8'));
+
+      final lines = SiteService.playLinesOf(vod);
+      expect(lines, isNotEmpty);
+
+      final decision = await service.resolvePlayback(
+        site: site(),
+        episodeTarget: lines.first.episodes.first.url,
+        flag: lines.first.flag,
+        vodId: vod.vodId,
+      );
+      expect(decision.value.action, PlaybackAction.direct);
+      expect(decision.value.url, contains('/media/sample.m3u8'));
+    });
+
+    test('请求捕获：参数编码与 Header 注入符合 §7.4.6、§7.4.7', () async {
+      server.captured.clear();
+      // 站点 ext 超过 1000 字符时应改用表单 body。
+      final longExtConfig = AppConfig(
+        sites: [
+          Site(
+            key: 'long',
+            name: '长 ext 站点',
+            type: 1,
+            api: '${server.baseUrl}/api/type1/',
+            ext: 'x' * 1001,
+          ),
+        ],
+      );
+      final longService = SiteService(
+        appConfig: longExtConfig,
+        router: SpiderRouter(
+          client: HttpApiClient(),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+      await longService.home(longExtConfig.sites.first);
+
+      final longCall = server.captured.last;
+      expect(longCall.method, 'POST');
+      expect(longCall.form['extend'], 'x' * 1001);
+      expect(longCall.query.containsKey('extend'), isFalse);
+
+      // 短 ext + 分类：query 携带 extend/t/ac，并注入全局与站点 Header。
+      server.captured.clear();
+      await service.category(site(), typeId: '1', page: 2, filters: {'area': '大陆'});
+      final call = server.captured.last;
+      expect(call.method, 'GET');
+      expect(call.query['ac'], 'detail');
+      expect(call.query['t'], '1');
+      expect(call.query['pg'], '2');
+      expect(call.query['f'], jsonEncode({'area': '大陆'}));
+      expect(call.headers['x-global'], 'yes');
+      expect(call.headers['x-site'], 'type1');
+    });
+
+    test('type=0 XML 站点首页与详情解析', () async {
+      final xmlConfig = AppConfig(
+        sites: [
+          Site(
+            key: 'xml',
+            name: 'XML 站点',
+            type: 0,
+            api: '${server.baseUrl}/api/type0/',
+          ),
+        ],
+      );
+      final xmlService = SiteService(
+        appConfig: xmlConfig,
+        router: SpiderRouter(
+          client: HttpApiClient(),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+      final home = await xmlService.home(xmlConfig.sites.first);
+      expect(home.value.classes.length, 2);
+      expect(home.value.list.first.vodName, 'XML 测试视频');
+      expect(home.value.list.first.vodRemarks, '第 1 集');
+
+      final detail = await xmlService.detail(xmlConfig.sites.first, 'demo-1');
+      final lines = SiteService.playLinesOf(detail.value.list.first);
+      expect(lines.first.episodes.length, 2);
+      expect(lines.first.episodes[1].name, '第 2 集');
+    });
+
+    test('type=4 分类筛选对象使用 Base64 URL-Safe ext（§7.4.5）', () async {
+      final type4Config = AppConfig(
+        sites: [
+          Site(
+            key: 'type4',
+            name: 'Base64 站点',
+            type: 4,
+            api: '${server.baseUrl}/api/type4/',
+          ),
+        ],
+      );
+      final type4Service = SiteService(
+        appConfig: type4Config,
+        router: SpiderRouter(
+          client: HttpApiClient(),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+      server.captured.clear();
+      await type4Service.category(
+        type4Config.sites.first,
+        typeId: '1',
+        filters: {'area': '大陆'},
+      );
+      final call = server.captured.last;
+      final ext = call.query['ext']!;
+      expect(ext.contains('+'), isFalse);
+      expect(ext.contains('/'), isFalse);
+      expect(ext.contains('='), isFalse);
+      final padded = ext.padRight((ext.length + 3) ~/ 4 * 4, '=');
+      expect(utf8.decode(base64Url.decode(padded)), jsonEncode({'area': '大陆'}));
+    });
+
+    test('搜索：命中缓存后不再发起请求（§14.1）', () async {
+      server.captured.clear();
+      final first = await service.search(site(), keyword: '示例');
+      expect(first.value.list, isNotEmpty);
+      expect(first.fromCache, isFalse);
+      final requestsAfterFirst = server.captured.length;
+
+      final second = await service.search(site(), keyword: '示例');
+      expect(second.fromCache, isTrue);
+      expect(server.captured.length, requestsAfterFirst);
+
+      // 显式跳过缓存时必须重新请求。
+      final third = await service.search(site(), keyword: '示例', useCache: false);
+      expect(third.fromCache, isFalse);
+      expect(server.captured.length, greaterThan(requestsAfterFirst));
+    });
+
+    test('未声明 searchable 的站点搜索报 siteUnsupported', () async {
+      final noSearch = AppConfig(
+        sites: [
+          Site(
+            key: 'nosearch',
+            name: '不可搜索',
+            type: 1,
+            api: '${server.baseUrl}/api/type1/',
+          ),
+        ],
+      );
+      final runtime = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      ).runtimeFor(noSearch.sites.first);
+      await expectLater(
+        runtime.search(noSearch.sites.first, keyword: 'x'),
+        throwsA(
+          isA<AppError>().having(
+            (error) => error.kind,
+            'kind',
+            AppErrorKind.siteUnsupported,
+          ),
+        ),
+      );
+    });
+
+    test('播出错：HTML 错误页与非 2xx 都是可定位错误', () async {
+      final brokenConfig = AppConfig(
+        sites: [
+          Site(
+            key: 'html',
+            name: 'HTML 错误站点',
+            type: 1,
+            api: '${server.baseUrl}/api/error-html',
+          ),
+          Site(
+            key: 'missing',
+            name: '404 站点',
+            type: 1,
+            api: '${server.baseUrl}/api/does-not-exist',
+          ),
+        ],
+      );
+      final brokenService = SiteService(
+        appConfig: brokenConfig,
+        router: SpiderRouter(
+          client: HttpApiClient(),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+
+      final htmlError = await _capture(
+        () => brokenService.home(brokenConfig.sites.first),
+      );
+      expect(htmlError.kind, AppErrorKind.siteHttp);
+
+      final notFound = await _capture(
+        () => brokenService.home(brokenConfig.sites[1]),
+      );
+      expect(notFound.kind, AppErrorKind.siteHttp);
+      expect(notFound.statusCode, 404);
+    });
+
+    test('超时映射为 siteTimeout 且标记可重试（§10.4）', () async {
+      final slowConfig = AppConfig(
+        sites: [
+          Site(
+            key: 'slow',
+            name: '慢站点',
+            type: 1,
+            api: '${server.baseUrl}/api/slow?delay=2',
+          ),
+        ],
+      );
+      final slowService = SiteService(
+        appConfig: slowConfig,
+        router: SpiderRouter(
+          client: HttpApiClient(timeout: const Duration(milliseconds: 300)),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+      final error = await _capture(
+        () => slowService.home(slowConfig.sites.first),
+      );
+      expect(error.kind, AppErrorKind.siteTimeout);
+      expect(error.retryable, isTrue);
+    });
+
+    test('单站点失败不影响其他站点（§8.4、§14.3）', () async {
+      final mixed = AppConfig(
+        sites: [
+          Site(
+            key: 'good',
+            name: '可用站点',
+            type: 1,
+            api: '${server.baseUrl}/api/type1/',
+          ),
+          Site(
+            key: 'bad',
+            name: '不可用站点',
+            type: 1,
+            api: '${server.baseUrl}/api/does-not-exist',
+          ),
+        ],
+      );
+      final mixedService = SiteService(
+        appConfig: mixed,
+        router: SpiderRouter(
+          client: HttpApiClient(),
+          globalHeaders: const [],
+        ),
+        database: database,
+      );
+
+      final good = await mixedService.home(mixed.sites.first);
+      expect(good.value.list, isNotEmpty);
+
+      final bad = await _capture(() => mixedService.home(mixed.sites[1]));
+      expect(bad.kind, AppErrorKind.siteHttp);
+
+      // 失败之后可用站点仍能正常工作。
+      final again = await mixedService.home(mixed.sites.first);
+      expect(again.value.list, isNotEmpty);
+    });
+
+    test('多线路/多剧集详情能解析出全部线路（§8.4）', () async {
+      final multi = await service.detail(site(), 'multi-1');
+      final lines = SiteService.playLinesOf(multi.value.list.first);
+      expect(lines.length, 3);
+      expect(lines[0].episodes.length, 2);
+
+      final episodes = await service.detail(site(), 'episodes-1');
+      final single = SiteService.playLinesOf(episodes.value.list.first);
+      expect(single.length, 1);
+      expect(single.first.episodes.length, 3);
+    });
+
+    test('详情业务错误 msg 上报为 siteBusiness，不变成空列表', () async {
+      final error = await _capture(() => service.detail(site(), 'msg-1'));
+      expect(error.kind, AppErrorKind.siteBusiness);
+      expect(error.message, contains('维护中'));
+    });
+
+    test('详情漏填 vod_id/vod_name 时用请求上下文兜底（Hxq 回归锁）', () async {
+      // 不带身份：整条被判无效，历史行为保持不变（列表接口绝不回填）。
+      final error = await _capture(() => service.detail(site(), 'blank-1'));
+      expect(error.kind, AppErrorKind.siteParse);
+
+      // 带身份：本次请求知道 id/片名，详情页能打开且线路照常可用。
+      final detail = await service.detail(
+        site(),
+        'blank-1',
+        identity: const VodIdentityHint(vodId: 'blank-1', vodName: '热烈的告别'),
+      );
+      final vod = detail.value.list.first;
+      expect(vod.vodId, 'blank-1');
+      expect(vod.vodName, '热烈的告别');
+      expect(vod.vodRemarks, '更新至第8集·共12集');
+      expect(SiteService.playLinesOf(vod), isNotEmpty);
+    });
+
+    test('播放决策记录健康统计与耗时（§14.2）', () async {
+      final decision = await service.resolvePlayback(
+        site: site(),
+        episodeTarget: '${server.baseUrl}/media/sample.m3u8',
+        flag: 'line',
+      );
+      expect(decision.value.action, PlaybackAction.direct);
+
+      final health = database.siteHealth();
+      expect(health, isNotEmpty);
+      final entry = health.firstWhere((item) => item.siteKey == 'type1');
+      expect(entry.playTotal, greaterThanOrEqualTo(1));
+      expect(entry.playOk, greaterThanOrEqualTo(1));
+    });
+
+    test('需要解析器的剧集给出明确错误而不是静默成功（§7.4.8）', () async {
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: site(),
+          episodeTarget: 'not-a-url-token',
+          flag: 'line',
+        ),
+      );
+      expect(error.kind, AppErrorKind.playbackParserRequired);
+    });
+
+    test('播放结果 parse=1 时返回 needParser 决策（§7.4.8、§12）', () async {
+      // 站点 playUrl 指向返回 parse=0 的播放入口，这里改用一个显式返回
+      // parse=1 的场景：直接构造结果集合并走 resolver。
+      final decision = PlaybackResolver.decide(
+        PlaybackResolutionInput(
+          site: site(),
+          episodeTarget: 'token',
+          parse: 1,
+        ),
+      );
+      // §12：parse=1 不再直接报错，而是给出待解析决策，由 site_service 调解析器。
+      expect(decision.action, PlaybackAction.needParser);
+      expect(decision.url, 'token');
+      expect(decision.parse, 1);
+    });
+
+    test('§12 全链路：配置 parses → resolvePlayback 真实调解析器 → 可播放地址', () async {
+      // 重建一个带 parses 的配置与站点服务（播放入口返回 parse=1）。
+      final parseConfig = AppConfig(
+        name: '解析器闭环',
+        sites: [
+          Site(
+            key: 'parse-site',
+            name: '解析站点',
+            type: 1,
+            api: '${server.baseUrl}/api/type1/',
+            extra: {
+              // playUrl 指向返回 parse=1 的播放入口。
+              'playUrl': '${server.baseUrl}/api/play-parse-required',
+            },
+          ),
+        ],
+        parses: [
+          ParseEntry(
+            name: 'Fixture 解析器',
+            type: 1,
+            url: '${server.baseUrl}/api/parse/type1',
+          ),
+        ],
+      );
+      final parseRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(parseRouter.dispose);
+      final parseService = ParseService();
+      addTearDown(parseService.close);
+      final parseSiteService = SiteService(
+        appConfig: parseConfig,
+        router: parseRouter,
+        database: database,
+      );
+
+      final outcome = await parseSiteService.resolvePlayback(
+        site: parseConfig.sites.first,
+        episodeTarget: 'token',
+        flag: 'line',
+        parseService: parseService,
+      );
+
+      // 解析器返回的媒体地址必须成为最终可播放决策。
+      expect(outcome.value.action, PlaybackAction.direct);
+      expect(outcome.value.url, endsWith('/media/sample.mp4'));
+      expect(outcome.value.reason, contains('parsed-by'));
+      // 响应头注入（§8.4）：解析器返回的 UA/Referer 随决策传入。
+      expect(outcome.value.headers?['User-Agent'], isNotNull);
+    });
+
+    test('§9.4 type=3 必须真实进 /play，不把「长得像直链」的剧集目标短路', () async {
+      // 实测缺陷：`type=3`（Spider/猫源）剧集目标常是**播放入口的输入**
+      // （`vod_play_url` 中 `$` 之后的值）。网盘线路形如
+      // `https://pan.baidu.com/s/…|…|<base64>`，裸 scheme 是 https，若先做
+      // 「直链初判」就会把它当媒体地址交给播放器 → 网盘分享页（html）被当流
+      // → `Failed to recognize file format`。参考实现对 `type=3` 无条件先调
+      // `/play`，因此这里断言 `/play` 真的被请求、且返回地址来自 `/play`。
+      final catClient = CatHttpClient();
+      final catRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        catHttpClient: catClient,
+      );
+      addTearDown(catRouter.dispose);
+      final catConfig = AppConfig(
+        name: '猫源形态',
+        sites: [
+          Site(
+            key: 'cat-play-gate',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/ok/spider/demo',
+          ),
+        ],
+      );
+      final catService = SiteService(
+        appConfig: catConfig,
+        router: catRouter,
+        database: database,
+      );
+
+      // 与真实网盘线路同形：绝对 https + `|` + base64 段（不含任何媒体扩展名）。
+      const episodeTarget =
+          'https://pan.baidu.com/s/1AbCdEf?pwd=1234|用户:pwd|aHR0cHM6Ly9wYW4uYmFpZHUuY29tL3MvMQ==';
+      server.captured.clear();
+      final decision = await catService.resolvePlayback(
+        site: catConfig.sites.first,
+        episodeTarget: episodeTarget,
+        flag: '网盘',
+        vodId: '147243',
+      );
+
+      // 1) `/play` 必须被真实请求（旧的直链初判会在这里短路，captured 里没有它）。
+      final playRequests = server.captured
+          .where((item) => item.path.endsWith('/play'))
+          .toList();
+      expect(
+        playRequests,
+        isNotEmpty,
+        reason: 'type=3 的剧集目标必须先经播放入口，不能按直链初判短路',
+      );
+      // `/play` 的 `id` 是剧集目标串，不是纯 vod_id（§9.4）。
+      final body = jsonDecode(playRequests.last.body) as Map<String, Object?>;
+      expect(body['id'], episodeTarget);
+      expect(body['id'], isNot('147243'));
+      // 2) 最终地址来自 `/play` 的返回，而不是把剧集目标原样当媒体地址。
+      expect(decision.value.action, PlaybackAction.direct);
+      expect(decision.value.url, contains('/media/sample.m3u8'));
+      expect(decision.value.url, isNot(episodeTarget));
+    });
+
+    test('§9.4 type=3 的 /play 没给地址时如实报错，不回退到网盘分享页', () async {
+      // 实测上游行为：部分网盘线路（如夸克）的 `/play` 就是不返回地址——
+      // 猫源 bundle 回 {urls:[], header:{}}（playUrl 为空）。
+      // 此时**不得**回退到 `episodeTarget`：那是网盘分享页，mpv 会当 HTML 流而
+      // 报 `Failed to recognize file format`（比明确报错更难排查）。
+      final catClient = CatHttpClient();
+      final catRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        catHttpClient: catClient,
+      );
+      addTearDown(catRouter.dispose);
+      final catConfig = AppConfig(
+        name: '无地址形态',
+        sites: [
+          Site(
+            key: 'cat-nourl',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/nourl/spider/demo',
+          ),
+        ],
+      );
+      final catService = SiteService(
+        appConfig: catConfig,
+        router: catRouter,
+        database: database,
+      );
+
+      const episodeTarget =
+          'https://pan.quark.cn/s/47243bc44841|84ade034|eyJzaWQiOiJhYmMifQ==';
+      server.captured.clear();
+      final error = await _capture(
+        () => catService.resolvePlayback(
+          site: catConfig.sites.first,
+          episodeTarget: episodeTarget,
+          flag: '夸克网盘',
+          vodId: '147243',
+        ),
+      );
+      expect(error.kind, AppErrorKind.playbackUrlMissing);
+      // 确认走的是播放入口（而不是靠 episodeTarget 恒成功），且没有把分享页当结果。
+      expect(
+        server.captured.where((item) => item.path.endsWith('/play')),
+        isNotEmpty,
+      );
+      expect(error.detail, contains('cat-nourl'));
+    });
+
+    test('§9.4 type=3 运行时不可用时不伪装成直链成功', () async {
+      // 反向对照：没有 cat http 客户端时，`type=3` 必须报「运行时不可用」，
+      // 而不是把剧集目标当直链返回（旧行为会给播放器一个网盘分享页 URL）。
+      final bareRouter = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(bareRouter.dispose);
+      final bareConfig = AppConfig(
+        name: '无 cat 客户端',
+        sites: [
+          Site(
+            key: 'cat-no-client',
+            name: '猫源站点',
+            type: SiteType.spider,
+            api: '${server.baseUrl}/cathttp/ok/spider/demo',
+          ),
+        ],
+      );
+      final bareService = SiteService(
+        appConfig: bareConfig,
+        router: bareRouter,
+        database: database,
+      );
+
+      final error = await _capture(
+        () => bareService.resolvePlayback(
+          site: bareConfig.sites.first,
+          episodeTarget: 'https://pan.baidu.com/s/1AbCdEf|pwd|base64==',
+          flag: '网盘',
+          vodId: '147243',
+        ),
+      );
+      expect(error.kind, AppErrorKind.siteUnsupported);
+    });
+  });
+
+  group('type=4 播放入口（§8.1 分发顺序 4、§7.4.8）', () {
+    late AppDatabase database;
+
+    setUp(() {
+      database = AppDatabase.inMemory();
+    });
+    tearDown(() {
+      database.dispose();
+    });
+
+    // 与真实 AT 配置同形的 T4 站点：`type=4` + `api` + 站点级 `header`（token），
+    // 且**没有** `playUrl`（实测 163 站点里 68 个 type=4 全部没有 playUrl）。
+    Site t4Site({Object? ext}) => Site(
+      key: 't4',
+      name: 'T4 站点',
+      type: SiteType.jsonApiBase64Ext,
+      api: '${server.baseUrl}/api/type4/',
+      header: HeaderMap({'token': '872141dcd4e66e8a'}),
+      ext: ext,
+    );
+
+    SiteService t4Service(AppConfig config) {
+      final router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(router.dispose);
+      return SiteService(
+        appConfig: config,
+        router: router,
+        database: database,
+      );
+    }
+
+    test('播放入口是站点 api 自身：`play=<剧集目标>&flag=<线路>`（§7.4.8）', () {
+      // 契约来源：Android `SiteApi.playerContent` 的 `site.getType() == 4` 分支
+      // 构造 `params.play = id` / `params.flag = flag` 后调站点 `api`。
+      // 旧实现只对**站点自身声明的 playUrl** 才调播放入口，而 T4 站点没有
+      // playUrl → 所有 T4 站点播放都落 `playbackParserRequired`（用户实测）。
+      final builder = HttpApiRequestBuilder(site: t4Site());
+      final call = builder.buildPlayRequest('剧集目标串', flag: 'a115');
+      expect(call.method, 'GET');
+      expect(call.uri.path, '/api/type4/');
+      expect(call.uri.queryParameters['play'], '剧集目标串');
+      expect(call.uri.queryParameters['flag'], 'a115');
+      // 站点 header（token）必须随请求发出，否则 T4 服务端 401。
+      expect(call.headers['token'], '872141dcd4e66e8a');
+    });
+
+    test('缺少 flag 时不发送 flag 参数（不伪造线路）', () {
+      final call = HttpApiRequestBuilder(
+        site: t4Site(),
+      ).buildPlayRequest('剧集目标串');
+      expect(call.uri.queryParameters['play'], '剧集目标串');
+      expect(call.uri.queryParameters.containsKey('flag'), isFalse);
+    });
+
+    test('站点 ext 长度决定 extend 走 query 还是表单 body（§7.4.7）', () {
+      final short = HttpApiRequestBuilder(
+        site: t4Site(ext: '{"a":1}'),
+      ).buildPlayRequest('t', flag: 'f');
+      expect(short.formBody, isNull);
+      expect(short.uri.queryParameters['extend'], '{"a":1}');
+
+      final long = HttpApiRequestBuilder(
+        site: t4Site(ext: 'x' * 1001),
+      ).buildPlayRequest('t', flag: 'f');
+      expect(long.method, 'POST');
+      expect(long.formBody?['extend']?.length, 1001);
+      // 超长 ext 不能进入 URL query（§7.4.7 不允许请求头/URL 过大）。
+      expect(long.uri.queryParameters.containsKey('extend'), isFalse);
+      expect(long.uri.queryParameters['play'], 't');
+    });
+
+    test('parse=0：播放入口直链 + 媒体 Header 真实进入播放决策', () async {
+      final config = AppConfig(name: 'T4 直链', sites: [t4Site()]);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: 't4-direct',
+        flag: 'a115',
+      );
+      final decision = outcome.value;
+      expect(decision.action, PlaybackAction.direct);
+      expect(decision.url, '${server.baseUrl}/media/sample.mp4');
+      // 播放入口返回的媒体 Header（实测 115 CDN 必需 UA）必须带上。
+      expect(
+        decision.headers?['user-agent'],
+        'Mozilla/5.0 115Browser/23.9.3.2',
+      );
+
+      // 必须**真实**请求过播放入口（而不是把剧集目标当直链短路）。
+      final playCall = server.captured.firstWhere(
+        (item) => item.path.startsWith('/api/type4'),
+      );
+      expect(playCall.query['play'], 't4-direct');
+      expect(playCall.query['flag'], 'a115');
+      expect(playCall.headers['token'], '872141dcd4e66e8a');
+    });
+
+    test('parse=1：播放入口要求解析器时继续走 §12 解析器', () async {
+      final config = AppConfig(
+        name: 'T4 解析器',
+        sites: [t4Site()],
+        parses: [
+          ParseEntry(
+            name: 'Fixture 解析器',
+            type: 1,
+            url: '${server.baseUrl}/api/parse/type1',
+          ),
+        ],
+      );
+      final parseService = ParseService();
+      addTearDown(parseService.close);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: 't4-parse',
+        flag: 'a115',
+        parseService: parseService,
+      );
+      final decision = outcome.value;
+      expect(decision.action, PlaybackAction.direct);
+      expect(decision.url, '${server.baseUrl}/media/sample.mp4');
+      expect(decision.reason, contains('parsed-by'));
+
+      // 顺序：先播放入口，再解析器；两者都必须真实发生。
+      final paths = server.captured.map((item) => item.path).toList();
+      expect(paths.any((path) => path.startsWith('/api/type4')), isTrue);
+      expect(
+        paths.any((path) => path.startsWith('/api/parse/type1')),
+        isTrue,
+      );
+    });
+
+    test('播放入口没给地址时如实报错，不回退到剧集目标', () async {
+      final config = AppConfig(name: 'T4 无地址', sites: [t4Site()]);
+      final service = t4Service(config);
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-nourl',
+          flag: 'a115',
+        ),
+      );
+      // 不得把 `t4-nourl` 当直链返回（那会让播放器去放一个不存在的地址）。
+      expect(error.kind, AppErrorKind.playbackUrlMissing);
+    });
+
+    test('播放入口回业务错误时原样上报，不得把占位 url 当播放地址', () async {
+      // 实测真实 T4 服务端在取不到地址时回
+      // `{"url":"1","parse":1,"jx":1,"msg":"Request failed with status code 403"}`。
+      // 该 `url` 是占位符（不是地址），必须报业务错误；若当成地址交给播放器，
+      // 用户看到的会是一个“像地址但放不了”的 1，比直接报错更难排查。
+      final config = AppConfig(name: 'T4 业务错误', sites: [t4Site()]);
+      final service = t4Service(config);
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-bizerr',
+          flag: 'a115',
+        ),
+      );
+      expect(error.kind, AppErrorKind.siteBusiness);
+      expect(error.message, contains('403'));
+    });
+
+    test('播放入口返回占位串时，错误文案不得声称「未声明 playUrl」', () async {
+      // 实测 `tvb_yunbao` 的「剧情简介」线路：播放入口确实**调了**、也**返回了地址**
+      // （`parse=0` + `url:"vwnet-07cd…"`），但那是站点内 ID、不是媒体地址。
+      // 此时 [PlaybackResolver] 的兜底文案「站点未声明 playUrl 前缀」对 `type=4` 是
+      // **错的**（T4 没有 playUrl 概念，播放入口就是 api）——正是用户报告里那句话
+      // 把排查方向引偏的同一类问题。文案必须如实说明“播放入口返回的目标不可播”。
+      final config = AppConfig(name: 'T4 占位串', sites: [t4Site()]);
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final error = await _capture(
+        () => service.resolvePlayback(
+          site: config.sites.first,
+          episodeTarget: 't4-placeholder',
+          flag: '剧情简介',
+        ),
+      );
+      expect(error.kind, AppErrorKind.playbackParserRequired);
+      final text = '${error.message} ${error.detail ?? ""}';
+      expect(
+        text,
+        isNot(contains('未声明 playUrl')),
+        reason: 'type=4 没有 playUrl 概念，不得再用该文案误导排查方向',
+      );
+      expect(text, contains('播放入口返回的目标不是可播放地址'));
+      expect(text, contains('t4'));
+      expect(text, contains('剧情简介'));
+      // 必须真实请求过播放入口（这是缺陷 22 修复的核心）。
+      final playCall = server.captured.firstWhere(
+        (item) => item.path.startsWith('/api/type4'),
+      );
+      expect(playCall.query['play'], 't4-placeholder');
+      expect(playCall.query['flag'], '剧情简介');
+    });
+
+    test('type=0/1/2 保持直链初判：不为直链多打一次播放入口', () async {
+      // 回归保护：本次修改只应把 `type=3`/`type=4` 改为「先调播放入口」，
+      // 普通 HTTP API 站点（type=0/1/2）的直链不得产生多余网络请求。
+      final config = AppConfig(
+        name: 'type1 直链',
+        sites: [
+          Site(
+            key: 'type1',
+            name: 'JSON API 站点',
+            type: SiteType.jsonApi,
+            api: '${server.baseUrl}/api/type1/',
+          ),
+        ],
+      );
+      final service = t4Service(config);
+      server.captured.clear();
+
+      final outcome = await service.resolvePlayback(
+        site: config.sites.first,
+        episodeTarget: '${server.baseUrl}/media/sample.m3u8',
+        flag: 'line',
+      );
+      expect(outcome.value.action, PlaybackAction.direct);
+      expect(outcome.value.url, '${server.baseUrl}/media/sample.m3u8');
+      expect(server.captured, isEmpty);
+    });
+  });
+
+  group('配置记录持久化与恢复（§7.5、§16）', () {
+    test('导入 → 保存 → 重启恢复 得到同样的模型与未知字段', () async {
+      final database = AppDatabase.inMemory();
+      addTearDown(database.dispose);
+
+      final imported = await importService.import(
+        ConfigSource.parse(
+          jsonEncode({
+            'name': '待持久化配置',
+            'sites': [
+              {
+                'key': 'k',
+                'name': '站点',
+                'type': 1,
+                'api': '${server.baseUrl}/api/type1/',
+                'futureField': 'keep',
+              },
+            ],
+            'futureTopLevel': {'x': 1},
+          }),
+        ),
+      );
+      final id = database.saveConfig(
+        name: '待持久化配置',
+        origin: imported.origin,
+        json: imported.config!.toJson(),
+        contentType: imported.contentType,
+        siteCount: imported.config!.sites.length,
+      );
+      database.saveConfigSites(id, imported.config!.sites);
+
+      final record = database.activeConfig()!;
+      expect(record.siteCount, 1);
+      expect(record.name, '待持久化配置');
+
+      final restored = record.config!;
+      expect(restored.sites.first.extra['futureField'], 'keep');
+      expect(restored.extra['futureTopLevel'], {'x': 1});
+
+      // 恢复后的站点仍然可以正常工作（模型未在往返中损坏）。
+      final router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+      );
+      addTearDown(router.dispose);
+      final service = SiteService(
+        appConfig: restored,
+        router: router,
+        database: database,
+      );
+      final home = await service.home(restored.sites.first);
+      expect(home.value.list, isNotEmpty);
+
+      final sites = database.configSites(id);
+      expect(sites.length, 1);
+      expect(sites.first['site_key'], 'k');
+      expect(sites.first['type'], 1);
+    });
+
+    test('重复导入同一来源覆盖而不是新增版本', () async {
+      final database = AppDatabase.inMemory();
+      addTearDown(database.dispose);
+      final origin = '${server.baseUrl}/api/type1/config.json';
+      final first = await importService.import(ConfigSource.parse(origin));
+      database.saveConfig(
+        name: 'v1',
+        origin: first.origin,
+        json: first.config!.toJson(),
+        siteCount: 1,
+      );
+      final second = await importService.import(ConfigSource.parse(origin));
+      database.saveConfig(
+        name: 'v2',
+        origin: second.origin,
+        json: second.config!.toJson(),
+        siteCount: second.config!.sites.length,
+      );
+      expect(database.listConfigs().length, 1);
+      expect(database.activeConfig()!.name, 'v2');
+    });
+  });
+}
+
+/// 捕获异步 [AppError]。
+Future<AppError> _capture(Future<void> Function() action) async {
+  try {
+    await action();
+  } on AppError catch (error) {
+    return error;
+  } catch (error) {
+    fail('期望 AppError，实际抛出 ${error.runtimeType}: $error');
+  }
+  fail('期望抛出 AppError，但没有抛出');
+}

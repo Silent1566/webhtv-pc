@@ -1,0 +1,133 @@
+WebHTV PC Phase 3 验收日志（解析器 type=0 / type=4 · 浏览器嗅探内核）
+日期：2026-11-13　仓库：/home/maple/.dsh/worktrees/webhtv-pc-d700b86c/dev3（worktree wt/dev3，基线 da88911）
+设计依据：docs/webhtv-pc-design.md §12.1 / §12.4
+安卓参考：/home/maple/Workspace/webhtv/dev1/webhtv @ 2d8b99775（parse 语义：ParseJob.java / CustomWebView.java / Sniffer.java）
+
+PHASE3-EVIDENCE scope: type=0 Web sniff + type=4 Super + 站点/结果 click 注入 + 播放地址 json:/parse:<名称> 前缀
+PHASE3-EVIDENCE mechanism: 系统已装 Chromium 内核浏览器（Edge/Chrome/Chromium）+ CDP；不内置、不分发浏览器，不新增依赖
+PHASE3-EVIDENCE browser: Chrome for Testing 154.0.8037.0（WEBHTV_SNIFF_BROWSER=$HOME/.cache/ms-playwright/chromium-1246/chrome-linux64/chrome）
+PHASE3-EVIDENCE env: TMPDIR=/home/maple/.cache/webhtv-test-tmp（本机 /tmp 为 2.2G tmpfs 且已满，缺省会编译失败）
+PHASE3-EVIDENCE analyze: lib/core/sniff + 8 个解析层文件 → "No issues found!"
+PHASE3-EVIDENCE tests: 10 个测试文件 +189 通过；其中解析/嗅探相关 7 个文件全绿
+PHASE3-EVIDENCE e2e-real-browser: 8/8（xhr / click 注入 / 人机校验 / 规则 regex 无后缀地址 / 跨 scheme Referer / type=0 / type=0 超时 / type=4 Super）
+PHASE3-EVIDENCE orchestration-fake-transport: 11/11（命中与误判、规则、click+DOM 补采、兜底超时、stop 幂等、订阅前事件、跨 scheme Header、主文档被拦重试）
+PHASE3-EVIDENCE transport: 16/16（定位/参数纪律/CDP 配对/事件/错误码/超时/断线/关闭）+ 1 项真浏览器冒烟
+PHASE3-EVIDENCE no-browser: 8/8 skip，exit 0（用 mount namespace 把本机 chromium/snap 置为不可执行验证）
+PHASE3-EVIDENCE residue: 每轮运行后 pgrep chrome-linux64 为空、/tmp/webhtv-sniff-* 不存在
+PHASE3-EVIDENCE flaky-pre-existing: test/phase9_catvod_spider_test.dart（Python sidecar stdout 竞态，与本改动无关；同一代码 1 败 2 过）
+PHASE3-EVIDENCE browser-fallback: 坏候选被 --version 探测拒绝后继续试下一个；全部不可用报 parseSniffUnavailable 并逐个列出原因
+PHASE3-EVIDENCE real-machine-case: 本机只有 snap 包装（/snap/bin/chromium、/usr/bin/chromium-browser）时实测输出
+  「找到的浏览器都不可用… detail=/snap/bin/chromium：退出码 1；snap-confine is packaged without necessary permissions and cannot continue」
+PHASE3-EVIDENCE runs: 有可用浏览器 → 10 文件 +190 全绿、无残留；无可用浏览器 → 嗅探 E2E 9 项如实 skip、exit 0
+PHASE3-EVIDENCE error-format: 不可用原因压成单行（取首条有意义的行 + 「另有 N 行输出已折叠」），AppError.message/detail 均为单行（实测 MULTILINE=false）
+PHASE3-EVIDENCE probe-cache: 同一路径 30s 内不重复起进程（用户连续点集不会反复 shell --version；装好浏览器后无需重启）
+PHASE3-EVIDENCE user-visible(real machine):
+  KIND=parseSniffUnavailable
+  MESSAGE=本机浏览器都不可用（Chromium 是 snap 版，当前环境无法启动）
+  DETAIL=/snap/bin/chromium：退出码 1；snap-confine is packaged without necessary permissions and cannot continue（另有 2 行输出已折叠） ；/usr/bin/chromium-browser：… ；处理=安装非 snap 版 Chrome/Chromium，或用 WEBHTV_SNIFF_BROWSER 指定浏览器可执行文件
+PHASE3-EVIDENCE runs(updated): 有可用浏览器 → 9 文件 +191 全绿、无残留
+
+## 四、浏览器组件安装（§12.5，用户点一下装）
+
+PHASE3-EVIDENCE component-mechanism: 用户选本地目录/zip → 复制到 <dataDir>/components/browser/<label>-<version>/（临时目录 + 原子 rename）→ --version 校验 → 写 component.json 登记
+PHASE3-EVIDENCE component-priority: 显式 WEBHTV_SNIFF_BROWSER → 已装组件 → 系统浏览器
+PHASE3-EVIDENCE component-real-run: 394MB 便携 Chromium（Chrome for Testing 154）
+  INSTALLED=Google Chrome 154.0.8037.0 took=2279ms
+  CANDIDATES=[已安装组件（chrome）, Chromium, Chromium]     ← 组件排在两个坏的 snap 包装之前
+  SNIFFED=http://127.0.0.1:PORT/vod/master.m3u8?t=1 via=network   ← 未设 WEBHTV_SNIFF_BROWSER 也成功
+PHASE3-EVIDENCE component-tests: 6 项（目录安装/zip 安装+路径穿越防护/坏包拒收且回滚不留半装目录/包内无可执行文件的可诊断错误/同版本重装覆盖/卸载范围防护）+ 1 项候选排序（显式 override 仍第一）
+PHASE3-EVIDENCE component-zip-quirk: zip 解出的文件丢 POSIX 执行位 → 安装器补 chmod 755 后再读版本，否则会被误判成坏包（实测踩到并修）
+PHASE3-EVIDENCE component-not-bundled: 不内置、不随包分发、不联网下载；PRODUCT.md 硬约束不变
+PHASE3-EVIDENCE component-ui: 设置 → 高级设置 → 「解析器嗅探」区块（状态行 / 已装组件列表 / 安装本地目录 / 安装 zip / 重新校验 / 卸载二次确认），安装走 Isolate.run + 进度态
+PHASE3-EVIDENCE component-failure-entry: 播放失败且 kind=parseSniffUnavailable 时，确认框多出「安装浏览器内核」（key=detail-playback-failed-install-browser）；装成功弹已安装提示并**自动重试当前集**（不要求用户回详情页再点播放）；换源/知道了两条既有动作语义不变
+PHASE3-EVIDENCE component-ui-verified(父代理自查): 设置 → 高级设置 → 页末「解析器嗅探 / 浏览器内核」区块；空态文案 + 已装组件空态 + [安装本地目录…][安装 zip…][检测]；无溢出
+PHASE3-EVIDENCE component-screenshots: docs/phase3/evidence/browser-component-before.png / browser-component-after.png（900×900、DPR=1、dark、同滚动位置、本机 Noto 字形；Before 仅移除新增区块，其余完全同场景）
+PHASE3-EVIDENCE component-tests-final: dart analyze 8 个文件 0 issue；目标 11 个测试文件 +207 通过 / 1 skip（skip=视觉捕获用例，需 BROWSER_COMPONENT_CAPTURE 显式开启）；运行后无 chrome 残留、无临时 profile
+PHASE3-EVIDENCE parse-trace-log(用户要求「解析源名称与连接都打印」): 两层 sink（installParseTrace）。骨架永远记：解析源名/type/连接/目标/flag → 成功(地址/格式/耗时) 或 失败(kind/message/detail/耗时)；超级解析打全部腿与胜出源；回退拼候选链。详细层随「详细调试日志」开关：HTTP 方法/完整连接/Header 键名/状态码/字节/耗时、嗅探页面/超时/无头与命中途径
+PHASE3-EVIDENCE parse-trace-tests: 5 项（JSON 成功打源名+连接+结果、JSON 失败打类别与原因、嗅探打页面与超时180s与via、超级解析打腿与胜出、脱敏：查询串不进骨架层）
+PHASE3-EVIDENCE parse-source-bar(2026-11-13 用户选择「加切换栏，仅本次播放生效」): 播放器剧集面板新增解析源 chip 行（超级解析 + 配置解析器）；选中后关闭面板并用当前集重解析（`_switchParseSource` → `_playEpisode(index, overrideFlag: 当前flag)`）；不落盘
+PHASE3-EVIDENCE parse-source-seam: SiteService.resolvePlayback(preferredParseName) → resolveParseTarget(preferredParseName) → ParseRuntime.select(preferName)；AppState 两处透传；有测试证明「指定源覆盖默认」「不指定仍默认超级解析」
+PHASE3-EVIDENCE build-fix: 用户构建报 `The method 'parsersWithSuperParse' isn't defined for the type 'AppConfig'`（helper 写在 parse_runtime、AppConfig 在 protocol，跨库不可见）→ 已移入 protocol.dart；`flutter build linux --release` ✓ Built，lib/libapp.so 12:54 刷新
+PHASE3-EVIDENCE super-parse-default(2026-11-13 用户要求「遍历查找可用的」): 合成「超级解析」(type=4) 置于解析器选择列表头部（安卓 VodConfig.java:609 / Parse.god()），配置原文不受污染（AppConfig.playbackParsers）；默认即遍历全部 type=1 + type=0，flag 命中仍优先
+PHASE3-EVIDENCE super-parse-tests: 3 项（合成与不污染 / A 失败后 B 成功且两次都尝试 / flag 优先），行为测试 38 项全绿
+PHASE3-EVIDENCE timeouts(2026-11-13 用户指定): type=0 180s / type=4 180s / Super 单次 Web 60s / JSON 15s（有断言）
+PHASE3-EVIDENCE headless-default: 默认 --headless=new，不创建任何窗口；WEBHTV_SNIFF_HEADED=1 才用离屏可见窗口。实测（env 未设）HEADED_ENV=unset / CAN_REVEAL=false / 真实嗅探成功
+PHASE3-EVIDENCE headless-challenge: 无头会话遇人机校验立刻 parseSniffChallenge（有 <2s 断言，禁止伪装成 180s 超时），文案给出「开可见模式或换线路」
+PHASE3-EVIDENCE tmpdir-socket-limit(真机缺陷+修复): 应用继承的 TMPDIR=…/.local/linux-build/tmp（73 字节）→ Chromium 以
+  FATAL:chrome/browser/process_singleton_posix.cc:313 Socket path too long 退出 → 组件被正确选中但起不来。
+  修复：launchChromiumBrowser 按 XDG_RUNTIME_DIR → /tmp → 系统临时目录挑 ≤40 字节且可写的目录，作为子进程 TMPDIR；
+  纯函数 chooseBrowserTempRoot 有 4 条单测（长目录绝不选 / XDG 优先 / 全不可用时如实回落）。
+  回归：同一 73 字节 TMPDIR 下 —— parse_sniff_chromium_test 8/8 通过；应用真实接线（组件发现，未设 WEBHTV_SNIFF_BROWSER）嗅探成功。
+PHASE3-EVIDENCE component-known-gap: ①设置页区块与失败入口的 Before/After 视觉验收：本机 Linux 无图形会话，由子任务用 900×900 / dark / 同字体固定场景的 opt-in 截图脚本产出（BROWSER_COMPONENT_CAPTURE=1），仍需 Windows 真机复核；②detail_playback_resume_swap / detail_interaction_feedback 等 6 项 widget 测试在本机因缺 libmpv 必然失败（仓库 test/phase7_player_advance_test.dart:6 已注明），失败入口改动因此未本机回跑——需在有 libmpv 的机器上复跑这 6 项
+
+## 一、最终合并验收（一次不并发运行）
+
+$ cd apps/desktop-flutter
+$ TMPDIR=… WEBHTV_SNIFF_BROWSER=… ../../.tools/flutter/bin/dart analyze \
+    lib/core/sniff lib/services/parse_service.dart lib/services/site_service.dart \
+    lib/core/parse_runtime.dart lib/core/parse_failover.dart lib/core/app_error.dart \
+    lib/core/playback.dart lib/core/protocol.dart lib/core/http_api.dart
+Analyzing sniff, parse_service.dart, site_service.dart, ... → No issues found!
+
+$ TMPDIR=… WEBHTV_SNIFF_BROWSER=… ../../.tools/flutter/bin/flutter test \
+    test/phase3_parser_test.dart test/parse_sniff_behavior_test.dart \
+    test/chromium_sniffer_test.dart test/sniff_transport_test.dart \
+    test/sniff_browser_smoke_test.dart test/parse_sniff_chromium_test.dart \
+    test/config_and_site_test.dart test/playback_quality_resolution_test.dart \
+    test/phase9_parse_failover_test.dart test/phase9_catvod_spider_test.dart
+00:19 +186 -1: <phase9_catvod_spider_test 「destroy 之后 sidecar 以 0 退出」>
+00:24 +189 -1: Some tests failed.   ← 唯一失败项经复跑确认为既有 flaky（见上）
+
+$ 复跑举证（同一代码、同一环境）
+--- run 1 --- 00:09 +4 -1: Some tests failed.
+--- run 2 --- 00:09 +5: All tests passed!
+--- run 3 --- 00:09 +5: All tests passed!
+
+$ 解析/嗅探相关 5 个文件（不含该 flaky sidecar 测试）
+test/phase3_parser_test.dart + test/parse_sniff_behavior_test.dart +
+test/config_and_site_test.dart + test/playback_quality_resolution_test.dart +
+test/phase9_parse_failover_test.dart → 00:03 +149: All tests passed!
+
+$ 嗅探内核 4 个文件（含真浏览器 E2E）
+test/chromium_sniffer_test.dart + test/sniff_transport_test.dart +
+test/sniff_browser_smoke_test.dart + test/parse_sniff_chromium_test.dart
+→ 00:23 +36: All tests passed!
+→ 残留自查：pgrep -fa 'chrome-linux64/chrome' 空；ls -d /tmp/webhtv-sniff-* 空
+
+## 二、真浏览器端到端（B 子任务交付，父代理已复跑）
+
+夹具（test/support/sniff_fixture_server.dart）：
+/parse/xhr = fetch('/sig') 后 XHR /vod/master.m3u8?t=1；
+/parse/click = 只有 #play 的点击监听器才 XHR /vod/click.m3u8；
+/parse/challenge = 标题/正文含 Just a moment... / Verify you are human，1.5s 后仍 XHR；
+/parse/rule = XHR 无后缀 /hs/abcdef0123456789（只有 SniffRule(regexes:['/hs/']) 能命中）；
+/parse/slow = 只 fetch('/sig')，永不产出媒体；/json-broken = HTML 非 JSON；/vod/* → #EXTM3U。
+
+请求头注入实测（夹服务器记录）：
+跨 scheme（Referer=https://ref.example/，页面 http://127.0.0.1:PORT/parse/xhr）
+  /parse/xhr            ua=WH-PC-SNIFF/1.0  referer=null        ← 页面加载成功（修复前此处零请求）
+  /vod/master.m3u8?t=1  ua=WH-PC-SNIFF/1.0  referer=<页面自身地址>
+  → 候选拿到、无 ERR_BLOCKED_BY_CLIENT、无「解析页加载失败」
+同 scheme（Referer=http://ref.example/）
+  /vod/master.m3u8?t=1  referer=http://ref.example/             ← 注入值，不是页面默认 Referer
+
+过程中修掉的真实缺陷（父代理在 lib/core/sniff/chromium_sniffer.dart 修）：
+1. 跨 scheme Referer/Origin 不再进 setExtraHTTPHeaders（Chromium 会以
+   net::ERR_BLOCKED_BY_CLIENT 拦掉导航），改走 Page.navigate 的 referrer 参数；
+2. 主文档 Network.loadingFailed 时先清空全局 Header 重试一次导航，仍失败报
+   「解析页加载失败」+ net::ERR_xxx，不再退化成「嗅探超时」。
+
+## 三、未验证 / 已知边界（如实记录）
+
+1. Windows / macOS 的浏览器定位分支（Edge/Chrome 安装路径、执行位判定）本机无法
+   运行验证；只做了静态逻辑与 Linux 实测。Windows 侧还需要一次真机复跑。
+2. integration_test/t4_sweep_flow_test.dart 的 parser 分类桶已改为
+   parseSniffUnavailable（无浏览器=能力缺失），但该门禁需要真实 AT 配置 + 图形会话，
+   本机未执行；需在 Windows 复跑一次确认证据行。
+3. 无浏览器时的交互文案只做了单测（AppError 分类 + detail 文案），未在真实 UI 上
+   点验；Windows 手验步骤见交付摘要。
+4. headless 模式下无法完成人机校验交互：引擎只把窗口拉回可见（headed 时生效），
+   离屏 headless 时如实发 SniffChallenge 并最终超时；这是设计选择（不绕过验证），
+   不是缺陷。
+5. 解析器请求超时收紧到 15s（安卓 TIMEOUT_PARSE_DEF）后，慢解析器会更快失败；
+   站点接口预算仍是 180s，不受影响（有断言覆盖）。

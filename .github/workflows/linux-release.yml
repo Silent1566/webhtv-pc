@@ -1,0 +1,418 @@
+# Linux x86_64: build both formats; publish only from the manual release workflow.
+name: Linux Release
+'on':
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Blank = v<version>-yyyyMMddHHmm (stable) or v<version>-beta-yyyyMMddHHmm
+        required: false
+        type: string
+      release_channel:
+        description: 'auto: main stable, other branches beta'
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - stable
+          - beta
+      release_notes:
+        description: Release notes; use \n for Markdown newlines
+        required: false
+        type: string
+      prerelease:
+        description: Mark a NEW release as prerelease (beta always does)
+        required: false
+        default: false
+        type: boolean
+      publish_release:
+        description: Publish after smoke tests; false retains workflow artifacts only
+        required: false
+        default: true
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: linux-release
+  cancel-in-progress: false
+env:
+  TZ: Asia/Shanghai
+  FLUTTER_VERSION: 3.47.5
+defaults:
+  run:
+    shell: bash
+jobs:
+  release:
+    name: Build, package and manually publish (Linux x64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install native build and packaging dependencies
+        run: |-
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
+            xvfb xauth x11-utils dpkg-dev
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install JS sidecar dependencies
+        run: npm ci --omit=dev
+        working-directory: sidecars/spider-host-js
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install workflow test dependencies
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Verify tracked JVM jars
+        run: |-
+          test -s sidecars/spider-host-jvm/host.jar
+          git ls-files --error-unmatch sidecars/spider-host-jvm/host.jar
+          jar tf sidecars/spider-host-jvm/host.jar > "$RUNNER_TEMP/jvm-jar-contents.txt"
+          test -n "$(git ls-files 'sidecars/spider-host-jvm/lib/*.jar')"
+      - name: Install verified appimagetool
+        run: |-
+          set -euo pipefail
+          url='https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage'
+          file="$RUNNER_TEMP/appimagetool-1.9.1.AppImage"
+          curl --fail --location --retry 3 "$url" --output "$file"
+          printf '%s  %s\n' 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0' "$file" | sha256sum --check
+          chmod +x "$file"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$file" --version
+          printf 'APPIMAGETOOL=%s\n' "$file" >> "$GITHUB_ENV"
+      - name: Resolve release metadata
+        run: |-
+          python3 - <<'PY'
+          import datetime
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          text = Path('apps/desktop-flutter/pubspec.yaml').read_text()
+          match = re.search(r'^version:\s*(\d+\.\d+\.\d+)(?:\+(\d+))?\s*$', text, re.M)
+          if not match:
+              raise SystemExit('Invalid pubspec version; expected x.y.z+build')
+          version, build = match.group(1), match.group(2) or '0'
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if commit != os.environ['GITHUB_SHA']:
+              raise SystemExit('Checkout does not match GITHUB_SHA')
+          epoch = int(subprocess.check_output(['git', 'show', '-s', '--format=%ct', commit], text=True))
+          built_at = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+          short = subprocess.check_output(['git', 'rev-parse', '--short=7', commit], text=True).strip()
+          channel = 'dev'
+          tag = ''
+          if 'RELEASE_CHANNEL_INPUT' in os.environ:
+              channel = os.environ['RELEASE_CHANNEL_INPUT'].strip() or 'auto'
+              if channel == 'auto':
+                  channel = 'stable' if os.environ['GITHUB_REF_NAME'] == 'main' else 'beta'
+              if channel not in ('stable', 'beta'):
+                  raise SystemExit('Invalid release channel')
+              suffix = '-beta' if channel == 'beta' else ''
+              timestamp = built_at.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d%H%M')
+              tag = os.environ.get('RELEASE_TAG_INPUT', '').strip() or f'v{version}{suffix}-{timestamp}'
+              if not re.fullmatch(r'v' + re.escape(version + suffix) + r'-\d{12}', tag):
+                  raise SystemExit('Invalid release tag for version/channel')
+              existing = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'refs/tags/{tag}^{{commit}}'],
+                                        text=True, capture_output=True)
+              if existing.returncode == 0 and existing.stdout.strip() != commit:
+                  raise SystemExit(f'Tag {tag} points to a different commit; will not move it')
+          outputs = dict(version=version, build=build, channel=channel, short_sha=short,
+                         built_at=built_at.isoformat().replace('+00:00', 'Z'), tag=tag, title=tag[1:])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key, value in outputs.items():
+                  output.write(f'{key}={value}\n')
+          print(f'Linux build {version}+{build} channel={channel} commit={short} tag={tag}')
+          PY
+        id: meta
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.release_channel }}
+      - name: Prepare Linux release notes
+        run: |-
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          prerelease = os.environ['APP_CHANNEL'] == 'beta' or os.environ['PRERELEASE_INPUT'] == 'true'
+          notes = os.environ.get('RELEASE_NOTES_INPUT', '').replace('\\n', '\n').strip()
+          if not notes:
+              notes = f"WebHTV PC {os.environ['APP_VERSION']} ({os.environ['APP_CHANNEL']}) — Linux x86_64"
+          notes += '\n\nUnsigned AppImage/deb. Bundled Node; Python 3 and JDK 17+ are system requirements for corresponding sources. Ubuntu 22.04 / glibc 2.35 build baseline.\n'
+          Path('build').mkdir(exist_ok=True)
+          Path('build/linux-release-notes.md').write_text(notes)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('is_prerelease=' + str(prerelease).lower() + '\n')
+          PY
+        id: notes
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          APP_CHANNEL: ${{ steps.meta.outputs.channel }}
+          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+      - name: Install Dart dependencies
+        run: flutter pub get
+        working-directory: apps/desktop-flutter
+      - name: Static analysis
+        run: dart analyze
+        working-directory: apps/desktop-flutter
+      - name: Build Linux release
+        run: flutter build linux --release "--dart-define=APP_VERSION=$APP_VERSION"
+        working-directory: apps/desktop-flutter
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+      - name: Unit tests
+        run: xvfb-run -a flutter test
+        working-directory: apps/desktop-flutter
+        timeout-minutes: 30
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Packaging and workflow contract tests
+        run: python3 -m unittest discover -s tests -p 'test_*linux*.py'
+      - name: Package AppImage and deb
+        run: |-
+          python3 scripts/package_linux.py \
+            --build-dir apps/desktop-flutter/build/linux/x64/release/bundle \
+            --output-dir dist/linux --version "$APP_VERSION" --build-number "$APP_BUILD" \
+            --channel "$APP_CHANNEL" --commit "$GITHUB_SHA" --short-commit "$APP_SHORT_COMMIT" \
+            --built-at "$APP_BUILT_AT" --flutter-version "$FLUTTER_VERSION" \
+            --node-version v22.23.4 --appimagetool "$APPIMAGETOOL" \
+            --tag "$RELEASE_TAG" --notes-file build/linux-release-notes.md
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          APP_BUILD: ${{ steps.meta.outputs.build }}
+          APP_CHANNEL: ${{ steps.meta.outputs.channel }}
+          APP_SHORT_COMMIT: ${{ steps.meta.outputs.short_sha }}
+          APP_BUILT_AT: ${{ steps.meta.outputs.built_at }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+      - name: Verify package checksums
+        run: sha256sum --check SHA256SUMS.txt
+        working-directory: dist/linux
+      - name: Smoke test both Linux packages
+        run: |-
+          set -euo pipefail
+          smoke_dir="$(mktemp -d "$RUNNER_TEMP/webhtv-linux-smoke.XXXXXX")"
+          export SMOKE_DIR="$smoke_dir"
+          export GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 APPIMAGE_EXTRACT_AND_RUN=1
+          xvfb-run -a python3 - <<'PY'
+          import os
+          import re
+          import signal
+          import subprocess
+          import time
+          from pathlib import Path
+
+          root = Path(os.environ['SMOKE_DIR'])
+          version = os.environ['APP_VERSION']
+          stem = f'webhtv-pc-{version}'
+          channel = os.environ['APP_CHANNEL']
+          if channel != 'stable':
+              stem += '-' + channel
+          stem += '-linux-x64'
+          image = (Path('dist/linux') / (stem + '.AppImage')).resolve()
+          deb = (Path('dist/linux') / (stem + '.deb')).resolve()
+          subprocess.run(['dpkg-deb', '--extract', str(deb), str(root / 'deb')], check=True)
+          # Inspect the AppImage layout, then execute that same AppImage runtime below.
+          subprocess.run([str(image), '--appimage-extract'], cwd=root, check=True,
+                         stdout=subprocess.DEVNULL)
+          payloads = [root / 'deb/opt/webhtv-pc', root / 'squashfs-root']
+          for payload in payloads:
+              for relative in ('webhtv_pc', 'lib', 'data', 'runtime/node/node',
+                               'sidecars/spider-host-python/host.py', 'sidecars/spider-host-js/host.js',
+                               'sidecars/spider-host-jvm/host.jar'):
+                  if not (payload / relative).exists():
+                      raise SystemExit(f'Missing packaged runtime: {payload / relative}')
+              subprocess.run([str(payload / 'runtime/node/node'), '--version'], check=True)
+          # Run from outside the payload and from a path with spaces/non-ASCII.
+          relocated = root / 'client with spaces 中文'
+          payloads[0].rename(relocated)
+
+          # Ready protocol: 'ready <timestamp>', then startupInfo.oneLine, then trace summary.
+          info_pattern = re.compile(
+              r'^WebHTV PC ' + re.escape(version) + r' \(.*\) platform=(\S+) arch=(\S+) player=(.+?) dart=')
+
+
+          def parse_ready(text):
+              lines = [line for line in text.splitlines() if line.strip()]
+              if len(lines) < 3 or not lines[0].startswith('ready '):
+                  raise RuntimeError(
+                      'invalid ready protocol, expected "ready <timestamp>" then startupInfo and '
+                      f'trace lines: {text!r}')
+              info = lines[1]
+              if info.strip() == 'startup-info-unavailable':
+                  raise RuntimeError('unexpected startup info: startup-info-unavailable sentinel')
+              match = info_pattern.match(info)
+              if not match:
+                  raise RuntimeError(f'unexpected startup info: {info!r}')
+              platform, arch, player = match.groups()
+              # player is media-kit, whose engine label carries the libmpv backend.
+              if platform != 'linux' or arch != 'x64' or not player.startswith('media-kit'):
+                  raise RuntimeError(f'unexpected startup info: {info!r}')
+              return info
+
+
+          def process_tree_pids(pid):
+              children = {}
+              for entry in Path('/proc').iterdir():
+                  if not entry.name.isdigit():
+                      continue
+                  try:
+                      stat = (entry / 'stat').read_text()
+                  except OSError:
+                      continue
+                  children.setdefault(int(stat.rsplit(')', 1)[1].split()[1]), []).append(int(entry.name))
+              pids, stack = {pid}, [pid]
+              while stack:
+                  for child in children.get(stack.pop(), []):
+                      if child not in pids:
+                          pids.add(child)
+                          stack.append(child)
+              return pids
+
+
+          def mapped_window(pids):
+              listing = subprocess.run(['xwininfo', '-root', '-children'],
+                                       capture_output=True, text=True)
+              if listing.returncode != 0:
+                  raise RuntimeError('X11 window inventory failed: ' + listing.stderr.strip())
+              for line in listing.stdout.splitlines():
+                  found = re.match(r'\s+(0x[0-9a-f]+)\s', line)
+                  if not found:
+                      continue
+                  window = found.group(1)
+                  owner = subprocess.run(['xprop', '-id', window, '_NET_WM_PID'],
+                                         capture_output=True, text=True).stdout
+                  owner_match = re.search(r'=\s*(\d+)', owner)
+                  if not owner_match or int(owner_match.group(1)) not in pids:
+                      continue
+                  state = subprocess.run(['xwininfo', '-id', window],
+                                         capture_output=True, text=True).stdout
+                  if 'Map State: IsViewable' in state:
+                      return window
+              return None
+
+
+          for name, command in [('deb', relocated / 'webhtv_pc'), ('appimage', image)]:
+              ready, trace = root / (name + '.ready'), root / (name + '.trace')
+              env = dict(os.environ)
+              for variable, directory in (('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'),
+                                          ('XDG_DATA_HOME', 'data'), ('XDG_CACHE_HOME', 'cache')):
+                  target = root / name / directory
+                  target.mkdir(parents=True, exist_ok=True)
+                  env[variable] = str(target)
+              with (root / (name + '.log')).open('w+') as log:
+                  process = subprocess.Popen([str(command), f'--screenshot-ready-file={ready}',
+                                              f'--startup-trace={trace}'], cwd=root, env=env,
+                                             stdout=log, stderr=log, start_new_session=True)
+                  try:
+                      deadline = time.monotonic() + 45
+                      while not ready.exists():
+                          if process.poll() is not None:
+                              raise RuntimeError(f'{name} exited before readiness: {process.returncode}')
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError(
+                                  f'{name} did not report interactive readiness within 45s')
+                          time.sleep(0.1)
+                      info = parse_ready(ready.read_text())
+                      deadline = time.monotonic() + 20
+                      window = None
+                      while window is None:
+                          if process.poll() is not None:
+                              raise RuntimeError(
+                                  f'{name} exited after writing the ready marker: {process.returncode}')
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError(f'{name} reported readiness but no mapped X11 window '
+                                                 'belongs to its process tree within 20s')
+                          window = mapped_window(process_tree_pids(process.pid))
+                          if window is None:
+                              time.sleep(0.25)
+                      # Survive past the marker, catching a crash or self-exit right after readiness.
+                      time.sleep(3)
+                      if process.poll() is not None:
+                          raise RuntimeError(
+                              f'{name} exited within 3s after readiness: {process.returncode}')
+                      print(f'{name} mapped X11 window {window} {info}')
+                      print(f'{name} ready: {info}')
+                  except Exception:
+                      log.flush()
+                      log.seek(0)
+                      print(log.read()[-8000:])
+                      if trace.exists():
+                          print(trace.read_text()[-4000:])
+                      raise
+                  finally:
+                      try:
+                          os.killpg(process.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      try:
+                          process.wait(timeout=5)
+                      except subprocess.TimeoutExpired:
+                          pass
+          PY
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          APP_CHANNEL: ${{ steps.meta.outputs.channel }}
+      - name: Upload Linux workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.channel }}-${{ steps.meta.outputs.short_sha }}-linux-x64
+          path: |-
+            dist/linux/*.AppImage
+            dist/linux/*.deb
+            dist/linux/SHA256SUMS.txt
+            dist/linux/release-info.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish Linux release assets
+        run: |-
+          set -euo pipefail
+          # Check remote tags again: a concurrent Windows publisher must never move a tag.
+          remote_tags="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          if [[ -n "$remote_tags" ]]; then
+            remote_commit="$(printf '%s\n' "$remote_tags" | awk '/\^\{\}$/ { print $1; found=1 } END { if (!found) print first } NR==1 { first=$1 }')"
+            if [[ "$remote_commit" != "$GITHUB_SHA" ]]; then
+              echo 'Remote tag points to a different commit; will not move it' >&2
+              exit 1
+            fi
+          fi
+          assets_dir="$(mktemp -d "$RUNNER_TEMP/webhtv-linux-assets.XXXXXX")"
+          cp dist/linux/SHA256SUMS.txt "$assets_dir/linux-SHA256SUMS.txt"
+          cp dist/linux/release-info.json "$assets_dir/linux-release-info.json"
+          assets=(dist/linux/*.AppImage dist/linux/*.deb "$assets_dir/linux-SHA256SUMS.txt" "$assets_dir/linux-release-info.json")
+          for file in "${assets[@]}"; do test -s "$file"; done
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            # Existing notes, title and prerelease state belong to the original publisher.
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            args=(release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE")
+            if [[ "$RELEASE_PRERELEASE" == 'true' ]]; then args+=(--prerelease); fi
+            gh "${args[@]}" "${assets[@]}"
+          fi
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.meta.outputs.title }}
+          RELEASE_PRERELEASE: ${{ steps.notes.outputs.is_prerelease }}
+          NOTES_FILE: build/linux-release-notes.md

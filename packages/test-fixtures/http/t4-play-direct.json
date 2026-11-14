@@ -1,0 +1,9 @@
+{
+  "parse": 0,
+  "jx": 0,
+  "url": "http://127.0.0.1:18080/media/sample.mp4",
+  "header": {
+    "user-agent": "Mozilla/5.0 115Browser/23.9.3.2",
+    "Referer": "http://127.0.0.1:18080/"
+  }
+}
