@@ -27,6 +27,17 @@ void main() {
       expect(CatSource.isBundle('  HTTP://H/A/INDEX.JS.MD5  '), isTrue);
     });
 
+    test('本地 MixedCase 目录、zip 与相对路径保留大小写', () async {
+      final temp = await Directory.systemTemp.createTemp('webhtv-cat-case');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final dir = Directory(p.join(temp.path, 'MixedCaseBundle'))..createSync();
+      File(p.join(dir.path, 'index.js')).writeAsStringSync('// entry');
+      final zip = File(p.join(temp.path, 'Archive.ZIP'))..writeAsStringSync('fixture');
+      expect(CatSource.isBundle(dir.path), isTrue);
+      expect(CatSource.isBundle(p.relative(dir.path)), isTrue);
+      expect(CatSource.isBundle(zip.path), isTrue);
+    });
+
     test('普通配置地址不误判', () {
       expect(CatSource.isBundle('http://h/config.json'), isFalse);
       expect(CatSource.isBundle('http://h/sub/2024/buye-0'), isFalse);

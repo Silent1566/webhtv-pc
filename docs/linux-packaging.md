@@ -144,6 +144,13 @@ gh workflow run linux-release.yml --ref main \
   -f release_channel=stable -f publish_release=false
 ```
 
+## Runtime metadata and process isolation (2026-11)
+
+Two client-side facts the packaging checks depend on, both covered by regression tests:
+
+- **Startup metadata comes from the runtime, not from constants.** `appBuildFlavor` is derived from `Platform.operatingSystem` (`MVP-A (Linux)` on Linux) and `startupInfo.architecture` is derived from the ABI (`x64`/`arm64`/`x86`…), not from the Dart version string. Before this, a Linux build reported `MVP-A (Windows)` and `arch=3.13.4`, which would contradict the smoke protocol above on a real client even though a GUI fixture passed. Regression: `test/startup_platform_metadata_test.dart`.
+- **Process isolation is `process-only` on Linux.** POSIX has no Job Object: the sidecar host can be told to stop and its direct child is terminated, but no kill-on-close process-tree or memory/CPU limit is enforced, and `isolation.canTerminateTree` is `false`. IPC/JVM/JS sidecar tests assert the Windows Job Object guarantees only on Windows and assert `process-only` truthfully on POSIX, so a Linux green run is not evidence of Windows-equivalent isolation. Adding POSIX strong isolation is a separate runtime design task.
+
 ## Manual acceptance checklist and known limits
 
 Record distribution/glibc (`ldd --version`), GPU/driver, desktop session and package format for each check; report real native tests separately from fake packager fixtures.

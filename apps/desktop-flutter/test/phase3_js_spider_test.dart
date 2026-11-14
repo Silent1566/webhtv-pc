@@ -178,7 +178,14 @@ void main() {
       expect(init.majorCompatible, isTrue);
       expect(init.abi, 'webhtv-ipc-v1');
       expect(init.capabilities, containsAll(['home', 'play']));
-      expect(host.process.isolation.level, startsWith('job-object'));
+      if (Platform.isWindows) {
+        expect(host.process.isolation.level, startsWith('job-object'));
+        expect(host.process.isolation.canTerminateTree, isTrue);
+      } else {
+        // POSIX 没有 Job Object：只断言真实提供的 process-only 能力。
+        expect(host.process.isolation.level, 'process-only');
+        expect(host.process.isolation.canTerminateTree, isFalse);
+      }
 
       // 未声明 capability 的方法必须返回 SPIDER_UNSUPPORTED（§9.7）。
       await expectLater(

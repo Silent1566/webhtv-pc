@@ -147,7 +147,12 @@ const String appVersion = String.fromEnvironment(
   'APP_VERSION',
   defaultValue: '0.1.0',
 );
-const String appBuildFlavor = 'MVP-A (Windows)';
+final String appBuildFlavor = 'MVP-A (${switch (Platform.operatingSystem) {
+  'windows' => 'Windows',
+  'linux' => 'Linux',
+  'macos' => 'macOS',
+  final other => other,
+}})';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
 /// 架构、播放器引擎和运行时版本”）。
@@ -2826,7 +2831,7 @@ AiContentCompletion? aiContentCompletion,
     }
 
     var platform = Platform.operatingSystem;
-    var architecture = Platform.version.split(' ').first;
+    var architecture = _abiArchitecture();
     if (Platform.isWindows) {
       platform = 'windows';
       architecture = _windowsArchitecture();
@@ -3111,6 +3116,25 @@ AiContentCompletion? aiContentCompletion,
     if (await target.exists()) await target.delete();
     await temp.rename(target.path);
   }
+
+  /// 运行时架构取自 ABI；`Platform.version` 是 Dart 版本串，不含架构。
+  String _abiArchitecture() => switch (Abi.current()) {
+    Abi.linuxX64 ||
+    Abi.macosX64 ||
+    Abi.windowsX64 ||
+    Abi.androidX64 ||
+    Abi.iosX64 => 'x64',
+    Abi.linuxArm64 ||
+    Abi.macosArm64 ||
+    Abi.windowsArm64 ||
+    Abi.androidArm64 ||
+    Abi.iosArm64 => 'arm64',
+    Abi.linuxIA32 || Abi.windowsIA32 || Abi.androidIA32 => 'x86',
+    Abi.linuxArm || Abi.androidArm => 'arm',
+    Abi.linuxRiscv64 => 'riscv64',
+    Abi.linuxRiscv32 => 'riscv32',
+    _ => 'unknown',
+  };
 
   String _windowsArchitecture() {
     final env = Platform.environment['PROCESSOR_ARCHITECTURE'];
