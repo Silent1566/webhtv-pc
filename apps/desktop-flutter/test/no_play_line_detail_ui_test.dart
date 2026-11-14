@@ -230,6 +230,7 @@ class _TestAppState extends AppState {
     int? qualityIndex,
     bool Function()? isCurrent,
     Site? siteOverride,
+    String? preferredParseName,
     SiteService? serviceOverride,
   }) async {
     playedTargets.add(episodeTarget);

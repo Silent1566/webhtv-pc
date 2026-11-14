@@ -95,6 +95,7 @@ class _PendingPlaybackState extends AppState {
     bool Function()? isCurrent,
     int? qualityIndex,
     Site? siteOverride,
+    String? preferredParseName,
     SiteService? serviceOverride,
   }) async {
     resolutions += 1;

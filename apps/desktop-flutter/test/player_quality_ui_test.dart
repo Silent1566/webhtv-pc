@@ -151,6 +151,7 @@ class _ResolveState extends AppState {
     SiteService? serviceOverride,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     calls.add((
       target: episodeTarget,
@@ -173,6 +174,7 @@ class _ResolveState extends AppState {
     String? vodId,
     int? qualityIndex,
     bool Function()? isCurrent,
+    String? preferredParseName,
   }) async {
     calls.add((
       target: episodeTarget,

@@ -44,6 +44,7 @@ class _PendingPlaybackState extends AppState {
     SiteService? serviceOverride,
     bool Function()? isCurrent,
     int? qualityIndex,
+    String? preferredParseName,
   }) => playback.future;
 }
 
