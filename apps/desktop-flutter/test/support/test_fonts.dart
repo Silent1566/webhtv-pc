@@ -89,7 +89,8 @@ void reportFixtureFonts() {
   print(describeFixtureFonts());
 }
 
-/// 便于测试文件直接调用的断言前置：字体缺失不算失败，只记录。
+/// 视觉类用例的字体前置断言：CI 会安装 Noto CJK（Linux）并自带雅黑（Windows），
+/// 真缺字形时量出来的文本宽度不是真实渲染结果，所以这里显式失败而不是静默跳过。
 void expectFontsAvailableOrSkip() {
   expect(firstExisting(cjkFontCandidates()), isNotNull, reason: describeFixtureFonts());
 }

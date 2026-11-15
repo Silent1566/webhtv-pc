@@ -143,13 +143,24 @@ class PathIsolationDetectorTests(unittest.TestCase):
         ], unsafe_overrides(source))
 
 
+# 语义本身的用例：这几个调用是**被测对象**而不是夹具，必须用 roaming/local
+# 才能验证「Windows 用 APPDATA/LOCALAPPDATA、POSIX 用 XDG」的映射与优先级。
+# 豁免它们，其余任何字面 override 地图仍必须给全四个直连目录。
+SEMANTIC_EXEMPTIONS = {
+    'apps/desktop-flutter/test/app_paths_isolation_test.dart',
+}
+
+
 class FlutterTestPathIsolationTests(unittest.TestCase):
     def test_literal_overrides_isolate_every_platform_directory(self):
         violations = []
         for tree in ('test', 'integration_test'):
             for path in sorted((APP / tree).rglob('*.dart')):
+                relative = str(path.relative_to(ROOT))
+                if relative in SEMANTIC_EXEMPTIONS:
+                    continue
                 for line, reason in unsafe_overrides(path.read_text()):
-                    violations.append(f'{path.relative_to(ROOT)}:{line}: {reason}')
+                    violations.append(f'{relative}:{line}: {reason}')
         shown = violations[:20]
         if len(violations) > len(shown):
             shown.append(f'... {len(violations) - len(shown)} more unsafe calls')

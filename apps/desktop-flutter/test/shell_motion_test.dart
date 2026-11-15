@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -75,7 +76,12 @@ void main() {
     temp = await Directory.systemTemp.createTemp('webhtv-shell-motion');
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': p.join(temp.path, 'config'),
+          'data': p.join(temp.path, 'data'),
+          'cache': p.join(temp.path, 'cache'),
+          'state': p.join(temp.path, 'state'),
+        },
       ),
       log: LogService(),
     );

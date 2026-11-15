@@ -1,3 +1,6 @@
+@TestOn('windows')
+library;
+
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';

@@ -17,6 +17,7 @@ class SubtitleQuery {
     this.year,
     this.season,
     this.episode,
+    this.mediaPath,
     required this.siteKey,
     required this.vodId,
     required this.episodeName,
@@ -26,6 +27,13 @@ class SubtitleQuery {
   final int? year;
   final int? season;
   final int? episode;
+
+  /// 本地视频文件的绝对路径；网络流播放时为 null。
+  ///
+  /// 只有射手依赖它（按文件哈希搜索，见计划 §0）；其余源忽略。
+  /// 推导规则见 [deriveLocalMediaPath]。
+  final String? mediaPath;
+
   final String siteKey;
   final String vodId;
   final String episodeName;
@@ -50,6 +58,8 @@ class SubtitleCandidate {
     this.season,
     this.episode,
     this.headers = const {},
+    this.payload = const {},
+    this.requiresResolve = false,
   });
 
   final String providerId;
@@ -71,6 +81,13 @@ class SubtitleCandidate {
   final int? episode;
   final Map<String, String> headers;
 
+  /// 源私有载荷：ASSRT 是 `{id, format}`，迅雷/射手是 `{url, format}`。
+  /// 只在该源自己的 `resolve()` 里解释，跨源不得读取别人的键。
+  final Map<String, Object?> payload;
+
+  /// true = 必须先 `resolve()` 才能播放（二次跳转 / ZIP / 需要落盘）。
+  final bool requiresResolve;
+
   String get normalizedTitle => normalizeSubtitleTitle(title);
 
   SubtitleCandidate copyWithScore(double value) => SubtitleCandidate(
@@ -84,12 +101,37 @@ class SubtitleCandidate {
     season: season,
     episode: episode,
     headers: headers,
+    payload: payload,
+    requiresResolve: requiresResolve,
   );
 
   @override
   String toString() =>
       'SubtitleCandidate($providerId/$assetId "$title" $language '
       '${score.toStringAsFixed(3)})';
+}
+
+/// 一次 `resolve()` 的产物：可以交给播放器的本地字幕文件。
+class SubtitleResolvedAsset {
+  const SubtitleResolvedAsset({
+    required this.path,
+    required this.format,
+    required this.fileName,
+  });
+
+  /// 本地绝对路径，**带真实扩展名**。
+  ///
+  /// 不能是无扩展名的临时文件：mpv 靠扩展名建轨，否则会出现「轨已加入但
+  /// 轨表不刷新」（见 `player_controller.dart` 的同名注释）。
+  final String path;
+
+  /// 由**最终文件扩展名**得出，不是候选上的声明值（计划 §0.1 D1）。
+  final String format;
+
+  final String fileName;
+
+  @override
+  String toString() => 'SubtitleResolvedAsset($fileName, $format, $path)';
 }
 
 /// 匹配记忆（DB 行）。
@@ -162,6 +204,42 @@ const List<String> kDefaultSubtitleLanguages = ['zh-Hans', 'zh-Hant', 'en'];
 
 /// 自动加载阈值：低于它不自动加载，改为让用户手选。
 const double kSubtitleAutoPickThreshold = 0.75;
+
+/// 从播放地址推导本地视频文件路径；不是本地文件时返回 null。
+///
+/// 只认三种形态：`file://` URI、Windows 盘符路径、POSIX 绝对路径。
+/// 网络流（任何 `scheme://`）一律 null——射手按本地文件哈希搜索，
+/// 网络流没有哈希输入，配置了也不该被当成「源坏了」。
+String? deriveLocalMediaPath(String? url) {
+  final value = url?.trim() ?? '';
+  if (value.isEmpty) return null;
+  if (value.toLowerCase().startsWith('file://')) {
+    final uri = Uri.tryParse(value);
+    if (uri == null) return null;
+    try {
+      return uri.toFilePath();
+    } on UnsupportedError {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
+  }
+  if (value.contains('://')) return null;
+  if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value)) return value;
+  if (value.startsWith('/')) return value;
+  return null;
+}
+
+/// 字幕源显示名（空态与设置页共用，避免两处各写一份中文）。
+const Map<String, String> kSubtitleProviderLabels = {
+  'local': '本地目录',
+  'http': 'HTTP 字幕源',
+  'assrt': 'ASSRT',
+  'xunlei': '迅雷字幕',
+  'shooter': '射手字幕',
+};
+
+String subtitleProviderLabel(String id) => kSubtitleProviderLabels[id] ?? id;
 
 /// 标题归一化：去括号标签、标点、空白，统一小写。
 ///
@@ -251,6 +329,7 @@ List<SubtitleCandidate> rankSubtitleCandidates({
   required Iterable<SubtitleCandidate> candidates,
   required SubtitleQuery query,
   List<String> preferredLanguages = kDefaultSubtitleLanguages,
+  Map<String, int> providerPriorities = const {},
 }) {
   final scored = [
     for (final candidate in candidates)
@@ -264,6 +343,12 @@ List<SubtitleCandidate> rankSubtitleCandidates({
   ]..sort((a, b) {
     final byScore = b.score.compareTo(a.score);
     if (byScore != 0) return byScore;
+    // 同分按源优先级（ASSRT 30 > 迅雷 20 > 射手 10 > HTTP 5），
+    // 再按 providerId/assetId 稳定排序，避免刷新时列表跳动。
+    final byPriority = (providerPriorities[b.providerId] ?? 0).compareTo(
+      providerPriorities[a.providerId] ?? 0,
+    );
+    if (byPriority != 0) return byPriority;
     final byProvider = a.providerId.compareTo(b.providerId);
     return byProvider != 0 ? byProvider : a.assetId.compareTo(b.assetId);
   });
@@ -275,12 +360,14 @@ SubtitleCandidate? pickSubtitleCandidate({
   required Iterable<SubtitleCandidate> candidates,
   required SubtitleQuery query,
   List<String> preferredLanguages = kDefaultSubtitleLanguages,
+  Map<String, int> providerPriorities = const {},
   double threshold = kSubtitleAutoPickThreshold,
 }) {
   final ranked = rankSubtitleCandidates(
     candidates: candidates,
     query: query,
     preferredLanguages: preferredLanguages,
+    providerPriorities: providerPriorities,
   );
   if (ranked.isEmpty) return null;
   return ranked.first.score >= threshold ? ranked.first : null;
@@ -296,4 +383,6 @@ String encodeSubtitleCandidate(SubtitleCandidate candidate) => jsonEncode({
   'url': candidate.url,
   'season': candidate.season,
   'episode': candidate.episode,
+  'requiresResolve': candidate.requiresResolve,
+  if (candidate.payload.isNotEmpty) 'payload': candidate.payload,
 });

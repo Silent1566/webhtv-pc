@@ -372,13 +372,17 @@ time.sleep(120)
                         result = subprocess.run(['xvfb-run', '-a', 'python3', '-c', code],
                                                 cwd=root, env=env, capture_output=True,
                                                 text=True, timeout=30)
-                        self.assertEqual(succeeds, result.returncode == 0, result.stdout[-2000:] + result.stderr)
+                        # smoke 脚本把被测进程的日志 print 到 stdout，异常栈去 stderr；
+                        # 诊断文本因此可能落在任意一路，断言必须看合并输出，
+                        # 否则失败模式会被误判成「什么都没输出」。
+                        output = result.stdout + result.stderr
+                        self.assertEqual(succeeds, result.returncode == 0, output[-2000:])
                         if succeeds:
                             self.assertIn('appimage ready:', result.stdout)
                             self.assertIn('deb ready:', result.stdout)
                             self.assertIn('mapped X11 window', result.stdout)
                         else:
-                            self.assertIn(error, result.stderr)
+                            self.assertIn(error, output)
 
     def test_player_dependency_is_version_agnostic(self):
         for filename in (CI, RELEASE):

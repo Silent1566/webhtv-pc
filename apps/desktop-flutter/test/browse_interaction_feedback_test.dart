@@ -25,6 +25,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -140,7 +141,12 @@ void main() {
     client = _HoldingClient();
     state = AppState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': p.join(tempDir.path, 'config'),
+          'data': p.join(tempDir.path, 'data'),
+          'cache': p.join(tempDir.path, 'cache'),
+          'state': p.join(tempDir.path, 'state'),
+        },
       ),
       log: LogService(),
       httpClient: client,

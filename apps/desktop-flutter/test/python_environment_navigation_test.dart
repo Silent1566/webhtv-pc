@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -23,10 +24,15 @@ void main() {
 
   setUp(() async {
     temp = Directory.systemTemp.createTempSync('webhtv_python_nav_');
-    LogService.logDirectoryOverride = '${temp.path}\\logs';
     final paths = AppPaths.resolve(
-      overrides: {'roaming': temp.path, 'local': temp.path},
+      overrides: {
+        'config': p.join(temp.path, 'config'),
+        'data': p.join(temp.path, 'data'),
+        'cache': p.join(temp.path, 'cache'),
+        'state': p.join(temp.path, 'logs'),
+      },
     );
+    LogService.logDirectoryOverride = paths.logDir;
     state = AppState(paths: paths, log: LogService());
     await state.bootstrap();
   });

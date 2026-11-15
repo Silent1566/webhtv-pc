@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/config_source_status.dart';
 import 'package:webhtv_pc/services/storage.dart';
 
@@ -33,7 +34,9 @@ void main() {
   test(
     'existing path and file URI are available without changing file',
     () async {
-      final file = File('${root.path}/source config.json');
+      // 用 p.join 构造原生分隔符路径：Windows 上 file.path 与 file URI 解出的
+      // 路径必须逐字符一致，否则同一个文件在两种表示下会被判成不同来源。
+      final file = File(p.join(root.path, 'source config.json'));
       await file.writeAsString('{}');
       for (final origin in [file.path, file.uri.toString()]) {
         final status = await inspectConfigSource(record(origin));

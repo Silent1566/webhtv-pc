@@ -45,11 +45,50 @@ class CredentialBridge extends fixture.FakeBridge {
   }
 }
 
+/// 让测试里的任何真实 HTTP 立刻失败，而不是去连不可达的局域网地址。
+///
+/// `activateConfigRecord` 会在切换配置后 `loadHome(site)`，而桥接源的站点
+/// 地址就是那台安卓设备的网关（例如 192.168.50.9）。CI 上没有这台设备，
+/// 真实连接要等满连接超时，于是用例在 30 秒上限前耗尽预算。
+class _NoNetworkHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) => _FailingHttpClient();
+}
+
+/// 只关心「有没有发起网络」：其它成员一律走 noSuchMethod，不逐个实现。
+class _FailingHttpClient implements HttpClient {
+  @override
+  bool autoUncompress = true;
+
+  @override
+  Duration? connectionTimeout;
+
+  @override
+  Duration idleTimeout = const Duration(seconds: 1);
+
+  @override
+  int? maxConnectionsPerHost;
+
+  @override
+  String? userAgent;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async =>
+      throw const SocketException('测试内禁止真实网络');
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('测试替身未实现 ${invocation.memberName}');
+}
 void main() {
   late Directory temp;
   late AppState state;
   late CredentialBridge bridge;
   setUp(() async {
+    HttpOverrides.global = _NoNetworkHttpOverrides();
     temp = Directory.systemTemp.createTempSync('tmdb-subscription-bridge-');
     bridge = CredentialBridge();
     state = AppState(
@@ -69,6 +108,7 @@ void main() {
   tearDown(() {
     state.dispose();
     temp.deleteSync(recursive: true);
+    HttpOverrides.global = null;
   });
 
   Future<int> activateImported({bool fallback = false}) async {

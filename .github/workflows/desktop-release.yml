@@ -401,7 +401,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
             libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
-            xvfb xauth x11-utils dpkg-dev
+            xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -672,7 +672,10 @@ jobs:
       - name: Upload Linux workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: webhtv-pc-${{ needs.meta.outputs.version }}-${{ needs.meta.outputs.channel }}-${{ needs.meta.outputs.short_sha }}-linux-x64
+          # 名字必须与 publish 的 Download Linux assets 一字不差：
+          # 那边用 tag（含 v 前缀与时间戳），这里若沿用 CI 的
+          # version-channel-sha 模板，下载会报 Artifact not found。
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-linux-x64
           path: |-
             dist/linux/*.AppImage
             dist/linux/*.deb

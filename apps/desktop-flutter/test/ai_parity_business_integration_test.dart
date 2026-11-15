@@ -530,18 +530,16 @@ void integratedServiceTests() {
           await (await client.getUrl(Uri.parse(url)))
               .close()
               .then((r) => utf8.decoder.bind(r).join());
-      // 代理会把子清单/分片重写成 `/p/<token>/<base64 target>`；
-      // 断言必须解码回真实目标，不能对明文子串下判断。
-      List<String> mediaUris(String manifest) => [
+      // 代理会把子资源重写成两种形态：短码 `/p/<token>/i/<n>`，或表满后的
+      // 长连接 `/p/<token>/<base64 target>`。断言必须按发起会话解码回真实目标，
+      // 不能对明文子串下判断，也不能只认 base64 一种形态。
+      List<String> mediaUris(ProxySession session, String manifest) => [
         for (final line in const LineSplitter().convert(manifest))
           if (line.trim().isNotEmpty && !line.trim().startsWith('#'))
-            LocalProxyServer.decodeTarget(
-                  Uri.parse(line.trim()).pathSegments.last,
-                )?.toString() ??
-                line.trim(),
+            _resolveMediaUri(session, line.trim()),
       ];
       expect(
-        mediaUris(await read(proxy.urlFor(a, target))),
+        mediaUris(a, await read(proxy.urlFor(a, target))),
         containsAll([
           'http://127.0.0.1:${upstream.port}/feature/one.ts',
           'http://127.0.0.1:${upstream.port}/advert/ad.ts',
@@ -557,10 +555,10 @@ void integratedServiceTests() {
           excludePatterns: [r'/feature/'],
         ),
       ], target);
-      final filtered = mediaUris(await read(proxy.urlFor(a, target)));
+      final filtered = mediaUris(a, await read(proxy.urlFor(a, target)));
       expect(filtered, ['http://127.0.0.1:${upstream.port}/feature/one.ts']);
       expect(
-        mediaUris(await read(proxy.urlFor(b, target))),
+        mediaUris(b, await read(proxy.urlFor(b, target))),
         contains('http://127.0.0.1:${upstream.port}/advert/ad.ts'),
       );
     } finally {
@@ -569,6 +567,21 @@ void integratedServiceTests() {
       await upstream.close(force: true);
     }
   });
+}
+
+/// 把清单里的一条子资源行解析回真实目标。
+///
+/// 短码（`/i/<n>`）只能靠发起会话还原；`/i/` 命名空间与 base64 目标互不回落，
+/// 越界就是不可解析，绝不退回当 base64 再解一次。
+String _resolveMediaUri(ProxySession session, String line) {
+  final uri = Uri.parse(line);
+  final segments = uri.pathSegments;
+  if (segments.length >= 2 && segments[segments.length - 2] == 'i') {
+    final index = int.tryParse(segments.last);
+    final target = index == null ? null : session.childTargetAt(index);
+    return target?.toString() ?? line;
+  }
+  return LocalProxyServer.decodeTarget(segments.last)?.toString() ?? line;
 }
 
 class _CapturingSyncClient extends SyncClient {

@@ -208,12 +208,16 @@ void main() {
       expect((await engine.synthesize('新正文', TtsOptions())).bytes, [2, 3]);
     } finally {
       await engine.dispose();
+      // 取消已经把客户端连接强制关掉，此时再关服务端响应可能永远等不到对端。
+      // 给它一个有界超时：产品行为由「取消后能再次合成」断言覆盖，不靠收尾成败判。
       try {
-        await held?.close();
+        await held?.close().timeout(const Duration(seconds: 5));
       } on SocketException {
         // 取消会主动关闭客户端连接，fixture 收尾可能已无对端。
       } on HttpException {
         // 等待响应头的连接也可能已被强制关闭。
+      } on TimeoutException {
+        // 对端已消失，close 不会返回；忽略，直接销毁服务端。
       }
       await sub.cancel();
       await server.close(force: true);
@@ -242,12 +246,16 @@ void main() {
       await cancelled;
     } finally {
       await engine.dispose();
+      // 取消已经把客户端连接强制关掉，此时再关服务端响应可能永远等不到对端。
+      // 给它一个有界超时：产品行为由「取消后能再次合成」断言覆盖，不靠收尾成败判。
       try {
-        await held?.close();
+        await held?.close().timeout(const Duration(seconds: 5));
       } on SocketException {
         // 取消会主动关闭客户端连接，fixture 收尾可能已无对端。
       } on HttpException {
         // 等待响应头的连接也可能已被强制关闭。
+      } on TimeoutException {
+        // 对端已消失，close 不会返回；忽略，直接销毁服务端。
       }
       await sub.cancel();
       await server.close(force: true);

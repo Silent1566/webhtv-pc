@@ -11,16 +11,23 @@ import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'config_source_status_fixture.dart';
+import 'support/test_fonts.dart';
 
 void main() {
   final phase = Platform.environment['CONFIG_SOURCE_CAPTURE_PHASE'];
   setUpAll(() async {
-    final cjk = File('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc');
-    for (final family in ['FixtureCJK', 'Microsoft YaHei UI', 'Noto Sans CJK SC']) {
-      await (FontLoader(family)..addFont(cjk.readAsBytes().then(ByteData.sublistView))).load();
+    // 跨平台探测：Linux 用 Noto CJK，Windows 用微软雅黑，macOS 用 PingFang。
+    // 早期实现把 Linux 的绝对路径写死，在 Windows runner 上直接 PathNotFoundException。
+    final cjk = firstExisting(cjkFontCandidates());
+    if (cjk != null) {
+      for (final family in ['FixtureCJK', 'Microsoft YaHei UI', 'Noto Sans CJK SC']) {
+        await (FontLoader(family)..addFont(cjk.readAsBytes().then(ByteData.sublistView))).load();
+      }
     }
-    final icons = File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
-    await (FontLoader('MaterialIcons')..addFont(icons.readAsBytes().then(ByteData.sublistView))).load();
+    final icons = firstExisting(iconFontCandidates());
+    if (icons != null) {
+      await (FontLoader('MaterialIcons')..addFont(icons.readAsBytes().then(ByteData.sublistView))).load();
+    }
   });
 
   Future<void> capture(WidgetTester tester, String scenario, Size size, Brightness brightness) async {

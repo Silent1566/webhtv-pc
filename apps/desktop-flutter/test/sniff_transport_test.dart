@@ -70,7 +70,9 @@ void main() {
       );
     });
 
-    test('普通文件不算找到：没有可执行位就返回 null', () async {
+    // 可执行位是 POSIX 语义；Windows 的 mode 位没有对应含义，按存在即候选处理。
+    test('普通文件不算找到：没有可执行位就返回 null',
+        skip: Platform.isWindows ? '可执行位是 POSIX 语义' : null, () async {
       final plain = File('${temp.path}${Platform.pathSeparator}not-a-browser')
         ..writeAsStringSync('#!/bin/sh\nexit 0\n');
 
@@ -255,7 +257,9 @@ void main() {
       expect(commands[1].executablePath, component.path);
     });
 
-    test('probeChromiumBrowser：退出 0 返回 null（可用），退出 1 与不存在返回原因', () async {
+    // 该组用 #!/bin/sh 脚本模拟浏览器与退出码，Windows 没有 sh。
+    test('probeChromiumBrowser：退出 0 返回 null（可用），退出 1 与不存在返回原因',
+        skip: Platform.isWindows ? '用 POSIX 脚本模拟浏览器与退出码' : null, () async {
       final healthy = script('chrome-ok', 0);
       final broken = script('chrome-broken', 1);
       final healthyCommand = BrowserCommand(
@@ -323,11 +327,14 @@ void main() {
 
     test('事件进入广播流并带上 sessionId', () async {
       connection = await connectCdp(server.url);
+      // 服务端的 WebSocket 升级是异步的：客户端握手完成时 server.socket 可能
+      // 还没被赋值。Windows 上时序更紧，这里显式等到通道就绪再发事件。
+      final socket = await server.awaitSocket();
       final event = connection!.events.firstWhere(
         (event) => event.method == 'Network.requestWillBeSent',
       );
 
-      server.socket!.add(
+      socket.add(
         jsonEncode({
           'method': 'Network.requestWillBeSent',
           'params': {
@@ -461,6 +468,18 @@ class _FakeCdpServer {
       );
     });
     return fake;
+  }
+
+  /// 等到服务端完成 WebSocket 升级并持有连接。
+  Future<WebSocket> awaitSocket() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (socket == null) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw StateError('等待 CDP WebSocket 升级超时');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    return socket!;
   }
 
   Uri get url =>

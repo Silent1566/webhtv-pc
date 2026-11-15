@@ -7,6 +7,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ai_config.dart';
 import 'package:webhtv_pc/services/ai_config_store.dart';
 import 'package:webhtv_pc/services/settings_file.dart';
@@ -18,7 +19,12 @@ void main() {
       final dir = Directory.systemTemp.createTempSync('ai-parity-ui-');
       final state = AppState(
         paths: AppPaths.resolve(
-          overrides: {'roaming': dir.path, 'local': dir.path},
+          overrides: {
+            'config': p.join(dir.path, 'config'),
+            'data': p.join(dir.path, 'data'),
+            'cache': p.join(dir.path, 'cache'),
+            'state': p.join(dir.path, 'state'),
+          },
         ),
         log: LogService(),
       );

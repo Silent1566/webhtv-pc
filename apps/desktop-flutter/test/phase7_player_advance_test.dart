@@ -159,7 +159,15 @@ void main() {
       expect(failureEnd, greaterThan(failureStart));
       final failureBlock = pageSource.substring(failureStart, failureEnd);
 
-      final rollback = failureBlock.indexOf('_request = intent;');
+      // 回滚值可能由 `intent` 派生出更精确的副本（同集先补到的线路不能丢），
+      // 因此断言的是「先把 intent 落到 rollback，再把 rollback 写回 _request」，
+      // 而不是某个固定变量名。
+      expect(
+        failureBlock.contains('var rollback = intent;'),
+        isTrue,
+        reason: '失败分支必须从加载前捕获的 intent 派生回滚值（D3）',
+      );
+      final rollback = failureBlock.indexOf('_request = rollback;');
       final clear = failureBlock.indexOf('_controller.clearCompleted();');
       expect(rollback, greaterThan(0), reason: '失败分支必须回滚 _request（D3）');
       expect(clear, greaterThan(rollback), reason: '回滚后再清 completed');
