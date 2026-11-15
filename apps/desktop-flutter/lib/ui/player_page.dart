@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
@@ -41,11 +42,13 @@ import '../services/danmaku_library_service.dart';
 import '../services/danmaku_service.dart';
 import '../services/external_player.dart';
 import '../services/live_danmaku_session.dart';
+import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
 import 'advanced_settings_page.dart';
 import 'app.dart';
 import 'common.dart';
+import 'subtitle_search_dialog.dart';
 import 'subtitle_settings_page.dart';
 import 'ai_integration_widgets.dart';
 import 'audio_ai/audio_ai_controls.dart';
@@ -1407,8 +1410,22 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       siteKey: _request.siteKey,
       vodId: _request.vodId,
       episodeName: _request.episodeName,
+      // 射手按本地文件特征码搜索；网络流两个来源都推不出路径，结果为 null。
+      mediaPath:
+          deriveLocalMediaPath(_request.url) ??
+          deriveLocalMediaPath(_request.episodeTarget),
     );
   }
+
+  /// 构造字幕匹配服务：统一的缓存目录与超时口径。
+  ///
+  /// 自动匹配用 8s（不拖慢起播），用户主动搜索/下载用 15s（与参考实现一致）。
+  SubtitleMatchService _subtitleService({Duration? timeout}) =>
+      SubtitleMatchService(
+        log: widget.state.log,
+        cacheDir: SubtitleAssetStore.defaultCacheDir(widget.state.paths.cacheDir),
+        timeout: timeout ?? const Duration(seconds: 8),
+      );
 
   /// 播放结果没有字幕时，按设置自动匹配（`design/02` §1.3）。
   Future<void> _autoMatchSubtitle() async {
@@ -1434,7 +1451,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     final generation = _mediaGeneration;
-    final service = SubtitleMatchService(log: widget.state.log);
+    final service = _subtitleService();
     var best = await service.autoMatch(query: query, settings: settings);
     if (best == null && mounted && generation == _mediaGeneration) {
       final title = await widget.state.resolveBusinessTitle(
@@ -1468,11 +1485,32 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }) async {
     final generation = _mediaGeneration;
     final controller = _controller;
+    var url = candidate.url;
+    var format = candidate.format;
+    if (candidate.requiresResolve) {
+      // ASSRT 是两跳 + 可能 ZIP，落成本地文件后播放器才认得。
+      final asset = await _subtitleService(
+        timeout: const Duration(seconds: 15),
+      ).resolve(
+        candidate,
+        query: _subtitleQuery(),
+        settings: widget.state.subtitleSettings,
+      );
+      if (!mounted || generation != _mediaGeneration) return false;
+      if (asset == null) {
+        _showSubtitleError(
+          '字幕下载失败（${subtitleProviderLabel(candidate.providerId)}）',
+        );
+        return false;
+      }
+      url = asset.path;
+      format = asset.format;
+    }
     final info = SubtitleInfo(
-      url: candidate.url,
+      url: url,
       name: candidate.title,
       lang: candidate.language,
-      format: candidate.format,
+      format: format,
       flag: SubtitleInfo.selectionFlagDefault,
     );
     controller.setExternalSubtitles(
@@ -1516,110 +1554,31 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     return true;
   }
 
-  /// 手动搜索字幕：关键词 → 候选列表 → 选中并记忆。
+  /// 手动搜索字幕：打开搜索窗口 → 选中 → 下载/套用 → 记忆。
+  ///
+  /// 窗口只负责交互（可离屏测试）；搜索、下载、套用、记忆都在这一侧。
   Future<void> _showSubtitleSearch() async {
     final settings = widget.state.subtitleSettings;
     if (!settings.hasAnyProvider) {
-      _showPlayerMessage('未配置字幕源：请先在设置页填写字幕目录或 HTTP 源', kind: ToastKind.error);
-      return;
-    }
-    final query = _subtitleQuery();
-    final controller = TextEditingController(text: query.title);
-    final keyword = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('搜索字幕'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '剧名 / 关键词'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('搜索'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (keyword == null || !mounted) return;
-    final text = keyword.trim();
-    if (text.isEmpty) return;
-
-    setState(() {});
-    final service = SubtitleMatchService(log: widget.state.log);
-    final generation = _mediaGeneration;
-    var results = await service.search(
-      query: SubtitleQuery(
-        title: text,
-        season: query.season,
-        episode: query.episode,
-        siteKey: query.siteKey,
-        vodId: query.vodId,
-        episodeName: query.episodeName,
-      ),
-      settings: settings,
-    );
-    if (!mounted) return;
-    if (results.isEmpty) {
-      final title = await widget.state.resolveBusinessTitle(
-        text,
-        siteKey: query.siteKey,
-        vodId: query.vodId,
+      _showPlayerMessage(
+        '未配置字幕源：请先在 设置 → 字幕源 填写 ASSRT / 迅雷 / 射手或本地目录',
+        kind: ToastKind.error,
       );
-      if (!mounted || generation != _mediaGeneration) return;
-      if (title != null && title != text) {
-        results = await service.search(
-          query: SubtitleQuery(
-            title: title,
-            season: query.season,
-            episode: query.episode,
-            siteKey: query.siteKey,
-            vodId: query.vodId,
-            episodeName: query.episodeName,
-          ),
-          settings: settings,
-        );
-      }
-    }
-    if (!mounted || generation != _mediaGeneration) return;
-    if (results.isEmpty) {
-      _showPlayerMessage('没有找到字幕（可换关键词或检查字幕源）');
       return;
     }
-    final selected = await showModalBottomSheet<SubtitleCandidate>(
+    final generation = _mediaGeneration;
+    final service = _subtitleService(timeout: const Duration(seconds: 15));
+    final selected = await showSubtitleSearchDialog(
       context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text('搜索结果'),
-              titleTextStyle: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            for (final candidate in results)
-              ListTile(
-                title: Text(candidate.title),
-                subtitle: Text(
-                  '${candidate.providerId} · ${candidate.language.isEmpty ? "未知语言" : candidate.language} '
-                  '· ${candidate.score.toStringAsFixed(2)}',
-                ),
-                onTap: () => Navigator.of(context).pop(candidate),
-              ),
-          ],
-        ),
-      ),
+      initialQuery: _subtitleQuery(),
+      search: (query) => service.searchReport(query: query, settings: settings),
+      preferredLanguages: settings.preferredLanguages,
+      pickLocalFile: _pickLocalSubtitleFile,
     );
-    if (selected == null || !mounted) return;
+    if (selected == null || !mounted || generation != _mediaGeneration) return;
     final applied = await _applySubtitleCandidate(selected, remember: true);
-    if (applied) {
+    // 只有从字幕源搜到的候选才值得学标题：本地文件名不是影片名。
+    if (applied && selected.providerId != 'local') {
       await widget.state.learnBusinessTitle(
         rawTitle: _request.vodName,
         confirmedTitle: selected.title,
@@ -1629,6 +1588,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
   }
 
+  /// 搜索窗口里的「选择本地文件…」：原生文件对话框，取消返回 null。
+  Future<String?> _pickLocalSubtitleFile() async {
+    try {
+      final file = await FilePicker.pickFile(
+        dialogTitle: '选择字幕文件',
+        type: FileType.custom,
+        allowedExtensions: const ['srt', 'ass', 'ssa', 'vtt', 'sub'],
+      );
+      return file?.path;
+    } catch (error) {
+      widget.state.log.warning('选择本地字幕文件失败 $error', scope: 'subtitle');
+      return null;
+    }
+  }
   /// 选择本地字幕文件：路径输入 → 加载并记忆。
   Future<void> _showLocalSubtitlePicker() async {
     var input = '';
@@ -4286,8 +4259,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
     } else if (choice == 'search') {
       final query = _subtitleQuery();
-      final candidates = await SubtitleMatchService(log: widget.state.log)
-          .search(query: query, settings: widget.state.subtitleSettings);
+      final candidates = await _subtitleService(
+        timeout: const Duration(seconds: 15),
+      ).search(query: query, settings: widget.state.subtitleSettings);
       if (!mounted || generation != _mediaGeneration) return null;
       final candidate = await showDialog<SubtitleCandidate>(
         context: context,
@@ -4308,11 +4282,26 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         ),
       );
       if (candidate == null) return null;
+      var url = candidate.url;
+      var format = candidate.format;
+      if (candidate.requiresResolve) {
+        final asset = await _subtitleService(
+          timeout: const Duration(seconds: 15),
+        ).resolve(
+          candidate,
+          query: query,
+          settings: widget.state.subtitleSettings,
+        );
+        if (!mounted || generation != _mediaGeneration) return null;
+        if (asset == null) return null;
+        url = asset.path;
+        format = asset.format;
+      }
       sub = SubtitleInfo(
-        url: candidate.url,
+        url: url,
         name: candidate.title,
         lang: candidate.language,
-        format: candidate.format,
+        format: format,
       );
     }
     if (sub == null) return null;

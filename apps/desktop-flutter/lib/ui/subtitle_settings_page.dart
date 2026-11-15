@@ -1,7 +1,11 @@
-/// 字幕源设置页（`docs/phase9/design/02` §3）。
+/// 字幕源设置页（`docs/phase9/design/02` §3、
+/// `docs/superpowers/plans/2026-11-15-subtitle-online-search.md`）。
 ///
-/// 只配置「去哪里找字幕」：自动匹配开关、语言优先级、本地目录、HTTP 源。
+/// 只配置「去哪里找字幕」：自动匹配开关，以及每个源自己的开关/令牌
+/// （ASSRT、迅雷、射手、本地目录、HTTP 源）。
 /// 不在这里做搜索——搜索是播放期行为，入口在播放器字幕菜单。
+/// 也不判断某个源「是否可用」：什么算启用由 [SubtitleSettings] 的 getter 定义，
+/// 这里只负责写设置和如实统计。
 library;
 
 import 'dart:io';
@@ -30,8 +34,12 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
   late bool _autoMatch;
   late final TextEditingController _endpoint;
   late final TextEditingController _token;
+  late final TextEditingController _assrtToken;
   late final TextEditingController _directories;
   bool _revealToken = false;
+  bool _revealAssrtToken = false;
+  bool _xunleiEnabled = false;
+  bool _shooterEnabled = false;
   bool _busy = false;
   String? _message;
 
@@ -42,15 +50,19 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     _autoMatch = settings.autoMatch;
     _endpoint = TextEditingController(text: settings.httpEndpoint);
     _token = TextEditingController(text: settings.httpToken);
+    _assrtToken = TextEditingController(text: settings.assrtToken);
     _directories = TextEditingController(
       text: settings.localDirectories.join('\n'),
     );
+    _xunleiEnabled = settings.xunleiEnabled;
+    _shooterEnabled = settings.shooterEnabled;
   }
 
   @override
   void dispose() {
     _endpoint.dispose();
     _token.dispose();
+    _assrtToken.dispose();
     _directories.dispose();
     super.dispose();
   }
@@ -70,6 +82,9 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
       httpEndpoint: _endpoint.text.trim(),
       httpToken: _token.text.trim(),
       localDirectories: _directoryList,
+      assrtToken: _assrtToken.text.trim(),
+      xunleiEnabled: _xunleiEnabled,
+      shooterEnabled: _shooterEnabled,
     );
     final ok = await widget.state.setSubtitleSettings(settings);
     if (!mounted) return;
@@ -87,6 +102,25 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     setState(() {
       _directories.text = [...existing, suggested].join('\n');
     });
+  }
+
+  /// 已启用的源数量：五个来源彼此独立，逐个问 [SubtitleSettings] 的 getter。
+  int get _enabledSourceCount {
+    final settings = widget.state.subtitleSettings;
+    return [
+      settings.hasLocalProvider,
+      settings.hasHttpProvider,
+      settings.hasAssrt,
+      settings.hasXunlei,
+      settings.hasShooter,
+    ].where((enabled) => enabled).length;
+  }
+
+  String get _statusText {
+    final settings = widget.state.subtitleSettings;
+    final auto = settings.autoMatch ? ' · 自动匹配已开' : '';
+    if (!settings.hasAnyProvider) return '当前状态：未配置任何字幕源$auto';
+    return '当前状态：已配置字幕源 · 已启用 $_enabledSourceCount 个源$auto';
   }
 
   @override
@@ -107,6 +141,65 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 subtitle: const Text('只在配置了至少一个字幕源时生效；失败不阻塞播放'),
                 value: _autoMatch,
                 onChanged: (value) => setState(() => _autoMatch = value),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: 'ASSRT',
+            children: [
+              const Text(
+                '在 assrt.net 注册后获取免费 token；留空则不启用该源，也不发任何请求',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: AppSpace.sm),
+              TextField(
+                key: const ValueKey('subtitle-assrt-token'),
+                controller: _assrtToken,
+                obscureText: !_revealAssrtToken,
+                decoration: InputDecoration(
+                  labelText: 'ASSRT token',
+                  border: const OutlineInputBorder(),
+                  // tooltip 不能与 HTTP 源的「显示令牌」同名，否则一个
+                  // find.byTooltip 会同时命中两个按钮。
+                  suffixIcon: IconButton(
+                    key: const ValueKey('subtitle-assrt-token-reveal'),
+                    tooltip: _revealAssrtToken ? '隐藏 ASSRT token' : '显示 ASSRT token',
+                    icon: Icon(
+                      _revealAssrtToken ? Icons.visibility_off : Icons.visibility,
+                    ),
+                    onPressed: () => setState(
+                      () => _revealAssrtToken = !_revealAssrtToken,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '迅雷字幕',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('subtitle-xunlei-enabled'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('启用迅雷字幕源'),
+                subtitle: const Text('免 token，按片名搜索'),
+                value: _xunleiEnabled,
+                onChanged: (value) => setState(() => _xunleiEnabled = value),
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '射手字幕',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('subtitle-shooter-enabled'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('启用射手字幕源'),
+                subtitle: const Text(
+                  '按本地视频文件特征码搜索，只对本地文件播放有效；网络播放不会出结果',
+                ),
+                value: _shooterEnabled,
+                onChanged: (value) => setState(() => _shooterEnabled = value),
               ),
             ],
           ),
@@ -202,8 +295,8 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
           ),
           const SizedBox(height: AppSpace.xl),
           Text(
-            '当前状态：${widget.state.subtitleSettings.hasAnyProvider ? "已配置字幕源" : "未配置任何字幕源"}'
-            '${widget.state.subtitleSettings.autoMatch ? " · 自动匹配已开" : ""}',
+            _statusText,
+            key: const ValueKey('subtitle-status'),
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: AppSpace.sm),

@@ -268,8 +268,21 @@ class _FakeProvider implements SubtitleProvider {
   String get name => 'fake';
 
   @override
+  int get priority => 0;
+
+  @override
+  bool get needsLocalMediaPath => false;
+
+  @override
   Future<List<SubtitleCandidate>> search(
     SubtitleQuery query,
     SubtitleSettings settings,
   ) async => results;
+
+  @override
+  Future<SubtitleResolvedAsset?> resolve(
+    SubtitleCandidate candidate,
+    SubtitleQuery query,
+    SubtitleSettings settings,
+  ) async => null;
 }
