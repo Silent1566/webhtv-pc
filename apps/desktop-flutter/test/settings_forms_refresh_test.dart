@@ -6,10 +6,13 @@ import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/ui/ai_settings_page.dart';
+import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/subtitle_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/settings_navigation.dart';
+import 'support/settings_row_navigation.dart';
 
 // Reject unsafe paths before bootstrap can access storage.
 void _requireIsolatedPaths(AppPaths paths, Directory temp) {
@@ -93,31 +96,56 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final size in [const Size(560, 720), const Size(1440, 900)]) {
-      testWidgets('高级设置五类分组可扫描且无溢出 $brightness $size', (tester) async {
+      // 「高级设置」中枢整页已删除：它的 18 行按用途散进五个分类。
+      // 这条回归锁的意图不变——「每一类都能扫到、都没有溢出」——只把落点从
+      // 一页里的五段换成五个分类，并用每类自己的代表入口断言「真的渲染了」。
+      testWidgets('设置五类分组可扫描且无溢出 $brightness $size', (tester) async {
         await pumpPage(
           tester,
-          AdvancedSettingsPage(state: state),
+          Scaffold(body: SettingsPage(state: state)),
           size: size,
           brightness: brightness,
         );
-        // 分组标题按新版中枢逐字断言：五类，工具与隐私/诊断各自成段。
-        for (final title in const ['播放与观看', '站点与搜索', '网络', '工具', '隐私与诊断']) {
-          await reveal(tester, find.text(title));
-          expect(find.text(title).hitTestable(), findsOneWidget);
-          expect(tester.takeException(), isNull);
+        await pumpSettingsSettled(tester);
+
+        const markers = <String, String>{
+          'preferences': '外观',
+          'playback': '播放参数',
+          'sites': '站点健康',
+          'connections': 'AI 助手',
+          'maintenance': '运行环境',
+        };
+        for (final entry in markers.entries) {
+          await selectSettingsCategory(tester, entry.key);
+          await pumpSettingsSettled(tester);
+          final target = find.text(entry.value).first;
+          await tester.scrollUntilVisible(
+            target,
+            180,
+            scrollable: categoryScrollable(entry.key),
+          );
+          await tester.ensureVisible(target);
+          await pumpSettingsSettled(tester);
+          expect(
+            target.hitTestable(),
+            findsOneWidget,
+            reason: '分类 ${entry.key} 的代表入口「${entry.value}」不可见',
+          );
+          expect(tester.takeException(), isNull, reason: entry.key);
         }
-        await reveal(
+
+        // 维护类末尾的就地开关（原来在高集中枢里）必须仍在、默认关。
+        await selectSettingsCategory(tester, 'maintenance');
+        final logTile = find.byKey(
+          const ValueKey('settings-spider-debug-log'),
+        );
+        await revealCategoryRow(
           tester,
-          find.byKey(const ValueKey('settings-spider-debug-log')),
+          category: 'maintenance',
+          rowKey: 'settings-spider-debug-log',
         );
-        expect(
-          tester
-              .widget<SwitchListTile>(
-                find.byKey(const ValueKey('settings-spider-debug-log')),
-              )
-              .value,
-          isFalse,
-        );
+        expect(logTile, findsOneWidget);
+        expect(tester.widget<SwitchListTile>(logTile).value, isFalse);
       });
 
       testWidgets('AI 服务凭据操作分区可达且无溢出 $brightness $size', (tester) async {

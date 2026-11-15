@@ -5,8 +5,9 @@
 ///   CAPTURE_PHASE=after ../../.tools/flutter/bin/flutter test tool/settings_capture_test.dart
 /// 输出：`<仓库根>/.local/settings-refactor-visual/<phase>/<名称>-<亮度>-<宽>x<高>.png`
 ///
-/// before/ 里的 8 张是改版前基线，本工具只读：phase 为 before 时若输出目录已有
-/// PNG 就直接失败，避免覆盖基线；改版后的新增截图一律走 CAPTURE_PHASE=after。
+/// before/ 与 before-cats/ 里的 12 张是改版前基线，本工具只读：phase 为 before 时
+/// 若输出目录已有 PNG 就直接失败。改版后「高级设置」中枢整页删除，旧形态与本工具
+/// 不再同源，因此 before 阶段不跑任何场景——基线只能由改版前的代码重新采集。
 ///
 /// 为什么不用 integration_test：本机没有 clang/GTK 开发头，Linux 桌面构建不可用；
 /// widget test 里注册真实中文字体与 Material 图标后，渲染结果足够做版式对照。
@@ -22,15 +23,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
+import 'package:webhtv_pc/ui/settings_overview_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import '../test/support/settings_navigation.dart';
+import '../test/support/settings_row_navigation.dart';
 
 const _captureKey = ValueKey('settings-capture-root');
 const _wide = Size(1440, 900);
+const _short = Size(1024, 300);
 const _narrow = Size(480, 640);
+const _tinyHeight = Size(480, 320);
 const _user = Size(1072, 728);
 const _phaseEnv = 'CAPTURE_PHASE';
 const _beforePhase = 'before';
@@ -41,10 +45,11 @@ const _defaultCjkFont =
 const _materialFonts =
     '.tools/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf';
 
-/// 截图总数上限：既有 8 张基线 + 最多 18 张新增。
-const _maxPngs = 26;
+/// 截图总数上限：与 [_scenarios] 等长，多出一张就说明有历史 PNG 混进了输出目录。
+const _maxPngs = 22;
 
-enum _Page { settings, advanced }
+/// 挂哪一页做首页：外壳里的设置标签页，还是播放器右键菜单 push 的「全部设置」。
+enum _Page { settings, overview }
 
 /// 一张截图：挂载哪个页面、什么主题与视口、以及截图前怎么走到目标状态。
 class _Scenario {
@@ -55,101 +60,103 @@ class _Scenario {
     this.page = _Page.settings,
     this.category,
     this.open,
-    this.scrollTo,
-    this.afterOnly = false,
-  });
+  }) : assert(open == null || category != null, '点行必须先指定所在分类');
 
   final String name;
   final Brightness brightness;
   final Size size;
   final _Page page;
 
-  /// 真实分类入口 id（`selectSettingsCategory` 的合法取值）。
+  /// 真实分类入口 id（selectSettingsCategory 的合法取值）；null = 默认「偏好」。
   final String? category;
 
-  /// 明细页入口 key：点开后再截图，拍到的是被 push 的整条路由。
+  /// 明细页入口行 key：点开后再截图，拍到的是被 push 的整条路由。
   final String? open;
-
-  /// 截图前需要滚到可见区域的目标 key，用于覆盖 hub 下端分区。
-  final String? scrollTo;
-
-  /// true = 只在 after 阶段采集，不参与 before 基线。
-  final bool afterOnly;
 
   String get file =>
       '$name-${brightness.name}-${size.width.toInt()}x${size.height.toInt()}';
 }
 
-/// 高级设置里的六级明细页入口，key 同时用作截图名称。
-const _detailRoutes = [
-  'settings-player-options-open',
-  'settings-danmaku-open',
-  'settings-group-rules-open',
-  'settings-outbound-proxy-open',
-  'settings-doh-open',
-  'settings-browser-open',
-];
-
-final _scenarios = <_Scenario>[
-  // 改版前基线：名称与视口不得改动，否则无法与 before/ 里的 8 张逐帧对照。
-  const _Scenario('home', Brightness.dark, _wide),
-  const _Scenario('home', Brightness.light, _wide),
-  const _Scenario('home', Brightness.dark, _user),
-  const _Scenario('home', Brightness.dark, _narrow),
-  const _Scenario('hub', Brightness.dark, _wide, page: _Page.advanced),
-  const _Scenario('hub', Brightness.light, _wide, page: _Page.advanced),
-  const _Scenario('hub', Brightness.dark, _user, page: _Page.advanced),
-  const _Scenario('hub', Brightness.dark, _narrow, page: _Page.advanced),
-  // 改版后新增：设置页三个分类，走真实分类入口而不是拼装正文。
-  const _Scenario(
-    'settings-playback',
-    Brightness.dark,
-    _user,
-    category: 'playback',
-    afterOnly: true,
-  ),
-  const _Scenario(
-    'settings-connections',
+/// 22 张改版后截图。
+///
+/// 命名与视口沿用基线，才能和 before/（home 4 张）、before-cats/（cat 4 张）逐张配对；
+/// 中枢删除后它的 4 张由「同类落点」接替（cat-sites / cat-connections / cat-maintenance），
+/// 其余 12 张是新增明细页、「全部设置」页与矮窗证据。
+const _scenarios = <_Scenario>[
+  // 改版前基线配对：默认进入「偏好」分类（宽窗是左栏，窄窗走顶部分类条）。
+  _Scenario('home', Brightness.dark, _wide),
+  _Scenario('home', Brightness.light, _wide),
+  _Scenario('home', Brightness.dark, _user),
+  _Scenario('home', Brightness.dark, _narrow),
+  // 与 before-cats/ 配对：分类页，名字逐字沿用基线。
+  _Scenario('cat-playback', Brightness.dark, _user, category: 'playback'),
+  _Scenario('cat-playback', Brightness.light, _narrow, category: 'playback'),
+  _Scenario('cat-maintenance', Brightness.dark, _user, category: 'maintenance'),
+  _Scenario(
+    'cat-connections',
     Brightness.light,
     _narrow,
     category: 'connections',
-    afterOnly: true,
   ),
-  const _Scenario(
-    'settings-maintenance',
+  // 中枢消失后的落点：原来 hub 的 4 个视口由这三个分类接住。
+  _Scenario('cat-sites', Brightness.dark, _wide, category: 'sites'),
+  _Scenario('cat-sites', Brightness.light, _wide, category: 'sites'),
+  _Scenario('cat-connections', Brightness.dark, _user, category: 'connections'),
+  _Scenario(
+    'cat-maintenance',
+    Brightness.dark,
+    _narrow,
+    category: 'maintenance',
+  ),
+  // 新增明细页：真实切分类 + 真实点行（不用 Navigator.push 抄近路）。
+  _Scenario(
+    'osd',
+    Brightness.dark,
+    _user,
+    category: 'playback',
+    open: 'settings-osd-open',
+  ),
+  _Scenario(
+    'osd',
+    Brightness.light,
+    _narrow,
+    category: 'playback',
+    open: 'settings-osd-open',
+  ),
+  _Scenario(
+    'live',
+    Brightness.dark,
+    _user,
+    category: 'playback',
+    open: 'settings-live-open',
+  ),
+  _Scenario(
+    'live',
+    Brightness.light,
+    _narrow,
+    category: 'playback',
+    open: 'settings-live-open',
+  ),
+  _Scenario(
+    'about-data',
     Brightness.dark,
     _user,
     category: 'maintenance',
-    afterOnly: true,
+    open: 'settings-about-data-open',
   ),
-  // 改版后新增：六级明细页，两种代表视口各一张。
-  for (final route in _detailRoutes) ...[
-    _Scenario(
-      route,
-      Brightness.dark,
-      _user,
-      page: _Page.advanced,
-      open: route,
-      afterOnly: true,
-    ),
-    _Scenario(
-      route,
-      Brightness.light,
-      _narrow,
-      page: _Page.advanced,
-      open: route,
-      afterOnly: true,
-    ),
-  ],
-  // 改版后新增：hub 滚到底部，覆盖「网络 / 工具 / 隐私与诊断」三个分区。
   _Scenario(
-    'hub-bottom',
-    Brightness.dark,
-    _user,
-    page: _Page.advanced,
-    scrollTo: 'settings-spider-debug-log',
-    afterOnly: true,
+    'about-data',
+    Brightness.light,
+    _narrow,
+    category: 'maintenance',
+    open: 'settings-about-data-open',
   ),
+  // 「全部设置」是可 push 的独立路由：直接挂该页，不点行。
+  _Scenario('overview', Brightness.dark, _user, page: _Page.overview),
+  _Scenario('overview', Brightness.light, _narrow, page: _Page.overview),
+  // 矮窗：5 个分类 pill 在 480 下换行；1024x300 走左栏，分类栏自身可滚。
+  _Scenario('home', Brightness.dark, _tinyHeight),
+  _Scenario('home', Brightness.dark, _short),
 ];
 
 Directory _repoRoot() {
@@ -212,7 +219,7 @@ ThemeData _captureTheme(Brightness brightness) {
 
 Widget _page(_Page page, AppState state) => switch (page) {
   _Page.settings => Scaffold(body: SettingsPage(state: state)),
-  _Page.advanced => AdvancedSettingsPage(state: state),
+  _Page.overview => SettingsOverviewPage(state: state),
 };
 
 /// 捕获边界必须在 MaterialApp 之上：包在 home 里只拍得到当前页，
@@ -227,21 +234,6 @@ Widget _captureRoot(_Scenario scenario, AppState state) => RepaintBoundary(
   ),
 );
 
-/// 把目标控件滚到可见区域：懒加载列表里目标可能还没建出来，先按需滚动。
-/// 只依赖公开的 Scrollable 与控件 key，不读页面私有状态。
-Future<void> _reveal(WidgetTester tester, String key) async {
-  final target = find.byKey(ValueKey(key));
-  if (target.evaluate().isEmpty) {
-    await tester.scrollUntilVisible(
-      target,
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
-  }
-  await tester.ensureVisible(target);
-  await tester.pumpAndSettle();
-}
-
 Future<void> _writePng(WidgetTester tester, File target) async {
   await tester.runAsync(() async {
     final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -255,6 +247,8 @@ Future<void> _writePng(WidgetTester tester, File target) async {
       image.dispose();
     }
   });
+  // 纯色或空图连 PNG 头都攒不满这么多字节。
+  expect(target.lengthSync(), greaterThan(1024), reason: '截图疑似空白：$target');
 }
 
 class _OfflineHttpOverrides extends HttpOverrides {
@@ -275,10 +269,7 @@ void main() {
   final output = Directory(
     '${_repoRoot().path}/.local/settings-refactor-visual/$phase',
   );
-  final scenarios = [
-    for (final scenario in _scenarios)
-      if (!scenario.afterOnly || phase == _afterPhase) scenario,
-  ];
+  final scenarios = phase == _afterPhase ? _scenarios : const <_Scenario>[];
   final previousHttpOverrides = HttpOverrides.current;
 
   setUpAll(() async {
@@ -342,17 +333,16 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(_captureRoot(scenario, state));
-      await tester.pumpAndSettle();
+      await pumpSettingsSettled(tester);
       if (scenario.category != null) {
         await selectSettingsCategory(tester, scenario.category!);
       }
-      if (scenario.scrollTo != null) {
-        await _reveal(tester, scenario.scrollTo!);
-      }
       if (scenario.open != null) {
-        await _reveal(tester, scenario.open!);
-        await tester.tap(find.byKey(ValueKey(scenario.open!)));
-        await tester.pumpAndSettle();
+        await tapCategoryRow(
+          tester,
+          category: scenario.category!,
+          rowKey: scenario.open!,
+        );
       }
       expect(find.byType(ErrorWidget), findsNothing);
       expect(tester.takeException(), isNull, reason: '渲染异常（含布局溢出）时不出图');

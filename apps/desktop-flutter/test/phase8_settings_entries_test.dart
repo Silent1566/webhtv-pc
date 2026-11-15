@@ -20,12 +20,20 @@
 /// `pumpAndSettle` 一律用**有界超时**（5s）：将来再出现挂起是几秒失败，
 /// 而不是 10 分钟。
 ///
-/// ## 分类导航（设置页改为「左分类 + 右单列」之后）
+/// ## 分类导航（设置页改为「五个分类 + 每类单列」之后）
 ///
 /// 设置页默认落在 `preferences`（偏好），屏显与播放器按钮属于 `playback`
 /// （播放），因此每条用例在挂载后先经 `selectSettingsCategory` 显式选类，
 /// 再执行原有断言。旧写法里「不同类别的入口必须在同一个首屏同时可见」不再成立，
 /// 那条约束改为「选类后可达」；业务断言一条未删。
+///
+/// ## 屏显落点（7 个开关改为一行入口 → 独立明细页之后）
+///
+/// 屏显的 7 个开关不再就地摊在「播放」类里：分类页只留一行
+/// `settings-osd-open`，开关本身在 `OsdSettingsPage`。于是屏显的每条断言都先经
+/// `openOsdPage` 真实点开那一行——**断言内容一字未改**，只换了落点。
+/// 分类页上「不得再出现成组开关块」由 `settings_categories_navigation_test.dart`
+/// 与 `advanced_settings_navigation_test.dart` 的结构锁负责。
 library;
 
 import 'dart:convert';
@@ -38,11 +46,12 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
+import 'package:webhtv_pc/ui/osd_settings_page.dart';
 import 'package:webhtv_pc/ui/player_button_config_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
-import 'support/advanced_settings_navigation.dart';
 import 'support/settings_navigation.dart';
+import 'support/settings_row_navigation.dart';
 
 void main() {
   late Directory temp;
@@ -131,12 +140,19 @@ void main() {
     await selectSettingsCategory(tester, category);
   }
 
-  Finder settingsScrollable() => find
-      .byWidgetPredicate(
-        (widget) =>
-            widget is Scrollable && widget.axisDirection == AxisDirection.down,
-      )
-      .last;
+  /// 进入「屏显（OSD）」明细页。
+  ///
+  /// 屏显的 7 个开关原来就地摊在「播放」类里，现在是**一行入口 → 独立明细页**：
+  /// 屏显的每条断言都先经这一行真实进入（不直接 push、不碰私有状态）。
+  Future<void> openOsdPage(WidgetTester tester) async {
+    await pumpSettings(tester);
+    await tapCategoryRow(
+      tester,
+      category: 'playback',
+      rowKey: 'settings-osd-open',
+    );
+    expect(find.byType(OsdSettingsPage), findsOneWidget, reason: '必须进入屏显明细页');
+  }
 
   /// 屏显开关的中文名（`docs/phase8/design/02` §5.1 的表格逐字）。
   const osdLabels = <String, String>{
@@ -162,9 +178,9 @@ void main() {
   }
 
   testWidgets('屏显区块存在，7 项开关齐全且中文名逐项正确', (tester) async {
-    await pumpSettings(tester);
+    await openOsdPage(tester);
 
-    expect(osdBlock(), findsOneWidget, reason: '设置页必须有屏显区块');
+    expect(osdBlock(), findsOneWidget, reason: '屏显明细页必须有屏显区块');
 
     // 逐项断言**精确中文名**，而不是「区块里有个开关」。
     // 什么错误实现会仍然通过：`_osdLabel` 整个删掉、直接 `Text(id)` 显示
@@ -195,7 +211,7 @@ void main() {
     // 只有先改状态才能区分。
     await configure(tester, () => state.setOsdFlag(OsdFlag.mini, true));
     await configure(tester, () => state.setOsdFlag(OsdFlag.title, false));
-    await pumpSettings(tester);
+    await openOsdPage(tester);
 
     for (final id in OsdFlag.values) {
       expect(
@@ -220,7 +236,7 @@ void main() {
   // 上一版把 `raw-input-rate` 写成"属性"是错的（实测它回 PROPERTY_NOT_FOUND），
   // 文案钉死实现细节就会把那个错误固化下来。
   testWidgets('网速开关可用：可点、副标题说明来源、点下去真的写进 AppState', (tester) async {
-    await pumpSettings(tester);
+    await openOsdPage(tester);
 
     final traffic = tester.widget<SwitchListTile>(osdTile(OsdFlag.traffic));
     // 什么错误实现会仍然通过：留着上一版的 `onChanged: null` —— 开关永远点不动。
@@ -298,7 +314,7 @@ void main() {
   });
 
   testWidgets('切换屏显开关：精确状态 + 往返 + 落盘（design/05 §3.2 B5）', (tester) async {
-    await pumpSettings(tester);
+    await openOsdPage(tester);
     expect(state.osdFlags[OsdFlag.mini], isFalse, reason: '前置条件：默认关闭');
 
     await tester.ensureVisible(osdTile(OsdFlag.mini));
@@ -370,7 +386,7 @@ void main() {
   // 做法：点**两个不同的**开关（`progress` 与 `diagnostics`），
   // 断言各自落在自己的键上、且**其余键一个都没被碰**。
   testWidgets('每个开关写自己的 flag id（不是同一个 id 写 7 遍）', (tester) async {
-    await pumpSettings(tester);
+    await openOsdPage(tester);
     // 前置：两个目标默认一开一关，方向不同，便于区分。
     expect(state.osdFlags[OsdFlag.progress], isTrue, reason: '前置：默认开');
     expect(state.osdFlags[OsdFlag.diagnostics], isFalse, reason: '前置：默认关');
@@ -428,8 +444,12 @@ void main() {
     );
     expect(find.byKey(const ValueKey('player-buttons-reset')), findsOneWidget);
     expect(find.text('播放器按钮'), findsOneWidget, reason: '配置页的 AppBar 标题');
-    // 设置页已被不透明路由盖住（`skipOffstage` 默认 true）。
-    expect(osdBlock(), findsNothing, reason: 'push 之后设置页不应仍在渲染');
+    // 分类页已被不透明路由盖住（`skipOffstage` 默认 true）。
+    expect(
+      find.byKey(const ValueKey('settings-category-content-playback')),
+      findsNothing,
+      reason: 'push 之后分类页不应仍在渲染',
+    );
   });
 
   testWidgets('800×600 默认视口下两个入口仍可滚动到达', (tester) async {
@@ -448,25 +468,39 @@ void main() {
     await tester.pump();
     await selectSettingsCategory(tester, 'playback');
 
+    // 屏显的一行入口必须滚得到；具体开关在它自己的明细页里。
     await tester.scrollUntilVisible(
-      osdBlock(),
+      find.byKey(const ValueKey('settings-osd-open')),
       200,
-      scrollable: settingsScrollable(),
+      scrollable: categoryScrollable('playback'),
     );
-    expect(osdBlock(), findsOneWidget);
-    for (final id in OsdFlag.values) {
-      expect(osdTile(id), findsOneWidget, reason: '缺少屏显开关「$id」');
-    }
+    expect(find.byKey(const ValueKey('settings-osd-open')), findsOneWidget);
+    expect(
+      osdBlock(),
+      findsNothing,
+      reason: '分类页只留一行入口（7 个开关不得再就地摊开）',
+    );
 
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('settings-player-buttons')),
       200,
-      scrollable: settingsScrollable(),
+      scrollable: categoryScrollable('playback'),
     );
     expect(
       find.byKey(const ValueKey('settings-player-buttons')),
       findsOneWidget,
     );
+
+    // 进入屏显明细页后 7 个开关全部可达（原断言只换了落点，一项没少）。
+    await tapCategoryRow(
+      tester,
+      category: 'playback',
+      rowKey: 'settings-osd-open',
+    );
+    expect(osdBlock(), findsOneWidget);
+    for (final id in OsdFlag.values) {
+      expect(osdTile(id), findsOneWidget, reason: '缺少屏显开关「$id」');
+    }
   });
 
   testWidgets('既有设置页入口在各既有视口下选类后可达（design/05 §5 回归）', (tester) async {
@@ -504,7 +538,8 @@ void main() {
       'settings-tmdb-open': 'connections',
       'settings-android-open': 'connections',
       'settings-android-summary': 'connections',
-      'settings-site-health-open': 'maintenance',
+      // 站点健康随「站点与内容」独立成第五类：落点跟着搬家，断言不变。
+      'settings-site-health-open': 'sites',
     };
 
     for (final entry in viewports.entries) {
@@ -516,7 +551,7 @@ void main() {
         await tester.scrollUntilVisible(
           finder,
           200,
-          scrollable: settingsScrollable(),
+          scrollable: categoryScrollable(categories[key]!),
         );
         expect(finder, findsOneWidget, reason: '${entry.key}：$key 选类并滚动后必须可达');
         final rect = tester.getRect(finder);
@@ -533,12 +568,12 @@ void main() {
       }
 
       await selectSettingsCategory(tester, 'playback');
-      for (final key in const ['settings-osd', 'settings-player-buttons']) {
+      for (final key in const ['settings-osd-open', 'settings-player-buttons']) {
         final finder = find.byKey(ValueKey(key));
         await tester.scrollUntilVisible(
           finder,
           200,
-          scrollable: settingsScrollable(),
+          scrollable: categoryScrollable('playback'),
         );
         expect(
           finder,
@@ -549,75 +584,103 @@ void main() {
     }
   });
 
-  // 高级设置已从「一页长表单」改为「中枢行 + 三级明细页」：这里锁的是
-  // 「原 Phase 9 的每一项业务控件都还在，只是从同一屏搬到了各自可达的位置」。
-  // 旧写法要求它们在中枢同一屏可见——那正是被改掉的旧形态。
-  testWidgets('高级设置入口可进入：中枢开关仍在，明细控件经各自路由可达', (tester) async {
+  // 「高级设置」整页已删除：它的 18 行按用途散进五个分类，任意设置最多两级
+  // 可达。这里锁的是「原 Phase 9 的每一项业务控件都还在，只是从同一屏搬到了
+  // 各自分类页 / 明细页里的可达位置」——旧写法要求它们在中枢同一屏可见，
+  // 那正是被改掉的旧形态。
+  testWidgets('分类页入口逐项可达：就地开关仍在，明细控件经各自路由可达', (tester) async {
     await pumpSettings(tester);
-    final entry = find.byKey(const ValueKey('settings-advanced-open'));
-    expect(entry, findsOneWidget, reason: '设置页必须有高级设置入口');
-    await tester.scrollUntilVisible(
-      entry,
-      200,
-      scrollable: settingsScrollable(),
-    );
-    await tester.tap(entry);
-    await settle(tester);
 
-    // 迁到三级页的控件：经中枢行真实进入 → 断言页内控件 → 返回，继续下一条。
-    // 行顺序与中枢自上而下一致，所以这一轮只往下滚。
-    const details = <String, List<String>>{
-      'settings-player-options-open': ['settings-player-options'],
-      'settings-danmaku-open': ['settings-danmaku-auto-search'],
-      'settings-group-rules-open': ['settings-group-rules'],
-      'settings-outbound-proxy-open': ['settings-outbound-proxy-enabled'],
-      'settings-doh-open': [
-        'settings-doh-enabled',
-        'settings-doh-endpoint',
-        'settings-doh-cache',
-      ],
-    };
-    for (final detail in details.entries) {
-      await tapAdvancedRow(tester, detail.key);
-      for (final key in detail.value) {
+    // 迁到明细页的控件：经分类页上的行真实进入 → 断言页内控件 → 返回，继续下一条。
+    const details =
+        <
+          ({
+            String category,
+            String rowKey,
+            List<String> markers,
+          })
+        >[
+          (
+            category: 'playback',
+            rowKey: 'settings-player-options-open',
+            markers: ['settings-player-options'],
+          ),
+          (
+            category: 'playback',
+            rowKey: 'settings-danmaku-open',
+            markers: ['settings-danmaku-auto-search'],
+          ),
+          (
+            category: 'playback',
+            rowKey: 'settings-live-open',
+            markers: ['settings-live-source-fallback', 'settings-live-change-line'],
+          ),
+          (
+            category: 'sites',
+            rowKey: 'settings-group-rules-open',
+            markers: ['settings-group-rules'],
+          ),
+          (
+            category: 'connections',
+            rowKey: 'settings-outbound-proxy-open',
+            markers: ['settings-outbound-proxy-enabled'],
+          ),
+          (
+            category: 'connections',
+            rowKey: 'settings-doh-open',
+            markers: ['settings-doh-enabled'],
+          ),
+        ];
+    for (final detail in details) {
+      await selectSettingsCategory(tester, detail.category);
+      await tapCategoryRow(
+        tester,
+        category: detail.category,
+        rowKey: detail.rowKey,
+      );
+      for (final key in detail.markers) {
         expect(
           find.byKey(ValueKey(key)),
           findsOneWidget,
-          reason: '明细页 ${detail.key} 缺少控件：$key',
+          reason: '明细页 ${detail.rowKey} 缺少控件：$key',
         );
       }
-      // 对照组：同一批 key 在中枢里不得再挂载（否则等于把旧长页挂了回来）。
-      await backFromAdvancedDetail(tester);
-      for (final key in detail.value) {
+      // 对照组：同一批 key 在分类页里不得再挂载（否则等于把旧长页挂了回来）。
+      await backFromSettingsDetail(tester);
+      for (final key in detail.markers) {
         expect(
           find.byKey(ValueKey(key)),
           findsNothing,
-          reason: '中枢不得再挂载明细控件：$key',
+          reason: '分类页不得再挂载明细控件：$key',
         );
       }
     }
 
-    // 仍然就地生效 / 仍在中枢的入口：自上而下逐个滚到。
-    await scrollHubToTop(tester);
-    for (final key in const [
-      'settings-live-source-fallback',
-      'settings-live-change-line',
-      'settings-subtitle-open',
-      'settings-parse-failover',
-      'settings-site-health-sort',
-      'settings-injected-sites-open',
-      'settings-ad-block',
-      'settings-pan-check-open',
-      'settings-ai-assist-open',
-      'settings-backup-open',
-    ]) {
-      final finder = find.byKey(ValueKey(key));
-      await tester.scrollUntilVisible(
-        finder,
-        200,
-        scrollable: advancedHubScrollable(),
-      );
-      expect(finder, findsOneWidget, reason: '高级设置中枢缺少：$key');
+    // 仍然就地生效 / 仍在分类页的入口：按分类自上而下逐个滚到。
+    const inline = <String, List<String>>{
+      'playback': ['settings-subtitle-open', 'settings-osd-open'],
+      'sites': [
+        'settings-site-health-open',
+        'settings-injected-sites-open',
+        'settings-pan-check-open',
+        'settings-parse-failover',
+        'settings-site-health-sort',
+        'settings-ad-block',
+      ],
+      'connections': ['settings-ai-business-open', 'settings-tmdb-open'],
+      'maintenance': ['settings-backup-open', 'settings-incognito'],
+    };
+    for (final entry in inline.entries) {
+      await selectSettingsCategory(tester, entry.key);
+      for (final key in entry.value) {
+        final finder = find.byKey(ValueKey(key));
+        await tester.scrollUntilVisible(
+          finder,
+          200,
+          scrollable: categoryScrollable(entry.key),
+        );
+        expect(finder, findsOneWidget, reason: '分类 ${entry.key} 缺少：$key');
+      }
     }
   });
 }

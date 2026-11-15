@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/history_view.dart';
-import '../core/osd_config.dart';
 import '../core/playback_diagnostics.dart';
 import '../services/log_service.dart';
 import '../services/storage.dart';
@@ -17,14 +16,20 @@ import '../state/sync_state.dart';
 import 'ai_settings_page.dart';
 import 'ai_integration_widgets.dart';
 import 'app.dart';
+import 'backup_page.dart';
 import 'common.dart';
-import 'advanced_settings_page.dart';
 import 'config_pages.dart';
+import 'injected_sites_page.dart';
 import 'intro_skip_options_page.dart';
+import 'local_sources_page.dart';
+import 'osd_settings_page.dart';
+import 'pan_check_page.dart';
 import 'player_button_config_page.dart';
 import 'python_environment_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
+import 'subtitle_settings_page.dart';
+import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
 import 'toast.dart';
@@ -32,33 +37,35 @@ import 'toast.dart';
 /// 设置分类的稳定标识与显示名。
 ///
 /// 分类 key 是**公开契约**：宽窗左侧分类栏与窄窗顶部分类条使用同一组
-/// `settings-category-<id>` key，同一时刻只渲染其中一套，因此每个 key
-/// 始终恰好出现一次（测试与自动化按此定位）。
+/// `settings-category-<id>` key，同一时刻只渲染其中一套，因此**同一页面内**
+/// 每个 key 恰好出现一次（测试与自动化按此定位）。
+///
+/// 「同一页面内」而不是「全局」：播放器 push 出来的「全部设置」页复用同一个
+/// 中枢本体，首页那一份仍挂在外壳里，所以整棵树里可以有两份——两者互不同屏，
+/// 且默认 `find.byKey` 会跳过离屏那一份。
 ///
 /// 分类只影响**显示**：切换分类不写 `settings.json`，不进 `AppState`。
-/// 四个类别（偏好 / 播放 / 连接与服务 / 维护与说明）沿用它之前的信息架构；
-/// 本次只重排**类别内的排版**：进入下一级的工具改成可扫描的行，字段仍是字段。
-const List<_SettingsCategory> _settingsCategories = [
-  _SettingsCategory(_SettingsCategory.preferences, '偏好', Icons.tune_outlined),
-  _SettingsCategory(
-    _SettingsCategory.playback,
-    '播放',
-    Icons.play_circle_outline,
-  ),
-  _SettingsCategory(_SettingsCategory.connections, '连接与服务', Icons.hub_outlined),
-  _SettingsCategory(
-    _SettingsCategory.maintenance,
-    '维护与说明',
-    Icons.build_outlined,
-  ),
+///
+/// 五个类别按**用途**划分，不再有「高级设置」这类兜底页（它原先的 19 个控件
+/// 把站点、网络、工具与隐私混在一个入口下面，播放参数要三级才到）：
+/// 偏好 = 外观与日常；播放 = 看片时的行为；站点与内容 = 源与搜索；
+/// 连接与服务 = 外部账号与出站请求；维护 = 本机运行与排查。
+/// 于是任意设置**最多两级可达**。
+const List<SettingsCategory> kSettingsCategories = [
+  SettingsCategory(SettingsCategory.preferences, '偏好', Icons.tune_outlined),
+  SettingsCategory(SettingsCategory.playback, '播放', Icons.play_circle_outline),
+  SettingsCategory(SettingsCategory.sites, '站点与内容', Icons.public_outlined),
+  SettingsCategory(SettingsCategory.connections, '连接与服务', Icons.hub_outlined),
+  SettingsCategory(SettingsCategory.maintenance, '维护', Icons.build_outlined),
 ];
 
 /// 一个设置分类：稳定 id + 显示名 + 图标。
-class _SettingsCategory {
-  const _SettingsCategory(this.id, this.label, this.icon);
+class SettingsCategory {
+  const SettingsCategory(this.id, this.label, this.icon);
 
   static const String preferences = 'preferences';
   static const String playback = 'playback';
+  static const String sites = 'sites';
   static const String connections = 'connections';
   static const String maintenance = 'maintenance';
 
@@ -67,29 +74,53 @@ class _SettingsCategory {
   final IconData icon;
 }
 
-/// 设置页：TMDB、运行信息、目录、缓存维护、合规说明。
+/// 设置首页：分类中枢的宿主（外壳里的一个标签页）。
 ///
 /// 布局（用户截图否定了「两张内容列并排堆叠」的旧形态）：宽窗是
-/// **左侧四类导航 + 右侧当前类别单列**，两者以一条发丝线分隔；内容区
+/// **左侧分类导航 + 右侧当前类别单列**，两者以一条发丝线分隔；内容区
 /// 窄到放不下分类栏时，分类条移到顶部、正文仍是单列。
 ///
-/// 分类与各分类的滚动位置是本页自己的 **UI 状态**（[_SettingsPageState]），
-/// 不进 `AppState`、不落盘；返回子页后分类与滚动位置都还在。
-/// 本页仍然**不监听** `AppState`（旧契约不变：由外壳在 `notifyListeners`
-/// 后重建内容区）。
-///
-/// 类别内排版是行式入口：工具入口整行可点，字段用统一的标题—控件—脚注节奏。
-/// 字段、默认值、回调与保存时机都没有改。
-class SettingsPage extends StatefulWidget {
+/// 本页只负责「带页标题」这一件事：分类模型、导航与正文都在
+/// [SettingsCategoriesBody]，播放器右键菜单 push 出来的 `SettingsOverviewPage`
+/// 用的是同一个 body，两处不会分叉。
+class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.state});
 
   final AppState state;
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  Widget build(BuildContext context) => SettingsCategoriesBody(state: state);
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+/// 分类中枢本体：[SettingsPage] 与「全部设置」页共用。
+///
+/// 分类与各分类的滚动位置是本组件自己的 **UI 状态**，不进 `AppState`、
+/// 不落盘；返回子页后分类与滚动位置都还在。
+/// 本组件**不监听** `AppState`（旧契约不变：由宿主在 `notifyListeners` 后
+/// 重建内容区）。
+///
+/// 类别内排版是行式入口：进入下一级的工具整行可点、成组开关进明细页、
+/// 单个开关就地生效，字段用统一的标题—控件—脚注节奏。
+/// 字段、默认值、回调与保存时机都没有改。
+class SettingsCategoriesBody extends StatefulWidget {
+  const SettingsCategoriesBody({
+    super.key,
+    required this.state,
+    this.showHeader = true,
+  });
+
+  final AppState state;
+
+  /// 是否渲染页标题（「设置 + 一句说明」）。
+  ///
+  /// 独立路由（「全部设置」页）已有 AppBar 标题，再画一次就是同屏两个标题。
+  final bool showHeader;
+
+  @override
+  State<SettingsCategoriesBody> createState() => _SettingsCategoriesBodyState();
+}
+
+class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   /// 内容区宽度门槛：低于它就把分类栏挪到顶部（逻辑像素）。
   ///
   /// 取值理由：分类栏 196 + 两处 16 间距 + 1 发丝线 = 229。门槛 720 时
@@ -100,7 +131,7 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 左侧分类栏宽度（设计稿 180–200）。
   static const double _navWidth = 196;
 
-  String _category = _SettingsCategory.preferences;
+  String _category = SettingsCategory.preferences;
 
   /// 每类别一个滚动控制器：切走再回来时用它恢复位置。
   final Map<String, ScrollController> _scrollControllers = {};
@@ -136,7 +167,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final info = state.startupInfo;
     final tmdb = state.tmdbConfig;
     final sync = state.syncState;
 
@@ -232,71 +262,156 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ],
     );
-    final playback = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+
+    // 「播放」= 看片时的行为。整类都是「一行入口」：原本就地摊在这里的
+    // 屏显（7 个开关）已经进独立页，同屏不再有第二种行形态。
+    final playback = SettingsRowList(
       children: [
         SettingsNavRow(
           key: const ValueKey('settings-player-buttons'),
-          icon: Icons.tune,
+          icon: Icons.view_week_outlined,
           title: '播放器按钮排版',
           subtitle: '调整底部控制栏的按钮顺序与显示状态。',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PlayerButtonConfigPage(state: state),
-            ),
-          ),
+          onTap: () => _push(context, PlayerButtonConfigPage(state: state)),
         ),
-        // 片头片尾跳过提到这一级：原先埋在「高级设置 → 播放参数」第三层的滚动区里，
-        // 用户反馈两次找不到。入口的可见性比开关本身更重要。
+        SettingsNavRow(
+          key: const ValueKey('settings-player-options-open'),
+          icon: Icons.tune,
+          title: '播放参数',
+          // 片头片尾与屏显现在各自有一行，不再写进这一行的副标题。
+          subtitle:
+              '硬件解码 ${_onOff(state.playerOptions.hardwareDecoding)}'
+              ' · 自动连播 ${_onOff(state.playerOptions.autoNext)}'
+              ' · 缓存 ${state.playerOptions.demuxerMaxBytesMiB} MiB',
+          onTap: () => _push(context, PlaybackOptionsPage(state: state)),
+        ),
+        // 片头片尾跳过留在这一级：原先埋在「播放参数」第二层，用户反馈两次找不到。
+        // 入口的可见性比开关本身更重要。
         SettingsNavRow(
           key: const ValueKey('settings-skip-open'),
           icon: Icons.skip_next_outlined,
           title: '片头片尾跳过',
           subtitle: IntroSkipOptionsPage.summary(state.playerOptions),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => IntroSkipOptionsPage(state: state),
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpace.xl),
-        SettingsSection(
-          title: '屏显（OSD）',
-          description: '播放画面上叠加的信息角标。',
-          children: [
-            Column(
-              key: const ValueKey('settings-osd'),
-              children: [
-                for (final id in OsdFlag.values)
-                  SwitchListTile(
-                    key: ValueKey('settings-osd-$id'),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(_osdLabel(id)),
-                    subtitle: id == OsdFlag.traffic
-                        ? const Text('取自播放引擎的网络输入速率；取不到时显示 —')
-                        : null,
-                    value: state.osdFlags[id] ?? false,
-                    onChanged: (value) => state.setOsdFlag(id, value),
-                  ),
-              ],
-            ),
-          ],
+          onTap: () => _push(context, IntroSkipOptionsPage(state: state)),
         ),
         SettingsNavRow(
-          key: const ValueKey('settings-advanced-open'),
-          icon: Icons.tune,
-          title: '高级设置',
-          subtitle: '直播、播放参数、弹幕与字幕、站点与网络、工具与维护。',
-          subtitleKey: const ValueKey('settings-advanced-summary'),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => AdvancedSettingsPage(state: state),
-            ),
+          key: const ValueKey('settings-osd-open'),
+          icon: Icons.ondemand_video_outlined,
+          title: '屏显（OSD）',
+          subtitle: osdSummary(state),
+          onTap: () => _push(context, OsdSettingsPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-danmaku-open'),
+          icon: Icons.comment_outlined,
+          title: '弹幕源',
+          subtitle:
+              '${state.danmakuSettings.autoSearch ? "自动搜索已开" : "自动搜索已关"}'
+              ' · ${state.danmakuSettings.apiUrl.isEmpty ? "未配置地址" : "已配置地址"}',
+          onTap: () => _push(context, DanmakuSourcePage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-subtitle-open'),
+          icon: Icons.subtitles_outlined,
+          title: '字幕源',
+          subtitle: state.subtitleSettings.hasAnyProvider
+              ? '已配置${state.subtitleSettings.autoMatch ? " · 自动匹配已开" : ""}'
+              : '未配置：播放结果没有字幕时不会自动匹配',
+          subtitleKey: const ValueKey('settings-subtitle-summary'),
+          onTap: () => _push(
+            context,
+            SubtitleSettingsPage(state: state, paths: state.paths),
           ),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-live-open'),
+          icon: Icons.live_tv_outlined,
+          title: '直播',
+          subtitle: _liveSummary(),
+          onTap: () => _push(context, LiveSettingsPage(state: state)),
         ),
       ],
     );
+
+    // 「站点与内容」= 站源、搜索顺序与站点请求链。成组开关进明细页，
+    // 单个开关就地生效：一个开关再套一层页面只是多一次点击。
+    final sites = SettingsRowList(
+      children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-site-health-open'),
+          icon: Icons.monitor_heart_outlined,
+          title: '站点健康',
+          subtitle: _healthSummary(state),
+          onTap: () => _push(context, SiteHealthPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-group-rules-open'),
+          icon: Icons.account_tree_outlined,
+          title: '分组规则',
+          subtitle:
+              '${state.siteGroupSettings.rules.length} 条规则'
+              ' · ${state.siteGroupSettings.rules.where((e) => e.enabled).length} 条启用',
+          onTap: () => _push(context, SiteGroupRulesPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-injected-sites-open'),
+          icon: Icons.code_outlined,
+          title: '站点注入',
+          subtitle: state.injectedSites.isEmpty
+              ? '未注入站点：可粘贴站点 JSON 追加到站点列表'
+              : '已注入 ${state.injectedSites.length} 个站点'
+                    '（启用 ${state.injectedSites.where((e) => e.enabled).length}）',
+          subtitleKey: const ValueKey('settings-injected-sites-summary'),
+          onTap: () => _push(context, InjectedSitesPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-local-sources-open'),
+          icon: Icons.folder_open_outlined,
+          title: '本地源',
+          subtitle: '扫描本机媒体目录，按文件名匹配剧集',
+          onTap: () => _push(context, LocalSourcesPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-pan-check-open'),
+          icon: Icons.link_outlined,
+          title: '网盘检测',
+          subtitle: '粘贴分享链接检测有效性',
+          onTap: () => _push(context, PanCheckPage(state: state)),
+        ),
+        _switch(
+          key: const ValueKey('settings-ad-block'),
+          icon: Icons.block,
+          title: '启用配置中的广告规则',
+          subtitle:
+              '${state.config?.ads.length ?? 0} 个广告主机 · '
+              '${state.config?.hlsRules.length ?? 0} 条 HLS 规则；规则为空时无效果',
+          value: state.adBlockEnabled,
+          onChanged: state.setAdBlockEnabled,
+        ),
+        _switch(
+          key: const ValueKey('settings-parse-failover'),
+          icon: Icons.swap_calls,
+          title: '解析接口失败时尝试其他接口',
+          subtitle: '按配置顺序最多再试一个；只尝试 JSON 类接口',
+          value: state.parseFailoverSettings.enabled,
+          onChanged: (value) => state.setParseFailoverSettings(
+            state.parseFailoverSettings.copyWith(enabled: value),
+          ),
+        ),
+        _switch(
+          key: const ValueKey('settings-site-health-sort'),
+          icon: Icons.sort,
+          title: '按站点健康排序搜索结果',
+          subtitle: '成功的站点优先；没有实测记录的站点排在最后',
+          value: state.siteOrder.healthSort,
+          onChanged: (value) =>
+              state.setSiteOrder(state.siteOrder.copyWith(healthSort: value)),
+        ),
+      ],
+    );
+
+    // 「连接与服务」= 需要外部账号或外部系统的部分；出站代理与 DoH 也在这一类：
+    // 它们改的都是本站**发出**的请求，与站源无关。
     final connections = SettingsRowList(
       children: [
         SettingsNavRow(
@@ -357,112 +472,95 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ),
+        // 出站代理与 DoH 改的是本站**发出**的请求，与站源无关：原来埋在
+        // 「高级设置 → 网络」，与账号类入口分在两处，现在和它们同屏。
+        SettingsNavRow(
+          key: const ValueKey('settings-outbound-proxy-open'),
+          icon: Icons.hub_outlined,
+          title: '出站代理',
+          subtitle: _outboundProxySummary(),
+          onTap: () => _push(context, OutboundProxyPage(state: state)),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-doh-open'),
+          icon: Icons.dns_outlined,
+          title: '加密 DNS（DoH）',
+          subtitle: dohStatusText(state),
+          onTap: () => _push(context, DohSettingsPage(state: state)),
+        ),
       ],
     );
-    final maintenance = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SettingsRowList(
-          children: [
-            SettingsNavRow(
-              key: const ValueKey('settings-site-health-open'),
-              icon: Icons.monitor_heart_outlined,
-              title: '站点健康',
-              subtitle: _healthSummary(state),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => SiteHealthPage(state: state),
-                ),
-              ),
-            ),
-            SettingsNavRow(
-              key: const ValueKey('settings-python-environment-open'),
-              icon: Icons.terminal_outlined,
-              title: '运行环境',
-              subtitle: '内置 Python 与依赖；可检测、离线修复、选择自定义解释器。',
-              subtitleKey: const ValueKey(
-                'settings-python-environment-summary',
-              ),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => PythonEnvironmentPage(state: state),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpace.xl),
-        SettingsSection(
-          title: '本地数据',
-          children: [
-            SelectableText(
-              '配置：${state.paths.configDir}\n'
-              '数据：${state.paths.dataDir}\n'
-              '缓存：${state.paths.cacheDir}\n'
-              '日志：${state.paths.logDir}',
-            ),
-            const SizedBox(height: AppSpace.md),
-            SettingsActions(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await state.resetCache();
-                    if (context.mounted) {
-                      showToast('缓存目录已重建', kind: ToastKind.success);
-                    }
-                  },
-                  icon: const Icon(Icons.cleaning_services_outlined),
-                  label: const Text('清理缓存目录'),
-                ),
 
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(text: state.log.export()),
-                    );
-                    if (context.mounted) {
-                      showToast('已复制脱敏日志', kind: ToastKind.success);
-                    }
-                  },
-                  icon: const Icon(Icons.copy_all_outlined),
-                  label: const Text('复制脱敏日志'),
-                ),
-              ],
+    // 「维护」= 本机运行、排查与一次性动作。长文本都进了「关于与数据」。
+    final maintenance = SettingsRowList(
+      children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-python-environment-open'),
+          icon: Icons.terminal_outlined,
+          title: '运行环境',
+          subtitle: '内置 Python 与依赖；可检测、离线修复、选择自定义解释器。',
+          subtitleKey: const ValueKey('settings-python-environment-summary'),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PythonEnvironmentPage(state: state),
             ),
-          ],
+          ),
         ),
-        SettingsSection(
-          title: '运行信息',
-          children: [
-            if (info == null)
-              const Text('启动信息尚未就绪。')
-            else
-              SelectableText(info.detailLines),
-          ],
+        SettingsNavRow(
+          key: const ValueKey('settings-backup-open'),
+          icon: Icons.settings_backup_restore,
+          title: '备份与恢复',
+          subtitle: '导出设置与数据库，或从备份恢复',
+          onTap: () => _push(context, BackupPage(state: state)),
         ),
-        SettingsSection(
-          title: '隐私与合规',
-          children: [
-            const SelectableText(usageBoundaryNotice),
-            const SizedBox(height: AppSpace.sm),
-            const Text(
-              '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
-              '• 站点配置同步：关闭（Phase 4 能力）\n'
-              '• 自动更新：不更新站源，仅更新应用本体',
-            ),
-          ],
+        SettingsNavRow(
+          key: const ValueKey('settings-browser-open'),
+          icon: Icons.web_asset_outlined,
+          title: '浏览器内核',
+          subtitle: 'Web 嗅探使用本机 Chromium 内核',
+          onTap: () => _push(context, BrowserEnginePage(paths: state.paths)),
+        ),
+        // 目录、启动信息与合规说明都是「查一次就够」的长文本：进独立页，
+        // 分类页只留一行入口（原来三块长文本把这一类结尾拉得很长）。
+        SettingsNavRow(
+          key: const ValueKey('settings-about-data-open'),
+          icon: Icons.info_outline,
+          title: '关于与数据',
+          subtitle: '本机目录、缓存维护、运行信息与隐私说明',
+          onTap: () => _push(context, AboutDataPage(state: state)),
+        ),
+        _switch(
+          key: const ValueKey('settings-incognito'),
+          icon: Icons.visibility_off_outlined,
+          title: '隐身模式',
+          subtitle: '不写播放历史与搜索记录；季度进度等历史投影同样不写',
+          value: state.incognito,
+          onChanged: state.setIncognito,
+        ),
+        _switch(
+          key: const ValueKey('settings-spider-debug-log'),
+          icon: Icons.bug_report_outlined,
+          title: '详细调试日志（爬虫入参/出参）',
+          subtitle:
+              '记录每次爬虫 IPC 调用的完整请求参数与响应结果（落盘前脱敏），'
+              '单份日志上限放大到 20MB。切换即时生效；日志量很大，排查完请关掉',
+          value: state.spiderDebugLog,
+          onChanged: state.setSpiderDebugLog,
         ),
       ],
     );
+
     final contents = <String, Widget>{
-      _SettingsCategory.preferences: preferences,
-      _SettingsCategory.playback: playback,
-      _SettingsCategory.connections: connections,
-      _SettingsCategory.maintenance: maintenance,
+      SettingsCategory.preferences: preferences,
+      SettingsCategory.playback: playback,
+      SettingsCategory.sites: sites,
+      SettingsCategory.connections: connections,
+      SettingsCategory.maintenance: maintenance,
     };
 
     return LayoutBuilder(
       builder: (context, constraints) => Padding(
+        // 表单列限宽：宽窗下正文居中，与明细页同一个 900 宽度口径。
         padding: EdgeInsets.symmetric(
           horizontal:
               AppSpace.lg +
@@ -474,10 +572,11 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SettingsPageHeader(
-              title: '设置',
-              description: '调整日常偏好、播放体验与连接服务。',
-            ),
+            if (widget.showHeader)
+              const SettingsPageHeader(
+                title: '设置',
+                description: '调整日常偏好、播放体验与连接服务。',
+              ),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, inner) {
@@ -515,6 +614,58 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 分类页里的一行开关：与 [SettingsNavRow] 同一个图标槽与标题字号。
+  ///
+  /// 为什么不用默认 `ListTile`：它的 leading 槽位比自绘行宽 4px，
+  /// `horizontalTitleGap` 取 8（不是 12）标题列才与行对齐；标题字号也用
+  /// bodyLarge，否则同一列表里两种字重读起来就是「有的行重、有的行轻」。
+  Widget _switch({
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final theme = Theme.of(context);
+    return SwitchListTile(
+      key: key,
+      horizontalTitleGap: AppSpace.sm,
+      secondary: SizedBox(width: 20, child: Icon(icon, size: 20)),
+      contentPadding: EdgeInsets.zero,
+      title: Text(title, style: theme.textTheme.bodyLarge),
+      subtitle: Text(
+        subtitle,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      value: value,
+      onChanged: onChanged,
+    );
+  }
+
+  String _onOff(bool value) => value ? '开' : '关';
+
+  /// 直播回退开关的一句话摘要（副标题用）。
+  String _liveSummary() {
+    final live = state.liveSettings;
+    return '换源 ${_onOff(live.sourceFallback)} · 换线 ${_onOff(live.changeLine)}';
+  }
+
+  /// 出站代理的一句话摘要（副标题用）。
+  String _outboundProxySummary() {
+    final proxy = state.outboundProxy;
+    if (!proxy.enabled) return '未启用';
+    return proxy.isEffective
+        ? '${proxy.validRules.length} 条规则'
+        : '未生效（没有规则或地址不合法）';
+  }
+
+  void _push(BuildContext context, Widget page) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
   /// 当前类别的单列内容区（滚动位置按类别恢复）。
   Widget _categoryContent(Widget section) {
     final id = _category;
@@ -543,15 +694,21 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// 宽窗：左侧分类栏（竖排）。
-  Widget _categoryRail(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      for (final category in _settingsCategories)
-        Padding(
-          padding: const EdgeInsets.only(bottom: AppSpace.xs),
-          child: _categoryControl(context, category, compact: false),
-        ),
-    ],
+  ///
+  /// 可滚动：分类从 4 类增到 5 类后，「16 上内边距 + 页标题 + 5×(48 行 + 4 间距)」
+  /// 在矮窗里放不下，直接 Column 会 RenderFlex overflow（480×340 即可复现）。
+  /// 让栏自己滚比隐藏第 5 类或压字号更诚实：每个分类都还在，滚一下就看得到。
+  Widget _categoryRail(BuildContext context) => SingleChildScrollView(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final category in kSettingsCategories)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpace.xs),
+            child: _categoryControl(context, category, compact: false),
+          ),
+      ],
+    ),
   );
 
   /// 窄窗：顶部分类条（横向换行，仍用同一组 key）。
@@ -559,7 +716,7 @@ class _SettingsPageState extends State<SettingsPage> {
     spacing: AppSpace.sm,
     runSpacing: AppSpace.sm,
     children: [
-      for (final category in _settingsCategories)
+      for (final category in kSettingsCategories)
         _categoryControl(context, category, compact: true),
     ],
   );
@@ -568,7 +725,7 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 选中态同时体现在**表面层级**（填充）与**公开语义**（`selected`）上。
   Widget _categoryControl(
     BuildContext context,
-    _SettingsCategory category, {
+    SettingsCategory category, {
     required bool compact,
   }) {
     final theme = Theme.of(context);
@@ -675,31 +832,6 @@ class _SettingsPageState extends State<SettingsPage> {
       buffer.write('，同步服务已开启');
     }
     return buffer.toString();
-  }
-}
-
-/// 屏显开关的中文名（`docs/phase8/design/02` §5.1）。
-///
-/// 与 [OsdFlag] 的 id 一一对应；未知 id 回落成 id 本身（不抛异常，
-/// 与 `normalizeOsdFlags` 的「只接受合法值」同一口径）。
-String _osdLabel(String id) {
-  switch (id) {
-    case OsdFlag.title:
-      return '标题';
-    case OsdFlag.size:
-      return '分辨率';
-    case OsdFlag.time:
-      return '时钟';
-    case OsdFlag.progress:
-      return '播放进度';
-    case OsdFlag.traffic:
-      return '网速';
-    case OsdFlag.mini:
-      return '迷你进度条';
-    case OsdFlag.diagnostics:
-      return '诊断面板';
-    default:
-      return id;
   }
 }
 

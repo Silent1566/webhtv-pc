@@ -2,23 +2,27 @@
 ///
 /// ## 这一组用例锁什么
 ///
-/// 用户截图否定了旧布局：宽窗把「偏好+播放」与「连接与增强+维护与说明」
-/// **两张内容列并排堆叠**，一屏两列同时展开。改成「左侧四类导航 + 右侧当前类
-/// 单列」后，回归锁必须能抓到下面每一种退回旧形态的实现：
+/// 「设置 + 一张长页」被否掉过两次：先是宽窗把「偏好+播放」与「连接与增强+
+/// 维护与说明」**两张内容列并排堆叠**，一屏两列同时展开；随后是「高级设置」
+/// 中枢整页——它把 18 行混在一个入口下面，播放参数要三级才到。现在的形态是
+/// **五个按用途划分的分类 + 每类单列**，任意设置最多两级可达。回归锁必须能抓到
+/// 下面每一种退回旧形态的实现：
 ///
-/// 1. 默认不是「偏好」，或四个稳定分类 key 缺失/重名；
+/// 1. 默认不是「偏好」，或五个稳定分类 key 缺失/重名/多出一份；
 /// 2. 当前类别之外的类别内容仍然渲染（=又变成多列同时可见）；
 /// 3. 切类别时顺手写盘（分类只影响显示，不是配置项）；
 /// 4. 键盘不可达（只能用鼠标点）；
 /// 5. 切回来类别后滚动位置归零（各类别滚动不保留）；
-/// 6. 480/720/1024/宽窗、暗/亮任一档溢出或导航与正文糊在一起；
+/// 6. 480/720/1024/宽窗、暗/亮任一档溢出或导航与正文糊在一起
+///    （矮窗单列一档：480×320 与左栏 1024×300，见「矮窗：…」）；
 /// 7. 正文又退回两列；
 /// 8. 再挂一个 `NavigationRail`（外壳已有一个）；
-/// 9. 旧功能/旧业务事实被搬走或改写（主题选择不再写进 `AppState`）。
+/// 9. 旧功能/旧业务事实被搬走或改写（主题选择不再写进 `AppState`）；
+/// 10. 屏显这类**成组开关**又回到分类页里就地摊开（结构锁，见「点击类别切换」）。
 ///
 /// ## 为什么用 `tester.getSemantics`
 ///
-/// 选中态必须是**公开语义**，不只是内部 `_category` 字段：视觉组按四个
+/// 选中态必须是**公开语义**，不只是内部 `_category` 字段：视觉组按五个
 /// 稳定 key 读 `SemanticsFlag.isSelected`。内部字段对调用方不可见，
 /// 断言它等于把测试绑在实现上。
 ///
@@ -40,6 +44,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
+import 'package:webhtv_pc/ui/osd_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 // Reject unsafe paths before bootstrap can access storage.
@@ -87,31 +92,32 @@ void main() {
     } catch (_) {}
   });
 
-  /// 有界 `pumpAndSettle`（5 秒），理由见 `phase8_settings_entries_test.dart`。
+  /// 有界 $pumpAndSettle（5 秒），理由见 $phase8_settings_entries_test.dart。
   Future<void> settle(WidgetTester tester) => tester.pumpAndSettle(
     const Duration(milliseconds: 50),
     EnginePhase.sendSemanticsUpdate,
     const Duration(seconds: 5),
   );
 
-  /// 四个稳定分类 key（固定接口，宽窄一致）。
+  /// 五个稳定分类 key（固定接口，宽窄一致）。
   const categories = <String>[
     'settings-category-preferences',
     'settings-category-playback',
+    'settings-category-sites',
     'settings-category-connections',
     'settings-category-maintenance',
   ];
 
-  /// 每个类别**独有**的入口 key：用来判断「当前类别内容独占」。
+  /// 每个类别在分类页上**独有**的入口 key：用来判断「当前类别内容独占」。
   ///
-  /// 取自基线的原四组业务分配（preferences=主题/历史/搜索，
-  /// playback=按钮/高级/屏显，connections=AI/TMDB/安卓，
-  /// maintenance=健康/本地数据/运行信息/隐私）。
+  /// 标记只取留在**分类页**的控件：屏显的 7 个开关已进 $OsdSettingsPage，
+  /// 站点健康的明细表在 $SiteHealthPage，因此这里用的是各自的行入口。
   const categoryMarker = <String, String>{
     'settings-category-preferences': 'settings-theme-mode',
     'settings-category-playback': 'settings-player-buttons',
+    'settings-category-sites': 'settings-site-health-open',
     'settings-category-connections': 'settings-ai-open',
-    'settings-category-maintenance': 'settings-site-health-open',
+    'settings-category-maintenance': 'settings-python-environment-open',
   };
 
   Finder categoryFinder(String key) => find.byKey(ValueKey(key));
@@ -121,8 +127,8 @@ void main() {
 
   /// 当前类别内容区的滚动位置。
   ///
-  /// 读 `ListView.controller`（公开字段）而不是 `Scrollable` 位置：维护类别里
-  /// 有 `SelectableText`，它自带内部 `Scrollable`，按类型找会命中一堆。
+  /// 读 $ListView.controller（公开字段）而不是 $Scrollable 位置：维护类别里
+  /// 有 $SelectableText，它自带内部 $Scrollable，按类型找会命中一堆。
   double contentOffset(WidgetTester tester, String id) {
     final controller = tester.widget<ListView>(contentFinder(id)).controller;
     expect(controller, isNotNull, reason: '类别 $id 的内容列表必须挂自己的控制器');
@@ -130,7 +136,7 @@ void main() {
     return controller.offset;
   }
 
-  /// 挂载设置页；宽窗时套一个外壳 `NavigationRail`（复现真实产品结构）。
+  /// 挂载设置页；宽窗时套一个外壳 $NavigationRail（复现真实产品结构）。
   Future<void> pumpSettings(
     WidgetTester tester, {
     Size size = const Size(1440, 900),
@@ -177,9 +183,10 @@ void main() {
     await settle(tester);
   }
 
-  testWidgets('默认进入偏好类别：四个稳定 key 各一个，其余类别内容不渲染', (tester) async {
+  testWidgets('默认进入偏好类别：五个稳定 key 各恰好一处，其余类别不渲染', (tester) async {
     await pumpSettings(tester);
 
+    // ① 五个分类 key 各**恰好一处**（宽窄共用一个 key，同一时刻只渲染一套）。
     for (final key in categories) {
       expect(
         categoryFinder(key),
@@ -187,6 +194,20 @@ void main() {
         reason: '缺少稳定分类控件 $key（宽窗与窄窗都必须存在，且各只有一个）',
       );
     }
+
+    /// 分类控件（不含正文内容区）的 key 形态。
+    bool isCategoryControl(Widget widget) {
+      final key = widget.key;
+      if (key is! ValueKey<String>) return false;
+      return key.value.startsWith('settings-category-') &&
+          !key.value.startsWith('settings-category-content-');
+    }
+
+    expect(
+      find.byWidgetPredicate(isCategoryControl),
+      findsNWidgets(categories.length),
+      reason: '分类控件总数必须恰好 5 个（多出一个 = 两套导航同时渲染）',
+    );
 
     // 默认偏好：只断言业务标记 key，不断言文案（导航标签与区块标题共用词）。
     expect(
@@ -199,6 +220,11 @@ void main() {
         markerFinder(key),
         findsNothing,
         reason: '$key 的内容不得与当前类别同时渲染（否则又退回多列同时展开）',
+      );
+      expect(
+        contentFinder(key.replaceFirst('settings-category-', '')),
+        findsNothing,
+        reason: '$key 的内容区不得与当前类别同时挂载',
       );
     }
 
@@ -238,7 +264,33 @@ void main() {
       findsNothing,
       reason: '切到播放后，偏好内容必须消失（内容独占）',
     );
-    expect(find.byKey(const ValueKey('settings-osd')), findsOneWidget);
+    // 屏显已从「播放」类里就地展开的 7 个开关改成一行入口 → 独立明细页。
+    // 结构锁：**成组开关块不得回到分类页**。这里同时正向锁入口行、反向锁区块。
+    expect(
+      find.byKey(const ValueKey('settings-osd-open')),
+      findsOneWidget,
+      reason: '播放类必须有「屏显（OSD）」入口行',
+    );
+    expect(
+      find.byKey(const ValueKey('settings-osd')),
+      findsNothing,
+      reason: '屏显开关必须只在 OsdSettingsPage 里（分类页不得再就地摊开成组开关）',
+    );
+    for (final id in const [
+      'title',
+      'size',
+      'time',
+      'progress',
+      'traffic',
+      'mini',
+      'diagnostics',
+    ]) {
+      expect(
+        find.byKey(ValueKey('settings-osd-$id'), skipOffstage: false),
+        findsNothing,
+        reason: '屏显开关 settings-osd-$id 不得挂在分类页上',
+      );
+    }
     expect(
       tester.getSemantics(categoryFinder('settings-category-playback')),
       isSemantics(isSelected: true),
@@ -248,13 +300,28 @@ void main() {
       isSemantics(isSelected: false),
     );
 
+    // 新增的第五类「站点与内容」也必须能选中并独占正文。
+    await tester.tap(categoryFinder('settings-category-sites'));
+    await settle(tester);
+    expect(markerFinder('settings-category-sites'), findsOneWidget);
+    expect(markerFinder('settings-category-playback'), findsNothing);
+    expect(
+      tester.getSemantics(categoryFinder('settings-category-sites')),
+      isSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(categoryFinder('settings-category-playback')),
+      isSemantics(isSelected: false),
+    );
+
     // 反向：切回偏好必须复原，不是单向跳转。
     await tester.tap(categoryFinder('settings-category-preferences'));
     await settle(tester);
     expect(markerFinder('settings-category-preferences'), findsOneWidget);
     expect(markerFinder('settings-category-playback'), findsNothing);
+    expect(markerFinder('settings-category-sites'), findsNothing);
 
-    // `skipOffstage: false`：未选类别**连离屏 widget 都不存在**，因此它们
+    // $skipOffstage: false：未选类别**连离屏 widget 都不存在**，因此它们
     // 既不会进入 Tab 焦点路径，也不会被屏幕阅读器读到——「保留滚动位置」
     // 不得靠挂载隐藏列表来换。
     for (final key in categories.skip(1)) {
@@ -268,7 +335,7 @@ void main() {
     handle.dispose();
   });
 
-  testWidgets('四个类别都可达各自旧入口（分类只是显示分组，入口一个不少）', (tester) async {
+  testWidgets('五个类别都可达各自旧入口（分类只是显示分组，入口一个不少）', (tester) async {
     await pumpSettings(tester);
     for (final key in categories) {
       await tester.tap(categoryFinder(key));
@@ -359,11 +426,12 @@ void main() {
   testWidgets('各分类滚动位置独立保留：切走再回来不回到顶部', (tester) async {
     // 矮视口：播放与连接两类的内容都必须比它高，两个位置才都可区分。
     //
-    // 340 是实测出来的档位（不是随便取的小数）：入口从「铺满整行的按钮」
-    // 改成「行」以后，连接类别只剩三行，内容高度约 275；420 高的视口下
-    // 内容区 304，连接类别根本滚不动（maxScrollExtent = 0），保留断言会变成
-    // 0 == 0 的空断言。340 高时内容区 224，播放类别可滚 220、连接类别可滚 51，
-    // 两者都非零且彼此不同；再矮（≤320）左侧分类栏会先溢出。
+    // 340 是**矮窗下限附近的取样**（不是随便取的小数）：
+    // 五类左栏的内容高约「16 上内边距 + 页标题 + 5×(48 行 + 4 间距)」≈ 300+，
+    // 340 高时栏只剩约 224（页内边距与页标题之后），5 类塞不下——源码因此把栏
+    // 包进 SingleChildScrollView（diagnostics_pages.dart:708），栏自己滚、五项都在；
+    // 340 高时内容区约 240，播放类（7 行）与连接类（6 行）都高过它，
+    // 两个位置都非零且彼此不同，滚动保留才有区分力。
     await pumpSettings(tester, size: const Size(1440, 340));
 
     await tester.tap(categoryFinder('settings-category-playback'));
@@ -415,28 +483,31 @@ void main() {
 
       await tester.drag(contentFinder('playback'), const Offset(0, -120));
       await settle(tester);
-      final entry = find.byKey(const ValueKey('settings-advanced-open'));
+      // 落点：屏显从「播放类里就地展开的 7 个开关」改成一行入口 → 独立明细页。
+      final entry = find.byKey(const ValueKey('settings-osd-open'));
       await tester.ensureVisible(entry);
       await settle(tester);
       final before = contentOffset(tester, 'playback');
       expect(before, greaterThan(0), reason: '必须从非零位置进入子页，才能抓到返回时归零');
-      expect(entry.hitTestable(), findsOneWidget, reason: '原高级设置入口必须真实可点');
+      expect(entry.hitTestable(), findsOneWidget, reason: '屏显入口必须真实可点');
 
       await tester.tap(entry);
       await settle(tester);
       expect(
-        find.byKey(const ValueKey('settings-live-source-fallback')),
+        find.byType(OsdSettingsPage),
         findsOneWidget,
-        reason: '原入口必须真的进入高级设置，不是空壳路由',
+        reason: '原入口必须真的进入屏显明细页，不是空壳路由',
+      );
+      expect(
+        find.byKey(const ValueKey('settings-osd-title')),
+        findsOneWidget,
+        reason: '明细页必须真的渲染了屏显开关',
       );
       expect(contentFinder('playback'), findsNothing, reason: '子页面应遮住原设置页');
 
       await tester.tap(find.byType(BackButton));
       await settle(tester);
-      expect(
-        find.byKey(const ValueKey('settings-live-source-fallback')),
-        findsNothing,
-      );
+      expect(find.byKey(const ValueKey('settings-osd-title')), findsNothing);
       expect(
         tester.getSemantics(categoryFinder('settings-category-playback')),
         isSemantics(isSelected: true),
@@ -482,7 +553,12 @@ void main() {
           tester.getSemantics(categoryFinder('settings-category-preferences')),
           isSemantics(isSelected: false),
         );
-        for (final id in const ['preferences', 'connections', 'maintenance']) {
+        for (final id in const [
+          'preferences',
+          'sites',
+          'connections',
+          'maintenance',
+        ]) {
           expect(contentFinder(id), findsNothing, reason: '宿主重建后仍只挂当前类别');
         }
         expect(contentOffset(tester, 'playback'), closeTo(before, 0.01));
@@ -538,6 +614,84 @@ void main() {
           );
         }
       }
+    }
+  });
+
+  testWidgets('矮窗：480×320 与 1024×300 不溢出，五个分类仍逐个点得动', (tester) async {
+    // 分类从 4 类增到 5 类后，左栏内容高「5×(48 行 + 4 间距)」≈ 260，矮窗放不下：
+    // 源码把左栏包进 SingleChildScrollView（diagnostics_pages.dart:708）。
+    // 所以「不溢出」必须和「第 5 类真的点得到并切过去」一起断言 —— 少画一个分类
+    // 同样不溢出，但那是把分类弄丢；只断言 key 存在也抓不到「按不到」。
+    const viewports = <Size>[Size(480, 320), Size(1024, 300)];
+    final semantics = tester.ensureSemantics();
+    try {
+      for (final size in viewports) {
+        final where = '${size.width}×${size.height}';
+        await pumpSettings(tester, size: size);
+        expect(tester.takeException(), isNull, reason: '$where：设置首页布局溢出');
+
+        for (final key in categories) {
+          expect(
+            categoryFinder(key),
+            findsOneWidget,
+            reason: '$where：分类控件 $key 缺失或重复（矮窗不许靠少画一个换不溢出）',
+          );
+        }
+
+        // 宽窗（≥720）走左栏：栏必须**自身**可滚，才证明上面的不溢出是
+        // 「滚得到」而不是「画不下就不画」。
+        if (size.width >= 720) {
+          final railScrollable = find
+              .ancestor(
+                of: categoryFinder('settings-category-preferences'),
+                matching: find.byType(Scrollable),
+              )
+              .first;
+          expect(
+            tester
+                .state<ScrollableState>(railScrollable)
+                .position
+                .maxScrollExtent,
+            greaterThan(0),
+            reason: '$where：5 类放不下，左栏必须自己可滚（否则溢出的只是被裁掉）',
+          );
+        }
+
+        // 逐个类别：滚到可见 → 命中测试通过 → 点下去真的切换（内容标记 + 选中语义）。
+        for (final key in categories) {
+          final control = categoryFinder(key);
+          final id = key.replaceFirst('settings-category-', '');
+          await tester.ensureVisible(control);
+          await settle(tester);
+          expect(
+            control.hitTestable(),
+            findsOneWidget,
+            reason: '$where：$key 滚到可见后必须真的可点',
+          );
+          await tester.tap(control);
+          await settle(tester);
+          expect(tester.takeException(), isNull, reason: '$where：切到 $id 后不得溢出');
+          expect(
+            markerFinder(key),
+            findsOneWidget,
+            reason: '$where：点了 $key 就必须渲染该类内容（不是空切）',
+          );
+          for (final other in categories.where((k) => k != key)) {
+            expect(
+              markerFinder(other),
+              findsNothing,
+              reason: '$where：切到 $id 后 $other 的内容必须消失（仍只渲染当前类）',
+            );
+          }
+          expect(
+            tester.getSemantics(control),
+            isSemantics(isSelected: true),
+            reason: '$where：$key 的选中语义必须跟着切换走',
+          );
+        }
+      }
+    } finally {
+      semantics.dispose();
     }
   });
 
@@ -601,7 +755,7 @@ void main() {
       ),
     );
     // 写盘续体落在真实事件循环（见文件头注释）：交替「推进一帧 → 给真实 I/O
-    // 一点时间」，直到界面收敛。**不得**在这之后手动 `setThemeMode`——
+    // 一点时间」，直到界面收敛。**不得**在这之后手动 setThemeMode——
     // 那会让断言变成对自身的镜像，点坏了也通过。
     for (var round = 0; round < 12; round++) {
       await tester.pump(const Duration(milliseconds: 16));

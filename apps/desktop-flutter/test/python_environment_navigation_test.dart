@@ -1,8 +1,8 @@
 /// 运行环境设置页的真实入口（任务书 Task C）。
 ///
-/// 从**真实** [SettingsPage] 的「维护与说明 → 工具」进入，验证：
+/// 从**真实** [SettingsPage] 的「维护 → 运行环境」进入，验证：
 /// - 入口 key 稳定、点击真的推入 [PythonEnvironmentPage]；
-/// - 返回后仍停在「维护与说明」分类（分类是页面自己的 UI 状态，不该被导航重置）；
+/// - 返回后仍停在「维护」分类（分类是页面自己的 UI 状态，不该被导航重置）；
 /// - 全流程目录与日志都在 `Directory.systemTemp`，绝不写 `%APPDATA%`。
 library;
 
@@ -47,7 +47,7 @@ void main() {
     }
   });
 
-  testWidgets('维护与说明里的真实入口打开运行环境页，返回后仍在该分类', (tester) async {
+  testWidgets('维护类里的真实入口打开运行环境页，返回后仍在该分类', (tester) async {
     tester.view.physicalSize = const Size(1280, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);

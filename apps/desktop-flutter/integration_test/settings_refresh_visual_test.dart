@@ -13,7 +13,6 @@ import 'package:webhtv_pc/core/ai_config.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/ui/ai_assist_page.dart';
 import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:webhtv_pc/ui/backup_page.dart';
@@ -22,6 +21,7 @@ import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/injected_sites_page.dart';
 import 'package:webhtv_pc/ui/pan_check_page.dart';
 import 'package:webhtv_pc/ui/player_button_config_page.dart';
+import 'package:webhtv_pc/ui/settings_overview_page.dart';
 import 'package:webhtv_pc/ui/subtitle_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -48,7 +48,9 @@ const _pages = [
   'tmdb',
   'android',
   'ai',
-  'advanced',
+  // 「高级设置」中枢整页已删除：改成可 push 的「全部设置」页，截图矩阵的数量
+  // 与名字口径不变（仍是 17 张，一页一图）。
+  'overview',
   'subtitle',
   'buttons',
   'backup',
@@ -96,7 +98,7 @@ Widget _page(String id, AppState state) => switch (id) {
   'tmdb' => TmdbSettingsPage(state: state),
   'android' => AndroidSettingsPage(state: state),
   'ai' => AiSettingsPage(state: state),
-  'advanced' => AdvancedSettingsPage(state: state),
+  'overview' => SettingsOverviewPage(state: state),
   'subtitle' => SubtitleSettingsPage(state: state, paths: state.paths),
   'buttons' => PlayerButtonConfigPage(state: state),
   'backup' => BackupPage(state: state),
