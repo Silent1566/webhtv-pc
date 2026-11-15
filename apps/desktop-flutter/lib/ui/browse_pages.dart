@@ -2243,6 +2243,8 @@ class _DetailPageState extends State<DetailPage> {
                 ? tmdb.selectedSeason
                 : -1),
         episodeNumber: _tmdbEpisodeNumberOf(episode),
+        // IntroDB 只收 IMDb 键；拿不到就留空，该源会自行跳过。
+        imdbId: externalImdbId(tmdb?.detail),
       );
       // 选集卡片数据（阶段 A）：与 [_buildEpisodes] 的 `cards` 用**同一套构造**，
       // 否则播放器浮层里的卡片会与详情页选集对不上——两者都按「当前季度过滤 →

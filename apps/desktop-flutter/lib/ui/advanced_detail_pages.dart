@@ -11,6 +11,7 @@ import '../core/site_group_rules.dart';
 import '../services/app_paths.dart';
 import '../state/app_state.dart';
 import 'browser_component_settings.dart';
+import 'intro_skip_options_page.dart';
 import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -118,27 +119,20 @@ class PlaybackOptionsPage extends StatelessWidget {
                         );
                       },
                     ),
-                    _switch(
-                      'settings-player-auto-skip-intro',
-                      '自动跳过片头',
-                      '需要在播放器菜单里标记过片头才生效',
-                      state.playerOptions.autoSkipIntro,
-                      (value) async {
-                        await state.setPlayerOptions(
-                          state.playerOptions.copyWith(autoSkipIntro: value),
-                        );
-                      },
-                    ),
-                    _switch(
-                      'settings-player-auto-skip-outro',
-                      '自动跳过片尾',
-                      '需要在播放器菜单里标记过片尾才生效',
-                      state.playerOptions.autoSkipOutro,
-                      (value) async {
-                        await state.setPlayerOptions(
-                          state.playerOptions.copyWith(autoSkipOutro: value),
-                        );
-                      },
+                    ListTile(
+                      key: const ValueKey('settings-player-skip-open'),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('片头片尾跳过'),
+                      subtitle: Text(
+                        IntroSkipOptionsPage.summary(state.playerOptions),
+                      ),
+                      trailing: const Icon(Icons.chevron_right, size: 18),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => IntroSkipOptionsPage(state: state),
+                        ),
+                      ),
                     ),
                     ListTile(
                       key: const ValueKey('settings-player-failure-fallback'),

@@ -20,6 +20,7 @@ import 'app.dart';
 import 'common.dart';
 import 'advanced_settings_page.dart';
 import 'config_pages.dart';
+import 'intro_skip_options_page.dart';
 import 'player_button_config_page.dart';
 import 'python_environment_page.dart';
 import 'scroll_behavior.dart';
@@ -242,6 +243,19 @@ class _SettingsPageState extends State<SettingsPage> {
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => PlayerButtonConfigPage(state: state),
+            ),
+          ),
+        ),
+        // 片头片尾跳过提到这一级：原先埋在「高级设置 → 播放参数」第三层的滚动区里，
+        // 用户反馈两次找不到。入口的可见性比开关本身更重要。
+        SettingsNavRow(
+          key: const ValueKey('settings-skip-open'),
+          icon: Icons.skip_next_outlined,
+          title: '片头片尾跳过',
+          subtitle: IntroSkipOptionsPage.summary(state.playerOptions),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => IntroSkipOptionsPage(state: state),
             ),
           ),
         ),
