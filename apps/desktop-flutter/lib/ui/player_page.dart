@@ -290,6 +290,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       widget.liveSession?.requestProgram != null || _request.flag == '回看';
   bool get _hasLivePanels => _livePanelOpen || _linePanelChannel != null;
   bool _progressReady = false;
+
+  /// 引擎时长的诊断基线（毫秒）；-1 表示本次播放还没记过。
+  ///
+  /// 只在**真正写日志时**前进，所以一个刚变化、又被 1 秒节流挡下的值会留到
+  /// 下一次通知（位置每 250ms 一次）补记，不会把最终值丢掉。
+  int _loggedDurationMs = -1;
+  DateTime? _lastDurationLogAt;
+
+  /// 本次播放是否已经记过「已播时间超过引擎总长」。
+  bool _loggedOverrun = false;
   int _mediaGeneration = 0;
   PlayerAudioAiSession? _audioAi;
   StreamSubscription<RealtimeSubtitleState>? _audioStateSubscription;
@@ -754,6 +764,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       playing: _controller.isPlaying && !_controller.isBuffering,
       rate: _controller.rate,
     );
+    _logEngineDurationDrift();
     setState(() {});
     // 连播改为**事件驱动**（`design/03` §4.1 D1）：
     // 旧实现在 `build()` 里排 postFrameCallback，任何一次通知（position/
@@ -763,6 +774,44 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _maybeAutoSkip();
     _maybeAdvanceOnGenuineEnd();
     _applyRememberedTrackChoices();
+  }
+
+  /// 记录「引擎上报的时长」怎么变，以及第一次被已播时间跑过的那一刻。
+  ///
+  /// 为什么单独记：进度条的总长完全照搬引擎（[PlayerController.duration]），
+  /// 而 HLS 线路的引擎总长可能是假的——同一部两小时的片子，载入时引擎只报
+  /// 1.78s / 4.14s（见 `[player] 播放结果` 的 duration 字段）。界面把这句话
+  /// 当真之后，拇指走到那个很小的总长就被钳住，明明还在放却不再动。只看载入
+  /// 那一个点，分不清「引擎算错」还是「清单本来就只有两分钟」，所以把变化过程
+  /// 和越界时刻一起留在日志里（清单侧的段数与 Σ `#EXTINF` 由代理
+  /// `[proxy] 清单形状` 行给出）。
+  ///
+  /// 节奏：时长每秒最多记一行——滚动窗口的清单会让引擎反复改这个值。
+  void _logEngineDurationDrift() {
+    final durationMs = _controller.duration.inMilliseconds;
+    final positionMs = _controller.position.inMilliseconds;
+    if (durationMs > 0 && durationMs != _loggedDurationMs) {
+      final now = DateTime.now();
+      final last = _lastDurationLogAt;
+      if (last == null || now.difference(last) >= const Duration(seconds: 1)) {
+        _lastDurationLogAt = now;
+        final previous = _loggedDurationMs < 0
+            ? '未上报'
+            : '${_loggedDurationMs}ms';
+        _loggedDurationMs = durationMs;
+        widget.state.log.debug(
+          '引擎时长 ${durationMs}ms（上次 $previous）position=${positionMs}ms',
+          scope: 'player',
+        );
+      }
+    }
+    if (_loggedOverrun || durationMs <= 0 || positionMs <= durationMs) return;
+    _loggedOverrun = true;
+    widget.state.log.warning(
+      '已播超过引擎总长 position=${positionMs}ms duration=${durationMs}ms'
+      '（进度条拇指会被钳在末端，不再跟随播放）',
+      scope: 'player',
+    );
   }
 
   /// 自动跳过片头/片尾（`docs/phase9/design/01` §3）。
@@ -2845,6 +2894,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         unawaited(replacement.setRate(rate));
       });
     }
+    // 每换一次媒体（含重试、换线路）都要换一份诊断基线。
+    _loggedDurationMs = -1;
+    _lastDurationLogAt = null;
+    _loggedOverrun = false;
     return ++_mediaGeneration;
   }
 
