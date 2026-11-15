@@ -71,6 +71,7 @@ import '../core/http_api.dart';
 import '../core/osd_config.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_lines.dart';
 import '../core/player_buttons.dart';
 import '../core/outbound_proxy.dart';
 import '../core/parse_failover.dart';
@@ -5596,6 +5597,80 @@ AiContentCompletion? aiContentCompletion,
   }
 
   List<VodPlayLine> playLinesOf(Vod vod) => parseVodPlayLines(vod);
+
+  /// 取「站点详情里的线路」+ 该线路该用哪个站点/vod_id 解析，只读：不写详情槽、
+  /// 不跑 TMDB、不动选中站点。
+  ///
+  /// 历史续播先起播，再按需补线路：详情可能等几秒，不能阻塞播放主操作。
+  ///
+  /// 两条路径合流后返回同一个值类型：
+  /// - 普通记录走 [SiteService.detail]，线路来自详情（无额外路由：换集仍用记录
+  ///   自己的 `siteKey`/`vodId`）；
+  /// - 目录记录（`atvp_detail:` 前缀，见 [isBridgeFolderVodId]）走
+  ///   [SiteService.folderPlaybackLines]，因为拿目录 id 去 `ids=` 会被站源判为
+  ///   业务错误，必须用 `t=<folder_id>` 展开，且每条合并线路要带回**条目自己的
+  ///   **`vod_id`，否则换集会拿父目录 id 去问站点。
+  Future<PlaybackLines?> playLinesForRecord({
+    required String siteKey,
+    required String vodId,
+    String vodName = '',
+    String sourceKey = '',
+    bool Function()? isCurrent,
+  }) async {
+    try {
+      final context = sourceKey.isNotEmpty
+          ? playbackContextFor(sourceKey)
+          : null;
+      final service = sourceKey.isNotEmpty ? context?.service : _siteService;
+      final site = sourceKey.isNotEmpty
+          ? context?.siteByKey(siteKey)
+          : siteByKey(siteKey);
+      if (service == null || site == null) return null;
+      await _waitForPythonSite(site);
+      if (_disposed || _isStale(isCurrent)) return null;
+      if (isBridgeFolderVodId(vodId)) {
+        // 目录条目自己不是影片：只用它当作「展开哪个目录」的入口，标题仅供
+        // 详情页合并显示，不参与解析。
+        final expanded = await service.folderPlaybackLines(
+          site,
+          Vod(vodId: vodId, vodName: vodName),
+          isCurrent: isCurrent,
+        );
+        if (_disposed || _isStale(isCurrent)) return null;
+        return expanded;
+      }
+      final outcome = await service.detail(
+        site,
+        vodId,
+        identity: VodIdentityHint(vodId: vodId, vodName: vodName),
+      );
+      if (_disposed || _isStale(isCurrent)) return null;
+      final vod = outcome.value.list.firstOrNull;
+      return vod == null ? null : PlaybackLines(lines: playLinesOf(vod));
+    } on AppError catch (error) {
+      // 取消不是失败：`_expandFolder` 用 siteCancelled 表达「用户已离开」，
+      // 这条路径本来就该静默返回——但**必须留痕**，否则「没有选集按钮」既可能
+      // 是取消也可能是失败，排查时无法区分。
+      if (error.kind == AppErrorKind.siteCancelled) {
+        log.debug('历史续播线路补齐已取消 vod=$vodId kind=siteCancelled', scope: 'player');
+        return null;
+      }
+      _logPlayLinesFailure(vodId, error);
+      return null;
+    } catch (error) {
+      _logPlayLinesFailure(vodId, error);
+      return null;
+    }
+  }
+
+  void _logPlayLinesFailure(String vodId, Object error) {
+    // 异常文本可能带完整站点 URL/Header；只记错误分类，避免泄露配置凭据。
+    log.warning(
+      '历史续播线路补齐失败 vod=$vodId '
+      'kind=${error is AppError ? error.kind.name : error.runtimeType}',
+      scope: 'player',
+    );
+  }
 
   /// 解析播放请求（§10.2）。
   ///

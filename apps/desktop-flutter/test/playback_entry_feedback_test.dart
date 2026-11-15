@@ -4,14 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/following.dart';
+import 'package:webhtv_pc/core/playback_lines.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/source_swap.dart';
+import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/playback_resume.dart';
 import 'package:webhtv_pc/ui/following_page.dart';
+import 'package:webhtv_pc/ui/playback_resume.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/toast.dart';
+
+import 'support/player_page_harness.dart';
 
 class _PendingState extends AppState {
   final home = Completer<void>();
@@ -99,6 +104,8 @@ Future<BuildContext> _pumpEntry(
   _PendingState state,
   GlobalKey<NavigatorState> navigator, {
   _PushObserver? observer,
+  PlaybackHistory history = _history,
+  Duration linesTimeout = folderLinesPrefetchTimeout,
 }) async {
   late BuildContext entryContext;
   await tester.pumpWidget(
@@ -110,7 +117,12 @@ Future<BuildContext> _pumpEntry(
           builder: (context) {
             entryContext = context;
             return FilledButton(
-              onPressed: () => resumeHistoryEntry(context, state, _history),
+              onPressed: () => resumeHistoryEntry(
+                context,
+                state,
+                history,
+                linesTimeout: linesTimeout,
+              ),
               child: const Text('续播'),
             );
           },
@@ -123,6 +135,91 @@ Future<BuildContext> _pumpEntry(
 
 /// 等待反馈的落点：只有一个转圈，没有上屏文案，因此按 key 找。
 const ValueKey<String> _feedbackKey = ValueKey('async-action-feedback');
+
+/// 网盘聚合目录条目（`atvp_detail:` 前缀）的历史记录。
+///
+/// 形态取自真机记录：`vod_id="atvp_detail:131957"`、`flag="丫仙女"`、
+/// `episode_id="1@20465"`。
+const _folderHistory = PlaybackHistory(
+  id: 9,
+  siteKey: 'site',
+  vodId: 'atvp_detail:131957',
+  vodName: '目录剧',
+  vodPic: 'poster',
+  flag: '丫仙女',
+  episodeName: '01(696.02 MB)',
+  episodeId: '1@20465',
+  positionMs: 0,
+  durationMs: 0,
+  updatedAt: 2,
+);
+
+final _folderLines = [
+  VodPlayLine(
+    flag: '丫仙女',
+    sourceFlag: '丫仙女',
+    episodes: [
+      VodEpisode(name: '01(696.02 MB)', url: '1@20465'),
+      VodEpisode(name: '02(1.2 GB)', url: '1@20466'),
+    ],
+  ),
+  VodPlayLine(
+    flag: 'quark · 夸克',
+    sourceFlag: '夸克',
+    episodes: [VodEpisode(name: '01(696.02 MB)', url: '9@30001')],
+  ),
+];
+
+const _folderRoutes = {
+  '丫仙女': SwapLineRoute(
+    siteKey: 'bridge-site',
+    siteName: '桥接站',
+    vodId: 'hxq-1',
+  ),
+  'quark · 夸克': SwapLineRoute(
+    siteKey: 'bridge-site',
+    siteName: '桥接站',
+    vodId: 'hxq-2',
+  ),
+};
+
+const _decision = PlaybackDecision(
+  action: PlaybackAction.direct,
+  url: 'http://fixture/media',
+);
+
+/// 目录记录专用：线路补齐由用例用 Completer 控制，解析不走 `_PendingState` 的断言。
+class _FolderState extends _PendingState {
+  final lines = Completer<PlaybackLines?>();
+  final lineCalls = <({String siteKey, String vodId, String sourceKey})>[];
+
+  @override
+  Future<PlaybackDecision?> resolvePlayback({
+    required String episodeTarget,
+    String? flag,
+    String? vodId,
+    Site? siteOverride,
+    SiteService? serviceOverride,
+    bool Function()? isCurrent,
+    int? qualityIndex,
+    String? preferredParseName,
+  }) {
+    resolutions++;
+    return playback.future;
+  }
+
+  @override
+  Future<PlaybackLines?> playLinesForRecord({
+    required String siteKey,
+    required String vodId,
+    String vodName = '',
+    String sourceKey = '',
+    bool Function()? isCurrent,
+  }) {
+    lineCalls.add((siteKey: siteKey, vodId: vodId, sourceKey: sourceKey));
+    return lines.future;
+  }
+}
 
 void main() {
   tearDown(dismissAllToasts);
@@ -297,5 +394,101 @@ void main() {
     await tester.pump();
     expect(find.byKey(_feedbackKey), findsNothing);
     expect(toastCenter.toasts, isEmpty);
+  });
+
+  testWidgets('目录记录：进播放器前就取好线路，request 直接带线路与路由', (tester) async {
+    final state = _FolderState();
+    addTearDown(state.dispose);
+    final navigator = GlobalKey<NavigatorState>();
+    final observer = _PushObserver();
+    final context = await _pumpEntry(
+      tester,
+      state,
+      navigator,
+      observer: observer,
+      history: _folderHistory,
+    );
+    // 观察者也会收到启动时首页那次 push，用身份比较而不是判空。
+    final homeRoute = observer.last;
+    await tester.tap(find.text('续播'));
+    await tester.pump();
+    state.home.complete();
+    await tester.pump();
+    // 还没 push：线路预取已经发出去了。
+    expect(state.lineCalls, hasLength(1));
+    expect(state.lineCalls.single.vodId, 'atvp_detail:131957');
+    expect(identical(observer.last, homeRoute), isTrue);
+    state.lines.complete(
+      PlaybackLines(lines: _folderLines, routes: _folderRoutes),
+    );
+    state.playback.complete(_decision);
+    await tester.runAsync(() async {
+      await Future<void>.delayed(Duration.zero);
+      final route = observer.last! as MaterialPageRoute<void>;
+      final player = route.builder(context) as PlayerPage;
+      // 断言的是**push 出去的那个 request**：线路、路由、命中线路与集下标成对。
+      expect(player.request.playLines, _folderLines);
+      expect(player.request.lineRoutes, _folderRoutes);
+      expect(player.request.flag, '丫仙女');
+      expect(player.request.playbackFlag, '丫仙女');
+      expect(player.request.episodeIndex, 0);
+      expect(player.request.episodeTarget, '1@20465');
+      navigator.currentState!.pop();
+    });
+    await tester.pump();
+    expect(find.byKey(_feedbackKey), findsNothing);
+    expect(toastCenter.toasts, isEmpty);
+  });
+
+  testWidgets('目录记录预取超时：仍在超时后起播，不带线路、无 toast、留 debug', (tester) async {
+    // 超时后播放器会真的被 push 上来，先把 media_kit / window_manager 的
+    // 平台通道 mock 掉，否则构建 PlayerPage 会抛 MissingPluginException。
+    installMediaKitMocks(tester);
+    installWindowManagerMocks(tester);
+    final state = _FolderState();
+    addTearDown(state.dispose);
+    final navigator = GlobalKey<NavigatorState>();
+    final observer = _PushObserver();
+    final context = await _pumpEntry(
+      tester,
+      state,
+      navigator,
+      observer: observer,
+      history: _folderHistory,
+      linesTimeout: const Duration(milliseconds: 20),
+    );
+    final homeRoute = observer.last;
+    await tester.tap(find.text('续播'));
+    await tester.pump();
+    state.home.complete();
+    await tester.pump();
+    expect(state.lineCalls, hasLength(1));
+    // 线路永远不完成：只靠超时收口。
+    state.playback.complete(_decision);
+    await tester.pump(const Duration(milliseconds: 5));
+    expect(
+      identical(observer.last, homeRoute),
+      isTrue,
+      reason: '超时之前不得提前起播',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    final route = observer.last! as MaterialPageRoute<void>;
+    final player = route.builder(context) as PlayerPage;
+    // 超时只是没线路，其余字段照旧（未命中就不硬塞）。
+    expect(player.request.playLines, isEmpty);
+    expect(player.request.lineRoutes, isEmpty);
+    expect(player.request.flag, '丫仙女');
+    expect(player.request.episodeIndex, 0);
+    navigator.currentState!.pop();
+    await tester.pump();
+    expect(toastCenter.toasts, isEmpty);
+    final debug = state.log.entries.where(
+      (entry) =>
+          entry.scope == 'player' &&
+          entry.level == LogLevel.debug &&
+          entry.message.contains('预取线路超时'),
+    );
+    expect(debug, hasLength(1));
+    expect(debug.single.message, contains('atvp_detail:131957'));
   });
 }
