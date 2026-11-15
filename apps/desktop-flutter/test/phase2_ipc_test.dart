@@ -389,8 +389,14 @@ void main() {
       final init = host.initResult!;
       expect(init.majorCompatible, isTrue);
       expect(init.capabilities, containsAll(['home', 'play']));
-      expect(host.process.isolation.level, startsWith('job-object'));
-      expect(host.process.isolation.canTerminateTree, isTrue);
+      if (Platform.isWindows) {
+        expect(host.process.isolation.level, startsWith('job-object'));
+        expect(host.process.isolation.canTerminateTree, isTrue);
+      } else {
+        // POSIX 没有 Job Object：如实断言实现提供的能力，不宣称强隔离。
+        expect(host.process.isolation.level, 'process-only');
+        expect(host.process.isolation.canTerminateTree, isFalse);
+      }
 
       // 未声明 capability 的方法必须返回 SPIDER_UNSUPPORTED（§9.7）。
       await expectLater(
@@ -677,9 +683,16 @@ void main() {
 
       final pid = int.parse(File(marker).readAsStringSync().trim());
       await _waitFor(() => !host.process.isRunning, timeoutMs: 8000);
-      // Job Object 的 kill-on-close 必须连孙进程一起终止。
-      final stillAlive = await _processAlive(pid);
-      expect(stillAlive, isFalse, reason: '孙进程 pid=$pid 不应残留');
+      if (Platform.isWindows) {
+        // Job Object 的 kill-on-close 必须连孙进程一起终止。
+        final stillAlive = await _processAlive(pid);
+        expect(stillAlive, isFalse, reason: '孙进程 pid=$pid 不应残留');
+      } else {
+        // POSIX 只能终止直接子进程：断言能力边界，并清掉本用例派生的孙进程。
+        expect(host.process.isolation.canTerminateTree, isFalse,
+            reason: 'POSIX 仅提供 process-only 隔离，不得宣称可终止进程树');
+        await Process.run('kill', ['-9', '$pid']);
+      }
       await host.destroy();
     });
 
@@ -848,6 +861,11 @@ Future<bool> _processAlive(int pid) async {
 
 /// 把目录修改时间改到 2 小时前，模拟遗留目录。
 Future<void> _touchOld(Directory directory) async {
+  if (!Platform.isWindows) {
+    // POSIX 没有 powershell；touch 与 cleanStaleWorkDirs 的 mtime 判定一致。
+    await Process.run('touch', ['-d', '2 hours ago', directory.path]);
+    return;
+  }
   try {
     await Process.run('powershell', [
       '-NoProfile',

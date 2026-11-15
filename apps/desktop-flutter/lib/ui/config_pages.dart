@@ -88,7 +88,8 @@ class _ConfigPageState extends State<ConfigPage> {
       _busy = false;
       _resultIsError = !succeeded;
       _resultMessage = succeeded
-          ? '导入成功：${widget.state.config?.sites.length ?? 0} 个站点，'
+          ? '导入成功：${widget.state.config?.sites.length ?? 0} 个站点'
+                '（可用 ${widget.state.usableSiteCount} 个），'
                 '${widget.state.config?.lives.length ?? 0} 个直播源'
           : widget.state.lastError?.userMessage ?? '导入失败';
     });

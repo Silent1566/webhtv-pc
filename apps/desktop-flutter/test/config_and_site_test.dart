@@ -81,6 +81,105 @@ void main() {
       await temp.delete(recursive: true);
     });
 
+    group('okhttp UA 配置下载', () {
+      late HttpServer uaServer;
+      late String uaBaseUrl;
+      late ConfigImportService defaultService;
+
+      setUp(() async {
+        uaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        uaBaseUrl = 'http://127.0.0.1:${uaServer.port}';
+        defaultService = ConfigImportService();
+        addTearDown(() async {
+          defaultService.close();
+          await uaServer.close(force: true);
+        });
+
+        uaServer.listen((request) async {
+          final userAgent = request.headers.value(HttpHeaders.userAgentHeader);
+          final response = request.response;
+          if (userAgent != 'okhttp' &&
+              !(userAgent?.startsWith('okhttp/') ?? false)) {
+            response.headers.contentType = ContentType.html;
+            response.write('<html><body>Configuration landing page</body></html>');
+            await response.close();
+            return;
+          }
+
+          response.headers.contentType = ContentType.json;
+          switch (request.uri.path) {
+            case '/redirect':
+              response.statusCode = HttpStatus.found;
+              response.headers.set(HttpHeaders.locationHeader, '/redirect-hop');
+            case '/redirect-hop':
+              response.statusCode = HttpStatus.found;
+              response.headers.set(HttpHeaders.locationHeader, '/config.json');
+            case '/repository.json':
+              response.write(jsonEncode({
+                'urls': [
+                  {'name': 'okhttp 仓库条目', 'url': '$uaBaseUrl/child.json'},
+                ],
+              }));
+            case '/config.json':
+            case '/child.json':
+              response.write(jsonEncode({
+                'name': 'okhttp 配置',
+                'sites': [
+                  {
+                    'key': 'okhttp-only',
+                    'name': 'okhttp 站点',
+                    'type': 1,
+                    'api': '$uaBaseUrl/api/site',
+                  },
+                ],
+              }));
+            default:
+              response.statusCode = HttpStatus.notFound;
+          }
+          await response.close();
+        });
+      });
+
+      for (final path in ['/config.json', '/redirect', '/repository.json']) {
+        test('默认导入服务可读取 okhttp 专用端点 $path', () async {
+          final imported = await defaultService.import(
+            ConfigSource.parse('$uaBaseUrl$path'),
+          );
+          if (path == '/repository.json') {
+            expect(imported.isRepository, isTrue);
+            expect(imported.repositoryEntries.single.name, 'okhttp 仓库条目');
+          }
+          final config = imported.isRepository
+              ? await defaultService.expandRepository(imported)
+              : imported;
+          expect(config.contentType, 'application/json; charset=utf-8');
+          expect(config.config!.name, 'okhttp 配置');
+          expect(config.config!.sites.single.key, 'okhttp-only');
+          expect(config.config!.sites.single.name, 'okhttp 站点');
+          expect(config.config!.sites.single.api, '$uaBaseUrl/api/site');
+          expect(
+            config.origin,
+            '$uaBaseUrl${path == '/repository.json' ? '/child.json' : '/config.json'}',
+          );
+        });
+      }
+
+      test('注入的 HttpClient 保留自身 UA，不被配置 UA 覆盖', () async {
+        // 契约：配置 UA 只加在本类自建的客户端上；调用方注入客户端时不得改写。
+        final service = ConfigImportService(
+          loader: ConfigLoader(httpClient: HttpClient()),
+        );
+        addTearDown(service.close);
+
+        final error = await _capture(
+          () => service.import(ConfigSource.parse('$uaBaseUrl/config.json')),
+        );
+
+        // 注入的客户端仍是 Dart 默认 UA，站点的 UA 分流只回落地页 HTML。
+        expect(error.kind, AppErrorKind.configInvalid);
+      });
+    });
+
     test('猫源 bundle 缺 Node 运行时只挡猫源，普通配置照常导入', () async {
       // 用户实测 2026-10-31：没有解析到 node 时，连 T4 的 http JSON 配置都被
       // 「未检测到 Node 运行时，无法导入配置」挡住。门禁现在只留在猫源分支。

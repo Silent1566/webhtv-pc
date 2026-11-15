@@ -66,6 +66,7 @@ import 'live_playback_session.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
+import 'player_parse_source_strip.dart';
 import 'player_quality_panel.dart';
 import 'theme.dart';
 import 'window_mode.dart';
@@ -881,14 +882,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _showPlayerMessage(String text, {ToastKind kind = ToastKind.info}) {
     if (!mounted) return;
-    // 错误给足阅读时间但不赖着：不传 duration，让 toast.dart 按类型取默认值
-    // （error -> 15s，info/success -> 4s）。只有信息/成功在播放器里收窄到 3s：
-    // 播放页的操作反馈更频繁，4s 会让右下角一直有东西。
-    showToast(
-      text,
-      kind: kind,
-      duration: kind == ToastKind.error ? null : const Duration(seconds: 3),
-    );
+    // 时长不在这里定：不传 duration，让 toast.dart 按类型取默认值
+    // （error -> 30s，info/success -> 15s）。
+    // 这里曾把信息/成功单独收窄到 3 秒，理由是「播放页反馈频繁，怕右下角一直有东西」；
+    // 但 3 秒连「已标记片头 12:34」这种一句话都读不完，且播放页的提示多半是低频的
+    // 「已标记 / 已清除」，堆积不是真问题（可见栈上限 4 条兜底）。于是回到全站同一套时长。
+    showToast(text, kind: kind);
   }
 
   /// 连播闸门：单次守卫 + 真播完判定（`design/03` §4.1）。
@@ -3270,13 +3269,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (decision?.url == null) {
         throw AppError(AppErrorKind.playbackUrlMissing, '本文件没有可用播放地址');
       }
+      // 新结果没有可切换解析源时丢掉上一次的手动指定：留着它会被带到
+      // 下一个需要解析的集，变成用户没选过的解析器。
+      if (decision!.parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
         _request = intent.copyWith(
-          url: decision!.url!,
+          url: decision.url!,
           headers: decision.headers?.asRequestHeaders ?? const {},
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
           qualities: decision.qualities,
           qualityIndex: decision.qualityIndex,
+          // 解析选项随本次决策**无条件**覆盖（含空值）：直链结果必须清掉
+          // 上一次解析留下的入口，否则控制区会挂着点了不生效的解析条。
+          parseSources: decision.parseSources,
+          parseSource: decision.parseSource,
           subtitles: decision.subs,
           danmaku: decision.danmaku,
           startPosition: start,
@@ -3509,6 +3515,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final int qualityIndex;
       final Map<String, String> headers;
       final Map<String, String> subtitleHeaders;
+      // 换集后解析源选择也要跟着这一集的决策走：不同线路/不同集可以是不同
+      // 的解析路径（直链集不该继承上一集的解析条）。
+      final List<String> parseSources;
+      final String parseSource;
       // 提到外层：下面写进度归属时要判断「这一集是不是外部并入线路」。
       final route = _request.lineRoutes[flag];
       if (_request.directUrl) {
@@ -3519,6 +3529,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         qualityIndex = 0;
         headers = _request.headers;
         subtitleHeaders = _request.subtitleHeaders;
+        // 直播/本地直连不经站点解析：没有可切换的解析源。
+        parseSources = const [];
+        parseSource = '';
       } else {
         // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
         final decision = await _resolvePlayback(
@@ -3545,8 +3558,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         qualityIndex = decision.qualityIndex;
         headers = decision.headers?.asRequestHeaders ?? const {};
         subtitleHeaders = decision.assetHeaders?.asRequestHeaders ?? const {};
+        parseSources = decision.parseSources;
+        parseSource = decision.parseSource;
       }
       if (!mounted || generation != _mediaGeneration) return;
+      // 换集后新结果没有可切换解析源时，手动指定不再成立。
+      if (parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
         _loadError = null;
         _request = _request.copyWith(
@@ -3562,6 +3579,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           subtitleHeaders: subtitleHeaders,
           qualities: qualities,
           qualityIndex: qualityIndex,
+          parseSources: parseSources,
+          parseSource: parseSource,
           episodeIndex: episodeIndex,
           clearStartPosition: true,
           // 种子属于**原记录那一集**：换集后必须一起清掉，否则会被当成
@@ -4033,6 +4052,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                           progressRow: _buildProgressRow(),
                           actionButtons: _buildActionButtons(),
                           actionGroups: _actionGroups(),
+                          extraRow: _buildParseSourceStrip(),
                         ),
                       ),
                     ),
@@ -4820,6 +4840,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
       final position = _controller.position;
       final playing = _controller.isPlaying;
+      // 同上：新画质结果没有可切换解析源时，手动指定不再成立。
+      if (decision.parseSources.isEmpty) _parseSourceOverride = null;
       _beginMediaTransition();
       setState(() {
         _request = intent.copyWith(
@@ -4828,6 +4850,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
           qualities: decision.qualities,
           qualityIndex: decision.qualityIndex,
+          parseSources: decision.parseSources,
+          parseSource: decision.parseSource,
           subtitles: decision.subs,
           danmaku: decision.danmaku,
           startPosition: position,
@@ -4906,16 +4930,24 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           episodeIndex: _request.episodeIndex,
           onSelectEpisode: (index) => unawaited(_playEpisode(index)),
           onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
-          // 解析源不是每条配置都有多个；面板只在 >1 时渲染这一行。
-          parseSources: [
-            for (final entry in widget.state.config?.playbackParsers ??
-                const <ParseEntry>[])
-              entry.name,
-          ],
-          parseSource: _parseSourceOverride ?? superParseEntryName,
-          onSelectParseSource: (name) => unawaited(_switchParseSource(name)),
         ),
       ),
+    );
+  }
+
+  /// 控制区的解析源条；本次播放没有可切换的解析源时返回 `null`。
+  ///
+  /// 判定只读**本次播放的解析结果**（`PlaybackRequest.parseSources`），不看配置
+  /// 里有没有解析器：直链播放、本地文件与直播都不产生解析结果，读配置就会凭空
+  /// 给出一个点了不生效的入口。少于两项也不给——只有一个解析源时选不选都一样。
+  Widget? _buildParseSourceStrip() {
+    if (_isLive || _isCatchup) return null;
+    final sources = _request.parseSources;
+    if (sources.length < 2) return null;
+    return PlayerParseSourceStrip(
+      sources: sources,
+      selected: _request.parseSource,
+      onSelect: (name) => unawaited(_switchParseSource(name)),
     );
   }
 

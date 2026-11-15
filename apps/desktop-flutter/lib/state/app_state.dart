@@ -151,7 +151,12 @@ const String appVersion = String.fromEnvironment(
   'APP_VERSION',
   defaultValue: '0.1.0',
 );
-const String appBuildFlavor = 'MVP-A (Windows)';
+final String appBuildFlavor = 'MVP-A (${switch (Platform.operatingSystem) {
+  'windows' => 'Windows',
+  'linux' => 'Linux',
+  'macos' => 'macOS',
+  final other => other,
+}})';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
 /// 架构、播放器引擎和运行时版本”）。
@@ -2709,6 +2714,13 @@ AiContentCompletion? aiContentCompletion,
 
   bool get hasConfig => effectiveConfig?.sites.isNotEmpty ?? false;
 
+  /// 当前配置里**真正能用**的站点数（与站点选择器同一套判定）。
+  ///
+  /// 只报总数会误导：一份 111 站点的配置可能全指向同一个带原生库的 jar，
+  /// 导入成功但一个都用不了（用户 2026-11 反馈）。
+  int get usableSiteCount =>
+      siteItems.where((item) => item.availability.available).length;
+
   /// 站点列表(含运行时可用性),隐藏 `hide=1` 的站点。
   ///
   /// 使用实例级 [SpiderRouter.classifySite] 而非静态 [SpiderRouter.classify],
@@ -2881,7 +2893,7 @@ AiContentCompletion? aiContentCompletion,
     }
 
     var platform = Platform.operatingSystem;
-    var architecture = Platform.version.split(' ').first;
+    var architecture = _abiArchitecture();
     if (Platform.isWindows) {
       platform = 'windows';
       architecture = _windowsArchitecture();
@@ -3171,6 +3183,25 @@ AiContentCompletion? aiContentCompletion,
     if (await target.exists()) await target.delete();
     await temp.rename(target.path);
   }
+
+  /// 运行时架构取自 ABI；`Platform.version` 是 Dart 版本串，不含架构。
+  String _abiArchitecture() => switch (Abi.current()) {
+    Abi.linuxX64 ||
+    Abi.macosX64 ||
+    Abi.windowsX64 ||
+    Abi.androidX64 ||
+    Abi.iosX64 => 'x64',
+    Abi.linuxArm64 ||
+    Abi.macosArm64 ||
+    Abi.windowsArm64 ||
+    Abi.androidArm64 ||
+    Abi.iosArm64 => 'arm64',
+    Abi.linuxIA32 || Abi.windowsIA32 || Abi.androidIA32 => 'x86',
+    Abi.linuxArm || Abi.androidArm => 'arm',
+    Abi.linuxRiscv64 => 'riscv64',
+    Abi.linuxRiscv32 => 'riscv32',
+    _ => 'unknown',
+  };
 
   String _windowsArchitecture() {
     final env = Platform.environment['PROCESSOR_ARCHITECTURE'];
@@ -3964,10 +3995,15 @@ AiContentCompletion? aiContentCompletion,
         _resetCategoryPaging();
       }
 
-      _notice = config.notice ?? '配置导入成功：${config.sites.length} 个站点';
+      // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
+      // 以为导入即可用，实际整份配置可能没有一个站点能跑。
+      final usableSites = usableSiteCount;
+      _notice = config.notice ??
+          '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
       _configPhase = LoadPhase.ready;
       log.info(
         '配置导入成功 name=$name sites=${config.sites.length} '
+        'usable=$usableSites '
         'lives=${config.lives.length} headers=${config.headers.length} '
         'origin=${redactUrl(imported.origin)}',
         scope: 'config',
@@ -7053,6 +7089,10 @@ AiContentCompletion? aiContentCompletion,
       format: decision.format,
       reason: decision.reason,
       flag: decision.flag,
+      // 解析选项不是地址的一部分，代理换 url 后必须原样带过：丢了它，
+      // 走代理的解析播放就再也没有解析入口。
+      parseSources: decision.parseSources,
+      parseSource: decision.parseSource,
       // 字幕不随代理地址变化：原样透传（§10.3）。
       subs: decision.subs,
       // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。

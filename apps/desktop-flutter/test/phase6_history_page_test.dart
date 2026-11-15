@@ -835,9 +835,9 @@ void main() {
       await pumpHistory(tester);
 
       await tester.tap(find.byKey(const ValueKey('history-row-1')));
-      // 不能用 `pumpAndSettle`：错误通知带 15 秒倒计时动画，settle 会一路把它
+      // 不能用 `pumpAndSettle`：错误通知带 30 秒倒计时动画，settle 会一路把它
       // 推到自动关闭，断言就没东西可看了（这正是本文件当初按「错误永不关闭」
-      // 规避的那个陷阱，错误改成 15 秒后该规避失效）。显式推两帧即可。
+      // 规避的那个陷阱，错误改成有限时长后该规避失效）。显式推两帧即可。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 

@@ -31,21 +31,28 @@ enum ToastKind {
   error,
 }
 
-/// info / success 通知的默认驻留时长（约 4 秒）。
-const Duration kToastDefaultDuration = Duration(seconds: 4);
-
-/// 错误通知的默认驻留时长：15 秒。
+/// info / success 通知的默认驻留时长：15 秒。
 ///
-/// 为什么是 15 秒而不是 4 秒 / 永不关闭：
-/// - 4 秒读不完一条带错误码的失败原因，用户只能去日志里翻；
+/// 为什么从 4 秒提到 15 秒：4 秒是「扫一眼」的长度，读不完一条带站点名、集数或错误码的
+/// 文案——中文长句在 336px 宽的窄卡里要换成两三行，视线还没落到第二行就该关了。
+/// 抬到 15 秒的代价由两条既有机制兜住：可见栈上限 4 条（[kToastMaxVisible]）防堆积，
+/// 悬停暂停倒计时（见 [ToastHost]）让用户能按住读完。
+const Duration kToastDefaultDuration = Duration(seconds: 15);
+
+/// 错误通知的默认驻留时长：30 秒。
+///
+/// 为什么是 30 秒而不是 15 秒 / 永不关闭：
+/// - 错误文案最长（失败原因 + 错误码 + 就地动作），15 秒仍要一口气读完；
+///   信息类已经是 15 秒，错误必须比它明显更长，否则「轻重」又混在一起了；
 /// - 但「永不关闭」已被证伪——常驻的错误通知**物理压住**了右下角的集数卡片网格
 ///   和换源浮层的「并入」按钮，它们是右下角唯一的点击目标，被盖住就等于功能不可用
 ///   （相关测试只能先 `dismissAllToasts()` 再点，等于要求用户先手动收提示）。
-/// 15 秒是这两端之间取的值：足够读完一整条错误，又不至于一直占着那个角。
+/// 30 秒是这两端之间取的值：足够读完一整条错误，又终究会让开那个角；
+/// 等不及的人随时可以按关闭按钮，不必等它自己走完。
 ///
 /// 注意这**不改变** [AppToast.duration] 的契约：`Duration.zero` 依旧是「永不自动关闭」，
 /// 只是错误类型不再取到 zero 这个默认值。
-const Duration kToastErrorDuration = Duration(seconds: 15);
+const Duration kToastErrorDuration = Duration(seconds: 30);
 
 /// 可见栈上限。超出时丢弃**最旧**的一条：新的通知永远离用户最近。
 const int kToastMaxVisible = 4;
@@ -160,7 +167,7 @@ class ToastCenter extends ChangeNotifier {
 
   /// 推入一条通知，返回它的 id。
   ///
-  /// [duration] 为 null 时按类型取默认值：info/success 约 4 秒，error 15 秒
+  /// [duration] 为 null 时按类型取默认值：info/success 15 秒，error 30 秒
   /// （为什么不是永不关闭，见 [kToastErrorDuration]）。
   int show(
     String message, {
@@ -340,7 +347,15 @@ class _ToastCardState extends State<_ToastCard> with TickerProviderStateMixin {
     _visual.forward();
     final duration = widget.toast.duration;
     if (duration > Duration.zero) {
-      final controller = AnimationController(vsync: this, duration: duration);
+      // `AnimationBehavior.preserve` 不是可选项：这个控制器是**计时器**，不是动画。
+      // 平台打开「减少动态效果」（无障碍 / GTK 关闭动画）时，默认的 `normal` 行为会把
+      // 时长压到 **5%**——30 秒的错误通知 1.5 秒就没了，用户连第一行都没读完。
+      // 减动态该减的是入场/退场的位移与淡入（见 `_visual`），不该减阅读时间。
+      final controller = AnimationController(
+        vsync: this,
+        duration: duration,
+        animationBehavior: AnimationBehavior.preserve,
+      );
       controller.addStatusListener(_onCountdownStatus);
       _countdown = controller..forward();
     }

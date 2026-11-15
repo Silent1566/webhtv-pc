@@ -2261,6 +2261,10 @@ class _DetailPageState extends State<DetailPage> {
               // 当前集的多画质候选随请求下传：播放器据此显示入口、按索引重解析。
               qualities: decision.qualities,
               qualityIndex: decision.qualityIndex,
+              // 解析选项由解析层给出：控制区解析条只在本次播放确实可切换时
+              // 出现，不在 UI 侧读全局配置推断。
+              parseSources: decision.parseSources,
+              parseSource: decision.parseSource,
               // 历史里存**站点入口目标**（`episode.url`），而不是这个解析后的
               // 可播地址（带时效签名，站点不认）。续播时要拿它回传站点重解析。
               episodeTarget: episode.url,
@@ -4316,8 +4320,7 @@ class _UnsupportedSiteHint extends StatelessWidget {
     return _EmptyHint(
       title: '站点运行时未安装或不支持',
       message:
-          '站点「${site.name}」需要 ${availability.runtimeName} 运行时'
-          '${availability.stage == null ? "" : "（计划阶段：${availability.stage}）"}。\n'
+          '站点「${site.name}」需要 ${availability.runtimeName} 运行时。\n'
           '${availability.reason ?? ""}\n'
           '请在站点列表中选择其他可运行站点。',
     );
