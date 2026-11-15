@@ -276,6 +276,35 @@ class ProxySession {
   /// 这些主机需要被授权以继续代理 HLS 子清单/分片。
   final Set<String> derivedHosts = {};
 
+  /// 重写清单时引用过的子资源（分片、子清单、密钥）与其短码。
+  ///
+  /// 为什么要有：清单里每条子资源都要写成本地代理地址，长表单条 500+ 字符。
+  /// 一份实测 24 KB 的真实清单（739 段 × 10s）重写后变成 240 KB，播放器每次
+  /// 重载都要多读一个数量级。短码把每条压到几十字符，取回时只在本会话内还原，
+  /// 授权范围不变（每个目标被记下时都已通过同一套主机白名单）。
+  static const int maxChildTargets = 4096;
+
+  final List<Uri> _childTargets = <Uri>[];
+  final Map<String, int> _childIndexes = <String, int>{};
+
+  /// 子资源的短码（同一目标复用同一个编号）；表满返回 null。
+  ///
+  /// 表满时调用方必须退回长表单条 URL：清单变大可以接受，把地址丢掉不行。
+  int? indexOfChild(Uri target) {
+    final key = target.toString();
+    final existing = _childIndexes[key];
+    if (existing != null) return existing;
+    if (_childTargets.length >= maxChildTargets) return null;
+    final index = _childTargets.length;
+    _childTargets.add(target);
+    _childIndexes[key] = index;
+    return index;
+  }
+
+  /// 短码还原；越界或负数返回 null（调用方必须以 4xx 拒绝）。
+  Uri? childTargetAt(int index) =>
+      index >= 0 && index < _childTargets.length ? _childTargets[index] : null;
+
   bool get expired => DateTime.now().isAfter(expiresAt);
 
   bool get usable => !revoked && !expired;
@@ -490,6 +519,125 @@ abstract final class HlsPlaylistRewriter {
     final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
     return path.endsWith('.m3u8') || path.endsWith('.m3u');
   }
+}
+
+/// HLS 清单形状：**只统计标签**，不含任何 URL（§11.3.1 的日志约束）。
+///
+/// 为什么要有它：进度条的总长完全照搬播放引擎，而 HLS 线路的引擎时长可能是
+/// 假的——实测同一部两小时的片子，载入时引擎只报 1.78s / 4.14s，界面把这句话
+/// 当真之后拇指到 2:19 就被钳住。只看引擎那一个点，分不清是「引擎算错了」
+/// 还是「清单本身就只有两分钟内容」，而这两种情况的修法相反。把清单侧的事实
+/// （段数、Σ `#EXTINF`、有无 `#EXT-X-ENDLIST`、是否主清单）与引擎时长的变化放在
+/// 同一份日志里，才有可能定论。
+class HlsPlaylistShape {
+  const HlsPlaylistShape({
+    required this.segments,
+    required this.totalSeconds,
+    required this.hasEndList,
+    required this.playlistType,
+    required this.isMaster,
+    required this.hasByteRange,
+    required this.hasParts,
+    required this.hasMap,
+    required this.hasKey,
+    required this.discontinuities,
+  });
+
+  /// 分片数：数 `#EXTINF` 的条数（与 demuxer 求和的口径一致，不看 URI 行）。
+  final int segments;
+
+  /// Σ `#EXTINF`（秒）：点播清单里它就是引擎本该上报的总时长。
+  final double totalSeconds;
+
+  /// 有 `#EXT-X-ENDLIST` 才是「点播完结」；缺失时 ffmpeg 侧时长是 N/A。
+  final bool hasEndList;
+
+  /// `#EXT-X-PLAYLIST-TYPE` 的值（VOD/EVENT），没有该标签时为 null。
+  final String? playlistType;
+
+  /// 主清单（含 `#EXT-X-STREAM-INF`）：本身没有分片，时长得问子清单。
+  final bool isMaster;
+
+  /// 分片按 `#EXT-X-BYTERANGE` 切：同一个文件被反复请求。
+  final bool hasByteRange;
+
+  /// 含 `#EXT-X-PART`：低延迟切片，通常是滚动窗口而不是完整点播。
+  final bool hasParts;
+
+  /// 含 `#EXT-X-MAP`：fMP4 初始化段，广告贴片常在这里换轨。
+  final bool hasMap;
+
+  /// 含 `#EXT-X-KEY`：分片加密。
+  final bool hasKey;
+
+  /// `#EXT-X-DISCONTINUITY` 数量：贴片广告与正片的分界通常就在这几处。
+  final int discontinuities;
+
+  static HlsPlaylistShape parse(String text) {
+    var segments = 0;
+    var totalSeconds = 0.0;
+    var hasEndList = false;
+    var isMaster = false;
+    var hasByteRange = false;
+    var hasParts = false;
+    var hasMap = false;
+    var hasKey = false;
+    var discontinuities = 0;
+    String? playlistType;
+    for (final raw in const LineSplitter().convert(text)) {
+      final line = raw.trim();
+      if (line.length < 4 || !line.startsWith('#')) continue;
+      final upper = line.toUpperCase();
+      if (upper.startsWith('#EXTINF:')) {
+        segments += 1;
+        final value = line.substring('#EXTINF:'.length).split(',').first.trim();
+        totalSeconds += double.tryParse(value) ?? 0;
+      } else if (upper.startsWith('#EXT-X-ENDLIST')) {
+        hasEndList = true;
+      } else if (upper.startsWith('#EXT-X-PLAYLIST-TYPE:')) {
+        playlistType = line.substring('#EXT-X-PLAYLIST-TYPE:'.length).trim();
+      } else if (upper.startsWith('#EXT-X-STREAM-INF')) {
+        isMaster = true;
+      } else if (upper.startsWith('#EXT-X-BYTERANGE')) {
+        hasByteRange = true;
+      } else if (upper.startsWith('#EXT-X-PART')) {
+        hasParts = true;
+      } else if (upper.startsWith('#EXT-X-MAP')) {
+        hasMap = true;
+      } else if (upper.startsWith('#EXT-X-KEY')) {
+        hasKey = true;
+      } else if (upper.startsWith('#EXT-X-DISCONTINUITY') &&
+          !upper.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE')) {
+        // 序号标签不是断点，跟着算进去会把「广告分界」的数量放大。
+        discontinuities += 1;
+      }
+    }
+    return HlsPlaylistShape(
+      segments: segments,
+      totalSeconds: totalSeconds,
+      hasEndList: hasEndList,
+      playlistType: playlistType,
+      isMaster: isMaster,
+      hasByteRange: hasByteRange,
+      hasParts: hasParts,
+      hasMap: hasMap,
+      hasKey: hasKey,
+      discontinuities: discontinuities,
+    );
+  }
+
+  /// 一行日志用的紧凑描述（只含标签事实，没有 URL）。
+  String get summary =>
+      'segments=$segments '
+      'extinfSum=${totalSeconds.toStringAsFixed(1)}s '
+      'endlist=${hasEndList ? "yes" : "no"} '
+      'type=${playlistType ?? "-"} '
+      'master=${isMaster ? "yes" : "no"} '
+      'byrange=${hasByteRange ? "yes" : "no"} '
+      'parts=${hasParts ? "yes" : "no"} '
+      'map=${hasMap ? "yes" : "no"} '
+      'key=${hasKey ? "yes" : "no"} '
+      'disc=$discontinuities';
 }
 
 /// 需要跨 origin 移除的敏感 Header（§11.3.1）。

@@ -460,6 +460,61 @@ void main() {
       expect(body, contains('https://evil.example.com/seg2.ts'));
     });
 
+    // 缺陷：上游用 206 + Content-Range 回 `bytes=0-`，声明的是**上游那份**清单的
+    // 长度；重写后正文大了一个数量级（分片 URI 换成了代理地址）。原样透传时
+    // 播放器按声明长度截断，末尾的 `#EXT-X-ENDLIST` 读不到 —— HLS 被当成直播，
+    // 引擎上报的时长变成「已播 + 缓冲」的爬升值，进度条失真且不能拖动。
+    test('清单响应是完整实体：不转发上游 Content-Range（§11.4）', () async {
+      final session = newSession();
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/range-playlist.m3u8')),
+        range: 'bytes=0-',
+      );
+      expect(response.status, 200);
+      expect(response.headers.value(HttpHeaders.contentRangeHeader), isNull);
+      expect(
+        response.headers.value(HttpHeaders.contentLengthHeader),
+        '${response.body.length}',
+      );
+      // 上游声明的是它那份清单的长度；重写后必然更长，尾部必须完整到达。
+      final upstreamBytes = utf8.encode(upstream._playlist()).length;
+      expect(
+        response.body.length,
+        greaterThan(upstreamBytes),
+        reason: '重写后正文必然比上游那份长（分片 URI 换成了代理地址）',
+      );
+      expect(response.text, contains('#EXT-X-ENDLIST'));
+    });
+
+    test('清单子资源用会话短码，取回仍走同一套会话校验（§11.4）', () async {
+      final session = newSession();
+      final response = await _get(
+        client,
+        proxy.urlFor(session, upstream.uri('/index.m3u8')),
+      );
+      expect(response.status, 200);
+      final shortPrefix =
+          '${proxy.baseUrl}${LocalProxyServer.pathPrefix}${session.token}/i/';
+      expect(response.text, contains(shortPrefix));
+
+      // 短码只在本会话内可解：越界编号、别的会话都必须被拒绝。
+      final index = session.indexOfChild(upstream.uri('/seg0.ts'));
+      expect(index, isNotNull);
+      final child = await _get(client, '$shortPrefix$index');
+      expect(child.status, 200);
+      expect(child.body.length, 2048);
+      final outOfRange = await _get(client, '${shortPrefix}999999');
+      expect(outOfRange.status, 400);
+      final otherSession = newSession();
+      final foreign = await _get(
+        client,
+        '${proxy.baseUrl}${LocalProxyServer.pathPrefix}'
+        '${otherSession.token}/i/$index',
+      );
+      expect(foreign.status, 400);
+    });
+
     test('撤销会话后 token 立即失效（停止播放，§11.3.1）', () async {
       final session = newSession();
       expect(proxy.sessions.revoke(session.token), isTrue);
@@ -893,6 +948,28 @@ class _Upstream {
           charset: 'utf-8',
         );
         request.response.write('<html><body>站点错误页</body></html>');
+      case '/seg0.ts':
+        // 短码取回分片用；内容无关紧要，只看能不能被会话短码寻址。
+        await _serveBytes(request, 2048, 'video/mp2t');
+      case '/range-playlist.m3u8':
+        // 复现真实 CDN：`Range: bytes=0-` 用 206 致意，Content-Range 描述的是
+        // **上游这份**清单（300 字节），而代理重写后的正文要大一个数量级。
+        final playlistBody = Uint8List.fromList(utf8.encode(_playlist()));
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers.contentType = ContentType(
+          'application',
+          'vnd.apple.mpegurl',
+          charset: 'utf-8',
+        );
+        request.response.headers.set(
+          HttpHeaders.contentLengthHeader,
+          '${playlistBody.length}',
+        );
+        request.response.headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes 0-${playlistBody.length - 1}/${playlistBody.length}',
+        );
+        request.response.add(playlistBody);
       case '/index.m3u8':
         request.response.headers.contentType = ContentType(
           'application',

@@ -132,6 +132,17 @@ class LocalProxyServer {
   String urlFor(ProxySession session, Uri target) =>
       '$baseUrl$pathPrefix${session.token}/${encodeTarget(target)}';
 
+  /// 构造会话内子资源（分片、子清单、密钥）的代理地址。
+  ///
+  /// 先用会话短码 `…/p/<token>/i/<n>`：清单里每一条子资源都要写一个地址，长表
+  /// 单条 500+ 字符，一份实测 24 KB 的清单（739 段）重写后变成 240 KB。短码表满
+  /// 时退回 [urlFor] 的长表单条 URL，正确性不受上限影响。
+  String urlForChild(ProxySession session, Uri target) {
+    final index = session.indexOfChild(target);
+    if (index == null) return urlFor(session, target);
+    return '$baseUrl$pathPrefix${session.token}/i/$index';
+  }
+
   /// 目标 URL 编码：base64url 无填充，避免路径分隔符与 query 干扰路由解析。
   static String encodeTarget(Uri target) =>
       base64Url.encode(utf8.encode(target.toString())).replaceAll('=', '');
@@ -206,7 +217,15 @@ class LocalProxyServer {
       return;
     }
 
-    final target = decodeTarget(segments.sublist(2).join('/'));
+    // 3) 目标解析：`i/<n>` 是**本会话**的短码命名空间，其余按 base64 目标解码。
+    //    两套编码互不回落——短码越界就当作无法解析，绝不去当 base64 再解一次。
+    final payload = segments.sublist(2);
+    final Uri? target;
+    if (payload.length == 2 && payload[0] == 'i') {
+      target = session.childTargetAt(int.tryParse(payload[1]) ?? -1);
+    } else {
+      target = decodeTarget(payload.join('/'));
+    }
     if (target == null) {
       await _fail(request, 400, '目标 URL 无法解析');
       return;
@@ -462,7 +481,27 @@ class LocalProxyServer {
         (child) => _proxify(session, child),
       );
       final bytes = utf8.encode(rewritten);
-      _copySafeHeaders(response, upstream, contentLength: bytes.length);
+      _logPlaylistShape(
+        session,
+        upstreamText: originalText,
+        cleaned: cleaned,
+        upstreamBytes: body.length,
+        bytes: bytes.length,
+      );
+      // 重写后的清单是**新的实体**，必须按 200 完整返回。
+      //
+      // 绝不能转发上游的 `Content-Range`：上游用 `Range: bytes=0-` 回 206，
+      // 声明的是**它那份**清单的长度（实测 `bytes 0-24522/24523`），而重写后
+      // 的正文是 240311 字节（每条分片 URI 换成了代理地址）。播放器按声明长度
+      // 截断后，末尾的 `#EXT-X-ENDLIST` 永远读不到——HLS 会被当成直播，引擎上报
+      // 的时长变成「已播 + 缓冲」的爬升值，进度条从此失真、拖动也没了（§11.4）。
+      response.statusCode = HttpStatus.ok;
+      _copySafeHeaders(
+        response,
+        upstream,
+        contentLength: bytes.length,
+        synthesizedBody: true,
+      );
       response.headers.contentType = ContentType(
         'application',
         'vnd.apple.mpegurl',
@@ -529,7 +568,7 @@ class LocalProxyServer {
         ) ||
         (established != null && established == host);
     if (!allowed) return null;
-    return urlFor(session, child);
+    return urlForChild(session, child);
   }
 
   Map<String, String> _forwardHeaders({
@@ -591,26 +630,39 @@ class LocalProxyServer {
         : null;
   }
 
+  /// 复制可透传给播放器的上游 Header（白名单，§11.3.1）。
+  ///
+  /// [synthesizedBody] 为 true 表示正文是本地生成的（清单重写）：
+  /// `Content-Range`/`Accept-Ranges`/`ETag`/`Last-Modified` 描述的都是**上游
+  /// 那份**字节，与合成后的正文无关，一律不转发——否则播放器按上游长度截断，
+  /// 合成正文的尾部（例如 `#EXT-X-ENDLIST`）永远读不到。
   void _copySafeHeaders(
     HttpResponse response,
     HttpClientResponse upstream, {
     required int contentLength,
+    bool synthesizedBody = false,
   }) {
-    const passthrough = [
+    const alwaysPass = [
       HttpHeaders.contentTypeHeader,
+      HttpHeaders.cacheControlHeader,
+    ];
+    const upstreamOnly = [
       HttpHeaders.contentRangeHeader,
       HttpHeaders.acceptRangesHeader,
       HttpHeaders.lastModifiedHeader,
       HttpHeaders.etagHeader,
-      HttpHeaders.cacheControlHeader,
     ];
-    // Host：只复制已知安全的头，避免把上游 Set-Cookie 等透传给播放器。
-    for (final name in passthrough) {
+    // 只复制已知安全的头，避免把上游 Set-Cookie 等透传给播放器。
+    for (final name in [
+      ...alwaysPass,
+      if (!synthesizedBody) ...upstreamOnly,
+    ]) {
       final value = upstream.headers.value(name);
       if (value == null) continue;
       response.headers.set(name, value);
     }
-    if (upstream.statusCode == 206 &&
+    if (!synthesizedBody &&
+        upstream.statusCode == 206 &&
         upstream.headers.value(HttpHeaders.contentRangeHeader) == null) {
       // 206 必须带 Content-Range，否则播放器无法定位（§11.4）。
       response.headers.set(
@@ -690,6 +742,38 @@ class LocalProxyServer {
       note: note,
     );
     log.debug('代理 ${record.line}', scope: 'proxy');
+  }
+
+  /// 记录清单形状（诊断用：只写标签事实，不写任何 URL，§11.3.1）。
+  ///
+  /// 为什么必须记：进度条总长只能取自播放引擎，而 HLS 线路的引擎时长会骗人
+  /// ——实测同一部两小时的片子，载入时引擎只报 1.78s / 4.14s，界面把这句话
+  /// 当成总长之后拇指被钳在末端不再跟随。清单侧的事实（段数、Σ `#EXTINF`、
+  /// 有无 `#EXT-X-ENDLIST`）是唯一能区分「引擎算错」与「清单本来就只有两分钟」
+  /// 的证据，两种情况的修法相反，所以每次重写都留一行。
+  void _logPlaylistShape(
+    ProxySession session, {
+    required String upstreamText,
+    required HlsCleanResult cleaned,
+    required int upstreamBytes,
+    required int bytes,
+  }) {
+    // 引擎真正读的是清洗后的清单，所以形状以它为准：广告被删掉之后，引擎
+    // 本该上报的总长是「删完之后」的 Σ `#EXTINF`，不是上游那一份。
+    final played = HlsPlaylistShape.parse(cleaned.text);
+    log.debug(
+      '清单形状 token=${session.fingerprint} ${played.summary} '
+      'upstreamBytes=$upstreamBytes bytes=$bytes '
+      'adBlockRemoved=${cleaned.removedSegments}',
+      scope: 'proxy',
+    );
+    if (!cleaned.changed) return;
+    // 删过分片时再记一条上游形状：否则「少了多少秒」只能靠猜。
+    final upstream = HlsPlaylistShape.parse(upstreamText);
+    log.debug(
+      '清单形状（上游） token=${session.fingerprint} ${upstream.summary}',
+      scope: 'proxy',
+    );
   }
 
   static bool _isLoopback(InternetAddress address) {
