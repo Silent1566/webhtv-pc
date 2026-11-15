@@ -286,6 +286,20 @@ class SidecarServer:
 
     # --------------------------------------------------------------- 生命周期
 
+    def _join_workers(self, threads: list[threading.Thread], timeout: float = 10.0) -> None:
+        """读循环结束后，等在途 worker 把响应写完再返回。
+
+        这些 worker 是 daemon 线程：`serve()` 一返回，解释器就把它们连同未落盘的
+        stdout 一起丢掉。stdin 关闭（EOF）时最后一批请求正处于「已派发、还没写完」
+        的窗口里，不等它们就会丢响应——宿主看到的是「发出去没有回音」。
+        """
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            thread.join(remaining)
+
     def _drain_in_flight(self, context: CallContext, timeout: float = 5.0) -> None:
         """等其它在途请求把响应写完（最多 timeout 秒）。
 
@@ -321,9 +335,16 @@ class SidecarServer:
                 if not isinstance(message, Mapping) or not message.get("id"):
                     log("丢弃非法消息：缺少 id/method")
                     continue
+                # 在**读循环**里登记在途请求，而不是在 worker 线程里：drain 依赖的
+                # 顺序必须与 stdin 顺序一致，否则 destroy 可能先看到「没有在途」
+                # 而抢在 home 之前登记/开跑，照样把响应截断。
+                request_id = str(message["id"])
+                cancel_event = threading.Event()
+                with self._state_lock:
+                    self._cancel_events[request_id] = cancel_event
                 thread = threading.Thread(
                     target=self._dispatch,
-                    args=(message,),
+                    args=(message, cancel_event),
                     daemon=True,
                 )
                 thread.start()
@@ -337,16 +358,14 @@ class SidecarServer:
                         break
                     threading.Event().wait(0.01)
         finally:
+            self._join_workers(threads)
             self._call_quietly("close")
         return 0
 
-    def _dispatch(self, message: Mapping[str, Any]) -> None:
+    def _dispatch(self, message: Mapping[str, Any], cancel_event: threading.Event) -> None:
         request_id = str(message["id"])
         method = str(message.get("method", ""))
         params = message.get("params") or {}
-        cancel_event = threading.Event()
-        with self._state_lock:
-            self._cancel_events[request_id] = cancel_event
         context = CallContext(request_id, cancel_event)
         try:
             handler = self._handlers.get(method)
@@ -428,12 +447,13 @@ class SidecarServer:
         }
 
     def _handle_destroy(self, params: Mapping[str, Any], context: CallContext) -> dict:
+        # destroy 与同一批 stdin 里的 home/category 是并发线程。必须**先**等它们
+        # 把响应写完，再拆 spider、再停服务循环：顺序反了的话，正在执行的 home
+        # 会在 spider 已被 destroy 之后才去取数据，于是「派发了却没有响应」，
+        # 宿主把它误判成崩溃。
+        self._drain_in_flight(context)
         self._call_quietly("destroy")
         if not self.hold:
-            # destroy 与其它请求并发执行：先等在途请求把响应写完再停服务循环，
-            # 否则同一批 stdin 里的 home/category 会被「退出得太早」截断，
-            # 宿主看到「派发了却没响应」而误判成崩溃/丢响应。
-            self._drain_in_flight(context)
             self._stopping = True
         return {"ok": True}
 
