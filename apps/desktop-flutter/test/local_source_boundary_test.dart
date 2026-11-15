@@ -94,7 +94,9 @@ void main() {
     expect(state.lastError, isNull);
   });
 
-  test('混合只读资源拒绝删除前不得先删普通兄弟', () async {
+  // 用 SetFileAttributesW 造只读文件，是 Windows 专属的拒绝删除场景；
+  // Linux 没有这个属性，用 skip 而不是伪造一个等价物。
+  test('混合只读资源拒绝删除前不得先删普通兄弟', skip: !Platform.isWindows ? 'Windows 专属只读属性场景' : null, () async {
     final state = AppState(paths: tempPaths(temp), log: LogService());
     addTearDown(state.dispose);
     final dir = Directory(p.join(state.spiderRoot, 'local', 'readonly'));

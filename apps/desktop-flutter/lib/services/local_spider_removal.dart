@@ -4,9 +4,15 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
-/// Windows-only：锁住根、local 和整棵源树后按句柄删除，拒绝链接/替换竞态。
+/// 删除一个本地源目录。
+///
+/// Windows：锁住根、local 和整棵源树后按句柄删除，拒绝链接/替换竞态。
+/// POSIX：没有句柄删除，改为「先整树校验（拒绝链接与越界），再自底向上删除」；
+/// 校验与删除之间仍可能被替换，因此每一步都重新 resolve 并拒绝越界。
 bool removeLocalSpiderDirectory({required String root, required String key}) {
-  if (!Platform.isWindows) return false;
+  if (!Platform.isWindows) {
+    return _removeLocalSpiderDirectoryPosix(root: root, key: key);
+  }
   final normalizedRoot = p.normalize(p.absolute(root));
   final local = p.join(normalizedRoot, 'local');
   final target = p.join(local, key);
@@ -184,5 +190,67 @@ class _LockedEntry {
     if (_closed) return;
     _closed = true;
     _close(handle);
+  }
+}
+
+/// POSIX 版删除：先整树校验（链接、越界、local 自身是否为链接），
+/// 全部通过后才自底向上删除。任一校验失败即整体拒绝，不做部分删除。
+bool _removeLocalSpiderDirectoryPosix({
+  required String root,
+  required String key,
+}) {
+  final normalizedRoot = p.normalize(p.absolute(root));
+  final local = p.join(normalizedRoot, 'local');
+  final target = p.join(local, key);
+  if (!p.isWithin(local, target) || p.dirname(target) != local) return false;
+  try {
+    // local 自身必须是真目录而不是链接，否则整棵树都在外部。
+    if (FileSystemEntity.typeSync(local, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      return false;
+    }
+    final canonicalLocal = Directory(local).resolveSymbolicLinksSync();
+    final canonicalRoot = Directory(normalizedRoot).resolveSymbolicLinksSync();
+    if (!p.equals(canonicalLocal, p.join(canonicalRoot, 'local'))) return false;
+    if (FileSystemEntity.typeSync(target, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      return false;
+    }
+    // 整树校验：任何链接（包括指向目标内部）与越界都整体拒绝。
+    final files = <String>[];
+    final dirs = <String>[];
+    void inspect(String path) {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        throw FileSystemException('本地源含链接，拒绝删除', path);
+      }
+      final resolved = type == FileSystemEntityType.directory
+          ? Directory(path).resolveSymbolicLinksSync()
+          : File(path).resolveSymbolicLinksSync();
+      if (!p.isWithin(canonicalLocal, resolved)) {
+        throw FileSystemException('资源越出本地源目录', path);
+      }
+      if (type == FileSystemEntityType.directory) {
+        dirs.add(path);
+        for (final child in Directory(path).listSync(followLinks: false)) {
+          inspect(child.path);
+        }
+      } else {
+        files.add(path);
+      }
+    }
+
+    inspect(target);
+    // 自底向上删：先文件，再目录（dirs 是前序遍历，倒序即后序）。
+    for (final file in files) {
+      File(file).deleteSync();
+    }
+    for (final dir in dirs.reversed) {
+      Directory(dir).deleteSync();
+    }
+    return FileSystemEntity.typeSync(target, followLinks: false) ==
+        FileSystemEntityType.notFound;
+  } catch (_) {
+    return false;
   }
 }

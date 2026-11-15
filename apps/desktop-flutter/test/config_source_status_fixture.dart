@@ -31,7 +31,13 @@ class ConfigSourceFixtureState extends AppState {
 }
 
 Future<ConfigSourceFixtureState> createConfigSourceFixture(String scenario) async {
-  final root = Directory('${Platform.environment['XDG_STATE_HOME']!}/../profiles/$scenario');
+  // XDG_STATE_HOME 是 POSIX 才有的环境变量；Windows runner 上为 null，
+  // 早期实现直接用非空断言解引用，导致三个 UI 用例在 Windows 上一开始就崩。
+  final stateHome = Platform.environment['XDG_STATE_HOME'];
+  final base = stateHome != null && stateHome.isNotEmpty
+      ? Directory(stateHome).parent.path
+      : Directory.systemTemp.path;
+  final root = Directory('$base/profiles/$scenario');
   await root.create(recursive: true);
   final paths = AppPaths.resolve(overrides: {
     'config': '${root.path}/config', 'data': '${root.path}/data',

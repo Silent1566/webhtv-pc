@@ -74,6 +74,12 @@ class HttpTtsEngine implements TtsEngine {
       throw StateError('返回 $contentType：$preview');
     } on SocketException catch (error) {
       throw StateError('在线语音网络错误：${error.message}');
+    } on HttpException catch (error) {
+      // cancel()/dispose() 会 force-close 连接，正在读取响应体时抛的是
+      // HttpException（Connection closed while receiving data），不是
+      // SocketException。两者都是「传输被中止」，统一转成可读的 StateError，
+      // 否则会以未处理异步错误逃逸到调用方。
+      throw StateError('在线语音连接已中止：${error.message}');
     } finally {
       _clients.remove(client);
       client.close(force: true);

@@ -137,6 +137,26 @@ Future<AppState> pendingState(
   return state;
 }
 
+/// 内置离线 Python 包（`runtime/python`）只在 Windows 发行构建里准备
+/// （`scripts/python-runtime.lock.json` 的 platform 为 windows-x64，由
+/// `scripts/prepare_python_runtime.ps1` 落地）。没有它的平台上，这些用例
+/// 无法验证真实解释器行为——显式跳过，不伪造通过。
+bool get hasBundledPython {
+  var dir = Directory.current;
+  for (var hop = 0; hop < 10; hop++) {
+    if (File(p.join(dir.path, 'runtime', 'python', 'bundle.json')).existsSync()) {
+      return true;
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  return false;
+}
+
+String? get noBundledPythonReason =>
+    hasBundledPython ? null : 'runtime/python 离线包仅在 Windows 构建中准备';
+
 void main() {
   late Directory root;
   setUp(() {
@@ -244,7 +264,7 @@ void main() {
       expect(jsonDecode(prefs.readAsStringSync()), {'custom': custom.path});
     },
   );
-  test('final N1 old Python home cannot replace HTTP home or send its class to HTTP site', () async {
+  test('final N1 old Python home cannot replace HTTP home or send its class to HTTP site', skip: noBundledPythonReason, () async {
     var python = availablePython();
     PythonEnvironmentStatus? realStatus;
     if (python == null) {
@@ -299,7 +319,7 @@ void main() {
     expect(state.selectedTypeId, isNull);
     expect(state.lastError, isNull);
   }, timeout: const Timeout(Duration(minutes: 3)));
-  test('final N2 false launcher switch and async discovery never invoke synchronous enumeration', () async {
+  test('final N2 false launcher switch and async discovery never invoke synchronous enumeration', skip: noBundledPythonReason, () async {
     var syncCalls = 0;
     var asyncCalls = 0;
     ProcessResult syncRunner(String executable, List<String> arguments) {
@@ -492,6 +512,7 @@ void main() {
   for (final kind in ['json', 'map', 'read']) {
     test(
       'review corrupt pointer $kind refresh reports then repair preserves bytes and recovers',
+      skip: !Platform.isWindows ? 'icacls 只读锁是 Windows 场景' : null,
       () async {
         final env = PythonEnvironment(
           paths: isolatedPaths(root),
@@ -546,6 +567,7 @@ void main() {
     );
     test(
       'review corrupt preference $kind does not permanently block explicit custom or default',
+      skip: !Platform.isWindows ? 'icacls 只读锁是 Windows 场景' : null,
       () async {
         final env = PythonEnvironment(
           paths: isolatedPaths(root),
@@ -760,7 +782,7 @@ void main() {
       expect(File(old).existsSync(), isTrue);
     },
   );
-  test('native junction root cannot escape software data directory', () async {
+  test('native junction root cannot escape software data directory', skip: noBundledPythonReason, () async {
     final outside = Directory(p.join(root.path, 'outside'))..createSync();
     final marker = File(p.join(outside.path, 'marker'))
       ..writeAsStringSync('untouched');
@@ -794,7 +816,7 @@ void main() {
       expect(removed.exitCode, 0, reason: '${removed.stdout}${removed.stderr}');
     }
   });
-  test('failed config commit keeps selected custom interpreter and configuration bytes', () async {
+  test('failed config commit keeps selected custom interpreter and configuration bytes', skip: noBundledPythonReason, () async {
     final env = PythonEnvironment(
       paths: isolatedPaths(root),
       bundleDirectory: fixtureBundle(root),
@@ -848,7 +870,7 @@ void main() {
     expect(env.busy, isFalse);
     expect(await env.repair(), isTrue);
   });
-  test('live processes reject transitions without kill and release last-user lease on exit', () async {
+  test('live processes reject transitions without kill and release last-user lease on exit', skip: noBundledPythonReason, () async {
     final env = PythonEnvironment(
       paths: isolatedPaths(root),
       bundleDirectory: fixtureBundle(root),
@@ -887,7 +909,7 @@ void main() {
     }
     expect(await env.repair(), isTrue);
   });
-  test('concurrent start, failed launch and non-Python process do not leak or steal leases', () async {
+  test('concurrent start, failed launch and non-Python process do not leak or steal leases', skip: noBundledPythonReason, () async {
     final env = PythonEnvironment(
       paths: isolatedPaths(root),
       bundleDirectory: fixtureBundle(root),
@@ -931,7 +953,7 @@ void main() {
     }
     expect(await env.useDefault(), isTrue);
   });
-  test('stage-ready and native atomic-rename failures preserve old bytes and pointer', () async {
+  test('stage-ready and native atomic-rename failures preserve old bytes and pointer', skip: noBundledPythonReason, () async {
     final bundle = fixtureBundle(root);
     final env = PythonEnvironment(
       paths: isolatedPaths(root),

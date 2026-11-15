@@ -21,12 +21,12 @@ void main() {
   setUp(() => tempDir = Directory.systemTemp.createTempSync('webhtv_task5_db_'));
   tearDown(() => tempDir.deleteSync(recursive: true));
 
-  test('schemaVersion 升到 10 且新表存在', () {
-    expect(AppDatabase.schemaVersion, 10);
+  test('schemaVersion 升到 11 且新表存在', () {
+    expect(AppDatabase.schemaVersion, 11);
     final db = AppDatabase.inMemory();
     expect(db.count('ai_season_episode_mappings'), 0);
     expect(db.rowCounts().containsKey('ai_season_episode_mappings'), isTrue);
-    expect(db.schemaVersionValue, '10');
+    expect(db.schemaVersionValue, '11');
     db.dispose();
   });
 
@@ -126,7 +126,7 @@ void main() {
     // 旧数据仍在
     expect(db.count('tmdb_season_bindings'), 1);
     expect(db.count('tmdb_season_progress'), 1);
-    expect(db.schemaVersionValue, '10');
+    expect(db.schemaVersionValue, '11');
     // 新表可用
     expect(db.count('ai_season_episode_mappings'), 0);
     db.upsertAiSeasonMappings(
@@ -150,7 +150,7 @@ void main() {
 
     // 再次打开仍幂等
     final again = AppDatabase.open(path).database!;
-    expect(again.schemaVersionValue, '10');
+    expect(again.schemaVersionValue, '11');
     expect(again.count('ai_season_episode_mappings'), 1);
     expectLegacyValues(again);
     final mapping = again.findAiSeasonMappings(
@@ -245,7 +245,7 @@ void main() {
         expect(loaded.skippedSourceIndexes, isEmpty);
         expect(loaded.mappedCount, 1);
         expect(loaded.bindings.map((b) => b.toJson()), expected);
-        expect(db.schemaVersionValue, '10');
+        expect(db.schemaVersionValue, '11');
       } finally {
         db.dispose();
       }

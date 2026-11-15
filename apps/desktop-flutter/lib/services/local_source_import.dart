@@ -18,6 +18,7 @@ import 'dart:io';
 import 'dart:ffi' as ffi;
 
 import 'package:ffi/ffi.dart';
+import 'package:posix/posix.dart' as posix;
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
@@ -136,15 +137,15 @@ class LocalSourceImporter {
       );
     }
     final rootAtCreation = Directory(allowedRoot).resolveSymbolicLinksSync();
-    final ownedRoot = _WinDirectory.open(rootAtCreation);
-    _WinDirectory? ownership;
+    final ownedRoot = _openDirectory(rootAtCreation);
+    _DirectoryHandle? ownership;
     final dir = Directory(targetDir);
     final pathAtCreation = p.join(rootAtCreation, p.basename(targetDir));
     try {
       dir.createSync();
       String failure;
       try {
-        ownership = _WinDirectory.open(pathAtCreation);
+        ownership = _openDirectory(pathAtCreation);
         if (!p.equals(dir.resolveSymbolicLinksSync(), pathAtCreation)) {
           throw StateError('本次创建的目标目录已变化');
         }
@@ -178,12 +179,12 @@ class LocalSourceImporter {
     Directory dir,
     String rootAtCreation,
     String pathAtCreation,
-    _WinDirectory ownedRoot,
-    _WinDirectory? ownership,
+    _DirectoryHandle ownedRoot,
+    _DirectoryHandle? ownership,
   ) {
     final ownedLocation = ownership?.currentPath() ?? '目录身份未取得';
-    _WinDirectory? lockedRoot;
-    _WinDirectory? lockedTarget;
+    _DirectoryHandle? lockedRoot;
+    _DirectoryHandle? lockedTarget;
     try {
       final type = FileSystemEntity.typeSync(dir.path, followLinks: false);
       if (type == FileSystemEntityType.notFound) {
@@ -195,8 +196,8 @@ class LocalSourceImporter {
         return '未撤回：无法确认目录身份，残留目录 $pathAtCreation；本次原目录：$ownedLocation';
       }
       // 保留原句柄防止 file-id 重用；无 SHARE_DELETE 的现路径句柄阻止替换。
-      lockedRoot = _WinDirectory.open(rootAtCreation, lock: true);
-      lockedTarget = _WinDirectory.open(
+      lockedRoot = _openDirectory(rootAtCreation, lock: true);
+      lockedTarget = _openDirectory(
         pathAtCreation,
         lock: true,
         deleting: true,
@@ -481,10 +482,35 @@ class LocalSourceImporter {
 }
 
 /// Windows 目录句柄与卷/file-index 身份；不把可复制的路径标记当作身份。
-class _WinDirectory {
+/// 目录身份句柄：Windows 用 win32 文件 ID，POSIX 用 (st_dev, st_ino)。
+///
+/// 回滚必须证明「路径上现在这个目录，就是我刚创建的那个」，否则宁可不删——
+/// 删掉别人替换进来的目录是不可接受的越权。
+abstract class _DirectoryHandle {
+  String get identity;
+
+  bool sameIdentity(_DirectoryHandle other);
+
+  String currentPath();
+
+  void deleteOnClose();
+
+  void close();
+}
+
+_DirectoryHandle _openDirectory(
+  String path, {
+  bool lock = false,
+  bool deleting = false,
+}) => Platform.isWindows
+    ? _WinDirectory.open(path, lock: lock, deleting: deleting)
+    : _PosixDirectory.open(path);
+
+class _WinDirectory implements _DirectoryHandle {
   _WinDirectory(this.handle, this.identity);
 
   final int handle;
+  @override
   final String identity;
   bool _closed = false;
 
@@ -557,9 +583,6 @@ class _WinDirectory {
     bool lock = false,
     bool deleting = false,
   }) {
-    if (!Platform.isWindows) {
-      throw UnsupportedError('当前平台没有可靠的目录身份回滚实现');
-    }
     final name = p.absolute(path).toNativeUtf16(allocator: calloc);
     final info = calloc<ffi.Uint32>(
       13,
@@ -601,8 +624,10 @@ class _WinDirectory {
     }
   }
 
-  bool sameIdentity(_WinDirectory other) => identity == other.identity;
+  @override
+  bool sameIdentity(_DirectoryHandle other) => identity == other.identity;
 
+  @override
   String currentPath() {
     final capacity = _finalPath(handle, ffi.nullptr, 0, 0) + 1;
     if (capacity <= 1) return '句柄路径不可读(file-id=$identity)';
@@ -618,6 +643,7 @@ class _WinDirectory {
     }
   }
 
+  @override
   void deleteOnClose() {
     final flag = calloc<ffi.Uint8>()..value = 1;
     try {
@@ -630,9 +656,107 @@ class _WinDirectory {
     }
   }
 
+  @override
   void close() {
     if (_closed) return;
     _closed = true;
     _close(handle);
+  }
+}
+
+/// POSIX 目录身份：`(st_dev, st_ino)` 与 Windows 的 128-bit file id 语义等价。
+///
+/// 同一个目录被重命名后 inode 不变，所以「还是我创建的那个」可以证明；
+/// 别人在同一路径新建的目录必然拿到不同 inode，因此回滚不会误删。
+///
+/// 与 Windows 的差异：POSIX 没有「句柄删除」（`SetFileInformationByHandle`），
+/// 删除只能按路径做，所以 `deleteOnClose` 退化为「关闭前再比对一次身份再删」。
+/// 相比 Windows 的原子语义多一个极小的 TOCTOU 窗口；在「自己拥有父目录」且
+/// 已持有同一身份校验的前提下接受它，失败时如实报告残留而不假装成功。
+class _PosixDirectory implements _DirectoryHandle {
+  _PosixDirectory(this._fd, this.identity);
+
+  final int _fd;
+  bool _closed = false;
+  bool _deleteOnClose = false;
+  String? _knownPath;
+
+  @override
+  final String identity;
+
+  static _PosixDirectory open(String path) {
+    final target = p.absolute(path);
+    final stat = posix.lstat(target);
+    if (!stat.mode.isDirectory) {
+      throw FileSystemException('不能确认普通目录身份', target);
+    }
+    final fd = _openFd(target);
+    final handle = _PosixDirectory(fd, '${stat.deviceId}:${stat.inode}');
+    handle._knownPath = target;
+    return handle;
+  }
+
+  static final _open = ffi.DynamicLibrary.process()
+      .lookupFunction<ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Int32),
+          int Function(ffi.Pointer<Utf8>, int)>('open');
+
+  static int _openFd(String path) {
+    final native = path.toNativeUtf8(allocator: calloc);
+    try {
+      // O_RDONLY：目录也能以只读方式打开，不跟随创建/修改语义。
+      final fd = _open(native, 0);
+      if (fd < 0) throw FileSystemException('打开目录句柄失败', path);
+      return fd;
+    } finally {
+      calloc.free(native);
+    }
+  }
+
+  /// 句柄当前指向的路径：目录被重命名后跟随过去，与 Windows 的
+  /// `GetFinalPathNameByHandleW` 同义。Linux 走 `/proc/self/fd`。
+  @override
+  String currentPath() {
+    if (!Platform.isLinux) return _knownPath ?? '句柄路径不可读(file-id=$identity)';
+    final buffer = calloc<ffi.Uint8>(4096);
+    try {
+      final read = posix.native_readlink('/proc/self/fd/$_fd', buffer.cast(), 4096);
+      if (read <= 0) return _knownPath ?? '句柄路径不可读(file-id=$identity)';
+      return buffer.cast<Utf8>().toDartString();
+    } catch (_) {
+      return _knownPath ?? '句柄路径不可读(file-id=$identity)';
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  @override
+  bool sameIdentity(_DirectoryHandle other) => identity == other.identity;
+
+  @override
+  void deleteOnClose() {
+    _deleteOnClose = true;
+  }
+
+  @override
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    try {
+      if (_deleteOnClose) {
+        final path = _knownPath;
+        if (path != null) {
+          final current = posix.lstat(path);
+          final expected = identity.split(':');
+          if (current.deviceId.toString() == expected[0] &&
+              current.inode.toString() == expected[1]) {
+            Directory(path).deleteSync();
+          }
+        }
+      }
+    } catch (_) {
+      // 删除失败交由调用方按「路径是否还在」如实报告残留。
+    } finally {
+      posix.close(_fd);
+    }
   }
 }

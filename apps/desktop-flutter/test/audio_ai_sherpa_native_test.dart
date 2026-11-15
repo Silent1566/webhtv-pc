@@ -1,3 +1,6 @@
+@TestOn('windows')
+library;
+
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
