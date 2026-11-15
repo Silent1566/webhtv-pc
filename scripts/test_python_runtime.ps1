@@ -87,7 +87,7 @@ Check 'packaging refuses build without official audio AI runtime and workflows k
     $bareRepo = Join-Path $testRoot 'no-native'; New-Item -ItemType Directory (Join-Path $bareRepo 'build') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $bareRepo 'build/webhtv_pc.exe'), 'fixture')
     Must-Fail { & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $bareRepo -BuildDir (Join-Path $bareRepo 'build') -OutputDir (Join-Path $bareRepo 'dist') -Version 0.1.0 -Commit ('0' * 40) } '缺少官方音频AI/native运行时'
-    foreach ($workflow in @('.github/workflows/windows-ci.yml', '.github/workflows/windows-release.yml')) {
+    foreach ($workflow in @('.github/workflows/desktop-ci.yml', '.github/workflows/desktop-release.yml')) {
         $text = Get-Content (Join-Path $repo $workflow) -Raw
         if ($text -match 'SkipNativeAiAssetChecks') { throw "$workflow 不得用 -SkipNativeAiAssetChecks 旁路原生引擎门禁" }
     }
@@ -173,7 +173,7 @@ if ($Review) {
         if($missed.Count){throw "Accepted devices: $($missed -join ',')"}
     }
     Review-Check 'F5 execute real release-note step with offline Python and local JVM disclosure' {
-        $y=Get-Content (Join-Path $repo '.github/workflows/windows-release.yml') -Raw
+        $y=Get-Content (Join-Path $repo '.github/workflows/desktop-release.yml') -Raw
         $step=[regex]::Match($y,'(?s)      - name: Prepare release notes.*?        run: \|\r?\n(?<body>.*?)\r?\n      - name: Package portable zip').Groups['body'].Value
         if(-not $step){throw 'Release notes step not found'}
         $step=($step -split "`n" | ForEach-Object {$_ -replace '^          ',''}) -join "`n"
