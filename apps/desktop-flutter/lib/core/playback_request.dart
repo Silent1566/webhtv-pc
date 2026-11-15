@@ -162,6 +162,10 @@ class PlaybackRequest {
     Map<String, String>? headers,
     Map<String, String>? subtitleHeaders,
     List<PlaybackQuality>? qualities,
+    List<VodPlayLine>? playLines,
+    // 补齐选集入口时一并换上「线路 → 来源站点/vod_id」的路由：只换线路不换路由，
+    // 换集会拿原请求的 vodId 去问站点（目录条目会直接被判为业务错误）。
+    Map<String, SwapLineRoute>? lineRoutes,
     int? qualityIndex,
     int? episodeIndex,
     Duration? startPosition,
@@ -199,9 +203,9 @@ class PlaybackRequest {
           : (startPosition ?? this.startPosition),
       // 与 `startPosition` 一样是「一次性交接」：显式清除优先，其次是新值。
       resumeSeed: clearResumeSeed ? null : (resumeSeed ?? this.resumeSeed),
-      playLines: playLines,
+      playLines: playLines ?? this.playLines,
       // 与 `playLines` / `siteKey` 一样原样带过：换集不能把外部线路的路由丢掉。
-      lineRoutes: lineRoutes,
+      lineRoutes: lineRoutes ?? this.lineRoutes,
       // 卡片同属「详情页一次性算好」的上下文：换集不带过来，选集面板就退回裸集名，
       // 而播放器自己再也算不回来（缺选中季度与季过滤后的渲染顺序）。按线路分组后
       // 切线路也能取到**那条线路自己**的卡片，不必等详情页重新算。
