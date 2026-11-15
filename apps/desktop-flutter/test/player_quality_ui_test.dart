@@ -390,7 +390,7 @@ Future<void> _openEpisodes(WidgetTester tester) async {
 Future<void> _close(WidgetTester tester) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump(const Duration(seconds: 1));
-  // `toastCenter` 是全局单例：error 提示驻留 15 秒，会浮在右下角盖住控制栏
+  // `toastCenter` 是全局单例：error 提示驻留 30 秒，会浮在右下角盖住控制栏
   // 按钮，把后面的用例全部点不中（实测跨用例串扰）。
   dismissAllToasts();
 }

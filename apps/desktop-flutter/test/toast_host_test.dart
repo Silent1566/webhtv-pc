@@ -2,7 +2,7 @@
 ///
 /// 锁的是用户已经定下的四条行为，每一条单独都能被一种错误实现弄红：
 ///
-/// - 自动关闭 vs 错误驻留更久：把 error 也当成 4 秒，第 2 条红；
+/// - 自动关闭 vs 错误驻留更久：把 error 也按 info 的 15 秒处理，第 2 条红；
 /// - 悬停暂停：只做视觉上的 hover 效果而不 stop 控制器，第 3 条红；
 /// - 动作按钮在卡片里且能用：把动作放回页面侧，第 4 条红；
 /// - 透明区域不拦截点击：把宿主包成整屏不透明层，第 6 条红。
@@ -61,17 +61,17 @@ Future<TestGesture> _mouseAt(WidgetTester tester, Offset at) async {
 void main() {
   setUp(dismissAllToasts);
 
-  testWidgets('info 通知到时自动关闭（约 4 秒）', (tester) async {
+  testWidgets('info 通知到时自动关闭（15 秒）', (tester) async {
     await _pumpHost(tester);
     final id = showToast('已保存配置');
     await _settleEntrance(tester);
     expect(find.byKey(_toastKey(id)), findsOneWidget);
 
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 14));
     expect(
       find.byKey(_toastKey(id)),
       findsOneWidget,
-      reason: '默认驻留 4 秒，3 秒时不该消失',
+      reason: '默认驻留 15 秒，14 秒时不该消失',
     );
 
     await tester.pump(const Duration(milliseconds: 1200));
@@ -79,27 +79,53 @@ void main() {
     expect(find.byKey(_toastKey(id)), findsNothing);
   });
 
-  testWidgets('error 通知驻留 15 秒后自动关闭（远长于 info 的 4 秒）', (tester) async {
+  testWidgets('error 通知驻留 30 秒后自动关闭（info 的两倍）', (tester) async {
     await _pumpHost(tester);
     final id = showToast('源站不可用', kind: ToastKind.error);
     await _settleEntrance(tester);
 
-    // 14 秒时还在：错误要比 info 的 4 秒长得多，不能提前收走用户还没读完的原因。
-    await tester.pump(const Duration(seconds: 14));
+    // 29 秒时还在：错误要比 info 的 15 秒长一倍，不能提前收走用户还没读完的原因。
+    await tester.pump(const Duration(seconds: 29));
     expect(
       find.byKey(_toastKey(id)),
       findsOneWidget,
-      reason: '错误驻留 15 秒，14 秒时不该消失',
+      reason: '错误驻留 30 秒，29 秒时不该消失',
     );
 
-    // 越过 15 秒即自动关闭，把右下角的集数卡片与「并入」按钮让出来。
+    // 越过 30 秒即自动关闭，把右下角的集数卡片与「并入」按钮让出来。
     await tester.pump(const Duration(milliseconds: 1200));
     await tester.pumpAndSettle();
     expect(
       find.byKey(_toastKey(id)),
       findsNothing,
-      reason: '15 秒到时自己让开右下角，不必等用户手动收',
+      reason: '30 秒到时自己让开右下角，不必等用户手动收',
     );
+  });
+
+  // 回归：平台的「减少动态效果」（无障碍 / GTK 关闭动画）会让默认的
+  // `AnimationController` 把时长压到 **5%**，30 秒的错误通知 1.5 秒就消失——
+  // 用户看到的就是「文字还没看清就没了」。倒计时是计时器，必须 `preserve`。
+  testWidgets('平台开启「减少动态效果」时驻留时长不被压缩', (tester) async {
+    tester.binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(
+      tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
+    );
+
+    await _pumpHost(tester);
+    final id = showToast('源站不可用', kind: ToastKind.error);
+    await _settleEntrance(tester);
+
+    await tester.pump(const Duration(seconds: 29));
+    expect(
+      find.byKey(_toastKey(id)),
+      findsOneWidget,
+      reason: '减动态只该缩短入场/退场动画，不该把 30 秒的阅读时间压成 1.5 秒',
+    );
+
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_toastKey(id)), findsNothing);
   });
 
   testWidgets('悬停暂停倒计时，移开后继续', (tester) async {
@@ -111,16 +137,16 @@ void main() {
       tester,
       tester.getCenter(find.byKey(_toastKey(id))),
     );
-    await tester.pump(const Duration(seconds: 8));
+    await tester.pump(const Duration(seconds: 20));
     expect(
       find.byKey(_toastKey(id)),
       findsOneWidget,
-      reason: '悬停期间倒计时暂停，超过 4 秒也不该关闭',
+      reason: '悬停期间倒计时暂停，超过 15 秒也不该关闭',
     );
 
     await mouse.moveTo(const Offset(AppSpace.md, AppSpace.md));
     await tester.pump();
-    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(seconds: 16));
     await tester.pumpAndSettle();
     expect(
       find.byKey(_toastKey(id)),
