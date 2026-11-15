@@ -36,6 +36,10 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+/// 截图用根边界：`find.byType(RepaintBoundary).first` 会命中视频层，
+/// 拍不到 Dialog/Overlay；取证必须盯住整棵树的这一层。
+const Key playerPageCaptureRootKey = ValueKey<String>('player-page-capture-root');
+
 /// `media_kit_video` 的平台通道（见文件头注释）。
 const MethodChannel mediaKitVideoChannel = MethodChannel(
   'com.alexmercerind/media_kit_video',
@@ -139,6 +143,8 @@ Future<void> pumpPlayerPage(
   Size size = const Size(1280, 720),
   bool pushRoute = false,
   bool trackFullscreen = false,
+  Future<void> Function(AppState state)? onStateReady,
+  ThemeData? theme,
 }) async {
   final temp = Directory.systemTemp.createTempSync('webhtv-phase8-page');
   addTearDown(() {
@@ -174,6 +180,8 @@ Future<void> pumpPlayerPage(
     if (buttonOrder != null) {
       await state.setPlayerButtonOrder(buttonOrder);
     }
+    // 取证用例用：在 pump 之前写入任意设置（如字幕源），否则入口会走「未配置」分支。
+    if (onStateReady != null) await onStateReady(state);
   });
 
   tester.view.physicalSize = size;
@@ -199,8 +207,10 @@ Future<void> pumpPlayerPage(
     ),
   );
   await tester.pumpWidget(
-    MaterialApp(
-      theme: buildAppTheme(Brightness.dark),
+    RepaintBoundary(
+      key: playerPageCaptureRootKey,
+      child: MaterialApp(
+      theme: theme ?? buildAppTheme(Brightness.dark),
       home: pushRoute
           ? Builder(
               builder: (context) => Scaffold(
@@ -214,6 +224,7 @@ Future<void> pumpPlayerPage(
               ),
             )
           : Scaffold(body: player),
+    ),
     ),
   );
   // 让 initState 的 postFrameCallback 跑起来，但不等真实网络。
