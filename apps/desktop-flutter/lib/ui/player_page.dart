@@ -728,14 +728,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _showPlayerMessage(String text, {ToastKind kind = ToastKind.info}) {
     if (!mounted) return;
-    // 错误给足阅读时间但不赖着：不传 duration，让 toast.dart 按类型取默认值
-    // （error -> 15s，info/success -> 4s）。只有信息/成功在播放器里收窄到 3s：
-    // 播放页的操作反馈更频繁，4s 会让右下角一直有东西。
-    showToast(
-      text,
-      kind: kind,
-      duration: kind == ToastKind.error ? null : const Duration(seconds: 3),
-    );
+    // 时长不在这里定：不传 duration，让 toast.dart 按类型取默认值
+    // （error -> 30s，info/success -> 15s）。
+    // 这里曾把信息/成功单独收窄到 3 秒，理由是「播放页反馈频繁，怕右下角一直有东西」；
+    // 但 3 秒连「已标记片头 12:34」这种一句话都读不完，且播放页的提示多半是低频的
+    // 「已标记 / 已清除」，堆积不是真问题（可见栈上限 4 条兜底）。于是回到全站同一套时长。
+    showToast(text, kind: kind);
   }
 
   /// 连播闸门：单次守卫 + 真播完判定（`design/03` §4.1）。
