@@ -1,0 +1,771 @@
+name: Desktop Release
+
+# 手动发布：Windows x64 便携包 + Linux x64 AppImage/deb + 统一校验文件 + 单一 GitHub Release。
+# 语义对齐安卓仓库 .github/workflows/android-release.yml：
+#   - tag：v<versionName>-yyyyMMddHHmm（stable）/ v<versionName>-beta-yyyyMMddHHmm（beta）；
+#   - 通道 auto：main → stable，其它分支 → beta；beta 强制预发布；
+#   - 同一 commit 重跑复用 tag、覆盖同名资产，不移动 tag；
+#   - 发布门禁（analyze + 单测 + 打包烟测）不过不产出 Release。
+#
+# 一次触发只产出一个 Release：meta 解析一次版本/channel/tag，两个 build job 并行完成各自
+# 平台的门禁与打包，publish 汇总两平台资产、合并 SHA256SUMS 后统一发布。
+#
+# 当前发布形态与限制（诚实披露，不生成应用不消费的更新通道）：
+#   - Windows 便携 zip（不含 MSI）；Linux AppImage + deb（Ubuntu 22.04 / glibc 2.35 基线）；
+#   - 无自动更新（docs/phase9/README.md P2-7：更新签名通道未定）；
+#   - 代码签名为可选：配置 secrets 后签名，否则在 notes/BUILD_INFO/release-info.json 标注未签名；
+#   - 包内自带 Node 运行时；Python/JDK 解释器不随包，对应站源需要本机安装 Python 3 / JDK 17+。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, blank = v<versionName>-yyyyMMddHHmm or v<versionName>-beta-yyyyMMddHHmm"
+        required: false
+        type: string
+      release_channel:
+        description: "Release channel, auto uses beta on non-main branches and stable on main"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - stable
+          - beta
+      release_notes:
+        description: "Release notes, use \\n for Markdown newlines"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+      publish_release:
+        description: "Create/update the GitHub Release (false = build and upload workflow artifacts only)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+  FLUTTER_VERSION: "3.47.5"
+
+jobs:
+  meta:
+    name: Resolve release metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      title: ${{ steps.meta.outputs.title }}
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+      channel: ${{ steps.meta.outputs.channel }}
+      asset_suffix: ${{ steps.meta.outputs.asset_suffix }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      built_at: ${{ steps.meta.outputs.built_at }}
+      is_beta: ${{ steps.meta.outputs.is_beta }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        run: |-
+          python3 - <<'PY'
+          import datetime
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          text = Path('apps/desktop-flutter/pubspec.yaml').read_text()
+          match = re.search(r'^version:\s*(\d+\.\d+\.\d+)(?:\+(\d+))?\s*$', text, re.M)
+          if not match:
+              raise SystemExit('Invalid pubspec version; expected x.y.z+build')
+          version, build = match.group(1), match.group(2) or '0'
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if commit != os.environ['GITHUB_SHA']:
+              raise SystemExit('Checkout does not match GITHUB_SHA')
+          epoch = int(subprocess.check_output(['git', 'show', '-s', '--format=%ct', commit], text=True))
+          built_at = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+          short = subprocess.check_output(['git', 'rev-parse', '--short=7', commit], text=True).strip()
+          channel = 'dev'
+          tag = ''
+          if 'RELEASE_CHANNEL_INPUT' in os.environ:
+              channel = os.environ['RELEASE_CHANNEL_INPUT'].strip() or 'auto'
+              if channel == 'auto':
+                  channel = 'stable' if os.environ['GITHUB_REF_NAME'] == 'main' else 'beta'
+              if channel not in ('stable', 'beta'):
+                  raise SystemExit('Invalid release channel')
+              suffix = '-beta' if channel == 'beta' else ''
+              timestamp = built_at.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d%H%M')
+              tag = os.environ.get('RELEASE_TAG_INPUT', '').strip() or f'v{version}{suffix}-{timestamp}'
+              if not re.fullmatch(r'v' + re.escape(version + suffix) + r'-\d{12}', tag):
+                  raise SystemExit('Invalid release tag for version/channel')
+              existing = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'refs/tags/{tag}^{{commit}}'],
+                                        text=True, capture_output=True)
+              if existing.returncode == 0 and existing.stdout.strip() != commit:
+                  raise SystemExit(f'Tag {tag} points to a different commit; will not move it')
+          is_beta = channel == 'beta'
+          prerelease = is_beta or os.environ.get('PRERELEASE_INPUT', '').strip().lower() == 'true'
+          asset_suffix = '-beta' if is_beta else ''
+          outputs = dict(version=version, build=build, channel=channel, short_sha=short,
+                         built_at=built_at.isoformat().replace('+00:00', 'Z'), tag=tag, title=tag[1:],
+                         asset_suffix=asset_suffix, is_beta=str(is_beta).lower(),
+                         is_prerelease=str(prerelease).lower())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key, value in outputs.items():
+                  output.write(f'{key}={value}\n')
+          print(f'Linux build {version}+{build} channel={channel} commit={short} tag={tag}')
+          PY
+        id: meta
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.release_channel }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+
+  build-windows:
+    name: Build and package (Windows x64)
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up JDK 21 (JVM sidecar tests)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node.js 22 (JS sidecar tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # node_modules 不入库（.gitignore:51），但 scripts/package_windows.ps1 要求
+      # sidecars/spider-host-js/node_modules 存在，缺失即打包失败。必须在打包前安装；
+      # 用 npm ci 按已入库的 package-lock.json 精确还原，--omit=dev 避免把开发依赖打进包。
+      - name: Install JS sidecar dependencies
+        working-directory: sidecars/spider-host-js
+        shell: pwsh
+        run: npm ci --omit=dev
+
+      - name: Set up Python 3.12 (Python sidecar tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enable Windows long paths and symlink support
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          git config --system core.longpaths true
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法写入 core.longpaths（非管理员）；路径较短时通常不影响构建。'
+          }
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法通过注册表启用开发者模式；若 flutter pub get 因插件符号链接失败，请检查 runner 权限。'
+          }
+
+      # 先解析元数据：非法 tag / 指向别的 commit 的 tag 应在跑 13 分钟单测之前失败。
+      - name: Install Dart dependencies
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Static analysis
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: dart analyze
+
+      # 顺序要点：先 Release 构建，再跑单测。
+      # 13 个 phase8 播放器用例会真实实例化 media_kit 的 NativePlayer，而
+      # media_kit 在 Windows 上要求 `libmpv-2.dll` 位于 `%PATH%`；该 DLL 由
+      # media_kit_libs_windows_video 的 CMake 在原生构建时下载解压到
+      # build/windows/x64/libmpv/。开发机 PATH 里恰好有 libmpv 才显得无关，
+      # CI 必须显式补 PATH，不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
+      - name: Build Windows release
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter build windows --release "--dart-define=APP_VERSION=${{ needs.meta.outputs.version }}"
+
+      - name: Unit tests
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $libmpv = Get-ChildItem -Path 'build/windows/x64' -Filter 'libmpv-2.dll' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $libmpv) {
+            throw '未找到 libmpv-2.dll：media_kit 的播放器用例无法运行（Release 构建应已下载解压它）。'
+          }
+          Write-Host "libmpv：$($libmpv.FullName)"
+          $env:PATH = "$($libmpv.Directory.FullName);$env:PATH"
+          # audio_ai 用例直接加载真实 native（不做 mock）：代码按
+          # <repo>/.local/audio_ai/native/audio_ai_native.dll 与
+          # <cwd>/.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll 查找，
+          # 而 .local 被 .gitignore 忽略。这里从本次 Release 构建产物与 CMake 固定的
+          # 官方 LiteRT wheel 缓存准备，任一项缺失或校验不符都直接失败，不跳过、不降级。
+          $repoRoot = (Resolve-Path '../..').Path
+          $nativeDir = Join-Path $repoRoot '.local/audio_ai/native'
+          $litertDir = Join-Path (Get-Location) '.local/audio_ai/litert/ai_edge_litert'
+          New-Item -ItemType Directory -Force -Path $nativeDir, $litertDir | Out-Null
+          foreach ($dll in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll')) {
+            $source = Join-Path 'build/windows/x64/runner/Release' $dll
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "缺少原生库 $dll（build/windows/x64/runner/Release）：audio_ai 单元测试需要真实 native，不允许跳过或降级。"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $nativeDir $dll) -Force
+          }
+          # 两个等价来源（Release 产物与 CMake 解压的官方 wheel 缓存）必须是同一份
+          # pinned DLL，下面的 SHA256 校验对任一来源都成立；两者都缺失才算失败。
+          $litertSource = @(
+            (Join-Path 'build/windows/x64/runner/Release' 'libLiteRt.dll'),
+            (Join-Path $repoRoot '.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll')
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $litertSource) {
+            throw '缺少 pinned libLiteRt.dll：Release 构建产物与 audio_ai_runtime.cmake 缓存都没有它，不允许跳过或降级。'
+          }
+          $litertSha = (Get-FileHash -LiteralPath $litertSource -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($litertSha -ne 'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+            throw "libLiteRt.dll SHA256 与 audio_ai_runtime.cmake 固定的官方 wheel 不一致：$litertSha"
+          }
+          Copy-Item -LiteralPath $litertSource -Destination (Join-Path $litertDir 'libLiteRt.dll') -Force
+          Write-Host "audio_ai native：$nativeDir"
+          Write-Host "libLiteRt：$litertDir"
+          flutter test
+
+      # 可选代码签名：配置了 secrets 就必须成功，不静默降级成未签名。
+      - name: Configure code signing (optional)
+        id: sign
+        shell: pwsh
+        env:
+          CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PFX_PASSWORD }}
+          CERT_TIMESTAMP_URL: ${{ vars.WINDOWS_CERT_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop-flutter/build/windows/x64/runner/Release/webhtv_pc.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "未找到构建产物：$exe" }
+          if ([string]::IsNullOrWhiteSpace($env:CERT_PFX_BASE64)) {
+            Write-Warning '未配置 WINDOWS_CERT_PFX_BASE64，产物保持未签名（会写入发布说明与 release-info.json）。'
+            'signed=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CERT_PFX_PASSWORD)) {
+            throw '配置了 WINDOWS_CERT_PFX_BASE64 但缺少 WINDOWS_CERT_PFX_PASSWORD。'
+          }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'webhtv-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX_BASE64))
+            $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+              Sort-Object -Property FullName | Select-Object -Last 1
+            if (-not $signtool) { throw '未找到 Windows SDK 的 signtool.exe，无法签名。' }
+            $timestamp = if ([string]::IsNullOrWhiteSpace($env:CERT_TIMESTAMP_URL)) { 'http://timestamp.digicert.com' } else { $env:CERT_TIMESTAMP_URL }
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:CERT_PFX_PASSWORD /tr $timestamp /td SHA256 /v $exe
+            if ($LASTEXITCODE -ne 0) { throw 'signtool sign 失败。' }
+            & $signtool.FullName verify /pa /v $exe
+            if ($LASTEXITCODE -ne 0) { throw 'signtool verify 失败。' }
+            $signature = Get-AuthenticodeSignature -LiteralPath $exe
+            if ($signature.Status.ToString() -ne 'Valid') {
+              throw "签名状态不是 Valid：$($signature.Status)"
+            }
+            'signed=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "已签名：$($signature.SignerCertificate.Subject)"
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Prepare release notes
+        id: notes
+        shell: pwsh
+        env:
+          RAW_NOTES: ${{ inputs.release_notes }}
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = $env:RAW_NOTES
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            $notes = '手动触发 GitHub Actions 构建发布。'
+          } else {
+            $notes = $notes.Replace('\r\n', "`n").Replace('\n', "`n").Replace('\t', "`t").Replace('\"', '"').Replace("\'", "'")
+          }
+
+          $extra = @()
+          if ($env:SIGNED -ne 'true') {
+            $extra += '> **未签名包**：本可执行文件未做代码签名，Windows SmartScreen 可能提示「未知发布者」。这是当前发布形态，不是下载损坏。'
+          }
+          $extra += '> **运行环境**：包内自带 Node 运行时（runtime/node/node.exe，v22.23.4），Node Spider 开箱即用，无需自行安装 Node。Python 3.14.10 运行时与依赖已内置，可离线准备和修复，运行/修复不联网，无需安装系统 Python。只有 JVM Spider 对应站源仍需本机安装 JDK 17+。'
+
+          $body = ($notes.TrimEnd() + "`n`n" + ($extra -join "`n`n") + "`n")
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:GITHUB_WORKSPACE 'build') | Out-Null
+          [IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE 'build/release-notes.md'), $body, [Text.UTF8Encoding]::new($false))
+
+          $isPrerelease = '${{ needs.meta.outputs.is_prerelease }}' -eq 'true'
+          "is_prerelease=$($isPrerelease.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host $body
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/package_windows.ps1 `
+            -BuildDir 'apps/desktop-flutter/build/windows/x64/runner/Release' `
+            -OutputDir 'dist' `
+            -Version '${{ needs.meta.outputs.version }}' `
+            -BuildNumber '${{ needs.meta.outputs.build }}' `
+            -Channel '${{ needs.meta.outputs.channel }}' `
+            -Tag '${{ needs.meta.outputs.tag }}' `
+            -Commit "$env:GITHUB_SHA" `
+            -ShortCommit '${{ needs.meta.outputs.short_sha }}' `
+            -FlutterVersion "$env:FLUTTER_VERSION" `
+            -NotesFile 'build/release-notes.md'
+
+      - name: Smoke test packaged client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem -LiteralPath 'dist' -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'dist 下没有 zip' }
+          $extract = Join-Path $env:RUNNER_TEMP ('webhtv-smoke-' + [guid]::NewGuid().ToString('N'))
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract -Force
+          $exe = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'webhtv_pc.exe' | Select-Object -First 1
+          if (-not $exe) { throw '解压后未找到 webhtv_pc.exe' }
+          ./scripts/smoke_windows.ps1 -ExePath $exe.FullName -ExpectedVersion '${{ needs.meta.outputs.version }}'
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      # publish 是独立 job：发布说明必须跨 job 传递，否则 publish 里没有 build/release-notes.md。
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-release-notes
+          path: build/release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+  build-linux:
+    name: Build and package (Linux x64)
+    needs: meta
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install native build and packaging dependencies
+        run: |-
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
+            xvfb xauth x11-utils dpkg-dev
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install JS sidecar dependencies
+        run: npm ci --omit=dev
+        working-directory: sidecars/spider-host-js
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install workflow test dependencies
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Verify tracked JVM jars
+        run: |-
+          test -s sidecars/spider-host-jvm/host.jar
+          git ls-files --error-unmatch sidecars/spider-host-jvm/host.jar
+          jar tf sidecars/spider-host-jvm/host.jar > "$RUNNER_TEMP/jvm-jar-contents.txt"
+          test -n "$(git ls-files 'sidecars/spider-host-jvm/lib/*.jar')"
+      - name: Install verified appimagetool
+        run: |-
+          set -euo pipefail
+          url='https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage'
+          file="$RUNNER_TEMP/appimagetool-1.9.1.AppImage"
+          curl --fail --location --retry 3 "$url" --output "$file"
+          printf '%s  %s\n' 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0' "$file" | sha256sum --check
+          chmod +x "$file"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$file" --version
+          printf 'APPIMAGETOOL=%s\n' "$file" >> "$GITHUB_ENV"
+      - name: Prepare Linux release notes
+        run: |-
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          prerelease = os.environ['APP_CHANNEL'] == 'beta' or os.environ['PRERELEASE_INPUT'] == 'true'
+          notes = os.environ.get('RELEASE_NOTES_INPUT', '').replace('\\n', '\n').strip()
+          if not notes:
+              notes = f"WebHTV PC {os.environ['APP_VERSION']} ({os.environ['APP_CHANNEL']}) — Linux x86_64"
+          notes += '\n\nUnsigned AppImage/deb. Bundled Node; Python 3 and JDK 17+ are system requirements for corresponding sources. Ubuntu 22.04 / glibc 2.35 build baseline.\n'
+          Path('build').mkdir(exist_ok=True)
+          Path('build/linux-release-notes.md').write_text(notes)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('is_prerelease=' + str(prerelease).lower() + '\n')
+          PY
+        id: notes
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+          APP_CHANNEL: ${{ needs.meta.outputs.channel }}
+          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
+          PRERELEASE_INPUT: ${{ inputs.prerelease }}
+      - name: Install Dart dependencies
+        run: flutter pub get
+        working-directory: apps/desktop-flutter
+      - name: Static analysis
+        run: dart analyze
+        working-directory: apps/desktop-flutter
+      - name: Build Linux release
+        run: flutter build linux --release "--dart-define=APP_VERSION=$APP_VERSION"
+        working-directory: apps/desktop-flutter
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+      - name: Unit tests
+        run: xvfb-run -a flutter test
+        working-directory: apps/desktop-flutter
+        timeout-minutes: 30
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Packaging and workflow contract tests
+        run: python3 -m unittest discover -s tests -p 'test_*linux*.py'
+      - name: Package AppImage and deb
+        run: |-
+          python3 scripts/package_linux.py \
+            --build-dir apps/desktop-flutter/build/linux/x64/release/bundle \
+            --output-dir dist/linux --version "$APP_VERSION" --build-number "$APP_BUILD" \
+            --channel "$APP_CHANNEL" --commit "$GITHUB_SHA" --short-commit "$APP_SHORT_COMMIT" \
+            --built-at "$APP_BUILT_AT" --flutter-version "$FLUTTER_VERSION" \
+            --node-version v22.23.4 --appimagetool "$APPIMAGETOOL" \
+            --tag "$RELEASE_TAG" --notes-file build/linux-release-notes.md
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+          APP_BUILD: ${{ needs.meta.outputs.build }}
+          APP_CHANNEL: ${{ needs.meta.outputs.channel }}
+          APP_SHORT_COMMIT: ${{ needs.meta.outputs.short_sha }}
+          APP_BUILT_AT: ${{ needs.meta.outputs.built_at }}
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+      - name: Verify package checksums
+        run: sha256sum --check SHA256SUMS.txt
+        working-directory: dist/linux
+      - name: Smoke test both Linux packages
+        run: |-
+          set -euo pipefail
+          smoke_dir="$(mktemp -d "$RUNNER_TEMP/webhtv-linux-smoke.XXXXXX")"
+          export SMOKE_DIR="$smoke_dir"
+          export GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 APPIMAGE_EXTRACT_AND_RUN=1
+          xvfb-run -a python3 - <<'PY'
+          import os
+          import re
+          import signal
+          import subprocess
+          import time
+          from pathlib import Path
+
+          root = Path(os.environ['SMOKE_DIR'])
+          version = os.environ['APP_VERSION']
+          stem = f'webhtv-pc-{version}'
+          channel = os.environ['APP_CHANNEL']
+          if channel != 'stable':
+              stem += '-' + channel
+          stem += '-linux-x64'
+          image = (Path('dist/linux') / (stem + '.AppImage')).resolve()
+          deb = (Path('dist/linux') / (stem + '.deb')).resolve()
+          subprocess.run(['dpkg-deb', '--extract', str(deb), str(root / 'deb')], check=True)
+          # Inspect the AppImage layout, then execute that same AppImage runtime below.
+          subprocess.run([str(image), '--appimage-extract'], cwd=root, check=True,
+                         stdout=subprocess.DEVNULL)
+          payloads = [root / 'deb/opt/webhtv-pc', root / 'squashfs-root']
+          for payload in payloads:
+              for relative in ('webhtv_pc', 'lib', 'data', 'runtime/node/node',
+                               'sidecars/spider-host-python/host.py', 'sidecars/spider-host-js/host.js',
+                               'sidecars/spider-host-jvm/host.jar'):
+                  if not (payload / relative).exists():
+                      raise SystemExit(f'Missing packaged runtime: {payload / relative}')
+              subprocess.run([str(payload / 'runtime/node/node'), '--version'], check=True)
+          # Run from outside the payload and from a path with spaces/non-ASCII.
+          relocated = root / 'client with spaces 中文'
+          payloads[0].rename(relocated)
+
+          # Ready protocol: 'ready <timestamp>', then startupInfo.oneLine, then trace summary.
+          info_pattern = re.compile(
+              r'^WebHTV PC ' + re.escape(version) + r' \(.*\) platform=(\S+) arch=(\S+) player=(.+?) dart=')
+
+
+          def parse_ready(text):
+              lines = [line for line in text.splitlines() if line.strip()]
+              if len(lines) < 3 or not lines[0].startswith('ready '):
+                  raise RuntimeError(
+                      'invalid ready protocol, expected "ready <timestamp>" then startupInfo and '
+                      f'trace lines: {text!r}')
+              info = lines[1]
+              if info.strip() == 'startup-info-unavailable':
+                  raise RuntimeError('unexpected startup info: startup-info-unavailable sentinel')
+              match = info_pattern.match(info)
+              if not match:
+                  raise RuntimeError(f'unexpected startup info: {info!r}')
+              platform, arch, player = match.groups()
+              # player is media-kit, whose engine label carries the libmpv backend.
+              if platform != 'linux' or arch != 'x64' or not player.startswith('media-kit'):
+                  raise RuntimeError(f'unexpected startup info: {info!r}')
+              return info
+
+
+          def process_tree_pids(pid):
+              children = {}
+              for entry in Path('/proc').iterdir():
+                  if not entry.name.isdigit():
+                      continue
+                  try:
+                      stat = (entry / 'stat').read_text()
+                  except OSError:
+                      continue
+                  children.setdefault(int(stat.rsplit(')', 1)[1].split()[1]), []).append(int(entry.name))
+              pids, stack = {pid}, [pid]
+              while stack:
+                  for child in children.get(stack.pop(), []):
+                      if child not in pids:
+                          pids.add(child)
+                          stack.append(child)
+              return pids
+
+
+          def mapped_window(pids):
+              listing = subprocess.run(['xwininfo', '-root', '-children'],
+                                       capture_output=True, text=True)
+              if listing.returncode != 0:
+                  raise RuntimeError('X11 window inventory failed: ' + listing.stderr.strip())
+              for line in listing.stdout.splitlines():
+                  found = re.match(r'\s+(0x[0-9a-f]+)\s', line)
+                  if not found:
+                      continue
+                  window = found.group(1)
+                  owner = subprocess.run(['xprop', '-id', window, '_NET_WM_PID'],
+                                         capture_output=True, text=True).stdout
+                  owner_match = re.search(r'=\s*(\d+)', owner)
+                  if not owner_match or int(owner_match.group(1)) not in pids:
+                      continue
+                  state = subprocess.run(['xwininfo', '-id', window],
+                                         capture_output=True, text=True).stdout
+                  if 'Map State: IsViewable' in state:
+                      return window
+              return None
+
+
+          for name, command in [('deb', relocated / 'webhtv_pc'), ('appimage', image)]:
+              ready, trace = root / (name + '.ready'), root / (name + '.trace')
+              env = dict(os.environ)
+              for variable, directory in (('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'),
+                                          ('XDG_DATA_HOME', 'data'), ('XDG_CACHE_HOME', 'cache')):
+                  target = root / name / directory
+                  target.mkdir(parents=True, exist_ok=True)
+                  env[variable] = str(target)
+              with (root / (name + '.log')).open('w+') as log:
+                  process = subprocess.Popen([str(command), f'--screenshot-ready-file={ready}',
+                                              f'--startup-trace={trace}'], cwd=root, env=env,
+                                             stdout=log, stderr=log, start_new_session=True)
+                  try:
+                      deadline = time.monotonic() + 45
+                      while not ready.exists():
+                          if process.poll() is not None:
+                              raise RuntimeError(f'{name} exited before readiness: {process.returncode}')
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError(
+                                  f'{name} did not report interactive readiness within 45s')
+                          time.sleep(0.1)
+                      info = parse_ready(ready.read_text())
+                      deadline = time.monotonic() + 20
+                      window = None
+                      while window is None:
+                          if process.poll() is not None:
+                              raise RuntimeError(
+                                  f'{name} exited after writing the ready marker: {process.returncode}')
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError(f'{name} reported readiness but no mapped X11 window '
+                                                 'belongs to its process tree within 20s')
+                          window = mapped_window(process_tree_pids(process.pid))
+                          if window is None:
+                              time.sleep(0.25)
+                      # Survive past the marker, catching a crash or self-exit right after readiness.
+                      time.sleep(3)
+                      if process.poll() is not None:
+                          raise RuntimeError(
+                              f'{name} exited within 3s after readiness: {process.returncode}')
+                      print(f'{name} mapped X11 window {window} {info}')
+                      print(f'{name} ready: {info}')
+                  except Exception:
+                      log.flush()
+                      log.seek(0)
+                      print(log.read()[-8000:])
+                      if trace.exists():
+                          print(trace.read_text()[-4000:])
+                      raise
+                  finally:
+                      try:
+                          os.killpg(process.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      try:
+                          process.wait(timeout=5)
+                      except subprocess.TimeoutExpired:
+                          pass
+          PY
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+          APP_CHANNEL: ${{ needs.meta.outputs.channel }}
+      - name: Upload Linux workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.version }}-${{ needs.meta.outputs.channel }}-${{ needs.meta.outputs.short_sha }}-linux-x64
+          path: |-
+            dist/linux/*.AppImage
+            dist/linux/*.deb
+            dist/linux/SHA256SUMS.txt
+            dist/linux/release-info.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Merge assets and publish one desktop release
+    needs: [meta, build-windows, build-linux]
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows assets
+        uses: actions/download-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-windows-x64
+          path: artifacts/windows
+
+      - name: Download Linux assets
+        uses: actions/download-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-linux-x64
+          path: artifacts/linux
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-release-notes
+          path: build
+
+      - name: Merge desktop assets and checksums
+        run: |-
+          set -euo pipefail
+          mkdir -p dist
+          # 分目录下载，避免同名 SHA256SUMS.txt / release-info.json 互相覆盖；
+          # Linux 的 release-info.json 改名为 linux-release-info.json，Windows 保留原名。
+          for platform in windows linux; do
+            [[ -s "artifacts/$platform/SHA256SUMS.txt" ]] || { echo "$platform 校验文件缺失" >&2; exit 1; }
+            while IFS= read -r -d '' asset; do
+              base="$(basename "$asset")"
+              case "$platform:$base" in
+                *:SHA256SUMS.txt) continue ;;
+                linux:release-info.json) cp "$asset" "dist/linux-release-info.json"; continue ;;
+              esac
+              cp "$asset" "dist/$base"
+            done < <(find "artifacts/$platform" -maxdepth 1 -type f -print0)
+          done
+          [[ -f dist/release-info.json && -f dist/linux-release-info.json ]] || { echo '缺少两平台 release-info manifest' >&2; exit 1; }
+          cat artifacts/windows/SHA256SUMS.txt artifacts/linux/SHA256SUMS.txt \
+            | sed 's/\r$//' | LC_ALL=C sort -u > dist/SHA256SUMS.txt
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+
+      - name: Upload combined workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ needs.meta.outputs.tag }}-desktop-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.meta.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.meta.outputs.title }}
+          RELEASE_PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          NOTES_FILE: build/release-notes.md
+        run: |-
+          set -euo pipefail
+          mapfile -d '' assets < <(find dist -maxdepth 1 -type f -print0)
+          (( ${#assets[@]} > 0 )) || { echo 'dist 下没有可发布资产。' >&2; exit 1; }
+          [[ -f "$NOTES_FILE" ]] || { echo "发布说明不存在：$NOTES_FILE" >&2; exit 1; }
+          # 再次检查，防止构建期间有人创建了同名但指向另一 commit 的 tag。
+          if existing_commit=$(git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}"); then
+            [[ "$existing_commit" == "$GITHUB_SHA" ]] || { echo "tag $RELEASE_TAG 已指向 $existing_commit；不会移动既有 tag。" >&2; exit 1; }
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG 已存在：覆盖同名资产并刷新说明。"
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE" "--prerelease=$RELEASE_PRERELEASE"
+          else
+            args=(release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE")
+            if [[ "$RELEASE_PRERELEASE" == true ]]; then args+=(--prerelease); fi
+            gh "${args[@]}" "${assets[@]}"
+          fi

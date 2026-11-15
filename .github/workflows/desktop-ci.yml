@@ -1,51 +1,235 @@
-# Linux x86_64: build both formats; publish only from the manual release workflow.
-name: Linux Release
-'on':
+name: Desktop CI
+
+# 普通提交的构建门禁：静态检查 + 单测 + Windows/Linux Release 构建 + 打包 + 启动烟测。
+# 产物只作为 workflow artifact 保留，不发 Release（发布见 desktop-release.yml）。
+#
+# 设计依据：docs/webhtv-pc-design.md §20（构建与打包）、§19.1（CI 矩阵）。
+#
+# 关于 dev* 分支：
+#   GitHub 只把**默认分支（main）**上的工作流登记到 Actions API，因此
+#   `workflow_dispatch` / `gh workflow list` 在 main 还没有本文件时不可用。
+#   而 push 事件只要求文件存在于被推送的那个 ref，所以 dev* 推送能正常触发。
+#   main 合入本文件后，workflow_dispatch 与 GitHub 页面的 Run workflow 即可用。
+#
+# 单测约 13 分钟、Windows runner 计费更高，因此不覆盖所有分支：
+# 只跑 main、dev* 与 PR，其它分支用 workflow_dispatch（main 具备后）。
+#
+# 两个平台是同一工作流里的两个并行 job：一次触发、一个 run，平台步骤各自独立，
+# 不把 bash/pwsh 混进 matrix。
+
+on:
+  push:
+    branches:
+      - main
+      - 'dev*'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Blank = v<version>-yyyyMMddHHmm (stable) or v<version>-beta-yyyyMMddHHmm
-        required: false
-        type: string
-      release_channel:
-        description: 'auto: main stable, other branches beta'
-        required: false
-        default: auto
-        type: choice
-        options:
-          - auto
-          - stable
-          - beta
-      release_notes:
-        description: Release notes; use \n for Markdown newlines
-        required: false
-        type: string
-      prerelease:
-        description: Mark a NEW release as prerelease (beta always does)
-        required: false
-        default: false
-        type: boolean
-      publish_release:
-        description: Publish after smoke tests; false retains workflow artifacts only
-        required: false
-        default: true
-        type: boolean
+
 permissions:
-  contents: write
+  contents: read
+
 concurrency:
-  group: linux-release
-  cancel-in-progress: false
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   TZ: Asia/Shanghai
-  FLUTTER_VERSION: 3.47.5
-defaults:
-  run:
-    shell: bash
+  FLUTTER_VERSION: "3.47.5"
+
 jobs:
-  release:
-    name: Build, package and manually publish (Linux x64)
+  build-windows:
+    name: Analyze, test, build and package (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up JDK 21 (JVM sidecar tests)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # 仅用于 JS sidecar 测试；发行包内置的 node.exe 由 scripts/package_windows.ps1 自行下载校验。
+      - name: Set up Node.js 22 (JS sidecar tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # node_modules 不入库（.gitignore:51），但 scripts/package_windows.ps1 要求
+      # sidecars/spider-host-js/node_modules 存在，缺失即打包失败。必须在打包前安装；
+      # 用 npm ci 按已入库的 package-lock.json 精确还原，--omit=dev 避免把开发依赖打进包。
+      - name: Install JS sidecar dependencies
+        working-directory: sidecars/spider-host-js
+        shell: pwsh
+        run: npm ci --omit=dev
+
+      - name: Set up Python 3.12 (Python sidecar tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enable Windows long paths and symlink support
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          git config --system core.longpaths true
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法写入 core.longpaths（非管理员）；路径较短时通常不影响构建。'
+          }
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning '无法通过注册表启用开发者模式；若 flutter pub get 因插件符号链接失败，请检查 runner 权限。'
+          }
+
+      - name: Resolve build metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $pubspec = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop-flutter/pubspec.yaml'
+          $line = Select-String -Path $pubspec -Pattern '^version:\s*([^\s#]+)\s*$' | Select-Object -First 1
+          if (-not $line) { throw 'apps/desktop-flutter/pubspec.yaml 缺少 version 字段' }
+          $full = $line.Matches[0].Groups[1].Value
+          $parsed = [regex]::Match($full, '^(\d+\.\d+\.\d+)(?:\+(\d+))?$')
+          if (-not $parsed.Success) { throw "非法版本号：$full（期望 x.y.z 或 x.y.z+build）" }
+          $version = $parsed.Groups[1].Value
+          $build = if ($parsed.Groups[2].Success) { $parsed.Groups[2].Value } else { '0' }
+          $short = (git rev-parse --short=7 HEAD).Trim()
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "build=$build" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "channel=dev" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "short_sha=$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "WebHTV PC $version+$build（dev, $short）"
+
+      - name: Install Dart dependencies
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Static analysis
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: dart analyze
+
+      # 必须排在单测之前：13 个 phase8 播放器用例会真实实例化 media_kit 的
+      # NativePlayer，而 media_kit 在 Windows 上要求 `libmpv-2.dll` 位于
+      # `%PATH%`。该 DLL 由 media_kit_libs_windows_video 的 CMake 在**原生构建时**
+      # 下载并解压到 build/windows/x64/libmpv/，所以只有先构建才有它。
+      #
+      # 本地能跑通只是因为开发机 PATH 里恰好有 libmpv 目录（如 F:/Tools/libmpv），
+      # CI runner 没有——这是一处真实的隐性环境依赖，必须在流水线里显式消除，
+      # 不能靠跳过用例掩盖。
+      - name: Prepare verified offline Python runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare_python_runtime.ps1
+          ./scripts/test_python_runtime.ps1 -Review -Integration
+      - name: Build Windows release
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        run: flutter build windows --release "--dart-define=APP_VERSION=${{ steps.meta.outputs.version }}"
+
+      - name: Unit tests
+        working-directory: apps/desktop-flutter
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $libmpv = Get-ChildItem -Path 'build/windows/x64' -Filter 'libmpv-2.dll' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $libmpv) {
+            throw '未找到 libmpv-2.dll：media_kit 的播放器用例无法运行（Release 构建应已下载解压它）。'
+          }
+          Write-Host "libmpv：$($libmpv.FullName)"
+          $env:PATH = "$($libmpv.Directory.FullName);$env:PATH"
+          # audio_ai 用例直接加载真实 native（不做 mock）：代码按
+          # <repo>/.local/audio_ai/native/audio_ai_native.dll 与
+          # <cwd>/.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll 查找，
+          # 而 .local 被 .gitignore 忽略。这里从本次 Release 构建产物与 CMake 固定的
+          # 官方 LiteRT wheel 缓存准备，任一项缺失或校验不符都直接失败，不跳过、不降级。
+          $repoRoot = (Resolve-Path '../..').Path
+          $nativeDir = Join-Path $repoRoot '.local/audio_ai/native'
+          $litertDir = Join-Path (Get-Location) '.local/audio_ai/litert/ai_edge_litert'
+          New-Item -ItemType Directory -Force -Path $nativeDir, $litertDir | Out-Null
+          foreach ($dll in @('audio_ai_native.dll', 'karaoke_mic_native.dll', 'sherpa-onnx-c-api.dll', 'onnxruntime.dll')) {
+            $source = Join-Path 'build/windows/x64/runner/Release' $dll
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "缺少原生库 $dll（build/windows/x64/runner/Release）：audio_ai 单元测试需要真实 native，不允许跳过或降级。"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $nativeDir $dll) -Force
+          }
+          # 两个等价来源（Release 产物与 CMake 解压的官方 wheel 缓存）必须是同一份
+          # pinned DLL，下面的 SHA256 校验对任一来源都成立；两者都缺失才算失败。
+          $litertSource = @(
+            (Join-Path 'build/windows/x64/runner/Release' 'libLiteRt.dll'),
+            (Join-Path $repoRoot '.local/audio_ai/litert/ai_edge_litert/libLiteRt.dll')
+          ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $litertSource) {
+            throw '缺少 pinned libLiteRt.dll：Release 构建产物与 audio_ai_runtime.cmake 缓存都没有它，不允许跳过或降级。'
+          }
+          $litertSha = (Get-FileHash -LiteralPath $litertSource -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($litertSha -ne 'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
+            throw "libLiteRt.dll SHA256 与 audio_ai_runtime.cmake 固定的官方 wheel 不一致：$litertSha"
+          }
+          Copy-Item -LiteralPath $litertSource -Destination (Join-Path $litertDir 'libLiteRt.dll') -Force
+          Write-Host "audio_ai native：$nativeDir"
+          Write-Host "libLiteRt：$litertDir"
+          flutter test
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/package_windows.ps1 `
+            -BuildDir 'apps/desktop-flutter/build/windows/x64/runner/Release' `
+            -OutputDir 'dist' `
+            -Version '${{ steps.meta.outputs.version }}' `
+            -BuildNumber '${{ steps.meta.outputs.build }}' `
+            -Channel 'dev' `
+            -Commit "$env:GITHUB_SHA" `
+            -ShortCommit '${{ steps.meta.outputs.short_sha }}' `
+            -FlutterVersion "$env:FLUTTER_VERSION"
+
+      - name: Smoke test packaged client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem -LiteralPath 'dist' -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'dist 下没有 zip' }
+          $extract = Join-Path $env:RUNNER_TEMP ('webhtv-smoke-' + [guid]::NewGuid().ToString('N'))
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract -Force
+          $exe = Get-ChildItem -LiteralPath $extract -Recurse -Filter 'webhtv_pc.exe' | Select-Object -First 1
+          if (-not $exe) { throw '解压后未找到 webhtv_pc.exe' }
+          ./scripts/smoke_windows.ps1 -ExePath $exe.FullName -ExpectedVersion '${{ steps.meta.outputs.version }}'
+
+      - name: Upload dev artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-${{ steps.meta.outputs.version }}-dev-${{ steps.meta.outputs.short_sha }}-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    name: Analyze, test, build and package (Linux x64)
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,7 +281,7 @@ jobs:
           chmod +x "$file"
           APPIMAGE_EXTRACT_AND_RUN=1 "$file" --version
           printf 'APPIMAGETOOL=%s\n' "$file" >> "$GITHUB_ENV"
-      - name: Resolve release metadata
+      - name: Resolve build metadata
         run: |-
           python3 - <<'PY'
           import datetime
@@ -143,31 +327,6 @@ jobs:
           print(f'Linux build {version}+{build} channel={channel} commit={short} tag={tag}')
           PY
         id: meta
-        env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
-          RELEASE_CHANNEL_INPUT: ${{ inputs.release_channel }}
-      - name: Prepare Linux release notes
-        run: |-
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          prerelease = os.environ['APP_CHANNEL'] == 'beta' or os.environ['PRERELEASE_INPUT'] == 'true'
-          notes = os.environ.get('RELEASE_NOTES_INPUT', '').replace('\\n', '\n').strip()
-          if not notes:
-              notes = f"WebHTV PC {os.environ['APP_VERSION']} ({os.environ['APP_CHANNEL']}) — Linux x86_64"
-          notes += '\n\nUnsigned AppImage/deb. Bundled Node; Python 3 and JDK 17+ are system requirements for corresponding sources. Ubuntu 22.04 / glibc 2.35 build baseline.\n'
-          Path('build').mkdir(exist_ok=True)
-          Path('build/linux-release-notes.md').write_text(notes)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('is_prerelease=' + str(prerelease).lower() + '\n')
-          PY
-        id: notes
-        env:
-          APP_VERSION: ${{ steps.meta.outputs.version }}
-          APP_CHANNEL: ${{ steps.meta.outputs.channel }}
-          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
-          PRERELEASE_INPUT: ${{ inputs.prerelease }}
       - name: Install Dart dependencies
         run: flutter pub get
         working-directory: apps/desktop-flutter
@@ -195,15 +354,13 @@ jobs:
             --output-dir dist/linux --version "$APP_VERSION" --build-number "$APP_BUILD" \
             --channel "$APP_CHANNEL" --commit "$GITHUB_SHA" --short-commit "$APP_SHORT_COMMIT" \
             --built-at "$APP_BUILT_AT" --flutter-version "$FLUTTER_VERSION" \
-            --node-version v22.23.4 --appimagetool "$APPIMAGETOOL" \
-            --tag "$RELEASE_TAG" --notes-file build/linux-release-notes.md
+            --node-version v22.23.4 --appimagetool "$APPIMAGETOOL"
         env:
           APP_VERSION: ${{ steps.meta.outputs.version }}
           APP_BUILD: ${{ steps.meta.outputs.build }}
           APP_CHANNEL: ${{ steps.meta.outputs.channel }}
           APP_SHORT_COMMIT: ${{ steps.meta.outputs.short_sha }}
           APP_BUILT_AT: ${{ steps.meta.outputs.built_at }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           APPIMAGE_EXTRACT_AND_RUN: '1'
       - name: Verify package checksums
         run: sha256sum --check SHA256SUMS.txt
@@ -383,36 +540,4 @@ jobs:
             dist/linux/SHA256SUMS.txt
             dist/linux/release-info.json
           if-no-files-found: error
-          retention-days: 30
-      - name: Publish Linux release assets
-        run: |-
-          set -euo pipefail
-          # Check remote tags again: a concurrent Windows publisher must never move a tag.
-          remote_tags="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
-          if [[ -n "$remote_tags" ]]; then
-            remote_commit="$(printf '%s\n' "$remote_tags" | awk '/\^\{\}$/ { print $1; found=1 } END { if (!found) print first } NR==1 { first=$1 }')"
-            if [[ "$remote_commit" != "$GITHUB_SHA" ]]; then
-              echo 'Remote tag points to a different commit; will not move it' >&2
-              exit 1
-            fi
-          fi
-          assets_dir="$(mktemp -d "$RUNNER_TEMP/webhtv-linux-assets.XXXXXX")"
-          cp dist/linux/SHA256SUMS.txt "$assets_dir/linux-SHA256SUMS.txt"
-          cp dist/linux/release-info.json "$assets_dir/linux-release-info.json"
-          assets=(dist/linux/*.AppImage dist/linux/*.deb "$assets_dir/linux-SHA256SUMS.txt" "$assets_dir/linux-release-info.json")
-          for file in "${assets[@]}"; do test -s "$file"; done
-          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            # Existing notes, title and prerelease state belong to the original publisher.
-            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
-          else
-            args=(release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE")
-            if [[ "$RELEASE_PRERELEASE" == 'true' ]]; then args+=(--prerelease); fi
-            gh "${args[@]}" "${assets[@]}"
-          fi
-        if: ${{ inputs.publish_release }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-          RELEASE_TITLE: ${{ steps.meta.outputs.title }}
-          RELEASE_PRERELEASE: ${{ steps.notes.outputs.is_prerelease }}
-          NOTES_FILE: build/linux-release-notes.md
+          retention-days: 7

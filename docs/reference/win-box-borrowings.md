@@ -800,7 +800,7 @@ webhtv.spider.Spider 或提供静态 createSpider(Map)")` 收场——**这是�
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
-| 静态分析 | `flutter analyze`（`C:\dev\flutter` 3.47.5 / Dart 3.13.4，与 CI `.github/workflows/windows-ci.yml` 的 `FLUTTER_VERSION: 3.47.5` 同版本） | **`No issues found!`** |
+| 静态分析 | `flutter analyze`（`C:\dev\flutter` 3.47.5 / Dart 3.13.4，与 CI `.github/workflows/desktop-ci.yml` 的 `FLUTTER_VERSION: 3.47.5` 同版本） | **`No issues found!`** |
 | 新增测试 | `flutter test test/jar_intake_test.dart` | **17 passed / 0 failed** |
 | 受影响的既有测试 | `flutter test test/phase3_jvm_spider_test.dart` | **18 passed / 0 failed**（含 5 个 csp 映射用例） |
 | 全量回归 | `flutter test` | **2765 passed / 10 failed**；10 个失败**全部**是环境性的（9 个 `test/phase2_ipc_test.dart` 的 sidecar 生命周期组 `SPIDER_CRASHED [transport] sidecar 意外退出（code=101）` + 1 个 `test/phase2_spider_page_test.dart:273` 的 `'running'` vs `'backoff'`），**与本改动无关**：用 `git stash` 摘掉本次 3 个被改文件后单跑 `test/phase2_spider_page_test.dart`，同一用例**同样失败**（同样的 `Expected: 'running' / Actual: 'backoff'`）。改动前的基线同批失败数为 10。 |
@@ -900,7 +900,7 @@ def create_spider(manifest=None):
    每个 handler 再包一层 `_stdout_to_stderr()` 上下文。
 2. **常驻重定向必须在退出前撤销**（实测踩坑，见 12.8.5）。`CatVodSpider.close()` 用 try/finally
    调 `_restore_stdout()`。
-3. **依赖必须惰性**。CI（`.github/workflows/windows-ci.yml`）装了 Python 3.12 但**没有任何 pip install**，
+3. **依赖必须惰性**。CI（`.github/workflows/desktop-ci.yml`）装了 Python 3.12 但**没有任何 pip install**，
    所以垫片的 `requests` / `lxml` / `pycryptodome` 全部惰性导入：有就用，没有就给**可执行的**错误文案
    （`CatVod 站源缺少 Python 依赖：requests（<entry> 需要它）。请在运行 WebHTV 的同一个 Python 环境里安装后重试。`），
    而不是在 import 阶段直接崩。
@@ -960,7 +960,7 @@ Python runtime state: finalizing
 `search` 该插件本身未实现 → 如实报 `SPIDER_UNSUPPORTED`。
 
 **边界（诚实）**：这把「82 个站点完全跑不起来」变成「能跑，前提是本机 Python 环境已装
-`requests` / `pycryptodome`（`lxml` 视插件而定）」。仓库仍不捆绑任何 pip 包（`windows-release.yml`
+`requests` / `pycryptodome`（`lxml` 视插件而定）」。仓库仍不捆绑任何 pip 包（`desktop-release.yml`
 明示不捆绑 Python 运行时），依赖缺失时给的是**能照着做的错误文案**，不是静默降级。
 
 **为什么不走 dex2jar（方案 B）**：Win-box 走的是转译 `classes.dex` 那条路，代价是长期补丁链
@@ -1335,7 +1335,7 @@ ui/app.dart:760  state.siteItems.isEmpty        ← build 里同步求值
 Win-box 走的是**相反**的方向：它把嵌入式 CPython 3.11.6 与
 `requests 2.31.0 / lxml 4.9.2 / pycryptodome 3.19.1` **随包分发**
 （`resources/python/`），用户机器上是什么解释器与它无关。
-本项目不随包分发 **Python** 解释器（`windows-release.yml` 明确不捆绑 Python / JDK 运行时；
+本项目不随包分发 **Python** 解释器（`desktop-release.yml` 明确不捆绑 Python / JDK 运行时；
 Node 运行时随包内置在 `runtime/node/node.exe`，但本节的 Python 供给与它无关），
 所以只能走「选本机已带依赖的解释器 → 否则自己建 venv」这条路——
 这是**同一问题的两种解法**：Win-box 用体积换确定性，本项目用首启一次性的

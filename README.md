@@ -99,7 +99,7 @@ Linux 原生依赖、构建和无显示器测试步骤请按 [Linux 指南](docs
 
 - [桌面客户端开发说明](apps/desktop-flutter/README.md)
 - [Windows 构建与发布](docs/release/windows.md)
-- [Windows CI：原生库准备与测试步骤](.github/workflows/windows-ci.yml)
+- [Desktop CI：Windows/Linux 原生库准备与测试步骤](.github/workflows/desktop-ci.yml)
 - [Linux 构建与发布](docs/linux-packaging.md)
 
 ### 仓库结构

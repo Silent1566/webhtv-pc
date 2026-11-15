@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import os
 import re
 import subprocess
@@ -11,19 +12,26 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+CI = 'desktop-ci.yml'
+RELEASE = 'desktop-release.yml'
+LINUX_JOB = 'build-linux'
+
+
 def workflow(name):
     path = ROOT / '.github/workflows' / name
     if not path.exists():
-        raise AssertionError(f'Missing Linux workflow: {path.name}')
+        raise AssertionError(f'Missing workflow: {path.name}')
     return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
-def steps(document):
-    return next(iter(document['jobs'].values()))['steps']
+def steps(document, job=LINUX_JOB):
+    if job not in document['jobs']:
+        raise AssertionError(f'Missing job: {job}')
+    return document['jobs'][job]['steps']
 
 
-def step(document, name):
-    return next(item for item in steps(document) if item['name'] == name)
+def step(document, name, job=LINUX_JOB):
+    return next(item for item in steps(document, job) if item['name'] == name)
 
 
 def python_body(script):
@@ -35,9 +43,9 @@ class LinuxWorkflowTests(unittest.TestCase):
         info = ('WebHTV PC 0.1.0 (MVP-A (Windows)) platform=linux arch=x64 '
                 'player=media-kit (libmpv) dart=3.13.4 (stable) on "linux_x64" startup=1939ms')
         ready = 'ready 2026-11-10T00:00:00\n' + info + '\ninteractive=1939ms\n'
-        for filename in ('linux-ci.yml', 'linux-release.yml'):
+        for filename in (CI, RELEASE):
             with self.subTest(filename=filename):
-                script = python_body(step(workflow(filename), 'Smoke test both Linux packages')['run'])
+                script = python_body(step(workflow(filename), 'Smoke test both Linux packages', 'build-linux')['run'])
                 tree = ast.parse(script)
                 nodes = [node for node in tree.body
                          if (isinstance(node, ast.FunctionDef) and node.name == 'parse_ready')
@@ -53,22 +61,28 @@ class LinuxWorkflowTests(unittest.TestCase):
                 self.assertEqual(info, result)
 
     def test_ci_cannot_publish_and_release_is_manual_only(self):
-        ci = workflow('linux-ci.yml')
-        release = workflow('linux-release.yml')
+        ci = workflow(CI)
+        release = workflow(RELEASE)
         self.assertEqual({'push', 'pull_request', 'workflow_dispatch'}, set(ci['on']))
         self.assertEqual('read', ci['permissions']['contents'])
         self.assertEqual({'workflow_dispatch'}, set(release['on']))
-        publish = step(release, 'Publish Linux release assets')
-        self.assertEqual('${{ inputs.publish_release }}', publish['if'])
         self.assertNotIn('gh release', str(ci))
-        self.assertLess(steps(release).index(step(release, 'Smoke test both Linux packages')),
-                        steps(release).index(publish))
+        # 两个平台各自构建并烟测通过后，唯一的 publish job 才发布。
+        publish_job = release['jobs']['publish']
+        self.assertEqual(['meta', 'build-windows', 'build-linux'], publish_job['needs'])
+        publish = step(release, 'Publish GitHub Release', 'publish')
+        self.assertEqual('${{ inputs.publish_release }}', publish['if'])
+        self.assertIn('release create', publish['run'])
+        self.assertIn('Smoke test both Linux packages',
+                      [item['name'] for item in steps(release, 'build-linux')])
+        self.assertIn('Smoke test packaged client',
+                      [item['name'] for item in steps(release, 'build-windows')])
 
     def test_both_workflows_obey_native_build_and_packager_contract(self):
-        for filename in ('linux-ci.yml', 'linux-release.yml'):
+        for filename in (CI, RELEASE):
             with self.subTest(filename=filename):
                 document = workflow(filename)
-                job = next(iter(document['jobs'].values()))
+                job = document['jobs'][LINUX_JOB]
                 self.assertEqual('ubuntu-22.04', job['runs-on'])
                 self.assertEqual('3.47.5', document['env']['FLUTTER_VERSION'])
                 self.assertIn('npm ci --omit=dev', str(document))
@@ -92,7 +106,7 @@ class LinuxWorkflowTests(unittest.TestCase):
                         self.assertNotRegex(item['run'], r'\$\{\{.*\}\}')
 
     def test_embedded_shell_and_python_have_valid_syntax(self):
-        for filename in ('linux-ci.yml', 'linux-release.yml'):
+        for filename in (CI, RELEASE):
             for item in steps(workflow(filename)):
                 if 'run' not in item:
                     continue
@@ -103,7 +117,7 @@ class LinuxWorkflowTests(unittest.TestCase):
                     compile(python_body(item['run']), item['name'], 'exec')
 
     def test_release_metadata_uses_commit_time_and_rejects_tag_mismatch(self):
-        code = python_body(step(workflow('linux-release.yml'), 'Resolve release metadata')['run'])
+        code = python_body(step(workflow(RELEASE), 'Resolve release metadata', 'meta')['run'])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'apps/desktop-flutter').mkdir(parents=True)
@@ -141,40 +155,75 @@ class LinuxWorkflowTests(unittest.TestCase):
             env['RELEASE_TAG_INPUT'] = 'v1.2.3-beta-202612030800\nINJECT=value'
             self.assertNotEqual(0, resolve().returncode)
 
-    def test_reused_release_uploads_only_prefixed_linux_assets(self):
-        code = step(workflow('linux-release.yml'), 'Publish Linux release assets')['run']
+    def test_merged_publish_merges_both_platforms_into_one_release(self):
+        merge = step(workflow(RELEASE), 'Merge desktop assets and checksums', 'publish')['run']
+        publish = step(workflow(RELEASE), 'Publish GitHub Release', 'publish')['run']
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / 'dist/linux').mkdir(parents=True)
-            for name in ('webhtv-pc-1.2.3-linux-x64.AppImage', 'webhtv-pc-1.2.3-linux-x64.deb',
-                         'SHA256SUMS.txt', 'release-info.json'):
-                (root / 'dist/linux' / name).write_text('fixture')
-            subprocess.run(['git', 'init', '--bare', '-q', str(root / 'origin.git')], check=True)
-            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
-            subprocess.run(['git', 'remote', 'add', 'origin', str(root / 'origin.git')], cwd=root, check=True)
-            (root / 'bin').mkdir()
-            gh = root / 'bin/gh'
-            gh.write_text('#!/bin/bash\nprintf "%s\n" "$*" >> "$GH_LOG"\n')
-            gh.chmod(0o755)
-            env = dict(os.environ, PATH=str(root / 'bin') + ':' + os.environ['PATH'],
-                       RUNNER_TEMP=str(root), GH_LOG=str(root / 'gh.log'),
-                       RELEASE_TAG='v1.2.3-202612030800', RELEASE_TITLE='title',
-                       RELEASE_PRERELEASE='false', GITHUB_SHA='f' * 40,
-                       NOTES_FILE=str(root / 'notes.md'))
-            (root / 'notes.md').write_text('notes')
-            result = subprocess.run(['bash', '-e', '-c', code], cwd=root, env=env,
+            windows = root / 'artifacts/windows'
+            linux = root / 'artifacts/linux'
+            windows.mkdir(parents=True)
+            linux.mkdir(parents=True)
+            (windows / 'webhtv-pc-1.2.3-beta-windows-x64.zip').write_text('zip')
+            (linux / 'webhtv-pc-1.2.3-beta-linux-x64.AppImage').write_text('appimage')
+            (linux / 'webhtv-pc-1.2.3-beta-linux-x64.deb').write_text('deb')
+            (windows / 'release-info.json').write_text('windows-metadata')
+            (linux / 'release-info.json').write_text('linux-metadata')
+
+            def checksums(directory):
+                entries = []
+                for name in sorted(p.name for p in directory.iterdir()
+                                   if p.name not in ('SHA256SUMS.txt', 'release-info.json')):
+                    digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                    entries.append(digest + '  ' + name)
+                return chr(10).join(entries) + chr(10)
+
+            (windows / 'SHA256SUMS.txt').write_text(checksums(windows))
+            (linux / 'SHA256SUMS.txt').write_text(checksums(linux))
+            result = subprocess.run(['bash', '-e', '-u', '-o', 'pipefail', '-c', merge], cwd=root,
                                     capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
+            dist = root / 'dist'
+            self.assertEqual({'webhtv-pc-1.2.3-beta-windows-x64.zip',
+                              'webhtv-pc-1.2.3-beta-linux-x64.AppImage',
+                              'webhtv-pc-1.2.3-beta-linux-x64.deb',
+                              'release-info.json', 'linux-release-info.json',
+                              'SHA256SUMS.txt'}, {p.name for p in dist.iterdir()})
+            # Windows 保留原名，Linux 改名成 linux-release-info.json，互不覆盖。
+            self.assertEqual('windows-metadata', (dist / 'release-info.json').read_text())
+            self.assertEqual('linux-metadata', (dist / 'linux-release-info.json').read_text())
+            merged = (dist / 'SHA256SUMS.txt').read_text()
+            self.assertIn('webhtv-pc-1.2.3-beta-windows-x64.zip', merged)
+            self.assertIn('webhtv-pc-1.2.3-beta-linux-x64.AppImage', merged)
+            self.assertEqual(3, len(merged.strip().splitlines()))
+
+            (root / 'build').mkdir()
+            (root / 'build/release-notes.md').write_text('notes')
+            (root / 'bin').mkdir()
+            gh = root / 'bin/gh'
+            gh.write_text("#!/bin/bash\nprintf \"%s\n\" \"$*\" >> \"$GH_LOG\"\nif [ \"$1 $2\" = \"release view\" ]; then exit 0; fi\n")
+            gh.chmod(0o755)
+            base_path = os.environ.get('PATH') or '/usr/local/bin:/usr/bin:/bin'
+            env = dict(os.environ, PATH=str(root / 'bin') + ':' + base_path,
+                       GH_LOG=str(root / 'gh.log'), GITHUB_SHA='f' * 40,
+                       RELEASE_TAG='v1.2.3-beta-202612030800',
+                       RELEASE_TITLE='1.2.3-beta-202612030800',
+                       RELEASE_PRERELEASE='true', NOTES_FILE='build/release-notes.md')
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            result = subprocess.run(['bash', '-e', '-u', '-o', 'pipefail', '-c', publish], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
             calls = (root / 'gh.log').read_text()
+            self.assertIn('release view', calls)
             self.assertIn('release upload', calls)
-            self.assertIn('linux-SHA256SUMS.txt', calls)
+            self.assertIn('--clobber', calls)
             self.assertIn('linux-release-info.json', calls)
-            self.assertNotIn('release edit', calls)
+            self.assertIn('release edit', calls)
             self.assertNotIn('release create', calls)
 
     def test_smoke_requires_ready_protocol_mapped_window_and_survival(self):
-        for filename in ('linux-ci.yml', 'linux-release.yml'):
-            code = step(workflow(filename), 'Smoke test both Linux packages')['run']
+        for filename in (CI, RELEASE):
+            code = step(workflow(filename), 'Smoke test both Linux packages', 'build-linux')['run']
             self.assertIn("['dpkg-deb', '--extract'", code)
             self.assertIn('APPIMAGE_EXTRACT_AND_RUN', code)
             self.assertIn('--screenshot-ready-file=', code)
@@ -198,7 +247,7 @@ class LinuxWorkflowTests(unittest.TestCase):
             self.assertIn('os.killpg', code)
 
     def test_notes_treat_untrusted_input_as_data_and_force_beta_prerelease(self):
-        code = python_body(step(workflow('linux-release.yml'), 'Prepare Linux release notes')['run'])
+        code = python_body(step(workflow(RELEASE), 'Prepare Linux release notes')['run'])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = dict(os.environ, APP_VERSION='1.2.3', APP_CHANNEL='beta',
@@ -311,8 +360,8 @@ time.sleep(120)
                      ('marker-only', False, 'invalid ready protocol'),
                      ('exit', False, 'exited'), ('delayed-exit', False, 'exited'),
                      ('no-window', False, 'no mapped X11 window')]
-            for filename in ('linux-ci.yml', 'linux-release.yml'):
-                code = python_body(step(workflow(filename), 'Smoke test both Linux packages')['run'])
+            for filename in (CI, RELEASE):
+                code = python_body(step(workflow(filename), 'Smoke test both Linux packages', 'build-linux')['run'])
                 for mode, succeeds, error in cases:
                     with self.subTest(workflow=filename, mode=mode):
                         smoke = root / (filename + '-' + mode)
@@ -332,7 +381,7 @@ time.sleep(120)
                             self.assertIn(error, result.stderr)
 
     def test_player_dependency_is_version_agnostic(self):
-        for filename in ('linux-ci.yml', 'linux-release.yml'):
+        for filename in (CI, RELEASE):
             text = (ROOT / '.github/workflows' / filename).read_text()
             self.assertNotIn('libmpv.so.', text)
             self.assertNotIn('libmpv2', text)
