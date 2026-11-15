@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import threading
 import traceback
 from typing import Any, Callable, Iterable, Mapping
@@ -285,6 +286,23 @@ class SidecarServer:
 
     # --------------------------------------------------------------- 生命周期
 
+    def _drain_in_flight(self, context: CallContext, timeout: float = 5.0) -> None:
+        """等其它在途请求把响应写完（最多 timeout 秒）。
+
+        destroy 与同一批 stdin 里的 home/category 是并发线程：先停服务循环会让
+        已经派发的请求来不及写回响应，宿主看到的是「派发了却没收响应」。
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._state_lock:
+                pending = [
+                    request_id for request_id in self._cancel_events
+                    if request_id != context.request_id
+                ]
+            if not pending:
+                return
+            time.sleep(0.005)
+
     def serve(self) -> int:
         threads: list[threading.Thread] = []
         try:
@@ -412,11 +430,16 @@ class SidecarServer:
     def _handle_destroy(self, params: Mapping[str, Any], context: CallContext) -> dict:
         self._call_quietly("destroy")
         if not self.hold:
+            # destroy 与其它请求并发执行：先等在途请求把响应写完再停服务循环，
+            # 否则同一批 stdin 里的 home/category 会被「退出得太早」截断，
+            # 宿主看到「派发了却没响应」而误判成崩溃/丢响应。
+            self._drain_in_flight(context)
             self._stopping = True
         return {"ok": True}
 
     def _handle_shutdown(self, params: Mapping[str, Any], context: CallContext) -> dict:
         """显式停机：无论 hold 与否都结束服务循环。"""
+        self._drain_in_flight(context)
         self._stopping = True
         self._call_quietly("destroy")
         return {"ok": True}
