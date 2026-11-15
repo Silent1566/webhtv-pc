@@ -21,6 +21,7 @@ import '../core/history_view.dart';
 import '../core/lut.dart';
 import '../core/osd_config.dart';
 import '../core/osd_diagnostics.dart';
+import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/playback_request.dart';
@@ -37,6 +38,7 @@ import '../core/sleep_timer.dart';
 import '../core/source_swap.dart';
 import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
+import '../core/subtitle_style.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/intro_skip/provider.dart';
@@ -157,40 +159,12 @@ enum PlayerVideoFitMode {
   final double? aspectRatio;
 }
 
-/// 字幕显示样式：默认透明底 + 黑色描边，避免视频上出现整块黑色背景。
-class PlayerSubtitleStyle {
-  const PlayerSubtitleStyle({
-    this.color = Colors.white,
-    this.backgroundColor = Colors.black,
-    this.backgroundOpacity = 0,
-    this.outlineWidth = 2,
-    this.textScale = 1,
-    this.bottomPadding = 24,
-  });
-
-  final Color color;
-  final Color backgroundColor;
-  final double backgroundOpacity;
-  final double outlineWidth;
-  final double textScale;
-  final double bottomPadding;
-
-  PlayerSubtitleStyle copyWith({
-    Color? color,
-    Color? backgroundColor,
-    double? backgroundOpacity,
-    double? outlineWidth,
-    double? textScale,
-    double? bottomPadding,
-  }) => PlayerSubtitleStyle(
-    color: color ?? this.color,
-    backgroundColor: backgroundColor ?? this.backgroundColor,
-    backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
-    outlineWidth: outlineWidth ?? this.outlineWidth,
-    textScale: textScale ?? this.textScale,
-    bottomPadding: bottomPadding ?? this.bottomPadding,
-  );
-
+/// 字幕样式的渲染投影：core 的 [SubtitleStyle] → media-kit 的视图配置。
+///
+/// 样式模型在 `core/subtitle_style.dart`（core 不能依赖 Flutter，颜色以
+/// 0xAARRGGBB 落盘），这里只负责把它翻成 [SubtitleViewConfiguration]：
+/// 默认透明底 + 黑色描边，避免视频上出现整块黑色背景。
+extension SubtitleStyleView on SubtitleStyle {
   List<Shadow> get shadows {
     if (outlineWidth <= 0) return const [];
     final d = outlineWidth.clamp(0.5, 4.0).toDouble();
@@ -213,15 +187,28 @@ class PlayerSubtitleStyle {
     style: TextStyle(
       height: 1.35,
       fontSize: 32 * textScale,
-      color: color,
+      color: Color(textColorValue),
       fontWeight: FontWeight.w500,
-      backgroundColor: backgroundColor.withValues(alpha: backgroundOpacity),
+      backgroundColor: Colors.black.withValues(alpha: backgroundOpacity),
       shadows: shadows,
     ),
     textAlign: TextAlign.center,
     padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPadding),
   );
 }
+
+/// 字幕文字色的可选档位（底部弹层与右键菜单共用同一张表）。
+///
+/// 两处必须同源：菜单里的选中判定比对的是 `textColorValue`，各写一张表会
+/// 出现「菜单里选了黄、弹层里不显示选中」这类割裂。
+const List<({String label, int value})> subtitleColorChoices = [
+  (label: '白', value: 0xFFFFFFFF),
+  (label: '黄', value: 0xFFFFEB3B),
+  (label: '青', value: 0xFF18FFFF),
+  (label: '绿', value: 0xFFB2FF59),
+  (label: '橙', value: 0xFFFFAB40),
+  (label: '粉', value: 0xFFFF4081),
+];
 
 class PlayerPage extends StatefulWidget {
   const PlayerPage({
@@ -447,7 +434,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 未命中时不标记已应用，但也不能任由每次 notifyListeners 都重算+写日志：
   /// 只有轨道集合真的变了（引擎补齐了真实轨）才值得再试一次。
   final Map<PlayerTrackSlot, List<String>> _lastTriedTrackIds = {};
-  PlayerSubtitleStyle _subtitleStyle = const PlayerSubtitleStyle();
+  /// 字幕显示样式（P1-4 起从偏好存储初始化，改动即时写盘）。
+  SubtitleStyle _subtitleStyle = SubtitleStyle.defaults;
+
+  /// 屏显样式（P1-4）：字号缩放与整层不透明度。
+  OsdStyle _osdStyle = OsdStyle.defaults;
   double? _gestureRateBeforeLongPress;
 
   /// 最近一次长按手势请求的倍速（仅供测试观测，生产代码不读）。
@@ -489,6 +480,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     _danmakuLoader = widget.danmakuLoader ?? DanmakuService();
     _danmakuStyle = widget.state.danmakuStyle;
+    _subtitleStyle = widget.state.subtitleStyle;
+    _osdStyle = widget.state.osdStyle;
     _options = widget.state.playerOptions;
     _skipSegments = widget.state.skipSegmentsFor(
       siteKey: _request.siteKey,
@@ -4203,6 +4196,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   Positioned.fill(
                     child: PlayerOsdLayer(
                       flags: widget.state.osdFlags,
+                      style: _osdStyle,
                       controlsVisible: _controlsVisible,
                       title: _isLive || _isCatchup
                           ? _request.title
@@ -5601,11 +5595,29 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 ],
               ),
               PlayerMenuItem(
+                id: 'sub_color',
+                label: '文字颜色',
+                icon: Icons.format_color_text,
+                children: [
+                  for (final choice in subtitleColorChoices)
+                    PlayerMenuItem(
+                      id: 'sub_color_${choice.value.toRadixString(16)}',
+                      label: choice.label,
+                      selected: _subtitleStyle.textColorValue == choice.value,
+                      onSelect: () => _applySubtitleStyle(
+                        _subtitleStyle.copyWith(
+                          textColorValue: choice.value,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              PlayerMenuItem(
                 id: 'sub_style_reset',
                 label: '恢复默认样式',
                 icon: Icons.restart_alt,
                 onSelect: act(
-                  () => _applySubtitleStyle(const PlayerSubtitleStyle()),
+                  () => _applySubtitleStyle(SubtitleStyle.defaults),
                 ),
               ),
             ],
@@ -5738,6 +5750,54 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   // （`_toggleOsdFlag` 自己 setState，勾选当场刷新）。
                   onSelect: () => _toggleOsdFlag(id),
                 ),
+            ],
+          ),
+          // 屏显样式与「屏显」开关平级而不是嵌进它的 children：开关是「显示
+          // 哪些项」，样式是「怎么画」；嵌进去会变成第 5 层，且与 7 个开关
+          // 混排后「字号」看起来像第 8 个开关。
+          PlayerMenuItem(
+            id: 'osd_style',
+            label: '屏显样式',
+            icon: Icons.text_format,
+            children: [
+              PlayerMenuItem(
+                id: 'osd_size',
+                label: '字号',
+                icon: Icons.text_fields,
+                children: [
+                  for (final scale in const [0.8, 1.0, 1.25, 1.5])
+                    PlayerMenuItem(
+                      id: 'osd_size_${(scale * 100).round()}',
+                      label: '${(scale * 100).round()}%',
+                      selected: (_osdStyle.textScale - scale).abs() < 0.001,
+                      onSelect: () => _applyOsdStyle(
+                        _osdStyle.copyWith(textScale: scale),
+                      ),
+                    ),
+                ],
+              ),
+              PlayerMenuItem(
+                id: 'osd_opacity',
+                label: '不透明度',
+                icon: Icons.opacity,
+                children: [
+                  for (final opacity in const [0.5, 0.7, 0.85, 1.0])
+                    PlayerMenuItem(
+                      id: 'osd_opacity_${(opacity * 100).round()}',
+                      label: '${(opacity * 100).round()}%',
+                      selected: (_osdStyle.opacity - opacity).abs() < 0.001,
+                      onSelect: () => _applyOsdStyle(
+                        _osdStyle.copyWith(opacity: opacity),
+                      ),
+                    ),
+                ],
+              ),
+              PlayerMenuItem(
+                id: 'osd_style_reset',
+                label: '恢复默认样式',
+                icon: Icons.restart_alt,
+                onSelect: act(() => _applyOsdStyle(OsdStyle.defaults)),
+              ),
             ],
           ),
           PlayerMenuItem(
@@ -6088,12 +6148,33 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     ];
   }
 
-  /// 字幕样式的就地改动（右键菜单三级叶子项用）。
+  /// 应用并持久化字幕样式（右键菜单叶子项与底部弹层的「应用」同一入口）。
   ///
-  /// **不落盘**：与 `_showSubtitleStyleSettings` 的「应用」同语义——
-  /// `PlayerSubtitleStyle` 目前是页面级字段，没有持久化能力，这里也不假装有。
-  void _applySubtitleStyle(PlayerSubtitleStyle next) {
+  /// 顺序对齐 `_toggleOsdFlag`：**先 setState、再不 await 落盘**。写盘失败只
+  /// 记日志——当前会话已经按新样式渲染，不因磁盘问题回滚。
+  void _applySubtitleStyle(SubtitleStyle next) {
+    if (!mounted) return;
     setState(() => _subtitleStyle = next);
+    unawaited(
+      widget.state.setSubtitleStyle(next).then((ok) {
+        if (!ok) {
+          widget.state.log.warning('保存字幕样式失败', scope: 'player');
+        }
+      }),
+    );
+  }
+
+  /// 应用并持久化屏显样式（字号缩放 / 不透明度）。语义同 [_applySubtitleStyle]。
+  void _applyOsdStyle(OsdStyle next) {
+    if (!mounted) return;
+    setState(() => _osdStyle = next);
+    unawaited(
+      widget.state.setOsdStyle(next).then((ok) {
+        if (!ok) {
+          widget.state.log.warning('保存屏显样式失败', scope: 'player');
+        }
+      }),
+    );
   }
 
   /// 切换一项屏显开关（菜单里就地生效，**不关闭菜单**，便于连续调整）。
@@ -6240,7 +6321,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   Future<void> _showSubtitleStyleSettings() async {
     var draft = _subtitleStyle;
-    final result = await showModalBottomSheet<PlayerSubtitleStyle>(
+    final result = await showModalBottomSheet<SubtitleStyle>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -6263,17 +6344,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 Wrap(
                   spacing: 10,
                   children: [
-                    for (final color in const [
-                      Colors.white,
-                      Colors.yellow,
-                      Colors.cyanAccent,
-                      Colors.lightGreenAccent,
-                      Colors.orangeAccent,
-                      Colors.pinkAccent,
-                    ])
+                    for (final choice in subtitleColorChoices)
                       InkWell(
                         onTap: () => setModalState(
-                          () => draft = draft.copyWith(color: color),
+                          () => draft = draft.copyWith(
+                            textColorValue: choice.value,
+                          ),
                         ),
                         borderRadius: BorderRadius.circular(20),
                         child: Container(
@@ -6281,12 +6357,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                           height: 30,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: color,
+                            color: Color(choice.value),
                             border: Border.all(
-                              color: draft.color == color
+                              color: draft.textColorValue == choice.value
                                   ? Theme.of(context).colorScheme.primary
                                   : Colors.white54,
-                              width: draft.color == color ? 3 : 1,
+                              width: draft.textColorValue == choice.value
+                                  ? 3
+                                  : 1,
                             ),
                           ),
                         ),
@@ -6356,7 +6434,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   children: [
                     TextButton(
                       onPressed: () => setModalState(() {
-                        draft = const PlayerSubtitleStyle();
+                        draft = SubtitleStyle.defaults;
                       }),
                       child: const Text('恢复默认'),
                     ),
@@ -6374,7 +6452,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       ),
     );
     if (result == null || !mounted) return;
-    setState(() => _subtitleStyle = result);
+    _applySubtitleStyle(result);
   }
 
   Future<void> _showVideoFitSettings() async {

@@ -53,7 +53,9 @@ import '../core/doh_settings.dart';
 import '../core/following.dart';
 import '../core/live_settings.dart';
 import '../core/subtitle_settings.dart';
+import '../core/subtitle_style.dart';
 import '../core/osd_config.dart';
+import '../core/osd_style.dart';
 import '../core/player_buttons.dart';
 import '../core/player_tracks.dart';
 import '../core/outbound_proxy.dart';
@@ -179,6 +181,17 @@ class UiPreferencesStore {
 
   /// 字幕源设置的**显式**设置；null 表示从未设置过（默认全关）。
   SubtitleSettings? _subtitleSettings;
+
+  /// 字幕显示样式的**显式**设置；null 表示从未设置过（用默认样式）。
+  ///
+  /// 与 [_subtitleSettings]（去哪找字幕）分开存：一个是源，一个是画法。
+  /// 落盘位置在 `ui` 段（`ui.subtitleStyle`），因为它是显示偏好而非播放行为。
+  SubtitleStyle? _subtitleStyle;
+
+  /// 屏显样式的**显式**设置；null 表示从未设置过（14dp、完全不透明）。
+  ///
+  /// 与 [_osdFlags]（显不显示）分开：一个是开关，一个是字号/透明度。
+  OsdStyle? _osdStyle;
 
   /// 弹幕库设置的**显式**设置；null 表示从未设置过（默认全关）。
   DanmakuSettings? _danmakuSettings;
@@ -347,6 +360,18 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过字幕源。
   bool get hasExplicitSubtitleSettings => _subtitleSettings != null;
+
+  /// 生效的字幕显示样式。
+  SubtitleStyle get subtitleStyle => _subtitleStyle ?? SubtitleStyle.defaults;
+
+  /// 用户是否显式设置过字幕显示样式。
+  bool get hasExplicitSubtitleStyle => _subtitleStyle != null;
+
+  /// 生效的屏显样式。
+  OsdStyle get osdStyle => _osdStyle ?? OsdStyle.defaults;
+
+  /// 用户是否显式设置过屏显样式。
+  bool get hasExplicitOsdStyle => _osdStyle != null;
 
   /// 生效的弹幕库设置。
   DanmakuSettings get danmakuSettings =>
@@ -551,6 +576,16 @@ class UiPreferencesStore {
               final value = osd[id];
               if (value is bool) _osdFlags[id] = value;
             }
+          }
+          // 字幕/屏显样式：解析交给模型（缺失与非法字段各自回落默认），
+          // 空 Map 视为「从未设置过」，避免把 {} 当成显式默认值。
+          final subtitleStyle = ui['subtitleStyle'];
+          if (subtitleStyle is Map && subtitleStyle.isNotEmpty) {
+            _subtitleStyle = SubtitleStyle.fromJson(subtitleStyle);
+          }
+          final osdStyle = ui['osdStyle'];
+          if (osdStyle is Map && osdStyle.isNotEmpty) {
+            _osdStyle = OsdStyle.fromJson(osdStyle);
           }
           // 按钮排版：顺序与隐藏集各自独立；格式兼容 List 与逗号分隔字符串。
           final buttons = ui['playerButtons'];
@@ -1006,6 +1041,22 @@ class UiPreferencesStore {
     return _persist();
   }
 
+  /// 记住字幕显示样式。归一化后比较，避免「拖到越界值」造成无意义写盘。
+  Future<bool> rememberSubtitleStyle(SubtitleStyle style) {
+    final normalized = style.normalized();
+    if (_subtitleStyle == normalized) return Future.value(true);
+    _subtitleStyle = normalized;
+    return _persist();
+  }
+
+  /// 记住屏显样式。
+  Future<bool> rememberOsdStyle(OsdStyle style) {
+    final normalized = style.normalized();
+    if (_osdStyle == normalized) return Future.value(true);
+    _osdStyle = normalized;
+    return _persist();
+  }
+
   /// 记住直播设置。
   Future<bool> rememberLiveSettings(LiveSettings settings) {
     if (_liveSettings == settings) return Future.value(true);
@@ -1162,6 +1213,15 @@ class UiPreferencesStore {
         if (spiderDebugLog != null) ui['spiderDebugLog'] = spiderDebugLog;
         // 屏显：只有显式设置过的项才写（缺席 = 默认）。
         if (_osdFlags.isNotEmpty) ui['osd'] = _osdFlags;
+        // 字幕/屏显样式：默认值不写盘（整段 ui 每轮重建，恢复默认后键自然消失）。
+        final subtitleStyle = _subtitleStyle;
+        if (subtitleStyle != null && !subtitleStyle.isDefault) {
+          ui['subtitleStyle'] = subtitleStyle.normalized().toJson();
+        }
+        final osdStyle = _osdStyle;
+        if (osdStyle != null && !osdStyle.isDefault) {
+          ui['osdStyle'] = osdStyle.normalized().toJson();
+        }
         // 按钮排版：两个键各自独立；都缺席时整个 playerButtons 不写。
         final order = _buttonOrder;
         final hidden = _buttonHidden;

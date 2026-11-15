@@ -2,8 +2,9 @@
 
 - 作用：把对 **PotPlayer 最新版（261021 / 1.7.23164）** 的功能调研，落成**可执行**的借鉴清单——
   每一项都给出「PotPlayer 怎么做 → 本仓库落在哪个文件 → 优先级 → 前置条件/风险 → 验收口径」。
-- 性质：以分析为主，**P0/P1/P2 是 backlog**，是否实施由产品决策；本文不含任何已实施改动。
-- **要清单不要论证？** 直接看 [potplayer-checklist.md](potplayer-checklist.md)（38 条全量清单，
+- 性质：以分析为主，**除 P1-4（§4.1，本轮已实现）外，P0/P1/P2 都是 backlog**，是否实施由产品决策。
+  P1-4 的落地推翻了本节原来的建议（用 mpv `sub-*` 属性落盘），账记在 §12。
+- **要清单不要论证？** 直接看 [potplayer-checklist.md](potplayer-checklist.md)（39 条全量清单，
   按 P0/P1/P2/已具备/不做/待确认分组，带编号可逐条勾选）。本文与它是同一份结论的两种视图：
   **清单是唯一条目枚举，本文负责每条为什么成立、以及哪些结论被推翻过**。
 - 调研方式：三段证据链——
@@ -63,7 +64,7 @@
 | 1 | 双击左/右半屏分别配置动作 | 260819「Added the ability to individually configure actions for the left and right areas upon double-clicking」 | `ui/player_page.dart:82-123`、`:4902-4925` | **P0 借鉴** |
 | 2 | 拖动进度条时暂停 | 260622「Added pause function when navigating via the navigation bar」 | `ui/player_overlay.dart:204-283` | **P0 借鉴** |
 | 3 | 播放列表过滤式搜索 | 261021「customize the playlist search method」；260819「playlist search function to operate as a filter」 | `ui/player_queue_panel.dart`、`ui/player_episode_panel.dart`（TextField 0 命中） | **P0 借鉴** |
-| 4 | 字幕/OSD 样式落盘 | 240618 OSD 字体可设；250514 字幕字体处理；260401 用 libass 输出字幕 | `ui/player_page.dart:5697-5705`（明确不落盘）、`core/subtitle_settings.dart`（仅字幕**源**） | **P1 借鉴** |
+| 4 | 字幕/OSD 样式落盘 | 240618 OSD 字体可设；250514 字幕字体处理；260401 用 libass 输出字幕 | `core/subtitle_style.dart`、`core/osd_style.dart`；落盘 `services/ui_preferences_store.dart:1216-1224`（`ui.subtitleStyle` / `ui.osdStyle`） | **P1 已实现**（§4.1：样式落在 Flutter 侧 `SubtitleViewConfiguration`，零新增 mpv 属性） |
 | 5 | HDR 色调映射可调 | 250625「select HDR tone mapping type」；241211 HDR2084 显示器亮度 | `core/player_options.dart:164-170`（固定 5 个 mpv 属性） | **P1 借鉴** |
 | 6 | 字幕字符集处理 | 260114「Improved subtitle character set handling」 | `core/text_codec.dart`（utf-8/utf-16/gbk/latin1，无 Big5/Shift-JIS） | **P1 借鉴** |
 | 7 | 片段重复（A-B） | 210929 快速区间重复；200512 重复次数；200616 重复延迟 | `core/playback_repeat.dart:8-16`（仅 off/one/all） | **P1 借鉴** |
@@ -73,7 +74,7 @@
 | 11 | ReplayGain → 实为「响度归一」 | 261021「Added ReplayGain support」；安装包另有独立的 `Normalizer (Auto Volume Control)`（§11.4） | grep `replaygain` / `normaliz(e|er)` 播放器侧 **0 命中** | **P2 借问题不借实现**（见 §5.4）：ReplayGain 靠文件标签，站源没有；要做的是 Normalizer |
 | 12 | 鼠标按键调速 | 241015「adjust playback speed when pressing the mouse button」 | `core/player_options.dart:112 longPressSpeed`、`:81 choices [2,2.5,3,4]` | 已具备 |
 | 13 | 实时语音转字幕 | 250909 / 241211（Whisper）；250625 加 VAD | `services/audio_ai/realtime_subtitle_controller.dart`、`core/audio_ai/cue_window.dart` | 已具备 |
-| 14 | libass 渲染 ASS/SSA | 250226 / 260401 | mpv 默认走 libass；`core/subtitle.dart:98-105` 接受 ass/ssa | 已具备 |
+| 14 | 字幕文件格式白名单（含 ass/ssa） | 250226 / 260401 | `core/subtitle.dart:98-105` 接不接受这个文件；**绘制不走 libass**，见 §4.1「字幕渲染路径复核」 | 格式已具备；**ASS 排版不做**，见 §12.2 与 checklist Q-39 |
 | 15 | 字幕在线翻译 | 230705 / 230831 | `services/audio_ai/srt_translation_service.dart`、`core/audio_ai/srt_cues.dart:86` | 已具备 |
 | 16 | 播放队列/连播/循环 | — | `core/playback_queue.dart`、`core/playback_repeat.dart` | 已具备 |
 | 17 | 记忆播放位置/续播 | — | `ui/playback_resume.dart:24`、`core/playback_request.dart:61-142` | 已具备 |
@@ -272,7 +273,7 @@ class PlayerProgressSlider extends StatefulWidget {
 
 ## 4. P1：结构性收益，需要独立设计
 
-### 4.1 字幕与 OSD 样式落盘
+### 4.1 字幕与 OSD 样式落盘（P1-4，已实现）
 
 **PotPlayer 做法**
 
@@ -281,39 +282,71 @@ class PlayerProgressSlider extends StatefulWidget {
 260401「Added the ability to output subtitles using libass」。
 三件事连起来看：**样式要可调、要能选渲染器、要能持久**。
 
-**本仓库现状（逐行核实）**
+**本仓库实现前的现状（逐行核实）**
 
-- `ui/player_page.dart:5697-5705` 明确写着不落盘：
-
-```dart
-/// 字幕样式的就地改动（右键菜单三级叶子项用）。
-///
-/// **不落盘**：与 `_showSubtitleStyleSettings` 的「应用」同语义——
-/// `PlayerSubtitleStyle` 目前是页面级字段，没有持久化能力，这里也不假装有。
-void _applySubtitleStyle(PlayerSubtitleStyle next) {
-  setState(() => _subtitleStyle = next);
-}
-```
-
-- `core/subtitle_settings.dart` 只有**字幕源**：`autoMatch` / `preferredLanguages` /
-  `httpEndpoint` / `httpToken` / `localDirectories`，没有任何字号/描边/位置字段。
+- `ui/player_page.dart` 的 `_applySubtitleStyle` 当时注释原文就是「**不落盘**：与
+  `_showSubtitleStyleSettings` 的「应用」同语义——`PlayerSubtitleStyle` 目前是页面级字段，没有持久化
+  能力，这里也不假装有」。该注释已随实现删除，现值见下「本轮落地」。
+- `core/subtitle_settings.dart` 只有**字幕源**：`autoMatch` / `preferredLanguages` / `httpEndpoint` /
+  `httpToken` / `localDirectories`，没有任何字号/描边/位置字段。
 
 **缺口**：每次进播放器都要重调字号与位置；OSD 字体不可配。对「一次看几十集」的场景，
 这是每天都疼的点。
 
-**建议**
+**本轮落地（A 级，代码实测）**
 
-1. 新增 `core/subtitle_style_settings.dart`（纯数据 + `normalized()` + `toJson/fromJson`，
-   照 `core/subtitle_settings.dart` 的写法），落到 `services/ui_preferences_store.dart`
-   （参照 `:1017 rememberPlayerOptions` 的模式）。
-2. 播放器把样式翻译成 mpv 属性并**并入** `player_options.dart:164-170` 的 `mpvProperties`：
-   `sub-font-size` / `sub-border-size` / `sub-pos` / `sub-color` / `sub-back-color` / `sub-bold`。
+| 层 | 落点 |
+| --- | --- |
+| 模型 | `core/subtitle_style.dart`（`SubtitleStyle`：文字色 / 底色不透明度 / 描边 / 字号 / 底部间距，带 `normalized` / `toJson` / `fromJson` / `isDefault` / `copyWith`）、`core/osd_style.dart`（`OsdStyle`：字号 / 不透明度） |
+| 落盘 | `services/ui_preferences_store.dart:1216-1224` 写 `ui.subtitleStyle` / `ui.osdStyle`；`:1181` 每轮重建整个 `ui` 段，所以「恢复默认后键消失」是结构保证，不靠删键逻辑；`state/app_state.dart:1683,1687` 读、`:2437,2446` 写 |
+| 消费 | `ui/player_page.dart:159-191`（`extension SubtitleStyleView` → `SubtitleViewConfiguration`，`:3663-3664` 注入视频层；**只作用于 mpv 轨字幕**，ASR 字幕另行绘制，见下「前置条件 / 风险」）、`:5138-5239`「字幕 → 字幕样式」（字号 / 描边 / 位置 / 底色各 4 档、文字颜色 6 档、恢复默认）、`:5374-5417`「显示 → 屏显样式」（字号 / 不透明度各 4 档、恢复默认）；`ui/player_osd.dart:32-33`（正文 `14 * textScale`）、`:306`（诊断面板 `10 * textScale`）、`:162`（整层 `Opacity`，`:3826-3828` 由播放器页传入） |
+| 默认外观 | 逐项等于 Phase 3–8 的写死值：字幕 32dp 基准字号 + 白字 + 全透明底 + 2px 黑描边 + 底部 24dp；OSD 100% 字号、100% 不透明 |
 
-**关键约束（libass 覆盖语义）**
+**字幕渲染路径复核（A 级，代码实测）**
 
-ASS/SSA 自带样式。mpv 用 `sub-ass-override`（`no`/`scale`/`force`/`strips`）决定用户设置
-是否夺走字幕组的排版。**默认必须是 `scale`**（只缩放、不夺样式），否则会毁掉 ASS 字幕的
-定位与特效。
+结论先行：**本仓库从不使用 mpv 的 libass 渲染**，字幕由 Flutter 侧画。所以「把样式写成 mpv `sub-*`
+属性」这条路从一开始就不通，P1-4 只能落在 `SubtitleViewConfiguration` 上。
+
+| 环节 | 代码事实 |
+| --- | --- |
+| 默认值 | `PlayerConfiguration.libass` 默认 `false`：`media_kit-1.2.6/lib/src/player/platform_player.dart:526` |
+| 关闭时注入 mpv | `sub-ass` / `sub-visibility` / `secondary-sub-visibility` 全写 `no`：同包 `lib/src/player/native/player/real.dart:2434-2436` |
+| 谁画字幕 | `SubtitleView` 只在 `!libass` 时挂载：`media_kit_video-2.0.1/lib/src/video/video_texture.dart:450-455`（`:451` 即 `!(…configuration.libass ?? false)`）；它渲染 `player.stream.subtitle`，也就是 mpv 的 `sub-text`（`real.dart:1911` 监听、`:2477` 注册格式）——**纯文本** |
+| 本仓库 | 生产代码两处 `Player()` 都没传 `libass`：`ui/player_controller.dart:132`、`services/reader/media_kit_reader_audio.dart:26` |
+
+（上表媒体库路径相对 `~/.pub-cache/hosted/pub.dev/`，包版本即目录名：`media_kit 1.2.6`、`media_kit_video 2.0.1`。）
+
+**`sub-*` 属性为什么不生效**（三条，逐条对应上表）
+
+1. `sub-ass=no` + `sub-visibility=no` 之后，mpv 既不按 libass 解析 ASS 的排版指令、也不自己输出字幕；
+   `sub-font-size` / `sub-border-size` / `sub-pos` / `sub-color` / `sub-back-color` / `sub-bold` 调的都是
+   libass 的输出参数，没有消费者。
+2. 上屏的是 Flutter widget：字号、颜色、描边、内边距全部来自 `ui/player_page.dart:178-190` 构造的
+   `SubtitleViewConfiguration`。mpv 属性不跨进程影响 widget。
+3. `sub-ass-override` 是「用户设置要不要夺走字幕组样式」的开关，**只在 libass 打开时有意义**。原建议
+   「必须把默认值论证成 `scale`」因此是空论证——没有可覆盖的对象。
+
+**为什么默认值必须仍然等于今天的外观**
+
+- 今天的每个数都是既有实现的写死值：`ui/player_osd.dart:32-33` 的 14dp 正文、`:306` 的 10dp 诊断面板、
+  字幕 32dp 基准 + 2px 描边 + 底部 24dp。默认值一漂移就等于「用户没碰任何设置、画面却变了」——这种
+  改动没有 UI 痕迹可追，回滚成本最高。
+- 默认值同时是「恢复默认」的判据：`core/subtitle_style.dart:141` / `core/osd_style.dart:66` 的 `isDefault`
+  决定「不写盘」（`services/ui_preferences_store.dart:1216-1224`）。默认值与既有观感不等，恢复默认就会
+  把一个「新外观」还回去。
+
+**被作废的建议（对照 §12.1）**
+
+原建议 2「把样式翻译成 mpv 属性并入 `mpvProperties`」作废，理由见上「`sub-*` 属性为什么不生效」。
+`mpvProperties` 的「空值/默认项也写」约定（`core/player_options.dart:163`）仍然有效，但**与 P1-4 无关**：
+本轮零新增 mpv 属性。
+
+**关键约束（这是「渲染器归属」问题，不是 mpv 参数问题）**
+
+ASS/SSA 自带样式。mpv 用 `sub-ass-override`（`no`/`scale`/`force`/`strips`）决定用户设置是否夺走字幕组
+的排版——**但这条只对本仓库未启用的 libass 路径成立**。今天的事实是：libass 关闭，ASS 的定位与特效在
+`sub-text` 这一步就没了，字幕组排版全部丢失。这是**既有行为**，不是本轮引入的回归；要不要改，归 §12.2
+与 checklist 的 Q-39。
 
 **安装包实证（§11.4）**：PotPlayer 把这件事做成了**四态选择器**，而不是一个开关：
 
@@ -326,18 +359,35 @@ ASS/SSA 自带样式。mpv 用 `sub-ass-override`（`no`/`scale`/`force`/`strips
 
 并且**字体后端也是三选一**（`5017-5019`）：`GDI - High compatibility, reasonable speed` /
 `FreeType - Medium compatibility, fast speed` / `DirectWrite`。
-结论：字幕渲染在 PotPlayer 那里是「引擎 × 样式归属」的二维选择；本项目的 mpv 只有
-`sub-ass-override` 一维，**够用但要把默认值论证清楚**，别默认 `force`。
+
+结论：字幕渲染在 PotPlayer 那里是「引擎 × 样式归属」的二维选择；本仓库今天是**单轨**（libass 恒关、
+Flutter 恒画），所以「样式归属」在打开 libass 之前根本不是可调维度——这正是 Q-39 必须先拿 Before/After
+才能立项的原因。
 
 **前置条件 / 风险**
 
-- `mpvProperties` 的设计是「**空值/默认项也写**」：`player_options.dart:163` 的注释是
-  「保证切换设置后不回落到引擎旧值」——新属性必须遵守同一约定，否则切回默认时残留旧值。
-- 样式改动要即时生效且可一键还原。
+- 视觉回归面：样式只作用于 **mpv 轨字幕**。四路同源——外挂、在线匹配、本地挑文件都先变成外挂候选
+  （`core/subtitle.dart:198-208`），再走 `ui/player_controller.dart:576-598`（`isExternal` 分支：落临时文件 →
+  `setSubtitleTrack(SubtitleTrack.uri(...))`）；内嵌走 `ui/player_controller.dart:610-617`。四路最后都是一条
+  mpv 轨，经 `sub-text` 回到同一个 `SubtitleView`，所以改一次样式四路同时变。
+  **ASR（音频 AI）字幕是例外**：它由 `ui/player_page.dart:3678-3697` 把 `RealtimeSubtitleOverlay`
+  （定义在 `lib/ui/audio_ai/audio_ai_controls.dart:429`，绘制是 `:552-554` 的普通 `SelectableText` / `Text`）
+  直接叠在画面上，读的是实时字幕控制器与呈现时钟，**不经过 `SubtitleViewConfiguration`**，字幕样式改动
+  不影响它（`RealtimeSubtitleControls` 里那一份 `:417` 同理）。注意 `PlayerAudioAiPanel`
+  （`ui/player_page.dart:3740`，类定义在 `lib/ui/ai_integration_widgets.dart:792`）
+  是控制面板，不是 ASR 字幕的绘制点。验证口径因此是「四路同源看一次 + ASR 单独确认不受影响」。
+- 落盘口径：默认值不写盘由 `services/ui_preferences_store.dart:1216-1224` 的结构保证（`:1181` 整段重建）；
+  新增字段写空值会把它固化进 `settings.json`。
+- 写盘失败不回滚：`ui/player_page.dart:5763-5773` 先 `setState`、再 unawaited 落盘，失败只记日志——这是
+  既定语义，别改成「保存失败就弹窗回滚」。
 
 **验收**
 
-- 改字号/描边/位置后重进播放器仍生效；ASS 字幕默认不被夺样式；`dart analyze` 无告警。
+- 改字号 / 描边 / 位置 / 底色 / 文字颜色后重进播放器仍生效。
+- 「恢复默认样式」后 `settings.json` 的 `ui.subtitleStyle` / `ui.osdStyle` 键消失。
+- 默认值下观感与 Phase 3–8 完全一致（没人动过设置 = 画面不该有任何变化）。
+- ASS 排版丢失**不在本条验收范围**：单列为 checklist 的 Q-39。
+- `dart analyze` 无告警。
 
 ---
 
@@ -517,7 +567,7 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 | 能力 | 本仓库落点 | 说明 |
 | --- | --- | --- |
 | 实时语音转字幕 | `services/audio_ai/realtime_subtitle_controller.dart`、`core/audio_ai/cue_window.dart` | sherpa-onnx 本地推理；`cue_window` 已处理「ASR 时间戳不能直接当显示时间」 |
-| libass 渲染 ASS/SSA | `core/subtitle.dart:98-105` | 扩展名白名单含 ass/ssa；mpv 默认走 libass |
+| 字幕文件格式白名单（含 ass/ssa） | `core/subtitle.dart:98-105` | 接不接受这个文件已具备；**绘制不走 libass**，见 §4.1「字幕渲染路径复核」与 §12.2 |
 | 字幕在线匹配/翻译 | `services/subtitle_providers.dart`、`services/subtitle_match_service.dart`、`services/audio_ai/srt_translation_service.dart` | 默认全关，不配置就不发请求 |
 | 播放队列/连播/循环 | `core/playback_queue.dart`、`core/playback_repeat.dart` | 队列是懒加载的（`hasMore`/`loadMore`） |
 | 续播记忆 | `ui/playback_resume.dart:24`、`core/playback_request.dart:61-142` | 跨源续播用 `resumeSeed` |
@@ -552,8 +602,8 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 2. **「搜索」不等于「过滤」**：PotPlayer 261021 先做播放列表搜索，260819 立刻改成「过滤」。
    做 §3.3 时按「列表收缩」设计，别做「高亮跳转」。
 3. **字幕样式是反复回归区**：250514 改字体处理、250312 修 ASS/SSA、260114 修字符集——
-   同一家产品连着几个版本在同一个区打补丁。做 §4.1 时**默认 `sub-ass-override=scale`**，
-   并且把「切回默认」当成一等用例测。
+   同一家产品连着几个版本在同一个区打补丁。做 §4.1 时**没有**去调 `sub-ass-override`：本仓库 libass 恒关，
+   那条开关管不到绘制路径（§12.1）；真正要做的是「样式归属」的取舍——见 §12.2 与 checklist Q-39。
 4. **实时字幕在直播里的不同步**：260114 专门修了「实时流媒体播放时字幕生成与实时音频不同步」。
    本项目 `core/audio_ai/cue_window.dart` 的文件头注释已经写明「PC 不延迟播放器：ASR 在语音
    端点返回，显示窗口从可呈现的位置开始」——改 ASR 相关逻辑时别退回「拿 ASR 时间戳直接当显示时间」。
@@ -569,7 +619,7 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 | 1 | §3.2 拖动暂停 | 改动最小、无新概念、不引入存储 |
 | 2 | §3.1 双击分区 | 已有 `PlayerDoubleClickGate`，改动集中在一个文件；但要连带 `PlayerOptions` 新字段 |
 | 3 | §3.3 队列过滤 | 纯 UI + 边界提示，不碰播放器 |
-| 4 | §4.1 字幕样式落盘 | 需要新存储模型 + mpv 属性合并 + libass 覆盖语义 |
+| 4 | §4.1 字幕样式落盘 | **已实现**：新存储模型（`core/subtitle_style.dart`、`core/osd_style.dart`）+ `ui.subtitleStyle` / `ui.osdStyle` 落盘；不走 mpv 属性，ASS 归属单列 Q-39 |
 | 5 | §4.2 HDR 色调映射 | 需要先确认 libmpv 版本 |
 | 6 | §4.3 字符集 / §4.4 A-B / §5.x | 按需，互不阻塞 |
 
@@ -611,6 +661,11 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 | `grep -c "TextField" lib/ui/player_queue_panel.dart lib/ui/player_episode_panel.dart` | **0 / 0** |
 | `grep -rni "hdr\|toneMapping"` | 仅标题正则（`core/tmdb_title.dart:33,67`、`core/ai_content/title_resolution.dart:266`），**播放器侧 0** |
 | `wc -l` | `player_page.dart` 6401、`player_context_menu.dart` 701、`player_overlay.dart` 470、`player_options.dart` 292 |
+| `grep -rn 'libass' lib test` | **0 命中**（没有任何一处打开 libass） |
+| `grep -n 'this.libass' …/media_kit-1.2.6/lib/src/player/platform_player.dart` | `:526` → `this.libass = false` |
+| `grep -n 'sub-ass\|sub-visibility' …/media_kit-1.2.6/…/real.dart` | `:2434-2436` 三条按 `libass` 取值写 `no` |
+| `grep -n 'SubtitleView' …/media_kit_video-2.0.1/lib/src/video/video_texture.dart` | `:450-455` 只在 `!libass` 时挂 Flutter 侧 `SubtitleView` |
+| `grep -rn 'Player(' lib/` | 仅两处构造：`ui/player_controller.dart:132`、`services/reader/media_kit_reader_audio.dart:26`，都没传 `libass` |
 
 **未能验证的部分（如实列出）**
 
@@ -770,6 +825,7 @@ Extension/Media/PlayParse/     MediaPlayParse - YouTube.as
   所以拿不到「出厂默认设置」的完整快照。
 - **任何性能数据**：无（未运行）。
 - 本项目 media-kit 打包的 **libmpv 版本**：仍未查，是 §4.2 / §5.2 的前置条件。
+- 开 libass 之后的真实观感（ASS 定位/特效是否恢复、与 Flutter 侧样式如何取舍）：需要图形环境实跑，见 §12.2 与 checklist Q-39。
 
 ### 11.7 复核命令（本次实际执行）
 
@@ -790,3 +846,47 @@ grep -n '5005=\|5006=\|3131=\|3385=\|5010=\|5013=' extract/Language/English.ini
 **产物位置**：`/tmp/pp/PotPlayerSetup64.exe`、`/tmp/pp/extract/`（183 MB）。
 未提交进仓库——体积与许可证都不适合入库，本文只保留结论与命令。
 
+---
+
+## 12. 被推翻过的判断（复核后的更正）
+
+> 开头承诺本文负责「哪些结论被推翻过」，这一节就是账本。每条三段：**原判断 → 推翻它的证据（file:line）
+> → 现在的口径**。证据一律 **A 级**（代码实测）；被推翻的原判断来自本文早期草稿与 `potplayer-checklist.md` 的 P1-4。
+
+### 12.1 「P1-4 用 mpv `sub-*` 属性落盘」——推翻
+
+**原判断**（§4.1 早期建议 2）：把字幕样式翻成 mpv 属性 `sub-font-size` / `sub-border-size` / `sub-pos` /
+`sub-color` / `sub-back-color` / `sub-bold`，并入 `core/player_options.dart:164-170` 的 `mpvProperties`；
+并把 `sub-ass-override` 的默认值论证成 `scale`。
+
+**推翻它的证据**：本仓库的字幕**不经过 mpv 渲染**（链路见 §4.1「字幕渲染路径复核」）。
+
+- `PlayerConfiguration.libass` 默认 `false`：`~/.pub-cache/hosted/pub.dev/media_kit-1.2.6/lib/src/player/platform_player.dart:526`。
+- 关闭时给 mpv 写 `sub-ass=no` / `sub-visibility=no` / `secondary-sub-visibility=no`：同包 `lib/src/player/native/player/real.dart:2434-2436`。
+- Flutter 侧只在 `!libass` 时挂 `SubtitleView`：`~/.pub-cache/hosted/pub.dev/media_kit_video-2.0.1/lib/src/video/video_texture.dart:450-455`（`:451` 即 `!(…configuration.libass ?? false)`）。
+- 本仓库生产代码两处 `Player()` 构造都没传 `libass`：`apps/desktop-flutter/lib/ui/player_controller.dart:132`、`apps/desktop-flutter/lib/services/reader/media_kit_reader_audio.dart:26`。
+- 于是 `mpvProperties` 里写任何 `sub-*` 都进不了绘制路径；`sub-ass-override` 在 libass 关闭时没有可覆盖的对象，论证它等于论证一个空操作。
+
+**现在的口径**：样式落在 Flutter 侧——`apps/desktop-flutter/lib/core/subtitle_style.dart` +
+`apps/desktop-flutter/lib/core/osd_style.dart`，渲染投影 `apps/desktop-flutter/lib/ui/player_page.dart:159-191`，
+落盘 `ui.subtitleStyle` / `ui.osdStyle`（`apps/desktop-flutter/lib/services/ui_preferences_store.dart:1216-1224`）；
+**零新增 mpv 属性**。
+
+### 12.2 「mpv 默认走 libass，所以 ASS/SSA 排版是现成的」——推翻
+
+**原判断**（`potplayer-checklist.md` D-18 的备注、§2 对照总表第 14 行）：扩展名白名单收 `ass`/`ssa`，
+mpv 默认用 libass 渲染，字幕组排版天然保留。
+
+**推翻它的证据**：白名单只决定「接不接受这个文件」（`apps/desktop-flutter/lib/core/subtitle.dart:98-105`），
+不决定「谁来画」。绘制路径同 §12.1：mpv 不画（`sub-visibility=no`），Flutter 画，而 Flutter 拿的是 mpv 的
+`sub-text`（`real.dart:1911` 监听、`:2477` 注册格式）——**纯文本**，ASS 的定位/特效标记在这一步已经剥掉。
+像素级观感未在本机实跑（Linux，无图形环境），但「排不掉 libass」这条链是代码事实。
+
+**现在的口径**：能力记为「字幕文件格式白名单（含 ass/ssa）」；**ASS 排版丢失单列为 checklist Q-39**，
+切 libass 要 Before/After 视觉证据，且回归面包含「Flutter 侧样式整层失效」。
+
+### 12.3 顺带纠正的一句代码注释（已改）
+
+`apps/desktop-flutter/lib/ui/player_controller.dart:507` 原来用「写成带真实扩展名后 libass 能直接按扩展名解析」
+解释外挂字幕落盘的理由。扩展名确实有用（影响 mpv 的格式识别与轨表刷新），但**与 libass 无关**——本仓库
+libass 关着。该句已按 §12.1 的口径改为「mpv 能按扩展名直接识别格式」，代码行为未变。
