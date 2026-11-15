@@ -10,11 +10,11 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/session_recovery_store.dart';
 import 'package:webhtv_pc/services/ui_preferences_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/advanced_settings_page.dart';
+import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/recovery_banner.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
-import 'support/advanced_settings_navigation.dart';
+import 'support/settings_row_navigation.dart';
 
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
@@ -336,7 +336,9 @@ void main() {
     });
   });
 
-  group('高级设置入口（L2）', () {
+  // 「高级设置」中枢整页已删除：DoH 进「连接与服务」、隐身模式进「维护」。
+  // 这一组锁的仍然是同一件事——两处的入口都真实可达、开关都真的改状态。
+  group('分类页入口（L2）', () {
     late Directory temp;
     late AppState state;
 
@@ -353,21 +355,32 @@ void main() {
       } catch (_) {}
     });
 
-    testWidgets('隐身开关在中枢、DoH 在独立明细页：都能进入并改开关', (tester) async {
+    testWidgets('隐身开关在维护类、DoH 在独立明细页：都能进入并改开关', (tester) async {
       tester.view.physicalSize = const Size(900, 700);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
-          home: AdvancedSettingsPage(state: state),
+          home: ListenableBuilder(
+            listenable: state,
+            builder: (context, _) => Scaffold(body: SettingsPage(state: state)),
+          ),
         ),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
 
-      // DoH 的三个控件已迁到独立明细页：先经中枢上的「加密 DNS（DoH）」行真实
-      // 进入，再逐个断言；写入后还要断言开关自己回显（写盘通知在真实事件循环上）。
-      await tapAdvancedRow(tester, 'settings-doh-open');
+      // DoH 的三个控件在「连接与服务」里的一行入口后面：先真实进入明细页，
+      // 再逐个断言；写入后还要断言开关自己回显（写盘通知在真实事件循环上）。
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-connections')),
+      );
+      await pumpSettingsSettled(tester);
+      await tapCategoryRow(
+        tester,
+        category: 'connections',
+        rowKey: 'settings-doh-open',
+      );
       expect(
         find.widgetWithText(AppBar, '加密 DNS（DoH）'),
         findsOneWidget,
@@ -386,26 +399,32 @@ void main() {
 
       final dohEnabled = find.byKey(const ValueKey('settings-doh-enabled'));
       await tester.tap(dohEnabled);
-      await settleAdvancedIo(tester);
+      await settleSettingsIo(tester);
       expect(state.dohSettings.enabled, isTrue);
       expect(
         tester.widget<SwitchListTile>(dohEnabled).value,
         isTrue,
         reason: 'DoH 开关必须回显为开，不能弹回',
       );
-      await backFromAdvancedDetail(tester);
-      expect(find.widgetWithText(AppBar, '高级设置'), findsOneWidget);
-
-      // 隐身开关仍在枢纽约「隐私与诊断」段里：滚过去真实点击。
-      final incognito = find.byKey(const ValueKey('settings-incognito'));
-      await tester.scrollUntilVisible(
-        incognito,
-        200,
-        scrollable: advancedHubScrollable(),
+      await backFromSettingsDetail(tester);
+      expect(
+        find.byKey(const ValueKey('settings-category-content-connections')),
+        findsOneWidget,
+        reason: '返回后必须回到「连接与服务」分类页',
       );
-      await tester.ensureVisible(incognito);
-      await pumpAdvanced(tester);
-      expect(incognito, findsOneWidget, reason: '中枢缺少区块：settings-incognito');
+
+      // 隐身开关现在在「维护」类里就地生效：切类 → 滚过去 → 真实点击。
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-maintenance')),
+      );
+      await pumpSettingsSettled(tester);
+      final incognito = find.byKey(const ValueKey('settings-incognito'));
+      await revealCategoryRow(
+        tester,
+        category: 'maintenance',
+        rowKey: 'settings-incognito',
+      );
+      expect(incognito, findsOneWidget, reason: '维护类缺少区块：settings-incognito');
       await tester.tap(incognito);
       await tester.pumpAndSettle();
       expect(state.incognito, isTrue);

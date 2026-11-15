@@ -1,7 +1,10 @@
-/// 高级设置明细页。独立路由自行监听 AppState，避免受控开关视觉回弹。
+/// 设置明细页：播放参数、弹幕源、直播、分组规则、出站代理、DoH、浏览器内核与「关于与数据」。
+///
+/// 独立路由自行监听 AppState，避免受控开关视觉回弹。
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/doh.dart';
 import '../core/doh_settings.dart';
@@ -10,13 +13,14 @@ import '../core/player_options.dart';
 import '../core/site_group_rules.dart';
 import '../services/app_paths.dart';
 import '../state/app_state.dart';
+import 'app.dart';
 import 'browser_component_settings.dart';
 import 'intro_skip_options_page.dart';
 import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
 
-/// hub 与明细页共用原有的 DoH 状态说明。
+/// 设置中枢与明细页共用原有的 DoH 状态说明。
 String dohStatusText(AppState state) {
   final endpoints = DohEndpoint.parseList(state.config?.doh);
   final hosts = DohHostMap.parse(state.config?.hosts);
@@ -800,4 +804,131 @@ class BrowserEnginePage extends StatelessWidget {
     description: 'Web 嗅探使用本机 Chromium 内核；仅安装你选择的本地目录或 zip，不联网下载。',
     children: [BrowserComponentSettingsSection(paths: paths)],
   );
+}
+
+/// 直播明细页：源与线路各自的回退行为。
+class LiveSettingsPage extends StatelessWidget {
+  const LiveSettingsPage({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: state,
+    builder: (context, _) => SettingsDetailScaffold(
+      title: '直播',
+      description: '当前源出问题时的回退顺序；改动即时保存。',
+      children: [
+        SwitchListTile(
+          key: const ValueKey('settings-live-source-fallback'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('直播源失败时自动换源'),
+          subtitle: const Text('当前源所有线路都失败后，尝试其他源的同名频道'),
+          value: state.liveSettings.sourceFallback,
+          onChanged: (value) async {
+            await state.setLiveSettings(
+              state.liveSettings.copyWith(sourceFallback: value),
+            );
+          },
+        ),
+        SwitchListTile(
+          key: const ValueKey('settings-live-change-line'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('线路失败自动换线'),
+          subtitle: const Text('关闭后单条线路失败直接报错，不再尝试同频道其他线路'),
+          value: state.liveSettings.changeLine,
+          onChanged: (value) async {
+            await state.setLiveSettings(
+              state.liveSettings.copyWith(changeLine: value),
+            );
+          },
+        ),
+      ],
+    ),
+  );
+}
+
+/// 「关于与数据」：本机目录、缓存维护、启动信息与隐私说明。
+///
+/// 这三块都是「查一次就够」的长文本；留在分类页里会把结尾拉得很长，
+/// 而它们的主要用途是排查时被复制出去。
+class AboutDataPage extends StatelessWidget {
+  const AboutDataPage({super.key, required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final info = state.startupInfo;
+    return ListenableBuilder(
+      listenable: state,
+      builder: (context, _) => SettingsDetailScaffold(
+        title: '关于与数据',
+        description: '本机目录、缓存维护与版本身份；复制类操作都只读。',
+        children: [
+          SettingsSection(
+            title: '本地数据',
+            children: [
+              SelectableText(
+                '配置：${state.paths.configDir}\n'
+                '数据：${state.paths.dataDir}\n'
+                '缓存：${state.paths.cacheDir}\n'
+                '日志：${state.paths.logDir}',
+              ),
+              const SizedBox(height: AppSpace.md),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await state.resetCache();
+                      if (context.mounted) {
+                        showToast('缓存目录已重建', kind: ToastKind.success);
+                      }
+                    },
+                    icon: const Icon(Icons.cleaning_services_outlined),
+                    label: const Text('清理缓存目录'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: state.log.export()),
+                      );
+                      if (context.mounted) {
+                        showToast('已复制脱敏日志', kind: ToastKind.success);
+                      }
+                    },
+                    icon: const Icon(Icons.copy_all_outlined),
+                    label: const Text('复制脱敏日志'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: '运行信息',
+            children: [
+              if (info == null)
+                const Text('启动信息尚未就绪。')
+              else
+                SelectableText(info.detailLines),
+            ],
+          ),
+          SettingsSection(
+            title: '隐私与合规',
+            children: [
+              const SelectableText(usageBoundaryNotice),
+              const SizedBox(height: AppSpace.sm),
+              const Text(
+                '• 遥测与崩溃上报：关闭（未实现上报通道）\n'
+                '• 站点配置同步：关闭（Phase 4 能力）\n'
+                '• 自动更新：不更新站源，仅更新应用本体',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

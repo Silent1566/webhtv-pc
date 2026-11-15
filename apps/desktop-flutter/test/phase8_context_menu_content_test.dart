@@ -5,6 +5,8 @@ import 'package:webhtv_pc/core/osd_config.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/settings_detail_pages.dart';
+import 'package:webhtv_pc/ui/settings_overview_page.dart';
 
 import 'support/player_page_harness.dart';
 
@@ -684,6 +686,60 @@ void main() {
         find.byKey(const ValueKey('player-menu-item-settings_danmaku_library_form')),
       );
       expect(_isDisabled(tester, formRow), isFalse);
+    });
+
+    // 「设置」组里的两个跳转项在改版后换了落点：弹幕库设置 → 弹幕源页本身；
+    // 完整设置页 → 可 push 的「全部设置」页（菜单项 id 也从 settings_advanced_page
+    // 改名成 settings_overview_page，旧 id 不得残留）。
+    testWidgets('设置组跳转项的落点：弹幕源页与全部设置页', (tester) async {
+      await _openMenu(tester);
+      await _drill(tester, '设置');
+      await _drill(tester, '弹幕库');
+
+      final danmakuForm = find.byKey(
+        const ValueKey('player-menu-item-settings_danmaku_library_form'),
+      );
+      expect(danmakuForm, findsOneWidget, reason: '「打开弹幕库设置…」不得被删掉');
+      await tester.ensureVisible(danmakuForm);
+      await settlePlayerPage(tester, times: 2);
+      await tester.tap(danmakuForm);
+      await settlePlayerPage(tester, times: 6);
+      expect(
+        find.byType(DanmakuSourcePage),
+        findsOneWidget,
+        reason: '「打开弹幕库设置…」必须落在弹幕源页，而不是某个总入口',
+      );
+      await tester.tap(find.byType(BackButton));
+      await settlePlayerPage(tester, times: 6);
+      expect(find.byType(DanmakuSourcePage), findsNothing);
+
+      // 重新打开菜单，走「完整设置页…」。
+      await tester.tapAt(const Offset(300, 260), buttons: kSecondaryButton);
+      await settlePlayerPage(tester);
+      await _drill(tester, '设置');
+      final overviewItem = find.byKey(
+        const ValueKey('player-menu-item-settings_overview_page'),
+      );
+      expect(
+        overviewItem,
+        findsOneWidget,
+        reason: '「完整设置页…」的菜单项 id 必须是 settings_overview_page',
+      );
+      expect(
+        find.byKey(const ValueKey('player-menu-item-settings_advanced_page')),
+        findsNothing,
+        reason: '旧菜单项 id settings_advanced_page 不得残留（中枢已删除）',
+      );
+      await tester.ensureVisible(overviewItem);
+      await settlePlayerPage(tester, times: 2);
+      await tester.tap(overviewItem);
+      await settlePlayerPage(tester, times: 6);
+      expect(
+        find.byType(SettingsOverviewPage),
+        findsOneWidget,
+        reason: '「完整设置页…」必须落在「全部设置」页',
+      );
+      expect(find.widgetWithText(AppBar, '全部设置'), findsOneWidget);
     });
 
     testWidgets('菜单项 key 唯一（同 id 不得在多列里重复）', (tester) async {

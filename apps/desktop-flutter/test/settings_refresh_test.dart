@@ -12,21 +12,41 @@ import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/settings_navigation.dart';
 
+// 五个分类（偏好 / 播放 / 站点与内容 / 连接与服务 / 维护）——「高级设置」整页
+// 已删除，它的行散进了这五类，所以这里按新落点逐类列出入口。
 const _categoryEntries = <String, List<String>>{
-  'playback': ['settings-player-buttons', 'settings-advanced-open'],
+  'playback': ['settings-player-buttons', 'settings-osd-open'],
+  'sites': [
+    'settings-site-health-open',
+    'settings-group-rules-open',
+    'settings-injected-sites-open',
+    'settings-local-sources-open',
+    'settings-pan-check-open',
+    'settings-ad-block',
+  ],
   'connections': [
     'settings-ai-open',
     'settings-tmdb-open',
     'settings-android-open',
+    'settings-outbound-proxy-open',
+    'settings-doh-open',
   ],
-  'maintenance': ['settings-site-health-open'],
+  'maintenance': [
+    'settings-python-environment-open',
+    'settings-backup-open',
+    'settings-browser-open',
+    'settings-about-data-open',
+  ],
 };
 
+// 每类的**标记**控件：只取留在分类页上的东西（屏显开关、站点健康明细表都
+// 已经进各自的明细页，所以标记用行入口 / 就地开关）。
 const _categoryContent = <String, String>{
   'preferences': 'settings-theme-mode',
-  'playback': 'settings-osd',
+  'playback': 'settings-player-buttons',
+  'sites': 'settings-site-health-open',
   'connections': 'settings-ai-open',
-  'maintenance': 'settings-site-health-open',
+  'maintenance': 'settings-python-environment-open',
 };
 
 void _expectOnlyCategory(String category) {
@@ -82,7 +102,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('设置'), findsOneWidget);
-    for (final title in ['偏好', '播放', '连接与服务', '维护与说明']) {
+    // 维护类的显示名从「维护与说明」改成「维护」：旧名必须不再出现。
+    for (final title in ['偏好', '播放', '站点与内容', '连接与服务', '维护']) {
       expect(find.text(title), findsWidgets);
     }
     for (final category in _categoryContent.keys) {
@@ -228,16 +249,23 @@ void main() {
           await selectSettingsCategory(tester, entry.key);
           _expectOnlyCategory(entry.key);
           if (entry.key == 'playback') {
+            // 屏显从「就地展开的 7 个开关」改成一行入口：分类页上必须有这一行，
+            // 且成组开关块不得再挂在这里。
             expect(
-              tester.widget(find.byKey(const ValueKey('settings-osd'))),
-              isA<Column>(),
+              tester.widget(find.byKey(const ValueKey('settings-osd-open'))),
+              isA<SettingsNavRow>(),
             );
+            expect(find.byKey(const ValueKey('settings-osd')), findsNothing);
           }
           for (final key in entry.value) {
             final target = find.byKey(ValueKey(key));
-            // 入口已从「铺满整行的 tonal 按钮」改为「图标 + 标题 + 摘要 + 箭头」的行：
-            // 类型断言跟着换成 SettingsNavRow，但「该 key 可达且是入口控件」的原意不变。
-            expect(tester.widget(target), isA<SettingsNavRow>());
+            // 入口有两种合法形态：进入下一级的行（SettingsNavRow）与就地生效的
+            // 开关（SwitchListTile）。类型断言只在两种之间放宽，
+            // 「该 key 可达且是入口控件」的原意不变。
+            expect(
+              tester.widget(target),
+              anyOf(isA<SettingsNavRow>(), isA<SwitchListTile>()),
+            );
             await tester.ensureVisible(target);
             await tester.pumpAndSettle();
             final rect = tester.getRect(target);

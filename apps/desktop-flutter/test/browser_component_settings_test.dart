@@ -11,12 +11,13 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/browser_component_store.dart';
 import 'package:webhtv_pc/services/sniff_runtime.dart';
 import 'package:webhtv_pc/ui/browser_component_settings.dart';
+import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
-import 'package:webhtv_pc/ui/advanced_settings_page.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 
-import 'support/advanced_settings_navigation.dart';
+import 'support/settings_navigation.dart';
+import 'support/settings_row_navigation.dart';
 
 class FakeTransport extends SniffTransport {
   FakeTransport(this.commands, {this.issues = const {}});
@@ -280,8 +281,8 @@ void main() {
   });
 
   // 默认跳过（需要 `BROWSER_COMPONENT_CAPTURE` 指向输出路径才跑）。它锁的是
-  // 「浏览器内核区块自己渲染成什么样」：区块已从高级设置长页搬进独立路由，
-  // 所以这里真实点中枢上的「浏览器内核」行进入，再截这一页。
+  // 「浏览器内核区块自己渲染成什么样」：区块已从旧长页搬进独立路由，
+  // 所以这里真实点「维护」类上的「浏览器内核」行进入，再截这一页。
   testWidgets('浏览器内核明细页视觉快照', (tester) async {
     final target = Platform.environment['BROWSER_COMPONENT_CAPTURE'];
     if (target == null) return;
@@ -319,21 +320,30 @@ void main() {
       await state.bootstrap();
       final theme = buildAppTheme(Brightness.dark);
       // 截图根必须包在 Navigator **外面**：明细页是 push 出来的独立路由，
-      // RepaintBoundary 套在 `home` 上只能拍到被盖住的中枢。
+      // RepaintBoundary 套在 `home` 上只能拍到被盖住的分类页。
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
           child: MaterialApp(
             theme: theme,
-            home: AdvancedSettingsPage(state: state),
+            home: ListenableBuilder(
+              listenable: state,
+              builder: (context, _) =>
+                  Scaffold(body: SettingsPage(state: state)),
+            ),
           ),
         ),
       );
     });
     await tester.pumpAndSettle();
 
-    // 真实点击「浏览器内核」行进入明细页（不直接构造路由）。
-    await tapAdvancedRow(tester, 'settings-browser-open');
+    // 真实点击「维护 → 浏览器内核」行进入明细页（不直接构造路由）。
+    await selectSettingsCategory(tester, 'maintenance');
+    await tapCategoryRow(
+      tester,
+      category: 'maintenance',
+      rowKey: 'settings-browser-open',
+    );
     expect(
       find.widgetWithText(AppBar, '浏览器内核'),
       findsOneWidget,

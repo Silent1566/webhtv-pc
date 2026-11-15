@@ -20,11 +20,15 @@ const _wide = Size(1440, 900);
 const _narrow = Size(480, 640);
 const _userViewport = Size(1072, 728);
 const _captureKey = ValueKey('settings-categories-capture');
+// 五个分类（偏好 / 播放 / 站点与内容 / 连接与服务 / 维护）与每类的代表控件。
+// 标记只取留在**分类页**上的东西：屏显开关已进 OsdSettingsPage，站点健康
+// 明细已进 SiteHealthPage，所以这里用各自的行入口。
 const _categoryContent = <String, String>{
   'preferences': 'settings-theme-mode',
-  'playback': 'settings-osd',
+  'playback': 'settings-osd-open',
+  'sites': 'settings-site-health-open',
   'connections': 'settings-ai-open',
-  'maintenance': 'settings-site-health-open',
+  'maintenance': 'settings-python-environment-open',
 };
 
 class _Capture {
@@ -90,8 +94,9 @@ void main() {
 
   setUpAll(() {
     expect(Platform.isWindows, isTrue, reason: '仅协调者在 Windows 原生时段采集');
-    expect(_matrix.length, 12);
-    expect(_matrix.map((capture) => capture.name).toSet().length, 12);
+    // 5 类 × 暗亮 = 10 张宽窗，外加窄窗与用户视口各两张。
+    expect(_matrix.length, 14);
+    expect(_matrix.map((capture) => capture.name).toSet().length, 14);
     HttpOverrides.global = _OfflineHttpOverrides();
     output.createSync(recursive: true);
   });

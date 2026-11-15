@@ -48,9 +48,10 @@ import '../services/live_danmaku_session.dart';
 import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
-import 'advanced_settings_page.dart';
 import 'app.dart';
 import 'common.dart';
+import 'settings_detail_pages.dart';
+import 'settings_overview_page.dart';
 import 'subtitle_search_dialog.dart';
 import 'subtitle_settings_page.dart';
 import 'ai_integration_widgets.dart';
@@ -6013,10 +6014,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 icon: Icons.link,
                 // 为什么仍是跳转：弹幕库地址是一个 URL，改完还要重新探测库
                 // 是否可用——那是表单页的职责，不是一次点击能表达的。
+                // 落点是**弹幕源页本身**：此前它跳到「高级设置」中枢，用户点
+                // 「打开弹幕库设置」却落在一张与被点项无关的总入口上。
                 onSelect: act(
                   () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => AdvancedSettingsPage(state: widget.state),
+                      builder: (_) => DanmakuSourcePage(state: widget.state),
                     ),
                   ),
                 ),
@@ -6066,15 +6069,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             ],
           ),
           PlayerMenuItem(
-            id: 'settings_advanced_page',
+            id: 'settings_overview_page',
             label: '完整设置页…',
             icon: Icons.settings_outlined,
-            // 兜底入口：直播源回退、广告规则、DoH、站点注入等不在本树的项，
-            // 以及需要数字输入的精调（缓存上限滑杆）都在这里。
+            // 兜底入口：本树之外的一切设置（直播、广告规则、DoH、站点注入，
+            // 以及需要数字输入的精调）都在那里。落点是**全部设置**页：
+            // 它复用设置首页的分类中枢，五个分类都能从这里进。
             onSelect: act(
               () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => AdvancedSettingsPage(state: widget.state),
+                  builder: (_) => SettingsOverviewPage(state: widget.state),
                 ),
               ),
             ),
