@@ -16,6 +16,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:integration_test/integration_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/protocol.dart';
@@ -94,7 +95,12 @@ void main() {
     final temp = Directory.systemTemp.createTempSync('webhtv-feedback-visual');
     final state = _PendingPlaybackState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': p.join(temp.path, 'config'),
+          'data': p.join(temp.path, 'data'),
+          'cache': p.join(temp.path, 'cache'),
+          'state': p.join(temp.path, 'state'),
+        },
       ),
       log: LogService(),
     );

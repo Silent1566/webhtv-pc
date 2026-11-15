@@ -12,6 +12,7 @@ import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/temp_dirs.dart';
 import 'support/test_fonts.dart';
 import 'tmdb_root_key_ingress_test.dart' as root;
 
@@ -33,7 +34,9 @@ void main() {
       );
       addTearDown(() {
         state.dispose();
-        temp.deleteSync(recursive: true);
+        // Windows 上 SQLite/日志句柄可能还没释放，直接 deleteSync 会抛
+        // PathAccessException 让用例变红——那是环境差异，不是被测逻辑。
+        deleteTempDirBestEffortSync(temp);
       });
       tester.view.physicalSize = const Size(1100, 900);
       tester.view.devicePixelRatio = 1;
@@ -141,7 +144,9 @@ void main() {
       );
       addTearDown(() {
         state.dispose();
-        temp.deleteSync(recursive: true);
+        // Windows 上 SQLite/日志句柄可能还没释放，直接 deleteSync 会抛
+        // PathAccessException 让用例变红——那是环境差异，不是被测逻辑。
+        deleteTempDirBestEffortSync(temp);
       });
       tester.view.physicalSize = const Size(1200, 1000);
       tester.view.devicePixelRatio = 1;

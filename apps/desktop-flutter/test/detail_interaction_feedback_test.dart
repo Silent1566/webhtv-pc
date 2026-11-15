@@ -26,6 +26,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/protocol.dart';
@@ -120,7 +121,12 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-feedback');
     state = _PendingPlaybackState(
       paths: AppPaths.resolve(
-        overrides: {'roaming': tempDir.path, 'local': tempDir.path},
+        overrides: {
+          'config': p.join(tempDir.path, 'config'),
+          'data': p.join(tempDir.path, 'data'),
+          'cache': p.join(tempDir.path, 'cache'),
+          'state': p.join(tempDir.path, 'state'),
+        },
       ),
       log: LogService(),
       // 换源用例要走真实的搜索/探测/并入，用假客户端承接，不碰 socket。
