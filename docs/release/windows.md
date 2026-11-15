@@ -11,10 +11,10 @@ Windows 与 Linux 现在收敛在同一对工作流里，Windows 是其中一个
 
 | 工作流 | 触发 | 作用 | 产物 |
 | --- | --- | --- | --- |
-| Desktop CI（`build-windows`） | push `main` / `dev*`、PR 到 `main`、手动 `workflow_dispatch` | `dart analyze` + `flutter test` + Release 构建 + 打包 + 烟测 | workflow artifact（7 天） |
+| Desktop CI（`build-windows`） | push `main` / `beta` / `dev*`、PR 到 `main`、手动 `workflow_dispatch` | `dart analyze` + `flutter test` + Release 构建 + 打包 + 烟测 | workflow artifact（7 天） |
 | Desktop Release（`build-windows`；`publish`） | 手动 `workflow_dispatch` | 上述门禁 + 可选签名 + 打包 + 烟测，两个平台都成功后由 `publish` 统一发布 | Release 资产 + workflow artifact（30 天） |
 
-CI 在 `main` / `dev*` 推送、PR 到 `main` 与手动触发时运行；实际步骤与触发条件以工作流文件为准。
+CI 在 `main` / `beta` / `dev*` 推送、PR 到 `main` 与手动触发时运行；实际步骤与触发条件以工作流文件为准。`beta` 是集成分支，功能先进 beta 再进 main，所以它必须在合并前就拿到完整的双平台门禁结果。
 
 本地开发仍用 puro：
 
@@ -153,4 +153,4 @@ Get-FileHash (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName -Algor
 - **本指南仅覆盖 Windows x64**：仓库另有 Linux x86_64 平台工程与打包流程，见 [Linux 指南](../linux-packaging.md)；当前没有 macOS 发布流程。
 - **不跑集成测试**：需要真实窗口、播放器与 fixture 媒体，仍由 `tools/phase*` 的本地验收脚本覆盖。
 - **Node / Python 随包、JDK 需本机**：Node 内置在 `runtime/node/node.exe`；专用 Python 与依赖以离线包随发行版提供，运行与修复不联网；JVM 站源需用户自备 JDK 17+。
-- **CI 触发范围**：当前覆盖 `main` / `dev*` 推送、PR 到 `main` 与手动触发，详见 `desktop-ci.yml`。
+- **CI 触发范围**：当前覆盖 `main` / `beta` / `dev*` 推送、PR 到 `main` 与手动触发，详见 `desktop-ci.yml`。

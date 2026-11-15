@@ -64,6 +64,9 @@ class LinuxWorkflowTests(unittest.TestCase):
         ci = workflow(CI)
         release = workflow(RELEASE)
         self.assertEqual({'push', 'pull_request', 'workflow_dispatch'}, set(ci['on']))
+        # beta 是集成分支：功能先进 beta 再进 main。它必须在每次 push 时拿到
+        # 完整双平台门禁，否则只能在合进 main 之后才发现红。
+        self.assertIn('beta', ci['on']['push']['branches'])
         self.assertEqual('read', ci['permissions']['contents'])
         self.assertEqual({'workflow_dispatch'}, set(release['on']))
         self.assertNotIn('gh release', str(ci))

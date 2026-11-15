@@ -12,7 +12,11 @@ name: Desktop CI
 #   main 合入本文件后，workflow_dispatch 与 GitHub 页面的 Run workflow 即可用。
 #
 # 单测约 13 分钟、Windows runner 计费更高，因此不覆盖所有分支：
-# 只跑 main、dev* 与 PR，其它分支用 workflow_dispatch（main 具备后）。
+# 跑 main、beta、dev* 与 PR，其它分支用 workflow_dispatch。
+#
+# beta 是集成分支（功能 PR 先进 beta 再进 main），也是最容易在合并后才暴露
+# 跨平台问题的位置：不覆盖它就只能等合到 main 之后才发现红，而那时已经影响
+# 发布分支。beta 的 push 与 PR 因此都必须跑一次完整双平台门禁。
 #
 # 两个平台是同一工作流里的两个并行 job：一次触发、一个 run，平台步骤各自独立，
 # 不把 bash/pwsh 混进 matrix。
@@ -21,6 +25,7 @@ on:
   push:
     branches:
       - main
+      - beta
       - 'dev*'
   pull_request:
     branches: [main]
