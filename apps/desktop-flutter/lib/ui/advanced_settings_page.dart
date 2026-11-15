@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/skip_plan.dart';
 import '../state/app_state.dart';
 import 'advanced_detail_pages.dart';
 import 'ai_integration_widgets.dart';
@@ -105,6 +106,9 @@ class AdvancedSettingsPage extends StatelessWidget {
                       subtitle:
                           '硬件解码 ${_onOff(state.playerOptions.hardwareDecoding)}'
                           ' · 自动连播 ${_onOff(state.playerOptions.autoNext)}'
+                          // 片头片尾的设置都在这页里，但这一行标题叫「播放参数」：
+                          // 不把跳过状态写进副标题，用户会以为根本没有这个设置。
+                          ' · 片头片尾 ${_skipModeText(state.playerOptions.skipMode)}'
                           ' · 缓存 ${state.playerOptions.demuxerMaxBytesMiB} MiB',
                       onTap: () =>
                           _push(context, PlaybackOptionsPage(state: state)),
@@ -387,6 +391,13 @@ class AdvancedSettingsPage extends StatelessWidget {
   }
 
   String _onOff(bool value) => value ? '开' : '关';
+
+  /// 跳过模式的一句话摘要（副标题用，避免整段文案撑爆一行）。
+  String _skipModeText(SkipMode mode) => switch (mode) {
+    SkipMode.off => '关',
+    SkipMode.auto => '自动',
+    SkipMode.confirm => '先问',
+  };
 
   String _outboundProxySummary() {
     final proxy = state.outboundProxy;

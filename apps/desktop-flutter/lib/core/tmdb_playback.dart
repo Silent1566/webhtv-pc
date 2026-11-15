@@ -28,6 +28,7 @@ class TmdbPlaybackIdentity {
     this.flagKey = '',
     this.episodeUrl = '',
     this.episodeName = '',
+    this.imdbId = '',
   });
 
   /// 媒体身份（`04` §8.1）。
@@ -49,6 +50,12 @@ class TmdbPlaybackIdentity {
   /// 来源剧集名。
   final String episodeName;
 
+  /// TMDB `external_ids.imdb_id`；空串表示未知。
+  ///
+  /// 只有 IntroDB 需要它（该源只收 IMDb 键）。缺省为空时该源直接跳过，
+  /// 不发无意义的请求——不能让「拿不到 IMDb id」变成一次失败查询。
+  final String imdbId;
+
   bool get hasIdentity => tmdbId > 0;
 
   bool get isTv => mediaType == TmdbMediaType.tv;
@@ -67,6 +74,7 @@ class TmdbPlaybackIdentity {
     required String flagKey,
     int seasonNumber = -1,
     int episodeNumber = -1,
+    String imdbId = '',
   }) {
     return TmdbPlaybackIdentity(
       tmdbId: identity?.tmdbId ?? 0,
@@ -76,6 +84,7 @@ class TmdbPlaybackIdentity {
       flagKey: flagKey,
       episodeUrl: episode.url,
       episodeName: episode.name,
+      imdbId: imdbId,
     );
   }
 

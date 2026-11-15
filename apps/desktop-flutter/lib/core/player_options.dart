@@ -8,6 +8,8 @@
 /// 明确要的默认值变更，不是漏改。
 library;
 
+import 'skip_plan.dart';
+
 /// 失败回退阶梯。
 enum PlayerFailureFallback {
   /// 不自动回退，直接把错误交给 UI。
@@ -53,11 +55,24 @@ class PlayerOptions {
     this.autoNext = true,
     this.failureFallback = PlayerFailureFallback.line,
     this.preloadNext = false,
-    this.autoSkipIntro = false,
-    this.autoSkipOutro = false,
+    SkipMode skipMode = SkipMode.off,
+    int skipKinds = SkipKindBits.defaults,
+    this.skipRemoteEnabled = true,
+    this.skipSources = defaultSkipSources,
+    bool? autoSkipIntro,
+    bool? autoSkipOutro,
     this.longPressSpeed = defaultLongPressSpeed,
     this.lutPath = '',
-  });
+  }) : skipMode = autoSkipIntro == true || autoSkipOutro == true
+           ? (skipMode == SkipMode.off ? SkipMode.auto : skipMode)
+           : skipMode,
+       // 旧参数的翻译：true 置位，false 清位，两者都没传时保留 skipKinds。
+       skipKinds =
+           (skipKinds |
+               (autoSkipIntro == true ? SkipKindBits.intro : 0) |
+               (autoSkipOutro == true ? SkipKindBits.outro : 0)) &
+           ~((autoSkipIntro == false ? SkipKindBits.intro : 0) |
+               (autoSkipOutro == false ? SkipKindBits.outro : 0));
 
   /// 默认值：与 Phase 0–8 的行为一致（唯一例外见 [longPressSpeed]：默认 3×）。
   const PlayerOptions.defaults() : this();
@@ -68,6 +83,9 @@ class PlayerOptions {
   static const int maxDemuxerMaxMiB = 2048;
   static const int minDemuxerBackMiB = 8;
   static const int maxDemuxerBackMiB = 512;
+
+  /// 远端标定默认全开（IntroDB / TheIntroDB / TODB）。
+  static const int defaultSkipSources = SkipSourceBits.defaults;
 
   /// 长按画面期间的临时倍速（松开恢复）的默认值与合法区间。
   ///
@@ -104,9 +122,25 @@ class PlayerOptions {
   /// 是否预解析下一集地址（**不下载媒体数据**）。
   final bool preloadNext;
 
-  /// 自动跳过片头/片尾（标记见 `SkipSegments`）。
-  final bool autoSkipIntro;
-  final bool autoSkipOutro;
+  /// 跳过模式：关、静默跳、跳前询问（见 [SkipMode]）。
+  final SkipMode skipMode;
+
+  /// 允许自动跳过的片段类型位图（见 [SkipKindBits]）。
+  final int skipKinds;
+
+  /// 是否向远端数据源查询片头/片尾时间轴。
+  final bool skipRemoteEnabled;
+
+  /// 启用的远端数据源位图（见 [SkipSourceBits]）。
+  final int skipSources;
+
+  /// 旧字段的派生态：模式开着且类型位包含片头。
+  bool get autoSkipIntro =>
+      skipMode != SkipMode.off && (skipKinds & SkipKindBits.intro) != 0;
+
+  /// 旧字段的派生态：模式开着且类型位包含片尾。
+  bool get autoSkipOutro =>
+      skipMode != SkipMode.off && (skipKinds & SkipKindBits.outro) != 0;
 
   /// 长按画面期间的临时倍速（松开恢复原速）。见 [defaultLongPressSpeed]。
   final double longPressSpeed;
@@ -153,8 +187,22 @@ class PlayerOptions {
       autoNext: autoNext,
       failureFallback: failureFallback,
       preloadNext: preloadNext,
-      autoSkipIntro: autoSkipIntro,
-      autoSkipOutro: autoSkipOutro,
+      skipMode: skipMode,
+      skipKinds: clamp(
+        skipKinds,
+        SkipKindBits.none,
+        SkipKindBits.all,
+        SkipKindBits.defaults,
+      ),
+      skipRemoteEnabled: skipRemoteEnabled,
+      // 上界是「全部已知源位」，不是「出厂默认源位」：新增第 4 个源时
+      // [SkipSourceBits.allBits] 会跟着长，[SkipSourceBits.defaults] 不会。
+      skipSources: clamp(
+        skipSources,
+        SkipSourceBits.none,
+        SkipSourceBits.allBits,
+        SkipSourceBits.defaults,
+      ),
       longPressSpeed: speed,
       lutPath: lutPath.trim(),
     );
@@ -178,6 +226,10 @@ class PlayerOptions {
     bool? autoNext,
     PlayerFailureFallback? failureFallback,
     bool? preloadNext,
+    SkipMode? skipMode,
+    int? skipKinds,
+    bool? skipRemoteEnabled,
+    int? skipSources,
     bool? autoSkipIntro,
     bool? autoSkipOutro,
     double? longPressSpeed,
@@ -192,8 +244,12 @@ class PlayerOptions {
     autoNext: autoNext ?? this.autoNext,
     failureFallback: failureFallback ?? this.failureFallback,
     preloadNext: preloadNext ?? this.preloadNext,
-    autoSkipIntro: autoSkipIntro ?? this.autoSkipIntro,
-    autoSkipOutro: autoSkipOutro ?? this.autoSkipOutro,
+    skipMode: skipMode ?? this.skipMode,
+    skipKinds: skipKinds ?? this.skipKinds,
+    skipRemoteEnabled: skipRemoteEnabled ?? this.skipRemoteEnabled,
+    skipSources: skipSources ?? this.skipSources,
+    autoSkipIntro: autoSkipIntro,
+    autoSkipOutro: autoSkipOutro,
     longPressSpeed: longPressSpeed ?? this.longPressSpeed,
     lutPath: lutPath ?? this.lutPath,
   );
@@ -207,6 +263,11 @@ class PlayerOptions {
     'autoNext': autoNext,
     'failureFallback': failureFallback.id,
     'preloadNext': preloadNext,
+    'skipMode': skipMode.name,
+    'skipKinds': skipKinds,
+    'skipRemoteEnabled': skipRemoteEnabled,
+    'skipSources': skipSources,
+    // 旧键照写派生值：老版本读新配置时仍能认出「跳过片头/片尾」。
     'autoSkipIntro': autoSkipIntro,
     'autoSkipOutro': autoSkipOutro,
     'longPressSpeed': longPressSpeed,
@@ -231,6 +292,20 @@ class PlayerOptions {
       return value is num && value.isFinite ? value.toDouble() : fallback;
     }
 
+    // 片头/片尾：新键优先；只有旧布尔键时按旧语义折成「模式 + 类型位」。
+    //
+    // 旧配置里没有任何「回顾」信息，所以迁移只能还原用户真开过的那两类；两个
+    // 都为 false（等于从没用过这功能）时回落到出厂默认，而不是留下一张空表——
+    // 否则用户日后打开「自动跳过」会发现片头片尾都不跳。
+    final hasSkipMode = map.containsKey('skipMode');
+    final hasLegacySkip =
+        map.containsKey('autoSkipIntro') || map.containsKey('autoSkipOutro');
+    final legacyIntro = boolOf('autoSkipIntro', false);
+    final legacyOutro = boolOf('autoSkipOutro', false);
+    final legacyKinds =
+        (legacyIntro ? SkipKindBits.intro : 0) |
+        (legacyOutro ? SkipKindBits.outro : 0);
+
     return PlayerOptions(
       hardwareDecoding: boolOf('hardwareDecoding', true),
       cache: boolOf('cache', true),
@@ -243,8 +318,14 @@ class PlayerOptions {
       autoNext: boolOf('autoNext', true),
       failureFallback: PlayerFailureFallback.fromId(map['failureFallback']),
       preloadNext: boolOf('preloadNext', false),
-      autoSkipIntro: boolOf('autoSkipIntro', false),
-      autoSkipOutro: boolOf('autoSkipOutro', false),
+      skipMode: hasSkipMode
+          ? SkipMode.fromName(map['skipMode'])
+          : (legacyIntro || legacyOutro ? SkipMode.auto : SkipMode.off),
+      skipKinds: hasSkipMode || !hasLegacySkip
+          ? intOf('skipKinds', SkipKindBits.defaults)
+          : (legacyKinds == 0 ? SkipKindBits.defaults : legacyKinds),
+      skipRemoteEnabled: boolOf('skipRemoteEnabled', true),
+      skipSources: intOf('skipSources', defaultSkipSources),
       longPressSpeed: doubleOf('longPressSpeed', defaultLongPressSpeed),
       lutPath: map['lutPath'] is String ? (map['lutPath'] as String).trim() : '',
     ).normalized();
@@ -261,8 +342,10 @@ class PlayerOptions {
       other.autoNext == autoNext &&
       other.failureFallback == failureFallback &&
       other.preloadNext == preloadNext &&
-      other.autoSkipIntro == autoSkipIntro &&
-      other.autoSkipOutro == autoSkipOutro &&
+      other.skipMode == skipMode &&
+      other.skipKinds == skipKinds &&
+      other.skipRemoteEnabled == skipRemoteEnabled &&
+      other.skipSources == skipSources &&
       other.longPressSpeed == longPressSpeed &&
       other.lutPath == lutPath;
 
@@ -276,8 +359,10 @@ class PlayerOptions {
     autoNext,
     failureFallback,
     preloadNext,
-    autoSkipIntro,
-    autoSkipOutro,
+    skipMode,
+    skipKinds,
+    skipRemoteEnabled,
+    skipSources,
     longPressSpeed,
     lutPath,
   );
@@ -287,6 +372,7 @@ class PlayerOptions {
       'PlayerOptions(hwdec=$hardwareDecoding cache=$cache '
       'max=${demuxerMaxBytesMiB}MiB back=${demuxerMaxBackBytesMiB}MiB '
       'spdif=$audioPassthrough autoNext=$autoNext ${failureFallback.id} '
-      'preload=$preloadNext skip=$autoSkipIntro/$autoSkipOutro '
+      'preload=$preloadNext skip=${skipMode.name} kinds=$skipKinds '
+      'src=$skipSources remote=$skipRemoteEnabled '
       'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}")';
 }

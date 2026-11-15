@@ -31,6 +31,7 @@ import '../core/player_buttons.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
+import '../core/skip_plan.dart';
 import '../core/skip_segments.dart';
 import '../core/sleep_timer.dart';
 import '../core/source_swap.dart';
@@ -38,6 +39,8 @@ import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
+import '../services/intro_skip/provider.dart';
+import '../services/intro_skip/registry.dart';
 import '../services/danmaku_library_service.dart';
 import '../services/danmaku_service.dart';
 import '../services/external_player.dart';
@@ -346,12 +349,29 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 播放参数（缓冲/硬解/自动连播/失败回退/片头片尾开关/LUT）。
   PlayerOptions _options = const PlayerOptions.defaults();
 
-  /// 本片的片头/片尾标记。
+  /// 本片的**手动**片头/片尾标记（用户可改，落 DB）。
   SkipSegments _skipSegments = const SkipSegments.none();
 
-  /// 本集是否已经自动跳过片头/片尾（每集各一次）。
-  bool _introSkipped = false;
-  bool _outroSkipped = false;
+  /// 远端标定拿回的原始段：**未折算**，时长变化后按新时长重算。
+  List<RawSkipSegment> _skipRawSegments = const <RawSkipSegment>[];
+
+  /// 本集的完整跳过计划：远端标定 ∪ 手动标记（手动优先）。
+  SkipPlan _skipPlan = SkipPlan.empty;
+
+  /// 已经处理过的段身份：每段每集只自动处理一次。
+  ///
+  /// 用 identity 集合而不是「片头/片尾两个布尔」：远端一集可能同时给回顾、
+  /// 片头、片尾、预告四段，布尔表达不了「哪一段处理过」。
+  final Set<String> _skipHandled = <String>{};
+
+  /// 远端标定的进程内缓存：同一部剧各集共用一份，切集不重打请求。
+  final IntroSkipCache _skipCache = IntroSkipCache();
+
+  /// 本集是否已发起过远端查询（每集一次；失败也不重试，免得拖慢播放）。
+  bool _skipLookupStarted = false;
+
+  /// 折算计划时用的时长；时长变化（HLS 精化）时重算一次。
+  int _skipPlanDurationMs = -1;
 
   /// 是否已允许自动跳过。
   ///
@@ -771,6 +791,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // duration/buffer/volume/… 每秒多次）只要 `isCompleted` 仍为 true 就会
     // 再排一个 `_onCompleted()`。于是「唤醒后点继续播放」这种纯重建动作
     // 也会立即跳下一集。
+    _syncSkipPlanWithDuration();
+    _maybeStartSkipLookup();
     _maybeAutoSkip();
     _maybeAdvanceOnGenuineEnd();
     _applyRememberedTrackChoices();
@@ -819,55 +841,172 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 只读控制器状态，不重建播放器；`_skipArmed` 保证续播 seek 完成之前不判定。
   void _maybeAutoSkip() {
     if (!_skipArmed || _loadError != null) return;
+    if (_skipPlan.isEmpty) return;
     final duration = _controller.duration;
     if (duration <= Duration.zero) return;
-    final decision = _skipSegments.decide(
+    final decision = _skipPlan.decide(
       positionMs: _controller.position.inMilliseconds,
       durationMs: duration.inMilliseconds,
-      autoIntro: _options.autoSkipIntro,
-      autoOutro: _options.autoSkipOutro,
-      introDone: _introSkipped,
-      outroDone: _outroSkipped,
+      kinds: _options.skipKinds,
+      mode: _options.skipMode,
+      handled: _skipHandled,
+      resumeMs: _request.startPosition?.inMilliseconds ?? 0,
     );
     if (!decision.shouldSeek) return;
-    if (decision.action == SkipAction.intro) {
-      _introSkipped = true;
-    } else if (decision.action == SkipAction.outro) {
-      _outroSkipped = true;
+    final segment = decision.segment!;
+    // 先记账再动作：确认框是异步的，等它回来期间每一帧位置通知都会再次命中
+    // 同一段，不先登记就会连弹一串框。
+    _skipHandled.add(segment.identity);
+    if (decision.needsConfirm) {
+      unawaited(_confirmAndSkip(segment, decision));
+      return;
     }
+    _applySkip(segment, decision);
+  }
+
+  /// 真正执行跳转（自动模式与「确认后再跳」共用）。
+  void _applySkip(SkipSegment segment, SkipPlanDecision decision) {
     widget.state.log.info(
-      '自动跳过 ${decision.action.name} target=${decision.targetMs}ms '
+      '跳过${segment.kind.label} target=${decision.targetMs}ms '
+      'provider=${segment.provider} openEnd=${decision.openEnd} '
       'episode=${_request.episodeName}',
       scope: 'player',
+    );
+    _showPlayerMessage(
+      '已跳过${segment.kind.label} → ${_formatMs(decision.targetMs)}',
+      kind: ToastKind.success,
     );
     unawaited(_controller.seek(Duration(milliseconds: decision.targetMs)));
   }
 
-  /// 手动跳过片头/片尾（不依赖开关；未标记时如实提示）。
-  Future<void> _manualSkip(SkipAction action) async {
-    final duration = _controller.duration;
-    final segments = _skipSegments.normalizedFor(duration.inMilliseconds);
-    final target = action == SkipAction.intro
-        ? segments.introEndMs
-        : segments.outroStartMs;
-    if (target == null) {
-      _showPlayerMessage(action == SkipAction.intro ? '本集未标记片头' : '本集未标记片尾');
-      return;
-    }
-    if (action == SkipAction.intro) {
-      _introSkipped = true;
-    } else {
-      _outroSkipped = true;
-    }
-    await _controller.seek(
-      Duration(
-        milliseconds: action == SkipAction.intro
-            ? target
-            : duration.inMilliseconds,
+  /// `confirm` 模式先问用户（安卓 `INTRO_SKIP_CONFIRM`）。
+  ///
+  /// 用户点「不跳」也不再重问：这一段已记进 `_skipHandled`，否则每次位置通知
+  /// 都会重新弹框，播放页会变成关不掉的弹框循环。
+  Future<void> _confirmAndSkip(
+    SkipSegment segment,
+    SkipPlanDecision decision,
+  ) async {
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('跳过${segment.kind.label}？'),
+        content: Text(
+          '已识别到${segment.kind.label}，跳到 ${_formatMs(decision.targetMs)}。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('不跳'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('跳过'),
+          ),
+        ],
       ),
     );
+    if (!mounted || confirmed != true) return;
+    _applySkip(segment, decision);
+  }
+
+  /// 时长首次已知或被精化时重算一次计划（尾部段折算依赖时长）。
+  void _syncSkipPlanWithDuration() {
+    final durationMs = _controller.duration.inMilliseconds;
+    if (durationMs <= 0 || durationMs == _skipPlanDurationMs) return;
+    _skipPlanDurationMs = durationMs;
+    _rebuildSkipPlan();
+  }
+
+  /// 远端标定 ∪ 手动标记 → 当前计划。
+  void _rebuildSkipPlan() {
+    final durationMs = _controller.duration.inMilliseconds;
+    _skipPlan = SkipPlan.resolve(
+      _skipRawSegments,
+      durationMs: durationMs,
+    ).withManualOverride(manual: _skipSegments, durationMs: durationMs);
+  }
+
+  /// 每集最多发起一次远端查询；无 TMDB 身份或关了远端识别就不发。
+  ///
+  /// 只看 [PlayerOptions.skipRemoteEnabled]，**不看跳过模式**：模式管的是「自动跳
+  /// 不跳」，而标定本身还要供给右键菜单里的手动跳过与「本集已识别到片头」的显示。
+  /// 两者捆在一起会让「远端识别开着」这个开关在默认（模式 off）下形同虚设。
+  /// 代价是每集一轮查询（进程内缓存按集去重，播放过程中不重发）。
+  void _maybeStartSkipLookup() {
+    if (_skipLookupStarted) return;
+    if (!_options.skipRemoteEnabled) return;
+    final tmdb = _request.tmdb;
+    if (tmdb == null || !tmdb.hasIdentity) return;
+    final providers = buildIntroSkipProviders(_options.skipSources);
+    if (providers.isEmpty) return;
+    _skipLookupStarted = true;
+    final durationMs = _controller.duration.inMilliseconds;
+    unawaited(
+      _loadRemoteSkipSegments(
+        SkipQuery(
+          tmdbId: tmdb.tmdbId,
+          imdbId: tmdb.imdbId,
+          mediaType: tmdb.mediaType.name,
+          season: tmdb.seasonNumber > 0 ? tmdb.seasonNumber : 0,
+          episode: tmdb.episodeNumber > 0 ? tmdb.episodeNumber : 0,
+          durationMs: durationMs > 0 ? durationMs : 0,
+        ),
+        providers,
+      ),
+    );
+  }
+
+  Future<void> _loadRemoteSkipSegments(
+    SkipQuery query,
+    List<IntroSkipProvider> providers,
+  ) async {
+    final result = await lookupIntroSkip(
+      query: query,
+      providers: providers,
+      cache: _skipCache,
+    );
+    if (!mounted) return;
+    _skipRawSegments = result.segments;
+    _rebuildSkipPlan();
     widget.state.log.info(
-      '手动跳过 ${action.name} target=$target ms',
+      '片头片尾标定 ${result.segments.length} 段 '
+      'cacheable=${result.cacheable} episode=${_request.episodeName}',
+      scope: 'player',
+    );
+    // 标定到位时可能已经播过点了，立刻按当前位置判一次。
+    _maybeAutoSkip();
+  }
+
+  /// 手动跳过片头/片尾（不依赖开关；没有可用段时如实提示）。
+  Future<void> _manualSkip(SkipAction action) async {
+    final targetKind = action == SkipAction.intro
+        ? SkipKind.intro
+        : SkipKind.outro;
+    final durationMs = _controller.duration.inMilliseconds;
+    SkipSegment? segment;
+    for (final candidate in _skipPlan.segments) {
+      if (candidate.kind != targetKind) continue;
+      segment = candidate;
+      break;
+    }
+    if (segment == null) {
+      _showPlayerMessage(
+        action == SkipAction.intro ? '本集未识别到片头' : '本集未识别到片尾',
+      );
+      return;
+    }
+    final target = action == SkipAction.intro
+        ? segment.endMs
+        : (segment.openEnded || segment.endMs >= durationMs
+              ? durationMs
+              : segment.endMs);
+    _skipHandled.add(segment.identity);
+    await _controller.seek(Duration(milliseconds: target));
+    widget.state.log.info(
+      '手动跳过${segment.kind.label} target=$target ms '
+      'provider=${segment.provider}',
       scope: 'player',
     );
   }
@@ -895,8 +1034,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     setState(() {
       _skipSegments = next;
-      _introSkipped = false;
-      _outroSkipped = false;
+      // 手动端点变了：重算计划并忘掉「处理过」，让新端点立刻生效。
+      _skipHandled.clear();
+      _rebuildSkipPlan();
     });
     _showPlayerMessage(
       action == SkipAction.intro
@@ -919,8 +1059,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     setState(() {
       _skipSegments = const SkipSegments.none();
-      _introSkipped = false;
-      _outroSkipped = false;
+      _skipHandled.clear();
+      _rebuildSkipPlan();
     });
     _showPlayerMessage('已清除本片的片头/片尾标记', kind: ToastKind.success);
   }
@@ -1037,8 +1177,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 单集循环：回到开头重播（不重建播放器）。
   Future<void> _replayCurrent() async {
     _skipArmed = false;
-    _introSkipped = true; // 重播不再跳片头，否则会陷入「跳一次又重播」的循环。
-    _outroSkipped = false;
+    // 重播不再跳片头，否则会陷入「跳一次又重播」的循环；片尾仍要能跳。
+    _skipHandled
+      ..clear()
+      ..addAll(_skipPlan.openings.map((segment) => segment.identity));
     await _controller.seek(Duration.zero);
     await _controller.play();
     _skipArmed = true;
@@ -1103,8 +1245,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 轨道记忆的键里含线路与集，换集/换线路后必须重读，上一集的记忆绝不能带过来。
     _loadRememberedTrackChoices();
     _skipArmed = false;
-    _introSkipped = false;
-    _outroSkipped = false;
+    _skipHandled.clear();
+    // 换集/换线路：上一集的远端标定与计划一律作废，重新查一次。
+    _skipRawSegments = const <RawSkipSegment>[];
+    _skipPlan = SkipPlan.empty;
+    _skipPlanDurationMs = -1;
+    _skipLookupStarted = false;
     setState(() => _loadError = null);
     final controller = _controller;
     if (widget.liveSession != null) _liveOpenInFlight = true;
@@ -2760,13 +2906,24 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await widget.state.setPlayerOptions(_options);
   }
 
+  /// 菜单里那两个「自动跳过」开关改的是**类型位**，不是模式。
+  ///
+  /// 打开任一类型却仍是 off 模式，等于装了个没反应的开关：顺手把模式拉到
+  /// auto，用户点一下就能看到效果（想把模式设回 off 走设置页或右键菜单）。
   Future<void> _toggleAutoSkip({required bool intro}) async {
-    final next = intro
-        ? _options.copyWith(autoSkipIntro: !_options.autoSkipIntro)
-        : _options.copyWith(autoSkipOutro: !_options.autoSkipOutro);
-    await _persistOptions(next);
+    final bit = intro ? SkipKindBits.intro : SkipKindBits.outro;
+    final on = (_options.skipKinds & bit) != 0;
+    final kinds = on
+        ? _options.skipKinds & ~bit
+        : _options.skipKinds | bit;
+    final mode = !on && _options.skipMode == SkipMode.off
+        ? SkipMode.auto
+        : _options.skipMode;
+    await _persistOptions(
+      _options.copyWith(skipKinds: kinds, skipMode: mode),
+    );
     if (!mounted) return;
-    setState(() {});
+    setState(() => _rebuildSkipPlan());
   }
 
   Future<void> _showSubtitleMenu() async {
@@ -5599,30 +5756,34 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             id: 'auto_skip_intro',
             label: '自动跳过片头',
             icon: Icons.fast_forward_outlined,
-            selected: _options.autoSkipIntro,
+            selected: (_options.skipKinds & SkipKindBits.intro) != 0,
             onSelect: () => _toggleAutoSkip(intro: true),
           ),
           PlayerMenuItem(
             id: 'auto_skip_outro',
             label: '自动跳过片尾',
             icon: Icons.fast_forward,
-            selected: _options.autoSkipOutro,
+            selected: (_options.skipKinds & SkipKindBits.outro) != 0,
             onSelect: () => _toggleAutoSkip(intro: false),
           ),
-          // 手动跳过依赖数据库里的标记：没有标记时**灰掉但仍然列出**，
-          // 隐藏会让用户以为功能没了（`DESIGN.md` 同类教训）。
+          // 手动跳过依赖「本集有可用段」（手动标记或远端标定）：没有时
+          // **灰掉但仍然列出**，隐藏会让用户以为功能没了（`DESIGN.md` 同类教训）。
           PlayerMenuItem(
             id: 'skip_intro',
             label: '跳过片头',
             icon: Icons.skip_next_outlined,
-            enabled: _skipSegments.hasIntro,
+            enabled: _skipPlan.segments.any(
+              (segment) => segment.kind == SkipKind.intro,
+            ),
             onSelect: act(() => _manualSkip(SkipAction.intro)),
           ),
           PlayerMenuItem(
             id: 'skip_outro',
             label: '跳过片尾',
             icon: Icons.skip_next,
-            enabled: _skipSegments.hasOutro,
+            enabled: _skipPlan.segments.any(
+              (segment) => segment.kind == SkipKind.outro,
+            ),
             onSelect: act(() => _manualSkip(SkipAction.outro)),
           ),
           PlayerMenuItem(

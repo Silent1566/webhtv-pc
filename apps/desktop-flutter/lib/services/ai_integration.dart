@@ -449,6 +449,7 @@ TmdbPlaybackIdentity? aiPlaybackIdentityForEpisode(
     flagKey: flagKey,
     seasonNumber: season is int ? season : current.seasonNumber,
     episodeNumber: number is int ? number : -1,
+    imdbId: current.imdbId,
   );
 }
 
