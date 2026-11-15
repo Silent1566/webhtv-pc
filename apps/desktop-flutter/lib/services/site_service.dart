@@ -14,7 +14,9 @@ import '../core/http_api.dart';
 import '../core/parse_failover.dart';
 import '../core/parse_runtime.dart';
 import '../core/playback.dart';
+import '../core/playback_lines.dart';
 import '../core/protocol.dart';
+import '../core/source_swap.dart';
 import 'android_playback_bridge.dart';
 import 'parse_service.dart';
 import 'spider_router.dart';
@@ -88,10 +90,15 @@ class SiteService {
     }
   }
 
-  Future<SiteCallResult<SiteResult>> _call(
+  /// 执行一次站点调用并记录健康统计。
+  ///
+  /// 泛型：目录展开（[folderPlaybackLines]）要的是一次调用里的**中间产物**，
+  /// 不是 [SiteResult]。健康统计与异常包装对谁都一样，所以结果类型留给调用点
+  /// 推断——写成死 [SiteResult] 就得为它在外面再套一层，统计口径反而会分叉。
+  Future<SiteCallResult<T>> _call<T>(
     String siteKey,
     HealthAction action,
-    Future<SiteResult> Function() body,
+    Future<T> Function() body,
   ) async {
     final stopwatch = Stopwatch()..start();
     try {
@@ -154,93 +161,169 @@ class SiteService {
     Vod parent, {
     bool Function()? isCurrent,
   }) async {
-    final warnings = <AppError>[];
+    var warnings = const <AppError>[];
     final outcome = await _call(site.key, HealthAction.detail, () async {
-      void checkCurrent() {
-        if (isCurrent != null && !isCurrent()) {
-          throw AppError(AppErrorKind.siteCancelled, '详情请求已取消');
-        }
-      }
-
-      checkCurrent();
-      final entries = (await category(site, typeId: parent.vodId)).value.list;
-      final names = <String>[];
-      final urls = <String>[];
-      final displayEntries = <Vod>[];
-      final sourceFlags = <String, String>{};
-      // 顺序读取，兼容使用共享 Spider 上下文的网关；离开页面后不再发后续请求。
-      for (final entry in entries) {
-        checkCurrent();
-        try {
-          final items = playLinesOf(entry).isNotEmpty
-              ? [entry]
-              : (await detail(site, entry.vodId)).value.list;
-          checkCurrent();
-          displayEntries.addAll(items);
-          final lines = items.expand(playLinesOf).toList();
-          if (lines.isEmpty) {
-            throw AppError(AppErrorKind.playbackUrlMissing, '未返回可播放的分集');
-          }
-          for (final line in lines) {
-            final providerName = _bridgeProviderName(entry.vodName);
-            final label =
-                (lines.length == 1
-                        ? providerName
-                        : '$providerName · ${line.displayName}')
-                    .replaceAll(r'$$$', ' ');
-            var name = label;
-            for (
-              var duplicate = 2;
-              sourceFlags.containsKey(name);
-              duplicate++
-            ) {
-              name = '$label ($duplicate)';
-            }
-            names.add(name);
-            sourceFlags[name] = line.playbackFlag;
-            urls.add(line.episodes.map((e) => '${e.name}\$${e.url}').join('#'));
-          }
-        } catch (error) {
-          checkCurrent();
-          final failure = error is AppError
-              ? error
-              : AppError(AppErrorKind.unknown, '资源详情加载失败', cause: error);
-          warnings.add(
-            AppError(
-              failure.kind,
-              '线路「${entry.vodName}」加载失败，可刷新详情重试',
-              detail: failure.message,
-              retryable: true,
-              cause: failure,
-            ),
-          );
-        }
-      }
-      checkCurrent();
-      if (names.isEmpty) {
-        throw AppError(
-          AppErrorKind.playbackUrlMissing,
-          '该影片的线路均未返回分集，请刷新重试或换源',
-          detail: warnings.map((e) => e.message).join('；'),
-          retryable: true,
-        );
-      }
+      final expanded = await _expandFolder(
+        site,
+        parent,
+        isCurrent: isCurrent,
+      );
+      warnings = expanded.warnings;
       final merged = mergeFolderDisplay(
         parent: parent,
-        entries: displayEntries,
+        entries: expanded.displayEntries,
       );
       final vod = Vod.fromJson({
         ...merged.toJson(),
         'vod_tag': 'file',
-        'vod_play_from': names.join(r'$$$'),
-        'vod_play_url': urls.join(r'$$$'),
-        bridgePlaybackFlagsKey: sourceFlags,
+        'vod_play_from': expanded.names.join(r'$$$'),
+        'vod_play_url': [
+          for (final episodes in expanded.episodes)
+            episodes.map((e) => '${e.name}\$${e.url}').join('#'),
+        ].join(r'$$$'),
+        bridgePlaybackFlagsKey: expanded.sourceFlags,
       })!;
       return SiteResult(list: [vod]);
     });
     return SiteCallResult(
       value: outcome.value,
       latency: outcome.latency,
+      warnings: warnings,
+    );
+  }
+
+  /// 目录展开成「线路 + 路由」，供播放器从历史补齐选集入口。
+  ///
+  /// 为什么与 [folderDetail] 共用 [_expandFolder]：用户从历史进播放器后看到的
+  /// 线路必须和目录页/详情页完全一致（同样的合并命名、同样的分集）。两处各写
+  /// 一遍时，重名追加 ` (2)`、清洗 `$$$` 这类细节迟早会漂移。
+  ///
+  /// 与详情页的区别只有一处：这里还要产出 [SwapLineRoute]。网盘聚合的目录条目
+  /// 自己不是影片，换集必须回到**条目自己的** `vod_id`——拿父目录 id 去 `ids=`
+  /// 会被站源判为业务错误（真机实测 2026-10-20）。
+  Future<PlaybackLines> folderPlaybackLines(
+    Site site,
+    Vod parent, {
+    bool Function()? isCurrent,
+  }) async {
+    final outcome = await _call(site.key, HealthAction.detail, () async {
+      final expanded = await _expandFolder(
+        site,
+        parent,
+        isCurrent: isCurrent,
+      );
+      final routes = <String, SwapLineRoute>{};
+      final lines = <VodPlayLine>[];
+      for (var index = 0; index < expanded.names.length; index++) {
+        final name = expanded.names[index];
+        lines.add(
+          VodPlayLine(
+            flag: name,
+            episodes: expanded.episodes[index],
+            sourceFlag: expanded.sourceFlags[name],
+          ),
+        );
+        final entryVodId = expanded.entryVodIds[name];
+        if (entryVodId != null) {
+          routes[name] = SwapLineRoute(
+            siteKey: site.key,
+            siteName: site.name,
+            vodId: entryVodId,
+          );
+        }
+      }
+      return PlaybackLines(lines: lines, routes: routes);
+    });
+    return outcome.value;
+  }
+
+  /// 目录展开的共用实现：`t=<folder_id>` 分类 → 逐条目详情 → 合并命名。
+  ///
+  /// 输出按**线路展示名**索引：`names` 与 `episodes` 一一对应，`sourceFlags`
+  /// 与 `entryVodIds` 用同名键查。三者必须同批产出，否则线路与来源会错配。
+  Future<_FolderExpansion> _expandFolder(
+    Site site,
+    Vod parent, {
+    bool Function()? isCurrent,
+  }) async {
+    void checkCurrent() {
+      if (isCurrent != null && !isCurrent()) {
+        throw AppError(AppErrorKind.siteCancelled, '详情请求已取消');
+      }
+    }
+
+    checkCurrent();
+    final entries = (await category(site, typeId: parent.vodId)).value.list;
+    final names = <String>[];
+    final episodes = <List<VodEpisode>>[];
+    final displayEntries = <Vod>[];
+    final sourceFlags = <String, String>{};
+    final entryVodIds = <String, String>{};
+    final warnings = <AppError>[];
+    // 顺序读取，兼容使用共享 Spider 上下文的网关；离开页面后不再发后续请求。
+    for (final entry in entries) {
+      checkCurrent();
+      try {
+        final items = playLinesOf(entry).isNotEmpty
+            ? [entry]
+            : (await detail(site, entry.vodId)).value.list;
+        checkCurrent();
+        displayEntries.addAll(items);
+        final lines = items.expand(playLinesOf).toList();
+        if (lines.isEmpty) {
+          throw AppError(AppErrorKind.playbackUrlMissing, '未返回可播放的分集');
+        }
+        for (final line in lines) {
+          final providerName = _bridgeProviderName(entry.vodName);
+          final label =
+              (lines.length == 1
+                      ? providerName
+                      : '$providerName · ${line.displayName}')
+                  .replaceAll(r'$$$', ' ');
+          var name = label;
+          for (
+            var duplicate = 2;
+            sourceFlags.containsKey(name);
+            duplicate++
+          ) {
+            name = '$label ($duplicate)';
+          }
+          names.add(name);
+          episodes.add(line.episodes);
+          sourceFlags[name] = line.playbackFlag;
+          entryVodIds[name] = entry.vodId;
+        }
+      } catch (error) {
+        checkCurrent();
+        final failure = error is AppError
+            ? error
+            : AppError(AppErrorKind.unknown, '资源详情加载失败', cause: error);
+        warnings.add(
+          AppError(
+            failure.kind,
+            '线路「${entry.vodName}」加载失败，可刷新详情重试',
+            detail: failure.message,
+            retryable: true,
+            cause: failure,
+          ),
+        );
+      }
+    }
+    checkCurrent();
+    if (names.isEmpty) {
+      throw AppError(
+        AppErrorKind.playbackUrlMissing,
+        '该影片的线路均未返回分集，请刷新重试或换源',
+        detail: warnings.map((e) => e.message).join('；'),
+        retryable: true,
+      );
+    }
+    return _FolderExpansion(
+      names: names,
+      episodes: episodes,
+      displayEntries: displayEntries,
+      sourceFlags: sourceFlags,
+      entryVodIds: entryVodIds,
       warnings: warnings,
     );
   }
@@ -639,9 +722,20 @@ class SiteService {
         detail: 'url=${redactUrl(outcome.url)}',
       );
     }
+    // 可切换的解析源只对「由解析层自己挑解析器」的目标成立：`json:` /
+    // `parse:<名称>` 是源站写死的解析器，手动换源会被前缀忽略，给一排点了
+    // 无效的 chip 比不给更糟。
+    final selectable = !isParsePrefixedTarget(target);
     return PlaybackDecision(
       action: PlaybackAction.direct,
       url: outcome.url,
+      // 列**配置里**的解析器（含合成「超级解析」），选中态用本次**选择**
+      // 而不是竞速胜出者：超级解析的胜出者随集变化，用它当选中项会让高亮
+      // 每集乱跳。
+      parseSources: selectable
+          ? [for (final entry in appConfig.playbackParsers) entry.name]
+          : const [],
+      parseSource: spec.selection.entry.name,
       headers: HeaderMap.merge([
         inputDecision.headers,
         HeaderMap(outcome.headers),
@@ -801,3 +895,38 @@ String _jsonTargetName(String parseUrl) {
   final host = Uri.tryParse(parseUrl)?.host ?? '';
   return host.isEmpty ? 'json' : 'json:$host';
 }
+
+/// 目录展开的中间结果（[SiteService._expandFolder] 的返回值）。
+///
+/// 只在本文件内使用：`names` / `episodes` 按线路下标对齐，`sourceFlags` 与
+/// `entryVodIds` 按线路展示名索引。详情页只关心前两组 + `displayEntries`，
+/// 播放器补齐还要后两组才能把线路指回条目自己。
+class _FolderExpansion {
+  const _FolderExpansion({
+    required this.names,
+    required this.episodes,
+    required this.displayEntries,
+    required this.sourceFlags,
+    required this.entryVodIds,
+    required this.warnings,
+  });
+
+  /// 合并后的线路展示名（与 `vod_play_from` 里的顺序一致）。
+  final List<String> names;
+
+  /// 每条线路自己的分集，下标与 [names] 对齐。
+  final List<List<VodEpisode>> episodes;
+
+  /// 用于合并封面/简介的条目（[mergeFolderDisplay] 的输入）。
+  final List<Vod> displayEntries;
+
+  /// 线路展示名 → 站源要求的原始 playbackFlag。
+  final Map<String, String> sourceFlags;
+
+  /// 线路展示名 → 该线路所属**目录条目自己的** `vod_id`。
+  final Map<String, String> entryVodIds;
+
+  /// 单条线路展开失败的原因（详情页把它们作为重试提示显示）。
+  final List<AppError> warnings;
+}
+

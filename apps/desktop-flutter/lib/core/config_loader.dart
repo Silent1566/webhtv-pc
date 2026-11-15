@@ -97,10 +97,24 @@ class ConfigLoader {
     this.maxBytes = 8 * 1024 * 1024,
     this.maxRedirects = 5,
     this.timeout = const Duration(seconds: 20),
-  }) : _client = httpClient ?? HttpClient() {
+  }) : _client = httpClient ??
+           (HttpClient()..userAgent = configUserAgent) {
     _client.autoUncompress = false;
     _client.connectionTimeout = timeout;
   }
+
+  /// 配置下载使用的 UA。
+  ///
+  /// 为什么不用应用 UA（`WebHTV-PC/0.1`）：TVBox 生态里大量站点**按 UA 分流**
+  /// ——常规 / 浏览器 UA 收到 HTTP 200 的落地页或广告页，只有 okhttp UA 才给真
+  /// 配置 JSON。此时导入会以「JSON 解析失败」收场，而不是任何网络错误，用户看到
+  /// 的就是「这个接口导不进来」。
+  /// 取值与实测依据见 `docs/reference/win-box-borrowings.md` §4.3（`UA_OKHTTP`，
+  /// 原文注明「不要臆造其它 UA」）；安卓端 `Decoder.getJson` 走
+  /// `OkHttp.newCall`，发出的同样是 okhttp 系 UA。
+  ///
+  /// 只作用于本类自建的客户端：调用方注入 [httpClient] 时保留其原有 UA。
+  static const String configUserAgent = 'okhttp/3.12.0';
 
   /// 配置响应大小上限，默认 8 MiB（§7.4.1）。
   final int maxBytes;

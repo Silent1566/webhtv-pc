@@ -340,7 +340,7 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
-  // 通知中心是进程级单例：上一条用例留下的通知（错误通知会驻留 15 秒，足够跨过去）
+  // 通知中心是进程级单例：上一条用例留下的通知（错误通知会驻留 30 秒，足够跨过去）
   // 会活到下一条用例里，把「用户被告知失败」变成假绿。每条用例前清空。
   setUp(dismissAllToasts);
 

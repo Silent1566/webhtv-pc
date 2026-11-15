@@ -893,7 +893,7 @@ void main() {
       await tester.tap(
         find.byKey(const ValueKey('tmdb-video-open-YouTube|abc123')),
       );
-      // 不能用 `pumpAndSettle`：通知自带 ~4 秒倒计时，settle 会一路推到它自己
+      // 不能用 `pumpAndSettle`：通知自带 15 秒倒计时，settle 会一路推到它自己
       // 关掉，断言就没东西可看了。推两帧即可（microtask + 入场动画）。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));

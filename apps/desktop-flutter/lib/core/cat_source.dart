@@ -33,8 +33,10 @@ abstract final class CatSource {
   /// `_localDir`/`_localZip` 会二次确认（含 zip 内 `index.js.md5` 标记校验）。
   static bool isBundle(String? url) {
     if (url == null) return false;
-    final value = url.trim().toLowerCase();
-    if (value.isEmpty) return false;
+    // 本地路径必须按原样 stat：大小写敏感磁盘上 toLowerCase 会指向不存在的文件。
+    final raw = url.trim();
+    if (raw.isEmpty) return false;
+    final value = raw.toLowerCase();
     if (value.endsWith('.js.md5')) return true;
     // 去掉 query/fragment 后判断 `/index.js`，避免把 `index.js?v=2` 漏判。
     final path = _pathOnly(value);
@@ -45,10 +47,10 @@ abstract final class CatSource {
     }
     // 本地包：目录（含 index.js）或 zip 文件。
     if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      if (value.endsWith('.zip')) return File(value).existsSync();
+      if (value.endsWith('.zip')) return File(raw).existsSync();
       final entry = value.endsWith(r'\') || value.endsWith('/')
-          ? '${value}index.js'
-          : '$value/index.js';
+          ? '${raw}index.js'
+          : '$raw/index.js';
       return File(entry).existsSync();
     }
     return false;

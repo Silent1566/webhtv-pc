@@ -1452,6 +1452,8 @@ class PlaybackDecision {
     this.upstreamHeaders,
     this.parse,
     this.jx,
+    this.parseSources = const [],
+    this.parseSource = '',
   });
 
   final PlaybackAction action;
@@ -1473,6 +1475,25 @@ class PlaybackDecision {
   /// 决定是否调用解析器，以及按 `flag` 匹配哪个解析器（§12.2）。
   final int? parse;
   final int? jx;
+
+  /// 本次播放**实际可选**的解析源名称（含合成的「超级解析」）。
+  ///
+  /// 空 = 本次播放没有可切换的解析源，UI 不得给出解析入口。三种情况都是空：
+  /// 直链播放（站点没要求解析，切换解析器无从生效）、配置里没有解析器、以及
+  /// 目标自带固定的 `json:` / `parse:<名称>` 指令（那是源站写死的解析器，
+  /// 给一个点了会被忽略的下拉等于撒谎）。
+  ///
+  /// 为什么由解析层给出而不是 UI 读全局配置：UI 只看得到**当前生效配置**，
+  /// 而原来源续播（`PlaybackRequest.sourceKey`）用的是**那份配置**的解析器；
+  /// 读全局配置会把 A 配置的解析器列在 B 配置的播放上。
+  final List<String> parseSources;
+
+  /// 当前生效的解析源名称；[parseSources] 为空时无意义。
+  ///
+  /// 取的是**选择**（`ParseRuntime.select` 的结果）而不是实际胜出的解析器：
+  /// 「超级解析」由多个解析器竞速，胜出者随集变化，用它当选中态会让选中项
+  /// 每集乱跳。
+  final String parseSource;
 
   /// 播放结果携带的外挂字幕（§10.3）：随决策一起传到播放器。
   final List<SubtitleInfo> subs;
@@ -1506,6 +1527,8 @@ class PlaybackDecision {
     String? flag,
     int? parse,
     int? jx,
+    List<String>? parseSources,
+    String? parseSource,
     List<SubtitleInfo>? subs,
     List<DanmakuSource>? danmaku,
     List<PlaybackQuality>? qualities,
@@ -1521,6 +1544,8 @@ class PlaybackDecision {
       flag: flag ?? this.flag,
       parse: parse ?? this.parse,
       jx: jx ?? this.jx,
+      parseSources: parseSources ?? this.parseSources,
+      parseSource: parseSource ?? this.parseSource,
       subs: subs ?? this.subs,
       danmaku: danmaku ?? this.danmaku,
       qualities: qualities ?? this.qualities,

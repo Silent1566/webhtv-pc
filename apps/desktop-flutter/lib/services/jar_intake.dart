@@ -130,7 +130,8 @@ class JarInspection {
             '因此不做自动转译；JVM 无法加载（ADR-0002）。';
       case JarVerdict.nativeLibrary:
         return '该入口含原生库（${nativeEntries.take(3).join('、')}），'
-            '依赖 Android/ARM 原生实现，桌面 JVM 无法加载（Win-box 用 unidbg 属另一条路线）。';
+            '只能在安卓端运行，桌面 JVM 无法加载。'
+            '如需在 PC 上使用，请在安卓端运行该配置，再通过「安卓设备接入」导入。';
       case JarVerdict.missingEntryClass:
         return '可解析但没有任何 .class 条目（宿主会以 ClassNotFound 收场）：'
             '入口必须继承 webhtv.spider.Spider 或提供静态 createSpider(Map)。';

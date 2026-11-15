@@ -22,12 +22,14 @@
 
 ## 结果（108 条用户可见能力）
 
-2026-11-13 补核：catalog 的 Vod.tmdb 与配置根 tmdb_api_key 两项由未迁移更新为已迁移，故统计相应调整；[实现与测试证据](../evidence/09-tmdb-source-payload-and-key.md)。其余条目仍保持原基线静态判定。
+2026-11-13 补核：catalog 的 Vod.tmdb 与配置根 tmdb_api_key 两项由未迁移更新为已迁移，故统计相应调整；[实现与测试证据](../evidence/09-tmdb-source-payload-and-key.md)。
+
+2026-11-14 补核：catalog 的「观影报告」由部分迁移更新为已迁移（四维偏好 + 桌面增强），[证据](../evidence/10-viewing-report-v2.md)。其余条目仍保持原基线静态判定。
 
 | 状态 | 条数 |
 | --- | --- |
-| 已迁移 | 45 |
-| 部分迁移 | 30 |
+| 已迁移 | 46 |
+| 部分迁移 | 29 |
 | 未迁移 | 22 |
 | 证据不足 | 7 |
 | 平台专属 | 3 |

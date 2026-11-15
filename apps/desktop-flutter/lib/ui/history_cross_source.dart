@@ -41,6 +41,7 @@ import 'ai_integration_widgets.dart';
 import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'history_resume_seed.dart';
+import 'playback_resume.dart';
 import 'player_page.dart';
 import 'toast.dart';
 
@@ -113,6 +114,14 @@ Future<String?> _tryOriginalSource(
 
   try {
     final episodeTarget = restoreHistoryPlaybackTarget(item.episodeId);
+    // 与解析并行：目录记录（`atvp_detail:`）的线路展开要 2~15s，起播后再补
+    // 会让用户先看到一个没有选集按钮的播放器。超时/失败都只是 null，不挡起播。
+    final prefetch = prefetchFolderPlayLines(
+      state,
+      item,
+      sourceKey: sourceContext.sourceKey,
+      isCurrent: () => context.mounted && feedback?.isCurrent == true,
+    );
     final decision = await state.resolvePlaybackForSource(
       sourceKey: sourceContext.sourceKey,
       siteKey: item.siteKey,
@@ -123,6 +132,7 @@ Future<String?> _tryOriginalSource(
     if (decision == null || decision.url == null) {
       return '原播放源「${_sourceNameOf(state, item)}」没有返回可用播放地址';
     }
+    final folderLines = await prefetch;
     if (!context.mounted || !feedback!.isCurrent) return null;
     feedback.dismiss();
     await Navigator.of(context).push(
@@ -134,6 +144,9 @@ Future<String?> _tryOriginalSource(
             // 当前集的多画质候选随请求下传：播放器据此显示入口、按索引重解析。
             qualities: decision.qualities,
             qualityIndex: decision.qualityIndex,
+            // 原来源续播必须带**那份配置**的解析选项，不能读当前配置。
+            parseSources: decision.parseSources,
+            parseSource: decision.parseSource,
             episodeTarget: episodeTarget,
             headers: decision.headers?.asRequestHeaders ?? const {},
             title: item.vodName,
@@ -141,7 +154,13 @@ Future<String?> _tryOriginalSource(
             vodId: item.vodId,
             vodName: item.vodName,
             episodeName: item.episodeName,
-            flag: item.flag,
+            // 预取命中才带线路：线路/路由/命中线路/集下标必须成对，缺路由时
+            // 换集会拿父目录 id 去问站点（站源判为业务错误）。
+            flag: folderLines?.flag ?? item.flag,
+            playbackFlag: folderLines?.playbackFlag,
+            episodeIndex: folderLines?.episodeIndex ?? 0,
+            playLines: folderLines?.lines ?? const [],
+            lineRoutes: folderLines?.routes ?? const {},
             // 续播后再写进度必须保留同一个入口目标，否则这条历史会被刚解析出的
             // 可播地址覆盖（下一次续播又失败）。
             startPosition: Duration(milliseconds: item.positionMs),

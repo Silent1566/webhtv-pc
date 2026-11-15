@@ -32,6 +32,7 @@ import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/skip_segments.dart';
 import '../core/sleep_timer.dart';
+import '../core/source_swap.dart';
 import '../core/subtitle.dart';
 import '../core/subtitle_provider.dart';
 import '../core/tmdb_playback.dart';
@@ -65,6 +66,7 @@ import 'live_playback_session.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
+import 'player_parse_source_strip.dart';
 import 'player_quality_panel.dart';
 import 'theme.dart';
 import 'window_mode.dart';
@@ -249,6 +251,8 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> with WindowListener {
   late PlayerController _controller;
   late PlaybackRequest _request;
+  bool _playLinesRequested = false;
+  int _playLinesRevision = 0;
   String? _queueItemKey;
   String? _pendingQueueItemKey;
   int? _pendingQueueStep;
@@ -470,6 +474,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted) return;
       _touchControls();
       _load();
+      unawaited(_ensurePlayLines());
     });
   }
 
@@ -496,6 +501,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _pendingQueueItemKey = null;
     _pendingQueueStep = null;
     _request = widget.request;
+    _playLinesRequested = false;
+    _playLinesRevision++;
     if (_hasQueue) {
       _queueRestorePosition = _request.startPosition;
       _clearQueueMediaView();
@@ -503,6 +510,154 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _sessionRevision = widget.liveSession?.playbackRevision ?? 0;
     _episodesCache = const [];
     unawaited(_load());
+    unawaited(_ensurePlayLines());
+  }
+
+  /// 历史入口没有线路时先播再补；完整命中当前集才开放选集，歧义就不猜。
+  ///
+  /// 用户看到的是「播放器里没有选集按钮」，而这里每个提前返回都是**静默**的：
+  /// 没有日志就只能让站点再跑一遍才知道卡在哪。因此每个出口各留一条 debug，
+  /// 且只记分类与数量，不输出完整 URL/Header。
+  Future<void> _ensurePlayLines() async {
+    if (_playLinesRequested) {
+      _logPlayLinesSkip('本次会话已请求过线路补齐');
+      return;
+    }
+    if (widget.liveSession != null) {
+      _logPlayLinesSkip('直播会话');
+      return;
+    }
+    if (_hasQueue) {
+      _logPlayLinesSkip('目录连播队列自带选集');
+      return;
+    }
+    if (_request.playLines.isNotEmpty) {
+      _logPlayLinesSkip('请求已自带线路 lines=${_request.playLines.length}');
+      return;
+    }
+    if (_request.siteKey.trim().isEmpty || _request.vodId.trim().isEmpty) {
+      // 空身份时 site/vod 由 _logPlayLinesSkip 统一带上，这里不再重复。
+      _logPlayLinesSkip('请求缺少站源身份');
+      return;
+    }
+    _playLinesRequested = true;
+    final request = _request;
+    final revision = _playLinesRevision;
+    // 起播清种子、添加字幕、同集重试都会换请求对象，不能据 identical 误丢同集。
+    // 外部请求更替单独计代次：即使复用旧对象，迟到的详情也不能串进新会话。
+    //
+    // 返回**第一个**不一致的字段名而不是 bool：补齐结果被丢弃时，日志要能直接
+    // 指出是哪一处变了（换集？换片？切到外部源？），否则只剩「没补上」。
+    String? mismatch() {
+      if (!mounted) return 'unmounted';
+      if (widget.liveSession != null) return 'liveSession';
+      if (_hasQueue) return 'queue';
+      // 先比语义字段再比代次：换集同时会改 vodId 与代次，只报代次等于没说清。
+      if (_request.siteKey != request.siteKey) return 'siteKey';
+      if (_request.vodId != request.vodId) return 'vodId';
+      if (_request.sourceKey != request.sourceKey) return 'sourceKey';
+      // 入口目标可能是完整播放地址，只记字段名。
+      if (_request.episodeTarget != request.episodeTarget) return 'episodeTarget';
+      if (revision != _playLinesRevision) return 'revision';
+      return null;
+    }
+
+    bool isCurrent() => mismatch() == null;
+    widget.state.log.debug(
+      '开始补齐选集入口 site="${request.siteKey}" vod="${request.vodId}" '
+      'flag="${request.flag}"',
+      scope: 'player',
+    );
+    final started = DateTime.now();
+    final fetched = await widget.state.playLinesForRecord(
+      siteKey: request.siteKey,
+      vodId: request.vodId,
+      vodName: request.vodName,
+      sourceKey: request.sourceKey,
+      isCurrent: isCurrent,
+    );
+    final elapsed = DateTime.now().difference(started).inMilliseconds;
+    final stale = mismatch();
+    if (stale != null) {
+      // 页面已经卸载时连日志都不落：State 已 dispose，没有任何用户可见结果，
+      // 落一条「过期」只会把「用户自己关掉了播放器」写成缺陷。
+      if (stale != 'unmounted') {
+        widget.state.log.debug(
+          '无选集入口：补齐结果已过期 field=$stale vod="${request.vodId}" '
+          'elapsed=${elapsed}ms',
+          scope: 'player',
+        );
+      }
+      return;
+    }
+    final lines = fetched?.lines ?? const <VodPlayLine>[];
+    widget.state.log.debug(
+      '补齐线路取回 vod="${request.vodId}" lines=${lines.length} '
+      'routes=${fetched?.routes.length ?? 0} elapsed=${elapsed}ms',
+      scope: 'player',
+    );
+    if (lines.isEmpty || _request.playLines.isNotEmpty) {
+      widget.state.log.debug(
+        '无选集入口：站点详情没有可用线路 vod="${request.vodId}" '
+        'lines=${lines.length}',
+        scope: 'player',
+      );
+      return;
+    }
+    final current = _request;
+    final target = resolveHistoryTarget(
+      historyFlag: current.flag,
+      historyEpisodeId: current.episodeTarget,
+      historyEpisodeName: current.episodeName,
+      lines: lines,
+    );
+    if (!target.matched) {
+      widget.state.log.debug(
+        '无选集入口：线路里定位不到当前集 vod="${request.vodId}" '
+        'flag="${current.flag}" episode="${current.episodeName}" '
+        'lines=${lines.length}',
+        scope: 'player',
+      );
+      return;
+    }
+    final line = lines.where((line) => line.flag == target.flag).firstOrNull;
+    if (line == null || line.episodes.isEmpty) {
+      // 按钮的渲染条件是「`_request.flag` 指得到一条有分集的线路」：
+      // 命中的 flag 取不到线路或分集为空时采纳它，只会得到一个空按钮。
+      widget.state.log.debug(
+        '无选集入口：命中线路取不到分集 vod="${request.vodId}" '
+        'flag="${target.flag}" lines=${lines.length}',
+        scope: 'player',
+      );
+      return;
+    }
+    setState(() {
+      // 合并到当前请求，保住详情等待期间更新过的字幕、画质与起播状态。
+      // 路由必须跟着线路一起采纳：目录条目补出来的线路各自属于**不同条目**，
+      // 少了路由，换集就会拿父目录的 vodId 去解析（站源判为业务错误）。
+      _request = current.copyWith(
+        playLines: lines,
+        lineRoutes: fetched!.routesWith(current.lineRoutes),
+        flag: target.flag,
+        playbackFlag: line.playbackFlag,
+        episodeIndex: target.episodeIndex,
+        tmdb: current.tmdb,
+      );
+    });
+    widget.state.log.debug(
+      '选集入口已补齐 vod="${request.vodId}" lines=${lines.length} '
+      'flag="${target.flag}" episodeIndex=${target.episodeIndex} '
+      'episodes=${line.episodes.length} elapsed=${elapsed}ms',
+      scope: 'player',
+    );
+  }
+
+  /// 补齐入口的提前返回原因（静默出口的统一落点）。
+  void _logPlayLinesSkip(String reason) {
+    widget.state.log.debug(
+      '无选集入口：$reason site="${_request.siteKey}" vod="${_request.vodId}"',
+      scope: 'player',
+    );
   }
 
   void _onPlaybackSessionChanged() {
@@ -727,14 +882,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _showPlayerMessage(String text, {ToastKind kind = ToastKind.info}) {
     if (!mounted) return;
-    // 错误给足阅读时间但不赖着：不传 duration，让 toast.dart 按类型取默认值
-    // （error -> 15s，info/success -> 4s）。只有信息/成功在播放器里收窄到 3s：
-    // 播放页的操作反馈更频繁，4s 会让右下角一直有东西。
-    showToast(
-      text,
-      kind: kind,
-      duration: kind == ToastKind.error ? null : const Duration(seconds: 3),
-    );
+    // 时长不在这里定：不传 duration，让 toast.dart 按类型取默认值
+    // （error -> 30s，info/success -> 15s）。
+    // 这里曾把信息/成功单独收窄到 3 秒，理由是「播放页反馈频繁，怕右下角一直有东西」；
+    // 但 3 秒连「已标记片头 12:34」这种一句话都读不完，且播放页的提示多半是低频的
+    // 「已标记 / 已清除」，堆积不是真问题（可见栈上限 4 条兜底）。于是回到全站同一套时长。
+    showToast(text, kind: kind);
   }
 
   /// 连播闸门：单次守卫 + 真播完判定（`design/03` §4.1）。
@@ -942,8 +1095,40 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 2. 清除残留的 `completed`，否则重建会再次触发连播（D1）；
       // 3. 记一条含 nearEnd 判定的诊断，让「缓存耗尽」在 PC 侧可见（§4.6）。
       _logFailureDiagnostics(outcome);
+      var rollback = intent;
+      if (_playLinesRequested &&
+          intent.playLines.isEmpty &&
+          _request.playLines.isNotEmpty &&
+          widget.liveSession == null &&
+          !_hasQueue &&
+          _request.siteKey == intent.siteKey &&
+          _request.vodId == intent.vodId &&
+          _request.sourceKey == intent.sourceKey &&
+          _request.episodeTarget == intent.episodeTarget) {
+        // 起播失败仍要回滚原意图，但同集先补到的线路不能被回滚丢掉。
+        // 重新完整定位，确保线路与集下标成对；其它起播字段继续来自 intent。
+        final lines = _request.playLines;
+        final target = resolveHistoryTarget(
+          historyFlag: intent.flag,
+          historyEpisodeId: intent.episodeTarget,
+          historyEpisodeName: intent.episodeName,
+          lines: lines,
+        );
+        if (target.matched) {
+          final line = lines.where((line) => line.flag == target.flag).firstOrNull;
+          rollback = intent.copyWith(
+            playLines: lines,
+            // 线路与路由同进同出：回滚丢掉路由，下一次换集就退回父目录 id。
+            lineRoutes: _request.lineRoutes,
+            flag: target.flag,
+            playbackFlag: line?.playbackFlag ?? intent.playbackFlag,
+            episodeIndex: target.episodeIndex,
+            tmdb: intent.tmdb,
+          );
+        }
+      }
       setState(() {
-        _request = intent;
+        _request = rollback;
         _loadError = outcome.failureKind == null
             ? '播放失败'
             : describePlayerFailure(outcome.failureKind!);
@@ -3076,10 +3261,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         episodeTarget: intent.episodeTarget,
         flag: intent.playbackFlag,
         vodId: route?.vodId ?? intent.vodId,
-        siteOverride: route == null
-            ? null
-            : widget.state.siteByKey(route.siteKey),
-        isExternalRoute: route != null,
+        route: route,
         qualityIndex: intent.qualityIndex,
         isCurrent: isCurrent,
       );
@@ -3087,13 +3269,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (decision?.url == null) {
         throw AppError(AppErrorKind.playbackUrlMissing, '本文件没有可用播放地址');
       }
+      // 新结果没有可切换解析源时丢掉上一次的手动指定：留着它会被带到
+      // 下一个需要解析的集，变成用户没选过的解析器。
+      if (decision!.parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
         _request = intent.copyWith(
-          url: decision!.url!,
+          url: decision.url!,
           headers: decision.headers?.asRequestHeaders ?? const {},
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
           qualities: decision.qualities,
           qualityIndex: decision.qualityIndex,
+          // 解析选项随本次决策**无条件**覆盖（含空值）：直链结果必须清掉
+          // 上一次解析留下的入口，否则控制区会挂着点了不生效的解析条。
+          parseSources: decision.parseSources,
+          parseSource: decision.parseSource,
           subtitles: decision.subs,
           danmaku: decision.danmaku,
           startPosition: start,
@@ -3173,30 +3362,35 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  /// 本次播放是否用**记录自己那份配置**解析（跨源续播）。
+  bool get _crossSource {
+    final source = _request.sourceKey.trim();
+    return source.isNotEmpty && source != widget.state.activeSourceKey;
+  }
+
   /// 本次播放的解析入口（换集/切线路/失败重试都走它）。
   ///
   /// 为什么不让调用点各写一遍：原来源播放（`_request.sourceKey` 是**别的**
   /// 配置）必须一直用那份配置解析，任何一处漏掉就会回落到当前配置的同名站点上，
   /// 表现为「换集后播的是当前源的另一部片」。
+  ///
+  /// [route] 是这条线路自己的来源路由（`PlaybackRequest.lineRoutes`）。跨源时
+  /// **必须**把路由的 `siteKey`/`vodId` 交给 [AppState.resolvePlaybackForSource]：
+  /// 请求上的 `siteKey`/`vodId` 是**记录**的身份（目录记录就是父目录 id），
+  /// 拿它去问那份配置会解析到别的条目，甚至被站源判为业务错误。
   Future<PlaybackDecision?> _resolvePlayback({
     required String episodeTarget,
     required String flag,
     required String vodId,
-    Site? siteOverride,
-    bool isExternalRoute = false,
+    SwapLineRoute? route,
     int? qualityIndex,
     bool Function()? isCurrent,
   }) {
     final state = widget.state;
-    final source = _request.sourceKey.trim();
-    // 外部并入线路属于**当前配置**：那条线路必须用当前配置解析，不能借原配置的
-    // 服务去问（站点在两份配置里是两回事）。
-    if (!isExternalRoute &&
-        source.isNotEmpty &&
-        source != state.activeSourceKey) {
+    if (_crossSource) {
       return state.resolvePlaybackForSource(
-        sourceKey: source,
-        siteKey: _request.siteKey,
+        sourceKey: _request.sourceKey,
+        siteKey: route?.siteKey ?? _request.siteKey,
         qualityIndex: qualityIndex,
         isCurrent: isCurrent,
         episodeTarget: episodeTarget,
@@ -3209,7 +3403,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       episodeTarget: episodeTarget,
       flag: flag,
       vodId: vodId,
-      siteOverride: siteOverride,
+      siteOverride: route == null ? null : state.siteByKey(route.siteKey),
       qualityIndex: qualityIndex,
       isCurrent: isCurrent,
       preferredParseName: _parseSourceOverride,
@@ -3321,6 +3515,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final int qualityIndex;
       final Map<String, String> headers;
       final Map<String, String> subtitleHeaders;
+      // 换集后解析源选择也要跟着这一集的决策走：不同线路/不同集可以是不同
+      // 的解析路径（直链集不该继承上一集的解析条）。
+      final List<String> parseSources;
+      final String parseSource;
       // 提到外层：下面写进度归属时要判断「这一集是不是外部并入线路」。
       final route = _request.lineRoutes[flag];
       if (_request.directUrl) {
@@ -3331,14 +3529,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         qualityIndex = 0;
         headers = _request.headers;
         subtitleHeaders = _request.subtitleHeaders;
+        // 直播/本地直连不经站点解析：没有可切换的解析源。
+        parseSources = const [];
+        parseSource = '';
       } else {
         // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
         final decision = await _resolvePlayback(
           episodeTarget: episode.url,
           flag: _playbackFlagFor(flag),
           vodId: route?.vodId ?? _request.vodId,
-          siteOverride: route == null ? null : state.siteByKey(route.siteKey),
-          isExternalRoute: route != null,
+          route: route,
           isCurrent: _hasQueue
               ? () => mounted && generation == _mediaGeneration
               : null,
@@ -3358,8 +3558,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         qualityIndex = decision.qualityIndex;
         headers = decision.headers?.asRequestHeaders ?? const {};
         subtitleHeaders = decision.assetHeaders?.asRequestHeaders ?? const {};
+        parseSources = decision.parseSources;
+        parseSource = decision.parseSource;
       }
       if (!mounted || generation != _mediaGeneration) return;
+      // 换集后新结果没有可切换解析源时，手动指定不再成立。
+      if (parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
         _loadError = null;
         _request = _request.copyWith(
@@ -3375,6 +3579,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           subtitleHeaders: subtitleHeaders,
           qualities: qualities,
           qualityIndex: qualityIndex,
+          parseSources: parseSources,
+          parseSource: parseSource,
           episodeIndex: episodeIndex,
           clearStartPosition: true,
           // 种子属于**原记录那一集**：换集后必须一起清掉，否则会被当成
@@ -3384,7 +3590,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           danmaku: danmaku,
           // 切到外部并入线路时，这条线路属于**当前配置**：进度不能再写回
           // 原来源（否则历史里多出一条挂错源的记录）。
-          clearSourceKey: route != null,
+          // 跨源续播的目录线路不属于这种情况：它们是**记录自己那份配置**展开出来
+          // 的，清掉 sourceKey 会把一次换集的进度写进当前源，历史里立刻多一条
+          // 挂错源的记录。
+          clearSourceKey: route != null && !_crossSource,
         );
         _episodesCache = const [];
         // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕；
@@ -3843,6 +4052,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                           progressRow: _buildProgressRow(),
                           actionButtons: _buildActionButtons(),
                           actionGroups: _actionGroups(),
+                          extraRow: _buildParseSourceStrip(),
                         ),
                       ),
                     ),
@@ -4620,10 +4830,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         episodeTarget: intent.episodeTarget,
         flag: intent.playbackFlag,
         vodId: route?.vodId ?? intent.vodId,
-        siteOverride: route == null
-            ? null
-            : widget.state.siteByKey(route.siteKey),
-        isExternalRoute: route != null,
+        route: route,
         qualityIndex: index,
         isCurrent: isCurrent,
       );
@@ -4633,6 +4840,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
       final position = _controller.position;
       final playing = _controller.isPlaying;
+      // 同上：新画质结果没有可切换解析源时，手动指定不再成立。
+      if (decision.parseSources.isEmpty) _parseSourceOverride = null;
       _beginMediaTransition();
       setState(() {
         _request = intent.copyWith(
@@ -4641,6 +4850,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
           qualities: decision.qualities,
           qualityIndex: decision.qualityIndex,
+          parseSources: decision.parseSources,
+          parseSource: decision.parseSource,
           subtitles: decision.subs,
           danmaku: decision.danmaku,
           startPosition: position,
@@ -4719,16 +4930,24 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           episodeIndex: _request.episodeIndex,
           onSelectEpisode: (index) => unawaited(_playEpisode(index)),
           onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
-          // 解析源不是每条配置都有多个；面板只在 >1 时渲染这一行。
-          parseSources: [
-            for (final entry in widget.state.config?.playbackParsers ??
-                const <ParseEntry>[])
-              entry.name,
-          ],
-          parseSource: _parseSourceOverride ?? superParseEntryName,
-          onSelectParseSource: (name) => unawaited(_switchParseSource(name)),
         ),
       ),
+    );
+  }
+
+  /// 控制区的解析源条；本次播放没有可切换的解析源时返回 `null`。
+  ///
+  /// 判定只读**本次播放的解析结果**（`PlaybackRequest.parseSources`），不看配置
+  /// 里有没有解析器：直链播放、本地文件与直播都不产生解析结果，读配置就会凭空
+  /// 给出一个点了不生效的入口。少于两项也不给——只有一个解析源时选不选都一样。
+  Widget? _buildParseSourceStrip() {
+    if (_isLive || _isCatchup) return null;
+    final sources = _request.parseSources;
+    if (sources.length < 2) return null;
+    return PlayerParseSourceStrip(
+      sources: sources,
+      selected: _request.parseSource,
+      onSelect: (name) => unawaited(_switchParseSource(name)),
     );
   }
 

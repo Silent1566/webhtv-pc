@@ -139,8 +139,8 @@ void main() {
 
   /// 收走当前所有通知，等同用户点「×」。
   ///
-  /// 错误通知驻留右下角 15 秒，而详情页的错误通知正好压住右下角的集数卡片与
-  /// 浮层底部的「并入」按钮：测试里不能等那 15 秒自己过去，先收走，
+  /// 错误通知驻留右下角 30 秒，而详情页的错误通知正好压住右下角的集数卡片与
+  /// 浮层底部的「并入」按钮：测试里不能等那 30 秒自己过去，先收走，
   /// 否则 `tap` 会落在通知卡片上（`derived an Offset that would not hit test`）。
   Future<void> clearToasts(WidgetTester tester) async {
     dismissAllToasts();

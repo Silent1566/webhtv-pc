@@ -139,7 +139,7 @@ Future<List<SwapRow>?> showSourceSwapSheet(
   SourceStatus Function(String siteKey)? statusOf,
 }) {
   // 浮层的提交按钮（「并入 N 条线路」）就压在右下角，那是通知栈的地盘：错误通知
-  // 哪怕只活 15 秒，也够把按钮盖住一整轮操作。用户既然已经在处理这个错误，
+  // 哪怕只活 30 秒，也够把按钮盖住一整轮操作。用户既然已经在处理这个错误，
   // 通知的使命就结束了，开浮层时先收走。
   dismissAllToasts();
   return showModalBottomSheet<List<SwapRow>>(

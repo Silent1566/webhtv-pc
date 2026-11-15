@@ -24,6 +24,7 @@ import '../core/skip_segments.dart';
 import '../core/source_key.dart';
 import '../core/subtitle_provider.dart';
 import '../core/tmdb_credential_ingress.dart';
+import '../core/tmdb_identity.dart';
 
 /// 归一化媒体类型：只认 `movie` / `tv`，其余回空串。
 ///
@@ -332,11 +333,12 @@ class AppDatabase {
   ///   默认空串，旧收藏与安卓同步来的收藏一律「无海报」，卡片渲染占位图。
   /// - `9` → `10`：AI 季集逐集映射（`ai_season_episode_mappings`）。**纯加法式**：
   ///   旧库打开后自动获得新表，既有绑定/进度行不受影响。
+  /// - 10 → 11：按来源/站点/作品/标题隔离的观影元数据表，只加表。
   ///
   /// 除 v7 的两张表之外，升级都是**加法式**（`CREATE TABLE IF NOT EXISTS` 或
   /// `ALTER TABLE ADD COLUMN`）：旧库打开后自动获得新表/新列且不丢数据，
   /// 无需分支式升级逻辑。
-  static const int schemaVersion = 10;
+  static const int schemaVersion = 11;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -475,6 +477,16 @@ class AppDatabase {
     _migrateSources();
     _migrateHistoryIdentity();
     _migrateFavorites();
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS viewing_metadata (
+        source_key TEXT NOT NULL,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        source_title TEXT NOT NULL,
+        metadata TEXT NOT NULL,
+        PRIMARY KEY(source_key, site_key, vod_id, source_title)
+      );
+    ''');
     _stripLegacyTmdbRootCredentials();
     _db.execute(
       "INSERT INTO meta(key, value) VALUES('schema_version', '$schemaVersion') "
@@ -1432,6 +1444,63 @@ class AppDatabase {
     'SELECT * FROM config_sites WHERE config_id = ? ORDER BY id;',
     [configId],
   );
+
+  String? viewingMetadataJson({
+    required String sourceKey,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+  }) {
+    final rows = _db.select(
+      'SELECT metadata FROM viewing_metadata WHERE source_key=? AND '
+      'site_key=? AND vod_id=? AND source_title=? LIMIT 1;',
+      [sourceKey, siteKey, vodId, sourceTitle],
+    );
+    return rows.isEmpty ? null : rows.first['metadata'] as String?;
+  }
+
+  void upsertViewingMetadataJson({
+    required String sourceKey,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String metadata,
+  }) {
+    _db.execute(
+      'INSERT INTO viewing_metadata(source_key, site_key, vod_id, source_title, metadata) '
+      'VALUES(?,?,?,?,?) ON CONFLICT(source_key, site_key, vod_id, source_title) '
+      'DO UPDATE SET metadata=excluded.metadata;',
+      [sourceKey, siteKey, vodId, sourceTitle, metadata],
+    );
+  }
+
+  Row? viewingMetadataTmdbMatch({
+    required String sourceKey,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+  }) {
+    final config = configBySourceKey(sourceKey);
+    if (config == null) return null;
+    final title = TmdbCacheKey.normalizeSourceTitle(sourceTitle);
+    if (title.isEmpty) return null;
+    final rows = _db.select(
+      'SELECT * FROM tmdb_matches WHERE config_id=? AND site_key=? AND vod_id=? '
+      'ORDER BY manual DESC, matched_at DESC;',
+      [config.id, siteKey, vodId],
+    );
+    for (final row in rows) {
+      if (TmdbIdentity.from(row['media_type'], row['tmdb_id']) == null) continue;
+      final aliases = (row['manual_titles'] as String? ?? '').split('\u0001');
+      if (TmdbCacheKey.normalizeSourceTitle(row['source_title'] as String?) == title ||
+          TmdbCacheKey.normalizeSourceTitle(row['title'] as String?) == title ||
+          (row['manual'] == 1 && aliases.any((alias) =>
+              TmdbCacheKey.normalizeSourceTitle(alias) == title))) {
+        return row;
+      }
+    }
+    return null;
+  }
 
   // -------------------------------------------------------------------------
   // 历史
