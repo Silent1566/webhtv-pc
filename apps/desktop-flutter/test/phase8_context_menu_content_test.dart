@@ -6,6 +6,7 @@ import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
+import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/settings_overview_page.dart';
 
 import 'support/player_page_harness.dart';
@@ -246,7 +247,7 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 45 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 47 项）', (tester) async {
       await _openMenu(tester);
 
       // 计数口径是「该组飞出列的行数」。P1-4 起「显示」组多了「屏显样式」，
@@ -255,7 +256,7 @@ void main() {
         '播放': 7,
         '速度': 6,
         '字幕': 4,
-        '画面': 2,
+        '画面': 4,
         '声音': 3,
         '轨道': 5,
         // 「显示」组多了「屏显样式」（字号 / 不透明度 / 恢复默认，P1-4）。
@@ -271,9 +272,10 @@ void main() {
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        45,
-        reason: '十个分组的项数之和必须是 45（「播放」组多了「用外部播放器打开…」，'
-            '「显示」组多了「屏显样式」）',
+        47,
+        reason: '十个分组的项数之和必须是 47：44 是 MenuItem 时代的锁定值，'
+            '「播放」组多了「用外部播放器打开…」，「显示」组多了「屏显样式」（P1-4），'
+            '「画面」组新增 HDR 色调映射 / 峰值亮度计算两棵子树',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -706,6 +708,87 @@ void main() {
         checked,
         ['3×'],
         reason: '默认 3×（PlayerOptions.defaultLongPressSpeed），且恰有一项打勾',
+      );
+    });
+
+    testWidgets('第四条第 3 层路径：画面 → HDR 色调映射（6 档单选，就地生效）', (
+      tester,
+    ) async {
+      late AppState state;
+      await pumpPlayerPage(
+        tester,
+        onStateReady: (ready) async => state = ready,
+      );
+      await tester.tapAt(const Offset(300, 260), buttons: kSecondaryButton);
+      await settlePlayerPage(tester);
+
+      await _drill(tester, '画面');
+      await _drill(tester, 'HDR 色调映射');
+
+      List<InkWell> hdrRows() => _rowsAt(tester, 2);
+      List<String> hdrLabels() => [for (final r in hdrRows()) _labelOf(tester, r)];
+      List<String> hdrChecked() => [
+        for (var i = 0; i < hdrRows().length; i++)
+          if (_isChecked(tester, hdrRows()[i])) hdrLabels()[i],
+      ];
+
+      expect(
+        hdrRows().length,
+        HdrToneMapping.values.length,
+        reason: 'HDR 色调映射必须把每个算法各列一行',
+      );
+      expect(hdrLabels(), [for (final m in HdrToneMapping.values) m.label]);
+      expect(
+        hdrChecked(),
+        [HdrToneMapping.auto.label],
+        reason: '默认 auto（等于 mpv 默认），且恰有一项打勾',
+      );
+
+      // 就地生效：点完菜单不能关、勾要当场挪到新档、状态要真的落到
+      // PlayerOptions（设置页读的是同一份）。
+      final target = find.descendant(
+        of: find.byType(PlayerContextMenu),
+        matching: find.text(HdrToneMapping.bt2390.label),
+      );
+      await tester.ensureVisible(target.first);
+      await settlePlayerPage(tester, times: 2);
+      await tester.tap(target.first);
+      await settlePlayerPage(tester, times: 3);
+
+      expect(
+        find.byType(PlayerContextMenu),
+        findsOneWidget,
+        reason: '就地切换把菜单关了——这就退化成跳转了',
+      );
+      expect(
+        hdrChecked(),
+        [HdrToneMapping.bt2390.label],
+        reason: '勾选必须当场挪到新算法，且只有一项',
+      );
+      expect(
+        state.playerOptions.toneMapping,
+        HdrToneMapping.bt2390,
+        reason: '菜单改动必须落进 PlayerOptions（设置页读同一份）',
+      );
+    });
+
+    testWidgets('画面 → 峰值亮度计算：3 档单选', (tester) async {
+      await _openMenu(tester);
+      await _drill(tester, '画面');
+      await _drill(tester, '峰值亮度计算');
+
+      final rows = _rowsAt(tester, 2);
+      expect(rows.length, HdrPeakCompute.values.length);
+      final labels = [for (final row in rows) _labelOf(tester, row)];
+      expect(labels, [for (final m in HdrPeakCompute.values) m.label]);
+      final checked = [
+        for (var i = 0; i < rows.length; i++)
+          if (_isChecked(tester, rows[i])) labels[i],
+      ];
+      expect(
+        checked,
+        [HdrPeakCompute.auto.label],
+        reason: '默认 auto（等于 mpv 默认）',
       );
     });
 

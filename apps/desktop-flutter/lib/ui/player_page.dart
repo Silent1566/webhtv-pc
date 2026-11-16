@@ -5392,8 +5392,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// ## 每组至少两项
   ///
   /// 只有一个子项的分组没有存在价值（分组的目的是缩短主列），宁可合并掉。
-  /// 所以「画面」只有画面比例与 LUT 两项、全屏归「显示」——全屏是显示模式，
-  /// 与屏显开关同一类。
+  /// 所以「画面」只有画面比例、LUT、HDR 色调映射、峰值亮度计算四项、全屏归
+  /// 「显示」——全屏是显示模式，与屏显开关同一类。
+  ///
+  /// HDR 两项放在「画面」而不是「设置 → 播放参数」：它们改的是**画面**本身，
+  /// 用户调它时眼睛正盯着画面；设置页那份仍是权威值，两处读同一份
+  /// `PlayerOptions`，不会各记一套。
   List<PlayerMenuSection> _contextMenuSections() {
     const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
     // 音量档位：与底部控制条滑杆同值域（0–100），20 一档。
@@ -5649,6 +5653,47 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             icon: Icons.palette_outlined,
             selected: _options.hasLut,
             onSelect: act(_showLutSettings),
+          ),
+          // HDR 色调映射：**互斥单选**，和长按倍速/失败回退同一形态——摊成
+          // 开关看不出「当前是哪一档」，飞出子列天然只有一项打勾。
+          //
+          // 为什么可以就地生效（而设置页仍写「下次播放生效」）：实测 mpv 0.40.0
+          // 在播片过程中 set_property_string tone-mapping 六个取值全回 rc=0、
+          // 画面不断流；非法值回 rc=-9 且继续播放。所以这里走
+          // [_livePatchOptions]，与 applyPlayerOptions 共用同一条
+          // 白名单 + 回读校验：回读不符会被判成没生效，不会假装成功。
+          PlayerMenuItem(
+            id: 'hdr_tone_mapping',
+            label: 'HDR 色调映射',
+            icon: Icons.hdr_auto_outlined,
+            children: [
+              for (final mode in HdrToneMapping.values)
+                PlayerMenuItem(
+                  id: 'hdr_tone_mapping_${mode.id}',
+                  label: mode.label,
+                  selected: _options.toneMapping == mode,
+                  onSelect: () => _livePatchOptions(
+                    _options.copyWith(toneMapping: mode),
+                  ),
+                ),
+            ],
+          ),
+          // 峰值亮度计算：同样三档互斥单选。
+          PlayerMenuItem(
+            id: 'hdr_peak_compute',
+            label: '峰值亮度计算',
+            icon: Icons.brightness_auto_outlined,
+            children: [
+              for (final mode in HdrPeakCompute.values)
+                PlayerMenuItem(
+                  id: 'hdr_peak_compute_${mode.id}',
+                  label: mode.label,
+                  selected: _options.hdrPeakCompute == mode,
+                  onSelect: () => _livePatchOptions(
+                    _options.copyWith(hdrPeakCompute: mode),
+                  ),
+                ),
+            ],
           ),
         ],
       ),

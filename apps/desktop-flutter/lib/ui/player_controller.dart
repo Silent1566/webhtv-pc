@@ -14,6 +14,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'dart:io';
 
 import '../core/lut.dart';
+import '../core/mpv_properties.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
@@ -398,21 +399,58 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
-  /// 注入 mpv 属性。返回 false 表示当前平台不是 NativePlayer 或属性被拒绝。
+  /// 最近一次被白名单拦下的属性（诊断用）。
+  List<MpvPropertyRejection> get rejectedMpvProperties =>
+      List.unmodifiable(_rejectedMpvProperties);
+
+  List<MpvPropertyRejection> _rejectedMpvProperties = const [];
+
+  /// 注入 mpv 属性。返回 false 表示当前平台不是 NativePlayer、有属性没生效，
+  /// 或者内核抛错。
+  ///
+  /// **只走白名单**（`docs/phase9/design/01` §5.2）：表外的键与非法值在到达
+  /// 内核之前就被丢弃，**不抛异常**——一条脏配置不该让整批属性（缓存/硬解）
+  /// 一起失效。
+  ///
+  /// **写后回读**：media-kit 的 `setProperty` 丢掉 mpv 返回码
+  /// （`media_kit/.../native/player/real.dart:1239`），非法值（实测
+  /// `tone-mapping=bogus` 回 `rc=-9`）不会抛异常。所以可验证的属性写完要
+  /// 回读比对，把"静默没写进去"如实算成没生效。被丢弃与被内核拒绝的项都从
+  /// [rejectedMpvProperties] 可读。
   Future<bool> applyMpvProperties(Map<String, String> properties) async {
     if (_disposed) return false;
     final platform = _player.platform;
     if (platform is! NativePlayer) return false;
+    final filtered = filterMpvProperties(properties);
+    final rejected = <MpvPropertyRejection>[...filtered.rejected];
+    var applied = !filtered.hasRejections;
     try {
-      for (final entry in properties.entries) {
+      for (final entry in filtered.accepted.entries) {
         if (_disposed) return false;
         await platform.setProperty(entry.key, entry.value);
+        final rule = mpvPropertyRule(entry.key);
+        if (rule == null || !rule.verifiable) continue;
+        final actual = await platform.getProperty(entry.key);
+        if (mpvPropertyReadbackMatches(entry.value, actual)) continue;
+        applied = false;
+        rejected.add(
+          MpvPropertyRejection(
+            key: entry.key,
+            value: entry.value,
+            reason: '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
+          ),
+        );
       }
-      return true;
     } catch (error) {
       if (!_disposed) _lastEngineError = '$error';
+      _rejectedMpvProperties = rejected;
       return false;
     }
+    _rejectedMpvProperties = rejected;
+    for (final rejection in rejected) {
+      debugPrint('mpv 属性未生效：${rejection.describe()}');
+    }
+    return applied;
   }
 
   /// 采样一次网络吞吐（字节/秒），成功时更新 [bytesPerSecond]。

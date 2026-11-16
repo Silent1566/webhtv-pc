@@ -44,6 +44,64 @@ enum PlayerFailureFallback {
   bool get allowsSource => this == lineAndParseAndSource;
 }
 
+/// HDR 色调映射算法（mpv `tone-mapping`）。
+///
+/// 只在「片源是 HDR、显示端只能吃 SDR」时起作用：把高动态范围压回可用亮度。
+/// [auto] 是 mpv 默认，等价于改造前的行为。
+enum HdrToneMapping {
+  auto('auto', '自动（跟随内核）'),
+  bt2390('bt.2390', 'BT.2390'),
+  spline('spline', 'Spline'),
+  mobius('mobius', 'Mobius'),
+  reinhard('reinhard', 'Reinhard'),
+  clip('clip', 'Clip（直接裁剪）');
+
+  const HdrToneMapping(this.id, this.label);
+
+  /// 落盘标识，**不得改名**；同时就是 mpv 的取值。
+  final String id;
+
+  final String label;
+
+  /// 注入 mpv 的取值。
+  String get mpvValue => id;
+
+  static HdrToneMapping fromId(Object? raw) {
+    final value = raw is String ? raw.trim().toLowerCase() : '';
+    for (final item in values) {
+      if (item.id == value) return item;
+    }
+    return HdrToneMapping.auto;
+  }
+}
+
+/// 峰值亮度计算（mpv `hdr-compute-peak`）。
+///
+/// [auto] 是 mpv 默认（内核按输出后端决定），因此默认值不改变既有行为。
+enum HdrPeakCompute {
+  auto('auto', 'auto', '自动（跟随内核）'),
+  on('on', 'yes', '按帧计算（更亮，更吃性能）'),
+  off('off', 'no', '不计算（按元数据静态压缩）');
+
+  const HdrPeakCompute(this.id, this.mpvValue, this.label);
+
+  /// 落盘标识，**不得改名**。
+  final String id;
+
+  /// 注入 mpv 的取值：`auto` / `yes` / `no`。
+  final String mpvValue;
+
+  final String label;
+
+  static HdrPeakCompute fromId(Object? raw) {
+    final value = raw is String ? raw.trim().toLowerCase() : '';
+    for (final item in values) {
+      if (item.id == value) return item;
+    }
+    return HdrPeakCompute.auto;
+  }
+}
+
 /// 播放器参数。
 class PlayerOptions {
   const PlayerOptions({
@@ -52,6 +110,8 @@ class PlayerOptions {
     this.demuxerMaxBytesMiB = defaultDemuxerMaxMiB,
     this.demuxerMaxBackBytesMiB = defaultDemuxerBackMiB,
     this.audioPassthrough = false,
+    this.toneMapping = HdrToneMapping.auto,
+    this.hdrPeakCompute = HdrPeakCompute.auto,
     this.autoNext = true,
     this.failureFallback = PlayerFailureFallback.line,
     this.preloadNext = false,
@@ -112,6 +172,12 @@ class PlayerOptions {
 
   /// 音频直通（`audio-spdif`）。桌面默认关闭：直通需要接收端支持。
   final bool audioPassthrough;
+
+  /// HDR 色调映射算法（`tone-mapping`）。默认跟随内核。
+  final HdrToneMapping toneMapping;
+
+  /// 峰值亮度计算（`hdr-compute-peak`）。默认跟随内核。
+  final HdrPeakCompute hdrPeakCompute;
 
   /// 真正播完后是否自动进下一集（`PlaybackRepeat.off` 时生效）。
   final bool autoNext;
@@ -184,6 +250,8 @@ class PlayerOptions {
         defaultDemuxerBackMiB,
       ),
       audioPassthrough: audioPassthrough,
+      toneMapping: toneMapping,
+      hdrPeakCompute: hdrPeakCompute,
       autoNext: autoNext,
       failureFallback: failureFallback,
       preloadNext: preloadNext,
@@ -215,6 +283,8 @@ class PlayerOptions {
     'demuxer-max-bytes': '${demuxerMaxBytesMiB * 1024 * 1024}',
     'demuxer-max-back-bytes': '${demuxerMaxBackBytesMiB * 1024 * 1024}',
     'audio-spdif': audioPassthrough ? 'ac3,eac3,dts' : '',
+    'tone-mapping': toneMapping.mpvValue,
+    'hdr-compute-peak': hdrPeakCompute.mpvValue,
   };
 
   PlayerOptions copyWith({
@@ -223,6 +293,8 @@ class PlayerOptions {
     int? demuxerMaxBytesMiB,
     int? demuxerMaxBackBytesMiB,
     bool? audioPassthrough,
+    HdrToneMapping? toneMapping,
+    HdrPeakCompute? hdrPeakCompute,
     bool? autoNext,
     PlayerFailureFallback? failureFallback,
     bool? preloadNext,
@@ -241,6 +313,8 @@ class PlayerOptions {
     demuxerMaxBackBytesMiB:
         demuxerMaxBackBytesMiB ?? this.demuxerMaxBackBytesMiB,
     audioPassthrough: audioPassthrough ?? this.audioPassthrough,
+    toneMapping: toneMapping ?? this.toneMapping,
+    hdrPeakCompute: hdrPeakCompute ?? this.hdrPeakCompute,
     autoNext: autoNext ?? this.autoNext,
     failureFallback: failureFallback ?? this.failureFallback,
     preloadNext: preloadNext ?? this.preloadNext,
@@ -260,6 +334,8 @@ class PlayerOptions {
     'demuxerMaxBytesMiB': demuxerMaxBytesMiB,
     'demuxerMaxBackBytesMiB': demuxerMaxBackBytesMiB,
     'audioPassthrough': audioPassthrough,
+    'toneMapping': toneMapping.id,
+    'hdrPeakCompute': hdrPeakCompute.id,
     'autoNext': autoNext,
     'failureFallback': failureFallback.id,
     'preloadNext': preloadNext,
@@ -315,6 +391,8 @@ class PlayerOptions {
         defaultDemuxerBackMiB,
       ),
       audioPassthrough: boolOf('audioPassthrough', false),
+      toneMapping: HdrToneMapping.fromId(map['toneMapping']),
+      hdrPeakCompute: HdrPeakCompute.fromId(map['hdrPeakCompute']),
       autoNext: boolOf('autoNext', true),
       failureFallback: PlayerFailureFallback.fromId(map['failureFallback']),
       preloadNext: boolOf('preloadNext', false),
@@ -339,6 +417,8 @@ class PlayerOptions {
       other.demuxerMaxBytesMiB == demuxerMaxBytesMiB &&
       other.demuxerMaxBackBytesMiB == demuxerMaxBackBytesMiB &&
       other.audioPassthrough == audioPassthrough &&
+      other.toneMapping == toneMapping &&
+      other.hdrPeakCompute == hdrPeakCompute &&
       other.autoNext == autoNext &&
       other.failureFallback == failureFallback &&
       other.preloadNext == preloadNext &&
@@ -356,6 +436,8 @@ class PlayerOptions {
     demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB,
     audioPassthrough,
+    toneMapping,
+    hdrPeakCompute,
     autoNext,
     failureFallback,
     preloadNext,
@@ -371,7 +453,8 @@ class PlayerOptions {
   String toString() =>
       'PlayerOptions(hwdec=$hardwareDecoding cache=$cache '
       'max=${demuxerMaxBytesMiB}MiB back=${demuxerMaxBackBytesMiB}MiB '
-      'spdif=$audioPassthrough autoNext=$autoNext ${failureFallback.id} '
+      'spdif=$audioPassthrough tone=${toneMapping.id} '
+    'peak=${hdrPeakCompute.id} autoNext=$autoNext ${failureFallback.id} '
       'preload=$preloadNext skip=${skipMode.name} kinds=$skipKinds '
       'src=$skipSources remote=$skipRemoteEnabled '
       'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}")';
