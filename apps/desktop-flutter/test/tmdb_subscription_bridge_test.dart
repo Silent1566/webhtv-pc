@@ -73,6 +73,9 @@ class _FailingHttpClient implements HttpClient {
   String? userAgent;
 
   @override
+  String Function(Uri)? findProxy;
+
+  @override
   Future<HttpClientRequest> openUrl(String method, Uri url) async =>
       throw const SocketException('测试内禁止真实网络');
 

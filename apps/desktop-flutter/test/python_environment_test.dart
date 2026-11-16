@@ -30,7 +30,7 @@ AppPaths isolatedPaths(Directory root) => AppPaths.resolve(
 );
 String fixtureBundle(
   Directory root, {
-  String path = 'python.exe',
+  String? path,
   bool link = false,
   bool wrongHash = false,
   bool wrongSize = false,
@@ -39,7 +39,8 @@ String fixtureBundle(
   final dir = Directory(p.join(root.path, 'install', 'runtime', 'python'))
     ..createSync(recursive: true);
   final bytes = utf8.encode('fixture executable');
-  final file = ArchiveFile(path, bytes.length, bytes);
+  final entry = path ?? (Platform.isWindows ? 'python.exe' : 'bin/python3');
+  final file = ArchiveFile(entry, bytes.length, bytes);
   if (link) {
     file.mode = 0xa1ff;
     file.symbolicLink = '../outside';
@@ -50,7 +51,7 @@ String fixtureBundle(
     jsonEncode({
       'schemaVersion': 1,
       'pythonVersion': '3.13.17',
-      'platform': 'windows-x64',
+      'platform': Platform.isWindows ? 'windows-x64' : 'linux-x64',
       'archive': 'python-runtime.zip',
       'archiveSha256': sha256.convert(zip).toString(),
       'probeModules': ['requests', 'Crypto', 'lxml', 'bs4'],
@@ -59,7 +60,7 @@ String fixtureBundle(
       ],
       'files': [
         {
-          'path': path,
+          'path': entry,
           'size': wrongSize ? bytes.length + 1 : bytes.length,
           'sha256': wrongHash ? '0' * 64 : sha256.convert(bytes).toString(),
         },
@@ -137,11 +138,9 @@ Future<AppState> pendingState(
   return state;
 }
 
-/// 内置离线 Python 包（`runtime/python`）只在 Windows 发行构建里准备
-/// （`scripts/python-runtime.lock.json` 的 platform 为 windows-x64，由
-/// `scripts/prepare_python_runtime.ps1` 落地）。没有它的平台上，这些用例
-/// 无法验证真实解释器行为——显式跳过，不伪造通过。
+/// 这些既有原生场景使用 Windows ACL/junction/launcher；Linux 原生验收独立运行。
 bool get hasBundledPython {
+  if (!Platform.isWindows) return false;
   var dir = Directory.current;
   for (var hop = 0; hop < 10; hop++) {
     if (File(p.join(dir.path, 'runtime', 'python', 'bundle.json')).existsSync()) {
@@ -154,8 +153,11 @@ bool get hasBundledPython {
   return false;
 }
 
-String? get noBundledPythonReason =>
-    hasBundledPython ? null : 'runtime/python 离线包仅在 Windows 构建中准备';
+String? get noBundledPythonReason => !Platform.isWindows
+    ? 'Windows 原生场景；Linux 使用独立的内置运行时集成测试'
+    : hasBundledPython
+    ? null
+    : 'runtime/python 离线包未准备';
 
 void main() {
   late Directory root;

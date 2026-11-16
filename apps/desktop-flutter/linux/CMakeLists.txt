@@ -75,6 +75,8 @@ set_target_properties(${BINARY_NAME}
 include(flutter/generated_plugins.cmake)
 
 
+get_filename_component(WEBHTV_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
 # directory.
@@ -83,10 +85,44 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
 endif()
 
+# === Bundled offline Python ===
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(WEBHTV_PYTHON_RUNTIME_DIR "${WEBHTV_REPO_ROOT}/runtime/python" CACHE PATH
+  "Prepared offline Linux Python bundle (build input, not user configuration)")
+set(WEBHTV_PYTHON_VALIDATE_CODE "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from prepare_python_runtime_linux import validate_bundle; validate_bundle(Path(sys.argv[2]))")
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" -c "${WEBHTV_PYTHON_VALIDATE_CODE}"
+    "${WEBHTV_REPO_ROOT}/scripts" "${WEBHTV_PYTHON_RUNTIME_DIR}"
+  RESULT_VARIABLE WEBHTV_PYTHON_VALIDATION_RESULT
+  ERROR_VARIABLE WEBHTV_PYTHON_VALIDATION_ERROR)
+if(NOT WEBHTV_PYTHON_VALIDATION_RESULT EQUAL 0)
+  message(FATAL_ERROR "Invalid or missing offline Linux Python bundle. Prepare the build input with scripts/prepare_python_runtime_linux.py before building. ${WEBHTV_PYTHON_VALIDATION_ERROR}")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${WEBHTV_PYTHON_RUNTIME_DIR}/bundle.json"
+  "${WEBHTV_PYTHON_RUNTIME_DIR}/python-runtime.zip"
+  "${WEBHTV_REPO_ROOT}/scripts/prepare_python_runtime_linux.py"
+  "${WEBHTV_REPO_ROOT}/scripts/python-runtime-linux.lock.json")
+install(CODE "
+  execute_process(
+    COMMAND \"${Python3_EXECUTABLE}\" -c \"${WEBHTV_PYTHON_VALIDATE_CODE}\"
+      \"${WEBHTV_REPO_ROOT}/scripts\" \"${WEBHTV_PYTHON_RUNTIME_DIR}\"
+    RESULT_VARIABLE validation_result ERROR_VARIABLE validation_error)
+  if(NOT validation_result EQUAL 0)
+    message(FATAL_ERROR \"Invalid or missing offline Linux Python bundle: \${validation_error}\")
+  endif()
+" COMPONENT Runtime)
+
 # Start with a clean build bundle directory every time.
 install(CODE "
   file(REMOVE_RECURSE \"${BUILD_BUNDLE_DIR}/\")
   " COMPONENT Runtime)
+
+install(FILES
+  "${WEBHTV_PYTHON_RUNTIME_DIR}/python-runtime.zip"
+  "${WEBHTV_PYTHON_RUNTIME_DIR}/bundle.json"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/runtime/python" COMPONENT Runtime)
+# === End bundled offline Python ===
 
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")

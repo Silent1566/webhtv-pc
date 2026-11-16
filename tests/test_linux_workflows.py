@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from test_package_linux import make_python_fixture
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -107,6 +109,23 @@ class LinuxWorkflowTests(unittest.TestCase):
                 for item in steps(document):
                     if 'run' in item:
                         self.assertNotRegex(item['run'], r'\$\{\{.*\}\}')
+
+    def test_python_runtime_prepared_before_build_and_required_native_test(self):
+        for filename in (CI, RELEASE):
+            document = workflow(filename)
+            names = [item["name"] for item in steps(document)]
+            self.assertIn("Prepare verified offline Linux Python runtime", names)
+            prepare = step(document, "Prepare verified offline Linux Python runtime")
+            self.assertIn("python3 scripts/prepare_python_runtime_linux.py", prepare["run"])
+            self.assertLess(names.index(prepare["name"]), names.index("Build Linux release"))
+            integration = step(document, "Linux bundled Python native integration")
+            self.assertEqual("1", integration["env"]["WEBHTV_REQUIRE_BUNDLED_PYTHON"])
+            self.assertIn("linux_bundled_python_integration_test.dart", integration["run"])
+            self.assertNotIn("continue-on-error", integration)
+            self.assertIn("--python-runtime-dir runtime/python", step(document, "Package AppImage and deb")["run"])
+            smoke = python_body(step(document, "Smoke test both Linux packages")["run"])
+            for required in ("validate_bundle", "bin/python3", "-I", "3.14.10", "requests", "Crypto", "lxml", "bs4"):
+                self.assertIn(required, smoke)
 
     def test_embedded_shell_and_python_have_valid_syntax(self):
         for filename in (CI, RELEASE):
@@ -262,6 +281,10 @@ class LinuxWorkflowTests(unittest.TestCase):
             self.assertFalse((root / 'injected').exists())
             self.assertIn('$(touch injected)\nsecond line',
                           (root / 'build/linux-release-notes.md').read_text())
+            notes = (root / 'build/linux-release-notes.md').read_text()
+            self.assertNotIn('Python 3 and JDK', notes)
+            self.assertIn('Python 3.14.10', notes)
+            self.assertIn('offline', notes)
             self.assertEqual('is_prerelease=true\n', (root / 'output').read_text())
 
     def test_smoke_protocol_window_and_crash_regressions(self):
@@ -279,6 +302,27 @@ class LinuxWorkflowTests(unittest.TestCase):
             node = app / 'runtime/node/node'
             node.write_text('#!/bin/sh\necho fixture-node\n')
             node.chmod(0o755)
+            # Real validation and executable invocation, but this C probe is not native Python proof.
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            import shutil
+            shutil.copyfile(ROOT / 'scripts/prepare_python_runtime_linux.py', scripts / 'prepare_python_runtime_linux.py')
+            probe_source = root / 'probe.c'
+            probe_source.write_text(r'''#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(void) {
+  char path[4096]; if (!getcwd(path, sizeof(path))) return 1;
+  const char *mode = getenv("FIXTURE_MODE");
+  const char *version = mode && !strcmp(mode, "invalid-python-version") ? "3.14.9" : "3.14.10";
+  printf("{\"version\":\"%s\",\"prefix\":\"%s\",\"modules\":[\"%s/requests\",\"%s/Crypto\",\"%s/lxml\",\"%s/bs4\"]}\n", version, path, path, path, path, path);
+  return 0;
+}
+''')
+            probe = root / 'probe'
+            subprocess.run(['cc', str(probe_source), '-o', str(probe)], check=True, capture_output=True)
+            make_python_fixture(app / 'runtime/python', scripts / 'python-runtime-linux.lock.json', probe.read_bytes())
             client = app / 'webhtv_pc'
             client.write_text(r'''#!/usr/bin/env python3
 import ctypes as C
@@ -355,7 +399,8 @@ time.sleep(120)
                              "if '--appimage-extract' in sys.argv:\n shutil.copytree(app,'squashfs-root')\n"
                              "else:\n os.execv(str(app/'webhtv_pc'),[str(app/'webhtv_pc'),*sys.argv[1:]])\n")
             image.chmod(0o755)
-            cases = [('valid', True, None), ('wrong-version', False, 'unexpected startup info'),
+            cases = [('valid', True, None), ('invalid-python-version', False, 'Python version/prefix mismatch'),
+                     ('wrong-version', False, 'unexpected startup info'),
                      ('wrong-platform', False, 'unexpected startup info'),
                      ('wrong-arch', False, 'unexpected startup info'),
                      ('wrong-player', False, 'unexpected startup info'),

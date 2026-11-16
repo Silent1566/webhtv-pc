@@ -230,6 +230,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('Linux 自定义路径选择接受无 exe 后缀，且仅确认后切换', (tester) async {
+    await pumpPage(
+      tester,
+      pickExecutablePath: () async => '/opt/python/bin/python3',
+    );
+    final field = tester.widget<TextField>(
+      _key('python-environment-custom-path'),
+    );
+    expect(field.decoration!.labelText, contains('Python 可执行文件'));
+    expect(field.decoration!.hintText, '/usr/bin/python3');
+    expect(find.text('选择 Python 可执行文件'), findsOneWidget);
+    await tester.ensureVisible(_key('python-environment-pick'));
+    await tester.tap(_key('python-environment-pick'));
+    await tester.pumpAndSettle();
+    expect(_candidate(tester), '/opt/python/bin/python3');
+    expect(state.appliedPaths, isEmpty);
+    await tester.tap(_key('python-environment-custom-apply'));
+    await tester.pumpAndSettle();
+    expect(state.appliedPaths, ['/opt/python/bin/python3']);
+  }, skip: !Platform.isLinux);
+
   testWidgets('未检测时如实说明没有状态，四个操作仍可用', (tester) async {
     await pumpPage(tester);
 
@@ -503,11 +524,11 @@ void main() {
     expect(state.appliedPaths, <String>[r'D:\broken\python.exe']);
 
     // 动作面必须是这五个：任何新增的「下载 / 在线更新」按钮都会让计数变化。
-    const labels = <String>[
+    final labels = <String>[
       '重新检测',
       '离线修复内置环境',
       '恢复默认内置运行时',
-      '选择 python.exe',
+      Platform.isWindows ? '选择 python.exe' : '选择 Python 可执行文件',
       '使用自定义解释器',
     ];
     // `ButtonStyleButton` 是抽象基类，`find.byType` 只精确匹配运行时类型，

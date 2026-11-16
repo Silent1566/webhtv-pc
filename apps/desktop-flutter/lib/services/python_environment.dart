@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:isolate';
 
@@ -205,6 +206,7 @@ Future<PythonEnvironmentStatus> _probePython(
       executable,
       [
         ...arguments,
+        if (source == PythonEnvironmentSource.bundled) '-I',
         '-B',
         '-c',
         'import sys,json,importlib; ms=["requests","Crypto","lxml","bs4"]; d={}; '

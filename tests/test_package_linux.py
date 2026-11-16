@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import stat
+import struct
 import sys
 import tarfile
 import tempfile
@@ -15,6 +17,52 @@ import zipfile
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/package_linux.py"
+
+
+def make_python_fixture(directory, lock_path, executable=None):
+    """Genuine ZIP/lock fixture; ELF headers do not claim a native Python runtime."""
+    lock = json.loads((SCRIPT.parent / "python-runtime-linux.lock.json").read_text())
+    elf = bytearray(64)
+    elf[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<H", elf, 18, 62)
+    elf = bytes(elf)
+    files = {"bin/python3": executable or elf, "lib/libpython3.14.so.1.0": elf,
+             "lib/python3.14/LICENSE.txt": b"CPython license", "lib/python3.14/os.py": b"# os",
+             "lib/python3.14/encodings/__init__.py": b"# encodings"}
+    site = "lib/python3.14/site-packages/"
+    for name in ("requests", "Crypto", "lxml", "bs4"):
+        files[site + name + "/__init__.py"] = b"# fixture"
+    files[site + "lxml/etree.cpython-314-x86_64-linux-gnu.so"] = elf
+    files[site + "Crypto/Cipher/_raw_aes.abi3.so"] = elf
+    for package in lock["packages"]:
+        prefix = site + package["name"].replace("-", "_") + "-" + package["version"] + ".dist-info/"
+        files[prefix + "METADATA"] = f'Name: {package["name"]}\nVersion: {package["version"]}\n'.encode()
+        interpreter, abi, platforms = package["filename"][:-4].split("-")[-3:]
+        files[prefix + "WHEEL"] = ("Wheel-Version: 1.0\n" + "".join(
+            f"Tag: {interpreter}-{abi}-{platform}\n" for platform in platforms.split("."))).encode()
+        files[prefix + "RECORD"] = b"fixture"
+        files[prefix + "licenses/LICENSE"] = b"license"
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / "python-runtime.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        for name, data in sorted(files.items()):
+            info = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
+            info.external_attr = (stat.S_IFREG | 0o600) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            stream.writestr(info, data)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    manifest = {"schemaVersion": 1, "platform": "linux-x64", "pythonVersion": "3.14.10",
+                "archive": "python-runtime.zip", "archiveSha256": digest,
+                "probeModules": ["requests", "Crypto", "lxml", "bs4"],
+                "packages": [{"name": p["name"], "version": p["version"]} for p in lock["packages"]],
+                "files": [{"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                          for name, data in sorted(files.items())]}
+    (directory / "bundle.json").write_text(json.dumps(manifest))
+    lock["assembled"] = {"archiveSha256": digest, "size": archive.stat().st_size,
+                         "expandedSize": sum(map(len, files.values())), "fileCount": len(files)}
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(json.dumps(lock))
+    return manifest
 
 
 class PackageLinuxTests(unittest.TestCase):
@@ -74,11 +122,77 @@ class PackageLinuxTests(unittest.TestCase):
         self.put(self.tools / "appimagetool", fake_archive, 0o755)
         self.put(self.tools / "dpkg-deb", fake_archive, 0o755)
         self.env = {"PATH": str(self.tools) + os.pathsep + os.environ["PATH"]}
+        self.python_runtime = self.repo / "runtime/python"
+        self.python_lock = self.root / "fixture.lock.json"
+        make_python_fixture(self.python_runtime, self.python_lock)
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import prepare_python_runtime_linux as validator
+        finally:
+            sys.path.pop(0)
+        lock_patch = patch.object(validator, "DEFAULT_LOCK", self.python_lock)
+        lock_patch.start()
+        self.addCleanup(lock_patch.stop)
+        self.validator = validator
         self.output = self.root / "output"
         self.args = ["--build-dir", str(self.bundle), "--output-dir", str(self.output),
                      "--version", "1.2.3", "--node-runtime-dir", str(self.node),
                      "--commit", "abc123full", "--short-commit", "abc123", "--build-number", "9",
                      "--built-at", "2026-12-03T00:00:00Z", "--flutter-version", "3.41.5"]
+
+    def test_python_runtime_cli_default(self):
+        args = self.packager.parse_arguments(["--version", "1.2.3"])
+        self.assertTrue(hasattr(args, "python_runtime_dir"), "missing --python-runtime-dir")
+        self.assertEqual(args.python_runtime_dir, str(self.repo / "runtime/python"))
+
+    def test_missing_python_runtime_prevents_publish(self):
+        (self.python_runtime / "python-runtime.zip").unlink()
+        self.run_package(success=False)
+        self.assertFalse(self.output.exists())
+
+    def test_python_tamper_wrong_platform_pollution_links_and_overlap_rejected(self):
+        manifest = make_python_fixture(self.python_runtime, self.python_lock)
+        archive = self.python_runtime / "python-runtime.zip"
+        archive.write_bytes(archive.read_bytes() + b"tamper")
+        self.run_package(success=False)
+        manifest = make_python_fixture(self.python_runtime, self.python_lock)
+        manifest["platform"] = "windows-x64"
+        (self.python_runtime / "bundle.json").write_text(json.dumps(manifest))
+        self.run_package(success=False)
+        make_python_fixture(self.python_runtime, self.python_lock)
+        self.put(self.python_runtime / "config.json", "private")
+        self.run_package(success=False)
+        (self.python_runtime / "config.json").unlink()
+        external = self.root / "external-runtime.zip"
+        archive.rename(external)
+        archive.symlink_to(external)
+        self.run_package(success=False)
+        archive.unlink()
+        make_python_fixture(self.python_runtime, self.python_lock)
+        for output in (self.python_runtime, self.python_runtime / "out"):
+            self.run_package(["--output-dir", str(output)], success=False)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.validator.validate_bundle(self.python_runtime)["platform"], "linux-x64")
+
+    def test_user_spiders_config_and_database_are_not_packaged(self):
+        for name in ("config/settings.json", "configs.json", "settings.json", "webhtv-pc.sqlite3",
+                     "webhtv-pc.sqlite3-wal", "webhtv-pc.sqlite3-shm", "spiders/user.py"):
+            self.put(self.bundle / "data" / name, "private user data")
+        self.run_package()
+        stem = "webhtv-pc-1.2.3-dev-linux-x64"
+        for payload in (self.extracted(stem + ".AppImage"), self.extracted(stem + ".deb") / "opt/webhtv-pc"):
+            for name in ("config", "configs.json", "settings.json", "webhtv-pc.sqlite3",
+                         "webhtv-pc.sqlite3-wal", "webhtv-pc.sqlite3-shm", "spiders"):
+                self.assertFalse((payload / "data" / name).exists(), name)
+            self.assertTrue((payload / "data/flutter_assets/asset").exists())
+
+    def test_explicit_python_runtime_directory_is_copied(self):
+        explicit = self.root / "explicit-python"
+        shutil.copytree(self.python_runtime, explicit)
+        self.run_package(["--python-runtime-dir", str(explicit), "--formats", "deb"])
+        payload = self.extracted("webhtv-pc-1.2.3-dev-linux-x64.deb") / "opt/webhtv-pc"
+        self.assertEqual(self.validator.validate_bundle(payload / "runtime/python"),
+                         self.validator.validate_bundle(explicit))
 
     def put(self, path, text, mode=0o644):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,8 +221,12 @@ class PackageLinuxTests(unittest.TestCase):
         self.assertEqual(info["builtAt"], "2026-12-03T00:00:00Z")
         self.assertEqual(info["flutter"], "3.41.5")
         self.assertEqual(info["signature"], {"status": "unsigned", "subject": None})
-        self.assertEqual(info["runtimes"]["requiresLocal"], ["Python 3", "JDK 17+"])
+        self.assertEqual(info["runtimes"]["requiresLocal"], ["JDK 17+"])
         self.assertEqual(info["runtimes"]["bundled"][0]["path"], "runtime/node/node")
+        python = next(item for item in info["runtimes"]["bundled"] if item["id"] == "python")
+        self.assertEqual(python["version"], "3.14.10")
+        self.assertEqual(python["path"], "runtime/python/python-runtime.zip")
+        self.assertEqual(python["sha256"], hashlib.sha256((self.python_runtime / "python-runtime.zip").read_bytes()).hexdigest())
         self.assertEqual([a["name"] for a in info["assets"]], [stem + ".AppImage", stem + ".deb"])
         for asset in info["assets"]:
             p = self.output / asset["name"]
@@ -138,6 +256,12 @@ class PackageLinuxTests(unittest.TestCase):
         self.assertIn("/opt/webhtv-pc", (deb / "usr/bin/webhtv-pc").read_text())
         control = (deb / "DEBIAN/control").read_text()
         self.assertIn("Architecture: amd64", control)
+        self.assertNotIn("python3", control)
+        self.assertIn("Recommends: openjdk-17-jre-headless", control)
+        for payload in (app, deb / "opt/webhtv-pc"):
+            for name in ("python-runtime.zip", "bundle.json"):
+                self.assertEqual((payload / "runtime/python" / name).read_bytes(), (self.python_runtime / name).read_bytes())
+            self.validator.validate_bundle(payload / "runtime/python")
         self.assertIn("Version: 1.2.3~dev-9", control)
         self.assertIn("libcontrolled1", control)
         self.assertTrue((deb / "usr/share/applications/webhtv-pc.desktop").is_file())
@@ -419,6 +543,95 @@ class PackageLinuxTests(unittest.TestCase):
         self.assertTrue((dest / "opt/webhtv-pc/runtime/node/node").stat().st_mode & 0o111)
         self.assertTrue((dest / "opt/webhtv-pc/lib/libalias.so").is_symlink())
         self.assertEqual((dest / "opt/webhtv-pc/sidecars/spider-host-jvm/lib/dep.jar").read_text(), "dependency")
+
+
+class LinuxCMakePythonTests(unittest.TestCase):
+    def test_production_install_preserves_old_bundle_on_tamper_and_cleans_on_success(self):
+        source = (SCRIPT.parents[1] / "apps/desktop-flutter/linux/CMakeLists.txt").read_text()
+        install_section = source.split("# === Installation ===", 1)[1].split("set(INSTALL_BUNDLE_DATA_DIR", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="webhtv-cmake-preserve-") as tmp:
+            root = Path(tmp)
+            runtime = root / "input/runtime/python"
+            runtime.mkdir(parents=True)
+            for name in ("bundle.json", "python-runtime.zip"):
+                shutil.copyfile(SCRIPT.parents[1] / "runtime/python" / name, runtime / name)
+            project = root / "source"
+            project.mkdir()
+            (project / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.13)\nproject(preserve_bundle NONE)\n'
+                + f'set(WEBHTV_REPO_ROOT "{SCRIPT.parents[1]}")\n' + install_section)
+            build = root / "build"
+            configured = subprocess.run(["cmake", "-S", str(project), "-B", str(build),
+                                         f"-DWEBHTV_PYTHON_RUNTIME_DIR={runtime}"], capture_output=True, text=True)
+            self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
+            install_args = ["cmake", "--install", str(build)]
+            installed = subprocess.run(install_args, capture_output=True, text=True)
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            bundle = build / "bundle"
+            for name in ("bundle.json", "python-runtime.zip"):
+                self.assertEqual((bundle / "runtime/python" / name).read_bytes(), (runtime / name).read_bytes())
+            (bundle / "old-data").mkdir()
+            (bundle / "old-data/state.txt").write_text("existing user-independent build data")
+            (bundle / "stale.txt").write_text("must be removed only after validation succeeds")
+
+            def fingerprint():
+                return {path.relative_to(bundle).as_posix():
+                        ("dir",) if path.is_dir() else ("file", path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+                        for path in sorted(bundle.rglob("*"))}
+
+            before = fingerprint()
+            with (runtime / "python-runtime.zip").open("ab") as output:
+                output.write(b"tamper")
+            invalid = subprocess.run(install_args, capture_output=True, text=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("Invalid or missing offline Linux Python bundle", invalid.stdout + invalid.stderr)
+            self.assertEqual(fingerprint(), before, "Failed validation must preserve every old bundle path, size, and SHA256")
+            print("TAMPER_REJECTED_OLD_BUNDLE_PRESERVED", json.dumps(before, sort_keys=True))
+            shutil.copyfile(SCRIPT.parents[1] / "runtime/python/python-runtime.zip", runtime / "python-runtime.zip")
+            repaired = subprocess.run(install_args, capture_output=True, text=True)
+            self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+            self.assertFalse((bundle / "stale.txt").exists())
+            self.assertFalse((bundle / "old-data").exists())
+            for name in ("bundle.json", "python-runtime.zip"):
+                self.assertEqual((bundle / "runtime/python" / name).read_bytes(), (runtime / name).read_bytes())
+            print("VALID_INPUT_CLEANUP_AND_INSTALL_PASS", json.dumps(fingerprint(), sort_keys=True))
+
+    def test_cmake_requires_bundle_and_installs_only_verified_files(self):
+        source = (SCRIPT.parents[1] / "apps/desktop-flutter/linux/CMakeLists.txt").read_text()
+        self.assertIn("# === Bundled offline Python ===", source)
+        block = source.split("# === Installation ===", 1)[1].split("set(INSTALL_BUNDLE_DATA_DIR", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="webhtv-cmake-python-") as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime/python"
+            project = root / "source"
+            project.mkdir()
+            (project / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.13)\nproject(python_gate NONE)\n'
+                + f'set(WEBHTV_REPO_ROOT "{SCRIPT.parents[1]}")\n' + block)
+            build = root / "build"
+            args = ["cmake", "-S", str(project), "-B", str(build),
+                    f"-DWEBHTV_PYTHON_RUNTIME_DIR={runtime}", f"-DCMAKE_INSTALL_PREFIX={root / 'installed'}"]
+            missing = subprocess.run(args, capture_output=True, text=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("Invalid or missing offline Linux Python bundle", missing.stdout + missing.stderr)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copyfile(SCRIPT.parent / "prepare_python_runtime_linux.py", scripts / "prepare_python_runtime_linux.py")
+            make_python_fixture(runtime, scripts / "python-runtime-linux.lock.json")
+            (project / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.13)\nproject(python_gate NONE)\n'
+                + f'set(WEBHTV_REPO_ROOT "{root}")\n' + block)
+            valid = subprocess.run(args, capture_output=True, text=True)
+            self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+            install = subprocess.run(["cmake", "--install", str(build)], capture_output=True, text=True)
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+            for name in ("bundle.json", "python-runtime.zip"):
+                self.assertEqual((root / "installed/runtime/python" / name).read_bytes(), (runtime / name).read_bytes())
+            with (runtime / "python-runtime.zip").open("ab") as output:
+                output.write(b"tamper")
+            invalid = subprocess.run(["cmake", "--install", str(build)], capture_output=True, text=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("Invalid or missing offline Linux Python bundle", invalid.stdout + invalid.stderr)
 
 
 if __name__ == "__main__":
