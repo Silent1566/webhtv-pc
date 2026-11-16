@@ -45,6 +45,7 @@ import '../services/danmaku_library_service.dart';
 import '../services/danmaku_service.dart';
 import '../services/external_player.dart';
 import '../services/live_danmaku_session.dart';
+import '../services/lut_store.dart';
 import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
@@ -70,6 +71,8 @@ import 'player_controller.dart';
 import 'player_episode_panel.dart';
 import 'player_queue_panel.dart';
 import 'live_playback_session.dart';
+import 'lut_menu.dart';
+import 'lut_picker_sheet.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
@@ -256,6 +259,8 @@ class PlayerPage extends StatefulWidget {
 }
 
 class _PlayerPageState extends State<PlayerPage> with WindowListener {
+  /// LUT 预设仓库：应用级单例挂在 AppState 上，播放页/面板/设置页共用。
+  LutStore get _lutStore => widget.state.lutStore;
   late PlayerController _controller;
   late PlaybackRequest _request;
   bool _playLinesRequested = false;
@@ -1426,7 +1431,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!applied) {
       widget.state.log.warning('播放参数未生效（当前平台不是 NativePlayer）', scope: 'player');
     }
-    final lut = _options.lutPath.trim();
+    // 内置预设按 id 重新落盘：cacheDir 随时可能被系统或清理功能删掉，
+    // 只信 lutPath 会在缓存被清后静默失效。
+    var lut = _options.lutPath.trim();
+    final builtinLut = findBuiltinLut(_options.lutPresetId);
+    if (builtinLut != null) {
+      try {
+        lut = await _lutStore.materialize(builtinLut);
+        if (lut != _options.lutPath) {
+          await _persistOptions(_options.copyWith(lutPath: lut));
+        }
+      } on LutStoreException catch (error) {
+        widget.state.log.warning(
+          'LUT 落盘失败 ${error.code} path=${builtinLut.path}',
+          scope: 'player',
+        );
+        _showPlayerMessage('LUT 不可用：${error.message}', kind: ToastKind.error);
+        return;
+      }
+    }
     if (lut.isEmpty) return;
     try {
       final text = await File(lut).readAsString();
@@ -2799,106 +2822,64 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
   }
 
-  /// LUT 选择/清除。
+  /// LUT 选择/清除：内置 / 我的 / 在线。
   Future<void> _showLutSettings() async {
-    final current = _options.lutPath;
-    final action = await showModalBottomSheet<String>(
+    final result = await showModalBottomSheet<LutPickerResult>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text('LUT 滤镜'),
-              titleTextStyle: TextStyle(fontWeight: FontWeight.w600),
-              subtitle: Text('只支持 3D .cube；由 mpv 的 lut3d 滤镜应用'),
-            ),
-            ListTile(
-              title: const Text('当前'),
-              subtitle: Text(current.isEmpty ? '未启用' : current),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_open_outlined),
-              title: const Text('输入 .cube 路径…'),
-              onTap: () => Navigator.of(context).pop('pick'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.clear),
-              title: const Text('清除 LUT'),
-              enabled: current.isNotEmpty,
-              onTap: () => Navigator.of(context).pop('clear'),
-            ),
-          ],
-        ),
+      isScrollControlled: true,
+      builder: (context) => LutPickerSheet(
+        store: _lutStore,
+        currentPath: _options.lutPath.trim(),
+        currentPresetId: _options.lutPresetId,
       ),
     );
-    if (action == null || !mounted) return;
-    if (action == 'clear') {
-      await _applyLutPath('');
-      return;
-    }
-    if (action != 'pick') return;
-    final controller = TextEditingController(text: current);
-    final path = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('LUT 文件路径'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: r'C:\luts\movie.cube'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('应用'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (path == null || !mounted) return;
-    await _applyLutPath(path.trim());
+    if (result == null || !mounted) return;
+    await _applyLutPreset(result.cleared ? null : result.preset);
   }
 
-  /// 解析并应用 LUT；失败时保持原设置不变。
-  Future<void> _applyLutPath(String path) async {
-    if (path.isEmpty) {
+  /// 落盘并应用 LUT；失败时保持原设置不变。
+  ///
+  /// 内置项先经 LutStore.materialize 写成真实文件——mpv 的 lut3d 只吃路径；
+  /// 用户项在应用前整读校验一次，避免「列表里能选、点了却放不出画面」。
+  Future<void> _applyLutPreset(LutPreset? preset) async {
+    if (preset == null) {
       final applied = await _controller.applyLut(null);
       if (!applied) {
         _showPlayerMessage('当前播放内核不支持 LUT', kind: ToastKind.error);
         return;
       }
-      await _persistOptions(_options.copyWith(lutPath: ''));
+      await _persistOptions(_options.copyWith(lutPath: '', lutPresetId: ''));
       if (mounted) setState(() {});
       return;
     }
     try {
-      final text = await File(path).readAsString();
-      final parsed = parseCube(text, path: path);
-      if (!parsed.ok) {
-        _showPlayerMessage('LUT 不可用：${parsed.error}', kind: ToastKind.error);
-        return;
+      if (!preset.isBundled) {
+        final text = await File(preset.path).readAsString();
+        final parsed = parseCube(text, path: preset.path);
+        if (!parsed.ok) {
+          _showPlayerMessage('LUT 不可用：${parsed.error}', kind: ToastKind.error);
+          return;
+        }
       }
+      final path = await _lutStore.materialize(preset);
       final applied = await _controller.applyLut(path);
       if (!applied) {
         _showPlayerMessage('当前播放内核不支持 LUT', kind: ToastKind.error);
         return;
       }
-      await _persistOptions(_options.copyWith(lutPath: path));
-      if (mounted) setState(() {});
-      _showPlayerMessage(
-        '已应用 LUT：${parsed.preset!.name}',
-        kind: ToastKind.success,
+      await _persistOptions(
+        _options.copyWith(
+          lutPath: path,
+          lutPresetId: preset.isBundled ? preset.id : '',
+        ),
       );
+      if (mounted) setState(() {});
+      _showPlayerMessage('已应用 LUT：${preset.name}', kind: ToastKind.success);
+    } on LutStoreException catch (error) {
+      _showPlayerMessage('LUT 不可用：${error.message}', kind: ToastKind.error);
     } catch (error) {
-      _showPlayerMessage('LUT 读取失败：$error', kind: ToastKind.error);
+      _showPlayerMessage('LUT 加载失败：$error', kind: ToastKind.error);
     }
   }
 
@@ -5635,12 +5616,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                 ),
             ],
           ),
+          // LUT 是**即时生效**的切换，所以走飞出子列：选完仍在画面上。
+          // 管理的长尾（导入/删除/在线搜索）塞不进 240 宽的子列，
+          // 交给「更多 LUT…」打开的底部面板与设置里的三级明细页。
           PlayerMenuItem(
             id: 'lut',
-            label: 'LUT 滤镜…',
+            label: 'LUT 滤镜',
             icon: Icons.palette_outlined,
-            selected: _options.hasLut,
-            onSelect: act(_showLutSettings),
+            children: buildLutMenuItems(
+              options: _options,
+              onOff: act(() => _applyLutPreset(null)),
+              onPick: (preset) => act(() => _applyLutPreset(preset))(),
+              onMore: act(_showLutSettings),
+            ),
           ),
           // HDR 色调映射：**互斥单选**，和长按倍速/失败回退同一形态——摊成
           // 开关看不出「当前是哪一档」，飞出子列天然只有一项打勾。
