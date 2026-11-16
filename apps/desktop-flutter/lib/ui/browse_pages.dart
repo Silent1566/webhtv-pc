@@ -94,7 +94,7 @@ class BrowsePage extends StatelessWidget {
 /// 海报网格度量。
 ///
 /// 竖版海报标准比例是 `2:3`，网格按这个比例反推格子高度（见
-/// [_VodGrid._gridDelegate]）。目标列宽与列间距不再写死在这里：它们
+/// [_VodGrid._gridMetrics]）。目标列宽与列间距不再写死在这里：它们
 /// 跟着 `LayoutScale` 的密度档走（默认窗口 ≈ 185 / 11，1440p 全屏 ≈ 263 / 16）。
 const double _posterGridPadding = 16;
 
@@ -858,58 +858,59 @@ class _VodGrid extends StatelessWidget {
             // 期间（`loadHome` 保留旧列表）用户看不到任何变化。
             children: [
               LayoutBuilder(
-                builder: (context, constraints) =>
-                    NotificationListener<ScrollNotification>(
-                      onNotification: _onScroll,
-                      child: CustomScrollView(
-                        slivers: [
-                          // 筛选条**不再常驻**。
-                          //
-                          // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
-                          // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
-                          // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
-                          // 显示——不占布局、不推挤网格。
-                          if (vods.isEmpty)
-                            SliverFillRemaining(
-                              hasScrollBody: false,
-                              child: _emptyState(
-                                loading: loading,
-                                hasClasses: hasClasses,
-                              ),
-                            )
-                          else
-                            SliverPadding(
-                              padding: const EdgeInsets.fromLTRB(
-                                _posterGridPadding,
-                                14,
-                                _posterGridPadding,
-                                8,
-                              ),
-                              sliver: SliverGrid(
-                                gridDelegate: _gridDelegate(
-                                  context,
-                                  constraints.maxWidth,
-                                ),
-                                delegate: SliverChildBuilderDelegate(
-                                  (context, index) => _VodCard(
-                                    key: ValueKey(
-                                      'vod-card-${vods[index].vodId}',
-                                    ),
-                                    vod: vods[index],
-                                    onTap: () =>
-                                        _openDetail(context, vods[index]),
+                builder: (context, constraints) {
+                  // 整个网格共用一次列宽/DPR 计算，卡片重建时只读取已存的解码宽度。
+                  final metrics = _gridMetrics(context, constraints.maxWidth);
+                  return NotificationListener<ScrollNotification>(
+                    onNotification: _onScroll,
+                    child: CustomScrollView(
+                      slivers: [
+                        // 筛选条**不再常驻**。
+                        //
+                        // 它原来占内容区顶部 150~200px（多维度时更多），把海报挤下去，
+                        // 而多数时候用户并不筛选（用户反馈 2026-10-13：「筛选区域不再
+                        // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
+                        // 显示——不占布局、不推挤网格。
+                        if (vods.isEmpty)
+                          SliverFillRemaining(
+                            hasScrollBody: false,
+                            child: _emptyState(
+                              loading: loading,
+                              hasClasses: hasClasses,
+                            ),
+                          )
+                        else
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(
+                              _posterGridPadding,
+                              14,
+                              _posterGridPadding,
+                              8,
+                            ),
+                            sliver: SliverGrid(
+                              gridDelegate: metrics.delegate,
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) => _VodCard(
+                                  key: ValueKey(
+                                    'vod-card-${vods[index].vodId}',
                                   ),
-                                  childCount: vods.length,
+                                  vod: vods[index],
+                                  posterCacheWidth: metrics.posterCacheWidth,
+                                  onTap: () =>
+                                      _openDetail(context, vods[index]),
                                 ),
+                                childCount: vods.length,
                               ),
                             ),
-                          if (paged)
-                            SliverToBoxAdapter(
-                              child: _ScrollFooter(state: state),
-                            ),
-                        ],
-                      ),
+                          ),
+                        if (paged)
+                          SliverToBoxAdapter(
+                            child: _ScrollFooter(state: state),
+                          ),
+                      ],
                     ),
+                  );
+                },
               ),
               // 覆盖层：不占布局、不遮挡海报（只有 2px），旧列表照常可见。
               if (loading && vods.isNotEmpty)
@@ -966,7 +967,7 @@ class _VodGrid extends StatelessWidget {
   /// 是固定值，窗口变窄时列宽变小、高度不变，海报会被压成非 2:3 或被裁切。
   /// 这里列宽已知，格子高度就能精确算成「海报 2:3 + 文字区」，任何窗口宽度下
   /// 比例都稳定（§17.5 要求窗口缩放布局稳定）。
-  static SliverGridDelegate _gridDelegate(
+  static ({SliverGridDelegate delegate, int posterCacheWidth}) _gridMetrics(
     BuildContext context,
     double maxWidth,
   ) {
@@ -977,11 +978,20 @@ class _VodGrid extends StatelessWidget {
     final usable = maxWidth - _posterGridPadding * 2;
     final columns = LayoutScale.columnsFor(usable, target, spacing);
     final cellWidth = (usable - (columns - 1) * spacing) / columns;
-    return SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: columns,
-      crossAxisSpacing: spacing,
-      mainAxisSpacing: 8,
-      mainAxisExtent: cellWidth * 1.5 + 8 + caption,
+    // cacheWidth 是物理像素：跟随当前 DPR，不照搬固定 2 倍，避免 1 倍屏多解码、
+    // 高 DPI 屏欠采样。用 LayoutScale 推出的实际列宽，而非近似的目标卡宽。
+    final posterCacheWidth = math.max(
+      1,
+      (cellWidth * MediaQuery.devicePixelRatioOf(context)).round(),
+    );
+    return (
+      delegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        crossAxisSpacing: spacing,
+        mainAxisSpacing: 8,
+        mainAxisExtent: cellWidth * 1.5 + 8 + caption,
+      ),
+      posterCacheWidth: posterCacheWidth,
     );
   }
 
@@ -1065,9 +1075,16 @@ class _BrowseBusyBar extends StatelessWidget {
 }
 
 class _VodCard extends StatelessWidget {
-  const _VodCard({super.key, required this.vod, required this.onTap});
+  const _VodCard({
+    super.key,
+    required this.vod,
+    required this.posterCacheWidth,
+    required this.onTap,
+  });
 
   final Vod vod;
+  final int posterCacheWidth;
+
   final VoidCallback onTap;
 
   @override
@@ -1091,7 +1108,10 @@ class _VodCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  PosterImage(url: vod.vodPic),
+                  PosterImage(
+                    url: vod.vodPic,
+                    cacheWidth: posterCacheWidth,
+                  ),
                   if (year != null)
                     Positioned(
                       left: 6,
