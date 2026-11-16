@@ -33,6 +33,11 @@ dependencies:
   path_provider: ^2.1.5
   brotli: ^0.6.0
   fast_gbk: ^1.0.0
+  # 字幕的 Big5 / Shift-JIS / EUC-KR：纯 Dart 表实现，不依赖原生 iconv。
+  # 选型与验收见 docs/phase9/evidence/12-subtitle-charset-extension.md。
+  charset: ^2.0.1
+  enough_convert: ^1.7.1
+  cp949_codec: ^1.0.2
   sqlite3: ^3.1.0
   sqlite3_flutter_libs: ^0.5.30
   # FFI：Windows Job Object 进程隔离（§9.8、§18.2.1）。

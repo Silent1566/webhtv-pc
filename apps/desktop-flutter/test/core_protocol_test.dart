@@ -12,6 +12,7 @@ import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/config_loader.dart';
 import 'package:webhtv_pc/core/config_parser.dart';
 import 'package:webhtv_pc/core/http_api.dart';
+import 'package:webhtv_pc/core/legacy_charset.dart';
 import 'package:webhtv_pc/core/playback.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/text_codec.dart';
@@ -19,6 +20,7 @@ import 'package:webhtv_pc/services/spider_router.dart';
 import 'package:webhtv_pc/services/storage.dart';
 
 import 'fixture_support.dart';
+import 'support/legacy_charset_samples.dart';
 
 void main() {
   group('配置解析（§7.1–§7.4）', () {
@@ -955,6 +957,203 @@ void main() {
         _captureError(() => decodeConfigText(const [])).kind,
         AppErrorKind.configInvalid,
       );
+    });
+
+    test('声明 Big5 / Shift-JIS / EUC-KR 时按声明解码（字幕开启后）', () {
+      for (final sample in legacyCharsetSamples) {
+        final decoded = decodeTextAndCharset(
+          sample.bytes,
+          declaredCharset: sample.charset,
+          allowLegacyCjk: true,
+        );
+        expect(decoded.text, sample.text, reason: sample.charset);
+        expect(decoded.charset, sample.charset, reason: sample.charset);
+      }
+    });
+
+    test('charset 别名与大小写都能识别', () {
+      final big5 = legacyCharsetSample('big5');
+      final shiftJis = legacyCharsetSample('shift_jis');
+      final eucKr = legacyCharsetSample('euc_kr');
+
+      final big5Decoded = decodeTextAndCharset(
+        big5.bytes,
+        declaredCharset: 'CP950',
+        allowLegacyCjk: true,
+      );
+      expect(big5Decoded.text, big5.text);
+      // 记录归一化后的名字，而不是服务端原样写的别名。
+      expect(big5Decoded.charset, 'big5');
+      expect(
+        decodeTextAndCharset(
+          shiftJis.bytes,
+          declaredCharset: 'Shift-JIS',
+          allowLegacyCjk: true,
+        ).text,
+        shiftJis.text,
+      );
+      expect(
+        decodeTextAndCharset(
+          eucKr.bytes,
+          declaredCharset: 'CP949',
+          allowLegacyCjk: true,
+        ).text,
+        eucKr.text,
+      );
+      expect(normalizeLegacyCjkCharset('GB18030'), 'gbk');
+      expect(normalizeLegacyCjkCharset('koi8-r'), isNull);
+    });
+
+    test('未声明 charset 时按文本证据探测四种编码', () {
+      for (final sample in legacyCharsetSamples) {
+        final decoded = decodeTextAndCharset(
+          sample.bytes,
+          allowLegacyCjk: true,
+        );
+        expect(decoded.charset, sample.charset, reason: sample.charset);
+        expect(decoded.text, sample.text, reason: sample.charset);
+      }
+    });
+
+    test('探测默认关闭：配置解码仍是 UTF-8 → GBK', () {
+      // Big5 的字节在 GBK 表里也能解出字符；只有字幕等显式开启探测的调用方
+      // 才会改判，配置导入的行为保持不变（§7.4.1）。
+      final big5 = legacyCharsetSample('big5');
+      final decoded = decodeTextAndCharset(big5.bytes);
+      expect(decoded.charset, 'gbk');
+      expect(decoded.text, isNot(contains('中文字幕測試')));
+    });
+
+    test('声明与字节不符时按证据探测（字幕），配置边界不变', () {
+      // 服务端声明 utf-8 却发 Big5 字节：声明路径会解出替换字符，字幕必须改走
+      // 证据探测，而不是把整篇 U+FFFD 交给播放器。
+      final big5 = legacyCharsetSample('big5');
+      final decoded = decodeTextAndCharset(
+        big5.bytes,
+        declaredCharset: 'utf-8',
+        allowLegacyCjk: true,
+      );
+      expect(decoded.charset, 'big5');
+      expect(decoded.text, big5.text);
+      expect(decoded.text, isNot(contains('\uFFFD')));
+
+      // 配置路径（allowLegacyCjk 默认关闭）不接受 Big5 声明：§7.4.1 边界不变。
+      final error = _captureError(
+        () => decodeConfigText(big5.bytes, declaredCharset: 'big5'),
+      );
+      expect(error.kind, AppErrorKind.configDecode);
+    });
+
+    test('短中文句留在 GBK：不被韩文证据抢走（回归）', () {
+      // 短句上 GBK 与 CP949 对称：短中文被 CP949 解成纯谚文，纯度同为 1.0。
+      // 按“打平按 GBK”的既定优先序，短文本必须留在 GBK。
+      final shorts = legacyCharsetSamplesOf('gbk')
+          .where(
+            (sample) =>
+                sample.text.runes.where((rune) => rune > 0x7F).length < 8,
+          )
+          .toList();
+      expect(shorts, isNotEmpty, reason: '样本里必须有短句');
+      for (final sample in shorts) {
+        final decoded = decodeTextAndCharset(
+          sample.bytes,
+          allowLegacyCjk: true,
+        );
+        expect(decoded.charset, 'gbk', reason: sample.text);
+        expect(decoded.text, sample.text, reason: sample.text);
+      }
+    });
+
+    test('半角片假名例外只在唯一可解时放行', () {
+      // 整段半角片假名是 Shift-JIS 的合法写法，在中文/韩文编码里是乱码；
+      // 它必须同时是“唯一能解的候选”才放行——这是设计承诺的窄例外。
+      expect(probeLegacyCjkCharset(<int>[0xA1])?.charset, 'shift_jis');
+      // 同一串字节 GBK / Big5 / EUC-KR 也能各解出一个符号（都是乱码）。
+      // 既然不是唯一可解，就不能挑一个当成功：必须如实返回 null。
+      expect(probeLegacyCjkCharset(<int>[0xA2, 0xBB]), isNull);
+    });
+
+    test('全部候选都不可信时如实返回 null（不静默硬猜）', () {
+      // 下面这些字节四种编码都能“解出点东西”，但全是孤立的符号/半角乱码，
+      // 没有一个像文本。没有可信候选时报错，而不是把随机字节当字幕。
+      for (final bytes in <List<int>>[
+        <int>[0xA2, 0xBB],
+        <int>[0xA1, 0xD2, 0xB0, 0xB4, 0xA2, 0xBC],
+      ]) {
+        expect(probeLegacyCjkCharset(bytes), isNull, reason: '$bytes');
+      }
+    });
+
+    test('GBK 家族声明标签原样记录（默认与字幕开启两条路径）', () {
+      // 归一化只用于匹配，不用于改写入库/日志里的编码名：弹幕等调用方
+      // 记录的必须是服务端声明的那一个。
+      final gbkSample = legacyCharsetSample('gbk');
+      for (final label in <String>['gb2312', 'gb18030', 'cp936', 'ms936']) {
+        final plain = decodeTextAndCharset(
+          gbkSample.bytes,
+          declaredCharset: label,
+        );
+        expect(plain.charset, label);
+        expect(plain.text, gbkSample.text);
+
+        final subtitle = decodeTextAndCharset(
+          gbkSample.bytes,
+          declaredCharset: label,
+          allowLegacyCjk: true,
+        );
+        expect(subtitle.charset, label);
+        expect(subtitle.text, gbkSample.text);
+      }
+    });
+
+    test('字幕里的符号与框线不算乱码', () {
+      // 真实简中字幕会用 ★、框线、箭头；GBK 本来就收录这些字符，
+      // 不能因为它们把整份字幕判成“不可信文本”。
+      const starredSrt = <int>[
+        0x31, 0x0A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x2C, 0x30,
+        0x30, 0x30, 0x20, 0x2D, 0x2D, 0x3E, 0x20, 0x30, 0x30, 0x3A, 0x30, 0x30,
+        0x3A, 0x30, 0x32, 0x2C, 0x30, 0x30, 0x30, 0x0A, 0xA1, 0xEF, 0x20, 0xCE,
+        0xD2, 0xB5, 0xC8, 0xC4, 0xE3, 0x20, 0xA1, 0xEF,
+      ];
+      expect(probeLegacyCjkCharset(starredSrt)?.charset, 'gbk');
+      expect(
+        probeLegacyCjkCharset(starredSrt)?.text,
+        '1\n00:00:00,000 --> 00:00:02,000\n★ 我等你 ★',
+      );
+
+      const boxedSrt = <int>[
+        0x31, 0x0A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x2C, 0x30,
+        0x30, 0x30, 0x20, 0x2D, 0x2D, 0x3E, 0x20, 0x30, 0x30, 0x3A, 0x30, 0x30,
+        0x3A, 0x30, 0x32, 0x2C, 0x30, 0x30, 0x30, 0x0A, 0xA9, 0xA4, 0xA9, 0xA4,
+        0xA9, 0xA4, 0x20, 0xB7, 0xD6, 0xB8, 0xF4, 0xCF, 0xDF, 0x20, 0xA9, 0xA4,
+        0xA9, 0xA4, 0xA9, 0xA4,
+      ];
+      expect(probeLegacyCjkCharset(boxedSrt)?.charset, 'gbk');
+      expect(
+        probeLegacyCjkCharset(boxedSrt)?.text,
+        '1\n00:00:00,000 --> 00:00:02,000\n─── 分隔线 ───',
+      );
+    });
+
+    test('歌词式多 cue 重复台词留在 GBK（回归）', () {
+      // 同一句短台词重复多行时，非 ASCII 总量会跨过韩文证据门槛；但中文被
+      // CP949 误解出的谚文行内没有空格，按“韩文按词空格分词”判掉。
+      final sample = legacyCharsetSamples.lastWhere(
+        (item) => item.charset == 'gbk' && item.text.contains('00:00:04,000'),
+      );
+      final decoded = decodeTextAndCharset(
+        sample.bytes,
+        allowLegacyCjk: true,
+      );
+      expect(decoded.charset, 'gbk');
+      expect(decoded.text, sample.text);
+    });
+
+    test('严格解码：非法字节不算命中，不产出替换字符', () {
+      expect(decodeLegacyCjkStrict('big5', <int>[0x81, 0x20]), isNull);
+      expect(decodeLegacyCjkStrict('shift_jis', <int>[0x81, 0x20]), isNull);
+      expect(decodeLegacyCjkStrict('euc_kr', <int>[0x80, 0x20]), isNull);
+      expect(decodeLegacyCjkStrict('koi8-r', <int>[0x41]), isNull);
     });
 
     test('gzip 传输解压', () {

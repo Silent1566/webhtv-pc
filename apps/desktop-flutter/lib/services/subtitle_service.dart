@@ -1,9 +1,11 @@
 /// 外挂字幕加载服务（设计文档 §10.3「外挂字幕」「字幕轨选择」）。
 ///
 /// 职责边界：
-/// - 按 [SubtitleInfo] 拉取字幕文本（HTTP/本地文件），复用 [decodeConfigText]
-///   的编码探测（BOM → 声明 charset → UTF-8 → GBK 兜底）；字幕样本在 TVBox
-///   生态里 GBK 极常见，必须与配置导入同一套兜底规则；
+/// - 按 [SubtitleInfo] 拉取字幕文本（HTTP/本地文件），复用
+///   [decodeTextAndCharset] 的编码探测（BOM → 声明 charset → UTF-8 严格解码），
+///   再按字幕场景做 GBK / Big5 / Shift-JIS / EUC-KR 的证据探测：字幕样本在
+///   TVBox 生态里 GBK 极常见，繁体、日文、韩文字幕同样常见，且本地文件没有
+///   Content-Type 可依据；
 /// - 失败一律归一化为 [AppError]（`subtitle*` 分类），但**调用方不得让它升级为
 ///   播放失败**：字幕拿不到只提示，视频照常播（§10.4、§13.3）；
 /// - 网络请求由宿主自己发出并携带与媒体一致的 Header（Referer/UA/Cookie），
@@ -29,13 +31,13 @@ class SubtitleDocument {
     required this.byteLength,
   });
 
-  /// 已转为 UTF-8 的文本（GBK 等已在加载阶段转码）。
+  /// 已转为 UTF-8 的文本（GBK/Big5/Shift-JIS/EUC-KR 已在加载阶段转码）。
   final String text;
 
   /// 归一化格式：`srt`/`ass`/`ssa`/`vtt`/`sub`。
   final String format;
 
-  /// 实际使用的字符集（`utf-8`、`gbk`、`utf-16le`…）。
+  /// 实际使用的字符集（`utf-8`、`gbk`、`big5`、`shift_jis`、`euc_kr`…）。
   final String encoding;
 
   final String sourceUrl;
@@ -119,7 +121,8 @@ class SubtitleService implements SubtitleLoader {
     return SubtitleDocument(
       text: decoded.text,
       format: format,
-      // 独立编码探测：字幕在 TVBox 生态里 GBK 极常见，必须如实记录用了哪个编码。
+      // 独立编码探测：字幕编码可能是 GBK/Big5/Shift-JIS/EUC-KR 之一，
+      // 必须如实记录用了哪个编码，便于用户按日志定位乱码。
       encoding: decoded.charset,
       sourceUrl: url,
       byteLength: raw.bytes.length,
@@ -132,7 +135,11 @@ class SubtitleService implements SubtitleLoader {
     String url,
   ) {
     try {
-      return decodeTextAndCharset(bytes, declaredCharset: declaredCharset);
+      return decodeTextAndCharset(
+        bytes,
+        declaredCharset: declaredCharset,
+        allowLegacyCjk: true,
+      );
     } on AppError catch (error) {
       // 复用配置解码的错误分类，但换成字幕语义，便于 UI 区分提示。
       throw AppError(
