@@ -347,6 +347,23 @@ class SidecarProcess {
   );
 
   final Map<String, _Pending> _pending = {};
+  void Function()? _activityChanged;
+
+  /// 已向调用方交付过本机环回地址（取流/代理场景）。
+  ///
+  /// 这类地址可能直接被播放器当成流地址拉取：宿主此刻没有「播放依赖已释放」的信号，
+  /// 因此这个进程不能被空闲回收（宁可多留一个进程也不能把正在播的流掐断）。
+  bool _hasPlaybackDependency = false;
+
+  /// 是否已承载播放依赖（只读，供空闲回收判定）。
+  bool get hasPlaybackDependency => _hasPlaybackDependency;
+
+  /// 会返回取流地址的 ABI 方法。
+  static const Set<String> playbackMethods = {
+    SpiderMethod.play,
+    SpiderMethod.live,
+    SpiderMethod.proxy,
+  };
   final Completer<SidecarExit> _exitCompleter = Completer<SidecarExit>();
   final List<String> _stderrLines = [];
 
@@ -544,7 +561,10 @@ class SidecarProcess {
       }
       pending.timer?.cancel();
       pending.graceTimer?.cancel();
-      if (pending.completer.isCompleted) continue;
+      if (pending.completer.isCompleted) {
+        _activityChanged?.call();
+        continue;
+      }
       if (response.succeeded) {
         // 超限时 _checkResponseSize 已用错误完成该请求，不能再 complete，
         // 否则会抛 `Bad state: Future already completed`，掩盖真正的
@@ -552,6 +572,10 @@ class SidecarProcess {
         if (!_checkResponseSize(response.result, pending)) {
           // 出参日志只记真正交付给调用方的那份结果，与下面的 complete 同条件。
           _debugLog?.inboundOk(pending.method, pending.id, response.result);
+          if (playbackMethods.contains(pending.method) &&
+              _carriesLoopbackAddress(response.result)) {
+            _hasPlaybackDependency = true;
+          }
           pending.completer.complete(response.result);
         }
       } else {
@@ -572,8 +596,28 @@ class SidecarProcess {
               : response.error!,
         );
       }
+      _activityChanged?.call();
     }
   }
+
+  /// 结果是否携带本机环回地址（127.0.0.1 / localhost）。
+  static bool _carriesLoopbackAddress(Object? value) {
+    switch (value) {
+      case String():
+        return _loopbackPattern.hasMatch(value);
+      case Map():
+        return value.values.any(_carriesLoopbackAddress);
+      case Iterable():
+        return value.any(_carriesLoopbackAddress);
+      default:
+        return false;
+    }
+  }
+
+  static final RegExp _loopbackPattern = RegExp(
+    r'(?:^|[/:])?(?:127\.0\.0\.1|localhost)(?::\d+)?(?:/|$)',
+    caseSensitive: false,
+  );
 
   /// 校验单响应大小；返回 `true` 表示已用 [SpiderErrorCode.resourceLimit] 完成
   /// 该请求，调用方**不得**再 complete。
@@ -655,30 +699,18 @@ class SidecarProcess {
     // `kill-on-close` 只在**最后一个**作业句柄关闭时生效，而宿主仍持有句柄，
     // 因此这里必须显式终止作业，否则崩溃会留下永久孤儿进程。
     _job?.terminate();
-    if (!expected) {
-      _failAll(
-        SpiderError(
-          code: SpiderErrorCode.crashed,
-          message: 'sidecar 意外退出（code=$code）',
-          siteKey: _spec.siteKey,
-          details: {
-            'exitCode': code,
-            'stderr': _stderrLines.isEmpty ? '' : _stderrLines.last,
-          },
-        ),
-      );
-    } else {
-      // 主动停止时在途请求必须立刻结束：否则等它的人会一直挂到 deadline，
-      // 表现为「停用了源，界面还转圈几十秒」。
-      _failAll(
-        SpiderError(
-          code: SpiderErrorCode.cancelled,
-          message: 'sidecar 已停止，取消未完成的请求',
-          siteKey: _spec.siteKey,
-          userVisible: true,
-        ),
-      );
-    }
+    // 应期停机同样要结束在途请求：否则调用方会永远挂在一个已退出的子进程上。
+    _failAll(
+      SpiderError(
+        code: expected ? SpiderErrorCode.cancelled : SpiderErrorCode.crashed,
+        message: expected ? 'sidecar 已停止' : 'sidecar 意外退出（code=$code）',
+        siteKey: _spec.siteKey,
+        details: {
+          'exitCode': code,
+          'stderr': _stderrLines.isEmpty ? '' : _stderrLines.last,
+        },
+      ),
+    );
   }
 
   void _failAll(SpiderError error) {
@@ -704,6 +736,7 @@ class SidecarProcess {
       }
     }
     _pending.clear();
+    _activityChanged?.call();
   }
 
   void _killWithProtocolError(SpiderError error) {
@@ -774,6 +807,7 @@ class SidecarProcess {
       deadline: deadline,
     );
     _pending[id] = pending;
+    _activityChanged?.call();
     _send(
       IpcEnvelope.request(
         id: id,
@@ -1054,7 +1088,11 @@ class SpiderHostSupervisor {
     this.maxFailures = 5,
     this.baseBackoff = const Duration(seconds: 1),
     this.maxBackoff = const Duration(seconds: 60),
-  });
+    this.idleTimeout = const Duration(minutes: 5),
+    Timer Function(Duration, void Function())? idleScheduler,
+    DateTime Function()? clock,
+  }) : _idleScheduler = idleScheduler ?? Timer.new,
+       _clock = clock ?? DateTime.now;
 
   /// sidecar 临时工作目录根（`%LOCALAPPDATA%/webhtv-pc/cache/sidecars`）。
   final String workRoot;
@@ -1063,27 +1101,40 @@ class SpiderHostSupervisor {
   /// 详细调试日志旁路；由 `AppState` 注入，缺省不影响既有行为。
   final SpiderDebugLog? debugLog;
 
-  /// 用户停用源的入口门禁，与连续失败触发的熔断分开。
+  /// 用户停用源的入口门禁，与连续失败触发的熔断分开（停用是用户的决定，
+  /// 不该被算成「源失败」而推进指数退避）。
   final bool Function(String sourceKey)? isSourceEnabled;
 
   void _checkSourceEnabled(String siteKey, SpiderManifest manifest) {
     if (isSourceEnabled?.call(manifest.key) ?? true) return;
-    throw SpiderError(
-      code: SpiderErrorCode.initFailed,
-      message: '本地源 ${manifest.key} 已停用，请在本地源页启用后重试',
-      siteKey: siteKey,
-      userVisible: true,
-    );
+    throw _sourceDisabled(siteKey, manifest.key);
   }
+
+  SpiderError _sourceDisabled(String siteKey, String sourceKey) => SpiderError(
+    code: SpiderErrorCode.initFailed,
+    message: '本地源 $sourceKey 已停用，请在本地源页启用后重试',
+    siteKey: siteKey,
+    userVisible: true,
+  );
 
   /// 同一站点连续失败该次数后进入禁用状态，禁止无限快速重启（§9.3.1）。
   final int maxFailures;
   final Duration baseBackoff;
   final Duration maxBackoff;
 
+  /// 空闲回收期限。不存在用户面板设置：工程上的保守默认值。
+  final Duration idleTimeout;
+  final Timer Function(Duration, void Function()) _idleScheduler;
+  final DateTime Function() _clock;
+
   final Map<String, _SiteRuntime> _runtimes = {};
+  Future<void>? _shutdown;
+  int _workSequence = 0;
 
   /// 确保站点运行时可用；必要时启动并握手。
+  ///
+  /// 并发调用共用同一次启动（_SiteRuntime.starting），不会各起一个进程；
+  /// 正在停机的站点先等停机收尾再重新启动，调用方拿到的永远是可用宿主。
   Future<SpiderHost> ensureRunning({
     required String siteKey,
     required String executable,
@@ -1091,11 +1142,89 @@ class SpiderHostSupervisor {
     required SpiderManifest manifest,
     String extend = '',
     Map<String, String> environment = const {},
-  }) async {
-    _checkSourceEnabled(siteKey, manifest);
+  }) {
+    if (_shutdown != null) return Future.error(_cancelled(siteKey));
+    if (!(isSourceEnabled?.call(manifest.key) ?? true)) {
+      return Future.error(_sourceDisabled(siteKey, manifest.key));
+    }
     final runtime = _runtimes.putIfAbsent(siteKey, () => _SiteRuntime(siteKey));
-    if (runtime.host != null) return runtime.host!;
+    final stopping = runtime.stopping;
+    if (stopping != null) {
+      return stopping.then(
+        (_) => ensureRunning(
+          siteKey: siteKey,
+          executable: executable,
+          arguments: arguments,
+          manifest: manifest,
+          extend: extend,
+          environment: environment,
+        ),
+      );
+    }
+    final existing = hostFor(siteKey);
+    if (existing != null) {
+      _updateIdleTimer(runtime);
+      return Future.value(existing);
+    }
+    final previous = runtime.process;
+    if (previous != null && !previous.isRunning) {
+      // 退出回执还没结算：等它落定再启动，绝不能把已退出的进程当作可用宿主。
+      return previous.done.then(
+        (_) => ensureRunning(
+          siteKey: siteKey,
+          executable: executable,
+          arguments: arguments,
+          manifest: manifest,
+          extend: extend,
+          environment: environment,
+        ),
+      );
+    }
+    final inFlight = runtime.starting;
+    if (inFlight != null) return inFlight;
 
+    final starting = _startRuntime(
+      runtime,
+      runtime.generation,
+      executable: executable,
+      arguments: arguments,
+      manifest: manifest,
+      extend: extend,
+      environment: environment,
+    );
+    runtime.starting = starting;
+    void clearStart() {
+      if (identical(runtime.starting, starting)) runtime.starting = null;
+    }
+
+    unawaited(
+      starting.then<void>(
+        (_) => clearStart(),
+        onError: (Object error, StackTrace stack) => clearStart(),
+      ),
+    );
+    return starting;
+  }
+
+  SpiderError _cancelled(String siteKey) => SpiderError(
+    code: SpiderErrorCode.cancelled,
+    message: '站点 $siteKey 的 Spider 已停止',
+    siteKey: siteKey,
+  );
+
+  Future<SpiderHost> _startRuntime(
+    _SiteRuntime runtime,
+    int generation, {
+    required String executable,
+    required List<String> arguments,
+    required SpiderManifest manifest,
+    required String extend,
+    required Map<String, String> environment,
+  }) async {
+    final siteKey = runtime.siteKey;
+    // 记录这次启动属于哪个源：删除源时要据此判断「还有进程占着目录」。
+    runtime.sourceKey = manifest.key;
+    _checkSourceEnabled(siteKey, manifest);
     if (runtime.state == SpiderRuntimeState.disabled) {
       throw SpiderError(
         code: SpiderErrorCode.initFailed,
@@ -1104,7 +1233,7 @@ class SpiderHostSupervisor {
         userVisible: true,
       );
     }
-    final now = DateTime.now();
+    final now = _clock();
     if (runtime.nextRetryAt != null && now.isBefore(runtime.nextRetryAt!)) {
       final wait = runtime.nextRetryAt!.difference(now);
       throw SpiderError(
@@ -1138,26 +1267,9 @@ class SpiderHostSupervisor {
       );
     }
 
-    runtime
-      ..sourceKey = manifest.key
-      ..starting = true;
-    final generation = runtime.generation;
-    // 握手可能持续数秒：期间用户停用源或删除源都必须让这次启动作废，
-    // 而不是等握手完成后再把进程登记成「运行中」。
-    void checkCurrent() {
-      _checkSourceEnabled(siteKey, manifest);
-      if (generation == runtime.generation) return;
-      throw SpiderError(
-        code: SpiderErrorCode.cancelled,
-        message: '源 $siteKey 的启动已取消',
-        siteKey: siteKey,
-        userVisible: true,
-      );
-    }
-
     final workingDirectory = p.join(
       workRoot,
-      '$siteKey-${DateTime.now().microsecondsSinceEpoch}',
+      '$siteKey-${_clock().microsecondsSinceEpoch}-${++_workSequence}',
     );
     final logFile = p.join(workingDirectory, 'stderr.log');
 
@@ -1177,41 +1289,49 @@ class SpiderHostSupervisor {
         ),
         debugLog: debugLog,
       );
-      checkCurrent();
+      // 先挂到 runtime 上：停机才能在启动过程中收掉这个进程。
       runtime.process = process;
+      if (runtime.generation != generation) throw _cancelled(siteKey);
+      // 握手期间用户可能已经停用该源：那样这次启动必须作废，
+      // 而不是等握手完成后把进程登记成「运行中」。
+      _checkSourceEnabled(siteKey, manifest);
       host = SpiderHost(manifest: manifest, process: process, log: log);
       await host.initialize(extend: extend);
-      checkCurrent();
+      if (runtime.generation != generation) throw _cancelled(siteKey);
+      _checkSourceEnabled(siteKey, manifest);
     } catch (error) {
-      if (process != null) await process.dispose();
-      if (identical(runtime.process, process)) runtime.process = null;
-      // 被停用/取消的启动不是「源失败」：不记失败、不进退避，否则用户
-      // 手动停用一个源会把它推进指数退避的熔断里。
-      if (generation == runtime.generation) {
-        runtime.starting = false;
-        if (isSourceEnabled?.call(manifest.key) ?? true) {
-          _recordFailure(runtime, error);
-        }
+      if (process != null) {
+        if (identical(runtime.process, process)) runtime.process = null;
+        await process.dispose();
       }
+      // 停机/停用打断的启动不是站点失败，不能计进崩溃退避。
+      if (runtime.generation != generation) throw _cancelled(siteKey);
+      if (!(isSourceEnabled?.call(manifest.key) ?? true)) {
+        throw _sourceDisabled(siteKey, manifest.key);
+      }
+      _recordFailure(runtime, error);
       rethrow;
     }
 
+    final liveProcess = process;
+    final liveHost = host;
     runtime
-      ..starting = false
-      ..host = host
-      ..process = process
+      ..host = liveHost
+      ..process = liveProcess
       ..state = SpiderRuntimeState.running
       ..lastError = null;
     log.info(
       'Spider 已启动 site=$siteKey runtime=${manifest.runtime} '
-      'isolation=${process.isolation.summary}',
+      'isolation=${liveProcess.isolation.summary}',
       scope: 'spider',
     );
 
     // 崩溃监听：只影响该站点，并驱动指数退避。
     unawaited(
-      process.done.then((exit) {
-        if (runtime.process != process) return;
+      liveProcess.done.then((exit) {
+        if (!identical(runtime.process, liveProcess)) return;
+        _cancelIdleTimer(runtime);
+        liveProcess._activityChanged = null;
         runtime
           ..host = null
           ..process = null;
@@ -1226,7 +1346,7 @@ class SpiderHostSupervisor {
             code: SpiderErrorCode.crashed,
             message: 'sidecar 意外退出：${exit.summary}',
             siteKey: siteKey,
-            details: {'stderr': process!.stderrLines.take(5).join(' | ')},
+            details: {'stderr': liveProcess.stderrLines.take(5).join(' | ')},
           ),
         );
         log.error(
@@ -1237,7 +1357,43 @@ class SpiderHostSupervisor {
       }),
     );
 
-    return host;
+    liveProcess._activityChanged = () => _updateIdleTimer(runtime);
+    _updateIdleTimer(runtime);
+    return liveHost;
+  }
+
+  void _cancelIdleTimer(_SiteRuntime runtime) {
+    runtime.idleTimer?.cancel();
+    runtime.idleTimer = null;
+  }
+
+  /// 只有真正空闲的宿主才允许被回收。
+  ///
+  /// 在途请求、初始化中的进程、自托管取流的站点，以及已经交付过环回播放地址的
+  /// 宿主都不在回收范围内：它们身上还有调用方正在使用的资源。
+  bool _canRecycle(SpiderHost host) {
+    final process = host.process;
+    return process.isRunning &&
+        !process._stopping &&
+        process._pending.isEmpty &&
+        !process.hasPlaybackDependency &&
+        !host.manifest.permissions.localProxy;
+  }
+
+  void _updateIdleTimer(_SiteRuntime runtime) {
+    final host = runtime.host;
+    if (host == null || _shutdown != null || !_canRecycle(host)) {
+      _cancelIdleTimer(runtime);
+      return;
+    }
+    if (runtime.idleTimer?.isActive ?? false) return;
+    runtime.idleTimer = _idleScheduler(idleTimeout, () {
+      runtime.idleTimer = null;
+      // 到点时再确认一次：期间可能又来了调用或播放地址。
+      if (identical(runtime.host, host) && _canRecycle(host)) {
+        unawaited(_stopRuntime(runtime));
+      }
+    });
   }
 
   void _recordFailure(_SiteRuntime runtime, Object error) {
@@ -1275,6 +1431,7 @@ class SpiderHostSupervisor {
   void reset(String siteKey) {
     final runtime = _runtimes[siteKey];
     if (runtime == null) return;
+    _cancelIdleTimer(runtime);
     runtime
       ..failureCount = 0
       ..restartDelay = Duration.zero
@@ -1284,33 +1441,77 @@ class SpiderHostSupervisor {
     log.info('Spider 已重置 site=$siteKey', scope: 'spider');
   }
 
-  /// 强制停止某站点运行时（§18.2「每个站点运行时可随时强制停止」）。
-  Future<void> stop(String siteKey) async {
+  /// 强制停止某站点运行时（第18.2节「每个站点运行时可随时强制停止」）。
+  ///
+  /// 在途启动会被一起去掉：调用方收到 SPIDER_CANCELLED，不会留下孤儿进程。
+  Future<void> stop(String siteKey) {
     final runtime = _runtimes[siteKey];
-    if (runtime == null) return;
+    return runtime == null ? Future<void>.value() : _stopRuntime(runtime);
+  }
+
+  Future<void> _stopRuntime(_SiteRuntime runtime) {
+    final stopping = runtime.stopping;
+    if (stopping != null) return stopping;
     final process = runtime.process;
-    // 递增代际让「正在握手」的那次启动在下一次检查点自行作废。
-    runtime.generation++;
+    final starting = runtime.starting;
+    // 递增代号：正在进行的启动在握手后立刻发现自己已过期。
+    runtime.generation += 1;
+    _cancelIdleTimer(runtime);
+    if (process != null) process._activityChanged = null;
     runtime
-      ..starting = false
       ..host = null
       ..process = null
       ..state = SpiderRuntimeState.stopped;
-    if (process != null) await process.dispose();
-    log.info('Spider 已停止 site=$siteKey', scope: 'spider');
+    return _trackStop(runtime, _drainRuntime(runtime, process, starting));
   }
 
-  /// 某个源是否有活着的运行时（含尚未完成握手、或已启动未登记主机的进程）。
+  Future<void> _trackStop(_SiteRuntime runtime, Future<void> stopping) {
+    runtime.stopping = stopping;
+    void clearStop() {
+      if (identical(runtime.stopping, stopping)) runtime.stopping = null;
+    }
+
+    unawaited(
+      stopping.then<void>(
+        (_) => clearStop(),
+        onError: (Object error, StackTrace stack) => clearStop(),
+      ),
+    );
+    return stopping;
+  }
+
+  Future<void> _drainRuntime(
+    _SiteRuntime runtime,
+    SidecarProcess? process,
+    Future<SpiderHost>? starting,
+  ) async {
+    if (process != null) await process.dispose();
+    if (starting != null) {
+      try {
+        await starting;
+      } catch (_) {
+        // 停机打断的启动由 ensureRunning 用 SPIDER_CANCELLED 报给调用方。
+      }
+    }
+    log.info('Spider 已停止 site=${runtime.siteKey}', scope: 'spider');
+  }
+
+  bool isRunning(String siteKey) => hostFor(siteKey) != null;
+
+  /// 某个源是否还有活着的运行时：主机在、进程在、或正在启动/停机收尾。
   ///
-  /// 删除源时用它而不是 [isRunning]：握手中的进程也持有源目录里的文件，
-  /// 那时删目录会在 Windows 上失败或留下半删除状态。
+  /// 删除源时用它而不是 [isRunning]：握手中与收尾中的进程仍然占着源目录里的
+  /// 文件，那时删目录会失败或留下半删除状态。
   bool isSourceActive(String sourceKey) => _runtimes.values.any(
     (runtime) =>
         runtime.sourceKey == sourceKey &&
-        (runtime.starting || runtime.process != null || runtime.host != null),
+        (runtime.host != null ||
+            runtime.process != null ||
+            runtime.starting != null ||
+            runtime.stopping != null),
   );
 
-  /// 按源停止全部站点别名，包括尚未完成握手的进程。
+  /// 按源停止全部站点别名（一个源可能被多个配置站点引用），含握手中的进程。
   Future<void> stopSources(Iterable<String> sourceKeys) async {
     final keys = sourceKeys.toSet();
     final siteKeys = [
@@ -1322,9 +1523,13 @@ class SpiderHostSupervisor {
     }
   }
 
-  bool isRunning(String siteKey) => _runtimes[siteKey]?.host != null;
-
-  SpiderHost? hostFor(String siteKey) => _runtimes[siteKey]?.host;
+  /// 当前可用宿主；已退出或正在退出的进程不再返回（否则调用方会往死进程发帧）。
+  SpiderHost? hostFor(String siteKey) {
+    final host = _runtimes[siteKey]?.host;
+    if (host == null) return null;
+    final process = host.process;
+    return process.isRunning && !process._stopping ? host : null;
+  }
 
   /// 全部运行时状态，供 Spider 管理页展示（§17.2）。
   List<SpiderRuntimeStatus> statuses() =>
@@ -1346,15 +1551,23 @@ class SpiderHostSupervisor {
           .toList()
         ..sort((a, b) => a.siteKey.compareTo(b.siteKey));
 
-  /// 应用退出时释放全部 sidecar 与端口（§22.2）。
-  Future<void> shutdownAll() async {
-    for (final runtime in _runtimes.values) {
-      final process = runtime.process;
-      runtime
-        ..host = null
-        ..process = null;
-      if (process != null) await process.dispose();
-    }
+  /// 应用退出时释放全部 sidecar 与端口（第22.2节）。
+  Future<void> shutdownAll() {
+    final running = _shutdown;
+    if (running != null) return running;
+    final shutdown = _shutdownAll();
+    _shutdown = shutdown;
+    unawaited(
+      shutdown.then<void>(
+        (_) => _shutdown = null,
+        onError: (Object error, StackTrace stack) => _shutdown = null,
+      ),
+    );
+    return shutdown;
+  }
+
+  Future<void> _shutdownAll() async {
+    await Future.wait(_runtimes.values.toList().map(_stopRuntime));
     _runtimes.clear();
   }
 
@@ -1384,14 +1597,14 @@ class _SiteRuntime {
 
   final String siteKey;
 
-  /// 该站点运行时对应的 manifest key（一个源可能被多个配置站点别名引用）。
+  /// 该运行时对应的 manifest key（一个源可能被多个配置站点别名引用）。
   String sourceKey = '';
-  bool starting = false;
-
-  /// 停止一次启动就递增；握手期间的检查点据此判定这次启动已作废。
-  int generation = 0;
   SpiderHost? host;
   SidecarProcess? process;
+  Future<SpiderHost>? starting;
+  Future<void>? stopping;
+  Timer? idleTimer;
+  int generation = 0;
   SpiderRuntimeState state = SpiderRuntimeState.stopped;
   String? lastError;
   int failureCount = 0;

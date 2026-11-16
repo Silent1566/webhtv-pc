@@ -302,7 +302,7 @@ POST /action
 | 项 | 策略 |
 | --- | --- |
 | 并发 | 单请求串行处理（同步是低频操作，不做并发） |
-| 幂等 | 按 `(siteKey, vodId, flag, episodeId)` + `updatedAt` 比较，重复推送不产生新行 |
+| 幂等 | 按 `(siteKey, vodId, flag, episodeId)` + `updatedAt` 比较；同时间戳时再按规范化内容序裁决（见 §4.4），内容等价不产生新行 |
 | 部分失败 | 逐条处理，统计 `applied` / `skipped` / `failed`，返回**明细**；不因单条失败回滚全部 |
 | 请求体上限 | **8 MiB**（历史列表可达数 MB；`00` §3.6 的 `Backup` 含全表） |
 | 超时 | 读取 30 s |
@@ -318,10 +318,23 @@ for each incoming record:
     else if incoming.updatedAt > local.updatedAt:
         upsert(incoming)                        → applied
     else if incoming.updatedAt == local.updatedAt:
-        skip                                    → skipped (幂等)
+        cmp = compareContent(incoming, local)   // 进度、时长、片名、集名、海报
+        cmp == 0 → skip                         → skipped (幂等)
+        cmp  > 0 → upsert(incoming)             → applied (规范化裁决)
+        cmp  < 0 → skip                         → skipped (本地内容序更优)
     else:
         skip                                    → skipped (旧不覆盖新)
 ```
+
+同时间戳**不再一律 skip**：那会让「谁胜」取决于到达顺序（A←B 与 B←A 各自保留
+自己那份，两端永远不一致）。规范化内容序是**确定性破平**，不声称知道真实先后；
+它只保证同一对记录无论从哪个方向合并都收敛到同一条。同一批内出现重复 matchKey
+时，先用同一裁决选出赢家，其余计入 `skipped`——写入顺序不再影响结果。
+
+排序列只取**PC 同步链路真正落库并会重新序列化**的字段：`positionMs`、
+`durationMs`、`vodName`、`episodeName`、`vodPic`（空串与 `null` 等价）。
+`cid` 是重映射别名，`raw` 与 `opening`/`ending` 不被同步写入保留，因此不参与。
+本条只约束 PC 侧合并；Android 对端逻辑未改。
 
 **禁止**：
 - 任何形式的 `DELETE FROM history` 作为合并的前置步骤；
@@ -412,5 +425,5 @@ for each incoming record:
 | 3 | `keep`（收藏）是否本阶段做？ | **做**，映射简单（`Keep` 4 字段） | `00` §3.6 |
 | 4 | `backup` 的 multipart 归档（`paths`/`mpvConfig`/`loginState`）是否处理？ | **不处理**，只处理 JSON 表单 | PC 无对应文件语义 |
 | 5 | PC 的 `uuid` 如何生成？ | 首次启动生成并持久化到 `settings.json` | 保证重启后 Android 仍认同一台设备 |
-| 6 | 同步冲突（两端都改）如何裁决？ | **时间戳大者胜**；相等则跳过 | §4.4 |
+| 6 | 同步冲突（两端都改）如何裁决？ | **时间戳大者胜**；相等时按规范化内容序破平（内容等价才跳过） | §4.4 |
 | 7 | 是否回写 `completed`？ | PC 端按 `position >= duration - 5000` 重算 | 复用 `upsertHistory` 既有规则 |

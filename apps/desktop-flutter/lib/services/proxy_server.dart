@@ -653,10 +653,7 @@ class LocalProxyServer {
       HttpHeaders.etagHeader,
     ];
     // 只复制已知安全的头，避免把上游 Set-Cookie 等透传给播放器。
-    for (final name in [
-      ...alwaysPass,
-      if (!synthesizedBody) ...upstreamOnly,
-    ]) {
+    for (final name in [...alwaysPass, if (!synthesizedBody) ...upstreamOnly]) {
       final value = upstream.headers.value(name);
       if (value == null) continue;
       response.headers.set(name, value);
@@ -764,7 +761,8 @@ class LocalProxyServer {
     log.debug(
       '清单形状 token=${session.fingerprint} ${played.summary} '
       'upstreamBytes=$upstreamBytes bytes=$bytes '
-      'adBlockRemoved=${cleaned.removedSegments}',
+      'adBlockRemoved=${cleaned.removedSegments}'
+      '${cleaned.abandoned ? ' adBlockRollback=${cleaned.abandonReason}' : ''}',
       scope: 'proxy',
     );
     if (!cleaned.changed) return;

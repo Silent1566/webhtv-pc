@@ -20,6 +20,7 @@ import '../core/android_bridge.dart';
 import '../core/android_sources.dart';
 import '../core/app_error.dart';
 import '../core/protocol.dart';
+import 'lan_http_client.dart';
 import 'log_service.dart';
 
 /// 探测/拉取的进度事件（供 UI 展示）。
@@ -66,9 +67,11 @@ class AndroidBridgeService {
     this.timeout = const Duration(seconds: 8),
     this.scanTimeout = const Duration(milliseconds: 400),
     this.scanConcurrency = 16,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? createLanHttpClient(),
+       _outboundClient = client ?? http.Client();
 
   final http.Client _client;
+  final http.Client _outboundClient;
 
   /// 日志服务（脱敏口径见 `design/01` §7）。
   final LogService log;
@@ -83,7 +86,10 @@ class AndroidBridgeService {
   /// 扫描并发上限。
   final int scanConcurrency;
 
-  void close() => _client.close();
+  void close() {
+    _client.close();
+    if (!identical(_client, _outboundClient)) _outboundClient.close();
+  }
 
   /// 探测一台设备（`design/01` §4.3）。
   ///
@@ -199,6 +205,7 @@ class AndroidBridgeService {
         Uri.parse(activeUrl),
         base: normalized,
         timeout: timeout,
+        client: _outboundClient,
       );
       final sources = extractLiveSources(text);
       _logInfo(
@@ -332,14 +339,14 @@ class AndroidBridgeService {
     required Duration timeout,
     AppErrorKind? notFoundKind,
     String? notFoundMessage,
+    http.Client? client,
   }) async {
     final hostPort = hostPortOf(base);
     final http.Response response;
     try {
-      response = await _client.get(uri, headers: {
-        'Host': hostPort,
-        'Accept': 'application/json',
-      }).timeout(timeout);
+      response = await (client ?? _client)
+          .get(uri, headers: {'Host': hostPort, 'Accept': 'application/json'})
+          .timeout(timeout);
     } on TimeoutException catch (error) {
       throw AppError(
         AppErrorKind.bridgeUnreachable,
