@@ -1,7 +1,7 @@
 /// 播放参数与失败回退策略（`docs/phase9/design/01` §5）。
 ///
-/// 纯数据 + 校验：不碰播放器、不读磁盘。播放器只消费 [mpvProperties] 与
-/// [failureFallback]；设置页只消费 `toJson`/`fromJson`。
+/// 纯数据 + 校验：不碰播放器、不读磁盘。播放器消费播放参数与手势选项；
+/// 设置持久化消费 `toJson`/`fromJson`。
 ///
 /// 缺省值**必须等价于当前行为**：缓存开、硬解自动、自动连播开、回退到线路。
 /// 唯一的例外是 [longPressSpeed]：2026-11 起默认 3×（此前写死 2×），这是需求方
@@ -102,6 +102,32 @@ enum HdrPeakCompute {
   }
 }
 
+/// 画面左右半屏各自的双击动作；默认保持只切换全屏。
+enum PlayerDoubleClickAction {
+  toggleFullscreen('toggleFullscreen', '切换全屏'),
+  togglePlayback('togglePlayback', '播放 / 暂停'),
+  seekBackward('seekBackward', '快退'),
+  seekForward('seekForward', '快进'),
+  volumeUp('volumeUp', '音量增加'),
+  volumeDown('volumeDown', '音量减少'),
+  none('none', '无动作');
+
+  const PlayerDoubleClickAction(this.id, this.label);
+
+  final String id;
+  final String label;
+
+  bool get isSeek => this == seekBackward || this == seekForward;
+
+  static PlayerDoubleClickAction fromId(Object? raw) {
+    final value = raw is String ? raw.trim().toLowerCase() : '';
+    for (final item in values) {
+      if (item.id.toLowerCase() == value) return item;
+    }
+    return toggleFullscreen;
+  }
+}
+
 /// 播放器参数。
 class PlayerOptions {
   const PlayerOptions({
@@ -122,6 +148,8 @@ class PlayerOptions {
     bool? autoSkipIntro,
     bool? autoSkipOutro,
     this.longPressSpeed = defaultLongPressSpeed,
+    this.doubleClickLeft = PlayerDoubleClickAction.toggleFullscreen,
+    this.doubleClickRight = PlayerDoubleClickAction.toggleFullscreen,
     this.lutPath = '',
     this.lutPresetId = '',
   }) : skipMode = autoSkipIntro == true || autoSkipOutro == true
@@ -212,6 +240,9 @@ class PlayerOptions {
   /// 长按画面期间的临时倍速（松开恢复原速）。见 [defaultLongPressSpeed]。
   final double longPressSpeed;
 
+  final PlayerDoubleClickAction doubleClickLeft;
+  final PlayerDoubleClickAction doubleClickRight;
+
   /// 选中的 LUT 文件路径；空串表示未启用。
   final String lutPath;
 
@@ -236,9 +267,7 @@ class PlayerOptions {
 
     // 非有限值（NaN/Infinity）没有"夹"的意义，直接回落默认。
     final speed = longPressSpeed.isFinite
-        ? longPressSpeed
-              .clamp(minLongPressSpeed, maxLongPressSpeed)
-              .toDouble()
+        ? longPressSpeed.clamp(minLongPressSpeed, maxLongPressSpeed).toDouble()
         : defaultLongPressSpeed;
 
     return PlayerOptions(
@@ -279,6 +308,8 @@ class PlayerOptions {
         SkipSourceBits.defaults,
       ),
       longPressSpeed: speed,
+      doubleClickLeft: doubleClickLeft,
+      doubleClickRight: doubleClickRight,
       lutPath: lutPath.trim(),
       lutPresetId: lutPresetId.trim(),
     );
@@ -313,6 +344,8 @@ class PlayerOptions {
     bool? autoSkipIntro,
     bool? autoSkipOutro,
     double? longPressSpeed,
+    PlayerDoubleClickAction? doubleClickLeft,
+    PlayerDoubleClickAction? doubleClickRight,
     String? lutPath,
     String? lutPresetId,
   }) => PlayerOptions(
@@ -334,6 +367,8 @@ class PlayerOptions {
     autoSkipIntro: autoSkipIntro,
     autoSkipOutro: autoSkipOutro,
     longPressSpeed: longPressSpeed ?? this.longPressSpeed,
+    doubleClickLeft: doubleClickLeft ?? this.doubleClickLeft,
+    doubleClickRight: doubleClickRight ?? this.doubleClickRight,
     lutPath: lutPath ?? this.lutPath,
     lutPresetId: lutPresetId ?? this.lutPresetId,
   );
@@ -357,6 +392,8 @@ class PlayerOptions {
     'autoSkipIntro': autoSkipIntro,
     'autoSkipOutro': autoSkipOutro,
     'longPressSpeed': longPressSpeed,
+    'doubleClickLeft': doubleClickLeft.id,
+    'doubleClickRight': doubleClickRight.id,
     'lutPath': lutPath,
     'lutPresetId': lutPresetId,
   };
@@ -416,7 +453,11 @@ class PlayerOptions {
       skipRemoteEnabled: boolOf('skipRemoteEnabled', true),
       skipSources: intOf('skipSources', defaultSkipSources),
       longPressSpeed: doubleOf('longPressSpeed', defaultLongPressSpeed),
-      lutPath: map['lutPath'] is String ? (map['lutPath'] as String).trim() : '',
+      doubleClickLeft: PlayerDoubleClickAction.fromId(map['doubleClickLeft']),
+      doubleClickRight: PlayerDoubleClickAction.fromId(map['doubleClickRight']),
+      lutPath: map['lutPath'] is String
+          ? (map['lutPath'] as String).trim()
+          : '',
       lutPresetId: map['lutPresetId'] is String
           ? (map['lutPresetId'] as String).trim()
           : '',
@@ -441,6 +482,8 @@ class PlayerOptions {
       other.skipRemoteEnabled == skipRemoteEnabled &&
       other.skipSources == skipSources &&
       other.longPressSpeed == longPressSpeed &&
+      other.doubleClickLeft == doubleClickLeft &&
+      other.doubleClickRight == doubleClickRight &&
       other.lutPath == lutPath &&
       other.lutPresetId == lutPresetId;
 
@@ -461,6 +504,8 @@ class PlayerOptions {
     skipRemoteEnabled,
     skipSources,
     longPressSpeed,
+    doubleClickLeft,
+    doubleClickRight,
     lutPath,
     lutPresetId,
   );
@@ -470,7 +515,7 @@ class PlayerOptions {
       'PlayerOptions(hwdec=$hardwareDecoding cache=$cache '
       'max=${demuxerMaxBytesMiB}MiB back=${demuxerMaxBackBytesMiB}MiB '
       'spdif=$audioPassthrough tone=${toneMapping.id} '
-    'peak=${hdrPeakCompute.id} autoNext=$autoNext ${failureFallback.id} '
+      'peak=${hdrPeakCompute.id} autoNext=$autoNext ${failureFallback.id} '
       'preload=$preloadNext skip=${skipMode.name} kinds=$skipKinds '
       'src=$skipSources remote=$skipRemoteEnabled '
       'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}")';
