@@ -21,6 +21,7 @@ import 'common.dart';
 import 'config_pages.dart';
 import 'injected_sites_page.dart';
 import 'intro_skip_options_page.dart';
+import 'lut_presets_page.dart';
 import 'local_sources_page.dart';
 import 'osd_settings_page.dart';
 import 'pan_check_page.dart';
@@ -284,6 +285,23 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
               ' · 自动连播 ${_onOff(state.playerOptions.autoNext)}'
               ' · 缓存 ${state.playerOptions.demuxerMaxBytesMiB} MiB',
           onTap: () => _push(context, PlaybackOptionsPage(state: state)),
+        ),
+        // LUT 此前只挂在播放画面右键菜单上，设置里没有等价入口（DESIGN.md：
+        // 右键菜单不是唯一入口）。它管的是「内置 / 我的 / 在线」三类预设，
+        // 不是一个开关，所以放明细页而不是就地摊开。
+        SettingsNavRow(
+          key: const ValueKey('settings-lut-open'),
+          icon: Icons.palette_outlined,
+          title: 'LUT 滤镜',
+          subtitle: LutPresetsPage.summary(state.playerOptions),
+          onTap: () => _push(
+            context,
+            LutPresetsPage(
+              store: state.lutStore,
+              options: state.playerOptions,
+              onChanged: (value) => state.setPlayerOptions(value),
+            ),
+          ),
         ),
         // 片头片尾跳过留在这一级：原先埋在「播放参数」第二层，用户反馈两次找不到。
         // 入口的可见性比开关本身更重要。

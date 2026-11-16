@@ -62,5 +62,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    # 内置 LUT（13 个 33³/17³/16³ .cube，对齐安卓 assets/lut_presets）。
+    # 播放前由 LutStore 落到缓存目录，再交给 mpv 的 lut3d 滤镜。
+    - assets/lut/
     - assets/models/basic_pitch_nmp.tflite
     - lib/core/audio_ai/RESOURCE_SOURCES.md
