@@ -117,6 +117,24 @@ class _DraftChannel {
   );
 }
 
+/// 把清单里「频道级声明」（M3U 的 `#EXTINF http-user-agent`、JSON 的
+/// `ua`/`referer`/`origin` 字段）落成请求头。
+///
+/// 声明只是兜底，两种情况不写：`#EXTVLCOPT` 等行级设置更具体，它在 URL 行用
+/// `addAll` 落 header，天然压过这里；用户显式写下的同名 header 也不该被改写。
+void _applyDeclaredHeader(_DraftChannel channel, String key, String? value) {
+  final text = value?.trim() ?? '';
+  if (text.isEmpty) return;
+  // 草稿期的 header 是普通 Map（大小写敏感），而 HeaderMap 大小写不敏感：
+  // 这里必须自己做小写比较，否则 `user-agent` 会与 `User-Agent` 并存成两条。
+  final normalized = key.trim().toLowerCase();
+  final declared = channel.header.keys.any(
+    (existing) => existing.trim().toLowerCase() == normalized,
+  );
+  if (declared) return;
+  channel.header[key] = text;
+}
+
 class _DraftGroup {
   _DraftGroup(this.name);
 
@@ -249,6 +267,11 @@ LivePlaylist _parseM3u(String sourceName, String text, int rawLines) {
       if (!catchup.isEmpty) channel.catchup = catchup;
       if (attributes['http-user-agent'] != null) {
         channel.extras['ua'] = attributes['http-user-agent']!;
+        _applyDeclaredHeader(
+          channel,
+          'User-Agent',
+          attributes['http-user-agent'],
+        );
       }
       current = channel;
       continue;
@@ -432,6 +455,32 @@ LivePlaylist _parseJson(String sourceName, String text, int rawLines) {
         final value = asNonEmptyString(channelMap[key]);
         if (value != null) channel.extras[key] = value;
       }
+      // JSON 频道可以显式给 `header` 对象：它比 `ua`/`referer`/`origin` 字段更具体，
+      // 所以先落 header，字段兜底只补没被显式声明的键（大小写不敏感，同 HeaderMap）。
+      for (final entry in asMap(channelMap['header']).entries) {
+        final key = entry.key.trim();
+        final value = asNonEmptyString(entry.value);
+        // 空值等同未声明：不占位，好让下面的字段兜底仍然生效。
+        if (key.isEmpty || value == null) continue;
+        channel.header[key] = value;
+      }
+      // 这三个字段与 M3U 的 `http-user-agent` 同义：只写进 extras 会停在解析结果里，
+      // 播放时取的是 channel.header，所以声明值必须同时落成请求头。
+      _applyDeclaredHeader(
+        channel,
+        'User-Agent',
+        asNonEmptyString(channelMap['ua']),
+      );
+      _applyDeclaredHeader(
+        channel,
+        'Referer',
+        asNonEmptyString(channelMap['referer']),
+      );
+      _applyDeclaredHeader(
+        channel,
+        'Origin',
+        asNonEmptyString(channelMap['origin']),
+      );
       // JSON 直播源的回看参数：既接受嵌套对象，也接受扁平字段。
       final nested = CatchupSpec.fromJson(channelMap['catchup']);
       final flat = CatchupSpec(

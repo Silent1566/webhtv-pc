@@ -293,14 +293,40 @@ void main() {
       expect(decision.isApplied, isTrue);
     });
 
-    test('14 · 时间戳相等 → skip（幂等）', () {
-      // 记录 #14。
-      final decision = decideHistoryMerge(
-        incoming: incomingAt(1791450000000),
+    test('14 · 时间戳相等：内容等价 → skip（幂等），内容分歧 → 规范化裁决', () {
+      // 记录 #14。时间戳相同**不再**一律 skip：那会让胜负取决于到达顺序
+      // （A←B 与 B←A 各自保留自己那份）。见
+      // `test/history_merge_convergence_test.dart`。
+
+      // ① 内容完全等价 → 幂等 skip。
+      final same = decideHistoryMerge(
+        incoming: incomingAt(1791450000000, positionMs: 100000),
         local: localItem(updatedAt: 1791450000000),
       );
-      expect(decision.action, SyncMergeAction.skip);
-      expect(decision.reason, contains('幂等'));
+      expect(same.action, SyncMergeAction.skip);
+      expect(same.reason, contains('幂等'));
+
+      // ② 进度分歧 → 进度更大的一方胜（规范化排序，与谁先落地无关）。
+      final newer = decideHistoryMerge(
+        incoming: incomingAt(1791450000000, positionMs: 200000),
+        local: localItem(updatedAt: 1791450000000),
+      );
+      expect(newer.action, SyncMergeAction.upsert);
+      expect(newer.reason, contains('规范化裁决'));
+
+      // ③ 反方向必须一个 upsert、一个 skip（反对称 → 不会互相覆盖）。
+      final reverse = decideHistoryMerge(
+        incoming: itemFrom(
+          androidHistoryJson(
+            position: 100000,
+            createTime: 1791450000000,
+            episodeUrl: 'http://h/ep.m3u8',
+          ),
+        ),
+        local: localItem(updatedAt: 1791450000000, positionMs: 200000),
+      );
+      expect(reverse.action, SyncMergeAction.skip);
+      expect(reverse.reason, contains('本地记录更新'));
     });
 
     test('15 · 远端更旧 → skip（旧不覆盖新）', () {
@@ -336,7 +362,7 @@ void main() {
       expect(a.matchKey, isNot(b.matchKey));
     });
 
-    test('合并计划逐条裁决，且 skipped 不产生任何删除动作', () {
+    test('合并计划同 matchKey 先收敛再裁决，skipped 不产生删除动作', () {
       final local = localItem(updatedAt: 1791450000000);
       final plan = buildHistoryMergePlan(
         parsed: SyncHistoryParseResult.parse([

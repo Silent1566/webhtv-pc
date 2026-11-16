@@ -34,6 +34,7 @@ import '../core/android_bridge.dart';
 import '../core/android_sync.dart';
 import '../core/app_error.dart';
 import '../core/protocol.dart';
+import 'lan_http_client.dart';
 import 'log_service.dart';
 
 /// 一次推送的结果。
@@ -78,7 +79,7 @@ class SyncClient {
     required this.log,
     http.Client? client,
     this.timeout = const Duration(seconds: 30),
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? createLanHttpClient();
 
   final http.Client _client;
   final LogService log;

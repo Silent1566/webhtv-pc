@@ -175,7 +175,7 @@ packages/test-fixtures/android/
 | 11 | 反向映射 `speed=1.0` | 固定值 |
 | 12 | 合并：本地无 → insert | `applied` |
 | 13 | 合并：远端新 → upsert | `applied` |
-| 14 | 合并：时间戳相等 → skip | `skipped`（幂等） |
+| 14 | 合并：时间戳相等且内容等价 → skip；内容分歧 → 规范化裁决 | `skipped`（幂等）／`applied`（内容序胜出） |
 | 15 | 合并：远端旧 → skip | `skipped`（旧不覆盖新） |
 | 16 | 删除标记：远端旧于删除时间 → skip | 不复活（`02` §4.5） |
 | 17 | 删除标记：远端新于删除时间 → insert | 用户重新观看后应恢复 |

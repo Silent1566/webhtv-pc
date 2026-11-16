@@ -159,6 +159,27 @@ WebHTV PC 是一个通用桌面播放器。
 • 遥测与崩溃上报默认关闭，应用不采集用户观影数据。
 ''';
 
+/// 默认 1280×800 逻辑视口，按 DPR 2 保守估算（不扣侧栏、顶栏）：
+/// LayoutScale 目标卡宽 185.25，6 列的实际卡宽 198.5；2:3 海报解码成
+/// 397×596×4 B ≈ 0.90 MiB。6 列×2 行×3 屏 ≈ 32.5 MiB，加两张
+/// 1920×1080 背景 ≈ 15.8 MiB、40 张 200×300 缩略图 ≈ 9.2 MiB，
+/// 合计约 57.5 MiB，留余量取 64 MiB，而不是套用其他应用的 48 MiB。
+/// 大窗口或 4K 背景（单张约 31.6 MiB）会缩短可回看屏数，由 LRU 淘汰。
+/// 这是 keepAlive 缓存预算，不是进程内存硬上限：仍被监听的 live 图片可超出它；
+/// 其他未限宽图位仍按源尺寸解码，缩略图估算只是用途预算，不保证源图大小。
+const int imageCacheBudgetBytes = 64 * 1024 * 1024;
+
+/// 三屏大网格（9×3×3 = 81）+ 60 张详情图 + 80 张列表缩略图 ≈ 221，
+/// 取 256 留余量；张数上限兜住小图片积累，较大的位图先受字节预算约束。
+const int imageCacheBudgetCount = 256;
+
+/// 与 main 共用同一入口，测试无需启动桌面窗口或播放器即可验证全局预算。
+void installImageCacheBudget() {
+  PaintingBinding.instance.imageCache
+    ..maximumSizeBytes = imageCacheBudgetBytes
+    ..maximumSize = imageCacheBudgetCount;
+}
+
 Future<void> main(List<String> args) async {
   StartupTrace.mark('entry');
   // 图片请求的 User-Agent 必须**在客户端层**替换（见 `core/image_user_agent.dart`）：
@@ -170,6 +191,8 @@ Future<void> main(List<String> args) async {
   installImageUserAgent();
   WidgetsFlutterBinding.ensureInitialized();
   StartupTrace.mark('binding');
+  // 首张图片解码前就启用预算，避免冷启动先按默认上限保留大图。
+  installImageCacheBudget();
   // 崩溃恢复（Phase 9 P2-8）：把未捕获异常写入有界崩溃日志，供下次启动展示。
   // 只写日志，不吞掉 Flutter 的默认报错展示。
   FlutterError.onError = (details) {
@@ -2118,11 +2141,8 @@ class PosterImage extends StatelessWidget {
   /// 全屏的时候被截取了不好看」）。
   final Alignment alignment;
 
-  /// 解码宽度上限（转发给 `Image.network` 的 `cacheWidth`）。
-  ///
-  /// 给**已经确定会被放大/糊掉**的用途用（如详情页背景的模糊垫底层）：
-  /// 那种层看不出细节，按满宽解码只是白白吃内存与解码时间
-  /// （TMDB `w1280` 后景约 121KB，`original` 约 983KB）。
+  /// 解码宽度（物理像素）；固定尺寸图位应传逻辑宽度 × DPR，避免保留原尺寸位图。
+  /// 只转发给 `Image.network`，不影响布局尺寸或 `fit`。
   final int? cacheWidth;
 
   /// 是否绘制占位底色，默认 `true`（普通图位需要它兜住"图还没到"的状态）。

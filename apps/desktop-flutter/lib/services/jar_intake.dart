@@ -22,7 +22,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
@@ -54,6 +53,9 @@ enum JarVerdict {
 
   /// 含 *.so：依赖 Android/ARM 原生库，桌面 JVM 无法加载。
   nativeLibrary,
+
+  /// 检测到 Guard / DexNative 系加固壳特征，不承诺 dex 转译可用。
+  shellGuard,
 
   /// 无 dex / 无原生库，但没有任何 class 条目：宿主加载时以 ClassNotFound 收场。
   missingEntryClass,
@@ -125,6 +127,9 @@ class JarInspection {
         return '这是 Android 站源入口（内含 classes.dex，共 ${dexEntries.length} 个 dex 条目）：'
             '无原生库，可在导入时转译为桌面可加载的 class jar。';
       case JarVerdict.androidJar:
+        if (note.startsWith('加固壳检测')) {
+          return '$note，无法确认可转译性，因此不自动导入；请检查入口或交由安卓端运行。';
+        }
         return '该入口看起来含 classes.dex（${dexEntries.take(3).join('、')}），'
             '但 zip 结构已损坏、无法确认是否还含原生库（lib/*.so），'
             '因此不做自动转译；JVM 无法加载（ADR-0002）。';
@@ -132,6 +137,9 @@ class JarInspection {
         return '该入口含原生库（${nativeEntries.take(3).join('、')}），'
             '只能在安卓端运行，桌面 JVM 无法加载。'
             '如需在 PC 上使用，请在安卓端运行该配置，再通过「安卓设备接入」导入。';
+      case JarVerdict.shellGuard:
+        return '检测到加固壳站源特征（Guard / DexNative）。这类入口可能依赖 Android/ARM '
+            '解包，不自动转译为桌面 Java 实现；请通过「安卓设备接入」使用。';
       case JarVerdict.missingEntryClass:
         return '可解析但没有任何 .class 条目（宿主会以 ClassNotFound 收场）：'
             '入口必须继承 webhtv.spider.Spider 或提供静态 createSpider(Map)。';
@@ -187,6 +195,60 @@ class InstalledJar {
 }
 
 /// T3 桌面 jar 的静态检测与导入。
+/// 把解压输出按块交给回调；回调返回 false 后不再接收任何数据。
+class _LimitedByteSink implements Sink<List<int>> {
+  _LimitedByteSink(this._accept);
+
+  final bool Function(List<int> block) _accept;
+  bool _closed = false;
+
+  @override
+  void add(List<int> data) {
+    if (_closed || data.isEmpty) return;
+    if (!_accept(data)) _closed = true;
+  }
+
+  @override
+  void close() => _closed = true;
+}
+
+/// 中央目录里的一条记录（只保留检测需要的字段）。
+class _ZipEntry {
+  const _ZipEntry({
+    required this.name,
+    required this.method,
+    required this.compressedSize,
+    required this.uncompressedSize,
+    required this.localHeaderOffset,
+    required this.isSymbolicLink,
+  });
+
+  final String name;
+  final int method;
+  final int compressedSize;
+  final int uncompressedSize;
+  final int localHeaderOffset;
+  final bool isSymbolicLink;
+}
+
+/// 中央目录扫描结果。
+class _ZipCatalog {
+  const _ZipCatalog({
+    required this.entries,
+    required this.totalEntries,
+    required this.centralDirectoryOffset,
+    required this.centralDirectorySize,
+  });
+
+  final List<_ZipEntry> entries;
+  final int totalEntries;
+  final int centralDirectoryOffset;
+  final int centralDirectorySize;
+}
+
+/// 加固壳 dex 扫描：是否命中 / 未能完成的原因。
+typedef ShellScan = ({bool guarded, String? failure});
+
 class JarIntake {
   const JarIntake._();
 
@@ -212,7 +274,7 @@ class JarIntake {
 
   /// 静态检测一个入口（jar 文件 / 目录 / .java 文件）。
   ///
-  /// 不加载类、不解压条目内容、不执行任何代码；不抛异常。
+  /// 不加载类、不执行代码、不落盘；仅有界读取 dex 元数据识别加固壳。
   static JarInspection inspectPath(String sourcePath, {String? expectedClass}) {
     final type = FileSystemEntity.typeSync(sourcePath);
     if (type == FileSystemEntityType.notFound) {
@@ -248,8 +310,8 @@ class JarIntake {
       );
     }
 
-    final names = _readZipEntryNames(path);
-    if (names == null) {
+    final catalog = _readZipCatalog(path);
+    if (catalog == null) {
       // 兜底：只有**确实是 zip**（魔数 50 4B 03 04）却解析失败时才做字节扫描，
       // 避免「文件里恰好出现 classes.dex 字样」被误判（§12.6.4 ⑦）。
       //
@@ -270,7 +332,32 @@ class JarIntake {
         expectedClass: expectedClass,
       );
     }
-    return _classifyNames(path, names, expectedClass: expectedClass);
+    // 中央目录不完整时不能只看「我读到的这些条目」——漏掉的 lib/*.so 会让整个
+    // 拒绝链失效（旧实现的 maxEntries 截断就是这个洞）。按「无法确认」处置。
+    if (catalog.entries.length != catalog.totalEntries) {
+      return JarInspection(
+        verdict: JarVerdict.androidJar,
+        sourcePath: path,
+        entryCount: catalog.entries.length,
+        expectedClass: expectedClass,
+        note: 'zip 中央目录不完整，无法确认是否含原生库',
+      );
+    }
+    if (catalog.entries.any((entry) => entry.isSymbolicLink)) {
+      return JarInspection(
+        verdict: JarVerdict.androidJar,
+        sourcePath: path,
+        entryCount: catalog.entries.length,
+        expectedClass: expectedClass,
+        note: '含符号链接条目，无法安全检测',
+      );
+    }
+    return _classifyNames(
+      path,
+      [for (final entry in catalog.entries) entry.name],
+      expectedClass: expectedClass,
+      scanDex: (dexNames) => _scanJarDex(path, catalog, dexNames),
+    );
   }
 
   static JarInspection _inspectDirectory(
@@ -279,8 +366,10 @@ class JarIntake {
   }) {
     final names = <String>[];
     try {
-      for (final entity
-          in directory.listSync(recursive: true, followLinks: false)) {
+      for (final entity in directory.listSync(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is! File) continue;
         names.add(p.relative(entity.path, from: directory.path));
         if (names.length >= maxEntries) break;
@@ -305,6 +394,7 @@ class JarIntake {
       names,
       expectedClass: expectedClass,
       isDirectory: true,
+      scanDex: (dexNames) => _scanDirectoryDex(directory.path, dexNames),
     );
   }
 
@@ -313,6 +403,7 @@ class JarIntake {
     List<String> names, {
     String? expectedClass,
     bool isDirectory = false,
+    ShellScan Function(List<String> dexEntries)? scanDex,
   }) {
     final dex = <String>[];
     final native = <String>[];
@@ -355,6 +446,20 @@ class JarIntake {
         sourceEntries: sources,
         expectedClass: expectedClass,
         entryClassFound: found,
+      );
+    }
+    final guard = _scanShellGuard(sourcePath, names, dex, isDirectory, scanDex);
+    if (guard.guarded || guard.failure != null) {
+      return JarInspection(
+        verdict: guard.guarded ? JarVerdict.shellGuard : JarVerdict.androidJar,
+        sourcePath: sourcePath,
+        entryCount: names.length,
+        dexEntries: dex,
+        classEntries: classes,
+        sourceEntries: sources,
+        expectedClass: expectedClass,
+        entryClassFound: found,
+        note: guard.failure ?? '',
       );
     }
     if (dex.isNotEmpty) {
@@ -401,27 +506,326 @@ class JarIntake {
     );
   }
 
-  /// 读取 zip 中央目录里的**条目名**。返回 null 表示无法按 zip 解析。
-  static List<String>? _readZipEntryNames(String path) {
-    InputFileStream? stream;
+  /// 读取 zip **中央目录**（不解压任何条目）作为检测输入。
+  ///
+  /// 为什么不用 `ZipDecoder`：它在 `decodeStream` 里会**急切解压**符号链接条目，
+  /// 且 `content` 的膨胀量只受内存限制。检测只需要条目名与声明大小，自己走中央
+  /// 目录既能拿到完整清单（不再被 `maxEntries` 截断而漏掉骨架里的 lib/*.so），
+  /// 也不会因为一个「声明 1 字节、实际 40 MiB」的条目把内存打爆。
+  ///
+  /// 返回 null 表示无法按 zip 完整解析——调用方必须按「无法确认」处理，不得乐观放行。
+  static _ZipCatalog? _readZipCatalog(String path) {
+    RandomAccessFile? handle;
     try {
-      stream = InputFileStream(path);
-      final archive = ZipDecoder().decodeStream(stream);
-      if (archive.files.isEmpty) return null;
-      final names = <String>[];
-      for (final file in archive.files) {
-        names.add(file.name);
-        if (names.length >= maxEntries) break;
+      handle = File(path).openSync();
+      final length = handle.lengthSync();
+      if (length < 22) return null;
+      final tailLength = length < 66 * 1024 ? length : 66 * 1024;
+      handle.setPositionSync(length - tailLength);
+      final tail = handle.readSync(tailLength);
+      final eocd = _findEndOfCentralDirectory(tail);
+      if (eocd < 0) return null;
+      final totalEntries = _le16(tail, eocd + 10);
+      final directorySize = _le32(tail, eocd + 12);
+      final directoryOffset = _le32(tail, eocd + 16);
+      // zip64 与本实现的定长字段不兼容：如实报「无法完整检测」，不猜。
+      if (totalEntries == 0xffff ||
+          directorySize == 0xffffffff ||
+          directoryOffset == 0xffffffff) {
+        return null;
       }
-      return names;
+      if (totalEntries == 0) return null;
+      if (directorySize > _maxDirectoryBytes) return null;
+      if (directoryOffset + directorySize > length) return null;
+      handle.setPositionSync(directoryOffset);
+      final directory = handle.readSync(directorySize);
+      final entries = <_ZipEntry>[];
+      var cursor = 0;
+      while (cursor + 46 <= directory.length) {
+        if (_le32(directory, cursor) != 0x02014b50) return null;
+        final madeBy = _le16(directory, cursor + 4);
+        final method = _le16(directory, cursor + 10);
+        final compressedSize = _le32(directory, cursor + 20);
+        final uncompressedSize = _le32(directory, cursor + 24);
+        final nameLength = _le16(directory, cursor + 28);
+        final extraLength = _le16(directory, cursor + 30);
+        final commentLength = _le16(directory, cursor + 32);
+        final externalAttributes = _le32(directory, cursor + 38);
+        final localOffset = _le32(directory, cursor + 42);
+        final nameStart = cursor + 46;
+        final nameEnd = nameStart + nameLength;
+        if (nameEnd > directory.length) return null;
+        entries.add(
+          _ZipEntry(
+            name: utf8.decode(
+              directory.sublist(nameStart, nameEnd),
+              allowMalformed: true,
+            ),
+            method: method,
+            compressedSize: compressedSize,
+            uncompressedSize: uncompressedSize,
+            localHeaderOffset: localOffset,
+            // 0xA000 是 UNIX 符号链接；archive 会为它急切解压目标路径。
+            isSymbolicLink:
+                (madeBy >> 8) == 3 &&
+                ((externalAttributes >> 16) & 0xf000) == 0xa000,
+          ),
+        );
+        cursor = nameEnd + extraLength + commentLength;
+      }
+      return _ZipCatalog(
+        entries: entries,
+        totalEntries: totalEntries,
+        centralDirectoryOffset: directoryOffset,
+        centralDirectorySize: directorySize,
+      );
     } catch (_) {
       return null;
     } finally {
       // Windows 上必须释放句柄，否则紧接着的移动/删除会失败。
       try {
-        stream?.closeSync();
+        handle?.closeSync();
       } catch (_) {}
     }
+  }
+
+  /// 中央目录本身的大小上限：超过就不做检测（视为无法完整确认）。
+  static const int _maxDirectoryBytes = 16 * 1024 * 1024;
+
+  static int _findEndOfCentralDirectory(List<int> tail) {
+    for (var offset = tail.length - 22; offset >= 0; offset--) {
+      if (_le32(tail, offset) == 0x06054b50) return offset;
+    }
+    return -1;
+  }
+
+  static int _le16(List<int> bytes, int offset) =>
+      bytes[offset] | (bytes[offset + 1] << 8);
+
+  static int _le32(List<int> bytes, int offset) =>
+      bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24);
+
+  /// 只在**读取时**限量：预算必须约束真正读到的字节数，而不是 zip 头里声明的
+  /// 大小（后者由攻击者填写，声明 1 字节也能解出 40 MiB）。
+  static const int _guardScanBudget = 32 * 1024 * 1024;
+  static const int _guardScanBlock = 64 * 1024;
+
+  /// 逐块扫描 dex：先拼上跨块边界的尾部再判定，避免标记被切在块之间而漏检。
+  static ({List<int> tail, bool found}) _scanChunk(
+    List<int> previousTail,
+    List<int> chunk,
+  ) {
+    final buffer = <int>[...previousTail, ...chunk];
+    for (final descriptor in _guardDescriptors) {
+      if (_containsAsciiBytes(buffer, descriptor)) {
+        return (tail: const <int>[], found: true);
+      }
+    }
+    final keep = _guardDescriptors
+        .map((descriptor) => descriptor.length - 1)
+        .reduce((a, b) => a > b ? a : b);
+    return (
+      tail: buffer.length <= keep
+          ? buffer
+          : buffer.sublist(buffer.length - keep),
+      found: false,
+    );
+  }
+
+  static ShellScan _scanDirectoryDex(String root, List<String> dexEntries) {
+    var read = 0;
+    var tail = const <int>[];
+    try {
+      for (final name in dexEntries) {
+        final source = File(p.join(root, name)).openSync();
+        try {
+          while (true) {
+            final remaining = _guardScanBudget - read;
+            if (remaining <= 0) {
+              return (guarded: false, failure: '加固壳检测超过32 MiB预算');
+            }
+            final block = source.readSync(
+              remaining < _guardScanBlock ? remaining : _guardScanBlock,
+            );
+            if (block.isEmpty) break;
+            read += block.length;
+            final scanned = _scanChunk(tail, block);
+            if (scanned.found) return (guarded: true, failure: null);
+            tail = scanned.tail;
+          }
+        } finally {
+          source.closeSync();
+        }
+      }
+      return (guarded: false, failure: null);
+    } catch (_) {
+      return (guarded: false, failure: '加固壳检测未完成：dex 内容不可读取');
+    }
+  }
+
+  /// 从 jar 里按块读出 dex 条目内容并扫描。
+  ///
+  /// 两条硬约束，缺一条这个检测就会被恶意 zip 击穿：
+  /// 1. 只从**本地文件头记录的真实偏移**开始读，绝不信中央目录里声明的边界；
+  /// 2. 压缩条目的解压输出也要限量——deflate 的膨胀比可达 1000:1，只压压缩大小没用。
+  static ShellScan _scanJarDex(
+    String path,
+    _ZipCatalog catalog,
+    List<String> dexEntries,
+  ) {
+    RandomAccessFile? handle;
+    var read = 0;
+    var tail = const <int>[];
+    try {
+      handle = File(path).openSync();
+      for (final entry in catalog.entries) {
+        if (!dexEntries.contains(entry.name)) continue;
+        final dataStart = _localDataOffset(handle, entry);
+        if (dataStart == null) {
+          return (guarded: false, failure: '加固壳检测未完成：条目偏移不可读');
+        }
+        if (entry.method != 0 && entry.method != 8) {
+          return (guarded: false, failure: '加固壳检测未完成：不支持的压缩方式');
+        }
+        final remaining = _guardScanBudget - read;
+        if (remaining <= 0) {
+          return (guarded: false, failure: '加固壳检测超过32 MiB预算');
+        }
+        // 压缩数据本身也限量：超过剩余预算就不必读了，直接如实报预算不足。
+        if (entry.compressedSize > remaining) {
+          return (guarded: false, failure: '加固壳检测超过32 MiB预算');
+        }
+        handle.setPositionSync(dataStart);
+        final compressed = handle.readSync(entry.compressedSize);
+        if (compressed.length != entry.compressedSize) {
+          return (guarded: false, failure: '加固壳检测未完成：条目数据被截断');
+        }
+        if (!_endsAtStructure(
+          handle,
+          dataStart + entry.compressedSize,
+          catalog,
+          handle.lengthSync(),
+        )) {
+          return (guarded: false, failure: '加固壳检测未完成：条目大小声明与实际不符');
+        }
+        final blocks = entry.method == 0
+            ? <List<int>>[compressed]
+            : _inflateBounded(compressed, remaining);
+        if (blocks == null) {
+          return (guarded: false, failure: '加固壳检测超过32 MiB预算');
+        }
+        for (final block in blocks) {
+          read += block.length;
+          if (read > _guardScanBudget) {
+            return (guarded: false, failure: '加固壳检测超过32 MiB预算');
+          }
+          final scanned = _scanChunk(tail, block);
+          if (scanned.found) return (guarded: true, failure: null);
+          tail = scanned.tail;
+        }
+      }
+      return (guarded: false, failure: null);
+    } catch (_) {
+      return (guarded: false, failure: '加固壳检测未完成：dex 内容不可读取');
+    } finally {
+      try {
+        handle?.closeSync();
+      } catch (_) {}
+    }
+  }
+
+  /// 同步解压 raw deflate，输出超过 [limit] 立即放弃（返回 null）。
+  static List<List<int>>? _inflateBounded(List<int> compressed, int limit) {
+    final blocks = <List<int>>[];
+    var produced = 0;
+    var overflow = false;
+    final sink = _LimitedByteSink((block) {
+      produced += block.length;
+      if (produced > limit) {
+        overflow = true;
+        return false;
+      }
+      blocks.add(block);
+      return true;
+    });
+    // zip 的 method 8 是**裸 deflate**，没有 zlib 头/尾；用 zlib 包装解码会抛。
+    final conversion = ZLibDecoder(raw: true).startChunkedConversion(sink);
+    conversion.add(compressed);
+    if (overflow) return null;
+    conversion.close();
+    return overflow ? null : blocks;
+  }
+
+  /// 条目的数据区是否真的在声明大小处结束。
+  ///
+  /// 声明大小可能说谎（声明 1 字节、实际 36 MiB）。若不校验，检测只读 1 字节
+  /// 就宣称「扫过整个 dex」，然后给出可转译结论——把未检查的内容当成检查过。
+  /// 数据区之后必须是下一个本地文件头，或中央目录本身。
+  static bool _endsAtStructure(
+    RandomAccessFile handle,
+    int dataEnd,
+    _ZipCatalog catalog,
+    int fileLength,
+  ) {
+    if (dataEnd > fileLength) return false;
+    if (dataEnd == catalog.centralDirectoryOffset) return true;
+    if (dataEnd + 4 > fileLength) return false;
+    handle.setPositionSync(dataEnd);
+    final probe = handle.readSync(4);
+    if (probe.length != 4) return false;
+    if (_le32(probe, 0) == 0x04034b50) return true;
+    // zip 允许本地头与中央目录之间夹着数据描述符或归档级注释。
+    return _le32(probe, 0) == 0x02014b50 || _le32(probe, 0) == 0x08074b50;
+  }
+
+  static int? _localDataOffset(RandomAccessFile handle, _ZipEntry entry) {
+    handle.setPositionSync(entry.localHeaderOffset);
+    final header = handle.readSync(30);
+    if (header.length < 30 || _le32(header, 0) != 0x04034b50) return null;
+    final nameLength = _le16(header, 26);
+    final extraLength = _le16(header, 28);
+    return entry.localHeaderOffset + 30 + nameLength + extraLength;
+  }
+
+  static const _guardDescriptors = [
+    'DexNative;',
+    'BaseSpiderGuard;',
+    'Shinidie;',
+  ];
+
+  static ({bool guarded, String? failure}) _scanShellGuard(
+    String path,
+    List<String> names,
+    List<String> dexEntries,
+    bool isDirectory,
+    ShellScan Function(List<String> dexEntries)? scanDex,
+  ) {
+    if (names.any((name) {
+      final normalized = name.replaceAll('\\', '/').toLowerCase();
+      return normalized.startsWith('assets/') && normalized.endsWith('.guard');
+    })) {
+      return (guarded: true, failure: null);
+    }
+    if (dexEntries.isEmpty || scanDex == null) {
+      return (guarded: false, failure: null);
+    }
+    final scanned = scanDex(dexEntries);
+    return (guarded: scanned.guarded, failure: scanned.failure);
+  }
+
+  static bool _containsAsciiBytes(List<int> bytes, String marker) {
+    final pattern = marker.codeUnits;
+    outer:
+    for (var offset = 0; offset + pattern.length <= bytes.length; offset++) {
+      for (var index = 0; index < pattern.length; index++) {
+        if (bytes[offset + index] != pattern[index]) continue outer;
+      }
+      return true;
+    }
+    return false;
   }
 
   static bool _hasZipMagic(File file) {
@@ -506,12 +910,13 @@ class JarIntake {
   static String? _entryIn(Directory directory) {
     final index = File(p.join(directory.path, 'index.jar'));
     if (index.existsSync()) return index.path;
-    final jars = directory
-        .listSync(followLinks: false)
-        .whereType<File>()
-        .where((file) => file.path.toLowerCase().endsWith('.jar'))
-        .toList()
-      ..sort((a, b) => a.path.compareTo(b.path));
+    final jars =
+        directory
+            .listSync(followLinks: false)
+            .whereType<File>()
+            .where((file) => file.path.toLowerCase().endsWith('.jar'))
+            .toList()
+          ..sort((a, b) => a.path.compareTo(b.path));
     if (jars.isNotEmpty) return jars.first.path;
     for (final entity in directory.listSync(followLinks: false)) {
       if (entity is Directory && _containsClass(entity)) return entity.path;
@@ -521,8 +926,10 @@ class JarIntake {
 
   static bool _containsClass(Directory directory) {
     try {
-      for (final entity
-          in directory.listSync(recursive: true, followLinks: false)) {
+      for (final entity in directory.listSync(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is File && entity.path.toLowerCase().endsWith('.class')) {
           return true;
         }
@@ -552,7 +959,8 @@ class JarIntake {
     Future<Map<String, Object?>> Function({
       required String siteDir,
       required String archive,
-    })? translateDex,
+    })?
+    translateDex,
   }) async {
     final expected = className?.trim().isNotEmpty == true
         ? className!.trim()
@@ -679,7 +1087,8 @@ class JarIntake {
     required Future<Map<String, Object?>> Function({
       required String siteDir,
       required String archive,
-    }) translate,
+    })
+    translate,
     required String siteKey,
     required String siteDir,
     required String archive,
@@ -788,13 +1197,7 @@ class JarIntake {
         'name': siteKey,
         'runtime': 'jvm',
         'entry': entryName,
-        'capabilities': const [
-          'home',
-          'category',
-          'detail',
-          'search',
-          'play',
-        ],
+        'capabilities': const ['home', 'category', 'detail', 'search', 'play'],
         'permissions': const {
           'network': true,
           'localProxy': false,
@@ -898,8 +1301,10 @@ class JarIntake {
   /// 目录内容哈希：按相对路径排序后累积「相对路径 + 内容」（不依赖 mtime，可复现）。
   static Future<String> _directorySha256(Directory directory) async {
     final files = <File>[];
-    await for (final entity
-        in directory.list(recursive: true, followLinks: false)) {
+    await for (final entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is File) files.add(entity);
     }
     files.sort((a, b) => a.path.compareTo(b.path));
