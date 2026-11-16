@@ -167,6 +167,62 @@ class PlaybackOptionsPage extends StatelessWidget {
               ],
             ),
             SettingsSection(
+              title: '画面',
+              description: '只在片源是 HDR、显示端只能吃 SDR 时起作用；改动在下次播放生效。',
+              children: [
+                ListTile(
+                  key: const ValueKey('settings-player-tone-mapping'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('HDR 色调映射'),
+                  subtitle: Text(
+                    '把高动态范围压回可用亮度；'
+                    '换算法主要影响亮部细节与整体风格，当前为「${state.playerOptions.toneMapping.label}」',
+                  ),
+                  trailing: DropdownButton<HdrToneMapping>(
+                    key: const ValueKey('settings-player-tone-mapping-menu'),
+                    value: state.playerOptions.toneMapping,
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      for (final mode in HdrToneMapping.values)
+                        DropdownMenuItem(value: mode, child: Text(mode.label)),
+                    ],
+                    onChanged: (mode) async {
+                      if (mode == null) return;
+                      await state.setPlayerOptions(
+                        state.playerOptions.copyWith(toneMapping: mode),
+                      );
+                    },
+                  ),
+                ),
+                ListTile(
+                  key: const ValueKey('settings-player-hdr-peak'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('峰值亮度计算'),
+                  subtitle: Text(
+                    '按帧统计峰值后再压缩，暗场更干净但更吃性能；'
+                    '当前为「${state.playerOptions.hdrPeakCompute.label}」',
+                  ),
+                  trailing: DropdownButton<HdrPeakCompute>(
+                    key: const ValueKey('settings-player-hdr-peak-menu'),
+                    value: state.playerOptions.hdrPeakCompute,
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      for (final mode in HdrPeakCompute.values)
+                        DropdownMenuItem(value: mode, child: Text(mode.label)),
+                    ],
+                    onChanged: (mode) async {
+                      if (mode == null) return;
+                      await state.setPlayerOptions(
+                        state.playerOptions.copyWith(hdrPeakCompute: mode),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+            SettingsSection(
               title: '缓存',
               children: [
                 Text(

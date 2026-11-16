@@ -315,6 +315,9 @@ void main() {
       expect(props['demuxer-max-bytes'], '${128 * 1024 * 1024}');
       expect(props['demuxer-max-back-bytes'], '${32 * 1024 * 1024}');
       expect(props['audio-spdif'], 'ac3,eac3,dts');
+      // HDR 两个键也走同一张表：默认值等于 mpv 默认。
+      expect(props['tone-mapping'], 'auto');
+      expect(props['hdr-compute-peak'], 'auto');
     });
 
     test('越界值被夹住，脏类型回落默认', () {
