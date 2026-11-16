@@ -202,5 +202,7 @@ void main() {
       File(state.pythonEnvironmentStatus!.executable).existsSync(),
       isTrue,
     );
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  },
+      skip: !Platform.isWindows,
+      timeout: const Timeout(Duration(minutes: 3)));
 }

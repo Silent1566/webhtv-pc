@@ -14,7 +14,7 @@ name: Desktop Release
 #   - Windows 便携 zip（不含 MSI）；Linux AppImage + deb（Ubuntu 22.04 / glibc 2.35 基线）；
 #   - 无自动更新（docs/phase9/README.md P2-7：更新签名通道未定）；
 #   - 代码签名为可选：配置 secrets 后签名，否则在 notes/BUILD_INFO/release-info.json 标注未签名；
-#   - 包内自带 Node 运行时；Python/JDK 解释器不随包，对应站源需要本机安装 Python 3 / JDK 17+。
+#   - 包内自带 Node 与 Python 3.14.10 离线运行时；只有 JVM 对应站源需要本机安装 JDK 17+。
 
 on:
   workflow_dispatch:
@@ -452,7 +452,7 @@ jobs:
           notes = os.environ.get('RELEASE_NOTES_INPUT', '').replace('\\n', '\n').strip()
           if not notes:
               notes = f"WebHTV PC {os.environ['APP_VERSION']} ({os.environ['APP_CHANNEL']}) — Linux x86_64"
-          notes += '\n\nUnsigned AppImage/deb. Bundled Node; Python 3 and JDK 17+ are system requirements for corresponding sources. Ubuntu 22.04 / glibc 2.35 build baseline.\n'
+          notes += '\n\nUnsigned AppImage/deb. Bundled Node and Python 3.14.10 with dependencies; Python preparation and repair are offline, no system Python required. Only JVM sources require system JDK 17+. Ubuntu 22.04 / glibc 2.35 build baseline.\n'
           Path('build').mkdir(exist_ok=True)
           Path('build/linux-release-notes.md').write_text(notes)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -470,6 +470,10 @@ jobs:
       - name: Static analysis
         run: dart analyze
         working-directory: apps/desktop-flutter
+      - name: Prepare verified offline Linux Python runtime
+        run: |-
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --cache-dir .local/python-runtime-linux/cache --lock-file scripts/python-runtime-linux.lock.json
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --validate-only --offline
       - name: Build Linux release
         run: flutter build linux --release "--dart-define=APP_VERSION=$APP_VERSION"
         working-directory: apps/desktop-flutter
@@ -482,6 +486,14 @@ jobs:
         env:
           GDK_BACKEND: x11
           LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Linux bundled Python native integration
+        run: xvfb-run -a flutter test test/linux_bundled_python_integration_test.dart
+        working-directory: apps/desktop-flutter
+        timeout-minutes: 30
+        env:
+          WEBHTV_REQUIRE_BUNDLED_PYTHON: '1'
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'
       - name: Packaging and workflow contract tests
         run: python3 -m unittest discover -s tests -p 'test_*linux*.py'
       - name: Package AppImage and deb
@@ -491,7 +503,7 @@ jobs:
             --output-dir dist/linux --version "$APP_VERSION" --build-number "$APP_BUILD" \
             --channel "$APP_CHANNEL" --commit "$GITHUB_SHA" --short-commit "$APP_SHORT_COMMIT" \
             --built-at "$APP_BUILT_AT" --flutter-version "$FLUTTER_VERSION" \
-            --node-version v22.23.4 --appimagetool "$APPIMAGETOOL" \
+            --python-runtime-dir runtime/python --node-version v22.23.4 --appimagetool "$APPIMAGETOOL" \
             --tag "$RELEASE_TAG" --notes-file build/linux-release-notes.md
         env:
           APP_VERSION: ${{ needs.meta.outputs.version }}
@@ -514,9 +526,15 @@ jobs:
           import os
           import re
           import signal
+          import json
+          import sys
+          import zipfile
           import subprocess
           import time
           from pathlib import Path
+
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from prepare_python_runtime_linux import validate_bundle
 
           root = Path(os.environ['SMOKE_DIR'])
           version = os.environ['APP_VERSION']
@@ -539,6 +557,29 @@ jobs:
                   if not (payload / relative).exists():
                       raise SystemExit(f'Missing packaged runtime: {payload / relative}')
               subprocess.run([str(payload / 'runtime/node/node'), '--version'], check=True)
+              bundle = validate_bundle(payload / 'runtime/python')
+              isolated = root / ('python-' + payload.parent.name)
+              isolated.mkdir()
+              with zipfile.ZipFile(payload / 'runtime/python/python-runtime.zip') as archive:
+                  archive.extractall(isolated)
+              executable = isolated / 'bin/python3'
+              executable.chmod(0o700)
+              env = dict(os.environ, HOME=str(isolated), XDG_CONFIG_HOME=str(isolated / 'config'),
+                         XDG_DATA_HOME=str(isolated / 'data'), PATH='')
+              for key in tuple(env):
+                  if key.startswith('PYTHON') or key in ('LD_LIBRARY_PATH', 'LD_PRELOAD'):
+                      env.pop(key)
+              probe = subprocess.run([str(executable), '-I', '-B', '-c',
+                  "import sys,json,requests,Crypto,lxml.etree,bs4; "
+                  "print(json.dumps({'version':sys.version.split()[0], 'prefix':sys.prefix, "
+                  "'modules':[m.__file__ for m in (requests,Crypto,lxml.etree,bs4)]}))"],
+                  cwd=isolated, env=env, capture_output=True, text=True, timeout=30, check=True)
+              result = json.loads(probe.stdout)
+              if result['version'] != '3.14.10' or not Path(result['prefix']).resolve().is_relative_to(isolated.resolve()):
+                  raise SystemExit('Packaged Python version/prefix mismatch')
+              if any(not Path(path).resolve().is_relative_to(isolated.resolve()) for path in result['modules']):
+                  raise SystemExit('Packaged Python imported a module outside isolated runtime')
+              print(f"Packaged Python validated and ran offline: {payload} sha256={bundle['archiveSha256']}")
           # Run from outside the payload and from a path with spaces/non-ASCII.
           relocated = root / 'client with spaces 中文'
           payloads[0].rename(relocated)

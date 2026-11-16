@@ -3,12 +3,13 @@
 
 Python 3 standard library only. Build on Ubuntu 22.04 for that glibc baseline;
 AppImage still requires compatible glibc, display/graphics drivers, and optional
-system Python 3 / JDK 17+ for those sidecars. Never run on untrusted ELF inputs:
+system JDK 17+ for JVM sidecars; Python 3.14.10 is bundled offline. Never run on untrusted ELF inputs:
 ldd is a native build-tool inspection, not an executable sandbox.
 """
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import importlib
 import json
 import os
 import posixpath
@@ -92,7 +93,7 @@ def validate_tree(source, boundary):
         raise PackageError(f"Unsupported or missing input: {source}")
 
 
-def copy_safe(source, destination, boundary):
+def copy_safe(source, destination, boundary, excluded=EXCLUDED):
     validate_tree(source, boundary)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
@@ -100,8 +101,8 @@ def copy_safe(source, destination, boundary):
     elif source.is_dir():
         destination.mkdir(exist_ok=True)
         for child in sorted(source.iterdir()):
-            if child.name not in EXCLUDED:
-                copy_safe(child, destination / child.name, boundary)
+            if child.name not in excluded:
+                copy_safe(child, destination / child.name, boundary, excluded)
     else:
         shutil.copy2(source, destination)
         destination.chmod(stat.S_IMODE(source.stat().st_mode) & 0o777)
@@ -338,10 +339,42 @@ def notices(payload, native_packages):
     write_text(payload / "THIRD-PARTY-NOTICES.txt", "\n".join(sections) + "\n")
 
 
+def validate_python_runtime(directory):
+    directory = Path(directory).absolute()
+    if any(path.is_symlink() for path in [directory, *directory.parents]):
+        raise PackageError(f"Python runtime must not traverse symlinks: {directory}")
+    if not directory.is_dir() or {path.name for path in directory.iterdir()} != {"python-runtime.zip", "bundle.json"}:
+        raise PackageError(f"Python runtime requires exactly python-runtime.zip and bundle.json: {directory}")
+    for name in ("python-runtime.zip", "bundle.json"):
+        path = directory / name
+        if path.is_symlink() or not path.is_file():
+            raise PackageError(f"Python runtime requires regular files: {path}")
+    scripts = str(Path(__file__).resolve().parent)
+    sys.path.insert(0, scripts)
+    try:
+        validator = importlib.import_module("prepare_python_runtime_linux")
+    except ImportError as error:
+        raise PackageError("Linux Python bundle validator is unavailable") from error
+    finally:
+        sys.path.pop(0)
+    return validator.validate_bundle(directory)
+
+
+def stage_python_runtime(directory, payload):
+    validate_python_runtime(directory)
+    target = payload / "runtime/python"
+    target.mkdir(parents=True)
+    for name in ("python-runtime.zip", "bundle.json"):
+        shutil.copyfile(Path(directory) / name, target / name)
+        (target / name).chmod(0o644)
+    return validate_python_runtime(target)
+
+
 def stage_payload(bundle, runtime, payload):
     payload.mkdir()
     for name in ["webhtv_pc", "lib", "data"]:
-        copy_safe(bundle / name, payload / name, bundle)
+        excluded = EXCLUDED | {"config", "configs.json", "settings.json", "webhtv-pc.sqlite3", "webhtv-pc.sqlite3-wal", "webhtv-pc.sqlite3-shm"} if name == "data" else EXCLUDED
+        copy_safe(bundle / name, payload / name, bundle, excluded)
     stage_sidecars(payload)
     binary = runtime / "bin/node" if (runtime / "bin/node").exists() else runtime / "node"
     # A provided relative Node symlink is validated, then flattened because only Node is shipped.
@@ -381,6 +414,7 @@ def parse_arguments(argv):
     parser.add_argument("--channel", default="dev")
     for name in ["commit", "short-commit", "built-at", "flutter-version", "tag", "notes-file", "node-runtime-dir"]:
         parser.add_argument("--" + name, default="")
+    parser.add_argument("--python-runtime-dir", default=str(REPO_ROOT / "runtime/python"))
     parser.add_argument("--node-version", default="v22.23.4")
     parser.add_argument("--appimagetool", default="appimagetool")
     parser.add_argument("--formats", default="appimage,deb")
@@ -401,7 +435,7 @@ def validate_arguments(args):
         raise PackageError("Formats must be appimage,deb or either single format")
     bundle = Path(args.build_dir).absolute()
     output = Path(args.output_dir).absolute()
-    inputs = [bundle, REPO_ROOT / "sidecars"]
+    inputs = [bundle, REPO_ROOT / "sidecars", Path(args.python_runtime_dir).absolute()]
     if args.node_runtime_dir:
         inputs.append(Path(args.node_runtime_dir).absolute())
     if args.notes_file:
@@ -416,6 +450,7 @@ def validate_arguments(args):
         raise PackageError(f"Output must not traverse symlinks: {output}")
     if output.exists() and not output.is_dir():
         raise PackageError(f"Output is not a directory: {output}")
+    validate_python_runtime(args.python_runtime_dir)
     require_file(bundle / "webhtv_pc")
     if not (bundle / "webhtv_pc").stat().st_mode & 0o111:
         raise PackageError("Flutter executable is not executable")
@@ -453,6 +488,7 @@ def build(args):
         runtime = resolve_node(args.node_version, args.node_runtime_dir, work / "node-download")
         payload = work / "payload"
         node_version_text = stage_payload(bundle, runtime, payload)
+        python_bundle = stage_python_runtime(args.python_runtime_dir, payload)
         if node_version_text != args.node_version:
             raise PackageError(f"Node version mismatch: expected {args.node_version}, got {node_version_text}")
         dependencies, packages = native_inventory(payload)
@@ -461,7 +497,7 @@ def build(args):
         inventory["bundleLibraries"] = [{"path": path.relative_to(payload).as_posix(), "sha256": hash_file(path)}
                                         for path in sorted((payload / "lib").rglob("*")) if path.is_file()]
         write_json(payload / "BUILD-INFO.json", inventory)
-        metadata["runtimes"] = {"bundledHosts": ["python", "node", "jvm"], "bundled": [{"id": "node", "version": args.node_version, "path": "runtime/node/node", "sha256": hash_file(payload / "runtime/node/node"), "fileVersion": node_version_text}], "requiresLocal": ["Python 3", "JDK 17+"]}
+        metadata["runtimes"] = {"bundledHosts": ["python", "node", "jvm"], "bundled": [{"id": "node", "version": args.node_version, "path": "runtime/node/node", "sha256": hash_file(payload / "runtime/node/node"), "fileVersion": node_version_text}, {"id": "python", "version": python_bundle["pythonVersion"], "path": "runtime/python/python-runtime.zip", "sha256": python_bundle["archiveSha256"]}], "requiresLocal": ["JDK 17+"]}
         metadata["native"] = {"packages": packages, "requiresLocal": ["compatible glibc (build baseline Ubuntu 22.04)", "X11 or Wayland", "graphics drivers"]}
         assets = []
         for format_name in formats:
@@ -490,7 +526,7 @@ def build(args):
                 integrate(deb)
                 debversion = args.version.replace("-", "~") + ("" if args.channel == "stable" else "~" + args.channel) + "-" + args.build_number
                 depends = {p["package"] + " (>= " + p["version"] + ")" for p in packages}
-                control = f"Package: webhtv-pc\nVersion: {debversion}\nArchitecture: amd64\nMaintainer: WebHTV PC contributors\nSection: video\nPriority: optional\nDepends: {', '.join(sorted(depends))}\nRecommends: python3, openjdk-17-jre-headless\nDescription: WebHTV PC desktop media player\n"
+                control = f"Package: webhtv-pc\nVersion: {debversion}\nArchitecture: amd64\nMaintainer: WebHTV PC contributors\nSection: video\nPriority: optional\nDepends: {', '.join(sorted(depends))}\nRecommends: openjdk-17-jre-headless\nDescription: WebHTV PC desktop media player\n"
                 write_text(deb / "DEBIAN/control", control)
                 command(["dpkg-deb", "--root-owner-group", "--build", deb, artifact])
             require_file(artifact)

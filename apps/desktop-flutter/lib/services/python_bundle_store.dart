@@ -4,6 +4,15 @@ const _zipCap = 64 * 1024 * 1024;
 const _expandedCap = 128 * 1024 * 1024;
 const _fileCap = 10000;
 
+String get _bundledPythonPlatform => switch (Abi.current()) {
+  Abi.windowsX64 => 'windows-x64',
+  Abi.linuxX64 => 'linux-x64',
+  _ => throw StateError('当前平台不支持内置 Python 运行时'),
+};
+
+String get _bundledPythonEntry =>
+    Platform.isWindows ? 'python.exe' : 'bin/python3';
+
 class _PythonBundleStore {
   _PythonBundleStore(String data, String config, {this.writeStamp})
     : root = p.join(p.absolute(data), 'runtime', 'python'),
@@ -51,7 +60,7 @@ class _PythonBundleStore {
           return null;
         }
       }
-      return p.join(directory, 'python.exe');
+      return p.join(directory, _bundledPythonEntry);
     } catch (error) {
       _pointerDamaged = true;
       metadataError = '运行时元数据损坏：$error；请离线修复或恢复默认';
@@ -154,7 +163,16 @@ class _PythonBundleStore {
       }
       File(p.join(stage.path, '.bundle.json'))
           .writeAsStringSync(jsonEncode(manifest), flush: true);
-      final executable = p.join(stage.path, 'python.exe');
+      final executable = p.join(stage.path, _bundledPythonEntry);
+      if (Platform.isLinux) {
+        final chmod = await Process.run('/bin/chmod', [
+          '700',
+          executable,
+        ], includeParentEnvironment: false);
+        if (chmod.exitCode != 0) {
+          throw StateError('无法设置 Python 可执行权限：${chmod.stderr}');
+        }
+      }
       final status = await probe(
         executable,
         const [],
@@ -187,7 +205,7 @@ Map<String, Map<String, dynamic>> _manifestFiles(
   Map<String, dynamic> manifest,
 ) {
   if (manifest['schemaVersion'] != 1 ||
-      manifest['platform'] != 'windows-x64' ||
+      manifest['platform'] != _bundledPythonPlatform ||
       manifest['archive'] != 'python-runtime.zip' ||
       manifest['pythonVersion'] is! String ||
       !RegExp(r'^3\.\d+\.\d+$').hasMatch(manifest['pythonVersion'] as String) ||
@@ -235,7 +253,9 @@ Map<String, Map<String, dynamic>> _manifestFiles(
     if (size > _expandedCap) throw StateError('清单展开超过 128MiB');
     result[path.toLowerCase()] = entry;
   }
-  if (!result.containsKey('python.exe')) throw StateError('清单缺少 python.exe');
+  if (!result.containsKey(_bundledPythonEntry)) {
+    throw StateError('清单缺少 $_bundledPythonEntry');
+  }
   for (final path in result.keys) {
     var parent = p.posix.dirname(path);
     while (parent != '.') {

@@ -14,6 +14,8 @@
 ///    避免同一操作重入；异步回调一律先查 `mounted`。
 library;
 
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -56,6 +58,8 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
   String? _message;
 
   AppState get _state => widget.state;
+  String get _executableName =>
+      Platform.isWindows ? 'python.exe' : 'Python 可执行文件';
 
   bool get _busy => _state.pythonEnvironmentBusy || _submitting;
 
@@ -106,7 +110,7 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
             children: [
               SettingsSection(
                 title: '当前运行环境',
-                description: '本软件自带专用 Python 与依赖；这里显示它实际用的解释器。',
+                description: '这里显示软件实际使用的 Python 解释器与依赖状态。',
                 children: [
                   Text(
                     _statusSummary(status),
@@ -215,14 +219,16 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
               ),
               SettingsSection(
                 title: '自定义解释器',
-                description: '只接受 python.exe 的完整路径；留空不会被提交。',
+                description: '只接受 $_executableName 的完整路径；留空不会被提交。',
                 children: [
                   TextField(
                     key: const ValueKey('python-environment-custom-path'),
                     controller: _customPath,
-                    decoration: const InputDecoration(
-                      labelText: 'python.exe 完整路径',
-                      hintText: r'D:\tools\python\python.exe',
+                    decoration: InputDecoration(
+                      labelText: '$_executableName 完整路径',
+                      hintText: Platform.isWindows
+                          ? r'D:\tools\python\python.exe'
+                          : '/usr/bin/python3',
                     ),
                     onSubmitted: (_) => _applyCustom(),
                   ),
@@ -233,7 +239,7 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
                         key: const ValueKey('python-environment-pick'),
                         onPressed: _busy ? null : _pickExecutable,
                         icon: const Icon(Icons.folder_open_outlined),
-                        label: const Text('选择 python.exe'),
+                        label: Text('选择 $_executableName'),
                       ),
                       FilledButton.tonalIcon(
                         key: const ValueKey('python-environment-custom-apply'),
@@ -429,7 +435,7 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
     if (_busy) return;
     final path = _customPath.text.trim();
     if (path.isEmpty) {
-      setState(() => _message = '请填写 python.exe 的完整路径后再使用自定义解释器。');
+      setState(() => _message = '请填写 $_executableName 的完整路径后再使用自定义解释器。');
       return;
     }
     await _runOperation(
@@ -467,12 +473,12 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
     }
   }
 
-  /// 真实文件对话框：只允许选 `.exe`，手输路径不受此限。
+  /// Windows 过滤 exe；Unix Python 可执行文件通常没有扩展名。
   Future<String?> _pickWithFilePicker() async {
     final file = await FilePicker.pickFile(
-      dialogTitle: '选择 python.exe',
-      type: FileType.custom,
-      allowedExtensions: const <String>['exe'],
+      dialogTitle: '选择 $_executableName',
+      type: Platform.isWindows ? FileType.custom : FileType.any,
+      allowedExtensions: Platform.isWindows ? const <String>['exe'] : null,
     );
     return file?.path;
   }
