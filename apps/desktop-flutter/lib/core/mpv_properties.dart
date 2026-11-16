@@ -239,6 +239,11 @@ final Map<String, MpvPropertyRule> _rules = {
     _isSpdifList,
     reason: '只允许 ac3 / eac3 / dts / dts-hd / truehd 的逗号列表',
   ),
+  'af': MpvPropertyRule(
+    'af',
+    (value) => value.isEmpty || value == 'dynaudnorm',
+    reason: '只允许空串或 dynaudnorm',
+  ),
   'tone-mapping': MpvPropertyRule(
     'tone-mapping',
     (value) => _inSet(value, _toneMappingValues),
