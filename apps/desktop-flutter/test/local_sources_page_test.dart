@@ -10,6 +10,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
@@ -17,6 +18,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/local_sources_page.dart';
+import 'package:webhtv_pc/ui/theme.dart';
 
 import 'local_source_sites_test.dart' show deleteTempWhenReleased;
 
@@ -60,6 +62,7 @@ Future<void> _pumpPage(
   WidgetTester tester,
   AppState state, {
   Size size = const Size(1000, 1600),
+  ThemeData? theme,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -67,7 +70,12 @@ Future<void> _pumpPage(
   // 每个用例的 AppState 都必须释放：否则它名下的定时器、日志与 sidecar
   // 回收会在 tearDown 删临时目录时还持有句柄（Windows 报 OS Error 32）。
   addTearDown(state.dispose);
-  await tester.pumpWidget(MaterialApp(home: LocalSourcesPage(state: state)));
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: theme,
+      home: LocalSourcesPage(state: state),
+    ),
+  );
   // 必须等首帧路由转场结束：转场期间 Navigator 会吸收指针，此时 tap 会静默打空。
   await tester.pumpAndSettle();
 }
@@ -82,7 +90,10 @@ Future<void> _scan(
   await _tap(tester, 'local-sources-scan');
   await _settleIo(
     tester,
-    ready ?? () => _key('candidate-$expectKey').evaluate().isNotEmpty,
+    () =>
+        tester.widget<FilledButton>(_key('local-sources-scan')).onPressed !=
+            null &&
+        (ready?.call() ?? _key('candidate-$expectKey').evaluate().isNotEmpty),
   );
 }
 
@@ -219,7 +230,9 @@ void main() {
       tester.widget<Text>(_key('local-sources-result')).data,
       '导入结果：成功 1，失败 0',
     );
-    expect(_selectionCount(tester), '已选 0 / 3');
+    expect(_selectionCount(tester), '已选 1 / 3');
+    expect(tester.widget<CheckboxListTile>(_key('candidate-a')).value, isTrue);
+    expect(_key('local-sources-import'), findsNothing);
   });
 
   testWidgets('重扫清理上一轮的勾选', (tester) async {
@@ -244,6 +257,217 @@ void main() {
     expect(_selectionCount(tester), '已选 0 / 2');
     expect(find.text('导入所选（3）'), findsNothing);
   });
+
+  testWidgets('重扫自动勾选已导入的 Python、JavaScript 和 HTML 源', (tester) async {
+    final root = makeRoot('rescan');
+    await tester.runAsync(() async {
+      final report = await state.scanLocalSources(root.path);
+      final result = await state.importLocalSources(report.candidates);
+      expect(result.importedCount, 3);
+      expect(result.rejectedCount, 0);
+    });
+    File(p.join(root.path, 'd.py')).writeAsStringSync('class Spider: pass');
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+
+    for (final key in ['a', 'b', 'c']) {
+      expect(
+        tester.widget<CheckboxListTile>(_key('candidate-$key')).value,
+        isTrue,
+        reason: key,
+      );
+      expect(_key('candidate-imported-$key'), findsOneWidget);
+    }
+    expect(tester.widget<CheckboxListTile>(_key('candidate-d')).value, isFalse);
+    expect(_selectionCount(tester), '已选 3 / 4');
+    expect(_key('local-sources-import'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('导入跳过已导入的勾选项，保留原文件与停用状态', (tester) async {
+    final root = makeRoot('skipimported');
+    await tester.runAsync(() async {
+      final report = await state.scanLocalSources(root.path);
+      final result = await state.importLocalSources(
+        report.candidates.where((item) => item.key == 'a').toList(),
+      );
+      expect(result.importedCount, 1);
+      await state.setLocalSourceEnabled('a', false);
+    });
+    final installed = File(p.join(state.spiderRoot, 'local', 'a', 'spider.py'));
+    final before = installed.readAsBytesSync();
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    expect(tester.widget<CheckboxListTile>(_key('candidate-a')).value, isTrue);
+    await _tap(tester, 'candidate-b');
+    expect(find.text('导入所选（1）'), findsOneWidget);
+    await _tap(tester, 'local-sources-import');
+    await _settleIo(
+      tester,
+      () => _key('local-sources-result').evaluate().isNotEmpty,
+    );
+    expect(
+      tester.widget<Text>(_key('local-sources-result')).data,
+      '导入结果：成功 1，失败 0',
+    );
+    expect(state.localSpiders.map((item) => item.key), ['a', 'b']);
+    expect(installed.readAsBytesSync(), before);
+    expect(state.localSourceEnabled('a'), isFalse);
+    expect(state.webHomeSources, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('已导入和未导入筛选保留勾选，全选只改变当前可见结果', (tester) async {
+    final root = makeRoot('filter');
+    final changedTime = DateTime(2024, 1, 1);
+    for (final file in root.listSync(recursive: true).whereType<File>()) {
+      file.setLastModifiedSync(changedTime);
+    }
+    await tester.runAsync(() async {
+      final report = await state.scanLocalSources(root.path);
+      await state.importLocalSources(
+        report.candidates.where((item) => item.key == 'a').toList(),
+      );
+    });
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    expect(find.text('全部 3'), findsOneWidget);
+    expect(find.text('未导入 2'), findsOneWidget);
+    expect(find.text('已导入 1'), findsOneWidget);
+    await _tap(tester, 'local-sources-filter-unimported');
+    expect(_candidateOrder(tester), ['candidate-b', 'candidate-c']);
+    await _tap(tester, 'local-sources-select-all');
+    expect(_selectionCount(tester), '已选 3 / 3 · 当前显示 2');
+    await _tap(tester, 'local-sources-select-all');
+    expect(_selectionCount(tester), '已选 1 / 3 · 当前显示 2');
+    await _tap(tester, 'local-sources-filter-imported');
+    expect(_candidateOrder(tester), ['candidate-a']);
+    expect(tester.widget<CheckboxListTile>(_key('candidate-a')).value, isTrue);
+    await _tap(tester, 'local-sources-filter-all');
+    expect(_candidateTiles(tester).length, 3);
+    expect(tester.widget<CheckboxListTile>(_key('candidate-b')).value, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('模糊搜索匹配名称 key 和路径，可清空搜索且无匹配时有提示', (tester) async {
+    final root = makeRoot('search');
+    File(p.join(root.path, 'csp_demo.py'))
+        .writeAsStringSync('class Spider: pass');
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    await _tap(tester, 'candidate-b');
+    await tester.enterText(_key('local-sources-query'), 'CSPDEMO');
+    await tester.pump();
+    expect(_candidateOrder(tester), ['candidate-csp_demo']);
+    await tester.enterText(_key('local-sources-query'), 'search js');
+    await tester.pump();
+    expect(_candidateOrder(tester), ['candidate-b']);
+    expect(tester.widget<CheckboxListTile>(_key('candidate-b')).value, isTrue);
+    expect(_selectionCount(tester), '已选 1 / 4 · 当前显示 1');
+    await tester.enterText(_key('local-sources-query'), 'not-found');
+    await tester.pump();
+    expect(_candidateTiles(tester), isEmpty);
+    expect(_key('local-sources-filter-empty'), findsOneWidget);
+    await tester.tap(_key('local-sources-query-clear'));
+    await tester.pumpAndSettle();
+    expect(_candidateTiles(tester).length, 4);
+    expect(tester.widget<CheckboxListTile>(_key('candidate-b')).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('重新载入后已导入项不重复计数或作为新增导入', (tester) async {
+    final root = makeRoot('reload-imported');
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    await _tap(tester, 'candidate-a');
+    await tester.runAsync(() async {
+      final report = await state.scanLocalSources(root.path);
+      await state.importLocalSources(
+        report.candidates.where((item) => item.key == 'a').toList(),
+      );
+    });
+    await _tap(tester, 'local-sources-rescan');
+    await _settleIo(
+      tester,
+      () =>
+          tester.widget<FilledButton>(_key('local-sources-scan')).onPressed !=
+          null,
+    );
+    expect(_selectionCount(tester), '已选 1 / 3');
+    expect(_key('local-sources-import'), findsNothing);
+    expect(
+      tester.widget<CheckboxListTile>(_key('candidate-a')).onChanged,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('扫描后登记表损坏，导入失败可见且不写入源目录', (tester) async {
+    final root = makeRoot('corrupt-import');
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    await _tap(tester, 'candidate-a');
+    final store = WebHomeStore(root: p.join(paths.configDir, 'webhome'));
+    File(store.registryPath).parent.createSync(recursive: true);
+    File(store.registryPath).writeAsStringSync('{broken');
+    await _tap(tester, 'local-sources-import');
+    await _settleIo(tester, () => _messageContains(tester, '导入失败'));
+    expect(_messageContains(tester, '导入失败'), isTrue);
+    expect(
+      Directory(p.join(state.spiderRoot, 'local', 'a')).existsSync(),
+      isFalse,
+    );
+    expect(
+      tester.widget<FilledButton>(_key('local-sources-scan')).onPressed,
+      isNotNull,
+    );
+    expect(_key('local-sources-import-state-error'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('已导入候选信息保持可读对比度：$brightness', (tester) async {
+      final root = makeRoot('readable-imported');
+      File(p.join(root.path, 'a.py'))
+          .writeAsStringSync('print("fixture only")');
+      await tester.runAsync(() async {
+        final report = await state.scanLocalSources(root.path);
+        await state.importLocalSources(
+          report.candidates.where((item) => item.key == 'a').toList(),
+        );
+      });
+      await _pumpPage(tester, state, theme: buildAppTheme(brightness));
+      await _scan(tester, root.path, expectKey: 'a');
+      for (final text in [
+        find.text('a（a）'),
+        find.textContaining('Python 爬虫 ·'),
+        find.textContaining('未发现 Spider/create_spider'),
+      ]) {
+        final finder = find.descendant(of: _key('candidate-a'), matching: text);
+        final paragraph = tester.renderObject<RenderParagraph>(finder);
+        final background = Theme.of(tester.element(finder))
+            .scaffoldBackgroundColor;
+        final color = Color.alphaBlend(
+          paragraph.text.style!.color!,
+          background,
+        );
+        final foregroundLuminance = color.computeLuminance();
+        final backgroundLuminance = background.computeLuminance();
+        final bright = foregroundLuminance > backgroundLuminance
+            ? foregroundLuminance
+            : backgroundLuminance;
+        final dark = foregroundLuminance < backgroundLuminance
+            ? foregroundLuminance
+            : backgroundLuminance;
+        expect(
+          (bright + 0.05) / (dark + 0.05),
+          greaterThanOrEqualTo(4.5),
+          reason: '已导入候选的文字信息不应因禁用勾选而变得难读',
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('候选行显示本地格式修改时间，默认最新优先且可切换、同时间稳定', (tester) async {
     final root = Directory(p.join(temp.path, 'times'))

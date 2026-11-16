@@ -43,6 +43,7 @@ class _Scenario {
     this.size, {
     this.afterOnly = false,
     this.enterBatch = false,
+    this.scanFolder = false,
   });
 
   final String name;
@@ -54,6 +55,7 @@ class _Scenario {
 
   /// 截图前点「批量管理」进入多选态。
   final bool enterBatch;
+  final bool scanFolder;
 
   String get file => '$name-${brightness.name}.png';
 }
@@ -61,6 +63,9 @@ class _Scenario {
 const _scenarios = <_Scenario>[
   _Scenario('list', Brightness.dark, Size(1000, 1100)),
   _Scenario('list', Brightness.light, Size(1000, 1100)),
+  _Scenario('rescan', Brightness.dark, Size(1000, 1100), scanFolder: true),
+  _Scenario('rescan', Brightness.light, Size(1000, 1100), scanFolder: true),
+  _Scenario('rescan-narrow', Brightness.dark, Size(480, 900), scanFolder: true),
   _Scenario(
     'batch-mode',
     Brightness.dark,
@@ -186,7 +191,8 @@ void _writeLocalSpider(String spiderRoot, String key, String runtime) {
 void main() {
   final phase = Platform.environment[_phaseEnv] ?? _beforePhase;
   final output = Directory(
-    '${_repoRoot().path}/.local/local-sources-visual/$phase',
+    '${_repoRoot().path}/.local/'
+    '${Platform.environment['CAPTURE_OUTPUT_DIR'] ?? 'local-sources-visual'}/$phase',
   );
   final scenarios = _scenarios
       .where((scenario) => !scenario.afterOnly || phase == _afterPhase)
@@ -239,6 +245,41 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(_captureRoot(scenario, state));
       await tester.pumpAndSettle();
+      if (scenario.scanFolder) {
+        final source = Directory(p.join(temp.path, 'sources'))
+          ..createSync(recursive: true);
+        for (final name in ['py-demo.py', 'js-demo.js', 'new-demo.py']) {
+          final file = File(p.join(source.path, name));
+          file.writeAsStringSync('// fixture only\n');
+          file.setLastModifiedSync(DateTime(2025, 11, 15, 18));
+        }
+        final html = File(p.join(source.path, 'html-demo', 'index.html'));
+        html.parent.createSync(recursive: true);
+        html.writeAsStringSync('<html><body>fixture</body></html>');
+        html.setLastModifiedSync(DateTime(2025, 11, 15, 18));
+        await tester.enterText(
+          find.byKey(const ValueKey('local-sources-folder')),
+          source.path,
+        );
+        await tester.tap(find.byKey(const ValueKey('local-sources-scan')));
+        await tester.pump();
+        for (var i = 0; i < 200; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+          await tester.pump();
+          if (tester
+                  .widget<FilledButton>(
+                    find.byKey(const ValueKey('local-sources-scan')),
+                  )
+                  .onPressed !=
+              null) {
+            break;
+          }
+        }
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('candidate-js-demo')), findsOneWidget);
+      }
       if (scenario.enterBatch) {
         await tester.tap(find.byKey(const ValueKey('local-sources-batch')));
         await tester.pumpAndSettle();
