@@ -250,8 +250,7 @@ void main() {
     testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 47 项）', (tester) async {
       await _openMenu(tester);
 
-      // 计数口径是「该组飞出列的行数」。P1-4 起「显示」组多了「屏显样式」，
-      // 于是总数从 44 变 45；其余九组的数字没动。
+      // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，共 47。
       const expected = <String, int>{
         '播放': 7,
         '速度': 6,
@@ -273,9 +272,9 @@ void main() {
       expect(
         expected.values.reduce((a, b) => a + b),
         47,
-        reason: '十个分组的项数之和必须是 47：44 是 MenuItem 时代的锁定值，'
-            '「播放」组多了「用外部播放器打开…」，「显示」组多了「屏显样式」（P1-4），'
-            '「画面」组新增 HDR 色调映射 / 峰值亮度计算两棵子树',
+        reason: '十个分组的项数之和必须是 47：基线 44，'
+            '「显示」组新增「屏显样式」（P1-4）1 项，'
+            '「画面」组新增 HDR 色调映射 / 峰值亮度计算 2 项',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);

@@ -97,6 +97,7 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
+import '../services/lut_store.dart';
 import '../services/config_source_status.dart';
 import '../services/android_bridge_service.dart';
 import '../services/android_playback_bridge.dart';
@@ -390,6 +391,14 @@ AiContentCompletion? aiContentCompletion,
   }
 
   final AppPaths paths;
+
+  /// LUT 预设仓库（内置落盘 / 用户目录 / 在线下载）。
+  ///
+  /// 应用级单例：播放页、底部面板与设置页共用同一个 http.Client 与同一份
+  /// 缓存目录，避免三处各自建客户端、各自重扫目录。
+  LutStore? _lutStoreInstance;
+
+  LutStore get lutStore => _lutStoreInstance ??= LutStore(paths: paths);
   final LogService log;
 
   /// 爬虫 IPC 详细调试日志（入参/出参）的开关载体。
@@ -7531,6 +7540,7 @@ AiContentCompletion? aiContentCompletion,
     _recommendationDependencies?.close();
     _detailRatingService?.close();
     _tmdbService.close();
+    _lutStoreInstance?.dispose();
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();
     // §22.2:退出后 sidecar 与代理端口全部释放。

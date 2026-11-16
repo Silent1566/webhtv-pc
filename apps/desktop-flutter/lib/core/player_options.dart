@@ -123,6 +123,7 @@ class PlayerOptions {
     bool? autoSkipOutro,
     this.longPressSpeed = defaultLongPressSpeed,
     this.lutPath = '',
+    this.lutPresetId = '',
   }) : skipMode = autoSkipIntro == true || autoSkipOutro == true
            ? (skipMode == SkipMode.off ? SkipMode.auto : skipMode)
            : skipMode,
@@ -216,6 +217,12 @@ class PlayerOptions {
 
   bool get hasLut => lutPath.trim().isNotEmpty;
 
+  /// 选中的内置预设 id（`builtinLutPresets` 里的一项）；空串表示选的是用户文件或未选。
+  ///
+  /// 它**不参与**播放：mpv 注入只看 [lutPath]。存它是为了让界面在缓存被清理、
+  /// 或换了机器之后仍知道「当前是哪一档」，并按 id 重新落盘。
+  final String lutPresetId;
+
   /// 夹到合法区间并在类型异常时回落默认。
   PlayerOptions normalized() {
     int clamp(int value, int min, int max, int fallback) {
@@ -273,6 +280,7 @@ class PlayerOptions {
       ),
       longPressSpeed: speed,
       lutPath: lutPath.trim(),
+      lutPresetId: lutPresetId.trim(),
     );
   }
 
@@ -306,6 +314,7 @@ class PlayerOptions {
     bool? autoSkipOutro,
     double? longPressSpeed,
     String? lutPath,
+    String? lutPresetId,
   }) => PlayerOptions(
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     cache: cache ?? this.cache,
@@ -326,6 +335,7 @@ class PlayerOptions {
     autoSkipOutro: autoSkipOutro,
     longPressSpeed: longPressSpeed ?? this.longPressSpeed,
     lutPath: lutPath ?? this.lutPath,
+    lutPresetId: lutPresetId ?? this.lutPresetId,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -348,6 +358,7 @@ class PlayerOptions {
     'autoSkipOutro': autoSkipOutro,
     'longPressSpeed': longPressSpeed,
     'lutPath': lutPath,
+    'lutPresetId': lutPresetId,
   };
 
   /// 宽松解析：任何缺失/非法字段回落默认，**不抛异常**（设置文件可能被手改）。
@@ -406,6 +417,9 @@ class PlayerOptions {
       skipSources: intOf('skipSources', defaultSkipSources),
       longPressSpeed: doubleOf('longPressSpeed', defaultLongPressSpeed),
       lutPath: map['lutPath'] is String ? (map['lutPath'] as String).trim() : '',
+      lutPresetId: map['lutPresetId'] is String
+          ? (map['lutPresetId'] as String).trim()
+          : '',
     ).normalized();
   }
 
@@ -427,7 +441,8 @@ class PlayerOptions {
       other.skipRemoteEnabled == skipRemoteEnabled &&
       other.skipSources == skipSources &&
       other.longPressSpeed == longPressSpeed &&
-      other.lutPath == lutPath;
+      other.lutPath == lutPath &&
+      other.lutPresetId == lutPresetId;
 
   @override
   int get hashCode => Object.hash(
@@ -447,6 +462,7 @@ class PlayerOptions {
     skipSources,
     longPressSpeed,
     lutPath,
+    lutPresetId,
   );
 
   @override
