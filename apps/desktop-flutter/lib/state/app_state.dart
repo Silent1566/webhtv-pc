@@ -134,6 +134,7 @@ import '../services/sync_server.dart';
 import '../services/tmdb_cache.dart';
 import '../services/tmdb_config_store.dart';
 import '../services/ui_preferences_store.dart';
+import '../services/local_source_enable_store.dart';
 import '../services/web_home_store.dart';
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_history.dart';
@@ -310,6 +311,12 @@ AiContentCompletion? aiContentCompletion,
       workRoot: p.join(cacheDir, 'sidecars'),
       log: this.log,
       debugLog: _spiderDebugLog,
+      isSourceEnabled: (key) {
+        final spider = _spiderRegistry.byKey(key);
+        return spider == null ||
+            !isImportedLocalSpider(spider, spiderRoot) ||
+            _localSourceEnable.isEnabled(key);
+      },
     );
     _spiderRegistry = SpiderManifestRegistry(
       root: p.join(this.paths.configDir, 'spiders'),
@@ -321,6 +328,10 @@ AiContentCompletion? aiContentCompletion,
       root: p.join(this.paths.configDir, 'spiders', 'csp'),
     );
     _webHomeStore = WebHomeStore(root: p.join(this.paths.configDir, 'webhome'));
+    _localSourceEnable = LocalSourceEnableStore(
+      path: p.join(this.paths.configDir, 'local_sources.json'),
+      log: this.log,
+    );
     _proxy = LocalProxyServer(log: this.log);
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
@@ -522,6 +533,12 @@ AiContentCompletion? aiContentCompletion,
   /// 与 `spiders/` 分开：webHome 由 WebView2 承载，不是 `webhtv-ipc-v1`
   /// 运行时，混进 manifest 注册表会让站点可用性判定出现「未知 runtime」。
   late final WebHomeStore _webHomeStore;
+
+  /// 本地 py/js 源的启用状态（`<configDir>/local_sources.json`）。
+  ///
+  /// HTML 源的启用状态不在这里：它是 `webhome/registry.json` 的一部分。
+  /// 两套存储由 [localSourceEnabled]/[setLocalSourceEnabled] 统一成一个接缝。
+  late final LocalSourceEnableStore _localSourceEnable;
 
   /// 本地源扫描器（只读、不执行）。无状态，参数取自 [LocalSpiderScanner] 默认值。
   final LocalSpiderScanner _localScanner = const LocalSpiderScanner();
@@ -2218,6 +2235,8 @@ AiContentCompletion? aiContentCompletion,
       (spider) => isImportedLocalSpider(spider, _spiderRegistry.root),
     ),
     webHomeSources: _safeWebHomeSources().values,
+    // 停用的源不进站点列表：选择器、搜索与换源都不该再看见它。
+    isEnabled: _localSourceEnable.isEnabled,
   );
 
   /// 被既有站点占用的本地 key（同 key 冲突的如实记录）。
@@ -2241,6 +2260,7 @@ AiContentCompletion? aiContentCompletion,
   void _invalidateLocalSites() {
     _localSitesCache = null;
     _webHomeSourcesCache = null;
+    _allWebHomeSourcesCache = null;
     _effectiveConfigCache = null;
     // 站点服务与分类判定都读 effectiveConfig：重建它，本地源才能立刻可选/可用。
     _attachSiteService();
@@ -6960,6 +6980,7 @@ AiContentCompletion? aiContentCompletion,
   /// 重新载入已导入源（磁盘被手工改动后刷新界面）。
   Future<void> reloadLocalSources() async {
     await _spiderRegistry.scan();
+    _localSourceEnable.reload();
     _invalidateLocalSites();
   }
 
@@ -6976,16 +6997,14 @@ AiContentCompletion? aiContentCompletion,
       return false;
     }
     // Supervisor 按配置站点 key 管理，同一 manifest 可能由多个站点引用。
-    if (_supervisor.statuses().any(
-      (status) =>
-          status.state == SpiderRuntimeState.running &&
-          (status.manifest?.key == key || status.siteKey == key),
-    )) {
+    if (_supervisor.isSourceActive(key)) {
       log.warning('本地源仍在运行，拒绝删除 key=$key，请先停止运行时', scope: 'spider');
       return false;
     }
     try {
       if (!removeLocalSpiderDirectory(root: root, key: key)) return false;
+      // 同 key 重新导入不得继承旧的停用状态：删除时一并清掉残留。
+      _localSourceEnable.forget(key);
       await _spiderRegistry.scan();
       _invalidateLocalSites();
       return true;
@@ -7002,10 +7021,119 @@ AiContentCompletion? aiContentCompletion,
     return ok;
   }
 
+  /// 全部已登记的 webHome 源（含已停用）；读取失败时保留原因并降级为空表。
+  ///
+  /// 与 [_safeWebHomeSources] 的区别：那份只含**启用**的源（站点列表用），
+  /// 这里要能看见停用的源，否则「再启用」会提示源不存在。
+  List<WebHomeSource>? _allWebHomeSourcesCache;
+
+  List<WebHomeSource> _allWebHomeSources() {
+    final cached = _allWebHomeSourcesCache;
+    if (cached != null) return cached;
+    try {
+      return _allWebHomeSourcesCache = _webHomeStore.list();
+    } on FormatException catch (error) {
+      log.error('载入HTML源失败：$error', scope: 'site');
+    } on FileSystemException catch (error) {
+      log.error('载入HTML源失败：$error', scope: 'site');
+    }
+    return _allWebHomeSourcesCache = const [];
+  }
+
+  /// 启用状态文件读坏时的原因（界面必须显示，不能静默当成全部启用）。
+  String? get localSourceEnableError {
+    _localSourceEnable.disabledKeys;
+    return _localSourceEnable.loadError;
+  }
+
+  /// 本地源当前是否启用（py/js 与 HTML 统一口径，不存在的源返回 false）。
+  ///
+  /// HTML 的启用状态在 `webhome/registry.json`，py/js 在 `local_sources.json`：
+  /// 两套存储的差异只在这里出现一次，界面与调用方不必知道 key 属于哪种源。
+  bool localSourceEnabled(String key) {
+    final trimmed = key.trim();
+    // 先按 manifest 判定：`spiders/local/<key>/` 的源归 local_sources.json 管，
+    // 其余（含根级 manifest 与直连注册）不是「本地源」，一律视为启用。
+    final spider = _spiderRegistry.byKey(trimmed);
+    if (spider != null && isImportedLocalSpider(spider, spiderRoot)) {
+      return _localSourceEnable.isEnabled(trimmed);
+    }
+    for (final source in _allWebHomeSources()) {
+      if (source.key == trimmed) return source.enabled;
+    }
+    return false;
+  }
+
+  /// 启用/停用单个本地源；返回是否已持久化。
+  ///
+  /// 停用的语义（用户已确认）：**从站点列表隐藏 + 立即停止该源运行中的 sidecar**。
+  /// 只隐藏不停运行时，用户已经关掉的源仍在后台跑；只停运行时不停用列表，
+  /// 下次打开又看到它可选——两者都不到「停用」。
+  Future<bool> setLocalSourceEnabled(String key, bool enabled) async {
+    final result = await setLocalSourcesEnabled([key], enabled);
+    return result.results[key.trim()] ?? false;
+  }
+
+  /// 批量启用/停用；逐 key 返回成败，绝不把部分失败写成整体成功。
+  Future<LocalSourceEnabledOutcome> setLocalSourcesEnabled(
+    Iterable<String> keys,
+    bool enabled,
+  ) async {
+    final wanted = <String>[];
+    for (final key in keys) {
+      final trimmed = key.trim();
+      if (trimmed.isNotEmpty && !wanted.contains(trimmed)) wanted.add(trimmed);
+    }
+    // 先按「失败」初始化：不存在的 key 必须如实报 false，不能顺手把状态写进去。
+    final results = <String, bool>{for (final key in wanted) key: false};
+    if (wanted.isEmpty) return LocalSourceEnabledOutcome(results: results);
+    final htmlKeys = <String>{
+      for (final source in _allWebHomeSources()) source.key,
+    };
+    final spiderKeys = <String>[];
+    for (final key in wanted) {
+      final spider = _spiderRegistry.byKey(key);
+      if (spider != null && isImportedLocalSpider(spider, spiderRoot)) {
+        spiderKeys.add(key);
+      } else if (htmlKeys.contains(key)) {
+        try {
+          results[key] = _webHomeStore.setEnabled(key, enabled);
+        } on FormatException catch (error) {
+          log.error('更新 HTML 源 key=$key 失败：$error', scope: 'site');
+        } on FileSystemException catch (error) {
+          log.error('保存 HTML 源 key=$key 失败：$error', scope: 'site');
+        }
+      }
+    }
+    if (spiderKeys.isNotEmpty) {
+      // 一次写盘：逐个写会在中途失败时留下「部分停用」，且每次都要重读文件。
+      final stored = _localSourceEnable.setEnabledAll(spiderKeys, enabled);
+      for (final key in spiderKeys) {
+        results[key] = stored;
+      }
+    }
+    if (!enabled) {
+      await _supervisor.stopSources(
+        spiderKeys.where((key) => results[key] == true),
+      );
+    }
+    _invalidateLocalSites();
+    final failed = [
+      for (final entry in results.entries)
+        if (!entry.value) entry.key,
+    ];
+    final action = enabled ? '启用' : '停用';
+    log.info('本地源$action keys=$wanted failed=$failed', scope: 'spider');
+    return LocalSourceEnabledOutcome(results: results);
+  }
+
   /// 删除某个 webHome 源（连同其资源目录）。
   Future<bool> removeWebHome(String key) async {
     final ok = _webHomeStore.remove(key);
-    if (ok) _invalidateLocalSites();
+    if (ok) {
+      _localSourceEnable.forget(key);
+      _invalidateLocalSites();
+    }
     return ok;
   }
 

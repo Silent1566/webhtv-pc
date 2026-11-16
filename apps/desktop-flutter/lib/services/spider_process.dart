@@ -1084,6 +1084,7 @@ class SpiderHostSupervisor {
     required this.workRoot,
     required this.log,
     this.debugLog,
+    this.isSourceEnabled,
     this.maxFailures = 5,
     this.baseBackoff = const Duration(seconds: 1),
     this.maxBackoff = const Duration(seconds: 60),
@@ -1099,6 +1100,22 @@ class SpiderHostSupervisor {
 
   /// 详细调试日志旁路；由 `AppState` 注入，缺省不影响既有行为。
   final SpiderDebugLog? debugLog;
+
+  /// 用户停用源的入口门禁，与连续失败触发的熔断分开（停用是用户的决定，
+  /// 不该被算成「源失败」而推进指数退避）。
+  final bool Function(String sourceKey)? isSourceEnabled;
+
+  void _checkSourceEnabled(String siteKey, SpiderManifest manifest) {
+    if (isSourceEnabled?.call(manifest.key) ?? true) return;
+    throw _sourceDisabled(siteKey, manifest.key);
+  }
+
+  SpiderError _sourceDisabled(String siteKey, String sourceKey) => SpiderError(
+    code: SpiderErrorCode.initFailed,
+    message: '本地源 $sourceKey 已停用，请在本地源页启用后重试',
+    siteKey: siteKey,
+    userVisible: true,
+  );
 
   /// 同一站点连续失败该次数后进入禁用状态，禁止无限快速重启（§9.3.1）。
   final int maxFailures;
@@ -1127,6 +1144,9 @@ class SpiderHostSupervisor {
     Map<String, String> environment = const {},
   }) {
     if (_shutdown != null) return Future.error(_cancelled(siteKey));
+    if (!(isSourceEnabled?.call(manifest.key) ?? true)) {
+      return Future.error(_sourceDisabled(siteKey, manifest.key));
+    }
     final runtime = _runtimes.putIfAbsent(siteKey, () => _SiteRuntime(siteKey));
     final stopping = runtime.stopping;
     if (stopping != null) {
@@ -1202,6 +1222,9 @@ class SpiderHostSupervisor {
     required Map<String, String> environment,
   }) async {
     final siteKey = runtime.siteKey;
+    // 记录这次启动属于哪个源：删除源时要据此判断「还有进程占着目录」。
+    runtime.sourceKey = manifest.key;
+    _checkSourceEnabled(siteKey, manifest);
     if (runtime.state == SpiderRuntimeState.disabled) {
       throw SpiderError(
         code: SpiderErrorCode.initFailed,
@@ -1269,16 +1292,23 @@ class SpiderHostSupervisor {
       // 先挂到 runtime 上：停机才能在启动过程中收掉这个进程。
       runtime.process = process;
       if (runtime.generation != generation) throw _cancelled(siteKey);
+      // 握手期间用户可能已经停用该源：那样这次启动必须作废，
+      // 而不是等握手完成后把进程登记成「运行中」。
+      _checkSourceEnabled(siteKey, manifest);
       host = SpiderHost(manifest: manifest, process: process, log: log);
       await host.initialize(extend: extend);
       if (runtime.generation != generation) throw _cancelled(siteKey);
+      _checkSourceEnabled(siteKey, manifest);
     } catch (error) {
       if (process != null) {
         if (identical(runtime.process, process)) runtime.process = null;
         await process.dispose();
       }
-      // 停机打断的启动不是站点失败，不能计进崩溃退避。
+      // 停机/停用打断的启动不是站点失败，不能计进崩溃退避。
       if (runtime.generation != generation) throw _cancelled(siteKey);
+      if (!(isSourceEnabled?.call(manifest.key) ?? true)) {
+        throw _sourceDisabled(siteKey, manifest.key);
+      }
       _recordFailure(runtime, error);
       rethrow;
     }
@@ -1468,6 +1498,31 @@ class SpiderHostSupervisor {
 
   bool isRunning(String siteKey) => hostFor(siteKey) != null;
 
+  /// 某个源是否还有活着的运行时：主机在、进程在、或正在启动/停机收尾。
+  ///
+  /// 删除源时用它而不是 [isRunning]：握手中与收尾中的进程仍然占着源目录里的
+  /// 文件，那时删目录会失败或留下半删除状态。
+  bool isSourceActive(String sourceKey) => _runtimes.values.any(
+    (runtime) =>
+        runtime.sourceKey == sourceKey &&
+        (runtime.host != null ||
+            runtime.process != null ||
+            runtime.starting != null ||
+            runtime.stopping != null),
+  );
+
+  /// 按源停止全部站点别名（一个源可能被多个配置站点引用），含握手中的进程。
+  Future<void> stopSources(Iterable<String> sourceKeys) async {
+    final keys = sourceKeys.toSet();
+    final siteKeys = [
+      for (final runtime in _runtimes.values)
+        if (keys.contains(runtime.sourceKey)) runtime.siteKey,
+    ];
+    for (final siteKey in siteKeys) {
+      await stop(siteKey);
+    }
+  }
+
   /// 当前可用宿主；已退出或正在退出的进程不再返回（否则调用方会往死进程发帧）。
   SpiderHost? hostFor(String siteKey) {
     final host = _runtimes[siteKey]?.host;
@@ -1541,6 +1596,9 @@ class _SiteRuntime {
   _SiteRuntime(this.siteKey);
 
   final String siteKey;
+
+  /// 该运行时对应的 manifest key（一个源可能被多个配置站点别名引用）。
+  String sourceKey = '';
   SpiderHost? host;
   SidecarProcess? process;
   Future<SpiderHost>? starting;

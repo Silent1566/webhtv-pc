@@ -55,30 +55,54 @@ bool isImportedLocalSpider(LocalSpider spider, String registryRoot) =>
 ///
 /// - py/js 沿用既有 `spider-local:<key>` 路由；
 /// - html 用 `web-home:<key>` 且 `searchable=false`：它不是爬虫，不假装能搜；
-/// - 按 key 排序固定：导入前后列表位置不跳。
+/// - 按 key 排序固定：导入前后列表位置不跳；
+/// - [isEnabled] 为 false 的源**不出现**：停用即从站点选择与搜索里消失，
+///   而不是留一个点了必失败的条目。
 List<Site> buildLocalSourceSites({
   required Iterable<LocalSpider> spiders,
   required Iterable<WebHomeSource> webHomeSources,
+  bool Function(String key)? isEnabled,
 }) {
   final sites = <Site>[
     for (final spider in spiders)
-      Site(
-        key: spider.key,
-        name: spider.manifest.name,
-        type: 3,
-        api: '${SpiderLocalBinding.scheme}${spider.key}',
-        searchable: spider.manifest.capabilities.supports('search'),
-      ),
+      if (isEnabled?.call(spider.key) ?? true)
+        Site(
+          key: spider.key,
+          name: spider.manifest.name,
+          type: 3,
+          api: '${SpiderLocalBinding.scheme}${spider.key}',
+          searchable: spider.manifest.capabilities.supports('search'),
+        ),
     for (final source in webHomeSources)
-      Site(
-        key: source.key,
-        name: source.name,
-        type: 3,
-        api: webHomeApiForKey(source.key),
-        searchable: false,
-      ),
+      if (source.enabled)
+        Site(
+          key: source.key,
+          name: source.name,
+          type: 3,
+          api: webHomeApiForKey(source.key),
+          searchable: false,
+        ),
   ]..sort((a, b) => a.key.compareTo(b.key));
   return sites;
+}
+
+/// 批量启停的逐 key 结论。
+///
+/// [results] 里 false 表示**该 key 没写成功**（读坏的文件、只读目录等），
+/// 调用方必须逐条显示，不能把部分失败说成整体成功。
+class LocalSourceEnabledOutcome {
+  const LocalSourceEnabledOutcome({required this.results});
+
+  final Map<String, bool> results;
+
+  int get okCount => results.values.where((ok) => ok).length;
+
+  List<String> get failedKeys => [
+    for (final entry in results.entries)
+      if (!entry.value) entry.key,
+  ];
+
+  bool get allOk => results.isNotEmpty && failedKeys.isEmpty;
 }
 
 /// 本地源并入后的结论。
