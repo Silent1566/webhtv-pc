@@ -130,13 +130,16 @@ class PlayerDoubleClickGate {
   final Duration window;
 
   Timer? _pending;
+  bool? _rightSide;
 
-  /// 登记一次点击，返回它是否构成双击。
+  /// 登记一次点击，返回它是否与上一击在同侧构成双击。
   ///
   /// 双击成立后窗口立即重置：第 3 击属于新的一轮，不能继续被当成双击。
-  bool registerTap() {
-    final doubleClick = _pending?.isActive ?? false;
+  bool registerTap({bool rightSide = false}) {
+    final doubleClick =
+        (_pending?.isActive ?? false) && _rightSide == rightSide;
     _pending?.cancel();
+    _rightSide = doubleClick ? null : rightSide;
     _pending = doubleClick ? null : Timer(window, () => _pending = null);
     return doubleClick;
   }
@@ -323,13 +326,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 画面双击判定（见 [PlayerDoubleClickGate]）。
   final PlayerDoubleClickGate _clickGate = PlayerDoubleClickGate();
+  final GlobalKey _videoGestureKey = GlobalKey();
 
-  /// 单击画面**之前**引擎是否在播放。
+  /// 单击画面之前的播放状态（优先使用尚未获引擎确认的点击意图）。
   ///
-  /// 双击的第 2 击用它把播放状态拨回去（双击不改变播放状态）。不能改成
+  /// 双击的第 2 击用它确定最终状态（播放切换之外的动作保持原状态）。不能改成
   /// 再调一次 `playOrPause()`：`isPlaying` 由引擎事件流异步回传，同一 tick
   /// 内两次读到的可能都是旧值，两次调用会发同一条命令，双击于是真的暂停了。
   bool? _playingBeforeFirstTap;
+  bool? _gesturePlaybackIntent;
+  Timer? _gesturePlaybackTimer;
+  StreamSubscription<bool>? _gesturePlayingSubscription;
   String? _loadError;
 
   /// 连播单次守卫（`design/03` §4.1 D1）。
@@ -439,6 +446,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 未命中时不标记已应用，但也不能任由每次 notifyListeners 都重算+写日志：
   /// 只有轨道集合真的变了（引擎补齐了真实轨）才值得再试一次。
   final Map<PlayerTrackSlot, List<String>> _lastTriedTrackIds = {};
+
   /// 字幕显示样式（P1-4 起从偏好存储初始化，改动即时写盘）。
   SubtitleStyle _subtitleStyle = SubtitleStyle.defaults;
 
@@ -495,6 +503,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _controller = PlayerController(
       onSeek: (position) => _audioAi?.seek(position),
     )..addListener(_onControllerChanged);
+    _bindGesturePlaybackStream();
     windowManager.addListener(this);
     widget.liveSession?.addListener(_onPlaybackSessionChanged);
     _osdNow = debugOsdClockOverride ?? DateTime.now();
@@ -589,7 +598,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (_request.vodId != request.vodId) return 'vodId';
       if (_request.sourceKey != request.sourceKey) return 'sourceKey';
       // 入口目标可能是完整播放地址，只记字段名。
-      if (_request.episodeTarget != request.episodeTarget) return 'episodeTarget';
+      if (_request.episodeTarget != request.episodeTarget) {
+        return 'episodeTarget';
+      }
       if (revision != _playLinesRevision) return 'revision';
       return null;
     }
@@ -991,9 +1002,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       break;
     }
     if (segment == null) {
-      _showPlayerMessage(
-        action == SkipAction.intro ? '本集未识别到片头' : '本集未识别到片尾',
-      );
+      _showPlayerMessage(action == SkipAction.intro ? '本集未识别到片头' : '本集未识别到片尾');
       return;
     }
     final target = action == SkipAction.intro
@@ -1312,7 +1321,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           lines: lines,
         );
         if (target.matched) {
-          final line = lines.where((line) => line.flag == target.flag).firstOrNull;
+          final line = lines
+              .where((line) => line.flag == target.flag)
+              .firstOrNull;
           rollback = intent.copyWith(
             playLines: lines,
             // 线路与路由同进同出：回滚丢掉路由，下一次换集就退回父目录 id。
@@ -1635,7 +1646,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   SubtitleMatchService _subtitleService({Duration? timeout}) =>
       SubtitleMatchService(
         log: widget.state.log,
-        cacheDir: SubtitleAssetStore.defaultCacheDir(widget.state.paths.cacheDir),
+        cacheDir: SubtitleAssetStore.defaultCacheDir(
+          widget.state.paths.cacheDir,
+        ),
         timeout: timeout ?? const Duration(seconds: 8),
       );
 
@@ -1701,13 +1714,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     var format = candidate.format;
     if (candidate.requiresResolve) {
       // ASSRT 是两跳 + 可能 ZIP，落成本地文件后播放器才认得。
-      final asset = await _subtitleService(
-        timeout: const Duration(seconds: 15),
-      ).resolve(
-        candidate,
-        query: _subtitleQuery(),
-        settings: widget.state.subtitleSettings,
-      );
+      final asset = await _subtitleService(timeout: const Duration(seconds: 15))
+          .resolve(
+            candidate,
+            query: _subtitleQuery(),
+            settings: widget.state.subtitleSettings,
+          );
       if (!mounted || generation != _mediaGeneration) return false;
       if (asset == null) {
         _showSubtitleError(
@@ -1814,6 +1826,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return null;
     }
   }
+
   /// 选择本地字幕文件：路径输入 → 加载并记忆。
   Future<void> _showLocalSubtitlePicker() async {
     var input = '';
@@ -2888,15 +2901,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<void> _toggleAutoSkip({required bool intro}) async {
     final bit = intro ? SkipKindBits.intro : SkipKindBits.outro;
     final on = (_options.skipKinds & bit) != 0;
-    final kinds = on
-        ? _options.skipKinds & ~bit
-        : _options.skipKinds | bit;
+    final kinds = on ? _options.skipKinds & ~bit : _options.skipKinds | bit;
     final mode = !on && _options.skipMode == SkipMode.off
         ? SkipMode.auto
         : _options.skipMode;
-    await _persistOptions(
-      _options.copyWith(skipKinds: kinds, skipMode: mode),
-    );
+    await _persistOptions(_options.copyWith(skipKinds: kinds, skipMode: mode));
     if (!mounted) return;
     setState(() => _rebuildSkipPlan());
   }
@@ -2987,6 +2996,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   int _beginMediaTransition() {
+    _clearGesturePlaybackIntent();
+    _clickGate.dispose();
+    _playingBeforeFirstTap = null;
     if (_hasQueue) {
       _pendingQueueItemKey = null;
       _pendingQueueStep = null;
@@ -3017,6 +3029,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final rate = previous.rate;
       previous.removeListener(_onControllerChanged);
       _controller = PlayerController()..addListener(_onControllerChanged);
+      _bindGesturePlaybackStream();
       final replacement = _controller;
       _liveOpenInFlight = false;
       previous.dispose();
@@ -3106,6 +3119,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _saveTimer?.cancel();
     _controlHideTimer?.cancel();
     _clickGate.dispose();
+    _clearGesturePlaybackIntent();
+    unawaited(_gesturePlayingSubscription?.cancel());
     _osdTimer?.cancel();
     _osdTimer = null;
     _endGestureSpeed();
@@ -3992,11 +4007,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         if (!_controlsVisible) _touchControls();
                       },
                       child: GestureDetector(
+                        key: _videoGestureKey,
                         behavior: HitTestBehavior.opaque,
-                        // 单击 = 暂停/播放；双击 = 全屏切换（`design/01` §4.6）。
-                        // **不注册 `onDoubleTap`**：那会把单击拖慢一个判定窗，
-                        // 判定改由 [_clickGate] 在 onTap 里完成（见 [_onVideoTap]）。
-                        onTap: _onVideoTap,
+                        // 不注册 onDoubleTap：单击仍立即落地，双击由 _clickGate 判定。
+                        onTapUp: (details) =>
+                            _onVideoTap(details.localPosition),
                         onLongPressStart: (_) => _beginGestureSpeed(),
                         onLongPressEnd: (_) => _endGestureSpeed(),
                         onLongPressCancel: _endGestureSpeed,
@@ -4471,13 +4486,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       var url = candidate.url;
       var format = candidate.format;
       if (candidate.requiresResolve) {
-        final asset = await _subtitleService(
-          timeout: const Duration(seconds: 15),
-        ).resolve(
-          candidate,
-          query: query,
-          settings: widget.state.subtitleSettings,
-        );
+        final asset =
+            await _subtitleService(timeout: const Duration(seconds: 15))
+                .resolve(
+                  candidate,
+                  query: query,
+                  settings: widget.state.subtitleSettings,
+                );
         if (!mounted || generation != _mediaGeneration) return null;
         if (asset == null) return null;
         url = asset.path;
@@ -5259,44 +5274,89 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     });
   }
 
-  /// 画面单击/双击（`design/01` §4.6）。
-  ///
-  /// 单击立即翻转播放并唤回控制栏；[PlayerDoubleClickGate] 判定为双击时，
-  /// 第 2 击把播放状态**拨回**第 1 击前的值，再切全屏。
-  void _onVideoTap() {
-    final action = resolvePlayerGesture(doubleClick: _clickGate.registerTap());
-    // 点击瞬间就把控制栏唤回来：暂停/播放是静默的状态变化，没有反馈会像没点上。
+  /// 单击立即翻转播放；同侧双击按配置执行，并显式确定最终播放状态。
+  void _onVideoTap(Offset localPosition) {
+    final box =
+        _videoGestureKey.currentContext!.findRenderObject()! as RenderBox;
+    final rightSide = localPosition.dx >= box.size.width / 2;
+    final doubleClick = _clickGate.registerTap(rightSide: rightSide);
     _touchControls();
+    if (!doubleClick) {
+      final before = _gesturePlaybackIntent ?? _controller.isPlaying;
+      _playingBeforeFirstTap = before;
+      unawaited(_applyPlayerGesturePlayback(!before));
+      return;
+    }
+    var action = rightSide
+        ? _options.doubleClickRight
+        : _options.doubleClickLeft;
+    if ((_isLive || _isCatchup) && action.isSeek) {
+      action = PlayerDoubleClickAction.none;
+    }
+    final originalPlaying = _playingBeforeFirstTap;
+    _playingBeforeFirstTap = null;
+    if (originalPlaying != null) {
+      unawaited(
+        _applyPlayerGesturePlayback(
+          action == PlayerDoubleClickAction.togglePlayback
+              ? !originalPlaying
+              : originalPlaying,
+        ),
+      );
+    }
     switch (action) {
-      case PlayerGestureAction.togglePlaybackAndFullscreen:
-        // 第 2 击：把播放状态拨回第 1 击前的值（双击不改变播放），再切全屏。
-        final restore = _playingBeforeFirstTap;
-        _playingBeforeFirstTap = null;
-        if (restore != null) unawaited(_applyPlayerGesturePlayback(restore));
+      case PlayerDoubleClickAction.toggleFullscreen:
         unawaited(_toggleFullscreen());
-      case PlayerGestureAction.togglePlayback:
-        _playingBeforeFirstTap = _controller.isPlaying;
-        unawaited(_applyPlayerGesturePlayback(null));
+      case PlayerDoubleClickAction.seekBackward:
+        unawaited(_controller.seekBy(const Duration(seconds: -10)));
+      case PlayerDoubleClickAction.seekForward:
+        unawaited(_controller.seekBy(const Duration(seconds: 10)));
+      case PlayerDoubleClickAction.volumeUp:
+        unawaited(_controller.setVolume(_controller.volume + 5));
+      case PlayerDoubleClickAction.volumeDown:
+        unawaited(_controller.setVolume(_controller.volume - 5));
+      case PlayerDoubleClickAction.togglePlayback:
+      case PlayerDoubleClickAction.none:
+        break;
     }
   }
 
-  /// 画面点击的播放控制。
-  ///
-  /// [playing] 为 null 时反转当前状态；否则**显式**切到该状态——双击的第 2 击
-  /// 必须走这条确定路径（见 [_playingBeforeFirstTap]）。
+  void _clearGesturePlaybackIntent() {
+    _gesturePlaybackTimer?.cancel();
+    _gesturePlaybackTimer = null;
+    _gesturePlaybackIntent = null;
+  }
+
+  void _bindGesturePlaybackStream() {
+    unawaited(_gesturePlayingSubscription?.cancel());
+    _gesturePlayingSubscription = _controller
+        .videoController
+        .player
+        .stream
+        .playing
+        .listen((_) => _clearGesturePlaybackIntent());
+  }
+
+  /// 显式应用点击目标；仅在双击窗口内保留未获引擎确认的意图。
+  /// 新 playing 事件、换媒体与窗口到期都以引擎真值为准。
   ///
   /// 失败只记日志：流未就绪/已断开时点一下画面不该让整页抛异常
   /// （`play()` 在没有原生实现的环境里会抛 `MissingPluginException`）。
-  Future<void> _applyPlayerGesturePlayback(bool? playing) async {
+  Future<void> _applyPlayerGesturePlayback(bool playing) async {
+    _gesturePlaybackIntent = playing;
+    _gesturePlaybackTimer?.cancel();
+    _gesturePlaybackTimer = Timer(
+      kPlayerDoubleClickWindow,
+      _clearGesturePlaybackIntent,
+    );
     try {
-      if (playing == null) {
-        await _controller.playOrPause();
-      } else if (playing) {
+      if (playing) {
         await _controller.play();
       } else {
         await _controller.pause();
       }
     } catch (error) {
+      _clearGesturePlaybackIntent();
       widget.state.log.warning('画面点击切换播放失败：$error', scope: 'player');
     }
   }
@@ -5590,9 +5650,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                       label: choice.label,
                       selected: _subtitleStyle.textColorValue == choice.value,
                       onSelect: () => _applySubtitleStyle(
-                        _subtitleStyle.copyWith(
-                          textColorValue: choice.value,
-                        ),
+                        _subtitleStyle.copyWith(textColorValue: choice.value),
                       ),
                     ),
                 ],
@@ -5660,9 +5718,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   id: 'hdr_tone_mapping_${mode.id}',
                   label: mode.label,
                   selected: _options.toneMapping == mode,
-                  onSelect: () => _livePatchOptions(
-                    _options.copyWith(toneMapping: mode),
-                  ),
+                  onSelect: () =>
+                      _livePatchOptions(_options.copyWith(toneMapping: mode)),
                 ),
             ],
           ),
@@ -5803,9 +5860,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                       id: 'osd_size_${(scale * 100).round()}',
                       label: '${(scale * 100).round()}%',
                       selected: (_osdStyle.textScale - scale).abs() < 0.001,
-                      onSelect: () => _applyOsdStyle(
-                        _osdStyle.copyWith(textScale: scale),
-                      ),
+                      onSelect: () =>
+                          _applyOsdStyle(_osdStyle.copyWith(textScale: scale)),
                     ),
                 ],
               ),
@@ -5819,9 +5875,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                       id: 'osd_opacity_${(opacity * 100).round()}',
                       label: '${(opacity * 100).round()}%',
                       selected: (_osdStyle.opacity - opacity).abs() < 0.001,
-                      onSelect: () => _applyOsdStyle(
-                        _osdStyle.copyWith(opacity: opacity),
-                      ),
+                      onSelect: () =>
+                          _applyOsdStyle(_osdStyle.copyWith(opacity: opacity)),
                     ),
                 ],
               ),
@@ -6005,6 +6060,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                     ),
                 ],
               ),
+              for (final rightSide in [false, true])
+                PlayerMenuItem(
+                  id: 'settings_double_click_${rightSide ? 'right' : 'left'}',
+                  label: rightSide ? '右半屏双击' : '左半屏双击',
+                  icon: Icons.touch_app_outlined,
+                  children: [
+                    for (final action in PlayerDoubleClickAction.values)
+                      PlayerMenuItem(
+                        id: 'settings_double_click_${rightSide ? 'right' : 'left'}_${action.id}',
+                        label: action.label,
+                        selected:
+                            (rightSide
+                                ? _options.doubleClickRight
+                                : _options.doubleClickLeft) ==
+                            action,
+                        enabled: !((_isLive || _isCatchup) && action.isSeek),
+                        onSelect: (_isLive || _isCatchup) && action.isSeek
+                            ? null
+                            : () => _livePatchOptions(
+                                rightSide
+                                    ? _options.copyWith(
+                                        doubleClickRight: action,
+                                      )
+                                    : _options.copyWith(
+                                        doubleClickLeft: action,
+                                      ),
+                              ),
+                      ),
+                  ],
+                ),
               // 第 3 层：失败回退阶梯。四档是**互斥单选**，摊成四条开关会让
               // 「当前是哪一档」看不出来；飞出子列则天然单选（只有一项打勾）。
               PlayerMenuItem(

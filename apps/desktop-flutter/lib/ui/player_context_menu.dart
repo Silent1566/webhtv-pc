@@ -174,15 +174,13 @@ Offset clampMenuOrigin({
 }) {
   final maxX = viewport.width - menuSize.width - _viewportMargin;
   final maxY = viewport.height - menuSize.height - _viewportMargin;
-  return Offset(
-    _clampStart(anchor.dx, maxX),
-    _clampStart(anchor.dy, maxY),
-  );
+  return Offset(_clampStart(anchor.dx, maxX), _clampStart(anchor.dy, maxY));
 }
 
 /// 单个轴上的 clamp：可用空间不足一个留白时退回留白本身。
-double _clampStart(double value, double maxStart) =>
-    maxStart <= _viewportMargin ? _viewportMargin : value.clamp(_viewportMargin, maxStart);
+double _clampStart(double value, double maxStart) => maxStart <= _viewportMargin
+    ? _viewportMargin
+    : value.clamp(_viewportMargin, maxStart);
 
 /// 右键菜单。
 ///
@@ -322,12 +320,11 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
     final levels = _visibleLevels();
 
     final columns = <Widget>[];
-    var columnLeft = origin.dx;
+    final lefts = _columnLefts(origin.dx, width, levels.length);
     var columnTop = origin.dy;
     for (var level = 0; level < levels.length; level++) {
       if (level > 0) {
         final parentId = _openIds[level - 1];
-        columnLeft = _childColumnLeft(columnLeft, width);
         // 量不到（首帧这一行还没被测量）就先贴父列顶边，下一帧校正。
         columnTop = _childColumnTop(
           _rowTops[_rowKeyOf(level - 1, parentId)] ?? columnTop,
@@ -342,7 +339,7 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
       columns.add(
         _column(
           level: level,
-          left: columnLeft,
+          left: lefts[level],
           top: columnTop,
           maxHeight: maxHeight,
           items: levels[level],
@@ -382,9 +379,7 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   /// **叶子**（例如「速度」组里被勾的是 `1.0×`）。所以勾只留在叶子行上，
   /// 由 [_sectionRows] 造出的分组行恒为 `selected: false`。
   List<List<PlayerMenuItem>> _visibleLevels() {
-    final levels = <List<PlayerMenuItem>>[
-      _sectionRows(),
-    ];
+    final levels = <List<PlayerMenuItem>>[_sectionRows()];
     for (var i = 0; i < _openIds.length; i++) {
       final parent = _findById(levels[i], _openIds[i]);
       if (parent == null || parent.children.isEmpty) {
@@ -450,6 +445,30 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   GlobalKey _rowKey(int level, String itemId) =>
       _rowKeys.putIfAbsent(_rowKeyOf(level, itemId), GlobalKey.new);
 
+  /// 能装下整条路径时保持同一飞出方向，整体平移留在视口内，避免翻回早先的列。
+  List<double> _columnLefts(double rootLeft, double width, int count) {
+    final step = width + _columnGap;
+    final totalWidth = width + (count - 1) * step;
+    if (totalWidth <= widget.viewport.width - 2 * _viewportMargin) {
+      final flyRight =
+          rootLeft + step + width <= widget.viewport.width - _viewportMargin;
+      final firstLeft = _clampStart(
+        flyRight ? rootLeft : rootLeft - (count - 1) * step,
+        widget.viewport.width - totalWidth - _viewportMargin,
+      );
+      return [
+        for (var level = 0; level < count; level++)
+          firstLeft + (flyRight ? level : count - 1 - level) * step,
+      ];
+    }
+    // 整条路径比窗口宽时维持既有逐列翻转/收窄降级。
+    final lefts = [rootLeft];
+    for (var level = 1; level < count; level++) {
+      lefts.add(_childColumnLeft(lefts.last, width));
+    }
+    return lefts;
+  }
+
   /// 第 N 列的左缘（N >= 2）：默认贴父列右缘，放不下就翻到父列左侧。
   double _childColumnLeft(double parentLeft, double width) {
     final maxLeft = widget.viewport.width - width - _viewportMargin;
@@ -465,7 +484,8 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   double _childColumnTop(double rowTop) {
     // 上移的下限是「还剩下 [_minColumnViewport] 的可用高度」：再往下就会把子列
     // 压成一条缝。
-    final maxTop = widget.viewport.height - _viewportMargin - _minColumnViewport;
+    final maxTop =
+        widget.viewport.height - _viewportMargin - _minColumnViewport;
     return _clampStart(rowTop, maxTop);
   }
 

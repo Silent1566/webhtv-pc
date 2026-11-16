@@ -60,6 +60,194 @@ Future<TestGesture> mousePointer(WidgetTester tester) async {
 const Offset blankSpot = Offset(700, 820);
 
 void main() {
+  group('四层飞出菜单水平布局', () {
+    for (final size in [const Size(1024, 640), const Size(1280, 720)]) {
+      for (final anchorName in ['center', 'left', 'right', 'bottom-right']) {
+        testWidgets(
+          '${size.width} $anchorName: all four columns fit without overlap and leaf is clickable',
+          (tester) async {
+            setSurface(tester, size);
+            final anchor = switch (anchorName) {
+              'center' => size.center(Offset.zero),
+              'left' => const Offset(60, 100),
+              'right' => Offset(size.width - 20, 100),
+              _ => Offset(size.width - 20, size.height - 20),
+            };
+            var selected = 0;
+            await tester.pumpWidget(
+              wrap(
+                PlayerContextMenu(
+                  anchor: anchor,
+                  viewport: size,
+                  sections: [
+                    PlayerMenuSection(
+                      title: '设置',
+                      items: [
+                        PlayerMenuItem(
+                          id: 'parameters',
+                          label: '播放参数',
+                          children: [
+                            PlayerMenuItem(
+                              id: 'double-click',
+                              label: '左半屏双击',
+                              children: [
+                                PlayerMenuItem(
+                                  id: 'leaf',
+                                  label: '无动作',
+                                  onSelect: () => selected++,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                  onDismiss: () {},
+                ),
+              ),
+            );
+            for (final label in ['设置', '播放参数', '左半屏双击']) {
+              await tester.tap(find.text(label));
+              await tester.pumpAndSettle();
+            }
+            expect(columnSurfaces, findsNWidgets(4));
+            final rects = [for (var i = 0; i < 4; i++) columnRect(tester, i)];
+            debugPrint('${size.width} $anchorName columns=$rects');
+            for (var i = 0; i < rects.length; i++) {
+              expect(rects[i].width, 240);
+              expect(rects[i].left, greaterThanOrEqualTo(8));
+              expect(rects[i].right, lessThanOrEqualTo(size.width - 8));
+              expect(rects[i].top, greaterThanOrEqualTo(8));
+              expect(rects[i].bottom, lessThanOrEqualTo(size.height - 8));
+              for (var j = 0; j < i; j++) {
+                expect(
+                  rects[i].overlaps(rects[j]),
+                  isFalse,
+                  reason: 'column $i overlaps column $j: $rects',
+                );
+              }
+            }
+            await tester.tap(find.text('无动作'));
+            await tester.pumpAndSettle();
+            expect(selected, 1);
+            await tester.tap(find.text('左半屏双击'));
+            await tester.pumpAndSettle();
+            expect(columnSurfaces, findsNWidgets(3));
+          },
+        );
+      }
+    }
+    for (final size in [const Size(1024, 640), const Size(1280, 720)]) {
+      testWidgets(
+        '${size.width}: center hover keeps four levels open after horizontal reposition',
+        (tester) async {
+          setSurface(tester, size);
+          var selected = 0;
+          await tester.pumpWidget(
+            wrap(
+              PlayerContextMenu(
+                anchor: size.center(Offset.zero),
+                viewport: size,
+                sections: [
+                  PlayerMenuSection(
+                    title: '设置',
+                    items: [
+                      PlayerMenuItem(
+                        id: 'parameters',
+                        label: '播放参数',
+                        children: [
+                          PlayerMenuItem(
+                            id: 'double-click',
+                            label: '左半屏双击',
+                            children: [
+                              PlayerMenuItem(
+                                id: 'leaf',
+                                label: '无动作',
+                                onSelect: () => selected++,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+                onDismiss: () {},
+              ),
+            ),
+          );
+          final mouse = await mousePointer(tester);
+          for (final label in ['设置', '播放参数', '左半屏双击', '无动作']) {
+            await mouse.moveTo(tester.getCenter(find.text(label)));
+            await tester.pumpAndSettle();
+          }
+          await tester.pump(const Duration(milliseconds: 300));
+          await tester.pumpAndSettle();
+          expect(columnSurfaces, findsNWidgets(4));
+          await mouse.down(tester.getCenter(find.text('无动作')));
+          await mouse.up();
+          await tester.pumpAndSettle();
+          expect(selected, 1);
+        },
+      );
+    }
+    for (final size in [const Size(200, 600), const Size(800, 600)]) {
+      testWidgets(
+        '${size.width}: insufficient total width retains reachable leaf fallback',
+        (tester) async {
+          setSurface(tester, size);
+          var selected = 0;
+          await tester.pumpWidget(
+            wrap(
+              PlayerContextMenu(
+                anchor: size.center(Offset.zero),
+                viewport: size,
+                sections: [
+                  PlayerMenuSection(
+                    title: '设置',
+                    items: [
+                      PlayerMenuItem(
+                        id: 'parameters',
+                        label: '播放参数',
+                        children: [
+                          PlayerMenuItem(
+                            id: 'double-click',
+                            label: '左半屏双击',
+                            children: [
+                              PlayerMenuItem(
+                                id: 'leaf',
+                                label: '无动作',
+                                onSelect: () => selected++,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+                onDismiss: () {},
+              ),
+            ),
+          );
+          for (final label in ['设置', '播放参数', '左半屏双击']) {
+            await tester.tap(find.text(label));
+            await tester.pumpAndSettle();
+          }
+          for (var i = 0; i < 4; i++) {
+            final rect = columnRect(tester, i);
+            expect(rect.left, greaterThanOrEqualTo(8));
+            expect(rect.right, lessThanOrEqualTo(size.width - 8));
+          }
+          await tester.tap(find.text('无动作'));
+          await tester.pumpAndSettle();
+          expect(selected, 1);
+        },
+      );
+    }
+  });
+
   group('位置 clamp（design/04 §5.2）', () {
     test('左上角锚点不偏移', () {
       final origin = clampMenuOrigin(
@@ -160,7 +348,9 @@ void main() {
               ),
               PlayerMenuSection(
                 title: '速度',
-                items: [PlayerMenuItem(id: 'rate_1', label: '1.0×', selected: true)],
+                items: [
+                  PlayerMenuItem(id: 'rate_1', label: '1.0×', selected: true),
+                ],
               ),
             ],
             onDismiss: () {},
@@ -174,7 +364,11 @@ void main() {
       expect(find.text('速度'), findsOneWidget);
       for (final title in ['播放', '速度']) {
         final text = tester.widget<Text>(find.text(title));
-        expect(text.style?.color, darkScheme.onSurface, reason: '「$title」是行不是标题');
+        expect(
+          text.style?.color,
+          darkScheme.onSurface,
+          reason: '「$title」是行不是标题',
+        );
         expect(text.style?.fontSize, isNot(11), reason: '「$title」不该还是标题字号');
       }
       // 组内的项不再摊在主列里，只在自己组的飞出列里。
@@ -357,7 +551,9 @@ void main() {
       expect(rect.bottom, lessThanOrEqualTo(900));
     });
 
-    testWidgets('无阴影、elevation 0（DESIGN.md The Zero-Elevation Rule）', (tester) async {
+    testWidgets('无阴影、elevation 0（DESIGN.md The Zero-Elevation Rule）', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         wrap(
           PlayerContextMenu(
@@ -378,9 +574,7 @@ void main() {
       }
     });
 
-    testWidgets('几何：左上角等于 clamp 后的锚点，宽度 240、项高 36（§5.2、§5.6）', (
-      tester,
-    ) async {
+    testWidgets('几何：左上角等于 clamp 后的锚点，宽度 240、项高 36（§5.2、§5.6）', (tester) async {
       // 画布要与菜单声明的 viewport 一致：行现在在分组飞出列里，要真的点到
       // 「播放」组就得让它在画布内（理由见 setSurface 的注释）。
       setSurface(tester, const Size(1440, 900));
@@ -487,9 +681,7 @@ void main() {
       );
     });
 
-    testWidgets('父项点击飞出子列、再点收起，且父项不发动作（design/04 §5.5）', (
-      tester,
-    ) async {
+    testWidgets('父项点击飞出子列、再点收起，且父项不发动作（design/04 §5.5）', (tester) async {
       var parentSelected = 0;
       await tester.pumpWidget(
         wrap(
@@ -506,7 +698,11 @@ void main() {
                     icon: Icons.tune,
                     onSelect: () => parentSelected++,
                     children: const [
-                      PlayerMenuItem(id: 'osd_title', label: '标题', selected: true),
+                      PlayerMenuItem(
+                        id: 'osd_title',
+                        label: '标题',
+                        selected: true,
+                      ),
                       PlayerMenuItem(id: 'osd_clock', label: '时钟'),
                     ],
                   ),
@@ -542,7 +738,9 @@ void main() {
       expect(flyout.width, parent.width);
       expect(
         flyout.top,
-        tester.getTopLeft(find.byKey(const ValueKey('player-menu-item-osd'))).dy,
+        tester
+            .getTopLeft(find.byKey(const ValueKey('player-menu-item-osd')))
+            .dy,
       );
       // 子列整列落在父列之外：证明它是飞出的一列，而不是缩进塞进父列滚动区
       // （就地展开的实现里子项一定在父列矩形之内）。
@@ -571,9 +769,7 @@ void main() {
       expect(find.byIcon(Icons.chevron_right), findsNWidgets(2));
     });
 
-    testWidgets('内容比可用空间高时：菜单压到可用高度并在内部滚动，不溢出窗口', (
-      tester,
-    ) async {
+    testWidgets('内容比可用空间高时：菜单压到可用高度并在内部滚动，不溢出窗口', (tester) async {
       // 20 个分组行 ≈ 728px，远超「锚点以下」的 492px——这是主列**可能**变得
       // 过高的形状（真实内容现在是 10 行，但分组数由调用方决定，本引擎不许
       // 依赖「恰好 10 个」）。用 420 的估值 clamp 之后如果不把高度压到左上角
@@ -653,7 +849,10 @@ void main() {
                         id: 'aspect-16-9',
                         label: '16:9',
                         children: [
-                          PlayerMenuItem(id: 'aspect-16-9-pillarbox', label: '信箱'),
+                          PlayerMenuItem(
+                            id: 'aspect-16-9-pillarbox',
+                            label: '信箱',
+                          ),
                         ],
                       ),
                     ],
@@ -674,11 +873,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(columnSurfaces, findsNWidgets(4));
-      for (final id in [
-        'aspect',
-        'aspect-16-9',
-        'aspect-16-9-pillarbox',
-      ]) {
+      for (final id in ['aspect', 'aspect-16-9', 'aspect-16-9-pillarbox']) {
         expect(
           find.byKey(ValueKey('player-menu-item-$id')),
           findsOneWidget,
@@ -692,7 +887,8 @@ void main() {
         expect(
           columns[i].overlaps(columns[i - 1]),
           isFalse,
-          reason: '第 $i 列与上一列重叠了：${columns.map((c) => c.toString()).join(' / ')}',
+          reason:
+              '第 $i 列与上一列重叠了：${columns.map((c) => c.toString()).join(' / ')}',
         );
       }
 
@@ -719,7 +915,9 @@ void main() {
                   PlayerMenuItem(
                     id: 'aspect',
                     label: '画面比例',
-                    children: [PlayerMenuItem(id: 'aspect-16-9', label: '16:9')],
+                    children: [
+                      PlayerMenuItem(id: 'aspect-16-9', label: '16:9'),
+                    ],
                   ),
                 ],
               ),
@@ -864,22 +1062,14 @@ void main() {
       expect(columnSurfaces, findsOneWidget);
       await mouse.moveTo(tester.getCenter(find.text('显示')));
       await tester.pumpAndSettle();
-      expect(
-        columnSurfaces,
-        findsNWidgets(2),
-        reason: '悬停分组行必须飞出该组的项，不点击也要飞出',
-      );
+      expect(columnSurfaces, findsNWidgets(2), reason: '悬停分组行必须飞出该组的项，不点击也要飞出');
 
       // 组内带子列的行同样只靠 hover 展开。
       await mouse.moveTo(tester.getCenter(find.text('屏显')));
       await tester.pumpAndSettle();
 
       // 抓的错误实现：只保留点击路径（hover 不展开）→ 这里仍是 2 列。
-      expect(
-        columnSurfaces,
-        findsNWidgets(3),
-        reason: '悬停必须展开子列，不点击也要飞出',
-      );
+      expect(columnSurfaces, findsNWidgets(3), reason: '悬停必须展开子列，不点击也要飞出');
       expect(find.text('标题'), findsOneWidget);
       // 悬停不触发父项的动作（和点击路径同一条规则）。
       expect(
@@ -940,7 +1130,9 @@ void main() {
                   PlayerMenuItem(
                     id: 'aspect',
                     label: '画面比例',
-                    children: [PlayerMenuItem(id: 'aspect_16_9', label: '16:9')],
+                    children: [
+                      PlayerMenuItem(id: 'aspect_16_9', label: '16:9'),
+                    ],
                   ),
                 ],
               ),
@@ -1007,11 +1199,7 @@ void main() {
       // 只推进一半的延迟：**逐帧**推进而不是一次 pump 到底——一次性 pump
       // 到 delay 之后，立即收起的实现也会「碰巧通过」。
       await tester.pump(const Duration(milliseconds: 60));
-      expect(
-        columnSurfaces,
-        findsNWidgets(3),
-        reason: '离开父项只应排一次延迟收起，不能立刻收',
-      );
+      expect(columnSurfaces, findsNWidgets(3), reason: '离开父项只应排一次延迟收起，不能立刻收');
 
       // 延迟未到，指针已经进入子列。
       // 抓的错误实现：**立即收起**（没有延迟）→ 上一行就已经红了；
@@ -1019,11 +1207,7 @@ void main() {
       await mouse.moveTo(tester.getCenter(find.text('标题')));
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
-      expect(
-        columnSurfaces,
-        findsNWidgets(3),
-        reason: '指针已经进到子列里，父层不得把它收掉',
-      );
+      expect(columnSurfaces, findsNWidgets(3), reason: '指针已经进到子列里，父层不得把它收掉');
       expect(find.text('标题'), findsOneWidget);
     });
 

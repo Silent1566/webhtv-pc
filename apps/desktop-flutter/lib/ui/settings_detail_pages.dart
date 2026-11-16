@@ -101,6 +101,41 @@ class PlaybackOptionsPage extends StatelessWidget {
                         },
                       ),
                     ),
+                    _doubleClickActionTile(
+                      'left',
+                      '左半屏双击',
+                      state.playerOptions.doubleClickLeft,
+                      (action) async {
+                        await state.setPlayerOptions(
+                          state.playerOptions.copyWith(doubleClickLeft: action),
+                        );
+                      },
+                    ),
+                    _doubleClickActionTile(
+                      'right',
+                      '右半屏双击',
+                      state.playerOptions.doubleClickRight,
+                      (action) async {
+                        await state.setPlayerOptions(
+                          state.playerOptions.copyWith(
+                            doubleClickRight: action,
+                          ),
+                        );
+                      },
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpace.sm),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '仅配置鼠标左键双击画面的动作；单击播放 / 暂停仍即时响应。'
+                          '快进 / 快退用于点播，直播时不执行。',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
                     _switch(
                       'settings-player-preload-next',
                       '预解析下一集地址',
@@ -273,6 +308,33 @@ class PlaybackOptionsPage extends StatelessWidget {
     subtitle: Text(subtitle),
     value: value,
     onChanged: (next) => onChanged(next),
+  );
+
+  Widget _doubleClickActionTile(
+    String side,
+    String label,
+    PlayerDoubleClickAction value,
+    ValueChanged<PlayerDoubleClickAction> onChanged,
+  ) => ListTile(
+    key: ValueKey('settings-player-double-click-$side'),
+    dense: true,
+    contentPadding: EdgeInsets.zero,
+    title: Text(label),
+    trailing: Semantics(
+      label: label,
+      child: DropdownButton<PlayerDoubleClickAction>(
+        key: ValueKey('settings-player-double-click-$side-menu'),
+        value: value,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final action in PlayerDoubleClickAction.values)
+            DropdownMenuItem(value: action, child: Text(action.label)),
+        ],
+        onChanged: (action) {
+          if (action != null) onChanged(action);
+        },
+      ),
+    ),
   );
 
   /// 倍速文案：整数不带小数点（3× 而不是 3.0×）。
