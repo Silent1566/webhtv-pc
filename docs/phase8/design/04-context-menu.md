@@ -100,6 +100,9 @@ Stack:
 | | 前进 10 秒 | `seekBy(+10s)` | → |
 | **速度** | 0.5× / 0.75× / 1.0× / 1.25× / 1.5× / 2.0× | `controller.setRate` | 无（新增） |
 | **画面** | 画面比例与缩放 ▸ | `_showVideoFitSettings` | 无 |
+| | LUT 滤镜… | `_showLutSettings` | 无 |
+| | HDR 色调映射 ▸ | `_livePatchOptions`（就地写 `tone-mapping`） | 无 |
+| | 峰值亮度计算 ▸ | `_livePatchOptions`（就地写 `hdr-compute-peak`） | 无 |
 | | 全屏切换 | `_toggleFullscreen` | F11 / F |
 | **轨道** | 字幕轨 ▸ | `_showSubtitleMenu` | 无 |
 | | 弹幕开关 | `_toggleDanmaku` | 无 |
@@ -122,6 +125,8 @@ Stack:
 | --- | --- |
 | 字幕 → 字幕样式 ▸ | 字号 ▸ / 描边 ▸ / 位置 ▸ / 底色 ▸（各再一档可选值）+ 恢复默认样式 |
 | 画面 → 画面比例与缩放 ▸ | 原始比例 / 裁切铺满 / 拉伸填充 / 固定 16:9 / 固定 4:3 |
+| 画面 → HDR 色调映射 ▸ | 自动 / BT.2390 / Spline / Mobius / Reinhard / Clip（互斥单选，就地生效） |
+| 画面 → 峰值亮度计算 ▸ | 自动 / 按帧计算 / 不计算（互斥单选，就地生效） |
 | 显示 → 屏显 ▸ | 标题 / 分辨率 / 时钟 / 播放进度 / 网速 / 迷你进度条 / 诊断面板 |
 | 声音 → 音量 ▸ | 0% / 20% / 40% / 60% / 80% / 100% |
 
