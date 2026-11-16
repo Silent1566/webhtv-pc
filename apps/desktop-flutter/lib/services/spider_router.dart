@@ -109,7 +109,8 @@ class UnsupportedRuntime implements SiteRuntime {
   AppError _error(String siteKey, String operation) => AppError(
     AppErrorKind.siteUnsupported,
     '站点运行时「$runtimeName」未安装或未支持',
-    detail: '站点=$siteKey 操作=$operation ${stage == null ? "" : "阶段=$stage"} $reason',
+    detail:
+        '站点=$siteKey 操作=$operation ${stage == null ? "" : "阶段=$stage"} $reason',
   );
 
   @override
@@ -362,7 +363,8 @@ class SpiderRouter {
     if (client != null && !identical(client, this.client)) {
       this.client = client;
     }
-    if (globalHeaders != null && !identical(globalHeaders, this.globalHeaders)) {
+    if (globalHeaders != null &&
+        !identical(globalHeaders, this.globalHeaders)) {
       this.globalHeaders = globalHeaders;
     }
     _cache.clear();
@@ -433,7 +435,8 @@ class SpiderRouter {
       available: true,
       runtimeName: '本地 Spider (webhtv-ipc-v1)',
       stage: 'MVP-B',
-      reason: 'runtime=${local.manifest.runtime} '
+      reason:
+          'runtime=${local.manifest.runtime} '
           'capabilities=${local.manifest.capabilities.sorted.join(",")}',
     );
   }
@@ -483,14 +486,13 @@ class SpiderRouter {
       available: true,
       runtimeName: '本地 Spider (webhtv-ipc-v1)',
       stage: 'Phase 3',
-      reason: 'runtime=${local.manifest.runtime} '
+      reason:
+          'runtime=${local.manifest.runtime} '
           'capabilities=${local.manifest.capabilities.sorted.join(",")}',
     );
   }
 
-  String _hostPath() =>
-      hostPath ??
-      (supervisor == null ? '' : '');
+  String _hostPath() => hostPath ?? (supervisor == null ? '' : '');
 
   /// `csp_*` 站点的可用性判定（§9.3 `tvbox-java-v1`）。
   ///
@@ -530,7 +532,8 @@ class SpiderRouter {
         available: false,
         runtimeName: 'PC Java Spider',
         stage: 'Phase 3',
-        reason: '缺少桌面 JVM 站源：请把**无 Android Context** 的 jar 放到 '
+        reason:
+            '缺少桌面 JVM 站源：请把**无 Android Context** 的 jar 放到 '
             '${binding.directoryFor(site.key)}（Android jar 内含 classes.dex，JVM 无法加载）',
       );
     }
@@ -548,17 +551,29 @@ class SpiderRouter {
         available: false,
         runtimeName: 'Android/JAR Spider',
         stage: 'Phase 3',
-        reason: '该 jar 含原生库（$native），只能在安卓端运行，桌面 JVM 无法加载。'
+        reason:
+            '该 jar 含原生库（$native），只能在安卓端运行，桌面 JVM 无法加载。'
             'dex 预转译只解决 Java 字节码形态，替代不了安卓原生库。'
             '如需在 PC 上使用，请通过「安卓设备接入」交给安卓端运行。',
       );
     }
-    if (CspJvmBinding.isAndroidJar(entry)) {
+    if (inspection.verdict == JarVerdict.shellGuard ||
+        (inspection.verdict == JarVerdict.androidJar &&
+            inspection.note.startsWith('加固壳检测'))) {
       return SiteAvailability(
         available: false,
         runtimeName: 'Android/JAR Spider',
         stage: 'Phase 3',
-        reason: '该 jar 看起来是 Android 站源（内含 classes.dex），但 zip 结构已损坏、'
+        reason: inspection.summary,
+      );
+    }
+    if (inspection.verdict == JarVerdict.androidJar) {
+      return SiteAvailability(
+        available: false,
+        runtimeName: 'Android/JAR Spider',
+        stage: 'Phase 3',
+        reason:
+            '该 jar 看起来是 Android 站源（内含 classes.dex），但 zip 结构已损坏、'
             '无法确认是否还含原生库（lib/*.so），因此不自动转译；JVM 无法加载。'
             '请重新获取完整的 jar，或改用桌面版 jar。',
       );
@@ -568,13 +583,16 @@ class SpiderRouter {
     // 已转译 → 可用；转译失败 → 不可用；没有记录 → 可用但首次加载要现场转译。
     String? dexNote;
     if (inspection.verdict == JarVerdict.translatableDex) {
-      final translation =
-          JarIntake.intakeRecord(binding.directoryFor(site.key))?['dexTranslation'];
+      final translation = JarIntake.intakeRecord(
+        binding.directoryFor(site.key),
+      )?['dexTranslation'];
       if (translation is! Map) {
-        dexNote = '该站点为 Android 站源（内含 classes.dex），尚未预转译，'
+        dexNote =
+            '该站点为 Android 站源（内含 classes.dex），尚未预转译，'
             '首次加载时会转译（约数秒）';
       } else if (translation['ok'] == true) {
-        dexNote = '该站点为 Android 站源，dex 已转译 classCount='
+        dexNote =
+            '该站点为 Android 站源，dex 已转译 classCount='
             '${translation['classCount'] ?? 0}';
       } else {
         final stage = '${translation['stage'] ?? ''}'.trim();
@@ -583,7 +601,8 @@ class SpiderRouter {
           available: false,
           runtimeName: 'Android/JAR Spider',
           stage: 'Phase 3',
-          reason: '该站点为 Android 站源，dex 预转译失败'
+          reason:
+              '该站点为 Android 站源，dex 预转译失败'
               '${stage.isEmpty ? '' : '（$stage）'}'
               '${message.isEmpty ? '' : '：$message'}',
         );
@@ -620,7 +639,8 @@ class SpiderRouter {
       available: true,
       runtimeName: 'PC Java Spider (tvbox-java-v1)',
       stage: 'Phase 3',
-      reason: '${dexNote == null ? '' : '$dexNote；'}'
+      reason:
+          '${dexNote == null ? '' : '$dexNote；'}'
           'runtime=jvm entry=${p.basename(entry)} '
           'capabilities=${local.manifest.capabilities.sorted.join(",")}',
     );
@@ -720,7 +740,8 @@ class SpiderRouter {
         available: false,
         runtimeName: 'PC Java Spider',
         stage: 'Phase 3',
-        reason: '需要本地桌面 JVM 站源（tvbox-java-v1）与独立 JVM sidecar，'
+        reason:
+            '需要本地桌面 JVM 站源（tvbox-java-v1）与独立 JVM sidecar，'
             '主进程不得加载不可信 JAR',
       );
     }
@@ -821,7 +842,11 @@ class SpiderRouter {
           stage: 'Phase 3',
         );
       }
-      final local = cspLocalSpider(site: site, entryPath: entry, binding: binding);
+      final local = cspLocalSpider(
+        site: site,
+        entryPath: entry,
+        binding: binding,
+      );
       final command = LocalSpiderCommand.resolve(
         spider: local,
         hostPath: _hostPath(),
