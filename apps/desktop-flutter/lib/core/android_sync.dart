@@ -376,7 +376,7 @@ enum SyncMergeAction {
   /// 本地无该条 → 插入。
   insert,
 
-  /// 远端更新 → 覆盖本地。
+  /// 远端更新或同时间戳内容序胜出 → 覆盖本地。
   upsert,
 
   /// 跳过（幂等、旧不覆盖新、删除标记拦截）。
@@ -396,6 +396,24 @@ class SyncMergeDecision {
   String toString() => '${action.name}: $reason';
 }
 
+/// 同 matchKey、同时间戳时，PC 按 (进度、时长、片名、集名、海报) 取字典序最大。
+/// 数字用整数顺序，字符串用 Dart compareTo 的固定顺序，不猜测真实事件先后。
+/// 这些字段既被同步写入落库，也被 toAndroidJson 重新序列化。
+/// cid 是重映射别名；raw、opening/ending 不被同步写入保留，因此不参与排序。
+/// 返回 0 表示 PC 的同步有效内容等价（幂等）。
+int _compareHistoryContentOrder(SyncHistoryItem a, SyncHistoryItem b) {
+  var result = a.positionMs.compareTo(b.positionMs);
+  if (result != 0) return result;
+  result = a.durationMs.compareTo(b.durationMs);
+  if (result != 0) return result;
+  result = a.vodName.compareTo(b.vodName);
+  if (result != 0) return result;
+  result = a.episodeName.compareTo(b.episodeName);
+  if (result != 0) return result;
+  // 空串与 `null` 是同一种"没有海报"（`tryFromJson` 已归一到 `null`）。
+  return (a.vodPic ?? '').compareTo(b.vodPic ?? '');
+}
+
 /// 合并裁决（`design/02` §4.4 + §4.5）。
 ///
 /// ```text
@@ -404,9 +422,15 @@ class SyncMergeDecision {
 ///     否则                                        → insert
 /// local != null:
 ///     incoming.updatedAt >  local.updatedAt       → upsert
-///     incoming.updatedAt == local.updatedAt       → skip（幂等）
 ///     incoming.updatedAt <  local.updatedAt       → skip（旧不覆盖新）
+///     incoming.updatedAt == local.updatedAt       → 按 [_compareHistoryContentOrder]：
+///         内容等价                                → skip（幂等）
+///         远端内容序更优                          → upsert
+///         本地内容序更优                          → skip
 /// ```
+///
+/// PC 对同 matchKey 的分歧记录两个方向裁决时，恰好一个 upsert、一个 skip。
+/// 不改变 Android 对端的合并逻辑。
 ///
 /// [localDeletedAt] 是本条在 PC 上被删除的时刻（毫秒）。**只在
 /// `local == null` 时生效**：本地还有记录说明用户后来又看了，删除标记
@@ -427,7 +451,20 @@ SyncMergeDecision decideHistoryMerge({
     return const SyncMergeDecision(SyncMergeAction.upsert, '远端记录更新');
   }
   if (incoming.updatedAt == local.updatedAt) {
-    return const SyncMergeDecision(SyncMergeAction.skip, '时间戳相同（幂等）');
+    final order = _compareHistoryContentOrder(incoming, local);
+    if (order == 0) {
+      return const SyncMergeDecision(SyncMergeAction.skip, '时间戳相同（幂等）');
+    }
+    if (order > 0) {
+      return const SyncMergeDecision(
+        SyncMergeAction.upsert,
+        '时间戳相同，远端内容序更优（规范化裁决）',
+      );
+    }
+    return const SyncMergeDecision(
+      SyncMergeAction.skip,
+      '时间戳相同，本地内容序更优（本地记录更新）',
+    );
   }
   return const SyncMergeDecision(SyncMergeAction.skip, '本地记录更新（旧不覆盖新）');
 }
@@ -476,8 +513,7 @@ class SyncMergeStats {
 
 /// 合并计划：裁决完成、可直接执行的写入清单。
 ///
-/// 服务端与存储层消费它，这样"裁决"与"写库"解耦，纯逻辑层可全量覆盖
-/// 5 种合并裁决（`design/03` §4.3）。
+/// 服务端与存储层消费它，使裁决与写库解耦。
 class SyncMergePlan {
   const SyncMergePlan({
     required this.inserts,
@@ -490,10 +526,10 @@ class SyncMergePlan {
   /// 待插入（本地无该条）。
   final List<SyncHistoryItem> inserts;
 
-  /// 待覆盖（远端更新）。
+  /// 待覆盖（远端更新或同时间戳内容序胜出）。
   final List<SyncHistoryItem> upserts;
 
-  /// 被跳过的条数（幂等 / 旧不覆盖新 / 删除标记）。
+  /// 被跳过的条数（批内重复、幂等、内容序落败、旧不覆盖新、删除标记）。
   final int skipped;
 
   /// 解析失败的条目（`design/02` §6：必须计入 `failed`）。
@@ -519,6 +555,9 @@ class SyncMergePlan {
 /// [localByMatchKey]：本地已有记录，按 [SyncHistoryItem.matchKey] 索引。
 /// [deletedAtByMatchKey]：本地删除标记（毫秒），用于阻止已删除记录被复活。
 ///
+/// 批内同 matchKey 先用同一裁决选出赢家；仅赢家与本地比较并进入写入清单。
+/// 被淘汰的重复条目计入 skipped，避免存储层的覆盖顺序决定结果。
+///
 /// 注意：即使某条只是 `skip`，也**不会**删除本地数据；本函数不产生任何
 /// 删除动作（P3：禁止 `DELETE FROM history` 作为合并前置步骤）。
 SyncMergePlan buildHistoryMergePlan({
@@ -530,11 +569,25 @@ SyncMergePlan buildHistoryMergePlan({
   final upserts = <SyncHistoryItem>[];
   var skipped = 0;
 
+  final winners = <String, SyncHistoryItem>{};
   for (final incoming in parsed.items) {
+    final current = winners[incoming.matchKey];
+    if (current == null) {
+      winners[incoming.matchKey] = incoming;
+      continue;
+    }
+    skipped++;
+    if (decideHistoryMerge(incoming: incoming, local: current).isApplied) {
+      winners[incoming.matchKey] = incoming;
+    }
+  }
+
+  for (final incoming in winners.values) {
+    final matchKey = incoming.matchKey;
     final decision = decideHistoryMerge(
       incoming: incoming,
-      local: localByMatchKey[incoming.matchKey],
-      localDeletedAt: deletedAtByMatchKey[incoming.matchKey],
+      local: localByMatchKey[matchKey],
+      localDeletedAt: deletedAtByMatchKey[matchKey],
     );
     switch (decision.action) {
       case SyncMergeAction.insert:
