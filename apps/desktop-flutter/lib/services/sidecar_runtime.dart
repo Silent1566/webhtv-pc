@@ -42,6 +42,9 @@ class SidecarRuntime implements SiteRuntime {
   String get name => '本地 Spider (${spider.manifest.runtime})';
 
   /// 正在运行的主机；首次调用时建立。
+  ///
+  /// 这份缓存**不是真源**：空闲回收或崩溃后宿主会消失，因此每次使用前都要向
+  /// [SpiderHostSupervisor] 核对它是否仍然存活；否则调用会发给一个已退出的进程。
   SpiderHost? _host;
 
   /// 每次调用递增，用于生成不重复的 requestId（§9.3.1）。
@@ -54,10 +57,12 @@ class SidecarRuntime implements SiteRuntime {
 
   /// 确保运行时已启动并完成 `initialize` 握手。
   Future<SpiderHost> _ensureHost() async {
-    final existing = _host ?? supervisor.hostFor(site.key);
-    if (existing != null) {
-      _host = existing;
-      return existing;
+    final live = supervisor.hostFor(site.key);
+    if (live != null && identical(live, _host)) return live;
+    _host = null;
+    if (live != null) {
+      _host = live;
+      return live;
     }
     _host = await supervisor.ensureRunning(
       siteKey: site.key,
