@@ -23,6 +23,7 @@ import 'package:path/path.dart' as p;
 
 import '../services/local_source_import.dart';
 import '../services/local_spider_scanner.dart';
+import '../services/spider_registry.dart' show LocalSpider;
 import '../services/web_home_store.dart';
 import '../state/app_state.dart';
 import 'common.dart';
@@ -51,6 +52,13 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   final TextEditingController _onlineUrlController = TextEditingController();
   final TextEditingController _onlineNameController = TextEditingController();
   final Set<String> _selected = <String>{};
+
+  /// 已导入区的多选态与勾选集（HTML 与 py/js 共用一个集合，按源 key 记）。
+  ///
+  /// 与候选区 [_selected] 分开：候选存绝对路径，已导入源存 key，两批数据在
+  /// 同一次扫描/导入里不会同时存在，混用一个集合只会让「清空勾选」清错对象。
+  bool _batchMode = false;
+  final Set<String> _batchKeys = <String>{};
 
   LocalScanReport? _report;
   LocalImportResult? _result;
@@ -215,108 +223,320 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
             ],
           ),
           const Divider(height: AppSpace.xl),
-          SettingsSection(
-            title: '已导入的本地源',
-            description:
-                'HTML 源可在此打开或停用；Python / JavaScript 源在「Spider」页查看运行状态。',
-            children: [
-              if (webHomeError != null)
-                Text(webHomeError, key: const ValueKey('webhome-load-error')),
-              if (webHome != null && webHome.isEmpty && localSpiders.isEmpty)
-                const EmptyState(
-                  icon: Icons.inbox_outlined,
-                  title: '还没有本地源',
-                  message: '选一个文件夹扫描，勾选后点「导入所选」。',
-                ),
-              for (final source in webHome ?? const <WebHomeSource>[])
-                ListTile(
-                  key: ValueKey('webhome-row-${source.key}'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    source.enabled
-                        ? Icons.web_asset
-                        : Icons.web_asset_off_outlined,
-                  ),
-                  title: Text(source.name),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        source.isRemote
-                            ? '${source.key} · 在线 HTML'
-                            : '${source.key} · HTML 首页 · 入口 ${source.entry}',
+          Builder(
+            builder: (context) {
+              final htmlSources = webHome ?? const <WebHomeSource>[];
+              // 两类源的 key 合起来就是「已导入的全部源」，批量操作只用这一份。
+              final importedKeys = <String>[
+                for (final source in htmlSources) source.key,
+                for (final spider in localSpiders) spider.key,
+              ];
+              // 启用状态与 HTML 登记、py/js 的 local_sources.json 两套存储同源；
+              // 读取失败时后端降级为「全部启用」，必须在此如实可见。
+              final enableError = _state.localSourceEnableError;
+              return SettingsSection(
+                title: '已导入的本地源',
+                description:
+                    '每个源都可单独启用或停用；HTML 源可在此打开。'
+                    'Python / JavaScript 源在「Spider」页查看运行状态。',
+                children: [
+                  if (webHomeError != null)
+                    Text(
+                      webHomeError,
+                      key: const ValueKey('webhome-load-error'),
+                    ),
+                  if (enableError != null)
+                    Text(
+                      '读取启用状态失败（已按「启用」显示，可能不准）：$enableError',
+                      key: const ValueKey('local-enable-load-error'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppPalette.statusDegraded,
                       ),
-                      Text(
-                        source.isRemote
-                            ? source.remoteUrl
-                            : '本地文件：${source.entry}',
-                        key: ValueKey('webhome-origin-${source.key}'),
-                        style: theme.textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        _webHomeTimeLabel(source),
-                        key: ValueKey('webhome-time-${source.key}'),
-                        style: tabular(theme.textTheme.bodySmall!),
-                      ),
-                    ],
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextButton(
-                        key: ValueKey('webhome-open-${source.key}'),
-                        onPressed: source.enabled
-                            ? () => _openWebHome(source)
-                            : null,
-                        child: const Text('打开'),
-                      ),
-                      Switch(
-                        key: ValueKey('webhome-toggle-${source.key}'),
-                        value: source.enabled,
-                        onChanged: _busy
-                            ? null
-                            : (value) => _setWebHomeEnabled(source, value),
-                      ),
-                      IconButton(
-                        key: ValueKey('webhome-remove-${source.key}'),
-                        tooltip: '删除',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: _busy ? null : () => _removeWebHome(source),
-                      ),
-                    ],
-                  ),
-                ),
-              for (final spider in localSpiders)
-                ListTile(
-                  key: ValueKey('localspider-row-${spider.key}'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.extension_outlined),
-                  title: Text(spider.manifest.name),
-                  subtitle: Text(
-                    '${spider.key} · ${spider.manifest.runtime} · '
-                    '${spider.manifest.entry}',
-                  ),
-                  trailing: IconButton(
-                    key: ValueKey('local-remove-${spider.key}'),
-                    tooltip: '删除本地源',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: _busy
-                        ? null
-                        : () => _removeLocalSpider(
-                            spider.key,
-                            spider.manifest.name,
-                          ),
-                  ),
-                ),
-            ],
+                    ),
+                  // 登记表读取失败时 [webHome] 是 null：那不是"没有源"，而是
+                  // "不知道有哪些源"。此时显示空态会把读取失败说成空列表。
+                  if (webHome != null &&
+                      webHome.isEmpty &&
+                      localSpiders.isEmpty &&
+                      webHomeError == null)
+                    const EmptyState(
+                      icon: Icons.inbox_outlined,
+                      title: '还没有本地源',
+                      message: '选一个文件夹扫描，勾选后点「导入所选」。',
+                    ),
+                  if (importedKeys.isNotEmpty && !_batchMode)
+                    SettingsActions(
+                      children: [
+                        OutlinedButton.icon(
+                          key: const ValueKey('local-sources-batch'),
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() {
+                                  _batchMode = true;
+                                  _batchKeys.clear();
+                                }),
+                          icon: const Icon(Icons.checklist),
+                          label: const Text('批量管理'),
+                        ),
+                      ],
+                    ),
+                  if (_batchMode)
+                    _buildBatchBar(
+                      context,
+                      allKeys: importedKeys,
+                      htmlSources: htmlSources,
+                      spiders: localSpiders,
+                    ),
+                  for (final source in htmlSources)
+                    _buildWebHomeRow(theme, source),
+                  for (final spider in localSpiders)
+                    _buildSpiderRow(theme, spider),
+                ],
+              );
+            },
           ),
           const SizedBox(height: AppSpace.lg),
           Text(
             '说明：本地源与远端直连源共用同一套 Spider 运行时；'
             'HTML 源依赖 Microsoft Edge WebView2 运行时。',
             style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 已导入单行：批量态在行首多一个勾选框（HTML 与 py/js 共用 [_batchKeys]）。
+  Widget _buildRowLeading(String key, IconData icon) {
+    if (!_batchMode) return Icon(icon);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Checkbox(
+          key: ValueKey('local-batch-check-$key'),
+          value: _batchKeys.contains(key),
+          onChanged: _busy
+              ? null
+              : (value) => setState(() {
+                  if (value ?? false) {
+                    _batchKeys.add(key);
+                  } else {
+                    _batchKeys.remove(key);
+                  }
+                }),
+        ),
+        Icon(icon),
+      ],
+    );
+  }
+
+  Widget _buildWebHomeRow(ThemeData theme, WebHomeSource source) {
+    // 启用状态一律取自统一口径：HTML 的登记表与 py/js 的 local_sources.json
+    // 由 [AppState.localSourceEnabled] 抹平，页面不再自己判断存储来源。
+    final enabled = _state.localSourceEnabled(source.key);
+    return ListTile(
+      key: ValueKey('webhome-row-${source.key}'),
+      contentPadding: EdgeInsets.zero,
+      leading: _buildRowLeading(
+        source.key,
+        enabled ? Icons.web_asset : Icons.web_asset_off_outlined,
+      ),
+      title: Text(source.name),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            source.isRemote
+                ? '${source.key} · 在线 HTML'
+                : '${source.key} · HTML 首页 · 入口 ${source.entry}',
+          ),
+          Text(
+            source.isRemote ? source.remoteUrl : '本地文件：${source.entry}',
+            key: ValueKey('webhome-origin-${source.key}'),
+            style: theme.textTheme.bodySmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          Text(
+            _webHomeTimeLabel(source),
+            key: ValueKey('webhome-time-${source.key}'),
+            style: tabular(theme.textTheme.bodySmall!),
+          ),
+          if (!enabled)
+            Text(
+              '已停用：不在站点列表中显示',
+              key: ValueKey('webhome-disabled-note-${source.key}'),
+              style: tabular(theme.textTheme.bodySmall!)
+                  .copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton(
+            key: ValueKey('webhome-open-${source.key}'),
+            onPressed: enabled ? () => _openWebHome(source) : null,
+            child: const Text('打开'),
+          ),
+          Switch(
+            key: ValueKey('webhome-toggle-${source.key}'),
+            value: enabled,
+            onChanged: _busy
+                ? null
+                : (value) => _setWebHomeEnabled(source, value),
+          ),
+          IconButton(
+            key: ValueKey('webhome-remove-${source.key}'),
+            tooltip: '删除',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _busy ? null : () => _removeWebHome(source),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpiderRow(ThemeData theme, LocalSpider spider) {
+    final enabled = _state.localSourceEnabled(spider.key);
+    return ListTile(
+      key: ValueKey('localspider-row-${spider.key}'),
+      contentPadding: EdgeInsets.zero,
+      leading: _buildRowLeading(
+        spider.key,
+        enabled ? Icons.extension_outlined : Icons.extension_off_outlined,
+      ),
+      title: Text(spider.manifest.name),
+      subtitle: Text(
+        '${spider.key} · ${spider.manifest.runtime} · '
+        '${spider.manifest.entry}'
+        '${enabled ? '' : ' · 已停用'}',
+        key: ValueKey('localspider-state-${spider.key}'),
+        style: tabular(theme.textTheme.bodySmall!),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Switch(
+            key: ValueKey('local-toggle-${spider.key}'),
+            value: enabled,
+            onChanged: _busy
+                ? null
+                : (value) => _setSpiderEnabled(spider.key, value),
+          ),
+          IconButton(
+            key: ValueKey('local-remove-${spider.key}'),
+            tooltip: '删除本地源',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _busy
+                ? null
+                : () => _removeLocalSpider(spider.key, spider.manifest.name),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 批量条：全选、计数、启用/停用/删除、退出。全部包在 [SettingsActions]
+  /// 的 Wrap 里，窄窗自动换行而不会溢出。
+  Widget _buildBatchBar(
+    BuildContext context, {
+    required List<String> allKeys,
+    required List<WebHomeSource> htmlSources,
+    required List<LocalSpider> spiders,
+  }) {
+    final theme = Theme.of(context);
+    final selected = _batchKeys;
+    final allSelected = allKeys.isNotEmpty && allKeys.every(selected.contains);
+    final hasSelection = selected.isNotEmpty;
+    final style = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final names = <String, String>{
+      for (final source in htmlSources) source.key: source.name,
+      for (final spider in spiders) spider.key: spider.manifest.name,
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpace.md),
+      padding: const EdgeInsets.all(AppSpace.md),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.45,
+        ),
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('批量管理已导入源', style: theme.textTheme.titleSmall),
+          const SizedBox(height: AppSpace.xs),
+          Text('删除会连同本地源目录一起清除，且不可撤销。', style: style),
+          const SizedBox(height: AppSpace.sm),
+          SettingsActions(
+            children: [
+              TextButton.icon(
+                key: const ValueKey('local-sources-batch-select-all'),
+                onPressed: _busy
+                    ? null
+                    : () => setState(() {
+                        if (allSelected) {
+                          _batchKeys.clear();
+                        } else {
+                          _batchKeys
+                            ..clear()
+                            ..addAll(allKeys);
+                        }
+                      }),
+                icon: Icon(
+                  allSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                ),
+                label: Text(allSelected ? '取消全选' : '全选'),
+              ),
+              Text(
+                '已选 ${selected.length} / ${allKeys.length}',
+                key: const ValueKey('local-sources-batch-count'),
+                style: tabular(theme.textTheme.bodyMedium!),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('local-sources-batch-enable'),
+                onPressed: _busy || !hasSelection
+                    ? null
+                    : () => _setBatchEnabled(true),
+                icon: const Icon(Icons.toggle_on),
+                label: const Text('批量启用'),
+              ),
+              FilledButton.tonalIcon(
+                key: const ValueKey('local-sources-batch-disable'),
+                onPressed: _busy || !hasSelection
+                    ? null
+                    : () => _setBatchEnabled(false),
+                icon: const Icon(Icons.toggle_off),
+                label: const Text('批量停用'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('local-sources-batch-delete'),
+                onPressed: _busy || !hasSelection
+                    ? null
+                    : () => _deleteBatch(_batchKeys.toList()..sort(), names),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                ),
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: const Text('批量删除'),
+              ),
+              TextButton.icon(
+                key: const ValueKey('local-sources-batch-exit'),
+                onPressed: _busy
+                    ? null
+                    : () => setState(() {
+                        _batchMode = false;
+                        _batchKeys.clear();
+                      }),
+                icon: const Icon(Icons.close),
+                label: const Text('退出批量'),
+              ),
+            ],
           ),
         ],
       ),
@@ -691,6 +911,136 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// py/js 源的单条启停：走统一接缝，成功后必须 setState 刷新开关与文案。
+  Future<void> _setSpiderEnabled(String key, bool enabled) async {
+    setState(() {
+      _busy = true;
+      _busyNote = enabled ? '正在启用本地源…' : '正在停用本地源…';
+      _message = null;
+    });
+    try {
+      final ok = await _state.setLocalSourceEnabled(key, enabled);
+      if (mounted) {
+        setState(() {
+          if (!ok) {
+            _message =
+                '${enabled ? '启用' : '停用'}本地源失败：key=$key 未能保存'
+                '（源不存在或启用状态文件不可写）';
+          }
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _message = '${enabled ? '启用' : '停用'}本地源失败：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 批量启用/停用：逐 key 结论必须落到 [_message]，失败要说清是哪几个 key。
+  Future<void> _setBatchEnabled(bool enabled) async {
+    final keys = _batchKeys.toList(growable: false);
+    if (keys.isEmpty) return;
+    final action = enabled ? '启用' : '停用';
+    setState(() {
+      _busy = true;
+      _busyNote = '正在批量$action…';
+      _message = null;
+    });
+    try {
+      final outcome = await _state.setLocalSourcesEnabled(keys, enabled);
+      if (mounted) {
+        setState(() {
+          final failed = outcome.failedKeys;
+          _message = failed.isEmpty
+              ? '批量$action完成：成功 ${outcome.okCount} / ${keys.length}'
+              : '批量$action完成：成功 ${outcome.okCount} / ${keys.length}，'
+                    '失败 ${failed.length}（${failed.join('、')}）';
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _message = '批量$action失败：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 批量删除：与单条删除同形态的二次确认；被拒的 key 必须逐条报出来。
+  Future<void> _deleteBatch(
+    List<String> keys,
+    Map<String, String> names,
+  ) async {
+    if (keys.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('批量删除本地源'),
+        content: Text(
+          '确定删除以下 ${keys.length} 个源？本地源目录及其中的文件会被一并清除，'
+          '在线 HTML 只移除网址登记。\n\n'
+          '${keys.map((key) => '· ${names[key] ?? key}（$key）').join('\n')}\n\n'
+          '如源仍在运行，请先在「Spider」页停止。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _busyNote = '正在批量删除…';
+      _message = null;
+    });
+    var okCount = 0;
+    final failed = <String>[];
+    try {
+      for (final key in keys) {
+        bool ok;
+        try {
+          ok = await _removeImportedSource(key);
+        } catch (error) {
+          ok = false;
+          _message = '删除 $key 失败：$error';
+        }
+        if (ok) {
+          okCount++;
+        } else {
+          failed.add(key);
+        }
+      }
+      if (mounted) {
+        setState(() {
+          // 成功删掉的 key 必须离开选择集，否则下一次批量会去操作已不存在的源。
+          _batchKeys.removeAll(keys.where((key) => !failed.contains(key)));
+          _message = failed.isEmpty
+              ? '批量删除完成：成功 $okCount / ${keys.length}'
+              : '批量删除完成：成功 $okCount / ${keys.length}，'
+                    '失败 ${failed.length}（${failed.join('、')}）。'
+                    '常见原因：源不存在、目录不安全或仍在运行——'
+                    '如仍在运行，请先在「Spider」页停止后重试。';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 按 key 判断该源属于哪种存储，再走对应删除：HTML 走登记表，py/js 走目录。
+  Future<bool> _removeImportedSource(String key) async {
+    final isHtml = _state.webHomeSources.any((source) => source.key == key);
+    if (isHtml) return _state.removeWebHome(key);
+    return _state.removeLocalSpider(key);
   }
 
   Future<void> _setWebHomeEnabled(WebHomeSource source, bool enabled) async {

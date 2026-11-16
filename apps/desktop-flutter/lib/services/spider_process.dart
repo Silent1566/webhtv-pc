@@ -667,6 +667,17 @@ class SidecarProcess {
           },
         ),
       );
+    } else {
+      // 主动停止时在途请求必须立刻结束：否则等它的人会一直挂到 deadline，
+      // 表现为「停用了源，界面还转圈几十秒」。
+      _failAll(
+        SpiderError(
+          code: SpiderErrorCode.cancelled,
+          message: 'sidecar 已停止，取消未完成的请求',
+          siteKey: _spec.siteKey,
+          userVisible: true,
+        ),
+      );
     }
   }
 
@@ -1039,6 +1050,7 @@ class SpiderHostSupervisor {
     required this.workRoot,
     required this.log,
     this.debugLog,
+    this.isSourceEnabled,
     this.maxFailures = 5,
     this.baseBackoff = const Duration(seconds: 1),
     this.maxBackoff = const Duration(seconds: 60),
@@ -1050,6 +1062,19 @@ class SpiderHostSupervisor {
 
   /// 详细调试日志旁路；由 `AppState` 注入，缺省不影响既有行为。
   final SpiderDebugLog? debugLog;
+
+  /// 用户停用源的入口门禁，与连续失败触发的熔断分开。
+  final bool Function(String sourceKey)? isSourceEnabled;
+
+  void _checkSourceEnabled(String siteKey, SpiderManifest manifest) {
+    if (isSourceEnabled?.call(manifest.key) ?? true) return;
+    throw SpiderError(
+      code: SpiderErrorCode.initFailed,
+      message: '本地源 ${manifest.key} 已停用，请在本地源页启用后重试',
+      siteKey: siteKey,
+      userVisible: true,
+    );
+  }
 
   /// 同一站点连续失败该次数后进入禁用状态，禁止无限快速重启（§9.3.1）。
   final int maxFailures;
@@ -1067,6 +1092,7 @@ class SpiderHostSupervisor {
     String extend = '',
     Map<String, String> environment = const {},
   }) async {
+    _checkSourceEnabled(siteKey, manifest);
     final runtime = _runtimes.putIfAbsent(siteKey, () => _SiteRuntime(siteKey));
     if (runtime.host != null) return runtime.host!;
 
@@ -1112,6 +1138,23 @@ class SpiderHostSupervisor {
       );
     }
 
+    runtime
+      ..sourceKey = manifest.key
+      ..starting = true;
+    final generation = runtime.generation;
+    // 握手可能持续数秒：期间用户停用源或删除源都必须让这次启动作废，
+    // 而不是等握手完成后再把进程登记成「运行中」。
+    void checkCurrent() {
+      _checkSourceEnabled(siteKey, manifest);
+      if (generation == runtime.generation) return;
+      throw SpiderError(
+        code: SpiderErrorCode.cancelled,
+        message: '源 $siteKey 的启动已取消',
+        siteKey: siteKey,
+        userVisible: true,
+      );
+    }
+
     final workingDirectory = p.join(
       workRoot,
       '$siteKey-${DateTime.now().microsecondsSinceEpoch}',
@@ -1134,15 +1177,27 @@ class SpiderHostSupervisor {
         ),
         debugLog: debugLog,
       );
+      checkCurrent();
+      runtime.process = process;
       host = SpiderHost(manifest: manifest, process: process, log: log);
       await host.initialize(extend: extend);
+      checkCurrent();
     } catch (error) {
       if (process != null) await process.dispose();
-      _recordFailure(runtime, error);
+      if (identical(runtime.process, process)) runtime.process = null;
+      // 被停用/取消的启动不是「源失败」：不记失败、不进退避，否则用户
+      // 手动停用一个源会把它推进指数退避的熔断里。
+      if (generation == runtime.generation) {
+        runtime.starting = false;
+        if (isSourceEnabled?.call(manifest.key) ?? true) {
+          _recordFailure(runtime, error);
+        }
+      }
       rethrow;
     }
 
     runtime
+      ..starting = false
       ..host = host
       ..process = process
       ..state = SpiderRuntimeState.running
@@ -1234,12 +1289,37 @@ class SpiderHostSupervisor {
     final runtime = _runtimes[siteKey];
     if (runtime == null) return;
     final process = runtime.process;
+    // 递增代际让「正在握手」的那次启动在下一次检查点自行作废。
+    runtime.generation++;
     runtime
+      ..starting = false
       ..host = null
       ..process = null
       ..state = SpiderRuntimeState.stopped;
     if (process != null) await process.dispose();
     log.info('Spider 已停止 site=$siteKey', scope: 'spider');
+  }
+
+  /// 某个源是否有活着的运行时（含尚未完成握手、或已启动未登记主机的进程）。
+  ///
+  /// 删除源时用它而不是 [isRunning]：握手中的进程也持有源目录里的文件，
+  /// 那时删目录会在 Windows 上失败或留下半删除状态。
+  bool isSourceActive(String sourceKey) => _runtimes.values.any(
+    (runtime) =>
+        runtime.sourceKey == sourceKey &&
+        (runtime.starting || runtime.process != null || runtime.host != null),
+  );
+
+  /// 按源停止全部站点别名，包括尚未完成握手的进程。
+  Future<void> stopSources(Iterable<String> sourceKeys) async {
+    final keys = sourceKeys.toSet();
+    final siteKeys = [
+      for (final runtime in _runtimes.values)
+        if (keys.contains(runtime.sourceKey)) runtime.siteKey,
+    ];
+    for (final siteKey in siteKeys) {
+      await stop(siteKey);
+    }
   }
 
   bool isRunning(String siteKey) => _runtimes[siteKey]?.host != null;
@@ -1303,6 +1383,13 @@ class _SiteRuntime {
   _SiteRuntime(this.siteKey);
 
   final String siteKey;
+
+  /// 该站点运行时对应的 manifest key（一个源可能被多个配置站点别名引用）。
+  String sourceKey = '';
+  bool starting = false;
+
+  /// 停止一次启动就递增；握手期间的检查点据此判定这次启动已作废。
+  int generation = 0;
   SpiderHost? host;
   SidecarProcess? process;
   SpiderRuntimeState state = SpiderRuntimeState.stopped;

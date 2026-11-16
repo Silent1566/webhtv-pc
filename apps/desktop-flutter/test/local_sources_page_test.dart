@@ -800,6 +800,337 @@ void main() {
     );
   });
 
+  // ---------------------------------------------------------------------
+  // 四类源启停 + 已导入区批量管理（多选 / 批量启用 / 批量停用 / 批量删除）
+  // ---------------------------------------------------------------------
+
+  String batchCount(WidgetTester tester) =>
+      tester.widget<Text>(_key('local-sources-batch-count')).data!;
+
+  bool batchActionEnabled(WidgetTester tester, String key) {
+    final widget = tester.widget(_key(key));
+    if (widget is FilledButton) return widget.onPressed != null;
+    if (widget is OutlinedButton) return widget.onPressed != null;
+    if (widget is TextButton) return widget.onPressed != null;
+    if (widget is IconButton) return widget.onPressed != null;
+    throw StateError('批量按钮类型未知：${widget.runtimeType}');
+  }
+
+  List<Switch> spiderToggles(WidgetTester tester) =>
+      tester.widgetList<Switch>(find.byType(Switch)).where((widget) {
+        final key = (widget.key as ValueKey<String>?)?.value ?? '';
+        return key.startsWith('local-toggle-');
+      }).toList();
+
+  testWidgets('Python/JS 行提供开关，状态取自 localSourceEnabled 且可双向切换', (tester) async {
+    final root = makeRoot('localtoggle');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+
+    expect(_key('local-toggle-a'), findsOneWidget);
+    expect(state.localSourceEnabled('a'), isTrue);
+    expect(tester.widget<Switch>(_key('local-toggle-a')).value, isTrue);
+    expect(spiderToggles(tester).length, 1);
+
+    await _tap(tester, 'local-toggle-a');
+    await _settleIo(
+      tester,
+      () =>
+          state.localSourceEnabled('a') == false &&
+          tester.widget<Switch>(_key('local-toggle-a')).value == false,
+    );
+    expect(state.localSourceEnabled('a'), isFalse);
+    expect(tester.widget<Switch>(_key('local-toggle-a')).value, isFalse);
+    expect(tester.widget<Switch>(_key('local-toggle-a')).onChanged, isNotNull);
+    expect(
+      tester.widget<FilledButton>(_key('local-sources-scan')).onPressed,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+
+    await _tap(tester, 'local-toggle-a');
+    await _settleIo(
+      tester,
+      () =>
+          state.localSourceEnabled('a') == true &&
+          tester.widget<Switch>(_key('local-toggle-a')).value == true,
+    );
+    expect(state.localSourceEnabled('a'), isTrue);
+    expect(tester.widget<Switch>(_key('local-toggle-a')).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('HTML 行开关沿用 webhome-toggle，且与 localSourceEnabled 同口径', (
+    tester,
+  ) async {
+    final online = await state.addOnlineWebHome('https://example.com/unified');
+    final toggle = 'webhome-toggle-${online.key}';
+    await _pumpPage(tester, state);
+
+    expect(_key(toggle), findsOneWidget);
+    expect(state.localSourceEnabled(online.key), isTrue);
+    expect(tester.widget<Switch>(_key(toggle)).value, isTrue);
+
+    await _tap(tester, toggle);
+    await _settleIo(
+      tester,
+      () =>
+          state.localSourceEnabled(online.key) == false &&
+          tester.widget<Switch>(_key(toggle)).value == false,
+    );
+    expect(state.localSourceEnabled(online.key), isFalse);
+    expect(tester.widget<Switch>(_key(toggle)).value, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('批量管理：多选态、全选与计数正确，退出清空选择集', (tester) async {
+    final root = makeRoot('batchselect');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+    final online = await state.addOnlineWebHome('https://example.com/batch');
+    final onlineCheck = 'local-batch-check-${online.key}';
+
+    expect(_key('local-batch-check-a'), findsNothing);
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+
+    expect(_key('local-batch-check-a'), findsOneWidget);
+    expect(_key(onlineCheck), findsOneWidget);
+    expect(batchCount(tester), '已选 0 / 2');
+
+    // 未选中任何源时三个批量动作都 disabled。
+    expect(batchActionEnabled(tester, 'local-sources-batch-enable'), isFalse);
+    expect(batchActionEnabled(tester, 'local-sources-batch-disable'), isFalse);
+    expect(batchActionEnabled(tester, 'local-sources-batch-delete'), isFalse);
+
+    await _tap(tester, 'local-sources-batch-select-all');
+    expect(batchCount(tester), '已选 2 / 2');
+    expect(tester.widget<Checkbox>(_key('local-batch-check-a')).value, isTrue);
+    expect(tester.widget<Checkbox>(_key(onlineCheck)).value, isTrue);
+    expect(batchActionEnabled(tester, 'local-sources-batch-enable'), isTrue);
+
+    await _tap(tester, 'local-sources-batch-select-all');
+    expect(batchCount(tester), '已选 0 / 2');
+    expect(tester.widget<Checkbox>(_key('local-batch-check-a')).value, isFalse);
+
+    await _tap(tester, 'local-batch-check-a');
+    expect(batchCount(tester), '已选 1 / 2');
+
+    await _tap(tester, 'local-sources-batch-exit');
+    await tester.pumpAndSettle();
+    expect(_key('local-batch-check-a'), findsNothing);
+    expect(_key('local-sources-batch-count'), findsNothing);
+    expect(_key('local-sources-batch'), findsOneWidget);
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    expect(batchCount(tester), '已选 0 / 2');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('批量停用后两套源都停用、开关随之关闭，且仍停留在多选态', (tester) async {
+    final root = makeRoot('batchdisable');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+    final online = await state.addOnlineWebHome('https://example.com/off');
+    final htmlToggle = 'webhome-toggle-${online.key}';
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'local-sources-batch-select-all');
+    await _tap(tester, 'local-sources-batch-disable');
+    await _settleIo(
+      tester,
+      () =>
+          !state.localSourceEnabled('a') &&
+          !state.localSourceEnabled(online.key) &&
+          _messageContains(tester, '批量停用完成'),
+    );
+
+    expect(state.localSourceEnabled('a'), isFalse);
+    expect(state.localSourceEnabled(online.key), isFalse);
+    expect(tester.widget<Switch>(_key('local-toggle-a')).value, isFalse);
+    expect(tester.widget<Switch>(_key(htmlToggle)).value, isFalse);
+    expect(_messageContains(tester, '成功 2 / 2'), isTrue);
+    expect(_messageContains(tester, '失败'), isFalse);
+
+    // 不退出多选态，选择集保留。
+    expect(batchCount(tester), '已选 2 / 2');
+    expect(batchActionEnabled(tester, 'local-sources-batch-enable'), isTrue);
+    expect(
+      tester.widget<Checkbox>(_key('local-batch-check-a')).onChanged,
+      isNotNull,
+    );
+
+    await _tap(tester, 'local-sources-batch-enable');
+    await _settleIo(
+      tester,
+      () =>
+          state.localSourceEnabled('a') &&
+          state.localSourceEnabled(online.key) &&
+          _messageContains(tester, '批量启用完成'),
+    );
+    expect(tester.widget<Switch>(_key('local-toggle-a')).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('批量删除：取消不删；确认后 py/js 与 HTML 各自走对应删除', (tester) async {
+    final root = makeRoot('batchdelete');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+    final online = await state.addOnlineWebHome('https://example.com/del');
+    final spiderDir = Directory(p.join(state.spiderRoot, 'local', 'a'));
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'local-sources-batch-select-all');
+    await _tap(tester, 'local-sources-batch-delete');
+    await tester.pumpAndSettle();
+
+    // 二次确认：取消不删除。
+    expect(find.text('批量删除本地源'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(_key('localspider-row-a'), findsOneWidget);
+    expect(_key('webhome-row-${online.key}'), findsOneWidget);
+    expect(state.localSpiders.map((item) => item.key), contains('a'));
+    expect(spiderDir.existsSync(), isTrue);
+    expect(batchCount(tester), '已选 2 / 2');
+
+    await _tap(tester, 'local-sources-batch-delete');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, '删除'),
+      ),
+    );
+    await _settleIo(
+      tester,
+      () =>
+          _key('localspider-row-a').evaluate().isEmpty &&
+          _key('webhome-row-${online.key}').evaluate().isEmpty &&
+          _messageContains(tester, '批量删除完成'),
+    );
+
+    expect(state.localSpiders.map((item) => item.key), isNot(contains('a')));
+    expect(state.webHomeSources, isEmpty);
+    expect(spiderDir.existsSync(), isFalse);
+    expect(_messageContains(tester, '成功 2 / 2'), isTrue);
+    // 已删除的 key 必须从选择集移除；源已全部删除，总数也随之归零。
+    expect(batchCount(tester), '已选 0 / 0');
+    expect(batchActionEnabled(tester, 'local-sources-batch-enable'), isFalse);
+    expect(
+      tester.widget<FilledButton>(_key('local-sources-scan')).onPressed,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('批量删除被拒时如实报出失败 key，不谎称成功', (tester) async {
+    final root = makeRoot('batchreject');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+    // 页面载入后从磁盘移走源目录：删除会落到真实的安全拒绝分支。
+    Directory(p.join(state.spiderRoot, 'local', 'a'))
+        .deleteSync(recursive: true);
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'local-batch-check-a');
+    await _tap(tester, 'local-sources-batch-delete');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, '删除'),
+      ),
+    );
+    await _settleIo(tester, () => _messageContains(tester, '批量删除完成'));
+
+    expect(_messageContains(tester, '失败 1（a）'), isTrue);
+    expect(_messageContains(tester, '成功 0 / 1'), isTrue);
+    expect(
+      tester.widget<FilledButton>(_key('local-sources-scan')).onPressed,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('批量动作在忙碌时全部 disabled，结束后还原', (tester) async {
+    final root = makeRoot('batchbusy');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    await _tap(tester, 'local-sources-batch-select-all');
+
+    await tester.enterText(_key('local-sources-folder'), root.path);
+    await tester.tap(_key('local-sources-scan'));
+    await tester.pump();
+
+    for (final key in <String>[
+      'local-sources-batch-select-all',
+      'local-sources-batch-enable',
+      'local-sources-batch-disable',
+      'local-sources-batch-delete',
+      'local-sources-batch-exit',
+    ]) {
+      expect(batchActionEnabled(tester, key), isFalse, reason: '$key 应在忙碌时禁用');
+    }
+    expect(
+      tester.widget<Checkbox>(_key('local-batch-check-a')).onChanged,
+      isNull,
+    );
+
+    await _settleIo(
+      tester,
+      () => batchActionEnabled(tester, 'local-sources-batch-enable'),
+    );
+    expect(batchActionEnabled(tester, 'local-sources-batch-enable'), isTrue);
+    expect(batchActionEnabled(tester, 'local-sources-batch-exit'), isTrue);
+    expect(
+      tester.widget<Checkbox>(_key('local-batch-check-a')).onChanged,
+      isNotNull,
+    );
+  });
+
+  testWidgets('窄窗批量态不溢出（480x640）', (tester) async {
+    final root = makeRoot('narrowbatch');
+    await _pumpPage(tester, state);
+    await importLocal(tester, root.path, 'a');
+
+    // 先在能容纳整页的视口完成导入，再缩到窄窗：窄窗里 ListView 只构建可见
+    // 子项，已导入区必须先滚进来才能点；这里要验的是批量条本身的窄窗布局。
+    tester.view.physicalSize = const Size(480, 640);
+    await tester.pumpAndSettle();
+    final pageScrollable = find.byWidgetPredicate(
+      (widget) =>
+          widget is Scrollable && widget.axisDirection == AxisDirection.down,
+    );
+    await tester.scrollUntilVisible(
+      _key('local-sources-batch'),
+      200,
+      scrollable: pageScrollable,
+    );
+    await tester.pumpAndSettle();
+
+    await _tap(tester, 'local-sources-batch');
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      _key('local-sources-batch-count'),
+      200,
+      scrollable: pageScrollable,
+    );
+    await _tap(tester, 'local-sources-batch-select-all');
+    await tester.pumpAndSettle();
+
+    expect(_key('local-sources-batch-count'), findsOneWidget);
+    expect(batchCount(tester), '已选 1 / 1');
+    expect(_key('local-batch-check-a'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('窄窗渲染不溢出', (tester) async {
     final root = makeRoot('narrow');
     await _pumpPage(tester, state, size: const Size(720, 520));

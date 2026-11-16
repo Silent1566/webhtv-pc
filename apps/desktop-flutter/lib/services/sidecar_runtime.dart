@@ -41,9 +41,6 @@ class SidecarRuntime implements SiteRuntime {
   @override
   String get name => '本地 Spider (${spider.manifest.runtime})';
 
-  /// 正在运行的主机；首次调用时建立。
-  SpiderHost? _host;
-
   /// 每次调用递增，用于生成不重复的 requestId（§9.3.1）。
   int _sequence = 0;
 
@@ -54,19 +51,15 @@ class SidecarRuntime implements SiteRuntime {
 
   /// 确保运行时已启动并完成 `initialize` 握手。
   Future<SpiderHost> _ensureHost() async {
-    final existing = _host ?? supervisor.hostFor(site.key);
-    if (existing != null) {
-      _host = existing;
-      return existing;
-    }
-    _host = await supervisor.ensureRunning(
+    // 一律交给 supervisor：它按站点持有唯一主机，并对「源已停用」直接拒绝，
+    // 本地再缓存一份会让停用后仍有一条绕过门禁的快路径。
+    return supervisor.ensureRunning(
       siteKey: site.key,
       executable: command.executable,
       arguments: command.arguments,
       manifest: spider.manifest,
       extend: _extendFor(site),
     );
-    return _host!;
   }
 
   /// `extend` 传递站点 `ext`（对象按稳定 JSON 文本传递，§7.4.5）。
@@ -140,7 +133,6 @@ class SidecarRuntime implements SiteRuntime {
 
   Future<void> dispose() async {
     cancelInflight();
-    _host = null;
     await supervisor.stop(site.key);
   }
 
