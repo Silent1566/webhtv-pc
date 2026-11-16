@@ -38,6 +38,26 @@ String formatLocalTimestamp(DateTime value) {
       '${two(value.day)} ${two(value.hour)}:${two(value.minute)}';
 }
 
+enum _CandidateFilter { all, unimported, imported }
+
+bool candidateMatchesQuery(LocalSourceCandidate candidate, String query) {
+  final terms = query.toLowerCase().trim().split(RegExp(r'\s+'));
+  String compact(String value) => value.replaceAll(RegExp(r'[\s_\-/\\]'), '');
+  final text = [
+    candidate.name,
+    candidate.key,
+    candidate.entryName,
+    candidate.kind.label,
+    candidate.absPath,
+  ].join(' ').toLowerCase();
+  final compactText = compact(text);
+  return terms.every(
+    (term) =>
+        text.contains(term) ||
+        (compact(term).isNotEmpty && compactText.contains(compact(term))),
+  );
+}
+
 class LocalSourcesPage extends StatefulWidget {
   const LocalSourcesPage({super.key, required this.state});
 
@@ -52,6 +72,8 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   final TextEditingController _onlineUrlController = TextEditingController();
   final TextEditingController _onlineNameController = TextEditingController();
   final Set<String> _selected = <String>{};
+  final TextEditingController _queryController = TextEditingController();
+  _CandidateFilter _filter = _CandidateFilter.all;
 
   /// 已导入区的多选态与勾选集（HTML 与 py/js 共用一个集合，按源 key 记）。
   ///
@@ -80,6 +102,7 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   @override
   void dispose() {
     _folderController.dispose();
+    _queryController.dispose();
     _onlineUrlController.dispose();
     _onlineNameController.dispose();
     super.dispose();
@@ -100,6 +123,14 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     final localSpiders = _state.localSpiders
         .where((spider) => spider.rootDir.startsWith(localRoot))
         .toList();
+
+    final importedKeys = <String>{
+      for (final spider in _state.localSpiders) spider.key,
+      for (final source in webHome ?? const <WebHomeSource>[]) source.key,
+    };
+    final pending = webHomeError == null
+        ? _pendingCandidates(importedKeys)
+        : const <LocalSourceCandidate>[];
 
     return Scaffold(
       appBar: AppBar(
@@ -147,12 +178,12 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                     icon: const Icon(Icons.search),
                     label: const Text('扫描'),
                   ),
-                  if (_selected.isNotEmpty)
+                  if (pending.isNotEmpty)
                     FilledButton.tonalIcon(
                       key: const ValueKey('local-sources-import'),
                       onPressed: _busy ? null : _import,
                       icon: const Icon(Icons.download_done),
-                      label: Text('导入所选（${_selected.length}）'),
+                      label: Text('导入所选（${pending.length}）'),
                     ),
                 ],
               ),
@@ -178,7 +209,7 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
           ),
           if (_report != null) ...[
             const Divider(height: AppSpace.xl),
-            _buildCandidates(context),
+            _buildCandidates(context, importedKeys, webHomeError),
           ],
           const Divider(height: AppSpace.xl),
           SettingsSection(
@@ -543,24 +574,45 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     );
   }
 
-  Widget _buildCandidates(BuildContext context) {
+  Widget _buildCandidates(
+    BuildContext context,
+    Set<String> importedKeys,
+    String? importStateError,
+  ) {
     final theme = Theme.of(context);
     final report = _report!;
+    final visible = _visibleCandidates(importedKeys);
     return SettingsSection(
       title: '扫描结果（${report.candidates.length} 个候选）',
-      description: report.folder,
+      description: '${report.folder}\n已导入项自动勾选，导入时跳过；新增源请手动勾选。',
       children: [
         if (report.truncated)
           const Padding(
             padding: EdgeInsets.only(bottom: AppSpace.sm),
             child: Text('候选已达上限，部分文件未列出；请缩小文件夹范围。'),
           ),
-        if (report.candidates.isNotEmpty) _buildSelectionHeader(context),
-        for (final candidate in _orderedCandidates)
+        if (importStateError != null)
+          Text(
+            '读取导入状态失败：$importStateError；请重新载入后再选择。',
+            key: const ValueKey('local-sources-import-state-error'),
+          )
+        else if (report.candidates.isNotEmpty)
+          _buildSelectionHeader(context, importedKeys, visible),
+        if (report.candidates.isNotEmpty && visible.isEmpty)
+          const Text(
+            '没有符合条件的候选，请清空搜索或切回「全部」。',
+            key: ValueKey('local-sources-filter-empty'),
+          ),
+        for (final candidate in visible)
           CheckboxListTile(
             key: ValueKey('candidate-${candidate.key}'),
-            value: _selected.contains(candidate.absPath),
-            onChanged: _busy
+            value:
+                importedKeys.contains(candidate.key) ||
+                _selected.contains(candidate.absPath),
+            onChanged:
+                _busy ||
+                    importStateError != null ||
+                    importedKeys.contains(candidate.key)
                 ? null
                 : (value) {
                     setState(() {
@@ -572,7 +624,10 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                     });
                   },
             contentPadding: EdgeInsets.zero,
-            title: Text('${candidate.name}（${candidate.key}）'),
+            title: Text(
+              '${candidate.name}（${candidate.key}）',
+              style: TextStyle(color: theme.colorScheme.onSurface),
+            ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -580,6 +635,7 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                   '${candidate.kind.label} · '
                   '${(candidate.bytes / 1024).toStringAsFixed(1)} KiB · '
                   'runtime=${candidate.suggestedRuntime}',
+                  style: TextStyle(color: theme.colorScheme.onSurface),
                 ),
                 Text(
                   '最后修改：${formatLocalTimestamp(candidate.modified)}',
@@ -587,11 +643,21 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                   style: tabular(theme.textTheme.bodySmall!)
                       .copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                if (importedKeys.contains(candidate.key))
+                  Text(
+                    '已导入',
+                    key: ValueKey('candidate-imported-${candidate.key}'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 for (final warning in candidate.warnings)
                   Text(
                     '⚠ $warning',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: AppPalette.statusDegraded,
+                      color: theme.brightness == Brightness.dark
+                          ? AppPalette.statusDegraded
+                          : AppPalette.statusDegradedOnLight,
                     ),
                   ),
                 Text(
@@ -641,37 +707,90 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     );
   }
 
-  /// 全选/取消全选 + 选择计数 + 排序方向。只作用于**当前报告**里的候选。
-  Widget _buildSelectionHeader(BuildContext context) {
+  /// 已导入的勾选只表示登记状态；全选和导入仅作用于可见的新增候选。
+  Widget _buildSelectionHeader(
+    BuildContext context,
+    Set<String> importedKeys,
+    List<LocalSourceCandidate> visible,
+  ) {
     final theme = Theme.of(context);
     final report = _report!;
     final total = report.candidates.length;
-    final all = report.candidates.every(
-      (candidate) => _selected.contains(candidate.absPath),
-    );
-    final none = report.candidates.every(
+    final imported = report.candidates
+        .where((candidate) => importedKeys.contains(candidate.key))
+        .length;
+    final selectable = visible
+        .where((candidate) => !importedKeys.contains(candidate.key))
+        .toList();
+    final all =
+        selectable.isNotEmpty &&
+        selectable.every((candidate) => _selected.contains(candidate.absPath));
+    final none = selectable.every(
       (candidate) => !_selected.contains(candidate.absPath),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        TextField(
+          key: const ValueKey('local-sources-query'),
+          controller: _queryController,
+          enabled: !_busy,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            isDense: true,
+            border: const OutlineInputBorder(),
+            labelText: '筛选扫描结果',
+            hintText: '名称、key 或路径（支持模糊搜索）',
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _queryController.text.isEmpty
+                ? null
+                : IconButton(
+                    key: const ValueKey('local-sources-query-clear'),
+                    tooltip: '清空搜索',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: _busy
+                        ? null
+                        : () => setState(_queryController.clear),
+                  ),
+          ),
+        ),
+        const SizedBox(height: AppSpace.sm),
+        Wrap(
+          spacing: AppSpace.xs,
+          runSpacing: AppSpace.xs,
+          children: [
+            for (final entry in <_CandidateFilter, String>{
+              _CandidateFilter.all: '全部 $total',
+              _CandidateFilter.unimported: '未导入 ${total - imported}',
+              _CandidateFilter.imported: '已导入 $imported',
+            }.entries)
+              TagChip(
+                keyValue: 'local-sources-filter-${entry.key.name}',
+                label: entry.value,
+                selectable: true,
+                selected: _filter == entry.key,
+                onTap: _busy ? null : () => setState(() => _filter = entry.key),
+              ),
+          ],
+        ),
         Row(
           children: [
             Expanded(
               child: CheckboxListTile(
                 key: const ValueKey('local-sources-select-all'),
-                // 部分选择时显示中间态；点一下清空当前选择。
                 value: all
                     ? true
                     : none
                     ? false
                     : null,
                 tristate: true,
-                onChanged: _busy ? null : (value) => _selectAll(value == true),
+                onChanged: _busy || selectable.isEmpty
+                    ? null
+                    : (value) => _selectAll(value == true, selectable),
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 dense: true,
-                title: const Text('全选当前扫描结果'),
+                title: const Text('全选当前未导入候选'),
               ),
             ),
             TextButton.icon(
@@ -690,7 +809,8 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
             bottom: AppSpace.sm,
           ),
           child: Text(
-            '已选 ${_selected.length} / $total',
+            '已选 ${imported + _pendingCandidates(importedKeys).length} / $total'
+            '${visible.length == total ? '' : ' · 当前显示 ${visible.length}'}',
             key: const ValueKey('local-sources-selection-count'),
             style: tabular(theme.textTheme.bodySmall!)
                 .copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -724,16 +844,34 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     return '原文件修改时间：${formatLocalTimestamp(modified.toLocal())}';
   }
 
-  void _selectAll(bool select) {
-    final report = _report;
-    if (report == null) return;
+  List<LocalSourceCandidate> _pendingCandidates(Set<String> importedKeys) => [
+    for (final candidate
+        in _report?.candidates ?? const <LocalSourceCandidate>[])
+      if (_selected.contains(candidate.absPath) &&
+          !importedKeys.contains(candidate.key))
+        candidate,
+  ];
+
+  List<LocalSourceCandidate> _visibleCandidates(Set<String> importedKeys) => [
+    for (final candidate in _orderedCandidates)
+      if (candidateMatchesQuery(candidate, _queryController.text) &&
+          switch (_filter) {
+            _CandidateFilter.all => true,
+            _CandidateFilter.unimported => !importedKeys.contains(
+              candidate.key,
+            ),
+            _CandidateFilter.imported => importedKeys.contains(candidate.key),
+          })
+        candidate,
+  ];
+
+  void _selectAll(bool select, List<LocalSourceCandidate> visible) {
     setState(() {
+      final paths = visible.map((candidate) => candidate.absPath);
       if (select) {
-        _selected.addAll(
-          report.candidates.map((candidate) => candidate.absPath),
-        );
+        _selected.addAll(paths);
       } else {
-        _selected.clear();
+        _selected.removeAll(paths);
       }
     });
   }
@@ -784,14 +922,17 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   Future<void> _import() async {
     final report = _report;
     if (report == null || _selected.isEmpty) return;
-    final picked = report.candidates
-        .where((candidate) => _selected.contains(candidate.absPath))
-        .toList();
     setState(() {
       _busy = true;
       _busyNote = '正在导入…';
     });
     try {
+      final importedKeys = <String>{
+        for (final spider in _state.localSpiders) spider.key,
+        for (final source in _state.webHomeSources) source.key,
+      };
+      final picked = _pendingCandidates(importedKeys);
+      if (picked.isEmpty) return;
       final result = await _state.importLocalSources(picked);
       if (!mounted) return;
       setState(() {
