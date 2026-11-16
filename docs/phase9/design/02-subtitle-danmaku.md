@@ -20,7 +20,9 @@
 
 ### 1.1 现状
 
-- `subtitle_service.dart` 已能从 URL 或本地路径（含 Windows 盘符）加载，编码兜底（BOM → charset → UTF-8 → GBK），格式 `srt/ass/ssa/vtt/sub`。
+- `subtitle_service.dart` 已能从 URL 或本地路径（含 Windows 盘符）加载，编码链为 BOM → 声明 charset → UTF-8 严格解码 → 证据探测（GBK / Big5 / Shift-JIS / EUC-KR），格式 `srt/ass/ssa/vtt/sub`。
+  - 探测只在**未声明 charset** 时进行，且必须“严格解码 + 脚本证据”双通过：GBK 能把 Shift-JIS/EUC-KR 字节解成看似正常的汉字，只按“谁先不报错”判定会静默产出乱码。规则与边界见 [evidence/12](../evidence/12-subtitle-charset-extension.md)。
+  - 配置导入不走探测（§7.4.1 只为 GBK/GB18030 兜底），行为保持不变。
 - `player_controller` 已支持内嵌/外挂轨选择与关闭。
 - 缺：外部字幕源、自动匹配、首选语言、手动搜索、匹配记忆，以及「选择本地字幕」入口。
 
@@ -82,7 +84,7 @@ class SubtitleCandidate {
 | 401/403 | 「字幕源鉴权失败」+ 引导到设置页，不重试 |
 | 超时/网络 | 「字幕源不可用」+ 可重试；不影响播放 |
 | 下载后格式不支持 | 丢弃该候选并记录；继续下一个 |
-| 字幕编码非法 | 沿用现有 `subtitleDecode` 语义，提示 |
+| 字幕编码非法 | 声明的编码解不出来，或四种旧编码都严格解码失败 → `subtitleDecode` 提示。声明值与字节不符（解出 U+FFFD）时改走证据探测；探测路径**不写入替换字符**，探测无解才沿用声明路径的既有容错 |
 | 用户手动关闭字幕 | 自动匹配不得再把字幕装回来（会话级标记） |
 
 ### 1.7 测试

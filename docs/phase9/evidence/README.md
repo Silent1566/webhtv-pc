@@ -15,6 +15,7 @@
 | `07-w3-following-runtime.md` | W3 / P2-1 追番运行期：默认开启、间隔设置、系统通知与降级、ADR 0006 | 已产出 |
 | `08-w3-following-calendar.md` | W3 / P2-1 追剧日历：归日策略、页面与导航、TMDB 真实播出日接入 | 已产出 |
 | `09-tmdb-source-payload-and-key.md` | 源内嵌 TMDB：协议/首屏/缺口合并/单集弹窗，以及配置根 key 作用域与凭据安全、配对截图/回归证据 | 已产出 |
+| `12-subtitle-charset-extension.md` | 字幕字符集扩展（Big5 / Shift-JIS / EUC-KR）：为什么需要证据探测、编码源与许可、测试与已知边界 | 已产出 |
 | `player-l3-run.txt` | `phase9_player_flow_test.dart -d windows` 原始输出 | 已产出 |
 | `screenshots/01-context-menu-skip-segments.png` | 右键菜单「片头片尾」截图（只裁菜单本体；两次运行 sha256 一致） | 已产出 |
 

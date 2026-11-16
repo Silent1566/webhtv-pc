@@ -3,7 +3,8 @@
 /// 覆盖四层：
 /// 1. 模型：`Result.subs` → `SubtitleInfo` 的解析与往返、`flag` 位语义；
 /// 2. 纯逻辑：格式推断、候选构建、菜单顺序、默认/强制字幕选择、切集后的沿用；
-/// 3. 加载服务：HTTP（带 Header）/本地文件/GBK 兜底/大小上限/各类错误归一化；
+/// 3. 加载服务：HTTP（带 Header）/本地文件/GBK、Big5、Shift-JIS、EUC-KR 解码/
+///    大小上限/各类错误归一化；
 /// 4. 失败隔离：字幕错误只提示，不得升级为播放失败（§10.4）。
 library;
 
@@ -20,6 +21,7 @@ import 'package:webhtv_pc/core/subtitle.dart';
 import 'package:webhtv_pc/services/subtitle_service.dart';
 
 import 'fixture_support.dart';
+import 'support/legacy_charset_samples.dart';
 import 'support/test_fixture_server.dart';
 
 /// 解析一份 fixture 播放结果（与产品同一条 `HttpApiResponseParser` 链路）。
@@ -366,6 +368,132 @@ void main() {
       final document = await service.load(SubtitleInfo(url: file.path));
       expect(document.text, contains('中文字幕测试'));
       expect(document.encoding, 'gbk');
+    });
+
+    test('本地 Big5 / Shift-JIS / EUC-KR 字幕按文本证据探测解码', () async {
+      for (final sample in legacyCharsetSamples) {
+        if (sample.charset == 'gbk') continue; // GBK 由上一例覆盖。
+        final temp = await Directory.systemTemp.createTemp(
+          'webhtv-srt-${sample.charset}',
+        );
+        addTearDown(() => temp.deleteSync(recursive: true));
+        final file = File(p.join(temp.path, 'sample.srt'));
+        await file.writeAsBytes(sample.bytes);
+
+        final document = await service.load(SubtitleInfo(url: file.path));
+        expect(document.encoding, sample.charset, reason: sample.charset);
+        expect(document.text, sample.text, reason: sample.charset);
+        // 字幕加载阶段已转成 Dart 字符串，不得残留替换字符。
+        expect(document.text, isNot(contains('\uFFFD')));
+      }
+    });
+
+    test('HTTP 声明 charset=big5 时按声明解码', () async {
+      final sample = legacyCharsetSample('big5');
+      final charsetServer = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => charsetServer.close(force: true));
+      charsetServer.listen((request) async {
+        request.response.headers.set(
+          HttpHeaders.contentTypeHeader,
+          'application/x-subrip; charset=big5',
+        );
+        request.response.add(sample.bytes);
+        await request.response.close();
+      });
+
+      final document = await service.load(
+        SubtitleInfo(url: 'http://127.0.0.1:${charsetServer.port}/big5.srt'),
+      );
+      expect(document.encoding, 'big5');
+      expect(document.text, sample.text);
+    });
+
+    test('HTTP 未声明 charset 的日文字幕按 Shift-JIS 探测', () async {
+      final sample = legacyCharsetSample('shift_jis');
+      final charsetServer = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => charsetServer.close(force: true));
+      charsetServer.listen((request) async {
+        // 只给 MIME、不给 charset：本地/第三方站点常见，必须靠证据判定。
+        request.response.headers.set(
+          HttpHeaders.contentTypeHeader,
+          'application/x-subrip',
+        );
+        request.response.add(sample.bytes);
+        await request.response.close();
+      });
+
+      final document = await service.load(
+        SubtitleInfo(url: 'http://127.0.0.1:${charsetServer.port}/ja.srt'),
+      );
+      expect(document.encoding, 'shift_jis');
+      expect(document.text, sample.text);
+    });
+
+    test('四种编码都解不出来 → subtitleDecode，不写入替换字符', () async {
+      final temp = await Directory.systemTemp.createTemp('webhtv-srt-bad');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final file = File(p.join(temp.path, 'bad.srt'));
+      // 0x80 在 GBK/Big5/Shift-JIS/EUC-KR 里都不是合法起始字节。
+      await file.writeAsBytes(<int>[0x80, 0x80, 0x80]);
+
+      await expectLater(
+        service.load(SubtitleInfo(url: file.path)),
+        throwsA(
+          isA<AppError>().having(
+            (error) => error.kind,
+            'kind',
+            AppErrorKind.subtitleDecode,
+          ),
+        ),
+      );
+    });
+
+    test('有候选但都不可信 → subtitleDecode，不把随机字节当字幕', () async {
+      final temp = await Directory.systemTemp.createTemp('webhtv-srt-junk');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final file = File(p.join(temp.path, 'junk.srt'));
+      // 这两种字节四种编码都能“解出点东西”，但全是孤立的符号/半角乱码：
+      // 必须报 subtitleDecode，而不是挑一个当成功。
+      for (final bytes in <List<int>>[
+        <int>[0xA2, 0xBB],
+        <int>[0xA1, 0xD2, 0xB0, 0xB4, 0xA2, 0xBC],
+      ]) {
+        await file.writeAsBytes(bytes);
+        await expectLater(
+          service.load(SubtitleInfo(url: file.path)),
+          throwsA(
+            isA<AppError>().having(
+              (error) => error.kind,
+              'kind',
+              AppErrorKind.subtitleDecode,
+            ),
+          ),
+          reason: '$bytes',
+        );
+      }
+    });
+
+    test('GBK 字幕里的 ★ 与框线不触发误判', () async {
+      final temp = await Directory.systemTemp.createTemp('webhtv-srt-star');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final file = File(p.join(temp.path, 'star.srt'));
+      // "1\n00:00:00,000 --> 00:00:02,000\n★ 我等你 ★" 的 GBK 字节。
+      await file.writeAsBytes(<int>[
+        0x31, 0x0A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x3A, 0x30, 0x30, 0x2C, 0x30,
+        0x30, 0x30, 0x20, 0x2D, 0x2D, 0x3E, 0x20, 0x30, 0x30, 0x3A, 0x30, 0x30,
+        0x3A, 0x30, 0x32, 0x2C, 0x30, 0x30, 0x30, 0x0A, 0xA1, 0xEF, 0x20, 0xCE,
+        0xD2, 0xB5, 0xC8, 0xC4, 0xE3, 0x20, 0xA1, 0xEF,
+      ]);
+
+      final document = await service.load(SubtitleInfo(url: file.path));
+      expect(document.encoding, 'gbk');
+      expect(document.text, contains('★ 我等你 ★'));
     });
 
     test('超过大小上限 → subtitleTooLarge，不读满内存', () async {
