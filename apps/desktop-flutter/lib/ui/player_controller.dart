@@ -542,7 +542,7 @@ class PlayerController extends ChangeNotifier {
   /// 为什么落盘而不是用 `SubtitleTrack.data`：media-kit 的 `.data` 会写一个
   /// **没有扩展名**的临时文件（`TempFile` 用 UUID 命名），mpv 只能靠内容嗅探
   /// 识别格式，并出现“轨已加入但 `tracks`/`track` 状态迟迟不刷新”的观测不一致；
-  /// 写成带真实扩展名（`.srt`/`.ass`/…）的临时文件后 libass 能直接按扩展名解析，
+  /// 写成带真实扩展名（`.srt`/`.ass`/…）的临时文件后 mpv 能按扩展名直接识别格式，
   /// 轨表也能立即反映出来（Windows 实测，见 phase3 字幕集成测试）。
   /// 宿主先自己带 Header 拉取文本再落盘，因此不会把 Header 泄漏给播放器。
   final Map<String, SubtitleOption> _externalTrackFiles = {};

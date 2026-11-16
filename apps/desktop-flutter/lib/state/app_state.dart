@@ -69,6 +69,7 @@ import '../core/history_view.dart';
 import '../core/live_settings.dart';
 import '../core/http_api.dart';
 import '../core/osd_config.dart';
+import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/playback_lines.dart';
@@ -88,6 +89,7 @@ import '../core/site_order.dart';
 import '../core/skip_segments.dart';
 import '../core/subtitle_provider.dart';
 import '../core/subtitle_settings.dart';
+import '../core/subtitle_style.dart';
 import '../core/tmdb_config.dart';
 import '../core/viewing_metadata.dart';
 import '../core/tmdb_subscription.dart';
@@ -1685,6 +1687,15 @@ AiContentCompletion? aiContentCompletion,
   DanmakuStyle get danmakuStyle =>
       _uiPreferences?.danmakuStyle ?? DanmakuStyle.defaults;
 
+  /// 生效的字幕显示样式（P1-4）。
+  ///
+  /// `_uiPreferences` 为 null（未 bootstrap）时返回默认样式，不让播放器失败。
+  SubtitleStyle get subtitleStyle =>
+      _uiPreferences?.subtitleStyle ?? SubtitleStyle.defaults;
+
+  /// 生效的屏显样式（P1-4）。
+  OsdStyle get osdStyle => _uiPreferences?.osdStyle ?? OsdStyle.defaults;
+
   /// 生效的直播设置（Phase 9）。
   LiveSettings get liveSettings =>
       _uiPreferences?.liveSettings ?? const LiveSettings.defaults();
@@ -2428,6 +2439,24 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberDanmakuStyle(style);
+    notifyListeners();
+    return ok;
+  }
+
+  /// 持久化字幕显示样式（P1-4）。写盘失败不影响当前会话。
+  Future<bool> setSubtitleStyle(SubtitleStyle style) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.rememberSubtitleStyle(style);
+    notifyListeners();
+    return ok;
+  }
+
+  /// 持久化屏显样式（P1-4）。写盘失败不影响当前会话。
+  Future<bool> setOsdStyle(OsdStyle style) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.rememberOsdStyle(style);
     notifyListeners();
     return ok;
   }

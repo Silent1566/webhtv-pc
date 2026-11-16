@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/osd_config.dart';
 import 'package:webhtv_pc/core/osd_diagnostics.dart';
+import 'package:webhtv_pc/core/osd_style.dart';
 import 'package:webhtv_pc/ui/player_osd.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tokens.dart';
@@ -21,8 +22,10 @@ PlayerOsdLayer buildLayer({
   double? bytesPerSecond,
   List<OsdDiagnosticsRow> diagnostics = const [],
   List<OsdDiagnosticsRow> environment = const [],
+  OsdStyle style = OsdStyle.defaults,
 }) => PlayerOsdLayer(
   flags: flags ?? defaultOsdFlags(),
+  style: style,
   controlsVisible: controlsVisible,
   title: '示例剧集 · E3',
   resolution: resolution,
@@ -454,5 +457,115 @@ void main() {
       expect(text.data, isNot(''), reason: '不得渲染空串 Text（无内容占位）');
     }
     expect(find.text(''), findsNothing);
+  });
+
+  // ------------------------------------------------------ 屏显样式（P1-4）
+  //
+  // P1-4 把「字号 / 不透明度」变成可调项（core/osd_style.dart）。这里锁的是
+  // **样式真的落到渲染上**，而不是「字段被存下来了」：
+  // - 默认 style 下既有外观一字不变（正文 14dp、诊断面板 10dp、整层不透明）；
+  // - 非默认 style 下同一处按 14 × textScale / 10 × textScale 走。
+
+  /// 整层不透明度：PlayerOsdLayer.build 返回的就是这个 Opacity。
+  double layerOpacity(WidgetTester tester) => tester
+      .widget<Opacity>(
+        find
+            .descendant(
+              of: find.byType(PlayerOsdLayer),
+              matching: find.byType(Opacity),
+            )
+            .first,
+      )
+      .opacity;
+
+  testWidgets('默认 style：正文 14 / 诊断面板 10 / 整层不透明（P1-4 不改既有外观）', (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        buildLayer(
+          flags: {...defaultOsdFlags(), OsdFlag.diagnostics: true},
+          diagnostics: const [OsdDiagnosticsRow('视频', 'hevc 3840×2160')],
+        ),
+      ),
+    );
+    expect(layerOpacity(tester), 1.0, reason: '默认 opacity = 1，用户不该看出多了这一层');
+    expect(tester.widget<Text>(find.text('20:30:18')).style?.fontSize, 14);
+    // 诊断面板是密集信息：基准 10 不随正文改动。
+    expect(tester.widget<Text>(find.text('视频')).style?.fontSize, 10);
+    expect(tester.widget<Text>(find.text('hevc 3840×2160')).style?.fontSize, 10);
+  });
+
+  testWidgets('style.textScale 生效于正文字号：14 × 1.25 = 17.5', (tester) async {
+    await tester.pumpWidget(
+      wrap(buildLayer(style: const OsdStyle(textScale: 1.25))),
+    );
+    // 时钟 / 标题 / 进度是三处独立的 _osdTextStyle(...) 调用点，逐处核对：
+    // 漏一处就是「只有时钟变大」的半成品。
+    expect(tester.widget<Text>(find.text('20:30:18')).style?.fontSize, 17.5);
+    expect(
+      tester.widget<Text>(find.text('示例剧集 · E3\n3840×2160')).style?.fontSize,
+      17.5,
+    );
+    expect(tester.widget<Text>(find.text('02:56 / 10:00')).style?.fontSize, 17.5);
+
+    // 缩放只改字号：字形、颜色、描边（亮画面上的可读性保证）都不许被顺手改掉。
+    final clock = tester.widget<Text>(find.text('20:30:18')).style!;
+    expect(clock.fontFeatures, kTabularFigures);
+    expect(clock.color, Colors.white);
+    expect(clock.shadows, isNotEmpty);
+  });
+
+  testWidgets('style.textScale 生效于诊断面板：10 × 1.6 = 16', (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        buildLayer(
+          flags: {...defaultOsdFlags(), OsdFlag.diagnostics: true},
+          diagnostics: const [OsdDiagnosticsRow('视频', 'hevc 3840×2160')],
+          environment: const [OsdDiagnosticsRow('运行环境', 'Windows 11')],
+          style: const OsdStyle(textScale: 1.6),
+        ),
+      ),
+    );
+    // 主列与附加列的标签/取值都用同一个 style，四处一起核对。
+    for (final label in ['视频', 'hevc 3840×2160', '运行环境', 'Windows 11']) {
+      expect(
+        tester.widget<Text>(find.text(label)).style?.fontSize,
+        16,
+        reason: '诊断面板「$label」没有跟着 textScale 走',
+      );
+    }
+  });
+
+  testWidgets('style.opacity 体现在整层 Opacity 上：0.5', (tester) async {
+    await tester.pumpWidget(
+      wrap(buildLayer(style: const OsdStyle(opacity: 0.5))),
+    );
+    expect(layerOpacity(tester), 0.5);
+    // 压淡不是隐藏：文字仍在树上（找不到文本才是 bug）。
+    expect(find.text('20:30:18'), findsOneWidget);
+  });
+
+  testWidgets('不透明度作用于整层：迷你进度条也在被压淡的那一层里', (tester) async {
+    // 只压文字、进度条保持原样的话，「调淡」在不同项上力度就不一致了
+    // （player_osd.dart:160-162 的注释）。
+    await tester.pumpWidget(
+      wrap(
+        buildLayer(
+          flags: {...defaultOsdFlags(), OsdFlag.mini: true},
+          style: const OsdStyle(opacity: 0.4),
+        ),
+      ),
+    );
+    final layer = find
+        .descendant(
+          of: find.byType(PlayerOsdLayer),
+          matching: find.byType(Opacity),
+        )
+        .first;
+    expect(layerOpacity(tester), 0.4, reason: 'opacity 下限 0.4 必须能原样落到 Opacity');
+    expect(
+      find.descendant(of: layer, matching: find.byType(PlayerOsdMiniProgress)),
+      findsOneWidget,
+      reason: '迷你进度条必须落在同一个 Opacity 里',
+    );
   });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/subtitle_style.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 
 void main() {
@@ -35,7 +36,8 @@ void main() {
   });
 
   test('字幕默认透明底并保留描边，样式参数映射到 media-kit 配置', () {
-    const defaults = PlayerSubtitleStyle();
+    // P1-4 起样式模型在 core（落盘用），渲染投影是 player_page 的扩展方法。
+    const defaults = SubtitleStyle.defaults;
     expect(defaults.configuration.style.backgroundColor, Colors.transparent);
     expect(defaults.configuration.style.shadows, isNotEmpty);
     expect(defaults.configuration.padding.bottom, 24);

@@ -15,20 +15,22 @@ import 'package:flutter/material.dart';
 
 import '../core/osd_config.dart';
 import '../core/osd_diagnostics.dart';
+import '../core/osd_style.dart';
 import 'player_controller.dart' show formatByteRate;
 import 'tokens.dart';
 
 /// 屏显文本样式。
 ///
-/// **字号显式指定 14**，不通过 `textTheme`：`DESIGN.md` 的 The Metric-Neutral Rule
-/// 记录了实测——改 `textTheme` 会移动所有页面里不带 `ensureVisible` 的 `tap`。
+/// **字号基准 14 显式指定**，不通过 `textTheme`：`DESIGN.md` 的 The Metric-Neutral
+/// Rule 记录了实测——改 `textTheme` 会移动所有页面里不带 `ensureVisible` 的 `tap`。
+/// 用户可调的只有 `textScale`（`core/osd_style.dart`），基准值不变。
 ///
 /// **必须描边**：背景是任意视频帧（实测 fixture 是高饱和彩条），
 /// 纯白字在亮画面上不可读。上游同做法（`view_player_osd.xml:26-29` 的 shadow）。
 ///
 /// **必须 `tabular`**：时钟与进度每秒刷新，比例字形会让整行左右抖动。
-TextStyle _osdTextStyle() => const TextStyle(
-  fontSize: 14,
+TextStyle _osdTextStyle(double textScale) => TextStyle(
+  fontSize: 14 * textScale,
   height: 1.3,
   color: Colors.white,
   fontFeatures: kTabularFigures,
@@ -53,6 +55,7 @@ class PlayerOsdLayer extends StatelessWidget {
   const PlayerOsdLayer({
     super.key,
     required this.flags,
+    required this.style,
     required this.controlsVisible,
     required this.title,
     required this.resolution,
@@ -66,6 +69,9 @@ class PlayerOsdLayer extends StatelessWidget {
   });
 
   final Map<String, bool> flags;
+
+  /// 屏显样式（字号缩放 / 整层不透明度，P1-4）。
+  final OsdStyle style;
 
   /// 控制栏是否可见。可见时强制显示时钟、强制隐藏其余
   /// （`docs/phase8/design/02` §4.2）。
@@ -151,6 +157,12 @@ class PlayerOsdLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 不透明度作用在**整层**（含迷你进度条）：屏显是纯信息层，压淡是为了不
+    // 挡画面；若只压文字、进度条保持原样，「调淡」在不同项上力度就不一致了。
+    return Opacity(opacity: style.opacity, child: _content());
+  }
+
+  Widget _content() {
     return IgnorePointer(
       child: Stack(
         children: [
@@ -178,7 +190,7 @@ class PlayerOsdLayer extends StatelessWidget {
                                   if (_sizeVisible && resolution != null)
                                     resolution!,
                                 ].join('\n'),
-                                style: _osdTextStyle(),
+                                style: _osdTextStyle(style.textScale),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               )
@@ -186,7 +198,7 @@ class PlayerOsdLayer extends StatelessWidget {
                       ),
                       if (_clockVisible) ...[
                         const SizedBox(width: AppSpace.xl),
-                        Text(_clockText(), style: _osdTextStyle()),
+                        Text(_clockText(), style: _osdTextStyle(style.textScale)),
                       ],
                     ],
                   ),
@@ -196,6 +208,7 @@ class PlayerOsdLayer extends StatelessWidget {
                     child: _DiagnosticsPanel(
                       rows: diagnostics,
                       environment: environment,
+                      textScale: style.textScale,
                     ),
                   ),
                 const Spacer(),
@@ -216,7 +229,7 @@ class PlayerOsdLayer extends StatelessWidget {
                           child: Text(
                             '${_formatDuration(position)} / '
                             '${_formatDuration(duration)}',
-                            style: _osdTextStyle(),
+                            style: _osdTextStyle(style.textScale),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -227,7 +240,7 @@ class PlayerOsdLayer extends StatelessWidget {
                         const SizedBox(width: AppSpace.md),
                         Text(
                           formatByteRate(bytesPerSecond),
-                          style: _osdTextStyle(),
+                          style: _osdTextStyle(style.textScale),
                           maxLines: 1,
                         ),
                       ],
@@ -263,10 +276,18 @@ class PlayerOsdLayer extends StatelessWidget {
 ///   不写死像素（写死值会引入 `AppSpace` 之外的新散值）；
 /// - 拼成一条字符串时标签与取值之间没有可对齐的边界，多行看起来是锯齿。
 class _DiagnosticsPanel extends StatelessWidget {
-  const _DiagnosticsPanel({required this.rows, required this.environment});
+  const _DiagnosticsPanel({
+    required this.rows,
+    required this.environment,
+    required this.textScale,
+  });
 
   final List<OsdDiagnosticsRow> rows;
   final List<OsdDiagnosticsRow> environment;
+
+  /// 与屏显正文同源的缩放：诊断面板是密集信息，基准 10 不随层面改动
+  /// （见下方 style 的注释）。
+  final double textScale;
 
   @override
   Widget build(BuildContext context) {
@@ -281,8 +302,8 @@ class _DiagnosticsPanel extends StatelessWidget {
     // 在 Flutter 的 `TextStyle` 里没有对应字段（只有 `letterSpacing`），
     // 用 `letterSpacing` 近似会改变**字距**语义而非压缩**字形宽度**，属于伪造；
     // 因此本层不压字宽，靠 `maxLines` 与省略号兜底。
-    const style = TextStyle(
-      fontSize: 10,
+    final style = TextStyle(
+      fontSize: 10 * textScale,
       height: 1.35,
       color: Colors.white,
       fontFamily: 'monospace',

@@ -87,8 +87,8 @@ Future<void> _openMenu(
 
 /// 点 [label] 让那一行飞出下一列。
 ///
-/// 先 `ensureVisible`：分组之外的列仍可能装不下（例如「字幕样式」的 5 项里
-/// 还套着 4 棵子树），引擎会把任何一列压到可用高度内部滚动（\`design/04\` §5.2）。
+/// 先 `ensureVisible`：分组之外的列仍可能装不下（例如「字幕样式」的 6 项里
+/// 还套着 5 棵子树），引擎会把任何一列压到可用高度内部滚动（\`design/04\` §5.2）。
 /// 不滚到可见处 `tap` 会点在窗口外静默失效——那是**测试的问题**，不是菜单的。
 Future<void> _drill(WidgetTester tester, String label) async {
   final target = find.descendant(
@@ -247,10 +247,10 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 46 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 47 项）', (tester) async {
       await _openMenu(tester);
 
-      // 计数口径从「主列行数」改成「该组飞出列的行数」——数字一个没变。
+      // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，共 47。
       const expected = <String, int>{
         '播放': 7,
         '速度': 6,
@@ -258,7 +258,8 @@ void main() {
         '画面': 4,
         '声音': 3,
         '轨道': 5,
-        '显示': 2,
+        // 「显示」组多了「屏显样式」（字号 / 不透明度 / 恢复默认，P1-4）。
+        '显示': 3,
         '片头片尾': 7,
         '信息': 3,
         // 设置组已从「3 个跳转入口」改造成下钻树：播放参数 / 字幕源 /
@@ -270,10 +271,10 @@ void main() {
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        46,
-        reason:
-            '十个分组的项数之和必须仍是 46：44 是 MenuItem 时代的锁定值，'
-            '「画面」组新增 HDR 色调映射 / 峰值亮度计算两棵子树后为 46',
+        47,
+        reason: '十个分组的项数之和必须是 47：基线 44，'
+            '「显示」组新增「屏显样式」（P1-4）1 项，'
+            '「画面」组新增 HDR 色调映射 / 峰值亮度计算 2 项',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -350,8 +351,8 @@ void main() {
       // 列序：0 主列（分组行）→ 1 「字幕」组 → 2 字幕样式 → 3 字号。
       await _drill(tester, '字幕');
       await _drill(tester, '字幕样式');
-      expect(_rowsAt(tester, 2).length, 5, reason: '字幕样式应有 5 个二级项');
-      for (final label in ['字号', '描边', '位置', '底色', '恢复默认样式']) {
+      expect(_rowsAt(tester, 2).length, 6, reason: '字幕样式应有 6 个二级项');
+      for (final label in ['字号', '描边', '位置', '底色', '文字颜色', '恢复默认样式']) {
         expect(find.text(label), findsWidgets, reason: '二级缺「$label」');
       }
 
@@ -366,6 +367,89 @@ void main() {
           if (_isChecked(tester, sizeRows[i])) labels[i],
       ];
       expect(checked, ['100%'], reason: '字号当前值应只有一项被标记');
+    });
+
+    // P1-4：字幕样式新增「文字颜色」二级项。单独一条用例，因为它有两个别处
+    // 没有的特征：取值不是 slider 而是 6 个叶子，且 id 由 ARGB 拼装
+    // （sub_color_<hex>）—— id 与颜色表脱钩时表现为「点了不变色」。
+    testWidgets('字幕 → 字幕样式 → 文字颜色：6 档颜色，当前白字打勾', (tester) async {
+      await _openMenu(tester);
+      await _drill(tester, '字幕');
+      await _drill(tester, '字幕样式');
+      await _drill(tester, '文字颜色');
+
+      final rows = _rowsAt(tester, 3);
+      expect(
+        rows.length,
+        subtitleColorChoices.length,
+        reason: '文字颜色必须与 subtitleColorChoices 同源（${subtitleColorChoices.length} 档）',
+      );
+      final labels = [for (final row in rows) _labelOf(tester, row)];
+      expect(labels, [for (final choice in subtitleColorChoices) choice.label]);
+      // 默认 textColorValue = 0xFFFFFFFF（白）→ 有且只有一项打勾。
+      final checked = [
+        for (var i = 0; i < rows.length; i++)
+          if (_isChecked(tester, rows[i])) labels[i],
+      ];
+      expect(checked, ['白'], reason: '当前文字色应只有一项被标记');
+
+      // id 由 ARGB 拼装：菜单里选颜色靠它定位，与颜色表脱钩就成了死项。
+      final yellow = subtitleColorChoices.firstWhere((c) => c.label == '黄');
+      expect(
+        find.byKey(
+          ValueKey('player-menu-item-sub_color_${yellow.value.toRadixString(16)}'),
+        ),
+        findsOneWidget,
+        reason: '文字颜色叶子的 id 必须是 sub_color_<argb hex>',
+      );
+    });
+
+    // P1-4：屏显样式（字号 / 不透明度 / 恢复默认）。它是「显示」组新增的第 2 项，
+    // 且与「屏显」开关**平级**：嵌进开关的 children 会变成第 5 层，
+    // 「字号」看着就像第 8 个开关。
+    testWidgets('显示 → 屏显样式：字号/不透明度各 4 档 + 恢复默认', (tester) async {
+      await _openMenu(tester);
+      await _drill(tester, '显示');
+      expect(
+        [for (final row in _rowsAt(tester, 1)) _labelOf(tester, row)],
+        ['屏显', '屏显样式', '全屏'],
+        reason: '屏显样式必须与屏显开关平级、且排在它与全屏之间',
+      );
+
+      await _drill(tester, '屏显样式');
+      final styleRows = _rowsAt(tester, 2);
+      expect(styleRows.length, 3, reason: '屏显样式应有 3 个二级项');
+      expect(
+        [for (final row in styleRows) _labelOf(tester, row)],
+        ['字号', '不透明度', '恢复默认样式'],
+      );
+
+      await _drill(tester, '字号');
+      final sizeRows = _rowsAt(tester, 3);
+      final sizeLabels = [for (final row in sizeRows) _labelOf(tester, row)];
+      expect(sizeLabels, ['80%', '100%', '125%', '150%']);
+      expect(
+        [
+          for (var i = 0; i < sizeRows.length; i++)
+            if (_isChecked(tester, sizeRows[i])) sizeLabels[i],
+        ],
+        ['100%'],
+        reason: '默认 textScale = 1.0 → 100% 打勾',
+      );
+
+      // 同一层换到「不透明度」：档位更换，当前值仍是默认的 100%。
+      await _drill(tester, '不透明度');
+      final opacityRows = _rowsAt(tester, 3);
+      final opacityLabels = [for (final row in opacityRows) _labelOf(tester, row)];
+      expect(opacityLabels, ['50%', '70%', '85%', '100%']);
+      expect(
+        [
+          for (var i = 0; i < opacityRows.length; i++)
+            if (_isChecked(tester, opacityRows[i])) opacityLabels[i],
+        ],
+        ['100%'],
+        reason: '默认 opacity = 1.0 → 100% 打勾',
+      );
     });
 
     testWidgets('第二条 3 层路径：画面 → 画面比例与缩放（5 种模式）', (tester) async {
