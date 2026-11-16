@@ -136,6 +136,7 @@ class PlayerOptions {
     this.demuxerMaxBytesMiB = defaultDemuxerMaxMiB,
     this.demuxerMaxBackBytesMiB = defaultDemuxerBackMiB,
     this.audioPassthrough = false,
+    this.audioNormalization = false,
     this.toneMapping = HdrToneMapping.auto,
     this.hdrPeakCompute = HdrPeakCompute.auto,
     this.autoNext = true,
@@ -201,6 +202,9 @@ class PlayerOptions {
 
   /// 音频直通（`audio-spdif`）。桌面默认关闭：直通需要接收端支持。
   final bool audioPassthrough;
+
+  /// 全局实时音量归一（`af=dynaudnorm`）。默认关闭，不改变音量偏好。
+  final bool audioNormalization;
 
   /// HDR 色调映射算法（`tone-mapping`）。默认跟随内核。
   final HdrToneMapping toneMapping;
@@ -286,6 +290,7 @@ class PlayerOptions {
         defaultDemuxerBackMiB,
       ),
       audioPassthrough: audioPassthrough,
+      audioNormalization: audioNormalization,
       toneMapping: toneMapping,
       hdrPeakCompute: hdrPeakCompute,
       autoNext: autoNext,
@@ -322,6 +327,7 @@ class PlayerOptions {
     'demuxer-max-bytes': '${demuxerMaxBytesMiB * 1024 * 1024}',
     'demuxer-max-back-bytes': '${demuxerMaxBackBytesMiB * 1024 * 1024}',
     'audio-spdif': audioPassthrough ? 'ac3,eac3,dts' : '',
+    'af': audioNormalization ? 'dynaudnorm' : '',
     'tone-mapping': toneMapping.mpvValue,
     'hdr-compute-peak': hdrPeakCompute.mpvValue,
   };
@@ -332,6 +338,7 @@ class PlayerOptions {
     int? demuxerMaxBytesMiB,
     int? demuxerMaxBackBytesMiB,
     bool? audioPassthrough,
+    bool? audioNormalization,
     HdrToneMapping? toneMapping,
     HdrPeakCompute? hdrPeakCompute,
     bool? autoNext,
@@ -355,6 +362,7 @@ class PlayerOptions {
     demuxerMaxBackBytesMiB:
         demuxerMaxBackBytesMiB ?? this.demuxerMaxBackBytesMiB,
     audioPassthrough: audioPassthrough ?? this.audioPassthrough,
+    audioNormalization: audioNormalization ?? this.audioNormalization,
     toneMapping: toneMapping ?? this.toneMapping,
     hdrPeakCompute: hdrPeakCompute ?? this.hdrPeakCompute,
     autoNext: autoNext ?? this.autoNext,
@@ -379,6 +387,7 @@ class PlayerOptions {
     'demuxerMaxBytesMiB': demuxerMaxBytesMiB,
     'demuxerMaxBackBytesMiB': demuxerMaxBackBytesMiB,
     'audioPassthrough': audioPassthrough,
+    'audioNormalization': audioNormalization,
     'toneMapping': toneMapping.id,
     'hdrPeakCompute': hdrPeakCompute.id,
     'autoNext': autoNext,
@@ -439,6 +448,7 @@ class PlayerOptions {
         defaultDemuxerBackMiB,
       ),
       audioPassthrough: boolOf('audioPassthrough', false),
+      audioNormalization: boolOf('audioNormalization', false),
       toneMapping: HdrToneMapping.fromId(map['toneMapping']),
       hdrPeakCompute: HdrPeakCompute.fromId(map['hdrPeakCompute']),
       autoNext: boolOf('autoNext', true),
@@ -472,6 +482,7 @@ class PlayerOptions {
       other.demuxerMaxBytesMiB == demuxerMaxBytesMiB &&
       other.demuxerMaxBackBytesMiB == demuxerMaxBackBytesMiB &&
       other.audioPassthrough == audioPassthrough &&
+      other.audioNormalization == audioNormalization &&
       other.toneMapping == toneMapping &&
       other.hdrPeakCompute == hdrPeakCompute &&
       other.autoNext == autoNext &&
@@ -494,6 +505,7 @@ class PlayerOptions {
     demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB,
     audioPassthrough,
+    audioNormalization,
     toneMapping,
     hdrPeakCompute,
     autoNext,
@@ -514,7 +526,8 @@ class PlayerOptions {
   String toString() =>
       'PlayerOptions(hwdec=$hardwareDecoding cache=$cache '
       'max=${demuxerMaxBytesMiB}MiB back=${demuxerMaxBackBytesMiB}MiB '
-      'spdif=$audioPassthrough tone=${toneMapping.id} '
+      'spdif=$audioPassthrough normalizer=$audioNormalization '
+      'tone=${toneMapping.id} '
       'peak=${hdrPeakCompute.id} autoNext=$autoNext ${failureFallback.id} '
       'preload=$preloadNext skip=${skipMode.name} kinds=$skipKinds '
       'src=$skipSources remote=$skipRemoteEnabled '

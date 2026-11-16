@@ -158,6 +158,20 @@ class PlaybackOptionsPage extends StatelessWidget {
                         );
                       },
                     ),
+                    _switch(
+                      'settings-player-audio-normalization',
+                      '音量归一',
+                      '全局实时处理已解码音频，默认关闭；可能改变动态并增加延迟。'
+                          '音频直通时不生效，设置于下次播放生效。',
+                      state.playerOptions.audioNormalization,
+                      (value) async {
+                        await state.setPlayerOptions(
+                          state.playerOptions.copyWith(
+                            audioNormalization: value,
+                          ),
+                        );
+                      },
+                    ),
                     ListTile(
                       key: const ValueKey('settings-player-skip-open'),
                       dense: true,

@@ -349,6 +349,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 播放参数（缓冲/硬解/自动连播/失败回退/片头片尾开关/LUT）。
   PlayerOptions _options = const PlayerOptions.defaults();
 
+  /// 串行化**所有** mpv 参数写入（整表 + 只写 `af`）。
+  ///
+  /// 整表写入（`_applyPlaybackEnhancements` 的开播注入、`_livePatchOptions`）
+  /// 也带 `af`。两条链各自并发时，较早发起、较晚落地的那一笔会把内核的 `af`
+  /// 盖成旧值，出现「界面显示关、实际仍在归一」。串成一条链后，内核顺序与
+  /// 用户操作顺序一致，最终值总等于最后一次操作的偏好。
+  Future<void> _optionWriteQueue = Future<void>.value();
+
   /// 本片的**手动**片头/片尾标记（用户可改，落 DB）。
   SkipSegments _skipSegments = const SkipSegments.none();
 
@@ -1431,7 +1439,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 不把失败升级成播放失败（`docs/phase9/design/01` §5）。
   Future<void> _applyPlaybackEnhancements() async {
     _options = widget.state.playerOptions;
-    final applied = await _controller.applyPlayerOptions(_options);
+    final applied = await _queueOptionsApply(_options);
     if (!applied) {
       widget.state.log.warning('播放参数未生效（当前平台不是 NativePlayer）', scope: 'player');
     }
@@ -3902,6 +3910,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       toggleFullscreen: _toggleFullscreen,
       exitFullscreen: _exitFullscreen,
     );
+    shortcuts[const SingleActivator(
+          LogicalKeyboardKey.keyN,
+          shift: true,
+          includeRepeats: false,
+        )] =
+        _toggleAudioNormalization;
     if (_isLive || _isCatchup) {
       shortcuts.removeWhere(
         (activator, _) =>
@@ -5759,6 +5773,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   selected: (volume - step).abs() < 0.5,
                   onSelect: act(() => _controller.setVolume(step)),
                 ),
+              PlayerMenuItem(
+                id: 'audio_normalization',
+                label: '音量归一（Shift+N）',
+                selected: widget.state.playerOptions.audioNormalization,
+                onSelect: _toggleAudioNormalization,
+              ),
             ],
           ),
           PlayerMenuItem(
@@ -6348,8 +6368,56 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final normalized = next.normalized();
     _options = normalized;
     unawaited(widget.state.setPlayerOptions(normalized));
-    unawaited(_controller.applyPlayerOptions(normalized));
+    unawaited(_queueOptionsApply(normalized));
     setState(() {});
+  }
+
+  /// 把一次 mpv 参数写入排进 [_optionWriteQueue]。返回该笔的真实结果。
+  Future<bool> _queueOptionsApply(PlayerOptions options) =>
+      _enqueueWrite(() => _controller.applyPlayerOptions(options));
+
+  Future<bool> _enqueueWrite(Future<bool> Function() write) {
+    final run = _optionWriteQueue.then((_) => write());
+    // 队列只承载顺序：单笔失败不让后续写入永远挂住（失败已由调用方提示）。
+    _optionWriteQueue = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  void _toggleAudioNormalization() {
+    final current = widget.state.playerOptions;
+    final enabled = !current.audioNormalization;
+    _options = current.copyWith(audioNormalization: enabled);
+    unawaited(
+      widget.state.setPlayerOptions(_options).then((saved) {
+        if (!mounted || saved) return;
+        widget.state.log.warning('音量归一偏好保存失败', scope: 'player');
+        _showPlayerMessage('音量归一偏好保存失败', kind: ToastKind.error);
+      }),
+    );
+    setState(() {});
+    // 只写 `af`，且与整表写入共用一条队列：不会被更早发起、更晚落地的
+    // 整表写入盖回旧值。
+    unawaited(() async {
+      if (!mounted) return;
+      final applied = await _enqueueWrite(
+        () =>
+            _controller.applyMpvProperties({'af': enabled ? 'dynaudnorm' : ''}),
+      );
+      if (!mounted) return;
+      if (!applied) {
+        final rejected = _controller.rejectedMpvProperties;
+        final reason = rejected.isNotEmpty
+            ? rejected.map((entry) => entry.reason).join('；')
+            : _controller.lastEngineError ?? '当前内核不支持';
+        final message = '音量归一${enabled ? '开启' : '关闭'}未生效：$reason';
+        widget.state.log.warning(message, scope: 'player');
+        _showPlayerMessage(message, kind: ToastKind.error);
+      } else if (enabled && widget.state.playerOptions.audioPassthrough) {
+        const message = '音量归一：音频直通时不生效，仅对解码后的音频生效';
+        widget.state.log.warning(message, scope: 'player');
+        _showPlayerMessage(message);
+      }
+    }());
   }
 
   /// 「自动匹配字幕」开关：没有配置任何字幕源时不给改（菜单行已灰）。
