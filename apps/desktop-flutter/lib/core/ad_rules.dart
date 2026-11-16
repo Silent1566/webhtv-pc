@@ -206,10 +206,18 @@ String _normalizeHost(String raw) {
 
 /// 清洗结果。
 class HlsCleanResult {
-  const HlsCleanResult({required this.text, this.removedSegments = 0});
+  const HlsCleanResult({
+    required this.text,
+    this.removedSegments = 0,
+    this.abandonReason,
+  });
 
   final String text;
   final int removedSegments;
+
+  /// 安全回退保留原文和零移除计数，供代理诊断说明规则为何未应用。
+  final String? abandonReason;
+  bool get abandoned => abandonReason != null;
 
   bool get changed => removedSegments > 0;
 
@@ -228,7 +236,36 @@ HlsCleanResult cleanHlsPlaylist({
   if (text.isEmpty || rules.isEmpty) {
     return HlsCleanResult(text: text);
   }
-  final lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '').split('\n');
+  // 带 BOM 的清单同样可播：只在分析时去掉，回写时按原样补回。
+  final bom = text.startsWith('\uFEFF') ? '\uFEFF' : '';
+  final body = bom.isEmpty ? text : text.substring(1);
+  final lines = body.replaceAll('\r\n', '\n').replaceAll('\r', '').split('\n');
+  // 规则清洗只处理完整点播媒体清单，不能删直播窗口或主清单的 variant URI。
+  if (!lines.any((line) => line.trim().toUpperCase() == '#EXT-X-ENDLIST')) {
+    return HlsCleanResult(text: text);
+  }
+  if (!_isPlayableMediaPlaylist(body)) {
+    return HlsCleanResult(text: text, abandonReason: '上游不是完整可播放的媒体清单');
+  }
+  // RFC 8216 §5.2：未显式给 IV 的 AES-128 依赖原媒体序号。删除分片会改变
+  // 后续解密；BYTERANGE 的隐式偏移同样依赖前段，不能只凭结构有效就认定可播。
+  final attributes = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
+  for (final raw in lines) {
+    final upper = raw.trim().toUpperCase();
+    if (upper.startsWith('#EXT-X-BYTERANGE:')) {
+      return HlsCleanResult(text: text, abandonReason: 'BYTERANGE 清单保留原分片偏移');
+    }
+    if (!upper.startsWith('#EXT-X-KEY:')) continue;
+    final values = {
+      for (final match in attributes.allMatches(upper))
+        match[1]!: match[2]!.replaceAll('"', '').trim(),
+    };
+    // METHOD 不止 AES-128：SAMPLE-AES / SAMPLE-AES-CTR 同样用媒体序号派生 IV。
+    final method = values['METHOD'] ?? '';
+    if (method.isNotEmpty && method != 'NONE' && !values.containsKey('IV')) {
+      return HlsCleanResult(text: text, abandonReason: '$method 隐式 IV 依赖原媒体序号');
+    }
+  }
 
   final blocks = <_SegmentBlock>[];
   final pending = <String>[];
@@ -264,15 +301,17 @@ HlsCleanResult cleanHlsPlaylist({
   final output = <String>[];
   for (final block in blocks) {
     if (_isAdBlock(block, playlistUri, rules)) {
+      // MAP 声明的初始化段归属于后随分片。删掉广告却留下它的 MAP，会让下一个
+      // 正片分片用广告的 init 段解码；删掉 MAP 又让正片用回更早的 init 段。
+      // 两种猜测都可能坏，直接放弃这次清洗。
+      if (block.tags.any(_isInitSectionTag)) {
+        return HlsCleanResult(text: text, abandonReason: '广告分片自带初始化段，取舍不可判定');
+      }
       removed += 1;
-      // 保留会影响后续分片的标签（KEY/MAP），其余分片级标签一起删。
+      // 只丢**属于这一分片本身**的标签。其它标签（KEY / DISCONTINUITY / DEFINE /
+      // I-FRAMES-ONLY / GAP 等）对后随分片持续生效，删掉会破坏仍保留的分片。
       for (final tag in block.tags) {
-        final upper = tag.trim().toUpperCase();
-        if (upper.startsWith('#EXT-X-KEY') ||
-            upper.startsWith('#EXT-X-MAP') ||
-            upper.startsWith('#EXT-X-SESSION-KEY')) {
-          output.add(tag);
-        }
+        if (!_isSegmentLocalTag(tag)) output.add(tag);
       }
       continue;
     }
@@ -283,7 +322,60 @@ HlsCleanResult cleanHlsPlaylist({
   output.addAll(pending);
 
   if (removed == 0) return HlsCleanResult(text: text);
-  return HlsCleanResult(text: output.join('\n'), removedSegments: removed);
+  // 当前只有规则级清洗；30% 是多级启发式的单级限额，不套在用户规则上。
+  // 累计超过一半则整次回退，避免一条宽规则删除整片 CDN 的正片。
+  if (removed > blocks.length * 0.5) {
+    return HlsCleanResult(text: text, abandonReason: '移除分片超过50%上限');
+  }
+  final cleaned = output.join('\n');
+  if (!_isPlayableMediaPlaylist(cleaned)) {
+    return HlsCleanResult(text: text, abandonReason: '清洗后媒体清单不可播放');
+  }
+  return HlsCleanResult(text: '$bom$cleaned', removedSegments: removed);
+}
+
+/// `#EXT-X-MAP` 指向后随分片共用的初始化段，删分片时无法安全重绑定。
+bool _isInitSectionTag(String tag) =>
+    tag.trim().toUpperCase().startsWith('#EXT-X-MAP');
+
+/// 只描述**紧跟的那个分片**的标签，删掉该分片时一并删。
+///
+/// 判据是「删掉它会不会改变仍保留的分片的解释」：KEY / DISCONTINUITY / DEFINE /
+/// GAP / I-FRAMES-ONLY 等持续生效，必须保留；EXTINF / BYTERANGE / 时间戳 / 广告
+/// 标记只描述被删的那一段。
+bool _isSegmentLocalTag(String tag) {
+  final upper = tag.trim().toUpperCase();
+  return upper.startsWith('#EXTINF') ||
+      upper.startsWith('#EXT-X-BYTERANGE') ||
+      upper.startsWith('#EXT-X-PROGRAM-DATE-TIME') ||
+      upper.startsWith('#EXT-X-BITRATE');
+}
+
+bool _isPlayableMediaPlaylist(String text) {
+  var needsUri = false;
+  var segments = 0;
+  var ended = false;
+  final lines = text
+      .split('\n')
+      .map((line) => line.trim())
+      .where((line) => line.isNotEmpty);
+  if (lines.isEmpty || lines.first.toUpperCase() != '#EXTM3U') return false;
+  for (final line in lines) {
+    final upper = line.toUpperCase();
+    if (upper.startsWith('#EXT-X-STREAM-INF:')) return false;
+    if (upper.startsWith('#EXTINF:')) {
+      if (needsUri || ended) return false;
+      needsUri = true;
+    } else if (upper == '#EXT-X-ENDLIST') {
+      if (needsUri) return false;
+      ended = true;
+    } else if (!line.startsWith('#')) {
+      if (!needsUri || ended) return false;
+      needsUri = false;
+      segments++;
+    }
+  }
+  return ended && !needsUri && segments > 0;
 }
 
 bool _isAdBlock(_SegmentBlock block, Uri playlistUri, AdRuleSet rules) {

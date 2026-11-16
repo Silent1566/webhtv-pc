@@ -151,6 +151,7 @@ https://cdn.good/1.ts
 https://ad.other/2.ts
 #EXTINF:10,
 https://cdn.good/3.ts
+#EXT-X-ENDLIST
 ''';
       const rule = HlsAdRule(
         id: 'r4',
@@ -171,11 +172,12 @@ https://cdn.good/3.ts
     test('删除广告分片时保留 EXT-X-KEY（不破坏后续解密）', () {
       const text = '''
 #EXTM3U
-#EXT-X-KEY:METHOD=AES-128,URI="https://key.example/k"
+#EXT-X-KEY:METHOD=AES-128,URI="https://key.example/k",IV=0x00000000000000000000000000000001
 #EXTINF:5,
 https://ads.example/ad.ts
 #EXTINF:10,
 https://cdn.good/1.ts
+#EXT-X-ENDLIST
 ''';
       final result = cleanHlsPlaylist(
         text: text,
