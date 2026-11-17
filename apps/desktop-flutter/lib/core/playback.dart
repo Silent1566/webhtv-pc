@@ -324,6 +324,40 @@ bool isGenuineEnd({
   return positionMs >= durationMs - marginMs;
 }
 
+/// 相邻两次位置采样之间算作「跳变」的最小差值（毫秒）。
+///
+/// 自然播放的步进等于引擎通知间隔（`time-pos` 约 4 次/秒，1x 下每次约
+/// 250ms，8x 也才 2s），所以 10s 这个门槛只会命中 `seek`（点击/拖动进度条、
+/// 快进快退、续播定位），不会命中正常播放。
+///
+/// **为什么用位置差而不是时长窗口**：mpv 在 `seek` 到未缓冲位置时会把
+/// `time-pos` 一步打成 `duration`（并置 `eof-reached`），与「自然播到片尾」
+/// 的唯一区别就是——自然播放是**连续**走到片尾的，seek 是**一步跳**过去的。
+/// 用「距 seek 多久」判定依赖墙上时钟，暂停、快进与测试虚拟时间都会让它失真。
+const int positionJumpThresholdMs = 10000;
+
+/// 位置是否发生了跳变：这次 `time-pos` 不是从上一个位置连续走过来的。
+bool isPositionJump({
+  required int previousMs,
+  required int currentMs,
+  int thresholdMs = positionJumpThresholdMs,
+}) {
+  if (previousMs < 0 || currentMs < 0) return false;
+  return (currentMs - previousMs).abs() > thresholdMs;
+}
+/// 两处起播定位是否已经是同一个点。
+///
+/// [toleranceMs] 吸收毫秒级重算误差：`open` 已经按 A 定位后，重算得到 A' 时
+/// 不该再补一次 seek——跨缓冲的补 seek 会新建第二条连接被服务端 429。
+bool isSameStartPosition(
+  Duration? a,
+  Duration? b, {
+  int toleranceMs = 1000,
+}) {
+  if (a == null || b == null) return a == b;
+  return (a - b).inMilliseconds.abs() <= toleranceMs;
+}
+
 /// 跨端 `completed` 重算（`design/03` §4.2）。
 ///
 /// **PC 一律不采信同步来的 `completed` 字段**：安卓用

@@ -226,12 +226,19 @@ class QueueMediaIO implements NativePlayer {
     bool play = true,
     bool synchronized = true,
   }) async {
-    opened.add(playable as Media);
+    final media = playable as Media;
+    opened.add(media);
     final gate = nextOpen;
     nextOpen = null;
     if (gate != null) await gate.future;
     if (failOpen) throw StateError('404 missing file');
-    progress(1, playing: play);
+    // 起播定位由 `Media.start` 下发（真实 mpv 在 on_load hook 里应用）；
+    // 假件必须照做，否则「定位随 open 一起下发」这条契约无人验证。
+    final start = media.start;
+    progress(
+      start != null && start > Duration.zero ? start.inSeconds : 1,
+      playing: play,
+    );
   }
 
   @override
@@ -1056,7 +1063,7 @@ void main() {
       1,
       reason: 'premature media EOF is not queue EOF',
     );
-    fixture.media.progress(1000, completed: true);
+        fixture.media.progress(1000, completed: true);
     await settleQueue(tester);
     expect(fixture.media.opened.last.uri, 'https://media.test/resolved-A.m3u8');
     await closeQueue(tester);

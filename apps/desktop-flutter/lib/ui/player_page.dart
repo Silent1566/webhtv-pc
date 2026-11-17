@@ -344,6 +344,40 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 一次连播未完成时忽略后续所有控制器通知，避免「一次播完连跳多集」。
   bool _advanceInFlight = false;
 
+  /// 「跳过片尾」afterwards 多久内算同一次跳转（我们自己的跳转不该被当成伪结束）。
+  static const int _skipSeekWindowMs = 5000;
+
+  /// 「跳过片尾」发起 seek 的时刻；这一次 seek 导致的 EOF 就是真播完。
+  DateTime? _skipSeekAt;
+
+  /// 本次 `completed` 已被判定为 seek 造成的伪结束。
+  ///
+  /// 一旦置位，直到引擎把 `completed` 落回 false（下一次 open / seek 会这么做）
+  /// 为止都不再连播：mpv 的 `eof-reached` 在 `--keep-open=yes` 下不会自己
+  /// 回落，只看「seek 之后 5 秒」会让同一个伪结束在冷静期过后又被判成真播完。
+  bool _spuriousCompletion = false;
+
+  /// 上一次位置采样（毫秒）；-1 表示还没有基线（刚换媒体）。
+  int _lastPositionMs = -1;
+
+  /// 最近一次 seed 过的 seek 次数（见 [PlayerController.seekCount]）。
+  int _seenSeekCount = 0;
+
+  /// 发生过 seek 且之后还没连续播过：本次 completed 可能是 seek 伪结束。
+  bool _seekPending = false;
+
+  /// 非空表示这次换媒体是**用户跳转**（见 [_seekFromUser]）：重开期间到达的
+  /// completed 一律当伪结束，否则定位一旦失败就会把「点了一下进度条」变成
+  /// 「本集播完 → 下一集」。
+  Duration? _reloadStartAt;
+
+  /// 同一时刻只允许一个「跳转重开」在跑：并发 `_load` 会在 media_kit 的串行锁上
+  /// 互相等（前一次的 open 还没放锁，后一次的 stop 已经排队），实测能把播放卡死。
+  bool _reloadInFlight = false;
+
+  /// 重开期间用户又点了别处：只保留最后一次，由进行中的那一轮接力执行。
+  Duration? _queuedSeekTarget;
+
   // ------------------------------------------------- Phase 9 播放增强
 
   /// 播放参数（缓冲/硬解/自动连播/失败回退/片头片尾开关/LUT）。
@@ -800,6 +834,55 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _touchControls();
   }
 
+  /// 最近这次 seek 是不是「跳过片尾」发起的。
+  ///
+  /// `_applySkip` 与控制器 `seek()` 在同一帧内先后执行，两者时刻只差微秒，
+  /// 所以用一个短窗口判定「同一次 seek」。
+  bool _isSkipSeekJustNow() {
+    final at = _skipSeekAt;
+    if (at == null) return false;
+    return DateTime.now().difference(at).inMilliseconds <
+        _skipSeekWindowMs;
+  }
+
+  /// 记录位置采样是否「跳变」，并在 `completed` 落回 false 时作废伪结束判定。
+  ///
+  /// 引擎在下一次 `open` / `seek` 都会把 `completed` 复位；不复位标志的话，
+  /// 一次 seek 伪结束会永久掐掉本集的连播。
+  void _trackPositionSample() {
+    final currentMs = _controller.position.inMilliseconds;
+    final previousMs = _lastPositionMs;
+    _lastPositionMs = currentMs;
+    final seekCount = _controller.seekCount;
+    if (seekCount != _seenSeekCount) {
+      // 新的 seek：在它落地之前到达的 completed 都可能是伪结束。
+      _seenSeekCount = seekCount;
+      _seekPending = true;
+    } else if (previousMs >= 0 &&
+        currentMs > previousMs &&
+        !isPositionJump(previousMs: previousMs, currentMs: currentMs)) {
+      // 在新位置连续播起来了：seek 已经落地，伪结束的因果消失。
+      _seekPending = false;
+    }
+    if (!_controller.isCompleted) _spuriousCompletion = false;
+  }
+
+  /// 跳转重开收尾：**位置真的到达目标**才撤遮罩。
+  ///
+  /// 不能按流程节点撤（比如 `_progressReady`）：往后跳要的数据还没缓冲好，
+  /// `keep-open` 留着的旧帧会立刻从撤掉的遮罩后面露出来，用户看到的就是
+  /// 「先闪一下之前的画面，再刷新到当前进度」。往回跳走的是同连接直接 seek，
+  /// 画面被新帧覆盖，所以只有往后跳会闪。
+  void _maybeFinishReposition() {
+    if (!_controller.isRepositioning) return;
+    final target = _controller.repositionTarget;
+    if (target == null) return;
+    final position = _controller.position;
+    if (position <= Duration.zero) return;
+    if ((position - target).inMilliseconds.abs() > 3000) return;
+    _controller.endReposition();
+  }
+
   void _onControllerChanged() {
     if (!mounted) return;
     _audioAi?.update(
@@ -814,6 +897,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // duration/buffer/volume/… 每秒多次）只要 `isCompleted` 仍为 true 就会
     // 再排一个 `_onCompleted()`。于是「唤醒后点继续播放」这种纯重建动作
     // 也会立即跳下一集。
+    _trackPositionSample();
+    _maybeFinishReposition();
     _syncSkipPlanWithDuration();
     _maybeStartSkipLookup();
     _maybeAutoSkip();
@@ -899,7 +984,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       '已跳过${segment.kind.label} → ${_formatMs(decision.targetMs)}',
       kind: ToastKind.success,
     );
-    unawaited(_controller.seek(Duration(milliseconds: decision.targetMs)));
+    // 这一步是应用自己发起的「跳到片尾」：跳完若紧接着 EOF，那就是本集真的
+    // 看完了，不能按「seek 伪结束」挡掉连播。
+    _skipSeekAt = DateTime.now();
+    // 走同一条跳转通道：片尾段可能在缓冲之外，同样只能靠重开定位。
+    unawaited(_seekFromUser(Duration(milliseconds: decision.targetMs)));
   }
 
   /// `confirm` 模式先问用户（安卓 `INTRO_SKIP_CONFIRM`）。
@@ -1105,17 +1194,40 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 连播闸门：单次守卫 + 真播完判定（`design/03` §4.1）。
   ///
-  /// 三道闸门缺一不可：
+  /// 四道闸门缺一不可：
   /// 1. [_advanceInFlight] 防重入（D1）：一次连播未完成时忽略后续通知；
   /// 2. [PlayerController.isCompleted] 是 media_kit 的「到达流末尾」；
   /// 3. [isGenuineEnd] 排除提前 EOF（D2）——缓存耗尽时 `duration` 往往还没取到，
-  ///    此时 `completed=true` 一定是误报。
+  ///    此时 `completed=true` 一定是误报；
+  /// 4. [isPositionJump] 排除 seek 伪结束——点击/拖动进度条到未缓冲
+  ///    位置时 mpv 会短暂走到末尾，这一帧与「自然播完」的数字完全一样。
   void _maybeAdvanceOnGenuineEnd() {
     if (_advanceInFlight) return;
     if (_isLive || _isCatchup) return;
     if (!_progressReady) return;
     if (!_controller.isCompleted) return;
     if (!_isGenuineEnd()) return;
+    // 第四道闸门：这次 completed 是不是被 seek 送来的。
+    //
+    // 点击/拖动进度条到未缓冲位置时，mpv 会短暂 `eof-reached` 并把 `time-pos`
+    // 报成 `duration`，那一帧与「自然播完」在 isGenuineEnd 眼里完全一样。
+    // 只靠前三道闸门，用户点一下进度条就会被当成「本集播完」而跳到下一集
+    // （实测 0.4s 内发生）。判据见 [isPositionJump]。
+    if (_spuriousCompletion) return;
+    if (_isSkipSeekJustNow()) {
+      // 「跳过片尾」是我们自己发起的跳转：它跳到片尾就是本集真的看完了。
+      _skipSeekAt = null;
+    } else if (_seekPending) {
+      _spuriousCompletion = true;
+      widget.state.log.debug(
+        '连播闸门：completed 紧跟 seek（seek 伪结束），本集不连播 '
+        'position=${_controller.position.inMilliseconds}ms '
+        'duration=${_controller.duration.inMilliseconds}ms '
+        'episode=${_request.episodeName}',
+        scope: 'player',
+      );
+      return;
+    }
 
     if (_hasQueue) {
       if (_repeat == PlaybackRepeat.off && !_options.autoNext) return;
@@ -1252,6 +1364,76 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     position: _controller.position,
   );
 
+  /// 传给 `open` 的起播定位：0 与 null 都表示「从头开始」，不下发。
+  Duration? _startPositionForOpen(Duration? want) {
+    if (want == null || want <= Duration.zero) return null;
+    return want;
+  }
+
+  /// 用户点击/拖动进度条后的跳转。
+  ///
+  /// **为什么不能一律 `_controller.seek`**：mpv 的 mid-stream seek 会新建第二条
+  /// HTTP 连接去发 `Range`，而站点（T4 内网源）每客户端只允许 **1 条活动流**，
+  /// 第二条直接回 429。ffmpeg 定位失败被判为致命错误后，mpv 置
+  /// `eof-reached` 并把 `time-pos` 报成 `duration`——用户看到的就是「拖到缓冲
+  /// 区外就停住/跳下一集」。实测证据见 `.probe/seek-fix-verify`。
+  ///
+  /// 正确做法：缓冲内直接 seek（同连接 Range，服务端接受）；缓冲外重开本集，
+  /// 让定位发生在**打开时**（`Media.start`），全程只用一条连接。
+  Future<void> _seekFromUser(Duration target) async {
+    if (_isLive || _isCatchup || _hasQueue) {
+      await _controller.seek(target);
+      return;
+    }
+    final duration = _controller.duration;
+    var clamped = target < Duration.zero ? Duration.zero : target;
+    if (duration > Duration.zero && clamped > duration) clamped = duration;
+    final buffered = _controller.buffered;
+    // 引擎没上报缓存（buffered==0）时无从判断，保持旧行为直接 seek：
+    // 对本地文件/不限流的源这是对的，只有「明确知道目标在缓冲之外」才重开。
+    if (buffered <= Duration.zero || clamped <= buffered) {
+      await _controller.seek(clamped);
+      return;
+    }
+    widget.state.log.info(
+      '跨缓冲跳转：重开本集并在打开时定位 '
+      'target=${clamped.inMilliseconds}ms '
+      'buffered=${buffered.inMilliseconds}ms '
+      'episode=${_request.episodeName}',
+      scope: 'player',
+    );
+    _queuedSeekTarget = clamped;
+    // 已经在重开的：把目标交给那一轮接力，绝不并发第二个 `_load`。
+    if (_reloadInFlight) return;
+    _reloadInFlight = true;
+    try {
+      while (_queuedSeekTarget != null) {
+        final next = _queuedSeekTarget!;
+        _queuedSeekTarget = null;
+        if (!mounted) break;
+        setState(() {
+          _request = _request.copyWith(
+            startPosition: next,
+            clearResumeSeed: true,
+          );
+        });
+        // 标记这次换媒体是跳转（`_beginMediaTransition` 据此武装伪结束闸门）。
+        _reloadStartAt = next;
+        _controller.beginReposition(next);
+        try {
+          await _load(restorePlaying: _controller.isPlaying);
+        } finally {
+          _reloadStartAt = null;
+          if (!_controller.isRepositioning) _controller.endReposition();
+        }
+      }
+    } finally {
+      _reloadInFlight = false;
+      _queuedSeekTarget = null;
+      _controller.endReposition();
+    }
+  }
+
   Future<void> _load({bool? restorePlaying}) async {
     if (!mounted) return;
     final generation = _beginMediaTransition();
@@ -1284,6 +1466,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         flag: intent.playbackFlag,
         episodeName: intent.episodeName,
         isCurrent: () => mounted && generation == _mediaGeneration,
+        // 起播定位跟着 open 一起下发（见 [PlayerController.open] 的 startAt）：
+        // 打开后再 seek 会新建第二条连接，服务端只允许 1 条活动流。
+        startAt: _startPositionForOpen(intent.startPosition),
       );
     } finally {
       if (identical(controller, _controller)) _liveOpenInFlight = false;
@@ -1392,17 +1577,51 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (start != null &&
         start > Duration.zero &&
         start < _controller.duration) {
-      await _controller.seek(start);
-      if (!mounted || generation != _mediaGeneration) return;
-      widget.state.log.info(
-        '恢复播放进度 episode=${_request.episodeName} '
-        'position=${start.inMilliseconds}ms',
-        scope: 'player',
-      );
+      // 起播已经定位到 [intent.startPosition]；只有重算结果不同且**落在已缓冲
+      // 区间内**时才补一次 seek。跨缓冲的 seek 会新建第二条连接被服务端 429，
+      // 表现为「停住 + eof-reached」，绝不能在这里发。
+      final alreadyPositioned = isSameStartPosition(intent.startPosition, start);
+      if (alreadyPositioned) {
+        // 起播定位写在 mpv 的 `start` 选项里，生效与否只有引擎自己知道：
+        // 落地位置明显偏离就说明这次定位没吃上（此时是从头播，而不是跳转失败）。
+        final actual = _controller.position;
+        final drift = (actual - start).inMilliseconds.abs();
+        if (drift > 5000) {
+          widget.state.log.warning(
+            '起播定位未生效：wanted=${start.inMilliseconds}ms '
+            'actual=${actual.inMilliseconds}ms episode=${_request.episodeName}',
+            scope: 'player',
+          );
+        } else {
+          widget.state.log.info(
+            '恢复播放进度 episode=${_request.episodeName} '
+            'position=${start.inMilliseconds}ms',
+            scope: 'player',
+          );
+        }
+      } else if (start <= _controller.buffered) {
+        await _controller.seek(start);
+        if (!mounted || generation != _mediaGeneration) return;
+        widget.state.log.info(
+          '恢复播放进度 episode=${_request.episodeName} '
+          'position=${start.inMilliseconds}ms',
+          scope: 'player',
+        );
+      } else {
+        widget.state.log.warning(
+          '进度重算落在缓冲之外，未下发 seek（避免 429 伪结束）'
+          'wanted=${start.inMilliseconds}ms '
+          'buffered=${_controller.buffered.inMilliseconds}ms '
+          'openedAt=${intent.startPosition?.inMilliseconds ?? 0}ms '
+          'episode=${_request.episodeName}',
+          scope: 'player',
+        );
+      }
     }
     // 续播 seek 完成之后才允许自动跳片头/片尾（design/01 §3.1）。
     _progressReady = true;
     _skipArmed = true;
+
     if (restorePlaying == null) _maybeAutoSkip();
     _startProgressSaver();
   }
@@ -3065,6 +3284,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         unawaited(replacement.setRate(rate));
       });
     }
+    // 采样基线与 seek 溯源随媒体一起作废：上一集的位置对新载入的媒体无意义。
+    _controller.clearLastSeek();
+    _lastPositionMs = -1;
+    _seenSeekCount = _controller.seekCount;
+    // 换集本身不是跳转；只有「用户跳转引起的重开」才武装伪结束闸门。
+    _seekPending = _reloadStartAt != null;
+    _skipSeekAt = null;
+    _spuriousCompletion = false;
     // 每换一次媒体（含重试、换线路）都要换一份诊断基线。
     _loggedDurationMs = -1;
     _lastDurationLogAt = null;
@@ -3083,6 +3310,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _persistProgress() {
     if (!_progressReady) return;
+    // seek 伪结束期间的位置是假的（引擎把 time-pos 报成了 duration），
+    // 落库会把「点了一下进度条」写成「这一集已看完」，下次续播直接失效。
+    if (_spuriousCompletion) return;
     if (_controller.duration <= Duration.zero) return;
     final position = _controller.position;
     final duration = _controller.duration;
@@ -4175,6 +4405,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                               ),
                             if (_controller.isLoading)
                               const Positioned.fill(child: LoadingBlock()),
+                            // 跳转重开期间盖一层**不透明**底：mpv 的 `keep-open`
+                            // 会把上一帧留在画面控件上，直到新位置首帧解码出来；
+                            // [LoadingBlock] 自己只有转圈、没有底色，旧帧会直接
+                            // 透出来（用户看到「先闪一下之前的画面再跳到新位置」）。
+                            if (_controller.isRepositioning)
+                              const Positioned.fill(
+                                child: ColoredBox(
+                                  color: Colors.black,
+                                  child: LoadingBlock(),
+                                ),
+                              ),
                             // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
                             // 浮层之下），且判据互斥——加载阶段已经有上面那个
                             // 全屏圈，再叠一个就是两个圈（判据见
@@ -4818,7 +5059,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             position: _controller.position,
             duration: duration,
             buffered: _controller.buffered,
-            onSeek: _controller.seek,
+            onSeek: _seekFromUser,
           ),
         ),
         Text(
