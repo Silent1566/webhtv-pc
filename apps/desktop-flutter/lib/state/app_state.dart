@@ -7174,6 +7174,10 @@ AiContentCompletion? aiContentCompletion,
 
   ProxySessionManager get proxySessions => _proxy.sessions;
 
+  /// 播放地址对应的代理会话流量快照；非代理地址返回 null（直连走引擎读数）。
+  ProxyTrafficSnapshot? proxyTrafficFor(String playbackUrl) =>
+      _proxy.trafficFor(playbackUrl);
+
   /// 当前播放会话的代理 token 指纹（供设置页显示，不回显完整 token）。
   String? get proxySessionFingerprint => _proxySession?.fingerprint;
 
