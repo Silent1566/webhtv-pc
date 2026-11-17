@@ -1679,6 +1679,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             'actual=${actual.inMilliseconds}ms episode=${_request.episodeName}',
             scope: 'player',
           );
+          // 定位失败**不会抛异常**（`start` 只是内核选项），所以必须显式告诉
+          // 用户「没跳过去」——否则他只是看到画面从头开始，以为点了没反应。
+          _showPlayerMessage('未能跳到该位置，已从头播放');
         } else {
           widget.state.log.info(
             '恢复播放进度 episode=${_request.episodeName} '
