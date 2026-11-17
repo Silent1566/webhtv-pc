@@ -111,7 +111,22 @@ class _FollowingPageState extends State<FollowingPage> {
       text: '${settings.intervalMinutes}',
     );
     var selected = settings.intervalMinutes;
-    final picked = await showDialog<int>(
+    String? error;
+    var revision = 0;
+    Future<void> commit(int minutes) async {
+      final current = ++revision;
+      final saved = await _state.setFollowingSettings(
+        _state.followingSettings.copyWith(intervalMinutes: minutes),
+      );
+      if (!mounted || current != revision) return;
+      setState(() {
+        _message = saved
+            ? '检查间隔已自动保存为 ${_state.followingSettings.intervalLabel}'
+            : '检查间隔自动保存失败，请重新修改后重试';
+      });
+    }
+
+    final route = DialogRoute<void>(
       context: context,
       builder: (context) => AlertDialog(
         key: const ValueKey('following-interval-dialog'),
@@ -130,10 +145,14 @@ class _FollowingPageState extends State<FollowingPage> {
                       key: ValueKey('following-interval-$minutes'),
                       label: Text(FollowingSettings.formatInterval(minutes)),
                       selected: selected == minutes,
-                      onSelected: (_) => setLocal(() {
-                        selected = minutes;
-                        controller.text = '$minutes';
-                      }),
+                      onSelected: (_) {
+                        setLocal(() {
+                          selected = minutes;
+                          error = null;
+                          controller.text = '$minutes';
+                        });
+                        commit(minutes);
+                      },
                     ),
                 ],
               ),
@@ -142,39 +161,41 @@ class _FollowingPageState extends State<FollowingPage> {
                 key: const ValueKey('following-interval-input'),
                 controller: controller,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '自定义分钟（15–1440）'),
-                onChanged: (value) => setLocal(() {
-                  selected = int.tryParse(value.trim()) ?? selected;
-                }),
+                decoration: InputDecoration(
+                  labelText: '自定义分钟（15–1440）',
+                  errorText: error,
+                ),
+                onChanged: (value) {
+                  final minutes = int.tryParse(value.trim());
+                  final valid =
+                      minutes != null && minutes >= 15 && minutes <= 1440;
+                  setLocal(() {
+                    error = valid ? null : '请输入 15–1440 之间的整数';
+                    if (valid) selected = minutes;
+                  });
+                  if (valid) {
+                    commit(minutes);
+                  } else {
+                    revision++;
+                  }
+                },
               ),
+              const SizedBox(height: 8),
+              const Text('有效修改即生效并自动保存'),
             ],
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const ValueKey('following-interval-save'),
-            onPressed: () => Navigator.of(context).pop(
-              int.tryParse(controller.text.trim()) ?? settings.intervalMinutes,
-            ),
-            child: const Text('保存'),
+            child: const Text('关闭'),
           ),
         ],
       ),
     );
+    await Navigator.of(context).push(route);
+    await route.completed;
     controller.dispose();
-    if (picked == null) return;
-    // 夹取在 `FollowingSettings.copyWith` 里做；保存后立即重建定时器并补检查。
-    await _state.setFollowingSettings(
-      settings.copyWith(intervalMinutes: picked),
-    );
-    if (!mounted) return;
-    setState(() {
-      _message = '检查间隔已设为 ${_state.followingSettings.intervalLabel}';
-    });
   }
 
   Future<void> _playLatest(Following item) async {

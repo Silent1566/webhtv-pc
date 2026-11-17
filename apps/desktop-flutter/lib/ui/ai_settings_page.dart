@@ -4,6 +4,8 @@
 /// 避免用户以为 AI 会在后台自动调用。
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../core/ai_config.dart';
@@ -25,8 +27,41 @@ class AiSettingsPage extends StatefulWidget {
   State<AiSettingsPage> createState() => _AiSettingsPageState();
 }
 
+class _AiSaveSession extends ChangeNotifier {
+  _AiSaveSession(this.config);
+
+  AiConfig config;
+  String? error;
+  bool pending = false;
+  int _revision = 0;
+  Future<void> _queue = Future.value();
+
+  void save(AppState state, AiConfig next) {
+    config = next;
+    pending = true;
+    final revision = ++_revision;
+    notifyListeners();
+    _queue = _queue.then((_) async {
+      var ok = false;
+      try {
+        ok = await state.saveAiConfig(next);
+      } catch (_) {
+        ok = false;
+      }
+      if (revision != _revision) return;
+      pending = false;
+      error = ok ? null : '保存失败，本次修改未写入磁盘；请修改后重试（详见日志）';
+      notifyListeners();
+    });
+  }
+}
+
 class _AiSettingsPageState extends State<AiSettingsPage> {
-  late final AiConfig _base;
+  late AiConfig _base;
+  static final _saveSessions = Expando<_AiSaveSession>();
+  late final _AiSaveSession _saveSession;
+  int _saveStatusVersion = 0;
+  int _statusVersion = 0;
   late final Map<String, TextEditingController> _prompts;
   static const _promptLabels = {
     'recommend': '影视推荐',
@@ -48,6 +83,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
 
   /// 测试连接 / 拉模型的结果提示。
   String _status = '';
+  String? get _saveError => _saveSession.error;
   bool _busy = false;
 
   /// 最近一次成功拉取到的模型名（为空时模型框退回普通输入）。
@@ -62,8 +98,15 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   @override
   void initState() {
     super.initState();
-    final config = widget.state.aiConfig.sanitized();
+    _saveSession = _saveSessions[widget.state] ??= _AiSaveSession(
+      widget.state.aiConfig.sanitized(),
+    );
+    if (!_saveSession.pending && _saveSession.error == null) {
+      _saveSession.config = widget.state.aiConfig.sanitized();
+    }
+    final config = _saveSession.config;
     _base = config;
+    _status = _saveSession.pending ? '正在保存…' : _saveError ?? '';
     final json = config.toJson();
     _prompts = {
       for (final key in _promptLabels.keys)
@@ -76,10 +119,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     _model = TextEditingController(text: config.model);
     _userAgent = TextEditingController(text: config.customUserAgent);
     _timeout = TextEditingController(text: '${config.timeoutSeconds}');
+    _saveSession.addListener(_saveChanged);
   }
 
   @override
   void dispose() {
+    _saveSession.removeListener(_saveChanged);
     for (final controller in _prompts.values) {
       controller.dispose();
     }
@@ -100,12 +145,14 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       ...original,
       'enabled': _enabled,
       'protocol': _protocol,
-      'endpoint': _endpoint.text,
+      'endpoint': _endpointError == null ? _endpoint.text : _base.endpoint,
       'apiKey': _apiKey.text,
       'model': _model.text,
       'customUserAgent': _userAgent.text,
-      'timeoutSeconds':
-          int.tryParse(_timeout.text.trim()) ?? _base.timeoutSeconds,
+      'timeoutSeconds': _timeoutError != null
+          ? _base.timeoutSeconds
+          : int.tryParse(_timeout.text.trim()) ??
+                AiConfig.defaultTimeoutSeconds,
       for (final entry in _prompts.entries)
         '${entry.key}Prompt': entry.value.text,
       for (final entry in _prompts.entries)
@@ -114,6 +161,63 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             ? original['${entry.key}PromptVersion']
             : defaults['${entry.key}PromptVersion'],
     });
+  }
+
+  String? get _endpointError {
+    final text = _endpoint.text.trim();
+    if (text.isEmpty) return null;
+    final uri = Uri.tryParse(text);
+    return uri != null &&
+            (uri.scheme == 'http' || uri.scheme == 'https') &&
+            uri.host.isNotEmpty &&
+            !RegExp(r'\s').hasMatch(text)
+        ? null
+        : '请输入完整的 http:// 或 https:// 服务地址';
+  }
+
+  String? get _timeoutError {
+    final text = _timeout.text.trim();
+    if (text.isEmpty) return null;
+    final seconds = int.tryParse(text);
+    return seconds != null &&
+            seconds >= AiConfig.minTimeoutSeconds &&
+            seconds <= AiConfig.maxTimeoutSeconds
+        ? null
+        : '请输入 30–1800 之间的整数秒数';
+  }
+
+  bool get _invalidInput => _endpointError != null || _timeoutError != null;
+
+  void _saveChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (_saveStatusVersion == _statusVersion && !_invalidInput) {
+        _status = _saveSession.pending ? '正在保存…' : _saveError ?? '已生效并保存';
+      }
+    });
+  }
+
+  void _changed({bool validChange = true}) {
+    final version = ++_statusVersion;
+    final next = _draft;
+    final changed = jsonEncode(next.toJson()) != jsonEncode(_base.toJson());
+    final retry = validChange && _saveError != null;
+    setState(() {
+      if (_invalidInput) {
+        _status = '输入无效，已保留上次有效值';
+      } else {
+        _status = changed || retry || _saveSession.pending
+            ? '正在保存…'
+            : _saveError ?? '';
+      }
+    });
+    if (!changed && !retry) {
+      if (!_invalidInput && _saveSession.pending) _saveStatusVersion = version;
+      return;
+    }
+    _base = next;
+    _saveStatusVersion = version;
+    _saveSession.save(widget.state, next);
   }
 
   /// 切换协议：端点为空、或仍等于旧协议默认端点时，自动填新协议默认端点。
@@ -128,8 +232,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         _endpoint.text = AiProtocol.defaultEndpoint(next);
       }
     });
+    _changed();
   }
-
 
   Widget _promptSection(String key) {
     final json = _draft.toJson();
@@ -147,7 +251,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           controller: _prompts[key],
           minLines: 4,
           maxLines: 10,
-          onChanged: (_) => setState(() {}),
+          onChanged: (_) => _changed(),
           decoration: InputDecoration(
             labelText: '${_promptLabels[key]}提示词',
             border: const OutlineInputBorder(),
@@ -157,10 +261,11 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           alignment: AlignmentDirectional.centerEnd,
           child: TextButton.icon(
             key: ValueKey('ai-$key-prompt-reset'),
-            onPressed: () => setState(() {
+            onPressed: () {
               _prompts[key]!.text =
                   const AiConfig().toJson()['${key}Prompt']! as String;
-            }),
+              _changed();
+            },
             icon: const Icon(Icons.restore),
             label: const Text('恢复内置提示词'),
           ),
@@ -184,7 +289,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           key: const ValueKey('ai-model'),
           controller: _model,
           // 输入即筛选：本地匹配，不发起任何网络请求。
-          onChanged: (value) => setState(() => _modelKeyword = value),
+          onChanged: (value) {
+            _modelKeyword = value;
+            _changed();
+          },
           decoration: InputDecoration(
             labelText: '模型',
             hintText: 'gpt-4.1-mini',
@@ -219,10 +327,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             child: matches.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(AppSpace.md),
-                    child: Text(
-                      '没有匹配的模型名',
-                      style: theme.textTheme.bodySmall,
-                    ),
+                    child: Text('没有匹配的模型名', style: theme.textTheme.bodySmall),
                   )
                 : ListView.builder(
                     shrinkWrap: true,
@@ -238,11 +343,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                         trailing: selected
                             ? const Icon(Icons.check, size: 18)
                             : null,
-                        onTap: () => setState(() {
+                        onTap: () {
                           _model.text = name;
                           _modelKeyword = '';
                           _modelListOpen = false;
-                        }),
+                          _changed();
+                        },
                       );
                     },
                   ),
@@ -252,51 +358,62 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
-  Future<void> _save() async {
-    setState(() => _status = '正在保存…');
-    final ok = await widget.state.saveAiConfig(_draft);
-    if (!mounted) return;
-    setState(() => _status = ok ? '已保存' : '保存失败（详见日志）');
-  }
-
   Future<void> _testConnection() async {
+    final version = ++_statusVersion;
+    final config = _draft;
     setState(() {
       _busy = true;
       _status = '正在测试连接…';
     });
     final client = AiCompletionClient();
-    final result = await client.complete(
-      config: _draft,
-      prompt:
-          '这是 AI 服务连通性测试。请只返回 JSON: '
-          '{"ok":true,"message":"connected"}',
-    );
-    client.close();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _status = result.ok ? '连接成功：${result.text}' : '连接失败：${result.message}';
-    });
+    try {
+      final result = await client.complete(
+        config: config,
+        prompt:
+            '这是 AI 服务连通性测试。请只返回 JSON: '
+            '{"ok":true,"message":"connected"}',
+      );
+      if (!mounted || version != _statusVersion) return;
+      setState(() {
+        _status = result.ok ? '连接成功：${result.text}' : '连接失败：${result.message}';
+      });
+    } catch (_) {
+      if (mounted && version == _statusVersion) {
+        setState(() => _status = '连接失败，请检查服务设置后重试');
+      }
+    } finally {
+      client.close();
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _fetchModels() async {
+    final version = ++_statusVersion;
+    final config = _draft;
     setState(() {
       _busy = true;
       _status = '正在拉取模型列表…';
     });
-    final fetch = widget.fetchModelList ?? fetchAiModelList;
-    final models = await fetch(_draft);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _modelOptions = models;
-      _modelKeyword = '';
-      _modelListOpen = models.isNotEmpty;
-      _status = models.isEmpty
-          ? '未取到模型列表（可手动填写模型名）'
-          : '取到 ${models.length} 个模型：${models.take(5).join('、')}'
-                '${models.length > 5 ? ' …' : ''}';
-    });
+    try {
+      final fetch = widget.fetchModelList ?? fetchAiModelList;
+      final models = await fetch(config);
+      if (!mounted || version != _statusVersion) return;
+      setState(() {
+        _modelOptions = models;
+        _modelKeyword = '';
+        _modelListOpen = models.isNotEmpty;
+        _status = models.isEmpty
+            ? '未取到模型列表（可手动填写模型名）'
+            : '取到 ${models.length} 个模型：${models.take(5).join('、')}'
+                  '${models.length > 5 ? ' …' : ''}';
+      });
+    } catch (_) {
+      if (mounted && version == _statusVersion) {
+        setState(() => _status = '拉取模型列表失败，请检查服务设置后重试');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -310,7 +427,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         children: [
           Text(
             'AI 仅用于季度弹窗的「AI 识别剧集/季度」，不会自动调用。'
-            '未配置时其余季度选项照常可用。',
+            '未配置时其余季度选项照常可用。设置修改后即时生效并自动保存。',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -323,7 +440,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               SwitchListTile(
                 key: const ValueKey('ai-enabled'),
                 value: _enabled,
-                onChanged: (value) => setState(() => _enabled = value),
+                onChanged: (value) {
+                  _enabled = value;
+                  _changed();
+                },
                 title: const Text('启用 AI 服务'),
                 contentPadding: EdgeInsets.zero,
               ),
@@ -361,7 +481,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               TextField(
                 key: const ValueKey('ai-endpoint'),
                 controller: _endpoint,
-                decoration: const InputDecoration(
+                onChanged: (_) => _changed(validChange: _endpointError == null),
+                decoration: InputDecoration(
+                  errorText: _endpointError,
                   labelText: '端点',
                   hintText: 'https://api.openai.com/v1/responses',
                   border: OutlineInputBorder(),
@@ -378,6 +500,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               TextField(
                 key: const ValueKey('ai-api-key'),
                 controller: _apiKey,
+                onChanged: (_) => _changed(),
                 obscureText: !_revealKey,
                 decoration: InputDecoration(
                   labelText: 'API Key',
@@ -395,6 +518,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               TextField(
                 key: const ValueKey('ai-user-agent'),
                 controller: _userAgent,
+                onChanged: (_) => _changed(),
                 decoration: const InputDecoration(
                   labelText: 'User-Agent（可选）',
                   border: OutlineInputBorder(),
@@ -404,8 +528,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               TextField(
                 key: const ValueKey('ai-timeout'),
                 controller: _timeout,
+                onChanged: (_) => _changed(validChange: _timeoutError == null),
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
+                  errorText: _timeoutError,
                   labelText: '请求超时（秒）',
                   helperText:
                       '默认 300 秒（5 分钟），可设 30–1800。推荐、画像这类长输出'
@@ -415,7 +541,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               ),
             ],
           ),
-          // 五套提示词：与安卓 `AiConfig` 同名，改了就随保存写回；
+          // 五套提示词：与安卓 `AiConfig` 同名，修改后自动写回；
           // 内置旧版会自动升级到当前版，自定义内容原样保留。
           SettingsSection(
             title: '提示词',
@@ -426,27 +552,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           ),
           SettingsSection(
             title: '操作与状态',
-            description: '测试与拉取只使用当前输入，不落盘；保存后才写入设置。',
+            description: '设置修改后即时生效并自动保存；测试连接与拉取模型列表仅在点击时发起请求。',
             children: [
               SettingsActions(
                 children: [
                   OutlinedButton.icon(
                     key: const ValueKey('ai-test'),
-                    onPressed: _busy ? null : _testConnection,
+                    onPressed: _busy || _invalidInput ? null : _testConnection,
                     icon: const Icon(Icons.network_check),
                     label: const Text('测试连接'),
                   ),
                   OutlinedButton.icon(
                     key: const ValueKey('ai-fetch-models'),
-                    onPressed: _busy ? null : _fetchModels,
+                    onPressed: _busy || _invalidInput ? null : _fetchModels,
                     icon: const Icon(Icons.download_outlined),
                     label: const Text('拉取模型列表'),
-                  ),
-                  FilledButton.icon(
-                    key: const ValueKey('ai-save'),
-                    onPressed: _busy ? null : _save,
-                    icon: const Icon(Icons.save_outlined),
-                    label: const Text('保存'),
                   ),
                 ],
               ),
@@ -456,6 +576,16 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   _status,
                   key: const ValueKey('ai-settings-status'),
                   style: theme.textTheme.bodySmall,
+                ),
+              ],
+              if (_saveError != null && _saveError != _status) ...[
+                const SizedBox(height: AppSpace.md),
+                Text(
+                  _saveError!,
+                  key: const ValueKey('ai-settings-save-error'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
                 ),
               ],
             ],

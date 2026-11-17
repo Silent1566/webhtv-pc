@@ -18,6 +18,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/tmdb_config.dart';
 import 'log_service.dart';
+import 'settings_file.dart';
 
 class TmdbConfigStore {
   TmdbConfigStore({required this.path, LogService? log}) : _log = log;
@@ -67,38 +68,22 @@ class TmdbConfigStore {
   ///
   /// 保留 `settings.json` 中其它顶层键（未来设置项），只替换 `tmdb` 段。
   Future<bool> save(TmdbConfig config) async {
-    config = config.userSettings;
-    _config = config;
-    try {
-      final file = File(path);
-      await file.parent.create(recursive: true);
-      final existing = <String, Object?>{};
-      if (await file.exists()) {
-        try {
-          final decoded = jsonDecode(await file.readAsString());
-          if (decoded is Map) {
-            existing.addAll(decoded.cast<String, Object?>());
-          }
-        } catch (_) {
-          // 旧文件损坏 → 直接覆盖，不把损坏内容带进新文件。
-        }
-      }
-      existing['tmdb'] = config.toJson();
-
-      final temporary = File('$path.tmp');
-      await temporary.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(existing),
-        flush: true,
-      );
-      // rename 在同一卷上是原子操作（Windows 上会先删除目标）。
-      if (await file.exists()) await file.delete();
-      await temporary.rename(path);
+    final next = config.userSettings;
+    _config = next;
+    final result = writeSettingsSectionSync(
+      path: path,
+      writer: SettingsWriter.tmdbConfig,
+      mutate: (root) {
+        root['tmdb'] = next.toJson();
+        return true;
+      },
+    );
+    if (result.ok) {
       _log?.info('TMDB 设置已保存（凭据已脱敏）', scope: 'tmdb');
-      return true;
-    } catch (error) {
-      _log?.error('保存 TMDB 设置失败：$error', scope: 'tmdb');
-      return false;
+    } else {
+      _log?.error('保存 TMDB 设置失败：${result.error}', scope: 'tmdb');
     }
+    return result.ok;
   }
 
   /// 便于诊断：设置文件所在目录。

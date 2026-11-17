@@ -132,9 +132,18 @@ class PlayerController extends ChangeNotifier {
     SubtitleLoader? subtitleLoader,
     PlayerThumbnailService? thumbnailService,
     this.onSeek,
+    double? initialVolume,
+    double initialResumeVolume = 100,
+    this.onVolumeChanged,
   }) : _player = player ?? Player(),
        _thumbnails = thumbnailService ?? PlayerThumbnailService(),
        _subtitleLoader = subtitleLoader ?? SubtitleService() {
+    _volume = _safeVolume(initialVolume ?? 100);
+    _volumeBeforeMute = _safeVolume(initialResumeVolume);
+    if (_volume > 0) _volumeBeforeMute = _volume;
+    if (_volumeBeforeMute <= 0) _volumeBeforeMute = 100;
+    _muted = _volume == 0;
+    _volumeOverridden = initialVolume != null;
     _videoController = VideoController(_player);
     _bind();
   }
@@ -142,6 +151,9 @@ class PlayerController extends ChangeNotifier {
   final Player _player;
   final PlayerThumbnailService _thumbnails;
   final ValueChanged<Duration>? onSeek;
+
+  /// 仅显式音量/静音操作触发；引擎回报与恢复动作不回写偏好。
+  final ValueChanged<double>? onVolumeChanged;
 
   int get thumbnailGeneration => _thumbnails.generation;
 
@@ -223,6 +235,8 @@ class PlayerController extends ChangeNotifier {
   double _volume = 100;
   bool _muted = false;
   double _volumeBeforeMute = 100;
+  bool _volumeOverridden = false;
+  Future<void> _volumeQueue = Future<void>.value();
   double _rate = 1.0;
   String? _currentUrl;
   PlayerLoadOutcome? _lastOutcome;
@@ -786,8 +800,10 @@ class PlayerController extends ChangeNotifier {
         notifyListeners();
       }),
       _player.stream.volume.listen((value) {
-        if (_disposed) return;
-        _volume = value;
+        if (_disposed || _volumeOverridden || !value.isFinite) return;
+        _volume = _safeVolume(value);
+        if (_volume > 0) _volumeBeforeMute = _volume;
+        _muted = _volume == 0;
         notifyListeners();
       }),
       _player.stream.rate.listen((value) {
@@ -987,6 +1003,17 @@ class PlayerController extends ChangeNotifier {
     final cancellation = isCurrent == null ? null : Completer<void>();
     _liveOpenCancellation = cancellation;
     try {
+      if (_volumeOverridden) {
+        final restoration = _restoreVolumeForOpen();
+        if (cancellation == null) {
+          await restoration;
+        } else {
+          await _awaitLiveOpen(restoration, timeout, cancellation);
+        }
+      }
+      if (_disposed || (isCurrent != null && !isCurrent())) {
+        return _failure(url, 'Playback superseded', stopwatch);
+      }
       _nativeOpenPending = true;
       final nativeOpen = _player
           .open(
@@ -1267,41 +1294,54 @@ class PlayerController extends ChangeNotifier {
     return seek(next);
   }
 
-  Future<void> setVolume(double value) async {
-    if (_disposed) return;
-    final clamped = value.clamp(0.0, 100.0);
-    if (clamped > 0) _volumeBeforeMute = clamped;
-    _muted = clamped == 0;
-    await _player.setVolume(clamped);
-    if (_disposed) return;
+  static double _safeVolume(double value) =>
+      value.isFinite ? value.clamp(0.0, 100.0) : 100;
+
+  Future<void> _writeVolume(double value) {
+    final result = _volumeQueue.then((_) async {
+      if (!_disposed) await _player.setVolume(value);
+    });
+    _volumeQueue = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<void> _restoreVolumeForOpen() async {
+    await _writeVolume(_volume);
+    Future<void> tail;
+    do {
+      tail = _volumeQueue;
+      await tail;
+    } while (!identical(tail, _volumeQueue));
+  }
+
+  Future<void> setVolume(double value) {
+    if (_disposed || !value.isFinite) return Future.value();
+    _volume = _safeVolume(value);
+    if (_volume > 0) _volumeBeforeMute = _volume;
+    _muted = _volume == 0;
+    _volumeOverridden = true;
+    onVolumeChanged?.call(_volume);
     notifyListeners();
+    return _writeVolume(_volume);
   }
 
   Future<void> restoreVolumeState(
     ({double volume, double resumeVolume, bool muted}) snapshot,
-  ) async {
-    if (_disposed) return;
-    _volume = snapshot.volume;
-    _volumeBeforeMute = snapshot.resumeVolume;
-    _muted = snapshot.muted;
-    await _player.setVolume(snapshot.volume);
-    if (!_disposed) notifyListeners();
+  ) {
+    if (_disposed) return Future.value();
+    _volume = _safeVolume(snapshot.volume);
+    _volumeBeforeMute = _safeVolume(snapshot.resumeVolume);
+    if (_volumeBeforeMute <= 0) _volumeBeforeMute = 100;
+    _muted = snapshot.muted || _volume == 0;
+    _volumeOverridden = true;
+    notifyListeners();
+    return _writeVolume(_volume);
   }
 
   /// 静音切换：静音时记住原音量，取消静音时恢复，不使用硬编码 100。
-  Future<void> toggleMute() async {
-    if (_disposed) return;
-    if (_muted || _volume <= 0) {
-      _muted = false;
-      final restored = _volumeBeforeMute <= 0 ? 100.0 : _volumeBeforeMute;
-      await _player.setVolume(restored);
-    } else {
-      _volumeBeforeMute = _volume;
-      _muted = true;
-      await _player.setVolume(0);
-    }
-    if (_disposed) return;
-    notifyListeners();
+  Future<void> toggleMute() {
+    if (_disposed) return Future.value();
+    return setVolume(_muted || _volume <= 0 ? _volumeBeforeMute : 0);
   }
 
   Future<void> setRate(double value) => _player.setRate(value.clamp(0.25, 4.0));

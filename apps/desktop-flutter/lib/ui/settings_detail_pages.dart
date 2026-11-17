@@ -428,40 +428,19 @@ class DanmakuSourcePage extends StatelessWidget {
     ),
   );
 
-  Future<void> _editDanmakuApi(BuildContext context) async {
-    final controller = TextEditingController(
-      text: state.danmakuSettings.apiUrl,
-    );
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('弹幕库地址'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://example.test/danmaku/search',
-          ),
-          onSubmitted: (text) => Navigator.of(context).pop(text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('保存'),
-          ),
-        ],
+  Future<void> _editDanmakuApi(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (_) => _ImmediateAddressDialog(
+      title: '弹幕库地址',
+      initialValue: state.danmakuSettings.apiUrl,
+      hint: 'https://example.test/danmaku/search',
+      validate: (text) =>
+          _isHttpAddress(text) ? null : '请输入完整的 http 或 https 地址',
+      save: (text) => state.setDanmakuSettings(
+        state.danmakuSettings.copyWith(apiUrl: text),
       ),
-    );
-    controller.dispose();
-    if (value == null) return;
-    await state.setDanmakuSettings(
-      state.danmakuSettings.copyWith(apiUrl: value.trim()),
-    );
-  }
+    ),
+  );
 }
 
 /// 站点分组规则明细页。
@@ -700,38 +679,22 @@ class OutboundProxyPage extends StatelessWidget {
     );
   }
 
-  Future<void> _editDefaultProxy(BuildContext context) async {
-    final controller = TextEditingController(
-      text: state.outboundProxy.defaultProxyUrl,
-    );
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('默认代理地址'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'http://127.0.0.1:7890'),
-          onSubmitted: (text) => Navigator.of(context).pop(text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('保存'),
-          ),
-        ],
+  Future<void> _editDefaultProxy(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (_) => _ImmediateAddressDialog(
+      title: '默认代理地址',
+      initialValue: state.outboundProxy.defaultProxyUrl,
+      hint: 'http://127.0.0.1:7890',
+      validate: (text) =>
+          _isHttpAddress(text) &&
+              OutboundProxyRule(patterns: const ['*'], proxyUrl: text).isValid
+          ? null
+          : '请输入完整的 http 代理地址，端口范围为 1–65535',
+      save: (text) => state.setOutboundProxy(
+        state.outboundProxy.copyWith(defaultProxyUrl: text),
       ),
-    );
-    controller.dispose();
-    if (value == null) return;
-    await state.setOutboundProxy(
-      state.outboundProxy.copyWith(defaultProxyUrl: value.trim()),
-    );
-  }
+    ),
+  );
 
   Future<void> _addOutboundRule(BuildContext context) async {
     final patterns = TextEditingController();
@@ -896,46 +859,20 @@ class DohSettingsPage extends StatelessWidget {
     return index < 0 ? options[1] : options[(index + 1) % options.length];
   }
 
-  Future<void> _editDohEndpoint(BuildContext context) async {
-    final controller = TextEditingController(text: state.dohSettings.url);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('DoH 端点'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://dns.example.com/dns-query',
-          ),
-          onSubmitted: (text) => Navigator.of(context).pop(text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(''),
-            child: const Text('清空'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (value == null) return;
-    final text = value.trim();
-    if (text.isNotEmpty && !isUsableDohUrl(text)) {
-      if (!context.mounted) return;
-      showToast('DoH 端点必须是 https 地址', kind: ToastKind.error);
-      return;
-    }
-    await state.setDohSettings(state.dohSettings.copyWith(url: text));
-  }
+  Future<void> _editDohEndpoint(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (_) => _ImmediateAddressDialog(
+      title: 'DoH 端点',
+      initialValue: state.dohSettings.url,
+      hint: 'https://dns.example.com/dns-query',
+      allowClear: true,
+      validate: (text) => _isHttpAddress(text) && isUsableDohUrl(text)
+          ? null
+          : '请输入完整的 https DoH 地址',
+      save: (text) =>
+          state.setDohSettings(state.dohSettings.copyWith(url: text)),
+    ),
+  );
 }
 
 class BrowserEnginePage extends StatelessWidget {
@@ -1076,4 +1013,124 @@ class AboutDataPage extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _isHttpAddress(String text) {
+  final uri = Uri.tryParse(text);
+  return !RegExp(r'\s').hasMatch(text) &&
+      uri != null &&
+      (uri.scheme == 'http' || uri.scheme == 'https') &&
+      uri.host.isNotEmpty &&
+      (!uri.hasPort || (uri.port > 0 && uri.port <= 65535));
+}
+
+class _ImmediateAddressDialog extends StatefulWidget {
+  const _ImmediateAddressDialog({
+    required this.title,
+    required this.initialValue,
+    required this.hint,
+    required this.validate,
+    required this.save,
+    this.allowClear = false,
+  });
+  final String title;
+  final String initialValue;
+  final String hint;
+  final String? Function(String) validate;
+  final Future<bool> Function(String) save;
+  final bool allowClear;
+  @override
+  State<_ImmediateAddressDialog> createState() =>
+      _ImmediateAddressDialogState();
+}
+
+class _ImmediateAddressDialogState extends State<_ImmediateAddressDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+  String? _status;
+  String? _saveError;
+  int _revision = 0;
+  late String _lastValue;
+  @override
+  void initState() {
+    super.initState();
+    _lastValue = widget.initialValue;
+    _controller = TextEditingController(text: _lastValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _change(String raw) async {
+    final revision = ++_revision;
+    final text = raw.trim();
+    final error = text.isEmpty ? null : widget.validate(text);
+    setState(() {
+      _error = error;
+      _status = null;
+    });
+    if (error != null || (text == _lastValue && _saveError == null)) return;
+    _lastValue = text;
+    setState(() => _status = '正在自动保存…');
+    bool saved;
+    try {
+      saved = await widget.save(text);
+    } catch (_) {
+      saved = false;
+    }
+    if (!mounted || text != _lastValue) return;
+    setState(() {
+      _saveError = saved ? null : '自动保存失败，请重新修改后重试';
+      if (revision == _revision) {
+        _status = saved ? '已自动保存' : _saveError;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.title),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          decoration: InputDecoration(hintText: widget.hint, errorText: _error),
+          onChanged: _change,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _status ?? '有效修改即生效并自动保存',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (_saveError != null && _saveError != _status) ...[
+          const SizedBox(height: 8),
+          Text(
+            _saveError!,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ],
+    ),
+    actions: [
+      if (widget.allowClear)
+        TextButton(
+          onPressed: () {
+            _controller.clear();
+            _change('');
+          },
+          child: const Text('清空'),
+        ),
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('关闭'),
+      ),
+    ],
+  );
 }

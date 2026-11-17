@@ -2,12 +2,14 @@
 ///
 /// ## 为什么需要这个文件
 ///
-/// `settings.json` 有**两个**独立写盘者，各自做 read-modify-write：
+/// `settings.json` 的各个写盘者独立做 read-modify-write：
 ///
 /// | 写盘者 | 负责的段 |
 /// | --- | --- |
 /// | `UiPreferencesStore`（`lib/services/ui_preferences_store.dart`） | `ui` |
 /// | `SyncState`（`lib/state/sync_state.dart`） | `sync` |
+/// | `AiConfigStore` | `ai` |
+/// | `TmdbConfigStore` | `tmdb` |
 ///
 /// 两者原先都用 `'$path.tmp'` 这**同一个**临时文件名，流程都是
 /// 「写 tmp → 删旧 → rename」。并发时会出三类破坏（前两类已实测复现）：
@@ -54,7 +56,9 @@ enum SettingsWriter {
   /// `SyncState`（`sync` 段）。
   sync('sync'),
 
-  aiConfig('ai');
+  aiConfig('ai'),
+
+  tmdbConfig('tmdb');
 
   const SettingsWriter(this.tag);
 

@@ -656,7 +656,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('tmdb-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-save')), findsNothing);
       expect(find.byKey(const ValueKey('tmdb-test')), findsOneWidget);
       expect(find.byKey(const ValueKey('settings-android-open')), findsNothing);
       expect(find.text('设备与同步'), findsNothing);
