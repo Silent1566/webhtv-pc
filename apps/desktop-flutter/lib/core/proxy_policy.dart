@@ -212,6 +212,8 @@ class ProxyTargetPolicy {
 }
 
 /// 代理会话（§11.3.1「每次播放创建独立 sessionId 和高熵随机 token」）。
+typedef ProxyTrafficSnapshot = ({String sessionId, int receivedBytes});
+
 class ProxySession {
   ProxySession({
     required this.id,
@@ -253,6 +255,18 @@ class ProxySession {
 
   int bytes = 0;
   int requests = 0;
+
+  int _receivedBytes = 0;
+
+  /// 会话内**实际收到的上游字节**（按到达的块累加）。
+  ///
+  /// 与 [bytes] 不同：[bytes] 是配额记账，按声明的长度预先累加；这里只记真的
+  /// 到了的数据，所以能回答「此刻在下多少」。
+  int get receivedBytes => _receivedBytes;
+
+  void recordReceivedBytes(int count) {
+    if (count > 0 && !revoked) _receivedBytes += count;
+  }
   bool revoked = false;
 
   /// 会话内允许继承的 `User-Agent`；不得用于覆盖宿主的安全/诊断 Header（§11.3.1）。

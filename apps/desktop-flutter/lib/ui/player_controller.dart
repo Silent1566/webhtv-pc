@@ -19,6 +19,7 @@ import '../core/playback_diagnostics.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
+import '../core/proxy_policy.dart' show ProxyTrafficSnapshot;
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
 import '../services/player_thumbnail_service.dart';
@@ -135,7 +136,9 @@ class PlayerController extends ChangeNotifier {
     double? initialVolume,
     double initialResumeVolume = 100,
     this.onVolumeChanged,
-  }) : _player = player ?? Player(),
+    Duration Function()? networkClock,
+  }) : _networkClockOverride = networkClock,
+       _player = player ?? Player(),
        _thumbnails = thumbnailService ?? PlayerThumbnailService(),
        _subtitleLoader = subtitleLoader ?? SubtitleService() {
     _volume = _safeVolume(initialVolume ?? 100);
@@ -150,6 +153,8 @@ class PlayerController extends ChangeNotifier {
 
   final Player _player;
   final PlayerThumbnailService _thumbnails;
+  final Duration Function()? _networkClockOverride;
+  final Stopwatch _networkWatch = Stopwatch()..start();
   final ValueChanged<Duration>? onSeek;
 
   /// 仅显式音量/静音操作触发；引擎回报与恢复动作不回写偏好。
@@ -513,8 +518,51 @@ class PlayerController extends ChangeNotifier {
   ///   `demuxer-cache-state` 正是回 NULL，这里如实给 null、下一拍重试；
   /// - 解析失败（mpv 在某些状态下会回 `"nan"` / `"inf"`）；
   /// - 值为负数或非有限。
-  Future<double?> sampleNetworkRate() async {
+  /// 丢弃上一拍基线：换集、换源或刷新循环停过之后，旧增量不能再用来算速度。
+  void resetNetworkRate() {
+    _proxyBaseline = null;
+    _setBytesPerSecond(null);
+  }
+
+  /// 回到 [resetNetworkRate] 之后的第一拍状态。
+  ({String sessionId, int receivedBytes, Duration at})? _proxyBaseline;
+
+  Duration _networkNow() =>
+      _networkClockOverride?.call() ?? _networkWatch.elapsed;
+
+  /// 代理播放的当前速率：**本会话实际收到的上游字节**除以真实间隔。
+  ///
+  /// 为什么不用 mpv 的 `raw-input-rate`：实测（真实 HLS 源 + 本地代理）跳转后
+  /// 缓冲期间该值会整段停在旧值上，直到恢复播放才更新——它来自 demuxer 的
+  /// 1 秒窗口平滑（mpv `demux.c` 的 `update_cache`），不跟随代理侧的收包节奏。
+  /// 代理这边知道每一块字节什么时候到，所以由它出数。
+  double? _proxyRate(ProxyTrafficSnapshot traffic) {
+    final now = _networkNow();
+    final previous = _proxyBaseline;
+    _proxyBaseline = (
+      sessionId: traffic.sessionId,
+      receivedBytes: traffic.receivedBytes,
+      at: now,
+    );
+    if (previous == null || previous.sessionId != traffic.sessionId) {
+      // 新会话（换集/换源/重建代理）没有可比基线，这一拍如实给 null。
+      return null;
+    }
+    final delta = traffic.receivedBytes - previous.receivedBytes;
+    final seconds = (now - previous.at).inMicroseconds / 1000000;
+    if (delta < 0 || seconds <= 0) return null;
+    return delta / seconds;
+  }
+
+  Future<double?> sampleNetworkRate({
+    ProxyTrafficSnapshot? proxyTraffic,
+  }) async {
     if (_disposed) return null;
+    if (proxyTraffic != null) {
+      final measured = _proxyRate(proxyTraffic);
+      _setBytesPerSecond(measured);
+      return measured;
+    }
     final platform = _player.platform;
     if (platform is! NativePlayer) {
       _setBytesPerSecond(null);
@@ -942,6 +990,8 @@ class PlayerController extends ChangeNotifier {
       return _failure(url, 'Playback superseded', Stopwatch()..start());
     }
     _loading = true;
+    // 换媒体就是换会话基线：上一集的字节增量不能算到这一集头上。
+    resetNetworkRate();
     _completed = false;
     _lastEngineError = null;
     _currentUrl = url;
@@ -1444,3 +1494,14 @@ String formatByteRate(double? bytesPerSecond) {
   if (bytesPerSecond >= kb) return '${(bytesPerSecond / kb).round()} KB/s';
   return '${bytesPerSecond.round()} B/s';
 }
+
+/// 这一拍要不要采网速。
+///
+/// 判据是「界面上有没有地方在显示这个数」：屏显右下角开着，或加载/缓冲提示
+/// 正挂在画面中央（圈下那行网速）。网速屏显开关是用户的选择，不该成为
+/// 加载提示有没有读数的前提——两条都要，任一条成立就采。
+bool shouldSampleNetworkRate({
+  required bool trafficEnabled,
+  required bool isLoading,
+  required bool isBuffering,
+}) => trafficEnabled || isLoading || isBuffering;

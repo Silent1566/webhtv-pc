@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 
 import '../core/player_buttons.dart';
 import 'common.dart';
+import 'player_controller.dart' show formatByteRate;
 import 'scroll_behavior.dart';
 import 'tokens.dart';
 
@@ -597,7 +598,7 @@ bool showBufferingIndicator({
   required bool isLoading,
 }) => isBuffering && !isLoading;
 
-/// 画面中央的缓冲中提示：环形 + 可选百分比。
+/// 画面中央的加载/缓冲提示：环形 + 可选百分比，环下显示网速。
 ///
 /// 复用 [LoadingBlock]（"一处定义，全站同一个圈"）而不是另写一个
 /// `CircularProgressIndicator`：描边宽度随直径缩放的规则已经在那边定过。
@@ -605,48 +606,64 @@ bool showBufferingIndicator({
 /// **不吃指针**（外层 `IgnorePointer`）：缓冲中用户仍可能想点画面唤出
 /// 控制栏或右键菜单，提示层挡住中间那块等于把常用手势全废掉。
 class PlayerBufferingIndicator extends StatelessWidget {
-  const PlayerBufferingIndicator({super.key, this.percent});
+  const PlayerBufferingIndicator({
+    super.key,
+    this.percent,
+    this.bytesPerSecond,
+    this.size = 44,
+  });
 
-  /// 0–100；null 表示引擎还没上报百分比（`cache-buffering-state` 未就绪）。
-  ///
-  /// 两种形态：有值 → 环中显示百分比数字；无值 → 只有一个无限旋转的环。
+  /// 0–100；null 表示引擎还没上报百分比。
   final double? percent;
 
-  /// 环的直径。44 不是间距 token 里的值，而是**尺寸**：比
-  /// `LoadingBlock` 默认 36 大一圈，好让环中的百分比数字不显得拥挤。
-  static const double _diameter = 44;
+  /// 与屏显共用的最近一次网速采样；null 显示 `—`。
+  final double? bytesPerSecond;
+
+  /// 起播沿用 36，缓冲时用 44 为环内百分比留空间。
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     final label = percent;
+    final theme = Theme.of(context);
+    const shadows = [
+      Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 2),
+    ];
     return IgnorePointer(
       child: Center(
-        child: SizedBox(
-          width: _diameter,
-          height: _diameter,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              const LoadingBlock(size: _diameter),
-              if (label != null)
-                Text(
-                  '${label.round()}%',
-                  // 环内的数字压在任意视频帧上：必须浅色 + 描边（同
-                  // `player_osd.dart` 的理由：fixture 是高饱和彩条）。
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontFeatures: kTabularFigures,
-                    shadows: const [
-                      Shadow(
-                        color: Colors.black,
-                        offset: Offset(1, 1),
-                        blurRadius: 2,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: size,
+              height: size,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  LoadingBlock(size: size),
+                  if (label != null)
+                    Text(
+                      '${label.round()}%',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        fontFeatures: kTabularFigures,
+                        shadows: shadows,
                       ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpace.sm),
+            Text(
+              formatByteRate(bytesPerSecond),
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontFeatures: kTabularFigures,
+                shadows: shadows,
+              ),
+            ),
+          ],
         ),
       ),
     );

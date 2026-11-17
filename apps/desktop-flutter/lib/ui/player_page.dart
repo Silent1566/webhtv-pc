@@ -52,7 +52,6 @@ import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
 import 'app.dart';
-import 'common.dart';
 import 'settings_detail_pages.dart';
 import 'settings_overview_page.dart';
 import 'subtitle_search_dialog.dart';
@@ -809,6 +808,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     _logEngineDurationDrift();
     setState(() {});
+    _syncOsdTimer();
     // 连播改为**事件驱动**（`design/03` §4.1 D1）：
     // 旧实现在 `build()` 里排 postFrameCallback，任何一次通知（position/
     // duration/buffer/volume/… 每秒多次）只要 `isCompleted` 仍为 true 就会
@@ -4194,7 +4194,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                 ),
                               ),
                             if (_controller.isLoading)
-                              const Positioned.fill(child: LoadingBlock()),
+                              Positioned.fill(
+                                child: PlayerBufferingIndicator(
+                                  size: 36,
+                                  bytesPerSecond: _controller.bytesPerSecond,
+                                ),
+                              ),
                             // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
                             // 浮层之下），且判据互斥——加载阶段已经有上面那个
                             // 全屏圈，再叠一个就是两个圈（判据见
@@ -4210,6 +4215,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                               Positioned.fill(
                                 child: PlayerBufferingIndicator(
                                   percent: _controller.bufferingPercent,
+                                  bytesPerSecond: _controller.bytesPerSecond,
                                 ),
                               ),
                             if (_loadError != null)
@@ -5291,10 +5297,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 控制栏可见时**必须**运行（为了强制显示的时钟），
   /// 即使屏显开关全关（上游同语义：`PlayerOsdController.java:152-158`）。
   bool get _osdNeedsTicker =>
-      _controlsVisible || anyOsdEnabled(widget.state.osdFlags);
+      _controlsVisible ||
+      anyOsdEnabled(widget.state.osdFlags) ||
+      _controller.isLoading ||
+      _controller.isBuffering;
 
   void _syncOsdTimer() {
     if (_osdNeedsTicker) {
+      if (_osdTimer == null) {
+        // 起播/卡顿的第一秒不该先空一拍：提示一出现就采一次。
+        _sampleNetworkRate();
+      }
       _osdTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
         setState(() => _osdNow = debugOsdClockOverride ?? DateTime.now());
@@ -5309,12 +5322,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 网速采样，挂在屏显刷新循环上（不另起 Timer，见
   /// `PlayerController.sampleNetworkRate` 的注释）。
   ///
-  /// **只在网速开关开着时采**：关着时每秒读一次 mpv 属性纯属浪费，
-  /// 而且会把 "屏显全关 → 停止刷新" 的优化打回半残（循环虽停，
-  /// 这里若另起唤醒就又活了）。
+  /// 屏显网速开启或加载/缓冲提示可见时采样，共用同一个读数。
   void _sampleNetworkRate() {
-    if (!(widget.state.osdFlags[OsdFlag.traffic] ?? false)) return;
-    unawaited(_controller.sampleNetworkRate());
+    final wanted = shouldSampleNetworkRate(
+      trafficEnabled: widget.state.osdFlags[OsdFlag.traffic] ?? false,
+      isLoading: _controller.isLoading,
+      isBuffering: _controller.isBuffering,
+    );
+    if (!wanted) return;
+    unawaited(
+      _controller.sampleNetworkRate(
+        proxyTraffic: widget.state.proxyTrafficFor(
+          _controller.currentUrl ?? '',
+        ),
+      ),
+    );
   }
 
   void _touchControls() {

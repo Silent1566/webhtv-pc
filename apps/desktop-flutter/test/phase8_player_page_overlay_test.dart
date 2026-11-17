@@ -36,10 +36,7 @@ void main() {
     await pumpPlayerPage(tester);
     expect(find.byType(AppBar), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byType(AppBar),
-        matching: find.byTooltip('更多'),
-      ),
+      find.descendant(of: find.byType(AppBar), matching: find.byTooltip('更多')),
       findsOneWidget,
     );
   });
@@ -154,21 +151,36 @@ void main() {
     await pressShiftF10(tester);
     await settlePlayerPage(tester);
 
-    expect(find.byType(PlayerContextMenu), findsOneWidget, reason: 'Shift+F10 必须能打开菜单');
+    expect(
+      find.byType(PlayerContextMenu),
+      findsOneWidget,
+      reason: 'Shift+F10 必须能打开菜单',
+    );
 
     // 量的是**菜单面板**而不是 PlayerContextMenu 本身：后者返回
     // `Positioned.fill`（`player_context_menu.dart:270`），`getRect` 拿到的是
     // 整个视口，断言恒成立 = 空断言。面板是菜单里唯一的 `Material`。
-    final panel = tester.getRect(find.descendant(
-      of: find.byType(PlayerContextMenu),
-      matching: find.byType(Material),
-    ).first);
-    final viewport = Offset.zero & tester.view.physicalSize / tester.view.devicePixelRatio;
+    final panel = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(PlayerContextMenu),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    final viewport =
+        Offset.zero & tester.view.physicalSize / tester.view.devicePixelRatio;
     // 面板左上角 = 画面中心 - 半个菜单（240×420，见 `_openContextMenuAtCenter`）。
-    expect((panel.left - (viewport.center.dx - 120)).abs(), lessThan(40),
-        reason: '菜单水平居中（实测面板 $panel，视口 $viewport）');
-    expect((panel.top - (viewport.center.dy - 210)).abs(), lessThan(40),
-        reason: '菜单竖直居中（实测面板 $panel，视口 $viewport）');
+    expect(
+      (panel.left - (viewport.center.dx - 120)).abs(),
+      lessThan(40),
+      reason: '菜单水平居中（实测面板 $panel，视口 $viewport）',
+    );
+    expect(
+      (panel.top - (viewport.center.dy - 210)).abs(),
+      lessThan(40),
+      reason: '菜单竖直居中（实测面板 $panel，视口 $viewport）',
+    );
   });
 
   testWidgets('contextMenu 键打开菜单', (tester) async {
@@ -193,7 +205,11 @@ void main() {
 
     await pressShiftF10(tester);
     await settlePlayerPage(tester);
-    expect(find.byType(PlayerContextMenu), findsOneWidget, reason: '连按不得叠加出第二个菜单');
+    expect(
+      find.byType(PlayerContextMenu),
+      findsOneWidget,
+      reason: '连按不得叠加出第二个菜单',
+    );
     expect(tester.takeException(), isNull, reason: '连按不得抛异常');
   });
 
@@ -207,7 +223,11 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await settlePlayerPage(tester);
 
-    expect(find.byType(PlayerContextMenu), findsNothing, reason: 'Esc 必须关掉键盘打开的菜单');
+    expect(
+      find.byType(PlayerContextMenu),
+      findsNothing,
+      reason: 'Esc 必须关掉键盘打开的菜单',
+    );
     expect(
       windowManagerCalls.where((c) => c.method == 'setFullScreen'),
       isEmpty,
@@ -230,18 +250,29 @@ void main() {
     expect(find.text('F10：打开右键菜单（画面中央）'), findsOneWidget);
   });
 
-  testWidgets('屏显全关且控制栏隐藏时定时器停止（design/02 §4.3）', (tester) async {
-    await pumpPlayerPage(tester, osdFlags: {
-      for (final id in OsdFlag.values) id: false,
-    });
-    // 前置条件：控制栏可见时 ticker **必须**在跑（为了强制显示的时钟）。
-    expect(
-      osdTickerRunning(tester),
-      isTrue,
-      reason: '前置条件：控制栏可见时 ticker 必须在跑',
+  testWidgets('加载圈下方显示网速，即使网速屏显关闭', (tester) async {
+    await pumpPlayerPage(
+      tester,
+      osdFlags: {for (final id in OsdFlag.values) id: false},
     );
+    final indicator = find.byType(PlayerBufferingIndicator);
+    expect(indicator, findsOneWidget);
+    expect(
+      find.descendant(of: indicator, matching: find.text('—')),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
 
-    // 等自动隐藏；此时屏显开关全关 → 无事可刷 → ticker 必须停。
+  testWidgets('加载期间屏显全关且控制栏隐藏时仍刷新网速', (tester) async {
+    await pumpPlayerPage(
+      tester,
+      osdFlags: {for (final id in OsdFlag.values) id: false},
+    );
+    // 前置条件：控制栏可见时 ticker **必须**在跑（为了强制显示的时钟）。
+    expect(osdTickerRunning(tester), isTrue, reason: '前置条件：控制栏可见时 ticker 必须在跑');
+
+    // 等自动隐藏；加载提示仍需要刷新网速。
     //
     // **不能用 `transientCallbackCount == 0` 观测**：加载态永远挂着
     // `LoadingBlock` 的 `CircularProgressIndicator`，该计数恒 ≥1
@@ -249,11 +280,7 @@ void main() {
     // 那条件永远不成立，用例会永久失败——这正是本 brief 初版的问题。
     await tester.pump(const Duration(seconds: 4));
     await settlePlayerPage(tester);
-    expect(
-      osdTickerRunning(tester),
-      isFalse,
-      reason: '屏显全关 + 控制栏隐藏后 ticker 必须停止（不得每秒空转）',
-    );
+    expect(osdTickerRunning(tester), isTrue, reason: '加载网速仍可见，不能随控制栏和屏显一起停止采样');
     // 反向锁：控制栏可见时必须重新启动（上游 `PlayerOsdController.java:152-158`）。
     await tester.tapAt(const Offset(400, 300));
     await settlePlayerPage(tester);
