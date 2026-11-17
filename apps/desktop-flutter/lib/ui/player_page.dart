@@ -3895,6 +3895,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  bool get _navigationAvailable =>
+      !_isLive && _controller.duration > Duration.zero;
+
+  Future<void> _seekToKeyframe({required bool forward}) async {
+    if (!_navigationAvailable) return;
+    var succeeded = false;
+    try {
+      succeeded = await _controller.seekToKeyframe(forward: forward);
+    } catch (_) {}
+    if (mounted && !succeeded) {
+      showToast('关键帧跳转不可用', duration: const Duration(seconds: 3));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final audioInputGeneration = _mediaGeneration;
@@ -3902,6 +3916,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       togglePlay: _controller.playOrPause,
       seekBackward: () => _controller.seekBy(const Duration(seconds: -10)),
       seekForward: () => _controller.seekBy(const Duration(seconds: 10)),
+      previousKeyframe: _navigationAvailable
+          ? () => unawaited(_seekToKeyframe(forward: false))
+          : null,
+      nextKeyframe: _navigationAvailable
+          ? () => unawaited(_seekToKeyframe(forward: true))
+          : null,
       volumeUp: () => _controller.setVolume(_controller.volume + 5),
       volumeDown: () => _controller.setVolume(_controller.volume - 5),
       toggleMute: _controller.toggleMute,
@@ -4801,6 +4821,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             duration: duration,
             buffered: _controller.buffered,
             onSeek: _controller.seek,
+            thumbnailPreviewEnabled:
+                _navigationAvailable && _options.showThumbnailPreview,
+            thumbnailProvider:
+                _navigationAvailable && _options.showThumbnailPreview
+                ? _controller.thumbnailAt
+                : null,
+            previewSourceKey: _controller.thumbnailGeneration,
           ),
         ),
         Text(
@@ -5511,6 +5538,28 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             icon: Icons.forward_10,
             onSelect: act(
               () => _controller.seekBy(const Duration(seconds: 10)),
+            ),
+          ),
+          PlayerMenuItem(
+            id: 'previous_keyframe',
+            label: '前一个关键帧  Ctrl+Shift+←',
+            icon: Icons.skip_previous_outlined,
+            enabled: _navigationAvailable,
+            onSelect: act(() => unawaited(_seekToKeyframe(forward: false))),
+          ),
+          PlayerMenuItem(
+            id: 'next_keyframe',
+            label: '后一个关键帧  Ctrl+Shift+→',
+            icon: Icons.skip_next_outlined,
+            enabled: _navigationAvailable,
+            onSelect: act(() => unawaited(_seekToKeyframe(forward: true))),
+          ),
+          _settingsToggle(
+            id: 'thumbnail_preview',
+            label: '导航栏缩略图',
+            value: _options.showThumbnailPreview,
+            onChanged: (value) => _livePatchOptions(
+              _options.copyWith(showThumbnailPreview: value),
             ),
           ),
           // 循环与定时是**会话级**状态，取值有 3 种循环 + 8 种定时，全部
@@ -6792,7 +6841,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           children: [
             for (final (key, description) in [
               for (final entry in playerShortcuts)
-                if ((!_isLive && !_isCatchup) || entry.$1 != '[ / ]') entry,
+                if (((!_isLive && !_isCatchup) || entry.$1 != '[ / ]') &&
+                    (_navigationAvailable || entry.$1 != 'Ctrl+Shift+← / →'))
+                  entry,
               if (_isLive) ('PgUp / PgDn', '上一台 / 下一台（跨分组）'),
               ..._contextMenuShortcutHelp,
             ])

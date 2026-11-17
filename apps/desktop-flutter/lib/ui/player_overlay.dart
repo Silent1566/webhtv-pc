@@ -15,6 +15,10 @@
 /// **必须保留 `AppBar` widget 类型**（`design/01` §4.1）。
 library;
 
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../core/player_buttons.dart';
@@ -208,6 +212,9 @@ class PlayerProgressSlider extends StatefulWidget {
     required this.duration,
     required this.buffered,
     required this.onSeek,
+    this.thumbnailPreviewEnabled = false,
+    this.thumbnailProvider,
+    this.previewSourceKey,
   });
 
   final Duration position;
@@ -218,6 +225,10 @@ class PlayerProgressSlider extends StatefulWidget {
 
   /// 拖动时连续回调（语义与改造前的 `Slider.onChanged` 一致）。
   final ValueChanged<Duration> onSeek;
+
+  final bool thumbnailPreviewEnabled;
+  final Future<Uint8List?> Function(Duration)? thumbnailProvider;
+  final Object? previewSourceKey;
 
   @override
   State<PlayerProgressSlider> createState() => _PlayerProgressSliderState();
@@ -230,6 +241,188 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
   /// "引擎已经拿到的地方"，两者画在同一根轨道上会被读成"这一段已经被
   /// 播放覆盖了"。松手后缓冲段立刻回来，代价只是一次重建。
   bool _dragging = false;
+  final _previewPortal = OverlayPortalController();
+  final _sliderKey = GlobalKey();
+  Timer? _previewDebounce;
+  int _request = 0;
+  Rect? _trackRect;
+  Duration? _previewTarget;
+  Uint8List? _previewBytes;
+  bool _previewLoading = false;
+  double _previewX = 0;
+
+  bool get _canPreview =>
+      widget.thumbnailPreviewEnabled &&
+      widget.thumbnailProvider != null &&
+      widget.duration > Duration.zero;
+
+  @override
+  void didUpdateWidget(PlayerProgressSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.previewSourceKey != widget.previewSourceKey ||
+        oldWidget.thumbnailPreviewEnabled != widget.thumbnailPreviewEnabled ||
+        oldWidget.thumbnailProvider != widget.thumbnailProvider ||
+        oldWidget.duration != widget.duration) {
+      _hidePreview(duringBuild: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _previewDebounce?.cancel();
+    _request++;
+    super.dispose();
+  }
+
+  void _hidePreview({bool duringBuild = false}) {
+    _previewDebounce?.cancel();
+    _request++;
+    _previewTarget = null;
+    _previewBytes = null;
+    _previewLoading = false;
+    if (duringBuild) {
+      final request = _request;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && request == _request) _previewPortal.hide();
+      });
+    } else {
+      _previewPortal.hide();
+    }
+  }
+
+  void _hoverPreview(Offset globalPosition) {
+    final rect = _trackRect;
+    if (!_canPreview || rect == null || rect.width <= 0) return;
+    var fraction = ((globalPosition.dx - rect.left) / rect.width).clamp(
+      0.0,
+      1.0,
+    );
+    if (Directionality.of(context) == TextDirection.rtl) {
+      fraction = 1 - fraction;
+    }
+    _showPreview(
+      Duration(
+        milliseconds: (widget.duration.inMilliseconds * fraction).round(),
+      ),
+    );
+  }
+
+  void _showPreview(Duration target) {
+    final rect = _trackRect;
+    if (!_canPreview || rect == null) return;
+    var fraction = target.inMilliseconds / widget.duration.inMilliseconds;
+    if (Directionality.of(context) == TextDirection.rtl) {
+      fraction = 1 - fraction;
+    }
+    _previewX = rect.left + rect.width * fraction;
+    if (_previewTarget == target && _previewPortal.isShowing) return;
+    _previewDebounce?.cancel();
+    final request = ++_request;
+    final provider = widget.thumbnailProvider!;
+    setState(() {
+      _previewTarget = target;
+      _previewBytes = null;
+      _previewLoading = true;
+    });
+    _previewPortal.show();
+    _previewDebounce = Timer(const Duration(milliseconds: 200), () async {
+      Uint8List? bytes;
+      try {
+        bytes = await provider(target);
+      } catch (_) {
+        bytes = null;
+      }
+      if (!mounted || request != _request || !_canPreview) return;
+      setState(() {
+        _previewBytes = bytes == null || bytes.isEmpty ? null : bytes;
+        _previewLoading = false;
+      });
+    });
+  }
+
+  Widget _buildPreview(BuildContext context) {
+    if (_previewTarget == null) return const SizedBox.shrink();
+    final overlayBox =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final sliderBox =
+        _sliderKey.currentContext!.findRenderObject()! as RenderBox;
+    final sliderTop = overlayBox
+        .globalToLocal(sliderBox.localToGlobal(Offset.zero))
+        .dy;
+    final width = math.min(
+      192.0,
+      math.max(0.0, overlayBox.size.width - AppSpace.lg),
+    );
+    final height = width * 9 / 16 + 28;
+    final x = overlayBox.globalToLocal(Offset(_previewX, 0)).dx;
+    final left = (x - width / 2).clamp(
+      0.0,
+      math.max(0.0, overlayBox.size.width - width),
+    );
+    final top = math.max(0.0, sliderTop - height - AppSpace.sm);
+    final theme = Theme.of(context);
+    final seconds = _previewTarget!.inSeconds;
+    final mm = (seconds ~/ 60 % 60).toString().padLeft(2, '0');
+    final ss = (seconds % 60).toString().padLeft(2, '0');
+    final time = seconds >= 3600
+        ? '${seconds ~/ 3600}:$mm:$ss'
+        : '${(seconds ~/ 60).toString().padLeft(2, '0')}:$ss';
+    Widget feedback(String text) => Center(
+      child: Text(
+        text,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+    return Positioned(
+      left: left.toDouble(),
+      top: top,
+      width: width,
+      height: height,
+      child: IgnorePointer(
+        child: DecoratedBox(
+          key: const ValueKey('player-thumbnail-preview'),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainer,
+            border: Border.all(color: theme.colorScheme.outline),
+            borderRadius: AppRadius.smAll,
+          ),
+          child: ClipRRect(
+            borderRadius: AppRadius.smAll,
+            child: Column(
+              children: [
+                SizedBox(
+                  width: width,
+                  height: width * 9 / 16,
+                  child: _previewLoading
+                      ? feedback('加载中…')
+                      : _previewBytes == null
+                      ? feedback('预览不可用')
+                      : Image.memory(
+                          _previewBytes!,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, error, stack) => feedback('预览不可用'),
+                        ),
+                ),
+                SizedBox(
+                  height: 28,
+                  child: Center(
+                    child: Text(
+                      time,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// 缓冲段在滑杆值域里的位置；不需要画时为 null。
   ///
@@ -254,8 +447,11 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
     final maxMs = widget.duration.inMilliseconds;
     final live = maxMs <= 0;
     final max = live ? 1.0 : maxMs.toDouble();
-    final value = widget.position.inMilliseconds.clamp(0, max.toInt()).toDouble();
-    return Slider(
+    final value = widget.position.inMilliseconds
+        .clamp(0, max.toInt())
+        .toDouble();
+    final slider = Slider(
+      key: _sliderKey,
       value: value,
       max: max,
       secondaryTrackValue: _bufferedValue,
@@ -276,10 +472,113 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
       secondaryActiveColor: Theme.of(context).colorScheme.tertiary,
       onChanged: live
           ? null
-          : (next) => widget.onSeek(Duration(milliseconds: next.round())),
+          : (next) {
+              final target = Duration(milliseconds: next.round());
+              widget.onSeek(target);
+              if (_dragging) _showPreview(target);
+            },
       // 只在拖动期间置位：键盘/快捷键 seek 不该让缓冲段闪一下。
-      onChangeStart: live ? null : (_) => setState(() => _dragging = true),
-      onChangeEnd: live ? null : (_) => setState(() => _dragging = false),
+      onChangeStart: live
+          ? null
+          : (value) {
+              setState(() => _dragging = true);
+              _showPreview(Duration(milliseconds: value.round()));
+            },
+      onChangeEnd: live
+          ? null
+          : (_) {
+              setState(() => _dragging = false);
+              _hidePreview();
+            },
+    );
+    final theme = SliderTheme.of(context);
+    // Mirror the native Slider default while honoring the existing theme.
+    // ignore: deprecated_member_use
+    final legacyAppearance = theme.year2023 != false;
+    final SliderTrackShape shape =
+        theme.trackShape ??
+        (Theme.of(context).useMaterial3 && !legacyAppearance
+            ? const GappedSliderTrackShape()
+            : const RoundedRectSliderTrackShape());
+    return OverlayPortal(
+      controller: _previewPortal,
+      overlayChildBuilder: _buildPreview,
+      child: MouseRegion(
+        onHover: (event) => _hoverPreview(event.position),
+        onExit: (_) => _hidePreview(),
+        child: SliderTheme(
+          data: theme.copyWith(
+            trackShape: _MeasuredPreviewTrack(
+              shape,
+              (rect) => _trackRect = rect,
+            ),
+          ),
+          child: slider,
+        ),
+      ),
+    );
+  }
+}
+
+/// Delegates drawing unchanged and observes the framework's actual track rectangle.
+class _MeasuredPreviewTrack extends SliderTrackShape {
+  const _MeasuredPreviewTrack(this.delegate, this.onRect);
+  final SliderTrackShape delegate;
+  final ValueChanged<Rect> onRect;
+
+  @override
+  bool get isRounded => delegate.isRounded;
+
+  @override
+  Rect getPreferredRect({
+    required RenderBox parentBox,
+    Offset offset = Offset.zero,
+    required SliderThemeData sliderTheme,
+    bool isEnabled = false,
+    bool isDiscrete = false,
+  }) {
+    final rect = delegate.getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    onRect(rect.shift(parentBox.localToGlobal(Offset.zero) - offset));
+    return rect;
+  }
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isEnabled = false,
+    bool isDiscrete = false,
+    required TextDirection textDirection,
+  }) {
+    getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    delegate.paint(
+      context,
+      offset,
+      parentBox: parentBox,
+      sliderTheme: sliderTheme,
+      enableAnimation: enableAnimation,
+      thumbCenter: thumbCenter,
+      secondaryOffset: secondaryOffset,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+      textDirection: textDirection,
     );
   }
 }
