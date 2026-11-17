@@ -240,6 +240,8 @@ class ReaderTtsSettingsDialog extends StatefulWidget {
 
 class _ReaderTtsSettingsDialogState extends State<ReaderTtsSettingsDialog> {
   late final TextEditingController _customUrl;
+  String? _customSaveError;
+  int _customRevision = 0;
   List<TtsVoice> _voices = const [];
   String? _voiceNotice;
 
@@ -304,11 +306,12 @@ class _ReaderTtsSettingsDialogState extends State<ReaderTtsSettingsDialog> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _customUrl,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
+                    errorText: _customSaveError,
                     labelText: '自定义在线引擎规则',
                     helperText: '仅支持 GET/POST 与 {{speakText}}/{{speakSpeed}}/java.encodeURI/算术',
                   ),
-                  onSubmitted: _saveCustom,
+                  onChanged: _saveCustom,
                 ),
               ],
               const SizedBox(height: 12),
@@ -363,8 +366,27 @@ class _ReaderTtsSettingsDialogState extends State<ReaderTtsSettingsDialog> {
 
   Future<void> _saveCustom(String value) async {
     final url = value.trim();
-    await controller.setCustom(url.isEmpty ? null : TtsCustomConfig(url: url));
-    await _loadVoices();
+    final previous = controller.settings.custom;
+    if (url == (previous?.url ?? '') && _customSaveError == null) return;
+    final revision = ++_customRevision;
+    try {
+      await controller.setCustom(
+        url.isEmpty
+            ? null
+            : TtsCustomConfig(
+                url: url,
+                name: previous?.name ?? '',
+                contentType: previous?.contentType ?? 'audio/mpeg',
+                header: previous?.header ?? '',
+              ),
+      );
+      if (mounted && revision == _customRevision) {
+        setState(() => _customSaveError = null);
+      }
+    } catch (_) {
+      if (!mounted || revision != _customRevision) return;
+      setState(() => _customSaveError = '自定义规则自动保存失败，请重新修改后重试');
+    }
   }
 
   static String _sourceHint(TtsSource source) => switch (source) {

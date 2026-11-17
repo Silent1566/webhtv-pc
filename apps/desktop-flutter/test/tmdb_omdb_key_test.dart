@@ -96,9 +96,7 @@ void main() {
     await tester.enterText(field, key);
     await tester.pump();
 
-    await tester.ensureVisible(find.byKey(const ValueKey('tmdb-save')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('tmdb-save')));
+    expect(find.byKey(const ValueKey('tmdb-save')), findsNothing);
     await settleIo(tester);
 
     expect(state.tmdbConfig.omdbApiKey, key);

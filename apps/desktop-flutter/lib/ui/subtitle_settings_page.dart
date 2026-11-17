@@ -30,7 +30,28 @@ class SubtitleSettingsPage extends StatefulWidget {
   State<SubtitleSettingsPage> createState() => _SubtitleSettingsPageState();
 }
 
+class _SubtitleSaveStatus extends ChangeNotifier {
+  int _revision = 0;
+  bool busy = false;
+  bool? saved;
+
+  int begin() {
+    busy = true;
+    notifyListeners();
+    return ++_revision;
+  }
+
+  void finish(int revision, bool ok) {
+    if (revision != _revision) return;
+    busy = false;
+    saved = ok;
+    notifyListeners();
+  }
+}
+
 class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
+  static final _saveStatuses = Expando<_SubtitleSaveStatus>();
+  late final _SubtitleSaveStatus _saveStatus;
   late bool _autoMatch;
   late final TextEditingController _endpoint;
   late final TextEditingController _token;
@@ -40,12 +61,23 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
   bool _revealAssrtToken = false;
   bool _xunleiEnabled = false;
   bool _shooterEnabled = false;
-  bool _busy = false;
-  String? _message;
+  String? _endpointError;
+
+  String? get _message => _saveStatus.saved == false
+      ? '保存失败：设置文件不可写，请检查权限后重新修改'
+      : !_saveStatus.busy && _saveStatus.saved == true
+      ? '已保存'
+      : null;
+
+  void _saveStatusChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
+    _saveStatus = _saveStatuses[widget.state] ??= _SubtitleSaveStatus();
+    _saveStatus.addListener(_saveStatusChanged);
     final settings = widget.state.subtitleSettings;
     _autoMatch = settings.autoMatch;
     _endpoint = TextEditingController(text: settings.httpEndpoint);
@@ -60,6 +92,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
 
   @override
   void dispose() {
+    _saveStatus.removeListener(_saveStatusChanged);
     _endpoint.dispose();
     _token.dispose();
     _assrtToken.dispose();
@@ -72,26 +105,45 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
       if (line.trim().isNotEmpty) line.trim(),
   ];
 
-  Future<void> _save() async {
+  void _endpointChanged(String value) {
+    final endpoint = value.trim();
+    final uri = Uri.tryParse(endpoint);
+    final valid =
+        endpoint.isEmpty ||
+        (uri != null &&
+            (uri.scheme == 'http' || uri.scheme == 'https') &&
+            uri.host.isNotEmpty &&
+            !RegExp(r'\s').hasMatch(endpoint));
     setState(() {
-      _busy = true;
-      _message = null;
+      _endpointError = valid ? null : '请输入有效的 HTTP(S) 地址，或留空停用该源';
     });
-    final settings = widget.state.subtitleSettings.copyWith(
+    if (valid) _save();
+  }
+
+  Future<void> _save() async {
+    final state = widget.state;
+    final settings = state.subtitleSettings.copyWith(
       autoMatch: _autoMatch,
-      httpEndpoint: _endpoint.text.trim(),
+      httpEndpoint: _endpointError == null
+          ? _endpoint.text.trim()
+          : state.subtitleSettings.httpEndpoint,
       httpToken: _token.text.trim(),
       localDirectories: _directoryList,
       assrtToken: _assrtToken.text.trim(),
       xunleiEnabled: _xunleiEnabled,
       shooterEnabled: _shooterEnabled,
     );
-    final ok = await widget.state.setSubtitleSettings(settings);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _message = ok ? '已保存' : '保存失败：设置文件不可写';
-    });
+    if (settings == state.subtitleSettings && _saveStatus.saved != false) {
+      return;
+    }
+    final revision = _saveStatus.begin();
+    bool ok;
+    try {
+      ok = await state.setSubtitleSettings(settings);
+    } catch (_) {
+      ok = false;
+    }
+    _saveStatus.finish(revision, ok);
   }
 
   Future<void> _addDefaultDirectory() async {
@@ -102,6 +154,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
     setState(() {
       _directories.text = [...existing, suggested].join('\n');
     });
+    await _save();
   }
 
   /// 已启用的源数量：五个来源彼此独立，逐个问 [SubtitleSettings] 的 getter。
@@ -140,7 +193,10 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 title: const Text('播放结果没有字幕时自动匹配'),
                 subtitle: const Text('只在配置了至少一个字幕源时生效；失败不阻塞播放'),
                 value: _autoMatch,
-                onChanged: (value) => setState(() => _autoMatch = value),
+                onChanged: (value) {
+                  setState(() => _autoMatch = value);
+                  _save();
+                },
               ),
             ],
           ),
@@ -155,6 +211,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
               TextField(
                 key: const ValueKey('subtitle-assrt-token'),
                 controller: _assrtToken,
+                onChanged: (_) => _save(),
                 obscureText: !_revealAssrtToken,
                 decoration: InputDecoration(
                   labelText: 'ASSRT token',
@@ -163,13 +220,16 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                   // find.byTooltip 会同时命中两个按钮。
                   suffixIcon: IconButton(
                     key: const ValueKey('subtitle-assrt-token-reveal'),
-                    tooltip: _revealAssrtToken ? '隐藏 ASSRT token' : '显示 ASSRT token',
+                    tooltip: _revealAssrtToken
+                        ? '隐藏 ASSRT token'
+                        : '显示 ASSRT token',
                     icon: Icon(
-                      _revealAssrtToken ? Icons.visibility_off : Icons.visibility,
+                      _revealAssrtToken
+                          ? Icons.visibility_off
+                          : Icons.visibility,
                     ),
-                    onPressed: () => setState(
-                      () => _revealAssrtToken = !_revealAssrtToken,
-                    ),
+                    onPressed: () =>
+                        setState(() => _revealAssrtToken = !_revealAssrtToken),
                   ),
                 ),
               ),
@@ -184,7 +244,10 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 title: const Text('启用迅雷字幕源'),
                 subtitle: const Text('免 token，按片名搜索'),
                 value: _xunleiEnabled,
-                onChanged: (value) => setState(() => _xunleiEnabled = value),
+                onChanged: (value) {
+                  setState(() => _xunleiEnabled = value);
+                  _save();
+                },
               ),
             ],
           ),
@@ -195,11 +258,12 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 key: const ValueKey('subtitle-shooter-enabled'),
                 contentPadding: EdgeInsets.zero,
                 title: const Text('启用射手字幕源'),
-                subtitle: const Text(
-                  '按本地视频文件特征码搜索，只对本地文件播放有效；网络播放不会出结果',
-                ),
+                subtitle: const Text('按本地视频文件特征码搜索，只对本地文件播放有效；网络播放不会出结果'),
                 value: _shooterEnabled,
-                onChanged: (value) => setState(() => _shooterEnabled = value),
+                onChanged: (value) {
+                  setState(() => _shooterEnabled = value);
+                  _save();
+                },
               ),
             ],
           ),
@@ -214,6 +278,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
               TextField(
                 key: const ValueKey('subtitle-local-directories'),
                 controller: _directories,
+                onChanged: (_) => _save(),
                 minLines: 3,
                 maxLines: 6,
                 decoration: const InputDecoration(
@@ -247,7 +312,9 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
               TextField(
                 key: const ValueKey('subtitle-http-endpoint'),
                 controller: _endpoint,
-                decoration: const InputDecoration(
+                onChanged: _endpointChanged,
+                decoration: InputDecoration(
+                  errorText: _endpointError,
                   labelText: '搜索地址',
                   border: OutlineInputBorder(),
                   hintText: 'https://example.test/subtitles/search',
@@ -257,6 +324,7 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
               TextField(
                 key: const ValueKey('subtitle-http-token'),
                 controller: _token,
+                onChanged: (_) => _save(),
                 obscureText: !_revealToken,
                 decoration: InputDecoration(
                   labelText: '令牌（可选）',
@@ -280,10 +348,9 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
           ),
           SettingsActions(
             children: [
-              FilledButton(
-                key: const ValueKey('subtitle-save'),
-                onPressed: _busy ? null : _save,
-                child: const Text('保存'),
+              Text(
+                _saveStatus.busy ? '正在保存…' : '设置修改后立即生效',
+                style: theme.textTheme.bodySmall,
               ),
               if (_message != null)
                 Text(

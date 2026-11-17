@@ -92,10 +92,10 @@ void main() {
     expect(find.byKey(const ValueKey('ai-user-agent')), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-test')), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-fetch-models')), findsOneWidget);
-    expect(find.byKey(const ValueKey('ai-save')), findsOneWidget);
+    expect(find.byKey(const ValueKey('ai-save')), findsNothing);
   });
 
-  testWidgets('保存后写入 ai 段', (tester) async {
+  testWidgets('编辑后自动写入 ai 段', (tester) async {
     await pumpAiPage(tester);
 
     await tester.enterText(
@@ -109,7 +109,6 @@ void main() {
     );
     await tester.pump();
 
-    await tester.tap(find.byKey(const ValueKey('ai-save')));
     await tester.pumpAndSettle();
 
     expect(state.aiConfig.endpoint, 'https://api.deepseek.com/v1');
@@ -144,7 +143,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('ai-model')));
   }
 
-  testWidgets('拉取模型后模型框变为可筛选下拉，点选回填并保存', (tester) async {
+  testWidgets('拉取模型后模型框变为可筛选下拉，点选回填并即时保存', (tester) async {
     await pumpAiPageWithModels(tester, const [
       'deepseek-v4.1-flash',
       '1/MiniMax-M2.5',
@@ -189,12 +188,11 @@ void main() {
       '1/MiniMax-M3',
     );
 
-    await tester.tap(find.byKey(const ValueKey('ai-save')));
     await tester.pumpAndSettle();
     expect(state.aiConfig.model, '1/MiniMax-M3');
   });
 
-  testWidgets('筛选无匹配时给出提示，仍可保存自定义模型名', (tester) async {
+  testWidgets('筛选无匹配时给出提示，自定义模型名即时保存', (tester) async {
     await pumpAiPageWithModels(tester, const ['1/MiniMax-M3']);
     await tester.enterText(
       find.byKey(const ValueKey('ai-model')),
@@ -203,7 +201,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('没有匹配的模型名'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('ai-save')));
     await tester.pumpAndSettle();
     expect(state.aiConfig.model, 'my-local-model');
   });

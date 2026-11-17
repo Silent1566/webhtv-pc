@@ -13,6 +13,7 @@ import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/temp_dirs.dart';
+import 'settings_immediate_forms_test.dart' show settleWrites;
 import 'support/test_fonts.dart';
 import 'tmdb_root_key_ingress_test.dart' as root;
 
@@ -91,25 +92,9 @@ void main() {
         '',
       );
       expect(state.tmdbConfig.isReady, isTrue);
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey('tmdb-save')),
-        300,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.ensureVisible(find.byKey(const ValueKey('tmdb-save')));
-      await tester.tap(find.byKey(const ValueKey('tmdb-save')));
-      await tester.runAsync(() async {
-        final settings = File(state.paths.settingsPath);
-        for (var attempt = 0; attempt < 100; attempt++) {
-          if (settings.existsSync() &&
-              settings.readAsStringSync().contains('"tmdb"')) {
-            return;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
-      });
-      await tester.pump();
-      await tester.pump();
+      expect(find.byKey(const ValueKey('tmdb-save')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('tmdb-enabled')));
+      await settleWrites(tester);
       expect(
         File(state.paths.settingsPath).readAsStringSync(),
         isNot(contains(root.secret)),

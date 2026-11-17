@@ -509,6 +509,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       vodId: _request.vodId,
     );
     _controller = PlayerController(
+      initialVolume: widget.state.hasExplicitPlayerVolume
+          ? widget.state.playerVolume
+          : null,
+      initialResumeVolume: widget.state.playerResumeVolume,
+      onVolumeChanged: _rememberVolume,
       onSeek: (position) => _audioAi?.seek(position),
     )..addListener(_onControllerChanged);
     _bindGesturePlaybackStream();
@@ -3003,6 +3008,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (error != null) _showSubtitleError(error);
   }
 
+  void _rememberVolume(double volume) {
+    unawaited(
+      widget.state.setPlayerVolume(
+        volume,
+        resumeVolume: _controller.volumeState.resumeVolume,
+      ),
+    );
+  }
+
   int _beginMediaTransition() {
     _clearGesturePlaybackIntent();
     _clickGate.dispose();
@@ -3036,14 +3050,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final volume = previous.volumeState;
       final rate = previous.rate;
       previous.removeListener(_onControllerChanged);
-      _controller = PlayerController()..addListener(_onControllerChanged);
+      _controller = PlayerController(
+        initialVolume: volume.volume,
+        initialResumeVolume: volume.resumeVolume,
+        onVolumeChanged: _rememberVolume,
+        onSeek: (position) => _audioAi?.seek(position),
+      )..addListener(_onControllerChanged);
       _bindGesturePlaybackStream();
       final replacement = _controller;
       _liveOpenInFlight = false;
       previous.dispose();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !identical(replacement, _controller)) return;
-        unawaited(replacement.restoreVolumeState(volume));
         unawaited(replacement.setRate(rate));
       });
     }

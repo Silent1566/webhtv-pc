@@ -129,6 +129,25 @@ class UiPreferencesStore {
   /// 缺省不写盘，语义上「缺席 = 用默认」。
   String? _themeMode;
 
+  double? _playerVolume;
+  double? _playerResumeVolume;
+
+  double get playerVolume => _playerVolume ?? 100;
+  bool get hasExplicitPlayerVolume => _playerVolume != null;
+  double get playerResumeVolume => _playerResumeVolume ?? 100;
+
+  Future<bool> rememberPlayerVolume(double volume, {double? resumeVolume}) {
+    if (!volume.isFinite || (resumeVolume != null && !resumeVolume.isFinite)) {
+      return Future.value(false);
+    }
+    _playerVolume = volume.clamp(0.0, 100.0);
+    if (volume > 0) _playerResumeVolume = _playerVolume;
+    if (resumeVolume != null && resumeVolume > 0) {
+      _playerResumeVolume = resumeVolume.clamp(0.0, 100.0);
+    }
+    return _persist();
+  }
+
   /// 搜索历史：去重、最新在前。上限 [_maxSearchKeywords]。
   List<String> _searchKeywords = const [];
 
@@ -483,6 +502,16 @@ class UiPreferencesStore {
             : {};
         final ui = decoded['ui'];
         if (ui is Map) {
+          final volume = ui['playerVolume'];
+          _playerVolume = volume is num && volume.isFinite
+              ? volume.toDouble().clamp(0.0, 100.0)
+              : null;
+          final resume = ui['playerResumeVolume'];
+          _playerResumeVolume = resume is num && resume.isFinite && resume > 0
+              ? resume.toDouble().clamp(0.0, 100.0)
+              : (_playerVolume != null && _playerVolume! > 0
+                    ? _playerVolume
+                    : null);
           final value = ui['lastSiteKey'];
           if (value is String) _lastSiteKey = value.trim();
           // 只接受合法值；文件里被手改成别的字符串时回落到默认，不写坏状态。
@@ -937,14 +966,14 @@ class UiPreferencesStore {
 
   /// 记住出站代理设置。
   Future<bool> rememberOutboundProxy(OutboundProxySettings settings) {
-    if (_outboundProxy == settings) return Future.value(true);
+    if (_outboundProxy == settings) return _persist();
     _outboundProxy = settings;
     return _persist();
   }
 
   /// 记住 DoH 设置。
   Future<bool> rememberDohSettings(DohSettings settings) {
-    if (_dohSettings == settings) return Future.value(true);
+    if (_dohSettings == settings) return _persist();
     _dohSettings = settings;
     return _persist();
   }
@@ -958,7 +987,7 @@ class UiPreferencesStore {
 
   /// 记住追番设置。
   Future<bool> rememberFollowingSettings(FollowingSettings settings) {
-    if (_followingSettings == settings) return Future.value(true);
+    if (_followingSettings == settings) return _persist();
     _followingSettings = settings;
     return _persist();
   }
@@ -1022,7 +1051,7 @@ class UiPreferencesStore {
 
   /// 记住弹幕库设置。
   Future<bool> rememberDanmakuSettings(DanmakuSettings settings) {
-    if (_danmakuSettings == settings) return Future.value(true);
+    if (_danmakuSettings == settings) return _persist();
     _danmakuSettings = settings;
     return _persist();
   }
@@ -1036,7 +1065,7 @@ class UiPreferencesStore {
 
   /// 记住字幕源设置。
   Future<bool> rememberSubtitleSettings(SubtitleSettings settings) {
-    if (_subtitleSettings == settings) return Future.value(true);
+    if (_subtitleSettings == settings) return _persist();
     _subtitleSettings = settings;
     return _persist();
   }
@@ -1179,6 +1208,10 @@ class UiPreferencesStore {
       writer: SettingsWriter.uiPreferences,
       mutate: (root) {
         final ui = <String, Object?>{'lastSiteKey': _lastSiteKey};
+        if (_playerVolume != null) ui['playerVolume'] = _playerVolume;
+        if (_playerResumeVolume != null) {
+          ui['playerResumeVolume'] = _playerResumeVolume;
+        }
         if (_videoFitModes.isNotEmpty) ui['videoFitModes'] = _videoFitModes;
         if (_trackChoices.isNotEmpty) {
           ui['trackChoices'] = <String, Object?>{

@@ -221,8 +221,14 @@ class ReaderTtsController extends ChangeNotifier {
   Future<void> setVoice(String voice) async => _persist(
     _settings.copyWith(options: _settings.options.copyWith(voice: voice)),
   );
-  Future<void> setCustom(TtsCustomConfig? config) async =>
-      _persist(_settings.copyWith(custom: config));
+  Future<void> setCustom(TtsCustomConfig? config) async => _persist(
+    ReaderPreferences(
+      source: _settings.source,
+      options: _settings.options,
+      timerMinutes: _settings.timerMinutes,
+      custom: config,
+    ),
+  );
 
   Future<void> setTimer(int minutes) async {
     final settings = _settings.copyWith(timerMinutes: minutes);
@@ -238,8 +244,11 @@ class ReaderTtsController extends ChangeNotifier {
 
   void _persist(ReaderPreferences value) {
     _settings = value;
-    store.save(_settings);
-    notifyListeners();
+    try {
+      store.save(_settings);
+    } finally {
+      if (!_closed) notifyListeners();
+    }
   }
 
   void _scheduleTimer() {

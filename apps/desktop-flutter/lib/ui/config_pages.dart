@@ -353,7 +353,7 @@ class _ConfigPageState extends State<ConfigPage> {
 /// 设计要点：
 /// - Key/Token 默认掩码，可切换明文；**不写入日志**（`03` §5.4）；
 /// - 「重置为默认规则」需二次确认（`04` §10.2）；
-/// - 点「保存」统一保存（对齐上游 `TmdbSourceDialog`）。
+/// - 偏好修改即生效并自动保存；测试连接仍由用户显式发起。
 class TmdbSettingsPage extends StatefulWidget {
   const TmdbSettingsPage({super.key, required this.state});
 
@@ -380,17 +380,37 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   bool _busy = false;
   String? _testResult;
   String? _saveResult;
+  String? _saveError;
+  String? _apiBaseError;
+  String? _imageBaseError;
+  int _revision = 0;
+  static final _saveQueues = Expando<Future<void>>();
+  static final _pendingConfigs = Expando<TmdbConfig>();
+  static final _saveErrors = Expando<String>();
 
   @override
   void initState() {
     super.initState();
-    _draft = widget.state.tmdbUserConfig;
+    final pending = _pendingConfigs[widget.state];
+    _draft = pending ?? widget.state.tmdbUserConfig;
+    _saveError = _saveErrors[widget.state];
     _apiKey = TextEditingController(text: _draft.apiKey);
     _accessToken = TextEditingController(text: _draft.accessToken);
     _omdbKey = TextEditingController(text: _draft.omdbApiKey);
     _apiBase = TextEditingController(text: _draft.apiBase);
     _imageBase = TextEditingController(text: _draft.imageBase);
     _language = TextEditingController(text: _draft.language);
+    if (pending != null) {
+      _saveQueues[widget.state]?.then((_) {
+        if (!mounted || !identical(_draft, pending)) return;
+        setState(() {
+          _saveError = _saveErrors[widget.state];
+          if (_apiBaseError == null && _imageBaseError == null) {
+            _saveResult = _saveError ?? '已自动保存（凭据仅保存在本机）';
+          }
+        });
+      });
+    }
   }
 
   @override
@@ -407,43 +427,88 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     super.dispose();
   }
 
-  TmdbConfig _collect() => _draft.copyWith(
-    apiKey: _apiKey.text.trim(),
-    accessToken: _accessToken.text.trim(),
-    omdbApiKey: _omdbKey.text.trim(),
-    apiBase: _apiBase.text.trim(),
-    imageBase: _imageBase.text.trim(),
-    language: _language.text.trim(),
-  );
+  void _commit(TmdbConfig config) {
+    final revision = ++_revision;
+    final state = widget.state;
+    _pendingConfigs[state] = config;
+    setState(() {
+      _draft = config;
+      _testResult = null;
+      _saveResult = '正在自动保存…';
+    });
+    final pending = (_saveQueues[state] ?? Future<void>.value()).then((
+      _,
+    ) async {
+      bool saved;
+      try {
+        saved = await state.saveTmdbConfig(config);
+      } catch (_) {
+        saved = false;
+      }
+      if (identical(_pendingConfigs[state], config)) {
+        _pendingConfigs[state] = null;
+        _saveErrors[state] = saved ? null : '自动保存失败，请重新修改后重试';
+      }
+      if (!mounted || !identical(_draft, config)) return;
+      setState(() {
+        _saveError = saved ? null : '自动保存失败，请重新修改后重试';
+        if (revision == _revision) {
+          _saveResult = saved ? '已自动保存（凭据仅保存在本机）' : _saveError;
+        }
+      });
+    });
+    _saveQueues[state] = pending;
+  }
 
-  Future<void> _save() async {
+  bool _validEndpoint(String text) {
+    if (text.isEmpty) return true;
+    final uri = Uri.tryParse(text);
+    return !RegExp(r'\s').hasMatch(text) &&
+        uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty &&
+        (!uri.hasPort || (uri.port > 0 && uri.port <= 65535));
+  }
+
+  void _changeEndpoint(String value, {required bool image}) {
+    final text = value.trim();
+    final valid = _validEndpoint(text);
     setState(() {
-      _busy = true;
-      _saveResult = null;
+      if (image) {
+        _imageBaseError = valid ? null : '请输入完整的 http 或 https 图片地址';
+      } else {
+        _apiBaseError = valid ? null : '请输入完整的 http 或 https API 地址';
+      }
     });
-    final config = _collect();
-    final saved = await widget.state.saveTmdbConfig(config);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _draft = widget.state.tmdbUserConfig;
-      _saveResult = saved ? '已保存（凭据已写入本地设置文件）' : '保存失败';
-    });
+    if (!valid) {
+      _revision++;
+      setState(() {
+        _saveResult = null;
+        _testResult = null;
+      });
+      return;
+    }
+    _commit(
+      image
+          ? _draft.copyWith(
+              imageBase: text.isEmpty ? tmdbDefaultImageBase : text,
+            )
+          : _draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text),
+    );
   }
 
   Future<void> _test() async {
+    final revision = _revision;
     setState(() {
       _busy = true;
       _testResult = null;
     });
-    // 测试连接用**当前草稿**：先落盘再测，避免用户改了 Key 但测的是旧值。
-    await widget.state.saveTmdbConfig(_collect());
+    await _saveQueues[widget.state];
     final result = await widget.state.testTmdbConnection();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _testResult = result;
-      _draft = widget.state.tmdbUserConfig;
+      if (revision == _revision) _testResult = result;
     });
   }
 
@@ -467,11 +532,12 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       ),
     );
     if (confirmed != true) return;
-    setState(() {
-      _draft = _draft
+    if (!mounted) return;
+    _commit(
+      _draft
           .copyWith(enabledSites: const [], allowedSites: const [])
-          .withDefaultDisabledRules();
-    });
+          .withDefaultDisabledRules(),
+    );
   }
 
   void _addRule(
@@ -500,8 +566,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
             title: const Text('启用 TMDB 增强'),
             subtitle: const Text('关闭后等同未配置：不发起任何 TMDB 请求'),
             value: _draft.enabled,
-            onChanged: (value) =>
-                setState(() => _draft = _draft.copyWith(enabled: value)),
+            onChanged: (value) => _commit(_draft.copyWith(enabled: value)),
           ),
           SettingsSection(
             title: '凭据',
@@ -512,6 +577,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                     child: TextField(
                       key: const ValueKey('tmdb-api-key'),
                       controller: _apiKey,
+                      onChanged: (value) =>
+                          _commit(_draft.copyWith(apiKey: value.trim())),
                       obscureText: !_showApiKey,
                       decoration: const InputDecoration(
                         labelText: 'API Key（v3）',
@@ -534,6 +601,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                     child: TextField(
                       key: const ValueKey('tmdb-access-token'),
                       controller: _accessToken,
+                      onChanged: (value) =>
+                          _commit(_draft.copyWith(accessToken: value.trim())),
                       obscureText: !_showAccessToken,
                       decoration: const InputDecoration(
                         labelText: 'Access Token（v4）',
@@ -557,6 +626,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                     child: TextField(
                       key: const ValueKey('tmdb-omdb-key'),
                       controller: _omdbKey,
+                      onChanged: (value) =>
+                          _commit(_draft.copyWith(omdbApiKey: value.trim())),
                       obscureText: !_showOmdbKey,
                       decoration: const InputDecoration(
                         labelText: 'OMDB API Key（可选）',
@@ -590,7 +661,9 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
               TextField(
                 key: const ValueKey('tmdb-api-base'),
                 controller: _apiBase,
-                decoration: const InputDecoration(
+                onChanged: (value) => _changeEndpoint(value, image: false),
+                decoration: InputDecoration(
+                  errorText: _apiBaseError,
                   labelText: 'API 主机',
                   hintText: 'https://api.tmdb.org/3',
                   border: OutlineInputBorder(),
@@ -600,7 +673,9 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
               TextField(
                 key: const ValueKey('tmdb-image-base'),
                 controller: _imageBase,
-                decoration: const InputDecoration(
+                onChanged: (value) => _changeEndpoint(value, image: true),
+                decoration: InputDecoration(
+                  errorText: _imageBaseError,
                   labelText: '图片主机',
                   hintText: 'https://images.tmdb.org/t/p/w342',
                   border: OutlineInputBorder(),
@@ -610,6 +685,13 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
               TextField(
                 key: const ValueKey('tmdb-language'),
                 controller: _language,
+                onChanged: (value) => _commit(
+                  _draft.copyWith(
+                    language: value.trim().isEmpty
+                        ? tmdbDefaultLanguage
+                        : value.trim(),
+                  ),
+                ),
                 decoration: const InputDecoration(
                   labelText: '语言',
                   hintText: 'zh-CN',
@@ -626,17 +708,15 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 title: const Text('智能匹配'),
                 value: _draft.smartMatch,
                 onChanged: (value) =>
-                    setState(() => _draft = _draft.copyWith(smartMatch: value)),
+                    _commit(_draft.copyWith(smartMatch: value)),
               ),
               SwitchListTile(
                 key: const ValueKey('tmdb-heuristic'),
                 title: const Text('启发式季度推断'),
                 subtitle: const Text('关闭后证据不足时不再猜测季度（保持「未确定季度」）'),
                 value: _draft.heuristicSeasonGuessing,
-                onChanged: (value) => setState(
-                  () =>
-                      _draft = _draft.copyWith(heuristicSeasonGuessing: value),
-                ),
+                onChanged: (value) =>
+                    _commit(_draft.copyWith(heuristicSeasonGuessing: value)),
               ),
             ],
           ),
@@ -651,12 +731,10 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 onAdd: () => _addRule(
                   _siteRule,
                   _draft.enabledSites,
-                  (next) => setState(
-                    () => _draft = _draft.copyWith(enabledSites: next),
-                  ),
+                  (next) => _commit(_draft.copyWith(enabledSites: next)),
                 ),
-                onRemove: (value) => setState(
-                  () => _draft = _draft.copyWith(
+                onRemove: (value) => _commit(
+                  _draft.copyWith(
                     enabledSites: [..._draft.enabledSites]..remove(value),
                   ),
                 ),
@@ -670,12 +748,10 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 onAdd: () => _addRule(
                   _allowRule,
                   _draft.allowedSites,
-                  (next) => setState(
-                    () => _draft = _draft.copyWith(allowedSites: next),
-                  ),
+                  (next) => _commit(_draft.copyWith(allowedSites: next)),
                 ),
-                onRemove: (value) => setState(
-                  () => _draft = _draft.copyWith(
+                onRemove: (value) => _commit(
+                  _draft.copyWith(
                     allowedSites: [..._draft.allowedSites]..remove(value),
                   ),
                 ),
@@ -689,15 +765,15 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 onAdd: () => _addRule(
                   _denyRule,
                   _draft.disabledSites,
-                  (next) => setState(
-                    () => _draft = _draft.copyWith(
+                  (next) => _commit(
+                    _draft.copyWith(
                       disabledSites: next,
                       excludeKeywordsConfigured: true,
                     ),
                   ),
                 ),
-                onRemove: (value) => setState(
-                  () => _draft = _draft.copyWith(
+                onRemove: (value) => _commit(
+                  _draft.copyWith(
                     disabledSites: [..._draft.disabledSites]..remove(value),
                     excludeKeywordsConfigured: true,
                   ),
@@ -717,14 +793,10 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
             ],
           ),
           const Divider(height: AppSpace.xl),
+          const Text('修改即生效并自动保存'),
+          const SizedBox(height: 8),
           SettingsActions(
             children: [
-              FilledButton.icon(
-                key: const ValueKey('tmdb-save'),
-                onPressed: _busy ? null : _save,
-                icon: const Icon(Icons.save_outlined),
-                label: const Text('保存'),
-              ),
               OutlinedButton.icon(
                 key: const ValueKey('tmdb-test'),
                 onPressed: _busy ? null : _test,
@@ -751,6 +823,16 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
           if (_saveResult != null) ...[
             const SizedBox(height: 8),
             Text(_saveResult!, key: const ValueKey('tmdb-save-result')),
+          ],
+          if (_saveError != null && _saveError != _saveResult) ...[
+            const SizedBox(height: 8),
+            Text(
+              _saveError!,
+              key: const ValueKey('tmdb-save-error'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
           ],
           const SizedBox(height: 8),
           SelectableText(
