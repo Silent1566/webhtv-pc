@@ -71,6 +71,19 @@ class PlaybackOptionsPage extends StatelessWidget {
                       },
                     ),
                     _switch(
+                      'settings-player-thumbnail-preview',
+                      '导航栏缩略图',
+                      '默认关闭；开启可能增加网络请求，仅点播且时长已知时可用',
+                      state.playerOptions.showThumbnailPreview,
+                      (value) async {
+                        await state.setPlayerOptions(
+                          state.playerOptions.copyWith(
+                            showThumbnailPreview: value,
+                          ),
+                        );
+                      },
+                    ),
+                    _switch(
                       'settings-player-auto-next',
                       '自动连播下一集',
                       '关闭后播完当前集会停住；循环模式优先于该开关',
@@ -1099,9 +1112,8 @@ class _ImmediateAddressDialogState extends State<_ImmediateAddressDialog> {
           const SizedBox(height: 8),
           Text(
             _saveError!,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.error,
-            ),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: Theme.of(context).colorScheme.error),
           ),
         ],
       ],

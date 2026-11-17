@@ -284,9 +284,7 @@ void main() {
 
       await backFromSettingsDetail(tester);
       expect(
-        find.byKey(
-          ValueKey('settings-category-content-${route.category}'),
-        ),
+        find.byKey(ValueKey('settings-category-content-${route.category}')),
         findsOneWidget,
         reason: '从「${route.title}」返回后必须回到 ${route.category} 分类页',
       );
@@ -454,7 +452,6 @@ void main() {
     expect(find.widgetWithText(AppBar, '关于与数据'), findsOneWidget);
     expect(find.text('本地数据'), findsOneWidget);
     expect(find.text('运行信息'), findsOneWidget);
-    expect(find.text('隐私与合规'), findsOneWidget);
 
     // 两个动作必须是仍在树里、且可点的按钮（不要求真的写盘：清理缓存与复制
     // 剪贴板都依赖平台通道，widget 测试里只锁「入口还在」）。
@@ -475,7 +472,19 @@ void main() {
       );
     }
 
-    // 隐私与合规段的两条硬事实（关闭遥测 / 关闭站点配置同步）必须仍在。
+    // 明细页懒构建屏外段落；先滚到隐私段，再检查两条硬事实。
+    await tester.scrollUntilVisible(
+      find.text('隐私与合规'),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(SettingsDetailScaffold),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await pumpSettingsSettled(tester);
+    expect(find.text('隐私与合规'), findsOneWidget);
     expect(find.textContaining('遥测与崩溃上报：关闭'), findsOneWidget);
     expect(find.textContaining('站点配置同步：关闭'), findsOneWidget);
 
@@ -493,33 +502,30 @@ void main() {
       Size(1024, 728),
       Size(1440, 900),
     ]) {
-      testWidgets(
-        '分类页与明细页不溢出 ${brightness.name} '
-        '${size.width.toInt()}x${size.height.toInt()}',
-        (tester) async {
-          await pumpSettings(tester, size: size, brightness: brightness);
+      testWidgets('分类页与明细页不溢出 ${brightness.name} '
+          '${size.width.toInt()}x${size.height.toInt()}', (tester) async {
+        await pumpSettings(tester, size: size, brightness: brightness);
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: '分类页在 $size 溢出（RenderFlex overflow）',
+        );
+
+        // 每类都扫一遍（分类栏在 5 类之后最容易在矮窗里先溢出）。
+        for (final category in const [
+          'playback',
+          'sites',
+          'connections',
+          'maintenance',
+        ]) {
+          await openCategory(tester, category);
           expect(
             tester.takeException(),
             isNull,
-            reason: '分类页在 $size 溢出（RenderFlex overflow）',
+            reason: '分类 $category 在 $size 溢出（RenderFlex overflow）',
           );
-
-          // 每类都扫一遍（分类栏在 5 类之后最容易在矮窗里先溢出）。
-          for (final category in const [
-            'playback',
-            'sites',
-            'connections',
-            'maintenance',
-          ]) {
-            await openCategory(tester, category);
-            expect(
-              tester.takeException(),
-              isNull,
-              reason: '分类 $category 在 $size 溢出（RenderFlex overflow）',
-            );
-          }
-        },
-      );
+        }
+      });
     }
   }
 

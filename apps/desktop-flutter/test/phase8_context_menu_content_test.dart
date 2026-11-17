@@ -33,11 +33,10 @@ Finder _columnSurface(WidgetTester tester, int level) => find
 
 /// 第 [level] 列（0 = 主列）的所有行。
 List<InkWell> _rowsAt(WidgetTester tester, int level) {
-  final surfaces = find
-      .descendant(
-        of: find.byType(PlayerContextMenu),
-        matching: find.byType(Material),
-      );
+  final surfaces = find.descendant(
+    of: find.byType(PlayerContextMenu),
+    matching: find.byType(Material),
+  );
   if (level >= surfaces.evaluate().length) return const [];
   return tester
       .widgetList<InkWell>(
@@ -57,7 +56,10 @@ String _labelOf(WidgetTester tester, InkWell row) => tester
 /// 一行是否带对勾（= `PlayerMenuItem.selected`）。
 bool _isChecked(WidgetTester tester, InkWell row) => tester
     .widgetList(
-      find.descendant(of: find.byWidget(row), matching: find.byIcon(Icons.check)),
+      find.descendant(
+        of: find.byWidget(row),
+        matching: find.byIcon(Icons.check),
+      ),
     )
     .isNotEmpty;
 
@@ -154,8 +156,11 @@ void main() {
         find.descendant(
           of: find.byType(PlayerContextMenu),
           matching: find.byWidgetPredicate(
-            (w) => w.key is ValueKey<String> &&
-                (w.key! as ValueKey<String>).value.startsWith('player-menu-item-section:'),
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'player-menu-item-section:',
+                ),
           ),
         ),
         findsNWidgets(10),
@@ -247,12 +252,13 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 47 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 50 项）', (tester) async {
       await _openMenu(tester);
 
-      // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，共 47。
+      // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，
+      // 再加 P2-12 的「播放」组三个入口（前/后关键帧 + 导航栏缩略图开关），共 50。
       const expected = <String, int>{
-        '播放': 7,
+        '播放': 10,
         '速度': 6,
         '字幕': 4,
         '画面': 4,
@@ -271,10 +277,12 @@ void main() {
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        47,
-        reason: '十个分组的项数之和必须是 47：基线 44，'
+        50,
+        reason:
+            '十个分组的项数之和必须是 50：基线 44，'
             '「显示」组新增「屏显样式」（P1-4）1 项，'
-            '「画面」组新增 HDR 色调映射 / 峰值亮度计算 2 项',
+            '「画面」组新增 HDR 色调映射 / 峰值亮度计算 2 项，'
+            '「播放」组新增前/后关键帧与导航栏缩略图开关 3 项（P2-12）',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -335,11 +343,16 @@ void main() {
       // 反向锁：不可点的项必须是**已知的、条件不满足**的那几个，
       // 而且它们不许从菜单里消失（用「隐藏」代替「灰掉」也算失败）。
       // 本用例的环境：单一音轨、本集无片头片尾标记、还没拿到播放诊断。
-      expect(
-        disabled,
-        ['音轨…', '跳过片头', '跳过片尾', '清除本片标记', '播放诊断'],
-        reason: '不可点项集合变了：要么新增了死项，要么「该灰的」被藏起来了',
-      );
+      expect(disabled, [
+        // 播放分组先遍历；时长未知时，关键帧入口按设计置灰而不是隐藏。
+        '前一个关键帧  Ctrl+Shift+←',
+        '后一个关键帧  Ctrl+Shift+→',
+        '音轨…',
+        '跳过片头',
+        '跳过片尾',
+        '清除本片标记',
+        '播放诊断',
+      ], reason: '不可点项集合变了：要么新增了死项，要么「该灰的」被藏起来了');
       // 44 项里减去 5 个不可点的叶子，其余叶子都必须真的能点
       // （不是「有 children 就都以为能点」）。
       expect(sawLeaf, greaterThan(25), reason: '叶子项数量异常（$sawLeaf）');
@@ -382,7 +395,8 @@ void main() {
       expect(
         rows.length,
         subtitleColorChoices.length,
-        reason: '文字颜色必须与 subtitleColorChoices 同源（${subtitleColorChoices.length} 档）',
+        reason:
+            '文字颜色必须与 subtitleColorChoices 同源（${subtitleColorChoices.length} 档）',
       );
       final labels = [for (final row in rows) _labelOf(tester, row)];
       expect(labels, [for (final choice in subtitleColorChoices) choice.label]);
@@ -397,7 +411,9 @@ void main() {
       final yellow = subtitleColorChoices.firstWhere((c) => c.label == '黄');
       expect(
         find.byKey(
-          ValueKey('player-menu-item-sub_color_${yellow.value.toRadixString(16)}'),
+          ValueKey(
+            'player-menu-item-sub_color_${yellow.value.toRadixString(16)}',
+          ),
         ),
         findsOneWidget,
         reason: '文字颜色叶子的 id 必须是 sub_color_<argb hex>',
@@ -440,7 +456,9 @@ void main() {
       // 同一层换到「不透明度」：档位更换，当前值仍是默认的 100%。
       await _drill(tester, '不透明度');
       final opacityRows = _rowsAt(tester, 3);
-      final opacityLabels = [for (final row in opacityRows) _labelOf(tester, row)];
+      final opacityLabels = [
+        for (final row in opacityRows) _labelOf(tester, row),
+      ];
       expect(opacityLabels, ['50%', '70%', '85%', '100%']);
       expect(
         [
@@ -585,11 +603,12 @@ void main() {
         for (final row in rows)
           if (_hasFlyout(tester, row)) _labelOf(tester, row),
       ];
-      expect(
-        parents,
-        ['播放参数', '字幕源', '弹幕库', '控制栏按钮'],
-        reason: '设置组下的四棵子树必须都在，且顺序固定',
-      );
+      expect(parents, [
+        '播放参数',
+        '字幕源',
+        '弹幕库',
+        '控制栏按钮',
+      ], reason: '设置组下的四棵子树必须都在，且顺序固定');
 
       // 至少一个**跳转项**：长文本表单留在专门页面（见 player_page 里的注释）。
       final leaves = [
@@ -628,14 +647,7 @@ void main() {
       ];
       expect(
         paramLabels,
-        containsAll(<String>[
-          '硬件解码',
-          '缓存',
-          '预加载下一集',
-          '音频直通',
-          '自动连播',
-          '长按画面倍速',
-        ]),
+        containsAll(<String>['硬件解码', '缓存', '预加载下一集', '音频直通', '自动连播', '长按画面倍速']),
         reason: '播放参数下的 5 个就地开关必须都在',
       );
 
@@ -647,20 +659,17 @@ void main() {
         reason: '失败回退必须是 ${PlayerFailureFallback.values.length} 档',
       );
       final labels = [for (final row in rows) _labelOf(tester, row)];
-      expect(
-        labels,
-        [for (final mode in PlayerFailureFallback.values) mode.label],
-      );
+      expect(labels, [
+        for (final mode in PlayerFailureFallback.values) mode.label,
+      ]);
       final checked = [
         for (var i = 0; i < rows.length; i++)
           if (_isChecked(tester, rows[i])) labels[i],
       ];
       // 默认值 = `PlayerOptions.defaults().failureFallback`（PlayerFailureFallback.line）。
-      expect(
-        checked,
-        [PlayerFailureFallback.line.label],
-        reason: '回退档位必须恰有一项打勾，且是当前生效值',
-      );
+      expect(checked, [
+        PlayerFailureFallback.line.label,
+      ], reason: '回退档位必须恰有一项打勾，且是当前生效值');
     });
 
     testWidgets('第二条新增第 4 层路径：设置 → 播放参数 → 缓存上限', (tester) async {
@@ -676,16 +685,12 @@ void main() {
         for (var i = 0; i < rows.length; i++)
           if (_isChecked(tester, rows[i])) labels[i],
       ];
-      expect(
-        checked,
-        ['${PlayerOptions.defaultDemuxerMaxMiB} MiB'],
-        reason: '缓存上限当前值必须打勾（默认 ${PlayerOptions.defaultDemuxerMaxMiB} MiB）',
-      );
+      expect(checked, [
+        '${PlayerOptions.defaultDemuxerMaxMiB} MiB',
+      ], reason: '缓存上限当前值必须打勾（默认 ${PlayerOptions.defaultDemuxerMaxMiB} MiB）');
     });
 
-    testWidgets('第三条新增第 4 层路径：设置 → 播放参数 → 长按画面倍速（4 档单选）', (
-      tester,
-    ) async {
+    testWidgets('第三条新增第 4 层路径：设置 → 播放参数 → 长按画面倍速（4 档单选）', (tester) async {
       await _openMenu(tester);
       await _drill(tester, '设置');
       await _drill(tester, '播放参数');
@@ -703,16 +708,12 @@ void main() {
         for (var i = 0; i < rows.length; i++)
           if (_isChecked(tester, rows[i])) labels[i],
       ];
-      expect(
-        checked,
-        ['3×'],
-        reason: '默认 3×（PlayerOptions.defaultLongPressSpeed），且恰有一项打勾',
-      );
+      expect(checked, [
+        '3×',
+      ], reason: '默认 3×（PlayerOptions.defaultLongPressSpeed），且恰有一项打勾');
     });
 
-    testWidgets('第四条第 3 层路径：画面 → HDR 色调映射（6 档单选，就地生效）', (
-      tester,
-    ) async {
+    testWidgets('第四条第 3 层路径：画面 → HDR 色调映射（6 档单选，就地生效）', (tester) async {
       late AppState state;
       await pumpPlayerPage(
         tester,
@@ -725,7 +726,9 @@ void main() {
       await _drill(tester, 'HDR 色调映射');
 
       List<InkWell> hdrRows() => _rowsAt(tester, 2);
-      List<String> hdrLabels() => [for (final r in hdrRows()) _labelOf(tester, r)];
+      List<String> hdrLabels() => [
+        for (final r in hdrRows()) _labelOf(tester, r),
+      ];
       List<String> hdrChecked() => [
         for (var i = 0; i < hdrRows().length; i++)
           if (_isChecked(tester, hdrRows()[i])) hdrLabels()[i],
@@ -737,11 +740,9 @@ void main() {
         reason: 'HDR 色调映射必须把每个算法各列一行',
       );
       expect(hdrLabels(), [for (final m in HdrToneMapping.values) m.label]);
-      expect(
-        hdrChecked(),
-        [HdrToneMapping.auto.label],
-        reason: '默认 auto（等于 mpv 默认），且恰有一项打勾',
-      );
+      expect(hdrChecked(), [
+        HdrToneMapping.auto.label,
+      ], reason: '默认 auto（等于 mpv 默认），且恰有一项打勾');
 
       // 就地生效：点完菜单不能关、勾要当场挪到新档、状态要真的落到
       // PlayerOptions（设置页读的是同一份）。
@@ -759,11 +760,9 @@ void main() {
         findsOneWidget,
         reason: '就地切换把菜单关了——这就退化成跳转了',
       );
-      expect(
-        hdrChecked(),
-        [HdrToneMapping.bt2390.label],
-        reason: '勾选必须当场挪到新算法，且只有一项',
-      );
+      expect(hdrChecked(), [
+        HdrToneMapping.bt2390.label,
+      ], reason: '勾选必须当场挪到新算法，且只有一项');
       expect(
         state.playerOptions.toneMapping,
         HdrToneMapping.bt2390,
@@ -784,11 +783,9 @@ void main() {
         for (var i = 0; i < rows.length; i++)
           if (_isChecked(tester, rows[i])) labels[i],
       ];
-      expect(
-        checked,
-        [HdrPeakCompute.auto.label],
-        reason: '默认 auto（等于 mpv 默认）',
-      );
+      expect(checked, [
+        HdrPeakCompute.auto.label,
+      ], reason: '默认 auto（等于 mpv 默认）');
     });
 
     testWidgets('就地开关不关菜单：点「硬件解码」后菜单仍在且勾选翻转', (tester) async {
@@ -835,13 +832,11 @@ void main() {
 
       // harness 不写任何弹幕库设置 → `DanmakuSettings.defaults()`：
       // autoSearch=false、apiUrl 空 → hasLibrary=false → 该行禁用。
-      expect(
-        find.text('自动搜索弹幕'),
-        findsWidgets,
-        reason: '不可用时应灰掉，而不是从菜单里消失',
-      );
+      expect(find.text('自动搜索弹幕'), findsWidgets, reason: '不可用时应灰掉，而不是从菜单里消失');
       final row = tester.widget<InkWell>(
-        find.byKey(const ValueKey('player-menu-item-settings_danmaku_auto_search')),
+        find.byKey(
+          const ValueKey('player-menu-item-settings_danmaku_auto_search'),
+        ),
       );
       expect(_isDisabled(tester, row), isTrue, reason: '未配置弹幕库时应不可点');
       // 保留 selected（引擎把「选中 + 禁用」画成压暗琥珀）：
@@ -851,7 +846,9 @@ void main() {
 
       // 同一棵子树里，「打开弹幕库设置…」必须**仍可点**（不是整组被禁）。
       final formRow = tester.widget<InkWell>(
-        find.byKey(const ValueKey('player-menu-item-settings_danmaku_library_form')),
+        find.byKey(
+          const ValueKey('player-menu-item-settings_danmaku_library_form'),
+        ),
       );
       expect(_isDisabled(tester, formRow), isFalse);
     });
@@ -949,13 +946,7 @@ void main() {
       // （\`test/support/player_page_harness.dart\` 文件头注释）。
       await tester.tap(find.byTooltip('更多'));
       await settlePlayerPage(tester, times: 4);
-      for (final label in [
-        '字幕样式',
-        '弹幕设置',
-        '画面比例与缩放',
-        '媒体信息',
-        '快捷键说明',
-      ]) {
+      for (final label in ['字幕样式', '弹幕设置', '画面比例与缩放', '媒体信息', '快捷键说明']) {
         expect(find.text(label), findsWidgets, reason: '溢出菜单缺少「$label」');
       }
       for (final label in ['播放诊断', '音轨', '视频轨', '循环与定时', 'LUT 滤镜']) {

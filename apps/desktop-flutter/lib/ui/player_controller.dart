@@ -21,6 +21,7 @@ import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
+import '../services/player_thumbnail_service.dart';
 
 /// 起播加载超时的默认预算（180 秒）。
 ///
@@ -129,11 +130,13 @@ class PlayerController extends ChangeNotifier {
   PlayerController({
     Player? player,
     SubtitleLoader? subtitleLoader,
+    PlayerThumbnailService? thumbnailService,
     this.onSeek,
     double? initialVolume,
     double initialResumeVolume = 100,
     this.onVolumeChanged,
   }) : _player = player ?? Player(),
+       _thumbnails = thumbnailService ?? PlayerThumbnailService(),
        _subtitleLoader = subtitleLoader ?? SubtitleService() {
     _volume = _safeVolume(initialVolume ?? 100);
     _volumeBeforeMute = _safeVolume(initialResumeVolume);
@@ -146,9 +149,32 @@ class PlayerController extends ChangeNotifier {
   }
 
   final Player _player;
+  final PlayerThumbnailService _thumbnails;
   final ValueChanged<Duration>? onSeek;
+
   /// 仅显式音量/静音操作触发；引擎回报与恢复动作不回写偏好。
   final ValueChanged<double>? onVolumeChanged;
+
+  int get thumbnailGeneration => _thumbnails.generation;
+
+  void setThumbnailPreviewEnabled(bool enabled) {
+    if (_disposed) return;
+    _thumbnails.setEnabled(enabled);
+  }
+
+  Future<Uint8List?> thumbnailAt(Duration target) {
+    if (_disposed || _loading || _duration <= Duration.zero) {
+      return Future.value();
+    }
+    return _thumbnails.thumbnailAt(
+      target < Duration.zero
+          ? Duration.zero
+          : target > _duration
+          ? _duration
+          : target,
+    );
+  }
+
   SubtitleDocument? _selectedSubtitleDocument;
   SubtitleDocument? get selectedSubtitleDocument =>
       _selectedSubtitle?.isExternal == true &&
@@ -264,9 +290,8 @@ class PlayerController extends ChangeNotifier {
 
   double get volume => _volume;
   bool get muted => _muted;
-  ({double volume, double resumeVolume, bool muted}) get volumeState => (
-    volume: _volume, resumeVolume: _volumeBeforeMute, muted: _muted,
-  );
+  ({double volume, double resumeVolume, bool muted}) get volumeState =>
+      (volume: _volume, resumeVolume: _volumeBeforeMute, muted: _muted);
   double get rate => _rate;
   String? get currentUrl => _currentUrl;
   PlayerLoadOutcome? get lastOutcome => _lastOutcome;
@@ -450,7 +475,8 @@ class PlayerController extends ChangeNotifier {
           MpvPropertyRejection(
             key: entry.key,
             value: entry.value,
-            reason: '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
+            reason:
+                '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
           ),
         );
       }
@@ -528,8 +554,10 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// 应用播放参数（Phase 9）。失败不阻断播放，只留错误文本。
-  Future<bool> applyPlayerOptions(PlayerOptions options) =>
-      applyMpvProperties(options.mpvProperties);
+  Future<bool> applyPlayerOptions(PlayerOptions options) {
+    setThumbnailPreviewEnabled(options.showThumbnailPreview);
+    return applyMpvProperties(options.mpvProperties);
+  }
 
   /// 应用/清除 LUT。空路径表示清除。
   Future<bool> applyLut(String? path) =>
@@ -910,11 +938,14 @@ class PlayerController extends ChangeNotifier {
         Stopwatch()..start(),
       );
     }
-    if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', Stopwatch()..start());
+    if (isCurrent != null && !isCurrent()) {
+      return _failure(url, 'Playback superseded', Stopwatch()..start());
+    }
     _loading = true;
     _completed = false;
     _lastEngineError = null;
     _currentUrl = url;
+    _thumbnails.setMedia(url, headers: headers);
 
     // 诊断：记录入口地址与注入 Header（输出时统一脱敏，§23）。
     final builder =
@@ -984,13 +1015,19 @@ class PlayerController extends ChangeNotifier {
         return _failure(url, 'Playback superseded', stopwatch);
       }
       _nativeOpenPending = true;
-      final nativeOpen = _player.open(Media(url, httpHeaders: headers)).whenComplete(() => _nativeOpenPending = false);
+      final nativeOpen = _player
+          .open(
+            Media(url, httpHeaders: Map<String, String>.unmodifiable(headers)),
+          )
+          .whenComplete(() => _nativeOpenPending = false);
       if (isCurrent == null) {
         await nativeOpen;
       } else {
         await _awaitLiveOpen(nativeOpen, timeout, cancellation!);
       }
-      if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', stopwatch);
+      if (isCurrent != null && !isCurrent()) {
+        return _failure(url, 'Playback superseded', stopwatch);
+      }
       openIssued = true;
 
       final loadElapsed = cancellation == null
@@ -1004,7 +1041,9 @@ class PlayerController extends ChangeNotifier {
 
       if (awaitFirstFrame && firstFrame == null) {
         final deadline = stopwatch.elapsed + firstFrameTimeout;
-        while (firstFrame == null && stopwatch.elapsed < deadline && (isCurrent == null || (!_disposed && isCurrent()))) {
+        while (firstFrame == null &&
+            stopwatch.elapsed < deadline &&
+            (isCurrent == null || (!_disposed && isCurrent()))) {
           await Future<void>.delayed(const Duration(milliseconds: 25));
           if (openIssued && _player.state.position > Duration.zero) {
             firstFrame ??= stopwatch.elapsed;
@@ -1032,7 +1071,11 @@ class PlayerController extends ChangeNotifier {
       }
       return outcome;
     } on TimeoutException catch (error) {
-      final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
+      final outcome = _failure(
+        url,
+        loadError ?? error.message ?? 'timeout',
+        stopwatch,
+      );
       if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
         _loading = false;
@@ -1050,28 +1093,40 @@ class PlayerController extends ChangeNotifier {
       }
       return outcome;
     } finally {
-      if (identical(_liveOpenCancellation, cancellation)) _liveOpenCancellation = null;
+      if (identical(_liveOpenCancellation, cancellation)) {
+        _liveOpenCancellation = null;
+      }
       for (final subscription in localSubscriptions) {
         await subscription.cancel();
       }
     }
   }
 
-  Future<T> _awaitLiveOpen<T>(Future<T> operation, Duration timeout, Completer<void> cancellation) async {
+  Future<T> _awaitLiveOpen<T>(
+    Future<T> operation,
+    Duration timeout,
+    Completer<void> cancellation,
+  ) async {
     final timeoutSignal = Completer<T>();
-    final timer = Timer(timeout, () => timeoutSignal.completeError(TimeoutException('live open timeout')));
+    final timer = Timer(
+      timeout,
+      () => timeoutSignal.completeError(TimeoutException('live open timeout')),
+    );
     _nativeOpenTimer = timer;
     try {
       return await Future.any<T>([
         operation,
         timeoutSignal.future,
-        cancellation.future.then<T>((_) => throw StateError('Playback superseded')),
+        cancellation.future.then<T>(
+          (_) => throw StateError('Playback superseded'),
+        ),
       ]);
     } finally {
       timer.cancel();
       if (identical(_nativeOpenTimer, timer)) _nativeOpenTimer = null;
     }
   }
+
   PlayerLoadOutcome _failure(String url, String message, Stopwatch stopwatch) {
     final kind = classifyPlayerError(message);
     return PlayerLoadOutcome(
@@ -1141,7 +1196,9 @@ class PlayerController extends ChangeNotifier {
       diagnosticsBuilder: builder,
       isCurrent: isCurrent,
     );
-    if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) return outcome;
+    if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) {
+      return outcome;
+    }
     if (outcome.failureKind != PlayerFailureKind.timeout &&
         outcome.failureKind != PlayerFailureKind.network) {
       return outcome;
@@ -1177,6 +1234,55 @@ class PlayerController extends ChangeNotifier {
   Future<void> seek(Duration target) {
     onSeek?.call(target);
     return _player.seek(target);
+  }
+
+  /// Signed epsilon selects the adjacent GOP without an exact or ten-second seek.
+  Future<bool> seekToKeyframe({required bool forward}) async {
+    if (_disposed || _loading || _duration <= Duration.zero) return false;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return false;
+    final generation = thumbnailGeneration;
+    bool current() =>
+        !_disposed && !_loading && thumbnailGeneration == generation;
+    try {
+      if (await platform.getProperty('seekable') != 'yes' || !current()) {
+        return false;
+      }
+      final before = double.tryParse(await platform.getProperty('time-pos'));
+      if (!current() || before == null || !before.isFinite) return false;
+      if (!await runNativeNavigationCommand(platform, [
+        'seek',
+        forward ? '0.0001' : '-0.0001',
+        'relative+keyframes',
+      ])) {
+        return false;
+      }
+      if (!current()) return false;
+      final wait = Stopwatch()..start();
+      while (current() && wait.elapsed < const Duration(seconds: 2)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        if (!current()) return false;
+        final seeking = await platform.getProperty('seeking');
+        if (!current()) return false;
+        final after = double.tryParse(await platform.getProperty('time-pos'));
+        if (!current()) return false;
+        if (seeking == 'yes' ||
+            after == null ||
+            !after.isFinite ||
+            (forward ? after <= before : after >= before)) {
+          continue;
+        }
+        onSeek?.call(
+          Duration(
+            microseconds: (after * Duration.microsecondsPerSecond).round(),
+          ),
+        );
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> seekBy(Duration delta) {
@@ -1257,6 +1363,7 @@ class PlayerController extends ChangeNotifier {
     _nativeOpenTimer?.cancel();
     _nativeOpenTimer = null;
     cancelPendingRetries();
+    unawaited(_thumbnails.dispose());
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

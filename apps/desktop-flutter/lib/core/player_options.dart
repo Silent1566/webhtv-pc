@@ -133,6 +133,7 @@ class PlayerOptions {
   const PlayerOptions({
     this.hardwareDecoding = true,
     this.cache = true,
+    this.showThumbnailPreview = false,
     this.demuxerMaxBytesMiB = defaultDemuxerMaxMiB,
     this.demuxerMaxBackBytesMiB = defaultDemuxerBackMiB,
     this.audioPassthrough = false,
@@ -193,6 +194,9 @@ class PlayerOptions {
 
   /// mpv `cache=yes/no`。
   final bool cache;
+
+  /// 导航栏缩略图预览；默认关闭，开启可能增加网络请求。
+  final bool showThumbnailPreview;
 
   /// 前向 demuxer 缓存上限（MiB）。
   final int demuxerMaxBytesMiB;
@@ -277,6 +281,7 @@ class PlayerOptions {
     return PlayerOptions(
       hardwareDecoding: hardwareDecoding,
       cache: cache,
+      showThumbnailPreview: showThumbnailPreview,
       demuxerMaxBytesMiB: clamp(
         demuxerMaxBytesMiB,
         minDemuxerMaxMiB,
@@ -335,6 +340,7 @@ class PlayerOptions {
   PlayerOptions copyWith({
     bool? hardwareDecoding,
     bool? cache,
+    bool? showThumbnailPreview,
     int? demuxerMaxBytesMiB,
     int? demuxerMaxBackBytesMiB,
     bool? audioPassthrough,
@@ -358,6 +364,7 @@ class PlayerOptions {
   }) => PlayerOptions(
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     cache: cache ?? this.cache,
+    showThumbnailPreview: showThumbnailPreview ?? this.showThumbnailPreview,
     demuxerMaxBytesMiB: demuxerMaxBytesMiB ?? this.demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB:
         demuxerMaxBackBytesMiB ?? this.demuxerMaxBackBytesMiB,
@@ -384,6 +391,7 @@ class PlayerOptions {
   Map<String, Object?> toJson() => <String, Object?>{
     'hardwareDecoding': hardwareDecoding,
     'cache': cache,
+    'showThumbnailPreview': showThumbnailPreview,
     'demuxerMaxBytesMiB': demuxerMaxBytesMiB,
     'demuxerMaxBackBytesMiB': demuxerMaxBackBytesMiB,
     'audioPassthrough': audioPassthrough,
@@ -442,6 +450,7 @@ class PlayerOptions {
     return PlayerOptions(
       hardwareDecoding: boolOf('hardwareDecoding', true),
       cache: boolOf('cache', true),
+      showThumbnailPreview: boolOf('showThumbnailPreview', false),
       demuxerMaxBytesMiB: intOf('demuxerMaxBytesMiB', defaultDemuxerMaxMiB),
       demuxerMaxBackBytesMiB: intOf(
         'demuxerMaxBackBytesMiB',
@@ -479,6 +488,7 @@ class PlayerOptions {
       other is PlayerOptions &&
       other.hardwareDecoding == hardwareDecoding &&
       other.cache == cache &&
+      other.showThumbnailPreview == showThumbnailPreview &&
       other.demuxerMaxBytesMiB == demuxerMaxBytesMiB &&
       other.demuxerMaxBackBytesMiB == demuxerMaxBackBytesMiB &&
       other.audioPassthrough == audioPassthrough &&
@@ -499,9 +509,10 @@ class PlayerOptions {
       other.lutPresetId == lutPresetId;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     hardwareDecoding,
     cache,
+    showThumbnailPreview,
     demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB,
     audioPassthrough,
@@ -520,7 +531,7 @@ class PlayerOptions {
     doubleClickRight,
     lutPath,
     lutPresetId,
-  );
+  ]);
 
   @override
   String toString() =>
