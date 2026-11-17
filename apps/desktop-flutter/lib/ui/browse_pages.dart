@@ -2769,18 +2769,26 @@ class _DetailPageState extends State<DetailPage> {
     // 可能假唯一），而且 `_selectedLineFlag` 一旦写入就**永久锁死**
     // （下面 `isEmpty` 守卫会让真详情到达后不再重解析）。
     //
-    // **只有 `matched == true` 才切**（`design/02` §4.1）：`matched == false`
-    // 涵盖「无历史」「历史线路在但那一集已消失」两种情形，它们都不该改变
-    // 用户的线路选择——切过去也没有那一集。
-    if (belongs && lines.isNotEmpty) {
+    // 分集完整命中决定能否续播；集入口失效不应阻止恢复仍存在的历史线路。
+    // 用户手动切过线路后，历史不得把选择抢回去。
+    if (belongs && lines.isNotEmpty && _selectedLineFlag.isEmpty) {
       final target = _resumeTarget(lines);
-      // 只在「用户还没手动选过」时应用（`_selectedLineFlag` 为空）。
-      // 用户手动切过线路后，历史不得把选择抢回去。
-      if (target.matched && _selectedLineFlag.isEmpty) {
-        _selectedLineFlag = target.flag;
+      final historyFlag = _history?.flag ?? '';
+      final historyLine = historyFlag.isEmpty
+          ? null
+          : lines
+                .where(
+                  (line) =>
+                      line.flag == historyFlag ||
+                      line.playbackFlag == historyFlag,
+                )
+                .firstOrNull;
+      final initialFlag = target.matched ? target.flag : historyLine?.flag;
+      if (initialFlag != null) {
+        _selectedLineFlag = initialFlag;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          state.tmdb.selectLine(target.flag);
+          state.tmdb.selectLine(initialFlag);
           unawaited(state.reloadTmdb());
         });
       }
