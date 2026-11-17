@@ -133,7 +133,7 @@ void main() {
       expect(find.byKey(const ValueKey('tmdb-enabled')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-api-key')), findsOneWidget);
       expect(find.byKey(const ValueKey('tmdb-test')), findsOneWidget);
-      expect(find.byKey(const ValueKey('tmdb-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tmdb-save')), findsNothing);
     });
   });
 

@@ -160,14 +160,14 @@ void main() {
           expect(find.text(title).hitTestable(), findsOneWidget);
           expect(tester.takeException(), isNull);
         }
-        for (final key in ['ai-test', 'ai-fetch-models', 'ai-save']) {
+        for (final key in ['ai-test', 'ai-fetch-models']) {
           await reveal(tester, find.byKey(ValueKey(key)));
           expect(find.byKey(ValueKey(key)).hitTestable(), findsOneWidget);
           expect(tester.takeException(), isNull);
         }
       });
 
-      testWidgets('字幕三类源与保存可达且无溢出 $brightness $size', (tester) async {
+      testWidgets('字幕三类源可达且无保存门槛或溢出 $brightness $size', (tester) async {
         await pumpPage(
           tester,
           SubtitleSettingsPage(state: state),
@@ -179,29 +179,24 @@ void main() {
           expect(find.text(title).hitTestable(), findsOneWidget);
           expect(tester.takeException(), isNull);
         }
-        await reveal(tester, find.byKey(const ValueKey('subtitle-save')));
-        expect(
-          find.byKey(const ValueKey('subtitle-save')).hitTestable(),
-          findsOneWidget,
-        );
+        expect(find.byKey(const ValueKey('subtitle-save')), findsNothing);
         expect(tester.takeException(), isNull);
       });
     }
   }
 
-  testWidgets('AI 编辑不提前保存，显隐凭据保留草稿，保存显示结果', (tester) async {
+  testWidgets('AI 编辑即时保存，显隐凭据保留输入，自动显示结果', (tester) async {
     await pumpPage(
       tester,
       AiSettingsPage(state: state),
-      // AI 设置页合并后多了「提示词」分区，视口必须更高，否则状态行
-      // （在保存按钮下方）落在 ListView 懒构建范围外。
+      // 状态位于提示词分区下方，使用高视口覆盖全部输入。
       size: const Size(1200, 2600),
     );
-    final before = state.aiConfig.endpoint;
     final endpoint = find.byKey(const ValueKey('ai-endpoint'));
     await reveal(tester, endpoint);
     await tester.enterText(endpoint, ' https://example.test/v1 ');
-    expect(state.aiConfig.endpoint, before);
+    await tester.pumpAndSettle();
+    expect(state.aiConfig.endpoint, 'https://example.test/v1');
     final key = find.byKey(const ValueKey('ai-api-key'));
     await reveal(tester, key);
     await tester.enterText(key, 'sk-test');
@@ -210,19 +205,13 @@ void main() {
     await tester.pump();
     expect(tester.widget<TextField>(key).obscureText, isFalse);
     expect(tester.widget<TextField>(key).controller!.text, 'sk-test');
-    final save = find.byKey(const ValueKey('ai-save'));
-    await reveal(tester, save);
-    await tester.tap(save);
-    await tester.pump();
-    // 合并后 AI 设置页多了「提示词」分区，状态行落在保存按钮下方，
-    // 需要滚进视口才会被懒构建；而滚动本身会推进真实写盘，所以这里
-    // 断言的是**保存结果可见**（"编辑不提前保存"由上一条断言覆盖）。
+    expect(find.byKey(const ValueKey('ai-save')), findsNothing);
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('ai-settings-status')),
       200,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(find.text('已保存'), findsOneWidget, reason: '保存完成后要显示结果');
+    expect(find.text('已生效并保存'), findsOneWidget, reason: '自动保存完成后显示结果');
     await tester.pumpAndSettle();
     await waitUntil(tester, () => state.aiConfig.apiKey == 'sk-test');
     await tester.pump();
@@ -232,7 +221,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('字幕编辑不提前保存，默认目录与令牌保存后刷新当前状态', (tester) async {
+  testWidgets('字幕编辑即时保存，默认目录与令牌自动刷新当前状态', (tester) async {
     await pumpPage(tester, SubtitleSettingsPage(state: state));
     expect(state.subtitleSettings.hasAnyProvider, isFalse);
     final directories = find.byKey(
@@ -248,7 +237,8 @@ void main() {
       tester.widget<TextField>(directories).controller!.text,
       contains('subtitles'),
     );
-    expect(state.subtitleSettings.hasAnyProvider, isFalse);
+    await tester.pumpAndSettle();
+    expect(state.subtitleSettings.hasAnyProvider, isTrue);
     final token = find.byKey(const ValueKey('subtitle-http-token'));
     await reveal(tester, token);
     await tester.enterText(token, ' token-test ');
@@ -256,9 +246,7 @@ void main() {
     await tester.tap(find.byTooltip('显示令牌'));
     await tester.pump();
     expect(tester.widget<TextField>(token).obscureText, isFalse);
-    final save = find.byKey(const ValueKey('subtitle-save'));
-    await reveal(tester, save);
-    await tester.tap(save);
+    expect(find.byKey(const ValueKey('subtitle-save')), findsNothing);
     await tester.pump();
     await waitUntil(
       tester,

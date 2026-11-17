@@ -124,7 +124,7 @@ void main() {
           isFalse,
         );
         await reach(tester, 'tmdb-reset-rules');
-        await reach(tester, 'tmdb-save');
+        expect(find.byKey(const ValueKey('tmdb-save')), findsNothing);
         await reach(tester, 'tmdb-test');
       });
 

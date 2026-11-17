@@ -1282,7 +1282,7 @@ AiContentCompletion? aiContentCompletion,
   /// 与 `saveTmdbConfig` 同构：写盘失败**不影响**当前会话（store 的内存值已
   /// 生效），但无论如何都通知 UI 重建。
   ///
-  /// **API Key 不得进日志**（Global Constraints）：只记脱敏值与就绪状态。
+  /// **API Key 不得进日志**：只记配置与就绪状态，不记逐字保存的凭据片段。
   Future<bool> saveAiConfig(AiConfig config) async {
     final saved = await _aiConfigStore.save(config);
     if (!config.isReady) clearAiAdApplication();
@@ -1290,7 +1290,7 @@ AiContentCompletion? aiContentCompletion,
       log.info(
         'AI 设置已更新 enabled=${config.enabled} '
         'protocol=${config.protocol} ready=${config.isReady} '
-        'key=${config.redactedApiKey}',
+        'keyConfigured=${config.apiKey.isNotEmpty}',
         scope: 'ai',
       );
     } else {
@@ -1692,6 +1692,18 @@ AiContentCompletion? aiContentCompletion,
     final ok = await store.resetPlayerButtons();
     notifyListeners();
     return ok;
+  }
+
+  double get playerVolume => _uiPreferences?.playerVolume ?? 100;
+  bool get hasExplicitPlayerVolume =>
+      _uiPreferences?.hasExplicitPlayerVolume ?? false;
+  double get playerResumeVolume => _uiPreferences?.playerResumeVolume ?? 100;
+
+  /// 落盘不广播全局变化，避免音量拖动重建播放、字幕与手势状态。
+  Future<bool> setPlayerVolume(double volume, {double? resumeVolume}) {
+    final store = _uiPreferences;
+    if (store == null) return Future.value(false);
+    return store.rememberPlayerVolume(volume, resumeVolume: resumeVolume);
   }
 
   /// 生效的播放参数（Phase 9）。
@@ -3433,7 +3445,7 @@ AiContentCompletion? aiContentCompletion,
     _tmdbState = null;
   }
 
-  /// 保存 TMDB 设置（设置页「保存」；原子写，`03` §5.5）。
+  /// 保存 TMDB 设置（修改即生效；原子写，`03` §5.5）。
   Future<bool> saveTmdbConfig(TmdbConfig config) async {
     final safeConfig = config.userSettings;
     final saved = await _tmdbConfigStore.save(safeConfig);
@@ -3442,7 +3454,8 @@ AiContentCompletion? aiContentCompletion,
       log.info(
         'TMDB 设置已更新 enabled=${safeConfig.enabled} ready=${safeConfig.isReady} '
         'lang=${safeConfig.language} '
-        'key=${safeConfig.redactedApiKey} token=${safeConfig.redactedAccessToken}',
+        'keyConfigured=${safeConfig.apiKey.isNotEmpty} '
+        'tokenConfigured=${safeConfig.accessToken.isNotEmpty}',
         scope: 'tmdb',
       );
     } else {

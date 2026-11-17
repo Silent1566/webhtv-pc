@@ -1,7 +1,7 @@
 /// 字幕源设置页的每源开关/令牌
 /// （`docs/superpowers/plans/2026-11-15-subtitle-online-search.md`）。
 ///
-/// 只测页面这一层的契约：三段的默认值、保存后写进 `SubtitleSettings` 的字段、
+/// 只测页面这一层的契约：三段的默认值、即时写进 `SubtitleSettings` 的字段、
 /// 状态行的源计数、token 输入的显隐，以及 1280×720 下不溢出。
 /// 不测网络与「某个源是否真有结果」——那是 provider 和 core 的测试。
 library;
@@ -81,6 +81,7 @@ void main() {
   /// 保存走真实写盘，假时钟的 pump 等不到它；按状态条件轮询，不用固定 sleep。
   Future<void> waitUntil(WidgetTester tester, bool Function() done) async {
     await tester.runAsync(() async {
+      await Future<void>.delayed(Duration.zero);
       for (var i = 0; i < 200 && !done(); i++) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
@@ -110,7 +111,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('填入 ASSRT token 并打开迅雷后保存，字段正确且统计为 2 个源', (tester) async {
+  testWidgets('填入 ASSRT token 并打开迅雷即时生效，字段正确且统计为 2 个源', (tester) async {
     await pumpPage(tester);
     const token = 'assrt-token-7f3';
 
@@ -123,10 +124,6 @@ void main() {
     await tester.pump();
     expect(tester.widget<SwitchListTile>(xunlei).value, isTrue);
 
-    final save = find.byKey(const ValueKey('subtitle-save'));
-    await reveal(tester, save);
-    await tester.tap(save);
-    await tester.pump();
     await waitUntil(tester, () => state.subtitleSettings.assrtToken.isNotEmpty);
     await tester.pumpAndSettle();
 
@@ -157,7 +154,10 @@ void main() {
     expect(find.textContaining('已启用 2 个源').hitTestable(), findsOneWidget);
 
     await reveal(tester, assrtField());
-    expect(tester.widget<TextField>(assrtField()).controller!.text, 'tok-seeded');
+    expect(
+      tester.widget<TextField>(assrtField()).controller!.text,
+      'tok-seeded',
+    );
     await tester.enterText(assrtField(), '');
 
     final xunlei = find.byKey(const ValueKey('subtitle-xunlei-enabled'));
@@ -166,10 +166,6 @@ void main() {
     await tester.pump();
     expect(tester.widget<SwitchListTile>(xunlei).value, isFalse);
 
-    final save = find.byKey(const ValueKey('subtitle-save'));
-    await reveal(tester, save);
-    await tester.tap(save);
-    await tester.pump();
     await waitUntil(
       tester,
       () =>
@@ -214,7 +210,14 @@ void main() {
 
   testWidgets('1280×720 下五个分区都可滚到且无溢出', (tester) async {
     await pumpPage(tester, size: const Size(1280, 720));
-    for (final title in const ['自动匹配', 'ASSRT', '迅雷字幕', '射手字幕', '本地目录', 'HTTP 字幕源']) {
+    for (final title in const [
+      '自动匹配',
+      'ASSRT',
+      '迅雷字幕',
+      '射手字幕',
+      '本地目录',
+      'HTTP 字幕源',
+    ]) {
       await reveal(tester, find.text(title));
       expect(find.text(title).hitTestable(), findsOneWidget, reason: title);
       expect(tester.takeException(), isNull, reason: title);
@@ -223,11 +226,14 @@ void main() {
       'subtitle-assrt-token',
       'subtitle-xunlei-enabled',
       'subtitle-shooter-enabled',
-      'subtitle-save',
       'subtitle-status',
     ]) {
       await reveal(tester, find.byKey(ValueKey(key)));
-      expect(find.byKey(ValueKey(key)).hitTestable(), findsOneWidget, reason: key);
+      expect(
+        find.byKey(ValueKey(key)).hitTestable(),
+        findsOneWidget,
+        reason: key,
+      );
       expect(tester.takeException(), isNull, reason: key);
     }
   });

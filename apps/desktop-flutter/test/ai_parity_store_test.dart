@@ -62,15 +62,16 @@ void main() {
         await tester.pumpAndSettle();
         final input = find.byKey(ValueKey('ai-$field-prompt'));
         await tester.enterText(input, 'edited $field');
-        final save = find.byKey(const ValueKey('ai-save'));
-        await tester.tap(save);
+        expect(find.byKey(const ValueKey('ai-save')), findsNothing);
         await tester.pumpAndSettle();
         expect(state.aiConfig.toJson()['${field}Prompt'], 'edited $field');
         expect(state.aiConfig.toJson()['${field}PromptCustom'], true);
+        final reloaded = AiConfigStore(path: state.paths.settingsPath);
+        await tester.runAsync(reloaded.load);
+        expect(reloaded.config.toJson()['${field}Prompt'], 'edited $field');
+        expect(reloaded.config.toJson()['futureField'], 'keep');
         final reset = find.byKey(ValueKey('ai-$field-prompt-reset'));
         await tester.tap(reset);
-        await tester.pumpAndSettle();
-        await tester.tap(save);
         await tester.pumpAndSettle();
         expect(state.aiConfig.toJson()['${field}PromptCustom'], false);
         expect(
@@ -78,6 +79,10 @@ void main() {
           isNot('edited $field'),
         );
         expect(state.aiConfig.toJson()['futureField'], 'keep');
+        await tester.runAsync(reloaded.load);
+        expect(reloaded.config.toJson()['${field}PromptCustom'], false);
+        expect(reloaded.config.toJson()['${field}Prompt'], const AiConfig().toJson()['${field}Prompt']);
+        expect(reloaded.config.toJson()['futureField'], 'keep');
         await tester.tap(tile);
         await tester.pumpAndSettle();
       }
