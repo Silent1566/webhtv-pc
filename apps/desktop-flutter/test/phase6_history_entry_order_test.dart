@@ -13,6 +13,7 @@
 /// 既有分层纪律注入 `http.BaseClient`，并把真实 I/O 夹在 `tester.runAsync` 里。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -50,8 +51,8 @@ class _RecordingClient extends http.BaseClient {
           'vod_id': 'v1',
           'vod_name': '外站剧',
           'vod_year': '2024',
-          'vod_play_from': '线路一',
-          'vod_play_url': '第1集\$http://media.example/e1',
+          'vod_play_from': r'线路一$$$线路二',
+          'vod_play_url': r'第1集$http://media.example/e1$$$第1集$http://media.example/line2/e1',
         },
       ],
     };
@@ -126,15 +127,20 @@ void main() {
   }
 
   /// 一条属于**另一份配置**的历史。
-  PlaybackHistory foreignItem(String sourceKey) => PlaybackHistory(
+  PlaybackHistory foreignItem(
+    String sourceKey, {
+    String flag = '线路一',
+    String episodeName = '第1集',
+    String episodeId = 'http://media.example/e1',
+  }) => PlaybackHistory(
     id: 1,
     siteKey: sharedSiteKey,
     vodId: 'v1',
     vodName: '外站剧',
     vodPic: '',
-    flag: '线路一',
-    episodeName: '第1集',
-    episodeId: 'http://media.example/e1',
+    flag: flag,
+    episodeName: episodeName,
+    episodeId: episodeId,
     positionMs: 30000,
     durationMs: 300000,
     updatedAt: 1,
@@ -203,6 +209,56 @@ void main() {
 
     expect(state.activeSourceKey, beforeSource, reason: '不得激活原配置');
     expect(state.selectedSite?.key, beforeSite, reason: '不得改选中站点');
+  });
+
+  testWidgets('历史分集失效：异步加载原来源详情后仍选中历史线路', (tester) async {
+    final otherKey = await seedTwoConfigs(tester);
+    await tester.runAsync(() async {
+      await state.setHistoryClickAction(UiHistoryClickAction.detail);
+    });
+    final context = await pumpHost(tester);
+    final loaded = Completer<void>();
+    void onDetailChanged() {
+      if (state.detailRequestVodId == 'v1' &&
+          state.detailResult?.list.isNotEmpty == true &&
+          !loaded.isCompleted) {
+        loaded.complete();
+      }
+    }
+
+    state.addListener(onDetailChanged);
+    addTearDown(() => state.removeListener(onDetailChanged));
+    await runOpen(
+      tester,
+      context,
+      foreignItem(
+        otherKey,
+        flag: '线路二',
+        episodeName: '旧分集',
+        episodeId: 'http://media.example/stale/e1',
+      ),
+    );
+    await tester.runAsync(
+      () => loaded.future.timeout(const Duration(seconds: 5)),
+    );
+    await tester.pump();
+    expect(find.text('播放第一集'), findsOneWidget);
+
+    final selector = find.byKey(const ValueKey('tmdb-line-selector'));
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if (selector.evaluate().isNotEmpty) break;
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+      await tester.pump();
+    }
+    final first = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('tmdb-line-线路一')),
+    );
+    final second = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('tmdb-line-线路二')),
+    );
+    expect(first.selected, isFalse);
+    expect(second.selected, isTrue);
+    expect(tester.takeException(), isNull);
   });
 
   // 播放模式的「UI 级」用例刻意不写：`PlayerPage` 构建需要 media_kit 原生库，
