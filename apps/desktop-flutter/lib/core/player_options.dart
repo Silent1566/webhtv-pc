@@ -134,6 +134,7 @@ class PlayerOptions {
     this.hardwareDecoding = true,
     this.cache = true,
     this.showThumbnailPreview = false,
+    this.dragPause = true,
     this.demuxerMaxBytesMiB = defaultDemuxerMaxMiB,
     this.demuxerMaxBackBytesMiB = defaultDemuxerBackMiB,
     this.audioPassthrough = false,
@@ -197,6 +198,13 @@ class PlayerOptions {
 
   /// 导航栏缩略图预览；默认关闭，开启可能增加网络请求。
   final bool showThumbnailPreview;
+
+  /// 拖动进度条时先暂停，松手按拖动前的状态续播。
+  ///
+  /// 默认开：网络流每拖一格就 seek 一次，边播边丢缓冲会让拖动变成"拖不动"，
+  /// 而且用户看不出松手后是继续播还是停住。关掉等于回到今天的手感（拖动中
+  /// 继续播），只在本地文件、或者想边拖边看画面时才值得关。
+  final bool dragPause;
 
   /// 前向 demuxer 缓存上限（MiB）。
   final int demuxerMaxBytesMiB;
@@ -282,6 +290,7 @@ class PlayerOptions {
       hardwareDecoding: hardwareDecoding,
       cache: cache,
       showThumbnailPreview: showThumbnailPreview,
+      dragPause: dragPause,
       demuxerMaxBytesMiB: clamp(
         demuxerMaxBytesMiB,
         minDemuxerMaxMiB,
@@ -341,6 +350,7 @@ class PlayerOptions {
     bool? hardwareDecoding,
     bool? cache,
     bool? showThumbnailPreview,
+    bool? dragPause,
     int? demuxerMaxBytesMiB,
     int? demuxerMaxBackBytesMiB,
     bool? audioPassthrough,
@@ -365,6 +375,7 @@ class PlayerOptions {
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     cache: cache ?? this.cache,
     showThumbnailPreview: showThumbnailPreview ?? this.showThumbnailPreview,
+    dragPause: dragPause ?? this.dragPause,
     demuxerMaxBytesMiB: demuxerMaxBytesMiB ?? this.demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB:
         demuxerMaxBackBytesMiB ?? this.demuxerMaxBackBytesMiB,
@@ -392,6 +403,7 @@ class PlayerOptions {
     'hardwareDecoding': hardwareDecoding,
     'cache': cache,
     'showThumbnailPreview': showThumbnailPreview,
+    'dragPause': dragPause,
     'demuxerMaxBytesMiB': demuxerMaxBytesMiB,
     'demuxerMaxBackBytesMiB': demuxerMaxBackBytesMiB,
     'audioPassthrough': audioPassthrough,
@@ -451,6 +463,8 @@ class PlayerOptions {
       hardwareDecoding: boolOf('hardwareDecoding', true),
       cache: boolOf('cache', true),
       showThumbnailPreview: boolOf('showThumbnailPreview', false),
+      // 旧 settings.json 里没有这个键：缺键即默认开（不是"缺键即关"）。
+      dragPause: boolOf('dragPause', true),
       demuxerMaxBytesMiB: intOf('demuxerMaxBytesMiB', defaultDemuxerMaxMiB),
       demuxerMaxBackBytesMiB: intOf(
         'demuxerMaxBackBytesMiB',
@@ -489,6 +503,7 @@ class PlayerOptions {
       other.hardwareDecoding == hardwareDecoding &&
       other.cache == cache &&
       other.showThumbnailPreview == showThumbnailPreview &&
+      other.dragPause == dragPause &&
       other.demuxerMaxBytesMiB == demuxerMaxBytesMiB &&
       other.demuxerMaxBackBytesMiB == demuxerMaxBackBytesMiB &&
       other.audioPassthrough == audioPassthrough &&
@@ -513,6 +528,7 @@ class PlayerOptions {
     hardwareDecoding,
     cache,
     showThumbnailPreview,
+    dragPause,
     demuxerMaxBytesMiB,
     demuxerMaxBackBytesMiB,
     audioPassthrough,

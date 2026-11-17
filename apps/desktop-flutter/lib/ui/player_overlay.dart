@@ -212,6 +212,8 @@ class PlayerProgressSlider extends StatefulWidget {
     required this.duration,
     required this.buffered,
     required this.onSeek,
+    this.onSeekStart,
+    this.onSeekEnd,
     this.thumbnailPreviewEnabled = false,
     this.thumbnailProvider,
     this.previewSourceKey,
@@ -224,7 +226,20 @@ class PlayerProgressSlider extends StatefulWidget {
   final Duration buffered;
 
   /// 拖动时连续回调（语义与改造前的 `Slider.onChanged` 一致）。
+  ///
+  /// 回调频率没有变，但**页面把它当"预览"用**：拖动期间只更新拇指与时间，
+  /// 松手时（[onSeekEnd] 之后）才真正落一次引擎 seek。别在这里加"每格都 seek"
+  /// 的期待——那正是画面长时间静止的根因（单次 seek 1–3 秒，逐格排队）。
   final ValueChanged<Duration> onSeek;
+
+  /// 用户**按下滑杆开始拖动**时回调；直播时为 null（没有可拖的值域）。
+  ///
+  /// 与 [onSeek] 分开是关键：只有真拖动才发，键盘/快捷键 seek 不发，
+  /// 页面据此暂停也绝不会误伤程序化 seek。
+  final VoidCallback? onSeekStart;
+
+  /// 用户**松手结束拖动**时回调；与 [onSeekStart] 成对，直播时同样为 null。
+  final VoidCallback? onSeekEnd;
 
   final bool thumbnailPreviewEnabled;
   final Future<Uint8List?> Function(Duration)? thumbnailProvider;
@@ -478,17 +493,24 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
               if (_dragging) _showPreview(target);
             },
       // 只在拖动期间置位：键盘/快捷键 seek 不该让缓冲段闪一下。
+      //
+      // 注意：**单击轨道**同样会走 start → seek → end（Flutter 的 `Slider`
+      // 先安置拇指再结束交互）。对上面两个回调就是"点一下进度条 = 一次导航，
+      // 暂停随即恢复"——这是既定语义，不是漏判：点击本来就要 seek，暂停只是
+      // 让这次 seek 落在"停住"的状态上。
       onChangeStart: live
           ? null
           : (value) {
               setState(() => _dragging = true);
               _showPreview(Duration(milliseconds: value.round()));
+              widget.onSeekStart?.call();
             },
       onChangeEnd: live
           ? null
           : (_) {
               setState(() => _dragging = false);
               _hidePreview();
+              widget.onSeekEnd?.call();
             },
     );
     final theme = SliderTheme.of(context);
@@ -589,13 +611,19 @@ class _MeasuredPreviewTrack extends SliderTrackShape {
 /// widget 树上不可直接观测（`isLoading` 为 true 时两个条件都为真，
 /// 差别只在渲染结果）。抽出来之后三种组合都能被直接断言。
 ///
-/// 判据：`isBuffering && !isLoading`。
+/// 判据：`(isBuffering || isSeeking) && !isLoading`。
 /// - 加载阶段已有全屏 [LoadingBlock]，再叠一个环等于画两个圈；
 /// - 加载完成后才轮到"播放中途卡顿"这个场景，此时 `isLoading` 为 false。
+///
+/// **为什么把 [isSeeking] 也当成缓冲态**：mpv 在 seek 期间不上报 buffering
+/// （`paused-for-cache` 恒为 no、`cache-buffering-state` 甚至还是 100），
+/// 只有 `seeking=yes` 会持续十几秒。只看缓冲流的话，拖动进度条后用户
+/// 看到的就是「画面静止 + 什么都没转」——同一次等待，只是上报口径不同。
 bool showBufferingIndicator({
   required bool isBuffering,
+  bool isSeeking = false,
   required bool isLoading,
-}) => isBuffering && !isLoading;
+}) => (isBuffering || isSeeking) && !isLoading;
 
 /// 画面中央的缓冲中提示：环形 + 可选百分比。
 ///

@@ -62,7 +62,7 @@
 | # | 主题 | PotPlayer 做法（发布说明原文/转述） | 本仓库落点 | 结论 |
 | --- | --- | --- | --- | --- |
 | 1 | 双击左/右半屏分别配置动作 | 260819「Added the ability to individually configure actions for the left and right areas upon double-clicking」 | `ui/player_page.dart:82-123`、`:4902-4925` | **P0 借鉴** |
-| 2 | 拖动进度条时暂停 | 260622「Added pause function when navigating via the navigation bar」 | `ui/player_overlay.dart:204-283` | **P0 借鉴** |
+| 2 | 拖动进度条时暂停 | 260622「Added pause function when navigating via the navigation bar」 | **已实现**：`ui/player_overlay.dart:212-238,489-509`、`ui/player_page.dart:161-185,4903-4919`、`core/player_options.dart:137,207`（默认开、可关） | **P0 借鉴 → 已实现**（§3.2） |
 | 3 | 播放列表过滤式搜索 | 261021「customize the playlist search method」；260819「playlist search function to operate as a filter」 | `ui/player_queue_panel.dart`、`ui/player_episode_panel.dart`（TextField 0 命中） | **P0 借鉴** |
 | 4 | 字幕/OSD 样式落盘 | 240618 OSD 字体可设；250514 字幕字体处理；260401 用 libass 输出字幕 | `core/subtitle_style.dart`、`core/osd_style.dart`；落盘 `services/ui_preferences_store.dart:1216-1224`（`ui.subtitleStyle` / `ui.osdStyle`） | **P1 已实现**（§4.1：样式落在 Flutter 侧 `SubtitleViewConfiguration`，零新增 mpv 属性） |
 | 5 | HDR 色调映射可调 | 250625「select HDR tone mapping type」；241211 HDR2084 显示器亮度 | `core/player_options.dart:164-170`（固定 5 个 mpv 属性） | **P1 借鉴** |
@@ -185,52 +185,56 @@ PlayerGestureAction resolvePlayerGesture({required bool doubleClick}) =>
 260622：「Added pause function when navigating via the navigation bar」——在进度条上拖动时
 自动暂停，松手后按拖动前的状态续播。（**松手是否自动恢复播放，官方说明未展开**，推测是恢复。）
 
-**本仓库现状（逐行核实）**
+**本仓库落地（已实现）**
 
-`apps/desktop-flutter/lib/ui/player_overlay.dart:204-283`：
+改造前的缺口是：`PlayerProgressSlider` 的 `_dragging` **只决定缓冲段画不画**，
+拖动期间 `onSeek` 连续触发；网络流每拖一格就 seek 一次、反复丢缓冲，且用户在拖动时
+看不出「松手后是继续播还是停住」。
 
-```dart
-class PlayerProgressSlider extends StatefulWidget {
-  ...
-  /// 拖动时连续回调（语义与改造前的 `Slider.onChanged` 一致）。
-  final ValueChanged<Duration> onSeek;
-  ...
-  bool _dragging = false;
-  ...
-      onChanged: live
-          ? null
-          : (next) => widget.onSeek(Duration(milliseconds: next.round())),
-      // 只在拖动期间置位：键盘/快捷键 seek 不该让缓冲段闪一下。
-      onChangeStart: live ? null : (_) => setState(() => _dragging = true),
-      onChangeEnd: live ? null : (_) => setState(() => _dragging = false),
-```
+| 落点 | 内容 |
+| --- | --- |
+| `core/player_options.dart:137,207` | `PlayerOptions.dragPause`（默认 `true`），经 `normalized`/`copyWith`/`toJson`/`fromJson`/`==` 全链路穿透；落盘键 `dragPause`，**旧 settings.json 缺键 → `true`** |
+| `ui/player_overlay.dart:212-238` | `PlayerProgressSlider` 新增可选 `onSeekStart`/`onSeekEnd`，复用既有 `onChangeStart`/`onChangeEnd`（`:489-509`）；`onSeek` 连续语义、`_dragging` 缓冲段隐藏语义、进度行高度全部不变 |
+| `ui/player_page.dart:161-185` | `PlayerDragPauseGate`：只回答「该不该 pause/play」，`begin` 记住拖动**前**的播放状态、重复 `begin` 不覆盖，`end` 无条件清状态，`reset` 丢弃进行中的拖动 |
+| `ui/player_page.dart:4903-4919` | 两个回调**恒定挂载**、判据在调用当时求值：`dragPause && !_isLive`。关掉开关/切直播/换媒都不会让一次拖动丢掉 `end()` |
+| `ui/player_page.dart:3066` | `_beginMediaTransition()` 复位 gate（与 `_clickGate`/`_playingBeforeFirstTap` 同处），避免换媒后按旧状态续播 |
+| `ui/player_page.dart:5499` | `pause()/play()` 走 `_applyDragPausePlayback`，异常写 `log.warning`，不产生未处理的 async error |
+| `ui/settings_detail_pages.dart:87`、`ui/player_page.dart:5671` | 两个入口：设置 → 播放「拖动进度条时暂停」、右键「播放 → 拖动进度条时暂停」，都经 `setPlayerOptions` 落盘 |
 
-`_dragging` **只用来决定缓冲段画不画**（`_bufferedValue` 在拖动时返回 `null`），
-拖动期间 `onSeek` 是**连续**触发的。
+**为什么改成「松手才 seek」（2026-11 修订）**：初版按最小版本保留了拖动期间的连续 seek。
+真机实测推翻了那个取舍：用户拖动一次进度条后**画面静止十几秒且没有任何加载提示**。
+用真实 libmpv 复现后拿到判据——`set pause yes` → 20 次 `seek` → `set pause no`：
+`pause=no` **立刻**生效，但 `seeking=yes` 持续整个观察窗（`time-pos` 钉在目标值），
+同时 `core-idle=yes`、`paused-for-cache=no`、`cache-buffering-state=100`、
+`demuxer-cache-time=None`——media-kit 的 buffering 流全程沉默，所以「加载中」根本不可能出现。
+根因是这条 HLS 代理单次 seek 要 1–3 秒，逐格 seek 会串行排队几十个；用户把开关关掉后
+同样静止，证明与暂停无关、只与 seek 频率有关。
 
-**缺口**：网络流每拖一格就 seek 一次，意味着反复丢缓冲；且用户在拖动时看不出
-「松手后是继续播还是停住」。本地文件播放器感觉不到这个问题，流媒体会被放大。
+因此现在：**拖动期间不发引擎 seek**（只更新拇指与时间），**松手只发一次 seek**，再按
+拖前状态恢复播放；同时把引擎的 `seeking` 也并入「卡住了」的判据
+（`showBufferingIndicator` 收 `isSeeking`），慢 seek 期间用户能看到既有的缓冲提示而不是干等。
+这条与开关无关——即使关掉「拖动进度条时暂停」，拖动仍然只在松手时 seek 一次。
 
-**建议**
+**残留限制（写清楚，别当成 bug）**
 
-最小版本（**只做暂停/恢复，不改 seek 频率**）：
+- **直播不暂停**（`_isLive`）。理由：直播没有可自由拖动的时间轴。判据在**页面**侧，
+  滑杆侧仍是既有的 `duration <= 0`——有些流会报非零时长，两层互为兜底。
+- **回看（`_isCatchup`）与点播同待遇**：时长可拖、seek 语义与点播一致，所以也暂停。
+  这是产品确认过的范围，不为回看单独开口子。
+- **单击轨道也算一次导航**：Flutter 的 `Slider` 单击会走 `start → seek → end`，因此点一下
+  进度条会「暂停 → 松手 seek 一次 → 恢复」。这是既定语义（点击本来就要 seek），已用测试钉住。
+- **拖动时画面不跟手**：拖动期间画面停在暂停帧、拇指与时间跟随指针，松手才跳。
+  这是上面那条修订的直接后果，换的是「不再排队几十个 seek」。
+- **慢 seek 有提示**：`seeking=yes` 期间显示既有缓冲提示（判据 `(isBuffering || isSeeking) && !isLoading`）。
+- **拖动中途把开关关掉**：这一次拖动不强行续播（先清状态再判），下一次拖动照常生效。
 
-- `PlayerProgressSlider` 增两个回调 `onSeekStart` / `onSeekEnd`（或在 `player_page.dart`
-  的 `_buildProgressRow` 里把 `_dragging` 的提升为页面状态）。
-- `onSeekStart`：记录 `_wasPlayingBeforeSeek = controller.playing`，若在播则 `pause()`。
-- `onSeekEnd`：`seek(target)`，然后 **仅当** `_wasPlayingBeforeSeek` 为真时 `play()`。
+**验收（`test/player_drag_pause_test.dart`，19 例）**
 
-**前置条件 / 风险**
-
-- 直播（`duration <= 0`，`live == true`）时两个回调本来就是 `null`，**不要动直播路径**。
-- 恢复播放必须严格依赖拖动前的状态，否则等于替用户点了播放。
-- 与「片头片尾自动跳过」（`core/skip_segments.dart`）的自动 seek 要区分：只有**用户拖动**
-  才暂停，程序 seek 不该暂停。
-
-**验收**
-
-- 拖动中暂停、松手续播；拖动前本就暂停 → 松手仍暂停；直播路径零行为变化。
-- 拖动期间缓冲段仍按既有语义隐藏（避免两条轨道打架）。
+- 拖动中暂停、松手续播；拖动前本就暂停 → 松手仍暂停；直播零行为变化（含「引擎报了非零时长」）。
+- 程序化 seek（快捷键/自动跳片头片尾/续播）不进这两个回调，不暂停。
+- 关掉开关、拖动中途关掉开关、换媒、单击轨道四条边界各有用例。
+- 缓冲段隐藏语义不变；浮层几何（进度行 32）不因本次改动变化。
+- 拖动期间**不发 seek**、松手恰好一次 seek（新增用例断言 `io.calls` 里拖动阶段没有 seek）。
 
 ---
 
@@ -609,8 +613,9 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 4. **实时字幕在直播里的不同步**：260114 专门修了「实时流媒体播放时字幕生成与实时音频不同步」。
    本项目 `core/audio_ai/cue_window.dart` 的文件头注释已经写明「PC 不延迟播放器：ASR 在语音
    端点返回，显示窗口从可呈现的位置开始」——改 ASR 相关逻辑时别退回「拿 ASR 时间戳直接当显示时间」。
-5. **拖动暂停是「新增的可选能力」而不是默认行为**（260622 是 `+` 项）。本项目也应做成设置项，
-   默认开启与否由产品定，但**不要静默改变既有手感**。
+5. **拖动暂停是「新增的可选能力」而不是默认行为**（260622 是 `+` 项）。P0-2 已按此落地为
+   `PlayerOptions.dragPause` 设置项；**默认值由产品定为开启**（用户可关，关掉即回到改造前手感）。
+   两个入口（设置页 + 右键菜单）共用同一份落盘值，不会出现"菜单关了、设置页还开着"。
 
 ---
 
@@ -618,7 +623,7 @@ mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或
 
 | 顺序 | 项 | 理由 |
 | --- | --- | --- |
-| 1 | §3.2 拖动暂停 | 改动最小、无新概念、不引入存储 |
+| 1 | §3.2 拖动暂停（**已实现**） | 改动最小；产品定为设置项、默认开，故引入 `player.dragPause` 一个键 |
 | 2 | §3.1 双击分区 | 已有 `PlayerDoubleClickGate`，改动集中在一个文件；但要连带 `PlayerOptions` 新字段 |
 | 3 | §3.3 队列过滤 | 纯 UI + 边界提示，不碰播放器 |
 | 4 | §4.1 字幕样式落盘 | **已实现**：新存储模型（`core/subtitle_style.dart`、`core/osd_style.dart`）+ `ui.subtitleStyle` / `ui.osdStyle` 落盘；不走 mpv 属性，ASS 归属单列 Q-39 |
