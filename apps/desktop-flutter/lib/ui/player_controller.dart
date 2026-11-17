@@ -226,7 +226,12 @@ class PlayerController extends ChangeNotifier {
   /// 跳转重开要显示的目标位置；null 表示没有正在进行的重开。
   Duration? get repositionTarget => _repositionTarget;
 
-  Timer? _repositionGuard;
+  /// 本次跳转的开始时刻；null 表示没有正在进行的重开。
+  ///
+  /// 用它做**兜底超时**而不是 `Timer`：定时器会随 widget 树销毁一起变成
+  /// "still pending"，既污染测试也可能在真实退出时拖住事件循环。播放中位置
+  /// 通知每秒多次，判定放在通知里就够了。
+  DateTime? _repositionStartedAt;
 
   /// 兜底上限：跳转重开最长占用遮罩这么久。
   ///
@@ -238,20 +243,21 @@ class PlayerController extends ChangeNotifier {
   void beginReposition(Duration target) {
     if (_disposed) return;
     _repositionTarget = target;
+    _repositionStartedAt = DateTime.now();
     if (target > _position) _position = target;
-    _repositionGuard?.cancel();
-    _repositionGuard = Timer(repositionGuardTimeout, () {
-      if (_disposed) return;
-      _repositionTarget = null;
-      notifyListeners();
-    });
     notifyListeners();
+  }
+
+  /// 兜底超时是否已到（由位置通知驱动，见 [repositionStartedAt]）。
+  bool get repositionTimedOut {
+    final started = _repositionStartedAt;
+    if (started == null) return false;
+    return DateTime.now().difference(started) >= repositionGuardTimeout;
   }
 
   /// 结束跳转重开：清掉占位，时间轴交还给引擎。
   void endReposition() {
-    _repositionGuard?.cancel();
-    _repositionGuard = null;
+    _repositionStartedAt = null;
     if (_repositionTarget == null) return;
     _repositionTarget = null;
     notifyListeners();
@@ -1199,9 +1205,10 @@ class PlayerController extends ChangeNotifier {
       // 再写 option，最后才让 open 去 loadfile。
       if (startAt != null) {
         try {
-          // 卡住不如失败：`stop` 若被其它 open 占着锁，宁可放弃这次的 close，
-          // 也不能让整个跳转无限等下去。
-          await _player.stop().timeout(const Duration(seconds: 3));
+          // 不加 `.timeout()`：那会留下一个未触发的定时器（widget 树销毁时
+          // 变成 "A Timer is still pending"）。并发抢锁已由页面侧
+          // `_reloadInFlight` 串行化解决，这里只需要顺序正确。
+          await _player.stop();
         } catch (_) {
           // 停不下来也要继续：最坏结果是退回从头播，不该阻断加载。
         }

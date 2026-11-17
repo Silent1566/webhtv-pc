@@ -960,6 +960,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 画面被新帧覆盖，所以只有往后跳会闪。
   void _maybeFinishReposition() {
     if (!_controller.isRepositioning) return;
+    // 兜底：定位始终没到（线路不支持或媒体异常）时也必须把画面放出来。
+    if (_controller.repositionTimedOut) {
+      _controller.endReposition();
+      return;
+    }
     final target = _controller.repositionTarget;
     if (target == null) return;
     final position = _controller.position;
