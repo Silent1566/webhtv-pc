@@ -74,9 +74,10 @@ void main() {
   });
 
   group('跨缓冲跳转必须重开定位（源码契约）', () {
-    test('进度条走缓冲分流，不再直连 seek', () {
-      expect(pageSource.contains('onSeek: _seekFromUser,'), isTrue);
-      expect(pageSource.contains('onSeek: _controller.seek,'), isFalse);
+    test('进度条只记录目标，提交时才走缓冲分流', () {
+      // beta 起拖动期间不 seek，松手由 _commitDragSeek 提交。
+      expect(pageSource.contains('_commitDragSeek('), isTrue);
+      expect(pageSource.contains('await _seekFromUser(target);'), isTrue);
       expect(pageSource.contains('_controller.buffered'), isTrue);
     });
 
@@ -86,9 +87,9 @@ void main() {
         isTrue,
       );
       expect(
-        controllerSource.contains('Media(url, httpHeaders: headers, start: startAt)'),
+        controllerSource.contains('start: startAt'),
         isTrue,
-        reason: '定位必须写在 Media 上，打开后 seek 会开第二条连接被 429',
+        reason: '定位必须随 open 下发，打开后 seek 会开第二条连接被 429',
       );
     });
 
@@ -99,7 +100,7 @@ void main() {
         reason: '定位必须在 loadfile 之前写进 option，property 实测无效',
       );
       expect(
-        controllerSource.contains('Media(url, httpHeaders: headers, start: startAt)'),
+        controllerSource.contains('start: startAt'),
         isTrue,
         reason: '定位意图也要挂在 Media 上，供假件模拟内核',
       );

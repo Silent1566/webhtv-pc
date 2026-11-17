@@ -52,7 +52,6 @@ import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
 import 'app.dart';
-import 'common.dart';
 import 'settings_detail_pages.dart';
 import 'settings_overview_page.dart';
 import 'subtitle_search_dialog.dart';
@@ -149,6 +148,44 @@ class PlayerDoubleClickGate {
     _pending?.cancel();
     _pending = null;
   }
+}
+
+/// 拖动进度条时的暂停/续播判定器：只回答「该不该 pause / play」，不碰播放器。
+///
+/// 与 [PlayerDoubleClickGate] 同样单独成类：语义全在"上一次 begin 记下了
+/// 什么"，抽出来后 L1 用例不必挂真实播放器就能把四种情形走一遍。
+///
+/// 为什么必须记住拖动**前**的播放状态：松手时若一律 `play()`，等于替一个
+/// 本来就暂停着的用户点了播放；这不是"恢复"，是改变了用户意图。
+class PlayerDragPauseGate {
+  /// 本次拖动开始前是否在播；null 表示当前没有进行中的拖动。
+  bool? _wasPlaying;
+
+  /// 登记一次拖动开始，返回 true 表示"应当 pause()"。
+  ///
+  /// 重复调用（页面重建、乱序事件）返回 false 且**不覆盖**已记录的值：
+  /// 覆盖会把"拖动前本就暂停"读成"松手要播"。
+  bool begin({required bool playing}) {
+    if (_wasPlaying != null) return false;
+    _wasPlaying = playing;
+    return playing;
+  }
+
+  /// 登记一次拖动结束，返回 true 表示"应当 play()"。
+  ///
+  /// 无条件清状态：没 begin 过就 end（例如拖动中途切了片源）返回 false。
+  bool end() {
+    final wasPlaying = _wasPlaying;
+    _wasPlaying = null;
+    return wasPlaying ?? false;
+  }
+
+  /// 丢弃进行中的拖动（换台/换媒等"这次拖动已经不算数"的场合）。
+  ///
+  /// 没有它时残留的 `_wasPlaying` 有两种坏结果：下一次 begin() 被判成重复
+  /// 而静默失效（不再暂停），以及下一次 end() 拿着旧状态强行 play()——
+  /// 正是本类要避免的"替暂停着的用户点播放"。
+  void reset() => _wasPlaying = null;
 }
 
 enum PlayerVideoFitMode {
@@ -382,6 +419,54 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 播放参数（缓冲/硬解/自动连播/失败回退/片头片尾开关/LUT）。
   PlayerOptions _options = const PlayerOptions.defaults();
+
+  /// 拖动进度条与播放状态的衔接（见 [PlayerDragPauseGate]）。
+  final PlayerDragPauseGate _dragPauseGate = PlayerDragPauseGate();
+
+  /// 拖动中的"预览目标"：**不落引擎**，只在松手时 seek 一次。
+  ///
+  /// 每移动一格就 seek 的代价不是线性的：这条 HLS 代理单次 seek 要 1–3 秒，
+  /// 几十次串行排队会把 mpv 长时间按在 `seeking=yes` 上（画面静止，
+  /// 用户实测"等一会儿会自己恢复"）。频率才是根因，与拖动暂停开关无关。
+  ///
+  /// 非 null 期间拇指与时间标签显示它（拖到哪、读数就到哪），松手时取走并 seek；
+  /// 换媒时清掉，绝不把上一部片的目标 seek 到新片上。
+  ///
+  /// **松手后不立刻清空**：这条代理的 seek 要 1–3 秒才落地，立刻清空会让拇指
+  /// 与读数先弹回旧位置、再跳到目标。所以留到引擎位置追上为止
+  /// （见 [_settleDragSeekTarget]）。
+  Duration? _dragSeekTarget;
+
+  /// 松手提交 seek 的时刻；null 表示这次拖动还没提交（仍在拖动中）。
+  ///
+  /// 只用来给「目标迟迟等不到引擎追上」设一条兜底时限，避免 seek 静默失败时
+  /// 拇指永远钉在目标上。
+  DateTime? _dragSeekCommittedAt;
+
+  /// 判定「引擎已追上拖动目标」的窗口：进入它就把显示交还给引擎。
+  static const Duration _dragSeekSettleWindow = Duration(seconds: 2);
+
+  /// 目标最多保留这么久（seek 失败/被丢弃时的兜底）。
+  static const Duration _dragSeekSettleTimeout = Duration(seconds: 15);
+
+  /// 引擎位置追上拖动目标后，把显示交还给引擎。
+  ///
+  /// 只在**已提交** seek 之后才这么做：拖动进行中没有提交，位置当然还没到
+  /// 目标，此时清掉会让读数中途跳回旧值。
+  void _settleDragSeekTarget() {
+    if (_dragSeekTarget == null || _dragSeekCommittedAt == null) return;
+    final target = _dragSeekTarget!;
+    final caughtUp =
+        (_controller.position - target).abs() <= _dragSeekSettleWindow;
+    final timedOut =
+        DateTime.now().difference(_dragSeekCommittedAt!) >
+        _dragSeekSettleTimeout;
+    if (!caughtUp && !timedOut) return;
+    setState(() {
+      _dragSeekTarget = null;
+      _dragSeekCommittedAt = null;
+    });
+  }
 
   /// 串行化**所有** mpv 参数写入（整表 + 只写 `af`）。
   ///
@@ -885,6 +970,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _onControllerChanged() {
     if (!mounted) return;
+    _settleDragSeekTarget();
     _audioAi?.update(
       position: _controller.position,
       playing: _controller.isPlaying && !_controller.isBuffering,
@@ -892,6 +978,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     _logEngineDurationDrift();
     setState(() {});
+    _syncOsdTimer();
     // 连播改为**事件驱动**（`design/03` §4.1 D1）：
     // 旧实现在 `build()` 里排 postFrameCallback，任何一次通知（position/
     // duration/buffer/volume/… 每秒多次）只要 `isCompleted` 仍为 true 就会
@@ -3240,6 +3327,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _clearGesturePlaybackIntent();
     _clickGate.dispose();
     _playingBeforeFirstTap = null;
+    // 同一次拖动不会跨媒体：换媒后松手不该再按旧状态续播，
+    // 也不该把上一部片的拖动目标 seek 到新片上。
+    _dragPauseGate.reset();
+    _dragSeekTarget = null;
+    _dragSeekCommittedAt = null;
     if (_hasQueue) {
       _pendingQueueItemKey = null;
       _pendingQueueStep = null;
@@ -4143,6 +4235,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  bool get _navigationAvailable =>
+      !_isLive && _controller.duration > Duration.zero;
+
+  Future<void> _seekToKeyframe({required bool forward}) async {
+    if (!_navigationAvailable) return;
+    var succeeded = false;
+    try {
+      succeeded = await _controller.seekToKeyframe(forward: forward);
+    } catch (_) {}
+    if (mounted && !succeeded) {
+      showToast('关键帧跳转不可用', duration: const Duration(seconds: 3));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final audioInputGeneration = _mediaGeneration;
@@ -4150,6 +4256,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       togglePlay: _controller.playOrPause,
       seekBackward: () => _controller.seekBy(const Duration(seconds: -10)),
       seekForward: () => _controller.seekBy(const Duration(seconds: 10)),
+      previousKeyframe: _navigationAvailable
+          ? () => unawaited(_seekToKeyframe(forward: false))
+          : null,
+      nextKeyframe: _navigationAvailable
+          ? () => unawaited(_seekToKeyframe(forward: true))
+          : null,
       volumeUp: () => _controller.setVolume(_controller.volume + 5),
       volumeDown: () => _controller.setVolume(_controller.volume - 5),
       toggleMute: _controller.toggleMute,
@@ -4404,16 +4516,24 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                 ),
                               ),
                             if (_controller.isLoading)
-                              const Positioned.fill(child: LoadingBlock()),
+                              Positioned.fill(
+                                child: PlayerBufferingIndicator(
+                                  size: 36,
+                                  bytesPerSecond: _controller.bytesPerSecond,
+                                ),
+                              ),
                             // 跳转重开期间盖一层**不透明**底：mpv 的 `keep-open`
                             // 会把上一帧留在画面控件上，直到新位置首帧解码出来；
-                            // [LoadingBlock] 自己只有转圈、没有底色，旧帧会直接
-                            // 透出来（用户看到「先闪一下之前的画面再跳到新位置」）。
+                            // 无底色的转圈挡不住它，旧帧会直接透出来（用户看到
+                            // 「先闪一下之前的画面再跳到新位置」）。
                             if (_controller.isRepositioning)
-                              const Positioned.fill(
+                              Positioned.fill(
                                 child: ColoredBox(
                                   color: Colors.black,
-                                  child: LoadingBlock(),
+                                  child: PlayerBufferingIndicator(
+                                    size: 36,
+                                    bytesPerSecond: _controller.bytesPerSecond,
+                                  ),
                                 ),
                               ),
                             // 缓冲中提示：与加载态同一层（画面之上、屏显与控制
@@ -4426,11 +4546,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                             // 恰恰看不到控制栏。
                             if (showBufferingIndicator(
                               isBuffering: _controller.isBuffering,
+                              // seek 期间 mpv 不上报 buffering，只有 seeking=yes
+                              // （判据见 [showBufferingIndicator]）。
+                              isSeeking: _controller.isSeeking,
                               isLoading: _controller.isLoading,
                             ))
                               Positioned.fill(
                                 child: PlayerBufferingIndicator(
                                   percent: _controller.bufferingPercent,
+                                  bytesPerSecond: _controller.bytesPerSecond,
                                 ),
                               ),
                             if (_loadError != null)
@@ -5051,15 +5175,80 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 时间必须用**等宽字形**：比例字形下秒数每跳一次，整行时间
         // 就会左右抖动，读进度时很难受。
         Text(
-          _formatDuration(_controller.position),
+          // 拖动期间显示拖动目标：这一次拖动还没落引擎，读数只能来自
+          // `_dragSeekTarget`，否则时间会停在按下那一刻不动。
+          _formatDuration(_dragSeekTarget ?? _controller.position),
           style: tabular(Theme.of(context).textTheme.bodyMedium!),
         ),
         Expanded(
           child: PlayerProgressSlider(
-            position: _controller.position,
+            // 拖动中与「已提交但引擎还没追上」期间都显示目标位置，否则拇指
+            // 会先弹回旧位置再跳过去（慢 seek 上尤其明显）。
+            position: _dragSeekTarget ?? _controller.position,
             duration: duration,
             buffered: _controller.buffered,
-            onSeek: _seekFromUser,
+            // 拖动期间**只记录、不 seek**（见 [_dragSeekTarget]）。
+            onSeek: (target) {
+              // 直播不 seek：页面其它 seek 入口（快捷键、右键菜单、
+              // `seekBy`）对直播一律禁用，这里不能开一个例外。
+              if (_isLive) return;
+              setState(() => _dragSeekTarget = target);
+            },
+            thumbnailPreviewEnabled:
+                _navigationAvailable && _options.showThumbnailPreview,
+            thumbnailProvider:
+                _navigationAvailable && _options.showThumbnailPreview
+                ? _controller.thumbnailAt
+                : null,
+            previewSourceKey: _controller.thumbnailGeneration,
+            // 只有用户拖动才暂停：程序化 seek（自动跳片头片尾、seekBy、
+            // 关键帧跳转、续播）走 `_controller.seek`，根本不经过这两个回调。
+            //
+            // 两个回调**恒定挂载**，判据搬进回调内部、在调用当时求值：
+            // 关掉开关/切到直播都不是 rebuild 时固化成一个 null 回调，否则
+            // 拖动中途被关掉时 end 永远走不到，gate 会把"拖动前在播"永久
+            // 留下来，下一次拖动就会不暂停却强行 play()。
+            //
+            // 直播再挡一层：滑杆用引擎上报的 `duration <= 0` 判断直播，但有些
+            // 流会报出非零时长，于是滑杆可拖、回调照发——那会把直播流 pause
+            // 掉。滑杆负责值域，页面负责语义，两者互为兜底。
+            onSeekStart: () {
+              if (!_options.dragPause || _isLive) {
+                // 关掉/直播时也要清一次：上一次拖动的残留不能带进下一次。
+                _dragPauseGate.reset();
+                return;
+              }
+              if (_dragPauseGate.begin(playing: _controller.isPlaying)) {
+                _applyDragPausePlayback(_controller.pause());
+              }
+            },
+            onSeekEnd: () {
+              final target = _dragSeekTarget;
+              final resume = _dragPauseGate.end();
+              // 目标先留着：慢 seek 期间拇指/读数必须停在目标上，等引擎追上
+              // 再交还（见 [_settleDragSeekTarget]）。
+              if (target != null) {
+                setState(() => _dragSeekCommittedAt = DateTime.now());
+              }
+              // 拖动中途被关掉/切到直播时，这一次拖动按"用户已经不想要
+              // 暂停"处理：先清状态，再决定不续播。
+              final shouldResume = resume && _options.dragPause && !_isLive;
+              // 关掉开关也必须 seek（只有这一次）：暂停与否是另一回事，
+              // 用户要跳到的位置照样得跳。
+              if (target == null || _isLive) {
+                // 没有可提交的目标（或直播不 seek）：显示立刻交还引擎，
+                // 不能让它钉在目标上等 15 秒。
+                if (target != null) {
+                  setState(() {
+                    _dragSeekTarget = null;
+                    _dragSeekCommittedAt = null;
+                  });
+                }
+                if (shouldResume) _applyDragPausePlayback(_controller.play());
+                return;
+              }
+              unawaited(_commitDragSeek(target, resume: shouldResume));
+            },
           ),
         ),
         Text(
@@ -5505,10 +5694,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 控制栏可见时**必须**运行（为了强制显示的时钟），
   /// 即使屏显开关全关（上游同语义：`PlayerOsdController.java:152-158`）。
   bool get _osdNeedsTicker =>
-      _controlsVisible || anyOsdEnabled(widget.state.osdFlags);
+      _controlsVisible ||
+      anyOsdEnabled(widget.state.osdFlags) ||
+      _controller.isLoading ||
+      _controller.isBuffering;
 
   void _syncOsdTimer() {
     if (_osdNeedsTicker) {
+      if (_osdTimer == null) {
+        // 起播/卡顿的第一秒不该先空一拍：提示一出现就采一次。
+        _sampleNetworkRate();
+      }
       _osdTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
         setState(() => _osdNow = debugOsdClockOverride ?? DateTime.now());
@@ -5523,12 +5719,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 网速采样，挂在屏显刷新循环上（不另起 Timer，见
   /// `PlayerController.sampleNetworkRate` 的注释）。
   ///
-  /// **只在网速开关开着时采**：关着时每秒读一次 mpv 属性纯属浪费，
-  /// 而且会把 "屏显全关 → 停止刷新" 的优化打回半残（循环虽停，
-  /// 这里若另起唤醒就又活了）。
+  /// 屏显网速开启或加载/缓冲提示可见时采样，共用同一个读数。
   void _sampleNetworkRate() {
-    if (!(widget.state.osdFlags[OsdFlag.traffic] ?? false)) return;
-    unawaited(_controller.sampleNetworkRate());
+    final wanted = shouldSampleNetworkRate(
+      trafficEnabled: widget.state.osdFlags[OsdFlag.traffic] ?? false,
+      isLoading: _controller.isLoading,
+      isBuffering: _controller.isBuffering,
+    );
+    if (!wanted) return;
+    unawaited(
+      _controller.sampleNetworkRate(
+        proxyTraffic: widget.state.proxyTrafficFor(
+          _controller.currentUrl ?? '',
+        ),
+      ),
+    );
   }
 
   void _touchControls() {
@@ -5632,6 +5837,43 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _clearGesturePlaybackIntent();
       widget.state.log.warning('画面点击切换播放失败：$error', scope: 'player');
     }
+  }
+
+  /// 松手时的**唯一一次** seek，之后按拖动前状态决定是否恢复播放。
+  ///
+  /// 顺序是 seek → play（与 [_replayCurrent] 一致）：先 play 再 seek 会让引擎
+  /// 在旧位置先播一帧再跳，观感上是一次"闪回"。
+  Future<void> _commitDragSeek(
+    Duration target, {
+    required bool resume,
+  }) async {
+    final controller = _controller;
+    try {
+      // 走统一跳转通道：缓冲内同连接直接 seek；缓冲外必须重开并在打开时定位
+      // （服务端每客户端只允许 1 条活动流，mid-stream seek 会被回 429）。
+      await _seekFromUser(target);
+    } catch (error) {
+      widget.state.log.warning('拖动进度条后跳转失败：$error', scope: 'player');
+    }
+    // seek 在飞的时候可能已经换媒：那份 gate 状态属于上一部片，不许续播。
+    if (!mounted || !identical(controller, _controller)) return;
+    if (resume) _applyDragPausePlayback(controller.play());
+  }
+
+  /// 拖动暂停的 pause/play 都走这里。
+  ///
+  /// 与 [_applyPlayerGesturePlayback] 同一条理由：`play()` 在没有原生实现的
+  /// 环境里会抛 `MissingPluginException`，松手续播失败不该变成未处理的
+  /// async error（拖动是高频操作，静默失败也要留日志）。
+  void _applyDragPausePlayback(Future<void> action) {
+    unawaited(
+      action.catchError((Object error) {
+        widget.state.log.warning(
+          '拖动进度条时切换播放状态失败：$error',
+          scope: 'player',
+        );
+      }),
+    );
   }
 
   /// 打开右键菜单（`design/04` §5.1）。
@@ -5771,6 +6013,35 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             onSelect: act(
               () => _controller.seekBy(const Duration(seconds: 10)),
             ),
+          ),
+          PlayerMenuItem(
+            id: 'previous_keyframe',
+            label: '前一个关键帧  Ctrl+Shift+←',
+            icon: Icons.skip_previous_outlined,
+            enabled: _navigationAvailable,
+            onSelect: act(() => unawaited(_seekToKeyframe(forward: false))),
+          ),
+          PlayerMenuItem(
+            id: 'next_keyframe',
+            label: '后一个关键帧  Ctrl+Shift+→',
+            icon: Icons.skip_next_outlined,
+            enabled: _navigationAvailable,
+            onSelect: act(() => unawaited(_seekToKeyframe(forward: true))),
+          ),
+          _settingsToggle(
+            id: 'thumbnail_preview',
+            label: '导航栏缩略图',
+            value: _options.showThumbnailPreview,
+            onChanged: (value) => _livePatchOptions(
+              _options.copyWith(showThumbnailPreview: value),
+            ),
+          ),
+          _settingsToggle(
+            id: 'drag_pause',
+            label: '拖动进度条时暂停',
+            value: _options.dragPause,
+            onChanged: (value) =>
+                _livePatchOptions(_options.copyWith(dragPause: value)),
           ),
           // 循环与定时是**会话级**状态，取值有 3 种循环 + 8 种定时，全部
           // 摊进主列会让「播放」组比别的组高出一倍，所以保留原来的底部弹层
@@ -7051,7 +7322,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           children: [
             for (final (key, description) in [
               for (final entry in playerShortcuts)
-                if ((!_isLive && !_isCatchup) || entry.$1 != '[ / ]') entry,
+                if (((!_isLive && !_isCatchup) || entry.$1 != '[ / ]') &&
+                    (_navigationAvailable || entry.$1 != 'Ctrl+Shift+← / →'))
+                  entry,
               if (_isLive) ('PgUp / PgDn', '上一台 / 下一台（跨分组）'),
               ..._contextMenuShortcutHelp,
             ])

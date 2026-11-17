@@ -20,8 +20,10 @@ import '../core/playback_diagnostics.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
+import '../core/proxy_policy.dart' show ProxyTrafficSnapshot;
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
+import '../services/player_thumbnail_service.dart';
 
 /// 起播加载超时的默认预算（180 秒）。
 ///
@@ -130,11 +132,15 @@ class PlayerController extends ChangeNotifier {
   PlayerController({
     Player? player,
     SubtitleLoader? subtitleLoader,
+    PlayerThumbnailService? thumbnailService,
     this.onSeek,
     double? initialVolume,
     double initialResumeVolume = 100,
     this.onVolumeChanged,
-  }) : _player = player ?? Player(),
+    Duration Function()? networkClock,
+  }) : _networkClockOverride = networkClock,
+       _player = player ?? Player(),
+       _thumbnails = thumbnailService ?? PlayerThumbnailService(),
        _subtitleLoader = subtitleLoader ?? SubtitleService() {
     _volume = _safeVolume(initialVolume ?? 100);
     _volumeBeforeMute = _safeVolume(initialResumeVolume);
@@ -144,15 +150,40 @@ class PlayerController extends ChangeNotifier {
     _volumeOverridden = initialVolume != null;
     _videoController = VideoController(_player);
     _bind();
+    unawaited(_observeSeeking());
   }
 
   final Player _player;
-
   /// 「打开时定位」通道（见 [MpvStartOption]）。
   final MpvStartOption _startOption = MpvStartOption();
+  final PlayerThumbnailService _thumbnails;
+  final Duration Function()? _networkClockOverride;
+  final Stopwatch _networkWatch = Stopwatch()..start();
   final ValueChanged<Duration>? onSeek;
+
   /// 仅显式音量/静音操作触发；引擎回报与恢复动作不回写偏好。
   final ValueChanged<double>? onVolumeChanged;
+
+  int get thumbnailGeneration => _thumbnails.generation;
+
+  void setThumbnailPreviewEnabled(bool enabled) {
+    if (_disposed) return;
+    _thumbnails.setEnabled(enabled);
+  }
+
+  Future<Uint8List?> thumbnailAt(Duration target) {
+    if (_disposed || _loading || _duration <= Duration.zero) {
+      return Future.value();
+    }
+    return _thumbnails.thumbnailAt(
+      target < Duration.zero
+          ? Duration.zero
+          : target > _duration
+          ? _duration
+          : target,
+    );
+  }
+
   SubtitleDocument? _selectedSubtitleDocument;
   SubtitleDocument? get selectedSubtitleDocument =>
       _selectedSubtitle?.isExternal == true &&
@@ -247,6 +278,17 @@ class PlayerController extends ChangeNotifier {
   /// 把"没数据"画成 0% 会让用户以为卡死在零。
   double? _bufferingPercent;
 
+  /// mpv 是否正在定位（`seeking` 属性为 `yes`）。
+  ///
+  /// **必须单独暴露**：mpv 在 seek 期间**不上报 buffering**——实测
+  /// 拖动进度条后 `pause=no` 立刻生效，而 `seeking=yes` 能持续十几秒，
+  /// 期间 `core-idle=yes`、`paused-for-cache=no`、
+  /// `cache-buffering-state=100`、`demuxer-cache-time=None`。也就是说
+  /// media-kit 的 buffering 流永远不会置真，只看 [isBuffering] 的话，
+  /// 用户面对的是「画面静止 + 什么都没转」。这两件事对用户是同一件
+  /// 「卡住了」，判据的合并留给调用点（见 `showBufferingIndicator`）。
+  bool _seeking = false;
+
   /// 最近一次采样到的网络吞吐（字节/秒）。null 表示**取不到**。
   ///
   /// 为什么是 null 而不是 0：0 会被读成"网络停了"，而真正的 0 只在
@@ -289,6 +331,9 @@ class PlayerController extends ChangeNotifier {
   /// 缓冲百分比 0–100；null 表示引擎尚未上报（见 [_bufferingPercent]）。
   double? get bufferingPercent => _bufferingPercent;
 
+  /// mpv 是否正在定位（`seeking=yes`，见 [_seeking]）。
+  bool get isSeeking => _seeking;
+
   /// 最近一次采样到的网速（字节/秒）；null 表示取不到（见 [_bytesPerSecond]）。
   double? get bytesPerSecond => _bytesPerSecond;
 
@@ -312,9 +357,8 @@ class PlayerController extends ChangeNotifier {
 
   double get volume => _volume;
   bool get muted => _muted;
-  ({double volume, double resumeVolume, bool muted}) get volumeState => (
-    volume: _volume, resumeVolume: _volumeBeforeMute, muted: _muted,
-  );
+  ({double volume, double resumeVolume, bool muted}) get volumeState =>
+      (volume: _volume, resumeVolume: _volumeBeforeMute, muted: _muted);
   double get rate => _rate;
   String? get currentUrl => _currentUrl;
   PlayerLoadOutcome? get lastOutcome => _lastOutcome;
@@ -498,7 +542,8 @@ class PlayerController extends ChangeNotifier {
           MpvPropertyRejection(
             key: entry.key,
             value: entry.value,
-            reason: '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
+            reason:
+                '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
           ),
         );
       }
@@ -535,8 +580,51 @@ class PlayerController extends ChangeNotifier {
   ///   `demuxer-cache-state` 正是回 NULL，这里如实给 null、下一拍重试；
   /// - 解析失败（mpv 在某些状态下会回 `"nan"` / `"inf"`）；
   /// - 值为负数或非有限。
-  Future<double?> sampleNetworkRate() async {
+  /// 丢弃上一拍基线：换集、换源或刷新循环停过之后，旧增量不能再用来算速度。
+  void resetNetworkRate() {
+    _proxyBaseline = null;
+    _setBytesPerSecond(null);
+  }
+
+  /// 回到 [resetNetworkRate] 之后的第一拍状态。
+  ({String sessionId, int receivedBytes, Duration at})? _proxyBaseline;
+
+  Duration _networkNow() =>
+      _networkClockOverride?.call() ?? _networkWatch.elapsed;
+
+  /// 代理播放的当前速率：**本会话实际收到的上游字节**除以真实间隔。
+  ///
+  /// 为什么不用 mpv 的 `raw-input-rate`：实测（真实 HLS 源 + 本地代理）跳转后
+  /// 缓冲期间该值会整段停在旧值上，直到恢复播放才更新——它来自 demuxer 的
+  /// 1 秒窗口平滑（mpv `demux.c` 的 `update_cache`），不跟随代理侧的收包节奏。
+  /// 代理这边知道每一块字节什么时候到，所以由它出数。
+  double? _proxyRate(ProxyTrafficSnapshot traffic) {
+    final now = _networkNow();
+    final previous = _proxyBaseline;
+    _proxyBaseline = (
+      sessionId: traffic.sessionId,
+      receivedBytes: traffic.receivedBytes,
+      at: now,
+    );
+    if (previous == null || previous.sessionId != traffic.sessionId) {
+      // 新会话（换集/换源/重建代理）没有可比基线，这一拍如实给 null。
+      return null;
+    }
+    final delta = traffic.receivedBytes - previous.receivedBytes;
+    final seconds = (now - previous.at).inMicroseconds / 1000000;
+    if (delta < 0 || seconds <= 0) return null;
+    return delta / seconds;
+  }
+
+  Future<double?> sampleNetworkRate({
+    ProxyTrafficSnapshot? proxyTraffic,
+  }) async {
     if (_disposed) return null;
+    if (proxyTraffic != null) {
+      final measured = _proxyRate(proxyTraffic);
+      _setBytesPerSecond(measured);
+      return measured;
+    }
     final platform = _player.platform;
     if (platform is! NativePlayer) {
       _setBytesPerSecond(null);
@@ -576,8 +664,10 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// 应用播放参数（Phase 9）。失败不阻断播放，只留错误文本。
-  Future<bool> applyPlayerOptions(PlayerOptions options) =>
-      applyMpvProperties(options.mpvProperties);
+  Future<bool> applyPlayerOptions(PlayerOptions options) {
+    setThumbnailPreviewEnabled(options.showThumbnailPreview);
+    return applyMpvProperties(options.mpvProperties);
+  }
 
   /// 应用/清除 LUT。空路径表示清除。
   Future<bool> applyLut(String? path) =>
@@ -892,6 +982,49 @@ class PlayerController extends ChangeNotifier {
     ]);
   }
 
+  /// 观察 mpv 的 `seeking` 属性，维护 [isSeeking]。
+  ///
+  /// **用属性观察而不是轮询**：seek 的开始与结束都是事件，轮询只能把它们
+  /// 采样成「大概什么时候开始、什么时候结束」——短 seek 会整段漏掉，长
+  /// seek 结束后还会多挂一个采样间隔，而那时提示早该消失了。
+  ///
+  /// 非 `NativePlayer`（Web/移动构建）没有这个属性，[isSeeking] 安全地保持
+  /// false；注册失败同样只影响提示，不影响播放。
+  Future<void> _observeSeeking() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.observeProperty('seeking', (value) async {
+        _applySeeking(value.trim() == 'yes');
+      });
+    } catch (_) {
+      return;
+    }
+    // 注册本身是异步的，期间页面可能已经销毁：立刻撤销，免得在已释放的
+    // 引擎上留下一个永远不会被移除的观察。
+    if (_disposed) unawaited(_unobserveSeeking());
+  }
+
+  void _applySeeking(bool value) {
+    if (_disposed || _seeking == value) return;
+    _seeking = value;
+    notifyListeners();
+  }
+
+  /// 撤销 `seeking` 观察（见 [_observeSeeking]）。
+  ///
+  /// 吞掉异常：注册与撤销都是异步的，两者之间有「还没来得及观察」的窗口，
+  /// 此时 media-kit 会以 `Not observed` 报错，而它并不代表故障。
+  Future<void> _unobserveSeeking() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.unobserveProperty('seeking');
+    } catch (_) {
+      // 未观察 / 引擎已销毁都无需处理。
+    }
+  }
+
   /// 播放器上报的内嵌字幕轨变化（切集/换片后重新计算菜单）。
   void _updateEmbeddedSubtitles(List<SubtitleTrack> tracks) {
     if (_disposed) return;
@@ -973,11 +1106,16 @@ class PlayerController extends ChangeNotifier {
         Stopwatch()..start(),
       );
     }
-    if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', Stopwatch()..start());
+    if (isCurrent != null && !isCurrent()) {
+      return _failure(url, 'Playback superseded', Stopwatch()..start());
+    }
     _loading = true;
+    // 换媒体就是换会话基线：上一集的字节增量不能算到这一集头上。
+    resetNetworkRate();
     _completed = false;
     _lastEngineError = null;
     _currentUrl = url;
+    _thumbnails.setMedia(url, headers: headers);
 
     // 诊断：记录入口地址与注入 Header（输出时统一脱敏，§23）。
     final builder =
@@ -1073,14 +1211,20 @@ class PlayerController extends ChangeNotifier {
       // 同一个定位意图也挂在 [Media] 上：真正生效的是上面那条 option，
       // 这一条是给测试假件模拟内核行为用的（当前内核上它不生效）。
       final nativeOpen = _player
-          .open(Media(url, httpHeaders: headers, start: startAt))
+          .open(Media(
+            url,
+            httpHeaders: Map<String, String>.unmodifiable(headers),
+            start: startAt,
+          ))
           .whenComplete(() => _nativeOpenPending = false);
       if (isCurrent == null) {
         await nativeOpen;
       } else {
         await _awaitLiveOpen(nativeOpen, timeout, cancellation!);
       }
-      if (isCurrent != null && !isCurrent()) return _failure(url, 'Playback superseded', stopwatch);
+      if (isCurrent != null && !isCurrent()) {
+        return _failure(url, 'Playback superseded', stopwatch);
+      }
       openIssued = true;
 
       final loadElapsed = cancellation == null
@@ -1094,7 +1238,9 @@ class PlayerController extends ChangeNotifier {
 
       if (awaitFirstFrame && firstFrame == null) {
         final deadline = stopwatch.elapsed + firstFrameTimeout;
-        while (firstFrame == null && stopwatch.elapsed < deadline && (isCurrent == null || (!_disposed && isCurrent()))) {
+        while (firstFrame == null &&
+            stopwatch.elapsed < deadline &&
+            (isCurrent == null || (!_disposed && isCurrent()))) {
           await Future<void>.delayed(const Duration(milliseconds: 25));
           if (openIssued && _player.state.position > Duration.zero) {
             firstFrame ??= stopwatch.elapsed;
@@ -1122,7 +1268,11 @@ class PlayerController extends ChangeNotifier {
       }
       return outcome;
     } on TimeoutException catch (error) {
-      final outcome = _failure(url, loadError ?? error.message ?? 'timeout', stopwatch);
+      final outcome = _failure(
+        url,
+        loadError ?? error.message ?? 'timeout',
+        stopwatch,
+      );
       if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
         _loading = false;
@@ -1140,28 +1290,40 @@ class PlayerController extends ChangeNotifier {
       }
       return outcome;
     } finally {
-      if (identical(_liveOpenCancellation, cancellation)) _liveOpenCancellation = null;
+      if (identical(_liveOpenCancellation, cancellation)) {
+        _liveOpenCancellation = null;
+      }
       for (final subscription in localSubscriptions) {
         await subscription.cancel();
       }
     }
   }
 
-  Future<T> _awaitLiveOpen<T>(Future<T> operation, Duration timeout, Completer<void> cancellation) async {
+  Future<T> _awaitLiveOpen<T>(
+    Future<T> operation,
+    Duration timeout,
+    Completer<void> cancellation,
+  ) async {
     final timeoutSignal = Completer<T>();
-    final timer = Timer(timeout, () => timeoutSignal.completeError(TimeoutException('live open timeout')));
+    final timer = Timer(
+      timeout,
+      () => timeoutSignal.completeError(TimeoutException('live open timeout')),
+    );
     _nativeOpenTimer = timer;
     try {
       return await Future.any<T>([
         operation,
         timeoutSignal.future,
-        cancellation.future.then<T>((_) => throw StateError('Playback superseded')),
+        cancellation.future.then<T>(
+          (_) => throw StateError('Playback superseded'),
+        ),
       ]);
     } finally {
       timer.cancel();
       if (identical(_nativeOpenTimer, timer)) _nativeOpenTimer = null;
     }
   }
+
   PlayerLoadOutcome _failure(String url, String message, Stopwatch stopwatch) {
     final kind = classifyPlayerError(message);
     return PlayerLoadOutcome(
@@ -1233,7 +1395,9 @@ class PlayerController extends ChangeNotifier {
       isCurrent: isCurrent,
       startAt: startAt,
     );
-    if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) return outcome;
+    if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) {
+      return outcome;
+    }
     if (outcome.failureKind != PlayerFailureKind.timeout &&
         outcome.failureKind != PlayerFailureKind.network) {
       return outcome;
@@ -1314,6 +1478,55 @@ class PlayerController extends ChangeNotifier {
     return _player.seek(target);
   }
 
+  /// Signed epsilon selects the adjacent GOP without an exact or ten-second seek.
+  Future<bool> seekToKeyframe({required bool forward}) async {
+    if (_disposed || _loading || _duration <= Duration.zero) return false;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return false;
+    final generation = thumbnailGeneration;
+    bool current() =>
+        !_disposed && !_loading && thumbnailGeneration == generation;
+    try {
+      if (await platform.getProperty('seekable') != 'yes' || !current()) {
+        return false;
+      }
+      final before = double.tryParse(await platform.getProperty('time-pos'));
+      if (!current() || before == null || !before.isFinite) return false;
+      if (!await runNativeNavigationCommand(platform, [
+        'seek',
+        forward ? '0.0001' : '-0.0001',
+        'relative+keyframes',
+      ])) {
+        return false;
+      }
+      if (!current()) return false;
+      final wait = Stopwatch()..start();
+      while (current() && wait.elapsed < const Duration(seconds: 2)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        if (!current()) return false;
+        final seeking = await platform.getProperty('seeking');
+        if (!current()) return false;
+        final after = double.tryParse(await platform.getProperty('time-pos'));
+        if (!current()) return false;
+        if (seeking == 'yes' ||
+            after == null ||
+            !after.isFinite ||
+            (forward ? after <= before : after >= before)) {
+          continue;
+        }
+        onSeek?.call(
+          Duration(
+            microseconds: (after * Duration.microsecondsPerSecond).round(),
+          ),
+        );
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> seekBy(Duration delta) {
     final next = _position + delta;
     if (next < Duration.zero) return seek(Duration.zero);
@@ -1392,6 +1605,10 @@ class PlayerController extends ChangeNotifier {
     _nativeOpenTimer?.cancel();
     _nativeOpenTimer = null;
     cancelPendingRetries();
+    // 必须在 `_player.dispose()` 之前撤销：销毁之后 media-kit 会直接拒绝对
+    // 该引擎的属性观察调用。
+    unawaited(_unobserveSeeking());
+    unawaited(_thumbnails.dispose());
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
@@ -1472,3 +1689,14 @@ String formatByteRate(double? bytesPerSecond) {
   if (bytesPerSecond >= kb) return '${(bytesPerSecond / kb).round()} KB/s';
   return '${bytesPerSecond.round()} B/s';
 }
+
+/// 这一拍要不要采网速。
+///
+/// 判据是「界面上有没有地方在显示这个数」：屏显右下角开着，或加载/缓冲提示
+/// 正挂在画面中央（圈下那行网速）。网速屏显开关是用户的选择，不该成为
+/// 加载提示有没有读数的前提——两条都要，任一条成立就采。
+bool shouldSampleNetworkRate({
+  required bool trafficEnabled,
+  required bool isLoading,
+  required bool isBuffering,
+}) => trafficEnabled || isLoading || isBuffering;

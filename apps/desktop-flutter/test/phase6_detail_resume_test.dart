@@ -169,8 +169,7 @@ void main() {
       );
       expect(target.episodeIndex, 1, reason: '集名兜底');
       // 集名兜底**也算完整命中**：线路对上了、集也对上了（只是靠名字而非 URL）。
-      // 这条断言是 Task 3 的前提——`matched` 决定是否自动切线路
-      // （`design/02` §4.1），不锁住它会让「集名兜底」的行为漂移。
+      // 集名兜底也应允许续播，不能退化为「播放第一集」。
       expect(target.matched, isTrue, reason: '集名命中也是完整命中');
       expect(target.episodeName, '第2集');
     });
@@ -381,10 +380,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('历史线路在但那一集已消失 → 不切线路（design/02 §4.1）', (tester) async {
-      // 线路二存在，但 http://stale/gone 不在任何线路上 →
-      // §2.1 第 1 级降级、第 2 级因 URL 非空且无命中而止步、第 3 级被前提挡住
-      // → matched == false → **不得**把用户切到线路二（切过去也没有那一集）。
+    testWidgets('历史集入口失效时仍默认选中历史线路，但不恢复未知分集', (tester) async {
       await pumpDetail(
         tester,
         vod: twoLineVod,
@@ -395,28 +391,71 @@ void main() {
       final first = tester.widget<ChoiceChip>(
         find.byKey(const ValueKey('tmdb-line-线路一')),
       );
-      expect(first.selected, isTrue, reason: 'matched=false 时保持第一条线路');
+      expect(first.selected, isFalse);
       final second = tester.widget<ChoiceChip>(
         find.byKey(const ValueKey('tmdb-line-线路二')),
       );
-      expect(second.selected, isFalse);
+      expect(second.selected, isTrue, reason: '历史线路仍在，不应被分集匹配失败阻止选中');
+      expect(find.text('播放第一集'), findsOneWidget);
     });
 
-    testWidgets('旧数据（无集入口）按线路名命中但集未对上 → 不切线路', (tester) async {
-      // historyFlag='线路二' 且 historyEpisodeId=''（旧数据，没有集入口）
-      // → §2.1 第三级按线路名命中 → flag='线路二' 但 matched=false。
-      // 正确实现（target.matched）：**不**切，仍选线路一。
-      // 错误实现（target.flag.isNotEmpty）：会切到线路二 → 本用例失败。
+    testWidgets('旧历史没有集入口时仍恢复已保存的线路', (tester) async {
       await pumpDetail(tester, vod: twoLineVod, historyFlag: '线路二');
 
       final first = tester.widget<ChoiceChip>(
         find.byKey(const ValueKey('tmdb-line-线路一')),
       );
-      expect(first.selected, isTrue, reason: 'matched=false 时保持第一条线路');
+      expect(first.selected, isFalse);
       final second = tester.widget<ChoiceChip>(
         find.byKey(const ValueKey('tmdb-line-线路二')),
       );
-      expect(second.selected, isFalse);
+      expect(second.selected, isTrue, reason: '历史线路仍在，不应被分集匹配失败阻止选中');
+      expect(find.text('播放第一集'), findsOneWidget);
+    });
+
+    testWidgets('历史源线路名与展示名不同时也能恢复默认线路', (tester) async {
+      final bridged = Vod(
+        vodId: 'demo-1',
+        vodName: '剧集甲',
+        vodPlayFrom: r'线路一$$$合并线路',
+        vodPlayUrl: r'第1集$http://x/e1$$$第1集$http://y/e1',
+        extra: const {
+          'bridge_playback_flags': {'合并线路': '原始线路'},
+        },
+      );
+      await pumpDetail(
+        tester,
+        vod: bridged,
+        historyFlag: '原始线路',
+        historyEpisodeId: 'http://stale/gone',
+      );
+      final historical = tester.widget<ChoiceChip>(
+        find.byKey(const ValueKey('tmdb-line-合并线路')),
+      );
+      final first = tester.widget<ChoiceChip>(
+        find.byKey(const ValueKey('tmdb-line-线路一')),
+      );
+      expect(historical.selected, isTrue);
+      expect(first.selected, isFalse);
+    });
+
+    testWidgets('恢复历史线路后手动切线，重建不会抢回历史线路', (tester) async {
+      await pumpDetail(
+        tester,
+        vod: twoLineVod,
+        historyFlag: '线路二',
+        historyEpisodeId: 'http://stale/gone',
+      );
+      final first = find.byKey(const ValueKey('tmdb-line-线路一'));
+      final second = find.byKey(const ValueKey('tmdb-line-线路二'));
+      expect(tester.widget<ChoiceChip>(second).selected, isTrue);
+      await tester.tap(first);
+      await tester.pump();
+      state.seedDetailForTest(vod: twoLineVod);
+      await tester.pump();
+      expect(tester.widget<ChoiceChip>(first).selected, isTrue);
+      expect(tester.widget<ChoiceChip>(second).selected, isFalse);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('不传历史参数时行为不变（第一条线路）', (tester) async {

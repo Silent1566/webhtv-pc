@@ -183,10 +183,7 @@ void main() {
         parseRawInputRateFromCacheState('{"raw-input-rate-foo":1}'),
         isNull,
       );
-      expect(
-        parseRawInputRateFromCacheState('{"xraw-input-rate":1}'),
-        isNull,
-      );
+      expect(parseRawInputRateFromCacheState('{"xraw-input-rate":1}'), isNull);
     });
   });
 
@@ -304,11 +301,7 @@ void main() {
       );
       await gesture.moveBy(const Offset(40, 0));
       await tester.pump();
-      expect(
-        sliderOf(tester).secondaryTrackValue,
-        isNull,
-        reason: '拖动中不得画缓冲段',
-      );
+      expect(sliderOf(tester).secondaryTrackValue, isNull, reason: '拖动中不得画缓冲段');
 
       await gesture.up();
       await tester.pumpAndSettle();
@@ -322,33 +315,38 @@ void main() {
 
   group('缓冲中提示：与加载态互斥', () {
     test('showBufferingIndicator 只有"缓冲中且不在加载"为真', () {
-      expect(showBufferingIndicator(isBuffering: true, isLoading: false), isTrue);
+      expect(
+        showBufferingIndicator(isBuffering: true, isLoading: false),
+        isTrue,
+      );
       expect(
         showBufferingIndicator(isBuffering: true, isLoading: true),
         isFalse,
         reason: '加载阶段已有全屏 LoadingBlock，再叠一个就是两个圈',
       );
-      expect(showBufferingIndicator(isBuffering: false, isLoading: true), isFalse);
-      expect(showBufferingIndicator(isBuffering: false, isLoading: false), isFalse);
+      expect(
+        showBufferingIndicator(isBuffering: false, isLoading: true),
+        isFalse,
+      );
+      expect(
+        showBufferingIndicator(isBuffering: false, isLoading: false),
+        isFalse,
+      );
     });
 
     testWidgets('有百分比时环中显示数字', (tester) async {
-      await tester.pumpWidget(wrap(const PlayerBufferingIndicator(percent: 42)));
+      await tester.pumpWidget(
+        wrap(const PlayerBufferingIndicator(percent: 42)),
+      );
       expect(find.text('42%'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
 
-    testWidgets('无百分比时只有环，没有数字', (tester) async {
+    testWidgets('无百分比时不伪造百分比，未知网速显示 —', (tester) async {
       await tester.pumpWidget(wrap(const PlayerBufferingIndicator()));
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byType(PlayerBufferingIndicator),
-          matching: find.byType(Text),
-        ),
-        findsNothing,
-        reason: '没有数据就不该显示 "0%"（那是"卡死在零"的误读）',
-      );
+      expect(find.text('—'), findsOneWidget);
+      expect(find.textContaining('%'), findsNothing);
     });
 
     testWidgets('不吃指针：点击穿透到下层', (tester) async {
@@ -374,6 +372,55 @@ void main() {
       );
       await tester.tapAt(const Offset(400, 300));
       expect(taps, 1, reason: '缓冲提示不得挡住画面手势');
+    });
+  });
+
+  // 加载/缓冲提示下方显示网速，就必须在提示可见期间持续采样——否则那行字永远是 —。
+  // 屏显网速开关是用户选择，不能当成加载提示是否有读数的前提。
+  group('shouldSampleNetworkRate：界面上有读数就该采', () {
+    test('屏显网速开着 → 一直采', () {
+      expect(
+        shouldSampleNetworkRate(
+          trafficEnabled: true,
+          isLoading: false,
+          isBuffering: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('加载中，屏显开关关着也要采（圈下那行字在）', () {
+      expect(
+        shouldSampleNetworkRate(
+          trafficEnabled: false,
+          isLoading: true,
+          isBuffering: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('缓冲中同样要采', () {
+      expect(
+        shouldSampleNetworkRate(
+          trafficEnabled: false,
+          isLoading: false,
+          isBuffering: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('没有任何读数要求时不采（不空转）', () {
+      expect(
+        shouldSampleNetworkRate(
+          trafficEnabled: false,
+          isLoading: false,
+          isBuffering: false,
+        ),
+        isFalse,
+        reason: '加载/缓冲结束且屏显网速关闭 → 停止采样',
+      );
     });
   });
 }

@@ -6,9 +6,10 @@
 > - PotPlayer 基线：**261021** 构建（`PotPlayer64.dll` 实为 **1.7.23172**），Windows 64-bit 官方安装包。
 > - 本仓库基线：`fix/toast-hold-time` @ `e65212b`，路径相对 `apps/desktop-flutter/`。
 > - 证据等级：**A** = 安装包实测（字符串/符号/文件）；**B** = 官方更新日志原文；**C** = 推断（标「未验证」）。
-> - **状态**：**P1-4（字幕与 OSD 样式落盘）与 P1-8（音量归一）已实现**——它们的「落点」列写的是真实文件与落盘键；
+> - **状态**：**P0-2（拖动进度条时暂停）、P1-4（字幕与 OSD 样式落盘）、P1-8（音量归一）已实现**——它们的「落点」列写的是真实文件与落盘键；
 >   其余条目仍全部为 backlog。P1-4 的实现推翻了旧的「用 mpv `sub-*` 属性落盘」建议
->   （登记在 [potplayer-borrowings.md](potplayer-borrowings.md) §12）。
+>   （登记在 [potplayer-borrowings.md](potplayer-borrowings.md) §12）；P0-2 的落地与残留限制见 §2 表格与
+>   [evidence/p0-2-drag-pause.md](evidence/p0-2-drag-pause.md)。
 
 ---
 
@@ -32,7 +33,7 @@
 
 | 分类 | 条数 | 含义 |
 | --- | --- | --- |
-| P0 | 3 | 真实缺口、改动小、收益直接 |
+| P0 | 3 | 真实缺口、改动小、收益直接（其中 P0-2 已实现） |
 | P1 | 5 | 结构性收益，需独立设计（其中 P1-4 已实现） |
 | P2 | 6 | 工程纪律与体验细节 |
 | 观察 | 2 | 记录在案，暂不做 |
@@ -48,7 +49,7 @@
 | # | 主题 | PotPlayer 依据 | 本仓库落点 | 前置条件 / 风险 | 验收口径 |
 | --- | --- | --- | --- | --- | --- |
 | P0-1 | **双击左/右区域分别配置动作** | 260819「individually configure actions for the left and right areas upon double-clicking」（B）；`5005=Left Button - Double Click:(left area):`、`5006=…(right area):`（A） | `ui/player_page.dart:82-123`（`kPlayerDoubleClickWindow` / `PlayerGestureAction` / `resolvePlayerGesture` / `PlayerDoubleClickGate`）、`:4902-4925 _onVideoTap`；新增字段落 `core/player_options.dart`，经 `services/ui_preferences_store.dart:1017 rememberPlayerOptions` 持久化 | **禁止改用 `GestureDetector.onDoubleTap`**（`:84-92` 记录过 300 ms 迟滞与轮询误判，见 `integration_test/live_interaction_flow_test.dart`）；直播下 `seek*` 退化为 `none`；坐标按渲染盒算，不按窗口 | 左右各自触发配置动作；**默认配置 = 今天的行为**（双击只切全屏、不改播放状态）；第 3 击属于新一轮；直播菜单项禁用对应动作 |
-| P0-2 | **拖动进度条时暂停** | 260622「pause function when navigating via the navigation bar」（B） | `ui/player_overlay.dart:204-283`（`_dragging` 只决定缓冲段画不画；`onChanged` 连续 seek）、`ui/player_page.dart:4391 _buildProgressRow` | 直播 `duration<=0` 时回调本就是 `null`，**不要动直播路径**；恢复播放严格依赖拖动前状态；程序 seek（`core/skip_segments.dart`）不得暂停 | 拖动中暂停、松手续播；拖前本就暂停 → 松手仍暂停；直播零行为变化；缓冲段隐藏语义不变 |
+| P0-2 | **拖动进度条时暂停**（状态：**已实现**） | 260622「pause function when navigating via the navigation bar」（B） | 开关 `core/player_options.dart:137,207`（`dragPause`，默认 `true`，落盘键 `dragPause`，缺键回落 `true`）；滑杆回调 `ui/player_overlay.dart:212-238,489-509`（`onSeekStart`/`onSeekEnd`，`onSeek` 连续语义不变）；判定器 `ui/player_page.dart:161-185`（`PlayerDragPauseGate`，含 `reset()`）；**拖动期间不落引擎 seek、松手一次 seek** `ui/player_page.dart:397-435`（`_dragSeekTarget`/`_settleDragSeekTarget`）、`:4898-4965`（`onSeek` 只记预览、`onSeekEnd` 提交一次）；`seeking` 并入缓冲提示 `ui/player_controller.dart:226-289,876-915`、`ui/player_overlay.dart` 的 `showBufferingIndicator`；入口 `ui/settings_detail_pages.dart:87`、右键「播放 → 拖动进度条时暂停」 | 直播 `duration<=0` 时回调本就是 `null`，**不要动直播路径**；恢复播放严格依赖拖动前状态；程序 seek（`core/skip_segments.dart`）不得暂停 | 拖动中暂停、松手续播；拖前本就暂停 → 松手仍暂停；直播零行为变化；缓冲段隐藏语义不变；**拖动期间不发 seek、松手恰好一次 seek**（已由 `test/player_drag_pause_test.dart` 的 `io.calls` 断言锁住）；慢 seek 期间有缓冲提示 |
 | P0-3 | **队列/选集过滤式搜索** | 261021「customize the playlist search method」（B）+ 260819「playlist search function to operate as a filter」（B） | `ui/player_queue_panel.dart`（`TextField` **0 命中**）、`ui/player_episode_panel.dart`（**0**）、`core/playback_queue.dart`（`PlaybackQueueSnapshot{items,hasMore,loading,error}` + `loadMore()`） | 懒加载队列**只能过滤已加载项**，必须如实标注边界；自动 `loadMore()` 要限页且可取消；过滤不得改动 `itemKey`；不做「跳转高亮」式搜索 | 输入即收缩、清空即恢复；`hasMore` 时边界提示可见；`onSelect` 传出的 key 与过滤前一致 |
 
 ---
@@ -72,7 +73,7 @@
 | P2-9 | **系统媒体控制（SMTC / MPRIS）** | 240618「system media transport control function」（B）；`3034=Turn on global media control keys`（A） | grep `smtc` / `MediaSession` **0 命中** | Windows 走 SMTC、Linux 走 MPRIS；macOS 不在打包目标，**不要为它设计**；窗口最小化后仍要响应 | 播放/暂停、上一集/下一集、元数据（片名·第 N 集）在系统面板可见可控 |
 | P2-10 | **视频截图（PNG 起步）** | 240827「Added WEBP to video capture」（B）；`4776=Save images in WEBP format`（A） | grep `screenshot` 只剩测试参数 `--screenshot-ready-file`（`ui/app.dart:86,121`），**非用户功能** | 先确认 media-kit 是否暴露 mpv `screenshot-raw`；WebP 需额外编码器，可后置；截图目录必须用户可配（别默默塞进应用数据目录）；受保护内容应拒绝 | 截图落盘且用户找得到；快捷键可用；格式正确 |
 | P2-11 | **本地 HLS/DASH 文件播放** | 261021「playing HLS/DASH streams from local files」（B） | `state/folder_playback_queue.dart` 的 `_nonVideoExtensions` **未排除** `m3u8`/`mpd`，因此本地方案会被当视频候选 | **先实测**：manifest 内相对路径能否解析、mpv 对 `file://` 的态度；播不了就复用 `services/proxy_server.dart` 既有的 HLS 改写能力 | 实测结论写进文档；能播则补图标与说明，不能播则走代理改写 |
-| P2-12 | **导航栏缩略图 + 关键帧跳转** | `3066=Show thumbnail previews on nav. bar`、`3048=Generate thumbnails by keyframe search`、`101_0_9_6_2=Previous keyframe Ctrl+Shift+Left`（A） | `ui/player_overlay.dart` 无预览；`ui/player_controller.dart` 只按时间 seek | 网络流抓缩略图成本高，**先只做关键帧跳转**（mpv 侧有现成语义），预览做成可选开关 | 关键帧跳转可用；预览默认关、开启后不拖慢 seek |
+| P2-12 | **导航栏缩略图 + 关键帧跳转**（状态：**部分实现**） | `3066=Show thumbnail previews on nav. bar`、`3048=Generate thumbnails by keyframe search`、`101_0_9_6_2=Previous keyframe Ctrl+Shift+Left`（A） | 预览：`ui/player_overlay.dart`（`PlayerProgressSlider` 可选预览卡）+ `services/player_thumbnail_service.dart`（独立静音 320×180 media-kit 实例）；关键帧：`ui/player_controller.dart:1213 seekToKeyframe`；落盘 `core/player_options.dart` `showThumbnailPreview` → `settings.json` 顶层 `player`；入口 `ui/player_page.dart`（右键播放分组 + 设置页「导航栏缩略图」）、`ui/app.dart`（`Ctrl+Shift+←/→` 帮助文案） | 网络流抓缩略图成本高，预览做成可选开关（默认关）；关键帧用 `relative+keyframes` 的 `±0.0001s` 偏移，**MKV/AVI 未缓存路径会被 mpv v0.40.0 的 5ms 方向容差量成 no-op**，静态放大偏移会跳过高帧率全关键帧视频的紧邻帧，现有 `NativePlayer` 无原子 seek 策略接口，未获产品确认前不扩大偏移/缩小支持范围 | 预览默认关、开启后不拖慢 seek（已验证）；关键帧在 **MP4** 上逐个相邻关键帧且保持播放/暂停（已验证）；MKV/AVI 当前 fail-closed 给「关键帧跳转不可用」，缺陷与复现登记在 `docs/phase9/evidence/14-player-navigation.md` § 已知限制 |
 | P2-13 | **多实例语义** | `3293=Multiple instances:`、`3339=Use non-overlapping multi instances`、`3501-3503` 三档（A） | `windows/` 无 `CreateMutex`；`lib/main.dart` 无单例逻辑（grep 0 命中） | 目前"第二次启动会发生什么"未定义；两个实例同时占 SQLite 与本地代理端口有风险；先定语义再写代码 | 明确三档之一并写进文档；并发启动不损坏数据、端口冲突有明确报错 |
 | P2-14 | **深链/外部起播（含 header）** | `CmdLine64.txt`：`/user_agent=` `/referer=` `/headers=` `/seek=` `/sub=` `config="name"`（A） | `services/proxy_server.dart` 已有 header 注入能力；**但没有"从外部带着 header 起播"的入口** | 安全优先：允许注入 header 等于开放 SSRF 面，必须限定来源（localhost / 用户显式粘贴），且不得读本地文件 | 深链可带 header 起播；非法/越权输入被拒绝并有明确错误 |
 
@@ -139,7 +140,7 @@ Q-36 (libmpv 版本)
    ├─→ P2-10 截图
    └─→ P2-12 关键帧跳转
 
-P0-2  拖动暂停        ← 无依赖，先做
+P0-2  拖动暂停        ← **已实现**（无依赖）
 P0-1  双击分区        ← 依赖 PlayerOptions 新字段（落盘可直接复用 P1-4 的模式）
 P0-3  队列过滤        ← 无依赖
 P1-4  字幕样式落盘    ← **已实现**；P0-1 可直接复用它的落盘模式（ui_preferences_store）

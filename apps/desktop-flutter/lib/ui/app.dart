@@ -2062,6 +2062,7 @@ class _GroupChip extends StatelessWidget {
 const List<(String, String)> playerShortcuts = [
   ('空格', '播放 / 暂停'),
   ('← / →', '后退 / 前进 10 秒'),
+  ('Ctrl+Shift+← / →', '前一个 / 后一个关键帧（点播且时长已知）'),
   ('↑ / ↓', '音量 +5 / -5'),
   ('M', '静音切换'),
   ('[ / ]', '上一集 / 下一集'),
@@ -2082,11 +2083,23 @@ Map<ShortcutActivator, VoidCallback> buildPlayerShortcuts({
   required VoidCallback nextEpisode,
   required VoidCallback toggleFullscreen,
   required VoidCallback exitFullscreen,
+  VoidCallback? previousKeyframe,
+  VoidCallback? nextKeyframe,
 }) {
   return {
     const SingleActivator(LogicalKeyboardKey.space): togglePlay,
     const SingleActivator(LogicalKeyboardKey.arrowLeft): seekBackward,
     const SingleActivator(LogicalKeyboardKey.arrowRight): seekForward,
+    const SingleActivator(
+      LogicalKeyboardKey.arrowLeft,
+      control: true,
+      shift: true,
+    ): ?previousKeyframe,
+    const SingleActivator(
+      LogicalKeyboardKey.arrowRight,
+      control: true,
+      shift: true,
+    ): ?nextKeyframe,
     const SingleActivator(LogicalKeyboardKey.arrowUp): volumeUp,
     const SingleActivator(LogicalKeyboardKey.arrowDown): volumeDown,
     const SingleActivator(LogicalKeyboardKey.keyM): toggleMute,
@@ -2238,8 +2251,7 @@ class PosterImage extends StatelessWidget {
       loadingBuilder: (context, child, progress) => progress == null
           ? child
           : Center(child: _placeholderIcon(context, loading: true)),
-      errorBuilder: (context, error, stackTrace) =>
-          _emptyPlaceholder(context),
+      errorBuilder: (context, error, stackTrace) => _emptyPlaceholder(context),
     );
   }
 

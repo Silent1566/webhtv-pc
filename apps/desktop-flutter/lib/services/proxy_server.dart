@@ -132,6 +132,22 @@ class LocalProxyServer {
   String urlFor(ProxySession session, Uri target) =>
       '$baseUrl$pathPrefix${session.token}/${encodeTarget(target)}';
 
+  ProxyTrafficSnapshot? trafficFor(String playbackUrl) {
+    final uri = Uri.tryParse(playbackUrl);
+    if (!isRunning ||
+        uri == null ||
+        uri.scheme != 'http' ||
+        uri.host != '127.0.0.1' ||
+        uri.port != port) {
+      return null;
+    }
+    final parts = uri.pathSegments;
+    if (parts.length < 3 || parts.first != 'p') return null;
+    final session = sessions.byToken(parts[1]);
+    if (session == null) return null;
+    return (sessionId: session.id, receivedBytes: session.receivedBytes);
+  }
+
   /// 构造会话内子资源（分片、子清单、密钥）的代理地址。
   ///
   /// 先用会话短码 `…/p/<token>/i/<n>`：清单里每一条子资源都要写一个地址，长表
@@ -451,6 +467,7 @@ class LocalProxyServer {
     if (isPlaylist) {
       // 清单必须整体读取后重写，保证子清单/分片 URL 走同一会话（§11.4）。
       final body = await _readAll(upstream);
+      session.recordReceivedBytes(body.length);
       final originalText = utf8.decode(body, allowMalformed: true);
       final evidence = collectAdPlaylistEvidence(originalText, current);
       if (!evidence.isEmpty) {
@@ -529,6 +546,7 @@ class LocalProxyServer {
     try {
       await for (final chunk in upstream) {
         bytes += chunk.length;
+        session.recordReceivedBytes(chunk.length);
         response.add(chunk);
       }
       await response.close();
