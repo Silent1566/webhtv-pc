@@ -84,6 +84,17 @@ class PlaybackOptionsPage extends StatelessWidget {
                       },
                     ),
                     _switch(
+                      'settings-player-drag-pause',
+                      '拖动进度条时暂停',
+                      '拖动时先暂停，松手回到拖动前的播放状态；关闭则拖动中继续播放',
+                      state.playerOptions.dragPause,
+                      (value) async {
+                        await state.setPlayerOptions(
+                          state.playerOptions.copyWith(dragPause: value),
+                        );
+                      },
+                    ),
+                    _switch(
                       'settings-player-auto-next',
                       '自动连播下一集',
                       '关闭后播完当前集会停住；循环模式优先于该开关',

@@ -149,6 +149,7 @@ class PlayerController extends ChangeNotifier {
     _volumeOverridden = initialVolume != null;
     _videoController = VideoController(_player);
     _bind();
+    unawaited(_observeSeeking());
   }
 
   final Player _player;
@@ -230,6 +231,17 @@ class PlayerController extends ChangeNotifier {
   /// 把"没数据"画成 0% 会让用户以为卡死在零。
   double? _bufferingPercent;
 
+  /// mpv 是否正在定位（`seeking` 属性为 `yes`）。
+  ///
+  /// **必须单独暴露**：mpv 在 seek 期间**不上报 buffering**——实测
+  /// 拖动进度条后 `pause=no` 立刻生效，而 `seeking=yes` 能持续十几秒，
+  /// 期间 `core-idle=yes`、`paused-for-cache=no`、
+  /// `cache-buffering-state=100`、`demuxer-cache-time=None`。也就是说
+  /// media-kit 的 buffering 流永远不会置真，只看 [isBuffering] 的话，
+  /// 用户面对的是「画面静止 + 什么都没转」。这两件事对用户是同一件
+  /// 「卡住了」，判据的合并留给调用点（见 `showBufferingIndicator`）。
+  bool _seeking = false;
+
   /// 最近一次采样到的网络吞吐（字节/秒）。null 表示**取不到**。
   ///
   /// 为什么是 null 而不是 0：0 会被读成"网络停了"，而真正的 0 只在
@@ -271,6 +283,9 @@ class PlayerController extends ChangeNotifier {
 
   /// 缓冲百分比 0–100；null 表示引擎尚未上报（见 [_bufferingPercent]）。
   double? get bufferingPercent => _bufferingPercent;
+
+  /// mpv 是否正在定位（`seeking=yes`，见 [_seeking]）。
+  bool get isSeeking => _seeking;
 
   /// 最近一次采样到的网速（字节/秒）；null 表示取不到（见 [_bytesPerSecond]）。
   double? get bytesPerSecond => _bytesPerSecond;
@@ -906,6 +921,49 @@ class PlayerController extends ChangeNotifier {
     ]);
   }
 
+  /// 观察 mpv 的 `seeking` 属性，维护 [isSeeking]。
+  ///
+  /// **用属性观察而不是轮询**：seek 的开始与结束都是事件，轮询只能把它们
+  /// 采样成「大概什么时候开始、什么时候结束」——短 seek 会整段漏掉，长
+  /// seek 结束后还会多挂一个采样间隔，而那时提示早该消失了。
+  ///
+  /// 非 `NativePlayer`（Web/移动构建）没有这个属性，[isSeeking] 安全地保持
+  /// false；注册失败同样只影响提示，不影响播放。
+  Future<void> _observeSeeking() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.observeProperty('seeking', (value) async {
+        _applySeeking(value.trim() == 'yes');
+      });
+    } catch (_) {
+      return;
+    }
+    // 注册本身是异步的，期间页面可能已经销毁：立刻撤销，免得在已释放的
+    // 引擎上留下一个永远不会被移除的观察。
+    if (_disposed) unawaited(_unobserveSeeking());
+  }
+
+  void _applySeeking(bool value) {
+    if (_disposed || _seeking == value) return;
+    _seeking = value;
+    notifyListeners();
+  }
+
+  /// 撤销 `seeking` 观察（见 [_observeSeeking]）。
+  ///
+  /// 吞掉异常：注册与撤销都是异步的，两者之间有「还没来得及观察」的窗口，
+  /// 此时 media-kit 会以 `Not observed` 报错，而它并不代表故障。
+  Future<void> _unobserveSeeking() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.unobserveProperty('seeking');
+    } catch (_) {
+      // 未观察 / 引擎已销毁都无需处理。
+    }
+  }
+
   /// 播放器上报的内嵌字幕轨变化（切集/换片后重新计算菜单）。
   void _updateEmbeddedSubtitles(List<SubtitleTrack> tracks) {
     if (_disposed) return;
@@ -1413,6 +1471,9 @@ class PlayerController extends ChangeNotifier {
     _nativeOpenTimer?.cancel();
     _nativeOpenTimer = null;
     cancelPendingRetries();
+    // 必须在 `_player.dispose()` 之前撤销：销毁之后 media-kit 会直接拒绝对
+    // 该引擎的属性观察调用。
+    unawaited(_unobserveSeeking());
     unawaited(_thumbnails.dispose());
     for (final subscription in _subscriptions) {
       subscription.cancel();

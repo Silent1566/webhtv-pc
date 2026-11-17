@@ -6,9 +6,10 @@
 > - PotPlayer 基线：**261021** 构建（`PotPlayer64.dll` 实为 **1.7.23172**），Windows 64-bit 官方安装包。
 > - 本仓库基线：`fix/toast-hold-time` @ `e65212b`，路径相对 `apps/desktop-flutter/`。
 > - 证据等级：**A** = 安装包实测（字符串/符号/文件）；**B** = 官方更新日志原文；**C** = 推断（标「未验证」）。
-> - **状态**：**P1-4（字幕与 OSD 样式落盘）与 P1-8（音量归一）已实现**——它们的「落点」列写的是真实文件与落盘键；
+> - **状态**：**P0-2（拖动进度条时暂停）、P1-4（字幕与 OSD 样式落盘）、P1-8（音量归一）已实现**——它们的「落点」列写的是真实文件与落盘键；
 >   其余条目仍全部为 backlog。P1-4 的实现推翻了旧的「用 mpv `sub-*` 属性落盘」建议
->   （登记在 [potplayer-borrowings.md](potplayer-borrowings.md) §12）。
+>   （登记在 [potplayer-borrowings.md](potplayer-borrowings.md) §12）；P0-2 的落地与残留限制见 §2 表格与
+>   [evidence/p0-2-drag-pause.md](evidence/p0-2-drag-pause.md)。
 
 ---
 
@@ -32,7 +33,7 @@
 
 | 分类 | 条数 | 含义 |
 | --- | --- | --- |
-| P0 | 3 | 真实缺口、改动小、收益直接 |
+| P0 | 3 | 真实缺口、改动小、收益直接（其中 P0-2 已实现） |
 | P1 | 5 | 结构性收益，需独立设计（其中 P1-4 已实现） |
 | P2 | 6 | 工程纪律与体验细节 |
 | 观察 | 2 | 记录在案，暂不做 |
@@ -48,7 +49,7 @@
 | # | 主题 | PotPlayer 依据 | 本仓库落点 | 前置条件 / 风险 | 验收口径 |
 | --- | --- | --- | --- | --- | --- |
 | P0-1 | **双击左/右区域分别配置动作** | 260819「individually configure actions for the left and right areas upon double-clicking」（B）；`5005=Left Button - Double Click:(left area):`、`5006=…(right area):`（A） | `ui/player_page.dart:82-123`（`kPlayerDoubleClickWindow` / `PlayerGestureAction` / `resolvePlayerGesture` / `PlayerDoubleClickGate`）、`:4902-4925 _onVideoTap`；新增字段落 `core/player_options.dart`，经 `services/ui_preferences_store.dart:1017 rememberPlayerOptions` 持久化 | **禁止改用 `GestureDetector.onDoubleTap`**（`:84-92` 记录过 300 ms 迟滞与轮询误判，见 `integration_test/live_interaction_flow_test.dart`）；直播下 `seek*` 退化为 `none`；坐标按渲染盒算，不按窗口 | 左右各自触发配置动作；**默认配置 = 今天的行为**（双击只切全屏、不改播放状态）；第 3 击属于新一轮；直播菜单项禁用对应动作 |
-| P0-2 | **拖动进度条时暂停** | 260622「pause function when navigating via the navigation bar」（B） | `ui/player_overlay.dart:204-283`（`_dragging` 只决定缓冲段画不画；`onChanged` 连续 seek）、`ui/player_page.dart:4391 _buildProgressRow` | 直播 `duration<=0` 时回调本就是 `null`，**不要动直播路径**；恢复播放严格依赖拖动前状态；程序 seek（`core/skip_segments.dart`）不得暂停 | 拖动中暂停、松手续播；拖前本就暂停 → 松手仍暂停；直播零行为变化；缓冲段隐藏语义不变 |
+| P0-2 | **拖动进度条时暂停**（状态：**已实现**） | 260622「pause function when navigating via the navigation bar」（B） | 开关 `core/player_options.dart:137,207`（`dragPause`，默认 `true`，落盘键 `dragPause`，缺键回落 `true`）；滑杆回调 `ui/player_overlay.dart:212-238,489-509`（`onSeekStart`/`onSeekEnd`，`onSeek` 连续语义不变）；判定器 `ui/player_page.dart:161-185`（`PlayerDragPauseGate`，含 `reset()`）；**拖动期间不落引擎 seek、松手一次 seek** `ui/player_page.dart:397-435`（`_dragSeekTarget`/`_settleDragSeekTarget`）、`:4898-4965`（`onSeek` 只记预览、`onSeekEnd` 提交一次）；`seeking` 并入缓冲提示 `ui/player_controller.dart:226-289,876-915`、`ui/player_overlay.dart` 的 `showBufferingIndicator`；入口 `ui/settings_detail_pages.dart:87`、右键「播放 → 拖动进度条时暂停」 | 直播 `duration<=0` 时回调本就是 `null`，**不要动直播路径**；恢复播放严格依赖拖动前状态；程序 seek（`core/skip_segments.dart`）不得暂停 | 拖动中暂停、松手续播；拖前本就暂停 → 松手仍暂停；直播零行为变化；缓冲段隐藏语义不变；**拖动期间不发 seek、松手恰好一次 seek**（已由 `test/player_drag_pause_test.dart` 的 `io.calls` 断言锁住）；慢 seek 期间有缓冲提示 |
 | P0-3 | **队列/选集过滤式搜索** | 261021「customize the playlist search method」（B）+ 260819「playlist search function to operate as a filter」（B） | `ui/player_queue_panel.dart`（`TextField` **0 命中**）、`ui/player_episode_panel.dart`（**0**）、`core/playback_queue.dart`（`PlaybackQueueSnapshot{items,hasMore,loading,error}` + `loadMore()`） | 懒加载队列**只能过滤已加载项**，必须如实标注边界；自动 `loadMore()` 要限页且可取消；过滤不得改动 `itemKey`；不做「跳转高亮」式搜索 | 输入即收缩、清空即恢复；`hasMore` 时边界提示可见；`onSelect` 传出的 key 与过滤前一致 |
 
 ---
@@ -139,7 +140,7 @@ Q-36 (libmpv 版本)
    ├─→ P2-10 截图
    └─→ P2-12 关键帧跳转
 
-P0-2  拖动暂停        ← 无依赖，先做
+P0-2  拖动暂停        ← **已实现**（无依赖）
 P0-1  双击分区        ← 依赖 PlayerOptions 新字段（落盘可直接复用 P1-4 的模式）
 P0-3  队列过滤        ← 无依赖
 P1-4  字幕样式落盘    ← **已实现**；P0-1 可直接复用它的落盘模式（ui_preferences_store）
