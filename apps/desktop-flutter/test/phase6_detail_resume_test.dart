@@ -49,6 +49,61 @@ void main() {
     lineOf('线路二', [('第1集', 'http://y/e1'), ('第2集', 'http://y/e2')]),
   ];
 
+  group('多线路共用 playbackFlag 时按集入口精确定位', () {
+    // 同一个解析源下，多条线路的 sourceFlag/playbackFlag 会完全一样。
+    final shared = [
+      lineOf('baidu', [
+        ('第1集', 'http://baidu/e1'),
+        ('第2集', 'http://baidu/e2'),
+      ], sourceFlag: '丫仙女'),
+      lineOf('quark(3)', [
+        ('第1集', 'http://quark3/e1'),
+        ('第2集', 'http://quark3/e2'),
+      ], sourceFlag: '丫仙女'),
+    ];
+
+    test('集入口命中第二条时选中它，而不是列表第一条', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: 'http://quark3/e2',
+      );
+      expect(picked?.flag, 'quark(3)');
+    });
+
+    test('集入口对不上时退回第一条（与旧行为一致）', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: 'http://gone/e1',
+      );
+      expect(picked?.flag, 'baidu');
+    });
+
+    test('历史没有集入口时退回第一条', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: '',
+      );
+      expect(picked?.flag, 'baidu');
+    });
+
+    test('只有一条候选时直接用它', () {
+      expect(
+        pickHistoryLine(
+          candidates: [shared.first],
+          historyEpisodeId: 'http://quark3/e2',
+        )?.flag,
+        'baidu',
+      );
+    });
+
+    test('没有候选时返回 null', () {
+      expect(
+        pickHistoryLine(candidates: const [], historyEpisodeId: 'x'),
+        isNull,
+      );
+    });
+  });
+
   group('无历史', () {
     test('返回第一条线路第 0 集，matched=false', () {
       final target = resolve(lines: twoLines);
@@ -993,22 +1048,54 @@ void main() {
       );
     });
 
-    testWidgets('切到非历史线路后不标（design/02 §6）', (tester) async {
-      // **这是「只标历史那条线路」守卫的钉子。**
+    testWidgets('切到非历史线路后，同一集仍然标出最近播放（对齐安卓）', (tester) async {
+      // 产品决策变更：**跨线路也标**。同一部剧的「第 2 集」在各条线路上是同一集，
+      // 用户切线路后仍需要知道从哪继续，否则不记得看到哪了（安卓版同样如此）。
       //
-      // 实测把 `if (rawLine.flag != target.flag) return -1;` 删掉后，
-      // 上面 3 个用例全部照过——因为历史命中的线路恰好就是当前渲染的线路。
-      //
-      // 手动切到线路二后，`_resumeTarget` 给的仍是线路一的下标 1；不校验
-      // 线路就会在线路二的第 2 集上打标，而历史根本不在那条线路上。
+      // 映射按可信度依次尝试：集入口 URL 相同 → 集名相同 → 两条线路集数相同
+      // 时按下标对齐；都对不上就不标。
       await pump(tester, source: vodTwoLines);
       await tester.tap(find.byKey(const ValueKey('tmdb-line-线路二')));
       await tester.pumpAndSettle();
 
       expect(
         find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-1')),
+        findsOneWidget,
+        reason: '历史在线路一第 2 集，线路二的第 2 集（同名集）也要标',
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-0')),
         findsNothing,
-        reason: '历史在线路一，线路二的同下标集不得被标记',
+        reason: '不能顺带把第 1 集也标上',
+      );
+    });
+
+    // -----------------------------------------------------------------------
+    testWidgets('线路集名写法不同（第2集 vs EP02）时按集号标中', (tester) async {
+      // 真实站点里不同线路的集名写法经常不一致，集数也可能差一集。
+      // 集名逐字比会全部落空，必须回退到**集号数字**。
+      final naming = Vod(
+        vodId: 'demo-2',
+        vodName: '剧集乙',
+        vodPlayFrom: '线路一\$\$\$线路二',
+        vodPlayUrl:
+            '第1集\$http://a/e1#第2集\$http://a/e2#第3集\$http://a/e3'
+            '\$\$\$EP01\$http://b/e1#EP02\$http://b/e2#EP03\$http://b/e3'
+            '#EP04\$http://b/e4',
+      );
+      await pump(
+        tester,
+        source: naming,
+        historyFlag: '线路一',
+        historyEpisodeId: 'http://a/e2',
+      );
+      await tester.tap(find.byKey(const ValueKey('tmdb-line-线路二')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-1')),
+        findsOneWidget,
+        reason: 'EP02 与「第2集」是同一集，集数还差一集也要按集号对上',
       );
       expect(
         find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-0')),
@@ -1016,8 +1103,6 @@ void main() {
       );
     });
 
-
-    // -----------------------------------------------------------------------
     // plans/03：选集区间条接线（`docs/phase6/design/03` §4.2、§4.4、§5.1）
     // -----------------------------------------------------------------------
 

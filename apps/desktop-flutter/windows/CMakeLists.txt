@@ -59,6 +59,10 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# Seed the artifacts plugin CMakeLists would otherwise download during
+# generation, so no build step waits on the network.
+include(runner/native_deps_cache.cmake)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

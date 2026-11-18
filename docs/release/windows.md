@@ -111,6 +111,11 @@ WebHTV-PC-<version>[-beta]-windows-x64/
 ## 6. 本地复现
 
 ```powershell
+# 0. 先在仓库根目录一次性准备固定的原生依赖（libmpv/ANGLE/nuget/sqlite3 源码）。
+#    插件 CMake 原本用不设超时的 file(DOWNLOAD)/FetchContent 拉这些，网络一卡
+#    构建就停在 "Building Windows application..." 且没有任何输出。
+./scripts/prepare_windows_native_deps.ps1
+
 # 1. 构建（与 CI 相同的版本注入）
 # 必须先 cd 进工程目录：puro 的 --dir / -p 都**不会**改 flutter 的工作目录，
 # 只有 cd 真的会。实测 puro 1.5.0（Flutter 3.47.5）：
