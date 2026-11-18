@@ -52,10 +52,11 @@ class PosterCard extends StatelessWidget {
     this.posterKey,
     this.highlighted = false,
     this.overlay,
+    this.posterHeight = HotRankMetrics.posterIdealHeight,
+    this.titleMaxLines = 2,
   });
 
-  static const double _width = 140;
-  static const double _posterHeight = 190;
+  static const double _width = HotRankMetrics.posterWidth;
 
   final String title;
   final VoidCallback onTap;
@@ -76,6 +77,18 @@ class PosterCard extends StatelessWidget {
 
   /// 叠在海报上的角标层（需要 `Positioned` 的子节点，父级是一个 `Stack`）。
   final Widget? overlay;
+
+  /// 海报高度；默认 190（搜索结果墙与换源浮层都用默认值）。
+  ///
+  /// 热门网格会传 `HotRankLayout.posterHeight`：格子高度随窗口摊开时，
+  /// 海报也得跟着长高/变矮，否则文字区要么空一块、要么把卡片撑破。
+  final double posterHeight;
+
+  /// 片名最多画几行；默认 2。
+  ///
+  /// 热门网格在格子被压矮时传 1 或 0（参考 `HotRankLayout.titleLines`）：
+  /// 文字区只剩 40px 时画两行标题会把副标题挤出去。
+  final int titleMaxLines;
 
   @override
   Widget build(BuildContext context) {
@@ -108,7 +121,7 @@ class PosterCard extends StatelessWidget {
                   PosterImage(
                     url: url,
                     width: _width,
-                    height: _posterHeight,
+                    height: posterHeight,
                     // 限解码尺寸：榜单封面的原始分辨率从 150×200 到 770×1080
                     // 都有（最大那张 PNG 1.6MB）。按 2 倍屏解码已经够清晰，
                     // 再大只是白吃内存与解码时间。
@@ -141,26 +154,34 @@ class PosterCard extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: AppSpace.xs),
             // 文字区吃掉剩余高度；放大字号时**只缩不放**，避免固定高的卡片溢出。
-            Expanded(
-              child: MediaQuery.withClampedTextScaling(
-                maxScaleFactor: 1.0,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    if (subtitle != null)
+            // `titleMaxLines <= 0` 时整块文字都不画：格子被压到连一行标题都
+            // 放不下时，画出来只会被裁掉半个字（热门网格的极矮窗口）。
+            if (titleMaxLines > 0) ...[
+              const SizedBox(height: AppSpace.xs),
+              Expanded(
+                child: MediaQuery.withClampedTextScaling(
+                  maxScaleFactor: 1.0,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        subtitle!,
-                        maxLines: 1,
+                        title,
+                        maxLines: titleMaxLines,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
                       ),
-                  ],
+                      if (subtitle != null)
+                        Text(
+                          subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
