@@ -100,6 +100,29 @@ HistoryResumeTarget resolveHistoryTarget({
       historyEpisodeName.isNotEmpty;
   if (!hasHistory) return HistoryResumeTarget.firstEpisodeOf(lines);
 
+  // 零级：**集入口 URL 精确命中优先于 flag 与集名**。
+  //
+  // 为什么必须提到最前：多条线路共用同一个 `playbackFlag`（同一解析源）时，
+  // 第一级的「集名兜底」会让列表第一条线路凭同名集先命中，于是角标/续播目标
+  // 都落在第一条线路上——用户实际播的是另一条。URL 是唯一能区分线路的证据。
+  if (historyEpisodeId.isNotEmpty) {
+    final hits = <(VodPlayLine, int)>[];
+    for (final line in lines) {
+      final index = _indexOfUrl(line, historyEpisodeId);
+      if (index >= 0) hits.add((line, index));
+    }
+    // 歧义（多条线路共用同一个集入口）时不猜——与第二级同一条判据。
+    if (hits.length == 1) {
+      final (line, index) = hits.first;
+      return HistoryResumeTarget(
+        flag: line.flag,
+        episodeIndex: index,
+        episodeName: line.episodes[index].name,
+        matched: true,
+      );
+    }
+  }
+
   // 第一级：flag 精确命中，且该线路**包含**这一集。
   for (final line in lines) {
     if (line.playbackFlag != historyFlag && line.flag != historyFlag) continue;
@@ -114,23 +137,7 @@ HistoryResumeTarget resolveHistoryTarget({
     }
   }
 
-  // 第二级：集 URL 在所有线路里**唯一**命中。
-  if (historyEpisodeId.isNotEmpty) {
-    final hits = <(VodPlayLine, int)>[];
-    for (final line in lines) {
-      final index = _indexOfUrl(line, historyEpisodeId);
-      if (index >= 0) hits.add((line, index));
-    }
-    if (hits.length == 1) {
-      final (line, index) = hits.first;
-      return HistoryResumeTarget(
-        flag: line.flag,
-        episodeIndex: index,
-        episodeName: line.episodes[index].name,
-        matched: true,
-      );
-    }
-  }
+  // 第二级（已并入零级）：集 URL 在所有线路里唯一命中时即采用。
 
   // 第三级：线路名命中——**仅当历史没有集入口目标**（旧数据）。
   //
