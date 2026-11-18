@@ -2774,7 +2774,8 @@ class _DetailPageState extends State<DetailPage> {
     if (belongs && lines.isNotEmpty && _selectedLineFlag.isEmpty) {
       final target = _resumeTarget(lines);
       final historyFlag = _history?.flag ?? '';
-      final historyLine = historyFlag.isEmpty
+      final historyEpisodeId = _history?.episodeId ?? '';
+      final byFlag = historyFlag.isEmpty
           ? null
           : lines
                 .where(
@@ -2782,7 +2783,16 @@ class _DetailPageState extends State<DetailPage> {
                       line.flag == historyFlag ||
                       line.playbackFlag == historyFlag,
                 )
-                .firstOrNull;
+                .toList();
+      // 多条线路可能共用同一个 `playbackFlag`（同一个解析源），这时只按 flag
+      // 取 `firstOrNull` 会把用户送到列表里的第一条线路。用历史里的集入口在
+      // 候选里精确定位用户真正播过的那条（见 [pickHistoryLine]）。
+      final historyLine = byFlag == null
+          ? null
+          : pickHistoryLine(
+              candidates: byFlag,
+              historyEpisodeId: historyEpisodeId,
+            );
       final initialFlag = target.matched ? target.flag : historyLine?.flag;
       if (initialFlag != null) {
         _selectedLineFlag = initialFlag;

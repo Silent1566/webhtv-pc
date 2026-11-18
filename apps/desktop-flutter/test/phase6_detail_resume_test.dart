@@ -49,6 +49,61 @@ void main() {
     lineOf('线路二', [('第1集', 'http://y/e1'), ('第2集', 'http://y/e2')]),
   ];
 
+  group('多线路共用 playbackFlag 时按集入口精确定位', () {
+    // 同一个解析源下，多条线路的 sourceFlag/playbackFlag 会完全一样。
+    final shared = [
+      lineOf('baidu', [
+        ('第1集', 'http://baidu/e1'),
+        ('第2集', 'http://baidu/e2'),
+      ], sourceFlag: '丫仙女'),
+      lineOf('quark(3)', [
+        ('第1集', 'http://quark3/e1'),
+        ('第2集', 'http://quark3/e2'),
+      ], sourceFlag: '丫仙女'),
+    ];
+
+    test('集入口命中第二条时选中它，而不是列表第一条', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: 'http://quark3/e2',
+      );
+      expect(picked?.flag, 'quark(3)');
+    });
+
+    test('集入口对不上时退回第一条（与旧行为一致）', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: 'http://gone/e1',
+      );
+      expect(picked?.flag, 'baidu');
+    });
+
+    test('历史没有集入口时退回第一条', () {
+      final picked = pickHistoryLine(
+        candidates: shared,
+        historyEpisodeId: '',
+      );
+      expect(picked?.flag, 'baidu');
+    });
+
+    test('只有一条候选时直接用它', () {
+      expect(
+        pickHistoryLine(
+          candidates: [shared.first],
+          historyEpisodeId: 'http://quark3/e2',
+        )?.flag,
+        'baidu',
+      );
+    });
+
+    test('没有候选时返回 null', () {
+      expect(
+        pickHistoryLine(candidates: const [], historyEpisodeId: 'x'),
+        isNull,
+      );
+    });
+  });
+
   group('无历史', () {
     test('返回第一条线路第 0 集，matched=false', () {
       final target = resolve(lines: twoLines);

@@ -12,6 +12,29 @@ import 'protocol.dart';
 import 'resume_migration.dart';
 import 'tmdb_title.dart';
 
+/// 在「按 flag 命中的候选线路」里挑出用户真正播过的那条。
+///
+/// 多条线路可以共用同一个 `playbackFlag`/`sourceFlag`（同一解析源），此时只按
+/// flag 取第一条会把用户送到列表里的第一条线路。历史里还存着当时的**集入口**
+/// （`PlaybackHistory.episodeId`），用它能在候选里精确定位。
+///
+/// 都定位不到时退回第一条，与旧行为一致——宁可回到默认线路，也不要空选。
+VodPlayLine? pickHistoryLine({
+  required List<VodPlayLine> candidates,
+  required String historyEpisodeId,
+}) {
+  if (candidates.isEmpty) return null;
+  if (candidates.length == 1) return candidates.first;
+  if (historyEpisodeId.isEmpty) return candidates.first;
+  return candidates
+          .where(
+            (line) =>
+                line.episodes.any((episode) => episode.url == historyEpisodeId),
+          )
+          .firstOrNull ??
+      candidates.first;
+}
+
 /// 详情页从历史恢复播放的目标（`docs/phase6/design/02` §2）。
 class HistoryResumeTarget {
   const HistoryResumeTarget({
