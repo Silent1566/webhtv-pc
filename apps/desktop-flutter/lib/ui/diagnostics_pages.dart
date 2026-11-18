@@ -19,6 +19,7 @@ import 'app.dart';
 import 'backup_page.dart';
 import 'common.dart';
 import 'config_pages.dart';
+import 'meta_sources_page.dart';
 import 'injected_sites_page.dart';
 import 'intro_skip_options_page.dart';
 import 'lut_presets_page.dart';
@@ -457,7 +458,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
         SettingsNavRow(
           key: const ValueKey('settings-tmdb-open'),
           icon: Icons.movie_filter_outlined,
-          title: 'TMDB 元数据增强',
+          title: 'TMDB 凭据与站点规则',
           subtitle: tmdb.isReady
               ? '已启用（站点规则 ${tmdb.disabledSites.length} 条禁用'
                     '${tmdb.enabledSites.isEmpty ? '' : '、${tmdb.enabledSites.length} 条启用'}）'
@@ -466,6 +467,22 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => TmdbSettingsPage(state: state),
+            ),
+          ),
+        ),
+        // 元数据来源与 TMDB 凭据是两件事：前者管「用哪家、谁优先、聚合什么」，
+        // 后者只管 TMDB 自己的 Key 与站点规则。合并成一个条目会让用户找不到
+        // 「数据来源」这项设置（用户反馈 2026-11-18）。
+        SettingsNavRow(
+          key: const ValueKey('settings-meta-sources-open'),
+          icon: Icons.hub_outlined,
+          title: '元数据来源与优先级',
+          subtitle: state.externalMetaEnabled
+              ? 'TMDB / 豆瓣 / Bangumi / Wikidata，逐字段设优先或聚合'
+              : '外部元数据兜底已关闭：只剩 TMDB',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => MetaSourcesPage(state: state),
             ),
           ),
         ),
