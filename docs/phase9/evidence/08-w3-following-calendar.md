@@ -212,3 +212,108 @@ $ flutter test test\phase9_calendar_air_time_test.dart test\phase9_calendar_page
    1 个文件，索引待后续统一补。
 6. 全量 test 的一条既有失败（`phase8_app_state_config_test.dart`，断言 9 而实现只定义 8 个按钮）
    未修，属既有缺陷，与追番/日历无关。
+
+## 8. 合并：追番 + 追剧日历 → 「追剧」页（2026-11-18）
+
+本文上面各节（尤其 §2 的 `ui/following_calendar_page.dart:...` 行号、「侧栏新增 calendar 入口」）
+记的是**合并前**的事实，保留作历史证据。现状如下。
+
+- **一个入口**：`ShellSection` 去掉 `calendar`（`lib/ui/app.dart:431`，11 → 10 项），侧栏「追番」+
+  「追剧日历」合并为带未读徽标的「追剧」（`lib/ui/app.dart:1451`）；`_buildContent` 不再有
+  calendar 分支，`following_calendar_page.dart` 也不再被壳层直接引用。
+- **一个页面两个视角**：`FollowingPage`（`lib/ui/following_page.dart:36`）成为宿主，页头一行
+  「追剧(N) · N 部有未看 · 检查更新 · 列表|日历 · ⋯」；日历侧是 `FollowingCalendarView`
+  （`lib/ui/following_calendar_page.dart:50`，原 `FollowingCalendarPage` 改名，只保留本体、不再自带壳层）。
+  `IndexedStack`（`following_page.dart` 的 `_calendarBuilt` 分支）保住月份/选中日/滚动位置，
+  且日历视图**首次切过去才创建**；TMDB 播出数据不归视图所有（见 §9），由宿主在页面打开时统一取。
+- **系统通知落点**：`AppState.followingOpenRequest` 仍由壳层切到 `ShellSection.following`
+  （`app.dart:514`），页面在 `_consumeOpenRequest`（`following_page.dart:84`）里先把视角切成列表、
+  再播放最新集——否则从通知进来会停在日历视角而看不到播放。
+- **设置归位**：自动检查 / 新集提示 / 检查间隔从页头整行收进「⋯」菜单（`following_page.dart:112`，
+  按钮 key `following-more`，菜单项沿用 `following-auto` / `following-notify` / `following-interval`）；
+  写入口仍是 `AppState.setFollowingSettings`。
+- **命名口径**：PC 界面统一「追剧」——详情页 ★ tooltip（`ui/browse_pages.dart` 的 `followed ? '取消追剧' : '追剧'`）、
+  加入/取消提示、两处空态、卡片 kebab「取消追剧」。内部 `following` 代码名、DB 表名、安卓对照词条仍叫「追番」。
+- **测试迁移**：`FollowingCalendarPage` → `FollowingCalendarView` 的 7 处挂载点，加上侧栏文案
+  （`phase9_following_unread_test.dart` 的 `find.text('追剧')`）、空态与 tooltip 断言；
+  `settings_immediate_forms_test.dart` 需先点开「⋯」再点「检查间隔」；`phase9_following_test.dart`
+  的三个设置断言改为菜单内断言。
+- **验收证据**：`apps/desktop-flutter/.local/merge-capture/{before,after}-{list,calendar-month,calendar-week}.png`
+  （同 1100×800、深色主题、同一部剧、同一场景）。合并后页头多占约 56px，月网格 `cellHeight` 仍在
+  24–30 的 clamp 内、行距与合并前一致（42px）；截图装置的 Material 按钮/列表项文字在本机回退成方框，
+  **前后一致**，不影响布局对比。
+- **后续**：动作层与 TMDB 数据的合并见 §9（同日完成）。
+
+## 9. 合并第二步：动作层去重 + TMDB 数据上提（2026-11-18）
+
+- **动作只留一份**：`lib/ui/following_actions.dart`。`playFollowingLatest`（列表卡：标读 → 起播 →
+  回写已看）、`playFollowingEntry`（日历条目：只有最新一集直达，其余提示去详情页选集）、
+  `openFollowingDetail`（换站点 → push 详情；`markRead`/`syncProgress` 显式表达列表卡的额外副作用）、
+  `followingPlaybackHistory`（同一份历史项构造）。合并前是 `_playLatest`/`_playEntry` + 两份
+  `_openDetail`，差异藏在不同页面的实现里，改一处容易漏另一处。
+- **TMDB 数据只有一份**：`lib/ui/following_air_data.dart` 的 `FollowingAirData`（ChangeNotifier）。
+  宿主 `FollowingPage` 持有实例并在页面打开/追番集合变化时刷新（判重键仍按身份集合，取数仍并发），
+  日历视图通过 `airData` 参数读它；`FollowingCalendarView` 在没人传时自建一份（单独挂载/测试路径不变）。
+- **列表卡多了 TMDB 摘要**：`FollowingCard.airSummary`（key `following-air-<identityKey>`）——
+  「官方共 N 集 · 下一集 M月D日」；TMDB 未配置/未匹配时是空串，不占位（列表卡其余信息位不动）。
+- **保留的交互守卫**：合并前日历在「加载期间用户手动滚动过」时不抢回列表位置（靠
+  `_interactionVersion`）。数据搬到共享对象后这条用「每次通知都是一个分界」保持：`refresh` 在
+  发起阶段先通知一次，视图比较两次通知之间有没有滚动；对应用例
+  `phase9_calendar_page_test.dart`「加载期间手动滚动后数据就绪不抢回列表位置」仍为绿。
+- **新增测试**：`test/following_air_data_test.dart`（下一集取「不早于现在」的最早一集、跨剧不串线、
+  官方总集数按季命中）、`test/following_view_switch_test.dart`（懒创建、切视角保状态、离开页面再回来保留视角）、
+  以及 `phase9_following_ui_test.dart` 的卡片摘要用例。
+- **已知取舍**：页面打开就会为已配置 TMDB 的用户取一次播出数据（列表卡要用），TMDB 侧有 6h 缓存；
+  取消「只在进日历才取」是有意为之——否则列表的摘要会依赖用户先点过日历。
+
+## 10. 列表视角补上「播放平台」徽标（2026-11-18，用户要求两边对齐）
+
+- **同一组件**：日历条目原来用的私有 `_Badge` 抽成 `lib/ui/following_badge.dart` 的
+  `FollowingBadge`（字号 11、容器色底、药丸圆角；`emphasized` 只区分「要用户注意」的未看态）。
+  日历条目的三处（集状态 / 平台 / 播出日期来源）与列表卡的平台徽标现在共用它，样式不会各写一套。
+- **列表卡**：`FollowingCard.platformLabel`，值来自 `playbackPlatformLabel(networks: _airData.networks[identityKey])`，
+  与日历同一口径（只取 TMDB `networks`、转中文显示名、最多两个、` / ` 连接、没有就不渲染）。位置是
+  标签行首位（沿用 DESIGN.md「播放平台排第一」），key `following-platform-<identityKey>`。
+- **不需要先点开日历**：平台名走 `FollowingAirData`，宿主打开页面时就取，列表视角直接有值。
+- **测试**：`calendar_platform_badge_test.dart` 新增用例 g)（挂 `FollowingPage` 断言列表徽标文案为「湖南卫视 / 芒果TV」、
+  站点名不参与、且只打一次 `/tv/{id}`）；`phase9_following_ui_test.dart` 新增卡片级用例（空串不占位 / 有值时渲染）。
+- **截图**：`.local/merge-capture/after-list-platform.png`（1100×800 深色，TMDB networks = Hunan Television + Mango TV）。
+
+## 11. 真机截图反馈后的四点修正（2026-11-18）
+
+用户给的是真机截图（「今天是太阳雨」24 集、湖南卫视 / 芒果TV），暴露了四处：
+
+1. **日历里平台徽标重复**：剧级信息本该只在当天该剧首条出现，但平台徽标写在主行无条件位置
+   （`following_calendar_page.dart` 的 `platformLabel` 分支），E21/E22/E23 各挂一遍。现在跟
+   `showSeriesInfo` 一起门控；新增用例 `calendar_platform_badge_test.dart` h)（同一天两集 → 两张卡、
+   只有一个平台徽标）。
+2. **列表卡同一个数字出现四次**：pill「N 集未看」+ 行内「未看 N 集」+「本线路可播 N 集」+「官方共 N 集」。
+   处理：行内未看文案删除（pill 保留）；官方集数的判断移到 `FollowingAirData.episodeLabelFor`
+   （可单测，见 `following_air_data_test.dart`）；通知三态文案缩短为「开 / 关（本条）/ 关（全局）」。
+   注意：本轮先做的是「相同就省略」，用户当天指出**断更/滞后时官方集数是唯一真实口径**，
+   随即改为「官方永远显示，线路不同时才补一句」（见 §12）。
+3. **「选中日没有更新」浮层压住列表首条**：原来是列表 Stack 顶部居中的浮层。现在渲染在日历区与列表
+   之间的固定行（`_selectedEmptyHint`），占自己的高度；`phase9_calendar_page_test.dart` 增加
+   `hint.bottom <= list.top` 的几何断言。
+4. **圆点与「没有更新」的口径**：两者都从同一份 `byDay` 推出（`followingCalendarUnwatchedDaysInMonth` /
+   `followingCalendarDayOf`），不可能同时成立；截图里的冲突最可能是 TMDB 数据落位前后的残留帧。
+   修正后提示条常驻，且已用几何断言锁住「不遮挡」这一条。
+
+截图：`.local/merge-capture/{after-list-platform,after-calendar-multiep,after-calendar-emptyday}.png`。
+已知小尾巴（未改）：日历卡进度分母来自官方总集数、分子来自本线路已播集数，若官方数据滞后（总集数
+小于线路已播）会显示成「24 / 3 集」；真实数据下常见于元数据比源慢一步的情况，是否夹紧待定。
+
+## 12. 官方总集数改为「永远显示」（2026-11-18 用户追问后修正）
+
+用户问「总集数去掉了吗？这个很重要的，比如当前线路更新不及时或断更了，用户就不清楚真实集数了」。
+
+- 上一版规则是「官方 == 本线路可播时省略」，用户的实际诉求正相反：**总集数本身就是信息**
+  （线路 18 / 官方 24 时要能看出差了 6 集；线路断更时更是唯一口径）。
+- 现行规则（`FollowingAirData.episodeLabelFor`）：
+  - 官方未知（未配置 TMDB / 未匹配 / 取数失败）→ 空串，卡片退回「本线路可播 N 集」；
+  - 官方已知且与线路相同 → `官方共 N 集`（只有一个数，不重复）；
+  - 官方已知且与线路不同 → `本线路可播 X 集 · 官方共 N 集`。
+- `airSummaryFor` 现在只管「下一集 M月D日」，不再重复集数。
+- 测试：`following_air_data_test.dart` 覆盖三种分支；`phase9_following_ui_test.dart` 的「集数行」用例
+  验证宿主给了完整口径时不再并列报线路集数。
+- 截图：`.local/merge-capture/after-list-platform.png`（官方 24 / 线路 12 的断更场景）。

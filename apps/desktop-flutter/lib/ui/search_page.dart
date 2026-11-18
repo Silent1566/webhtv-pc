@@ -602,6 +602,11 @@ class _SearchPageState extends State<SearchPage> {
   /// `列 × 行`，由 `HotRankLayout` 从可用宽高算出；候选池取接口全量 30 条，
   /// 于是还能「换一批」轮换出一屏之外的条目。
   ///
+  /// 行数不是按固定 254 的卡高数的：那样 483 的可用高只够一行（用户窗口
+  /// 1273×821 实测就是这样），而两行其实放得下。行数按「最省卡高」194 数，
+  /// 再把可用高摊给实际行数得到 `layout.cardHeight`——卡片随窗口长高，
+  /// 海报封顶 210（140×210 = 2:3），封顶后底部的留白是预期行为。
+  ///
   /// 点击语义**不是播放**：360kan 不是本应用可播放的站源，点卡片执行的是
   /// 「拿这个片名去各站点搜索」——与原来的词 chips 完全一致，只是换了呈现。
   Widget _buildHotSection() {
@@ -693,6 +698,10 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   /// 网格：`columns × rows` 个卡片，恰好铺满可用空间。
+  ///
+  /// 行高取 `layout.cardHeight`（不是常量 254）：可用高摊给实际行数得到的高度，
+  /// 网格与卡片两边必须用同一个值，否则算出来的行数与实际显示的行数会不一致
+  /// （又出现半行/溢出）。
   Widget _buildHotGrid(HotRankLayout layout, List<SearchSuggestItem> window) {
     final theme = Theme.of(context);
     if (window.isEmpty) {
@@ -711,14 +720,14 @@ class _SearchPageState extends State<SearchPage> {
     }
     return GridView.builder(
       padding: EdgeInsets.zero,
-      // 固定行高：铺满计算按 `HotRankMetrics.cardHeight` 算，这里必须用同一个值，
-      // 否则算出来的行数与实际显示的行数会不一致（又出现半行/溢出）。
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: layout.columns,
-        mainAxisExtent: HotRankMetrics.cardHeight,
+        mainAxisExtent: layout.cardHeight,
         crossAxisSpacing: HotRankMetrics.spacing,
         mainAxisSpacing: HotRankMetrics.spacing,
       ),
+      // 卡片宽仍是 140（`PosterCard` 自己定宽 + Column 的 crossAxisAlignment.start），
+      // 不拉满格子：格子比 140 宽出来的那点余量留在右侧，与结果区同宽同密度。
       itemCount: window.length,
       itemBuilder: (context, index) {
         final item = window[index];
@@ -729,6 +738,8 @@ class _SearchPageState extends State<SearchPage> {
           subtitle: item.subtitle,
           rank: item.rank,
           score: item.score,
+          posterHeight: layout.posterHeight,
+          titleMaxLines: layout.titleLines,
           onTap: () => _searchFrom(item.title),
         );
       },

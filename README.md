@@ -85,12 +85,21 @@ flutter pub get
 dart analyze
 ```
 
-Windows 原生构建需安装 Flutter 要求的 Visual Studio C++ 桌面开发工具链。Windows 构建前，在仓库根目录通过 PowerShell 准备校验过的 Python 运行时：
+Windows 原生构建需安装 Flutter 要求的 Visual Studio C++ 桌面开发工具链。Windows 构建前，在仓库根目录通过 PowerShell 准备校验过的 Python 运行时与固定的原生依赖：
 
 ```powershell
 ./scripts/prepare_python_runtime.ps1
+./scripts/prepare_windows_native_deps.ps1
 cd apps/desktop-flutter
 flutter build windows --release
+```
+
+第二个脚本把 libmpv、ANGLE、nuget、sqlite3 源码等插件依赖一次性下载到 `.local/win-deps/`（带 SHA-256/MD5 校验和 curl 超时）。这些依赖原本由插件 CMake 在构建时用不设超时的 `file(DOWNLOAD)`/`FetchContent` 拉取，网络一卡构建就停在 `Building Windows application...` 且没有任何输出。准备过之后原生构建不再联网。
+
+构建卡住时用带心跳和卡死快照的包装脚本，它会记录是哪个进程真的卡住了：
+
+```powershell
+./scripts/flutter_build_windows.ps1 -Mode release
 ```
 
 Linux 原生依赖、构建和无显示器测试步骤请按 [Linux 指南](docs/linux-packaging.md) 执行。播放器测试需要原生库，不能把缺失运行环境当作普通测试失败或直接跳过相关测试。

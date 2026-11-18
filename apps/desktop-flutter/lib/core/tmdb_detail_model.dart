@@ -15,6 +15,7 @@
 library;
 
 import 'detail_ratings.dart';
+import 'playback_platform.dart';
 import 'tmdb_identity.dart';
 import 'tmdb_media.dart';
 import 'tmdb_title.dart';
@@ -164,6 +165,7 @@ class TmdbDetailData {
     this.genres = const [],
     this.countries = const [],
     this.languages = const [],
+    this.networks = const [],
     this.rating = 0,
     this.ratingSourceLabel = RatingBrand.tmdb,
     this.voteCount = 0,
@@ -220,6 +222,10 @@ class TmdbDetailData {
   final List<String> genres;
   final List<String> countries;
   final List<String> languages;
+
+  /// 播出平台（`networks` 的台名，最多两个）；响应缺失时为空。
+  final List<String> networks;
+
   final double rating;
   final String ratingSourceLabel;
   final int voteCount;
@@ -365,6 +371,7 @@ class TmdbDetailData {
       genres: _namesOf(detail['genres']),
       countries: _productionCountries(detail),
       languages: _spokenLanguages(detail),
+      networks: tmdbNetworkNames(detail['networks']),
       rating: rating > 0 ? rating : (item?.tmdbRating ?? 0),
       voteCount: tmdbInt(detail['vote_count']),
       releaseDate: date,

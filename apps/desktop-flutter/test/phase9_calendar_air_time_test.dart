@@ -342,7 +342,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
-          home: Scaffold(body: FollowingCalendarPage(state: state)),
+          home: Scaffold(body: FollowingCalendarView(state: state)),
         ),
       );
       // 第一次 pump 触发异步加载，第二次 pump 渲染加载结果。

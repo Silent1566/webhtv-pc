@@ -46,12 +46,16 @@ class _MediaIO extends PlatformPlayer {
 
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
-    opened.add((playable as Media).uri);
+    final media = playable as Media;
+    opened.add(media.uri);
     final pending = nextOpen;
     nextOpen = null;
     if (pending != null) await pending.future;
     if (failOpen) throw StateError('404 missing episode');
-    progress(1);
+    // 起播定位由 `Media.start` 下发（真实 mpv 在 on_load hook 里应用）；
+    // 假播放器必须照做，否则「定位随 open 一起下发」这条契约就无人验证。
+    final start = media.start;
+    progress(start != null && start > Duration.zero ? start.inSeconds : 1);
   }
 
   @override

@@ -38,6 +38,9 @@ class _MediaIO extends PlatformPlayer {
   final PlatformPlayer original;
   final opened = <Media>[];
   final seeks = <Duration>[];
+
+  /// 是否让 `Media.start` 生效（模拟内核拒收 `start` 选项）。
+  bool honourStart = true;
   Completer<void>? nextOpen;
 
   /// 让恢复进度这一步失败（`_load` 的 seek），验证错误可见性。
@@ -62,13 +65,19 @@ class _MediaIO extends PlatformPlayer {
 
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
-    opened.add(playable as Media);
+    final media = playable as Media;
+    opened.add(media);
     final pending = nextOpen;
     nextOpen = null;
     if (pending != null) await pending.future;
-    progress(const Duration(seconds: 1), playing: play);
+    // 起播定位由 `Media.start` 下发（真实 mpv 在 loadfile 前应用）。对用户而言
+    // 这与一次 seek 等价——切画质必须停在当前进度，所以照样记进 `seeks`。
+    final start = media.start;
+    // `honourStart=false` 模拟内核没吃上 `start` 选项：定位失败不会抛异常。
+    final honoured = start != null && start > Duration.zero && honourStart;
+    if (honoured) seeks.add(start);
+    progress(honoured ? start : const Duration(seconds: 1), playing: play);
   }
-
   @override
   Future<void> seek(Duration position) async {
     seeks.add(position);
@@ -584,7 +593,9 @@ void main() {
     final f = await _mount(tester);
     f.current.progress(const Duration(milliseconds: 123456), playing: true);
     await tester.pump();
-    f.current.throwOnSeek = true;
+    // 定位改为随 open 下发（`Media.start`）：失败形态不是 seek 抛错，
+    // 而是内核没吃上选项、落点仍在开头。
+    f.current.honourStart = false;
 
     final opensBefore = f.current.opened.length;
     await _select(tester, 1);
@@ -597,14 +608,14 @@ void main() {
       reason: '恢复失败发生在换地址之后，不该再重开一次媒体',
     );
     expect(
-      f.state.log.entries.any((entry) => entry.line.contains('画质切换失败')),
+      f.state.log.entries.any((entry) => entry.line.contains('起播定位未生效')),
       isTrue,
-      reason: '当前新画质的恢复失败必须留下日志',
+      reason: '定位没吃上必须留下日志',
     );
     expect(
-      find.textContaining('画质切换失败'),
+      find.textContaining('未能跳到该位置'),
       findsOneWidget,
-      reason: '当前新画质的恢复失败必须提示用户，不能被静默吞掉',
+      reason: '定位失败不抛异常，必须显式提示用户，不能被静默吞掉',
     );
     await _close(tester);
   });

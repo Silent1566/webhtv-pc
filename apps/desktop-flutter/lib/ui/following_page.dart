@@ -1,24 +1,34 @@
-/// 追番页（Phase 9 · P2-1）。
+/// 追剧页（Phase 9 · P2-1；追番列表与追剧日历合并后的宿主页）。
 ///
-/// 数据来自本地 `following` 表；检查更新走「站点详情 → 线路集数」，
-/// 应用关闭后不检查（PC 没有后台服务，见 `core/following.dart` 的边界说明）。
+/// 两个视角共用本地 `following` 表：`列表` 是系列视角（检查/通知/移除），
+/// `日历` 是时间视角（[FollowingCalendarView]：整周/整月 + 按日分段）。
+/// 检查更新走「站点详情 → 线路集数」，应用关闭后不检查（PC 没有后台服务，
+/// 见 `core/following.dart` 的边界说明）。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../core/app_error.dart';
 import '../core/following.dart';
-import '../core/protocol.dart';
-import '../services/storage.dart';
+import '../core/playback_platform.dart';
 import '../state/app_state.dart';
 import 'app.dart';
-import 'async_action_feedback.dart';
-import 'browse_pages.dart';
-import 'playback_resume.dart';
+import 'following_actions.dart';
+import 'following_air_data.dart';
+import 'following_badge.dart';
+import 'following_calendar_page.dart';
 import 'tokens.dart';
-import 'toast.dart';
+
+/// 追剧页的两个视角：系列列表 / 日历。
+enum _FollowingView {
+  list('列表'),
+  calendar('日历');
+
+  const _FollowingView(this.label);
+
+  final String label;
+}
 
 class FollowingPage extends StatefulWidget {
   const FollowingPage({super.key, required this.state});
@@ -29,30 +39,66 @@ class FollowingPage extends StatefulWidget {
   State<FollowingPage> createState() => _FollowingPageState();
 }
 
+/// 「⋯」菜单项取值（页面内部路由用，不是持久化字段）。
+const String _menuAuto = 'auto';
+const String _menuNotify = 'notify';
+const String _menuInterval = 'interval';
+
 class _FollowingPageState extends State<FollowingPage> {
   bool _checking = false;
   String _message = '';
 
+  /// 当前视角：系列列表 / 日历。
+  _FollowingView _view = _FollowingView.list;
+
+  /// 日历视图是否已创建过：首次切过去才创建，之后一直留在树里，
+  /// 由 IndexedStack 保住它的月份/选中日/滚动位置。
+  ///
+  /// 注意这只省下日历视图本身的构建：TMDB 播出数据由宿主在页面打开时统一取，
+  /// 列表卡也要用（见 [FollowingAirData]）。
+  bool _calendarBuilt = false;
+
   AppState get _state => widget.state;
+
+  /// 两个视角共用的 TMDB 播出数据：列表卡显示官方集数/下一集，日历用它归日与分母。
+  ///
+  /// 数据在页面打开时就取（列表视角也要用），日历视图只是不再自己取一份。
+  late final FollowingAirData _airData = FollowingAirData(state: _state);
 
   @override
   void initState() {
     super.initState();
     // 外部（检查/追番/取消）都会 notify；页面必须跟着重建。
     _state.addListener(_onStateChanged);
+    _airData.addListener(_onAirDataChanged);
+    unawaited(_airData.refresh(_state.followings));
+    // 恢复上次视角（壳层切页会重建本页，会话内不该被打回列表）。
+    if (_state.followingViewIndex == _FollowingView.calendar.index) {
+      _view = _FollowingView.calendar;
+      _calendarBuilt = true;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeOpenRequest());
   }
 
   @override
   void dispose() {
     _state.removeListener(_onStateChanged);
+    _airData.removeListener(_onAirDataChanged);
+    _airData.dispose();
     super.dispose();
   }
 
   void _onStateChanged() {
     if (!mounted) return;
     setState(() {});
+    unawaited(_airData.refresh(_state.followings));
     _consumeOpenRequest();
+  }
+
+  /// TMDB 数据回来了：重画（列表卡的「官方集数 / 下一集」跟着变）。
+  void _onAirDataChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   /// 系统通知被点击后打开对应追番的最新集（请求由 AppState 记录）。
@@ -60,15 +106,77 @@ class _FollowingPageState extends State<FollowingPage> {
     final key = _state.followingOpenRequest;
     if (key.isEmpty) return;
     _state.clearFollowingOpenRequest();
+    // 从系统通知进来必须落在列表视角：日历视角没有这条剧的播放入口。
+    if (_view != _FollowingView.list) {
+      setState(() {
+        _view = _FollowingView.list;
+        _state.followingViewIndex = _FollowingView.list.index;
+      });
+    }
     final item = _items
         .where((candidate) => candidate.identityKey == key)
         .firstOrNull;
     if (item == null) return;
     _message = '来自系统通知：${item.vodName}';
-    unawaited(_playLatest(item));
+    unawaited(playFollowingLatest(context, _state, item));
   }
 
   List<Following> get _items => _state.followings;
+
+  void _setView(_FollowingView view) {
+    if (view == _view) return;
+    setState(() {
+      _view = view;
+      _state.followingViewIndex = view.index;
+      if (view == _FollowingView.calendar) _calendarBuilt = true;
+    });
+  }
+
+  /// 页头「⋯」：原先把这三项平铺成一行，合并后页头要让位给视角切换，
+  /// 收进菜单里；写入口与生效开关（[AppState.setFollowingSettings]）不变。
+  Widget _followingMenu(FollowingSettings settings) {
+    return PopupMenuButton<String>(
+      key: const ValueKey('following-more'),
+      tooltip: '追剧设置',
+      icon: const Icon(Icons.more_horiz),
+      onSelected: (value) => unawaited(_onMenuSelected(value, settings)),
+      itemBuilder: (context) => [
+        CheckedPopupMenuItem(
+          key: const ValueKey('following-auto'),
+          value: _menuAuto,
+          checked: settings.enabled,
+          child: Text('自动检查（应用运行期间${settings.intervalLabel}）'),
+        ),
+        CheckedPopupMenuItem(
+          key: const ValueKey('following-notify'),
+          value: _menuNotify,
+          checked: settings.notifyEnabled,
+          child: const Text('新集提示'),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          key: const ValueKey('following-interval'),
+          value: _menuInterval,
+          child: Text('检查间隔：${settings.intervalLabel}'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _onMenuSelected(String value, FollowingSettings settings) async {
+    switch (value) {
+      case _menuNotify:
+        await _state.setFollowingSettings(
+          settings.copyWith(notifyEnabled: !settings.notifyEnabled),
+        );
+      case _menuInterval:
+        await _editInterval(settings);
+      case _menuAuto:
+        await _state.setFollowingSettings(
+          settings.copyWith(enabled: !settings.enabled),
+        );
+    }
+  }
 
   Future<void> _checkAll() async {
     if (_checking) return;
@@ -198,107 +306,11 @@ class _FollowingPageState extends State<FollowingPage> {
     controller.dispose();
   }
 
-  Future<void> _playLatest(Following item) async {
-    if (item.latestEpisodeTarget.isEmpty) {
-      await _openDetail(item);
-      return;
-    }
-    final feedback = AsyncActionFeedback.begin(
-      context,
-      '正在准备播放：${item.vodName}',
-    );
-    if (feedback == null) return;
-    try {
-      await _state.markFollowingRead(item);
-      if (!mounted || !feedback.isCurrent) return;
-      final history = PlaybackHistory(
-        id: 0,
-        siteKey: item.siteKey,
-        vodId: item.vodId,
-        vodName: item.vodName,
-        vodPic: item.vodPic,
-        flag: item.sourceFlag.isEmpty ? item.flag : item.sourceFlag,
-        episodeName: item.latestEpisodeName,
-        episodeId: item.latestEpisodeTarget,
-        positionMs: 0,
-        durationMs: 0,
-        updatedAt: item.updatedAtMs,
-      );
-      await resumeHistoryEntry(context, _state, history, feedback: feedback);
-      if (!mounted || !feedback.isCurrent) return;
-      _syncProgress(item);
-    } catch (error) {
-      if (mounted && feedback.isCurrent) {
-        feedback.dismiss();
-        showToast(
-          error is AppError ? error.userMessage : '$error',
-          kind: ToastKind.error,
-        );
-      }
-    } finally {
-      feedback.close();
-    }
-  }
-
-  Future<void> _openDetail(Following item) async {
-    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
-    final config = _state.config;
-    final site = config?.sites
-        .where((candidate) => candidate.key == item.siteKey)
-        .firstOrNull;
-    if (site == null) {
-      showToast('该追番所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-      return;
-    }
-    final feedback = AsyncActionFeedback.begin(
-      context,
-      '正在打开详情：${item.vodName}',
-    );
-    if (feedback == null) return;
-    try {
-      await _state.markFollowingRead(item);
-      if (!mounted || !feedback.isCurrent) return;
-      await _state.selectSite(site);
-      if (!mounted || !feedback.isCurrent) return;
-      feedback.dismiss();
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => DetailPage(
-            state: _state,
-            vod: Vod(
-              vodId: item.vodId,
-              vodName: item.vodName,
-              vodPic: item.vodPic,
-            ),
-            historyFlag: item.flag,
-          ),
-        ),
-      );
-      if (!mounted || !feedback.isCurrent) return;
-      _syncProgress(item);
-    } catch (error) {
-      if (mounted && feedback.isCurrent) {
-        feedback.dismiss();
-        showToast(
-          error is AppError ? error.userMessage : '$error',
-          kind: ToastKind.error,
-        );
-      }
-    } finally {
-      feedback.close();
-    }
-  }
-
-  void _syncProgress(Following item) {
-    final result = _state.syncFollowingProgress(items: [item]);
-    if (result.updated > 0) setState(() {});
-  }
-
   Future<void> _remove(Following item) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('取消追番？'),
+        title: const Text('取消追剧？'),
         content: Text('不再检查《${item.vodName}》的更新。已下载/已看的记录不受影响。'),
         actions: [
           TextButton(
@@ -307,7 +319,7 @@ class _FollowingPageState extends State<FollowingPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('取消追番'),
+            child: const Text('取消追剧'),
           ),
         ],
       ),
@@ -332,81 +344,56 @@ class _FollowingPageState extends State<FollowingPage> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 12,
-            runSpacing: 8,
+          child: Row(
             children: [
-              Text('追番（${items.length}）', style: theme.textTheme.titleMedium),
-              if (unwatchedCount > 0)
-                Container(
-                  key: const ValueKey('following-update-summary'),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(AppRadius.sm),
-                  ),
-                  child: Text(
-                    '$unwatchedCount 部有未看',
-                    style: TextStyle(
-                      color: theme.colorScheme.onPrimaryContainer,
-                      fontSize: 12,
+              Expanded(
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    Text(
+                      '追剧（${items.length}）',
+                      style: theme.textTheme.titleMedium,
                     ),
-                  ),
+                    if (unwatchedCount > 0)
+                      Container(
+                        key: const ValueKey('following-update-summary'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                        ),
+                        child: Text(
+                          '$unwatchedCount 部有未看',
+                          style: TextStyle(
+                            color: theme.colorScheme.onPrimaryContainer,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    FilledButton.tonalIcon(
+                      key: const ValueKey('following-check-all'),
+                      onPressed: _checking || items.isEmpty ? null : _checkAll,
+                      icon: _checking
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: 18),
+                      label: Text(_checking ? '检查中…' : '检查更新'),
+                    ),
+                  ],
                 ),
-              const SizedBox(width: 8),
-              FilledButton.tonalIcon(
-                key: const ValueKey('following-check-all'),
-                onPressed: _checking || items.isEmpty ? null : _checkAll,
-                icon: _checking
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh, size: 18),
-                label: Text(_checking ? '检查中…' : '检查更新'),
               ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              _toggle(
-                key: 'following-auto',
-                label: '自动检查',
-                value: settings.enabled,
-                subtitle: '应用运行期间${settings.intervalLabel}',
-                onChanged: (value) async {
-                  await _state.setFollowingSettings(
-                    settings.copyWith(enabled: value),
-                  );
-                },
-              ),
-              _toggle(
-                key: 'following-notify',
-                label: '新集提示',
-                value: settings.notifyEnabled,
-                subtitle: '系统通知；不可用时降级为应用内徽标与提示条',
-                onChanged: (value) async {
-                  await _state.setFollowingSettings(
-                    settings.copyWith(notifyEnabled: value),
-                  );
-                },
-              ),
-              TextButton.icon(
-                key: const ValueKey('following-interval'),
-                onPressed: () => _editInterval(settings),
-                icon: const Icon(Icons.schedule, size: 16),
-                label: Text('检查间隔：${settings.intervalLabel}'),
-              ),
+              const SizedBox(width: AppSpace.md),
+              _FollowingViewToggle(view: _view, onChanged: _setView),
+              _followingMenu(settings),
             ],
           ),
         ),
@@ -418,9 +405,14 @@ class _FollowingPageState extends State<FollowingPage> {
           ),
         const SizedBox(height: 4),
         Expanded(
-          child: items.isEmpty
-              ? const _FollowingEmpty()
-              : ListView.separated(
+          child: IndexedStack(
+            index: _view.index,
+            sizing: StackFit.expand,
+            children: [
+              if (items.isEmpty)
+                const _FollowingEmpty()
+              else
+                ListView.separated(
                   key: const ValueKey('following-list'),
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
                   itemCount: items.length,
@@ -428,11 +420,24 @@ class _FollowingPageState extends State<FollowingPage> {
                   itemBuilder: (context, index) {
                     final item = items[index];
                     return FollowingCard(
+                      episodeLabel: _airData.episodeLabelFor(item),
+                      airSummary: _airData.airSummaryFor(item),
+                      platformLabel: playbackPlatformLabel(
+                        networks:
+                            _airData.networks[item.identityKey] ?? const [],
+                      ),
                       item: item,
                       checking: _checking,
                       globalNotifyEnabled: settings.notifyEnabled,
-                      onPlay: _playLatest,
-                      onOpenDetail: _openDetail,
+                      onPlay: (item) =>
+                          playFollowingLatest(context, _state, item),
+                      onOpenDetail: (item) => openFollowingDetail(
+                        context,
+                        _state,
+                        item,
+                        markRead: true,
+                        syncProgress: true,
+                      ),
                       onCheck: _checkOne,
                       onMarkRead: (item) => _state.markFollowingRead(item),
                       onSetNotify: (enabled) =>
@@ -441,28 +446,66 @@ class _FollowingPageState extends State<FollowingPage> {
                     );
                   },
                 ),
+              // 日历首次进入才创建；之后由 IndexedStack 保活（月份/选中日/滚动位置）。
+              if (_calendarBuilt)
+                FollowingCalendarView(state: _state, airData: _airData)
+              else
+                const SizedBox.shrink(),
+            ],
+          ),
         ),
       ],
     );
   }
+}
 
-  Widget _toggle({
-    required String key,
-    required String label,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) {
-    return SizedBox(
-      width: 300,
-      child: SwitchListTile(
-        key: ValueKey(key),
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        title: Text(label),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 11)),
-        value: value,
-        onChanged: onChanged,
+/// 列表 / 日历视角切换（视觉与日历内的「整周 / 整月」一致）。
+class _FollowingViewToggle extends StatelessWidget {
+  const _FollowingViewToggle({required this.view, required this.onChanged});
+
+  final _FollowingView view;
+  final ValueChanged<_FollowingView> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: AppRadius.pillAll,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final option in _FollowingView.values)
+            InkWell(
+              key: ValueKey('following-view-${option.name}'),
+              onTap: option == view ? null : () => onChanged(option),
+              borderRadius: AppRadius.pillAll,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: option == view
+                    ? BoxDecoration(
+                        color: scheme.primary,
+                        borderRadius: AppRadius.pillAll,
+                      )
+                    : null,
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: option == view
+                        ? scheme.onPrimary
+                        : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -480,10 +523,10 @@ class _FollowingEmpty extends StatelessWidget {
         children: [
           const Icon(Icons.star_border, size: 44),
           const SizedBox(height: AppSpace.sm),
-          const Text('还没有追番'),
+          const Text('还没有追剧'),
           const SizedBox(height: AppSpace.xs),
           const Text(
-            '在影片详情页点右上角 ★ 加入追番；有新集时这里会显示徽标。',
+            '在影片详情页点右上角 ★ 加入追剧；有新集时这里会显示徽标。',
             style: TextStyle(fontSize: 12),
           ),
         ],
@@ -505,9 +548,23 @@ class FollowingCard extends StatelessWidget {
     required this.onMarkRead,
     required this.onSetNotify,
     required this.onRemove,
+    this.airSummary = '',
+    this.platformLabel = '',
+    this.episodeLabel = '',
   });
 
   final Following item;
+
+  /// TMDB 摘要（官方共 N 集 / 下一集 M月D日）；空串表示未知，不占位。
+  final String airSummary;
+
+  /// 播放平台（TMDB networks 转中文名，如「湖南卫视 / 芒果TV」）；空串不占位。
+  ///
+  /// 与日历条目同一个 [FollowingBadge] 组件，样式与日历一致。
+  final String platformLabel;
+
+  /// 集数行（含官方总集数的完整口径）；空串表示宿主没给，退回本线路可播集数。
+  final String episodeLabel;
   final bool checking;
 
   /// 全局「新集提示」开关（`FollowingSettings.notifyEnabled`）。
@@ -539,18 +596,23 @@ class FollowingCard extends StatelessWidget {
     return '$status · $line';
   }
 
-  /// 本线路可播集数（来自站点线路，不是官方/元数据集数）。
-  String get _episodeText =>
-      item.releasedEpisode > 0 ? '本线路可播 ${item.releasedEpisode} 集' : '集数未知';
+  /// 集数行：宿主给了完整口径（含官方总集数）就用它；否则退回本线路可播集数。
+  String get _episodeText {
+    if (episodeLabel.isNotEmpty) return episodeLabel;
+    return item.releasedEpisode > 0
+        ? '本线路可播 ${item.releasedEpisode} 集'
+        : '集数未知';
+  }
 
   String get _watchedText =>
       item.watchedEpisode > 0 ? '已看 ${item.watchedEpisode} 集' : '未开始看';
 
   /// 三态：生效开 / 条目关 / 全局关（条目开着但推送不会发生）。
+  /// 三态短文案：生效开 / 条目关 / 全局关（条目开着但推送不会发生）。
   String get _notifyText {
     if (_notifyEffective) return '新集通知：开';
-    if (!item.notifyEnabled) return '新集通知：关（条目关闭）';
-    return '新集通知：关（全局开关关闭）';
+    if (!item.notifyEnabled) return '新集通知：关（本条）';
+    return '新集通知：关（全局）';
   }
 
   /// 下一季入口：仅当有比追踪季更新的发布季时显示（PC 暂无季数据，恒不显示），
@@ -637,16 +699,21 @@ class FollowingCard extends StatelessWidget {
                     runSpacing: 2,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(_episodeText, style: subtle),
-                      Text(_watchedText, style: subtle),
-                      if (_unwatched > 0)
-                        Text(
-                          '未看 $_unwatched 集',
+                      if (platformLabel.isNotEmpty)
+                        FollowingBadge(
                           key: ValueKey(
-                            'following-unwatched-${item.identityKey}',
+                            'following-platform-${item.identityKey}',
                           ),
-                          style: emphasis,
+                          text: platformLabel,
                         ),
+                      Text(_episodeText, style: subtle),
+                      if (airSummary.isNotEmpty)
+                        Text(
+                          airSummary,
+                          key: ValueKey('following-air-${item.identityKey}'),
+                          style: subtle,
+                        ),
+                      Text(_watchedText, style: subtle),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -739,11 +806,8 @@ class FollowingCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const PopupMenuItem(
-                  value: 'read',
-                  child: Text('标为已读（仅清除提示）'),
-                ),
-                const PopupMenuItem(value: 'remove', child: Text('取消追番')),
+                const PopupMenuItem(value: 'read', child: Text('标为已读（仅清除提示）')),
+                const PopupMenuItem(value: 'remove', child: Text('取消追剧')),
               ],
             ),
           ],

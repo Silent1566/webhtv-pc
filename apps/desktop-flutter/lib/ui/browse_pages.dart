@@ -16,6 +16,7 @@ import '../core/detail_ratings.dart';
 import '../core/external_detail_meta.dart';
 import '../core/external_meta.dart';
 import '../core/meta_source.dart';
+import '../core/playback_platform.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_detail_meta.dart';
@@ -2448,13 +2449,14 @@ class _DetailPageState extends State<DetailPage> {
   /// 用集 **URL** 而不是集号做桥接：集号可能缺失或重复（`stillKey` 的注释里
   /// 已记过这个坑），URL 才是「同一集」的稳定身份。
   ///
-  /// 三道守卫都不可省：
-  /// 1. `matched` —— `matched == false` 涵盖「无历史」与「历史线路在但那一集
-  ///    已消失」（§4.1），标出来会把用户引到一条没有那一集的线路上；
-  /// 2. `rawLine.flag == target.flag` —— 只有历史命中的**那条线路**才标，
-  ///    否则切到别的线路也会看到标记；
-  /// 3. 下标越界 —— `lines` 与 `rawLine` 理论上同源，但越界时必须回落到
-  ///    「无标记」而不是抛异常（详情刷新期间两者可能短暂不同步）。
+  /// **跨线路也要标**：同一部剧的「那一集」在各条线路上是同一集，用户切到别的
+  /// 线路后仍然需要知道从哪继续（安卓版同样如此）。执行顺序：
+  /// 1. `matched == false` 直接不标——「无历史」与「那一集已消失」（§4.1）都
+  ///    标出来会把用户引到一条没有那一集的线路上；
+  /// 2. 在本线路里映射到同一集，按可信度依次尝试：集入口 URL 相同（精确）→
+  ///    集名相同（站点通常用「第 N 集」）→ 两条线路集数相同时按同下标对齐；
+  /// 3. 三者都对不上就不标——宁可没有角标，也不能把用户引到错误的集；
+  /// 4. 下标越界同样回落到「无标记」（详情刷新期间两个集合可能短暂不同步）。
   int _recentRenderedIndex(
     Vod vod,
     VodPlayLine rawLine,
@@ -2463,19 +2465,47 @@ class _DetailPageState extends State<DetailPage> {
     final lines = _playableLines(vod);
     final target = _resumeTarget(lines);
     if (!target.matched) return -1;
-    if (rawLine.flag != target.flag) return -1;
-    if (target.episodeIndex < 0 ||
-        target.episodeIndex >= rawLine.episodes.length) {
+    final targetLine = lines
+        .where((line) => line.flag == target.flag)
+        .firstOrNull;
+    if (targetLine == null ||
+        target.episodeIndex < 0 ||
+        target.episodeIndex >= targetLine.episodes.length) {
       return -1;
     }
-    final episode = rawLine.episodes[target.episodeIndex];
+    final historyEpisode = targetLine.episodes[target.episodeIndex];
+    VodEpisode? mark;
+    for (final episode in rawLine.episodes) {
+      if (episode.url == historyEpisode.url) {
+        mark = episode;
+        break;
+      }
+    }
+    mark ??= rawLine.episodes
+        .where((episode) => episode.name == historyEpisode.name)
+        .firstOrNull;
+    // 集名兜底：不同线路的命名常常不一致（「第 2 集」/「EP02」/「02」），
+    // 按**集号数字**再对一次；这是同一部剧里最稳定的跨线路身份。
+    final historyNumber = _episodeNameNumber(historyEpisode.name);
+    if (mark == null && historyNumber > 0) {
+      mark = rawLine.episodes
+          .where((episode) => _episodeNameNumber(episode.name) == historyNumber)
+          .firstOrNull;
+    }
+    if (mark == null &&
+        rawLine.episodes.isNotEmpty &&
+        rawLine.episodes.length == targetLine.episodes.length) {
+      mark = rawLine.episodes[target.episodeIndex];
+    }
+    if (mark == null) return -1;
     for (var i = 0; i < ordered.length; i++) {
-      if (identical(ordered[i], episode) || ordered[i].url == episode.url) {
+      if (identical(ordered[i], mark) || ordered[i].url == mark.url) {
         return i;
       }
     }
     return -1;
   }
+
 
   Vod? get _currentVod {
     final result = widget.state.detailResult;
@@ -2932,6 +2962,10 @@ class _DetailPageState extends State<DetailPage> {
   /// 集名里的**最后一个** 1~4 位数字段；整条名字里没有数字时返回 -1。
   ///
   /// 为什么取最后一个：`S01E06` 的最后一个数字才是集号，`第2季第6集` 同理；
+
+  /// 集名里的**最后一个** 1~4 位数字段；整条名字里没有数字时返回 -1。
+  ///
+  /// 为什么取最后一个：`S01E06` 的最后一个数字才是集号，`第2季第6集` 同理；
   /// 取第一个会在季集混排时稳定错位。
   static int _episodeNameNumber(String name) {
     var value = -1;
@@ -3064,7 +3098,8 @@ class _DetailPageState extends State<DetailPage> {
     if (belongs && lines.isNotEmpty && _selectedLineFlag.isEmpty) {
       final target = _resumeTarget(lines);
       final historyFlag = _history?.flag ?? '';
-      final historyLine = historyFlag.isEmpty
+      final historyEpisodeId = _history?.episodeId ?? '';
+      final byFlag = historyFlag.isEmpty
           ? null
           : lines
                 .where(
@@ -3072,7 +3107,16 @@ class _DetailPageState extends State<DetailPage> {
                       line.flag == historyFlag ||
                       line.playbackFlag == historyFlag,
                 )
-                .firstOrNull;
+                .toList();
+      // 多条线路可能共用同一个 `playbackFlag`（同一个解析源），这时只按 flag
+      // 取 `firstOrNull` 会把用户送到列表里的第一条线路。用历史里的集入口在
+      // 候选里精确定位用户真正播过的那条（见 [pickHistoryLine]）。
+      final historyLine = byFlag == null
+          ? null
+          : pickHistoryLine(
+              candidates: byFlag,
+              historyEpisodeId: historyEpisodeId,
+            );
       final initialFlag = target.matched ? target.flag : historyLine?.flag;
       if (initialFlag != null) {
         _selectedLineFlag = initialFlag;
@@ -3178,11 +3222,11 @@ class _DetailPageState extends State<DetailPage> {
               final followed = existing != null;
               return IconButton(
                 key: const ValueKey('detail-follow'),
-                tooltip: followed ? '取消追番' : '追番',
+                tooltip: followed ? '取消追剧' : '追剧',
                 onPressed: () {
                   if (followed) {
                     unawaited(state.unfollowFollowing(existing));
-                    showToast('已取消追番', kind: ToastKind.success);
+                    showToast('已取消追剧', kind: ToastKind.success);
                     return;
                   }
                   final line = lines.isEmpty ? null : _activeLine(lines);
@@ -3193,7 +3237,7 @@ class _DetailPageState extends State<DetailPage> {
                     sourceFlag: line?.sourceFlag ?? line?.playbackFlag ?? '',
                     releasedEpisode: line?.episodes.length ?? 0,
                   );
-                  showToast('已加入追番', kind: ToastKind.success);
+                  showToast('已加入追剧', kind: ToastKind.success);
                 },
                 icon: Icon(followed ? Icons.star : Icons.star_border),
               );
@@ -3240,7 +3284,12 @@ class _DetailPageState extends State<DetailPage> {
                   // 图片由页面级背景负责（见本 body 的 Stack），头部只画内容。
                   paintImage: false,
                   data: headerData,
-                  heroOverview: external != null ? headerData.overview : display.vodContent ?? tmdbData?.overview,
+                  platformLabel: playbackPlatformLabel(
+                    networks: headerData.networks,
+                  ),
+                  heroOverview: external != null
+                      ? headerData.overview
+                      : display.vodContent ?? tmdbData?.overview,
                   // 评分多源并列：TMDB 分 + 兜底来源分 + 额外来源分，各取各的不互斥。
                   ratingTags: Wrap(
                     spacing: AppSpace.sm,

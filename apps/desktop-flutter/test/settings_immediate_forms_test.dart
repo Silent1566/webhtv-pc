@@ -237,6 +237,8 @@ void main() {
         ),
       );
       await openForm(tester, Scaffold(body: FollowingPage(state: state)));
+      await tester.tap(find.byKey(const ValueKey('following-more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('following-interval')));
       await tester.pumpAndSettle();
       final file = File(state.paths.settingsPath);
@@ -275,6 +277,8 @@ void main() {
         ),
       );
       await openForm(tester, Scaffold(body: FollowingPage(state: state)));
+      await tester.tap(find.byKey(const ValueKey('following-more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('following-interval')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('following-interval-30')));

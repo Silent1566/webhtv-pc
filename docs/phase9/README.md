@@ -290,7 +290,7 @@ py -3 tools/phase9/verify_gap_matrix.py
 | P2-7 备份/恢复/重置（部分） | **已实现（手动备份；自动备份/更新未做）** | `core/backup_manifest.dart`（清单/路径安全/SHA-256 校验/库版本门禁）；`services/backup_service.dart`（zip 读写、`VACUUM INTO` 快照）；`state/app_state.dart`（恢复时关闭→校验→原子替换→重新 bootstrap，失败回滚）；`ui/backup_page.dart` + 高级设置入口；重置回到未导入配置 | `test/phase9_backup_test.dart`（9 用例） |
 | P2-8 DoH / 隐身 / 崩溃恢复 | **已实现** | `core/doh.dart`（RFC 8484 编解码、端点/hosts 解析、缓存模型）；`services/doh_resolver.dart`（查询、TTL 缓存、磁盘缓存、失败回落系统 DNS、多端点切换）；`services/outbound_proxy.dart` 用 `connectionFactory` 接管 DNS（保留 SNI/证书校验）；隐身：`recordProgress`/搜索关键词/季度进度不落库；崩溃恢复：`core/session_recovery.dart` + `services/session_recovery_store.dart`（pid 标记、64KiB 有界崩溃日志）+ `ui/recovery_banner.dart`（继续上次播放/忽略/看日志），窗口关闭时删标记 | `test/phase9_doh_test.dart`（15 用例）、`test/phase9_privacy_recovery_test.dart`（12 用例） |
 
-| P2-1 追番 | **已实现（应用运行期检查；无后台服务/系统通知）** | `core/following.dart`：身份键、6h/24h/7d 调度、首播+30m、失败退避、更新/通知水位、设置；DB v6 `following`（29 列，水位与集数）；`services/following_service.dart`：站点详情该线路集数 → 更新策略 → 串行检查；`ui/following_page.dart` + 侧栏徽标 + 详情页 ★；支持播放最新集（复用历史续播路径）与标记已读 | `test/phase9_following_test.dart`（16 用例） |
+| P2-1 追番（PC 显示名「追剧」） | **已实现（应用运行期检查；无后台服务/系统通知）** | `core/following.dart`：身份键、6h/24h/7d 调度、首播+30m、失败退避、更新/通知水位、设置；DB v6 `following`（29 列，水位与集数）；`services/following_service.dart`：站点详情该线路集数 → 更新策略 → 串行检查；`ui/following_page.dart` 追剧页（**列表 / 日历双视角共用一张表**：列表是 `FollowingCard` 系列视角，日历是 `FollowingCalendarView` 整周/整月 + 按日分段，含 TMDB 真实播出日）+ 侧栏徽标 + 详情页 ★；三个设置收进页头「⋯」菜单；列表卡显示 TMDB 官方集数/下一集与播放平台徽标（`ui/following_air_data.dart` 共享一份数据，徽标组件 `ui/following_badge.dart` 与日历共用）、播放/详情动作合到 `ui/following_actions.dart`；支持播放最新集（复用历史续播路径）与标记已读 | `test/phase9_following_test.dart`（16 用例）+ 6 个日历用例文件 |
 已知偏差（已在 §4.3 与本表注明）：
 
 - PC `history` 表没有题材/地区/演员/导演字段，因此**不做**安卓那四类偏好榜单，
@@ -316,8 +316,8 @@ py -3 tools/phase9/verify_gap_matrix.py
   上限 64 KiB，窗口正常关闭时删除标记。
 - P2-1 的追番检查只在**应用运行期间**按间隔执行（含启动后补一次到期检查）；
   PC 没有 Android WorkManager 式后台常驻，关闭应用后不会检查，也没有系统级通知
-  （只有侧栏徽标与追番页「N 部有新集」）。
+  （只有侧栏徽标与追剧页「N 部有新集」）。
 - 更新检测口径是**站点详情里追踪线路的集数**，不是 TMDB 元数据：PC 没有接
   TMDB 季表，`trackedSeason` 固定 0（模型保留字段，不伪造季信息）。
 - 安卓的 AList 订阅导入 / 片源探测（`FollowingSourceProbe`、`AlistSubscriptionImporter`）
-  未迁移：PC 目前只支持从详情页手动追番。
+  未迁移：PC 目前只支持从详情页手动加入追剧。

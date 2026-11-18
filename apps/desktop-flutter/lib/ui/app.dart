@@ -34,7 +34,6 @@ import 'config_pages.dart';
 import 'config_source_status_view.dart';
 import 'diagnostics_pages.dart';
 import 'ai_integration_widgets.dart';
-import 'following_calendar_page.dart';
 import 'following_page.dart';
 import 'image_header_scope.dart';
 import 'library_pages.dart';
@@ -436,7 +435,6 @@ enum ShellSection {
   history,
   favorites,
   following,
-  calendar,
   spiders,
   settings,
   logs,
@@ -506,12 +504,12 @@ class _AppShellState extends State<AppShell> {
     _maybeAutoPlayMedia();
   }
 
-  /// 系统通知被点击时把侧栏切到「追番」页。
+  /// 系统通知被点击时把侧栏切到「追剧」页（页面自己会切到列表视角）。
   ///
   /// **只切页，不清 `followingOpenRequest`**：真正的消费方是 `FollowingPage`
   /// （`_consumeOpenRequest` 取到身份键后打开最新集，再原子地清空）。壳层要是
-  /// 提前清掉，追番页拿不到 key，点通知就只跳到列表、不打开那一集。
-  /// 只判「当前是否已在追番页」而不记历史值：清空不触发 notify，记历史值会让
+  /// 提前清掉，追剧页拿不到 key，点通知就只跳到列表、不打开那一集。
+  /// 只判「当前是否已在追剧页」而不记历史值：清空不触发 notify，记历史值会让
   /// 同一条通知的第二次点击失去跳转。
   void _syncFollowingOpenRequest() {
     if (_state.followingOpenRequest.isEmpty) return;
@@ -1064,8 +1062,6 @@ class _AppShellState extends State<AppShell> {
         return FavoritesPage(state: _state);
       case ShellSection.following:
         return FollowingPage(state: _state);
-      case ShellSection.calendar:
-        return FollowingCalendarPage(state: _state);
       case ShellSection.spiders:
         return SpiderPage(state: _state);
       case ShellSection.settings:
@@ -1445,17 +1441,14 @@ class _SideBar extends StatelessWidget {
           icon: Icon(Icons.bookmark_border),
           label: Text('收藏'),
         ),
+        // 追番列表与追剧日历合并成一个入口（页面内用「列表 / 日历」切换）。
         NavigationRailDestination(
           icon: Badge(
             isLabelVisible: updateCount > 0,
             label: Text('$updateCount'),
             child: const Icon(Icons.star_border),
           ),
-          label: const Text('追番'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.calendar_month),
-          label: Text('追剧日历'),
+          label: const Text('追剧'),
         ),
         const NavigationRailDestination(
           icon: Icon(Icons.extension),
