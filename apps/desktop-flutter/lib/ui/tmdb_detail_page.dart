@@ -21,6 +21,7 @@ import 'package:flutter/scheduler.dart';
 import '../core/app_error.dart';
 import '../core/detail_ratings.dart';
 import '../core/detail_recommendation.dart';
+import '../core/playback_platform.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
@@ -420,6 +421,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
             // 且两层同图不同框比会在交界处错位）。
             paintBackdrop: false,
             data: data,
+            platformLabel: playbackPlatformLabel(networks: data.networks),
             seasons: data.seasons,
             selectedSeason: _selectedSeason,
             selectableSeasons: _tmdbSeasons,

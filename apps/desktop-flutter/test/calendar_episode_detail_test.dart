@@ -257,7 +257,9 @@ void main() {
     expect(inDetails(find.textContaining('测试剧')), findsWidgets);
     expect(inDetails(find.textContaining('E0')), findsNothing);
     expect(inDetails(find.textContaining('最新源')), findsNothing);
-    expect(requests, isEmpty);
+    // 只断言「当集」元数据没有请求：平台徽标的兜底只打 /tv/{id} 剧集详情，
+    // 与这条用例的意图（集号未知不编造 E0、不查这一集）无关。
+    expect(requests.where((uri) => uri.path.contains('/episode/')), isEmpty);
     expect(tester.takeException(), isNull);
   });
 
