@@ -1260,7 +1260,7 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(body: FollowingCalendarPage(state: state)),
+          home: Scaffold(body: FollowingCalendarView(state: state)),
         ),
       );
       await tester.pumpAndSettle();
@@ -1475,7 +1475,7 @@ void main() {
       reason: '没有站源身份就不该能写进收藏',
     );
     expect(
-      find.byTooltip('追番', skipOffstage: false),
+      find.byTooltip('追剧', skipOffstage: false),
       findsNothing,
       reason: '没有站源身份就不该能写进追番',
     );

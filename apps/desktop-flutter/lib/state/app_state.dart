@@ -487,6 +487,13 @@ AiContentCompletion? aiContentCompletion,
 
   /// 点击系统通知后待打开的追番身份键（空 = 无待处理请求）。
   String _followingOpenRequestKey = '';
+
+  /// 追剧页上次停留的视角（0 = 列表，1 = 日历）。
+  ///
+  /// 只存会话内存：合并后两个视角共用一个侧栏入口，壳层切页会重建页面，离开再回来
+  /// 不该每次都被打回列表；不落盘——重启回到列表，与合并前的默认口径一致。
+  int followingViewIndex = 0;
+
   late final CatHttpClient _catHttpClient = CatHttpClient(
     debugLog: _spiderDebugLog,
   );

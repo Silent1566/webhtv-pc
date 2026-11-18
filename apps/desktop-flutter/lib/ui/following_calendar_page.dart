@@ -1,4 +1,7 @@
-/// 追剧日历页（Phase 9 · P2-1 配套）。
+/// 追剧日历视图（Phase 9 · P2-1 配套；合并后的追剧页内视图）。
+///
+/// 宿主是 `FollowingPage`：本视图只画日历（整周/整月 + 按日分段列表），
+/// 不带自己的壳层与导航；`following_page.dart` 用 IndexedStack 保它的状态。
 ///
 /// 数据全部来自本地 `following` 表 + `core/following_calendar.dart` 的纯逻辑层：
 /// 页面自己不做归日/合并计算，只负责把 `followingCalendarByDay` 的结果画成
@@ -15,20 +18,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 
-import '../core/app_error.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/playback_platform.dart';
-import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../services/following_air_time_service.dart';
-import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'app.dart';
-import 'async_action_feedback.dart';
-import 'browse_pages.dart';
-import 'playback_resume.dart';
+import 'following_actions.dart';
+import 'following_air_data.dart';
+import 'following_badge.dart';
 import 'tmdb_episode_detail.dart';
 import 'search_page.dart';
 import 'tokens.dart';
@@ -44,16 +44,20 @@ enum _CalendarView {
   final String label;
 }
 
-class FollowingCalendarPage extends StatefulWidget {
-  const FollowingCalendarPage({super.key, required this.state});
+class FollowingCalendarView extends StatefulWidget {
+  const FollowingCalendarView({super.key, required this.state, this.airData});
 
   final AppState state;
 
+  /// 共享的 TMDB 播出数据（宿主页持有）。为 null 时本视图自建一份并自行刷新，
+  /// 这样单独挂载（widget 测试）的行为与合并前一致。
+  final FollowingAirData? airData;
+
   @override
-  State<FollowingCalendarPage> createState() => _FollowingCalendarPageState();
+  State<FollowingCalendarView> createState() => _FollowingCalendarViewState();
 }
 
-class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
+class _FollowingCalendarViewState extends State<FollowingCalendarView> {
   /// 当前视图（默认整月，与历史行为一致）。
   _CalendarView _view = _CalendarView.month;
 
@@ -63,20 +67,12 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
   /// 选中的自然日（0:00）；周视图以它为锚点，列表把它的分段高亮。
   late DateTime _selected;
 
-  /// 真实播出时间（TMDB）；加载中/失败/未配置时为空列表。
-  List<FollowingAirTime> _airTimes = const [];
+  /// 真实播出时间 / 官方总集数 / 播放平台名：由宿主共享，跨视角同一份。
+  late final FollowingAirData _airData =
+      widget.airData ?? FollowingAirData(state: widget.state);
 
-  /// 官方该季总集数（TMDB）；空表示全部降级到本线路可播集数。
-  List<FollowingSeasonTotal> _seasonTotals = const [];
-
-  /// 播放平台名（TMDB 台名）；键是追番 identityKey。
-  Map<String, List<String>> _networks = const {};
-
-  /// 最近一次发起加载时的追番身份集合（用于判断追番变化后是否需要重取）。
-  String _loadedKey = '';
-
-  /// 最近一次发起平台名请求时的追番身份集合。
-  String _loadedNetworksKey = '';
+  /// 没拿到宿主给的那份时，本视图自己负责刷新（单独挂载 / 测试）。
+  bool get _ownsAirData => widget.airData == null;
 
   final _listController = ScrollController();
   final _dayHeaders = <DateTime, GlobalKey>{};
@@ -96,12 +92,15 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
     _selected = today;
     // 追番检查/删除都会 notify；日历必须跟着重建。
     _state.addListener(_onStateChanged);
-    _loadRealData();
+    _airData.addListener(_onAirDataChanged);
+    if (_ownsAirData) unawaited(_airData.refresh(_state.followings));
   }
 
   @override
   void dispose() {
     _state.removeListener(_onStateChanged);
+    _airData.removeListener(_onAirDataChanged);
+    if (_ownsAirData) _airData.dispose();
     _listController.dispose();
     super.dispose();
   }
@@ -109,52 +108,22 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
   void _onStateChanged() {
     if (!mounted) return;
     setState(() {});
-    _loadRealData();
+    // 宿主页负责刷新共享数据；单独挂载时（测试）本视图自己刷。
+    if (_ownsAirData) unawaited(_airData.refresh(_state.followings));
   }
 
-  /// 追番集合变化后取平台名（TMDB 的 networks）：判重键同 [_loadedKey]，
-  /// 同一集合重复 build 不会重复请求。
-  void _loadNetworks(List<Following> items) {
-    final key = items.map((item) => item.identityKey).join(',');
-    if (key == _loadedNetworksKey) return;
-    _loadedNetworksKey = key;
-    if (items.isEmpty) {
-      _networks = const {};
-      return;
-    }
-    unawaited(() async {
-      final networks = await _state.followingNetworksFor(items);
-      if (!mounted || _loadedNetworksKey != key) return;
-      setState(() => _networks = networks);
-    }());
-  }
+  /// 上一次数据通知（取数发起 / 数据到达）时的交互版本。
+  int _interactionAtLoad = 0;
 
-  /// 追番集合变化后重取播出时间与官方总集数（两者共享同一次 TMDB 请求）。
-  void _loadRealData() {
-    final items = _state.followings;
-    _loadNetworks(items);
-    final key = items.map((item) => item.identityKey).join(',');
-    if (key == _loadedKey) return;
-    _loadedKey = key;
-    if (items.isEmpty) {
-      // 追番为空时由上层的 setState 一并刷新，这里不再额外触发重建。
-      _airTimes = const [];
-      _seasonTotals = const [];
-      return;
-    }
-    final interactionVersion = _interactionVersion;
-    unawaited(() async {
-      final airTimes = await _state.followingAirTimes();
-      if (!mounted || _loadedKey != key) return;
-      final totals = await _state.followingSeasonTotals();
-      if (!mounted || _loadedKey != key) return;
-      setState(() {
-        _airTimes = airTimes;
-        _seasonTotals = totals;
-        // 数据改变布局后补定位，但不覆盖加载期间的用户操作。
-        if (interactionVersion == _interactionVersion) _locateSelected = true;
-      });
-    }());
+  /// 共享数据变了：重画。数据到达改变条目的日期分布，需要补一次定位；
+  /// 但取数期间用户手动滚动过就不抢位置（与合并前的 `_interactionVersion` 同义）。
+  void _onAirDataChanged() {
+    if (!mounted) return;
+    final idle = _interactionVersion == _interactionAtLoad;
+    _interactionAtLoad = _interactionVersion;
+    setState(() {
+      if (idle) _locateSelected = true;
+    });
   }
 
   DateTime _today() {
@@ -280,7 +249,26 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
     return null;
   }
 
-  /// 某天的条目卡：剧级信息（已播/进度条/来源）只在当天该剧的**首条**出现一次。
+  /// 选中日没有更新时的提示条：固定占一行，不浮在卡片上方、也不会被滚走。
+  Widget _selectedEmptyHint(ThemeData theme) {
+    return Row(
+      key: const ValueKey('calendar-selected-empty'),
+      children: [
+        Icon(
+          Icons.event_busy,
+          size: 14,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: AppSpace.xs),
+        Text(
+          '${_selected.month}月${_selected.day}日 没有更新',
+          style: theme.textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+
+  /// 某天的条目卡：剧级信息（已播/进度条/来源/平台）只在当天该剧的**首条**出现一次。
   List<Widget> _dayCards(CalendarDay day) {
     final leads = followingCalendarSeriesLeadIndexes(day.entries);
     return [
@@ -297,13 +285,14 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
   }
 
   /// 平台标签：TMDB 的 networks（腾讯视频 / 爱奇艺…）；没有台名时返回空串。
-  String _platformLabel(CalendarEntry entry) =>
-      playbackPlatformLabel(networks: _networks[entry.identityKey] ?? const []);
+  String _platformLabel(CalendarEntry entry) => playbackPlatformLabel(
+    networks: _airData.networks[entry.identityKey] ?? const [],
+  );
 
   Future<void> _showEntryDetails(CalendarEntry entry, DateTime day) async {
     final item = _itemFor(entry);
     var date = day;
-    for (final airTime in _airTimes) {
+    for (final airTime in _airData.airTimes) {
       if (airTime.identityKey == entry.identityKey &&
           airTime.episode == entry.episode) {
         date = followingCalendarDateOf(airTime.airAtMs);
@@ -365,88 +354,10 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
   Future<void> _playEntry(CalendarEntry entry) async {
     final item = _itemFor(entry);
     if (item == null) {
-      showToast('该追番已不在列表中：${entry.vodName}', kind: ToastKind.error);
+      showToast('该追剧已不在列表中：${entry.vodName}', kind: ToastKind.error);
       return;
     }
-    final isLatest =
-        entry.episode >= 1 && entry.episode == item.releasedEpisode;
-    if (!isLatest || item.latestEpisodeTarget.isEmpty) {
-      if (entry.episode >= 1 && !isLatest) {
-        showToast('${entry.code} 不是最新一集，请在详情页选集播放', kind: ToastKind.info);
-      }
-      await _openDetail(item);
-      return;
-    }
-    final feedback = AsyncActionFeedback.begin(
-      context,
-      '正在准备播放：${item.vodName}',
-    );
-    if (feedback == null) return;
-    try {
-      final history = PlaybackHistory(
-        id: 0,
-        siteKey: item.siteKey,
-        vodId: item.vodId,
-        vodName: item.vodName,
-        vodPic: item.vodPic,
-        flag: item.sourceFlag.isEmpty ? item.flag : item.sourceFlag,
-        episodeName: item.latestEpisodeName,
-        episodeId: item.latestEpisodeTarget,
-        positionMs: 0,
-        durationMs: 0,
-        updatedAt: item.updatedAtMs,
-      );
-      await resumeHistoryEntry(context, _state, history, feedback: feedback);
-      if (!mounted || !feedback.isCurrent) return;
-      await _state.markFollowingWatched(item);
-    } finally {
-      feedback.close();
-    }
-  }
-
-  Future<void> _openDetail(Following item) async {
-    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return;
-    final config = _state.config;
-    final site = config?.sites
-        .where((candidate) => candidate.key == item.siteKey)
-        .firstOrNull;
-    if (site == null) {
-      showToast('该追番所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-      return;
-    }
-    final feedback = AsyncActionFeedback.begin(
-      context,
-      '正在打开详情：${item.vodName}',
-    );
-    if (feedback == null) return;
-    try {
-      await _state.selectSite(site);
-      if (!mounted || !feedback.isCurrent) return;
-      feedback.dismiss();
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => DetailPage(
-            state: _state,
-            vod: Vod(
-              vodId: item.vodId,
-              vodName: item.vodName,
-              vodPic: item.vodPic,
-            ),
-            historyFlag: item.flag,
-          ),
-        ),
-      );
-    } catch (error) {
-      if (mounted && feedback.isCurrent) {
-        feedback.dismiss();
-        showToast(
-          error is AppError ? error.userMessage : '$error',
-          kind: ToastKind.error,
-        );
-      }
-    } finally {
-      feedback.close();
-    }
+    await playFollowingEntry(context, _state, item, entry);
   }
 
   @override
@@ -460,12 +371,13 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
     );
     // 官方总集数 → 进度分母；键就是条目的 identityKey。
     final officialTotals = <String, int>{
-      for (final total in _seasonTotals) total.identityKey: total.totalEpisodes,
+      for (final total in _airData.seasonTotals)
+        total.identityKey: total.totalEpisodes,
     };
     final byDay = followingCalendarByDay(
       items: items,
       nowMs: nowMs,
-      airTimes: _airTimes,
+      airTimes: _airData.airTimes,
       officialTotalEpisodes: officialTotals,
     );
     final dayUpdates = followingCalendarUnwatchedDaysInMonth(
@@ -649,6 +561,13 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
                   ),
                 ),
               ),
+              // 选中日没有更新：常驻在日历区与列表之间，占自己的高度——
+              // 既不遮挡卡片，也不会像清单首项那样被滚走后看不见（2026-11-18 反馈）。
+              if (noUpdates)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+                  child: _selectedEmptyHint(theme),
+                ),
               if (items.isEmpty)
                 const Expanded(child: _CalendarEmpty())
               else ...[
@@ -683,22 +602,6 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
                               ],
                             ),
                           ],
-                        ),
-                      if (noUpdates)
-                        Align(
-                          alignment: Alignment.topCenter,
-                          child: Material(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            borderRadius: AppRadius.smAll,
-                            child: Padding(
-                              padding: const EdgeInsets.all(AppSpace.sm),
-                              child: Text(
-                                '${_selected.month}月${_selected.day}日 没有更新',
-                                key: const ValueKey('calendar-selected-empty'),
-                                style: theme.textTheme.bodySmall,
-                              ),
-                            ),
-                          ),
                         ),
                     ],
                   ),
@@ -1167,7 +1070,7 @@ class _CalendarEntryCard extends StatelessWidget {
                                 ),
                                 if (entry.episode >= 1) ...[
                                   const SizedBox(width: AppSpace.sm),
-                                  _Badge(
+                                  FollowingBadge(
                                     key: ValueKey(
                                       'calendar-episode-state-'
                                       '${entry.identityKey}-$suffix',
@@ -1188,8 +1091,11 @@ class _CalendarEntryCard extends StatelessWidget {
                           // 平台徽标完整显示、不省略：卡片右侧本来就空着一大块，
                           // 长度由台名本身决定；空间不够时先挤压左侧剧名（Flexible），
                           // 而不是把平台截成「Hunan Television / …」。
-                          if (platformLabel.isNotEmpty) ...[
-                            _Badge(
+                          //
+                          // 平台是**剧级**信息：同一天同一部剧多集时只在首条出现，
+                          // 与「第1季 · 线路已播」那行同一口径（[showSeriesInfo]）。
+                          if (showSeriesInfo && platformLabel.isNotEmpty) ...[
+                            FollowingBadge(
                               key: ValueKey(
                                 'calendar-platform-'
                                 '${entry.identityKey}-$suffix',
@@ -1258,7 +1164,7 @@ class _CalendarEntryCard extends StatelessWidget {
                             // 来源必须能被用户看到：real 表示日期来自平台排期（数据源
                             // 是 TMDB 等元数据源，文案不暴露供应商），不代表已经播出
                             // （未来集见集级「待播」）；local 是本地推算。
-                            _Badge(
+                            FollowingBadge(
                               key: ValueKey(
                                 'calendar-source-${entry.identityKey}-$suffix',
                               ),
@@ -1323,40 +1229,6 @@ String _airLine(CalendarEntry entry, int released) {
 }
 
 /// 淡色小标签（集级状态与来源标记共用）。
-class _Badge extends StatelessWidget {
-  const _Badge({super.key, required this.text, required this.emphasized});
-
-  final String text;
-
-  /// `true` 用主色淡底（未看），`false` 用容器色（来源标记）。
-  final bool emphasized;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: emphasized
-            ? scheme.primaryContainer
-            : scheme.surfaceContainerHighest,
-        borderRadius: AppRadius.pillAll,
-      ),
-      child: Text(
-        text,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 11,
-          color: emphasized
-              ? scheme.onPrimaryContainer
-              : scheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-}
-
 /// 没有任何追番时的空态。
 class _CalendarEmpty extends StatelessWidget {
   const _CalendarEmpty();
@@ -1370,10 +1242,10 @@ class _CalendarEmpty extends StatelessWidget {
         children: [
           const Icon(Icons.calendar_month, size: 44),
           const SizedBox(height: AppSpace.sm),
-          const Text('还没有追番，日历暂时没有内容'),
+          const Text('还没有追剧，日历暂时没有内容'),
           const SizedBox(height: AppSpace.xs),
           const Text(
-            '在影片详情页点右上角 ★ 加入追番后，这里会按日期列出更新。',
+            '在影片详情页点右上角 ★ 加入追剧后，这里会按日期列出更新。',
             style: TextStyle(fontSize: 12),
           ),
         ],

@@ -43,10 +43,7 @@ Following _item({
 void main() {
   group('追番身份与调度（P2-1）', () {
     test('身份键与安卓同格式', () {
-      expect(
-        followingSeriesKey('SiteA', 'VOD-1'),
-        'source:0:sitea:vod-1',
-      );
+      expect(followingSeriesKey('SiteA', 'VOD-1'), 'source:0:sitea:vod-1');
       expect(
         followingIdentityKey('source:0:sitea:vod-1', 2),
         'source:0:sitea:vod-1:s2',
@@ -265,11 +262,7 @@ void main() {
           latestEpisodeName: 'E10',
           latestEpisodeTarget: 't10',
         ),
-        FollowingLineEpisodes(
-          flag: '线路二',
-          sourceFlag: '线路二',
-          episodeCount: 4,
-        ),
+        FollowingLineEpisodes(flag: '线路二', sourceFlag: '线路二', episodeCount: 4),
       ];
       failure = null;
       service = FollowingService(
@@ -317,11 +310,7 @@ void main() {
         releasedEpisode: 4,
       );
       lines = const [
-        FollowingLineEpisodes(
-          flag: '线路一',
-          sourceFlag: '线路一',
-          episodeCount: 10,
-        ),
+        FollowingLineEpisodes(flag: '线路一', sourceFlag: '线路一', episodeCount: 10),
         FollowingLineEpisodes(
           flag: '线路二',
           sourceFlag: '线路二',
@@ -335,7 +324,10 @@ void main() {
       expect(outcome.changed, isTrue);
       expect(outcome.following.releasedEpisode, 6);
       expect(outcome.following.hasUpdate, isTrue);
-      expect(outcome.following.nextCheckAtMs, greaterThan(now.millisecondsSinceEpoch));
+      expect(
+        outcome.following.nextCheckAtMs,
+        greaterThan(now.millisecondsSinceEpoch),
+      );
       expect(service.byVod('s', 'v')!.releasedEpisode, 6);
     });
 
@@ -364,12 +356,7 @@ void main() {
         vodName: 'A',
         releasedEpisode: 1,
       );
-      service.add(
-        siteKey: 's',
-        vodId: 'v2',
-        vodName: 'B',
-        releasedEpisode: 1,
-      );
+      service.add(siteKey: 's', vodId: 'v2', vodName: 'B', releasedEpisode: 1);
       db.upsertFollowing(
         a.copyWith(
           nextCheckAtMs: now.millisecondsSinceEpoch + 100000,
@@ -401,11 +388,7 @@ void main() {
       expect(read.watchedEpisode, 0, reason: '已读水位不冒充已看');
       expect(read.unwatchedCount, 8);
       expect(read.hasUpdate, isTrue, reason: '8 集仍未看');
-      expect(
-        shouldNotifyFollowing(read),
-        isFalse,
-        reason: '水位仍然负责抑制新集提示',
-      );
+      expect(shouldNotifyFollowing(read), isFalse, reason: '水位仍然负责抑制新集提示');
     });
   });
 
@@ -569,10 +552,7 @@ void main() {
       expect(item, isNotNull);
       // 模拟发现两集新内容。
       state.database!.upsertFollowing(
-        item!.copyWith(
-          latestReleasedEpisode: 12,
-          seasonReleasedEpisodes: 12,
-        ),
+        item!.copyWith(latestReleasedEpisode: 12, seasonReleasedEpisodes: 12),
       );
       state.notifyListeners();
       await tester.pump();
@@ -589,17 +569,18 @@ void main() {
         find.byKey(ValueKey('following-badge-$identityKey')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(ValueKey('following-unwatched-$identityKey')),
-        findsOneWidget,
-      );
       expect(find.text('12 集未看'), findsWidgets);
       expect(
         find.byKey(const ValueKey('following-update-summary')),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('following-check-all')), findsOneWidget);
+      expect(find.byKey(const ValueKey('following-more')), findsOneWidget);
+      // 三个设置合并后收进「⋯」菜单：点开才构建菜单项。
+      await tester.tap(find.byKey(const ValueKey('following-more')));
+      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('following-auto')), findsOneWidget);
+      expect(find.byKey(const ValueKey('following-notify')), findsOneWidget);
       expect(find.byKey(const ValueKey('following-interval')), findsOneWidget);
     });
   });
@@ -608,11 +589,8 @@ void main() {
     late Directory temp;
     late AppPaths paths;
 
-    AppState newState({FollowingNotifier? notifier}) => AppState(
-      paths: paths,
-      log: LogService(),
-      followingNotifier: notifier,
-    );
+    AppState newState({FollowingNotifier? notifier}) =>
+        AppState(paths: paths, log: LogService(), followingNotifier: notifier);
 
     setUp(() {
       temp = Directory.systemTemp.createTempSync('webhtv-following-default');
@@ -677,7 +655,9 @@ void main() {
         15,
       );
       expect(
-        second.followingSettings.copyWith(intervalMinutes: 5000).intervalMinutes,
+        second.followingSettings
+            .copyWith(intervalMinutes: 5000)
+            .intervalMinutes,
         1440,
       );
       expect(FollowingSettings.formatInterval(360), '每 6 小时');
@@ -690,7 +670,10 @@ void main() {
       addTearDown(state.dispose);
 
       expect(state.tmdbSeasonService, isNotNull);
-      expect(identical(state.tmdbSeasonService, state.tmdbSeasonService), isTrue);
+      expect(
+        identical(state.tmdbSeasonService, state.tmdbSeasonService),
+        isTrue,
+      );
     });
   });
 
@@ -773,8 +756,9 @@ void main() {
       )!;
       expect(state.followingUpdateCount, 0, reason: '刚追建立已读基线，卡片仍未看10集');
       expect(item.unwatchedCount, 10);
-      state.database!.upsertFollowing(item.copyWith(
-        latestReleasedEpisode: 12, seasonReleasedEpisodes: 12));
+      state.database!.upsertFollowing(
+        item.copyWith(latestReleasedEpisode: 12, seasonReleasedEpisodes: 12),
+      );
       expect(state.followingUpdateCount, 1, reason: '发现未读更新');
 
       // 播放到第10集：播放历史只推进已看，不确认新消息。
@@ -829,12 +813,8 @@ void main() {
       } catch (_) {}
     });
 
-    Site site() => Site(
-      key: 's',
-      name: '甲站',
-      type: 4,
-      api: 'http://127.0.0.1:1/vod',
-    );
+    Site site() =>
+        Site(key: 's', name: '甲站', type: 4, api: 'http://127.0.0.1:1/vod');
 
     Following add({int releasedEpisode = 10}) => state.followFromDetail(
       site: site(),

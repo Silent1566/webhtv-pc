@@ -116,7 +116,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
-          home: Scaffold(body: FollowingCalendarPage(state: state)),
+          home: Scaffold(body: FollowingCalendarView(state: state)),
         ),
       );
       await tester.pump();
@@ -441,13 +441,20 @@ void main() {
       expect(find.byKey(const ValueKey('calendar-list')), findsOneWidget);
       expect(listPosition(tester), same(position));
       expect(position.pixels, offset);
+      // 提示条不能盖住卡片：它的下边必须在列表视口上边之上（2026-11-18 截图反馈，
+      // 当时它是叠在列表上的浮层，把第一条卡啃掉一半）。
+      final hint = tester.getRect(
+        find.byKey(const ValueKey('calendar-selected-empty')),
+      );
+      final list = tester.getRect(find.byKey(const ValueKey('calendar-list')));
+      expect(hint.bottom, lessThanOrEqualTo(list.top));
       expect(tester.takeException(), isNull);
     });
 
     testWidgets('月历完整区域不超过视口40%且五周月份更矮', (tester) async {
       await pumpDenseCalendar(tester);
       final grid = find.byKey(const ValueKey('calendar-grid'));
-      final page = find.byType(FollowingCalendarPage);
+      final page = find.byType(FollowingCalendarView);
       final viewport = tester.getRect(
         find.byKey(const ValueKey('calendar-list')),
       );
@@ -940,10 +947,22 @@ void main() {
       final identity = await followTwoEpisodes(tester);
       final first = find.byKey(ValueKey('calendar-card-$identity-S01E09'));
       final second = find.byKey(ValueKey('calendar-card-$identity-S01E10'));
-      expect(find.descendant(of: first, matching: find.text('决斗之夜')), findsNothing);
-      expect(find.descendant(of: second, matching: find.text('决斗之夜')), findsOneWidget);
-      expect(find.byKey(ValueKey('calendar-title-$identity-S01E09')), findsNothing);
-      expect(find.byKey(ValueKey('calendar-title-$identity-S01E10')), findsOneWidget);
+      expect(
+        find.descendant(of: first, matching: find.text('决斗之夜')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: second, matching: find.text('决斗之夜')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(ValueKey('calendar-title-$identity-S01E09')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(ValueKey('calendar-title-$identity-S01E10')),
+        findsOneWidget,
+      );
       expect(find.text('null'), findsNothing);
     });
 
@@ -951,9 +970,15 @@ void main() {
       final identity = await followTwoEpisodes(tester);
       for (final (code, label) in [('S01E09', '已看'), ('S01E10', '未看')]) {
         final card = find.byKey(ValueKey('calendar-card-$identity-$code'));
-        expect(find.descendant(of: card, matching: find.text(label)), findsOneWidget);
         expect(
-          find.descendant(of: card, matching: find.text(label == '已看' ? '未看' : '已看')),
+          find.descendant(of: card, matching: find.text(label)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: card,
+            matching: find.text(label == '已看' ? '未看' : '已看'),
+          ),
           findsNothing,
         );
       }
@@ -1085,7 +1110,11 @@ void main() {
       expect(find.text('第1季 · 线路已播 0 集'), findsOneWidget);
       // 集号未知：不给集级胶囊（无法判断这一集），也不再写整剧已看/未看。
       expect(
-        find.byKey(ValueKey('calendar-episode-state-${state.followings.single.identityKey}-S01')),
+        find.byKey(
+          ValueKey(
+            'calendar-episode-state-${state.followings.single.identityKey}-S01',
+          ),
+        ),
         findsNothing,
       );
       expect(find.textContaining('已看'), findsNothing);
@@ -1154,7 +1183,7 @@ void main() {
                 ),
               ),
             ),
-            home: Scaffold(body: FollowingCalendarPage(state: state)),
+            home: Scaffold(body: FollowingCalendarView(state: state)),
           ),
         ),
       );
@@ -1194,8 +1223,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(
-          find.byKey(ValueKey('calendar-day-selected-${today.year}-'
-              '${today.month}-${today.day}')),
+          find.byKey(
+            ValueKey(
+              'calendar-day-selected-${today.year}-'
+              '${today.month}-${today.day}',
+            ),
+          ),
           findsOneWidget,
         );
         final card = find.byKey(ValueKey('calendar-card-$identity-S01E09'));
@@ -1249,7 +1282,7 @@ void main() {
         find.byKey(const ValueKey('calendar-following-empty')),
         findsOneWidget,
       );
-      expect(find.text('还没有追番，日历暂时没有内容'), findsOneWidget);
+      expect(find.text('还没有追剧，日历暂时没有内容'), findsOneWidget);
       expect(find.byKey(const ValueKey('calendar-grid')), findsNothing);
     });
 

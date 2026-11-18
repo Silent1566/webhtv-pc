@@ -149,7 +149,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildAppTheme(Brightness.dark),
-        home: Scaffold(body: FollowingCalendarPage(state: state)),
+        home: Scaffold(body: FollowingCalendarView(state: state)),
       ),
     );
     await tester.pumpAndSettle();
