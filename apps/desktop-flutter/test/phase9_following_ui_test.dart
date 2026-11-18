@@ -39,6 +39,9 @@ Future<void> _pump(
   Following item, {
   bool globalNotifyEnabled = true,
   ValueChanged<bool>? onSetNotify,
+  String airSummary = '',
+  String episodeLabel = '',
+  String platformLabel = '',
 }) async {
   tester.view.physicalSize = const Size(1200, 400);
   tester.view.devicePixelRatio = 1.0;
@@ -57,6 +60,9 @@ Future<void> _pump(
           onMarkRead: (_) {},
           onSetNotify: onSetNotify ?? (_) {},
           onRemove: (_) {},
+          airSummary: airSummary,
+          platformLabel: platformLabel,
+          episodeLabel: episodeLabel,
         ),
       ),
     ),
@@ -120,11 +126,8 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('3 集未看'), findsOneWidget);
-      expect(
-        find.byKey(ValueKey('following-unwatched-${item.identityKey}')),
-        findsOneWidget,
-      );
-      expect(find.text('未看 3 集'), findsOneWidget);
+      // 行内不再重复同一条计数（2026-11-18 截图反馈：同一行里 24 出现三次）。
+      expect(find.text('未看 3 集'), findsNothing);
     });
 
     testWidgets('已读水位不算已看：read=12/watched=3 仍有 9 集未看', (tester) async {
@@ -142,10 +145,6 @@ void main() {
 
       expect(
         find.byKey(ValueKey('following-badge-${item.identityKey}')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(ValueKey('following-unwatched-${item.identityKey}')),
         findsNothing,
       );
       expect(find.textContaining('集未看'), findsNothing);
@@ -169,10 +168,10 @@ void main() {
 
     testWidgets('通知状态：条目关 / 条目开但全局关 / 两者都开', (tester) async {
       await _pump(tester, _item(released: 1, itemNotifyEnabled: false));
-      expect(find.text('新集通知：关（条目关闭）'), findsOneWidget);
+      expect(find.text('新集通知：关（本条）'), findsOneWidget);
 
       await _pump(tester, _item(released: 1), globalNotifyEnabled: false);
-      expect(find.text('新集通知：关（全局开关关闭）'), findsOneWidget);
+      expect(find.text('新集通知：关（全局）'), findsOneWidget);
 
       await _pump(tester, _item(released: 1));
       expect(find.text('新集通知：开'), findsOneWidget);
@@ -233,7 +232,7 @@ void main() {
 
       // 开→关：传出去的必须是取反后的 false。
       expect(seen, [false]);
-      expect(find.text('新集通知：关（条目关闭）'), findsOneWidget);
+      expect(find.text('新集通知：关（本条）'), findsOneWidget);
       expect(find.text('新集通知：开'), findsNothing);
     });
 
@@ -241,8 +240,8 @@ void main() {
       final item = _item(released: 3, itemNotifyEnabled: false);
       await _pump(tester, item);
 
-      expect(find.text('新集通知：关（条目关闭）'), findsOneWidget);
-      expect(find.text('新集通知：关（全局开关关闭）'), findsNothing);
+      expect(find.text('新集通知：关（本条）'), findsOneWidget);
+      expect(find.text('新集通知：关（全局）'), findsNothing);
 
       await _openMenu(tester, item);
       expect(find.text('新集通知：已关闭'), findsOneWidget);
@@ -259,26 +258,21 @@ void main() {
         onSetNotify: seen.add,
       );
 
-      expect(find.text('新集通知：关（全局开关关闭）'), findsOneWidget);
+      expect(find.text('新集通知：关（全局）'), findsOneWidget);
 
       await _openMenu(tester, item);
       // 条目状态仍如实显示「已开启」，同时点明全局关闭。
       expect(find.text('新集通知：已开启'), findsOneWidget);
-      expect(
-        find.text('全局「新集提示」已关闭，开启后也不会推送'),
-        findsOneWidget,
-      );
+      expect(find.text('全局「新集提示」已关闭，开启后也不会推送'), findsOneWidget);
 
       // 全局关时条目照样可切（只是不会推送）。
       await tester.tap(find.text('新集通知：已开启'));
       await tester.pumpAndSettle();
       expect(seen, [false]);
-      expect(find.text('新集通知：关（条目关闭）'), findsOneWidget);
+      expect(find.text('新集通知：关（本条）'), findsOneWidget);
     });
 
-    testWidgets('「标为已读（仅清除提示）」文案清楚，且行为仍是 markFollowingRead', (
-      tester,
-    ) async {
+    testWidgets('「标为已读（仅清除提示）」文案清楚，且行为仍是 markFollowingRead', (tester) async {
       final item = _item(released: 3, watched: 1, read: 0);
       final markedRead = <Following>[];
       await _pumpInteractive(
@@ -295,6 +289,58 @@ void main() {
       await tester.tap(find.text('标为已读（仅清除提示）'));
       await tester.pumpAndSettle();
       expect(markedRead, [item]);
+    });
+  });
+
+  group('集数行（官方总集数优先）', () {
+    testWidgets('没有官方数据时退回「本线路可播」，有线时用完整口径', (tester) async {
+      final item = _item(released: 12, watched: 9);
+      await _pump(tester, item);
+      expect(find.text('本线路可播 12 集'), findsOneWidget);
+
+      await _pump(tester, item, episodeLabel: '官方共 24 集');
+      expect(find.text('官方共 24 集'), findsOneWidget);
+      expect(
+        find.text('本线路可播 12 集'),
+        findsNothing,
+        reason: '宿主给了完整口径就不再并列报线路集数',
+      );
+    });
+  });
+
+  group('播放平台徽标（与日历同一个组件）', () {
+    testWidgets('空串不占位，有值时排在标签行首位', (tester) async {
+      final item = _item(released: 12, watched: 9);
+      final badgeKey = ValueKey(
+        'following-platform-${followingIdentityKey(followingSeriesKey('s', 'v'), 0)}',
+      );
+
+      await _pump(tester, item);
+      expect(find.byKey(badgeKey), findsNothing);
+
+      await _pump(tester, item, platformLabel: '湖南卫视 / 芒果TV');
+      final badge = find.byKey(badgeKey);
+      expect(badge, findsOneWidget);
+      expect(
+        find.descendant(of: badge, matching: find.text('湖南卫视 / 芒果TV')),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('TMDB 摘要（官方集数 / 下一集）', () {
+    testWidgets('没有数据时不占位，有数据时显示在可播集数后面', (tester) async {
+      final item = _item(released: 12, watched: 9);
+      final airKey = ValueKey(
+        'following-air-${followingIdentityKey(followingSeriesKey('s', 'v'), 0)}',
+      );
+
+      await _pump(tester, item);
+      expect(find.byKey(airKey), findsNothing);
+
+      await _pump(tester, item, airSummary: '官方共 12 集 · 下一集 11月25日');
+      expect(find.byKey(airKey), findsOneWidget);
+      expect(find.text('官方共 12 集 · 下一集 11月25日'), findsOneWidget);
     });
   });
 }

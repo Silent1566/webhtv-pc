@@ -427,7 +427,7 @@ void main() {
     }
 
     Future<void> openMenu(WidgetTester tester) async {
-      await tester.tap(find.text('追番').first);
+      await tester.tap(find.text('追剧').first);
       await pumpFrames(tester);
       await tester.tap(
         find.byKey(ValueKey('following-menu-${item.identityKey}')),
@@ -481,7 +481,7 @@ void main() {
     testWidgets('最新入口为空时卡片退详情仍即时标读', (tester) async {
       update();
       await mount(tester);
-      await tester.tap(find.text('追番').first);
+      await tester.tap(find.text('追剧').first);
       await pumpFrames(tester);
       await tester.tap(
         find.byKey(ValueKey('following-card-${item.identityKey}')),
@@ -505,7 +505,7 @@ void main() {
         ),
       );
       await mount(tester);
-      await tester.tap(find.text('追番').first);
+      await tester.tap(find.text('追剧').first);
       await pumpFrames(tester);
       await tester.tap(
         find.byKey(ValueKey('following-card-${item.identityKey}')),

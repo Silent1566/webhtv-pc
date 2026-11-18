@@ -14,6 +14,7 @@ import 'package:webhtv_pc/core/following.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/following_air_time_service.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -21,6 +22,7 @@ import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/services/tmdb_stores.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/following_calendar_page.dart';
+import 'package:webhtv_pc/ui/following_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 /// 含站点 `s` / `甲站` 的最小配置：用例 e 用它证明站点名不参与徽标。
@@ -251,6 +253,67 @@ void main() {
       expect(badgeText(tester), '腾讯视频 / 爱奇艺');
     });
 
+    testWidgets('g) 列表视角显示同一个平台徽标（following-platform-*）', (tester) async {
+      networkNames = const ['Hunan Television', 'Mango TV'];
+      await configure(tester);
+      saveMatch();
+      final item = follow(tmdbState);
+      requests.clear();
+      await pumpListPage(tester, tmdbState);
+      await settleBadge(tester);
+
+      final badge = find.byKey(
+        ValueKey('following-platform-${item.identityKey}'),
+      );
+      expect(badge, findsOneWidget, reason: '列表卡也要显示播放平台');
+      expect(
+        find.descendant(of: badge, matching: find.text('湖南卫视 / 芒果TV')),
+        findsOneWidget,
+      );
+      // 站点名（甲站）不参与徽标。
+      expect(find.text('甲站'), findsNothing);
+      expect(tester.takeException(), isNull);
+      expect(detailRequests(), 1, reason: '列表视角同样只打一次剧集详情');
+    });
+
+    testWidgets('h) 同一天同一部剧多集：平台徽标只出现在首条', (tester) async {
+      networkNames = const ['Hunan Television', 'Mango TV'];
+      await configure(tester);
+      saveMatch();
+      // 平台连更：两集同一天播出，当天会出现两张卡。
+      final now = DateTime.now();
+      final today =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+          '${now.day.toString().padLeft(2, '0')}';
+      tmdbState.attachFollowingAirTimeService(
+        FollowingAirTimeService(
+          isConfigured: () => true,
+          resolveTmdbId: (_) async => 4242,
+          fetchEpisodes: (_, _) async => [
+            TmdbEpisode(number: 1, title: '第一集', date: today),
+            TmdbEpisode(number: 2, title: '第二集', date: today),
+          ],
+        ),
+      );
+      follow(tmdbState);
+      await pumpPage(tester, tmdbState);
+      await settleBadge(tester);
+
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'calendar-card-',
+              ),
+        ),
+        findsNWidgets(2),
+        reason: '同一天两集各占一张卡',
+      );
+      expect(platformBadge(), findsOneWidget, reason: '平台是剧级信息：只在当天该剧首条出现一次');
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('f) 打开日历打一次 /tv/{id}，同一集合重复 build 不重复打', (tester) async {
       networkNames = const ['Youku'];
       await openCalendar(tester);
@@ -315,7 +378,21 @@ Future<void> pumpPage(WidgetTester tester, AppState target) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: buildAppTheme(Brightness.dark),
-      home: Scaffold(body: FollowingCalendarPage(state: target)),
+      home: Scaffold(body: FollowingCalendarView(state: target)),
+    ),
+  );
+  await tester.pump();
+}
+
+/// 追剧页（列表视角）：平台徽标在列表卡上也要出现，且与日历同一个组件。
+Future<void> pumpListPage(WidgetTester tester, AppState target) async {
+  tester.view.physicalSize = const Size(1100, 800);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: buildAppTheme(Brightness.dark),
+      home: Scaffold(body: FollowingPage(state: target)),
     ),
   );
   await tester.pump();

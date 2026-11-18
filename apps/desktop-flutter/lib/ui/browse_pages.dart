@@ -2875,11 +2875,11 @@ class _DetailPageState extends State<DetailPage> {
               final followed = existing != null;
               return IconButton(
                 key: const ValueKey('detail-follow'),
-                tooltip: followed ? '取消追番' : '追番',
+                tooltip: followed ? '取消追剧' : '追剧',
                 onPressed: () {
                   if (followed) {
                     unawaited(state.unfollowFollowing(existing));
-                    showToast('已取消追番', kind: ToastKind.success);
+                    showToast('已取消追剧', kind: ToastKind.success);
                     return;
                   }
                   final line = lines.isEmpty ? null : _activeLine(lines);
@@ -2890,7 +2890,7 @@ class _DetailPageState extends State<DetailPage> {
                     sourceFlag: line?.sourceFlag ?? line?.playbackFlag ?? '',
                     releasedEpisode: line?.episodes.length ?? 0,
                   );
-                  showToast('已加入追番', kind: ToastKind.success);
+                  showToast('已加入追剧', kind: ToastKind.success);
                 },
                 icon: Icon(followed ? Icons.star : Icons.star_border),
               );
