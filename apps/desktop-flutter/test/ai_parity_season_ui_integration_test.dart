@@ -15,11 +15,12 @@ import 'package:webhtv_pc/services/ai_completion_client.dart';
 import 'package:webhtv_pc/services/ai_episode_season_service.dart';
 import 'package:webhtv_pc/services/ai_season_mapping_service.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/detail_test_seams.dart';
 
 class _SeasonCompletion extends AiCompletionClient {
   _SeasonCompletion(this.response)
@@ -146,7 +147,7 @@ void main() {
         });
         return AppState(
           paths: paths,
-          log: LogService(),
+          log: MemoryOnlyLogService(),
           httpClient: client,
           aiSeasonClient: _SeasonCompletion(response),
           tmdbService: TmdbService(
@@ -172,7 +173,7 @@ void main() {
 
       try {
         await tester.runAsync(() async {
-          await state.bootstrap();
+          await bootstrapWithoutExternalMeta(state);
           await state.saveTmdbConfig(
             const TmdbConfig(
               enabled: true,
@@ -360,7 +361,7 @@ void main() {
         state.dispose();
         state = createState();
         await tester.runAsync(() async {
-          await state.bootstrap();
+          await bootstrapWithoutExternalMeta(state);
           await state.loadDetail(vod);
           await state.reloadTmdb();
         });

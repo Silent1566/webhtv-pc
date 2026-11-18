@@ -31,13 +31,13 @@ import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
 import 'support/player_page_harness.dart';
 
 /// 等待反馈的落点：只有一个转圈，没有上屏文案，因此按 key 找。
@@ -66,7 +66,7 @@ const String _swapConfigJson = '''
 /// `SiteService` → `PlaybackResolver` → 本地代理 token（`revokeProxySession`
 /// /`proxyDecision`），用假客户端只能挂住**某一环**。挂住这一个公开入口，
 /// 测的正是「入口到播放器之间那段时间用户看到什么」。
-class _PendingPlaybackState extends AppState {
+class _PendingPlaybackState extends AppState with ExternalMetaOff {
   _PendingPlaybackState({
     required super.paths,
     required super.log,
@@ -128,7 +128,7 @@ void main() {
           'state': p.join(tempDir.path, 'state'),
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       // 换源用例要走真实的搜索/探测/并入，用假客户端承接，不碰 socket。
       httpClient: _SwapClient(),
     );

@@ -165,11 +165,11 @@ void main() {
       await tester.tap(field('add-default-dir'));
       await tester.pump();
       expect(state.subtitleSettings.localDirectories, [
-        '${paths.configDir}/subtitles',
+        '${paths.configDir}${Platform.pathSeparator}subtitles',
       ]);
       await settleWrites(tester);
       expect((await reload(tester)).subtitleSettings.localDirectories, [
-        '${paths.configDir}/subtitles',
+        '${paths.configDir}${Platform.pathSeparator}subtitles',
       ]);
       final count = state.saves;
       await tester.tap(field('add-default-dir'));

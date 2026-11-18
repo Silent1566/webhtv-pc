@@ -29,12 +29,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
 import 'support/player_page_harness.dart';
 
 /// `主站[盘]` 承载详情页自己的线路（不可搜），`换源站[盘]` 可搜。
@@ -67,11 +67,11 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       httpClient: siteClient,
     );
     // 详情页 `initState` 会碰 `state.tmdb`（TMDB 身份服务由 bootstrap 装配）。
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
   });
 
   tearDown(() async {

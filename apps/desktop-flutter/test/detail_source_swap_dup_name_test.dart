@@ -20,12 +20,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/source_field.dart';
 import 'package:webhtv_pc/ui/toast.dart';
+
+import 'support/detail_test_seams.dart';
 
 /// 两个可搜站点**共用**同一个显示名：这正是缺陷的触发条件。
 const String _dupName = '同名站[盘]';
@@ -66,11 +67,11 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       httpClient: siteClient,
     );
     // 详情页 `initState` 会碰 `state.tmdb`（TMDB 身份服务由 bootstrap 装配）。
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
   });
 
   tearDown(() async {

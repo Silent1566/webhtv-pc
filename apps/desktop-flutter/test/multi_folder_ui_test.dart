@@ -10,13 +10,13 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/state/playback_source_context.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/detail_test_seams.dart';
 import 'support/player_page_harness.dart';
 import 'support/test_fonts.dart';
 
@@ -64,7 +64,7 @@ class FolderFixture {
           'state': '${dir.path}/state',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       httpClient: MockClient((request) async {
         calls.add(request.url);
         final query = request.url.queryParameters;
@@ -119,7 +119,7 @@ class FolderFixture {
         });
       }),
     );
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
     await state.importConfig(
       jsonEncode({
         'sites': [

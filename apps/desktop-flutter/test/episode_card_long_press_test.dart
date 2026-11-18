@@ -9,7 +9,6 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
 import 'package:webhtv_pc/services/tmdb_identity_service.dart';
@@ -23,6 +22,8 @@ import 'package:webhtv_pc/ui/toast.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
+
+import 'support/detail_test_seams.dart';
 
 const _card = TmdbEpisodeCard(
   number: 7,
@@ -234,9 +235,9 @@ class _Client extends http.BaseClient {
 
 TmdbConfig _config() => const TmdbConfig(apiKey: 'test-key');
 
-class _State extends AppState {
+class _State extends AppState with ExternalMetaOff {
   _State({required super.paths, required this.client, required this.site})
-    : super(log: LogService()) {
+    : super(log: MemoryOnlyLogService()) {
     service = TmdbService(config: _config, client: client);
     metadata = TmdbState(
       config: _config,
