@@ -2834,7 +2834,6 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
   PersonWorkFilters? _workFilters;
   String _departmentFilter = PersonWorkDepartment.all;
   String _mediaFilter = PersonWorkMedia.all;
-  bool _biographyExpanded = false;
 
   @override
   void initState() {
@@ -3042,21 +3041,12 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
             ),
           ),
           const SizedBox(height: 6),
+          // 简介整段铺开，不折叠（用户反馈 2026-11-18：「人员介绍页简介下面的
+          // 展开去掉，正常是要全部显示」）。人物页是纯阅读页，没有首屏高度压力。
           Text(
             biography,
             key: const ValueKey('tmdb-person-biography'),
             style: theme.textTheme.bodyMedium,
-            maxLines: _biographyExpanded ? null : 6,
-            overflow: _biographyExpanded ? null : TextOverflow.ellipsis,
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              key: const ValueKey('tmdb-person-biography-toggle'),
-              onPressed: () =>
-                  setState(() => _biographyExpanded = !_biographyExpanded),
-              child: Text(_biographyExpanded ? '收起' : '展开'),
-            ),
           ),
         ],
         if (_photos.isNotEmpty) ...[

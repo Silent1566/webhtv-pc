@@ -615,4 +615,56 @@ void main() {
       );
     });
   });
+
+  group('人物页简介不折叠（用户反馈 2026-11-18）', () {
+    testWidgets('长简介整段铺开：没有「展开」按钮，也不截断成 6 行', (tester) async {
+      tester.view.physicalSize = const Size(900, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final biography = List.generate(
+        160,
+        (index) => '第${index + 1}句生平介绍。',
+      ).join();
+      final service = TmdbService(
+        config: () => const TmdbConfig(apiKey: 'k'),
+        client: _PersonClient({
+          'id': 1,
+          'name': '示例演员',
+          'biography': biography,
+          'combined_credits': const {'cast': [], 'crew': []},
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(Brightness.dark),
+          home: TmdbPersonPage(
+            service: service,
+            person: const TmdbPerson(personId: 1, name: '示例演员'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('展开'), findsNothing, reason: '简介下面不再有「展开」');
+      expect(find.text('收起'), findsNothing, reason: '也不再有「收起」');
+      expect(
+        find.byKey(const ValueKey('tmdb-person-biography-toggle')),
+        findsNothing,
+      );
+
+      final bioFinder = find.byKey(const ValueKey('tmdb-person-biography'));
+      final bio = tester.widget<Text>(bioFinder);
+      expect(bio.data, biography, reason: '简介原文整段交给 Text 渲染');
+      expect(bio.maxLines, isNull, reason: '不再按行数截断');
+      expect(bio.overflow, isNull, reason: '不再打省略号');
+      // 6 行 bodyMedium 约 120px 高；整段铺开后远超这个高度。
+      expect(
+        tester.getSize(bioFinder).height,
+        greaterThan(300),
+        reason: '整段简介真的铺开了（折叠时只有 6 行高）',
+      );
+    });
+  });
 }
