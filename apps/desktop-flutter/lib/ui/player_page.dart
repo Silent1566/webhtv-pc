@@ -967,9 +967,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     final target = _controller.repositionTarget;
     if (target == null) return;
-    final position = _controller.position;
-    if (position <= Duration.zero) return;
-    if ((position - target).inMilliseconds.abs() > 3000) return;
+    // 必须用**引擎真实上报**的位置：`position` 在跳转期间是占位值，
+    // 用它判断会在新首帧上屏之前就撤掉遮罩（用户看到旧帧闪一下）。
+    if (!_controller.enginePositionSeen) return;
+    // 光看位置不够：`start` 定位成功后引擎的 `time-pos` **立刻**就是目标值，
+    // 那时画面还没解码出来。必须等引擎真的播起来（playing）。
+    if (!_controller.isPlaying) return;
+    final enginePosition = _controller.enginePosition;
+    if ((enginePosition - target).inMilliseconds.abs() > 3000) return;
     _controller.endReposition();
   }
 

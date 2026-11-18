@@ -216,6 +216,21 @@ class PlayerController extends ChangeNotifier {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
+  /// 引擎**真实上报**的最后一个位置（不受跳转占位影响）。
+  ///
+  /// `_position` 在跳转期间会被占位成目标位置，不能拿它判断"是否真的到位"：
+  /// 占位一写进去，判据立刻成立，遮罩会在新首帧上屏前就撤掉，旧帧露出来。
+  Duration _enginePosition = Duration.zero;
+
+  /// 引擎真实上报的位置（见 [_enginePosition]）。
+  Duration get enginePosition => _enginePosition;
+
+  /// 引擎是否上报过真实位置（换媒体后要先清掉）。
+  bool _enginePositionSeen = false;
+
+  /// 引擎是否至少上报过一次非零位置。
+  bool get enginePositionSeen => _enginePositionSeen;
+
   /// 跳转重开期间要显示的「目标位置」；null 表示没有正在进行的重开。
   ///
   /// `open()` 内部先 `stop()`，那会把 duration/position 一起清成 0——界面于是
@@ -244,6 +259,9 @@ class PlayerController extends ChangeNotifier {
     if (_disposed) return;
     _repositionTarget = target;
     _repositionStartedAt = DateTime.now();
+    // 上一部片的位置不能拿来判「这一次是否到位」。
+    _enginePosition = Duration.zero;
+    _enginePositionSeen = false;
     if (target > _position) _position = target;
     notifyListeners();
   }
@@ -877,6 +895,9 @@ class PlayerController extends ChangeNotifier {
     _subscriptions.addAll([
       _player.stream.position.listen((value) {
         if (_disposed) return;
+        // 引擎的原始上报永远照收：占位只影响显示，不影响"是否真的到位"的判定。
+        _enginePosition = value;
+        if (value > Duration.zero) _enginePositionSeen = true;
         // 重开期间引擎会先报 0：那是 stop() 的回声，不是用户的位置。
         final reposition = _repositionTarget;
         if (reposition != null &&
