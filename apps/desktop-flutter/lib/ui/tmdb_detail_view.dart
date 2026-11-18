@@ -361,6 +361,7 @@ class TmdbDetailHeader extends StatelessWidget {
     this.heroOverview,
     this.heroActions,
     this.ratingTags,
+    this.platformLabel = '',
     this.paintImage = true,
   });
 
@@ -379,6 +380,9 @@ class TmdbDetailHeader extends StatelessWidget {
   /// 放这里而不是正文顶部：评分是「这部片子怎么样」的定性信息，紧挨简介读才连贯；
   /// 也是用户 2026-11-11 明确要求的位置。
   final Widget? ratingTags;
+
+  /// 播放平台标签文案（站点名优先，其次 TMDB 台名）；空串时不渲染。
+  final String platformLabel;
 
   /// 是否由本头部绘制背景图，默认 `true`。
   ///
@@ -426,6 +430,7 @@ class TmdbDetailHeader extends StatelessWidget {
                   overview: heroOverview,
                   actions: heroActions,
                   ratingTags: ratingTags,
+                  platformLabel: platformLabel,
                 ),
               ),
             ],
@@ -1212,6 +1217,7 @@ class TmdbDetailView extends StatelessWidget {
     this.episodeTitle = '剧集',
     this.ratingTags,
     this.ratingLinks,
+    this.platformLabel = '',
   });
 
   final TmdbDetailData data;
@@ -1283,6 +1289,9 @@ class TmdbDetailView extends StatelessWidget {
   /// 页面上的位置和交互都不同（用户决策 2026-11-11）。
   final Widget? ratingLinks;
 
+  /// 播放平台标签文案，透传给 [TmdbDetailHeader]。
+  final String platformLabel;
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1296,6 +1305,7 @@ class TmdbDetailView extends StatelessWidget {
           metadataBadge: metadataBadge,
           heroOverview: data.overview,
           ratingTags: ratingTags,
+          platformLabel: platformLabel,
         ),
         Padding(
           padding: padding,
@@ -1407,6 +1417,7 @@ class _HeaderContent extends StatelessWidget {
     this.overview,
     this.actions,
     this.ratingTags,
+    this.platformLabel = '',
   });
 
   final TmdbDetailData data;
@@ -1414,6 +1425,7 @@ class _HeaderContent extends StatelessWidget {
   final String? overview;
   final Widget? actions;
   final Widget? ratingTags;
+  final String platformLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1472,9 +1484,10 @@ class _HeaderContent extends StatelessWidget {
               _MetaChips(
                 data: data,
                 metadataBadge: metadataBadge,
-                // chips 换行会挤占简介的高度：宽屏上限 8（新增语言后正好 8 个），
-                // 窄屏维持 5，避免把标题挤出内容带。
-                maxChips: compact ? 5 : 8,
+                platformLabel: platformLabel,
+                // chips 换行会挤占简介的高度：宽屏上限 9（新增播放平台后正好
+                // 9 个），窄屏取 6，避免把标题挤出内容带。
+                maxChips: compact ? 6 : 9,
               ),
               const SizedBox(height: 8),
               ?ratingTags,
@@ -1533,10 +1546,18 @@ class _HeaderContent extends StatelessWidget {
 }
 
 class _MetaChips extends StatelessWidget {
-  const _MetaChips({required this.data, this.metadataBadge, this.maxChips = 8});
+  const _MetaChips({
+    required this.data,
+    this.metadataBadge,
+    this.platformLabel = '',
+    this.maxChips = 8,
+  });
 
   final TmdbDetailData data;
   final String? metadataBadge;
+
+  /// 播放平台文案；空串时不渲染这个 chip。
+  final String platformLabel;
 
   /// 最多展示几个 chip（窄窗口下少展示，避免把标题挤出动态背景区）。
   final int maxChips;
@@ -1546,6 +1567,16 @@ class _MetaChips extends StatelessWidget {
     final chips = <Widget>[];
     // 评分不在这里：它由 [TmdbDetailView.ratingTags] 在简介正上方单独成行
     // （用户决策 2026-11-11「评分单独提出来」）。标签行只放「本片是什么」。
+    // 播放平台放在最前面：它是「在哪看」，比年份/时长更靠前才有意义。
+    if (platformLabel.trim().isNotEmpty) {
+      chips.add(
+        _Chip(
+          keyValue: 'tmdb-detail-platform',
+          icon: Icons.live_tv_outlined,
+          label: platformLabel,
+        ),
+      );
+    }
     if (data.yearLabel.isNotEmpty) {
       chips.add(_Chip(keyValue: 'tmdb-detail-year', label: data.yearLabel));
     }
