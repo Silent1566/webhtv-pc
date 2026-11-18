@@ -1071,6 +1071,38 @@ void main() {
     });
 
     // -----------------------------------------------------------------------
+    testWidgets('线路集名写法不同（第2集 vs EP02）时按集号标中', (tester) async {
+      // 真实站点里不同线路的集名写法经常不一致，集数也可能差一集。
+      // 集名逐字比会全部落空，必须回退到**集号数字**。
+      final naming = Vod(
+        vodId: 'demo-2',
+        vodName: '剧集乙',
+        vodPlayFrom: '线路一\$\$\$线路二',
+        vodPlayUrl:
+            '第1集\$http://a/e1#第2集\$http://a/e2#第3集\$http://a/e3'
+            '\$\$\$EP01\$http://b/e1#EP02\$http://b/e2#EP03\$http://b/e3'
+            '#EP04\$http://b/e4',
+      );
+      await pump(
+        tester,
+        source: naming,
+        historyFlag: '线路一',
+        historyEpisodeId: 'http://a/e2',
+      );
+      await tester.tap(find.byKey(const ValueKey('tmdb-line-线路二')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-1')),
+        findsOneWidget,
+        reason: 'EP02 与「第2集」是同一集，集数还差一集也要按集号对上',
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路二-recent-0')),
+        findsNothing,
+      );
+    });
+
     // plans/03：选集区间条接线（`docs/phase6/design/03` §4.2、§4.4、§5.1）
     // -----------------------------------------------------------------------
 

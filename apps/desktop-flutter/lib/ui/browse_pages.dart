@@ -2193,6 +2193,14 @@ class _DetailPageState extends State<DetailPage> {
     mark ??= rawLine.episodes
         .where((episode) => episode.name == historyEpisode.name)
         .firstOrNull;
+    // 集名兜底：不同线路的命名常常不一致（「第 2 集」/「EP02」/「02」），
+    // 按**集号数字**再对一次；这是同一部剧里最稳定的跨线路身份。
+    final historyNumber = _episodeNameNumber(historyEpisode.name);
+    if (mark == null && historyNumber > 0) {
+      mark = rawLine.episodes
+          .where((episode) => _episodeNameNumber(episode.name) == historyNumber)
+          .firstOrNull;
+    }
     if (mark == null &&
         rawLine.episodes.isNotEmpty &&
         rawLine.episodes.length == targetLine.episodes.length) {
@@ -2206,6 +2214,7 @@ class _DetailPageState extends State<DetailPage> {
     }
     return -1;
   }
+
 
   Vod? get _currentVod {
     final result = widget.state.detailResult;
@@ -2658,6 +2667,10 @@ class _DetailPageState extends State<DetailPage> {
     }
     return const _ResumeLocatorHit(0, true);
   }
+
+  /// 集名里的**最后一个** 1~4 位数字段；整条名字里没有数字时返回 -1。
+  ///
+  /// 为什么取最后一个：`S01E06` 的最后一个数字才是集号，`第2季第6集` 同理；
 
   /// 集名里的**最后一个** 1~4 位数字段；整条名字里没有数字时返回 -1。
   ///
