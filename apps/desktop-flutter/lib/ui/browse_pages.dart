@@ -13,6 +13,7 @@ import '../core/episode_range.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
 import '../core/detail_ratings.dart';
+import '../core/playback_platform.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_detail_meta.dart';
@@ -2979,6 +2980,9 @@ class _DetailPageState extends State<DetailPage> {
                   // 图片由页面级背景负责（见本 body 的 Stack），头部只画内容。
                   paintImage: false,
                   data: headerData,
+                  platformLabel: playbackPlatformLabel(
+                    networks: headerData.networks,
+                  ),
                   heroOverview: display.vodContent ?? tmdbData?.overview,
                   ratingTags: DetailRatingTags(
                     ratings: ratings,

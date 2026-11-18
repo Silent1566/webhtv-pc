@@ -18,6 +18,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../core/app_error.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
+import '../core/playback_platform.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
@@ -68,8 +69,14 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
   /// 官方该季总集数（TMDB）；空表示全部降级到本线路可播集数。
   List<FollowingSeasonTotal> _seasonTotals = const [];
 
+  /// 播放平台名（TMDB 台名）；键是追番 identityKey。
+  Map<String, List<String>> _networks = const {};
+
   /// 最近一次发起加载时的追番身份集合（用于判断追番变化后是否需要重取）。
   String _loadedKey = '';
+
+  /// 最近一次发起平台名请求时的追番身份集合。
+  String _loadedNetworksKey = '';
 
   final _listController = ScrollController();
   final _dayHeaders = <DateTime, GlobalKey>{};
@@ -105,9 +112,27 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
     _loadRealData();
   }
 
+  /// 追番集合变化后取平台名（TMDB 的 networks）：判重键同 [_loadedKey]，
+  /// 同一集合重复 build 不会重复请求。
+  void _loadNetworks(List<Following> items) {
+    final key = items.map((item) => item.identityKey).join(',');
+    if (key == _loadedNetworksKey) return;
+    _loadedNetworksKey = key;
+    if (items.isEmpty) {
+      _networks = const {};
+      return;
+    }
+    unawaited(() async {
+      final networks = await _state.followingNetworksFor(items);
+      if (!mounted || _loadedNetworksKey != key) return;
+      setState(() => _networks = networks);
+    }());
+  }
+
   /// 追番集合变化后重取播出时间与官方总集数（两者共享同一次 TMDB 请求）。
   void _loadRealData() {
     final items = _state.followings;
+    _loadNetworks(items);
     final key = items.map((item) => item.identityKey).join(',');
     if (key == _loadedKey) return;
     _loadedKey = key;
@@ -262,6 +287,7 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
       for (final (index, entry) in day.entries.indexed)
         _CalendarEntryCard(
           entry: entry,
+          platformLabel: _platformLabel(entry),
           showSeriesInfo: leads.contains(index),
           releasedEpisode: _itemFor(entry)?.releasedEpisode ?? entry.episode,
           onPlay: _playEntry,
@@ -269,6 +295,10 @@ class _FollowingCalendarPageState extends State<FollowingCalendarPage> {
         ),
     ];
   }
+
+  /// 平台标签：TMDB 的 networks（腾讯视频 / 爱奇艺…）；没有台名时返回空串。
+  String _platformLabel(CalendarEntry entry) =>
+      playbackPlatformLabel(networks: _networks[entry.identityKey] ?? const []);
 
   Future<void> _showEntryDetails(CalendarEntry entry, DateTime day) async {
     final item = _itemFor(entry);
@@ -1041,6 +1071,7 @@ bool _isSameDay(DateTime a, DateTime b) =>
 class _CalendarEntryCard extends StatelessWidget {
   const _CalendarEntryCard({
     required this.entry,
+    required this.platformLabel,
     required this.showSeriesInfo,
     required this.releasedEpisode,
     required this.onPlay,
@@ -1048,6 +1079,9 @@ class _CalendarEntryCard extends StatelessWidget {
   });
 
   final CalendarEntry entry;
+
+  /// 播放平台标签（TMDB 台名）；空串表示整块不渲染。
+  final String platformLabel;
 
   /// 是否展示剧级信息（该剧当天的首条卡才为 true）。
   final bool showSeriesInfo;
@@ -1106,7 +1140,10 @@ class _CalendarEntryCard extends StatelessWidget {
                       // 主行：剧名后紧跟集号，一集一条时它是唯一的区分信息。
                       Row(
                         children: [
-                          Expanded(
+                          // 剧名组用 Flexible 而不是 Expanded：平台徽标是**非弹性**的
+                          // 定宽内容，先于剧名拿到自己的宽度，剩余空间才给剧名，
+                          // 因此长台名不会把主行撑溢出。
+                          Flexible(
                             child: Row(
                               children: [
                                 Flexible(
@@ -1148,6 +1185,20 @@ class _CalendarEntryCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: AppSpace.sm),
+                          // 平台徽标完整显示、不省略：卡片右侧本来就空着一大块，
+                          // 长度由台名本身决定；空间不够时先挤压左侧剧名（Flexible），
+                          // 而不是把平台截成「Hunan Television / …」。
+                          if (platformLabel.isNotEmpty) ...[
+                            _Badge(
+                              key: ValueKey(
+                                'calendar-platform-'
+                                '${entry.identityKey}-$suffix',
+                              ),
+                              text: platformLabel,
+                              emphasized: false,
+                            ),
+                            const SizedBox(width: AppSpace.sm),
+                          ],
                           Icon(
                             Icons.chevron_right,
                             size: 18,
@@ -1293,6 +1344,8 @@ class _Badge extends StatelessWidget {
       ),
       child: Text(
         text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 11,
           color: emphasized

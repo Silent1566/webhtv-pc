@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import 'package:webhtv_pc/core/hot_rank_layout.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/search_suggest_service.dart';
@@ -225,6 +226,107 @@ void main() {
       find.byKey(ValueKey('search-hot-movie-$rendered')),
       findsNothing,
       reason: '第 capacity+1 条不该渲染（否则就不是恰好铺满）',
+    );
+  });
+
+  testWidgets('用户窗口内容区 1196×725：热门推荐铺满两行 14 张（回归：曾只有 7 张）', (tester) async {
+    // 用户窗口 1273×821 扣掉顶栏 64、侧栏 76 + 1px 分隔线后，SearchPage 拿到的
+    // 正是 1196×725（本机复刻 1273×789 视口量到的网格是 1164×453）。
+    // 旧实现按固定卡高 254 数行：floor((453+12)/266) = 1 行 → 7 张，底部空出
+    // 200 多像素；现在按最省卡高 194 数出 2 行，再把可用高摊成 220.5 的卡高。
+    tester.view.physicalSize = const Size(1196, 725);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    fakeSuggest.hotCount = 30;
+
+    await prepare(tester);
+    await pumpPage(tester);
+
+    final grid = tester.widget<GridView>(find.byType(GridView));
+    final delegate =
+        grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
+    final rect = tester.getRect(find.byType(GridView));
+    final expected = HotRankLayout.resolve(
+      availableWidth: rect.width,
+      availableHeight: rect.height,
+      poolSize: 30,
+    );
+
+    expect(delegate.crossAxisCount, 7, reason: '1164 宽按「140 + 12」放得下 7 列');
+    expect(
+      delegate.mainAxisExtent,
+      closeTo(expected.cardHeight, 1e-6),
+      reason: '行高必须用布局算出的卡高，而不是常量 254（否则又只剩一行）',
+    );
+    expect(expected.rows, 2);
+    // 卡高按**实测**网格 rect 算（与 `_buildHotSection` 的入参同源）：本用例
+    // 没挂中文字体，历史区比截图环境矮一点，网格约 1164×493 → 240.5；
+    // 挂 FixtureCJK 的截图环境是 1164×453 → 220.5（见 .local/capture 的打印）。
+    // 真正要锁的是「两行 + 整数条数」，具体像素随文字度量走。
+    expect(rect.width, closeTo(1164, 1), reason: '7 列 × 156 = 1092 + 6 × 12');
+    expect(rect.height, greaterThan(400), reason: '两行最省卡高 = 2×194 + 12 = 400');
+    expect(rect.height, lessThan(606), reason: '三行要 3×194 + 2×12 = 606');
+    expect(
+      expected.cardHeight,
+      closeTo((rect.height - HotRankMetrics.spacing) / 2, 1e-9),
+      reason: '两行平分「网格高 - 1 个行间距」',
+    );
+    expect(hotCards(HotRankCategory.movie), 14, reason: '7 列 × 2 行');
+    expect(
+      find.byKey(const ValueKey('search-hot-movie-14')),
+      findsNothing,
+      reason: '第 15 条（0 基的 14）不该渲染',
+    );
+    // 卡片真的被撑到格子高（不是 254 后被裁、也不是撑破格子）。
+    expect(
+      tester.getSize(find.byKey(const ValueKey('search-hot-movie-0'))).height,
+      closeTo(expected.cardHeight, 1e-6),
+    );
+  });
+
+  testWidgets('全屏 1920×1080：热门推荐凑成 10 列 × 3 行 = 30 条（不留白）', (tester) async {
+    // 用户全屏 1920×1080：内容区 1843×945（顶栏 64 + 侧栏 76 + 1px），网格约
+    // 1811×673。按宽度能放 11 列，但 30 条在 11 列下排不出整 3 行（11×3 > 30），
+    // 旧规则只给 2 整行 22 条、底部空 113px（用户全屏截图）。精确铺满改成
+    // 10 列 × 3 行：30 条正好铺满，列缝仍在 48 以内。
+    tester.view.physicalSize = const Size(1843, 945);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    fakeSuggest.hotCount = 30;
+
+    await prepare(tester);
+    await pumpPage(tester);
+
+    final grid = tester.widget<GridView>(find.byType(GridView));
+    final delegate =
+        grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
+    final rect = tester.getRect(find.byType(GridView));
+    final expected = HotRankLayout.resolve(
+      availableWidth: rect.width,
+      availableHeight: rect.height,
+      poolSize: 30,
+    );
+
+    // 三行区间：3 × 194 + 2 × 12 = 606 起，4 行要 4 × 194 + 3 × 12 = 812。
+    expect(rect.height, greaterThan(606), reason: '前置条件：高度够三行');
+    expect(rect.height, lessThan(846), reason: '前置条件：还没到四行');
+    expect(delegate.crossAxisCount, 10, reason: '10 列 × 3 行 = 30 条整行');
+    expect(expected.rows, 3);
+    expect(
+      delegate.mainAxisExtent,
+      closeTo(expected.cardHeight, 1e-6),
+      reason: '行高用精确铺满算出的卡高（不是退路的 274）',
+    );
+    expect(hotCards(HotRankCategory.movie), 30, reason: '整个池子都在屏上');
+    expect(
+      find.byKey(const ValueKey('search-hot-movie-30')),
+      findsNothing,
+      reason: '第 31 条不该渲染（池子只有 30 条）',
+    );
+    // 铺满：三行卡片 + 两个间距正好等于网格高。
+    expect(
+      expected.rows * expected.cardHeight + (expected.rows - 1) * 12,
+      closeTo(rect.height, 1e-6),
     );
   });
 

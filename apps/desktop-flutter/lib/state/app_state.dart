@@ -73,6 +73,7 @@ import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/playback_lines.dart';
+import '../core/playback_platform.dart';
 import '../core/player_buttons.dart';
 import '../core/outbound_proxy.dart';
 import '../core/parse_failover.dart';
@@ -7494,6 +7495,41 @@ AiContentCompletion? aiContentCompletion,
       return await service.seasonTotalsFor(items);
     } catch (_) {
       return const [];
+    }
+  }
+
+  /// 追剧日历平台徽标用的播放平台名（TMDB `networks`，与站点/站源无关）。
+  ///
+  /// 每部追番一次 `/tv/{id}` 剧集详情（磁盘缓存 7 天）；未配置 TMDB、无匹配、
+  /// 超时或任何失败都只跳过该条，**不抛异常**，没拿到台名的条目也不进结果。
+  Future<Map<String, List<String>>> followingNetworksFor(
+    List<Following> items,
+  ) async {
+    if (items.isEmpty || !tmdbConfig.isReady) return const {};
+    final result = <String, List<String>>{};
+    for (var start = 0; start < items.length; start += _networksBatch) {
+      final batch = items.skip(start).take(_networksBatch);
+      final found = await Future.wait(batch.map(_followingNetworksForOne));
+      for (final entry in found) {
+        if (entry.value.isNotEmpty) result[entry.key] = entry.value;
+      }
+    }
+    return result;
+  }
+
+  /// 兜底平台名的小并发上限：串行的 TMDB 请求会把日历拖到几十秒。
+  static const int _networksBatch = 2;
+
+  Future<MapEntry<String, List<String>>> _followingNetworksForOne(
+    Following item,
+  ) async {
+    try {
+      final tmdb = await followingTmdbItem(item);
+      if (tmdb == null) return MapEntry(item.identityKey, const []);
+      final detail = await tmdbService.detail(tmdb, includeRelated: false);
+      return MapEntry(item.identityKey, tmdbNetworkNames(detail['networks']));
+    } catch (_) {
+      return MapEntry(item.identityKey, const []);
     }
   }
 
