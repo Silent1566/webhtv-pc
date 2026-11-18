@@ -167,6 +167,7 @@ class TmdbDetailData {
     this.languages = const [],
     this.networks = const [],
     this.rating = 0,
+    this.ratingSourceLabel = RatingBrand.tmdb,
     this.voteCount = 0,
     this.releaseDate = '',
     this.runtime = 0,
@@ -226,6 +227,7 @@ class TmdbDetailData {
   final List<String> networks;
 
   final double rating;
+  final String ratingSourceLabel;
   final int voteCount;
   final String releaseDate;
   final int runtime;
@@ -244,7 +246,7 @@ class TmdbDetailData {
 
   /// 评分文案（`TMDB 8.2`）；无评分时为空串。
   String get ratingLabel =>
-      rating > 0 ? '${RatingBrand.tmdb} ${rating.toStringAsFixed(1)}' : '';
+      rating > 0 ? '$ratingSourceLabel ${rating.toStringAsFixed(1)}' : '';
 
   /// 时长文案（`45 分钟` / `1 小时 52 分钟`）；为 0 时为空串。
   String get runtimeLabel {
@@ -482,15 +484,15 @@ String? tmdbCreatorJobLabel(String? job, String? department) {
   if (jobText.isEmpty && deptText.isEmpty) return null;
   final value = (jobText.isEmpty ? deptText : jobText).toLowerCase();
   final group = '$deptText $jobText'.toLowerCase();
-  if (value.contains('director') || group.contains('directing')) return '导演';
+  if (value.contains('director') || group.contains('directing') || group.contains('导演')) return '导演';
   if (value.contains('writer') ||
       value.contains('screenplay') ||
       value.contains('story') ||
       value.contains('teleplay') ||
-      group.contains('writing')) {
+      group.contains('writing') || group.contains('编剧')) {
     return '编剧';
   }
-  if (value.contains('producer') || group.contains('production')) return '制片';
+  if (value.contains('producer') || group.contains('production') || group.contains('制片') || group.contains('监制')) return '制片';
   return null;
 }
 

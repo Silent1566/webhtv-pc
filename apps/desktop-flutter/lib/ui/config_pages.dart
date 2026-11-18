@@ -1,6 +1,8 @@
 /// 配置导入与管理页（§17.2 配置导入页 / 配置管理页，§7.5 配置验收）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 

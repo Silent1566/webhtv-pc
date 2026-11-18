@@ -16,6 +16,7 @@ library;
 
 import 'tmdb_detail_model.dart';
 import 'tmdb_identity.dart';
+import 'tmdb_title.dart';
 
 /// 部门筛选键：`all` 表示「全部部门」。
 abstract final class PersonWorkDepartment {
@@ -219,7 +220,12 @@ class PersonWorkFilters {
     return PersonWorkDepartment.of('其他');
   }
 
-  static String _keyOf(TmdbItem item) => '${item.mediaType.name}:${item.tmdbId}';
+  /// 去重键：有 TMDB 身份用身份，没有身份（兜底源的合成条目 `tmdbId == 0`）
+  /// 退回标题——否则同一个人的所有外部作品都会落到同一个 `tv:0` 键上，网格里
+  /// 只剩一张卡。
+  static String _keyOf(TmdbItem item) => item.tmdbId > 0
+      ? '${item.mediaType.name}:${item.tmdbId}'
+      : '${item.mediaType.name}:title:${normalizeTitle(item.title)}';
 
   static void _putUnique(
     Map<String, List<TmdbPersonWork>> map,

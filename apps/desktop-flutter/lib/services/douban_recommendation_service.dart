@@ -7,6 +7,8 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/detail_recommendation.dart';
+import '../core/external_meta.dart';
+import '../core/meta_source.dart';
 import '../core/tmdb_identity.dart';
 import 'app_paths.dart';
 import 'tmdb_service.dart';
@@ -401,6 +403,208 @@ class DoubanRecommendationService {
       // Enrichment is optional; the unresolved title remains searchable.
     }
     return entry;
+  }
+
+  // ---------------------------------------------------------------------------
+  // §9 外部元数据兜底（TMDB 不可用时用）
+  // ---------------------------------------------------------------------------
+  //
+  // 用户决策 2026-11-17：TMDB 不可用时**先用豆瓣兜底**，未命中再退 Bangumi。
+  // 这里刻意复用推荐/评分那条串行队列与冷却（`_request`）：多开一条队列只会让
+  // 豆瓣更快地把我们判成异常访问（403/418/429 → 30 分钟冷却，见 `_requestSerial`）。
+  //
+  // 边界：本段只负责"拿到原始 JSON 或候选"，**不做展示映射**——映射是
+  // `core/external_detail_meta.dart` 的事。任何失败都退化成空值，绝不抛给详情页。
+
+  /// 按标题检索候选（`/j/subject_suggest`）。失败返回空列表。
+  Future<List<MetaCandidate>> searchMeta(MetaQuery query) async {
+    final titles = query.queries;
+    if (titles.isEmpty) return const [];
+    final body = await _request(
+      Uri.https('movie.douban.com', '/j/subject_suggest', {'q': titles.first}),
+    );
+    if (body is! List) return const [];
+    final result = <MetaCandidate>[];
+    for (final raw in body) {
+      final item = _map(raw);
+      final id = int.tryParse(_text(item, const ['id']));
+      final title = _text(item, const ['title']);
+      if (id == null || id <= 0 || title.isEmpty) continue;
+      // suggest 不分剧/影：`episode` 只有剧集条目才有，用它判类型；判不出就
+      // 跟随本次查询的类型（用户点进来的页面本来就知道是剧还是电影）。
+      final episode = int.tryParse(_text(item, const ['episode'])) ?? 0;
+      // 有集数 = 剧；没有集数就跟随查询类型（电影查询本来就不该出现集数）。
+      final isTv = item.containsKey('episode')
+          ? episode > 0
+          : _text(item, const ['type']) == 'tv' || query.isTv == true;
+      final identity = MetaIdentity.of(
+        MetaSourceKind.douban,
+        isTv ? TmdbMediaType.tv : TmdbMediaType.movie,
+        id,
+      );
+      if (identity == null) continue;
+      final poster = _text(item, const ['img']);
+      final subtitle = _text(item, const ['sub_title']);
+      result.add(
+        MetaCandidate(
+          identity: identity,
+          title: title,
+          originalTitle: subtitle == title ? '' : subtitle,
+          year: _year(_text(item, const ['year'])),
+          episodeCount: episode,
+          // suggest 不返回评分：留给详情接口，避免这里编一个假分数。
+          rating: 0,
+          posterUrl: poster.isEmpty ? null : poster,
+        ),
+      );
+    }
+    return result;
+  }
+
+  /// 作品详情（`/rexxar/api/v2/{tv|movie}/{id}`）；失败返回空 Map。
+  Future<Map<String, Object?>> metaSubject(int id, {required bool isTv}) async {
+    final kind = isTv ? 'tv' : 'movie';
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/$kind/$id'),
+      referer: 'https://m.douban.com/movie/subject/$id/',
+    );
+    return _map(body).cast<String, Object?>();
+  }
+
+  /// 演职员（`/credits`）：条目带 celebrity id、角色名（`饰 X`）与头像。
+  Future<List<Map<String, Object?>>> metaCredits(
+    int id, {
+    required bool isTv,
+  }) async {
+    final kind = isTv ? 'tv' : 'movie';
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/$kind/$id/credits'),
+      referer: 'https://m.douban.com/movie/subject/$id/',
+    );
+    final items = _map(body)['items'];
+    if (items is! List) return const [];
+    return [
+      for (final item in items)
+        if (item is Map) item.cast<String, Object?>(),
+    ];
+  }
+
+  /// 人物详情（`/celebrity/{id}`）。
+  ///
+  /// 注意：豆瓣**不返回简介**（实测 rexxar 载荷无 intro 字段，网页版被反爬跳转），
+  /// 因此人物页的简介只能靠 Bangumi 或第三方站，这里只拿基本信息与头像。
+  Future<Map<String, Object?>> metaCelebrity(int id) async {
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/celebrity/$id'),
+      referer: 'https://m.douban.com/',
+    );
+    return _map(body).cast<String, Object?>();
+  }
+
+  /// 人物相册（`/celebrity/{id}/photos`），只取图片地址并按出现顺序去重。
+  Future<List<String>> metaCelebrityPhotos(int id, {int count = 24}) async {
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/celebrity/$id/photos', {
+        'start': '0',
+        'count': '$count',
+      }),
+      referer: 'https://m.douban.com/',
+    );
+    final photos = _map(body)['photos'];
+    if (photos is! List) return const [];
+    final urls = <String>[];
+    for (final item in photos) {
+      final image = _map(_map(item)['image']);
+      final large = _map(image['large']);
+      final normal = _map(image['normal']);
+      final url = _text(large, const ['url']);
+      final fallback = _text(normal, const ['url']);
+      final chosen = url.isNotEmpty ? url : fallback;
+      if (chosen.isNotEmpty && !urls.contains(chosen)) urls.add(chosen);
+    }
+    return urls;
+  }
+
+  /// 作品剧照（`/{tv|movie}/{id}/photos`）。
+  ///
+  /// 与人物相册同一形状，只是路径不同：图片地址去重后按出现顺序返回。
+  Future<List<String>> metaSubjectPhotos(
+    int id, {
+    required bool isTv,
+    int count = 24,
+  }) async {
+    final kind = isTv ? 'tv' : 'movie';
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/$kind/$id/photos', {
+        'start': '0',
+        'count': '$count',
+      }),
+      referer: 'https://m.douban.com/movie/subject/$id/',
+    );
+    final photos = _map(body)['photos'];
+    if (photos is! List) return const [];
+    final urls = <String>[];
+    for (final item in photos) {
+      final image = _map(_map(item)['image']);
+      final url = _text(_map(image['large']), const ['url']);
+      final fallback = _text(_map(image['normal']), const ['url']);
+      final chosen = url.isNotEmpty ? url : fallback;
+      if (chosen.isNotEmpty && !urls.contains(chosen)) urls.add(chosen);
+    }
+    return urls;
+  }
+
+  /// 作品短评（`/{tv|movie}/{id}/interests`），按热度分页。
+  ///
+  /// 返回原始条目 + 该来源声称的总数：分页与「是否还有更多」由调用方决定，
+  /// 服务层不替它猜。
+  Future<({List<Map<String, Object?>> items, int total})> metaInterests(
+    int id, {
+    required bool isTv,
+    int start = 0,
+    int count = 12,
+  }) async {
+    final kind = isTv ? 'tv' : 'movie';
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/$kind/$id/interests', {
+        'start': '$start',
+        'count': '$count',
+        'order_by': 'hot',
+      }),
+      referer: 'https://m.douban.com/movie/subject/$id/',
+    );
+    final root = _map(body);
+    final items = root['interests'];
+    return (
+      items: items is List
+          ? [
+              for (final item in items)
+                if (item is Map) item.cast<String, Object?>(),
+            ]
+          : const <Map<String, Object?>>[],
+      total: int.tryParse('${root['total'] ?? ''}') ?? 0,
+    );
+  }
+
+  /// 人物作品（`/celebrity/{id}/works`），按时间倒序取前 [count] 条。
+  Future<List<Map<String, Object?>>> metaCelebrityWorks(
+    int id, {
+    int count = 50,
+  }) async {
+    final body = await _request(
+      Uri.https('m.douban.com', '/rexxar/api/v2/celebrity/$id/works', {
+        'start': '0',
+        'count': '$count',
+        'sortby': 'time',
+      }),
+      referer: 'https://m.douban.com/',
+    );
+    final works = _map(body)['works'];
+    if (works is! List) return const [];
+    return [
+      for (final item in works)
+        if (item is Map) item.cast<String, Object?>(),
+    ];
   }
 
   Future<Object?> _request(

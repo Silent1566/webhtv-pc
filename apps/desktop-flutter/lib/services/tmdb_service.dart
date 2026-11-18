@@ -208,6 +208,67 @@ class TmdbService {
     return _itemsFromSearch(body, config);
   }
 
+  /// 按 IMDb 编号解析 TMDB 身份（确定性跨源映射）。
+  ///
+  /// 为什么不用标题搜索：标题会认错续作与翻拍，IMDb 编号是全局唯一的。
+  /// 只认形如 tt1234567 的输入；未配置 TMDB 或编号非法时返回 null 且不发请求。
+  Future<TmdbIdentity?> findByImdbId(
+    String imdbId, {
+    TmdbCancellationToken? cancel,
+    bool refresh = false,
+  }) async {
+    final id = imdbId.trim();
+    if (!RegExp(r'^tt\d{6,}$').hasMatch(id)) return null;
+    if (!config.isReady) return null;
+    final payload = await _request(
+      'find',
+      '/find/$id',
+      const Duration(days: 7),
+      query: const {'external_source': 'imdb_id'},
+      cancel: cancel,
+      refresh: refresh,
+    );
+    for (final entry in const [
+      ('movie_results', 'movie'),
+      ('tv_results', 'tv'),
+    ]) {
+      final results = payload[entry.$1];
+      if (results is! List || results.isEmpty) continue;
+      final first = results.first;
+      if (first is! Map) continue;
+      final identity = TmdbIdentity.from(entry.$2, first['id']);
+      if (identity != null) return identity;
+    }
+    return null;
+  }
+
+  /// 按 IMDb 人物编号解析 TMDB 人物 id（人物级确定性映射）。
+  ///
+  /// 与作品映射分开：`TmdbIdentity` 只有 movie/tv，人物不属于这两种，
+  /// 因此这里直接返回人物 id。
+  Future<int?> findPersonByImdbId(
+    String imdbId, {
+    TmdbCancellationToken? cancel,
+  }) async {
+    final id = imdbId.trim();
+    if (!RegExp(r'^nm\d{6,}$').hasMatch(id)) return null;
+    if (!config.isReady) return null;
+    final payload = await _request(
+      'find',
+      '/find/$id',
+      const Duration(days: 7),
+      query: const {'external_source': 'imdb_id'},
+      cancel: cancel,
+    );
+    final people = payload['person_results'];
+    if (people is! List || people.isEmpty) return null;
+    final first = people.first;
+    if (first is! Map) return null;
+    final raw = first['id'];
+    final personId = raw is int ? raw : (raw is num ? raw.toInt() : null);
+    return personId != null && personId > 0 ? personId : null;
+  }
+
   Future<Map<String, Object?>> detail(
     TmdbItem item, {
     bool includeRelated = true,

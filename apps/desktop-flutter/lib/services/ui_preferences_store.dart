@@ -42,6 +42,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import '../core/external_meta.dart';
+import '../core/meta_override.dart';
+import '../core/meta_pipeline.dart';
 import '../core/external_player_catalog.dart';
 import 'external_player.dart';
 import '../core/history_aggregation.dart';
@@ -168,6 +171,9 @@ class UiPreferencesStore {
 
   /// 选集视图模式。`null` = 从未设置过，用默认 [UiEpisodeViewMode.fallback]。
   String? _episodeViewMode;
+  bool? _externalMetaEnabled;
+  MetaPipeline? _metaPipeline;
+  MetaOverrideStore? _metaOverrides;
 
   /// 屏显开关的**显式**设置；缺席的 id 用 [defaultOsdFlags] 补齐。
   ///
@@ -326,6 +332,37 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过选集视图模式。
   bool get hasExplicitEpisodeViewMode => _episodeViewMode != null;
+
+  bool get externalMetaEnabled => _externalMetaEnabled ?? true;
+
+  /// 多来源元数据管线（逐字段优先/聚合）；缺席 = 默认规则。
+  MetaPipeline get metaPipeline => _metaPipeline ?? MetaPipeline.defaults;
+
+  /// 用户手动钉住的来源身份（vod → MetaIdentity）；空表示全部走自动匹配。
+  MetaOverrideStore get metaOverrides =>
+      _metaOverrides ?? MetaOverrideStore();
+
+  /// 钉住某条身份并落盘；返回是否成功。
+  Future<bool> pinMetaOverride(String vodId, MetaIdentity identity) async {
+    final store = _metaOverrides ?? MetaOverrideStore();
+    if (!store.pin(vodId, identity)) return false;
+    _metaOverrides = store;
+    return _persist();
+  }
+
+  /// 取消钉住并落盘。
+  Future<bool> unpinMetaOverride(String vodId) async {
+    final store = _metaOverrides;
+    if (store == null || !store.unpin(vodId)) return false;
+    _metaOverrides = store.isEmpty ? null : store;
+    return _persist();
+  }
+
+  Future<bool> rememberMetaPipeline(MetaPipeline pipeline) {
+    if (pipeline == _metaPipeline) return Future.value(true);
+    _metaPipeline = pipeline.isDefault ? null : pipeline;
+    return _persist();
+  }
 
   /// 生效的屏显开关：显式设置过的项用用户值，其余用默认。
   Map<String, bool> get osdFlags => normalizeOsdFlags(_osdFlags);
@@ -589,6 +626,10 @@ class UiPreferencesStore {
               _historyAggregation = aggregation.trim().toLowerCase();
             }
           }
+          final externalMeta = ui['externalMetaEnabled'];
+          if (externalMeta is bool) _externalMetaEnabled = externalMeta;
+          _metaPipeline = MetaPipeline.fromJson(ui['metaPipeline']);
+          _metaOverrides = MetaOverrideStore.fromJson(ui['metaOverrides']);
           final viewMode = ui['episodeViewMode'];
           if (viewMode is String) {
             // 只接受合法值；手改成别的字符串时回落到默认（网格）。
@@ -851,6 +892,12 @@ class UiPreferencesStore {
     if (normalized == _episodeViewMode) return;
     _episodeViewMode = normalized;
     await _persist();
+  }
+
+  Future<bool> rememberExternalMetaEnabled(bool enabled) {
+    if (_externalMetaEnabled == enabled) return Future.value(true);
+    _externalMetaEnabled = enabled;
+    return _persist();
   }
 
   /// 记住单项屏显开关。非法 id 忽略（不写坏状态）。
@@ -1241,6 +1288,14 @@ class UiPreferencesStore {
         // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
         final viewMode = _episodeViewMode;
         if (viewMode != null) ui['episodeViewMode'] = viewMode;
+        final externalMeta = _externalMetaEnabled;
+        if (externalMeta != null) ui['externalMetaEnabled'] = externalMeta;
+        final pipeline = _metaPipeline;
+        if (pipeline != null) ui['metaPipeline'] = pipeline.toJson();
+        final overrides = _metaOverrides;
+        if (overrides != null && !overrides.isEmpty) {
+          ui['metaOverrides'] = overrides.toJson();
+        }
         // 详细调试日志：显式切过就写（含 false），从未设置过则缺席 = 默认关闭。
         final spiderDebugLog = _spiderDebugLog;
         if (spiderDebugLog != null) ui['spiderDebugLog'] = spiderDebugLog;
