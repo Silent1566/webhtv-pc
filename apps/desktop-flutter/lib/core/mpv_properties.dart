@@ -207,6 +207,10 @@ bool mpvPropertyReadbackMatches(String expected, String actual) {
   final want = expected.trim();
   final got = actual.trim();
   if (want == got) return true;
+  // mpv 会把 auto 解析成实际算法再回读（实测 tone-mapping 写 auto、回读
+  // bt.2390；hdr-compute-peak 同理）。写 auto 的语义就是「让内核自己挑」，
+  // 因此非空回读即算生效；空回读仍旧算失败——读失败与静默拒绝都长这样。
+  if (want == 'auto') return got.isNotEmpty;
   final wantNumber = num.tryParse(want);
   final gotNumber = num.tryParse(got);
   if (wantNumber != null && gotNumber != null) return wantNumber == gotNumber;
