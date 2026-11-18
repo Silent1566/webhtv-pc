@@ -12,10 +12,11 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/detail_test_seams.dart';
 
 const _parentId = 'atvp_detail:133099';
 const _parentName = '父级作品标题';
@@ -185,10 +186,10 @@ void main() {
           'state': '${temp.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
     addTearDown(state.dispose);
-    await tester.runAsync(state.bootstrap);
+    await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
     final imported = await tester.runAsync(
       () => state.importConfig(
         jsonEncode({
@@ -301,10 +302,10 @@ void main() {
           'state': '${temp.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
     addTearDown(state.dispose);
-    await tester.runAsync(state.bootstrap);
+    await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
     await tester.runAsync(
       () => state.importConfig(
         jsonEncode({

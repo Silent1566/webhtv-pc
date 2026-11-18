@@ -14,9 +14,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+
+import 'support/detail_test_seams.dart';
 
 void main() {
   VodPlayLine lineOf(
@@ -326,9 +327,9 @@ void main() {
             'state': '${tempDir.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await state.bootstrap();
+      await bootstrapWithoutExternalMeta(state);
     });
 
     tearDown(() async {
@@ -573,9 +574,9 @@ void main() {
             'state': '${dir.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await appState.bootstrap();
+      await bootstrapWithoutExternalMeta(appState);
     });
 
     tearDown(() async {
@@ -779,9 +780,9 @@ void main() {
             'state': '${dir.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await appState.bootstrap();
+      await bootstrapWithoutExternalMeta(appState);
     });
 
     tearDown(() async {
@@ -918,9 +919,9 @@ void main() {
             'state': '${dir.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await appState.bootstrap();
+      await bootstrapWithoutExternalMeta(appState);
     });
 
     tearDown(() async {
@@ -1315,9 +1316,9 @@ void main() {
             'state': '${dir.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await appState.bootstrap();
+      await bootstrapWithoutExternalMeta(appState);
     });
 
     tearDown(() async {

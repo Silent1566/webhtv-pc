@@ -19,7 +19,6 @@ import 'package:webhtv_pc/services/ai_season_mapping_service.dart';
 import 'package:webhtv_pc/services/ai_content/ai_content_completion.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/detail_rating_service.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
@@ -37,6 +36,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
 
+import 'support/detail_test_seams.dart';
 import 'support/temp_dirs.dart';
 import 'support/test_fonts.dart';
 
@@ -71,7 +71,7 @@ class _Ratings implements DetailRatingService {
   dynamic noSuchMethod(Invocation invocation) => null;
 }
 
-class _DetailState extends AppState {
+class _DetailState extends AppState with ExternalMetaOff {
   _DetailState(Directory dir, this.fixtureTmdb, this.fixtureService)
     : super(
         paths: AppPaths.resolve(
@@ -82,7 +82,7 @@ class _DetailState extends AppState {
             'state': dir.path,
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
         aiContentCompletion: AiContentCompletion(
           complete:
               ({

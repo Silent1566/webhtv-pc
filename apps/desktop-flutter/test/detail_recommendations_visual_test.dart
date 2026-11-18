@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
 import 'package:webhtv_pc/services/tmdb_identity_service.dart';
 import 'package:webhtv_pc/services/tmdb_season_service.dart';
@@ -30,6 +29,8 @@ import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
+
+import 'support/detail_test_seams.dart';
 
 const fixtureItems = [
   TmdbItem(
@@ -142,7 +143,7 @@ DetailRecommendationDependencies _fallbackDependencies() =>
 
 /// 只替换站点 / TMDB 状态 / 推荐依赖的 AppState（其余走真实实现：
 /// `loadDetail` 因为合成条目 vodId 为空而只跑 TMDB 链）。
-class _FallbackState extends AppState {
+class _FallbackState extends AppState with ExternalMetaOff {
   _FallbackState(
     Directory dir,
     this.dependencies, {
@@ -157,7 +158,7 @@ class _FallbackState extends AppState {
              'state': dir.path,
            },
          ),
-         log: LogService(),
+         log: MemoryOnlyLogService(),
        );
   final DetailRecommendationDependencies dependencies;
   final Site site;

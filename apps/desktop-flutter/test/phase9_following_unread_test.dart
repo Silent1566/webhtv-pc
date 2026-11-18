@@ -11,7 +11,6 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/following_progress_service.dart';
 import 'package:webhtv_pc/services/following_service.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/notification_service.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -21,6 +20,7 @@ import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
 import 'support/player_page_harness.dart'
     show installMediaKitMocks, installWindowManagerMocks;
 
@@ -238,11 +238,11 @@ void main() {
             'state': '${temp.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
         httpClient: _Client(),
         followingNotifier: FollowingNotifier(platform: platform),
       );
-      await state.bootstrap();
+      await bootstrapWithoutExternalMeta(state);
       await state.setFollowingSettings(
         state.followingSettings.copyWith(enabled: false, notifyEnabled: true),
       );
@@ -358,10 +358,10 @@ void main() {
             'state': '${temp.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
         httpClient: _Client(),
       );
-      await state.bootstrap();
+      await bootstrapWithoutExternalMeta(state);
       await state.setFollowingSettings(
         state.followingSettings.copyWith(enabled: false, notifyEnabled: true),
       );

@@ -24,12 +24,13 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart' show PosterImage;
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
+
+import 'support/detail_test_seams.dart';
 
 TmdbDetailData _data() => const TmdbDetailData(
   title: '测试剧集',
@@ -145,9 +146,9 @@ void main() {
             'state': '${temp.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await state.bootstrap();
+      await bootstrapWithoutExternalMeta(state);
     });
 
     tearDown(() async {

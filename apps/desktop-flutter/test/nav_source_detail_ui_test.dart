@@ -52,6 +52,8 @@ import 'package:webhtv_pc/ui/tmdb_detail_view.dart' show TmdbEpisodeHeader;
 import 'package:webhtv_pc/ui/tmdb_widgets.dart' show TmdbLoadPhase;
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
+
 // ---------------------------------------------------------------------------
 // fake HTTP（与 `tmdb_season_aggregate_test` 同一套基础设施）
 // ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ TmdbState _tmdbState({required http.Client client}) {
 }
 
 /// 只替换 TMDB 状态、本页站点、播放解析、全局搜索与换源解析的 `AppState`。
-class _TestAppState extends AppState {
+class _TestAppState extends AppState with ExternalMetaOff {
   _TestAppState({
     required AppPaths paths,
     required LogService log,
@@ -447,25 +449,25 @@ void main() {
     unmatchedTmdb = _tmdbState(client: _unmatchedClient());
     navState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: navTmdb,
       site: _site(nav: true),
     );
     plainState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: plainTmdb,
       site: _site(nav: false),
     );
     unmatchedState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: unmatchedTmdb,
       site: _site(nav: true),
     );
     listState = _TestAppState(
       paths: listPaths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: _tmdbState(client: _tmdbClient()),
       site: _site(nav: true),
     );
@@ -550,7 +552,7 @@ void main() {
   ) async {
     final state = _TestAppState(
       paths: navState.paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: _tmdbState(client: client),
       site: _site(nav: true),
     );

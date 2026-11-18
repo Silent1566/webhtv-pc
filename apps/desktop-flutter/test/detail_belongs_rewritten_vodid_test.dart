@@ -19,6 +19,8 @@ import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
+
 const _listId = r'2$swz14y33hdc-2946404633528039801$1';
 const _detailId = r'2$15178$1';
 final _listVod = Vod(vodId: _listId, vodName: '列表标题');
@@ -77,7 +79,7 @@ class _TmdbClient extends http.BaseClient {
 }
 
 // 只替换外部 TMDB 请求，详情请求及运行号保护仍走真实 AppState。
-class _State extends AppState {
+class _State extends AppState with ExternalMetaOff {
   _State({
     required super.paths,
     required super.log,
@@ -129,9 +131,9 @@ void main() {
       },
     );
     client = _SiteClient();
-    log = LogService();
+    log = MemoryOnlyLogService();
     state = _State(paths: paths, log: log, client: client);
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
     expect(
       await state.importConfig(
         jsonEncode({
@@ -210,7 +212,7 @@ void main() {
     await tester.tap(action);
     await tester.pump();
     final input = tester.widget<TextField>(
-      find.byKey(const ValueKey('tmdb-match-input')),
+      find.byKey(const ValueKey('meta-match-query')),
     );
     expect(input.controller!.text, '权威详情标题');
     await tester.pumpWidget(const SizedBox.shrink());
@@ -289,9 +291,9 @@ void main() {
     expect(log.entries.last.message, '详细调试日志已关闭');
     expect(await state.setSpiderDebugLog(true), isTrue);
     state.dispose();
-    log = LogService();
+    log = MemoryOnlyLogService();
     state = _State(paths: paths, log: log, client: _SiteClient());
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
     expect(state.spiderDebugLog, isTrue);
     expect(
       log.entries.where(

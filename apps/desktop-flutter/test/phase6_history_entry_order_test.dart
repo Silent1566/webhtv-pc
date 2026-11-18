@@ -23,11 +23,12 @@ import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/source_key.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/history_cross_source.dart';
+
+import 'support/detail_test_seams.dart';
 
 
 const String sharedSiteKey = 'csp_shared';
@@ -93,10 +94,10 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       httpClient: client,
     );
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
   });
 
   tearDown(() async {

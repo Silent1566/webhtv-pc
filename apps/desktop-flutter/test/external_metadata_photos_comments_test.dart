@@ -4,9 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/external_detail_meta.dart';
-import 'package:webhtv_pc/core/external_meta.dart';
 import 'package:webhtv_pc/core/meta_source.dart';
-import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/douban_recommendation_service.dart';
 
 http.Response json(Object v) => http.Response(jsonEncode(v), 200,

@@ -28,11 +28,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/history_cross_source.dart';
 import 'package:webhtv_pc/ui/search_page.dart';
+
+import 'support/detail_test_seams.dart';
 
 /// 两个站点用不同路径，假客户端据此返回不同详情。
 const String siteA = 'csp_a';
@@ -132,12 +133,12 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       httpClient: client,
     );
     // bootstrap 必须在真实异步区里跑（打开数据库、读设置）；放进 testWidgets
     // 的假时钟区会让写库永不返回。
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
     final imported = await state.importConfig(
       configJson('http://127.0.0.1:1/api/type1'),
     );

@@ -24,7 +24,7 @@ import 'tmdb_title.dart';
 /// 散在四处拼接时迟早漂成两种。界面上一律取这里的常量。
 abstract final class RatingBrand {
   static const String tmdb = 'TMDB';
-  static const String imdb = 'IMDB';
+  static const String imdb = 'IMDb';
   static const String douban = '豆瓣';
   static const String rottenTomatoes = '烂番茄';
   static const String metacritic = 'Metacritic';

@@ -9,12 +9,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/library_pages.dart';
 import 'package:webhtv_pc/ui/toast.dart';
+
+import 'support/detail_test_seams.dart';
 
 void main() {
   late Directory tempDir;
@@ -33,14 +34,14 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       // **必须注入假 client**：`play` 分流会走 `_resume` → `resolvePlayback`，
       // 那是真实 HTTP + 本地代理链。在 `testWidgets` 的 fake-async 区里做真实
       // socket I/O 会**挂死**（`did not complete`，无任何 Exception 日志）——
       // 这是本仓库既有的分层纪律（`webhtv-pc-test-io-layering`）。
       httpClient: _RecordingSiteClient(),
     );
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
   });
 
   tearDown(() async {

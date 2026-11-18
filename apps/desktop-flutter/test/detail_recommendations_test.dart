@@ -20,7 +20,6 @@ import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
@@ -39,6 +38,8 @@ import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/following_calendar_page.dart';
+
+import 'support/detail_test_seams.dart';
 
 const item = TmdbItem(tmdbId: 2, mediaType: TmdbMediaType.movie, title: '推荐作品');
 DetailRecommendationDependencies deps({
@@ -73,7 +74,7 @@ DetailRecommendationDependencies deps({
   },
 );
 
-class SourceState extends AppState {
+class SourceState extends AppState with ExternalMetaOff {
   SourceState(
     Directory dir,
     this.dependencies, {
@@ -90,7 +91,7 @@ class SourceState extends AppState {
              'state': dir.path,
            },
          ),
-         log: LogService(),
+         log: MemoryOnlyLogService(),
        );
   final TmdbService? tmdbFixture;
   @override
@@ -632,9 +633,9 @@ void main() {
           'state': dir.path,
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
-    await tester.runAsync(app.bootstrap);
+    await tester.runAsync(() => bootstrapWithoutExternalMeta(app));
 
     addTearDown(app.dispose);
     addTearDown(() => deleteTempDirBestEffortSync(dir));
@@ -981,9 +982,9 @@ void main() {
             'state': dir.path,
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
-      await tester.runAsync(app.bootstrap);
+      await tester.runAsync(() => bootstrapWithoutExternalMeta(app));
 
       addTearDown(app.dispose);
       addTearDown(() => deleteTempDirBestEffortSync(dir));

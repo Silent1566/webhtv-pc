@@ -35,8 +35,11 @@ import 'package:webhtv_pc/state/search_state.dart';
 import 'package:webhtv_pc/state/tmdb_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/meta_match_dialog.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
 import 'package:webhtv_pc/ui/toast.dart';
+
+import 'support/detail_test_seams.dart';
 
 // ---------------------------------------------------------------------------
 // fake HTTP
@@ -126,7 +129,7 @@ TmdbState _tmdbState({
 }
 
 /// 只替换 TMDB 状态、本页站点、详情请求、换源解析与 TMDB 搜索的 `AppState`。
-class _TestAppState extends AppState {
+class _TestAppState extends AppState with ExternalMetaOff {
   _TestAppState({
     required AppPaths paths,
     required LogService log,
@@ -303,19 +306,19 @@ void main() {
 
     unconfiguredState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: unconfiguredTmdb,
       site: _plainSite(),
     );
     unmatchedState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: unmatchedTmdb,
       site: _plainSite(),
     );
     emptySeasonState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: emptySeasonTmdb,
       site: _plainSite(),
     );
@@ -433,7 +436,7 @@ void main() {
     await tester.tap(action);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(TmdbMatchDialog), findsOneWidget);
+    expect(find.byType(MetaMatchDialog), findsOneWidget);
   });
 
   testWidgets('TMDB 已匹配但摊不出剧集 → 不给 TMDB 入口，只剩换源', (tester) async {

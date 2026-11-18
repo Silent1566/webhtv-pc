@@ -15,12 +15,13 @@ import 'package:webhtv_pc/core/source_detail_meta.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart' show TmdbPersonPage;
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/detail_test_seams.dart';
 
 const _overview = '来源接口简介：TMDB 未匹配时仍显示。';
 const _year = '2024';
@@ -262,10 +263,10 @@ void main() {
           'state': '${temp.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
     addTearDown(state.dispose);
-    await tester.runAsync(state.bootstrap);
+    await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
     await tester.runAsync(() => state.saveTmdbConfig(config));
     final vod = _sourceVod();
     await state.tmdb.loadForVod(vod, siteKey: 'fixture-site');
@@ -444,10 +445,10 @@ void main() {
           'state': '${temp.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
     addTearDown(state.dispose);
-    await tester.runAsync(state.bootstrap);
+    await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
     await tester.runAsync(() => state.saveTmdbConfig(config));
     final vod = Vod(
       vodId: 'source-meta-matched',

@@ -38,6 +38,8 @@ import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/common.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/detail_test_seams.dart';
+
 // ---------------------------------------------------------------------------
 // fake HTTP（与 `nav_source_detail_ui_test` 同一套基础设施）
 // ---------------------------------------------------------------------------
@@ -143,7 +145,7 @@ TmdbState _tmdbState({required http.Client client}) {
 
 /// 只替换 TMDB 状态、本页站点、播放解析、详情请求、全局搜索与换源解析的
 /// `AppState`。
-class _TestAppState extends AppState {
+class _TestAppState extends AppState with ExternalMetaOff {
   _TestAppState({
     required AppPaths paths,
     required LogService log,
@@ -345,13 +347,13 @@ void main() {
     unmatchedTmdb = _tmdbState(client: _unmatchedClient());
     plainState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: plainTmdb,
       site: _plainSite(),
     );
     unmatchedState = _TestAppState(
       paths: paths,
-      log: LogService(),
+      log: MemoryOnlyLogService(),
       tmdb: unmatchedTmdb,
       site: _plainSite(),
     );

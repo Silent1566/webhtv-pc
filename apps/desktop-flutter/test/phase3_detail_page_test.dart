@@ -19,9 +19,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+
+import 'support/detail_test_seams.dart';
 
 void main() {
   late Directory tempDir;
@@ -38,9 +39,9 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
     );
-    await state.bootstrap();
+    await bootstrapWithoutExternalMeta(state);
   });
 
   tearDown(() async {

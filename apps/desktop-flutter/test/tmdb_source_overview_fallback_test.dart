@@ -15,10 +15,11 @@ import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/detail_source_merge.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/detail_test_seams.dart';
 
 const _sourceOverview = '接口返回的来源简介：TMDB 匹配不到时仍应显示这一段文字。';
 
@@ -293,10 +294,10 @@ void main() {
             'state': '${temp.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
       addTearDown(state.dispose);
-      await tester.runAsync(state.bootstrap);
+      await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
       if (scenario != 'unconfigured') {
         await tester.runAsync(() => state.saveTmdbConfig(config));
       }
@@ -447,10 +448,10 @@ void main() {
             'state': '${temp.path}/webhtv-pc/logs',
           },
         ),
-        log: LogService(),
+        log: MemoryOnlyLogService(),
       );
       addTearDown(state.dispose);
-      await tester.runAsync(state.bootstrap);
+      await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
       await tester.runAsync(() => state.saveTmdbConfig(config));
       final imported = await tester.runAsync(
         () => state.importConfig(
