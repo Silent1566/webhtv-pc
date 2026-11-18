@@ -13,6 +13,9 @@ import '../core/episode_range.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
 import '../core/detail_ratings.dart';
+import '../core/external_detail_meta.dart';
+import '../core/external_meta.dart';
+import '../core/meta_source.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_detail_meta.dart';
@@ -48,6 +51,7 @@ import 'tmdb_detail_page.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
 import 'common.dart';
+import 'meta_match_dialog.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
@@ -1557,6 +1561,280 @@ class _DetailPageState extends State<DetailPage> {
     });
   }
 
+  ExternalDetail? _externalMeta;
+  ExternalCommentPage _externalComments = const ExternalCommentPage();
+
+  /// 已经为哪一次请求取过短评（避免每帧重复抓）。
+  String? _commentsKey;
+
+  /// 额外来源的评分（豆瓣等）；TMDB 分由 headerData 自带，不重复。
+  Map<MetaSourceKind, double> _extraRatings = const {};
+  String? _ratingsKey;
+
+  /// 短评自己的一趟请求代数：与详情那趟互不取消。
+  int _commentsGeneration = 0;
+
+  /// 评分自己的一趟请求代数：与详情、短评都不互相取消。
+  int _ratingsGeneration = 0;
+  bool _externalCommentsLoading = false;
+  ExternalDetail? _externalCommentsFor;
+  String? _externalMetaKey;
+  int _externalMetaGeneration = 0;
+
+  /// 上一次打过的「剧照来源构成」，用于去重日志（build 每帧都跑）。
+  String _lastPhotoTrace = '';
+
+  /// 剧照构成日志：一眼看出是「没取到」「取到了没合并」还是「合并了没渲染」。
+  void _traceMetaPhotos(
+    TmdbDetailData? tmdb,
+    ExternalDetail? external,
+    TmdbDetailData? merged,
+    TmdbDetailData shown,
+  ) {
+    final trace = [
+      'tmdb=${tmdb?.photoUrls.length ?? 0}/${tmdb?.stillUrls.length ?? 0}',
+      'external=${external?.data.photoUrls.length ?? 0}/${external?.data.stillUrls.length ?? 0}',
+      'merged=${merged?.photoUrls.length ?? 0}/${merged?.stillUrls.length ?? 0}',
+      'shown=${shown.photoUrls.length}/${shown.stillUrls.length}',
+      'source=${external == null ? 'none' : external.sourceLabel}',
+    ].join(' ');
+    if (trace == _lastPhotoTrace) return;
+    _lastPhotoTrace = trace;
+    widget.state.log.info('剧照构成 $trace', scope: 'metadata');
+  }
+
+  /// 把外部源取到的**聚合字段**并入 TMDB 的展示数据。
+  ///
+  /// 只并剧照：它们是加法；标题、简介、演职员属于「优先」字段，
+  /// 一律仍是 TMDB 的，不被覆盖。
+  TmdbDetailData _mergeAggregates(TmdbDetailData primary, TmdbDetailData extra) {
+    final photos = <String>[...primary.photoUrls];
+    for (final url in extra.photoUrls) {
+      if (!photos.contains(url)) photos.add(url);
+    }
+    final stills = <String>[...primary.stillUrls];
+    for (final url in extra.stillUrls) {
+      if (!stills.contains(url)) stills.add(url);
+    }
+    if (photos.length == primary.photoUrls.length &&
+        stills.length == primary.stillUrls.length) {
+      return primary;
+    }
+    return TmdbDetailData(
+      tmdbId: primary.tmdbId,
+      mediaType: primary.mediaType,
+      title: primary.title,
+      originalTitle: primary.originalTitle,
+      overview: primary.overview,
+      tagline: primary.tagline,
+      posterUrl: primary.posterUrl,
+      backdropUrls: primary.backdropUrls,
+      posterUrls: primary.posterUrls,
+      photoUrls: photos,
+      stillUrls: stills,
+      seasons: primary.seasons,
+      cast: primary.cast,
+      creators: primary.creators,
+      crew: primary.crew,
+      creatorTeam: primary.creatorTeam,
+      directors: primary.directors,
+      writers: primary.writers,
+      genres: primary.genres,
+      countries: primary.countries,
+      languages: primary.languages,
+      rating: primary.rating,
+      ratingSourceLabel: primary.ratingSourceLabel,
+      voteCount: primary.voteCount,
+      releaseDate: primary.releaseDate,
+      runtime: primary.runtime,
+      seasonCount: primary.seasonCount,
+      episodeCount: primary.episodeCount,
+      status: primary.status,
+      homepage: primary.homepage,
+    );
+  }
+
+  /// 同一来源只保留一个 chip：**管线优先**。
+  ///
+  /// 为什么管线赢：它的来源顺序与启停都在设置页里由用户控制，老链路
+  /// （`DetailRatingService`）的豆瓣分是写死的。老链路负责它独有的
+  /// IMDb / 烂番茄 / Metacritic，那些不受影响。
+  DetailRatings _chipsRatings(DetailRatings ratings) {
+    if (!_extraRatings.containsKey(MetaSourceKind.douban)) return ratings;
+    final kept = [
+      for (final entry in ratings.entries)
+        if (entry.source != RatingSource.douban) entry,
+    ];
+    // 条目没变就别新建对象，避免无谓重建。
+    if (kept.length == ratings.entries.length) return ratings;
+    return DetailRatings(
+      entries: kept,
+      loading: ratings.loading,
+      failed: ratings.failed,
+    );
+  }
+
+  /// 评分按 `rating` 字段的来源管线取，**与 TMDB 是否匹配无关**。
+  void _ensureRatings(Vod vod) {
+    if (!widget.state.externalMetaEnabled) return;
+    final title = vod.vodName.trim();
+    if (title.isEmpty) return;
+    final query = MetaQuery(
+      title: title,
+      year: firstYear(vod.vodYear ?? ''),
+      isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
+    );
+    final key = '${vod.vodId}|${query.key}';
+    if (_ratingsKey == key) return;
+    _ratingsKey = key;
+    final generation = ++_ratingsGeneration;
+    unawaited(() async {
+      final found = await widget.state.externalMetaService.ratingsByTitle(query);
+      if (!mounted || generation != _ratingsGeneration) return;
+      setState(() => _extraRatings = found);
+    }());
+  }
+
+  /// 已尝试过的自动绑定键（同一部影片 + 同一 IMDb 编号只试一次）。
+  String? _autoTmdbKey;
+
+  /// 用 IMDb 编号把 TMDB 身份确定性地绑上（只在 TMDB 已配置且尚未匹配时）。
+  ///
+  /// 走的是既有手动匹配链路（`matchTmdbManual`），因此季集、站点规则、
+  /// 冲突标记全部复用，没有第二套绑定逻辑。
+  Future<void> _autoBindTmdb(ExternalDetail detail, Vod vod) async {
+    final imdb = detail.imdbId;
+    if (imdb.isEmpty) return;
+    final state = widget.state;
+    if (!state.tmdbConfig.isReady) return;
+    if (_ownedTmdb?.hasMatch == true) return;
+    final key = '${vod.vodId}|$imdb';
+    if (_autoTmdbKey == key) return;
+    _autoTmdbKey = key;
+    final identity = await state.externalMetaService.resolveIdentity(
+      MetaQuery(
+        title: vod.vodName,
+        year: firstYear(vod.vodYear ?? ''),
+        isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
+      ),
+      MetaSourceKind.tmdb,
+      0,
+    );
+    if (!mounted || identity == null) return;
+    final item = await state.resolveTmdbProviderId(
+      '${identity.mediaType.name}:${identity.id}',
+    );
+    if (!mounted || item == null) return;
+    await state.matchTmdbManual(item: item, sourceTitle: vod.vodName);
+  }
+
+  /// 短评与 TMDB 匹配状态**无关**：TMDB 没有短评、豆瓣有，所以单独取。
+  void _ensureComments(Vod vod) {
+    if (!widget.state.externalMetaEnabled) return;
+    final title = vod.vodName.trim();
+    if (title.isEmpty) return;
+    final query = MetaQuery(
+      title: title,
+      year: firstYear(vod.vodYear ?? ''),
+      isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
+    );
+    final key = '${vod.vodId}|${query.key}';
+    if (_commentsKey == key) return;
+    _commentsKey = key;
+    _externalComments = const ExternalCommentPage();
+    final generation = ++_commentsGeneration;
+    unawaited(() async {
+      final page = await widget.state.externalMetaService.commentsByTitle(query);
+      if (!mounted || generation != _commentsGeneration) return;
+      setState(() => _externalComments = page);
+    }());
+  }
+
+  void _ensureExternalMeta(Vod vod, TmdbState? tmdb) {
+    if (!widget.state.externalMetaEnabled) {
+      _externalMetaGeneration++;
+      _externalMeta = null;
+      _externalMetaKey = null;
+      return;
+    }
+    if (widget.state.detailPhase == LoadPhase.loading ||
+        tmdb?.phase == TmdbLoadPhase.loading ||
+        (tmdb?.phase == TmdbLoadPhase.idle &&
+            widget.state.tmdbConfig.isReady)) {
+      return;
+    }
+    if (vod.vodName.trim().isEmpty) return;
+    final type = '${vod.extra['type_name'] ?? ''}'.toLowerCase();
+    final query = MetaQuery(
+      title: vod.vodName,
+      year: firstYear(vod.vodYear ?? ''),
+      isTv: _tvHintOf(type),
+      aliases: [
+        if (vod.extra['original_title'] case final String original) original,
+      ],
+    );
+    final key = '${vod.vodId}|${_pageSite?.key}|${query.key}';
+    if (_externalMetaKey == key) return;
+    _externalMetaKey = key;
+    _externalMeta = null;
+    final generation = ++_externalMetaGeneration;
+    unawaited(() async {
+      final loaded = await widget.state.externalMetaService.detail(
+        query,
+        // 用户手动钉住的身份优先；没钉住就照常自动匹配。
+        pinned: widget.state.metaOverrides.of(vod.vodId),
+      );
+      // 不要在 TMDB 已匹配时丢弃结果：聚合字段（剧照）还要用它。
+      if (!mounted ||
+          generation != _externalMetaGeneration ||
+          !widget.state.externalMetaEnabled) {
+        return;
+      }
+      setState(() {
+        _externalMeta = loaded;
+        _externalComments = const ExternalCommentPage();
+        _externalCommentsFor = null;
+      });
+      if (loaded == null) return;
+      // 豆瓣/Bangumi 侧有 IMDb 编号时，用它做**确定性**的 TMDB 自动绑定
+      // （按标题搜不到、但 IMDb 编号唯一，这条路不会认错续作/翻拍）。
+      unawaited(_autoBindTmdb(loaded, vod));
+      final comments = await widget.state.externalMetaService.comments(
+        loaded.identity,
+      );
+      if (!mounted || generation != _externalMetaGeneration) return;
+      setState(() {
+        _externalComments = comments;
+        _externalCommentsFor = loaded;
+      });
+    }());
+  }
+
+  /// 站源分类名 → 电影/剧集提示；判不出返回 `null`（交给外部源自己判断）。
+  ///
+  /// 为什么不用 `isTv` 的默认值：判错会让 `MetaMatchRules` 把类型不符的候选
+  /// 直接丢掉，宁可交 `null` 让外部站自己按类型检索。
+  static bool? _tvHintOf(String type) {
+    if (type.isEmpty) return null;
+    if (type.contains('电影')) return false;
+    const tvHints = ['电视剧', '剧集', '国产剧', '日剧', '美剧', '韩剧', '连续剧', '动漫', '动画', '综艺'];
+    if (tvHints.any(type.contains)) return true;
+    return null;
+  }
+
+  void _refreshExternalMeta() {
+    _externalMetaGeneration++;
+    _commentsGeneration++;
+    _ratingsGeneration++;
+    _externalMeta = null;
+    _externalMetaKey = null;
+    _commentsKey = null;
+    _ratingsKey = null;
+    _externalComments = const ExternalCommentPage();
+    _extraRatings = const {};
+    widget.state.externalMetaService.clearCache();
+  }
+
   /// 评分标签与页尾外链共用这一份查询（页面只发一轮请求）。
   DetailRatingsController? _ratingsController;
 
@@ -1594,6 +1872,9 @@ class _DetailPageState extends State<DetailPage> {
       return;
     }
     // 评分查询随页面一起收走：控制器会取消还在等限速间隔的请求。
+    _externalMetaGeneration++;
+    _commentsGeneration++;
+    _ratingsGeneration++;
     _ratingsController?.dispose();
     _ratingsController = null;
     widget.state.removeListener(_onStateChanged);
@@ -1679,16 +1960,25 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _openMatchDialog() async {
     final state = widget.state;
     final vod = _currentVod;
-    final item = await showDialog<TmdbItem>(
+    // 一个入口覆盖三家：TMDB 结论写 `TmdbMatchRecord`，外部来源写 override。
+    final searched = await showDialog<bool>(
       context: context,
-      builder: (_) => TmdbMatchDialog(
-        initialQuery: _ownedTmdb?.item?.title ?? vod?.vodName ?? '',
-        search: state.searchTmdb,
-        resolveProviderId: state.resolveTmdbProviderId,
+      builder: (_) => MetaMatchDialog(
+        state: state,
+        vod: vod ?? widget.vod,
+        tmdbSearch: state.tmdbConfig.isReady ? state.searchTmdb : null,
+        onPickTmdb: (item) {
+          unawaited(state.matchTmdbManual(item: item, sourceTitle: vod?.vodName));
+        },
       ),
     );
-    if (item == null || !mounted) return;
-    await state.matchTmdbManual(item: item, sourceTitle: vod?.vodName);
+    if (searched != true || !mounted) return;
+    _refreshExternalMeta();
+    await state.loadDetail(
+      widget.vod,
+      siteOverride: _pageSite,
+      serviceOverride: widget.sourceContext?.service,
+    );
   }
 
   Future<void> _openSeasonDialog() async {
@@ -2818,7 +3108,21 @@ class _DetailPageState extends State<DetailPage> {
     final ratings = owned && tmdb.detail != null
         ? _syncRatings(ratingRequest)
         : const DetailRatings();
-    final headerData = tmdbData ?? sourceDetailMeta(display);
+    _ensureExternalMeta(vod, owned ? tmdb : null);
+    _ensureComments(vod);
+    _ensureRatings(vod);
+    // 注意：TMDB 有数据时**也要**保留 external —— 聚合字段（剧照）还要并进来。
+    // 之前这里 `&& tmdbData == null` 让合并永远不会发生（用户反馈 2026-11-18：
+    // 「照片貌似只看到了 TMDB 的」）。
+    final external = state.externalMetaEnabled ? _externalMeta : null;
+    // TMDB 已匹配时，**聚合字段**（剧照）仍要并进来：TMDB 只有自己的剧照，
+    // 豆瓣那 24 张不能因为「主来源是 TMDB」就被丢掉。优先字段不动。
+    final mergedData = tmdbData != null && external != null
+        ? _mergeAggregates(tmdbData, external.data)
+        : tmdbData;
+    final headerData =
+        mergedData ?? external?.forSource(display) ?? sourceDetailMeta(display);
+    _traceMetaPhotos(tmdbData, external, mergedData, headerData);
 
     return Scaffold(
       // 头部是**全幅 hero**（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有
@@ -2897,11 +3201,11 @@ class _DetailPageState extends State<DetailPage> {
           ),
           IconButton(
             tooltip: '刷新详情',
-            onPressed: () => state.loadDetail(
-              widget.vod,
-              siteOverride: _pageSite,
-              serviceOverride: widget.sourceContext?.service,
-            ),
+            onPressed: () {
+              _refreshExternalMeta();
+              state.loadDetail(widget.vod, siteOverride: _pageSite,
+                serviceOverride: widget.sourceContext?.service);
+            },
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -2936,10 +3240,39 @@ class _DetailPageState extends State<DetailPage> {
                   // 图片由页面级背景负责（见本 body 的 Stack），头部只画内容。
                   paintImage: false,
                   data: headerData,
-                  heroOverview: display.vodContent ?? tmdbData?.overview,
-                  ratingTags: DetailRatingTags(
-                    ratings: ratings,
-                    tmdbRating: headerData.rating,
+                  heroOverview: external != null ? headerData.overview : display.vodContent ?? tmdbData?.overview,
+                  // 评分多源并列：TMDB 分 + 兜底来源分 + 额外来源分，各取各的不互斥。
+                  ratingTags: Wrap(
+                    spacing: AppSpace.sm,
+                    runSpacing: AppSpace.xs,
+                    children: [
+                      // 三种情况：
+                      // - 有 TMDB 数据：走老链路（TMDB 分 + IMDB/烂番茄等外链）；
+                      // - 无 TMDB 但有外部详情：显示兜底来源的分（如「豆瓣 9.4」）；
+                      // - 都没有：不渲染占位。
+                      if (tmdbData != null)
+                        DetailRatingTags(
+                          ratings: _chipsRatings(ratings),
+                          tmdbRating: headerData.rating,
+                        )
+                      else if (external != null && headerData.rating > 0)
+                        TagChip(
+                          keyValue: 'detail-external-rating',
+                          label: headerData.ratingLabel,
+                          icon: Icons.star,
+                          emphasized: true,
+                        ),
+                      for (final entry in _extraRatings.entries)
+                        if (external == null ||
+                            external.identity.kind != entry.key)
+                          TagChip(
+                            keyValue: 'detail-pipeline-rating-${entry.key.key}',
+                            label:
+                                '${entry.key.label} ${entry.value.toStringAsFixed(1)}',
+                            icon: Icons.star,
+                            emphasized: true,
+                          ),
+                    ],
                   ),
                   // 只剩播放入口：简介已改为在 hero 内按剩余高度完整显示，
                   // 「查看简介」按钮及其对话框按 2026-10-22 用户反馈移除。
@@ -3074,6 +3407,10 @@ class _DetailPageState extends State<DetailPage> {
                       // 「桥接站点还是没有 tmdb 详情页」）。信息表缺失字段由
                       // `TmdbInfoTable` 自行跳过空值行。
                       ..._buildTmdbBlocks(context, tmdb, headerData),
+                      // 短评排在相关视频之后、个性推荐之前（用户要求 2026-11-18）：
+                      // 它是「别人怎么看这部片」，属于作品信息的收尾，
+                      // 不该插在 TMDB 资料块中间，也不该压到推荐行下面。
+                      _buildExternalComments(context),
                       _buildRecommendationBottom(vod),
                       // 外部链接沉到页面最底部（用户决策 2026-11-11）：它是
                       // 「去别的站继续查」的出口，不属于任何内容区块，放在推荐行
@@ -3112,26 +3449,154 @@ class _DetailPageState extends State<DetailPage> {
     TmdbState tmdb,
     TmdbDetailData fallback,
   ) {
-    // 归属门：不属于本页影片时整块（简介/演职人员/推荐/视频）都不渲染。
-    if (!_tmdbOwnsThisPage) return const [];
-    final matched = tmdb.detailData;
-    final data = matched ?? fallback;
-    final sourceOnly = matched == null;
+    final matched = _ownedTmdb?.detailData;
+    final external = matched == null && widget.state.externalMetaEnabled ? _externalMeta : null;
+    if (!_tmdbOwnsThisPage && external == null) return const [];
+    final data = fallback;
+    final sourceOnly = matched == null && external == null;
     return [
       // 不发丝线（2026-11-12 用户反馈）：那条线让「选集」与「剧照」之间像被
       // 撕开了一道。区块间隔全部由 `SectionHeader` 的上 24 承担。
+      if (external != null)
+        Align(alignment: Alignment.centerLeft, child: TextButton.icon(
+          key: const ValueKey('detail-external-meta-source'),
+          onPressed: () => widget.state.openExternalUrl(external.identity.url),
+          icon: const Icon(Icons.open_in_new, size: 16),
+          label: Text('资料来源：${external.sourceLabel}'),
+        )),
       TmdbDetailSections(
         data: data,
         // 新的底部推荐行接管"猜你喜欢 / 个性推荐"，旧的"相关推荐"海报墙
         // 不再重复渲染（同一批作品在页面上只出现一次）。
         recommendations: const [],
-        videos: tmdb.videos,
+        videos: matched == null ? const [] : tmdb.videos,
         onPersonTap: sourceOnly ? null : _openPerson,
         onRecommendationTap: _openItemDetail,
         onOpenVideo: widget.state.openExternalUrl,
         onCopyVideo: copyToClipboard,
       ),
     ];
+  }
+
+  /// 本页短评是否来自多个来源（决定徽标放标题行还是逐条放）。
+  bool get _mixedCommentSources {
+    final sources = _externalComments.comments.map((c) => c.source).toSet();
+    return sources.length > 1;
+  }
+
+  /// 追加下一页短评。
+  Future<void> _loadMoreComments() async {
+    final loaded = _externalCommentsFor;
+    if (loaded == null || _externalCommentsLoading || !_externalComments.hasMore) {
+      return;
+    }
+    final generation = _externalMetaGeneration;
+    setState(() => _externalCommentsLoading = true);
+    final page = await widget.state.externalMetaService.comments(
+      loaded.identity,
+      offset: _externalComments.nextOffset,
+    );
+    if (!mounted || generation != _externalMetaGeneration) return;
+    setState(() {
+      _externalCommentsLoading = false;
+      _externalComments = ExternalCommentPage(
+        comments: [..._externalComments.comments, ...page.comments],
+        total: page.total,
+        hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
+      );
+    });
+  }
+
+  /// 外部短评：多来源 + 分页。
+  ///
+  /// 设计取舍（用户要求「支持多来源、尽可能多、可分页」）：
+  /// - 每条带来源徽标，来源由模型决定，UI 不认具体站点；
+  /// - 只显示文字/作者/评分/有用数，**不参与任何评分统计**；
+  /// - 默认一页 12 条，「加载更多」按来源继续翻页，翻到没有就收起按钮。
+  Widget _buildExternalComments(BuildContext context) {
+    final theme = Theme.of(context);
+    final page = _externalComments;
+    if (page.isEmpty) return const SizedBox.shrink();
+    return Column(
+      key: const ValueKey('detail-external-comments'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: page.total > page.comments.length
+              ? '短评（${page.comments.length}/${page.total}）'
+              : '短评（${page.comments.length}）',
+          // 整页同源时徽标只出现一次：每条都挂一遍「豆瓣」纯属视觉噪音，
+          // 只有**混源**（以后接了第二家评论源）才需要逐条标注。
+          trailing: _mixedCommentSources
+              ? null
+              : TagChip(
+                  keyValue: 'detail-comments-source',
+                  label: page.comments.first.sourceLabel,
+                  icon: Icons.forum_outlined,
+                ),
+        ),
+        for (final comment in page.comments)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpace.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  comment.text,
+                  style: theme.textTheme.bodyMedium,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: AppSpace.xs),
+                Row(
+                  children: [
+                    if (_mixedCommentSources) ...[
+                      TagChip(
+                        keyValue: 'detail-comment-source-${comment.source.key}',
+                        label: comment.sourceLabel,
+                        icon: Icons.forum_outlined,
+                      ),
+                      const SizedBox(width: AppSpace.xs),
+                    ],
+                    Expanded(
+                      child: Text(
+                        [
+                          if (comment.author.isNotEmpty) comment.author,
+                          if (comment.rating > 0)
+                            '${comment.ratingOutOfTen.toStringAsFixed(1)}/10',
+                          if (comment.votes > 0) '${comment.votes} 有用',
+                          if (comment.date.isNotEmpty)
+                            comment.date.split(' ').first,
+                        ].join(' · '),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        if (page.hasMore)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('detail-comments-more'),
+              onPressed: _externalCommentsLoading ? null : _loadMoreComments,
+              icon: _externalCommentsLoading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.expand_more, size: 18),
+              label: Text(_externalCommentsLoading ? '加载中…' : '加载更多短评'),
+            ),
+          ),
+      ],
+    );
   }
 
   /// 底部推荐行（猜你喜欢 / 个性推荐·TMDB / 个性推荐·豆瓣）。
@@ -3279,12 +3744,63 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 打开人物页（演职人员点击）。
   void _openPerson(TmdbPerson person) {
+    final ref = person.ref;
+    final state = widget.state;
+    final vod = _currentVod ?? widget.vod;
+    final query = MetaQuery(
+      title: vod.vodName,
+      year: firstYear(vod.vodYear ?? ''),
+      isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
+    );
+    // TMDB 人物 → 豆瓣人物：在**这部剧的豆瓣演职员表**里按姓名找，
+    // 恰好 1 条才采用（宁缺勿错）。同步方法里拿不到豆瓣 cast，因此放在
+    // photoLoader 的异步里做——顺带能把相册直接返回给人物页。
+    final Future<List<String>> Function()? photoLoader = ref == null
+        ? () async {
+            final cast = await state.externalMetaService.doubanCastByTitle(
+              query,
+              0,
+            );
+            final wanted = normalizeTitle(person.name);
+            final hits = <MetaPersonRef>{};
+            for (final candidate in cast) {
+              final candidateRef = candidate.ref;
+              if (candidateRef == null) continue;
+              if (normalizeTitle(candidate.name) != wanted) continue;
+              hits.add(candidateRef);
+            }
+            final names = cast.take(10).map((p) => p.name).join('/');
+            if (hits.length != 1) {
+              state.log.info(
+                '人物页来源：TMDB personId=${person.personId}；豆瓣对应=无'
+                '（命中 ${hits.length} 条）；豆瓣演员表=${names.isEmpty ? '空' : names}',
+                scope: 'metadata',
+              );
+              return const <String>[];
+            }
+            state.log.info(
+              '人物页来源：TMDB personId=${person.personId}；豆瓣对应=${hits.first.key}',
+              scope: 'metadata',
+            );
+            final twin = await state.externalMetaService.person(hits.first);
+            return twin?.photos ?? const <String>[];
+          }
+        : null;
+    state.log.info(
+      ref == null
+          ? '人物页来源：TMDB personId=${person.personId}（照片取自 TMDB 资料）'
+          : '人物页来源：${ref.key}（照片取自主来源，TMDB 需经人物级映射）',
+      scope: 'metadata',
+    );
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TmdbPersonPage(
-          service: widget.state.tmdbService,
+          service: state.tmdbService,
           person: person,
           onOpenItem: _openItemDetail,
+          onSearchTitle: _searchRecommendationTitle,
+          externalLoader: ref == null ? null : state.externalMetaService.person,
+          photoLoader: photoLoader,
         ),
       ),
     );

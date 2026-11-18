@@ -8,6 +8,10 @@ library;
 
 import 'dart:async';
 
+import '../core/external_meta.dart';
+import '../core/meta_override.dart';
+import '../core/meta_pipeline.dart';
+import '../core/meta_source.dart';
 import '../core/detail_recommendation.dart';
 import '../core/detail_source_merge.dart';
 import 'detail_recommendation_state.dart';
@@ -55,6 +59,7 @@ import '../core/following_calendar.dart';
 import '../core/session_recovery.dart';
 import '../core/backup_manifest.dart';
 import '../services/backup_service.dart';
+import '../services/bangumi_service.dart';
 import '../services/doh_resolver.dart';
 import '../services/following_progress_service.dart';
 import '../services/following_service.dart';
@@ -127,6 +132,8 @@ import '../services/spider_registry.dart';
 import '../services/spider_router.dart';
 import '../services/ai_config_store.dart';
 import '../services/detail_rating_service.dart';
+import '../services/douban_recommendation_service.dart';
+import '../services/external_meta_service.dart';
 import '../services/storage.dart';
 import '../services/viewing_report_metadata.dart';
 import '../services/sync_client.dart';
@@ -269,6 +276,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 AiContentCompletion? aiContentCompletion,
     AiCompletionClient? aiSeasonClient,
     TmdbService? tmdbService,
+    ExternalMetaService? externalMetaService,
     PythonEnvironment? pythonEnvironment,
   }) : paths = paths ?? AppPaths.resolve(),
        _injectedPythonEnvironment = pythonEnvironment,
@@ -294,6 +302,7 @@ AiContentCompletion? aiContentCompletion,
        _sidecarHostPath = sidecarHostPath ?? defaultSidecarHostPath(),
        _jsSidecarHostPath = jsSidecarHostPath ?? defaultJsSidecarHostPath(),
        _jvmSidecarHostPath = jvmSidecarHostPath ?? defaultJvmSidecarHostPath() {
+    _externalMetaService = externalMetaService;
     // 同一开关在客户端构造前就绪，HTTP 与 IPC 都持有共享引用。
     _spiderDebugLog = SpiderDebugLog(log: this.log);
     if (httpClient != null) {
@@ -1322,6 +1331,88 @@ AiContentCompletion? aiContentCompletion,
       );
 
   DetailRatingService? _detailRatingService;
+
+  /// 外部元数据兜底（TMDB 不可用时：豆瓣 → Bangumi）。
+  ///
+  /// 惰性创建：没进过「无 TMDB」详情页的会话不会发出任何外部请求。
+  /// 默认开启（用户决策 2026-11-17）；两个客户端各自串行限速并落盘缓存，
+  /// 失败一律退化成「取不到」，详情页保持站源字段的样子。
+  ExternalMetaService get externalMetaService =>
+      _externalMetaService ??= ExternalMetaService(
+        enabled: () => externalMetaEnabled,
+        // 只用于按 IMDb 编号做确定性跨源映射（只读，不抓内容）。
+        tmdb: tmdbService,
+        // TMDB 快照只读：已匹配的详情直接进优先链，不额外发请求。
+        tmdbDetail: () => tmdb.detailData,
+        tmdbIdentity: () {
+          final identity = tmdb.identity;
+          if (identity == null) return null;
+          return MetaIdentity.of(
+            MetaSourceKind.tmdb,
+            identity.mediaType,
+            identity.tmdbId,
+          );
+        },
+        log: (message) => log.info(message, scope: 'metadata'),
+        douban: DoubanRecommendationService(
+          cacheDirectory: Directory(
+            '${paths.cacheDir}${Platform.pathSeparator}douban_meta',
+          ),
+        ),
+        bangumi: BangumiService(
+          cacheDirectory: Directory(
+            '${paths.cacheDir}${Platform.pathSeparator}bangumi_meta',
+          ),
+        ),
+      );
+
+  ExternalMetaService? _externalMetaService;
+
+  bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
+
+  /// 多来源元数据管线（逐字段优先/聚合）。
+  MetaPipeline get metaPipeline => _uiPreferences?.metaPipeline ?? MetaPipeline.defaults;
+
+  /// 用户手动钉住的来源身份（vod → MetaIdentity）。
+  MetaOverrideStore get metaOverrides =>
+      _uiPreferences?.metaOverrides ?? MetaOverrideStore();
+
+  /// 钉住一条来源身份：优先于自动匹配，取不到时自动回退。
+  Future<bool> pinMetaOverride(String vodId, MetaIdentity identity) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final saved = await store.pinMetaOverride(vodId, identity);
+    _externalMetaService?.clearCache();
+    notifyListeners();
+    return saved;
+  }
+
+  Future<bool> unpinMetaOverride(String vodId) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final saved = await store.unpinMetaOverride(vodId);
+    _externalMetaService?.clearCache();
+    notifyListeners();
+    return saved;
+  }
+
+  Future<bool> setMetaPipeline(MetaPipeline pipeline) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final saved = store.rememberMetaPipeline(pipeline);
+    _externalMetaService?.clearCache();
+    notifyListeners();
+    return saved;
+  }
+
+  Future<bool> setExternalMetaEnabled(bool enabled) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final saved = store.rememberExternalMetaEnabled(enabled);
+    _externalMetaService?.clearCache();
+    notifyListeners();
+    return saved;
+  }
 
   DetailRecommendationDependencies? _recommendationDependencies;
   DetailRecommendationDependencies get recommendationDependencies =>
@@ -7684,6 +7775,7 @@ AiContentCompletion? aiContentCompletion,
     _epgService?.close();
     _recommendationDependencies?.close();
     _detailRatingService?.close();
+    _externalMetaService?.close();
     _tmdbService.close();
     _lutStoreInstance?.dispose();
     // 联想/热搜的 HTTP 客户端同样要释放。

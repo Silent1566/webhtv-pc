@@ -7,6 +7,7 @@
 /// `utils/TmdbImageSelector`。
 library;
 
+import 'meta_source.dart';
 import 'tmdb_identity.dart';
 import 'tmdb_title.dart';
 
@@ -126,7 +127,11 @@ class TmdbEpisode {
 // §4.3 TmdbPerson
 // ---------------------------------------------------------------------------
 
-/// TMDB 人物（`03` §4.3）。
+/// 人物条目（`03` §4.3）。
+///
+/// 名字里的 `Tmdb` 是历史名：**TMDB 不可用时，兜底源（豆瓣 / Bangumi）的人物
+/// 也用这个类型**，靠 [ref] 区分来源。UI 只认这一种人物形状，因此不必为兜底源
+/// 再写一套演职人员 / 人物页。
 class TmdbPerson {
   const TmdbPerson({
     required this.personId,
@@ -135,6 +140,7 @@ class TmdbPerson {
     this.profileUrl,
     this.knownForDepartment = '',
     this.biography,
+    this.ref,
   });
 
   final int personId;
@@ -143,6 +149,15 @@ class TmdbPerson {
   final String? profileUrl;
   final String knownForDepartment;
   final String? biography;
+
+  /// 外部源的人物引用；`null` 表示这就是一个 TMDB 人物。
+  ///
+  /// 非空时 [personId] 是该来源内的原始 id（与 TMDB 号段无关），人物页必须按
+  /// 来源去取数据——直接拿它当 TMDB id 请求会串到别人的简介上。
+  final MetaPersonRef? ref;
+
+  /// 是否来自兜底源。
+  bool get isExternal => ref != null;
 
   static TmdbPerson? fromJson(
     Object? value, {
@@ -183,13 +198,13 @@ class TmdbPerson {
 
   @override
   bool operator ==(Object other) =>
-      other is TmdbPerson && other.personId == personId;
+      other is TmdbPerson && other.personId == personId && other.ref == ref;
 
   @override
-  int get hashCode => personId.hashCode;
+  int get hashCode => Object.hash(personId, ref);
 
   @override
-  String toString() => 'TmdbPerson($personId $name)';
+  String toString() => 'TmdbPerson(${ref?.key ?? personId} $name)';
 }
 
 String? _personSubtitle(Map<Object?, Object?> map) {

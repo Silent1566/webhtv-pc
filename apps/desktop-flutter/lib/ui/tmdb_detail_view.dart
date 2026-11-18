@@ -30,6 +30,8 @@ import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
 import '../core/episode_range.dart';
 import '../core/app_error.dart';
+import '../core/external_detail_meta.dart';
+import '../core/meta_source.dart';
 import '../core/person_work_filters.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
@@ -2766,6 +2768,8 @@ class PersonWorkFilterRow extends StatelessWidget {
   }
 }
 
+typedef ExternalPersonLoader = Future<ExternalPersonDetail?> Function(MetaPersonRef ref);
+
 /// 人物页：简介 + 照片 + 作品列表（`04` §6.1 的演职人员作品入口）。
 class TmdbPersonPage extends StatefulWidget {
   const TmdbPersonPage({
@@ -2774,10 +2778,18 @@ class TmdbPersonPage extends StatefulWidget {
     required this.person,
     this.onOpenItem,
     this.onOpenPhoto,
+    this.externalLoader,
+    this.photoLoader,
+    this.onSearchTitle,
   });
 
   final TmdbService service;
   final TmdbPerson person;
+  final ExternalPersonLoader? externalLoader;
+
+  /// 额外照片（如豆瓣相册）：与 TMDB 的 profile 合并，去重后展示。
+  final Future<List<String>> Function()? photoLoader;
+  final ValueChanged<String>? onSearchTitle;
 
   /// 点击作品：进入该作品的 TMDB 详情。
   final ValueChanged<TmdbItem>? onOpenItem;
@@ -2804,6 +2816,8 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
   String _departmentFilter = PersonWorkDepartment.all;
   String _mediaFilter = PersonWorkMedia.all;
   bool _biographyExpanded = false;
+  bool _externalUnavailable = false;
+  List<String> _extraPhotos = const [];
 
   @override
   void initState() {
@@ -2817,6 +2831,15 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
       _phase = TmdbLoadPhase.loading;
       _error = null;
     });
+    final ref = widget.person.ref;
+    if (ref != null) {
+      await _loadExternal(ref);
+      return;
+    }
+    if (widget.person.personId <= 0) {
+      setState(() => _phase = TmdbLoadPhase.ready);
+      return;
+    }
     try {
       final detail = await widget.service.person(widget.person.personId);
       if (!mounted) return;
@@ -2845,13 +2868,18 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
         ...castWorks,
         ...crewWorks,
       ]);
+      _extraPhotos = await widget.photoLoader?.call() ?? const [];
+      if (!mounted) return;
       setState(() {
         _detail = detail;
-        _photos = TmdbImageSelector.profiles(
-          detail,
-          config.imageBase,
-          limit: 12,
-        );
+        _photos = [
+          ...TmdbImageSelector.profiles(
+            detail,
+            config.imageBase,
+            limit: 12,
+          ),
+          ..._extraPhotos,
+        ];
         _works = works;
         // 筛选器由 cast/crew **分开**构造：`cast` 一律算「出演」，`crew` 按
         // job/department 归一后的中文身份归类（对齐默影视）。
@@ -2885,6 +2913,28 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
         _phase = TmdbLoadPhase.failed;
       });
     }
+  }
+
+  Future<void> _loadExternal(MetaPersonRef ref) async {
+    ExternalPersonDetail? loaded;
+    try { loaded = await widget.externalLoader?.call(ref); } catch (_) { /* 保留已有资料。 */ }
+    if (!mounted) return;
+    setState(() {
+      _externalUnavailable = loaded == null;
+      _detail = {
+        'name': loaded?.name ?? widget.person.name,
+        'biography': (loaded?.biography ?? '').isNotEmpty ? loaded!.biography : widget.person.biography,
+        'known_for_department': loaded?.department ?? widget.person.knownForDepartment,
+      };
+      _photos = loaded?.photos ?? const [];
+      final cast = loaded?.castWorks ?? const <TmdbPersonWork>[];
+      final crew = loaded?.crewWorks ?? const <TmdbPersonWork>[];
+      _works = PersonWorkFilters.sortByDateDesc([...cast, ...crew]);
+      _workFilters = PersonWorkFilters.from(cast, crew);
+      _departmentFilter = PersonWorkDepartment.all;
+      _mediaFilter = PersonWorkMedia.all;
+      _phase = TmdbLoadPhase.ready;
+    });
   }
 
   /// 当前筛选下的作品（筛选器未就绪时退化为全部）。
@@ -2973,7 +3023,7 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
               child: SizedBox(
                 width: 150,
                 height: 225,
-                child: PosterImage(url: widget.person.profileUrl),
+                child: PosterImage(url: _photos.firstOrNull ?? widget.person.profileUrl),
               ),
             ),
             const SizedBox(width: 16),
@@ -3002,6 +3052,11 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
             ),
           ],
         ),
+        if (_externalUnavailable)
+          Row(children: [
+            const Expanded(child: Text('暂未取得更多资料，已保留现有信息。')),
+            TextButton(onPressed: _load, child: const Text('重试')),
+          ]),
         if (biography.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(
@@ -3119,9 +3174,9 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
                 final key = work.item.identity?.key ?? 'work-$index';
                 return InkWell(
                   key: ValueKey('tmdb-person-work-$key'),
-                  onTap: widget.onOpenItem == null
-                      ? null
-                      : () => widget.onOpenItem!.call(work.item),
+                  onTap: work.item.identity == null && widget.onSearchTitle != null
+                      ? () => widget.onSearchTitle!(work.item.title)
+                      : widget.onOpenItem == null ? null : () => widget.onOpenItem!(work.item),
                   borderRadius: BorderRadius.circular(8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
