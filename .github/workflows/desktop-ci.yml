@@ -141,6 +141,9 @@ jobs:
         run: |
           ./scripts/prepare_python_runtime.ps1
           ./scripts/test_python_runtime.ps1 -Review -Integration
+      - name: Prepare pinned offline Windows native dependencies
+        shell: pwsh
+        run: ./scripts/prepare_windows_native_deps.ps1
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh

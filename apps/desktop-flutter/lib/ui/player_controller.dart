@@ -15,6 +15,7 @@ import 'dart:io';
 
 import '../core/lut.dart';
 import '../core/mpv_properties.dart';
+import '../core/mpv_start_option.dart';
 import '../core/playback_diagnostics.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
@@ -153,6 +154,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   final Player _player;
+  /// 「打开时定位」通道（见 [MpvStartOption]）。
+  final MpvStartOption _startOption = MpvStartOption();
   final PlayerThumbnailService _thumbnails;
   final Duration Function()? _networkClockOverride;
   final Stopwatch _networkWatch = Stopwatch()..start();
@@ -203,6 +206,7 @@ class PlayerController extends ChangeNotifier {
   Completer<void>? _liveOpenCancellation;
   bool get hasPendingNativeOpen => _nativeOpenPending;
 
+
   @override
   void notifyListeners() {
     if (_disposed) return;
@@ -211,6 +215,73 @@ class PlayerController extends ChangeNotifier {
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+
+  /// 引擎**真实上报**的最后一个位置（不受跳转占位影响）。
+  ///
+  /// `_position` 在跳转期间会被占位成目标位置，不能拿它判断"是否真的到位"：
+  /// 占位一写进去，判据立刻成立，遮罩会在新首帧上屏前就撤掉，旧帧露出来。
+  Duration _enginePosition = Duration.zero;
+
+  /// 引擎真实上报的位置（见 [_enginePosition]）。
+  Duration get enginePosition => _enginePosition;
+
+  /// 引擎是否上报过真实位置（换媒体后要先清掉）。
+  bool _enginePositionSeen = false;
+
+  /// 引擎是否至少上报过一次非零位置。
+  bool get enginePositionSeen => _enginePositionSeen;
+
+  /// 跳转重开期间要显示的「目标位置」；null 表示没有正在进行的重开。
+  ///
+  /// `open()` 内部先 `stop()`，那会把 duration/position 一起清成 0——界面于是
+  /// 闪成「00:00 / 00:00」，看起来像从头重播。重开期间把时间轴钉在「目标位置 /
+  /// 上一次的时长」上，等新媒体的值到了再自然接管。
+  Duration? _repositionTarget;
+
+  /// 跳转重开要显示的目标位置；null 表示没有正在进行的重开。
+  Duration? get repositionTarget => _repositionTarget;
+
+  /// 本次跳转的开始时刻；null 表示没有正在进行的重开。
+  ///
+  /// 用它做**兜底超时**而不是 `Timer`：定时器会随 widget 树销毁一起变成
+  /// "still pending"，既污染测试也可能在真实退出时拖住事件循环。播放中位置
+  /// 通知每秒多次，判定放在通知里就够了。
+  DateTime? _repositionStartedAt;
+
+  /// 兜底上限：跳转重开最长占用遮罩这么久。
+  ///
+  /// 遮罩撤除的正常条件是「位置真的到达目标」，定位失败时那个条件永远不成立，
+  /// 没有这条兜底就会一直黑屏。
+  static const Duration repositionGuardTimeout = Duration(seconds: 20);
+
+  /// 标记一次「跳转重开」开始，[target] 为界面期间显示的位置。
+  void beginReposition(Duration target) {
+    if (_disposed) return;
+    _repositionTarget = target;
+    _repositionStartedAt = DateTime.now();
+    // 上一部片的位置不能拿来判「这一次是否到位」。
+    _enginePosition = Duration.zero;
+    _enginePositionSeen = false;
+    if (target > _position) _position = target;
+    notifyListeners();
+  }
+
+  /// 兜底超时是否已到（由位置通知驱动，见 [repositionStartedAt]）。
+  bool get repositionTimedOut {
+    final started = _repositionStartedAt;
+    if (started == null) return false;
+    return DateTime.now().difference(started) >= repositionGuardTimeout;
+  }
+
+  /// 结束跳转重开：清掉占位，时间轴交还给引擎。
+  void endReposition() {
+    _repositionStartedAt = null;
+    if (_repositionTarget == null) return;
+    _repositionTarget = null;
+    notifyListeners();
+  }
+
+  bool get isRepositioning => _repositionTarget != null;
   Duration _buffered = Duration.zero;
   bool _playing = false;
   bool _loading = false;
@@ -824,11 +895,28 @@ class PlayerController extends ChangeNotifier {
     _subscriptions.addAll([
       _player.stream.position.listen((value) {
         if (_disposed) return;
-        _position = value;
+        // 引擎的原始上报永远照收：占位只影响显示，不影响"是否真的到位"的判定。
+        _enginePosition = value;
+        if (value > Duration.zero) _enginePositionSeen = true;
+        // 重开期间引擎会先报 0：那是 stop() 的回声，不是用户的位置。
+        final reposition = _repositionTarget;
+        if (reposition != null &&
+            value < reposition &&
+            value <= Duration.zero) {
+          _position = reposition;
+        } else {
+          _position = value;
+        }
         notifyListeners();
       }),
       _player.stream.duration.listen((value) {
         if (_disposed) return;
+        // 同上：重开期间先到的 0 会清空总时长，界面就成了 00:00/00:00。
+        if (value <= Duration.zero &&
+            _repositionTarget != null &&
+            _duration > Duration.zero) {
+          return;
+        }
         _duration = value;
         notifyListeners();
       }),
@@ -1036,6 +1124,7 @@ class PlayerController extends ChangeNotifier {
     String? flag,
     String? episodeName,
     bool Function()? isCurrent,
+    Duration? startAt,
   }) async {
     if (_disposed) {
       return _failure(
@@ -1123,10 +1212,38 @@ class PlayerController extends ChangeNotifier {
         return _failure(url, 'Playback superseded', stopwatch);
       }
       _nativeOpenPending = true;
+      // **起播定位必须在 loadfile 之前写进 mpv 的 `start` 选项**：那样整个定位
+      // 发生在**同一条** HTTP 连接内。打开之后再 seek 需要第二条连接，而站点
+      // 只允许 1 条活动流，会回 429，seek 失败后 mpv 直接把 `time-pos` 报成
+      // `duration`（`.probe/seek-fix-verify` 有实测）。
+      //
+      // 不能用 media_kit 的 `Media.start`：它走 `setProperty`，实测对 `start`
+      // 无效（见 [MpvStartOption] 文件头）。每次 open 都显式写一次目标值或
+      // `none`，避免上一次的定位残留到下一集。
+      unawaited(_primeNativeHandle());
+      // **顺序不能反**：`stop` 会把之前设好的 `start` 清掉（实测：先设后停 →
+      // 定位失效、直接落到 duration；先停后设 → 落点正确）。所以先停掉当前流，
+      // 再写 option，最后才让 open 去 loadfile。
+      if (startAt != null) {
+        try {
+          // 不加 `.timeout()`：那会留下一个未触发的定时器（widget 树销毁时
+          // 变成 "A Timer is still pending"）。并发抢锁已由页面侧
+          // `_reloadInFlight` 串行化解决，这里只需要顺序正确。
+          await _player.stop();
+        } catch (_) {
+          // 停不下来也要继续：最坏结果是退回从头播，不该阻断加载。
+        }
+      }
+      final nativeHandle = _startOption.isAvailable ? _nativeHandle : null;
+      if (nativeHandle != null) _startOption.apply(nativeHandle, startAt);
+      // 同一个定位意图也挂在 [Media] 上：真正生效的是上面那条 option，
+      // 这一条是给测试假件模拟内核行为用的（当前内核上它不生效）。
       final nativeOpen = _player
-          .open(
-            Media(url, httpHeaders: Map<String, String>.unmodifiable(headers)),
-          )
+          .open(Media(
+            url,
+            httpHeaders: Map<String, String>.unmodifiable(headers),
+            start: startAt,
+          ))
           .whenComplete(() => _nativeOpenPending = false);
       if (isCurrent == null) {
         await nativeOpen;
@@ -1291,6 +1408,7 @@ class PlayerController extends ChangeNotifier {
     String? flag,
     String? episodeName,
     bool Function()? isCurrent,
+    Duration? startAt,
   }) async {
     final builder = PlaybackDiagnosticsBuilder(
       siteKey: siteKey,
@@ -1303,6 +1421,7 @@ class PlayerController extends ChangeNotifier {
       timeout: timeout,
       diagnosticsBuilder: builder,
       isCurrent: isCurrent,
+      startAt: startAt,
     );
     if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) {
       return outcome;
@@ -1323,8 +1442,27 @@ class PlayerController extends ChangeNotifier {
       timeout: timeout,
       diagnosticsBuilder: builder,
       isCurrent: isCurrent,
+      startAt: startAt,
     );
     return outcome;
+  }
+
+  /// 当前内核句柄（拿不到就返回 null，调用方跳过「打开时定位」）。
+  ///
+  /// **不能在 `open()` 里 await**：`PlatformPlayer.handle` 在句柄就绪前是一个
+  /// 不会完成的 Future，测试替身与某些平台实现上更是永不返回——await 它会把
+  /// 整个加载流程挂住（改用侧路预热 + 同步读缓存）。
+  int? _nativeHandle;
+
+  Future<void> _primeNativeHandle() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      final handle = await platform.handle;
+      if (handle > 0) _nativeHandle = handle;
+    } catch (_) {
+      // 拿不到就算了：定位退化为「不设 start」，不影响正常播放。
+    }
   }
 
   Future<void> play() => _player.play();
@@ -1339,7 +1477,31 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
+  /// 最近一次由我方发起的 seek 时刻；null 表示本次媒体还没 seek 过。
+  ///
+  /// 连播闸门要用它区分「自然播到片尾」与「seek 把人送到片尾」：mpv 在
+  /// seek 到尚未缓冲的位置时会短暂走到文件末尾（`eof-reached`），那一帧的
+  /// `time-pos` 直接等于 `duration`，与自然播完在数字上完全一样，只能靠
+  /// 「刚刚发生过 seek」这条因果来分辨。
+  DateTime? _lastSeekAt;
+
+  DateTime? get lastSeekAt => _lastSeekAt;
+
+  int _seekCount = 0;
+
+  /// 累计 seek 次数：闸门用它判断「这次 completed 之前有没有发生过跳转」。
+  ///
+  /// 用计数而不是时刻：时刻要跟墙钟比，暂停、快进和测试虚拟时间都会让它失真。
+  int get seekCount => _seekCount;
+
+  /// 显式清除 seek 溯源（换媒体/恢复继续播放后用）。
+  void clearLastSeek() {
+    _lastSeekAt = null;
+  }
+
   Future<void> seek(Duration target) {
+    _lastSeekAt = DateTime.now();
+    _seekCount += 1;
     onSeek?.call(target);
     return _player.seek(target);
   }
