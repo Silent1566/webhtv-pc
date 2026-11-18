@@ -2158,13 +2158,14 @@ class _DetailPageState extends State<DetailPage> {
   /// 用集 **URL** 而不是集号做桥接：集号可能缺失或重复（`stillKey` 的注释里
   /// 已记过这个坑），URL 才是「同一集」的稳定身份。
   ///
-  /// 三道守卫都不可省：
-  /// 1. `matched` —— `matched == false` 涵盖「无历史」与「历史线路在但那一集
-  ///    已消失」（§4.1），标出来会把用户引到一条没有那一集的线路上；
-  /// 2. `rawLine.flag == target.flag` —— 只有历史命中的**那条线路**才标，
-  ///    否则切到别的线路也会看到标记；
-  /// 3. 下标越界 —— `lines` 与 `rawLine` 理论上同源，但越界时必须回落到
-  ///    「无标记」而不是抛异常（详情刷新期间两者可能短暂不同步）。
+  /// **跨线路也要标**：同一部剧的「那一集」在各条线路上是同一集，用户切到别的
+  /// 线路后仍然需要知道从哪继续（安卓版同样如此）。执行顺序：
+  /// 1. `matched == false` 直接不标——「无历史」与「那一集已消失」（§4.1）都
+  ///    标出来会把用户引到一条没有那一集的线路上；
+  /// 2. 在本线路里映射到同一集，按可信度依次尝试：集入口 URL 相同（精确）→
+  ///    集名相同（站点通常用「第 N 集」）→ 两条线路集数相同时按同下标对齐；
+  /// 3. 三者都对不上就不标——宁可没有角标，也不能把用户引到错误的集；
+  /// 4. 下标越界同样回落到「无标记」（详情刷新期间两个集合可能短暂不同步）。
   int _recentRenderedIndex(
     Vod vod,
     VodPlayLine rawLine,
@@ -2173,14 +2174,33 @@ class _DetailPageState extends State<DetailPage> {
     final lines = _playableLines(vod);
     final target = _resumeTarget(lines);
     if (!target.matched) return -1;
-    if (rawLine.flag != target.flag) return -1;
-    if (target.episodeIndex < 0 ||
-        target.episodeIndex >= rawLine.episodes.length) {
+    final targetLine = lines
+        .where((line) => line.flag == target.flag)
+        .firstOrNull;
+    if (targetLine == null ||
+        target.episodeIndex < 0 ||
+        target.episodeIndex >= targetLine.episodes.length) {
       return -1;
     }
-    final episode = rawLine.episodes[target.episodeIndex];
+    final historyEpisode = targetLine.episodes[target.episodeIndex];
+    VodEpisode? mark;
+    for (final episode in rawLine.episodes) {
+      if (episode.url == historyEpisode.url) {
+        mark = episode;
+        break;
+      }
+    }
+    mark ??= rawLine.episodes
+        .where((episode) => episode.name == historyEpisode.name)
+        .firstOrNull;
+    if (mark == null &&
+        rawLine.episodes.isNotEmpty &&
+        rawLine.episodes.length == targetLine.episodes.length) {
+      mark = rawLine.episodes[target.episodeIndex];
+    }
+    if (mark == null) return -1;
     for (var i = 0; i < ordered.length; i++) {
-      if (identical(ordered[i], episode) || ordered[i].url == episode.url) {
+      if (identical(ordered[i], mark) || ordered[i].url == mark.url) {
         return i;
       }
     }
