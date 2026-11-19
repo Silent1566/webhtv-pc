@@ -418,6 +418,36 @@ UI 层的重复与一致性问题（均为可量化机械收敛）：
 - **偏移是全局一份**，不按站点/影片/集记忆；mpv 的 delay 按文件重置，靠每次注入恢复（真实内核用例已证明该路径不误报）。
 - **产品措辞待定**：本地播放点音频 AI 时的提示「本地文件播放不支持实时字幕 / 卡拉OK」。
 
+## 迭代 3 执行记录（2026-11-20）
+
+### 交付
+
+| 子代理 | 结果 | 证据 |
+| --- | --- | --- |
+| `wave3-secondary-core` | `PlayerTrackSlot.secondarySubtitle` + `normalizeSecondarySubtitleId`（主次同轨→`no`）+ `canOfferSecondarySubtitle`（≥2 真实轨）+ `secondarySubtitleId` 落盘 + 控制器 `rawSubtitleTrackInfos`/`selectSecondarySubtitle`；写入通道泛化为 `writeMpvPropertyValue`（白名单→写→回读，永不抛） | 全包 analyze 0；40 passed（主审复核） |
+| `wave3-local-tail` | 本地摘「上一集/下一集」：播放组 11→9 项，站点/直播菜单树 **0 变化**；新建偏移菜单 widget 用例 3 条（±0.1 落盘、重置、±60s 边界只提示） | 反向对照：守卫改 `if (true)` 后用例立刻红；菜单树 25 passed |
+| `wave3-fallback` | `core/playback_fallback.dart` 纯策略（上限 3 步：原地重试/换线路/换解析源，不可回退项不换线）；`failureFallback` 默认 `line`→`off`（显式值仍生效）；失败路径接上阶梯，复用既有切换入口 | 29 新用例 + 126 passed 回归 |
+| `wave3-secondary-ui` | 字幕弹层「次字幕」分组（单轨/0 轨不出现、候选剔除主字幕、同轨回落）；真实内核取证到「无字幕轨」这一半 | 4 + 1 用例；`secondary-sid=1 applied=true` 的日志证据 |
+
+### 主审在验收时改掉的两处（都比子代理的交付更重要）
+
+1. **原地重试与回退解耦**。`failureFallback` 默认改 `off` 的同时，`shouldRetryInPlace` 也被回退档位门控 → **超时/网络连「重试一次」都没了**，而这是接线前的既有行为（§10.4）。改为重试只看 `retryLimit` 与失败性质，回退档位只管「换不换地址」。连带修正 3 处断言（`off` 下 `shouldRetryInPlace(timeout)=true`、超时用例 `io.opens` 回到 2）。
+2. **控制栏按钮与分组收成单一来源**。本地隐藏「上一集/下一集」时先只过滤按钮，`PlayerOverlayActionRow` 的「按钮与分组一一对应（8 != 10）」断言当场炸。抽 `_visibleButtonSpecs()` 供两者共用，并补一条「本地不出现 skip_previous/skip_next 图标」的回归断言。
+3. 附带修：偏移越界提示按下标符号取边界（原先下界 −60s 也印「已到 **+60.0 秒** 上限」）。
+
+### 验证
+
+- `dart analyze --fatal-infos .` 全包 **0 issue**。
+- Wave 3 回归组合 17 文件 **285 passed**（含真实 libmpv 用例）。
+
+### 顺延项
+
+- **真实内核双字幕轨取证缺失**：仓库 fixture 只有 `sample.mp4`（0 条字幕轨）+ srt/ts，且本环境 `flutter test` 里 `player.open` 无回调。需要「带 2 条内嵌字幕轨的容器 + 能跑 open 的环境」，**没有伪造通过**。
+- 右键菜单（`player_menu_sections.dart`）没有次字幕入口；`_primarySubtitleTrackId` 里的 `embedded:` 前缀与 core 重复一份（建议由 core 收口「菜单 id → 引擎轨道 id」）。
+- 同轨回落只覆盖「从本字幕菜单切主字幕」；若主字幕在别处被切到次字幕那条轨，菜单显示正确但落盘/内核会保留旧轨道，直到用户在本菜单再切一次。
+- 解析失败（`播放决策没有返回可用地址`）没有引擎失败分类，不进回退阶梯，只提示。
+- 页面级回退没有 widget 用例（只有策略单测 + 全包 analyze）。
+
 ---
 
 本文档为 2026-11-20 评估快照。后续请新建日期文件，并在「勘误」节记录旧结论何时失效，不要原地改写已过期的判断。
