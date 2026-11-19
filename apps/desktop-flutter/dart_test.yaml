@@ -1,0 +1,13 @@
+# 只声明分层跑用到的 tag，不默认排除任何用例：全量 `flutter test` 行为不变。
+#
+#   flutter test --tags native            # 需要本机 libmpv 内核的用例
+#   flutter test --exclude-tags external  # 不跑依赖外部工具链/运行时的用例
+tags:
+  # 需要本机可加载的 libmpv（见 test/support/libmpv_guard.dart）
+  native: {}
+  # 启动真浏览器进程（显式 opt-in：WEBHTV_SNIFF_BROWSER）
+  browser: {}
+  # 依赖本机外部工具链/运行时（java、python、ffmpeg 等）
+  external: {}
+  # 分钟级用例，默认参与全量跑
+  slow: {}

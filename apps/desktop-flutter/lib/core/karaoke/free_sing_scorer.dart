@@ -35,9 +35,9 @@ class KaraokeFreeSingScorer {
     );
     final midi = voiced ? frequencyToMidi(sample.frequencyHz) : double.nan;
     var slice = 0;
-    if (_last < 0)
+    if (_last < 0) {
       _warmup = position + 3000;
-    else {
+    } else {
       final delta = position - _last;
       if (delta < -1000 || delta > 2000) {
         _warmup = position + 3000;
@@ -46,8 +46,9 @@ class KaraokeFreeSingScorer {
         _lastMidi = double.nan;
         _recent.clear();
         _combo = 0;
-      } else if (delta > 0)
+      } else if (delta > 0) {
         slice = math.min(delta, math.max(20, config.maxSliceMs));
+      }
     }
     if (slice > 0 && position >= _warmup && window >= 0) {
       if (_line != window) {
@@ -78,8 +79,9 @@ class KaraokeFreeSingScorer {
         _combo += slice;
         _best = math.max(_best, _combo);
         _lastMidi = midi;
-      } else
+      } else {
         _combo = 0;
+      }
     }
     _last = position;
     final count = _completed + (_lineTotal > 0 ? 1 : 0);
@@ -141,9 +143,9 @@ class KaraokeFreeSingScorer {
         (1 - (midi - midi.round()).abs() / tolerance).clamp(0.0, 1.0) *
         cConfidence;
     double musicality;
-    if (_recent.length < 5)
+    if (_recent.length < 5) {
       musicality = .42;
-    else {
+    } else {
       final range = _recent.reduce(math.max) - _recent.reduce(math.min);
       final rangeScore = range < 0.5
           ? 0.18
@@ -183,15 +185,18 @@ class KaraokeFreeSingScorer {
       var start = line.startMs, end = nextStart;
       if (line.words.isNotEmpty) {
         var wordEnd = 0;
-        for (final w in line.words)
+        for (final w in line.words) {
           wordEnd = math.max(wordEnd, w.startOffsetMs + w.durationMs);
+        }
         start += math.max(0, line.words.first.startOffsetMs - 250);
         end = line.startMs + wordEnd + 250;
         if (nextStart > line.startMs) end = math.min(end, nextStart);
-      } else
+      } else {
         end = math.min(end, line.startMs + 8000);
-      if (position >= start && position < end && end > start + 300)
+      }
+      if (position >= start && position < end && end > start + 300) {
         return line.index;
+      }
     }
     return -1;
   }

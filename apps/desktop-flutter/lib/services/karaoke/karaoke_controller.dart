@@ -126,10 +126,12 @@ class KaraokeController {
         !identical(media, _media) ||
         session != clock.sessionId ||
         clockGeneration != clock.generation ||
-        !_active)
+        !_active) {
       return KaraokeImportResult.fail('stale generated track');
-    if (result.success && result.track != null && result.track!.hasScoredNotes)
+    }
+    if (result.success && result.track != null && result.track!.hasScoredNotes) {
       selectTrack(result.track);
+    }
     return result;
   }
 
@@ -137,10 +139,11 @@ class KaraokeController {
     _config = config;
     _wasScoring = false;
     _lastScoredPosition = null;
-    if (_track != null)
+    if (_track != null) {
       _scorer = KaraokeScorer(_track!, config);
-    else
+    } else {
       _freeScorer = KaraokeFreeSingScorer(config);
+    }
     _emit();
   }
 
@@ -167,8 +170,7 @@ class KaraokeController {
     }
     _active = true;
     _userPaused = false;
-    if (_micSubscription == null) {
-      _micSubscription = mic.samples.listen(
+    _micSubscription ??= mic.samples.listen(
         _onSample,
         onError: (Object error) {
           _micUnavailable = true;
@@ -178,7 +180,6 @@ class KaraokeController {
           _emit();
         },
       );
-    }
     final started = await mic.start();
     _micUnavailable = !started;
     _error = started ? '' : mic.unavailableReason;
@@ -295,8 +296,9 @@ class KaraokeController {
   void _onSample(KaraokePitchSample sample) {
     if (!sample.frequencyHz.isFinite ||
         !sample.volume.isFinite ||
-        !sample.confidence.isFinite)
+        !sample.confidence.isFinite) {
       return;
+    }
     _sample = sample;
     _micUnavailable = false;
     _samples.add(sample);
@@ -331,8 +333,9 @@ class KaraokeController {
 
   Future<void> dispose() async {
     await stop();
-    if (_ownsMic && mic is WindowsKaraokeMicSource)
+    if (_ownsMic && mic is WindowsKaraokeMicSource) {
       await (mic as WindowsKaraokeMicSource).dispose();
+    }
     await _samples.close();
     await _changes.close();
   }

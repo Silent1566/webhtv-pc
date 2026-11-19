@@ -94,8 +94,9 @@ class _FfiMicBackend implements KaraokeMicBackend {
   @override
   int read(Float32List buffer) {
     final count = _read!(_pcm!, buffer.length);
-    if (count > 0 && count <= buffer.length)
+    if (count > 0 && count <= buffer.length) {
       buffer.setRange(0, count, _pcm!.asTypedList(count));
+    }
     return count;
   }
 
@@ -154,8 +155,9 @@ class WindowsKaraokeMicSource implements KaraokeMicSource {
         return false;
       }
       _sampleRate = _backend.sampleRate;
-      if (_sampleRate < 8000 || _sampleRate > 192000)
+      if (_sampleRate < 8000 || _sampleRate > 192000) {
         throw StateError('invalid microphone sample rate');
+      }
       _buffer = Float32List(frameSize);
       _ready = Completer<void>();
       _receive = ReceivePort();
@@ -195,8 +197,9 @@ class WindowsKaraokeMicSource implements KaraokeMicSource {
         return false;
       }
       _running = true;
-      if (automaticPolling)
+      if (automaticPolling) {
         _timer = Timer.periodic(pollInterval, (_) => unawaited(poll()));
+      }
       return true;
     } catch (error) {
       _reason = '麦克风启动失败: $error';
@@ -210,12 +213,13 @@ class WindowsKaraokeMicSource implements KaraokeMicSource {
     _busy = true;
     try {
       final count = _backend.read(_buffer!);
-      if (count < 0 || count > frameSize)
+      if (count < 0 || count > frameSize) {
         throw StateError(
           _backend.error.isEmpty
               ? 'invalid microphone read length'
               : _backend.error,
         );
+      }
       if (count == 0) return;
       _pending = Completer<void>();
       _commands!.send([

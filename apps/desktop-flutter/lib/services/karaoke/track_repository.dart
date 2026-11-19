@@ -118,13 +118,15 @@ class KaraokeTrackRepository {
   Future<void> _mutation = Future.value();
   Future<T> _serial<T>(Future<T> Function() operation) {
     final next = _mutation.then((_) => operation());
-    _mutation = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _mutation = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return next;
   }
 
   void _invalidatePending() {
     _generation++;
-    for (final token in _requests.toList()) token.cancel();
+    for (final token in _requests.toList()) {
+      token.cancel();
+    }
   }
 
   KaraokeCancellation _requestToken(KaraokeCancellation? external) {
@@ -146,10 +148,11 @@ class KaraokeTrackRepository {
   String signatureOf(KaraokeMedia media) {
     final name = normalizeSearchText(stripExtension(media.title));
     final singer = normalizeSearchText(media.artist);
-    if (name.isEmpty && singer.isEmpty)
+    if (name.isEmpty && singer.isEmpty) {
       return media.key.isEmpty
           ? media.legacySignature
           : md5.convert(utf8.encode('karaoke-v2|key|${media.key}')).toString();
+    }
     return md5.convert(utf8.encode('karaoke-v2|meta|$name|$singer')).toString();
   }
 
@@ -169,7 +172,7 @@ class KaraokeTrackRepository {
     // 失效令牌看显式清除，写入计数看扫描期间是否发生过落盘——两者必须分开。
     final epoch = _generation;
     final epochVersion = _writes;
-    final signatures = [signatureOf(media), media.legacySignature].toSet();
+    final signatures = {signatureOf(media), media.legacySignature};
     for (final signature in signatures) {
       for (final file in [_primary(signature), _user(signature)]) {
         final track = await _readTrack(file);
@@ -187,8 +190,9 @@ class KaraokeTrackRepository {
             base.contains('/') ||
             base.contains('\\') ||
             base == '.' ||
-            base == '..')
+            base == '..') {
           continue;
+        }
         for (final suffix in [
           '.ultrastar.txt',
           '.karaoke.txt',
@@ -254,8 +258,9 @@ class KaraokeTrackRepository {
   File? _localMediaFile(String url) {
     if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(url)) return File(url);
     final uri = Uri.tryParse(url);
-    if (uri == null || uri.scheme.isEmpty)
+    if (uri == null || uri.scheme.isEmpty) {
       return url.isEmpty ? null : File(url);
+    }
     if (uri.scheme == 'file') {
       try {
         return File.fromUri(uri);
@@ -284,8 +289,9 @@ class KaraokeTrackRepository {
 
   Future<KaraokeTrack?> _readTrack(File file) async {
     try {
-      if (!await file.exists() || await file.length() > maxTrackBytes)
+      if (!await file.exists() || await file.length() > maxTrackBytes) {
         return null;
+      }
       final text = utf8.decode(await file.readAsBytes(), allowMalformed: false);
       if (!UltraStarParser.looksLikeUltraStar(text)) return null;
       final track = UltraStarParser.parseStrict(text);
@@ -313,24 +319,28 @@ class KaraokeTrackRepository {
   }) => _serial(() async {
     void checkCurrent() {
       cancellation?.throwIfCancelled();
-      if (expectedGeneration != null && expectedGeneration != _generation)
+      if (expectedGeneration != null && expectedGeneration != _generation) {
         throw const KaraokeCancelled();
+      }
     }
 
     checkCurrent();
     if (text.trim().isEmpty) return KaraokeImportResult.fail('empty track');
-    if (utf8.encode(text).length > maxTrackBytes)
+    if (utf8.encode(text).length > maxTrackBytes) {
       return KaraokeImportResult.fail('track too large');
-    if (!UltraStarParser.looksLikeUltraStar(text))
+    }
+    if (!UltraStarParser.looksLikeUltraStar(text)) {
       return KaraokeImportResult.fail('not ultrastar');
+    }
     KaraokeTrack track;
     try {
       track = UltraStarParser.parseStrict(text);
     } catch (_) {
       return KaraokeImportResult.fail('invalid track numbers');
     }
-    if (!track.hasScoredNotes)
+    if (!track.hasScoredNotes) {
       return KaraokeImportResult.fail('no scored notes');
+    }
     await target.parent.create(recursive: true);
     checkCurrent();
     final temporary = File('${target.path}.tmp');
@@ -353,8 +363,9 @@ class KaraokeTrackRepository {
     List<int> bytes,
   ) async {
     if (bytes.isEmpty) return KaraokeImportResult.fail('empty file');
-    if (bytes.length > maxMidiBytes)
+    if (bytes.length > maxMidiBytes) {
       return KaraokeImportResult.fail('file too large');
+    }
     try {
       final text = MidiKaraokeParser.looksLikeMidi(bytes)
           ? MidiKaraokeParser.toUltraStar(name, bytes)
@@ -414,8 +425,9 @@ class KaraokeTrackRepository {
         : Uri.decodeComponent(value.substring(marker + 8));
     var uri = Uri.parse(marker < 0 ? value : value.substring(0, marker));
     final namedId = KaraokeUsdbProvider.parseUsdbId(uri.toString());
-    if (namedId.isNotEmpty && (uri.scheme.isEmpty || uri.scheme == 'usdb'))
+    if (namedId.isNotEmpty && (uri.scheme.isEmpty || uri.scheme == 'usdb')) {
       uri = Uri.parse('https://usdb.animux.de/?link=detail&id=$namedId');
+    }
     if (uri.host == 'github.com' &&
         uri.pathSegments.length >= 5 &&
         uri.pathSegments[2] == 'blob') {
@@ -428,14 +440,17 @@ class KaraokeTrackRepository {
           ...uri.pathSegments.skip(3),
         ],
       );
-    } else if (uri.path.contains('/-/blob/'))
+    } else if (uri.path.contains('/-/blob/')) {
       uri = uri.replace(path: uri.path.replaceFirst('/-/blob/', '/-/raw/'));
+    }
     if (cookie.isEmpty &&
         media != null &&
-        Uri.tryParse(media.url)?.host == uri.host)
+        Uri.tryParse(media.url)?.host == uri.host) {
       cookie = media.headers['Cookie'] ?? media.headers['cookie'] ?? '';
-    if (cookie.contains('\r') || cookie.contains('\n'))
+    }
+    if (cookie.contains('\r') || cookie.contains('\n')) {
       throw const KaraokeTrackException('invalid authentication');
+    }
     final remote = CheckedKaraokeTransport(
       transport,
       cancellation: cancellation,
@@ -468,8 +483,9 @@ class KaraokeTrackRepository {
     if (query.length < 2) return const [];
     final key = normalizeSearchText(query);
     final cached = _searchCache[key];
-    if (cached != null && DateTime.now().difference(cached.$1) < searchCacheTtl)
+    if (cached != null && DateTime.now().difference(cached.$1) < searchCacheTtl) {
       return cached.$2;
+    }
     final epoch = _generation;
     final token = _requestToken(cancellation);
     final results = <KaraokeSearchResult>[];
@@ -487,8 +503,9 @@ class KaraokeTrackRepository {
             if (uri == null ||
                 !['http', 'https'].contains(uri.scheme) ||
                 result.title.isEmpty ||
-                results.any((r) => r.url == result.url))
+                results.any((r) => r.url == result.url)) {
               continue;
+            }
             results.add(result);
           }
         } on KaraokeCancelled {
@@ -498,8 +515,9 @@ class KaraokeTrackRepository {
         }
       }
       if (epoch != _generation) throw const KaraokeCancelled();
-      if (!failed)
+      if (!failed) {
         _searchCache[key] = (DateTime.now(), List.unmodifiable(results));
+      }
       return results;
     } on KaraokeCancelled {
       return const [];
@@ -578,8 +596,9 @@ class KaraokeTrackRepository {
         if (entry is! File) continue;
         final name = entry.path.split(Platform.pathSeparator).last;
         if (!name.endsWith('.generated.txt') &&
-            !name.endsWith('.generated-pitch.txt'))
+            !name.endsWith('.generated-pitch.txt')) {
           continue;
+        }
         try {
           await entry.delete();
         } catch (_) {
@@ -597,12 +616,15 @@ class KaraokeTrackRepository {
   static bool _isUserFile(String name) => _userFileName.hasMatch(name);
 
   String _validateUserTrack(String name, List<int> bytes) {
-    if (!_isUserFile(name))
+    if (!_isUserFile(name)) {
       throw KaraokeUserDataException('unsafe user track name: $name');
-    if (bytes.isEmpty || bytes.length > maxTrackBytes)
+    }
+    if (bytes.isEmpty || bytes.length > maxTrackBytes) {
       throw KaraokeUserDataException('invalid track size: $name');
-    if (bytes.any((byte) => byte < 0 || byte > 255))
+    }
+    if (bytes.any((byte) => byte < 0 || byte > 255)) {
       throw KaraokeUserDataException('invalid byte value: $name');
+    }
     String text;
     try {
       text = utf8.decode(bytes, allowMalformed: false);
@@ -650,8 +672,9 @@ class KaraokeTrackRepository {
     bool replace = false,
   }) async {
     if (replace) {
-      for (final entry in data.entries)
+      for (final entry in data.entries) {
         _validateUserTrack(entry.key, entry.value);
+      }
       _invalidatePending();
       return _serial(() => _replaceUserData(data));
     }
@@ -697,12 +720,14 @@ class KaraokeTrackRepository {
       if (await trackDirectory.exists()) {
         await for (final entry in trackDirectory.list(followLinks: false)) {
           final name = entry.path.split(Platform.pathSeparator).last;
-          if (entry is! File)
+          if (entry is! File) {
             throw KaraokeUserDataException(
               'unexpected track directory entry: $name',
             );
-          if (!_isUserFile(name))
+          }
+          if (!_isUserFile(name)) {
             await entry.copy('${staged.path}${Platform.pathSeparator}$name');
+          }
         }
       }
       for (final entry in validated.entries) {

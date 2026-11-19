@@ -155,8 +155,9 @@ class KaraokeScorer {
     if (changes < 4 ||
         high - low < .35 ||
         high - low > 2.4 ||
-        intervals.length < 2)
+        intervals.length < 2) {
       return false;
+    }
     final avg = intervals.reduce((a, b) => a + b) / intervals.length;
     return intervals.reduce(math.max) < avg * 1.9 &&
         intervals.reduce(math.min) > avg / 1.9;

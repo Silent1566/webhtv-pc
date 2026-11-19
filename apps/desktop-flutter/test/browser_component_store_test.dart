@@ -5,6 +5,7 @@
 ///
 /// 全部用真实的 shell 脚本当「浏览器」：`probeChromiumBrowser` 与
 /// `chromiumVersionOf` 走的是真子进程，用假脚本才能测到真实判定路径。
+@Tags(['external'])
 library;
 
 import 'dart:convert';

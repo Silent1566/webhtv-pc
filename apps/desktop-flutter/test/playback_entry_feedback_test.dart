@@ -16,6 +16,7 @@ import 'package:webhtv_pc/ui/playback_resume.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
+import 'support/libmpv_guard.dart';
 import 'support/player_page_harness.dart';
 
 class _PendingState extends AppState {
@@ -25,8 +26,16 @@ class _PendingState extends AppState {
   int resolutions = 0;
   final fixture = Site(key: 'site', name: '站点', type: 1, api: 'http://fixture');
 
+  late final AppConfig _config = AppConfig(sites: [fixture]);
+
   @override
-  AppConfig get config => AppConfig(sites: [fixture]);
+  AppConfig get config => _config;
+
+  /// 起播入口查的是 [effectiveConfig]：`AppState` 用私有 `_config` 与本地源合并，
+  /// 可覆盖的 [config] 取值器不参与。只覆盖 `config` 时 `siteInActiveSource` 恒为
+  /// null，入口会在建反馈之前就弹「站点已不在配置中」，与真实运行不符。
+  @override
+  AppConfig? get effectiveConfig => _config;
 
   @override
   Future<void> selectSite(Site site) {
@@ -490,5 +499,6 @@ void main() {
     );
     expect(debug, hasLength(1));
     expect(debug.single.message, contains('atvp_detail:131957'));
-  });
+    // 本条会构造 PlayerPage（初始化原生解码器）：没有 libmpv 时跳过而不是报错。
+  }, skip: libmpvUnavailableReason != null);
 }

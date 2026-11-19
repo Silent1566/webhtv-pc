@@ -1,3 +1,6 @@
+@Tags(['external'])
+library;
+
 import 'dart:async';
 import 'dart:io';
 

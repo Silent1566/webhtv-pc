@@ -45,15 +45,13 @@ class PcmFrame {
 /// 过期文本继续上屏。
 class AudioSessionClock {
   AudioSessionClock({
-    int sessionId = 0,
+    this._sessionId = 0,
     Duration position = Duration.zero,
-    bool playing = false,
+    this._playing = false,
     double rate = 1.0,
     DateTime Function()? now,
-  }) : _sessionId = sessionId,
-       _generation = 0,
+  }) : _generation = 0,
        _anchorPosition = position,
-       _playing = playing,
        _rate = rate <= 0 ? 1.0 : rate,
        _now = now ?? DateTime.now,
        _anchorAt = (now ?? DateTime.now)();

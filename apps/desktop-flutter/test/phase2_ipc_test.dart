@@ -4,6 +4,7 @@
 /// 这些测试使用**真实的** Python sidecar 子进程与真实的 stdio 帧通信，不用桩：
 /// 只有这样才能证明「主进程不加载不可信代码」「崩溃只影响该站点」「超时/取消/
 /// 资源超限被隔离」这些要求真的成立。
+@Tags(['external'])
 library;
 
 import 'dart:convert';

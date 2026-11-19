@@ -75,8 +75,9 @@ Future<void> generatedGate() async {
     );
     await c.bindMedia(b, track: track(72));
     c.pushSample(sample);
-    for (var t = 0; t <= 2000; t += 100)
+    for (var t = 0; t <= 2000; t += 100) {
       c.updateClock(position: Duration(milliseconds: t), playing: true);
+    }
     final snapshot = c.snapshot;
     repo.gate.complete(KaraokeImportResult.ok(track(69), 'A'));
     final result = await pending;
@@ -113,10 +114,11 @@ Future<void> generatedIntentGates() async {
           pitched: 3,
         ),
       );
-      if (intent == 'selection')
+      if (intent == 'selection') {
         c.selectTrack(null);
-      else
+      } else {
         c.seek(const Duration(milliseconds: 500));
+      }
       final old = c.snapshot;
       repo.gate.complete(KaraokeImportResult.ok(track(72), 'late'));
       check(
@@ -429,12 +431,13 @@ Future<void> sourceBranches() async {
   final t = RoutingTransport();
   const rss =
       '<rss><item><title>Artist - Song</title><guid>12345</guid></item></rss>';
-  for (final name in ['rss_new_top10.php', 'rss_downloads_top10.php'])
+  for (final name in ['rss_new_top10.php', 'rss_downloads_top10.php']) {
     t.routes['https://usdb.animux.de/rss/$name'] = const KaraokeResponse(
       status: 200,
       body: rss,
       contentType: 'application/xml',
     );
+  }
   final results = await const KaraokeUsdbProvider().search('Song', t);
   check(
     results.length == 1 &&
@@ -696,12 +699,13 @@ class RedirectClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     headers.add(Map.of(request.headers));
-    if (headers.length == 1)
+    if (headers.length == 1) {
       return http.StreamedResponse(
         const Stream.empty(),
         302,
         headers: {'location': 'https://other.fixture.invalid/song.txt'},
       );
+    }
     return http.StreamedResponse(
       Stream.value(utf8.encode(fixture)),
       200,
@@ -787,12 +791,13 @@ Future<void> repositoryGates() async {
         Uri.parse('https://fixture.invalid/song.txt'),
       );
       await Future<void>.delayed(Duration.zero);
-      if (action == 'binding')
+      if (action == 'binding') {
         await repo.clearBinding(a);
-      else if (action == 'cache')
+      } else if (action == 'cache') {
         await repo.clearCache();
-      else
+      } else {
         await repo.importUserData({}, replace: true);
+      }
       t.gate!.complete();
       final result = await pending;
       check(
@@ -942,6 +947,7 @@ Future<void> main() async {
       stderr.writeln('$e\n$stack');
     }
   }
-  if (failures.isNotEmpty)
+  if (failures.isNotEmpty) {
     throw StateError('FAILED GROUPS: ${failures.join(',')}');
+  }
 }

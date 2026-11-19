@@ -14,8 +14,9 @@ Future<void> main(List<String> args) async {
     'kmic_stop',
     'kmic_last_error',
   ]) {
-    if (library.lookup<Void>(name) == nullptr)
+    if (library.lookup<Void>(name) == nullptr) {
       throw StateError('missing $name');
+    }
   }
   final available = library.lookupFunction<Int32 Function(), int Function()>(
     'kmic_available',

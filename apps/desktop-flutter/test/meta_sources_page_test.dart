@@ -27,8 +27,8 @@ void main() {
       paths: AppPaths.resolve(overrides: {
         'config': dir.path,
         'data': dir.path,
-        'cache': dir.path + '/cache',
-        'state': dir.path + '/state',
+        'cache': '${dir.path}/cache',
+        'state': '${dir.path}/state',
       }),
       log: LogService(),
     );
@@ -67,7 +67,7 @@ void main() {
       isNot(contains(MetaSourceKind.wikidata)),
     );
     final store = UiPreferencesStore(
-      path: state.paths.configDir + '/settings.json',
+      path: '${state.paths.configDir}/settings.json',
     );
     await tester.runAsync(store.load);
     expect(

@@ -44,8 +44,9 @@ class KaraokeResponse {
   bool get ok => status >= 200 && status < 300;
   String checkedText({int maxBytes = 512 * 1024, bool allowTrackBody = false}) {
     if (!ok) throw KaraokeTrackException('http $status');
-    if (utf8.encode(body).length > maxBytes)
+    if (utf8.encode(body).length > maxBytes) {
       throw const KaraokeTrackException('track too large');
+    }
     final type = contentType.toLowerCase();
     if (type.isNotEmpty &&
         !['text', 'html', 'xml', 'json'].any(type.contains)) {
@@ -94,8 +95,9 @@ class CheckedKaraokeTransport implements KaraokeTransport {
     cancellation?.throwIfCancelled();
     if (!['http', 'https'].contains(uri.scheme) ||
         uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty)
+        uri.userInfo.isNotEmpty) {
       throw const KaraokeTrackException('invalid url');
+    }
     final headers = <String, String>{
       if (cookie.isNotEmpty && uri.host == cookieHost) 'Cookie': cookie,
     };
@@ -164,8 +166,9 @@ class HttpKaraokeTransport implements KaraokeRequestTransport {
         cancellation?.throwIfCancelled();
         if (!['http', 'https'].contains(current.scheme) ||
             current.host.isEmpty ||
-            current.userInfo.isNotEmpty)
+            current.userInfo.isNotEmpty) {
           throw const KaraokeTrackException('invalid redirect url');
+        }
         final request = http.AbortableRequest(
           currentMethod,
           current,
@@ -178,8 +181,9 @@ class HttpKaraokeTransport implements KaraokeRequestTransport {
             'authorization',
           ].contains(entry.key.toLowerCase());
           if (!sensitive ||
-              current.host == uri.host && current.scheme == uri.scheme)
+              current.host == uri.host && current.scheme == uri.scheme) {
             request.headers[entry.key] = entry.value;
+          }
         }
         if (currentMethod == 'POST') request.bodyFields = form;
         final response = await _client.send(request);
@@ -192,8 +196,9 @@ class HttpKaraokeTransport implements KaraokeRequestTransport {
           current = current.resolve(location);
           if (response.statusCode == 303 ||
               currentMethod == 'POST' &&
-                  [301, 302].contains(response.statusCode))
+                  [301, 302].contains(response.statusCode)) {
             currentMethod = 'GET';
+          }
           continue;
         }
         final bytes = <int>[];

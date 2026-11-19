@@ -15,6 +15,7 @@
 ///
 /// 与 `phase2_ipc_test.dart`（Python）、`phase3_js_spider_test.dart`（Node）对称：
 /// 这是 `webhtv-ipc-v1` 的第四份实现（`tvbox-java-v1`）的进程级验证（§19）。
+@Tags(['external'])
 library;
 
 import 'dart:convert';
@@ -346,7 +347,11 @@ void main() {
         <int>[],
         (acc, chunk) => acc..addAll(chunk),
       );
-      final exitCode = await process.exitCode;
+      final exitCode = await process.exitCode.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () =>
+            fail('等待 JVM 子进程退出超过 20s：可能是缺 JDK，或 jar 启动挂住'),
+      );
       expect(exitCode, 0, reason: '正常 EOF 应以 0 退出');
 
       final text = utf8.decode(stdoutBytes);

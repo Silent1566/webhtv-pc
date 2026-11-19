@@ -19,30 +19,36 @@ class UltraStarParser {
         if (value == null ||
             !value.isFinite ||
             (key == 'BPM' && value <= 0) ||
-            (key == 'GAP' && value.abs() > max))
+            (key == 'GAP' && value.abs() > max)) {
           throw FormatException('invalid $key');
-        if (key == 'BPM')
+        }
+        if (key == 'BPM') {
           bpm = value;
-        else
+        } else {
           gap = value;
+        }
       } else if (KaraokeNoteType.values.any((n) => n.prefix == line[0])) {
         final parts = line.substring(1).trim().split(RegExp(r'\s+'));
-        if (parts.length < 3 || bpm == null || gap == null)
+        if (parts.length < 3 || bpm == null || gap == null) {
           throw const FormatException('invalid note timing');
+        }
         final values = parts.take(3).map(int.tryParse).toList();
-        if (values.any((v) => v == null || v.abs() > max) || values[1]! <= 0)
+        if (values.any((v) => v == null || v.abs() > max) || values[1]! <= 0) {
           throw const FormatException('invalid note numbers');
+        }
         final start = gap + values[0]! * 60000 / bpm;
         final end = gap + (values[0]! + values[1]!) * 60000 / bpm;
         if (!start.isFinite ||
             !end.isFinite ||
             end < start ||
-            end > max)
+            end > max) {
           throw const FormatException('note time out of range');
+        }
       }
     }
-    if (bpm == null || gap == null)
+    if (bpm == null || gap == null) {
       throw const FormatException('missing timing');
+    }
     return parse(text);
   }
 
@@ -72,14 +78,15 @@ class UltraStarParser {
         if (index <= 1) continue;
         final key = line.substring(1, index).trim().toUpperCase();
         final value = line.substring(index + 1).trim();
-        if (key == 'TITLE')
+        if (key == 'TITLE') {
           title = value;
-        else if (key == 'ARTIST')
+        } else if (key == 'ARTIST') {
           artist = value;
-        else if (key == 'BPM')
+        } else if (key == 'BPM') {
           bpm = double.tryParse(value.replaceAll(',', '.')) ?? bpm;
-        else if (key == 'GAP')
+        } else if (key == 'GAP') {
           gap = (double.tryParse(value.replaceAll(',', '.')) ?? gap).round();
+        }
         continue;
       }
       if (line[0] == '-') {

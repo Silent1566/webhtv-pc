@@ -12,12 +12,12 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 收敛判据与 `pumpAndSettle` 完全相同（没有帧在排队），只是每轮多给真实事件
 /// 循环一次机会让 IO 落地；真出现无限动画照样失败，窗口还从 10 分钟假时钟收紧
-/// 到 30 秒真实时间，失败信息直接指向「真实 IO 没落地 / 有无限动画」。
+/// 到 5 秒真实时间，失败信息直接指向「真实 IO 没落地 / 有无限动画」。
 ///
 /// 用法：`mount` 里 `pumpWidget` 之后调用它，替代
 /// `runAsync(Future.delayed(Duration.zero)) + pumpAndSettle()` 这两步。
 Future<void> settle(WidgetTester tester) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
   while (true) {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 5)),
@@ -25,7 +25,7 @@ Future<void> settle(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 100));
     if (!tester.binding.hasScheduledFrame) return;
     if (DateTime.now().isAfter(deadline)) {
-      fail('30s 真实时间内仍在排帧：真实 IO 未落地或存在无限动画');
+      fail('5s 真实时间内仍在排帧：真实 IO 未落地或存在无限动画');
     }
   }
 }

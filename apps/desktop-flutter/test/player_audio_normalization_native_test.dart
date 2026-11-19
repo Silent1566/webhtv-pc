@@ -13,6 +13,8 @@ import 'package:webhtv_pc/core/mpv_properties.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/ui/player_controller.dart';
 
+import 'support/libmpv_guard.dart';
+
 Future<void> _eventually(FutureOr<bool> Function() check) async {
   final deadline = DateTime.now().add(const Duration(seconds: 5));
   while (!await check()) {
@@ -145,9 +147,12 @@ Future<bool> _ffmpegAvailable() async {
 
 Future<void> main() async {
   TestWidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized(
-    libmpv: Platform.environment['WEBHTV_TEST_LIBMPV'],
-  );
+  final skipWithoutLibmpv = libmpvUnavailableReason;
+  if (skipWithoutLibmpv == null) {
+    MediaKit.ensureInitialized(
+      libmpv: Platform.environment['WEBHTV_TEST_LIBMPV'],
+    );
+  }
   final ffmpegAvailable = await _ffmpegAvailable();
 
   test('real controller enables clears and retains af on media reopen without volume or mute changes', () async {
@@ -193,7 +198,7 @@ Future<void> main() async {
     await f.controller.toggleMute();
     await _eventually(() => f.controller.volume == 37);
     expect(f.controller.volume, 37);
-  });
+  }, skip: skipWithoutLibmpv);
 
   test('invalid af is rejected by production whitelist and real libmpv returns rc=-9', () async {
     final f = await _NativeFixture.create();
@@ -223,7 +228,7 @@ Future<void> main() async {
     await f.expectAf(afApplicable ? audioNormalizationAf : '');
     expect(await f.controller.applyMpvProperties({'af': ''}), isTrue);
     await f.expectAf('');
-  });
+  }, skip: skipWithoutLibmpv);
 
   test('rapid queued production-controller af writes finish at final preference', () async {
     final f = await _NativeFixture.create();
@@ -255,7 +260,7 @@ Future<void> main() async {
     debugPrint(
       'NATIVE rapid toggles=20 finalPreference=${preference.audioNormalization} afApplicable=$afApplicable',
     );
-  });
+  }, skip: skipWithoutLibmpv);
 
   test(
     'AC3 passthrough bypasses PCM normalization while decoded WAV accepts af',
@@ -296,8 +301,10 @@ Future<void> main() async {
       expect(await f.controller.applyMpvProperties({'af': ''}), isTrue);
       await f.expectAf('');
     },
-    skip: ffmpegAvailable
-        ? false
-        : 'ffmpeg is unavailable; skipping only AC3 passthrough compatibility',
+    skip:
+        skipWithoutLibmpv ??
+        (ffmpegAvailable
+            ? false
+            : 'ffmpeg is unavailable; skipping only AC3 passthrough compatibility'),
   );
 }

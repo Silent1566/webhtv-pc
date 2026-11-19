@@ -57,9 +57,9 @@ class ModelDownloadProgress {
 class AudioModelManager {
   AudioModelManager({
     required this.root,
-    http.Client? client,
+    this._client,
     this.chunkBytes = 1 << 16,
-  }) : _client = client;
+  });
 
   /// 模型根目录（通常是 `%APPDATA%` 下的 audio_ai/models）。
   final Directory root;
@@ -236,7 +236,7 @@ class AudioModelManager {
     }
     if (received != file.size) {
       throw ModelIntegrityException(
-        '${file.relativePath}: size ${received} != ${file.size}',
+        '${file.relativePath}: size $received != ${file.size}',
       );
     }
     final digest = await _sha256Of(partial);
