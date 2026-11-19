@@ -151,6 +151,49 @@ const Set<String> _toneMappingValues = {
 
 const Set<String> _hdrComputePeakValues = {'auto', 'yes', 'no'};
 
+/// 字幕/音轨时间偏移在 mpv 里是**双精度秒**（`sub-delay` / `audio-delay`），
+/// 本应用内部一律用毫秒整数。换算只有这一处——界面不许自己乘除。
+///
+/// 固定 3 位小数：1 ms 就是 0.001 s，再细的位本应用产不出来，写多了只会让
+/// 回读比较多一堆噪声。
+String mpvSecondsFromMilliseconds(int milliseconds) =>
+    (milliseconds / 1000).toStringAsFixed(3);
+
+/// 偏移类属性的回读容差，单位秒（= 1 ms）。
+///
+/// mpv 按 `%f` 打印 double，写 `0.1` 回读可能是 `0.100000`，也可能是
+/// `0.09999999999999999`；按数值相等比会把「写进去了」判成失败，然后界面
+/// 反复重试注入。1 ms 足够宽于差值、又远小于任何有意义的偏移步进。
+const double mpvDelayToleranceSeconds = 0.001;
+
+/// 偏移允许的绝对值上限（秒）。
+///
+/// 与 `player_tracks.dart` 的 `TrackOffset.maxMilliseconds` 是**两份独立常量**：
+/// 模型侧夹取、白名单侧拒绝，互为补位；这里 import 上层模型会让白名单
+/// 反向依赖调用方，不值得。
+const double _maxDelaySeconds = 60;
+
+/// 延迟只认本应用产出的形态：可选负号 + 整数部分 + 最多 3 位小数。
+///
+/// 不接受指数记数法、`+` 前缀、`nan`/`inf` 与空串——它们都不是
+/// [mpvSecondsFromMilliseconds] 会写出去的形态，能出现在这里就说明有人在拼串。
+final RegExp _delayValuePattern = RegExp(r'^-?\d{1,3}(\.\d{1,3})?$');
+
+bool _isDelaySeconds(String value) {
+  if (!_delayValuePattern.hasMatch(value)) return false;
+  final seconds = double.tryParse(value);
+  return seconds != null && seconds.abs() <= _maxDelaySeconds;
+}
+
+/// `secondary-sid` 只认 `auto` / `no` / 轨道号。
+///
+/// 轨道号从 1 开始（0 不是轨道），4 位封顶：再长只可能是指望它当别的东西
+/// （路径、脚本参数），而这条通道正是要挡住那种东西。
+final RegExp _trackIdPattern = RegExp(r'^[1-9]\d{0,3}$');
+
+bool _isSecondarySid(String value) =>
+    value == 'auto' || value == 'no' || _trackIdPattern.hasMatch(value);
+
 bool _inSet(String value, Set<String> allowed) => allowed.contains(value);
 
 bool _isByteSize(String value) {
@@ -200,10 +243,18 @@ MpvPropertyRule? mpvPropertyRule(String key) => _rules[key];
 
 /// 回读值是否等于写入值（供 [MpvPropertyRule.verifiable] 的属性判定落盘）。
 ///
-/// 比较口径：去空白、数字按数值比、其余按忽略大小写比。空回读**不等于**任何
-/// 非空写入值——`NativePlayer.getProperty` 读失败时返回空串
-/// （`real.dart:1278`），当成功处理会把静默失败洗成成功。
-bool mpvPropertyReadbackMatches(String expected, String actual) {
+/// 比较口径：去空白、数字按数值比（[tolerance] > 0 时按容差比）、其余按忽略
+/// 大小写比。空回读**不等于**任何非空写入值——`NativePlayer.getProperty` 读
+/// 失败时返回空串（`real.dart:1278`），当成功处理会把静默失败洗成成功。
+///
+/// [tolerance] 只作用于数字形态，默认 0（严格相等，即整数字节数这类属性的
+/// 原有口径）。浮点属性（偏移）请传 [mpvDelayToleranceSeconds]，或直接用
+/// [mpvDelayReadbackMatches]。
+bool mpvPropertyReadbackMatches(
+  String expected,
+  String actual, {
+  num tolerance = 0,
+}) {
   final want = expected.trim();
   final got = actual.trim();
   if (want == got) return true;
@@ -213,8 +264,24 @@ bool mpvPropertyReadbackMatches(String expected, String actual) {
   if (want == 'auto') return got.isNotEmpty;
   final wantNumber = num.tryParse(want);
   final gotNumber = num.tryParse(got);
-  if (wantNumber != null && gotNumber != null) return wantNumber == gotNumber;
+  if (wantNumber != null && gotNumber != null) {
+    if (tolerance > 0) return (wantNumber - gotNumber).abs() <= tolerance;
+    return wantNumber == gotNumber;
+  }
   return want.toLowerCase() == got.toLowerCase();
+}
+
+/// 偏移类属性的专用回读判定：写入侧给**内部毫秒**，读回侧给 mpv 的秒串。
+///
+/// 为什么不直接用 [mpvPropertyReadbackMatches]：那条按数值相等比，而 mpv 打印
+/// double 的末位不可控（`0.1` 可能回来 `0.09999999999999999`），差一个 ulp
+/// 就会被判成没写进去。这里按 [mpvDelayToleranceSeconds] 比。
+///
+/// 空回读、非数字回读一律算失败：读失败与静默拒绝都长这样。
+bool mpvDelayReadbackMatches(int milliseconds, String actual) {
+  final got = num.tryParse(actual.trim());
+  if (got == null) return false;
+  return (got - milliseconds / 1000).abs() <= mpvDelayToleranceSeconds;
 }
 
 /// 音量归一写进 `af` 的**唯一**取值：裸滤镜名。
@@ -285,5 +352,24 @@ final Map<String, MpvPropertyRule> _rules = {
     // mpv 回写的是规范化后的滤镜图，回读判不了成败。
     verifiable: false,
     reason: "只允许空串或 lavfi=[lut3d=file='…'] 形态",
+  ),
+  // 时间偏移：值是**秒**（双精度），由 mpvSecondsFromMilliseconds 从内部毫秒
+  // 换算而来。回读要用 mpvDelayReadbackMatches（容差 1 ms），
+  // 通用比较在小数末位上会把成功判成失败。
+  'sub-delay': MpvPropertyRule(
+    'sub-delay',
+    _isDelaySeconds,
+    reason: '只允许 ±60 秒内的十进制秒数（最多 3 位小数）',
+  ),
+  'audio-delay': MpvPropertyRule(
+    'audio-delay',
+    _isDelaySeconds,
+    reason: '只允许 ±60 秒内的十进制秒数（最多 3 位小数）',
+  ),
+  // 双字幕的第二字幕：auto 跟随容器、no 关闭、数字是 mpv 轨道号。
+  'secondary-sid': MpvPropertyRule(
+    'secondary-sid',
+    _isSecondarySid,
+    reason: '只允许 auto / no / 轨道号',
   ),
 };
