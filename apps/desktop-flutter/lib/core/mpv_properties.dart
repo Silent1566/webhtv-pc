@@ -219,23 +219,21 @@ bool mpvPropertyReadbackMatches(String expected, String actual) {
 
 /// 音量归一写进 `af` 的**唯一**取值：裸滤镜名。
 ///
-/// **不要**把它改成 `lavfi=[dynaudnorm]`。实测（随包 Windows libmpv
-/// v0.36.0-403 / FFmpeg n6.0，media_kit_libs_windows_video）：
-/// - 裸名 `af=dynaudnorm` → 内核直接回 `rc=-9`，什么都没改，播放照常；
-/// - `af=lavfi=[dynaudnorm]` → 属性写入回 `rc=0`、回读也"成功"
-///   （`lavfi=graph=dynaudnorm`），但建链时才炸：
-///   `AVFilterGraph: No such filter: 'dynaudnorm'` →
-///   `Audio filter initialized failed!` → mpv 把音轨整条丢掉
-///   （`Audio: no audio`），用户直接变哑。
+/// 随包内核是 `scripts/prepare_libmpv_windows.ps1` pin 的完整 FFmpeg 构建
+/// （mpv v0.42.0-38 / FFmpeg N-128766），裸名 `af=dynaudnorm` 在它上面直接生效：
+/// 回读 `dynaudnorm`，`audio-out-params.format` 从 `s16` 变成 `doublep`（dynaudnorm
+/// 的输出格式）。Linux 的系统 libmpv 同样接受。
 ///
-/// 那个 libmpv 根本没编进 ffmpeg 滤镜表：`lavfi=[anull]`、`lavfi=[null]`、
-/// `lavfi=[volume=0.5]` 全部同样建不起来。所以 lavfi 形态在 Windows 上是
-/// "写成功、播放坏"的最坏组合，而裸名是**安全的失败**——内核明说做不了，
-/// `PlayerController.applyMpvProperties` 的写后回读于是如实返回 false，UI 照常
-/// 提示"未生效"，音轨不动。
+/// 仍然只放行这一个字面量、**不要**改成 `lavfi=[dynaudnorm]`：
+/// - `lavfi` 形态能挂任意 ffmpeg 滤镜图（`movie=` 能读本地文件），白名单要的是
+///   "只认自己产出的这一条"，不是"能以 lavfi 开头"；
+/// - 历史教训：换内核之前那份 media_kit 归档（v0.36.0-403 / FFmpeg n6.0）没有编进
+///   滤镜表，`lavfi=[dynaudnorm]` 会"属性写成功、建链失败"，mpv 把音轨整条丢掉
+///   （`Audio: no audio`），而裸名只是被内核拒（`rc=-9`，安全的失败）。
 ///
-/// Linux 的系统 libmpv（Ubuntu CI，完整 FFmpeg）接受同一个裸名写入并原样回读，
-/// 这条用例在两个平台上都按"内核到底做了什么"断言，不互相迁就。
+/// 用例按"内核到底做了什么"断言（`afApplicable` 分支），两个平台都不互相迁就：
+/// 内核能挂上就校验回读与重开保留，挂不上就校验拒绝原因、链路为空且播放照常。
+/// 取证与迁移记录见 `docs/reference/libmpv-windows.md`。
 const String audioNormalizationAf = 'dynaudnorm';
 
 final Map<String, MpvPropertyRule> _rules = {
