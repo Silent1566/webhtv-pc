@@ -782,7 +782,11 @@ void main() {
     final store = WebHomeStore(root: p.join(paths.configDir, 'webhome'));
     Directory(store.root).createSync(recursive: true);
     File(store.registryPath).writeAsStringSync('{"items":false}');
-    await _pumpPage(tester, state);
+    // 缓存契约：读取失败只在真正读盘的那次记账。setUp 里的实例在损坏前已经读过
+    // 登记表（缓存命中就不会再读盘），所以这里用「损坏之后才创建」的实例还原
+    // 「首次进入」的语义——这正是本用例名要验证的场景。
+    final fresh = AppState(paths: paths, log: LogService());
+    await _pumpPage(tester, fresh);
     expect(find.textContaining('载入 HTML 源失败'), findsOneWidget);
     expect(find.textContaining('登记表 items 必须是记录列表'), findsOneWidget);
     expect(find.text('还没有本地源'), findsNothing);

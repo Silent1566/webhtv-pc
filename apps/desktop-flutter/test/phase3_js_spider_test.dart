@@ -11,6 +11,7 @@
 ///
 /// 与 `phase2_ipc_test.dart` 对称：Python sidecar 用同一份 `webhtv-ipc-v1`
 /// 契约测试，这份是第三份实现（`tvbox-js-v1`）的进程级验证（§19「契约测试」）。
+@Tags(['external'])
 library;
 
 import 'dart:convert';

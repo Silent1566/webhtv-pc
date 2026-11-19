@@ -1,3 +1,6 @@
+// 手动探针脚本：标准输出即观测结果，print 是预期行为。
+// ignore_for_file: avoid_print
+
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:webhtv_pc/core/karaoke/karaoke.dart';

@@ -16,7 +16,7 @@ import '../services/storage.dart';
 import '../services/tmdb_history.dart';
 import '../state/app_state.dart';
 import '../core/protocol.dart';
-import 'app.dart';
+import 'poster_image.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'history_cross_source.dart';

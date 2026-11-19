@@ -21,7 +21,7 @@ import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../core/tmdb_season.dart';
 import '../state/tmdb_state.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'common.dart';
 import 'tokens.dart';
 import 'scroll_behavior.dart';

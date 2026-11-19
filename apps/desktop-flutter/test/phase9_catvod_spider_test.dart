@@ -6,6 +6,7 @@
 /// - home/category/detail/search/play 五方法返回结构化 Result；
 /// - 站源自己的 `print()` 落到 stderr，不污染 stdio 协议帧；
 /// - 站源未实现的方法如实报 `SPIDER_UNSUPPORTED`，而不是空列表。
+@Tags(['external'])
 library;
 
 import 'dart:convert';
@@ -337,7 +338,12 @@ void main() {
           <int>[],
           (acc, chunk) => acc..addAll(chunk),
         );
-        final exitCode = await process.exitCode;
+        final exitCode = await process.exitCode.timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => fail(
+            '第 $round 轮：等待子进程退出超过 20s：可能是缺 Python 运行时，或 sidecar 启动挂住',
+          ),
+        );
         expect(
           exitCode,
           0,

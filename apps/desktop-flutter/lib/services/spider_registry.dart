@@ -245,7 +245,11 @@ class CspJvmBinding {
   }
 
   /// 站点 key 对应的缓存目录。
-  String directoryFor(String siteKey) => p.join(root, _safe(siteKey));
+  ///
+  /// siteKey 来自 manifest（不可信）：先净化成单个路径段再拼，与 sidecar 工作目录
+  /// 共用 [sanitizePathSegment] 的同一套规则。
+  String directoryFor(String siteKey) =>
+      p.join(root, sanitizePathSegment(siteKey));
 
   /// 在缓存目录内定位入口：优先 `index.jar`，其次唯一的一个 jar，最后类目录。
   String? entryFor(String siteKey) {
@@ -300,8 +304,6 @@ class CspJvmBinding {
   /// 只做**静态**检查（zip 目录项 / 文件树），不加载任何类、不解压条目内容，
   /// 因此对不可信 jar 也安全（§9.8）。
   static bool isAndroidJar(String path) => JarIntake.hasAndroidDex(path);
-  static String _safe(String value) =>
-      value.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
 }
 
 /// Java 运行时探测结果（§9.3 `tvbox-java-v1`）。

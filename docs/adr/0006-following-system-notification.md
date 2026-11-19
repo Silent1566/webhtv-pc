@@ -1,7 +1,8 @@
 # ADR-0006：追番新集的 Windows 系统通知（新增依赖与失败降级）
 
 - 状态：已接受
-- 日期：2026-11-02（2026-11-08 修订：实现库由 `flutter_local_notifications` 换成 `local_notifier`）
+- 日期：2026-11-02（2026-11-08 修订：实现库由 `flutter_local_notifications` 换成 `local_notifier`；
+  2026-11-20 更正：§6 第 1 条「点击通知的跨页切换未实现」已不成立，见该条）
 - 决策：引入 `local_notifier`（Windows toast 通道），用于「追番发现新集」的桌面系统通知；
   **系统通知不可用时一律自动降级为应用内提示**（侧栏徽标 + 追番页提示条），
   检查流程永不因通知失败中断。
@@ -102,9 +103,13 @@ WinToast（`windows/wintoastlib.cpp`），只依赖 Windows SDK / WinRT 头，�
 
 ## 6. 已知限制
 
-- **点击通知的跨页切换未实现**：本任务禁止修改 `lib/ui/app.dart`，所以点击通知
+- ~~**点击通知的跨页切换未实现**~~ 原记载：「本任务禁止修改 `lib/ui/app.dart`，所以点击通知
   只记录 `AppState.followingOpenRequest`，由追番页消费并直接打开该条目的最新集
-  （`FollowingPage` 已挂载时生效；其他页面停留时不会自动跳转到追番页）。
+  （`FollowingPage` 已挂载时生效；其他页面停留时不会自动跳转到追番页）」。
+  **2026-11-20 更正：已实现**——`apps/desktop-flutter/lib/ui/app.dart:522-532` 的
+  `_syncFollowingOpenRequest` 在状态变化时把侧栏切到「追剧」页（只切页、不清
+  `followingOpenRequest`，消费方仍是 `FollowingPage`），停留在其他页面时点击通知
+  也会跳到追番页并打开最新集。
 - **toast 未做端到端弹窗验证**：本次只验证到 release 构建通过 + 单测覆盖降级路径，
   没有在运行中的桌面会话里截图确认弹窗与点击。
 - **`local_notifier` 不回传 WinToast 的初始化结果**：Windows 插件 `Setup` 忽略

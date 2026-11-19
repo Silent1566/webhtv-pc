@@ -58,11 +58,15 @@ void main() {
     final service = ExternalMetaService(
       douban: douban(MockClient((r) async {
         if (r.url.path == '/j/subject_suggest') return response(suggestion);
-        if (r.url.path.endsWith('/credits')) return response({'items': [
+        if (r.url.path.endsWith('/credits')) {
+          return response({'items': [
           {'id': '1', 'name': '范伟', 'character': '演员 (饰 王响)', 'roles': ['演员']}]});
-        if (r.url.path.endsWith('/photos')) return response({'total': 2, 'photos': [
+        }
+        if (r.url.path.endsWith('/photos')) {
+          return response({'total': 2, 'photos': [
           {'image': {'large': {'url': 'https://img.example/a.jpg'}}},
           {'image': {'large': {'url': 'https://img.example/b.jpg'}}}]});
+        }
         return response(subject);
       })),
     );
@@ -75,10 +79,14 @@ void main() {
   test('人物简介为空时用 Wikidata 补一句，照片与作品不动', () async {
     final service = ExternalMetaService(
       douban: douban(MockClient((r) async {
-        if (r.url.path.endsWith('/photos')) return response({'total': 1, 'photos': [
+        if (r.url.path.endsWith('/photos')) {
+          return response({'total': 1, 'photos': [
           {'image': {'large': {'url': 'https://img.example/p.jpg'}}}]});
-        if (r.url.path.endsWith('/works')) return response({'total': 1, 'works': [
+        }
+        if (r.url.path.endsWith('/works')) {
+          return response({'total': 1, 'works': [
           {'roles': ['演员'], 'work': {'id': '1', 'title': '漫长的季节', 'type': 'tv', 'year': '2023'}}]});
+        }
         return response({'title': '范伟'});
       })),
       wikidata: WikidataService(
@@ -109,8 +117,10 @@ void main() {
     var bgmCalls=0;
     final service=ExternalMetaService(douban:douban(MockClient((r) async {
       if(r.url.path=='/j/subject_suggest') return response(suggestion);
-      if(r.url.path.endsWith('/credits')) return response({'items':[
+      if(r.url.path.endsWith('/credits')) {
+        return response({'items':[
         {'id':'1','name':'范伟','character':'演员 (饰 王响)','roles':['演员']}]});
+      }
       return response(subject);
     })),bangumi:BangumiService(client:MockClient((_) async {
       bgmCalls++;return response({},500);
@@ -141,8 +151,10 @@ void main() {
   test('Douban challenge falls back to Bangumi without aborting the page', () async {
     final service=ExternalMetaService(douban:douban(MockClient((_) async=>response({},403))),
       bangumi:BangumiService(client:MockClient((r) async {
-        if(r.method=='POST') return response({'data':[{'id':431299,'name_cn':'漫长的季节','name':'The Long Season',
+        if(r.method=='POST') {
+          return response({'data':[{'id':431299,'name_cn':'漫长的季节','name':'The Long Season',
           'type':6,'platform':'国产剧','date':'2023-04-22','eps':12}]});
+        }
         if(r.url.path.endsWith('/persons')) return response([]);
         return response({'id':431299,'name_cn':'漫长的季节','summary':'Bangumi 简介'});
       }),minInterval:Duration.zero));

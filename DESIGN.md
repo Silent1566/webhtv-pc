@@ -342,7 +342,7 @@ components:
 
 **仍未做：**
 
-- **`AppMotion` 的 `fast` / `slow` / `emphasized` 无调用点。** 只有 `base` 与 `ease` 有（源场换源时选中环的过渡）。其余三个是常规档位，留着备用——在有人真的用上之前，它们只是**声明**，不是既成事实。
+- ~~**`AppMotion` 的 `fast` / `slow` / `emphasized` 无调用点。**~~ 原记载：「只有 `base` 与 `ease` 有（源场换源时选中环的过渡）。其余三个是常规档位，留着备用……它们只是**声明**，不是既成事实」。**2026-11-20 更正**：`fast` 实测 4 处（`lib/ui/async_action_feedback.dart:104`、`lib/ui/browse_pages.dart:1034`、`lib/ui/player_page.dart:4633`、`lib/ui/app_motion.dart:58`）、`slow` 1 处（`lib/ui/app_motion.dart:54`），`base` 7 处、`ease` 10 处；`lib/ui/app_motion.dart:28` 的 `AppMotionScope` 还统一按 `reducedMotion` 门控。仅 `emphasized`（`lib/ui/tokens.dart:91`）仍无调用点。
 - **`t4_sweep_flow_test` 仍红。** 已用 `git worktree` 检出干净 HEAD 证明**同一个用例在 HEAD 上也失败**（预先存在），但**根因未查**。
 - **筛选面板的观感未验证。** 面板渲染在 `Navigator` 的 `Overlay` 里，本项目的截图 harness 取的是 `Scaffold` 那层的 `RepaintBoundary`，**拍不到浮层**。面板内容由断言保证（打开后 `剧情` / `地区` 必须出现），但"看起来对不对"只能靠人眼在真机上确认。
 - **同类「周期定时器 + `pumpAndSettle`」写法可能还在别处。** `live_danmaku_flow_test` 已修（10 分钟超时 → 11 秒），但改的时候要按**状态条件**等待而不是等"界面安静"。
@@ -668,7 +668,7 @@ UI 不重排——安卓两处实现曾各自排过一遍，同一部片子出�
 
 ### Open Items
 
-- **动效标度已定义但零调用点。** `AppMotion` 在 `tokens.dart` 里定义了 `fast 120ms` / `base 200ms` / `slow 320ms`，以及指数缓出 `Cubic(0.16, 1, 0.3, 1)` 与 `Cubic(0.2, 0, 0, 1)`；但全仓（`lib/` 与 `test/`）**没有任何 `AppMotion.` 引用，也没有任何 `Curves.` 使用**。它目前是**声明而非事实**，因此本文不把它写成生效的动效规则。要么在某处真正用上它（指数缓出是刻意的：从「已经可见」的默认状态出发——入场动画藏起来的内容会被读成「元素缺失」，然后在截图里被当成缺陷修掉），要么把它删掉。
+- ~~**动效标度已定义但零调用点。**~~ 原记载：「全仓（`lib/` 与 `test/`）**没有任何 `AppMotion.` 引用，也没有任何 `Curves.` 使用**……要么把它删掉」。**2026-11-20 更正：不成立，本项关闭**——`AppMotion.*` 实测 `lib/` 20 处（8 个文件，如 `lib/ui/async_action_feedback.dart:104`、`lib/ui/browse_pages.dart:238`、`lib/ui/toast.dart:343`）、`test/` 2 处，`Curves.` 1 处（`lib/ui/tmdb_detail_view.dart:1006`）。标度已是生效的动效规则；原附注「指数缓出是刻意的：从已经可见的默认状态出发」这一理由继续有效。
 
 ## Do's and Don'ts
 

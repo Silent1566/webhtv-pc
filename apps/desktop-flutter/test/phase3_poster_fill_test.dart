@@ -25,7 +25,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:webhtv_pc/ui/app.dart' show PosterImage;
+import 'package:webhtv_pc/ui/poster_image.dart';
 
 /// 与 `MemoryImage` 匹配的解码回调（供图片缓存预热用）。
 Future<ui.Codec> _decode(

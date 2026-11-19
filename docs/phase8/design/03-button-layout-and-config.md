@@ -1,6 +1,6 @@
 # 03 · 按钮排版与可配置（隐藏 + 重排）
 
-- 状态：设计指导，**待评审**
+- 状态：设计指导，**待评审**（2026-11-20 复核 §3.3：`lut` / `opening` / `ending` / `timer` / `repeat` 已核为已实现、`ad_feedback` 部分实现、`pan_diagnostic` 待复核，见表内更正；各行的排除结论本身未改）
 - 日期：2026-10-18
 - 上游参考：`F:\Workspace\webtv4\webhtv\app\src\main\java\com\fongmi\android\tv\setting\PlayerButtonSetting.java`、
   `app\src\main\java\com\fongmi\android\tv\ui\dialog\PlayerButtonConfigDialog.java`
@@ -79,13 +79,13 @@
 | --- | --- |
 | `decode` | PC 端只有 media-kit 一个引擎（`PlaybackEngine.mediaKit`），无解码器切换 |
 | `codec_capability` | PC 端无硬件解码能力探测 |
-| `lut` | 未实现 |
+| `lut` | 原记载：未实现。2026-11-20 复核：已实现，实现位置 `apps/desktop-flutter/lib/ui/lut_menu.dart`（顶栏菜单项，`lib/ui/player_page.dart:6254` 接入）；仍不占控制栏按钮位 |
 | `karaoke` / `immersive_audio` | 未实现 |
 | `cast` | 未实现（无 DLNA/投屏） |
-| `timer` | 未实现（无睡眠定时） |
-| `pan_diagnostic` | 未实现（无网盘专用诊断） |
-| `ad_feedback` | 未实现（无广告反馈） |
-| `opening` / `ending` | 未实现（无片头片尾跳过） |
+| `timer` | 原记载：未实现（无睡眠定时）。2026-11-20 复核：已实现，实现位置 `apps/desktop-flutter/lib/core/sleep_timer.dart`（`SleepTimerPlan`/`SleepTimerMode`）+ 播放器「定时关闭」菜单 `apps/desktop-flutter/lib/ui/player_page.dart:3151-3160`（`_applySleepTimer`，到点停在当前画面 `:1352-1354`）；会话级、退出即取消 |
+| `pan_diagnostic` | 原记载：未实现（无网盘专用诊断）。2026-11-20 复核：**待复核**——`apps/desktop-flutter/lib/services/pan_check_service.dart`（+ `lib/core/pan_check.dart`、`lib/ui/pan_check_page.dart`）做的是**分享链接可用性检测**（`docs/phase9/README.md` P1-8：状态码 + 页面特征、三态、并发 4、缓存），其头注释明确「不做各网盘私有 API 适配」；与安卓 `PanNetworkDiagnosticDialog`（网盘专用网络诊断）相似但未确认同一能力，故不断言已实现 |
+| `ad_feedback` | 原记载：未实现（无广告反馈）。2026-11-20 复核：**部分实现**——广告**过滤**已落地（`apps/desktop-flutter/lib/core/ad_rules.dart` 解析 `ads`/`hlsRules` 并清洗 m3u8，接入点 `lib/services/proxy_server.dart:71` 的 `setAdRules`）；但「广告**反馈**」（用户标记误杀/漏杀并上报）无对应 UI 与服务，`lib/services/ad_block_service.dart` 仍缺 |
+| `opening` / `ending` | 原记载：未实现（无片头片尾跳过）。2026-11-20 复核：已实现，实现位置 `apps/desktop-flutter/lib/core/skip_plan.dart:128`（`opening`/`ending` → intro/outro）与 `lib/ui/intro_skip_options_page.dart`；这两个 id 仍不配置为控制栏按钮 |
 | `parse` | 解析线路由站点配置决定，PC 端不暴露手动切换 |
 | `player` | 无引擎切换 |
 | `play_params` | 无播放参数面板 |
@@ -93,7 +93,7 @@
 | `scale` | 画面比例归顶栏菜单与右键菜单（`02` §6、`04` §4.1），不占控制栏按钮位 |
 | `reset` | PC 端的"重置"语义不明确（重置什么？），排除 |
 | `search` | 播放中搜索是独立流程，不在播放器浮层 |
-| `repeat` | 未实现（无循环模式） |
+| `repeat` | 原记载：未实现（无循环模式）。2026-11-20 复核：已实现，实现位置 `apps/desktop-flutter/lib/core/playback_repeat.dart`（关/单集/列表）+ 播放器循环菜单 `apps/desktop-flutter/lib/ui/player_page.dart:3107-3146`（选中即 `_repeat = mode`，连播决策 `:1376`），会话级不落盘 |
 | `display` | 屏显开关归 `02` 的屏显设置，不占控制栏按钮位 |
 | `title` | 标题归顶栏 |
 | `change` | 换源是详情页动作 |

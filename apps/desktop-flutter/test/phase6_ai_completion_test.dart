@@ -3,6 +3,7 @@
 /// L2：用注入的假 `http.Client` 捕获请求，**不发真实请求**。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -310,7 +311,8 @@ void main() {
     });
 
     test('超时 → ok=false，message 说明超时', () async {
-      final client = _SlowClient();
+      final release = Completer<void>();
+      final client = _SlowClient(release);
       final completion = AiCompletionClient(client: client);
       final result = await completion.complete(
         config: const AiConfig(
@@ -326,16 +328,22 @@ void main() {
 
       expect(result.ok, isFalse);
       expect(result.message, contains('超时'));
+      // 显式放行挂住的 send：收尾不留 pending 真实定时器。
+      release.complete();
       completion.close();
     });
   });
 }
 
-/// 永不返回的客户端，用于验证超时。
+/// 请求挂住不返回，直到用例用 [release] 显式放行，用于验证超时。
 class _SlowClient extends http.BaseClient {
+  _SlowClient(this.release);
+
+  final Completer<void> release;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    await Future<void>.delayed(const Duration(seconds: 30));
+    await release.future;
     return http.StreamedResponse(const Stream.empty(), 200);
   }
 }

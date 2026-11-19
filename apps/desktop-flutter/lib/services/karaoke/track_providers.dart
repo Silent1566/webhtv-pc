@@ -64,8 +64,9 @@ String decodeEntities(String value) => value
 
 Uri absoluteUri(String base, String path) {
   if (path.isEmpty) return Uri.parse(base);
-  if (path.startsWith('http://') || path.startsWith('https://'))
+  if (path.startsWith('http://') || path.startsWith('https://')) {
     return Uri.parse(path);
+  }
   if (path.startsWith('//')) return Uri.parse('https:$path');
   return Uri.parse(base).resolve(path.startsWith('/') ? path : '/$path');
 }
@@ -128,8 +129,9 @@ class KaraokeGithubProvider implements KaraokeTrackProvider {
 
   static List<String> parseGithubTree(String text) {
     final decoded = jsonDecode(text);
-    if (decoded is! Map<String, dynamic> || decoded['tree'] is! List)
+    if (decoded is! Map<String, dynamic> || decoded['tree'] is! List) {
       throw const KaraokeTrackException('invalid GitHub tree');
+    }
     final paths = <String>[];
     for (final row in decoded['tree'] as List) {
       if (row is! Map || row['type'] is! String) {
@@ -138,16 +140,18 @@ class KaraokeGithubProvider implements KaraokeTrackProvider {
       if (row['type'] != 'blob') continue;
       final path = row['path'];
       final size = row['size'];
-      if (path is! String)
+      if (path is! String) {
         throw const KaraokeTrackException('invalid GitHub path');
+      }
       if (!path.toLowerCase().endsWith('.txt')) continue;
       if (size is! int || size <= 0 || size > 512 * 1024) {
         throw const KaraokeTrackException('invalid GitHub track size');
       }
       if (path.startsWith('/') ||
           path.split('/').any((part) => part == '..') ||
-          path.contains('\\'))
+          path.contains('\\')) {
         continue;
+      }
       paths.add(path);
     }
     return paths;
@@ -270,8 +274,9 @@ class KaraokeUsdbProvider implements KaraokeTrackProvider {
           caseSensitive: false,
         ).firstMatch(block)?.group(1);
         if (id == null ||
-            !normalizeSearchText(title).contains(normalizeSearchText(keyword)))
+            !normalizeSearchText(title).contains(normalizeSearchText(keyword))) {
           continue;
+        }
         final url = 'https://usdb.animux.de/?link=detail&id=$id';
         if (results.any((r) => r.url == url)) continue;
         results.add(

@@ -38,6 +38,7 @@ import 'package:webhtv_pc/services/last_config_store.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
+import 'package:webhtv_pc/ui/startup_arguments.dart';
 
 import 'support/fake_sources_bridge.dart';
 import 'support/widget_settle.dart';

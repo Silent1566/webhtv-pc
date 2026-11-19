@@ -85,7 +85,8 @@ void main() {
       await store.load();
       expect(store.playerOptions.autoNext, isTrue);
       expect(store.playerOptions.demuxerMaxBytesMiB, PlayerOptions.maxDemuxerMaxMiB);
-      expect(store.playerOptions.failureFallback, PlayerFailureFallback.line);
+      // 迭代 3-C：无法识别的档位落到默认 off（脏值不得替用户打开自动回退）。
+      expect(store.playerOptions.failureFallback, PlayerFailureFallback.off);
       expect(
         store.playerOptions.longPressSpeed,
         PlayerOptions.defaultLongPressSpeed,

@@ -9,6 +9,8 @@ import 'package:webhtv_pc/ui/player_controller.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/ui_preferences_store.dart';
 
+import 'support/libmpv_guard.dart';
+
 class _VolumeIO extends PlatformPlayer {
   _VolumeIO() : super(configuration: const PlayerConfiguration());
   Completer<void>? gate;
@@ -119,7 +121,7 @@ void main() {
         expect(changes, [37]);
       }
     }
-  });
+  }, skip: libmpvUnavailableReason);
   PlayerController create(
     _VolumeIO media, {
     double initialVolume = 100,

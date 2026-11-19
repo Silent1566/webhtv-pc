@@ -580,8 +580,8 @@ class SherpaSpeechEngine implements SpeechEngine {
     this.online,
     this.offline,
     this.vad,
-    sherpa.OnlineStream? stream,
-  }) : _stream = stream;
+    this._stream,
+  });
 
   final sherpa.OnlineRecognizer? online;
   final sherpa.OfflineRecognizer? offline;

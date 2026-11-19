@@ -460,7 +460,9 @@ void main() {
       await crateConfig(state);
       expect(state.siteItems.map((item) => item.site.key), contains('base'));
       expect(state.webHomeLoadError, contains('FileSystemException'));
-      expect(() => state.webHomeSources, throwsA(isA<FileSystemException>()));
+      expect(state.webHomeLoadErrorDetail, contains('FileSystemException'));
+      // 2026-11-20 契约变更：getter 不再抛异常（build 期会炸整页），降级为空表并回报原因。
+      expect(state.webHomeSources, isEmpty);
       expect(sentinel.readAsStringSync(), 'keep');
     });
 
@@ -496,7 +498,8 @@ void main() {
       await crateConfig(state);
       expect(state.siteItems.map((item) => item.site.key), contains('base'));
       expect(state.webHomeLoadError, contains('FormatException'));
-      expect(() => state.webHomeSources, throwsFormatException);
+      // 同上：降级为空表 + 原因可读，不再抛。
+      expect(state.webHomeSources, isEmpty);
       expect(registry.readAsStringSync(), broken);
     });
 

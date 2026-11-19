@@ -6,9 +6,11 @@
 /// 这一层无法用假实现替代：任何一环断了都只在真实进程里表现出来。
 ///
 /// 本机没有可用浏览器时 `markTestSkipped`：这是能力探测，不是失败。
+@Tags(['browser'])
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
@@ -21,6 +23,20 @@ import 'package:webhtv_pc/core/sniff/sniff_types.dart';
 import 'package:webhtv_pc/services/parse_service.dart';
 
 import 'support/sniff_fixture_server.dart';
+
+/// 真浏览器用例显式 opt-in：本机/CI 默认不启动 Chromium 进程
+/// （启动外部浏览器是慢用例的来源之一），只有显式给出
+/// `WEBHTV_SNIFF_BROWSER` 时才跑。
+String? get _browserOptInReason =>
+    (Platform.environment['WEBHTV_SNIFF_BROWSER'] ?? '').isEmpty
+    ? '真浏览器用例默认跳过：设置 WEBHTV_SNIFF_BROWSER（浏览器可执行文件路径）后运行'
+    : null;
+
+/// 统一带上 opt-in 跳过条件；用例内的 `skipWithoutBrowser()` 继续兜住
+/// 「环境变量给了但本机浏览器起不来」。
+void _browserTest(String description, Future<void> Function() body) {
+  test(description, body, skip: _browserOptInReason);
+}
 
 void main() {
   BrowserCommand? browser;
@@ -65,7 +81,7 @@ void main() {
     headed: false,
   );
 
-  test('引擎：/parse/xhr 的页面脚本请求被识别为 network 候选', () async {
+  _browserTest('引擎：/parse/xhr 的页面脚本请求被识别为 network 候选', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     SniffSession? session;
@@ -85,7 +101,7 @@ void main() {
     }
   });
 
-  test('click 注入：只有点击 #play 才产出 /vod/click.m3u8', () async {
+  _browserTest('click 注入：只有点击 #play 才产出 /vod/click.m3u8', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     SniffSession? session;
@@ -105,7 +121,7 @@ void main() {
     }
   });
 
-  test('人机校验：先收到 SniffChallenge，随后仍拿到校验后的媒体地址', () async {
+  _browserTest('人机校验：先收到 SniffChallenge，随后仍拿到校验后的媒体地址', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     SniffSession? session;
@@ -131,7 +147,7 @@ void main() {
     }
   });
 
-  test('规则 regex：无后缀地址 /hs/... 只能靠规则命中；不给规则则拿不到候选', () async {
+  _browserTest('规则 regex：无后缀地址 /hs/... 只能靠规则命中；不给规则则拿不到候选', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     SniffSession? session;
@@ -176,7 +192,7 @@ void main() {
     }
   });
 
-  test('请求头注入：跨 scheme 只走导航 referrer，同 scheme 落到媒体请求上', () async {
+  _browserTest('请求头注入：跨 scheme 只走导航 referrer，同 scheme 落到媒体请求上', () async {
     if (skipWithoutBrowser()) return;
 
     // (1) 跨 scheme：配置 Referer=https，夹具页是 http。旧实现把 Referer 塞进
@@ -253,7 +269,7 @@ void main() {
     }
   });
 
-  test('ParseService type=0：解析页产出的 m3u8 成为 ParseRunResult.url', () async {
+  _browserTest('ParseService type=0：解析页产出的 m3u8 成为 ParseRunResult.url', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     final service = ParseService(
@@ -279,7 +295,7 @@ void main() {
     }
   });
 
-  test('ParseService type=0：页面不产出媒体请求时超时抛 parseSniffTimeout', () async {
+  _browserTest('ParseService type=0：页面不产出媒体请求时超时抛 parseSniffTimeout', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     final service = ParseService(
@@ -312,7 +328,7 @@ void main() {
     }
   });
 
-  test('ParseService type=4（Super）：坏 JSON 腿失败后 web 腿胜出', () async {
+  _browserTest('ParseService type=4（Super）：坏 JSON 腿失败后 web 腿胜出', () async {
     if (skipWithoutBrowser()) return;
     final engine = newEngine();
     final service = ParseService(

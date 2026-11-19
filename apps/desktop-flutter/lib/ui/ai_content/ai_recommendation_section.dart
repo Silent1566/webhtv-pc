@@ -7,7 +7,7 @@ import '../../core/ai_content/recommendation.dart';
 import '../../core/tmdb_identity.dart';
 import '../../services/ai_content/recommendation_service.dart';
 import '../../state/app_state.dart';
-import '../app.dart' show PosterImage;
+import '../poster_image.dart';
 import '../common.dart';
 import '../detail_recommendations.dart' show detailRecommendationRowHeight;
 import '../recommendation_info_dialog.dart';

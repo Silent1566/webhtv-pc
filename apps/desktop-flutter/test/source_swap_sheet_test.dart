@@ -20,7 +20,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/state/search_state.dart';
-import 'package:webhtv_pc/ui/app.dart' show PosterImage;
+import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/common.dart';
 import 'package:webhtv_pc/ui/source_field.dart';
 import 'package:webhtv_pc/ui/source_swap_sheet.dart';

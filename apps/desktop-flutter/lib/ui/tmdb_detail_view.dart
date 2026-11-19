@@ -38,7 +38,7 @@ import '../core/tmdb_identity.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'backdrop_scrim.dart';
 import 'common.dart';
 import 'layout_scale.dart';

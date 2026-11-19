@@ -4,6 +4,7 @@
 /// 为什么要真浏览器：这条链路上「定位 → 启动 → DevToolsActivePort → CDP →
 /// flatten session → 事件」任何一环断了都只在真实进程里表现出来，假服务无法证明。
 /// 本机没有可用浏览器时跳过——它是能力探测，不是失败。
+@Tags(['browser'])
 library;
 
 import 'dart:io';
@@ -24,6 +25,14 @@ const String _parsePage = '''
   });
 </script></body></html>
 ''';
+
+/// 真浏览器用例显式 opt-in：本机/CI 默认不启动 Chromium 进程
+/// （启动外部浏览器是慢用例的来源之一），只有显式给出
+/// `WEBHTV_SNIFF_BROWSER` 时才跑。
+String? get _browserOptInReason =>
+    (Platform.environment['WEBHTV_SNIFF_BROWSER'] ?? '').isEmpty
+    ? '真浏览器用例默认跳过：设置 WEBHTV_SNIFF_BROWSER（浏览器可执行文件路径）后运行'
+    : null;
 
 void main() {
   test('真实浏览器：页面脚本请求的 m3u8 出现在 CDP 网络事件里', () async {
@@ -126,7 +135,7 @@ void main() {
       }
       await server.close(force: true);
     }
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  }, skip: _browserOptInReason, timeout: const Timeout(Duration(minutes: 3)));
 }
 
 String? _requestUrl(CdpEvent event) {

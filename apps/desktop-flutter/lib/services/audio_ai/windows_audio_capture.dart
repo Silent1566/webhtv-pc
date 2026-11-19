@@ -157,7 +157,7 @@ class WindowsAudioCapture {
 
   static String resolveLibrary([String? explicit]) {
     final candidates = [
-      if (explicit != null) explicit,
+      ?explicit,
       p.join(
         File(Platform.resolvedExecutable).parent.path,
         'audio_ai_native.dll',

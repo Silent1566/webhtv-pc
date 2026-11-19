@@ -52,6 +52,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 缓存的是 pin 产物的落盘目录，不是脚本的运行结果：恢复后脚本仍会逐项校验哈希
+      # （prepare_python_runtime.ps1 对已存在的 bundle 是 validate 后直接返回，
+      # prepare_windows_native_deps.ps1 / prepare_libmpv_windows.ps1 命中校验即跳过下载）。
+      # 路径取自脚本默认值：runtime/python（OutputDir）、.local/python-runtime/cache、
+      # .local/win-deps、.local/libmpv-windows（三个 CacheDir）。
+      # key 只由仓库内的 pin 决定（两份 Python runtime lock + 两个 native 依赖脚本的 pin），
+      # 不用时间戳；也不加 restore-keys：跨 pin 的旧缓存会把"恢复后仍能通过"变成赌博。
+      - name: Cache pinned Python runtime and Windows native deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            runtime/python
+            .local/python-runtime/cache
+            .local/win-deps
+            .local/libmpv-windows
+          key: ${{ runner.os }}-build-deps-v1-${{ hashFiles('scripts/python-runtime.lock.json', 'scripts/python-runtime-linux.lock.json', 'scripts/prepare_libmpv_windows.ps1', 'scripts/prepare_windows_native_deps.ps1') }}
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -126,7 +143,7 @@ jobs:
       - name: Static analysis
         working-directory: apps/desktop-flutter
         shell: pwsh
-        run: dart analyze
+        run: dart analyze --fatal-infos
 
       # 必须排在单测之前：13 个 phase8 播放器用例会真实实例化 media_kit 的
       # NativePlayer，而 media_kit 在 Windows 上要求 `libmpv-2.dll` 位于
@@ -208,7 +225,17 @@ jobs:
           Copy-Item -LiteralPath $litertSource -Destination (Join-Path $litertDir 'libLiteRt.dll') -Force
           Write-Host "audio_ai native：$nativeDir"
           Write-Host "libLiteRt：$litertDir"
-          flutter test
+          # --coverage 的固定产物是 apps/desktop-flutter/coverage/lcov.info，
+          # 下面单独上传，artifact 名按 OS 区分。
+          flutter test --coverage
+
+      - name: Upload Windows unit test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-coverage-windows-x64
+          path: apps/desktop-flutter/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Package portable zip
         shell: pwsh
@@ -262,6 +289,16 @@ jobs:
           sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
             libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
             xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
+      # Linux 端只有下载缓存值得存：prepare_python_runtime_linux.py 先校验已存在的
+      # runtime/python，然后**重新装配**并覆盖它（_publish_bundle），所以缓存输出目录
+      # 一步都省不掉；真正省时间的是 .local/python-runtime-linux/cache 里那批
+      # 按 sha256 校验过的官方归档与 wheel（即 workflow 里 --cache-dir 的同一个目录）。
+      # key 与 Windows job 同一套 pin（两份 lock + 两个 native 依赖脚本），OS 前缀区分平台。
+      - name: Cache pinned Linux Python runtime artifacts
+        uses: actions/cache@v4
+        with:
+          path: .local/python-runtime-linux/cache
+          key: ${{ runner.os }}-build-deps-v1-${{ hashFiles('scripts/python-runtime.lock.json', 'scripts/python-runtime-linux.lock.json', 'scripts/prepare_libmpv_windows.ps1', 'scripts/prepare_windows_native_deps.ps1') }}
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -352,7 +389,7 @@ jobs:
         run: flutter pub get
         working-directory: apps/desktop-flutter
       - name: Static analysis
-        run: dart analyze
+        run: dart analyze --fatal-infos
         working-directory: apps/desktop-flutter
       - name: Prepare verified offline Linux Python runtime
         run: |-
@@ -364,12 +401,19 @@ jobs:
         env:
           APP_VERSION: ${{ steps.meta.outputs.version }}
       - name: Unit tests
-        run: xvfb-run -a flutter test
+        run: xvfb-run -a flutter test --coverage
         working-directory: apps/desktop-flutter
         timeout-minutes: 30
         env:
           GDK_BACKEND: x11
           LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Upload Linux unit test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-coverage-linux-x64
+          path: apps/desktop-flutter/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
       - name: Linux bundled Python native integration
         run: xvfb-run -a flutter test test/linux_bundled_python_integration_test.dart
         working-directory: apps/desktop-flutter
@@ -378,8 +422,12 @@ jobs:
           WEBHTV_REQUIRE_BUNDLED_PYTHON: '1'
           GDK_BACKEND: x11
           LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Install contract validation dependencies
+        run: python3 -m pip install jsonschema==4.23.0
       - name: Packaging and workflow contract tests
-        run: python3 -m unittest discover -s tests -p 'test_*linux*.py'
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Validate protocol and ABI contracts
+        run: python3 scripts/validate_contracts.py
       - name: Package AppImage and deb
         run: |-
           python3 scripts/package_linux.py \
@@ -603,3 +651,46 @@ jobs:
             dist/linux/release-info.json
           if-no-files-found: error
           retention-days: 7
+
+  # 试用 e2e：独立 job，只在 Linux，且**不在** build-linux 的 needs 链上——失败不阻塞
+  # 既有门禁，只产出证据。
+  # 试用：本地无法验证（缺 GTK dev 头），连续两次绿后去掉 continue-on-error。
+  # 验证对象是 integration_test/mvp_a_flow_test.dart 在真实 Linux 桌面上能否跑通；
+  # 两次全绿（同一 pin、同一 runner）之后再转成阻塞门禁。
+  e2e-linux-trial:
+    name: Trial e2e (Linux x64, non-blocking)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # 与 build-linux 完全相同的 apt 依赖：e2e 走同一套 GTK/X11/播放内核链路。
+      - name: Install native build and packaging dependencies
+        run: |-
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
+            xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Install Dart dependencies
+        run: flutter pub get
+        working-directory: apps/desktop-flutter
+      - name: Build Linux debug bundle
+        run: flutter build linux --debug
+        working-directory: apps/desktop-flutter
+      - name: Run MVP-A e2e flow under xvfb
+        run: xvfb-run -a flutter test integration_test/mvp_a_flow_test.dart -d linux
+        working-directory: apps/desktop-flutter
+        timeout-minutes: 30
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'

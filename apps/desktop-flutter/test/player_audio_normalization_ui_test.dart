@@ -18,6 +18,7 @@ import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
 import 'live_playback_session_test.dart' show fixture;
+import 'support/libmpv_guard.dart';
 import 'support/player_page_harness.dart';
 
 // Replace only the media transport; the page, controller, whitelist/readback
@@ -254,12 +255,18 @@ void _pageTest(String description, Future<void> Function(WidgetTester) body) {
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pump(Duration.zero);
     }
-  });
+  // skip 只收 bool；跳过理由见 support/libmpv_guard.dart。
+  }, skip: libmpvUnavailableReason != null);
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+  // 没有内核时引擎初始化会抛/挂（见 support/libmpv_guard.dart）。
+  if (libmpvUnavailableReason == null) {
+    MediaKit.ensureInitialized(
+      libmpv: Platform.environment['WEBHTV_TEST_LIBMPV'],
+    );
+  }
 
   _pageTest('volume submenu toggles real af, checkmark and persisted options', (
     tester,

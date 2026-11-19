@@ -234,10 +234,42 @@ ConvertTo-Json -InputObject \$result -Compress
     }
   }
 
+  /// 本地文件系统路径：Windows 盘符（`D:\` / `D:/`）、UNC
+  /// （`\\server\share`）或 POSIX 绝对路径。
+  ///
+  /// 只判形状、不碰文件系统：这里回答的是「这个字符串该被当成路径还是地址」，
+  /// 路径存不存在由播放器自己报错——探测一次磁盘并不会让启动更可靠，反而会
+  /// 让网络盘/挂载点在探测与启动之间发生变化。
+  static bool isLocalFilePath(String target) {
+    final value = target.trim();
+    if (value.isEmpty) return false;
+    if (RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(value)) return true;
+    if (value.startsWith(r'\\')) return true;
+    return value.startsWith('/');
+  }
+
+  /// 能交给原生播放器的目标：http(s) 地址、`file://` URI，或
+  /// [isLocalFilePath] 认定的本地路径。
+  ///
+  /// 其它协议（`ftp://`、`rtsp://`、`magnet:`、`javascript:` …）一律拒绝：
+  /// 外部播放器是我们拉起的**独立进程**，参数里出现「看起来像协议」的字符串
+  /// 就该当场拒绝，而不是把它当路径交给对方自己解释。
+  static bool isPlayableTarget(String target) {
+    final value = target.trim();
+    if (isLocalFilePath(value)) return true;
+    final lower = value.toLowerCase();
+    return lower.startsWith('http://') ||
+        lower.startsWith('https://') ||
+        lower.startsWith('file://');
+  }
+
   /// 启动播放器打开 [url]。
   ///
-  /// 输入只接受 http(s) 媒体地址；PotPlayer 的启动参数包装为其原生协议。
-  /// 本地文件路径与其他输入协议不在本能力范围内。
+  /// 输入接受 http(s) 媒体地址、`file://` URI 与本地文件绝对路径
+  /// （见 [isPlayableTarget]），其它协议一律拒绝。
+  ///
+  /// PotPlayer 的 `potplayer://` 只是**远程地址**的原生协议包装：本地路径必须
+  /// 给裸路径，`potplayer://D:\a.mkv` 会被当成 URL 的 host，路径直接丢。
   static Future<ExternalPlayerLaunchResult> launch({
     required String executable,
     required String url,
@@ -253,9 +285,9 @@ ConvertTo-Json -InputObject \$result -Compress
     if (!isExecutablePath(exe)) {
       return const ExternalPlayerLaunchResult.failure('播放器路径必须是独立程序文件路径');
     }
-    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+    if (!isPlayableTarget(target)) {
       return const ExternalPlayerLaunchResult.failure(
-        '当前地址不是 http(s)，无法交给外部播放器',
+        '当前地址既不是 http(s) 地址，也不是本地文件路径，无法交给外部播放器',
       );
     }
     final fileExists = exists ?? _fileExists;
@@ -263,9 +295,15 @@ ConvertTo-Json -InputObject \$result -Compress
       return ExternalPlayerLaunchResult.failure('播放器文件不存在：$exe');
     }
     final fileName = exe.split(RegExp(r'[/\\]')).last.toLowerCase();
-    // 与 alist-tvbox 浏览器入口一致；其他播放器仍接收普通媒体 URL。
+    // 与 alist-tvbox 浏览器入口一致；本地路径与 `file://` 给裸目标，其他播放器
+    // 仍接收普通媒体 URL。
+    final remote =
+        target.toLowerCase().startsWith('http://') ||
+        target.toLowerCase().startsWith('https://');
     final argument =
-        fileName == 'potplayermini64.exe' || fileName == 'potplayermini.exe'
+        remote &&
+            (fileName == 'potplayermini64.exe' ||
+                fileName == 'potplayermini.exe')
         ? 'potplayer://$target'
         : target;
     try {

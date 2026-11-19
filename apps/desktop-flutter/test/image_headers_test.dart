@@ -18,7 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/image_headers.dart';
 import 'package:webhtv_pc/core/image_user_agent.dart';
 import 'package:webhtv_pc/core/protocol.dart';
-import 'package:webhtv_pc/ui/app.dart' show PosterImage;
+import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/image_header_scope.dart';
 
 /// 用户真实配置（AT 配置第 1/11 条）里豆瓣图床的写法。

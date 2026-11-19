@@ -4,7 +4,19 @@ import 'tmdb_detail_model.dart';
 import 'tmdb_playback.dart';
 import 'history_view.dart';
 
-/// 一次播放请求（由详情页或命令行构造）。
+/// 播放源的种类。
+///
+/// 只有两类，没有中间态：一类是站点解析（含本地代理）产出的媒体地址，
+/// 一类是用户通过「打开本地文件」挑中的一个磁盘文件。
+enum PlaybackSourceKind {
+  /// 站点解析或本地代理产出的媒体地址：可带 Header、可跨源续播。
+  remote,
+
+  /// 磁盘上的本地媒体文件：没有站点、没有 Header、不经回环代理。
+  local,
+}
+
+/// 一次播放请求（由详情页、命令行或「打开本地文件」构造）。
 class PlaybackRequest {
   const PlaybackRequest({
     required this.url,
@@ -35,8 +47,62 @@ class PlaybackRequest {
     this.sourceKey = '',
     this.parseSources = const <String>[],
     this.parseSource = '',
+    this.sourceKind = PlaybackSourceKind.remote,
+    this.localPath = '',
   }) : episodeTarget = episodeTarget ?? url,
        playbackFlag = playbackFlag ?? flag;
+
+  /// 「打开本地文件」的请求：把一个磁盘路径包成 [PlaybackSourceKind.local]。
+  ///
+  /// 本地源与站点播放的**边界**（Wave 1 定死；播放器页 Wave 2 再消费）：
+  /// - **不注入 Header**：[headers] / [subtitleHeaders] 恒为空——本地文件没有
+  ///   站点鉴权，也没有理由让 Cookie/Referer 跟着一个本地路径走；
+  /// - **不经回环代理、不过站点解析**：[url] 就是磁盘路径本身，[directUrl] 仍为
+  ///   `false`——`directUrl` 在播放器页等价于「直播」，借用它会让进度条消失；
+  /// - **不参与跨源续播与多源聚合**：[episodeTarget] 只回退成同一路径，没有站点
+  ///   可以重新解析；[playLines] / [lineRoutes] / [episodeCardsByFlag] /
+  ///   [parseSources] / [parseSource] 全为空，[resumeSeed] 不带；
+  /// - [siteKey] 固定 [localSiteKey]：历史与进度按站点分组，本地播放集中在
+  ///   这一个合成站点下，不会混进任何真实配置的续播。
+  factory PlaybackRequest.localFile({required String path, String? title}) {
+    final target = path.trim();
+    if (target.isEmpty) {
+      throw ArgumentError.value(path, 'path', '本地文件路径不能为空');
+    }
+    final name = _fileName(target);
+    final display = (title ?? '').trim();
+    final resolved = display.isEmpty ? _fileTitle(name) : display;
+    return PlaybackRequest(
+      url: target,
+      // `url` 与 `localPath` 必须一致：播放器页直接 `open(request.url)`，它不看
+      // 源种类——两者分叉，本地文件就打不开了。
+      localPath: target,
+      sourceKind: PlaybackSourceKind.local,
+      title: resolved,
+      siteKey: localSiteKey,
+      vodId: target,
+      vodName: resolved,
+      episodeName: name,
+      flag: localSourceFlag,
+    );
+  }
+
+  /// 本地播放的合成站点标识（历史按站点分组，本地播放集中在这一条下）。
+  static const String localSiteKey = 'local-file';
+
+  /// 本地播放的线路名。
+  static const String localSourceFlag = '本地文件';
+
+  static String _fileName(String path) {
+    final parts = path.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty);
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  /// 去掉扩展名：`阿凡达.2009.mkv` 的标题只留 `阿凡达.2009`。
+  static String _fileTitle(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    return dot <= 0 ? fileName : fileName.substring(0, dot);
+  }
 
   final String url;
   final String title;
@@ -147,6 +213,20 @@ class PlaybackRequest {
   /// 当前生效的解析源名称；[parseSources] 为空时无意义。
   final String parseSource;
 
+  /// 本次播放的源种类；[PlaybackSourceKind.local] 时看 [localPath]。
+  final PlaybackSourceKind sourceKind;
+
+  /// 本地文件的磁盘路径；空串 = 非本地源。
+  ///
+  /// 为本地源时**等于** [url]（见 [PlaybackRequest.localFile]）。
+  final String localPath;
+
+  /// 是否本地文件播放。
+  ///
+  /// 消费方应只看这一个判据，不要用「地址以 `/` 或盘符开头」之类去猜：本地
+  /// 与否是请求的语义，不是地址的形状。
+  bool get isLocal => sourceKind == PlaybackSourceKind.local;
+
   /// 地址已是最终可播地址（直播频道），无需经站点播放入口解析。
   ///
   /// 直播源的 `urls` 直接在本地就是媒体地址，走解析器只会多余地请求站点；
@@ -178,6 +258,8 @@ class PlaybackRequest {
     bool clearSourceKey = false,
     List<String>? parseSources,
     String? parseSource,
+    PlaybackSourceKind? sourceKind,
+    String? localPath,
     // 换集要同时换成该集的 TMDB 身份；缺这个参数会让 `copyWith(tmdb: …)`
     // 在编译期就失败（beta 抽类时只留了构造实参，漏了形参）。
     TmdbPlaybackIdentity? tmdb,
@@ -225,6 +307,11 @@ class PlaybackRequest {
       sourceKey: clearSourceKey ? '' : (sourceKey ?? this.sourceKey),
       parseSources: parseSources ?? this.parseSources,
       parseSource: parseSource ?? this.parseSource,
+      // 源种类与本地路径原样带过：换集对本地文件没有意义，但漏掉这两个字段会
+      // 把一次「copyWith 之后的本地请求」悄悄降级成 remote，播放器页从此按站点
+      // 语义处理它（例如拿本地路径去问站点重新解析）。
+      sourceKind: sourceKind ?? this.sourceKind,
+      localPath: localPath ?? this.localPath,
     );
   }
 }

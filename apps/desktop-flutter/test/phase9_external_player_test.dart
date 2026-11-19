@@ -270,14 +270,28 @@ void main() {
       }
     });
 
-    test('非 http(s) 地址拒绝交给外部进程', () async {
-      final result = await ExternalPlayers.launch(
-        executable: r'D:\PotPlayer\PotPlayerMini64.exe',
-        url: r'D:\movie.mkv',
-        exists: (_) => true,
-      );
-      expect(result.ok, isFalse);
-      expect(result.error, contains('http(s)'));
+    test('非 http(s)/本地路径的协议一律拒绝交给外部进程', () async {
+      for (final target in [
+        'ftp://media.example/a.mkv',
+        'rtsp://media.example/live',
+        'magnet:?xt=urn:btih:0000',
+        'javascript:alert(1)',
+        'movie.mkv',
+      ]) {
+        var started = false;
+        final result = await ExternalPlayers.launch(
+          executable: r'D:\PotPlayer\PotPlayerMini64.exe',
+          url: target,
+          exists: (_) => true,
+          starter: (_, _) async {
+            started = true;
+            return _FakeProcess();
+          },
+        );
+        expect(result.ok, isFalse, reason: target);
+        expect(result.error, contains('http(s)'), reason: target);
+        expect(started, isFalse, reason: target);
+      }
     });
 
     test('可执行文件不存在时拒绝，且不启动进程', () async {
@@ -374,6 +388,101 @@ void main() {
       );
       expect(result.ok, isTrue);
       expect(usedArgs, ['https://cdn.example.com/a.m3u8']);
+    });
+  });
+
+  group('本地文件（ExternalPlayers.launch）', () {
+    test('Windows 路径给裸路径，不套 potplayer:// 协议', () async {
+      List<String>? usedArgs;
+      final result = await ExternalPlayers.launch(
+        executable: r'D:\PotPlayer\PotPlayerMini64.exe',
+        url: r'D:\电影\阿凡达 2009.mkv',
+        exists: (_) => true,
+        starter: (_, arguments) async {
+          usedArgs = arguments;
+          return _FakeProcess();
+        },
+      );
+      expect(result.ok, isTrue);
+      expect(result.error, isNull);
+      expect(usedArgs, [r'D:\电影\阿凡达 2009.mkv']);
+    });
+
+    test('POSIX 绝对路径同样给裸路径', () async {
+      List<String>? usedArgs;
+      final result = await ExternalPlayers.launch(
+        executable: '/usr/bin/mpv',
+        url: '/home/someone/videos/a b.mp4',
+        exists: (_) => true,
+        starter: (_, arguments) async {
+          usedArgs = arguments;
+          return _FakeProcess();
+        },
+      );
+      expect(result.ok, isTrue);
+      expect(usedArgs, ['/home/someone/videos/a b.mp4']);
+    });
+
+    test('file:// URI 也接受，且不打 PotPlayer 协议前缀', () async {
+      List<String>? usedArgs;
+      final result = await ExternalPlayers.launch(
+        executable: r'D:\DAUM\PotPlayer\PotPlayerMini64.exe',
+        url: 'file:///D:/media/a.mkv',
+        exists: (_) => true,
+        starter: (_, arguments) async {
+          usedArgs = arguments;
+          return _FakeProcess();
+        },
+      );
+      expect(result.ok, isTrue);
+      expect(usedArgs, ['file:///D:/media/a.mkv']);
+    });
+
+    test('路径前后空白被裁掉', () async {
+      List<String>? usedArgs;
+      final result = await ExternalPlayers.launch(
+        executable: r'D:\VLC\vlc.exe',
+        url: '  D:\\a.mkv  ',
+        exists: (_) => true,
+        starter: (_, arguments) async {
+          usedArgs = arguments;
+          return _FakeProcess();
+        },
+      );
+      expect(result.ok, isTrue);
+      expect(usedArgs, [r'D:\a.mkv']);
+    });
+
+    test('isPlayableTarget 只认 http(s)/file:///本地绝对路径', () {
+      for (final accepted in [
+        'http://127.0.0.1:9/p/token/a',
+        'https://cdn.example.com/a.m3u8',
+        'file:///D:/media/a.mkv',
+        r'D:\media\a.mkv',
+        'D:/media/a.mkv',
+        r'\\nas\share\a.mkv',
+        '/mnt/media/a.mkv',
+      ]) {
+        expect(
+          ExternalPlayers.isPlayableTarget(accepted),
+          isTrue,
+          reason: accepted,
+        );
+      }
+      for (final rejected in [
+        'ftp://media.example/a.mkv',
+        'rtsp://media.example/live',
+        'magnet:?xt=urn:btih:0000',
+        'javascript:alert(1)',
+        'a.mkv',
+        '   ',
+      ]) {
+        expect(
+          ExternalPlayers.isPlayableTarget(rejected),
+          isFalse,
+          reason: rejected,
+        );
+      }
     });
   });
 

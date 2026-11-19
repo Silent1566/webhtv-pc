@@ -7,7 +7,7 @@
     py -3 host.py --manifest site.json --entry site/loader.py --catvod
     py -3 host.py --manifest site.json --entry site/spider.py --hold
 
-宿主负责协议帧、取消、心跳与错误信封；`--entry` 指定的模块只实现 Spider 语义，
+宿主负责协议帧、取消、宿主侧 deadline、并发上限、心跳与错误信封；`--entry` 指定的模块只实现 Spider 语义，
 不接触 stdio。这样第三方 Python 站源只需要写业务代码，帧实现只有一份
 （`webhtv_ipc.py`），避免每个站点各自实现协议从而出现行为漂移。
 
@@ -18,6 +18,9 @@
 - 进程由主程序以独立子进程启动，工作目录是每站点独立临时目录；
 - 只继承白名单环境变量，宿主凭据不传递给站源；
 - 一切异常都转为统一错误对象写回 stdout，栈信息只写 stderr。
+
+退出码：0 正常；2 manifest/入口不可用；3 站源初始化失败；4 站源在 deadline 之后
+仍不返回，宿主放弃本进程（`webhtv_ipc.SidecarServer._abandon`）。
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from webhtv_catvod import create_catvod_spider  # noqa: E402
-from webhtv_ipc import SidecarServer, log  # noqa: E402
+from webhtv_ipc import DEFAULT_MAX_WORKERS, SidecarServer, log  # noqa: E402
 
 #: manifest.runtime 取该值时自动进入 CatVod 方言模式（等价于命令行 --catvod）。
 CATVOD_RUNTIME = "python-catvod"
@@ -154,7 +157,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="WebHTV Python Spider sidecar")
     parser.add_argument("--entry", required=True, help="站源模块路径")
     parser.add_argument("--manifest", help="manifest JSON 路径")
-    parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="并发上限；缺省取 manifest 的 limits.concurrency（再缺省为 "
+        f"{DEFAULT_MAX_WORKERS}），与 JS 宿主的 maxWorkers 同义",
+    )
     parser.add_argument(
         "--catvod",
         action="store_true",

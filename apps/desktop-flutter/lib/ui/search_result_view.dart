@@ -19,7 +19,7 @@ import '../core/hot_rank_layout.dart';
 import '../core/protocol.dart';
 import '../core/search_result_filter.dart';
 import '../state/search_state.dart';
-import 'app.dart';
+import 'poster_image.dart';
 import 'common.dart';
 import 'tokens.dart';
 

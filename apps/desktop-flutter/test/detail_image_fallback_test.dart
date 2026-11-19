@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
-import 'package:webhtv_pc/ui/app.dart' show PosterImage;
+import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/image_header_scope.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';

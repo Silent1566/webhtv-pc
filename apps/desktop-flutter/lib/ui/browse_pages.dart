@@ -38,7 +38,7 @@ import 'folder_browser_page.dart';
 import '../state/tmdb_state.dart';
 import 'ai_content/ai_recommendation_section.dart';
 import 'ai_settings_page.dart';
-import 'app.dart';
+import 'poster_image.dart';
 import 'async_action_feedback.dart';
 import 'browser_component_settings.dart';
 import 'config_pages.dart';

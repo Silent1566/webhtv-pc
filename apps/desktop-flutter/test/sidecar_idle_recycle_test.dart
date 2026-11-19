@@ -1,3 +1,6 @@
+@Tags(['external'])
+library;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -106,6 +109,7 @@ void main() {
     late LocalSpider gatedSpider;
     late String hostPath;
     final hosts = <SpiderHost>[];
+    final extraProcesses = <SidecarProcess>[];
 
     String extend({bool gateInit = false}) =>
         jsonEncode({'base': gate.base, 'gateInit': gateInit});
@@ -148,6 +152,7 @@ void main() {
 
     setUp(() async {
       hosts.clear();
+      extraProcesses.clear();
       temp = await Directory.systemTemp.createTemp('webhtv-idle-recycle-');
       gate = _GateServer(
         await HttpServer.bind(InternetAddress.loopbackIPv4, 0),
@@ -192,6 +197,9 @@ void main() {
       await supervisor.shutdownAll().timeout(_waitBound);
       for (final host in hosts) {
         await host.process.dispose();
+      }
+      for (final process in extraProcesses) {
+        await process.dispose();
       }
       await gate.close();
       await temp.delete(recursive: true);
@@ -490,6 +498,164 @@ void main() {
         expect(workDirCount(), 0);
       },
     );
+
+    // -----------------------------------------------------------------------
+    // 超时兜底终止（§9.3.1「超时后依次执行取消、宽限等待、终止进程树」）
+    //
+    // 宽限期只该判「这一个请求慢」，不该判「整站挂死」：还有别的调用方在途时
+    // 终止进程等于替别人做决定，一次慢请求就能让整站下线。
+    // -----------------------------------------------------------------------
+    group('超时兜底终止守卫', () {
+      // 一个真实但「死也不说话」的子进程：读过 stdin，永不写帧，也不认取消。
+      //
+      // 只有完全无响应的进程才该走到终止那一步；用 /bin/sh + sleep 造它，
+      // 判定就与站源是否配合取消无关。
+      Future<SidecarProcess> startHungProcess() async {
+        final workDir = p.join(temp.path, 'hung', 'site');
+        final process = await SidecarProcess.start(
+          SidecarLaunchSpec(
+            siteKey: 'hung-fixture',
+            executable: '/bin/sh',
+            arguments: const ['-c', 'exec sleep 60'],
+            workingDirectory: workDir,
+            logFile: p.join(workDir, 'stderr.log'),
+          ),
+        );
+        extraProcesses.add(process);
+        return process;
+      }
+
+      test('并发请求中一次超时不误杀进程', () async {
+        final host = await start();
+        final slow = host.call(
+          SpiderMethod.home,
+          requestId: 'slow',
+          deadline: const Duration(milliseconds: 200),
+        );
+        final slowFailure = expectLater(
+          slow,
+          throwsA(
+            isA<SpiderError>().having(
+              (error) => error.code,
+              'code',
+              SpiderErrorCode.timeout,
+            ),
+          ),
+        );
+        // 两条 HTTP 连接同时被扣住 = 两个请求真的并发在同一个 sidecar 里在途。
+        final slowHttp = await gate.take('/home');
+        final fast = host.call(
+          SpiderMethod.home,
+          requestId: 'fast',
+          deadline: const Duration(seconds: 30),
+        );
+        final fastHttp = await gate.take('/home');
+        await slowFailure;
+        // 守住原 500ms 窗口：守卫到点时 fast 仍被扣在 gate 上。
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        expect(host.process.isRunning, isTrue, reason: '一次慢请求不得杀掉整站进程');
+        expect(host.process.killTreeCount, 0);
+        expect(supervisor.statuses().single.failureCount, 0);
+        for (final request in [slowHttp, fastHttp]) {
+          await gate.reply(request, {'list': [], 'done': 'pong'});
+        }
+        final result = await fast as Map;
+        expect(result['done'], 'pong', reason: '另一个在途请求必须照常成功');
+        expect(result['list'], isEmpty);
+        expect(host.process.isRunning, isTrue);
+      });
+
+      test('仍有其它在途请求时守卫只放弃这一刀', () async {
+        if (Platform.isWindows) return;
+        final process = await startHungProcess();
+        final timedOut = expectLater(
+          process.request(
+            SpiderMethod.home,
+            const {},
+            deadline: const Duration(milliseconds: 200),
+          ),
+          throwsA(
+            isA<SpiderError>().having(
+              (error) => error.code,
+              'code',
+              SpiderErrorCode.timeout,
+            ),
+          ),
+        );
+        // 第二个请求同样没有响应，但它让 `_pending` 一直非空：这不代表进程挂死。
+        final stillInFlight = expectLater(
+          process.request(
+            SpiderMethod.search,
+            const {},
+            deadline: const Duration(seconds: 30),
+          ),
+          throwsA(isA<SpiderError>()),
+        );
+        await timedOut;
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        expect(process.killGuardArmed, isFalse, reason: '守卫到期后应当放弃这一刀');
+        expect(process.killTreeCount, 0, reason: '还有调用方在途时不得终止进程');
+        expect(process.isRunning, isTrue);
+        await process.dispose();
+        await stillInFlight;
+      });
+
+      test('dispose 之后宽限期守卫不再补刀', () async {
+        if (Platform.isWindows) return;
+        final process = await startHungProcess();
+        await expectLater(
+          process.request(
+            SpiderMethod.home,
+            const {},
+            deadline: const Duration(milliseconds: 200),
+          ),
+          throwsA(
+            isA<SpiderError>().having(
+              (error) => error.code,
+              'code',
+              SpiderErrorCode.timeout,
+            ),
+          ),
+        );
+        expect(process.killGuardArmed, isTrue, reason: '超时后必须挂上宽限守卫');
+        await process.dispose();
+        expect(process.killGuardArmed, isFalse, reason: 'dispose 必须撤销守卫');
+        final kills = process.killTreeCount;
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        expect(
+          process.killTreeCount,
+          kills,
+          reason: '守卫若无句柄，会在 dispose 之后照样补一刀',
+        );
+        expect(process.killGuardArmed, isFalse);
+        expect(process.isRunning, isFalse);
+      });
+
+      test('真正挂死的进程仍会在宽限期后终止', () async {
+        if (Platform.isWindows) return;
+        final process = await startHungProcess();
+        await expectLater(
+          process.request(
+            SpiderMethod.home,
+            const {},
+            deadline: const Duration(milliseconds: 200),
+          ),
+          throwsA(
+            isA<SpiderError>().having(
+              (error) => error.code,
+              'code',
+              SpiderErrorCode.timeout,
+            ),
+          ),
+        );
+        expect(process.killGuardArmed, isTrue);
+        // 没有其它在途请求：宽限期一过必须补刀，进程树终止要能到达。
+        final exit = await process.done.timeout(_waitBound);
+        expect(exit.expected, isTrue, reason: '终止由超时守卫发起，属于预期停机');
+        expect(process.isRunning, isFalse);
+        expect(process.killTreeCount, 1);
+      });
+    });
   });
 }
 

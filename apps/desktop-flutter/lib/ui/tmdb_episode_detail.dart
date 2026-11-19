@@ -13,7 +13,7 @@ import '../core/tmdb_source_payload.dart';
 import 'tmdb_widgets.dart' show TmdbVideoTile;
 import '../services/tmdb_service.dart';
 import '../state/detail_recommendation_state.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'tmdb_detail_page.dart';
 import 'tokens.dart';
 import 'tmdb_detail_view.dart' show showTmdbPhotoViewer, TmdbPersonPage;

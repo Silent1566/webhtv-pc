@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -45,6 +46,7 @@ import 'player_page.dart';
 import 'scroll_behavior.dart';
 import 'search_page.dart';
 import 'spider_page.dart';
+import 'startup_arguments.dart';
 import 'theme.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -76,75 +78,6 @@ String themeModeName(ThemeMode mode) {
       return 'system';
     case ThemeMode.dark:
       return 'dark';
-  }
-}
-
-/// 命令行为参数，供冒烟验证与自动化使用：
-/// - `--media=<url>`：启动后直接播放指定地址；
-/// - `--config=<path|url|json>`：启动后自动导入配置；
-/// - `--fullscreen=true`：启动即全屏；
-/// - `--screenshot-ready-file=<path>`：主界面可交互后写入标记文件，供外部脚本等待。
-class StartupArguments {
-  const StartupArguments({
-    this.media,
-    this.config,
-    this.fullscreen = false,
-    this.readyFile,
-    this.headers = const {},
-    this.seekSeconds,
-    this.traceFile,
-  });
-
-  final String? media;
-  final String? config;
-  final bool fullscreen;
-  final String? readyFile;
-  final Map<String, String> headers;
-  final double? seekSeconds;
-
-  /// `--startup-trace=<path>`：启动阶段追踪输出文件。
-  final String? traceFile;
-
-  static StartupArguments parse(List<String> arguments) {
-    String? media;
-    String? config;
-    String? readyFile;
-    String? traceFile;
-    var fullscreen = false;
-    double? seek;
-    final headers = <String, String>{};
-    for (final argument in arguments) {
-      if (argument.startsWith('--media=')) {
-        media = argument.substring('--media='.length);
-      } else if (argument.startsWith('--config=')) {
-        config = argument.substring('--config='.length);
-      } else if (argument.startsWith('--screenshot-ready-file=')) {
-        readyFile = argument.substring('--screenshot-ready-file='.length);
-      } else if (argument.startsWith('--startup-trace=')) {
-        traceFile = argument.substring('--startup-trace='.length);
-      } else if (argument.startsWith('--header=')) {
-        final header = argument.substring('--header='.length);
-        final separator = header.indexOf(':');
-        if (separator > 0) {
-          headers[header.substring(0, separator).trim()] = header
-              .substring(separator + 1)
-              .trim();
-        }
-      } else if (argument.startsWith('--seek=')) {
-        seek = double.tryParse(argument.substring('--seek='.length));
-      } else if (argument == '--fullscreen=true') {
-        fullscreen = true;
-      }
-    }
-    return StartupArguments(
-      media: media,
-      config: config,
-      fullscreen: fullscreen,
-      readyFile: readyFile,
-      headers: headers,
-      seekSeconds: seek,
-      traceFile: traceFile,
-    );
   }
 }
 
@@ -457,10 +390,22 @@ enum ShellSection {
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.state, required this.startup});
+  const AppShell({
+    super.key,
+    required this.state,
+    required this.startup,
+    this.pickLocalMediaFile,
+  });
 
   final AppState state;
   final StartupArguments startup;
+
+  /// 「打开本地文件」用的文件选择器；`null` = 走原生 `file_picker`。
+  ///
+  /// 与 `PlayerPage.externalPlayerStarter` 同一个理由：原生窗口在测试里起不来，
+  /// 注入一个返回固定路径的替身，才能验证「选文件 → 构造本地请求 → 交给既有
+  /// 播放器入口」这条链路本身。
+  final Future<String?> Function()? pickLocalMediaFile;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -857,26 +802,39 @@ class _AppShellState extends State<AppShell> {
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
             state: _state,
-            request: PlaybackRequest(
-              url: media,
-              headers: widget.startup.headers,
-              title: '命令行媒体',
-              siteKey: 'cli',
-              vodId: 'cli',
-              vodName: '命令行媒体',
-              episodeName: '媒体',
-              flag: 'cli',
-              startPosition: widget.startup.seekSeconds == null
-                  ? null
-                  : Duration(
-                      milliseconds: (widget.startup.seekSeconds! * 1000)
-                          .round(),
-                    ),
-            ),
+            request: _commandLineRequest(media),
           ),
         ),
       );
     });
+  }
+
+  /// 命令行媒体 → 播放请求。
+  ///
+  /// 本地文件走 [PlaybackRequest.localFile]（不带 Header、siteKey 固定为
+  /// `local-file`），其余仍是原来的 `cli` 合成站点。判据来自
+  /// [StartupArguments.mediaIsLocal]，UI 层不重新猜路径形状。
+  PlaybackRequest _commandLineRequest(String media) {
+    final seek = widget.startup.seekSeconds == null
+        ? null
+        : Duration(
+            milliseconds: (widget.startup.seekSeconds! * 1000).round(),
+          );
+    if (widget.startup.mediaIsLocal) {
+      final local = PlaybackRequest.localFile(path: media);
+      return seek == null ? local : local.copyWith(startPosition: seek);
+    }
+    return PlaybackRequest(
+      url: media,
+      headers: widget.startup.headers,
+      title: '命令行媒体',
+      siteKey: 'cli',
+      vodId: 'cli',
+      vodName: '命令行媒体',
+      episodeName: '媒体',
+      flag: 'cli',
+      startPosition: seek,
+    );
   }
 
   @override
@@ -963,6 +921,43 @@ class _AppShellState extends State<AppShell> {
     await _state.selectSite(selected);
   }
 
+  /// 顶栏「打开本地文件」：挑一个磁盘视频，包成本地 [PlaybackRequest] 后交给
+  /// 既有播放器入口（与命令行自动播放同一条 `PlayerPage` 路由）。
+  ///
+  /// Wave 1 只做到「构造并交给既有入口」：播放器页对本地源的处理（进度写盘、
+  /// 历史、线路面板）留到 Wave 2，这里**不**改 `player_page.dart`。
+  Future<void> _openLocalMediaFile() async {
+    final picked = await _pickLocalMediaPath();
+    if (!mounted) return;
+    final target = picked?.trim() ?? '';
+    if (target.isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerPage(
+          state: _state,
+          request: PlaybackRequest.localFile(path: target),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// 原生文件对话框；测试经 [AppShell.pickLocalMediaFile] 注入替身。
+  Future<String?> _pickLocalMediaPath() async {
+    final injected = widget.pickLocalMediaFile;
+    if (injected != null) return injected();
+    try {
+      final file = await FilePicker.pickFile(
+        dialogTitle: '打开本地视频文件',
+        type: FileType.video,
+      );
+      return file?.path;
+    } catch (error) {
+      _state.log.warning('选择本地视频文件失败 $error', scope: 'player');
+      return null;
+    }
+  }
+
   /// 崩溃恢复：用标记里的标识信息按历史续播路径重新解析并播放。
   ///
   /// 标记里**没有** URL/Header（见 `core/session_recovery.dart`），
@@ -1026,6 +1021,7 @@ class _AppShellState extends State<AppShell> {
             onOpenConfig: _openConfigSwitcher,
             onManageConfig: _openConfigPage,
             onOpenSitePicker: _openSitePicker,
+            onOpenLocalFile: _openLocalMediaFile,
           ),
           if (_state.storageWarnings.isNotEmpty)
             _StorageWarningBanner(warnings: _state.storageWarnings),
@@ -1279,12 +1275,14 @@ class _TopBar extends StatelessWidget {
     required this.onOpenConfig,
     required this.onManageConfig,
     required this.onOpenSitePicker,
+    required this.onOpenLocalFile,
   });
 
   final AppState state;
   final VoidCallback onOpenConfig;
   final VoidCallback onManageConfig;
   final VoidCallback onOpenSitePicker;
+  final VoidCallback onOpenLocalFile;
 
   @override
   Widget build(BuildContext context) {
@@ -1344,6 +1342,15 @@ class _TopBar extends StatelessWidget {
             onPressed: state.siteItems.isEmpty ? null : onOpenSitePicker,
             icon: const Icon(Icons.dns_outlined, size: 18),
             label: Text(site == null ? '选择站点' : '站点：${site.name}'),
+          ),
+          const SizedBox(width: AppSpace.xs),
+          // 本地视频不需要站点：入口必须独立于「站点：xxx」，否则用户会以为
+          // 先得选个站点才能放自己硬盘上的文件。
+          TextButton.icon(
+            key: const ValueKey('topbar-open-local-file'),
+            onPressed: onOpenLocalFile,
+            icon: const Icon(Icons.folder_open_outlined, size: 18),
+            label: const Text('打开本地文件'),
           ),
           if (state.webHomeLoadError != null)
             Tooltip(
@@ -2168,157 +2175,4 @@ Map<ShortcutActivator, VoidCallback> buildPlayerShortcuts({
     const SingleActivator(LogicalKeyboardKey.keyF): toggleFullscreen,
     const SingleActivator(LogicalKeyboardKey.escape): exitFullscreen,
   };
-}
-
-/// 图片加载：站点图床可能失效，用占位符而不是抛错。
-/// 图片占位底色。
-///
-/// 刻意选 `surfaceContainerLow`（紧贴页面底色）而**不是** `surfaceContainerHigh`：
-/// 后者在深色主题下比背景亮得多（≈#333 对 ≈#111），图上不来时就是一块突兀的
-/// 灰块（用户反馈 2026-10-09：「大量地方存在这种无效的阴影或背景色区域太丑了」，
-/// 截图里海报墙、缺失头像甚至网格里都是这种灰块）。换成低一档的容器色后，
-/// 占位仍然存在（不会退化成「与页面同色的空洞」），但不会再抢视线。
-Color _posterPlaceholderColor(BuildContext context) =>
-    Theme.of(context).colorScheme.surfaceContainerLow;
-
-class PosterImage extends StatelessWidget {
-  const PosterImage({
-    super.key,
-    this.url,
-    this.width,
-    this.height,
-    this.fit = BoxFit.cover,
-    this.alignment = Alignment.center,
-    this.cacheWidth,
-    this.background = true,
-    this.fallbackUrl,
-    this.placeholder,
-  });
-
-  final String? url;
-  final double? width;
-  final double? height;
-  final BoxFit fit;
-
-  /// `BoxFit.cover` 裁切时保留图片的哪一块，默认居中。
-  ///
-  /// 只转发给 `Image.network` 的同名参数——**不会**引入外层 `Align`
-  /// （见 [build] 里那条「绝不能给 Container 加 alignment」的注释），
-  /// 因此不影响 cover 的铺满语义。
-  ///
-  /// 详情页背景轮播传 `Alignment.topCenter`：窗口比素材更高时（全屏 2.35:1
-  /// 对 16:9 素材）cover 会纵向裁掉约 24%，居中裁等于上下各切一半，人物头顶
-  /// 常被切到；改成顶部对齐后裁切全部落在底部——底部本来就被渐变遮罩压暗、
-  /// 被标题/简介盖住，观感损失最小（用户反馈 2026-10-23：「同一个海报背景
-  /// 全屏的时候被截取了不好看」）。
-  final Alignment alignment;
-
-  /// 解码宽度（物理像素）；固定尺寸图位应传逻辑宽度 × DPR，避免保留原尺寸位图。
-  /// 只转发给 `Image.network`，不影响布局尺寸或 `fit`。
-  final int? cacheWidth;
-
-  /// 是否绘制占位底色，默认 `true`（普通图位需要它兜住"图还没到"的状态）。
-  ///
-  /// **叠层背景的上层必须传 `false`。** 这个底色是**不透明**的，而且这里的
-  /// `Container` 会撑满父级给的紧约束——放在 `Stack` 里就会把下层的模糊垫底
-  /// **整块盖住**。实测（2026-10-13）：详情页背景的"模糊延伸"因此**从来没有
-  /// 渲染过**，屏幕上只有一块纯色信箱边加一个硬边图片，用户看到的就是这个
-  /// （「怎么变得这么丑了」）。单元测试只断言了 `fit`，断言不到"谁盖住了谁"，
-  /// 所以全绿也没拦住它。
-  final bool background;
-
-  /// 主图失败时**只重试一次**的后备图（剧集卡片的剧照 → 本剧海报）。
-  ///
-  /// 只在 [url] 加载失败、或 [url] 为空时换用；两者相同或后备为空时直接落占位，
-  /// 因此不会出现同址递归。默认 `null`，其余调用方行为不变。
-  final String? fallbackUrl;
-
-  /// 无图/坏图时替代默认图标的占位内容（人物头像用姓名字标）。
-  ///
-  /// 默认 `null` → 沿用既有「灰底 + 图标」，其余调用方观感不变。
-  final Widget? placeholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final target = url?.trim() ?? '';
-    // 图片请求也要按目标 host 注入顶层 `headers` 规则（§7.4.6）：豆瓣图床这类
-    // 防盗链站点不带 `Referer` 直接返回 418，而 `Image.network` 默认连 UA 都不带
-    // （`dart:io` 的 `Dart/x.y (dart:io)` 同样被边缘节点拦掉，见 `core/image_headers.dart`）。
-    //
-    // 没有作用域时（单测直接 pump）返回 null，与改造前行为完全一致。
-    // 底层永远是占位底色 + 图标，图片叠在上面。
-    //
-    // 为什么不能只靠 `loadingBuilder` 兜底（实测 2026-10-09，网盘聚合站慢图床）：
-    // 慢速图床在**首帧产出之前**会走到 `progress == null` 分支，此时 `child` 是
-    // 一个还没有图像的 `RawImage`（什么都不画），而占位符已经被跳过——结果整个
-    // 格子与页面同色，看上去像「少了一部片」，实测要等 25s 图才出现。
-    // 把占位符当底而不是当分支，就不存在“两个分支都画空”的窗口。
-    //
-    // **绝不能给这个 Container 加 `alignment`**（2026-10-10 实测根因）：
-    // `Container(alignment:)` 会在子节点外包一层 `Align`，而 `Align` 给子节点的是
-    // **松约束**；`Image` 在松约束且未给 width/height 时会退回**图片固有尺寸**，
-    // 于是 `BoxFit.cover` 根本没有“盒子”可以铺——背景图与人物头像就变成
-    // 「按原始尺寸居中、两侧露底色」（用户反馈「都没铺满」的真实根因）。
-    // 去掉 alignment 后子节点拿到父级传入的**紧约束**，cover 才真正生效。
-    // 占位图标需要居中，各自用 `Center` 包。
-    //
-    // 剧照缺失（空串）时**直接**用后备海报，不必先发一次注定失败的请求。
-    final fallback = fallbackUrl?.trim() ?? '';
-    final resolved = target.isEmpty ? fallback : target;
-    final canFallback = fallback.isNotEmpty && fallback != resolved;
-    final headers = imageHeadersOrNull(context, resolved);
-    return Container(
-      width: width,
-      height: height,
-      color: background ? _posterPlaceholderColor(context) : null,
-      child: resolved.isEmpty
-          ? _emptyPlaceholder(context)
-          : Image.network(
-              resolved,
-              width: width,
-              height: height,
-              fit: fit,
-              alignment: alignment,
-              cacheWidth: cacheWidth,
-              headers: headers,
-              loadingBuilder: (context, child, progress) => progress == null
-                  ? child
-                  : Center(child: _placeholderIcon(context, loading: true)),
-              // 主图加载失败时换后备图**重试一次**；后备也没有（或与主图同址）
-              // 就落回占位。后备图的 errorBuilder 直接给占位，不再递归。
-              errorBuilder: (context, error, stackTrace) => canFallback
-                  ? _fallbackImage(context, fallback)
-                  : _emptyPlaceholder(context),
-            ),
-    );
-  }
-
-  /// 无图/坏图的占位。默认是居中图标；调用方给了 [placeholder] 时
-  /// **原样**放进盒子（不包 `Center`），让人物字标这类整块面板能铺满。
-  Widget _emptyPlaceholder(BuildContext context) =>
-      placeholder ?? Center(child: _placeholderIcon(context));
-
-  Widget _fallbackImage(BuildContext context, String target) {
-    return Image.network(
-      target,
-      width: width,
-      height: height,
-      fit: fit,
-      alignment: alignment,
-      cacheWidth: cacheWidth,
-      headers: imageHeadersOrNull(context, target),
-      loadingBuilder: (context, child, progress) => progress == null
-          ? child
-          : Center(child: _placeholderIcon(context, loading: true)),
-      errorBuilder: (context, error, stackTrace) => _emptyPlaceholder(context),
-    );
-  }
-
-  Widget _placeholderIcon(BuildContext context, {bool loading = false}) {
-    return Icon(
-      loading ? Icons.downloading : Icons.image_not_supported_outlined,
-      size: 20,
-      color: Theme.of(context).disabledColor,
-    );
-  }
 }

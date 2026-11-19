@@ -1,6 +1,4 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -74,22 +72,30 @@ void main() {
     final external = ExternalMetaService(douban:DoubanRecommendationService(cacheDirectory:cache, delay:(_) async {},
       client:MockClient((r) async {
         if (r.url.path=='/j/subject_suggest') return response(suggestion);
-        if (r.url.path.endsWith('/credits')) return response({'items':[
+        if (r.url.path.endsWith('/credits')) {
+          return response({'items':[
           {'id':'1051526','name':'范伟','character':'演员 Actor (饰 王响)','roles':['演员']},
           {'id':'1397818','name':'辛爽','character':'导演 Director','roles':['导演','编剧']},
         ]});
-        if (r.url.path.endsWith('/photos')) return response({'total':3,'photos':[
+        }
+        if (r.url.path.endsWith('/photos')) {
+          return response({'total':3,'photos':[
           {'image':{'large':{'url':'https://img.example/1.jpg'}}},
           {'image':{'large':{'url':'https://img.example/2.jpg'}}},
           {'image':{'large':{'url':'https://img.example/3.jpg'}}},
         ]});
-        if (r.url.path.endsWith('/works')) return response({'total':1,'works':[
+        }
+        if (r.url.path.endsWith('/works')) {
+          return response({'total':1,'works':[
           {'roles':['演员 (饰 王响)'],'work':{'id':'35588177','title':'漫长的季节','type':'tv','year':'2023','rating':{'value':9.4}}}]});
+        }
         if (r.url.path.contains('/celebrity/')) return response({'title':'范伟','extra':{'info':[['IMDB编号','nm1981215'],['出生日期','1962年9月2日']]}});
-        if (r.url.path.endsWith('/interests')) return response({'total':413365,'interests':[
+        if (r.url.path.endsWith('/interests')) {
+          return response({'total':413365,'interests':[
           {'comment':'节奏慢但后劲足，范伟的表演撑住了整部剧。','create_time':'2023-04-23','vote_count':12,'rating':{'value':5},'user':{'name':'江户川乱跑'}},
           {'comment':'看着看着就哭了。','create_time':'2023-05-01','vote_count':3,'rating':{'value':4},'user':{'name':'冬天不冷'}},
         ]});
+        }
         return response({...subject,'cover':{},'cover_url':''});
       })));
     final state=await makeState(tester,external:external);

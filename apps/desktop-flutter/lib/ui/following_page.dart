@@ -13,7 +13,7 @@ import 'package:flutter/material.dart';
 import '../core/following.dart';
 import '../core/playback_platform.dart';
 import '../state/app_state.dart';
-import 'app.dart';
+import 'poster_image.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
 import 'following_badge.dart';

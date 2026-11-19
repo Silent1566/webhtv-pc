@@ -18,14 +18,16 @@ class MidiKaraokeParser {
     reader.expect('MThd');
     final headerLength = reader.readInt();
     final headerEnd = reader.position + headerLength;
-    if (headerLength < 6 || headerEnd > data.length)
+    if (headerLength < 6 || headerEnd > data.length) {
       throw ArgumentError('bad MIDI header length');
+    }
     reader.readShort();
     final tracks = reader.readShort();
     final division = reader.readShort();
     reader.position = headerEnd;
-    if (division <= 0 || (division & 0x8000) != 0)
+    if (division <= 0 || (division & 0x8000) != 0) {
       throw ArgumentError('unsupported midi timing');
+    }
     final parsed = <_TrackNotes>[];
     var tempoUs = _defaultTempoUs;
     for (var i = 0; i < tracks; i++) {
@@ -35,8 +37,9 @@ class MidiKaraokeParser {
         _Reader(reader.slice(reader.position, reader.position + length)),
       );
       reader.position = reader.position + length;
-      if (track.tempoUs > 0 && tempoUs == _defaultTempoUs)
+      if (track.tempoUs > 0 && tempoUs == _defaultTempoUs) {
         tempoUs = track.tempoUs;
+      }
       if (track.notes.isNotEmpty) parsed.add(track);
     }
     if (parsed.isEmpty) throw ArgumentError('no midi notes');
@@ -58,8 +61,9 @@ class MidiKaraokeParser {
     for (final note in best.notes) {
       if (++count > _maxNotes) break;
       if (note.startTick > 2147483647 ||
-          note.endTick - note.startTick > 2147483647)
+          note.endTick - note.startTick > 2147483647) {
         continue;
+      }
       buffer.writeln(
         ': ${note.startTick} ${note.endTick - note.startTick} ${note.pitch}',
       );
@@ -112,8 +116,9 @@ class MidiKaraokeParser {
         open[key] = tick;
       } else if (command == 0x80 || command == 0x90) {
         final start = open.remove(key);
-        if (start != null && tick > start)
+        if (start != null && tick > start) {
           track.notes.add(_Note(start, tick, p1));
+        }
       }
     }
     return track;
@@ -170,14 +175,16 @@ class _Reader {
 
   void skip(int length) {
     if (length < 0) throw ArgumentError('negative skip');
-    if (position + length > data.length)
+    if (position + length > data.length) {
       throw ArgumentError('truncated MIDI event');
+    }
     position += length;
   }
 
   List<int> slice(int start, int end) {
-    if (start < 0 || end > data.length || end < start)
+    if (start < 0 || end > data.length || end < start) {
       throw ArgumentError('bad MIDI track length');
+    }
     return data.sublist(start, end);
   }
 }
