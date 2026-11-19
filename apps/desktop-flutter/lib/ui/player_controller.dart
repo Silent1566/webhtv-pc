@@ -17,6 +17,7 @@ import '../core/lut.dart';
 import '../core/mpv_properties.dart';
 import '../core/mpv_start_option.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_open_policy.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
@@ -24,6 +25,10 @@ import '../core/proxy_policy.dart' show ProxyTrafficSnapshot;
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
 import '../services/player_thumbnail_service.dart';
+
+// 既有调用点（`player_page.dart` 等）从本文件拿 PlayerFailureKind /
+// describePlayerFailure / classifyPlayerError，搬到 core 后原地可见。
+export '../core/playback_open_policy.dart';
 
 /// 起播加载超时的默认预算（180 秒）。
 ///
@@ -33,68 +38,9 @@ import '../services/player_thumbnail_service.dart';
 /// 不约束单次等待时长）。
 const Duration playerLoadTimeout = Duration(seconds: 180);
 
-/// 播放错误分类（§10.4）。
-enum PlayerFailureKind {
-  /// 403/404：链接失效，建议换线路。
-  notFound,
-
-  /// 401：Header 或 Cookie 丢失。
-  unauthorized,
-
-  /// DNS/连接失败。
-  network,
-
-  /// 超时。
-  timeout,
-
-  /// 格式不支持。
-  unsupportedFormat,
-
-  /// 其他加载失败。
-  loadFailed,
-}
-
-String describePlayerFailure(PlayerFailureKind kind) {
-  switch (kind) {
-    case PlayerFailureKind.notFound:
-      return '播放地址失效（403/404），建议切换线路或更新配置';
-    case PlayerFailureKind.unauthorized:
-      return '播放地址需要鉴权（401），请检查站点 Header 或 Cookie 是否完整';
-    case PlayerFailureKind.network:
-      return '网络不可达：请检查网络、代理或 DNS 设置';
-    case PlayerFailureKind.timeout:
-      return '播放超时：请重试一次或切换线路';
-    case PlayerFailureKind.unsupportedFormat:
-      return '播放器不支持该格式，请切换线路';
-    case PlayerFailureKind.loadFailed:
-      return '播放加载失败，请重试或切换线路';
-  }
-}
-
-/// 从引擎错误文本推断失败分类。
-PlayerFailureKind classifyPlayerError(String message) {
-  final lowered = message.toLowerCase();
-  if (lowered.contains('403') || lowered.contains('404')) {
-    return PlayerFailureKind.notFound;
-  }
-  if (lowered.contains('401')) return PlayerFailureKind.unauthorized;
-  if (lowered.contains('timed out') || lowered.contains('timeout')) {
-    return PlayerFailureKind.timeout;
-  }
-  if (lowered.contains('could not resolve') ||
-      lowered.contains('name or service not known') ||
-      lowered.contains('connection refused') ||
-      lowered.contains('no route to host') ||
-      lowered.contains('failed to connect')) {
-    return PlayerFailureKind.network;
-  }
-  if (lowered.contains('could not open codec') ||
-      lowered.contains('unsupported') ||
-      lowered.contains('codec not found')) {
-    return PlayerFailureKind.unsupportedFormat;
-  }
-  return PlayerFailureKind.loadFailed;
-}
+// 失败分类（PlayerFailureKind / classifyPlayerError / describePlayerFailure）与
+// 打开策略（PlaybackOpenPolicy）住在 core，见 `lib/core/playback_open_policy.dart`：
+// 分类要能脱离控制器单测，控制器只执行策略结论。本文件底部 re-export，既有 import 不变。
 
 /// 一次加载的可观测结果。
 class PlayerLoadOutcome {
@@ -127,6 +73,88 @@ class PlayerLoadOutcome {
       '${errorMessage == null ? "" : "error=${errorMessage!.length > 160 ? errorMessage!.substring(0, 160) : errorMessage!}"}';
 }
 
+/// 一条偏移写入的结果（[writeTrackOffsetProperty] 的输出）。
+class TrackOffsetWriteResult {
+  const TrackOffsetWriteResult._({required this.applied, this.rejection});
+
+  /// 白名单放行、写入没抛错、回读也匹配上了。
+  final bool applied;
+
+  /// 未生效时的一条可读原因（可直接进日志/提示）；生效时为 null。
+  final MpvPropertyRejection? rejection;
+}
+
+/// 把一条偏移写进内核：**白名单过滤 → 写入 → 按 1 ms 容差回读**。
+///
+/// 为什么独立成顶层函数：`PlayerController` 的构造要 MediaKit 内核，单测里造不
+/// 出来，而「过滤之后到底写了什么值」「回读不匹配怎么降级」正是必须断言的部分。
+/// 手法与 `player_tracks.dart` 的 `applyTrackChoice` 一致：编排留在纯函数里，
+/// 引擎调用由调用方以回调注入（生产环境是 `NativePlayer` 的 set/getProperty）。
+///
+/// **永不抛异常**：写失败、读失败、白名单拒绝都折成 `applied: false` + 可读原因，
+/// 由调用方决定记日志还是提示界面。
+Future<TrackOffsetWriteResult> writeTrackOffsetProperty({
+  required TrackOffset offset,
+  required Future<void> Function(String key, String value) setProperty,
+  required Future<String> Function(String key) getProperty,
+}) async {
+  final key = offset.kind.mpvPropertyKey;
+  final filtered = filterMpvProperties(offset.toMpvProperty());
+  final value = filtered.accepted[key];
+  if (value == null) {
+    // 偏移值恒在 ±60 s 内，正常走不到这里；真走到了说明白名单与模型漂移了，
+    // 仍然不抛：拒绝理由原样带出去。
+    final reason = filtered.rejected.isEmpty
+        ? '值未通过 mpv 属性白名单'
+        : filtered.rejected.single.reason;
+    return TrackOffsetWriteResult._(
+      applied: false,
+      rejection: MpvPropertyRejection(
+        key: key,
+        value: offset.mpvValue,
+        reason: reason,
+      ),
+    );
+  }
+  try {
+    await setProperty(key, value);
+  } catch (error) {
+    return TrackOffsetWriteResult._(
+      applied: false,
+      rejection: MpvPropertyRejection(
+        key: key,
+        value: value,
+        reason: '写入失败（$error）',
+      ),
+    );
+  }
+  String actual;
+  try {
+    actual = await getProperty(key);
+  } catch (error) {
+    return TrackOffsetWriteResult._(
+      applied: false,
+      rejection: MpvPropertyRejection(
+        key: key,
+        value: value,
+        reason: '回读失败（$error）',
+      ),
+    );
+  }
+  if (mpvDelayReadbackMatches(offset.milliseconds, actual)) {
+    return const TrackOffsetWriteResult._(applied: true);
+  }
+  // 与 applyMpvProperties 的回读失败同一句话：空回读要如实说「空」。
+  return TrackOffsetWriteResult._(
+    applied: false,
+    rejection: MpvPropertyRejection(
+      key: key,
+      value: value,
+      reason: '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
+    ),
+  );
+}
+
 /// 播放器控制器。
 class PlayerController extends ChangeNotifier {
   PlayerController({
@@ -138,6 +166,7 @@ class PlayerController extends ChangeNotifier {
     double initialResumeVolume = 100,
     this.onVolumeChanged,
     Duration Function()? networkClock,
+    this.prefetchProbe,
   }) : _networkClockOverride = networkClock,
        _player = player ?? Player(),
        _thumbnails = thumbnailService ?? PlayerThumbnailService(),
@@ -159,6 +188,12 @@ class PlayerController extends ChangeNotifier {
   final PlayerThumbnailService _thumbnails;
   final Duration Function()? _networkClockOverride;
   final Stopwatch _networkWatch = Stopwatch()..start();
+
+  /// 预取探测实现（迭代 2 Wave 1）。优先级：策略里的 → 这里的 → 内置 HEAD 探测。
+  ///
+  /// 注入而不是在控制器里 new `HttpClient`：单测能直接断言「先发了探测再开播」，
+  /// 真实实现（带站点 Header、走代理）由调用方给。
+  final PlaybackPrefetchProbe? prefetchProbe;
   final ValueChanged<Duration>? onSeek;
 
   /// 仅显式音量/静音操作触发；引擎回报与恢复动作不回写偏好。
@@ -328,6 +363,20 @@ class PlayerController extends ChangeNotifier {
   double _rate = 1.0;
   String? _currentUrl;
   PlayerLoadOutcome? _lastOutcome;
+
+  /// 最近一次失败属于「可回退 / 不可回退」（见 [classifyPlaybackFailureClass]）。
+  ///
+  /// 只读诊断信息，不参与重试判据；成功时清空。Wave 2 用它决定要不要跑回退阶梯。
+  PlaybackFailureClass? _lastFailureClass;
+
+  /// 失败分类结论；null 表示还没有失败，或最近一次已成功。
+  PlaybackFailureClass? get lastFailureClass => _lastFailureClass;
+
+  /// 最近一次预取探测的错误文本；null 表示没开预取、探测成功或未执行。
+  String? _lastPrefetchError;
+
+  /// 预取探测失败原因（见 [_prefetch]）。探测失败不影响开播。
+  String? get lastPrefetchError => _lastPrefetchError;
 
   /// media-kit 在媒体打开后持续上报的真实媒体元数据。
   VideoParams _videoParams = const VideoParams();
@@ -560,7 +609,7 @@ class PlayerController extends ChangeNotifier {
         final rule = mpvPropertyRule(entry.key);
         if (rule == null || !rule.verifiable) continue;
         final actual = await platform.getProperty(entry.key);
-        if (mpvPropertyReadbackMatches(entry.value, actual)) continue;
+        if (_readbackMatches(entry.key, entry.value, actual)) continue;
         applied = false;
         rejected.add(
           MpvPropertyRejection(
@@ -582,6 +631,20 @@ class PlayerController extends ChangeNotifier {
     }
     return applied;
   }
+
+  /// 回读口径：偏移类属性按 1 ms 容差比，其余按严格相等。
+  ///
+  /// `sub-delay`/`audio-delay` 在 mpv 里是双精度秒（`%f` 打印），浮点末位不可控；
+  /// 严格数值比会把「写进去了」判成失败，界面于是反复重试注入。容差与
+  /// [mpvDelayReadbackMatches] 同源（[mpvDelayToleranceSeconds]）。
+  static bool _readbackMatches(String key, String expected, String actual) =>
+      TrackOffsetKind.fromMpvPropertyKey(key) == null
+      ? mpvPropertyReadbackMatches(expected, actual)
+      : mpvPropertyReadbackMatches(
+          expected,
+          actual,
+          tolerance: mpvDelayToleranceSeconds,
+        );
 
   /// 采样一次网络吞吐（字节/秒），成功时更新 [bytesPerSecond]。
   ///
@@ -696,6 +759,40 @@ class PlayerController extends ChangeNotifier {
   /// 应用/清除 LUT。空路径表示清除。
   Future<bool> applyLut(String? path) =>
       applyMpvProperties({'vf': buildLutVfArgument(path)});
+
+  /// 写入一条字幕/音轨时间偏移（内部毫秒 → mpv 的秒）。
+  ///
+  /// 与 [applyMpvProperties] 同一条通道：**白名单过滤 → 写入 → 写后回读**；
+  /// 差别只在回读口径——偏移是双精度秒，按 [mpvDelayReadbackMatches] 的
+  /// 1 ms 容差比（见 [_readbackMatches]），严格比较会把成功判成失败。
+  ///
+  /// **不抛给 UI**：当前平台不是 [NativePlayer]、内核没有这个属性（老 mpv 会把
+  /// 写入静默丢掉，回读给空串），或者写入直接抛错，都只落日志 + 返回 false，
+  /// 播放器继续能播。失败原因从 [rejectedMpvProperties] 可读（与整表注入同一口径）。
+  Future<bool> setTrackOffset(TrackOffset offset) async {
+    if (_disposed) return false;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) {
+      debugPrint(
+        'mpv 时间偏移未生效：当前平台不是 NativePlayer'
+        '（${offset.kind.mpvPropertyKey}=${offset.mpvValue}）',
+      );
+      return false;
+    }
+    final result = await writeTrackOffsetProperty(
+      offset: offset,
+      setProperty: (key, value) => platform.setProperty(key, value),
+      getProperty: (key) => platform.getProperty(key),
+    );
+    final rejection = result.rejection;
+    _rejectedMpvProperties = rejection == null
+        ? const []
+        : <MpvPropertyRejection>[rejection];
+    if (rejection != null) {
+      debugPrint('mpv 属性未生效：${rejection.describe()}');
+    }
+    return result.applied;
+  }
 
   /// 最近一次播放的诊断快照（§23）。未开始播放时为 null。
   PlaybackDiagnostics? get diagnostics => _diagnostics;
@@ -1397,9 +1494,16 @@ class PlayerController extends ChangeNotifier {
     _diagnostics = builder.build();
   }
 
-  /// 超时场景只重试一次（§10.4）。
+  /// 超时场景只重试一次（§10.4）——除非调用方用 [policy] 另给了上限。
   ///
   /// 诊断阶段跨重试累积到同一个快照，便于区分「首次失败」与「重试后失败/成功」。
+  ///
+  /// [policy] 为 null（默认）时**行为与引入策略前逐字节一致**：只有超时/网络失败
+  /// 会原地重试，且至多一次。传入策略时：
+  /// 1. 先按 [PlaybackOpenPolicy.preload] 发一次预取探测（见 [_prefetch]）；
+  /// 2. 重试闸门改由 [PlaybackOpenPolicy.shouldRetryInPlace] 与
+  ///    [PlaybackOpenPolicy.retryLimit] 决定，其余（同一 address、600ms 退避、
+  ///    诊断累积、同一取消判据）一律不变。
   Future<PlayerLoadOutcome> openWithRetry(
     String url, {
     Map<String, String> headers = const {},
@@ -1409,7 +1513,16 @@ class PlayerController extends ChangeNotifier {
     String? episodeName,
     bool Function()? isCurrent,
     Duration? startAt,
+    PlaybackOpenPolicy? policy,
   }) async {
+    if (policy != null) {
+      await _prefetch(
+        url,
+        headers: headers,
+        policy: policy,
+        isCurrent: isCurrent,
+      );
+    }
     final builder = PlaybackDiagnosticsBuilder(
       siteKey: siteKey,
       flag: flag,
@@ -1424,27 +1537,76 @@ class PlayerController extends ChangeNotifier {
       startAt: startAt,
     );
     if (_disposed || (isCurrent != null && !isCurrent()) || outcome.succeeded) {
+      if (outcome.succeeded) _lastFailureClass = null;
       return outcome;
     }
-    if (outcome.failureKind != PlayerFailureKind.timeout &&
-        outcome.failureKind != PlayerFailureKind.network) {
-      return outcome;
+    var kind = outcome.failureKind;
+    _lastFailureClass = kind == null
+        ? null
+        : classifyPlaybackFailureClass(kind);
+    final retryLimit = policy?.retryLimit ?? 1;
+    while (_retryCount < retryLimit) {
+      // 不传策略：历史判据（超时/网络，且上限 1 次）。
+      final retryAllowed = policy == null
+          ? kind == PlayerFailureKind.timeout ||
+                kind == PlayerFailureKind.network
+          : policy.shouldRetryInPlace(kind);
+      if (!retryAllowed) break;
+      _retryCount++;
+      final retryStopwatch = Stopwatch()..start();
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (_disposed || (isCurrent != null && !isCurrent())) break;
+      builder.addStage(PlaybackStage.retry, retryStopwatch.elapsed);
+      outcome = await open(
+        url,
+        headers: headers,
+        timeout: timeout,
+        diagnosticsBuilder: builder,
+        isCurrent: isCurrent,
+        startAt: startAt,
+      );
+      if (outcome.succeeded) {
+        _lastFailureClass = null;
+        break;
+      }
+      kind = outcome.failureKind;
+      _lastFailureClass = kind == null
+          ? null
+          : classifyPlaybackFailureClass(kind);
     }
-    if (_retryCount >= 1) return outcome;
-    _retryCount++;
-    final retryStopwatch = Stopwatch()..start();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (_disposed || (isCurrent != null && !isCurrent())) return outcome;
-    builder.addStage(PlaybackStage.retry, retryStopwatch.elapsed);
-    outcome = await open(
-      url,
-      headers: headers,
-      timeout: timeout,
-      diagnosticsBuilder: builder,
-      isCurrent: isCurrent,
-      startAt: startAt,
-    );
     return outcome;
+  }
+
+  /// 预取探测（迭代 2 Wave 1）：开播前对地址发一次「这个地址还能不能用」的请求。
+  ///
+  /// 三条纪律：
+  /// - **不阻断开播**：探测失败只记进 [lastPrefetchError]，照常开播。地址可能只是
+  ///   不允许 HEAD，或者站点把探测当爬虫——能不能播永远以播放器打开为准；
+  /// - **不下载媒体数据**：内置实现只发一次 HEAD（见 [httpPlaybackPrefetchProbe]）；
+  /// - **可测**：实现来自 [PlaybackOpenPolicy.prefetch] / [prefetchProbe]，
+  ///   控制器里没有任何 `HttpClient`。
+  Future<void> _prefetch(
+    String url, {
+    required Map<String, String> headers,
+    required PlaybackOpenPolicy policy,
+    bool Function()? isCurrent,
+  }) async {
+    if (!policy.preload) return;
+    if (_disposed || (isCurrent != null && !isCurrent())) return;
+    // 本地文件与 rtsp/rtmp 没有 HTTP 语义，探测它们没有意义。
+    final scheme = Uri.tryParse(url)?.scheme.toLowerCase() ?? '';
+    if (scheme != 'http' && scheme != 'https') return;
+    final probe = policy.prefetch ?? prefetchProbe ?? httpPlaybackPrefetchProbe;
+    _lastPrefetchError = null;
+    try {
+      await probe(
+        url,
+        Map<String, String>.unmodifiable(headers),
+      ).timeout(policy.prefetchTimeout);
+    } catch (error) {
+      // 只记不改判：预取是加速手段，不是开播的前置条件。
+      _lastPrefetchError = '$error';
+    }
   }
 
   /// 当前内核句柄（拿不到就返回 null，调用方跳过「打开时定位」）。

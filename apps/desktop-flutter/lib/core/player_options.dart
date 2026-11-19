@@ -9,6 +9,8 @@
 library;
 
 import 'mpv_properties.dart';
+import 'playback_open_policy.dart';
+import 'player_tracks.dart';
 import 'skip_plan.dart';
 
 /// 失败回退阶梯。
@@ -156,6 +158,8 @@ class PlayerOptions {
     this.doubleClickRight = PlayerDoubleClickAction.toggleFullscreen,
     this.lutPath = '',
     this.lutPresetId = '',
+    this.subtitleOffsetMs = defaultTrackOffsetMs,
+    this.audioOffsetMs = defaultTrackOffsetMs,
   }) : skipMode = autoSkipIntro == true || autoSkipOutro == true
            ? (skipMode == SkipMode.off ? SkipMode.auto : skipMode)
            : skipMode,
@@ -229,11 +233,39 @@ class PlayerOptions {
   /// 真正播完后是否自动进下一集（`PlaybackRepeat.off` 时生效）。
   final bool autoNext;
 
-  /// 失败回退阶梯。
+  /// 失败回退阶梯（[PlayerFailureFallback]）。
+  ///
+  /// 它回答「回退能走多深」（只切线路 / 再试解析接口 / 再换源），**不**回答
+  /// 「这次失败值不值得回退」——后者由失败性质决定，见
+  /// [classifyPlaybackFailureClass]：403/404、401、网络不可达、超时是可回退的；
+  /// 解码器缺失、格式不支持（`could not open codec` 等）换地址也打不开，
+  /// 属于不可回退，硬试只会把黑屏时间拉长。
+  ///
+  /// 消费点：[openPolicy] 会把 [off] 翻成「不允许重试/回退」。
   final PlayerFailureFallback failureFallback;
 
-  /// 是否预解析下一集地址（**不下载媒体数据**）。
+  /// 预取开关，**一个开关覆盖两件事**（两者都不下载媒体数据）：
+  ///
+  /// 1. **解析预取**：拿到播放地址后先对目标地址发一次探测（HEAD），提前建连、
+  ///    提前发现失效地址——由 [openPolicy] 的 `preload` 交给
+  ///    `PlayerController.openWithRetry` 执行；
+  /// 2. **下一集预取**：当前集播到接近片尾时，先把下一集的地址解析出来
+  ///    （只解析、不预加载媒体），避免连播时黑屏等待。
+  ///
+  /// 第 2 件发生在页面级的连播路径上（`lib/ui/player_page.dart`），不在本文件的
+  /// 消费范围内；第 1 件由控制器执行（迭代 2 Wave 1 起）。拆成两个开关的收益
+  /// 不明显（都是「提前把地址准备好」），所以保留一个。
   final bool preloadNext;
+
+  /// 本次播放要用的打开策略：把设置页的两个开关翻成控制器认的策略对象。
+  ///
+  /// 唯一消费点是 `PlayerController.openWithRetry(policy:)`；传 `null` 时控制器
+  /// 保持历史行为（超时/网络失败原地重试一次），因此这里不给「默认策略」暗开任何开关。
+  /// [failureFallback] 为 [PlayerFailureFallback.off] 时策略不含重试，也不含回退。
+  PlaybackOpenPolicy get openPolicy => PlaybackOpenPolicy(
+    preload: preloadNext,
+    fallbackOnFailure: failureFallback != PlayerFailureFallback.off,
+  );
 
   /// 跳过模式：关、静默跳、跳前询问（见 [SkipMode]）。
   final SkipMode skipMode;
@@ -271,6 +303,36 @@ class PlayerOptions {
   /// 它**不参与**播放：mpv 注入只看 [lutPath]。存它是为了让界面在缓存被清理、
   /// 或换了机器之后仍知道「当前是哪一档」，并按 id 重新落盘。
   final String lutPresetId;
+
+  /// 字幕/音轨时间偏移（毫秒）的默认值。
+  ///
+  /// 合法区间由 [TrackOffset.maxMilliseconds]（±60 s）定义，**夹取而不拒绝**
+  /// （见 [normalized]）：越界不是「另一个合法意图」，而是手滑或手改配置写错
+  /// 位数；夹住保证「记住的那一档仍然生效」，最多顶到 ±60 s，用户仍看得见。
+  static const int defaultTrackOffsetMs = 0;
+
+  /// 字幕时间偏移（毫秒，正数＝字幕晚出）。见 [TrackOffset]。
+  ///
+  /// 需要配字幕轨时用；单位是毫秒，写 mpv 时才换算成秒
+  /// （[TrackOffset.mpvValue]）。
+  final int subtitleOffsetMs;
+
+  /// 音轨时间偏移（毫秒，正数＝声音晚出）。见 [TrackOffset]。
+  final int audioOffsetMs;
+
+  /// 取某一类轨的当前偏移（毫秒已在这个对象里夹进 ±60 s）。
+  TrackOffset trackOffset(TrackOffsetKind kind) => TrackOffset(
+    kind: kind,
+    milliseconds: kind == TrackOffsetKind.subtitle
+        ? subtitleOffsetMs
+        : audioOffsetMs,
+  );
+
+  /// 写回一条偏移。毫秒已由 [TrackOffset] 夹好，这里不再判断区间。
+  PlayerOptions withTrackOffset(TrackOffset offset) =>
+      offset.kind == TrackOffsetKind.subtitle
+      ? copyWith(subtitleOffsetMs: offset.milliseconds)
+      : copyWith(audioOffsetMs: offset.milliseconds);
 
   /// 夹到合法区间并在类型异常时回落默认。
   PlayerOptions normalized() {
@@ -333,6 +395,9 @@ class PlayerOptions {
       doubleClickRight: doubleClickRight,
       lutPath: lutPath.trim(),
       lutPresetId: lutPresetId.trim(),
+      // 夹取而不是拒绝，理由见 [defaultTrackOffsetMs]。
+      subtitleOffsetMs: TrackOffset.clampMilliseconds(subtitleOffsetMs),
+      audioOffsetMs: TrackOffset.clampMilliseconds(audioOffsetMs),
     );
   }
 
@@ -346,6 +411,11 @@ class PlayerOptions {
     'af': audioNormalization ? audioNormalizationAf : '',
     'tone-mapping': toneMapping.mpvValue,
     'hdr-compute-peak': hdrPeakCompute.mpvValue,
+    // 偏移必须跟着整表一起注入：mpv 的 `sub-delay`/`audio-delay` 是**按文件**
+    // 的选项，换集/换源会回到 0；不在这里写一遍，「记住的偏移」下一集就失效，
+    // 而界面还显示着上一集的值。
+    'sub-delay': mpvSecondsFromMilliseconds(subtitleOffsetMs),
+    'audio-delay': mpvSecondsFromMilliseconds(audioOffsetMs),
   };
 
   PlayerOptions copyWith({
@@ -373,6 +443,8 @@ class PlayerOptions {
     PlayerDoubleClickAction? doubleClickRight,
     String? lutPath,
     String? lutPresetId,
+    int? subtitleOffsetMs,
+    int? audioOffsetMs,
   }) => PlayerOptions(
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     cache: cache ?? this.cache,
@@ -399,6 +471,8 @@ class PlayerOptions {
     doubleClickRight: doubleClickRight ?? this.doubleClickRight,
     lutPath: lutPath ?? this.lutPath,
     lutPresetId: lutPresetId ?? this.lutPresetId,
+    subtitleOffsetMs: subtitleOffsetMs ?? this.subtitleOffsetMs,
+    audioOffsetMs: audioOffsetMs ?? this.audioOffsetMs,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -427,6 +501,8 @@ class PlayerOptions {
     'doubleClickRight': doubleClickRight.id,
     'lutPath': lutPath,
     'lutPresetId': lutPresetId,
+    'subtitleOffsetMs': subtitleOffsetMs,
+    'audioOffsetMs': audioOffsetMs,
   };
 
   /// 宽松解析：任何缺失/非法字段回落默认，**不抛异常**（设置文件可能被手改）。
@@ -496,6 +572,10 @@ class PlayerOptions {
       lutPresetId: map['lutPresetId'] is String
           ? (map['lutPresetId'] as String).trim()
           : '',
+      // 老 settings.json 没有这两个键：缺键即 0（不是「缺键即非法」），
+      // 这保证升级后既没有偏移、也不会把旧配置读成脏数据。
+      subtitleOffsetMs: intOf('subtitleOffsetMs', defaultTrackOffsetMs),
+      audioOffsetMs: intOf('audioOffsetMs', defaultTrackOffsetMs),
     ).normalized();
   }
 
@@ -523,7 +603,9 @@ class PlayerOptions {
       other.doubleClickLeft == doubleClickLeft &&
       other.doubleClickRight == doubleClickRight &&
       other.lutPath == lutPath &&
-      other.lutPresetId == lutPresetId;
+      other.lutPresetId == lutPresetId &&
+      other.subtitleOffsetMs == subtitleOffsetMs &&
+      other.audioOffsetMs == audioOffsetMs;
 
   @override
   int get hashCode => Object.hashAll([
@@ -549,6 +631,8 @@ class PlayerOptions {
     doubleClickRight,
     lutPath,
     lutPresetId,
+    subtitleOffsetMs,
+    audioOffsetMs,
   ]);
 
   @override
