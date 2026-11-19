@@ -4,6 +4,32 @@
 > ffmpeg 滤镜。本文记录现状取证、候选方案、实测数据与迁移步骤，供"要不要换内核依赖"决策。
 > 评估日期 2026-11-19，基于 `beta` 分支 commit `0954d31`。
 
+## 0. 结论：已采纳方案 A
+
+换成 shinchiro 的完整 FFmpeg 构建（pin 到 `20261111`，mpv `v0.42.0-38-gbcde6b93c` / FFmpeg
+`N-128766-gcd4e96eb3`）。落地位置：
+
+| 环节 | 位置 |
+| --- | --- |
+| 下载/校验/解压/缓存 | `scripts/prepare_libmpv_windows.ps1`（归档 SHA256 + DLL SHA256 双钉死，`-Offline` 可离线复用） |
+| 覆盖构建树 | 同一脚本 `-ApplyBuildDir apps/desktop-flutter/build/windows/x64`（`libmpv/` 与 `runner/Release/` 两处） |
+| CI | `desktop-ci.yml` / `desktop-release.yml`：构建前准备、构建后覆盖、单测前 `-VerifyPath` 钉死并显式放进 `PATH` |
+| 打包 | `scripts/package_windows.ps1` 校验随包 `libmpv-2.dll` 的 SHA256，并生成随包 `libmpv-SOURCE.txt`（来源+版本+双哈希+许可） |
+| 代码 | 无需改动：`player_audio_normalization_native_test` 的能力分支在真内核上自动走 `afApplicable=true` |
+
+本地实测（2026-11-19，Windows x64）：
+
+- 构建树上跑 `player_audio_normalization_native_test`：`NATIVE af=dynaudnorm`、`afApplicable=true`、全部通过；
+- 9 个真实内核用例文件（89 用例）全绿；
+- `flutter build windows --release` + 打包 + 启动烟测通过，zip 103 MB → **142 MB**（+39 MB），
+  烟测输出 `player=media-kit (libmpv)`、startup 518 ms；
+- 随包 `libmpv-SOURCE.txt` 已核对（来源 URL、双哈希、mpv/FFmpeg 版本、许可提示）。
+
+仍未完成（不阻塞本次迁移，但要在下一轮补齐）：
+1. **许可全文**：现在包里只有来源与许可名（`libmpv-SOURCE.txt`）和 `NOTICES.Z`，没有 mpv/FFmpeg 的 GPL/LGPL 正文——这是迁移前就存在的缺口，不是本次引入；
+2. **人工回归清单**（本文 §3 门禁 4 里需要真实硬件/画面的几项：硬解、字幕渲染、HDR 判定、拖动/倍速体感）本地无法覆盖，需在发布前手测；
+3. LUT（`vf=lavfi=[lut3d=…]`）在真机上确认恢复（headless 无法建视频链）。
+
 ## 1. 现状：pin 的是谁的构建
 
 | 项 | 值 |
@@ -71,7 +97,7 @@ af=lavfi=[dynaudnorm]  同样生效（当前白名单按设计拒收，保持拒
 **未实测**：LUT（`vf=lavfi=[lut3d=…]`）在同一内核上是否恢复。headless 下 `vo=null` 不建视频链，
 探针拿不到证据（`current-vo` 恒为空）；从"完整 FFmpeg"推断应当一并恢复，但要按第 3 节门禁实测。
 
-## 3. 迁移方案（推荐 A）
+## 3. 迁移方案（A 已采纳并落地，见 §0）
 
 ### 方案 A：换成完整 FFmpeg 的 libmpv（推荐）
 - 步骤：新增 `scripts/prepare_libmpv_windows.ps1`（下载+校验 shinchiro 归档，解出 `libmpv-2.dll`）；

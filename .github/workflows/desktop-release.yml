@@ -217,10 +217,21 @@ jobs:
       - name: Prepare pinned offline Windows native dependencies
         shell: pwsh
         run: ./scripts/prepare_windows_native_deps.ps1
+      # 播放内核不用 media_kit 归档里那份：它的 libavfilter 没有编进滤镜表，音量归一
+      # 在 Windows 上不可能生效（见 docs/reference/libmpv-windows.md）。
+      - name: Prepare pinned Windows libmpv (full FFmpeg)
+        shell: pwsh
+        run: ./scripts/prepare_libmpv_windows.ps1
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh
         run: flutter build windows --release "--dart-define=APP_VERSION=${{ needs.meta.outputs.version }}"
+
+      # 覆盖 CMake 解压出来的那份 libmpv：换成仓库 pin 的完整 FFmpeg 构建（mpv v0.42.0）。
+      # media_kit 只负责把 DLL 放进构建树，具体是哪一份内核由这一步决定。
+      - name: Swap in pinned Windows libmpv (full FFmpeg)
+        shell: pwsh
+        run: ./scripts/prepare_libmpv_windows.ps1 -ApplyBuildDir apps/desktop-flutter/build/windows/x64
 
       - name: Unit tests
         working-directory: apps/desktop-flutter
@@ -229,11 +240,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
-          $libmpv = Get-ChildItem -Path 'build/windows/x64' -Filter 'libmpv-2.dll' -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          $libmpv = Get-Item -LiteralPath 'build/windows/x64/runner/Release/libmpv-2.dll' -ErrorAction SilentlyContinue
           if (-not $libmpv) {
             throw '未找到 libmpv-2.dll：media_kit 的播放器用例无法运行（Release 构建应已下载解压它）。'
           }
+          # 单测必须跑在**随包那一份**内核上，而且必须是 pin 的完整 FFmpeg 构建：
+          # 否则播放器用例会在另一个内核上给出失真的结论（这正是随包内核无滤镜表被藏了两年的原因）。
+          & ../../scripts/prepare_libmpv_windows.ps1 -VerifyPath $libmpv.FullName
           Write-Host "libmpv：$($libmpv.FullName)"
           $env:PATH = "$($libmpv.Directory.FullName);$env:PATH"
           # audio_ai 用例直接加载真实 native（不做 mock）：代码按

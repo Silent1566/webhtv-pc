@@ -111,7 +111,7 @@ function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
             # 清掉（见下面的清理步骤），万一漏清也会在这里被判成 Untrusted 而不是静默进包。
             if (-not $Staging -and $path -cmatch '^[^/]+\.(exp|lib|ilk)$') { $allowed = $true }
             if ($path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -and $item.Extension -match '(?i)^\.(py|pyc|jar)$') { $allowed = $false }
-            if ($Staging -and $path -cin @('BUILD_INFO.txt','THIRD_PARTY.txt')) { $allowed = $true }
+            if ($Staging -and $path -cin @('BUILD_INFO.txt','THIRD_PARTY.txt','libmpv-SOURCE.txt')) { $allowed = $true }
             if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
                 $allowed = $path -cin $sidecarFiles
                 foreach ($dir in $sidecarDependencyDirs.Keys) { if ($path.StartsWith($dir+'/',[StringComparison]::Ordinal)) { $allowed = $true } }
@@ -273,6 +273,16 @@ if (-not $SkipNativeAiAssetChecks) {
     if ((Get-FileHash -LiteralPath (Join-Path $BuildDir 'libLiteRt.dll') -Algorithm SHA256).Hash.ToLowerInvariant() -ne
         'fd1ee59560a7aa13d44614bd4344c9a75070c18c9faf29792b1841f22dae6add') {
         Fail '官方LiteRT Windows DLL SHA256不匹配'
+    }
+    # 播放内核必须是我们 pin 的完整 FFmpeg 构建：media_kit 归档里那份 libavfilter 没有
+    # 滤镜表，音量归一在 Windows 上不可能生效，误换成 lavfi 形态还会丢整条音轨
+    # （见 docs/reference/libmpv-windows.md）。这里按 SHA256 卡死，不允许静默降级。
+    $libmpvDll = Join-Path $BuildDir 'libmpv-2.dll'
+    if (-not (Test-Path -LiteralPath $libmpvDll -PathType Leaf)) { Fail "缺少播放内核：libmpv-2.dll（$BuildDir）" }
+    try {
+        & (Join-Path $PSScriptRoot 'prepare_libmpv_windows.ps1') -VerifyPath $libmpvDll | Out-Null
+    } catch {
+        Fail "随包 libmpv-2.dll 不是 pin 的完整 FFmpeg 构建：$($_.Exception.Message)"
     }
 }
 
@@ -579,9 +589,40 @@ Sidecar 宿主（随包）：Python / Node / JVM
     }
     [IO.File]::WriteAllText(
         (Join-Path $staging 'THIRD_PARTY.txt'),
-        (($inventory -join "`n") + "`n"),
+        (($inventory -join [char]10) + [char]10),
         $utf8
     )
+
+    # 播放内核来自外部构建（不是 Flutter 依赖树里能重建出来的东西）：随包必须留下
+    # 来源、版本与双重哈希，否则"这份 libmpv 是谁编的"无从追溯。
+    # 上面的 SHA256 卡口已按 -SkipNativeAiAssetChecks 放行合成夹具，这里同口径。
+    $libmpvManifestPath = Join-Path $RepoRoot '.local/libmpv-windows/manifest.json'
+    if (-not (Test-Path -LiteralPath $libmpvManifestPath -PathType Leaf)) {
+        if (-not $SkipNativeAiAssetChecks) {
+            Fail "缺少 libmpv 来源清单：$libmpvManifestPath（先执行 scripts/prepare_libmpv_windows.ps1）"
+        }
+        Write-Verbose "跳过 libmpv-SOURCE.txt（-SkipNativeAiAssetChecks 的合成夹具）"
+    } else {
+        $libmpvManifest = Get-Content -LiteralPath $libmpvManifestPath -Raw | ConvertFrom-Json
+        $libmpvSource = @(
+            'libmpv（播放内核）来源与许可'
+            ''
+            "source        $($libmpvManifest.source)"
+            "archiveUrl    $($libmpvManifest.archiveUrl)"
+            "archiveSha256 $($libmpvManifest.archiveSha256)"
+            "dllSha256     $($libmpvManifest.dllSha256)"
+            "dllBytes      $($libmpvManifest.dllBytes)"
+            "mpv           $($libmpvManifest.mpvVersion)"
+            "ffmpeg        $($libmpvManifest.ffmpegVersion)"
+            ''
+            $libmpvManifest.license
+            ''
+            '为什么不用 media_kit 归档里那一份：它的 libavfilter 没有编进滤镜表，连 lavfi=[anull] 都建不起来，'
+            '音量归一在 Windows 上不可能生效（裸名被拒 rc=-9；lavfi 形态会让 mpv 丢掉整条音轨）。'
+            '详细取证与迁移评估见仓库 docs/reference/libmpv-windows.md。'
+        ) -join [char]10
+        [IO.File]::WriteAllText((Join-Path $staging 'libmpv-SOURCE.txt'), $libmpvSource + [char]10, $utf8)
+    }
 
     Assert-PackageBuildTree $staging -Staging
 
