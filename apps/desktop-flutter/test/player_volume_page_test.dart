@@ -20,12 +20,25 @@ Future<void> _expectStored(
   double volume,
   double resume,
 ) async {
+  // 落盘是异步的（快速连改会排队、离页时才 flush），所以这里等它写完，
+  // 而不是假定"紧接着读盘就已经写好"——慢 runner 上那个假定会偶发失败
+  // （CI 上 volume 用例曾这样红过一次）。等到超时仍然断言，失败信息不变。
+  late double storedVolume;
+  late double storedResume;
   await tester.runAsync(() async {
-    final restored = UiPreferencesStore(path: state.paths.settingsPath);
-    await restored.load();
-    expect(restored.playerVolume, volume);
-    expect(restored.playerResumeVolume, resume);
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (true) {
+      final restored = UiPreferencesStore(path: state.paths.settingsPath);
+      await restored.load();
+      storedVolume = restored.playerVolume;
+      storedResume = restored.playerResumeVolume;
+      if (storedVolume == volume && storedResume == resume) return;
+      if (DateTime.now().isAfter(deadline)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
   });
+  expect(storedVolume, volume);
+  expect(storedResume, resume);
 }
 
 Future<AppState> _mount(WidgetTester tester, {double? seed}) async {
