@@ -684,6 +684,13 @@ jobs:
       - name: Install Dart dependencies
         run: flutter pub get
         working-directory: apps/desktop-flutter
+      # CMake 要求 `runtime/python` 里正好是 bundle.json + python-runtime.zip
+      # （CMakeLists.txt:99）。首次跑这个试用 job 时漏了这步，构建直接报
+      # `ValueError: Bundle must contain exactly bundle.json and python-runtime.zip`。
+      - name: Prepare verified offline Linux Python runtime
+        run: |-
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --cache-dir .local/python-runtime-linux/cache --lock-file scripts/python-runtime-linux.lock.json
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --validate-only --offline
       - name: Build Linux debug bundle
         run: flutter build linux --debug
         working-directory: apps/desktop-flutter
