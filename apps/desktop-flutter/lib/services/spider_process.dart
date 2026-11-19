@@ -19,6 +19,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:xml/xml.dart';
 
@@ -29,6 +30,24 @@ import 'log_service.dart';
 import 'node_runtime.dart';
 import 'python_environment.dart';
 import 'windows_job.dart';
+
+/// 把不可信标识（manifest key、siteKey）净化成**单个**路径段。
+///
+/// 为什么必须有：siteKey 取自源包 manifest，属于不可信输入。直接
+/// `p.join(root, siteKey)` 时，`../`、绝对路径或平台分隔符都能把结果拼到
+/// `root` 之外；而 sidecar 工作目录随后会被 [SidecarProcess.dispose] 递归删除，
+/// 拼错一次就是删掉别人的目录。缓存目录（`SpiderRegistry.directoryFor`）与
+/// sidecar 工作目录现在共用这一份规则，不再各写一套。
+///
+/// 放在本文件而不是 spider_registry.dart：registry 已经 import 本文件，
+/// 反向 import 会形成循环依赖。
+String sanitizePathSegment(String value) {
+  final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
+  // `.` / `..` 不含被替换字符却仍能穿出父目录，空串则会让 join 退化成父目录本身；
+  // 二者都是「净化后依然危险」的名字，单独兜底。
+  if (sanitized.isEmpty || sanitized == '.' || sanitized == '..') return '_';
+  return sanitized;
+}
 
 /// 启动参数。
 class SidecarLaunchSpec {
@@ -331,13 +350,22 @@ class SpiderDebugLog {
 
 /// 单个 sidecar 进程。
 class SidecarProcess {
-  SidecarProcess._(this._process, this._spec, this._job, this._debugLog);
+  SidecarProcess._(
+    this._process,
+    this._spec,
+    this._job,
+    this._debugLog,
+    this._log,
+  );
 
   final Process _process;
   final SidecarLaunchSpec _spec;
 
   /// 详细调试日志旁路；null 表示调用点没注入（既有行为与日志量不变）。
   final SpiderDebugLog? _debugLog;
+
+  /// 诊断告警出口（现场日志保留/清理失败）；null 表示调用点没注入。
+  final LogService? _log;
 
   /// Windows Job Object；为 null 表示只能做进程级终止（§18.2.1）。
   WindowsJobObject? _job;
@@ -378,6 +406,22 @@ class SidecarProcess {
   String? get lastStdinError => _lastStdinError;
   String? _lastStderrError;
 
+  /// 超时升级为终止进程树之前的宽限期守卫（§9.3.1「超时后依次执行取消、
+  /// 宽限等待、终止进程树」）。
+  ///
+  /// 必须是字段而不是匿名 Timer：匿名 Timer 没有句柄，[dispose] 之后照样
+  /// 到点触发，那时进程已经退出、pid 也可能被系统复用，这一刀根本不该落下。
+  Timer? _killGuard;
+
+  /// 已超时、迟到响应仍可能到达的请求 id。
+  ///
+  /// 用集合而不是单个 id：A 超时后 B 也超时，守卫会为 B 重新挂上；此时 A 的
+  /// 迟到响应同样证明这一次超时不是进程挂死。集合在「证明存活」、进程退出和
+  /// [dispose] 时清空，不会跨守卫周期堆积。
+  final Set<String> _timedOutIds = {};
+
+  int _killTreeCount = 0;
+
   /// 心跳间隔（§9.3.1「支持 cancel、shutdown 和心跳」）。
   static const Duration heartbeatInterval = Duration(seconds: 15);
 
@@ -388,6 +432,16 @@ class SidecarProcess {
 
   static const int stderrKeepFiles = 3;
 
+  /// 正常停止/崩溃后保留的 sidecar 现场份数（按站点计）。
+  ///
+  /// 为什么是 10：[dispose] 默认会连工作目录一起删掉，而 stderr.log 就落在
+  /// 工作目录里（见 [SpiderHostSupervisor] 里 logFile 与 workingDirectory
+  /// 同目录），不复制就等于「一正常停止就销毁崩溃现场」。单份体积由 stderr
+  /// 轮转封顶（([stderrKeepFiles] + 1) × [stderrRotateBytes] ≈ 1MB），10 份约
+  /// 10MB/站点——足够回答「刚才那个源为什么打不开」的最近几次启停，再老的现场
+  /// 已经和当下的版本/配置对不上了，留着只是占磁盘。
+  static const int preservedStderrKeepFiles = 10;
+
   int get pid => _process.pid;
 
   bool get isRunning => !_exitCompleter.isCompleted;
@@ -396,15 +450,27 @@ class SidecarProcess {
 
   String? get lastStderrError => _lastStderrError;
 
+  /// 兜底终止守卫是否仍在等待（用例据此断言响应/退出/dispose 之后已撤销）。
+  @visibleForTesting
+  bool get killGuardArmed => _killGuard?.isActive ?? false;
+
+  /// 已经发起的进程树终止次数（用例据此断言宽限期之后不再补刀）。
+  @visibleForTesting
+  int get killTreeCount => _killTreeCount;
+
   ProcessIsolationReport get isolation =>
       _job?.report ?? ProcessIsolationReport.bestEffortOnly;
 
   Future<SidecarExit> get done => _exitCompleter.future;
 
   /// 启动子进程并接管 stdout/stderr。
+  ///
+  /// [log] 只用于诊断告警（现场日志保留/清理失败）；null 时静默跳过，
+  /// 既有的启动与停止行为不受影响。
   static Future<SidecarProcess> start(
     SidecarLaunchSpec spec, {
     SpiderDebugLog? debugLog,
+    LogService? log,
   }) async {
     final pythonSidecar =
         spec.pythonRuntime ||
@@ -440,7 +506,7 @@ class SidecarProcess {
         }
       }
 
-      final instance = SidecarProcess._(process, spec, job, debugLog);
+      final instance = SidecarProcess._(process, spec, job, debugLog, log);
       instance._wire();
       if (pythonSidecar) {
         unawaited(
@@ -553,6 +619,11 @@ class SidecarProcess {
         // 非响应消息（例如 sidecar 主动通知）只忽略，不视为污染。
         continue;
       }
+      // 只有**超时的那个请求**自己回了帧，才证明进程没挂死。心跳与别的请求
+      // 的应答只说明读循环还在转，站源可以照样卡死在工作线程里，不能拿它们
+      // 当存活证据。超时请求的迟到响应已从 `_pending` 移出，会落到下面的未知
+      // id 分支，因此同样在这里撤销守卫。
+      if (_timedOutIds.remove(response.id)) _cancelKillGuard();
       final pending = _pending.remove(response.id);
       if (pending == null) {
         // 未知 ID：只在日志层记录，不改变任何在途请求状态（§9.3.1）。
@@ -685,6 +756,8 @@ class SidecarProcess {
 
   void _onExit(int code) {
     _heartbeatTimer?.cancel();
+    // 进程已经退出，宽限窗口失去意义：守卫绝不能等 [dispose] 之后再补一刀。
+    _cancelKillGuard();
     final expected = _stopping;
     if (!_exitCompleter.isCompleted) {
       _exitCompleter.complete(
@@ -860,15 +933,50 @@ class SidecarProcess {
     _pending.remove(pending.id);
     // §9.3.1：超时后依次执行取消、宽限等待、终止进程树。
     _send(IpcEnvelope.cancel(pending.id));
-    Timer(const Duration(milliseconds: 500), () {
-      // 只有进程仍在运行且确实无响应时才终止，避免把偶发慢响应误判为挂死。
+    _armKillGuard(pending.id);
+  }
+
+  /// 撤销宽限期守卫。
+  ///
+  /// 三个撤销点缺一不可：超时的那个请求自己回了帧（进程没挂死）、[_onExit]
+  /// 或 [dispose] 已经把进程收掉。少任何一个，都会留下「进程早已结束、守卫
+  /// 仍然到点补刀」的窗口。
+  void _cancelKillGuard() {
+    _killGuard?.cancel();
+    _killGuard = null;
+    _timedOutIds.clear();
+  }
+
+  /// 挂上宽限期守卫：到期仍拿不到这个请求的任何帧，才升级为终止进程树。
+  ///
+  /// 升级条件（两条同时满足才 killTree）：
+  /// 1. 到期时进程仍在运行、且未判协议污染（污染已由 [_killWithProtocolError]
+  ///    终止，避免重复终止）；
+  /// 2. 这个请求在宽限期内没有回帧（[_timedOutIds] 里还留着它），且
+  ///    `_pending` 已空——还有别的调用方在途时，这次超时只说明**这一个**
+  ///    请求慢，不代表整个进程挂死，杀进程等于替别人做决定（一次慢请求就能让
+  ///    整站下线）。
+  ///
+  /// 因此「确实挂死才杀」的语义仍然成立：真挂死的进程一个帧都回不了，它的
+  /// 第二次超时（届时通常已无其它在途请求）会重新挂上守卫并真正终止。
+  void _armKillGuard(String requestId) {
+    // 新的超时是更新的证据：重挂守卫，宽限期从这一刻重新计时。已超时的 id
+    // 要留着——它们迟到的响应仍然算「进程没挂死」的证据。
+    _killGuard?.cancel();
+    _killGuard = null;
+    _timedOutIds.add(requestId);
+    _killGuard = Timer(const Duration(milliseconds: 500), () {
+      _killGuard = null;
+      if (_exitCompleter.isCompleted) return;
       if (_stdoutPolluted) return;
+      if (_pending.isNotEmpty) return;
       unawaited(killTree());
     });
   }
 
   /// 终止整个子进程树。
   Future<void> killTree() async {
+    _killTreeCount += 1;
     _stopping = true;
     _heartbeatTimer?.cancel();
     if (_job != null && _job!.report.canTerminateTree) {
@@ -909,6 +1017,8 @@ class SidecarProcess {
   /// 释放资源：关闭管道、作业对象与临时目录（§9.3.1「destroy/进程退出、资源释放」）。
   Future<void> dispose({bool removeWorkingDirectory = true}) async {
     _heartbeatTimer?.cancel();
+    // 释放之后不再有人等这一次宽限：先撤销守卫再终止进程。
+    _cancelKillGuard();
     if (!_exitCompleter.isCompleted) {
       await killTree();
       try {
@@ -921,6 +1031,18 @@ class SidecarProcess {
     _job?.dispose();
     _job = null;
     if (removeWorkingDirectory) {
+      // 先留现场再删目录：stderr.log 与轮转文件就在工作目录里，删目录等于
+      // 销毁崩溃现场。保留属于诊断设施，任何失败都只能告警——反过来阻断停止/
+      // 空闲回收会是比丢日志严重得多的缺陷。
+      try {
+        await preserveStderrLog(
+          logFile: _spec.logFile,
+          siteKey: _spec.siteKey,
+          log: _log,
+        );
+      } catch (error) {
+        _log?.warning('sidecar 现场日志复制失败（不影响停止）：$error', scope: 'sidecar');
+      }
       try {
         final dir = Directory(_spec.workingDirectory);
         if (await dir.exists()) await dir.delete(recursive: true);
@@ -928,6 +1050,94 @@ class SidecarProcess {
         // 目录被占用时忽略，由系统临时目录清理。
       }
     }
+  }
+
+  /// 把 stderr.log 及其轮转文件按时间顺序合并复制到应用日志目录，
+  /// 落成 `sidecar-<siteKey>-<时间戳>.log`，并只保留最近
+  /// [preservedStderrKeepFiles] 份。
+  ///
+  /// 返回写入的文件；没有 stderr 内容或日志目录未就绪时返回 null。
+  /// 复制失败会抛出（由 [dispose] 兜住并告警），清理失败只在内部告警——已经
+  /// 写好的现场不能因为「旧文件删不掉」而一起丢掉。
+  static Future<File?> preserveStderrLog({
+    required String logFile,
+    required String siteKey,
+    String? directory,
+    LogService? log,
+  }) async {
+    final target = directory ?? LogService.logDirectoryOverride;
+    // 日志目录尚未初始化（未开放落盘/纯单测）：没有可写的地方，也就无从保留。
+    if (target == null) return null;
+    // 轮转文件编号越大越旧（[_rotateStderr] 每次把 .1 往后挪），因此从大号往
+    // 小号读、最后接主文件，拼出来的时间顺序与进程实际输出一致。
+    final sources = <File>[
+      for (var index = stderrKeepFiles; index >= 1; index--)
+        File('$logFile.$index'),
+      File(logFile),
+    ];
+    final existing = <File>[];
+    for (final file in sources) {
+      if (await file.exists()) existing.add(file);
+    }
+    // 进程还没往 stderr 写过任何东西：没有现场可留，不制造空文件。
+    if (existing.isEmpty) return null;
+    final segment = sanitizePathSegment(siteKey);
+    final stamp = _fileTimestamp(DateTime.now());
+    final out = File(p.join(target, 'sidecar-$segment-$stamp.log'));
+    final bytes = <int>[];
+    for (final file in existing) {
+      final chunk = await file.readAsBytes();
+      bytes.addAll(chunk);
+      // 片段之间补换行：上一份的最后一行可能被轮转截断，直接粘下一份会把
+      // 两条无关的日志并成一行。
+      if (chunk.isEmpty || chunk.last != 10) bytes.add(10);
+    }
+    await Directory(target).create(recursive: true);
+    await out.writeAsBytes(bytes, flush: true);
+    await _prunePreservedStderrLogs(Directory(target), segment, log: log);
+    return out;
+  }
+
+  /// 每个站点只保留最近 [preservedStderrKeepFiles] 份现场。
+  ///
+  /// 只清本站点前缀的文件：一个反复崩溃的源不该把其它源的现场挤掉。
+  /// 清理失败只告警（下次保留时还会再试）。
+  static Future<void> _prunePreservedStderrLogs(
+    Directory directory,
+    String segment, {
+    LogService? log,
+  }) async {
+    try {
+      final prefix = 'sidecar-$segment-';
+      final kept = <File>[];
+      await for (final entity in directory.list()) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        if (name.startsWith(prefix) && name.endsWith('.log')) kept.add(entity);
+      }
+      if (kept.length <= preservedStderrKeepFiles) return;
+      // 文件名里的时间戳定长，字典序即时间序（同秒内靠毫秒位仍然稳定）。
+      kept.sort((a, b) => p.basename(b.path).compareTo(p.basename(a.path)));
+      for (final stale in kept.skip(preservedStderrKeepFiles)) {
+        try {
+          await stale.delete();
+        } catch (_) {
+          // 单个文件被占用就先留着，下次再清。
+        }
+      }
+    } catch (error) {
+      log?.warning('清理旧 sidecar 现场日志失败：$error', scope: 'sidecar');
+    }
+  }
+
+  /// 文件名用的时间戳（本地时间，定长可排序）。
+  ///
+  /// 不用 ISO8601：其中的 `:` 在 Windows 文件名里非法，写盘会直接失败。
+  static String _fileTimestamp(DateTime time) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${time.year}${two(time.month)}${two(time.day)}'
+        '-${two(time.hour)}${two(time.minute)}${two(time.second)}'
+        '-${time.millisecond.toString().padLeft(3, '0')}';
   }
 }
 
@@ -1267,10 +1477,22 @@ class SpiderHostSupervisor {
       );
     }
 
-    final workingDirectory = p.join(
-      workRoot,
+    // siteKey 来自 manifest key（源包内容，不可信）：先净化成单个路径段再拼，
+    // 否则 `../../x` 这类 key 会把工作目录拼到 workRoot 之外，而 dispose() 会
+    // 递归删除这个目录。
+    final workSegment = sanitizePathSegment(
       '$siteKey-${_clock().microsecondsSinceEpoch}-${++_workSequence}',
     );
+    final workingDirectory = p.join(workRoot, workSegment);
+    // 净化之后仍要断言：这个目录随后会被递归删除，宁可在启动阶段就报错，
+    // 也绝不能静默回退到 workRoot（回退会把删除范围放大到全部站点）。
+    if (!p.isWithin(workRoot, workingDirectory)) {
+      throw SpiderError(
+        code: SpiderErrorCode.initFailed,
+        message: 'sidecar 工作目录越界：$workingDirectory 不在 $workRoot 内，拒绝启动',
+        siteKey: siteKey,
+      );
+    }
     final logFile = p.join(workingDirectory, 'stderr.log');
 
     SidecarProcess? process;
@@ -1288,6 +1510,7 @@ class SpiderHostSupervisor {
           extraEnvironment: environment,
         ),
         debugLog: debugLog,
+        log: log,
       );
       // 先挂到 runtime 上：停机才能在启动过程中收掉这个进程。
       runtime.process = process;

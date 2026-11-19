@@ -88,6 +88,9 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   bool _newestFirst = true;
   String _busyNote = '';
   String? _message;
+
+  /// 本次导入自身失败的原因（与登记表读取失败分开记账，两者都要能显示）。
+  String? _importStateError;
   String? _urlError;
 
   AppState get _state => widget.state;
@@ -111,13 +114,14 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    List<WebHomeSource>? webHome;
-    String? webHomeError;
-    try {
-      webHome = _state.webHomeSources;
-    } catch (error) {
-      webHomeError = '载入 HTML 源失败：$error';
-    }
+    // getter 不再抛异常（在 build 期抛会炸整页），失败由状态层降级并回报原因；
+    // 失败时 webHome 保持 null，页面据此区分「不知道有哪些源」与「确实没有源」。
+    // 顺序要紧：先读一次（缓存未命中时这次读盘才会记账），再取失败原因；
+    // 反过来会在首次构建时拿到 null，把「读取失败」显示成「没有本地源」。
+    final sources = _state.webHomeSources;
+    final loadDetail = _state.webHomeLoadErrorDetail;
+    final webHomeError = loadDetail == null ? null : '载入 HTML 源失败：$loadDetail';
+    final webHome = loadDetail == null ? sources : null;
     // 只列本地导入的（`spiders/local/`）；远端直连源在 Spider 页统一展示。
     final localRoot = p.join(_state.spiderRoot, 'local');
     final localSpiders = _state.localSpiders
@@ -209,7 +213,7 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
           ),
           if (_report != null) ...[
             const Divider(height: AppSpace.xl),
-            _buildCandidates(context, importedKeys, webHomeError),
+            _buildCandidates(context, importedKeys, webHomeError ?? _importStateError),
           ],
           const Divider(height: AppSpace.xl),
           SettingsSection(
@@ -935,13 +939,28 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
       if (picked.isEmpty) return;
       final result = await _state.importLocalSources(picked);
       if (!mounted) return;
+      // 整批失败时必须给一句明确结论：失败只埋在结果报表里，用户会读成
+      // 「导入成功但 0 个」。登记表读取失败另记一份，好在候选区如实说明
+      // 「已导入状态未知」，否则会让人以为这批源全都不存在。
+      final rejected = result.rejected;
+      final readFailure = rejected
+          .map((item) => item.message)
+          .firstWhere((message) => message.contains('登记表'), orElse: () => '');
       setState(() {
         _result = result;
         _selected.clear();
-        _message = null;
+        _message = result.importedCount == 0 && rejected.isNotEmpty
+            ? '导入失败：${rejected.first.message}'
+            : null;
+        _importStateError = readFailure.isEmpty ? null : readFailure;
       });
     } catch (error) {
-      if (mounted) setState(() => _message = '导入失败：$error');
+      if (mounted) {
+        setState(() {
+          _message = '导入失败：$error';
+          _importStateError = '$error';
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

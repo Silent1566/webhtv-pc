@@ -9,6 +9,7 @@
 /// 为什么不在这里拉起真实 sidecar：入参/出参日志挂在 [SidecarProcess] 的帧出口
 /// 与响应入口，两者的格式化、脱敏与开关语义都在 [SpiderDebugLog] 这一层可测；
 /// 真实子进程链路由 `phase2_ipc_test.dart` 覆盖。
+@Tags(['external'])
 library;
 
 import 'dart:convert';
@@ -300,6 +301,179 @@ void main() {
       final reloadedOff = UiPreferencesStore(path: path);
       await reloadedOff.load();
       expect(reloadedOff.spiderDebugLog, isFalse);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 停止时的现场保留（dispose 默认删工作目录，而 stderr.log 就在目录里）
+  // ---------------------------------------------------------------------------
+  group('停止时保留 sidecar 现场日志', () {
+    late Directory tempDir;
+    String? savedOverride;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('webhtv-sidecar-scene');
+      savedOverride = LogService.logDirectoryOverride;
+      // 缺省不落盘：是否需要保留由用例显式指定目录，避免读到上一个用例的残留。
+      LogService.logDirectoryOverride = null;
+    });
+
+    tearDown(() async {
+      LogService.logDirectoryOverride = savedOverride;
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {
+        // Windows 上偶发目录占用：清理失败不影响用例结论。
+      }
+    });
+
+    test('把 stderr.log 与轮转文件按时间顺序合并成一个文件', () async {
+      final workDir = p.join(tempDir.path, 'work', 'site-a');
+      await Directory(workDir).create(recursive: true);
+      final logFile = p.join(workDir, 'stderr.log');
+      await File('$logFile.2').writeAsString('oldest\n');
+      await File('$logFile.1').writeAsString('older\n');
+      await File(logFile).writeAsString('newest\n');
+
+      final out = await SidecarProcess.preserveStderrLog(
+        logFile: logFile,
+        siteKey: 'site-a',
+        directory: p.join(tempDir.path, 'logs'),
+      );
+
+      expect(out, isNotNull);
+      expect(
+        p.basename(out!.path),
+        matches(RegExp(r'^sidecar-site-a-\d{8}-\d{6}-\d{3}\.log$')),
+      );
+      expect(await out.readAsString(), 'oldest\nolder\nnewest\n');
+    });
+
+    test('每个站点只保留最近 10 份，其它站点的现场不受影响', () async {
+      final logDir = p.join(tempDir.path, 'logs');
+      await Directory(logDir).create(recursive: true);
+      for (var i = 0; i < 12; i++) {
+        final name = 'sidecar-site-a-20240101-0000'
+            '${i.toString().padLeft(2, '0')}-000.log';
+        await File(p.join(logDir, name)).writeAsString('old-$i\n');
+      }
+      await File(
+        p.join(logDir, 'sidecar-site-b-20240101-000000-000.log'),
+      ).writeAsString('other\n');
+
+      final workDir = p.join(tempDir.path, 'work', 'site-a');
+      await Directory(workDir).create(recursive: true);
+      final logFile = p.join(workDir, 'stderr.log');
+      await File(logFile).writeAsString('fresh\n');
+
+      await SidecarProcess.preserveStderrLog(
+        logFile: logFile,
+        siteKey: 'site-a',
+        directory: logDir,
+      );
+
+      final names = Directory(logDir)
+          .listSync()
+          .whereType<File>()
+          .map((file) => p.basename(file.path))
+          .where((name) => name.startsWith('sidecar-site-a-'))
+          .toList()
+        ..sort();
+      expect(names, hasLength(SidecarProcess.preservedStderrKeepFiles));
+      expect(
+        names,
+        isNot(contains('sidecar-site-a-20240101-000000-000.log')),
+        reason: '最旧的现场必须被清掉',
+      );
+      expect(names, contains('sidecar-site-a-20240101-000003-000.log'));
+      expect(
+        File(p.join(logDir, 'sidecar-site-b-20240101-000000-000.log'))
+            .existsSync(),
+        isTrue,
+        reason: '清理只能作用于本站点的文件',
+      );
+    });
+
+    test('日志目录未就绪时跳过保留，源文件原样留着', () async {
+      final logFile = p.join(tempDir.path, 'work', 'site-a', 'stderr.log');
+      await Directory(p.dirname(logFile)).create(recursive: true);
+      await File(logFile).writeAsString('x\n');
+
+      final out = await SidecarProcess.preserveStderrLog(
+        logFile: logFile,
+        siteKey: 'site-a',
+      );
+
+      expect(out, isNull);
+      expect(File(logFile).existsSync(), isTrue);
+    });
+
+    test('siteKey 含穿越字符时落点仍在日志目录内', () async {
+      final logDir = p.join(tempDir.path, 'logs');
+      final logFile = p.join(tempDir.path, 'work', 'site-a', 'stderr.log');
+      await Directory(p.dirname(logFile)).create(recursive: true);
+      await File(logFile).writeAsString('x\n');
+
+      final out = await SidecarProcess.preserveStderrLog(
+        logFile: logFile,
+        siteKey: '../../escape',
+        directory: logDir,
+      );
+
+      expect(out, isNotNull);
+      expect(p.dirname(out!.path), logDir);
+    });
+
+    test('dispose 先留现场再删工作目录', () async {
+      // 用 /bin/sh 造一个真实子进程：dispose 的删除顺序只有端到端才看得见。
+      if (Platform.isWindows) return;
+      final workDir = p.join(tempDir.path, 'work', 'scene-fixture');
+      final logFile = p.join(workDir, 'stderr.log');
+      final logDir = p.join(tempDir.path, 'logs');
+      LogService.logDirectoryOverride = logDir;
+
+      final process = await SidecarProcess.start(
+        SidecarLaunchSpec(
+          siteKey: 'scene-fixture',
+          executable: '/bin/sh',
+          arguments: const ['-c', 'echo scene >&2; exit 0'],
+          workingDirectory: workDir,
+          logFile: logFile,
+        ),
+      );
+      await process.done.timeout(const Duration(seconds: 10));
+      // 退出后补一行确定的标记：stderr 是异步送达的，不能拿它当断言依据。
+      await File(logFile).writeAsString('scene-marker\n', mode: FileMode.append);
+
+      await process.dispose();
+
+      expect(Directory(workDir).existsSync(), isFalse, reason: '工作目录照旧删除');
+      final kept = Directory(logDir)
+          .listSync()
+          .whereType<File>()
+          .where(
+            (file) => p.basename(file.path).startsWith('sidecar-scene-fixture-'),
+          )
+          .toList();
+      expect(kept, hasLength(1));
+      expect(await kept.single.readAsString(), contains('scene-marker'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 路径段净化（工作目录/缓存目录共用）
+  // ---------------------------------------------------------------------------
+  group('路径段净化', () {
+    test('把分隔符与穿越段压成单个安全段', () {
+      expect(sanitizePathSegment('site-a'), 'site-a');
+      expect(sanitizePathSegment('a/../../b'), 'a_.._.._b');
+      expect(sanitizePathSegment(r'a\b'), 'a_b');
+      expect(sanitizePathSegment('..'), '_');
+      expect(sanitizePathSegment('.'), '_');
+      expect(sanitizePathSegment(''), '_');
+
+      final root = p.join(Directory.systemTemp.path, 'work');
+      expect(p.isWithin(root, p.join(root, sanitizePathSegment('../evil'))), isTrue);
     });
   });
 }

@@ -585,7 +585,7 @@ AiContentCompletion? aiContentCompletion,
     final result = await _directRegistrar().materialize(config);
     _router.setDirectSpiders(result);
     _attachSiteService();
-    notifyListeners();
+    _notifyIfAlive();
     return result.length;
   }
 
@@ -598,9 +598,13 @@ AiContentCompletion? aiContentCompletion,
   final Set<String> _pendingLocalImports = {};
   Map<String, WebHomeSource>? _webHomeSourcesCache;
   String? _webHomeLoadError;
+  String? _webHomeLoadErrorDetail;
 
   /// 登记表严格读取失败的原因；内部降级不代表登记表为空，也不会写回。
   String? get webHomeLoadError => _webHomeLoadError;
+
+  /// 失败原因原文（不含前缀）：页面需要按自己的措辞展示，避免两处前缀叠加。
+  String? get webHomeLoadErrorDetail => _webHomeLoadErrorDetail;
 
   Map<String, WebHomeSource> _safeWebHomeSources() {
     final cached = _webHomeSourcesCache;
@@ -608,16 +612,16 @@ AiContentCompletion? aiContentCompletion,
     try {
       final sources = _webHomeStore.list();
       _webHomeLoadError = null;
+      _webHomeLoadErrorDetail = null;
       return _webHomeSourcesCache = {
         for (final source in sources)
           if (source.enabled) source.key: source,
       };
     } on FormatException catch (error) {
-      _webHomeLoadError = '载入HTML源失败：$error';
+      _recordWebHomeLoadError(error);
     } on FileSystemException catch (error) {
-      _webHomeLoadError = '载入HTML源失败：$error';
+      _recordWebHomeLoadError(error);
     }
-    log.error(_webHomeLoadError!, scope: 'site');
     return _webHomeSourcesCache = const {};
   }
 
@@ -846,7 +850,7 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> saveAudioAiSettings(Map<String, Object?> values) async {
     final ok =
         await _uiPreferences?.rememberAiIntegrationSettings(values) ?? false;
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -902,7 +906,7 @@ AiContentCompletion? aiContentCompletion,
           'ai_title_extraction': enabled,
         }) ??
         false;
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -913,7 +917,7 @@ AiContentCompletion? aiContentCompletion,
         }) ??
         false;
     if (!enabled) clearAiAdApplication();
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1009,7 +1013,7 @@ AiContentCompletion? aiContentCompletion,
     await importAiUserFiles(paths, raw);
     _aiIntegration = null;
     clearAiAdApplication();
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   Future<MultiSiteSearchOutcome?> searchRecommendation(String title) async {
@@ -1083,6 +1087,35 @@ AiContentCompletion? aiContentCompletion,
   int _aiLoadRun = 0;
   final Map<String, AiSeasonBindingsResult> _aiSeasonBindings = {};
   final Map<String, String> _aiSeasonSnapshots = {};
+
+  /// AI 季度绑定的容量上限。
+  ///
+  /// 为什么是这个量级：键里带「配置|站点|影片|线路」，一个详情页实测最多十几条
+  /// 线路，128 条足够覆盖同一会话里来回切线路、换源、几部剧来回比较的全部记录，
+  /// 同时挡住异常配置（比如线路 flag 每帧都变）把两张表撑成无界内存。
+  static const int _aiSeasonBindingCapacity = 128;
+
+  /// 记一对「绑定结果 + 线路快照」，超限时按写入顺序淘汰最旧的一条。
+  ///
+  /// 两张表必须同进同出：只淘汰一张会留下没有绑定的快照，读侧
+  /// （[aiMappingsFor]）虽然仍能判出「快照变了」，但会积累永远命中不到的死数据。
+  /// 淘汰的永远是最早写入的键——当前影片是刚写进来的，不会被淘汰，
+  /// 所以正在看的这部剧的季/集判定不受影响。
+  void _rememberAiSeasonBinding(
+    String key,
+    AiSeasonBindingsResult result,
+    String snapshot,
+  ) {
+    if (_aiSeasonBindings.length >= _aiSeasonBindingCapacity &&
+        !_aiSeasonBindings.containsKey(key)) {
+      final oldest = _aiSeasonBindings.keys.first;
+      _aiSeasonBindings.remove(oldest);
+      _aiSeasonSnapshots.remove(oldest);
+    }
+    _aiSeasonBindings[key] = result;
+    _aiSeasonSnapshots[key] = snapshot;
+  }
+
   String _aiLineKey(Vod vod, VodPlayLine line) =>
       '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
   VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) {
@@ -1157,13 +1190,13 @@ AiContentCompletion? aiContentCompletion,
           _disposed) {
         return;
       }
-      _aiSeasonBindings[_aiLineKey(vod, line)] = result;
-      _aiSeasonSnapshots[_aiLineKey(vod, line)] = seasonBindingsSnapshot(
-        line.episodes,
-        tmdb.seasonEpisodeCounts,
+      _rememberAiSeasonBinding(
+        _aiLineKey(vod, line),
+        result,
+        seasonBindingsSnapshot(line.episodes, tmdb.seasonEpisodeCounts),
       );
     }
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   Future<AiSeasonApplyResult?> confirmAiSeasonMapping({
@@ -1313,7 +1346,7 @@ AiContentCompletion? aiContentCompletion,
     } else {
       log.warning('AI 设置保存失败（内存已生效）', scope: 'ai');
     }
-    notifyListeners();
+    _notifyIfAlive();
     return saved;
   }
 
@@ -1391,7 +1424,7 @@ AiContentCompletion? aiContentCompletion,
     if (store == null) return false;
     final saved = await store.pinMetaOverride(vodId, identity);
     _externalMetaService?.clearCache();
-    notifyListeners();
+    _notifyIfAlive();
     return saved;
   }
 
@@ -1400,7 +1433,7 @@ AiContentCompletion? aiContentCompletion,
     if (store == null) return false;
     final saved = await store.unpinMetaOverride(vodId);
     _externalMetaService?.clearCache();
-    notifyListeners();
+    _notifyIfAlive();
     return saved;
   }
 
@@ -1576,7 +1609,7 @@ AiContentCompletion? aiContentCompletion,
     }
     if (!status.needsAttention) return;
     _restoredConfigSourceStatus = status;
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   List<ConfigRecord> get configs => _configs;
@@ -1718,7 +1751,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberOsdFlag(id, enabled);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1735,7 +1768,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberButtonOrder(order);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1744,7 +1777,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberButtonHidden(hidden);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1772,7 +1805,7 @@ AiContentCompletion? aiContentCompletion,
       executable: executable,
       scanned: _externalPlayerDetector(),
     );
-    if (ok) notifyListeners();
+    if (ok) _notifyIfAlive();
     return ok;
   }
 
@@ -1784,7 +1817,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberExternalPlayerPath(path);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1793,7 +1826,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.resetPlayerButtons();
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -1890,6 +1923,17 @@ AiContentCompletion? aiContentCompletion,
 
   bool _disposed = false;
 
+  /// 通知监听者的**统一出口**：已 dispose 就安静返回。
+  ///
+  /// 为什么要有它：`await` 之后回到同步段时，widget 树可能已经拆掉
+  /// （[dispose] 把 [_disposed] 置真）。此时直接 `notifyListeners()` 会向已
+  /// 释放的监听者派发，Flutter 侧表现为「dispose 之后仍在触发重建」的报错；
+  /// 而在 await **之前**发通知是安全的，所以同步路径保持原样、不改变通知时序。
+  void _notifyIfAlive() {
+    if (_disposed) return;
+    notifyListeners();
+  }
+
   /// 发起直连站源注册并保存 Future（幂等：已有进行中的注册沿用同一 Future）。
   void _kickDirectRegistration() {
     final pending = _directReady;
@@ -1949,7 +1993,7 @@ AiContentCompletion? aiContentCompletion,
     await pending;
     if (!_disposed) {
       _applyPythonEnvironment();
-      notifyListeners();
+      _notifyIfAlive();
     }
   }
 
@@ -1959,7 +2003,7 @@ AiContentCompletion? aiContentCompletion,
     final ok = await pending;
     if (!_disposed) {
       if (ok) _applyPythonEnvironment();
-      notifyListeners();
+      _notifyIfAlive();
     }
     return ok;
   }
@@ -2058,7 +2102,7 @@ AiContentCompletion? aiContentCompletion,
       final result = await _directRegistrar().materialize(config);
       _router.setDirectSpiders(result);
       // 站点可用性变了：重算列表（不重建路由缓存之外的状态）。
-      notifyListeners();
+      _notifyIfAlive();
     } catch (error) {
       log.warning('直连站源注册失败：$error', scope: 'spider');
     } finally {
@@ -2080,7 +2124,7 @@ AiContentCompletion? aiContentCompletion,
     _applyOutboundProxy();
     // 站点服务持有上一代客户端：必须重建，否则新设置不生效。
     _attachSiteService();
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2180,7 +2224,7 @@ AiContentCompletion? aiContentCompletion,
     final ok = await store.rememberDohSettings(settings);
     _applyOutboundProxy();
     _attachSiteService();
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2192,7 +2236,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberIncognito(value);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2289,7 +2333,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberSiteGroupSettings(settings);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2304,7 +2348,7 @@ AiContentCompletion? aiContentCompletion,
     _applyAdRulesToProxy();
     // 直连 js/py 站点：每次配置装配后异步注册（不阻塞首页；失败只记日志）。
     _kickDirectRegistration();
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2461,7 +2505,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberParseFailover(settings.normalized());
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2470,7 +2514,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberSiteOrder(settings);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2486,7 +2530,7 @@ AiContentCompletion? aiContentCompletion,
       blocked: current.blocked,
     );
     final ok = await store.rememberSiteListOverrides(siteListScopeKey, next);
-    if (ok) notifyListeners();
+    if (ok) _notifyIfAlive();
     return ok;
   }
 
@@ -2506,7 +2550,7 @@ AiContentCompletion? aiContentCompletion,
       siteListScopeKey,
       current.copyWith(blocked: next),
     );
-    if (ok) notifyListeners();
+    if (ok) _notifyIfAlive();
     return ok;
   }
 
@@ -2538,7 +2582,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberDanmakuSettings(settings);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2547,7 +2591,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberSubtitleSettings(settings);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2556,7 +2600,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberLiveSettings(settings);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2565,7 +2609,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberPlayerOptions(options);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2574,7 +2618,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberDanmakuStyle(style);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2583,7 +2627,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberSubtitleStyle(style);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2592,7 +2636,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberOsdStyle(style);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2761,7 +2805,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberThemeMode(mode);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2784,7 +2828,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberHistoryClickAction(mode);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2804,7 +2848,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberHistoryScope(scope);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2824,7 +2868,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final ok = await store.rememberHistoryAggregation(mode);
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -2842,7 +2886,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return;
     await store.rememberEpisodeViewMode(mode);
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 当前生效配置的来源标识（见 `core/source_key.dart`）。
@@ -3153,7 +3197,7 @@ AiContentCompletion? aiContentCompletion,
     }
     // 追番调度：应用运行期间生效；关闭时不会创建定时器（测试也不会残留 Timer）。
     _restartFollowingTimer();
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   // ---------------------------------------------------------------- 备份/恢复
@@ -3243,7 +3287,7 @@ AiContentCompletion? aiContentCompletion,
         );
       }
       await bootstrap();
-      notifyListeners();
+      _notifyIfAlive();
       return failures.isEmpty
           ? '写入恢复文件失败：$error'
           : '写入恢复文件失败：$error；回滚未完成：${failures.join(',')}'
@@ -3252,7 +3296,7 @@ AiContentCompletion? aiContentCompletion,
     await recovery.delete();
 
     await bootstrap();
-    notifyListeners();
+    _notifyIfAlive();
     log.info(
       '备份恢复完成 ${describeBackupManifest(contents.manifest)}',
       scope: 'backup',
@@ -3286,11 +3330,11 @@ AiContentCompletion? aiContentCompletion,
     } catch (error) {
       log.error('删除本地数据失败：$error', scope: 'backup');
       await bootstrap();
-      notifyListeners();
+      _notifyIfAlive();
       return '删除本地数据失败：$error';
     }
     await bootstrap();
-    notifyListeners();
+    _notifyIfAlive();
     log.info('本地数据已重置（设置与数据库已删除）', scope: 'backup');
     _afterDataSwap();
     return null;
@@ -3564,7 +3608,7 @@ AiContentCompletion? aiContentCompletion,
     } else {
       _lastError = AppError(AppErrorKind.storage, 'TMDB 设置保存失败');
     }
-    notifyListeners();
+    _notifyIfAlive();
     return saved;
   }
 
@@ -4185,7 +4229,7 @@ AiContentCompletion? aiContentCompletion,
       if (_importDiagnosticsSummary != null) {
         log.warning('导入诊断：$_importDiagnosticsSummary', scope: 'config');
       }
-      notifyListeners();
+      _notifyIfAlive();
 
       // 导入后自动加载默认站点首页，形成“导入 → 首页”的闭环。
       final site = _selectedSite;
@@ -4200,7 +4244,7 @@ AiContentCompletion? aiContentCompletion,
       _lastError = failure;
       _configPhase = hasConfig ? LoadPhase.ready : LoadPhase.failed;
       log.error('配置导入失败：${failure.logLine}', scope: 'config');
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
   }
@@ -4256,7 +4300,7 @@ AiContentCompletion? aiContentCompletion,
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       _lastError = failure;
       log.error('切换配置失败：${failure.logLine}', scope: 'config');
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
   }
@@ -4349,7 +4393,7 @@ AiContentCompletion? aiContentCompletion,
     if (imported == null) return false;
     if (mutationEpoch != _configMutationEpoch) {
       _lastError = _staleConfigMutation();
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
     final config = imported.config;
@@ -4359,7 +4403,7 @@ AiContentCompletion? aiContentCompletion,
         '新地址没有可用配置',
         detail: redactUrl(trimmedOrigin),
       );
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
     final sourceKey = LocalSourceKey.of(imported.origin);
@@ -4386,7 +4430,7 @@ AiContentCompletion? aiContentCompletion,
       _acceptImportedTmdbCredential(imported, id, sourceKey);
       await _reloadActiveConfigContent(config);
     }
-    notifyListeners();
+    _notifyIfAlive();
     return true;
   }
 
@@ -4405,7 +4449,7 @@ AiContentCompletion? aiContentCompletion,
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       log.warning('刷新配置失败：${_lastError!.logLine}', scope: 'config');
-      notifyListeners();
+      _notifyIfAlive();
       return null;
     }
   }
@@ -4464,7 +4508,7 @@ AiContentCompletion? aiContentCompletion,
               '该播放源刷新失败',
               detail: redactUrl(address),
             );
-        notifyListeners();
+        _notifyIfAlive();
         return false;
       }
       _configs = database.listConfigs();
@@ -4476,7 +4520,7 @@ AiContentCompletion? aiContentCompletion,
           await _reloadActiveConfigContent(parseConfigRecord(json));
         }
       }
-      notifyListeners();
+      _notifyIfAlive();
       return true;
     }
 
@@ -4484,7 +4528,7 @@ AiContentCompletion? aiContentCompletion,
     if (imported == null) return false;
     if (mutationEpoch != _configMutationEpoch) {
       _lastError = _staleConfigMutation();
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
     final config = imported.config;
@@ -4494,7 +4538,7 @@ AiContentCompletion? aiContentCompletion,
         '来源没有可用配置',
         detail: redactUrl(record.origin),
       );
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
     database.refreshConfigContent(
@@ -4518,7 +4562,7 @@ AiContentCompletion? aiContentCompletion,
       );
       await _reloadActiveConfigContent(config);
     }
-    notifyListeners();
+    _notifyIfAlive();
     return true;
   }
 
@@ -4860,7 +4904,7 @@ AiContentCompletion? aiContentCompletion,
     if (!current()) return;
     _contentPhase = LoadPhase.loading;
     _lastError = null;
-    if (current()) notifyListeners();
+    if (current()) _notifyIfAlive();
     try {
       final outcome = await service.home(site);
       if (!current()) return;
@@ -4895,7 +4939,7 @@ AiContentCompletion? aiContentCompletion,
       _contentPhase = LoadPhase.failed;
       log.error('首页加载失败 site=${site.key} ${failure.logLine}', scope: 'site');
     }
-    if (current()) notifyListeners();
+    if (current()) _notifyIfAlive();
   }
 
   /// 作废分类分页状态（换站点 / 换配置 / 回首页时调用）。
@@ -4937,7 +4981,7 @@ AiContentCompletion? aiContentCompletion,
     _categoryLoadingMore = false;
     _contentPhase = LoadPhase.loading;
     _lastError = null;
-    notifyListeners();
+    _notifyIfAlive();
     try {
       final outcome = await service.category(
         site,
@@ -4970,7 +5014,7 @@ AiContentCompletion? aiContentCompletion,
         scope: 'site',
       );
     }
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 追加下一页（滚动到底自动触发，§7.4.7）。
@@ -5035,7 +5079,7 @@ AiContentCompletion? aiContentCompletion,
     } finally {
       if (runId == _categoryRunId) {
         _categoryLoadingMore = false;
-        notifyListeners();
+        _notifyIfAlive();
       }
     }
   }
@@ -5313,7 +5357,7 @@ AiContentCompletion? aiContentCompletion,
         // 取消后即便请求刚好返回也**不得投递**（§9.5、§14.1）。
         if (!outcome.cancelled && identical(_activeSearch, outcome)) {
           outcome.update(entries);
-          notifyListeners();
+          _notifyIfAlive();
         }
       }
     }
@@ -5353,7 +5397,7 @@ AiContentCompletion? aiContentCompletion,
       'elapsed=${stopwatch.elapsedMilliseconds}ms',
       scope: 'search',
     );
-    notifyListeners();
+    _notifyIfAlive();
     return outcome;
   }
 
@@ -5476,7 +5520,7 @@ AiContentCompletion? aiContentCompletion,
           'hasMore=$hasMore',
           scope: 'search',
         );
-        notifyListeners();
+        _notifyIfAlive();
         return false;
       }
 
@@ -5501,7 +5545,7 @@ AiContentCompletion? aiContentCompletion,
         'total=${merged.list.length} hasMore=$hasMore',
         scope: 'search',
       );
-      notifyListeners();
+      _notifyIfAlive();
       return true;
     } catch (error) {
       _searchPaging.cancelPending();
@@ -5514,7 +5558,7 @@ AiContentCompletion? aiContentCompletion,
         '搜索翻页失败 site=$siteKey page=$requestedPage ${failure.logLine}',
         scope: 'search',
       );
-      notifyListeners();
+      _notifyIfAlive();
       return false;
     }
   }
@@ -5652,7 +5696,7 @@ AiContentCompletion? aiContentCompletion,
       navSource: _navSourceFor(site, vod),
       knownIdentity: _knownIdentityWithoutPlayback(site, vod),
     );
-    notifyListeners();
+    _notifyIfAlive();
     if (synthetic) {
       // 只等并行的 TMDB 链落地：合成条目的剧集卡片、换源入口与播放入口全部来自它。
       final pending = _pendingTmdbLoad;
@@ -5669,7 +5713,7 @@ AiContentCompletion? aiContentCompletion,
       }
       if (runId != _detailRunId) return;
       _detailPhase = LoadPhase.ready;
-      notifyListeners();
+      _notifyIfAlive();
       return;
     }
     if (service == null) return;
@@ -5734,7 +5778,7 @@ AiContentCompletion? aiContentCompletion,
       }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
-      notifyListeners();
+      _notifyIfAlive();
       // 等并行启动的那一轮 TMDB 收尾，再用权威线路补一次映射。为什么要等而不是
       // 直接发第二次：同一作品换线路会清掉季度解析，两次调用叠在一起会互相覆盖。
       // 只在「句柄仍属于本次 run」时取走并等待：这段时间里用户可能已经进了另一部剧，
@@ -5796,7 +5840,7 @@ AiContentCompletion? aiContentCompletion,
         scope: 'site',
       );
     }
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 清空详情错误（详情页「重试」后的提示关闭）。
@@ -5937,7 +5981,7 @@ AiContentCompletion? aiContentCompletion,
         'elapsed=${outcome.latency.inMilliseconds}ms',
         scope: 'playback',
       );
-      notifyListeners();
+      _notifyIfAlive();
       return decision;
     } catch (error) {
       // 过期请求的失败同样不是「当前播放失败」，交给 UI 丢弃（不写 lastError）。
@@ -5950,7 +5994,7 @@ AiContentCompletion? aiContentCompletion,
         '播放决策失败 site=${site.key} ${failure.logLine}',
         scope: 'playback',
       );
-      notifyListeners();
+      _notifyIfAlive();
       rethrow;
     }
   }
@@ -6955,7 +6999,7 @@ AiContentCompletion? aiContentCompletion,
   /// 强制停止某站点的 Spider（§18.2「每个站点运行时可随时强制停止」）。
   Future<void> stopSpider(String siteKey) async {
     await _supervisor.stop(siteKey);
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 重置站点 Spider 失败计数，允许重新启动（§9.3.1 退避的人工退出）。
@@ -7011,7 +7055,7 @@ AiContentCompletion? aiContentCompletion,
     );
     // 分类结果不经过 SpiderRouter 的 _cache，磁盘变化后 classifySite 立即反映；
     // 这里只需刷新 UI（站点列表的可用性文案会跟着变）。
-    notifyListeners();
+    _notifyIfAlive();
     return result;
   }
 
@@ -7031,7 +7075,7 @@ AiContentCompletion? aiContentCompletion,
     final config = effectiveConfig;
     if (config == null) return const CspProbeReport();
     final report = await _cspProbe().materialize(config);
-    if (!report.isEmpty) notifyListeners();
+    if (!report.isEmpty) _notifyIfAlive();
     return report;
   }
 
@@ -7049,7 +7093,7 @@ AiContentCompletion? aiContentCompletion,
       if (config == null) return;
       if (!config.sites.any((site) => CspJvmBinding.matches(site.api))) return;
       final report = await _cspProbe().materialize(config);
-      if (!report.isEmpty) notifyListeners();
+      if (!report.isEmpty) _notifyIfAlive();
     } catch (error) {
       log.warning('CSP jar 自动探测失败：$error', scope: 'spider');
     }
@@ -7061,7 +7105,7 @@ AiContentCompletion? aiContentCompletion,
       targetDir: _cspBinding.directoryFor(siteKey),
       log: log,
     );
-    if (removed) notifyListeners();
+    if (removed) _notifyIfAlive();
     return removed;
   }
 
@@ -7075,8 +7119,13 @@ AiContentCompletion? aiContentCompletion,
   /// 上次扫描的文件夹（本会话记忆，供页面回填）。
   String get lastLocalScanFolder => _lastLocalScanFolder;
 
-  /// 已导入的 HTML 首页注入源（webHome）。
-  List<WebHomeSource> get webHomeSources => _webHomeStore.list();
+  /// 已导入的 HTML 首页注入源（webHome，含已停用的源）。
+  ///
+  /// 走 [_allWebHomeSources] 的缓存而非直读 [_webHomeStore]：`LocalSourcesPage.build`
+  /// 会直接读它，而登记表是磁盘上的 JSON——每次 build 同步读盘既慢，又会在登记表
+  /// 损坏时把异常抛进 build。缓存统一在 [_invalidateLocalSites] 失效，导入/启停/
+  /// 删除后立刻可见；读数失败的原因仍由 [webHomeLoadError] 如实上报。
+  List<WebHomeSource> get webHomeSources => _allWebHomeSources();
 
   /// 某个 webHome 源的资源目录（WebView2 虚拟主机映射用）。
   String webHomeDirectory(String key) => _webHomeStore.directoryFor(key);
@@ -7215,13 +7264,24 @@ AiContentCompletion? aiContentCompletion,
     final cached = _allWebHomeSourcesCache;
     if (cached != null) return cached;
     try {
-      return _allWebHomeSourcesCache = _webHomeStore.list();
+      final sources = _webHomeStore.list();
+      _webHomeLoadError = null;
+      _webHomeLoadErrorDetail = null;
+      return _allWebHomeSourcesCache = sources;
     } on FormatException catch (error) {
-      log.error('载入HTML源失败：$error', scope: 'site');
+      _recordWebHomeLoadError(error);
     } on FileSystemException catch (error) {
-      log.error('载入HTML源失败：$error', scope: 'site');
+      _recordWebHomeLoadError(error);
     }
     return _allWebHomeSourcesCache = const [];
+  }
+
+  /// 两套读取（启用集 / 全量集）共用一份失败记账：原因必须对界面可见，
+  /// 否则 `webHomeSources` 不再抛异常后，坏登记表会被读成「没有本地源」。
+  void _recordWebHomeLoadError(Object error) {
+    _webHomeLoadError = '载入HTML源失败：$error';
+    _webHomeLoadErrorDetail = '$error';
+    log.error(_webHomeLoadError!, scope: 'site');
   }
 
   /// 启用状态文件读坏时的原因（界面必须显示，不能静默当成全部启用）。
@@ -7356,14 +7416,14 @@ AiContentCompletion? aiContentCompletion,
   Future<void> startProxy({int port = 0}) async {
     if (_proxy.isRunning) return;
     await _proxy.start(port: port);
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 停止本地代理并释放端口（§11.4）。
   Future<void> stopProxy() async {
     _proxySession = null;
     await _proxy.stop();
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 为一次播放开启代理会话，并把媒体地址重写为代理 URL（§9.6、§11.3.1）。
@@ -7434,7 +7494,7 @@ AiContentCompletion? aiContentCompletion,
       'target=${LocalProxyServer.redactProxyTarget(target)}',
       scope: 'proxy',
     );
-    notifyListeners();
+    _notifyIfAlive();
     // 走代理后 Header 由代理注入，播放器不再重复携带（避免 Header 泄漏到直连请求）。
     return PlaybackDecision(
       action: decision.action,
@@ -7477,7 +7537,7 @@ AiContentCompletion? aiContentCompletion,
     } catch (error) {
       _lastError = AppError(AppErrorKind.storage, '清理缓存失败', detail: '$error');
     }
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   // ---------------------------------------------------------------- 追番 P2-1
@@ -7513,7 +7573,7 @@ AiContentCompletion? aiContentCompletion,
     _restartFollowingTimer(
       kickDelay: followingSettings.enabled ? Duration.zero : null,
     );
-    notifyListeners();
+    _notifyIfAlive();
     return ok;
   }
 
@@ -7783,7 +7843,7 @@ AiContentCompletion? aiContentCompletion,
         shouldNotifyFollowing(outcome.following)) {
       await _notifyFollowingNewEpisodes([outcome.following]);
     }
-    notifyListeners();
+    _notifyIfAlive();
     return outcome;
   }
 
@@ -7813,7 +7873,7 @@ AiContentCompletion? aiContentCompletion,
             item,
       ]);
     }
-    notifyListeners();
+    _notifyIfAlive();
     return summary;
   }
 
