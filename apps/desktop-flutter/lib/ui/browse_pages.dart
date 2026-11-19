@@ -4,7 +4,6 @@ library;
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -176,7 +175,7 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
                 // 否则分类多到溢出时滚轮推不动这条（§17.4 鼠标可用）。
                 // 鼠标左右拖由 `HorizontalMouseDrag` 打开（同样 §17.4）。
                 child: HorizontalMouseDrag(
-                  child: _WheelScroll(
+                  child: WheelScroll(
                     controller: _controller,
                     child: SingleChildScrollView(
                       controller: _controller,
@@ -299,38 +298,6 @@ class _BrowseTab extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// 把纵向滚轮增量转成横向滚动（桌面端专用）。
-///
-/// Flutter 的横向 `Scrollable` 只消费 `scrollDelta.dx`，而普通鼠标只有 `dy`，
-/// 于是「滚轮推不动横向标签条」。这里把明显偏向纵向的增量自己转成横向位移；
-/// 横向分量更大时（触控板横扫）仍交给内部滚动视图处理，避免双重滚动。
-class _WheelScroll extends StatelessWidget {
-  const _WheelScroll({required this.controller, required this.child});
-
-  final ScrollController controller;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerSignal: (event) {
-        if (event is! PointerScrollEvent) return;
-        final delta = event.scrollDelta;
-        if (delta.dx.abs() >= delta.dy.abs()) return;
-        if (!controller.hasClients) return;
-        final position = controller.position;
-        final target = (position.pixels + delta.dy).clamp(
-          position.minScrollExtent,
-          position.maxScrollExtent,
-        );
-        if (target == position.pixels) return;
-        controller.jumpTo(target);
-      },
-      child: child,
     );
   }
 }

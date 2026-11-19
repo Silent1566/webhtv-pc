@@ -35,6 +35,7 @@ import 'config_source_status_view.dart';
 import 'diagnostics_pages.dart';
 import 'ai_integration_widgets.dart';
 import 'following_page.dart';
+import 'home_page.dart';
 import 'image_header_scope.dart';
 import 'library_pages.dart';
 import 'live_page.dart';
@@ -429,6 +430,13 @@ class _SplashPage extends StatelessWidget {
 ///
 /// §17.2 的「搜索页」在 MVP-B 是必须项，因此与首页同级放在侧栏。
 enum ShellSection {
+  /// 首页：首屏（hero + 续播/推荐轨道）。
+  ///
+  /// **必须**排在第一位并与 `_SideBar.destinations` 的顺序一致：
+  /// `NavigationRail` 的 `selectedIndex` 直接取 `section.index`。
+  home,
+
+  /// 点播：按站点浏览（原「首页」，改名不改行为）。
   browse,
   live,
   search,
@@ -452,7 +460,14 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  ShellSection _section = ShellSection.browse;
+  // 启动落在首页（用户 2026-11-19 决策）：第一屏回答「今晚看什么」，不是「挑分类」。
+  ShellSection _section = ShellSection.home;
+
+  /// 首页「热门」点进来的搜索词。
+  ///
+  /// `SearchPage` 用构造参数 `initialKeyword` 自动搜索一次；用户在侧栏手动点
+  /// 「搜索」时**清空**它，否则每次进搜索页都会重跑上一次的热门搜索。
+  String? _pendingSearchKeyword;
   bool? _boundaryAccepted;
   String? _handledAutoMedia;
 
@@ -605,7 +620,8 @@ class _AppShellState extends State<AppShell> {
     if (memory.isLocal) {
       await _state.restoreLastConfig();
       if (!mounted) return;
-      setState(() => _section = ShellSection.browse);
+      // **不切段**：启动落点是「首页」（用户 2026-11-19 反馈：启动后停在点播
+      // 而不是新首页）。恢复配置是后台动作，不是「用户要看这个站点」。
       await _loadInitialHome();
       return;
     }
@@ -740,7 +756,7 @@ class _AppShellState extends State<AppShell> {
       return;
     }
     setState(() {
-      _section = ShellSection.browse;
+      // 同上：恢复桥接配置不改变当前段（启动时应停在首页）。
       _bridgeBanner = null;
       _bannerMemory = null;
     });
@@ -887,6 +903,17 @@ class _AppShellState extends State<AppShell> {
     if (mounted) setState(() {});
   }
 
+  /// 首页「热门」卡片 → 带着这个词进搜索页。
+  ///
+  /// 只切段 + 传词，不复用搜索页的内部方法：搜索的提交/分页/范围都属于
+  /// `SearchPage` 自己的状态机，壳层只负责「去哪、带什么」。
+  void _searchFor(String keyword) {
+    setState(() {
+      _pendingSearchKeyword = keyword;
+      _section = ShellSection.search;
+    });
+  }
+
   Future<void> _openConfigPage() async {
     await Navigator.of(
       context,
@@ -1021,10 +1048,16 @@ class _AppShellState extends State<AppShell> {
           Expanded(
             child: Row(
               children: [
-                _SideBar(
+                AppSideBar(
                   section: _section,
                   updateCount: _state.followingUpdateCount,
-                  onSelect: (value) => setState(() => _section = value),
+                  onSelect: (value) => setState(() {
+                    // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
+                    if (value == ShellSection.search) {
+                      _pendingSearchKeyword = null;
+                    }
+                    _section = value;
+                  }),
                 ),
                 const VerticalDivider(width: 1),
                 Expanded(
@@ -1050,12 +1083,27 @@ class _AppShellState extends State<AppShell> {
 
   Widget _buildContent() {
     switch (_section) {
+      case ShellSection.home:
+        return HomePage(
+          state: _state,
+          onOpenBrowse: () => setState(() => _section = ShellSection.browse),
+          onOpenHistory: () => setState(() => _section = ShellSection.history),
+          onOpenFollowing: () =>
+              setState(() => _section = ShellSection.following),
+          onImportConfig: _openConfigPage,
+          onSearch: _searchFor,
+        );
       case ShellSection.browse:
         return BrowsePage(state: _state);
       case ShellSection.live:
         return LivePage(state: _state);
       case ShellSection.search:
-        return SearchPage(state: _state);
+        return SearchPage(
+          // 换词必须换 State：`initialKeyword` 只在 initState 读一次。
+          key: ValueKey('search-${_pendingSearchKeyword ?? ''}'),
+          state: _state,
+          initialKeyword: _pendingSearchKeyword,
+        );
       case ShellSection.history:
         return HistoryPage(state: _state);
       case ShellSection.favorites:
@@ -1401,8 +1449,11 @@ class _WallpaperBackdrop extends StatelessWidget {
   }
 }
 
-class _SideBar extends StatelessWidget {
-  const _SideBar({
+/// 侧栏。公开而不是私有：它的容量（11 项能否放进最小窗口）是回归风险，
+/// 必须能单独挂载并断言（test/shell_rail_capacity_test.dart）。
+class AppSideBar extends StatelessWidget {
+  const AppSideBar({
+    super.key,
     required this.section,
     required this.onSelect,
     this.updateCount = 0,
@@ -1420,10 +1471,18 @@ class _SideBar extends StatelessWidget {
       minWidth: 76,
       groupAlignment: -0.9,
       labelType: NavigationRailLabelType.all,
+      // 11 个入口在最小窗口（1024×640，内容区 576px）下竖排放不下：实测 11 项
+      // 溢出 72px（10 项时就已经溢出 8px）。开 `scrollable` 而不是砍入口——
+      // 导航信息架构不该被这一屏的高度决定。
+      scrollable: true,
       destinations: [
         const NavigationRailDestination(
-          icon: Icon(Icons.grid_view),
+          icon: Icon(Icons.home_outlined),
           label: Text('首页'),
+        ),
+        const NavigationRailDestination(
+          icon: Icon(Icons.grid_view),
+          label: Text('点播'),
         ),
         const NavigationRailDestination(
           icon: Icon(Icons.live_tv),

@@ -49,11 +49,18 @@ import 'toast.dart';
 Future<void> openHistoryFromOtherSource(
   BuildContext context,
   AppState state,
-  PlaybackHistory item,
-) async {
+  PlaybackHistory item, {
+  /// 显式指定「要播还是要看详情」。
+  ///
+  /// `null` = 依用户设置（历史页的整卡点击就是这个语义）。首页的「查看详情」
+  /// 按钮必须传 `false`：按钮上写着详情，点下去却起播，是标签在骗人。
+  bool? wantsPlayOverride,
+}) async {
   // 用户设定：点历史是进详情还是直接播。原来源与当前源**同一套语义**。
   if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
-  final wantsPlay = state.historyClickAction == UiHistoryClickAction.play;
+  final wantsPlay =
+      wantsPlayOverride ??
+      (state.historyClickAction == UiHistoryClickAction.play);
   final needsPreparation =
       wantsPlay ||
       state.playbackContextFor(item.sourceKey)?.siteByKey(item.siteKey) == null;
