@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'tokens.dart';
 
 /// 推荐详情弹窗的展示数据。

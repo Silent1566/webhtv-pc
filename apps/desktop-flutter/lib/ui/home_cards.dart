@@ -12,7 +12,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/home_feed.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'common.dart';
 import 'layout_scale.dart';
 import 'scroll_behavior.dart';

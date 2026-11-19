@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 
 import '../core/home_feed.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'backdrop_scrim.dart';
 import 'common.dart' show TagChip;
 import 'image_header_scope.dart' show imageHeadersOrNull;

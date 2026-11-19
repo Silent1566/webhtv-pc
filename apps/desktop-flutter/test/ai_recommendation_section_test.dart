@@ -11,7 +11,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/ai_content/ai_recommendation_section.dart';
-import 'package:webhtv_pc/ui/app.dart';
+import 'package:webhtv_pc/ui/poster_image.dart';
 
 import 'support/temp_dirs.dart';
 

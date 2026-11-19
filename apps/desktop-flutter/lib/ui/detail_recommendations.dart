@@ -6,7 +6,7 @@ import '../core/detail_recommendation.dart';
 import '../core/recommendation_meta.dart';
 import '../core/tmdb_identity.dart';
 import '../state/detail_recommendation_state.dart';
-import 'app.dart' show PosterImage;
+import 'poster_image.dart';
 import 'common.dart';
 import 'recommendation_info_dialog.dart';
 import 'scroll_behavior.dart';

@@ -25,7 +25,7 @@ import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../services/following_air_time_service.dart';
 import '../state/app_state.dart';
-import 'app.dart';
+import 'poster_image.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
 import 'following_badge.dart';

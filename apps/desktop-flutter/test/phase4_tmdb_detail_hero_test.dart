@@ -25,7 +25,7 @@ import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/app.dart' show PosterImage;
+import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_view.dart';

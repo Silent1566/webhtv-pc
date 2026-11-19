@@ -6,6 +6,7 @@ import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/ui/config_source_status_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/ui/app.dart';
+import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
