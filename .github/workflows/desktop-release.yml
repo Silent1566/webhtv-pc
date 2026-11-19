@@ -148,6 +148,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 缓存的是 pin 产物的落盘目录，不是脚本的运行结果：恢复后脚本仍会逐项校验哈希
+      # （prepare_python_runtime.ps1 对已存在的 bundle 是 validate 后直接返回，
+      # prepare_windows_native_deps.ps1 / prepare_libmpv_windows.ps1 命中校验即跳过下载）。
+      # 路径取自脚本默认值：runtime/python（OutputDir）、.local/python-runtime/cache、
+      # .local/win-deps、.local/libmpv-windows（三个 CacheDir）。
+      # key 只由仓库内的 pin 决定（两份 Python runtime lock + 两个 native 依赖脚本的 pin），
+      # 不用时间戳；也不加 restore-keys：跨 pin 的旧缓存会把"恢复后仍能通过"变成赌博。
+      - name: Cache pinned Python runtime and Windows native deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            runtime/python
+            .local/python-runtime/cache
+            .local/win-deps
+            .local/libmpv-windows
+          key: ${{ runner.os }}-build-deps-v1-${{ hashFiles('scripts/python-runtime.lock.json', 'scripts/python-runtime-linux.lock.json', 'scripts/prepare_libmpv_windows.ps1', 'scripts/prepare_windows_native_deps.ps1') }}
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -201,7 +218,7 @@ jobs:
       - name: Static analysis
         working-directory: apps/desktop-flutter
         shell: pwsh
-        run: dart analyze
+        run: dart analyze --fatal-infos
 
       # 顺序要点：先 Release 构建，再跑单测。
       # 13 个 phase8 播放器用例会真实实例化 media_kit 的 NativePlayer，而
@@ -418,6 +435,16 @@ jobs:
           sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
             libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
             xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
+      # Linux 端只有下载缓存值得存：prepare_python_runtime_linux.py 先校验已存在的
+      # runtime/python，然后**重新装配**并覆盖它（_publish_bundle），所以缓存输出目录
+      # 一步都省不掉；真正省时间的是 .local/python-runtime-linux/cache 里那批
+      # 按 sha256 校验过的官方归档与 wheel（即 workflow 里 --cache-dir 的同一个目录）。
+      # key 与 Windows job 同一套 pin（两份 lock + 两个 native 依赖脚本），OS 前缀区分平台。
+      - name: Cache pinned Linux Python runtime artifacts
+        uses: actions/cache@v4
+        with:
+          path: .local/python-runtime-linux/cache
+          key: ${{ runner.os }}-build-deps-v1-${{ hashFiles('scripts/python-runtime.lock.json', 'scripts/python-runtime-linux.lock.json', 'scripts/prepare_libmpv_windows.ps1', 'scripts/prepare_windows_native_deps.ps1') }}
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -484,7 +511,7 @@ jobs:
         run: flutter pub get
         working-directory: apps/desktop-flutter
       - name: Static analysis
-        run: dart analyze
+        run: dart analyze --fatal-infos
         working-directory: apps/desktop-flutter
       - name: Prepare verified offline Linux Python runtime
         run: |-
@@ -510,8 +537,12 @@ jobs:
           WEBHTV_REQUIRE_BUNDLED_PYTHON: '1'
           GDK_BACKEND: x11
           LIBGL_ALWAYS_SOFTWARE: '1'
+      - name: Install contract validation dependencies
+        run: python3 -m pip install jsonschema==4.23.0
       - name: Packaging and workflow contract tests
-        run: python3 -m unittest discover -s tests -p 'test_*linux*.py'
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Validate protocol and ABI contracts
+        run: python3 scripts/validate_contracts.py
       - name: Package AppImage and deb
         run: |-
           python3 scripts/package_linux.py \
