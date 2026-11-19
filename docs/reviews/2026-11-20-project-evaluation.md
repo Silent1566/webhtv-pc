@@ -379,6 +379,45 @@ UI 层的重复与一致性问题（均为可量化机械收敛）：
 - 四份 sidecar 相关 Dart 用例同时跑（两层改动共存）：**72 passed**。
 - `python3 selftest_deadline.py`：28/28；`verify_sidecar_contracts.py`：4/4。
 
+## 迭代 2 执行记录（2026-11-20）
+
+分两波：三件事都要落在同一个 7605 行文件上，所以 Wave 1 先腾地方 + 备 core 能力，Wave 2 才接线。
+
+### Wave 1（4 路并行，文件互斥）
+
+| 子代理 | 结果 | 证据 |
+| --- | --- | --- |
+| `player-split` | `player_page.dart` **7605 → 6324 行**；三块用 `part` + extension 搬出：菜单构造 793、字幕菜单 345、播放参数 207；自带逐字节校验脚本比对 13 个块 | `dart analyze --fatal-infos lib/ui` 0；4 个菜单/OSD/shell 用例 97 passed |
+| `core-tracks` | 次字幕轨选项、`TrackOffset`（毫秒 ±60s 夹取、输出秒）、白名单三条规则 + 回读容差（1ms） | 24 个新用例；3 个既有相关文件 81 passed |
+| `preload-core` | 新建 `core/playback_open_policy.dart`（失败分类搬出 controller + `recoverable/nonRecoverable` + 可注入预取探测）；`openWithRetry` 加可选 `policy`（不传＝历史行为） | 10 个新用例；23 passed 旁证 |
+| `local-file-core` | `PlaybackRequest.localFile`（不走代理/不加 Header/不参与跨源续播）；外部播放器放开本地路径；顶栏入口 + 命令行裸路径 | 32 + 12 用例（我给 2 条 widget 用例补了 libmpv 闸门） |
+
+### Wave 2（2 路并行，同 library 不同文件）
+
+| 子代理 | 结果 | 证据 |
+| --- | --- | --- |
+| `wave2-player-page` | 预取接通（`:1564` 传 `policy`）——设置里的「预加载」不再是假开关；本地文件 **14 处守卫**：不写历史、不问站点、不复用 `directUrl` 直播判据、音频 AI 与网速采样短路、选集/切线路/解析源/画质四类入口「UI 摘按钮 + 函数守卫」双保险 | `analyze lib/ui` 0；4 文件 88 passed ×2 轮 |
+| `wave2-offsets` | `PlayerOptions` 增 `subtitleOffsetMs`/`audioOffsetMs`（向后兼容、越界夹取）；控制器 `writeTrackOffsetProperty` 走白名单 → 写入 → 回读，**全程不抛**；字幕菜单新增两组「±0.1s / 重置」 | 16 个纯逻辑用例 + 1 个**真实 libmpv** 用例（回读在 1ms 内、无 rejection）；48 + 43 passed 零回归 |
+
+### 本轮学到的两条硬约束（下次改播放器前必读）
+
+1. **`part` + extension 的边界**：extension 里不能用 `State.setState`（protected），也不能用被扩展类型的 static 成员（必须写 `_PlayerPageState.xxx`）。这就是 `_livePatchOptions`、`_buildActionButtons`（直接调 `setState`）留在 `player_page.dart` 的原因。
+2. **`PlayerTrackSlot` 是穷举 `switch`**：加次字幕槽会同时动到 core 的枚举与 `player_page.dart` 的槽位分派，跨两个 owner 的文件——所以次字幕推迟到 Wave 3 单独做。
+
+### 验证
+
+- `dart analyze --fatal-infos` 全包 0（Wave 1 后与 Wave 2 后各跑一次）。
+- Wave 1 回归组合 9 文件 **178 passed**；Wave 2 回归组合 12 文件 **259 passed**（均含真实 libmpv）。
+
+### 顺延项（不是漏掉）
+
+- **次字幕（`secondary-sid`）**：缺 6 件事——`PlayerTrackSlot` 无次字幕槽、控制器无 `selectSecondarySubtitle`、引擎原始字幕轨列表未暴露（`buildSecondarySubtitleOptions` 至今零调用点）、无次字幕 UI 分组、无默认值/记忆落盘、缺「写进真实内核 + 回读」取证。
+- **自动换线/换源**：`PlaybackOpenPolicy.allowsFallback` 已就位，但这是可见行为变更，要与产品决策和截图证据一起做。
+- **拖放播放**：需新依赖，本环境无法 `pub get`。
+- **本地播放语义尾巴**：右键「上一集/下一集」仍在列（靠空数据 no-op）、本地 `vodId=<路径>` 仍参与轨道记忆/弹幕/字幕匹配 key、OSD 标题略重复。
+- **偏移是全局一份**，不按站点/影片/集记忆；mpv 的 delay 按文件重置，靠每次注入恢复（真实内核用例已证明该路径不误报）。
+- **产品措辞待定**：本地播放点音频 AI 时的提示「本地文件播放不支持实时字幕 / 卡拉OK」。
+
 ---
 
 本文档为 2026-11-20 评估快照。后续请新建日期文件，并在「勘误」节记录旧结论何时失效，不要原地改写已过期的判断。
