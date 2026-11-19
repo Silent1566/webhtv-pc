@@ -28,6 +28,12 @@ class _PendingState extends AppState {
   @override
   AppConfig get config => AppConfig(sites: [fixture]);
 
+  /// 历史/收藏/追剧解析站点走的是 [siteInActiveSource]，它读 [effectiveConfig]
+  /// 而不是这个 `config` 覆盖（本地导入源只并进 effectiveConfig）。假 state 必须
+  /// 跟着补同一个接缝，否则用例会落进「站点已不在当前配置中」的分支。
+  @override
+  AppConfig? get effectiveConfig => config;
+
   @override
   Future<void> selectSite(Site site) {
     selections++;
