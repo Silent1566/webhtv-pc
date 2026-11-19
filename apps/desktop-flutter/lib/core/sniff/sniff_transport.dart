@@ -54,6 +54,12 @@ abstract class CdpConnection {
   /// 全部事件（含各 session 的事件）。
   Stream<CdpEvent> get events;
 
+  /// 连接是否已经不能用了（socket 断开或 [close] 之后）。
+  ///
+  /// 调用方靠它区分「命令本身失败」与「连接没了」：后者不是启动流程的错，
+  /// 把断线报成「浏览器嗅探启动失败」只会把真正的原因埋掉。
+  bool get isClosed;
+
   /// 调用一条 CDP 命令。[sessionId] 非空时发到对应子 session。
   Future<Map<String, Object?>> send(
     String method, {

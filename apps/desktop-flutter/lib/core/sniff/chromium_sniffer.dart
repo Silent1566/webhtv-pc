@@ -68,38 +68,49 @@ class ChromiumSniffEngine implements SniffEngine {
         failures.add('${candidate.executablePath}：$issue');
         continue;
       }
-      BrowserSession? browser;
-      CdpConnection? connection;
-      try {
-        browser = await transport.launch(
-          candidate,
-          headless: !visible,
-          readyTimeout: const Duration(seconds: 20),
-          width: WindowBounds.offscreen.width,
-          height: WindowBounds.offscreen.height,
-        );
-        connection = await transport.connect(
-          browser.webSocketUrl,
-          timeout: const Duration(seconds: 10),
-        );
-      } on Object catch (error) {
-        await connection?.close();
-        connection = null;
-        await browser?.close();
-        browser = null;
-        failures.add('${candidate.label}（${candidate.executablePath}）：$error');
-        continue;
+      // 浏览器起得来、也连得上，但会话打不开：这是「就这一次偶发」（负载高的
+      // 机器上浏览器会在首屏导航的瞬间自己退出，CI 上实测到过）。换候选治不了它，
+      // 重试同一个候选才对症。启动/连接阶段失败不重试：那是确定性的坏内核
+      // （probe 已经挡掉大部分），重试只会让用户白等满一次 20s 端点超时。
+      for (var attempt = 0; attempt < 2; attempt++) {
+        BrowserSession? browser;
+        CdpConnection? connection;
+        var connected = false;
+        try {
+          browser = await transport.launch(
+            candidate,
+            headless: !visible,
+            readyTimeout: const Duration(seconds: 20),
+            width: WindowBounds.offscreen.width,
+            height: WindowBounds.offscreen.height,
+          );
+          connection = await transport.connect(
+            browser.webSocketUrl,
+            timeout: const Duration(seconds: 10),
+          );
+          connected = true;
+          final session = ChromiumSniffSession(
+            command: candidate,
+            request: request,
+            headed: visible,
+            moveOffscreen: visible,
+            browser: browser,
+            connection: connection,
+          );
+          await session.open();
+          return session;
+        } on Object catch (error) {
+          await connection?.close();
+          connection = null;
+          await browser?.close();
+          browser = null;
+          failures.add(
+            '${candidate.label}（${candidate.executablePath}）'
+            '${attempt == 1 ? '（重试后仍失败）' : ''}：$error',
+          );
+          if (!connected || attempt == 1) break;
+        }
       }
-      final session = ChromiumSniffSession(
-        command: candidate,
-        request: request,
-        headed: visible,
-        moveOffscreen: visible,
-        browser: browser,
-        connection: connection,
-      );
-      await session.open();
-      return session;
     }
     // 文案分两层：message 一句话说「缺什么」（进日志/提示的主行），detail 逐个
     // 候选给真实原因 + 一条能照做的处置——用户看不到原因就只能猜。
@@ -206,6 +217,9 @@ class ChromiumSniffSession implements SniffSession {
   int? _windowId;
   bool _finished = false;
   bool _stopping = false;
+
+  /// 本次嗅探的失败结论（成功时为 null）：`open()` 用它如实复述原因。
+  SniffFailed? _failure;
   bool _closeWhenListened = false;
   bool _retriedNavigation = false;
   String? _referrer;
@@ -240,7 +254,8 @@ class ChromiumSniffSession implements SniffSession {
       final connection = _connection!;
       _subscription = connection.events.listen(
         _onEvent,
-        onError: (Object _) {},
+        onError: (Object error) => _onConnectionLost('连接异常：$error'),
+        onDone: () => _onConnectionLost('连接已关闭'),
       );
 
       _targetId = await _createTarget(connection);
@@ -259,12 +274,36 @@ class ChromiumSniffSession implements SniffSession {
 
       await _navigate();
     } catch (error) {
+      // 三个状态必须在 stop() 之前取：stop() 自己也会把 _finished 置位、把连接
+      // 关掉，之后就分不清「打开期间已有结论」和「我刚收的尾」了。
+      final failure = _failure;
+      final settled = _finished;
+      final connectionLost = _connection?.isClosed ?? false;
       await stop();
+      // 打开期间会话自己已经有结论（兜底计时器、页面崩溃）：那条结论就是真正的
+      // 原因，必须原样抛出去。否则 stop() 关掉连接会把手上的 CDP 调用变成
+      // 「连接已关闭」，把原因埋成一句没有信息量的「浏览器嗅探启动失败」。
+      if (failure != null) {
+        throw SniffException(failure.message, detail: failure.detail ?? '$error');
+      }
+      // 打开期间已经产出结果：这不是启动失败，会话（连同已发出的事件）交回调用方。
+      if (settled) return;
       if (error is SniffUnavailableException || error is SniffException) {
         rethrow;
       }
+      // 连接在打开途中没了（浏览器进程自己退出），报「启动失败」会让人去查启动
+      // 参数；真实原因是连接，说清楚才有下一步。
+      if (connectionLost) {
+        throw SniffException('浏览器连接中断', detail: '$error');
+      }
       throw SniffException('浏览器嗅探启动失败', detail: '$error');
     }
+  }
+
+  /// 连接断开分两种：内核自己断（失败原因）与 stop() 主动关（收尾动作）。
+  void _onConnectionLost(String reason) {
+    if (_finished || _stopping) return;
+    _fail('浏览器连接中断', detail: reason);
   }
 
   Future<String> _createTarget(CdpConnection connection) async {
@@ -578,7 +617,9 @@ class ChromiumSniffSession implements SniffSession {
   void _fail(String message, {String? detail}) {
     if (_finished) return;
     _finished = true;
-    _emit(SniffFailed(message: message, detail: detail));
+    final failure = SniffFailed(message: message, detail: detail);
+    _failure = failure;
+    _emit(failure);
     unawaited(stop());
   }
 

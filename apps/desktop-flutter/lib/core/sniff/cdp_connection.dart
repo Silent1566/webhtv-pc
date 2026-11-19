@@ -51,8 +51,8 @@ class WebSocketCdpConnection implements CdpConnection {
   WebSocketCdpConnection(this._channel) {
     _subscription = _channel.stream.listen(
       _handleMessage,
-      onError: (Object error) => _failAll('连接异常：$error'),
-      onDone: () => _failAll('连接已关闭'),
+      onError: (Object error) => _lose('连接异常：$error'),
+      onDone: () => _lose('连接已关闭'),
       cancelOnError: false,
     );
   }
@@ -169,6 +169,19 @@ class WebSocketCdpConnection implements CdpConnection {
       ),
     );
   }
+
+  /// socket 自己断开：先让所有 pending 失败，再把连接标记成已关闭。
+  ///
+  /// 只失败 pending 是不够的：之后每条 [send] 都会挂到一条已经死掉的 socket 上，
+  /// 调用方只能等到超时，还分不清是「命令慢」还是「连接没了」。
+  void _lose(String reason) {
+    if (_closed) return;
+    _failAll(reason);
+    _closed = true;
+  }
+
+  @override
+  bool get isClosed => _closed;
 
   void _failAll(String reason) {
     if (_closed && _pending.isEmpty) return;
