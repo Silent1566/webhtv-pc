@@ -39,6 +39,7 @@ import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
 import 'app.dart' show PosterImage;
+import 'backdrop_scrim.dart';
 import 'common.dart';
 import 'layout_scale.dart';
 import 'tmdb_episode_detail.dart';
@@ -233,30 +234,13 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           // 背景」，遮罩太厚就把背景彻底洗成一片纯色，等于没有背景。
           // 下半部压到接近不透明：hero 改成**满屏**后，标题/海报落在屏幕底部，
           // 那里必须够暗才能保证白字可读。
+          // 两档力度与首页 hero 共用同一份实现（`backdrop_scrim.dart`），
+          // 数值不在两个页面各写一遍。
           if (widget.paintImage)
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  // 两种力度见 [TmdbBackdropScrim]：头部要压到不透明保证标题可读；
-                  // 页面级背景必须**轻且大体均匀**，否则正文滚到下半屏时图片就没了。
-                  colors: widget.scrim == TmdbBackdropScrim.hero
-                      ? [
-                          theme.colorScheme.surface.withValues(alpha: 0.42),
-                          theme.colorScheme.surface.withValues(alpha: 0.40),
-                          theme.colorScheme.surface.withValues(alpha: 0.78),
-                          theme.colorScheme.surface,
-                        ]
-                      : [
-                          theme.colorScheme.surface.withValues(alpha: 0.62),
-                          theme.colorScheme.surface.withValues(alpha: 0.66),
-                          theme.colorScheme.surface.withValues(alpha: 0.74),
-                          theme.colorScheme.surface.withValues(alpha: 0.84),
-                        ],
-                  stops: const [0, 0.45, 0.78, 1],
-                ),
-              ),
+            BackdropScrim(
+              kind: widget.scrim == TmdbBackdropScrim.hero
+                  ? BackdropScrimKind.hero
+                  : BackdropScrimKind.page,
             ),
           if (widget.child != null)
             Padding(

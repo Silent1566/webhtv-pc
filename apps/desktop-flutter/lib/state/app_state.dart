@@ -1434,11 +1434,15 @@ AiContentCompletion? aiContentCompletion,
             historyChanges: this,
             history: () => [
               for (final row in recentHistory(sourceKey: ''))
-                _recommendationSeedForHistory(row),
+                recommendationSeedForHistory(row),
             ],
           );
 
-  RecommendationSeed _recommendationSeedForHistory(PlaybackHistory row) {
+  /// 把一条历史行映射成推荐种子。
+  ///
+  /// 公开而不是私有：详情页用它拼「个性推荐」，首页也用它拼（同一个口径，
+  /// 否则两处对「这部片适合当种子吗」会给出不同答案）。
+  RecommendationSeed recommendationSeedForHistory(PlaybackHistory row) {
     final sourceConfig = configForSourceKey(row.sourceKey) ?? config;
     final site = sourceConfig == null
         ? null

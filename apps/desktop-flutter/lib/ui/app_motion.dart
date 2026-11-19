@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'tokens.dart';
 
-bool _reduceMotion(BuildContext context) {
+bool reducedMotionOf(BuildContext context) {
   final media = MediaQuery.maybeOf(context);
   return media != null &&
       (media.disableAnimations || media.accessibleNavigation);
@@ -35,7 +35,7 @@ class AppMotionScope extends StatelessWidget {
     return Theme(
       data: Theme.of(context).copyWith(
         pageTransitionsTheme: appPageTransitionsTheme(
-          reducedMotion: _reduceMotion(context),
+          reducedMotion: reducedMotionOf(context),
         ),
       ),
       child: child,
@@ -65,7 +65,7 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    final reduced = reducedMotion || _reduceMotion(context);
+    final reduced = reducedMotion || reducedMotionOf(context);
     return DualTransitionBuilder(
       animation: animation,
       forwardBuilder: (context, animation, child) => FadeTransition(
@@ -126,7 +126,7 @@ class _AppShellTransitionState extends State<AppShellTransition>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _reducedMotion = _reduceMotion(context);
+    _reducedMotion = reducedMotionOf(context);
     if (_reducedMotion) _controller.value = 1;
   }
 

@@ -60,3 +60,40 @@ class HorizontalMouseDrag extends StatelessWidget {
     );
   }
 }
+
+/// 把纵向滚轮增量转成横向滚动（桌面端专用）。
+///
+/// 为什么只有**横向**条需要它：Flutter 的横向 `Scrollable` 只消费
+/// `scrollDelta.dx`，而普通鼠标滚轮只有 `dy`，增量方向对不上，于是
+/// 「滚轮推不动横向标签条」。竖向列表本身就吃 `dy`，不需要任何转译。
+///
+/// 为什么**不**做成全局一层：与文件头同一个理由——真正被鼠标/滚轮处理
+/// 波及的是竖直列表里的 `SelectableText` 文字选中与
+/// `ReorderableDragStartListener` 排序手柄，用户推不动的只有横向媒体条。
+/// 所以这里也只是**换个方向**，并只套在被包住的那一棵横向子树上。
+class WheelScroll extends StatelessWidget {
+  const WheelScroll({super.key, required this.controller, required this.child});
+
+  final ScrollController controller;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is! PointerScrollEvent) return;
+        final delta = event.scrollDelta;
+        if (delta.dx.abs() >= delta.dy.abs()) return;
+        if (!controller.hasClients) return;
+        final position = controller.position;
+        final target = (position.pixels + delta.dy).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        );
+        if (target == position.pixels) return;
+        controller.jumpTo(target);
+      },
+      child: child,
+    );
+  }
+}
