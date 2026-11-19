@@ -1618,7 +1618,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _logFailureDiagnostics(outcome);
       // 自动回退（迭代 3-C）：设置显式开启且策略还给出下一步时，按结论换线路/
       // 换解析源/原地重试，成功发起重开就不再走下面的失败收尾。
-      if (await _tryPlaybackFallback(outcome)) return;
+      // 关掉回退时**不能**引入任何 await**：失败收尾必须与接线前完全同步。
+      // 多一次微任务让步就会让 `_loadError` 晚一帧落地，失败态三出口（重试/续播/
+      // 下一集）在首帧看不到——`player_history_lines_test` 的同集重试用例当场红。
+      if (widget.state.playerOptions.failureFallback !=
+              PlayerFailureFallback.off &&
+          await _tryPlaybackFallback(outcome)) {
+        return;
+      }
       if (!mounted || generation != _mediaGeneration) return;
       var rollback = intent;
       if (_playLinesRequested &&
