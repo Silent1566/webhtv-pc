@@ -10,6 +10,7 @@ import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/web_home_page.dart';
 
 import 'local_source_sites_test.dart' show tempPaths, writeCandidates, join;
+import 'support/widget_settle.dart';
 
 class _RecordingState extends AppState {
   _RecordingState(Directory temp)
@@ -74,32 +75,7 @@ void main() {
     if (temp.existsSync()) temp.deleteSync(recursive: true);
   });
 
-  /// 推进假时钟直到没有帧在排队，每一轮先放行一次真实事件循环。
-  ///
-  /// 为什么不能直接 `pumpAndSettle`：`AppShell` 在 `usage-boundary-accepted` 的
-  /// `File.exists()`（真实 dart:io）返回前渲染 `LoadingBlock`——一个无限
-  /// `CircularProgressIndicator`，每帧都会再排一帧。假时钟推不动真实 IO
-  /// （`binding.pump` 只 flush 假微任务，不回到事件循环），于是
-  /// `pumpAndSettle` 唯一的出口「`hasScheduledFrame == false`」在慢机器上永远
-  /// 到不了：CI run 44441281049 就是这样在 6000 次 pump 后抛
-  /// `pumpAndSettle timed out`。
-  ///
-  /// 收敛判据与 `pumpAndSettle` 完全相同（没有帧在排队），只是每轮多给真实
-  /// 事件循环一次机会；真出现无限动画照样失败，窗口还从 10 分钟假时钟收紧到
-  /// 30 秒真实时间，且失败信息说明是「真实 IO 没落地 / 有无限动画」。
-  Future<void> settle(WidgetTester tester) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 30));
-    while (true) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 5)),
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      if (!tester.binding.hasScheduledFrame) return;
-      if (DateTime.now().isAfter(deadline)) {
-        fail('30s 真实时间内仍在排帧：真实 IO 未落地或存在无限动画');
-      }
-    }
-  }
+  // mount 期收敛统一走 support/widget_settle.dart 的 settle（根因见该文件注释）。
 
   Future<void> mount(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1600, 1000);

@@ -12,6 +12,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 
 import 'config_source_status_fixture.dart';
 import 'support/test_fonts.dart';
+import 'support/widget_settle.dart';
 
 void main() {
   final phase = Platform.environment['CONFIG_SOURCE_CAPTURE_PHASE'];
@@ -51,8 +52,8 @@ void main() {
         ? ConfigPage(state: state)
         : AppShell(state: state, startup: const StartupArguments())),
     ));
-    await tester.runAsync(() async => Future<void>.delayed(const Duration(milliseconds: 80)));
-    await tester.pumpAndSettle();
+    // 同上：startup 场景的 AppShell 有真实 File.exists 前置，固定 pumpAndSettle 会超时。
+    await settle(tester);
     expect(tester.takeException(), isNull);
     expect(find.text('家庭配置'), scenario == 'list' ? findsNWidgets(2) : findsNothing);
     if (phase != null) {

@@ -40,6 +40,7 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 
 import 'support/fake_sources_bridge.dart';
+import 'support/widget_settle.dart';
 
 const String _deviceUuid = 'dev-uuid-0001';
 const String _deviceBase = 'http://192.168.50.9:9978';
@@ -180,7 +181,8 @@ void main() {
         home: AppShell(state: target, startup: const StartupArguments()),
       ),
     );
-    await _settle(tester);
+    // 挂载期走共享 settle；_settle 仍留给后续交互的小轮次推进。
+    await settle(tester);
   }
 
   /// 存一条桥接源记录（走真实的 `saveBridgeConfig`，与桥接导入同一条路径）。
