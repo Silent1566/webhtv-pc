@@ -63,11 +63,18 @@ class PlayerButtonSpec {
 /// 排除清单与理由：
 /// - `decode` / `player` / `play_params`：PC 只有 media-kit 一个引擎，无解码器切换
 /// - `codec_capability`：无硬件解码能力探测
-/// - `lut` / `karaoke` / `immersive_audio` / `timer` / `repeat`：未实现
+/// - `lut` / `karaoke` / `immersive_audio` / `timer` / `repeat`：原记载「未实现」；
+///   2026-11-20 更正：`lut` 的理由已不成立——它已实现为顶栏菜单项
+///   （`apps/desktop-flutter/lib/ui/lut_menu.dart`，由 `lib/ui/player_page.dart:6254`
+///   的 `buildLutMenuItems` 接入），只是仍不占控制栏按钮位；
+///   `karaoke` / `immersive_audio` / `timer` / `repeat` 仍未实现
 /// - `cast`：无 DLNA / 投屏
 /// - `pan_diagnostic`：无网盘专用诊断
 /// - `ad_feedback`：无广告反馈
-/// - `opening` / `ending`：无片头片尾跳过
+/// - `opening` / `ending`：原记载「无片头片尾跳过」；2026-11-20 更正：理由不成立——
+///   `apps/desktop-flutter/lib/core/skip_plan.dart:128` 已把 `opening` / `ending`
+///   映射为 intro / outro，跳过入口与选项页是
+///   `lib/ui/intro_skip_options_page.dart`；排除结论不变（这两个 id 仍不是控制栏按钮）
 /// - `parse`：解析线路由站点配置决定，不暴露手动切换
 /// - `multi_thread_proxy`：代理是站点级配置，不是播放器按钮
 /// - `scale`：画面比例归顶栏菜单与右键菜单，不占控制栏按钮位
