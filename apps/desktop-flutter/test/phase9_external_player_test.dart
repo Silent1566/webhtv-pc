@@ -410,8 +410,14 @@ void main() {
 
     test('POSIX 绝对路径同样给裸路径', () async {
       List<String>? usedArgs;
+      // 播放器路径本身必须是平台合法的可执行文件（Windows 要求盘符 + .exe），
+      // 本条要验的是**媒体路径**：POSIX 绝对路径不得被包装成 potplayer://
+      // 或当成协议拒绝。
+      final executable = Platform.isWindows
+          ? r'C:\Tools\mpv\mpv.exe'
+          : '/usr/bin/mpv';
       final result = await ExternalPlayers.launch(
-        executable: '/usr/bin/mpv',
+        executable: executable,
         url: '/home/someone/videos/a b.mp4',
         exists: (_) => true,
         starter: (_, arguments) async {
