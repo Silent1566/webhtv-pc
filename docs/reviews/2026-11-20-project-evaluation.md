@@ -448,6 +448,33 @@ UI 层的重复与一致性问题（均为可量化机械收敛）：
 - 解析失败（`播放决策没有返回可用地址`）没有引擎失败分类，不进回退阶梯，只提示。
 - 页面级回退没有 widget 用例（只有策略单测 + 全包 analyze）。
 
+## 首次 CI 实测（PR #79，2026-11-20）
+
+推送后连跑四轮，逐轮定位：
+
+| 轮次 | Linux | Windows | 试用 e2e | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | Unit tests 红 | Unit tests 红 | Build 红 | 复现出「失败收尾多一次 await」的时序回归（`player_history_lines_test`），修 |
+| 2 | 同上 | 同上 + POSIX 路径用例红 | Build 红 | 修时序；Windows 用例改为按平台取可执行文件 |
+| 3 | **success** | 红：teardown `OS Error 32` | Build 红 | 既有用例在 Windows 上删临时目录的句柄竞态，改用仓库既有 `deleteTempWhenReleased` |
+| 4 | **success** | **success** | Run 红：`homeResult` 为 null | e2e job 补 Python 运行时准备后构建通过；失败下移到用例本身 |
+
+### 从 CI 学到、本地学不到的三件事
+
+1. **「关掉功能」也必须零异步开销**：回退默认 off 时若仍 `await` 一次，失败收尾就晚一帧，失败态三出口在首帧看不到。本地组合测试没覆盖到，是 CI 抓的。
+2. **Windows 的可执行文件判定是平台相关的**：`isExecutablePath` 在 Windows 要求「盘符 + `.exe`」，所以拿 `/usr/bin/mpv` 当播放器路径的用例在 Windows 上根本走不到媒体路径断言。
+3. **Windows 的 `dispose()` ≠ 句柄已归还**：删临时目录要重试（仓库早有 `deleteTempWhenReleased`，只是没被所有用例采用）。
+
+### 试用 e2e 的现状（非阻塞）
+
+- 构建已通过（缺的是 `prepare_python_runtime_linux.py`：CMake 要求 `runtime/python` 正好是 bundle.json + python-runtime.zip）。
+- 用例仍红：`mvp_a_flow_test.dart:157` 的 `state.homeResult!` 为 null，4 个用例失败。**这层此前在 CI 里从未执行过**，属新暴露的既有问题，需要真实 Linux 桌面环境定位；在修好前保持 `continue-on-error`，不要转阻塞。
+
+### 本地全量口径（同一棵树）
+
+`flutter test --concurrency=2` → **6434 passed / 37 skipped / 0 failed**（12:41）。
+
 ---
 
 本文档为 2026-11-20 评估快照。后续请新建日期文件，并在「勘误」节记录旧结论何时失效，不要原地改写已过期的判断。
+
