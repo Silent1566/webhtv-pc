@@ -295,7 +295,8 @@ class _HistoryPageState extends State<HistoryPage> {
       configForSourceKey: _state.configForSourceKey,
       cachedTmdbPosterUrl: (siteKey, vodId) =>
           _state.cachedTmdbPosterUrl(siteKey: siteKey, vodId: vodId),
-      fallbackConfig: _state.config,
+      // 生效源也要用合并后的配置：本地爬虫源只在那里，否则本地源的历史补不了图。
+      fallbackConfig: _state.effectiveConfig,
     );
     var changed = false;
     for (final item in candidates) {
@@ -973,7 +974,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
   /// 站点名：收藏只存 `site_key`，换源或删站后站点可能已不在当前配置里，
   /// 此时回退到 key 本身（原列表也是这么展示的）。
   String _siteLabel(String siteKey) {
-    final sites = _state.config?.sites;
+    final sites = _state.effectiveConfig?.sites;
     if (sites != null) {
       for (final site in sites) {
         if (site.key == siteKey) return site.name;
@@ -991,9 +992,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
       showToast('站点级收藏没有影片详情（类型=${item.kind}）');
       return;
     }
-    final site = _state.config?.sites
-        .where((candidate) => candidate.key == item.siteKey)
-        .firstOrNull;
+    final site = _state.siteInActiveSource(item.siteKey);
     if (site == null) {
       showToast('该收藏所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
       return;
@@ -1160,16 +1159,6 @@ class _FavoritesPageState extends State<FavoritesPage> {
         ],
       ),
     );
-  }
-}
-
-/// 本地实现的 firstOrNull，避免为单个用法引入 `package:collection`。
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull {
-    for (final item in this) {
-      return item;
-    }
-    return null;
   }
 }
 

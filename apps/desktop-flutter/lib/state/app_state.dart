@@ -5995,19 +5995,39 @@ AiContentCompletion? aiContentCompletion,
     }
   }
 
-  /// 按 `source_key` 取那份配置（只读）。
+  /// 按 `source_key` 取那份配置（只读），**含本地导入源**。
   ///
-  /// 历史补图要用记录**自己的**配置找站点：跨源记录挂在非生效配置上，拿
-  /// [config] 会找不到站点，补图永远不执行。空 `sourceKey`（迁移前老记录）
-  /// 返回 null，由调用方退回生效配置。
+  /// 历史补图与推荐种子要用记录**自己的**配置找站点：跨源记录挂在非生效配置上，
+  /// 拿 [config] 会找不到站点，补图永远不执行。
+  ///
+  /// 本地爬虫源（`spiders/local/<key>/`）只并入 [effectiveConfig]，从不写进配置
+  /// 记录（见 `state/local_site_sources.dart`）；照记录原样返回就是一份缺站的
+  /// 配置，本地源播出来的历史一律解析不出站点（用户反馈「最近观看不支持本地
+  /// 爬虫源」）。因此：
+  /// - 生效源直接返回 [effectiveConfig]（与站点选择器、首页同一份）；
+  /// - 其它源在记录配置上**追加**启用中的本地源，同 key 让位给记录自己的站点；
+  /// - 空 `sourceKey`（迁移前老记录）按生效源解析。
   AppConfig? configForSourceKey(String sourceKey) {
     final key = sourceKey.trim();
-    if (key.isEmpty) return null;
+    final active = effectiveConfig;
+    if (key.isEmpty || key == activeSourceKey) return active;
     try {
-      return _database?.configBySourceKey(key)?.config;
+      final config = _database?.configBySourceKey(key)?.config;
+      if (config == null) return null;
+      return _withLocalSources(config);
     } catch (_) {
       return null;
     }
+  }
+
+  /// 把启用中的本地导入源追加到一份配置上（只追加，不覆盖）。
+  ///
+  /// 与 [effectiveConfig] 的合并链同一优先级：同 key 时既有站点优先，本地条目
+  /// 被拒绝并记入 conflicts，因此不会把别的配置的站点 api 换掉（那是串源）。
+  AppConfig _withLocalSources(AppConfig config) {
+    final local = localSourceSites;
+    if (local.isEmpty) return config;
+    return mergeLocalSourceSites(config, local).config;
   }
 
   /// 跨配置读 TMDB 缓存海报（只读，不暴露数据库）。
@@ -6033,6 +6053,27 @@ AiContentCompletion? aiContentCompletion,
   /// 配置被重新导入/删除后自动重建，不会拿旧站点去请求。
   final Map<String, PlaybackSourceContext> _playbackContexts = {};
 
+  /// 建上下文时的「合并源」签名（见 [_mergedSourcesSignature]）。
+  ///
+  /// 本地导入源与 JSON 注入站点都**不改配置记录**，只看记录签名会把缺站的旧
+  /// 上下文当成新鲜货；而**不能**改成「装配时清空整张表」：这张表同时是
+  /// `SiteService → 所属 sourceKey` 的身份索引（[loadDetail] 用它给在途详情
+  /// 补来源归属，见那里的 `captureSource`），清掉会让原来源的详情记不出源。
+  final Map<String, String> _playbackContextSignatures = {};
+
+  /// 本地导入源与注入站点的当前形态（`key@api`，排序后拼接）。
+  ///
+  /// 只在导入/启停/删除本地源、增删注入站点时变化——这正是要触发上下文重建的
+  /// 全部时机，且与配置记录的更新时间无关。
+  String get _mergedSourcesSignature {
+    final parts = <String>[
+      for (final site in localSourceSites) 'L:${site.key}@${site.api}',
+      for (final entry in _injectedSites)
+        'I:${entry.site.key}@${entry.site.api}',
+    ]..sort();
+    return parts.join('|');
+  }
+
   /// 取一份**非生效配置**的播放上下文；配置不存在或无法解析时返回 `null`。
   ///
   /// 调用方（历史页）据 `null` 决定回退到「当前源匹配」的老路径，所以这里
@@ -6053,6 +6094,7 @@ AiContentCompletion? aiContentCompletion,
       final found = database.configBySourceKey(key);
       if (found == null) {
         _playbackContexts.remove(key);
+        _playbackContextSignatures.remove(key);
         return null;
       }
       record = found;
@@ -6060,15 +6102,23 @@ AiContentCompletion? aiContentCompletion,
       log.warning('读取来源配置失败 source=$key error=$error', scope: 'history');
       return null;
     }
+    // 记录签名 + 合并源签名：本地源导入/启停/删除不改记录，必须靠后者才失效。
+    final signature =
+        '${record.id}\n${record.updatedAt}\n$_mergedSourcesSignature';
     final cached = _playbackContexts[key];
     if (cached != null &&
         cached.record.id == record.id &&
-        cached.record.updatedAt == record.updatedAt) {
+        cached.record.updatedAt == record.updatedAt &&
+        _playbackContextSignatures[key] == signature) {
       return cached;
     }
-    final config = record.config;
+    // 合并本地导入源：历史行可能是本地爬虫源播出来的，而记录所属配置里没有它。
+    // 生效源拿 [effectiveConfig]，其它源在记录配置上追加本地源（见
+    // [configForSourceKey]）。
+    final config = configForSourceKey(key) ?? record.config;
     if (config == null || config.sites.isEmpty) {
       _playbackContexts.remove(key);
+      _playbackContextSignatures.remove(key);
       return null;
     }
     // 独立路由：生效配置的 `_router` 会被 `updateTransport` 改写
@@ -6098,6 +6148,7 @@ AiContentCompletion? aiContentCompletion,
       ),
     );
     _playbackContexts[key] = context;
+    _playbackContextSignatures[key] = signature;
     // 直连 js/py 站点要按**这份配置**注册：生效配置那次注册的结果只对生效配置
     // 的站点有效，直接借过来会把同 key 的站点认错。
     unawaited(_registerDirectSpidersFor(config, router));
@@ -6124,6 +6175,23 @@ AiContentCompletion? aiContentCompletion,
   /// 某条历史所属配置里的站点（找不到返回 `null`，调用方据此回退）。
   Site? siteForSourceKey(String sourceKey, String siteKey) =>
       playbackContextFor(sourceKey)?.siteByKey(siteKey);
+
+  /// 在**当前生效源**里按 key 找站点（含本地导入源与 JSON 注入站点）。
+  ///
+  /// 历史、收藏、追剧都只存 `site_key`，解析时必须查 [effectiveConfig]：本地爬虫
+  /// 源只存在于那里，用 [config]（配置记录的原文）找必然落空，界面就会弹
+  /// 「该记录所属站点已不在当前配置中」（用户反馈「最近观看不支持本地爬虫源」）。
+  /// 隐藏站点同样算找到：隐藏只影响列表展示，不影响已有记录能不能续播。
+  Site? siteInActiveSource(String siteKey) {
+    final target = siteKey.trim();
+    if (target.isEmpty) return null;
+    final config = effectiveConfig;
+    if (config == null) return null;
+    for (final site in config.sites) {
+      if (site.key == target) return site;
+    }
+    return null;
+  }
 
   /// 用**记录所属配置**解析播放（原来源续播）。
   ///

@@ -272,6 +272,15 @@ HistoryViewState withKeyword(String next) {
 **不静默失败**，用 `SnackBar` 说明「该记录所属站点已不在当前配置中：<key>」，
 与现有 `_resume` 的处理一致。
 
+站点查找必须查**合并后**的站点集合（`AppState.effectiveConfig`，或
+`AppState.siteInActiveSource`），不能查 `AppState.config`（配置记录的原文）：
+本地爬虫源（`spiders/local/<key>/`，见 `state/local_site_sources.dart`）只并入
+`effectiveConfig`，从不写进配置记录。用原文查会把本地源播出来的历史一律判成
+「站点已不在当前配置中」（用户 2026-11 反馈「最近观看不支持本地爬虫源」）。
+按源解析（`playbackContextFor` / `configForSourceKey`）同理：生效源返回
+`effectiveConfig`，其它源在记录配置上**追加**启用中的本地源——只追加，同 key
+让位给记录自己的站点，因此不会把别的配置的站点 api 换掉（那是串源）。
+
 ### 5.1 传给详情页的参数
 
 `DetailPage` 新增两个可选参数（**定义与消费都在 `02` §4**，本节只说明
