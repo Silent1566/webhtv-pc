@@ -19,9 +19,8 @@ enum PlayerTrackKind {
 
   /// 次字幕轨（双字幕）：mpv 的 `secondary-sid`。
   ///
-  /// 它**没有**对应的 [PlayerTrackSlot]：槽位决定记忆键怎么拼，主字幕与次字幕
-  /// 若共用一个槽，同一集里两条选择会互相覆盖。要记住次字幕的选择，得先给
-  /// 用它的地方（`player_page.dart` 的槽位 switch）补分支，那是另一层的事。
+  /// 与 [PlayerTrackSlot.secondarySubtitle] 一一对应：槽位决定记忆键怎么拼，
+  /// 主字幕与次字幕若共用 `subtitle` 槽，同一集里两条选择会互相覆盖。
   secondarySubtitle('secondary_subtitle', '次字幕');
 
   const PlayerTrackKind(this.id, this.label);
@@ -186,6 +185,51 @@ bool hasSwitchableTracks(List<PlayerTrackOption> options) {
   return real.length >= 2;
 }
 
+/// 次字幕「关闭」的落盘值：mpv 的 `secondary-sid=no`。
+///
+/// 三个地方必须同一个字面量：菜单里那一行、`PlayerOptions.secondarySubtitleId`
+/// 的默认值、以及写内核的取值。散写 `'no'` 就会在某处漏改。
+const String secondarySubtitleOffId = 'no';
+
+/// 次字幕的落盘口径：空值、以及「记住的次字幕正好是当前主字幕那条」都归到
+/// [secondarySubtitleOffId]。
+///
+/// 同轨回落是**内容规则**而不是界面规则：同一条轨同时当主、次字幕，只会在画面
+/// 上把同一行字显示两遍。所以判定放 core，界面与控制器只调用、不重判。
+String normalizeSecondarySubtitleId({String? selectedId, String? primaryId}) {
+  final current = (selectedId ?? '').trim();
+  if (current.isEmpty) return secondarySubtitleOffId;
+  final primary = (primaryId ?? '').trim();
+  if (primary.isNotEmpty && current == primary) return secondarySubtitleOffId;
+  return current;
+}
+
+/// 是否值得给「次字幕」入口。
+///
+/// 「至少两条真实字幕轨」是硬条件：次字幕天生是**第二条**字幕，只有一条时它
+/// 能选的只剩「关闭」，入口点开也只有一项，没有意义；主字幕再占掉一条后，
+/// 剩下的候选为空同样不给入口。
+///
+/// 与 [hasSwitchableTracks] 的口径**不同**（那条要求 ≥2 条候选）：次字幕菜单里
+/// 「关闭」本身是可点的一项，所以「2 条字幕轨、主 1 次 2」就是双字幕的完整场景，
+/// 此时候选只有一条也该给入口。
+bool canOfferSecondarySubtitle({
+  required Iterable<PlayerTrackInfo> tracks,
+  String? primaryId,
+}) {
+  final real = <PlayerTrackInfo>[
+    for (final track in tracks)
+      if (_isRealTrack(track)) track,
+  ];
+  if (real.length < 2) return false;
+  final primary = (primaryId ?? '').trim();
+  if (primary.isEmpty) return true;
+  for (final track in real) {
+    if (track.id.trim() != primary) return true;
+  }
+  return false;
+}
+
 /// 次字幕菜单：一条「关闭」+ 主字幕菜单的同一套规则（mpv `secondary-sid`）。
 ///
 /// 与 [buildPlayerTrackOptions] 的差别只有三处，且都是次字幕独有的语义：
@@ -204,17 +248,21 @@ List<PlayerTrackOption> buildSecondarySubtitleOptions({
   String? selectedId,
   String? excludeId,
 }) {
-  final current = (selectedId ?? '').trim();
   final excluded = (excludeId ?? '').trim();
-  final effective = current.isEmpty || current == excluded ? 'no' : current;
+  // 选中态与落盘口径同源：主次同轨/空值都由 [normalizeSecondarySubtitleId] 归到
+  // 「关闭」，菜单不会再出现「次字幕开着、但和主字幕是同一条」的自相矛盾态。
+  final effective = normalizeSecondarySubtitleId(
+    selectedId: selectedId,
+    primaryId: excludeId,
+  );
 
   return <PlayerTrackOption>[
     PlayerTrackOption(
       kind: PlayerTrackKind.secondarySubtitle,
-      id: 'no',
+      id: secondarySubtitleOffId,
       label: '关闭',
       isOff: true,
-      selected: effective == 'no',
+      selected: effective == secondarySubtitleOffId,
     ),
     ...buildPlayerTrackOptions(
       kind: PlayerTrackKind.secondarySubtitle,
@@ -234,7 +282,16 @@ List<PlayerTrackOption> buildSecondarySubtitleOptions({
 enum PlayerTrackSlot {
   audio('audio', '音轨'),
   video('video', '视频轨'),
-  subtitle('subtitle', '内嵌字幕');
+  subtitle('subtitle', '内嵌字幕'),
+
+  /// 次字幕槽（mpv `secondary-sid`）。
+  ///
+  /// 与 [PlayerTrackSlot.subtitle] 分开是必须的：共用一个槽时，同一集里主字幕
+  /// 与次字幕的选择会互相覆盖成同一个键，后写的那次直接顶掉前一次。
+  ///
+  /// 它只记忆「次字幕是哪条」，**与主字幕的冲突**由 [normalizeSecondarySubtitleId]
+  /// 在读写两侧统一回落（见该函数的文档）。
+  secondarySubtitle('secondary_subtitle', '次字幕');
 
   const PlayerTrackSlot(this.id, this.label);
 
@@ -552,3 +609,9 @@ String formatTrackOffsetSeconds(int milliseconds) {
 
 /// `auto` 是「回到引擎默认」的伪轨，language/title 上没有意义。
 bool _isPseudoTrack(PlayerTrackInfo track) => track.id.trim() == 'auto';
+
+/// 真实轨：伪轨（`auto`）与「关闭」（`no`）都不是可被选中的轨道。
+bool _isRealTrack(PlayerTrackInfo track) {
+  final id = track.id.trim();
+  return id.isNotEmpty && id != secondarySubtitleOffId && !_isPseudoTrack(track);
+}

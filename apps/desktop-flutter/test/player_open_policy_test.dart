@@ -76,7 +76,9 @@ void main() {
     );
   });
 
-  test('回退关闭时一次都不重试，但仍如实给出失败分类', () async {
+  // 原地重试与「自动换线」是两件事：回退关闭只关掉换线路/换解析源，
+  // 瞬时故障（超时/网络）仍按 §10.4 重试一次——这是接线前就有的行为。
+  test('回退关闭时不做回退，但瞬时故障仍重试一次', () async {
     final io = _SilentIO(<String>[]);
     final controller = _controller(io);
 
@@ -87,8 +89,8 @@ void main() {
     );
 
     expect(outcome.failureKind, PlayerFailureKind.timeout);
-    expect(io.opens, 1);
-    // 分类是只读事实：超时可回退，只是这次不允许回退。
+    expect(io.opens, 2, reason: '超时先原地重试一次（§10.4），与回退档位无关');
+    // 分类是只读事实：超时可回退，只是这次不允许换地址。
     expect(controller.lastFailureClass, PlaybackFailureClass.recoverable);
   });
 
@@ -236,18 +238,30 @@ void main() {
     );
   });
 
-  test('设置页两个开关翻成策略；默认值与历史行为逐项一致', () {
+  test('设置页两个开关翻成策略；默认 off 之后回退不再默认打开', () {
     final defaults = const PlayerOptions.defaults().openPolicy;
     expect(defaults.preload, false);
-    expect(defaults.fallbackOnFailure, true);
+    // 迭代 3-C：回退档位默认 off → 默认不换线路/换解析源；
+    // 但原地重试只针对瞬时故障（超时/网络），与回退档位无关，必须保留
+    // （否则关回退会顺手关掉既有的「超时重试一次」）。
+    expect(defaults.fallbackOnFailure, false);
     expect(defaults.retryLimit, 1);
-    // 历史重试判据：只有超时与网络，403/404 不在其中。
     expect(defaults.shouldRetryInPlace(PlayerFailureKind.timeout), true);
     expect(defaults.shouldRetryInPlace(PlayerFailureKind.network), true);
-    expect(defaults.shouldRetryInPlace(PlayerFailureKind.notFound), false);
-    expect(defaults.shouldRetryInPlace(null), false);
+    expect(defaults.allowsFallback(PlayerFailureKind.notFound), false);
+
+    // 显式开启才生效。重试判据仍是历史口径：只有超时与网络，403/404 不在其中。
+    final on = const PlayerOptions(
+      failureFallback: PlayerFailureFallback.line,
+    ).openPolicy;
+    expect(on.fallbackOnFailure, true);
+    expect(on.retryLimit, 1);
+    expect(on.shouldRetryInPlace(PlayerFailureKind.timeout), true);
+    expect(on.shouldRetryInPlace(PlayerFailureKind.network), true);
+    expect(on.shouldRetryInPlace(PlayerFailureKind.notFound), false);
+    expect(on.shouldRetryInPlace(null), false);
     // 回退阶梯：403/404 恰恰是最该换线路的一类。
-    expect(defaults.allowsFallback(PlayerFailureKind.notFound), true);
+    expect(on.allowsFallback(PlayerFailureKind.notFound), true);
 
     expect(const PlayerOptions(preloadNext: true).openPolicy.preload, true);
 
@@ -255,7 +269,8 @@ void main() {
       failureFallback: PlayerFailureFallback.off,
     ).openPolicy;
     expect(off.fallbackOnFailure, false);
-    expect(off.shouldRetryInPlace(PlayerFailureKind.timeout), false);
+    // off 只关「换地址」：原地重试是既有行为，不能被回退档位顺手关掉。
+    expect(off.shouldRetryInPlace(PlayerFailureKind.timeout), true);
     expect(off.allowsFallback(PlayerFailureKind.network), false);
   });
 

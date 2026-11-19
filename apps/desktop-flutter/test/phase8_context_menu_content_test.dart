@@ -668,9 +668,9 @@ void main() {
         for (var i = 0; i < rows.length; i++)
           if (_isChecked(tester, rows[i])) labels[i],
       ];
-      // 默认值 = `PlayerOptions.defaults().failureFallback`（PlayerFailureFallback.line）。
+      // 默认值 = `PlayerOptions.defaults().failureFallback`（迭代 3-C 起为 off）。
       expect(checked, [
-        PlayerFailureFallback.line.label,
+        PlayerFailureFallback.off.label,
       ], reason: '回退档位必须恰有一项打勾，且是当前生效值');
     });
 

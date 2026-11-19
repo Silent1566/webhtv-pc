@@ -231,7 +231,10 @@ class PlaybackOpenPolicy {
   /// 只治瞬时失败：403/404、401 再打同一个地址不会变好，那是回退阶梯的活
   /// （见 [allowsFallback]）。[fallbackOnFailure] 关掉时一律不重试。
   bool shouldRetryInPlace(PlayerFailureKind? kind) {
-    if (kind == null || !fallbackOnFailure || retryLimit <= 0) return false;
+    // 原地重试与「自动换线」是两件事：重试只针对瞬时故障（超时/网络），
+    // 在回退档位为 off 时也必须保留——否则把回退默认关掉会顺手把
+    // 「超时重试一次」这个既有行为一起关掉，属默认行为变更。
+    if (kind == null || retryLimit <= 0) return false;
     return kind == PlayerFailureKind.timeout || kind == PlayerFailureKind.network;
   }
 

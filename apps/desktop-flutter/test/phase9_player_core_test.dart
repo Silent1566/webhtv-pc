@@ -265,7 +265,8 @@ void main() {
       expect(options.cache, isTrue);
       expect(options.autoNext, isTrue);
       expect(options.preloadNext, isFalse);
-      expect(options.failureFallback, PlayerFailureFallback.line);
+      // 迭代 3-C：回退默认 off——自动换线路/解析源必须由用户显式开启。
+      expect(options.failureFallback, PlayerFailureFallback.off);
       expect(options.autoSkipIntro, isFalse);
       expect(options.longPressSpeed, 3, reason: '长按倍速默认 3×（2026-11 起）');
     });
@@ -330,7 +331,8 @@ void main() {
       expect(options.demuxerMaxBytesMiB, PlayerOptions.maxDemuxerMaxMiB);
       expect(options.demuxerMaxBackBytesMiB, PlayerOptions.minDemuxerBackMiB);
       expect(options.autoNext, isTrue);
-      expect(options.failureFallback, PlayerFailureFallback.line);
+      // 脏值不等于「用户开启过」：落到默认的 off，而不是旧的 line。
+      expect(options.failureFallback, PlayerFailureFallback.off);
     });
 
     test('回退阶梯能力判定', () {

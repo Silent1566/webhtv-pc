@@ -73,9 +73,9 @@ class PlayerLoadOutcome {
       '${errorMessage == null ? "" : "error=${errorMessage!.length > 160 ? errorMessage!.substring(0, 160) : errorMessage!}"}';
 }
 
-/// 一条偏移写入的结果（[writeTrackOffsetProperty] 的输出）。
-class TrackOffsetWriteResult {
-  const TrackOffsetWriteResult._({required this.applied, this.rejection});
+/// 一次 mpv 属性写入的结果（[writeMpvPropertyValue] 的输出）。
+class MpvPropertyWriteResult {
+  const MpvPropertyWriteResult._({required this.applied, this.rejection});
 
   /// 白名单放行、写入没抛错、回读也匹配上了。
   final bool applied;
@@ -84,46 +84,50 @@ class TrackOffsetWriteResult {
   final MpvPropertyRejection? rejection;
 }
 
-/// 把一条偏移写进内核：**白名单过滤 → 写入 → 按 1 ms 容差回读**。
+/// 偏移写入的结果；与 [MpvPropertyWriteResult] 同一形态。
 ///
-/// 为什么独立成顶层函数：`PlayerController` 的构造要 MediaKit 内核，单测里造不
-/// 出来，而「过滤之后到底写了什么值」「回读不匹配怎么降级」正是必须断言的部分。
-/// 手法与 `player_tracks.dart` 的 `applyTrackChoice` 一致：编排留在纯函数里，
-/// 引擎调用由调用方以回调注入（生产环境是 `NativePlayer` 的 set/getProperty）。
+/// 保留旧名只是不给既有调用方（偏移菜单、单测）添无谓改动：偏移并不是另一条
+/// 通道，它只是「回读按 1 ms 容差比」的一种属性写入。
+typedef TrackOffsetWriteResult = MpvPropertyWriteResult;
+
+/// 把一条 mpv 属性写进内核：**白名单过滤 → 写入 → 回读**。
 ///
-/// **永不抛异常**：写失败、读失败、白名单拒绝都折成 `applied: false` + 可读原因，
-/// 由调用方决定记日志还是提示界面。
-Future<TrackOffsetWriteResult> writeTrackOffsetProperty({
-  required TrackOffset offset,
+/// 这是偏移、次字幕（`secondary-sid`）共用的唯一写入通道。独立成顶层函数的
+/// 理由与 [writeTrackOffsetProperty] 相同：`PlayerController` 的构造要 MediaKit
+/// 内核，单测里造不出来，而「白名单之后真正写了什么值」「回读不匹配怎么降级」
+/// 恰恰是必须断言的部分。
+///
+/// [matches] 决定回读口径（默认 [mpvPropertyReadbackMatches]：数值相等/忽略大小
+/// 写；浮点属性传容差版或 [mpvDelayReadbackMatches]）。
+///
+/// **永不抛异常**：写失败、读失败、白名单拒绝都折成 `applied: false` + 可读原因。
+Future<MpvPropertyWriteResult> writeMpvPropertyValue({
+  required String key,
+  required String value,
   required Future<void> Function(String key, String value) setProperty,
   required Future<String> Function(String key) getProperty,
+  bool Function(String written, String actual)? matches,
 }) async {
-  final key = offset.kind.mpvPropertyKey;
-  final filtered = filterMpvProperties(offset.toMpvProperty());
-  final value = filtered.accepted[key];
-  if (value == null) {
-    // 偏移值恒在 ±60 s 内，正常走不到这里；真走到了说明白名单与模型漂移了，
-    // 仍然不抛：拒绝理由原样带出去。
+  final filtered = filterMpvProperties({key: value});
+  final accepted = filtered.accepted[key];
+  if (accepted == null) {
+    // 白名单拒了：不写、也不猜一个「近似合法」的值，原因原样带出去。
     final reason = filtered.rejected.isEmpty
         ? '值未通过 mpv 属性白名单'
         : filtered.rejected.single.reason;
-    return TrackOffsetWriteResult._(
+    return MpvPropertyWriteResult._(
       applied: false,
-      rejection: MpvPropertyRejection(
-        key: key,
-        value: offset.mpvValue,
-        reason: reason,
-      ),
+      rejection: MpvPropertyRejection(key: key, value: value, reason: reason),
     );
   }
   try {
-    await setProperty(key, value);
+    await setProperty(key, accepted);
   } catch (error) {
-    return TrackOffsetWriteResult._(
+    return MpvPropertyWriteResult._(
       applied: false,
       rejection: MpvPropertyRejection(
         key: key,
-        value: value,
+        value: accepted,
         reason: '写入失败（$error）',
       ),
     );
@@ -132,28 +136,52 @@ Future<TrackOffsetWriteResult> writeTrackOffsetProperty({
   try {
     actual = await getProperty(key);
   } catch (error) {
-    return TrackOffsetWriteResult._(
+    return MpvPropertyWriteResult._(
       applied: false,
       rejection: MpvPropertyRejection(
         key: key,
-        value: value,
+        value: accepted,
         reason: '回读失败（$error）',
       ),
     );
   }
-  if (mpvDelayReadbackMatches(offset.milliseconds, actual)) {
-    return const TrackOffsetWriteResult._(applied: true);
-  }
+  final ok = (matches ?? mpvPropertyReadbackMatches)(accepted, actual);
+  if (ok) return const MpvPropertyWriteResult._(applied: true);
   // 与 applyMpvProperties 的回读失败同一句话：空回读要如实说「空」。
-  return TrackOffsetWriteResult._(
+  return MpvPropertyWriteResult._(
     applied: false,
     rejection: MpvPropertyRejection(
       key: key,
-      value: value,
+      value: accepted,
       reason: '内核未接受写入（回读 ${actual.trim().isEmpty ? '空' : actual.trim()}）',
     ),
   );
 }
+
+/// 把一条偏移写进内核：**白名单过滤 → 写入 → 按 1 ms 容差回读**。
+///
+/// 编排在 [writeMpvPropertyValue] 里（与次字幕共用一条通道），这里只把「偏移是
+/// 双精度秒」这件事实翻成回读口径：严格相等会把写成功判成失败。
+///
+/// 独立成顶层函数的理由：`PlayerController` 的构造要 MediaKit 内核，单测里造不
+/// 出来，而「过滤之后到底写了什么值」「回读不匹配怎么降级」正是必须断言的部分。
+///
+/// **永不抛异常**：写失败、读失败、白名单拒绝都折成 `applied: false` + 可读原因。
+Future<TrackOffsetWriteResult> writeTrackOffsetProperty({
+  required TrackOffset offset,
+  required Future<void> Function(String key, String value) setProperty,
+  required Future<String> Function(String key) getProperty,
+}) => writeMpvPropertyValue(
+  key: offset.kind.mpvPropertyKey,
+  value: offset.mpvValue,
+  setProperty: setProperty,
+  getProperty: getProperty,
+  matches: (written, actual) =>
+      mpvDelayReadbackMatches(offset.milliseconds, actual),
+);
+
+/// 次字幕对应的 mpv 属性名（白名单与取值规则在 `mpv_properties.dart`）。
+const String _secondarySidKey = 'secondary-sid';
 
 /// 播放器控制器。
 class PlayerController extends ChangeNotifier {
@@ -509,6 +537,24 @@ class PlayerController extends ChangeNotifier {
         ),
   ];
 
+  /// 引擎上报的原始字幕轨（**裸** trackId，不带菜单 id 的 `embedded:` 前缀）。
+  ///
+  /// 与 [embeddedSubtitleTrackInfos] 的唯一差别就是前缀，但那一层前缀在这里
+  /// 必须剥掉：次字幕写的是 mpv 的 `secondary-sid`，它只认 `auto`/`no`/轨道号，
+  /// 把 `embedded:1` 写下去会被白名单直接拒掉。
+  ///
+  /// 轨道记忆也取这份：菜单 id 拼过前缀，引擎原文才做得了 title/language 回落。
+  List<PlayerTrackInfo> get rawSubtitleTrackInfos => <PlayerTrackInfo>[
+    for (final track in _tracks.subtitle)
+      if (isRealSubtitleTrackId(track.id))
+        PlayerTrackInfo(
+          id: track.id,
+          title: track.title ?? '',
+          language: track.language ?? '',
+          isDefault: track.isDefault ?? false,
+        ),
+  ];
+
   /// 音轨菜单（Phase 9）。空表表示引擎尚未上报轨道。
   List<PlayerTrackOption> get audioTrackOptions => buildPlayerTrackOptions(
     kind: PlayerTrackKind.audio,
@@ -575,6 +621,47 @@ class PlayerController extends ChangeNotifier {
       if (!_disposed) _lastEngineError = '$error';
       return false;
     }
+  }
+
+  /// 切换次字幕（mpv `secondary-sid`）：双字幕里那条「第二条」，与主字幕互不影响。
+  ///
+  /// 走与 [setTrackOffset] 同一条通道（[writeMpvPropertyValue]：白名单 → 写 →
+  /// 回读），差别只在回读口径——这条属性是枚举/轨道号，不是 double。
+  ///
+  /// **主次同轨在这里就回落「关闭」**：判定来自 core 的
+  /// [normalizeSecondarySubtitleId]，比对对象是引擎此刻上报的主字幕 id。界面
+  /// 不需要自己判、也不该再判一遍——「同一个 id 写两次」只会把同一行字叠着显示。
+  ///
+  /// 失败不抛：不是 [NativePlayer]、被白名单拒、回读不匹配都只落日志 + 返回
+  /// false，原因从 [rejectedMpvProperties] 可读（与偏移同一口径）；播放不受影响。
+  Future<bool> selectSecondarySubtitle(String id) async {
+    if (_disposed) return false;
+    if (id.trim().isEmpty) return false;
+    final target = normalizeSecondarySubtitleId(
+      selectedId: id,
+      primaryId: _player.state.track.subtitle.id,
+    );
+    final platform = _player.platform;
+    if (platform is! NativePlayer) {
+      debugPrint(
+        'mpv 次字幕未生效：当前平台不是 NativePlayer（secondary-sid=$target）',
+      );
+      return false;
+    }
+    final result = await writeMpvPropertyValue(
+      key: _secondarySidKey,
+      value: target,
+      setProperty: (key, value) => platform.setProperty(key, value),
+      getProperty: (key) => platform.getProperty(key),
+    );
+    final rejection = result.rejection;
+    _rejectedMpvProperties = rejection == null
+        ? const []
+        : <MpvPropertyRejection>[rejection];
+    if (rejection != null) {
+      debugPrint('mpv 属性未生效：${rejection.describe()}');
+    }
+    return result.applied;
   }
 
   /// 最近一次被白名单拦下的属性（诊断用）。

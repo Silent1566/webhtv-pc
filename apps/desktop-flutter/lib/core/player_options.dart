@@ -3,9 +3,11 @@
 /// 纯数据 + 校验：不碰播放器、不读磁盘。播放器消费播放参数与手势选项；
 /// 设置持久化消费 `toJson`/`fromJson`。
 ///
-/// 缺省值**必须等价于当前行为**：缓存开、硬解自动、自动连播开、回退到线路。
-/// 唯一的例外是 [longPressSpeed]：2026-11 起默认 3×（此前写死 2×），这是需求方
-/// 明确要的默认值变更，不是漏改。
+/// 缺省值**必须等价于当前行为**：缓存开、硬解自动、自动连播开、失败不自动回退
+/// （[failureFallback] 默认 [PlayerFailureFallback.off]，2026-11 迭代 3-C 起）。
+/// 两处刻意变更过的默认值：① [longPressSpeed] 默认 3×（此前写死 2×）；
+/// ② [failureFallback] 默认 off（此前构造默认 line，等于未开启也自动换线路）。
+/// 两处都是需求方明确要的变更，不是漏改。
 library;
 
 import 'mpv_properties.dart';
@@ -14,6 +16,10 @@ import 'player_tracks.dart';
 import 'skip_plan.dart';
 
 /// 失败回退阶梯。
+///
+/// [off] 是**构造函数默认值**（2026-11 迭代 3-C 起）：自动换线路/换解析源必须
+/// 由用户显式开启。老配置里显式存了 [line] 的仍然是 [line]——那是用户在设置页
+/// 做过的选择，不静默改写；缺键与脏值才落到 [off]（见 [fromId]）。
 enum PlayerFailureFallback {
   /// 不自动回退，直接把错误交给 UI。
   off('off', '不自动回退'),
@@ -39,7 +45,10 @@ enum PlayerFailureFallback {
     for (final item in values) {
       if (item.id == value) return item;
     }
-    return PlayerFailureFallback.line;
+    // 缺键（老配置从没存过这一档）与脏值都落到 off：默认不自动切换。
+    // **不**把历史默认 line 当成「用户的选择」——那只是旧版本的构造默认值，
+    // 凭它替用户开启自动换线路，正是这次要修的行为。
+    return PlayerFailureFallback.off;
   }
 
   bool get allowsParse => this == lineAndParse || this == lineAndParseAndSource;
@@ -145,7 +154,7 @@ class PlayerOptions {
     this.toneMapping = HdrToneMapping.auto,
     this.hdrPeakCompute = HdrPeakCompute.auto,
     this.autoNext = true,
-    this.failureFallback = PlayerFailureFallback.line,
+    this.failureFallback = PlayerFailureFallback.off,
     this.preloadNext = false,
     SkipMode skipMode = SkipMode.off,
     int skipKinds = SkipKindBits.defaults,
@@ -160,6 +169,7 @@ class PlayerOptions {
     this.lutPresetId = '',
     this.subtitleOffsetMs = defaultTrackOffsetMs,
     this.audioOffsetMs = defaultTrackOffsetMs,
+    this.secondarySubtitleId = secondarySubtitleOffId,
   }) : skipMode = autoSkipIntro == true || autoSkipOutro == true
            ? (skipMode == SkipMode.off ? SkipMode.auto : skipMode)
            : skipMode,
@@ -241,7 +251,14 @@ class PlayerOptions {
   /// 解码器缺失、格式不支持（`could not open codec` 等）换地址也打不开，
   /// 属于不可回退，硬试只会把黑屏时间拉长。
   ///
-  /// 消费点：[openPolicy] 会把 [off] 翻成「不允许重试/回退」。
+  /// **默认 [off]**：用户没有显式开启自动回退时，起播失败就停在失败态，由
+  /// 失败态的三个出口（重试 / 续播 / 下一集）决定下一步。理由：自动换线路会
+  /// 让用户在毫无预期的情况下被换到别的线路或解析源，画质、字幕、音轨都可能
+  /// 变样，而用户根本不知道自己被换了——这比多看一眼错误提示更糟。
+  ///
+  /// 消费点：① [openPolicy] 会把 [off] 翻成「不允许重试/回退」；
+  /// ② `lib/core/playback_fallback.dart` 的阶梯只在这个档位不是 [off] 时才
+  /// 给出换线路/换解析源。
   final PlayerFailureFallback failureFallback;
 
   /// 预取开关，**一个开关覆盖两件事**（两者都不下载媒体数据）：
@@ -319,6 +336,32 @@ class PlayerOptions {
 
   /// 音轨时间偏移（毫秒，正数＝声音晚出）。见 [TrackOffset]。
   final int audioOffsetMs;
+
+  /// 次字幕轨（mpv `secondary-sid`）：[secondarySubtitleOffId]（默认关闭）、
+  /// `auto`，或引擎轨道号。
+  ///
+  /// 为什么要落盘：双字幕是「同一部剧一直想开两条字幕」的偏好，每次开播都要
+  /// 重选一遍，等于没有这个功能。
+  ///
+  /// **缺键读成「关闭」**（见 [fromJson]），不改变既有行为。**主次同轨的回落
+  /// 不在这里判断**——本对象不知道主字幕是哪条；判定在
+  /// [normalizeSecondarySubtitleId]，拿到主字幕的调用方用 [withSecondarySubtitle]
+  /// 传进来，或自己调那个函数后 [copyWith]。
+  final String secondarySubtitleId;
+
+  /// 写回一次次字幕选择：主次同轨、以及白名单不认的形态都回落「关闭」。
+  ///
+  /// 判定全在 core（[normalizeSecondarySubtitleId] + mpv 白名单），界面只传
+  /// 「用户点了哪一项」和「此刻主字幕是哪一条」，不自己判——把规则留在两处，
+  /// 迟早出现「界面显示开着、内核写的是 no」。
+  PlayerOptions withSecondarySubtitle({
+    required String id,
+    String? primaryId,
+  }) => copyWith(
+    secondarySubtitleId: _acceptedSecondarySubtitleId(
+      normalizeSecondarySubtitleId(selectedId: id, primaryId: primaryId),
+    ),
+  );
 
   /// 取某一类轨的当前偏移（毫秒已在这个对象里夹进 ±60 s）。
   TrackOffset trackOffset(TrackOffsetKind kind) => TrackOffset(
@@ -398,6 +441,9 @@ class PlayerOptions {
       // 夹取而不是拒绝，理由见 [defaultTrackOffsetMs]。
       subtitleOffsetMs: TrackOffset.clampMilliseconds(subtitleOffsetMs),
       audioOffsetMs: TrackOffset.clampMilliseconds(audioOffsetMs),
+      // 与偏移同样「夹取而不拒绝」：脏值回落「关闭」，界面与内核两边都不会
+      // 出现这条属性认不出的取值。
+      secondarySubtitleId: _acceptedSecondarySubtitleId(secondarySubtitleId),
     );
   }
 
@@ -445,6 +491,7 @@ class PlayerOptions {
     String? lutPresetId,
     int? subtitleOffsetMs,
     int? audioOffsetMs,
+    String? secondarySubtitleId,
   }) => PlayerOptions(
     hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
     cache: cache ?? this.cache,
@@ -473,6 +520,7 @@ class PlayerOptions {
     lutPresetId: lutPresetId ?? this.lutPresetId,
     subtitleOffsetMs: subtitleOffsetMs ?? this.subtitleOffsetMs,
     audioOffsetMs: audioOffsetMs ?? this.audioOffsetMs,
+    secondarySubtitleId: secondarySubtitleId ?? this.secondarySubtitleId,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -503,6 +551,7 @@ class PlayerOptions {
     'lutPresetId': lutPresetId,
     'subtitleOffsetMs': subtitleOffsetMs,
     'audioOffsetMs': audioOffsetMs,
+    'secondarySubtitleId': secondarySubtitleId,
   };
 
   /// 宽松解析：任何缺失/非法字段回落默认，**不抛异常**（设置文件可能被手改）。
@@ -576,6 +625,12 @@ class PlayerOptions {
       // 这保证升级后既没有偏移、也不会把旧配置读成脏数据。
       subtitleOffsetMs: intOf('subtitleOffsetMs', defaultTrackOffsetMs),
       audioOffsetMs: intOf('audioOffsetMs', defaultTrackOffsetMs),
+      // 旧 settings.json 没有这个键：缺键即「关闭」（不是「缺键即非法」）。
+      // 非字符串（手改配置塞了数字）同样回落——轨道号必须是字符串，否则
+      // 「1」与「auto」两种形态在类型层就分不开。
+      secondarySubtitleId: map['secondarySubtitleId'] is String
+          ? (map['secondarySubtitleId'] as String).trim()
+          : secondarySubtitleOffId,
     ).normalized();
   }
 
@@ -605,7 +660,8 @@ class PlayerOptions {
       other.lutPath == lutPath &&
       other.lutPresetId == lutPresetId &&
       other.subtitleOffsetMs == subtitleOffsetMs &&
-      other.audioOffsetMs == audioOffsetMs;
+      other.audioOffsetMs == audioOffsetMs &&
+      other.secondarySubtitleId == secondarySubtitleId;
 
   @override
   int get hashCode => Object.hashAll([
@@ -633,6 +689,7 @@ class PlayerOptions {
     lutPresetId,
     subtitleOffsetMs,
     audioOffsetMs,
+    secondarySubtitleId,
   ]);
 
   @override
@@ -644,5 +701,17 @@ class PlayerOptions {
       'peak=${hdrPeakCompute.id} autoNext=$autoNext ${failureFallback.id} '
       'preload=$preloadNext skip=${skipMode.name} kinds=$skipKinds '
       'src=$skipSources remote=$skipRemoteEnabled '
-      'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}")';
+      'speed=$longPressSpeed lut="${lutPath.isEmpty ? '' : 'set'}" '
+      'secondary=$secondarySubtitleId)';
+}
+
+/// 次字幕取值只留白名单认的三种形态（`auto` / `no` / 轨道号），其余回落「关闭」。
+///
+/// 复用 [filterMpvProperties] 而不是在本文件重写一遍正则：写内核的那道闸就是
+/// 权威；两处各写一份，迟早放宽到能写进非法值（`embedded:1`、路径片段）。
+String _acceptedSecondarySubtitleId(String raw) {
+  final value = raw.trim();
+  if (value.isEmpty) return secondarySubtitleOffId;
+  final accepted = filterMpvProperties({'secondary-sid': value}).accepted;
+  return accepted['secondary-sid'] ?? secondarySubtitleOffId;
 }
