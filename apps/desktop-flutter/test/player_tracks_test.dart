@@ -421,4 +421,124 @@ void main() {
       );
     });
   });
+
+  group('次字幕槽与入口判据（迭代 3-A）', () {
+    const twoTracks = <PlayerTrackInfo>[
+      PlayerTrackInfo(id: '1', title: '中文', language: 'zh'),
+      PlayerTrackInfo(id: '2', title: '英文', language: 'en'),
+    ];
+
+    String key(PlayerTrackSlot slot) => trackChoiceKey(
+      siteKey: 'site',
+      vodId: 'vod',
+      flag: 'line1',
+      episodeId: 'ep1',
+      episodeName: '第 1 集',
+      slot: slot,
+    );
+
+    test('槽位 id 与中文名；主/次字幕的记忆键只在末段不同', () {
+      expect(PlayerTrackSlot.secondarySubtitle.id, 'secondary_subtitle');
+      expect(PlayerTrackSlot.secondarySubtitle.label, '次字幕');
+      expect(PlayerTrackSlot.subtitle.id, 'subtitle', reason: '既有 id 不得改名');
+
+      final primary = key(PlayerTrackSlot.subtitle).split('\x00');
+      final secondary = key(PlayerTrackSlot.secondarySubtitle).split('\x00');
+      expect(
+        secondary.sublist(0, 4),
+        primary.sublist(0, 4),
+        reason: '站点/影片/线路/集四段口径必须一致',
+      );
+      expect(secondary.last, 'secondary_subtitle');
+      expect(
+        key(PlayerTrackSlot.secondarySubtitle),
+        isNot(key(PlayerTrackSlot.subtitle)),
+        reason: '共用一个键会让主/次字幕互相顶掉',
+      );
+    });
+
+    test('主次同轨回落 no；空值也是 no；其余取值原样保留', () {
+      expect(secondarySubtitleOffId, 'no');
+      expect(normalizeSecondarySubtitleId(), 'no');
+      expect(normalizeSecondarySubtitleId(selectedId: '  '), 'no');
+      expect(normalizeSecondarySubtitleId(selectedId: '2'), '2');
+      expect(
+        normalizeSecondarySubtitleId(selectedId: '2', primaryId: '2'),
+        'no',
+        reason: '同一个 id 同时当主/次字幕，会在画面上把同一行字显示两遍',
+      );
+      expect(normalizeSecondarySubtitleId(selectedId: '1', primaryId: '2'), '1');
+      expect(
+        normalizeSecondarySubtitleId(selectedId: 'auto', primaryId: 'auto'),
+        'no',
+      );
+    });
+
+    test('只有 1 条字幕轨不给入口（主字幕是谁都一样）', () {
+      const single = <PlayerTrackInfo>[PlayerTrackInfo(id: '1', title: '中文')];
+      expect(canOfferSecondarySubtitle(tracks: single), isFalse);
+      expect(canOfferSecondarySubtitle(tracks: single, primaryId: '1'), isFalse);
+      expect(
+        canOfferSecondarySubtitle(tracks: single, primaryId: 'no'),
+        isFalse,
+        reason: '次字幕是第二条字幕，只有一条时入口点开只剩「关闭」',
+      );
+      expect(canOfferSecondarySubtitle(tracks: const []), isFalse);
+      expect(
+        canOfferSecondarySubtitle(
+          tracks: const <PlayerTrackInfo>[
+            PlayerTrackInfo(id: 'auto'),
+            PlayerTrackInfo(id: '1'),
+          ],
+        ),
+        isFalse,
+        reason: 'auto 是伪轨，不算第二条可选字幕',
+      );
+    });
+
+    test('≥2 条真实轨才给入口，主字幕占掉一条后仍成立', () {
+      expect(canOfferSecondarySubtitle(tracks: twoTracks), isTrue);
+      expect(canOfferSecondarySubtitle(tracks: twoTracks, primaryId: '1'), isTrue);
+      expect(canOfferSecondarySubtitle(tracks: twoTracks, primaryId: 'no'), isTrue);
+      expect(
+        canOfferSecondarySubtitle(tracks: twoTracks, primaryId: 'auto'),
+        isTrue,
+      );
+      expect(
+        canOfferSecondarySubtitle(
+          tracks: const <PlayerTrackInfo>[
+            PlayerTrackInfo(id: '1'),
+            PlayerTrackInfo(id: '2'),
+            PlayerTrackInfo(id: '3'),
+          ],
+          primaryId: '2',
+        ),
+        isTrue,
+      );
+    });
+
+    test('次字幕菜单沿用 PlayerTrackOption 与既有口径', () {
+      final options = buildSecondarySubtitleOptions(
+        tracks: twoTracks,
+        excludeId: '1',
+      );
+      expect(options.map((option) => option.id), ['no', '2']);
+      expect(
+        options.every((option) => option.kind == PlayerTrackKind.secondarySubtitle),
+        isTrue,
+      );
+      expect(options.every((option) => option.selectable), isTrue);
+      expect(options.first.copyWith(selected: true).selected, isTrue);
+      expect(
+        hasSwitchableTracks(options),
+        isFalse,
+        reason: '关闭不算可切换轨道；主字幕占掉 1 之后只剩一条候选',
+      );
+      expect(
+        canOfferSecondarySubtitle(tracks: twoTracks, primaryId: '1'),
+        isTrue,
+        reason: '入口判据与 hasSwitchableTracks 口径不同：关闭本身是可点的一项',
+      );
+    });
+  });
 }
