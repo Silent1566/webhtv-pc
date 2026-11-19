@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit/ffi/ffi.dart';
+import 'package:webhtv_pc/core/mpv_properties.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/ui/player_controller.dart';
 
@@ -117,6 +118,20 @@ class _NativeFixture {
     );
     expect(actual, expected);
   }
+
+  /// 内核能不能真的挂上归一滤镜是**平台事实**，本仓库选不了：
+  ///
+  /// - 随包 Windows libmpv（v0.36.0-403 / FFmpeg n6.0）没编进任何 ffmpeg 滤镜，
+  ///   裸名写入被内核直接拒（`rc=-9`），`lavfi=[dynaudnorm]` 更糟——属性写成功、
+  ///   建链时 `Audio filter initialized failed`，音轨被整条丢掉。见
+  ///   `core/mpv_properties.dart` 的 [audioNormalizationAf]。
+  /// - Linux 的系统 libmpv（完整 FFmpeg）接受同一个裸名写入并原样回读。
+  ///
+  /// 所以用例按这个事实分支，两边都只断言"内核到底做了什么"：拒绝时必须给出
+  /// 拒绝原因、必须没写进去、并且播放照常。
+  Future<bool> tryEnableNormalization() {
+    return controller.applyMpvProperties({'af': audioNormalizationAf});
+  }
 }
 
 Future<bool> _ffmpegAvailable() async {
@@ -145,15 +160,18 @@ Future<void> main() async {
     final volume = await f.native.getProperty('volume');
     final mute = await f.native.getProperty('mute');
     await f.expectAf('');
-    expect(
-      await f.controller.applyMpvProperties(
-        const PlayerOptions(audioNormalization: true).mpvProperties,
-      ),
-      isTrue,
-    );
-    await f.expectAf('dynaudnorm');
-    await f.open();
-    await f.expectAf('dynaudnorm');
+    final afApplicable = await f.tryEnableNormalization();
+    if (afApplicable) {
+      await f.expectAf(audioNormalizationAf);
+      await f.open();
+      await f.expectAf(audioNormalizationAf);
+    } else {
+      // 内核没有这个滤镜：只准如实报告，不准写进去、也不准动音轨。
+      expect(f.controller.rejectedMpvProperties.single.key, 'af');
+      await f.expectAf('');
+      await f.open();
+      await f.expectAf('');
+    }
     expect(await f.controller.applyMpvProperties({'af': ''}), isTrue);
     await f.expectAf('');
     await f.open();
@@ -165,7 +183,9 @@ Future<void> main() async {
     await _eventually(() => f.controller.volume == 0);
     final mutedState = f.controller.volumeState;
     expect(mutedState.muted, isTrue);
-    expect(await f.controller.applyMpvProperties({'af': 'dynaudnorm'}), isTrue);
+    // 同一内核的第二次写入必须和第一次同口径：不能这次说成功、上次说失败。
+    final mutedAfApplied = await f.tryEnableNormalization();
+    expect(mutedAfApplied, afApplicable);
     expect(f.controller.volumeState, mutedState);
     expect(await f.native.getProperty('volume'), '0.000000');
     expect(await f.native.getProperty('mute'), mute);
@@ -178,7 +198,7 @@ Future<void> main() async {
   test('invalid af is rejected by production whitelist and real libmpv returns rc=-9', () async {
     final f = await _NativeFixture.create();
     await f.open();
-    expect(await f.controller.applyMpvProperties({'af': 'dynaudnorm'}), isTrue);
+    final afApplicable = await f.tryEnableNormalization();
     const bogus = 'webhtv_bogus_normalization_filter';
     expect(await f.controller.applyMpvProperties({'af': bogus}), isFalse);
     expect(f.controller.rejectedMpvProperties.single.key, 'af');
@@ -199,7 +219,8 @@ Future<void> main() async {
       'NATIVE invalid af rc=$rc rejected=${f.controller.rejectedMpvProperties.single.reason}',
     );
     expect(rc, -9);
-    await f.expectAf('dynaudnorm');
+    // 被拒的写入不许动到已经生效（或本来就为空）的链路。
+    await f.expectAf(afApplicable ? audioNormalizationAf : '');
     expect(await f.controller.applyMpvProperties({'af': ''}), isTrue);
     await f.expectAf('');
   });
@@ -210,6 +231,7 @@ Future<void> main() async {
     await f.controller.setVolume(43);
     await _eventually(() => f.controller.volume == 43);
     final before = f.controller.volumeState;
+    final afApplicable = await f.tryEnableNormalization();
     var queue = Future<void>.value();
     var preference = const PlayerOptions();
     for (var i = 0; i < 20; i++) {
@@ -218,16 +240,20 @@ Future<void> main() async {
       );
       final af = preference.mpvProperties['af']!;
       queue = queue.then((_) async {
-        expect(await f.controller.applyMpvProperties({'af': af}), isTrue);
-        expect(await f.native.getProperty('af'), af);
+        expect(
+          await f.controller.applyMpvProperties({'af': af}),
+          af.isEmpty || afApplicable,
+          reason: 'af="$af" 在 afApplicable=$afApplicable 的内核上口径不一致',
+        );
+        expect(await f.native.getProperty('af'), afApplicable ? af : '');
       });
     }
     await queue;
-    await f.expectAf(preference.mpvProperties['af']!);
+    await f.expectAf(afApplicable ? preference.mpvProperties['af']! : '');
     expect(f.controller.volumeState, before);
     expect(preference.audioNormalization, isFalse);
     debugPrint(
-      'NATIVE rapid toggles=20 finalPreference=${preference.audioNormalization}',
+      'NATIVE rapid toggles=20 finalPreference=${preference.audioNormalization} afApplicable=$afApplicable',
     );
   });
 
@@ -235,6 +261,8 @@ Future<void> main() async {
     'AC3 passthrough bypasses PCM normalization while decoded WAV accepts af',
     () async {
       final f = await _NativeFixture.create();
+      final afApplicable = await f.tryEnableNormalization();
+      expect(await f.controller.applyMpvProperties({'af': ''}), isTrue);
       final ac3 = File('${f.directory.path}/levels.ac3');
       final generated = await Process.run('ffmpeg', [
         '-hide_banner',
@@ -254,14 +282,14 @@ Future<void> main() async {
         audioPassthrough: true,
         audioNormalization: true,
       );
-      expect(await f.controller.applyPlayerOptions(options), isTrue);
+      expect(await f.controller.applyPlayerOptions(options), afApplicable);
       await f.open(ac3);
-      await f.expectAf('dynaudnorm');
+      await f.expectAf(afApplicable ? audioNormalizationAf : '');
       final passthrough = await f.native.getProperty('audio-out-params/format');
       debugPrint('NATIVE AC3 audio-out-params/format=$passthrough');
       expect(passthrough, 'spdif-ac3');
       await f.open();
-      await f.expectAf('dynaudnorm');
+      await f.expectAf(afApplicable ? audioNormalizationAf : '');
       final decoded = await f.native.getProperty('audio-out-params/format');
       debugPrint('NATIVE WAV audio-out-params/format=$decoded');
       expect(decoded, isNot(startsWith('spdif')));

@@ -19,6 +19,7 @@ import '../core/danmaku.dart';
 import '../core/danmaku_match.dart';
 import '../core/history_view.dart';
 import '../core/lut.dart';
+import '../core/mpv_properties.dart';
 import '../core/osd_config.dart';
 import '../core/osd_diagnostics.dart';
 import '../core/osd_style.dart';
@@ -6944,7 +6945,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted) return;
       final applied = await _enqueueWrite(
         () =>
-            _controller.applyMpvProperties({'af': enabled ? 'dynaudnorm' : ''}),
+            _controller.applyMpvProperties({
+              'af': enabled ? audioNormalizationAf : '',
+            }),
       );
       if (!mounted) return;
       if (!applied) {
