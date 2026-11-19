@@ -230,7 +230,9 @@ Future<void> _matchInCurrentSource(
   AsyncActionFeedback feedback,
 ) async {
   if (!context.mounted || !feedback.isCurrent) return;
-  final config = state.config;
+  // 用**合并后**的配置：本地爬虫源只存在于 effectiveConfig，用 state.config
+  // 会让当前源里明明有的站点被判成「不在」。
+  final config = state.effectiveConfig;
   if (config == null || config.sites.isEmpty) {
     _toast(context, '当前没有生效的播放源配置，无法续播', kind: ToastKind.error);
     return;
@@ -419,7 +421,9 @@ Future<List<ResumeCandidate>> _enrichCandidates(
 }) async {
   final service = state.siteService;
   if (service == null) return listed;
-  final config = state.config;
+  // 与 [state.siteService] 同一份站点集合（含本地导入源），否则本地源的候选
+  // 永远拿不到详情，也就永远无法成为续播目标。
+  final config = state.effectiveConfig;
   if (config == null) return listed;
 
   // 先按第一阶段等级排序，保证被截断掉的是最不像的那些。

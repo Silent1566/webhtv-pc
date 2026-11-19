@@ -29,6 +29,7 @@ import '../state/detail_recommendation_state.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
 import 'home_cards.dart';
+import 'history_cross_source.dart';
 import 'history_entry_detail.dart';
 import 'home_hero.dart';
 import 'playback_resume.dart';
@@ -484,7 +485,21 @@ class _HomePageState extends State<HomePage> {
         if (primary) {
           // 主按钮（卡片整张 / hero「继续播放」）就是续播：切回这条记录自己的
           // 站点再起播，失败有可读提示。
-          await resumeHistoryEntry(context, _state, record);
+          //
+          // 首页 feed 取的是**全源**历史（`recentHistory(sourceKey: '')`），所以这里
+          // 必须和历史页一样先过跨源闸门：直接 `resumeHistoryEntry` 会拿生效配置
+          // 去找别的源的站点，轻则误报「站点已不在配置中」，重则同名 key 在错源上
+          // 起播（串源）。原来源优先、失败再回退的语义由跨源流程自己负责。
+          if (_state.isHistoryFromOtherSource(record)) {
+            await openHistoryFromOtherSource(
+              context,
+              _state,
+              record,
+              wantsPlayOverride: true,
+            );
+          } else {
+            await resumeHistoryEntry(context, _state, record);
+          }
         } else {
           // 「查看详情」进详情页，并**优先这条记录自己的播放源**：先切站点，
           // 带着线路/集/进度进去（`history_entry_detail.dart`）。

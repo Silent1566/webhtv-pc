@@ -39,10 +39,9 @@ Future<void> openHistoryDetail(
     );
     return;
   }
-  final config = state.config;
-  final site = config?.sites
-      .where((candidate) => candidate.key == item.siteKey)
-      .firstOrNull;
+  // 查**合并后**的站点集合：本地爬虫源只在那里，用 state.config 会让一条本地源
+  // 播出来的记录直接落进「站点已不在当前配置中」。
+  final site = state.siteInActiveSource(item.siteKey);
   if (site == null) {
     showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
     return;

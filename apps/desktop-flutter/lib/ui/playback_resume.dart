@@ -160,10 +160,8 @@ Future<void> resumeHistoryEntry(
 }) async {
   if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
   final episodeTarget = restoreHistoryPlaybackTarget(item.episodeId);
-  final config = state.config;
-  final site = config?.sites
-      .where((candidate) => candidate.key == item.siteKey)
-      .firstOrNull;
+  // 查**合并后**的站点集合：本地爬虫源只在那里（见 AppState.siteInActiveSource）。
+  final site = state.siteInActiveSource(item.siteKey);
   if (site == null) {
     showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
     return;

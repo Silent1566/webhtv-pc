@@ -124,9 +124,8 @@ Future<void> openFollowingDetail(
   bool syncProgress = false,
 }) async {
   if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
-  final site = state.config?.sites
-      .where((candidate) => candidate.key == item.siteKey)
-      .firstOrNull;
+  // 追剧行同样只存 site_key：本地爬虫源在 effectiveConfig 里，查 state.config 会落空。
+  final site = state.siteInActiveSource(item.siteKey);
   if (site == null) {
     showToast('该追剧所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
     return;
