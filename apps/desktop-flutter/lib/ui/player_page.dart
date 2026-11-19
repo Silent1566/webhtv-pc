@@ -25,6 +25,7 @@ import '../core/osd_diagnostics.dart';
 import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_fallback.dart';
 import '../core/playback_request.dart';
 import '../core/playback_queue.dart';
 export '../core/playback_request.dart';
@@ -368,6 +369,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Timer? _gesturePlaybackTimer;
   StreamSubscription<bool>? _gesturePlayingSubscription;
   String? _loadError;
+
+  /// 本次播放已经自动回退过几次（迭代 3-C，见 [maxPlaybackFallbackAttempts]）。
+  ///
+  /// 只在「失败 → 自动换线路/解析源」这条链上累加：用户自己点重试、换集、换线路
+  /// 都算新一轮，由 [_load] 入口按 [_fallbackPending] 清零。
+  int _fallbackAttempts = 0;
+
+  /// 下一次 [_load] 是否来自回退链（而不是用户动作）。
+  ///
+  /// 为什么要这个标记：回退同样走 [_openTarget] → [_load]，若不分来源，链上
+  /// 第二次失败时次数会被清零，上限就永远到不了。
+  bool _fallbackPending = false;
 
   /// 连播单次守卫（`design/03` §4.1 D1）。
   ///
@@ -1533,6 +1546,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   Future<void> _load({bool? restorePlaying}) async {
     if (!mounted) return;
+    // 回退链上的重开保留次数；其余入口（重试、换集、换线路、续播）都是新一轮。
+    if (!_fallbackPending) _fallbackAttempts = 0;
+    _fallbackPending = false;
     final generation = _beginMediaTransition();
     // 记录本次加载的「意图」，失败时用它回滚 `_request`（`design/03` §4.3 D3）。
     //
@@ -1600,6 +1616,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 2. 清除残留的 `completed`，否则重建会再次触发连播（D1）；
       // 3. 记一条含 nearEnd 判定的诊断，让「缓存耗尽」在 PC 侧可见（§4.6）。
       _logFailureDiagnostics(outcome);
+      // 自动回退（迭代 3-C）：设置显式开启且策略还给出下一步时，按结论换线路/
+      // 换解析源/原地重试，成功发起重开就不再走下面的失败收尾。
+      if (await _tryPlaybackFallback(outcome)) return;
+      if (!mounted || generation != _mediaGeneration) return;
       var rollback = intent;
       if (_playLinesRequested &&
           intent.playLines.isEmpty &&
@@ -1821,6 +1841,101 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     });
     await _load();
     return true;
+  }
+
+  /// 开播失败后的自动回退（迭代 3-C）。
+  ///
+  /// **默认什么都不做**：`PlayerFailureFallback.off` 是设置的默认值，第一行就
+  /// 返回，行为与接线之前完全一致（不改错误提示、不写日志）。只有用户显式开启
+  /// 才继续往下走。
+  ///
+  /// 下一步由 `decidePlaybackFallback`（`lib/core/playback_fallback.dart`）这个
+  /// 纯策略给出，本方法只执行结论，三条路都复用既有入口、不另写开播逻辑：
+  /// - 换线路 → [_switchLineResumingEpisode]（尽量续播同一集）；
+  /// - 换解析源 → [_switchParseSource]（用当前集重新走站点播放入口 + 解析器）；
+  /// - 原地重试 → 再跑一次 [_load]。
+  ///
+  /// 返回 true 表示已经发起了一次重开：调用方必须立刻返回，把失败收尾（回滚
+  /// `_request`、写 `_loadError`）让给新一轮。两处都做会把错误提示盖在正在
+  /// 加载的画面上。
+  ///
+  /// `giveUp` 时返回 false，失败收尾照旧执行——错误提示与接线前逐字相同。
+  Future<bool> _tryPlaybackFallback(PlayerLoadOutcome outcome) async {
+    final mode = widget.state.playerOptions.failureFallback;
+    if (mode == PlayerFailureFallback.off) return false;
+    // 直播/回看/目录队列/本地/直连各有自己的失败路径（直播另有线路回退），
+    // 这里的阶梯只治「站点线路 + 解析源」这一种形态。
+    if (_isLive ||
+        _isCatchup ||
+        _hasQueue ||
+        _request.isLocal ||
+        _request.directUrl) {
+      return false;
+    }
+    final lines = _request.playLines;
+    final decision = decidePlaybackFallback(
+      PlaybackFallbackRequest(
+        // 引擎没给分类时按「加载失败」处理：那是不可回退的一档，宁可不动，
+        // 也不拿一个无处归因的失败去换线路。
+        failure: classifyPlaybackFailureClass(
+          outcome.failureKind ?? PlayerFailureKind.loadFailed,
+        ),
+        mode: mode,
+        lineIndex: lines.indexWhere((line) => line.flag == _request.flag),
+        lineCount: lines.length,
+        parseSourceIndex: _request.parseSources.indexOf(_request.parseSource),
+        parseSourceCount: _request.parseSources.length,
+        attempts: _fallbackAttempts,
+      ),
+    );
+    if (!decision.hasNext) {
+      widget.state.log.info(
+        '失败回退放弃：${decision.reason} '
+        'episode=${_request.episodeName} attempts=$_fallbackAttempts',
+        scope: 'player',
+      );
+      return false;
+    }
+    final before = _mediaGeneration;
+    _fallbackAttempts++;
+    _fallbackPending = true;
+    try {
+      switch (decision.step) {
+        case FallbackStep.giveUp:
+          return false;
+        case FallbackStep.retrySame:
+          widget.state.log.info(
+            '失败回退 原地重试：${decision.reason} '
+            'attempts=$_fallbackAttempts episode=${_request.episodeName}',
+            scope: 'player',
+          );
+          await _load();
+        case FallbackStep.nextLine:
+          final flag = lines[decision.targetIndex!].flag;
+          widget.state.log.info(
+            '失败回退 换线路：${decision.reason} '
+            'from=${_request.flag} to=$flag '
+            'attempts=$_fallbackAttempts episode=${_request.episodeName}',
+            scope: 'player',
+          );
+          await _switchLineResumingEpisode(flag);
+        case FallbackStep.nextParseSource:
+          final name = _request.parseSources[decision.targetIndex!];
+          widget.state.log.info(
+            '失败回退 换解析源：${decision.reason} '
+            'from=${_request.parseSource} to=$name '
+            'attempts=$_fallbackAttempts episode=${_request.episodeName}',
+            scope: 'player',
+          );
+          await _switchParseSource(name);
+      }
+    } finally {
+      _fallbackPending = false;
+    }
+    if (!mounted) return true;
+    // 一次新的媒体切换都没发生＝切换入口自己拒了（目标线路没有选集、解析源
+    // 没变、下标越界）。这时回退不成立，交回失败收尾把原错误提示出来。
+    return _mediaGeneration != before;
   }
 
   /// 装配字幕（§10.3「外挂字幕」「字幕轨选择」）。
@@ -2861,6 +2976,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       PlayerTrackSlot.audio => _controller.audioTrackInfos,
       PlayerTrackSlot.video => _controller.videoTrackInfos,
       PlayerTrackSlot.subtitle => _controller.embeddedSubtitleTrackInfos,
+      // 次字幕写的是 mpv 的轨道号，只能用引擎原文（剥掉 `embedded:` 前缀）。
+      PlayerTrackSlot.secondarySubtitle => _controller.rawSubtitleTrackInfos,
     };
     // 菜单 id 与引擎原文分开：label 拼过语言/序号，只有原文能做 title 回落。
     var choice = TrackChoice(engineId: id);
@@ -5104,13 +5221,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 每个 id 对应的 widget 类型与 tooltip 精确串是**既有的、被测试锁定的**，
   /// 不得改动（`design/03` §5.2）。
   List<Widget> _buildActionButtons() {
-    final specs = resolveVisibleButtons(
-      order: widget.state.playerButtonOrder,
-      hidden: widget.state.playerButtonHidden,
-    );
     final episodes = _episodes;
     return [
-      for (final spec in specs)
+      for (final spec in _visibleButtonSpecs())
         switch (spec.id) {
           'prev' => IconButton(
             tooltip: _isLive ? '上一台（PgUp）' : '上一集（[）',
@@ -5232,12 +5345,24 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   /// 与 [_buildActionButtons] 一一对应的分组（用于插分隔线）。
-  List<PlayerButtonGroup> _actionGroups() {
+  List<PlayerButtonGroup> _actionGroups() => [
+    for (final spec in _visibleButtonSpecs()) spec.group,
+  ];
+
+  /// 控制栏可见按钮的**唯一来源**：按钮与其分组必须一一对应
+  /// （`PlayerOverlayActionRow` 有断言），所以两处都从这里取。
+  ///
+  /// 本地文件没有上一集/下一集（右键菜单同口径），摘掉不给死按钮；
+  /// 若将来支持「本地文件 + 目录连播队列」，改成 `!_request.isLocal || _hasQueue`。
+  List<PlayerButtonSpec> _visibleButtonSpecs() {
     final specs = resolveVisibleButtons(
       order: widget.state.playerButtonOrder,
       hidden: widget.state.playerButtonHidden,
     );
-    return [for (final spec in specs) spec.group];
+    if (!_request.isLocal) return specs;
+    return specs
+        .where((spec) => spec.id != 'prev' && spec.id != 'next')
+        .toList(growable: false);
   }
 
   /// 控制栏倍速下拉的候选：常规档位 + 当前真实速率（去重升序）。

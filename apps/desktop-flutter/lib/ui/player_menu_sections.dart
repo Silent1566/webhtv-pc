@@ -72,18 +72,27 @@ extension _PlayerPageMenuSections on _PlayerPageState {
             icon: _controller.isPlaying ? Icons.pause : Icons.play_arrow,
             onSelect: act(_controller.playOrPause),
           ),
-          PlayerMenuItem(
-            id: 'prev',
-            label: _isLive ? '上一台' : '上一集',
-            icon: Icons.skip_previous,
-            onSelect: act(_playPrevious),
-          ),
-          PlayerMenuItem(
-            id: 'next',
-            label: _isLive ? '下一台' : '下一集',
-            icon: Icons.skip_next,
-            onSelect: act(_playNext),
-          ),
+          // 本地文件没有「集」可换：这两个按钮落到 [_playPrevious] /
+          // [_playNext] 的选集分支，而那一支读的是 `_episodes`
+          // （= `request.playLines` 里当前线路的分集）——本地请求不带线路，
+          // 队列也只属于站点目录连播，于是两条都退化成**静默 no-op**。
+          // 死按钮比缺按钮更像「坏了」：置灰好歹表示「这里有个能力，此刻不可
+          // 用」，而本地根本没有集这个概念，置灰还得多解释一句为什么。
+          // 直播的「上一台/下一台」不受影响：那条路径走 liveSession。
+          if (!_request.isLocal) ...[
+            PlayerMenuItem(
+              id: 'prev',
+              label: _isLive ? '上一台' : '上一集',
+              icon: Icons.skip_previous,
+              onSelect: act(_playPrevious),
+            ),
+            PlayerMenuItem(
+              id: 'next',
+              label: _isLive ? '下一台' : '下一集',
+              icon: Icons.skip_next,
+              onSelect: act(_playNext),
+            ),
+          ],
           PlayerMenuItem(
             id: 'back10',
             label: '后退 10 秒',

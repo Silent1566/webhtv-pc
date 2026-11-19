@@ -25,6 +25,26 @@ const List<({String label, int value})> subtitleColorChoices = [
   (label: '粉', value: 0xFFFF4081),
 ];
 
+/// 内嵌字幕轨在菜单 id 里的前缀（`core/subtitle.dart` 的
+/// `embeddedSubtitleOptions` 就是这么拼的）：次字幕写的是 mpv 轨道号，
+/// 这层前缀必须剥掉，否则 `embedded:1` 会被白名单直接拒。
+const String _embeddedSubtitleIdPrefix = 'embedded:';
+
+/// 主字幕的**引擎轨道 id**：次字幕候选的剔除对象，也是同轨回落的比对对象。
+///
+/// 两个来源都必需：内嵌轨的菜单 id 是 `embedded:<trackId>`，剥掉前缀就是 mpv
+/// 认得的轨道号；外挂/本地字幕由控制器自己登记（菜单 id 是 `external:0`、临时
+/// 文件路径，不是轨道号），只有引擎此刻上报的主字幕才是。未选/关闭时引擎给的
+/// 是 `auto`/`no` 这类伪轨，统一成空串（＝ 没有主字幕要剔除）。
+String _primarySubtitleTrackId(PlayerController controller) {
+  final menuId = controller.selectedSubtitle?.id.trim() ?? '';
+  if (menuId.startsWith(_embeddedSubtitleIdPrefix)) {
+    return menuId.substring(_embeddedSubtitleIdPrefix.length);
+  }
+  final engineId = controller.player.state.track.subtitle.id.trim();
+  return isRealSubtitleTrackId(engineId) ? engineId : '';
+}
+
 extension _PlayerPageSubtitleMenu on _PlayerPageState {
   /// 手动搜索字幕：打开搜索窗口 → 选中 → 下载/套用 → 记忆。
   ///
@@ -130,6 +150,22 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
 
   Future<void> _showSubtitleMenu() async {
     final options = _controller.subtitleOptions;
+    // 次字幕的入口与候选都在 core 里判（[canOfferSecondarySubtitle] 要求至少
+    // 两条真实字幕轨）：界面只把「引擎报了哪些字幕轨」「主字幕是哪一条」递进去，
+    // 不自己数轨、也不自己判同轨——判两处迟早出现「界面开着、内核写的是 no」。
+    final primaryId = _primarySubtitleTrackId(_controller);
+    final rawSubtitleTracks = _controller.rawSubtitleTrackInfos;
+    final showSecondary = canOfferSecondarySubtitle(
+      tracks: rawSubtitleTracks,
+      primaryId: primaryId,
+    );
+    final secondaryOptions = showSecondary
+        ? buildSecondarySubtitleOptions(
+            tracks: rawSubtitleTracks,
+            selectedId: _options.secondarySubtitleId,
+            excludeId: primaryId,
+          )
+        : const <PlayerTrackOption>[];
     final selected = await showModalBottomSheet<Object>(
       context: context,
       showDragHandle: true,
@@ -164,6 +200,10 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
                 title: Text('当前视频没有字幕轨'),
                 subtitle: Text('可以搜索字幕或选择本地文件'),
               ),
+            // 只有一条字幕轨时这一整组不出现：次字幕天生是「第二条」，主字幕
+            // 占掉唯一那条后候选为空，做出来就是个点不出东西的死入口。
+            if (showSecondary)
+              ..._secondarySubtitleTiles(context, secondaryOptions),
             const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.search),
@@ -207,6 +247,14 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
       await _showLocalSubtitlePicker();
       return;
     }
+    // 次字幕那一组回传的是引擎轨道号（`PlayerTrackOption`），走另一条落盘口径：
+    // 主字幕是「一条」，次字幕是「一套与主字幕并联的选择」，两者写的是不同的
+    // mpv 属性（`sid` vs `secondary-sid`），不能混在同一个分支里。
+    if (selected is PlayerTrackOption &&
+        selected.kind == PlayerTrackKind.secondarySubtitle) {
+      await _selectSecondarySubtitle(selected.id);
+      return;
+    }
     if (selected is! SubtitleOption) return;
     _controller.clearSubtitleError();
     final ok = await _controller.selectSubtitle(
@@ -223,6 +271,15 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
       if (!selected.isExternal && selected.id != SubtitleOption.offId) {
         _rememberTrackChoice(PlayerTrackSlot.subtitle, selected.id);
       }
+      // 主字幕换了，次字幕可能正好落在同一条轨上：core 的 `withSecondarySubtitle`
+      // 把这种组合回落到「关闭」（同一条轨当主+次只会在画面上把同一行字叠两遍）。
+      // 回落要写回落盘，否则菜单下次打开读的还是旧值——界面显示次字幕开着，
+      // 内核里却已经是 `no`。没有变化时不动落盘（不为一趟菜单开合写一次盘）。
+      final synced = _options.withSecondarySubtitle(
+        id: _options.secondarySubtitleId,
+        primaryId: _primarySubtitleTrackId(_controller),
+      );
+      if (synced != _options) _livePatchOptions(synced);
       return;
     }
     widget.state.log.warning(
@@ -230,6 +287,78 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
       scope: 'subtitle',
     );
     if (error != null) _showSubtitleError(error);
+  }
+
+  /// 「次字幕」这一组：标题 + 「关闭」+ 除主字幕之外的每条字幕轨。
+  ///
+  /// 只在 [canOfferSecondarySubtitle] 为真时被调用（见 [_showSubtitleMenu]）。
+  /// 选中态不在这里算：`option.selected` 来自 [buildSecondarySubtitleOptions]，
+  /// 它读的就是落盘值 [_options]，界面只是照抄——两处各判一次，就会出现菜单里
+  /// 打勾的那条和写进内核的那条不是同一条。
+  List<Widget> _secondarySubtitleTiles(
+    BuildContext context,
+    List<PlayerTrackOption> options,
+  ) => [
+    const Divider(height: 1),
+    Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text('次字幕', style: Theme.of(context).textTheme.titleSmall),
+    ),
+    for (final option in options)
+      ListTile(
+        leading: Icon(
+          option.isOff
+              ? Icons.subtitles_off_outlined
+              : Icons.subtitles_outlined,
+        ),
+        title: Text(option.label),
+        subtitle: option.isOff ? null : const Text('与主字幕同时显示'),
+        trailing: option.selected ? const Icon(Icons.check) : null,
+        onTap: () => Navigator.of(context).pop(option),
+      ),
+  ];
+
+  /// 次字幕选中：写内核 → 落盘 → 本集立即生效（不重开、不切集）。
+  ///
+  /// 写内核与偏移同一条通道（[_enqueueWrite] → `selectSecondarySubtitle` 的
+  /// 白名单 → 写 → 回读），失败只提示不抛：不是 NativePlayer、被白名单拒、
+  /// 回读不匹配都只让这一条不生效，播放照旧。
+  ///
+  /// 落盘仍走 [_livePatchOptions]（extension 里不调 `setState`）：它同步更新
+  /// 页面字段 [_options]、落盘，并把整表 mpv 属性排进写入队列——所以下次打开
+  /// 菜单读到的就是这次的选中态，换集也沿用。
+  Future<void> _selectSecondarySubtitle(String id) async {
+    var applied = false;
+    try {
+      applied = await _enqueueWrite(
+        () => _controller.selectSecondarySubtitle(id),
+      );
+    } catch (error) {
+      // 控制器已把「不是 NativePlayer / 白名单拒 / 回读不匹配」降级成 false；
+      // 走得到这里的只有意外异常，同样只提示，不让点一下菜单就崩。
+      widget.state.log.warning('次字幕写入异常 $error', scope: 'subtitle');
+    }
+    if (!mounted) return;
+    _livePatchOptions(
+      _options.withSecondarySubtitle(
+        id: id,
+        primaryId: _primarySubtitleTrackId(_controller),
+      ),
+    );
+    if (applied) {
+      widget.state.log.info(
+        '次字幕已切换 secondary-sid=${id.trim()}',
+        scope: 'subtitle',
+      );
+      return;
+    }
+    final rejected = _controller.rejectedMpvProperties;
+    final reason = rejected.isNotEmpty
+        ? rejected.map((entry) => entry.reason).join('；')
+        : _controller.lastEngineError ?? '当前内核不支持';
+    final message = '次字幕未生效：$reason';
+    widget.state.log.warning(message, scope: 'subtitle');
+    _showPlayerMessage(message, kind: ToastKind.error);
   }
 
   /// 「字幕延迟 / 音轨延迟」一行：当前值 + −0.1 秒 / 重置 / +0.1 秒。
@@ -304,9 +433,12 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
       milliseconds: current.milliseconds + deltaMilliseconds,
     );
     if (stepped == current) {
+      // 到哪一端就报哪一端：写死上半界会让 −60 秒时提示「已到 +60.0 秒」。
+      final bound = current.milliseconds > 0
+          ? TrackOffset.maxMilliseconds
+          : -TrackOffset.maxMilliseconds;
       _showPlayerMessage(
-        '${kind.label}延迟已到 '
-        '${formatTrackOffsetSeconds(TrackOffset.maxMilliseconds)} 上限',
+        '${kind.label}延迟已到 ${formatTrackOffsetSeconds(bound)}，无法再调整',
       );
       return;
     }
