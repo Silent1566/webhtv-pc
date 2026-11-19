@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -382,10 +383,22 @@ enum ShellSection {
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.state, required this.startup});
+  const AppShell({
+    super.key,
+    required this.state,
+    required this.startup,
+    this.pickLocalMediaFile,
+  });
 
   final AppState state;
   final StartupArguments startup;
+
+  /// 「打开本地文件」用的文件选择器；`null` = 走原生 `file_picker`。
+  ///
+  /// 与 `PlayerPage.externalPlayerStarter` 同一个理由：原生窗口在测试里起不来，
+  /// 注入一个返回固定路径的替身，才能验证「选文件 → 构造本地请求 → 交给既有
+  /// 播放器入口」这条链路本身。
+  final Future<String?> Function()? pickLocalMediaFile;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -782,26 +795,39 @@ class _AppShellState extends State<AppShell> {
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
             state: _state,
-            request: PlaybackRequest(
-              url: media,
-              headers: widget.startup.headers,
-              title: '命令行媒体',
-              siteKey: 'cli',
-              vodId: 'cli',
-              vodName: '命令行媒体',
-              episodeName: '媒体',
-              flag: 'cli',
-              startPosition: widget.startup.seekSeconds == null
-                  ? null
-                  : Duration(
-                      milliseconds: (widget.startup.seekSeconds! * 1000)
-                          .round(),
-                    ),
-            ),
+            request: _commandLineRequest(media),
           ),
         ),
       );
     });
+  }
+
+  /// 命令行媒体 → 播放请求。
+  ///
+  /// 本地文件走 [PlaybackRequest.localFile]（不带 Header、siteKey 固定为
+  /// `local-file`），其余仍是原来的 `cli` 合成站点。判据来自
+  /// [StartupArguments.mediaIsLocal]，UI 层不重新猜路径形状。
+  PlaybackRequest _commandLineRequest(String media) {
+    final seek = widget.startup.seekSeconds == null
+        ? null
+        : Duration(
+            milliseconds: (widget.startup.seekSeconds! * 1000).round(),
+          );
+    if (widget.startup.mediaIsLocal) {
+      final local = PlaybackRequest.localFile(path: media);
+      return seek == null ? local : local.copyWith(startPosition: seek);
+    }
+    return PlaybackRequest(
+      url: media,
+      headers: widget.startup.headers,
+      title: '命令行媒体',
+      siteKey: 'cli',
+      vodId: 'cli',
+      vodName: '命令行媒体',
+      episodeName: '媒体',
+      flag: 'cli',
+      startPosition: seek,
+    );
   }
 
   @override
@@ -888,6 +914,43 @@ class _AppShellState extends State<AppShell> {
     await _state.selectSite(selected);
   }
 
+  /// 顶栏「打开本地文件」：挑一个磁盘视频，包成本地 [PlaybackRequest] 后交给
+  /// 既有播放器入口（与命令行自动播放同一条 `PlayerPage` 路由）。
+  ///
+  /// Wave 1 只做到「构造并交给既有入口」：播放器页对本地源的处理（进度写盘、
+  /// 历史、线路面板）留到 Wave 2，这里**不**改 `player_page.dart`。
+  Future<void> _openLocalMediaFile() async {
+    final picked = await _pickLocalMediaPath();
+    if (!mounted) return;
+    final target = picked?.trim() ?? '';
+    if (target.isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerPage(
+          state: _state,
+          request: PlaybackRequest.localFile(path: target),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// 原生文件对话框；测试经 [AppShell.pickLocalMediaFile] 注入替身。
+  Future<String?> _pickLocalMediaPath() async {
+    final injected = widget.pickLocalMediaFile;
+    if (injected != null) return injected();
+    try {
+      final file = await FilePicker.pickFile(
+        dialogTitle: '打开本地视频文件',
+        type: FileType.video,
+      );
+      return file?.path;
+    } catch (error) {
+      _state.log.warning('选择本地视频文件失败 $error', scope: 'player');
+      return null;
+    }
+  }
+
   /// 崩溃恢复：用标记里的标识信息按历史续播路径重新解析并播放。
   ///
   /// 标记里**没有** URL/Header（见 `core/session_recovery.dart`），
@@ -951,6 +1014,7 @@ class _AppShellState extends State<AppShell> {
             onOpenConfig: _openConfigSwitcher,
             onManageConfig: _openConfigPage,
             onOpenSitePicker: _openSitePicker,
+            onOpenLocalFile: _openLocalMediaFile,
           ),
           if (_state.storageWarnings.isNotEmpty)
             _StorageWarningBanner(warnings: _state.storageWarnings),
@@ -1204,12 +1268,14 @@ class _TopBar extends StatelessWidget {
     required this.onOpenConfig,
     required this.onManageConfig,
     required this.onOpenSitePicker,
+    required this.onOpenLocalFile,
   });
 
   final AppState state;
   final VoidCallback onOpenConfig;
   final VoidCallback onManageConfig;
   final VoidCallback onOpenSitePicker;
+  final VoidCallback onOpenLocalFile;
 
   @override
   Widget build(BuildContext context) {
@@ -1269,6 +1335,15 @@ class _TopBar extends StatelessWidget {
             onPressed: state.siteItems.isEmpty ? null : onOpenSitePicker,
             icon: const Icon(Icons.dns_outlined, size: 18),
             label: Text(site == null ? '选择站点' : '站点：${site.name}'),
+          ),
+          const SizedBox(width: AppSpace.xs),
+          // 本地视频不需要站点：入口必须独立于「站点：xxx」，否则用户会以为
+          // 先得选个站点才能放自己硬盘上的文件。
+          TextButton.icon(
+            key: const ValueKey('topbar-open-local-file'),
+            onPressed: onOpenLocalFile,
+            icon: const Icon(Icons.folder_open_outlined, size: 18),
+            label: const Text('打开本地文件'),
           ),
           if (state.webHomeLoadError != null)
             Tooltip(
