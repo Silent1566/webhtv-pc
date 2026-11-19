@@ -10,6 +10,7 @@ import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/web_home_page.dart';
 
 import 'local_source_sites_test.dart' show tempPaths, writeCandidates, join;
+import 'support/widget_settle.dart';
 
 class _RecordingState extends AppState {
   _RecordingState(Directory temp)
@@ -74,6 +75,8 @@ void main() {
     if (temp.existsSync()) temp.deleteSync(recursive: true);
   });
 
+  // mount 期收敛统一走 support/widget_settle.dart 的 settle（根因见该文件注释）。
+
   Future<void> mount(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -83,8 +86,7 @@ void main() {
         home: AppShell(state: state, startup: const StartupArguments()),
       ),
     );
-    await tester.runAsync(() async => Future<void>.delayed(Duration.zero));
-    await tester.pumpAndSettle();
+    await settle(tester);
   }
 
   testWidgets('真实AppShell picker打开HTML宿主，不选站点也不loadHome，普通站点仍selectSite', (
@@ -102,7 +104,7 @@ void main() {
     state.selectedKeys.clear();
     state.homeKeys.clear();
     await tester.tap(find.widgetWithIcon(TextButton, Icons.dns_outlined));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.byType(SitePickerDialog), findsOneWidget);
     await tester.tap(
       find.descendant(
@@ -120,7 +122,7 @@ void main() {
       }),
       (_) {},
     );
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.byType(WebHomePage), findsOneWidget);
     expect(state.selectedSite, same(before));
     expect(state.selectedKeys, isEmpty);
@@ -128,23 +130,23 @@ void main() {
     expect(state.homeResult, isNull);
     expect(calls.map((call) => call.method), contains('initialize'));
     await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.widgetWithIcon(TextButton, Icons.dns_outlined));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(
       find.descendant(
         of: find.byType(SitePickerDialog),
         matching: find.text('普通源'),
       ),
     );
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(state.selectedKeys, ['base']);
     expect(state.homeKeys, ['base']);
     expect(state.selectedSite?.key, 'base');
     expect(find.byType(WebHomePage), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
-    await tester.pumpAndSettle();
+    await settle(tester);
   });
 
   testWidgets('坏HTML登记表主外壳不红屏，展示失败原因且普通站点仍可选', (tester) async {
@@ -173,7 +175,7 @@ void main() {
       contains('FormatException'),
     );
     await tester.tap(find.widgetWithIcon(TextButton, Icons.dns_outlined));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(
       find.descendant(
         of: find.byType(SitePickerDialog),
@@ -183,6 +185,6 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
-    await tester.pumpAndSettle();
+    await settle(tester);
   });
 }

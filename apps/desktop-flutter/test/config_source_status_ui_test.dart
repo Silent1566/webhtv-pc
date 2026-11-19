@@ -10,6 +10,7 @@ import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'config_source_status_fixture.dart';
+import 'support/widget_settle.dart';
 
 void main() {
   ConfigRecord record(int id, String origin) => ConfigRecord(
@@ -101,8 +102,9 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(theme: buildAppTheme(Brightness.dark),
       home: shell ? AppShell(state: state, startup: const StartupArguments()) : ConfigPage(state: state)));
-    await tester.runAsync(() async => Future<void>.delayed(const Duration(milliseconds: 80)));
-    await tester.pumpAndSettle();
+    // AppShell 在 usage-boundary 的真实 File.exists 落地前渲染无限 LoadingBlock，
+    // 假时钟里的 pumpAndSettle 在慢 runner 上等不到 hasScheduledFrame == false。
+    await settle(tester);
     return state;
   }
 

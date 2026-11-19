@@ -19,6 +19,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/widget_settle.dart';
+
 void main() {
   late Directory tempDir;
   late AppState state;
@@ -72,13 +74,9 @@ void main() {
         home: AppShell(state: state, startup: const StartupArguments()),
       ),
     );
+    // 挂载期要等真实 IO（usage-boundary 探测）落地：固定轮次在慢 runner 上会泵不到位。
+    await settle(tester);
     // 有首启公告时先关掉，否则它盖住顶栏。
-    for (var round = 0; round < 40; round++) {
-      await tester.pump(const Duration(milliseconds: 16));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 8)),
-      );
-    }
     final accept = find.text('我已了解并继续');
     if (accept.evaluate().isNotEmpty) {
       await tester.tap(accept);

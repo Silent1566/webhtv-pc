@@ -11,6 +11,8 @@ import 'package:webhtv_pc/ui/app_motion.dart';
 import 'package:webhtv_pc/ui/search_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/widget_settle.dart';
+
 double _opacity(WidgetTester tester, Finder target) => tester
     .widgetList<FadeTransition>(
       find.ancestor(of: target, matching: find.byType(FadeTransition)),
@@ -116,12 +118,8 @@ void main() {
         home: AppShell(state: state, startup: const StartupArguments()),
       ),
     );
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 8)),
-      );
-      await tester.pump(const Duration(milliseconds: 16));
-    }
+    // 挂载期等真实 IO 落地：固定 12 轮在慢 runner 上会泵不到位。
+    await settle(tester);
     expect(find.byType(NavigationRail), findsOneWidget);
   }
 

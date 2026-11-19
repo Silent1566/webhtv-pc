@@ -30,7 +30,7 @@ void main() {
         final options = PlayerOptions.fromJson({'audioNormalization': enabled});
         final restored = PlayerOptions.fromJson(options.toJson());
         expect(restored.toJson()['audioNormalization'], enabled);
-        expect(restored.mpvProperties['af'], enabled ? 'dynaudnorm' : '');
+        expect(restored.mpvProperties['af'], enabled ? audioNormalizationAf : '');
       }
     });
 
@@ -40,7 +40,7 @@ void main() {
         'audioPassthrough': true,
       }).normalized().copyWith(cache: false);
       expect(options.toJson()['audioNormalization'], true);
-      expect(options.mpvProperties['af'], 'dynaudnorm');
+      expect(options.mpvProperties['af'], audioNormalizationAf);
       expect(options.mpvProperties['audio-spdif'], 'ac3,eac3,dts');
       expect(options.cache, false);
     });
@@ -56,15 +56,20 @@ void main() {
     });
 
     test('白名单仅接受默认 dynaudnorm 或清空，不开放任意音频滤镜', () {
-      for (final value in ['dynaudnorm', '']) {
+      for (final value in [audioNormalizationAf, '']) {
         final result = filterMpvProperties({'af': value});
         expect(result.accepted, {'af': value});
         expect(result.rejected, isEmpty);
       }
+      // lavfi 形态既能把任意 ffmpeg 滤镜图挂上来（movie= 能读本地文件），
+      // 在随包 Windows 内核上还会因为滤镜表是空的而让音轨整条丢失
+      // （见 core/mpv_properties.dart 的 audioNormalizationAf），所以一律不收。
       for (final value in [
+        'lavfi=[dynaudnorm]',
+        'lavfi=[dynaudnorm,movie=/tmp/x]',
+        'lavfi=[volume=100]',
         'dynaudnorm=m=99',
         'dynaudnorm,volume=100',
-        'lavfi=[dynaudnorm]',
         'loudnorm',
         'dynaudnorm\n',
       ]) {
@@ -76,8 +81,11 @@ void main() {
 
     test('音频滤镜写入仍需回读，不忽略内核的静默拒绝', () {
       expect(mpvPropertyRule('af')?.verifiable, true);
-      expect(mpvPropertyReadbackMatches('dynaudnorm', ''), false);
-      expect(mpvPropertyReadbackMatches('', 'dynaudnorm'), false);
+      // 内核拒绝写入时回读是空串（NativePlayer.getProperty 读失败也返回空串），
+      // 当成功处理就会把"静默没生效"洗成成功——随包 Windows 内核正是这种。
+      expect(mpvPropertyReadbackMatches(audioNormalizationAf, ''), false);
+      expect(mpvPropertyReadbackMatches('', audioNormalizationAf), false);
+      expect(mpvPropertyReadbackMatches(audioNormalizationAf, audioNormalizationAf), true);
     });
   });
 }

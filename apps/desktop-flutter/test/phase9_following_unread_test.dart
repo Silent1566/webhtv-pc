@@ -23,6 +23,7 @@ import 'package:webhtv_pc/ui/toast.dart';
 import 'support/detail_test_seams.dart';
 import 'support/player_page_harness.dart'
     show installMediaKitMocks, installWindowManagerMocks;
+import 'support/widget_settle.dart';
 
 Following _item() => Following(
   seriesKey: followingSeriesKey('s', 'v'),
@@ -423,7 +424,8 @@ void main() {
           home: AppShell(state: state, startup: const StartupArguments()),
         ),
       );
-      await pumpFrames(tester);
+      // 挂载期走共享 settle（等真实 IO 落地）；pumpFrames 仍用于后续交互推进。
+      await settle(tester);
     }
 
     Future<void> openMenu(WidgetTester tester) async {

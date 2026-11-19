@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:webhtv_pc/core/mpv_properties.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
@@ -274,7 +275,7 @@ void main() {
     await _flush(tester);
     expect(f.state.playerOptions.audioNormalization, isTrue);
     expect(_item(tester, 'audio_normalization').selected, isTrue);
-    expect(f.media.writes, [('af', 'dynaudnorm')]);
+    expect(f.media.writes, [('af', audioNormalizationAf)]);
     expect(f.state.playerOptions.cache, isFalse);
     expect(f.state.playerOptions.autoNext, isFalse);
     final saved = await tester.runAsync(() => _persistedOptions(f.state));
@@ -283,7 +284,7 @@ void main() {
     await _flush(tester);
     expect(f.state.playerOptions.audioNormalization, isFalse);
     expect(_item(tester, 'audio_normalization').selected, isFalse);
-    expect(f.media.writes, [('af', 'dynaudnorm'), ('af', '')]);
+    expect(f.media.writes, [('af', audioNormalizationAf), ('af', '')]);
     expect(f.media.volumes, isEmpty);
   });
 
@@ -302,7 +303,7 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await _flush(tester);
       expect(f.state.playerOptions.audioNormalization, isTrue);
-      expect(f.media.writes, [('af', 'dynaudnorm')]);
+      expect(f.media.writes, [('af', audioNormalizationAf)]);
       await _openVolume(tester);
       expect(_item(tester, 'audio_normalization').selected, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -336,9 +337,9 @@ void main() {
       await _flush(tester);
       expect(f.media.maxActive, 1);
       expect(f.media.writes, [
-        ('af', 'dynaudnorm'),
+        ('af', audioNormalizationAf),
         ('af', ''),
-        ('af', 'dynaudnorm'),
+        ('af', audioNormalizationAf),
         ('af', ''),
       ]);
       expect(f.media.properties['af'], '');
@@ -368,7 +369,7 @@ void main() {
       // 整表写入带的是**发起时**的 af（空串），不能盖掉之后那次开启。
       expect(f.state.playerOptions.audioNormalization, isTrue);
       expect(f.state.playerOptions.cache, isFalse);
-      expect(f.media.properties['af'], 'dynaudnorm');
+      expect(f.media.properties['af'], audioNormalizationAf);
       final saved = await tester.runAsync(() => _persistedOptions(f.state));
       expect(saved!['audioNormalization'], isTrue);
     },
@@ -409,7 +410,7 @@ void main() {
       await _shiftN(tester);
       await _flush(tester);
       expect(f.state.playerOptions.audioNormalization, isTrue);
-      expect(f.media.properties['af'], 'dynaudnorm');
+      expect(f.media.properties['af'], audioNormalizationAf);
       expect(live.session.request.url, request.url);
       expect(live.session.request.headers, request.headers);
     },
@@ -469,7 +470,7 @@ void main() {
       await _flush(tester);
       expect(f.state.playerOptions.audioNormalization, isTrue);
       expect(f.state.playerOptions.audioPassthrough, isTrue);
-      expect(f.media.properties['af'], 'dynaudnorm');
+      expect(f.media.properties['af'], audioNormalizationAf);
       expect(
         toastCenter.toasts.any(
           (t) => t.message.contains('音频直通时不生效') && t.kind != ToastKind.success,

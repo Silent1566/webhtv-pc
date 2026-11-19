@@ -92,7 +92,7 @@
 
 | 主题 | 证据 | 为什么值得看 | 初步判断 |
 | --- | --- | --- | --- |
-| 音量归一 `Normalizer` | `3385`、`Shift+N` | 站源之间响度差异是日常痛点 | **P1 已实现**（mpv `af=dynaudnorm`，默认关；见 §5.4） |
+| 音量归一 `Normalizer` | `3385`、`Shift+N` | 站源之间响度差异是日常痛点 | **P1 已实现**（mpv `af=dynaudnorm`，默认关；Linux 生效，随包 Windows 内核无 ffmpeg 滤镜故实测未生效，见 §5.4） |
 | 导航栏缩略图 + 关键帧跳转 | `3066`、`3048`、`3204`、`Ctrl+Shift+←/→` | 本项目 seek 无预览、无关键帧粒度 | **P2 候选**（网络流缩略图成本高，先做关键帧跳转） |
 | A-B 是**区间列表**而非单组 | `3285`、`101_0_9_10_15/17`、`3990` | 修正 §4.4 的建模 | §4.4 已注明 |
 | 多实例语义三档 | `3501/3502/3503` | 本项目无任何单例/复用语义 | **P2 候选**（先解决"第二次启动会发生什么"） |
@@ -564,7 +564,7 @@ PotPlayer 261021 加了 ReplayGain。**安装包实证（§11.4）把这条彻�
 mpv 侧对应 `af=dynaudnorm`（有副作用，必须默认关且可关），或记住「该站源的音量偏好」。
 **不做 ReplayGain 字面实现，做 Normalizer 那条。**
 
-**落地（已实现）**：`core/player_options.dart:207` 的 `audioNormalization`（默认 `false`）经 `:330` 映射成 `af=dynaudnorm` / 空串，白名单 `core/mpv_properties.dart:241` 只放行这两个值并做写后回读；落盘键 `player.audioNormalization`；三个入口共用同一份偏好——设置页 `ui/settings_detail_pages.dart:162`、右键「声音 → 音量」勾选项 `ui/player_page.dart:5777`、页面局部 Shift+N `:3914`（菜单与快捷键都走 `:6386`，整表参数与 `af` 单项写入共用串行队列，失败走既有 toast/日志且仍可关闭）。**实测边界**：`audio-spdif` 命中时 `af=dynaudnorm` 虽回读成功，`audio-out-params/format` 仍是 `spdif-ac3`——滤镜只作用于已解码音频；`audioPassthrough` 偏好因此保持不变，UI 文案明确写「音频直通时不生效」。音量/静音不受归一开关影响（实测 `volume`/`mute` 前后一致），未引入任何标签读取逻辑。
+**落地（已实现）**：`core/player_options.dart:207` 的 `audioNormalization`（默认 `false`）经 `:330` 映射成 `af=dynaudnorm` / 空串，白名单 `core/mpv_properties.dart:241` 只放行这两个值并做写后回读；落盘键 `player.audioNormalization`；三个入口共用同一份偏好——设置页 `ui/settings_detail_pages.dart:162`、右键「声音 → 音量」勾选项 `ui/player_page.dart:5777`、页面局部 Shift+N `:3914`（菜单与快捷键都走 `:6386`，整表参数与 `af` 单项写入共用串行队列，失败走既有 toast/日志且仍可关闭）。**实测边界**：`audio-spdif` 命中时 `af=dynaudnorm` 虽回读成功，`audio-out-params/format` 仍是 `spdif-ac3`——滤镜只作用于已解码音频；`audioPassthrough` 偏好因此保持不变，UI 文案明确写「音频直通时不生效」。音量/静音不受归一开关影响（实测 `volume`/`mute` 前后一致），未引入任何标签读取逻辑。**平台边界（2026-11 实测，GitHub Actions Windows runner 复现）**：随包 Windows libmpv（v0.36.0-403 / FFmpeg n6.0）没有编进任何 ffmpeg 滤镜表，裸名 `af=dynaudnorm` 被内核直接拒（`rc=-9`），写后回读因此如实报"未生效"，音轨不受影响；**不可**改用 `af=lavfi=[dynaudnorm]`——属性写入回 `rc=0`、回读也像成功，但建链时 `AVFilterGraph: No such filter: 'dynaudnorm'` → `Audio filter initialized failed` → mpv 丢掉整条音轨（用户直接变哑）。Linux 的系统 libmpv 有完整 FFmpeg，同一个裸名写入被接受并原样回读。
 
 ---
 

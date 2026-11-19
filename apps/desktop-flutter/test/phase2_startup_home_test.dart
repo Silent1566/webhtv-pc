@@ -41,6 +41,8 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 
+import 'support/widget_settle.dart';
+
 /// 捕获请求并返回固定首页响应的假 HTTP 客户端（widget 测试不可做真实 socket I/O）。
 class _CapturingClient extends http.BaseClient {
   final List<Uri> requests = [];
@@ -80,17 +82,6 @@ const String _configJson = '''
 }
 ''';
 
-/// 交替「推进一帧 → 给真实 I/O 一点时间」，有界收敛（不用 `pumpAndSettle`）。
-Future<void> _settle(WidgetTester tester, {int rounds = 20}) async {
-  for (var round = 0; round < rounds; round++) {
-    await tester.pump(const Duration(milliseconds: 16));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 8)),
-    );
-  }
-  await tester.pump(const Duration(milliseconds: 16));
-}
-
 Future<void> _mountShell(WidgetTester tester, AppState state) async {
   tester.view.physicalSize = const Size(1280, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -98,7 +89,8 @@ Future<void> _mountShell(WidgetTester tester, AppState state) async {
   await tester.pumpWidget(
     MaterialApp(home: AppShell(state: state, startup: const StartupArguments())),
   );
-  await _settle(tester);
+  // 有界收敛改走共享助手：判据是「没有帧在排队」，慢 runner 上不会泵不到位。
+  await settle(tester);
 }
 
 void main() {

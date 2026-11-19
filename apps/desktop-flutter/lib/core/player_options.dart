@@ -8,6 +8,7 @@
 /// 明确要的默认值变更，不是漏改。
 library;
 
+import 'mpv_properties.dart';
 import 'skip_plan.dart';
 
 /// 失败回退阶梯。
@@ -215,7 +216,8 @@ class PlayerOptions {
   /// 音频直通（`audio-spdif`）。桌面默认关闭：直通需要接收端支持。
   final bool audioPassthrough;
 
-  /// 全局实时音量归一（`af=dynaudnorm`）。默认关闭，不改变音量偏好。
+  /// 全局实时音量归一（`af=dynaudnorm`，见 [audioNormalizationAf]）。
+  /// 默认关闭，不改变音量偏好。
   final bool audioNormalization;
 
   /// HDR 色调映射算法（`tone-mapping`）。默认跟随内核。
@@ -341,7 +343,7 @@ class PlayerOptions {
     'demuxer-max-bytes': '${demuxerMaxBytesMiB * 1024 * 1024}',
     'demuxer-max-back-bytes': '${demuxerMaxBackBytesMiB * 1024 * 1024}',
     'audio-spdif': audioPassthrough ? 'ac3,eac3,dts' : '',
-    'af': audioNormalization ? 'dynaudnorm' : '',
+    'af': audioNormalization ? audioNormalizationAf : '',
     'tone-mapping': toneMapping.mpvValue,
     'hdr-compute-peak': hdrPeakCompute.mpvValue,
   };

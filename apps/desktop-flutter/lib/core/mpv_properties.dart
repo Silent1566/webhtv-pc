@@ -217,6 +217,27 @@ bool mpvPropertyReadbackMatches(String expected, String actual) {
   return want.toLowerCase() == got.toLowerCase();
 }
 
+/// 音量归一写进 `af` 的**唯一**取值：裸滤镜名。
+///
+/// **不要**把它改成 `lavfi=[dynaudnorm]`。实测（随包 Windows libmpv
+/// v0.36.0-403 / FFmpeg n6.0，media_kit_libs_windows_video）：
+/// - 裸名 `af=dynaudnorm` → 内核直接回 `rc=-9`，什么都没改，播放照常；
+/// - `af=lavfi=[dynaudnorm]` → 属性写入回 `rc=0`、回读也"成功"
+///   （`lavfi=graph=dynaudnorm`），但建链时才炸：
+///   `AVFilterGraph: No such filter: 'dynaudnorm'` →
+///   `Audio filter initialized failed!` → mpv 把音轨整条丢掉
+///   （`Audio: no audio`），用户直接变哑。
+///
+/// 那个 libmpv 根本没编进 ffmpeg 滤镜表：`lavfi=[anull]`、`lavfi=[null]`、
+/// `lavfi=[volume=0.5]` 全部同样建不起来。所以 lavfi 形态在 Windows 上是
+/// "写成功、播放坏"的最坏组合，而裸名是**安全的失败**——内核明说做不了，
+/// `PlayerController.applyMpvProperties` 的写后回读于是如实返回 false，UI 照常
+/// 提示"未生效"，音轨不动。
+///
+/// Linux 的系统 libmpv（Ubuntu CI，完整 FFmpeg）接受同一个裸名写入并原样回读，
+/// 这条用例在两个平台上都按"内核到底做了什么"断言，不互相迁就。
+const String audioNormalizationAf = 'dynaudnorm';
+
 final Map<String, MpvPropertyRule> _rules = {
   'hwdec': MpvPropertyRule(
     'hwdec',
@@ -245,8 +266,10 @@ final Map<String, MpvPropertyRule> _rules = {
   ),
   'af': MpvPropertyRule(
     'af',
-    (value) => value.isEmpty || value == 'dynaudnorm',
-    reason: '只允许空串或 dynaudnorm',
+    // 字面相等，不是前缀：lavfi 形态能把任意 ffmpeg 滤镜图挂上去，而且见
+    // [audioNormalizationAf]——它在 Windows 随包内核上会把音轨整条弄没。
+    (value) => value.isEmpty || value == audioNormalizationAf,
+    reason: '只允许空串或 $audioNormalizationAf',
   ),
   'tone-mapping': MpvPropertyRule(
     'tone-mapping',
