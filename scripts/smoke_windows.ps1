@@ -89,8 +89,19 @@ try {
         throw "等待 ${TimeoutSeconds}s 仍未写出 ready 文件（主界面未进入可交互状态）。"
     }
 
-    $content = Get-Content -LiteralPath $readyFile -Raw -Encoding utf8
-    $oneLine = ($content -split "`r?`n" | Where-Object { $_ -match '^WebHTV PC ' } | Select-Object -First 1)
+    # ready 文件可能出现得比内容早（应用侧也可能被别的版本改成先建后写）：
+    # 给它 5 秒把内容写完，不要"文件一出现就判死"。
+    $content = $null
+    $oneLine = $null
+    $contentDeadline = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $contentDeadline) {
+        $content = Get-Content -LiteralPath $readyFile -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($content)) {
+            $oneLine = ($content -split "`r?`n" | Where-Object { $_ -match '^WebHTV PC ' } | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace($oneLine)) { break }
+        }
+        Start-Sleep -Milliseconds 100
+    }
     if ([string]::IsNullOrWhiteSpace($oneLine)) {
         throw "ready 文件缺少启动信息行，实际内容：`n$content"
     }

@@ -27,7 +27,7 @@
 
 仍未完成（不阻塞本次迁移，但要在下一轮补齐）：
 1. **许可全文**：现在包里只有来源与许可名（`libmpv-SOURCE.txt`）和 `NOTICES.Z`，没有 mpv/FFmpeg 的 GPL/LGPL 正文——这是迁移前就存在的缺口，不是本次引入；
-2. **人工回归清单**（本文 §3 门禁 4 里需要真实硬件/画面的几项：硬解、字幕渲染、HDR 判定、拖动/倍速体感）本地无法覆盖，需在发布前手测；
+2. **人工回归清单**（硬解、字幕渲染、HDR 判定、LUT 画面、拖动/倍速体感）本地无法覆盖，需在发布前真机手测：逐项步骤与判据见本文 §5；
 3. LUT（`vf=lavfi=[lut3d=…]`）在真机上确认恢复（headless 无法建视频链）。
 
 ## 1. 现状：pin 的是谁的构建
@@ -135,7 +135,30 @@ af=lavfi=[dynaudnorm]  同样生效（当前白名单按设计拒收，保持拒
 | LUT 是否恢复 | 未实测（headless 不建视频链）；门禁 1/4 覆盖 |
 | Windows 音频直通与 `ao` 行为 | 0.42 的 audio-out 参数名/取值可能变（`audio-out-params` 已有断言，风险低但要回归） |
 
-## 5. 本次取证方式（可复现）
+## 5. 人工回归清单（门禁 4，必须在真机上跑）
+
+**自动化覆盖不到的部分**：下面每一项都依赖真实硬件、真实画面或真实音频设备。
+mpv 0.36 → 0.42 跨了 6 个 minor，风险集中在这里。每项记「通过 / 异常 + 现象」；
+异常时把应用日志对应片段与截图一起留下。
+
+| # | 项目 | 怎么做 | 判据 |
+| --- | --- | --- | --- |
+| 1 | 硬解 | 播 1080p 与 4K 各一次；设置里关硬解再开，各重开一次 | 不掉帧、不花屏、seek 后画面恢复；开硬解时 CPU 明显下降 |
+| 2 | LUT | 选一个 `.cube` 播放，再切走 | 颜色明显变化、关闭即恢复；日志无 `Video filter initialized failed`（旧内核连 `lut3d` 都挂不上，这项是换内核的预期收益） |
+| 3 | 音频直通 | 开 `audioPassthrough`，播 AC3 片源 | 接收端点亮、`audio-out-params` 为 `spdif-ac3`；关掉回到 PCM |
+| 4 | 音量归一 | `Shift+N` 或 右键→声音→音量 开启 | **不再弹「未生效」**；两段响度差很大的片源被拉平；切静音/音量不受影响 |
+| 5 | 字幕 | ASS/SSA 与 SRT 各一份 | 样式、位置、CJK 字体正常；字幕同步步进可用（libass 版本变了） |
+| 6 | HDR | 播 HDR 片源，`tone-mapping` 各档与 `hdr-compute-peak` 各切一次 | 明暗变化符合预期、不偏色 |
+| 7 | 拖动/倍速/长按 | 拖到中段、长按 3×、切倍速 | 画面恢复、音画同步、无卡死 |
+| 8 | 网速屏显 | 播网络流，跳转一次 | 有数、不跳 0；跳转后不停在旧值（`demuxer-cache-state` 是版本敏感字段，重点看这条） |
+| 9 | 稳定性 | 冷启动、切集、全屏、退出各一次 | 无新报错弹窗；日志不刷 `mpv: error` |
+
+任何一项异常，先回退内核再定位：把 `scripts/prepare_libmpv_windows.ps1` 的 pin 换回
+`media-kit/libmpv-win32-video-build` 的 `mpv-dev-x86_64-20230924-git-652a1dd.7z`
+（或临时跳过 `-ApplyBuildDir` 那一步）即可拿到对照，`afApplicable` 会退回 false、
+音量归一重新变成"如实提示未生效"，其余功能不应有差异。
+
+## 6. 本次取证方式（可复现）
 
 - 候选归档：`curl -L https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261111/mpv-dev-x86_64-20261111-git-bcde6b93cc.7z`，
   `tar.exe -xf` 解出 `libmpv-2.dll`（bsdtar 支持 7z）。

@@ -347,7 +347,11 @@ class Spider:
             },
           );
       try {
-        for (var i = 0; i < 200 && !marker.existsSync(); i++) {
+        // 等真实 Python 进程起来并跑完 init() 写下 marker：慢 runner 上 spawn + import
+        // 可能超过 2s，固定 200×10ms 的预算会把"还没起来"误判成"从没起来过"
+        // （CI 上这条曾这样红过一次）。正常情况 100-300ms 就会跳出。
+        final markerDeadline = DateTime.now().add(const Duration(seconds: 15));
+        while (!marker.existsSync() && DateTime.now().isBefore(markerDeadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
         final diagnostics = Directory(state.paths.cacheDir).existsSync()

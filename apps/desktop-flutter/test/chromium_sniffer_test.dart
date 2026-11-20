@@ -358,6 +358,91 @@ void main() {
     expect((extra.single.params?['headers'] as Map)['Referer'], 'https://ref.example.com/');
     await session.stop();
   });
+
+  test('打开期间页面崩溃：抛出的就是崩溃原因，不是笼统的启动失败', () async {
+    final connection = FakeCdpConnection(hangMethods: {'Page.navigate'});
+    final session = ChromiumSniffSession(
+      command: const BrowserCommand(
+        executablePath: '/usr/bin/fake-chrome',
+        label: 'Fake Chrome',
+      ),
+      request: request(),
+      headed: false,
+      moveOffscreen: false,
+      browser: FakeBrowserSession(),
+      connection: connection,
+    );
+    final opened = session.open();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    connection.emit(CdpEvent(method: 'Inspector.targetCrashed', params: const {}));
+    await expectLater(
+      opened,
+      throwsA(
+        isA<SniffException>().having((error) => error.message, 'message', contains('崩溃')),
+      ),
+    );
+  });
+
+  test('打开期间 socket 自己断开：如实报「浏览器连接中断」', () async {
+    final connection = FakeCdpConnection(hangMethods: {'Page.navigate'});
+    final session = ChromiumSniffSession(
+      command: const BrowserCommand(
+        executablePath: '/usr/bin/fake-chrome',
+        label: 'Fake Chrome',
+      ),
+      request: request(),
+      headed: false,
+      moveOffscreen: false,
+      browser: FakeBrowserSession(),
+      connection: connection,
+    );
+    final opened = session.open();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    connection.simulateSocketClose();
+    await expectLater(
+      opened,
+      throwsA(
+        isA<SniffException>()
+            .having((error) => error.message, 'message', contains('浏览器连接中断')),
+      ),
+    );
+  });
+
+  test('连通后会话打不开：重试同一个候选一次，成功就照常返回', () async {
+    var connects = 0;
+    final transport = FakeTransport(
+      connectionFactory: () {
+        connects++;
+        return connects == 1
+            ? FakeCdpConnection(failMethods: {'Page.navigate'})
+            : FakeCdpConnection();
+      },
+    );
+    final engine = ChromiumSniffEngine(transport: transport, headed: false);
+    final session = await engine.start(request());
+    expect(connects, 2, reason: '会话打不开应重试同一个候选一次');
+    expect(transport.launched.length, 2);
+    await session.stop();
+  });
+
+  test('连通后会话始终打不开：重试一次后如实列出原因，不无限重试', () async {
+    var connects = 0;
+    final transport = FakeTransport(
+      connectionFactory: () {
+        connects++;
+        return FakeCdpConnection(failMethods: {'Page.navigate'});
+      },
+    );
+    final engine = ChromiumSniffEngine(transport: transport, headed: false);
+    await expectLater(
+      engine.start(request()),
+      throwsA(
+        isA<SniffUnavailableException>()
+            .having((error) => error.detail, 'detail', contains('重试后仍失败')),
+      ),
+    );
+    expect(connects, 2, reason: '同一个候选最多两次：首次 + 一次重试');
+  });
 }
 
 /// CDP 调用记录。
@@ -377,7 +462,12 @@ class FakeTransport implements SniffTransport {
     this.candidates,
     this.badProbePaths = const {},
     this.failingLaunchPaths = const {},
+    this.connectionFactory,
   });
+
+  /// 不传时所有候选共享一条假连接（既有用例依赖这个身份）；传了则每次
+  /// `connect` 造一条新的——重试语义需要「第二条连接」才观察得到。
+  final FakeCdpConnection Function()? connectionFactory;
 
   final BrowserCommand? locateResult;
 
@@ -391,7 +481,8 @@ class FakeTransport implements SniffTransport {
   final Set<String> failingLaunchPaths;
 
   late final FakeBrowserSession browser = FakeBrowserSession();
-  late final FakeCdpConnection connection = FakeCdpConnection();
+  FakeCdpConnection? _connection;
+  FakeCdpConnection get connection => _connection ??= FakeCdpConnection();
   final List<BrowserCommand> probed = [];
   final List<BrowserCommand> launched = [];
   final List<bool> launchHeadless = [];
@@ -430,7 +521,17 @@ class FakeTransport implements SniffTransport {
   }
 
   @override
-  Future<CdpConnection> connect(Uri webSocketUrl, {Duration timeout = const Duration(seconds: 10)}) async => connection;
+  Future<CdpConnection> connect(
+    Uri webSocketUrl, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final created = connectionFactory?.call();
+    if (created != null) {
+      _connection = created;
+      return created;
+    }
+    return connection;
+  }
 }
 
 class FakeBrowserSession implements BrowserSession {
@@ -447,17 +548,39 @@ class FakeBrowserSession implements BrowserSession {
 }
 
 class FakeCdpConnection implements CdpConnection {
+  FakeCdpConnection({this.failMethods = const {}, this.hangMethods = const {}});
+
+  /// 这些命令立刻以 [CdpCallError] 失败（模拟对端已经关掉连接）。
+  final Set<String> failMethods;
+
+  /// 这些命令永远不回响应（模拟内核卡住）：连接一关就按真实语义以
+  /// [CdpCallError]「连接已关闭」失败，而不是永远挂着。
+  final Set<String> hangMethods;
+
   final StreamController<CdpEvent> _events = StreamController<CdpEvent>.broadcast();
   final List<RecordedCall> calls = [];
   final List<String> evaluated = [];
+  final Completer<void> _closedSignal = Completer<void>();
+  bool _closed = false;
   int closeCount = 0;
 
   Object? Function(String expression)? evaluateValues;
 
   void emit(CdpEvent event) => _events.add(event);
 
+  /// 模拟浏览器那头自己把 socket 断了（不是我们调的 [close]）：事件流结束、
+  /// 之后每条命令都立刻失败——与 [WebSocketCdpConnection] 的断线语义一致。
+  void simulateSocketClose() {
+    _closed = true;
+    if (!_closedSignal.isCompleted) _closedSignal.complete();
+    if (!_events.isClosed) unawaited(_events.close());
+  }
+
   @override
   Stream<CdpEvent> get events => _events.stream;
+
+  @override
+  bool get isClosed => _closed;
 
   @override
   Future<Map<String, Object?>> send(
@@ -467,6 +590,13 @@ class FakeCdpConnection implements CdpConnection {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     calls.add(RecordedCall(method, params, sessionId));
+    if (_closed || failMethods.contains(method)) {
+      throw CdpCallError(method, '连接已关闭');
+    }
+    if (hangMethods.contains(method)) {
+      await _closedSignal.future;
+      throw CdpCallError(method, '连接已关闭');
+    }
     switch (method) {
       case 'Target.createTarget':
         return {'targetId': 'TARGET-1'};
@@ -488,6 +618,8 @@ class FakeCdpConnection implements CdpConnection {
   @override
   Future<void> close() async {
     closeCount++;
-    await _events.close();
+    _closed = true;
+    if (!_closedSignal.isCompleted) _closedSignal.complete();
+    if (!_events.isClosed) await _events.close();
   }
 }

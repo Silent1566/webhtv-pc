@@ -34,9 +34,6 @@ class _PendingState extends AppState {
   /// 历史/收藏/追剧解析站点走的是 [siteInActiveSource]，它读 [effectiveConfig]
   /// 而不是这个 `config` 覆盖（本地导入源只并进 effectiveConfig）。假 state 必须
   /// 跟着补同一个接缝，否则用例会落进「站点已不在当前配置中」的分支。
-  ///
-  /// 与 `beta` 上的同名修复保持**逐字一致**：两边各写一份时 git 不会冲突，
-  /// 合并后会变成同一类里的两个同名成员（`duplicate_definition`），只能靠 CI 发现。
   @override
   AppConfig? get effectiveConfig => config;
 

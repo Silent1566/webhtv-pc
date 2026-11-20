@@ -251,11 +251,18 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
     }
     if (startup.readyFile != null) {
       try {
-        await File(startup.readyFile!).writeAsString(
+        // 先写临时文件再原子改名：外部脚本（烟测、截图自动化）的约定是
+        // 「文件出现 = 内容完整」，直接 writeAsString 会先建空文件再写，
+        // 慢 runner 上读到的就是空内容（实测 CI 烟测偶发）。
+        final readyFile = File(startup.readyFile!);
+        final temp = File('${readyFile.path}.tmp');
+        await temp.writeAsString(
           'ready ${DateTime.now().toIso8601String()}\n'
           '${_state.startupInfo?.oneLine ?? "startup-info-unavailable"}\n'
           '${StartupTrace.summary}\n',
+          flush: true,
         );
+        await temp.rename(readyFile.path);
       } catch (_) {
         // 标记文件写入失败不影响应用运行。
       }
