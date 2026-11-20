@@ -520,6 +520,7 @@ class UiPreferencesStore {
   }
 
   Future<void> load() async {
+    var migrateMetaPipeline = false;
     try {
       final file = File(path);
       if (!await file.exists()) {
@@ -629,6 +630,11 @@ class UiPreferencesStore {
           final externalMeta = ui['externalMetaEnabled'];
           if (externalMeta is bool) _externalMetaEnabled = externalMeta;
           _metaPipeline = MetaPipeline.fromJson(ui['metaPipeline']);
+          if (ui['metaPipelineVersion'] is! num ||
+              (ui['metaPipelineVersion'] as num) < 1) {
+            _metaPipeline = _metaPipeline!.withSourceFallbackAdded();
+            migrateMetaPipeline = true;
+          }
           _metaOverrides = MetaOverrideStore.fromJson(ui['metaOverrides']);
           final viewMode = ui['episodeViewMode'];
           if (viewMode is String) {
@@ -752,6 +758,7 @@ class UiPreferencesStore {
         if (spiderDebugLog is bool) _spiderDebugLog = spiderDebugLog;
       }
       _loaded = true;
+      if (migrateMetaPipeline) _persistMetaPipelineMigration();
     } catch (error) {
       _log?.warning('读取 UI 偏好失败，使用默认值：$error', scope: 'ui');
       _lastSiteKey = '';
@@ -1225,6 +1232,41 @@ class UiPreferencesStore {
     }
   }
 
+  /// Startup migration patches only its owned metadata keys, leaving future
+  /// settings and rule extensions intact. A failed write retries next load.
+  bool _persistMetaPipelineMigration() {
+    final result = writeSettingsSectionSync(
+      path: path,
+      writer: SettingsWriter.uiPreferences,
+      mutate: (root) {
+        final rawUi = root['ui'];
+        final ui = rawUi is Map ? Map<String, Object?>.from(rawUi) : <String, Object?>{};
+        final version = ui['metaPipelineVersion'];
+        if (version is num && version >= 1) return false;
+        final rawRules = ui['metaPipeline'];
+        final rules = rawRules is Map
+            ? Map<String, Object?>.from(rawRules)
+            : <String, Object?>{};
+        final migrated = MetaPipeline.fromJson(rules).withSourceFallbackAdded();
+        for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+          final rawRule = rules[field.key];
+          rules[field.key] = {
+            if (rawRule is Map) ...Map<String, Object?>.from(rawRule),
+            ...migrated.ruleOf(field).toJson(),
+          };
+        }
+        ui['metaPipeline'] = rules;
+        ui['metaPipelineVersion'] = 1;
+        root['ui'] = ui;
+        return true;
+      },
+    );
+    if (!result.ok) {
+      _log?.error('迁移元数据来源偏好失败：${result.error}', scope: 'ui');
+    }
+    return result.ok;
+  }
+
   /// 写盘队列尾：串行化所有 `_persist` 调用。
   ///
   /// 为什么必须串行：`_persist` 是「写 tmp → 删旧 → 改名」三步，并发时两个
@@ -1290,6 +1332,7 @@ class UiPreferencesStore {
         if (viewMode != null) ui['episodeViewMode'] = viewMode;
         final externalMeta = _externalMetaEnabled;
         if (externalMeta != null) ui['externalMetaEnabled'] = externalMeta;
+        ui['metaPipelineVersion'] = 1;
         final pipeline = _metaPipeline;
         if (pipeline != null) ui['metaPipeline'] = pipeline.toJson();
         final overrides = _metaOverrides;

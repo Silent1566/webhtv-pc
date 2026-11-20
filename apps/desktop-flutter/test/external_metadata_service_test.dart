@@ -6,6 +6,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/external_meta.dart';
 import 'package:webhtv_pc/core/meta_source.dart';
+import 'package:webhtv_pc/core/meta_pipeline.dart';
+import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/source_meta_resolver.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
@@ -23,11 +26,178 @@ const subject = {'id':'35588177','title':'漫长的季节', 'is_tv':true,'type':
   'cover':{'url':'https://img.example/cover.jpg'},'pubdate':['2023-04-22(中国大陆)']};
 
 void main() {
+  test('raw field resolution obeys external order and never fetches source identity', () async {
+    final temp = Directory.systemTemp.createTempSync('crawler-field-service');
+    addTearDown(() => temp.deleteSync(recursive: true));
+    var bangumiCalls = 0;
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: temp, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/credits')) return response({'items': []});
+        return response({...subject, 'intro': 'Raw Douban overview'});
+      })),
+      bangumi: BangumiService(minInterval: Duration.zero, client: MockClient((r) async {
+        bangumiCalls++;
+        if (r.method == 'POST') return response({'data': [{'id': 431299, 'name_cn': '漫长的季节', 'platform': '国产剧', 'date': '2023-04-22'}]});
+        if (r.url.path.endsWith('/persons')) return response([]);
+        return response({'id': 431299, 'name_cn': '漫长的季节', 'summary': 'Raw Bangumi overview'});
+      })),
+    );
+    addTearDown(service.close);
+    final pipeline = MetaPipeline.defaults.withRule(MetaPipeline.defaults.ruleOf(MetaField.overview).copyWith(order: [MetaSourceKind.bangumi, MetaSourceKind.douban, MetaSourceKind.source]));
+    final result = await service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023), source: Vod(vodId: 'v', vodName: '漫长的季节'), pipeline: pipeline);
+    expect(result.providers[MetaSourceKind.bangumi]?.overview, 'Raw Bangumi overview');
+    expect(result.providers[MetaSourceKind.douban]?.overview, 'Raw Douban overview');
+    expect(bangumiCalls, greaterThan(0));
+    expect(await service.candidates(const MetaQuery(title: 'x'), MetaSourceKind.source), isEmpty);
+    expect(await service.resolveIdentity(const MetaQuery(title: 'x'), MetaSourceKind.source, 0), isNull);
+  });
+
   late Directory temp;
   setUp(()=>temp=Directory.systemTemp.createTempSync('extmeta-service'));
   tearDown(()=>temp.deleteSync(recursive:true));
   DoubanRecommendationService douban(http.Client client) => DoubanRecommendationService(
     client:client,cacheDirectory:temp,delay:(_) async {});
+
+  for (final sourceOnly in [false, true]) {
+    test('source-first complete resource retains independently enabled photos (sourceOnly=$sourceOnly)', () async {
+      final requests = <String>[];
+      final service = ExternalMetaService(douban: douban(MockClient((r) async {
+        requests.add(r.url.path);
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/photos')) return response({'photos': [
+          {'image': {'large': {'url': 'https://img.example/still.jpg'}}},
+        ]});
+        return response({}, 500);
+      })));
+      addTearDown(service.close);
+      var pipeline = MetaPipeline.defaults;
+      for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+        pipeline = pipeline.withRule(pipeline.ruleOf(field).copyWith(order: [
+          MetaSourceKind.source, if (!sourceOnly) MetaSourceKind.douban,
+        ]));
+      }
+      final result = await service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023),
+        source: Vod(vodId: 'local', vodName: '漫长的季节', vodContent: 'Local overview',
+          vodPic: 'local.jpg', vodActor: 'Local actor', vodDirector: 'Local director',
+          vodArea: 'Local country', vodYear: '2023', extra: {'type_name': 'Drama', 'vod_lang': 'Local language'}),
+        pipeline: pipeline);
+      expect(result.primary?.data.photoUrls, ['https://img.example/still.jpg']);
+      expect(result.primary?.identity.kind, MetaSourceKind.douban);
+      final shown = SourceMetaResolver.resolve(pipeline: pipeline,
+        source: Vod(vodId: 'local', vodName: '漫长的季节', vodContent: 'Local overview'),
+        providers: result.providers, primary: result.primary?.data);
+      expect(shown.title, '漫长的季节');
+      expect(shown.overview, 'Local overview');
+      expect(shown.photoUrls, ['https://img.example/still.jpg']);
+      expect(shown.tmdbId, 0);
+      expect(shown.rating, 0);
+      expect(result.providers, isEmpty, reason: 'local priority stops must still avoid fetching external detail fields');
+      expect(requests, ['/j/subject_suggest', '/rexxar/api/v2/tv/35588177/photos']);
+      requests.clear();
+      service.clearCache();
+      final disabled = await service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023),
+        source: Vod(vodId: 'local', vodName: '漫长的季节', vodContent: 'Local overview',
+          vodPic: 'local.jpg', vodActor: 'Local actor', vodDirector: 'Local director',
+          vodArea: 'Local country', vodYear: '2023', extra: {'type_name': 'Drama', 'vod_lang': 'Local language'}),
+        pipeline: pipeline.withRule(pipeline.ruleOf(MetaField.photos).copyWith(order: [])));
+      expect(disabled.primary, isNull);
+      expect(requests, isEmpty, reason: 'disabled photos must not initiate a provider request');
+    });
+  }
+
+  test('independent photo result is discarded when generation changes in flight', () async {
+    final started = Completer<void>();
+    final pending = Completer<http.Response>();
+    final service = ExternalMetaService(douban: douban(MockClient((r) async {
+      if (r.url.path == '/j/subject_suggest') return response(suggestion);
+      if (r.url.path.endsWith('/photos')) { started.complete(); return pending.future; }
+      return response({}, 500);
+    })));
+    addTearDown(service.close);
+    var pipeline = MetaPipeline.defaults;
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      pipeline = pipeline.withRule(pipeline.ruleOf(field).copyWith(order: [MetaSourceKind.source]));
+    }
+    final future = service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023),
+      source: Vod(vodId: 'local', vodName: '漫长的季节'), pipeline: pipeline);
+    await started.future;
+    service.clearCache();
+    pending.complete(response({'photos': [{'image': {'large': {'url': 'https://img.example/stale.jpg'}}}]}));
+    final result = await future;
+    expect(result.providers, isEmpty); expect(result.primary, isNull);
+  });
+
+  test('comments never send another providers work id to Douban', () async {
+    final requests = <String>[];
+    final service = ExternalMetaService(douban: douban(MockClient((r) async {
+      requests.add(r.url.path);
+      return response({'interests': [{'comment': 'Correct provider comment'}], 'total': 1});
+    })));
+    addTearDown(service.close);
+    for (final kind in [MetaSourceKind.tmdb, MetaSourceKind.bangumi, MetaSourceKind.wikidata]) {
+      final page = await service.comments(MetaIdentity.of(kind, TmdbMediaType.tv, 42)!);
+      expect(page.comments, isEmpty);
+    }
+    expect(requests, isEmpty, reason: 'a numeric work id is only valid in its own provider namespace');
+    final page = await service.comments(MetaIdentity.of(MetaSourceKind.douban, TmdbMediaType.tv, 35588177)!);
+    expect(page.comments.single.text, 'Correct provider comment');
+    expect(requests, ['/rexxar/api/v2/tv/35588177/interests']);
+  });
+
+  test('comment completion cannot publish after service generation invalidation', () async {
+    final started = Completer<void>(); final pending = Completer<http.Response>();
+    final service = ExternalMetaService(douban: douban(MockClient((r) async {
+      started.complete(); return pending.future;
+    })));
+    addTearDown(service.close);
+    final future = service.comments(MetaIdentity.of(MetaSourceKind.douban, TmdbMediaType.tv, 35588177)!);
+    await started.future;
+    service.clearCache();
+    pending.complete(response({'interests': [{'comment': 'Stale comment'}], 'total': 1}));
+    expect((await future).comments, isEmpty);
+  });
+
+  test('field resolver honors pinned identity and keeps IMDb through photo aggregation', () async {
+    var searches = 0;
+    final service = ExternalMetaService(douban: douban(MockClient((r) async {
+      if (r.url.path == '/j/subject_suggest') { searches++; return response(suggestion); }
+      if (r.url.path.endsWith('/credits')) return response({'items': []});
+      if (r.url.path.endsWith('/photos')) return response({'photos': [{'image': {'large': {'url': 'https://img.example/pinned.jpg'}}}]});
+      return response({...subject, 'imdb': 'tt4574334'});
+    })));
+    addTearDown(service.close);
+    var pipeline = MetaPipeline.defaults;
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      pipeline = pipeline.withRule(pipeline.ruleOf(field).copyWith(order: [MetaSourceKind.source]));
+    }
+    final result = await service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023),
+      source: Vod(vodId: 'local', vodName: 'Local title'), pipeline: pipeline,
+      pinned: MetaIdentity.of(MetaSourceKind.douban, TmdbMediaType.tv, 35588177));
+    expect(searches, 0);
+    expect(result.effectivePipeline(pipeline).orderOf(MetaField.title).first, MetaSourceKind.douban);
+    expect(result.primary?.data.photoUrls, ['https://img.example/pinned.jpg']);
+    expect(result.primary?.imdbId, 'tt4574334');
+  });
+
+  test('field resolver disabled and invalidated requests cannot publish providers', () async {
+    final pending = Completer<http.Response>();
+    var enabled = false; var calls = 0;
+    final service = ExternalMetaService(enabled: () => enabled, douban: douban(MockClient((r) async {
+      calls++; return pending.future;
+    })));
+    addTearDown(service.close);
+    final vod = Vod(vodId: 'local', vodName: '漫长的季节');
+    final disabled = await service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023), source: vod, pipeline: MetaPipeline.defaults);
+    expect(disabled.providers, isEmpty); expect(calls, 0);
+    enabled = true;
+    final future = service.resolveFields(const MetaQuery(title: '漫长的季节', year: 2023), source: vod, pipeline: MetaPipeline.defaults);
+    await Future<void>.delayed(Duration.zero);
+    service.clearCache();
+    pending.complete(response(suggestion));
+    final stale = await future;
+    expect(stale.providers, isEmpty); expect(stale.primary, isNull); expect(calls, 1);
+  });
 
   test('TMDB 有简介与演职员时不再请求豆瓣与 Bangumi', () async {
     var doubanCalls = 0;

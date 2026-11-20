@@ -1381,6 +1381,7 @@ AiContentCompletion? aiContentCompletion,
   ExternalMetaService get externalMetaService =>
       _externalMetaService ??= ExternalMetaService(
         enabled: () => externalMetaEnabled,
+        pipeline: () => metaPipeline,
         // 只用于按 IMDb 编号做确定性跨源映射（只读，不抓内容）。
         tmdb: tmdbService,
         // TMDB 快照只读：已匹配的详情直接进优先链，不额外发请求。
@@ -1423,7 +1424,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final saved = await store.pinMetaOverride(vodId, identity);
-    _externalMetaService?.clearCache();
+    _externalMetaService?.clearCache(preserveComments: true);
     _notifyIfAlive();
     return saved;
   }
@@ -1432,7 +1433,7 @@ AiContentCompletion? aiContentCompletion,
     final store = _uiPreferences;
     if (store == null) return false;
     final saved = await store.unpinMetaOverride(vodId);
-    _externalMetaService?.clearCache();
+    _externalMetaService?.clearCache(preserveComments: true);
     _notifyIfAlive();
     return saved;
   }
@@ -1440,8 +1441,10 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> setMetaPipeline(MetaPipeline pipeline) async {
     final store = _uiPreferences;
     if (store == null) return false;
+    final commentsChanged = metaPipeline.ruleOf(MetaField.comments) !=
+        pipeline.ruleOf(MetaField.comments);
     final saved = store.rememberMetaPipeline(pipeline);
-    _externalMetaService?.clearCache();
+    _externalMetaService?.clearCache(preserveComments: !commentsChanged);
     notifyListeners();
     return saved;
   }

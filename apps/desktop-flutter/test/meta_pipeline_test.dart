@@ -80,7 +80,7 @@ void main() {
           MetaSourceKind.tmdb => ['a.jpg', 'b.jpg'],
           MetaSourceKind.douban => ['b.jpg', 'c.jpg'],
           MetaSourceKind.bangumi => ['d.jpg'],
-          MetaSourceKind.wikidata => <String>[],
+          MetaSourceKind.wikidata || MetaSourceKind.source => <String>[],
         };
       },
     );

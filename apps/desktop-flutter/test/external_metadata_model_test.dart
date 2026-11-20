@@ -12,7 +12,7 @@ MetaCandidate candidate(int id, String title, {String original = '', int year = 
 );
 
 void main() {
-  test('missing external fields use source data without changing the playable title', () {
+  test('missing external fields use source data while title follows configured default priority', () {
     final value = ExternalDetailMeta.douban(
       identity: MetaIdentity.of(MetaSourceKind.douban, TmdbMediaType.tv, 1)!,
       subject: {'title':'外部标题'},
@@ -20,7 +20,7 @@ void main() {
     final merged = value.forSource(Vod(vodId:'video', vodName:'来源标题', vodContent:'来源简介',
       vodPic:'https://img.example/source.jpg', vodActor:'来源演员', vodDirector:'来源导演',
       vodYear:'2024', vodArea:'中国大陆', extra:{'vod_lang':'汉语普通话','type_name':'剧情'}));
-    expect(merged.title, '来源标题');
+    expect(merged.title, '外部标题');
     expect(merged.overview, '来源简介');
     expect(merged.posterUrl, 'https://img.example/source.jpg');
     expect(merged.cast.single.name, '来源演员');

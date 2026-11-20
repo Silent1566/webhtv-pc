@@ -478,8 +478,8 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           icon: Icons.hub_outlined,
           title: '元数据来源与优先级',
           subtitle: state.externalMetaEnabled
-              ? 'TMDB / 豆瓣 / Bangumi / Wikidata，逐字段设优先或聚合'
-              : '外部元数据兜底已关闭：只剩 TMDB',
+              ? 'TMDB / 豆瓣 / Bangumi / Wikidata / 爬虫源，逐字段设优先或聚合'
+              : '外部请求已关闭：仍按规则使用 TMDB 与爬虫源',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => MetaSourcesPage(state: state),

@@ -47,7 +47,13 @@ class MetaIdentity {
     TmdbMediaType? mediaType,
     int? id,
   ) {
-    if (kind == null || mediaType == null || id == null || id <= 0) return null;
+    if (kind == null ||
+        kind == MetaSourceKind.source ||
+        mediaType == null ||
+        id == null ||
+        id <= 0) {
+      return null;
+    }
     return MetaIdentity._(kind, mediaType, id);
   }
 
@@ -67,7 +73,7 @@ class MetaIdentity {
     MetaSourceKind.douban => 'https://movie.douban.com/subject/$id/',
     MetaSourceKind.bangumi => 'https://bgm.tv/subject/$id',
     MetaSourceKind.wikidata => 'https://www.wikidata.org/wiki/Q$id',
-    MetaSourceKind.tmdb => '',
+    MetaSourceKind.tmdb || MetaSourceKind.source => '',
   };
 
   @override

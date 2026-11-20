@@ -93,14 +93,21 @@ class MetaFieldRule {
     if (rawOrder is List) {
       for (final item in rawOrder) {
         final kind = MetaSourceKind.parse(item);
-        if (kind != null && !order.contains(kind)) order.add(kind);
+        if (kind != null &&
+            (kind != MetaSourceKind.source || MetaPipeline.supportsSource(field)) &&
+            !order.contains(kind)) {
+          order.add(kind);
+        }
       }
     }
     return MetaFieldRule(
       field: field,
       mode: mode,
-      // 空顺序等于该字段永远取不到，因此回落到默认。
-      order: order.isEmpty ? fallback.order : order,
+      // 作品字段保留显式空顺序，避免重新启用用户停用的来源。
+      order: order.isEmpty &&
+              !(rawOrder is List && rawOrder.isEmpty && MetaPipeline.supportsSource(field))
+          ? fallback.order
+          : order,
     );
   }
 
@@ -134,7 +141,7 @@ class MetaPipeline {
 
   static const List<MetaSourceKind> _textOrder = [
     MetaSourceKind.tmdb, MetaSourceKind.douban, MetaSourceKind.bangumi,
-    MetaSourceKind.wikidata,
+    MetaSourceKind.wikidata, MetaSourceKind.source,
   ];
 
   static MetaFieldRule _priority(MetaField field) =>
@@ -146,7 +153,7 @@ class MetaPipeline {
       MetaFieldRule(field: field, mode: MetaFieldMode.aggregate, order: order);
 
   /// 默认值（Lead 定，2026-11-18）：
-  /// - 文本字段：TMDB → 豆瓣 → Bangumi → Wikidata，取到即停；
+  /// - 文本字段：TMDB → 豆瓣 → Bangumi → Wikidata → 爬虫源，取到即停；
   /// - 人物简介：Bangumi（有 summary）→ Wikidata（最全）→ TMDB → 豆瓣（无简介）；
   /// - 作品剧照：TMDB + 豆瓣 **同类聚合**；人物照片：豆瓣 + Bangumi 同类聚合
   ///   （用户决策 A：横向剧照与竖向写真不混排，所以拆成两个字段）。
@@ -195,14 +202,35 @@ class MetaPipeline {
   /// 该字段按顺序尝试的来源（聚合模式同样按此顺序拼接）。
   List<MetaSourceKind> orderOf(MetaField field) => ruleOf(field).order;
 
-  /// 勾选/取消一个来源；取消到空时回落到默认顺序（不允许「没有来源」）。
+  /// 爬虫源只提供当前资源自身的十个作品字段。
+  static bool supportsSource(MetaField field) =>
+      defaults.ruleOf(field).order.contains(MetaSourceKind.source);
+
+  /// 为新增爬虫源之前保存的规则追加末位兜底；存储层负责仅迁移一次。
+  MetaPipeline withSourceFallbackAdded() {
+    var result = this;
+    for (final field in MetaField.values) {
+      final rule = ruleOf(field);
+      if (supportsSource(field) && !rule.order.contains(MetaSourceKind.source)) {
+        result = result.withRule(
+          rule.copyWith(order: [...rule.order, MetaSourceKind.source]),
+        );
+      }
+    }
+    return result;
+  }
+
+  /// 勾选/取消一个来源；作品字段允许全部停用，其余字段保留默认顺序。
   MetaPipeline toggleSource(MetaField field, MetaSourceKind source) {
+    if (source == MetaSourceKind.source && !supportsSource(field)) return this;
     final rule = ruleOf(field);
     final order = [...rule.order];
     if (!order.remove(source)) order.add(source);
     return withRule(
       rule.copyWith(
-        order: order.isEmpty ? defaults.ruleOf(field).order : order,
+        order: order.isEmpty && !supportsSource(field)
+            ? defaults.ruleOf(field).order
+            : order,
       ),
     );
   }

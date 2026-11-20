@@ -11,14 +11,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/meta_pipeline.dart';
+import 'package:webhtv_pc/core/meta_source.dart';
 import 'package:webhtv_pc/core/source_detail_meta.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
+import 'package:webhtv_pc/services/external_meta_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
-import 'package:webhtv_pc/ui/tmdb_detail_view.dart' show TmdbPersonPage;
+import 'package:webhtv_pc/ui/tmdb_detail_view.dart' show TmdbPersonPage, TmdbDetailHeader, TmdbDetailBackdrop;
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
@@ -388,6 +391,13 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byType(TmdbPersonPage), findsNothing);
+    final noBackdrop = state.metaPipeline.withRule(state.metaPipeline.ruleOf(MetaField.backdrop).copyWith(order: []));
+    await tester.runAsync(() => state.setMetaPipeline(noBackdrop));
+    await tester.drag(find.byType(ListView).first, const Offset(0, 3000));
+    await tester.pumpAndSettle();
+    final backdrop = tester.widget<TmdbDetailBackdrop>(find.byType(TmdbDetailBackdrop));
+    expect(backdrop.urls, isEmpty);
+    expect(backdrop.fallbackUrl, isNull, reason: 'the poster rule must not leak into a disabled backdrop rule');
     await tester.pumpWidget(const SizedBox.shrink());
   });
   testWidgets('matched TMDB metadata replaces source-only chips and people', (
@@ -436,6 +446,7 @@ void main() {
       );
     });
     final state = AppState(
+      externalMetaService: ExternalMetaService(),
       tmdbService: TmdbService(config: () => config, client: tmdbClient),
       paths: AppPaths.resolve(
         overrides: {
@@ -481,6 +492,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     debugNetworkImageHttpClientProvider = null;
+    final header = tester.widget<TmdbDetailHeader>(find.byType(TmdbDetailHeader));
+    expect(header.heroOverview, 'TMDB 简介', reason: 'configured TMDB priority must reach the hero consumer');
     expect(find.text('2023'), findsOneWidget);
     expect(find.text('来源类型 / 来源类型二 / 来源类型三'), findsNothing);
     expect(find.text('TMDB类型'), findsOneWidget);
@@ -495,6 +508,36 @@ void main() {
     for (final sourceName in ['张三', '王导演']) {
       expect(find.text(sourceName), findsNothing);
     }
+    var pipeline = state.metaPipeline;
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      final rule = pipeline.ruleOf(field);
+      pipeline = pipeline.withRule(rule.copyWith(order: [MetaSourceKind.source, ...rule.order.where((s) => s != MetaSourceKind.source)]));
+    }
+    await tester.runAsync(() => state.setMetaPipeline(pipeline));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, 3000));
+    await tester.pumpAndSettle();
+    final sourceHeader = tester.widget<TmdbDetailHeader>(find.byType(TmdbDetailHeader));
+    expect(sourceHeader.data.title, vod.vodName);
+    expect(sourceHeader.heroOverview, _overview);
+    expect(sourceHeader.data.genres, ['来源类型', '来源类型二', '来源类型三']);
+    expect(sourceHeader.data.cast.first.name, '张三');
+    expect(sourceHeader.data.tmdbId, 42);
+    expect(vod.vodName, '来源影视条目');
+    await tester.runAsync(() => state.setExternalMetaEnabled(true));
+    for (var i = 0; i < 12; i++) { await tester.pump(const Duration(milliseconds: 100)); }
+    expect(tester.binding.hasScheduledFrame, isFalse, reason: 'a rebuilt TMDB snapshot must not start a new metadata request each frame');
+    await tester.runAsync(() => state.setExternalMetaEnabled(false));
+    pipeline = state.metaPipeline;
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      pipeline = pipeline.withRule(pipeline.ruleOf(field).copyWith(order: [MetaSourceKind.tmdb]));
+    }
+    await tester.runAsync(() => state.setMetaPipeline(pipeline));
+    await tester.pumpAndSettle();
+    final disabledHeader = tester.widget<TmdbDetailHeader>(find.byType(TmdbDetailHeader));
+    expect(disabledHeader.data.posterUrl, isNull);
+    expect(disabledHeader.data.backdropUrls, isEmpty);
+    expect(disabledHeader.data.countries, isNot(contains(_area)));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }
