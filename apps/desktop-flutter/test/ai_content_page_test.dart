@@ -126,12 +126,15 @@ void main() {
 
     await tester.tap(find.text('生成推荐'));
     // 页面内部有真实文件 IO：用 runAsync 推进真实异步，再逐帧 pump。
-    for (var i = 0; i < 40; i++) {
+    // 用**时间预算**而不是固定帧数：Windows runner 上真实 IO 慢一个数量级，
+    // 原来 40×25ms≈1s 的窗口在 CI 上会偶发不够（`页面片单` 还没渲染出来）。
+    final deadline = DateTime.now().add(const Duration(seconds: 6));
+    while (DateTime.now().isBefore(deadline) &&
+        find.text('页面片单').evaluate().isEmpty) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 25)),
       );
       await tester.pump();
-      if (find.text('页面片单').evaluate().isNotEmpty) break;
     }
 
     expect(tester.takeException(), isNull);
