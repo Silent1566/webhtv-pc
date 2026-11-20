@@ -9,6 +9,7 @@ import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/app_motion.dart';
 
 import 'config_source_status_fixture.dart';
 import 'support/widget_settle.dart';
@@ -95,13 +96,17 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  Future<ConfigSourceFixtureState> mount(WidgetTester tester, {bool shell = false}) async {
+  Future<ConfigSourceFixtureState> mount(WidgetTester tester, {
+    bool shell = false,
+    Size size = const Size(1280, 950),
+    Brightness brightness = Brightness.dark,
+  }) async {
     final state = (await tester.runAsync(() => createConfigSourceFixture(shell ? 'startup-ui' : 'list-ui')))!;
     addTearDown(state.dispose);
-    tester.view.physicalSize = const Size(1280, 950);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(Brightness.dark),
+    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(brightness),
       home: shell ? AppShell(state: state, startup: const StartupArguments()) : ConfigPage(state: state)));
     // AppShell 在 usage-boundary 的真实 File.exists 落地前渲染无限 LoadingBlock，
     // 假时钟里的 pumpAndSettle 在慢 runner 上等不到 hasScheduledFrame == false。
@@ -144,6 +149,14 @@ void main() {
     expect(state.config, isNotNull);
     expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
     expect(find.textContaining('刷新不可用'), findsOneWidget);
+    final sidebarWithWarning = tester.getRect(find.byType(AppSideBar));
+    final contentWithWarning = tester.getRect(find.byType(AppShellTransition));
+    final warning = tester.getRect(find.byKey(const ValueKey('config-source-restored-warning')));
+    expect(warning.left, contentWithWarning.left,
+      reason: 'The banner must start at the content edge, not cover the sidebar');
+    expect(warning.right, contentWithWarning.right);
+    expect(warning.top, contentWithWarning.top,
+      reason: 'Keep the banner at the top of the content area');
     await tester.tap(find.byKey(const ValueKey('config-source-manage')));
     await tester.pumpAndSettle();
     expect(find.byType(ConfigPage), findsOneWidget);
@@ -155,5 +168,34 @@ void main() {
     expect(find.byKey(const ValueKey('config-source-restored-warning')), findsNothing);
     expect(state.savedConfigs.length, count);
     expect(state.config, isNotNull);
+    expect(tester.getRect(find.byType(AppSideBar)), sidebarWithWarning,
+      reason: 'Startup notifications must float without moving or resizing the shell');
+    expect(tester.getRect(find.byType(AppShellTransition)), contentWithWarning);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('startup overlay preserves content and input at 1024x640 ${brightness.name}', (tester) async {
+      await mount(tester, shell: true, size: const Size(1024, 640), brightness: brightness);
+      final sidebar = tester.getRect(find.byType(AppSideBar));
+      final content = tester.getRect(find.byType(AppShellTransition));
+      final section = tester.widget<AppSideBar>(find.byType(AppSideBar)).section;
+      expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
+      await tester.tap(find.text('去点播逛逛'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, isNot(section),
+        reason: 'The empty area outside the notification must not intercept content clicks');
+      expect(find.text('首页').hitTestable(), findsOneWidget,
+        reason: 'Startup notifications must never cover sidebar navigation');
+      await tester.tap(find.text('首页'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, section);
+      expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('config-source-dismiss')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('config-source-restored-warning')), findsNothing);
+      expect(tester.getRect(find.byType(AppSideBar)), sidebar);
+      expect(tester.getRect(find.byType(AppShellTransition)), content);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

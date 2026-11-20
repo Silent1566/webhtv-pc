@@ -136,9 +136,16 @@ void main() {
           'tmdb': {'language': 'zh'},
         }),
       );
-    final before = file.readAsStringSync();
+    final beforeLoad = jsonDecode(file.readAsStringSync()) as Map;
     final store = UiPreferencesStore(path: settings);
     await store.load();
+    final before = file.readAsStringSync();
+    final migrated = jsonDecode(before) as Map;
+    final migratedUi = Map<String, Object?>.from(migrated['ui'] as Map);
+    // 启动只允许既有的元数据迁移，外部播放器目录和其他设置保持原样。
+    expect(migratedUi.remove('metaPipelineVersion'), 1);
+    expect(migratedUi.remove('metaPipeline'), isA<Map>());
+    expect({...migrated, 'ui': migratedUi}, beforeLoad);
     expect(
       store
           .listExternalPlayers(const [
