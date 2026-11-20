@@ -152,9 +152,11 @@ void main() {
     final sidebarWithWarning = tester.getRect(find.byType(AppSideBar));
     final contentWithWarning = tester.getRect(find.byType(AppShellTransition));
     final warning = tester.getRect(find.byKey(const ValueKey('config-source-restored-warning')));
-    expect(warning.left, 0, reason: 'Preserve the original full-width top banner');
-    expect(warning.right, 1280);
-    expect(warning.top, 64, reason: 'Keep the banner immediately below the top bar');
+    expect(warning.left, contentWithWarning.left,
+      reason: 'The banner must start at the content edge, not cover the sidebar');
+    expect(warning.right, contentWithWarning.right);
+    expect(warning.top, contentWithWarning.top,
+      reason: 'Keep the banner at the top of the content area');
     await tester.tap(find.byKey(const ValueKey('config-source-manage')));
     await tester.pumpAndSettle();
     expect(find.byType(ConfigPage), findsOneWidget);
@@ -182,11 +184,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, isNot(section),
         reason: 'The empty area outside the notification must not intercept content clicks');
+      expect(find.text('首页').hitTestable(), findsOneWidget,
+        reason: 'Startup notifications must never cover sidebar navigation');
+      await tester.tap(find.text('首页'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, section);
+      expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('config-source-dismiss')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('config-source-restored-warning')), findsNothing);
-      await tester.tap(find.text('首页'));
-      await tester.pumpAndSettle();
       expect(tester.getRect(find.byType(AppSideBar)), sidebar);
       expect(tester.getRect(find.byType(AppShellTransition)), content);
       expect(tester.takeException(), isNull);
