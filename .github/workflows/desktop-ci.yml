@@ -699,6 +699,17 @@ jobs:
       - name: Build Linux debug bundle
         run: flutter build linux --debug
         working-directory: apps/desktop-flutter
+      # 这些 e2e 用例全部打 `tools/fixture_server`（127.0.0.1:18080）：
+      # 之前 job 没起服务，于是「导入配置 → 首页」永远等不到数据，
+      # 4 条用例报 homeResult 为 null / 断言找不到文字。
+      - name: Start fixture server
+        run: |-
+          python3 tools/fixture_server/server.py > /tmp/fixture-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health
       - name: Run MVP-A e2e flow under xvfb
         run: xvfb-run -a flutter test integration_test/mvp_a_flow_test.dart -d linux
         working-directory: apps/desktop-flutter
