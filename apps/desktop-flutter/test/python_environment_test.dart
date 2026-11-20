@@ -871,9 +871,13 @@ void main() {
     final state = AppState(paths: env.paths, pythonEnvironment: env);
     final pending = state.repairPythonEnvironment();
     state.dispose();
-    expect(await pending, isTrue);
-    expect(env.busy, isFalse);
-    expect(await env.repair(), isTrue);
+    // 关闭后的契约（协作取消）：正在进行的一轮以「取消」结束、不发布结果；
+    // 闸门必须归还；关闭后不再接受新操作。旧行为是让在途/后续操作照常成功，
+    // 那会在 dispose 之后继续写盘并发布状态。
+    expect(await pending, isFalse, reason: '关闭后不得把准备结果发布为成功');
+    expect(env.busy, isFalse, reason: '操作闸门必须归还');
+    expect(env.error, isNotNull);
+    expect(await env.repair(), isFalse, reason: '关闭后不再接受新操作');
   });
   test('live processes reject transitions without kill and release last-user lease on exit', skip: noBundledPythonReason, () async {
     final env = PythonEnvironment(

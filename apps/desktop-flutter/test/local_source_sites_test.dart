@@ -708,7 +708,10 @@ class LocalSourceTestPythonEnvironment extends PythonEnvironment {
 
   Future<void> _probe() async {
     busy = true;
-    await Future<void>.delayed(probeDelay);
+    // 零延迟不要排 Timer：测试替身的完成必须只走微任务，否则在 widget 测试的
+    // fake-async 区里创建的真实 Timer 不会被 `pump()` 推进，teardown 等 idle
+    // 就会一直等不到（页面测试曾因此稳定红一条）。
+    if (probeDelay > Duration.zero) await Future<void>.delayed(probeDelay);
     status = const PythonEnvironmentStatus(
       error: 'local source contract: native runtime intentionally unavailable',
     );

@@ -73,6 +73,8 @@ class PythonEnvironment {
   bool busy = false;
   String? error;
   Future<bool>? _pending;
+  SendPort? _cancellation;
+  bool _closed = false;
 
   static bool _changing = false;
   static int _users = 0;
@@ -96,6 +98,12 @@ class PythonEnvironment {
     await _pending;
   }
 
+  Future<void> close() async {
+    _closed = true;
+    _cancellation?.send(null);
+    await idle;
+  }
+
   Future<void> refresh() async {
     final pending = _pending;
     if (pending != null) {
@@ -111,6 +119,10 @@ class PythonEnvironment {
   Future<bool> useDefault() => _run('default');
 
   Future<bool> _run(String operation, [String executable = '']) {
+    if (_closed) {
+      error = const _PythonEnvironmentCancelled().toString();
+      return Future.value(false);
+    }
     if (busy || _changing || (operation != 'refresh' && _users > 0)) {
       error = _users > 0 ? 'Python 源正在运行，请先停止后再修复或切换' : 'Python 环境操作正在进行';
       return Future.value(false);
@@ -124,32 +136,42 @@ class PythonEnvironment {
     final config = paths.configDir;
     final cache = paths.cacheDir;
     final bundle = bundleDirectory;
-    final checker = probe ?? _probePython;
+    final checker = probe;
     final candidates = systemCandidates;
     final environment = processEnvironment;
     final launcher = launcherRunner;
     final launcherLimit = launcherTimeout;
     final writeStamp = clock?.call().microsecondsSinceEpoch;
+    final control = ReceivePort();
+    final subscription = control.listen((message) {
+      _cancellation = message as SendPort;
+      if (_closed) _cancellation!.send(null);
+    });
     final future =
-        Isolate.run(
-              () => _operateEnvironment(
-                operation,
-                executable,
-                data,
-                config,
-                cache,
-                bundle,
-                checker,
-                candidates,
-                environment,
-                allowPrepare,
-                launcher,
-                launcherLimit,
-                writeStamp,
-              ),
+        _operateEnvironment(
+              operation,
+              executable,
+              data,
+              config,
+              cache,
+              bundle,
+              checker,
+              candidates,
+              environment,
+              allowPrepare,
+              launcher,
+              launcherLimit,
+              writeStamp,
+              control.sendPort,
             )
             .then(
               (result) {
+                if (_closed) {
+                  error =
+                      result.error ??
+                      const _PythonEnvironmentCancelled().toString();
+                  return false;
+                }
                 if (result.status != null) {
                   status = result.status;
                   arguments = result.arguments;
@@ -174,7 +196,10 @@ class PythonEnvironment {
                 return false;
               },
             )
-            .whenComplete(() {
+            .whenComplete(() async {
+              _cancellation = null;
+              control.close();
+              await subscription.cancel();
               busy = false;
               _changing = false;
               _pending = null;
@@ -195,14 +220,120 @@ class _EnvironmentResult {
   final String? error;
 }
 
+class _PythonEnvironmentCancelled implements Exception {
+  const _PythonEnvironmentCancelled();
+
+  @override
+  String toString() => 'Python 环境准备已取消';
+}
+
+class _PythonPreparation {
+  bool cancelled = false;
+  final Set<Process> _processes = {};
+  Timer? _escalation;
+
+  /// 取消时的宽限窗：先 SIGTERM 让进程自己收尾，超过这个时间才升级 SIGKILL。
+  ///
+  /// 这个窗口只用于**升级信号**，不是 idle 的完成条件——收尾处仍然要等到真实
+  /// exitCode，否则「关闭完成」就可能是假的。
+  static const _killGrace = Duration(seconds: 2);
+
+  void cancel() {
+    cancelled = true;
+    for (final process in _processes.toList()) {
+      _terminate(process);
+    }
+  }
+
+  void _terminate(Process process) {
+    try {
+      process.kill();
+    } catch (_) {
+      // 已退出：下面的 exitCode 会立即完成。
+    }
+    if (Platform.isWindows) return;
+    _escalation?.cancel();
+    _escalation = Timer(_killGrace, () {
+      for (final tracked in _processes.toList()) {
+        try {
+          tracked.kill(ProcessSignal.sigkill);
+        } catch (_) {
+          // 竞态退出。
+        }
+      }
+    });
+  }
+
+  void check() {
+    if (cancelled) throw const _PythonEnvironmentCancelled();
+  }
+
+  Future<void> checkpoint() async {
+    await Future<void>.delayed(Duration.zero);
+    check();
+  }
+
+  void track(Process process) {
+    _processes.add(process);
+    if (cancelled) _terminate(process);
+  }
+
+  void release(Process process) {
+    _processes.remove(process);
+    if (_processes.isEmpty) {
+      _escalation?.cancel();
+      _escalation = null;
+    }
+  }
+}
+
+/// 停止一个探测/启动子进程：先 SIGTERM 给一个宽限窗，必要时升级 SIGKILL，
+/// 但**最终仍要等到真实 exitCode**。
+///
+/// 为什么需要宽限窗：POSIX 上自建/系统解释器的包装脚本可能忽略 SIGTERM，不升级
+/// 就会把取消后的收尾挂住（实测过：dispose 后 10 秒仍在解包/等进程）。
+/// 为什么最终不能「超时就放弃等待」：idle 的唯一证据是子进程真的退出；用超时
+/// 替代它，等于把「关闭完成」变成假完成（本轮复审打回的正是那种写法）。
+Future<void> _stopProcess(Process process) async {
+  try {
+    process.kill();
+  } catch (_) {
+    // 进程可能已经退出；继续等待 exitCode 即可。
+  }
+  if (await _waitProcessExit(process, const Duration(seconds: 2))) return;
+  // SIGKILL 不能被忽略：发出去之后必须等到 exitCode，否则「idle 完成」就会
+  // 变成「可能还有子进程在跑」的假证据。这里的无界等待由 SIGKILL 的语义兜底，
+  // 不是原先那种「关着眼睛放弃等待」。
+  if (!Platform.isWindows) {
+    try {
+      process.kill(ProcessSignal.sigkill);
+    } catch (_) {
+      // 竞态退出：下面的 exitCode 会立即完成。
+    }
+  }
+  await process.exitCode;
+}
+
+Future<bool> _waitProcessExit(Process process, Duration limit) async {
+  try {
+    await process.exitCode.timeout(limit);
+    return true;
+  } on TimeoutException {
+    return false;
+  }
+}
+
 Future<PythonEnvironmentStatus> _probePython(
   String executable,
   List<String> arguments,
   PythonEnvironmentSource source,
   Map<String, String>? environment,
+  _PythonPreparation preparation,
 ) async {
+  Process? process;
   try {
-    final process = await Process.start(
+    preparation.check();
+    process = await Process.start(
       executable,
       [
         ...arguments,
@@ -216,6 +347,7 @@ Future<PythonEnvironmentStatus> _probePython(
       environment: environment,
       includeParentEnvironment: environment == null,
     );
+    preparation.track(process);
     final output =
         await Future.wait<Object>([
           process.exitCode,
@@ -224,10 +356,11 @@ Future<PythonEnvironmentStatus> _probePython(
         ]).timeout(
           const Duration(seconds: 30),
           onTimeout: () {
-            process.kill();
+            process?.kill();
             throw TimeoutException('Python 探测超过 30 秒');
           },
         );
+    preparation.check();
     if (output[0] != 0) throw StateError('${output[2]}'.trim());
     final payload = jsonDecode('${output[1]}'.trim()) as Map<String, dynamic>;
     final dependencies = Map<String, bool>.from(payload['dependencies'] as Map);
@@ -244,15 +377,107 @@ Future<PythonEnvironmentStatus> _probePython(
           : '缺少 CatVod 依赖',
     );
   } catch (e) {
+    preparation.check();
     return PythonEnvironmentStatus(
       executable: executable,
       source: source,
       error: '解释器探测失败：$e',
     );
+  } finally {
+    if (process != null) {
+      await _stopProcess(process);
+      preparation.release(process);
+    }
   }
 }
 
 Future<_EnvironmentResult> _operateEnvironment(
+  String operation,
+  String executable,
+  String data,
+  String config,
+  String cache,
+  String? bundle,
+  /// 测试注入的探测回调：按 **trusted/finite** 处理——它本身不可取消，必须自己
+  /// 有限完成。生产实现只在回调返回后的 checkpoint 检查取消，因此中途不会打断它。
+  PythonEnvironmentProbe? injectedProbe,
+  List<String>? candidates,
+  Map<String, String>? environment,
+  bool allowPrepare,
+  Future<ProcessResult> Function(String, List<String>)? launcherRunner,
+  Duration launcherTimeout,
+  int? writeStamp,
+  SendPort control,
+) => Isolate.run(() async {
+  final preparation = _PythonPreparation();
+  final cancellation = ReceivePort();
+  final subscription = cancellation.listen((_) => preparation.cancel());
+  control.send(cancellation.sendPort);
+  Future<PythonEnvironmentStatus> probe(
+    String executable,
+    List<String> arguments,
+    PythonEnvironmentSource source,
+    Map<String, String>? environment,
+  ) async {
+    await preparation.checkpoint();
+    final result = await (injectedProbe == null
+        ? _probePython(executable, arguments, source, environment, preparation)
+        : injectedProbe(executable, arguments, source, environment));
+    await preparation.checkpoint();
+    return result;
+  }
+
+  Future<ProcessResult> launcher(
+    String executable,
+    List<String> arguments,
+  ) async {
+    await preparation.checkpoint();
+    if (launcherRunner != null) {
+      // 同 injectedProbe：注入的启动器是 trusted/finite 测试钩子，不可中途取消。
+      final result = await launcherRunner(executable, arguments);
+      preparation.check();
+      return result;
+    }
+    final process = await Process.start(executable, arguments);
+    preparation.track(process);
+    try {
+      final output = await Future.wait<Object>([
+        process.exitCode,
+        process.stdout.transform(systemEncoding.decoder).join(),
+        process.stderr.transform(systemEncoding.decoder).join(),
+      ]).timeout(launcherTimeout);
+      preparation.check();
+      return ProcessResult(process.pid, output[0] as int, output[1], output[2]);
+    } finally {
+      await _stopProcess(process);
+      preparation.release(process);
+    }
+  }
+
+  try {
+    return await _performEnvironment(
+      operation,
+      executable,
+      data,
+      config,
+      cache,
+      bundle,
+      probe,
+      candidates,
+      environment,
+      allowPrepare,
+      launcher,
+      launcherTimeout,
+      writeStamp,
+      preparation,
+    );
+  } finally {
+    cancellation.close();
+    await subscription.cancel();
+  }
+});
+
+Future<_EnvironmentResult> _performEnvironment(
   String operation,
   String executable,
   String data,
@@ -266,8 +491,10 @@ Future<_EnvironmentResult> _operateEnvironment(
   Future<ProcessResult> Function(String, List<String>)? launcherRunner,
   Duration launcherTimeout,
   int? writeStamp,
+  _PythonPreparation preparation,
 ) async {
   try {
+    preparation.check();
     final store = _PythonBundleStore(data, config, writeStamp: writeStamp);
     String? custom;
     var preferenceDamaged = false;
@@ -290,11 +517,12 @@ Future<_EnvironmentResult> _operateEnvironment(
         environment,
       );
       if (!status.ready) throw StateError(status.error ?? '自定义 Python 未就绪');
+      await preparation.checkpoint();
       store.saveSelection({'custom': executable}, recover: preferenceDamaged);
       return _EnvironmentResult(status);
     }
     String? bundleError;
-    var installed = store.installed();
+    var installed = await store.installed(preparation);
     if (store.metadataError != null && operation == 'refresh') {
       return _EnvironmentResult(null, error: store.metadataError);
     }
@@ -303,8 +531,14 @@ Future<_EnvironmentResult> _operateEnvironment(
       final directory = bundleOverride ?? _findPythonBundle();
       if (directory != null && allowPrepare) {
         try {
-          installed = await store.prepare(directory, probe, environment);
+          installed = await store.prepare(
+            directory,
+            probe,
+            environment,
+            preparation,
+          );
         } catch (e) {
+          preparation.check();
           bundleError = '$e';
           if (operation != 'refresh') rethrow;
         }
@@ -333,6 +567,7 @@ Future<_EnvironmentResult> _operateEnvironment(
       );
       if (operation == 'default') {
         if (!status.ready) throw StateError(status.error ?? '内置环境未就绪，请离线修复');
+        await preparation.checkpoint();
         store.saveSelection({}, recover: preferenceDamaged);
       }
       return _EnvironmentResult(status, error: bundleError);
