@@ -210,7 +210,7 @@ void main() {
     await store.rememberSite('site_b');
 
     final decoded = jsonDecode(file.readAsStringSync()) as Map;
-    expect(decoded['ui'], {'lastSiteKey': 'site_b'});
+    expect(decoded['ui'], {'lastSiteKey': 'site_b', 'metaPipelineVersion': 1});
     expect(
       (decoded['tmdb'] as Map)['apiKey'],
       'KEEP-ME',
