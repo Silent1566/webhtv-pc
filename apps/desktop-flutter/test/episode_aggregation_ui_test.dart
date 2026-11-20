@@ -176,8 +176,10 @@ class _DetailState extends AppState with ExternalMetaOff {
     : super(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: dir.path,
+            'config': dir.path,
+            'data': dir.path,
+            'cache': dir.path,
+            'state': dir.path,
           },
         ),
         log: MemoryOnlyLogService(),
