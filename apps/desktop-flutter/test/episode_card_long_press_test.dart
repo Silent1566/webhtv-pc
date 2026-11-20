@@ -382,6 +382,99 @@ void _pageTests() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets('名称开关紧跟网格，切换只改标题且倒序列表仍播放原集', (tester) async {
+      final vod = _vod();
+      final state = (await tester.runAsync(() => stateFor(vod)))!;
+      await pumpPage(tester, DetailPage(state: state, vod: vod));
+      final nameToggle = find.byKey(const ValueKey('tmdb-episode-name-mode'));
+      final gridToggle = find.byKey(const ValueKey('tmdb-episode-view-mode'));
+      final first = find.byKey(const ValueKey('tmdb-episode-card-原线路-0'));
+      await reveal(tester, first);
+      expect(nameToggle, findsOneWidget, reason: '选集标题栏需要名称切换入口');
+      expect(
+        tester.getTopLeft(nameToggle).dx,
+        greaterThan(tester.getTopRight(gridToggle).dx - 1),
+      );
+      expect(
+        find.descendant(of: first, matching: find.text('E1 元数据1')),
+        findsOneWidget,
+      );
+      await tester.tap(nameToggle);
+      await tester.pump();
+      expect(
+        find.descendant(of: first, matching: find.text('S02E01 原名保留')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: first, matching: find.text('2025-01-01 · 42 分钟')),
+        findsOneWidget,
+        reason: '名称开关不能清空日期、时长等元数据',
+      );
+      final tile = tester.widget<TmdbEpisodeCardTile>(
+        find.ancestor(of: first, matching: find.byType(TmdbEpisodeCardTile)),
+      );
+      expect(tile.card.title, 'E1 元数据1', reason: '仅替换展示，不能改写刮削元数据');
+      expect(state.played, isEmpty);
+      expect(client.episodePaths, isEmpty, reason: '切换名称不请求单集详情');
+      await tester.tap(find.byKey(const ValueKey('tmdb-episode-reverse')));
+      await tester.pump();
+      await tester.tap(gridToggle);
+      await tester.pump();
+      expect(
+        find.descendant(of: first, matching: find.text('S02E07 原名保留')),
+        findsOneWidget,
+        reason: '倒序及列表布局不能让原名错配到其它集',
+      );
+      await tester.tap(first);
+      await tester.pumpAndSettle();
+      expect(state.played, ['http://example.invalid/e7']);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
+
+    testWidgets('名称模式落盘后新详情页恢复，并能切回刮削名称', (tester) async {
+      final vod = _vod();
+      final state = (await tester.runAsync(() => stateFor(vod)))!;
+      await pumpPage(tester, DetailPage(state: state, vod: vod));
+      final first = find.byKey(const ValueKey('tmdb-episode-card-原线路-0'));
+      final toggle = find.byKey(const ValueKey('tmdb-episode-name-mode'));
+      await reveal(tester, first);
+      expect(toggle, findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pump();
+      await tester.runAsync(() async {
+        // 等已发出的持久化写入完成，不接触用户真实配置。
+        final settings = File('${state.paths.configDir}/settings.json');
+        for (var attempt = 0; attempt < 100; attempt++) {
+          if (await settings.exists()) {
+            final decoded = jsonDecode(await settings.readAsString()) as Map;
+            if ((decoded['ui'] as Map?)?['episodeShowScrapedName'] == false) {
+              return;
+            }
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        fail('名称偏好没有写入 settings.json');
+      });
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      final reopened = (await tester.runAsync(() => stateFor(vod)))!;
+      await pumpPage(tester, DetailPage(state: reopened, vod: vod));
+      await reveal(tester, first);
+      expect(
+        find.descendant(of: first, matching: find.text('S02E01 原名保留')),
+        findsOneWidget,
+      );
+      await tester.tap(toggle);
+      await tester.pump();
+      expect(
+        find.descendant(of: first, matching: find.text('E1 元数据1')),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
+
     for (final (name, index) in [('前篇', 0), ('后篇', 1)]) {
       testWidgets('无号站源长按$name不猜集号、不请求、不展示猜号元数据', (tester) async {
         final vod = Vod(

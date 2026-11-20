@@ -718,6 +718,7 @@ class TmdbEpisodeCard {
   const TmdbEpisodeCard({
     required this.number,
     required this.title,
+    this.sourceName = '',
     this.date = '',
     this.overview,
     this.stillUrl,
@@ -729,6 +730,7 @@ class TmdbEpisodeCard {
   /// 季内集号（无法确定时为线路下标 + 1）。
   final int number;
   final String title;
+  final String sourceName;
   final String date;
   final String? overview;
   final String? stillUrl;
@@ -799,6 +801,7 @@ abstract final class TmdbEpisodeCards {
         TmdbEpisodeCard(
           number: number,
           title: metadata?.displayTitle ?? name,
+          sourceName: name,
           date: metadata?.date ?? '',
           overview: metadata?.overview,
           stillUrl: still,

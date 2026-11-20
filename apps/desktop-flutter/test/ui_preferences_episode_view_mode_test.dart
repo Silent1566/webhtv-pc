@@ -37,6 +37,38 @@ void main() {
     return ((decoded as Map)['ui'] as Map).cast<String, Object?>();
   }
 
+  test('名称默认刮削，往返持久化且不破坏其它 UI 偏好', () async {
+    final store = await openStore();
+    expect(store.episodeShowScrapedName, isTrue);
+    await store.rememberThemeMode(UiThemeMode.light);
+    await store.rememberEpisodeViewMode(UiEpisodeViewMode.list);
+    expect(readUiSection().containsKey('episodeShowScrapedName'), isFalse);
+
+    await store.rememberEpisodeShowScrapedName(false);
+    var reopened = await openStore();
+    expect(reopened.episodeShowScrapedName, isFalse);
+    expect(reopened.episodeViewMode, UiEpisodeViewMode.list);
+    expect(reopened.themeMode, UiThemeMode.light);
+    expect(readUiSection()['episodeShowScrapedName'], isFalse);
+
+    await reopened.rememberEpisodeShowScrapedName(true);
+    reopened = await openStore();
+    expect(reopened.episodeShowScrapedName, isTrue);
+    expect(readUiSection()['episodeShowScrapedName'], isTrue);
+  });
+
+  for (final invalid in ['false', 0, null, <Object>[]]) {
+    test('名称偏好非法值 $invalid 安全回落到刮削名称', () async {
+      await File(settingsPath).writeAsString(
+        jsonEncode({
+          'ui': {'episodeShowScrapedName': invalid},
+        }),
+      );
+      final store = await openStore();
+      expect(store.episodeShowScrapedName, isTrue);
+    });
+  }
+
   test('从未设置过时返回默认网格', () async {
     final store = await openStore();
 

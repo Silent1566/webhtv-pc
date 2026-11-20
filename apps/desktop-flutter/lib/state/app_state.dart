@@ -2892,6 +2892,16 @@ AiContentCompletion? aiContentCompletion,
     _notifyIfAlive();
   }
 
+  bool get episodeShowScrapedName =>
+      _uiPreferences?.episodeShowScrapedName ?? true;
+
+  Future<void> setEpisodeShowScrapedName(bool showScraped) async {
+    final store = _uiPreferences;
+    if (store == null) return;
+    await store.rememberEpisodeShowScrapedName(showScraped);
+    _notifyIfAlive();
+  }
+
   /// 当前生效配置的来源标识（见 `core/source_key.dart`）。
   ///
   /// 桥接源为 `bridge|<deviceUuid>|<interfaceKey>`，本地导入为
