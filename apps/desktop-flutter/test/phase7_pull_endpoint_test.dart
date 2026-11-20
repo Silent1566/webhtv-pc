@@ -346,17 +346,16 @@ void main() {
   });
 
   group('limit 与 hasMore（design/01 §3.2.2）', () {
-    late SyncServer server;
-
-    tearDown(() async => server.stop());
+    // 纯解析用例不创建服务器；只让真正创建资源的用例登记清理。
 
     test('limit 限制返回条数并置 hasMore', () async {
-      server = await startServer(
+      final server = await startServer(
         history: [
           for (var i = 0; i < 10; i++)
             localHistory(vodId: '/v$i', updatedAt: 100 + i),
         ],
       );
+      addTearDown(server.stop);
       final decoded =
           jsonDecode((await get(server.port, '/api/playback/sync?since=0&limit=3')).body)
               as Map<String, Object?>;
@@ -365,7 +364,8 @@ void main() {
     });
 
     test('条数不足时不置 hasMore', () async {
-      server = await startServer(history: [localHistory()]);
+      final server = await startServer(history: [localHistory()]);
+      addTearDown(server.stop);
       final decoded =
           jsonDecode((await get(server.port, '/api/playback/sync?since=0&limit=50')).body)
               as Map<String, Object?>;
@@ -385,7 +385,7 @@ void main() {
     });
 
     test('limit 与删除共享配额', () async {
-      server = await startServer(
+      final server = await startServer(
         history: [
           for (var i = 0; i < 5; i++)
             localHistory(vodId: '/v$i', updatedAt: 100 + i),
@@ -395,6 +395,7 @@ void main() {
             (historyKey: 'CupFox@@@/d$i@@@0', deletedAt: 200 + i),
         ],
       );
+      addTearDown(server.stop);
       final decoded =
           jsonDecode((await get(server.port, '/api/playback/sync?since=0&limit=4')).body)
               as Map<String, Object?>;
@@ -408,13 +409,14 @@ void main() {
     test('删除优先于 upsert 抢占配额（墓碑更紧急）', () async {
       // 当前实现先填 upsert 再填删除（与 Go 参考实现一致）。
       // 这个用例锁定顺序，避免以后默默改成“删除优先”而无人知晓。
-      server = await startServer(
+      final server = await startServer(
         history: [
           for (var i = 0; i < 3; i++)
             localHistory(vodId: '/v$i', updatedAt: 100 + i),
         ],
         deletions: [(historyKey: 'k', deletedAt: 300)],
       );
+      addTearDown(server.stop);
       final decoded =
           jsonDecode((await get(server.port, '/api/playback/sync?since=0&limit=2')).body)
               as Map<String, Object?>;
