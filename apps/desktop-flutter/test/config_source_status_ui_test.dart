@@ -151,6 +151,10 @@ void main() {
     expect(find.textContaining('刷新不可用'), findsOneWidget);
     final sidebarWithWarning = tester.getRect(find.byType(AppSideBar));
     final contentWithWarning = tester.getRect(find.byType(AppShellTransition));
+    final warning = tester.getRect(find.byKey(const ValueKey('config-source-restored-warning')));
+    expect(warning.left, 0, reason: 'Preserve the original full-width top banner');
+    expect(warning.right, 1280);
+    expect(warning.top, 64, reason: 'Keep the banner immediately below the top bar');
     await tester.tap(find.byKey(const ValueKey('config-source-manage')));
     await tester.pumpAndSettle();
     expect(find.byType(ConfigPage), findsOneWidget);
@@ -178,11 +182,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, isNot(section),
         reason: 'The empty area outside the notification must not intercept content clicks');
-      await tester.tap(find.text('首页'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('config-source-dismiss')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('config-source-restored-warning')), findsNothing);
+      await tester.tap(find.text('首页'));
+      await tester.pumpAndSettle();
       expect(tester.getRect(find.byType(AppSideBar)), sidebar);
       expect(tester.getRect(find.byType(AppShellTransition)), content);
       expect(tester.takeException(), isNull);

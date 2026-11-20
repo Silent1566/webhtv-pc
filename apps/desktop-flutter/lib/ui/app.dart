@@ -1052,72 +1052,47 @@ class _AppShellState extends State<AppShell> {
             onOpenLocalFile: _openLocalMediaFile,
           ),
           Expanded(
-            child: Row(
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                AppSideBar(
-                  section: _section,
-                  updateCount: _state.followingUpdateCount,
-                  onSelect: (value) => setState(() {
-                    // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
-                    if (value == ShellSection.search) {
-                      _pendingSearchKeyword = null;
-                    }
-                    _section = value;
-                  }),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: _WallpaperBackdrop(
-                    url: _state.config?.wallpaper,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AppShellTransition(
+                Row(
+                  children: [
+                    AppSideBar(
+                      section: _section,
+                      updateCount: _state.followingUpdateCount,
+                      onSelect: (value) => setState(() {
+                        // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
+                        if (value == ShellSection.search) {
+                          _pendingSearchKeyword = null;
+                        }
+                        _section = value;
+                      }),
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: _WallpaperBackdrop(
+                        url: _state.config?.wallpaper,
+                        child: AppShellTransition(
                           sectionIndex: _section.index,
                           child: _buildContent(),
                         ),
-                        if (startupNotifications.isNotEmpty)
-                          Positioned.fill(
-                            child: Padding(
-                              padding: const EdgeInsets.all(AppSpace.md),
-                              child: Align(
-                                alignment: Alignment.topRight,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 720,
-                                  ),
-                                  child: SingleChildScrollView(
-                                    primary: false,
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      spacing: AppSpace.sm,
-                                      children: [
-                                        for (final notification
-                                            in startupNotifications)
-                                          Material(
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: AppRadius.mdAll,
-                                              side: BorderSide(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .outlineVariant
-                                                    .withValues(alpha: 0.6),
-                                              ),
-                                            ),
-                                            clipBehavior: Clip.antiAlias,
-                                            child: notification,
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (startupNotifications.isNotEmpty)
+                  Positioned.fill(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: SingleChildScrollView(
+                        primary: false,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: startupNotifications,
+                        ),
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),
