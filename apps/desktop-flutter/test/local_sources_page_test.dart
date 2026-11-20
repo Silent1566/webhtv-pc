@@ -20,7 +20,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/local_sources_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
-import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+import 'local_source_sites_test.dart'
+    show LocalSourceTestPythonEnvironment, deleteTempWhenReleased;
 
 AppPaths _tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
@@ -69,7 +70,14 @@ Future<void> _pumpPage(
   addTearDown(tester.view.reset);
   // 每个用例的 AppState 都必须释放：否则它名下的定时器、日志与 sidecar
   // 回收会在 tearDown 删临时目录时还持有句柄（Windows 报 OS Error 32）。
-  addTearDown(state.dispose);
+  addTearDown(() async {
+    state.dispose();
+    var idle = false;
+    final pending = state.pythonEnvironmentIdle.then((_) => idle = true);
+    await _settleIo(tester, () => idle);
+    expect(idle, isTrue, reason: 'dispose 必须等待 Python 环境任务真正退出');
+    await pending;
+  });
   await tester.pumpWidget(
     MaterialApp(
       theme: theme,
@@ -151,12 +159,24 @@ void main() {
   late AppState state;
 
   setUp(() {
-    temp = Directory.systemTemp.createTempSync('webhtv_local_page_');
+    temp = Directory(
+      p.join(
+        Directory.systemTemp.path,
+        'webhtv_local_page_${pid}_${DateTime.now().microsecondsSinceEpoch}',
+      ),
+    )..createSync();
     // 日志也必须落在 temp 内：`LogService` 未显式 open 时不得摸默认目录。
     LogService.logDirectoryOverride = p.join(temp.path, 'logs');
     paths = _tempPaths(temp);
     paths.ensureDirectories();
-    state = AppState(paths: paths, log: LogService());
+    // 页面测试不启动真实 Python 准备（Isolate + 真实解包）：那会在 fake-async 里
+    // 留下跨区任务，teardown 的 idle 断言就只能靠碰运气。取消/提交语义由
+    // `local_source_enable_test.dart` 用真实夹具覆盖，这里用仓库既有的替身。
+    state = AppState(
+      paths: paths,
+      log: LogService(),
+      pythonEnvironment: LocalSourceTestPythonEnvironment(paths: paths),
+    );
   });
 
   tearDown(() async {
@@ -351,6 +371,7 @@ void main() {
 
   testWidgets('模糊搜索匹配名称 key 和路径，可清空搜索且无匹配时有提示', (tester) async {
     final root = makeRoot('search');
+    expect(root.path.toLowerCase(), isNot(contains('js')));
     File(p.join(root.path, 'csp_demo.py'))
         .writeAsStringSync('class Spider: pass');
     await _pumpPage(tester, state);
@@ -361,6 +382,10 @@ void main() {
     expect(_candidateOrder(tester), ['candidate-csp_demo']);
     await tester.enterText(_key('local-sources-query'), 'search js');
     await tester.pump();
+    expect(
+      tester.widget<TextField>(_key('local-sources-query')).controller!.text,
+      'search js',
+    );
     expect(_candidateOrder(tester), ['candidate-b']);
     expect(tester.widget<CheckboxListTile>(_key('candidate-b')).value, isTrue);
     expect(_selectionCount(tester), '已选 1 / 4 · 当前显示 1');
@@ -372,6 +397,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(_candidateTiles(tester).length, 4);
     expect(tester.widget<CheckboxListTile>(_key('candidate-b')).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('路径搜索保留祖先目录：search 与 js 同时在根路径时匹配全部候选', (tester) async {
+    final root = makeRoot('search-js');
+    File(p.join(root.path, 'csp_demo.py'))
+        .writeAsStringSync('class Spider: pass');
+    await _pumpPage(tester, state);
+    await _scan(tester, root.path, expectKey: 'a');
+    await tester.enterText(_key('local-sources-query'), 'search js');
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(_key('local-sources-query')).controller!.text,
+      'search js',
+    );
+    expect(
+      _candidateOrder(tester),
+      unorderedEquals([
+        'candidate-a',
+        'candidate-b',
+        'candidate-c',
+        'candidate-csp_demo',
+      ]),
+    );
     expect(tester.takeException(), isNull);
   });
 

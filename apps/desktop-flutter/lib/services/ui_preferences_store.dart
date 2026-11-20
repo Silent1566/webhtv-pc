@@ -635,8 +635,9 @@ class UiPreferencesStore {
           _metaPipeline = MetaPipeline.fromJson(ui['metaPipeline']);
           if (ui['metaPipelineVersion'] is! num ||
               (ui['metaPipelineVersion'] as num) < 1) {
-            _metaPipeline = _metaPipeline!.withSourceFallbackAdded();
-            migrateMetaPipeline = true;
+            final migrated = _metaPipeline!.withSourceFallbackAdded();
+            migrateMetaPipeline = !identical(migrated, _metaPipeline);
+            _metaPipeline = migrated;
           }
           _metaOverrides = MetaOverrideStore.fromJson(ui['metaOverrides']);
           final showScrapedName = ui['episodeShowScrapedName'];
@@ -1260,7 +1261,9 @@ class UiPreferencesStore {
         final rules = rawRules is Map
             ? Map<String, Object?>.from(rawRules)
             : <String, Object?>{};
-        final migrated = MetaPipeline.fromJson(rules).withSourceFallbackAdded();
+        final pipeline = MetaPipeline.fromJson(rules);
+        final migrated = pipeline.withSourceFallbackAdded();
+        if (identical(migrated, pipeline)) return false;
         for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
           final rawRule = rules[field.key];
           rules[field.key] = {

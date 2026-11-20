@@ -35,8 +35,9 @@ class _PythonBundleStore {
         writeStamp: writeStamp,
       );
 
-  String? installed() {
+  Future<String?> installed(_PythonPreparation preparation) async {
     try {
+      await preparation.checkpoint();
       final generation = _readJson(_pointer)['generation'];
       if (generation is! String ||
           !RegExp(r'^env-[a-z0-9-]+$').hasMatch(generation)) {
@@ -49,19 +50,24 @@ class _PythonBundleStore {
         _readJson(p.join(directory, '.bundle.json')),
       );
       for (final item in files.values) {
+        await preparation.checkpoint();
         final file = File(
           p.joinAll([directory, ...(item['path'] as String).split('/')]),
         );
         _assertNoLinks(file.path);
         if (!file.existsSync() ||
             file.lengthSync() != item['size'] ||
-            sha256.convert(file.readAsBytesSync()).toString() !=
+            (await _preparationDigest(
+                  file.readAsBytesSync(),
+                  preparation,
+                )).toString() !=
                 item['sha256']) {
           return null;
         }
       }
       return p.join(directory, _bundledPythonEntry);
     } catch (error) {
+      preparation.check();
       _pointerDamaged = true;
       metadataError = '运行时元数据损坏：$error；请离线修复或恢复默认';
       return null;
@@ -72,7 +78,9 @@ class _PythonBundleStore {
     String bundle,
     PythonEnvironmentProbe probe,
     Map<String, String>? environment,
+    _PythonPreparation preparation,
   ) async {
+    await preparation.checkpoint();
     _assertNoLinks(bundle);
     final manifestFile = File(p.join(bundle, 'bundle.json'));
     _assertNoLinks(manifestFile.path);
@@ -85,7 +93,8 @@ class _PythonBundleStore {
     if (zipFile.lengthSync() > _zipCap) throw StateError('ZIP 超过 64MiB');
     final bytes = zipFile.readAsBytesSync();
     if (bytes.length > _zipCap ||
-        sha256.convert(bytes).toString() != manifest['archiveSha256']) {
+        (await _preparationDigest(bytes, preparation)).toString() !=
+            manifest['archiveSha256']) {
       throw StateError('ZIP SHA256 校验失败');
     }
     final directory = ZipDirectory()..read(InputMemoryStream(bytes));
@@ -96,6 +105,7 @@ class _PythonBundleStore {
     final seen = <String>{};
     var expanded = 0;
     for (final header in directory.fileHeaders) {
+      await preparation.checkpoint();
       final local = header.file;
       final path = header.filename;
       final isDir = path.endsWith('/');
@@ -145,6 +155,7 @@ class _PythonBundleStore {
     var committed = false;
     try {
       for (final header in directory.fileHeaders) {
+        await preparation.checkpoint();
         if (header.filename.endsWith('/')) continue;
         final item = expected[header.filename.toLowerCase()]!;
         final output = _CappedOutput(item['size'] as int);
@@ -161,6 +172,7 @@ class _PythonBundleStore {
         file.parent.createSync(recursive: true);
         file.writeAsBytesSync(content, flush: true);
       }
+      await preparation.checkpoint();
       File(p.join(stage.path, '.bundle.json'))
           .writeAsStringSync(jsonEncode(manifest), flush: true);
       final executable = p.join(stage.path, _bundledPythonEntry);
@@ -179,6 +191,11 @@ class _PythonBundleStore {
         PythonEnvironmentSource.bundled,
         environment,
       );
+      // 取消的线性化边界就在这里：checkpoint 通过后到 _atomicJson 是同步的，
+      // 中间没有 await。若 close 恰好在这个窗口之后到达，取消消息只能排队，
+      // active.json 仍可能被提交（主端只保证不再发布 status）。
+      // 因此不要宣称「close 先于 rename 就一定不会改 active」。
+      await preparation.checkpoint();
       if (!status.ready || status.version != manifest['pythonVersion']) {
         throw StateError('stage Python 未就绪/版本不匹配：${status.error}');
       }
@@ -199,6 +216,22 @@ class _PythonBundleStore {
       }
     }
   }
+}
+
+Future<Digest> _preparationDigest(
+  List<int> bytes,
+  _PythonPreparation preparation,
+) {
+  Stream<List<int>> chunks() async* {
+    const chunkSize = 64 * 1024;
+    for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+      await preparation.checkpoint();
+      final end = offset + chunkSize;
+      yield bytes.sublist(offset, end > bytes.length ? bytes.length : end);
+    }
+  }
+
+  return sha256.bind(chunks()).first;
 }
 
 Map<String, Map<String, dynamic>> _manifestFiles(

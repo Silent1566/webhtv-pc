@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
+import 'package:webhtv_pc/services/python_environment.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/spider_page.dart';
 
@@ -45,6 +46,13 @@ void main() {
     state = AppState(
       paths: paths,
       log: LogService(),
+      // 本夹具只 import Python 标准库，目标是页面/真实宿主启停，而非离线包安装。
+      // 显式使用真实系统解释器探测，避免扫描样本时顺带解包整个发行版运行时；
+      // 包准备/取消由 python_environment 与 local_source_enable 用例另行覆盖。
+      pythonEnvironment: PythonEnvironment(
+        paths: paths,
+        bundleDirectory: p.join(tempDir.path, 'no-bundled-runtime'),
+      ),
       sidecarHostPath: p.join(
         repositoryRoot.path,
         'sidecars',
@@ -271,6 +279,17 @@ void main() {
       // 触发一次真实调用，让运行时真正启动（§9.8）。
       final outcome = await state.searchAll('样本', maxConcurrency: 1);
       expect(outcome.results, isNotEmpty);
+      expect(
+        state.pythonEnvironmentStatus?.source,
+        PythonEnvironmentSource.system,
+        reason: '本用例必须真实运行系统 Python，而不是静默安装离线运行时',
+      );
+      expect(
+        File(p.join(paths.dataDir, 'runtime', 'python', 'active.json'))
+            .existsSync(),
+        isFalse,
+        reason: '只依赖标准库的启停夹具不得顺带安装整个运行时',
+      );
 
       final statuses = state.spiderRuntimeStatuses();
       expect(statuses, hasLength(1));

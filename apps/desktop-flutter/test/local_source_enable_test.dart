@@ -14,12 +14,17 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ipc_protocol.dart';
 import 'package:webhtv_pc/services/local_source_enable_store.dart';
 import 'package:webhtv_pc/services/log_service.dart';
+import 'package:webhtv_pc/services/python_environment.dart';
 import 'package:webhtv_pc/services/spider_registry.dart';
+import 'package:webhtv_pc/services/spider_process.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
 import 'local_source_sites_test.dart'
@@ -30,17 +35,30 @@ import 'local_source_sites_test.dart'
         writeCandidates,
         writeManifest;
 
+import 'python_environment_test.dart' show fixtureBundle, fixtureProbe;
+
+Future<void> waitForFile(File file) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!file.existsSync() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+  expect(file.existsSync(), isTrue, reason: file.path);
+}
+
 void main() {
   late Directory temp;
 
   setUp(() {
     temp = Directory.systemTemp.createTempSync('webhtv_local_enable_');
-    LogService.logDirectoryOverride = p.join(temp.path, 'logs');
-  });
-
-  tearDown(() async {
-    LogService.logDirectoryOverride = null;
-    await deleteTempWhenReleased(temp);
+    final ownedTemp = temp;
+    final logDirectory = p.join(ownedTemp.path, 'logs');
+    LogService.logDirectoryOverride = logDirectory;
+    addTearDown(() async {
+      if (LogService.logDirectoryOverride == logDirectory) {
+        LogService.logDirectoryOverride = null;
+      }
+      await deleteTempWhenReleased(ownedTemp);
+    });
   });
 
   File enableFile(Directory dir) =>
@@ -125,6 +143,213 @@ void main() {
       expect(store.setEnabled('a', false), isTrue);
       expect(outside.readAsStringSync(), 'keep');
       expect(link.existsSync(), isTrue);
+    });
+  });
+
+  group('准备任务生命周期', () {
+    test('dispose 取消真实 Python probe 并等待子进程退出', () async {
+      final paths = tempPaths(temp);
+      final modules = Directory(p.join(temp.path, 'modules'))..createSync();
+      final marker = File(p.join(temp.path, 'probe-started'));
+      final lateWrite = File(p.join(temp.path, 'probe-late-write'));
+      File(p.join(modules.path, 'requests.py')).writeAsStringSync('''
+import os
+import pathlib
+import time
+pathlib.Path(${jsonEncode(marker.path)}).write_text(str(os.getpid()))
+time.sleep(3)
+pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
+''');
+      final python = SidecarRuntimeResolver.pythonCandidates(
+        queryLauncher: false,
+      ).firstWhere((command) => File(command.executable).existsSync());
+      final env = PythonEnvironment(
+        paths: paths,
+        bundleDirectory: p.join(temp.path, 'absent-bundle'),
+        systemCandidates: [python.executable],
+        processEnvironment: {
+          ...Platform.environment,
+          'PYTHONPATH': modules.path,
+        },
+      );
+      final state = AppState(
+        paths: paths,
+        pythonEnvironment: env,
+        log: LogService(),
+      );
+      final pending = state.refreshPythonEnvironment();
+      var disposed = false;
+      addTearDown(() async {
+        if (!disposed) state.dispose();
+        await pending;
+        await state.pythonEnvironmentIdle;
+      });
+      await waitForFile(marker);
+      final stopwatch = Stopwatch()..start();
+      state.dispose();
+      disposed = true;
+      await pending;
+      await state.pythonEnvironmentIdle;
+      stopwatch.stop();
+      debugPrint(
+        '[local-lifecycle] probe cancellation idle=${stopwatch.elapsedMilliseconds}ms pid=${marker.readAsStringSync()}',
+      );
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(env.status, isNull, reason: '取消后不得发布 probe 结果');
+      expect(env.error, contains('取消'));
+      await Future<void>.delayed(const Duration(milliseconds: 3200));
+      expect(lateWrite.existsSync(), isFalse, reason: '子进程必须真正退出');
+    });
+
+    test('dispose 取消解包并回滚 stage，idle 后不再写盘或提交', () async {
+      final bundle = fixtureBundle(temp);
+      final manifestFile = File(p.join(bundle, 'bundle.json'));
+      final manifest =
+          jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
+      final archive = ZipDecoder().decodeBytes(
+        File(p.join(bundle, 'python-runtime.zip')).readAsBytesSync(),
+      );
+      final content = List<int>.generate(16384, (index) => index % 251);
+      for (var i = 0; i < 1500; i++) {
+        final path = 'lib/file-$i.bin';
+        archive.add(ArchiveFile(path, content.length, content));
+        (manifest['files'] as List).add({
+          'path': path,
+          'size': content.length,
+          'sha256': sha256.convert(content).toString(),
+        });
+      }
+      final zip = ZipEncoder().encode(archive);
+      File(p.join(bundle, 'python-runtime.zip')).writeAsBytesSync(zip);
+      manifest['archiveSha256'] = sha256.convert(zip).toString();
+      manifestFile.writeAsStringSync(jsonEncode(manifest));
+      final paths = tempPaths(temp);
+      final env = PythonEnvironment(
+        paths: paths,
+        bundleDirectory: bundle,
+        probe: fixtureProbe,
+        systemCandidates: const [],
+      );
+      final state = AppState(
+        paths: paths,
+        pythonEnvironment: env,
+        log: LogService(),
+      );
+      final pending = state.refreshPythonEnvironment();
+      var disposed = false;
+      addTearDown(() async {
+        if (!disposed) state.dispose();
+        await pending;
+        await state.pythonEnvironmentIdle;
+      });
+      final root = Directory(p.join(paths.dataDir, 'runtime', 'python'));
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while ((!root.existsSync() ||
+              root.listSync().whereType<Directory>().isEmpty) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(root.listSync().whereType<Directory>(), isNotEmpty);
+      final cancelledAt = DateTime.now();
+      final stopwatch = Stopwatch()..start();
+      state.dispose();
+      disposed = true;
+      await pending;
+      await state.pythonEnvironmentIdle;
+      stopwatch.stop();
+      final filesAtIdle = root
+          .listSync(recursive: true)
+          .map((file) => file.path)
+          .toList();
+      debugPrint(
+        '[local-lifecycle] unpack cancelled=$cancelledAt idle=${stopwatch.elapsedMilliseconds}ms entries=${filesAtIdle.length}',
+      );
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(File(p.join(root.path, 'active.json')).existsSync(), isFalse);
+      expect(filesAtIdle, isEmpty, reason: '未提交 stage 必须由事务 finally 回滚');
+      expect(env.status, isNull);
+      expect(env.error, contains('取消'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(root.listSync(recursive: true), isEmpty, reason: 'idle 后不得继续写盘');
+    });
+
+    test('dispose 在 probe 期间取消，不发布 active 指针', () async {
+      final bundle = fixtureBundle(temp);
+      final marker = File(p.join(temp.path, 'bundle-probe-started'));
+      final paths = tempPaths(temp);
+      final markerPath = marker.path;
+      final env = PythonEnvironment(
+        paths: paths,
+        bundleDirectory: bundle,
+        systemCandidates: const [],
+        probe: (executable, arguments, source, environment) async {
+          File(markerPath).writeAsStringSync('started');
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          return fixtureProbe(executable, arguments, source, environment);
+        },
+      );
+      final state = AppState(
+        paths: paths,
+        pythonEnvironment: env,
+        log: LogService(),
+      );
+      final pending = state.refreshPythonEnvironment();
+      var disposed = false;
+      addTearDown(() async {
+        if (!disposed) state.dispose();
+        await pending;
+        await state.pythonEnvironmentIdle;
+      });
+      await waitForFile(marker);
+      final stopwatch = Stopwatch()..start();
+      state.dispose();
+      disposed = true;
+      await pending;
+      await state.pythonEnvironmentIdle;
+      stopwatch.stop();
+      final root = Directory(p.join(paths.dataDir, 'runtime', 'python'));
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(root.listSync(), isEmpty);
+      expect(env.status, isNull);
+      expect(env.error, contains('取消'));
+      debugPrint(
+        '[local-lifecycle] precommit cancellation idle=${stopwatch.elapsedMilliseconds}ms entries=0',
+      );
+    });
+
+    test('正常准备仍校验并原子提交，已提交环境不因 dispose 删除', () async {
+      final paths = tempPaths(temp);
+      final env = PythonEnvironment(
+        paths: paths,
+        bundleDirectory: fixtureBundle(temp),
+        probe: fixtureProbe,
+        systemCandidates: const [],
+      );
+      final state = AppState(
+        paths: paths,
+        pythonEnvironment: env,
+        log: LogService(),
+      );
+      await state.refreshPythonEnvironment();
+      expect(env.status?.ready, isTrue, reason: env.error);
+      final pointer = File(
+        p.join(paths.dataDir, 'runtime', 'python', 'active.json'),
+      );
+      final committed = pointer.readAsStringSync();
+      final executable = File(env.status!.executable);
+      expect(executable.existsSync(), isTrue);
+      state.dispose();
+      await state.pythonEnvironmentIdle;
+      expect(pointer.readAsStringSync(), committed);
+      expect(executable.existsSync(), isTrue);
+    });
+
+    test('reloadLocalSources 的扫描完成晚于 dispose 时不通知已释放状态', () async {
+      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final pending = state.reloadLocalSources();
+      state.dispose();
+      await expectLater(pending, completes);
+      await state.pythonEnvironmentIdle;
     });
   });
 
@@ -351,7 +576,8 @@ class Spider:
         // 可能超过 2s，固定 200×10ms 的预算会把"还没起来"误判成"从没起来过"
         // （CI 上这条曾这样红过一次）。正常情况 100-300ms 就会跳出。
         final markerDeadline = DateTime.now().add(const Duration(seconds: 15));
-        while (!marker.existsSync() && DateTime.now().isBefore(markerDeadline)) {
+        while (!marker.existsSync() &&
+            DateTime.now().isBefore(markerDeadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
         final diagnostics = Directory(state.paths.cacheDir).existsSync()
@@ -378,9 +604,15 @@ class Spider:
         expect(state.spiderSupervisor.isRunning('starting-alias'), isFalse);
         expect(state.spiderRuntimeStatuses().single.failureCount, 0);
       } finally {
-        release.writeAsStringSync('release');
-        await starting.timeout(const Duration(seconds: 5));
-        await state.stopSpider('starting-alias');
+        try {
+          release.writeAsStringSync('release');
+        } finally {
+          try {
+            await starting.timeout(const Duration(seconds: 5));
+          } finally {
+            await state.stopSpider('starting-alias');
+          }
+        }
       }
     });
 

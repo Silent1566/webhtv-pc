@@ -45,6 +45,84 @@ void main() {
     expect(external.forSource(vod, pipeline: sourceFirst).title, 'Original resource');
   });
 
+  final noOpSettings = <String, Map<String, Object?>>{
+    'missing UI': {},
+    'missing pipeline': {
+      'ui': {'externalPlayerPath': r'D:\Gone\old.exe'},
+    },
+    'empty pipeline': {
+      'ui': {'metaPipeline': <String, Object?>{}},
+    },
+    'invalid pipeline': {
+      'ui': {'metaPipeline': 'invalid'},
+    },
+    'unknown fields only': {
+      'ui': {
+        'metaPipeline': {'futureField': {'order': ['future-provider']}},
+      },
+    },
+    'invalid rule': {
+      'ui': {'metaPipeline': {'title': 'invalid'}},
+    },
+    'invalid order': {
+      'ui': {'metaPipeline': {'title': {'order': 'douban'}}},
+    },
+    'unknown providers only': {
+      'ui': {'metaPipeline': {'title': {'order': ['future-provider']}}},
+    },
+    'unsupported fields only': {
+      'ui': {'metaPipeline': {'rating': {'order': ['bangumi']}}},
+    },
+    'source already present': {
+      'ui': {
+        'metaPipeline': {'title': {'order': ['bangumi', 'source', 'douban']}},
+      },
+    },
+    'default rules with old version': {
+      'ui': {'metaPipeline': MetaPipeline.defaults.toJson(), 'metaPipelineVersion': 0},
+    },
+  };
+  for (final entry in noOpSettings.entries) {
+    test('no-op load preserves settings bytes: ${entry.key}', () async {
+      final dir = Directory.systemTemp.createTempSync('crawler-no-op');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}/settings.json');
+      final root = {
+        ...entry.value,
+        'sync': {'deviceName': 'keep'},
+        'tmdb': {'language': 'zh'},
+      };
+      final before = jsonEncode(root);
+      file.writeAsStringSync(before);
+      final store = UiPreferencesStore(path: file.path);
+
+      await store.load();
+
+      expect(store.loaded, isTrue);
+      expect(
+        store.metaPipeline.orderOf(MetaField.title),
+        entry.key == 'source already present'
+            ? [MetaSourceKind.bangumi, MetaSourceKind.source, MetaSourceKind.douban]
+            : [
+                MetaSourceKind.tmdb,
+                MetaSourceKind.douban,
+                MetaSourceKind.bangumi,
+                MetaSourceKind.wikidata,
+                MetaSourceKind.source,
+              ],
+      );
+      expect(
+        store.metaPipeline.orderOf(MetaField.rating),
+        entry.key == 'unsupported fields only'
+            ? [MetaSourceKind.bangumi]
+            : [MetaSourceKind.tmdb, MetaSourceKind.douban, MetaSourceKind.bangumi],
+      );
+      expect(file.readAsStringSync(), before);
+      await UiPreferencesStore(path: file.path).load();
+      expect(file.readAsStringSync(), before);
+    });
+  }
+
   test('legacy reordered rules gain last source once and explicit removal survives reload', () async {
     final dir = Directory.systemTemp.createTempSync('crawler-rules');
     addTearDown(() => dir.deleteSync(recursive: true));

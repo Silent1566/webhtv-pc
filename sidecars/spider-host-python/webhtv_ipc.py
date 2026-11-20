@@ -25,8 +25,10 @@
 - **宽限之后宿主退出**：错误帧只是「告诉调用方」，并不能把卡住的线程解出来。
   到期后再给站源 `TIMEOUT_ABANDON_GRACE_SECONDS` 的宽限，仍不返回说明它确实
   阻塞在无法中断的调用里——这个并发名额永久收不回，本进程主动退出（退出码
-  `EXIT_PROCESS_ABANDONED`），由上层重建。与改造前「超时后杀进程」同一兜底，
-  区别是先给出 `SPIDER_TIMEOUT`，用户看到的是超时而不是闪退。
+  `EXIT_PROCESS_ABANDONED`），由上层重建。但只要还有未超时的在途请求（包括
+  排队或正在回帧），就等它们完成/到期再回收，不能让一次超时连坐其它调用。
+  与改造前「超时后杀进程」同一兜底，区别是先给出 `SPIDER_TIMEOUT`，用户看到
+  的是超时而不是闪退。
 - **为什么并发必须有上限**：每个请求起一条线程，等于把站源的阻塞转成宿主的资源
   耗尽（线程数无界、栈内存跟着涨）。这里用有界工作池：并发 = manifest
   `limits.concurrency`（默认 4，与 JS `maxWorkers` 一致），队列同样有界，满则立刻回
@@ -359,9 +361,14 @@ class _BoundedWorkerPool:
         for thread in self._threads:
             thread.start()
 
-    def submit(self, fn: Callable[..., Any], *args: Any) -> bool:
-        """投递任务；队列已满返回 False（调用方据此回错误帧）。"""
+    def submit(
+        self, fn: Callable[..., Any], *args: Any, queue_if_busy: bool = True
+    ) -> bool:
+        """投递任务；队列已满或不允许排队且无空闲名额时返回 False。"""
         with self._lock:
+            # _pending 包括已预留但尚未执行的任务；检查与预留必须在同一把锁下。
+            if not queue_if_busy and self._pending >= len(self._threads):
+                return False
             self._pending += 1
         try:
             self._queue.put_nowait((fn, args))
@@ -560,20 +567,31 @@ class SidecarServer:
             self._calls[request_id] = call
             # 新登记可能带来更早的到期点，叫醒监视线程重算下次醒来时间。
             self._state_changed.notify_all()
-        pool = self._pool
-        if pool is not None and pool.submit(self._dispatch, message, call):
+        # heartbeat 只是宿主本地簿记，与 JS 相同，不依赖可能全部挂死的业务 worker。
+        if method == "heartbeat":
+            self._dispatch(message, call)
             return
-        # 拒绝路径：不留半登记状态，也不静默丢帧（§9.3.1 每个请求必须有应答）。
-        with self._state_changed:
-            self._calls.pop(request_id, None)
-        if self._claim(call):
-            log(f"并发已满，拒绝请求 id={request_id} method={method}")
-            self._respond_error(
-                request_id,
-                ERROR_RESOURCE_LIMIT,
-                f"sidecar 并发已满（并发上限 {self._max_workers}，队列 {self._queue_capacity}），请求被拒绝",
-                details={"maxWorkers": self._max_workers, "queueCapacity": self._queue_capacity},
-            )
+        pool = self._pool
+        if pool is not None and pool.submit(
+            self._dispatch, message, call, queue_if_busy=call.deadline_at is not None
+        ):
+            return
+        # 无宿主 deadline 的控制调用不能排在挂死 worker 后永久保护本进程。
+        # 无空闲名额时复用资源限制应答，不执行生命周期回调或改变 hold/停止状态。
+        # 拒绝帧同样是在途应答：保留登记直到 write/flush 完成，避免被回收截断。
+        try:
+            if self._claim(call):
+                log(f"并发已满，拒绝请求 id={request_id} method={method}")
+                self._respond_error(
+                    request_id,
+                    ERROR_RESOURCE_LIMIT,
+                    f"sidecar 并发已满（并发上限 {self._max_workers}，队列 {self._queue_capacity}），请求被拒绝",
+                    details={"maxWorkers": self._max_workers, "queueCapacity": self._queue_capacity},
+                )
+        finally:
+            with self._state_changed:
+                self._calls.pop(request_id, None)
+                self._state_changed.notify_all()
 
     def _deadline_of(self, message: Mapping[str, Any]) -> float | None:
         """请求的 deadline（毫秒）：帧里的 deadlineMs 优先，其次按方法默认值。
@@ -632,7 +650,10 @@ class SidecarServer:
                     if call.abandoned_at is not None
                     and now - call.abandoned_at >= self._abandon_grace
                 ]
-                if not expired and not abandoned:
+                # answered 只表示已认领应答；正常回帧仍可能尚未写完。只有
+                # abandoned_at 非空才是已超时、可以随挂死 worker 一起回收的调用。
+                protected = any(call.abandoned_at is None for call in self._calls.values())
+                if not expired and (not abandoned or protected):
                     upcoming = [
                         call.deadline_at - now
                         for call in self._calls.values()
@@ -642,7 +663,9 @@ class SidecarServer:
                         call.abandoned_at + self._abandon_grace - now
                         for call in self._calls.values()
                         if call.abandoned_at is not None
+                        and call.abandoned_at + self._abandon_grace > now
                     ]
+                    # 已成熟但被健康请求挡住的回收点不再参与等待，避免 5ms 热轮询。
                     # 睡到最早到期点（每轮重算，登记/完成都会 notify）；没有在途
                     # deadline 时 0.5s 醒一次。「睡到点」而不是轮询，是为了让错误帧
                     # 尽量贴近 deadline 发出，而不是晚一个轮询周期。
@@ -670,10 +693,15 @@ class SidecarServer:
                 except Exception as error:  # noqa: BLE001 - 管道断了由下游收尾
                     log(f"回写超时错误帧失败：{error}")
                     return
-            for call in abandoned:
-                # 宽限已过、worker 仍未回来：这个并发名额再也收不回来（见 _abandon）。
-                self._abandon(call)
-                return
+            with self._state_changed:
+                # 回超时帧期间可能接受新请求，或旧 worker 已返回。必须重新核对，
+                # 并持有接收请求的同一把锁直到退出，封住 snapshot 到退出的窗口。
+                if any(call.abandoned_at is None for call in self._calls.values()):
+                    continue
+                for call in abandoned:
+                    if self._calls.get(call.request_id) is call:
+                        self._abandon(call)
+                        return
 
     def _abandon(self, call: _Call) -> None:
         """站源在 deadline 后仍未返回：本进程已收不回这个 worker，主动退出。
@@ -684,7 +712,8 @@ class SidecarServer:
         宿主侧的唯一兜底（超时后杀进程），区别在于我们现在先给出了 SPIDER_TIMEOUT
         错误帧，用户看到的是超时，而不是莫名闪退。
 
-        os._exit 前必须持有 _write_lock：否则可能把另一条正在写的帧截成半截，
+        调用方持有 _state_lock 并确认没有健康在途；再取 _write_lock 后退出，
+        避免与新请求登记交错。os._exit 前必须持有 _write_lock：否则可能截断帧，
         宿主会判成协议污染，真实死因（站源挂死）就被掩盖了。
         """
         with self._write_lock:
@@ -702,6 +731,7 @@ class SidecarServer:
             # 排队期间就已到期/被拒：不再执行站源方法，把并发名额留给有效请求。
             with self._state_changed:
                 self._calls.pop(request_id, None)
+                self._state_changed.notify_all()
             log(f"请求已应答（超时或被拒），跳过执行 id={request_id} method={method}")
             return
         params = message.get("params") or {}
@@ -743,6 +773,7 @@ class SidecarServer:
         finally:
             with self._state_changed:
                 self._calls.pop(request_id, None)
+                self._state_changed.notify_all()
 
     def _on_cancel(self, message: Mapping[str, Any]) -> None:
         params = message.get("params") or {}
