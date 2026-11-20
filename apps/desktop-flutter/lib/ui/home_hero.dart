@@ -33,15 +33,14 @@ String homeHeroPrimaryLabel(HomeItemKind kind) => switch (kind) {
   HomeItemKind.resume => '继续播放',
   HomeItemKind.following => '从最新一集开始',
   HomeItemKind.recommend => '查看详情',
-  // 热门条目不会进 hero（`buildHomeFeed` 不产出 hot），这里只为穷尽枚举。
-  HomeItemKind.hot => '搜索片源',
+  HomeItemKind.hot => '查看详情',
 };
 
 String homeHeroSecondaryLabel(HomeItemKind kind) => switch (kind) {
   HomeItemKind.resume => '查看详情',
   HomeItemKind.following => '查看详情',
   HomeItemKind.recommend => '去找片源',
-  HomeItemKind.hot => '搜索片源',
+  HomeItemKind.hot => '去找片源',
 };
 
 class HomeHero extends StatefulWidget {
@@ -52,6 +51,8 @@ class HomeHero extends StatefulWidget {
     required this.onPrimary,
     required this.onSecondary,
     this.interval = homeHeroInterval,
+    this.paintImage = true,
+    this.onIndexChanged,
   });
 
   /// 非空。空的情况由页面画空态，不进来。
@@ -61,6 +62,10 @@ class HomeHero extends StatefulWidget {
   final ValueChanged<HomeItem> onPrimary;
   final ValueChanged<HomeItem> onSecondary;
   final Duration interval;
+
+  /// 页面接管固定背景时，hero 只保留内容；无横图的夜空兜底仍由 hero 绘制。
+  final bool paintImage;
+  final ValueChanged<int>? onIndexChanged;
 
   @override
   State<HomeHero> createState() => _HomeHeroState();
@@ -155,8 +160,7 @@ class _HomeHeroState extends State<HomeHero> {
     }
     _timer ??= Timer.periodic(widget.interval, (_) {
       if (!mounted) return;
-      setState(() => _index = (_index + 1) % widget.items.length);
-      _preloadAround(_index);
+      _setIndex((_index + 1) % widget.items.length);
     });
   }
 
@@ -178,9 +182,14 @@ class _HomeHeroState extends State<HomeHero> {
 
   void _goTo(int index) {
     if (index == _index || index < 0 || index >= widget.items.length) return;
+    _setIndex(index);
+    _restart();
+  }
+
+  void _setIndex(int index) {
     setState(() => _index = index);
     _preloadAround(index);
-    _restart();
+    widget.onIndexChanged?.call(index);
   }
 
   @override
@@ -194,6 +203,7 @@ class _HomeHeroState extends State<HomeHero> {
     final item = items[index];
     final backdrop = _nonEmpty(item.backdrop);
     final poster = _nonEmpty(item.poster);
+    final paintField = widget.paintImage || backdrop == null;
     // 背景只有两种形态（用户 2026-11-19 反馈：模糊底「基本看不清」，像是在加载）：
     // - 有 16:9 背景图 → 满幅铺开，这是唯一能当「大海报」用的素材；
     // - 没有 → 夜空渐变 + 左侧一张**大而锐利**的竖版海报（下面 tileHeight 那段）。
@@ -236,17 +246,18 @@ class _HomeHeroState extends State<HomeHero> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            AnimatedSwitcher(
-              duration: _reduced
-                  ? Duration.zero
-                  : const Duration(milliseconds: 600),
-              child: SizedBox.expand(
-                key: ValueKey('home-hero-backdrop-$index'),
-                child: field,
+            if (paintField) ...[
+              AnimatedSwitcher(
+                duration: _reduced
+                    ? Duration.zero
+                    : const Duration(milliseconds: 600),
+                child: SizedBox.expand(
+                  key: ValueKey('home-hero-backdrop-$index'),
+                  child: field,
+                ),
               ),
-            ),
-            // 与详情页 hero 同一份遮罩实现（`backdrop_scrim.dart`）。
-            const BackdropScrim(),
+              const BackdropScrim(),
+            ],
             if (item.kind == HomeItemKind.resume && item.progress > 0)
               Positioned(
                 // 与内容同一左右内边距：贴到窗口左右缘时它读起来像一条分隔线，

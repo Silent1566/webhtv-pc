@@ -24,17 +24,24 @@ import '../core/home_feed.dart';
 import '../core/home_hot.dart';
 import '../core/meta_pipeline.dart';
 import '../core/tmdb_identity.dart';
+import '../core/tmdb_title.dart';
 import '../services/home_art_service.dart';
 import '../services/search_suggest_service.dart';
 import '../state/app_state.dart';
 import '../state/detail_recommendation_state.dart';
+import 'async_action_feedback.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
 import 'home_cards.dart';
+import 'home_backdrop.dart';
 import 'history_cross_source.dart';
 import 'history_entry_detail.dart';
 import 'home_hero.dart';
 import 'playback_resume.dart';
+import 'recommendation_info_dialog.dart';
+import 'search_page.dart';
+import 'tmdb_detail_page.dart';
+import 'tmdb_widgets.dart' show copyToClipboard;
 import 'tokens.dart';
 
 /// hero 的容量上限（与 `core/home_feed.dart` 的 `_heroMax` 同一个数）。
@@ -74,7 +81,7 @@ class HomePage extends StatefulWidget {
   /// 未导入配置时的主按钮：打开配置页。
   final VoidCallback onImportConfig;
 
-  /// 点「热门」卡片：带着这个词去搜索页（搜索页已有 `initialKeyword` 自动搜索）。
+  /// 热门「去找片源」：带着标题去搜索页（`initialKeyword` 自动搜索）。
   final ValueChanged<String> onSearch;
 
   @override
@@ -82,6 +89,15 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  final ValueNotifier<int> _heroIndex = ValueNotifier(0);
+  int _heroItemCount = 0;
+  late final _recommendationFeedback =
+      _state.recommendationDependencies.feedback;
+
+  void _onRecommendationFeedback() {
+    if (mounted) setState(() {});
+  }
+
   /// 已到达的推荐：行 → 条目。空表示还没到（或失败后永远不来）。
   final Map<RecommendationRow, List<RecommendationEntry>> _recommendations = {};
 
@@ -109,6 +125,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _recommendationFeedback.addListener(_onRecommendationFeedback);
     // 放到首帧之后：第一帧必须是本地内容，不能被网络挡住（§5「不显示骨架」）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadRecommendations();
@@ -125,6 +142,8 @@ class _HomePageState extends State<HomePage> {
     if (_leased) _state.recommendationDependencies.release();
     _air?.removeListener(_onAirChanged);
     _air?.dispose();
+    _heroIndex.dispose();
+    _recommendationFeedback.removeListener(_onRecommendationFeedback);
     super.dispose();
   }
 
@@ -205,6 +224,7 @@ class _HomePageState extends State<HomePage> {
     final request = RecommendationRequest(
       current: seeds.first,
       history: seeds.skip(1).toList(),
+      blockedTitles: _recommendationFeedback.blockedTitles,
     );
     final loaders = _state.recommendationDependencies.acquire();
     _leased = true;
@@ -443,6 +463,12 @@ class _HomePageState extends State<HomePage> {
     final history = _state.recentHistory(sourceKey: '');
     final followings = _recentFollowings(_state.followings);
     final local = buildHomeFeed(history: history, followings: followings);
+    final blocked = _recommendationFeedback.blockedTitles;
+    List<RecommendationEntry> recommended(RecommendationRow row) => [
+      for (final entry
+          in _recommendations[row] ?? const <RecommendationEntry>[])
+        if (!blocked.contains(recommendationTitleKey(entry.item.title))) entry,
+    ];
     final feed = _recommendations.isEmpty
         ? local
         : _merge(
@@ -450,10 +476,8 @@ class _HomePageState extends State<HomePage> {
             buildHomeFeed(
               history: history,
               followings: followings,
-              tmdbRecommendations:
-                  _recommendations[RecommendationRow.tmdb] ?? const [],
-              doubanRecommendations:
-                  _recommendations[RecommendationRow.douban] ?? const [],
+              tmdbRecommendations: recommended(RecommendationRow.tmdb),
+              doubanRecommendations: recommended(RecommendationRow.douban),
             ),
           );
     _ensureFollowingMeta(feed);
@@ -471,11 +495,15 @@ class _HomePageState extends State<HomePage> {
     // 首屏兜底（用户 2026-11-19 问「第一次用的时候海报取什么」）：
     // 没有历史、没有追剧、推荐也还没到时，hero 用**热门榜单**的前 12 条——
     // 于是第一次打开就看到一组真实的海报轮播，而不是一块只会说「还没有内容」
-    // 的渐变。点主按钮 = 带着标题去搜索（与热门卡同一条路）。
+    // 的渐变。主按钮查看作品详情，次按钮按标题找片源（与热门卡同一条路）。
     //
     // 顺序要紧：先算出 hero，再据此过滤热门轨道——否则首次使用时 hero 里的
     // 12 部片会立刻在下面三条轨道里**原样再出现一遍**。
     final heroItems = hero.isNotEmpty ? hero : _hotHeroFallback(hotRails(_hot));
+    if (_heroItemCount != heroItems.length) {
+      _heroItemCount = heroItems.length;
+      _heroIndex.value = 0;
+    }
 
     // 热门接在本机轨道之后（用户 2026-11-19：用过也照样要给热门），
     // 并去掉 hero 里已经有的条目。
@@ -492,39 +520,73 @@ class _HomePageState extends State<HomePage> {
             (item) => (item.backdrop ?? '').trim().isNotEmpty,
           ),
         );
-        return CustomScrollView(
-          key: const ValueKey('home-scroll'),
-          slivers: [
-            SliverToBoxAdapter(
-              child: heroItems.isEmpty
-                  ? _HomeEmptyHero(
-                      height: heroHeight,
-                      hasConfig: _state.hasConfig,
-                      onImportConfig: widget.onImportConfig,
-                      onOpenBrowse: widget.onOpenBrowse,
-                    )
-                  : HomeHero(
-                      items: heroItems,
-                      height: heroHeight,
-                      onPrimary: (item) =>
-                          _activate(context, item, primary: true),
-                      onSecondary: (item) =>
-                          _activate(context, item, primary: false),
-                    ),
-            ),
-            for (final rail in [...rails, ...hot])
-              SliverToBoxAdapter(
-                child: HomeRailView(
-                  rail: rail,
-                  onTap: (item) => _activate(context, item, primary: false),
-                  onSeeAll: switch (rail.seeAll) {
-                    HomeSeeAll.history => widget.onOpenHistory,
-                    HomeSeeAll.following => widget.onOpenFollowing,
-                    null => null,
-                  },
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _heroIndex,
+                  builder: (context, index, _) =>
+                      HomeBackdrop(items: heroItems, index: index),
                 ),
               ),
-            const SliverToBoxAdapter(child: SizedBox(height: AppSpace.xxl)),
+            ),
+            CustomScrollView(
+              key: const ValueKey('home-scroll'),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: heroItems.isEmpty
+                      ? _HomeEmptyHero(
+                          height: heroHeight,
+                          hasConfig: _state.hasConfig,
+                          onImportConfig: widget.onImportConfig,
+                          onOpenBrowse: widget.onOpenBrowse,
+                        )
+                      : HomeHero(
+                          items: heroItems,
+                          height: heroHeight,
+                          paintImage: false,
+                          onIndexChanged: (index) => _heroIndex.value = index,
+                          onPrimary: (item) =>
+                              _activate(context, item, primary: true),
+                          onSecondary: (item) =>
+                              _activate(context, item, primary: false),
+                        ),
+                ),
+                for (final rail in [...rails, ...hot])
+                  SliverToBoxAdapter(
+                    child: HomeRailView(
+                      rail: rail,
+                      onTap: (item) => _activate(
+                        context,
+                        item,
+                        primary:
+                            item.kind == HomeItemKind.recommend ||
+                            item.kind == HomeItemKind.hot,
+                      ),
+                      onLongPress: switch (rail.kind) {
+                        HomeRailKind.recommendTmdb ||
+                        HomeRailKind.recommendDouban => (item) => unawaited(
+                          _showRecommendationInfo(item),
+                        ),
+                        HomeRailKind.hotMovie ||
+                        HomeRailKind.hotTv ||
+                        HomeRailKind.hotVariety => (item) => unawaited(
+                          _showHotInfo(item, rail.kind),
+                        ),
+                        _ => null,
+                      },
+                      onSeeAll: switch (rail.seeAll) {
+                        HomeSeeAll.history => widget.onOpenHistory,
+                        HomeSeeAll.following => widget.onOpenFollowing,
+                        null => null,
+                      },
+                    ),
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpace.xxl)),
+              ],
+            ),
           ],
         );
       },
@@ -597,16 +659,237 @@ class _HomePageState extends State<HomePage> {
         }
         return;
       case HomeItemKind.hot:
-        // 热门只有标题：带上它去搜索页，由用户挑站源（首页不做第二条解析链）。
-        widget.onSearch(item.title);
+        if (primary) {
+          await _openHotDetail(item);
+        } else {
+          widget.onSearch(item.title);
+        }
         return;
       case HomeItemKind.recommend:
-        // 推荐卡在第一版只做展示入口：点主按钮去点播页按标题找片源，
-        // 与「首页不放第二条播放链路」的约束一致；精确的三条去向
-        // （站点命中 / 导航源 / 纯标题搜索）留在详情页的推荐行里。
-        widget.onOpenBrowse();
+        if (primary) {
+          await _openRecommendationDetail(context, item);
+        } else {
+          await _searchRecommendation(item.title, item.entry?.item.identity);
+        }
         return;
     }
+  }
+
+  Future<void> _searchRecommendation(String title, [TmdbIdentity? identity]) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('搜索站源')),
+          body: SearchPage(
+            state: _state,
+            initialKeyword: title,
+            identityHint: identity,
+          ),
+        ),
+      ),
+    );
+  }
+
+  RecommendationInfo _recommendationInfo(HomeItem item) => RecommendationInfo(
+    title: item.title,
+    sourceLabel: item.entry?.source == RecommendationSource.douban
+        ? '豆瓣'
+        : 'TMDB',
+    posterUrl: item.poster,
+    meta: [
+      ...item.subtitle.split(' · ').where((part) => part.trim().isNotEmpty),
+      if ((item.entry?.doubanRating ?? 0) > 0)
+        '豆瓣 ${item.entry!.doubanRating.toStringAsFixed(1)}',
+    ],
+    overview: item.overview,
+    reason: item.reason,
+    credit: item.entry?.item.credit,
+    openLabel: item.entry?.item.identity == null ? '去找片源' : '详情',
+  );
+
+  Future<void> _showRecommendationInfo(HomeItem item) {
+    return showRecommendationInfo(
+      context,
+      info: _recommendationInfo(item),
+      onOpen: () => unawaited(
+        item.entry?.item.identity == null
+            ? _searchRecommendation(item.title)
+            : _activate(context, item, primary: true),
+      ),
+      onNotInterested: () async => _recommendationFeedback.block(item.title),
+    );
+  }
+
+  Future<void> _showHotInfo(HomeItem item, HomeRailKind kind) {
+    final category = switch (kind) {
+      HomeRailKind.hotMovie => HotRankCategory.movie,
+      HomeRailKind.hotTv => HotRankCategory.series,
+      HomeRailKind.hotVariety => HotRankCategory.variety,
+      _ => throw ArgumentError.value(kind),
+    };
+    final source = _hot[category]
+        ?.where(
+          (row) => hotItem(row, categoryKey: category.name).key == item.key,
+        )
+        .firstOrNull;
+    return showRecommendationInfo(
+      context,
+      info: RecommendationInfo(
+        title: item.title,
+        kind: RecommendationInfoKind.hot,
+        sourceLabel: '360kan · ${category.label}榜',
+        posterUrl: item.poster,
+        meta: [
+          if ((source?.rank ?? 0) > 0) '第 ${source!.rank} 名',
+          if (item.subtitle.isNotEmpty) item.subtitle,
+          if (item.reason.isNotEmpty && item.reason != '热门') item.reason,
+        ],
+      ),
+      onOpen: () => unawaited(_openHotDetail(item)),
+      onSearchSource: () => widget.onSearch(item.title),
+    );
+  }
+
+  Future<void> _openRecommendationDetail(BuildContext context, HomeItem item) {
+    final entry = item.entry;
+    final identity = entry?.item.identity;
+    if (identity == null) {
+      // 没有 TMDB 身份时只展示已有资料，不伪造详情身份或跳到无关站点。
+      return _showRecommendationInfo(item);
+    }
+    return _openItemDetail(entry!.item);
+  }
+
+  Future<void> _openHotDetail(HomeItem item) async {
+    final feedback = AsyncActionFeedback.begin(context, '正在查找详情：${item.title}');
+    if (feedback == null) return;
+    try {
+      final service = _state.tmdbService;
+      if (!service.config.isReady) {
+        feedback.dismiss();
+        await _hotDetailUnavailable(item, '未配置 TMDB，暂时无法查询热门作品详情。可先去找片源。');
+        return;
+      }
+      final mediaType = switch (item.key.split(':').elementAtOrNull(1)) {
+        'movie' => TmdbMediaType.movie,
+        'series' || 'variety' => TmdbMediaType.tv,
+        _ => null,
+      };
+      final candidates = [
+        for (final candidate in await service.search(item.title))
+          if (candidate.identity != null &&
+              (mediaType == null || candidate.mediaType == mediaType))
+            candidate,
+      ];
+      if (!mounted || !feedback.isCurrent) return;
+      feedback.dismiss();
+      if (candidates.isEmpty) {
+        await _hotDetailUnavailable(item, '暂未找到《${item.title}》的作品详情，可先去找片源。');
+        return;
+      }
+      final title = normalizeTitle(item.title);
+      final exact = candidates
+          .where((candidate) => normalizeTitle(candidate.title) == title)
+          .toList();
+      final selected = exact.length == 1
+          ? exact.single
+          : await _chooseHotDetail(item, exact.isEmpty ? candidates : exact);
+      if (!mounted || !feedback.isCurrent || selected == null) return;
+      await _openItemDetail(selected);
+    } catch (_) {
+      if (!mounted || !feedback.isCurrent) return;
+      feedback.dismiss();
+      await _hotDetailUnavailable(item, '暂未取得《${item.title}》的详情，请稍后重试，或先去找片源。');
+    } finally {
+      feedback.close();
+    }
+  }
+
+  Future<TmdbItem?> _chooseHotDetail(HomeItem item, List<TmdbItem> candidates) {
+    return showDialog<TmdbItem>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        key: const ValueKey('home-hot-details-picker'),
+        title: Text('选择《${item.title}》的详情'),
+        children: [
+          SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final candidate in candidates)
+                  ListTile(
+                    key: ValueKey(
+                      'home-hot-candidate-${candidate.identity!.key}',
+                    ),
+                    leading: Icon(
+                      candidate.isMovie ? Icons.movie_outlined : Icons.tv,
+                    ),
+                    title: Text(candidate.title),
+                    subtitle: Text(candidate.subtitle),
+                    onTap: () => Navigator.of(dialogContext).pop(candidate),
+                  ),
+              ],
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const ValueKey('home-hot-details-cancel'),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _hotDetailUnavailable(HomeItem item, String message) async {
+    final search = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('home-hot-details-unavailable'),
+        title: const Text('暂未找到详情'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('关闭'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('home-hot-details-search'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.search),
+            label: const Text('去找片源'),
+          ),
+        ],
+      ),
+    );
+    if (mounted && search == true) widget.onSearch(item.title);
+  }
+
+  Future<void> _openItemDetail(TmdbItem item) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdbDetailPage(
+          service: _state.tmdbService,
+          identity: item.identity!,
+          initialItem: item,
+          recommendationDependencies: _state.recommendationDependencies,
+          ratingService: _state.detailRatingService,
+          omdbApiKey: _state.tmdbConfig.omdbApiKey,
+          initialViewMode: _state.episodeViewMode,
+          onViewModeChanged: (mode) =>
+              unawaited(_state.setEpisodeViewMode(mode)),
+          onSearchTitle: (title) => unawaited(_searchRecommendation(title)),
+          onSearchSource: (title, hint) =>
+              unawaited(_searchRecommendation(title, hint)),
+          onOpenVideo: _state.openExternalUrl,
+          onCopyVideo: copyToClipboard,
+        ),
+      ),
+    );
   }
 }
 

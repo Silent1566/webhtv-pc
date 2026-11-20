@@ -9,8 +9,10 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/home_feed.dart';
+import 'package:webhtv_pc/ui/backdrop_scrim.dart';
 import 'package:webhtv_pc/ui/common.dart';
 import 'package:webhtv_pc/ui/home_hero.dart';
+import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 HomeItem heroItem(
@@ -20,6 +22,8 @@ HomeItem heroItem(
   String reason = '',
   String overview = '',
   List<String> tags = const [],
+  String? poster,
+  String? backdrop,
 }) => HomeItem(
   kind: kind,
   key: title,
@@ -29,14 +33,18 @@ HomeItem heroItem(
   tags: tags,
   reason: reason,
   progress: progress,
+  poster: poster,
+  backdrop: backdrop,
 );
 
 Future<void> pumpHero(
   WidgetTester tester,
   List<HomeItem> items, {
   bool disableAnimations = false,
+  bool paintImage = true,
   ValueChanged<HomeItem>? onPrimary,
   ValueChanged<HomeItem>? onSecondary,
+  ValueChanged<int>? onIndexChanged,
 }) async {
   tester.view.physicalSize = const Size(1280, 800);
   tester.view.devicePixelRatio = 1.0;
@@ -54,6 +62,8 @@ Future<void> pumpHero(
               height: 500,
               onPrimary: onPrimary ?? (_) {},
               onSecondary: onSecondary ?? (_) {},
+              onIndexChanged: onIndexChanged,
+              paintImage: paintImage,
             ),
           ),
         ),
@@ -229,5 +239,57 @@ void main() {
     ], onPrimary: (item) => tapped = item);
     await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
     expect(tapped?.title, 'A');
+  });
+
+  testWidgets('有 16:9 背景图：hero 不自绘图，图交给页面的固定背景', (tester) async {
+    // 两处都画＝两张同图不同框比：滚动时 hero 的图往上走、固定背景不动，
+    // 交界处会错位（详情页 `paintImage: false` 是同一条理由）。所以有背景图时
+    // hero 只留内容，不碰背景。
+    await pumpHero(tester, [
+      heroItem(
+        HomeItemKind.resume,
+        'A',
+        backdrop: 'http://127.0.0.1:1/a.jpg',
+        poster: 'http://127.0.0.1:1/a2.jpg',
+      ),
+    ], paintImage: false);
+    expect(find.byKey(const ValueKey('home-hero-backdrop-0')), findsNothing);
+    expect(find.byType(BackdropScrim), findsNothing);
+    expect(find.byType(PosterImage), findsNothing);
+    expect(find.text('A'), findsOneWidget);
+  });
+
+  testWidgets('没有 16:9 背景图：hero 自己画夜空底（不然首屏只剩一块空）', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A', poster: 'http://127.0.0.1:1/a2.jpg'),
+    ]);
+    expect(find.byKey(const ValueKey('home-hero-backdrop-0')), findsOneWidget);
+    expect(find.byType(BackdropScrim), findsOneWidget);
+    // 竖版海报是**内容**（左侧那张大而锐利的海报），不是背景。
+    expect(find.byType(PosterImage), findsOneWidget);
+  });
+
+  testWidgets('换张时把当前下标回传给页面（固定背景要跟着换）', (tester) async {
+    final seen = <int>[];
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A', backdrop: 'http://127.0.0.1:1/a.jpg'),
+      heroItem(HomeItemKind.resume, 'B', backdrop: 'http://127.0.0.1:1/b.jpg'),
+      heroItem(HomeItemKind.resume, 'C', backdrop: 'http://127.0.0.1:1/c.jpg'),
+    ], onIndexChanged: seen.add);
+
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('home-hero-dots')),
+            matching: find.byType(GestureDetector),
+          )
+          .at(2),
+    );
+    await tester.pumpAndSettle();
+    expect(seen.last, 2);
+
+    await tester.pump(homeHeroInterval);
+    await tester.pumpAndSettle();
+    expect(seen.last, 0, reason: '3 张里停在第 3 张，一个间隔后回到第 1 张');
   });
 }

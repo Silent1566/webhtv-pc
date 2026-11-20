@@ -74,7 +74,8 @@ HomePage({
 └───────────────────────────────────────────────────────────────┘
 ```
 
-- 整页是**一个**纵向滚动视图（`CustomScrollView`），hero 是第一个 sliver：hero 不吸顶、不视差、不在页面滚动时缩放。
+- 页面参照详情页采用**固定背景 + 一个纵向滚动视图**：16:9 海报在 `Positioned.fill` 中铺满内容区，不随滚动移动；`CustomScrollView` 承载 hero 文案与下方轨道。hero 文案是第一个 sliver，不吸顶、不视差、不在滚动时缩放。
+- 固定背景与 hero 共用当前轮播下标，沿用 8 秒节奏、手动切换、悬停停表与减少动效；背景不单独计时。固定图使用 `BackdropScrimKind.page`，下方轨道也能看到图片。只有竖版海报时保留夜空渐变 + 清晰海报，不把竖图拉成宽幅。
 - 区间距只有一个来源：`SectionHeader` 的 24px 上留白（与 `DESIGN.md:320` 的收敛一致），区块之间**不加** `SizedBox`。
 - 页面左右内边距 24（`AppSpace.xl`）；hero 是满幅——**上下左右都不留白**，只有内容落在 24/24/24/44 的安全区里。
 
@@ -126,7 +127,7 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 | 副信息 | `bodyMedium` / `onSurfaceVariant` | `年份 · 评分 · 类型`（口径复用 `recommendation_meta.dart` 的「年份 · 评分」） |
 | 理由行 | `bodySmall`，前面一个 14px 图标 | 三类各一句，见 §7 |
 | 主按钮 | `FilledButton`（琥珀） | 续播：「继续播放」；追剧：「从最新一集开始」；推荐：「查看详情」 |
-| 次按钮 | `OutlinedButton` | 续播/追剧：「查看详情」；推荐：「去找片源」（走 `recommendationTargetFor`） |
+| 次按钮 | `OutlinedButton` | 续播/追剧：「查看详情」；推荐：「去找片源」（打开 `SearchPage`，带入片名与已有 TMDB 身份并自动搜索） |
 | 进度线 | 2px，`primary`，宽度 = 剧集进度 | **只给续播类**。这是本页唯一的「星等」用法：它确实在度量一个真实的东西（看到哪儿了） |
 
 进度线为什么放在 hero 底边而不是内容块里：hero 底边是这张幻灯片的「地平线」，进度线压在上面读起来是「这部剧的进度」，放进文字块就变成又一个标签。
@@ -150,8 +151,9 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 | 动作 | 行为 |
 |---|---|
 | 点次按钮（查看详情） | `openHistoryDetail`：切回记录自己的站点 + 带线路/集/进度进详情页 |
-| 点主按钮 | 续播 → `resumeHistoryEntry`（`playback_resume.dart`）／追剧 → 进详情并定位最新集／推荐 → `openRecommendationTarget` |
-| 点次按钮 | 进详情页（同点播页点海报） |
+| 续播／追剧主按钮 | 续播 → `resumeHistoryEntry`（`playback_resume.dart`）／追剧 → 进详情并定位最新集 |
+| 推荐「查看详情」／推荐轨道卡片 | 有 TMDB 身份时打开该作品的 `TmdbDetailPage`；无身份时展示已有推荐资料，不伪造身份，不跳当前站点点播页 |
+| 推荐「去找片源」 | 打开站源搜索页，带入作品名及已有身份提示；没有身份时只带标题。详情页的「搜索站源」沿用相同入口 |
 | 点指示点 | 跳到该张，停表 |
 | 指针悬停 hero | 停表 |
 | `←` / `→` | 上一张 / 下一张（hero 区域有焦点时） |
@@ -178,6 +180,17 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 
 - 「查看全部 →」：继续观看 → 最近观看页；追剧更新 → 追剧页；个性推荐 **不设**——推荐没有独立页，点了无处可去就不放这个入口（一个动作只有一个家）。
 - 追剧的播出时间/平台来自 `FollowingAirData`（`following_air_data.dart`，TMDB 6h 缓存）：**先渲染本地已知的「更新至第 N 集」，air data 到位后再补平台徽标与下一集时间**，绝不让轨道等网络。
+
+### 4.1 长按与右键（2026-11-20）
+
+- 首页的个性推荐与热门轨道支持**长按 / 鼠标右键**，不触发单击跳转；左右拖拽仍滚动轨道。继续观看、追剧卡片不改变行为。
+- **个性推荐**复用详情页的资料弹窗：海报、来源、已有元信息、简介、推荐理由；有身份时「详情」进入作品详情，无 TMDB 身份时主操作明确改为「去找片源」。
+- 「不感兴趣」写入与详情页相同的反馈记录，立即从首页推荐轨道与轮播移除；其他页面写入的反馈也同步生效。按现有反馈存储保留 90 天，不另外保存一套偏好，也不删除观看历史或追剧。
+- **热门**使用同一弹窗的榜单形态：标明 360kan 与电影／剧集／综艺榜，展示上游真实名次、已有豆瓣评分和更新信息。缺失字段不编造，过滤后的列表序号不能当名次。
+- 热门不显示「推荐理由」「不感兴趣」，不伪装成个性推荐或可直接播放的资源；弹窗主操作「查看详情」，另保留「去找片源」，二者都先关闭弹窗再跳转。仅预览榜单信息不额外查询剧情或片源。
+- **热门作品详情**：卡片单击、热门轮播主按钮、弹窗「查看详情」复用同一入口；只在点击时通过现有 TMDB 服务按片名检索，并按电影榜／剧集与综艺榜过滤媒体类型。唯一同名候选直接打开既有 `TmdbDetailPage`；同名多条或只有近似片名时展示候选与年份供选择，不盲选第一条。
+- 热门轮播次按钮和弹窗「去找片源」仍走按标题搜索。未配置、网络失败或无匹配结果时显示可恢复说明，允许关闭或找片源；不伪造作品身份、不跳当前站点点播列表。查找期间防重复点击，离开首页后迟到的结果不再跳页。
+- 新增弹窗取证：`HOME_CARD_CAPTURE=1 flutter test --no-pub test/home_recommendation_navigation_test.dart` 将深浅主题两类弹窗写到 `.local/home-card-info/`（测试夹具海报为空，验证布局与交互而非影视素材）。
 
 ## 5. 状态矩阵
 
@@ -226,3 +239,12 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 - Before：当前 HEAD 上的外壳首屏截图（默认段 = 点播页）。
 - After：同一台机器、同一 1280×720 视口（口径见 `integration_test/ui_redesign_visual_flow_test.dart`）、dark 主题、注册 CJK 字体，拍三张：首屏（hero + 第一条轨道）、滚到第二条轨道、空态。
 - 落盘：`.impeccable/review/` 下新增 `home-hero-*.png`；Before 用 `git worktree` 在 HEAD 上重拍（与本仓库既有 p0-6b 取证流程一致）。
+
+### 2026-11-20 · 固定背景滚动对照
+
+`test/home_scroll_visual_capture_test.dart` 以真实 `HomePage` 和已解码的合成 16:9 图片取证（不是影视素材，也不是缺图占位）。同一 1280×800、DPR 1、dark 主题，首屏与精确下滚 800px 各拍一次；标题已滚出视口，轨道位置保持一致。
+
+- `.local/home-scroll/before-{top,scrolled}.png`：修改前，滚动后背景回到页面纯色。
+- `.local/home-scroll/after-{top,scrolled}.png`：修改后，滚动后同一背景保留；空白区域像素与首屏同位置一致。
+- `before.json` / `after.json` 记录场景参数；`README.md` 记录命令与对照结果。取证文件保存在忽略的 `.local/`，不替换原有截图。
+- 重拍：在 `apps/desktop-flutter` 运行 `HOME_SCROLL_CAPTURE_STAGE=after flutter test --no-pub test/home_scroll_visual_capture_test.dart`。

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'poster_image.dart';
 import 'tokens.dart';
 
+enum RecommendationInfoKind { recommendation, hot }
+
 /// 推荐详情弹窗的展示数据。
 ///
 /// 只承载调用方**已经拿到**的字段：来源、海报、年份/评分等元信息、简介、
@@ -18,9 +20,13 @@ class RecommendationInfo {
     this.reason,
     this.status,
     this.credit,
+    this.kind = RecommendationInfoKind.recommendation,
+    this.openLabel = '详情',
   });
 
   final String title;
+  final RecommendationInfoKind kind;
+  final String openLabel;
 
   /// 来源标签：`AI 推荐` / `TMDB` / `豆瓣`。
   final String sourceLabel;
@@ -51,6 +57,7 @@ Future<void> showRecommendationInfo(
   BuildContext context, {
   required RecommendationInfo info,
   VoidCallback? onOpen,
+  VoidCallback? onSearchSource,
   Future<void> Function()? onNotInterested,
 }) {
   return showDialog<void>(
@@ -58,6 +65,7 @@ Future<void> showRecommendationInfo(
     builder: (context) => RecommendationInfoDialog(
       info: info,
       onOpen: onOpen,
+      onSearchSource: onSearchSource,
       onNotInterested: onNotInterested,
     ),
   );
@@ -68,11 +76,13 @@ class RecommendationInfoDialog extends StatelessWidget {
     super.key,
     required this.info,
     this.onOpen,
+    this.onSearchSource,
     this.onNotInterested,
   });
 
   final RecommendationInfo info;
   final VoidCallback? onOpen;
+  final VoidCallback? onSearchSource;
   final Future<void> Function()? onNotInterested;
 
   @override
@@ -81,6 +91,7 @@ class RecommendationInfoDialog extends StatelessWidget {
     final media = MediaQuery.of(context).size;
     final overview = (info.overview ?? '').trim();
     final reason = (info.reason ?? '').trim();
+    final hot = info.kind == RecommendationInfoKind.hot;
     return Dialog(
       key: const ValueKey('recommendation-info-dialog'),
       clipBehavior: Clip.antiAlias,
@@ -111,10 +122,14 @@ class RecommendationInfoDialog extends StatelessWidget {
                     children: [
                       _Hero(info: info),
                       const SizedBox(height: AppSpace.lg),
-                      _SectionLabel(text: '简介'),
+                      _SectionLabel(text: hot ? '榜单信息' : '简介'),
                       const SizedBox(height: AppSpace.xs),
                       Text(
-                        overview.isEmpty ? '暂无可用简介' : overview,
+                        hot
+                            ? '公开热榜内容，非个性化推荐。找到可用片源后才能播放。'
+                            : overview.isEmpty
+                            ? '暂无可用简介'
+                            : overview,
                         key: const ValueKey('recommendation-info-overview'),
                         style: theme.textTheme.bodyMedium?.copyWith(
                           height: 1.55,
@@ -123,7 +138,7 @@ class RecommendationInfoDialog extends StatelessWidget {
                               : null,
                         ),
                       ),
-                      if (reason.isNotEmpty) ...[
+                      if (!hot && reason.isNotEmpty) ...[
                         const SizedBox(height: AppSpace.lg),
                         _SectionLabel(text: '推荐理由'),
                         const SizedBox(height: AppSpace.xs),
@@ -142,7 +157,10 @@ class RecommendationInfoDialog extends StatelessWidget {
               const SizedBox(height: AppSpace.lg),
               _Actions(
                 onOpen: onOpen,
-                onNotInterested: onNotInterested,
+                onSearchSource: onSearchSource,
+                onNotInterested: hot ? null : onNotInterested,
+                hot: hot,
+                openLabel: info.openLabel,
               ),
             ],
           ),
@@ -239,9 +257,7 @@ class _Hero extends StatelessWidget {
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: [
-                    for (final value in info.meta) _Pill(text: value),
-                  ],
+                  children: [for (final value in info.meta) _Pill(text: value)],
                 ),
               ],
               if ((info.status ?? '').trim().isNotEmpty) ...[
@@ -308,9 +324,18 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _Actions extends StatelessWidget {
-  const _Actions({this.onOpen, this.onNotInterested});
+  const _Actions({
+    this.onOpen,
+    this.onNotInterested,
+    this.onSearchSource,
+    this.hot = false,
+    this.openLabel = '详情',
+  });
 
+  final bool hot;
+  final String openLabel;
   final VoidCallback? onOpen;
+  final VoidCallback? onSearchSource;
   final Future<void> Function()? onNotInterested;
 
   @override
@@ -342,6 +367,18 @@ class _Actions extends StatelessWidget {
           child: const Text('关闭'),
         ),
         const SizedBox(width: AppSpace.sm),
+        if (onSearchSource != null) ...[
+          TextButton.icon(
+            key: const ValueKey('recommendation-info-search'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              onSearchSource!.call();
+            },
+            icon: const Icon(Icons.search, size: 18),
+            label: const Text('去找片源'),
+          ),
+          const SizedBox(width: AppSpace.sm),
+        ],
         FilledButton.icon(
           key: const ValueKey('recommendation-info-open'),
           onPressed: onOpen == null
@@ -352,7 +389,7 @@ class _Actions extends StatelessWidget {
                   onOpen!.call();
                 },
           icon: const Icon(Icons.arrow_forward, size: 18),
-          label: const Text('详情'),
+          label: Text(hot ? '查看详情' : openLabel),
         ),
       ],
     );
