@@ -33,10 +33,12 @@ class HomePosterCard extends StatelessWidget {
     required this.item,
     required this.onTap,
     required this.width,
+    this.onLongPress,
   });
 
   final HomeItem item;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final double width;
 
   /// 2:3 海报框的测试定位键（也是"高 = 宽 × 1.5"的唯一测量对象）。
@@ -60,6 +62,8 @@ class HomePosterCard extends StatelessWidget {
       width: width,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
+        onSecondaryTap: onLongPress,
         // hover 取主题的 `hoverColor`（不覆盖）：交互态由主题统一给出，
         // 卡片若自定一层，全站就会出现第二种"鼠标悬停"的样子。
         borderRadius: AppRadius.mdAll,
@@ -176,12 +180,14 @@ class HomeRailView extends StatelessWidget {
     required this.rail,
     required this.onTap,
     this.onSeeAll,
+    this.onLongPress,
   });
 
   final HomeRail rail;
 
   /// 卡片点击：把整条 [HomeItem] 交回页面，卡片自己不去猜"该打开什么"。
   final ValueChanged<HomeItem> onTap;
+  final ValueChanged<HomeItem>? onLongPress;
 
   /// 「查看全部」的去向；[HomeRail.seeAll] 为 null（推荐行）时不会渲染入口。
   final VoidCallback? onSeeAll;
@@ -240,6 +246,9 @@ class HomeRailView extends StatelessWidget {
                     child: HomePosterCard(
                       item: item,
                       onTap: () => onTap(item),
+                      onLongPress: onLongPress == null
+                          ? null
+                          : () => onLongPress!(item),
                       width: cardWidth,
                     ),
                   );
