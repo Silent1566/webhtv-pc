@@ -8,6 +8,7 @@
 ///   `py -m tools.fixture_server.server`
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,8 +19,6 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/core/protocol.dart';
-import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/startup_arguments.dart';
@@ -33,24 +32,12 @@ import 'package:window_manager/window_manager.dart';
 import '../test/fixture_support.dart';
 import '../test/support/settings_navigation.dart';
 import 'phase8_player_test_support.dart';
+import 'support/mvp_fixture_environment.dart';
 
 /// 把可复查事实写入测试输出，供 Phase 1 验收报告引用。
 void evidence(String message) => debugPrint('PHASE1-EVIDENCE $message');
 
-/// 删除测试临时目录：**重试并容忍失败**。
-///
-/// 为什么不能直接 `temp.deleteSync`：`AppState.dispose()` 里有多处
-/// `unawaited(...)`（`_proxy.stop()`、`_supervisor.shutdownAll()`、
-/// `_androidPlaybackBridge.close()`），它们**异步**释放句柄。测试在 `dispose()`
-/// 之后立刻删目录，Windows 上句柄还没放开就抛
-/// `PathAccessException`（OS Error 32「另一个程序正在使用此文件」）。
-///
-/// 那是**时序问题，不是产品缺陷**，也不该让用例变红。目录本来就在系统 temp 下，
-/// 删不掉交给系统回收即可。这里重试几次是为了让"能删就删干净"，不是为了让断言通过。
-/// 真实 HTTP 下「导入配置 / 选择站点 → 首页加载」是异步的：
-/// `importConfig` / `selectSite` 只负责触发，不把首页数据等回来。
-/// 直接 `state.homeResult!` 会抛 TypeError，`state.homeResult?.list` 会让
-/// `isNotEmpty` 挂在 null 上——CI（真网络 + 负载）上必现。
+/// 真实 HTTP 首页由状态层异步加载；等待可观测结果，而不是延长固定定时。
 Future<void> _waitForHome(AppState state, {int seconds = 30}) async {
   final deadline = DateTime.now().add(Duration(seconds: seconds));
   while (state.homeResult == null && DateTime.now().isBefore(deadline)) {
@@ -59,15 +46,17 @@ Future<void> _waitForHome(AppState state, {int seconds = 30}) async {
   expect(state.homeResult, isNotNull, reason: '首页在 ${seconds}s 内没有加载完成');
 }
 
-void _deleteTempQuietly(Directory dir) {
-  for (var attempt = 0; attempt < 5; attempt++) {
-    try {
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
-      return;
-    } on FileSystemException {
-      sleep(const Duration(milliseconds: 200));
-    }
-  }
+Future<MvpFixtureEnvironment> _fixtureEnvironment(
+  WidgetTester tester, {
+  bool bootstrap = true,
+  Future<void>? bootstrapGate,
+}) async {
+  final environment = await MvpFixtureEnvironment.create(
+    bootstrap: bootstrap,
+    bootstrapGate: bootstrapGate,
+  );
+  addTearDown(() => environment.dispose(tester));
+  return environment;
 }
 
 void main() {
@@ -79,11 +68,22 @@ void main() {
   });
 
   testWidgets('主界面可交互且包含 §17.1 的桌面布局', (tester) async {
-    await tester.pumpWidget(const WebHtvApp());
+    final bootstrapGate = Completer<void>();
+    final environment = await _fixtureEnvironment(
+      tester,
+      bootstrap: false,
+      bootstrapGate: bootstrapGate.future,
+    );
+    expect(environment.bootstrapCalls, 0);
+    await tester.pumpWidget(WebHtvApp(stateFactory: environment.stateForRoot));
+    expect(find.text('正在初始化…'), findsOneWidget);
+    bootstrapGate.complete();
     await tester.pumpAndSettle(const Duration(seconds: 5));
 
-    // 启动页必须已经消失。
+    // 必须经过真实 root 的启动页，再进入可交互壳层。
     expect(find.text('正在初始化…'), findsNothing);
+    expect(find.byType(AppShell), findsOneWidget);
+    expect(environment.bootstrapCalls, 1);
     // 顶栏入口（配置 / 站点）存在。
     expect(find.textContaining('配置'), findsWidgets);
     // 侧栏五个桌面入口存在。
@@ -98,22 +98,8 @@ void main() {
 
   testWidgets('首次启动展示使用边界提示，且可确认（§22.4）', (tester) async {
     // 使用独立配置目录，确保本次是“首次启动”。
-    final temp = await Directory.systemTemp.createTemp('webhtv-boundary-test');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-
-    final state = AppState(paths: paths, log: LogService());
-    addTearDown(() {
-      state.dispose();
-      _deleteTempQuietly(temp);
-    });
-    await state.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final state = environment.state;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -139,21 +125,8 @@ void main() {
     final configText = jsonEncode(configJson)
         .replaceAll('http://127.0.0.1:18080', fixtureBase);
 
-    final temp = await Directory.systemTemp.createTemp('webhtv-e2e-test');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-    final state = AppState(paths: paths, log: LogService());
-    addTearDown(() {
-      state.dispose();
-      _deleteTempQuietly(temp);
-    });
-    await state.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final state = environment.state;
 
     // 1) 导入配置（JSON 文本入口）。导入会自动加载默认站点首页。
     final imported = await state.importConfig(configText, displayName: 'e2e');
@@ -285,21 +258,8 @@ void main() {
       jsonDecode(readFixture('config/config-e2e.json')),
     ).replaceAll('http://127.0.0.1:18080', fixtureBase);
 
-    final temp = await Directory.systemTemp.createTemp('webhtv-resume-e2e');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-    final state = AppState(paths: paths, log: LogService());
-    addTearDown(() {
-      state.dispose();
-      _deleteTempQuietly(temp);
-    });
-    await state.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final state = environment.state;
 
     final imported = await state.importConfig(
       configText,
@@ -392,21 +352,8 @@ void main() {
 
   testWidgets('单站点失败不影响其他站点，UI 不卡死（§8.1、§8.4）', (tester) async {
     final fixtureBase = fixtureBaseUrl;
-    final temp = await Directory.systemTemp.createTemp('webhtv-failure-test');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-    final state = AppState(paths: paths, log: LogService());
-    addTearDown(() {
-      state.dispose();
-      _deleteTempQuietly(temp);
-    });
-    await state.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final state = environment.state;
 
     final imported = await state.importConfig(
       jsonEncode({
@@ -462,7 +409,9 @@ void main() {
       (item) => item.site.key == 'unavailable',
     );
     expect(unavailable.availability.available, isFalse);
-    expect(unavailable.availability.runtimeName, contains('JS'));
+    expect(unavailable.availability.runtimeName, 'Node Spider (tvbox-js-v1)');
+    expect(unavailable.availability.stage, 'Phase 3');
+    expect(unavailable.availability.reason, contains('尚未注册'));
     evidence(
       'unavailable-site runtime=${unavailable.availability.runtimeName} '
       'stage=${unavailable.availability.stage}',
@@ -477,21 +426,8 @@ void main() {
 
   testWidgets('渲染 UI 页面：配置页、浏览页、详情页、历史页、设置页、日志页', (tester) async {
     final fixtureBase = fixtureBaseUrl;
-    final temp = await Directory.systemTemp.createTemp('webhtv-ui-test');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-    final state = AppState(paths: paths, log: LogService());
-    addTearDown(() {
-      state.dispose();
-      _deleteTempQuietly(temp);
-    });
-    await state.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final state = environment.state;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -558,7 +494,37 @@ void main() {
     final vod = state.detailResult!.list.first;
     expect(find.text(vod.vodName), findsWidgets);
     final lines = state.playLinesOf(vod);
-    expect(find.textContaining(lines.first.displayName), findsWidgets);
+    expect(lines, isNotEmpty);
+    final line = lines.first;
+    expect(line.episodes, isNotEmpty);
+    final lineChip = find.byKey(ValueKey('tmdb-line-${line.flag}'));
+    // 正文是懒加载 ListView；先像用户一样滚过 hero，再选择线路。
+    await tester.scrollUntilVisible(
+      lineChip,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.descendant(
+        of: lineChip,
+        matching: find.textContaining(line.displayName),
+      ),
+      findsWidgets,
+    );
+    expect(tester.widget<ChoiceChip>(lineChip).onSelected, isNotNull);
+    await tester.tap(lineChip);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(lineChip).selected, isTrue);
+    final episodeCard = find.byKey(
+      ValueKey('tmdb-episode-card-${line.flag}-0'),
+    );
+    await tester.scrollUntilVisible(
+      episodeCard,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(episodeCard.hitTestable(), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(episodeCard).onPressed, isNotNull);
     evidence(
       'detail-page-rendered lines=${lines.length} '
       'episodes=${lines.first.episodes.length}',
@@ -605,9 +571,22 @@ void main() {
   });
 
   testWidgets('窗口缩放与全屏切换后布局稳定（§17.5）', (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.binding.setSurfaceSize(const Size(1280, 720));
-    await tester.pumpWidget(const WebHtvApp());
+    final bootstrapGate = Completer<void>();
+    final environment = await _fixtureEnvironment(
+      tester,
+      bootstrap: false,
+      bootstrapGate: bootstrapGate.future,
+    );
+    expect(environment.bootstrapCalls, 0);
+    await tester.pumpWidget(WebHtvApp(stateFactory: environment.stateForRoot));
+    expect(find.text('正在初始化…'), findsOneWidget);
+    bootstrapGate.complete();
     await tester.pumpAndSettle(const Duration(seconds: 5));
+    expect(find.byType(AppShell), findsOneWidget);
+    expect(find.text('正在初始化…'), findsNothing);
+    expect(environment.bootstrapCalls, 1);
     expect(tester.takeException(), isNull);
     evidence('layout-1280x720 ok');
 
@@ -636,19 +615,9 @@ void main() {
   });
 
   testWidgets('数据库删除后可初始化默认库（§16.3）', (tester) async {
-    final temp = await Directory.systemTemp.createTemp('webhtv-rebuild-test');
-    final paths = AppPaths.resolve(
-      overrides: {
-        'config': '${temp.path}${Platform.pathSeparator}config',
-        'data': '${temp.path}${Platform.pathSeparator}data',
-        'cache': '${temp.path}${Platform.pathSeparator}cache',
-        'state': '${temp.path}${Platform.pathSeparator}logs',
-      },
-    );
-    addTearDown(() => _deleteTempQuietly(temp));
-
-    final first = AppState(paths: paths, log: LogService());
-    await first.bootstrap();
+    final environment = await _fixtureEnvironment(tester);
+    final paths = environment.paths;
+    final first = environment.state;
     expect(first.startupInfo?.databaseError, isNull);
     first.recordProgress(
       vod: Vod(vodId: 'v', vodName: 'n'),
@@ -659,13 +628,12 @@ void main() {
       duration: const Duration(seconds: 10),
     );
     expect(first.recentHistory(), isNotEmpty);
-    first.dispose();
+    await environment.disposeState(first);
 
     // 删除数据目录后应能重建而不是崩溃。
     Directory(paths.dataDir).deleteSync(recursive: true);
 
-    final second = AppState(paths: paths, log: LogService());
-    await second.bootstrap();
+    final second = await environment.createState();
     expect(second.startupInfo?.databaseError, isNull);
     expect(second.recentHistory(), isEmpty);
     expect(second.database, isNotNull);
@@ -676,7 +644,7 @@ void main() {
     await second.resetCache();
     expect(Directory(paths.cacheDir).existsSync(), isTrue);
     evidence('cache-rebuild-after-delete ok');
-    second.dispose();
+    await environment.disposeState(second);
   });
 }
 

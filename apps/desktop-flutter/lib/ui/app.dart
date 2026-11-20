@@ -211,21 +211,30 @@ void recordCrashForPaths({
 }
 
 class WebHtvApp extends StatefulWidget {
-  const WebHtvApp({super.key, this.startup = const StartupArguments()});
+  const WebHtvApp({
+    super.key,
+    this.startup = const StartupArguments(),
+    this.stateFactory,
+  });
 
   final StartupArguments startup;
+
+  /// Creates a fresh, unbootstrapped state once; the root owns bootstrap/dispose.
+  /// Omitted in production, which continues to create the default AppState.
+  final AppState Function()? stateFactory;
 
   @override
   State<WebHtvApp> createState() => _WebHtvAppState();
 }
 
 class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
-  final AppState _state = AppState();
+  late final AppState _state;
   bool _bootstrapped = false;
 
   @override
   void initState() {
     super.initState();
+    _state = widget.stateFactory?.call() ?? AppState();
     // 窗口关闭时标记「正常退出」（崩溃恢复靠它区分强杀）。
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -274,6 +283,9 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    // Toast callbacks can retain this root state across the next app session.
+    // Finish them while AppState is still alive, before releasing its owner.
+    dismissAllToasts();
     // 正常退出：删除会话标记（同步写，进程可能马上结束）。
     _state.endSessionCleanly();
     _state.dispose();
@@ -518,6 +530,7 @@ class _AppShellState extends State<AppShell> {
       '${_state.paths.configDir}${Platform.pathSeparator}usage-boundary-accepted',
     );
     final exists = await marker.exists();
+    if (!mounted) return;
     if (exists) {
       setState(() => _boundaryAccepted = true);
       return;
@@ -534,6 +547,7 @@ class _AppShellState extends State<AppShell> {
     } catch (_) {
       // 无法写入时本次会话内仍然放行，但下次启动会再次提示。
     }
+    if (!mounted) return;
     setState(() => _boundaryAccepted = true);
     _state.log.info('用户已确认使用边界提示', scope: 'compliance');
   }

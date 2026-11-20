@@ -97,7 +97,8 @@ class AptBudgetTests(unittest.TestCase):
                 install = calls[1]
                 self.assertIn('install', install)
                 self.assertIn('--no-install-recommends', install)
-                self.assertEqual(PACKAGES, install[install.index('-y') + 1:])
+                expected = PACKAGES + (['openbox'] if job == 'e2e-linux-trial' else [])
+                self.assertEqual(expected, install[install.index('-y') + 1:])
 
     def test_update_failure_stops_before_install(self):
         for filename, job in TARGETS:

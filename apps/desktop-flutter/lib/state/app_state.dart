@@ -2420,13 +2420,14 @@ AiContentCompletion? aiContentCompletion,
   /// 导入、刷新、启停、删除都必须走这里：只 `notifyListeners()` 不会让
   /// [effectiveConfig]/[siteItems] 重新合并（缓存还在），用户看到的是导入前后一样的列表。
   void _invalidateLocalSites() {
+    if (_disposed) return;
     _localSitesCache = null;
     _webHomeSourcesCache = null;
     _allWebHomeSourcesCache = null;
     _effectiveConfigCache = null;
     // 站点服务与分类判定都读 effectiveConfig：重建它，本地源才能立刻可选/可用。
     _attachSiteService();
-    notifyListeners();
+    _notifyIfAlive();
   }
 
   /// 当前注入站点（供设置页展示）。
@@ -7947,6 +7948,7 @@ AiContentCompletion? aiContentCompletion,
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_pythonEnvironment.close());
     _detailRunId++;
     _followingTimer?.cancel();
     _followingKickTimer?.cancel();
