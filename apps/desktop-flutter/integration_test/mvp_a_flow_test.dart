@@ -47,6 +47,18 @@ void evidence(String message) => debugPrint('PHASE1-EVIDENCE $message');
 ///
 /// 那是**时序问题，不是产品缺陷**，也不该让用例变红。目录本来就在系统 temp 下，
 /// 删不掉交给系统回收即可。这里重试几次是为了让"能删就删干净"，不是为了让断言通过。
+/// 真实 HTTP 下「导入配置 / 选择站点 → 首页加载」是异步的：
+/// `importConfig` / `selectSite` 只负责触发，不把首页数据等回来。
+/// 直接 `state.homeResult!` 会抛 TypeError，`state.homeResult?.list` 会让
+/// `isNotEmpty` 挂在 null 上——CI（真网络 + 负载）上必现。
+Future<void> _waitForHome(AppState state, {int seconds = 30}) async {
+  final deadline = DateTime.now().add(Duration(seconds: seconds));
+  while (state.homeResult == null && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  expect(state.homeResult, isNotNull, reason: '首页在 ${seconds}s 内没有加载完成');
+}
+
 void _deleteTempQuietly(Directory dir) {
   for (var attempt = 0; attempt < 5; attempt++) {
     try {
@@ -146,6 +158,7 @@ void main() {
     // 1) 导入配置（JSON 文本入口）。导入会自动加载默认站点首页。
     final imported = await state.importConfig(configText, displayName: 'e2e');
     expect(imported, isTrue, reason: state.lastError?.logLine);
+    await _waitForHome(state);
     expect(state.config!.sites.length, 6);
     expect(state.siteItems.length, 6);
     evidence(
@@ -293,6 +306,7 @@ void main() {
       displayName: 'resume',
     );
     expect(imported, isTrue, reason: state.lastError?.logLine);
+    await _waitForHome(state);
 
     final home = state.homeResult!;
     await state.loadCategory(home.classes.first.typeId, page: 1);
@@ -429,6 +443,7 @@ void main() {
     // 可用站点正常工作。
     final good = state.siteItems.firstWhere((item) => item.site.key == 'good');
     await state.selectSite(good.site);
+    await _waitForHome(state);
     expect(state.homeResult?.list, isNotEmpty);
     evidence('good-site home-ok list=${state.homeResult!.list.length}');
 
@@ -493,6 +508,7 @@ void main() {
           .replaceAll('http://127.0.0.1:18080', fixtureBase),
       displayName: 'ui-test',
     );
+    await _waitForHome(state);
     await tester.pumpWidget(MaterialApp(home: ConfigPage(state: state)));
     await tester.pumpAndSettle();
     expect(find.text('配置导入与管理'), findsOneWidget);
