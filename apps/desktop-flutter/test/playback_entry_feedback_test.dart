@@ -31,12 +31,6 @@ class _PendingState extends AppState {
   @override
   AppConfig get config => _config;
 
-  /// 起播入口查的是 [effectiveConfig]：`AppState` 用私有 `_config` 与本地源合并，
-  /// 可覆盖的 [config] 取值器不参与。只覆盖 `config` 时 `siteInActiveSource` 恒为
-  /// null，入口会在建反馈之前就弹「站点已不在配置中」，与真实运行不符。
-  @override
-  AppConfig? get effectiveConfig => _config;
-
   /// 历史/收藏/追剧解析站点走的是 [siteInActiveSource]，它读 [effectiveConfig]
   /// 而不是这个 `config` 覆盖（本地导入源只并进 effectiveConfig）。假 state 必须
   /// 跟着补同一个接缝，否则用例会落进「站点已不在当前配置中」的分支。
