@@ -719,6 +719,9 @@ class TmdbEpisodeCard {
     required this.number,
     required this.title,
     this.sourceName = '',
+    this.variantCount = 1,
+    this.fileSizeLabel = '',
+    this.groupLabel = '',
     this.date = '',
     this.overview,
     this.stillUrl,
@@ -731,6 +734,9 @@ class TmdbEpisodeCard {
   final int number;
   final String title;
   final String sourceName;
+  final int variantCount;
+  final String fileSizeLabel;
+  final String groupLabel;
   final String date;
   final String? overview;
   final String? stillUrl;

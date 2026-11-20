@@ -18,6 +18,7 @@ import '../core/app_error.dart';
 import '../core/danmaku.dart';
 import '../core/danmaku_match.dart';
 import '../core/history_view.dart';
+import '../core/episode_aggregation.dart';
 import '../core/lut.dart';
 import '../core/mpv_properties.dart';
 import '../core/osd_config.dart';
@@ -72,6 +73,7 @@ import 'player_context_menu.dart';
 import 'external_player_picker_dialog.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
+import 'episode_version_dialog.dart';
 import 'player_queue_panel.dart';
 import 'live_playback_session.dart';
 import 'lut_menu.dart';
@@ -1352,11 +1354,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
 
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
+    final groups = _aggregatedEpisodeGroups(episodes);
+    final groupIndex = groups?.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == _request.episodeIndex,
+      ),
+    );
     final decision = decidePlaybackAdvance(
       repeat: _repeat,
       autoNext: _options.autoNext,
-      currentIndex: _request.episodeIndex,
-      episodeCount: episodes.length,
+      currentIndex: groupIndex ?? _request.episodeIndex,
+      episodeCount: groups?.length ?? episodes.length,
       genuineEnd: true,
     );
 
@@ -1394,6 +1402,22 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final suggested = decision.nextIndex;
     if (suggested == null) return;
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
+    final groups = _aggregatedEpisodeGroups(episodes);
+    if (groups != null) {
+      final wrap = suggested == 0 && !(_request.tmdb?.hasSeason ?? false);
+      if (wrap && groups.length == 1) {
+        await _replayCurrent();
+      } else {
+        await _playAggregatedAdjacent(
+          episodes,
+          groups,
+          1,
+          wrap: wrap,
+          pauseForSelection: false,
+        );
+      }
+      return;
+    }
     final index = _resolveAdvanceIndex(suggested, episodes);
     if (index < 0 || index >= episodes.length) return;
     await _openTarget(
@@ -4112,6 +4136,110 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await _load();
   }
 
+  bool _episodeVersionSelectionInFlight = false;
+
+  List<EpisodeGroup>? _aggregatedEpisodeGroups(List<VodEpisode> episodes) {
+    if (_isLive ||
+        _isCatchup ||
+        _hasQueue ||
+        _request.isLocal ||
+        !widget.state.episodeAggregateVersions) {
+      return null;
+    }
+    final groups = EpisodeAggregation.build(
+      episodes,
+      scope: '${_request.siteKey}/${_request.vodId}/${_request.flag}',
+    );
+    return groups.any((group) => group.isMultiple) ? groups : null;
+  }
+
+  Future<void> _playAggregatedAdjacent(
+    List<VodEpisode> episodes,
+    List<EpisodeGroup> groups,
+    int direction, {
+    bool wrap = false,
+    bool pauseForSelection = true,
+  }) async {
+    if (_episodeVersionSelectionInFlight) return;
+    final currentIndex = _request.episodeIndex;
+    if (currentIndex < 0 || currentIndex >= episodes.length) return;
+    final current = episodes[currentIndex];
+    if (current.url != _request.episodeTarget) return;
+    var group = EpisodeAggregation.adjacentGroup(
+      groups,
+      currentSourceIndex: currentIndex,
+      direction: direction,
+    );
+    if (group == null &&
+        wrap &&
+        groups.last.versions.any((v) => v.sourceIndex == currentIndex)) {
+      group = EpisodeAggregation.adjacentGroup(
+        [groups.last, groups.first],
+        currentSourceIndex: currentIndex,
+        direction: 1,
+      );
+    }
+    if (group == null) return;
+    final identity = _request.tmdb;
+    if (identity != null && identity.hasSeason) {
+      for (final version in group.versions) {
+        if (TmdbAutoPlay.nextIndex(
+              episodes: [current, version.episode],
+              currentIndex: 0,
+              availableSeasons: [identity.seasonNumber],
+              selectedSeason: identity.seasonNumber,
+            ) <
+            0) {
+          return;
+        }
+      }
+    }
+    final generation = _mediaGeneration;
+    final request = _request;
+    bool isCurrentMedia() =>
+        mounted && generation == _mediaGeneration && request == _request;
+    var version = EpisodeAggregation.preferredVersion(group, current);
+    if (version == null) {
+      _episodeVersionSelectionInFlight = true;
+      final restorePlaying = pauseForSelection && _controller.isPlaying;
+      try {
+        if (restorePlaying) await _controller.pause();
+        if (!mounted ||
+            !isCurrentMedia() ||
+            !widget.state.episodeAggregateVersions) {
+          return;
+        }
+        version = await showEpisodeVersionDialog(
+          context,
+          group: group,
+          lineName: request.flag,
+        );
+      } finally {
+        try {
+          if (restorePlaying &&
+              isCurrentMedia() &&
+              (version == null || !widget.state.episodeAggregateVersions)) {
+            await _controller.play();
+          }
+        } finally {
+          _episodeVersionSelectionInFlight = false;
+        }
+      }
+    }
+    if (!mounted ||
+        generation != _mediaGeneration ||
+        request != _request ||
+        !widget.state.episodeAggregateVersions ||
+        version == null) {
+      return;
+    }
+    await _openTarget(
+      version.episode,
+      flag: request.flag,
+      episodeIndex: version.sourceIndex,
+    );
+  }
+
   Future<void> _playNext() async {
     if (_isLive) {
       widget.liveSession!.stepChannel(1);
@@ -4124,6 +4252,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
+    final groups = _aggregatedEpisodeGroups(episodes);
+    if (groups != null) {
+      await _playAggregatedAdjacent(episodes, groups, 1);
+      return;
+    }
     final identity = _request.tmdb;
     // 自动连播**不跨季度**（`04` §8.4）：季度边界处停止。
     final next = identity == null || !identity.hasSeason
@@ -4152,6 +4285,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
     if (episodes.isEmpty) return;
+    final groups = _aggregatedEpisodeGroups(episodes);
+    if (groups != null) {
+      await _playAggregatedAdjacent(episodes, groups, -1);
+      return;
+    }
     final previous = _request.episodeIndex - 1;
     if (previous < 0) return;
     await _openTarget(

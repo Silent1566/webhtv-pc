@@ -29,7 +29,11 @@ void main() {
               width: 260,
               child: TmdbEpisodeStrip(
                 cards: [
-                  TmdbEpisodeCard(number: 1, title: scraped, sourceName: source),
+                  TmdbEpisodeCard(
+                    number: 1,
+                    title: scraped,
+                    sourceName: source,
+                  ),
                 ],
                 showScrapedName: false,
                 onTap: (_, _) {},
@@ -57,6 +61,7 @@ void main() {
               data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
               child: TmdbEpisodeHeader(
                 episodeCount: 100,
+                onToggleAggregation: () {},
                 reversed: false,
                 gridMode: true,
                 lineName: '这是一条需要安全省略而不能挤走操作按钮的很长的线路名称' * 3,
@@ -70,6 +75,12 @@ void main() {
       final toggle = find.byKey(const ValueKey('tmdb-episode-name-mode'));
       expect(tester.getRect(toggle).right, lessThanOrEqualTo(1024));
       expect(find.byTooltip('切换为原始名称'), findsOneWidget);
+      final aggregate = find.byKey(const ValueKey('tmdb-episode-aggregation'));
+      expect(tester.getRect(aggregate).right, lessThanOrEqualTo(1024));
+      expect(
+        tester.getRect(aggregate).left,
+        greaterThan(tester.getRect(toggle).left),
+      );
     });
 
     testWidgets('名称模式可视化 ${brightness.name}', (tester) async {
@@ -125,12 +136,16 @@ void main() {
       );
       for (final mode in ['scraped', 'original']) {
         if (mode == 'original') {
-          await tester.tap(find.byKey(const ValueKey('tmdb-episode-name-mode')));
+          await tester.tap(
+            find.byKey(const ValueKey('tmdb-episode-name-mode')),
+          );
         }
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(
-          find.text(mode == 'original' ? '剧名.S01E01.1080p.WEB-DL.mkv' : 'E1 第1集的刮削标题'),
+          find.text(
+            mode == 'original' ? '剧名.S01E01.1080p.WEB-DL.mkv' : 'E1 第1集的刮削标题',
+          ),
           findsOneWidget,
         );
         if (Platform.environment['EPISODE_NAME_CAPTURE'] != '1') continue;
