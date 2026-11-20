@@ -37,6 +37,30 @@ void main() {
     return ((decoded as Map)['ui'] as Map).cast<String, Object?>();
   }
 
+  test('aggregation defaults on and persists independently', () async {
+    final store = await openStore();
+    expect(store.episodeAggregateVersions, isTrue);
+    await store.rememberEpisodeShowScrapedName(false);
+    await store.rememberEpisodeAggregateVersions(false);
+    final reopened = await openStore();
+    expect(reopened.episodeAggregateVersions, isFalse);
+    expect(reopened.episodeShowScrapedName, isFalse);
+    expect(readUiSection()['episodeAggregateVersions'], isFalse);
+    await reopened.rememberEpisodeAggregateVersions(true);
+    expect((await openStore()).episodeAggregateVersions, isTrue);
+  });
+
+  for (final invalid in ['false', 0, null, <Object>[]]) {
+    test('invalid aggregation preference $invalid defaults on', () async {
+      await File(settingsPath).writeAsString(
+        jsonEncode({
+          'ui': {'episodeAggregateVersions': invalid},
+        }),
+      );
+      expect((await openStore()).episodeAggregateVersions, isTrue);
+    });
+  }
+
   test('名称默认刮削，往返持久化且不破坏其它 UI 偏好', () async {
     final store = await openStore();
     expect(store.episodeShowScrapedName, isTrue);

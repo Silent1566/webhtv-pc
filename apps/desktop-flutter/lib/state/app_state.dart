@@ -2893,6 +2893,16 @@ AiContentCompletion? aiContentCompletion,
     _notifyIfAlive();
   }
 
+  bool get episodeAggregateVersions =>
+      _uiPreferences?.episodeAggregateVersions ?? true;
+
+  Future<void> setEpisodeAggregateVersions(bool enabled) async {
+    final store = _uiPreferences;
+    if (store == null) return;
+    await store.rememberEpisodeAggregateVersions(enabled);
+    _notifyIfAlive();
+  }
+
   bool get episodeShowScrapedName =>
       _uiPreferences?.episodeShowScrapedName ?? true;
 

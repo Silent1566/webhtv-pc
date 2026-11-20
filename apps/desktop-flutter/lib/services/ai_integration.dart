@@ -190,6 +190,7 @@ VodPlayLine applyAiEpisodeBindings(
             ...line.episodes[i].extra,
             'tmdb_season_number': binding.season,
             'tmdb_episode_number': binding.episode,
+            'episode_identity_confirmed': true,
             'display_name':
                 'S${binding.season}E${binding.episode} ${line.episodes[i].name}',
           },

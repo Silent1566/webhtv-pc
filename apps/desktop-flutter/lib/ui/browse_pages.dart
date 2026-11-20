@@ -9,6 +9,8 @@ import 'package:flutter/scheduler.dart';
 
 import '../core/app_error.dart';
 import '../core/episode_range.dart';
+import '../core/episode_aggregation.dart';
+import 'episode_version_dialog.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
 import '../core/detail_ratings.dart';
@@ -1325,6 +1327,9 @@ class _DetailPageState extends State<DetailPage> {
   late bool _episodeGridMode =
       widget.state.episodeViewMode == UiEpisodeViewMode.grid;
   late bool _episodeShowScrapedName = widget.state.episodeShowScrapedName;
+  late bool _episodeAggregateVersions = widget.state.episodeAggregateVersions;
+  bool _versionDialogOpen = false;
+  int _episodeSelectionEpoch = 0;
 
   /// 选集区间下标（`docs/phase6/design/03` §4.4）。
   ///
@@ -2325,12 +2330,43 @@ class _DetailPageState extends State<DetailPage> {
   /// （`core/`），不得依赖 `services/storage.dart`。
   HistoryResumeTarget _resumeTarget(List<VodPlayLine> lines) {
     final history = _history;
+    if (history != null &&
+        history.episodeId.isNotEmpty &&
+        history.episodeName.isNotEmpty) {
+      for (final line in lines) {
+        if (line.playbackFlag != history.flag && line.flag != history.flag) {
+          continue;
+        }
+        final hits = [
+          for (var i = 0; i < line.episodes.length; i++)
+            if (line.episodes[i].url == history.episodeId &&
+                line.episodes[i].name == history.episodeName)
+              i,
+        ];
+        if (hits.length == 1) {
+          return HistoryResumeTarget(
+            flag: line.flag,
+            episodeIndex: hits.single,
+            episodeName: line.episodes[hits.single].name,
+            matched: true,
+          );
+        }
+      }
+    }
     return resolveHistoryTarget(
       historyFlag: history?.flag ?? '',
       historyEpisodeId: history?.episodeId ?? '',
       historyEpisodeName: history?.episodeName ?? '',
       lines: lines,
     );
+  }
+
+  bool _hasExactVersionHistory(VodPlayLine line, int index) {
+    final history = _history;
+    return index >= 0 &&
+        index < line.episodes.length &&
+        history?.flag == line.playbackFlag &&
+        history?.episodeId == line.episodes[index].url;
   }
 
   /// 首屏按钮文案（`docs/phase6/design/02` §3.1）。
@@ -2425,8 +2461,7 @@ class _DetailPageState extends State<DetailPage> {
   /// 两个下标在「多季线路」或「倒序」下并不相等。直接把原始下标交给
   /// [TmdbEpisodeStrip.recentIndex] 会标错集。
   ///
-  /// 用集 **URL** 而不是集号做桥接：集号可能缺失或重复（`stillKey` 的注释里
-  /// 已记过这个坑），URL 才是「同一集」的稳定身份。
+  /// 同线路保留原始下标；跨线路优先用 URL + 集名消歧，再退化为既有匹配。
   ///
   /// **跨线路也要标**：同一部剧的「那一集」在各条线路上是同一集，用户切到别的
   /// 线路后仍然需要知道从哪继续（安卓版同样如此）。执行顺序：
@@ -2453,8 +2488,19 @@ class _DetailPageState extends State<DetailPage> {
       return -1;
     }
     final historyEpisode = targetLine.episodes[target.episodeIndex];
-    VodEpisode? mark;
+    VodEpisode? mark =
+        targetLine.flag == rawLine.flag &&
+            target.episodeIndex < rawLine.episodes.length
+        ? rawLine.episodes[target.episodeIndex]
+        : rawLine.episodes
+              .where(
+                (episode) =>
+                    episode.url == historyEpisode.url &&
+                    episode.name == historyEpisode.name,
+              )
+              .firstOrNull;
     for (final episode in rawLine.episodes) {
+      if (mark != null) break;
       if (episode.url == historyEpisode.url) {
         mark = episode;
         break;
@@ -2477,12 +2523,8 @@ class _DetailPageState extends State<DetailPage> {
       mark = rawLine.episodes[target.episodeIndex];
     }
     if (mark == null) return -1;
-    for (var i = 0; i < ordered.length; i++) {
-      if (identical(ordered[i], mark) || ordered[i].url == mark.url) {
-        return i;
-      }
-    }
-    return -1;
+    final rawIndex = rawLine.episodes.indexOf(mark);
+    return _sourceEpisodeIndices(rawLine.episodes, ordered).indexOf(rawIndex);
   }
 
 
@@ -2496,7 +2538,28 @@ class _DetailPageState extends State<DetailPage> {
     return widget.vod;
   }
 
-  Future<void> _play(Vod vod, VodPlayLine line, int episodeIndex) async {
+  Future<void> _play(
+    Vod vod,
+    VodPlayLine line,
+    int episodeIndex, {
+    bool versionConfirmed = false,
+  }) async {
+    if (episodeIndex < 0 || episodeIndex >= line.episodes.length) return;
+    if (_episodeAggregateVersions && !versionConfirmed) {
+      final mapped = widget.state.applyAiMappingsToLine(vod, line);
+      final group = EpisodeAggregation.build(mapped.episodes, scope: line.flag)
+          .where(
+            (group) => group.versions.any(
+              (version) => version.sourceIndex == episodeIndex,
+            ),
+          )
+          .firstOrNull;
+      if (group?.isMultiple == true) {
+        await _playEpisodeGroup(vod, line, group!);
+        return;
+      }
+    }
+    final selectionEpoch = _episodeSelectionEpoch;
     final state = widget.state;
     line = state.applyAiMappingsToLine(vod, line);
     final episode = line.episodes[episodeIndex];
@@ -2531,7 +2594,9 @@ class _DetailPageState extends State<DetailPage> {
         serviceOverride: route == null ? widget.sourceContext?.service : null,
       );
       // 离页/被别的路由覆盖：`isCurrent` 会顺手收掉反馈并返回 false。
-      if (!feedback.isCurrent) return;
+      if (!feedback.isCurrent || selectionEpoch != _episodeSelectionEpoch) {
+        return;
+      }
       if (decision == null || decision.url == null) {
         throw AppError(
           AppErrorKind.playbackUrlMissing,
@@ -2638,7 +2703,9 @@ class _DetailPageState extends State<DetailPage> {
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       // 离页/被别的路由覆盖：这里必须放弃——被覆盖的旧页仍 `mounted`，
       // 只看 `mounted` 会放行迟到 push 与迟到通知。
-      if (!feedback.isCurrent) return;
+      if (!feedback.isCurrent || selectionEpoch != _episodeSelectionEpoch) {
+        return;
+      }
       // 解析阶段到此结束：收起等待态并**交还 owner**。后面「确认换源 → 并入 →
       // 自动续播」是同一次用户动作的后半段，续播那次 [_play] 需要重新拿到反馈；
       // 占着 owner 不放到 `finally`，续播就会因为「本页已有在途动作」被挡掉。
@@ -3322,6 +3389,10 @@ class _DetailPageState extends State<DetailPage> {
                             // 的下标），而渲染下标经过季度过滤与倒序——
                             // `_play` 要的正是原始下标（§3.3）。
                             _resumeTarget(lines).episodeIndex,
+                            versionConfirmed: _hasExactVersionHistory(
+                              _activeLine(lines),
+                              _resumeTarget(lines).episodeIndex,
+                            ),
                           ),
                           icon: const Icon(Icons.play_arrow),
                           label: Text(_heroPlayLabel(lines, vod)),
@@ -3903,7 +3974,11 @@ class _DetailPageState extends State<DetailPage> {
     // 当成「当前季度意图」带进新线路解析）。
     final tmdb = _ownedTmdb;
     final preferred = tmdb?.selectedSeason ?? -1;
-    setState(() => _selectedLineFlag = line.flag);
+    setState(() {
+      _selectedLineFlag = line.flag;
+      _episodeSelectionEpoch++;
+      _manualRange = false;
+    });
     tmdb?.selectLine(line.flag, preferredSeason: preferred);
     unawaited(widget.state.reloadTmdb());
   }
@@ -3938,7 +4013,6 @@ class _DetailPageState extends State<DetailPage> {
   }) {
     // 归属门：不属于本页影片的 TMDB 数据一律不参与渲染，直接直通原集列表。
     final tmdb = _ownedTmdb;
-    if (tmdb == null) return rawLine.episodes;
     final vod = _currentVod;
     if (vod != null && widget.state.hasAiMappings(vod, rawLine)) {
       final mapped = widget.state.applyAiMappingsToLine(vod, rawLine).episodes;
@@ -3952,6 +4026,7 @@ class _DetailPageState extends State<DetailPage> {
                 )
                 .toList();
     }
+    if (tmdb == null) return rawLine.episodes;
     if (!active) {
       final selected = tmdb.selectedSeason;
       if (selected < 0) return rawLine.episodes;
@@ -3980,14 +4055,24 @@ class _DetailPageState extends State<DetailPage> {
     List<VodEpisode> rendered,
   ) {
     final indices = <int>[];
+    final used = <int>{};
     for (final episode in rendered) {
-      var index = -1;
-      for (var i = 0; i < source.length; i++) {
-        if (identical(source[i], episode) || source[i].url == episode.url) {
-          index = i;
-          break;
+      int find(bool Function(VodEpisode) matches) {
+        for (var i = 0; i < source.length; i++) {
+          if (!used.contains(i) && matches(source[i])) return i;
         }
+        return -1;
       }
+
+      var index = find((candidate) => identical(candidate, episode));
+      if (index < 0) {
+        index = find(
+          (candidate) =>
+              candidate.url == episode.url && candidate.name == episode.name,
+        );
+      }
+      if (index < 0) index = find((candidate) => candidate.url == episode.url);
+      if (index >= 0) used.add(index);
       indices.add(index);
     }
     return indices;
@@ -4087,28 +4172,75 @@ class _DetailPageState extends State<DetailPage> {
     // 否则会拿到上一部剧的剧照/集标题）。
     final tmdb = _ownedTmdb;
     final rawLine = _activeLine(lines);
-    final line = tmdb?.applyEpisodesToLine(rawLine).line ?? rawLine;
     final episodes = _renderEpisodes(rawLine, active: true);
-    final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
-    final cards = widget.state.hasAiMappings(vod, rawLine)
+    final fullLine = widget.state.applyAiMappingsToLine(vod, rawLine);
+    final hasDuplicates = EpisodeAggregation.build(
+      fullLine.episodes,
+      scope: rawLine.flag,
+    ).any((group) => group.isMultiple);
+    final sourceIndices = _sourceEpisodeIndices(rawLine.episodes, episodes);
+    final sourceGroups = _episodeAggregateVersions
+        ? EpisodeAggregation.build(
+            episodes,
+            scope: rawLine.flag,
+            sourceIndices: sourceIndices,
+          )
+        : [
+            for (var i = 0; i < episodes.length; i++)
+              EpisodeGroup(
+                key: '${rawLine.flag}:raw:$i',
+                seasonNumber: _seasonOfEpisode(episodes[i]),
+                episodeNumber: sourceEpisodeNumber(episodes[i].name),
+                versions: [
+                  EpisodeVersion(
+                    episode: episodes[i],
+                    sourceIndex: sourceIndices[i],
+                    fileSize: EpisodeFileSize.parse(episodes[i].name),
+                  ),
+                ],
+              ),
+          ];
+    final groups = _episodesReversed
+        ? sourceGroups.reversed.toList()
+        : sourceGroups;
+    final ordered = groups
+        .map((group) => group.versions.first.episode)
+        .toList();
+    // 已确认的组号用于卡片/元数据查表；未知条目仍按原始位置退化。
+    final cardSourceIndices = [
+      for (final group in groups)
+        group.episodeNumber > 0
+            ? group.episodeNumber - 1
+            : group.versions.first.sourceIndex,
+    ];
+    final rawCards = widget.state.hasAiMappings(vod, rawLine)
         ? _aiEpisodeCards(ordered)
         : tmdb == null
         ? TmdbEpisodeCards.build(
             sourceNames: ordered.map((episode) => episode.name).toList(),
             metadataByNumber: const <int, TmdbEpisode>{},
-            // 本分支没有 TMDB 元数据可用，缺号集的集号只能按线路位置推断；
-            // `ordered` 可能已倒序，用它的下标会让缺号集整体错位，故取原始线路下标。
-            sourceIndices: _sourceEpisodeIndices(rawLine.episodes, ordered),
+            sourceIndices: cardSourceIndices,
           )
         : tmdb.episodeCardsForEpisodes(
             ordered,
             seasonNumber: tmdb.selectedSeason >= 0 ? tmdb.selectedSeason : null,
             includeMetadata: true,
-            // 集号只能按**原始线路**的位置推断：`ordered` 已季度过滤、可能已
-            // 倒序，用它的下标会让缺号集的编号整体错位（上游同样用
-            // `episodes.indexOf(episode)`）。
-            sourceIndices: _sourceEpisodeIndices(line.episodes, ordered),
+            sourceIndices: cardSourceIndices,
           );
+
+    final cards = [
+      for (var i = 0; i < rawCards.length; i++)
+        _groupCard(rawCards[i], groups[i]),
+    ];
+    final recentEpisodeIndex = _recentRenderedIndex(vod, rawLine, episodes);
+    final recentSourceIndex = recentEpisodeIndex < 0
+        ? -1
+        : sourceIndices[recentEpisodeIndex];
+    final recentGroupIndex = groups.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == recentSourceIndex,
+      ),
+    );
 
     // 切季 → 区间回到该季第一集所在区间（`docs/phase6/design/03` §5.1）。
     _resetRangeOnSeasonChange(tmdb);
@@ -4118,12 +4250,14 @@ class _DetailPageState extends State<DetailPage> {
     // 未手动选过时，区间跟随「用户关注的那一集」：优先历史命中的集，
     // 否则第 0 集——否则用户从历史续播进来会看到第 1 页而当前集在第 4 页。
     final ranges = _rangeLabels(
-      ordered,
+      cards,
       EpisodeRangePolicy.build(
         ordered.length,
         _manualRange
             ? _rangeIndex * EpisodeRangePolicy.groupSize(ordered.length)
-            : _focusIndex(vod, rawLine, ordered),
+            : recentGroupIndex < 0
+            ? 0
+            : recentGroupIndex,
         _episodesReversed,
       ),
     );
@@ -4169,19 +4303,21 @@ class _DetailPageState extends State<DetailPage> {
             ],
           ),
         TmdbEpisodeHeader(
-          episodeCount: episodes.length,
+          episodeCount: groups.length,
           reversed: _episodesReversed,
           gridMode: _episodeGridMode,
           lineName: rawLine.displayName,
           showScrapedName: _episodeShowScrapedName,
           onToggleNameMode: _toggleEpisodeNameMode,
+          aggregateVersions: _episodeAggregateVersions,
+          onToggleAggregation: hasDuplicates ? _toggleEpisodeAggregation : null,
           onToggleReversed: () =>
               setState(() => _episodesReversed = !_episodesReversed),
           onToggleGridMode: _toggleEpisodeGridMode,
         ),
         // 剧集海报卡片：本线路**唯一**的选集入口（用户反馈 2026-10-08：
         // 有卡片时不再渲染文字版集按钮，二者取其一）。
-        // 卡片数量恒等于本线路渲染的集数；未匹配 TMDB 时用来源剧照/海报兑底，
+        // 聚合只改变此处投影；未匹配 TMDB 时用来源剧照/海报兑底，
         // 保证「每集都有画面」。
         TmdbEpisodeStrip(
           key: ValueKey('tmdb-episode-strip-${rawLine.flag}'),
@@ -4189,27 +4325,61 @@ class _DetailPageState extends State<DetailPage> {
           keyPrefix: 'tmdb-episode-card-${rawLine.flag}',
           actionLabel: '播放',
           showScrapedName: _episodeShowScrapedName,
-          cardWidth: _episodeCardWidth(context, episodes.length),
+          cardWidth: _episodeCardWidth(context, groups.length),
           gridMode: _episodeGridMode,
           // 剧照缺失/失败时回退本剧海报（TMDB 海报优先，否则来源海报）。
           posterUrl: _ownedTmdb?.detailData?.posterUrl ?? vod.vodPic,
-          recentIndex: _recentRenderedIndex(vod, rawLine, ordered),
+          recentIndex: recentGroupIndex,
           ranges: ranges,
           rangeIndex: rangeIndex,
           onRangeChanged: (index) => setState(() {
             _rangeIndex = index;
             _manualRange = true;
           }),
-          onTap: (index, _) =>
-              _playEpisodeAt(vod, rawLine, line, ordered, index),
+          onTap: (index, _) => _playEpisodeGroup(vod, rawLine, groups[index]),
           onLongPress: (index, card) => _showEpisodeDetails(
-            _sourceCardForDetails(card, ordered[index]),
-            sourceName: ordered[index].name,
-            onAction: () => _playEpisodeAt(vod, rawLine, line, ordered, index),
+            groups[index].episodeNumber > 0
+                ? card
+                : _sourceCardForDetails(card, ordered[index]),
+            sourceName: groups[index].isMultiple
+                ? groups[index].label
+                : ordered[index].name,
+            onAction: () => _playEpisodeGroup(vod, rawLine, groups[index]),
           ),
         ),
       ],
     );
+  }
+
+  TmdbEpisodeCard _groupCard(TmdbEpisodeCard card, EpisodeGroup group) =>
+      TmdbEpisodeCard(
+        number: group.episodeNumber > 0 ? group.episodeNumber : card.number,
+        title: group.isMultiple && card.title == card.sourceName
+            ? group.label
+            : EpisodeFileSize.strip(card.title),
+        sourceName: EpisodeFileSize.strip(card.sourceName),
+        date: card.date,
+        overview: card.overview,
+        stillUrl: card.stillUrl,
+        runtime: card.runtime,
+        rating: card.rating,
+        seasonNumber: group.seasonNumber >= 0
+            ? group.seasonNumber
+            : card.seasonNumber,
+        variantCount: group.versions.length,
+        fileSizeLabel: group.sizeSummary,
+        groupLabel: group.label,
+      );
+
+  void _toggleEpisodeAggregation() {
+    final next = !_episodeAggregateVersions;
+    setState(() {
+      _episodeAggregateVersions = next;
+      _episodeSelectionEpoch++;
+      _rangeIndex = 0;
+      _manualRange = false;
+    });
+    unawaited(widget.state.setEpisodeAggregateVersions(next));
   }
 
   TmdbEpisodeCard _sourceCardForDetails(
@@ -4274,21 +4444,12 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  /// 自动跟随的焦点集在**渲染列表**里的下标。
-  ///
-  /// 优先「历史命中的那一集」，否则第 0 集。
-  int _focusIndex(Vod vod, VodPlayLine rawLine, List<VodEpisode> ordered) {
-    if (ordered.isEmpty) return 0;
-    final recent = _recentRenderedIndex(vod, rawLine, ordered);
-    return recent < 0 ? 0 : recent;
-  }
-
   /// 用**真实集号**修正区间标签（`docs/phase6/design/03` §4.2）。
   ///
   /// 集号可能不连续（缺号、重复号），直接用列表下标会误导
   /// （对齐上游 `buildCardEpisodeRanges` 的标签修正）。
   List<EpisodeRange> _rangeLabels(
-    List<VodEpisode> ordered,
+    List<TmdbEpisodeCard> ordered,
     List<EpisodeRange> ranges,
   ) {
     final corrected = <EpisodeRange>[];
@@ -4298,8 +4459,10 @@ class _DetailPageState extends State<DetailPage> {
         corrected.add(range);
         continue;
       }
-      final first = _episodeNumberOr(slice.first, ordered, range.start + 1);
-      final last = _episodeNumberOr(slice.last, ordered, range.end);
+      final first = slice.first.number > 0
+          ? slice.first.number
+          : range.start + 1;
+      final last = slice.last.number > 0 ? slice.last.number : range.end;
       corrected.add(
         EpisodeRange(
           label: first == last ? '$first' : '$first-$last',
@@ -4310,19 +4473,6 @@ class _DetailPageState extends State<DetailPage> {
       );
     }
     return corrected;
-  }
-
-  /// TMDB 富集的集号；取不到时退回 [fallback]（列表下标 + 1）。
-  ///
-  /// 复用既有的 [_tmdbEpisodeNumberOf]（它取不到时返回 -1），
-  /// 不另写一份重复实现（对齐上游 `numbers.getOrDefault(first, start + 1)`）。
-  int _episodeNumberOr(
-    VodEpisode episode,
-    List<VodEpisode> ordered,
-    int fallback,
-  ) {
-    final number = _tmdbEpisodeNumberOf(episode);
-    return number > 0 ? number : fallback;
   }
 
   /// 切季时把区间回到该季第一集所在区间（`docs/phase6/design/03` §5.1）。
@@ -4812,22 +4962,81 @@ class _DetailPageState extends State<DetailPage> {
     return card.title.isEmpty ? code : '$code · ${card.title}';
   }
 
-  /// 按**渲染下标**播放（卡片下标 → 线路原始下标）。
-  void _playEpisodeAt(
+  String? _preferredGroupUrl(Vod vod, VodPlayLine line, EpisodeGroup group) {
+    final current = _history;
+    PlaybackHistory? latest =
+        current?.flag == line.playbackFlag &&
+            group.versions.any(
+              (version) => version.episode.url == current?.episodeId,
+            )
+        ? current
+        : null;
+    final route = _externalRoutes[line.flag];
+    for (final version in group.versions) {
+      final hit = widget.state.findHistory(
+        siteKey: route?.siteKey ?? _pageSite?.key ?? '',
+        vodId: route?.vodId ?? vod.vodId,
+        flag: line.playbackFlag,
+        episodeId: version.episode.url,
+        sourceKey: route == null ? _pageSourceKey : '',
+      );
+      if (hit != null &&
+          hit.flag == line.playbackFlag &&
+          hit.episodeId == version.episode.url &&
+          (latest == null || hit.updatedAt > latest.updatedAt)) {
+        latest = hit;
+      }
+    }
+    return latest?.episodeId;
+  }
+
+  Future<void> _playEpisodeGroup(
     Vod vod,
     VodPlayLine rawLine,
-    VodPlayLine line,
-    List<VodEpisode> episodes,
-    int index,
-  ) {
-    if (index < 0 || index >= episodes.length) return;
-    final episode = episodes[index];
-    // 播放必须用**线路原始下标**（TMDB 只丰富展示，不改变播放事实源）。
-    final rawIndex = line.episodes.indexWhere(
-      (candidate) =>
-          identical(candidate, episode) || candidate.url == episode.url,
-    );
-    _play(vod, rawLine, rawIndex < 0 ? index : rawIndex);
+    EpisodeGroup group,
+  ) async {
+    if (group.versions.isEmpty || _versionDialogOpen) return;
+    var version = group.versions.first;
+    if (group.isMultiple) {
+      final origin = ModalRoute.of(context);
+      final epoch = _episodeSelectionEpoch;
+      final flag = _selectedLineFlag;
+      final preferredUrl = _preferredGroupUrl(vod, rawLine, group);
+      _versionDialogOpen = true;
+      EpisodeVersion? selected;
+      try {
+        selected = await showEpisodeVersionDialog(
+          context,
+          group: group,
+          lineName: rawLine.displayName,
+          preferredUrl: preferredUrl,
+        );
+      } finally {
+        _versionDialogOpen = false;
+      }
+      if (!mounted ||
+          selected == null ||
+          origin?.isCurrent == false ||
+          epoch != _episodeSelectionEpoch ||
+          flag != _selectedLineFlag ||
+          _currentVod?.vodId != vod.vodId) {
+        return;
+      }
+      version = selected;
+    }
+    final currentVod = _currentVod;
+    if (currentVod == null || currentVod.vodId != vod.vodId) return;
+    final currentLine = _playableLines(currentVod)
+        .where((line) => line.flag == rawLine.flag)
+        .firstOrNull;
+    final rawIndex = version.sourceIndex;
+    if (currentLine == null ||
+        rawIndex < 0 ||
+        rawIndex >= currentLine.episodes.length ||
+        currentLine.episodes[rawIndex].url != version.episode.url) {
+      return;
+    }
+    await _play(currentVod, currentLine, rawIndex, versionConfirmed: true);
   }
 
   /// 剧集卡片宽度（`04` §4.4 列数策略的卡片版）。

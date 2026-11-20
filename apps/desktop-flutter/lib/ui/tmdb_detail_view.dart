@@ -762,6 +762,8 @@ class TmdbEpisodeHeader extends StatelessWidget {
     required this.gridMode,
     this.showScrapedName = true,
     this.onToggleNameMode,
+    this.aggregateVersions = true,
+    this.onToggleAggregation,
     this.onToggleReversed,
     this.onToggleGridMode,
     this.lineName,
@@ -776,6 +778,8 @@ class TmdbEpisodeHeader extends StatelessWidget {
   final bool gridMode;
   final bool showScrapedName;
   final VoidCallback? onToggleNameMode;
+  final bool aggregateVersions;
+  final VoidCallback? onToggleAggregation;
   final VoidCallback? onToggleReversed;
   final VoidCallback? onToggleGridMode;
 
@@ -829,6 +833,16 @@ class TmdbEpisodeHeader extends StatelessWidget {
                 onPressed: onToggleNameMode,
                 icon: showScrapedName ? Icons.short_text : Icons.subject,
                 label: showScrapedName ? '刮削名称' : '原始名称',
+              ),
+            ),
+          if (onToggleAggregation != null)
+            Tooltip(
+              message: aggregateVersions ? '展开同集版本' : '聚合同集版本',
+              child: _HeaderToggle(
+                buttonKey: const ValueKey('tmdb-episode-aggregation'),
+                onPressed: onToggleAggregation,
+                icon: aggregateVersions ? Icons.layers : Icons.layers_outlined,
+                label: aggregateVersions ? '聚合开' : '聚合关',
               ),
             ),
         ],
@@ -1937,7 +1951,10 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final title = !showScrapedName && card.sourceName.isNotEmpty
+    final title =
+        !showScrapedName && card.variantCount > 1 && card.groupLabel.isNotEmpty
+        ? card.groupLabel
+        : !showScrapedName && card.sourceName.isNotEmpty
         ? card.sourceName
         : card.title;
     final tooltip = actionLabel.isEmpty ? title : '$actionLabel · $title';
@@ -2008,6 +2025,25 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (card.variantCount > 1)
+                      Positioned(
+                        right: 6,
+                        top: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surface,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '${card.variantCount} 版本',
+                            style: theme.textTheme.labelSmall,
+                          ),
+                        ),
+                      ),
                     if (card.rating > 0)
                       Positioned(
                         right: 6,
@@ -2089,6 +2125,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                   ),
                   Text(
                     [
+                      if (card.fileSizeLabel.isNotEmpty) card.fileSizeLabel,
                       if (card.date.isNotEmpty) card.date,
                       if (card.runtime > 0) '${card.runtime} 分钟',
                     ].join(' · '),
