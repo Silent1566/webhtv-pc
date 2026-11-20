@@ -2106,11 +2106,16 @@ double _lineHeight(BuildContext context, TextStyle? style) {
 /// 300 宽的卡就成了 2.7:1——「放大卡片」会变成「把剧照裁得更狠」。
 double _episodeCardHeight(BuildContext context, double cardWidth) {
   final text = Theme.of(context).textTheme;
-  return cardWidth * 9 / 16 +
-      6 +
-      _lineHeight(context, text.bodyMedium) +
-      _lineHeight(context, text.bodySmall) +
-      6;
+  // `TextPainter` 量出的行高与实际排版之间存在亚像素差：e2e 在 CI 的窗口尺寸上
+  // 出现过「卡片内容比分配高度多 1.00 px」的 RenderFlex overflow（Column 报错、
+  // 用例整条失败）。向上取整并留 1px 余量，保证分配高度不小于真实排版高度。
+  return (cardWidth * 9 / 16 +
+          6 +
+          _lineHeight(context, text.bodyMedium) +
+          _lineHeight(context, text.bodySmall) +
+          6)
+      .ceilToDouble() +
+      1;
 }
 
 /// 网格列数：由可用宽度与目标卡宽反推，列宽不低于目标的 92%。
