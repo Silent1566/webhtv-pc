@@ -655,6 +655,11 @@ jobs:
   # 试用 e2e：独立 job，只在 Linux，且**不在** build-linux 的 needs 链上——失败不阻塞
   # 既有门禁，只产出证据。
   # 试用：本地无法验证（缺 GTK dev 头），连续两次绿后去掉 continue-on-error。
+  #
+  # 2026-11-20 首跑记录（run 44577004188）：构建已通过（补了 Python 运行时准备），
+  # 但 `mvp_a_flow_test` 的 4 个用例失败，首个是 `state.homeResult!` 为 null
+  # （`mvp_a_flow_test.dart:157`）。这一层此前**在 CI 里从未执行过**，属新暴露的
+  # 既有问题，需要能跑真实 Linux 桌面的环境来定位；在修好之前不要把它转为阻塞门禁。
   # 验证对象是 integration_test/mvp_a_flow_test.dart 在真实 Linux 桌面上能否跑通；
   # 两次全绿（同一 pin、同一 runner）之后再转成阻塞门禁。
   e2e-linux-trial:
@@ -684,6 +689,13 @@ jobs:
       - name: Install Dart dependencies
         run: flutter pub get
         working-directory: apps/desktop-flutter
+      # CMake 要求 `runtime/python` 里正好是 bundle.json + python-runtime.zip
+      # （CMakeLists.txt:99）。首次跑这个试用 job 时漏了这步，构建直接报
+      # `ValueError: Bundle must contain exactly bundle.json and python-runtime.zip`。
+      - name: Prepare verified offline Linux Python runtime
+        run: |-
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --cache-dir .local/python-runtime-linux/cache --lock-file scripts/python-runtime-linux.lock.json
+          python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --validate-only --offline
       - name: Build Linux debug bundle
         run: flutter build linux --debug
         working-directory: apps/desktop-flutter

@@ -12,6 +12,8 @@ import 'package:webhtv_pc/services/config_source_status.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 const cachedJson = <String, Object?>{
   'name': '缓存配置',
   'sites': [
@@ -151,7 +153,9 @@ void main() {
     state?.dispose();
     await state?.pythonEnvironmentIdle;
     state = null;
-    await root.delete(recursive: true);
+    // Windows 上 dispose 之后句柄未必立刻归还：直接递归删除会报 OS Error 32
+    // （本仓库已有 `deleteTempWhenReleased` 专门处理这一类）。
+    await deleteTempWhenReleased(root);
   });
 
   test(
