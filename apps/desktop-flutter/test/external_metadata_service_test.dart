@@ -200,9 +200,11 @@ void main() {
       final service = ExternalMetaService(douban: douban(MockClient((r) async {
         requests.add(r.url.path);
         if (r.url.path == '/j/subject_suggest') return response(suggestion);
-        if (r.url.path.endsWith('/photos')) return response({'photos': [
-          {'image': {'large': {'url': 'https://img.example/still.jpg'}}},
-        ]});
+        if (r.url.path.endsWith('/photos')) {
+          return response({'photos': [
+            {'image': {'large': {'url': 'https://img.example/still.jpg'}}},
+          ]});
+        }
         return response({}, 500);
       })));
       addTearDown(service.close);

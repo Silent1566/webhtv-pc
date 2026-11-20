@@ -1013,6 +1013,34 @@ class _AppShellState extends State<AppShell> {
       return const Scaffold(body: LoadingBlock());
     }
 
+    final startupNotifications = <Widget>[
+      if (_state.storageWarnings.isNotEmpty)
+        _StorageWarningBanner(warnings: _state.storageWarnings),
+      if (_bridgeBanner != null)
+        BridgeRestoreBanner(
+          key: const ValueKey('bridge-restore-banner'),
+          failure: _bridgeBanner!,
+          busy: _restoringBridge,
+          onRetry: _retryBridgeRestore,
+          onSwitchSource: _openSitePickerFromBanner,
+          onDismiss: () => setState(() => _bridgeBanner = null),
+        ),
+      if (_state.restoredConfigSourceStatus?.needsAttention ?? false)
+        RestoredConfigSourceBanner(
+          status: _state.restoredConfigSourceStatus!,
+          onManage: _openConfigPage,
+          onDismiss: _state.dismissRestoredConfigSourceWarning,
+        ),
+      if (_state.pendingRecovery != null)
+        RecoveryBanner(
+          marker: _state.pendingRecovery!,
+          hasCrashLog: _state.recoveryCrashLog != null,
+          onResume: _resumeRecovered,
+          onShowLog: _showCrashLog,
+          onDismiss: () => _state.dismissRecovery(),
+        ),
+    ];
+
     return Scaffold(
       body: Column(
         children: [
@@ -1023,31 +1051,6 @@ class _AppShellState extends State<AppShell> {
             onOpenSitePicker: _openSitePicker,
             onOpenLocalFile: _openLocalMediaFile,
           ),
-          if (_state.storageWarnings.isNotEmpty)
-            _StorageWarningBanner(warnings: _state.storageWarnings),
-          if (_bridgeBanner != null)
-            BridgeRestoreBanner(
-              key: const ValueKey('bridge-restore-banner'),
-              failure: _bridgeBanner!,
-              busy: _restoringBridge,
-              onRetry: _retryBridgeRestore,
-              onSwitchSource: _openSitePickerFromBanner,
-              onDismiss: () => setState(() => _bridgeBanner = null),
-            ),
-          if (_state.restoredConfigSourceStatus?.needsAttention ?? false)
-            RestoredConfigSourceBanner(
-              status: _state.restoredConfigSourceStatus!,
-              onManage: _openConfigPage,
-              onDismiss: _state.dismissRestoredConfigSourceWarning,
-            ),
-          if (_state.pendingRecovery != null)
-            RecoveryBanner(
-              marker: _state.pendingRecovery!,
-              hasCrashLog: _state.recoveryCrashLog != null,
-              onResume: _resumeRecovered,
-              onShowLog: _showCrashLog,
-              onDismiss: () => _state.dismissRecovery(),
-            ),
           Expanded(
             child: Row(
               children: [
@@ -1066,9 +1069,52 @@ class _AppShellState extends State<AppShell> {
                 Expanded(
                   child: _WallpaperBackdrop(
                     url: _state.config?.wallpaper,
-                    child: AppShellTransition(
-                      sectionIndex: _section.index,
-                      child: _buildContent(),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        AppShellTransition(
+                          sectionIndex: _section.index,
+                          child: _buildContent(),
+                        ),
+                        if (startupNotifications.isNotEmpty)
+                          Positioned.fill(
+                            child: Padding(
+                              padding: const EdgeInsets.all(AppSpace.md),
+                              child: Align(
+                                alignment: Alignment.topRight,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 720,
+                                  ),
+                                  child: SingleChildScrollView(
+                                    primary: false,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      spacing: AppSpace.sm,
+                                      children: [
+                                        for (final notification
+                                            in startupNotifications)
+                                          Material(
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: AppRadius.mdAll,
+                                              side: BorderSide(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .outlineVariant
+                                                    .withValues(alpha: 0.6),
+                                              ),
+                                            ),
+                                            clipBehavior: Clip.antiAlias,
+                                            child: notification,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
