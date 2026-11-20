@@ -227,7 +227,20 @@ jobs:
           Write-Host "libLiteRt：$litertDir"
           # --coverage 的固定产物是 apps/desktop-flutter/coverage/lcov.info，
           # 下面单独上传，artifact 名按 OS 区分。
-          flutter test --coverage
+          # 汇总显示 passed 仍可能在 runner/coverage 收尾返回非零；保留原码并旁路留档。
+          & ../../scripts/flutter_test_diagnostics_windows.ps1
+          exit $LASTEXITCODE
+
+      - name: Upload Windows unit test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhtv-pc-test-diagnostics-windows-x64
+          path: |
+            apps/desktop-flutter/ci-test-diagnostics/
+            apps/desktop-flutter/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload Windows unit test coverage
         uses: actions/upload-artifact@v4
@@ -284,9 +297,13 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install native build and packaging dependencies
+        # 有界失败/重试：镜像等待不得占满整个 job。
+        timeout-minutes: 5
         run: |-
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update --error-on=any
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 install --no-install-recommends -y clang cmake ninja-build pkg-config \
             libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
             xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
       # Linux 端只有下载缓存值得存：prepare_python_runtime_linux.py 先校验已存在的
@@ -675,9 +692,13 @@ jobs:
         uses: actions/checkout@v4
       # 与 build-linux 完全相同的 apt 依赖：e2e 走同一套 GTK/X11/播放内核链路。
       - name: Install native build and packaging dependencies
+        # 有界失败/重试：镜像等待不得占满整个 job。
+        timeout-minutes: 5
         run: |-
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y clang cmake ninja-build pkg-config \
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update --error-on=any
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 install --no-install-recommends -y clang cmake ninja-build pkg-config \
             libgtk-3-dev libmpv-dev libnotify-dev liblzma-dev libstdc++-12-dev \
             xvfb xauth x11-utils dpkg-dev fonts-noto-cjk
       - name: Set up Flutter
