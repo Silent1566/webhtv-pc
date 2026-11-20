@@ -53,7 +53,9 @@ void main() {
     final row = find.byKey(
       const ValueKey('meta-source-personBiography-wikidata'),
     );
+    await tester.scrollUntilVisible(row, 2000, scrollable: find.byType(Scrollable).first);
     expect(row, findsOneWidget);
+    expect(find.byKey(const ValueKey('meta-source-personBiography-source')), findsNothing);
     await tester.ensureVisible(row);
     await settle(tester);
     await tester.tap(
@@ -74,6 +76,44 @@ void main() {
       store.metaPipeline.orderOf(MetaField.personBiography),
       isNot(contains(MetaSourceKind.wikidata)),
     );
+    final checkbox = tester.widget<Checkbox>(find.descendant(of: row, matching: find.byType(Checkbox)));
+    expect(checkbox.value, isFalse, reason: 'the rebuilt row must reflect the updated pipeline');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('crawler toggle and drag update visible rows immediately', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('crawler-settings');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final state = AppState(paths: AppPaths.resolve(overrides: {'config': dir.path, 'data': dir.path, 'cache': '${dir.path}/cache', 'state': '${dir.path}/state'}), log: LogService());
+    addTearDown(state.dispose);
+    await tester.runAsync(state.bootstrap);
+    tester.view.physicalSize = const Size(1200, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(Brightness.dark), home: MetaSourcesPage(state: state)));
+    await settle(tester);
+    final row = find.byKey(const ValueKey('meta-source-title-source'));
+    final checkbox = find.descendant(of: row, matching: find.byType(Checkbox));
+    await tester.tap(checkbox); await settle(tester);
+    expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+    await tester.tap(checkbox); await settle(tester);
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    final handle = find.descendant(of: row, matching: find.byType(ReorderableDragStartListener));
+    final target = find.byKey(const ValueKey('meta-source-title-tmdb'));
+    final destination = Offset(tester.getCenter(handle).dx, tester.getCenter(target).dy - 72);
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await gesture.moveBy(const Offset(0, -20));
+    await tester.pump(const Duration(milliseconds: 100));
+    await gesture.moveTo(destination);
+    await tester.pumpAndSettle();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    await settle(tester);
+    expect(state.metaPipeline.orderOf(MetaField.title).first, MetaSourceKind.source);
+    expect(tester.getTopLeft(row).dy, lessThan(tester.getTopLeft(target).dy));
+    final store = UiPreferencesStore(path: '${state.paths.configDir}/settings.json');
+    await tester.runAsync(store.load);
+    expect(store.metaPipeline.orderOf(MetaField.title).first, MetaSourceKind.source);
     expect(tester.takeException(), isNull);
   });
 }

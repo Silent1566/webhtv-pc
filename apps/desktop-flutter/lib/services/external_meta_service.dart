@@ -7,11 +7,32 @@ import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_media.dart';
 import '../core/external_meta.dart';
 import '../core/meta_pipeline.dart';
+import '../core/protocol.dart';
+import '../core/source_meta_resolver.dart';
 import '../core/meta_source.dart';
 import 'bangumi_service.dart';
 import 'tmdb_service.dart';
 import 'wikidata_service.dart';
 import 'douban_recommendation_service.dart';
+
+class MetaFieldSnapshots {
+  const MetaFieldSnapshots({this.providers = const {}, this.primary, this.pinnedKind});
+
+  final Map<MetaSourceKind, TmdbDetailData> providers;
+  final ExternalDetail? primary;
+  final MetaSourceKind? pinnedKind;
+
+  MetaPipeline effectivePipeline(MetaPipeline pipeline) {
+    final kind = pinnedKind;
+    if (kind == null) return pipeline;
+    var result = pipeline;
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      final rule = result.ruleOf(field);
+      result = result.withRule(rule.copyWith(order: [kind, ...rule.order.where((s) => s != kind)]));
+    }
+    return result;
+  }
+}
 
 class ExternalMetaService {
   ExternalMetaService({
@@ -70,10 +91,12 @@ class ExternalMetaService {
   /// 当前这一趟解析用的查询（供字段级聚合复用，避免层层传参）。
   MetaQuery? _activeQuery;
   int _generation = 0;
+  int _commentsEpoch = 0;
   bool _closed = false;
 
   bool get isEnabled => !_closed && (_enabled?.call() ?? true);
   bool _current(int generation) => isEnabled && generation == _generation;
+  bool _commentsCurrent(int epoch) => isEnabled && epoch == _commentsEpoch;
 
   /// 某来源的检索候选（手动匹配对话框用）。失败返回空列表，不抛。
   Future<List<MetaCandidate>> candidates(
@@ -85,7 +108,7 @@ class ExternalMetaService {
       return switch (source) {
         MetaSourceKind.douban => await _douban?.searchMeta(query) ?? const [],
         MetaSourceKind.bangumi => await _bangumi?.search(query) ?? const [],
-        MetaSourceKind.tmdb || MetaSourceKind.wikidata => const [],
+        MetaSourceKind.tmdb || MetaSourceKind.wikidata || MetaSourceKind.source => const [],
       };
     } catch (_) {
       _note('候选检索失败：${source.label}', warn: true);
@@ -104,6 +127,93 @@ class ExternalMetaService {
       if (identical(_details[query.key], pending)) _details.remove(query.key);
     });
     return pending;
+  }
+
+  /// Raw snapshots for configurable work fields, independent of the legacy
+  /// mixed primary detail used by ratings/comments.
+  Future<MetaFieldSnapshots> resolveFields(
+    MetaQuery query, {
+    required Vod source,
+    required MetaPipeline pipeline,
+    TmdbDetailData? tmdb,
+    MetaIdentity? tmdbIdentity,
+    MetaIdentity? pinned,
+  }) async {
+    if (!isEnabled) return const MetaFieldSnapshots();
+    final generation = _generation;
+    final raw = <MetaSourceKind, ExternalDetail?>{};
+    MetaSourceKind? pinnedKind;
+    if (pinned != null) {
+      try {
+        final direct = await _detailByIdentity(pinned, generation);
+        if (direct != null) { raw[pinned.kind] = direct; pinnedKind = pinned.kind; }
+      } catch (_) { /* An unavailable pin falls back to configured matching. */ }
+    }
+    if (!_current(generation)) return const MetaFieldSnapshots();
+    final effective = MetaFieldSnapshots(pinnedKind: pinnedKind).effectivePipeline(pipeline);
+    final snapshots = await SourceMetaResolver.loadProviders(
+      pipeline: effective, source: source, tmdb: tmdb,
+      load: (kind) async {
+        if (!_current(generation)) return null;
+        if (!raw.containsKey(kind)) {
+          raw[kind] = switch (kind) {
+            MetaSourceKind.douban => await _doubanDetail(query, generation),
+            MetaSourceKind.bangumi => await _bangumiDetail(query, generation),
+            _ => null,
+          };
+        }
+        return raw[kind]?.data;
+      },
+    );
+    if (!_current(generation)) return const MetaFieldSnapshots();
+    ExternalDetail? primary = pinnedKind == null ? null : raw[pinnedKind];
+    if (primary == null && tmdb != null && tmdbIdentity != null) {
+      primary = ExternalDetail(identity: tmdbIdentity, data: tmdb);
+    }
+    primary ??= raw.values.whereType<ExternalDetail>().firstOrNull;
+    final photoOnly = primary == null;
+    if (photoOnly) primary = await _photoOnlyDetail(query, generation, pipeline);
+    if (!_current(generation)) return const MetaFieldSnapshots();
+    if (primary != null) {
+      _activeQuery = query;
+      _activeImdbId = primary.imdbId;
+      if (!photoOnly) {
+        primary = await _withAggregatedPhotos(primary, generation, rules: pipeline);
+      }
+      if (!_current(generation)) return const MetaFieldSnapshots();
+      _lastSourceLabel = primary.sourceLabel;
+    }
+    return MetaFieldSnapshots(providers: snapshots, primary: primary, pinnedKind: pinnedKind);
+  }
+
+  /// A photo rule can need an external identity even when every text/list
+  /// field stopped at the local resource. Do not load unused subject fields.
+  Future<ExternalDetail?> _photoOnlyDetail(
+    MetaQuery query,
+    int generation,
+    MetaPipeline pipeline,
+  ) async {
+    final douban = _douban;
+    if (douban == null ||
+        !pipeline.orderOf(MetaField.photos).contains(MetaSourceKind.douban)) {
+      return null;
+    }
+    try {
+      final identity = await resolveIdentity(query, MetaSourceKind.douban, generation);
+      if (identity == null || !_current(generation)) return null;
+      final photos = await douban.metaSubjectPhotos(identity.id, isTv: identity.isTv);
+      if (!_current(generation) || photos.isEmpty) return null;
+      return ExternalDetail(
+        identity: identity,
+        data: TmdbDetailData(
+          mediaType: identity.mediaType,
+          photoUrls: photos,
+          stillUrls: photos,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<ExternalDetail?> _loadDetail(
@@ -304,8 +414,9 @@ class ExternalMetaService {
     }
   }
 
-  void clearCache() {
+  void clearCache({bool preserveComments = false}) {
     _generation++;
+    if (!preserveComments) _commentsEpoch++;
     _resolved.clear();
     _details.clear();
     _people.clear();
@@ -359,6 +470,7 @@ class ExternalMetaService {
         );
       case MetaSourceKind.tmdb:
       case MetaSourceKind.wikidata:
+      case MetaSourceKind.source:
         return null;
     }
   }
@@ -407,7 +519,7 @@ class ExternalMetaService {
     MetaSourceKind source,
     int generation,
   ) async {
-    if (!isEnabled) return null;
+    if (!isEnabled || source == MetaSourceKind.source) return null;
     final key = '${source.key}|${query.key}';
     if (_resolved.containsKey(key)) return _resolved[key];
     MetaIdentity? resolved;
@@ -444,6 +556,7 @@ class ExternalMetaService {
                   );
           }
         case MetaSourceKind.wikidata:
+        case MetaSourceKind.source:
           resolved = null;
       }
     } catch (_) {
@@ -459,14 +572,16 @@ class ExternalMetaService {
 
   Future<ExternalDetail> _withAggregatedPhotos(
     ExternalDetail detail,
-    int generation,
-  ) async {
+    int generation, {
+    MetaPipeline? rules,
+  }) async {
     // 三条返回路径都会经过这里：在这里记录 IMDb 编号，供确定性映射使用。
     _activeImdbId = detail.imdbId;
     final field = MetaField.photos;
-    if (pipeline.modeOf(field) != MetaFieldMode.aggregate) return detail;
+    final activePipeline = rules ?? pipeline;
+    if (activePipeline.modeOf(field) != MetaFieldMode.aggregate) return detail;
     final douban = _douban;
-    final order = pipeline.orderOf(field);
+    final order = activePipeline.orderOf(field);
     if (douban == null || !order.contains(MetaSourceKind.douban)) return detail;
     final List<String> extra;
     try {
@@ -496,7 +611,10 @@ class ExternalMetaService {
     final data = detail.data;
     return ExternalDetail(
       identity: detail.identity,
+      imdbId: detail.imdbId,
       data: TmdbDetailData(
+        tmdbId: data.tmdbId,
+        networks: data.networks,
         mediaType: data.mediaType,
         title: data.title,
         originalTitle: data.originalTitle,
@@ -711,6 +829,7 @@ class ExternalMetaService {
     int offset = 0,
     int limit = 5,
   }) async {
+    final generation = _commentsEpoch;
     final order = pipeline.orderOf(MetaField.comments);
     if (!order.contains(MetaSourceKind.douban)) {
       return const ExternalCommentPage();
@@ -719,7 +838,7 @@ class ExternalMetaService {
     if (douban == null || !isEnabled) return const ExternalCommentPage();
     try {
       final candidates = await douban.searchMeta(query);
-      if (!_current(_generation)) return const ExternalCommentPage();
+      if (!_commentsCurrent(generation)) return const ExternalCommentPage();
       final chosen = MetaMatchRules.choose(candidates, query: query);
       if (chosen == null) {
         _note('短评：豆瓣未命中，跳过');
@@ -742,7 +861,10 @@ class ExternalMetaService {
     int offset = 0,
     int limit = 5,
   }) async {
-    if (!isEnabled) return const ExternalCommentPage();
+    if (!isEnabled || identity.kind != MetaSourceKind.douban) {
+      return const ExternalCommentPage();
+    }
+    final generation = _commentsEpoch;
     final douban = _douban;
     if (douban == null) return const ExternalCommentPage();
     try {
@@ -752,7 +874,7 @@ class ExternalMetaService {
         start: offset,
         count: limit,
       );
-      if (!_current(_generation)) return const ExternalCommentPage();
+      if (!_commentsCurrent(generation)) return const ExternalCommentPage();
       final parsed = externalComments(
         page.items,
         source: MetaSourceKind.douban,

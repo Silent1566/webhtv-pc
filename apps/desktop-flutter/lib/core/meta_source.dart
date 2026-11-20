@@ -5,17 +5,17 @@
 /// [MetaSourceKind] 放进后者，`tmdb_media.dart` 就会反向依赖「外部元数据」整层。
 ///
 /// 关键契约：
-/// - [MetaSourceKind.tmdb] 是原有主源；其余两源**只在 TMDB 不可用时兜底**
-///   （用户决策 2026-11-17：豆瓣优先，未命中再退 Bangumi）；
+/// - 来源顺序由逐字段管线决定；爬虫源是当前资源自身的数据，默认排最后；
 /// - 站点名只在这里定义一次，UI 不得各处拼字符串（对齐 `RatingBrand` 的做法）。
 library;
 
-/// 元数据的来源站点。枚举顺序即兜底尝试顺序（豆瓣优先）。
+/// 元数据来源；爬虫源不发请求，只提供当前资源已有的字段。
 enum MetaSourceKind {
   tmdb,
   douban,
   bangumi,
-  wikidata;
+  wikidata,
+  source;
 
   /// 用户可见的站点名。
   String get label => switch (this) {
@@ -23,6 +23,7 @@ enum MetaSourceKind {
     MetaSourceKind.douban => '豆瓣',
     MetaSourceKind.bangumi => 'Bangumi',
     MetaSourceKind.wikidata => 'Wikidata',
+    MetaSourceKind.source => '爬虫源',
   };
 
   /// 稳定的机器名（缓存键、widget key、日志用）。
@@ -31,10 +32,11 @@ enum MetaSourceKind {
     MetaSourceKind.douban => 'douban',
     MetaSourceKind.bangumi => 'bangumi',
     MetaSourceKind.wikidata => 'wikidata',
+    MetaSourceKind.source => 'source',
   };
 
-  /// 是否属于「兜底源」：TMDB 之外的都是。
-  bool get isFallback => this != MetaSourceKind.tmdb;
+  /// 可按外部身份请求的兜底源；爬虫源只读取当前资源，不具备外部身份。
+  bool get isFallback => this != MetaSourceKind.tmdb && this != MetaSourceKind.source;
 
   /// 从机器名反解；无法识别返回 `null`。
   static MetaSourceKind? parse(Object? value) {
@@ -48,6 +50,8 @@ enum MetaSourceKind {
         return MetaSourceKind.bangumi;
       case 'wikidata':
         return MetaSourceKind.wikidata;
+      case 'source':
+        return MetaSourceKind.source;
       default:
         return null;
     }
@@ -66,7 +70,7 @@ enum MetaSourceKind {
 class MetaPersonRef {
   const MetaPersonRef({required this.kind, required this.id, this.name = ''});
 
-  /// 唯一合法入口：`id <= 0` 或来源为 TMDB 时返回 `null`
+  /// 唯一合法入口：`id <= 0` 或来源为 TMDB/爬虫源时返回 `null`
   /// （TMDB 人物不应该走这条兜底链路）。
   static MetaPersonRef? of(MetaSourceKind? kind, int? id, {String name = ''}) {
     if (kind == null || !kind.isFallback) return null;
@@ -97,7 +101,7 @@ class MetaPersonRef {
     MetaSourceKind.douban => 'https://movie.douban.com/celebrity/$id/',
     MetaSourceKind.bangumi => 'https://bgm.tv/person/$id',
     MetaSourceKind.wikidata => 'https://www.wikidata.org/wiki/$id',
-    MetaSourceKind.tmdb => '',
+    MetaSourceKind.tmdb || MetaSourceKind.source => '',
   };
 
   @override

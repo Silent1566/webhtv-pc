@@ -2,7 +2,7 @@ import 'protocol.dart';
 import 'tmdb_detail_model.dart';
 import 'tmdb_media.dart';
 
-/// Builds display-only metadata from a source detail Vod when TMDB is absent.
+/// Builds the local crawler snapshot from the original current-resource Vod.
 TmdbDetailData sourceDetailMeta(Vod vod) {
   final typeGenres = _split(vod.extra['type_name']);
   final genres = typeGenres.isEmpty

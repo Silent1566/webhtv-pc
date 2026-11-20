@@ -5,7 +5,7 @@
 /// 都不用为「数据来自哪家」分叉。
 ///
 /// 关键契约（用户决策 2026-11-17）：
-/// - 只在 TMDB 不可用时使用，**不参与**已匹配 TMDB 的页面；
+/// - 原始字段由管线选择，也可参与已匹配 TMDB 页面的逐字段解析；
 /// - 外部作品一律 `TmdbItem(tmdbId: 0)`：`identity` 因此为 `null`，
 ///   任何"打开 TMDB 详情"的入口都会自然失效，不会拿着豆瓣 id 去请求 TMDB；
 /// - 人物带上 [MetaPersonRef]，人物页据此决定用哪个客户端取简介/作品；
@@ -17,7 +17,8 @@ library;
 import 'external_meta.dart';
 import 'meta_source.dart';
 import 'protocol.dart';
-import 'source_detail_meta.dart';
+import 'meta_pipeline.dart';
+import 'source_meta_resolver.dart';
 import 'tmdb_detail_model.dart';
 import 'tmdb_identity.dart';
 import 'tmdb_media.dart';
@@ -46,38 +47,13 @@ class ExternalDetail {
   /// 展示用的来源名（`豆瓣` / `Bangumi`），供状态条标注真实出处。
   String get sourceLabel => identity.kind.label;
 
-  TmdbDetailData forSource(Vod vod) {
-    final source = sourceDetailMeta(vod);
-    return TmdbDetailData(
-      mediaType: data.mediaType,
-      title: vod.vodName,
-      originalTitle: data.originalTitle,
-      overview: (data.overview ?? '').trim().isEmpty ? source.overview : data.overview,
-      posterUrl: (data.posterUrl ?? '').isEmpty ? source.posterUrl : data.posterUrl,
-      backdropUrls: data.backdropUrls.isEmpty ? source.backdropUrls : data.backdropUrls,
-      posterUrls: data.posterUrls,
-      photoUrls: data.photoUrls,
-      stillUrls: data.stillUrls,
-      cast: data.cast.isEmpty ? source.cast : data.cast,
-      crew: data.crew,
-      creators: data.creators,
-      creatorTeam: data.creatorTeam.isEmpty ? source.creatorTeam : data.creatorTeam,
-      directors: data.directors.isEmpty ? source.directors : data.directors,
-      writers: data.writers,
-      genres: data.genres.isEmpty ? source.genres : data.genres,
-      countries: data.countries.isEmpty ? source.countries : data.countries,
-      languages: data.languages.isEmpty ? source.languages : data.languages,
-      rating: data.rating,
-      ratingSourceLabel: sourceLabel,
-      voteCount: data.voteCount,
-      releaseDate: data.releaseDate.isEmpty ? source.releaseDate : data.releaseDate,
-      runtime: data.runtime,
-      episodeCount: data.episodeCount,
-      seasonCount: data.seasonCount,
-      status: data.status,
-      homepage: identity.url,
-    );
-  }
+  TmdbDetailData forSource(Vod vod, {MetaPipeline? pipeline}) =>
+      SourceMetaResolver.resolve(
+        pipeline: pipeline ?? MetaPipeline.defaults,
+        source: vod,
+        providers: {identity.kind: data},
+        primary: data,
+      );
 }
 
 /// 原始载荷 → [ExternalDetail] 的适配器。

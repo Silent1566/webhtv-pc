@@ -15,10 +15,11 @@ import '../core/detail_ratings.dart';
 import '../core/external_detail_meta.dart';
 import '../core/external_meta.dart';
 import '../core/meta_source.dart';
+import '../core/meta_pipeline.dart';
 import '../core/playback_platform.dart';
 import '../core/protocol.dart';
 import '../core/recommendation_target.dart';
-import '../core/source_detail_meta.dart';
+import '../core/source_meta_resolver.dart';
 import '../core/source_swap.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
@@ -31,6 +32,7 @@ import '../services/ai_season_mapping_service.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/ui_preferences_store.dart';
+import '../services/external_meta_service.dart';
 import '../state/app_state.dart';
 import '../state/detail_ratings_state.dart';
 import '../state/playback_source_context.dart';
@@ -1530,6 +1532,7 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   ExternalDetail? _externalMeta;
+  MetaFieldSnapshots? _externalFields;
   ExternalCommentPage _externalComments = const ExternalCommentPage();
 
   /// 已经为哪一次请求取过短评（避免每帧重复抓）。
@@ -1545,7 +1548,7 @@ class _DetailPageState extends State<DetailPage> {
   /// 评分自己的一趟请求代数：与详情、短评都不互相取消。
   int _ratingsGeneration = 0;
   bool _externalCommentsLoading = false;
-  ExternalDetail? _externalCommentsFor;
+  MetaQuery? _commentsQuery;
   String? _externalMetaKey;
   int _externalMetaGeneration = 0;
 
@@ -1571,10 +1574,7 @@ class _DetailPageState extends State<DetailPage> {
     widget.state.log.info('剧照构成 $trace', scope: 'metadata');
   }
 
-  /// 把外部源取到的**聚合字段**并入 TMDB 的展示数据。
-  ///
-  /// 只并剧照：它们是加法；标题、简介、演职员属于「优先」字段，
-  /// 一律仍是 TMDB 的，不被覆盖。
+  /// 只并剧照；其余可配置字段由原始来源快照逐字段选择。
   TmdbDetailData _mergeAggregates(TmdbDetailData primary, TmdbDetailData extra) {
     final photos = <String>[...primary.photoUrls];
     for (final url in extra.photoUrls) {
@@ -1590,6 +1590,7 @@ class _DetailPageState extends State<DetailPage> {
     }
     return TmdbDetailData(
       tmdbId: primary.tmdbId,
+      networks: primary.networks,
       mediaType: primary.mediaType,
       title: primary.title,
       originalTitle: primary.originalTitle,
@@ -1698,7 +1699,15 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 短评与 TMDB 匹配状态**无关**：TMDB 没有短评、豆瓣有，所以单独取。
   void _ensureComments(Vod vod) {
-    if (!widget.state.externalMetaEnabled) return;
+    final rule = widget.state.metaPipeline.ruleOf(MetaField.comments);
+    if (!widget.state.externalMetaEnabled || !rule.order.contains(MetaSourceKind.douban)) {
+      _commentsGeneration++;
+      _commentsKey = null;
+      _commentsQuery = null;
+      _externalComments = const ExternalCommentPage();
+      _externalCommentsLoading = false;
+      return;
+    }
     final title = vod.vodName.trim();
     if (title.isEmpty) return;
     final query = MetaQuery(
@@ -1706,9 +1715,11 @@ class _DetailPageState extends State<DetailPage> {
       year: firstYear(vod.vodYear ?? ''),
       isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
     );
-    final key = '${vod.vodId}|${query.key}';
+    final key = '${vod.vodId}|${_pageSite?.key}|${query.key}|${rule.toJson()}';
     if (_commentsKey == key) return;
     _commentsKey = key;
+    _commentsQuery = query;
+    _externalCommentsLoading = false;
     _externalComments = const ExternalCommentPage();
     final generation = ++_commentsGeneration;
     unawaited(() async {
@@ -1722,6 +1733,7 @@ class _DetailPageState extends State<DetailPage> {
     if (!widget.state.externalMetaEnabled) {
       _externalMetaGeneration++;
       _externalMeta = null;
+      _externalFields = null;
       _externalMetaKey = null;
       return;
     }
@@ -1741,17 +1753,22 @@ class _DetailPageState extends State<DetailPage> {
         if (vod.extra['original_title'] case final String original) original,
       ],
     );
-    final key = '${vod.vodId}|${_pageSite?.key}|${query.key}';
+    final key = '${vod.vodId}|${_pageSite?.key}|${query.key}|${widget.state.metaPipeline.toJson()}|${tmdb?.detail.hashCode}|${tmdb?.identity?.key}|${widget.state.metaOverrides.of(vod.vodId)?.key}';
     if (_externalMetaKey == key) return;
     _externalMetaKey = key;
     _externalMeta = null;
+    _externalFields = null;
     final generation = ++_externalMetaGeneration;
     unawaited(() async {
-      final loaded = await widget.state.externalMetaService.detail(
-        query,
-        // 用户手动钉住的身份优先；没钉住就照常自动匹配。
+      final identity = tmdb?.identity;
+      final fields = await widget.state.externalMetaService.resolveFields(
+        query, source: vod, pipeline: widget.state.metaPipeline,
+        tmdb: tmdb?.detailData,
+        tmdbIdentity: identity == null ? null : MetaIdentity.of(
+          MetaSourceKind.tmdb, identity.mediaType, identity.tmdbId),
         pinned: widget.state.metaOverrides.of(vod.vodId),
       );
+      final loaded = fields.primary;
       // 不要在 TMDB 已匹配时丢弃结果：聚合字段（剧照）还要用它。
       if (!mounted ||
           generation != _externalMetaGeneration ||
@@ -1760,21 +1777,12 @@ class _DetailPageState extends State<DetailPage> {
       }
       setState(() {
         _externalMeta = loaded;
-        _externalComments = const ExternalCommentPage();
-        _externalCommentsFor = null;
+        _externalFields = fields;
       });
       if (loaded == null) return;
       // 豆瓣/Bangumi 侧有 IMDb 编号时，用它做**确定性**的 TMDB 自动绑定
       // （按标题搜不到、但 IMDb 编号唯一，这条路不会认错续作/翻拍）。
       unawaited(_autoBindTmdb(loaded, vod));
-      final comments = await widget.state.externalMetaService.comments(
-        loaded.identity,
-      );
-      if (!mounted || generation != _externalMetaGeneration) return;
-      setState(() {
-        _externalComments = comments;
-        _externalCommentsFor = loaded;
-      });
     }());
   }
 
@@ -1795,8 +1803,11 @@ class _DetailPageState extends State<DetailPage> {
     _commentsGeneration++;
     _ratingsGeneration++;
     _externalMeta = null;
+    _externalFields = null;
     _externalMetaKey = null;
     _commentsKey = null;
+    _commentsQuery = null;
+    _externalCommentsLoading = false;
     _ratingsKey = null;
     _externalComments = const ExternalCommentPage();
     _extraRatings = const {};
@@ -3099,8 +3110,8 @@ class _DetailPageState extends State<DetailPage> {
     // 归属门：保留的 TMDB 数据不属于本页影片时，整块 TMDB 渲染按「无 TMDB」降级
     // （上一部剧的海报/标题/演职人员绝不能出现在本页，哪怕只有一帧）。
     final owned = _tmdbOwnsThisPage;
-    // 头部补位（`04` §3.2）：**仅补位不覆盖**来源已有字段。
-    final display = owned && tmdb.hasMatch ? tmdb.enrich(vod).vod : vod;
+    // 展示规则只读取原始资源，不能把 TMDB enrich 的结果当作爬虫字段。
+    final display = vod;
     // TMDB 展示模型（海报/背景/类型/时长/季集数/演职人员…）。
     final tmdbData = owned ? tmdb.detailData : null;
     // 头部数据：未匹配 TMDB 时回退到来源海报，保证头部不空白。
@@ -3127,12 +3138,18 @@ class _DetailPageState extends State<DetailPage> {
     // 「照片貌似只看到了 TMDB 的」）。
     final external = state.externalMetaEnabled ? _externalMeta : null;
     // TMDB 已匹配时，**聚合字段**（剧照）仍要并进来：TMDB 只有自己的剧照，
-    // 豆瓣那 24 张不能因为「主来源是 TMDB」就被丢掉。优先字段不动。
+    // 豆瓣那 24 张不能因为「主来源是 TMDB」就被丢掉。
     final mergedData = tmdbData != null && external != null
         ? _mergeAggregates(tmdbData, external.data)
         : tmdbData;
-    final headerData =
-        mergedData ?? external?.forSource(display) ?? sourceDetailMeta(display);
+    final fields = state.externalMetaEnabled ? _externalFields : null;
+    final headerData = SourceMetaResolver.resolve(
+      pipeline: fields?.effectivePipeline(state.metaPipeline) ?? state.metaPipeline,
+      source: vod,
+      tmdb: mergedData,
+      providers: fields?.providers ?? const {},
+      primary: external?.data,
+    );
     _traceMetaPhotos(tmdbData, external, mergedData, headerData);
 
     return Scaffold(
@@ -3148,7 +3165,7 @@ class _DetailPageState extends State<DetailPage> {
         // 调），否则标题会与正文文字叠在一起。
         surfaceTintColor: Theme.of(context).colorScheme.surface,
         elevation: 0,
-        title: Text(vod.vodName),
+        title: Text(headerData.title),
         leading: IconButton(
           tooltip: '返回',
           onPressed: _closeDetail,
@@ -3231,7 +3248,6 @@ class _DetailPageState extends State<DetailPage> {
           Positioned.fill(
             child: TmdbDetailBackdrop(
               urls: headerData.backdropUrls,
-              fallbackUrl: headerData.posterUrl,
             ),
           ),
           if (loading && lines.isEmpty)
@@ -3254,9 +3270,7 @@ class _DetailPageState extends State<DetailPage> {
                   platformLabel: playbackPlatformLabel(
                     networks: headerData.networks,
                   ),
-                  heroOverview: external != null
-                      ? headerData.overview
-                      : display.vodContent ?? tmdbData?.overview,
+                  heroOverview: headerData.overview,
                   // 评分多源并列：TMDB 分 + 兜底来源分 + 额外来源分，各取各的不互斥。
                   ratingTags: Wrap(
                     spacing: AppSpace.sm,
@@ -3467,7 +3481,6 @@ class _DetailPageState extends State<DetailPage> {
   ) {
     final matched = _ownedTmdb?.detailData;
     final external = matched == null && widget.state.externalMetaEnabled ? _externalMeta : null;
-    if (!_tmdbOwnsThisPage && external == null) return const [];
     final data = fallback;
     final sourceOnly = matched == null && external == null;
     return [
@@ -3502,17 +3515,17 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 追加下一页短评。
   Future<void> _loadMoreComments() async {
-    final loaded = _externalCommentsFor;
-    if (loaded == null || _externalCommentsLoading || !_externalComments.hasMore) {
+    final query = _commentsQuery;
+    if (query == null || _externalCommentsLoading || !_externalComments.hasMore) {
       return;
     }
-    final generation = _externalMetaGeneration;
+    final generation = _commentsGeneration;
     setState(() => _externalCommentsLoading = true);
-    final page = await widget.state.externalMetaService.comments(
-      loaded.identity,
+    final page = await widget.state.externalMetaService.commentsByTitle(
+      query,
       offset: _externalComments.nextOffset,
     );
-    if (!mounted || generation != _externalMetaGeneration) return;
+    if (!mounted || generation != _commentsGeneration) return;
     setState(() {
       _externalCommentsLoading = false;
       _externalComments = ExternalCommentPage(
