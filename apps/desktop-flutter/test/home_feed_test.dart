@@ -29,6 +29,38 @@ void main() {
     });
   });
 
+  group('元数据覆盖图', () {
+    test('未启用覆盖时缺省海报保留原图（旧调用不受影响）', () {
+      final item = const HomeItem(
+        kind: HomeItemKind.following,
+        key: 'k',
+        title: 't',
+        poster: 'source.jpg',
+        backdrop: 'source-back.jpg',
+      ).copyWith(poster: null, backdrop: null);
+      expect(item.poster, 'source.jpg');
+      expect(item.backdrop, 'source-back.jpg');
+    });
+
+    test('字段级来源被停用后覆盖为空，不再恢复站点海报', () {
+      final item =
+          const HomeItem(
+            kind: HomeItemKind.following,
+            key: 'k',
+            title: 't',
+            poster: 'source.jpg',
+            backdrop: 'source-back.jpg',
+          ).copyWith(
+            poster: null,
+            backdrop: null,
+            hidePoster: true,
+            hideBackdrop: true,
+          );
+      expect(item.poster, isNull);
+      expect(item.backdrop, isNull);
+    });
+  });
+
   group('I1 容量与唯一', () {
     test('I1 · hero 最多 12 张，每条轨道最多 20 条', () {
       final feed = buildHomeFeed(

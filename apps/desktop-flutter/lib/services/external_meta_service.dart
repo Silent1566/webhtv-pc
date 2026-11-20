@@ -28,6 +28,7 @@ class MetaFieldSnapshots {
     var result = pipeline;
     for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
       final rule = result.ruleOf(field);
+      if (rule.order.isEmpty) continue;
       result = result.withRule(rule.copyWith(order: [kind, ...rule.order.where((s) => s != kind)]));
     }
     return result;
@@ -142,10 +143,15 @@ class ExternalMetaService {
     if (!isEnabled) return const MetaFieldSnapshots();
     final generation = _generation;
     final raw = <MetaSourceKind, ExternalDetail?>{};
+    bool needsPeople(MetaPipeline rules, MetaSourceKind kind) =>
+        rules.orderOf(MetaField.cast).contains(kind) ||
+        rules.orderOf(MetaField.crew).contains(kind);
     MetaSourceKind? pinnedKind;
     if (pinned != null) {
       try {
-        final direct = await _detailByIdentity(pinned, generation);
+        final pinnedPipeline = MetaFieldSnapshots(pinnedKind: pinned.kind).effectivePipeline(pipeline);
+        final direct = await _detailByIdentity(pinned, generation,
+          includePeople: needsPeople(pinnedPipeline, pinned.kind));
         if (direct != null) { raw[pinned.kind] = direct; pinnedKind = pinned.kind; }
       } catch (_) { /* An unavailable pin falls back to configured matching. */ }
     }
@@ -157,8 +163,10 @@ class ExternalMetaService {
         if (!_current(generation)) return null;
         if (!raw.containsKey(kind)) {
           raw[kind] = switch (kind) {
-            MetaSourceKind.douban => await _doubanDetail(query, generation),
-            MetaSourceKind.bangumi => await _bangumiDetail(query, generation),
+            MetaSourceKind.douban => await _doubanDetail(query, generation,
+              includePeople: needsPeople(effective, kind)),
+            MetaSourceKind.bangumi => await _bangumiDetail(query, generation,
+              includePeople: needsPeople(effective, kind)),
             _ => null,
           };
         }
@@ -433,8 +441,9 @@ class ExternalMetaService {
   /// 直接按身份取详情（手动指定用）：不检索、不猜，id 不存在就返回 null。
   Future<ExternalDetail?> _detailByIdentity(
     MetaIdentity identity,
-    int generation,
-  ) async {
+    int generation, {
+    bool includePeople = true,
+  }) async {
     switch (identity.kind) {
       case MetaSourceKind.douban:
         final douban = _douban;
@@ -444,10 +453,9 @@ class ExternalMetaService {
           isTv: identity.isTv,
         );
         if (!_current(generation) || subject.isEmpty) return null;
-        final credits = await douban.metaCredits(
-          identity.id,
-          isTv: identity.isTv,
-        );
+        final credits = includePeople
+            ? await douban.metaCredits(identity.id, isTv: identity.isTv)
+            : const <Map<String, Object?>>[];
         if (!_current(generation)) return null;
         return ExternalDetailMeta.douban(
           identity: identity,
@@ -459,9 +467,9 @@ class ExternalMetaService {
         if (bangumi == null) return null;
         final subject = await bangumi.subject(identity.id);
         if (!_current(generation) || subject.isEmpty) return null;
-        final persons = await _optional(
-          () => bangumi.persons(identity.id),
-        );
+        final persons = includePeople
+            ? await _optional(() => bangumi.persons(identity.id))
+            : const <Map<String, Object?>>[];
         if (!_current(generation)) return null;
         return ExternalDetailMeta.bangumi(
           identity: identity,
@@ -485,7 +493,11 @@ class ExternalMetaService {
     return ExternalDetail(identity: identity, data: data);
   }
 
-  Future<ExternalDetail?> _doubanDetail(MetaQuery query, int generation) async {
+  Future<ExternalDetail?> _doubanDetail(
+    MetaQuery query,
+    int generation, {
+    bool includePeople = true,
+  }) async {
     final douban = _douban;
     if (douban == null) return null;
     try {
@@ -495,7 +507,9 @@ class ExternalMetaService {
       if (chosen == null) return null;
       final subject = await douban.metaSubject(chosen.identity.id, isTv: chosen.identity.isTv);
       if (!_current(generation) || subject.isEmpty) return null;
-      final credits = await douban.metaCredits(chosen.identity.id, isTv: chosen.identity.isTv);
+      final credits = includePeople
+          ? await douban.metaCredits(chosen.identity.id, isTv: chosen.identity.isTv)
+          : const <Map<String, Object?>>[];
       if (!_current(generation)) return null;
       return ExternalDetailMeta.douban(identity: chosen.identity, subject: subject, credits: credits);
     } catch (_) {
@@ -712,7 +726,11 @@ class ExternalMetaService {
     return index >= 0 && index < order.length - 1;
   }
 
-  Future<ExternalDetail?> _bangumiDetail(MetaQuery query, int generation) async {
+  Future<ExternalDetail?> _bangumiDetail(
+    MetaQuery query,
+    int generation, {
+    bool includePeople = true,
+  }) async {
     final bangumi = _bangumi;
     if (bangumi == null) return null;
     try {
@@ -722,7 +740,9 @@ class ExternalMetaService {
       if (chosen == null) return null;
       final subject = await bangumi.subject(chosen.identity.id);
       if (!_current(generation) || subject.isEmpty) return null;
-      final persons = await _optional(() => bangumi.persons(chosen.identity.id));
+      final persons = includePeople
+          ? await _optional(() => bangumi.persons(chosen.identity.id))
+          : const <Map<String, Object?>>[];
       if (!_current(generation)) return null;
       return ExternalDetailMeta.bangumi(identity: chosen.identity, subject: subject, persons: persons);
     } catch (_) {

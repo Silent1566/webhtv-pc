@@ -12,6 +12,43 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/following_air_data.dart';
 
+import 'support/detail_test_seams.dart';
+
+class _AirOnlyState extends AppState {
+  _AirOnlyState(Directory temp)
+    : super(
+        paths: AppPaths.resolve(
+          overrides: {
+            'config': '${temp.path}${Platform.pathSeparator}config',
+            'data': '${temp.path}${Platform.pathSeparator}data',
+            'cache': '${temp.path}${Platform.pathSeparator}cache',
+            'state': '${temp.path}${Platform.pathSeparator}logs',
+          },
+        ),
+        log: MemoryOnlyLogService(),
+      );
+
+  int networkCalls = 0;
+  int airCalls = 0;
+
+  @override
+  Future<Map<String, List<String>>> followingNetworksFor(
+    List<Following> items,
+  ) async {
+    networkCalls++;
+    return const {};
+  }
+
+  @override
+  Future<List<FollowingAirTime>> followingAirTimes() async {
+    airCalls++;
+    return const [];
+  }
+
+  @override
+  Future<List<FollowingSeasonTotal>> followingSeasonTotals() async => const [];
+}
+
 void main() {
   late Directory temp;
   late AppState state;
@@ -44,6 +81,27 @@ void main() {
   final identity = followingIdentityKey('s|v1', 0);
   int at(int month, int day, [int hour = 20]) =>
       DateTime(2026, month, day, hour).millisecondsSinceEpoch;
+
+  test('只要播出时间时跳过平台名，且第二次刷新不再重复取数', () async {
+    final only = _AirOnlyState(temp);
+    final onlyData = FollowingAirData(state: only);
+    addTearDown(() {
+      onlyData.dispose();
+      only.dispose();
+    });
+    final item = Following(
+      seriesKey: 's|v1',
+      season: 0,
+      siteKey: 's',
+      vodId: 'v1',
+      vodName: '测试剧',
+    );
+    await onlyData.refresh([item], includeNetworks: false);
+    expect(only.networkCalls, 0);
+    expect(only.airCalls, 1);
+    await onlyData.refresh([item], includeNetworks: false);
+    expect(only.airCalls, 1);
+  });
 
   test('下一集：取「不早于现在」的最早一集，落到自然日', () {
     data.airTimes = [
