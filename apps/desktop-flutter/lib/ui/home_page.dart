@@ -13,6 +13,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -21,6 +22,7 @@ import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
 import '../core/home_hot.dart';
+import '../core/meta_pipeline.dart';
 import '../core/tmdb_identity.dart';
 import '../services/home_art_service.dart';
 import '../services/search_suggest_service.dart';
@@ -85,6 +87,9 @@ class _HomePageState extends State<HomePage> {
 
   /// 按 TMDB 身份取回的高清图：HomeItem.key → 图。空表示还没到。
   final Map<String, HomeMeta> _art = {};
+  final Map<String, HomeMeta> _followingMeta = {};
+  String _followingMetaKey = '';
+  int _followingMetaGeneration = 0;
 
   /// 热门榜单：类目 → 条目（360kan，搜索页同一份数据）。
   final Map<HotRankCategory, List<SearchSuggestItem>> _hot = {};
@@ -133,7 +138,7 @@ class _HomePageState extends State<HomePage> {
     _air = air;
     air.addListener(_onAirChanged);
     try {
-      await air.refresh(items);
+      await air.refresh(items, includeNetworks: false);
     } catch (_) {
       // 播出时间拿不到就退化成「全部保留」，绝不因为查不到时间而藏掉轨道。
     }
@@ -223,11 +228,12 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 按 TMDB 身份取图（`services/home_art_service.dart`）。
+  /// 续播按历史里已存的 TMDB 身份取图（`services/home_art_service.dart`）。
   ///
-  /// 只覆盖**续播**条目：追番记录没有 TMDB 身份，推荐条目本来就带 TMDB 图，
-  /// 热门条目来自 360kan 榜单（自带封面）。没有身份的条目一律保留站点海报——
-  /// 按标题去 TMDB 搜一遍是 N 次请求，首页首屏付不起这个代价。
+  /// 推荐条目本来就带 TMDB 图，热门条目来自 360kan 榜单（自带封面）。
+  /// 追剧没有内嵌身份，走 `_ensureFollowingMeta` 的持久化匹配链，只补展示字段。
+  /// 没有身份的续播条目一律保留站点海报——按标题去 TMDB 搜一遍是 N 次请求，
+  /// 首页首屏付不起这个代价。
   Future<void> _loadArt() async {
     if (_artRequested || !mounted) return;
     _artRequested = true;
@@ -313,12 +319,80 @@ class _HomePageState extends State<HomePage> {
     return items;
   }
 
+  void _ensureFollowingMeta(HomeFeed feed) {
+    final items = {
+      for (final item in [
+        ...feed.hero,
+        for (final rail in feed.rails) ...rail.items,
+      ])
+        if (item.following != null) item.key: item.following!,
+    }.values.take(_heroMax).toList();
+    final state = _state;
+    final pipeline = state.metaPipeline;
+    final enabled = state.externalMetaEnabled;
+    final overrides = state.metaOverrides;
+    final siteNames = {
+      for (final item in items)
+        item.siteKey: state.siteInActiveSource(item.siteKey)?.name ?? '',
+    };
+    final key = jsonEncode([
+      identityHashCode(state),
+      state.activeSourceKey,
+      state.tmdbConfigRevision,
+      pipeline.toJson(),
+      enabled,
+      for (final item in items)
+        [
+          item.identityKey,
+          item.vodName,
+          item.vodPic,
+          item.metadataUpdatedAtMs,
+          item.updatedAtMs,
+          overrides.of(item.vodId)?.key,
+        ],
+    ]);
+    if (key == _followingMetaKey) return;
+    _followingMetaKey = key;
+    final generation = ++_followingMetaGeneration;
+    _followingMeta.clear();
+    if (items.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || generation != _followingMetaGeneration) return;
+      final resolved = await HomeMetaService(tmdb: state.tmdbService)
+          .resolveFollowings(
+            items,
+            match: state.followingTmdbItem,
+            pipeline: pipeline,
+            external: enabled ? state.externalMetaService : null,
+            pinned: (item) => overrides.of(item.vodId),
+            source: state.followingVod,
+            siteName: (item) => siteNames[item.siteKey],
+            isCurrent: () => mounted && generation == _followingMetaGeneration,
+          );
+      if (!mounted ||
+          generation != _followingMetaGeneration ||
+          resolved.isEmpty) {
+        return;
+      }
+      setState(() => _followingMeta.addAll(resolved));
+    });
+  }
+
   HomeItem _withArt(HomeItem item) {
-    final art = _art[item.key];
-    if (art == null) return item;
+    final pipeline = _state.metaPipeline;
+    final hidePoster =
+        item.following != null && pipeline.orderOf(MetaField.poster).isEmpty;
+    final hideBackdrop =
+        item.following != null && pipeline.orderOf(MetaField.backdrop).isEmpty;
+    final art = _followingMeta[item.key] ?? _art[item.key];
+    if (art == null) {
+      return item.copyWith(hidePoster: hidePoster, hideBackdrop: hideBackdrop);
+    }
     return item.copyWith(
       poster: art.poster,
       backdrop: art.backdrop,
+      hidePoster: hidePoster,
+      hideBackdrop: hideBackdrop,
       overview: art.overview,
       tags: art.genres,
       // 副信息只在站点没给的时候补：站源写的「2024 · 8.1」是它自己的口径，
@@ -382,6 +456,7 @@ class _HomePageState extends State<HomePage> {
                   _recommendations[RecommendationRow.douban] ?? const [],
             ),
           );
+    _ensureFollowingMeta(feed);
     // 元数据优先级的图覆盖站点图（取不到的条目原样保留站点海报）。
     final hero = [for (final item in feed.hero) _withArt(item)];
     final rails = [

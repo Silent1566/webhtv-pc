@@ -136,9 +136,12 @@ void main() {
           'tmdb': {'language': 'zh'},
         }),
       );
+    // 没有持久化元数据规则就无须迁移；load 与只读目录合并均须保留原字节。
+    // 不允许先读迁移后的文件再当作 baseline，否则会漏掉无规则被意外重写。
     final before = file.readAsStringSync();
     final store = UiPreferencesStore(path: settings);
     await store.load();
+    expect(file.readAsStringSync(), before);
     expect(
       store
           .listExternalPlayers(const [

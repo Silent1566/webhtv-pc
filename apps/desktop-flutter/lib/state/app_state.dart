@@ -7881,10 +7881,8 @@ AiContentCompletion? aiContentCompletion,
     return summary;
   }
 
-  /// 站点详情 → 线路集数（供 `FollowingService` 调用）。
-  Future<List<FollowingLineEpisodes>?> _resolveFollowingLines(
-    Following item,
-  ) async {
+  /// 只读取追剧的原始站源详情，不切换当前站点或详情页状态。
+  Future<Vod?> followingVod(Following item) async {
     final config = effectiveConfig;
     final service = _siteService;
     if (config == null || service == null) return null;
@@ -7899,8 +7897,15 @@ AiContentCompletion? aiContentCompletion,
       item.vodId,
       identity: VodIdentityHint(vodId: item.vodId, vodName: item.vodName),
     );
-    if (result.value.list.isEmpty) return null;
-    final vod = result.value.list.first;
+    return result.value.list.firstOrNull;
+  }
+
+  /// 站点详情 → 线路集数（供 `FollowingService` 调用）。
+  Future<List<FollowingLineEpisodes>?> _resolveFollowingLines(
+    Following item,
+  ) async {
+    final vod = await followingVod(item);
+    if (vod == null) return null;
     return [
       for (final line in playLinesOf(vod))
         FollowingLineEpisodes(

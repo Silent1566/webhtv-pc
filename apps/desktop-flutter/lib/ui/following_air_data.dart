@@ -32,13 +32,18 @@ class FollowingAirData extends ChangeNotifier {
   /// `phase9_calendar_page_test`「加载期间手动滚动后数据就绪不抢回列表位置」）。
 
   /// 按当前追番集合刷新；集合没变直接返回。两个来源并行取（与原日历页一致）。
-  Future<void> refresh(List<Following> items) async {
+  /// [includeNetworks] 只在首页这种「只要播出时间」的宿主里关掉：
+  /// 平台名是追剧页的徽标素材，首页不画，多取一次等于多一趟 TMDB 匹配。
+  Future<void> refresh(
+    List<Following> items, {
+    bool includeNetworks = true,
+  }) async {
     final key = items.map((item) => item.identityKey).join(',');
     final loadAir = key != _airKey;
-    final loadNetworks = key != _networksKey;
+    final loadNetworks = includeNetworks && key != _networksKey;
     if (!loadAir && !loadNetworks) return;
     _airKey = key;
-    _networksKey = key;
+    if (loadNetworks) _networksKey = key;
     if (items.isEmpty) {
       airTimes = const [];
       seasonTotals = const [];

@@ -59,6 +59,141 @@ void main() {
   DoubanRecommendationService douban(http.Client client) => DoubanRecommendationService(
     client:client,cacheDirectory:temp,delay:(_) async {});
 
+  ExternalMetaService fieldService(List<String> requests) {
+    final service = ExternalMetaService(
+      douban: douban(MockClient((r) async {
+        requests.add(r.url.path);
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/credits')) {
+          return response({'items': [
+            {'id': '1', 'name': '范伟', 'character': '演员', 'roles': ['演员']},
+            {'id': '2', 'name': '辛爽', 'character': '导演', 'roles': ['导演']},
+          ]});
+        }
+        return response(subject);
+      })),
+      bangumi: BangumiService(minInterval: Duration.zero, client: MockClient((r) async {
+        requests.add(r.url.path);
+        if (r.method == 'POST') {
+          return response({'data': [
+            {'id': 431299, 'name_cn': '漫长的季节', 'platform': '国产剧', 'date': '2023-04-22'},
+          ]});
+        }
+        if (r.url.path.endsWith('/persons')) {
+          return response([
+            {'id': 7, 'name': '范伟', 'relation': '主演'},
+            {'id': 8, 'name': '辛爽', 'relation': '导演'},
+          ]);
+        }
+        return response({
+          'id': 431299, 'name_cn': '漫长的季节', 'summary': 'Bangumi 简介',
+          'images': {'large': 'https://img.example/bangumi.jpg'},
+        });
+      })),
+    );
+    addTearDown(service.close);
+    return service;
+  }
+
+  MetaPipeline fieldPipeline(Map<MetaField, List<MetaSourceKind>> orders) {
+    var pipeline = MetaPipeline.defaults;
+    for (final field in MetaField.values) {
+      pipeline = pipeline.withRule(pipeline.ruleOf(field).copyWith(order: orders[field] ?? []));
+    }
+    return pipeline;
+  }
+
+  const fieldQuery = MetaQuery(title: '漫长的季节', year: 2023);
+  final fieldSource = Vod(vodId: 'local', vodName: 'Local title');
+  MetaIdentity fieldIdentity(MetaSourceKind kind) => MetaIdentity.of(
+    kind, TmdbMediaType.tv, kind == MetaSourceKind.douban ? 35588177 : 431299,
+  )!;
+
+  test('successful pin leaves explicitly disabled poster and work fields empty', () async {
+    final service = fieldService([]);
+    final pipeline = fieldPipeline({MetaField.overview: [MetaSourceKind.douban]});
+    final result = await service.resolveFields(fieldQuery, source: fieldSource,
+      pipeline: pipeline, pinned: fieldIdentity(MetaSourceKind.douban));
+    expect(result.pinnedKind, MetaSourceKind.douban);
+    final effective = result.effectivePipeline(pipeline);
+    final projected = SourceMetaResolver.resolve(pipeline: effective, source: fieldSource,
+      providers: result.providers, primary: result.primary?.data);
+    expect(projected.overview, '豆瓣简介');
+    expect(projected.posterUrl, isNull);
+    expect(projected.posterUrls, isEmpty);
+    for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+      if (field != MetaField.overview) expect(effective.orderOf(field), isEmpty, reason: field.name);
+    }
+  });
+
+  for (final kind in [MetaSourceKind.douban, MetaSourceKind.bangumi]) {
+    for (final pinned in [false, true]) {
+      test('home-scope fields skip people endpoints (${kind.name}, pinned=$pinned)', () async {
+        final requests = <String>[];
+        final service = fieldService(requests);
+        final pipeline = fieldPipeline({
+          for (final field in [MetaField.poster, MetaField.backdrop, MetaField.overview,
+            MetaField.genres, MetaField.releaseDate]) field: [kind],
+        });
+        final result = await service.resolveFields(fieldQuery, source: fieldSource,
+          pipeline: pipeline, pinned: pinned ? fieldIdentity(kind) : null);
+        final projected = SourceMetaResolver.resolve(
+          pipeline: result.effectivePipeline(pipeline), source: fieldSource,
+          providers: result.providers, primary: result.primary?.data);
+        expect(projected.overview, kind == MetaSourceKind.douban ? '豆瓣简介' : 'Bangumi 简介');
+        expect(projected.posterUrl, kind == MetaSourceKind.douban
+          ? 'https://img.example/cover.jpg' : 'https://img.example/bangumi.jpg');
+        expect(requests.where((path) => path.endsWith('/credits')), isEmpty);
+        expect(requests.where((path) => path.endsWith('/persons')), isEmpty);
+      });
+
+      for (final peopleField in [MetaField.cast, MetaField.crew]) {
+        test('people fields fetch only required provider (${kind.name}, ${peopleField.name}, pinned=$pinned)', () async {
+          final requests = <String>[];
+          final service = fieldService(requests);
+          final pipeline = fieldPipeline({
+            MetaField.overview: [MetaSourceKind.douban],
+            MetaField.poster: [MetaSourceKind.bangumi],
+            peopleField: [pinned ? MetaSourceKind.source : kind],
+          });
+          final result = await service.resolveFields(fieldQuery, source: fieldSource,
+            pipeline: pipeline, pinned: pinned ? fieldIdentity(kind) : null);
+          final projected = SourceMetaResolver.resolve(
+            pipeline: result.effectivePipeline(pipeline), source: fieldSource,
+            providers: result.providers, primary: result.primary?.data);
+          expect(peopleField == MetaField.cast
+            ? projected.cast.map((person) => person.name)
+            : projected.crew.map((person) => person.name),
+            [peopleField == MetaField.cast ? '范伟' : '辛爽']);
+          expect(requests.where((path) => path.endsWith('/credits')),
+            hasLength(kind == MetaSourceKind.douban ? 1 : 0));
+          expect(requests.where((path) => path.endsWith('/persons')),
+            hasLength(kind == MetaSourceKind.bangumi ? 1 : 0));
+        });
+      }
+    }
+  }
+
+  test('default field resolution still loads provider casts', () async {
+    final requests = <String>[];
+    final service = fieldService(requests);
+    final result = await service.resolveFields(fieldQuery, source: fieldSource,
+      pipeline: MetaPipeline.defaults);
+    expect(result.providers[MetaSourceKind.douban]?.cast.single.name, '范伟');
+    expect(result.providers[MetaSourceKind.bangumi]?.cast.single.name, '范伟');
+    expect(requests.where((path) => path.endsWith('/credits')), hasLength(1));
+    expect(requests.where((path) => path.endsWith('/persons')), hasLength(1));
+  });
+
+  for (final kind in [null, MetaSourceKind.douban, MetaSourceKind.bangumi]) {
+    test('legacy detail keeps people loading (pin=${kind?.name})', () async {
+      final service = fieldService([]);
+      final result = await service.detail(fieldQuery, pinned: kind == null ? null : fieldIdentity(kind));
+      expect(result?.data.cast.single.name, '范伟');
+      expect(result?.data.crew.single.name, '辛爽');
+    });
+  }
+
   for (final sourceOnly in [false, true]) {
     test('source-first complete resource retains independently enabled photos (sourceOnly=$sourceOnly)', () async {
       final requests = <String>[];
