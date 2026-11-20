@@ -1324,6 +1324,7 @@ class _DetailPageState extends State<DetailPage> {
   /// 用 `late` 初始化器是为了能读 `widget`——它在 `initState` 之后才求值。
   late bool _episodeGridMode =
       widget.state.episodeViewMode == UiEpisodeViewMode.grid;
+  late bool _episodeShowScrapedName = widget.state.episodeShowScrapedName;
 
   /// 选集区间下标（`docs/phase6/design/03` §4.4）。
   ///
@@ -4067,6 +4068,7 @@ class _DetailPageState extends State<DetailPage> {
     return TmdbEpisodeCard(
       number: number ?? 0,
       title: metadata?.displayTitle ?? episode.name,
+      sourceName: episode.name,
       seasonNumber: season ?? -100,
       date: metadata?.date ?? '',
       overview: metadata?.overview,
@@ -4171,6 +4173,8 @@ class _DetailPageState extends State<DetailPage> {
           reversed: _episodesReversed,
           gridMode: _episodeGridMode,
           lineName: rawLine.displayName,
+          showScrapedName: _episodeShowScrapedName,
+          onToggleNameMode: _toggleEpisodeNameMode,
           onToggleReversed: () =>
               setState(() => _episodesReversed = !_episodesReversed),
           onToggleGridMode: _toggleEpisodeGridMode,
@@ -4184,6 +4188,7 @@ class _DetailPageState extends State<DetailPage> {
           cards: cards,
           keyPrefix: 'tmdb-episode-card-${rawLine.flag}',
           actionLabel: '播放',
+          showScrapedName: _episodeShowScrapedName,
           cardWidth: _episodeCardWidth(context, episodes.length),
           gridMode: _episodeGridMode,
           // 剧照缺失/失败时回退本剧海报（TMDB 海报优先，否则来源海报）。
@@ -4344,6 +4349,12 @@ class _DetailPageState extends State<DetailPage> {
         next ? UiEpisodeViewMode.grid : UiEpisodeViewMode.list,
       ),
     );
+  }
+
+  void _toggleEpisodeNameMode() {
+    final next = !_episodeShowScrapedName;
+    setState(() => _episodeShowScrapedName = next);
+    unawaited(widget.state.setEpisodeShowScrapedName(next));
   }
 
   /// 导航源选集区：卡片**只**来自 TMDB，站源的集名/集数/顺序一律不参与。

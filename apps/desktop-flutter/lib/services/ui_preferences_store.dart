@@ -171,6 +171,7 @@ class UiPreferencesStore {
 
   /// 选集视图模式。`null` = 从未设置过，用默认 [UiEpisodeViewMode.fallback]。
   String? _episodeViewMode;
+  bool? _episodeShowScrapedName;
   bool? _externalMetaEnabled;
   MetaPipeline? _metaPipeline;
   MetaOverrideStore? _metaOverrides;
@@ -332,6 +333,8 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过选集视图模式。
   bool get hasExplicitEpisodeViewMode => _episodeViewMode != null;
+
+  bool get episodeShowScrapedName => _episodeShowScrapedName ?? true;
 
   bool get externalMetaEnabled => _externalMetaEnabled ?? true;
 
@@ -637,6 +640,10 @@ class UiPreferencesStore {
             _metaPipeline = migrated;
           }
           _metaOverrides = MetaOverrideStore.fromJson(ui['metaOverrides']);
+          final showScrapedName = ui['episodeShowScrapedName'];
+          if (showScrapedName is bool) {
+            _episodeShowScrapedName = showScrapedName;
+          }
           final viewMode = ui['episodeViewMode'];
           if (viewMode is String) {
             // 只接受合法值；手改成别的字符串时回落到默认（网格）。
@@ -899,6 +906,12 @@ class UiPreferencesStore {
     final normalized = UiEpisodeViewMode.normalize(mode);
     if (normalized == _episodeViewMode) return;
     _episodeViewMode = normalized;
+    await _persist();
+  }
+
+  Future<void> rememberEpisodeShowScrapedName(bool showScraped) async {
+    if (_episodeShowScrapedName == showScraped) return;
+    _episodeShowScrapedName = showScraped;
     await _persist();
   }
 
@@ -1333,6 +1346,10 @@ class UiPreferencesStore {
         // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
         final viewMode = _episodeViewMode;
         if (viewMode != null) ui['episodeViewMode'] = viewMode;
+        final showScrapedName = _episodeShowScrapedName;
+        if (showScrapedName != null) {
+          ui['episodeShowScrapedName'] = showScrapedName;
+        }
         final externalMeta = _externalMetaEnabled;
         if (externalMeta != null) ui['externalMetaEnabled'] = externalMeta;
         ui['metaPipelineVersion'] = 1;

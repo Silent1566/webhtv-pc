@@ -760,6 +760,8 @@ class TmdbEpisodeHeader extends StatelessWidget {
     required this.episodeCount,
     required this.reversed,
     required this.gridMode,
+    this.showScrapedName = true,
+    this.onToggleNameMode,
     this.onToggleReversed,
     this.onToggleGridMode,
     this.lineName,
@@ -772,6 +774,8 @@ class TmdbEpisodeHeader extends StatelessWidget {
   final String title;
   final bool reversed;
   final bool gridMode;
+  final bool showScrapedName;
+  final VoidCallback? onToggleNameMode;
   final VoidCallback? onToggleReversed;
   final VoidCallback? onToggleGridMode;
 
@@ -787,17 +791,20 @@ class TmdbEpisodeHeader extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
-          Text(
-            [
-              title,
-              if (lineName != null && lineName!.isNotEmpty) lineName!,
-              '$episodeCount 集',
-            ].join(' · '),
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+          Expanded(
+            child: Text(
+              [
+                title,
+                if (lineName != null && lineName!.isNotEmpty) lineName!,
+                '$episodeCount 集',
+              ].join(' · '),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const Spacer(),
           // 两个切换按钮**压到 24 高**（= 标题行高）：默认按钮带 48 的点击区，
           // 会把整行撑到 48，标题被居中后上下各多出 12——「选集」到区间条/
           // 卡片的缝就变成 22，而其它区块是 10（用户 2026-11-12 反馈
@@ -814,6 +821,16 @@ class TmdbEpisodeHeader extends StatelessWidget {
             icon: gridMode ? Icons.view_list : Icons.grid_view,
             label: gridMode ? '网格' : '列表',
           ),
+          if (onToggleNameMode != null)
+            Tooltip(
+              message: showScrapedName ? '切换为原始名称' : '切换为刮削名称',
+              child: _HeaderToggle(
+                buttonKey: const ValueKey('tmdb-episode-name-mode'),
+                onPressed: onToggleNameMode,
+                icon: showScrapedName ? Icons.short_text : Icons.subject,
+                label: showScrapedName ? '刮削名称' : '原始名称',
+              ),
+            ),
         ],
       ),
     );
@@ -903,6 +920,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.cardWidth,
     this.height,
     this.gridMode = false,
+    this.showScrapedName = true,
     this.recentIndex = -1,
     this.ranges = const [],
     this.rangeIndex = 0,
@@ -948,6 +966,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 为什么需要：长剧集（几十集）在横向条里要滚很久，网格模式一屏能看到
   /// 更多集；上游同样提供「列表/网格」两种模式切换。
   final bool gridMode;
+  final bool showScrapedName;
 
   /// 区间分组（`docs/phase6/design/03` §4.3）。空或只有 1 个区间时不渲染区间条。
   final List<EpisodeRange> ranges;
@@ -1152,21 +1171,22 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     required TmdbEpisodeCard card,
     required double width,
   }) => TmdbEpisodeCardTile(
-        buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
-        stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
-        card: card,
-        width: width,
-        posterUrl: widget.posterUrl,
-        actionLabel: widget.actionLabel,
-        isRecent: originalIndex == widget.recentIndex,
-        recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
-        onTap: widget.onTap == null
-            ? null
-            : () => widget.onTap!.call(originalIndex, card),
-        onLongPress: widget.onLongPress == null
-            ? null
-            : () => widget.onLongPress!.call(originalIndex, card),
-      );
+    buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
+    stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
+    card: card,
+    width: width,
+    posterUrl: widget.posterUrl,
+    actionLabel: widget.actionLabel,
+    showScrapedName: widget.showScrapedName,
+    isRecent: originalIndex == widget.recentIndex,
+    recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
+    onTap: widget.onTap == null
+        ? null
+        : () => widget.onTap!.call(originalIndex, card),
+    onLongPress: widget.onLongPress == null
+        ? null
+        : () => widget.onLongPress!.call(originalIndex, card),
+  );
 }
 
 /// 详情页主体（站点页与纯 TMDB 页共用）。
@@ -1867,6 +1887,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.isRecent = false,
+    this.showScrapedName = true,
     this.posterUrl,
   });
 
@@ -1899,6 +1920,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
 
   /// 是否是「最近播放」那一集（`docs/phase6/design/02` §6）。
   final bool isRecent;
+  final bool showScrapedName;
 
   final TmdbEpisodeCard card;
 
@@ -1915,9 +1937,10 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tooltip = actionLabel.isEmpty
-        ? card.title
-        : '$actionLabel · ${card.title}';
+    final title = !showScrapedName && card.sourceName.isNotEmpty
+        ? card.sourceName
+        : card.title;
+    final tooltip = actionLabel.isEmpty ? title : '$actionLabel · $title';
     return Tooltip(
       message: tooltip,
       child: OutlinedButton(
@@ -2059,7 +2082,7 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    card.title,
+                    title,
                     style: theme.textTheme.bodyMedium,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
