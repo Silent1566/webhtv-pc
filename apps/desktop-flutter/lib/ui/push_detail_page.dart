@@ -207,6 +207,10 @@ class PushDetailPage extends StatelessWidget {
         state: state,
         vod: Vod(vodId: request.vodId, vodName: request.vodName),
         tmdbSearch: state.searchTmdb,
+        // 推送记录的当前匹配在推送表里，不在 state.tmdb。
+        currentTmdb: state
+            .pushMatchedItem(vodId: request.vodId, title: request.vodName)
+            ?.identity,
         allowExternal: false,
         onPickTmdb: (item) async {
           await state.manualMatchPush(

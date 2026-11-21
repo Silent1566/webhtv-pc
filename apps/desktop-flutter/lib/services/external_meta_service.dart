@@ -100,14 +100,19 @@ class ExternalMetaService {
   bool _commentsCurrent(int epoch) => isEnabled && epoch == _commentsEpoch;
 
   /// 某来源的检索候选（手动匹配对话框用）。失败返回空列表，不抛。
+  ///
+  /// [enrich] 由对话框传 `true`：候选行要显示评分/主创事实；自动匹配链路
+  /// 不传，避免为即将被详情覆盖的字段多打一次请求。
   Future<List<MetaCandidate>> candidates(
     MetaQuery query,
-    MetaSourceKind source,
-  ) async {
+    MetaSourceKind source, {
+    bool enrich = false,
+  }) async {
     if (!isEnabled) return const [];
     try {
       return switch (source) {
-        MetaSourceKind.douban => await _douban?.searchMeta(query) ?? const [],
+        MetaSourceKind.douban =>
+          await _douban?.searchMeta(query, enrich: enrich) ?? const [],
         MetaSourceKind.bangumi => await _bangumi?.search(query) ?? const [],
         MetaSourceKind.tmdb || MetaSourceKind.wikidata || MetaSourceKind.source => const [],
       };
