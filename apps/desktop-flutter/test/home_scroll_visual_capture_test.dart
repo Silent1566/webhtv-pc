@@ -271,7 +271,11 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final metadata = TmdbService(
-      config: () => const TmdbConfig(apiKey: 'capture-fixture'),
+      config: () => const TmdbConfig(
+        apiKey: 'capture-fixture',
+        imageBase: tmdbDefaultImageBase,
+        backdropBase: tmdbDefaultBackdropBase,
+      ),
       client: MockClient(
         (_) async => http.Response(
           jsonEncode({

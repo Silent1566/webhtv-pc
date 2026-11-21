@@ -37,8 +37,10 @@ class _ImageHostClient extends http.BaseClient {
   }
 }
 
-Future<AppState> _boot(
+Future<AppState> _createState(
   WidgetTester tester, {
+  bool bootstrap = true,
+  _ImageHostClient? client,
   Set<String> broken = const {},
   String apiBase = 'auto',
   String imageBase = 'auto',
@@ -72,20 +74,51 @@ Future<AppState> _boot(
     warmAutoRoutes: false,
     tmdbService: TmdbService(
       config: () => const TmdbConfig(apiKey: 'key'),
-      client: _ImageHostClient(broken: broken),
+      client: client ?? _ImageHostClient(broken: broken),
     ),
   );
   addTearDown(() {
     state.dispose();
     temp.deleteSync(recursive: true);
   });
-  await tester.runAsync(state.bootstrap);
+  if (bootstrap) await tester.runAsync(state.bootstrap);
   return state;
 }
 
 void main() {
+  testWidgets('设置加载前不探测自动线路，加载后仍能测速', (tester) async {
+    final client = _ImageHostClient();
+    final state = await _createState(tester, bootstrap: false, client: client);
+
+    final pending = await tester.runAsync(state.refreshTmdbAutoRoutes);
+    expect(pending, 'TMDB 设置尚未加载');
+    expect(client.requests, isEmpty);
+
+    await tester.runAsync(state.bootstrap);
+    final ready = await tester.runAsync(state.refreshTmdbAutoRoutes);
+    expect(ready, contains('自动线路已测速'));
+    expect(client.requests, isNotEmpty);
+  });
+
+  testWidgets('设置加载前的图片失败不抛异常，也不计入加载后的换线阈值', (tester) async {
+    final client = _ImageHostClient(broken: {'images.tmdb.org'});
+    final state = await _createState(tester, bootstrap: false, client: client);
+    var notifications = 0;
+    state.addListener(() => notifications++);
+
+    state.reportTmdbImageFailure('https://images.tmdb.org/t/p/w342/early.jpg');
+    expect(notifications, 0);
+    expect(client.requests, isEmpty);
+
+    await tester.runAsync(state.bootstrap);
+    state.reportTmdbImageFailure('https://images.tmdb.org/t/p/w342/first.jpg');
+    await tester.runAsync(pumpEventQueue);
+    expect(state.tmdbRouteStatus().imageHost, 'images.tmdb.org');
+    expect(client.requests, isEmpty);
+  });
+
   testWidgets('自动图片线路：配置存 auto，读出来是具体地址', (tester) async {
-    final state = await _boot(tester);
+    final state = await _createState(tester);
 
     expect(state.tmdbUserConfig.imageBase, 'auto');
     expect(state.tmdbUserConfig.apiBase, 'auto');
@@ -101,7 +134,7 @@ void main() {
   });
 
   testWidgets('非自动配置原样透传（不会被解析改写）', (tester) async {
-    final state = await _boot(
+    final state = await _createState(
       tester,
       apiBase: 'https://api.tmdb.org',
       imageBase: 'https://jsnzkpg4.pages.dev/https://image.tmdb.org',
@@ -116,22 +149,15 @@ void main() {
   });
 
   testWidgets('单张图片失败不换线，连续两张才换', (tester) async {
-    final state = await _boot(tester, broken: {'images.tmdb.org'});
+    final state = await _createState(tester, broken: {'images.tmdb.org'});
 
-    state.reportTmdbImageFailure(
-      'https://images.tmdb.org/t/p/w342/one.jpg',
-    );
+    state.reportTmdbImageFailure('https://images.tmdb.org/t/p/w342/one.jpg');
     expect(state.tmdbConfig.imageBase, 'https://images.tmdb.org/t/p/w342');
 
-    state.reportTmdbImageFailure(
-      'https://images.tmdb.org/t/p/w342/two.jpg',
-    );
+    state.reportTmdbImageFailure('https://images.tmdb.org/t/p/w342/two.jpg');
     // 换线后异步重测一次：图片主机必须不再是坏掉的那条。
     await tester.runAsync(pumpEventQueue);
-    expect(
-      state.tmdbRouteStatus().imageHost,
-      isNot('images.tmdb.org'),
-    );
+    expect(state.tmdbRouteStatus().imageHost, isNot('images.tmdb.org'));
     expect(
       state.tmdbConfig.imageBase,
       isNot(startsWith('https://images.tmdb.org')),
@@ -139,14 +165,17 @@ void main() {
   });
 
   testWidgets('重新测速返回人话并避开坏线路', (tester) async {
-    final state = await _boot(tester, broken: {'images.tmdb.org'});
+    final state = await _createState(tester, broken: {'images.tmdb.org'});
     final sentence = await tester.runAsync(state.refreshTmdbAutoRoutes);
     expect(sentence, contains('自动线路已测速'));
     expect(state.tmdbRouteStatus().imageHost, isNot('images.tmdb.org'));
   });
 
   testWidgets('图片不是自动时，重新测速什么都不做', (tester) async {
-    final state = await _boot(tester, imageBase: 'https://images.tmdb.org');
+    final state = await _createState(
+      tester,
+      imageBase: 'https://images.tmdb.org',
+    );
     final sentence = await tester.runAsync(state.refreshTmdbAutoRoutes);
     expect(sentence, '当前不是自动线路');
   });

@@ -553,9 +553,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await selectSettingsCategory(tester, 'maintenance');
+    await openAboutDataSettings(tester);
     expect(find.text('运行信息'), findsOneWidget);
     expect(find.text('清理缓存目录'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
 
     await tester.pumpWidget(
       MaterialApp(

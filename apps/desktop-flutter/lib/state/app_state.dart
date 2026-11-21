@@ -766,7 +766,10 @@ AiContentCompletion? aiContentCompletion,
   // 模块边界（`docs/phase4/design/04` §2）：UI 不直接发 TMDB 请求，全部经此处。
   // TMDB 配置落在 `<configDir>/settings.json`（`03` §5.3），**不进配置 JSON**。
 
-  late TmdbConfigStore _tmdbConfigStore;
+  late final TmdbConfigStore _tmdbConfigStore = TmdbConfigStore(
+    path: paths.settingsPath,
+    log: log,
+  );
 
   /// 订阅级 TMDB 凭据（仅进程内存，按配置身份/代际隔离）。
   final TmdbSubscriptionCredentials _tmdbSubscription = TmdbSubscriptionCredentials();
@@ -776,7 +779,7 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 与 `_tmdbConfigStore` 同构（两者都是 `settings.json` 里带凭据的独立段）。
   /// `late final`：在 `bootstrap` 里装配；未 bootstrap 时访问会抛
-  /// `LateInitializationError`——与 TMDB 一致（单测走 `attachAiConfigStore`
+  /// `LateInitializationError`（单测走 `attachAiConfigStore`
   /// 或 `bootstrap`）。
   late AiConfigStore _aiConfigStore;
 
@@ -890,6 +893,7 @@ AiContentCompletion? aiContentCompletion,
   /// 只测图片：API 的延迟来自真实请求（成功即记账、失败进冷却），单独探一次
   /// 还要凭据，意义不大。返回一句人话给设置页。
   Future<String> refreshTmdbAutoRoutes() async {
+    if (!_tmdbConfigStore.loaded) return 'TMDB 设置尚未加载';
     if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return '当前不是自动线路';
     for (final route in tmdbImageAutoCandidates) {
       final probe = await _tmdbService.probeImageRoute(route);
@@ -917,6 +921,7 @@ AiContentCompletion? aiContentCompletion,
   /// 单张坏图（被删掉的海报、404）不代表线路坏，因此要求 **60 秒内同一线路
   /// 连续两张**失败才切换；切换后异步重测一次，让排序反映真实延迟。
   void reportTmdbImageFailure(String url) {
+    if (!_tmdbConfigStore.loaded) return;
     if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return;
     final route = tmdbImageRouteOfUrl(url, tmdbImageAutoCandidates);
     if (route == null) return;
@@ -3562,7 +3567,6 @@ AiContentCompletion? aiContentCompletion,
     await syncState.load();
 
     // TMDB 设置（`03` §5.3）：读取失败不阻塞启动，退回默认配置。
-    _tmdbConfigStore = TmdbConfigStore(path: paths.settingsPath, log: log);
     await _tmdbConfigStore.load();
 
     // AI 配置（`docs/phase6/design/04` §4）：同样不阻塞启动。
