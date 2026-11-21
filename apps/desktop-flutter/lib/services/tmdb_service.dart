@@ -20,7 +20,9 @@ import '../core/app_error.dart';
 import '../core/tmdb_config.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_media.dart';
+import '../core/tmdb_route.dart';
 import 'tmdb_cache.dart';
+import 'tmdb_route_selector.dart';
 
 /// TMDB 请求被取消。
 class TmdbCancelledException implements Exception {
@@ -107,11 +109,13 @@ class TmdbService {
     http.Client? client,
     TmdbCache? cache,
     DateTime Function()? clock,
+    TmdbRouteSelector? routeSelector,
     this.timeout = const Duration(seconds: 15),
   }) : _config = config,
        _client = client ?? http.Client(),
        _cache = cache,
-       _clock = clock ?? DateTime.now;
+       _clock = clock ?? DateTime.now,
+       _routes = routeSelector;
 
   // 这两个字段无法用初始化形参：`_config` 需保持函数引用语义，
   // `_cache` 需与其它包装参数一起在初始化列表中赋值。
@@ -120,6 +124,10 @@ class TmdbService {
   final http.Client _client;
   final TmdbCache? _cache;
   final DateTime Function() _clock;
+
+  /// 线路健康表；为 `null` 时自动模式退化为「按候选顺序试一次」。
+  final TmdbRouteSelector? _routes;
+
   final Duration timeout;
 
   /// 当前 TMDB 配置（只读）。
@@ -173,6 +181,53 @@ class TmdbService {
   void clearAuthBlocks() => _authBlocks.clear();
 
   void close() => _client.close();
+
+  /// 图片线路探测（设置页「测试图片线路」）。
+  ///
+  /// 不走 [_request]：这里不问 TMDB API，而是问「这条图片线路此刻能不能把一张
+  /// 真海报取回来」，所以**不鉴权、不读缓存、不参与熔断、不写日志里的凭据**。
+  /// 取一张真图而不是只探域名，是为了把「反代活着但上游不通」（4xx/5xx）与
+  /// 「线路可用」（200）分开——用户换线路要的就是这个答案。
+  Future<TmdbImageProbe> probeImageRoute(
+    String imageRoute, {
+    TmdbCancellationToken? cancel,
+  }) async {
+    final url = tmdbImageProbeUrl(imageRoute);
+    if (url.isEmpty) {
+      return const TmdbImageProbe(
+        url: '',
+        statusCode: 0,
+        bytes: 0,
+        elapsed: Duration.zero,
+        error: '图片线路为空',
+      );
+    }
+    final watch = Stopwatch()..start();
+    try {
+      final response = await _awaitResponse(
+        () => _client.get(Uri.parse(url)),
+        cancel,
+      );
+      watch.stop();
+      return TmdbImageProbe(
+        url: url,
+        statusCode: response.statusCode,
+        bytes: response.bodyBytes.length,
+        elapsed: watch.elapsed,
+      );
+    } catch (error) {
+      watch.stop();
+      return TmdbImageProbe(
+        url: url,
+        statusCode: 0,
+        bytes: 0,
+        elapsed: watch.elapsed,
+        error: error is TmdbCancelledException
+            ? '已取消'
+            : _mapError(error).userMessage,
+      );
+    }
+  }
 
   // -------------------------------------------------------------------------
   // 端点方法（`03` §4.6）
@@ -648,9 +703,42 @@ class TmdbService {
     return config;
   }
 
-  Uri _buildUri(TmdbConfig config, String path, Map<String, String> query) {
-    final base = config.apiBase;
-    final uri = Uri.parse('$base$path');
+  /// 自动线路按健康度排出的本次尝试顺序（非自动模式只有一条）。
+  ///
+  /// 返回的是**线路值**（不含 `/3` 的候选原样；非自动模式就是配置值），
+  /// 健康表按它记账；补 `/3` 只在 [_sendOnce] 拼 URI 时发生，两边口径必须一致，
+  /// 否则同一条线路会以两个身份各记一份健康。
+  List<String> _apiRoutes(TmdbConfig config) {
+    if (!tmdbIsAutoRoute(config.apiBase)) return [config.apiBase];
+    final ordered =
+        _routes?.order(TmdbRouteKind.api, tmdbApiAutoCandidates) ??
+        tmdbApiAutoCandidates;
+    return ordered;
+  }
+
+  /// 这个错误像不像「线路坏了」？
+  ///
+  /// 只有网络失败/超时/5xx 才值得换线下探：解码失败、缺字段、4xx（作品不存在、
+  /// 参数错）换到哪条线路都一样，换线只会把真正的配置问题藏起来。
+  bool _isRouteFailure(AppError error, Object raw) =>
+      raw is TimeoutException ||
+      error.kind == AppErrorKind.tmdbNetwork ||
+      error.retryable;
+
+  Uri _buildUri(
+    TmdbConfig config,
+    String path,
+    Map<String, String> query, {
+    String? base,
+  }) {
+    // 自动线路没有固定主机：键与 URL 都必须落在**稳定基址**上，否则同一次请求
+    // 换条线路就换一个缓存键（读 key 与写 key 不一致＝缓存永远不命中）。
+    final target =
+        base ??
+        (tmdbIsAutoRoute(config.apiBase)
+            ? tmdbDefaultApiBase
+            : config.apiBase);
+    final uri = Uri.parse('$target$path');
     final params = <String, String>{
       'language': config.language,
       ...query,
@@ -703,12 +791,22 @@ class TmdbService {
     final config = _requireConfig();
     throwIfAuthBlocked(config);
 
-    final uri = _buildUri(config, path, {
+    final queryParams = {
       ...query,
       if (extraHeaders.containsKey('X-Image-Language'))
         'include_image_language': extraHeaders['X-Image-Language']!,
-    });
-    final key = cacheKeySuffix == null ? uri.toString() : '${uri.toString()}&$cacheKeySuffix';
+    };
+    // 缓存键必须与「这次走了哪条线路」无关：自动模式会换线，若键里带主机，
+    // 同一次请求会在每个候选下各写一份缓存。非自动模式仍是原来的完整 URI。
+    final keyUri = _buildUri(
+      config,
+      path,
+      queryParams,
+      base: tmdbIsAutoRoute(config.apiBase) ? tmdbDefaultApiBase : config.apiBase,
+    );
+    final key = cacheKeySuffix == null
+        ? keyUri.toString()
+        : '${keyUri.toString()}&$cacheKeySuffix';
     final keys = cacheKeys ?? [key];
     final cache = _cache;
 
@@ -721,86 +819,149 @@ class TmdbService {
       }
     }
 
-    // 2. 网络请求
-    try {
-      cancel?.throwIfCancelled();
-      requestCount++;
-      final headers = <String, String>{
-        if (config.accessToken.isNotEmpty)
-          'Authorization': 'Bearer ${config.accessToken}',
-        'Accept': 'application/json',
-      };
-      final response = await _awaitResponse(
-        () => _client.get(uri, headers: headers),
-        cancel,
-      );
-      cancel?.throwIfCancelled();
-
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        _authBlocks[_authCircuitKey(config)] =
-            _clock().add(TmdbTtl.authCooldown);
-        throw TmdbAuthException(
-          response.statusCode,
-          'TMDB 鉴权失败: HTTP ${response.statusCode}',
-        );
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AppError(
-          AppErrorKind.tmdbHttp,
-          'TMDB 请求失败：HTTP ${response.statusCode}',
-          statusCode: response.statusCode,
-          retryable: response.statusCode >= 500,
-        );
-      }
-
-      final Object? decoded;
+    // 2. 网络请求（自动线路：按健康度依次尝试，网络/5xx 失败换下一条）
+    final apiRoutes = _apiRoutes(config);
+    Object? lastError;
+    for (final apiBase in apiRoutes) {
       try {
-        decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        return await _sendOnce(
+          type: type,
+          path: path,
+          config: config,
+          apiRoute: apiBase,
+          query: queryParams,
+          key: key,
+          keys: keys,
+          cancel: cancel,
+          cache: cache,
+          requiredFields: requiredFields,
+        );
+      } on TmdbAuthException {
+        // 鉴权失败既不陈旧兜底也不换线：换到哪条线路都是同一套凭据。
+        rethrow;
+      } on TmdbCancelledException {
+        rethrow;
       } catch (error) {
-        throw AppError(
-          AppErrorKind.tmdbDecode,
-          'TMDB 响应解析失败',
-          detail: '$error',
-          cause: error,
+        final mapped = _mapError(error);
+        if (apiRoutes.length > 1 && _isRouteFailure(mapped, error)) {
+          _routes?.failure(TmdbRouteKind.api, apiBase);
+          lastError = error;
+          continue;
+        }
+        return _staleOrThrow(
+          type: type,
+          keys: keys,
+          cache: cache,
+          cancel: cancel,
+          error: mapped,
         );
       }
-      if (decoded is! Map) {
-        throw AppError(AppErrorKind.tmdbDecode, 'TMDB 响应不是 JSON 对象');
-      }
-      final body = decoded.cast<String, Object?>();
-      for (final field in requiredFields) {
-        if (!body.containsKey(field)) {
-          throw AppError(
-            AppErrorKind.tmdbEmpty,
-            'TMDB 响应缺少必需字段 $field',
-          );
-        }
-      }
-
-      // 写缓存（取消时不写；写失败不影响返回）。
-      cancel?.throwIfCancelled();
-      if (cache != null) {
-        cache.write(type, key, body);
-      }
-      lastSource = 'network';
-      return body;
-    } on TmdbAuthException {
-      // 鉴权失败不做陈旧兜底（否则用户看不到真正的配置问题）。
-      rethrow;
-    } on TmdbCancelledException {
-      rethrow;
-    } catch (error) {
-      // 3. 陈旧兜底（不看 TTL，`03` §3.3）
-      cancel?.throwIfCancelled();
-      if (cache != null) {
-        final stale = cache.readFirstAny(type, keys);
-        if (stale != null) {
-          lastSource = 'stale-cache';
-          return stale.payload;
-        }
-      }
-      throw _mapError(error);
     }
+    // 全部候选都失败：仍然先给陈旧缓存，再抛出最后一个错误。
+    return _staleOrThrow(
+      type: type,
+      keys: keys,
+      cache: cache,
+      cancel: cancel,
+      error: _mapError(lastError ?? StateError('TMDB 没有可用线路')),
+    );
+  }
+
+  /// 单次请求（含成功记账）。
+  ///
+  /// 换线与否由 [_request] 决定：这里只把错误按原有分类抛出，鉴权/解码/4xx
+  /// 换个线路也一样，换线只会把真正的配置问题藏起来。
+  Future<Map<String, Object?>> _sendOnce({
+    required String type,
+    required String path,
+    required TmdbConfig config,
+    required String apiRoute,
+    required Map<String, String> query,
+    required String key,
+    required List<String> keys,
+    required TmdbCancellationToken? cancel,
+    required TmdbCache? cache,
+    required List<String> requiredFields,
+  }) async {
+    final watch = Stopwatch()..start();
+    cancel?.throwIfCancelled();
+    requestCount++;
+    final uri = _buildUri(config, path, query, base: tmdbApiBaseOf(apiRoute));
+    final headers = <String, String>{
+      if (config.accessToken.isNotEmpty)
+        'Authorization': 'Bearer ${config.accessToken}',
+      'Accept': 'application/json',
+    };
+    final response = await _awaitResponse(
+      () => _client.get(uri, headers: headers),
+      cancel,
+    );
+    cancel?.throwIfCancelled();
+
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      _authBlocks[_authCircuitKey(config)] = _clock().add(TmdbTtl.authCooldown);
+      throw TmdbAuthException(
+        response.statusCode,
+        'TMDB 鉴权失败: HTTP ${response.statusCode}',
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AppError(
+        AppErrorKind.tmdbHttp,
+        'TMDB 请求失败：HTTP ${response.statusCode}',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    } catch (error) {
+      throw AppError(
+        AppErrorKind.tmdbDecode,
+        'TMDB 响应解析失败',
+        detail: '$error',
+        cause: error,
+      );
+    }
+    if (decoded is! Map) {
+      throw AppError(AppErrorKind.tmdbDecode, 'TMDB 响应不是 JSON 对象');
+    }
+    final body = decoded.cast<String, Object?>();
+    for (final field in requiredFields) {
+      if (!body.containsKey(field)) {
+        throw AppError(AppErrorKind.tmdbEmpty, 'TMDB 响应缺少必需字段 $field');
+      }
+    }
+
+    // 写缓存（取消时不写；写失败不影响返回）。
+    cancel?.throwIfCancelled();
+    if (cache != null) {
+      cache.write(type, key, body);
+    }
+    lastSource = 'network';
+    _routes?.success(TmdbRouteKind.api, apiRoute, watch.elapsed);
+    return body;
+  }
+
+  /// 陈旧兜底（不看 TTL，`03` §3.3）：有旧数据就给旧数据，否则抛出归一化错误。
+  Map<String, Object?> _staleOrThrow({
+    required String type,
+    required List<String> keys,
+    required TmdbCache? cache,
+    required TmdbCancellationToken? cancel,
+    required Object error,
+  }) {
+    cancel?.throwIfCancelled();
+    if (cache != null) {
+      final stale = cache.readFirstAny(type, keys);
+      if (stale != null) {
+        lastSource = 'stale-cache';
+        return stale.payload;
+      }
+    }
+    throw _mapError(error);
   }
 
   Future<http.Response> _awaitResponse(

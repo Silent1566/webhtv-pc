@@ -102,6 +102,9 @@ import '../core/subtitle_provider.dart';
 import '../core/subtitle_settings.dart';
 import '../core/subtitle_style.dart';
 import '../core/tmdb_config.dart';
+import '../core/tmdb_route.dart';
+import '../services/tmdb_route_health.dart';
+import '../services/tmdb_route_selector.dart';
 import '../core/viewing_metadata.dart';
 import '../core/tmdb_subscription.dart';
 import '../core/push_parser.dart';
@@ -284,6 +287,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 AiContentCompletion? aiContentCompletion,
     AiCompletionClient? aiSeasonClient,
     TmdbService? tmdbService,
+    this.warmAutoRoutes = true,
     ExternalMetaService? externalMetaService,
     PythonEnvironment? pythonEnvironment,
   }) : paths = paths ?? AppPaths.resolve(),
@@ -389,7 +393,15 @@ AiContentCompletion? aiContentCompletion,
     _tmdbCache = TmdbCache(cacheDir: cacheDir);
     _tmdbService =
         tmdbService ??
-        TmdbService(config: () => tmdbConfig, cache: _tmdbCache);
+        TmdbService(
+          config: () => tmdbConfig,
+          cache: _tmdbCache,
+          routeSelector: _tmdbRoutes,
+        );
+    // 图片位出错时由 `PosterImage` 回报到这里，判断「单张坏图还是整条线路坏了」。
+    // 只装回调，不读配置：构造函数阶段 `settings.json` 还没加载。
+    _imageHealthSink = reportTmdbImageFailure;
+    TmdbImageHealth.onFailure = _imageHealthSink;
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
       _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
@@ -779,6 +791,24 @@ AiContentCompletion? aiContentCompletion,
   /// 整个磁盘缓存静默失效而没人发现。测试只能从这里断言接线真的发生了。
   late final TmdbCache _tmdbCache;
 
+  /// 启动时是否真的去测速自动线路（测试可关；生产恒为 true）。
+  final bool warmAutoRoutes;
+
+  /// 本实例装进 [TmdbImageHealth] 的回调：dispose 时只摘自己那一个，
+  /// 不把同进程里另一个 AppState（测试常这么做）的回报口一起清掉。
+  void Function(String url)? _imageHealthSink;
+
+  /// TMDB 线路健康表（自动线路用）。API 与图片各自独立计健康。
+  final TmdbRouteSelector _tmdbRoutes = TmdbRouteSelector();
+
+  /// 自动图片线路的解析缓存：按 [TmdbRouteSelector.version] 失效。
+  String _resolvedImageRoute = tmdbImageAutoCandidates.first;
+  int _resolvedImageRouteVersion = -1;
+
+  /// 图片失败回报的时间窗（自动线路的失败切换防抖）。
+  final Map<String, List<DateTime>> _imageRouteFailures = {};
+  DateTime? _lastAutoProbeAt;
+
   /// 仅供测试：断言 TMDB 服务确实拿到了磁盘缓存（目录指向 [paths] 的缓存根）。
   @visibleForTesting
   TmdbCache get tmdbCacheForTest => _tmdbCache;
@@ -796,15 +826,105 @@ AiContentCompletion? aiContentCompletion,
   /// 订阅凭据。订阅凭据不进入设置、配置记录、导出或日志。
   TmdbConfig get tmdbConfig {
     final user = tmdbUserConfig;
-    if (user.apiKey.trim().isNotEmpty || user.accessToken.trim().isNotEmpty) return user;
+    if (user.apiKey.trim().isNotEmpty || user.accessToken.trim().isNotEmpty) {
+      return _withResolvedAutoRoutes(user);
+    }
     final record = _activeRecord;
     final key = _tmdbSubscription.snapshot(
       record?.id ?? 0,
       record == null ? '' : sourceKeyOfRecord(record),
       _tmdbSubscription.epoch,
     );
-    if (key.isEmpty) return user;
-    return user.withSubscriptionApiKey(key);
+    if (key.isEmpty) return _withResolvedAutoRoutes(user);
+    return _withResolvedAutoRoutes(user.withSubscriptionApiKey(key));
+  }
+
+  /// 自动图片线路在**读取时**解析成具体地址。
+  ///
+  /// 为什么放在这一处：海报与后景的 URL 都由 `config.imageBase` /
+  /// `backdropBase` 直接拼出来，消费点有十几处；解析放在这里，所有消费者
+  /// （服务、详情、首页取图、推荐）拿到的就已经是同一条线路，不必各自认识「自动」。
+  TmdbConfig _withResolvedAutoRoutes(TmdbConfig config) {
+    if (!tmdbIsAutoRoute(config.imageBase)) return config;
+    if (_resolvedImageRouteVersion != _tmdbRoutes.version) {
+      _resolvedImageRouteVersion = _tmdbRoutes.version;
+      _resolvedImageRoute = _tmdbRoutes.preferred(
+        TmdbRouteKind.image,
+        tmdbImageAutoCandidates,
+      );
+    }
+    return config.copyWith(
+      imageBase: tmdbImageBaseOf(_resolvedImageRoute, 'w342'),
+      backdropBase: tmdbImageBaseOf(
+        _resolvedImageRoute,
+        tmdbDefaultBackdropSize,
+      ),
+    );
+  }
+
+  /// 设置页要显示的「当前实际线路」（自动模式是已解析的那一条）。
+  TmdbRouteStatus tmdbRouteStatus() {
+    final configured = tmdbUserConfig;
+    final effective = tmdbConfig;
+    final apiAuto = tmdbIsAutoRoute(configured.apiBase);
+    return TmdbRouteStatus(
+      apiBase: apiAuto
+          ? tmdbApiBaseOf(
+              _tmdbRoutes.preferred(TmdbRouteKind.api, tmdbApiAutoCandidates),
+            )
+          : effective.apiBase,
+      imageBase: effective.imageBase,
+      apiAuto: apiAuto,
+      imageAuto: tmdbIsAutoRoute(configured.imageBase),
+    );
+  }
+
+  /// 自动线路测速：给图片候选各取一张公共海报，把延迟与可达性记进选择器。
+  ///
+  /// 只测图片：API 的延迟来自真实请求（成功即记账、失败进冷却），单独探一次
+  /// 还要凭据，意义不大。返回一句人话给设置页。
+  Future<String> refreshTmdbAutoRoutes() async {
+    if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return '当前不是自动线路';
+    for (final route in tmdbImageAutoCandidates) {
+      final probe = await _tmdbService.probeImageRoute(route);
+      if (probe.ok) {
+        _tmdbRoutes.success(TmdbRouteKind.image, route, probe.elapsed);
+      } else {
+        _tmdbRoutes.failure(TmdbRouteKind.image, route);
+      }
+    }
+    _lastAutoProbeAt = DateTime.now();
+    _notifyIfAlive();
+    final best = _tmdbRoutes.preferred(
+      TmdbRouteKind.image,
+      tmdbImageAutoCandidates,
+    );
+    final latency = _tmdbRoutes.latencyOf(TmdbRouteKind.image, best);
+    final host = Uri.tryParse(best)?.host ?? best;
+    final ms = latency == null ? '未测到' : '${latency.inMilliseconds} ms';
+    log.info('TMDB 图片自动线路：$host（$ms）', scope: 'tmdb');
+    return '自动线路已测速：$host · $ms';
+  }
+
+  /// 图片加载失败的回报入口（自动线路的失败切换）。
+  ///
+  /// 单张坏图（被删掉的海报、404）不代表线路坏，因此要求 **60 秒内同一线路
+  /// 连续两张**失败才切换；切换后异步重测一次，让排序反映真实延迟。
+  void reportTmdbImageFailure(String url) {
+    if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return;
+    final route = tmdbImageRouteOfUrl(url, tmdbImageAutoCandidates);
+    if (route == null) return;
+    final now = DateTime.now();
+    final failures = _imageRouteFailures.putIfAbsent(route, () => <DateTime>[]);
+    failures.add(now);
+    failures.removeWhere((at) => now.difference(at) > const Duration(seconds: 60));
+    if (failures.length < 2) return;
+    failures.clear();
+    _tmdbRoutes.failure(TmdbRouteKind.image, route);
+    _notifyIfAlive();
+    final last = _lastAutoProbeAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) return;
+    unawaited(refreshTmdbAutoRoutes());
   }
 
   void _beginCurrentTmdbCredentialScope() {
@@ -3990,6 +4110,16 @@ AiContentCompletion? aiContentCompletion,
     } catch (error) {
       return '连接失败：$error';
     }
+  }
+
+  /// 测试当前图片线路（设置页「测试图片线路」）：取一张公共海报并报出耗时。
+  ///
+  /// 与 [testTmdbConnection] 互补：那个测 API（Key/Token 与 apiBase），这个测
+  /// 海报与背景走的图片域名——换反代之后要确认的正是这一条。
+  Future<String> testTmdbImageRoute() async {
+    final config = tmdbConfig;
+    final probe = await _tmdbService.probeImageRoute(config.imageBase);
+    return tmdbImageProbeSummary(probe);
   }
 
   /// 手动匹配（`01` §7、`04` §5.1）。成功后刷新详情页 TMDB 区块。
@@ -8649,6 +8779,10 @@ AiContentCompletion? aiContentCompletion,
     _detailRatingService?.close();
     _externalMetaService?.close();
     _tmdbService.close();
+    if (identical(TmdbImageHealth.onFailure, _imageHealthSink)) {
+      TmdbImageHealth.onFailure = null;
+    }
+    _imageHealthSink = null;
     _lutStoreInstance?.dispose();
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();
