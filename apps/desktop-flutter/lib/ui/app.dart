@@ -247,6 +247,10 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
 
   Future<void> _bootstrap() async {
     await _state.bootstrap();
+    // 自动线路测速放在主界面起来之后：启动阶段别和首屏抢网络。
+    // 非自动配置这个方法一次请求都不发（直接返回「当前不是自动线路」）。
+    // 测试都直接 pump 具体页面、不走这个入口，因此不会打真网络。
+    if (_state.warmAutoRoutes) unawaited(_state.refreshTmdbAutoRoutes());
     if (!mounted) return;
     setState(() => _bootstrapped = true);
     // 主界面在 `_bootstrapped` 置位这一刻已经可交互（§22.2 “首个可交互主界面”），

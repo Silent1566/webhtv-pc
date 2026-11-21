@@ -5,11 +5,14 @@
 /// 上游对应实现：`bean/TmdbConfig`（308 行）、`setting/TmdbSitePolicy`。
 ///
 /// 关键契约：
-/// - `sanitize()` 的 13 条归一化规则顺序固定（`03` §5.2）。
+/// - `sanitize()` 的 13 条归一化规则顺序固定（`03` §5.2），其后是两条本地
+///   追加规则：14（官方 `w780` 后景升级到 `w1280`）、15（后景跟随图片线路）。
 /// - 站点策略判定顺序固定为 7 步（`01` §6.1），**不可调换**。
 /// - 括号归一（`「」【】〔〕［］` → `[]`）必须实现，否则猫源默认规则一条也匹配不上。
 /// - `[书]` 与 `[小说]`、`[漫]` 与 `[漫画]` **不可互换**（子串包含语义）。
 library;
+
+import 'tmdb_route.dart';
 
 // ---------------------------------------------------------------------------
 // 默认值（`03` §5.1）
@@ -30,6 +33,22 @@ const String tmdbDefaultBackdropSize = 'w1280';
 const String tmdbDefaultBackdropBase =
     'https://images.tmdb.org/t/p/$tmdbDefaultBackdropSize';
 const String tmdbDefaultLanguage = 'zh-CN';
+
+/// TMDB 官方图床域名（含官方别名）。
+///
+/// 用来判断「后景还是不是官方默认地址」——换图片线路时只有官方默认值才跟随，
+/// 用户自建/反代的后景一律不动。
+const Set<String> tmdbOfficialImageHosts = {
+  'images.tmdb.org',
+  'image.tmdb.org',
+  'media.themoviedb.org',
+};
+
+/// 是否是 TMDB 官方图床（按主机名判定，尺寸与路径不参与）。
+bool tmdbIsOfficialImageHost(String value) {
+  final host = Uri.tryParse(value.trim())?.host.toLowerCase() ?? '';
+  return tmdbOfficialImageHosts.contains(host);
+}
 
 /// 默认不富集 TMDB 的站点规则（`01` §6.2）。
 ///
@@ -118,7 +137,12 @@ bool _isImageHost(String value) {
       _looksLikeHost(image);
 }
 
-String _imageBaseOf(String value, String size) {
+/// 由「图片主机或主机 + /t/p」补出某一档尺寸的图片基址（构建图片 URL 的前缀）。
+///
+/// 对反代同样成立：`https://<反代>/https://image.tmdb.org` 补出
+/// `…/https://image.tmdb.org/t/p/w342`，wsrv 那种把目标地址放进查询参数的形态
+/// 也落在同一份拼接里（尺寸段接在 `?url=` 的目标地址之后）。
+String tmdbImageBaseOf(String value, String size) {
   final image = _stripImageSize(value);
   if (image.endsWith('/t/p')) return _joinUrl(image, size);
   return _joinUrl(_joinUrl(image, 't/p'), size);
@@ -128,6 +152,15 @@ String _normalizeApiBase(String value) {
   final api = _ensureHttpScheme(_trimTrailingSlash(value));
   if (api.endsWith('/3')) return api;
   return _joinUrl(api, '3');
+}
+
+/// 由「API 主机 / 线路值」补出以 `/3` 结尾的基址（自动哨兵原样返回）。
+///
+/// 自动模式要在多个候选之间切换，路径后缀必须与 `sanitize()` 完全一致，
+/// 因此这一条归一化只能有一份实现。
+String tmdbApiBaseOf(String value) {
+  if (tmdbIsAutoRoute(value)) return tmdbAutoRoute;
+  return _normalizeApiBase(_trimOr(value, tmdbDefaultApiBase));
 }
 
 String _normalizeImageInput(String value) {
@@ -202,13 +235,13 @@ bool _matchesExact(List<String> rules, String value) {
 class TmdbConfig {
   const TmdbConfig({
     this.enabled = true,
-    this.apiBase = tmdbDefaultApiBase,
+    this.apiBase = tmdbAutoRoute,
     this.apiKey = '',
     this.accessToken = '',
     this.omdbApiKey = '',
     this.language = tmdbDefaultLanguage,
-    this.imageBase = tmdbDefaultImageBase,
-    this.backdropBase = tmdbDefaultBackdropBase,
+    this.imageBase = tmdbAutoRoute,
+    this.backdropBase = tmdbAutoRoute,
     this.enabledSites = const [],
     this.disabledSites = tmdbDefaultDisabledRules,
     this.allowedSites = const [],
@@ -284,7 +317,10 @@ class TmdbConfig {
       disabledSites.isNotEmpty;
 
   /// API 主机（去掉末尾 `/3` 与斜杠），供设置页展示。
+  ///
+  /// 自动线路没有固定主机，原样返回哨兵（设置页按它显示「自动」）。
   String get apiHost {
+    if (tmdbIsAutoRoute(apiBase)) return tmdbAutoRoute;
     var api = _trimTrailingSlash(
       apiBase.isEmpty ? tmdbDefaultApiBase : apiBase,
     );
@@ -292,8 +328,9 @@ class TmdbConfig {
     return _trimTrailingSlash(api);
   }
 
-  /// 图片主机（去掉尺寸段与 `/t/p`）。
+  /// 图片主机（去掉尺寸段与 `/t/p`）。自动线路原样返回哨兵。
   String get imageHost {
+    if (tmdbIsAutoRoute(imageBase)) return tmdbAutoRoute;
     var base = _stripImageSize(
       imageBase.isEmpty ? tmdbDefaultImageBase : imageBase,
     );
@@ -414,8 +451,13 @@ class TmdbConfig {
 
   /// 13 条归一化规则（`03` §5.2）。顺序固定，不可调换。
   TmdbConfig sanitize() {
-    // 1. apiBase
-    final api = _normalizeApiBase(_trimOr(apiBase, tmdbDefaultApiBase));
+    // 1. apiBase：空值与 `auto` 都落到「自动线路」——默认就是自动（对齐安卓：
+    // 没显式选过线路时按低延迟优先并允许失败切换）。`auto` 是语义哨兵，
+    // 绝不能当主机名补协议/补 /3。
+    final rawApi = _trimOr(apiBase, '');
+    final api = rawApi.isEmpty || tmdbIsAutoRoute(rawApi)
+        ? tmdbAutoRoute
+        : _normalizeApiBase(rawApi);
 
     // 2/3. apiKey 与 accessToken
     final key = _trimOr(apiKey, '');
@@ -427,16 +469,45 @@ class TmdbConfig {
     // 4. language
     final lang = _trimOr(language, tmdbDefaultLanguage);
 
-    // 5/6/7/8. 图片基址
-    var image = _normalizeImageInput(_trimOr(imageBase, tmdbDefaultImageBase));
-    var backdrop = _normalizeImageInput(_trimOr(backdropBase, ''));
-    if (backdrop.isEmpty && _isImageHost(image)) {
-      backdrop = _imageBaseOf(image, tmdbDefaultBackdropSize);
+    // 5/6/7/8. 图片基址（`auto` 是哨兵，解析发生在读取时，见 TmdbRouteSelector；
+    // 空值同样落到自动，即默认就是自动线路）
+    final rawImage = _trimOr(imageBase, '');
+    final imageAuto = rawImage.isEmpty || tmdbIsAutoRoute(rawImage);
+    var image = imageAuto
+        ? tmdbAutoRoute
+        : _normalizeImageInput(rawImage);
+    // 后景单独判：只在「显式 auto」或「图片自动且后景没写」时跟随自动。
+    // 手改 settings.json 指定的自定义后景（含自选尺寸）必须留着——规则 14
+    // 存在的前提就是用户能自己定这一项。
+    final rawBackdrop = _trimOr(backdropBase, '');
+    final backdropAuto =
+        tmdbIsAutoRoute(rawBackdrop) || (imageAuto && rawBackdrop.isEmpty);
+    var backdrop = backdropAuto
+        ? tmdbAutoRoute
+        : _normalizeImageInput(rawBackdrop);
+    if (!imageAuto) {
+      if (backdrop.isEmpty && _isImageHost(image)) {
+        backdrop = tmdbImageBaseOf(image, tmdbDefaultBackdropSize);
+      }
+      if (_isImageHost(image)) image = tmdbImageBaseOf(image, 'w342');
     }
-    if (_isImageHost(image)) image = _imageBaseOf(image, 'w342');
-    backdrop = _trimOr(backdrop, tmdbDefaultBackdropBase);
-    if (_isImageHost(backdrop) && !backdrop.contains('/t/p/')) {
-      backdrop = _imageBaseOf(backdrop, tmdbDefaultBackdropSize);
+    // 后景单独归一：显式写了后景（含自选尺寸）时，即使图片是自动也要按规则 8
+    // 补出尺寸段，否则用户手改的裸主机地址会停在没有 /t/p/<尺寸> 的形态上。
+    if (!backdropAuto) {
+      backdrop = _trimOr(backdrop, tmdbDefaultBackdropBase);
+      if (_isImageHost(backdrop) && !backdrop.contains('/t/p/')) {
+        backdrop = tmdbImageBaseOf(backdrop, tmdbDefaultBackdropSize);
+      }
+    }
+    // 15. 图片线路跟随：海报换成反代/代理后，存量配置里的后景仍是官方默认地址，
+    // 照旧走打不开的 `images.tmdb.org`——「换了图片线路」就只对海报生效。
+    // 只在后景仍是官方默认值时跟随；用户显式指定的自定义后景（含规则 14 的
+    // 自选尺寸）一律不动。
+    if (!imageAuto &&
+        !backdropAuto &&
+        !tmdbIsOfficialImageHost(image) &&
+        tmdbIsOfficialImageHost(backdrop)) {
+      backdrop = tmdbImageBaseOf(image, tmdbDefaultBackdropSize);
     }
     // 存量配置升级：早期默认是 `w780`（仅 780px 宽），全屏铺开必然发虚
     // （用户反馈 2026-10-10：「清晰度不够没有选原画吗？」）。TMDB 官方后景尺寸
@@ -542,6 +613,25 @@ class TmdbConfig {
           heuristicSeasonGuessing ?? this.heuristicSeasonGuessing,
       subscriptionApiKey: marker,
     );
+  }
+
+  /// 切换图片线路：海报与后景必须同线路。
+  ///
+  /// 设置页选内置预设时用这里，而不是直接 `copyWith(imageBase:)`——只换海报
+  /// 不换后景，详情页背景照样走打不开的官方图床。自定义输入用
+  /// [tmdbImageBaseOf] 推出的同线路后景（见设置页），两者结果一致。
+  TmdbConfig withImageRoute(String value) {
+    if (tmdbIsAutoRoute(value)) {
+      return copyWith(
+        imageBase: tmdbAutoRoute,
+        backdropBase: tmdbAutoRoute,
+      ).sanitize();
+    }
+    final image = _trimOr(value, tmdbDefaultImageBase);
+    return copyWith(
+      imageBase: image,
+      backdropBase: tmdbImageBaseOf(image, tmdbDefaultBackdropSize),
+    ).sanitize();
   }
 
   /// 重置为默认禁用规则（`04` §10.2「重置默认规则」）。
