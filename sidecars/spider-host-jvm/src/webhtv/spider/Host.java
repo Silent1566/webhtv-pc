@@ -38,6 +38,13 @@ public final class Host {
         System.setErr(new java.io.PrintStream(
                 new java.io.FileOutputStream(java.io.FileDescriptor.err), true,
                 java.nio.charset.StandardCharsets.UTF_8));
+        // 退出面包屑：外部终止（Windows 作业对象的内存/CPU 上限、TerminateProcess）
+        // 不会执行任何 JVM 收尾代码，stderr 会一片空白；而进程内退出一定会留下这一行。
+        // 用户侧实测症状正是「code=1 且 stderr 无输出」，宿主只好把启动期的无关告警
+        // （dex2jar 的转译栈）当成死因。有了这一行，空白 stderr 就能被判定为「被外部杀掉」。
+        Runtime.getRuntime().addShutdownHook(new Thread(
+                () -> Ipc.log("[webhtv] 进程退出钩子：JVM 正在收尾退出"), "webhtv-exit"));
+
         int code = run(args);
         System.exit(code);
     }
@@ -93,11 +100,26 @@ public final class Host {
             return 3;
         }
 
+        // 帧通道必须钉在**真实的 fd 1** 上，并把 Java 层 System.out 改道 stderr：
+        // 站源与三方库（dex2jar、payload 自己的 println）之间没有任何约定遵守
+        // 「stdout 只放帧」，一次 println 就能让宿主把下一帧读成「头字段缺少冒号」。
+        // 注意边界：JVM 自身的致命错误报告（用户日志里的「[thread N also had an error]」
+        // 来自 jvm.dll 的崩溃报告器）直接写 fd 1，进程内改不掉 System.out 也拦不住它——
+        // 那一条只能由宿主的帧读取端容错，不在 sidecar 能力范围内。
+        java.io.PrintStream frames = new java.io.PrintStream(
+                new java.io.FileOutputStream(java.io.FileDescriptor.out),
+                true,
+                java.nio.charset.StandardCharsets.UTF_8);
+        System.setOut(new java.io.PrintStream(
+                new java.io.FileOutputStream(java.io.FileDescriptor.err),
+                true,
+                java.nio.charset.StandardCharsets.UTF_8));
+
         SidecarServer server = new SidecarServer(
                 loaded.spider,
                 manifest,
                 new BufferedInputStream(System.in),
-                new BufferedOutputStream(System.out));
+                new BufferedOutputStream(frames));
         Ipc.log("sidecar 就绪 entry=" + entry.getFileName()
                 + " origin=" + loaded.origin
                 + " class=" + loaded.className

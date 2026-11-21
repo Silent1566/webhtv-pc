@@ -9,6 +9,8 @@
 - 初始调研方式：将公开仓库浅克隆到 `/tmp/misatv`，随后只读核对源码；未构建或运行 MisaTV。
   下文“我们现状”和零命中记录均为调研基线，不是实施后状态。PC 修复与测试记录见 [P0 与问题修复验收](evidence/misatv-p0-fixes.md)。
 - 调研基准：本仓库 `9ff8bbb`（调研开始时工作树干净）；MisaTV `f91cc41`。本轮不升级播放器内核、不引入网盘/BT 或其他 P1 功能。
+- 复查记录：2026-11 MisaTV 的三次 jar 相关更新（原生 jar/DEX 运行器、加固壳修复、JVM 垫片补全）
+  的采纳与回绝见文末「复查：2026-11 MisaTV 近期 jar 更新的采纳与回绝」一节。
 
 ---
 
@@ -268,13 +270,18 @@ MisaTV 的中继路由表里，只有两条是 jar 的**硬编码依赖**（其�
   （`spider_env.dart:153-171`）。还有一条反直觉纪律：**未配置时也要写成空文件**——文件缺失时中继回 404 + 中文正文，
   蜘蛛不校验状态码，会把那段中文当 Cookie 拼进请求头。
 - **`/proxy?do=ck`**：小白/加固壳启动时探 9978~9999 的这个路由，**应答体必须等于 `ok`** 才认宿主代理
+  （2026-11-21 复核：硬编码只在**没有宿主钩子**时才会走。Wex 的 `ProxyOrigin.init()` 会先反射宿主
+  `com.github.catvod.Proxy.getPort()` / `getUrl(boolean)`，失败后才扫描 **8964..9998**，最后兜底 9978。
+  所以 PC 端不必抢 9978——提供会话级钩子即可，端口可协商；此前「必须占 9978」的结论过强。）
   （`local_relay_io.dart:1079-1083`；之前这里回 400，壳拿到的端口是 -1，播放器随后报 invalid or unsupported media）。
 
 我们现状：`services/proxy_server.dart:95` 只有 `/p/` 一类改前缀路由（`:205-208` 非该前缀一律 404）；
 `grep "'/file'|'/proxy'"` → 0；`grep 'tvbox.proxy|proxy.entry|proxy.port'` 于 `sidecars`+`lib` → 0；
 三套 sidecar 不监听任何端口。即**我们的桌面 JVM ABI 目前不给 jar 任何「中继地址」概念**。
 
-- **要**：`/file` + `/proxy?do=ck` 必须做，且必须占 9978（壳的硬编码无法协商）。配套要有第二条腿——
+- **要**：按站源实际 ABI 接通代理发现与流式取流；Wex 可用宿主 `Proxy.getPort/getUrl` 钩子注入真实随机端口，
+  不要求抢 9978。`/file` 是另一条凭据通道，不是每个壳源播放的必要条件，本轮代理扩展不据此开放文件读取。
+  对确实没有钩子、只吐旧端口的其它站源，才需要在已验证的来源/会话范围内重写地址——
   MisaTV 的做法是**先试 9978、失败回落临时端口**并**改写壳吐出来的宿主地址**（`spider_host.dart:332-360`
   用 `-?\d+` 连 `-1` 也认），这说明「抢到 9978」不是唯一解。
   **端口归属要先定**：`services/sync_server.dart:143` `startPort` 从 9978 起、`:145 bindAddress = '0.0.0.0'`，
@@ -363,3 +370,79 @@ grep -rn 'warmUp\|预热' apps/desktop-flutter/lib sidecars --include=*.dart --i
 4. LAN 同步在开启出站代理时是否真被代理带走（只从 `http.Client()` 与 `findProxy` 的装配关系推断）；
 5. 弹幕 28 个内置接口的当前可达性；
 6. MisaTV 的 `/file` 在我们的 Windows 作业对象隔离与只读 sidecar 目录模型下是否可行。
+
+---
+
+## 复查：2026-11 MisaTV 近期 jar 更新的采纳与回绝
+
+一句话：**三次提交里只有「JVM 垫片补全」这一层进得来**——加固壳修复与 Android 原生运行器都被本项目自己的边界挡在外面，
+并发与诊断增强我们已有等价或更强的机制。
+
+- 复查范围：基线 `f91cc41`（§1）之后与 jar 源相关的三次提交。播放器、网盘/BT、直播/弹幕等章节结论**不变**（见 §2–§8）。
+- 结论口径不变：依旧**依据公开协议独立实现，不复制 MisaTV（GPL-3.0）代码**（许可红线见 §0.1）。
+
+### A. 三次提交的采纳 / 不采纳对照
+
+| 提交 | 做了什么 | 判定 | 理由 | 落点 |
+| --- | --- | --- | --- | --- |
+| [`adb37b8`](https://github.com/yagami-hue/MisaTV/commit/adb37b8462b07f55b9817e85cd5767b021fa36c6)`feat(android): 原生 jar/DEX 蜘蛛运行器`（2026-11-18） | Android 端用原生运行器跑 jar/DEX 蜘蛛，改动集中在 `android/` 与 `lib/services/jar_spider/jar_spider_android.dart` | **不采纳** | 移动端形态：依赖 Android 运行时与原生装载，与 PC 端的进程隔离模型无关 | 无 |
+| [`dd34424`](https://github.com/yagami-hue/MisaTV/commit/dd344243f80bfbd20a0a3756b62d47ce122734df)`fix(shell): 修复加固壳两个缺陷：播放卡住、站点只剩分类`（2026-11-18） | 改 `assets/jvm/src/SpiderHost.java`：翻正 fty 壳的 `merge.uA.yq` 布尔门控（旧写法翻的是非布尔的 `merge.cn.yq`，静默 no-op）；探测 stubs.jar 里的 `com.github.catvod.spider.HideUtils`；对 wex/AiNew 系载荷的 `<spiderCacheDir>/files/AiWex/siteconfig` 做域名预检（只保留 2xx 且含 module-item 的候选，避免竞速选中 403 域名） | **不采纳** | 本项目不运行加固壳：壳 jar 判 `JarVerdict.shellGuard` 且不落盘（`apps/desktop-flutter/lib/services/jar_intake.dart:454`、`apps/desktop-flutter/lib/services/spider_router.dart:560`；ADR-0002 §3.4.3） | 无 |
+| [`90e7b65`](https://github.com/yagami-hue/MisaTV/commit/90e7b654281ff1ec981759c19770b8bd7abe4a23)`chore: 进程回收、JVM 垫片补全与网盘/搜索增强`（2026-11-20） | 新增 `assets/jvm/src/stubs/android/net/Uri.java`、`assets/jvm/src/stubs/android/util/LruCache.java` 与 `assets/jvm/stubs.jar`；另加 JvmStderrFilter、一次性 JVM 全局并发闸门（`_oneShotMax=4`）+ 搜索轮次作废 | **部分采纳** | 垫片补全采纳（见 §B）；诊断与并发增强不采纳（见下表） | `sidecars/spider-host-jvm/src-android-shim/src/android/` 下的 `net/Uri.java`、`util/LruCache.java` 等 |
+
+`90e7b65` 按条拆开：
+
+| 子项 | 判定 | 理由 / 落点 |
+| --- | --- | --- |
+| `android/net/Uri`、`android/util/LruCache` 垫片 | **采纳**，并按引用扫描扩到 6 个类 | 见 §B |
+| JvmStderrFilter（折叠 JVM 堆栈、异常降频） | **不采纳，留作后续可选** | 诊断增强，不是 jar 源能力；现在动它会改日志口径与既有诊断链路，属于独立改动 |
+| 一次性 JVM 全局并发闸门（`_oneShotMax=4`）+ 搜索轮次作废 | **不采纳** | 本项目已有等价或更强的机制：`apps/desktop-flutter/lib/services/spider_process.dart` 的 idle 回收 + 播放 pin、按 siteKey 常驻、`shutdownAll` |
+| 进程回收 | **不采纳** | 同上，已由 idle 回收覆盖 |
+
+### B. 采纳的部分：垫片补全，按「实测可达闭包」扩
+
+- 新增 6 个类：`android/util/Pair`、`android/net/Uri`、`android/util/LruCache`、`android/os/Build`、
+  `android/os/Bundle`、`android/os/SystemClock`；落点 `sidecars/spider-host-jvm/src-android-shim/src/android/`（按包路径分目录）。
+- 依据三条，缺一条都不补：
+  1. MisaTV `90e7b65` 的 `Uri` / `LruCache`——同一形态的缺失已经被人踩过；
+  2. 真实转译包 **1227 个类**的引用扫描：出现 `android/net/Uri`、`android/os/Build$VERSION`、`android/os/Bundle`、`android/os/SystemClock`；
+  3. 仓库内既有登记：`sidecars/spider-host-jvm/src-android-shim/src/android/database/Cursor.java:82-83`
+     写着「`android.os.Bundle` … 需补」「`android.net.Uri`、`android.content.ContentResolver` 需补」。
+- MisaTV 侧的两个症状值得留档，正是 ADR-0002 §3.4.3 第 1 条「点名缺失类、不静默降级」要拦住的东西：
+  `Uri.getUserInfo` 缺失 → `csp_Eighteen` 的 `homeContent` 直接 `NoSuchMethodError`；
+  `LruCache` 缺失 → `com.github.catvod.parser.merge.Y` 静态初始化 `NoClassDefFoundError`，异常被吞后首页 `items=0`。
+- **独立实现**：只对齐「类名 + 被调用到的签名够用」这一层，按公开的 Android SDK 语义自己写，不复制 MisaTV 源码（§0.1）。
+  这与 §0.1 的立场一致：抽象接口是公开事实，实现是自己的。
+
+### C. 样例源实测：wex/shinidie 系加固壳，PC 端维持不支持
+
+- 配置：`https://9280.kstore.vip/aiwex.json`。顶层 `spider` 为
+  `http://oss4liview.moji.com/thd_file/2026/11/17/ff5af105e608d6389b89d59586515c70.jpg;md5;5a934007fb34ec762c2e7d25dbdc865d`
+  ——伪装成 `.jpg` 的 jar，加 TVBox 的 `;md5;` 校验后缀；站点 `api` 全是 `csp_*Guard` 形态。
+- 实下载该地址，是一个含 5 个条目的 zip：
+  - `classes.dex`（40,024 B）
+  - `META-INF/MANIFEST.MF`
+  - `assets/wexguard_v7.so`
+  - `assets/wexguard_v8.so`
+  - `assets/wexshinidie.guard`（983,479 B）
+- 该文件 md5 = `5a934007fb34ec762c2e7d25dbdc865d`，与配置声明的 `;md5;` 一致——拿到的是配置指向的那一份，不是被替换/截断的内容。
+- 判读：这是 **wex/shinidie 系加固壳**。`classes.dex` 只是壳的加载层，真实 Spider 在加密的
+  `assets/wexshinidie.guard` 里（零明文，非 zlib/gzip）。
+- MisaTV 自己在 `assets/jvm/src/shell-shim/com/github/catvod/spider/DexNative.java` 的注释里也写明：
+  这类加密载荷「只能由 ARM native 解密」，纯 Java 影子类只在已拿到解密产物时可用。**它的快路径同样绕不开这条**（§0.1）。
+- 结论：PC 端维持「**如实判为 `shellGuard`、不落盘、不运行**」，与 **ADR-0002 §3.4.3** 一致；
+  本轮**不改 ADR 状态**，§6-1「加固壳 / unidbg 整条线路」的待决策项不因这次实测推进——
+  反而多了一条正向证据：壳内是加密载荷，纯 Java 转译没有输入。
+- 未验证：`MANIFEST.MF` 与两个 `.so` 的字节数未取；`.guard` 的加密算法未逆向，本文不对其做任何断言。
+### D. 后续实际落地（2026-11-21 更新，**修正 §A、§C 与 §6-1 的判定**）
+
+- **加固壳 ARM 解包桥：已采纳并落地**。§6-1 与 §C 的原结论是「不做 / 维持不运行」，本轮在真实 wex 源上
+  完成了可行性验证与产品化，形态与 MisaTV 一致：由用户点按钮**按需下载** unidbg 0.9.9（18 个 jar、
+  约 40.7 MB、四镜像回退 + 逐文件 SHA-256 校验），解包器以 **JDK 单文件源码模式**运行、只解一次，
+  payload 按壳 jar 的 SHA-256 缓存。决策、边界与代价见 [ADR-0002 附录 A](../../adr/0002-android-csp-jar-compat.md)。
+- 因此 §A 表里 `dd34424`（加固壳修复）与 §C 末段「不运行」判定**部分作废**：我们仍然不复制其实现，
+  但「PC 端不运行加固壳」不再是产品边界。
+- 仍不采纳：`adb37b8`（Android 原生 jar/DEX 运行器，移动端形态）、JvmStderrFilter（诊断增强）、
+  `_oneShotMax` 闸门与搜索轮次作废（本项目已有 idle 回收 + 播放 pin）。
+- 新证据：真实 wex 源（`AiNewHuaJuan`）在桌面 JVM 上 `homeContent` 返回 5 个分类 + 条目；
+  `--selfcheck` 1193 类 / 22 个加载失败（全是 Android UI 垫片缺口，未越 P1-2 边界）；
+  `-noverify` 是这条通路的必要取舍（进程内校验网失效，隔离靠独立 sidecar + 作业对象）。

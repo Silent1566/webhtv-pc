@@ -22,6 +22,7 @@ import '../core/site_group.dart';
 import '../core/site_group_rules.dart';
 import '../core/source_key.dart';
 import '../services/app_paths.dart';
+import '../services/csp_jar_probe.dart' show ShellUnpackTick;
 import '../services/last_config_store.dart';
 import '../services/log_service.dart';
 import '../services/session_recovery_store.dart';
@@ -46,6 +47,7 @@ import 'player_page.dart';
 import 'push_detail_page.dart';
 import 'push_dialog.dart';
 import 'scroll_behavior.dart';
+import 'shell_unpack_dialogs.dart';
 import 'search_page.dart';
 import 'spider_page.dart';
 import 'startup_arguments.dart';
@@ -452,6 +454,10 @@ class _AppShellState extends State<AppShell> {
 
   /// 「重试」进行中：按钮置忙，避免连点触发重复探测。
   bool _restoringBridge = false;
+
+  /// 加固壳解包流程是否已经开着：同一个站点连点、连选两次不许叠出第二个框。
+  bool _shellUnpackFlowOpen = false;
+
 
   /// 两条横幅通道上一次"已经推成通知"的值。
   ///
@@ -960,6 +966,51 @@ class _AppShellState extends State<AppShell> {
     }
     _section = ShellSection.browse;
     await _state.selectSite(selected);
+    // 加固壳：站点进入后 state 会登记「要不要确认解包」，这里负责问。
+    await _maybeOfferShellUnpack();
+  }
+
+  /// 选完站点后：若该站点还要解包，弹多选（默认勾选它所属的 jar）。
+  ///
+  /// 取消 = 什么都不做：不下载运行时、不下载 jar。自动弹出来的东西必须能安静退场。
+  Future<void> _maybeOfferShellUnpack() async {
+    if (_shellUnpackFlowOpen) return;
+    final siteKey = _state.takePendingShellUnpackForSite();
+    if (siteKey == null || !mounted) return;
+    final items = _state.shellUnpackItems(preferSiteKey: siteKey);
+    if (items.isEmpty) return;
+    _shellUnpackFlowOpen = true;
+    try {
+      final selected = await showShellUnpackSelection(
+        context,
+        items: items,
+        runtimeStateLabel: _state.shellUnpackRuntimeStateLabel,
+      );
+      if (selected == null || selected.isEmpty || !mounted) return;
+      final ticks = StreamController<ShellUnpackTick>();
+      final progress = showShellUnpackProgress(
+        context,
+        jarCount: selected.length,
+        ticks: ticks.stream,
+      );
+      try {
+        await _state.unpackShellTargets(
+          selected,
+          onTick: (tick) {
+            if (!ticks.isClosed) ticks.add(tick);
+          },
+        );
+      } catch (error) {
+        // 失败要落在对话框里（阶段 + 原因），不许静默关掉。
+        if (!ticks.isClosed) ticks.addError(error);
+      } finally {
+        if (!ticks.isClosed) await ticks.close();
+      }
+      await progress;
+    } finally {
+      _shellUnpackFlowOpen = false;
+    }
+    if (mounted) setState(() {});
   }
 
   /// 顶栏「推送」：地址粘贴与本地文件选择都从这个对话框起播。

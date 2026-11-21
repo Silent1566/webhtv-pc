@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ipc_protocol.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/log_service.dart';
+import 'package:webhtv_pc/services/node_runtime.dart';
 import 'package:webhtv_pc/services/sidecar_runtime.dart';
 import 'package:webhtv_pc/services/spider_process.dart';
 import 'package:webhtv_pc/services/spider_registry.dart';
@@ -455,6 +456,25 @@ void main() {
       },
     );
 
+    test('negotiated JVM leases renew, release and expire into a fresh idle deadline', () async {
+      final node = NodeRuntimeResolver.resolve();
+      if (node == null) { markTestSkipped('Node runtime unavailable for negotiated JVM fixture'); return; }
+      final entry=File(p.join(temp.path,'lease-host.cjs'));await entry.writeAsString(_leaseHostSource);
+      final manifest=SpiderManifest(key:'lease-fixture',name:'lease-fixture',runtime:'jvm',entry:'lease-host.cjs',capabilities:const ['home','category','detail','search','play','proxy'],permissions:const SpiderPermissions(localProxy:true));
+      final host=await supervisor.ensureRunning(siteKey:manifest.key,executable:node.executable,arguments:[...node.arguments,entry.path],manifest:manifest);
+      hosts.add(host);
+      final lease=host.acquirePlaybackLease('session-1');
+      time.advance(const Duration(seconds:100));expect(host.process.isRunning,true);
+      lease.renew(const Duration(seconds:120));
+      time.advance(const Duration(seconds:119));expect(host.activePlaybackLeaseCount,1);
+      lease.release();lease.release();expect(host.activePlaybackLeaseCount,0);
+      time.advance(_idleTimeout-const Duration(milliseconds:1));expect(host.process.isRunning,true);
+      final abandoned=host.acquirePlaybackLease('abandoned');
+      time.advance(const Duration(seconds:120));expect(abandoned.active,false);expect(host.activePlaybackLeaseCount,0);
+      time.advance(_idleTimeout-const Duration(milliseconds:1));expect(host.process.isRunning,true);
+      time.advance(const Duration(milliseconds:1));await drainIdle(host);
+    });
+
     test('declared localProxy hosts stay alive until explicit stop', () async {
       final base = gatedSpider.manifest;
       final manifest = SpiderManifest(
@@ -697,4 +717,10 @@ class Spider:
 
     def destroy(self):
         pass
+''';
+
+const _leaseHostSource=r'''
+let buf=Buffer.alloc(0);
+function send(id,result){const b=Buffer.from(JSON.stringify({jsonrpc:'2.0',id,result}));process.stdout.write(Buffer.concat([Buffer.from('Content-Length: '+b.length+'\r\n\r\n'),b]));}
+process.stdin.on('data',data=>{buf=Buffer.concat([buf,data]);while(true){const e=buf.indexOf('\r\n\r\n');if(e<0)break;const n=Number(/Content-Length: (\d+)/i.exec(buf.subarray(0,e).toString())[1]);if(buf.length<e+4+n)break;const m=JSON.parse(buf.subarray(e+4,e+4+n));buf=buf.subarray(e+4+n);send(m.id,m.method==='initialize'?{abi:'webhtv-ipc-v1',capabilities:['home','category','detail','search','play','proxy'],extensions:{proxyHttp:{version:1,sessionControl:true,baseUrl:'http://127.0.0.1:19000'}}}:{});if(m.method==='destroy')process.exit(0);}});
 ''';

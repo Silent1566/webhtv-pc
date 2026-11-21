@@ -139,7 +139,10 @@ import '../services/search_suggest_service.dart';
 import '../services/parse_service.dart';
 import '../services/site_service.dart';
 import '../services/spider_process.dart';
+import '../services/spider_proxy_session.dart';
+import '../services/sidecar_runtime.dart';
 import '../services/spider_registry.dart';
+import '../services/unidbg_runtime.dart';
 import '../services/spider_router.dart';
 import '../services/ai_config_store.dart';
 import '../services/detail_rating_service.dart';
@@ -154,6 +157,7 @@ import '../services/tmdb_config_store.dart';
 import '../services/ui_preferences_store.dart';
 import '../services/local_source_enable_store.dart';
 import '../services/web_home_store.dart';
+import '../ui/shell_unpack_dialogs.dart' show ShellTargetItem;
 import '../services/tmdb_enrichment_service.dart';
 import '../services/tmdb_history.dart';
 import '../services/tmdb_identity_service.dart';
@@ -587,6 +591,8 @@ AiContentCompletion? aiContentCompletion,
 
   /// 本次播放的代理会话（§11.3.1）。
   ProxySession? _proxySession;
+  SpiderProxySession? _jvmProxySession;
+  int _proxyPlaybackEpoch = 0;
 
   AppDatabase? _database;
 
@@ -2423,7 +2429,8 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 壳在**模块顶层**就 import 它们（实测 C:/dev/Atvp.py:18-23 的 requests /
   /// Crypto / lxml），因此缺依赖不是「某个方法不可用」而是**启动即失败**：
-  /// host.py 记一行 stderr 后 return 3，用户只会看到「sidecar 意外退出 code=3」。
+  /// host.py 记一行 stderr 后 return 3；宿主现在会把它读成「站源初始化失败：<缺的模块>」
+/// 并直接判定为确定性失败（不重试）。
   static const List<String> catVodPythonModules = <String>[
     'requests',
     'Crypto',
@@ -4421,6 +4428,7 @@ AiContentCompletion? aiContentCompletion,
   }
 
   void _attachSiteService() {
+    revokeProxySession();
     // 配置/注入变化后重新合并（缓存只在同一次装配内有效）。
     _effectiveConfigCache = null;
     // 配置可能带来新的 `doh`/`hosts`：先刷新出站传输（内部有输入签名，未变不重建）。
@@ -4440,10 +4448,12 @@ AiContentCompletion? aiContentCompletion,
     // 自己做嘛？」——让程序自己把带依赖的解释器准备好（本机已有就直接用，否则
     // 从离线 ZIP 准备专用环境），而不是让用户撞一句 code=3。同样不阻塞首屏。
     unawaited(_preparePythonRuntimeQuietly());
-    // csp_* 站点：配置里声明的 jar 若指向远端地址，自动取回并静态检测。
-    // 能加载的自动装好；不能加载的把结论写进 probe.json，列表与详情直接回显
-    // 原因（用户诉求 2026-10-24「迁移不该让用户自己做」）。同样不阻塞首屏。
-    unawaited(_probeCspJarsQuietly());
+    // csp_* 站点：启动**只做只读的加固壳发现**，不做全量探测。
+    //
+    // 为什么改（2026-11-21 实测）：全量探测会对配置里每个 csp_* 站点做下载/检测/装配，
+    // 上百个站点连起来是几十秒的同步 I/O + 每站一次 JVM，开屏必然「未响应」。
+    // 迁移/修复改为按需：用户在站点页点「自动探测」，或点某个源时触发。
+    unawaited(_probeShellTargetsQuietlyForStartup());
     // 站点服务必须复用**同一个** [_router] 实例。
     //
     // 缺陷（2026-10-24 实测）：这里曾每次新建一个匿名 SpiderRouter 交给
@@ -4613,6 +4623,10 @@ AiContentCompletion? aiContentCompletion,
     _configPhase = LoadPhase.loading;
     _lastError = null;
     _importDiagnosticsSummary = null;
+    // 上一份配置的加固壳结论必须作废：提示/确认框都是按「这份配置的站点」算的，
+    // 留着会让新配置弹出旧配置的框。
+    _shellTargets = const [];
+    _pendingShellUnpack.clear();
     notifyListeners();
 
     try {
@@ -4727,6 +4741,12 @@ AiContentCompletion? aiContentCompletion,
         log.warning('导入诊断：$_importDiagnosticsSummary', scope: 'config');
       }
       _notifyIfAlive();
+
+      // 加固壳：导入成功后异步探测，命中只**暂存**一条待确认提示——不弹 UI、
+      // 不下载运行时；弹不弹、什么时候弹由 UI 决定。
+      // 句柄留给 UI：导入页要在「导入成功」这一刻弹提示，必须能等到探测 settle。
+      _shellTargetsProbe = _probeShellTargetsQuietly(config);
+      unawaited(_shellTargetsProbe!);
 
       // 导入后自动加载默认站点首页，形成“导入 → 首页”的闭环。
       final site = _selectedSite;
@@ -5323,6 +5343,9 @@ AiContentCompletion? aiContentCompletion,
     // 筛选与分页都是**站点/分类相关**的，换站点必须一起作废（见 _resetCategoryPaging）。
     _categoryFilters = const {};
     _resetCategoryPaging();
+    // 加固壳：登记「这个站点要不要确认解包」的信号（单槽、幂等），
+    // 由壳层在选完站点后读取并弹框；state 层不弹 UI。
+    _noteShellUnpackForSite(site);
     // 本地 HTML 首页不是爬虫站点：内容由 `WebHomePage`（WebView2）承载，走
     // [loadHome] 只会得到一次假「站点不可用」。这里只登记选中态，也**不**写
     // 「最近使用站点」——否则下次启动会把一个不能加载首页的条目当成默认站点。
@@ -6456,48 +6479,77 @@ AiContentCompletion? aiContentCompletion,
     final service = serviceOverride ?? _siteService;
     // 本次解析用的站点：覆盖优先，之后所有分支（service/proxy/日志）共用它。
     final site = siteOverride ?? _selectedSite;
-    if (service == null || site == null) return null;
+    if (service == null || site == null || _disposed || _isStale(isCurrent)) {
+      return null;
+    }
+    final epoch = ++_proxyPlaybackEpoch;
+    final previousOwner = _jvmProxySession;
+    _jvmProxySession = null;
+    unawaited(previousOwner?.close());
+    bool current() =>
+        !_disposed && epoch == _proxyPlaybackEpoch && !_isStale(isCurrent);
     await _waitForPythonSite(site);
-    if (_disposed) return null;
+    if (!current()) return null;
+    SpiderProxySession? owner;
     try {
-      final outcome = await service.resolvePlayback(
-        site: site,
-        episodeTarget: episodeTarget,
-        flag: flag,
-        vodId: vodId,
-        qualityIndex: qualityIndex,
-        parseFailover: parseFailoverSettings,
-        preferredParseName: preferredParseName,
-      );
+      final runtime = service.router.runtimeFor(site);
+      if (runtime is SidecarRuntime) {
+        owner = await runtime.prepareProxySession(service, isCurrent: current);
+        if (!current()) {
+          unawaited(owner?.close());
+          return null;
+        }
+        _jvmProxySession = owner;
+      }
+      Future<SiteCallResult<PlaybackDecision>> resolve() =>
+          service.resolvePlayback(
+            site: site,
+            episodeTarget: episodeTarget,
+            flag: flag,
+            vodId: vodId,
+            qualityIndex: qualityIndex,
+            parseFailover: parseFailoverSettings,
+            preferredParseName: preferredParseName,
+          );
+      final outcome = runtime is SidecarRuntime
+          ? await runtime.withProxySession(owner, resolve)
+          : await resolve();
       // 过期响应（用户已切到别的画质/线路）不得改动全局播放状态：撤销旧 token 会
       // 连带把**新**会话作废，写 lastDecision 会把播放器指回旧画质。
-      if (_isStale(isCurrent)) return null;
-      // 退出旧会话并接入本地代理：Header 注入与 Range 都经同一 token 校验（§9.6、§11.3.1）。
-      revokeProxySession();
+      if (!current()) {
+        unawaited(owner?.close());
+        return null;
+      }
+      _revokeHttpProxySession();
       final decision = await proxyDecision(
         outcome.value,
         siteKey: site.key,
-        isCurrent: isCurrent,
+        isCurrent: current,
       );
-      if (_isStale(isCurrent)) return null;
+      if (!current()) {
+        unawaited(owner?.close());
+        return null;
+      }
       _lastDecision = decision;
       _lastError = null;
       log.info(
-        '播放决策 ${decision.logLine} site=${site.key} '
+        '播放决策 ${SpiderProxySession.redact(decision.logLine)} site=${site.key} '
         'elapsed=${outcome.latency.inMilliseconds}ms',
         scope: 'playback',
       );
       _notifyIfAlive();
       return decision;
     } catch (error) {
+      unawaited(owner?.close());
+      if (identical(_jvmProxySession, owner)) _jvmProxySession = null;
       // 过期请求的失败同样不是「当前播放失败」，交给 UI 丢弃（不写 lastError）。
-      if (_isStale(isCurrent)) return null;
+      if (!current()) return null;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       _lastError = failure;
       log.error(
-        '播放决策失败 site=${site.key} ${failure.logLine}',
+        '播放决策失败 site=${site.key} ${SpiderProxySession.redact(failure.logLine)}',
         scope: 'playback',
       );
       _notifyIfAlive();
@@ -6761,31 +6813,11 @@ AiContentCompletion? aiContentCompletion,
     final context = playbackContextFor(sourceKey);
     final site = context?.siteByKey(siteKey);
     if (context == null || site == null) return null;
-    await _waitForPythonSite(site);
-    if (_disposed || _isStale(isCurrent)) return null;
-    final outcome = await context.service.resolvePlayback(
-      site: site,
-      episodeTarget: episodeTarget,
-      flag: flag,
-      vodId: vodId,
-      qualityIndex: qualityIndex,
-      parseFailover: parseFailoverSettings,
-      preferredParseName: preferredParseName,
+    return resolvePlayback(
+      episodeTarget: episodeTarget, flag: flag, vodId: vodId, qualityIndex: qualityIndex,
+      isCurrent: isCurrent, preferredParseName: preferredParseName,
+      siteOverride: site, serviceOverride: context.service,
     );
-    if (_isStale(isCurrent)) return null;
-    revokeProxySession();
-    final decision = await proxyDecision(
-      outcome.value,
-      siteKey: site.key,
-      isCurrent: isCurrent,
-    );
-    if (_isStale(isCurrent)) return null;
-    log.info(
-      '原来源播放决策 ${decision.logLine} source=$sourceKey site=${site.key} '
-      'elapsed=${outcome.latency.inMilliseconds}ms',
-      scope: 'playback',
-    );
-    return decision;
   }
 
   /// 记录播放进度（§15.2）。
@@ -7912,16 +7944,240 @@ AiContentCompletion? aiContentCompletion,
   CspJarProbe _cspProbe() =>
       CspJarProbe(root: _spiderRegistry.root, binding: _cspBinding, log: log);
 
+  UnidbgRuntime? _unidbgRuntime;
+
+  /// 加固壳解包运行时（unidbg）。**只在用户点下载时才联网**；
+  /// 探测链路只读 [shellRuntimeInstalled]，绝不隐式触发 40.7 MB 下载。
+  UnidbgRuntime get shellRuntime => _unidbgRuntime ??= UnidbgRuntime(log: log);
+
+  /// 解包运行时是否已安装（读目录，不联网）。
+  bool get shellRuntimeInstalled => shellRuntime.isInstalledSync;
+
+  /// 下载并安装解包运行时（四镜像回退、逐文件 SHA-256 校验）。
+  ///
+  /// 安装完不自动重跑探测：调用方（设置页/站点页）决定何时重试；`needsShellRuntime`
+  /// 在 `probe.json` 里是非终态，下一轮探测会自己重跑。
+  Future<UnidbgRuntimeInstall> installShellRuntime({
+    void Function(UnidbgRuntimeProgress)? onProgress,
+  }) async {
+    final result = await shellRuntime.install(onProgress: onProgress);
+    log.info(
+      result.installed
+          ? '加固壳解包运行时已安装：${result.dir}（${result.bytes} B）'
+          : '加固壳解包运行时安装失败：${result.error ?? '原因未知'}',
+      scope: 'spider',
+    );
+    if (result.installed) _notifyIfAlive();
+    return result;
+  }
+
+  /// 删除解包运行时。**不动已解包的 payload 缓存**：删掉只是不能再解新壳，
+  /// 已经解出来的站点仍可运行。
+  Future<void> removeShellRuntime() async {
+    await shellRuntime.remove();
+    log.info('加固壳解包运行时已删除', scope: 'spider');
+    _notifyIfAlive();
+  }
+
+  /// 最近一次加固壳探测的原始结论（`csp_jar_probe` 契约对象）。
+  List<ShellJarTarget> _shellTargets = const [];
+
+  /// 「导入后 / 选站点后」两处待弹框信号。state 层只登记，不弹 UI。
+  final PendingShellUnpack _pendingShellUnpack = PendingShellUnpack();
+
+  /// 导入配置后待确认的解包提示（没有待弹框时为 null）。
+  List<ShellTargetItem>? get pendingShellUnpackPrompt =>
+      _pendingShellUnpack.prompt;
+
+  /// 待弹「确认解包」的站点 key（没有待弹框时为 null）。
+  String? get pendingShellUnpackForSite => _pendingShellUnpack.siteKey;
+
+  /// 取走导入提示：弹过一次就没了，同一条提示不会被连弹。
+  List<ShellTargetItem>? takePendingShellUnpackPrompt() =>
+      _pendingShellUnpack.takePrompt();
+
+  /// 取走站点级确认：同上。
+  String? takePendingShellUnpackForSite() => _pendingShellUnpack.takeSite();
+
+  /// 对话框顶部那一行运行时状态文案。
+  String? get shellUnpackRuntimeStateLabel => shellRuntimeInstalled
+      ? '解包运行时已安装。'
+      : '解包运行时未安装：开始解包时会先下载约 40.7 MB。';
+
+  /// 探测结论 → 对话框条目。
+  ///
+  /// 已解包的条目置灰、不勾选（重解没有意义）；给了 [preferSiteKey] 就只勾选它
+  /// 所属的 jar——用户点的是某个站点，不是整份配置。
+  List<ShellTargetItem> shellUnpackItems({String? preferSiteKey}) => [
+        for (final target in _shellTargets)
+          if (target.state != ShellTargetState.installed)
+            ShellTargetItem(
+              jarUrl: target.jarUrl,
+              label: _shellTargetLabel(target),
+              siteCount: target.siteKeys.length,
+              stateLabel: _shellTargetStateLabel(target),
+              selected: target.state != ShellTargetState.unpacked &&
+                  (preferSiteKey == null ||
+                      target.siteKeys.contains(preferSiteKey)),
+              disabled: target.state == ShellTargetState.unpacked,
+            ),
+      ];
+
+  /// 导入/切配置后异步探测加固壳。
+  ///
+  /// 只探测、只暂存：**不弹 UI、不下载运行时**。命中需要解包的站源时登记一条
+  /// 待确认提示，弹不弹、什么时候弹由 UI 决定。
+  Future<void>? _shellTargetsProbe;
+
+  /// 导入后加固壳探测的句柄（未导入过时为已完成的 Future）。
+  ///
+  /// 为什么需要：`importConfig` 里探测是 `unawaited` 的（不拖慢导入），但导入页要在
+  /// 「导入成功」这一刻决定弹不弹确认框，只能等它 settle 再读暂存提示。
+  Future<void> get shellTargetsProbe =>
+      _shellTargetsProbe ?? Future<void>.value();
+
+  Future<void> _probeShellTargetsQuietly(
+    AppConfig config, {
+    bool stagePrompt = true,
+  }) async {
+    try {
+      final targets = await _cspProbe().discoverShellTargets(config);
+      // 探测期间配置又换了：这批结论属于旧配置，丢掉。
+      if (!identical(_config, config)) return;
+      _shellTargets = targets;
+      final pending = targets.where(_shellTargetNeedsUnpack).toList();
+      if (pending.isEmpty) {
+        log.info('加固壳探测：没有需要解包的站源', scope: 'spider');
+        return;
+      }
+      if (stagePrompt && _pendingShellUnpack.stagePrompt(shellUnpackItems())) {
+        log.info(
+          '加固壳探测：${pending.length} 个 jar 待解包，已登记导入提示',
+          scope: 'spider',
+        );
+        _notifyIfAlive();
+      }
+    } catch (error) {
+      log.warning('加固壳探测失败：$error', scope: 'spider');
+    }
+  }
+
+  /// 解包用户选中的加固壳：运行时没装先装，解完刷新探测结论。
+  ///
+  /// 进度经 [onTick] 外抛，state 层不弹 UI；失败直接抛出（运行时装不上 / 解包报错），
+  /// 由进度对话框显示阶段与原因——失败不许静默。
+  Future<void> unpackShellTargets(
+    Set<String> jarUrls, {
+    void Function(ShellUnpackTick)? onTick,
+  }) async {
+    if (jarUrls.isEmpty) return;
+    final config = effectiveConfig;
+    if (config == null) {
+      throw AppError(AppErrorKind.configInvalid, '没有可用配置，无法解包加固壳');
+    }
+    // 运行时只在用户点了「下载并解包」之后才下载：40.7 MB 不跟着探测走。
+    if (!shellRuntimeInstalled) {
+      // 解包流还没开始，但它同样是用户要等的阶段：先发一条，进度条上不至于
+      // 停在「准备中」一动不动（这一段能占掉整个流程的一大半墙钟时间）。
+      onTick?.call(
+        ShellUnpackTick(
+          jarIndex: 0,
+          jarCount: jarUrls.length,
+          jarUrl: '',
+          fraction: 0,
+          stage: '下载解包运行时',
+        ),
+      );
+      final install = await installShellRuntime();
+      if (!install.installed) {
+        final reason = install.error ?? '未知原因';
+        throw AppError(AppErrorKind.unknown, '解包运行时安装失败：$reason');
+      }
+    }
+    await _cspProbe().unpackSelected(config, jarUrls: jarUrls, onProgress: onTick);
+    log.info('加固壳解包完成：${jarUrls.length} 个 jar', scope: 'spider');
+    // 结论刷新 + 清掉待弹信号：解完再点同一个站点不该再被问一次。
+    await _probeShellTargetsQuietly(config, stagePrompt: false);
+    _pendingShellUnpack.clear();
+    _notifyIfAlive();
+  }
+
+  bool _shellTargetNeedsUnpack(ShellJarTarget target) =>
+      target.state == ShellTargetState.needsRuntime ||
+      target.state == ShellTargetState.needsUnpack ||
+      target.state == ShellTargetState.failed;
+
+  String _shellTargetStateLabel(ShellJarTarget target) {
+    switch (target.state) {
+      case ShellTargetState.installed:
+        return '可直接运行';
+      case ShellTargetState.needsRuntime:
+        return '需下载运行时';
+      case ShellTargetState.needsUnpack:
+        return '需解包';
+      case ShellTargetState.unpacked:
+        return '已解包';
+      case ShellTargetState.failed:
+        final stage = target.stage;
+        return stage == null || stage.isEmpty ? '上次失败' : '上次失败（$stage）';
+    }
+  }
+
+  String _shellTargetLabel(ShellJarTarget target) {
+    final path = Uri.tryParse(target.jarUrl)?.path ?? '';
+    final name = p.basename(path);
+    return name.isEmpty ? target.jarUrl : name;
+  }
+
+  /// 站点进入后登记「确认解包」信号。
+  void _noteShellUnpackForSite(Site site) {
+    if (site.key.isEmpty) return;
+    _stageShellUnpackForSiteKey(site.key);
+  }
+
+  /// 幂等：同一站点重复点击只留一个待弹框（见 [PendingShellUnpack]）；
+  /// 站点不在最近一次探测的结论里就什么都不做。
+  void _stageShellUnpackForSiteKey(String siteKey) {
+    final needs = _shellTargets.any(
+      (target) =>
+          target.siteKeys.contains(siteKey) &&
+          _shellTargetNeedsUnpack(target),
+    );
+    if (!needs) return;
+    if (_pendingShellUnpack.stageSite(siteKey)) _notifyIfAlive();
+  }
+
+  /// 测试入口：直接注入一份探测结论（真实路径由 [_probeShellTargetsQuietly] 填）。
+  @visibleForTesting
+  void debugSetShellTargets(List<ShellJarTarget> targets) {
+    _shellTargets = targets;
+  }
+
+  /// 测试入口：模拟「用户点进某个站点」后登记待弹信号（与 [selectSite] 同一段逻辑）。
+  @visibleForTesting
+  void debugStageShellUnpackForSite(String siteKey) {
+    _stageShellUnpackForSiteKey(siteKey);
+  }
+
   /// 启动/换配置后异步探测（不阻塞首屏；失败只记日志）。
-  Future<void> _probeCspJarsQuietly() async {
+  /// 启动阶段的加固壳发现：**只读**，不下载、不装配、不起 JVM。
+  ///
+  /// 与 [_probeCspJarsQuietly] 的分工：后者是全量探测（会装站点），只在用户显式
+  /// 点「自动探测」时才跑。启动去掉全量探测，是为了不再出现「开屏卡死」。
+  Future<void> _probeShellTargetsQuietlyForStartup() async {
     try {
       final config = effectiveConfig;
       if (config == null) return;
       if (!config.sites.any((site) => CspJvmBinding.matches(site.api))) return;
-      final report = await _cspProbe().materialize(config);
-      if (!report.isEmpty) _notifyIfAlive();
+      final clock = Stopwatch()..start();
+      await _probeShellTargetsQuietly(config, stagePrompt: false);
+      // 可观测：启动阶段只读发现的耗时必须留在日志里，卡顿时才有据可查。
+      log.info(
+        '启动阶段加固壳发现完成 elapsed=${clock.elapsedMilliseconds}ms',
+        scope: 'spider',
+      );
     } catch (error) {
-      log.warning('CSP jar 自动探测失败：$error', scope: 'spider');
+      log.warning('启动阶段加固壳发现失败：$error', scope: 'spider');
     }
   }
 
@@ -8239,15 +8495,35 @@ AiContentCompletion? aiContentCompletion,
   String? get proxySessionFingerprint => _proxySession?.fingerprint;
 
   /// 启动本地代理（只监听 127.0.0.1）。
-  Future<void> startProxy({int port = 0}) async {
+  ///
+  /// 端口**优先用 9978**，与 Android 宿主一致：安卓参考实现就是
+  /// `com.github.catvod.Proxy.set(9978)` 后 `server.start(5000, true)`，
+  /// 而加固壳/第三方站源返回的播放地址里写死了
+  /// `http://127.0.0.1:9978/proxy?...`。桌面端此前从 0（随机端口）起，
+  /// 那个地址就指向没人监听的端口——播放决策成功、播放器却拿不到流
+  /// （2026-11-21 实测：本机 9978 无监听，WexHanXiaoQuan 返回的正是 9978 地址）。
+  ///
+  /// 9978 被占用时退回随机端口，并**如实记一条日志**：这种情况下壳源播放会失败，
+  /// 不要静默降级成「能点但没画面」。
+  Future<void> startProxy({int port = 9978}) async {
     if (_proxy.isRunning) return;
-    await _proxy.start(port: port);
+    try {
+      await _proxy.start(port: port);
+    } catch (error) {
+      if (port == 0) rethrow;
+      log.warning(
+        '本地代理无法绑定 $port（$error），退回随机端口：壳源返回的 9978 代理地址将不可用',
+        scope: 'proxy',
+      );
+      await _proxy.start(port: 0);
+    }
+    log.info('本地代理已监听 ${_proxy.baseUrl}', scope: 'proxy');
     _notifyIfAlive();
   }
 
   /// 停止本地代理并释放端口（§11.4）。
   Future<void> stopProxy() async {
-    _proxySession = null;
+    revokeProxySession();
     await _proxy.stop();
     _notifyIfAlive();
   }
@@ -8265,6 +8541,7 @@ AiContentCompletion? aiContentCompletion,
   }) async {
     final url = decision.url;
     if (url == null || url.isEmpty) return decision;
+    if (_jvmProxySession?.ownsUrl(url) ?? false) return decision;
     final target = Uri.tryParse(url);
     if (target == null ||
         !(target.isScheme('http') || target.isScheme('https'))) {
@@ -8345,12 +8622,40 @@ AiContentCompletion? aiContentCompletion,
     );
   }
 
+  /// Capture exact authorization now; a stale page cannot release its successor.
+  VoidCallback captureProxySessionRelease(String mediaUrl) {
+    final owner = _jvmProxySession;
+    final jvm = owner != null && (owner.ownsUrl(mediaUrl) || _lastDecision?.url == mediaUrl) ? owner : null;
+    final session = _proxySession;
+    final http = session != null && mediaUrl.startsWith('${_proxy.baseUrl}/p/${session.token}/') ? session : null;
+    return () {
+      var released = false;
+      if (jvm != null && identical(_jvmProxySession, jvm)) {
+        _jvmProxySession = null;
+        unawaited(jvm.close());
+        released = true;
+      }
+      if (http != null && identical(_proxySession, http)) {
+        _revokeHttpProxySession();
+        released = true;
+      }
+      if (released) _proxyPlaybackEpoch++;
+    };
+  }
+
   /// 停止当前播放会话的代理授权（§11.3.1「停止播放即失效」）。
   void revokeProxySession() {
+    _proxyPlaybackEpoch++;
+    final owner = _jvmProxySession;
+    _jvmProxySession = null;
+    unawaited(owner?.close());
+    _revokeHttpProxySession();
+  }
+
+  void _revokeHttpProxySession() {
     final session = _proxySession;
-    if (session == null) return;
-    _proxy.sessions.revoke(session.token);
     _proxySession = null;
+    if (session != null) _proxy.sessions.revoke(session.token);
   }
 
   Future<void> resetCache() async {
@@ -8770,6 +9075,7 @@ AiContentCompletion? aiContentCompletion,
   @override
   void dispose() {
     _disposed = true;
+    revokeProxySession();
     unawaited(_pythonEnvironment.close());
     _detailRunId++;
     _followingTimer?.cancel();
@@ -8805,5 +9111,62 @@ AiContentCompletion? aiContentCompletion,
     _database?.dispose();
     log.dispose();
     super.dispose();
+  }
+}
+/// 两处「待弹框」信号的单槽登记簿。
+///
+/// 单槽而不是队列：同一站点重复点击、同一批结果重复登记都只该剩下一个待弹框；
+/// 排队就会变成「连点三次，弹三次」。state 层只登记，弹框时机归 UI。
+class PendingShellUnpack {
+  List<ShellTargetItem>? _prompt;
+  String? _siteKey;
+
+  /// 导入后待确认的解包提示。
+  List<ShellTargetItem>? get prompt => _prompt;
+
+  /// 待弹「确认解包」的站点 key。
+  String? get siteKey => _siteKey;
+
+  /// 登记导入提示；同一批条目重复登记返回 false（幂等，不叠加）。
+  bool stagePrompt(List<ShellTargetItem> items) {
+    if (items.isEmpty) return false;
+    final current = _prompt;
+    if (current != null && _sameTargets(current, items)) return false;
+    _prompt = List<ShellTargetItem>.unmodifiable(items);
+    return true;
+  }
+
+  /// 登记站点级确认；同一站点重复登记返回 false（幂等，不叠加）。
+  bool stageSite(String key) {
+    if (key.isEmpty || _siteKey == key) return false;
+    _siteKey = key;
+    return true;
+  }
+
+  List<ShellTargetItem>? takePrompt() {
+    final prompt = _prompt;
+    _prompt = null;
+    return prompt;
+  }
+
+  String? takeSite() {
+    final key = _siteKey;
+    _siteKey = null;
+    return key;
+  }
+
+  void clear() {
+    _prompt = null;
+    _siteKey = null;
+  }
+
+  static bool _sameTargets(List<ShellTargetItem> a, List<ShellTargetItem> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].jarUrl != b[i].jarUrl || a[i].stateLabel != b[i].stateLabel) {
+        return false;
+      }
+    }
+    return true;
   }
 }

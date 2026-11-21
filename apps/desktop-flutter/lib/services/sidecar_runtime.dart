@@ -17,6 +17,7 @@ import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import 'log_service.dart';
 import 'spider_process.dart';
+import 'spider_proxy_session.dart';
 import 'spider_registry.dart';
 import 'spider_router.dart';
 
@@ -46,6 +47,30 @@ class SidecarRuntime implements SiteRuntime {
   /// 这份缓存**不是真源**：空闲回收或崩溃后宿主会消失，因此每次使用前都要向
   /// [SpiderHostSupervisor] 核对它是否仍然存活；否则调用会发给一个已退出的进程。
   SpiderHost? _host;
+  SpiderProxySession? _proxySession;
+  static final _hostContexts = Expando<SidecarRuntime>();
+  static final _hostStarts = Expando<Map<String, Future<void>>>();
+
+  Future<SpiderProxySession?> prepareProxySession(
+    Object context, {
+    bool Function()? isCurrent,
+  }) async {
+    final host = await _ensureHost();
+    final owner = await SpiderProxySession.open(
+      host: host,
+      supervisor: supervisor,
+      context: context,
+      siteKey: site.key,
+      isCurrent: isCurrent,
+    );
+    _proxySession = owner;
+    return owner;
+  }
+
+  Future<T> withProxySession<T>(
+    SpiderProxySession? owner,
+    Future<T> Function() action,
+  ) => runZoned(action, zoneValues: {this: owner});
 
   /// 每次调用递增，用于生成不重复的 requestId（§9.3.1）。
   int _sequence = 0;
@@ -56,12 +81,34 @@ class SidecarRuntime implements SiteRuntime {
   String _nextRequestId() => '${site.key}-${++_sequence}';
 
   /// 确保运行时已启动并完成 `initialize` 握手。
-  Future<SpiderHost> _ensureHost() async {
-    final live = supervisor.hostFor(site.key);
+  Future<SpiderHost> _ensureHost() {
+    if (spider.manifest.runtime != 'jvm' ||
+        !spider.manifest.permissions.localProxy) {
+      return _ensureHostNow();
+    }
+    final starts = _hostStarts[supervisor] ??= {};
+    final previous = starts[site.key] ?? Future<void>.value();
+    final result = previous.then((_) => _ensureHostNow());
+    starts[site.key] = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<SpiderHost> _ensureHostNow() async {
+    var live = supervisor.hostFor(site.key);
+    if (live != null &&
+        live.proxyHttp != null &&
+        !identical(_hostContexts[live], this)) {
+      await supervisor.stop(site.key);
+      live = null;
+    }
     if (live != null && identical(live, _host)) return live;
     _host = null;
     if (live != null) {
       _host = live;
+      _hostContexts[live] = this;
       return live;
     }
     _host = await supervisor.ensureRunning(
@@ -71,6 +118,7 @@ class SidecarRuntime implements SiteRuntime {
       manifest: spider.manifest,
       extend: _extendFor(site),
     );
+    _hostContexts[_host!] = this;
     return _host!;
   }
 
@@ -145,6 +193,8 @@ class SidecarRuntime implements SiteRuntime {
 
   Future<void> dispose() async {
     cancelInflight();
+    await _proxySession?.close();
+    _proxySession = null;
     _host = null;
     await supervisor.stop(site.key);
   }
@@ -189,10 +239,48 @@ class SidecarRuntime implements SiteRuntime {
     required String episodeTarget,
     String? flag,
     String? vodId,
-  }) => _invoke(SpiderMethod.play, {
-    'id': episodeTarget,
-    'flag': flag ?? '',
-  });
+  }) async {
+    final bound = Zone.current[this] as SpiderProxySession?;
+    final owner = bound ?? await prepareProxySession(this);
+    final params = <String, Object?>{'id': episodeTarget, 'flag': flag ?? ''};
+    if (owner == null) return _invoke(SpiderMethod.play, params);
+    try {
+      return await owner.run((host) async {
+        final requestId = _nextRequestId();
+        _inflight[requestId] = host;
+        try {
+          final raw = await host.call(
+            SpiderMethod.play,
+            params: params,
+            requestId: requestId,
+          );
+          return _toSiteResult(
+            _scopeProxyUrls(raw, owner),
+            method: SpiderMethod.play,
+          );
+        } finally {
+          _inflight.remove(requestId);
+        }
+      });
+    } catch (_) {
+      await owner.close();
+      rethrow;
+    }
+  }
+
+  static Object? _scopeProxyUrls(Object? value, SpiderProxySession owner) {
+    if (value is String) return owner.scopeUrl(value);
+    if (value is List) {
+      return [for (final item in value) _scopeProxyUrls(item, owner)];
+    }
+    if (value is Map) {
+      return {
+        for (final entry in value.entries)
+          entry.key: _scopeProxyUrls(entry.value, owner),
+      };
+    }
+    return value;
+  }
 }
 
 /// 把 `webhtv-cat-http-v1` 接到站点运行时接口（§8.1、§9.4）。

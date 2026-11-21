@@ -133,9 +133,11 @@ void main() {
     await openPage(tester);
     await choose(tester, '选择文件（JSON / ZIP）');
     await tester.pumpAndSettle();
+    // 平台无关：站点代码取的是 PlatformFile.path（即 uri.toFilePath()），
+    // Windows 上 POSIX 字面量会变成反斜杠形式，直接比字面量只会在 POSIX 通过。
     expect(
       tester.widget<TextField>(input()).controller!.text,
-      '/tmp/共享/dist (3).zip',
+      Uri.file('/tmp/共享/dist (3).zip').toFilePath(),
     );
     expect(state.savedConfigs, isEmpty);
     expect(tester.takeException(), isNull);

@@ -250,8 +250,42 @@ try {
     $hostEntry = $archive.GetEntry('webhtv/spider/Host.class')
     if ($null -eq $hostEntry) { throw 'host.jar 缺少 webhtv/spider/Host.class' }
     # 垫片必须在 jar 内：站源 loader 通过父委派解析 android.*，缺了就是 NoClassDefFoundError。
-    foreach ($shim in @('android/content/Context.class', 'android/content/WebhtvContext.class',
-                        'com/github/catvod/crawler/Spider.class')) {
+    # 缺类错误会被站源自己的 catch 吞掉，最终只表现为「首页 0 条目」，所以这里逐个点名断言。
+    # android/net/LegacyUriBuilderApi.class 是 Uri.buildUpon 的旧描述符（()Landroid/net/Uri;）
+    # 所需的协变 bridge 父类，缺了它 Uri 类本身仍能加载，但旧字节码的 buildUpon 调用会在
+    # 方法解析期抛 NoSuchMethodError——同样被吞，因此一并断言。
+    $shimClasses = @(
+        'android/content/Context.class',
+        'android/content/WebhtvContext.class',
+        'android/database/Cursor.class',
+        'android/text/TextUtils.class',
+        'android/util/Base64.class',
+        'android/util/Pair.class',
+        'android/util/LruCache.class',
+        'android/net/Uri.class',
+        'android/net/Uri$Builder.class',
+        'android/net/LegacyUriBuilderApi.class',
+        'android/os/Build.class',
+        'android/os/Build$VERSION.class',
+        'android/os/Bundle.class',
+        'android/os/SystemClock.class',
+        # 载荷 InitOrigin 只靠这两个名字才能加载：字段 android/app/Application 与
+        # checkcast 后的 registerActivityLifecycleCallbacks，本身不做真机行为（见 README §7）。
+        'android/app/Application.class',
+        'android/app/Application$ActivityLifecycleCallbacks.class',
+        'android/content/DialogInterface.class',
+        'android/content/DialogInterface$OnCancelListener.class',
+        'android/content/DialogInterface$OnDismissListener.class',
+        'com/github/catvod/crawler/Spider.class',
+        'com/github/catvod/Proxy.class',
+        'webhtv/spider/SpiderProxyHttpServer.class',
+        # 加固壳入口（壳 jar 当 index.jar + 同目录 payload.jar）靠这个类盖住壳里的
+        # native 版本 DexNative：站源加载器是 parent-first，只有 host.jar 里真有这个类，
+        # 壳的 getLoader/getSpider/proxyInvoke 才会落到纯 Java 实现上。缺了它，壳站点
+        # 会在 UnsatisfiedLinkError 里被自己的 catch 吞成「首页 0 条目」。
+        'com/github/catvod/spider/DexNative.class'
+    )
+    foreach ($shim in $shimClasses) {
         if ($null -eq $archive.GetEntry($shim)) { throw "host.jar 缺少垫片类 $shim" }
     }
 } finally {
