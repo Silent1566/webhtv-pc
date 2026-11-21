@@ -157,6 +157,8 @@ class MetaCandidate {
     this.posterUrl,
     this.overview,
     this.seasonLabel = '',
+    this.facts,
+    this.people,
   });
 
   final MetaIdentity identity;
@@ -181,6 +183,20 @@ class MetaCandidate {
 
   /// 季号标记（`第一季` / `S2`）；无季号时为空串。
   final String seasonLabel;
+
+  /// 一行补充事实（豆瓣 `card_subtitle` 前两段：`中国大陆 · 剧情 家庭 犯罪`）。
+  ///
+  /// 为什么是一整行而不是拆成地区 / 类型两个字段：各家能给的切分粒度不同
+  /// （TMDB 的流派是 id 不是名字，Bangumi 的标签在详情里），拆开就要为每个
+  /// 来源各写一套映射；这里只承载「能不能认出这部片」的补充信息。
+  final String? facts;
+
+  /// 一行主创信息，**已带标签**（如 `主演：范伟 / 秦昊 · 导演：辛爽`）。
+  ///
+  /// 为什么由来源拼成整行：三家的落点完全不同——豆瓣在 `card_subtitle` 的一段里，
+  /// Bangumi 在 `infobox` 的「主演/导演」键里，TMDB 只能靠详情 credits。
+  /// 统一成一行文本，候选行就不必认识三个来源的字段形状。
+  final String? people;
 
   /// 列表副标题：`2023 · 第一季 · 豆瓣`；缺项自动省略。
   String get subtitleForList => [

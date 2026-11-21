@@ -492,6 +492,7 @@ class BangumiService {
           posterUrl: poster.isEmpty ? null : poster,
           overview: summary.isEmpty ? null : summary,
           seasonLabel: _seasonLabel(title.isEmpty ? name : title),
+          people: _peopleOf(map),
         ),
       );
     }
@@ -577,6 +578,59 @@ int _episodeCountOf(Map<String, Object?> map) {
 double _ratingOf(Map<String, Object?> map) {
   final score = _number(_map(map['rating'])['score']);
   return score.isFinite && score > 0 ? score : 0;
+}
+
+/// 一行主创（`主演：… · 导演：…`）：搜索响应的 `infobox` 已经带这些键，
+/// 不必再逐条请求人物页（那会排 1s 间隔的队，手动匹配等不起）。
+String? _peopleOf(Map<String, Object?> map) {
+  final info = _infoboxOf(map);
+  final cast = info['主演'] ?? '';
+  final voices = info['声优'] ?? '';
+  final director = info['导演'] ?? '';
+  var castLine = '';
+  if (cast.isNotEmpty) {
+    // Bangumi 的主演常自带角色前缀（`领衔主演：…`），那就不再叠一层「主演：」。
+    castLine = cast.contains('：') ? cast : '主演：$cast';
+  } else if (voices.isNotEmpty) {
+    castLine = voices.contains('：') ? voices : '声优：$voices';
+  }
+  final parts = <String>[
+    if (castLine.isNotEmpty) castLine,
+    if (director.isNotEmpty) '导演：$director',
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
+/// `infobox`（`[{key, value}]`）摊平成 `key → 文本`。
+///
+/// `value` 既可能是字符串，也可能是 `[{v: '...'}]` 列表（别名/主演常用后者）。
+Map<String, String> _infoboxOf(Map<String, Object?> map) {
+  final result = <String, String>{};
+  final raw = map['infobox'];
+  if (raw is! List) return result;
+  for (final value in raw) {
+    if (value is! Map) continue;
+    final entry = value.cast<String, Object?>();
+    final key = _text(entry, 'key');
+    if (key.isEmpty) continue;
+    final text = _infoboxValue(entry['value']);
+    if (text.isNotEmpty) result[key] = text;
+  }
+  return result;
+}
+
+String _infoboxValue(Object? value) {
+  if (value is String) return value.trim();
+  if (value is num) return value.toString();
+  if (value is! List) return '';
+  final parts = <String>[];
+  for (final item in value) {
+    final entry = _map(item);
+    final text = _text(entry, 'v');
+    final name = text.isEmpty ? _text(entry, 'name') : text;
+    if (name.isNotEmpty) parts.add(name);
+  }
+  return parts.join(' / ');
 }
 
 /// 封面：`large` → `common` → `medium` → `grid`，取首个非空。

@@ -1953,6 +1953,8 @@ class _DetailPageState extends State<DetailPage> {
         state: state,
         vod: vod ?? widget.vod,
         tmdbSearch: state.tmdbConfig.isReady ? state.searchTmdb : null,
+        // 只认本页自己的 TMDB 状态：别的页面/上一条记录的匹配不能当「当前」。
+        currentTmdb: _ownedTmdb?.identity,
         onPickTmdb: (item) {
           unawaited(state.matchTmdbManual(item: item, sourceTitle: vod?.vodName));
         },
