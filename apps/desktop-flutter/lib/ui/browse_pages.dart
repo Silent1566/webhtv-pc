@@ -1460,11 +1460,27 @@ class _DetailPageState extends State<DetailPage> {
     final state = widget.state;
     final tmdb = state.tmdb;
     // 只认本页请求的权威条目，站源重写 ID 后仍能归属；别的剧不能借此认领。
-    final vod = state.detailRequestVodId == widget.vod.vodId
+    // 合成条目页的 id 都是空串，`detailRequestVodId` 也会与每条合成条目相等；
+    // 这时全局 `selectedVod` 可能还是上一部作品，归属必须只看本页条目。
+    final vod = widget.vod.vodId.isEmpty
+        ? widget.vod
+        : state.detailRequestVodId == widget.vod.vodId
         ? state.selectedVod ?? widget.vod
         : widget.vod;
-    return (tmdb.vodId.isEmpty && widget.vod.vodId.isEmpty) ||
-        tmdb.belongsTo(vod.vodId);
+    if (vod.vodId.isNotEmpty) return tmdb.belongsTo(vod.vodId);
+    if (tmdb.vodId.isNotEmpty) return false;
+    // 合成条目页（推荐 / 缺站详情）没有 id 可判归属：空 id 的残留数据只属于
+    // 上一部作品，必须再比一次身份或标题，否则新页面首帧会借用它的封面与简介。
+    final declared = TmdbIdentity.from(
+      vod.extra['media_type'],
+      vod.extra['tmdb_id'],
+    );
+    if (declared != null) {
+      final retained = tmdb.identity;
+      return retained == null || retained == declared;
+    }
+    final retainedTitle = tmdb.vod?.vodName;
+    return retainedTitle == null || retainedTitle == vod.vodName;
   }
 
   /// 属于本页影片的 TMDB 状态；`null` 表示按「无 TMDB」渲染。

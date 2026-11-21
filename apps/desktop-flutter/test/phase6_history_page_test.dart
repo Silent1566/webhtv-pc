@@ -830,20 +830,20 @@ void main() {
       );
     });
 
-    testWidgets('站点不在配置中时给出可见提示，不静默失败', (tester) async {
+    testWidgets('站点不在配置中时打开导航详情，不播放', (tester) async {
       await seedSite();
       seedHistory(id: 1, vodName: '剧集甲', siteKey: '已删除的站点');
       await pumpHistory(tester);
 
       await tester.tap(find.byKey(const ValueKey('history-row-1')));
-      // 不能用 `pumpAndSettle`：错误通知带 30 秒倒计时动画，settle 会一路把它
-      // 推到自动关闭，断言就没东西可看了（这正是本文件当初按「错误永不关闭」
-      // 规避的那个陷阱，错误改成有限时长后该规避失效）。显式推两帧即可。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      expect(find.textContaining('已不在当前配置中'), findsOneWidget);
-      expect(find.byType(DetailPage), findsNothing);
+      expect(find.textContaining('已不在当前配置中'), findsNothing);
+      expect(find.byType(DetailPage), findsOneWidget);
+      final page = tester.widget<DetailPage>(find.byType(DetailPage));
+      expect(page.vod.vodId, isEmpty);
+      expect(page.vod.vodName, '剧集甲');
     });
 
     // ---- 以下 5 条是 brief 没有的钉子（预检/变异自检发现）----

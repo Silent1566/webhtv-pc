@@ -35,13 +35,14 @@ PlaybackHistory followingPlaybackHistory(Following item) => PlaybackHistory(
 
 /// 列表卡的「播放最新集」：先标读（清徽标）再起播，起播后回写已看进度。
 ///
-/// 没有可播的最新集时退回详情页（与卡片点击同一条路径）。
+/// 没有最新集入口或原站点已缺失时退回详情页；旧地址不能当作有效播放源。
 Future<void> playFollowingLatest(
   BuildContext context,
   AppState state,
   Following item,
 ) async {
-  if (item.latestEpisodeTarget.isEmpty) {
+  if (item.latestEpisodeTarget.isEmpty ||
+      state.siteInActiveSource(item.siteKey) == null) {
     await openFollowingDetail(
       context,
       state,
@@ -89,7 +90,9 @@ Future<void> playFollowingEntry(
   CalendarEntry entry,
 ) async {
   final isLatest = entry.episode >= 1 && entry.episode == item.releasedEpisode;
-  if (!isLatest || item.latestEpisodeTarget.isEmpty) {
+  if (!isLatest ||
+      item.latestEpisodeTarget.isEmpty ||
+      state.siteInActiveSource(item.siteKey) == null) {
     if (entry.episode >= 1 && !isLatest) {
       showToast('${entry.code} 不是最新一集，请在详情页选集播放', kind: ToastKind.info);
     }
@@ -126,16 +129,12 @@ Future<void> openFollowingDetail(
   if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
   // 追剧行同样只存 site_key：本地爬虫源在 effectiveConfig 里，查 state.config 会落空。
   final site = state.siteInActiveSource(item.siteKey);
-  if (site == null) {
-    showToast('该追剧所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-    return;
-  }
   final feedback = AsyncActionFeedback.begin(context, '正在打开详情：${item.vodName}');
   if (feedback == null) return;
   try {
     if (markRead) await state.markFollowingRead(item);
     if (!context.mounted || !feedback.isCurrent) return;
-    await state.selectSite(site);
+    if (site != null) await state.selectSite(site);
     if (!context.mounted || !feedback.isCurrent) return;
     feedback.dismiss();
     await Navigator.of(context).push(
@@ -143,7 +142,7 @@ Future<void> openFollowingDetail(
         builder: (_) => DetailPage(
           state: state,
           vod: Vod(
-            vodId: item.vodId,
+            vodId: site == null ? '' : item.vodId,
             vodName: item.vodName,
             vodPic: item.vodPic,
           ),

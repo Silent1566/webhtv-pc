@@ -7,8 +7,7 @@
 ///   再带着线路 / 集 / 进度进详情，于是详情页里的线路与选集默认停在原处；
 /// - 记录来自**别的配置源**时，交给既有的跨源流程（它自己会先试原配置，再在
 ///   当前源里找替代站点），这里只声明「我要详情」，不让用户设置把它变成起播；
-/// - 站点已不在当前配置中时**不静默失败**：历史可能来自旧配置或安卓推送，
-///   用户需要知道为什么没反应。
+/// - 站点已不在当前配置中时以导航详情兜底，不拿旧站点 ID 请求当前站点。
 library;
 
 import 'dart:async';
@@ -78,14 +77,10 @@ Future<void> openHistoryDetail(
   // 查**合并后**的站点集合：本地爬虫源只在那里，用 state.config 会让一条本地源
   // 播出来的记录直接落进「站点已不在当前配置中」。
   final site = state.siteInActiveSource(item.siteKey);
-  if (site == null) {
-    showToast('该记录所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-    return;
-  }
   final feedback = AsyncActionFeedback.begin(context, '正在打开详情：${item.vodName}');
   if (feedback == null) return;
   try {
-    await state.selectSite(site);
+    if (site != null) await state.selectSite(site);
     if (!context.mounted || !feedback.isCurrent) return;
     feedback.dismiss();
     await Navigator.of(context).push(
@@ -93,9 +88,12 @@ Future<void> openHistoryDetail(
         builder: (_) => DetailPage(
           state: state,
           vod: Vod(
-            vodId: item.vodId,
+            vodId: site == null ? '' : item.vodId,
             vodName: item.vodName,
             vodPic: item.vodPic,
+            extra: site == null && item.hasTmdbIdentity
+                ? {'tmdb_id': item.tmdbId, 'media_type': item.mediaType}
+                : const {},
           ),
           // **必须传用户点的那一条**的线路与集入口：同一部剧有多条历史时，
           // 点旧记录却续新记录是错的（`docs/phase6/design/02` §7.1）。
