@@ -1580,18 +1580,50 @@ Uri uriWithoutUserInfo(Uri uri) {
   return uri.replace(userInfo: '');
 }
 
-/// URL 脱敏：只保留 scheme + host + path，隐藏 query 与片段（§11.3.1）。
+// Scoped proxy paths carry a bearer credential, even without a URL scheme.
+final RegExp _scopedProxyLogPattern = RegExp(
+  r'((?:/|\b)s/)([A-Za-z0-9_%-]{16,})([/A-Za-z0-9_.%~-]*)'
+  r'([?#][^\s"\x27<>\\)\]}]*)?',
+);
+final RegExp _escapedScopedProxyLogPattern = RegExp(
+  r'(\\/s\\/)([A-Za-z0-9_%-]{16,})([/\\A-Za-z0-9_.%~-]*)'
+  r'([?#][^\s"\x27<>\\)\]}]*)?',
+);
+final RegExp _encodedScopedProxyLogPattern = RegExp(
+  r'((?:%2f|\b)s%2f)([A-Za-z0-9_%-]{16,})((?:%2f|[A-Za-z0-9_.%~-])*)'
+  r'((?:%3f|%23)[^\s"\x27<>\\)\]}]*)?',
+  caseSensitive: false,
+);
+
+String _redactScopedProxyText(String text) {
+  var output = text;
+  for (final pattern in [
+    _scopedProxyLogPattern,
+    _escapedScopedProxyLogPattern,
+    _encodedScopedProxyLogPattern,
+  ]) {
+    output = output.replaceAllMapped(
+      pattern,
+      (match) => '${match.group(1)}REDACTED${match.group(3)}'
+          '${match.group(4) == null ? '' : match.group(4)!.startsWith('%') ? '%3F...' : '?...'}',
+    );
+  }
+  return output;
+}
+
+/// URL 脱敏：保留 host 与普通 path，隐藏 scoped proxy 凭据、query 与片段。
 String redactUrl(String? url) {
   if (url == null || url.isEmpty) return '';
   final uri = Uri.tryParse(url);
   if (uri == null) return '<invalid-url>';
-  if (!uri.hasScheme) return uri.path.isEmpty ? '<relative>' : uri.path;
+  final path = _redactScopedProxyText(uri.path);
+  if (!uri.hasScheme) return path.isEmpty ? '<relative>' : path;
   final buffer = StringBuffer('${uri.scheme}://');
   if (uri.host.isNotEmpty) {
     buffer.write(uri.host);
     if (uri.hasPort) buffer.write(':${uri.port}');
   }
-  buffer.write(uri.path.isEmpty ? '/' : uri.path);
+  buffer.write(path.isEmpty ? '/' : path);
   if (uri.hasQuery) buffer.write('?...');
   return buffer.toString();
 }
@@ -1627,7 +1659,7 @@ String redactHeadersForLog(Map<String, String> headers) {
 /// 与 [redactHeadersForLog] 的区别：这里处理的是 sidecar 自己打印的自由文本，
 /// 因此需要同时覆盖 `Key: value` 形式与 URL query 形式。
 String redactLogText(String line) {
-  var output = line;
+  var output = _redactScopedProxyText(line);
 
   // 1) `Cookie: xxx` / `Authorization: Bearer xxx` 这类头样式。
   // 值要吃到行尾或 `;`，否则 `Authorization: Bearer abc` 只会隐掉 `Bearer`。
@@ -1652,7 +1684,7 @@ String redactLogText(String line) {
   // 3) URL query 中的敏感键值（含签名参数）。
   output = output.replaceAllMapped(
     RegExp(
-      r'([?&](?:' + _sensitiveQueryNames + r')=)([^&#\s]*)',
+      r'([?&](?:' + _sensitiveQueryNames + r')=)(?!<redacted>|&lt;redacted(?:>|&gt;))([^&#\s]*)',
       caseSensitive: false,
     ),
     (match) => '${match.group(1)}<redacted>',
@@ -1662,7 +1694,7 @@ String redactLogText(String line) {
   output = output.replaceAllMapped(
     RegExp(
       r'\b((?:token|sign|signature|secret|password|passwd|session|'
-      r'access[-_]?key)\s*=\s*)([^\s,;&]+)',
+      r'access[-_]?key)\s*=\s*)(?!<redacted>|&lt;redacted(?:>|&gt;))([^\s,;&]+)',
       caseSensitive: false,
     ),
     (match) => '${match.group(1)}<redacted>',

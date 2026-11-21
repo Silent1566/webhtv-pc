@@ -183,8 +183,8 @@ class LogService {
     final entry = LogEntry(
       time: DateTime.now(),
       level: level,
-      scope: scope ?? this.scope ?? 'app',
-      message: message,
+      scope: redactLogText(scope ?? this.scope ?? 'app'),
+      message: redactLogText(message),
     );
     _entries.addLast(entry);
     while (_entries.length > maxEntries) {

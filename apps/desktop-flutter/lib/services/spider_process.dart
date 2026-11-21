@@ -114,6 +114,138 @@ class SidecarExit {
       'expected=$expected${reason == null ? "" : " reason=$reason"}';
 }
 
+/// sidecar 退出码的失败语义（`sidecars/spider-host-jvm/README.md`）。
+///
+/// 判定只存在这一处：退出码 → 语义，重试策略与用户文案都从这里派生。分散到
+/// 多个分支里各写一套「算不算崩溃」，两边迟早分叉，而且改一处漏一处。
+enum SidecarExitKind {
+  /// `0`：正常退出（stdin EOF，或 `destroy`/`shutdown`）。
+  normal,
+
+  /// `2`/`3`：协议/manifest/入口非法，或站源初始化失败。
+  ///
+  /// **确定性失败**：同一个入口、同一份 manifest 下次启动必然同样失败。因此
+  /// 不重试——退避重试只会反复拉起 JVM：既不可能成功，还会让用户觉得「像崩了」，
+  /// 同时把机器拖慢。
+  deterministic,
+
+  /// 其余（被 kill、拿不到退出码、超时、其它异常退出）：可能是抖动，
+  /// 保持既有指数退避重试。
+  transient,
+}
+
+/// 退出码 → 失败语义；null 表示拿不到退出码，按瞬时失败处理。
+SidecarExitKind sidecarExitKind(int? code) => switch (code) {
+  0 => SidecarExitKind.normal,
+  2 || 3 => SidecarExitKind.deterministic,
+  _ => SidecarExitKind.transient,
+};
+
+/// 单行 stderr 的展示上限（JVM 栈信息一行可能几百字符）。
+/// sidecar 进程的内存下限（MiB）。
+///
+/// 为什么需要兜底：加固壳站点**首次在进程内转译 payload** 时峰值 commit 约 257 MiB，
+/// 而 manifest 里写的 `limits.memoryMiB` 可能是旧值（256）——2026-11-21 实测：磁盘上的
+/// manifest 已被启动迁移改成 512，但作业对象仍按**启动扫描时缓存的 256** 建，于是照旧
+/// 被 TerminateProcess 杀掉（stderr 空、退出码 1）。这里在作业对象边界再兜一次，
+/// 不依赖「迁移是否早于扫描」这种时序条件。上限只是**上限**，调高不会真的占内存。
+const int minimumSidecarMemoryMiB = 512;
+
+int memoryFloorBytes(int memoryBytes) {
+  const floor = minimumSidecarMemoryMiB * 1024 * 1024;
+  return memoryBytes < floor ? floor : memoryBytes;
+}
+
+const int _stderrKeyMaxChars = 200;
+
+final RegExp _stderrKeyPattern = RegExp(r'Exception|Error|Caused by|错误|异常');
+
+/// stderr 里最值得展示给用户的一行：异常/错误行优先，否则取最后一条非空行。
+///
+/// 为什么不是直接取最后一行：JVM 因异常退出时最后一行常是栈帧表
+/// （`\tat com.xxx.Yyy.zzz(...)`），真正能行动的 `ClassNotFoundException: ...`
+/// 在它上面几行。
+String? stderrKeyLine(Iterable<String> lines) {
+  String? actionable;
+  String? last;
+  for (final raw in lines) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    last = line;
+    if (_stderrKeyPattern.hasMatch(line)) actionable = line;
+  }
+  final picked = actionable ?? last;
+  if (picked == null) return null;
+  return picked.length <= _stderrKeyMaxChars
+      ? picked
+      : '${picked.substring(0, _stderrKeyMaxChars)}…';
+}
+
+/// 确定性启动失败的**用户文案**。
+///
+/// 为什么不说「sidecar 意外退出（code=2/3）」：2/3 是**可解释**的失败（入口类名
+/// 对不上、manifest 非法、站源初始化抛异常），写成「意外退出/崩溃」会让用户以为
+/// 程序坏了，还把唯一的行动线索（stderr 里的异常类名）埋掉。
+String deterministicExitMessage(int code, Iterable<String> stderrLines) {
+  final prefix = code == 3 ? '站源初始化失败' : '协议或 manifest 非法';
+  final key = stderrKeyLine(stderrLines);
+  return key == null ? '$prefix（无 stderr 输出）' : '$prefix：$key';
+}
+
+/// 非 0 退出（瞬时崩溃，`SPIDER_CRASHED`）的**用户文案**。
+///
+/// 为什么也要挂 stderr：2/3 早就带出了 stderr 关键行，而 exit=1 这类崩溃原先
+/// 只有「sidecar 意外退出（code=1）」——用户拿不到任何线索，stderr 也只是记在
+/// details 里没人看，等于让用户对着一个退出码猜。这里补上同一类关键行，
+/// **分类不变**：瞬时崩溃仍是 `SPIDER_CRASHED`（可退避重试），不借用 2/3 的
+/// `SPIDER_INIT_FAILED` 文案。
+String crashExitMessage(int? code, Iterable<String> stderrLines) {
+  final head = 'sidecar 意外退出（code=${code ?? "-"}）';
+  final key = stderrKeyLine(stderrLines);
+  return key == null ? '$head（无 stderr 输出）' : '$head：$key';
+}
+
+/// 进程内退出钩子在 stderr 里的标记（宿主 [Host] 收尾时打的那一行）。
+const String _exitHookMarker = '进程退出钩子';
+
+/// 这次退出是不是「进程被外部终止」——作业对象的内存/CPU 上限、宿主强杀。
+///
+/// 判据只有一条：**没有**看到进程内退出钩子。为什么：作业对象超限走的是
+/// TerminateProcess，进程内没有任何收尾代码，stderr 停在崩溃前最后一条告警上，
+/// 把它当死因就是误归因（实测：256 MiB 上限杀进程，文案却写成启动期那条可降级的
+/// dex2jar 告警）。判定只留这一处：分散到多个分支各写一遍 `contains`，改一处漏一处。
+bool isExternalTermination(Iterable<String> stderrLines) =>
+    !stderrLines.any((line) => line.contains(_exitHookMarker));
+
+/// 资源类死亡：被外部终止，**且**退出码不是站源自己选的那种。
+///
+/// 为什么必须一并看退出码：`os._exit(3)`（站源初始化失败、以及 phase2_ipc /
+/// sidecar_idle_recycle 里的 CrashSpider）同样不会走到退出钩子——那是站源**故意**
+/// 的退出，重试语义不许被这条判定改掉。所以用 [sidecarExitKind] 把 2/3 排除在外，
+/// `null`（拿不到退出码）也按瞬时失败留给退避。
+bool isResourceLimitTermination(int? code, Iterable<String> stderrLines) =>
+    sidecarExitKind(code) == SidecarExitKind.transient &&
+    isExternalTermination(stderrLines);
+
+/// 资源类死亡的**可行动建议**：能给用户拧的旋钮只有 manifest 的资源上限。
+String resourceLimitAdvice(int? memoryMiB) =>
+    memoryMiB == null || memoryMiB <= 0
+    ? '建议提高该站点的 limits.memoryMiB'
+    : '建议提高该站点的 limits.memoryMiB（当前 $memoryMiB）';
+
+/// 外部终止的用户文案：说清「不是站源代码崩了」，给出唯一能行动的旋钮，并把
+/// 崩溃前的最后一条告警**降级成旁证**（它不是死因，只是死之前最后说的话）。
+String externalTerminationMessage(
+  int? memoryMiB, {
+  Iterable<String> stderrLines = const <String>[],
+}) {
+  final base =
+      '进程被外部终止（未见退出钩子：通常是作业对象的内存/CPU 上限或宿主强制结束）；'
+      '${resourceLimitAdvice(memoryMiB)}';
+  final key = stderrKeyLine(stderrLines);
+  return key == null || key.isEmpty ? base : '$base；崩溃前最后一条告警=$key';
+}
+
 /// 爬虫 IPC 详细调试日志（入参/出参）的开关与落点。
 ///
 /// 为什么是**可变共享对象**而不是一个 bool 参数：开关要能在设置页切换后立即对
@@ -125,6 +257,10 @@ class SidecarExit {
 ///
 /// 所有输出先抹掉敏感键、再经 [redactLogText]，并且吞掉写入异常——日志是旁路，
 /// 既不能改变 IPC 帧，也不能影响主流程。
+String redactSpiderProxyText(String value) => value.replaceAll(
+  RegExp(r'/s/[A-Za-z0-9_-]+/proxy(?:\?[^\s"<>]*)?'), '/s/<redacted>/proxy',
+);
+
 class SpiderDebugLog {
   SpiderDebugLog({this.log, this.enabled = false});
 
@@ -135,10 +271,11 @@ class SpiderDebugLog {
   bool enabled;
 
   /// 记录一条出站帧：请求帧写 method/id/完整 params，取消帧写目标 id。
-  void outbound(Map<String, Object?> envelope) {
+  void outbound(Map<String, Object?> envelope, {bool privatePlayback = false}) {
     if (!enabled) return;
     final method = '${envelope['method'] ?? "-"}';
-    final params = envelope['params'];
+    final params = privatePlayback && envelope['method'] == SpiderMethod.play
+        ? '<proxyHttp playback redacted>' : envelope['params'];
     final id = envelope['id'];
     // `$/cancelRequest` 是通知帧：自身没有 id，被取消的 id 在 params 里。
     final target = id == null
@@ -148,14 +285,19 @@ class SpiderDebugLog {
   }
 
   /// 记录一条成功的响应出参（result 全量，不截断）。
-  void inboundOk(String method, String requestId, Object? result) {
+  void inboundOk(String method, String requestId, Object? result, {bool privatePlayback = false}) {
     if (!enabled) return;
-    _write('rpc← method=$method id=$requestId ok result=${_encode(result)}');
+    final safe = privatePlayback && method == SpiderMethod.play ? '<proxyHttp playback redacted>' : result;
+    _write('rpc← method=$method id=$requestId ok result=${_encode(safe)}');
   }
 
   /// 记录一条失败的响应出参（含错误码与 message）。
   void inboundError(String method, String requestId, SpiderError error) {
     if (!enabled) return;
+    if (method == SpiderMethod.proxy) {
+      _write('rpc← method=$method id=$requestId error code=${error.code}');
+      return;
+    }
     _write(
       'rpc← method=$method id=$requestId error code=${error.code} '
       'message=${error.message} retryable=${error.retryable} '
@@ -314,7 +456,7 @@ class SpiderDebugLog {
     final target = log;
     if (target == null) return;
     try {
-      target.debug(redactLogText(message), scope: 'spider');
+      target.debug(redactLogText(redactSpiderProxyText(message)), scope: 'spider');
     } catch (_) {
       // 日志写入失败不得影响主流程。
     }
@@ -335,10 +477,13 @@ class SpiderDebugLog {
   /// `?sign=xxx`），而入参是 JSON，敏感值形如 `"Cookie":"a=b"`，两者形态不同。
   /// 判定复用 [isSensitiveHeaderKey]，与 HTTP 头脱敏同一套规则，避免规则分叉。
   static Object? _sanitize(Object? value) {
+    if (value is String) {
+      return redactSpiderProxyText(value);
+    }
     if (value is Map) {
       return <String, Object?>{
         for (final entry in value.entries)
-          '${entry.key}': isSensitiveHeaderKey('${entry.key}')
+          '${entry.key}': (isSensitiveHeaderKey('${entry.key}') || const {'token', 'entryUrl', 'sessionId'}.contains('${entry.key}'))
               ? '<redacted>'
               : _sanitize(entry.value),
       };
@@ -382,6 +527,7 @@ class SidecarProcess {
   /// 这类地址可能直接被播放器当成流地址拉取：宿主此刻没有「播放依赖已释放」的信号，
   /// 因此这个进程不能被空闲回收（宁可多留一个进程也不能把正在播的流掐断）。
   bool _hasPlaybackDependency = false;
+  bool _proxyHttpNegotiated = false;
 
   /// 是否已承载播放依赖（只读，供空闲回收判定）。
   bool get hasPlaybackDependency => _hasPlaybackDependency;
@@ -394,6 +540,24 @@ class SidecarProcess {
   };
   final Completer<SidecarExit> _exitCompleter = Completer<SidecarExit>();
   final List<String> _stderrLines = [];
+
+  /// stderr 管道结束信号。
+  ///
+  /// 为什么需要它：退出回执（exitCode）与 stderr 管道的最后一批数据没有先后
+  /// 保证。[_onExit] 若立刻读 [_stderrLines]，崩溃文案可能刚好错过那行唯一能
+  /// 说明原因的异常——「只有退出码、没有 stderr」就是这么来的。
+  final Completer<void> _stderrDone = Completer<void>();
+
+  /// 等 stderr 收尾的上限：正常情况管道随进程立即关闭，用不到这个上限；
+  /// 留 200ms 只是不让一个不关的管道把错误回执拖住。
+  static const Duration _stderrDrainTimeout = Duration(milliseconds: 200);
+
+  /// 退出回执（进程退出后才有值）。
+  ///
+  /// 为什么要留一份：启动阶段握手还没回帧、进程就已经退出时，调用方拿到的
+  /// 报错可能不带 exitCode。没有这份回执，exit=3 会被误判成瞬时失败又去重试。
+  SidecarExit? _exitInfo;
+  SidecarExit? get exitInfo => _exitInfo;
 
   int _sequence = 0;
   int _cumulativeStdoutBytes = 0;
@@ -498,7 +662,7 @@ class SidecarProcess {
       WindowsJobObject? job;
       if (Platform.isWindows) {
         job = WindowsJobObject.create(
-          memoryBytes: spec.limits.memoryBytes,
+          memoryBytes: memoryFloorBytes(spec.limits.memoryBytes),
           cpuSeconds: spec.limits.cpuSeconds,
         );
         if (job != null && !job.assign(process.pid)) {
@@ -537,12 +701,16 @@ class SidecarProcess {
       onError: (Object error) {
         _lastStderrError = '$error';
       },
+      // 管道关闭（进程退出）才说明 stderr 已经读全，[_onExit] 据此收尾。
+      onDone: () {
+        if (!_stderrDone.isCompleted) _stderrDone.complete();
+      },
       cancelOnError: false,
     );
     _process.exitCode.then(
       _onExit,
       onError: (Object error) {
-        _onExit(-1);
+        unawaited(_onExit(-1));
       },
     );
     // 对端退出后写 stdin 会异步失败；这里先挂兜底，避免未捕获的管道写错误
@@ -642,7 +810,7 @@ class SidecarProcess {
         // SPIDER_RESOURCE_LIMIT（§9.3.1「限制单响应大小」）。
         if (!_checkResponseSize(response.result, pending)) {
           // 出参日志只记真正交付给调用方的那份结果，与下面的 complete 同条件。
-          _debugLog?.inboundOk(pending.method, pending.id, response.result);
+          _debugLog?.inboundOk(pending.method, pending.id, response.result, privatePlayback: _proxyHttpNegotiated);
           if (playbackMethods.contains(pending.method) &&
               _carriesLoopbackAddress(response.result)) {
             _hasPlaybackDependency = true;
@@ -754,29 +922,35 @@ class SidecarProcess {
     }
   }
 
-  void _onExit(int code) {
+  Future<void> _onExit(int code) async {
     _heartbeatTimer?.cancel();
     // 进程已经退出，宽限窗口失去意义：守卫绝不能等 [dispose] 之后再补一刀。
     _cancelKillGuard();
     final expected = _stopping;
-    if (!_exitCompleter.isCompleted) {
-      _exitCompleter.complete(
-        SidecarExit(
-          code: code,
-          expected: expected,
-          reason: _stdoutPolluted ? 'protocol-pollution' : null,
-        ),
-      );
-    }
+    final exit = SidecarExit(
+      code: code,
+      expected: expected,
+      reason: _stdoutPolluted ? 'protocol-pollution' : null,
+    );
+    _exitInfo = exit;
+    if (!_exitCompleter.isCompleted) _exitCompleter.complete(exit);
     // sidecar 退出后，作业内仍可能残留它派生的孙进程（§18.2.1）。
     // `kill-on-close` 只在**最后一个**作业句柄关闭时生效，而宿主仍持有句柄，
     // 因此这里必须显式终止作业，否则崩溃会留下永久孤儿进程。
     _job?.terminate();
+    // 崩溃文案要挂 stderr 尾部，而 stderr 管道可能晚于退出回执才关：先等它收尾
+    // （有上限），再取关键行；否则拿到的是「半个 stderr」甚至空。
+    if (!_stderrDone.isCompleted) {
+      await _stderrDone.future.timeout(_stderrDrainTimeout, onTimeout: () {});
+    }
     // 应期停机同样要结束在途请求：否则调用方会永远挂在一个已退出的子进程上。
+    // 这里只陈述传输层事实（进程以哪个码退出），「算不算确定性失败、该不该
+    // 重试、文案怎么说」由 [SpiderHostSupervisor] 按启动阶段判定——同一个
+    // exit=3，启动阶段是「站源初始化失败」，运行中调用则是站源崩溃。
     _failAll(
       SpiderError(
         code: expected ? SpiderErrorCode.cancelled : SpiderErrorCode.crashed,
-        message: expected ? 'sidecar 已停止' : 'sidecar 意外退出（code=$code）',
+        message: expected ? 'sidecar 已停止' : _crashMessage(code),
         siteKey: _spec.siteKey,
         details: {
           'exitCode': code,
@@ -784,6 +958,21 @@ class SidecarProcess {
         },
       ),
     );
+  }
+
+  /// 崩溃文案：**只有看到进程内退出钩子**时，才把 stderr 里那条异常当死因。
+  ///
+  /// 为什么：作业对象的内存/CPU 上限会直接 TerminateProcess，进程内没有任何收尾代码，
+  /// stderr 停在崩溃前的最后一条告警上——把它当死因就是误归因（实测：256 MiB 上限杀进程，
+  /// 文案却写成启动期那条**可降级**的 dex2jar AIOOBE 告警）。钩子是宿主在 `Host` 里打的
+  /// `[webhtv] 进程退出钩子`，有它才说明 JVM 自己走到收尾。
+  String _crashMessage(int? code) {
+    if (!isExternalTermination(_stderrLines)) {
+      return crashExitMessage(code, _stderrLines);
+    }
+    // 外部终止要带出可行动建议：这份安装里唯一能给用户拧的旋钮就是资源上限。
+    return 'sidecar 意外退出（code=$code）：'
+        '${externalTerminationMessage(_spec.limits.memoryMiB, stderrLines: _stderrLines)}';
   }
 
   void _failAll(SpiderError error) {
@@ -821,7 +1010,7 @@ class SidecarProcess {
     if (_exitCompleter.isCompleted || _stdinClosed) return;
     // 入参日志挂在帧出口：全部出站帧（request / heartbeat / cancel）都经过这里，
     // 而帧内容一个字节都不改，日志纯旁路。
-    _debugLog?.outbound(envelope);
+    _debugLog?.outbound(envelope, privatePlayback: _proxyHttpNegotiated);
     try {
       _process.stdin.add(IpcFrameCodec.encode(envelope));
     } catch (_) {
@@ -1141,6 +1330,29 @@ class SidecarProcess {
   }
 }
 
+/// A bounded, releasable dependency on one exact host generation.
+class SpiderPlaybackLease {
+  SpiderPlaybackLease._(this.host, this.sessionId);
+  final SpiderHost host;
+  final String sessionId;
+  Timer? _expiry;
+  bool _released = false;
+  bool get active => !_released && host.process.isRunning;
+  void renew(Duration ttl) {
+    if (!active) return;
+    _expiry?.cancel();
+    _expiry = host._leaseScheduler(ttl, release);
+  }
+
+  void release() {
+    if (_released) return;
+    _released = true;
+    _expiry?.cancel();
+    host._playbackLeases.remove(this);
+    host.process._activityChanged?.call();
+  }
+}
+
 /// 宿主侧的 Spider 调用门面：manifest 校验 + capability 校验 + 调用。
 class SpiderHost {
   SpiderHost({
@@ -1148,26 +1360,83 @@ class SpiderHost {
     required this.process,
     required this.log,
     this.callbackTimeout = siteRequestTimeout,
-  });
+  }) {
+    unawaited(process.done.then((_) => clearPlaybackLeases()));
+  }
 
   final SpiderManifest manifest;
   final SidecarProcess process;
   final LogService log;
   final Duration callbackTimeout;
 
+  final Set<SpiderPlaybackLease> _playbackLeases = {};
+  Timer Function(Duration, void Function()) _leaseScheduler = Timer.new;
+  int get activePlaybackLeaseCount => _playbackLeases.length;
+  SpiderProxyHttpExtension? get proxyHttp =>
+      manifest.runtime == 'jvm' &&
+          manifest.permissions.localProxy &&
+          manifest.capabilities.values.contains(SpiderMethod.proxy) &&
+          (_init?.capabilities.contains(SpiderMethod.proxy) ?? false)
+      ? _init?.proxyHttp
+      : null;
+
+  SpiderPlaybackLease acquirePlaybackLease(
+    String sessionId, {
+    Duration ttl = const Duration(seconds: 120),
+  }) {
+    if (proxyHttp == null || !process.isRunning) {
+      throw StateError('proxyHttp host unavailable');
+    }
+    final lease = SpiderPlaybackLease._(this, sessionId);
+    _playbackLeases.add(lease);
+    lease.renew(ttl);
+    process._activityChanged?.call();
+    return lease;
+  }
+
+  void clearPlaybackLeases() {
+    for (final lease in _playbackLeases.toList()) {
+      lease.release();
+    }
+  }
+
   SpiderInitResult? _init;
   SpiderInitResult? get initResult => _init;
 
+  /// 站点请求预算：init/home/category/detail/proxy 30 秒，play 单独 90 秒。
+  /// play 的预算容纳已观测到约 70 秒才返回的慢请求，不表示播放性能已优化。
+  ///
+  /// 为什么是 30 秒而不是 `siteRequestTimeout`(180s)：
+  /// - 30 秒正是 sidecar 宿主自己的缺省预算（`sidecars/spider-host-js/host.js`
+  ///   的 `_deadlineOf` 兜底 `30000`、`sidecars/spider-host-python/webhtv_ipc.py`
+  ///   的 `DEFAULT_DEADLINE_MS = 30000`）。宿主与站源对齐到同一个上限，才不会
+  ///   出现「站源早已放弃、宿主还挂着等」——那种等待只会变成用户眼前的白屏。
+  /// - 给 180s 不行：真正挂死的请求会把首页按住 3 分钟，用户既看不到错误也点不动。
+  ///
+  /// 为什么不更短：JVM 壳站点的 home/category 常由站源内部**逐个试镜像**，
+  /// 单个镜像慢一点整页就超时；15 秒对竞速型站点是硬伤（实测 15s 必挂）。
+  static const Duration jvmShellRequestTimeout = Duration(seconds: 30);
+
   static const Map<String, Duration> _methodTimeouts = {
-    // init 握手是本地 IPC，不需要给站点那么长（给长了会把真正的启动问题拖成 3 分钟）。
-    SpiderMethod.init: Duration(seconds: 15),
-    SpiderMethod.home: siteRequestTimeout,
-    SpiderMethod.category: siteRequestTimeout,
-    SpiderMethod.detail: siteRequestTimeout,
+    // init 握手**不只是本地 IPC**：加固壳站点的站源对象就是在 `initialize` 里构造的，
+    // 而壳内 `DexNative` 首次会现场转译载荷（实测冷启动 10.6 s，1193 类），再加上
+    // payload 类加载与镜像初始化。给 15 s 会把「健康的慢启动」误判成 SPIDER_TIMEOUT
+    //（2026-11-21 用户日志：WexAiGuaZi / WexAiYueYue 首页报 deadline 15000ms，其实是握手）。
+    // 30 s 与 sidecar 宿主自身缺省预算一致（host.js / webhtv_ipc.py 都是 30 s）。
+    SpiderMethod.init: jvmShellRequestTimeout,
+    SpiderMethod.home: jvmShellRequestTimeout,
+    SpiderMethod.category: jvmShellRequestTimeout,
+    SpiderMethod.detail: jvmShellRequestTimeout,
+    // search 本轮不动：它的站点侧预算仍是 `siteRequestTimeout`（不在改动范围）。
     SpiderMethod.search: siteRequestTimeout,
-    SpiderMethod.play: siteRequestTimeout,
-    SpiderMethod.proxy: siteRequestTimeout,
+    SpiderMethod.play: Duration(seconds: 90),
+    SpiderMethod.proxy: jvmShellRequestTimeout,
   };
+
+  /// 某方法在未显式传 `deadline` 时的生效预算；null 表示按 [callbackTimeout]。
+  ///
+  /// 抽成静态函数是为了让用例能断言「生效值」，而不必真等 30 秒。
+  static Duration? declaredTimeout(String method) => _methodTimeouts[method];
 
   /// `initialize` 握手：交换 ABI major/minor、capabilities、权限与限制（§9.3.1）。
   Future<SpiderInitResult> initialize({String extend = ''}) async {
@@ -1203,6 +1472,7 @@ class SpiderHost {
       );
     }
     _init = init;
+    process._proxyHttpNegotiated = proxyHttp != null;
     return init;
   }
 
@@ -1225,7 +1495,7 @@ class SpiderHost {
         ),
       );
     }
-    final effective = deadline ?? _methodTimeouts[method] ?? callbackTimeout;
+    final effective = deadline ?? declaredTimeout(method) ?? callbackTimeout;
     return process.request(
       method,
       params,
@@ -1435,6 +1705,20 @@ class SpiderHostSupervisor {
     // 记录这次启动属于哪个源：删除源时要据此判断「还有进程占着目录」。
     runtime.sourceKey = manifest.key;
     _checkSourceEnabled(siteKey, manifest);
+    // 确定性启动失败（exit=2/3）是终态：同样的入口/manifest 再启动必然同样失败。
+    // 这里直接回放上次的结论，不再拉起进程；用户修好入口/manifest 后走管理页的
+    // reset() 才允许重来。
+    final fatal = runtime.fatalFailure;
+    if (fatal != null && runtime.state == SpiderRuntimeState.failed) {
+      throw SpiderError(
+        code: fatal.code,
+        message: fatal.message,
+        siteKey: siteKey,
+        retryable: false,
+        userVisible: true,
+        details: fatal.details,
+      );
+    }
     if (runtime.state == SpiderRuntimeState.disabled) {
       throw SpiderError(
         code: SpiderErrorCode.initFailed,
@@ -1518,7 +1802,8 @@ class SpiderHostSupervisor {
       // 握手期间用户可能已经停用该源：那样这次启动必须作废，
       // 而不是等握手完成后把进程登记成「运行中」。
       _checkSourceEnabled(siteKey, manifest);
-      host = SpiderHost(manifest: manifest, process: process, log: log);
+      host = SpiderHost(manifest: manifest, process: process, log: log)
+        .._leaseScheduler = _idleScheduler;
       await host.initialize(extend: extend);
       if (runtime.generation != generation) throw _cancelled(siteKey);
       _checkSourceEnabled(siteKey, manifest);
@@ -1532,6 +1817,31 @@ class SpiderHostSupervisor {
       if (!(isSourceEnabled?.call(manifest.key) ?? true)) {
         throw _sourceDisabled(siteKey, manifest.key);
       }
+      // 退出码 2/3 是确定性失败（语义见 sidecars/spider-host-jvm/README.md）：
+      // 退避重试对它只是反复起 JVM，日志里 count=1/2/3 的连续启动就是这么来的。
+      final exitCode = _startupExitCode(error, process);
+      if (exitCode != null &&
+          sidecarExitKind(exitCode) == SidecarExitKind.deterministic) {
+        final fatal = _deterministicStartupError(siteKey, exitCode, process);
+        _recordFatal(runtime, fatal, reason: '确定性');
+        throw fatal;
+      }
+      // 资源类死亡（作业对象的内存/CPU 上限 → TerminateProcess）同样是终态：
+      // 上限没改，重启只会再被杀一次，日志里 count=1/2/3 的连续启动就是这么来的。
+      // 判定要同时带退出码和「确实有进程」——起不来（拿不到退出码）不是外部终止。
+      if (exitCode != null &&
+          process != null &&
+          !_hostInitiatedExit(process.exitInfo) &&
+          isResourceLimitTermination(exitCode, process.stderrLines)) {
+        final fatal = _resourceLimitError(
+          siteKey,
+          exitCode,
+          process.stderrLines,
+          manifest.limits.memoryMiB,
+        );
+        _recordFatal(runtime, fatal, reason: '资源上限外部终止');
+        throw fatal;
+      }
       _recordFailure(runtime, error);
       rethrow;
     }
@@ -1542,7 +1852,8 @@ class SpiderHostSupervisor {
       ..host = liveHost
       ..process = liveProcess
       ..state = SpiderRuntimeState.running
-      ..lastError = null;
+      ..lastError = null
+      ..fatalFailure = null;
     log.info(
       'Spider 已启动 site=$siteKey runtime=${manifest.runtime} '
       'isolation=${liveProcess.isolation.summary}',
@@ -1562,12 +1873,34 @@ class SpiderHostSupervisor {
           runtime.state = SpiderRuntimeState.stopped;
           return;
         }
+        // 握手成功之后被作业对象/宿主干掉，与启动期是同一个结论：上限没改，重启只是
+        // 换个时间再死一次。因此同样直接进 failed、不进退避、不消耗重试预算。
+        if (!_hostInitiatedExit(exit) &&
+            isResourceLimitTermination(exit.code, liveProcess.stderrLines)) {
+          final fatal = _resourceLimitError(
+            siteKey,
+            exit.code,
+            liveProcess.stderrLines,
+            manifest.limits.memoryMiB,
+          );
+          _recordFatal(runtime, fatal, reason: '资源上限外部终止');
+          log.error(
+            'Spider 被外部终止（资源上限）site=$siteKey ${exit.summary}',
+            scope: 'spider',
+          );
+          return;
+        }
         runtime.state = SpiderRuntimeState.crashed;
+        // 管理页的 `lastError` 直接展示 message：崩溃原因（stderr 关键行）必须写进
+        // message 本身，只放 details 等于让用户看不到原因。
+        final keyLine = stderrKeyLine(liveProcess.stderrLines) ?? '';
         _recordFailure(
           runtime,
           SpiderError(
             code: SpiderErrorCode.crashed,
-            message: 'sidecar 意外退出：${exit.summary}',
+            message: keyLine.isEmpty
+                ? 'sidecar 意外退出：${exit.summary}（无 stderr 输出）'
+                : 'sidecar 意外退出：${exit.summary}：$keyLine',
             siteKey: siteKey,
             details: {'stderr': liveProcess.stderrLines.take(5).join(' | ')},
           ),
@@ -1585,6 +1918,11 @@ class SpiderHostSupervisor {
     return liveHost;
   }
 
+  /// 宿主自己结束的进程（目前只有协议污染）不算「外部终止」：那是宿主按规矩处置，
+  /// 不是作业对象/系统把进程干掉，重试语义也不该跟着资源上限一起改。
+  static bool _hostInitiatedExit(SidecarExit? exit) =>
+      exit != null && exit.reason != null;
+
   void _cancelIdleTimer(_SiteRuntime runtime) {
     runtime.idleTimer?.cancel();
     runtime.idleTimer = null;
@@ -1599,8 +1937,9 @@ class SpiderHostSupervisor {
     return process.isRunning &&
         !process._stopping &&
         process._pending.isEmpty &&
-        !process.hasPlaybackDependency &&
-        !host.manifest.permissions.localProxy;
+        (host.proxyHttp != null
+          ? host.activePlaybackLeaseCount == 0
+          : !process.hasPlaybackDependency && !host.manifest.permissions.localProxy);
   }
 
   void _updateIdleTimer(_SiteRuntime runtime) {
@@ -1617,6 +1956,92 @@ class SpiderHostSupervisor {
         unawaited(_stopRuntime(runtime));
       }
     });
+  }
+
+  /// 启动阶段的 sidecar 退出码：优先用错误里带出的，其次用进程退出回执。
+  ///
+  /// 两处都要看：握手失败会把 exitCode 放进 details，而「进程先退出、请求随后
+  /// 才发」时错误里没有 exitCode，只有 [_exitInfo] 知道真实退出码——漏了这条
+  /// exit=3 会被误判成瞬时失败，又去重试。
+  int? _startupExitCode(Object error, SidecarProcess? process) {
+    final declared = error is SpiderError ? error.details['exitCode'] : null;
+    return declared is int ? declared : process?.exitInfo?.code;
+  }
+
+  /// 把「启动阶段以 2/3 退出」翻译成面向用户的确定性失败。
+  ///
+  /// 为什么在这里翻译而不是在 [_onExit]：同样的 exit=3，启动阶段是站源初始化
+  /// 失败（可解释、重试无用），运行中调用则是站源崩溃（仍按退避重试）。
+  SpiderError _deterministicStartupError(
+    String siteKey,
+    int code,
+    SidecarProcess? process,
+  ) {
+    final stderrLines = process?.stderrLines ?? const <String>[];
+    return SpiderError(
+      code: SpiderErrorCode.initFailed,
+      message: deterministicExitMessage(code, stderrLines),
+      siteKey: siteKey,
+      // 确定性失败重试也没用，别让上层把它当成可重试故障。
+      retryable: false,
+      details: {
+        'exitCode': code,
+        'exitKind': 'deterministic',
+        'stderr': stderrLines.isEmpty ? '' : stderrLines.last,
+      },
+    );
+  }
+
+  /// 资源类死亡的**面向用户**错误：说清不是站源代码崩了，并给出唯一能行动的旋钮。
+  ///
+  /// `retryable: false` 是这条错误的一半语义：上限没改，上层任何一次重试都只会
+  /// 再被杀一次；剩下的一半由 [_recordFatal] 落成 failed 状态。
+  SpiderError _resourceLimitError(
+    String siteKey,
+    int code,
+    Iterable<String> stderrLines,
+    int memoryMiB,
+  ) => SpiderError(
+    code: SpiderErrorCode.crashed,
+    message:
+        'sidecar 意外退出（code=$code）：'
+        '${externalTerminationMessage(memoryMiB, stderrLines: stderrLines)}',
+    siteKey: siteKey,
+    retryable: false,
+    details: {
+      'exitCode': code,
+      'exitKind': 'resource',
+      'memoryMiB': memoryMiB,
+      'stderr': stderrLines.isEmpty ? '' : stderrLines.last,
+    },
+  );
+
+  /// 终态失败（确定性失败 / 资源类死亡）：直接进 failed，不进退避，也不消耗重试预算。
+  ///
+  /// 为什么不动 failureCount：它记的是「连续失败触发熔断」的预算，而这两类失败
+  /// 重试多少次都是一个结论，把它算进去只会更快禁用站点、掩盖真实原因。
+  /// 为什么还要记 [fatalFailure]：下一次 ensureRunning 必须回放同一结论而不是再起
+  /// 一次进程——「不重试」若只体现在数字上，用户点开站点就又是一次 JVM。
+  void _recordFatal(
+    _SiteRuntime runtime,
+    Object error, {
+    required String reason,
+  }) {
+    final fatal = error is SpiderError ? error : null;
+    runtime
+      ..host = null
+      ..process = null
+      ..state = SpiderRuntimeState.failed
+      ..lastError = fatal?.message ?? error.toString()
+      ..nextRetryAt = null
+      ..restartDelay = Duration.zero
+      ..fatalFailure = fatal;
+    log.error(
+      'Spider 已停止（$reason，不重试）site=${runtime.siteKey} '
+      'code=${fatal?.code ?? "-"} diag=${fatal?.diagnosticId ?? "-"} '
+      'reason=${fatal?.message ?? error}',
+      scope: 'spider',
+    );
   }
 
   void _recordFailure(_SiteRuntime runtime, Object error) {
@@ -1660,7 +2085,9 @@ class SpiderHostSupervisor {
       ..restartDelay = Duration.zero
       ..nextRetryAt = null
       ..lastError = null
-      ..state = SpiderRuntimeState.stopped;
+      ..state = SpiderRuntimeState.stopped
+      // 人工重置是「我改好了，再试一次」的唯一出口：确定性失败的门闩必须一起清掉。
+      ..fatalFailure = null;
     log.info('Spider 已重置 site=$siteKey', scope: 'spider');
   }
 
@@ -1681,10 +2108,12 @@ class SpiderHostSupervisor {
     runtime.generation += 1;
     _cancelIdleTimer(runtime);
     if (process != null) process._activityChanged = null;
+    runtime.host?.clearPlaybackLeases();
     runtime
       ..host = null
       ..process = null
-      ..state = SpiderRuntimeState.stopped;
+      ..state = SpiderRuntimeState.stopped
+      ..fatalFailure = null;
     return _trackStop(runtime, _drainRuntime(runtime, process, starting));
   }
 
@@ -1833,6 +2262,9 @@ class _SiteRuntime {
   int failureCount = 0;
   Duration restartDelay = Duration.zero;
   DateTime? nextRetryAt;
+
+  /// 终态失败的结论（确定性失败 exit=2/3、资源类外部终止）；非 null 表示重试没有意义。
+  SpiderError? fatalFailure;
 }
 
 /// 解析 sidecar 运行时类型的目标可执行文件（§9.7 `runtime` 字段）。

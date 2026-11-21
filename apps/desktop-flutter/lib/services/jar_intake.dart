@@ -77,9 +77,11 @@ class JarInspection {
     this.nativeEntries = const [],
     this.classEntries = const [],
     this.sourceEntries = const [],
+    this.shellEntries = const [],
     this.expectedClass,
     this.entryClassFound = false,
     this.note = '',
+    this.unpackedPayload = false,
   });
 
   final JarVerdict verdict;
@@ -89,6 +91,21 @@ class JarInspection {
   final List<String> nativeEntries;
   final List<String> classEntries;
   final List<String> sourceEntries;
+
+  /// 命中的加固壳资源条目（`assets/*.guard`）。
+  ///
+  /// 加固壳的拒绝文案必须**点名**壳资源（例 `assets/wexshinidie.guard`），
+  /// 否则用户看到的是「含原生库」这种和他手里的 jar 对不上的结论。
+  /// 只有 dex 里带壳标记时该列表为空，此时文案退回到 dex 条目名。
+  final List<String> shellEntries;
+
+  /// 该检测对象是**加固壳的解包产物**（见 [JarIntake.inspectUnpackedPayload]）。
+  ///
+  /// 区别只在原生库：壳 jar 里的 `assets/*.so` 是外壳依赖（必须拒绝），
+  /// payload 里的 `assets/*.so` 是**要跑的那份 dex 自己的**原生依赖——
+  /// 后者应当按 [JarVerdict.translatableDex] 放行，并在 [note] 里如实写明
+  /// 「native 调用会抛 UnsatisfiedLinkError」，不做静默降级。
+  final bool unpackedPayload;
 
   /// 期望的入口类名（csp_Demo → Demo）。
   final String? expectedClass;
@@ -124,6 +141,14 @@ class JarInspection {
         return '这是源码入口（${sourceEntries.length} 个 .java）：需要 JDK 编译，'
             '当前 csp_ 绑定只解析 index.jar / 类目录，请改用 manifest（spider-local:）。';
       case JarVerdict.translatableDex:
+        if (unpackedPayload) {
+          final nativeNote = nativeEntries.isEmpty
+              ? ''
+              : '、${nativeEntries.length} 个原生库条目';
+          return '这是加固壳的**解包产物**（${dexEntries.length} 个 dex 条目$nativeNote）：'
+              'classes.dex 可转译为桌面可加载的 class jar；'
+              '依赖 native 的调用会如实抛 UnsatisfiedLinkError，不静默降级。';
+        }
         return '这是 Android 站源入口（内含 classes.dex，共 ${dexEntries.length} 个 dex 条目）：'
             '无原生库，可在导入时转译为桌面可加载的 class jar。';
       case JarVerdict.androidJar:
@@ -138,8 +163,14 @@ class JarInspection {
             '只能在安卓端运行，桌面 JVM 无法加载。'
             '如需在 PC 上使用，请在安卓端运行该配置，再通过「安卓设备接入」导入。';
       case JarVerdict.shellGuard:
-        return '检测到加固壳站源特征（Guard / DexNative）。这类入口可能依赖 Android/ARM '
-            '解包，不自动转译为桌面 Java 实现；请通过「安卓设备接入」使用。';
+        final shell = (shellEntries.isNotEmpty ? shellEntries : dexEntries)
+            .take(3)
+            .join('、');
+        return '检测到加固壳站源特征'
+            '${shell.isEmpty ? '（Guard / DexNative）' : '（$shell）'}：'
+            '需要 ARM 解包桥（unidbg）先解出 payload 才能转译，'
+            '桌面 JVM 无法直接加载；未安装解包运行时时不自动导入，'
+            '也可通过「安卓设备接入」交给安卓端运行。';
       case JarVerdict.missingEntryClass:
         return '可解析但没有任何 .class 条目（宿主会以 ClassNotFound 收场）：'
             '入口必须继承 webhtv.spider.Spider 或提供静态 createSpider(Map)。';
@@ -269,13 +300,80 @@ class JarIntake {
   ///
   /// 边界：含 dex 且无原生库的入口现在是 [JarVerdict.translatableDex]（可转译），
   /// **不再**算「Android 站源」；只有兜底字节扫描出来的结论才算。
+  /// 把已装站点的 `limits` 抬到**当前最小值**（512 MiB / 120 s CPU）。
+  ///
+  /// 为什么需要：限额写在每个站点的 `manifest.json` 里，改默认值只影响**新装**站点。
+  /// 而 256 MiB 会被「首次在进程内转译 payload」的 257 MiB 峰值顶穿 → 作业对象静默
+  /// 杀进程（2026-11-21 实测：WexAiWenCai / WexAiBoBo / WexAiReBo 就是这么崩的，
+  /// 用户只看到 `code=1`）。不迁移的话老目录会继续崩，用户只能手动删目录。
+  ///
+  /// 只升不降：用户手工调得更大的站点保持原样。返回被改写的站点数。
+  static int ensureMinimumLimits({
+    required String root,
+    LogService? log,
+    int memoryMiB = 512,
+    int cpuSeconds = 120,
+  }) {
+    final cspDir = Directory(p.join(root, 'csp'));
+    if (!cspDir.existsSync()) return 0;
+    var changed = 0;
+    for (final site in cspDir.listSync().whereType<Directory>()) {
+      final manifest = File(p.join(site.path, 'manifest.json'));
+      if (!manifest.existsSync()) continue;
+      try {
+        final decoded = jsonDecode(manifest.readAsStringSync());
+        if (decoded is! Map) continue;
+        final map = Map<String, Object?>.from(decoded);
+        final limits = map['limits'];
+        final current = limits is Map
+            ? Map<String, Object?>.from(limits)
+            : <String, Object?>{};
+        final memory = current['memoryMiB'];
+        final cpu = current['cpuSeconds'];
+        final needsMemory = memory is! int || memory < memoryMiB;
+        final needsCpu = cpu is! int || cpu < cpuSeconds;
+        if (!needsMemory && !needsCpu) continue;
+        if (needsMemory) current['memoryMiB'] = memoryMiB;
+        if (needsCpu) current['cpuSeconds'] = cpuSeconds;
+        map['limits'] = current;
+        manifest.writeAsStringSync(jsonEncode(map), flush: true);
+        changed++;
+      } catch (error) {
+        log?.warning('迁移站点限额失败 ${site.path}：$error', scope: 'spider');
+      }
+    }
+    if (changed > 0) {
+      log?.info(
+        '站点限额已迁移：$changed 个抬到 memoryMiB>=$memoryMiB / cpuSeconds>=$cpuSeconds',
+        scope: 'spider',
+      );
+    }
+    return changed;
+  }
+
   static bool hasAndroidDex(String path) =>
       inspectPath(path).verdict == JarVerdict.androidJar;
 
   /// 静态检测一个入口（jar 文件 / 目录 / .java 文件）。
   ///
   /// 不加载类、不执行代码、不落盘；仅有界读取 dex 元数据识别加固壳。
-  static JarInspection inspectPath(String sourcePath, {String? expectedClass}) {
+  /// 同一入口的静态结论缓存（`path + size + mtime + 参数` 失效）。
+  ///
+  /// 为什么需要：站点选择器与路由会对**同一个入口**反复调用 [inspectPath]（列表每次
+  /// 重建、每次分类都调一次），而每次都要打开 zip 读中央目录。实测上百个站点连着
+  /// 做一遍是几百毫秒的同步 I/O，全压在 UI isolate 上——点开站点列表会明显顿一下。
+  /// 只缓存**文件**入口：目录入口的 mtime 不随内容变化，缓存会给出过期结论。
+  static final Map<
+    String,
+    ({int size, int mtimeMs, JarInspection result})
+  >
+  _inspectCache = {};
+
+  static JarInspection inspectPath(
+    String sourcePath, {
+    String? expectedClass,
+    bool unpackedPayload = false,
+  }) {
     final type = FileSystemEntity.typeSync(sourcePath);
     if (type == FileSystemEntityType.notFound) {
       return JarInspection(
@@ -287,16 +385,51 @@ class JarIntake {
       return _inspectDirectory(
         Directory(sourcePath),
         expectedClass: expectedClass,
+        unpackedPayload: unpackedPayload,
       );
     }
-    return _inspectFile(File(sourcePath), expectedClass: expectedClass);
+    final key = '$sourcePath|${expectedClass ?? ''}|$unpackedPayload';
+    final stat = FileStat.statSync(sourcePath);
+    final mtime = stat.modified.millisecondsSinceEpoch;
+    final cached = _inspectCache[key];
+    if (cached != null && cached.size == stat.size && cached.mtimeMs == mtime) {
+      return cached.result;
+    }
+    final result = _inspectFile(
+      File(sourcePath),
+      expectedClass: expectedClass,
+      unpackedPayload: unpackedPayload,
+    );
+    if (_inspectCache.length > 512) _inspectCache.clear();
+    _inspectCache[key] = (size: stat.size, mtimeMs: mtime, result: result);
+    return result;
   }
+
+  /// 检测**加固壳解包产物**（`ShellUnpack` 产出的 payload jar）。
+  ///
+  /// 与 [inspectPath] 的唯一区别：payload 里的 `assets/*.so` / `lib/*.so`
+  /// **不**触发 [JarVerdict.nativeLibrary]——它们是 payload 自己的原生依赖，
+  /// 要跑的那一份仍然是 `classes.dex`。结论为 [JarVerdict.translatableDex]，
+  /// 并在 [JarInspection.note] 里写明「native 调用会抛 UnsatisfiedLinkError」，
+  /// 不做静默降级：能装就装，装不了的调用如实失败。
+  static JarInspection inspectUnpackedPayload(
+    String path, {
+    String? expectedClass,
+  }) => inspectPath(
+    path,
+    expectedClass: expectedClass,
+    unpackedPayload: true,
+  );
 
   // ---------------------------------------------------------------------------
   // 检测
   // ---------------------------------------------------------------------------
 
-  static JarInspection _inspectFile(File file, {String? expectedClass}) {
+  static JarInspection _inspectFile(
+    File file, {
+    String? expectedClass,
+    bool unpackedPayload = false,
+  }) {
     final path = file.path;
 
     if (path.toLowerCase().endsWith('.java')) {
@@ -356,6 +489,7 @@ class JarIntake {
       path,
       [for (final entry in catalog.entries) entry.name],
       expectedClass: expectedClass,
+      allowNativeEntries: unpackedPayload,
       scanDex: (dexNames) => _scanJarDex(path, catalog, dexNames),
     );
   }
@@ -363,6 +497,7 @@ class JarIntake {
   static JarInspection _inspectDirectory(
     Directory directory, {
     String? expectedClass,
+    bool unpackedPayload = false,
   }) {
     final names = <String>[];
     try {
@@ -394,6 +529,7 @@ class JarIntake {
       names,
       expectedClass: expectedClass,
       isDirectory: true,
+      allowNativeEntries: unpackedPayload,
       scanDex: (dexNames) => _scanDirectoryDex(directory.path, dexNames),
     );
   }
@@ -403,6 +539,10 @@ class JarIntake {
     List<String> names, {
     String? expectedClass,
     bool isDirectory = false,
+    // 解包产物（payload）：`lib/*.so` / `assets/*.so` 是 payload 自己的原生
+    // 依赖，不构成拒绝理由——要跑的 classes.dex 仍然可以转译。壳 jar 里
+    // 的同名条目则相反（见下面的判定顺序注释）。
+    bool allowNativeEntries = false,
     ShellScan Function(List<String> dexEntries)? scanDex,
   }) {
     final dex = <String>[];
@@ -431,11 +571,32 @@ class JarIntake {
         expected.isNotEmpty &&
         classes.any((c) => p.basename(c) == '$expected.class');
 
-    // 判定顺序：**原生库的拒绝优先于 dex**。项目纪律要求含 lib/*.so 的 jar 一律
-    // 拒绝落盘——dex 预转译只解决「JVM 不认 dalvik 字节码」，不解决原生实现只能
-    // 在 Android/ARM 上跑的依赖（§12.6.4 ①、ADR-0002）。若先判 dex，「dex + 原生库」
-    // 会被错报成可转译的 dex 入口，转译成功后依然加载不出原生实现。
-    if (native.isNotEmpty) {
+    // 判定顺序（加固壳 → 原生库 → dex）三条都不是随手排的：
+    //
+    // 1. **加固壳优先**：wex 这类入口是「dex + assets/*.so + assets/*.guard」，
+    //    壳先判就不会被报成「含原生库」——那是让用户去看他自己的 jar 里根本没
+    //    提过的东西，而真正该做的是解包（见 shell_unpack.dart）。
+    // 2. **原生库其次**：dex 预转译只解决「JVM 不认 dalvik 字节码」，不解决原生
+    //    实现只能在 Android/ARM 上跑的依赖（§12.6.4 ①、ADR-0002）；含 lib/*.so
+    //    的 jar 一律拒绝落盘，否则转译成功也加载不出原生实现。
+    // 3. 最后才看 dex。
+    final guard = _scanShellGuard(sourcePath, names, dex, isDirectory, scanDex);
+    if (guard.guarded || guard.failure != null) {
+      return JarInspection(
+        verdict: guard.guarded ? JarVerdict.shellGuard : JarVerdict.androidJar,
+        sourcePath: sourcePath,
+        entryCount: names.length,
+        dexEntries: dex,
+        nativeEntries: native,
+        classEntries: classes,
+        sourceEntries: sources,
+        shellEntries: guard.shellEntries,
+        expectedClass: expectedClass,
+        entryClassFound: found,
+        note: guard.failure ?? '',
+      );
+    }
+    if (native.isNotEmpty && !allowNativeEntries) {
       return JarInspection(
         verdict: JarVerdict.nativeLibrary,
         sourcePath: sourcePath,
@@ -448,22 +609,9 @@ class JarIntake {
         entryClassFound: found,
       );
     }
-    final guard = _scanShellGuard(sourcePath, names, dex, isDirectory, scanDex);
-    if (guard.guarded || guard.failure != null) {
-      return JarInspection(
-        verdict: guard.guarded ? JarVerdict.shellGuard : JarVerdict.androidJar,
-        sourcePath: sourcePath,
-        entryCount: names.length,
-        dexEntries: dex,
-        classEntries: classes,
-        sourceEntries: sources,
-        expectedClass: expectedClass,
-        entryClassFound: found,
-        note: guard.failure ?? '',
-      );
-    }
     if (dex.isNotEmpty) {
-      // 走到这里说明已确认**没有任何原生库**，dex 可以在导入期转译。
+      // 走到这里说明 dex 可以在导入期转译：要么确认没有任何原生库，
+      // 要么这是一份**解包产物**（它的原生库属于 payload 自己）。
       return JarInspection(
         verdict: JarVerdict.translatableDex,
         sourcePath: sourcePath,
@@ -474,6 +622,11 @@ class JarIntake {
         sourceEntries: sources,
         expectedClass: expectedClass,
         entryClassFound: found,
+        note: allowNativeEntries && native.isNotEmpty
+            ? '该入口是加固壳的解包产物：含原生库条目（${native.take(3).join('、')}），'
+            '依赖 native 的调用会如实抛 UnsatisfiedLinkError，不静默降级'
+            : '',
+        unpackedPayload: allowNativeEntries,
       );
     }
     if (classes.isEmpty) {
@@ -796,24 +949,37 @@ class JarIntake {
     'Shinidie;',
   ];
 
-  static ({bool guarded, String? failure}) _scanShellGuard(
+  static ({bool guarded, String? failure, List<String> shellEntries})
+  _scanShellGuard(
     String path,
     List<String> names,
     List<String> dexEntries,
     bool isDirectory,
     ShellScan Function(List<String> dexEntries)? scanDex,
   ) {
-    if (names.any((name) {
-      final normalized = name.replaceAll('\\', '/').toLowerCase();
-      return normalized.startsWith('assets/') && normalized.endsWith('.guard');
-    })) {
-      return (guarded: true, failure: null);
+    // 壳资源条目（`assets/*.guard`）本身就是结论：wex 的 `assets/wexshinidie.guard`
+    // 必须被文案点名，否则用户只看到「含原生库」这种和他手里 jar 对不上的说明。
+    final guards = <String>[
+      for (final name in names)
+        if (_isGuardAsset(name)) name,
+    ];
+    if (guards.isNotEmpty) {
+      return (guarded: true, failure: null, shellEntries: guards);
     }
     if (dexEntries.isEmpty || scanDex == null) {
-      return (guarded: false, failure: null);
+      return (guarded: false, failure: null, shellEntries: const <String>[]);
     }
     final scanned = scanDex(dexEntries);
-    return (guarded: scanned.guarded, failure: scanned.failure);
+    return (
+      guarded: scanned.guarded,
+      failure: scanned.failure,
+      shellEntries: const <String>[],
+    );
+  }
+
+  static bool _isGuardAsset(String name) {
+    final normalized = name.replaceAll('\\', '/').toLowerCase();
+    return normalized.startsWith('assets/') && normalized.endsWith('.guard');
   }
 
   static bool _containsAsciiBytes(List<int> bytes, String marker) {
@@ -961,11 +1127,16 @@ class JarIntake {
       required String archive,
     })?
     translateDex,
+    bool unpackedPayload = false,
   }) async {
     final expected = className?.trim().isNotEmpty == true
         ? className!.trim()
         : classNameFor(siteKey);
-    final inspection = inspectPath(sourcePath, expectedClass: expected);
+    // 解包产物按**payload 口径**检测：它含 `assets/*.so` 也只是 payload 自己的
+    // 原生依赖，要跑的仍是 classes.dex（见 inspectUnpackedPayload）。
+    final inspection = unpackedPayload
+        ? inspectUnpackedPayload(sourcePath, expectedClass: expected)
+        : inspectPath(sourcePath, expectedClass: expected);
     if (!inspection.installable) {
       log?.warning(
         '拒绝导入 T3 桌面站源 site=$siteKey verdict=${inspection.verdict.name} '
@@ -1031,6 +1202,7 @@ class JarIntake {
         );
       }
 
+      final bool? unpackedMarker = unpackedPayload ? true : null;
       await File(p.join(targetDir, 'intake.json')).writeAsString(
         const JsonEncoder.withIndent('  ').convert({
           'siteKey': siteKey,
@@ -1042,19 +1214,21 @@ class JarIntake {
           'verdict': inspection.verdict.name,
           'entryCount': inspection.entryCount,
           'note': inspection.note,
+          'unpackedPayload': ?unpackedMarker,
           'dexTranslation': ?dexTranslation,
         }),
         flush: true,
       );
 
       // `manifest.json` 是**启动 sidecar 的必需输入**（`Host.java` 在文件缺失时直接
-      // 以退出码 2 结束，宿主侧只会看到「sidecar 意外退出（code=2）」）。此前这里
+      // 以退出码 2 结束，宿主侧现在会读成「协议或 manifest 非法：…」并判定确定性失败）。此前这里
       // 只写 intake.json，`spider_router.cspLocalSpider` 却按约定指向
       // `<站点目录>/manifest.json`，两者对不上，dex 站点于是每次启动都崩在 2。
       await _writeLaunchManifest(
         targetDir: targetDir,
         siteKey: siteKey,
         entryName: entryName,
+        className: expected,
       );
 
       log?.info(
@@ -1123,13 +1297,17 @@ class JarIntake {
   /// 退出码 2。不补写的话，用户必须删掉站点目录重新导入才能恢复——那等于把内部
   /// 实现变更的成本转嫁给用户。
   ///
-  /// 只在文件缺失时写一次，已有内容不覆盖（避免每次判定都产生磁盘写入）。
+  /// 已有内容只允许按已安装的 generated-shell 证据补授权；普通 manifest 不覆盖。
   static void ensureLaunchManifest({
     required String targetDir,
     required String siteKey,
+    LogService? log,
   }) {
     final manifest = File(p.join(targetDir, 'manifest.json'));
-    if (manifest.existsSync()) return;
+    if (manifest.existsSync()) {
+      _authorizeGeneratedShell(targetDir, siteKey, log);
+      return;
+    }
     final entry = File(p.join(targetDir, 'index.jar')).existsSync()
         ? 'index.jar'
         : (Directory(p.join(targetDir, 'classes')).existsSync()
@@ -1162,8 +1340,14 @@ class JarIntake {
             'browser': false,
           },
           'limits': const {
-            'memoryMiB': 256,
-            'cpuSeconds': 30,
+            // 512 而不是 256：实测加固壳站点**首次**在进程内转译 payload 时峰值 commit
+            // 约 257 MiB（1193 类 + dex2jar），正好越过 256 MiB 的作业对象上限，被
+            // JOB_OBJECT_LIMIT_PROCESS_MEMORY 静默杀掉——stderr 什么都不留、退出码 1，
+            // 用户看到的是「sidecar 意外退出」（2026-11-21 实测，WexAiWenCai/BoBo/ReBo）。
+            'memoryMiB': 512,
+            // 120 而不是 30：同一次首译是 CPU 密集的（10 s 级），30 s 的作业时间上限
+            // 会在站点还没服务过任何请求之前就触发。
+            'cpuSeconds': 120,
             'concurrency': 1,
             'responseMiB': 8,
           },
@@ -1172,9 +1356,57 @@ class JarIntake {
         }),
         flush: true,
       );
+      _authorizeGeneratedShell(targetDir, siteKey, log);
     } catch (_) {
       // 写失败不阻断判定：让后续启动照旧报出可诊断的错误，而不是在这里静默改状态。
     }
+  }
+
+  static void _authorizeGeneratedShell(
+    String targetDir,
+    String siteKey,
+    LogService? log,
+  ) {
+    try {
+      final probeFile = File(p.join(targetDir, 'probe.json'));
+      final payload = File(p.join(targetDir, 'payload.jar'));
+      if (!probeFile.existsSync() ||
+          !payload.existsSync() ||
+          payload.lengthSync() == 0) {
+        return;
+      }
+      final probe = jsonDecode(probeFile.readAsStringSync());
+      if (probe is! Map ||
+          probe['installed'] != true ||
+          !const ['installed', 'unpacked'].contains(probe['outcome']) ||
+          probe['shellPayload'] is! Map) {
+        return;
+      }
+      final file = File(p.join(targetDir, 'manifest.json'));
+      final data = jsonDecode(file.readAsStringSync());
+      if (data is! Map ||
+          data['runtime'] != 'jvm' ||
+          data['key'] != siteKey ||
+          data['permissions'] is! Map ||
+          data['capabilities'] is! List) {
+        return;
+      }
+      final permissions = Map<String, Object?>.from(data['permissions'] as Map);
+      final caps = List<Object?>.from(data['capabilities'] as List);
+      if (permissions['localProxy'] == true && caps.contains('proxy')) return;
+      permissions['localProxy'] = true;
+      if (!caps.contains('proxy')) caps.add('proxy');
+      data['permissions'] = permissions;
+      data['capabilities'] = caps;
+      file.writeAsStringSync(
+        const JsonEncoder.withIndent('  ').convert(data),
+        flush: true,
+      );
+      log?.info(
+        'generated-shell proxyHttp authorization site=$siteKey',
+        scope: 'spider',
+      );
+    } catch (_) {}
   }
 
   /// 写启动 sidecar 用的 `manifest.json`（`webhtv-ipc-v1` 分发契约）。
@@ -1188,6 +1420,7 @@ class JarIntake {
     required String targetDir,
     required String siteKey,
     required String entryName,
+    String? className,
   }) async {
     await File(p.join(targetDir, 'manifest.json')).writeAsString(
       const JsonEncoder.withIndent('  ').convert({
@@ -1197,6 +1430,11 @@ class JarIntake {
         'name': siteKey,
         'runtime': 'jvm',
         'entry': entryName,
+        // `config.className` 是宿主的类名解析链（--class → config.className →
+        // key 去 csp_）里唯一由导入方决定的一环：加固壳解包出的 payload 里
+        // 真实现叫 `Xxx` 而不是壳 jar 里的 `XxxGuard`，不写死这一项就必然
+        // ClassNotFound（见 csp_jar_probe 的入口类名回退）。
+        'config': {'className': className ?? classNameFor(siteKey)},
         'capabilities': const ['home', 'category', 'detail', 'search', 'play'],
         'permissions': const {
           'network': true,
@@ -1208,8 +1446,9 @@ class JarIntake {
           'browser': false,
         },
         'limits': const {
-          'memoryMiB': 256,
-          'cpuSeconds': 30,
+          // 见上一处 limits 的说明：256 MiB 会被首译峰值顶穿。
+          'memoryMiB': 512,
+          'cpuSeconds': 120,
           'concurrency': 1,
           'responseMiB': 8,
         },

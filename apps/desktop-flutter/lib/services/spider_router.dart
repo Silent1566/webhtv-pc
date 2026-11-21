@@ -24,6 +24,9 @@ library;
 
 import 'dart:async';
 
+import 'dart:io';
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 
 import '../core/app_error.dart';
@@ -31,6 +34,7 @@ import '../core/cat_http.dart';
 import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
+import 'csp_jar_probe.dart';
 import 'direct_spider_registrar.dart';
 import 'jar_intake.dart';
 import 'log_service.dart';
@@ -494,6 +498,46 @@ class SpiderRouter {
 
   String _hostPath() => hostPath ?? (supervisor == null ? '' : '');
 
+  /// 加固壳链路结论的**面向用户**文案（各自给出下一步做什么）。
+  ///
+  /// 返回值 null 表示「不是壳链路结论」，交给既有的 `summary` 分支处理；
+  /// 三种情形必须分别说清，不能合并成一句「自动检测失败」：
+  /// - `needsShellRuntime`：缺运行时（约 40.7 MB），**下一步是用户去下载**；
+  /// - `unpackFailed`：解包卡在某个阶段，下一步是修环境或交给安卓端；
+  /// - `unsupportedShell`：壳族不支持，桌面端没有下一步，只能交给安卓端。
+  static String? _shellProbeReason(Map<String, Object?>? record) {
+    if (record == null) return null;
+    final outcome = '${record['outcome'] ?? ''}'.trim();
+    final summary = '${record['summary'] ?? ''}'.trim();
+    final sourceUrl = '${record['sourceUrl'] ?? ''}'.trim();
+    final from = sourceUrl.isEmpty
+        ? '配置声明的 jar'
+        : '配置声明的 jar（${redactUrl(sourceUrl)}）';
+    final payload = record['shellPayload'];
+    switch (outcome) {
+      case 'needsShellRuntime':
+        return '该配置声明的 jar 是加固壳站源：需要 ARM 解包桥（unidbg，'
+            '${CspJarProbe.shellRuntimeSizeLabel}）先解出 payload 才能转译，'
+            '而解包运行时尚未安装（体积 ${CspJarProbe.shellRuntimeSizeLabel}）。'
+            '下一步：在设置里下载解包运行时后重启探测；不想下载就通过'
+            '「安卓设备接入」交给安卓端运行。详情：$summary';
+      case 'unpackFailed':
+        final stage = '${record['shellStage'] ?? ''}'.trim();
+        return '加固壳解包失败${stage.isEmpty ? '' : '（阶段：$stage）'}：$from。'
+            '下一步：确认解包运行时完整、JDK 为 17+ 后重试；'
+            '或通过「安卓设备接入」交给安卓端运行。详情：$summary';
+      case 'unsupportedShell':
+        final hint = payload is Map
+            ? '（payload ${payload['bytes'] ?? '?'} 字节）'
+            : '';
+        return '壳族未支持：$from 已尝试解包$hint，但解出来的 payload 仍无法在'
+            '桌面 JVM 加载。桌面端没有下一步，请通过「安卓设备接入」交给安卓端运行。'
+            '详情：$summary';
+      default:
+        return null;
+    }
+  }
+
   /// `csp_*` 站点的可用性判定（§9.3 `tvbox-java-v1`）。
   ///
   /// 判定顺序：本地缓存入口 → 原生库 → 不可转译的 Android jar → 「可转译 dex」的
@@ -515,6 +559,15 @@ class SpiderRouter {
       // 含 classes.dex / 原生库，程序已经试过并拒绝落盘，不能再让用户对着
       // 「请把 jar 放到 …」自己去猜（§12.9）。
       final probed = JarIntake.probeRecord(binding.directoryFor(site.key));
+      final shellReason = _shellProbeReason(probed);
+      if (shellReason != null) {
+        return SiteAvailability(
+          available: false,
+          runtimeName: 'Android/JAR Spider',
+          stage: 'Phase 3',
+          reason: shellReason,
+        );
+      }
       final summary = (probed?['summary'] as String?)?.trim() ?? '';
       final sourceUrl = (probed?['sourceUrl'] as String?)?.trim() ?? '';
       if (summary.isNotEmpty) {
@@ -541,10 +594,20 @@ class SpiderRouter {
     // 「zip 解析失败、按字节兜底看到 classes.dex」那一种（无法确认有无 lib/*.so），
     // 不含 [JarVerdict.nativeLibrary]；漏掉的话「dex + 原生库」的 jar 会一路滑到
     // 下面的「可加载」分支，被谎报成可用（§12.6.4 ①、ADR-0002）。
-    final inspection = JarIntake.inspectPath(
-      entry,
-      expectedClass: JarIntake.classNameFor(site.key),
-    );
+    // 解包产物（payload）里 `assets/*.so` 是 payload 自己的原生依赖：按**payload
+    // 口径**判定，否则一个已经装好、能跑的壳站点会被报成「含原生库」。
+    final unpackedPayload =
+        JarIntake.intakeRecord(binding.directoryFor(site.key))?['unpackedPayload'] ==
+        true;
+    final inspection = unpackedPayload
+        ? JarIntake.inspectUnpackedPayload(
+            entry,
+            expectedClass: JarIntake.classNameFor(site.key),
+          )
+        : JarIntake.inspectPath(
+            entry,
+            expectedClass: JarIntake.classNameFor(site.key),
+          );
     if (inspection.verdict == JarVerdict.nativeLibrary) {
       final native = inspection.nativeEntries.take(3).join('、');
       return SiteAvailability(
@@ -555,6 +618,23 @@ class SpiderRouter {
             '该 jar 含原生库（$native），只能在安卓端运行，桌面 JVM 无法加载。'
             'dex 预转译只解决 Java 字节码形态，替代不了安卓原生库。'
             '如需在 PC 上使用，请通过「安卓设备接入」交给安卓端运行。',
+      );
+    }
+    // 壳入口 + 同目录 `payload.jar` = **已装配好的加固壳站点**。
+    //
+    // 壳 jar 本身当然仍被判为 shellGuard，但真实实现已解包到 payload.jar，入口类
+    // 由宿主的 `DexNative` 影子类解析——这是**可用**状态。此前这里一刀切成
+    // 「加固壳 → 不可用」，迁移到壳入口装配后 98 个站点在列表里全显示不可用
+    // （2026-11-21 实测：目录里 index.jar + payload.jar 都在，界面却说要解包）。
+    if (inspection.verdict == JarVerdict.shellGuard &&
+        File(p.join(p.dirname(entry), 'payload.jar')).existsSync()) {
+      return const SiteAvailability(
+        available: true,
+        runtimeName: 'PC Java Spider (tvbox-java-v1)',
+        stage: 'Phase 3',
+        reason:
+            '加固壳站点（壳入口 + payload 已就位）：壳内的 DexNative 由宿主影子类接管，'
+            '真实实现从同目录 payload.jar 加载；依赖壳内 native 能力的调用会如实报错。',
       );
     }
     if (inspection.verdict == JarVerdict.shellGuard ||
@@ -583,15 +663,21 @@ class SpiderRouter {
     // 已转译 → 可用；转译失败 → 不可用；没有记录 → 可用但首次加载要现场转译。
     String? dexNote;
     if (inspection.verdict == JarVerdict.translatableDex) {
+      final unpackedNote = inspection.unpackedPayload
+          ? '该站点是加固壳的解包产物（含原生库，依赖 native 的调用会如实抛 '
+              'UnsatisfiedLinkError，不静默降级）；'
+          : '';
       final translation = JarIntake.intakeRecord(
         binding.directoryFor(site.key),
       )?['dexTranslation'];
       if (translation is! Map) {
         dexNote =
+            '$unpackedNote'
             '该站点为 Android 站源（内含 classes.dex），尚未预转译，'
             '首次加载时会转译（约数秒）';
       } else if (translation['ok'] == true) {
         dexNote =
+            '$unpackedNote'
             '该站点为 Android 站源，dex 已转译 classCount='
             '${translation['classCount'] ?? 0}';
       } else {
@@ -604,7 +690,8 @@ class SpiderRouter {
           reason:
               '该站点为 Android 站源，dex 预转译失败'
               '${stage.isEmpty ? '' : '（$stage）'}'
-              '${message.isEmpty ? '' : '：$message'}',
+              '${message.isEmpty ? '' : '：$message'}。'
+              '下一步：检查 JDK 17+ 与该入口 ${p.basename(entry)} 是否完整。',
         );
       }
     }
@@ -614,6 +701,7 @@ class SpiderRouter {
     JarIntake.ensureLaunchManifest(
       targetDir: binding.directoryFor(site.key),
       siteKey: site.key,
+      log: log,
     );
     final local = cspLocalSpider(
       site: site,
@@ -652,14 +740,32 @@ class SpiderRouter {
     required String entryPath,
     required CspJvmBinding binding,
   }) {
+    final manifestPath = p.join(
+      binding.directoryFor(site.key),
+      'manifest.json',
+    );
+    JarIntake.ensureLaunchManifest(
+      targetDir: binding.directoryFor(site.key),
+      siteKey: site.key,
+    );
+    SpiderManifest? launch;
+    try {
+      final raw = jsonDecode(File(manifestPath).readAsStringSync());
+      if (raw is Map && !raw.containsKey('capabilities')) {
+        raw['capabilities'] = const ['home', 'category', 'detail', 'search', 'play'];
+      }
+      launch = SpiderManifest.fromJson(raw);
+    } catch (_) {}
     final manifest = SpiderManifest(
       key: site.key,
       name: site.name,
       runtime: 'jvm',
       entry: entryPath,
-      capabilities: const ['home', 'category', 'detail', 'search', 'play'],
-      permissions: const SpiderPermissions(),
-      limits: const SpiderLimits(),
+      capabilities:
+          launch?.capabilities.values ??
+          const ['home', 'category', 'detail', 'search', 'play'],
+      permissions: launch?.permissions ?? const SpiderPermissions(),
+      limits: launch?.limits ?? const SpiderLimits(),
     );
     return LocalSpider(
       manifest: manifest,
