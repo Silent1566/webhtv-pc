@@ -28,6 +28,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
+import '../core/episode_manual_match.dart';
 import '../core/episode_range.dart';
 import '../core/app_error.dart';
 import '../core/external_detail_meta.dart';
@@ -861,6 +862,63 @@ class TmdbEpisodeHeader extends StatelessWidget {
   }
 }
 
+/// 手动匹配摘要：只在存在集级手动匹配（或失效锚点）时渲染。
+///
+/// 为什么不占区块头的按钮位：区块头已经有正序/视图/名称/聚合四个单位，
+/// 再加一个图标按钮会把标题挤没；这里自成一行，且「清除」是**破坏性**动作，
+/// 放在有文字的位置更安全。
+class TmdbEpisodeMatchSummary extends StatelessWidget {
+  const TmdbEpisodeMatchSummary({
+    super.key,
+    required this.manualCount,
+    required this.droppedCount,
+    this.onClear,
+  });
+
+  final int manualCount;
+  final int droppedCount;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    if (manualCount <= 0 && droppedCount <= 0) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final parts = <String>[
+      if (manualCount > 0) '已手动匹配 $manualCount 处',
+      if (droppedCount > 0) '$droppedCount 处已失效',
+    ];
+    return Padding(
+      key: const ValueKey('tmdb-episode-match-summary'),
+      padding: const EdgeInsets.only(bottom: AppSpace.xs),
+      child: Row(
+        children: [
+          Icon(Icons.edit, size: 14, color: theme.colorScheme.primary),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              parts.join(' · '),
+              style: theme.textTheme.bodySmall,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+            key: const ValueKey('tmdb-episode-match-clear'),
+            onPressed: onClear,
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 剧集区块：区块头（选集/正序倒序/列表网格）+ 剧集海报卡片。
 ///
 /// 站点详情页与纯 TMDB 详情页共用，避免两处各写一套导致行为漂移。
@@ -880,6 +938,10 @@ class TmdbEpisodeSection extends StatelessWidget {
     this.onToggleGridMode,
     this.posterUrl,
     this.title = '选集',
+    this.onEpisodeMenu,
+    this.variety = false,
+    this.manualIndexes = const {},
+    this.duplicateIndexes = const {},
   });
 
   final List<TmdbEpisodeCard> cards;
@@ -897,6 +959,19 @@ class TmdbEpisodeSection extends StatelessWidget {
   final VoidCallback? onToggleReversed;
   final VoidCallback? onToggleGridMode;
   final String title;
+
+  /// 卡片菜单（右键 / 长按），原样透传给 [TmdbEpisodeStrip]。
+  final void Function(int index, TmdbEpisodeCard card, Offset? position)?
+  onEpisodeMenu;
+
+  /// 综艺文案：集号显示为「第 N 期」。
+  final bool variety;
+
+  /// 已手动匹配的卡片下标。
+  final Set<int> manualIndexes;
+
+  /// 目标重复的卡片下标。
+  final Set<int> duplicateIndexes;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -919,6 +994,10 @@ class TmdbEpisodeSection extends StatelessWidget {
         cardWidth: cardWidth,
         gridMode: gridMode,
         posterUrl: posterUrl,
+        variety: variety,
+        manualIndexes: manualIndexes,
+        duplicateIndexes: duplicateIndexes,
+        onEpisodeMenu: onEpisodeMenu,
         onTap: onTap,
         onLongPress: onLongPress,
       ),
@@ -950,6 +1029,10 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.rangeIndex = 0,
     this.onRangeChanged,
     this.posterUrl,
+    this.onEpisodeMenu,
+    this.variety = false,
+    this.manualIndexes = const {},
+    this.duplicateIndexes = const {},
   });
 
   final List<TmdbEpisodeCard> cards;
@@ -991,6 +1074,19 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 更多集；上游同样提供「列表/网格」两种模式切换。
   final bool gridMode;
   final bool showScrapedName;
+
+  /// 卡片菜单（右键 / 长按）。`position` 是指针位置；长按时取最近一次按下点。
+  final void Function(int index, TmdbEpisodeCard card, Offset? position)?
+  onEpisodeMenu;
+
+  /// 综艺文案：集号显示为「第 N 期」。
+  final bool variety;
+
+  /// 已被手动匹配的卡片下标（[cards] 下标），卡面据此打「手动」标。
+  final Set<int> manualIndexes;
+
+  /// 目标季集与其他卡重复的下标，卡面据此打「重复」标。
+  final Set<int> duplicateIndexes;
 
   /// 区间分组（`docs/phase6/design/03` §4.3）。空或只有 1 个区间时不渲染区间条。
   final List<EpisodeRange> ranges;
@@ -1189,28 +1285,55 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     );
   }
 
+  /// 最近一次指针按下的位置：长按菜单贴在用户按下的地方。
+  Offset? _menuAnchor;
+
   /// 单张卡片。[originalIndex] 是 `cards` 里的下标（不是区间内下标）。
   Widget _tile({
     required int originalIndex,
     required TmdbEpisodeCard card,
     required double width,
-  }) => TmdbEpisodeCardTile(
-    buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
-    stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
-    card: card,
-    width: width,
-    posterUrl: widget.posterUrl,
-    actionLabel: widget.actionLabel,
-    showScrapedName: widget.showScrapedName,
-    isRecent: originalIndex == widget.recentIndex,
-    recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
-    onTap: widget.onTap == null
-        ? null
-        : () => widget.onTap!.call(originalIndex, card),
-    onLongPress: widget.onLongPress == null
-        ? null
-        : () => widget.onLongPress!.call(originalIndex, card),
-  );
+  }) {
+    final tile = TmdbEpisodeCardTile(
+      buttonKey: ValueKey('${widget.keyPrefix}-$originalIndex'),
+      stillKey: ValueKey('${widget.keyPrefix}-still-${card.number}'),
+      card: card,
+      width: width,
+      posterUrl: widget.posterUrl,
+      actionLabel: widget.actionLabel,
+      showScrapedName: widget.showScrapedName,
+      unitLabelOverride: EpisodeManualMatch.unitLabel(
+        variety: widget.variety,
+        seasonNumber: card.seasonNumber,
+        episodeNumber: card.number,
+        compact: true,
+      ),
+      manualMatched: widget.manualIndexes.contains(originalIndex),
+      duplicateTarget: widget.duplicateIndexes.contains(originalIndex),
+      isRecent: originalIndex == widget.recentIndex,
+      recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
+      onTap: widget.onTap == null
+          ? null
+          : () => widget.onTap!.call(originalIndex, card),
+      onLongPress: widget.onEpisodeMenu != null
+          ? () => widget.onEpisodeMenu!(originalIndex, card, _menuAnchor)
+          : widget.onLongPress == null
+          ? null
+          : () => widget.onLongPress!(originalIndex, card),
+    );
+    final menu = widget.onEpisodeMenu;
+    if (menu == null) return tile;
+    // 右键是桌面惯例，长按兼容触摸板：两者都走同一张菜单，靠 Listener 记住按点。
+    return Listener(
+      onPointerDown: (event) => _menuAnchor = event.position,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: (details) =>
+            menu(originalIndex, card, details.globalPosition),
+        child: tile,
+      ),
+    );
+  }
 }
 
 /// 详情页主体（站点页与纯 TMDB 页共用）。
@@ -1912,6 +2035,9 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     this.onLongPress,
     this.isRecent = false,
     this.showScrapedName = true,
+    this.unitLabelOverride,
+    this.manualMatched = false,
+    this.duplicateTarget = false,
     this.posterUrl,
   });
 
@@ -1945,6 +2071,15 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   /// 是否是「最近播放」那一集（`docs/phase6/design/02` §6）。
   final bool isRecent;
   final bool showScrapedName;
+
+  /// 集号角标文案（综艺是「第 N 期」）。为 null 时按 `S1E3` / `E3` 兜底。
+  final String? unitLabelOverride;
+
+  /// 这一集来自手动匹配（角标加笔形图标）。
+  final bool manualMatched;
+
+  /// 这一集的目标与别的卡重复（角标追加「重复」）。
+  final bool duplicateTarget;
 
   final TmdbEpisodeCard card;
 
@@ -2027,11 +2162,34 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                           ),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(
-                          card.seasonNumber > 0
-                              ? 'S${card.seasonNumber}E${card.number}'
-                              : 'E${card.number}',
-                          style: theme.textTheme.labelSmall,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (manualMatched) ...[
+                              Icon(
+                                Icons.edit,
+                                size: 11,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 2),
+                            ],
+                            Text(
+                              unitLabelOverride ??
+                                  (card.seasonNumber > 0
+                                      ? 'S${card.seasonNumber}E${card.number}'
+                                      : 'E${card.number}'),
+                              style: theme.textTheme.labelSmall,
+                            ),
+                            if (duplicateTarget) ...[
+                              const SizedBox(width: 4),
+                              Text(
+                                '重复',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ),

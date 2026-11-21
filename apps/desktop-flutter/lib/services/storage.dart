@@ -470,6 +470,7 @@ class AppDatabase {
     ''');
     _migrateTmdb();
     _migrateAiSeasonMappings();
+    _migrateEpisodeManualBindings();
     _migrateSync();
     _migratePlaybackExtras();
     _migrateSiteInjection();
@@ -760,6 +761,33 @@ class AppDatabase {
     if (columns.contains(name)) return;
     _db.execute(
       'ALTER TABLE ai_season_episode_mappings ADD COLUMN $name $declaration;',
+    );
+  }
+
+  /// 集级手动匹配表（`episode_manual_match_service` 的持久化底座）。
+  ///
+  /// 加法式新增：不改动任何既有表，旧数据库打开后自动获得本表且不丢数据。
+  /// `anchors` 是 `[{sourceIndex, sourceName, seasonNumber, episodeNumber,
+  /// spread}]` 的 JSON；不存全局快照——锚点自带 `sourceName` 自校验，失效按
+  /// 逐条 `relocate` 判定（与 AI 表「整批 stale」语义不同）。
+  void _migrateEpisodeManualBindings() {
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS episode_manual_bindings (
+        config_id INTEGER NOT NULL DEFAULT 0,
+        site_key TEXT NOT NULL,
+        vod_id TEXT NOT NULL,
+        source_title TEXT NOT NULL DEFAULT '',
+        flag_key TEXT NOT NULL DEFAULT '',
+        tmdb_id INTEGER NOT NULL DEFAULT 0,
+        media_type TEXT NOT NULL DEFAULT '',
+        anchors TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL,
+        UNIQUE(config_id, site_key, vod_id, source_title, flag_key)
+      );
+    ''');
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_episode_manual_bindings_scope '
+      'ON episode_manual_bindings(config_id, site_key, vod_id);',
     );
   }
 
@@ -2467,6 +2495,76 @@ class AppDatabase {
     _db.execute(
       'DELETE FROM ai_season_episode_mappings WHERE ${clauses.join(" AND ")};',
       args,
+    );
+    return _db.updatedRows;
+  }
+
+  // -------------------------------------------------------------------------
+  // 集级手动匹配（`episode_manual_match_service` 的持久化原语）
+  // -------------------------------------------------------------------------
+
+  /// 读取一条线路的手动匹配行。
+  Row? findEpisodeManualBindings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+  }) {
+    final rows = _db.select(
+      'SELECT * FROM episode_manual_bindings WHERE config_id=? AND '
+      'site_key=? AND vod_id=? AND source_title=? AND flag_key=? LIMIT 1;',
+      [configId, siteKey, vodId, sourceTitle, flagKey],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// 写入（upsert）一条线路的手动匹配锚点。
+  void upsertEpisodeManualBindings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+    required int tmdbId,
+    required String mediaType,
+    required List<Object?> anchors,
+    int? updatedAt,
+  }) {
+    _db.execute(
+      'INSERT INTO episode_manual_bindings(config_id, site_key, vod_id, '
+      'source_title, flag_key, tmdb_id, media_type, anchors, updated_at) '
+      'VALUES(?,?,?,?,?,?,?,?,?) '
+      'ON CONFLICT(config_id, site_key, vod_id, source_title, flag_key) '
+      'DO UPDATE SET tmdb_id=excluded.tmdb_id, '
+      'media_type=excluded.media_type, anchors=excluded.anchors, '
+      'updated_at=excluded.updated_at;',
+      [
+        configId,
+        siteKey,
+        vodId,
+        sourceTitle,
+        flagKey,
+        tmdbId,
+        mediaType,
+        jsonEncode(anchors),
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+  }
+
+  /// 删除一条线路的手动匹配行，返回删除行数。
+  int removeEpisodeManualBindings({
+    required int configId,
+    required String siteKey,
+    required String vodId,
+    required String sourceTitle,
+    required String flagKey,
+  }) {
+    _db.execute(
+      'DELETE FROM episode_manual_bindings WHERE config_id=? AND site_key=? '
+      'AND vod_id=? AND source_title=? AND flag_key=?;',
+      [configId, siteKey, vodId, sourceTitle, flagKey],
     );
     return _db.updatedRows;
   }

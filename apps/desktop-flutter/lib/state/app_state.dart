@@ -14,6 +14,8 @@ import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/detail_recommendation.dart';
 import '../core/detail_source_merge.dart';
+import '../core/episode_aggregation.dart';
+import '../core/episode_manual_match.dart';
 import 'detail_recommendation_state.dart';
 
 import 'dart:convert';
@@ -42,6 +44,7 @@ import '../services/ai_content/ai_content_completion.dart';
 import '../services/ai_completion_client.dart';
 import '../services/ai_integration.dart';
 import '../services/ai_season_mapping_service.dart';
+import '../services/episode_manual_match_service.dart';
 import '../services/ai_content_title_bridge.dart';
 import '../services/ai_episode_season_service.dart';
 import '../core/app_error.dart';
@@ -1099,6 +1102,17 @@ AiContentCompletion? aiContentCompletion,
   /// 同时挡住异常配置（比如线路 flag 每帧都变）把两张表撑成无界内存。
   static const int _aiSeasonBindingCapacity = 128;
 
+  /// 集级手动匹配的内存缓存：键与 AI 绑定同口径（配置|站点|影片|标题|线路）。
+  ///
+  /// 与 AI 表不同，这里**不做整批快照失效**：锚点自带 `sourceName`，
+  /// 每次刷新按名重定位、逐条判定失效（见 `EpisodeManualMatch.relocate`），
+  /// 因此线路小改（后段加集）不会把用户的人工结论整批丢掉。
+  final Map<String, List<EpisodeMatchAnchor>> _manualEpisodeAnchors = {};
+  final Map<String, int> _manualEpisodeDropped = {};
+
+  /// 手动锚点缓存容量：与 [_aiSeasonBindingCapacity] 同一量级与淘汰口径。
+  static const int _manualEpisodeCapacity = 128;
+
   /// 记一对「绑定结果 + 线路快照」，超限时按写入顺序淘汰最旧的一条。
   ///
   /// 两张表必须同进同出：只淘汰一张会留下没有绑定的快照，读侧
@@ -1122,20 +1136,74 @@ AiContentCompletion? aiContentCompletion,
 
   String _aiLineKey(Vod vod, VodPlayLine line) =>
       '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
-  VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) {
-    final result = aiMappingsFor(vod, line);
-    if (result == null) return line;
-    return applyAiEpisodeBindings(line, {
-      for (final binding in result.bindings)
-        binding.sourceIndex: (
-          season: binding.seasonNumber,
-          episode: binding.episodeNumber,
-        ),
-    });
+  /// 原始线路的聚合组：手动锚点的**身份口径**。
+  ///
+  /// 必须用未套任何绑定的线路算：锚点靠 `sourceName` 定位，先写 extra 再算组
+  /// 会让分组依赖绑定结果（自指）。聚合开关、倒序、区间都不改变这里的结果。
+  List<EpisodeGroup> _rawGroupsOf(VodPlayLine line) =>
+      EpisodeAggregation.build(line.episodes, scope: line.flag);
+
+  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) => _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
+
+  int manualEpisodeDroppedFor(Vod vod, VodPlayLine line) =>
+      _manualEpisodeDropped[_aiLineKey(vod, line)] ?? 0;
+
+  /// 手动锚点铺开后的逐集目标（未命中任何锚点的集不出现）。
+  Map<int, EpisodeMatchTarget> manualEpisodeTargetsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) {
+    final anchors = manualEpisodeAnchorsFor(vod, line);
+    if (anchors.isEmpty) return const {};
+    return EpisodeManualMatch.resolve(
+      groups: _rawGroupsOf(line),
+      anchors: anchors,
+      seasonEpisodeCounts: tmdb.seasonEpisodeCounts,
+    );
   }
 
+  /// 生效的逐集绑定：**手动锚点 > AI 逐集绑定**（AI 没覆盖到的集才用 AI）。
+  Map<int, ({int season, int episode})> episodeBindingsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) {
+    final bindings = <int, ({int season, int episode})>{
+      for (final entry in manualEpisodeTargetsFor(vod, line).entries)
+        entry.key: (
+          season: entry.value.seasonNumber,
+          episode: entry.value.episodeNumber,
+        ),
+    };
+    final ai = aiMappingsFor(vod, line);
+    if (ai != null) {
+      for (final binding in ai.bindings) {
+        bindings.putIfAbsent(
+          binding.sourceIndex,
+          () => (season: binding.seasonNumber, episode: binding.episodeNumber),
+        );
+      }
+    }
+    return bindings;
+  }
+
+  bool hasEpisodeBindings(Vod vod, VodPlayLine line) =>
+      episodeBindingsFor(vod, line).isNotEmpty;
+
+  VodPlayLine applyEpisodeBindingsToLine(Vod vod, VodPlayLine line) {
+    final bindings = episodeBindingsFor(vod, line);
+    if (bindings.isEmpty) return line;
+    return applyAiEpisodeBindings(line, bindings);
+  }
+
+  /// 旧名兼容：绑定现在是「手动 + AI」的合并结果，语义比原来更宽。
+  VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) =>
+      applyEpisodeBindingsToLine(vod, line);
+
   bool hasAiMappings(Vod vod, VodPlayLine line) =>
-      aiMappingsFor(vod, line)?.bindings.isNotEmpty ?? false;
+      hasEpisodeBindings(vod, line);
   AiSeasonBindingsResult? aiMappingsFor(Vod vod, VodPlayLine line) {
     final key = _aiLineKey(vod, line);
     if (_aiSeasonSnapshots[key] !=
@@ -1199,6 +1267,253 @@ AiContentCompletion? aiContentCompletion,
         result,
         seasonBindingsSnapshot(line.episodes, tmdb.seasonEpisodeCounts),
       );
+    }
+    // 手动锚点与 AI 绑定同批刷新：详情页只调一个入口，两条链路就不会不同步。
+    await refreshManualEpisodeMatches(vod, siteKey: siteKey);
+    _notifyIfAlive();
+  }
+
+  /// 线路在库里的 `flagKey`：与 [refreshAiSeasonMappings] 同一套口径。
+  String _dbFlagKeyOf(Vod vod, VodPlayLine line) {
+    final lines = playLinesOf(vod);
+    final unique = lines.where((item) => item.flag == line.flag).length == 1;
+    var index = lines.indexWhere((item) => identical(item, line));
+    if (index < 0) {
+      index = lines.indexWhere((item) => item.flag == line.flag);
+    }
+    return TmdbState.sourceLineOf(
+      line,
+      index < 0 ? 0 : index,
+      unique: unique,
+    ).flagKey;
+  }
+
+  void _rememberManualEpisodeAnchors(
+    String key,
+    List<EpisodeMatchAnchor> anchors,
+  ) {
+    if (anchors.isEmpty) {
+      _manualEpisodeAnchors.remove(key);
+      _manualEpisodeDropped.remove(key);
+      return;
+    }
+    if (_manualEpisodeAnchors.length >= _manualEpisodeCapacity &&
+        !_manualEpisodeAnchors.containsKey(key)) {
+      final oldest = _manualEpisodeAnchors.keys.first;
+      _manualEpisodeAnchors.remove(oldest);
+      _manualEpisodeDropped.remove(oldest);
+    }
+    _manualEpisodeAnchors[key] = List.unmodifiable(anchors);
+  }
+
+  void _writeManualEpisodeAnchors(
+    AppDatabase db,
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeMatchAnchor> anchors, {
+    String? siteKey,
+  }) {
+    final service = EpisodeManualMatchService(database: db);
+    final flagKey = _dbFlagKeyOf(vod, line);
+    final resolvedSiteKey = siteKey ?? _aiTmdbSiteKey;
+    if (anchors.isEmpty) {
+      service.clear(
+        configId: tmdbConfigId,
+        siteKey: resolvedSiteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      return;
+    }
+    service.save(
+      configId: tmdbConfigId,
+      siteKey: resolvedSiteKey,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+      flagKey: flagKey,
+      tmdbId: tmdb.identity?.tmdbId ?? 0,
+      mediaType: tmdb.identity?.mediaType.name ?? '',
+      anchors: anchors,
+    );
+  }
+
+  Future<void> _saveManualEpisodeAnchors(
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeMatchAnchor> anchors, {
+    String? siteKey,
+  }) async {
+    final db = _database;
+    if (db == null) return;
+    _writeManualEpisodeAnchors(db, vod, line, anchors, siteKey: siteKey);
+    _rememberManualEpisodeAnchors(_aiLineKey(vod, line), anchors);
+    _notifyIfAlive();
+  }
+
+  /// 手动把某一张卡片匹配到 `(season, episode)`，默认从此集起顺延。
+  Future<void> matchEpisodeManually({
+    required Vod vod,
+    required VodPlayLine line,
+    required int sourceIndex,
+    required String sourceName,
+    required int seasonNumber,
+    required int episodeNumber,
+    bool spread = true,
+    String? siteKey,
+  }) async {
+    final groups = _rawGroupsOf(line);
+    final position = groups.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == sourceIndex,
+      ),
+    );
+    if (position < 0) return;
+    // 同一组只留一个锚点：整组替换（组内多版本共享一条结论）。
+    final anchors = <EpisodeMatchAnchor>[
+      for (final existing in manualEpisodeAnchorsFor(vod, line))
+        if (!groups[position].versions.any(
+          (version) => version.sourceIndex == existing.sourceIndex,
+        ))
+          existing,
+      EpisodeMatchAnchor(
+        sourceIndex: sourceIndex,
+        sourceName: sourceName,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+        spread: spread,
+      ),
+    ];
+    await _saveManualEpisodeAnchors(vod, line, anchors, siteKey: siteKey);
+  }
+
+  /// 撤销手动匹配：`sourceIndex` 为 null 时清掉**整条线路**。
+  Future<void> clearManualEpisodeMatch({
+    required Vod vod,
+    required VodPlayLine line,
+    int? sourceIndex,
+    String? siteKey,
+  }) async {
+    final anchors = manualEpisodeAnchorsFor(vod, line);
+    if (anchors.isEmpty) return;
+    if (sourceIndex == null) {
+      await _saveManualEpisodeAnchors(vod, line, const [], siteKey: siteKey);
+      return;
+    }
+    final groups = _rawGroupsOf(line);
+    final position = groups.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == sourceIndex,
+      ),
+    );
+    if (position < 0) return;
+    final groupIndexes = {
+      for (final version in groups[position].versions) version.sourceIndex,
+    };
+    await _saveManualEpisodeAnchors(vod, line, [
+      for (final existing in anchors)
+        if (!groupIndexes.contains(existing.sourceIndex)) existing,
+    ], siteKey: siteKey);
+  }
+
+  /// 读库并重定位手动锚点（与 [refreshAiSeasonMappings] 同一代际守卫）。
+  Future<void> refreshManualEpisodeMatches(
+    Vod vod, {
+    required String siteKey,
+  }) async {
+    final db = _database;
+    if (db == null || !tmdb.belongsTo(vod.vodId)) return;
+    final generation = tmdb.generation;
+    final detailGeneration = _detailRunId;
+    final service = EpisodeManualMatchService(database: db);
+    final lines = playLinesOf(vod);
+    final tmdbId = tmdb.identity?.tmdbId ?? 0;
+    final mediaType = tmdb.identity?.mediaType.name ?? '';
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final key = _aiLineKey(vod, line);
+      final flagKey = TmdbState.sourceLineOf(
+        line,
+        i,
+        unique: lines.where((item) => item.flag == line.flag).length == 1,
+      ).flagKey;
+      final scope = service.loadScope(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      // 作品身份变了（用户重新匹配了整部作品）：旧锚点指向另一部剧，整行清掉。
+      // 身份**未知**时不动：TMDB 这次没拿到身份（网络/额度）不能被当成"换了作品"，
+      // 否则一次抖动就删掉用户的人工结论。
+      final identityKnown = tmdbId > 0;
+      if (identityKnown &&
+          scope != null &&
+          (scope.tmdbId != tmdbId || scope.mediaType != mediaType)) {
+        service.clear(
+          configId: tmdbConfigId,
+          siteKey: siteKey,
+          vodId: vod.vodId,
+          sourceTitle: vod.vodName,
+          flagKey: flagKey,
+        );
+        _manualEpisodeAnchors.remove(key);
+        _manualEpisodeDropped.remove(key);
+        continue;
+      }
+      final stored = service.load(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      if (stored.isEmpty) {
+        _manualEpisodeAnchors.remove(key);
+        _manualEpisodeDropped.remove(key);
+        continue;
+      }
+      final dropped = <int>{};
+      final relocated = EpisodeManualMatch.relocate(
+        groups: _rawGroupsOf(line),
+        anchors: stored,
+        dropped: dropped,
+      );
+      if (dropped.isNotEmpty) {
+        // 失效锚点写回：不让库里挂着一批永远命中不到的结论。
+        if (relocated.isEmpty) {
+          service.clear(
+            configId: tmdbConfigId,
+            siteKey: siteKey,
+            vodId: vod.vodId,
+            sourceTitle: vod.vodName,
+            flagKey: flagKey,
+          );
+        } else {
+          service.save(
+            configId: tmdbConfigId,
+            siteKey: siteKey,
+            vodId: vod.vodId,
+            sourceTitle: vod.vodName,
+            flagKey: flagKey,
+            tmdbId: tmdbId,
+            mediaType: mediaType,
+            anchors: relocated,
+          );
+        }
+      }
+      _rememberManualEpisodeAnchors(key, relocated);
+      if (dropped.isEmpty) {
+        _manualEpisodeDropped.remove(key);
+      } else {
+        _manualEpisodeDropped[key] = dropped.length;
+      }
+    }
+    if (generation != tmdb.generation ||
+        detailGeneration != _detailRunId ||
+        _disposed) {
+      return;
     }
     _notifyIfAlive();
   }
