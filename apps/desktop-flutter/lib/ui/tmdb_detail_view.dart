@@ -813,17 +813,27 @@ class TmdbEpisodeHeader extends StatelessWidget {
           // 会把整行撑到 48，标题被居中后上下各多出 12——「选集」到区间条/
           // 卡片的缝就变成 22，而其它区块是 10（用户 2026-11-12 反馈
           // 「这部分的间距和其他的不一样」）。
-          _HeaderToggle(
-            buttonKey: const ValueKey('tmdb-episode-reverse'),
-            onPressed: onToggleReversed,
-            icon: reversed ? Icons.swap_vert : Icons.swap_vert,
-            label: reversed ? '倒序' : '正序',
+          // 这两个切换按钮原先既没 Tooltip、图标又画的是「点下去会变成什么」，
+          // 与旁边的「名称 / 聚合」不一致：用户 2026-11-21 截图反馈「剧集上方一对
+          // 不知道是啥的按钮状的东西」。现在标签与图标都只表达**当前状态**，
+          // 悬停说明点下去会做什么，四个按钮同一条规则。
+          Tooltip(
+            message: reversed ? '切换为正序排列' : '切换为倒序排列',
+            child: _HeaderToggle(
+              buttonKey: const ValueKey('tmdb-episode-reverse'),
+              onPressed: onToggleReversed,
+              icon: Icons.swap_vert,
+              label: reversed ? '倒序' : '正序',
+            ),
           ),
-          _HeaderToggle(
-            buttonKey: const ValueKey('tmdb-episode-view-mode'),
-            onPressed: onToggleGridMode,
-            icon: gridMode ? Icons.view_list : Icons.grid_view,
-            label: gridMode ? '网格' : '列表',
+          Tooltip(
+            message: gridMode ? '切换为列表视图' : '切换为网格视图',
+            child: _HeaderToggle(
+              buttonKey: const ValueKey('tmdb-episode-view-mode'),
+              onPressed: onToggleGridMode,
+              icon: gridMode ? Icons.grid_view : Icons.view_list,
+              label: gridMode ? '网格' : '列表',
+            ),
           ),
           if (onToggleNameMode != null)
             Tooltip(
