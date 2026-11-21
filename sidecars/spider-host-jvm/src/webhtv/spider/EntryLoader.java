@@ -136,8 +136,14 @@ public final class EntryLoader {
                 // 否则它会在 SidecarServer 构造（capabilities()）时以 Error 穿透 main，
                 // 进程退出码变成 1，违反「初始化失败必须 3」的契约。
                 type.getDeclaredMethods();
+                // 顺序很关键：壳类的**构造器**里就会调 `Init.getSpider(...)` → 我们的
+                // `DexNative.getSpider`。宿主 Context 必须在 newInstance **之前**交进去，
+                // 否则那一刻注入拿到的是 null，载荷的 `InitOrigin.context()` 仍然是 null，
+                // playerContent 里取 SharedPreferences 直接 NPE（实测 wex 系：首页能出、播放必失败）。
+                android.content.Context hostContext = newHostContext(siteDir);
+                com.github.catvod.spider.DexNative.setHostContext(hostContext);
                 Object instance = type.getDeclaredConstructor().newInstance();
-                spider = new CatVodSpiderAdapter(instance, newHostContext(siteDir));
+                spider = new CatVodSpiderAdapter(instance, hostContext);
             } catch (NoClassDefFoundError error) {
                 throw new IllegalArgumentException(
                         CatVodSpiderAdapter.unsupportedAndroidMessage(error), error);

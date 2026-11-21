@@ -22,8 +22,8 @@ import java.util.Map;
  *
  * <p>异常语义（诊断契约）：站源抛出的 {@code UnsupportedOperationException} /
  * {@code IllegalArgumentException} 原样上抛；{@code NoClassDefFoundError} 一类链接错误包成
- * {@code UnsupportedOperationException} 并**点名缺失的类**——这类站源依赖不在 P1-2 垫片清单内
- * 的 Android 类（多为 UI），用户需要看到「缺哪个类」，而不是笼统的初始化失败。
+ * {@code UnsupportedOperationException} 并保留实际错误种类与完整消息；只有明确的缺类错误
+ * 才点名缺失的依赖类，不从链接错误推断 Android/UI 兼容性。
  */
 public final class CatVodSpiderAdapter extends Spider {
 
@@ -43,6 +43,22 @@ public final class CatVodSpiderAdapter extends Spider {
         this.target = catVodSpider;
         this.context = context;
         this.targetClassName = catVodSpider.getClass().getName();
+    }
+
+    @Override
+    public boolean supportsProxyHttp() {
+        return com.github.catvod.spider.DexNative.proxyMethod(target.getClass()) != null;
+    }
+
+    @Override
+    public void attachProxyHttp() {
+        com.github.catvod.spider.DexNative.attachProxy(target.getClass());
+    }
+
+    @Override
+    public Object[] proxy(Map<String, String> params, CallContext context) {
+        context.checkCancelled();
+        return com.github.catvod.spider.DexNative.invokeProxy(target.getClass(), params);
     }
 
     // ------------------------------------------------------------ 生命周期
@@ -71,6 +87,10 @@ public final class CatVodSpiderAdapter extends Spider {
             }
             inited = true;
         } catch (InvocationTargetException error) {
+            // 反射边界先落完整栈再映射：mapFailure 会把异常**重新包一层**，
+            // 打包后的栈只剩「xxx 调用失败」的摘要与其 cause，站源自己的帧极易被上层
+            // 只打 message 的日志吃掉。这里落原始异常，栈里才有 at com.github.catvod...。
+            logThrown("init", error.getTargetException());
             // 必须走 mapFailure 而不是自己取最内层 cause：init 阶段碰 UI 的站源
             // （如 Live）抛的是 ClassNotFoundException: android.app.Activity，
             // 只看最内层就会把它当成普通异常，用户拿不到「缺哪个 Android 类」这条信息。
@@ -197,11 +217,34 @@ public final class CatVodSpiderAdapter extends Spider {
                 vipFlags.add(String.valueOf(item));
             }
         }
-        Object raw = call(
-                "playerContent",
-                new Class<?>[]{String.class, String.class, List.class},
-                flag, id, vipFlags);
-        return Result.normalizePlay(asJsonObject("playerContent", raw), flag);
+        long startedNanos = System.nanoTime();
+        long playerContentMs = 0;
+        long normalizeMs = 0;
+        String status = "error";
+        try {
+            Object raw;
+            try {
+                raw = call("playerContent",
+                        new Class<?>[]{String.class, String.class, List.class}, flag, id, vipFlags);
+            } finally {
+                playerContentMs = SidecarServer.elapsedMillis(startedNanos);
+            }
+            long normalizeNanos = System.nanoTime();
+            try {
+                Map<String, Object> result = Result.normalizePlay(asJsonObject("playerContent", raw), flag);
+                status = "ok";
+                return result;
+            } finally {
+                normalizeMs = SidecarServer.elapsedMillis(normalizeNanos);
+            }
+        } catch (java.util.concurrent.CancellationException error) {
+            status = "cancel";
+            throw error;
+        } finally {
+            SidecarServer.logTiming("catvod-play", "play", siteKey, context.requestId(), status,
+                    SidecarServer.elapsedMillis(startedNanos),
+                    Map.of("playerContentMs", playerContentMs, "normalizeMs", normalizeMs));
+        }
     }
 
     /**
@@ -214,6 +257,7 @@ public final class CatVodSpiderAdapter extends Spider {
     @Override
     public List<String> capabilities() {
         List<String> declared = new ArrayList<>();
+        if (supportsProxyHttp()) declared.add("proxy");
         if (implementsOn("homeContent", boolean.class)) {
             declared.add("home");
         }
@@ -276,9 +320,26 @@ public final class CatVodSpiderAdapter extends Spider {
         try {
             return resolved.invoke(target, arguments);
         } catch (InvocationTargetException error) {
+            logThrown(method, error.getTargetException());
             throw mapFailure(method, error.getTargetException());
         } catch (IllegalAccessException error) {
             throw new IllegalStateException(method + " 调用失败：" + error, error);
+        }
+    }
+
+    /**
+     * 站源方法抛出的原始异常 → stderr 完整栈（诊断契约）。
+     *
+     * <p>为什么在反射边界而不是 {@code SidecarServer}：映射层把异常换成
+     * {@code IllegalStateException("xxx 调用失败：…")} 之后，栈里只剩宿主帧；用户要
+     * 定位「是不是我方 dex 翻译产物错了」，必须看到站源方法名与行号。
+     * 日志只能走 stderr（stdout 被协议独占，§9.3.1）。
+     */
+    private void logThrown(String method, Throwable thrown) {
+        Ipc.log("[webhtv] method=" + method + " site=" + siteKey + " 站源抛出：" + thrown);
+        if (thrown != null) {
+            thrown.printStackTrace(System.err);
+            System.err.flush();
         }
     }
 
@@ -295,10 +356,10 @@ public final class CatVodSpiderAdapter extends Spider {
             return illegal;
         }
         // 链接错误必须查**整条 cause 链**：NoClassDefFoundError 的 cause 是 ClassNotFoundException，
-        // 若只看「最内层 cause」就会落到普通异常分支，丢掉「缺哪个 Android 类」这条唯一有用的信息。
+        // 若只看「最内层 cause」就会落到普通异常分支，丢掉实际链接错误的种类与消息。
         LinkageError linkage = findLinkageError(thrown);
         if (linkage != null) {
-            return new UnsupportedOperationException(unsupportedAndroidMessage(linkage), linkage);
+            return new UnsupportedOperationException(unsupportedAndroidMessage(linkage), thrown);
         }
         if (root instanceof Error error) {
             if (root instanceof VirtualMachineError) {
@@ -322,13 +383,16 @@ public final class CatVodSpiderAdapter extends Spider {
         return null;
     }
 
-    /**
-     * 把「缺 Android 类」的链接错误翻译成用户能自查的一句话。
-     * 加载阶段（{@link EntryLoader}）与调用阶段（本类）共用同一措辞。
-     */
+    /** 加载与调用共用诊断；链接错误不等同于缺失 Android 类。 */
     static String unsupportedAndroidMessage(Throwable error) {
-        return "该站源依赖不支持的 Android 类：" + missingClass(error)
-                + "（P1-2 只支持不碰 UI 的站源）";
+        String missing = missingClass(error);
+        String detail = error.getClass().getName();
+        if (error.getMessage() != null && !error.getMessage().isBlank()) {
+            detail += ": " + error.getMessage();
+        }
+        return missing == null
+                ? "该站源运行失败：" + detail
+                : "该站源缺少依赖类：" + missing + "（" + detail + "）";
     }
 
     private static Throwable innermost(Throwable error) {
@@ -339,16 +403,20 @@ public final class CatVodSpiderAdapter extends Spider {
         return current;
     }
 
-    /** 从链接错误的消息里取出缺失的类名（{@code NoClassDefFoundError} 的消息就是内部名）。 */
+    /** 仅 NoClassDefFoundError 的纯类名消息能证明缺类；初始化失败等消息原样保留。 */
     private static String missingClass(Throwable error) {
+        if (!(error instanceof NoClassDefFoundError)) {
+            return null;
+        }
         String message = error.getMessage();
-        if (message == null || message.isBlank()) {
-            return error.getClass().getName();
+        if (message == null) {
+            return null;
         }
         String text = message.trim();
-        int space = text.indexOf(' ');
-        String token = space > 0 ? text.substring(0, space) : text;
-        return token.replace('/', '.');
+        if (!text.matches("[\\p{javaJavaIdentifierPart}]+(?:[./][\\p{javaJavaIdentifierPart}]+)+")) {
+            return null;
+        }
+        return text.replace('/', '.');
     }
 
     // ---------------------------------------------------------------- JSON

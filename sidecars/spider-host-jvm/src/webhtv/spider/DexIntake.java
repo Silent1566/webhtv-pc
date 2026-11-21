@@ -44,14 +44,30 @@ import org.objectweb.asm.Opcodes;
 public final class DexIntake {
     private DexIntake() {}
 
-    /** 转译产物：{@code bundle} 为 class jar；{@code cached}=true 表示复用了已有产物，未重新转译。 */
-    public record Result(Path bundle, boolean cached, int classCount, String sourceSha256) {}
+    /**
+     * 转译产物：{@code bundle} 为 class jar；{@code cached}=true 表示复用了已有产物，未重新转译。
+     *
+     * <p>{@code repairedClasses} / {@code stubbedMethods} 来自 {@link DexRepair}：dex2jar 对混淆代码
+     * 的语义误译被修正了多少。宿主把它们如实写进 intake 记录，出问题时可据此区分「转译成功」与
+     * 「转译但没修到」。缓存命中时从 {@code intake-dex.json} 回读，保证两种情况口径一致。
+     */
+    public record Result(
+            Path bundle,
+            boolean cached,
+            int classCount,
+            String sourceSha256,
+            int repairedClasses,
+            int stubbedMethods,
+            int retargetedCalls,
+            int retypedInstantiations,
+            List<String> records) {}
 
     /**
      * 失败阶段固定为以下四种之一，异常消息形如 {@code "<阶段>: <细节>"}。
      *
      * <p>调用方据此决定处置：{@code dex-读取} 说明源 jar 本身不可用；{@code dex-转译} 说明
      * dex 内容或 dex2jar 依赖有问题；{@code dex-帧修复} 说明字节码重写阶段失败；
+     * {@code dex-修复} 说明语义修复阶段本身不可用（单类修复失败不会走到这里）；
      * {@code dex-落盘} 说明站点目录不可写。绝不抛笼统的「初始化失败」。
      */
     public static final class DexIntakeException extends Exception {
@@ -75,6 +91,9 @@ public final class DexIntake {
     private static final String STAGE_READ = "dex-读取";
     private static final String STAGE_TRANSLATE = "dex-转译";
     private static final String STAGE_FRAMES = "dex-帧修复";
+
+    /** 语义修复阶段名；{@link DexRepair} 也用它，因此不是 private。 */
+    static final String STAGE_REPAIR = "dex-修复";
     private static final String STAGE_WRITE = "dex-落盘";
 
     private static final String DEX_ENTRY = "classes.dex";
@@ -145,8 +164,13 @@ public final class DexIntake {
                 && cached.sourceSha256.equals(sourceSha)
                 && Files.isRegularFile(bundle)
                 && cached.bundleSha256.equals(sha256(bundle, STAGE_READ))) {
-            Ipc.log("dex 产物缓存命中 bundle=" + bundle + " classes=" + cached.classCount);
-            return new Result(bundle, true, cached.classCount, sourceSha);
+            Ipc.log("dex 产物缓存命中 bundle=" + bundle + " classes=" + cached.classCount
+                    + " repairedClasses=" + cached.repairedClasses
+                    + " stubbedMethods=" + cached.stubbedMethods
+                    + " retypedInstantiations=" + cached.retypedInstantiations);
+            return new Result(bundle, true, cached.classCount, sourceSha,
+                    cached.repairedClasses, cached.stubbedMethods, cached.retargetedCalls,
+                    cached.retypedInstantiations, cached.records);
         }
 
         try {
@@ -161,13 +185,24 @@ public final class DexIntake {
             work = Files.createTempDirectory(bundleDir, ".dex-intake-");
             Path raw = work.resolve("raw.jar");
             Path fixed = work.resolve("fixed.jar");
+            Path repaired = work.resolve("repaired.jar");
             translateDex(dex, archive, raw);
             int classCount = fixFrames(raw, fixed);
-            moveAtomically(fixed, bundle);
+            // 语义修复必须排在帧修复之后：帧修复重算的是 dex2jar 原样的方法体，而修复会新增/改写
+            // 方法体（桩体、调用点改指向），只有把它放在最后，产物的帧才与最终字节码一致。
+            DexRepair.Report repair = DexRepair.repair(fixed, repaired, dex);
+            moveAtomically(repaired, bundle);
             String bundleSha = sha256(bundle, STAGE_WRITE);
-            writeRecord(record, sourceSha, bundleSha, classCount, dexSize);
-            Ipc.log("dex 转译完成 bundle=" + bundle + " classes=" + classCount + " dexEntrySize=" + dexSize);
-            return new Result(bundle, false, classCount, sourceSha);
+            writeRecord(record, sourceSha, bundleSha, classCount, dexSize, repair);
+            Ipc.log("dex 转译完成 bundle=" + bundle + " classes=" + classCount
+                    + " repairedClasses=" + repair.repairedClasses()
+                    + " stubbedMethods=" + repair.stubbedMethods()
+                    + " retargetedCalls=" + repair.retargetedCalls()
+                    + " retypedInstantiations=" + repair.retypedInstantiations()
+                    + " dexEntrySize=" + dexSize);
+            return new Result(bundle, false, classCount, sourceSha,
+                    repair.repairedClasses(), repair.stubbedMethods(), repair.retargetedCalls(),
+                    repair.retypedInstantiations(), repair.records());
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_WRITE, "写入产物失败：" + error, error);
         } finally {
@@ -405,9 +440,22 @@ public final class DexIntake {
 
     // ---------------------------------------------------------------- 产物记录与文件
 
-    private record Cached(String sourceSha256, String bundleSha256, int classCount) {}
+    private record Cached(
+            String sourceSha256,
+            String bundleSha256,
+            int classCount,
+            int repairedClasses,
+            int stubbedMethods,
+            int retargetedCalls,
+            int retypedInstantiations,
+            List<String> records) {}
 
-    /** 记录损坏只说明缓存不可用，不代表源不可转译：按未命中处理，重转一次即可。 */
+    /**
+     * 记录损坏只说明缓存不可用，不代表源不可转译：按未命中处理，重转一次即可。
+     *
+     * <p>{@code repairVersion} 对不上时同样按未命中处理：产物口径变了（新增了语义修复），
+     * 旧产物即便 SHA 相同也不能复用，否则修复永远跑不到真实 payload 上。
+     */
     private static Cached readRecord(Path record) {
         if (!Files.isRegularFile(record)) {
             return null;
@@ -420,6 +468,7 @@ public final class DexIntake {
             Object source = map.get("sourceSha256");
             Object bundle = map.get("bundleSha256");
             Object count = map.get("classCount");
+            Object version = map.get("repairVersion");
             if (source == null || bundle == null || !(count instanceof Number number)) {
                 return null;
             }
@@ -427,20 +476,58 @@ public final class DexIntake {
             if (classCount <= 0) {
                 return null;
             }
-            return new Cached(String.valueOf(source), String.valueOf(bundle), classCount);
+            if (!(version instanceof Number repairVersion) || repairVersion.intValue() != DexRepair.VERSION) {
+                Ipc.log(STAGE_READ + ": 产物是旧修复口径（repairVersion=" + version
+                        + "，当前 " + DexRepair.VERSION + "），重新转译 " + record);
+                return null;
+            }
+            int repairedClasses = intField(map.get("repairedClasses"));
+            int stubbedMethods = intField(map.get("stubbedMethods"));
+            int retargetedCalls = intField(map.get("retargetedCalls"));
+            int retypedInstantiations = intField(map.get("retypedInstantiations"));
+            List<String> records = new ArrayList<>();
+            if (map.get("records") instanceof List<?> list) {
+                for (Object item : list) {
+                    // 与 DexRepair.RECORD_LIMIT 同一口径：缓存命中和当场转译必须报出同样多的记录，
+                    // 否则「为什么没修」的记录会在第二次导入时凭空消失。
+                    if (records.size() >= DexRepair.RECORD_LIMIT) {
+                        break;
+                    }
+                    records.add(String.valueOf(item));
+                }
+            }
+            return new Cached(String.valueOf(source), String.valueOf(bundle), classCount,
+                    repairedClasses, stubbedMethods, retargetedCalls, retypedInstantiations,
+                    List.copyOf(records));
         } catch (Exception error) {
             Ipc.log(STAGE_READ + ": 产物记录不可读，按未命中处理 " + record + "（" + error + "）");
             return null;
         }
     }
 
+    private static int intField(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
     private static void writeRecord(
-            Path record, String sourceSha, String bundleSha, int classCount, long dexSize)
+            Path record,
+            String sourceSha,
+            String bundleSha,
+            int classCount,
+            long dexSize,
+            DexRepair.Report repair)
             throws IOException {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("sourceSha256", sourceSha);
         data.put("bundleSha256", bundleSha);
         data.put("classCount", classCount);
+        // repairVersion 必须与产物一起落盘：只写 SHA 无法表达「产物口径」变了。
+        data.put("repairVersion", DexRepair.VERSION);
+        data.put("repairedClasses", repair.repairedClasses());
+        data.put("stubbedMethods", repair.stubbedMethods());
+        data.put("retargetedCalls", repair.retargetedCalls());
+        data.put("retypedInstantiations", repair.retypedInstantiations());
+        data.put("records", repair.records());
         data.put("translatedAt", Instant.now().toString());
         data.put("dexEntrySize", dexSize);
         writeAtomically(record, Json.write(data).getBytes(StandardCharsets.UTF_8));
