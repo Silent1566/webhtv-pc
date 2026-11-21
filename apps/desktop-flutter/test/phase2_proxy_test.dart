@@ -535,10 +535,16 @@ void main() {
       await _get(client, proxy.urlFor(session, upstream.uri('/media.bin')));
       // 日志写入发生在响应关闭之后，可能晚于客户端读完响应；
       // 先等到该次请求确实被记录，再做「不得泄露」断言，避免把竞态当成泄露。
-      final fingerprint = ProxySessionManager.fingerprintOf(session.token);
-      await _waitUntil(() => log.export().contains('token=$fingerprint'));
+      final completedRequest = 'host=127.0.0.1:${upstream.port} status=200';
+      await _waitUntil(() => log.export().contains(completedRequest));
       final text = log.export();
-      expect(text, contains('token=$fingerprint'));
+      expect(text, contains(completedRequest), reason: '必须记录本次成功代理请求');
+      expect(text, contains('token=<redacted>'));
+      expect(
+        text.contains(ProxySessionManager.fingerprintOf(session.token)),
+        isFalse,
+        reason: '统一日志脱敏也必须隐藏会话指纹',
+      );
       expect(text.contains(session.token), isFalse, reason: '日志不得出现 token 明文');
       expect(text.contains('SECRET-COOKIE'), isFalse);
       expect(text.contains('SECRET-TOKEN'), isFalse);
