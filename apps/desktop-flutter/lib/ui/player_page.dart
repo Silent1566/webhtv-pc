@@ -286,6 +286,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   LutStore get _lutStore => widget.state.lutStore;
   late PlayerController _controller;
   late PlaybackRequest _request;
+  VoidCallback? _releaseProxySession;
   bool _playLinesRequested = false;
   int _playLinesRevision = 0;
   String? _queueItemKey;
@@ -1581,6 +1582,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 若加载失败而不回滚，续播上下文（原集 + 原进度）就已丢失，
     // 用户看到的是「上一集失败 → 已经切到下一集」。
     final intent = _request;
+    _releaseProxySession = widget.state.captureProxySessionRelease(intent.url);
     final sessionRevision = _sessionRevision;
     // 轨道记忆的键里含线路与集，换集/换线路后必须重读，上一集的记忆绝不能带过来。
     _loadRememberedTrackChoices();
@@ -3396,6 +3398,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   @override
   void dispose() {
+    _releaseProxySession?.call();
+    _releaseProxySession = null;
     windowManager.removeListener(this);
     // 路由 pop / 页面被替换时，窗口级全屏必须成对收尾；
     // 正常的返回路径已由 PopScope 处理，这里是最后兜底（幂等）。

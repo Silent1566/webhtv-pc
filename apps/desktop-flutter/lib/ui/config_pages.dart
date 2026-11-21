@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../core/android_bridge.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
+import '../services/csp_jar_probe.dart';
 import '../services/realtime_sync_engine.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
@@ -16,6 +17,7 @@ import '../state/sync_state.dart';
 import 'common.dart';
 import 'config_source_status_view.dart';
 import 'settings_layout.dart';
+import 'shell_unpack_dialogs.dart';
 import 'toast.dart';
 import 'tokens.dart';
 
@@ -35,6 +37,9 @@ class _ConfigPageState extends State<ConfigPage> {
   bool _busy = false;
   String? _resultMessage;
   bool _resultIsError = false;
+
+  /// 加固壳解包引导是否正在跑：导入成功后自动弹，用户再点导入不能叠第二条。
+  bool _shellUnpackFlowOpen = false;
 
   /// 导入区是否展开。
   ///
@@ -95,38 +100,73 @@ class _ConfigPageState extends State<ConfigPage> {
                 '${widget.state.config?.lives.length ?? 0} 个直播源'
           : widget.state.lastError?.userMessage ?? '导入失败';
     });
+
+    // 导入成功且配置里有加固壳站源时，主动问一句「要不要现在解包」——
+    // 用户不必自己去设置里找运行时（此前站点列表只说「需下载」，找不到入口）。
+    if (succeeded) await _offerShellUnpackAfterImport();
+  }
+
+  /// 导入后的加固壳解包引导：确认框 → 多选（默认全选）→ 进度框。
+  ///
+  /// 全部可取消，取消后不下载运行时、不解包；同一时刻只允许一条这样的流程。
+  Future<void> _offerShellUnpackAfterImport() async {
+    if (_shellUnpackFlowOpen || !mounted) return;
+    _shellUnpackFlowOpen = true;
+    try {
+      // 探测是异步的：等它 settle 再读暂存提示，否则永远读不到。
+      await widget.state.shellTargetsProbe.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {},
+      );
+      if (!mounted) return;
+      final items = widget.state.takePendingShellUnpackPrompt();
+      if (items == null || items.isEmpty) return;
+      await showShellUnpackPrompt(
+        context,
+        siteCount: items.length,
+        runtimeInstalled: widget.state.shellRuntimeInstalled,
+        onConfirm: () async {
+          if (!mounted) return;
+          final selected = await showShellUnpackSelection(
+            context,
+            items: items,
+            runtimeStateLabel: widget.state.shellUnpackRuntimeStateLabel,
+          );
+          if (selected == null || selected.isEmpty || !mounted) return;
+          final ticks = StreamController<ShellUnpackTick>();
+          final progress = showShellUnpackProgress(
+            context,
+            jarCount: selected.length,
+            ticks: ticks.stream,
+          );
+          try {
+            await widget.state.unpackShellTargets(
+              selected,
+              onTick: (tick) {
+                if (!ticks.isClosed) ticks.add(tick);
+              },
+            );
+          } catch (error) {
+            // 失败要落在对话框里（阶段 + 原因），不许静默关掉。
+            if (!ticks.isClosed) ticks.addError(error);
+          } finally {
+            if (!ticks.isClosed) await ticks.close();
+          }
+          await progress;
+        },
+      );
+    } finally {
+      _shellUnpackFlowOpen = false;
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> _pickFile() async {
-    final controller = TextEditingController();
     final path = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('输入本地配置文件路径'),
-        content: SizedBox(
-          width: 520,
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: r'例如 C:\Users\you\config.json',
-            ),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (context) => const _ConfigFilePathDialog(),
     );
-    controller.dispose();
+    if (!mounted) return;
     if (path != null && path.trim().isNotEmpty) {
       _input.text = path.trim();
       await _import();
@@ -348,6 +388,49 @@ class _ConfigPageState extends State<ConfigPage> {
       ),
     );
   }
+}
+
+class _ConfigFilePathDialog extends StatefulWidget {
+  const _ConfigFilePathDialog();
+
+  @override
+  State<_ConfigFilePathDialog> createState() => _ConfigFilePathDialogState();
+}
+
+class _ConfigFilePathDialogState extends State<_ConfigFilePathDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('输入本地配置文件路径'),
+    content: SizedBox(
+      width: 520,
+      child: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: r'例如 C:\Users\you\config.json',
+        ),
+        onSubmitted: (value) => Navigator.of(context).pop(value),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.of(context).pop(_controller.text),
+        child: const Text('确定'),
+      ),
+    ],
+  );
 }
 
 /// TMDB 设置页（`docs/phase4/design/04` §10）。

@@ -33,6 +33,7 @@ import 'source_field.dart';
 import 'subtitle_settings_page.dart';
 import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
+import 'runtime_dependencies_page.dart';
 import 'tokens.dart';
 import 'toast.dart';
 
@@ -363,6 +364,18 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           subtitle: _healthSummary(state),
           onTap: () => _push(context, SiteHealthPage(state: state)),
         ),
+        // 加固壳解包运行时与 Python 运行时是**同一类东西**（本地程序运行时、
+        // 按需获取、只影响对应站源类型），原来前者在本组、后者在「维护」组：
+        // 用户从站源错误信息找过来时要先猜它在哪一组。现在收成一个区块入口，
+        // 后续同类依赖（Node/JRE）只在该区块里加一行。
+        SettingsNavRow(
+          key: const ValueKey('settings-runtime-dependencies-open'),
+          icon: Icons.memory_outlined,
+          title: '运行时与外部依赖',
+          subtitleKey: const ValueKey('settings-runtime-dependencies-summary'),
+          subtitle: _runtimeDependenciesSummary(),
+          onTap: () => _push(context, RuntimeDependenciesPage(state: state)),
+        ),
         SettingsNavRow(
           key: const ValueKey('settings-group-rules-open'),
           icon: Icons.account_tree_outlined,
@@ -686,6 +699,19 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   String _liveSummary() {
     final live = state.liveSettings;
     return '换源 ${_onOff(live.sourceFallback)} · 换线 ${_onOff(live.changeLine)}';
+  }
+
+  /// 「运行时与外部依赖」的一句话摘要：两类可选组件的当前状态各占一截。
+  ///
+  /// 只写「已装/未装」与「能不能用」：装了什么版本、缺哪个包属于区块页，
+  /// 分类页这一行只负责让用户看出「这里有没有东西要处理」。
+  String _runtimeDependenciesSummary() {
+    final status = state.pythonEnvironmentStatus;
+    final python = status == null
+        ? '未检测'
+        : (status.ready ? '已就绪' : '不可用');
+    return '加固壳解包运行时（${state.shellRuntimeInstalled ? '已装' : '未装'}）'
+        ' · Python 运行时（$python）';
   }
 
   /// 出站代理的一句话摘要（副标题用）。
