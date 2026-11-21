@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,7 +21,7 @@ import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
 
-/// 配置导入页：URL / 本地文件 / JSON 文本三种入口。
+/// 配置导入页：URL / 本地文件与猫源文件夹 / JSON 文本。
 class ConfigPage extends StatefulWidget {
   const ConfigPage({super.key, required this.state});
 
@@ -34,6 +35,7 @@ class _ConfigPageState extends State<ConfigPage> {
   final TextEditingController _input = TextEditingController();
   final TextEditingController _name = TextEditingController();
   bool _busy = false;
+  bool _pickingLocal = false;
   String? _resultMessage;
   bool _resultIsError = false;
 
@@ -73,7 +75,7 @@ class _ConfigPageState extends State<ConfigPage> {
     if (value.isEmpty) {
       setState(() {
         _resultIsError = true;
-        _resultMessage = '请输入配置 URL、本地文件路径或 JSON 文本';
+        _resultMessage = '请输入配置 URL、本地文件或文件夹路径或 JSON 文本';
       });
       return;
     }
@@ -98,39 +100,37 @@ class _ConfigPageState extends State<ConfigPage> {
     });
   }
 
-  Future<void> _pickFile() async {
-    final controller = TextEditingController();
-    final path = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('输入本地配置文件路径'),
-        content: SizedBox(
-          width: 520,
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: r'例如 C:\Users\you\config.json',
-            ),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (path != null && path.trim().isNotEmpty) {
-      _input.text = path.trim();
-      await _import();
+  Future<void> _pickLocal({bool folder = false}) async {
+    if (_busy || _pickingLocal) return;
+    setState(() => _pickingLocal = true);
+    try {
+      final String? path;
+      if (folder) {
+        path = await FilePicker.getDirectoryPath(dialogTitle: '选择猫源本地包文件夹');
+      } else {
+        final file = await FilePicker.pickFile(dialogTitle: '选择配置文件或猫源 ZIP 包');
+        if (file != null && file.path == null) {
+          throw StateError('所选文件没有可用的本地路径，请选择本地文件');
+        }
+        path = file?.path;
+      }
+      final selectedPath = path;
+      if (!mounted || selectedPath == null || selectedPath.trim().isEmpty) {
+        return;
+      }
+      setState(() {
+        _input.text = selectedPath;
+        _resultMessage = null;
+        _resultIsError = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _resultIsError = true;
+        _resultMessage = '无法打开本地选择器：$error。可手动输入文件或文件夹路径。';
+      });
+    } finally {
+      if (mounted) setState(() => _pickingLocal = false);
     }
   }
 
@@ -164,8 +164,8 @@ class _ConfigPageState extends State<ConfigPage> {
             ),
             if (_importExpanded) ...[
               const Text(
-                '支持三种导入方式：HTTP(S) 配置地址、本地文件路径、直接粘贴 JSON 文本。'
-                '导入失败不会覆盖已有配置。',
+                '支持 HTTP(S) 配置地址、本地文件、猫源文件夹或直接粘贴 JSON 文本。'
+                '选择文件或文件夹后点击「导入」；导入失败不会覆盖已有配置。',
               ),
               const SizedBox(height: 12),
               TextField(
@@ -190,7 +190,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   expands: true,
                   textAlignVertical: TextAlignVertical.top,
                   decoration: const InputDecoration(
-                    labelText: '配置 URL / 文件路径 / JSON 文本',
+                    labelText: '配置 URL / 本地路径 / JSON 文本',
                     border: OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
@@ -208,7 +208,7 @@ class _ConfigPageState extends State<ConfigPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton.icon(
-                    onPressed: _busy ? null : _import,
+                    onPressed: _busy || _pickingLocal ? null : _import,
                     icon: _busy
                         ? const SizedBox(
                             width: 16,
@@ -218,13 +218,37 @@ class _ConfigPageState extends State<ConfigPage> {
                         : const Icon(Icons.playlist_add_check),
                     label: const Text('导入'),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _pickFile,
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('选择本地文件'),
+                  MenuAnchor(
+                    menuChildren: [
+                      MenuItemButton(
+                        onPressed: () => _pickLocal(),
+                        child: const Text('选择文件（JSON / ZIP）'),
+                      ),
+                      MenuItemButton(
+                        onPressed: () => _pickLocal(folder: true),
+                        child: const Text('选择文件夹（猫源包）'),
+                      ),
+                    ],
+                    builder: (context, controller, child) =>
+                        OutlinedButton.icon(
+                          onPressed: _busy || _pickingLocal
+                              ? null
+                              : () => controller.isOpen
+                                    ? controller.close()
+                                    : controller.open(),
+                          icon: const Icon(Icons.folder_open),
+                          label: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('选择本地文件'),
+                              SizedBox(width: 4),
+                              Icon(Icons.arrow_drop_down, size: 18),
+                            ],
+                          ),
+                        ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: _busy ? null : _importFixture,
+                    onPressed: _busy || _pickingLocal ? null : _importFixture,
                     icon: const Icon(Icons.science_outlined),
                     label: const Text('使用仓库 fixture'),
                   ),
