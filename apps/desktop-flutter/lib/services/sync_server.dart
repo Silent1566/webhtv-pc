@@ -15,6 +15,11 @@
 /// - 请求体上限 8 MiB，读取超时 30 s；
 /// - 失败必须带明确状态码与 message（P5）：403/400/413 不得折叠成"同步成功"；
 /// - 日志不含片名、不含 `config` JSON、设备 uuid 只留前 4 位（§7）。
+///
+/// 推送接收（2026-11-20）：同一端口、同一实现，额外提供 `GET /`（推送页）与
+/// `POST /action?do=push`（对齐安卓 `Action.onPush`）。推送端点**没有凭据**
+/// （安卓 `PushPlayUrlDialog` 只发 `url` 一个字段），因此用两层门禁代替 uuid
+/// 白名单：`isPushEnabled` 开关 + 来源必须是回环/私有地址。
 library;
 
 import 'dart:async';
@@ -27,8 +32,10 @@ import '../core/android_sync.dart';
 import '../core/app_error.dart';
 import '../core/playback_identity.dart';
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import '../core/realtime_sync.dart';
 import 'log_service.dart';
+import 'push_page.dart';
 
 /// 服务端能对外提供的信息与能力（由状态层注入，服务端不直接碰 `AppState`）。
 class SyncServerHost {
@@ -40,6 +47,8 @@ class SyncServerHost {
     required this.onHistory,
     required this.onKeep,
     required this.onBackup,
+    this.isPushEnabled = _pushDisabled,
+    this.onPush = _pushNotAccepted,
     this.onPullRequest,
     this.realtimePull,
     this.pullToken,
@@ -58,6 +67,16 @@ class SyncServerHost {
 
   /// 对端是否在 uuid 白名单内（§5）。未授权一律 `403`。
   final bool Function(String peerUuid) isPeerAuthorized;
+
+  /// 是否接受局域网推送播放（默认 **false**）。
+  ///
+  /// 与 [isEnabled]（同步）分开：只想同步、不想被局域网推播的用户可以只开前者。
+  final bool Function() isPushEnabled;
+
+  /// 收到一次推送（`url`/`title` 已按 [parsePushFields] 解析）。
+  ///
+  /// 返回 `false` 表示状态层没接住（播放器/状态层未就绪），端点回 `503`。
+  final Future<bool> Function(PushParsed parsed) onPush;
 
   /// 应用一批历史，返回明细统计。
   ///
@@ -103,6 +122,11 @@ class SyncServerHost {
   final SyncPlaybackCounts Function()? playbackCounts;
 }
 
+/// 默认不提供推送能力：没显式注入的宿主一推开就 `403`。
+bool _pushDisabled() => false;
+
+Future<bool> _pushNotAccepted(PushParsed parsed) async => false;
+
 /// `sync/status` 的本机计数。
 typedef SyncPlaybackCounts = ({int items, int tombstones, int nextSince});
 
@@ -115,18 +139,29 @@ typedef SyncPullProvider =
 
 /// 一次请求的处理结果（供测试直接断言状态码与 message）。
 class SyncResponse {
-  const SyncResponse(this.statusCode, this.body, {this.isJson = false});
+  const SyncResponse(
+    this.statusCode,
+    this.body, {
+    this.isJson = false,
+    this.contentType,
+  });
 
   const SyncResponse.ok(String detail)
     : statusCode = 200,
       body = 'OK $detail',
-      isJson = false;
+      isJson = false,
+      contentType = null;
 
   final int statusCode;
   final String body;
 
   /// 是否以 `application/json` 返回（路径 B 的响应体是 JSON）。
   final bool isJson;
+
+  /// 显式 MIME（目前只有推送页用 `text/html; charset=utf-8`）。
+  ///
+  /// 为空时按 [isJson] 回落到 JSON / text/plain，既有端点行为不变。
+  final String? contentType;
 
   bool get isOk => statusCode == 200;
 
@@ -244,6 +279,9 @@ class SyncServer {
     try {
       final response = switch (path) {
         '/device' => _handleDevice(request),
+        // 推送页（安卓 `PushActivity` 的二维码页对应物）：手机上打开就是
+        // 「播放地址 + 剧名」两栏，提交后走 `do=push`。
+        '/' || '/index.html' => _handlePushPage(),
         '/action' => await _handleAction(request),
         // 路径 B（`design/01` §3.2.2）：安卓的「远端同步源」就是客户端定时拉
         // HTTP 端点，PC 暴露这个端点即可获得「安卓侧实时」。
@@ -256,7 +294,7 @@ class SyncServer {
         '/playback/identity/resolve' => await _handleIdentityResolve(request),
         _ => const SyncResponse(
           404,
-          '未知路径（仅支持 /device、/action、/api/playback/sync、'
+          '未知路径（仅支持 /、/device、/action、/api/playback/sync、'
           '/api/playback/sync/status 与 /api/playback/identity/resolve）',
         ),
       };
@@ -289,16 +327,92 @@ class SyncServer {
     'time': DateTime.now().millisecondsSinceEpoch,
   });
 
+  /// `GET /`：推送页（安卓 `assets/index.html` 的「推送」面板 + 剧名一栏）。
+  SyncResponse _handlePushPage() {
+    if (!host.isPushEnabled()) {
+      return const SyncResponse(404, '接收推送未开启（设置 · 连接 → 安卓设备接入里开启）');
+    }
+    if (!host.isEnabled()) {
+      return const SyncResponse(404, '局域网服务未开启（设置 · 连接 → 安卓设备接入里开启）');
+    }
+    return SyncResponse(
+      200,
+      buildPushPage(deviceName: host.deviceName),
+      contentType: 'text/html; charset=utf-8',
+    );
+  }
+
+  /// `POST /action?do=push`：把一次推送交给状态层。
+  ///
+  /// 与同步不同：**推送端点没有任何凭据**，所以门禁只能是「开关 + 网段」。
+  /// 开关关 → 403；来源不是回环/私有地址 → 403。
+  Future<SyncResponse> _handlePush(HttpRequest request) async {
+    if (!host.isPushEnabled()) {
+      return const SyncResponse(403, '接收推送未开启（设置 · 连接 → 安卓设备接入里开启）');
+    }
+    if (!host.isEnabled()) {
+      return const SyncResponse(403, '局域网服务未开启（设置 · 连接 → 安卓设备接入里开启）');
+    }
+    final remote = request.connectionInfo?.remoteAddress;
+    if (remote != null && !isLanOrLoopback(remote)) {
+      log.warning('推送被拒绝：来源不是局域网地址', scope: 'sync');
+      return const SyncResponse(403, '仅接受局域网内的推送');
+    }
+    var fields = <String, String>{};
+    if (request.method == 'POST') {
+      final body = await _readBody(request);
+      if (body == null) {
+        return SyncResponse(
+          413,
+          '请求体超过上限 ${syncMaxPayloadBytes ~/ (1024 * 1024)} MiB',
+        );
+      }
+      final parsed = _parseForm(request, body);
+      if (parsed == null) {
+        return const SyncResponse(
+          415,
+          '推送只接受 application/x-www-form-urlencoded（字段 url、title）',
+        );
+      }
+      fields = parsed.fields;
+    } else if (request.method != 'GET') {
+      return const SyncResponse(405, '推送只接受 GET 或 POST');
+    }
+
+    final query = request.uri.queryParameters;
+    final url = (fields['url'] ?? query['url'] ?? '').trim();
+    final title = (fields['title'] ?? query['title'] ?? '').trim();
+    // `url` 里也可能带安卓的 `地址|剧名` 语法（安卓粘贴框就是这么发的）。
+    final parsed = parsePushFields(url: url, title: title);
+    if (parsed.url.isEmpty) {
+      return const SyncResponse(400, '缺少 url（推送需要播放地址）');
+    }
+    final accepted = await host.onPush(parsed);
+    if (!accepted) {
+      return const SyncResponse(503, '推送未被接受（播放器或状态层未就绪）');
+    }
+    // 日志不写完整地址（可能带签名参数）：只留 scheme + host。
+    log.info(
+      '收到推送：${redactPushUrl(parsed.url)} 剧名=${parsed.hasExplicitTitle ? '有' : '无'}',
+      scope: 'sync',
+    );
+    return const SyncResponse(200, 'OK push');
+  }
+
   /// `POST /action?do=sync&mode=…&type=…`（`design/02` §3.1 / §4.2）。
   Future<SyncResponse> _handleAction(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    // 推送（安卓 `Action.onPush`）。放在 `do=sync` 之前：它与同步是两条互不
+    // 相关的链路，且**不走** uuid 白名单（安卓推送不带任何设备标识）；GET 也认
+    // ——安卓的 NanoHTTPD 对 `/action` 两种方法都取 params，curl 只会发 GET。
+    if (params['do'] == 'push') return await _handlePush(request);
     if (request.method != 'POST') {
       return const SyncResponse(405, '仅支持 POST');
     }
-    final params = request.uri.queryParameters;
     if (params['do'] != 'sync') {
       return const SyncResponse(
         400,
-        '仅支持 do=sync（PC 不实现 file/push/cast 等安卓本机操作）',
+        '仅支持 do=sync 与 do=push（PC 不实现 file/cast 等安卓本机操作）',
       );
     }
 
@@ -734,9 +848,11 @@ class SyncServer {
     try {
       request.response
         ..statusCode = response.statusCode
-        ..headers.contentType = response.isJson
-            ? ContentType('application', 'json', charset: 'utf-8')
-            : ContentType('text', 'plain', charset: 'utf-8')
+        ..headers.contentType = response.contentType == null
+            ? (response.isJson
+                  ? ContentType('application', 'json', charset: 'utf-8')
+                  : ContentType('text', 'plain', charset: 'utf-8'))
+            : ContentType.parse(response.contentType!)
         ..write(response.body);
       await request.response.close();
     } on Object {
@@ -773,6 +889,54 @@ class SyncServer {
     }
     return null;
   }
+}
+
+/// 日志里的推送地址：只留 scheme + host，去掉路径/查询/片段。
+///
+/// 推送地址常带时效签名，整条写进日志等于把凭据留在磁盘上。
+String redactPushUrl(String value) {
+  final text = value.trim();
+  if (text.isEmpty) return '';
+  final uri = Uri.tryParse(text);
+  if (uri == null || uri.host.isEmpty) return text;
+  return '${uri.scheme}://${uri.host}';
+}
+
+/// 来源地址是否属于本机/局域网（推送第二层门禁）。
+///
+/// 安卓推送不带任何设备标识，uuid 白名单用不上；退一步只接受**私有网段与
+/// 回环**来源，避免把"接收推送"变成公网可达的播放触发器。
+bool isLanOrLoopback(InternetAddress address) {
+  if (address.isLoopback) return true;
+  final raw = address.rawAddress;
+  if (address.type == InternetAddressType.IPv4) {
+    if (raw.length < 4) return false;
+    final a = raw[0];
+    final b = raw[1];
+    if (a == 10) return true;
+    if (a == 172 && b >= 16 && b <= 31) return true;
+    if (a == 192 && b == 168) return true;
+    // 169.254/16 链路本地：某些直连场景会用到。
+    if (a == 169 && b == 254) return true;
+    return false;
+  }
+  if (raw.length == 16) {
+    // fe80::/10 链路本地。
+    if (raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80) return true;
+    // fc00::/7 唯一本地地址。
+    if ((raw[0] & 0xfe) == 0xfc) return true;
+    // ::ffff:a.b.c.d 映射地址：按内嵌的 IPv4 判。
+    final mapped =
+        raw.take(10).every((byte) => byte == 0) &&
+        raw[10] == 0xff &&
+        raw[11] == 0xff;
+    if (mapped) {
+      return isLanOrLoopback(
+        InternetAddress.fromRawAddress(raw.sublist(12)),
+      );
+    }
+  }
+  return false;
 }
 
 /// 请求体字段。

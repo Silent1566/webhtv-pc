@@ -1496,7 +1496,12 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('开启局域网同步服务'),
-          content: Text(_sync.serverBindHint),
+          // 只说"可以再开"，不能说成"推送已开启"：这一步只动同步服务语义。
+          content: Text(
+            '${_sync.serverBindHint}\n\n'
+            '开启后可在下方「接收推送播放」里允许局域网设备把播放地址推给这台 PC；'
+            '只做同步、不需要别人推给你播的用户不用开它。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -1512,6 +1517,46 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
       if (confirmed != true) return;
     }
     await _sync.setServerEnabled(value);
+  }
+
+  /// 推送页地址行：开启接收推送后，手机要打开的地址（可选中 + 一键复制）。
+  ///
+  /// 地址为空（服务未在监听）时返回空列表：`pushPageUrl` 已用 `null` 表达了
+  /// "现在没有可用地址"，UI 不再自造一行空占位。
+  List<Widget> _receivePushAddress(ThemeData theme, SyncState sync) {
+    final url = sync.pushPageUrl;
+    if (!sync.receivePushEnabled || url == null || url.isEmpty) {
+      return const [];
+    }
+    return [
+      Padding(
+        padding: const EdgeInsets.only(left: 16, right: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: SelectableText(
+                url,
+                key: const ValueKey('receive-push-url'),
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('receive-push-copy'),
+              tooltip: '复制推送页地址',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () => Clipboard.setData(ClipboardData(text: url)),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+        child: Text(
+          '手机和 PC 需在同一局域网；Windows 防火墙可能拦截，放行后手机才连得上。',
+          style: theme.textTheme.bodySmall,
+        ),
+      ),
+    ];
   }
 
   @override
@@ -1666,6 +1711,23 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                 value: sync.serverEnabled,
                 onChanged: sync.busy ? null : _toggleServer,
               ),
+              // 只读状态层：关闭服务时接收推送由 `SyncState` 一并落下去，
+              // 页面自己存一个 bool 就会出现"看起来还开着、手机却连不上"。
+              SwitchListTile(
+                key: const ValueKey('android-receive-push'),
+                title: const Text('接收推送播放'),
+                subtitle: const Text(
+                  '默认关闭：开启后局域网内任何设备都能把播放地址推给这台 PC'
+                  '（安卓 App 的推送/投屏入口可直接选这台 PC，'
+                  '手机浏览器打开下面的地址也行）；只接受私有网段来源；'
+                  '只同步不推送的用户可只开上面的服务开关。',
+                ),
+                value: sync.receivePushEnabled,
+                onChanged: sync.busy
+                    ? null
+                    : (value) => sync.setReceivePushEnabled(value),
+              ),
+              ..._receivePushAddress(theme, sync),
               SwitchListTile(
                 key: const ValueKey('android-sync-push'),
                 title: const Text('向安卓推送'),

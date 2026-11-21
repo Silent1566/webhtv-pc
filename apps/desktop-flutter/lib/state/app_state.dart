@@ -66,6 +66,7 @@ import '../services/following_service.dart';
 import '../services/following_air_time_service.dart';
 import '../services/notification_service.dart';
 import '../services/session_recovery_store.dart';
+import '../services/push_site_service.dart';
 import '../services/sniff_runtime.dart';
 import '../core/history_aggregation.dart';
 import '../core/history_grouping.dart';
@@ -77,6 +78,7 @@ import '../core/osd_config.dart';
 import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_request.dart';
 import '../core/playback_lines.dart';
 import '../core/playback_platform.dart';
 import '../core/player_buttons.dart';
@@ -99,8 +101,10 @@ import '../core/subtitle_style.dart';
 import '../core/tmdb_config.dart';
 import '../core/viewing_metadata.dart';
 import '../core/tmdb_subscription.dart';
+import '../core/push_parser.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
+import '../core/tmdb_title.dart';
 import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
 import '../services/lut_store.dart';
@@ -1250,6 +1254,24 @@ AiContentCompletion? aiContentCompletion,
     // 直接用站点声明的身份），这里原样透传上去。
     TmdbIdentity? knownIdentity,
   }) async {
+    // 推送标题守卫：推送源返回的名字常是网盘地址/文件名，不要拿它去自动匹配，
+    // 否则会把垃圾名字写进匹配表、还可能顶掉用户手动指定的结论。
+    // 已经有手动结论时仍然放行（详情页要显示用户选的那一部）。
+    if (siteKey == pushSiteKey && !shouldAutoMatchPushTitle(vod.vodName)) {
+      var manual = false;
+      try {
+        manual = _database != null &&
+            _ensureTmdbIdentityService().cachedManual(
+                  siteKey: siteKey,
+                  vodId: vod.vodId,
+                  sourceTitle: vod.vodName,
+                ) !=
+                null;
+      } catch (error) {
+        log.debug('推送手动匹配查询失败：$error', scope: 'tmdb');
+      }
+      if (!manual) return;
+    }
     final run = ++_aiLoadRun;
     _aiTmdbSiteKey = siteKey;
     await tmdb.loadForVod(
@@ -5674,6 +5696,10 @@ AiContentCompletion? aiContentCompletion,
     // 合成条目（推荐回退页）没有任何站源身份：拿空 `vod_id` 去请求详情只会换来
     // 一条业务错误，所以干脆不发请求，只跑 TMDB 链（见下面的 early return）。
     final synthetic = vod.vodId.isEmpty;
+    // 推送手填的剧名（Vod.extra）：压过推送源返回的片名，避免名字被网盘地址覆盖、
+    // 进而让 TMDB 拿 URL 再匹配一次把已有匹配清掉。
+    final pushNameOverride =
+        (vod.extra[pushDisplayNameExtraKey] as String?)?.trim() ?? '';
     if (service == null && !synthetic) return;
     final runId = ++_detailRunId;
     final captureAllowed = !incognito;
@@ -5768,7 +5794,13 @@ AiContentCompletion? aiContentCompletion,
       final returnedDetail = outcome.value.list.firstOrNull;
       final effective = returnedDetail == null
           ? vod
-          : mergeSourceDetailDisplay(detail: returnedDetail, listing: vod);
+          : mergeSourceDetailDisplay(
+              detail: returnedDetail,
+              listing: vod,
+              nameOverride: pushNameOverride,
+              // 推送身份固定用推送时的 id（见 merge 的注释）。
+              idOverride: site.key == pushSiteKey ? vod.vodId : null,
+            );
       _detailResult = returnedDetail == null
           ? outcome.value
           : outcome.value.copyWith(
@@ -6347,14 +6379,25 @@ AiContentCompletion? aiContentCompletion,
       siteKey: effectiveSiteKey,
       vod: vod,
     );
+    // 推送记录：海报与集名写**刮削后**的（对齐安卓 getInitialArtwork / 集数展示）。
+    // 推送源返回的往往是网盘 logo 与 "[2.44G] S01E01" 这类原始标签。
+    var historyPic = vod.vodPic;
+    var historyEpisodeName = episodeName;
+    if (effectiveSiteKey == pushSiteKey) {
+      final match = pushMatchedItem(vodId: vod.vodId, title: vod.vodName);
+      final poster = match?.posterUrl?.trim() ?? '';
+      if (poster.isNotEmpty) historyPic = poster;
+      final label = pushEpisodeLabel(episodeName);
+      if (label.isNotEmpty) historyEpisodeName = label;
+    }
     try {
       database.upsertHistory(
         siteKey: effectiveSiteKey,
         vodId: vod.vodId,
         vodName: vod.vodName,
-        vodPic: vod.vodPic,
+        vodPic: historyPic,
         flag: flag,
-        episodeName: episodeName,
+        episodeName: historyEpisodeName,
         episodeId: episodeId,
         positionMs: position.inMilliseconds,
         durationMs: duration.inMilliseconds,
@@ -6491,6 +6534,315 @@ AiContentCompletion? aiContentCompletion,
 
   /// 续播位置下限：小于 5 秒不恢复，避免“刚打开就跳”。
   static const Duration resumeThreshold = Duration(seconds: 5);
+
+  // -------------------------------------------------------------------------
+  // 推送接收（局域网推送 + 本机「推送…」输入）
+  // -------------------------------------------------------------------------
+  //
+  // 两条入口收同一个概念：安卓/手机经局域网推地址，以及 PC 上直接粘贴地址或
+  // 选本地文件。落地方式相同：解析 → 合成播放请求 → 壳层起播 → 异步匹配剧名。
+
+  /// 待播放的推送请求。
+  ///
+  /// 为什么不在状态层直接导航：状态层不碰 `Navigator`（与崩溃恢复
+  /// `pendingRecovery` 同一口径）。请求先落成数据，由 `AppShell` 投影成路由。
+  PlaybackRequest? _pendingPush;
+
+  /// 最近一次推送的原始解析结果：落点要区分"剧名是显式填的"还是地址兜底。
+  PushParsed? _pendingPushParsed;
+
+  PlaybackRequest? get pendingPush => _pendingPush;
+
+  PushParsed? get pendingPushParsed => _pendingPushParsed;
+
+  void clearPendingPush() {
+    if (_pendingPush == null && _pendingPushParsed == null) return;
+    _pendingPush = null;
+    _pendingPushParsed = null;
+    notifyListeners();
+  }
+
+  /// 站点在当前环境是否跑得起来（不联网，由 SpiderRouter 判定）。
+  SiteAvailability siteAvailabilityOf(Site site) => _router.classifySite(site);
+
+  /// 选一个「推送源」：先当前配置，再其它已保存配置（最近更新的优先）。
+  ///
+  /// 为什么放宽到跨配置：安卓只认当前配置里 key 恰为 push_agent 的站点，而用户的
+  /// 推送爬虫源经常配在别的配置里（实测："唐三的猫源" → nodejs_push）。选源时
+  /// **可用的优先**（安卓 JAR 站点在 PC 上不可用），同可用性下当前配置优先。
+  /// 返回 null 表示哪里都没有推送源，只能走合成详情。
+  PushSourceCandidate? pushSourceCandidate() {
+    final candidates = <PushSourceCandidate>[];
+    void collect(AppConfig? config, PlaybackSourceContext? context) {
+      if (config == null || context == null) return;
+      final site = pushSiteInConfig(config);
+      if (site == null) return;
+      var available = false;
+      try {
+        available = siteAvailabilityOf(site).available;
+      } catch (error) {
+        log.debug('推送源可用性判定失败：$error', scope: 'site');
+      }
+      candidates.add(
+        PushSourceCandidate(
+          site: site,
+          context: context,
+          active: identical(config, effectiveConfig),
+          available: available,
+        ),
+      );
+    }
+
+    final activeConfig = effectiveConfig;
+    final record = _activeRecord;
+    final service = _siteService;
+    if (activeConfig != null && record != null && service != null) {
+      collect(
+        activeConfig,
+        PlaybackSourceContext(
+          sourceKey: activeSourceKey,
+          record: record,
+          config: activeConfig,
+          service: service,
+        ),
+      );
+    }
+    final records = [..._configs]
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    for (final other in records) {
+      if (other.id == record?.id) continue;
+      final context = playbackContextFor(other.sourceKey);
+      collect(context?.config, context);
+    }
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) {
+      if (a.available != b.available) return a.available ? -1 : 1;
+      if (a.active != b.active) return a.active ? -1 : 1;
+      return 0;
+    });
+    return candidates.first;
+  }
+
+  /// 推送用的**合成站点上下文**（安卓 `SiteApi.pushDetail` 的 PC 对应物）。
+  ///
+  /// 配置里没有「推送」源时用它：把推送包成 `push_agent` 站点上的一条普通 vod，
+  /// 详情/播放都交给 [PushSiteService]。返回 `null` 表示连配置都没有——那种情况
+  /// 只能落到极简兜底页。
+  PlaybackSourceContext? pushSiteContext(PushParsed parsed) {
+    final base = effectiveConfig;
+    final record = activeRecord;
+    if (base == null || record == null) return null;
+    final site = Site(
+      key: pushSiteKey,
+      name: pushSourceName,
+      type: 1,
+      api: 'push://agent',
+    );
+    final config = base.copyWith(
+      sites: [...base.sites.where((item) => item.key != pushSiteKey), site],
+    );
+    return PlaybackSourceContext(
+      sourceKey: activeSourceKey,
+      record: record,
+      config: config,
+      service: PushSiteService(
+        appConfig: config,
+        router: _router,
+        database: _database,
+        parsed: parsed,
+      ),
+    );
+  }
+
+  /// 本机「推送…」（地址 + 剧名）：与局域网推送走同一条链路。
+  Future<bool> submitPush({required String url, String title = ''}) =>
+      _acceptPush(parsePushFields(url: url, title: title), from: '本机输入');
+
+  /// 局域网推送到达（`SyncStateHost` 的宿主能力，由 `SyncState` 调用）。
+  @override
+  Future<bool> onPushReceived(PushParsed parsed) =>
+      _acceptPush(parsed, from: '局域网推送');
+
+  /// 推送落地：本地路径走既有本地播放，地址走推送合成站点，随后异步匹配剧名。
+  Future<bool> _acceptPush(PushParsed parsed, {required String from}) async {
+    final raw = parsed.url.trim();
+    if (raw.isEmpty) {
+      _lastError = AppError(
+        AppErrorKind.playbackUrlMissing,
+        '推送需要一个播放地址',
+      );
+      notifyListeners();
+      return false;
+    }
+    var localPath = '';
+    if (looksLikeLocalMediaPath(raw)) {
+      final path = raw.toLowerCase().startsWith('file://')
+          ? (Uri.tryParse(raw)?.toFilePath() ?? raw)
+          : raw;
+      if (!File(path).existsSync()) {
+        _lastError = AppError(
+          AppErrorKind.playbackUrlMissing,
+          '本地文件不存在：$path',
+        );
+        notifyListeners();
+        return false;
+      }
+      localPath = path;
+    }
+    final request = pushPlaybackRequest(
+      parsed: PushParsed(url: raw, title: parsed.title),
+      localPath: localPath.isEmpty ? null : localPath,
+    );
+    _pendingPush = request;
+    _pendingPushParsed = parsed;
+    _lastError = null;
+    _notice = '收到（$from）：${request.title}';
+    // 日志不写地址（可能带签名参数）：只记"本地/远程"与是否有剧名。
+    log.info(
+      '推送已接收（$from）：本地=${localPath.isNotEmpty} '
+      '剧名=${parsed.hasExplicitTitle ? '有' : '无'}',
+      scope: 'player',
+    );
+    notifyListeners();
+    // 只有用户手填了剧名才做这一发预匹配：没填时用推送源解析出的名字，交给
+    // 常规 TMDB 管线（含标题清理与推送标题守卫），不要拿地址/文件名去搜。
+    if (parsed.hasExplicitTitle) unawaited(_autoMatchPush(request));
+    return true;
+  }
+
+  /// 推送剧名的一次自动匹配（`01` §5.4 推送标题守卫）。
+  ///
+  /// 只有「显式剧名 + 守卫放行 + TMDB 已配置」才发请求，否则**零请求**：拿地址
+  /// 或文件名去搜 TMDB 是纯浪费，还会把不该有的结论写进匹配表。
+  Future<void> _autoMatchPush(PlaybackRequest request) async {
+    if (_database == null || request.siteKey != pushSiteKey) return;
+    final title = request.vodName.trim();
+    if (!tmdbConfig.isReady || !shouldAutoMatchPushTitle(title)) return;
+    try {
+      final outcome = await _ensureTmdbIdentityService().match(
+        TmdbMatchRequest(
+          siteKey: pushSiteKey,
+          vodId: request.vodId,
+          sourceTitle: title,
+          vodName: title,
+          siteName: pushSourceName,
+        ),
+      );
+      final item = outcome.item;
+      if (item == null) {
+        log.info('推送剧名未匹配到元数据', scope: 'tmdb');
+        return;
+      }
+      _applyPushMatch(vodId: request.vodId, item: item);
+      _notice = '已匹配元数据：${item.title}';
+      log.info(
+        '推送剧名已匹配 tmdbId=${item.tmdbId} type=${item.mediaType.name}',
+        scope: 'tmdb',
+      );
+      notifyListeners();
+    } catch (error) {
+      log.warning('推送剧名匹配失败：$error', scope: 'tmdb');
+    }
+  }
+
+  /// 手动修正推送的元数据（历史页点推送记录时用，`04` §5.1 的入口之一）。
+  Future<void> manualMatchPush({
+    required String vodId,
+    required String title,
+    required TmdbItem item,
+  }) async {
+    if (_database == null) return;
+    try {
+      final outcome = await _ensureTmdbIdentityService().matchManual(
+        request: TmdbMatchRequest(
+          siteKey: pushSiteKey,
+          vodId: vodId,
+          sourceTitle: title,
+          vodName: title,
+          siteName: pushSourceName,
+        ),
+        item: item,
+      );
+      final matched = outcome.item ?? item;
+      _applyPushMatch(vodId: vodId, item: matched);
+      _notice = '已匹配元数据：${matched.title}';
+      log.info(
+        '推送手动匹配已写入 tmdbId=${matched.tmdbId}',
+        scope: 'tmdb',
+      );
+      notifyListeners();
+    } catch (error) {
+      log.warning('推送手动匹配失败：$error', scope: 'tmdb');
+    }
+  }
+
+  /// 推送内容当前的元数据匹配结论（只读，供推送详情页展示）。
+  ///
+  /// 与 [cachedTmdbPosterUrl] 分开：那张图只服务历史卡片补图，详情页还要标题、
+  /// 副标题与简介。没有匹配记录时返回 `null`（详情页就用推送时的剧名）。
+  TmdbItem? pushMatchedItem({required String vodId, required String title}) {
+    final database = _database;
+    final id = vodId.trim();
+    if (database == null || id.isEmpty) return null;
+    // 旧记录/站源改写会让 id 少掉 scheme，片名也可能带后缀（"罪蓝之路 4K内嵌中字"）：
+    // 两种变体都试一次，避免"明明匹配过却查不到"。
+    final ids = <String>{id};
+    if (!id.contains('://')) ids.add('https://$id');
+    final titles = <String>{title.trim()};
+    final head = title.trim().split(RegExp(r'\s+')).first;
+    if (head.isNotEmpty) titles.add(head);
+    try {
+      final store = DatabaseTmdbMatchStore(
+        database: database,
+        configId: tmdbConfigId,
+      );
+      for (final candidateId in ids) {
+        for (final candidateTitle in titles) {
+          final record = store.find(
+            siteKey: pushSiteKey,
+            vodId: candidateId,
+            sourceTitle: candidateTitle,
+          );
+          if (record != null) return record.toItem();
+        }
+      }
+      return null;
+    } catch (error) {
+      log.warning('读取推送匹配结论失败：$error', scope: 'tmdb');
+      return null;
+    }
+  }
+
+  /// 把匹配结论落进历史行（海报 + 身份）。
+  ///
+  /// 历史页另有一层懒补图（`HistoryPosterRepair` 读 TMDB 缓存），这里写是为了
+  /// "匹配完立刻看到"，而不是等用户打开历史页。行还不存在（刚起播，进度尚未
+  /// 落库）时什么都不做——下一次进度写入会带上剧名，海报由懒补图接上。
+  void _applyPushMatch({required String vodId, required TmdbItem item}) {
+    final row = findHistory(siteKey: pushSiteKey, vodId: vodId);
+    if (row == null) return;
+    final poster = (item.posterUrl ?? '').trim();
+    try {
+      _database?.upsertHistory(
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        vodName: row.vodName,
+        vodPic: poster.isEmpty ? row.vodPic : poster,
+        flag: row.flag,
+        episodeName: row.episodeName,
+        episodeId: row.episodeId,
+        positionMs: row.positionMs,
+        durationMs: row.durationMs,
+        completed: row.completed,
+        updatedAt: row.updatedAt,
+        sourceKey: row.sourceKey,
+        tmdbId: item.tmdbId,
+        mediaType: item.mediaType.name,
+      );
+    } catch (error) {
+      log.warning('推送匹配结论写回历史失败：$error', scope: 'history');
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Phase 5 · 安卓同步的宿主能力（`SyncStateHost`，`design/02` §2）

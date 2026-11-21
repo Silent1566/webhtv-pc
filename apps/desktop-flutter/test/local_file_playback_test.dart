@@ -5,7 +5,8 @@
 ///    不参与站点解析与跨源续播；
 /// 2. `copyWith` 不会把本地请求悄悄降级成 remote；
 /// 3. 命令行：`--media=<绝对路径>` 与裸绝对路径（拖文件到 exe）都识别为本地媒体；
-/// 4. 顶栏「打开本地文件」把本地请求交给**既有**播放器入口（不改 player_page）。
+/// 4. 顶栏只有「推送」：本地文件从推送对话框里选，仍交给**既有**播放器入口
+///    （不改 player_page）。「打开本地文件」入口已删除（用户 2026-11-20 决策）。
 library;
 
 import 'dart:io';
@@ -17,6 +18,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/push_detail_page.dart';
 import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -133,8 +135,7 @@ void main() {
       expect(args.fullscreen, isTrue);
     });
   });
-
-  group('应用入口（顶栏「打开本地文件」）', () {
+  group('应用入口（顶栏「推送」→ 选择本地文件）', () {
     late Directory tempDir;
     late AppState state;
 
@@ -161,12 +162,14 @@ void main() {
       } catch (_) {}
     });
 
-    // 这条会真正构造 PlayerPage（初始化原生解码器）：没有 libmpv 时跳过而不是报错。
-    testWidgets('选中的文件被包成本地请求并交给既有播放器入口', skip: libmpvUnavailableReason != null, (tester) async {
-      final path = '${tempDir.path}${Platform.pathSeparator}本地片.mkv';
-      File(path).createSync();
-      final picked = <String?>[];
-      installMediaKitMocks(tester);
+    /// 挂起壳层并越过首次启动的边界确认弹窗。
+    Future<void> mountShell(
+      WidgetTester tester,
+      Future<String?> Function() pickLocalFile,
+    ) async {
+      // 本机没有 libmpv 时 installMediaKitMocks 会直接抛：只有真正打开播放页的
+      // 用例才需要它（那条自己也带了 skip）。
+      if (libmpvUnavailableReason == null) installMediaKitMocks(tester);
       installWindowManagerMocks(tester);
       tester.view.physicalSize = const Size(1280, 900);
       tester.view.devicePixelRatio = 1.0;
@@ -177,10 +180,7 @@ void main() {
           home: AppShell(
             state: state,
             startup: const StartupArguments(),
-            pickLocalMediaFile: () async {
-              picked.add(path);
-              return path;
-            },
+            pickLocalMediaFile: pickLocalFile,
           ),
         ),
       );
@@ -190,13 +190,54 @@ void main() {
         await tester.tap(accept);
         await tester.pumpAndSettle();
       }
+    }
 
-      final entry = find.byKey(const ValueKey('topbar-open-local-file'));
-      expect(entry, findsOneWidget, reason: '本地视频入口不能埋在站点/配置里');
+    testWidgets('选中的文件被包成本地请求并进入推送详情页', (tester) async {
+      final path = '${tempDir.path}${Platform.pathSeparator}本地片.mkv';
+      File(path).createSync();
+      final picked = <String?>[];
+      await mountShell(tester, () async {
+        picked.add(path);
+        return path;
+      });
+
+      final entry = find.byKey(const ValueKey('topbar-push'));
+      expect(entry, findsOneWidget, reason: '本地视频能力仍在顶栏（经推送对话框）');
+      expect(
+        find.byKey(const ValueKey('topbar-open-local-file')),
+        findsNothing,
+        reason: '旧入口已并入推送对话框',
+      );
       await tester.tap(entry);
-      await settlePlayerPage(tester, times: 6);
+      await settle(tester);
+      final pick = find.byKey(const ValueKey('push-dialog-pick-file'));
+      expect(pick, findsOneWidget, reason: '推送对话框必须自带本地文件入口');
+      await tester.tap(pick);
+      await settle(tester);
 
       expect(picked, [path], reason: '点击入口必须真的走文件选择器');
+      expect(find.byType(PushDetailPage), findsOneWidget, reason: '先详情后播放');
+      final detail = tester.widget<PushDetailPage>(find.byType(PushDetailPage));
+      expect(detail.request.isLocal, isTrue);
+      expect(detail.request.localPath, path);
+      expect(detail.request.url, path);
+      expect(detail.request.headers, isEmpty);
+      expect(state.pendingPush, isNull);
+    });
+
+    // 这条真正构造 PlayerPage（初始化原生解码器）：没有 libmpv 时跳过而不是报错。
+    testWidgets('详情页点「播放」才交给既有播放器入口', skip: libmpvUnavailableReason != null, (tester) async {
+      final path = '${tempDir.path}${Platform.pathSeparator}本地片.mkv';
+      File(path).createSync();
+      await mountShell(tester, () async => path);
+
+      await tester.tap(find.byKey(const ValueKey('topbar-push')));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('push-dialog-pick-file')));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('push-detail-play')));
+      await settlePlayerPage(tester, times: 6);
+
       final page = tester.widget<PlayerPage>(find.byType(PlayerPage));
       expect(page.request.isLocal, isTrue);
       expect(page.request.localPath, path);
@@ -204,32 +245,20 @@ void main() {
       expect(page.request.headers, isEmpty);
     });
 
-    testWidgets('取消选择不打开播放器', skip: libmpvUnavailableReason != null, (tester) async {
-      installMediaKitMocks(tester);
-      installWindowManagerMocks(tester);
-      tester.view.physicalSize = const Size(1280, 900);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildAppTheme(Brightness.dark),
-          home: AppShell(
-            state: state,
-            startup: const StartupArguments(),
-            pickLocalMediaFile: () async => null,
-          ),
-        ),
-      );
-      await settle(tester);
-      final accept = find.text('我已了解并继续');
-      if (accept.evaluate().isNotEmpty) {
-        await tester.tap(accept);
-        await tester.pumpAndSettle();
-      }
+    testWidgets('取消选择不打开详情页', (tester) async {
+      await mountShell(tester, () async => null);
 
-      await tester.tap(find.byKey(const ValueKey('topbar-open-local-file')));
-      await settlePlayerPage(tester, times: 2);
+      await tester.tap(find.byKey(const ValueKey('topbar-push')));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('push-dialog-pick-file')));
+      await settle(tester);
+      expect(find.byType(PushDetailPage), findsNothing);
       expect(find.byType(PlayerPage), findsNothing);
+      expect(
+        find.byKey(const ValueKey('push-dialog')),
+        findsOneWidget,
+        reason: '取消选择只是不落地，对话框不该跟着关掉',
+      );
       expect(tester.takeException(), isNull);
     });
   });

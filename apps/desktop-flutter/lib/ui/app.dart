@@ -43,6 +43,8 @@ import 'live_page.dart';
 import 'playback_resume.dart';
 import 'recovery_banner.dart';
 import 'player_page.dart';
+import 'push_detail_page.dart';
+import 'push_dialog.dart';
 import 'scroll_behavior.dart';
 import 'search_page.dart';
 import 'spider_page.dart';
@@ -412,7 +414,7 @@ class AppShell extends StatefulWidget {
   final AppState state;
   final StartupArguments startup;
 
-  /// 「打开本地文件」用的文件选择器；`null` = 走原生 `file_picker`。
+  /// 推送对话框里「选择本地文件…」用的文件选择器；`null` = 走原生 `file_picker`。
   ///
   /// 与 `PlayerPage.externalPlayerStarter` 同一个理由：原生窗口在测试里起不来，
   /// 注入一个返回固定路径的替身，才能验证「选文件 → 构造本地请求 → 交给既有
@@ -479,8 +481,29 @@ class _AppShellState extends State<AppShell> {
   void _onStateChanged() {
     _syncToasts();
     _syncFollowingOpenRequest();
+    _consumePendingPush();
     if (mounted) setState(() {});
     _maybeAutoPlayMedia();
+  }
+
+  /// 把待播推送投影成播放页路由（本机输入与局域网推送共用这一条）。
+  ///
+  /// **先清再导航**：`clearPendingPush` 会再 notify 一次，若不等清空就 push，
+  /// 同一条推送会在下一次状态变化时又起播一遍。已在播放页时仍然压新页——
+  /// 与命令行媒体一致，用户推新的东西就该看到新的画面。
+  void _consumePendingPush() {
+    final request = _state.pendingPush;
+    if (request == null || !mounted) return;
+    final parsed = _state.pendingPushParsed;
+    _state.clearPendingPush();
+    // 必须延到下一帧再压栈：提交动作（对话框里 `await submitPush`）在同一个
+    // 同步段里随后会 `pop()` 自己，立刻压栈会让它把**详情页**当成对话框关掉
+    // ——现象就是"点了没反应、按钮停在处理中"（2026-11-21 用户实测）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 有 TMDB 匹配就复用 TMDB 详情页，否则用极简推送页兜底。
+      unawaited(openPushLanding(context, _state, request, parsed: parsed));
+    });
   }
 
   /// 系统通知被点击时把侧栏切到「追剧」页（页面自己会切到列表视角）。
@@ -935,22 +958,16 @@ class _AppShellState extends State<AppShell> {
     await _state.selectSite(selected);
   }
 
-  /// 顶栏「打开本地文件」：挑一个磁盘视频，包成本地 [PlaybackRequest] 后交给
-  /// 既有播放器入口（与命令行自动播放同一条 `PlayerPage` 路由）。
+  /// 顶栏「推送」：地址粘贴与本地文件选择都从这个对话框起播。
   ///
-  /// Wave 1 只做到「构造并交给既有入口」：播放器页对本地源的处理（进度写盘、
-  /// 历史、线路面板）留到 Wave 2，这里**不**改 `player_page.dart`。
-  Future<void> _openLocalMediaFile() async {
-    final picked = await _pickLocalMediaPath();
-    if (!mounted) return;
-    final target = picked?.trim() ?? '';
-    if (target.isEmpty) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PlayerPage(
-          state: _state,
-          request: PlaybackRequest.localFile(path: target),
-        ),
+  /// 本地文件不再由壳层自己构造 `PlaybackRequest.localFile`，而是走
+  /// `submitPush`（本地路径在状态层被识别）——起播与历史/匹配因此只有一条链路。
+  Future<void> _openPushDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => PushDialog(
+        state: _state,
+        pickLocalFile: _pickLocalMediaPath,
       ),
     );
     if (mounted) setState(() {});
@@ -1063,7 +1080,7 @@ class _AppShellState extends State<AppShell> {
             onOpenConfig: _openConfigSwitcher,
             onManageConfig: _openConfigPage,
             onOpenSitePicker: _openSitePicker,
-            onOpenLocalFile: _openLocalMediaFile,
+            onOpenPush: _openPushDialog,
           ),
           Expanded(
             child: Row(
@@ -1310,14 +1327,14 @@ class _TopBar extends StatelessWidget {
     required this.onOpenConfig,
     required this.onManageConfig,
     required this.onOpenSitePicker,
-    required this.onOpenLocalFile,
+    required this.onOpenPush,
   });
 
   final AppState state;
   final VoidCallback onOpenConfig;
   final VoidCallback onManageConfig;
   final VoidCallback onOpenSitePicker;
-  final VoidCallback onOpenLocalFile;
+  final VoidCallback onOpenPush;
 
   @override
   Widget build(BuildContext context) {
@@ -1379,13 +1396,14 @@ class _TopBar extends StatelessWidget {
             label: Text(site == null ? '选择站点' : '站点：${site.name}'),
           ),
           const SizedBox(width: AppSpace.xs),
-          // 本地视频不需要站点：入口必须独立于「站点：xxx」，否则用户会以为
-          // 先得选个站点才能放自己硬盘上的文件。
+          // 本地文件与推送地址是同一件事的两种来源（用户 2026-11-20 决策）：
+          // 合并成一个「推送」，选文件在对话框里。入口仍独立于「站点：xxx」——
+          // 放自己硬盘上的文件或粘贴地址，都不该要求先选站点。
           TextButton.icon(
-            key: const ValueKey('topbar-open-local-file'),
-            onPressed: onOpenLocalFile,
-            icon: const Icon(Icons.folder_open_outlined, size: 18),
-            label: const Text('打开本地文件'),
+            key: const ValueKey('topbar-push'),
+            onPressed: onOpenPush,
+            icon: const Icon(Icons.send_outlined, size: 18),
+            label: const Text('推送'),
           ),
           if (state.webHomeLoadError != null)
             Tooltip(

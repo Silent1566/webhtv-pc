@@ -11,16 +11,21 @@
 ///   用户需要知道为什么没反应。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
+import '../core/playback_request.dart';
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'async_action_feedback.dart';
 import 'browse_pages.dart';
 import 'history_cross_source.dart';
 import 'history_resume_seed.dart';
+import 'push_detail_page.dart';
 import 'toast.dart';
 
 Future<void> openHistoryDetail(
@@ -36,6 +41,37 @@ Future<void> openHistoryDetail(
       item,
       // 按钮上写着「查看详情」，就不能因为用户把整卡点击设成「直接播」而起播。
       wantsPlayOverride: false,
+    );
+    return;
+  }
+  // 推送记录不属于任何配置站点（合成站点键 [pushSiteKey]）：它没有详情页可进，
+  // 「这条片子是什么」只能靠手动指定元数据，所以别掉进下面的「站点已不在」。
+  // 推送源还在配置里时，这条记录就是一条普通站点记录：走下面的标准路径
+  // （选中站点 → 普通详情页）。只有源被删掉/改名了，才需要兜底页。
+  if (item.siteKey == pushSiteKey) {
+    // 推送记录没有站点详情可进：它的"详情页"就是推送详情（剧名/元数据/地址/
+    // 播放与再匹配都在那里），与刚推送时进入的是同一页。
+    final resumed = item.positionMs > 5000 && !item.completed
+        ? Duration(milliseconds: item.positionMs)
+        : null;
+    final target = item.episodeId.trim().isEmpty
+        ? item.vodId
+        : item.episodeId;
+    await openPushLanding(
+      context,
+      state,
+      PlaybackRequest(
+        url: target,
+        title: item.vodName,
+        siteKey: pushSiteKey,
+        vodId: item.vodId,
+        vodName: item.vodName,
+        episodeName: item.episodeName.isEmpty ? item.vodName : item.episodeName,
+        flag: item.flag.isEmpty ? pushSourceName : item.flag,
+        startPosition: resumed,
+      ),
+      // 历史记录的片名就是当初的剧名：带进详情页，别让推送源的英文名/URL 覆盖它。
+      parsed: parsePushFields(url: target, title: item.vodName),
     );
     return;
   }
