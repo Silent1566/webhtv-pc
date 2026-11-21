@@ -1012,18 +1012,14 @@ class _FavoritesPageState extends State<FavoritesPage> {
       return;
     }
     final site = _state.siteInActiveSource(item.siteKey);
-    if (site == null) {
-      showToast('该收藏所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-      return;
-    }
-    await _state.selectSite(site);
+    if (site != null) await _state.selectSite(site);
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DetailPage(
           state: _state,
           vod: Vod(
-            vodId: item.targetId,
+            vodId: site == null ? '' : item.targetId,
             vodName: item.title,
             vodPic: item.vodPic.isEmpty ? null : item.vodPic,
           ),

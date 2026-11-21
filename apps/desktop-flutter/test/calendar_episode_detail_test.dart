@@ -16,6 +16,7 @@ import 'package:webhtv_pc/services/following_air_time_service.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/tmdb_stores.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/following_calendar_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -274,20 +275,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('旧集短按及详情播放按钮均沿用原播放回退路径', (tester) async {
+  testWidgets('缺站旧集短按及详情播放按钮均打开导航详情，不标已看', (tester) async {
+    await tester.runAsync(() => state.setExternalMetaEnabled(false));
     final identity = await pumpCalendar(tester);
-    // 本地没有站点配置，旧路径回退会报站点缺失，不开共享弹窗或标已看。
     await tester.tap(entry(identity));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('tmdb-episode-details')), findsNothing);
     expect(state.selectedSite, isNull);
     expect(state.followings.single.watchedEpisode, 0);
+    expect(find.byType(DetailPage), findsOneWidget);
+    expect(
+      tester.widget<DetailPage>(find.byType(DetailPage)).vod.vodId,
+      isEmpty,
+    );
+    Navigator.of(tester.element(find.byType(DetailPage))).pop();
+    await tester.pumpAndSettle();
     await tester.longPress(entry(identity));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('tmdb-episode-details')), findsOneWidget);
     await tester.tap(inDetails(find.text('播放')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('tmdb-episode-details')), findsNothing);
+    expect(find.byType(DetailPage), findsOneWidget);
+    expect(
+      tester.widget<DetailPage>(find.byType(DetailPage)).vod.vodId,
+      isEmpty,
+    );
     expect(state.selectedSite, isNull);
     expect(state.followings.single.watchedEpisode, 0);
     expect(state.recentHistory(sourceKey: ''), isEmpty);

@@ -3944,12 +3944,16 @@ AiContentCompletion? aiContentCompletion,
   Future<void> reloadTmdb() async {
     final vod = _selectedVod;
     final site = _selectedSite;
-    if (vod == null || site == null || _database == null) return;
+    if (vod == null ||
+        (site == null && vod.vodId.isNotEmpty) ||
+        _database == null) {
+      return;
+    }
     _tmdbRunId = _detailRunId;
     await _loadTmdbWithAi(
       vod,
-      siteKey: site.key,
-      siteName: site.name,
+      siteKey: site?.key ?? '',
+      siteName: site?.name ?? '',
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
       navSource: _navSourceFor(site, vod),
@@ -3961,10 +3965,10 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 判据仍是 `site.indexs == 1`；推荐回退页的**合成条目**（`vodId` 为空）也走
   /// 这一条：它本来就没有站点索引条目，剧集卡片只能来自 TMDB 全季聚合。
-  bool _navSourceFor(Site site, Vod vod) =>
-      site.indexs == 1 || vod.vodId.isEmpty;
+  bool _navSourceFor(Site? site, Vod vod) =>
+      site?.indexs == 1 || vod.vodId.isEmpty;
 
-  TmdbIdentity? _knownIdentityWithoutPlayback(Site site, Vod vod) {
+  TmdbIdentity? _knownIdentityWithoutPlayback(Site? site, Vod vod) {
     if (!_navSourceFor(site, vod) &&
         playLinesOf(vod).any((line) => line.episodes.isNotEmpty)) {
       return null;
@@ -3978,7 +3982,7 @@ AiContentCompletion? aiContentCompletion,
     return vod.vodId.isNotEmpty &&
             tmdb.belongsTo(
               vod.vodId,
-              siteKey: site.key,
+              siteKey: site?.key ?? '',
               sourceTitle: vod.vodName,
             )
         ? tmdb.identity
@@ -4127,14 +4131,16 @@ AiContentCompletion? aiContentCompletion,
     required TmdbItem item,
     String? sourceTitle,
   }) async {
-    final identityService = _tmdbIdentityService;
+    final identityService = _ensureTmdbIdentityService();
     final vod = _selectedVod;
     final site = _selectedSite;
-    if (identityService == null || vod == null || site == null) return null;
+    // 合成条目没有站点 key，但仍需要能改 TMDB 身份（导航详情的手动匹配）。
+    if (vod == null || (site == null && vod.vodId.isNotEmpty)) return null;
+    final siteKey = site?.key ?? '';
     try {
       final outcome = await identityService.matchManual(
         request: TmdbMatchRequest(
-          siteKey: site.key,
+          siteKey: siteKey,
           vodId: vod.vodId,
           sourceTitle: sourceTitle ?? vod.vodName,
         ),
@@ -4143,7 +4149,7 @@ AiContentCompletion? aiContentCompletion,
       await learnBusinessTitle(
         rawTitle: vod.vodName,
         confirmedTitle: item.title,
-        siteKey: site.key,
+        siteKey: siteKey,
         vodId: vod.vodId,
         mediaType: item.mediaType.name,
       );
@@ -6137,10 +6143,9 @@ AiContentCompletion? aiContentCompletion,
     if (vod.isFolder && !isBridgeFolderVodId(vod.vodId)) return;
     final service = serviceOverride ?? _siteService;
     final site = siteOverride ?? _selectedSite;
-    if (site == null) return;
-    // 合成条目（推荐回退页）没有任何站源身份：拿空 `vod_id` 去请求详情只会换来
-    // 一条业务错误，所以干脆不发请求，只跑 TMDB 链（见下面的 early return）。
+    // 合成条目不依赖站点：原站点或最后一份配置被删除后仍可加载元数据。
     final synthetic = vod.vodId.isEmpty;
+    if (site == null && !synthetic) return;
     // 推送手填的剧名（Vod.extra）：压过推送源返回的片名，避免名字被网盘地址覆盖、
     // 进而让 TMDB 拿 URL 再匹配一次把已有匹配清掉。
     final pushNameOverride =
@@ -6166,7 +6171,7 @@ AiContentCompletion? aiContentCompletion,
     // 必须在这里推一次：等待运行时可能很长，不推的话监听方还停留在上一部剧的
     // 渲染上，「正在加载」根本显示不出来。
     notifyListeners();
-    await _waitForPythonSite(site);
+    if (site != null) await _waitForPythonSite(site);
     if (_disposed || runId != _detailRunId) return;
     // TMDB 与站源详情**并行**启动：整条 TMDB 链（匹配→详情→季度→剧集→视频）以前排在
     // 站源详情之后（本机实测站源详情 3.9~7.1s），首屏必然是站源「原始模式」，用户要等
@@ -6182,8 +6187,8 @@ AiContentCompletion? aiContentCompletion,
     _tmdbRunId = runId;
     _pendingTmdbLoad = tmdb.loadForVod(
       vod,
-      siteKey: site.key,
-      siteName: site.name,
+      siteKey: site?.key ?? '',
+      siteName: site?.name ?? '',
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
       // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；合成条目另算，
@@ -6211,7 +6216,7 @@ AiContentCompletion? aiContentCompletion,
       _notifyIfAlive();
       return;
     }
-    if (service == null) return;
+    if (service == null || site == null) return;
     try {
       // 已知 atvp_detail 桥接协议先取资源，再逐个取分享链分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
