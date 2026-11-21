@@ -24,6 +24,27 @@ import '../services/site_service.dart';
 import '../services/storage.dart';
 
 /// 原来源播放上下文：配置记录 + 它自己的站点服务。
+/// 一个「推送源」候选：站点、它所属配置的播放上下文，以及是否当前生效配置。
+///
+/// 为什么需要：安卓只认当前配置里 key 恰为 push_agent 的站点；用户的推送爬虫源
+/// 常常配在别的配置里（实测："唐三的猫源" → nodejs_push）。PC 允许跨配置选源，
+/// 但要如实带上归属配置的 service 与 sourceKey，历史才会写回它自己那份源。
+class PushSourceCandidate {
+  const PushSourceCandidate({
+    required this.site,
+    required this.context,
+    required this.active,
+    required this.available,
+  });
+
+  final Site site;
+  final PlaybackSourceContext context;
+  final bool active;
+
+  /// 当前环境是否跑得起来（安卓 JAR 站点在 PC 上是不可用）。
+  final bool available;
+}
+
 class PlaybackSourceContext {
   const PlaybackSourceContext({
     required this.sourceKey,

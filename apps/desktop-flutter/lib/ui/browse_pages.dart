@@ -20,6 +20,7 @@ import '../core/meta_source.dart';
 import '../core/meta_pipeline.dart';
 import '../core/playback_platform.dart';
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_meta_resolver.dart';
 import '../core/source_swap.dart';
@@ -2382,7 +2383,16 @@ class _DetailPageState extends State<DetailPage> {
   String _heroPlayLabel(List<VodPlayLine> lines, Vod vod) {
     final target = _resumeTarget(lines);
     final resume = _resumePositionOf(vod, lines, target);
-    return historyPlayLabel(target: target, resumePosition: resume);
+    // 推送的集名常带 "[2.44G] S01E01" 这类原始标签：按钮上展示清洗后的「第N集」。
+    final cleaned = _pageSite?.key == pushSiteKey
+        ? HistoryResumeTarget(
+            flag: target.flag,
+            episodeIndex: target.episodeIndex,
+            episodeName: pushEpisodeLabel(target.episodeName),
+            matched: target.matched,
+          )
+        : target;
+    return historyPlayLabel(target: cleaned, resumePosition: resume);
   }
 
   /// 历史那一集的续播位置（`design/02` §3.1 的第二个条件）。

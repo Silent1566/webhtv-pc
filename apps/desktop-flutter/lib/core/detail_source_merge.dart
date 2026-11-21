@@ -6,12 +6,22 @@ String? _fillDisplay(String? current, String? fallback) {
   return (fallback ?? '').trim().isNotEmpty ? fallback : current;
 }
 
-Vod mergeSourceDetailDisplay({required Vod detail, required Vod listing}) {
+Vod mergeSourceDetailDisplay({
+  required Vod detail,
+  required Vod listing,
+  String? nameOverride,
+  String? idOverride,
+}) {
   final fill = _fillDisplay;
+  final override = (nameOverride ?? '').trim();
+  final id = (idOverride ?? '').trim();
 
   return Vod(
-    vodId: detail.vodId,
-    vodName: detail.vodName,
+    // 推送的身份必须用**推送时的 id**：站源详情常把 https:// 去掉返回一个
+    // 不同的 id，身份一变，TMDB 归属门就会判成"换片"并清空已匹配的数据。
+    vodId: id.isEmpty ? detail.vodId : id,
+    // 片名优先用调用方指定的（推送的手填剧名），详情返回的名字只在没指定时生效。
+    vodName: override.isEmpty ? detail.vodName : override,
     vodContent: fill(detail.vodContent, listing.vodContent),
     vodPic: fill(detail.vodPic, listing.vodPic),
     vodRemarks: fill(detail.vodRemarks, listing.vodRemarks),

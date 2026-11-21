@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
+import '../core/push_parser.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
@@ -263,8 +264,22 @@ class _HomePageState extends State<HomePage> {
         TmdbMediaType.parse(row.mediaType),
         row.tmdbId,
       );
-      if (identity == null) continue;
-      byKey[homeHistoryKey(row)] = identity;
+      if (identity != null) {
+        byKey[homeHistoryKey(row)] = identity;
+        continue;
+      }
+      // 推送行常常没有内嵌身份（旧记录 tmdb_id=0，或播放时详情还没匹配上）：
+      // 用匹配记录补一次，首页才有 16:9 背景与简介（对齐点播条目）。
+      if (row.siteKey == pushSiteKey) {
+        final matched = _state.pushMatchedItem(
+          vodId: row.vodId,
+          title: row.vodName,
+        );
+        final pushed = matched == null
+            ? null
+            : TmdbIdentity.of(matched.mediaType, matched.tmdbId);
+        if (pushed != null) byKey[homeHistoryKey(row)] = pushed;
+      }
     }
     await _resolveMeta(byKey);
   }

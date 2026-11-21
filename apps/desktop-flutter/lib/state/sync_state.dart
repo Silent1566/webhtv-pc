@@ -37,6 +37,7 @@ import '../core/playback_identity.dart';
 import '../core/protocol.dart';
 import '../core/realtime_sync.dart';
 import '../core/source_key.dart';
+import '../core/push_parser.dart';
 import '../services/android_bridge_service.dart';
 import '../services/android_read_client.dart';
 import '../services/log_service.dart';
@@ -99,6 +100,12 @@ abstract class SyncStateHost {
   /// 不刷新的后果：历史页/详情页会一直显示旧数据，直到用户手动刷新或重启
   /// ——同步“成功”了但哪里都看不到，用户会以为没生效。
   void notifySyncedDataChanged();
+
+  /// 局域网推送到达：把地址交给宿主落地成一次播放。
+  ///
+  /// 返回 `false` 表示没接住（地址非法/本地文件不存在/状态层未就绪），
+  /// 端点据此回 `503`，手机上能看到明确失败而不是"推送成功"。
+  Future<bool> onPushReceived(PushParsed parsed);
 }
 
 /// 一条设备接入历史（用户反馈 2026-10-09：设备接入需要历史记录方便再次使用）。
@@ -272,6 +279,9 @@ class SyncState extends ChangeNotifier {
   bool _serverEnabled = false;
   bool _pushEnabled = false;
 
+  /// 是否接受局域网推送播放（默认 **false**，与 [pushEnabled]「向安卓推送」无关）。
+  bool _receivePushEnabled = false;
+
   /// 路径 B 的可选 token（`design/01` §3.2.2）。
   ///
   /// 为空时只允许 uuid 白名单内的对端（局域网默认形态）。
@@ -360,6 +370,12 @@ class SyncState extends ChangeNotifier {
   /// 是否允许向安卓推送（默认 **false**）。
   bool get pushEnabled => _pushEnabled;
 
+  /// 是否接受局域网推送播放（默认 **false**）。
+  ///
+  /// 与 [pushEnabled] 是相反方向的两件事：这个是"别人推给我播"，
+  /// 那个是"把我的历史推给别人"。只有服务端在监听时才可能为真。
+  bool get receivePushEnabled => _receivePushEnabled && serverRunning;
+
   /// 是否同步含凭据的设置项（默认 **false**）。
   bool get settingsSyncEnabled => _settingsSyncEnabled;
 
@@ -371,6 +387,9 @@ class SyncState extends ChangeNotifier {
 
   /// 服务端对外的可达基址。
   String? get serverBaseUrl => serverRunning ? _server!.baseUrl : null;
+
+  /// 手机上要打开的推送页地址；服务未监听时为 `null`。
+  String? get pushPageUrl => serverRunning ? '${_server!.baseUrl}/' : null;
 
   /// 开启服务端前必须向用户展示的提示（P3，`design/02` §5）。
   String get serverBindHint =>
@@ -455,6 +474,9 @@ class SyncState extends ChangeNotifier {
       // 这里直接读回用户上次的选择（用户已确认过），但**服务端不自动启动**。
       _serverEnabled = asFlag(section['serverEnabled']);
       _pushEnabled = asFlag(section['pushEnabled']);
+      // 服务端没开时推送不可能生效：不恢复一个悬空的开关。
+      _receivePushEnabled =
+          asFlag(section['receivePushEnabled']) && _serverEnabled;
       _settingsSyncEnabled = asFlag(section['settingsSyncEnabled']);
       _peers = asList(section['peers'])
           .map(SyncPeer.fromJson)
@@ -499,6 +521,7 @@ class SyncState extends ChangeNotifier {
       log.info(
         '同步设置已读取：server=${_serverEnabled ? 'on' : 'off'} '
         'push=${_pushEnabled ? 'on' : 'off'} '
+        'receivePush=${_receivePushEnabled ? 'on' : 'off'} '
         'settings=${_settingsSyncEnabled ? 'on' : 'off'} '
         'realtime=$_realtime '
         'pullCursor=$_realtimePullCursorMs '
@@ -518,6 +541,34 @@ class SyncState extends ChangeNotifier {
 
   // ------------------------------------------------------------------ 开关
 
+  /// 开启/关闭接收推送（默认 **false**）。
+  ///
+  /// 开启必须先有服务端在监听：拒绝推送的用户不该被迫开服务，想收推送的用户也
+  /// 不该被要求先去另一个开关点一下——所以这里**顺手把服务拉起来**，与实时同步
+  /// 自动拉起服务端的口径一致。
+  Future<bool> setReceivePushEnabled(bool value) async {
+    if (!value) {
+      if (!_receivePushEnabled) return true;
+      _receivePushEnabled = false;
+      _notice = '已停止接收推送';
+      log.info('接收推送：已关闭', scope: 'sync');
+      await _persist();
+      notifyListeners();
+      return true;
+    }
+    if (!serverRunning) {
+      final started = await _startServer();
+      if (!started) return false;
+    }
+    _receivePushEnabled = true;
+    final base = _server?.baseUrl ?? '';
+    _notice = '已开启接收推送：局域网内可推送到 $base/';
+    log.info('接收推送：已开启（$base/）', scope: 'sync');
+    await _persist();
+    notifyListeners();
+    return true;
+  }
+
   /// 开启/关闭 PC 服务端监听（P3：只有用户显式开启才启动）。
   Future<bool> setServerEnabled(bool value) async {
     if (_serverEnabled == value && serverRunning == value) return true;
@@ -526,7 +577,13 @@ class SyncState extends ChangeNotifier {
     if (!value) {
       await _server?.stop();
       _server = null;
-      _notice = '同步服务已关闭，端口已释放';
+      // 端口都没了，接收推送不可能继续有效：开关跟着落下去，不留"看似开着"
+      // 的死开关（否则 UI 显示已开启、手机却连不上）。
+      final hadPush = _receivePushEnabled;
+      _receivePushEnabled = false;
+      _notice = hadPush
+          ? '同步服务已关闭，端口已释放（接收推送一并关闭）'
+          : '同步服务已关闭，端口已释放';
       log.info('同步服务已关闭', scope: 'sync');
       await _persist();
       notifyListeners();
@@ -541,6 +598,10 @@ class SyncState extends ChangeNotifier {
     try {
       final server = _server ??= _serverFactory(_buildServerHost());
       final port = await server.start();
+      // 自动拉起的路径（接收推送 / 实时同步）也必须让总开关反映真实状态：
+      // 否则 UI 上「局域网服务」仍显示关闭、手机却能连上，而且重启后
+      // receivePushEnabled 会因为读回时的 && _serverEnabled 直接丢失。
+      _serverEnabled = true;
       _notice =
           '同步服务已启动：${server.baseUrl}'
           '（仅接受已授权对端，可在设置中关闭）';
@@ -1747,6 +1808,9 @@ class SyncState extends ChangeNotifier {
     deviceName: _deviceName,
     isEnabled: () => _serverEnabled,
     isPeerAuthorized: isPeerAuthorized,
+    // 闭包读字段（不是构造期快照）：拨开关不用重建服务端。
+    isPushEnabled: () => _receivePushEnabled,
+    onPush: host.onPushReceived,
     onHistory: (parsed, {String sourceKey = ''}) async {
       final stats = _mergeHistory(parsed, sourceKey: sourceKey);
       _recordMerge('history', stats);
@@ -1991,6 +2055,7 @@ class SyncState extends ChangeNotifier {
           'deviceName': _deviceName,
           'serverEnabled': _serverEnabled,
           'pushEnabled': _pushEnabled,
+          'receivePushEnabled': _receivePushEnabled,
           'settingsSyncEnabled': _settingsSyncEnabled,
           'peers': _peers.map((peer) => peer.toJson()).toList(),
           'devices': _deviceHistory.map((item) => item.toJson()).toList(),

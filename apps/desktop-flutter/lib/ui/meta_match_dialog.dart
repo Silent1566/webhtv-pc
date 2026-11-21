@@ -21,6 +21,7 @@ class MetaMatchDialog extends StatefulWidget {
     required this.vod,
     this.tmdbSearch,
     this.onPickTmdb,
+    this.allowExternal = true,
   });
 
   final AppState state;
@@ -29,6 +30,13 @@ class MetaMatchDialog extends StatefulWidget {
   /// TMDB 搜索（未配置时传 null：TMDB 分段置灰）。
   final Future<List<TmdbItem>> Function(String keyword)? tmdbSearch;
   final void Function(TmdbItem item)? onPickTmdb;
+
+  /// 是否允许外部来源（豆瓣/Bangumi）。
+  ///
+  /// 默认 `true`：既有入口（详情页）行为完全不变。推送记录传 `false`——
+  /// 外部来源的结论落在 `MetaOverrideStore`，推送的元数据只认 `TmdbMatchRecord`，
+  /// 让用户点到一条「选了也白选」的结果比不给他这个选项更糟。
+  final bool allowExternal;
 
   @override
   State<MetaMatchDialog> createState() => _MetaMatchDialogState();
@@ -50,7 +58,10 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
   void initState() {
     super.initState();
     // 有 TMDB 就先给 TMDB：它是原有主源，用户从旧按钮过来时预期一致。
-    _source = _tmdbAvailable ? MetaSourceKind.tmdb : MetaSourceKind.douban;
+    // 只开 TMDB 时没有第二个可选来源，初始值必须是它。
+    _source = _tmdbAvailable || !widget.allowExternal
+        ? MetaSourceKind.tmdb
+        : MetaSourceKind.douban;
   }
 
   @override
@@ -115,7 +126,11 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pinned = widget.state.metaOverrides.of(widget.vod.vodId);
+    // 只开 TMDB 时不碰外部分支：`metaOverrides` 是外部来源的状态，
+    // 读它对「这一个来源」没有任何意义。
+    final pinned = widget.allowExternal
+        ? widget.state.metaOverrides.of(widget.vod.vodId)
+        : null;
     final rows = _source == MetaSourceKind.tmdb
         ? _tmdb
               .map((item) => _RowData(
@@ -147,11 +162,13 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
             Wrap(
               spacing: 8,
               children: [
-                for (final source in const [
-                  MetaSourceKind.tmdb,
-                  MetaSourceKind.douban,
-                  MetaSourceKind.bangumi,
-                ])
+                for (final source in widget.allowExternal
+                    ? const [
+                        MetaSourceKind.tmdb,
+                        MetaSourceKind.douban,
+                        MetaSourceKind.bangumi,
+                      ]
+                    : const [MetaSourceKind.tmdb])
                   ChoiceChip(
                     key: ValueKey('meta-match-source-${source.key}'),
                     label: Text(
@@ -232,11 +249,14 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
         ),
       ),
       actions: [
-        TextButton(
-          key: const ValueKey('meta-match-reset'),
-          onPressed: _reset,
-          child: const Text('恢复自动匹配'),
-        ),
+        // 「恢复自动匹配」清的是外部来源的钉住（`unpinMetaOverride`）；
+        // 只开 TMDB 时没有那个状态可清，按钮留着只会让人点了以为恢复了。
+        if (widget.allowExternal)
+          TextButton(
+            key: const ValueKey('meta-match-reset'),
+            onPressed: _reset,
+            child: const Text('恢复自动匹配'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(false),
           child: const Text('取消'),

@@ -40,7 +40,7 @@
 | FileActivity | P2-9 | 本地/网盘文件浏览 |
 | FolderActivity | P2-9 | 文件夹浏览 |
 | ScanActivity | P3-6 | 扫码配对（远程托管信任） |
-| PushActivity | N4 | 接收推送/APK 推送 |
+| PushActivity | 已对齐（2026-11-20） | 接收推送播放：PC `ui/push_dialog.dart` + `services/sync_server.dart`（`GET /` 推送页、`POST /action?do=push`）；APK 推送仍属 N4 |
 | PluginManagerActivity | N/A（新增，未纳入） | 插件管理页；安卓后续新增，PC 无对应物；未纳入 2026-11-12 复核 |
 | CrashActivity | P2-8 | 崩溃页 |
 | PlaybackRecoveryActivity | P2-8 | 崩溃后播放恢复 |
