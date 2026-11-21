@@ -235,8 +235,10 @@ void main() {
     final app = _ContextState(
       paths: AppPaths.resolve(
         overrides: {
-          for (final key in ['config', 'data', 'cache', 'state'])
-            key: p.join(temp.path, key),
+            'config': p.join(temp.path, 'config'),
+            'data': p.join(temp.path, 'data'),
+            'cache': p.join(temp.path, 'cache'),
+            'state': p.join(temp.path, 'state'),
         },
       ),
       log: log,
@@ -277,8 +279,10 @@ void main() {
       final app = _ContextState(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: p.join(temp.path, key),
+              'config': p.join(temp.path, 'config'),
+              'data': p.join(temp.path, 'data'),
+              'cache': p.join(temp.path, 'cache'),
+              'state': p.join(temp.path, 'state'),
           },
         ),
         log: log,
@@ -321,8 +325,10 @@ void main() {
       final app = _ContextState(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: p.join(temp.path, key),
+              'config': p.join(temp.path, 'config'),
+              'data': p.join(temp.path, 'data'),
+              'cache': p.join(temp.path, 'cache'),
+              'state': p.join(temp.path, 'state'),
           },
         ),
         log: log,
@@ -385,8 +391,10 @@ void main() {
       final app = _ContextState(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: p.join(temp.path, key),
+              'config': p.join(temp.path, 'config'),
+              'data': p.join(temp.path, 'data'),
+              'cache': p.join(temp.path, 'cache'),
+              'state': p.join(temp.path, 'state'),
           },
         ),
         log: log,
@@ -496,7 +504,10 @@ void main() {
       final router = _RuntimeRouter(rt);
       final service = SiteService(appConfig: AppConfig(sites: [rt.site]), router: router);
       final app = _ContextState(paths: AppPaths.resolve(overrides: {
-        for (final key in ['config', 'data', 'cache', 'state']) key: p.join(temp.path, key),
+        'config': p.join(temp.path, 'config'),
+        'data': p.join(temp.path, 'data'),
+        'cache': p.join(temp.path, 'cache'),
+        'state': p.join(temp.path, 'state'),
       }), log: log);
       try {
         await expectLater(app.resolvePlayback(episodeTarget: 'opaque', siteOverride: rt.site,
@@ -530,8 +541,10 @@ void main() {
       final app = _ContextState(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: p.join(temp.path, key),
+              'config': p.join(temp.path, 'config'),
+              'data': p.join(temp.path, 'data'),
+              'cache': p.join(temp.path, 'cache'),
+              'state': p.join(temp.path, 'state'),
           },
         ),
         log: log,

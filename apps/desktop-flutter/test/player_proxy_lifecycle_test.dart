@@ -46,8 +46,10 @@ void main() {
     app = AppState(
       paths: AppPaths.resolve(
         overrides: {
-          for (final key in ['config', 'data', 'cache', 'state'])
-            key: p.join(temp.path, key),
+            'config': p.join(temp.path, 'config'),
+            'data': p.join(temp.path, 'data'),
+            'cache': p.join(temp.path, 'cache'),
+            'state': p.join(temp.path, 'state'),
         },
       ),
       log: log,
