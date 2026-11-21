@@ -417,7 +417,14 @@ class DoubanRecommendationService {
   // `core/external_detail_meta.dart` 的事。任何失败都退化成空值，绝不抛给详情页。
 
   /// 按标题检索候选（`/j/subject_suggest`）。失败返回空列表。
-  Future<List<MetaCandidate>> searchMeta(MetaQuery query) async {
+  ///
+  /// [enrich] 只在**手动匹配**时开：它多打一次 `search/subjects` 换评分与
+  /// `card_subtitle`，让候选行足够确认「是不是同一部片」。自动匹配链路随后
+  /// 本来就会取详情，那里开它只是白花一次请求配额。
+  Future<List<MetaCandidate>> searchMeta(
+    MetaQuery query, {
+    bool enrich = false,
+  }) async {
     final titles = query.queries;
     if (titles.isEmpty) return const [];
     final body = await _request(
@@ -452,13 +459,113 @@ class DoubanRecommendationService {
           originalTitle: subtitle == title ? '' : subtitle,
           year: _year(_text(item, const ['year'])),
           episodeCount: episode,
-          // suggest 不返回评分：留给详情接口，避免这里编一个假分数。
+          // suggest 本身不返回评分；[enrich] 的那次补全会填上，填不上就保持 0
+          // （「不补占位文案、不编评分」，见 PRODUCT.md 第 5 条）。
           rating: 0,
           posterUrl: poster.isEmpty ? null : poster,
         ),
       );
     }
-    return result;
+    if (!enrich || result.isEmpty || _closed) return result;
+    // 补全是一次请求覆盖整页候选：suggest 只给标题/年份/集数/封面，
+    // search/subjects 还带评分与 card_subtitle（地区 / 类型 / 主创）。
+    // 逐条打 subject_abstract 会排 20 × 750ms 的队——手动匹配是「搜一次、
+    // 看一眼」的交互，等不起；补全失败就退回列表级字段，不影响候选本身。
+    final rich = await _searchSubjects(titles.first);
+    if (rich.isEmpty) return result;
+    return [
+      for (final candidate in result)
+        _enrichCandidate(candidate, rich[candidate.identity.id]),
+    ];
+  }
+
+  /// 搜索补全（评分 / 更清晰的封面 / 一行事实）。
+  ///
+  /// 返回 id → target；失败、被限流、响应形状不认识都返回空表，由调用方回退。
+  /// 走同一条串行队列与 7 天缓存，不另开限速链（见 [searchMeta] 的边界说明）。
+  Future<Map<int, Map<String, Object?>>> _searchSubjects(String title) async {
+    try {
+      final body = await _request(
+        Uri.https('m.douban.com', '/rexxar/api/v2/search/subjects', {
+          'q': title,
+          'start': '0',
+          'count': '20',
+        }),
+        referer: 'https://m.douban.com/movie/',
+      );
+      final subjects = _map(_map(body)['subjects']);
+      final items = subjects['items'];
+      if (items is! List) return const {};
+      final result = <int, Map<String, Object?>>{};
+      for (final value in items) {
+        if (value is! Map) continue;
+        // 榜单/片单条目也在同一列表里，它们没有数字 id，构造不出身份。
+        final target = value['target'];
+        if (target is! Map) continue;
+        final id = int.tryParse(_text(target, const ['id']));
+        if (id == null || id <= 0) continue;
+        result[id] = target.cast<String, Object?>();
+      }
+      return result;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// 用补全载荷覆盖候选的可选字段；缺失项保留列表级取值。
+  MetaCandidate _enrichCandidate(
+    MetaCandidate candidate,
+    Map<String, Object?>? rich,
+  ) {
+    if (rich == null) return candidate;
+    final rating = _rating(rich);
+    final poster = (candidate.posterUrl ?? '').trim();
+    final cover = _text(rich, const ['cover_url']);
+    final subtitle = _cardSubtitleParts(
+      _text(rich, const ['card_subtitle']),
+    );
+    return MetaCandidate(
+      identity: candidate.identity,
+      title: candidate.title,
+      originalTitle: candidate.originalTitle,
+      year: candidate.year,
+      episodeCount: candidate.episodeCount,
+      rating: rating > 0 ? rating : candidate.rating,
+      // 列表级的 img 是稳定图床；cover_url 带签名参数，只在它缺席时兜底。
+      posterUrl: poster.isNotEmpty ? poster : (cover.isEmpty ? null : cover),
+      overview: candidate.overview,
+      seasonLabel: candidate.seasonLabel,
+      facts: subtitle.facts.isEmpty ? null : subtitle.facts,
+      people: subtitle.people,
+    );
+  }
+
+  /// 拆豆瓣 `card_subtitle`：`地区 / 类型 / 导演 / 主演`。
+  ///
+  /// 四段是常态；纪录片常见三段（`地区 / 类型 / 导演`，没有主演）。三段时
+  /// 最后一段可能是有声片主持人而不是导演，因此只标「主创」——错标角色比
+  /// 不标更糟。三段以下不猜，整段留在事实行。
+  ({String facts, String? people}) _cardSubtitleParts(String raw) {
+    final parts = raw
+        .split('/')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length < 3) return (facts: parts.join(' · '), people: null);
+    final hasCast = parts.length >= 4;
+    final facts = parts
+        .sublist(0, hasCast ? parts.length - 2 : parts.length - 1)
+        .join(' · ');
+    if (!hasCast) {
+      return (facts: facts, people: '主创：${parts.last}');
+    }
+    final director = parts[parts.length - 2];
+    final cast = parts.last;
+    final people = [
+      if (cast.isNotEmpty) '主演：$cast',
+      if (director.isNotEmpty) '导演：$director',
+    ].join(' · ');
+    return (facts: facts, people: people.isEmpty ? null : people);
   }
 
   /// 作品详情（`/rexxar/api/v2/{tv|movie}/{id}`）；失败返回空 Map。

@@ -202,7 +202,7 @@ L2 用它断言"未配置 / 站点禁用时零请求"（`01` §12 第 9 项）�
 
 | # | 用例组 | 关键断言 |
 | --- | --- | --- |
-| 1 | `sanitize()` 13 条 | 逐条断言归一化结果 |
+| 1 | `sanitize()` 13 条 + 本地追加 2 条 | 逐条断言归一化结果；规则 15 后景跟随图片线路 |
 | 2 | 别名键 | `apikey` / `api_key` / `tmdbApiKey` / `key` 均生效 |
 | 3 | JWT 判定 | `a.b.c` 形态保留 `accessToken`；与 `apiKey` 相同的非 JWT 被清空 |
 | 4 | `imageBase` 归一 | `stripImageSize` 反复剥离；补 `/t/p/w342` |
@@ -453,6 +453,9 @@ widget 存在无法区分「图片真的加载了」与「全是占位」——�
 | 季度进度 | 写入/读取/投影/换源/删除 | `phase4_tmdb_progress_test.dart` | `UnknownSeason` 不写；多季不互相覆盖；换源 5 条 |
 | 剧集元数据 | 未知季度不应用 + 代数校验 | `phase4_tmdb_episode_metadata_test.dart` | 反向验证：改回 `[1,0]` 则失败 |
 | 配置归一化 | 13 条 + 别名 + JWT | `phase4_tmdb_config_test.dart` | `toJson`/`objectFrom` 幂等 |
+| 内置线路 | 3 条 API + 4 条图片预设、三种代理拼接形态 | `tmdb_route_test.dart` | 预设经 `sanitize()` 落到 `/3` 与 `/t/p/w342`；后景与海报同线路 |
+| 线路探测 | 200 / 404 / 网络失败 / 空线路 | `tmdb_image_probe_test.dart` | 只发一次请求；失败给可读原因，不抛异常 |
+| 自动线路 | 排序/冷却/TTL/换线条件/读取处解析 | `tmdb_route_selector_test.dart` `tmdb_service_auto_route_test.dart` `tmdb_auto_route_state_test.dart` | 401 与 4xx 不换线；缓存键跨线路稳定；连续两张失败才换图片线路 |
 | 图片选择 | 4 条排序 + 方向回退 | `phase4_tmdb_image_selector_test.dart` | 去重；`limit <= 0` 不限 |
 | 服务可靠性 | 鉴权/TTL/兜底/熔断/取消 | `phase4_tmdb_service_test.dart` | 熔断期**零请求**；陈旧兜底；取消不落盘 |
 | 存储与迁移 | 建表/幂等/往返/上限/清理 | `phase4_tmdb_storage_test.dart` | 旧库打开后新表存在且旧数据不变 |

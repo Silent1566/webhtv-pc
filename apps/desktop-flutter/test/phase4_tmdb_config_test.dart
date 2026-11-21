@@ -8,6 +8,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
+import 'package:webhtv_pc/core/tmdb_route.dart';
 
 void main() {
   group('sanitize() 13 条归一化规则（§5.2）', () {
@@ -20,7 +21,9 @@ void main() {
         const TmdbConfig(apiBase: 'http://192.168.50.50:3000').sanitize().apiBase,
         'http://192.168.50.50:3000/3',
       );
-      expect(const TmdbConfig(apiBase: '').sanitize().apiBase, tmdbDefaultApiBase);
+      // 空值与缺省都落到「自动线路」：默认就是自动（对齐安卓的低延迟优先）。
+      expect(const TmdbConfig(apiBase: '').sanitize().apiBase, tmdbAutoRoute);
+      expect(const TmdbConfig().sanitize().apiBase, tmdbAutoRoute);
     });
 
     test('2. apiKey 去空白；空时回退默认空串', () {
@@ -223,7 +226,12 @@ void main() {
 
   group('apiHost / imageHost（§5.1）', () {
     test('apiHost 去掉 /3 与末尾斜杠', () {
-      expect(const TmdbConfig().apiHost, 'https://api.tmdb.org');
+      expect(
+        const TmdbConfig(apiBase: 'https://api.tmdb.org/3/').apiHost,
+        'https://api.tmdb.org',
+      );
+      // 自动线路没有固定主机：原样交给设置页显示「自动」。
+      expect(const TmdbConfig().apiHost, tmdbAutoRoute);
       expect(
         const TmdbConfig(apiBase: 'http://192.168.50.50:3000/3').apiHost,
         'http://192.168.50.50:3000',
@@ -231,7 +239,11 @@ void main() {
     });
 
     test('imageHost 去掉尺寸段与 /t/p', () {
-      expect(const TmdbConfig().imageHost, 'https://images.tmdb.org');
+      expect(
+        const TmdbConfig(imageBase: 'https://images.tmdb.org').imageHost,
+        'https://images.tmdb.org',
+      );
+      expect(const TmdbConfig().imageHost, tmdbAutoRoute);
       expect(
         const TmdbConfig(imageBase: 'https://images.tmdb.org/t/p/w500').imageHost,
         'https://images.tmdb.org',
@@ -325,9 +337,9 @@ void main() {
 
   group('JSON 输入健壮性', () {
     test('非 Map 输入返回默认配置', () {
-      expect(TmdbConfig.fromJson(null).apiBase, tmdbDefaultApiBase);
-      expect(TmdbConfig.fromJson('x').apiBase, tmdbDefaultApiBase);
-      expect(TmdbConfig.fromJson([1, 2]).apiBase, tmdbDefaultApiBase);
+      expect(TmdbConfig.fromJson(null).apiBase, tmdbAutoRoute);
+      expect(TmdbConfig.fromJson('x').apiBase, tmdbAutoRoute);
+      expect(TmdbConfig.fromJson([1, 2]).apiBase, tmdbAutoRoute);
     });
 
     test('非法类型不抛异常', () {

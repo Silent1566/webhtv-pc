@@ -275,13 +275,13 @@ class TmdbService {
 
 | 字段 | JSON 键（含兼容别名） | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `apiBase` | `apiBase` | `https://api.tmdb.org/3` | 归一化为以 `/3` 结尾 |
+| `apiBase` | `apiBase` | `auto` | **默认自动**（§5.7）；显式值归一化为以 `/3` 结尾；设置页提供内置线路（§5.6） |
 | `apiKey` | `apiKey` / `apikey` / `api_key` / `tmdbApiKey` / `key` | `""` | v3 Key |
 | `accessToken` | `accessToken` / `token` / `readAccessToken` / `bearerToken` | `""` | v4 Token |
 | `omdbApiKey` | `omdbApiKey` / `omdbKey` / `imdbApiKey` | `""` | 详情页 IMDb / 烂番茄 / Metacritic 评分用；**为空时 PC 端一次都不请求 OMDb**（2026-11-11 起由设置页显式配置后启用） |
 | `language` | `language` | `zh-CN` | |
-| `imageBase` | `imageBase` | `https://images.tmdb.org/t/p/w342` | |
-| `backdropBase` | `backdropBase` | `https://images.tmdb.org/t/p/w780` | |
+| `imageBase` | `imageBase` | `auto` | **默认自动**（§5.7）；显式值归一化为 `/t/p/w342`；设置页提供内置线路（§5.6） |
+| `backdropBase` | `backdropBase` | `auto` | 空值跟随 `imageBase`；显式值归一化为 `/t/p/w1280` 且不随图片线路改（§5.6 规则 15） |
 | `enabledSites` | `enabledSites` / `siteKeys` / `sites` / `matchSites` | `[]` | 见 `01` §6 |
 | `disabledSites` | `disabledSites` + 兼容 `excludeKeywords` / `exclude` / `blockedKeywords` / `skipKeywords` | 默认规则 | 见 `01` §6.2 |
 | `allowedSites` | `allowedSites` / `includeSites` / `whitelistSites` | `[]` | |
@@ -305,6 +305,11 @@ class TmdbService {
 12. `excludeKeywordsConfigured == null` → `= !disabledSites.isEmpty()`。
 13. `!excludeKeywordsConfigured && disabledSites.isEmpty()` → `disabledSites = DEFAULT_DISABLED_RULES`。
 
+本地追加的两条规则（2026-10-10 / 2026-11-21），排在 13 条之后、顺序同样固定：
+
+14. **官方 `w780` 后景升级到 `w1280`**：只针对 `images.tmdb.org/t/p/w780` 这一档（用户自选尺寸与自建图床不动）。
+15. **后景跟随图片线路**：`imageBase` 不是官方图床、而 `backdropBase` 仍是官方默认地址时，后景改用 `imageBase` 的同线路 `w1280`。否则用户换了反代只有海报生效，详情页背景照样走打不开的官方图床。用户显式指定的自定义后景（含规则 14 的自选尺寸）一律不动。
+
 辅助函数语义：
 
 - `cleanList`：去空、`trim`、去重、保序。
@@ -322,12 +327,12 @@ TMDB 配置**不进配置 JSON**（`AppConfig`），而是应用设置：
 {
   "tmdb": {
     "enabled": true,
-    "apiBase": "https://api.tmdb.org/3",
+    "apiBase": "auto",           // 默认：自动线路（也可写 https://api.tmdb.org/3 固定）
     "apiKey": "",
     "accessToken": "",
     "language": "zh-CN",
-    "imageBase": "https://images.tmdb.org/t/p/w342",
-    "backdropBase": "https://images.tmdb.org/t/p/w780",
+    "imageBase": "auto",         // 默认：自动线路（也可写 …/t/p/w342 固定）
+    "backdropBase": "auto",
     "enabledSites": [],
     "disabledSites": ["[音]", "[听]", "[书]", "[漫]", "[短]", "[设]", "[画]", "[漫画]", "[小说]", "配置", "[配]"],
     "allowedSites": [],
@@ -359,6 +364,72 @@ TMDB 配置**不进配置 JSON**（`AppConfig`），而是应用设置：
 - 提供"导出 TMDB 设置"（**不含**凭据）与"导入 TMDB 设置"（凭据留空）。
 - 导入时保留本地凭据，避免覆盖。
 - 兼容上游 `TmdbConfig` JSON 形态：导入时用同一 `sanitize()`，因此别名键（`apikey`/`api_key`/`token`）都能识别。
+
+### 5.6 内置线路与自定义地址（2026-11-21，对齐安卓 `TmdbProxy`）
+
+海报与背景全部走图片主机，而这个域名在部分网络下打不开或极慢；安卓版内置了可切换的线路，PC 版此前只能手打完整地址。现在两处地址都由「内置下拉 + 自定义输入」构成，预设定义在 `lib/core/tmdb_route.dart`（纯常量与字符串归一，不依赖 Flutter / `dart:io` / `http`）。
+
+| 用途 | 内置线路 | 形态 |
+| --- | --- | --- |
+| API | **自动** | 存 `auto`，请求时按健康度选路（§5.7） |
+| API | 官方 `https://api.tmdb.org` | 归一为 `…/3` |
+| API | 官方备用 `https://api.themoviedb.org` | 归一为 `…/3` |
+| API | 公共反代 `https://jsnzkpg4.pages.dev/https://api.tmdb.org` | 归一为 `…/3` |
+| 图片 | **自动** | 存 `auto`，读取时解析成具体线路（§5.7） |
+| 图片 | 官方 `https://images.tmdb.org` | 归一为 `…/t/p/w342` |
+| 图片 | 官方备用 `https://image.tmdb.org` | 归一为 `…/t/p/w342` |
+| 图片 | 公共反代 `https://jsnzkpg4.pages.dev/https://image.tmdb.org` | 归一为 `…/t/p/w342` |
+| 图片 | wsrv.nl `https://wsrv.nl/?url=https://image.tmdb.org` | 归一为 `…?url=…/t/p/w342` |
+
+三条拼接形态（同一份 `imageBase + path` 逻辑即可覆盖，不需要为反代写第二套代码）：
+
+1. **官方直连**：`https://images.tmdb.org/t/p/w342/<node>`。
+2. **路径式反代**：`<反代>/https://image.tmdb.org/t/p/w342/<node>`——目标地址本身就是路径。
+3. **查询式代理**（wsrv.nl）：`https://wsrv.nl/?url=https://image.tmdb.org/t/p/w342/<node>`——目标地址全是查询参数的值。
+
+约束与取舍：
+
+- **自定义输入与预设走同一条归一化**：都进 `sanitize()`，由它补 `/3`、`/t/p/<尺寸>`，因此 `http://api.tmdb.org`、`images.tmdb.org`、带不带末尾斜杠、带不带尺寸段都能用。
+- **默认就是自动**：新装或从未在设置里选过线路时，两条都是 `auto`（对齐安卓 `isApiAuto()` 的缺省语义：官方地址 + 没显式选过＝自动）；显式选了官方直连等具体线路才固定下来。自动的排序与换线见 §5.7。
+- **测速只回答「这条现在通不通」**：设置页的「测试图片线路」取一张 TMDB 公共海报，报出状态码、体积与耗时（`TmdbService.probeImageRoute` → `AppState.testTmdbImageRoute`），**不鉴权、不读缓存、不参与熔断**。
+- **线路判定按主机 + 目标地址，不按尺寸**：`https://images.tmdb.org/t/p/w500` 仍算官方线路（设置页不显示成「自定义」）。
+
+---
+
+### 5.7 自动线路（2026-11-21，对齐安卓 `TmdbProxy.RouteSelector`）
+
+两条线路的**默认值就是自动**，也是下拉的首项。配置里存的是**语义值** `auto`（与安卓同名），不是地址：具体走哪条由运行时决定，因此换线不用改配置、也不用问用户。
+
+**排序语义（API 与图片各自独立）**
+
+1. 未冷却的排在冷却中的前面；
+2. 同一组内按实测延迟升序，没测过的排最后；
+3. 仍然并列时保持候选的原始顺序（官方优先）。
+
+失败只影响该线路 **30 秒**（冷却），成功后立即解除；延迟数据 **10 分钟**过期。实现在 `lib/services/tmdb_route_selector.dart`（时钟可注入，时间语义由单测钉住）。
+
+**API：请求级换线**
+
+- 候选顺序 = 官方 → 官方备用 → 公共反代（顺序即未测速时的优先级）。
+- 只有当错误「像线路问题」时才换下一条：网络失败、超时、5xx。**401/403 不换线**（同一套凭据，换到哪条都一样）、解码失败与 4xx 不换线（换线只会把真正的配置问题藏起来）。
+- 延迟数据来自**真实请求**：每次成功记一次耗时，失败记一次冷却——不额外探活、不需要凭据。
+- 缓存键按「官方基址 + 路径」计算，与本次实际走了哪条线路无关：换线不会为同一次请求写出多份缓存。
+- 全部候选都失败时行为与单线路一致：先给陈旧缓存，再抛最后一个错误。
+
+**图片：会话内择优 + 失败重测**
+
+- 启动时（配置为自动才发请求）对每个候选取一张 TMDB 公共海报（`w342`，约 38 KB），把耗时与可达性记进选择器；**第一张海报之前**就已经是按延迟排好的顺序。测速发生在主界面起来之后（`ui/app.dart` 的引导回调），不在 `AppState.bootstrap()` 里抢首屏网络。
+- 解析发生在读取处（`AppState.tmdbConfig`）：`imageBase` / `backdropBase` 交出去时已经是具体地址，于是服务层、详情页、首页取图、推荐等十几处消费者都不需要认识「自动」，也不会出现海报走反代、后景仍走官方的情况。
+- 取图失败由 `PosterImage` 回报（`TmdbImageHealth.onFailure`）：**60 秒内同一条线路连续两张**失败才判定线路坏——单张 404（被删掉的海报）不足以换线。判定后该线路进冷却、解析结果切换、并异步重测一次；配置仍是 `auto`。
+
+与安卓的差异（有意）：
+
+| 项 | 安卓 | PC | 理由 |
+| --- | --- | --- | --- |
+| 图片失败切换粒度 | 逐图换 URL 重试（`nextAutoImageUrl`） | 线路级：连续两张失败才整条切换 | PC 的图片缓存键是 URL，逐图换主机等于把同一张图重新拉一遍；反复切换会让栅格抖动 |
+| 启动测速 | 由图片加载器顺带测量 | 启动时主动测一次（4 张探针图） | PC 端 `Image.network` 不回传耗时，只靠失败信号会让「低延迟优先」永远不生效 |
+
+`docs/phase4/design/05` §3.9 追加门禁：`tmdb_route_selector_test.dart`（排序/冷却/TTL）、`tmdb_service_auto_route_test.dart`（换线条件与缓存键）、`tmdb_auto_route_state_test.dart`（读取处解析、失败切换、重新测速）。
 
 ---
 
@@ -551,6 +622,7 @@ TMDB 只提供两件事给播放链路：
 | 匹配/绑定持久化 | Gson JSON 字符串 | SQLite 表 | 可查询、可索引、可迁移 |
 | 季度进度持久化 | Room `TmdbSeasonProgress` | SQLite `tmdb_season_progress` | 语义对齐，去掉 `cid` → `configId` |
 | OMDB 评分 | 支持 | 同构：`OmdbService` + 设置页 `omdbApiKey`（2026-11-11） | 无 Key 不请求；评分失败只降级不报错 |
+| 线路选择 | `TmdbProxy` 内置线路 + `auto` 延迟择优/失败切换 | 内置线路 + 自定义地址 + 手动测速（§5.6），无 `auto` | PC 端没有逐图兜底；静默换线路会让同一张图落到不同域名。测速只给结论，不改配置 |
 | 错误分类 | `IllegalStateException` + 字符串 | 结构化 `AppErrorKind.tmdb*` | 对齐 Phase 3 的字幕/弹幕/EPG 模式 |
 | 取消语义 | 线程中断 + `CancellationException` | `CancellationToken` + `siteCancelled` | 对齐 PC 端既有机制 |
 | 日志 | `SpiderDebug.log` | `LogService` | 对齐 PC 端既有机制 |
@@ -581,3 +653,4 @@ TMDB 只提供两件事给播放链路：
 8. `settings.json` 读写往返；凭据在日志与诊断导出中脱敏。
 9. 缓存目录不可写时**降级为不缓存**，主流程不受影响。
 10. "重置缓存"保留 SQLite 结论；"清空历史"清空季度进度但保留匹配与绑定。
+11. 内置线路经 `sanitize()` 后落在 `/3` 与 `/t/p/w342`；换图片线路后后景跟随（规则 15）；线路探测地址在官方/路径式反代/查询式代理三种形态下拼接正确。

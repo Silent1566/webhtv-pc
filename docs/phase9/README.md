@@ -148,6 +148,11 @@ PC 端已完成 Phase 0–8，**配置 → 站点 → 浏览/搜索 → 详情 �
 | N7 | AppBranding 品牌页 | PC 已实现配置驱动的 `wallpaper`/`logo`，且优先级高于自身身份 | 「PC 端使用配置提供的壁纸与 Logo，不提供独立的品牌设置页。」 |
 | N8 | 内置影视资源 / 站点配置 / 爬虫 | 产品边界（不内置资源、不内置配置、不内置爬虫） | 「PC 端不内置任何影视资源、站点配置或爬虫，全部由用户自行导入。」 |
 
+> **2026-11-20 变更**：`PushActivity` 的**接收推送播放**已迁移——PC 现在提供局域网
+> 推送页与安卓同款 `POST /action?do=push` 端点，并新增「剧名」用于 TMDB 匹配
+> （设计文档 §30，代码 `lib/ui/push_dialog.dart` + `lib/services/sync_server.dart`）。
+> N4 现在只覆盖 Android Intent、APK 推送、前台保活与电池适配。
+
 ---
 
 ## 6. 波次计划

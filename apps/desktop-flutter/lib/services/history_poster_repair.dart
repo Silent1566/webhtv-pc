@@ -8,6 +8,7 @@
 library;
 
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import 'storage.dart';
 import 'site_service.dart';
 
@@ -40,6 +41,11 @@ class HistoryPosterRepair {
     final vodId = item.vodId.trim();
     if (siteKey.isEmpty || vodId.isEmpty) return null;
 
+    // 推送行：站源详情返回的是网盘 logo，刮削海报（TMDB 缓存）优先。
+    if (siteKey == pushSiteKey) {
+      final scraped = _clean(cachedTmdbPosterUrl(siteKey, vodId));
+      if (scraped != null) return scraped;
+    }
     final site = _siteOf(siteKey, item.sourceKey);
     final l1 = await _fromDetail(site, item);
     if (l1 != null) return l1;

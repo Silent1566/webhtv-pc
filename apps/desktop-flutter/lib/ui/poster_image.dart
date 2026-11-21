@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../services/tmdb_route_health.dart';
 import 'image_header_scope.dart';
 
 /// 图片加载：站点图床可能失效，用占位符而不是抛错。
@@ -125,9 +126,14 @@ class PosterImage extends StatelessWidget {
                   : Center(child: _placeholderIcon(context, loading: true)),
               // 主图加载失败时换后备图**重试一次**；后备也没有（或与主图同址）
               // 就落回占位。后备图的 errorBuilder 直接给占位，不再递归。
-              errorBuilder: (context, error, stackTrace) => canFallback
-                  ? _fallbackImage(context, fallback)
-                  : _emptyPlaceholder(context),
+              errorBuilder: (context, error, stackTrace) {
+                // 自动线路：把「这张图挂了」报给线路选择器。单张 404 不算线路坏，
+                // 是否切换由 AppState 按时间窗判断（这也是唯一的线路反馈入口）。
+                TmdbImageHealth.onFailure?.call(target);
+                return canFallback
+                    ? _fallbackImage(context, fallback)
+                    : _emptyPlaceholder(context);
+              },
             ),
     );
   }

@@ -10,14 +10,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
+import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/services/search_suggest_service.dart';
+import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
+import 'package:webhtv_pc/services/tmdb_identity_service.dart';
+import 'package:webhtv_pc/services/tmdb_season_service.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/state/detail_recommendation_state.dart';
+import 'package:webhtv_pc/state/tmdb_state.dart';
+import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/home_cards.dart';
 import 'package:webhtv_pc/ui/home_page.dart';
 import 'package:webhtv_pc/ui/search_page.dart';
@@ -28,6 +34,10 @@ import 'support/detail_test_seams.dart';
 import 'support/test_fonts.dart';
 
 final _capture = Platform.environment['HOME_CARD_CAPTURE'] == '1';
+final _captureAfter = Platform.environment['HOME_DETAIL_CAPTURE'] == '1';
+
+/// 回退页 After 截图：只有显式打开环境变量时才写盘，CI 默认跑全绿。
+final _withFonts = _capture || _captureAfter;
 final _captureRoot = GlobalKey();
 
 const _item = TmdbItem(
@@ -37,9 +47,34 @@ const _item = TmdbItem(
   overview: '推荐作品的剧情简介',
 );
 
+/// 当前选中的普通站点（indexs 不为 1）：推荐点击「先按片名搜一次」的目标。
+Site _site() => Site(
+  key: 'current',
+  name: '当前站',
+  type: 1,
+  api: 'https://fixture.invalid/api.php/provide/vod',
+);
+
+Vod _siteVod(String vodId, String vodName) =>
+    Vod(vodId: vodId, vodName: vodName);
+
+/// 导航源回退页的剧集卡片前缀（与站源卡片的命名空间隔离）。
+const _navCardPrefix = 'tmdb-episode-card-nav-';
+
+Finder _navCards() => find.byWidgetPredicate(
+  (widget) =>
+      widget is OutlinedButton &&
+      widget.key is ValueKey<String> &&
+      (widget.key! as ValueKey<String>).value.startsWith(_navCardPrefix),
+);
+
 class _HomeRecommendationState extends AppState with ExternalMetaOff {
-  _HomeRecommendationState(Directory dir, this.metadata, this.recommendations)
-    : super(
+  _HomeRecommendationState(
+    Directory dir,
+    this.metadata,
+    this.recommendations,
+    this.fakeTmdb,
+  ) : super(
         paths: AppPaths.resolve(
           overrides: {
             'config': dir.path,
@@ -53,7 +88,20 @@ class _HomeRecommendationState extends AppState with ExternalMetaOff {
 
   final TmdbService metadata;
   final DetailRecommendationDependencies recommendations;
+  final TmdbState fakeTmdb;
   Map<HotRankCategory, List<SearchSuggestItem>> hot = const {};
+
+  /// 注入的「当前选中站点」。null = 首页没有选中站点（退回按片名搜索）。
+  Site? site;
+
+  /// 该站点按片名搜到的条目。
+  List<Vod> siteResults = const [];
+
+  /// 该站点搜索抛错（搜索失败也要按未命中处理）。
+  bool siteSearchFails = false;
+
+  /// 页面真的发过哪几次站点搜索（关键词，按顺序）。
+  final List<String> siteSearches = [];
 
   @override
   Future<List<SearchSuggestItem>> searchHotRank(
@@ -64,6 +112,24 @@ class _HomeRecommendationState extends AppState with ExternalMetaOff {
   TmdbService get tmdbService => metadata;
 
   @override
+  TmdbState get tmdb => fakeTmdb;
+
+  @override
+  Site? get selectedSite => site;
+
+  @override
+  Future<SiteResult?> search(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+  }) async {
+    siteSearches.add(keyword);
+    if (siteSearchFails) throw StateError('fixture site offline');
+    return SiteResult(list: siteResults);
+  }
+
+  @override
   DetailRecommendationDependencies get recommendationDependencies =>
       recommendations;
 }
@@ -71,6 +137,7 @@ class _HomeRecommendationState extends AppState with ExternalMetaOff {
 void main() {
   late Directory dir;
   late TmdbService metadata;
+  late TmdbState tmdbState;
   late _HomeRecommendationState state;
   var browseCalls = 0;
   final hotSearches = <String>[];
@@ -81,7 +148,7 @@ void main() {
   var lookupFails = false;
 
   setUpAll(() async {
-    if (_capture) await loadFixtureFonts();
+    if (_withFonts) await loadFixtureFonts();
   });
 
   setUp(() {
@@ -89,47 +156,56 @@ void main() {
     metadata = TmdbService(
       config: () => TmdbConfig(apiKey: tmdbEnabled ? 'fixture' : ''),
       client: MockClient((request) async {
-        if (request.url.path.endsWith('/search/multi')) {
+        final path = request.url.path;
+        http.Response json(Object body) => http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+        if (path.endsWith('/search/multi')) {
           lookupQueries.add(request.url.queryParameters['query'] ?? '');
           if (pendingLookup != null) return pendingLookup!.future;
           if (lookupFails) throw const SocketException('fixture offline');
-          return http.Response(
-            jsonEncode({'results': lookupResults}),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
+          return json({'results': lookupResults});
         }
-        final detailMatch = RegExp(r'/(movie|tv)/([0-9]+)$')
-            .firstMatch(request.url.path);
-        if (detailMatch != null && int.parse(detailMatch.group(2)!) != 1399) {
+        // 回退页的剧集卡片来自 TMDB 全季聚合：一季两集，卡片才铺得出来。
+        if (path.endsWith('/season/1')) {
+          return json({
+            'season_number': 1,
+            'episodes': [
+              {'episode_number': 1, 'name': '第一集', 'season_number': 1},
+              {'episode_number': 2, 'name': '第二集', 'season_number': 1},
+            ],
+          });
+        }
+        if (path.endsWith('/tv/1399')) {
+          return json({
+            'id': 1399,
+            'name': '双轨',
+            'overview': '推荐作品的剧情简介',
+            'seasons': [
+              {'season_number': 1, 'episode_count': 2},
+            ],
+          });
+        }
+        final detailMatch = RegExp(r'/(movie|tv)/([0-9]+)$').firstMatch(path);
+        if (detailMatch != null) {
           final id = int.parse(detailMatch.group(2)!);
           final result = lookupResults
               .where((item) => item['id'] == id)
               .firstOrNull;
-          return http.Response(
-            jsonEncode({
-              'id': id,
-              'name': result?['name'] ?? result?['title'] ?? '热门样片',
-              'title': result?['title'] ?? result?['name'] ?? '热门样片',
-              'overview': '热门作品的完整资料',
-              'seasons': <Object>[],
-            }),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
+          return json({
+            'id': id,
+            'name': result?['name'] ?? result?['title'] ?? '热门样片',
+            'title': result?['title'] ?? result?['name'] ?? '热门样片',
+            'overview': '热门作品的完整资料',
+            'seasons': <Object>[],
+          });
         }
+        // 其余路径（videos / credits …）按 404 处理：TMDB 区块失败不影响本页。
         return http.Response(
-          jsonEncode(
-            request.url.path.endsWith('/tv/1399')
-                ? {
-                    'id': 1399,
-                    'name': '双轨',
-                    'overview': '推荐作品的剧情简介',
-                    'seasons': <Object>[],
-                  }
-                : {'results': <Object>[]},
-          ),
-          200,
+          jsonEncode({'status_code': 404}),
+          404,
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
       }),
@@ -146,9 +222,29 @@ void main() {
   tearDown(() {
     state.dispose();
     state.recommendations.close();
+    tmdbState.dispose();
     metadata.close();
     dir.deleteSync(recursive: true);
   });
+
+  /// 详情页读取的 TMDB 状态（与既有详情页用例同一套注入方式）。
+  TmdbState buildTmdbState() {
+    TmdbConfig config() => TmdbConfig(apiKey: tmdbEnabled ? 'fixture' : '');
+    return TmdbState(
+      config: config,
+      service: metadata,
+      identityService: TmdbIdentityService(
+        config: config,
+        service: metadata,
+        store: InMemoryTmdbMatchStore(),
+      ),
+      seasonService: TmdbSeasonService(store: InMemoryTmdbSeasonStore()),
+      enrichmentService: TmdbEnrichmentService(
+        service: metadata,
+        config: config,
+      ),
+    );
+  }
 
   Future<void> pumpHome(
     WidgetTester tester, {
@@ -157,6 +253,9 @@ void main() {
     int extraRecommendations = 0,
     Brightness brightness = Brightness.dark,
     Map<HotRankCategory, List<SearchSuggestItem>> hot = const {},
+    Site? site,
+    List<Vod> siteResults = const [],
+    bool siteSearchFails = false,
   }) async {
     final entry = RecommendationEntry(
       item: titleOnly
@@ -198,7 +297,12 @@ void main() {
           ),
       },
     );
-    state = _HomeRecommendationState(dir, metadata, dependencies)..hot = hot;
+    tmdbState = buildTmdbState();
+    state = _HomeRecommendationState(dir, metadata, dependencies, tmdbState)
+      ..hot = hot
+      ..site = site
+      ..siteResults = siteResults
+      ..siteSearchFails = siteSearchFails;
     await tester.runAsync(() => bootstrapWithoutExternalMeta(state));
     // 已看完的记录只作为个性推荐种子，不占首屏轮播位。
     state.database!.upsertHistory(
@@ -217,7 +321,7 @@ void main() {
     addTearDown(tester.view.reset);
     final base = buildAppTheme(brightness);
     final label = base.textTheme.labelLarge?.copyWith(fontFamily: 'FixtureCJK');
-    final theme = !_capture
+    final theme = !_withFonts
         ? base
         : base.copyWith(
             textTheme: base.textTheme.apply(fontFamily: 'FixtureCJK'),
@@ -270,17 +374,45 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('首页推荐查看详情打开当前作品，不切到点播页', (tester) async {
-    await pumpHome(tester);
+  DetailPage pushedDetail(WidgetTester tester) =>
+      tester.widget<DetailPage>(find.byType(DetailPage));
+
+  /// 详情页是满屏 hero + 懒构建的下半页：目标控件在视口外时还没被 build，
+  /// 按既有视觉用例的做法先往下滚到它出现（找不到就交给后面的 expect 报错）。
+  Future<void> scrollDetailTo(WidgetTester tester, Finder target) async {
+    for (var attempt = 0;
+        attempt < 30 && target.evaluate().isEmpty;
+        attempt++) {
+      await tester.drag(
+        find.byType(Scrollable).first,
+        const Offset(0, -160),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('首页推荐查看详情先按片名搜当前站点，命中进站点真实详情', (tester) async {
+    await pumpHome(
+      tester,
+      site: _site(),
+      siteResults: [_siteVod('site-1399', '双轨')],
+    );
     await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
     await tester.pumpAndSettle();
     expect(browseCalls, 0);
-    final detail = tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage));
-    expect(detail.identity, _item.identity);
-    expect(detail.initialItem!.title, '双轨');
-    expect(detail.recommendationDependencies, same(state.recommendations));
-    expect(state.recentSearchKeywords, isEmpty);
+    expect(state.siteSearches, ['双轨'], reason: '点一次只按片名搜一次');
+    final detail = pushedDetail(tester);
+    expect(
+      detail.vod.vodId,
+      'site-1399',
+      reason: '命中站点条目：vodId 非空，页面可直接播放',
+    );
+    expect(detail.vod.vodName, '双轨');
+    expect(detail.state, same(state));
+    expect(find.byType(TmdbDetailPage), findsNothing);
     expect(find.byType(SearchPage), findsNothing);
+    expect(state.recentSearchKeywords, isEmpty);
     expect(tester.takeException(), isNull);
     await unmount(tester);
   });
@@ -300,7 +432,11 @@ void main() {
   });
 
   testWidgets('推荐轨道卡片进入详情，而不是误走去找片源', (tester) async {
-    await pumpHome(tester);
+    await pumpHome(
+      tester,
+      site: _site(),
+      siteResults: [_siteVod('site-1399', '双轨')],
+    );
     final card = find.descendant(
       of: find.byType(HomeRailView),
       matching: find.text('双轨'),
@@ -310,30 +446,83 @@ void main() {
     await tester.tap(card);
     await tester.pumpAndSettle();
     expect(browseCalls, 0);
-    expect(
-      tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage)).identity,
-      _item.identity,
-    );
+    expect(state.siteSearches, ['双轨']);
+    expect(pushedDetail(tester).vod.vodId, 'site-1399');
     expect(find.byType(SearchPage), findsNothing);
+    expect(tester.takeException(), isNull);
     await unmount(tester);
   });
 
-  testWidgets('详情页的搜索站源沿用同一片名和身份', (tester) async {
+  testWidgets('推荐在当前站点没命中时进回退详情页，带重新匹配与剧集卡片', (tester) async {
+    await pumpHome(tester, site: _site());
+    await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
+    await tester.pumpAndSettle();
+    expect(browseCalls, 0);
+    expect(state.siteSearches, ['双轨']);
+    final detail = pushedDetail(tester);
+    expect(
+      detail.vod.vodId,
+      isEmpty,
+      reason: '没有站源身份：合成条目不伪造可播放 id',
+    );
+    expect(detail.vod.vodName, '双轨');
+    final rematch = find.byKey(const ValueKey('tmdb-rematch'));
+    await scrollDetailTo(tester, rematch);
+    expect(rematch, findsOneWidget, reason: '回退页必须提供重新匹配');
+    expect(find.byKey(const ValueKey('tmdb-status-matched')), findsOneWidget);
+    await scrollDetailTo(tester, _navCards());
+    expect(_navCards(), findsWidgets, reason: '剧集卡片由 TMDB 全季聚合铺出');
+    expect(find.byType(TmdbDetailPage), findsNothing);
+    expect(find.byType(SearchPage), findsNothing);
+    expect(tester.takeException(), isNull);
+    await unmount(tester);
+  });
+
+  testWidgets('推荐站点搜索失败按未命中处理，退回回退详情页而不是报错', (tester) async {
+    await pumpHome(tester, site: _site(), siteSearchFails: true);
+    await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
+    await tester.pumpAndSettle();
+    expect(state.siteSearches, ['双轨']);
+    expect(pushedDetail(tester).vod.vodId, isEmpty);
+    final rematch = find.byKey(const ValueKey('tmdb-rematch'));
+    await scrollDetailTo(tester, rematch);
+    expect(rematch, findsOneWidget);
+    expect(find.byType(SearchPage), findsNothing);
+    expect(tester.takeException(), isNull);
+    await unmount(tester);
+  });
+
+  testWidgets('没有选中站点时查看详情退回按片名搜索站源', (tester) async {
     await pumpHome(tester);
     await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('tmdb-search-source')));
-    await tester.pumpAndSettle();
+    expect(state.siteSearches, isEmpty, reason: '没有站点就不该发站点搜索');
     final search = tester.widget<SearchPage>(find.byType(SearchPage));
     expect(search.initialKeyword, '双轨');
-    expect(search.identityHint, _item.identity);
+    expect(search.identityHint, isNull);
+    expect(find.byType(DetailPage), findsNothing);
+    expect(find.byType(TmdbDetailPage), findsNothing);
     expect(browseCalls, 0);
-    await tester.pageBack();
+    await unmount(tester);
+  });
+
+  testWidgets('回退详情页的重新匹配沿用同一片名与 TMDB 身份', (tester) async {
+    await pumpHome(tester, site: _site());
+    await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
     await tester.pumpAndSettle();
-    expect(find.byType(TmdbDetailPage), findsOneWidget);
-    await tester.pageBack();
+    final detail = pushedDetail(tester);
+    expect(detail.vod.vodName, '双轨');
+    expect(detail.vod.extra['tmdb_id'], 1399);
+    expect(detail.vod.extra['media_type'], 'tv');
+    final rematch = find.byKey(const ValueKey('tmdb-rematch'));
+    await scrollDetailTo(tester, rematch);
+    expect(rematch, findsOneWidget);
+    await tester.tap(rematch);
     await tester.pumpAndSettle();
-    expect(find.byType(HomePage), findsOneWidget);
+    final query = tester.widget<TextField>(
+      find.byKey(const ValueKey('meta-match-query')),
+    );
+    expect(query.controller!.text, '双轨');
     expect(browseCalls, 0);
     await unmount(tester);
   });
@@ -401,7 +590,11 @@ void main() {
 
   for (final rightClick in [false, true]) {
     testWidgets('推荐卡片${rightClick ? "右键" : "长按"}展示资料且不会触发单击', (tester) async {
-      await pumpHome(tester);
+      await pumpHome(
+        tester,
+        site: _site(),
+        siteResults: [_siteVod('site-1399', '双轨')],
+      );
       final card = await revealCard(tester, '双轨');
       if (rightClick) {
         await secondaryTap(tester, card);
@@ -417,7 +610,9 @@ void main() {
       expect(find.text('因为你看过《旧作品》').hitTestable(), findsOneWidget);
       expect(find.text('不感兴趣'), findsOneWidget);
       expect(find.byType(TmdbDetailPage), findsNothing);
+      expect(find.byType(DetailPage), findsNothing);
       expect(hotSearches, isEmpty);
+      expect(state.siteSearches, isEmpty, reason: '弹窗本身不触发站点搜索');
       expect(browseCalls, 0);
       await tester.tap(find.byKey(const ValueKey('recommendation-info-open')));
       await tester.pumpAndSettle();
@@ -425,9 +620,11 @@ void main() {
         find.byKey(const ValueKey('recommendation-info-dialog')),
         findsNothing,
       );
+      expect(state.siteSearches, ['双轨']);
       expect(
-        tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage)).identity,
-        _item.identity,
+        pushedDetail(tester).vod.vodId,
+        'site-1399',
+        reason: '弹窗的详情与单击走同一条去向',
       );
       await unmount(tester);
     });
@@ -621,6 +818,7 @@ void main() {
       findsNothing,
     );
     expect(find.byType(TmdbDetailPage), findsNothing);
+    expect(find.byType(DetailPage), findsNothing);
     expect(browseCalls, 0);
     expect(hotSearches, isEmpty);
     await unmount(tester);
@@ -645,6 +843,8 @@ void main() {
     lookupResults = [hotResult(3000, 'tv'), hotResult(3001, 'movie')];
     await pumpHome(
       tester,
+      site: _site(),
+      siteResults: [_siteVod('site-hot', '热门样片')],
       hot: {
         HotRankCategory.movie: [
           const SearchSuggestItem(title: '热门样片', rank: 7),
@@ -655,14 +855,21 @@ void main() {
     await tester.tap(await revealCard(tester, '热门样片'));
     await tester.pumpAndSettle();
     expect(lookupQueries, ['热门样片']);
-    final detail = tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage));
-    expect(detail.identity, TmdbIdentity.of(TmdbMediaType.movie, 3001));
-    expect(detail.initialItem!.title, '热门样片');
-    expect(find.text('热门作品的完整资料'), findsWidgets);
-    expect(detail.recommendationDependencies, same(state.recommendations));
+    expect(
+      find.byKey(const ValueKey('home-hot-details-picker')),
+      findsNothing,
+      reason: '榜单类别筛出唯一候选，不该再让人选',
+    );
+    final detail = pushedDetail(tester);
+    expect(detail.vod.vodId, 'site-hot');
+    expect(detail.vod.vodName, '热门样片');
+    expect(state.siteSearches, ['热门样片']);
+    expect(find.byType(TmdbDetailPage), findsNothing);
     expect(hotSearches, isEmpty);
     expect(browseCalls, 0);
-    await tester.pageBack();
+    // 回退页/详情页的返回是 hero 上的透明 AppBar 图标（tooltip 返回），
+    // 不是 BackButton，所以按 tooltip 点而不是 tester.pageBack()。
+    await tester.tap(find.byTooltip('返回'));
     await tester.pumpAndSettle();
     expect(find.byType(HomePage), findsOneWidget);
     await unmount(tester);
@@ -672,6 +879,8 @@ void main() {
     lookupResults = [hotResult(3001, 'movie')];
     await pumpHome(
       tester,
+      site: _site(),
+      siteResults: [_siteVod('site-hot', '热门样片')],
       hot: {
         HotRankCategory.movie: [
           const SearchSuggestItem(title: '热门样片', rank: 7),
@@ -687,10 +896,8 @@ void main() {
       find.byKey(const ValueKey('recommendation-info-dialog')),
       findsNothing,
     );
-    expect(
-      tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage)).identity,
-      TmdbIdentity.of(TmdbMediaType.movie, 3001),
-    );
+    expect(pushedDetail(tester).vod.vodId, 'site-hot');
+    expect(state.siteSearches, ['热门样片']);
     expect(hotSearches, isEmpty);
     await unmount(tester);
   });
@@ -701,6 +908,8 @@ void main() {
       await pumpHome(
         tester,
         hotOnly: true,
+        site: _site(),
+        siteResults: [_siteVod('site-hot', '热门样片')],
         hot: {
           category: [const SearchSuggestItem(title: '热门样片', rank: 3)],
         },
@@ -711,13 +920,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(hotSearches, ['热门样片']);
       expect(lookupQueries, isEmpty);
+      expect(find.byType(DetailPage), findsNothing);
       hotSearches.clear();
       await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
       await tester.pumpAndSettle();
-      expect(
-        tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage)).identity,
-        TmdbIdentity.of(TmdbMediaType.tv, 3002),
-      );
+      expect(pushedDetail(tester).vod.vodId, 'site-hot');
+      expect(state.siteSearches, ['热门样片']);
       expect(hotSearches, isEmpty);
       await unmount(tester);
     });
@@ -730,6 +938,8 @@ void main() {
     ];
     await pumpHome(
       tester,
+      site: _site(),
+      siteResults: [_siteVod('site-hot', '热门样片')],
       hot: {
         HotRankCategory.movie: [
           const SearchSuggestItem(title: '热门样片', rank: 7),
@@ -738,7 +948,7 @@ void main() {
     );
     await tester.tap(await revealCard(tester, '热门样片'));
     await tester.pumpAndSettle();
-    expect(find.byType(TmdbDetailPage), findsNothing);
+    expect(find.byType(DetailPage), findsNothing);
     expect(
       find.byKey(const ValueKey('home-hot-details-picker')),
       findsOneWidget,
@@ -749,10 +959,8 @@ void main() {
       find.byKey(const ValueKey('home-hot-candidate-movie:3003')),
     );
     await tester.pumpAndSettle();
-    expect(
-      tester.widget<TmdbDetailPage>(find.byType(TmdbDetailPage)).identity,
-      TmdbIdentity.of(TmdbMediaType.movie, 3003),
-    );
+    expect(pushedDetail(tester).vod.vodId, 'site-hot');
+    expect(state.siteSearches, ['热门样片']);
     expect(hotSearches, isEmpty);
     await unmount(tester);
   });
@@ -830,6 +1038,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.byType(TmdbDetailPage), findsNothing);
+      expect(find.byType(DetailPage), findsNothing);
       expect(hotSearches, isEmpty);
       expect(browseCalls, 0);
       await tester.tap(find.byKey(const ValueKey('home-hot-details-search')));
@@ -930,5 +1139,41 @@ void main() {
         });
       }
     }
+  }
+
+  if (_captureAfter) {
+    testWidgets('推荐未命中回退页 After 截图', (tester) async {
+      await pumpHome(tester, site: _site());
+      await tester.tap(find.byKey(const ValueKey('home-hero-primary')));
+      await tester.pumpAndSettle();
+      final rematch = find.byKey(const ValueKey('tmdb-rematch'));
+      await scrollDetailTo(tester, rematch);
+      expect(rematch, findsOneWidget);
+      await tester.ensureVisible(rematch);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.runAsync(() async {
+        final boundary =
+            _captureRoot.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 1);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        image.dispose();
+        var root = Directory.current;
+        while (!Directory('${root.path}/apps/desktop-flutter').existsSync()) {
+          if (root.parent.path == root.path) {
+            throw StateError('Repository root not found');
+          }
+          root = root.parent;
+        }
+        final output =
+            Directory('${root.path}/docs/superpowers/evidence/home-detail-route')
+              ..createSync(recursive: true);
+        File('${output.path}/after-home-fallback.png').writeAsBytesSync(
+          bytes!.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+        );
+      });
+      await unmount(tester);
+    });
   }
 }

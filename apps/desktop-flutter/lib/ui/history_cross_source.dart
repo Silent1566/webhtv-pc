@@ -81,6 +81,12 @@ Future<void> openHistoryFromOtherSource(
     if (fallbackReason == null) return;
 
     // ── 第二步：原配置不可用 → 提示原因，再走既有的当前源匹配 ──
+    // 连当前配置都没有时没有可匹配的站点；「看详情」仍按导航详情打开，
+    // 与当前站点缺失时的兜底一致（起播仍只能提示，不能伪造播放源）。
+    if (!wantsPlay && (state.effectiveConfig?.sites.isEmpty ?? true)) {
+      await _openMissingSiteDetail(context, state, item);
+      return;
+    }
     _toast(context, '$fallbackReason，改为在当前播放源中匹配');
     await _matchInCurrentSource(context, state, item, feedback!);
   } catch (error) {
@@ -213,6 +219,35 @@ Future<void> _openDetailFromSource(
         resumeSeed: resumeSeedOf(item),
         sourceContext: sourceContext,
         sourceSiteKey: site.key,
+      ),
+    ),
+  );
+}
+
+/// 原来源与当前配置都不可用：仍按导航详情打开已保存的条目。
+///
+/// 与 [openHistoryDetail] 的缺站点分支同一结果：空 `vodId` 让详情页走
+/// TMDB/换源的导航形态，绝不拿旧站点 id 去请求当前站点。
+Future<void> _openMissingSiteDetail(
+  BuildContext context,
+  AppState state,
+  PlaybackHistory item,
+) async {
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => DetailPage(
+        state: state,
+        vod: Vod(
+          vodId: '',
+          vodName: item.vodName,
+          vodPic: item.vodPic,
+          extra: item.hasTmdbIdentity
+              ? {'tmdb_id': item.tmdbId, 'media_type': item.mediaType}
+              : const {},
+        ),
+        historyFlag: item.flag,
+        historyEpisodeId: item.episodeId,
+        resumeSeed: resumeSeedOf(item),
       ),
     ),
   );

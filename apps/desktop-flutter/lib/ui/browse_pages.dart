@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../core/app_error.dart';
+import '../core/episode_manual_match.dart';
 import '../core/episode_range.dart';
 import '../core/episode_aggregation.dart';
 import 'episode_version_dialog.dart';
@@ -20,6 +21,7 @@ import '../core/meta_source.dart';
 import '../core/meta_pipeline.dart';
 import '../core/playback_platform.dart';
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import '../core/recommendation_target.dart';
 import '../core/source_meta_resolver.dart';
 import '../core/source_swap.dart';
@@ -52,6 +54,7 @@ import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
 import 'layout_scale.dart';
 import 'tmdb_detail_page.dart';
+import 'episode_match_dialog.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
 import 'common.dart';
@@ -1457,11 +1460,27 @@ class _DetailPageState extends State<DetailPage> {
     final state = widget.state;
     final tmdb = state.tmdb;
     // 只认本页请求的权威条目，站源重写 ID 后仍能归属；别的剧不能借此认领。
-    final vod = state.detailRequestVodId == widget.vod.vodId
+    // 合成条目页的 id 都是空串，`detailRequestVodId` 也会与每条合成条目相等；
+    // 这时全局 `selectedVod` 可能还是上一部作品，归属必须只看本页条目。
+    final vod = widget.vod.vodId.isEmpty
+        ? widget.vod
+        : state.detailRequestVodId == widget.vod.vodId
         ? state.selectedVod ?? widget.vod
         : widget.vod;
-    return (tmdb.vodId.isEmpty && widget.vod.vodId.isEmpty) ||
-        tmdb.belongsTo(vod.vodId);
+    if (vod.vodId.isNotEmpty) return tmdb.belongsTo(vod.vodId);
+    if (tmdb.vodId.isNotEmpty) return false;
+    // 合成条目页（推荐 / 缺站详情）没有 id 可判归属：空 id 的残留数据只属于
+    // 上一部作品，必须再比一次身份或标题，否则新页面首帧会借用它的封面与简介。
+    final declared = TmdbIdentity.from(
+      vod.extra['media_type'],
+      vod.extra['tmdb_id'],
+    );
+    if (declared != null) {
+      final retained = tmdb.identity;
+      return retained == null || retained == declared;
+    }
+    final retainedTitle = tmdb.vod?.vodName;
+    return retainedTitle == null || retainedTitle == vod.vodName;
   }
 
   /// 属于本页影片的 TMDB 状态；`null` 表示按「无 TMDB」渲染。
@@ -1952,6 +1971,8 @@ class _DetailPageState extends State<DetailPage> {
         state: state,
         vod: vod ?? widget.vod,
         tmdbSearch: state.tmdbConfig.isReady ? state.searchTmdb : null,
+        // 只认本页自己的 TMDB 状态：别的页面/上一条记录的匹配不能当「当前」。
+        currentTmdb: _ownedTmdb?.identity,
         onPickTmdb: (item) {
           unawaited(state.matchTmdbManual(item: item, sourceTitle: vod?.vodName));
         },
@@ -2382,7 +2403,16 @@ class _DetailPageState extends State<DetailPage> {
   String _heroPlayLabel(List<VodPlayLine> lines, Vod vod) {
     final target = _resumeTarget(lines);
     final resume = _resumePositionOf(vod, lines, target);
-    return historyPlayLabel(target: target, resumePosition: resume);
+    // 推送的集名常带 "[2.44G] S01E01" 这类原始标签：按钮上展示清洗后的「第N集」。
+    final cleaned = _pageSite?.key == pushSiteKey
+        ? HistoryResumeTarget(
+            flag: target.flag,
+            episodeIndex: target.episodeIndex,
+            episodeName: pushEpisodeLabel(target.episodeName),
+            matched: target.matched,
+          )
+        : target;
+    return historyPlayLabel(target: cleaned, resumePosition: resume);
   }
 
   /// 历史那一集的续播位置（`design/02` §3.1 的第二个条件）。
@@ -4110,19 +4140,12 @@ class _DetailPageState extends State<DetailPage> {
     final cards = <String, List<TmdbEpisodeCard>>{};
     for (final rawLine in lines) {
       final isActive = rawLine.flag == activeFlag;
-      if (widget.state.hasAiMappings(vod, rawLine)) {
-        final episodes = _renderEpisodes(rawLine, active: isActive);
-        cards[rawLine.flag] = _aiEpisodeCards(
-          _episodesReversed ? episodes.reversed.toList() : episodes,
-        );
-        continue;
-      }
       // `_buildEpisodes` 的 `sourceIndices` 取自 TMDB 应用元数据**之后**的线路集，
       // 这里必须用同一个来源，否则同一个缺号集会被算出两个集号。
       final enriched = tmdb.applyEpisodesToLine(rawLine).line;
       final episodes = _renderEpisodes(rawLine, active: isActive);
       final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
-      cards[rawLine.flag] = tmdb.episodeCardsForEpisodes(
+      final autoCards = tmdb.episodeCardsForEpisodes(
         ordered,
         seasonNumber: seasonNumber,
         includeMetadata: isActive,
@@ -4131,14 +4154,31 @@ class _DetailPageState extends State<DetailPage> {
           ordered,
         ),
       );
+      cards[rawLine.flag] = widget.state.hasEpisodeBindings(vod, rawLine)
+          ? _boundAwareCards(ordered, autoCards)
+          : autoCards;
     }
     return cards;
   }
 
-  /// 渲染当前线路的剧集区（区块头 + 剧集卡片）。
-  List<TmdbEpisodeCard> _aiEpisodeCards(List<VodEpisode> episodes) => [
-    for (final episode in episodes) _aiEpisodeCard(episode),
+  /// 逐集挑卡片来源：**有显式绑定的集**用绑定元数据，其余集保留自动刮削。
+  ///
+  /// 为什么不能整条线路二选一：手动匹配通常只覆盖一部分集（用户常见操作是纠正
+  /// 某一张卡再往后顺延）。整条线路切到「绑定元数据」分支时，没被锚点覆盖的集
+  /// 没有 `tmdb_*` extra，卡片就会退回源名、丢掉剧照/日期/集标题——用户看到的
+  /// 正是「匹配第 3 集之后前两集的刮削没了」。
+  List<TmdbEpisodeCard> _boundAwareCards(
+    List<VodEpisode> episodes,
+    List<TmdbEpisodeCard> autoCards,
+  ) => [
+    for (var i = 0; i < episodes.length; i++)
+      episodes[i].extra['episode_identity_confirmed'] == true
+          ? _aiEpisodeCard(episodes[i])
+          : i < autoCards.length
+          ? autoCards[i]
+          : _aiEpisodeCard(episodes[i]),
   ];
+
   TmdbEpisodeCard _aiEpisodeCard(VodEpisode episode) {
     final season = episode.extra['tmdb_season_number'] as int?;
     final number = episode.extra['tmdb_episode_number'] as int?;
@@ -4213,9 +4253,7 @@ class _DetailPageState extends State<DetailPage> {
             ? group.episodeNumber - 1
             : group.versions.first.sourceIndex,
     ];
-    final rawCards = widget.state.hasAiMappings(vod, rawLine)
-        ? _aiEpisodeCards(ordered)
-        : tmdb == null
+    final autoCards = tmdb == null
         ? TmdbEpisodeCards.build(
             sourceNames: ordered.map((episode) => episode.name).toList(),
             metadataByNumber: const <int, TmdbEpisode>{},
@@ -4227,6 +4265,9 @@ class _DetailPageState extends State<DetailPage> {
             includeMetadata: true,
             sourceIndices: cardSourceIndices,
           );
+    final rawCards = widget.state.hasEpisodeBindings(vod, rawLine)
+        ? _boundAwareCards(ordered, autoCards)
+        : autoCards;
 
     final cards = [
       for (var i = 0; i < rawCards.length; i++)
@@ -4265,10 +4306,48 @@ class _DetailPageState extends State<DetailPage> {
         ? _rangeIndex.clamp(0, ranges.length - 1)
         : EpisodeRangePolicy.selectedPosition(ranges);
 
+    // 集级手动匹配：卡面标记、摘要行与卡片菜单（`docs/superpowers/specs/
+    // 2026-11-21-episode-manual-match-design.md`）。标记按**卡片下标**算：
+    // 聚合组里任一版本被锚点覆盖，整张卡就算手动匹配。
+    final manualTargets = widget.state.manualEpisodeTargetsFor(vod, rawLine);
+    final duplicateSourceIndexes = EpisodeManualMatch.duplicateIndexes(
+      manualTargets,
+    );
+    final manualCardIndexes = <int>{};
+    final duplicateCardIndexes = <int>{};
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].versions.any(
+        (version) => manualTargets.containsKey(version.sourceIndex),
+      )) {
+        manualCardIndexes.add(i);
+      }
+      if (groups[i].versions.any(
+        (version) => duplicateSourceIndexes.contains(version.sourceIndex),
+      )) {
+        duplicateCardIndexes.add(i);
+      }
+    }
+    final variety = EpisodeManualMatch.isVariety(
+      tmdb?.detailData?.genres ?? const [],
+    );
+
+    void showDetails(int index, TmdbEpisodeCard card) => _showEpisodeDetails(
+      groups[index].episodeNumber > 0
+          ? card
+          : _sourceCardForDetails(card, ordered[index]),
+      sourceName: groups[index].isMultiple
+          ? groups[index].label
+          : ordered[index].name,
+      onAction: () => _playEpisodeGroup(vod, rawLine, groups[index]),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (widget.state.hasAiMappings(vod, rawLine))
+        // 这里只放 **AI** 的季节 chips：手动匹配也能让 hasEpisodeBindings 为真，
+        // 但那种情况下 aiMappingsFor 可能为 null。
+        if (widget.state.aiMappingsFor(vod, rawLine)?.bindings.isNotEmpty ??
+            false)
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -4315,6 +4394,21 @@ class _DetailPageState extends State<DetailPage> {
               setState(() => _episodesReversed = !_episodesReversed),
           onToggleGridMode: _toggleEpisodeGridMode,
         ),
+        TmdbEpisodeMatchSummary(
+          manualCount: widget.state
+              .manualEpisodeAnchorsFor(vod, rawLine)
+              .length,
+          droppedCount: widget.state.manualEpisodeDroppedFor(vod, rawLine),
+          onClear: widget.state
+                  .manualEpisodeAnchorsFor(vod, rawLine)
+                  .isEmpty
+              ? null
+              : () => widget.state.clearManualEpisodeMatch(
+                  vod: vod,
+                  line: rawLine,
+                  siteKey: widget.state.tmdbSiteKeyForAi,
+                ),
+        ),
         // 剧集海报卡片：本线路**唯一**的选集入口（用户反馈 2026-10-08：
         // 有卡片时不再渲染文字版集按钮，二者取其一）。
         // 聚合只改变此处投影；未匹配 TMDB 时用来源剧照/海报兑底，
@@ -4336,16 +4430,21 @@ class _DetailPageState extends State<DetailPage> {
             _rangeIndex = index;
             _manualRange = true;
           }),
+          variety: variety,
+          manualIndexes: manualCardIndexes,
+          duplicateIndexes: duplicateCardIndexes,
           onTap: (index, _) => _playEpisodeGroup(vod, rawLine, groups[index]),
-          onLongPress: (index, card) => _showEpisodeDetails(
-            groups[index].episodeNumber > 0
-                ? card
-                : _sourceCardForDetails(card, ordered[index]),
-            sourceName: groups[index].isMultiple
-                ? groups[index].label
-                : ordered[index].name,
-            onAction: () => _playEpisodeGroup(vod, rawLine, groups[index]),
+          onEpisodeMenu: (index, card, position) => _showEpisodeMenu(
+            context,
+            vod,
+            rawLine,
+            groups,
+            index,
+            card,
+            position,
+            () => showDetails(index, card),
           ),
+          onLongPress: showDetails,
         ),
       ],
     );
@@ -4393,6 +4492,125 @@ class _DetailPageState extends State<DetailPage> {
       title: episode.name,
       seasonNumber: card.seasonNumber,
       stillUrl: _ownedTmdb?.detailData?.posterUrl,
+    );
+  }
+
+  /// 卡片菜单（右键 / 长按）：播放、剧集详情、手动匹配…、恢复自动匹配。
+  Future<void> _showEpisodeMenu(
+    BuildContext context,
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeGroup> groups,
+    int index,
+    TmdbEpisodeCard card,
+    Offset? position,
+    VoidCallback onDetails,
+  ) async {
+    final group = groups[index];
+    final manualTargets = widget.state.manualEpisodeTargetsFor(vod, line);
+    final hasManual = group.versions.any(
+      (version) => manualTargets.containsKey(version.sourceIndex),
+    );
+    final overlay = Overlay.of(context).context.findRenderObject();
+    final box = overlay is RenderBox ? overlay : null;
+    final anchor = position ?? (box?.size.center(Offset.zero) ?? Offset.zero);
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(anchor.dx, anchor.dy, 1, 1),
+        Offset.zero & (box?.size ?? MediaQuery.sizeOf(context)),
+      ),
+      items: <PopupMenuEntry<String>>[
+        const PopupMenuItem<String>(value: 'play', child: Text('播放')),
+        const PopupMenuItem<String>(value: 'details', child: Text('剧集详情')),
+        const PopupMenuItem<String>(value: 'match', child: Text('手动匹配…')),
+        if (hasManual)
+          const PopupMenuItem<String>(
+            value: 'clear',
+            child: Text('恢复自动匹配'),
+          ),
+      ],
+    );
+    if (!mounted || selected == null) return;
+    switch (selected) {
+      case 'play':
+        _playEpisodeGroup(vod, line, group);
+      case 'details':
+        onDetails();
+      case 'match':
+        await _openEpisodeMatchDialog(vod, line, groups, index);
+      case 'clear':
+        await widget.state.clearManualEpisodeMatch(
+          vod: vod,
+          line: line,
+          sourceIndex: group.versions.first.sourceIndex,
+          siteKey: widget.state.tmdbSiteKeyForAi,
+        );
+    }
+  }
+
+  /// 打开匹配弹窗并把结果写回（顺延还是仅此一集由弹窗按钮决定）。
+  Future<void> _openEpisodeMatchDialog(
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeGroup> groups,
+    int index,
+  ) async {
+    final tmdb = _ownedTmdb;
+    if (tmdb == null) return;
+    final seasonCounts = tmdb.seasonEpisodeCounts;
+    if (seasonCounts.isEmpty) {
+      showToast('TMDB 还没有季集数据，暂时无法手动匹配', kind: ToastKind.info);
+      return;
+    }
+    final group = groups[index];
+    final groupIndexes = {
+      for (final version in group.versions) version.sourceIndex,
+    };
+    EpisodeMatchTarget? current;
+    for (final entry
+        in widget.state.manualEpisodeTargetsFor(vod, line).entries) {
+      if (groupIndexes.contains(entry.key)) {
+        current = entry.value;
+        break;
+      }
+    }
+    final seasons = seasonCounts.keys.toList()..sort();
+    final fallbackSeason = group.seasonNumber >= 0
+        ? group.seasonNumber
+        : tmdb.selectedSeason >= 0
+        ? tmdb.selectedSeason
+        : seasons.first;
+    final choice = await showEpisodeMatchDialog(
+      context,
+      title: vod.vodName,
+      seasonEpisodeCounts: seasonCounts,
+      initialSeason: current?.seasonNumber ?? fallbackSeason,
+      initialEpisode:
+          current?.episodeNumber ??
+          (group.episodeNumber > 0 ? group.episodeNumber : index + 1),
+      variety: EpisodeManualMatch.isVariety(
+        tmdb.detailData?.genres ?? const [],
+      ),
+      loadSeason: (season) async {
+        await tmdb.ensureAllSeasonEpisodes(
+          generation: tmdb.generation,
+          allowAnySource: true,
+        );
+        return tmdb.episodesBySeason[season];
+      },
+    );
+    if (choice == null || !mounted) return;
+    final version = group.versions.first;
+    await widget.state.matchEpisodeManually(
+      vod: vod,
+      line: line,
+      sourceIndex: version.sourceIndex,
+      sourceName: version.episode.name,
+      seasonNumber: choice.seasonNumber,
+      episodeNumber: choice.episodeNumber,
+      spread: choice.spread,
+      siteKey: widget.state.tmdbSiteKeyForAi,
     );
   }
 

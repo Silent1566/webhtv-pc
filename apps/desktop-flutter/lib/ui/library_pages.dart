@@ -16,6 +16,7 @@ import '../services/storage.dart';
 import '../services/tmdb_history.dart';
 import '../state/app_state.dart';
 import '../core/protocol.dart';
+import '../core/push_parser.dart';
 import 'poster_image.dart';
 import 'browse_pages.dart';
 import 'common.dart';
@@ -284,7 +285,9 @@ class _HistoryPageState extends State<HistoryPage> {
     final candidates = <PlaybackHistory>[];
     final seen = <String>{};
     for (final item in _items) {
-      if (item.vodPic != null && item.vodPic!.trim().isNotEmpty) continue;
+      final hasPic = item.vodPic != null && item.vodPic!.trim().isNotEmpty;
+      // 推送行即使有图也要补：推送源给的是网盘 logo，刮削海报才对（安卓同逻辑）。
+      if (hasPic && item.siteKey != pushSiteKey) continue;
       final key = '${item.siteKey}@@@${item.vodId}';
       if (seen.add(key)) candidates.add(item);
       if (candidates.length >= 12) break;
@@ -300,6 +303,18 @@ class _HistoryPageState extends State<HistoryPage> {
     );
     var changed = false;
     for (final item in candidates) {
+      // 推送行：先用 TMDB 匹配记录的海报（按标题域回退，旧记录换了 vod id 也能命中）。
+      if (item.siteKey == pushSiteKey) {
+        final scraped = _state
+            .pushMatchedItem(vodId: item.vodId, title: item.vodName)
+            ?.posterUrl
+            ?.trim();
+        if (scraped != null && scraped.isNotEmpty) {
+          _state.updateHistoryPoster(item, scraped);
+          changed = true;
+          continue;
+        }
+      }
       // 单条旧记录补图失败不影响历史列表和继续播放。
       final poster = await repair.posterFor(item);
       if (poster == null || poster.trim().isEmpty) continue;
@@ -702,7 +717,11 @@ class _HistoryPageState extends State<HistoryPage> {
                     ),
                   ),
                   Text(
-                    item.episodeName,
+                    item.siteKey == pushSiteKey
+                        ? (pushEpisodeLabel(item.episodeName).isEmpty
+                              ? item.episodeName
+                              : pushEpisodeLabel(item.episodeName))
+                        : item.episodeName,
                     textAlign: TextAlign.center,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -993,18 +1012,14 @@ class _FavoritesPageState extends State<FavoritesPage> {
       return;
     }
     final site = _state.siteInActiveSource(item.siteKey);
-    if (site == null) {
-      showToast('该收藏所属站点已不在当前配置中：${item.siteKey}', kind: ToastKind.error);
-      return;
-    }
-    await _state.selectSite(site);
+    if (site != null) await _state.selectSite(site);
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DetailPage(
           state: _state,
           vod: Vod(
-            vodId: item.targetId,
+            vodId: site == null ? '' : item.targetId,
             vodName: item.title,
             vodPic: item.vodPic.isEmpty ? null : item.vodPic,
           ),

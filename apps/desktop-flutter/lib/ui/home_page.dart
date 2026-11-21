@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
+import '../core/push_parser.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
@@ -38,10 +39,9 @@ import 'history_cross_source.dart';
 import 'history_entry_detail.dart';
 import 'home_hero.dart';
 import 'playback_resume.dart';
+import 'recommendation_detail_route.dart';
 import 'recommendation_info_dialog.dart';
 import 'search_page.dart';
-import 'tmdb_detail_page.dart';
-import 'tmdb_widgets.dart' show copyToClipboard;
 import 'tokens.dart';
 
 /// hero 的容量上限（与 `core/home_feed.dart` 的 `_heroMax` 同一个数）。
@@ -263,8 +263,22 @@ class _HomePageState extends State<HomePage> {
         TmdbMediaType.parse(row.mediaType),
         row.tmdbId,
       );
-      if (identity == null) continue;
-      byKey[homeHistoryKey(row)] = identity;
+      if (identity != null) {
+        byKey[homeHistoryKey(row)] = identity;
+        continue;
+      }
+      // 推送行常常没有内嵌身份（旧记录 tmdb_id=0，或播放时详情还没匹配上）：
+      // 用匹配记录补一次，首页才有 16:9 背景与简介（对齐点播条目）。
+      if (row.siteKey == pushSiteKey) {
+        final matched = _state.pushMatchedItem(
+          vodId: row.vodId,
+          title: row.vodName,
+        );
+        final pushed = matched == null
+            ? null
+            : TmdbIdentity.of(matched.mediaType, matched.tmdbId);
+        if (pushed != null) byKey[homeHistoryKey(row)] = pushed;
+      }
     }
     await _resolveMeta(byKey);
   }
@@ -757,7 +771,14 @@ class _HomePageState extends State<HomePage> {
       // 没有 TMDB 身份时只展示已有资料，不伪造详情身份或跳到无关站点。
       return _showRecommendationInfo(item);
     }
-    return _openItemDetail(entry!.item);
+    // 去向与点播页的推荐卡是同一条规则：先按标题在当前站点搜一次，命中进该站点的
+    // 真实详情页，没命中才退成导航源形态的回退页（`recommendation_detail_route.dart`）。
+    return openRecommendationDetail(
+      context,
+      _state,
+      entry!.item,
+      site: _state.selectedSite,
+    );
   }
 
   Future<void> _openHotDetail(HomeItem item) async {
@@ -795,7 +816,12 @@ class _HomePageState extends State<HomePage> {
           ? exact.single
           : await _chooseHotDetail(item, exact.isEmpty ? candidates : exact);
       if (!mounted || !feedback.isCurrent || selected == null) return;
-      await _openItemDetail(selected);
+      await openRecommendationDetail(
+        context,
+        _state,
+        selected,
+        site: _state.selectedSite,
+      );
     } catch (_) {
       if (!mounted || !feedback.isCurrent) return;
       feedback.dismiss();
@@ -867,29 +893,6 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     if (mounted && search == true) widget.onSearch(item.title);
-  }
-
-  Future<void> _openItemDetail(TmdbItem item) {
-    return Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => TmdbDetailPage(
-          service: _state.tmdbService,
-          identity: item.identity!,
-          initialItem: item,
-          recommendationDependencies: _state.recommendationDependencies,
-          ratingService: _state.detailRatingService,
-          omdbApiKey: _state.tmdbConfig.omdbApiKey,
-          initialViewMode: _state.episodeViewMode,
-          onViewModeChanged: (mode) =>
-              unawaited(_state.setEpisodeViewMode(mode)),
-          onSearchTitle: (title) => unawaited(_searchRecommendation(title)),
-          onSearchSource: (title, hint) =>
-              unawaited(_searchRecommendation(title, hint)),
-          onOpenVideo: _state.openExternalUrl,
-          onCopyVideo: copyToClipboard,
-        ),
-      ),
-    );
   }
 }
 

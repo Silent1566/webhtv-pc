@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,6 +11,7 @@ import '../core/android_bridge.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
 import '../services/csp_jar_probe.dart';
+import '../core/tmdb_route.dart';
 import '../services/realtime_sync_engine.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
@@ -21,7 +23,7 @@ import 'shell_unpack_dialogs.dart';
 import 'toast.dart';
 import 'tokens.dart';
 
-/// 配置导入页：URL / 本地文件 / JSON 文本三种入口。
+/// 配置导入页：URL / 本地文件与猫源文件夹 / JSON 文本。
 class ConfigPage extends StatefulWidget {
   const ConfigPage({super.key, required this.state});
 
@@ -35,6 +37,7 @@ class _ConfigPageState extends State<ConfigPage> {
   final TextEditingController _input = TextEditingController();
   final TextEditingController _name = TextEditingController();
   bool _busy = false;
+  bool _pickingLocal = false;
   String? _resultMessage;
   bool _resultIsError = false;
 
@@ -77,7 +80,7 @@ class _ConfigPageState extends State<ConfigPage> {
     if (value.isEmpty) {
       setState(() {
         _resultIsError = true;
-        _resultMessage = '请输入配置 URL、本地文件路径或 JSON 文本';
+        _resultMessage = '请输入配置 URL、本地文件或文件夹路径或 JSON 文本';
       });
       return;
     }
@@ -161,15 +164,37 @@ class _ConfigPageState extends State<ConfigPage> {
     }
   }
 
-  Future<void> _pickFile() async {
-    final path = await showDialog<String>(
-      context: context,
-      builder: (context) => const _ConfigFilePathDialog(),
-    );
-    if (!mounted) return;
-    if (path != null && path.trim().isNotEmpty) {
-      _input.text = path.trim();
-      await _import();
+  Future<void> _pickLocal({bool folder = false}) async {
+    if (_busy || _pickingLocal) return;
+    setState(() => _pickingLocal = true);
+    try {
+      final String? path;
+      if (folder) {
+        path = await FilePicker.getDirectoryPath(dialogTitle: '选择猫源本地包文件夹');
+      } else {
+        final file = await FilePicker.pickFile(dialogTitle: '选择配置文件或猫源 ZIP 包');
+        if (file != null && file.path == null) {
+          throw StateError('所选文件没有可用的本地路径，请选择本地文件');
+        }
+        path = file?.path;
+      }
+      final selectedPath = path;
+      if (!mounted || selectedPath == null || selectedPath.trim().isEmpty) {
+        return;
+      }
+      setState(() {
+        _input.text = selectedPath;
+        _resultMessage = null;
+        _resultIsError = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _resultIsError = true;
+        _resultMessage = '无法打开本地选择器：$error。可手动输入文件或文件夹路径。';
+      });
+    } finally {
+      if (mounted) setState(() => _pickingLocal = false);
     }
   }
 
@@ -203,8 +228,8 @@ class _ConfigPageState extends State<ConfigPage> {
             ),
             if (_importExpanded) ...[
               const Text(
-                '支持三种导入方式：HTTP(S) 配置地址、本地文件路径、直接粘贴 JSON 文本。'
-                '导入失败不会覆盖已有配置。',
+                '支持 HTTP(S) 配置地址、本地文件、猫源文件夹或直接粘贴 JSON 文本。'
+                '选择文件或文件夹后点击「导入」；导入失败不会覆盖已有配置。',
               ),
               const SizedBox(height: 12),
               TextField(
@@ -229,7 +254,7 @@ class _ConfigPageState extends State<ConfigPage> {
                   expands: true,
                   textAlignVertical: TextAlignVertical.top,
                   decoration: const InputDecoration(
-                    labelText: '配置 URL / 文件路径 / JSON 文本',
+                    labelText: '配置 URL / 本地路径 / JSON 文本',
                     border: OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
@@ -247,7 +272,7 @@ class _ConfigPageState extends State<ConfigPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton.icon(
-                    onPressed: _busy ? null : _import,
+                    onPressed: _busy || _pickingLocal ? null : _import,
                     icon: _busy
                         ? const SizedBox(
                             width: 16,
@@ -257,13 +282,37 @@ class _ConfigPageState extends State<ConfigPage> {
                         : const Icon(Icons.playlist_add_check),
                     label: const Text('导入'),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _pickFile,
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('选择本地文件'),
+                  MenuAnchor(
+                    menuChildren: [
+                      MenuItemButton(
+                        onPressed: () => _pickLocal(),
+                        child: const Text('选择文件（JSON / ZIP）'),
+                      ),
+                      MenuItemButton(
+                        onPressed: () => _pickLocal(folder: true),
+                        child: const Text('选择文件夹（猫源包）'),
+                      ),
+                    ],
+                    builder: (context, controller, child) =>
+                        OutlinedButton.icon(
+                          onPressed: _busy || _pickingLocal
+                              ? null
+                              : () => controller.isOpen
+                                    ? controller.close()
+                                    : controller.open(),
+                          icon: const Icon(Icons.folder_open),
+                          label: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('选择本地文件'),
+                              SizedBox(width: 4),
+                              Icon(Icons.arrow_drop_down, size: 18),
+                            ],
+                          ),
+                        ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: _busy ? null : _importFixture,
+                    onPressed: _busy || _pickingLocal ? null : _importFixture,
                     icon: const Icon(Icons.science_outlined),
                     label: const Text('使用仓库 fixture'),
                   ),
@@ -390,49 +439,6 @@ class _ConfigPageState extends State<ConfigPage> {
   }
 }
 
-class _ConfigFilePathDialog extends StatefulWidget {
-  const _ConfigFilePathDialog();
-
-  @override
-  State<_ConfigFilePathDialog> createState() => _ConfigFilePathDialogState();
-}
-
-class _ConfigFilePathDialogState extends State<_ConfigFilePathDialog> {
-  final TextEditingController _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('输入本地配置文件路径'),
-    content: SizedBox(
-      width: 520,
-      child: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: const InputDecoration(
-          hintText: r'例如 C:\Users\you\config.json',
-        ),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('取消'),
-      ),
-      FilledButton(
-        onPressed: () => Navigator.of(context).pop(_controller.text),
-        child: const Text('确定'),
-      ),
-    ],
-  );
-}
-
 /// TMDB 设置页（`docs/phase4/design/04` §10）。
 ///
 /// 设计要点：
@@ -456,6 +462,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   late final TextEditingController _apiBase;
   late final TextEditingController _imageBase;
   late final TextEditingController _language;
+  late final FocusNode _apiBaseFocus;
+  late final FocusNode _imageBaseFocus;
   final TextEditingController _siteRule = TextEditingController();
   final TextEditingController _allowRule = TextEditingController();
   final TextEditingController _denyRule = TextEditingController();
@@ -463,15 +471,27 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   bool _showAccessToken = false;
   bool _showOmdbKey = false;
   bool _busy = false;
+  bool _imageBusy = false;
   String? _testResult;
+  String? _imageTestResult;
   String? _saveResult;
   String? _saveError;
   String? _apiBaseError;
   String? _imageBaseError;
+
+  /// 用户点了「自定义…」但还没改地址：下拉先停在「自定义…」。
+  ///
+  /// 纯瞬态：选择内置线路或成功提交地址（[ _changeEndpoint ]）都会清掉它，
+  /// 之后下拉继续按 `_draft` 每帧反查。
+  bool _apiCustom = false;
+  bool _imageCustom = false;
   int _revision = 0;
   static final _saveQueues = Expando<Future<void>>();
   static final _pendingConfigs = Expando<TmdbConfig>();
   static final _saveErrors = Expando<String>();
+
+  /// 下拉的「自定义…」哨兵值：与任何内置线路地址都不重合。
+  static const String _customRoute = '__custom__';
 
   @override
   void initState() {
@@ -485,6 +505,9 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     _apiBase = TextEditingController(text: _draft.apiBase);
     _imageBase = TextEditingController(text: _draft.imageBase);
     _language = TextEditingController(text: _draft.language);
+    _apiBaseFocus = FocusNode();
+    _imageBaseFocus = FocusNode();
+    _syncAutoEndpoints();
     if (pending != null) {
       _saveQueues[widget.state]?.then((_) {
         if (!mounted || !identical(_draft, pending)) return;
@@ -506,6 +529,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     _apiBase.dispose();
     _imageBase.dispose();
     _language.dispose();
+    _apiBaseFocus.dispose();
+    _imageBaseFocus.dispose();
     _siteRule.dispose();
     _allowRule.dispose();
     _denyRule.dispose();
@@ -519,6 +544,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
     setState(() {
       _draft = config;
       _testResult = null;
+      _imageTestResult = null;
       _saveResult = '正在自动保存…';
     });
     final pending = (_saveQueues[state] ?? Future<void>.value()).then((
@@ -537,6 +563,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       if (!mounted || !identical(_draft, config)) return;
       setState(() {
         _saveError = saved ? null : '自动保存失败，请重新修改后重试';
+        _syncAutoEndpoints();
         if (revision == _revision) {
           _saveResult = saved ? '已自动保存（凭据仅保存在本机）' : _saveError;
         }
@@ -570,16 +597,163 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       setState(() {
         _saveResult = null;
         _testResult = null;
+        _imageTestResult = null;
       });
       return;
     }
+    setState(() {
+      // 手打回内置地址时下拉重新显示该线路；手打未知地址自然落到「自定义…」。
+      if (image) {
+        _imageCustom = false;
+      } else {
+        _apiCustom = false;
+      }
+    });
+    if (image) {
+      // 手打图片地址与预设同一条语义：后景跟着换到同一线路。只提交 imageBase 的话，
+      // 本次会话里海报走反代、详情页背景仍走官方图床，要等重启走 `sanitize()` 规则
+      // 15 才纠回来。输入框保留用户打的那串，不在这里归一化。
+      final base = text.isEmpty ? tmdbDefaultImageBase : text;
+      _commit(
+        _draft.copyWith(
+          imageBase: base,
+          backdropBase: tmdbImageBaseOf(base, tmdbDefaultBackdropSize),
+        ),
+      );
+      return;
+    }
     _commit(
-      image
-          ? _draft.copyWith(
-              imageBase: text.isEmpty ? tmdbDefaultImageBase : text,
-            )
-          : _draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text),
+      _draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text),
     );
+  }
+
+  /// 当前 API 地址命中哪条内置线路；未命中算「自定义」。
+  ///
+  /// 每帧从 `_draft` 反查而不是缓存选中项：地址可能来自手打输入、预设提交或
+  /// 手改 settings.json。命不中任何内置线路时下拉落到「自定义…」哨兵，绝不因为
+  /// 值不在候选里断言（对照 `settings_detail_pages.dart` 的倍速下拉）。
+  ///
+  /// 唯一覆盖它的是瞬态标志 [_apiCustom]：用户刚点「自定义…」、配置还没变时，
+  /// 下拉要立即显示「自定义…」，否则看起来像这一下没生效。
+  TmdbRouteOption? get _apiRoute => tmdbApiRouteOf(_draft.apiBase);
+
+  TmdbRouteOption? get _imageRoute => tmdbImageRouteOf(_draft.imageBase);
+
+  /// 自动线路的输入框显示**解析后的地址**，而不是哨兵 `auto`。
+  ///
+  /// 配置里存的永远是 `auto`（解析发生在读取配置时），把字面量 `auto` 摆进
+  /// 输入框会让人以为要往里手打这个串。非自动一律不动输入框：用户手打的那串
+  /// 必须原样留着，否则边打边被改写。
+  void _syncAutoEndpoints() {
+    final status = widget.state.tmdbRouteStatus();
+    if (tmdbIsAutoRoute(_draft.apiBase)) _apiBase.text = status.apiBase;
+    if (tmdbIsAutoRoute(_draft.imageBase)) _imageBase.text = status.imageBase;
+  }
+
+  /// 「当前实际线路」一行：自动模式是已解析的主机。
+  ///
+  /// 不缓存：解析结果随测速与失败切换变化，每帧从 state 反查才不会显示过期地址。
+  String _routeStatusLine() {
+    final status = widget.state.tmdbRouteStatus();
+    final suffix = status.apiAuto || status.imageAuto
+        ? '（自动，测速后可能变化）'
+        : '';
+    return '当前 API：${status.apiHost}　·　图片：${status.imageHost}$suffix';
+  }
+
+  /// 下拉候选：内置线路 + 末尾「自定义…」。
+  List<DropdownMenuItem<String>> _routeItems(List<TmdbRouteOption> routes) => [
+    for (final option in routes)
+      DropdownMenuItem(value: option.value, child: Text(option.label)),
+    const DropdownMenuItem(value: _customRoute, child: Text('自定义…')),
+  ];
+
+  /// 选中内置 API 线路：立即提交，并把归一化后的地址回填输入框。
+  ///
+  /// 输入框里显示的是 `sanitize()` 之后真正生效的地址（预设的 [value] 不带
+  /// `/3`），与用户手打地址走同一条归一化路径。
+  Future<void> _pickApiRoute(String? value) async {
+    if (value == null) return;
+    if (value == _customRoute) {
+      // 自定义不改变任何地址：下拉先停在「自定义…」，焦点交给输入框。
+      setState(() => _apiCustom = true);
+      _apiBaseFocus.requestFocus();
+      return;
+    }
+    final next = _draft.copyWith(apiBase: value).sanitize();
+    setState(() {
+      _apiCustom = false;
+      _apiBaseError = null;
+    });
+    _commit(next);
+    if (tmdbIsAutoRoute(next.apiBase)) {
+      // 自动线路的具体地址只有 state 解析得出，配置落盘后才拿得到。
+      await _saveQueues[widget.state];
+      if (!mounted) return;
+      _syncAutoEndpoints();
+      return;
+    }
+    _apiBase.text = next.apiBase;
+  }
+
+  /// 选中内置图片线路：必须走 [TmdbConfig.withImageRoute]，海报与后景同线路。
+  Future<void> _pickImageRoute(String? value) async {
+    if (value == null) return;
+    if (value == _customRoute) {
+      setState(() => _imageCustom = true);
+      _imageBaseFocus.requestFocus();
+      return;
+    }
+    final next = _draft.withImageRoute(value);
+    setState(() {
+      _imageCustom = false;
+      _imageBaseError = null;
+    });
+    _commit(next);
+    if (tmdbIsAutoRoute(next.imageBase)) {
+      await _saveQueues[widget.state];
+      if (!mounted) return;
+      _syncAutoEndpoints();
+      return;
+    }
+    _imageBase.text = next.imageBase;
+  }
+
+  /// 测试当前图片线路：与「测试连接」同族，但探测的是海报/背景走的图床。
+  Future<void> _testImageRoute() async {
+    final revision = _revision;
+    setState(() {
+      _imageBusy = true;
+      _imageTestResult = null;
+    });
+    await _saveQueues[widget.state];
+    final result = await widget.state.testTmdbImageRoute();
+    if (!mounted) return;
+    setState(() {
+      _imageBusy = false;
+      if (revision == _revision) _imageTestResult = result;
+    });
+  }
+
+  /// 「重新测速」：只对自动图片线路有意义。
+  ///
+  /// 结论复用「测试图片线路」那一行（同一个 key）：用户要的答案都是「这条线路
+  /// 现在通不通、多快」，两行并排只会留下两份互相覆盖的数字。
+  Future<void> _respeedRoutes() async {
+    final revision = _revision;
+    setState(() {
+      _imageBusy = true;
+      _imageTestResult = null;
+    });
+    await _saveQueues[widget.state];
+    final result = await widget.state.refreshTmdbAutoRoutes();
+    if (!mounted) return;
+    setState(() {
+      _imageBusy = false;
+      if (revision == _revision) _imageTestResult = result;
+      // 测速可能换了线路：说明行与输入框里的地址都要跟着变。
+      _syncAutoEndpoints();
+    });
   }
 
   Future<void> _test() async {
@@ -743,29 +917,93 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
           SettingsSection(
             title: '服务',
             children: [
+              _routeDropdown(
+                fieldKey: 'tmdb-api-route',
+                label: 'API 线路',
+                value: (_apiCustom ? null : _apiRoute)?.value ?? _customRoute,
+                items: _routeItems(tmdbApiRoutes),
+                onChanged: _pickApiRoute,
+              ),
+              const SizedBox(height: 12),
               TextField(
                 key: const ValueKey('tmdb-api-base'),
                 controller: _apiBase,
+                focusNode: _apiBaseFocus,
                 onChanged: (value) => _changeEndpoint(value, image: false),
                 decoration: InputDecoration(
                   errorText: _apiBaseError,
                   labelText: 'API 主机',
                   hintText: 'https://api.tmdb.org/3',
-                  border: OutlineInputBorder(),
+                  // 选中内置线路时用线路说明代替提示语；自定义时只有 hintText。
+                  helperText: _apiRoute?.note,
+                  helperMaxLines: 2,
+                  border: const OutlineInputBorder(),
                 ),
+              ),
+              const SizedBox(height: 12),
+              _routeDropdown(
+                fieldKey: 'tmdb-image-route',
+                label: '图片线路',
+                value: (_imageCustom ? null : _imageRoute)?.value ??
+                    _customRoute,
+                items: _routeItems(tmdbImageRoutes),
+                onChanged: _pickImageRoute,
               ),
               const SizedBox(height: 12),
               TextField(
                 key: const ValueKey('tmdb-image-base'),
                 controller: _imageBase,
+                focusNode: _imageBaseFocus,
                 onChanged: (value) => _changeEndpoint(value, image: true),
                 decoration: InputDecoration(
                   errorText: _imageBaseError,
                   labelText: '图片主机',
                   hintText: 'https://images.tmdb.org/t/p/w342',
-                  border: OutlineInputBorder(),
+                  helperText: _imageRoute?.note,
+                  helperMaxLines: 2,
+                  border: const OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                _routeStatusLine(),
+                key: const ValueKey('tmdb-route-status'),
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              SettingsActions(
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('tmdb-image-test'),
+                    onPressed: _imageBusy ? null : _testImageRoute,
+                    icon: const Icon(Icons.image_outlined),
+                    label: const Text('测试图片线路'),
+                  ),
+                  // 只有自动线路有「测速择优」这回事；固定线路的按钮会让人以为
+                  // 点一下能换线路。
+                  if (tmdbIsAutoRoute(_draft.imageBase))
+                    OutlinedButton.icon(
+                      key: const ValueKey('tmdb-route-respeed'),
+                      onPressed: _imageBusy ? null : _respeedRoutes,
+                      icon: const Icon(Icons.speed),
+                      label: const Text('重新测速'),
+                    ),
+                  if (_imageBusy)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: LoadingBlock(center: false, size: 16),
+                    ),
+                ],
+              ),
+              if (_imageTestResult != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _imageTestResult!,
+                  key: const ValueKey('tmdb-image-test-result'),
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 key: const ValueKey('tmdb-language'),
@@ -928,6 +1166,34 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       ),
     );
   }
+
+  /// 线路下拉：与输入框同一套描边样式（InputDecorator 兜住 label 与边框）。
+  ///
+  /// 用 [DropdownButton] 而非 `DropdownButtonFormField`：后者的值是 FormField
+  /// 内部状态，构造后不再随外部变化——而这里的当前值必须每帧从 `_draft` 反查
+  /// （手打地址后下拉要立刻回到「自定义…」）。
+  Widget _routeDropdown({
+    required String fieldKey,
+    required String label,
+    required String value,
+    required List<DropdownMenuItem<String>> items,
+    required ValueChanged<String?> onChanged,
+  }) => InputDecorator(
+    decoration: InputDecoration(
+      labelText: label,
+      border: const OutlineInputBorder(),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+    ),
+    child: DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        key: ValueKey(fieldKey),
+        value: value,
+        isExpanded: true,
+        items: items,
+        onChanged: onChanged,
+      ),
+    ),
+  );
 
   Widget _ruleSection({
     required String label,
@@ -1579,7 +1845,12 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('开启局域网同步服务'),
-          content: Text(_sync.serverBindHint),
+          // 只说"可以再开"，不能说成"推送已开启"：这一步只动同步服务语义。
+          content: Text(
+            '${_sync.serverBindHint}\n\n'
+            '开启后可在下方「接收推送播放」里允许局域网设备把播放地址推给这台 PC；'
+            '只做同步、不需要别人推给你播的用户不用开它。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -1595,6 +1866,46 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
       if (confirmed != true) return;
     }
     await _sync.setServerEnabled(value);
+  }
+
+  /// 推送页地址行：开启接收推送后，手机要打开的地址（可选中 + 一键复制）。
+  ///
+  /// 地址为空（服务未在监听）时返回空列表：`pushPageUrl` 已用 `null` 表达了
+  /// "现在没有可用地址"，UI 不再自造一行空占位。
+  List<Widget> _receivePushAddress(ThemeData theme, SyncState sync) {
+    final url = sync.pushPageUrl;
+    if (!sync.receivePushEnabled || url == null || url.isEmpty) {
+      return const [];
+    }
+    return [
+      Padding(
+        padding: const EdgeInsets.only(left: 16, right: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: SelectableText(
+                url,
+                key: const ValueKey('receive-push-url'),
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('receive-push-copy'),
+              tooltip: '复制推送页地址',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () => Clipboard.setData(ClipboardData(text: url)),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+        child: Text(
+          '手机和 PC 需在同一局域网；Windows 防火墙可能拦截，放行后手机才连得上。',
+          style: theme.textTheme.bodySmall,
+        ),
+      ),
+    ];
   }
 
   @override
@@ -1749,6 +2060,23 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                 value: sync.serverEnabled,
                 onChanged: sync.busy ? null : _toggleServer,
               ),
+              // 只读状态层：关闭服务时接收推送由 `SyncState` 一并落下去，
+              // 页面自己存一个 bool 就会出现"看起来还开着、手机却连不上"。
+              SwitchListTile(
+                key: const ValueKey('android-receive-push'),
+                title: const Text('接收推送播放'),
+                subtitle: const Text(
+                  '默认关闭：开启后局域网内任何设备都能把播放地址推给这台 PC'
+                  '（安卓 App 的推送/投屏入口可直接选这台 PC，'
+                  '手机浏览器打开下面的地址也行）；只接受私有网段来源；'
+                  '只同步不推送的用户可只开上面的服务开关。',
+                ),
+                value: sync.receivePushEnabled,
+                onChanged: sync.busy
+                    ? null
+                    : (value) => sync.setReceivePushEnabled(value),
+              ),
+              ..._receivePushAddress(theme, sync),
               SwitchListTile(
                 key: const ValueKey('android-sync-push'),
                 title: const Text('向安卓推送'),

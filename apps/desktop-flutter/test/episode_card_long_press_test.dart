@@ -376,9 +376,17 @@ void _pageTests() {
       expect(target, findsOneWidget);
     }
 
+    /// 长按现在打开的是卡片菜单（右键/长按出菜单），「剧集详情」是菜单里的
+    /// 第二项；本文件其余断言仍针对详情页，因此统一由这里点进菜单。
     Future<void> longPressCard(WidgetTester tester, Finder target) async {
       await reveal(tester, target);
       await tester.longPress(target);
+      await tester.pumpAndSettle();
+      // 站点详情页的卡片长按会先出菜单（第二项是「剧集详情」）；纯 TMDB 页
+      // 没有站源集、也就没有匹配菜单，长按仍然直达详情页。
+      final menuItem = find.text('剧集详情');
+      if (menuItem.evaluate().isEmpty) return;
+      await tester.tap(menuItem.last);
       await tester.pumpAndSettle();
     }
 

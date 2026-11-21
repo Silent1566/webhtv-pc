@@ -14,6 +14,8 @@ import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/detail_recommendation.dart';
 import '../core/detail_source_merge.dart';
+import '../core/episode_aggregation.dart';
+import '../core/episode_manual_match.dart';
 import 'detail_recommendation_state.dart';
 
 import 'dart:convert';
@@ -42,6 +44,7 @@ import '../services/ai_content/ai_content_completion.dart';
 import '../services/ai_completion_client.dart';
 import '../services/ai_integration.dart';
 import '../services/ai_season_mapping_service.dart';
+import '../services/episode_manual_match_service.dart';
 import '../services/ai_content_title_bridge.dart';
 import '../services/ai_episode_season_service.dart';
 import '../core/app_error.dart';
@@ -66,6 +69,7 @@ import '../services/following_service.dart';
 import '../services/following_air_time_service.dart';
 import '../services/notification_service.dart';
 import '../services/session_recovery_store.dart';
+import '../services/push_site_service.dart';
 import '../services/sniff_runtime.dart';
 import '../core/history_aggregation.dart';
 import '../core/history_grouping.dart';
@@ -77,6 +81,7 @@ import '../core/osd_config.dart';
 import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_request.dart';
 import '../core/playback_lines.dart';
 import '../core/playback_platform.dart';
 import '../core/player_buttons.dart';
@@ -97,10 +102,15 @@ import '../core/subtitle_provider.dart';
 import '../core/subtitle_settings.dart';
 import '../core/subtitle_style.dart';
 import '../core/tmdb_config.dart';
+import '../core/tmdb_route.dart';
+import '../services/tmdb_route_health.dart';
+import '../services/tmdb_route_selector.dart';
 import '../core/viewing_metadata.dart';
 import '../core/tmdb_subscription.dart';
+import '../core/push_parser.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
+import '../core/tmdb_title.dart';
 import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
 import '../services/lut_store.dart';
@@ -281,6 +291,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 AiContentCompletion? aiContentCompletion,
     AiCompletionClient? aiSeasonClient,
     TmdbService? tmdbService,
+    this.warmAutoRoutes = true,
     ExternalMetaService? externalMetaService,
     PythonEnvironment? pythonEnvironment,
   }) : paths = paths ?? AppPaths.resolve(),
@@ -386,7 +397,15 @@ AiContentCompletion? aiContentCompletion,
     _tmdbCache = TmdbCache(cacheDir: cacheDir);
     _tmdbService =
         tmdbService ??
-        TmdbService(config: () => tmdbConfig, cache: _tmdbCache);
+        TmdbService(
+          config: () => tmdbConfig,
+          cache: _tmdbCache,
+          routeSelector: _tmdbRoutes,
+        );
+    // 图片位出错时由 `PosterImage` 回报到这里，判断「单张坏图还是整条线路坏了」。
+    // 只装回调，不读配置：构造函数阶段 `settings.json` 还没加载。
+    _imageHealthSink = reportTmdbImageFailure;
+    TmdbImageHealth.onFailure = _imageHealthSink;
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
       _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
@@ -778,6 +797,24 @@ AiContentCompletion? aiContentCompletion,
   /// 整个磁盘缓存静默失效而没人发现。测试只能从这里断言接线真的发生了。
   late final TmdbCache _tmdbCache;
 
+  /// 启动时是否真的去测速自动线路（测试可关；生产恒为 true）。
+  final bool warmAutoRoutes;
+
+  /// 本实例装进 [TmdbImageHealth] 的回调：dispose 时只摘自己那一个，
+  /// 不把同进程里另一个 AppState（测试常这么做）的回报口一起清掉。
+  void Function(String url)? _imageHealthSink;
+
+  /// TMDB 线路健康表（自动线路用）。API 与图片各自独立计健康。
+  final TmdbRouteSelector _tmdbRoutes = TmdbRouteSelector();
+
+  /// 自动图片线路的解析缓存：按 [TmdbRouteSelector.version] 失效。
+  String _resolvedImageRoute = tmdbImageAutoCandidates.first;
+  int _resolvedImageRouteVersion = -1;
+
+  /// 图片失败回报的时间窗（自动线路的失败切换防抖）。
+  final Map<String, List<DateTime>> _imageRouteFailures = {};
+  DateTime? _lastAutoProbeAt;
+
   /// 仅供测试：断言 TMDB 服务确实拿到了磁盘缓存（目录指向 [paths] 的缓存根）。
   @visibleForTesting
   TmdbCache get tmdbCacheForTest => _tmdbCache;
@@ -795,15 +832,105 @@ AiContentCompletion? aiContentCompletion,
   /// 订阅凭据。订阅凭据不进入设置、配置记录、导出或日志。
   TmdbConfig get tmdbConfig {
     final user = tmdbUserConfig;
-    if (user.apiKey.trim().isNotEmpty || user.accessToken.trim().isNotEmpty) return user;
+    if (user.apiKey.trim().isNotEmpty || user.accessToken.trim().isNotEmpty) {
+      return _withResolvedAutoRoutes(user);
+    }
     final record = _activeRecord;
     final key = _tmdbSubscription.snapshot(
       record?.id ?? 0,
       record == null ? '' : sourceKeyOfRecord(record),
       _tmdbSubscription.epoch,
     );
-    if (key.isEmpty) return user;
-    return user.withSubscriptionApiKey(key);
+    if (key.isEmpty) return _withResolvedAutoRoutes(user);
+    return _withResolvedAutoRoutes(user.withSubscriptionApiKey(key));
+  }
+
+  /// 自动图片线路在**读取时**解析成具体地址。
+  ///
+  /// 为什么放在这一处：海报与后景的 URL 都由 `config.imageBase` /
+  /// `backdropBase` 直接拼出来，消费点有十几处；解析放在这里，所有消费者
+  /// （服务、详情、首页取图、推荐）拿到的就已经是同一条线路，不必各自认识「自动」。
+  TmdbConfig _withResolvedAutoRoutes(TmdbConfig config) {
+    if (!tmdbIsAutoRoute(config.imageBase)) return config;
+    if (_resolvedImageRouteVersion != _tmdbRoutes.version) {
+      _resolvedImageRouteVersion = _tmdbRoutes.version;
+      _resolvedImageRoute = _tmdbRoutes.preferred(
+        TmdbRouteKind.image,
+        tmdbImageAutoCandidates,
+      );
+    }
+    return config.copyWith(
+      imageBase: tmdbImageBaseOf(_resolvedImageRoute, 'w342'),
+      backdropBase: tmdbImageBaseOf(
+        _resolvedImageRoute,
+        tmdbDefaultBackdropSize,
+      ),
+    );
+  }
+
+  /// 设置页要显示的「当前实际线路」（自动模式是已解析的那一条）。
+  TmdbRouteStatus tmdbRouteStatus() {
+    final configured = tmdbUserConfig;
+    final effective = tmdbConfig;
+    final apiAuto = tmdbIsAutoRoute(configured.apiBase);
+    return TmdbRouteStatus(
+      apiBase: apiAuto
+          ? tmdbApiBaseOf(
+              _tmdbRoutes.preferred(TmdbRouteKind.api, tmdbApiAutoCandidates),
+            )
+          : effective.apiBase,
+      imageBase: effective.imageBase,
+      apiAuto: apiAuto,
+      imageAuto: tmdbIsAutoRoute(configured.imageBase),
+    );
+  }
+
+  /// 自动线路测速：给图片候选各取一张公共海报，把延迟与可达性记进选择器。
+  ///
+  /// 只测图片：API 的延迟来自真实请求（成功即记账、失败进冷却），单独探一次
+  /// 还要凭据，意义不大。返回一句人话给设置页。
+  Future<String> refreshTmdbAutoRoutes() async {
+    if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return '当前不是自动线路';
+    for (final route in tmdbImageAutoCandidates) {
+      final probe = await _tmdbService.probeImageRoute(route);
+      if (probe.ok) {
+        _tmdbRoutes.success(TmdbRouteKind.image, route, probe.elapsed);
+      } else {
+        _tmdbRoutes.failure(TmdbRouteKind.image, route);
+      }
+    }
+    _lastAutoProbeAt = DateTime.now();
+    _notifyIfAlive();
+    final best = _tmdbRoutes.preferred(
+      TmdbRouteKind.image,
+      tmdbImageAutoCandidates,
+    );
+    final latency = _tmdbRoutes.latencyOf(TmdbRouteKind.image, best);
+    final host = Uri.tryParse(best)?.host ?? best;
+    final ms = latency == null ? '未测到' : '${latency.inMilliseconds} ms';
+    log.info('TMDB 图片自动线路：$host（$ms）', scope: 'tmdb');
+    return '自动线路已测速：$host · $ms';
+  }
+
+  /// 图片加载失败的回报入口（自动线路的失败切换）。
+  ///
+  /// 单张坏图（被删掉的海报、404）不代表线路坏，因此要求 **60 秒内同一线路
+  /// 连续两张**失败才切换；切换后异步重测一次，让排序反映真实延迟。
+  void reportTmdbImageFailure(String url) {
+    if (!tmdbIsAutoRoute(tmdbUserConfig.imageBase)) return;
+    final route = tmdbImageRouteOfUrl(url, tmdbImageAutoCandidates);
+    if (route == null) return;
+    final now = DateTime.now();
+    final failures = _imageRouteFailures.putIfAbsent(route, () => <DateTime>[]);
+    failures.add(now);
+    failures.removeWhere((at) => now.difference(at) > const Duration(seconds: 60));
+    if (failures.length < 2) return;
+    failures.clear();
+    _tmdbRoutes.failure(TmdbRouteKind.image, route);
+    _notifyIfAlive();
+    final last = _lastAutoProbeAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) return;
+    unawaited(refreshTmdbAutoRoutes());
   }
 
   void _beginCurrentTmdbCredentialScope() {
@@ -1101,6 +1228,17 @@ AiContentCompletion? aiContentCompletion,
   /// 同时挡住异常配置（比如线路 flag 每帧都变）把两张表撑成无界内存。
   static const int _aiSeasonBindingCapacity = 128;
 
+  /// 集级手动匹配的内存缓存：键与 AI 绑定同口径（配置|站点|影片|标题|线路）。
+  ///
+  /// 与 AI 表不同，这里**不做整批快照失效**：锚点自带 `sourceName`，
+  /// 每次刷新按名重定位、逐条判定失效（见 `EpisodeManualMatch.relocate`），
+  /// 因此线路小改（后段加集）不会把用户的人工结论整批丢掉。
+  final Map<String, List<EpisodeMatchAnchor>> _manualEpisodeAnchors = {};
+  final Map<String, int> _manualEpisodeDropped = {};
+
+  /// 手动锚点缓存容量：与 [_aiSeasonBindingCapacity] 同一量级与淘汰口径。
+  static const int _manualEpisodeCapacity = 128;
+
   /// 记一对「绑定结果 + 线路快照」，超限时按写入顺序淘汰最旧的一条。
   ///
   /// 两张表必须同进同出：只淘汰一张会留下没有绑定的快照，读侧
@@ -1124,20 +1262,74 @@ AiContentCompletion? aiContentCompletion,
 
   String _aiLineKey(Vod vod, VodPlayLine line) =>
       '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
-  VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) {
-    final result = aiMappingsFor(vod, line);
-    if (result == null) return line;
-    return applyAiEpisodeBindings(line, {
-      for (final binding in result.bindings)
-        binding.sourceIndex: (
-          season: binding.seasonNumber,
-          episode: binding.episodeNumber,
-        ),
-    });
+  /// 原始线路的聚合组：手动锚点的**身份口径**。
+  ///
+  /// 必须用未套任何绑定的线路算：锚点靠 `sourceName` 定位，先写 extra 再算组
+  /// 会让分组依赖绑定结果（自指）。聚合开关、倒序、区间都不改变这里的结果。
+  List<EpisodeGroup> _rawGroupsOf(VodPlayLine line) =>
+      EpisodeAggregation.build(line.episodes, scope: line.flag);
+
+  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) => _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
+
+  int manualEpisodeDroppedFor(Vod vod, VodPlayLine line) =>
+      _manualEpisodeDropped[_aiLineKey(vod, line)] ?? 0;
+
+  /// 手动锚点铺开后的逐集目标（未命中任何锚点的集不出现）。
+  Map<int, EpisodeMatchTarget> manualEpisodeTargetsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) {
+    final anchors = manualEpisodeAnchorsFor(vod, line);
+    if (anchors.isEmpty) return const {};
+    return EpisodeManualMatch.resolve(
+      groups: _rawGroupsOf(line),
+      anchors: anchors,
+      seasonEpisodeCounts: tmdb.seasonEpisodeCounts,
+    );
   }
 
+  /// 生效的逐集绑定：**手动锚点 > AI 逐集绑定**（AI 没覆盖到的集才用 AI）。
+  Map<int, ({int season, int episode})> episodeBindingsFor(
+    Vod vod,
+    VodPlayLine line,
+  ) {
+    final bindings = <int, ({int season, int episode})>{
+      for (final entry in manualEpisodeTargetsFor(vod, line).entries)
+        entry.key: (
+          season: entry.value.seasonNumber,
+          episode: entry.value.episodeNumber,
+        ),
+    };
+    final ai = aiMappingsFor(vod, line);
+    if (ai != null) {
+      for (final binding in ai.bindings) {
+        bindings.putIfAbsent(
+          binding.sourceIndex,
+          () => (season: binding.seasonNumber, episode: binding.episodeNumber),
+        );
+      }
+    }
+    return bindings;
+  }
+
+  bool hasEpisodeBindings(Vod vod, VodPlayLine line) =>
+      episodeBindingsFor(vod, line).isNotEmpty;
+
+  VodPlayLine applyEpisodeBindingsToLine(Vod vod, VodPlayLine line) {
+    final bindings = episodeBindingsFor(vod, line);
+    if (bindings.isEmpty) return line;
+    return applyAiEpisodeBindings(line, bindings);
+  }
+
+  /// 旧名兼容：绑定现在是「手动 + AI」的合并结果，语义比原来更宽。
+  VodPlayLine applyAiMappingsToLine(Vod vod, VodPlayLine line) =>
+      applyEpisodeBindingsToLine(vod, line);
+
   bool hasAiMappings(Vod vod, VodPlayLine line) =>
-      aiMappingsFor(vod, line)?.bindings.isNotEmpty ?? false;
+      hasEpisodeBindings(vod, line);
   AiSeasonBindingsResult? aiMappingsFor(Vod vod, VodPlayLine line) {
     final key = _aiLineKey(vod, line);
     if (_aiSeasonSnapshots[key] !=
@@ -1202,6 +1394,253 @@ AiContentCompletion? aiContentCompletion,
         seasonBindingsSnapshot(line.episodes, tmdb.seasonEpisodeCounts),
       );
     }
+    // 手动锚点与 AI 绑定同批刷新：详情页只调一个入口，两条链路就不会不同步。
+    await refreshManualEpisodeMatches(vod, siteKey: siteKey);
+    _notifyIfAlive();
+  }
+
+  /// 线路在库里的 `flagKey`：与 [refreshAiSeasonMappings] 同一套口径。
+  String _dbFlagKeyOf(Vod vod, VodPlayLine line) {
+    final lines = playLinesOf(vod);
+    final unique = lines.where((item) => item.flag == line.flag).length == 1;
+    var index = lines.indexWhere((item) => identical(item, line));
+    if (index < 0) {
+      index = lines.indexWhere((item) => item.flag == line.flag);
+    }
+    return TmdbState.sourceLineOf(
+      line,
+      index < 0 ? 0 : index,
+      unique: unique,
+    ).flagKey;
+  }
+
+  void _rememberManualEpisodeAnchors(
+    String key,
+    List<EpisodeMatchAnchor> anchors,
+  ) {
+    if (anchors.isEmpty) {
+      _manualEpisodeAnchors.remove(key);
+      _manualEpisodeDropped.remove(key);
+      return;
+    }
+    if (_manualEpisodeAnchors.length >= _manualEpisodeCapacity &&
+        !_manualEpisodeAnchors.containsKey(key)) {
+      final oldest = _manualEpisodeAnchors.keys.first;
+      _manualEpisodeAnchors.remove(oldest);
+      _manualEpisodeDropped.remove(oldest);
+    }
+    _manualEpisodeAnchors[key] = List.unmodifiable(anchors);
+  }
+
+  void _writeManualEpisodeAnchors(
+    AppDatabase db,
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeMatchAnchor> anchors, {
+    String? siteKey,
+  }) {
+    final service = EpisodeManualMatchService(database: db);
+    final flagKey = _dbFlagKeyOf(vod, line);
+    final resolvedSiteKey = siteKey ?? _aiTmdbSiteKey;
+    if (anchors.isEmpty) {
+      service.clear(
+        configId: tmdbConfigId,
+        siteKey: resolvedSiteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      return;
+    }
+    service.save(
+      configId: tmdbConfigId,
+      siteKey: resolvedSiteKey,
+      vodId: vod.vodId,
+      sourceTitle: vod.vodName,
+      flagKey: flagKey,
+      tmdbId: tmdb.identity?.tmdbId ?? 0,
+      mediaType: tmdb.identity?.mediaType.name ?? '',
+      anchors: anchors,
+    );
+  }
+
+  Future<void> _saveManualEpisodeAnchors(
+    Vod vod,
+    VodPlayLine line,
+    List<EpisodeMatchAnchor> anchors, {
+    String? siteKey,
+  }) async {
+    final db = _database;
+    if (db == null) return;
+    _writeManualEpisodeAnchors(db, vod, line, anchors, siteKey: siteKey);
+    _rememberManualEpisodeAnchors(_aiLineKey(vod, line), anchors);
+    _notifyIfAlive();
+  }
+
+  /// 手动把某一张卡片匹配到 `(season, episode)`，默认从此集起顺延。
+  Future<void> matchEpisodeManually({
+    required Vod vod,
+    required VodPlayLine line,
+    required int sourceIndex,
+    required String sourceName,
+    required int seasonNumber,
+    required int episodeNumber,
+    bool spread = true,
+    String? siteKey,
+  }) async {
+    final groups = _rawGroupsOf(line);
+    final position = groups.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == sourceIndex,
+      ),
+    );
+    if (position < 0) return;
+    // 同一组只留一个锚点：整组替换（组内多版本共享一条结论）。
+    final anchors = <EpisodeMatchAnchor>[
+      for (final existing in manualEpisodeAnchorsFor(vod, line))
+        if (!groups[position].versions.any(
+          (version) => version.sourceIndex == existing.sourceIndex,
+        ))
+          existing,
+      EpisodeMatchAnchor(
+        sourceIndex: sourceIndex,
+        sourceName: sourceName,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+        spread: spread,
+      ),
+    ];
+    await _saveManualEpisodeAnchors(vod, line, anchors, siteKey: siteKey);
+  }
+
+  /// 撤销手动匹配：`sourceIndex` 为 null 时清掉**整条线路**。
+  Future<void> clearManualEpisodeMatch({
+    required Vod vod,
+    required VodPlayLine line,
+    int? sourceIndex,
+    String? siteKey,
+  }) async {
+    final anchors = manualEpisodeAnchorsFor(vod, line);
+    if (anchors.isEmpty) return;
+    if (sourceIndex == null) {
+      await _saveManualEpisodeAnchors(vod, line, const [], siteKey: siteKey);
+      return;
+    }
+    final groups = _rawGroupsOf(line);
+    final position = groups.indexWhere(
+      (group) => group.versions.any(
+        (version) => version.sourceIndex == sourceIndex,
+      ),
+    );
+    if (position < 0) return;
+    final groupIndexes = {
+      for (final version in groups[position].versions) version.sourceIndex,
+    };
+    await _saveManualEpisodeAnchors(vod, line, [
+      for (final existing in anchors)
+        if (!groupIndexes.contains(existing.sourceIndex)) existing,
+    ], siteKey: siteKey);
+  }
+
+  /// 读库并重定位手动锚点（与 [refreshAiSeasonMappings] 同一代际守卫）。
+  Future<void> refreshManualEpisodeMatches(
+    Vod vod, {
+    required String siteKey,
+  }) async {
+    final db = _database;
+    if (db == null || !tmdb.belongsTo(vod.vodId)) return;
+    final generation = tmdb.generation;
+    final detailGeneration = _detailRunId;
+    final service = EpisodeManualMatchService(database: db);
+    final lines = playLinesOf(vod);
+    final tmdbId = tmdb.identity?.tmdbId ?? 0;
+    final mediaType = tmdb.identity?.mediaType.name ?? '';
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final key = _aiLineKey(vod, line);
+      final flagKey = TmdbState.sourceLineOf(
+        line,
+        i,
+        unique: lines.where((item) => item.flag == line.flag).length == 1,
+      ).flagKey;
+      final scope = service.loadScope(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      // 作品身份变了（用户重新匹配了整部作品）：旧锚点指向另一部剧，整行清掉。
+      // 身份**未知**时不动：TMDB 这次没拿到身份（网络/额度）不能被当成"换了作品"，
+      // 否则一次抖动就删掉用户的人工结论。
+      final identityKnown = tmdbId > 0;
+      if (identityKnown &&
+          scope != null &&
+          (scope.tmdbId != tmdbId || scope.mediaType != mediaType)) {
+        service.clear(
+          configId: tmdbConfigId,
+          siteKey: siteKey,
+          vodId: vod.vodId,
+          sourceTitle: vod.vodName,
+          flagKey: flagKey,
+        );
+        _manualEpisodeAnchors.remove(key);
+        _manualEpisodeDropped.remove(key);
+        continue;
+      }
+      final stored = service.load(
+        configId: tmdbConfigId,
+        siteKey: siteKey,
+        vodId: vod.vodId,
+        sourceTitle: vod.vodName,
+        flagKey: flagKey,
+      );
+      if (stored.isEmpty) {
+        _manualEpisodeAnchors.remove(key);
+        _manualEpisodeDropped.remove(key);
+        continue;
+      }
+      final dropped = <int>{};
+      final relocated = EpisodeManualMatch.relocate(
+        groups: _rawGroupsOf(line),
+        anchors: stored,
+        dropped: dropped,
+      );
+      if (dropped.isNotEmpty) {
+        // 失效锚点写回：不让库里挂着一批永远命中不到的结论。
+        if (relocated.isEmpty) {
+          service.clear(
+            configId: tmdbConfigId,
+            siteKey: siteKey,
+            vodId: vod.vodId,
+            sourceTitle: vod.vodName,
+            flagKey: flagKey,
+          );
+        } else {
+          service.save(
+            configId: tmdbConfigId,
+            siteKey: siteKey,
+            vodId: vod.vodId,
+            sourceTitle: vod.vodName,
+            flagKey: flagKey,
+            tmdbId: tmdbId,
+            mediaType: mediaType,
+            anchors: relocated,
+          );
+        }
+      }
+      _rememberManualEpisodeAnchors(key, relocated);
+      if (dropped.isEmpty) {
+        _manualEpisodeDropped.remove(key);
+      } else {
+        _manualEpisodeDropped[key] = dropped.length;
+      }
+    }
+    if (generation != tmdb.generation ||
+        detailGeneration != _detailRunId ||
+        _disposed) {
+      return;
+    }
     _notifyIfAlive();
   }
 
@@ -1256,6 +1695,24 @@ AiContentCompletion? aiContentCompletion,
     // 直接用站点声明的身份），这里原样透传上去。
     TmdbIdentity? knownIdentity,
   }) async {
+    // 推送标题守卫：推送源返回的名字常是网盘地址/文件名，不要拿它去自动匹配，
+    // 否则会把垃圾名字写进匹配表、还可能顶掉用户手动指定的结论。
+    // 已经有手动结论时仍然放行（详情页要显示用户选的那一部）。
+    if (siteKey == pushSiteKey && !shouldAutoMatchPushTitle(vod.vodName)) {
+      var manual = false;
+      try {
+        manual = _database != null &&
+            _ensureTmdbIdentityService().cachedManual(
+                  siteKey: siteKey,
+                  vodId: vod.vodId,
+                  sourceTitle: vod.vodName,
+                ) !=
+                null;
+      } catch (error) {
+        log.debug('推送手动匹配查询失败：$error', scope: 'tmdb');
+      }
+      if (!manual) return;
+    }
     final run = ++_aiLoadRun;
     _aiTmdbSiteKey = siteKey;
     await tmdb.loadForVod(
@@ -3494,12 +3951,16 @@ AiContentCompletion? aiContentCompletion,
   Future<void> reloadTmdb() async {
     final vod = _selectedVod;
     final site = _selectedSite;
-    if (vod == null || site == null || _database == null) return;
+    if (vod == null ||
+        (site == null && vod.vodId.isNotEmpty) ||
+        _database == null) {
+      return;
+    }
     _tmdbRunId = _detailRunId;
     await _loadTmdbWithAi(
       vod,
-      siteKey: site.key,
-      siteName: site.name,
+      siteKey: site?.key ?? '',
+      siteName: site?.name ?? '',
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
       navSource: _navSourceFor(site, vod),
@@ -3511,10 +3972,10 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 判据仍是 `site.indexs == 1`；推荐回退页的**合成条目**（`vodId` 为空）也走
   /// 这一条：它本来就没有站点索引条目，剧集卡片只能来自 TMDB 全季聚合。
-  bool _navSourceFor(Site site, Vod vod) =>
-      site.indexs == 1 || vod.vodId.isEmpty;
+  bool _navSourceFor(Site? site, Vod vod) =>
+      site?.indexs == 1 || vod.vodId.isEmpty;
 
-  TmdbIdentity? _knownIdentityWithoutPlayback(Site site, Vod vod) {
+  TmdbIdentity? _knownIdentityWithoutPlayback(Site? site, Vod vod) {
     if (!_navSourceFor(site, vod) &&
         playLinesOf(vod).any((line) => line.episodes.isNotEmpty)) {
       return null;
@@ -3528,7 +3989,7 @@ AiContentCompletion? aiContentCompletion,
     return vod.vodId.isNotEmpty &&
             tmdb.belongsTo(
               vod.vodId,
-              siteKey: site.key,
+              siteKey: site?.key ?? '',
               sourceTitle: vod.vodName,
             )
         ? tmdb.identity
@@ -3662,19 +4123,31 @@ AiContentCompletion? aiContentCompletion,
     }
   }
 
+  /// 测试当前图片线路（设置页「测试图片线路」）：取一张公共海报并报出耗时。
+  ///
+  /// 与 [testTmdbConnection] 互补：那个测 API（Key/Token 与 apiBase），这个测
+  /// 海报与背景走的图片域名——换反代之后要确认的正是这一条。
+  Future<String> testTmdbImageRoute() async {
+    final config = tmdbConfig;
+    final probe = await _tmdbService.probeImageRoute(config.imageBase);
+    return tmdbImageProbeSummary(probe);
+  }
+
   /// 手动匹配（`01` §7、`04` §5.1）。成功后刷新详情页 TMDB 区块。
   Future<TmdbMatchOutcome?> matchTmdbManual({
     required TmdbItem item,
     String? sourceTitle,
   }) async {
-    final identityService = _tmdbIdentityService;
+    final identityService = _ensureTmdbIdentityService();
     final vod = _selectedVod;
     final site = _selectedSite;
-    if (identityService == null || vod == null || site == null) return null;
+    // 合成条目没有站点 key，但仍需要能改 TMDB 身份（导航详情的手动匹配）。
+    if (vod == null || (site == null && vod.vodId.isNotEmpty)) return null;
+    final siteKey = site?.key ?? '';
     try {
       final outcome = await identityService.matchManual(
         request: TmdbMatchRequest(
-          siteKey: site.key,
+          siteKey: siteKey,
           vodId: vod.vodId,
           sourceTitle: sourceTitle ?? vod.vodName,
         ),
@@ -3683,7 +4156,7 @@ AiContentCompletion? aiContentCompletion,
       await learnBusinessTitle(
         rawTitle: vod.vodName,
         confirmedTitle: item.title,
-        siteKey: site.key,
+        siteKey: siteKey,
         vodId: vod.vodId,
         mediaType: item.mediaType.name,
       );
@@ -5693,10 +6166,13 @@ AiContentCompletion? aiContentCompletion,
     if (vod.isFolder && !isBridgeFolderVodId(vod.vodId)) return;
     final service = serviceOverride ?? _siteService;
     final site = siteOverride ?? _selectedSite;
-    if (site == null) return;
-    // 合成条目（推荐回退页）没有任何站源身份：拿空 `vod_id` 去请求详情只会换来
-    // 一条业务错误，所以干脆不发请求，只跑 TMDB 链（见下面的 early return）。
+    // 合成条目不依赖站点：原站点或最后一份配置被删除后仍可加载元数据。
     final synthetic = vod.vodId.isEmpty;
+    if (site == null && !synthetic) return;
+    // 推送手填的剧名（Vod.extra）：压过推送源返回的片名，避免名字被网盘地址覆盖、
+    // 进而让 TMDB 拿 URL 再匹配一次把已有匹配清掉。
+    final pushNameOverride =
+        (vod.extra[pushDisplayNameExtraKey] as String?)?.trim() ?? '';
     if (service == null && !synthetic) return;
     final runId = ++_detailRunId;
     final captureAllowed = !incognito;
@@ -5718,7 +6194,7 @@ AiContentCompletion? aiContentCompletion,
     // 必须在这里推一次：等待运行时可能很长，不推的话监听方还停留在上一部剧的
     // 渲染上，「正在加载」根本显示不出来。
     notifyListeners();
-    await _waitForPythonSite(site);
+    if (site != null) await _waitForPythonSite(site);
     if (_disposed || runId != _detailRunId) return;
     // TMDB 与站源详情**并行**启动：整条 TMDB 链（匹配→详情→季度→剧集→视频）以前排在
     // 站源详情之后（本机实测站源详情 3.9~7.1s），首屏必然是站源「原始模式」，用户要等
@@ -5734,8 +6210,8 @@ AiContentCompletion? aiContentCompletion,
     _tmdbRunId = runId;
     _pendingTmdbLoad = tmdb.loadForVod(
       vod,
-      siteKey: site.key,
-      siteName: site.name,
+      siteKey: site?.key ?? '',
+      siteName: site?.name ?? '',
       configId: tmdbConfigId,
       lines: playLinesOf(vod),
       // `indexs == 1` 是用户拍板的导航源判据（`Site.indexs`）；合成条目另算，
@@ -5763,7 +6239,7 @@ AiContentCompletion? aiContentCompletion,
       _notifyIfAlive();
       return;
     }
-    if (service == null) return;
+    if (service == null || site == null) return;
     try {
       // 已知 atvp_detail 桥接协议先取资源，再逐个取分享链分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
@@ -5791,7 +6267,13 @@ AiContentCompletion? aiContentCompletion,
       final returnedDetail = outcome.value.list.firstOrNull;
       final effective = returnedDetail == null
           ? vod
-          : mergeSourceDetailDisplay(detail: returnedDetail, listing: vod);
+          : mergeSourceDetailDisplay(
+              detail: returnedDetail,
+              listing: vod,
+              nameOverride: pushNameOverride,
+              // 推送身份固定用推送时的 id（见 merge 的注释）。
+              idOverride: site.key == pushSiteKey ? vod.vodId : null,
+            );
       _detailResult = returnedDetail == null
           ? outcome.value
           : outcome.value.copyWith(
@@ -6379,14 +6861,25 @@ AiContentCompletion? aiContentCompletion,
       siteKey: effectiveSiteKey,
       vod: vod,
     );
+    // 推送记录：海报与集名写**刮削后**的（对齐安卓 getInitialArtwork / 集数展示）。
+    // 推送源返回的往往是网盘 logo 与 "[2.44G] S01E01" 这类原始标签。
+    var historyPic = vod.vodPic;
+    var historyEpisodeName = episodeName;
+    if (effectiveSiteKey == pushSiteKey) {
+      final match = pushMatchedItem(vodId: vod.vodId, title: vod.vodName);
+      final poster = match?.posterUrl?.trim() ?? '';
+      if (poster.isNotEmpty) historyPic = poster;
+      final label = pushEpisodeLabel(episodeName);
+      if (label.isNotEmpty) historyEpisodeName = label;
+    }
     try {
       database.upsertHistory(
         siteKey: effectiveSiteKey,
         vodId: vod.vodId,
         vodName: vod.vodName,
-        vodPic: vod.vodPic,
+        vodPic: historyPic,
         flag: flag,
-        episodeName: episodeName,
+        episodeName: historyEpisodeName,
         episodeId: episodeId,
         positionMs: position.inMilliseconds,
         durationMs: duration.inMilliseconds,
@@ -6523,6 +7016,315 @@ AiContentCompletion? aiContentCompletion,
 
   /// 续播位置下限：小于 5 秒不恢复，避免“刚打开就跳”。
   static const Duration resumeThreshold = Duration(seconds: 5);
+
+  // -------------------------------------------------------------------------
+  // 推送接收（局域网推送 + 本机「推送…」输入）
+  // -------------------------------------------------------------------------
+  //
+  // 两条入口收同一个概念：安卓/手机经局域网推地址，以及 PC 上直接粘贴地址或
+  // 选本地文件。落地方式相同：解析 → 合成播放请求 → 壳层起播 → 异步匹配剧名。
+
+  /// 待播放的推送请求。
+  ///
+  /// 为什么不在状态层直接导航：状态层不碰 `Navigator`（与崩溃恢复
+  /// `pendingRecovery` 同一口径）。请求先落成数据，由 `AppShell` 投影成路由。
+  PlaybackRequest? _pendingPush;
+
+  /// 最近一次推送的原始解析结果：落点要区分"剧名是显式填的"还是地址兜底。
+  PushParsed? _pendingPushParsed;
+
+  PlaybackRequest? get pendingPush => _pendingPush;
+
+  PushParsed? get pendingPushParsed => _pendingPushParsed;
+
+  void clearPendingPush() {
+    if (_pendingPush == null && _pendingPushParsed == null) return;
+    _pendingPush = null;
+    _pendingPushParsed = null;
+    notifyListeners();
+  }
+
+  /// 站点在当前环境是否跑得起来（不联网，由 SpiderRouter 判定）。
+  SiteAvailability siteAvailabilityOf(Site site) => _router.classifySite(site);
+
+  /// 选一个「推送源」：先当前配置，再其它已保存配置（最近更新的优先）。
+  ///
+  /// 为什么放宽到跨配置：安卓只认当前配置里 key 恰为 push_agent 的站点，而用户的
+  /// 推送爬虫源经常配在别的配置里（实测："唐三的猫源" → nodejs_push）。选源时
+  /// **可用的优先**（安卓 JAR 站点在 PC 上不可用），同可用性下当前配置优先。
+  /// 返回 null 表示哪里都没有推送源，只能走合成详情。
+  PushSourceCandidate? pushSourceCandidate() {
+    final candidates = <PushSourceCandidate>[];
+    void collect(AppConfig? config, PlaybackSourceContext? context) {
+      if (config == null || context == null) return;
+      final site = pushSiteInConfig(config);
+      if (site == null) return;
+      var available = false;
+      try {
+        available = siteAvailabilityOf(site).available;
+      } catch (error) {
+        log.debug('推送源可用性判定失败：$error', scope: 'site');
+      }
+      candidates.add(
+        PushSourceCandidate(
+          site: site,
+          context: context,
+          active: identical(config, effectiveConfig),
+          available: available,
+        ),
+      );
+    }
+
+    final activeConfig = effectiveConfig;
+    final record = _activeRecord;
+    final service = _siteService;
+    if (activeConfig != null && record != null && service != null) {
+      collect(
+        activeConfig,
+        PlaybackSourceContext(
+          sourceKey: activeSourceKey,
+          record: record,
+          config: activeConfig,
+          service: service,
+        ),
+      );
+    }
+    final records = [..._configs]
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    for (final other in records) {
+      if (other.id == record?.id) continue;
+      final context = playbackContextFor(other.sourceKey);
+      collect(context?.config, context);
+    }
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) {
+      if (a.available != b.available) return a.available ? -1 : 1;
+      if (a.active != b.active) return a.active ? -1 : 1;
+      return 0;
+    });
+    return candidates.first;
+  }
+
+  /// 推送用的**合成站点上下文**（安卓 `SiteApi.pushDetail` 的 PC 对应物）。
+  ///
+  /// 配置里没有「推送」源时用它：把推送包成 `push_agent` 站点上的一条普通 vod，
+  /// 详情/播放都交给 [PushSiteService]。返回 `null` 表示连配置都没有——那种情况
+  /// 只能落到极简兜底页。
+  PlaybackSourceContext? pushSiteContext(PushParsed parsed) {
+    final base = effectiveConfig;
+    final record = activeRecord;
+    if (base == null || record == null) return null;
+    final site = Site(
+      key: pushSiteKey,
+      name: pushSourceName,
+      type: 1,
+      api: 'push://agent',
+    );
+    final config = base.copyWith(
+      sites: [...base.sites.where((item) => item.key != pushSiteKey), site],
+    );
+    return PlaybackSourceContext(
+      sourceKey: activeSourceKey,
+      record: record,
+      config: config,
+      service: PushSiteService(
+        appConfig: config,
+        router: _router,
+        database: _database,
+        parsed: parsed,
+      ),
+    );
+  }
+
+  /// 本机「推送…」（地址 + 剧名）：与局域网推送走同一条链路。
+  Future<bool> submitPush({required String url, String title = ''}) =>
+      _acceptPush(parsePushFields(url: url, title: title), from: '本机输入');
+
+  /// 局域网推送到达（`SyncStateHost` 的宿主能力，由 `SyncState` 调用）。
+  @override
+  Future<bool> onPushReceived(PushParsed parsed) =>
+      _acceptPush(parsed, from: '局域网推送');
+
+  /// 推送落地：本地路径走既有本地播放，地址走推送合成站点，随后异步匹配剧名。
+  Future<bool> _acceptPush(PushParsed parsed, {required String from}) async {
+    final raw = parsed.url.trim();
+    if (raw.isEmpty) {
+      _lastError = AppError(
+        AppErrorKind.playbackUrlMissing,
+        '推送需要一个播放地址',
+      );
+      notifyListeners();
+      return false;
+    }
+    var localPath = '';
+    if (looksLikeLocalMediaPath(raw)) {
+      final path = raw.toLowerCase().startsWith('file://')
+          ? (Uri.tryParse(raw)?.toFilePath() ?? raw)
+          : raw;
+      if (!File(path).existsSync()) {
+        _lastError = AppError(
+          AppErrorKind.playbackUrlMissing,
+          '本地文件不存在：$path',
+        );
+        notifyListeners();
+        return false;
+      }
+      localPath = path;
+    }
+    final request = pushPlaybackRequest(
+      parsed: PushParsed(url: raw, title: parsed.title),
+      localPath: localPath.isEmpty ? null : localPath,
+    );
+    _pendingPush = request;
+    _pendingPushParsed = parsed;
+    _lastError = null;
+    _notice = '收到（$from）：${request.title}';
+    // 日志不写地址（可能带签名参数）：只记"本地/远程"与是否有剧名。
+    log.info(
+      '推送已接收（$from）：本地=${localPath.isNotEmpty} '
+      '剧名=${parsed.hasExplicitTitle ? '有' : '无'}',
+      scope: 'player',
+    );
+    notifyListeners();
+    // 只有用户手填了剧名才做这一发预匹配：没填时用推送源解析出的名字，交给
+    // 常规 TMDB 管线（含标题清理与推送标题守卫），不要拿地址/文件名去搜。
+    if (parsed.hasExplicitTitle) unawaited(_autoMatchPush(request));
+    return true;
+  }
+
+  /// 推送剧名的一次自动匹配（`01` §5.4 推送标题守卫）。
+  ///
+  /// 只有「显式剧名 + 守卫放行 + TMDB 已配置」才发请求，否则**零请求**：拿地址
+  /// 或文件名去搜 TMDB 是纯浪费，还会把不该有的结论写进匹配表。
+  Future<void> _autoMatchPush(PlaybackRequest request) async {
+    if (_database == null || request.siteKey != pushSiteKey) return;
+    final title = request.vodName.trim();
+    if (!tmdbConfig.isReady || !shouldAutoMatchPushTitle(title)) return;
+    try {
+      final outcome = await _ensureTmdbIdentityService().match(
+        TmdbMatchRequest(
+          siteKey: pushSiteKey,
+          vodId: request.vodId,
+          sourceTitle: title,
+          vodName: title,
+          siteName: pushSourceName,
+        ),
+      );
+      final item = outcome.item;
+      if (item == null) {
+        log.info('推送剧名未匹配到元数据', scope: 'tmdb');
+        return;
+      }
+      _applyPushMatch(vodId: request.vodId, item: item);
+      _notice = '已匹配元数据：${item.title}';
+      log.info(
+        '推送剧名已匹配 tmdbId=${item.tmdbId} type=${item.mediaType.name}',
+        scope: 'tmdb',
+      );
+      notifyListeners();
+    } catch (error) {
+      log.warning('推送剧名匹配失败：$error', scope: 'tmdb');
+    }
+  }
+
+  /// 手动修正推送的元数据（历史页点推送记录时用，`04` §5.1 的入口之一）。
+  Future<void> manualMatchPush({
+    required String vodId,
+    required String title,
+    required TmdbItem item,
+  }) async {
+    if (_database == null) return;
+    try {
+      final outcome = await _ensureTmdbIdentityService().matchManual(
+        request: TmdbMatchRequest(
+          siteKey: pushSiteKey,
+          vodId: vodId,
+          sourceTitle: title,
+          vodName: title,
+          siteName: pushSourceName,
+        ),
+        item: item,
+      );
+      final matched = outcome.item ?? item;
+      _applyPushMatch(vodId: vodId, item: matched);
+      _notice = '已匹配元数据：${matched.title}';
+      log.info(
+        '推送手动匹配已写入 tmdbId=${matched.tmdbId}',
+        scope: 'tmdb',
+      );
+      notifyListeners();
+    } catch (error) {
+      log.warning('推送手动匹配失败：$error', scope: 'tmdb');
+    }
+  }
+
+  /// 推送内容当前的元数据匹配结论（只读，供推送详情页展示）。
+  ///
+  /// 与 [cachedTmdbPosterUrl] 分开：那张图只服务历史卡片补图，详情页还要标题、
+  /// 副标题与简介。没有匹配记录时返回 `null`（详情页就用推送时的剧名）。
+  TmdbItem? pushMatchedItem({required String vodId, required String title}) {
+    final database = _database;
+    final id = vodId.trim();
+    if (database == null || id.isEmpty) return null;
+    // 旧记录/站源改写会让 id 少掉 scheme，片名也可能带后缀（"罪蓝之路 4K内嵌中字"）：
+    // 两种变体都试一次，避免"明明匹配过却查不到"。
+    final ids = <String>{id};
+    if (!id.contains('://')) ids.add('https://$id');
+    final titles = <String>{title.trim()};
+    final head = title.trim().split(RegExp(r'\s+')).first;
+    if (head.isNotEmpty) titles.add(head);
+    try {
+      final store = DatabaseTmdbMatchStore(
+        database: database,
+        configId: tmdbConfigId,
+      );
+      for (final candidateId in ids) {
+        for (final candidateTitle in titles) {
+          final record = store.find(
+            siteKey: pushSiteKey,
+            vodId: candidateId,
+            sourceTitle: candidateTitle,
+          );
+          if (record != null) return record.toItem();
+        }
+      }
+      return null;
+    } catch (error) {
+      log.warning('读取推送匹配结论失败：$error', scope: 'tmdb');
+      return null;
+    }
+  }
+
+  /// 把匹配结论落进历史行（海报 + 身份）。
+  ///
+  /// 历史页另有一层懒补图（`HistoryPosterRepair` 读 TMDB 缓存），这里写是为了
+  /// "匹配完立刻看到"，而不是等用户打开历史页。行还不存在（刚起播，进度尚未
+  /// 落库）时什么都不做——下一次进度写入会带上剧名，海报由懒补图接上。
+  void _applyPushMatch({required String vodId, required TmdbItem item}) {
+    final row = findHistory(siteKey: pushSiteKey, vodId: vodId);
+    if (row == null) return;
+    final poster = (item.posterUrl ?? '').trim();
+    try {
+      _database?.upsertHistory(
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        vodName: row.vodName,
+        vodPic: poster.isEmpty ? row.vodPic : poster,
+        flag: row.flag,
+        episodeName: row.episodeName,
+        episodeId: row.episodeId,
+        positionMs: row.positionMs,
+        durationMs: row.durationMs,
+        completed: row.completed,
+        updatedAt: row.updatedAt,
+        sourceKey: row.sourceKey,
+        tmdbId: item.tmdbId,
+        mediaType: item.mediaType.name,
+      );
+    } catch (error) {
+      log.warning('推送匹配结论写回历史失败：$error', scope: 'history');
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Phase 5 · 安卓同步的宿主能力（`SyncStateHost`，`design/02` §2）
@@ -8288,6 +9090,10 @@ AiContentCompletion? aiContentCompletion,
     _detailRatingService?.close();
     _externalMetaService?.close();
     _tmdbService.close();
+    if (identical(TmdbImageHealth.onFailure, _imageHealthSink)) {
+      TmdbImageHealth.onFailure = null;
+    }
+    _imageHealthSink = null;
     _lutStoreInstance?.dispose();
     // 联想/热搜的 HTTP 客户端同样要释放。
     _searchSuggestService?.close();
