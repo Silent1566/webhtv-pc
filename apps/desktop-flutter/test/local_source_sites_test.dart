@@ -14,6 +14,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/python_environment.dart';
@@ -98,8 +100,25 @@ const String configWithBase =
 
 void main() {
   late Directory temp;
+  late List<Uri> httpRequests;
+
+  AppState createState({AppPaths? paths, PythonEnvironment? pythonEnvironment}) =>
+      AppState(
+        paths: paths ?? tempPaths(temp),
+        log: LogService(),
+        pythonEnvironment: pythonEnvironment,
+        httpClient: MockClient((request) async {
+          httpRequests.add(request.url);
+          return http.Response(
+            '{"class":[],"list":[]}',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
 
   setUp(() {
+    httpRequests = [];
     temp = Directory.systemTemp.createTempSync('webhtv_local_site_sites_');
     LogService.logDirectoryOverride = join(temp, 'logs');
   });
@@ -110,7 +129,7 @@ void main() {
     test(
       '导入 py/js 后立即出现在 siteItems 与 effectiveConfig，并沿用 spider-local: 路由',
       () async {
-        final state = AppState(paths: tempPaths(temp), log: LogService());
+        final state = createState();
         addTearDown(state.dispose);
         await state.bootstrap();
         await crateConfig(state);
@@ -132,7 +151,7 @@ void main() {
     );
 
     test('没有任何配置时本地源依然可选', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final root = writeCandidates(temp);
 
@@ -149,13 +168,13 @@ void main() {
 
     test('重启恢复：新实例 bootstrap 后仍能看到本地源', () async {
       final paths = tempPaths(temp);
-      final first = AppState(paths: paths, log: LogService());
+      final first = createState(paths: paths);
       final root = writeCandidates(temp);
       final report = await first.scanLocalSources(root.path);
       await first.importLocalSources(report.candidates);
       first.dispose();
 
-      final second = AppState(paths: paths, log: LogService());
+      final second = createState(paths: paths);
       addTearDown(second.dispose);
       await second.bootstrap();
 
@@ -198,7 +217,7 @@ void main() {
         name: 'local-dup',
       );
 
-      final state = AppState(paths: paths, log: LogService());
+      final state = createState(paths: paths);
       addTearDown(state.dispose);
       await state.bootstrap();
 
@@ -240,9 +259,8 @@ void main() {
       test('本地导入不能覆盖root路由，当前及重新扫描均保持root$suffix', () async {
         final paths = tempPaths(temp);
         AppState routingState() {
-          final state = AppState(
+          final state = createState(
             paths: paths,
-            log: LogService(),
             pythonEnvironment: LocalSourceTestPythonEnvironment(
               paths: paths,
               probeDelay: probeDelay,
@@ -313,7 +331,7 @@ void main() {
     }
 
     test('跨HTML与Spider命名空间导入双向拒绝，批次内也拒绝', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final pyDir = sub(temp, 'py')..createSync();
       File(join(pyDir, 'c.py')).writeAsStringSync('class Spider: pass');
@@ -332,7 +350,7 @@ void main() {
       expect(reverse.rejected.single.message, contains('占用'));
     });
     test('本地 key 与用户配置同 key 时不覆盖配置，且如实报告被拒 key', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       await crateConfig(state, key: 'dup');
       final root = writeCandidates(temp);
@@ -359,7 +377,7 @@ void main() {
 
   group('HTML 源', () {
     test('可选择、不假称可搜索爬虫，停用后隐藏、删除后消失', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final root = writeCandidates(temp);
       final report = await state.scanLocalSources(root.path);
@@ -382,7 +400,7 @@ void main() {
     });
 
     test('识别接缝：只有启用的 HTML 源能被找到，py 站点为 null', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final root = writeCandidates(temp);
       final report = await state.scanLocalSources(root.path);
@@ -397,7 +415,7 @@ void main() {
     });
 
     test('选择 HTML 站点不走 loadHome，不产生错误状态', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final root = writeCandidates(temp);
       final report = await state.scanLocalSources(root.path);
@@ -415,7 +433,7 @@ void main() {
   group('在线 HTML 首页', () {
     test('登记后立即出现在站点列表，重启后仍在', () async {
       final paths = tempPaths(temp);
-      final state = AppState(paths: paths, log: LogService());
+      final state = createState(paths: paths);
       await state.bootstrap();
       final source = await state.addOnlineWebHome(
         'https://example.com/index.html',
@@ -425,7 +443,7 @@ void main() {
       expect(source.isRemote, isTrue);
       state.dispose();
 
-      final second = AppState(paths: paths, log: LogService());
+      final second = createState(paths: paths);
       addTearDown(second.dispose);
       await second.bootstrap();
 
@@ -439,7 +457,7 @@ void main() {
     });
 
     test('非法网址抛异常，不产生半条记录', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       await expectLater(
         state.addOnlineWebHome('not-a-url'),
@@ -454,7 +472,7 @@ void main() {
       final paths = tempPaths(temp);
       final registry = sub(sub(Directory(paths.configDir), 'webhome'), 'registry.json')..createSync(recursive: true);
       final sentinel = File(join(registry, 'keep.txt'))..writeAsStringSync('keep');
-      final state = AppState(paths: paths, log: LogService());
+      final state = createState(paths: paths);
       addTearDown(state.dispose);
       await state.bootstrap();
       await crateConfig(state);
@@ -467,7 +485,7 @@ void main() {
     });
 
     test('坏登记表阻止跨空间导入写盘，不冒充空表；修复刷新后恢复', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final registry = File(join(sub(Directory(state.paths.configDir), 'webhome')..createSync(recursive: true), 'registry.json'));
       registry.writeAsStringSync('broken');
@@ -492,7 +510,7 @@ void main() {
       registry.parent.createSync(recursive: true);
       const broken = '{"items":[';
       registry.writeAsStringSync(broken);
-      final state = AppState(paths: paths, log: LogService());
+      final state = createState(paths: paths);
       addTearDown(state.dispose);
       await state.bootstrap();
       await crateConfig(state);
@@ -501,10 +519,13 @@ void main() {
       // 同上：降级为空表 + 原因可读，不再抛。
       expect(state.webHomeSources, isEmpty);
       expect(registry.readAsStringSync(), broken);
+      expect(httpRequests, hasLength(1));
+      expect(state.homeResult, isNotNull);
+      expect(state.lastError, isNull);
     });
 
     test('内部读取仅刷新时失效，不在每站点和每次build重读磁盘', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       await state.importLocalSources(
         (await state.scanLocalSources(writeCandidates(temp).path)).candidates,
@@ -532,7 +553,7 @@ void main() {
 
   group('安全删除本地 Spider', () {
     test('真实运行中sidecar按manifest key拒绝删除，停止后可删', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final source = sub(sub(Directory(state.spiderRoot), 'local'), 'running');
       writeManifest(source, 'running', runtime: 'node', entry: 'spider.js');
@@ -584,7 +605,7 @@ module.exports = {init, homeContent, categoryContent, detailContent, searchConte
     });
 
     test('已注册源含子链接或local父目录是链接时拒绝，不部分删除', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final local = sub(Directory(state.spiderRoot), 'local');
       final source = sub(local, 'nested');
@@ -610,7 +631,7 @@ module.exports = {init, homeContent, categoryContent, detailContent, searchConte
       expect(sub(outside, 'parentlinked').existsSync(), isTrue);
     });
     test('删除 py/js 后目录与站点消失，配置不变且可以再次导入', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       await state.bootstrap();
       await crateConfig(state);
@@ -639,7 +660,7 @@ module.exports = {init, homeContent, categoryContent, detailContent, searchConte
     });
 
     test('unknown/root/越界和链接一律拒绝，不删除真实目标', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       final root = Directory(state.spiderRoot);
       writeManifest(sub(root, 'root-source'), 'root-source');
@@ -672,7 +693,7 @@ module.exports = {init, homeContent, categoryContent, detailContent, searchConte
 
   group('原始配置', () {
     test('导入本地源不写回配置记录', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      final state = createState();
       addTearDown(state.dispose);
       await state.bootstrap();
       await crateConfig(state);

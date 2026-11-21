@@ -1,6 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+Future<void> openAboutDataSettings(WidgetTester tester) async {
+  await selectSettingsCategory(tester, 'maintenance');
+  final entry = find.byKey(const ValueKey('settings-about-data-open'));
+  await tester.scrollUntilVisible(
+    entry,
+    180,
+    scrollable: find.descendant(
+      of: find.byKey(const ValueKey('settings-category-content-maintenance')),
+      matching: find.byType(Scrollable),
+    ),
+  );
+  await tester.tap(entry);
+  await tester.pumpAndSettle(
+    const Duration(milliseconds: 50),
+    EnginePhase.sendSemanticsUpdate,
+    const Duration(seconds: 5),
+  );
+}
+
 /// 设置页的分类开关（宽窗左栏与窄窗顶部分类条共用同一组 key）。
 ///
 /// 五个分类是**公开契约**（`diagnostics_pages.dart` 的 `kSettingsCategories`）：

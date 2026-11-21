@@ -47,6 +47,8 @@ import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/osd_settings_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'support/settings_navigation.dart';
+
 // Reject unsafe paths before bootstrap can access storage.
 void _requireIsolatedPaths(AppPaths paths, Directory temp) {
   for (final dir in [
@@ -182,6 +184,25 @@ void main() {
     );
     await settle(tester);
   }
+
+  testWidgets('MVP 设置路径进入关于与数据，展示运行信息和缓存操作', (tester) async {
+    await pumpSettings(tester);
+    await openAboutDataSettings(tester);
+    expect(find.text('运行信息'), findsOneWidget);
+    expect(find.text('清理缓存目录'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pageBack();
+    await settle(tester);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.dark),
+        home: Scaffold(body: LogsPage(state: state)),
+      ),
+    );
+    await settle(tester);
+    expect(find.text('复制全部'), findsOneWidget);
+  });
 
   testWidgets('默认进入偏好类别：五个稳定 key 各恰好一处，其余类别不渲染', (tester) async {
     await pumpSettings(tester);
