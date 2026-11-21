@@ -199,15 +199,40 @@ void main() {
       JarVerdict.translatableDex,
     );
   });
-  test('原生库拒绝优先级不变', () {
+  test('加固壳优先于原生库：dex 标记 + lib/*.so 判 shellGuard', () {
+    // wex 这类入口是「dex + assets/*.so + assets/*.guard」：壳特征必须先判，
+    // 否则用户看到的是「含原生库」——和他手里的 jar 对不上，也没有下一步。
     final source = jar({
       'classes.dex': dex('DemoDexNative'),
+      'lib/x.so': [0x7f],
+    });
+    final result = JarIntake.inspectPath(source.path);
+    expect(result.verdict, JarVerdict.shellGuard);
+    expect(result.installable, isFalse);
+    expect(result.nativeEntries, isNotEmpty, reason: '原生库条目仍要如实记录');
+  });
+  test('没有壳特征时原生库拒绝优先级不变', () {
+    final source = jar({
+      'classes.dex': dex('Ordinary'),
       'lib/x.so': [0x7f],
     });
     expect(
       JarIntake.inspectPath(source.path).verdict,
       JarVerdict.nativeLibrary,
     );
+  });
+  test('dex + assets/*.so + assets/*.guard 判 shellGuard，文案点名壳资源与 ARM 解包桥', () {
+    final source = jar({
+      'classes.dex': dex('Ordinary'),
+      'assets/wexshinidie.guard': [1, 2, 3],
+      'assets/libwex.so': [0x7f, 0x45, 0x4c, 0x46],
+    });
+    final result = JarIntake.inspectPath(source.path);
+    expect(result.verdict, JarVerdict.shellGuard);
+    expect(result.installable, isFalse);
+    expect(result.shellEntries, contains('assets/wexshinidie.guard'));
+    expect(result.summary, contains('assets/wexshinidie.guard'));
+    expect(result.summary, contains('ARM 解包桥'));
   });
   test('单 dex 超预算不能在未检查情况下承诺可转译', () {
     final source = jar({'classes.dex': Uint8List(32 * 1024 * 1024 + 1)});

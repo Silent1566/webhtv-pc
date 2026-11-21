@@ -523,7 +523,10 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
       _report = report;
       _message = report.isEmpty
           ? '没有需要自动探测的 csp_* 站点（配置里未声明 jar，或已全部导入）。'
-          : '自动探测完成：已装 ${report.installed} 个、拒绝 ${report.rejected} 个、失败 ${report.failed} 个。';
+          : '自动探测完成：已装 ${report.installed} 个（其中解包 ${report.unpacked} 个）、'
+                '拒绝 ${report.rejected} 个、失败 ${report.failed} 个'
+                '${report.needsShellRuntime > 0 ? '、需先下载解包运行时 ${report.needsShellRuntime} 个' : ''}'
+                '${report.unpackFailed > 0 ? '、解包失败 ${report.unpackFailed} 个' : ''}。';
     });
   }
 
@@ -541,12 +544,59 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
     });
   }
 
+  /// 下载加固壳解包运行时（四镜像回退 + 逐文件 SHA-256 校验；约 40.7 MB）。
+  ///
+  /// 下载完**不自动重跑探测**：用户在站点页点「自动探测」再试即可；
+  /// `needsShellRuntime` 结论在 probe.json 里是非终态，重探测自然会重跑。
+  Future<void> _onInstallShellRuntime() async {
+    setState(() {
+      _busy = true;
+      _busyNote = '正在下载加固壳解包运行时（${CspJarProbe.shellRuntimeSizeLabel}）…';
+      _message = null;
+    });
+    final result = await _state.installShellRuntime(
+      onProgress: (progress) {
+        if (!mounted) return;
+        setState(() {
+          _busyNote =
+              '正在下载 ${progress.file}（${progress.fileIndex}/${progress.fileCount}，'
+              '${(progress.bytesDone / (1024 * 1024)).toStringAsFixed(1)} MB）…';
+        });
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _message = result.installed
+          ? '加固壳解包运行时已安装：${result.dir}'
+          : '下载失败：${result.error ?? '原因未知'}';
+    });
+  }
+
+  Future<void> _onRemoveShellRuntime() async {
+    setState(() {
+      _busy = true;
+      _busyNote = '正在删除解包运行时…';
+      _message = null;
+    });
+    await _state.removeShellRuntime();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _message = '已删除加固壳解包运行时（已解包的站点不受影响）';
+    });
+  }
+
   static String _outcomeLabel(CspProbeOutcome outcome) => switch (outcome) {
     CspProbeOutcome.skippedInstalled => '已装过，跳过',
     CspProbeOutcome.installed => '已自动装入',
     CspProbeOutcome.rejected => '已拒绝（见原因）',
     CspProbeOutcome.failed => '取回/写入失败',
     CspProbeOutcome.noSource => '配置未声明 jar',
+    CspProbeOutcome.unpacked => '已解包并装入（native 依赖仍缺）',
+    CspProbeOutcome.needsShellRuntime => '需先下载解包运行时（约 40.7 MB）',
+    CspProbeOutcome.unpackFailed => '解包失败（见阶段）',
+    CspProbeOutcome.unsupportedShell => '壳族未支持，交给安卓端',
   };
 
   @override
@@ -577,6 +627,34 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                   icon: const Icon(Icons.travel_explore, size: 18),
                   label: const Text('自动探测配置里的 jar'),
                 ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // 加固壳解包运行时：安装是**用户动作**（约 40.7 MB），探测链路只读状态。
+            Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  _state.shellRuntimeInstalled
+                      ? '加固壳解包运行时：已安装（${CspJarProbe.shellRuntimeSizeLabel}）'
+                      : '加固壳解包运行时：未安装（加固壳源需要它，${CspJarProbe.shellRuntimeSizeLabel}）',
+                  style: theme.textTheme.bodySmall,
+                ),
+                if (!_state.shellRuntimeInstalled)
+                  TextButton.icon(
+                    key: const ValueKey('csp-shell-runtime-install'),
+                    onPressed: _busy ? null : _onInstallShellRuntime,
+                    icon: const Icon(Icons.download, size: 18),
+                    label: const Text('下载解包运行时'),
+                  )
+                else
+                  TextButton.icon(
+                    key: const ValueKey('csp-shell-runtime-remove'),
+                    onPressed: _busy ? null : _onRemoveShellRuntime,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('删除运行时'),
+                  ),
               ],
             ),
             const SizedBox(height: 8),

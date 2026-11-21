@@ -377,7 +377,7 @@ class LocalSpiderCommand {
       // CatVod 壳站点（自动注册时写了 loader.json，见 direct_spider_registrar.dart）
       // 在**模块顶层**就 import requests / Crypto / lxml：只验 `--version` 会挑中一个
       // 没有这些包的解释器，于是内层毁在 import 阶段、host.py 记一行 stderr 后 return 3，
-      // 用户只看到「SPIDER_CRASHED sidecar 意外退出（code=3）」。按目录标记改走依赖
+      // 用户现在会看到「站源初始化失败：<缺的模块>」（确定性失败、不重试）。按目录标记改走依赖
       // 感知的探测；普通 js/py 站点仍走原来的快路径。
       final isCatVodShell = File(p.join(spider.rootDir, 'loader.json'))
           .existsSync();
@@ -436,7 +436,13 @@ class LocalSpiderCommand {
           // 默认按物理内存的 1/4 预留堆（本机实测 640 MiB），在 256 MiB 作业内
           // 会直接 `os::commit_memory failed (DOS error 1455)` 退出，表现为
           // 「sidecar 启动即崩」而不是可诊断的错误（§18.2.1 资源限制）。
-          ...jvmHeapFlags(spider.manifest.limits.memoryMiB),
+          // 堆上限也按同一个下限兜底：manifest 里的 256 可能是旧值（缓存的扫描结果），
+        // 用它推导出来的 -Xmx 会让首译直接 Java OOM——那至少还看得见栈，但依然是坏体验。
+        ...jvmHeapFlags(
+          spider.manifest.limits.memoryMiB < minimumSidecarMemoryMiB
+              ? minimumSidecarMemoryMiB
+              : spider.manifest.limits.memoryMiB,
+        ),
           '-jar',
           resolvedJvmHost,
           '--entry',
@@ -495,6 +501,13 @@ class LocalSpiderCommand {
     final heapMiB = (memoryMiB ~/ 2).clamp(64, 2048);
     final initialMiB = (heapMiB ~/ 8).clamp(16, 256);
     return [
+      // 关闭字节码校验。dex→class 转译产物在混淆代码上可能不满足 JVM 的类型检查：
+      // 实测加固壳 payload 的 `AiNewHuaJuan.detailContent` 抛 `VerifyError: Bad type
+      // on operand stack`，而同一份方法在 Android（ART 不做 JVM 校验）上能跑。
+      // 代价是**这个进程内**的校验网失效，因此隔离只能靠进程级手段（独立 sidecar +
+      // Windows 作业对象），不能指望 JVM 校验器兜底；上游 MisaTV 的 JVM 宿主同样用
+      // `-noverify`。JDK 13+ 会在 stderr 打一条弃用警告，属预期噪声。
+      '-noverify',
       '-Xmx${heapMiB}m',
       '-Xms${initialMiB}m',
       // Metaspace 默认无上限（受作业对象总内存限制）；显式给出上限让失败
@@ -753,7 +766,7 @@ class LocalSpiderCommand {
   ///
   /// 缺陷（2026-10-25 实测）：只验 `--version` 会挑中一个没有 requests 的 3.14，
   /// 于是 82 个 CatVod 壳站点全部在 `import requests` 阶段失败 → host.py return 3 →
-  /// 用户只看到「SPIDER_CRASHED sidecar 意外退出（code=3）」。这里让真实可达的
+  /// 用户现在会看到「站源初始化失败：<缺的模块>」。这里让真实可达的
   /// 解释器优先（本机 3.13 自带三依赖），并在托管运行时建好后再走 [_pythonCommand]。
   ///
   /// 缓存独立于 [_pythonCommand]：普通 js/py 站点不该为一个用不到的依赖清单

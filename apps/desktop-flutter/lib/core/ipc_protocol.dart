@@ -486,6 +486,36 @@ class SpiderManifest {
   };
 }
 
+/// Optional, validated JVM HTTP data-plane negotiation.
+class SpiderProxyHttpExtension {
+  const SpiderProxyHttpExtension._(this.baseUrl);
+  final Uri baseUrl;
+
+  static SpiderProxyHttpExtension? fromJson(Object? value) {
+    if (value is! Map ||
+        value['version'] != 1 ||
+        value['sessionControl'] != true ||
+        value['baseUrl'] is! String) {
+      return null;
+    }
+    final uri = Uri.tryParse(value['baseUrl'] as String);
+    if (uri == null ||
+        uri.scheme != 'http' ||
+        uri.host != '127.0.0.1' ||
+        !uri.hasPort ||
+        uri.port < 1 ||
+        uri.port > 65535 ||
+        uri.userInfo.isNotEmpty ||
+        uri.path.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return null;
+    }
+    if (uri.toString() != 'http://127.0.0.1:${uri.port}') return null;
+    return SpiderProxyHttpExtension._(uri);
+  }
+}
+
 /// `initialize` 的协商结果（§9.3.1）。
 class SpiderInitResult {
   const SpiderInitResult({
@@ -496,6 +526,7 @@ class SpiderInitResult {
     required this.limits,
     this.key,
     this.runtime,
+    this.proxyHttp,
   });
 
   final String abi;
@@ -505,6 +536,7 @@ class SpiderInitResult {
   final SpiderLimits limits;
   final String? key;
   final String? runtime;
+  final SpiderProxyHttpExtension? proxyHttp;
 
   factory SpiderInitResult.fromJson(Object? value) {
     final map = value is Map ? value : const <String, Object?>{};
@@ -517,6 +549,9 @@ class SpiderInitResult {
       limits: SpiderLimits.fromJson(map['limits']),
       key: _string(map['key']),
       runtime: _string(map['runtime']),
+      proxyHttp: SpiderProxyHttpExtension.fromJson(
+        map['extensions'] is Map ? (map['extensions'] as Map)['proxyHttp'] : null,
+      ),
     );
   }
 

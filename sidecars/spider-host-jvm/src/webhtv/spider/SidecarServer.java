@@ -43,6 +43,7 @@ public final class SidecarServer {
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private final ExecutorService pool;
     private final Semaphore concurrency;
+    private volatile SpiderProxyHttpServer proxyHttp;
     private final CountDownLatch finished = new CountDownLatch(1);
 
     /** 已提交但尚未结束的任务数；主循环在 stdin EOF 后用它等完在途请求。 */
@@ -70,6 +71,10 @@ public final class SidecarServer {
         } else {
             values.addAll(spider.capabilities());
         }
+        Object permissions = this.manifest.get("permissions");
+        boolean proxyAuthorized = permissions instanceof Map<?, ?> map
+                && Boolean.TRUE.equals(map.get("localProxy"));
+        if (!proxyAuthorized || !spider.supportsProxyHttp()) values.remove("proxy");
         this.capabilities = values;
 
         Object key = this.manifest.get("key");
@@ -166,6 +171,7 @@ public final class SidecarServer {
     // ---------------------------------------------------------------- 派发
 
     private void dispatch(Map<String, Object> envelope) {
+        long dispatchedNanos = System.nanoTime();
         String requestId = str(envelope.get("id"));
         String method = str(envelope.get("method"));
         Map<String, Object> params = asMap(envelope.get("params"));
@@ -183,16 +189,18 @@ public final class SidecarServer {
         // 把已派发的请求连响应一起丢掉（实测：单帧 initialize 后 stdout 为空）。
         pendingTasks.incrementAndGet();
         pool.execute(() -> {
+            boolean acquired = false;
             try {
                 concurrency.acquire();
+                acquired = true;
+                handle(method, params, context, requestId, dispatchedNanos);
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
-                return;
-            }
-            try {
-                handle(method, params, context, requestId);
+                long elapsedMs = elapsedMillis(dispatchedNanos);
+                logTiming("request", method, siteKey, requestId, "cancel", elapsedMs,
+                        Map.of("queueMs", elapsedMs, "invokeMs", 0L));
             } finally {
-                concurrency.release();
+                if (acquired) concurrency.release();
                 synchronized (stateLock) {
                     inflight.remove(requestId);
                 }
@@ -226,33 +234,89 @@ public final class SidecarServer {
     }
 
     private void handle(
-            String method, Map<String, Object> params, CallContext context, String requestId) {
+            String method, Map<String, Object> params, CallContext context, String requestId,
+            long dispatchedNanos) {
+        long invokeNanos = System.nanoTime();
+        long queueMs = TimeUnit.NANOSECONDS.toMillis(invokeNanos - dispatchedNanos);
+        long invokeMs = 0;
+        String status = "error";
         try {
-            Object result = invoke(method, params, context);
+            Object result;
+            try {
+                result = invoke(method, params, context);
+            } finally {
+                invokeMs = elapsedMillis(invokeNanos);
+            }
+            status = "ok";
             if (result == NO_RESPONSE) {
                 return;
             }
             respondSuccess(requestId, result);
         } catch (CancellationException error) {
+            status = "cancel";
             respondError(requestId, Ipc.ERROR_CANCELLED, "调用方已取消该请求", null);
         } catch (UnsupportedMethodException error) {
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("capabilities", sortedCapabilities());
             respondError(requestId, Ipc.ERROR_UNSUPPORTED, error.getMessage(), details);
         } catch (IllegalArgumentException | IllegalStateException error) {
+            logSiteFailure(method, error);
             respondError(requestId, Ipc.ERROR_BAD_REQUEST, error.getMessage(), null);
         } catch (UnsupportedOperationException error) {
+            logSiteFailure(method, error);
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("capabilities", sortedCapabilities());
             respondError(requestId, Ipc.ERROR_UNSUPPORTED, error.getMessage(), details);
         } catch (Throwable error) {
-            Ipc.log("方法 " + method + " 失败：" + error + "\n" + stackTrace(error));
+            logSiteFailure(method, error);
             respondError(
                     requestId,
                     Ipc.ERROR_PARSE_ERROR,
                     error.getClass().getSimpleName() + ": " + error.getMessage(),
                     null);
+        } finally {
+            logTiming("request", method, siteKey, requestId, status, elapsedMillis(dispatchedNanos),
+                    Map.of("queueMs", queueMs, "invokeMs", invokeMs));
         }
+    }
+
+    static long elapsedMillis(long startedNanos) {
+        return Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos));
+    }
+
+    static void logTiming(String layer, String method, String site, String requestId,
+            String status, long elapsedMs, Map<String, Long> segments) {
+        Map<String, Object> timing = new LinkedHashMap<>();
+        timing.put("layer", layer);
+        timing.put("method", timingLabel(method));
+        timing.put("site", timingLabel(site));
+        timing.put("requestId", timingLabel(requestId));
+        timing.put("status", status);
+        timing.put("elapsedMs", elapsedMs);
+        timing.putAll(segments);
+        Ipc.log("[webhtv-timing] " + Json.write(timing));
+    }
+
+    private static String timingLabel(String value) {
+        if (value == null) return "";
+        if (value.length() > 96 || !value.matches("[\\p{L}\\p{N}_.:-]*")) return "[redacted]";
+        return value;
+    }
+
+    /**
+     * 站源方法边界上的**完整栈**（诊断契约）。
+     *
+     * <p>为什么每条失败分支都要打：错误信封里只有一行摘要，用户现场唯一能自证的信息就是栈。
+     * 实测坑：崩溃工单里用户日志只剩「Caused by: java.lang.ArrayIndexOutOfBoundsException」
+     * 一行——那其实是启动期 dex2jar 的转译告警被宿主当成了死因；没有完整栈，定位只能靠猜。
+     *
+     * <p>为什么写 stderr 而不是响应：stdout 被协议独占（§9.3.1），日志只能走 stderr；
+     * 站源自己的栈帧（{@code at com.github.catvod...}）也只有 printStackTrace 才完整。
+     */
+    private void logSiteFailure(String method, Throwable error) {
+        Ipc.log("[webhtv] method=" + method + " site=" + siteKey + " 未捕获：" + error);
+        error.printStackTrace(System.err);
+        System.err.flush();
     }
 
     private static final Object NO_RESPONSE = new Object();
@@ -287,7 +351,7 @@ public final class SidecarServer {
         return heartbeat();
     }
 
-    private Map<String, Object> initialize(Map<String, Object> params) {
+    private synchronized Map<String, Object> initialize(Map<String, Object> params) {
         String declared = str(params.get("abi"));
         if (!declared.isEmpty() && !Ipc.ABI_NAME.equals(declared)) {
             throw new IllegalArgumentException(
@@ -298,7 +362,24 @@ public final class SidecarServer {
             Object manifestExtend = manifest.get("extend");
             extend = manifestExtend == null ? "" : String.valueOf(manifestExtend);
         }
-        spider.init(extend);
+        try {
+            if (capabilities.contains("proxy") && proxyHttp == null) {
+                try {
+                    proxyHttp = new SpiderProxyHttpServer(spider, maxWorkers);
+                    com.github.catvod.Proxy.bind(proxyHttp);
+                    spider.attachProxyHttp();
+                } catch (java.io.IOException error) {
+                    throw new IllegalStateException("代理 HTTP 初始化失败", error);
+                }
+            }
+            spider.init(extend);
+            if (proxyHttp != null) proxyHttp.markReady();
+        } catch (RuntimeException | Error error) {
+            SpiderProxyHttpServer failed = proxyHttp;
+            proxyHttp = null;
+            if (failed != null) failed.close();
+            throw error;
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("abi", Ipc.ABI_NAME);
@@ -309,6 +390,7 @@ public final class SidecarServer {
         result.put("permissions", manifest.get("permissions") != null
                 ? manifest.get("permissions")
                 : defaultPermissions());
+        if (proxyHttp != null) result.put("extensions", Map.of("proxyHttp", proxyHttp.descriptor()));
         result.put("limits", manifest.get("limits") != null
                 ? manifest.get("limits")
                 : new LinkedHashMap<String, Object>());
@@ -325,12 +407,20 @@ public final class SidecarServer {
             case "category" -> spider.category(params, context);
             case "detail" -> spider.detail(params, context);
             case "search" -> spider.search(params, context);
-            case "play" -> spider.play(params, context);
+            case "play" -> proxyHttp == null ? spider.play(params, context)
+                    : proxyHttp.playback(() -> spider.play(params, context));
+            case "proxy" -> {
+                if (proxyHttp == null) throw new UnsupportedMethodException("代理 HTTP 尚未初始化");
+                context.checkCancelled();
+                yield proxyHttp.control(params);
+            }
             default -> throw new UnsupportedMethodException("未声明 capability：" + method);
         };
     }
 
     private void callQuietly() {
+        SpiderProxyHttpServer server = proxyHttp;
+        if (server != null) server.close();
         try {
             spider.close();
         } catch (Throwable error) {
@@ -408,12 +498,6 @@ public final class SidecarServer {
         permissions.put("clipboard", false);
         permissions.put("browser", false);
         return permissions;
-    }
-
-    private static String stackTrace(Throwable error) {
-        java.io.StringWriter writer = new java.io.StringWriter();
-        error.printStackTrace(new java.io.PrintWriter(writer));
-        return writer.toString();
     }
 
     @SuppressWarnings("unchecked")

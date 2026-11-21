@@ -36,6 +36,21 @@ public abstract class Spider {
     /** manifest 原文（只读约定）；子类可读取 {@code config} 等自定义段。 */
     protected Map<String, Object> manifest = new LinkedHashMap<>();
 
+    public boolean supportsProxyHttp() {
+        try {
+            return getClass().getMethod("proxy", Map.class, CallContext.class)
+                    .getDeclaringClass() != Spider.class;
+        } catch (NoSuchMethodException missing) {
+            return false;
+        }
+    }
+
+    public void attachProxyHttp() {}
+
+    public Object[] proxy(Map<String, String> params, CallContext context) {
+        throw new UnsupportedOperationException("站源没有流式代理处理器");
+    }
+
     // ------------------------------------------------------------ 生命周期
 
     /**

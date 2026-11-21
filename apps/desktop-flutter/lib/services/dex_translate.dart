@@ -20,6 +20,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'log_service.dart';
@@ -32,6 +33,12 @@ class DexTranslate {
   /// 整体上限。首次转译实测约 4.6 s、缓存命中约 0.4 s；120 s 只兜住
   /// 「dex2jar 遇到畸形 dex 卡住」这类情况，绝不让导入无限等。
   static const Duration timeout = Duration(seconds: 120);
+
+  /// 修复口径版本，必须与宿主 `DexRepair.VERSION` 一致。
+  ///
+  /// 它只用于**缓存准入**：旧口径产出的 classes.jar 即使文件还在、SHA 还能对上，也不能
+  /// 复用（否则新修复永远跑不到真实 payload 上）。版本不一致一律重新转译，绝不删用户缓存。
+  static const int repairVersion = 4;
 
   /// stderr 日志只保留**尾部**这么多字符：CLI 会打大量人类日志，整段塞进日志会
   /// 淹掉真正的原因，也撑爆日志文件。
@@ -48,6 +55,7 @@ class DexTranslate {
     required String siteDir,
     required String archive,
     LogService? log,
+    String? sharedDir,
   }) async {
     try {
       final probe = LocalSpiderCommand.probeJavaRuntime(log: log);
@@ -73,6 +81,21 @@ class DexTranslate {
 
       // `lib/*` 的通配符由 **JVM 自己**展开（`<dir>\*` 是 JVM 的类路径语法），
       // 这里只拼路径、不枚举 jar：lib 里有近 20 个第三方依赖，枚举会随版本漂移。
+      // 共享产物缓存：同一份 payload jar 会被 90+ 个站点共用（加固壳配置的常态）。
+      // 每个站点目录各跑一次 dex2jar 的时代，实测单站冷启动 12.9 s：45 个站点就是
+      // 十分钟级的持续重活，界面直接「未响应」。这里按 payload 的 SHA-256 复用
+      // 「与 sidecar 完全相同的两个产物文件」（classes.jar + intake-dex.json），
+      // 命中时只做一次 1 MB 级复制。
+      final shared = sharedDir?.trim() ?? '';
+      final payloadSha = _sha256OfFile(archive);
+      if (shared.isNotEmpty && payloadSha != null) {
+        final cached = copySharedBundle(sharedDir: shared, sha: payloadSha, siteDir: siteDir);
+        if (cached != null) {
+          log?.info('dex 预转译命中共享缓存 sha256=$payloadSha', scope: 'spider');
+          return cached;
+        }
+      }
+
       final separator = Platform.isWindows ? ';' : ':';
       final classpath = <String>[
         hostJar,
@@ -126,6 +149,9 @@ class DexTranslate {
       if (decoded != null) {
         // 退出码非 0 时**以 JSON 为准**：CLI 的失败路径就是 ok:false + stage，
         // 那比退出码本身信息量大得多。
+        if (decoded['ok'] == true && shared.isNotEmpty && payloadSha != null) {
+          _storeSharedBundle(shared, payloadSha, siteDir);
+        }
         return decoded;
       }
       // 退出码 0 但没有可解析的 JSON：绝不能当成功——落盘/缓存状态未知。
@@ -139,6 +165,87 @@ class DexTranslate {
     } catch (error) {
       // 注入点的最终兜底：异常一律转成结论，不让导入因转译崩掉。
       return <String, Object?>{'ok': false, 'stage': '', 'message': '$error'};
+    }
+  }
+
+  /// 共享产物的 SHA-256（只用于给缓存目录取个稳定名字；失败就当没有缓存）。
+  static String? _sha256OfFile(String path) {
+    try {
+      return sha256.convert(File(path).readAsBytesSync()).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 共享产物能否复用，只看 [recordUsable]：存在文件不等于口径对。
+  ///
+  /// 命中时按 [sha] 复制 classes.jar + 记录；任何一项不合格都返回 null，交给真实转译。
+  static Map<String, Object?>? copySharedBundle({
+    required String sharedDir,
+    required String sha,
+    required String siteDir,
+  }) {
+    try {
+      final srcDir = Directory(p.join(sharedDir, sha));
+      final srcJar = File(p.join(srcDir.path, 'classes.jar'));
+      final srcRecord = File(p.join(srcDir.path, 'intake-dex.json'));
+      if (!srcJar.existsSync() || !recordUsable(srcRecord.path)) return null;
+      final targetDir = Directory(p.join(siteDir, 'dexBundles'))
+        ..createSync(recursive: true);
+      final targetJar = p.join(targetDir.path, 'classes.jar');
+      srcJar.copySync(targetJar);
+      final raw = jsonDecode(srcRecord.readAsStringSync());
+      if (raw is! Map) return null;
+      final record = Map<String, Object?>.from(raw)
+        ..['bundle'] = targetJar
+        ..['cached'] = true;
+      File(p.join(targetDir.path, 'intake-dex.json'))
+          .writeAsStringSync(jsonEncode(record), flush: true);
+      return <String, Object?>{
+        ...record,
+        'ok': true,
+        'cached': true,
+        'bundle': targetJar,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 产物记录是否可复用：口径版本、类数、两个 SHA 都得对上。
+  ///
+  /// 只证明「记录是当前口径且内容自洽」。文件是否存在不参与判断——旧版本缓存正是靠这里被挡掉，
+  /// 而不是被删除（删用户缓存不在本服务的权限内）。
+  static bool recordUsable(String recordPath) {
+    try {
+      final raw = jsonDecode(File(recordPath).readAsStringSync());
+      if (raw is! Map) return false;
+      final source = raw['sourceSha256'];
+      final bundle = raw['bundleSha256'];
+      final classes = raw['classCount'];
+      return raw['repairVersion'] == repairVersion &&
+          classes is int &&
+          classes > 0 &&
+          source is String &&
+          source.isNotEmpty &&
+          bundle is String &&
+          bundle.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static void _storeSharedBundle(String sharedDir, String sha, String siteDir) {
+    try {
+      final bundle = File(p.join(siteDir, 'dexBundles', 'classes.jar'));
+      final record = File(p.join(siteDir, 'dexBundles', 'intake-dex.json'));
+      if (!bundle.existsSync() || !recordUsable(record.path)) return;
+      final target = Directory(p.join(sharedDir, sha))
+        ..createSync(recursive: true);
+      bundle.copySync(p.join(target.path, 'classes.jar'));
+      record.copySync(p.join(target.path, 'intake-dex.json'));
+    } catch (_) {
+      // 共享缓存只是加速手段：写不进去不影响本次转译结论。
     }
   }
 

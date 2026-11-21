@@ -65,6 +65,12 @@
    `CatHttpClient` 与 `looksLikeCatHttp`，不新增 ABI 版本。§9.4 已明确「PC 端如需扩展，
    必须新开 ABI 版本或 capability，不能悄悄改变 `tvbox-http-v1` 语义」，因此
    **只实现这六个路由**，`/live` `/proxy` `/action` 保持未实现并如实报错。
+
+> 附录 B（2026-11-21 起）：`/proxy` 方向新增**可选** `proxyHttp v1` 扩展（规划见
+> `docs/superpowers/plans/2026-11-21-jvm-proxy-http.md`）：JVM 宿主在 127.0.0.1 随机端口开**自己的**
+> 媒体数据面，IPC 只承载 `session.open/renew/close` 控制与高熵 token；不传媒体字节、不放宽
+> IPC 响应/帧/累计 stdout 限制、不做整段内存缓冲、不绑定固定 9978。只对**显式授权**的加固壳
+> 站点启用，旧 JS/Python 与手工 jar 行为不变；未协商的宿主仍按「未实现」如实报错。
 5. **不进入安装包。** Android 运行时（镜像 + 桥接 APK）体积远超安装包预算，
    只能作为用户按需安装的外部依赖；缺失时 UI 必须显示可定位原因。
 6. **合规边界不变。** §3.1「不内置爬虫、不内置站点配置」继续适用：兼容层只负责
@@ -219,3 +225,95 @@ D 方案已落地，它是本 ADR 中唯一**默认可用**的 PC Java 运行时
   不能承诺「全部 Android jar 可用」。
 - **对外表述约束**（沿用 §3.3）：只能说「支持 WebHTV / TVBox / 猫源配置协议和 Spider
   运行时；单个站源能否使用，以实际测试通过为准」。**不得承诺兼容全部 TVBox/猫源**。
+## 附录 A · 加固壳 ARM 解包桥（2026-11 追加，**部分推翻 §3.4.3 的「不碰壳」结论**）
+
+**背景**：§3.4 的方案 B 只覆盖「含 `classes.dex`、无原生库」的入口。实测真实的 wex/shinidie 系配置
+（例 `9280.kstore.vip/aiwex.json`）里，`classes.dex` 只是壳的加载层，真实 Spider 被加密在
+`assets/*.guard` 里，只能由 `assets/*.so`（ARM32/AArch64）解出——这类入口此前一律判 `shellGuard`
+并拒绝。
+
+**决策**：允许一条**按需、一次性**的 ARM 解包通路，形态与上游 MisaTV 一致：
+
+1. 运行时在**用户点「下载解包运行时」时**才获取（unidbg 0.9.9，18 个 jar，约 40.7 MB，
+   Apache-2.0；四镜像回退、逐文件 SHA-256 校验、`.part` + rename、总量上限 200 MB）。
+   仓库与安装包都**不携带**该运行时。
+2. 解包器是 `sidecars/spider-host-jvm/shell-unpack/ShellUnpack.java`，以 **JDK 单文件源码模式**
+   运行（`java -cp "<unidbg>/*" ShellUnpack.java …`），因此 `build.ps1` 依旧离线、不依赖 unidbg。
+   它只做一件事：把壳 jar 解成一个普通 payload jar；**不加载业务类、不联网**。
+3. payload 按**壳 jar 的 SHA-256** 缓存在 `<spiderRoot>/probe-cache/shell/<sha>/payload.jar`，
+   同一次导入只解一次；再次导入命中缓存。
+4. 解包后的 payload 走既有 dex 通路（`DexIntake` → 帧修复 → `DexRepair` → 转译 → 侧车装载）。
+   入口类名按「去 `Guard` 后缀 → 原名」的顺序在 payload 的 class 条目里选取，选中后写进
+   `manifest.json` 的 `config.className`。
+
+**边界（逐条生效）**：
+
+- **只支持有配方的壳族**：当前只有 `wex-shinidie`（一个 `.guard` + 一个能跑的 `.so`）。
+  其它壳族如实报 `unsupportedShell`，不退化成「看起来装上了但跑不起来」。
+- **payload 内的 native 能力仍缺失**：壳内 native 导出的辅助函数（如 `HideUtils`、
+  `merge.uA.yq` 门控）在桌面端没有等价实现，调用时**如实抛错**，不做静默降级。
+- **不补 Android UI 垫片**：`selfcheck` 剩下的 22 个类全是 `android.widget.*`/`app.Dialog`/
+  `ContentProvider`/`TextWatcher` 一类，属 §3.4.3 与 `sidecars/spider-host-jvm/README.md` §7
+  的 P1-2 边界，本轮不越界。
+- **本附录不改变 §6 的对外表述约束**。
+
+**代价与风险（必须一并披露）**：
+
+- **`-noverify`**：dex→class 产物在混淆代码上无法满足 JVM 校验器（实测 `VerifyError: Bad type on
+  operand stack`、`Call to wrong <init> method`）。JVM 宿主因此以 `-noverify` 启动。含义是**该进程内
+  的字节码校验网失效**，隔离只能靠**进程级**手段（独立 sidecar + Windows 作业对象），不能靠校验器；
+  这与上游 MisaTV 的做法一致，取舍记录在 `spider_registry.dart` 的 `jvmHeapFlags` 注释与
+  `sidecars/spider-host-jvm/README.md`。
+- **每壳配方需要维护**：壳更新会导致配方或 dex 修复规则失效；`DexRepair` 已内建 `repairVersion`，
+  口径一变即让旧产物缓存失效。
+- **法务**：解包是对第三方加固壳的互操作处理；仓库不携带任何解包产物或壳的真实实现。
+
+**验收（2026-11-21 实测）**：真实 wex 源 `AiNewHuaJuan` 在桌面 JVM 上 `homeContent` 返回 5 个分类 +
+条目；`--selfcheck`：1193 个类、22 个加载失败（全 UI）、`VerifyError=0`、`IncompatibleClassChangeError=0`；
+Dart 门禁 107 条通过（`phase3_jvm_spider` / `jar_intake` / `csp_jar_probe` / `jar_shell_guard` /
+`shell_unpack` / `unidbg_runtime`）。
+
+## 附录 B · JVM 本地代理数据面（proxyHttp v1）
+
+本扩展针对已授权的 JVM/CatVod 站源，补上「playerContent 返回回环代理地址」之后的取流路径。
+它不把所有 Android 站源视为兼容，不开放任意文件路由，也不更改 JS/Python 的旧 proxy 参数语义。
+
+### 决策与边界
+
+- **控制面**：initialize 仅在真实代理处理器存在、manifest 明确包含 `proxy` 能力与 `localProxy=true`、
+  服务器已成功绑定后返回 `extensions.proxyHttp={version:1,baseUrl,sessionControl:true}`。
+  IPC 的 `proxy` 方法只接受 `session.open/renew/close`；不承载 InputStream、媒体 Base64 或媒体分块。
+- **数据面**：每个 sidecar generation 在 `127.0.0.1:0` 绑定独立 HTTP 服务。业务路径是
+  `/s/<高熵token>/proxy`；未带会话的业务请求拒绝。只有发现检查动作允许精确返回 `ok`。
+  单站进程同时只有一个活动会话，替换、过期、关闭、进程退出均撤销旧令牌及在途流。
+- **生命周期**：TTL 120 秒，播放 owner 每 30 秒续期；Dart owner 绑定真实 service/config、site 与 host 对象。
+  采用可释放 lease 而不是永久 pin；停止播放/换源/销毁后释放，恢复原空闲回收。旧未协商宿主维持原行为。
+- **流语义**：接收站源 `Object[]{status,mime,InputStream[,headers]}`，固定 64 KiB 缓冲并背压写出，
+  保留 200/206/416、MIME、合法 Content-Length/Range 等字段。剥除 hop-by-hop（包括 Connection 点名的头）
+  与 Set-Cookie；未知长度采用 HTTP framing，不用 `available()` 猜长度，不整块缓冲。
+- **失败收尾**：初始化失败必须解绑服务；客户端断开、提前 EOF、停止/替换/过期时关闭源流与连接。
+  会话锁内不做阻塞网络 I/O，消费者停止读取也不能阻塞控制面关闭。
+- **访问与诊断**：仅 GET/HEAD、严格回环 Host、拒绝浏览器 Origin，token/TTL 校验与会话隔离。
+  日志脱敏会话路径及查询，不输出控制令牌；无法识别的任意无标签业务字符串不假称全部可自动脱敏。
+
+### 为什么不用固定 9978 或 JSON 媒体流
+
+Wex 的 `ProxyOrigin.init()` 会先反射宿主 `com.github.catvod.Proxy.getPort()/getUrl(boolean)`；
+没有钩子才扫描 8964..9998，最终兜底 9978。因此在 payload loader 就绪后显式挂接代理钩子，
+但不调用会加载 ARM native 的 `InitOrigin.init`，即可避开端口扫描且保留内层清单的会话路径。
+路由使用 payload 自身的 `ProxyOrigin.proxy(Map)`，避免父委派拿到 shell Proxy 后递归回 native 桥。
+
+现有 IPC 默认单响应 8 MiB、单帧 16 MiB，还限制进程生命周期累计 stdout 64 MiB。
+用 JSON/Base64 分块传媒体仍会超过累计限制；本扩展不放宽这些保护，媒体与帧协议彻底分开。
+
+### 验收记录（2026-11-21）
+
+- 独立运行打包 host.jar 的原生 fixture：918 个断言，96 MiB 测试堆传输 70 MiB，
+  传输期间 IPC heartbeat 正常，20 个跟踪流全部释放；覆盖 Range/HEAD、过期、替换、提前 EOF、
+  背压停读、初始化失败和日志脱敏。
+- 真正 AppState → SiteService → SidecarRuntime → JVM 调用：Wex 韩小圈 `play` 约 285 ms，
+  会话代理返回 HLS（200，约 135 KiB），源给出的媒体地址返回 206（video/mp2t，65,536 字节）。
+  撤销后旧会话 URL 返回 403；这是有限取流证据，不是全站覆盖、全片播放或解码首帧保证。
+- 该样本清单经 JVM，媒体 TS 使用站源提供的公网地址；不声称所有媒体字节均经 JVM 二次代理。
+- 实现计划：`docs/superpowers/plans/2026-11-21-jvm-proxy-http.md`。测试门禁在原生
+  `sidecars/spider-host-jvm/test/ProxyHttpContractTest.java` 及 Flutter proxy/session/idle/player 测试中保留。

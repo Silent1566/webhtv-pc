@@ -307,6 +307,140 @@ void main() {
       await okHost.destroy();
     });
 
+    test('play 分段计时：成功、站源异常和 normalize 异常只写 stderr', () async {
+      final entry = File(p.join(tempRoot.path, 'TimingSpider.java'));
+      await entry.writeAsString(r'''
+package timing;
+public class TimingSpider extends com.github.catvod.crawler.Spider {
+    public String playerContent(String flag, String id, java.util.List<String> vipFlags) {
+        if (id.equals("throw")) throw new IllegalStateException("fixture failure");
+        if (id.equals("normalize")) return "not-json";
+        try { Thread.sleep(80); } catch (InterruptedException e) { throw new RuntimeException(e); }
+        return "{\"url\":\"https://fixture.invalid/stream?token=secret\",\"parse\":0}";
+    }
+}
+''');
+      final manifestFile = File(p.join(tempRoot.path, 'timing.json'));
+      await manifestFile.writeAsString(
+        jsonEncode({
+          'abi': SpiderAbi.ipc,
+          'key': 'timing-fixture',
+          'runtime': 'jvm',
+          'entry': entry.path,
+          'config': {'className': 'timing.TimingSpider'},
+          'capabilities': ['play'],
+          'limits': {'concurrency': 1},
+        }),
+      );
+      final manifest = SpiderManifest.fromJson(
+        jsonDecode(await manifestFile.readAsString()),
+      );
+      final command = LocalSpiderCommand.resolve(
+        spider: LocalSpider(
+          manifest: manifest,
+          manifestPath: manifestFile.path,
+          rootDir: tempRoot.path,
+          entryPath: entry.path,
+        ),
+        hostPath: pythonHostPath,
+        jvmHostPath: jvmHostPath,
+      )!;
+      final process = await Process.start(
+        command.executable,
+        command.arguments,
+        environment: SidecarEnvironment.build(),
+        includeParentEnvironment: false,
+      );
+      addTearDown(() {
+        process.kill();
+      });
+      final stdoutFuture = process.stdout.fold<List<int>>(
+        <int>[],
+        (a, b) => a..addAll(b),
+      );
+      final stderrFuture = process.stderr.transform(utf8.decoder).join();
+      for (final id in ['ok', 'throw', 'normalize', 'cancel']) {
+        process.stdin.add(
+          IpcFrameCodec.encode({
+            'jsonrpc': '2.0',
+            'id': id,
+            'method': 'play',
+            'deadlineMs': 90000,
+            'params': {
+              'flag': 'fixture',
+              'id': id,
+              'unused': 'do-not-log-secret',
+            },
+          }),
+        );
+      }
+      process.stdin.add(
+        IpcFrameCodec.encode({
+          'jsonrpc': '2.0',
+          'method': r'$/cancelRequest',
+          'params': {'id': 'cancel'},
+        }),
+      );
+      await process.stdin.close();
+      expect(await process.exitCode.timeout(const Duration(seconds: 20)), 0);
+      final stdoutBytes = await stdoutFuture;
+      final stderr = await stderrFuture;
+      final decoder = IpcFrameDecoder(maxFrameBytes: 1024 * 1024);
+      final frames = decoder.add(stdoutBytes).cast<Map>();
+      expect(decoder.bufferedBytes, 0, reason: 'stdout 不得有日志或残帧');
+      expect(frames.length, 4);
+      expect(frames.singleWhere((f) => f['id'] == 'ok')['result'], isNotNull);
+      for (final id in ['throw', 'normalize']) {
+        expect(frames.singleWhere((f) => f['id'] == id)['error'], isNotNull);
+      }
+      expect(
+        (frames.singleWhere((f) => f['id'] == 'cancel')['error']
+            as Map)['code'],
+        SpiderErrorCode.cancelled,
+      );
+      final timings = stderr
+          .split('\n')
+          .where((line) => line.startsWith('[webhtv-timing] '))
+          .map(
+            (line) =>
+                jsonDecode(line.substring('[webhtv-timing] '.length)) as Map,
+          )
+          .toList();
+      for (final id in ['ok', 'throw', 'normalize']) {
+        for (final layer in ['request', 'catvod-play']) {
+          final timing = timings.singleWhere(
+            (t) => t['requestId'] == id && t['layer'] == layer,
+          );
+          expect(timing['method'], 'play');
+          expect(timing['site'], 'timing-fixture');
+          expect(timing['status'], id == 'ok' ? 'ok' : 'error');
+          for (final key
+              in layer == 'request'
+                  ? ['queueMs', 'invokeMs', 'elapsedMs']
+                  : ['playerContentMs', 'normalizeMs', 'elapsedMs']) {
+            expect(timing[key], isNonNegative, reason: '$id $layer $key');
+          }
+        }
+      }
+      expect(
+        timings.singleWhere(
+          (t) => t['requestId'] == 'throw' && t['layer'] == 'request',
+        )['queueMs'],
+        greaterThanOrEqualTo(50),
+      );
+      final cancelled = timings.singleWhere((t) => t['requestId'] == 'cancel');
+      expect(cancelled['layer'], 'request');
+      expect(cancelled['method'], 'play');
+      expect(cancelled['site'], 'timing-fixture');
+      expect(cancelled['status'], 'cancel');
+      for (final key in ['queueMs', 'invokeMs', 'elapsedMs']) {
+        expect(cancelled[key], isNonNegative);
+      }
+      final timingText = timings.map(jsonEncode).join();
+      expect(timingText, isNot(contains('secret')));
+      expect(timingText, isNot(contains('fixture.invalid')));
+    });
+
     test('stdin 一次性喂帧后关闭：响应必须写完再退出（§9.3.1）', () async {
       // 回归：宿主曾在 stdin EOF 时立即返回，把已派发但未及写回的请求一起丢掉。
       // 验收脚本的 jvm-host-preflight 用管道一次性喂 initialize 帧，正是这个形态。
@@ -413,6 +547,9 @@ void main() {
       expect(flags, contains('-Xmx128m'));
       expect(flags, contains('-Xms16m'));
       expect(flags, contains('-XX:MaxMetaspaceSize=64m'));
+      // dex 转译产物在混淆代码上可能过不了 JVM 校验（实测 VerifyError），
+      // 校验关闭只在本进程内生效，隔离仍靠独立 sidecar + 作业对象。
+      expect(flags, contains('-noverify'));
 
       // 堆上限必须严格小于作业限制，给 Metaspace/栈/直接内存留出余量。
       final heap = int.parse(

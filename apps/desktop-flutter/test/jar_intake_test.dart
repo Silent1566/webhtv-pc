@@ -43,6 +43,44 @@ void main() {
     } catch (_) {}
   });
 
+  test('generated shell migration authorizes disk and effective launch only with evidence', () async {
+    final target=p.join(cspRoot,'csp_Shell');await Directory(target).create(recursive:true);
+    File(p.join(target,'index.jar')).writeAsBytesSync([1]);
+    JarIntake.ensureLaunchManifest(targetDir:target,siteKey:'csp_Shell');
+    final manifest=File(p.join(target,'manifest.json'));final original=manifest.readAsStringSync();
+    File(p.join(target,'payload.jar')).writeAsBytesSync([1]);
+    File(p.join(target,'probe.json')).writeAsStringSync(jsonEncode({'installed':true,'outcome':'unpacked','shellPayload':{'sha256':'fixture'}}));
+    JarIntake.ensureLaunchManifest(targetDir:target,siteKey:'csp_Shell',log:log);
+    expect(log.export(),contains('generated-shell'));
+    final migrated=manifest.readAsStringSync();expect(migrated,isNot(original));
+    final data=jsonDecode(migrated) as Map;
+    expect((data['permissions'] as Map)['localProxy'],true);expect(data['capabilities'],contains('proxy'));
+    final site=Site(key:'csp_Shell',name:'Shell',type:SiteType.spider,api:'csp_Shell');
+    final local=SpiderRouter.cspLocalSpider(site:site,entryPath:p.join(target,'index.jar'),binding:CspJvmBinding(root:cspRoot));
+    expect(local.manifest.permissions.localProxy,true);expect(local.manifest.capabilities.values,contains('proxy'));
+    expect(local.manifest.limits.memoryMiB,512);
+    JarIntake.ensureLaunchManifest(targetDir:target,siteKey:'csp_Shell');expect(manifest.readAsStringSync(),migrated);
+    final manual=p.join(cspRoot,'csp_Manual');await Directory(manual).create(recursive:true);
+    File(p.join(manual,'index.jar')).writeAsBytesSync([1]);File(p.join(manual,'payload.jar')).writeAsBytesSync([1]);
+    File(p.join(manual,'manifest.json')).writeAsStringSync(original);
+    JarIntake.ensureLaunchManifest(targetDir:manual,siteKey:'csp_Manual');
+    expect(File(p.join(manual,'manifest.json')).readAsStringSync(),original);
+  });
+
+  test('old missing capabilities retains five methods, explicit empty stays empty', () async {
+    final target=p.join(cspRoot,'csp_LegacyCaps');await Directory(target).create(recursive:true);
+    File(p.join(target,'index.jar')).writeAsBytesSync([1]);
+    final file=File(p.join(target,'manifest.json'));
+    final base=<String,Object?>{'abi':'webhtv-ipc-v1','key':'csp_LegacyCaps','runtime':'jvm','entry':'index.jar','permissions':{'localProxy':false}};
+    file.writeAsStringSync(jsonEncode(base));
+    final site=Site(key:'csp_LegacyCaps',name:'old',type:3,api:'csp_LegacyCaps');
+    LocalSpider load()=>SpiderRouter.cspLocalSpider(site:site,entryPath:p.join(target,'index.jar'),binding:CspJvmBinding(root:cspRoot));
+    expect(load().manifest.capabilities.values,{'home','category','detail','search','play'});
+    expect(load().manifest.permissions.localProxy,false);
+    file.writeAsStringSync(jsonEncode({...base,'capabilities':<String>[]}));
+    expect(load().manifest.capabilities.values,isEmpty);expect(load().manifest.permissions.localProxy,false);
+  });
+
   group('静态检测：结论分级', () {
     test('含 classes.dex 且无原生库的 jar 判为 translatableDex，可安装', () async {
       final jar = File(p.join(tempRoot.path, 'android.jar'));
@@ -124,6 +162,30 @@ void main() {
       expect(inspection.verdict, JarVerdict.nativeLibrary);
       expect(inspection.installable, isFalse);
       expect(inspection.nativeEntries, contains('lib/arm64-v8a/libspider.so'));
+    });
+
+    test('解包产物（payload 含 assets/*.so）判为 translatableDex，note 点名 native 依赖', () async {
+      final jar = File(p.join(tempRoot.path, 'payload.jar'));
+      await _writeZip(jar, {
+        'classes.dex': const [0x64, 0x65, 0x78],
+        'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+      });
+      // 同一份内容按**壳 jar** 口径仍然拒绝（.so 是外壳依赖）。
+      expect(
+        JarIntake.inspectPath(jar.path).verdict,
+        JarVerdict.nativeLibrary,
+      );
+      final payload = JarIntake.inspectUnpackedPayload(
+        jar.path,
+        expectedClass: 'Demo',
+      );
+      expect(payload.verdict, JarVerdict.translatableDex);
+      expect(payload.installable, isTrue);
+      expect(payload.unpackedPayload, isTrue);
+      expect(payload.note, contains('解包产物'));
+      expect(payload.note, contains('UnsatisfiedLinkError'));
+      expect(payload.note, contains('不静默降级'));
+      expect(payload.summary, contains('解包产物'));
     });
 
     test('没有任何 class 条目时判为 missingEntryClass', () async {
@@ -356,6 +418,39 @@ void main() {
       JarIntake.ensureLaunchManifest(targetDir: target, siteKey: 'csp_Empty');
 
       expect(File(p.join(target, 'manifest.json')).existsSync(), isFalse);
+    });
+
+    test('解包产物可导入：intake.json 记 unpackedPayload、manifest 记 config.className', () async {
+      final payload = File(p.join(tempRoot.path, 'payload-import.jar'));
+      await _writeZip(payload, {
+        'classes.dex': const [0x64, 0x65, 0x78],
+        'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+        'com/github/catvod/spider/Demo.class': const [0xca, 0xfe],
+      });
+      final target = p.join(cspRoot, 'csp_Demo');
+      final result = await JarIntake.install(
+        sourcePath: payload.path,
+        targetDir: target,
+        siteKey: 'csp_Demo',
+        className: 'com.github.catvod.spider.Demo',
+        log: log,
+        unpackedPayload: true,
+      );
+
+      expect(result.ok, isTrue);
+      expect(result.inspection!.verdict, JarVerdict.translatableDex);
+      final intake = JarIntake.intakeRecord(target);
+      expect(intake?['unpackedPayload'], isTrue);
+      expect(intake?['className'], 'com.github.catvod.spider.Demo');
+      final manifest =
+          jsonDecode(
+                File(p.join(target, 'manifest.json')).readAsStringSync(),
+              )
+              as Map<String, Object?>;
+      expect(
+        (manifest['config'] as Map<String, Object?>)['className'],
+        'com.github.catvod.spider.Demo',
+      );
     });
 
     test('类目录入口导入为 classes/ 目录，entryFor 能定位', () async {

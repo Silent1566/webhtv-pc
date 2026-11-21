@@ -42,6 +42,7 @@
 | JS Spider | 正式 Windows / Linux 包内置 Node 运行时；源码开发需准备 Node.js |
 | Python Spider | 当前 Windows 包内置专用离线 Python 与依赖，可在 Python 环境页面检测及离线修复；Linux 对应站源仍需系统 Python 3 |
 | JVM Spider | 对应站源需本机 JDK 17+；站源需满足宿主 ABI 或支持的字节码转译路径，兼容性以实测为准 |
+| 加固壳 JVM 站源（jar 内 ARM 加密 payload） | 需 JDK 17+，并在需要时由用户点「下载解包运行时」按需获取 unidbg 0.9.9（约 40.7 MB，四镜像回退 + 逐文件 SHA-256 校验）；解包后 payload 内的 native 能力（如壳内加解密辅助）仍可能缺失，调用会如实报错。只支持已识别的壳配方（当前 wex/shinidie），其它壳如实判为未支持 |
 | Web 嗅探 / Super 解析 | 需本机 Chromium 内核浏览器，或用户提供的本地浏览器组件；应用不内置、不分发浏览器，也不代为联网下载 |
 
 ## 开始使用
@@ -145,6 +146,7 @@ docs/                     设计、ADR、发布说明与验收记录
 | **kknifer7/CatVodSpider-PC** | 适配电脑端的猫影视 / TVBox Spider 模板项目 | [https://github.com/kknifer7/CatVodSpider-PC](https://github.com/kknifer7/CatVodSpider-PC) |
 | **guozhigq/pilipala（PiliPala）** | 使用 Flutter 开发的 BiliBili 第三方客户端 | [https://github.com/guozhigq/pilipala](https://github.com/guozhigq/pilipala) |
 | **yagami-hue/Win-box** | Windows 版 TVBox 项目 | [https://github.com/yagami-hue/Win-box](https://github.com/yagami-hue/Win-box) |
+| **yagami-hue/MisaTV** | 同一作者的 Flutter 重写版 TVBox 客户端（`kniephos`），jar 源、JVM 垫片与加固壳边界的主要对照项目 | [https://github.com/yagami-hue/MisaTV](https://github.com/yagami-hue/MisaTV) |
 
 ### 使用的开源组件与模型
 

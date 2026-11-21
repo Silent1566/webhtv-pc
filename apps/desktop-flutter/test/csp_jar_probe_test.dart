@@ -17,6 +17,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart' show getCrc32;
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -24,11 +25,19 @@ import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/http_api.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/csp_jar_probe.dart';
+import 'package:webhtv_pc/services/dex_translate.dart';
 import 'package:webhtv_pc/services/jar_intake.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/spider_registry.dart';
 import 'package:webhtv_pc/services/spider_router.dart';
 
+/// 当前修复口径的产物记录样本：presence 判定要求版本/类数/两个 SHA 都在。
+Map<String, Object?> dexRecord({int? version, int classCount = 1227}) => <String, Object?>{
+  'sourceSha256': 'fake-sha256',
+  'bundleSha256': 'fake-sha256',
+  'classCount': classCount,
+  'repairVersion': version ?? DexTranslate.repairVersion,
+};
 void main() {
   late Directory tempRoot;
   late LogService log;
@@ -88,6 +97,26 @@ void main() {
     };
   }
 
+  /// 假预转译（**落盘版**）：记账之后真的把 `dexBundles/classes.jar` 写出来。
+  ///
+  /// 为什么要落盘：装配期预转译有没有产物，只能由文件系统证明；而幂等分支的判据
+  /// 也正是这个文件（与运行期 DexNative 的约定一致）。
+  Future<Map<String, Object?>> Function({
+    required String siteDir,
+    required String archive,
+  })
+  fakeDexWriting() {
+    return ({required String siteDir, required String archive}) async {
+      translated.add(archive);
+      final bundle = File(p.join(siteDir, 'dexBundles', 'classes.jar'));
+      await bundle.create(recursive: true);
+      await bundle.writeAsBytes(const [0x50, 0x4b, 0x03, 0x04], flush: true);
+      await File(p.join(siteDir, 'dexBundles', 'intake-dex.json'))
+          .writeAsString(jsonEncode(dexRecord()), flush: true);
+      return <String, Object?>{'ok': true, 'bundle': 'classes.jar'};
+    };
+  }
+
   CspJarProbe probeWith(
     http.Client client, {
     Future<Map<String, Object?>> Function({
@@ -95,12 +124,22 @@ void main() {
       required String archive,
     })?
     dexTranslate,
+    Future<Map<String, Object?>> Function({
+      required String shellJar,
+      required String outJar,
+    })?
+    shellUnpack,
+    // 缺省按**未安装**解包运行时处理：探测只读状态、绝不下载，测试也不需要真
+    // 的 18 个 unidbg jar 存在。
+    bool Function()? shellRuntimeInstalled,
   }) => CspJarProbe(
     root: p.join(tempRoot.path, 'spiders'),
     binding: CspJvmBinding(root: p.join(tempRoot.path, 'spiders', 'csp')),
     log: log,
     client: client,
     dexTranslate: dexTranslate ?? fakeDex(),
+    shellUnpack: shellUnpack,
+    shellRuntimeInstalled: shellRuntimeInstalled ?? (() => false),
   );
 
   CspJvmBinding binding() =>
@@ -133,6 +172,57 @@ void main() {
       'lib/arm64-v8a/libnative.so': const [0x7f, 0x45, 0x4c, 0x46],
     });
     return file.readAsBytes();
+  }
+
+  /// 加固壳 jar：`dex + assets/*.so + assets/*.guard`（wex 形态）。
+  Future<Uint8List> shellJar() async {
+    final file = File(p.join(tempRoot.path, 'shell.jar'));
+    await _writeZip(file, {
+      'classes.dex': const [0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35],
+      'assets/wexshinidie.guard': const [1, 2, 3],
+      'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+    });
+    return file.readAsBytes();
+  }
+
+  /// 假解包：把 payload 写到 `outJar`（含 dex + assets/*.so + 指定类名）。
+  Future<Map<String, Object?>> Function({
+    required String shellJar,
+    required String outJar,
+  })
+  fakeUnpack({
+    List<String> classes = const [
+      'com/github/catvod/spider/NewDouBan.class',
+    ],
+    bool ok = true,
+    String stage = '',
+    String message = '',
+    void Function()? onCall,
+  }) {
+    return ({required String shellJar, required String outJar}) async {
+      onCall?.call();
+      if (!ok) {
+        return <String, Object?>{
+          'ok': false,
+          'stage': stage,
+          'message': message,
+        };
+      }
+      await _writeZip(File(outJar), {
+        'classes.dex': const [0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35],
+        'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+        for (final name in classes) name: const [0xca, 0xfe],
+      });
+      return <String, Object?>{
+        'ok': true,
+        'payload': outJar,
+        'sha256': 'payload-sha256',
+        'bytes': 2048,
+        'recipe': 'wex-guard',
+        'asset': 'assets/wexshinidie.guard',
+        'elapsedMs': 1234,
+      };
+    };
   }
 
   setUp(() {
@@ -573,6 +663,822 @@ void main() {
       expect(record?['verdict'], JarVerdict.nativeLibrary.name);
     });
   });
+
+  group('加固壳解包链路', () {
+    test('needsShellRuntime：未安装解包运行时 → 只报结论，不下载、不落盘', () async {
+      final bytes = await shellJar();
+      var unpackCalls = 0;
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => false,
+        shellUnpack: fakeUnpack(onCall: () => unpackCalls++),
+      );
+
+      final report = await probe.materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(report.needsShellRuntime, 1);
+      expect(report.unpacked, 0);
+      expect(unpackCalls, 0, reason: '缺运行时不能白起一次模拟器');
+      expect(binding().entryFor('csp_NewDouBanGuard'), isNull);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      final record = JarIntake.probeRecord(dir);
+      expect(record?['outcome'], CspProbeOutcome.needsShellRuntime.name);
+      expect(record?['verdict'], JarVerdict.shellGuard.name);
+      expect('${record?['summary']}', contains(CspJarProbe.shellRuntimeSizeLabel));
+      expect(
+        File(p.join(tempRoot.path, 'spiders', 'probe-cache', 'shell'))
+            .existsSync(),
+        isFalse,
+        reason: '没解包就不该创建 payload 缓存目录',
+      );
+    });
+
+    test('unpackFailed：解包卡在 native-注册 → 结论带阶段、不落盘', () async {
+      final bytes = await shellJar();
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(
+          ok: false,
+          stage: 'native-注册',
+          message: '未找到 libwex.so',
+        ),
+      );
+
+      final report = await probe.materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(report.unpackFailed, 1);
+      expect(binding().entryFor('csp_NewDouBanGuard'), isNull);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      final record = JarIntake.probeRecord(dir);
+      expect(record?['outcome'], CspProbeOutcome.unpackFailed.name);
+      expect(record?['shellStage'], 'native-注册');
+      expect('${record?['summary']}', contains('native-注册'));
+      expect('${record?['summary']}', contains('未找到 libwex.so'));
+    });
+
+    test('解包成功：壳 jar 作入口 + payload.jar 同目录，manifest 写壳入口类', () async {
+      final bytes = await shellJar();
+      var unpackCalls = 0;
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(onCall: () => unpackCalls++),
+      );
+
+      final report = await probe.materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(unpackCalls, 1);
+      expect(report.unpacked, 1);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      expect(binding().entryFor('csp_NewDouBanGuard'), isNotNull);
+
+      // 入口必须是**壳 jar**：payload 里没有壳类，拿它当入口必然 ClassNotFound（code=3）。
+      final entry = File(p.join(dir, 'index.jar'));
+      expect(await entry.readAsBytes(), bytes, reason: 'index.jar 必须是壳 jar');
+      final payloadFile = File(p.join(dir, 'payload.jar'));
+      expect(
+        payloadFile.existsSync(),
+        isTrue,
+        reason: '解包产物要落在壳 jar 同目录，宿主 DexNative 才找得到',
+      );
+      expect(await payloadFile.readAsBytes(), isNot(bytes));
+
+      // 壳与 payload 各转译进自己的目录：两者都是 classes.dex，共用会互相顶掉。
+      expect(
+        translated.where((archive) => archive.endsWith('index.jar')),
+        isNotEmpty,
+        reason: '壳 jar 要转译进 <站点>/dexBundles/',
+      );
+      expect(
+        translated.where((archive) => archive.endsWith('payload.jar')),
+        isNotEmpty,
+        reason: 'payload 要转译进 <站点>/${CspJarProbe.payloadDexDirName}/',
+      );
+
+      final intake = JarIntake.intakeRecord(dir);
+      expect(intake?['className'], 'com.github.catvod.spider.NewDouBanGuard');
+      expect(intake?['unpackedPayload'], isTrue);
+      expect(intake?['verdict'], JarVerdict.translatableDex.name);
+      expect(intake?['shellEntry'], isTrue, reason: 'intake 记录要对齐真实装配');
+      expect(intake?['payloadSha256'], 'payload-sha256');
+      final manifest =
+          jsonDecode(File(p.join(dir, 'manifest.json')).readAsStringSync())
+              as Map<String, Object?>;
+      expect(
+        (manifest['config'] as Map<String, Object?>)['className'],
+        'com.github.catvod.spider.NewDouBanGuard',
+        reason: '入口是壳类；payload 的真实现由宿主 DexNative 在运行期解析',
+      );
+      final record = JarIntake.probeRecord(dir)!;
+      expect(record['outcome'], CspProbeOutcome.unpacked.name);
+      expect(record['verdict'], JarVerdict.translatableDex.name);
+      final shellPayload = record['shellPayload'] as Map<String, Object?>;
+      expect(shellPayload['sha256'], 'payload-sha256');
+      expect(shellPayload['bytes'], 2048);
+      expect(shellPayload['recipe'], 'wex-guard');
+      expect(shellPayload['asset'], 'assets/wexshinidie.guard');
+    });
+
+    test('payload 预转译：产物落在 payload-dex/dexBundles/classes.jar', () async {
+      final bytes = await shellJar();
+      final calls = <String, String>{};
+      Future<Map<String, Object?>> translate({
+        required String siteDir,
+        required String archive,
+      }) async {
+        calls[archive] = siteDir;
+        // 与真实 DexTranslate 一致：产物写进 <siteDir>/dexBundles/classes.jar。
+        final bundle = File(p.join(siteDir, 'dexBundles', 'classes.jar'));
+        await bundle.create(recursive: true);
+        await bundle.writeAsBytes(const [0x50, 0x4b, 0x03, 0x04], flush: true);
+        return <String, Object?>{'ok': true, 'bundle': 'classes.jar'};
+      }
+
+      final report = await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+        dexTranslate: translate,
+      ).materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(report.unpacked, 1);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      // 运行期 DexNative 就按这个路径取现成产物。缺了它，5-9 s 的 dex2jar 会挤进
+      // 侧车握手窗口，去撞作业对象的内存上限（表现为 stderr 空、退出码 1）。
+      expect(
+        File(
+          p.join(
+            dir,
+            CspJarProbe.payloadDexDirName,
+            'dexBundles',
+            'classes.jar',
+          ),
+        ).existsSync(),
+        isTrue,
+      );
+      // 壳与 payload **各转各的目录**：payload 的产物必须与 DexNative 的约定同址。
+      expect(
+        calls[p.join(dir, 'payload.jar')],
+        p.join(dir, CspJarProbe.payloadDexDirName),
+      );
+      expect(calls[p.join(dir, 'index.jar')], dir);
+    });
+
+    test('预转译抛错不影响装配：装配照旧成功，probe.json 记 installed/unpacked', () async {
+      final bytes = await shellJar();
+      final report = await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+        dexTranslate: ({required String siteDir, required String archive}) async {
+          throw StateError('dex2jar 挂了');
+        },
+      ).materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      // 预转译只是「把 5-9 s 挪到导入期」，运行期 DexNative 还有自译兜底：
+      // 因此它失败只能记 warning，绝不能把装配一起判死。
+      expect(report.unpacked, 1);
+      expect(report.failed, 0);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      expect(binding().entryFor('csp_NewDouBanGuard'), isNotNull);
+      expect(File(p.join(dir, 'payload.jar')).existsSync(), isTrue);
+      final record = JarIntake.probeRecord(dir)!;
+      expect(record['outcome'], CspProbeOutcome.unpacked.name);
+      expect(record['installed'], isTrue);
+    });
+
+    test('payload-dex 已存在就不重复转译（幂等，payload 转译 0 次）', () async {
+      const siteKey = 'csp_NewDouBanGuard';
+      final dir = binding().directoryFor(siteKey);
+      // 上一次装配留下的产物：字节内容不是一次真转译会写出来的东西，被重写就能看出来。
+      final prior = File(
+        p.join(dir, CspJarProbe.payloadDexDirName, 'dexBundles', 'classes.jar'),
+      );
+      await prior.create(recursive: true);
+      await prior.writeAsBytes(const [1, 2, 3], flush: true);
+      await File(p.join(dir, CspJarProbe.payloadDexDirName, 'dexBundles', 'intake-dex.json'))
+          .writeAsString(jsonEncode(dexRecord()), flush: true);
+
+      final bytes = await shellJar();
+      final report = await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+        dexTranslate: fakeDexWriting(),
+      ).materialize(
+        configOf([cspSite(siteKey, jar: 'https://example.test/shell.jar')]),
+      );
+
+      expect(report.unpacked, 1);
+      expect(
+        translated.where((archive) => archive.endsWith('payload.jar')),
+        isEmpty,
+        reason: 'payload-dex 已就位还重跑 dex2jar，就是白等 5-9 s',
+      );
+      // 壳没有这层幂等（壳 jar 换了而产物还在 = 入口类过期），所以壳仍然转译一次。
+      expect(
+        translated.where((archive) => archive.endsWith('index.jar')),
+        hasLength(1),
+      );
+      expect(await prior.readAsBytes(), const [1, 2, 3]);
+    });
+
+    test('payload-dex 记录是旧修复口径时重新转译（旧产物不能当成已就位）', () async {
+      const siteKey = 'csp_NewDouBanGuard';
+      final dir = binding().directoryFor(siteKey);
+      final bundle = File(
+        p.join(dir, CspJarProbe.payloadDexDirName, 'dexBundles', 'classes.jar'),
+      );
+      await bundle.create(recursive: true);
+      await bundle.writeAsBytes(const [1, 2, 3], flush: true);
+      await File(p.join(dir, CspJarProbe.payloadDexDirName, 'dexBundles', 'intake-dex.json'))
+          .writeAsString(jsonEncode(dexRecord(version: 3)), flush: true);
+
+      final bytes = await shellJar();
+      final report = await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+        dexTranslate: fakeDexWriting(),
+      ).materialize(
+        configOf([cspSite(siteKey, jar: 'https://example.test/shell.jar')]),
+      );
+
+      expect(
+        translated.where((archive) => archive.endsWith('payload.jar')),
+        hasLength(1),
+        reason: '旧口径产物带着已修的误译，复用等于让用户永远撞同一个崩溃',
+      );
+      expect(report.unpacked, 1, reason: '需要重译只是再转一次，不是永久失败');
+    });
+    test('壳入口装配不看 payload 类名：对不上也按壳类名装（猜错只会变成 code=3）', () async {
+      final bytes = await shellJar();
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(classes: const ['a/b/Other.class']),
+      );
+
+      final report = await probe.materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(report.unpacked, 1);
+      final dir = binding().directoryFor('csp_NewDouBanGuard');
+      expect(
+        JarIntake.intakeRecord(dir)?['className'],
+        'com.github.catvod.spider.NewDouBanGuard',
+        reason: 'App 侧只写壳入口类；payload 里叫什么都不影响装配',
+      );
+      expect(File(p.join(dir, 'payload.jar')).existsSync(), isTrue);
+      expect(
+        await File(p.join(dir, 'index.jar')).readAsBytes(),
+        bytes,
+        reason: '入口仍然是壳 jar',
+      );
+    });
+
+    test('入口类名解析：api 去 csp_ 保留 Guard，壳入口再补包名', () {
+      expect(
+        CspJarProbe.entryClassNameOf(cspSite('csp_WexHanXiaoQuanGuard')),
+        'WexHanXiaoQuanGuard',
+        reason: '裸名照旧按 api 推导；payload 的真实现由宿主 DexNative 解析',
+      );
+      expect(
+        CspJarProbe.qualifyClassName('WexHanXiaoQuanGuard'),
+        'com.github.catvod.spider.WexHanXiaoQuanGuard',
+        reason: '壳入口写 manifest 前补包名（省掉宿主的裸类名回退）',
+      );
+      expect(
+        CspJarProbe.qualifyClassName('com.github.catvod.spider.Demo'),
+        'com.github.catvod.spider.Demo',
+        reason: '已是全限定名不再重复补包名',
+      );
+    });
+
+    test('同一壳 jar 只解包一次：第二个站点命中 payload 缓存', () async {
+      final bytes = await shellJar();
+      var unpackCalls = 0;
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(onCall: () => unpackCalls++),
+      );
+
+      final report = await probe.materialize(
+        configOf([
+          cspSite('csp_SiteA', jar: 'https://example.test/shell.jar'),
+          cspSite('csp_SiteB', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(unpackCalls, 1, reason: 'payload 按壳 jar 的 SHA-256 缓存');
+      expect(report.unpacked, 2);
+      // 共享缓存只省「解包」，每个站点仍要有自己的 payload.jar 与壳入口（站点目录互相独立）。
+      for (final key in ['csp_SiteA', 'csp_SiteB']) {
+        final dir = binding().directoryFor(key);
+        expect(File(p.join(dir, 'payload.jar')).existsSync(), isTrue);
+        expect(
+          JarIntake.intakeRecord(dir)?['className'],
+          'com.github.catvod.spider.${key.substring(4)}',
+          reason: '每个站点写自己的壳入口类名（api 去 csp_）',
+        );
+      }
+    });
+
+    test('needsShellRuntime 不是永久结论：装好运行时的下一轮会重试解包', () async {
+      final bytes = await shellJar();
+      // 先按「未安装」跑一轮，写下 needsShellRuntime。
+      await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => false,
+        shellUnpack: fakeUnpack(),
+      ).materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+      expect(
+        JarIntake.probeRecord(
+          binding().directoryFor('csp_NewDouBanGuard'),
+        )?['outcome'],
+        CspProbeOutcome.needsShellRuntime.name,
+      );
+
+      // 装上运行时后：同一份配置必须重新取回并真的解包，而不是被旧结论挡掉。
+      final downloads = <String>[];
+      final report = await probeWith(
+        MockClient((request) async {
+          downloads.add(request.url.toString());
+          return http.Response.bytes(bytes, 200);
+        }),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+      ).materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+
+      expect(downloads, hasLength(1), reason: '旧结论不得阻止重试');
+      expect(report.unpacked, 1);
+    });
+
+    test('probeSemanticsVersion 升到 5：装配口径变更后旧结论必须失效', () async {
+      // 4 → 5 的原因：加固壳站点改为「壳 jar 作入口 + payload.jar 同目录」
+      // （此前把解包产物直接当入口——壳类不在 payload 里，站点必然 code=3）。
+      expect(CspJarProbe.probeSemanticsVersion, 5);
+      final bytes = await shellJar();
+      final probe = probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => false,
+        shellUnpack: fakeUnpack(),
+      );
+      await probe.materialize(
+        configOf([
+          cspSite('csp_NewDouBanGuard', jar: 'https://example.test/shell.jar'),
+        ]),
+      );
+      final record = JarIntake.probeRecord(
+        binding().directoryFor('csp_NewDouBanGuard'),
+      );
+      expect(record?['semanticsVersion'], 5);
+    });
+
+    test('旧口径装好的壳站点会按新装配重装，不用用户手删目录', () async {
+      const url = 'https://example.test/shell.jar';
+      const siteKey = 'csp_NewDouBanGuard';
+      final dir = binding().directoryFor(siteKey);
+      await Directory(dir).create(recursive: true);
+      // 模拟 4 口径留下的目录：index.jar 是 payload（壳类不在里面），probe.json 是旧版本。
+      await File(p.join(dir, 'index.jar')).writeAsBytes(const [1, 2, 3], flush: true);
+      await JarIntake.writeProbe(dir, {
+        'siteKey': siteKey,
+        'sourceUrl': url,
+        'semanticsVersion': 4,
+        'verdict': JarVerdict.translatableDex.name,
+        'outcome': CspProbeOutcome.unpacked.name,
+        'summary': '已解包并导入（payload 3 字节）',
+        'installed': true,
+        'shellPayload': {'sha256': 'payload-sha256', 'bytes': 2048},
+      });
+      expect(binding().entryFor(siteKey), isNotNull, reason: '前提：目录里已有入口');
+
+      final bytes = await shellJar();
+      final report = await probeWith(
+        MockClient((request) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(),
+      ).materialize(configOf([cspSite(siteKey, jar: url)]));
+
+      expect(
+        report.unpacked,
+        1,
+        reason: '旧装配不是「已装好」：必须重装成壳入口，否则站点永远 code=3',
+      );
+      expect(
+        await File(p.join(dir, 'index.jar')).readAsBytes(),
+        bytes,
+        reason: '重装后入口是壳 jar',
+      );
+      expect(File(p.join(dir, 'payload.jar')).existsSync(), isTrue);
+      expect(
+        (jsonDecode(File(p.join(dir, 'manifest.json')).readAsStringSync())
+                as Map<String, Object?>)['config'],
+        {'className': 'com.github.catvod.spider.NewDouBanGuard'},
+      );
+    });
+  });
+
+  group('加固壳目标（多选解包）', () {
+    const shellUrlA = 'https://example.test/shell-a.jar';
+    const shellUrlB = 'https://example.test/shell-b.jar';
+    const shellUrlC = 'https://example.test/shell-c.jar';
+
+    /// 造一个加固壳 jar：`pad` 让不同 jar 的**长度**可区分（假解包按长度决定成败）。
+    Future<Uint8List> shellJarAt(String name, {int pad = 3}) async {
+      final file = File(p.join(tempRoot.path, name));
+      await _writeZip(file, {
+        'classes.dex': const [0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35],
+        'assets/wexshinidie.guard': List<int>.filled(pad, 1),
+        'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+      });
+      return file.readAsBytes();
+    }
+
+    /// 按 URL 返回不同字节：多选测试需要「不同的壳 jar 内容」。
+    MockClient jarsClient(Map<String, Uint8List> byUrl, {List<String>? calls}) =>
+        MockClient((request) async {
+          final url = request.url.toString();
+          calls?.add(url);
+          final bytes = byUrl[url];
+          if (bytes == null) return http.Response('missing', 404);
+          return http.Response.bytes(bytes, 200);
+        });
+
+    Future<void> writePayload(String outJar, List<String> classes) => _writeZip(
+      File(outJar),
+      {
+        'classes.dex': const [0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35],
+        'assets/libwex.so': const [0x7f, 0x45, 0x4c, 0x46],
+        for (final name in classes) name: const [0xca, 0xfe],
+      },
+    );
+
+    test('同一 jar 多站点聚合成一条 target（siteKeys 去重、排序稳定）', () async {
+      final shellBytes = await shellJar();
+      final desktopBytes = await desktopJar();
+      final config = configOf([
+        cspSite('csp_Zeta', jar: 'https://example.test/shell.jar'),
+        cspSite('csp_Alpha', jar: 'https://example.test/shell.jar'),
+        cspSite('csp_Alpha', jar: 'https://example.test/shell.jar'),
+        cspSite('csp_Middle', jar: 'https://example.test/shell.jar'),
+        cspSite('csp_Desk', jar: 'https://example.test/desktop.jar'),
+      ]);
+      final byUrl = {
+        'https://example.test/shell.jar': shellBytes,
+        'https://example.test/desktop.jar': desktopBytes,
+      };
+      // 先探测一次：本地暂存 jar 与 probe.json 是列举的**唯一**证据来源。
+      await probeWith(
+        jarsClient(byUrl),
+        shellRuntimeInstalled: () => false,
+      ).materialize(config);
+
+      final calls = <String>[];
+      final targets = await probeWith(
+        jarsClient(byUrl, calls: calls),
+        shellRuntimeInstalled: () => false,
+      ).discoverShellTargets(config);
+
+      expect(targets, hasLength(1), reason: '非加固壳的 jar 不列举');
+      final target = targets.single;
+      expect(target.jarUrl, 'https://example.test/shell.jar');
+      expect(target.siteKeys, [
+        'csp_Alpha',
+        'csp_Middle',
+        'csp_Zeta',
+      ], reason: '同一 URL 的多个站点合成一条，去重且排序稳定');
+      expect(target.state, ShellTargetState.needsRuntime);
+      expect(target.jarSha256, isNotNull);
+      expect(target.payloadSha256, isNull);
+      expect(calls, isEmpty, reason: '列举不得触发任何下载');
+    });
+
+    test('运行时未安装：全部 needsRuntime，不创建 payload 目录、不调解包', () async {
+      final bytes = await shellJar();
+      const url = 'https://example.test/shell.jar';
+      final config = configOf([
+        cspSite('csp_Alpha', jar: url),
+        cspSite('csp_Beta', jar: url),
+      ]);
+      var unpackCalls = 0;
+      final probe = probeWith(
+        jarsClient({url: bytes}),
+        shellRuntimeInstalled: () => false,
+        shellUnpack: fakeUnpack(onCall: () => unpackCalls++),
+      );
+
+      await probe.materialize(config);
+      final targets = await probe.discoverShellTargets(config);
+      expect(targets.single.state, ShellTargetState.needsRuntime);
+
+      final report = await probe.unpackSelected(config, jarUrls: {url});
+      expect(report.entries, hasLength(2));
+      expect(report.needsShellRuntime, 2);
+      expect(report.unpacked, 0);
+      expect(unpackCalls, 0, reason: '缺运行时不能白起一次模拟器');
+      expect(binding().entryFor('csp_Alpha'), isNull);
+      expect(binding().entryFor('csp_Beta'), isNull);
+      expect(
+        Directory(
+          p.join(tempRoot.path, 'spiders', 'probe-cache', 'shell'),
+        ).existsSync(),
+        isFalse,
+        reason: '没解包就不该创建 payload 缓存目录',
+      );
+    });
+
+    test('多选：只解包选中的两个 jar，单 jar 失败不影响另一个', () async {
+      final bytesA = await shellJarAt('shell-a.jar', pad: 3);
+      final bytesB = await shellJarAt('shell-b.jar', pad: 7);
+      final bytesC = await shellJarAt('shell-c.jar', pad: 11);
+      final config = configOf([
+        cspSite('csp_Alpha', jar: shellUrlA),
+        cspSite('csp_Beta', jar: shellUrlA),
+        cspSite('csp_Gamma', jar: shellUrlB),
+        cspSite('csp_Delta', jar: shellUrlC),
+      ]);
+      final byUrl = {shellUrlA: bytesA, shellUrlB: bytesB, shellUrlC: bytesC};
+      // 先探测：三个壳 jar 落进本地暂存（运行时未安装 → 全部 needsRuntime）。
+      await probeWith(
+        jarsClient(byUrl),
+        shellRuntimeInstalled: () => false,
+      ).materialize(config);
+
+      final unpackedSizes = <int>[];
+      final probe = probeWith(
+        jarsClient(byUrl),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: ({required String shellJar, required String outJar}) async {
+          final size = File(shellJar).lengthSync();
+          unpackedSizes.add(size);
+          if (size == bytesB.length) {
+            return <String, Object?>{
+              'ok': false,
+              'stage': 'native-注册',
+              'message': '假的失败',
+            };
+          }
+          await writePayload(outJar, const [
+            'com/github/catvod/spider/Alpha.class',
+            'com/github/catvod/spider/Beta.class',
+          ]);
+          return <String, Object?>{
+            'ok': true,
+            'payload': outJar,
+            'sha256': 'payload-sha',
+            'bytes': 512,
+            'recipe': 'wex-guard',
+            'asset': 'assets/wexshinidie.guard',
+          };
+        },
+      );
+
+      final report = await probe.unpackSelected(
+        config,
+        jarUrls: {shellUrlA, shellUrlB},
+      );
+
+      expect(unpackedSizes, hasLength(2), reason: '只解包选中的两个 jar');
+      expect(unpackedSizes, isNot(contains(bytesC.length)));
+      expect(report.unpacked, 2, reason: 'jar A 名下两个站点都装好');
+      expect(report.unpackFailed, 1, reason: 'jar B 的失败只记在它自己名下');
+      expect(binding().entryFor('csp_Alpha'), isNotNull);
+      expect(binding().entryFor('csp_Beta'), isNotNull);
+      expect(binding().entryFor('csp_Gamma'), isNull);
+      expect(binding().entryFor('csp_Delta'), isNull, reason: '未选中的 jar 不安装');
+      expect(
+        Directory(binding().directoryFor('csp_Delta'))
+            .listSync()
+            .map((entity) => p.basename(entity.path))
+            .toList(),
+        ['probe.json'],
+        reason: '未选中的站点只有上一轮的探测结论，没有任何落盘入口',
+      );
+      expect(
+        JarIntake.probeRecord(binding().directoryFor('csp_Delta'))?['outcome'],
+        CspProbeOutcome.needsShellRuntime.name,
+        reason: '未选中的 jar 结论不得被多选解包改写',
+      );
+      expect(
+        Directory(
+          p.join(
+            tempRoot.path,
+            'spiders',
+            'probe-cache',
+            'shell',
+            sha256.convert(bytesC).toString(),
+          ),
+        ).existsSync(),
+        isFalse,
+        reason: '未选中的 jar 连 payload 都不该解',
+      );
+      final gamma = JarIntake.probeRecord(binding().directoryFor('csp_Gamma'));
+      expect(gamma?['outcome'], CspProbeOutcome.unpackFailed.name);
+      expect(gamma?['shellStage'], 'native-注册');
+      final alpha = JarIntake.probeRecord(binding().directoryFor('csp_Alpha'));
+      expect(alpha?['outcome'], CspProbeOutcome.unpacked.name);
+      expect(alpha?['verdict'], JarVerdict.translatableDex.name);
+    });
+
+    test('进度：每 jar 开始 + 每阶段回调，fraction 单调不减，ETA 按阶段权重外推', () async {
+      final bytesA = await shellJarAt('shell-a.jar', pad: 3);
+      final bytesB = await shellJarAt('shell-b.jar', pad: 7);
+      final config = configOf([
+        cspSite('csp_Alpha', jar: shellUrlA),
+        cspSite('csp_Beta', jar: shellUrlB),
+      ]);
+      final byUrl = {shellUrlA: bytesA, shellUrlB: bytesB};
+      await probeWith(
+        jarsClient(byUrl),
+        shellRuntimeInstalled: () => false,
+      ).materialize(config);
+
+      final ticks = <ShellUnpackTick>[];
+      final probe = probeWith(
+        jarsClient(byUrl),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: ({required String shellJar, required String outJar}) async {
+          // 解包是真耗时动作：这里睡一小会，才能验证「ETA 会算上未开始的 jar」。
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          await writePayload(outJar, const [
+            'com/github/catvod/spider/Alpha.class',
+            'com/github/catvod/spider/Beta.class',
+          ]);
+          return <String, Object?>{
+            'ok': true,
+            'payload': outJar,
+            'sha256': 'payload-sha',
+            'bytes': 512,
+          };
+        },
+      );
+
+      final report = await probe.unpackSelected(
+        config,
+        jarUrls: {shellUrlA, shellUrlB},
+        onProgress: ticks.add,
+      );
+
+      expect(report.unpacked, 2);
+      expect(ticks, isNotEmpty);
+      expect(ticks.every((tick) => tick.jarCount == 2), isTrue);
+      expect(ticks.map((tick) => tick.jarIndex).toSet(), {0, 1});
+
+      // 每个 jar 开始都有一条 tick；首个事件不是 0（与 sidecar 的含当前阶段权重同口径）。
+      expect(ticks.first.stage, 'shell-读取');
+      expect(ticks.first.jarIndex, 0);
+      expect(ticks.first.fraction, greaterThan(0));
+      expect(ticks.first.fraction, lessThan(0.1));
+      for (final index in [0, 1]) {
+        expect(
+          ticks.any((tick) => tick.jarIndex == index && tick.stage == 'shell-读取'),
+          isTrue,
+          reason: '每个 jar 开始都要回调',
+        );
+      }
+
+      // 每个阶段至少一次（阶段名与 CLI 的 STAGES 一字不差）。
+      for (final stage in [
+        'recipe-识别',
+        'emulator-启动',
+        '解包-调用',
+        'payload-校验',
+        'payload-落盘',
+      ]) {
+        expect(
+          ticks.any((tick) => tick.stage == stage),
+          isTrue,
+          reason: '缺少阶段 $stage 的回调',
+        );
+      }
+
+      // 数据太薄不给 ETA；中间阶段给 ETA。
+      expect(ticks.first.eta, isNull, reason: '只有「读取」的数据太薄，ETA 必须是 null');
+      final identify = ticks.firstWhere((tick) => tick.stage == 'recipe-识别');
+      expect(identify.eta, isNull, reason: '刚认出配方时同样太薄');
+      final started = ticks.firstWhere((tick) => tick.stage == 'emulator-启动');
+      expect(started.eta, isNotNull, reason: '中间阶段必须给出 ETA');
+      final mid = ticks.firstWhere((tick) => tick.stage == '解包-调用');
+      expect(mid.eta, isNotNull, reason: '中间阶段必须给出 ETA');
+      expect(mid.fraction, greaterThan(0));
+
+      // 跨 jar：第一个 jar 落盘时后面还有一整个 jar 没开始，ETA 不能归零。
+      final firstJarStore = ticks.firstWhere(
+        (tick) => tick.jarIndex == 0 && tick.stage == 'payload-落盘',
+      );
+      expect(
+        firstJarStore.eta,
+        isNotNull,
+        reason: '最后一个阶段也要给出 ETA',
+      );
+      expect(
+        firstJarStore.eta! > Duration.zero,
+        isTrue,
+        reason: '未开始的 jar 要按已完成 jar 的耗时折算进总体剩余',
+      );
+      expect(ticks.last.eta, Duration.zero, reason: '最后一个 jar 收尾时剩余为 0');
+
+      for (var i = 1; i < ticks.length; i++) {
+        expect(
+          ticks[i].fraction,
+          greaterThanOrEqualTo(ticks[i - 1].fraction),
+          reason: 'fraction 不得倒退',
+        );
+      }
+      expect(ticks.last.fraction, 1.0);
+    });
+
+    test('payload 命中缓存时不再调解包（runner 调用次数为 0）', () async {
+      final bytes = await shellJar();
+      const url = 'https://example.test/shell.jar';
+      final urlSha = sha256.convert(utf8.encode(url)).toString();
+      final staged = File(
+        p.join(
+          tempRoot.path,
+          'spiders',
+          'probe-cache',
+          '${urlSha.substring(0, 16)}.jar',
+        ),
+      );
+      await staged.create(recursive: true);
+      await staged.writeAsBytes(bytes, flush: true);
+      final jarSha = sha256.convert(bytes).toString();
+      final payload = File(
+        p.join(
+          tempRoot.path,
+          'spiders',
+          'probe-cache',
+          'shell',
+          jarSha,
+          'payload.jar',
+        ),
+      );
+      await payload.create(recursive: true);
+      await writePayload(payload.path, const [
+        'com/github/catvod/spider/Alpha.class',
+      ]);
+
+      final config = configOf([cspSite('csp_Alpha', jar: url)]);
+      final targets = await probeWith(
+        jarsClient({url: bytes}),
+        shellRuntimeInstalled: () => true,
+      ).discoverShellTargets(config);
+      expect(targets.single.state, ShellTargetState.unpacked);
+      expect(targets.single.jarSha256, jarSha);
+      expect(targets.single.payloadSha256, isNotNull);
+
+      var unpackCalls = 0;
+      final probe = probeWith(
+        jarsClient({url: bytes}),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: fakeUnpack(onCall: () => unpackCalls++),
+      );
+      final report = await probe.unpackSelected(config, jarUrls: {url});
+      expect(unpackCalls, 0, reason: 'payload 已缓存：不重复起模拟器');
+      expect(report.unpacked, 1);
+      expect(binding().entryFor('csp_Alpha'), isNotNull);
+
+      // 装好之后再列举：状态推进到 installed（UI 据此收起「解包」按钮）。
+      final after = await probe.discoverShellTargets(config);
+      expect(after.single.state, ShellTargetState.installed);
+    });
+  });
+
 }
 
 /// 写一个 stored（不压缩）zip：条目名与内容都可控，CRC 正确，可被 archive 解析。
