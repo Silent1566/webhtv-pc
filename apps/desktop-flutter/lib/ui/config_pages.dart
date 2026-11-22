@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/android_bridge.dart';
+import '../core/history_cross_site.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
 import '../services/csp_jar_probe.dart';
@@ -1538,6 +1539,7 @@ class _SavedConfigs extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final records = state.savedConfigs;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (records.isEmpty) {
       return const Align(
         alignment: Alignment.centerLeft,
@@ -1605,8 +1607,7 @@ class _SavedConfigs extends StatelessWidget {
                   subtitle: ConfigSourceStatusView(
                     key: ValueKey('config-list-source-${record.id}'),
                     record: record,
-                    metadata: '站点 ${record.siteCount} · 直播 ${record.liveCount} · '
-                        '更新 ${record.updatedAt.toLocal()}',
+                    metadata: _configRowMetadata(record, nowMs: nowMs),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -2466,4 +2467,28 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
       ],
     ),
   );
+}
+
+/// 配置行第二行摘要：站点/直播/更新时间 + 后台检查结果。
+///
+/// 启动后台刷新是静默的，用户能看到的痕迹只有这一行：检查成功显示「几分钟前
+/// 检查过」，失败显示原因。不弹窗、不弹横幅，但也不瞒着。
+String _configRowMetadata(ConfigRecord record, {required int nowMs}) {
+  final parts = <String>[
+    '站点 ${record.siteCount}',
+    '直播 ${record.liveCount}',
+    '更新 ${record.updatedAt.toLocal()}',
+  ];
+  final error = record.lastCheckError?.trim() ?? '';
+  final checkedAt = record.lastCheckedAt;
+  if (error.isNotEmpty) {
+    parts.add('检查失败：$error');
+  } else if (checkedAt != null) {
+    final ago = watchedAgoLabel(
+      checkedAt.millisecondsSinceEpoch,
+      nowMs: nowMs,
+    );
+    parts.add(ago.isEmpty ? '已检查' : '$ago检查过');
+  }
+  return parts.join(' · ');
 }

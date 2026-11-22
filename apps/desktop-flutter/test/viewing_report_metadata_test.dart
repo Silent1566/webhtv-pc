@@ -469,7 +469,7 @@ void main() {
     old.execute("UPDATE meta SET value='10' WHERE key='schema_version';");
     old.close();
     var reopened = AppDatabase.open(path).database!;
-    expect(reopened.schemaVersionValue, '11');
+    expect(reopened.schemaVersionValue, '${AppDatabase.schemaVersion}');
     ViewingReportMetadata(database: reopened).capture(
       sourceKey: 'local|A',
       siteKey: 's',
@@ -592,7 +592,7 @@ void main() {
   test('schema 11 adds isolated viewing snapshots', () {
     final db = AppDatabase.inMemory();
     addTearDown(db.dispose);
-    expect(db.schemaVersionValue, '11');
+    expect(db.schemaVersionValue, '${AppDatabase.schemaVersion}');
     expect(db.count('viewing_metadata'), 0);
   });
 }

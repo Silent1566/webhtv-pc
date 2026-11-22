@@ -250,6 +250,21 @@ class SiteListItem {
   final SiteAvailability availability;
 }
 
+/// 后台刷新一条配置的结局（只用于启动刷新的汇总统计）。
+enum _ConfigRefreshOutcome {
+  /// 内容真的变了，已落库。
+  changed,
+
+  /// 服务端 304 或内容摘要与库里一致：本地内容原样可用。
+  unchanged,
+
+  /// 这一轮失败：本地缓存与已注册/已编译的站源保持不动。
+  failed,
+
+  /// 用户在这几秒里改过配置（导入/切换/编辑/删除）：本轮作废。
+  skipped,
+}
+
 /// 应用状态。
 class AppState extends ChangeNotifier implements SyncStateHost {
   AppState({
@@ -780,6 +795,9 @@ AiContentCompletion? aiContentCompletion,
   /// 订阅级 TMDB 凭据（仅进程内存，按配置身份/代际隔离）。
   final TmdbSubscriptionCredentials _tmdbSubscription = TmdbSubscriptionCredentials();
   int _configMutationEpoch = 0;
+
+  /// 启动后台刷新的「同一进程只跑一轮」闸门（null = 还没发起）。
+  Future<void>? _startupConfigRefresh;
 
   /// AI 配置（`docs/phase6/design/04` §4）。
   ///
@@ -5071,6 +5089,8 @@ AiContentCompletion? aiContentCompletion,
       contentType: imported.contentType,
       origin: imported.origin,
       sourceKey: sourceKey,
+      etag: imported.etag,
+      lastModified: imported.lastModified,
     );
     database.saveConfigSites(id, config.sites);
     _configs = database.listConfigs();
@@ -5199,6 +5219,8 @@ AiContentCompletion? aiContentCompletion,
       contentType: imported.contentType,
       origin: imported.origin,
       sourceKey: LocalSourceKey.of(imported.origin),
+      etag: imported.etag,
+      lastModified: imported.lastModified,
     );
     database.saveConfigSites(id, config.sites);
     _configs = database.listConfigs();
@@ -5232,6 +5254,229 @@ AiContentCompletion? aiContentCompletion,
       }
     }
     return failures;
+  }
+
+  /// 启动后自动刷新各条配置（§7.5 多配置）：增量、串行、静默。
+  ///
+  /// 触发点是应用壳层首帧之后（ui/app.dart），与启动恢复并行、但**不抢先**：
+  /// 启动要的是本地缓存立刻可用，网络更新什么时候回来都不影响首屏。
+  ///
+  /// 为什么串行：这些来源可能指向同一台设备或同一个订阅站，并发会把失败原因
+  /// 搅成一团（与 [refreshAllConfigs] 同一条理由）。
+  ///
+  /// 同一进程内只跑一轮：重复调用返回同一个 Future，壳层重建不会再打一轮网络。
+  Future<void> startupConfigRefresh() {
+    final pending = _startupConfigRefresh;
+    if (pending != null) return pending;
+    final future = refreshConfigsInBackground();
+    _startupConfigRefresh = future;
+    return future;
+  }
+
+  /// 后台刷新一轮的落定信号（测试与退出路径用）。
+  Future<void> get startupConfigRefreshDone =>
+      _startupConfigRefresh ?? Future<void>.value();
+
+  /// 跑一轮后台增量刷新（不带 one-shot 闸门）。
+  ///
+  /// 启动路径经 [startupConfigRefresh] 调一次；单测可以直接跑多轮来锁住
+  /// 「第二轮不该再写库」这类增量性质。
+  Future<void> refreshConfigsInBackground() async {
+    try {
+      final database = _database;
+      if (database == null || _disposed) return;
+      final targets = [
+        for (final record in database.listConfigs())
+          if (_isStartupRefreshTarget(record)) record,
+      ];
+      if (targets.isEmpty) return;
+      final stopwatch = Stopwatch()..start();
+      var changed = 0;
+      var unchanged = 0;
+      var failed = 0;
+      var skipped = 0;
+      for (final record in targets) {
+        if (_disposed) return;
+        switch (await _refreshConfigInBackground(record)) {
+          case _ConfigRefreshOutcome.changed:
+            changed++;
+          case _ConfigRefreshOutcome.unchanged:
+            unchanged++;
+          case _ConfigRefreshOutcome.failed:
+            failed++;
+          case _ConfigRefreshOutcome.skipped:
+            skipped++;
+        }
+      }
+      // 检查时间/失败原因都落在库里，界面要能看见：统一刷新一次列表再通知。
+      if (_disposed) return;
+      _configs = database.listConfigs();
+      _activeRecord = database.activeConfig();
+      _notifyIfAlive();
+      log.info(
+        '启动配置刷新：$changed 条有更新，$unchanged 条未变，$failed 条失败，'
+        '$skipped 条作废（${stopwatch.elapsedMilliseconds} ms）',
+        scope: 'config',
+      );
+    } catch (error) {
+      // 后台刷新绝不能把启动路径或调用方拖挂：这里兜最后一次底。
+      log.warning('启动配置刷新中断：$error', scope: 'config');
+    }
+  }
+
+  /// 这条记录该不该进「启动自动刷新」。
+  ///
+  /// 三类排除，各有硬理由：
+  /// - 猫源 bundle：内容由本机 Node 运行时现场生成，重拉会先停掉正在服务当前
+  ///   配置的那个进程（端口随之变化）——启动时刷它等于把用户正在用的站点打断；
+  ///   它的新鲜度由启动恢复/激活时的 bundle md5 比对负责。
+  /// - 安卓桥接源：内容在设备上，启动恢复路径已经按记忆精确重拉过一次；设备
+  ///   离线时后台再打一轮只会产生一堆无意义的失败。
+  /// - 粘贴的 JSON 文本：origin 是 inline://json，没有可刷新的来源。
+  bool _isStartupRefreshTarget(ConfigRecord record) {
+    if (record.json.isEmpty) return false;
+    if (record.bridgeInterfaceKey.trim().isNotEmpty) return false;
+    if (record.contentType == 'android-t4-gateway') return false;
+    // 旧协议桥接记录没有 interfaceKey：设备地址、安卓侧配置地址与
+    // bridge| 来源标识同样说明「内容在安卓设备上」，一个都不能漏。
+    if (record.bridgeDevice.trim().isNotEmpty) return false;
+    if (record.bridgeConfigUrl.trim().isNotEmpty) return false;
+    if (record.sourceKey.startsWith('bridge|')) return false;
+    if (CatSource.isBundle(record.origin)) return false;
+    try {
+      return ConfigSource.parse(record.origin).kind !=
+          ConfigSourceKind.inlineJson;
+    } on AppError {
+      return false;
+    }
+  }
+
+  /// 后台刷新一条配置：条件请求 → 304 或摘要一致就只记「检查过」。
+  ///
+  /// 失败时**只写检查结果**，内容、站点数与 updated_at 一律不动：远端拉不下来
+  /// 时，本地缓存与已注册/已编译的站源继续照常可用——这正是增量刷新要保住的东西。
+  Future<_ConfigRefreshOutcome> _refreshConfigInBackground(
+    ConfigRecord record,
+  ) async {
+    final database = _database;
+    if (database == null) return _ConfigRefreshOutcome.failed;
+    final epoch = _configMutationEpoch;
+    try {
+      final source = ConfigSource.parse(record.origin);
+      var imported = await _importService.import(
+        source,
+        validators: ConfigValidators(
+          etag: record.etag,
+          lastModified: record.lastModified,
+        ),
+      );
+      if (imported.notModified) {
+        database.markConfigChecked(
+          record.id,
+          etag: imported.etag.isEmpty ? null : imported.etag,
+          lastModified: imported.lastModified.isEmpty
+              ? null
+              : imported.lastModified,
+        );
+        return _ConfigRefreshOutcome.unchanged;
+      }
+      final fromRepository = imported.isRepository;
+      if (fromRepository) {
+        // 仓库记录要展开的是用户当初选的那一条，不是「永远第一项」。
+        imported = await _importService.expandRepository(
+          imported,
+          index: record.repositoryIndex ?? 0,
+        );
+      }
+      // 仓库记录的 origin 是**仓库**地址，而展开后的校验值属于**条目**地址；
+      // 存回去等于下一轮拿条目 ETag 去问仓库，永远对不上。仓库记录只靠摘要判断。
+      final etag = fromRepository ? '' : imported.etag;
+      final lastModified = fromRepository ? '' : imported.lastModified;
+      final config = imported.config;
+      if (config == null) {
+        throw AppError(
+          AppErrorKind.configInvalid,
+          '来源没有可用配置',
+          detail: redactUrl(record.origin),
+        );
+      }
+      final hash = configRecordContentHash(config.toJson());
+      if (hash == record.contentHash) {
+        // 服务端没给校验值也能增量：内容摘要是最终判据。
+        database.markConfigChecked(
+          record.id,
+          etag: etag.isEmpty ? null : etag,
+          lastModified: lastModified.isEmpty ? null : lastModified,
+          contentHash: hash,
+        );
+        return _ConfigRefreshOutcome.unchanged;
+      }
+      if (epoch != _configMutationEpoch) {
+        // 用户在这几秒里导入/切换/编辑过配置：这一轮作废，别把刚写的东西盖回去。
+        return _ConfigRefreshOutcome.skipped;
+      }
+      database.refreshConfigContent(
+        record.id,
+        json: config.toJson(),
+        siteCount: config.sites.length,
+        liveCount: config.lives.length,
+        contentType: imported.contentType,
+        origin: imported.origin,
+        sourceKey: LocalSourceKey.of(imported.origin),
+        etag: etag,
+        lastModified: lastModified,
+      );
+      database.saveConfigSites(record.id, config.sites);
+      if (_activeRecord?.id == record.id) {
+        if (_userStillOnStartupHome) {
+          await _reloadActiveConfigContent(config);
+        } else {
+          // 用户已经走进详情/分类：库已经是新的，内存里的站点列表等下一次切换
+          // 配置或重启再换，免得把正在看的页面连根拔掉。
+          log.info(
+            '当前配置已后台更新：${record.name}（保留当前页面，'
+            '下次切换配置或重启生效）',
+            scope: 'config',
+          );
+        }
+      }
+      return _ConfigRefreshOutcome.changed;
+    } on AppError catch (error) {
+      _recordConfigCheckFailure(database, record, error);
+      return _ConfigRefreshOutcome.failed;
+    } catch (error) {
+      _recordConfigCheckFailure(database, record, error);
+      return _ConfigRefreshOutcome.failed;
+    }
+  }
+
+  /// 用户是否还停在「启动后没动过」的首页。
+  ///
+  /// 只看确凿的导航状态（有没有打开详情、有没有进分类）。判偏的代价只是一次
+  /// 多余的首页重载或一次延后生效，不值得为它引入更细的「用户是否正在操作」判断。
+  bool get _userStillOnStartupHome =>
+      _selectedVod == null && _categoryResult == null;
+
+  /// 把一轮失败记在记录上（静默：不写 [lastError]，不弹横幅）。
+  void _recordConfigCheckFailure(
+    AppDatabase database,
+    ConfigRecord record,
+    Object error,
+  ) {
+    final message = error is AppError ? error.userMessage : '$error';
+    final oneLine = message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final stored = oneLine.length > 200
+        ? '${oneLine.substring(0, 200)}…'
+        : oneLine;
+    try {
+      database.markConfigChecked(record.id, error: stored);
+    } catch (writeError) {
+      log.warning('记录配置检查结果失败：$writeError', scope: 'config');
+    }
+    log.warning(
+      '后台刷新配置失败：${record.name}（${redactUrl(record.origin)}）：$oneLine',
+      scope: 'config',
+    );
   }
 
   /// 当前生效配置的内容变了：重建配置与站点服务，并重挂首页。
