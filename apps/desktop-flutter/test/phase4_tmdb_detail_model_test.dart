@@ -9,9 +9,11 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_detail_model.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/tmdb_media.dart';
+import 'package:webhtv_pc/core/tmdb_title.dart';
 
 const String _imageBase = 'https://images.tmdb.org/t/p/w342';
 const String _backdropBase = 'https://images.tmdb.org/t/p/w780';
@@ -453,6 +455,68 @@ void main() {
       );
       expect(cards.map((c) => c.number), [7, 8]);
       expect(cards.map((c) => c.title), ['E7 T7', 'E8 T8']);
+    });
+  });
+
+  // 播放器选集面板会预览别的线路，那一屏也要集标题/剧照（用户反馈 2026-11-22：
+  // 切到非当前播放线路就看不到正确的 TMDB 图片）。但季元数据是线路级的，
+  // 混季线路贴当前季的图就是串季——门开在这里，UI 只消费结论。
+  group('非当前线路的元数据门（季归属）', () {
+    VodEpisode episode(String name) => VodEpisode(name: name, url: 'u:$name');
+
+    int seasonOf(VodEpisode e) {
+      final raw = e.extra['tmdb_season_number'];
+      if (raw is int) return raw;
+      return sourceSeasonNumber(e.name);
+    }
+
+    test('单季线路（集名不带季号）：放行，预览别的线路也能拿到标题/剧照', () {
+      expect(
+        TmdbEpisodeCards.metadataSafeForLine(
+          episodes: [episode('第01集'), episode('第02集')],
+          selectedSeason: 1,
+          seasonOf: seasonOf,
+        ),
+        isTrue,
+      );
+    });
+
+    test('线路里混着别的季：不放行（串季比没图更糟）', () {
+      expect(
+        TmdbEpisodeCards.metadataSafeForLine(
+          episodes: [episode('第01集'), episode('S02E01')],
+          selectedSeason: 1,
+          seasonOf: seasonOf,
+        ),
+        isFalse,
+      );
+    });
+
+    test('集自带 tmdb_season_number 时以它为准', () {
+      final tagged = VodEpisode(
+        name: '第01集',
+        url: 'u',
+        extra: const {'tmdb_season_number': 2},
+      );
+      expect(
+        TmdbEpisodeCards.metadataSafeForLine(
+          episodes: [tagged],
+          selectedSeason: 1,
+          seasonOf: seasonOf,
+        ),
+        isFalse,
+      );
+    });
+
+    test('未确证季度（selectedSeason 为空）一律不放行', () {
+      expect(
+        TmdbEpisodeCards.metadataSafeForLine(
+          episodes: [episode('第01集')],
+          selectedSeason: null,
+          seasonOf: seasonOf,
+        ),
+        isFalse,
+      );
     });
   });
 

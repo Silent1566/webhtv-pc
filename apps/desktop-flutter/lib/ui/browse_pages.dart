@@ -3082,6 +3082,9 @@ class _DetailPageState extends State<DetailPage> {
               episodesReversed: _episodesReversed,
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
+              // 选集卡片的剧照回退图：与详情页卡片同一个取值口径（TMDB 海报优先、
+              // 站源封面兜底）。有 TMDB 匹配时播放器才会拿到和详情页一样的那张图。
+              posterUrl: _ownedTmdb?.detailData?.posterUrl ?? vod.vodPic,
               // 弹幕库搜索要按「片名 + 年份」区分同名不同年的剧（`一马当先` 2026
               // 电视剧 vs 2023 短剧）：播放器手上只有这份请求，年份只能由这里带下去。
               vodYear: vod.vodYear,
@@ -4428,10 +4431,13 @@ class _DetailPageState extends State<DetailPage> {
   /// `PlaybackRequest.copyWith` 会把旧卡片原样带过——两条线路集数恰好相等时，
   /// 旧线路的剧照会被贴到新线路的集上，长度校验根本查不出来。
   ///
-  /// 为什么非当前线路走 `active: false`：季度元数据是线路级的（`04` §4.3），
-  /// 把当前线路的季度集标题/剧照套到另一条线路的集上就是串图串集
-  /// （`_renderEpisodes` 的 `active: false` 分支正是为此存在）。非当前线路只按
-  /// **来源集名**出自己的卡（集号 + 本剧通用剧照），不借用别条线路的集标题。
+  /// 为什么非当前线路走 `active: false`：季过滤依赖**这条线路自己**的季归属，
+  /// 非当前线路不套用当前线路的季过滤结果（`04` §4.3）。
+  ///
+  /// 但集标题/剧照仍要给：播放器选集面板会预览别的线路，那一屏不能只剩来源集名
+  /// （用户反馈 2026-11-22：切到非当前播放线路就看不到正确的 TMDB 图片）。放行条件
+  /// 由 `TmdbEpisodeCards.metadataSafeForLine` 判定——这条线路里没有任何一集被明确
+  /// 标成别的季才贴当前季的元数据；多季混排的线路宁可不贴，也不串季。
   ///
   /// 没有 TMDB 数据（未匹配/不属于本页影片）时返回空 Map：宁可没有卡片，
   /// 也不得用占位图或假简介冒充（`PRODUCT.md` §Product Principles 第 5 条）。
@@ -4454,10 +4460,20 @@ class _DetailPageState extends State<DetailPage> {
       final enriched = tmdb.applyEpisodesToLine(rawLine).line;
       final episodes = _renderEpisodes(rawLine, active: isActive);
       final ordered = _episodesReversed ? episodes.reversed.toList() : episodes;
+      // 季归属门：非当前线路也可能被播放器面板预览，那一屏同样要集标题/剧照；
+      // 但只要这条线路里有一集明确属于别的季就不贴，否则会把当前季的 E5 贴成
+      // 别季的 E5（串季比没图更糟）。
+      final metadataSafe =
+          isActive ||
+          TmdbEpisodeCards.metadataSafeForLine(
+            episodes: episodes,
+            selectedSeason: seasonNumber,
+            seasonOf: _seasonOfEpisode,
+          );
       final autoCards = tmdb.episodeCardsForEpisodes(
         ordered,
         seasonNumber: seasonNumber,
-        includeMetadata: isActive,
+        includeMetadata: metadataSafe,
         sourceIndices: _sourceEpisodeIndices(
           isActive ? enriched.episodes : rawLine.episodes,
           ordered,

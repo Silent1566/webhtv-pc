@@ -5257,14 +5257,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             label: Text('线路（${widget.liveSession!.lines.length}）'),
           ),
           'episodes' when !_request.isLocal && _hasQueue => OutlinedButton.icon(
-            onPressed: () => _showEpisodes(context, episodes),
+            onPressed: () => _showEpisodes(context),
             icon: const Icon(Icons.list, size: 18),
             label: Text('选集（${widget.queue!.snapshot.items.length}）'),
           ),
           'episodes'
               when !_request.isLocal && !_isCatchup && episodes.isNotEmpty =>
             OutlinedButton.icon(
-              onPressed: () => _showEpisodes(context, episodes),
+              onPressed: () => _showEpisodes(context),
               icon: const Icon(Icons.list, size: 18),
               label: Text('选集（${episodes.length}）'),
             ),
@@ -5428,8 +5428,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 与上一版 `showModalBottomSheet` 的区别：面板要容纳「线路行 + 区间行 +
   /// 16:9 剧照网格」，底部抽屉的高度放不下，改为居中弹窗。
-  /// 面板本身不碰播放状态：切集、切线路都回调回这里。
-  void _showEpisodes(BuildContext context, List<VodEpisode> episodes) {
+  /// 面板本身不碰播放状态：线路 chip 只换预览，点某张集数卡片才回调回这里起播
+  /// （线路与集号一起回传——预览的那条可能不是正在播放的那条）。
+  void _showEpisodes(BuildContext context) {
     // 本地文件没有选集与线路：整张面板（含线路行）在本地没有可切的目标。
     if (_request.isLocal) return;
     if (_isLive) {
@@ -5457,7 +5458,6 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       return;
     }
-    final line = _lineOf(_request.flag);
     unawaited(
       showDialog<void>(
         context: context,
@@ -5466,18 +5466,26 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           title: _request.vodName.isNotEmpty
               ? _request.vodName
               : _request.title,
-          lineLabel: line?.displayName ?? _request.flag,
           playLines: _request.playLines,
           lineFlag: _request.flag,
-          episodes: episodes,
-          // 只取**当前线路**那一份：切线路后 `_request.flag` 已经换过，
-          // 拿别的线路的卡片会串图（长度相等时连错位都查不出来）。
-          episodeCards: _request.episodeCardsByFlag[_request.flag] ?? const [],
+          // **每条线路**的卡片都给它：线路 chip 只换预览，面板要能就地取到预览
+          // 线路自己那份卡片（只给当前线路会串图：两条线路集数相等时连错位都
+          // 查不出来）。
+          episodeCardsByFlag: _request.episodeCardsByFlag,
           // 详情页那一刻是倒序的话，面板的排列方向、区间标签与当前集定位都要跟着倒。
           reversed: _request.episodesReversed,
           episodeIndex: _request.episodeIndex,
-          onSelectEpisode: (index) => unawaited(_playEpisode(index)),
-          onSelectLine: (flag) => unawaited(_switchLineResumingEpisode(flag)),
+          // 剧照缺席时回退本剧海报，与详情页同一条回退（TMDB 海报 → 站源封面）。
+          posterUrl: _request.posterUrl ?? _request.vodPic,
+          // 预览线路与集号必须一起回来：面板里可能已经切到别的线路，
+          // 只回下标会把「预览线路的第 N 集」播成「正在播放线路的第 N 集」。
+          //
+          // 一律走 `overrideFlag`：面板显示的是 `playLines[flag]` 里的第 index 集，
+          // 必须按**同一条线路的同一份列表**取值。无 flag 的那条分支会优先用
+          // `_episodesCache`（切线路解析途中缓存的是**另一条**线路的分集），
+          // 那个窗口里点卡片会播成别的线路的同一位置。
+          onSelectEpisode: (flag, index) =>
+              unawaited(_playEpisode(index, overrideFlag: flag)),
         ),
       ),
     );
@@ -5512,6 +5520,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   /// 切线路：尽量续播**同一集**（对齐安卓 `VideoActivity.java:3684-3687`）。
+  ///
+  /// 只给「已经决定要换线路」的两条路径用：失败自动回退（[_tryPlaybackFallback]）
+  /// 与目录连播面板（`PlayerQueuePanel`）。选集面板**不走这里**——那里的线路 chip
+  /// 只换预览，起播由用户点的那张卡片决定（`_playEpisode(index, overrideFlag:)`）。
   ///
   /// 定位规则见 [locateEpisodeInLine]：集名精确匹配 → 集号匹配 → 第 1 集。
   ///

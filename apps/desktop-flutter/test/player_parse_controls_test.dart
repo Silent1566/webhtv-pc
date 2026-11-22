@@ -107,13 +107,11 @@ void main() {
         theme: buildAppTheme(Brightness.dark),
         home: PlayerEpisodePanel(
           title: '测试剧',
-          lineLabel: 'baidu',
           playLines: lines,
           lineFlag: 'baidu',
-          episodes: lines.first.episodes,
           episodeIndex: 0,
-          onSelectEpisode: (_) {},
-          onSelectLine: (_) {},
+          episodeCardsByFlag: const {},
+          onSelectEpisode: (_, _) {},
         ),
       ),
     );

@@ -10,6 +10,17 @@
 /// 3. **卡片网格**：16:9 剧照满铺 + 底部渐变遮罩 + 集号角标 + 标题（≤2 行）
 ///    + 副信息（时长 / 首播日期），当前集强高亮。
 ///
+/// ## 线路 chip = **预览**，不是播放
+///
+/// 点线路 chip 只换「这一屏显示哪条线路的集与卡片」，**不动播放**（用户反馈
+/// 2026-11-22：以前点一下就切走了正在看的那一集）；真正换线路发生在用户点某张
+/// 集数卡片时——那一下同时带上线路与集号（[onSelectEpisode]），
+/// 对齐安卓 `VideoActivity.onItemClick(Flag)` 的「只重绑选集、不起播」。
+///
+/// 预览别的线路时，面板按 `locateEpisodeInLine` 定位到「正在播放那一集」在
+/// 新线路里的对应位置（集名 → 集号 → 第 1 集），区间与滚动都落在那里，
+/// 但**不画「正在播放」高亮**：那一集此刻并没有在播。
+///
 /// 为什么**不复用**详情页的 `TmdbEpisodeCardTile`：那张卡是「带播放按钮的
 /// 横向卡片条」，宽高由详情页布局写死；这里是「剧照满铺的网格格子」，
 /// 宽高由网格列宽算出来，命中区与信息层次也不同。硬参数化只会得到
@@ -30,6 +41,7 @@ import '../core/episode_range.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_detail_model.dart';
 import 'layout_scale.dart';
+import 'poster_image.dart';
 import 'scroll_behavior.dart';
 import 'tokens.dart';
 
@@ -74,6 +86,12 @@ int locateEpisodeInLine({
   return 0;
 }
 
+/// 选集回调：`(线路展示标识, 该线路剧集列表里的绝对下标)`。
+///
+/// 线路与下标必须一起给：预览线路与正在播放的线路可以不同，只回一个下标会让
+/// 调用方拿「预览线路的第 N 集」去播「正在播放线路的第 N 集」。
+typedef PlayerEpisodeTap = void Function(String flag, int index);
+
 /// 播放器选集面板。
 ///
 /// 自身只负责「展示 + 选择」：切集与切线路都由调用方注入（播放器握着
@@ -82,40 +100,41 @@ class PlayerEpisodePanel extends StatefulWidget {
   const PlayerEpisodePanel({
     super.key,
     required this.title,
-    required this.lineLabel,
     required this.playLines,
     required this.lineFlag,
-    required this.episodes,
     required this.episodeIndex,
+    required this.episodeCardsByFlag,
     required this.onSelectEpisode,
-    required this.onSelectLine,
-    this.episodeCards = const [],
     this.reversed = false,
+    this.posterUrl,
   });
 
   /// 片名（面板标题区第一行）。
   final String title;
 
-  /// 当前线路的展示名（标题区第二行）。
-  final String lineLabel;
-
   /// 详情页给出的全部线路（只有 >1 条时渲染线路行）。
+  ///
+  /// 线路行点一下就**只换预览**：面板从这份列表里取那条线路自己的剧集，
+  /// 不再回调调用方起播。分集必须在这里带全——面板不另问调用方要第二条线路的集。
   final List<VodPlayLine> playLines;
 
-  /// 当前线路在 [playLines] 里的展示标识。
+  /// **正在播放**的线路在 [playLines] 里的展示标识。
+  ///
+  /// 它不是「正在预览的线路」：预览是面板内部状态，点别的 chip 换的是面板从
+  /// [playLines] / [episodeCardsByFlag] 取到的那一份数据。
   final String lineFlag;
 
-  /// **当前线路**的剧集（面板的集数、分组与下标都以它为准）。
-  final List<VodEpisode> episodes;
+  /// 正在播放的集在**当前线路**剧集列表里的下标。
+  final int episodeIndex;
 
-  /// 详情页为这条线路渲染的卡片（`PlaybackRequest.episodeCardsByFlag[flag]`）。
+  /// 详情页为**每条线路**各算一次的卡片（`PlaybackRequest.episodeCardsByFlag`）。
   ///
   /// 顺序是**展示顺序**：与面板渲染的集列表一一对应（详情页倒序时它也是倒序的），
-  /// 所以取卡片只能用展示下标，不能用 [episodes] 的原始下标。
+  /// 所以取卡片只能用展示下标，不能用剧集的原始下标。
   ///
-  /// 允许比 [episodes] 短，甚至为空（未匹配 TMDB / 历史续播 / 换源）：
+  /// 允许缺线路、比剧集短，甚至为空（未匹配 TMDB / 历史续播 / 换源）：
   /// 缺卡片的集退化为「集名文字卡」，**不补集、不编造剧照**。
-  final List<TmdbEpisodeCard> episodeCards;
+  final Map<String, List<TmdbEpisodeCard>> episodeCardsByFlag;
 
   /// 详情页的页面级「倒序」开关状态（`browse_pages.dart` 的 `_episodesReversed`）。
   ///
@@ -124,59 +143,105 @@ class PlayerEpisodePanel extends StatefulWidget {
   /// 相反、卡片会贴到别的集上。
   final bool reversed;
 
-  /// 当前集在 [episodes] 里的下标。
-  final int episodeIndex;
+  /// 本剧海报：某集剧照缺失/加载失败时回退到它（与详情页 `TmdbEpisodeCardTile`
+  /// 的 `posterUrl` 同一条回退）。它也不可用时保留集号占位，不丢集。
+  final String? posterUrl;
 
-  /// 点卡片：参数是 [episodes] 里的**绝对下标**。
-  final ValueChanged<int> onSelectEpisode;
-
-  /// 点线路 chip：参数是线路的展示标识。
-  final ValueChanged<String> onSelectLine;
+  /// 点卡片：参数是**预览线路的展示标识**与该线路剧集列表里的**绝对下标**。
+  final PlayerEpisodeTap onSelectEpisode;
 
   @override
   State<PlayerEpisodePanel> createState() => _PlayerEpisodePanelState();
+
+  /// 某条线路的剧集；线路不在 [playLines] 里时返回空（不猜、不借用别条线路）。
+  List<VodEpisode> episodesOf(String flag) {
+    for (final line in playLines) {
+      if (line.flag == flag) return line.episodes;
+    }
+    return const [];
+  }
+
+  /// 正在播放线路的剧集。
+  List<VodEpisode> get episodes => episodesOf(lineFlag);
+
+  /// 正在播放线路的展示名（标题区第二行的来源）。
+  String get lineLabel => displayNameOf(lineFlag);
+
+  /// 线路展示名；线路不在 [playLines] 里时用 flag 本身兜底。
+  String displayNameOf(String flag) {
+    for (final line in playLines) {
+      if (line.flag == flag) return line.displayName;
+    }
+    return flag;
+  }
 }
 
 class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   final ScrollController _gridScroll = ScrollController();
 
+  /// 正在**预览**的线路（初值 = 正在播放的线路）。
+  ///
+  /// 面板的一切展示（集列表、区间、卡片、标题区）都跟着它走；点 chip 只改它，
+  /// 真正起播发生在点卡片时。
+  late String _previewFlag;
+
+  /// 正在预览线路的剧集（[PlayerEpisodePanel.episodesOf]）。
+  late List<VodEpisode> _episodes;
+
   late List<EpisodeRange> _ranges;
   late int _rangeIndex;
 
-  /// 打开后是否已经滚动到当前集（只做一次：用户自己滚动后不该被拽回去）。
+  /// 区间与滚动优先定位到的集（[_episodes] 里的下标）。
+  ///
+  /// 预览正在播放的线路时是 [PlayerEpisodePanel.episodeIndex]；预览别的线路时是
+  /// [locateEpisodeInLine] 定位出的对应集。它只决定落点，**不画「正在播放」高亮**：
+  /// 那一集此刻并没有在播。
+  late int _focusIndex;
+
+  /// 打开/换线路后是否已经滚动到 [_focusIndex]（只做一次：用户自己滚动后不该被拽回去）。
   bool _didAutoScroll = false;
 
   @override
   void initState() {
     super.initState();
+    _previewFlag = widget.lineFlag;
+    _episodes = widget.episodesOf(_previewFlag);
+    _focusIndex = _clampEpisodeIndex(widget.episodeIndex);
+    _resetRanges();
+  }
+
+  int _clampEpisodeIndex(int index) => _episodes.isEmpty
+      ? 0
+      : index.clamp(0, _episodes.length - 1);
+
+  /// 按当前预览线路重算区间与选中区间。
+  void _resetRanges() {
     _ranges = EpisodeRangePolicy.build(
-      widget.episodes.length,
+      _episodes.length,
       // 区间与标签都按**展示顺序**算：详情页倒序时区间方向必须一起倒过来，
       // 否则面板第一个区间标的是「1-20」而里面装的是最后的 20 集。
-      _displayEpisodeIndex,
+      _displayIndex(_focusIndex),
       widget.reversed,
     );
     _rangeIndex = EpisodeRangePolicy.selectedPosition(_ranges);
   }
 
-  /// 当前集在**展示顺序**里的下标。
+  /// 某集在**展示顺序**里的下标。
   ///
-  /// 倒序时集列表被整体翻过来，当前集的原始下标 `i` 对应展示下标
-  /// `length - 1 - i`；区间、滚动定位与卡片取用都必须用展示下标。
-  int get _displayEpisodeIndex {
-    final count = widget.episodes.length;
+  /// 倒序时集列表被整体翻过来，原始下标 `i` 对应展示下标 `length - 1 - i`；
+  /// 区间、滚动定位与卡片取用都必须用展示下标。
+  int _displayIndex(int index) {
+    final count = _episodes.length;
     if (count <= 0) return 0;
-    final mapped = widget.reversed
-        ? count - 1 - widget.episodeIndex
-        : widget.episodeIndex;
+    final mapped = widget.reversed ? count - 1 - index : index;
     return mapped.clamp(0, count - 1);
   }
 
-  /// 展示下标 → 原始下标（[episodes] 里的绝对下标）。
+  /// 展示下标 → 原始下标（[_episodes] 里的绝对下标）。
   ///
   /// 卡片 key 与切集回调都必须用原始下标，否则倒序下点第一张卡会播成第 1 集。
   int _originalIndex(int displayIndex) =>
-      widget.reversed ? widget.episodes.length - 1 - displayIndex : displayIndex;
+      widget.reversed ? _episodes.length - 1 - displayIndex : displayIndex;
 
   @override
   void dispose() {
@@ -193,15 +258,22 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   /// 卡片；而切集回调必须收到**原始下标**（[_originalIndex]），否则倒序下点第一张
   /// 卡会播成第 1 集。两者在正序时恰好相等，所以正序路径的行为一字未变。
   List<(int, VodEpisode)> get _visibleEntries {
-    if (widget.episodes.isEmpty || _ranges.isEmpty) return const [];
+    if (_episodes.isEmpty || _ranges.isEmpty) return const [];
     final range = _ranges[_safeRangeIndex];
     // 与 `EpisodeRangePolicy.slice` 同一套夹取规则，保证下标与切片一一对应。
-    final start = range.start.clamp(0, widget.episodes.length);
-    final end = range.end.clamp(start, widget.episodes.length);
+    final start = range.start.clamp(0, _episodes.length);
+    final end = range.end.clamp(start, _episodes.length);
     return [
-      for (var i = start; i < end; i++)
-        (i, widget.episodes[_originalIndex(i)]),
+      for (var i = start; i < end; i++) (i, _episodes[_originalIndex(i)]),
     ];
+  }
+
+  /// 正在播放那一集的集名（用它在别的线路里定位对应集）。
+  String get _playingEpisodeName {
+    final episodes = widget.episodes;
+    final index = widget.episodeIndex;
+    if (index < 0 || index >= episodes.length) return '';
+    return episodes[index].name;
   }
 
   /// 取**展示顺序**第 [displayIndex] 张卡片；没有可信卡片时返回 `null`（退化为文字卡）。
@@ -209,16 +281,16 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   /// 为什么按展示顺序取：详情页下发的卡片与它自己的渲染顺序一一对应（倒序时卡片
   /// 也是倒序的），按原始下标取会把第 1 张卡的剧照贴到最后一集上。
   ///
-  /// 为什么卡片数必须与集数**相等**才认：`episodeCards` 是详情页按**那条线路**
-  /// 算好的一次性快照，播放器自己算不回来（缺选中季度与季过滤后的渲染顺序）。
-  /// 切到集数不同的线路后，按下标对齐会把第 3 集的剧照贴到第 5 集上——
+  /// 为什么卡片数必须与**这条线路**的集数**相等**才认：`episodeCardsByFlag` 是
+  /// 详情页按线路算好的一次性快照，播放器自己算不回来（缺选中季度与季过滤后的
+  /// 渲染顺序）。线路集数不同还按下标对齐，会把第 3 集的剧照贴到第 5 集上——
   /// 宁可全部退回集名文字卡，也不给错的信息。
   TmdbEpisodeCard? _cardAt(int displayIndex) {
-    if (widget.episodeCards.length != widget.episodes.length) return null;
-    if (displayIndex < 0 || displayIndex >= widget.episodeCards.length) {
-      return null;
-    }
-    return widget.episodeCards[displayIndex];
+    final cards =
+        widget.episodeCardsByFlag[_previewFlag] ?? const <TmdbEpisodeCard>[];
+    if (cards.length != _episodes.length) return null;
+    if (displayIndex < 0 || displayIndex >= cards.length) return null;
+    return cards[displayIndex];
   }
 
   void _close() {
@@ -226,24 +298,39 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     if (navigator.canPop()) navigator.pop();
   }
 
-  /// 点卡片：先关面板再切集。
+  /// 点卡片：先关面板再起播（线路跟着一起回传——预览的可能不是正在播放的那条）。
   ///
   /// 顺序不能反：切集会立刻重建播放器请求（新剧集、新地址），面板留着
   /// 就会显示上一集的高亮；先关掉，切集失败也不会留下一个假装在播的面板。
   void _selectEpisode(int index) {
+    final flag = _previewFlag;
     _close();
-    widget.onSelectEpisode(index);
+    widget.onSelectEpisode(flag, index);
   }
 
-  /// 点线路：同样先关面板。
+  /// 点线路：只换预览，**不关面板、不起播**。
   ///
-  /// 线路切换会重载整条线路的剧集与卡片，面板里收到的 `episodes` /
-  /// `episodeCards` 都是**打开那一刻**的快照，原地刷新会是错的数据；
-  /// 重新打开面板拿最新快照才是对的（安卓是原地刷新，PC 端差异记在交付说明里）。
+  /// 以前这里是「关面板 + 立即切线路续播」，用户反馈 2026-11-22 明确否掉：
+  /// 想看一眼别的线路有哪些集，不该把正在看的这一集停掉。面板手里的
+  /// [PlayerEpisodePanel.playLines] / [episodeCardsByFlag] 本来就是全线路的，
+  /// 原地换一份数据即可，不必重开面板。
   void _selectLine(VodPlayLine line) {
-    if (line.flag == widget.lineFlag) return;
-    _close();
-    widget.onSelectLine(line.flag);
+    if (line.flag == _previewFlag) return;
+    final episodes = widget.episodesOf(line.flag);
+    setState(() {
+      _previewFlag = line.flag;
+      _episodes = episodes;
+      // 落在「正在播放那一集」在新线路里的对应位置（沿用切线路续播的同一套
+      // 定位：集名 → 集号 → 第 1 集），换线路不会凭空回到第一集。
+      _focusIndex = locateEpisodeInLine(
+        episodes: episodes,
+        currentName: _playingEpisodeName,
+      );
+      _resetRanges();
+      // 新区间是另一批集：让下一帧重新把对应集滚进视口。
+      _didAutoScroll = false;
+    });
+    if (_gridScroll.hasClients) _gridScroll.jumpTo(0);
   }
 
   void _selectRange(int index) {
@@ -256,10 +343,10 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     if (_gridScroll.hasClients) _gridScroll.jumpTo(0);
   }
 
-  /// 打开后把当前集滚进视口。
+  /// 打开/换线路后把要落点的那一集滚进视口。
   ///
   /// 为什么自己算偏移而不用 `Scrollable.ensureVisible`：网格是 `builder`
-  /// 懒加载的，当前集那张卡在滚动到它之前**根本不存在**，没有可定位的 element。
+  /// 懒加载的，那一集那张卡在滚动到它之前**根本不存在**，没有可定位的 element。
   void _scheduleScrollToCurrent({
     required int columns,
     required double rowExtent,
@@ -268,7 +355,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       if (!mounted || !_gridScroll.hasClients) return;
       final range = _ranges[_safeRangeIndex];
       final span = math.max(1, range.end - range.start);
-      final local = (_displayEpisodeIndex - range.start).clamp(0, span - 1);
+      final local = (_displayIndex(_focusIndex) - range.start).clamp(0, span - 1);
       final row = local ~/ columns;
       // 上留半行余量：贴顶会让人以为面板是从这一集开始的。
       final target = (row * rowExtent - rowExtent * 0.5).clamp(
@@ -328,7 +415,11 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
 
   Widget _buildHeader(ThemeData theme) {
     final scheme = theme.colorScheme;
-    final linePart = widget.lineLabel.isEmpty ? '' : '${widget.lineLabel} · ';
+    final lineName = widget.displayNameOf(_previewFlag);
+    final linePart = lineName.isEmpty ? '' : '$lineName · ';
+    // 预览的不是正在播放的线路时补一句提示：用户点 chip 后画面不会变，
+    // 不说明一句会以为「没切过去」。真正的切换发生在点集数卡片那一下。
+    final hint = _previewFlag == widget.lineFlag ? '' : ' · 点集数卡片起播';
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.lg,
@@ -353,7 +444,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$linePart共 ${widget.episodes.length} 集',
+                  '$linePart共 ${_episodes.length} 集$hint',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -391,7 +482,8 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
             theme: theme,
             key: ValueKey('player-episode-line-$index'),
             label: line.displayName,
-            selected: line.flag == widget.lineFlag,
+            // 选中态跟着**预览**走：点哪条线路，那一屏就显示哪条线路的集。
+            selected: line.flag == _previewFlag,
             onSelected: () => _selectLine(line),
           );
         },
@@ -510,7 +602,9 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   }) {
     final scheme = theme.colorScheme;
     final accent = context.semanticColors.magnitude;
-    final current = index == widget.episodeIndex;
+    // 只有「预览的是正在播放的那条线路」时才有当前集：预览别的线路时那一集
+    // 并没有在播，强高亮会谎报播放状态。
+    final current = _previewFlag == widget.lineFlag && index == widget.episodeIndex;
     final title = card != null && card.title.isNotEmpty
         ? card.title
         : (episode.name.isNotEmpty ? episode.name : '第${index + 1}集');
@@ -577,7 +671,14 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     );
   }
 
-  /// 16:9 剧照满铺；无剧照时是纯色占位块 + 集号（**不放假图**）。
+  /// 16:9 剧照满铺；剧照缺失/加载失败时回退**本剧海报**（与详情页
+  /// `TmdbEpisodeCardTile` 的 `posterUrl` 同一条回退），两者都不可用时才是
+  /// 纯色占位块 + 集号（**不放假图**）。
+  ///
+  /// 为什么必须回退：未匹配 TMDB 的集、以及**非当前线路**的卡片本来就没有剧照
+  /// （`episodeCardsForEpisodes(includeMetadata: false)`），没有回退时一屏灰块
+  /// （用户反馈 2026-11-22：「黑白空白太丑了」）。海报是整部剧的图，不是这一集的
+  /// 画面，所以只在剧照缺席时兜底，不冒充剧照。
   Widget _still({
     required ThemeData theme,
     required TmdbEpisodeCard card,
@@ -586,18 +687,19 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     final scheme = theme.colorScheme;
     final accent = context.semanticColors.magnitude;
     final number = card.number > 0 ? 'E${card.number}' : '';
+    final poster = widget.posterUrl?.trim() ?? '';
+    // 回退海报也算「有图」：同一张海报铺满一屏时，集号角标是唯一的区分线索，
+    // 不能因为主图缺失就把它一起藏掉。
+    final hasImage = card.hasStill || poster.isNotEmpty;
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (card.hasStill)
-          Image.network(
-            card.stillUrl!,
-            fit: BoxFit.cover,
-            // 图挂了也留住格子与集号：宁可显示占位，也不让卡片消失（消失=丢集）。
-            errorBuilder: (_, _, _) => _stillPlaceholder(theme, number),
-          )
-        else
-          _stillPlaceholder(theme, number),
+        PosterImage(
+          url: card.stillUrl,
+          fallbackUrl: poster,
+          // 两张都拿不到时仍要留住格子与集号：卡片不消失（消失=丢集）。
+          placeholder: _stillPlaceholder(theme, number),
+        ),
         // 底部渐变遮罩：剧照明暗不可预知，集号角标必须始终读得出来。
         Positioned(
           left: 0,
@@ -619,7 +721,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
             ),
           ),
         ),
-        if (card.hasStill && number.isNotEmpty)
+        if (hasImage && number.isNotEmpty)
           Positioned(
             left: AppSpace.sm,
             top: AppSpace.sm,
