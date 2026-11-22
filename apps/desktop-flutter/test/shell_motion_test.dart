@@ -173,7 +173,7 @@ void main() {
       await tester.enterText(input, '保留输入');
       await tester.pump();
       expect(original.mounted, isTrue, reason: '普通 rebuild 不能重挂页面');
-      await select(tester, ShellSection.logs);
+      await select(tester, ShellSection.settings);
       expect(
         original.mounted,
         isFalse,

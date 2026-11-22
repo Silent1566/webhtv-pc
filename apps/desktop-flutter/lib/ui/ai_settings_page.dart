@@ -11,9 +11,26 @@ import 'package:flutter/material.dart';
 import '../core/ai_config.dart';
 import '../services/ai_completion_client.dart';
 import '../state/app_state.dart';
+import 'ai_integration_widgets.dart';
 import 'common.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
+
+/// push（或同族内替换）打开 AI 设置页。
+///
+/// 为什么要有这个 seam：业务页的齿轮与设置页的星标都指这里，两页互为兄弟；
+/// 直接 `Navigator.push` 会在来回点击时叠栈（A→B→A→B，每层都是新 State）。
+Future<void> openAiSettingsPage(
+  BuildContext context,
+  AppState state, {
+  bool replace = false,
+}) {
+  final route = MaterialPageRoute<void>(
+    builder: (_) => AiSettingsPage(state: state),
+  );
+  if (replace) return Navigator.of(context).pushReplacement(route);
+  return Navigator.of(context).push(route);
+}
 
 class AiSettingsPage extends StatefulWidget {
   const AiSettingsPage({super.key, required this.state, this.fetchModelList});
@@ -421,7 +438,20 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     final theme = Theme.of(context);
     return Scaffold(
       key: const ValueKey('ai-settings-page'),
-      appBar: AppBar(title: const Text('AI 助手')),
+      appBar: AppBar(
+        title: const Text('AI 助手'),
+        actions: [
+          // 对称入口：业务页的齿轮指到本页（ai_integration_widgets.dart），
+          // 本页也必须能回指——否则从设置点进「AI 助手」就再也到不了阅读器。
+          IconButton(
+            key: const ValueKey('ai-settings-open-business'),
+            tooltip: 'AI 业务与阅读器',
+            onPressed: () =>
+                openAiBusiness(context, widget.state, replace: true),
+            icon: const Icon(Icons.auto_awesome_outlined),
+          ),
+        ],
+      ),
       body: ListView(
         padding: formPagePadding(context),
         children: [

@@ -35,7 +35,6 @@ import 'common.dart';
 import 'config_pages.dart';
 import 'config_source_status_view.dart';
 import 'diagnostics_pages.dart';
-import 'ai_integration_widgets.dart';
 import 'following_page.dart';
 import 'home_page.dart';
 import 'image_header_scope.dart';
@@ -49,7 +48,6 @@ import 'push_dialog.dart';
 import 'scroll_behavior.dart';
 import 'shell_unpack_dialogs.dart';
 import 'search_page.dart';
-import 'spider_page.dart';
 import 'startup_arguments.dart';
 import 'theme.dart';
 import 'toast.dart';
@@ -388,6 +386,11 @@ class _SplashPage extends StatelessWidget {
 
 /// 侧栏入口。
 ///
+/// **侧栏只放看片链路 + 设置**（2026-11-22 用户决策）：Spider 运行时、日志与
+/// AI / 阅读器都是低频的配置与排查，一律收进设置，于是从 11 项收敛到 8 项。
+/// 判据沿用 §17.2 的「入口数量按概念算，不按视角算」——Spider/日志/AI 都不是
+/// 又一个「要看什么」，而是「怎么把它弄好」，它们属于设置的六个分类。
+///
 /// §17.2 的「搜索页」在 MVP-B 是必须项，因此与首页同级放在侧栏。
 enum ShellSection {
   /// 首页：首屏（hero + 续播/推荐轨道）。
@@ -403,10 +406,7 @@ enum ShellSection {
   history,
   favorites,
   following,
-  spiders,
   settings,
-  logs,
-  ai,
 }
 
 class AppShell extends StatefulWidget {
@@ -1220,14 +1220,8 @@ class _AppShellState extends State<AppShell> {
         return FavoritesPage(state: _state);
       case ShellSection.following:
         return FollowingPage(state: _state);
-      case ShellSection.spiders:
-        return SpiderPage(state: _state);
       case ShellSection.settings:
         return SettingsPage(state: _state);
-      case ShellSection.logs:
-        return LogsPage(state: _state);
-      case ShellSection.ai:
-        return AiBusinessPage(state: _state);
     }
   }
 }
@@ -1571,8 +1565,8 @@ class _WallpaperBackdrop extends StatelessWidget {
   }
 }
 
-/// 侧栏。公开而不是私有：它的容量（11 项能否放进最小窗口）是回归风险，
-/// 必须能单独挂载并断言（test/shell_rail_capacity_test.dart）。
+/// 侧栏。公开而不是私有：它的容量（8 项能否放进最小窗口）与入口集合都是
+/// 回归风险，必须能单独挂载并断言（test/shell_rail_capacity_test.dart）。
 class AppSideBar extends StatelessWidget {
   const AppSideBar({
     super.key,
@@ -1593,9 +1587,9 @@ class AppSideBar extends StatelessWidget {
       minWidth: 76,
       groupAlignment: -0.9,
       labelType: NavigationRailLabelType.all,
-      // 11 个入口在最小窗口（1024×640，内容区 576px）下竖排放不下：实测 11 项
-      // 溢出 72px（10 项时就已经溢出 8px）。开 `scrollable` 而不是砍入口——
-      // 导航信息架构不该被这一屏的高度决定。
+      // 8 个入口在最小窗口（1024×640，内容区 576px）下放得下。`scrollable` 留着
+      // 当兜底：2026-11-19 实测 11 项溢出 72px、10 项也溢出 8px——导航不该因为
+      // 以后再引入口就无声破图。
       scrollable: true,
       destinations: [
         const NavigationRailDestination(
@@ -1632,20 +1626,8 @@ class AppSideBar extends StatelessWidget {
           label: const Text('追剧'),
         ),
         const NavigationRailDestination(
-          icon: Icon(Icons.extension),
-          label: Text('Spider'),
-        ),
-        const NavigationRailDestination(
           icon: Icon(Icons.tune),
           label: Text('设置'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.receipt_long),
-          label: Text('日志'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.auto_awesome_outlined),
-          label: Text('AI / 阅读器'),
         ),
       ],
     );

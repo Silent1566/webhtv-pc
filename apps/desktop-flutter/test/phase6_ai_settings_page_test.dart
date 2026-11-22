@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/ai_integration_widgets.dart';
 import 'package:webhtv_pc/ui/ai_settings_page.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/tmdb_widgets.dart';
@@ -93,6 +94,27 @@ void main() {
     expect(find.byKey(const ValueKey('ai-test')), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-fetch-models')), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-save')), findsNothing);
+  });
+
+  testWidgets('AI 助手与 AI 业务互跳：两侧都要有对称入口', (tester) async {
+    await pumpAiPage(tester);
+    // 业务页的齿轮指到本页（既有行为）；本页没有反向入口时，从设置点进
+    // 「AI 助手」就再也到不了阅读器/推荐——不对称本身就是缺陷。
+    final business = find.byKey(const ValueKey('ai-settings-open-business'));
+    expect(business, findsOneWidget);
+    await tester.tap(business);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(AiBusinessPage), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'AI 业务与阅读器'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byIcon(Icons.settings_outlined),
+      ),
+      findsOneWidget,
+      reason: '业务页要有指回 AI 助手的齿轮，两页互相可达',
+    );
   });
 
   testWidgets('编辑后自动写入 ai 段', (tester) async {
