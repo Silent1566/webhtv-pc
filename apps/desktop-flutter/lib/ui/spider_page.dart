@@ -19,6 +19,20 @@ import '../state/app_state.dart';
 import 'common.dart';
 import 'local_sources_page.dart';
 
+/// 从设置页 push 打开 Spider 管理页。
+///
+/// 本页原先是外壳里的一个标签页（裸 body，不带 `Scaffold`/`AppBar`）；收进设置
+/// 后它变成一条独立路由，必须自带宿主——否则从设置 push 进去没有标题也没有返回。
+Future<void> openSpiderPage(BuildContext context, AppState state) =>
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Spider')),
+          body: SpiderPage(state: state),
+        ),
+      ),
+    );
+
 class SpiderPage extends StatefulWidget {
   const SpiderPage({super.key, required this.state});
 

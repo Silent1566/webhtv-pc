@@ -31,6 +31,7 @@ import 'player_button_config_page.dart';
 import 'python_environment_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
+import 'spider_page.dart';
 import 'subtitle_settings_page.dart';
 import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
@@ -466,8 +467,8 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           icon: Icons.auto_awesome,
           title: 'AI 助手',
           subtitle: state.aiReady
-              ? '已启用（协议 ${state.aiConfig.protocol}）'
-              : '未配置：用于季度弹窗的「AI 识别剧集/季度」',
+              ? '已启用（协议 ${state.aiConfig.protocol}）· 端点、密钥与提示词'
+              : '未配置：先填端点/密钥/模型；内容智能与阅读器共用这套配置',
           subtitleKey: const ValueKey('settings-ai-summary'),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
@@ -480,7 +481,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           key: const ValueKey('settings-ai-business-open'),
           icon: Icons.auto_awesome_outlined,
           title: 'AI 业务与阅读器',
-          subtitle: '内容智能、推荐、阅读器与唱声评分',
+          subtitle: '内容智能、推荐、阅读器与唱声评分（用「AI 助手」那套配置）',
           onTap: () => openAiBusiness(context, state),
         ),
         SettingsNavRow(
@@ -568,6 +569,22 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
               builder: (_) => PythonEnvironmentPage(state: state),
             ),
           ),
+        ),
+        // Spider 运行时与日志原来是侧栏的两个常驻入口（2026-11-22 用户决策：
+        // 侧栏不再单独占位）。它们与本类同一个用途——本机进程在不在跑、坏了看什么。
+        SettingsNavRow(
+          key: const ValueKey('settings-spider-open'),
+          icon: Icons.extension,
+          title: 'Spider 运行时',
+          subtitle: '运行时状态、本地 Spider 清单、强制停止与重置',
+          onTap: () => openSpiderPage(context, state),
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-logs-open'),
+          icon: Icons.receipt_long,
+          title: '日志与诊断',
+          subtitle: '结构化日志、播放诊断、级别过滤与导出',
+          onTap: () => openLogsPage(context, state),
         ),
         SettingsNavRow(
           key: const ValueKey('settings-backup-open'),
@@ -1028,6 +1045,20 @@ class _HealthTable extends StatelessWidget {
     );
   }
 }
+
+/// 从设置页 push 打开日志页。
+///
+/// 与 [openSpiderPage] 同一个理由：本页原先是外壳标签页的裸 body，收进设置后
+/// 是一条独立路由，宿主（标题 + 返回）必须自己给。
+Future<void> openLogsPage(BuildContext context, AppState state) =>
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('日志与诊断')),
+          body: LogsPage(state: state),
+        ),
+      ),
+    );
 
 /// 日志页：结构化日志、级别过滤、导出（§17.2 日志页，§18.2 日志脱敏）。
 class LogsPage extends StatefulWidget {

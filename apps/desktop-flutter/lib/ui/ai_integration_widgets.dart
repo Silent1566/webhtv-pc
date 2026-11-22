@@ -32,16 +32,21 @@ Future<void> openAiBusiness(
   RecommendationSource source = RecommendationSource.history,
   String keyword = '',
   String title = '',
-}) => Navigator.of(context).push(
-  MaterialPageRoute<void>(
+  bool replace = false,
+}) {
+  final route = MaterialPageRoute<void>(
     builder: (_) => AiBusinessPage(
       state: state,
       source: source,
       keyword: keyword,
       title: title,
     ),
-  ),
-);
+  );
+  // 「AI 助手」与「AI 业务与阅读器」是同一族的两页，互相跳时**替换**当前路由：
+  // 来回点几次会在栈里叠出一串 A→B→A→B，且每层都是新 State 重新读配置。
+  if (replace) return Navigator.of(context).pushReplacement(route);
+  return Navigator.of(context).push(route);
+}
 
 /// SearchPage 自身不包含 Scaffold/Material（在应用里它由 shell 承载）。
 /// 任何**新路由**都必须自己给出真实宿主，否则 PopupMenu/TextField 会 No Material。
@@ -374,16 +379,11 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI业务与阅读器'),
+        title: const Text('AI 业务与阅读器'),
         actions: [
           IconButton(
-            tooltip: 'AI设置',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => AiSettingsPage(state: state),
-              ),
-            ),
+            tooltip: 'AI 助手',
+            onPressed: () => openAiSettingsPage(context, state, replace: true),
             icon: const Icon(Icons.settings_outlined),
           ),
         ],

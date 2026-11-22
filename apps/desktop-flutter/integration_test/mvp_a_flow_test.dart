@@ -86,14 +86,20 @@ void main() {
     expect(environment.bootstrapCalls, 1);
     // 顶栏入口（配置 / 站点）存在。
     expect(find.textContaining('配置'), findsWidgets);
-    // 侧栏五个桌面入口存在。
+    // 侧栏桌面入口存在；「日志」已收进设置（2026-11-22），侧栏不再有它。
     expect(find.text('首页'), findsWidgets);
     expect(find.text('最近观看'), findsWidgets);
     expect(find.text('收藏'), findsWidgets);
     expect(find.text('设置'), findsWidgets);
-    expect(find.text('日志'), findsWidgets);
+    expect(
+      find.descendant(
+        of: find.byType(NavigationRail),
+        matching: find.text('日志'),
+      ),
+      findsNothing,
+    );
 
-    evidence('shell-ready topbar=true sidebar=5');
+    evidence('shell-ready topbar=true sidebar=8');
   });
 
   testWidgets('首次启动展示使用边界提示，且可确认（§22.4）', (tester) async {
