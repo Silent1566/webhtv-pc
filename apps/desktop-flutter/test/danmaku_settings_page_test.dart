@@ -513,6 +513,102 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('速度档位：默认 12s，下拉含 30s/60s 与「自定义…」', (tester) async {
+    final state = await isolatedState(tester);
+    await openPage(tester, state);
+
+    final dropdown = find.byKey(const ValueKey('settings-danmaku-duration'));
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    expect(tester.widget<DropdownButton<int>>(dropdown).value, 12000);
+    expect(find.text('12s'), findsOneWidget);
+    expect(find.textContaining('越大越慢'), findsOneWidget);
+
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    // 长档位要能一次选到：慢速观看时 20s 仍然「飞得太快」。
+    expect(find.text('30s'), findsOneWidget);
+    expect(find.text('45s'), findsOneWidget);
+    expect(find.text('60s'), findsOneWidget);
+    expect(find.text('自定义…'), findsOneWidget);
+
+    await tester.tap(find.text('30s').last);
+    await settleWrites(tester);
+    expect(state.danmakuStyle.scrollDurationMs, 30000);
+    final display = readSettings(state)['danmakuDisplay'] as Map?;
+    expect(display?['scrollDurationMs'], 30000, reason: '档位改动必须落盘');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('自定义时长：25 秒写进 danmakuStyle 并落盘', (tester) async {
+    final state = await isolatedState(tester);
+    await openPage(tester, state);
+
+    final dropdown = find.byKey(const ValueKey('settings-danmaku-duration'));
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义…').last);
+    await tester.pumpAndSettle();
+
+    final input = find.byKey(const ValueKey('settings-danmaku-duration-input'));
+    expect(input, findsOneWidget);
+    await tester.enterText(input, '25');
+    await tester.tap(
+      find.byKey(const ValueKey('settings-danmaku-duration-confirm')),
+    );
+    await settleWrites(tester);
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(state.danmakuStyle.scrollDurationMs, 25000);
+    final display = readSettings(state)['danmakuDisplay'] as Map?;
+    expect(display?['scrollDurationMs'], 25000, reason: '自定义值必须落盘');
+    // 25s 不在预设里：当前值必须当候选显示，否则下拉会直接断言白屏。
+    expect(find.text('25s'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('自定义时长：99 与 1 秒只报错，不写盘也不关对话框', (tester) async {
+    final state = await isolatedState(tester);
+    await openPage(tester, state);
+    final before = readSettings(state);
+
+    final dropdown = find.byKey(const ValueKey('settings-danmaku-duration'));
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义…').last);
+    await tester.pumpAndSettle();
+
+    final input = find.byKey(const ValueKey('settings-danmaku-duration-input'));
+    final confirm = find.byKey(
+      const ValueKey('settings-danmaku-duration-confirm'),
+    );
+    for (final text in ['99', '1']) {
+      await tester.enterText(input, text);
+      await tester.tap(confirm);
+      await settleWrites(tester);
+      expect(
+        tester.widget<TextField>(input).decoration!.errorText,
+        isNotNull,
+        reason: '$text 秒越界必须就地报错',
+      );
+      expect(find.byType(AlertDialog), findsOneWidget, reason: '错了别关，让人改');
+      expect(state.danmakuStyle.scrollDurationMs, 12000);
+      expect(readSettings(state), before, reason: '非法输入不得写盘');
+    }
+
+    await tester.tap(
+      find.byKey(const ValueKey('settings-danmaku-duration-cancel')),
+    );
+    await settleWrites(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(readSettings(state), before);
+    expect(tester.takeException(), isNull);
+  });
+
   test('DanmakuSettings 的多源解析仍按「用户源优先」——summary 依赖它', () {
     final resolved = resolveDanmakuSources(
       settings: const DanmakuSettings(

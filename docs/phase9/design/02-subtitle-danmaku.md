@@ -292,8 +292,8 @@ class DanmakuMatchRecord {
 | `textBold` | bool | false | 无 |
 | `styleMode` | stroke / shadow | stroke | 无 |
 | `strokeWidth` | 0–0.3（相对字号） | 0.12 | 无 |
-| `durationMs` | 3000–15000 | 8000 | 无（写死） |
-| `fixedDurationMs` | 2000–10000 | 5000 | 无（写死） |
+| `durationMs` | 2000–60000 | 12000 | 有（档位 6–60s + 自定义 2..60s） |
+| `fixedDurationMs` | 1000–10000 | 4000 | 字段有，界面暂未给档位 |
 | `timeOffsetMs` | -5000–5000 | 0 | 无 |
 | `maxOnScreen` | 1–200 | 按分辨率 | 无 |
 | `scrollAreaRatio` | 0.1–1.0 | 0.5 | 无 |
@@ -303,6 +303,20 @@ class DanmakuMatchRecord {
 
 - 参数变化即时生效（不重建 player），由 `danmaku_overlay.dart` 的 `DanmakuStyle` 承载。
 - `maxOnScreen` 必须有上限，防止低配机被弹幕压垮；渲染层做「超限丢弃并计数」。
+
+#### 渲染时钟（用户反馈「卡、文字像有拖影」）
+
+- **叠加层自己插值**：`DanmakuMotionClock`（`lib/core/danmaku_motion.dart`）把播放器
+  上报的离散位置按墙钟插值成每帧连续位置。暂停不动；拖动进度条/切集立即跟随；
+  上报断流最多外插 600ms。播放器只交出「最近一次上报 + 播放状态 + 倍速」。
+- **只重绘不重建**：叠加层用 `Ticker` + `ValueNotifier` 作为 `CustomPaint` 的
+  repaint 通道，并包一层 `RepaintBoundary`；逐帧推进不 `setState` 整页。
+- **场景预排**：`DanmakuScene`（`lib/core/danmaku.dart`）把轨道只排一次，查询用开始
+  时刻二分出活动窗口；与旧 `visibleAt` 逐条一致（`test/danmaku_scene_test.dart`）。
+- **排版缓存 + 真描边**：文本排版按「文本 + 字号 + 颜色 + 描边」缓存；描边改成一次
+  `PaintingStyle.stroke`，不再沿 6 个方向各叠一份黑字（旧实现字边因此发虚）。
+- 实测（34 条可见、1920×1080，Ahem 字体下界）：每帧绘制 6.9ms → 0.46ms。
+  决策与被否决方案见 `docs/adr/0013-danmaku-render-clock.md`。
 
 ### 2.5 失败与边界
 

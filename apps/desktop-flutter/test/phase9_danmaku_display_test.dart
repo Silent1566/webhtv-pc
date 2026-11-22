@@ -14,7 +14,8 @@ void main() {
       expect(style.opacity, 0.9);
       expect(style.textScale, 1.0);
       expect(style.strokeWidth, 1.2);
-      expect(style.scrollDurationMs, 8000);
+      // 默认放慢到 12s：8s 是「看不清就飞过去了」的默认值。
+      expect(style.scrollDurationMs, 12000);
       expect(style.fixedDurationMs, 4000);
       expect(style.areaRatio, 0.6);
       expect(style.maxTracks, 0);
@@ -36,11 +37,15 @@ void main() {
       expect(style.opacity, 1.0);
       expect(style.textScale, 2.5);
       expect(style.strokeWidth, 0);
-      expect(style.scrollDurationMs, 20000);
+      expect(style.scrollDurationMs, 60000);
       expect(style.fixedDurationMs, 1000);
       expect(style.areaRatio, 0.9);
       expect(style.maxTracks, 10);
       expect(style.timeOffsetMs, -10000);
+
+      // 60s 档本身不是越界值：选到最长档位必须原样保留。
+      final slowest = DanmakuStyle.defaults.copyWith(scrollDurationMs: 60000);
+      expect(slowest.scrollDurationMs, 60000);
 
       final nan = DanmakuStyle.defaults.copyWith(opacity: double.nan);
       expect(nan.opacity, 0.1);
@@ -69,7 +74,7 @@ void main() {
       });
       expect(dirty.opacity, 0.9);
       expect(dirty.textScale, 2.5);
-      expect(dirty.scrollDurationMs, 8000);
+      expect(dirty.scrollDurationMs, 12000);
       expect(dirty.maxTracks, 0);
       expect(dirty.enabled, isTrue);
     });

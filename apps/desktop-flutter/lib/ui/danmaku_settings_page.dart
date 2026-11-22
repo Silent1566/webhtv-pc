@@ -23,6 +23,13 @@ import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
 
+/// 「自定义…」的哨兵值：合法时长最小 2s，-1 不会与任何档位撞值。
+const int _customDurationOption = -1;
+
+/// 自定义时长的合法区间（秒），与 core 的 2000..60000 ms 夹取区间同口径。
+const int _customMinSeconds = 2;
+const int _customMaxSeconds = 60;
+
 /// 弹幕设置：显示参数 + 弹幕库，改动即时写盘。
 class DanmakuSettingsPage extends StatefulWidget {
   const DanmakuSettingsPage({super.key, required this.state});
@@ -457,17 +464,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
           await _applyStyle(style.copyWith(areaRatio: value));
         },
       ),
-      _dropdownTile(
-        key: const ValueKey('settings-danmaku-duration'),
-        title: '速度',
-        subtitle: '滚动弹幕穿过画面的时长（越小越快）',
-        value: style.scrollDurationMs,
-        presets: const [4000, 6000, 8000, 10000, 12000],
-        label: (ms) => '${ms ~/ 1000}s',
-        onChanged: (value) async {
-          await _applyStyle(style.copyWith(scrollDurationMs: value));
-        },
-      ),
+      _durationTile(context, style),
       _dropdownTile(
         key: const ValueKey('settings-danmaku-tracks'),
         title: '行数',
@@ -616,6 +613,78 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     );
   }
 
+  /// 「速度」行：固定档位 + 末尾「自定义…」。
+  ///
+  /// 不复用 [_dropdownTile]：那一行只有固定档位，自定义还得再接一个对话框，
+  /// 把哨兵分支塞进共享实现，行数/偏移两行就都要背一个用不到的分支。
+  Widget _durationTile(BuildContext context, DanmakuStyle style) {
+    const presets = <int>[
+      6000,
+      8000,
+      10000,
+      12000,
+      15000,
+      20000,
+      30000,
+      45000,
+      60000,
+    ];
+    // 当前值必须进候选（理由同 [_dropdownTile]），但哨兵不能被当成当前值：
+    // 与「自定义…」项同值时，DropdownButton 会因为两个同值 item 直接断言。
+    final current = style.scrollDurationMs;
+    final options = <int>{...presets, current}
+        .where((ms) => ms != _customDurationOption)
+        .toList()
+      ..sort();
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: const Text('速度'),
+      subtitle: const Text('滚动弹幕穿过画面的时长（越大越慢）'),
+      trailing: DropdownButton<int>(
+        key: const ValueKey('settings-danmaku-duration'),
+        value: options.contains(current) ? current : null,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final option in options)
+            DropdownMenuItem(value: option, child: Text('${option ~/ 1000}s')),
+          const DropdownMenuItem(
+            value: _customDurationOption,
+            child: Text('自定义…'),
+          ),
+        ],
+        onChanged: (next) async {
+          if (next == null) return;
+          if (next == _customDurationOption) {
+            await _editCustomDuration(context, style);
+            return;
+          }
+          await _applyStyle(style.copyWith(scrollDurationMs: next));
+        },
+      ),
+    );
+  }
+
+  /// 自定义时长：对话框只校验并返回秒数，落盘仍走 [_applyStyle] 一条链路。
+  Future<void> _editCustomDuration(
+    BuildContext context,
+    DanmakuStyle style,
+  ) async {
+    final seconds = await showDialog<int>(
+      context: context,
+      builder: (context) => _DanmakuDurationDialog(
+        // 预填一个合法值：手改 settings.json 写到区间外时，一打开就报红更费解。
+        initialSeconds: (style.scrollDurationMs / 1000)
+            .round()
+            .clamp(_customMinSeconds, _customMaxSeconds)
+            .toInt(),
+      ),
+    );
+    // 取消返回 null：连值都没有，自然不写盘。
+    if (seconds == null) return;
+    await _applyStyle(style.copyWith(scrollDurationMs: seconds * 1000));
+  }
+
   Widget _typeSwitch({
     required Key key,
     required String title,
@@ -631,6 +700,98 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     value: value,
     onChanged: onChanged,
   );
+}
+
+/// 自定义滚动时长的对话框（单位：秒）。
+///
+/// 与 [_DanmakuSourceDialog] 同一范式：校验不过只在输入框下方出 errorText、
+/// 绝不写盘；确定才把秒数交回调用方，取消连值都不返回。
+class _DanmakuDurationDialog extends StatefulWidget {
+  const _DanmakuDurationDialog({required this.initialSeconds});
+
+  final int initialSeconds;
+
+  @override
+  State<_DanmakuDurationDialog> createState() => _DanmakuDurationDialogState();
+}
+
+class _DanmakuDurationDialogState extends State<_DanmakuDurationDialog> {
+  late final TextEditingController _seconds = TextEditingController(
+    text: '${widget.initialSeconds}',
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _seconds.dispose();
+    super.dispose();
+  }
+
+  /// 合法＝2..60 的整数；空串、小数、非数字一律不合法。
+  int? _parse() {
+    final value = int.tryParse(_seconds.text.trim());
+    if (value == null) return null;
+    if (value < _customMinSeconds || value > _customMaxSeconds) return null;
+    return value;
+  }
+
+  void _submit() {
+    final seconds = _parse();
+    if (seconds == null) {
+      setState(
+        () => _error = '请输入 $_customMinSeconds–$_customMaxSeconds 的整数秒',
+      );
+      return;
+    }
+    Navigator.of(context).pop(seconds);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('自定义时长'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            key: const ValueKey('settings-danmaku-duration-input'),
+            controller: _seconds,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: '时长（秒）',
+              hintText: '例如 25',
+              errorText: _error,
+            ),
+            // 只在**已经报过错**之后才随输入清错：边打字边报红是另一种噪音。
+            onChanged: (text) {
+              if (_error == null) return;
+              if (_parse() != null) setState(() => _error = null);
+            },
+          ),
+          const SizedBox(height: AppSpace.sm),
+          Text(
+            '$_customMinSeconds–$_customMaxSeconds 秒，越大越慢',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-danmaku-duration-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('settings-danmaku-duration-confirm'),
+          onPressed: _submit,
+          child: const Text('确定'),
+        ),
+      ],
+    );
+  }
 }
 
 /// 添加 / 编辑一条弹幕源的对话框（名称 + 地址）。
