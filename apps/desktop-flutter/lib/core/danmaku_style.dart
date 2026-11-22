@@ -26,7 +26,7 @@ class DanmakuStyle {
     this.showTop = true,
     this.showBottom = true,
     this.strokeWidth = 1.2,
-    this.scrollDurationMs = 8000,
+    this.scrollDurationMs = 12000,
     this.fixedDurationMs = 4000,
     this.areaRatio = 0.6,
     this.maxTracks = 0,
@@ -52,7 +52,7 @@ class DanmakuStyle {
   /// 描边宽度（0..3，0 = 关闭描边）。
   final double strokeWidth;
 
-  /// 滚动弹幕时长（2000..20000 ms）。
+  /// 滚动弹幕时长（2000..60000 ms）；缺字段/类型不对时回落到 12000。
   final int scrollDurationMs;
 
   /// 顶部/底部弹幕停留时长（1000..10000 ms）。
@@ -99,7 +99,7 @@ class DanmakuStyle {
       scrollDurationMs: _clampInt(
         scrollDurationMs ?? this.scrollDurationMs,
         2000,
-        20000,
+        60000,
       ),
       fixedDurationMs: _clampInt(
         fixedDurationMs ?? this.fixedDurationMs,

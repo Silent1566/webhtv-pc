@@ -638,7 +638,79 @@ class DanmakuTrackAllocator {
     double maxTracksRatio = 0.6,
     int maxTracks = 0,
   }) {
-    if (!enabled || items.isEmpty) return const [];
+    return DanmakuScene.plan(
+      items: items,
+      enabled: enabled,
+      scrollDurationMs: scrollDurationMs,
+      fixedDurationMs: fixedDurationMs,
+      width: width,
+      height: height,
+      trackHeight: trackHeight,
+      gap: gap,
+      maxTracksRatio: maxTracksRatio,
+      maxTracks: maxTracks,
+    ).visibleAt(positionMs);
+  }
+}
+/// 预排好的弹幕场景：轨道只排一次，按位置查询只碰活跃的那几条。
+///
+/// 旧的 [DanmakuTrackAllocator.visibleAt] 每次调用都重排全表（排序 + 全量轨道
+/// 分配）；渲染层改成每帧查询之后，一集几千条弹幕就是每帧 O(n log n)。
+/// 这里把结果预先摊成几条平行数组：轨道、时长、宽度各存一份，查询时用开始时刻
+/// 二分出窗口左界，窗口内逐条判可见——每帧只碰屏幕上真正活跃的那几条。
+///
+/// 语义与旧实现逐条一致（`danmaku_scene_test` 用多尺寸/多时长逐条比对过）。
+class DanmakuScene {
+  DanmakuScene._({
+    required this._items,
+    required this._starts,
+    required this._durations,
+    required this._tracks,
+    required this._widths,
+    required this._windowMs,
+  });
+
+  /// 空场景（弹幕关闭 / 没有条目）。
+  DanmakuScene.empty()
+    : _items = const [],
+      _starts = const [],
+      _durations = const [],
+      _tracks = const [],
+      _widths = const [],
+      _windowMs = 0;
+
+  /// 按开始时刻升序排列、已分好轨道的弹幕。
+  final List<DanmakuItem> _items;
+  final List<int> _starts;
+  final List<int> _durations;
+  final List<int> _tracks;
+  final List<double> _widths;
+
+  /// 一条弹幕最长的存活窗口；开始时刻早于窗口左界的一定不可见。
+  final int _windowMs;
+
+  /// 场景里的弹幕条数（已丢弃轨道满的条目）。
+  int get length => _items.length;
+
+  bool get isEmpty => _items.isEmpty;
+
+  /// 只排一次轨道，得到可反复查询的场景。
+  ///
+  /// 轨道分配沿用 [DanmakuTrackAllocator] 的「窗口内独占」模型：在弹幕开始
+  /// 时刻按确定性顺序排定，因此无论从哪个播放位置查询，轨道都不会重叠。
+  static DanmakuScene plan({
+    required List<DanmakuItem> items,
+    required bool enabled,
+    int scrollDurationMs = 8000,
+    int fixedDurationMs = 4000,
+    double width = 1280,
+    double height = 720,
+    double trackHeight = 28,
+    double gap = 12,
+    double maxTracksRatio = 0.6,
+    int maxTracks = 0,
+  }) {
+    if (!enabled || items.isEmpty) return DanmakuScene.empty();
     final allocator = DanmakuTrackAllocator(
       width: width,
       height: height,
@@ -648,64 +720,98 @@ class DanmakuTrackAllocator {
       maxTracks: maxTracks,
     );
 
-    // 按开始时刻排定轨道（先排序，保证确定性）。
+    // 先按开始时刻排序，保证轨道分配与查询结果都是确定性的。
     final sorted = List<DanmakuItem>.of(items)
       ..sort((a, b) => a.timeMs.compareTo(b.timeMs));
-    // 轨道 → 最新一条的释放时间（滚动：进入+整个滚动窗口；固定：进入+显示时长）。
     final scrollFreeAt = List<int?>.filled(allocator.scrollTrackCount, null);
     final topFreeAt = List<int?>.filled(allocator.fixedTrackCount, null);
     final bottomFreeAt = List<int?>.filled(allocator.fixedTrackCount, null);
-    // 每条弹幕的轨道分配（固定类型取保存的时刻）。
-    final trackOf = <DanmakuItem, int>{};
+
+    final kept = <DanmakuItem>[];
+    final starts = <int>[];
+    final durations = <int>[];
+    final tracks = <int>[];
+    final widths = <double>[];
 
     for (final item in sorted) {
+      final duration = item.type.movesHorizontally
+          ? scrollDurationMs
+          : fixedDurationMs;
+      int? track;
       switch (item.type) {
         case DanmakuType.scroll:
         case DanmakuType.reverse:
-          final track = allocator.allocateScrollTrack(
+          track = allocator.allocateScrollTrack(
             textWidth: estimateDanmakuTextWidth(item),
             nowMs: item.timeMs,
             trackFreeAtMs: scrollFreeAt,
           );
-          if (track == null) continue; // 轨道满：该条丢弃（不阻塞后续）。
-          scrollFreeAt[track] = item.timeMs + scrollDurationMs;
-          trackOf[item] = track;
+          if (track != null) {
+            scrollFreeAt[track] = item.timeMs + scrollDurationMs;
+          }
         case DanmakuType.top:
-          final track = allocator.allocateFixedTrack(
+          track = allocator.allocateFixedTrack(
             trackFreeAtMs: topFreeAt,
             nowMs: item.timeMs,
           );
-          if (track == null) continue;
-          topFreeAt[track] = item.timeMs + fixedDurationMs;
-          trackOf[item] = track;
+          if (track != null) topFreeAt[track] = item.timeMs + fixedDurationMs;
         case DanmakuType.bottom:
-          final track = allocator.allocateFixedTrack(
+          track = allocator.allocateFixedTrack(
             trackFreeAtMs: bottomFreeAt,
             nowMs: item.timeMs,
           );
-          if (track == null) continue;
-          bottomFreeAt[track] = item.timeMs + fixedDurationMs;
-          trackOf[item] = track;
+          if (track != null) {
+            bottomFreeAt[track] = item.timeMs + fixedDurationMs;
+          }
       }
+      // 轨道满：该条丢弃（不阻塞后续，与旧实现一致）。
+      if (track == null) continue;
+      kept.add(item);
+      starts.add(item.timeMs);
+      durations.add(duration);
+      tracks.add(track);
+      widths.add(estimateDanmakuTextWidth(item));
     }
 
+    return DanmakuScene._(
+      items: kept,
+      starts: starts,
+      durations: durations,
+      tracks: tracks,
+      widths: widths,
+      windowMs: scrollDurationMs > fixedDurationMs
+          ? scrollDurationMs
+          : fixedDurationMs,
+    );
+  }
+
+  /// 取出 [positionMs] 时刻应显示的弹幕（顺序、轨道、进度与旧实现逐条一致）。
+  List<VisibleDanmaku> visibleAt(int positionMs) {
+    if (_items.isEmpty) return const [];
+    final lower = positionMs - _windowMs;
+    var lo = 0;
+    var hi = _starts.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_starts[mid] < lower) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
     final visible = <VisibleDanmaku>[];
-    for (final item in sorted) {
-      final track = trackOf[item];
-      if (track == null) continue;
-      final state = visibilityAt(
-        item: item,
-        positionMs: positionMs,
-        scrollDurationMs: scrollDurationMs,
-        fixedDurationMs: fixedDurationMs,
-      );
-      if (!state.visible) continue;
+    for (var index = lo; index < _starts.length; index++) {
+      final start = _starts[index];
+      if (start > positionMs) break;
+      final elapsed = positionMs - start;
+      final duration = _durations[index];
+      if (elapsed > duration) continue;
       visible.add(
         VisibleDanmaku(
-          item: item,
-          track: track,
-          progress: state.progress,
-          textWidth: estimateDanmakuTextWidth(item),
+          item: _items[index],
+          track: _tracks[index],
+          progress: elapsed / duration,
+          textWidth: _widths[index],
         ),
       );
     }

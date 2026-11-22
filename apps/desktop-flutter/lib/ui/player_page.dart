@@ -2526,8 +2526,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _liveReceivedAt.removeWhere((item, receivedAt) => receivedAt < cutoff);
   }
 
-  /// 直播弹幕渲染时钟：定时推进 [liveNowMs]，使已过期的弹幕逐帧淡出。
-  /// 会话断开时停止（没有新消息就不需要重绘）。
+  /// 直播弹幕的「现在」：定时推进 [liveNowMs]，用于把过了
+  /// [scrollDurationMs] 的条目修剪掉。
+  ///
+  /// 渲染不再靠它逐帧推进——叠加层有自己的渲染时钟（墙钟采样），
+  /// 否则直播弹幕只能按这个 250ms 的节拍一跳一跳地走。
+  /// 会话断开时停止。
   void _startLiveTicker() {
     _liveTicker?.cancel();
     _liveTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -4264,13 +4268,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                             ),
                             // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
                             // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
+                            //
+                            // 位置只给「最近一次上报」：逐帧插值由叠加层自己的渲染时钟做，
+                            // 播放状态与倍速决定它还动不动、动多快。
                             Positioned.fill(
                               child: DanmakuOverlay(
                                 items: _danmakuItems,
                                 position: _controller.position,
                                 style: _danmakuStyle,
+                                playing: _controller.isPlaying,
+                                rate: _controller.rate,
                                 liveItems: _liveItems,
-                                liveNowMs: _liveNowMs,
                               ),
                             ),
                             if (_audioAi != null)
