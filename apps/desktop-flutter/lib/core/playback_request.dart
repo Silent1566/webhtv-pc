@@ -38,6 +38,7 @@ class PlaybackRequest {
     this.episodesReversed = false,
     this.episodeIndex = 0,
     this.vodPic,
+    this.vodYear,
     this.directUrl = false,
     this.subtitles = const [],
     this.subtitleHeaders = const {},
@@ -184,6 +185,14 @@ class PlaybackRequest {
   final int episodeIndex;
   final String? vodPic;
 
+  /// 作品年份（`Vod.vodYear` 原样带下来，可能为空或非四位数字）。
+  ///
+  /// 为什么播放器需要它：弹幕库搜索是按片名问中转的，中转会同时返回同名不同年
+  /// 的多部剧（`一马当先(2026)【电视剧】` / `一马当先(2023)【短剧】`）。年份是
+  /// 区分它们唯一的结构化证据，而详情页之外的构造点（历史续播/推送/直播/本地
+  /// 文件）拿不到 `Vod`，所以默认 null，由消费方按「缺证据」中性处理。
+  final String? vodYear;
+
   /// 待迁移的续播种子（跨源续播用，`docs/phase5/design/05` §7.3）。
   ///
   /// 为什么播放器还要收一次：比例换算需要**目标集的真实时长**，而目标集要
@@ -260,6 +269,8 @@ class PlaybackRequest {
     String? parseSource,
     PlaybackSourceKind? sourceKind,
     String? localPath,
+    // 年份是详情页的上下文：换集时原样带过，否则换了集就丢掉了「同名哪一部」的线索。
+    String? vodYear,
     // 换集要同时换成该集的 TMDB 身份；缺这个参数会让 `copyWith(tmdb: …)`
     // 在编译期就失败（beta 抽类时只留了构造实参，漏了形参）。
     TmdbPlaybackIdentity? tmdb,
@@ -296,6 +307,7 @@ class PlaybackRequest {
       episodesReversed: episodesReversed,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
+      vodYear: vodYear ?? this.vodYear,
       directUrl: directUrl,
       subtitles: subtitles ?? this.subtitles,
       subtitleHeaders: subtitleHeaders ?? this.subtitleHeaders,

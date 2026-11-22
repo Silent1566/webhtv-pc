@@ -219,8 +219,13 @@ AppConfig _buildConfig(
     'urls',
     'msg',
   };
+  // 站点配置的 `danmaku`（安卓 `VodConfig.getConfig().getDanmaku()`）提升为
+  // [AppConfig.danmaku]；只有非空字符串才提升，其余（空串、数组等）仍留在 extra
+  // 原样回写——提升不了又丢掉才是真丢数据。
+  final danmaku = asNonEmptyString(map['danmaku']);
   final extra = <String, Object?>{};
   for (final entry in map.entries) {
+    if (entry.key == 'danmaku' && danmaku != null) continue;
     if (!known.contains(entry.key)) extra[entry.key] = entry.value;
   }
 
@@ -244,6 +249,7 @@ AppConfig _buildConfig(
     notice: asNonEmptyString(map['notice']),
     home: asNonEmptyString(map['home']),
     parse: asNonEmptyString(map['parse']),
+    danmaku: danmaku,
     urls: repositoryEntries,
     msg: asNonEmptyString(map['msg']),
     hasMsgKey: map.containsKey('msg'),

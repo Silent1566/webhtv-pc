@@ -395,65 +395,6 @@ class PlaybackOptionsPage extends StatelessWidget {
   }
 }
 
-/// 弹幕源明细页。
-class DanmakuSourcePage extends StatelessWidget {
-  const DanmakuSourcePage({super.key, required this.state});
-
-  final AppState state;
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: state,
-    builder: (context, _) => SettingsDetailScaffold(
-      title: '弹幕源',
-      children: [
-        SwitchListTile(
-          key: const ValueKey('settings-danmaku-auto-search'),
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: const Text('没有弹幕时自动搜索弹幕库'),
-          subtitle: const Text('需要先配置弹幕库地址；失败只提示，不影响播放'),
-          value: state.danmakuSettings.autoSearch,
-          onChanged: (value) async {
-            await state.setDanmakuSettings(
-              state.danmakuSettings.copyWith(autoSearch: value),
-            );
-          },
-        ),
-        ListTile(
-          key: const ValueKey('settings-danmaku-api'),
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: const Text('弹幕库地址'),
-          subtitle: Text(
-            state.danmakuSettings.apiUrl.isEmpty
-                ? '未配置'
-                : state.danmakuSettings.apiUrl,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: const Icon(Icons.edit_outlined, size: 18),
-          onTap: () => _editDanmakuApi(context),
-        ),
-      ],
-    ),
-  );
-
-  Future<void> _editDanmakuApi(BuildContext context) => showDialog<void>(
-    context: context,
-    builder: (_) => _ImmediateAddressDialog(
-      title: '弹幕库地址',
-      initialValue: state.danmakuSettings.apiUrl,
-      hint: 'https://example.test/danmaku/search',
-      validate: (text) =>
-          _isHttpAddress(text) ? null : '请输入完整的 http 或 https 地址',
-      save: (text) => state.setDanmakuSettings(
-        state.danmakuSettings.copyWith(apiUrl: text),
-      ),
-    ),
-  );
-}
-
 /// 站点分组规则明细页。
 class SiteGroupRulesPage extends StatelessWidget {
   const SiteGroupRulesPage({super.key, required this.state});
@@ -692,12 +633,12 @@ class OutboundProxyPage extends StatelessWidget {
 
   Future<void> _editDefaultProxy(BuildContext context) => showDialog<void>(
     context: context,
-    builder: (_) => _ImmediateAddressDialog(
+    builder: (_) => ImmediateAddressDialog(
       title: '默认代理地址',
       initialValue: state.outboundProxy.defaultProxyUrl,
       hint: 'http://127.0.0.1:7890',
       validate: (text) =>
-          _isHttpAddress(text) &&
+          isHttpAddress(text) &&
               OutboundProxyRule(patterns: const ['*'], proxyUrl: text).isValid
           ? null
           : '请输入完整的 http 代理地址，端口范围为 1–65535',
@@ -872,12 +813,12 @@ class DohSettingsPage extends StatelessWidget {
 
   Future<void> _editDohEndpoint(BuildContext context) => showDialog<void>(
     context: context,
-    builder: (_) => _ImmediateAddressDialog(
+    builder: (_) => ImmediateAddressDialog(
       title: 'DoH 端点',
       initialValue: state.dohSettings.url,
       hint: 'https://dns.example.com/dns-query',
       allowClear: true,
-      validate: (text) => _isHttpAddress(text) && isUsableDohUrl(text)
+      validate: (text) => isHttpAddress(text) && isUsableDohUrl(text)
           ? null
           : '请输入完整的 https DoH 地址',
       save: (text) =>
@@ -1026,7 +967,11 @@ class AboutDataPage extends StatelessWidget {
   }
 }
 
-bool _isHttpAddress(String text) {
+/// 地址是否可用：必须是 http/https、host 非空、端口合法。
+///
+/// 公开而不是留在本文件私有：弹幕设置新页（`danmaku_settings_page.dart`）也用
+/// 同一套校验，复制一份的结果是两页对「什么算合法地址」给出不同答案。
+bool isHttpAddress(String text) {
   final uri = Uri.tryParse(text);
   return !RegExp(r'\s').hasMatch(text) &&
       uri != null &&
@@ -1035,8 +980,13 @@ bool _isHttpAddress(String text) {
       (!uri.hasPort || (uri.port > 0 && uri.port <= 65535));
 }
 
-class _ImmediateAddressDialog extends StatefulWidget {
-  const _ImmediateAddressDialog({
+/// 即时保存的地址编辑框：有效修改立刻落盘，没有「保存 / 取消」两个按钮。
+///
+/// 公开而不是留在本文件私有：弹幕设置新页（`danmaku_settings_page.dart`）也用它，
+/// 两处都靠「输入即保存 + 实时 errorText」表达同一件事，复制一份必然分叉。
+class ImmediateAddressDialog extends StatefulWidget {
+  const ImmediateAddressDialog({
+    super.key,
     required this.title,
     required this.initialValue,
     required this.hint,
@@ -1051,11 +1001,11 @@ class _ImmediateAddressDialog extends StatefulWidget {
   final Future<bool> Function(String) save;
   final bool allowClear;
   @override
-  State<_ImmediateAddressDialog> createState() =>
-      _ImmediateAddressDialogState();
+  State<ImmediateAddressDialog> createState() =>
+      ImmediateAddressDialogState();
 }
 
-class _ImmediateAddressDialogState extends State<_ImmediateAddressDialog> {
+class ImmediateAddressDialogState extends State<ImmediateAddressDialog> {
   late final TextEditingController _controller;
   String? _error;
   String? _status;

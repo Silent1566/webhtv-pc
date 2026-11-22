@@ -49,9 +49,9 @@ const settingsRoutes =
         marker: 'settings-player-options',
       ),
       (
-        category: 'playback',
+        category: 'danmaku',
         rowKey: 'settings-danmaku-open',
-        title: '弹幕源',
+        title: '弹幕设置',
         marker: 'settings-danmaku-auto-search',
       ),
       (
@@ -133,7 +133,7 @@ const settingsSwitches =
         field: 'hardwareDecoding',
       ),
       (
-        category: 'playback',
+        category: 'danmaku',
         rowKey: 'settings-danmaku-open',
         switchKey: 'settings-danmaku-auto-search',
         before: false,
@@ -321,6 +321,7 @@ void main() {
     for (final category in const [
       'preferences',
       'playback',
+      'danmaku',
       'sites',
       'connections',
       'maintenance',
@@ -511,9 +512,10 @@ void main() {
           reason: '分类页在 $size 溢出（RenderFlex overflow）',
         );
 
-        // 每类都扫一遍（分类栏在 5 类之后最容易在矮窗里先溢出）。
+        // 每类都扫一遍（分类栏在类目变多之后最容易在矮窗里先溢出）。
         for (final category in const [
           'playback',
+          'danmaku',
           'sites',
           'connections',
           'maintenance',

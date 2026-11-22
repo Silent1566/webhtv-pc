@@ -606,7 +606,7 @@ void main() {
             markers: ['settings-player-options'],
           ),
           (
-            category: 'playback',
+            category: 'danmaku',
             rowKey: 'settings-danmaku-open',
             markers: ['settings-danmaku-auto-search'],
           ),

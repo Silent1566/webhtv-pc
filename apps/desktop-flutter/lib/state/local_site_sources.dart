@@ -166,6 +166,7 @@ AppConfig _copyWithSites(AppConfig config, List<Site> sites) => AppConfig(
   notice: config.notice,
   home: config.home,
   parse: config.parse,
+  danmaku: config.danmaku,
   urls: config.urls,
   msg: config.msg,
   hasMsgKey: config.hasMsgKey,

@@ -7,6 +7,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/ui_preferences_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/danmaku_settings_page.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/following_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -98,23 +99,20 @@ class _Audio implements ReaderAudioOutput {
 }
 
 void main() {
-  for (final kind in ['danmaku', 'proxy', 'doh']) {
+  for (final kind in ['proxy', 'doh']) {
     testWidgets(
       '$kind address commits while typing, rejects invalid and clears',
       (tester) async {
         final state = await isolatedState(tester);
         final page = switch (kind) {
-          'danmaku' => DanmakuSourcePage(state: state),
           'proxy' => OutboundProxyPage(state: state),
           _ => DohSettingsPage(state: state),
         };
         final key = switch (kind) {
-          'danmaku' => 'settings-danmaku-api',
           'proxy' => 'settings-outbound-proxy-default',
           _ => 'settings-doh-endpoint',
         };
         String current() => switch (kind) {
-          'danmaku' => state.danmakuSettings.apiUrl,
           'proxy' => state.outboundProxy.defaultProxyUrl,
           _ => state.dohSettings.url,
         };
@@ -151,18 +149,16 @@ void main() {
       },
     );
   }
-  for (final kind in ['danmaku', 'proxy', 'doh']) {
+  for (final kind in ['proxy', 'doh']) {
     testWidgets(
       '$kind write failure survives invalid drafts and equivalent retries',
       (tester) async {
         final state = await isolatedState(tester);
         final page = switch (kind) {
-          'danmaku' => DanmakuSourcePage(state: state),
           'proxy' => OutboundProxyPage(state: state),
           _ => DohSettingsPage(state: state),
         };
         final key = switch (kind) {
-          'danmaku' => 'settings-danmaku-api',
           'proxy' => 'settings-outbound-proxy-default',
           _ => 'settings-doh-endpoint',
         };
@@ -205,28 +201,105 @@ void main() {
       },
     );
   }
-  testWidgets(
-    'rapid address edit and immediate close persist latest URL without extra submit',
-    (tester) async {
-      final state = await isolatedState(tester);
-      await openForm(tester, DanmakuSourcePage(state: state));
-      await tester.tap(find.byKey(const ValueKey('settings-danmaku-api')));
-      await tester.pumpAndSettle();
-      final input = find.byType(TextField);
-      await tester.enterText(input, 'https://first.test');
-      await tester.enterText(input, 'https://last.test');
-      await tester.tap(find.text('关闭'));
-      await settleWrites(tester);
-      expect(state.danmakuSettings.apiUrl, 'https://last.test');
-      final disk = File(state.paths.settingsPath).readAsStringSync();
-      expect(disk, contains('https://last.test'));
-      await tester.tap(find.byKey(const ValueKey('settings-danmaku-api')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('关闭'));
-      await settleWrites(tester);
-      expect(File(state.paths.settingsPath).readAsStringSync(), disk);
-    },
-  );
+  // 弹幕源升级成列表后（S2），地址不再是「一改就写盘」的单字段：新增/编辑走
+  // 「名称 + 地址」对话框，「确定」时才落盘（详见 danmaku_settings_page_test）。
+  // 下面三条承接原来 danmaku 单地址用例要守的东西：只写有效值、写盘失败可见、
+  // 重试不产生副作用。
+  testWidgets('danmaku 源对话框：确定才写盘，非法地址只出 errorText', (
+    tester,
+  ) async {
+    final state = await isolatedState(tester);
+    await openForm(tester, DanmakuSettingsPage(state: state));
+    final file = File(state.paths.settingsPath);
+    final before = file.readAsStringSync();
+
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-add')));
+    await tester.pumpAndSettle();
+    // 打开对话框、往框里打字都不写盘：两字段的半成品不该进配置。
+    expect(file.readAsStringSync(), before);
+    final input = find.byKey(const ValueKey('settings-danmaku-source-url'));
+    await tester.enterText(input, 'https://example.test/service');
+    await tester.pump();
+    expect(file.readAsStringSync(), before);
+
+    await tester.enterText(input, 'https://');
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(tester.widget<TextField>(input).decoration!.errorText, isNotNull);
+    expect(state.danmakuSettings.sources, isEmpty);
+    expect(file.readAsStringSync(), before);
+
+    await tester.enterText(input, 'https://example.test/service');
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(state.danmakuSettings.apiUrl, 'https://example.test/service');
+    expect(file.readAsStringSync(), contains('https://example.test/service'));
+    expect(find.byType(AlertDialog), findsNothing, reason: '保存成功后关掉对话框');
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('danmaku 源对话框：写盘失败留在框里，重试不重复新增', (tester) async {
+    final state = await isolatedState(tester);
+    await openForm(tester, DanmakuSettingsPage(state: state));
+    final file = File(state.paths.settingsPath);
+    expect(file.absolute.path, contains('forms-immediate-'));
+    final initial = file.readAsStringSync();
+    file.deleteSync();
+    final blocked = Directory(file.path)..createSync();
+
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-add')));
+    await tester.pumpAndSettle();
+    final valid = 'https://example.test/service';
+    await tester.enterText(
+      find.byKey(const ValueKey('settings-danmaku-source-url')),
+      valid,
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(find.textContaining('自动保存失败'), findsOneWidget);
+    expect(
+      find.byType(AlertDialog),
+      findsOneWidget,
+      reason: '写盘失败不能把刚填好的内容一起关掉',
+    );
+
+    blocked.deleteSync();
+    file.writeAsStringSync(initial);
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(
+      state.danmakuSettings.sources,
+      hasLength(1),
+      reason: '重试必须写回同一条源（内存里已留下失败那次的新增）',
+    );
+    expect(state.danmakuSettings.apiUrl, valid);
+    expect(file.readAsStringSync(), contains(valid));
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('danmaku 源对话框：最后一版输入一次性落盘，重开确认不再改盘', (
+    tester,
+  ) async {
+    final state = await isolatedState(tester);
+    await openForm(tester, DanmakuSettingsPage(state: state));
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-add')));
+    await tester.pumpAndSettle();
+    final input = find.byKey(const ValueKey('settings-danmaku-source-url'));
+    await tester.enterText(input, 'https://first.test');
+    await tester.enterText(input, 'https://last.test');
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(state.danmakuSettings.apiUrl, 'https://last.test');
+    final disk = File(state.paths.settingsPath).readAsStringSync();
+    expect(disk, contains('https://last.test'));
+    // 名称留空 → 标题回退成 host，点这一行重新打开同一条源。
+    await tester.tap(find.text('last.test'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await settleWrites(tester);
+    expect(File(state.paths.settingsPath).readAsStringSync(), disk);
+    expect(state.danmakuSettings.sources, hasLength(1));
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
     'following identical preset never reports saved after a failed write',
     (tester) async {

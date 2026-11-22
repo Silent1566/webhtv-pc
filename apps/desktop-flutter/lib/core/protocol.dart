@@ -661,6 +661,7 @@ class AppConfig {
     this.notice,
     this.home,
     this.parse,
+    this.danmaku,
     this.urls = const [],
     this.msg,
     this.hasMsgKey = false,
@@ -692,6 +693,13 @@ class AppConfig {
   final String? notice;
   final String? home;
   final String? parse;
+
+  /// 站点配置里的弹幕库地址（安卓 `VodConfig.getConfig().getDanmaku()`）。
+  ///
+  /// 它是「默认值」而非用户手填值：设置页手填的地址优先，见
+  /// `resolveDanmakuApi`。导入/导出/同步必须原样回写，所以存原文而不是解析后的 URI。
+  final String? danmaku;
+
   final List<ConfigRepositoryEntry> urls;
 
   /// 配置对象自身声明的错误信息（§7.4.3）。
@@ -733,6 +741,7 @@ class AppConfig {
     if (notice != null) 'notice': notice,
     if (home != null) 'home': home,
     if (parse != null) 'parse': parse,
+    if (danmaku != null) 'danmaku': danmaku,
     if (urls.isNotEmpty) 'urls': urls.map((entry) => entry.toJson()).toList(),
     if (msg != null) 'msg': msg,
   };
@@ -760,6 +769,7 @@ class AppConfig {
     String? notice,
     String? home,
     String? parse,
+    String? danmaku,
     List<ConfigRepositoryEntry>? urls,
     String? msg,
     bool? hasMsgKey,
@@ -784,6 +794,7 @@ class AppConfig {
       notice: notice ?? this.notice,
       home: home ?? this.home,
       parse: parse ?? this.parse,
+      danmaku: danmaku ?? this.danmaku,
       urls: urls ?? this.urls,
       msg: msg ?? this.msg,
       hasMsgKey: hasMsgKey ?? this.hasMsgKey,
