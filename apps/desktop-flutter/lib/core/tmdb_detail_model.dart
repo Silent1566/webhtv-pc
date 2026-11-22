@@ -16,6 +16,7 @@ library;
 
 import 'detail_ratings.dart';
 import 'playback_platform.dart';
+import 'protocol.dart';
 import 'tmdb_identity.dart';
 import 'tmdb_media.dart';
 import 'tmdb_title.dart';
@@ -829,6 +830,32 @@ abstract final class TmdbEpisodeCards {
   /// 纯 TMDB 详情页用：直接把 TMDB 剧集列表转为卡片（**不涉及线路**）。
   static List<TmdbEpisodeCard> fromMetadata(List<TmdbEpisode> episodes) =>
       episodes.map(TmdbEpisodeCard.fromEpisode).toList();
+
+  /// 当前季的集元数据能否安全贴到**非当前线路**的集上（`04` §4.3 季归属）。
+  ///
+  /// 播放器选集面板会预览别的线路，那一屏同样要显示该线路的集标题/剧照
+  /// （用户反馈 2026-11-22：切到非当前播放线路就看不到正确的 TMDB 图片）。
+  /// 但季元数据是**线路级**的：一条线路可能把 S1 与 S2 混排，把当前季的 E5 贴到
+  /// 别的季的 E5 上就是串季——串季比没图更糟。判据只有一条：
+  /// **这条线路没有任何一集被明确标成别的季**才放行；没有季号的集按当前季处理
+  /// （与 `TmdbEpisodeRenderPolicy.filter` 的「未分类不得被证明不属于当前季」
+  /// 同一口径）。
+  ///
+  /// [selectedSeason] 为空（未确证季度）→ 一律不放行：没有可贴的元数据。
+  /// [seasonOf] 由调用方给：先看集自带的 `tmdb_season_number`，再退回集名里的
+  /// 季号（见 `browse_pages.dart` 的 `_seasonOfEpisode`）。
+  static bool metadataSafeForLine({
+    required List<VodEpisode> episodes,
+    required int? selectedSeason,
+    required int Function(VodEpisode episode) seasonOf,
+  }) {
+    if (selectedSeason == null || episodes.isEmpty) return false;
+    for (final episode in episodes) {
+      final season = seasonOf(episode);
+      if (season >= 0 && season != selectedSeason) return false;
+    }
+    return true;
+  }
 
   /// 源集号优先；只有解析不出集号时才用**线路位置**推断（上游
   /// `EpisodeSeasonPolicy.linearEpisodeNumber` 的同一语义）。

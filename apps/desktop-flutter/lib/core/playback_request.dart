@@ -38,6 +38,7 @@ class PlaybackRequest {
     this.episodesReversed = false,
     this.episodeIndex = 0,
     this.vodPic,
+    this.posterUrl,
     this.vodYear,
     this.directUrl = false,
     this.subtitles = const [],
@@ -185,6 +186,18 @@ class PlaybackRequest {
   final int episodeIndex;
   final String? vodPic;
 
+  /// 本剧海报（选集卡片剧照缺失/失败时的回退图）。
+  ///
+  /// 与详情页卡片同一个取值口径：**TMDB 海报优先、站源封面兜底**
+  /// （`browse_pages.dart` 的 `_ownedTmdb?.detailData?.posterUrl ?? vod.vodPic`）。
+  /// 为什么不能只让播放器读 [vodPic]：站源封面常是低清竖图，而详情页卡片
+  /// （以及播放器里要模仿的那一屏）用的是 TMDB 海报——少带一个字段，同一部剧
+  /// 在两个页面就会有两张不同的回退图。
+  ///
+  /// 空/缺省 = 这次播放没有可回退的海报（历史续播、直播、命令行、本地文件），
+  /// 不是「暂时还没传」：消费方不得据此编造图片。
+  final String? posterUrl;
+
   /// 作品年份（`Vod.vodYear` 原样带下来，可能为空或非四位数字）。
   ///
   /// 为什么播放器需要它：弹幕库搜索是按片名问中转的，中转会同时返回同名不同年
@@ -307,6 +320,9 @@ class PlaybackRequest {
       episodesReversed: episodesReversed,
       episodeIndex: episodeIndex ?? this.episodeIndex,
       vodPic: vodPic,
+      // 海报同属「详情页带下来的上下文」：换集不能让选集卡片的回退图变成灰块，
+      // 所以这里没有形参、原样带过。
+      posterUrl: posterUrl,
       vodYear: vodYear ?? this.vodYear,
       directUrl: directUrl,
       subtitles: subtitles ?? this.subtitles,
