@@ -292,4 +292,134 @@ void main() {
     await tester.pumpAndSettle();
     expect(seen.last, 0, reason: '3 张里停在第 3 张，一个间隔后回到第 1 张');
   });
+
+  testWidgets('左右箭头切张，两端回卷', (tester) async {
+    final seen = <int>[];
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A'),
+      heroItem(HomeItemKind.resume, 'B'),
+      heroItem(HomeItemKind.resume, 'C'),
+    ], onIndexChanged: seen.add);
+    await tester.tap(find.byKey(const ValueKey('home-hero-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('B'), findsOneWidget);
+    // 箭头必须走 `_setIndex`：页面的固定背景靠这个回调跟着换，绕过去就会
+    // 出现「文案换了、背景还停在上一部」。
+    expect(seen.last, 1);
+
+    await tester.tap(find.byKey(const ValueKey('home-hero-prev')));
+    await tester.pumpAndSettle();
+    expect(find.text('A'), findsOneWidget);
+
+    // 第 1 张再往前 = 回卷到第 3 张，不是卡在原地。
+    await tester.tap(find.byKey(const ValueKey('home-hero-prev')));
+    await tester.pumpAndSettle();
+    expect(find.text('C'), findsOneWidget);
+  });
+
+  testWidgets('单张不画箭头（没有可切的内容，箭头只会是死按钮）', (tester) async {
+    await pumpHero(tester, [heroItem(HomeItemKind.resume, 'A')]);
+    expect(find.byKey(const ValueKey('home-hero-prev')), findsNothing);
+    expect(find.byKey(const ValueKey('home-hero-next')), findsNothing);
+  });
+
+  testWidgets('箭头命中区不小于 44×44，不是贴在边上的小图标', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A'),
+      heroItem(HomeItemKind.resume, 'B'),
+    ]);
+    for (final key in ['home-hero-prev', 'home-hero-next']) {
+      // 视觉圆底 44（fixedSize），Material 的 tapTargetSize 把它撑到 48 的
+      // 命中框，所以这里卡「不小于 44」而不是钉死一个数。
+      final size = tester.getSize(find.byKey(ValueKey(key)));
+      expect(size.width, greaterThanOrEqualTo(44), reason: '$key 要能不瞄准就点到');
+      expect(size.height, greaterThanOrEqualTo(44), reason: '$key 要能不瞄准就点到');
+    }
+  });
+
+  testWidgets('12 张时指示点命中区仍是 24×24', (tester) async {
+    await pumpHero(tester, [
+      for (var i = 0; i < 12; i++) heroItem(HomeItemKind.resume, '片$i'),
+    ]);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('home-hero-dot-3'))),
+      const Size(24, 24),
+      reason: '原来的 6×6 命中区连 WCAG 2.2 2.5.8 的 24×24 下限都不到',
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('home-hero-dots'))).width,
+      12 * 24,
+      reason: '12 颗点仍在右下角一整排，不换行',
+    );
+  });
+
+  testWidgets('指示点悬停给出片名（12 张时不用盲点）', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, '漫长的季节'),
+      heroItem(HomeItemKind.resume, '繁花'),
+    ]);
+    final tip = tester.widget<Tooltip>(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-hero-dot-1')),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(tip.message, '繁花');
+    expect(tip.waitDuration, const Duration(milliseconds: 350));
+  });
+
+  testWidgets('横向拖拽切张：向左下一张、向右上一张、阈值以下不动', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A'),
+      heroItem(HomeItemKind.resume, 'B'),
+      heroItem(HomeItemKind.resume, 'C'),
+    ]);
+    final hero = find.byKey(const ValueKey('home-hero'));
+    await tester.drag(hero, const Offset(-140, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('B'), findsOneWidget);
+
+    await tester.drag(hero, const Offset(140, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('A'), findsOneWidget);
+
+    // 手抖级别的位移不该切张。
+    await tester.drag(hero, const Offset(-20, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('A'), findsOneWidget);
+  });
+
+  testWidgets('指针压在箭头上也停表', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A'),
+      heroItem(HomeItemKind.resume, 'B'),
+    ]);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('home-hero-next'))),
+    );
+    await tester.pump();
+    await tester.pump(homeHeroInterval * 2);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('home-hero-backdrop-0')), findsOneWidget);
+  });
+
+  testWidgets('指针压在指示点上也不换图（正瞄的那一下不该被抽走）', (tester) async {
+    await pumpHero(tester, [
+      heroItem(HomeItemKind.resume, 'A'),
+      heroItem(HomeItemKind.resume, 'B'),
+    ]);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('home-hero-dot-0'))),
+    );
+    await tester.pump();
+    await tester.pump(homeHeroInterval * 2);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('home-hero-backdrop-0')), findsOneWidget);
+  });
 }
