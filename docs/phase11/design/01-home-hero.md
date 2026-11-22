@@ -113,8 +113,9 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 **素材来源与降级**（这是本页唯一新增的一条素材规则）：续播/追剧条目的 `vodPic` 是站点给的海报（2:3），拿它当 16:9 背景会把它拉成糊的宽幅。因此：
 
 1. 有 TMDB 身份（`PlaybackHistory.hasTmdbIdentity`，`storage.dart:89`）→ 用 backdrop（`TmdbItem.backdropUrl`）；
-2. 没有 → 用海报 cover 兜底 + **强遮罩**（图片本身当作色块，文字主要靠在海报上压暗的一层）；
-3. 两者都取不到 → 页面底色（`surface`），不出现破图（`PosterImage` 已有失败兜底）。
+2. **播放时没带上身份**（`tmdb_id=0`，见 `2026-11-22` 修复）→ 首页对 hero 里的续播条目补一次身份匹配（`historyTmdbItem`，结论由 `TmdbIdentityService` 落盘、下次启动零请求），命中后与第 1 条共用同一次 `detail()`，于是背景与简介一起回来；
+3. 仍然匹配不到 → 简介退回站源 `vod_content`（`historyVod`；只在用户把「爬虫源」留在简介来源里时才读，同一条逐字段规则）；
+4. 背景始终没有 16:9 图 → hero 只画夜空底 + 左侧一张**大而锐利**的竖版海报（`home_hero.dart`，2026-11-19 用户反馈「模糊底基本看不清」后定的口径），不把 2:3 拉成宽幅；简介取不到时整行不画、不占位。
 
 ### 3.3 内容（贴底）
 

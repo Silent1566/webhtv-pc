@@ -4101,6 +4101,35 @@ AiContentCompletion? aiContentCompletion,
     );
   }
 
+  /// 仅解析一条历史行的 TMDB 身份，不切换站点或当前详情的 TMDB 状态。
+  ///
+  /// 首页 hero 用它给「播放时没带上身份」的续播条目补 16:9 背景与简介
+  /// （`ui/home_page.dart`）。匹配结论由 [TmdbIdentityService] 按
+  /// `(siteKey, vodId, sourceTitle)` 落盘，下次启动零请求；匹配不到返回
+  /// `null`，调用方保留站点海报，不编造元数据。
+  Future<TmdbItem?> historyTmdbItem(PlaybackHistory row) async {
+    if (_database == null || row.vodId.trim().isEmpty) return null;
+    try {
+      final outcome = await _ensureTmdbIdentityService().match(
+        TmdbMatchRequest(
+          siteKey: row.siteKey,
+          vodId: row.vodId,
+          sourceTitle: row.vodName,
+          // 站点显示名参与「按来源停用 TMDB」的判定，与追剧同一条闸门。
+          siteName: siteInActiveSource(row.siteKey)?.name ?? '',
+          vodName: row.vodName,
+          vodYear: row.vodYear,
+          // 行里已经写明 movie / tv 时按它匹配；空串交给匹配器自己判。
+          expectedMediaType: TmdbMediaType.parse(row.mediaType),
+        ),
+      );
+      return outcome.item;
+    } catch (_) {
+      // 网络或鉴权失败只让这一条没有背景与简介，首页其余内容照常。
+      return null;
+    }
+  }
+
   /// 追番 → TMDB 剧集 id：优先用已落盘的匹配结论（同步、零请求），
   /// 没命中再走身份服务的自动匹配；都失败返回 `null`。
   Future<int?> _resolveFollowingTmdbId(Following item) async {
@@ -9068,20 +9097,43 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只读取追剧的原始站源详情，不切换当前站点或详情页状态。
-  Future<Vod?> followingVod(Following item) async {
-    final config = effectiveConfig;
+  Future<Vod?> followingVod(Following item) => _readSiteVod(
+    config: effectiveConfig,
+    siteKey: item.siteKey,
+    vodId: item.vodId,
+    vodName: item.vodName,
+  );
+
+  /// 只读取一条历史行归属站点的详情，不切换当前站点或详情页状态。
+  ///
+  /// 首页读的是**全源**历史：跨源记录要按行自己的源找配置，用生效配置会找不到
+  /// 那条记录所属的站点（历史补图踩过同一个坑，见 `HistoryPosterRepair`）。
+  Future<Vod?> historyVod(PlaybackHistory row) => _readSiteVod(
+    config: configForSourceKey(row.sourceKey) ?? effectiveConfig,
+    siteKey: row.siteKey,
+    vodId: row.vodId,
+    vodName: row.vodName,
+  );
+
+  /// 按站点读一次详情（只读，不切站点）：续播与追剧共用的取数口。
+  Future<Vod?> _readSiteVod({
+    required AppConfig? config,
+    required String siteKey,
+    required String vodId,
+    required String vodName,
+  }) async {
     final service = _siteService;
     if (config == null || service == null) return null;
     final site = config.sites
-        .where((candidate) => candidate.key == item.siteKey)
+        .where((candidate) => candidate.key == siteKey)
         .firstOrNull;
     if (site == null) return null;
     await _waitForPythonSite(site);
     if (_disposed) return null;
     final result = await service.detail(
       site,
-      item.vodId,
-      identity: VodIdentityHint(vodId: item.vodId, vodName: item.vodName),
+      vodId,
+      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
     );
     return result.value.list.firstOrNull;
   }

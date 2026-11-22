@@ -24,10 +24,12 @@ import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
 import '../core/home_hot.dart';
 import '../core/meta_pipeline.dart';
+import '../core/meta_source.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_title.dart';
 import '../services/home_art_service.dart';
 import '../services/search_suggest_service.dart';
+import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/detail_recommendation_state.dart';
 import 'async_action_feedback.dart';
@@ -106,6 +108,13 @@ class _HomePageState extends State<HomePage> {
   final Map<String, HomeMeta> _followingMeta = {};
   String _followingMetaKey = '';
   int _followingMetaGeneration = 0;
+
+  /// 没有 TMDB 身份时的站源简介：HomeItem.key → `vod_content`。
+  final Map<String, String> _sourceOverview = {};
+
+  /// 已经问过身份的历史行。hero 每次重建都会走一遍 [_ensureResumeMeta]，
+  /// 不记下来就会对同一行反复匹配。
+  final Set<String> _resumeMetaAsked = {};
 
   /// 热门榜单：类目 → 条目（360kan，搜索页同一份数据）。
   final Map<HotRankCategory, List<SearchSuggestItem>> _hot = {};
@@ -297,6 +306,76 @@ class _HomePageState extends State<HomePage> {
     setState(() => _art.addAll(resolved));
   }
 
+  /// 续播条目补「大海报 + 简介」的第二档。`_loadArt` 只覆盖历史里**存了**
+  /// TMDB 身份的行；播放时详情页还没匹配上 TMDB 的记录（`tmdb_id=0`）在首页
+  /// 只剩一张站点竖版海报：hero 既没有 16:9 背景，也没有一行简介。
+  ///
+  /// 这里对 hero 里的续播条目补一次身份匹配（结论由 `TmdbIdentityService`
+  /// 落盘，下次启动零请求），命中就沿用 `_art` 那条 `detail()`；仍然匹配不到
+  /// 才退回站源 `vod_content`——至少让 hero 说得出这是部什么剧。
+  ///
+  /// 只处理 hero（续播预算 6 条）而不是整份历史：按标题匹配每条最多 3 次搜索，
+  /// 首页首屏付不起「整份历史搜一遍」的代价（`_loadArt` 的同一条理由）。
+  /// 推送行不在这里处理：它们走 `pushMatchedItem` 的落盘结论。
+  void _ensureResumeMeta(List<HomeItem> items) {
+    final rows = <String, PlaybackHistory>{};
+    for (final item in items) {
+      final row = item.history;
+      if (row == null || row.siteKey == pushSiteKey) continue;
+      // 有身份的行由 `_loadArt` 负责，这里只补「播放时没带上身份」的行。
+      final identity = TmdbIdentity.of(
+        TmdbMediaType.parse(row.mediaType),
+        row.tmdbId,
+      );
+      if (identity != null) continue;
+      if (_resumeMetaAsked.contains(item.key)) continue;
+      rows[item.key] = row;
+    }
+    if (rows.isEmpty) return;
+    _resumeMetaAsked.addAll(rows.keys);
+    // 放到首帧之后：第一帧必须是本地内容，不能被网络挡住（§5「不显示骨架」）。
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final byKey = <String, TmdbIdentity>{};
+      final overviews = <String, String>{};
+      final sourceOverviewEnabled = _state.metaPipeline
+          .orderOf(MetaField.overview)
+          .contains(MetaSourceKind.source);
+      for (final entry in rows.entries) {
+        if (!mounted) return;
+        TmdbIdentity? identity;
+        try {
+          final matched = await _state.historyTmdbItem(entry.value);
+          identity = matched == null
+              ? null
+              : TmdbIdentity.of(matched.mediaType, matched.tmdbId);
+        } catch (_) {
+          // 单条匹配失败只丢这一条：其余条目照常补图。
+        }
+        if (!mounted) return;
+        if (identity != null) {
+          byKey[entry.key] = identity;
+          continue;
+        }
+        // 站源简介只在用户把「爬虫源」留在简介来源里时才读：同一条逐字段规则
+        // （`MetaPipeline`），关掉它的用户不该因为首页多出一串站点请求。
+        if (!sourceOverviewEnabled) continue;
+        try {
+          final vod = await _state.historyVod(entry.value);
+          final overview = (vod?.vodContent ?? '').trim();
+          if (overview.isNotEmpty) overviews[entry.key] = overview;
+        } catch (_) {
+          // 站点离线或已删除时连简介都没有：hero 保持「海报 + 标题」。
+        }
+      }
+      if (!mounted) return;
+      if (overviews.isNotEmpty) {
+        setState(() => _sourceOverview.addAll(overviews));
+      }
+      await _resolveMeta(byKey);
+    });
+  }
+
   /// 推荐条目也走同一套元数据：它们本来就有 TMDB 身份，`detail` 命中缓存时
   /// 零请求，于是推荐幻灯片同样有类型标签、简介与 16:9 背景（首屏因此能进
   /// 「占满一屏」那档）。只取两条推荐行各自的**前三张**——那是 hero 的预算，
@@ -419,15 +498,21 @@ class _HomePageState extends State<HomePage> {
     final hideBackdrop =
         item.following != null && pipeline.orderOf(MetaField.backdrop).isEmpty;
     final art = _followingMeta[item.key] ?? _art[item.key];
+    // 简介来源顺序：元数据 → 站源 `vod_content`（没有身份时的兜底）。
+    final overview = _firstNonEmpty([art?.overview, _sourceOverview[item.key]]);
     if (art == null) {
-      return item.copyWith(hidePoster: hidePoster, hideBackdrop: hideBackdrop);
+      return item.copyWith(
+        hidePoster: hidePoster,
+        hideBackdrop: hideBackdrop,
+        overview: overview,
+      );
     }
     return item.copyWith(
       poster: art.poster,
       backdrop: art.backdrop,
       hidePoster: hidePoster,
       hideBackdrop: hideBackdrop,
-      overview: art.overview,
+      overview: overview,
       tags: art.genres,
       // 副信息只在站点没给的时候补：站源写的「2024 · 8.1」是它自己的口径，
       // 两边混着用会出现「2024 · 8.1」和「2024 · 8.6」两种评分来源。
@@ -442,6 +527,15 @@ class _HomePageState extends State<HomePage> {
     if (meta.year.isNotEmpty) meta.year,
     if (meta.rating > 0) meta.rating.toStringAsFixed(1),
   ].join(' · ');
+
+  /// 取第一个非空串；都为空时返回 null（`HomeItem.copyWith` 据此保留原值）。
+  String? _firstNonEmpty(List<String?> values) {
+    for (final value in values) {
+      final trimmed = (value ?? '').trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return null;
+  }
 
   /// 热门轨道，去掉与本机条目重名的（「战狼2」既是续播又是热门时只留续播那条）。
   List<HomeRail> _hotRails({
@@ -495,6 +589,8 @@ class _HomePageState extends State<HomePage> {
             ),
           );
     _ensureFollowingMeta(feed);
+    // 续播条目没存 TMDB 身份时补一次匹配：否则 hero 只有竖版海报、没有简介。
+    _ensureResumeMeta(feed.hero);
     // 元数据优先级的图覆盖站点图（取不到的条目原样保留站点海报）。
     final hero = [for (final item in feed.hero) _withArt(item)];
     final rails = [
