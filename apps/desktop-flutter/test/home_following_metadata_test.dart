@@ -206,6 +206,7 @@ void main() {
     expect(item.backdrop, endsWith('/metadata-backdrop.jpg'));
     expect(item.overview, '元数据提供的剧情简介');
     expect(item.tags, ['剧情']);
+    expect(item.title, '今天是太阳雨', reason: '标题同样用刮削名（管线解析结果）');
     expect(find.text('元数据提供的剧情简介'), findsOneWidget);
     expect(item.reason, '更新至 番外第4期');
     expect(tester.takeException(), isNull);

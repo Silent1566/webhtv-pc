@@ -99,10 +99,11 @@ class HomeItem {
   /// 推荐类条目的原始推荐结果。
   final RecommendationEntry? entry;
 
-  /// 换掉图片地址（元数据优先级解析出来的图覆盖站点图，见
-  /// `services/home_art_service.dart`）。只允许改这两项：其余字段是身份与文案，
-  /// 换图不该顺手改掉它们。
+  /// 换掉图片地址与**刮削名**（元数据优先级解析出来的结果覆盖站点字段，见
+  /// `services/home_art_service.dart`）。标题也允许换：详情页头部显示的就是刮削名，
+  /// 首页不换会变成「同一部剧两个名字」。其余字段是身份与文案，换图不该顺手改掉它们。
   HomeItem copyWith({
+    String? title,
     String? poster,
     String? backdrop,
     String? overview,
@@ -113,7 +114,7 @@ class HomeItem {
   }) => HomeItem(
     kind: kind,
     key: key,
-    title: title,
+    title: title ?? this.title,
     poster: hidePoster ? null : poster ?? this.poster,
     backdrop: hideBackdrop ? null : backdrop ?? this.backdrop,
     subtitle: subtitle ?? this.subtitle,

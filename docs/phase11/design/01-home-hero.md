@@ -124,7 +124,7 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 | 元素 | 样式 | 内容 |
 |---|---|---|
 | 海报 | 2:3，宽约 168，`AppRadius.sm`，发丝边 | 与背景同一部作品的竖版海报；背景是海报兜底时可省略 |
-| 标题 | `displaySmall`（不缩放，Metric-Neutral） | 片名 |
+| 标题 | `displaySmall`（不缩放，Metric-Neutral） | 刮削名：`MetaPipeline` 的「标题」来源（TMDB 在前）取到就用它，取不到退回站点原名。与详情页头部（`SourceMetaResolver.resolve(...).title`）同一条规则——用户 2026-11-22 反馈「首页叫『罪蓝之路 4K内嵌中字』、详情页叫『罪蓝之路』」 |
 | 副信息 | `bodyMedium` / `onSurfaceVariant` | `年份 · 评分 · 类型`（口径复用 `recommendation_meta.dart` 的「年份 · 评分」） |
 | 理由行 | `bodySmall`，前面一个 14px 图标 | 三类各一句，见 §7 |
 | 主按钮 | `FilledButton`（琥珀） | 续播：「继续播放」；追剧：「从最新一集开始」；推荐：「查看详情」 |

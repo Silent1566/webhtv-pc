@@ -507,7 +507,14 @@ class _HomePageState extends State<HomePage> {
         overview: overview,
       );
     }
+    // 刮削名：与详情页头部同一条规则——「标题」来源里还留着 TMDB 才用它的名字，
+    // 用户把它移掉时首页保留站点原名（否则会出现同一部剧两个名字）。
+    final metaTitle =
+        pipeline.orderOf(MetaField.title).contains(MetaSourceKind.tmdb)
+        ? _firstNonEmpty([art.title])
+        : null;
     return item.copyWith(
+      title: metaTitle,
       poster: art.poster,
       backdrop: art.backdrop,
       hidePoster: hidePoster,

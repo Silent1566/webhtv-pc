@@ -208,6 +208,9 @@ void main() {
     expect(item.backdrop, '$backdropBase/metadata-backdrop.jpg');
     expect(item.overview, '元数据提供的剧情简介');
     expect(find.text('元数据提供的剧情简介'), findsOneWidget);
+    expect(item.title, '一马当先', reason: '标题用刮削名，与详情页头部一致');
+    expect(find.text('一马当先'), findsOneWidget);
+    expect(find.text('一马当先0'), findsNothing, reason: '站点原名（带后缀）不该再出现在 hero');
     expect(state.sourceCalls, 0, reason: '匹配到身份就不必再读站点');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -253,6 +256,29 @@ void main() {
     expect(state.matchCalls, 1);
     expect(state.sourceCalls, 0, reason: '用户已经关掉了站源简介');
     expect(hero(tester).overview, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('用户把 TMDB 移出「标题」来源时保留站点原名', (tester) async {
+    state.matched = const TmdbItem(
+      tmdbId: 42,
+      mediaType: TmdbMediaType.tv,
+      title: '一马当先',
+    );
+    var pipeline = MetaPipeline.defaults;
+    final rule = pipeline.ruleOf(MetaField.title);
+    pipeline = pipeline.withRule(
+      rule.copyWith(
+        order: rule.order.where((kind) => kind != MetaSourceKind.tmdb).toList(),
+      ),
+    );
+    state.setPipeline(pipeline);
+    await pumpHome(tester);
+
+    final item = hero(tester);
+    expect(item.title, '一马当先0', reason: '标题来源里没有 TMDB 就不能换成刮削名');
+    expect(item.overview, '元数据提供的剧情简介', reason: '简介规则没动，仍可用 TMDB');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
