@@ -5584,7 +5584,11 @@ class _DetailPageState extends State<DetailPage> {
     // 一条直接用它起播，两条以上先让用户选（用户 2026-11-29 选型）。
     // 本站记录不参与这里——[_play] 内既有的精确查询已经能命中它。
     var seed = resumeSeedOverride;
-    final options = _progressOptionsForEpisode(currentVod, currentLine, rawIndex);
+    // 调用方已经替用户选过一条记录时（首屏选择框 / 历史页跨源）不再问第二次：
+    // 同一集可能在两个源上都有进度，第二次弹框会让用户重复做同一个决定。
+    final options = seed != null
+        ? const <HistoryProgressChoice>[]
+        : _progressOptionsForEpisode(currentVod, currentLine, rawIndex);
     if (options.length == 1) {
       seed = options.single.seed;
     } else if (options.length >= 2) {
