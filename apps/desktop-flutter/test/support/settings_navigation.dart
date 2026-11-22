@@ -22,15 +22,23 @@ Future<void> openAboutDataSettings(WidgetTester tester) async {
 
 /// 设置页的分类开关（宽窗左栏与窄窗顶部分类条共用同一组 key）。
 ///
-/// 五个分类是**公开契约**（`diagnostics_pages.dart` 的 `kSettingsCategories`）：
-/// preferences / playback / sites / connections / maintenance。这里再列一次是为了
-/// 让拼错类别名的用例在**选择之前**就红，而不是在后面一条无关的 findsNothing 上红。
+/// 六个分类是**公开契约**（`diagnostics_pages.dart` 的 `kSettingsCategories`）：
+/// preferences / playback / danmaku / sites / connections / maintenance。这里再列一次
+/// 是为了让拼错类别名的用例在**选择之前**就红，而不是在后面一条无关的
+/// findsNothing 上红。
 Future<void> selectSettingsCategory(
   WidgetTester tester,
   String category,
 ) async {
   expect(
-    const ['preferences', 'playback', 'sites', 'connections', 'maintenance'],
+    const [
+      'preferences',
+      'playback',
+      'danmaku',
+      'sites',
+      'connections',
+      'maintenance',
+    ],
     contains(category),
     reason: '未知设置类别：$category',
   );

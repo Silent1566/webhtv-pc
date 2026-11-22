@@ -10,7 +10,7 @@ part of 'player_page.dart';
 extension _PlayerPageMenuSections on _PlayerPageState {
   /// 右键菜单的分组内容（`design/04` §4.1）。
   ///
-  /// ## 为什么是 10 组、且每组都能往下钻
+  /// ## 为什么是 11 组、且大多数组能往下钻
   ///
   /// 上一版是 7 个**扁平**组、约 40 项：子菜单基本为空，本该分层的选项
   /// （字幕字号/描边/位置/底色、各画面比例、7 个屏显开关、定时关闭）全被摊在
@@ -49,9 +49,8 @@ extension _PlayerPageMenuSections on _PlayerPageState {
     final subtitle = _controller.selectedSubtitle;
     final audioTracks = _controller.audioTrackOptions;
     // 设置组下钻树的数据源：每次建菜单都重读，菜单里显示的就是**真实值**，
-    // 不走本地缓存（`_options` 只是播放参数的会话副本，字幕/弹幕设置没有副本）。
+    // 不走本地缓存（`_options` 只是播放参数的会话副本，字幕设置没有副本）。
     final subtitleSettings = widget.state.subtitleSettings;
-    final danmakuSettings = widget.state.danmakuSettings;
 
     /// 叶子项的统一收尾：**先关菜单再执行**。
     ///
@@ -307,7 +306,45 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 4. 画面
+      // ------------------------------------------------------ 4. 弹幕
+      //
+      // 这三项原本寄生在「轨道」组里，但弹幕与轨道没有关系：轨道是**容器**，
+      // 弹幕是**内容**——用户找「弹幕」时不会先想到「轨道」，而「轨道」组也
+      // 因为混进 3 个非轨道项，从「切轨」变成了半张弹幕菜单。
+      //
+      // 三项都是**叶子**（与「设置」组的子树不同）：开关就地生效、不关菜单，
+      // 搜索是一次弹层，设置是整页跳转，没有一个需要再飞出一列。
+      PlayerMenuSection(
+        title: '弹幕',
+        items: [
+          PlayerMenuItem(
+            id: 'danmaku_toggle',
+            label: _danmakuStyle.enabled ? '关闭弹幕' : '开启弹幕',
+            icon: _danmakuStyle.enabled
+                ? Icons.comment
+                : Icons.comment_bank_outlined,
+            selected: _danmakuStyle.enabled,
+            // 就地生效、**不关菜单**：连续调整时会反复按。
+            onSelect: _toggleDanmaku,
+          ),
+          PlayerMenuItem(
+            id: 'danmaku_search',
+            label: '搜索弹幕…',
+            icon: Icons.travel_explore,
+            onSelect: act(_showDanmakuSearch),
+          ),
+          PlayerMenuItem(
+            id: 'danmaku_settings',
+            label: '弹幕设置…',
+            icon: Icons.comment_outlined,
+            // 整页而不是底部弹层：显示参数 + 弹幕库合并后一屏装不下，
+            // 弹层里再套一段可滚动列表比整页更难用（P1 已把 UI 搬进独立页）。
+            onSelect: act(() => unawaited(_openDanmakuSettingsPage())),
+          ),
+        ],
+      ),
+
+      // ------------------------------------------------------ 5. 画面
       PlayerMenuSection(
         title: '画面',
         items: [
@@ -382,7 +419,7 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 5. 声音
+      // ------------------------------------------------------ 6. 声音
       PlayerMenuSection(
         title: '声音',
         items: [
@@ -425,7 +462,7 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 6. 轨道
+      // ------------------------------------------------------ 7. 轨道
       PlayerMenuSection(
         title: '轨道',
         items: [
@@ -442,32 +479,10 @@ extension _PlayerPageMenuSections on _PlayerPageState {
             selected: subtitle != null && subtitle.id != SubtitleOption.offId,
             onSelect: act(_showSubtitleMenu),
           ),
-          PlayerMenuItem(
-            id: 'track_danmaku',
-            label: _danmakuStyle.enabled ? '关闭弹幕' : '开启弹幕',
-            icon: _danmakuStyle.enabled
-                ? Icons.comment
-                : Icons.comment_bank_outlined,
-            selected: _danmakuStyle.enabled,
-            // 就地生效、**不关菜单**：连续调整时会反复按。
-            onSelect: _toggleDanmaku,
-          ),
-          PlayerMenuItem(
-            id: 'track_danmaku_settings',
-            label: '弹幕设置…',
-            icon: Icons.comment_outlined,
-            onSelect: act(_showDanmakuSettings),
-          ),
-          PlayerMenuItem(
-            id: 'track_danmaku_search',
-            label: '搜索弹幕…',
-            icon: Icons.travel_explore,
-            onSelect: act(_showDanmakuSearch),
-          ),
         ],
       ),
 
-      // ------------------------------------------------------ 7. 显示
+      // ------------------------------------------------------ 8. 显示
       PlayerMenuSection(
         title: '显示',
         items: [
@@ -542,7 +557,7 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 8. 片头片尾
+      // ------------------------------------------------------ 9. 片头片尾
       PlayerMenuSection(
         title: '片头片尾',
         items: [
@@ -602,7 +617,7 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 9. 信息
+      // ------------------------------------------------------ 10. 信息
       PlayerMenuSection(
         title: '信息',
         items: [
@@ -628,20 +643,23 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 10. 设置
+      // ------------------------------------------------------ 11. 设置
       //
       // 这一组是**下钻设置树**，不再只是三个跳转入口：硬解 / 缓存 / 自动连播
       // 这类开关本身就在这里改，用户不必离开画面（上一版三项全是
       // `Navigator.push`，点一下播放器就没了——用户反馈「还有些没有聚合」
       // 指的正是这件事）。
       //
-      // 为什么仍保留跳转项（`完整设置页…` / `打开完整字幕源设置…` /
-      // `打开弹幕库设置…`）：那几个页面里是**文本表单**——字幕源 URL、token
-      // （**不得进日志**）、多个本地目录、弹幕库地址。菜单列宽固定 240
+      // 为什么仍保留跳转项（`完整设置页…` / `打开完整字幕源设置…`）：
+      // 那几个页面里是**文本表单**——字幕源 URL、token
+      // （**不得进日志**）、多个本地目录。菜单列宽固定 240
       // （`design/04` §5.2），放不下一个可读的输入框；硬塞进去也只会被
       // `maxLines: 1` 的省略号截断，用户看不到自己在改什么，比跳页更难用。
       // 所以切分标准是**「一步操作 vs 长文本录入」**，不是「开关 vs 页面」：
       // 开关就地改，表单仍交给专门页面，两边不重复实现同一份偏好。
+      //
+      // 弹幕库（自动搜索 / 打开弹幕库设置…）已从这里**删掉**：那两项的内容
+      // 被「弹幕 → 弹幕设置…」整页吸收，留着就是同一份偏好的第二个入口。
       PlayerMenuSection(
         title: '设置',
         items: [
@@ -683,37 +701,6 @@ extension _PlayerPageMenuSections on _PlayerPageState {
                   () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) => SubtitleSettingsPage(state: widget.state),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          PlayerMenuItem(
-            id: 'settings_danmaku_library',
-            label: '弹幕库',
-            icon: Icons.forum_outlined,
-            children: [
-              _settingsToggle(
-                id: 'settings_danmaku_auto_search',
-                label: '自动搜索弹幕',
-                value: danmakuSettings.autoSearch,
-                // 未配置库地址时搜不到任何东西：灰掉但保留 selected。
-                enabled: danmakuSettings.hasLibrary,
-                onChanged: _toggleDanmakuAutoSearch,
-              ),
-              PlayerMenuItem(
-                id: 'settings_danmaku_library_form',
-                label: '打开弹幕库设置…',
-                icon: Icons.link,
-                // 为什么仍是跳转：弹幕库地址是一个 URL，改完还要重新探测库
-                // 是否可用——那是表单页的职责，不是一次点击能表达的。
-                // 落点是**弹幕源页本身**：此前它跳到「高级设置」中枢，用户点
-                // 「打开弹幕库设置」却落在一张与被点项无关的总入口上。
-                onSelect: act(
-                  () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => DanmakuSourcePage(state: widget.state),
                     ),
                   ),
                 ),

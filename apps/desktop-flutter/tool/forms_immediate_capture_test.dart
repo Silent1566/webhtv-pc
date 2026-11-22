@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/danmaku_settings_page.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/following_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -56,7 +57,7 @@ void main() {
       final theme = buildAppTheme(brightness);
       final page = switch (scene.split('-').first) {
         'tmdb' => TmdbSettingsPage(state: state),
-        'danmaku' => DanmakuSourcePage(state: state),
+        'danmaku' => DanmakuSettingsPage(state: state),
         'proxy' => OutboundProxyPage(state: state),
         'doh' => DohSettingsPage(state: state),
         _ => Scaffold(body: FollowingPage(state: state)),

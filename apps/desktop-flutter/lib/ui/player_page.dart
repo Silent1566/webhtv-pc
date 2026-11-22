@@ -17,6 +17,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/app_error.dart';
 import '../core/danmaku.dart';
 import '../core/danmaku_match.dart';
+import '../core/danmaku_settings.dart';
 import '../core/history_view.dart';
 import '../core/episode_aggregation.dart';
 import '../core/lut.dart';
@@ -46,6 +47,7 @@ import '../core/tmdb_playback.dart';
 import '../core/tmdb_season.dart';
 import '../services/intro_skip/provider.dart';
 import '../services/intro_skip/registry.dart';
+import '../services/danmaku_auto_pick.dart';
 import '../services/danmaku_library_service.dart';
 import '../services/danmaku_service.dart';
 import '../services/external_player.dart';
@@ -55,7 +57,7 @@ import '../services/subtitle_asset_store.dart';
 import '../services/subtitle_match_service.dart';
 import '../state/app_state.dart';
 import 'app.dart';
-import 'settings_detail_pages.dart';
+import 'danmaku_search_dialog.dart';
 import 'settings_overview_page.dart';
 import 'subtitle_search_dialog.dart';
 import 'subtitle_settings_page.dart';
@@ -68,6 +70,7 @@ import '../core/audio_ai/audio_ai.dart';
 import '../services/subtitle_service.dart';
 import '../core/ai_content/recommendation.dart';
 import 'danmaku_overlay.dart';
+import 'danmaku_settings_page.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
 import 'external_player_picker_dialog.dart';
@@ -535,6 +538,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 当前集已加载的弹幕（按时间排序）。
   List<DanmakuItem> _danmakuItems = const [];
 
+  /// 播放器**正在使用**的那条弹幕地址（对应 [_danmakuItems] 的来源）。
+  ///
+  /// 搜索对话框靠它标出「当前」：用户重开搜索时最想知道的是「我现在这条是从哪
+  /// 来的」，而不是在几十行里自己回忆。空 = 没有正在使用的弹幕（未加载/失败/
+  /// 已切集），此时 UI 不渲染任何标记。
+  String? _danmakuSourceUrl;
+
   /// 弹幕显示设置（开关/透明度/字号）。
   DanmakuStyle _danmakuStyle = const DanmakuStyle();
 
@@ -869,6 +879,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _request = session.request;
       _episodesCache = const [];
       _danmakuItems = const [];
+      _danmakuSourceUrl = null;
       _danmakuError = null;
       _loadError = null;
     });
@@ -2249,15 +2260,53 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   DanmakuQuery _danmakuQuery() => DanmakuQuery(
     title: _request.vodName.trim().isEmpty ? _request.title : _request.vodName,
     episode: _request.episodeName,
+    year: _danmakuQueryYear,
     siteKey: _request.siteKey,
     vodId: _request.vodId,
     episodeName: _request.episodeName,
   );
 
+  /// 查询年份：先信详情页的 `vod_year`（结构化字段，可能是 '2026'、
+  /// '2026-01-01'，也可能为空/自由文本），从中抠出第一个 4 位年份；
+  /// 取不到才回退到片名里的 `(2026)` 一类括注。
+  ///
+  /// 两者都没有就返回 null（打分按中性处理）：从别处猜一个年份会让「同名不同年」
+  /// 的另一部剧被硬判成不匹配，比不知道更糟。
+  int? get _danmakuQueryYear {
+    final raw = _request.vodYear?.trim() ?? '';
+    final match = RegExp(r'(?:19|20)\d{2}').firstMatch(raw);
+    if (match != null) return int.tryParse(match.group(0)!);
+    return parseDanmakuTitleInfo(_request.vodName).year;
+  }
+
+  /// 多源并行搜索本集弹幕；只回条目，逐源的失败记账留在
+  /// `DanmakuLibraryService.searchSources` 的结果里（自动搜索不需要展示它）。
+  ///
+  /// 每次新建服务并在结束时关闭：`DanmakuLibraryService` 的 http client 是
+  /// 按实例持有的，播放页常驻一个连接池没有收益（换集就换查询）。
+  Future<List<DanmakuLibraryEntry>> _searchDanmakuEntries(
+    List<DanmakuSourceConfig> sources,
+    DanmakuQuery query, {
+    String? title,
+  }) async {
+    final service = DanmakuLibraryService();
+    try {
+      final result = await service.searchSources(
+        sources: sources,
+        title: title ?? query.title,
+        episode: query.episode,
+      );
+      return result.entries;
+    } finally {
+      service.close();
+    }
+  }
+
   /// 播放结果没有弹幕时按设置搜索弹幕库（`design/02` §2.3）。
   Future<void> _autoSearchDanmaku() async {
-    final settings = widget.state.danmakuSettings;
-    if (!settings.isEnabled) return;
+    if (!widget.state.canAutoSearchDanmaku) return;
+    final sources = widget.state.resolvedDanmakuSources.sources;
+    if (sources.isEmpty) return;
     final query = _danmakuQuery();
     final memory = widget.state.danmakuMatchFor(
       siteKey: _request.siteKey,
@@ -2274,13 +2323,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       return;
     }
-    final service = DanmakuLibraryService();
     final generation = _mediaGeneration;
-    var entries = await service.search(
-      apiUrl: settings.apiUrl,
-      title: query.title,
-      episode: query.episode,
-    );
+    var entries = await _searchDanmakuEntries(sources, query);
     // 阈值必须比较**实际检索用的片名**：用 AI 改名重搜后仍拿旧名打分，
     // 真名与原名不相似时真实命中会被 0.6 阈值丢掉。
     var matchQuery = query;
@@ -2292,11 +2336,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       if (!mounted || generation != _mediaGeneration) return;
       if (title != null && title != query.title) {
-        entries = await service.search(
-          apiUrl: settings.apiUrl,
-          title: title,
-          episode: query.episode,
-        );
+        entries = await _searchDanmakuEntries(sources, query, title: title);
         if (entries.isNotEmpty) {
           matchQuery = DanmakuQuery(
             title: title,
@@ -2309,11 +2349,34 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
     }
     if (!mounted || generation != _mediaGeneration) return;
-    final best = pickDanmakuEntry(entries: entries, query: matchQuery);
-    if (best == null) return;
-    await _loadDanmakuSource(
-      DanmakuSource(url: best.url, name: best.title, source: best.providerId),
+    // 阈值仍然前置过滤：低于阈值只说明「标题不像」，不能因为"恰好载得动"
+    // 就把无关弹幕记成本集的匹配（记忆一旦写下会一直命中）。
+    final ranked = rankDanmakuEntries(entries: entries, query: matchQuery)
+        .where((entry) => entry.score >= kDanmakuAutoPickThreshold)
+        .toList();
+    if (ranked.isEmpty) return;
+    var attempted = 0;
+    // 多来源候选里可能有空源：依次试到第一条**真的载入到弹幕**的候选，
+    // 失败的那些不弹 toast，全部失败才提示一次。
+    final best = await autoLoadDanmakuCandidates(
+      ranked: ranked,
+      load: (entry) async {
+        attempted++;
+        return _loadDanmakuSource(
+          DanmakuSource(
+            url: entry.url,
+            name: entry.title,
+            source: entry.providerId,
+          ),
+          quiet: true,
+        );
+      },
     );
+    if (best == null) {
+      if (!mounted) return;
+      _showPlayerMessage('没有可用的弹幕来源（已尝试 $attempted 个）');
+      return;
+    }
     await widget.state.rememberDanmakuMatch(
       DanmakuMatchRecord.fromEntry(
         siteKey: _request.siteKey,
@@ -2329,104 +2392,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  /// 手动搜索弹幕：关键词 → 候选列表 → 加载并记忆。
+  /// 手动搜索弹幕：大对话框（关键词/来源/渠道/倒序/分组/仅本集）→ 加载并记忆。
+  ///
+  /// 筛选与分组都在对话框里（`danmaku_search_dialog.dart`）：播放页只负责
+  /// 「把当前在用的源和本集查询递进去」以及「选中之后的那条链」。
   Future<void> _showDanmakuSearch() async {
-    final settings = widget.state.danmakuSettings;
-    if (!settings.hasLibrary) {
-      _showPlayerMessage('未配置弹幕库地址：请先在设置页填写', kind: ToastKind.error);
-      return;
-    }
-    final query = _danmakuQuery();
-    final controller = TextEditingController(text: query.title);
-    final keyword = await showDialog<String>(
+    final selected = await showDanmakuSearchDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('搜索弹幕'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '剧名 / 关键词'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('搜索'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    final text = keyword?.trim() ?? '';
-    if (text.isEmpty || !mounted) return;
-
-    final service = DanmakuLibraryService();
-    final generation = _mediaGeneration;
-    var entries = await service.search(
-      apiUrl: settings.apiUrl,
-      title: text,
-      episode: query.episode,
-    );
-    if (!mounted) return;
-    var matchQuery = query;
-    if (entries.isEmpty) {
-      final title = await widget.state.resolveBusinessTitle(
-        text,
-        siteKey: query.siteKey,
-        vodId: query.vodId,
-      );
-      if (!mounted || generation != _mediaGeneration) return;
-      if (title != null && title != text) {
-        entries = await service.search(
-          apiUrl: settings.apiUrl,
-          title: title,
-          episode: query.episode,
-        );
-        if (entries.isNotEmpty) {
-          matchQuery = DanmakuQuery(
-            title: title,
-            episode: query.episode,
-            siteKey: query.siteKey,
-            vodId: query.vodId,
-            episodeName: query.episodeName,
-          );
-        }
-      }
-    }
-    if (!mounted || generation != _mediaGeneration) return;
-    if (entries.isEmpty) {
-      _showPlayerMessage('没有找到弹幕（可换关键词或检查弹幕库）');
-      return;
-    }
-    final ranked = rankDanmakuEntries(entries: entries, query: matchQuery);
-    final selected = await showModalBottomSheet<DanmakuLibraryEntry>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text('搜索结果'),
-              titleTextStyle: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            for (final entry in ranked)
-              ListTile(
-                title: Text(entry.title),
-                subtitle: Text(
-                  '${entry.providerId} · ${entry.episode.isEmpty ? "未标注集" : entry.episode} '
-                  '${entry.count > 0 ? "· ${entry.count} 条" : ""} '
-                  '· ${entry.score.toStringAsFixed(2)}',
-                ),
-                onTap: () => Navigator.of(context).pop(entry),
-              ),
-          ],
-        ),
-      ),
+      sources: widget.state.resolvedDanmakuSources.sources,
+      query: _danmakuQuery(),
+      initialKeyword: _request.vodName,
+      currentUrl: _danmakuSourceUrl,
     );
     if (selected == null || !mounted) return;
     await _loadDanmakuSource(
@@ -2449,6 +2425,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         episodeName: _request.episodeName,
         entry: selected,
       ),
+    );
+    widget.state.log.info(
+      '弹幕手动匹配 provider=${selected.providerId} '
+      'source=${selected.libraryName} channel=${selected.channel} '
+      'title=${selected.title} episode=${selected.episode} '
+      'score=${selected.score.toStringAsFixed(2)}',
+      scope: 'danmaku',
     );
   }
 
@@ -2574,7 +2557,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   /// 拉取并启用一个弹幕源；失败只提示，不影响播放。
-  Future<void> _loadDanmakuSource(DanmakuSource source) async {
+  ///
+  /// 返回值 = 「仍在这一代媒体」且**真的载入到非空弹幕**。自动搜索要靠它判断
+  /// 单条候选是否可用：中转对同一片名会返回多来源候选，其中可能有空源
+  /// （200 + 空 XML），撞上就必须换下一个而不是判定「没有弹幕」。
+  ///
+  /// [quiet] 为 true 时失败不弹 toast（自动换源的过程中连弹多次只会更吵），
+  /// 日志仍记 warning。live 源恒返回 false：自动搜索不处理直播弹幕。
+  Future<bool> _loadDanmakuSource(
+    DanmakuSource source, {
+    bool quiet = false,
+  }) async {
     final generation = _hasQueue ? _mediaGeneration : null;
     bool isCurrent() =>
         mounted && (generation == null || generation == _mediaGeneration);
@@ -2584,25 +2577,33 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         source,
         headers: _request.subtitleHeaders,
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       _danmakuItems = document.items;
+      // 只有真的载入到非空弹幕才算「当前在用」：空源等于没弹幕，标它只会误导。
+      // 直播弹幕走 [_connectLiveDanmaku]，不是这里加载的一条点播弹幕。
+      _danmakuSourceUrl = !source.isLive && document.items.isNotEmpty
+          ? source.url
+          : null;
       _danmakuError = null;
       widget.state.log.info(
         '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms',
         scope: 'danmaku',
       );
       if (mounted) setState(() {});
+      return !source.isLive && document.items.isNotEmpty;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       _danmakuItems = const [];
+      _danmakuSourceUrl = null;
       _danmakuError = describeDanmakuFailure(error);
       widget.state.log.warning(
         '弹幕加载失败 source=${source.displayName} $_danmakuError',
         scope: 'danmaku',
       );
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {});
-      _showDanmakuError(_danmakuError!);
+      if (!quiet) _showDanmakuError(_danmakuError!);
+      return false;
     }
   }
 
@@ -2625,201 +2626,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  /// 弹幕设置菜单（§17.5）：开关 / 透明度 / 字号 / 速度 / 行数 / 区域 /
-  /// 描边 / 时间偏移 / 类型显隐 / 库搜索。
-  Future<void> _showDanmakuSettings() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.text_fields),
-              title: const Text('弹幕设置'),
-              titleTextStyle: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            _settingTile(
-              '弹幕开关',
-              subtitle: _danmakuStyle.enabled ? '已开启' : '已关闭',
-              onTap: () async {
-                Navigator.of(context).pop('toggle');
-              },
-            ),
-            _settingTile(
-              '透明度 ${(_danmakuStyle.opacity * 100).round()}%',
-              onTap: () async {
-                Navigator.of(context).pop('opacity');
-              },
-            ),
-            _settingTile(
-              '字号 ${(_danmakuStyle.textScale * 100).round()}%',
-              onTap: () async {
-                Navigator.of(context).pop('scale');
-              },
-            ),
-            _settingTile(
-              '速度 ${(_danmakuStyle.scrollDurationMs / 1000).toStringAsFixed(0)}s',
-              subtitle: '滚动弹幕穿过画面的时长（越小越快）',
-              onTap: () async {
-                Navigator.of(context).pop('duration');
-              },
-            ),
-            _settingTile(
-              '行数 ${_danmakuStyle.maxTracks == 0 ? "不限" : _danmakuStyle.maxTracks}',
-              subtitle: '最多同时占用的弹幕轨道数',
-              onTap: () async {
-                Navigator.of(context).pop('tracks');
-              },
-            ),
-            _settingTile(
-              '区域 ${(_danmakuStyle.areaRatio * 100).round()}%',
-              subtitle: '滚动弹幕最多占用的画面高度',
-              onTap: () async {
-                Navigator.of(context).pop('area');
-              },
-            ),
-            _settingTile(
-              '描边 ${_strokeLabel(_danmakuStyle.strokeWidth)}',
-              onTap: () async {
-                Navigator.of(context).pop('stroke');
-              },
-            ),
-            _settingTile(
-              '时间偏移 ${_offsetLabel(_danmakuStyle.timeOffsetMs)}',
-              subtitle: '正数＝弹幕整体延后出现',
-              onTap: () async {
-                Navigator.of(context).pop('offset');
-              },
-            ),
-            _settingTile(
-              '滚动弹幕',
-              subtitle: _danmakuStyle.showScroll ? '显示' : '隐藏',
-              onTap: () async {
-                Navigator.of(context).pop('scroll');
-              },
-            ),
-            _settingTile(
-              '顶部弹幕',
-              subtitle: _danmakuStyle.showTop ? '显示' : '隐藏',
-              onTap: () async {
-                Navigator.of(context).pop('top');
-              },
-            ),
-            _settingTile(
-              '底部弹幕',
-              subtitle: _danmakuStyle.showBottom ? '显示' : '隐藏',
-              onTap: () async {
-                Navigator.of(context).pop('bottom');
-              },
-            ),
-            _settingTile(
-              '搜索弹幕…',
-              subtitle: widget.state.danmakuSettings.hasLibrary
-                  ? '按标题在弹幕库中搜索'
-                  : '未配置弹幕库地址',
-              onTap: () async {
-                Navigator.of(context).pop('search');
-              },
-            ),
-            _settingTile(
-              '重新加载弹幕',
-              onTap: () async {
-                Navigator.of(context).pop('reload');
-              },
-            ),
-            ListTile(
-              onTap: () => Navigator.of(context).pop('close'),
-              title: const Text('关闭'),
-            ),
-          ],
-        ),
+  /// 打开「弹幕设置」**整页**（显示参数 + 弹幕库，P1 的独立页）。
+  ///
+  /// 页里每一处修改都直接写 state.setDanmakuStyle，而播放器渲染读的是本页
+  /// 的 _danmakuStyle 副本：不重新同步的话，用户在页里把字号调到 150%、
+  /// 返回后画面一点没变，只有下次进播放器才生效——「改完立刻看得见」正是
+  /// 这次把弹层换成整页时要保住的性质。
+  Future<void> _openDanmakuSettingsPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DanmakuSettingsPage(state: widget.state),
       ),
     );
-    if (action == null) return;
-    switch (action) {
-      case 'search':
-        await _showDanmakuSearch();
-      case 'toggle':
-        _toggleDanmaku();
-      case 'opacity':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            opacity: _nextStep(_danmakuStyle.opacity, 0.1, 0.3, 1.0),
-          ),
-        );
-      case 'scale':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            textScale: _nextStep(_danmakuStyle.textScale, 0.25, 0.5, 2.0),
-          ),
-        );
-      case 'duration':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            scrollDurationMs: _nextOption(
-              _danmakuStyle.scrollDurationMs,
-              const [4000, 6000, 8000, 10000, 12000],
-            ),
-          ),
-        );
-      case 'tracks':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            maxTracks: _nextOption(_danmakuStyle.maxTracks, const [0, 3, 5, 8]),
-          ),
-        );
-      case 'area':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            areaRatio: _nextOption(_danmakuStyle.areaRatio, const [
-              0.3,
-              0.45,
-              0.6,
-              0.75,
-            ]),
-          ),
-        );
-      case 'stroke':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(
-            strokeWidth: _nextOption(_danmakuStyle.strokeWidth, const [
-              0.0,
-              1.2,
-              2.0,
-            ]),
-          ),
-        );
-      case 'offset':
-        final next = _danmakuStyle.timeOffsetMs + 1000;
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(timeOffsetMs: next > 5000 ? -5000 : next),
-        );
-      case 'scroll':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(showScroll: !_danmakuStyle.showScroll),
-        );
-      case 'top':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(showTop: !_danmakuStyle.showTop),
-        );
-      case 'bottom':
-        _applyDanmakuStyle(
-          _danmakuStyle.copyWith(showBottom: !_danmakuStyle.showBottom),
-        );
-      case 'reload':
-        // 重新拉取时绕过缓存，否则“重新加载”会命中旧结果。
-        DanmakuSource? source;
-        for (final candidate in _request.danmaku) {
-          if (!candidate.isLive) {
-            source = candidate;
-            break;
-          }
-        }
-        source ??= _request.danmaku.isEmpty ? null : _request.danmaku.first;
-        if (source != null) await _loadDanmakuSource(source);
-    }
+    if (!mounted) return;
+    setState(() => _danmakuStyle = widget.state.danmakuStyle);
   }
 
   /// 应用并持久化弹幕显示样式。
@@ -2836,43 +2656,6 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }),
     );
   }
-
-  String _strokeLabel(double width) {
-    if (width <= 0) return '关';
-    return width >= 2.0 ? '粗' : '细';
-  }
-
-  String _offsetLabel(int offsetMs) {
-    if (offsetMs == 0) return '0s';
-    final seconds = offsetMs ~/ 1000;
-    return '${seconds > 0 ? '+' : ''}${seconds}s';
-  }
-
-  /// 在固定选项里循环取下一个（找不到当前值时回到第一项）。
-  T _nextOption<T>(T current, List<T> options) {
-    final index = options.indexOf(current);
-    if (index < 0) return options.first;
-    return options[(index + 1) % options.length];
-  }
-
-  /// 步进到下一个可选值（循环）。
-  double _nextStep(double current, double step, double min, double max) {
-    final next = current + step;
-    return next > max ? min : next;
-  }
-
-  Widget _settingTile(
-    String title, {
-    String? subtitle,
-    required VoidCallback onTap,
-  }) => ListTile(
-    leading: const Icon(Icons.tune),
-    title: Text(title),
-    trailing: subtitle == null
-        ? null
-        : Text(subtitle, style: const TextStyle(fontSize: 13)),
-    onTap: onTap,
-  );
 
   /// 字幕菜单：外挂 / 内嵌 / 关闭（§13.3「字幕可开启和关闭」）。
   // --------------------------------------------------- Phase 9 播放面板
@@ -3326,6 +3109,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _loggedDurationMs = -1;
     _lastDurationLogAt = null;
     _loggedOverrun = false;
+    // 换媒体（换集/换线路/重试）＝上一条弹幕的来源失效：留着它会让下一次
+    // 搜索把「上一集的源」标成当前。
+    _danmakuSourceUrl = null;
     return ++_mediaGeneration;
   }
 
@@ -3549,6 +3335,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void _clearQueueMediaView() {
     _episodesCache = const [];
     _danmakuItems = const [];
+    _danmakuSourceUrl = null;
     _danmakuError = null;
     _lastShownDanmakuError = null;
     _lastShownSubtitleError = null;
@@ -4074,6 +3861,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         // 换集后旧弹幕立即失效，避免新集开头出现上一集的弹幕；
         // 直播弹幕连接也必须断开，否则切集后旧会话会继续推流到新画面上。
         _danmakuItems = const [];
+        _danmakuSourceUrl = null;
         _danmakuError = null;
       });
       await _teardownLiveSession('episode-change');
@@ -5206,7 +4994,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               case _PlayerMenuAction.subtitleStyle:
                 _showSubtitleStyleSettings();
               case _PlayerMenuAction.danmakuSettings:
-                _showDanmakuSettings();
+                // 入口保留在「更多」里，落点换成整页（与右键「弹幕 → 弹幕设置…」同一实现）。
+                unawaited(_openDanmakuSettingsPage());
               case _PlayerMenuAction.videoFit:
                 _showVideoFitSettings();
               case _PlayerMenuAction.mediaInfo:
@@ -5606,6 +5395,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           clearResumeSeed: true,
         );
         _danmakuItems = const [];
+        _danmakuSourceUrl = null;
         _danmakuError = null;
       });
       final restoring = _load(restorePlaying: playing);
@@ -6149,16 +5939,6 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!current.hasAnyProvider) return;
     unawaited(
       widget.state.setSubtitleSettings(current.copyWith(autoMatch: value)),
-    );
-    setState(() {});
-  }
-
-  /// 「自动搜索弹幕」开关：没有配置弹幕库地址时不给改（菜单行已灰）。
-  void _toggleDanmakuAutoSearch(bool value) {
-    final current = widget.state.danmakuSettings;
-    if (!current.hasLibrary) return;
-    unawaited(
-      widget.state.setDanmakuSettings(current.copyWith(autoSearch: value)),
     );
     setState(() {});
   }

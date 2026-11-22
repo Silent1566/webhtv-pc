@@ -64,6 +64,7 @@ class CatNodeRuntime {
     this.startTimeout = const Duration(seconds: 55),
     this.maxMemoryBytes = 256 * 1024 * 1024,
     this.maxCpuSeconds = 0,
+    this.onDanmakuReady,
   }) : _probe = httpClient ?? HttpClient() {
     _probe.connectionTimeout = httpTimeout;
   }
@@ -80,6 +81,12 @@ class CatNodeRuntime {
   /// 0 = 不限 CPU 时间（bundle 是长驻服务，不能像 sidecar 一样限 CPU）。
   final int maxCpuSeconds;
 
+  /// bundle 自带弹幕服务的发现结果回调：命中给完整地址，失效给空串。
+  ///
+  /// 由 [start] 在后台探测、[stop] 清空；调用方只负责把它落到「弹幕库地址」
+  /// 的本地源那一档，不做任何优先级判断（优先级只有一处实现）。
+  final void Function(String baseUrl)? onDanmakuReady;
+
   /// 当前运行的进程与 job。
   Process? _process;
   WindowsJobObject? _job;
@@ -87,6 +94,12 @@ class CatNodeRuntime {
 
   /// 已就绪的会话；null 表示未启动/失败。
   CatRuntimeSession? _session;
+
+  /// 世代计数：每次 [start]/[stop] 自增，后台探测只认自己那一代。
+  ///
+  /// 换源时旧的探测线程可能还在跑，它探出来的是**上一个进程**的端口；写回去
+  /// 就是「选了 B 源却把弹幕打到 A 源进程」，比没有弹幕更糟。
+  int _generation = 0;
 
   ServerSocket? _backingServer;
   StreamSubscription<Socket>? _backingSub;
@@ -109,6 +122,8 @@ class CatNodeRuntime {
   }) async {
     await stop();
     _stopRequested = false;
+    // stop() 已经换过代；这里再换代，把「本次启动」与「上一次」的探测彻底隔开。
+    final generation = ++_generation;
     _job = WindowsJobObject.create(
       memoryBytes: maxMemoryBytes,
       cpuSeconds: maxCpuSeconds,
@@ -175,6 +190,11 @@ class CatNodeRuntime {
     );
     _session = session;
     log.info('猫源就绪 port=$port sites=${await _probeSites(port)}', scope: 'cat');
+    _startDanmakuDiscovery(
+      bundleDir: bundleDir,
+      catPort: port,
+      generation: generation,
+    );
     return session;
   }
 
@@ -267,6 +287,107 @@ class CatNodeRuntime {
       return ports;
     } catch (_) {
       return const [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 弹幕服务自动发现（对齐安卓 NodeRuntime.danmakuApiUrl / resolveDanmakuPort）
+  // ---------------------------------------------------------------------------
+
+  /// 后台探测 bundle 自带的弹幕中转服务，命中后回调地址。
+  ///
+  /// **必须不阻塞 [start]**：弹幕服务通常比猫源本体晚起，没有弹幕的 bundle 更是
+  /// 永远探不到；同步等它会把启动时间白拉长到 discovery 的 deadline。
+  void _startDanmakuDiscovery({
+    required String bundleDir,
+    required int catPort,
+    required int generation,
+  }) {
+    final notify = onDanmakuReady;
+    if (notify == null) return;
+    unawaited(() async {
+      final url = await discoverDanmakuBaseUrl(
+        bundleDir: bundleDir,
+        catPort: catPort,
+      );
+      // 探测要跑几秒，回来时可能已经换源/停止：只有仍停在发起时那一代才写回。
+      if (generation != _generation) return;
+      if (url.isEmpty) return;
+      log.info('猫源弹幕服务 port=${Uri.parse(url).port} url=$url', scope: 'cat');
+      notify(url);
+    }());
+  }
+
+  /// 从 bundle 的 `port` 文件里探出内置弹幕服务，返回 `http://127.0.0.1:<port>/danmaku`；
+  /// 到 [deadline] 仍未命中返回空串。
+  ///
+  /// 判据与安卓 `isDanmakuService` 一致：`GET /danmaku` 回 200 且 body 去空白后以
+  /// `[` 或 `{` 开头。反向也区分得开：猫源本体的 `/danmaku` 回 404，弹幕服务的
+  /// `/config` 回 401——因此**必须跳过 [catPort]**，否则每轮都白等一次 [probeTimeout]。
+  ///
+  /// 每一轮都重读 `port` 文件：bundle 往往先把猫源端口落盘，弹幕服务起来后才追加
+  /// 第二个端口，只读一次就永远错过（安卓 `resolveDanmakuPort` 同样每轮重读）。
+  ///
+  /// 探测是尽力而为：没有弹幕也能正常播放，所以任何异常都吞掉、只返回空串，
+  /// 绝不把未捕获错误抛给调用方。
+  ///
+  /// [client] 为空时自建并自关；外部传入的由调用方管理，这里**不** close。
+  static Future<String> discoverDanmakuBaseUrl({
+    required String bundleDir,
+    required int catPort,
+    Duration deadline = const Duration(seconds: 20),
+    Duration probeTimeout = const Duration(seconds: 2),
+    Duration pollInterval = const Duration(milliseconds: 500),
+    HttpClient? client,
+  }) async {
+    final ownsClient = client == null;
+    final probe = client ?? HttpClient();
+    final portFile = File(p.join(bundleDir, 'port'));
+    final until = DateTime.now().add(deadline);
+    try {
+      while (DateTime.now().isBefore(until)) {
+        for (final port in _readPorts(portFile)) {
+          if (port == catPort) continue;
+          if (await _isDanmakuService(probe, port, probeTimeout)) {
+            return 'http://127.0.0.1:$port/danmaku';
+          }
+        }
+        final remaining = until.difference(DateTime.now());
+        if (remaining <= Duration.zero) break;
+        await Future<void>.delayed(
+          remaining < pollInterval ? remaining : pollInterval,
+        );
+      }
+    } catch (_) {
+      return '';
+    } finally {
+      if (ownsClient) probe.close(force: true);
+    }
+    return '';
+  }
+
+  /// `GET /danmaku` 是不是弹幕服务：200 且 body 是 JSON 数组/对象。
+  static Future<bool> _isDanmakuService(
+    HttpClient client,
+    int port,
+    Duration timeout,
+  ) async {
+    try {
+      final request = await client
+          .getUrl(Uri.parse('http://127.0.0.1:$port/danmaku'))
+          .timeout(timeout);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json, */*');
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode != 200) {
+        await response.drain<void>().timeout(timeout);
+        return false;
+      }
+      final bytes = await _readBounded(response, 64 * 1024).timeout(timeout);
+      final body = utf8.decode(bytes, allowMalformed: true).trim();
+      return body.startsWith('[') || body.startsWith('{');
+    } catch (_) {
+      // 连不上/超时/半截响应都只是「这个候选不是弹幕服务」。
+      return false;
     }
   }
 
@@ -465,7 +586,12 @@ process.on('unhandledRejection', (e) => console.error('unhandled', e));
   /// 终止当前进程树（幂等）。
   Future<void> stop() async {
     _stopRequested = true;
+    // 先换代：还挂在旧世代上的探测结果此后一律丢弃（守卫见 _startDanmakuDiscovery）。
+    _generation++;
     _session = null;
+    // 猫源一停，它自带的弹幕服务随之消失：地址必须立刻变空，否则播放器会把请求
+    // 打到已经关掉的端口上。
+    onDanmakuReady?.call('');
     final process = _process;
     final job = _job;
     _process = null;

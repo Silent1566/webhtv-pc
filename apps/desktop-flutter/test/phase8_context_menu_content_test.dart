@@ -5,7 +5,7 @@ import 'package:webhtv_pc/core/osd_config.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
-import 'package:webhtv_pc/ui/settings_detail_pages.dart';
+import 'package:webhtv_pc/ui/danmaku_settings_page.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/settings_overview_page.dart';
 
@@ -14,7 +14,7 @@ import 'support/player_page_harness.dart';
 /// 从真实的 `PlayerPage` 右键菜单里读出内容结构。
 ///
 /// **为什么不用「找到几个 widget」这种断言**：本轮的交付物是**一棵菜单树**
-/// （10 组 / 多层 / 每层的选中态），「找到 10 个 Text」既证明不了分组标题
+/// （11 组 / 多层 / 每层的选中态），「找到 11 个 Text」既证明不了分组标题
 /// 是哪些，也证明不了某组下面真的有子项。这里读的是引擎按
 /// `PlayerMenuItem` 渲染出来的每一行（行 = `InkWell`），逐行比对文字、
 /// 对勾与可点状态。
@@ -108,13 +108,15 @@ void main() {
   // 本文件锁定的是**内容结构**（哪一组、有哪些层、当前值），不是引擎的
   // 渲染细节——后者在 `test/phase8_context_menu_test.dart` 里。
   group('右键菜单内容结构', () {
-    testWidgets('主列恰好 10 个分组行（不再是 43 个平铺的项）', (tester) async {
+    testWidgets('主列恰好 11 个分组行（不再是 43 个平铺的项）', (tester) async {
       await _openMenu(tester);
 
       const titles = [
         '播放',
         '速度',
         '字幕',
+        // P2：弹幕从「轨道」组里独立出来，位置紧随字幕（同为媒体内容轨）。
+        '弹幕',
         '画面',
         '声音',
         '轨道',
@@ -127,14 +129,14 @@ void main() {
       final sectionRows = _rowsAt(tester, 0);
       expect(
         sectionRows.length,
-        10,
-        reason: '主列必须恰好 10 行（用户报的就是「43 行平铺、速度的档位没进子菜单」）',
+        11,
+        reason: '主列必须恰好 11 行（用户报的就是「43 行平铺、速度的档位没进子菜单」）',
       );
       final rendered = [for (final row in sectionRows) _labelOf(tester, row)];
       expect(
         rendered,
         titles,
-        reason: '顶层分组必须是这 10 个、且顺序固定（${rendered.join("/")}）',
+        reason: '顶层分组必须是这 11 个、且顺序固定（${rendered.join("/")}）',
       );
       // 每一行都必须是**可飞出的父项**：带 `▸`，且 key 是分组命名空间。
       for (var i = 0; i < sectionRows.length; i++) {
@@ -151,7 +153,7 @@ void main() {
           reason: '分组「${titles[i]}」没有 `▸`，用户看不出它能飞出',
         );
       }
-      // 主列的项 key 恰 10 个 `section:*`，一个别的都没有。
+      // 主列的项 key 恰 11 个 `section:*`，一个别的都没有。
       expect(
         find.descendant(
           of: find.byType(PlayerContextMenu),
@@ -163,7 +165,7 @@ void main() {
                 ),
           ),
         ),
-        findsNWidgets(10),
+        findsNWidgets(11),
       );
     });
 
@@ -178,14 +180,14 @@ void main() {
         lessThan(viewport.height - 16),
         reason: '主列放不下就得滚动，用户又会看不见下面的分组（main=$main）',
       );
-      // 10 行 × 36 + 上下 xs 内边距 = 368。
-      expect(main.height, 10 * 36 + 2 * 4);
+      // 11 行 × 36 + 上下 xs 内边距 = 404。
+      expect(main.height, 11 * 36 + 2 * 4);
     });
 
     testWidgets('分组行本身没有 selected 勾（勾只属于组内的叶子）', (tester) async {
       await _openMenu(tester);
       final rows = _rowsAt(tester, 0);
-      expect(rows.length, 10);
+      expect(rows.length, 11);
       final checked = [
         for (final row in rows)
           if (_isChecked(tester, row)) _labelOf(tester, row),
@@ -252,39 +254,44 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 51 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 50 项）', (tester) async {
       await _openMenu(tester);
 
       // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，
       // 再加 P2-12 的「播放」组三个入口（前/后关键帧 + 导航栏缩略图开关），
       // 再加「拖动进度条时暂停」开关 1 项（P0-2），共 51。
+      //
+      // P2 的增减（相对 51）：弹幕三项从「轨道」挪进新的「弹幕」组 → 轨道
+      // -3、弹幕 +3；「设置 → 弹幕库」子菜单删除 → 设置 -1。净 -1，即 50。
       const expected = <String, int>{
         '播放': 11,
         '速度': 6,
         '字幕': 4,
+        // 弹幕（开关 / 搜索弹幕… / 弹幕设置…）独立成组。
+        '弹幕': 3,
         '画面': 4,
         '声音': 3,
-        '轨道': 5,
+        // 只剩视频轨 / 字幕轨——弹幕项已迁走。
+        '轨道': 2,
         // 「显示」组多了「屏显样式」（字号 / 不透明度 / 恢复默认，P1-4）。
         '显示': 3,
         '片头片尾': 7,
         '信息': 3,
         // 设置组已从「3 个跳转入口」改造成下钻树：播放参数 / 字幕源 /
-        // 弹幕库 / 控制栏按钮 / 完整设置页。
-        '设置': 5,
+        // 控制栏按钮 / 完整设置页。弹幕库已被「弹幕 → 弹幕设置…」整页吸收。
+        '设置': 4,
       };
       for (final entry in expected.entries) {
         expect(entry.value, greaterThan(0), reason: '分组「${entry.key}」不得为空');
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        51,
+        50,
         reason:
-            '十个分组的项数之和必须是 51：基线 44，'
-            '「显示」组新增「屏显样式」（P1-4）1 项，'
-            '「画面」组新增 HDR 色调映射 / 峰值亮度计算 2 项，'
-            '「播放」组新增前/后关键帧与导航栏缩略图开关 3 项（P2-12），'
-            '「播放」组新增「拖动进度条时暂停」开关 1 项（P0-2）',
+            '十一个分组的项数之和必须是 50：P2 前是 51（基线 44 + 屏显样式 1 + '
+            'HDR 2 + 关键帧与缩略图 3 + 拖动暂停 1），'
+            'P2 把弹幕三项从「轨道」挪进「弹幕」组（-3 +3），'
+            '并删除「设置 → 弹幕库」子菜单（-1）',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -297,13 +304,14 @@ void main() {
     });
 
     // 死项检查现在要**走遍所有层级**：分组行把它们的孩子藏进了第 2 列，
-    // 只扫主列会漏掉全部 45 个叶子。
+    // 只扫主列会漏掉全部叶子。
     testWidgets('所有层级都没有死项：分组必有 children，叶子必须可点', (tester) async {
       await _openMenu(tester);
       const titles = [
         '播放',
         '速度',
         '字幕',
+        '弹幕',
         '画面',
         '声音',
         '轨道',
@@ -355,7 +363,7 @@ void main() {
         '清除本片标记',
         '播放诊断',
       ], reason: '不可点项集合变了：要么新增了死项，要么「该灰的」被藏起来了');
-      // 45 项里减去那几个不可点的叶子，其余叶子都必须真的能点
+      // 叶子项里减去那几个不可点的，其余叶子都必须真的能点
       // （不是「有 children 就都以为能点」）。
       expect(sawLeaf, greaterThan(25), reason: '叶子项数量异常（$sawLeaf）');
     });
@@ -581,22 +589,22 @@ void main() {
     // 可达、就地开关不关菜单、条件不满足时灰而不藏。上一版这三条全都失败
     // （设置组只有三个 `Navigator.push`）。
     //
-    // **层级口径**：「设置」现在是主列里的一个**分组行**（可飞出），它的 5 个
+    // **层级口径**：「设置」现在是主列里的一个**分组行**（可飞出），它的 4 个
     // 子项落在第 2 列。从这里往下数：
     //   主列分组（第 1 列）→ 设置组子项（第 2 列）→ 播放参数（第 3 列）
     //   → 失败回退/缓存上限（第 4 列）。
     // 用户看到的是 3 层下钻（设置 → 播放参数 → 失败回退），按「菜单层」算则是
     // 第 4 层。
 
-    /// 设置组飞出的 5 行（第 2 列，顺序与 `_contextMenuSections` 里
-    /// 「10. 设置」一致）。调用前必须先 [_drill] 点开「设置」组。
+    /// 设置组飞出的 4 行（第 2 列，顺序与 `_contextMenuSections` 里
+    /// 「11. 设置」一致）。调用前必须先 [_drill] 点开「设置」组。
     List<InkWell> settingsRows(WidgetTester tester) {
       final rows = _rowsAt(tester, 1);
-      expect(rows.length, 5, reason: '设置组必须飞出 5 行');
+      expect(rows.length, 4, reason: '设置组必须飞出 4 行');
       return rows;
     }
 
-    testWidgets('设置组展开为四棵子树 + 至少一个跳转项', (tester) async {
+    testWidgets('设置组展开为三棵子树 + 至少一个跳转项', (tester) async {
       await _openMenu(tester);
       await _drill(tester, '设置');
 
@@ -608,9 +616,8 @@ void main() {
       expect(parents, [
         '播放参数',
         '字幕源',
-        '弹幕库',
         '控制栏按钮',
-      ], reason: '设置组下的四棵子树必须都在，且顺序固定');
+      ], reason: '设置组下的三棵子树必须都在，且顺序固定');
 
       // 至少一个**跳转项**：长文本表单留在专门页面（见 player_page 里的注释）。
       final leaves = [
@@ -827,58 +834,70 @@ void main() {
       );
     });
 
-    testWidgets('未配置弹幕库时「自动搜索弹幕」置灰但仍在树里', (tester) async {
+    // P2：弹幕三项从「轨道」搬进独立的「弹幕」组，「设置 → 弹幕库」子菜单
+    // 则被新页吸收后删除。反向锁住这两处**旧入口不得回流**——同一份偏好在
+    // 两个入口上并存时，用户在哪个入口改，都会被另一个入口的旧值盖掉。
+    testWidgets('「轨道」只剩视频轨/字幕轨，「设置」没有「弹幕库」行', (tester) async {
       await _openMenu(tester);
+      await _drill(tester, '轨道');
+      expect(
+        [for (final row in _rowsAt(tester, 1)) _labelOf(tester, row)],
+        ['视频轨…', '字幕轨…'],
+        reason: '弹幕项不得留在「轨道」组里（第 3 项起都是回归）',
+      );
+      for (final id in [
+        'track_danmaku',
+        'track_danmaku_settings',
+        'track_danmaku_search',
+      ]) {
+        expect(
+          find.byKey(ValueKey('player-menu-item-$id')),
+          findsNothing,
+          reason: '旧「轨道」组菜单项 $id 不得残留',
+        );
+      }
+
       await _drill(tester, '设置');
-      await _drill(tester, '弹幕库');
-
-      // harness 不写任何弹幕库设置 → `DanmakuSettings.defaults()`：
-      // autoSearch=false、apiUrl 空 → hasLibrary=false → 该行禁用。
-      expect(find.text('自动搜索弹幕'), findsWidgets, reason: '不可用时应灰掉，而不是从菜单里消失');
-      final row = tester.widget<InkWell>(
-        find.byKey(
-          const ValueKey('player-menu-item-settings_danmaku_auto_search'),
-        ),
+      expect(
+        find.byKey(const ValueKey('player-menu-item-settings_danmaku_library')),
+        findsNothing,
+        reason: '「弹幕库」子菜单已被「弹幕 → 弹幕设置…」整页吸收，不得留在「设置」组',
       );
-      expect(_isDisabled(tester, row), isTrue, reason: '未配置弹幕库时应不可点');
-      // 保留 selected（引擎把「选中 + 禁用」画成压暗琥珀）：
-      // 默认 autoSearch=false，所以这里断言的是「选中态没被禁用抹掉」的实现
-      // ——直接断言行里没有 check（false），再断言禁用能读出来。
-      expect(_isChecked(tester, row), isFalse);
-
-      // 同一棵子树里，「打开弹幕库设置…」必须**仍可点**（不是整组被禁）。
-      final formRow = tester.widget<InkWell>(
-        find.byKey(
-          const ValueKey('player-menu-item-settings_danmaku_library_form'),
-        ),
+      expect(
+        find.text('弹幕库'),
+        findsNothing,
+        reason: '「设置」组里不得再有「弹幕库」这一行',
       );
-      expect(_isDisabled(tester, formRow), isFalse);
     });
 
-    // 「设置」组里的两个跳转项在改版后换了落点：弹幕库设置 → 弹幕源页本身；
-    // 完整设置页 → 可 push 的「全部设置」页（菜单项 id 也从 settings_advanced_page
-    // 改名成 settings_overview_page，旧 id 不得残留）。
-    testWidgets('设置组跳转项的落点：弹幕源页与全部设置页', (tester) async {
+    // 弹幕设置的落点在 P2 从「弹幕源页」换成了**整页** `DanmakuSettingsPage`；
+    // 「完整设置页…」的落点仍是可 push 的「全部设置」页（菜单项 id 也从
+    // settings_advanced_page 改名成 settings_overview_page，旧 id 不得残留）。
+    testWidgets('弹幕组跳转项的落点：弹幕设置整页与全部设置页', (tester) async {
       await _openMenu(tester);
-      await _drill(tester, '设置');
-      await _drill(tester, '弹幕库');
+      await _drill(tester, '弹幕');
 
-      final danmakuForm = find.byKey(
-        const ValueKey('player-menu-item-settings_danmaku_library_form'),
+      final settingsItem = find.byKey(
+        const ValueKey('player-menu-item-danmaku_settings'),
       );
-      expect(danmakuForm, findsOneWidget, reason: '「打开弹幕库设置…」不得被删掉');
-      await tester.ensureVisible(danmakuForm);
+      expect(settingsItem, findsOneWidget, reason: '「弹幕设置…」必须是「弹幕」组里的叶子');
+      await tester.ensureVisible(settingsItem);
       await settlePlayerPage(tester, times: 2);
-      await tester.tap(danmakuForm);
+      await tester.tap(settingsItem);
       await settlePlayerPage(tester, times: 6);
       expect(
-        find.byType(DanmakuSourcePage),
+        find.byType(DanmakuSettingsPage),
         findsOneWidget,
-        reason: '「打开弹幕库设置…」必须落在弹幕源页，而不是某个总入口',
+        reason: '「弹幕设置…」必须打开整页（旧的底部弹层已删除）',
       );
       await tester.tap(find.byType(BackButton));
       await settlePlayerPage(tester, times: 6);
-      expect(find.byType(DanmakuSourcePage), findsNothing);
+      expect(find.byType(DanmakuSettingsPage), findsNothing);
+      expect(
+        find.byType(PlayerPage),
+        findsOneWidget,
+        reason: '从设置页返回必须还在播放器上（页面是被 push 上去的）',
+      );
 
       // 重新打开菜单，走「完整设置页…」。
       await tester.tapAt(const Offset(300, 260), buttons: kSecondaryButton);

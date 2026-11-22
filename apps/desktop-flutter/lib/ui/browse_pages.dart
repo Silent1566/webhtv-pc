@@ -2706,6 +2706,9 @@ class _DetailPageState extends State<DetailPage> {
               episodesReversed: _episodesReversed,
               episodeIndex: episodeIndex,
               vodPic: vod.vodPic,
+              // 弹幕库搜索要按「片名 + 年份」区分同名不同年的剧（`一马当先` 2026
+              // 电视剧 vs 2023 短剧）：播放器手上只有这份请求，年份只能由这里带下去。
+              vodYear: vod.vodYear,
               startPosition: resume,
               // 外挂字幕（§10.3）与弹幕（§21 Phase 3）：播放结果 + 代理前 Header。
               subtitles: decision.subs,

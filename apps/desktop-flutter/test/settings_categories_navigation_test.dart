@@ -101,10 +101,11 @@ void main() {
     const Duration(seconds: 5),
   );
 
-  /// 五个稳定分类 key（固定接口，宽窄一致）。
+  /// 六个稳定分类 key（固定接口，宽窄一致）。
   const categories = <String>[
     'settings-category-preferences',
     'settings-category-playback',
+    'settings-category-danmaku',
     'settings-category-sites',
     'settings-category-connections',
     'settings-category-maintenance',
@@ -117,6 +118,8 @@ void main() {
   const categoryMarker = <String, String>{
     'settings-category-preferences': 'settings-theme-mode',
     'settings-category-playback': 'settings-player-buttons',
+    // 「弹幕」类只有一行入口，行本身就是它独有的标记。
+    'settings-category-danmaku': 'settings-danmaku-open',
     'settings-category-sites': 'settings-site-health-open',
     'settings-category-connections': 'settings-ai-open',
     'settings-category-maintenance': 'settings-python-environment-open',
@@ -204,10 +207,10 @@ void main() {
     expect(find.text('复制全部'), findsOneWidget);
   });
 
-  testWidgets('默认进入偏好类别：五个稳定 key 各恰好一处，其余类别不渲染', (tester) async {
+  testWidgets('默认进入偏好类别：六个稳定 key 各恰好一处，其余类别不渲染', (tester) async {
     await pumpSettings(tester);
 
-    // ① 五个分类 key 各**恰好一处**（宽窄共用一个 key，同一时刻只渲染一套）。
+    // ① 六个分类 key 各**恰好一处**（宽窄共用一个 key，同一时刻只渲染一套）。
     for (final key in categories) {
       expect(
         categoryFinder(key),
@@ -227,7 +230,7 @@ void main() {
     expect(
       find.byWidgetPredicate(isCategoryControl),
       findsNWidgets(categories.length),
-      reason: '分类控件总数必须恰好 5 个（多出一个 = 两套导航同时渲染）',
+      reason: '分类控件总数必须恰好 6 个（多出一个 = 两套导航同时渲染）',
     );
 
     // 默认偏好：只断言业务标记 key，不断言文案（导航标签与区块标题共用词）。
@@ -448,15 +451,25 @@ void main() {
     // 矮视口：播放与连接两类的内容都必须比它高，两个位置才都可区分。
     //
     // 340 是**矮窗下限附近的取样**（不是随便取的小数）：
-    // 五类左栏的内容高约「16 上内边距 + 页标题 + 5×(48 行 + 4 间距)」≈ 300+，
-    // 340 高时栏只剩约 224（页内边距与页标题之后），5 类塞不下——源码因此把栏
-    // 包进 SingleChildScrollView（diagnostics_pages.dart:708），栏自己滚、五项都在；
+    // 六类左栏的内容高约「16 上内边距 + 页标题 + 6×(48 行 + 4 间距)」≈ 350+，
+    // 340 高时栏只剩约 224（页内边距与页标题之后），六类塞不下——源码因此把栏
+    // 包进 SingleChildScrollView（diagnostics_pages.dart:708），栏自己滚、六项都在；
     // 340 高时内容区约 240，播放类（7 行）与连接类（6 行）都高过它，
     // 两个位置都非零且彼此不同，滚动保留才有区分力。
     await pumpSettings(tester, size: const Size(1440, 340));
 
-    await tester.tap(categoryFinder('settings-category-playback'));
-    await settle(tester);
+    // 分类栏自己会滚，靠后的分类中心会落在视口外：先滚到它再点，否则
+    // tap 的落点打空、类别根本没切（点不到 ≠ 分类不可达，是这条用例的前置）。
+    final playbackTab = categoryFinder('settings-category-playback');
+    final connectionsTab = categoryFinder('settings-category-connections');
+    Future<void> tapTab(Finder tab) async {
+      await tester.ensureVisible(tab);
+      await settle(tester);
+      await tester.tap(tab);
+      await settle(tester);
+    }
+
+    await tapTab(playbackTab);
     expect(contentOffset(tester, 'playback'), 0, reason: '首次进入应在顶部');
 
     await tester.drag(contentFinder('playback'), const Offset(0, -220));
@@ -469,8 +482,7 @@ void main() {
     );
 
     // 另一个类别也滚一下，两个位置必须**各自**独立。
-    await tester.tap(categoryFinder('settings-category-connections'));
-    await settle(tester);
+    await tapTab(connectionsTab);
     expect(contentOffset(tester, 'connections'), 0, reason: '连接类别是新进入的，应从头开始');
     await tester.drag(contentFinder('connections'), const Offset(0, -120));
     await settle(tester);
@@ -478,16 +490,14 @@ void main() {
     expect(connectionsOffset, greaterThan(0), reason: '前置：连接类别也要滚下去');
     expect(connectionsOffset, isNot(playbackOffset), reason: '两个类别的滚动位置应各自独立');
 
-    await tester.tap(categoryFinder('settings-category-playback'));
-    await settle(tester);
+    await tapTab(playbackTab);
     expect(
       contentOffset(tester, 'playback'),
       playbackOffset,
       reason: '切回播放必须恢复原滚动位置（分类切换不丢位置）',
     );
 
-    await tester.tap(categoryFinder('settings-category-connections'));
-    await settle(tester);
+    await tapTab(connectionsTab);
     expect(
       contentOffset(tester, 'connections'),
       connectionsOffset,

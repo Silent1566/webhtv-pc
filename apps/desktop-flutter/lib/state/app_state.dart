@@ -408,7 +408,13 @@ AiContentCompletion? aiContentCompletion,
     TmdbImageHealth.onFailure = _imageHealthSink;
     final node = SidecarRuntimeResolver.resolve('node');
     if (node != null) {
-      _catRuntime = CatNodeRuntime(nodeCommand: node, log: this.log);
+      // 猫源 bundle 自带弹幕服务时自动接上（对齐安卓 `NodeRuntime.danmakuApiUrl()`）：
+      // 探测归运行时、优先级归 `resolveDanmakuApi`，这里只转手。
+      _catRuntime = CatNodeRuntime(
+        nodeCommand: node,
+        log: this.log,
+        onDanmakuReady: setBundleDanmakuApiUrl,
+      );
       _catPipeline = CatImportPipeline(
         bundle: _catBundle,
         runtime: _catRuntime!,
@@ -3058,6 +3064,55 @@ AiContentCompletion? aiContentCompletion,
     _notifyIfAlive();
     return ok;
   }
+
+  /// 本地猫源内置的弹幕服务地址。
+  ///
+  /// 由 [CatNodeRuntime.onDanmakuReady] 写入：猫源启动后后台探到弹幕服务就填，
+  /// 猫源停止（换源/退出）时清空。空表示没有。它排在站点配置之后，因为站点配置
+  /// 是用户显式选择的默认值，猫源只是「随装随带」的便利。
+  String _bundleDanmakuApiUrl = '';
+
+  void setBundleDanmakuApiUrl(String url) {
+    final next = url.trim();
+    if (next == _bundleDanmakuApiUrl) return;
+    _bundleDanmakuApiUrl = next;
+    _notifyIfAlive();
+  }
+
+  /// 当前生效的全部弹幕源与来源（用户启用的源 > 站点配置 danmaku 字段 > 本地猫源）。
+  ///
+  /// 播放器、设置页与搜索对话框只能从这里取：优先级只允许有一份实现。
+  ResolvedDanmakuSources get resolvedDanmakuSources => resolveDanmakuSources(
+    settings: danmakuSettings,
+    // 刻意读**原始配置**而不是合并结果：合并链（注入/本地源）是逐字段构造
+    // `AppConfig`，不能保证顺带保留每个字段；漏一个字段的后果是站点配置的
+    // `danmaku` 被静默丢掉、优先级掉到猫源。语义上也与安卓
+    // `VodConfig.getConfig().getDanmaku()` 一致：读的是配置原文。
+    configDanmaku: _config?.danmaku,
+    bundleDanmaku: _bundleDanmakuApiUrl,
+  );
+
+  /// 当前生效的首条弹幕库地址与来源（旧单地址 API）。
+  ///
+  /// 由 [resolvedDanmakuSources] 派生而不是自己再算一遍：播放器这一轮仍只认
+  /// 单地址，两份实现早晚会在「哪档优先」上分叉。
+  ResolvedDanmakuApi get resolvedDanmakuApi {
+    final resolved = resolvedDanmakuSources;
+    if (!resolved.isConfigured) {
+      return const ResolvedDanmakuApi(url: '', source: DanmakuApiSource.none);
+    }
+    return ResolvedDanmakuApi(
+      url: resolved.sources.first.url,
+      source: resolved.origin,
+    );
+  }
+
+  /// 搜索弹幕库时要用的地址；空表示没有可用地址。
+  String get danmakuApiUrl => resolvedDanmakuApi.url;
+
+  /// 自动搜索是否真的会发起请求：开关打开 **且** 有可用地址。
+  bool get canAutoSearchDanmaku =>
+      danmakuSettings.autoSearch && resolvedDanmakuSources.isConfigured;
 
   /// 持久化字幕源设置。
   Future<bool> setSubtitleSettings(SubtitleSettings settings) async {

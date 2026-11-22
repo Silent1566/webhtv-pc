@@ -19,6 +19,7 @@ import 'app.dart';
 import 'backup_page.dart';
 import 'common.dart';
 import 'config_pages.dart';
+import 'danmaku_settings_page.dart';
 import 'meta_sources_page.dart';
 import 'injected_sites_page.dart';
 import 'intro_skip_options_page.dart';
@@ -49,14 +50,19 @@ import 'toast.dart';
 ///
 /// 分类只影响**显示**：切换分类不写 `settings.json`，不进 `AppState`。
 ///
-/// 五个类别按**用途**划分，不再有「高级设置」这类兜底页（它原先的 19 个控件
+/// 六个类别按**用途**划分，不再有「高级设置」这类兜底页（它原先的 19 个控件
 /// 把站点、网络、工具与隐私混在一个入口下面，播放参数要三级才到）：
-/// 偏好 = 外观与日常；播放 = 看片时的行为；站点与内容 = 源与搜索；
-/// 连接与服务 = 外部账号与出站请求；维护 = 本机运行与排查。
+/// 偏好 = 外观与日常；播放 = 看片时的行为；弹幕 = 显示参数与弹幕库；
+/// 站点与内容 = 源与搜索；连接与服务 = 外部账号与出站请求；维护 = 本机运行与排查。
 /// 于是任意设置**最多两级可达**。
+///
+/// 「弹幕」为什么单独成类：它原先只有「播放 → 弹幕源」一行，管的是地址；
+/// 显示参数（透明度/字号/速度/行数…）则只存在于播放器弹层里。两件事合并成
+/// 一页后，它既不是「播放」也不是「站点」，塞进任何一类都会让那一类的用途变糊。
 const List<SettingsCategory> kSettingsCategories = [
   SettingsCategory(SettingsCategory.preferences, '偏好', Icons.tune_outlined),
   SettingsCategory(SettingsCategory.playback, '播放', Icons.play_circle_outline),
+  SettingsCategory(SettingsCategory.danmaku, '弹幕', Icons.comment_outlined),
   SettingsCategory(SettingsCategory.sites, '站点与内容', Icons.public_outlined),
   SettingsCategory(SettingsCategory.connections, '连接与服务', Icons.hub_outlined),
   SettingsCategory(SettingsCategory.maintenance, '维护', Icons.build_outlined),
@@ -68,6 +74,7 @@ class SettingsCategory {
 
   static const String preferences = 'preferences';
   static const String playback = 'playback';
+  static const String danmaku = 'danmaku';
   static const String sites = 'sites';
   static const String connections = 'connections';
   static const String maintenance = 'maintenance';
@@ -322,15 +329,6 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           onTap: () => _push(context, OsdSettingsPage(state: state)),
         ),
         SettingsNavRow(
-          key: const ValueKey('settings-danmaku-open'),
-          icon: Icons.comment_outlined,
-          title: '弹幕源',
-          subtitle:
-              '${state.danmakuSettings.autoSearch ? "自动搜索已开" : "自动搜索已关"}'
-              ' · ${state.danmakuSettings.apiUrl.isEmpty ? "未配置地址" : "已配置地址"}',
-          onTap: () => _push(context, DanmakuSourcePage(state: state)),
-        ),
-        SettingsNavRow(
           key: const ValueKey('settings-subtitle-open'),
           icon: Icons.subtitles_outlined,
           title: '字幕源',
@@ -349,6 +347,23 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           title: '直播',
           subtitle: _liveSummary(),
           onTap: () => _push(context, LiveSettingsPage(state: state)),
+        ),
+      ],
+    );
+
+    // 「弹幕」= 显示参数 + 弹幕库，合并成一页（`DanmakuSettingsPage`）。
+    // 这一类只有一行入口：设置项全部在明细页里，分类页不该再摊第二层。
+    final danmaku = SettingsRowList(
+      children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-danmaku-open'),
+          icon: Icons.comment_outlined,
+          title: '弹幕设置',
+          // 副标题口径只写在 `DanmakuSettingsPage.summary` 一处：地址来源有三档，
+          // 只按手填值判断会把「站点配置/本地猫源提供了地址」误报成未配置。
+          subtitle: DanmakuSettingsPage.summary(state),
+          subtitleKey: const ValueKey('settings-danmaku-summary'),
+          onTap: () => _push(context, DanmakuSettingsPage(state: state)),
         ),
       ],
     );
@@ -601,6 +616,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     final contents = <String, Widget>{
       SettingsCategory.preferences: preferences,
       SettingsCategory.playback: playback,
+      SettingsCategory.danmaku: danmaku,
       SettingsCategory.sites: sites,
       SettingsCategory.connections: connections,
       SettingsCategory.maintenance: maintenance,
