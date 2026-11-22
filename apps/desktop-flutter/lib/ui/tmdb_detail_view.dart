@@ -1017,6 +1017,7 @@ class EpisodeForeignProgressMark {
     required this.percent,
     required this.detail,
     this.active = false,
+    this.completed = false,
   });
 
   /// 映射到这张卡的记录条数（多集聚合卡按「来源记录数」计）。
@@ -1031,9 +1032,14 @@ class EpisodeForeignProgressMark {
   /// 是否是默认续播目标（决定描边颜色：用户点首屏按钮时优先去那一条）。
   final bool active;
 
-  String get label => count > 1
-      ? '其他源 $count条'
-      : (percent > 0 ? '其他源 $percent%' : '其他源');
+  /// 最近那条记录是否已看完（角标改用「已看完」，避免把 100% 当作进度）。
+  final bool completed;
+
+  String get label {
+    if (count > 1) return '其他源 $count条';
+    if (completed) return '其他源 已看完';
+    return percent > 0 ? '其他源 $percent%' : '其他源';
+  }
 }
 
 /// 剧集海报卡片条（横向滚动）。

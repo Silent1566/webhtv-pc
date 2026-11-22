@@ -109,15 +109,18 @@ void main() {
     );
   }
 
-  Future<void> pumpDetail(WidgetTester tester) async {
+  Future<void> pumpDetail(WidgetTester tester, {Vod? target}) async {
+    final pageVod = target ?? vod;
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
-    state.seedDetailForTest(vod: vod);
-    await tester.pumpWidget(MaterialApp(home: DetailPage(state: state, vod: vod)));
+    state.seedDetailForTest(vod: pageVod);
+    await tester.pumpWidget(
+      MaterialApp(home: DetailPage(state: state, vod: pageVod)),
+    );
     await tester.pump();
     // hero 占满首屏，选集区要滚进视口才会挂载。
     for (var attempt = 0; attempt < 20; attempt++) {
@@ -171,6 +174,12 @@ void main() {
       activeCard.style!.side!.resolve(<WidgetState>{})!.width,
       2,
       reason: '默认续播目标要能看出是哪一张卡',
+    );
+    final theme = Theme.of(tester.element(find.byType(DetailPage)));
+    expect(
+      activeCard.style!.side!.resolve(<WidgetState>{})!.color,
+      theme.colorScheme.tertiary,
+      reason: '别的源用第三色，与本的主题色角标区分开',
     );
     expect(plainCard.style?.side?.resolve(<WidgetState>{}), isNull);
 
@@ -256,5 +265,113 @@ void main() {
       findsNothing,
     );
     expect(find.text('播放第一集'), findsOneWidget);
+  });
+
+  /// 两条线路、集名顺序不同：用来区分「按目标线路的原始下标」与「按当前线路的下标」。
+  final multiLineVod = Vod(
+    vodId: 'a-2',
+    vodName: '剧集乙',
+    vodPlayFrom: '线路一\$\$\$线路二',
+    vodPlayUrl:
+        '第1集\$http://x/e1#第2集\$http://x/e2'
+        '\$\$\$'
+        '第3集\$http://y/e3#第1集\$http://y/e1',
+  );
+
+  void seedMultiLine(Vod pageVod) {
+    // 本站：线路二第 1 集；别的源：更新，映射到线路二第 3 集。
+    state.database!.upsertHistory(
+      siteKey: 'site-a',
+      vodId: pageVod.vodId,
+      vodName: pageVod.vodName,
+      flag: '线路二',
+      episodeName: '第1集',
+      episodeId: 'http://y/e1',
+      positionMs: 30000,
+      durationMs: 100000,
+      updatedAt: 100,
+      sourceKey: sourceKey,
+    );
+    state.database!.upsertHistory(
+      siteKey: 'site-b',
+      vodId: 'b-2',
+      vodName: pageVod.vodName,
+      flag: '乙站线路',
+      episodeName: '第3集',
+      episodeId: 'http://b/e3',
+      positionMs: 600000,
+      durationMs: 2400000,
+      updatedAt: 200,
+      sourceKey: sourceKey,
+    );
+  }
+
+  testWidgets('本站记录在第二条线路时，进详情仍自动选中那条线路', (tester) async {
+    // 回归钉子：跨源目标恒映射到「当前线路」，若拿它做自动选线路，
+    // `_selectedLineFlag` 会被钉死在线路一且不再重解析（§4 的既有语义丢失）。
+    seedMultiLine(multiLineVod);
+    await pumpDetail(tester, target: multiLineVod);
+
+    final second = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('tmdb-line-线路二')),
+    );
+    expect(second.selected, isTrue, reason: '改造前就是回到本站上次那条线路');
+    final first = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('tmdb-line-线路一')),
+    );
+    expect(first.selected, isFalse);
+    // 线路 chip 的「最近播放」只标本站那条线路。
+    expect(
+      find.byKey(const ValueKey('tmdb-line-recent-线路二')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-line-recent-线路一')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('选择框里选「本站」时按它自己的线路下标播放，不串到当前线路', (tester) async {
+    seedMultiLine(multiLineVod);
+    await pumpDetail(tester, target: multiLineVod);
+    expect(find.text('继续播放（2 条记录）'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
+    await tester.pumpAndSettle();
+    // 默认目标是更新的别的源（第 0 行）；本站那条在它后面。
+    await tester.tap(find.byKey(const ValueKey('history-progress-option-1')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('history-progress-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(
+      await playedEpisodeName(tester),
+      '第1集',
+      reason: '本站记录在线路二的第 1 集；套用线路一的下标会播成第 2 集',
+    );
+  });
+
+  testWidgets('本站记录已看完、别的源可续播时，默认用别的源直接续播', (tester) async {
+    // 用户规则：只有一条**可续播**记录时直接续播。本站那条已看完，
+    // 不能因为它更新/存在就把唯一的可续播记录藏起来。
+    state.database!.upsertHistory(
+      siteKey: 'site-a',
+      vodId: vod.vodId,
+      vodName: vod.vodName,
+      flag: '线路一',
+      episodeName: '第1集',
+      episodeId: 'http://x/e1',
+      positionMs: 100000,
+      durationMs: 100000,
+      updatedAt: 300,
+      completed: true,
+      sourceKey: sourceKey,
+    );
+    seedOtherSourceEpisode(updatedAt: 200);
+    await pumpDetail(tester);
+
+    expect(find.text('继续播放 · 第2集'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
+    expect(await playedEpisodeName(tester), '第2集');
   });
 }

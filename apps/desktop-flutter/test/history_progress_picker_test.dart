@@ -89,11 +89,22 @@ void main() {
     expect(find.textContaining('20:00'), findsWidgets);
     expect(find.textContaining('3 小时前'), findsOneWidget);
     expect(find.textContaining('5 分钟前'), findsOneWidget);
-    // 默认选中索引 0（core 已按最近观看排好序，调用方负责传入顺序）。
-    final confirm = tester.widget<FilledButton>(
-      find.byKey(const ValueKey('history-progress-confirm')),
+    // 默认选中第 0 行（调用方按优先级排好序）：选中态必须**看得见**，
+    // 否则用户不知道「播放」会播哪一条。
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('history-progress-option-0')),
+        matching: find.byIcon(Icons.radio_button_checked),
+      ),
+      findsOneWidget,
     );
-    expect(confirm.onPressed, isNotNull);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('history-progress-option-1')),
+        matching: find.byIcon(Icons.radio_button_unchecked),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('确认返回当前选中的那条记录', (tester) async {

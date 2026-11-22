@@ -1912,12 +1912,13 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   void _onStateChanged() {
-    if (!mounted || _holdingRecommendationDetail) return;
     // 历史写库、切换站点、TMDB 身份到达都会走到这里：跨站点候选与进度解析
-    // 的缓存必须跟着失效，否则卡片角标会停在「上一次播放之前」。
+    // 的缓存必须跟着失效，否则卡片角标会停在「上一次播放之前」。失效要放在
+    // 早退之前——`_holdingRecommendationDetail` 期间同样会写库/切站点。
     _crossSiteCandidatesKey = '';
     _historyResolution = null;
     _historyResolutionKey = '';
+    if (!mounted || _holdingRecommendationDetail) return;
     _syncDetailErrorToast();
     setState(() {});
   }
@@ -2405,14 +2406,6 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  /// 本页的默认续播目标（线路 + 集下标）。
-  ///
-  /// 在同站记录与「同一个配置里其它爬虫源」的记录之间取**最近可续播**的那条
-  /// （对齐安卓 `History.findPlayback` + `findPlaybackCandidate`）：本站记录
-  /// 更新或一样新时行为与改造前完全相同；别的源更新（或本站根本没有记录）时
-  /// 才由它接管。用户 2026-11-29 选型。
-  HistoryResumeTarget _resumeTarget(List<VodPlayLine> lines) =>
-      _resolveDetailHistory(widget.vod, lines).target;
 
   /// 同源其它站点的历史候选（同一个配置、别的爬虫源）。
   ///
@@ -2454,8 +2447,6 @@ class _DetailPageState extends State<DetailPage> {
 
   HistoryCandidate _candidateOf(PlaybackHistory row) => HistoryCandidate(
     siteKey: row.siteKey,
-    vodId: row.vodId,
-    flag: row.flag,
     episodeName: row.episodeName,
     episodeId: row.episodeId,
     positionMs: row.positionMs,
@@ -2480,8 +2471,13 @@ class _DetailPageState extends State<DetailPage> {
     Vod vod,
     List<VodPlayLine> lines,
   ) {
+    // 先取候选再算键：候选查询自己带缓存键，键必须取到它的最新值，否则每次
+    // 候选变化都会先用旧键算一轮、下一轮再重算。
+    final candidates = _crossSiteHistoryCandidates(vod);
     final key = [
       vod.vodId,
+      vod.vodName,
+      _pageSite?.key ?? '',
       _selectedLineFlag,
       lines.length,
       _crossSiteCandidatesKey,
@@ -2493,7 +2489,6 @@ class _DetailPageState extends State<DetailPage> {
 
     final ownTarget = _ownResumeTarget(lines);
     final active = lines.isEmpty ? null : _activeLine(lines);
-    final candidates = _crossSiteHistoryCandidates(vod);
     final progress = active == null || candidates.isEmpty
         ? const CrossSiteProgress(mapped: [], resumable: [])
         : buildCrossSiteProgress(
@@ -2502,11 +2497,33 @@ class _DetailPageState extends State<DetailPage> {
           );
     final own = _history;
     final ownUpdatedAt = own?.updatedAt ?? 0;
+    final ownResumable =
+        own != null &&
+        ownTarget.matched &&
+        hasResumePositionMs(
+          positionMs: own.positionMs,
+          durationMs: own.durationMs,
+          completed: own.completed,
+        );
     final primaryForeign = progress.primary;
-    // 「最近可续播」优先：别的源更晚、或者本站压根没命中时才接管。
-    final useForeign =
-        primaryForeign != null &&
-        (primaryForeign.candidate.updatedAt > ownUpdatedAt || !ownTarget.matched);
+    final foreignResumable =
+        primaryForeign != null && primaryForeign.candidate.hasResumePosition;
+    // 默认目标（用户 2026-11-29 选型：取最近可续播的那条）：
+    // 1. 本站没命中 → 用别的源；
+    // 2. 本站不可续播（已看完/位置过短）而别的源可续播 → 用别的源，否则用户
+    //    完全看不到那条唯一能续的记录（按钮会回落成「播放第一集」）；
+    // 3. 两边可续播性相同 → 谁更新用谁，并列时本站优先（既有行为）；
+    // 4. 两边都不可续播 → 谁更新标谁（保持「上次看到这里」的语义）。
+    final bool useForeign;
+    if (primaryForeign == null) {
+      useForeign = false;
+    } else if (!ownTarget.matched) {
+      useForeign = true;
+    } else if (foreignResumable != ownResumable) {
+      useForeign = foreignResumable;
+    } else {
+      useForeign = primaryForeign.candidate.updatedAt > ownUpdatedAt;
+    }
     final foreign = useForeign ? primaryForeign : null;
     final target = foreign != null
         ? HistoryResumeTarget(
@@ -2520,16 +2537,11 @@ class _DetailPageState extends State<DetailPage> {
         ? null
         : reboundResumeSeed(mapped: foreign, line: active!);
 
-    // 可续播选项：本站记录（有位置才列）+ 别的源里能续播的。按最近观看倒序，
-    // 顺序同时是弹框的展示顺序与默认选中项。
+    // 可续播选项：本站记录（有位置才列）+ 别的源里能续播的（按来源优先级）。
+    // 顺序同时是弹框的展示顺序与默认选中项：**默认目标排第一**，弹框第一行
+    // 与首屏按钮会走的那条永远一致。
     final options = <HistoryProgressChoice>[
-      if (own != null &&
-          ownTarget.matched &&
-          hasResumePositionMs(
-            positionMs: own.positionMs,
-            durationMs: own.durationMs,
-            completed: own.completed,
-          ))
+      if (own != null && ownResumable)
         HistoryProgressChoice(
           sourceLabel: '本站',
           isOwnSite: true,
@@ -2553,7 +2565,18 @@ class _DetailPageState extends State<DetailPage> {
             updatedAt: mapped.candidate.updatedAt,
             seed: reboundResumeSeed(mapped: mapped, line: active),
           ),
-    ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    ];
+    final defaultIndex = foreign == null
+        ? 0
+        : options.indexWhere(
+            (option) =>
+                !option.isOwnSite &&
+                option.episodeIndex == foreign.episodeIndex &&
+                option.updatedAt == foreign.candidate.updatedAt,
+          );
+    if (defaultIndex > 0) {
+      options.insert(0, options.removeAt(defaultIndex));
+    }
 
     final resolution = _DetailHistoryResolution(
       target: target,
@@ -2608,16 +2631,16 @@ class _DetailPageState extends State<DetailPage> {
   /// 只有一条（或没有）可续播记录时走改造前的路径——按钮上的「继续播放 ·
   /// 第N集」点下去就是播那一集，不该因为「同时存在过别的历史」多一次点击。
   Future<void> _playFromHero(Vod vod, List<VodPlayLine> lines) async {
-    final resolution = _resolveDetailHistory(vod, lines);
+    final resolution = _resolveDetailHistory(widget.vod, lines);
     final options = resolution.options;
     if (options.length >= 2) {
       final picked = await showHistoryProgressPicker(context, choices: options);
       if (!mounted || picked == null) return;
-      // 别的源选项都映射到当前线路；本站选项沿用既有「用正在看的线路 + 原始
-      // 下标」口径，两处都与改造前的行为一致。
-      final line = picked.isOwnSite
-          ? _activeLine(lines)
-          : (_lineOfFlag(lines, picked.lineFlag) ?? _activeLine(lines));
+      // 线路必须跟着**选项自己的** flag 走：`episodeIndex` 是按那条线路算的
+      // 原始下标，拿当前线路去播会把「本站 · 第 5 集」播成当前线路第 5 集
+      // ——线路和集同时错。别的源选项恒映射到当前线路，所以两者一致；
+      // 本站选项可能落在另一条线路上，必须按 flag 找回它。
+      final line = _lineOfFlag(lines, picked.lineFlag) ?? _activeLine(lines);
       await _play(
         vod,
         line,
@@ -2659,7 +2682,7 @@ class _DetailPageState extends State<DetailPage> {
   /// `matched` 并回落到 `fallback`，在这里再判一次就是重复判定——也正是
   /// §3.1 要避免的那种漂移。
   String _heroPlayLabel(List<VodPlayLine> lines, Vod vod) {
-    final resolution = _resolveDetailHistory(vod, lines);
+    final resolution = _resolveDetailHistory(widget.vod, lines);
     // 两条以上可续播记录：按钮不再暗示「就续那一集」——点下去先让用户选
     // （用户 2026-11-29 选型）。数字进文案，用户点之前就知道会看到选择框。
     if (resolution.options.length >= 2) {
@@ -2737,7 +2760,11 @@ class _DetailPageState extends State<DetailPage> {
     ResumeSeed? seedOverride,
   }) {
     final episode = line.episodes[episodeIndex];
-    final fallback = widget.state.resumePositionFor(
+    // 有种子时**不再用本站精确查询做兜底**：两者可能指向同一集的不同记录
+    // （本站旧记录 0:10、用户选的乙站记录 20:00），而 `resolveResumeStart`
+    // 会先返回兜底——用户选了哪条却不从哪条续播，等于选择框在骗人。
+    final seed = widget.resumeSeed ?? seedOverride;
+    final fallback = seed != null ? null : widget.state.resumePositionFor(
       siteKey: _pageSite?.key ?? '',
       vodId: vod.vodId,
       flag: line.playbackFlag,
@@ -2754,7 +2781,7 @@ class _DetailPageState extends State<DetailPage> {
       lines: lines,
       // 构造参数里的种子（历史页/换源）优先；其次是本页自己找到的其它源记录
       // （[reboundResumeSeed] 已把它改写成目标线路自己的身份）。
-      seed: widget.resumeSeed ?? seedOverride,
+      seed: seed,
       targetLine: line,
       targetEpisodeIndex: episodeIndex,
       targetEpisodeName: episode.name,
@@ -3465,7 +3492,10 @@ class _DetailPageState extends State<DetailPage> {
     // 分集完整命中决定能否续播；集入口失效不应阻止恢复仍存在的历史线路。
     // 用户手动切过线路后，历史不得把选择抢回去。
     if (belongs && lines.isNotEmpty && _selectedLineFlag.isEmpty) {
-      final target = _resumeTarget(lines);
+      // 自动选线路**只认本站记录**（改造前的语义）：跨源目标映射到的是当前
+      // 线路，拿它选线路会把 `_selectedLineFlag` 钉死在首条线路上并永久锁死
+      // （下面的 `isEmpty` 守卫让真详情到达后不再重解析）。
+      final target = _ownResumeTarget(lines);
       final historyFlag = _history?.flag ?? '';
       final historyEpisodeId = _history?.episodeId ?? '';
       final byFlag = historyFlag.isEmpty
@@ -3777,8 +3807,10 @@ class _DetailPageState extends State<DetailPage> {
                           // `matched == true` 才标——`matched == false` 涵盖
                           // 「无历史」与「历史线路在但那一集已消失」两种情形，
                           // 后者标出来会把用户引到一条没有那一集的线路上。
-                          recentFlag: _resumeTarget(lines).matched
-                              ? _resumeTarget(lines).flag
+                          // 线路 chip 的「最近播放」标的是**本站**上次那条线路；
+                          // 别的源的目标映射在当前线路上，标它等于标错线路。
+                          recentFlag: _ownResumeTarget(lines).matched
+                              ? _ownResumeTarget(lines).flag
                               : '',
                           episodeCounts: _episodeCountsByLine(lines),
                           onChanged: (line) => _selectLine(line, lines),
@@ -4573,7 +4605,7 @@ class _DetailPageState extends State<DetailPage> {
     // 别的爬虫源的进度标记（`design/02` §9）：一张卡最多一个角标，多条记录
     // 合并成「N条」，来源名/位置/时间进 Tooltip；默认续播目标用第三色描边。
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final resolution = _resolveDetailHistory(vod, lines);
+    final resolution = _resolveDetailHistory(widget.vod, lines);
     final foreignMarks = <int, EpisodeForeignProgressMark>{};
     for (final mapped in resolution.mapped) {
       final groupIndex = groups.indexWhere(
@@ -4598,12 +4630,14 @@ class _DetailPageState extends State<DetailPage> {
               percent: candidate.progressPercent,
               detail: detail,
               active: active,
+              completed: candidate.completed,
             )
           : EpisodeForeignProgressMark(
               count: previous.count + 1,
               percent: previous.percent,
               detail: '${previous.detail}\n$detail',
               active: previous.active || active,
+              completed: previous.completed,
             );
     }
 

@@ -36,8 +36,6 @@ const int resumeEndingGuardMs = 5000;
 class HistoryCandidate {
   const HistoryCandidate({
     required this.siteKey,
-    required this.vodId,
-    required this.flag,
     required this.episodeName,
     required this.episodeId,
     required this.positionMs,
@@ -46,14 +44,8 @@ class HistoryCandidate {
     this.completed = false,
   });
 
-  /// 记录所属站点（同一份配置里的爬虫源）。
+  /// 记录所属站点（同一份配置里的爬虫源；同一站点的多条记录靠它去重）。
   final String siteKey;
-
-  /// 记录所属条目 id（不同站点的 id 命名空间不同）。
-  final String vodId;
-
-  /// 记录里的线路标识（原站点的线路名，跨站点时**不可**用于定位线路）。
-  final String flag;
 
   /// 记录里的集名。跨站点时它是**唯一**可信的集身份线索。
   final String episodeName;
@@ -97,6 +89,17 @@ bool hasResumePositionMs({
     positionMs >= resumeMinPositionMs &&
     !(durationMs > 0 && positionMs > durationMs - resumeEndingGuardMs);
 
+/// 花絮/预告/特辑一类的条目：**不参与跨站点映射**。
+///
+/// 为什么必须显式否决：这些条目的集名里也带集号（`第1集 预告`、`S01E01 花絮`），
+/// 按集号对齐会把「预告的进度」搬到正片第 1 集上——标错、还可能续播到错的位置。
+/// 黑名单只认**明确的附加内容关键词**，不猜「看起来不像正片」。
+bool isExtraEpisodeName(String? input) {
+  final text = (input ?? '').trim();
+  if (text.isEmpty) return false;
+  return RegExp(r'预告|花絮|片段|特辑|番外|彩蛋|制作特辑|先导').hasMatch(text);
+}
+
 /// 一条候选映射到某条线路后的结果。
 class MappedHistoryCandidate {
   const MappedHistoryCandidate({
@@ -129,6 +132,9 @@ MappedHistoryCandidate? mapHistoryCandidateToLine({
 }) {
   final episodes = line.episodes;
   if (episodes.isEmpty) return null;
+  // 附加内容（预告/花絮/特辑）一律不参与映射：它的集名也带集号，按集号对齐会把
+  // 预告的进度搬到正片同一集上（§9.7 的边界必须真的落地，而不是只写在文档里）。
+  if (isExtraEpisodeName(candidate.episodeName)) return null;
 
   final candidateSeason = sourceSeasonNumber(candidate.episodeName);
   bool sameSeason(String? targetName) {
@@ -152,7 +158,9 @@ MappedHistoryCandidate? mapHistoryCandidateToLine({
   if (index == null && candidate.episodeName.isNotEmpty) {
     final hits = <int>[
       for (var i = 0; i < episodes.length; i++)
-        if (episodes[i].name == candidate.episodeName && sameSeason(episodes[i].name))
+        if (episodes[i].name == candidate.episodeName &&
+            sameSeason(episodes[i].name) &&
+            !isExtraEpisodeName(episodes[i].name))
           i,
     ];
     if (hits.length == 1) index = hits.single;
@@ -165,7 +173,8 @@ MappedHistoryCandidate? mapHistoryCandidateToLine({
       final hits = <int>[
         for (var i = 0; i < episodes.length; i++)
           if (sourceEpisodeNumber(episodes[i].name) == number &&
-              sameSeason(episodes[i].name))
+              sameSeason(episodes[i].name) &&
+              !isExtraEpisodeName(episodes[i].name))
             i,
       ];
       if (hits.length == 1) index = hits.single;
@@ -173,7 +182,10 @@ MappedHistoryCandidate? mapHistoryCandidateToLine({
   }
 
   // 四级：单集线路（电影/单集剧）——整部作品就是这一集。
-  if (index == null && episodes.length == 1 && sameSeason(episodes.single.name)) {
+  if (index == null &&
+      episodes.length == 1 &&
+      sameSeason(episodes.single.name) &&
+      !isExtraEpisodeName(episodes.single.name)) {
     index = 0;
   }
 
@@ -186,44 +198,47 @@ MappedHistoryCandidate? mapHistoryCandidateToLine({
 }
 
 /// 详情页的跨站点进度投影。
+///
+/// **顺序即优先级**：本层不重新排序，[mapped] 保持调用方给的顺序。调用方的
+/// 顺序是「TMDB 身份命中段 → 同名段」，两段内部各自按最近观看倒序
+/// （`AppDatabase.findHistoryCandidatesAcrossSites`）。这样同名不同剧的更晚
+/// 记录不会顶掉身份命中的那条，正是 §9.1 的身份优先保证（对齐安卓
+/// `findPlaybackByTmdb` 先查、`findPlaybackCandidate` 再选）。
 class CrossSiteProgress {
   const CrossSiteProgress({required this.mapped, required this.resumable});
 
-  /// 所有能映射到当前线路的候选，**按最近观看倒序**。
+  /// 能映射到当前线路的候选，保持调用方优先级顺序；同一站点的同一集只留一条。
   final List<MappedHistoryCandidate> mapped;
 
   /// 其中真正可续播的那些（顺序同 [mapped]）。
   final List<MappedHistoryCandidate> resumable;
 
-  /// 默认续播目标：最近的可续播记录；没有可续播的才回落到最近一条记录。
+  /// 默认续播目标：优先级最高的可续播记录；没有可续播的才回落到第一条记录。
   ///
-  /// 与安卓 `findPlaybackCandidate` 的排序同向：先「能续播」，再「最近」。
+  /// 与安卓 `findPlaybackCandidate` 同向：先「能续播」，再按来源优先级/最近观看。
   MappedHistoryCandidate? get primary =>
       resumable.isNotEmpty ? resumable.first : (mapped.isEmpty ? null : mapped.first);
-
-  /// 是否要弹「选择续播记录」：两条以上**不同记录**都能续播。
-  ///
-  /// 只数可续播的记录：已看完/没位置的记录不能作为续播起点，让用户去选
-  /// 一条点了就从头开始的记录，比不弹更糟。
-  bool get needsChoice => resumable.length >= 2;
 }
 
 /// 把候选投影成当前线路上的进度视图。
+///
+/// 去重键是 `(siteKey, episodeIndex)`：历史行按「线路 + 集入口」唯一，同一站点
+/// 换过线路后同一集会有两行。不去重的话选择框会出现两个一模一样的「乙站 ·
+/// 第5集」、首屏变成「2 条记录」、角标变成「其他源 2条」——用户在无法区分的
+/// 选项里做选择，本身就违反了「让用户选」的前提。
 CrossSiteProgress buildCrossSiteProgress({
   required Iterable<HistoryCandidate> candidates,
   required VodPlayLine line,
 }) {
   final mapped = <MappedHistoryCandidate>[];
+  final seen = <String, Set<int>>{};
   for (final candidate in candidates) {
     final hit = mapHistoryCandidateToLine(candidate: candidate, line: line);
-    if (hit != null) mapped.add(hit);
+    if (hit == null) continue;
+    final indexes = seen.putIfAbsent(candidate.siteKey, () => <int>{});
+    if (!indexes.add(hit.episodeIndex)) continue;
+    mapped.add(hit);
   }
-  mapped.sort((a, b) {
-    final byTime = b.candidate.updatedAt.compareTo(a.candidate.updatedAt);
-    if (byTime != 0) return byTime;
-    // 同一毫秒的并列：按集号稳定排序，避免每次 build 顺序抖动。
-    return a.episodeIndex.compareTo(b.episodeIndex);
-  });
   final resumable = [
     for (final item in mapped)
       if (item.candidate.hasResumePosition) item,

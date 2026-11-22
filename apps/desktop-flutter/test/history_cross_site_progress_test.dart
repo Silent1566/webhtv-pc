@@ -28,8 +28,6 @@ void main() {
 
   HistoryCandidate candidateOf({
     String siteKey = 'site-b',
-    String vodId = 'b-1',
-    String flag = '线路一',
     String episodeName = '第1集',
     String episodeId = 'https://b/e1',
     int positionMs = 600000,
@@ -38,8 +36,6 @@ void main() {
     bool completed = false,
   }) => HistoryCandidate(
     siteKey: siteKey,
-    vodId: vodId,
-    flag: flag,
     episodeName: episodeName,
     episodeId: episodeId,
     positionMs: positionMs,
@@ -117,6 +113,35 @@ void main() {
       );
     });
 
+    test('附加内容（预告/花絮/特辑）不参与映射', () {
+      // 预告的集名也带集号；按集号对齐会把预告的进度搬到正片第 1 集上。
+      expect(
+        mapHistoryCandidateToLine(
+          candidate: candidateOf(episodeName: '第1集 预告', episodeId: 'https://b/t1'),
+          line: line,
+        ),
+        isNull,
+      );
+      expect(
+        mapHistoryCandidateToLine(
+          candidate: candidateOf(episodeName: '花絮 第2集', episodeId: 'https://b/t2'),
+          line: line,
+        ),
+        isNull,
+      );
+      // 目标线路里那条本身是花絮时也不能落上去。
+      final withExtra = lineOf('线路一', [
+        ('第1集 预告', 'https://a/t1'),
+        ('第2集', 'https://a/e2'),
+      ]);
+      expect(
+        mapHistoryCandidateToLine(
+          candidate: candidateOf(episodeName: '第1集', episodeId: 'https://b/e1'),
+          line: withExtra,
+        ),
+        isNull,
+      );
+    });
     test('单集线路（电影）按「整部就是这一集」对齐', () {
       final movie = lineOf('线路一', [('正片', 'https://a/movie')]);
       final mapped = mapHistoryCandidateToLine(
@@ -144,39 +169,55 @@ void main() {
     });
   });
 
-  group('进度投影：最近观看排序 + 可续播判定', () {
+  group('进度投影：顺序即优先级 + 去重 + 可续播判定', () {
     final line = lineOf('线路一', [
       ('第1集', 'https://a/e1'),
       ('第2集', 'https://a/e2'),
       ('第3集', 'https://a/e3'),
     ]);
 
-    test('按最近观看倒序；primary 取最近的可续播记录', () {
+    test('保持调用方顺序；primary 取顺序里第一条可续播记录', () {
+      // 调用方（storage）给的顺序是「身份命中段 → 同名段」，段内最近在前。
+      // 本层不重排：重排会让同名但更晚的记录顶掉身份命中的那条（§9.1）。
       final progress = buildCrossSiteProgress(
         candidates: [
-          candidateOf(episodeName: '第1集', episodeId: 'https://b/e1', updatedAt: 100, positionMs: 600000),
           candidateOf(episodeName: '第3集', episodeId: 'https://b/e3', updatedAt: 300, completed: true),
           candidateOf(episodeName: '第2集', episodeId: 'https://b/e2', updatedAt: 200, positionMs: 900000),
+          candidateOf(episodeName: '第1集', episodeId: 'https://b/e1', updatedAt: 100, positionMs: 600000),
         ],
         line: line,
       );
       expect(progress.mapped.map((m) => m.episodeName).toList(), ['第3集', '第2集', '第1集']);
       expect(progress.resumable.map((m) => m.episodeName).toList(), ['第2集', '第1集']);
-      expect(progress.primary?.episodeName, '第2集');
-      expect(progress.needsChoice, isTrue);
+      expect(progress.primary?.episodeName, '第2集', reason: '最近观看的排在最前');
     });
 
-    test('只有一条可续播记录时不弹选择框', () {
+    test('顺序优先于时间：更晚的同名记录不得顶掉身份命中那条', () {
       final progress = buildCrossSiteProgress(
         candidates: [
-          candidateOf(episodeName: '第1集', episodeId: 'https://b/e1', updatedAt: 100),
-          candidateOf(episodeName: '第2集', episodeId: 'https://b/e2', updatedAt: 200, completed: true),
+          candidateOf(episodeName: '第3集', episodeId: 'https://b/e3', updatedAt: 100),
+          candidateOf(
+            siteKey: 'site-c',
+            episodeName: '第1集',
+            episodeId: 'https://c/e1',
+            updatedAt: 900,
+          ),
         ],
         line: line,
       );
-      expect(progress.resumable, hasLength(1));
-      expect(progress.needsChoice, isFalse);
-      expect(progress.primary?.episodeName, '第1集');
+      expect(progress.primary?.candidate.siteKey, 'site-b');
+    });
+
+    test('同一站点的同一集只保留优先级最高那条（换过线路会有两行）', () {
+      final progress = buildCrossSiteProgress(
+        candidates: [
+          candidateOf(episodeName: '第2集', episodeId: 'https://b/q/e2', updatedAt: 200),
+          candidateOf(episodeName: '第2集', episodeId: 'https://b/m/e2', updatedAt: 100),
+        ],
+        line: line,
+      );
+      expect(progress.mapped, hasLength(1));
+      expect(progress.mapped.single.candidate.updatedAt, 200);
     });
 
     test('位置过短 / 已看完 / 贴片尾都不算可续播', () {
@@ -202,8 +243,8 @@ void main() {
         line: line,
       );
       expect(progress.mapped, isEmpty);
+      expect(progress.resumable, isEmpty);
       expect(progress.primary, isNull);
-      expect(progress.needsChoice, isFalse);
     });
   });
 
@@ -215,8 +256,6 @@ void main() {
     const mapped = MappedHistoryCandidate(
       candidate: HistoryCandidate(
         siteKey: 'site-b',
-        vodId: 'b-1',
-        flag: '备用线路',
         episodeName: '第2集',
         episodeId: 'https://b/e2',
         positionMs: 650000,

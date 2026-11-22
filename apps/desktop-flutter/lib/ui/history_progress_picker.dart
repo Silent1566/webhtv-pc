@@ -129,7 +129,7 @@ class _HistoryProgressPickerDialogState
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '同一部剧在本站和其它爬虫源都有进度，选一条继续：',
+                      '同一部剧有多条可续播记录，选一条继续：',
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: 12),
