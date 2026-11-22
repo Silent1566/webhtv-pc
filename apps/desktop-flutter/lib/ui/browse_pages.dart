@@ -53,6 +53,7 @@ import 'config_pages.dart';
 import 'player_page.dart';
 import 'search_page.dart';
 import 'detail_ratings_section.dart';
+import 'detail_comments_section.dart';
 import 'detail_recommendations.dart';
 import 'layout_scale.dart';
 import 'tmdb_detail_page.dart';
@@ -4026,88 +4027,15 @@ class _DetailPageState extends State<DetailPage> {
   /// - 每条带来源徽标，来源由模型决定，UI 不认具体站点；
   /// - 只显示文字/作者/评分/有用数，**不参与任何评分统计**；
   /// - 默认一页 12 条，「加载更多」按来源继续翻页，翻到没有就收起按钮。
+  ///
+  /// 渲染搬到 [ExternalCommentsSection]（用户在 2026-11-22 要求评分改成豆瓣式
+  /// 五角星、并重排单条版式）：页面这里只剩「把四个字段递过去」。
   Widget _buildExternalComments(BuildContext context) {
-    final theme = Theme.of(context);
-    final page = _externalComments;
-    if (page.isEmpty) return const SizedBox.shrink();
-    return Column(
-      key: const ValueKey('detail-external-comments'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(
-          title: page.total > page.comments.length
-              ? '短评（${page.comments.length}/${page.total}）'
-              : '短评（${page.comments.length}）',
-          // 整页同源时徽标只出现一次：每条都挂一遍「豆瓣」纯属视觉噪音，
-          // 只有**混源**（以后接了第二家评论源）才需要逐条标注。
-          trailing: _mixedCommentSources
-              ? null
-              : TagChip(
-                  keyValue: 'detail-comments-source',
-                  label: page.comments.first.sourceLabel,
-                  icon: Icons.forum_outlined,
-                ),
-        ),
-        for (final comment in page.comments)
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpace.sm),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  comment.text,
-                  style: theme.textTheme.bodyMedium,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: AppSpace.xs),
-                Row(
-                  children: [
-                    if (_mixedCommentSources) ...[
-                      TagChip(
-                        keyValue: 'detail-comment-source-${comment.source.key}',
-                        label: comment.sourceLabel,
-                        icon: Icons.forum_outlined,
-                      ),
-                      const SizedBox(width: AppSpace.xs),
-                    ],
-                    Expanded(
-                      child: Text(
-                        [
-                          if (comment.author.isNotEmpty) comment.author,
-                          if (comment.rating > 0)
-                            '${comment.ratingOutOfTen.toStringAsFixed(1)}/10',
-                          if (comment.votes > 0) '${comment.votes} 有用',
-                          if (comment.date.isNotEmpty)
-                            comment.date.split(' ').first,
-                        ].join(' · '),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        if (page.hasMore)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              key: const ValueKey('detail-comments-more'),
-              onPressed: _externalCommentsLoading ? null : _loadMoreComments,
-              icon: _externalCommentsLoading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.expand_more, size: 18),
-              label: Text(_externalCommentsLoading ? '加载中…' : '加载更多短评'),
-            ),
-          ),
-      ],
+    return ExternalCommentsSection(
+      page: _externalComments,
+      mixedSources: _mixedCommentSources,
+      loadingMore: _externalCommentsLoading,
+      onLoadMore: _loadMoreComments,
     );
   }
 

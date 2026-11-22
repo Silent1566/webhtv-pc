@@ -224,6 +224,10 @@ class ExternalComment {
   /// 统一到 10 分制，供 UI 用同一套星条渲染。
   double get ratingOutOfTen =>
       rating <= 0 || maxRating <= 0 ? 0 : (rating / maxRating * 10).clamp(0, 10).toDouble();
+
+  /// 半星步进（0..10）：一步 = 半颗星。0 表示未评分。
+  int get ratingHalfStars =>
+      rating <= 0 || maxRating <= 0 ? 0 : ratingOutOfTen.round().clamp(0, 10);
 }
 
 /// 一页短评。
