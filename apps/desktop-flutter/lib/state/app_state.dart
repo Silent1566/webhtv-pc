@@ -2400,6 +2400,15 @@ AiContentCompletion? aiContentCompletion,
 
   bool _disposed = false;
 
+  /// 播放进度写库的修订号：每次 [recordProgress] 成功落库后自增。
+  ///
+  /// 为什么不是 [notifyListeners]：进度在播放中每 5 秒写一次，全局通知会让首页、
+  /// 侧栏、历史页等**所有**监听者在播放期间反复重建；而真正需要「刚才播到哪」
+  /// 的只有当前这页详情。订阅一个计数器，代价只落在它的监听者身上。
+  ///
+  /// 订阅方必须**重新查库**而不是缓存上一次的结果：写入与通知之间有微小窗口。
+  final ValueNotifier<int> progressRevision = ValueNotifier<int>(0);
+
   /// 通知监听者的**统一出口**：已 dispose 就安静返回。
   ///
   /// 为什么要有它：`await` 之后回到同步段时，widget 树可能已经拆掉
@@ -7052,6 +7061,9 @@ AiContentCompletion? aiContentCompletion,
         tmdbId: tmdbId,
         mediaType: mediaType,
       );
+      // 写库成功：通知订阅者（详情页角标/首屏文案）。放在这里而不是方法末尾，
+      // 是为了让「恢复上下文 / 追番回写」这些副作用不挡住界面刷新。
+      if (!_disposed) progressRevision.value++;
       // 崩溃恢复上下文（P2-8）：与历史同源，但只存标识与进度。
       _recordRecoveryPlayback(
         siteKey: effectiveSiteKey,
@@ -7137,6 +7149,44 @@ AiContentCompletion? aiContentCompletion,
     } catch (error) {
       log.warning('读取播放进度失败:$error', scope: 'history');
       return null;
+    }
+  }
+
+  /// 同一个配置里、其它爬虫源的历史候选（详情页跨爬虫源进度用）。
+  ///
+  /// 与 [findHistory] 的分工：那条回答「本站点这一集播到哪了」，这条回答
+  /// 「同一部作品在别的爬虫源上有没有记录」。两者都只认**当前播放源**
+  /// （sourceKey），跨配置的记录归历史页的「用原来源打开」。
+  ///
+  /// TMDB 身份匹配跟随 ui.historyAggregation：逐集模式（none）下不按身份查、
+  /// 只按片名查（对齐安卓 isHistoryAggregationEffective）；title 模式同理——
+  /// 用户选了「只按片名」，就不该被 TMDB 身份合并。
+  List<PlaybackHistory> findHistoryCandidatesAcrossSites({
+    required String siteKey,
+    required String vodId,
+    required String vodName,
+    int tmdbId = 0,
+    String mediaType = '',
+    String? sourceKey,
+  }) {
+    final database = _database;
+    if (database == null) return const [];
+    final key = (sourceKey ?? activeSourceKey).trim();
+    // 空串 = 没有具体播放源。宁可不标，不可猜源（docs/phase5/design/05 §6.1）。
+    if (key.isEmpty) return const [];
+    final usesTmdb = UiHistoryAggregation.usesTmdb(historyAggregation);
+    try {
+      return database.findHistoryCandidatesAcrossSites(
+        sourceKey: key,
+        siteKey: siteKey,
+        vodId: vodId,
+        vodName: vodName,
+        tmdbId: usesTmdb ? tmdbId : 0,
+        mediaType: usesTmdb ? mediaType : '',
+      );
+    } catch (error) {
+      log.warning('读取跨站点历史候选失败:$error', scope: 'history');
+      return const [];
     }
   }
 
@@ -9254,6 +9304,7 @@ AiContentCompletion? aiContentCompletion,
   @override
   void dispose() {
     _disposed = true;
+    progressRevision.dispose();
     revokeProxySession();
     unawaited(_pythonEnvironment.close());
     _detailRunId++;
