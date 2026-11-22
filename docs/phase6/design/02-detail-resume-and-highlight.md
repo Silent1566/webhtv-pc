@@ -488,3 +488,43 @@ B4 的链条由三段既有测试拼成，**没有**一条端到端用例：
 - 「选中记录的起始位置」目前没有端到端用例：本机 `/test` 环境缺 libmpv，播放器
   链路（`player_page_harness`）起不来；该语义由 `_resumeStartFor` 的「有种子不兜底」
   实现 + 纯逻辑层的种子改写用例共同保证，真机验收时需人工确认一次。
+
+---
+
+## 10. 进度写库后的详情页刷新（2026-11-29）
+
+用户实报：
+
+> 我在播放页后退返回到详情页时记录没有及时更新
+
+### 10.1 根因（三条事实叠在一起）
+
+| # | 事实 | 后果 |
+| --- | --- | --- |
+| 1 | `PlayerPage` 在 **`dispose()`** 里写最后一条进度：那是 pop 动画结束、路由被移除之后 | `Navigator.push` 的 future 在 **pop 开始**时就 resolve 了，`_play` 的 `await` 恢复时最后一条还没写 |
+| 2 | `AppState.recordProgress` 写库后**不通知**任何监听者 | 写库之后没有任何信号让详情页重算 |
+| 3 | 详情页只在 build 里查库（`_history`），并缓存了 [`_resolveDetailHistory`] | 返回时的重建要么没发生、要么发生在写库之前，于是角标/首屏文案停在进播放器之前 |
+
+### 10.2 修法：按需订阅的修订号，而不是全局通知
+
+- `AppState.progressRevision`（`ValueNotifier<int>`）：`recordProgress` 成功落库后自增。
+  为什么不用 `notifyListeners()`：播放中每 5 秒写一次，全局通知会让首页、侧栏、
+  历史页等**所有**监听者在播放期间反复重建；真正需要「刚才播到哪」的只有当前详情页。
+- 详情页 `initState` 订阅、`dispose` 退订；回调里失效缓存（跨站点候选 + 进度解析）
+  并在页面可见时重建。**播放器开着时只失效不重建**（`_playerRouteOpen`），返回时
+  由 `_play` 的 `await` 之后补一次重建；随后 dispose 写库触发的那次通知再刷新一遍。
+- **必须延后到帧末**：写库可能发生在路由 dispose 期间，那一刻 widget 树是锁住的，
+  直接 `setState` 会抛「setState() called when widget tree was locked」。
+  回调用 `SchedulerPhase.idle ? setState : addPostFrameCallback(setState)`。
+
+### 10.3 验收
+
+`test/detail_history_refresh_test.dart`：
+
+1. 假的播放页**只在 `dispose()` 里写进度**（与真实时序一致）→ 返回后首屏文案变
+   「继续播放 · 第2集」、角标挪到第 2 集；
+2. 详情页可见时直接写进度 → 同样立刻更新（不依赖任何路由时序）。
+
+边界：本修复只覆盖**详情页**。首页续播行、历史页等其他监听者仍走它们各自的刷新
+路径；`updateHistoryPoster` / 同步合并等历史写入口暂未自增修订号（`progressRevision`
+只表示「播放进度写库」），需要时再让它们加入。

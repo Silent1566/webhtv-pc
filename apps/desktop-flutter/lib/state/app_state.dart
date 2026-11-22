@@ -2400,6 +2400,15 @@ AiContentCompletion? aiContentCompletion,
 
   bool _disposed = false;
 
+  /// 播放进度写库的修订号：每次 [recordProgress] 成功落库后自增。
+  ///
+  /// 为什么不是 [notifyListeners]：进度在播放中每 5 秒写一次，全局通知会让首页、
+  /// 侧栏、历史页等**所有**监听者在播放期间反复重建；而真正需要「刚才播到哪」
+  /// 的只有当前这页详情。订阅一个计数器，代价只落在它的监听者身上。
+  ///
+  /// 订阅方必须**重新查库**而不是缓存上一次的结果：写入与通知之间有微小窗口。
+  final ValueNotifier<int> progressRevision = ValueNotifier<int>(0);
+
   /// 通知监听者的**统一出口**：已 dispose 就安静返回。
   ///
   /// 为什么要有它：`await` 之后回到同步段时，widget 树可能已经拆掉
@@ -7052,6 +7061,9 @@ AiContentCompletion? aiContentCompletion,
         tmdbId: tmdbId,
         mediaType: mediaType,
       );
+      // 写库成功：通知订阅者（详情页角标/首屏文案）。放在这里而不是方法末尾，
+      // 是为了让「恢复上下文 / 追番回写」这些副作用不挡住界面刷新。
+      if (!_disposed) progressRevision.value++;
       // 崩溃恢复上下文（P2-8）：与历史同源，但只存标识与进度。
       _recordRecoveryPlayback(
         siteKey: effectiveSiteKey,
@@ -9292,6 +9304,7 @@ AiContentCompletion? aiContentCompletion,
   @override
   void dispose() {
     _disposed = true;
+    progressRevision.dispose();
     revokeProxySession();
     unawaited(_pythonEnvironment.close());
     _detailRunId++;

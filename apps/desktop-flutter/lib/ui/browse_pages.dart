@@ -1328,6 +1328,12 @@ class _DetailPageState extends State<DetailPage> {
   _DetailHistoryResolution? _historyResolution;
   String _historyResolutionKey = '';
 
+  /// 播放器路由是否还开着。
+  ///
+  /// 开着时进度写库（播放中每 5 秒一次）只失效缓存、**不重建**：播放器整屏盖在
+  /// 上面，重建这页纯属浪费；等返回后补一次重建即可（见 [_play] 的 await 之后）。
+  bool _playerRouteOpen = false;
+
   /// 当前选中线路的 `flag`（`04` §3.1 ④）。
   ///
   /// 点击线路条即切换，下方剧集卡片随之变成该线路的集（对齐上游 `@id/flag`）。
@@ -1556,6 +1562,9 @@ class _DetailPageState extends State<DetailPage> {
     widget.state.addListener(_onStateChanged);
     // TMDB 区块也需监听（异步匹配/详情完成后重建，`04` §3.3）。
     widget.state.tmdb.addListener(_onStateChanged);
+    // 播放进度写库单独订阅：它不走全局 notify（播放中每 5 秒一次，全局通知会
+    // 把首页/侧栏一起重建），见 [AppState.progressRevision]。
+    widget.state.progressRevision.addListener(_onProgressWritten);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // 详情错误的投影也排在首帧之后：`showToast` 会 `notifyListeners`，在
@@ -1898,6 +1907,7 @@ class _DetailPageState extends State<DetailPage> {
     _ratingsController = null;
     widget.state.removeListener(_onStateChanged);
     widget.state.tmdb.removeListener(_onStateChanged);
+    widget.state.progressRevision.removeListener(_onProgressWritten);
     // 详情错误通知的动作指向本页的 `_openSourceSwap`，页面销毁后那条通知必须一起
     // 收走：否则用户返回列表后点「换源」，回调会拿一个已失效的 context 去开浮层。
     // 放到首帧之后而不是就地调用，理由同上——构建期不能标脏 `ToastHost`。
@@ -1921,6 +1931,30 @@ class _DetailPageState extends State<DetailPage> {
     if (!mounted || _holdingRecommendationDetail) return;
     _syncDetailErrorToast();
     setState(() {});
+  }
+
+  /// 播放进度写库后的刷新。
+  ///
+  /// 只失效缓存并重建：历史数据在库里，重建时 [_history] 会重新查。播放器开着时
+  /// 跳过重建（[_playerRouteOpen]），返回时由 [_play] 的 await 之后补一次。
+  void _onProgressWritten() {
+    _crossSiteCandidatesKey = '';
+    _historyResolution = null;
+    _historyResolutionKey = '';
+    if (!mounted || _playerRouteOpen) return;
+    // 写库可能发生在**路由 dispose 期间**（播放器的 dispose 在 pop 动画收尾才跑），
+    // 那一刻 widget 树是锁住的：直接 setState 会抛
+    // 「setState() called when widget tree was locked」。延到本帧末尾再标脏。
+    void rebuild() {
+      if (!mounted) return;
+      setState(() {});
+    }
+
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.idle) {
+      rebuild();
+    } else {
+      SchedulerBinding.instance.addPostFrameCallback((_) => rebuild());
+    }
   }
 
   /// 把 [AppState.detailError] 投影成一条带「换源」动作的右下角通知。
@@ -3007,6 +3041,8 @@ class _DetailPageState extends State<DetailPage> {
       // 导航前收掉反馈：否则它会盖在播放器首帧上。owner 仍由本次调用持有到
       // 播放器返回（`finally` 里 close），期间本页不再有第二个播放动作。
       feedback.dismiss();
+      // 播放期间进度写库只失效缓存、不重建（见 [_playerRouteOpen]）。
+      _playerRouteOpen = true;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerPage(
@@ -3069,6 +3105,16 @@ class _DetailPageState extends State<DetailPage> {
           ),
         ),
       );
+      _playerRouteOpen = false;
+      // 播放器在**自己的 dispose 里**写最后一条进度（pop 动画结束之后），所以
+      // 这里先重建一次（数据可能还是旧的一帧），随后的 [progressRevision] 通知
+      // 会再刷新一次——两次都是读库，不会出现「停在进播放器之前」。
+      if (mounted) {
+        _crossSiteCandidatesKey = '';
+        _historyResolution = null;
+        _historyResolutionKey = '';
+        setState(() {});
+      }
     } catch (error) {
       final failure = error is AppError
           ? error
