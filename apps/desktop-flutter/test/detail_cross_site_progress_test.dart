@@ -297,8 +297,8 @@ void main() {
       vodId: 'b-2',
       vodName: pageVod.vodName,
       flag: '乙站线路',
-      episodeName: '第3集',
-      episodeId: 'http://b/e3',
+      episodeName: '第2集',
+      episodeId: 'http://b/e2',
       positionMs: 600000,
       durationMs: 2400000,
       updatedAt: 200,
@@ -331,9 +331,22 @@ void main() {
     );
   });
 
-  testWidgets('选择框里选「本站」时按它自己的线路下标播放，不串到当前线路', (tester) async {
+  testWidgets('切到别的线路后，选择框里的本站记录仍按它自己的线路播放', (tester) async {
+    // 关键形状：用户进页后**手动切走**到线路一，此时本站记录还在线路二。
+    // 选择框里的「本站」下标是按线路二算的，若套用当前线路（线路一）的下标，
+    // 「第1集」会播成线路一的第 2 集——线路与集同时错。
     seedMultiLine(multiLineVod);
     await pumpDetail(tester, target: multiLineVod);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const ValueKey('tmdb-line-线路二')))
+          .selected,
+      isTrue,
+    );
+
+    // 切到线路一：别的源的第 2 集在这里才映射得上。
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路一')));
+    await tester.pump();
     expect(find.text('继续播放（2 条记录）'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
