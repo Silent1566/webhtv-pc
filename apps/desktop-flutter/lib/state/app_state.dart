@@ -3991,7 +3991,17 @@ AiContentCompletion? aiContentCompletion,
     seasonService: _ensureTmdbSeasonService(),
     enrichmentService: _ensureTmdbEnrichmentService(),
     isCurrentRun: () => _tmdbRunId == _detailRunId,
+    onMatched: _rememberDetailIdentity,
   );
+
+  /// 详情页匹配命中 → 把身份回写历史行（[rememberHistoryIdentity]）。
+  ///
+  /// 不写的话，这次匹配只活在 `tmdb_matches` 里：首页 hero 与历史页聚合读的是
+  /// 历史行，会一直显示「没有 TMDB 身份」——用户 2026-11-22 反馈的正是这个。
+  void _rememberDetailIdentity(String siteKey, String vodId, TmdbItem item) {
+    if (siteKey.trim().isEmpty || vodId.trim().isEmpty) return;
+    rememberHistoryIdentity(siteKey: siteKey, vodId: vodId, item: item);
+  }
 
   /// 当前 TMDB 加载归属的详情运行号（`loadDetail` 每次自增）。
   int _tmdbRunId = 0;
@@ -4103,31 +4113,57 @@ AiContentCompletion? aiContentCompletion,
 
   /// 仅解析一条历史行的 TMDB 身份，不切换站点或当前详情的 TMDB 状态。
   ///
-  /// 首页 hero 用它给「播放时没带上身份」的续播条目补 16:9 背景与简介
-  /// （`ui/home_page.dart`）。匹配结论由 [TmdbIdentityService] 按
-  /// `(siteKey, vodId, sourceTitle)` 落盘，下次启动零请求；匹配不到返回
-  /// `null`，调用方保留站点海报，不编造元数据。
+  /// 先读**已落盘的匹配结论**：详情页（`state/tmdb_state.dart`）早就匹配过的
+  /// 作品在这里零请求，也不会再触发分季变体探测；只有从未匹配过才按片名走一次
+  /// [TmdbIdentityService.match]。两种命中都回写历史行（[rememberHistoryIdentity]），
+  /// 于是下一次读历史（首页取图、历史页聚合）直接就有身份，不必再匹配。
+  ///
+  /// 匹配不到返回 `null`，调用方保留站点海报，不编造元数据。
   Future<TmdbItem?> historyTmdbItem(PlaybackHistory row) async {
-    if (_database == null || row.vodId.trim().isEmpty) return null;
+    final database = _database;
+    if (database == null || row.vodId.trim().isEmpty) return null;
+    TmdbItem? item;
     try {
-      final outcome = await _ensureTmdbIdentityService().match(
-        TmdbMatchRequest(
-          siteKey: row.siteKey,
-          vodId: row.vodId,
-          sourceTitle: row.vodName,
-          // 站点显示名参与「按来源停用 TMDB」的判定，与追剧同一条闸门。
-          siteName: siteInActiveSource(row.siteKey)?.name ?? '',
-          vodName: row.vodName,
-          vodYear: row.vodYear,
-          // 行里已经写明 movie / tv 时按它匹配；空串交给匹配器自己判。
-          expectedMediaType: TmdbMediaType.parse(row.mediaType),
-        ),
-      );
-      return outcome.item;
+      item = DatabaseTmdbMatchStore(
+        database: database,
+        configId: tmdbConfigId,
+      ).find(
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        sourceTitle: row.vodName,
+      )?.toItem();
     } catch (_) {
-      // 网络或鉴权失败只让这一条没有背景与简介，首页其余内容照常。
-      return null;
+      // 读匹配表失败不算错误：继续走按片名匹配。
     }
+    if (item == null) {
+      try {
+        final outcome = await _ensureTmdbIdentityService().match(
+          TmdbMatchRequest(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+            // 站点显示名参与「按来源停用 TMDB」的判定，与追剧同一条闸门。
+            siteName: siteInActiveSource(row.siteKey)?.name ?? '',
+            vodName: row.vodName,
+            vodYear: row.vodYear,
+            // 行里已经写明 movie / tv 时按它匹配；空串交给匹配器自己判。
+            expectedMediaType: TmdbMediaType.parse(row.mediaType),
+          ),
+        );
+        item = outcome.item;
+      } catch (_) {
+        // 网络或鉴权失败只让这一条没有背景与简介，首页其余内容照常。
+        return null;
+      }
+    }
+    if (item == null) return null;
+    rememberHistoryIdentity(
+      siteKey: row.siteKey,
+      vodId: row.vodId,
+      item: item,
+      sourceKey: row.sourceKey,
+    );
+    return item;
   }
 
   /// 追番 → TMDB 剧集 id：优先用已落盘的匹配结论（同步、零请求），
@@ -6682,6 +6718,38 @@ AiContentCompletion? aiContentCompletion,
       );
     } catch (error) {
       log.warning('补齐历史海报失败：$error', scope: 'history');
+    }
+  }
+
+  /// 把已定的 TMDB 身份回写到历史行（`storage.updateHistoryIdentity`）。
+  ///
+  /// 详情页匹配成功后，身份只落在 `tmdb_matches`；历史行的 `tmdb_id` 仍是 0。
+  /// 首页与历史页读的都是历史行，于是出现「详情页明明匹配上了，首页却既没有
+  /// 16:9 背景也没有简介」。这里补上回写（推送那条 `_applyPushMatch` 一直有），
+  /// 让身份在整条读链路上都可见。
+  ///
+  /// 只改身份两列：进度、集名与更新时间保持不动，播放中调用也安全。
+  void rememberHistoryIdentity({
+    required String siteKey,
+    required String vodId,
+    required TmdbItem item,
+    String sourceKey = '',
+  }) {
+    final database = _database;
+    final identity = TmdbIdentity.of(item.mediaType, item.tmdbId);
+    // 隐身模式不写历史（与 `updateHistoryPoster` 同一条闸门）。
+    if (database == null || identity == null || incognito) return;
+    try {
+      final changed = database.updateHistoryIdentity(
+        siteKey: siteKey,
+        vodId: vodId,
+        tmdbId: identity.tmdbId,
+        mediaType: identity.mediaType.wireName,
+        sourceKey: sourceKey,
+      );
+      if (changed > 0) notifyListeners();
+    } catch (error) {
+      log.warning('回写历史 TMDB 身份失败：$error', scope: 'history');
     }
   }
 

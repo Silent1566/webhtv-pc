@@ -38,12 +38,14 @@ class TmdbState extends ChangeNotifier {
     required TmdbSeasonService seasonService,
     required TmdbEnrichmentService enrichmentService,
     bool Function()? isCurrentRun,
+    void Function(String siteKey, String vodId, TmdbItem item)? onMatched,
   }) : _config = config,
        _service = service,
        _identityService = identityService,
        _seasonService = seasonService,
        _enrichmentService = enrichmentService,
-       _isCurrentRun = isCurrentRun ?? _alwaysCurrent;
+       _isCurrentRun = isCurrentRun ?? _alwaysCurrent,
+       _onMatched = onMatched;
 
   static bool _alwaysCurrent() => true;
 
@@ -51,6 +53,13 @@ class TmdbState extends ChangeNotifier {
   ///
   /// 用于「返回列表 → 点另一部剧」时丢弃迟到的 TMDB 响应（`04` §2.2）。
   final bool Function() _isCurrentRun;
+
+  /// 匹配命中后的回调（`AppState` 用它把身份回写到历史行）。
+  ///
+  /// 详情页匹配成功后身份只落在 `tmdb_matches`，历史行的 `tmdb_id` 仍是 0；
+  /// 首页与历史页读的都是历史行，于是会出现「详情页明明有匹配，首页却没有
+  /// 背景与简介」。命中时通知一次，回写由数据层负责。
+  final void Function(String siteKey, String vodId, TmdbItem item)? _onMatched;
 
   // ignore_for_file: prefer_initializing_formals
   final TmdbConfig Function() _config;
@@ -589,8 +598,11 @@ class TmdbState extends ChangeNotifier {
             case TmdbMissReason.ambiguous:
               _phase = TmdbLoadPhase.ready;
           }
-        case TmdbMatchHit():
+        case TmdbMatchHit(:final record):
           _phase = TmdbLoadPhase.ready;
+          // 命中（含缓存命中）就把身份交回数据层回写历史行：只落在
+          // `tmdb_matches` 的话，首页/历史页读历史行时看不到这次匹配。
+          _onMatched?.call(_siteKey, _vodId, record.toItem());
       }
     } on TmdbCancelledException {
       if (!_valid(generation)) return;
