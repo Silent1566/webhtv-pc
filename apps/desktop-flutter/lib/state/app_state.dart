@@ -7140,6 +7140,44 @@ AiContentCompletion? aiContentCompletion,
     }
   }
 
+  /// 同一个配置里、其它爬虫源的历史候选（详情页跨爬虫源进度用）。
+  ///
+  /// 与 [findHistory] 的分工：那条回答「本站点这一集播到哪了」，这条回答
+  /// 「同一部作品在别的爬虫源上有没有记录」。两者都只认**当前播放源**
+  /// （sourceKey），跨配置的记录归历史页的「用原来源打开」。
+  ///
+  /// TMDB 身份匹配跟随 ui.historyAggregation：逐集模式（none）下不按身份查、
+  /// 只按片名查（对齐安卓 isHistoryAggregationEffective）；title 模式同理——
+  /// 用户选了「只按片名」，就不该被 TMDB 身份合并。
+  List<PlaybackHistory> findHistoryCandidatesAcrossSites({
+    required String siteKey,
+    required String vodId,
+    required String vodName,
+    int tmdbId = 0,
+    String mediaType = '',
+    String? sourceKey,
+  }) {
+    final database = _database;
+    if (database == null) return const [];
+    final key = (sourceKey ?? activeSourceKey).trim();
+    // 空串 = 没有具体播放源。宁可不标，不可猜源（docs/phase5/design/05 §6.1）。
+    if (key.isEmpty) return const [];
+    final usesTmdb = UiHistoryAggregation.usesTmdb(historyAggregation);
+    try {
+      return database.findHistoryCandidatesAcrossSites(
+        sourceKey: key,
+        siteKey: siteKey,
+        vodId: vodId,
+        vodName: vodName,
+        tmdbId: usesTmdb ? tmdbId : 0,
+        mediaType: usesTmdb ? mediaType : '',
+      );
+    } catch (error) {
+      log.warning('读取跨站点历史候选失败:$error', scope: 'history');
+      return const [];
+    }
+  }
+
   /// 「继续播放」位置（§15.2）。
   ///
   /// 已播完或位置过短时返回 null：从零开始比从尾部几秒开始体验更好。

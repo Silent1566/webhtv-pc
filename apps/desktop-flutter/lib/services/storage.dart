@@ -1818,6 +1818,68 @@ class AppDatabase {
     return byName.isEmpty ? null : PlaybackHistory.fromRow(byName.first);
   }
 
+  /// 同一播放源内、**其它站点**的历史候选（详情页跨爬虫源进度用）。
+  ///
+  /// ## 与 [findHistory] 的分工
+  ///
+  /// [findHistory] 回答「本站点这一集播到哪了」；本方法回答「同一部作品在**别的
+  /// 爬虫源**上有没有记录」。详情页把两者合起来：本站记录优先（既有行为不变），
+  /// 别的源只用来补「本站没有 / 别源更新」的那一半。
+  ///
+  /// ## 三条硬约束
+  ///
+  /// 1. **只认传入的 `source_key`**：跨配置的记录归历史页的「用原来源打开」，
+  ///    混进详情页会让「历史只显示当前源」的默认偏好失效；空串（来源不明的老行）
+  ///    也一律不返回——`docs/phase5/design/05` §6.1「宁可不显示，不可猜源」。
+  /// 2. **排除本站点自己那条**：优先级与旗标由详情页既有路径独占，这里再返回
+  ///    一份会让「上次看到这里」算两次、选择框里出现重复项。
+  /// 3. **TMDB 身份命中排在按片名命中的前面**（对齐安卓 `findPlaybackByTmdb`）：
+  ///    同名不同剧（翻拍/短剧）只能靠身份区分。身份缺失或未启用时自动跳过第一段。
+  List<PlaybackHistory> findHistoryCandidatesAcrossSites({
+    required String sourceKey,
+    required String siteKey,
+    required String vodId,
+    required String vodName,
+    int tmdbId = 0,
+    String mediaType = '',
+    int limit = 40,
+  }) {
+    final source = sourceKey.trim();
+    if (source.isEmpty) return const [];
+    final results = <PlaybackHistory>[];
+    final seen = <int>{};
+    void absorb(List<Row> rows) {
+      for (final row in rows) {
+        final item = PlaybackHistory.fromRow(row);
+        if (seen.add(item.id)) results.add(item);
+      }
+    }
+
+    final normalizedType = normalizeMediaTypeValue(mediaType);
+    if (tmdbId > 0 && normalizedType.isNotEmpty) {
+      absorb(
+        _db.select(
+          'SELECT * FROM history WHERE source_key=? AND tmdb_id=? '
+          'AND media_type=? AND NOT (site_key=? AND vod_id=?) '
+          'ORDER BY updated_at DESC LIMIT ?;',
+          [source, tmdbId, normalizedType, siteKey, vodId, limit],
+        ),
+      );
+    }
+    final name = vodName.trim();
+    if (name.isNotEmpty) {
+      absorb(
+        _db.select(
+          'SELECT * FROM history WHERE source_key=? AND vod_name=? '
+          'AND NOT (site_key=? AND vod_id=?) '
+          'ORDER BY updated_at DESC LIMIT ?;',
+          [source, name, siteKey, vodId, limit],
+        ),
+      );
+    }
+    return results;
+  }
+
   void deleteHistory(int id) {
     final rows = _db.select(
       'SELECT source_key, site_key, vod_id, flag, episode_id '

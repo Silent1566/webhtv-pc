@@ -340,3 +340,111 @@ B4 的链条由三段既有测试拼成，**没有**一条端到端用例：
 
 **追踪**：记入 Phase 6 ledger 的 deferred 列表，交最终验收裁定。
 不得在本阶段以「改测试」的方式让它通过。
+
+---
+
+## 9. 跨爬虫源的进度标记与续播选择（2026-11-29）
+
+用户实报（原文）：
+
+> 参考安卓版实现跨配置跨爬虫源的历史进度，现在我同一个配置下换一个爬虫源进入
+> 已经在另一个爬虫源看过有历史记录的剧时详情页的选集卡片没有标记进度。
+
+根因不在渲染层：详情页的 `_history` 只查「本站点 + 本剧 id」那一条历史
+（§7.1），而记录落在**另一个站点**的 `site_key`/`vod_id` 上，查询必然落空，
+于是角标、首屏文案、续播一起消失。安卓的 `History.findPlayback` 会在同一个
+`cid`（= PC 的同一个 `source_key`）内按 TMDB 身份/同名回退，PC 缺的就是这一层。
+
+用户逐条选型（2026-11-29）：
+
+| # | 问题 | 结论 |
+| --- | --- | --- |
+| 1 | 匹配范围 | **同一个配置内跨站点**（对齐安卓 `cid` 语义）。跨配置仍走历史页的「用原来源打开」，详情页不自动混入 |
+| 2 | 命中后做什么 | **标记 + 续播**（对齐安卓 `updatePlayLabel`） |
+| 3 | 谁算默认记录 | **取最近可续播的那条**（对齐安卓 `findPlaybackCandidate`） |
+| 4 | 有分歧时怎么选 | **都标记、展示有差异；点续播时弹框让用户选**——不替用户决定，也不静默取「最新」 |
+
+### 9.1 查询（`services/storage.dart` + `state/app_state.dart`）
+
+`AppDatabase.findHistoryCandidatesAcrossSites`：
+
+- 只查传入的 `source_key`（同一个配置）。空串（来源不明的老行）与别的配置一律不返回
+  （`docs/phase5/design/05` §6.1「宁可不显示，不可猜源」）；
+- **排除本站点自己那条**（`site_key + vod_id`）：本站记录的优先级与旗标由既有路径独占，
+  再返回一份会让「上次看到这里」算两次、选择框出现重复项；
+- TMDB 身份命中排在按片名命中的前面（对齐 `findPlaybackByTmdb`），两段都按
+  `updated_at DESC`、`LIMIT 40`；
+- `AppState.findHistoryCandidatesAcrossSites` 统一处理偏好闸门：`ui.historyAggregation`
+  为 `tmdb` 时才按身份查，`none`/`title` 下只按片名（对齐
+  `isHistoryAggregationEffective`）。没有生效源（`activeSourceKey` 为空）时返回空。
+
+### 9.2 集对齐（`core/history_cross_site.dart`）
+
+换一个爬虫源后线路名、集名、集号写法全都不一样，任何「差不多对上」都可能把用户
+送到别的集，再叠加进度迁移就是**错续播**。因此 `mapHistoryCandidateToLine` 只认
+**唯一命中**，四级顺序：
+
+1. 集入口 URL 精确命中（同站点/同解析源时才可能命中）；
+2. 集名完全相同且唯一；
+3. 集号相同且唯一（`第5集` vs `EP05`，`sourceEpisodeNumber` 解析）；
+4. 单集线路（电影/单集剧）——整部就是这一集。
+
+季度不同直接否决（两边都能判定季度时）：`S02E05` 不落到 `S01E05`。多解、越界、
+空集一律返回 `null`（不标、不弹）。
+
+### 9.3 默认目标与迁移种子
+
+- 候选按「最近观看倒序」，`primary` = 最近**可续播**的那条（没有可续播的才回落最近一条）。
+- 默认目标 = `primary` 比本站记录**更新**、或本站根本没命中时用 `primary`；否则保持
+  改造前行为。并列（同一毫秒）时本站优先，避免抖动。
+- 「可续播」判定收在 `hasResumePositionMs`（`!completed && position >= 5s &&
+  !(duration > 0 && position > duration - 5s)`），与 `AppState.resumePositionFor` 同口径。
+- 跨站点续播把原记录的身份**改写成目标线路自己的身份**（`reboundResumeSeed`：
+  目标 `playbackFlag` + 目标集 URL/集名，进度沿用原记录）。不改写的话
+  `locateResumeEpisode` 定位不到「原记录那一集」，迁移会被拒——那正是
+  「卡片标了进度、点进去却从头播」。与安卓 `copyForPlaybackKey` 同一手法。
+
+### 9.4 界面：都标记，展示有差异
+
+| 记录 | 角标 | 描边 |
+| --- | --- | --- |
+| 本站（`recentIndex`） | 主题色 + `history` 图标 +「上次看到这里」（既有） | 主题色 2px |
+| 别的爬虫源 | **第三色**（`tertiaryContainer`）+ `devices` 图标 +「其他源 NN%」；同一张卡多条合并成「其他源 N条」 | 只有默认目标那条用第三色 2px |
+
+- 本站记录占左下的角标位；同一张卡同时有本站与别的源时**本站优先**（它才是
+  「这台设备上看到的」），别的源的来源名/集名/位置/观看时间进 Tooltip。
+- 没有百分比（时长为 0）时角标只写「其他源」，不编数字。
+- **跨线路不重复标**：映射以当前选中线路为准，用户切线路后重新解析。
+
+### 9.5 续播选择（`ui/history_progress_picker.dart`）
+
+- 可续播记录 **≥ 2 条**：首屏按钮文案变「继续播放（N 条记录）」，点下去先弹
+  `history-progress-dialog`：每行写「来源 + 集名 + 已看/总时长/百分比 + 相对时间」，
+  按最近观看倒序、默认选中第一条；`播放` 用选中那条，`取消` **不播也不写任何东西**。
+- **只有 1 条**：直接续播（不因为「曾经有过别的历史」多一次点击）。
+- **0 条**：维持既有「播放第一集」。
+- 选集卡片点击同一套语义：该集有别的源记录时，一条直接用它起播，两条以上弹同一个框；
+  本站记录不参与（`_play` 内既有的精确查询已经能命中它）。
+
+### 9.6 验收
+
+| # | 语义 | 钉子 |
+| --- | --- | --- |
+| C1 | 集名/集号/单集线路四级对齐，歧义返回 null | `test/history_cross_site_progress_test.dart` |
+| C2 | 季度不同不迁移 | 同上 |
+| C3 | 「可续播」三条否决与 `resumePositionFor` 同口径 | 同上 |
+| C4 | 查询只认同源、排除本站、身份优先 | `test/history_cross_site_candidates_test.dart` |
+| C5 | 逐集模式不按身份查、仍按同名查 | 同上 |
+| C6 | 跨源记录标在正确卡片、默认目标描边、首屏可续播 | `test/detail_cross_site_progress_test.dart` |
+| C7 | 两条记录先选择、取消不播、选中哪条播哪集 | 同上 + `test/history_progress_picker_test.dart` |
+| C8 | 对不上任何一集时不标也不弹 | `test/detail_cross_site_progress_test.dart` |
+
+视觉证据：`apps/desktop-flutter/test/detail_cross_site_progress_visual_test.dart`
+把「两种角标 + 选择框」截到 `.local/detail-cross-site-progress/`。
+
+### 9.7 已知边界
+
+- 不跨配置：另一个配置里的记录不会参与详情页标记（跨配置仍走历史页原来源打开）。
+- 片段/花絮类条目不参与映射（无法与正片集号对齐），因此也不会被标记。
+- 多季线路里若同一集号在两侧都能解析出不同季度，按 §9.2 的季度否决处理——宁可
+  不标，也不标错季。

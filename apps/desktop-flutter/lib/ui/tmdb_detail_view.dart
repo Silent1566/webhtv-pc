@@ -1005,6 +1005,37 @@ class TmdbEpisodeSection extends StatelessWidget {
   );
 }
 
+/// 选集卡片上的「其它爬虫源」进度标记（`docs/phase6/design/02` §9）。
+///
+/// 为什么不是复用 `isRecent`：两项标记可以同时存在（本站看过第 2 集、另一个源
+/// 看到第 2 集一半），而角标位置只有一个。本站记录占左下的主题色角标，
+/// 别的源用第三色并把百分比写进去——颜色 + 文案两处差异，用户一眼能分清
+/// 「这是我在这台设备上看到的」还是「那是我在另一个源上看到的」。
+class EpisodeForeignProgressMark {
+  const EpisodeForeignProgressMark({
+    required this.count,
+    required this.percent,
+    required this.detail,
+    this.active = false,
+  });
+
+  /// 映射到这张卡的记录条数（多集聚合卡按「来源记录数」计）。
+  final int count;
+
+  /// 最近一条记录的观看百分比；0 = 时长未知，角标只写「其他源」。
+  final int percent;
+
+  /// Tooltip：来源站名 + 集名 + 位置 + 观看时间（多来源逐行）。
+  final String detail;
+
+  /// 是否是默认续播目标（决定描边颜色：用户点首屏按钮时优先去那一条）。
+  final bool active;
+
+  String get label => count > 1
+      ? '其他源 $count条'
+      : (percent > 0 ? '其他源 $percent%' : '其他源');
+}
+
 /// 剧集海报卡片条（横向滚动）。
 ///
 /// 这是详情页**唯一**的选集入口（用户反馈 2026-10-08）：有卡片时不再渲染
@@ -1025,6 +1056,7 @@ class TmdbEpisodeStrip extends StatefulWidget {
     this.gridMode = false,
     this.showScrapedName = true,
     this.recentIndex = -1,
+    this.foreignMarks = const {},
     this.ranges = const [],
     this.rangeIndex = 0,
     this.onRangeChanged,
@@ -1055,6 +1087,12 @@ class TmdbEpisodeStrip extends StatefulWidget {
   /// 与 [onTap] 的下标同一口径：**管线原始下标**（`cards` 的下标），
   /// 因此区间切片后仍能正确标中（`docs/phase6/design/02` §6）。
   final int recentIndex;
+
+  /// 「其它爬虫源」的进度标记：键是**管线原始下标**（同 [recentIndex] 口径）。
+  ///
+  /// 一个下标最多一条标记：同一张卡上的多条别的源记录合并成 `N条` 角标，
+  /// 详情见 [EpisodeForeignProgressMark]。
+  final Map<int, EpisodeForeignProgressMark> foreignMarks;
 
   /// 单卡宽度；`null` 时沿用 260 的大卡默认（按密度档只放大、不缩小）。
   ///
@@ -1312,6 +1350,8 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
       duplicateTarget: widget.duplicateIndexes.contains(originalIndex),
       isRecent: originalIndex == widget.recentIndex,
       recentKey: ValueKey('${widget.keyPrefix}-recent-$originalIndex'),
+      foreignMark: widget.foreignMarks[originalIndex],
+      foreignKey: ValueKey('${widget.keyPrefix}-foreign-$originalIndex'),
       onTap: widget.onTap == null
           ? null
           : () => widget.onTap!.call(originalIndex, card),
@@ -2038,6 +2078,8 @@ class TmdbEpisodeCardTile extends StatelessWidget {
     this.unitLabelOverride,
     this.manualMatched = false,
     this.duplicateTarget = false,
+    this.foreignMark,
+    this.foreignKey,
     this.posterUrl,
   });
 
@@ -2081,6 +2123,16 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   /// 这一集的目标与别的卡重复（角标追加「重复」）。
   final bool duplicateTarget;
 
+  /// 同配置里**其它爬虫源**在这一集上的进度标记（null = 没有）。
+  ///
+  /// 与 [isRecent] 同一套语义、不同配色：本站记录用主题色说「上次看到这里」，
+  /// 别的源用第三色并把百分比写进角标——用户 2026-11-29 要求「都标记，但展示
+  /// 上有差异」，否则两种记录混在一起分不清是哪个源看到的。
+  final EpisodeForeignProgressMark? foreignMark;
+
+  /// 别的源角标的 key（与 [recentKey] 同样的挂载层约束：必须挂在 Container 上）。
+  final Key? foreignKey;
+
   final TmdbEpisodeCard card;
 
   /// 卡片宽度：剧照高度按 16:9 由它推出。
@@ -2096,6 +2148,8 @@ class TmdbEpisodeCardTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 局部变量才能让空值检查把类型提升成非空（公共字段不参与提升）。
+    final foreign = foreignMark;
     final title =
         !showScrapedName && card.variantCount > 1 && card.groupLabel.isNotEmpty
         ? card.groupLabel
@@ -2124,8 +2178,12 @@ class TmdbEpisodeCardTile extends StatelessWidget {
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           alignment: Alignment.centerLeft,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          // 描边只给「这一个」目标：本站记录优先（既有语义），没有本站记录时
+          // 才轮到别的源的默认目标（第三色，与角标同色，用户能对上号）。
           side: isRecent
               ? BorderSide(color: theme.colorScheme.primary, width: 2)
+              : foreign?.active == true
+              ? BorderSide(color: theme.colorScheme.tertiary, width: 2)
               : null,
         ),
         child: Column(
@@ -2230,6 +2288,45 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                           child: Text(
                             card.rating.toStringAsFixed(1),
                             style: theme.textTheme.labelSmall,
+                          ),
+                        ),
+                      ),
+                    // 「其它爬虫源」角标：本站记录已占左下角时让位给它
+                    // （本站记录才是首屏按钮默认续播的那条，优先级更高），
+                    // 别的源的来源名/位置/时间进 Tooltip，不挤占卡面。
+                    if (!isRecent && foreign != null)
+                      Positioned(
+                        left: 6,
+                        bottom: 6,
+                        child: Tooltip(
+                          message: foreign.detail,
+                          child: Container(
+                            key: foreignKey,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.tertiaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.devices,
+                                  size: 12,
+                                  color: theme.colorScheme.onTertiaryContainer,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  foreign.label,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onTertiaryContainer,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
