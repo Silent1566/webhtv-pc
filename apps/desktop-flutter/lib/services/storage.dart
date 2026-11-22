@@ -1628,6 +1628,40 @@ class AppDatabase {
     if (sourceKey.isNotEmpty) _forgetHistoryDeletion(matchKey);
   }
 
+  /// 只回写**作品身份**（TMDB id / 类型），不动进度、集名与更新时间。
+  ///
+  /// 身份是作品级的：同一部作品在历史里可能有多行（不同线路、不同集），
+  /// 一起更新，避免「首页有背景、历史页还是照片墙」这种半更新状态。
+  /// [sourceKey] 非空时再按源收窄，防止两个源里同名同 id 的作品互相覆盖。
+  ///
+  /// 返回实际改动的行数（`0` 表示身份已经是这个值，调用方不必再通知 UI）。
+  int updateHistoryIdentity({
+    required String siteKey,
+    required String vodId,
+    required int tmdbId,
+    required String mediaType,
+    String sourceKey = '',
+  }) {
+    final type = normalizeMediaTypeValue(mediaType);
+    if (tmdbId <= 0 || type.isEmpty) return 0;
+    final scoped = sourceKey.trim();
+    _db.execute(
+      'UPDATE history SET tmdb_id = ?, media_type = ? '
+      'WHERE site_key = ? AND vod_id = ? AND (tmdb_id != ? OR media_type != ?)'
+      '${scoped.isEmpty ? '' : ' AND source_key = ?'};',
+      [
+        tmdbId,
+        type,
+        siteKey,
+        vodId,
+        tmdbId,
+        type,
+        if (scoped.isNotEmpty) scoped,
+      ],
+    );
+    return _db.updatedRows;
+  }
+
   /// 把迁移前的空 `source_key` 行收编为 [sourceKey]（见 [upsertHistory]）。
   void _adoptLegacyHistoryRow({
     required String sourceKey,

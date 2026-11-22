@@ -16,6 +16,7 @@ const String imageBase = 'https://image.tmdb.org/t/p/w500';
 const String backdropBase = 'https://image.tmdb.org/t/p/w780';
 
 TmdbIdentity tv(int id) => TmdbIdentity.of(TmdbMediaType.tv, id)!;
+TmdbIdentity movie(int id) => TmdbIdentity.of(TmdbMediaType.movie, id)!;
 
 /// 造一份详情：`images` 段带横竖两套，根级路径用来模拟「只有 poster_path」。
 Map<String, Object?> detail({
@@ -205,6 +206,29 @@ void main() {
     final art = await service.resolve({'a': tv(1)});
 
     expect(art, isEmpty);
+  });
+
+  test('同一次 detail 顺带取到刮削名（剧集用 name、电影用 title）', () async {
+    final service = HomeMetaService(
+      tmdb: fakeTmdb(),
+      loader: (_) async => {'id': 1, 'name': '刮削后的剧名', 'poster_path': '/p.jpg'},
+    );
+
+    final art = await service.resolve({'k': tv(1)});
+
+    expect(art['k']!.title, '刮削后的剧名');
+  });
+
+  test('只有名字时也要返回（首页因此能显示刮削名）', () async {
+    final service = HomeMetaService(
+      tmdb: fakeTmdb(),
+      loader: (_) async => {'id': 1, 'title': '刮削后的片名'},
+    );
+
+    final art = await service.resolve({'k': movie(1)});
+
+    expect(art['k']!.title, '刮削后的片名');
+    expect(art['k']!.backdrop, isNull);
   });
 
   test('同一次 detail 顺带取到类型标签 / 年份 / 评分（不额外请求）', () async {

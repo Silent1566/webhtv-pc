@@ -113,8 +113,9 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 **素材来源与降级**（这是本页唯一新增的一条素材规则）：续播/追剧条目的 `vodPic` 是站点给的海报（2:3），拿它当 16:9 背景会把它拉成糊的宽幅。因此：
 
 1. 有 TMDB 身份（`PlaybackHistory.hasTmdbIdentity`，`storage.dart:89`）→ 用 backdrop（`TmdbItem.backdropUrl`）；
-2. 没有 → 用海报 cover 兜底 + **强遮罩**（图片本身当作色块，文字主要靠在海报上压暗的一层）；
-3. 两者都取不到 → 页面底色（`surface`），不出现破图（`PosterImage` 已有失败兜底）。
+2. **身份没写进历史行**（`tmdb_id=0`，见 `2026-11-22` 修复）→ 详情页匹配成功后身份只落在 `tmdb_matches`，历史行仍为 0；首页 hero 因此只有竖版海报。修法两层：详情页命中时经 `TmdbState.onMatched` → `rememberHistoryIdentity` 回写历史行；首页 `historyTmdbItem` 先读已落盘的匹配结论（零请求、不触发分季探测），没有才按片名匹配，命中同样回写。命中后与第 1 条共用同一次 `detail()`，背景与简介一起回来；
+3. 仍然匹配不到 → 简介退回站源 `vod_content`（`historyVod`；只在用户把「爬虫源」留在简介来源里时才读，同一条逐字段规则）；
+4. 背景始终没有 16:9 图 → hero 只画夜空底 + 左侧一张**大而锐利**的竖版海报（`home_hero.dart`，2026-11-19 用户反馈「模糊底基本看不清」后定的口径），不把 2:3 拉成宽幅；简介取不到时整行不画、不占位。
 
 ### 3.3 内容（贴底）
 
@@ -123,7 +124,7 @@ heroHeight = hasBackdrop ? clamp(内容区高, 360, 1000) : clamp(内容区高 �
 | 元素 | 样式 | 内容 |
 |---|---|---|
 | 海报 | 2:3，宽约 168，`AppRadius.sm`，发丝边 | 与背景同一部作品的竖版海报；背景是海报兜底时可省略 |
-| 标题 | `displaySmall`（不缩放，Metric-Neutral） | 片名 |
+| 标题 | `displaySmall`（不缩放，Metric-Neutral） | 刮削名：`MetaPipeline` 的「标题」来源（TMDB 在前）取到就用它，取不到退回站点原名。与详情页头部（`SourceMetaResolver.resolve(...).title`）同一条规则——用户 2026-11-22 反馈「首页叫『罪蓝之路 4K内嵌中字』、详情页叫『罪蓝之路』」 |
 | 副信息 | `bodyMedium` / `onSurfaceVariant` | `年份 · 评分 · 类型`（口径复用 `recommendation_meta.dart` 的「年份 · 评分」） |
 | 理由行 | `bodySmall`，前面一个 14px 图标 | 三类各一句，见 §7 |
 | 主按钮 | `FilledButton`（琥珀） | 续播：「继续播放」；追剧：「从最新一集开始」；推荐：「查看详情」 |

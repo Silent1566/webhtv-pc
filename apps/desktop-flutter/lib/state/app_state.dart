@@ -3991,7 +3991,17 @@ AiContentCompletion? aiContentCompletion,
     seasonService: _ensureTmdbSeasonService(),
     enrichmentService: _ensureTmdbEnrichmentService(),
     isCurrentRun: () => _tmdbRunId == _detailRunId,
+    onMatched: _rememberDetailIdentity,
   );
+
+  /// 详情页匹配命中 → 把身份回写历史行（[rememberHistoryIdentity]）。
+  ///
+  /// 不写的话，这次匹配只活在 `tmdb_matches` 里：首页 hero 与历史页聚合读的是
+  /// 历史行，会一直显示「没有 TMDB 身份」——用户 2026-11-22 反馈的正是这个。
+  void _rememberDetailIdentity(String siteKey, String vodId, TmdbItem item) {
+    if (siteKey.trim().isEmpty || vodId.trim().isEmpty) return;
+    rememberHistoryIdentity(siteKey: siteKey, vodId: vodId, item: item);
+  }
 
   /// 当前 TMDB 加载归属的详情运行号（`loadDetail` 每次自增）。
   int _tmdbRunId = 0;
@@ -4099,6 +4109,61 @@ AiContentCompletion? aiContentCompletion,
       title: item.vodName,
       posterUrl: item.vodPic,
     );
+  }
+
+  /// 仅解析一条历史行的 TMDB 身份，不切换站点或当前详情的 TMDB 状态。
+  ///
+  /// 先读**已落盘的匹配结论**：详情页（`state/tmdb_state.dart`）早就匹配过的
+  /// 作品在这里零请求，也不会再触发分季变体探测；只有从未匹配过才按片名走一次
+  /// [TmdbIdentityService.match]。两种命中都回写历史行（[rememberHistoryIdentity]），
+  /// 于是下一次读历史（首页取图、历史页聚合）直接就有身份，不必再匹配。
+  ///
+  /// 匹配不到返回 `null`，调用方保留站点海报，不编造元数据。
+  Future<TmdbItem?> historyTmdbItem(PlaybackHistory row) async {
+    final database = _database;
+    if (database == null || row.vodId.trim().isEmpty) return null;
+    TmdbItem? item;
+    try {
+      item = DatabaseTmdbMatchStore(
+        database: database,
+        configId: tmdbConfigId,
+      ).find(
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        sourceTitle: row.vodName,
+      )?.toItem();
+    } catch (_) {
+      // 读匹配表失败不算错误：继续走按片名匹配。
+    }
+    if (item == null) {
+      try {
+        final outcome = await _ensureTmdbIdentityService().match(
+          TmdbMatchRequest(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+            // 站点显示名参与「按来源停用 TMDB」的判定，与追剧同一条闸门。
+            siteName: siteInActiveSource(row.siteKey)?.name ?? '',
+            vodName: row.vodName,
+            vodYear: row.vodYear,
+            // 行里已经写明 movie / tv 时按它匹配；空串交给匹配器自己判。
+            expectedMediaType: TmdbMediaType.parse(row.mediaType),
+          ),
+        );
+        item = outcome.item;
+      } catch (_) {
+        // 网络或鉴权失败只让这一条没有背景与简介，首页其余内容照常。
+        return null;
+      }
+    }
+    if (item == null) return null;
+    rememberHistoryIdentity(
+      siteKey: row.siteKey,
+      vodId: row.vodId,
+      item: item,
+      sourceKey: row.sourceKey,
+    );
+    return item;
   }
 
   /// 追番 → TMDB 剧集 id：优先用已落盘的匹配结论（同步、零请求），
@@ -6656,6 +6721,38 @@ AiContentCompletion? aiContentCompletion,
     }
   }
 
+  /// 把已定的 TMDB 身份回写到历史行（`storage.updateHistoryIdentity`）。
+  ///
+  /// 详情页匹配成功后，身份只落在 `tmdb_matches`；历史行的 `tmdb_id` 仍是 0。
+  /// 首页与历史页读的都是历史行，于是出现「详情页明明匹配上了，首页却既没有
+  /// 16:9 背景也没有简介」。这里补上回写（推送那条 `_applyPushMatch` 一直有），
+  /// 让身份在整条读链路上都可见。
+  ///
+  /// 只改身份两列：进度、集名与更新时间保持不动，播放中调用也安全。
+  void rememberHistoryIdentity({
+    required String siteKey,
+    required String vodId,
+    required TmdbItem item,
+    String sourceKey = '',
+  }) {
+    final database = _database;
+    final identity = TmdbIdentity.of(item.mediaType, item.tmdbId);
+    // 隐身模式不写历史（与 `updateHistoryPoster` 同一条闸门）。
+    if (database == null || identity == null || incognito) return;
+    try {
+      final changed = database.updateHistoryIdentity(
+        siteKey: siteKey,
+        vodId: vodId,
+        tmdbId: identity.tmdbId,
+        mediaType: identity.mediaType.wireName,
+        sourceKey: sourceKey,
+      );
+      if (changed > 0) notifyListeners();
+    } catch (error) {
+      log.warning('回写历史 TMDB 身份失败：$error', scope: 'history');
+    }
+  }
+
   /// 按 `source_key` 取那份配置（只读），**含本地导入源**。
   ///
   /// 历史补图与推荐种子要用记录**自己的**配置找站点：跨源记录挂在非生效配置上，
@@ -9068,20 +9165,43 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只读取追剧的原始站源详情，不切换当前站点或详情页状态。
-  Future<Vod?> followingVod(Following item) async {
-    final config = effectiveConfig;
+  Future<Vod?> followingVod(Following item) => _readSiteVod(
+    config: effectiveConfig,
+    siteKey: item.siteKey,
+    vodId: item.vodId,
+    vodName: item.vodName,
+  );
+
+  /// 只读取一条历史行归属站点的详情，不切换当前站点或详情页状态。
+  ///
+  /// 首页读的是**全源**历史：跨源记录要按行自己的源找配置，用生效配置会找不到
+  /// 那条记录所属的站点（历史补图踩过同一个坑，见 `HistoryPosterRepair`）。
+  Future<Vod?> historyVod(PlaybackHistory row) => _readSiteVod(
+    config: configForSourceKey(row.sourceKey) ?? effectiveConfig,
+    siteKey: row.siteKey,
+    vodId: row.vodId,
+    vodName: row.vodName,
+  );
+
+  /// 按站点读一次详情（只读，不切站点）：续播与追剧共用的取数口。
+  Future<Vod?> _readSiteVod({
+    required AppConfig? config,
+    required String siteKey,
+    required String vodId,
+    required String vodName,
+  }) async {
     final service = _siteService;
     if (config == null || service == null) return null;
     final site = config.sites
-        .where((candidate) => candidate.key == item.siteKey)
+        .where((candidate) => candidate.key == siteKey)
         .firstOrNull;
     if (site == null) return null;
     await _waitForPythonSite(site);
     if (_disposed) return null;
     final result = await service.detail(
       site,
-      item.vodId,
-      identity: VodIdentityHint(vodId: item.vodId, vodName: item.vodName),
+      vodId,
+      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
     );
     return result.value.list.firstOrNull;
   }

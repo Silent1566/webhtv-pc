@@ -41,6 +41,7 @@ import 'tmdb_service.dart';
 /// 字段全部可空/可空串：拿不到就不显示，不做占位。
 class HomeMeta {
   const HomeMeta({
+    this.title = '',
     this.poster,
     this.backdrop,
     this.overview,
@@ -48,6 +49,11 @@ class HomeMeta {
     this.year = '',
     this.rating = 0,
   });
+
+  /// 刮削后的作品名（TMDB `name` / `title`）：详情页头部用的就是它，
+  /// 首页 hero 与卡片跟着用它，两边才不会出现「首页叫原始名、详情页叫刮削名」。
+  /// 空串表示没有，页面保留站点原名。
+  final String title;
 
   final String? poster;
   final String? backdrop;
@@ -156,6 +162,9 @@ class HomeMetaService {
         .toList();
     if (rows.isEmpty) return const {};
     const fields = {
+      // 标题也参与：首页 hero 与卡片要显示**刮削名**，与详情页头部同一条规则；
+      // 把它排除在外会让管线里的「标题」来源被清空，追剧条目只能退回站点原名。
+      MetaField.title,
       MetaField.poster,
       MetaField.backdrop,
       MetaField.overview,
@@ -351,6 +360,7 @@ class HomeMetaService {
             )
             .firstOrNull;
         result[row.identityKey] = HomeMeta(
+          title: _nonEmpty(data.title) ?? '',
           poster: _nonEmpty(data.posterUrl),
           backdrop: backdrop,
           overview: _nonEmpty(data.overview),
@@ -381,6 +391,7 @@ class HomeMetaService {
   /// `null` 正好让调用方保留站点自己的背景图。
   HomeMeta? _artOf(Map<String, Object?> detail) {
     final config = _tmdb.config;
+    final title = _titleOf(detail);
     final overview = (detail['overview'] is String)
         ? (detail['overview']! as String).trim()
         : '';
@@ -398,7 +409,8 @@ class HomeMetaService {
     final year = _yearOf(detail);
     final rating = _ratingOf(detail);
     // 一样都拿不到才返回 null（调用方据此保留站点海报与站点文案）。
-    if (backdrops.isEmpty &&
+    if (title.isEmpty &&
+        backdrops.isEmpty &&
         posters.isEmpty &&
         overview.isEmpty &&
         genres.isEmpty &&
@@ -407,6 +419,7 @@ class HomeMetaService {
       return null;
     }
     return HomeMeta(
+      title: title,
       poster: posters.isEmpty ? null : posters.first,
       backdrop: backdrops.isEmpty ? null : backdrops.first,
       overview: overview.isEmpty ? null : overview,
@@ -419,6 +432,15 @@ class HomeMetaService {
 
 String? _nonEmpty(String? text) =>
     (text ?? '').trim().isEmpty ? null : text!.trim();
+
+/// 作品名：电影用 `title`、剧集用 `name`（TMDB 两套字段）。
+String _titleOf(Map<String, Object?> detail) {
+  for (final key in const ['name', 'title']) {
+    final value = detail[key];
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+  }
+  return '';
+}
 
 /// 类型标签：`genres` 是 `[{id, name}]`，只取名字，最多 3 个。
 List<String> _genresOf(Map<String, Object?> detail) {
