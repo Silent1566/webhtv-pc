@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/history_cross_site.dart';
+import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 
 void main() {
@@ -275,6 +276,48 @@ void main() {
       expect(seed.positionMs, 650000);
       expect(seed.durationMs, 2400000);
       expect(seed.completed, isFalse);
+    });
+  });
+
+  group('有种子时的兜底优先级（N1）', () {
+    final line = lineOf('线路一', [
+      ('第1集', 'https://a/e1'),
+      ('第2集', 'https://a/e2'),
+    ]);
+    const seed = ResumeSeed(
+      flag: '线路一',
+      episodeId: 'https://a/e2',
+      episodeName: '第2集',
+      positionMs: 1000,
+      durationMs: 2000,
+    );
+
+    test('种子与目标同一集 → 跳过本站精确查询（用户选的那条优先）', () {
+      expect(
+        seedOverridesExactHistory(
+          lines: [line],
+          seed: seed,
+          targetLine: line,
+          targetEpisodeIndex: 1,
+          targetEpisodeName: '第2集',
+        ),
+        isTrue,
+      );
+    });
+
+    test('种子是另一集 → 不跳过兜底（点另一集仍要续本站自己的记录）', () {
+      // 详情页由跨源 seed 打开时，种子对每一集都非空；此时点别的集若把本站
+      // 精确查询也压掉，就会从 0 开始（N1 的回归）。
+      expect(
+        seedOverridesExactHistory(
+          lines: [line],
+          seed: seed,
+          targetLine: line,
+          targetEpisodeIndex: 0,
+          targetEpisodeName: '第1集',
+        ),
+        isFalse,
+      );
     });
   });
 

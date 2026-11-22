@@ -1317,7 +1317,7 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 同源（同一份配置）其它站点的历史候选缓存。
   ///
-  /// 为什么要缓存：[_history] 与 [_resumeTarget] 在 build 里被调用多次，而这条
+  /// 为什么要缓存：[_history] 与 [_resolveDetailHistory] 在 build 里被调用多次，而这条
   /// 查询比「本站这一集」那条宽——它要扫同一个源里同名/同身份的所有行。缓存键
   /// 覆盖作品、站点、身份与聚合偏好；[_onStateChanged] 里整体失效（播放写库、
   /// 切换站点、TMDB 身份到达都会走通知）。
@@ -2371,7 +2371,7 @@ class _DetailPageState extends State<DetailPage> {
   /// 传三个标量而不是 `PlaybackHistory`：`resolveHistoryTarget` 在纯逻辑层
   /// （`core/`），不得依赖 `services/storage.dart`。
   ///
-  /// 这是**改造前就有的那条路径**：跨爬虫源的候选只在 [_resumeTarget] 里参与
+  /// 这是**改造前就有的那条路径**：跨爬虫源的候选只在 [_resolveDetailHistory] 里参与
   /// 「谁更新」的比较，本站记录的解析规则一字未改。
   HistoryResumeTarget _ownResumeTarget(List<VodPlayLine> lines) {
     final history = _history;
@@ -2647,19 +2647,24 @@ class _DetailPageState extends State<DetailPage> {
         picked.episodeIndex,
         versionConfirmed: _hasExactVersionHistory(line, picked.episodeIndex),
         resumeSeedOverride: picked.seed,
+        // 用户已经选过记录：版本聚合那条路不许再用「按集再问一次」把它覆盖/重问。
+        historyChoiceMade: true,
       );
       return;
     }
-    final active = _activeLine(lines);
+    // 单条/无冲突：线路必须跟着目标自己的 flag 走，否则「本站记录在线路二第 1 集」
+    // 会被按当前线路的下标播成第 2 集（与选择框分支同一个坑，改造前就有）。
+    final targetLine = _lineOfFlag(lines, resolution.target.flag) ?? _activeLine(lines);
     await _play(
       vod,
-      active,
+      targetLine,
       resolution.target.episodeIndex,
       versionConfirmed: _hasExactVersionHistory(
-        active,
+        targetLine,
         resolution.target.episodeIndex,
       ),
       resumeSeedOverride: resolution.foreignSeed,
+      historyChoiceMade: true,
     );
   }
 
@@ -2760,11 +2765,23 @@ class _DetailPageState extends State<DetailPage> {
     ResumeSeed? seedOverride,
   }) {
     final episode = line.episodes[episodeIndex];
-    // 有种子时**不再用本站精确查询做兜底**：两者可能指向同一集的不同记录
-    // （本站旧记录 0:10、用户选的乙站记录 20:00），而 `resolveResumeStart`
+    // 种子命中**同一集**时不再用本站精确查询做兜底：两者可能指向同一集的不同
+    // 记录（本站旧记录 0:10、用户选的乙站记录 20:00），而 `resolveResumeStart`
     // 会先返回兜底——用户选了哪条却不从哪条续播，等于选择框在骗人。
+    //
+    // 反过来，种子对**别的集**也非空（详情页由 seed 打开时一直带着它）：那时
+    // 本站那一集自己的记录才是精确答案，压掉它会让「点另一集」从 0 开始。
     final seed = widget.resumeSeed ?? seedOverride;
-    final fallback = seed != null ? null : widget.state.resumePositionFor(
+    final seedWins =
+        seed != null &&
+        seedOverridesExactHistory(
+          lines: lines,
+          seed: seed,
+          targetLine: line,
+          targetEpisodeIndex: episodeIndex,
+          targetEpisodeName: episode.name,
+        );
+    final fallback = seedWins ? null : widget.state.resumePositionFor(
       siteKey: _pageSite?.key ?? '',
       vodId: vod.vodId,
       flag: line.playbackFlag,
@@ -2879,6 +2896,10 @@ class _DetailPageState extends State<DetailPage> {
     int episodeIndex, {
     bool versionConfirmed = false,
     ResumeSeed? resumeSeedOverride,
+    // 上层是否已经替用户定好了「用哪条记录」。版本聚合那条路只在没定好时才
+    // 按集再问一次；用 `resumeSeedOverride != null` 推断会把「选了本站」漏掉
+    // （本站选项的种子恒为 null）。
+    bool historyChoiceMade = false,
   }) async {
     if (episodeIndex < 0 || episodeIndex >= line.episodes.length) return;
     if (_episodeAggregateVersions && !versionConfirmed) {
@@ -2896,6 +2917,7 @@ class _DetailPageState extends State<DetailPage> {
           line,
           group!,
           resumeSeedOverride: resumeSeedOverride,
+          historyChoiceMade: historyChoiceMade,
         );
         return;
       }
@@ -4623,7 +4645,8 @@ class _DetailPageState extends State<DetailPage> {
       ].join(' · ');
       final previous = foreignMarks[groupIndex];
       final active = identical(mapped, resolution.foreignPrimary);
-      // 候选取自「最近观看倒序」：同一张卡的第一条就是最近那条，百分比用它。
+      // 候选取自「来源优先级（身份段 → 同名段）」：同一张卡的第一条就是优先级
+      // 最高那条，百分比用它（不是「时间最新」那条）。
       foreignMarks[groupIndex] = previous == null
           ? EpisodeForeignProgressMark(
               count: 1,
@@ -5572,6 +5595,7 @@ class _DetailPageState extends State<DetailPage> {
     VodPlayLine rawLine,
     EpisodeGroup group, {
     ResumeSeed? resumeSeedOverride,
+    bool historyChoiceMade = false,
   }) async {
     if (group.versions.isEmpty || _versionDialogOpen) return;
     var version = group.versions.first;
@@ -5618,9 +5642,10 @@ class _DetailPageState extends State<DetailPage> {
     // 一条直接用它起播，两条以上先让用户选（用户 2026-11-29 选型）。
     // 本站记录不参与这里——[_play] 内既有的精确查询已经能命中它。
     var seed = resumeSeedOverride;
-    // 调用方已经替用户选过一条记录时（首屏选择框 / 历史页跨源）不再问第二次：
-    // 同一集可能在两个源上都有进度，第二次弹框会让用户重复做同一个决定。
-    final options = seed != null
+    // 调用方已经替用户定好用哪条记录时（首屏选择框 / 自动默认 / 历史页跨源）
+    // 不再问第二次：同一集可能在两个源上都有进度，第二次弹框会让用户重复做
+    // 同一个决定；静默改用别源种子更糟——那会把用户刚选的那条换掉。
+    final options = resumeSeedOverride != null || historyChoiceMade
         ? const <HistoryProgressChoice>[]
         : _progressOptionsForEpisode(currentVod, currentLine, rawIndex);
     if (options.length == 1) {

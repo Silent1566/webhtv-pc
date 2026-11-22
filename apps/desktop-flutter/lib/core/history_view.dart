@@ -404,6 +404,28 @@ bool candidateHasResumeEpisode({
   return false;
 }
 
+/// 有种子时，是否必须跳过「本站该集精确查询」这个兜底。
+///
+/// 只有种子与本次目标**是同一集**时才跳过：用户在跨源记录里选了某一条，位置就
+/// 该用那条；但同一个种子对**别的集**也非空（详情页由 seed 打开时一直带着它），
+/// 那时本站那一集自己的记录才是唯一精确答案，跳过它会让「点另一集」从 0 开始。
+///
+/// 复用 [resumeEpisodeMatches]：迁移阶段说「不是同一集」的，这里也不该压掉兜底，
+/// 两处判定永远一致。
+bool seedOverridesExactHistory({
+  required List<VodPlayLine> lines,
+  required ResumeSeed seed,
+  required VodPlayLine targetLine,
+  required int targetEpisodeIndex,
+  required String targetEpisodeName,
+}) =>
+    resumeEpisodeMatches(
+      lines: lines,
+      seed: seed,
+      targetLine: targetLine,
+      targetEpisodeIndex: targetEpisodeIndex,
+      targetEpisodeName: targetEpisodeName,
+    );
 /// 把「原记录的进度」换算成**目标集**的起始位置（跨源续播的完整策略入口）。
 ///
 /// [targetDurationMs] 传播放器已有的时长（0 = 未知）；未知时策略沿用绝对位置。

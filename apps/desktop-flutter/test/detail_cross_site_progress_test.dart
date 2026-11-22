@@ -387,4 +387,34 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
     expect(await playedEpisodeName(tester), '第2集');
   });
+
+  testWidgets('只有本站记录时，切到别的线路后点续播仍播它自己那条线路的集', (tester) async {
+    // 与选择框分支同一个坑（既有问题）：目标下标是按线路二算的，拿当前线路
+    // （用户手切的线路一）去播会播成另一集。
+    state.database!.upsertHistory(
+      siteKey: 'site-a',
+      vodId: multiLineVod.vodId,
+      vodName: multiLineVod.vodName,
+      flag: '线路二',
+      episodeName: '第1集',
+      episodeId: 'http://y/e1',
+      positionMs: 30000,
+      durationMs: 100000,
+      updatedAt: 100,
+      sourceKey: sourceKey,
+    );
+    await pumpDetail(tester, target: multiLineVod);
+    expect(find.text('继续播放 · 第1集'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路一')));
+    await tester.pump();
+    expect(find.text('继续播放 · 第1集'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
+    expect(
+      await playedEpisodeName(tester),
+      '第1集',
+      reason: '本站记录在线路二第 1 集；套线路一的下标会播成第 2 集',
+    );
+  });
 }
