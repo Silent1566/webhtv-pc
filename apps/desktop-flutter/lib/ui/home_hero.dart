@@ -7,6 +7,10 @@
 ///
 /// 但**遮罩配方与切换节奏是逐字继承它的**：顶部 0.42 保画面、底部压到不透明保
 /// 白字可读；600ms 交叉淡入。差别只在单张停留：这里 8 秒，因为每张要读两行中文。
+///
+/// 手动切张有四条路（2026-11-22 补）：贴边左右箭头（主通道）、24×24 命中区的
+/// 指示点、横向拖/甩、键盘 ←/→。原先只有 6px 的指示点——用户反馈「很难才点到」，
+/// 那也是本仓 DESIGN.md 里登记过的已知取舍。
 library;
 
 import 'dart:async';
@@ -27,6 +31,19 @@ import 'tokens.dart';
 /// 比详情页背景的 5s（`TmdbBackdropRotation.interval`，纯图片）长 3 秒：
 /// hero 上要读的是「标题 + 理由行 + 两个按钮」，5 秒没有读完的余量。
 const Duration homeHeroInterval = Duration(seconds: 8);
+
+/// 指示点的**命中区**边长。视觉圆点仍是 6（见 _HeroDot）。
+///
+/// 24 不是随手取的：WCAG 2.2 的 2.5.8（Target Size Minimum）把 24×24 CSS px
+/// 定为下限，而原来的 6×6 命中区连它的四分之一都不到，这正是用户「很难才点到」
+/// 的量化解释。源场那套点用的是 26×26，同一族取值。
+const double _heroDotHitSize = 24;
+
+/// 横向拖/甩的判定阈值：位移到 60 或速度到 300，任一满足就切一张。
+///
+/// 两个都要有——鼠标慢拖的 primaryVelocity 是 0，轨迹板快甩的位移又很小。
+const double _heroDragDistance = 60;
+const double _heroDragVelocity = 300;
 
 /// 主按钮文案。三类的差别只在「马上能做什么」，不在措辞风格。
 String homeHeroPrimaryLabel(HomeItemKind kind) => switch (kind) {
@@ -75,9 +92,17 @@ class _HomeHeroState extends State<HomeHero> {
   Timer? _timer;
   int _index = 0;
 
-  /// 指针是否停在 hero 上。桌面端（尤其触控板）很常见：鼠标只是路过就把
-  /// 幻灯片换掉，等于读一半被抽走。
-  bool _pointerInside = false;
+  /// 指针停在**会挡住阅读或操作**的控件上的区域数。桌面端（尤其触控板）很常见：
+  /// 鼠标只是路过就把幻灯片换掉，等于读一半被抽走。
+  ///
+  /// 计数而不是布尔：从内容块直接滑到箭头上时，两块会先 exit 再 enter，布尔会在
+  /// 中间那一帧把轮播重新起表——用户看到的就是「停下来又走了」。
+  int _hoverRegions = 0;
+
+  /// 本次横向拖拽累计的位移。onHorizontalDragEnd 只给速度，慢拖的人速度为 0。
+  double _dragDx = 0;
+
+  bool get _pointerInside => _hoverRegions > 0;
 
   bool _reduced = false;
 
@@ -174,9 +199,12 @@ class _HomeHeroState extends State<HomeHero> {
     _syncTimer();
   }
 
-  void _setPointerInside(bool value) {
-    if (_pointerInside == value) return;
-    setState(() => _pointerInside = value);
+  void _reportHover(bool inside) {
+    final was = _pointerInside;
+    _hoverRegions += inside ? 1 : -1;
+    if (_hoverRegions < 0) _hoverRegions = 0;
+    if (was == _pointerInside) return;
+    setState(() {});
     _restart();
   }
 
@@ -184,6 +212,22 @@ class _HomeHeroState extends State<HomeHero> {
     if (index == _index || index < 0 || index >= widget.items.length) return;
     _setIndex(index);
     _restart();
+  }
+
+  /// 手动切一张（±1），两端回卷——和键盘 ←/→ 同一条规则。
+  void _step(int delta) =>
+      _goTo((_index + delta + widget.items.length) % widget.items.length);
+
+  void _onDragEnd(DragEndDetails details) {
+    final dx = _dragDx;
+    final vx = details.primaryVelocity ?? 0;
+    _dragDx = 0;
+    // 向左拖（内容被推向左）= 看下一张，与轨迹板横扫同一方向。
+    if (dx <= -_heroDragDistance || vx <= -_heroDragVelocity) {
+      _step(1);
+    } else if (dx >= _heroDragDistance || vx >= _heroDragVelocity) {
+      _step(-1);
+    }
   }
 
   void _setIndex(int index) {
@@ -232,147 +276,219 @@ class _HomeHeroState extends State<HomeHero> {
     // ——站点海报常见 300×450，按 320 高的框渲染接近 1:1，看起来才是原图。
     final double tileHeight = (widget.height * 0.52).clamp(160.0, 320.0);
     final double tileWidth = tileHeight * 2 / 3;
-    return Focus(
-      // 键盘：←/→ 切张、Enter/Space 执行主操作。autofocus 让首屏一打开就能用
-      // 方向键（hero 是这一屏的主体）；skipTraversal 让它不占 Tab 序——Tab 该先
-      // 落在真按钮上，而不是落在一个看不见的焦点框上。
-      autofocus: true,
-      skipTraversal: true,
-      onKeyEvent: _onKey,
-      child: SizedBox(
-        key: const ValueKey('home-hero'),
-        height: widget.height,
-        width: double.infinity,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (paintField) ...[
-              AnimatedSwitcher(
-                duration: _reduced
-                    ? Duration.zero
-                    : const Duration(milliseconds: 600),
-                child: SizedBox.expand(
-                  key: ValueKey('home-hero-backdrop-$index'),
-                  child: field,
+    return GestureDetector(
+      // 横向拖/甩切张。必须 opaque：没有背景图时 hero 的 Stack 只有内容块可命中，
+      // 「在画面上横扫一把」会落空。纵向滚动不会被抢——纵向 drag 一启动就赢下
+      // 竞技场，横向识别器自己退出。
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (details) => _dragDx += details.delta.dx,
+      onHorizontalDragCancel: () => _dragDx = 0,
+      onHorizontalDragEnd: _onDragEnd,
+      child: Focus(
+        // 键盘：←/→ 切张、Enter/Space 执行主操作。autofocus 让首屏一打开就能用
+        // 方向键（hero 是这一屏的主体）；skipTraversal 让它不占 Tab 序——Tab 该先
+        // 落在真按钮上，而不是落在一个看不见的焦点框上。
+        autofocus: true,
+        skipTraversal: true,
+        onKeyEvent: _onKey,
+        child: SizedBox(
+          key: const ValueKey('home-hero'),
+          height: widget.height,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (paintField) ...[
+                AnimatedSwitcher(
+                  duration: _reduced
+                      ? Duration.zero
+                      : const Duration(milliseconds: 600),
+                  child: SizedBox.expand(
+                    key: ValueKey('home-hero-backdrop-$index'),
+                    child: field,
+                  ),
                 ),
-              ),
-              const BackdropScrim(),
-            ],
-            if (item.kind == HomeItemKind.resume && item.progress > 0)
-              Positioned(
-                // 与内容同一左右内边距：贴到窗口左右缘时它读起来像一条分隔线，
-                // 而不是「这部剧的进度」。下面那条暗轨负责说明「全长多少」。
-                left: AppSpace.xl,
-                right: AppSpace.xl,
-                bottom: 0,
-                child: SizedBox(
-                  height: 2,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => Stack(
-                      children: [
-                        Positioned.fill(
-                          child: ColoredBox(
-                            color: scheme.onSurface.withValues(alpha: 0.14),
+                const BackdropScrim(),
+              ],
+              if (item.kind == HomeItemKind.resume && item.progress > 0)
+                Positioned(
+                  // 与内容同一左右内边距：贴到窗口左右缘时它读起来像一条分隔线，
+                  // 而不是「这部剧的进度」。下面那条暗轨负责说明「全长多少」。
+                  left: AppSpace.xl,
+                  right: AppSpace.xl,
+                  bottom: 0,
+                  child: SizedBox(
+                    height: 2,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Stack(
+                        children: [
+                          Positioned.fill(
+                            child: ColoredBox(
+                              color: scheme.onSurface.withValues(alpha: 0.14),
+                            ),
                           ),
-                        ),
-                        SizedBox(
-                          key: const ValueKey('home-hero-progress'),
-                          height: 2,
-                          width:
-                              constraints.maxWidth *
-                              item.progress.clamp(0.0, 1.0),
-                          child: ColoredBox(color: semantic.magnitude),
+                          SizedBox(
+                            key: const ValueKey('home-hero-progress'),
+                            height: 2,
+                            width:
+                                constraints.maxWidth *
+                                item.progress.clamp(0.0, 1.0),
+                            child: ColoredBox(color: semantic.magnitude),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.xl,
+                  AppSpace.xl,
+                  AppSpace.xl,
+                  44,
+                ),
+                child: Align(
+                  alignment: Alignment.bottomLeft,
+                  // 悬停停表挂在**会挡住阅读或操作的控件**上（用户 2026-11-19 反馈
+                  // 「不会自动切换」）：整块 hero 都算悬停的话，鼠标只要停在窗口里就
+                  // 永远不轮播——桌面用户的指针大半时间在窗口内。停表区因此是内容块
+                  // + 左右箭头 + 指示点这三块；画面其余地方照常轮播。
+                  child: MouseRegion(
+                    onEnter: (_) => _reportHover(true),
+                    onExit: (_) => _reportHover(false),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // 只有「没有背景图」时才需要这块海报：那时它是画面里唯一的
+                        // 图像，也是这张幻灯片的主体；有 backdrop 时它只是重复。
+                        if (backdrop == null && poster != null)
+                          Padding(
+                            padding: const EdgeInsets.only(right: AppSpace.xl),
+                            child: ClipRRect(
+                              borderRadius: AppRadius.mdAll,
+                              child: SizedBox(
+                                width: tileWidth,
+                                height: tileHeight,
+                                child: PosterImage(
+                                  url: poster,
+                                  // 按显示尺寸解码：既不欠采样，也不留原图尺寸的位图。
+                                  cacheWidth:
+                                      (tileWidth *
+                                              MediaQuery.devicePixelRatioOf(
+                                                context,
+                                              ))
+                                          .round(),
+                                ),
+                              ),
+                            ),
+                          ),
+                        Flexible(
+                          child: _HeroCopy(
+                            item: item,
+                            theme: theme,
+                            onPrimary: () => widget.onPrimary(item),
+                            onSecondary: () => widget.onSecondary(item),
+                          ),
                         ),
                       ],
                     ),
                   ),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.xl,
-                AppSpace.xl,
-                AppSpace.xl,
-                44,
-              ),
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                // 悬停停表**只挂内容块**（用户 2026-11-19 反馈「不会自动切换」）：
-                // 整块 hero 都算悬停的话，鼠标只要停在窗口里就永远不轮播——桌面
-                // 用户的指针大半时间在窗口内。会挡住阅读的只有这块文字与按钮，
-                // 所以只让这一块停表；画面上其余地方照常轮播。
-                child: MouseRegion(
-                  onEnter: (_) => _setPointerInside(true),
-                  onExit: (_) => _setPointerInside(false),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 只有「没有背景图」时才需要这块海报：那时它是画面里唯一的
-                      // 图像，也是这张幻灯片的主体；有 backdrop 时它只是重复。
-                      if (backdrop == null && poster != null)
-                        Padding(
-                          padding: const EdgeInsets.only(right: AppSpace.xl),
-                          child: ClipRRect(
-                            borderRadius: AppRadius.mdAll,
-                            child: SizedBox(
-                              width: tileWidth,
-                              height: tileHeight,
-                              child: PosterImage(
-                                url: poster,
-                                // 按显示尺寸解码：既不欠采样，也不留原图尺寸的位图。
-                                cacheWidth:
-                                    (tileWidth *
-                                            MediaQuery.devicePixelRatioOf(
-                                              context,
-                                            ))
-                                        .round(),
-                              ),
-                            ),
-                          ),
-                        ),
-                      Flexible(
-                        child: _HeroCopy(
-                          item: item,
-                          theme: theme,
-                          onPrimary: () => widget.onPrimary(item),
-                          onSecondary: () => widget.onSecondary(item),
-                        ),
+              if (items.length > 1) ...[
+                // 左右大箭头：手动切张的主通道。贴边垂直居中而不是挤在指示点旁边，
+                // 是因为贴边是 Fitts 定律里的「无限大目标」——鼠标甩到边缘就必然命中，
+                // 不需要瞄准；44×44 也是桌面端能舒适点击的下限。
+                //
+                // ExcludeFocus：它们不进 Tab 序。hero 的键盘操作已经是 ←/→，再让 Tab
+                // 落在箭头上，Enter 会被 _onKey 先吃掉当主操作，反倒说不清按了什么。
+                Positioned(
+                  left: AppSpace.md,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: ExcludeFocus(
+                      child: _arrow(
+                        key: const ValueKey('home-hero-prev'),
+                        icon: Icons.chevron_left,
+                        tooltip: '上一张',
+                        onPressed: () => _step(-1),
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
-            if (items.length > 1)
-              Positioned(
-                right: 20,
-                bottom: 16,
-                child: Row(
-                  key: const ValueKey('home-hero-dots'),
-                  children: [
-                    for (var i = 0; i < items.length; i++)
-                      MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: GestureDetector(
-                          onTap: () => _goTo(i),
-                          child: Container(
-                            width: 6,
-                            height: 6,
-                            margin: const EdgeInsets.only(left: 4),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: i == index
-                                  ? semantic.magnitude
-                                  : scheme.onSurface.withValues(alpha: 0.3),
-                            ),
-                          ),
-                        ),
+                Positioned(
+                  right: AppSpace.md,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: ExcludeFocus(
+                      child: _arrow(
+                        key: const ValueKey('home-hero-next'),
+                        icon: Icons.chevron_right,
+                        tooltip: '下一张',
+                        onPressed: () => _step(1),
                       ),
-                  ],
+                    ),
+                  ),
                 ),
-              ),
-          ],
+                Positioned(
+                  right: 20,
+                  bottom: 16,
+                  child: MouseRegion(
+                    // 指针压在指示点上时也要停表：8 秒一到画面被抽走，「正在瞄」的
+                    // 那一下就成了白瞄——这也是原先「点不到」体感的一半来源。
+                    onEnter: (_) => _reportHover(true),
+                    onExit: (_) => _reportHover(false),
+                    child: Row(
+                      key: const ValueKey('home-hero-dots'),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < items.length; i++)
+                          _HeroDot(
+                            key: ValueKey('home-hero-dot-$i'),
+                            active: i == index,
+                            label: items[i].title,
+                            onTap: () => _goTo(i),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 左右箭头。常驻低透明度而不是「悬停才出现」：悬停才出现的控件对新用户等于
+  /// 不存在，而这颗按钮要解决的正是「找不到怎么换」。
+  Widget _arrow({
+    required Key key,
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return MouseRegion(
+      onEnter: (_) => _reportHover(true),
+      onExit: (_) => _reportHover(false),
+      child: IconButton(
+        key: key,
+        tooltip: tooltip,
+        iconSize: 22,
+        onPressed: onPressed,
+        icon: Icon(icon),
+        style: IconButton.styleFrom(
+          fixedSize: const Size(44, 44),
+          shape: const CircleBorder(),
+          padding: EdgeInsets.zero,
+          backgroundColor: scheme.surface.withValues(alpha: 0.55),
+          foregroundColor: scheme.onSurface,
+          overlayColor: scheme.onSurface.withValues(alpha: 0.14),
         ),
       ),
     );
@@ -528,6 +644,63 @@ IconData _reasonIcon(HomeItemKind kind) => switch (kind) {
   HomeItemKind.recommend => Icons.auto_awesome_outlined,
   HomeItemKind.hot => Icons.local_fire_department_outlined,
 };
+
+/// 指示点：视觉仍是小圆点，**命中区**是 24×24。
+///
+/// 6×6 的命中区是这块唯一被用户点名「很难才点到」的地方，也正好落在 WCAG 2.2
+/// 2.5.8 的 24×24 下限之下。只撑命中区、不动视觉半径，是为了一排 12 颗点仍然读
+/// 作「一段指示」而不是「一组按钮」：它们现在占 288px，依然贴右下角。
+///
+/// 当前点画成 18×6 的胶囊——12 张时「我在第几张」靠一排等大的圆点是数不出来的。
+/// 悬停 350ms 出片名（与源场同一延迟）：不用盲点，先看名字再决定。
+class _HeroDot extends StatelessWidget {
+  const _HeroDot({
+    super.key,
+    required this.active,
+    required this.label,
+    required this.onTap,
+  });
+
+  final bool active;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final semantic = context.semanticColors;
+    return Tooltip(
+      message: label,
+      waitDuration: const Duration(milliseconds: 350),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          // opaque：命中区比圆点大得多，`deferToChild` 会把它缩回那 6px。
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: SizedBox(
+            width: _heroDotHitSize,
+            height: _heroDotHitSize,
+            child: Center(
+              child: AnimatedContainer(
+                duration: AppMotion.base,
+                curve: AppMotion.ease,
+                width: active ? 18 : 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(3),
+                  color: active
+                      ? semantic.magnitude
+                      : scheme.onSurface.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 String? _nonEmpty(String? value) {
   final trimmed = value?.trim() ?? '';
