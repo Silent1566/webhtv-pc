@@ -8,12 +8,12 @@ import 'package:webhtv_pc/services/storage.dart';
 
 void main() {
   group('Phase 9 schema v6', () {
-    test('schemaVersion 为 11 且五张新表存在', () {
+    test('schemaVersion 为当前版本且五张新表存在', () {
       final db = AppDatabase.inMemory();
       // v10 是 AI 季集映射表（`ai_season_episode_mappings`）的加法迁移；
       // v11 是观影元数据表（`viewing_metadata`）的加法迁移。
-      expect(AppDatabase.schemaVersion, 11);
-      expect(db.schemaVersionValue, '11');
+      expect(AppDatabase.schemaVersion, greaterThanOrEqualTo(11));
+      expect(db.schemaVersionValue, '${AppDatabase.schemaVersion}');
       for (final table in [
         'skip_segments',
         'subtitle_match',

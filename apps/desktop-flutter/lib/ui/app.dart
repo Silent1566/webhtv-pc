@@ -484,6 +484,11 @@ class _AppShellState extends State<AppShell> {
     // 启动时恢复「上一次使用的配置」（Phase 10）。
     // 放到 post-frame 之后：不能在首帧前做网络请求，否则会把启动变慢。
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreLastConfig());
+    // 启动后台增量刷新各条配置（§7.5）：首帧之后才动网络，本地缓存先顶上；
+    // 与上面的启动恢复并行，两者互不等待。
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_state.startupConfigRefresh()),
+    );
   }
 
   AppState get _state => widget.state;

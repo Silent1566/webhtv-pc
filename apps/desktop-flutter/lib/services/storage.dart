@@ -16,6 +16,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../core/android_sync.dart';
 import '../core/app_error.dart';
+import '../core/config_loader.dart' show configContentDigest;
 import '../core/danmaku_match.dart';
 import '../core/following.dart';
 import '../core/protocol.dart';
@@ -174,6 +175,11 @@ class ConfigRecord {
     this.bridgeDevice = '',
     this.bridgeInterfaceKey = '',
     this.bridgeConfigUrl = '',
+    this.etag = '',
+    this.lastModified = '',
+    this.contentHash = '',
+    this.lastCheckedAt,
+    this.lastCheckError,
   });
 
   final int id;
@@ -206,6 +212,19 @@ class ConfigRecord {
   /// 宁可不推送也不能发设备网关地址——安卓 Config.find 查不到就会 insert，
   /// 凭空多出一行「桥接源」。
   final String bridgeConfigUrl;
+
+  /// 上一轮刷新拿到的条件请求校验值：下一轮原样带回，服务端答 304 就省掉下载。
+  final String etag;
+  final String lastModified;
+
+  /// 上一次落库的内容摘要（[configRecordContentHash]），增量刷新据此判断
+  /// 「拉到了但内容没变」。
+  final String contentHash;
+
+  /// 上一次后台检查的时间与失败原因；两者都不进入 [updatedAt] 语义——
+  /// 「更新」时间只表达内容变化，检查时间表达「有没有去看过」。
+  final DateTime? lastCheckedAt;
+  final String? lastCheckError;
 
   AppConfig? get config => json.isEmpty ? null : _decode(json);
 
@@ -244,6 +263,13 @@ class ConfigRecord {
       bridgeDevice: (row['bridge_device'] as String?) ?? '',
       bridgeInterfaceKey: (row['bridge_interface_key'] as String?) ?? '',
       bridgeConfigUrl: (row['bridge_config_url'] as String?) ?? '',
+      etag: (row['etag'] as String?) ?? '',
+      lastModified: (row['last_modified'] as String?) ?? '',
+      contentHash: (row['content_hash'] as String?) ?? '',
+      lastCheckedAt: row['last_checked_at'] == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(row['last_checked_at'] as int),
+      lastCheckError: row['last_check_error'] as String?,
     );
   }
 }
@@ -334,11 +360,15 @@ class AppDatabase {
   /// - `9` → `10`：AI 季集逐集映射（`ai_season_episode_mappings`）。**纯加法式**：
   ///   旧库打开后自动获得新表，既有绑定/进度行不受影响。
   /// - 10 → 11：按来源/站点/作品/标题隔离的观影元数据表，只加表。
+  /// - 11 → 12：启动后台增量刷新所需的条件请求校验值与检查记录
+  ///   （`configs.etag`、`last_modified`、`content_hash`、`last_checked_at`、
+  ///   `last_check_error`）。**纯加法式**：旧库按现有内容回填摘要，
+  ///   因此升级后的第一次后台刷新不会把「没变」误判成「变了」。
   ///
   /// 除 v7 的两张表之外，升级都是**加法式**（`CREATE TABLE IF NOT EXISTS` 或
   /// `ALTER TABLE ADD COLUMN`）：旧库打开后自动获得新表/新列且不丢数据，
   /// 无需分支式升级逻辑。
-  static const int schemaVersion = 11;
+  static const int schemaVersion = 12;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -478,6 +508,7 @@ class AppDatabase {
     _migrateSources();
     _migrateHistoryIdentity();
     _migrateFavorites();
+    _migrateConfigRefreshState();
     _db.execute('''
       CREATE TABLE IF NOT EXISTS viewing_metadata (
         source_key TEXT NOT NULL,
@@ -875,6 +906,35 @@ class AppDatabase {
       .map((row) => row['name'] as String)
       .toSet();
 
+  /// v11 → v12：启动后台增量刷新的状态列。
+  ///
+  /// 为什么把「内容摘要」回填而不留给第一次刷新去填：摘要是「内容有没有变」的
+  /// 唯一依据，空摘要等于「从没见过这份内容」，升级后第一次启动就会把每条配置
+  /// 当成变了而重写一遍——用户看到的是所有「更新」时间集体跳一次，当前配置
+  /// 还会在启动瞬间重拉首页。回填一次就把这段假变化消掉。
+  void _migrateConfigRefreshState() {
+    _addConfigColumn('etag', "TEXT NOT NULL DEFAULT ''");
+    _addConfigColumn('last_modified', "TEXT NOT NULL DEFAULT ''");
+    _addConfigColumn('content_hash', "TEXT NOT NULL DEFAULT ''");
+    _addConfigColumn('last_checked_at', 'INTEGER');
+    _addConfigColumn('last_check_error', 'TEXT');
+    for (final row in _db.select(
+      "SELECT id, json FROM configs WHERE content_hash = '';",
+    )) {
+      final raw = (row['json'] as String?) ?? '';
+      if (raw.isEmpty) continue;
+      try {
+        final json = Map<String, Object?>.from(jsonDecode(raw) as Map);
+        _db.execute('UPDATE configs SET content_hash=? WHERE id=?;', [
+          configRecordContentHash(json),
+          row['id'],
+        ]);
+      } catch (_) {
+        // 内容坏了不在这里修：留给刷新/重新导入路径，打开数据库不能因此失败。
+      }
+    }
+  }
+
   /// `history` 重建：唯一键加入 `source_key`。
   void _rebuildHistoryWithSourceKey() {
     if (_columnsOf('history').contains('source_key')) return;
@@ -1192,6 +1252,7 @@ class AppDatabase {
     String bridgeConfigUrl = '',
   }) {
     final safeJson = TmdbCredentialIngress.stripRootField(json);
+    final contentHash = configRecordContentHash(safeJson);
     final now = DateTime.now().millisecondsSinceEpoch;
     _db.execute('BEGIN IMMEDIATE;');
     try {
@@ -1205,7 +1266,7 @@ class AppDatabase {
         _db.execute(
           'UPDATE configs SET name=?, origin=?, content_type=?, '
           'repository_index=?, repository_entries=?, json=?, site_count=?, '
-          'live_count=?, updated_at=?, '
+          'live_count=?, content_hash=?, updated_at=?, '
           // 空 `source_key` 不清掉已有的值：本机源以前存过空串，后来补上了
           // `local|<origin>`，任何一次「按 origin 覆盖写」都不该把这层身份抹回去。
           'source_key=COALESCE(NULLIF(?, \'\'), source_key), '
@@ -1224,6 +1285,7 @@ class AppDatabase {
             jsonEncode(safeJson),
             siteCount,
             liveCount,
+            contentHash,
             now,
             sourceKey,
             bridgeDevice,
@@ -1235,9 +1297,10 @@ class AppDatabase {
       } else {
         _db.execute(
           'INSERT INTO configs(name, origin, content_type, repository_index, '
-          'repository_entries, json, site_count, live_count, is_active, '
-          'updated_at, source_key, bridge_device, bridge_interface_key, '
-          'bridge_config_url) VALUES(?,?,?,?,?,?,?,?,0,?,?,?,?,?);',
+          'repository_entries, json, site_count, live_count, content_hash, '
+          'is_active, updated_at, source_key, bridge_device, '
+          'bridge_interface_key, bridge_config_url) '
+          'VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?);',
           [
             name,
             origin,
@@ -1251,6 +1314,7 @@ class AppDatabase {
             jsonEncode(safeJson),
             siteCount,
             liveCount,
+            contentHash,
             now,
             sourceKey,
             bridgeDevice,
@@ -1275,6 +1339,38 @@ class AppDatabase {
         cause: error,
       );
     }
+  }
+
+  /// 只记录「这一轮检查过了」：不碰内容、站点数与 updated_at。
+  ///
+  /// 增量刷新的正常结局（304、或内容摘要与库里一致）走这里。为什么与
+  /// [refreshConfigContent] 分开：把「检查过」记成 updated_at 前进，会让配置
+  /// 列表的「更新」时间每次启动都跳一次，用户看到的是「配置一直在变」，
+  /// 而实际上什么都没变。
+  ///
+  /// 三个校验值参数为 null 表示本轮没拿到新值、保留原值（304 响应常常只带
+  /// 其中一部分头）；[error] 为 null 表示检查成功，会清掉上一轮的错误。
+  void markConfigChecked(
+    int id, {
+    String? etag,
+    String? lastModified,
+    String? contentHash,
+    String? error,
+  }) {
+    _db.execute(
+      'UPDATE configs SET etag=COALESCE(?, etag), '
+      'last_modified=COALESCE(?, last_modified), '
+      'content_hash=COALESCE(?, content_hash), '
+      'last_checked_at=?, last_check_error=? WHERE id=?;',
+      [
+        etag,
+        lastModified,
+        contentHash,
+        DateTime.now().millisecondsSinceEpoch,
+        error,
+        id,
+      ],
+    );
   }
 
   /// 写入前的去重查找：给出 [sourceKey] 时按它查，否则按 [origin] 查。
@@ -1385,14 +1481,19 @@ class AppDatabase {
     String? contentType,
     String? origin,
     String? sourceKey,
+    String etag = '',
+    String lastModified = '',
   }) {
     final safeJson = TmdbCredentialIngress.stripRootField(json);
+    final now = DateTime.now().millisecondsSinceEpoch;
     _db.execute('BEGIN IMMEDIATE;');
     try {
       _db.execute(
         'UPDATE configs SET json=?, site_count=?, live_count=?, '
         'content_type=?, origin=COALESCE(?, origin), '
-        'source_key=COALESCE(?, source_key), updated_at=? WHERE id=?;',
+        'source_key=COALESCE(?, source_key), etag=?, last_modified=?, '
+        'content_hash=?, last_checked_at=?, last_check_error=NULL, '
+        'updated_at=? WHERE id=?;',
         [
           jsonEncode(safeJson),
           siteCount,
@@ -1400,7 +1501,11 @@ class AppDatabase {
           contentType,
           origin,
           sourceKey,
-          DateTime.now().millisecondsSinceEpoch,
+          etag,
+          lastModified,
+          configRecordContentHash(safeJson),
+          now,
+          now,
           id,
         ],
       );
@@ -3132,6 +3237,22 @@ class AppDatabase {
 }
 
 enum HealthAction { home, category, detail, play }
+
+/// 配置内容的稳定摘要：先归一化再摘要。
+///
+/// 为什么不在库里的原文上直接摘要：库里存的是上一次解析并归一化后的 JSON，
+/// 而刷新时手里是刚落库前的 AppConfig。两边都走「解析 → toJson」再摘要，
+/// 摘要才只表达「内容有没有变」，不受字段顺序或旧版归一化差异影响。
+/// 历史坏行解析失败时退回对已剥离敏感字段的原文摘要——摘要只是「变没变」的
+/// 判据，退化成字节比较也好过抛异常把刷新打断。
+String configRecordContentHash(Map<String, Object?> json) {
+  final safe = TmdbCredentialIngress.stripRootField(json);
+  try {
+    return configContentDigest(parseConfigRecord(safe).toJson());
+  } catch (_) {
+    return configContentDigest(safe);
+  }
+}
 
 /// 从存储中的 JSON 恢复 [AppConfig]。
 ///

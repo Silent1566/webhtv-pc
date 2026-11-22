@@ -6,13 +6,18 @@
 /// - 响应大小上限默认 8 MiB，超限拒绝并保留原配置；
 /// - 支持 gzip / br / UTF-8 BOM / 明确声明的 GBK、GB18030；
 /// - 解析失败或 `msg` 非空时不得覆盖最后一个可用配置（由调用方保证）；
-/// - `urls` 仓库按条目展开，默认第一项，失败回退（§7.4.2）。
+/// - `urls` 仓库按条目展开，默认第一项，失败回退（§7.4.2）；
+/// - **增量刷新**：带上上一轮的 `ETag`/`Last-Modified` 发条件请求，服务端
+///   答 `304` 时按「没变」返回（[FetchedConfigText.notModified]），调用方
+///   连下载带解析一起省掉；没有校验值可用的来源由调用方按内容摘要比对。
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 
 import 'app_error.dart';
 import 'cat_source.dart';
@@ -73,6 +78,24 @@ class ConfigSource {
   }
 }
 
+/// 条件请求的校验值：上一轮响应给的 `ETag` / `Last-Modified`。
+///
+/// 两者都空 = 没有可用校验值（首次刷新、或服务端没给头），此时只能整份拉取
+/// 再按 [configContentDigest] 判断内容有没有变。
+class ConfigValidators {
+  const ConfigValidators({this.etag = '', this.lastModified = ''});
+
+  final String etag;
+  final String lastModified;
+}
+
+/// 配置内容的稳定摘要（增量刷新用）。
+///
+/// 为什么是摘要而不是逐字节比较：解析后的配置是一棵 Map，同一份来源内容每次
+/// 解析出的文本一致，摘要因此稳定；存进数据库只有一列，比留整份原文便宜。
+String configContentDigest(Object? json) =>
+    sha256.convert(utf8.encode(jsonEncode(json))).toString();
+
 /// 抓取结果。
 class FetchedConfigText {
   const FetchedConfigText({
@@ -80,6 +103,9 @@ class FetchedConfigText {
     required this.origin,
     required this.contentType,
     this.contentEncoding = 'identity',
+    this.notModified = false,
+    this.etag = '',
+    this.lastModified = '',
   });
 
   final String text;
@@ -88,6 +114,15 @@ class FetchedConfigText {
   final String origin;
   final String? contentType;
   final String contentEncoding;
+
+  /// 服务端回了 `304 Not Modified`：内容与上一次完全相同，[text] 为空。
+  final bool notModified;
+
+  /// 本轮的 `ETag` / `Last-Modified`，下一轮原样带回做条件请求。
+  ///
+  /// 304 响应也必须记住：有的服务端只在 200 上给 `ETag`，那时沿用上一轮的。
+  final String etag;
+  final String lastModified;
 }
 
 /// 配置加载器。
@@ -125,7 +160,13 @@ class ConfigLoader {
   void close() => _client.close(force: true);
 
   /// 读取来源文本。不做解析，便于“抓取”和“解析”分别测试。
-  Future<FetchedConfigText> fetch(ConfigSource source) async {
+  ///
+  /// [validators] 非空时按 HTTP 条件请求发送：服务端答 304 就直接结束，
+  /// 连响应体都不读。本地文件与内联 JSON 没有条件请求语义，[validators] 被忽略。
+  Future<FetchedConfigText> fetch(
+    ConfigSource source, {
+    ConfigValidators? validators,
+  }) async {
     switch (source.kind) {
       case ConfigSourceKind.inlineJson:
         return FetchedConfigText(
@@ -136,7 +177,7 @@ class ConfigLoader {
       case ConfigSourceKind.file:
         return _readFile(source.value);
       case ConfigSourceKind.url:
-        return _fetchUrl(source.value);
+        return _fetchUrl(source.value, validators: validators);
     }
   }
 
@@ -169,13 +210,35 @@ class ConfigLoader {
     );
   }
 
-  Future<FetchedConfigText> _fetchUrl(String url) async {
+  Future<FetchedConfigText> _fetchUrl(
+    String url, {
+    ConfigValidators? validators,
+  }) async {
     var current = Uri.parse(url);
     final visited = <String>{current.toString()};
 
     for (var hop = 0; hop <= maxRedirects; hop++) {
-      final response = await _once(current);
+      final response = await _once(current, validators: validators);
       final status = response.statusCode;
+      final etag = response.headers.value(HttpHeaders.etagHeader) ?? '';
+      final lastModified =
+          response.headers.value(HttpHeaders.lastModifiedHeader) ?? '';
+
+      // 304 也落在 3xx 区间，但它**没有 Location**：必须排在跳转分支前面，
+      // 否则「内容没变」会被报成「重定向缺少 Location 头」。
+      if (status == HttpStatus.notModified) {
+        await response.drain<void>();
+        return FetchedConfigText(
+          text: '',
+          origin: current.toString(),
+          contentType: null,
+          notModified: true,
+          etag: etag.isEmpty ? (validators?.etag ?? '') : etag,
+          lastModified: lastModified.isEmpty
+              ? (validators?.lastModified ?? '')
+              : lastModified,
+        );
+      }
 
       if (status >= 300 && status < 400) {
         final location = response.headers.value(HttpHeaders.locationHeader);
@@ -258,6 +321,8 @@ class ConfigLoader {
         origin: current.toString(),
         contentType: contentType,
         contentEncoding: decoded.encoding,
+        etag: etag,
+        lastModified: lastModified,
       );
     }
 
@@ -268,7 +333,10 @@ class ConfigLoader {
     );
   }
 
-  Future<HttpClientResponse> _once(Uri uri) async {
+  Future<HttpClientResponse> _once(
+    Uri uri, {
+    ConfigValidators? validators,
+  }) async {
     try {
       // `HttpClient` 不会解码 URI userinfo 的百分号编码（如密码里的 `%3A`），
       // 而大量订阅地址带 `user:pass@host` 凭据；这里解码后显式设 Authorization 头，
@@ -280,6 +348,17 @@ class ConfigLoader {
         request.headers.set(HttpHeaders.authorizationHeader, auth);
       }
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
+      if (validators != null) {
+        if (validators.etag.isNotEmpty) {
+          request.headers.set(HttpHeaders.ifNoneMatchHeader, validators.etag);
+        }
+        if (validators.lastModified.isNotEmpty) {
+          request.headers.set(
+            HttpHeaders.ifModifiedSinceHeader,
+            validators.lastModified,
+          );
+        }
+      }
       // 必须自己处理 3xx：否则 dart:io 会用默认上限自动跟随，既无法按设计
       // 文档报告 `configRedirect`，也无法校验“禁止降级到 file:// 等非 HTTP(S)
       // 方案”。`autoUncompress=false` 也只对不自动跳转的请求可控。
@@ -367,6 +446,9 @@ class ImportedConfig {
     this.contentType,
     this.contentEncoding = 'identity',
     this.catRuntimeOrigin,
+    this.notModified = false,
+    this.etag = '',
+    this.lastModified = '',
   });
 
   final String origin;
@@ -374,6 +456,13 @@ class ImportedConfig {
   final DateTime fetchedAt;
   final String? contentType;
   final String contentEncoding;
+
+  /// 条件请求命中 304：来源没变，[document] 为空且**不得**用于覆盖本地内容。
+  final bool notModified;
+
+  /// 下一轮条件请求要带回去的校验值（见 [ConfigValidators]）。
+  final String etag;
+  final String lastModified;
 
   /// 猫源本机运行时地址（`http://127.0.0.1:port`）；非猫源导入为 null。
   final String? catRuntimeOrigin;
@@ -438,7 +527,13 @@ class ConfigImportService {
   /// 猫源 bundle 地址（`.../index.js.md5`、`.../index.js`）先经 [catResolver] 在本机
   /// 跑起 bundle 并读 `/config`，再进同一套解析路径；`origin` 保留**原始猫源地址**，
   /// 以便重启后按同一地址重新拉起 bundle。非猫源地址不碰 Node。
-  Future<ImportedConfig> import(ConfigSource source) async {
+  ///
+  /// [validators] 只对 HTTP 来源生效（本地文件没有条件请求语义）：命中 304 时返回
+  /// `notModified = true` 的空结果，调用方据此跳过解析与写库。
+  Future<ImportedConfig> import(
+    ConfigSource source, {
+    ConfigValidators? validators,
+  }) async {
     if (CatSource.isBundle(source.value)) {
       // 猫源分支是唯一需要 Node 的路径：只有这里才拦「没有运行时」。
       final resolver = catResolver;
@@ -471,7 +566,18 @@ class ConfigImportService {
         catRuntimeOrigin: resolved.origin,
       );
     }
-    final fetched = await _loader.fetch(source);
+    final fetched = await _loader.fetch(source, validators: validators);
+    if (fetched.notModified) {
+      // 304：内容与上一轮一致。绝不能拿空文本去解析（那是「配置非法」）。
+      return ImportedConfig(
+        origin: fetched.origin,
+        document: const ConfigDocument(),
+        fetchedAt: DateTime.now(),
+        notModified: true,
+        etag: fetched.etag,
+        lastModified: fetched.lastModified,
+      );
+    }
     final document = parseConfigDocument(fetched.text);
     return ImportedConfig(
       origin: fetched.origin,
@@ -479,6 +585,8 @@ class ConfigImportService {
       fetchedAt: DateTime.now(),
       contentType: fetched.contentType,
       contentEncoding: fetched.contentEncoding,
+      etag: fetched.etag,
+      lastModified: fetched.lastModified,
     );
   }
 
