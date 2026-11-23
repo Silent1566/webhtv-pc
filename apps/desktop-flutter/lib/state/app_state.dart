@@ -9460,11 +9460,15 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只读取追剧的原始站源详情，不切换当前站点或详情页状态。
+  ///
+  /// 目录条目（网盘聚合 `atvp_detail:`）按 folder 展开：拿壳去 `ids=` 只能拿到
+  /// 没有线路的空壳，家页/追剧卡片的站源元数据就永远补不上。
   Future<Vod?> followingVod(Following item) => _readSiteVod(
     config: effectiveConfig,
     siteKey: item.siteKey,
     vodId: item.vodId,
     vodName: item.vodName,
+    expandFolder: isBridgeFolderVodId(item.vodId),
   );
 
   /// 只读取一条历史行归属站点的详情，不切换当前站点或详情页状态。
@@ -9479,11 +9483,16 @@ AiContentCompletion? aiContentCompletion,
   );
 
   /// 按站点读一次详情（只读，不切站点）：续播与追剧共用的取数口。
+  ///
+  /// [expandFolder] 为 true 时按目录条目（`t=<vod_id>`）展开成合并后的普通
+  /// 详情：网盘聚合的 `atvp_detail:` 壳拿 `ids=` 去问只会得到没有线路的空壳
+  /// （见 [isBridgeFolderVodId]）。
   Future<Vod?> _readSiteVod({
     required AppConfig? config,
     required String siteKey,
     required String vodId,
     required String vodName,
+    bool expandFolder = false,
   }) async {
     final service = _siteService;
     if (config == null || service == null) return null;
@@ -9493,15 +9502,22 @@ AiContentCompletion? aiContentCompletion,
     if (site == null) return null;
     await _waitForPythonSite(site);
     if (_disposed) return null;
-    final result = await service.detail(
-      site,
-      vodId,
-      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
-    );
+    final result = expandFolder
+        ? await service.folderDetail(site, Vod(vodId: vodId, vodName: vodName))
+        : await service.detail(
+            site,
+            vodId,
+            identity: VodIdentityHint(vodId: vodId, vodName: vodName),
+          );
     return result.value.list.firstOrNull;
   }
 
   /// 站点详情 → 线路集数（供 `FollowingService` 调用）。
+  ///
+  /// 目录条目的展开由 [followingVod] 负责：追剧是从详情页追的，存下来的
+  /// `vod_id` 就是网盘聚合的 `atvp_detail:` 壳，拿它去 `ids=` 详情只能拿到
+  /// 没有线路的空壳——检查更新会据此误报「详情里没有可用线路」（真机日志
+  /// 2026-11-22：详情页能播 5 条线路，追剧检查却报没线路）。
   Future<List<FollowingLineEpisodes>?> _resolveFollowingLines(
     Following item,
   ) async {

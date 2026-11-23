@@ -58,6 +58,13 @@ const int _seedLimit = 4;
 /// 每条推荐行参与元数据解析的条数（= hero 的推荐预算 3）。
 const int _heroRecommendBudgetForMeta = 3;
 
+/// 追剧卡片元数据的整轮上限。
+///
+/// 普通详情默认 8s 够用，但网盘聚合的目录条目要按 `t=` 展开成分享链
+/// （实测 2~15s）：不抬上限就永远读不到站源那几项。上限只管整轮——
+/// 已解析出的行照旧生效，超时不会整轮作废。
+const Duration _followingMetaTimeout = Duration(seconds: 20);
+
 class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
@@ -480,6 +487,7 @@ class _HomePageState extends State<HomePage> {
             pinned: (item) => overrides.of(item.vodId),
             source: state.followingVod,
             siteName: (item) => siteNames[item.siteKey],
+            timeout: _followingMetaTimeout,
             isCurrent: () => mounted && generation == _followingMetaGeneration,
           );
       if (!mounted ||
