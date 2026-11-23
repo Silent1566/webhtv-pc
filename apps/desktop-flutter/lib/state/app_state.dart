@@ -9460,11 +9460,15 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只读取追剧的原始站源详情，不切换当前站点或详情页状态。
+  ///
+  /// 目录条目（网盘聚合 `atvp_detail:`）按 folder 展开：拿壳去 `ids=` 只能拿到
+  /// 没有线路的空壳，家页/追剧卡片的站源元数据就永远补不上。
   Future<Vod?> followingVod(Following item) => _readSiteVod(
     config: effectiveConfig,
     siteKey: item.siteKey,
     vodId: item.vodId,
     vodName: item.vodName,
+    expandFolder: isBridgeFolderVodId(item.vodId),
   );
 
   /// 只读取一条历史行归属站点的详情，不切换当前站点或详情页状态。
@@ -9478,12 +9482,17 @@ AiContentCompletion? aiContentCompletion,
     vodName: row.vodName,
   );
 
-  /// 按站点读一次详情（只读，不切站点）：续播与追剧共用的取数口。
+  /// 按站点读一次详情（只读，不切站点）：历史元数据与追剧共用的取数口。
+  ///
+  /// [expandFolder] 为 true 时按目录条目（`t=<vod_id>`）展开成合并后的普通
+  /// 详情：网盘聚合的 `atvp_detail:` 壳拿 `ids=` 去问只会得到没有线路的空壳
+  /// （见 [isBridgeFolderVodId]）。
   Future<Vod?> _readSiteVod({
     required AppConfig? config,
     required String siteKey,
     required String vodId,
     required String vodName,
+    bool expandFolder = false,
   }) async {
     final service = _siteService;
     if (config == null || service == null) return null;
@@ -9493,22 +9502,50 @@ AiContentCompletion? aiContentCompletion,
     if (site == null) return null;
     await _waitForPythonSite(site);
     if (_disposed) return null;
-    final result = await service.detail(
-      site,
-      vodId,
-      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
-    );
+    final result = expandFolder
+        ? await service.folderDetail(site, Vod(vodId: vodId, vodName: vodName))
+        : await service.detail(
+            site,
+            vodId,
+            identity: VodIdentityHint(vodId: vodId, vodName: vodName),
+          );
+    // 部分线路失败只出现在 warnings 里：详情页据此报错并可重试，这条路径以前
+    // 整段吞掉，追剧就会「静默换源」，日志里也查不到原因。
+    for (final warning in result.warnings) {
+      log.warning(
+        '站源详情部分线路加载失败 vod=$vodId ${warning.logLine}',
+        scope: 'site',
+      );
+    }
     return result.value.list.firstOrNull;
   }
 
   /// 站点详情 → 线路集数（供 `FollowingService` 调用）。
+  ///
+  /// 目录条目的展开由 [followingVod] 负责：追剧是从详情页追的，存下来的
+  /// `vod_id` 就是网盘聚合的 `atvp_detail:` 壳，拿它去 `ids=` 详情只能拿到
+  /// 没有线路的空壳——检查更新会据此误报「详情里没有可用线路」（真机日志
+  /// 2026-11-22：详情页能播 5 条线路，追剧检查却报没线路）。
   Future<List<FollowingLineEpisodes>?> _resolveFollowingLines(
     Following item,
   ) async {
     final vod = await followingVod(item);
     if (vod == null) return null;
+    final lines = playLinesOf(vod);
+    // 追的那条线路不在最新详情里（换 provider 或重命名）时不再完全静默：
+    // followingSnapshotFromLines 会退回第一条线路，日志必须留下这次换源。
+    if (lines.isNotEmpty &&
+        (item.flag.isNotEmpty || item.sourceFlag.isNotEmpty) &&
+        !lines.any((line) => _isFollowedLine(item, line))) {
+      log.warning(
+        '追剧取数：追的线路已不在详情里 ${item.vodName} '
+        'flag="${item.flag}" sourceFlag="${item.sourceFlag}" '
+        'lines=${lines.map((line) => line.flag).join('|')}',
+        scope: 'following',
+      );
+    }
     return [
-      for (final line in playLinesOf(vod))
+      for (final line in lines)
         FollowingLineEpisodes(
           flag: line.flag,
           sourceFlag: line.sourceFlag ?? line.playbackFlag,
@@ -9522,6 +9559,11 @@ AiContentCompletion? aiContentCompletion,
         ),
     ];
   }
+
+  /// 该线路是否就是追剧记录里的那一条（展示名精确匹配优先，退回原始 flag）。
+  bool _isFollowedLine(Following item, VodPlayLine line) =>
+      (item.flag.isNotEmpty && line.flag == item.flag) ||
+      (item.sourceFlag.isNotEmpty && line.sourceFlag == item.sourceFlag);
 
   /// 重启追番调度：应用运行期间按设置间隔检查到期条目。
   ///

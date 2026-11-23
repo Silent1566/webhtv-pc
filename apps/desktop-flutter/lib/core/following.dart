@@ -147,8 +147,10 @@ class FollowingSnapshot {
 
 /// 从站点详情的线路里取「已更新集数」。
 ///
-/// 线路匹配优先 `sourceFlag`（展示名与请求名可能不同），再退回 `flag`，
-/// 最后退回第一条线路；找不到返回 null（不猜）。
+/// 线路匹配优先 `flag`（展示名，目录展开后在本次结果里唯一），再退回
+/// `sourceFlag`——网盘聚合的多条分享链经常共用同一个 `vod_play_from`，先按
+/// `sourceFlag` 匹配会把「追的第二条」认成第一条（集数/最新集都会串）。
+/// 两者都不命中才退回第一条线路；线路为空返回 null（不猜）。
 FollowingSnapshot? followingSnapshotFromLines(
   List<FollowingLineEpisodes> lines, {
   required String flag,
@@ -158,13 +160,17 @@ FollowingSnapshot? followingSnapshotFromLines(
   if (lines.isEmpty) return null;
   FollowingLineEpisodes? line;
   for (final candidate in lines) {
-    if (sourceFlag.isNotEmpty && candidate.sourceFlag == sourceFlag) {
-      line = candidate;
-      break;
-    }
     if (flag.isNotEmpty && candidate.flag == flag) {
       line = candidate;
       break;
+    }
+  }
+  if (line == null) {
+    for (final candidate in lines) {
+      if (sourceFlag.isNotEmpty && candidate.sourceFlag == sourceFlag) {
+        line = candidate;
+        break;
+      }
     }
   }
   line ??= lines.first;
