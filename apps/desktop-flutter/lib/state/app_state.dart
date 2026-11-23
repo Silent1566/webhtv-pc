@@ -93,6 +93,7 @@ import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
 import '../core/realtime_sync.dart';
 import '../core/source_key.dart';
+import '../core/source_swap.dart';
 import '../core/site_group.dart';
 import '../core/site_injection.dart';
 import '../core/site_group_rules.dart';
@@ -6072,14 +6073,13 @@ AiContentCompletion? aiContentCompletion,
     }
   }
 
-  /// 换源解析：拿一个**指定站点**的详情，解析出它自己的线路。
-  ///
-  /// 找不到站点或详情里没有线路时如实抛错/返回空列表，由浮层显示「无分集」；
-  /// 绝不伪造一条线路——用户点下去播放会直接失败，比当下说清楚更难排查。
-  Future<List<VodPlayLine>> swapProbe({
+  /// 换源取数与普通详情共用站点服务、目录展开和线路解析，不写全局详情槽。
+  /// [listing] 保留搜索条目的目录标记及自带线路；只在详情 list 为空时回退它。
+  Future<PlaybackLines> swapProbe({
     required String siteKey,
     required String vodId,
     String vodName = '',
+    Vod? listing,
   }) async {
     final site = siteByKey(siteKey);
     if (site == null) {
@@ -6090,14 +6090,40 @@ AiContentCompletion? aiContentCompletion,
       throw AppError(AppErrorKind.siteUnsupported, '站点服务不可用：$siteKey');
     }
     await _waitForPythonSite(site);
-    if (_disposed) return const [];
+    if (_disposed) return PlaybackLines.empty;
+    final seed = listing ?? Vod(vodId: vodId, vodName: vodName);
+    if (seed.isFolder) {
+      if (!isBridgeFolderVodId(seed.vodId)) {
+        throw AppError(AppErrorKind.siteUnsupported, '该结果是目录，请先进入详情选择可播放条目');
+      }
+      final expanded = await service.folderPlaybackLines(
+        site,
+        seed,
+        isCurrent: () => !_disposed,
+      );
+      return _disposed ? PlaybackLines.empty : expanded;
+    }
     final outcome = await service.detail(
       site,
       vodId,
-      identity: VodIdentityHint(vodId: vodId, vodName: vodName),
+      identity: VodIdentityHint(vodId: vodId, vodName: seed.vodName),
     );
-    if (outcome.value.list.isEmpty) return const [];
-    return playLinesOf(outcome.value.list.first);
+    if (_disposed) return PlaybackLines.empty;
+    final effective = outcome.value.list.firstOrNull ?? seed;
+    final lines = playLinesOf(effective);
+    final routes = <String, SwapLineRoute>{
+      for (final line in lines)
+        line.flag: SwapLineRoute(
+          siteKey: site.key,
+          siteName: site.name,
+          vodId: effective.vodId,
+        ),
+    };
+    return PlaybackLines(
+      lines: lines,
+      warnings: outcome.warnings,
+      routes: routes,
+    );
   }
 
   /// 多站点并发搜索（§14.1、§14.3）。
@@ -6163,6 +6189,7 @@ AiContentCompletion? aiContentCompletion,
       skippedNotSearchable: allItems
           .where((item) => item.availability.available && !item.site.searchable)
           .length,
+      totalSites: sites.length,
     );
     // 新批次从第 1 页开始：分页状态必须清空，否则会沿用上一批次的页码。
     _searchPaging.clear();

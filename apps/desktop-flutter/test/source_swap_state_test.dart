@@ -166,16 +166,16 @@ void main() {
   });
 
   test('swapProbe 解析出该站点自己的线路', () async {
-    final lines = await state.swapProbe(
+    final result = await state.swapProbe(
       siteKey: 'swap-ok',
       vodId: 'cat-1',
       vodName: 'CatSpider 样本影片',
     );
 
-    expect(lines.length, 2, reason: '样本详情的 vod_play_from 是 cat\$\$\$备用');
-    expect([for (final line in lines) line.flag], ['cat', '备用']);
+    expect(result.lines.length, 2, reason: '样本详情的 vod_play_from 是 cat\$\$\$备用');
+    expect([for (final line in result.lines) line.flag], ['cat', '备用']);
     expect(
-      lines.every((line) => line.episodes.isNotEmpty),
+      result.lines.every((line) => line.episodes.isNotEmpty),
       isTrue,
       reason: '解析出的线路必须带集数，不能是空壳线路',
     );

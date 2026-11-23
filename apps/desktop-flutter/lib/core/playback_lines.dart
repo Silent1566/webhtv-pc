@@ -6,6 +6,7 @@
 /// 判为业务错误。线路与路由分开传递时，任何一处漏掉都会退回「父目录 id」。
 library;
 
+import 'app_error.dart';
 import 'protocol.dart';
 import 'source_swap.dart';
 
@@ -15,13 +16,20 @@ import 'source_swap.dart';
 /// 表示这次补齐没有额外路由——普通详情记录就是这种形态，此时播放器沿用请求
 /// 自带的 `siteKey`/`vodId`。
 class PlaybackLines {
-  const PlaybackLines({this.lines = const [], this.routes = const {}});
+  const PlaybackLines({
+    this.lines = const [],
+    this.routes = const {},
+    this.warnings = const [],
+  });
 
   /// 与详情页 / 目录页看到的是同一份线路（同样的展示名与分集）。
   final List<VodPlayLine> lines;
 
   /// 线路展示名 → 该线路自己的站点与 `vod_id`。
   final Map<String, SwapLineRoute> routes;
+
+  /// 部分资源失败不抹掉可用线路，调用方仍须提示用户。
+  final List<AppError> warnings;
 
   static const PlaybackLines empty = PlaybackLines();
 
@@ -33,8 +41,6 @@ class PlaybackLines {
   ///
   /// 已有路由来自详情页的换源合并（同一份页面上下文），比后补的线路更可信；
   /// 覆盖它会让用户切到换源线路后又被打回原站点。
-  Map<String, SwapLineRoute> routesWith(Map<String, SwapLineRoute> existing) => {
-    ...routes,
-    ...existing,
-  };
+  Map<String, SwapLineRoute> routesWith(Map<String, SwapLineRoute> existing) =>
+      {...routes, ...existing};
 }
