@@ -6,7 +6,7 @@
 /// 它的 18 行按用途散进五个分类，任意设置最多两级可达。本套件是它的改造继承者，
 /// 原来的六条锁一条没删，只把**落点**换到新结构：
 ///
-/// 1. 十一条行入口都能通过分类页上**真实点击一行**进入自己的明细页，并用 AppBar
+/// 1. 十二条行入口都能通过分类页上**真实点击一行**进入自己的明细页，并用 AppBar
 ///    返回按钮带回分类页（且仍停在原分类）；
 /// 2. 分类页不再挂载任何明细控件——明细控件只出现在各自页面里；
 /// 3. 明细页里的开关拨动后**界面回显**且**真的落盘** settings.json
@@ -39,7 +39,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/settings_row_navigation.dart';
 
-/// 十一条「分类页行 → 明细页」：所在分类 / 行 key / 明细页 AppBar 标题 / 页面独有 key。
+/// 十二条「分类页行 → 明细页」：所在分类 / 行 key / 明细页 AppBar 标题 / 页面独有 key。
 const settingsRoutes =
     <({String category, String rowKey, String title, String marker})>[
       (
@@ -107,6 +107,13 @@ const settingsRoutes =
         rowKey: 'settings-backup-open',
         title: '备份与恢复',
         marker: 'backup-output-path',
+      ),
+      (
+        category: 'maintenance',
+        rowKey: 'settings-update-open',
+        title: '软件更新',
+        // 页面独有控件：自动检查开关只在「软件更新」页里，分类页只有一行入口。
+        marker: 'settings-update-auto-check',
       ),
     ];
 
@@ -253,7 +260,7 @@ void main() {
     return raw is Map ? raw.cast<String, Object?>() : const {};
   }
 
-  testWidgets('十一条分类页行都能真实进入明细页，并由返回按钮带回原分类', (tester) async {
+  testWidgets('十二条分类页行都能真实进入明细页，并由返回按钮带回原分类', (tester) async {
     await pumpSettings(tester);
 
     for (final route in settingsRoutes) {

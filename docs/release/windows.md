@@ -76,7 +76,7 @@ WebHTV-PC-<version>[-beta]-windows-x64/
 - `THIRD_PARTY.txt` 列出主程序/动态库/sidecar 宿主的 SHA-256 与可获得的 FileVersion；第三方许可见 `data/flutter_assets/NOTICES.Z`。
 - 用户数据仍在 `%APPDATA%\webhtv-pc` 与 `%LOCALAPPDATA%\webhtv-pc`，替换解压目录即完成升级。
 
-`release-info.json` 是机器可读的发布事实（schema v1）：`version`/`build`/`channel`/`tag`/`commit`/`builtAt`/`platform`/`arch`/`flutter`/`signature`/`assets[]`/`runtimes`/`notes`。当前应用**没有自动更新**，不生成更新通道清单。
+`release-info.json` 是机器可读的发布事实（schema v1）：`version`/`build`/`channel`/`tag`/`commit`/`builtAt`/`platform`/`arch`/`flutter`/`signature`/`assets[]`/`runtimes`/`notes`。应用通过 GitHub Releases API 读取这些发布事实做更新检查（ADR-0015），`release-info.json` 仍只是构建侧产物。
 
 ## 4. 代码签名（可选）
 
@@ -154,8 +154,51 @@ Get-FileHash (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName -Algor
 ## 7. 已知限制与后续
 
 - **无 MSI**：当前只发便携 zip。MSI 需要先确定签名通道、安装范围、覆盖升级/卸载语义（设计文档 §20.4），本轮不做。
-- **无自动更新**：`docs/phase9/README.md` P2-7 明确更新需要签名通道与 ADR，本轮不生成更新清单。
+- **在线更新（ADR-0015）**：应用内可手动检查更新、可开启启动时自动检查；下载必须通过发布侧 SHA-256 校验。Windows 便携包在退出后由 PowerShell 脚本整目录换装，旧目录保留为 <安装目录>.webhtv-old 供回滚；签名通道仍未配置，因此不做静默自动安装。
 - **本指南仅覆盖 Windows x64**：仓库另有 Linux x86_64 平台工程与打包流程，见 [Linux 指南](../linux-packaging.md)；当前没有 macOS 发布流程。
 - **不跑集成测试**：需要真实窗口、播放器与 fixture 媒体，仍由 `tools/phase*` 的本地验收脚本覆盖。
 - **Node / Python 随包、JDK 需本机**：Node 内置在 `runtime/node/node.exe`；专用 Python 与依赖以离线包随发行版提供，运行与修复不联网；JVM 站源需用户自备 JDK 17+。
 - **CI 触发范围**：当前覆盖 `main` / `beta` / `dev*` 推送、PR 到 `main` 与手动触发，详见 `desktop-ci.yml`。
+
+## 8. 应用更新（ADR-0015）
+
+构建：发布流水线的两个平台构建都必须注入 --dart-define=APP_TAG=<release tag>，
+否则安装包会把自己当成开发构建，永远收不到更新提示。本地开发构建不注入，行为是
+「只展示最新发布、不自动判断更新」。
+
+发布：每个 Release 必须包含 `SHA256SUMS.txt`。应用下载前先读它（或 GitHub API 的
+`assets[].digest`），校验不过就删除文件并报错；没有校验值的发布拒绝安装。
+
+更新索引：发包成功后，发布流水线从真实发布记录自动生成 `releases.json`，上传到
+固定 prerelease tag `update-channel`（`.../releases/download/update-channel/releases.json`）。
+客户端优先读它，失败才查 Releases API 一次；索引缺失或损坏不会显示成「已是最新」。
+首份索引已于 2026-11-23 使用现有发布记录完成初始化，匿名直连与代理均验证 HTTP 200；
+后续由成功发包的流水线自动更新。目前只有测试版发布，正式通道显示暂无发布版本。
+
+下载加速：应用默认经公开 GitHub 下载代理（`https://gh-proxy.com/`，可切换
+`https://ghfast.top/` 或自定义 HTTPS 前缀）下载安装包与校验文件，代理失败自动
+回退直连；只代理本项目公开 Release 地址，API 与其它地址直连，代理不接收
+Cookie/Authorization。第三方代理能看到公开下载 URL，速度因网络而异；代理结果仍
+必须通过完整包 SHA-256，失败不降低校验门禁。
+
+行为：
+
+- 检查：设置 → 维护 → 软件更新；或开启「启动时自动检查」（默认关闭，24 小时最多一次）。
+  数据来源是 GitHub Releases API，按稳定版/测试版两个通道筛选；同名版本按 tag 的
+  构建时间戳比较先后。
+- 安装（Windows 便携包）：下载 → 校验 → 在 `<cache>/updates/<tag>/` 写
+  `apply-update.ps1` 并以 detached 方式启动；脚本等本进程退出后解包、把安装目录
+  改名为 `<安装目录>.webhtv-old`、移入新 payload、启动新版本；任一步失败还原旧目录。
+  日志在 `<cache>/updates/<tag>/update.log`。
+- 签名：仍未配置。SHA-256 只证明文件完整，不证明发布者，所以应用不会静默自动安装。
+  引入签名通道前，不建议把「下载并安装」做成无人值守动作。
+- 受保护目录：便携包若解压到 Program Files 这类需要提权的目录，换装脚本的目录
+  改名会失败并保留原目录（日志可读），应用不会提权。
+
+人工验收要点：
+
+1. 用带 APP_TAG 的包启动，在更新页能看到「当前版本 + 发布 tag」；
+2. 手动检查能拿到通道里最新的 tag，且不会把测试版推给稳定版用户；
+3. 下载进度可见，篡改过的资产会被拒绝（删文件 + 报错）；
+4. 退出应用后换装脚本完成替换并启动新版本；失败时旧目录仍在、日志可读；
+5. 未签名包与签名包的提示与 release-info.json 中的签名状态一致。

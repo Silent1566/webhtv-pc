@@ -35,6 +35,7 @@ const _categoryEntries = <String, List<String>>{
     'settings-python-environment-open',
     'settings-backup-open',
     'settings-browser-open',
+    'settings-update-open',
     'settings-about-data-open',
   ],
 };

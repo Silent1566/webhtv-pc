@@ -30,6 +30,7 @@ import '../services/startup_trace.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import 'app_motion.dart';
+import 'app_update_page.dart';
 import 'browse_pages.dart';
 import 'common.dart';
 import 'config_pages.dart';
@@ -469,6 +470,9 @@ class _AppShellState extends State<AppShell> {
   AppError? _shownLastError;
   String? _shownNotice;
 
+  /// 上一次已经推成通知的「发现新版本」tag（见 [_syncToasts]）。
+  String? _shownUpdateNotice;
+
   @override
   void initState() {
     super.initState();
@@ -488,6 +492,12 @@ class _AppShellState extends State<AppShell> {
     // 与上面的启动恢复并行，两者互不等待。
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => unawaited(_state.startupConfigRefresh()),
+    );
+    // 启动时按 24 小时闸门查一次更新（ADR-0015）：与上面同一位置风格，首帧之后
+    // 才动网络；闸门关着（没开自动检查、或 24 小时内查过）时一个请求都不发，
+    // 这个判断在 AppState 里。
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_state.maybeAutoCheckForUpdates()),
     );
   }
 
@@ -558,6 +568,32 @@ class _AppShellState extends State<AppShell> {
       _shownNotice = notice;
       if (notice != null) {
         showToast(notice, kind: ToastKind.info, onDismiss: _state.clearNotice);
+      }
+    }
+    // 自动检查发现新版本：只提示一次，动作直达「软件更新」页。
+    //
+    // 与上面两条同一套投影规则（值变了才推），但多一个 [AppToastAction]：
+    // 提示的价值在「点一下就能装」，让用户自己去设置里找那一行就是白提示。
+    final updateNotice = _state.updateNotice;
+    if (updateNotice != _shownUpdateNotice) {
+      _shownUpdateNotice = updateNotice;
+      if (updateNotice != null) {
+        showToast(
+          '发现新版本 $updateNotice',
+          detail: '点「查看」打开软件更新',
+          action: AppToastAction(
+            label: '查看',
+            onPressed: () {
+              if (!mounted) return;
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => AppUpdatePage(state: _state),
+                ),
+              );
+            },
+          ),
+          onDismiss: _state.clearUpdateNotice,
+        );
       }
     }
   }

@@ -58,7 +58,10 @@ enum SettingsWriter {
 
   aiConfig('ai'),
 
-  tmdbConfig('tmdb');
+  tmdbConfig('tmdb'),
+
+  /// 应用更新偏好（ADR-0015）。
+  update('update');
 
   const SettingsWriter(this.tag);
 
