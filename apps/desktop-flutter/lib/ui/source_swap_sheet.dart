@@ -20,7 +20,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../core/app_error.dart';
+import '../core/playback_lines.dart';
 import '../core/protocol.dart';
+import '../core/source_swap.dart';
+import '../core/search_result_filter.dart';
 import '../state/search_state.dart';
 import 'common.dart';
 import 'search_result_view.dart';
@@ -37,6 +40,7 @@ class SwapCandidate {
     required this.vodName,
     this.vodYear = '',
     this.vodPic = '',
+    this.listing,
   });
 
   /// 站点在站点表里的键，用来取来源健康状态（见 [SourceStatus]）。
@@ -51,6 +55,7 @@ class SwapCandidate {
   final String vodName;
   final String vodYear;
   final String vodPic;
+  final Vod? listing;
 }
 
 /// 单条候选的解析阶段。
@@ -68,30 +73,51 @@ class SwapRow {
     required this.candidate,
     this.stage = SwapStage.idle,
     this.lines = const <VodPlayLine>[],
+    this.routes = const {},
+    this.warnings = const [],
     this.error,
+    this.emptyResult = false,
+    this.retryable = true,
     this.selected = false,
   });
 
   final SwapCandidate candidate;
   final SwapStage stage;
   final List<VodPlayLine> lines;
+  final Map<String, SwapLineRoute> routes;
+  final List<AppError> warnings;
 
-  /// 解析失败原因（[AppError] 取 userMessage），成功时为 null。
+  /// 解析失败原因（[AppError] 取 userMessage）；部分失败的行也可能有重试失败原因。
   final String? error;
+
+  /// 失败原因是「站点确实没有返回分集」，而不是请求本身失败。
+  final bool emptyResult;
+
+  /// 再试一次是否可能成功：目录类不支持的形态重试多少次都不会变。
+  final bool retryable;
 
   final bool selected;
 
   SwapRow copyWith({
     SwapStage? stage,
     List<VodPlayLine>? lines,
+    Map<String, SwapLineRoute>? routes,
+    List<AppError>? warnings,
     String? error,
+    bool clearError = false,
+    bool? emptyResult,
+    bool? retryable,
     bool? selected,
   }) {
     return SwapRow(
       candidate: candidate,
       stage: stage ?? this.stage,
       lines: lines ?? this.lines,
-      error: error ?? this.error,
+      routes: routes ?? this.routes,
+      warnings: warnings ?? this.warnings,
+      error: clearError ? null : (error ?? this.error),
+      emptyResult: emptyResult ?? this.emptyResult,
+      retryable: retryable ?? this.retryable,
       selected: selected ?? this.selected,
     );
   }
@@ -107,7 +133,8 @@ class SwapRow {
 
   /// 真正可以并入的行：解析完成**且**确实有分集。
   /// 空线路算未就绪——并入一条没有分集的线路对用户毫无意义。
-  bool get ready => stage == SwapStage.ready && lines.isNotEmpty;
+  bool get ready =>
+      stage == SwapStage.ready && lines.any((line) => line.episodes.isNotEmpty);
 }
 
 /// 发起一次全局搜索（接线方传 (keyword) => state.searchAll(keyword, quick: true)）。
@@ -120,7 +147,7 @@ typedef SourceSwapSearch = Future<void> Function(String keyword);
 typedef SourceSwapOutcomeOf = MultiSiteSearchOutcome? Function();
 
 /// 解析回调：把一条候选解析成线路。
-typedef SourceSwapProbe = Future<List<VodPlayLine>> Function(
+typedef SourceSwapProbe = Future<PlaybackLines> Function(
   SwapCandidate candidate,
 );
 
@@ -136,6 +163,8 @@ Future<List<SwapRow>?> showSourceSwapSheet(
   required SourceSwapOutcomeOf outcomeOf,
   required SourceSwapSearch onSearch,
   required SourceSwapProbe onProbe,
+  int initialSimilarity = 30,
+  Future<void> Function(int value)? onSimilarityChanged,
   SourceStatus Function(String siteKey)? statusOf,
 }) {
   // 浮层的提交按钮（「并入 N 条线路」）就压在右下角，那是通知栈的地盘：错误通知
@@ -159,6 +188,8 @@ Future<List<SwapRow>?> showSourceSwapSheet(
       outcomeOf: outcomeOf,
       onSearch: onSearch,
       onProbe: onProbe,
+      initialSimilarity: initialSimilarity,
+      onSimilarityChanged: onSimilarityChanged,
       statusOf: statusOf,
     ),
   );
@@ -175,6 +206,8 @@ class SourceSwapSheet extends StatefulWidget {
     required this.outcomeOf,
     required this.onSearch,
     required this.onProbe,
+    this.initialSimilarity = 30,
+    this.onSimilarityChanged,
     this.statusOf,
   });
 
@@ -188,6 +221,8 @@ class SourceSwapSheet extends StatefulWidget {
 
   final SourceSwapSearch onSearch;
   final SourceSwapProbe onProbe;
+  final int initialSimilarity;
+  final Future<void> Function(int value)? onSimilarityChanged;
   final SourceStatus Function(String siteKey)? statusOf;
 
   @override
@@ -213,6 +248,22 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
 
   /// 当前生效的分组（null = 全部）。**只**影响本地筛选，绝不触发搜索。
   String? _group;
+  late int _similarity = widget.initialSimilarity;
+  bool _batchProbing = false;
+  bool _confirming = false;
+  int _probingDone = 0;
+  int _probingTotal = 0;
+
+  /// 勾选跨相似度/分组筛选保留：筛选只改可见集，不能悄悄丢掉用户已选的行。
+  List<SwapRow> get _selected => [
+    for (final row in _states.values)
+      if (row.selected) row,
+  ];
+
+  bool get _busy =>
+      _batchProbing ||
+      _confirming ||
+      _selected.any((row) => row.stage == SwapStage.probing);
 
   @override
   void initState() {
@@ -292,7 +343,11 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
           candidate: candidate,
           stage: state?.stage ?? SwapStage.idle,
           lines: state?.lines ?? const <VodPlayLine>[],
+          routes: state?.routes ?? const {},
+          warnings: state?.warnings ?? const [],
           error: state?.error,
+          emptyResult: state?.emptyResult ?? false,
+          retryable: state?.retryable ?? true,
           selected: state?.selected ?? false,
         );
         _states[key] = row;
@@ -304,7 +359,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
 
   /// 结果里真正有候选的站点条目（succeeded 且 itemCount > 0）。
   ///
-  /// 不做相似度过滤：浮层只负责展示，筛选规则留在服务层。
+  /// 保留原始候选；相似度筛选只影响共享视图，不删除已选状态。
   Iterable<SiteSearchEntry> _entriesOf(MultiSiteSearchOutcome? outcome) sync* {
     if (outcome == null) return;
     for (final entry in outcome.results) {
@@ -320,6 +375,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     vodName: vod.vodName,
     vodYear: vod.vodYear?.trim() ?? '',
     vodPic: vod.vodPic?.trim() ?? '',
+    listing: vod,
   );
 
   /// 行身份键：站点 + 站点内 id。
@@ -331,44 +387,137 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
   String _stateKey(SwapCandidate candidate) =>
       _stateKeyOf(candidate.siteKey, candidate.vodId);
 
-  Future<void> _probeSelected() async {
-    final targets = <SwapRow>[
-      for (final row in _rows)
-        if (row.selected &&
-            (row.stage == SwapStage.idle || row.stage == SwapStage.failed))
-          row,
-    ];
-    await Future.wait([for (final row in targets) _probe(row)]);
+  Future<void> _probeSelected() => _probeBatch([
+    for (final row in _selected)
+      if (row.stage == SwapStage.idle ||
+          (row.stage == SwapStage.failed && row.retryable))
+        row,
+  ]);
+
+  /// 与 [_confirmPartial] 的 issues 同条件：只重探 failed 或带 warnings 的行，
+  /// 所以 ready+error 一定伴随 warnings 出现，不会漏进对话框。
+  Future<void> _retryFailed() => _probeBatch([
+    for (final row in _selected)
+      if ((row.stage == SwapStage.failed && row.retryable) ||
+          row.warnings.isNotEmpty)
+        row,
+  ]);
+
+  Future<void> _probeBatch(List<SwapRow> targets) async {
+    if (_busy || targets.isEmpty) return;
+    setState(() {
+      _batchProbing = true;
+      _probingDone = 0;
+      _probingTotal = targets.length;
+    });
+    try {
+      await Future.wait([
+        for (final row in targets) _probe(row, trackProgress: true),
+      ]);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchProbing = false;
+          _probingDone = 0;
+          _probingTotal = 0;
+        });
+      }
+    }
+    if (!mounted) return;
+    final selected = _selected;
+    if (selected.any((row) => row.ready) &&
+        selected.any(
+          (row) => row.stage == SwapStage.failed || row.warnings.isNotEmpty,
+        )) {
+      await _confirmPartial();
+    }
   }
 
-  Future<void> _probe(SwapRow row) async {
+  Future<void> _probe(SwapRow row, {bool trackProgress = false}) async {
+    final key = _stateKey(row.candidate);
+    if (_states[key]?.stage == SwapStage.probing) return;
+    // 已解析出线路的行重试时先保留旧结果：站点抖动让这次重试失败，不能把
+    // 用户本来就能播的线路一起清掉（那是部分失败最常见的场景）。
+    final previous = _states[key];
+    final preserved = previous != null && previous.ready ? previous : null;
     _patch(
       row.candidate,
-      (current) => current.copyWith(stage: SwapStage.probing, error: null),
+      (current) => current.copyWith(
+        stage: SwapStage.probing,
+        clearError: true,
+        emptyResult: false,
+      ),
     );
     try {
-      final lines = await widget.onProbe(row.candidate);
+      final parsed = await widget.onProbe(row.candidate);
+      final lines = parsed.lines
+          .where((line) => line.episodes.isNotEmpty)
+          .toList();
       if (!mounted) return;
       if (lines.isEmpty) {
         _patch(
           row.candidate,
-          (current) =>
-              current.copyWith(stage: SwapStage.failed, error: '目标站点没有解析到分集'),
+          (current) => preserved == null
+              ? current.copyWith(
+                  stage: SwapStage.failed,
+                  lines: const [],
+                  routes: const {},
+                  warnings: const [],
+                  error: '目标站点没有解析到分集',
+                  emptyResult: true,
+                )
+              : preserved.copyWith(
+                  stage: SwapStage.ready,
+                  error: '重试失败：目标站点没有解析到分集',
+                  emptyResult: true,
+                ),
         );
         return;
       }
       _patch(
         row.candidate,
-        (current) =>
-            current.copyWith(stage: SwapStage.ready, lines: lines, error: null),
+        (current) => current.copyWith(
+          stage: SwapStage.ready,
+          lines: lines,
+          routes: {
+            for (final line in lines)
+              if (parsed.routes[line.flag] != null)
+                line.flag: parsed.routes[line.flag]!,
+          },
+          warnings: parsed.warnings,
+          clearError: true,
+          emptyResult: false,
+          retryable: true,
+        ),
       );
     } catch (error) {
       if (!mounted) return;
+      final retryable =
+          !(error is AppError && error.kind == AppErrorKind.siteUnsupported);
+      final message = preserved == null
+          ? _describe(error)
+          : '重试失败：${_describe(error)}';
       _patch(
         row.candidate,
-        (current) =>
-            current.copyWith(stage: SwapStage.failed, error: _describe(error)),
+        (current) => preserved == null
+            ? current.copyWith(
+                stage: SwapStage.failed,
+                lines: const [],
+                routes: const {},
+                warnings: const [],
+                error: message,
+                retryable: retryable,
+              )
+            : preserved.copyWith(
+                stage: SwapStage.ready,
+                error: message,
+                retryable: retryable,
+              ),
       );
+    } finally {
+      if (trackProgress && mounted) {
+        setState(() => _probingDone += 1);
+      }
     }
   }
 
@@ -389,6 +538,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
   }
 
   void _toggle(SwapRow row) {
+    if (_busy) return;
     _patch(
       row.candidate,
       (current) => current.copyWith(selected: !current.selected),
@@ -408,6 +558,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
   }
 
   void _submitQuery() {
+    if (_busy) return;
     final text = _query.text.trim();
     if (text.isEmpty || text == _keyword) return;
     setState(() {
@@ -420,8 +571,126 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     unawaited(_startSearch(text));
   }
 
+  int _lineCount(List<SwapRow> rows) => rows.fold(
+    0,
+    (count, row) =>
+        count + row.lines.where((line) => line.episodes.isNotEmpty).length,
+  );
+
+  Future<void> _changeSimilarity(int value) async {
+    if (_similarity == value) return;
+    setState(() => _similarity = value);
+    await widget.onSimilarityChanged?.call(value);
+  }
+
+  Future<void> _confirmPartial() async {
+    if (_busy) return;
+    final selected = _selected;
+    final ready = selected.where((row) => row.ready).toList();
+    final failed = selected
+        .where((row) => row.stage == SwapStage.failed)
+        .toList();
+    final issues = selected
+        .where(
+          (row) => row.stage == SwapStage.failed || row.warnings.isNotEmpty,
+        )
+        .toList();
+    final warningCount = selected.fold<int>(
+      0,
+      (count, row) => count + row.warnings.length,
+    );
+    if (ready.isEmpty || issues.isEmpty) return;
+    final lineCount = _lineCount(ready);
+    final retryableIssue = issues.any(
+      (row) => row.warnings.isNotEmpty || row.retryable,
+    );
+    setState(() => _confirming = true);
+    bool? confirmed;
+    try {
+      confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          final theme = Theme.of(dialogContext);
+          return AlertDialog(
+            key: const ValueKey('source-swap-partial-dialog'),
+            title: const Text('部分来源未完整解析'),
+            content: SizedBox(
+              width: 520,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.5,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${failed.isEmpty ? '${ready.length} 个来源可用。' : '${ready.length} 个来源可用，${failed.length} 个来源失败。'}'
+                        '${warningCount > 0 ? '另有 $warningCount 条线路加载失败。' : ''}'
+                        '确认后仅并入 $lineCount 条可用线路。',
+                      ),
+                      const SizedBox(height: AppSpace.lg),
+                      for (final row in issues)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpace.md),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${row.candidate.siteName} · ${row.candidate.vodName}',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: AppWeight.title,
+                                ),
+                              ),
+                              const SizedBox(height: AppSpace.xs),
+                              Text(
+                                _issueTextOf(row),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      Text(
+                        retryableIssue
+                            ? '返回检查可保留已选项，并重试失败来源。'
+                            : '返回检查可保留已选项；目录类结果请进入详情选择条目。',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                key: const ValueKey('source-swap-partial-cancel'),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('返回检查'),
+              ),
+              FilledButton(
+                key: const ValueKey('source-swap-partial-commit'),
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text('确认并入 $lineCount 条线路'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      if (mounted) setState(() => _confirming = false);
+    }
+    if (confirmed == true && mounted) {
+      final currentReady = _selected.where((row) => row.ready).toList();
+      if (currentReady.isNotEmpty) _commit(currentReady);
+    }
+  }
+
   void _commit(List<SwapRow> rows) {
-    Navigator.of(context).pop(rows);
+    if (rows.isNotEmpty) Navigator.of(context).pop(rows);
   }
 
   void _cancel() {
@@ -433,10 +702,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final selected = <SwapRow>[
-      for (final row in _rows)
-        if (row.selected) row,
-    ];
+    final selected = _selected;
     final readySelected = <SwapRow>[
       for (final row in selected)
         if (row.ready) row,
@@ -553,6 +819,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
       child: TextField(
         key: const ValueKey('source-swap-query'),
         controller: _query,
+        enabled: !_busy,
         textInputAction: TextInputAction.search,
         style: theme.textTheme.bodyMedium,
         decoration: InputDecoration(
@@ -588,7 +855,6 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
       'source-swap-row-$siteKey-$vodId';
 
   Widget _body(ThemeData theme, ColorScheme scheme) {
-
     final outcome = widget.outcomeOf();
     if (outcome == null) {
       // 只有「首次搜索还没建批次」才是整块加载态：一旦有快照，已有结果
@@ -603,14 +869,12 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     SwapRow? rowOf(String siteKey, String vodId) =>
         rowsBy[_stateKeyOf(siteKey, vodId)];
     // 结果区与搜索页共用同一套视图（侧栏 + 分组条 + 标准海报墙）。
-    // 差异只有三处，全部由参数表达：不显示相似度条（换源的意义是看全同一部片
-    // 在各站的样子，滤掉就白来一趟）、不分页（快速搜索只取首页）、卡片上叠
-    // 勾选框与解析状态角标。
+    // 相似度与搜索页共用；快速搜索不分页，卡片额外呈现勾选与解析状态。
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // 进行中只在列表上方占一行：不做遮罩，已有行照常可勾选。
-        if (!outcome.finished) _progressNote(theme, scheme),
+        // 进行中只在列表上方占一小块：不做遮罩，已有行照常可勾选。
+        if (!outcome.finished) _searchProgress(outcome, theme, scheme),
         if (failures > 0) _failureNote(failures, theme, scheme),
         Expanded(
           child: SearchResultView(
@@ -626,7 +890,8 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
             group: _group ?? '',
             onGroupChanged: (value) =>
                 _selectGroup(value.isEmpty ? null : value),
-            showSimilarity: false,
+            initialSimilarity: _similarity,
+            onSimilarityChanged: _changeSimilarity,
             showSummary: false,
             onTapItem: (siteKey, vod) {
               final row = rowOf(siteKey, vod.vodId);
@@ -646,27 +911,57 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     );
   }
 
-  Widget _progressNote(ThemeData theme, ColorScheme scheme) {
+  Widget _searchProgress(
+    MultiSiteSearchOutcome outcome,
+    ThemeData theme,
+    ColorScheme scheme,
+  ) {
+    final done = outcome.results.length;
+    final total = outcome.totalSites;
+    final value = total > 0 ? (done / total).clamp(0.0, 1.0).toDouble() : null;
     return Padding(
-      key: const ValueKey('source-swap-loading'),
+      key: const ValueKey('source-swap-search-progress'),
       padding: const EdgeInsets.fromLTRB(
         AppSpace.lg,
         0,
         AppSpace.lg,
         AppSpace.sm,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.more_horiz, size: 14, color: scheme.onSurfaceVariant),
-          const SizedBox(width: AppSpace.xs),
-          Expanded(
-            child: Text(
-              '还在搜索，返回一个站点就显示一个站点',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
+          Row(
+            children: [
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
+              const SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Text(
+                  total > 0
+                      ? '正在搜索 · 已完成 $done / $total 个站点'
+                      : '正在搜索 · 已返回 $done 个站点',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpace.xs),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              key: const ValueKey('source-swap-search-progress-bar'),
+              value: value,
+              minHeight: 4,
+              color: scheme.primary,
+              backgroundColor: scheme.surfaceContainerHighest,
             ),
           ),
         ],
@@ -704,6 +999,21 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
   }
 
   Widget _emptyState(MultiSiteSearchOutcome outcome) {
+    if (_similarity > 0 &&
+        _rows.isNotEmpty &&
+        filterSearchResults(
+          _rows,
+          outcome.keyword,
+          _similarity,
+          titleOf: (row) => row.candidate.vodName,
+        ).isEmpty) {
+      return const EmptyState(
+        key: ValueKey('source-swap-empty'),
+        title: '当前相似度下没有结果',
+        message: '降低相似度或选择「不过滤」，即可查看被隐藏的候选',
+        icon: Icons.filter_alt_off_outlined,
+      );
+    }
     if (!outcome.finished) {
       return const EmptyState(
         key: ValueKey('source-swap-empty'),
@@ -747,7 +1057,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
             value: row.selected,
             visualDensity: VisualDensity.compact,
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            onChanged: (_) => _toggle(row),
+            onChanged: _busy ? null : (_) => _toggle(row),
           ),
         ),
         // 来源健康度用来源色，不是强调色。
@@ -774,10 +1084,33 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     );
   }
 
-  /// 解析进度角标：`解析中…` / `N 集` / `无分集 + 重试`。
+  String _issueTextOf(SwapRow row) => [
+    if (row.error != null && row.error!.trim().isNotEmpty) row.error!,
+    for (final warning in row.warnings) warning.userMessage,
+  ].join('；');
+
+  /// 解析进度角标：解析中… / N 集 / 无分集 + 重试。
   Widget? _rowBadge(SwapRow row, String suffix, ThemeData theme) {
     if (row.stage == SwapStage.probing) {
-      return _badgeShell(theme, const Text('解析中…'));
+      return _badgeShell(
+        theme,
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              key: ValueKey('source-swap-spinner-$suffix'),
+              width: 12,
+              height: 12,
+              child: const CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(width: AppSpace.xs),
+            const Text('解析中…'),
+          ],
+        ),
+      );
     }
     if (row.stage == SwapStage.failed) {
       return _badgeShell(
@@ -788,28 +1121,35 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
             Tooltip(
               message: row.error ?? '解析失败',
               child: Text(
-                '无分集',
+                row.emptyResult ? '无分集' : '解析失败',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: sourceStatusColor(context, SourceStatus.failed),
                 ),
               ),
             ),
-            TextButton(
-              key: ValueKey('source-swap-retry-$suffix'),
-              onPressed: () => _probe(row),
-              style: TextButton.styleFrom(
-                minimumSize: const Size(0, AppSpace.lg),
-                padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                textStyle: theme.textTheme.bodySmall,
+            if (row.retryable)
+              TextButton(
+                key: ValueKey('source-swap-retry-$suffix'),
+                onPressed: _busy ? null : () => _probe(row),
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, AppSpace.lg),
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: theme.textTheme.bodySmall,
+                ),
+                child: const Text('重试'),
               ),
-              child: const Text('重试'),
-            ),
           ],
         ),
       );
     }
     if (row.ready) {
+      if (row.warnings.isNotEmpty || row.error != null) {
+        return Tooltip(
+          message: _issueTextOf(row),
+          child: _badgeShell(theme, Text('${row.episodeCount} 集 · 部分失败')),
+        );
+      }
       return _badgeShell(theme, Text('${row.episodeCount} 集'));
     }
     return null;
@@ -837,43 +1177,118 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     List<SwapRow> readySelected,
     Color hairline,
   ) {
+    final failedCount = selected
+        .where((row) => row.stage == SwapStage.failed)
+        .length;
+    final pendingCount = selected
+        .where((row) => row.stage == SwapStage.idle)
+        .length;
+    final lineCount = _lineCount(readySelected);
     final allReady = readySelected.length == selected.length;
+    final warnedCount = selected.where((row) => row.warnings.isNotEmpty).length;
+    final retryableFailedCount = selected
+        .where((row) => row.stage == SwapStage.failed && row.retryable)
+        .length;
+    final retryCount = retryableFailedCount + warnedCount;
+    final canProbe = pendingCount > 0 || retryableFailedCount > 0;
+    final hasPartial =
+        readySelected.isNotEmpty &&
+        (failedCount > 0 || warnedCount > 0) &&
+        pendingCount == 0;
+    // 还有未解析的行时必须先解析它们；只重试失败会让按钮永远停在原地。
+    final retryOnly = !hasPartial && pendingCount == 0 && retryCount > 0;
+    final canProbeCount = pendingCount + retryableFailedCount;
+    final probing = _batchProbing && _probingTotal > 0;
+    final busyLabel = probing ? '正在解析 $_probingDone/$_probingTotal' : '正在解析…';
+    final label = _confirming
+        ? '等待确认…'
+        : _busy
+        ? busyLabel
+        : hasPartial
+        ? '并入可用 · $lineCount 条线路'
+        : allReady
+        ? '并入 $lineCount 条线路'
+        : retryOnly
+        ? '重试失败 · $retryCount 个'
+        : canProbe
+        ? '解析所选 · $canProbeCount 条'
+        : '无可用线路';
+    final summary = readySelected.isEmpty && failedCount == 0
+        ? '已选 ${selected.length} 条候选'
+        : '已选 ${selected.length} 个来源 · 可用 ${readySelected.length}'
+              '${failedCount > 0 ? ' · 解析失败 $failedCount' : ''}'
+              '${warnedCount > 0 ? ' · 内部线路失败 $warnedCount' : ''}'
+              '${pendingCount > 0 ? ' · 待解析 $pendingCount' : ''}';
+    final actions = Wrap(
+      spacing: AppSpace.sm,
+      runSpacing: AppSpace.sm,
+      alignment: WrapAlignment.end,
+      children: [
+        if (hasPartial && retryCount > 0)
+          TextButton(
+            key: const ValueKey('source-swap-retry-failed'),
+            onPressed: _busy ? null : _retryFailed,
+            child: Text('重试失败 · $retryCount 个'),
+          ),
+        FilledButton(
+          key: const ValueKey('source-swap-commit'),
+          onPressed: _busy
+              ? null
+              : hasPartial
+              ? _confirmPartial
+              : allReady
+              ? () => _commit(readySelected)
+              : retryOnly
+              ? _retryFailed
+              : canProbe
+              ? _probeSelected
+              : null,
+          child: Text(label),
+        ),
+      ],
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(height: 1, color: hairline),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpace.lg,
-            AppSpace.md,
-            AppSpace.lg,
-            AppSpace.md,
+        if (probing)
+          LinearProgressIndicator(
+            key: const ValueKey('source-swap-probe-progress'),
+            value: _probingTotal > 0 ? _probingDone / _probingTotal : null,
+            minHeight: 4,
+            color: scheme.primary,
+            backgroundColor: scheme.surfaceContainerHighest,
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  allReady ? '已解析，可并入' : '已选 ${selected.length} 条候选',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+        Padding(
+          padding: const EdgeInsets.all(AppSpace.lg),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final note = Text(
+                summary,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
                 ),
-              ),
-              FilledButton(
-                key: const ValueKey('source-swap-commit'),
-                onPressed: allReady
-                    ? () => _commit(readySelected)
-                    : _probeSelected,
-                child: Text(
-                  allReady
-                      ? '并入 ${readySelected.length} 条线路'
-                      : '解析所选 · ${selected.length} 条',
-                ),
-              ),
-            ],
+              );
+              if (constraints.maxWidth < 680) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    note,
+                    const SizedBox(height: AppSpace.sm),
+                    actions,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: note),
+                  const SizedBox(width: AppSpace.md),
+                  actions,
+                ],
+              );
+            },
           ),
         ),
       ],

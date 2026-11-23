@@ -3304,7 +3304,10 @@ class _DetailPageState extends State<DetailPage> {
         siteKey: candidate.siteKey,
         vodId: candidate.vodId,
         vodName: candidate.vodName,
+        listing: candidate.listing,
       ),
+      initialSimilarity: state.searchSimilarity,
+      onSimilarityChanged: state.setSearchSimilarity,
       statusOf: (siteKey) => statuses[siteKey] ?? SourceStatus.unknown,
     );
     // 浮层一关，在途批次立刻作废：否则用户看到的是「关了还在打后端」。
@@ -3336,11 +3339,15 @@ class _DetailPageState extends State<DetailPage> {
           taken: taken,
         );
         mergedLines.add(merged);
-        mergedRoutes[merged.flag] = SwapLineRoute(
-          siteKey: row.candidate.siteKey,
-          siteName: row.candidate.siteName,
-          vodId: row.candidate.vodId,
-        );
+        // 目录展开后的线路必须回到分享条目自己的 id，否则换集会拿父目录 id
+        // 去问站源并被判业务错误（与历史续播同一语义）。
+        mergedRoutes[merged.flag] =
+            row.routes[line.flag] ??
+            SwapLineRoute(
+              siteKey: row.candidate.siteKey,
+              siteName: row.candidate.siteName,
+              vodId: row.candidate.vodId,
+            );
         mergedStatus[merged.flag] =
             statuses[row.candidate.siteKey] ?? SourceStatus.unknown;
       }

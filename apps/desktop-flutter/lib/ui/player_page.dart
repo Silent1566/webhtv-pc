@@ -72,6 +72,7 @@ import '../services/subtitle_service.dart';
 import '../core/ai_content/recommendation.dart';
 import 'danmaku_engine_view.dart';
 import 'danmaku_settings_page.dart';
+import 'danmaku_settings_sheet.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
 import 'external_player_picker_dialog.dart';
@@ -568,6 +569,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 直播弹幕会话（§13.1「直播弹幕」）。仅当弹幕源是 `ws://`/`wss://` 时建立。
   LiveDanmakuSession? _liveSession;
+
+  /// 当前直播源地址；与 [_danmakuSourceUrl] 分开，搜索对话框仍只认点播地址。
+  String? _liveSourceUrl;
+
+  /// 弹层打开时的媒体代次；切集后旧弹层里的选源请求必须作废。
+  int? _danmakuSheetGeneration;
 
   /// 已收到的直播弹幕（保留最近一段时间，过期条目会被修剪）。
   List<DanmakuItem> _liveItems = const [];
@@ -2254,6 +2261,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 自动启用第一个可用的弹幕源；直播弹幕（`ws`/`wss`）走 WebSocket 会话（§13.1）。
   /// 任何失败都只记日志/提示，绝不影响视频播放（§10.4 同语义）。
   Future<void> _configureDanmaku() async {
+    // 换集/重新装配时先停旧直播会话：否则新一集没有直播源时，旧 ws
+    // 仍会被当成「当前弹幕」，还会继续往新画面推流。
+    await _teardownLiveSession('configure');
     final sources = _request.danmaku;
     if (sources.isEmpty) {
       await _autoSearchDanmaku();
@@ -2453,6 +2463,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 连接直播弹幕（§13.1「直播弹幕」）。
   Future<void> _connectLiveDanmaku(DanmakuSource source) async {
     await _teardownLiveSession('replace');
+    _liveSourceUrl = source.url;
     widget.state.log.info(
       '直播弹幕连接 url=${redactUrl(source.url)} name=${source.displayName}',
       scope: 'danmaku',
@@ -2563,6 +2574,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _liveTicker?.cancel();
     _liveTicker = null;
     _liveItems = const [];
+    _liveSourceUrl = null;
     _liveReceivedAt.clear();
     _liveOnline = null;
     _liveStatus = null;
@@ -2645,7 +2657,98 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  /// 打开「弹幕设置」**整页**（显示参数 + 弹幕库，P1 的独立页）。
+  /// 先开页签式弹层调显示参数、切本集弹幕源；返回三态决定下一步。
+  ///
+  /// 弹层里的显示项都经 [_applyDanmakuStyle] 立即应用并落盘；源切换也已经在
+  /// 弹层内完成，所以这里不再有「应用一次」的步骤。
+  Future<void> _openDanmakuQuickSettings() async {
+    final resolved = widget.state.resolvedDanmakuSources;
+    _danmakuSheetGeneration = _mediaGeneration;
+    final action = await showDanmakuSettingsSheet(
+      context,
+      style: _danmakuStyle,
+      onChanged: _applyDanmakuStyle,
+      sourceView: DanmakuSourceView(
+        sources: _request.danmaku,
+        // 直播与点播各记一份地址：ws 地址不能塞进 _danmakuSourceUrl，
+        // 搜索对话框靠它标当前点播源。
+        currentUrl: _liveSession != null ? _liveSourceUrl : _danmakuSourceUrl,
+        itemCount: _liveSession != null
+            ? _liveItems.length
+            : _danmakuItems.length,
+        error: _danmakuError,
+        libraryUrl: resolved.sources.isEmpty
+            ? null
+            : resolved.sources.first.url,
+        libraryTotal: resolved.sources.length,
+      ),
+      onSelectSource: _selectDanmakuSourceForSheet,
+    );
+    _danmakuSheetGeneration = null;
+    if (!mounted) return;
+    switch (action) {
+      case DanmakuSheetAction.openFullPage:
+        await _openDanmakuSettingsPage();
+      case DanmakuSheetAction.openSearch:
+        await _showDanmakuSearch();
+      case DanmakuSheetAction.closed:
+        break;
+    }
+  }
+
+  /// 弹层里点一条源：直播走已有会话，点播走已有加载器。
+  ///
+  /// 失败只把 outcome 交回弹层；toast 仍由 _loadDanmakuSource 自己弹，
+  /// 这里再弹一次会让同一个失败提示出现两遍。
+  Future<DanmakuSourceLoadOutcome> _selectDanmakuSourceForSheet(
+    DanmakuSource source,
+  ) async {
+    // 弹层打开后可能自动切集；旧快照里的地址属于上一集，不能装进新一集。
+    if (_danmakuSheetGeneration == null ||
+        _danmakuSheetGeneration != _mediaGeneration) {
+      return const DanmakuSourceLoadOutcome(
+        ok: false,
+        error: '本集已切换，请重新打开弹幕设置',
+      );
+    }
+    if (source.isLive) {
+      // 直播分支不经过 _loadDanmakuSource；不复位点播状态，旧弹幕会继续
+      // 和直播弹幕一起被 DanmakuOverlay 渲染。
+      if (mounted) {
+        setState(() {
+          _danmakuItems = const [];
+          _danmakuSourceUrl = null;
+          _danmakuError = null;
+        });
+      }
+      await _connectLiveDanmaku(source);
+      // connect() 在握手失败时先返回，真正的失败由 onEvent 异步写入；给
+      // 事件一个短窗口，避免把「连接中」当成成功。
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      // 直播会话失败由 _connectLiveDanmaku 自己 toast 并进入重连；「当前」
+      // 仍指向用户刚选的 ws 地址，但成功与否必须如实回报给弹层。
+      return DanmakuSourceLoadOutcome(
+        ok: _danmakuError == null,
+        currentUrl: source.url,
+        itemCount: _liveItems.length,
+        error: _danmakuError,
+        statusText:
+            _liveStatus ?? (_danmakuError != null ? '连接失败' : '已连接'),
+      );
+    }
+    // 点播分支不经过直播会话；不先停掉会继续推流并渲染到新弹幕上。
+    await _teardownLiveSession('danmaku-switch');
+    if (mounted) setState(() {});
+    final ok = await _loadDanmakuSource(source);
+    return DanmakuSourceLoadOutcome(
+      ok: ok,
+      currentUrl: _danmakuSourceUrl,
+      itemCount: _danmakuItems.length,
+      error: _danmakuError,
+    );
+  }
+
+  /// 打开「弹幕设置」**整页**（弹幕库 + 全部显示参数，P1 的独立页）。
   ///
   /// 页里每一处修改都直接写 state.setDanmakuStyle，而播放器渲染读的是本页
   /// 的 _danmakuStyle 副本：不重新同步的话，用户在页里把字号调到 150%、
@@ -5035,8 +5138,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
               case _PlayerMenuAction.subtitleStyle:
                 _showSubtitleStyleSettings();
               case _PlayerMenuAction.danmakuSettings:
-                // 入口保留在「更多」里，落点换成整页（与右键「弹幕 → 弹幕设置…」同一实现）。
-                unawaited(_openDanmakuSettingsPage());
+                // 与右键「弹幕 → 弹幕设置…」同一入口：先弹层，整页在弹层底部。
+                unawaited(_openDanmakuQuickSettings());
               case _PlayerMenuAction.videoFit:
                 _showVideoFitSettings();
               case _PlayerMenuAction.mediaInfo:

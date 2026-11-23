@@ -337,9 +337,9 @@ extension _PlayerPageMenuSections on _PlayerPageState {
             id: 'danmaku_settings',
             label: '弹幕设置…',
             icon: Icons.comment_outlined,
-            // 整页而不是底部弹层：显示参数 + 弹幕库合并后一屏装不下，
-            // 弹层里再套一段可滚动列表比整页更难用（P1 已把 UI 搬进独立页）。
-            onSelect: act(() => unawaited(_openDanmakuSettingsPage())),
+            // 先给页签式弹层调显示参数；弹幕库仍在一屏放不下的整页里，
+            // 由弹层底部的「完整设置页…」进入，两个入口共用同一实现。
+            onSelect: act(() => unawaited(_openDanmakuQuickSettings())),
           ),
         ],
       ),

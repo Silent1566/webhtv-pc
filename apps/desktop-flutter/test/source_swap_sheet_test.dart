@@ -18,7 +18,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_error.dart';
+import 'package:webhtv_pc/core/playback_lines.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/source_swap.dart';
 import 'package:webhtv_pc/state/search_state.dart';
 import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/common.dart';
@@ -72,11 +74,13 @@ MultiSiteSearchOutcome _outcome({
   required List<SiteSearchEntry> entries,
   bool finished = false,
   String keyword = '示例剧',
+  int totalSites = 0,
 }) {
   final outcome = MultiSiteSearchOutcome(
     runId: 1,
     keyword: keyword,
     results: entries,
+    totalSites: totalSites,
   );
   outcome.finished = finished;
   return outcome;
@@ -110,7 +114,8 @@ void _useTallViewport(WidgetTester tester) => _useViewport(tester, 1400, 1200);
 Future<Future<List<SwapRow>?>> _openSheet(
   WidgetTester tester, {
   ValueNotifier<MultiSiteSearchOutcome?>? snapshot,
-  required SourceSwapProbe onProbe,
+  required Future<List<VodPlayLine>> Function(SwapCandidate candidate) onProbe,
+  SourceSwapProbe? onProbeResult,
   SourceSwapSearch? onSearch,
   List<String>? calls,
   String keyword = '示例剧',
@@ -141,7 +146,9 @@ Future<Future<List<SwapRow>?>> _openSheet(
                         ? Future<void>.value()
                         : onSearch(text);
                   },
-                  onProbe: onProbe,
+                  onProbe: (candidate) async => onProbeResult == null
+                      ? PlaybackLines(lines: await onProbe(candidate))
+                      : await onProbeResult(candidate),
                   statusOf: statusOf,
                 );
               },
@@ -339,6 +346,7 @@ void main() {
         tester,
         snapshot: snapshot,
         onProbe: (candidate) async => [_line('线路')],
+        settle: false,
       );
 
       // 只有 A 到货：A 的行立刻可见，且没有遮罩挡住它。
@@ -351,9 +359,12 @@ void main() {
         findsNothing,
       );
       expect(find.byType(LoadingBlock), findsNothing);
-      // 进行中提示只是一行，不是遮罩。
-      expect(find.byKey(const ValueKey('source-swap-loading')), findsOneWidget);
-      expect(find.text('还在搜索，返回一个站点就显示一个站点'), findsOneWidget);
+      // 进行中显示站点完成进度，且不是遮罩。
+      expect(
+        find.byKey(const ValueKey('source-swap-search-progress')),
+        findsOneWidget,
+      );
+      expect(find.text('正在搜索 · 已返回 1 个站点'), findsOneWidget);
 
       // 用户先把 A 勾上。
       await _tapKey(tester, 'source-swap-check-site-a-100');
@@ -375,7 +386,10 @@ void main() {
       );
       // 关键：A 的状态按 (siteKey, vodId) 复用了，没有被新快照重置。
       expect(_checked(tester, 'source-swap-check-site-a-100'), isTrue);
-      expect(find.byKey(const ValueKey('source-swap-loading')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('source-swap-search-progress')),
+        findsNothing,
+      );
     });
 
     testWidgets('流式到达：已解析好的行也保持 ready', (tester) async {
@@ -603,6 +617,109 @@ void main() {
       expect(placeholder.url, isNull);
     });
 
+    testWidgets('搜索中显示完成站点数与线性进度', (tester) async {
+      _useTallViewport(tester);
+      await _openSheet(
+        tester,
+        snapshot: ValueNotifier<MultiSiteSearchOutcome?>(
+          _outcome(
+            entries: [
+              _entry('site-a', vods: [_vod('100')]),
+              _entry('site-b', error: AppError(AppErrorKind.siteHttp, '连接超时')),
+            ],
+            finished: false,
+            totalSites: 10,
+          ),
+        ),
+        onProbe: (_) async => [_line('线路')],
+        settle: false,
+      );
+      expect(
+        find.byKey(const ValueKey('source-swap-search-progress')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('已完成 2 / 10 个站点'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+        find.byKey(const ValueKey('source-swap-search-progress-bar')),
+      );
+      expect(bar.value, closeTo(0.2, 0.001));
+    });
+
+    testWidgets('批量解析期间显示已完成数量与进度', (tester) async {
+      _useTallViewport(tester);
+      final gates = <String, Completer<List<VodPlayLine>>>{
+        'site-a': Completer<List<VodPlayLine>>(),
+        'site-b': Completer<List<VodPlayLine>>(),
+      };
+      await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) => gates[candidate.siteKey]!.future,
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pump();
+      expect(find.text('正在解析 0/2'), findsOneWidget);
+
+      gates['site-a']!.complete([_line('A 线路')]);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('正在解析 1/2'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+        find.byKey(const ValueKey('source-swap-probe-progress')),
+      );
+      expect(bar.value, closeTo(0.5, 0.001));
+
+      gates['site-b']!.complete([_line('B 线路')]);
+      await tester.pumpAndSettle();
+      expect(find.text('并入 2 条线路'), findsOneWidget);
+    });
+
+    testWidgets('分组很多时相似度控件仍独立成行且不被挤出可视区', (tester) async {
+      _useViewport(tester, 1000, 700);
+      await _openSheet(
+        tester,
+        snapshot: ValueNotifier<MultiSiteSearchOutcome?>(
+          _outcome(
+            entries: [
+              for (var index = 0; index < 30; index += 1)
+                _entry(
+                  'site-$index',
+                  groups: ['分组$index'],
+                  vods: [_vod('id-$index')],
+                ),
+            ],
+            finished: true,
+          ),
+        ),
+        onProbe: (_) async => [_line('线路')],
+      );
+      final groups = find.byKey(const ValueKey('source-swap-filter-groups'));
+      final similarity = find.byKey(
+        const ValueKey('source-swap-filter-similarity'),
+      );
+      expect(groups, findsOneWidget);
+      expect(similarity, findsOneWidget);
+      expect(
+        tester.getSize(groups).height,
+        lessThanOrEqualTo(96.1),
+        reason: '分组区必须有高度上限，不能无限向上挤占相似度与结果区',
+      );
+      expect(
+        tester.getTopLeft(similarity).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(groups).dy),
+        reason: '相似度筛选必须单独占行，排在全部分组之后',
+      );
+      expect(
+        find
+            .byKey(const ValueKey('source-swap-similarity-custom'))
+            .hitTestable(),
+        findsOneWidget,
+        reason: '分组很多时「自定义…」仍然必须可点',
+      );
+    });
+
     testWidgets('勾选后才出现动作条，文案带条数', (tester) async {
       _useTallViewport(tester);
       await _openSheet(
@@ -655,7 +772,7 @@ void main() {
         findsOneWidget,
       );
       // 还没 ready，所以按钮不能变成「并入」。
-      expect(find.text('解析所选 · 1 条'), findsOneWidget);
+      expect(find.text('重试失败 · 1 个'), findsOneWidget);
     });
 
     testWidgets('全流程：一条成功一条失败 → 重试失败行 → 并入，返回行集正确', (tester) async {
@@ -682,9 +799,9 @@ void main() {
       await _tapKey(tester, 'source-swap-commit');
       await tester.pumpAndSettle();
 
-      // 部分成功：成功的行留在 ready，失败的行各自失败。
+      // 网络失败与真实无分集分开呈现，不能把请求错误说成内容为空。
       expect(find.text('2 集'), findsOneWidget);
-      expect(find.text('无分集'), findsOneWidget);
+      expect(find.text('解析失败'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('source-swap-retry-site-b-200')),
         findsOneWidget,
@@ -693,7 +810,13 @@ void main() {
         find.byKey(const ValueKey('source-swap-retry-site-a-100')),
         findsNothing,
       );
-      expect(find.text('解析所选 · 2 条'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsOneWidget,
+      );
+      await _tapKey(tester, 'source-swap-partial-cancel');
+      await tester.pumpAndSettle();
+      expect(find.text('并入可用 · 1 条线路'), findsOneWidget);
 
       // 失败原因进 tooltip（AppError 取 userMessage）。
       final tooltips = tester
@@ -732,6 +855,527 @@ void main() {
       );
       // 浮层已关闭，且没有留下未解析的行。
       expect(find.byKey(const ValueKey('source-swap-sheet')), findsNothing);
+    });
+
+    testWidgets('同款相似度筛选可放宽并切换为完全一致，不重新搜索', (tester) async {
+      _useTallViewport(tester);
+      final calls = <String>[];
+      await _openSheet(
+        tester,
+        snapshot: ValueNotifier<MultiSiteSearchOutcome?>(
+          _outcome(
+            entries: [
+              _entry(
+                'site-a',
+                vods: [
+                  _vod('exact'),
+                  _vod('extra', name: '示例剧花絮'),
+                  _vod('other', name: '完全不同的作品'),
+                ],
+              ),
+            ],
+            finished: true,
+          ),
+        ),
+        onProbe: (_) async => [_line('线路')],
+        calls: calls,
+      );
+      expect(
+        find.byKey(const ValueKey('source-swap-row-site-a-other')),
+        findsNothing,
+      );
+      await _tapKey(tester, 'source-swap-similarity-0');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-row-site-a-other')),
+        findsOneWidget,
+      );
+      await _tapKey(tester, 'source-swap-similarity-100');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-row-site-a-exact')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('source-swap-row-site-a-extra')),
+        findsNothing,
+      );
+      expect(calls, ['示例剧']);
+    });
+
+    testWidgets('相似度隐藏已选候选后仍可解析并入', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: ValueNotifier<MultiSiteSearchOutcome?>(
+          _outcome(
+            entries: [
+              _entry(
+                'site-a',
+                vods: [
+                  _vod('exact'),
+                  _vod('extra', name: '示例剧花絮'),
+                ],
+              ),
+            ],
+            finished: true,
+          ),
+        ),
+        onProbe: (_) async => [_line('线路')],
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-extra');
+      await _tapKey(tester, 'source-swap-similarity-100');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-row-site-a-extra')),
+        findsNothing,
+      );
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.candidate.vodId, 'extra');
+    });
+
+    testWidgets('分组隐藏已选候选后批量解析仍包含全部已选项', (tester) async {
+      _useTallViewport(tester);
+      final probed = <String>[];
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) async {
+          probed.add(candidate.siteKey);
+          return [_line('线路')];
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-group-电影');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(probed.toSet(), {'site-a', 'site-b'});
+      expect((await popped)!.length, 2);
+    });
+
+    testWidgets('部分失败集中提示原因，确认后只返回可用线路', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) async {
+          if (candidate.siteKey == 'site-b') {
+            throw AppError(AppErrorKind.siteHttp, '目标站返回 500');
+          }
+          return [_line('主线路', episodes: 2), _line('备用线路')];
+        },
+      );
+      var closed = false;
+      unawaited(popped.then((_) => closed = true));
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const ValueKey('source-swap-partial-dialog'));
+      expect(dialog, findsOneWidget);
+      expect(find.text('等待确认…'), findsOneWidget);
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining('site-b 站')),
+        findsWidgets,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining('目标站返回 500')),
+        findsWidgets,
+      );
+      expect(closed, isFalse);
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      final rows = (await popped)!;
+      expect(rows.single.candidate.siteKey, 'site-a');
+      expect(rows.single.lines.length, 2);
+      expect(
+        rows.single.lines.every((line) => line.episodes.isNotEmpty),
+        isTrue,
+      );
+      expect(find.byKey(const ValueKey('source-swap-sheet')), findsNothing);
+    });
+
+    testWidgets('返回检查不并入，批量重试只重新解析失败来源', (tester) async {
+      _useTallViewport(tester);
+      var failing = true;
+      final attempts = <String, int>{};
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) async {
+          attempts.update(
+            candidate.siteKey,
+            (count) => count + 1,
+            ifAbsent: () => 1,
+          );
+          if (candidate.siteKey == 'site-b' && failing) {
+            throw AppError(AppErrorKind.siteHttp, '暂时不可用');
+          }
+          return [_line('线路')];
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-partial-cancel');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('source-swap-sheet')), findsOneWidget);
+      expect(_checked(tester, 'source-swap-check-site-a-100'), isTrue);
+      expect(_checked(tester, 'source-swap-check-site-b-200'), isTrue);
+      failing = false;
+      await _tapKey(tester, 'source-swap-retry-failed');
+      await tester.pumpAndSettle();
+      expect(attempts, {'site-a': 1, 'site-b': 2});
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      final rows = (await popped)!;
+      expect(rows.length, 2);
+      expect(rows.every((row) => row.error == null), isTrue);
+    });
+
+    testWidgets('批量解析期间提交禁用，不会重复发起解析', (tester) async {
+      _useTallViewport(tester);
+      final gate = Completer<List<VodPlayLine>>();
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) {
+          attempts++;
+          return gate.future;
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      final button = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('source-swap-commit')),
+      );
+      expect(button.onPressed, isNull);
+      expect(attempts, 1);
+      gate.complete([_line('线路')]);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('只有空分集的线路算失败，不提供并入入口', (tester) async {
+      _useTallViewport(tester);
+      await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [VodPlayLine(flag: '空线路', episodes: const [])],
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-site-a-100')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsNothing,
+      );
+      expect(find.textContaining('并入 1 条线路'), findsNothing);
+    });
+
+    testWidgets('关闭浮层后在途解析失败不会再弹确认', (tester) async {
+      _useTallViewport(tester);
+      final gate = Completer<List<VodPlayLine>>();
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) => candidate.siteKey == 'site-a'
+            ? Future.value([_line('线路')])
+            : gate.future,
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-commit');
+      await _tapKey(tester, 'source-swap-close');
+      await tester.pumpAndSettle();
+      expect(await popped, isNull);
+      gate.completeError(AppError(AppErrorKind.siteHttp, '连接超时'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('并入保留解析结果中每条线路的条目路由', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [],
+        onProbeResult: (_) async => PlaybackLines(
+          lines: [_line('资源线路')],
+          routes: {
+            '资源线路': const SwapLineRoute(
+              siteKey: 'site-a',
+              siteName: 'site-a 站',
+              vodId: 'share:child',
+            ),
+          },
+        ),
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.routes['资源线路']?.vodId, 'share:child');
+    });
+
+    testWidgets('来源内部部分线路失败也确认后才并入可用部分', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [],
+        onProbeResult: (_) async => PlaybackLines(
+          lines: [_line('资源线路')],
+          warnings: [AppError(AppErrorKind.siteNetwork, 'UC 线路加载失败')],
+        ),
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const ValueKey('source-swap-partial-dialog'));
+      expect(dialog, findsOneWidget);
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining('UC 线路加载失败')),
+        findsWidgets,
+      );
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      final row = (await popped)!.single;
+      expect(row.ready, isTrue);
+      expect(row.lines.length, 1);
+      expect(row.warnings.single.message, 'UC 线路加载失败');
+    });
+
+    testWidgets('部分失败来源重试再次失败时保留已解析的可用线路', (tester) async {
+      _useTallViewport(tester);
+      var attempt = 0;
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [],
+        onProbeResult: (_) async {
+          attempt += 1;
+          if (attempt == 1) {
+            return PlaybackLines(
+              lines: [_line('资源线路', episodes: 2)],
+              warnings: [AppError(AppErrorKind.siteNetwork, '备用线路加载失败')],
+            );
+          }
+          throw AppError(AppErrorKind.siteHttp, '目标站暂时不可用');
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-partial-cancel');
+      await tester.pumpAndSettle();
+      expect(find.text('2 集 · 部分失败'), findsOneWidget);
+      await _tapKey(tester, 'source-swap-retry-failed');
+      await tester.pumpAndSettle();
+      expect(
+        find.text('2 集 · 部分失败'),
+        findsOneWidget,
+        reason: '重试失败不能把上一次已经解析出的线路一起清掉',
+      );
+      expect(find.text('解析失败'), findsNothing);
+      // 重试后仍是部分失败：确认框会再次出现，本来就该由它决定是否并入。
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsOneWidget,
+      );
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.lines.single.episodes.length, 2);
+    });
+
+    testWidgets('失败与未解析同时存在时先解析全部，而不是只重试失败', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) async {
+          if (candidate.siteKey == 'site-a') {
+            throw AppError(AppErrorKind.siteHttp, '暂时不可用');
+          }
+          return [_line('线路')];
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsNothing,
+      );
+      expect(find.text('重试失败 · 1 个'), findsOneWidget);
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      expect(find.text('重试失败 · 1 个'), findsNothing);
+      expect(find.text('解析所选 · 2 条'), findsOneWidget);
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-partial-dialog')),
+        findsOneWidget,
+      );
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.candidate.siteKey, 'site-b');
+    });
+
+    testWidgets('部分失败来源重试遇到空结果仍保留已解析线路', (tester) async {
+      _useTallViewport(tester);
+      var attempt = 0;
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [],
+        onProbeResult: (_) async {
+          attempt += 1;
+          if (attempt == 1) {
+            return PlaybackLines(
+              lines: [_line('资源线路', episodes: 2)],
+              warnings: [AppError(AppErrorKind.siteNetwork, '备用线路加载失败')],
+            );
+          }
+          return PlaybackLines.empty;
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-partial-cancel');
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'source-swap-retry-failed');
+      await tester.pumpAndSettle();
+      expect(find.text('2 集 · 部分失败'), findsOneWidget);
+      expect(find.text('无分集'), findsNothing);
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.lines.single.episodes.length, 2);
+    });
+
+    testWidgets('不可重试状态在流式快照到达后仍然保留', (tester) async {
+      _useTallViewport(tester);
+      final snapshot = ValueNotifier<MultiSiteSearchOutcome?>(
+        _outcome(
+          entries: [
+            _entry('site-a', vods: [_vod('100')]),
+          ],
+          finished: true,
+        ),
+      );
+      await _openSheet(
+        tester,
+        snapshot: snapshot,
+        onProbe: (_) async => throw AppError(
+          AppErrorKind.siteUnsupported,
+          '该结果是目录，请先进入详情选择可播放条目',
+        ),
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-site-a-100')),
+        findsNothing,
+      );
+      snapshot.value = _outcome(
+        entries: [
+          _entry('site-a', vods: [_vod('100')]),
+        ],
+        finished: true,
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-site-a-100')),
+        findsNothing,
+      );
+      final button = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('source-swap-commit')),
+      );
+      expect(button.onPressed, isNull);
+    });
+
+    testWidgets('可用来源与不可重试目录混合时只并入可用部分并说明原因', (tester) async {
+      _useTallViewport(tester);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (candidate) async {
+          if (candidate.siteKey == 'site-b') {
+            throw AppError(
+              AppErrorKind.siteUnsupported,
+              '该结果是目录，请先进入详情选择可播放条目',
+            );
+          }
+          return [_line('线路', episodes: 2)];
+        },
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-check-site-b-200');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const ValueKey('source-swap-partial-dialog'));
+      expect(dialog, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-failed')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: dialog,
+          matching: find.textContaining('目录类结果请进入详情选择条目'),
+        ),
+        findsOneWidget,
+      );
+      await _tapKey(tester, 'source-swap-partial-commit');
+      await tester.pumpAndSettle();
+      expect((await popped)!.single.candidate.siteKey, 'site-a');
+    });
+
+    testWidgets('不可重试的目录候选不显示重试入口也不冒充可并入', (tester) async {
+      _useTallViewport(tester);
+      await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => throw AppError(
+          AppErrorKind.siteUnsupported,
+          '该结果是目录，请先进入详情选择可播放条目',
+        ),
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await _tapKey(tester, 'source-swap-commit');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-site-a-100')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('source-swap-retry-failed')),
+        findsNothing,
+      );
+      final button = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('source-swap-commit')),
+      );
+      expect(button.onPressed, isNull);
+      expect(find.text('无可用线路'), findsOneWidget);
     });
 
     testWidgets('关闭按钮 pop(null)，不返回空列表', (tester) async {
@@ -845,6 +1489,5 @@ void main() {
         isNot(sourceStatusColor(context, SourceStatus.failed)),
       );
     });
-
   });
 }

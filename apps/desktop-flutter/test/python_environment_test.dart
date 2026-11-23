@@ -433,7 +433,10 @@ void main() {
       final pending = state.swapProbe(siteKey: 'old-site', vodId: 'old');
       state.dispose();
       env.gate.complete();
-      expect(await pending, isEmpty);
+      final result = await pending;
+      expect(result.lines, isEmpty);
+      expect(result.routes, isEmpty);
+      expect(result.warnings, isEmpty);
     },
   );
   test('review historical Python playback waits readiness in otherwise non-Python context', () async {

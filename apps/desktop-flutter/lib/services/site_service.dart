@@ -232,7 +232,11 @@ class SiteService {
           );
         }
       }
-      return PlaybackLines(lines: lines, routes: routes);
+      return PlaybackLines(
+        lines: lines,
+        routes: routes,
+        warnings: expanded.warnings,
+      );
     });
     return outcome.value;
   }
