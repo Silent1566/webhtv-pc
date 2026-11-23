@@ -21,6 +21,7 @@ import '../services/spider_process.dart';
 import 'app_error.dart';
 import 'danmaku.dart';
 import 'protocol.dart';
+import 'request_cancellation.dart';
 
 /// 站点类型常量。
 abstract final class SiteType {
@@ -833,7 +834,9 @@ class HttpApiClient {
     HttpApiCall call, {
     required String siteKey,
     VodIdentityHint? identity,
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     // 只进日志的请求上下文：动作 + 脱敏 URL + 参数名（不含取值，§9.3.1）。
     final diagnostic = 'action=${call.action ?? "unknown"} ${call.summary}';
     if (debugLog?.enabled ?? false) {
@@ -847,19 +850,29 @@ class HttpApiClient {
       );
     }
     final http.Response response;
+    final abort = Completer<void>();
+    var finished = false;
+    cancellation?.whenCancelled.then((_) {
+      if (!finished && !abort.isCompleted) abort.complete();
+    });
     try {
-      http.Response received;
-      if (call.formBody != null) {
-        received = await _client
-            .post(call.uri, headers: call.headers, body: call.formBody)
-            .timeout(timeout);
-      } else {
-        received = await _client
-            .get(call.uri, headers: call.headers)
-            .timeout(timeout);
-      }
-      response = received;
+      final request = http.AbortableRequest(
+        call.formBody != null ? 'POST' : 'GET',
+        call.uri,
+        abortTrigger: abort.future,
+      )..headers.addAll(call.headers);
+      if (call.formBody != null) request.bodyFields = call.formBody!;
+      cancellation?.throwIfCancelled();
+      final operation = _client.send(request).then(http.Response.fromStream);
+      response = await (cancellation?.bind(operation) ?? operation).timeout(
+        timeout,
+        onTimeout: () {
+          if (!abort.isCompleted) abort.complete();
+          throw TimeoutException('Request timed out', timeout);
+        },
+      );
     } on TimeoutException catch (error, stackTrace) {
+      cancellation?.throwIfCancelled();
       if (debugLog?.enabled ?? false) {
         debugLog!.httpFailure(
           method: call.method,
@@ -878,6 +891,7 @@ class HttpApiClient {
         diagnostic: diagnostic,
       );
     } catch (error, stackTrace) {
+      cancellation?.throwIfCancelled();
       if (debugLog?.enabled ?? false) {
         debugLog!.httpFailure(
           method: call.method,
@@ -895,7 +909,10 @@ class HttpApiClient {
         stackTrace: stackTrace,
         diagnostic: diagnostic,
       );
+    } finally {
+      finished = true;
     }
+    cancellation?.throwIfCancelled();
 
     if (debugLog?.enabled ?? false) {
       debugLog!.httpInbound(

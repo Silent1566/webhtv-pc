@@ -1,6 +1,6 @@
 # xiugou-tv 对照与借鉴清单
 
-- 性质：配置/运行时、播放恢复、备份/WebDAV、更新/打包的源码对照研究。初次交付只做分析；后续用户单独选择“备份消费项完整校验、读取与解压预算”，已实施部分见 §7，其余仍是建议而非兼容性承诺。
+- 性质：配置/运行时、播放恢复、备份/WebDAV、更新/打包的源码对照研究。初次交付只做分析；后续用户分别选择“备份消费项完整校验、读取与解压预算”（§7）和“搜索在途取消”（§8），其余仍是建议而非兼容性承诺。
 - 固定基线：本项目 `f0bf45c2c6d0aea97d850ce8abd6970cb3a7716b`；上游 [qfw66/xiugou-tv](https://github.com/qfw66/xiugou-tv/tree/d57c239d23081e4902068d2081515fa1ac85ff8e) @ `d57c239d23081e4902068d2081515fa1ac85ff8e`（提交日期 2026-11-22）。行号以这些基线为准，后续按符号检索。
 - 方法：固定上游提交、按目录读取源代码，与本项目当前实现逐行对照；不以 README 宣称或旧差距文档替代证据。未启动应用、执行第三方脚本/Spider、请求真实影视源或验证随包运行时。
 - 路径约定：未写仓库前缀的本地 `core/`、`state/`、`services/`、`ui/` 均相对 `apps/desktop-flutter/lib/`，`test/` 相对 `apps/desktop-flutter/`；上游链接均为固定提交 permalink。
@@ -18,7 +18,7 @@
 | 1 | 常规配置导入、仓库展开、失败保护 | 已等价具备（核心能力） | 小：复用已有链路 | 不重复 |
 | 2 | 非标准配置载体解码 | 确认缺口 | 中：解码、入口识别、限额、凭据清理与负例测试 | P1 |
 | 3 | 全局搜索增量、并发、失败与批次隔离 | 已等价具备（核心能力） | 小：保留现有实现与测试 | 不重复 |
-| 4 | 搜索取消下传、超时终止与运行时分档预算 | 有可核实的增量收益 | 中：跨状态/服务/HTTP/sidecar 契约 | P1 |
+| 4 | 搜索取消下传、超时终止与运行时分档预算 | 按请求取消已接通（§8）；分档预算未调整 | 中：跨状态/服务/HTTP/sidecar 契约 | 已实施取消部分 |
 | 5 | 用户触发的分阶段站点体检 | 确认缺口（不是缺诊断） | 中：复用路由，新增调度与结果模型 | P1 |
 | 6 | XPTV/NowShowTime 与 PHP 脚本适配 | 上游路径可核实，本地收益待验证 | 大：新 ABI/宿主能力或解释器 | P2 |
 | 7 | 自动换线的唯一同集确认与显式进度传递 | 现有换线之上的增量 | 中：区分换集/同集恢复 | P1 |
@@ -57,7 +57,7 @@
 
 - **上游**：[search_engine.dart:150 `_searchSiteOutcome`][u-search-budget] 为每站创建子令牌，取消联动并在超时 `child.cancel()`；[:50-59、101-128][u-search-budget] 区分普通请求与 Companion 预算、限制 Companion 在途数。
 - [cms_json_api.dart:473 `_search` / :488-489 取消桥接][u-cms-cancel] 令牌触发 Dio 取消；[companion_spider_api.dart:502-529 `_callSpiderOnce`][u-rpc-cancel] 生成 rpcId，取消本地连接并发 `_cancelRemote(rpcId)`。此处可借鉴“跨层取消身份”，不能承诺任意第三方阻塞代码可中断。
-- **本地逐行差异**：`state/app_state.dart:6616-6618 AppState.searchAll` 仅包 `Future.timeout`，未传专属 client；`:6712-6722 cancelSearch` 只标记批次。`services/site_service.dart:360-370` **已有** `HttpApiClient? client` 并下传路由（`:403`），不能说 HTTP 完全不能取消；缺的是聚合搜索链路接线及 sidecar 统一的按请求取消契约。
+- **本地逐行差异（研究基线，后续取消实施见 §8）**：`state/app_state.dart:6616-6618 AppState.searchAll` 仅包 `Future.timeout`，未传专属 client；`:6712-6722 cancelSearch` 只标记批次。`services/site_service.dart:360-370` **已有** `HttpApiClient? client` 并下传路由（`:403`），不能说 HTTP 完全不能取消；缺的是聚合搜索链路接线及 sidecar 统一的按请求取消契约。
 - **收益/成本**：让取消不仅“不显示结果”，还能对支持取消的网络/宿主请求发出真实终止信号；分档预算能表达冷启动与普通 HTTP 的不同阶段。中，必须跨状态、缓存、路由、HTTP/IPC 一起设计；无需照搬上游 20/110 秒和并发 6。
 - **风险/优先级**：不得取消同一宿主中的无关请求；非 HTTP 阻塞需如实标“已停止等待、宿主仍运行”，不能假报终止。P1；验收用本地慢响应 fixture 检查断连/取消 RPC 和旧结果不污染，不以真实源测试为前提。
 
@@ -139,7 +139,7 @@
 | --- | --- | --- | --- |
 | 0 | 明确源码/组件复用许可与范围 | 保留署名/通知，确认许可兼容、对应源码与发行义务；未明确前不复制 | 任何直接复用前 |
 | 1 | 备份消费集合与预算（§7 已实施部分） | 漏列恢复载荷、超预算及矛盾 ZIP 在写入前拒绝，旧 v1/闭环不退化；新 SQLite/设置语义审计另行评估 | 本次未扩展语义审计 |
-| 2 | 搜索按请求取消：AppState → SiteService/Router → HTTP/sidecar | 取消/超时能终止支持的在途工作，不影响无关请求，不投递旧结果；不能终止者如实报告 | 冻结分层取消契约 |
+| 2 | 搜索按请求取消（§8 已实施）：AppState → SiteService/Router → HTTP/sidecar | 取消/超时能终止支持的在途工作，不影响无关请求，不投递旧结果；不能终止者如实报告 | 冻结分层取消契约 |
 | 3 | 自动换线专用同集与位置：episode matcher / player_page | 重名/重集号/未命中不自动播首集；确定同集保留当前真实位置和倍速；手动选集保持既有语义 | 明确恢复与换集边界 |
 | 4 | seek/error 纯策略及最小接线 | 旧代际失效；暂停/预览不假装推进；失败可重试/回原位置，错误风暴不无限延后确认 | 合成时钟/位置 fixture |
 | 5 | 纯数据载体解码与主动体检，分别成任务 | 载体大小/深度/完整消费受限，保留 msg/凭据/失败保护；体检按阶段显示有限结论 | 明确允许格式/检查范围 |
@@ -152,7 +152,7 @@
 - **许可门槛（P0）**：上游为 [GPL v3][u-license]，其 [THIRD_PARTY_LICENSES.md:3-9、26-29][u-third-party] 明确组件保留各自许可并列有待核实项。本地固定树未找到 tracked LICENSE/COPYING/NOTICE 文件，这不等于本地没有权利人或自动 GPL 兼容。直接复制/修改分发需具体核对本项目许可、授权、派生/组合关系、对应源码和构建材料；进程隔离不自动免除义务。借鉴行为与独立实现不是无条件复制的借口，也不能说看过源码就自动使本项目受 GPL 约束。
 - **不建议照搬**：内置别名/站源/爬虫、多播放内核（本地固定 mpv）、Windows 专属分发假设、整套状态管理、所有兼容兜底与阈值。保留本项目 Windows/Linux、进程隔离、失败如实可诊断的已确定边界。
 - **证据核验口径**：3 路任务均 run 1/3 返回 ready；主审独立读取关键实现与接线，再检查文档引用/行号、变更范围。路径统计使用固定 Git 树，源码规模仅用对应文件行数；没有执行上游或本地功能测试，因此不作“测试通过/更稳定/更兼容”的结论。
-- **审查发现与路由**：初次备份风险按用户选择保留分析，后续用户明确选择消费项/预算并完成 §7；自动恢复同集回落/位置、seek/error、搜索取消仍是未实施建议。上游宽松解析 EOF、跨站回调未接线、loopback/403 身份不足、WebDAV 凭据链未验证均排除直接照搬，不把研究建议误记为已修复。
+- **审查发现与路由**：初次备份风险按用户选择保留分析，后续用户明确选择消费项/预算并完成 §7；搜索取消后续已接通（§8）；自动恢复同集回落/位置、seek/error 仍是未实施建议。上游宽松解析 EOF、跨站回调未接线、loopback/403 身份不足、WebDAV 凭据链未验证均排除直接照搬，不把研究建议误记为已修复。
 - **未核实**：真实站源/第三方脚本兼容率、原生 mpv 错误序列、真实 WebDAV/媒体重定向、秘密保护原生实现、镜像当前可达性、发布产物与源码一致性、完整第三方许可证合规。无性能或稳定性比较结论。
 - **交付/接手**：初次研究只新增本文件；后续备份修复额外修改/新增四个代码测试文件（§7），未改 UI、AppState、依赖或锁文件。其余按 §5 分拆任务，不默认扩展实施范围。
 
@@ -170,6 +170,20 @@
 - **独立验收**：主审执行 `flutter test --no-pub --reporter expanded test/backup_input_validation_test.dart test/phase9_backup_test.dart test/ai_parity_business_integration_test.dart`，**70/70 通过**（新增 49，既有 21）。修改的四个文件 `dart analyze` **No issues found**，格式检查 0 改动、diff whitespace 检查通过。
 - **证据位置**：`.local/backup-hardening/lead-tests-final.log`、`lead-analyze.log`；TDD/反证见 `red-initial.log`、`red-budgets.log`、`run2-red-db-coverage.log`。这里只做合成输入与真实 SQLite 闭环回归，未进行 512 MiB/1 GiB 实际内存压力测试。
 - **仍不承诺**：SQLite/设置的新增完整语义审计、来源认证、断电原子恢复不在本次范围；原有辅助数据语义检查保留。预算限制解码内容量，不是整个进程的峰值内存保证。
+
+## 8. 后续实施：搜索按请求取消
+
+**状态：已验收。** 用户单独选择本项；独立实现取消行为，未复制上游源码。没有新增 UI、依赖或运行时分档预算，默认单站搜索预算仍为 20 秒。
+
+- **链路与接口**：`core/request_cancellation.dart` 提供请求级信号，第一次取消保留原因并观察迟到错误；`SiteService.search` / `SpiderRouter.search` 下传信号。运行时增加可选 `CancellableSearchRuntime` 能力，保留原 `SiteRuntime.search`，兼容既有自定义运行时。
+- **HTTP/Cat HTTP**：通过注入的客户端发送 `http.AbortableRequest`；取消与客户端内部超时中断对应请求（含响应正文在途），不关闭共享 client。保留 GET、form POST、Cat JSON POST、headers、代理/DoH、诊断及解析限制。超时仍归类 `siteTimeout`。不支持 abort 的自定义传输只保证停止本地等待。
+- **sidecar**：`SidecarProcess.abandon(id)` / `SpiderHost.abandon(id)` 移除目标 pending/timer，发送现有 `$/cancelRequest` 并立即结束本地等待，不走原有取消后的整进程强杀兜底。请求 ID 跨运行时实例唯一；冷启动等待取消后不补发过期搜索，也不终止共享初始化。任意第三方阻塞代码不保证物理终止，日志如实报告“已停止等待、已发取消、宿主仍运行”。
+- **生命周期**：取消、清空、新查询取代、配置/服务替换、数据交换和 dispose 均取消旧请求；初始搜索完成后的在途分页也能取消。保留已发布快照，旧批次不得清理新批次分页登记；同步 listener 内取消后不再发起分页。被新查询取代的旧批次保留 `cancelled=false`，与用户取消区分。
+- **发布保护**：取消前检查缓存，返回后检查健康统计/缓存写入；取消后的迟到成功/失败不写缓存、不覆盖新缓存、不增加站点失败。真正超时仍记录一次 `siteTimeout` 失败，并释放 worker 继续搜索其他站点。
+- **测试入口**：新增 `request_cancellation_test.dart`、`search_http_cancellation_test.dart`、`search_runtime_cancellation_test.dart`、`search_ipc_cancellation_test.dart`、`search_inflight_cancellation_test.dart`、`search_service_cancellation_test.dart`（相对 `apps/desktop-flutter/test/`）。HTTP 使用 loopback 真实断连 fixture；IPC 同时使用受控子进程及实际 Python 宿主。
+- **独立验证**：主审执行 23 个风险相关测试文件，**460/460 通过**，其中新增取消行为测试 61 项（信号 4、HTTP 27、运行时/IPC 8、状态/服务 22）；覆盖既有协议、站点、缓存、分页、并发、搜索 UI、空闲回收、日志和 JS/JVM 集成回归。全量 `flutter analyze --no-pub` 为 **No issues found**，`git diff --check` 通过。独立只读复审的 Spec / Standards 均为 0 项发现，另行复跑 99 项通过，核对冻结源码摘要一致。命令输出见 `/tmp/search-lead-final-regression.log`、`/tmp/search-lead-final-analyze.log`；任务与验收记录见 `docs/superpowers/plans/2026-11-23-search-inflight-cancellation.md`。
+- **审查发现与修正**：同步 listener 内取消后仍发送分页、取代批次被误标为用户取消均补行为红测后修正；最终回归基于冻结后的源码重新运行，不使用并行编辑中间态通过记录。测试环境原有依赖解析缺少已声明的 canvas_danmaku，以 `flutter pub get --enforce-lockfile` 恢复，未变更依赖或锁文件。
+- **验证边界**：实际 Python 宿主证明仅目标收到取消标记、另一请求跨越 2200ms 后成功且无 killTree/kill guard；JS/JVM 取消处理器只读核对为按 id 标记，其既有集成测试已回归，但新增取消 fixture 未逐宿主重复。新增 Python fixture 在 Windows 跳过，本轮原生执行环境为 Linux；没有请求真实影视源或验证任意第三方脚本可中断。
 
 [u-license]: https://github.com/qfw66/xiugou-tv/blob/d57c239d23081e4902068d2081515fa1ac85ff8e/LICENSE#L1-L2
 [u-input]: https://github.com/qfw66/xiugou-tv/blob/d57c239d23081e4902068d2081515fa1ac85ff8e/lib/core/config/config_repository.dart#L782-L827

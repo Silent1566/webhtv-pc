@@ -87,7 +87,8 @@ class SiteSearchEntry {
 /// 一次并发搜索批次。
 ///
 /// [runId] 单调递增：调用方据此判断自己持有的结果是否已被更新的查询取代。
-/// [cancelled] 只表示用户取消；被新查询取代时旧批次不会把结果写回状态。
+/// [cancelled] 表示主动取消或清空、配置替换、dispose 引起的失效；
+/// 被新查询取代的旧批次保持此标记不变，但不会再把结果写回状态。
 class MultiSiteSearchOutcome {
   MultiSiteSearchOutcome({
     required this.runId,
@@ -125,10 +126,10 @@ class MultiSiteSearchOutcome {
 
   List<SiteSearchEntry> _results;
 
-  /// 全部站点是否都已结束（成功或失败）。
+  /// 首轮搜索是否已结束（全部站点完成或批次失效）；分页仍可能在途。
   bool finished = false;
 
-  /// 用户是否已取消本批次。
+  /// 本批次是否被主动取消或因清空、配置替换、dispose 而失效。
   bool cancelled = false;
 
   /// 从发起到全部结束的总耗时。

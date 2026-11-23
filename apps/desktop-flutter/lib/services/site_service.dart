@@ -16,6 +16,7 @@ import '../core/parse_runtime.dart';
 import '../core/playback.dart';
 import '../core/playback_lines.dart';
 import '../core/protocol.dart';
+import '../core/request_cancellation.dart';
 import '../core/source_swap.dart';
 import 'android_playback_bridge.dart';
 import 'parse_service.dart';
@@ -98,23 +99,30 @@ class SiteService {
   Future<SiteCallResult<T>> _call<T>(
     String siteKey,
     HealthAction action,
-    Future<T> Function() body,
-  ) async {
+    Future<T> Function() body, {
+    RequestCancellation? cancellation,
+  }) async {
     final stopwatch = Stopwatch()..start();
     try {
-      final value = await body();
+      cancellation?.throwIfCancelled();
+      final operation = body();
+      final value = await (cancellation?.bind(operation) ?? operation);
+      cancellation?.throwIfCancelled();
       _record(siteKey, action, true, stopwatch.elapsed, null);
       return SiteCallResult(value: value, latency: stopwatch.elapsed);
     } catch (error, stackTrace) {
-      final failure = error is AppError
-          ? error.withDiagnostics(stackTrace: stackTrace)
+      final effectiveError = cancellation?.reason ?? error;
+      final failure = effectiveError is AppError
+          ? effectiveError.withDiagnostics(stackTrace: stackTrace)
           : AppError(
               AppErrorKind.unknown,
-              '$error',
-              cause: error,
+              '$effectiveError',
+              cause: effectiveError,
               stackTrace: stackTrace,
             );
-      _record(siteKey, action, false, stopwatch.elapsed, failure.logLine);
+      if (failure.kind != AppErrorKind.siteCancelled) {
+        _record(siteKey, action, false, stopwatch.elapsed, failure.logLine);
+      }
       throw failure;
     }
   }
@@ -368,7 +376,9 @@ class SiteService {
     bool useCache = true,
     bool cache = true,
     HttpApiClient? client,
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     final database = _database;
     if (cache && useCache && database != null) {
       try {
@@ -401,8 +411,11 @@ class SiteService {
         page: page,
         quick: quick,
         client: client,
+        cancellation: cancellation,
       ),
+      cancellation: cancellation,
     );
+    cancellation?.throwIfCancelled();
     if (cache && database != null) {
       try {
         database.cacheSearch(
