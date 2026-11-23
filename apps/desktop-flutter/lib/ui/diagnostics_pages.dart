@@ -16,6 +16,7 @@ import '../state/sync_state.dart';
 import 'ai_settings_page.dart';
 import 'ai_integration_widgets.dart';
 import 'app.dart';
+import 'app_update_page.dart';
 import 'backup_page.dart';
 import 'common.dart';
 import 'config_pages.dart';
@@ -599,6 +600,18 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           title: '浏览器内核',
           subtitle: 'Web 嗅探使用本机 Chromium 内核',
           onTap: () => _push(context, BrowserEnginePage(paths: state.paths)),
+        ),
+        // 应用本体的版本与更新：它和「本机进程在不在跑」同属「这一台机器的
+        // 运行状态」，所以落在维护类，而不是「关于与数据」（那里是长文本说明）。
+        SettingsNavRow(
+          key: const ValueKey('settings-update-open'),
+          icon: Icons.system_update_alt,
+          title: '软件更新',
+          // 摘要口径只写在 AppUpdatePage.summary 一处：行上写「已是最新」、
+          // 进页面却看到「发现新版本」这种自相矛盾，源头就是两处各推一次文案。
+          subtitle: AppUpdatePage.summary(state),
+          subtitleKey: const ValueKey('settings-update-summary'),
+          onTap: () => _push(context, AppUpdatePage(state: state)),
         ),
         // 目录、启动信息与合规说明都是「查一次就够」的长文本：进独立页，
         // 分类页只留一行入口（原来三块长文本把这一类结尾拉得很长）。

@@ -242,7 +242,7 @@ jobs:
       - name: Build Windows release
         working-directory: apps/desktop-flutter
         shell: pwsh
-        run: flutter build windows --release "--dart-define=APP_VERSION=${{ needs.meta.outputs.version }}"
+        run: flutter build windows --release "--dart-define=APP_VERSION=${{ needs.meta.outputs.version }}" "--dart-define=APP_TAG=${{ needs.meta.outputs.tag }}"
 
       # 覆盖 CMake 解压出来的那份 libmpv：换成仓库 pin 的完整 FFmpeg 构建（mpv v0.42.0）。
       # media_kit 只负责把 DLL 放进构建树，具体是哪一份内核由这一步决定。
@@ -522,10 +522,11 @@ jobs:
           python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --cache-dir .local/python-runtime-linux/cache --lock-file scripts/python-runtime-linux.lock.json
           python3 scripts/prepare_python_runtime_linux.py --output-dir runtime/python --validate-only --offline
       - name: Build Linux release
-        run: flutter build linux --release "--dart-define=APP_VERSION=$APP_VERSION"
+        run: flutter build linux --release "--dart-define=APP_VERSION=$APP_VERSION" "--dart-define=APP_TAG=$APP_TAG"
         working-directory: apps/desktop-flutter
         env:
           APP_VERSION: ${{ needs.meta.outputs.version }}
+          APP_TAG: ${{ needs.meta.outputs.tag }}
       - name: Unit tests
         run: xvfb-run -a flutter test
         working-directory: apps/desktop-flutter

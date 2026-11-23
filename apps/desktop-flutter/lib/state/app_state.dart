@@ -48,6 +48,7 @@ import '../services/episode_manual_match_service.dart';
 import '../services/ai_content_title_bridge.dart';
 import '../services/ai_episode_season_service.dart';
 import '../core/app_error.dart';
+import '../core/app_update.dart';
 import '../core/cat_http.dart';
 import '../core/cat_source.dart';
 import '../core/config_loader.dart';
@@ -156,6 +157,8 @@ import '../services/sync_server.dart';
 import '../services/tmdb_cache.dart';
 import '../services/tmdb_config_store.dart';
 import '../services/ui_preferences_store.dart';
+import '../services/app_update_service.dart';
+import '../services/update_preferences_store.dart';
 import '../services/local_source_enable_store.dart';
 import '../services/web_home_store.dart';
 import '../ui/shell_unpack_dialogs.dart' show ShellTargetItem;
@@ -177,6 +180,13 @@ import 'tmdb_state.dart';
 const String appVersion = String.fromEnvironment(
   'APP_VERSION',
   defaultValue: '0.1.0',
+);
+
+/// 发布 tag：CI 用 --dart-define=APP_TAG=「v0.1.0-202611231630」注入，
+/// 更新检查靠它判断「本机是发布构建」还是「开发构建」（ADR-0015）。
+const String appBuildTag = String.fromEnvironment(
+  'APP_TAG',
+  defaultValue: '',
 );
 final String appBuildFlavor = 'MVP-A (${switch (Platform.operatingSystem) {
   'windows' => 'Windows',
@@ -310,8 +320,10 @@ AiContentCompletion? aiContentCompletion,
     this.warmAutoRoutes = true,
     ExternalMetaService? externalMetaService,
     PythonEnvironment? pythonEnvironment,
+    AppUpdateService? updateService,
   }) : paths = paths ?? AppPaths.resolve(),
        _injectedPythonEnvironment = pythonEnvironment,
+       _injectedUpdateService = updateService,
        _externalPlayerDetector =
            externalPlayerDetector ?? ExternalPlayers.detect,
        // AI 调用日志的默认 sink：底座持有多处调用点，不能靠每处记得传 log。
@@ -815,6 +827,26 @@ AiContentCompletion? aiContentCompletion,
   /// 用 `late final` 会在 `selectSite` 里抛 `LateInitializationError`。
   /// 记住站点只是**锦上添花**，它不可用时应安静降级，而不是把选站点弄崩。
   UiPreferencesStore? _uiPreferences;
+
+  // --- 应用更新（ADR-0015） ---
+  /// 测试注入的更新服务（null = 真实 GitHub 客户端，按当前出站代理构造）。
+  final AppUpdateService? _injectedUpdateService;
+  AppUpdateService? _updateService;
+  UpdatePreferencesStore? _updatePreferencesStore;
+  AppUpdatePreferences _updatePreferences = AppUpdatePreferences.defaults;
+  AppUpdateCheck? _updateCheck;
+  Future<AppUpdateCheck>? _updateCheckFuture;
+  bool _updateChecking = false;
+  String? _updateNotice;
+  AppUpdateDownload? _updateDownload;
+  bool _updateDownloading = false;
+  int _updateDownloadReceived = 0;
+  int? _updateDownloadTotal;
+  int _updateProgressNotifiedBytes = -1;
+  String? _updateDownloadError;
+  AppUpdateInstallResult? _updateInstallResult;
+  bool _updateInstalling = false;
+  static const int _updateProgressStepBytes = 256 * 1024;
   final List<ExternalPlayer> Function() _externalPlayerDetector;
   late final TmdbService _tmdbService;
 
@@ -2686,6 +2718,8 @@ AiContentCompletion? aiContentCompletion,
       'hosts=${hostMap.entries.length} endpoints=${endpoints.length}',
       scope: 'proxy',
     );
+    // 更新检查也走同一套出站设置：代理变了，旧客户端必须换掉。
+    _resetUpdateService();
   }
 
   /// 构造 DoH 解析器：配置提供端点与 hosts，偏好提供开关/自定义端点/缓存时长。
@@ -3670,6 +3704,16 @@ AiContentCompletion? aiContentCompletion,
     _applySpiderDebugLog(uiPreferences.spiderDebugLog);
     // 出站代理：从设置恢复后立即重建 HTTP 客户端（未开启时等价于默认客户端）。
     _applyOutboundProxy();
+
+    // 应用更新偏好（ADR-0015）：读取失败只回落默认值，不阻塞启动；
+    // 真正的检查由壳层首帧之后调 maybeAutoCheckForUpdates 发起。
+    final updatePreferencesStore = UpdatePreferencesStore(
+      path: paths.settingsPath,
+      log: log,
+    );
+    await updatePreferencesStore.load();
+    _updatePreferencesStore = updatePreferencesStore;
+    _updatePreferences = updatePreferencesStore.preferences;
 
     final openResult = AppDatabase.open(paths.databasePath);
     _database = openResult.database;
@@ -5277,6 +5321,286 @@ AiContentCompletion? aiContentCompletion,
   /// 后台刷新一轮的落定信号（测试与退出路径用）。
   Future<void> get startupConfigRefreshDone =>
       _startupConfigRefresh ?? Future<void>.value();
+
+  // --- 应用更新（ADR-0015）-----------------------------------------------
+
+  /// 本机这份构建的身份：版本名 + CI 注入的发布 tag。
+  AppUpdateIdentity get appUpdateIdentity =>
+      AppUpdateIdentity(version: appVersion, tag: appBuildTag);
+
+  /// 更新偏好：自动检查开关、通道、上次检查时间与失败原因。
+  AppUpdatePreferences get updatePreferences => _updatePreferences;
+
+  /// 最近一次检查结果（null = 本进程还没查过）。
+  AppUpdateCheck? get updateCheck => _updateCheck;
+
+  /// 是否有检查在飞（按钮禁用与状态回显用）。
+  bool get updateChecking => _updateChecking;
+
+  /// 已下载并通过校验的更新包。
+  AppUpdateDownload? get updateDownload => _updateDownload;
+
+  bool get updateDownloading => _updateDownloading;
+
+  int get updateDownloadReceived => _updateDownloadReceived;
+
+  int? get updateDownloadTotal => _updateDownloadTotal;
+
+  /// 下载进度 [0,1]；总大小未知时为 null。
+  double? get updateDownloadProgress {
+    final total = _updateDownloadTotal;
+    if (total == null || total <= 0) return null;
+    return (_updateDownloadReceived / total).clamp(0.0, 1.0);
+  }
+
+  /// 下载失败原因（页面直接显示）。
+  String? get updateDownloadError => _updateDownloadError;
+
+  /// 安装结果（成功与失败都由页面回显）。
+  AppUpdateInstallResult? get updateInstallResult => _updateInstallResult;
+
+  bool get updateInstalling => _updateInstalling;
+
+  /// 后台检查发现新版本时的一次性提示（tag）；壳层投影成 toast 后清空。
+  String? get updateNotice => _updateNotice;
+
+  /// 发布页：优先用这条发布自己的页面，否则仓库 Releases 列表。
+  Uri get updateReleasePage =>
+      _updateCheck?.release?.pageUri ?? appUpdateReleasePageUri;
+
+  void clearUpdateNotice() {
+    if (_updateNotice == null) return;
+    _updateNotice = null;
+    _notifyIfAlive();
+  }
+
+  /// 打开/关闭「启动时自动检查」（每 24 小时最多一次）。
+  ///
+  /// 打开时立刻查一次：用户拨开关的动作本身就是「现在给我看看」。
+  Future<void> setUpdateAutoCheck(bool enabled) async {
+    if (_updatePreferences.autoCheck == enabled) return;
+    await _saveUpdatePreferences(
+      _updatePreferences.copyWith(autoCheck: enabled),
+    );
+    if (enabled) unawaited(checkForUpdates());
+  }
+
+  /// 切换更新通道；切完清掉上一次结果，免得把别的通道的版本当成「可更新」。
+  Future<void> setUpdateChannel(AppUpdateChannel channel) async {
+    if (_updatePreferences.channel == channel) return;
+    await _saveUpdatePreferences(
+      _updatePreferences.copyWith(
+        channel: channel,
+        lastCheckedAt: null,
+        lastCheckError: null,
+      ),
+    );
+    _updateCheck = null;
+    _updateDownload = null;
+    _updateDownloadError = null;
+    _updateInstallResult = null;
+    _updateNotice = null;
+    _notifyIfAlive();
+  }
+
+  /// 查一次更新。同一时刻只允许一个请求在飞（重复点击返回同一个 Future）。
+  ///
+  /// **永不抛异常**：失败落成 [AppUpdateVerdict.failed] 的结果。
+  Future<AppUpdateCheck> checkForUpdates() {
+    final pending = _updateCheckFuture;
+    if (pending != null) return pending;
+    final future = _runUpdateCheck();
+    _updateCheckFuture = future;
+    return future;
+  }
+
+  Future<AppUpdateCheck> _runUpdateCheck() async {
+    final identity = appUpdateIdentity;
+    final channel = _updatePreferences.channel;
+    _updateChecking = true;
+    _notifyIfAlive();
+    AppUpdateCheck check;
+    try {
+      check = await _updates.check(identity: identity, channel: channel);
+    } on Object catch (error) {
+      final message = error.toString();
+      check = AppUpdateCheck(
+        verdict: AppUpdateVerdict.failed,
+        identity: identity,
+        checkedAt: DateTime.now(),
+        message: '检查更新失败：$message',
+      );
+    } finally {
+      _updateChecking = false;
+      _updateCheckFuture = null;
+    }
+    if (_disposed) return check;
+    _updateCheck = check;
+    _updateNotice = check.hasUpdate ? check.release?.tag : null;
+    final failure = check.message;
+    await _saveUpdatePreferences(
+      _updatePreferences.copyWith(
+        lastCheckedAt: check.checkedAt,
+        lastCheckError: check.failed ? failure : null,
+      ),
+    );
+    final tag = check.release?.tag ?? '-';
+    final channelName = channel.name;
+    final verdictName = check.verdict.name;
+    log.info(
+      '检查更新：通道=$channelName 结论=$verdictName 最新=$tag',
+      scope: 'update',
+    );
+    _notifyIfAlive();
+    return check;
+  }
+
+  /// 启动路径：壳层首帧之后调一次。间隔不到 24 小时就一个请求都不发。
+  Future<void> maybeAutoCheckForUpdates() async {
+    if (_disposed || _updateChecking) return;
+    if (!_updatePreferences.shouldAutoCheck(DateTime.now())) return;
+    await checkForUpdates();
+  }
+
+  /// 下载并校验当前可用的安装包；失败返回 null，原因进 [updateDownloadError]。
+  Future<AppUpdateDownload?> downloadUpdate() async {
+    if (_updateDownloading) return _updateDownload;
+    final release = _updateCheck?.release;
+    if (release == null) {
+      _updateDownloadError = '还没有可安装的版本，请先检查更新';
+      _notifyIfAlive();
+      return null;
+    }
+    final appImagePath = Platform.environment['APPIMAGE'];
+    final asset = release.preferredAsset(
+      operatingSystem: Platform.operatingSystem,
+      runningAsAppImage: (appImagePath ?? '').isNotEmpty,
+    );
+    if (asset == null) {
+      _updateDownloadError = '这次发布没有适合当前平台和发行形态的安装包';
+      _notifyIfAlive();
+      return null;
+    }
+    _updateDownloading = true;
+    _updateDownloadError = null;
+    _updateInstallResult = null;
+    _updateDownloadReceived = 0;
+    _updateDownloadTotal = asset.size > 0 ? asset.size : null;
+    _updateProgressNotifiedBytes = -1;
+    _notifyIfAlive();
+    final destination = Directory(
+      p.join(paths.cacheDir, 'updates', _updateToken(release.tag)),
+    );
+    try {
+      final download = await _updates.download(
+        release,
+        asset,
+        destination: destination,
+        onProgress: (received, total) {
+          _updateDownloadReceived = received;
+          _updateDownloadTotal = total ?? _updateDownloadTotal;
+          final notified = _updateProgressNotifiedBytes;
+          final enough =
+              notified < 0 ||
+              received - notified >= _updateProgressStepBytes ||
+              (total != null && received >= total);
+          if (enough) {
+            _updateProgressNotifiedBytes = received;
+            _notifyIfAlive();
+          }
+        },
+      );
+      _updateDownload = download;
+      _updateDownloadReceived = download.size;
+      _updateDownloadTotal = download.size;
+      final path = download.file.path;
+      log.info('更新包已下载并校验：$path', scope: 'update');
+      return download;
+    } on AppUpdateException catch (error) {
+      final message = error.message;
+      _updateDownloadError = message;
+      log.warning('下载更新包失败：$message', scope: 'update');
+      return null;
+    } on Object catch (error) {
+      final message = error.toString();
+      _updateDownloadError = '下载更新包失败：$message';
+      log.warning('下载更新包失败：$message', scope: 'update');
+      return null;
+    } finally {
+      _updateDownloading = false;
+      _notifyIfAlive();
+    }
+  }
+
+  /// 安装已下载的更新包（AppImage 原地替换 / Windows 换装脚本 / 仅下载）。
+  Future<AppUpdateInstallResult?> applyDownloadedUpdate() async {
+    final download = _updateDownload;
+    if (download == null) return null;
+    if (_updateInstalling) return _updateInstallResult;
+    _updateInstalling = true;
+    _notifyIfAlive();
+    try {
+      final result = await _updates.install(
+        download,
+        environment: _updateInstallEnvironment(),
+      );
+      _updateInstallResult = result;
+      final outcome = result.outcome.name;
+      final message = result.message;
+      if (message == null || message.isEmpty) {
+        log.info('更新安装：$outcome', scope: 'update');
+      } else {
+        log.info('更新安装：$outcome · $message', scope: 'update');
+      }
+      return result;
+    } finally {
+      _updateInstalling = false;
+      _notifyIfAlive();
+    }
+  }
+
+  /// 一次点击完成「下载 → 校验 → 安装」。
+  Future<AppUpdateInstallResult?> downloadAndInstallUpdate() async {
+    final download = _updateDownload ?? await downloadUpdate();
+    if (download == null) return null;
+    return applyDownloadedUpdate();
+  }
+
+  AppUpdateService get _updates {
+    final injected = _injectedUpdateService;
+    if (injected != null) return injected;
+    return _updateService ??= AppUpdateService(
+      client: createOutboundHttpClient(outboundProxy, doh: _dohResolver),
+    );
+  }
+
+  /// 出站传输重建后调用：下一次检查按新设置重新构造客户端。
+  void _resetUpdateService() {
+    if (_injectedUpdateService != null) return;
+    _updateService?.close();
+    _updateService = null;
+  }
+
+  AppUpdateInstallEnvironment _updateInstallEnvironment() =>
+      AppUpdateInstallEnvironment(
+        operatingSystem: Platform.operatingSystem,
+        executablePath: Platform.resolvedExecutable,
+        updatesRoot: p.join(paths.cacheDir, 'updates'),
+        processId: pid,
+        appImagePath: Platform.environment['APPIMAGE'],
+      );
+
+  Future<void> _saveUpdatePreferences(AppUpdatePreferences next) async {
+    if (next == _updatePreferences) return;
+    _updatePreferences = next;
+    _notifyIfAlive();
+    await _updatePreferencesStore?.persist(next);
+  }
+
+  String _updateToken(String value) {
+    final token = value.replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');
+    return token.isEmpty ? 'update' : token;
+  }
 
   /// 跑一轮后台增量刷新（不带 one-shot 闸门）。
   ///
@@ -9653,6 +9977,7 @@ AiContentCompletion? aiContentCompletion,
     syncState.removeListener(notifyListeners);
     syncState.dispose();
     _database?.dispose();
+    if (_injectedUpdateService == null) _updateService?.close();
     log.dispose();
     super.dispose();
   }
