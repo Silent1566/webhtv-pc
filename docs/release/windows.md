@@ -172,7 +172,8 @@ Get-FileHash (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName -Algor
 更新索引：发包成功后，发布流水线从真实发布记录自动生成 `releases.json`，上传到
 固定 prerelease tag `update-channel`（`.../releases/download/update-channel/releases.json`）。
 客户端优先读它，失败才查 Releases API 一次；索引缺失或损坏不会显示成「已是最新」。
-流水线改动合并后的**下一次发布**才产生第一个真实索引。
+首份索引已于 2026-11-23 使用现有发布记录完成初始化，匿名直连与代理均验证 HTTP 200；
+后续由成功发包的流水线自动更新。目前只有测试版发布，正式通道显示暂无发布版本。
 
 下载加速：应用默认经公开 GitHub 下载代理（`https://gh-proxy.com/`，可切换
 `https://ghfast.top/` 或自定义 HTTPS 前缀）下载安装包与校验文件，代理失败自动

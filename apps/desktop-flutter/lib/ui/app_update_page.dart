@@ -63,6 +63,7 @@ class AppUpdatePage extends StatelessWidget {
       if (check.verdict == AppUpdateVerdict.developmentBuild) {
         return '当前 v$version · 开发构建';
       }
+      if (check.release == null) return '当前 v$version · 该通道暂无发布版本';
       return '当前 v$version · 已是最新';
     }
     final error = lastCheckError;
@@ -367,7 +368,8 @@ class AppUpdatePage extends StatelessWidget {
     final tag = check.release?.tag ?? '';
     return switch (check.verdict) {
       AppUpdateVerdict.updateAvailable => tag.isEmpty ? '发现新版本' : '发现新版本 $tag',
-      AppUpdateVerdict.upToDate => tag.isEmpty ? '已是最新' : '已是最新（$tag）',
+      AppUpdateVerdict.upToDate =>
+        tag.isEmpty ? (check.message ?? '该通道暂无发布版本') : '已是最新（$tag）',
       AppUpdateVerdict.developmentBuild => '当前为开发构建，不参与通道比较',
       AppUpdateVerdict.failed => '检查失败：${check.message ?? '未知原因'}',
     };

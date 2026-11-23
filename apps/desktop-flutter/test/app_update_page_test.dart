@@ -435,6 +435,47 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('空通道展示尚未发布而非已是最新，并禁用安装', (tester) async {
+    await pumpPage(tester);
+    for (final channel in AppUpdateChannel.values) {
+      await state.setUpdateChannel(channel);
+      service.result = _check(
+        AppUpdateVerdict.upToDate,
+        message: '发布通道里还没有可见的版本',
+      );
+      await state.checkForUpdates();
+      await tester.pump();
+      final status = tester.widget<Text>(
+        find.byKey(const ValueKey('settings-update-status')),
+      );
+      expect(status.data, '发布通道里还没有可见的版本');
+      expect(AppUpdatePage.summary(state), '当前 v0.1.0 · 该通道暂无发布版本');
+      expect(find.textContaining('已是最新'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('settings-update-install')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-update-new-version')),
+        findsNothing,
+      );
+    }
+    service.result = _check(AppUpdateVerdict.upToDate);
+    await state.checkForUpdates();
+    await tester.pump();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('settings-update-status')))
+          .data,
+      '该通道暂无发布版本',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('状态文本覆盖四种结论，摘要与页面同源', (tester) async {
     await pumpPage(tester);
     expect(find.text('未检查过'), findsOneWidget);
