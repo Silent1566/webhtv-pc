@@ -428,6 +428,8 @@ components:
 
 **不要动的约束：** 顶栏的字幕轨与弹幕开关的 `tooltip` 被集成测试按**精确串**查找并直接 `tap`（`subtitle_flow_test.dart:144,153`、`danmaku_flow_test.dart:156,175`）。`find.byTooltip` 对 String 是**精确匹配**（只有 `RegExp` 才做子串，见 flutter_test `finders.dart:407`），所以这两个控件**不能**被收进溢出菜单，也**不能**加入可配置按钮集合——收进去测试就点空了。
 
+**播放器内的「弹幕设置」是四页签弹层。** 右键 `弹幕 → 弹幕设置…` 与顶栏 `更多 → 弹幕设置` 共用 `_openDanmakuQuickSettings()`，先开「显示 / 时间 / 轨道 / 弹幕源」（`lib/ui/danmaku_settings_sheet.dart`）。用户原意是**弹幕地址显示**：「弹幕源」列出本集的弹幕资源地址，标出当前项、载入条数与失败原因；顶部当前弹幕摘要可点击直达该页签。不同地址须可区分，选择状态不能冒充加载或连接成功。弹幕库的**接口地址**单独只读展示，搜索与完整设置页仍有入口；多源接口的增删改留在 `DanmakuSettingsPage`，不与本集资源地址混为一谈。原三个显示页签及 12 个显示项保留、改动即时生效，入口标签与顶栏弹幕开关不变。
+
 **顶栏必须保留 `AppBar` widget 类型：** `ui_redesign_visual_flow_test.dart:677-681` 用 `find.descendant(of: find.byType(AppBar), matching: find.byTooltip('更多'))` 断言「更多」按钮的位置。换成自绘 `Row` 会让那条断言找不到东西。
 
 **播放器页恒定暗色。** `PlayerPage.build` 内部包一层 `buildAppTheme(Brightness.dark)`。理由：播放器背景是**视频帧**、不是应用底色，主题给的浅色 surface 会让浮层文字对比度崩掉。用户的亮色主题作用于**应用外壳**，不作用于播放器——VLC / mpv / PotPlayer / Netflix 全屏播放器都如此。

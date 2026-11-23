@@ -870,10 +870,11 @@ void main() {
       );
     });
 
-    // 弹幕设置的落点在 P2 从「弹幕源页」换成了**整页** `DanmakuSettingsPage`；
-    // 「完整设置页…」的落点仍是可 push 的「全部设置」页（菜单项 id 也从
+    // 本轮有意改落点：「弹幕设置…」不再直接 push 整页，而是先开页签式弹层；
+    // 整页仍是弹幕库的权威落点，由弹层底部的「完整设置页…」进入。其余
+    // 「完整设置页…」的落点仍是可 push 的「全部设置」页（菜单项 id 从
     // settings_advanced_page 改名成 settings_overview_page，旧 id 不得残留）。
-    testWidgets('弹幕组跳转项的落点：弹幕设置整页与全部设置页', (tester) async {
+    testWidgets('弹幕组跳转项的落点：弹层 → 完整设置页 → 全部设置页', (tester) async {
       await _openMenu(tester);
       await _drill(tester, '弹幕');
 
@@ -886,9 +887,22 @@ void main() {
       await tester.tap(settingsItem);
       await settlePlayerPage(tester, times: 6);
       expect(
+        find.byKey(const ValueKey('player-danmaku-sheet')),
+        findsOneWidget,
+        reason: '「弹幕设置…」必须先打开页签式弹层',
+      );
+      expect(
+        find.byType(DanmakuSettingsPage),
+        findsNothing,
+        reason: '弹层还在时不得直接 push 整页',
+      );
+
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-full-page')));
+      await settlePlayerPage(tester, times: 6);
+      expect(
         find.byType(DanmakuSettingsPage),
         findsOneWidget,
-        reason: '「弹幕设置…」必须打开整页（旧的底部弹层已删除）',
+        reason: '弹层里的「完整设置页…」才是整页入口',
       );
       await tester.tap(find.byType(BackButton));
       await settlePlayerPage(tester, times: 6);
