@@ -2,10 +2,13 @@
 /// 下载与安装的状态机。网络与进程全部由 [_FakeUpdateService] 接管。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/app_update.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
@@ -40,6 +43,7 @@ class _FakeUpdateService extends AppUpdateService {
   int downloads = 0;
   int installs = 0;
   AppUpdateChannel? lastChannel;
+  Completer<void>? pendingCheck;
 
   @override
   Future<AppUpdateCheck> check({
@@ -48,6 +52,7 @@ class _FakeUpdateService extends AppUpdateService {
   }) async {
     checks++;
     lastChannel = channel;
+    await pendingCheck?.future;
     return AppUpdateCheck(
       verdict: verdict,
       identity: identity,
@@ -125,6 +130,186 @@ void main() {
   Map<String, Object?> readSettings() =>
       jsonDecode(File(state.paths.settingsPath).readAsStringSync())
           as Map<String, Object?>;
+
+  test(
+    'production service uses live update proxy callback and metadata cache',
+    () async {
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+        return request.url == appUpdateIndexUri
+            ? http.Response('offline', 503)
+            : http.Response(
+                jsonEncode([
+                  {'tag_name': 'v0.2.0-202611231630', 'assets': []},
+                ]),
+                200,
+              );
+      });
+      await http.runWithClient(() async {
+        final production = AppState(
+          paths: AppPaths.resolve(
+            overrides: {
+              'config': p.join(temp.path, 'production-config'),
+              'data': p.join(temp.path, 'production-data'),
+              'cache': p.join(temp.path, 'production-cache'),
+              'state': p.join(temp.path, 'production-logs'),
+            },
+          ),
+          log: LogService(),
+          externalPlayerDetector: () => const [],
+        );
+        try {
+          await production.bootstrap();
+          requests.clear();
+          const custom = AppUpdateProxySettings(
+            baseUrl: 'https://custom.example/prefix/',
+          );
+          expect(await production.setUpdateGithubProxy(custom), isTrue);
+          expect((await production.checkForUpdates()).failed, isFalse);
+          expect(requests, [
+            appUpdateIndexUri,
+            custom.routesFor(appUpdateIndexUri).first,
+          ]);
+          final metadata = Directory(
+            p.join(production.paths.cacheDir, 'updates', 'metadata'),
+          );
+          expect(metadata.existsSync(), isTrue);
+          expect(metadata.listSync(), isNotEmpty);
+          requests.clear();
+          const alternative = AppUpdateProxySettings(
+            baseUrl: 'https://ghfast.top/',
+          );
+          expect(await production.setUpdateGithubProxy(alternative), isTrue);
+          await production.checkForUpdates();
+          expect(requests, [
+            appUpdateIndexUri,
+            alternative.routesFor(appUpdateIndexUri).first,
+          ]);
+        } finally {
+          production.dispose();
+        }
+      }, () => client);
+    },
+  );
+
+  test(
+    'GitHub proxy validates and persists without changing other settings',
+    () async {
+      final root = readSettings()..['unrelated'] = {'keep': true};
+      File(state.paths.settingsPath).writeAsStringSync(jsonEncode(root));
+      expect(
+        await state.setUpdateGithubProxy(
+          const AppUpdateProxySettings(
+            baseUrl: 'https://mirror.example/prefix',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        state.updatePreferences.githubProxy.baseUrl,
+        'https://mirror.example/prefix/',
+      );
+      expect(readSettings()['unrelated'], {'keep': true});
+      final update = readSettings()['update'] as Map;
+      expect(update['githubProxy'], {
+        'enabled': true,
+        'baseUrl': 'https://mirror.example/prefix/',
+      });
+      expect(
+        await state.setUpdateGithubProxy(
+          const AppUpdateProxySettings(
+            enabled: false,
+            baseUrl: 'https://mirror.example/prefix/',
+          ),
+        ),
+        isTrue,
+      );
+      expect(state.updatePreferences.githubProxy.enabled, isFalse);
+      expect(
+        await state.setUpdateGithubProxy(
+          const AppUpdateProxySettings(baseUrl: 'http://unsafe.example'),
+        ),
+        isFalse,
+      );
+      expect(state.updatePreferences.githubProxy.enabled, isFalse);
+      expect(fake.checks, 0);
+    },
+  );
+
+  test(
+    'GitHub proxy disk failure does not pretend settings were saved',
+    () async {
+      final previous = state.updatePreferences;
+      final settings = File(state.paths.settingsPath);
+      expect(settings.path.startsWith(temp.path), isTrue);
+      if (settings.existsSync()) settings.deleteSync();
+      Directory(settings.path).createSync();
+      expect(
+        await state.setUpdateGithubProxy(
+          const AppUpdateProxySettings(enabled: false),
+        ),
+        isFalse,
+      );
+      expect(state.updatePreferences, previous);
+    },
+  );
+
+  test(
+    'busy check refuses channel and proxy changes until its verdict lands',
+    () async {
+      fake.pendingCheck = Completer<void>();
+      fake.verdict = AppUpdateVerdict.updateAvailable;
+      fake.release = releaseOf('v0.2.0-202611231630');
+      final pending = state.checkForUpdates();
+      await state.setUpdateChannel(AppUpdateChannel.beta);
+      final saved = await state.setUpdateGithubProxy(
+        const AppUpdateProxySettings(enabled: false),
+      );
+      fake.pendingCheck!.complete();
+      await pending;
+      expect(saved, isFalse);
+      expect(state.updatePreferences.channel, AppUpdateChannel.stable);
+      expect(state.updatePreferences.githubProxy.enabled, isTrue);
+      expect(state.updateCheck?.release?.tag, 'v0.2.0-202611231630');
+      await state.setUpdateChannel(AppUpdateChannel.beta);
+      expect(state.updateCheck, isNull);
+      expect(state.updateNotice, isNull);
+    },
+  );
+
+  test(
+    'a new release identity invalidates previously downloaded package',
+    () async {
+      fake.verdict = AppUpdateVerdict.updateAvailable;
+      fake.release = releaseOf('v0.2.0-202611231630');
+      await state.checkForUpdates();
+      await state.downloadUpdate();
+      expect(state.updateDownload, isNotNull);
+      fake.release = releaseOf('v0.3.0-202611241630');
+      await state.checkForUpdates();
+      expect(state.updateDownload, isNull);
+      await state.downloadAndInstallUpdate();
+      expect(fake.downloads, 2);
+      expect(state.updateDownload?.release.tag, 'v0.3.0-202611241630');
+    },
+  );
+
+  test(
+    'failed cached release cannot download or reuse an old package',
+    () async {
+      fake.verdict = AppUpdateVerdict.updateAvailable;
+      fake.release = releaseOf('v0.2.0-202611231630');
+      await state.checkForUpdates();
+      await state.downloadUpdate();
+      fake.verdict = AppUpdateVerdict.failed;
+      fake.failure = '离线，仅供参考';
+      await state.checkForUpdates();
+      expect(await state.downloadAndInstallUpdate(), isNull);
+      expect(fake.installs, 0);
+      expect(fake.downloads, 1);
+    },
+  );
 
   test('bootstrap 读到默认偏好：不自动检查、稳定版、没有检查结果', () {
     expect(state.updatePreferences.autoCheck, isFalse);

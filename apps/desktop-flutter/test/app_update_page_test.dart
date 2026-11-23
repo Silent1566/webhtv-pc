@@ -234,6 +234,144 @@ void main() {
     'settings-update-release-page',
   ];
 
+  testWidgets(
+    'GitHub proxy defaults on; presets and validated custom address save immediately',
+    (tester) async {
+      await pumpPage(tester);
+      final toggle = find.byKey(
+        const ValueKey('settings-update-proxy-enabled'),
+      );
+      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      expect(find.textContaining('第三方'), findsWidgets);
+      expect(find.textContaining('失败'), findsWidgets);
+      await tapKey(tester, 'settings-update-proxy-url');
+      await tester.pumpAndSettle();
+      expect(find.text('gh-proxy.com'), findsOneWidget);
+      await tester.tap(find.text('ghfast.top'));
+      await tester.pumpAndSettle();
+      expect(
+        state.updatePreferences.githubProxy.baseUrl,
+        'https://ghfast.top/',
+      );
+      await tapKey(tester, 'settings-update-proxy-url');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自定义 HTTPS 地址'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'http://unsafe.example');
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.textContaining('请输入 HTTPS'), findsOneWidget);
+      expect(
+        state.updatePreferences.githubProxy.baseUrl,
+        'https://ghfast.top/',
+      );
+      await tester.enterText(
+        find.byType(TextField),
+        'https://custom.example/proxy',
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(
+        state.updatePreferences.githubProxy.baseUrl,
+        'https://custom.example/proxy/',
+      );
+      await tester.tap(find.text('完成'));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'settings-update-proxy-enabled');
+      await tester.pumpAndSettle();
+      final proxy = updateSection()['githubProxy'] as Map;
+      expect(proxy['enabled'], isFalse);
+      expect(proxy['baseUrl'], 'https://custom.example/proxy/');
+      expect(service.checkCalls, 0);
+    },
+  );
+
+  testWidgets('proxy save failure keeps switch unchanged and shows recovery', (
+    tester,
+  ) async {
+    await pumpPage(tester);
+    final settings = File(state.paths.settingsPath);
+    expect(settings.path.startsWith(temp.path), isTrue);
+    if (settings.existsSync()) settings.deleteSync();
+    Directory(settings.path).createSync();
+    await tapKey(tester, 'settings-update-proxy-enabled');
+    await tester.pumpAndSettle();
+    expect(state.updatePreferences.githubProxy.enabled, isTrue);
+    expect(toastCenter.toasts.last.message, contains('保存失败'));
+    expect(toastCenter.toasts.last.kind, ToastKind.error);
+  });
+
+  testWidgets(
+    'failed cached release renders source age retry hints without fresh install',
+    (tester) async {
+      service.result = AppUpdateCheck(
+        verdict: AppUpdateVerdict.failed,
+        identity: const AppUpdateIdentity(version: '0.1.0', tag: _localTag),
+        checkedAt: DateTime.utc(2026, 11, 24, 2),
+        release: _release(),
+        fromCache: true,
+        cachedAt: DateTime.utc(2026, 11, 22, 2),
+        retryAt: DateTime.utc(2026, 11, 24, 3),
+        source: '静态索引',
+        message: '连接失败；仅显示历史缓存，请稍后重试',
+      );
+      await state.checkForUpdates();
+      await pumpPage(tester);
+      expect(
+        find.byKey(const ValueKey('settings-update-source')),
+        findsOneWidget,
+      );
+      final hint = tester.widget<Text>(
+        find.byKey(const ValueKey('settings-update-cache-hint')),
+      );
+      expect(hint.data, contains('2 天'));
+      expect(hint.data, contains('仅供参考'));
+      expect(
+        find.byKey(const ValueKey('settings-update-retry-at')),
+        findsOneWidget,
+      );
+      expect(find.text('缓存版本（仅供参考）'), findsOneWidget);
+      expect(find.textContaining('发现新版本'), findsNothing);
+      final install = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('settings-update-install')),
+      );
+      expect(install.onPressed, isNull);
+      expect(service.checkCalls, 1);
+    },
+  );
+
+  testWidgets('checking disables channel and proxy controls', (tester) async {
+    await pumpPage(tester);
+    service.pendingCheck = Completer<AppUpdateCheck>();
+    final pending = state.checkForUpdates();
+    await tester.pump();
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(const ValueKey('settings-update-channel-beta')),
+          )
+          .onSelected,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const ValueKey('settings-update-proxy-enabled')),
+          )
+          .onChanged,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<ListTile>(
+            find.byKey(const ValueKey('settings-update-proxy-url')),
+          )
+          .onTap,
+      isNull,
+    );
+    service.pendingCheck!.complete(service.result);
+    await pending;
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('构建不发请求；key 齐全；有可用版本才允许安装', (tester) async {
     await pumpPage(tester);
 
@@ -451,6 +589,25 @@ void main() {
     expect(find.text('正在下载…'), findsOneWidget);
     expect(
       tester
+          .widget<ChoiceChip>(
+            find.byKey(const ValueKey('settings-update-channel-beta')),
+          )
+          .onSelected,
+      isNull,
+    );
+    await state.setUpdateChannel(AppUpdateChannel.beta);
+    expect(state.updatePreferences.channel, AppUpdateChannel.stable);
+    expect(
+      await state.setUpdateGithubProxy(
+        const AppUpdateProxySettings(enabled: false),
+      ),
+      isFalse,
+    );
+    final checksBefore = service.checkCalls;
+    await state.checkForUpdates();
+    expect(service.checkCalls, checksBefore);
+    expect(
+      tester
           .widget<FilledButton>(
             find.byKey(const ValueKey('settings-update-install')),
           )
@@ -584,6 +741,7 @@ void main() {
     // 造一份「上次检查早已过期」的偏好：开关打开，但 lastCheckedAt 为空
     // （切一次通道会把上次检查时间清掉，这正是真实的「换通道后重新查」）。
     await state.setUpdateAutoCheck(true);
+    await state.checkForUpdates();
     await state.setUpdateChannel(AppUpdateChannel.beta);
     await state.setUpdateChannel(AppUpdateChannel.stable);
     state.clearUpdateNotice();
@@ -638,7 +796,17 @@ void main() {
         // 注：发布说明的正文（settings-update-notes）按设计高于视口，
         // 它的约束由下面那条 240 上限断言负责，这里只检查外层控件。
         for (final key in [...alwaysKeys, 'settings-update-new-version']) {
+          tester
+              .state<ScrollableState>(find.byType(Scrollable).first)
+              .position
+              .jumpTo(0);
+          await tester.pumpAndSettle();
           final target = find.byKey(ValueKey(key));
+          await tester.scrollUntilVisible(
+            target,
+            160,
+            scrollable: find.byType(Scrollable).first,
+          );
           expect(target, findsOneWidget, reason: '$key 在 $size 下不存在');
           await tester.ensureVisible(target);
           await tester.pumpAndSettle();

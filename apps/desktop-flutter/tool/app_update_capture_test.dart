@@ -3,7 +3,7 @@
 /// 用法（在 apps/desktop-flutter 下）：
 ///   ../../.tools/flutter/bin/flutter test tool/app_update_capture_test.dart \
 ///     --dart-define=APP_TAG=v0.1.0-202611231630
-/// 输出：<仓库根>/.local/update-page-visual/after/update-<亮度>-<宽>x<高>.png
+/// 输出：<仓库根>/.local/update-network-visual/after/update-<亮度>-<宽>x<高>.png
 ///
 /// 为什么带 APP_TAG：它是编译期注入的构建身份，缺省为空 = 开发构建，而开发
 /// 构建永远不会得到「发现新版本」这个结论。截图要拍的是**发布构建看到新版本**
@@ -44,12 +44,14 @@ const List<({String name, Brightness brightness, Size size})> _scenarios = [
   (name: 'update', brightness: Brightness.light, size: Size(480, 640)),
   (name: 'update', brightness: Brightness.dark, size: Size(1440, 900)),
   (name: 'update', brightness: Brightness.light, size: Size(1440, 900)),
+  (name: 'cached-error', brightness: Brightness.dark, size: Size(480, 640)),
 ];
 
 Directory _repoRoot() {
   var directory = Directory.current;
   for (var hop = 0; hop < 6; hop++) {
-    if (File('${directory.path}/apps/desktop-flutter/pubspec.yaml').existsSync()) {
+    if (File('${directory.path}/apps/desktop-flutter/pubspec.yaml')
+        .existsSync()) {
       return directory;
     }
     directory = directory.parent;
@@ -198,7 +200,7 @@ class _OfflineHttpClient implements HttpClient {
 
 void main() {
   final output = Directory(
-    '${_repoRoot().path}/.local/update-page-visual/after',
+    '${_repoRoot().path}/.local/update-network-visual/after',
   );
   final previousHttpOverrides = HttpOverrides.current;
 
@@ -217,7 +219,9 @@ void main() {
         '${scenario.name}-${scenario.brightness.name}-'
         '${scenario.size.width.toInt()}x${scenario.size.height.toInt()}';
     testWidgets('capture $file', (tester) async {
-      final temp = Directory.systemTemp.createTempSync('webhtv-update-capture-');
+      final temp = Directory.systemTemp.createTempSync(
+        'webhtv-update-capture-',
+      );
       final previousLogDirectory = LogService.logDirectoryOverride;
       addTearDown(() {
         LogService.logDirectoryOverride = previousLogDirectory;
@@ -236,7 +240,22 @@ void main() {
       LogService.logDirectoryOverride = paths.logDir;
       final service = _CaptureUpdateService(
         AppUpdateCheck(
-          verdict: AppUpdateVerdict.updateAvailable,
+          verdict: scenario.name == 'cached-error'
+              ? AppUpdateVerdict.failed
+              : AppUpdateVerdict.updateAvailable,
+          fromCache: scenario.name == 'cached-error',
+          cachedAt: scenario.name == 'cached-error'
+              ? DateTime.utc(2026, 11, 22, 2)
+              : null,
+          retryAt: scenario.name == 'cached-error'
+              ? DateTime.utc(2026, 11, 24, 3)
+              : null,
+          source: '静态索引',
+          message: scenario.name == 'cached-error'
+              ? '静态索引连接超时，备用代理也暂时无法连接；GitHub API 请求限流。'
+                    '当前仅显示两天前保存的历史缓存，尚未确认最新版本，不能下载或安装；'
+                    '请稍后检查，或打开 Release 页面手动查看。'
+              : null,
           identity: const AppUpdateIdentity(
             version: '0.1.0',
             tag: 'v0.1.0-202611231630',
@@ -263,6 +282,14 @@ void main() {
       expect(find.byType(ErrorWidget), findsNothing);
       expect(tester.takeException(), isNull, reason: '渲染异常（含布局溢出）时不出图');
       await _writePng(tester, File('${output.path}/$file.png'));
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('settings-update-proxy-url')),
+        160,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await _writePng(tester, File('${output.path}/$file-proxy.png'));
     });
   }
 }

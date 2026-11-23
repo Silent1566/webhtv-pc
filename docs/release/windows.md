@@ -169,6 +169,17 @@ Get-FileHash (Get-ChildItem dist/*.zip | Select-Object -First 1).FullName -Algor
 发布：每个 Release 必须包含 `SHA256SUMS.txt`。应用下载前先读它（或 GitHub API 的
 `assets[].digest`），校验不过就删除文件并报错；没有校验值的发布拒绝安装。
 
+更新索引：发包成功后，发布流水线从真实发布记录自动生成 `releases.json`，上传到
+固定 prerelease tag `update-channel`（`.../releases/download/update-channel/releases.json`）。
+客户端优先读它，失败才查 Releases API 一次；索引缺失或损坏不会显示成「已是最新」。
+流水线改动合并后的**下一次发布**才产生第一个真实索引。
+
+下载加速：应用默认经公开 GitHub 下载代理（`https://gh-proxy.com/`，可切换
+`https://ghfast.top/` 或自定义 HTTPS 前缀）下载安装包与校验文件，代理失败自动
+回退直连；只代理本项目公开 Release 地址，API 与其它地址直连，代理不接收
+Cookie/Authorization。第三方代理能看到公开下载 URL，速度因网络而异；代理结果仍
+必须通过完整包 SHA-256，失败不降低校验门禁。
+
 行为：
 
 - 检查：设置 → 维护 → 软件更新；或开启「启动时自动检查」（默认关闭，24 小时最多一次）。

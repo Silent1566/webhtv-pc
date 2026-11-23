@@ -113,10 +113,12 @@ class AppUpdatePage extends StatelessWidget {
                         ),
                         label: Text(channel.label),
                         selected: state.updatePreferences.channel == channel,
-                        onSelected: (selected) {
-                          if (!selected) return;
-                          unawaited(state.setUpdateChannel(channel));
-                        },
+                        onSelected: _busy
+                            ? null
+                            : (selected) {
+                                if (!selected) return;
+                                unawaited(state.setUpdateChannel(channel));
+                              },
                       ),
                   ],
                 ),
@@ -126,12 +128,30 @@ class AppUpdatePage extends StatelessWidget {
                 key: const ValueKey('settings-update-status'),
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
+              if (state.updateCheck?.source case final source?)
+                Text(
+                  '信息来源：$source',
+                  key: const ValueKey('settings-update-source'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (state.updateCheck?.fromCache == true)
+                Text(
+                  _cacheHint(state.updateCheck!),
+                  key: const ValueKey('settings-update-cache-hint'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (state.updateCheck?.retryAt case final retryAt?)
+                Text(
+                  'GitHub API 可重试时间：${formatAppUpdateTime(retryAt)}；静态索引仍可检查',
+                  key: const ValueKey('settings-update-retry-at'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               const SizedBox(height: AppSpace.md),
               SettingsActions(
                 children: [
                   FilledButton.tonalIcon(
                     key: const ValueKey('settings-update-check'),
-                    onPressed: state.updateChecking
+                    onPressed: _busy
                         ? null
                         : () => unawaited(state.checkForUpdates()),
                     icon: const Icon(Icons.refresh),
@@ -153,9 +173,12 @@ class AppUpdatePage extends StatelessWidget {
           ),
           if (release != null)
             SettingsSection(
-              title: '可用版本',
+              title: state.updateCheck!.failed ? '缓存版本（仅供参考）' : '可用版本',
               children: [
-                _NewVersionBlock(release: release),
+                _NewVersionBlock(
+                  release: release,
+                  historical: state.updateCheck!.failed,
+                ),
                 _ReleaseNotes(release: release),
               ],
             ),
@@ -208,10 +231,110 @@ class AppUpdatePage extends StatelessWidget {
               ],
             ],
           ),
+          SettingsSection(
+            title: 'GitHub 下载加速',
+            description:
+                '使用第三方服务加速公开的 GitHub 更新下载；第三方会看到公开下载 URL。'
+                '速度因网络而异，失败自动直连。不影响全局出站代理。',
+            children: [
+              SwitchListTile(
+                key: const ValueKey('settings-update-proxy-enabled'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('启用 GitHub 下载代理'),
+                value: state.updatePreferences.githubProxy.enabled,
+                onChanged: _busy
+                    ? null
+                    : (enabled) => unawaited(
+                        _saveProxy(
+                          state.updatePreferences.githubProxy.copyWith(
+                            enabled: enabled,
+                          ),
+                        ),
+                      ),
+              ),
+              ListTile(
+                key: const ValueKey('settings-update-proxy-url'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('下载代理地址'),
+                subtitle: Text(state.updatePreferences.githubProxy.baseUrl),
+                trailing: const Icon(Icons.edit_outlined),
+                enabled: !_busy && state.updatePreferences.githubProxy.enabled,
+                onTap: _busy || !state.updatePreferences.githubProxy.enabled
+                    ? null
+                    : () => unawaited(_selectProxy(context)),
+              ),
+            ],
+          ),
         ],
       );
     },
   );
+
+  bool get _busy =>
+      state.updateChecking || state.updateDownloading || state.updateInstalling;
+
+  Future<void> _saveProxy(AppUpdateProxySettings settings) async {
+    if (!await state.setUpdateGithubProxy(settings)) {
+      showToast(
+        '下载代理设置保存失败',
+        detail: '设置未更改，请在更新操作结束后重试，并检查设置目录是否可写。',
+        kind: ToastKind.error,
+      );
+    }
+  }
+
+  Future<void> _selectProxy(BuildContext context) async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('下载代理地址'),
+        children: [
+          for (final url in appUpdateProxyPresets)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, url),
+              child: Row(
+                children: [
+                  Expanded(child: Text(Uri.parse(url).host)),
+                  if (url == state.updatePreferences.githubProxy.baseUrl)
+                    const Icon(Icons.check),
+                ],
+              ),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 'custom'),
+            child: const Text('自定义 HTTPS 地址'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || !context.mounted) return;
+    if (selected == 'custom') {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _UpdateProxyAddressDialog(state: state),
+      );
+    } else {
+      await _saveProxy(
+        state.updatePreferences.githubProxy.copyWith(baseUrl: selected),
+      );
+    }
+  }
+
+  String _cacheHint(AppUpdateCheck check) {
+    final saved = check.cachedAt;
+    final age = saved == null ? null : check.checkedAt.difference(saved);
+    final ageText = age == null
+        ? '时间未知'
+        : age.inDays > 0
+        ? '${age.inDays} 天'
+        : age.inHours > 0
+        ? '${age.inHours} 小时'
+        : '${age.inMinutes.clamp(0, 59)} 分钟';
+    final time = saved == null ? '' : ' · 保存于 ${formatAppUpdateTime(saved)}';
+    final stateText = check.failed ? '仅供参考，尚未确认最新版本' : '已使用缓存';
+    return '$stateText · 缓存年龄 $ageText$time';
+  }
 
   bool get _canInstall {
     final check = state.updateCheck;
@@ -222,7 +345,7 @@ class AppUpdatePage extends StatelessWidget {
         check.verdict != AppUpdateVerdict.developmentBuild) {
       return false;
     }
-    return !state.updateDownloading && !state.updateInstalling;
+    return !_busy;
   }
 
   String _identityText() {
@@ -298,9 +421,84 @@ class AppUpdatePage extends StatelessWidget {
   }
 }
 
+class _UpdateProxyAddressDialog extends StatefulWidget {
+  const _UpdateProxyAddressDialog({required this.state});
+
+  final AppState state;
+
+  @override
+  State<_UpdateProxyAddressDialog> createState() =>
+      _UpdateProxyAddressDialogState();
+}
+
+class _UpdateProxyAddressDialogState extends State<_UpdateProxyAddressDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.state.updatePreferences.githubProxy.baseUrl,
+  );
+  String? _error;
+  String _status = '有效修改即生效并自动保存';
+  int _revision = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _change(String text) async {
+    final revision = ++_revision;
+    final normalized = AppUpdateProxySettings.normalizeBaseUrl(text);
+    setState(() {
+      _error = normalized == null ? '请输入 HTTPS 地址，不含账号、查询参数或片段' : null;
+      _status = normalized == null ? '无效地址未保存' : '正在自动保存…';
+    });
+    if (normalized == null) return;
+    final saved = await widget.state.setUpdateGithubProxy(
+      widget.state.updatePreferences.githubProxy.copyWith(baseUrl: normalized),
+    );
+    if (!mounted || revision != _revision) return;
+    setState(() {
+      _status = saved ? '已自动保存' : '自动保存失败，设置未更改，请修改后重试';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('自定义下载代理'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          decoration: InputDecoration(
+            labelText: 'HTTPS 代理前缀',
+            hintText: defaultAppUpdateProxyUrl,
+            errorText: _error,
+            errorMaxLines: 3,
+          ),
+          onChanged: _change,
+        ),
+        const SizedBox(height: AppSpace.sm),
+        Text(_status, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('完成'),
+      ),
+    ],
+  );
+}
+
 /// 「可更新到」标题：版本、通道与发布时间。
 class _NewVersionBlock extends StatelessWidget {
-  const _NewVersionBlock({required this.release});
+  const _NewVersionBlock({required this.release, this.historical = false});
+
+  final bool historical;
 
   final AppRelease release;
 
@@ -314,7 +512,10 @@ class _NewVersionBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('可更新到 ${release.tag}', style: theme.textTheme.titleSmall),
+          Text(
+            '${historical ? '历史版本' : '可更新到'} ${release.tag}',
+            style: theme.textTheme.titleSmall,
+          ),
           const SizedBox(height: AppSpace.sm),
           Wrap(
             spacing: AppSpace.sm,

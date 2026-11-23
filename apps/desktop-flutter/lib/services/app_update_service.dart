@@ -15,12 +15,14 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../core/app_update.dart';
+import 'app_update_cache.dart';
 
 /// 更新链路的失败（文案可直接给用户看）。
 class AppUpdateException implements Exception {
@@ -153,13 +155,22 @@ class AppUpdateService {
   AppUpdateService({
     http.Client? client,
     Uri? apiBaseUri,
+    Uri? indexUri,
+    this.useStaticIndex = true,
+    Directory? cacheDirectory,
+    AppUpdateProxySettings Function()? proxySettings,
+    bool ownsClient = false,
     this.userAgent = appUpdateUserAgent,
     this.timeout = const Duration(seconds: 20),
     DateTime Function()? clock,
     AppUpdateProcessStarter? processStarter,
     AppUpdateProcessRunner? processRunner,
   }) : _client = client ?? http.Client(),
-       _ownsClient = client == null,
+       _ownsClient = client == null || ownsClient,
+       _indexUri = indexUri ?? appUpdateIndexUri,
+       _cache = AppUpdateMetadataCache(cacheDirectory),
+       _proxySettings =
+           proxySettings ?? (() => AppUpdateProxySettings.defaults),
        _apiBaseUri = apiBaseUri ?? Uri.parse(appUpdateApiBaseUrl),
        _clock = clock ?? DateTime.now,
        _startProcess =
@@ -181,6 +192,10 @@ class AppUpdateService {
   final http.Client _client;
   final bool _ownsClient;
   final Uri _apiBaseUri;
+  final Uri _indexUri;
+  final bool useStaticIndex;
+  final AppUpdateMetadataCache _cache;
+  final AppUpdateProxySettings Function() _proxySettings;
   final DateTime Function() _clock;
   final AppUpdateProcessStarter _startProcess;
   final AppUpdateProcessRunner _runProcess;
@@ -200,59 +215,300 @@ class AppUpdateService {
     required AppUpdateIdentity identity,
     required AppUpdateChannel channel,
   }) async {
-    final checkedAt = _clock();
-    AppUpdateCheck failure(String message) => AppUpdateCheck(
-      verdict: AppUpdateVerdict.failed,
+    final checkedAt = _clock().toUtc();
+    final deadline = Stopwatch()..start();
+    final errors = <String>[];
+    DateTime? retryAt;
+    final sources = <({Uri uri, String label, bool api})>[];
+    AppUpdateCheck result({
+      AppRelease? release,
+      bool failed = false,
+      bool fromCache = false,
+      DateTime? cachedAt,
+      String? source,
+    }) => AppUpdateCheck(
+      verdict: failed
+          ? AppUpdateVerdict.failed
+          : release == null
+          ? AppUpdateVerdict.upToDate
+          : !identity.isReleaseBuild
+          ? AppUpdateVerdict.developmentBuild
+          : release.isNewerThan(identity)
+          ? AppUpdateVerdict.updateAvailable
+          : AppUpdateVerdict.upToDate,
       identity: identity,
       checkedAt: checkedAt,
-      message: message,
+      release: release,
+      message: failed
+          ? '${errors.join('；')}${fromCache ? '；仅显示旧缓存（${cachedAt?.toIso8601String()}），请联网重新检查后再安装' : ''}'
+          : release == null
+          ? '发布通道里还没有可见的版本'
+          : null,
+      fromCache: fromCache,
+      cachedAt: cachedAt,
+      retryAt: retryAt,
+      source: source,
     );
+    AppRelease? newest(List<AppRelease> releases) => _newestRelease([
+      for (final release in releases)
+        if (_matchesChannel(release, channel)) release,
+    ]);
     try {
-      final uri = _apiBaseUri.replace(
+      final settings = _proxySettings();
+      if (useStaticIndex) {
+        for (final uri in settings.routesFor(_indexUri, proxyFirst: false)) {
+          sources.add((
+            uri: uri,
+            label: uri == _indexUri ? '静态索引' : '静态索引（代理）',
+            api: false,
+          ));
+        }
+      }
+      final api = _apiBaseUri.replace(
         path: '/repos/$appUpdateRepository/releases',
         queryParameters: const {'per_page': '30'},
       );
-      final response = await _client
-          .get(uri, headers: _headers)
-          .timeout(timeout);
-      if (response.statusCode != 200) {
-        return failure(_httpMessage('查询发布信息', response.statusCode));
+      sources.add((uri: api, label: 'GitHub API', api: true));
+      await _cache.load().timeout(_checkRemaining(deadline));
+      final active = sources.map((source) => source.uri.toString()).toSet();
+      _cache.entries.removeWhere((key, _) => !active.contains(key));
+      retryAt = _cache.cooldowns[api.toString()];
+      if (retryAt != null && !retryAt.isAfter(_clock().toUtc())) {
+        _cache.cooldowns.remove(api.toString());
+        retryAt = null;
       }
-      final releases = _parseReleases(response.body);
-      final newest = _newestRelease([
-        for (final release in releases)
-          if (_matchesChannel(release, channel)) release,
-      ]);
-      if (newest == null) {
-        return AppUpdateCheck(
-          verdict: AppUpdateVerdict.upToDate,
-          identity: identity,
-          checkedAt: checkedAt,
-          message: '发布通道里还没有可见的版本',
-        );
+      for (final source in sources) {
+        if (source.api && retryAt != null) {
+          errors.add('GitHub API 限流冷却中，请在 ${retryAt.toIso8601String()} 后重试');
+          continue;
+        }
+        final remaining = _checkRemaining(deadline);
+        if (remaining <= Duration.zero) {
+          errors.add('检查更新超时');
+          break;
+        }
+        final cached = _cache.entries[source.uri.toString()];
+        try {
+          final response = await _readResponse(
+            source.uri,
+            headers: {
+              ..._headers,
+              if (cached?.etag != null) 'If-None-Match': cached!.etag!,
+              if (cached?.lastModified != null)
+                'If-Modified-Since': cached!.lastModified!,
+            },
+            limit: _shorter(
+              _shorter(timeout, const Duration(seconds: 6)),
+              remaining,
+            ),
+          );
+          if (response.statusCode == 304) {
+            if (cached == null) throw const AppUpdateException('304 响应没有对应的缓存');
+            if (source.api) {
+              retryAt = _rateLimitUntil(response);
+              if (retryAt != null) {
+                _cache.cooldowns[source.uri.toString()] = retryAt;
+                await _saveCache(deadline);
+              }
+            }
+            return result(
+              release: newest(_parseReleases(cached.body)),
+              fromCache: true,
+              cachedAt: cached.savedAt,
+              source: source.label,
+            );
+          }
+          if (response.statusCode != 200) {
+            final limitedUntil = source.api ? _rateLimitUntil(response) : null;
+            if (limitedUntil != null) {
+              retryAt = limitedUntil;
+              _cache.cooldowns[source.uri.toString()] = limitedUntil;
+              await _saveCache(deadline);
+              throw AppUpdateException(
+                '查询发布信息被限流（HTTP ${response.statusCode}），请在 ${limitedUntil.toIso8601String()} 后重试',
+              );
+            }
+            throw AppUpdateException(
+              _httpMessage('查询发布信息', response.statusCode),
+            );
+          }
+          final releases = _parseReleases(response.body);
+          // 静态索引是生成物：合法 JSON 但没有任何可比较的发布，说明引发生成失败/
+          // 被截断，不能据此回答「已是最新」，应继续走代理与 API 兜底。
+          if (releases.isEmpty && !source.api) {
+            throw const AppUpdateException('静态索引里没有可用的发布记录');
+          }
+          _cache.entries[source.uri.toString()] = AppUpdateCacheEntry(
+            body: response.body,
+            savedAt: _clock().toUtc(),
+            etag: response.headers['etag'],
+            lastModified: response.headers['last-modified'],
+          );
+          if (source.api) {
+            retryAt = _rateLimitUntil(response);
+            if (retryAt == null) {
+              _cache.cooldowns.remove(source.uri.toString());
+            } else {
+              _cache.cooldowns[source.uri.toString()] = retryAt;
+            }
+          }
+          await _saveCache(deadline);
+          return result(release: newest(releases), source: source.label);
+        } on Object catch (error) {
+          errors.add('${source.label}：${_transportMessage(error)}');
+        }
       }
-      if (!identity.isReleaseBuild) {
-        return AppUpdateCheck(
-          verdict: AppUpdateVerdict.developmentBuild,
-          identity: identity,
-          checkedAt: checkedAt,
-          release: newest,
-        );
-      }
-      return AppUpdateCheck(
-        verdict: newest.isNewerThan(identity)
-            ? AppUpdateVerdict.updateAvailable
-            : AppUpdateVerdict.upToDate,
-        identity: identity,
-        checkedAt: checkedAt,
-        release: newest,
-      );
-    } on TimeoutException {
-      return failure('连接更新服务超时，请稍后再试');
-    } on AppUpdateException catch (error) {
-      return failure(error.message);
     } on Object catch (error) {
-      return failure('检查更新失败：$error');
+      errors.add(_transportMessage(error));
+    }
+    if (errors.isEmpty) errors.add('检查更新失败');
+    final cachedSources = [...sources]
+      ..sort(
+        (a, b) => (_cache.entries[b.uri.toString()]?.savedAt ?? DateTime(0))
+            .compareTo(
+              _cache.entries[a.uri.toString()]?.savedAt ?? DateTime(0),
+            ),
+      );
+    for (final source in cachedSources) {
+      final cached = _cache.entries[source.uri.toString()];
+      if (cached == null) continue;
+      try {
+        return result(
+          release: newest(_parseReleases(cached.body)),
+          failed: true,
+          fromCache: true,
+          cachedAt: cached.savedAt,
+          source: source.label,
+        );
+      } on AppUpdateException {
+        _cache.entries.remove(source.uri.toString());
+      }
+    }
+    return result(failed: true);
+  }
+
+  Duration _checkRemaining(Stopwatch watch) {
+    final remaining = const Duration(seconds: 24) - watch.elapsed;
+    return remaining > Duration.zero ? remaining : Duration.zero;
+  }
+
+  static Duration _shorter(Duration a, Duration b) => a < b ? a : b;
+
+  Future<void> _saveCache(Stopwatch deadline) async {
+    try {
+      await _cache.save().timeout(_checkRemaining(deadline));
+    } on Object {
+      // A disk timeout does not invalidate successfully validated metadata.
+    }
+  }
+
+  String _transportMessage(Object error) {
+    if (error is AppUpdateException) return error.message;
+    if (error is TimeoutException) return '连接更新服务超时，请稍后再试';
+    if (error is FormatException) return '更新服务返回的内容格式错误';
+    if (error is FileSystemException) return '更新文件读写失败，请检查磁盘空间与权限';
+    return '网络连接失败，请检查网络后重试';
+  }
+
+  DateTime? _rateLimitUntil(http.Response response) {
+    final code = response.statusCode;
+    final headers = response.headers;
+    if (code != 403 && code != 429 && headers['x-ratelimit-remaining'] != '0') {
+      return null;
+    }
+    final body = response.body.toLowerCase();
+    if (code != 429 &&
+        headers['x-ratelimit-remaining'] != '0' &&
+        !headers.containsKey('retry-after') &&
+        !body.contains('rate limit') &&
+        !body.contains('secondary rate') &&
+        !body.contains('abuse detection')) {
+      return null;
+    }
+    final now = _clock().toUtc();
+    DateTime? retry;
+    final after = headers['retry-after'];
+    if (after != null) {
+      final seconds = int.tryParse(after);
+      if (seconds != null && seconds >= 0) {
+        retry = now.add(Duration(seconds: seconds));
+      } else {
+        try {
+          retry = HttpDate.parse(after).toUtc();
+        } on FormatException {
+          /* Invalid server hint; use reset or default. */
+        }
+      }
+    }
+    final reset = int.tryParse(headers['x-ratelimit-reset'] ?? '');
+    if (reset != null) {
+      final resetAt = DateTime.fromMillisecondsSinceEpoch(
+        reset * 1000,
+        isUtc: true,
+      );
+      if (retry == null || resetAt.isAfter(retry)) retry = resetAt;
+    }
+    return retry != null && retry.isAfter(now)
+        ? retry
+        : now.add(const Duration(seconds: 60));
+  }
+
+  Future<http.StreamedResponse> _send(
+    Uri uri,
+    Map<String, String> headers,
+    Duration limit,
+  ) async {
+    var expired = false;
+    final abort = Completer<void>();
+    final pending = _client.send(
+      http.AbortableRequest('GET', uri, abortTrigger: abort.future)
+        ..headers.addAll(headers),
+    );
+    unawaited(
+      pending.then((response) async {
+        if (expired) await response.stream.listen(null).cancel();
+      }, onError: (Object _) {}),
+    );
+    try {
+      return await pending.timeout(limit);
+    } on TimeoutException {
+      expired = true;
+      abort.complete();
+      rethrow;
+    }
+  }
+
+  Future<http.Response> _readResponse(
+    Uri uri, {
+    required Map<String, String> headers,
+    required Duration limit,
+  }) async {
+    final watch = Stopwatch()..start();
+    final response = await _send(uri, headers, limit);
+    final iterator = StreamIterator(response.stream);
+    final bytes = BytesBuilder(copy: false);
+    try {
+      while (true) {
+        final remaining = limit - watch.elapsed;
+        if (remaining <= Duration.zero) {
+          throw TimeoutException('metadata deadline');
+        }
+        if (!await iterator.moveNext().timeout(remaining)) break;
+        if (bytes.length + iterator.current.length > 2 * 1024 * 1024) {
+          throw const AppUpdateException('更新信息超过 2 MiB 上限');
+        }
+        bytes.add(iterator.current);
+      }
+      return http.Response.bytes(
+        bytes.takeBytes(),
+        response.statusCode,
+        headers: {
+          ...response.headers,
+          'content-type': 'application/json; charset=utf-8',
+        },
+      );
+    } finally {
+      await iterator.cancel();
     }
   }
 
@@ -265,11 +521,11 @@ class AppUpdateService {
     required Directory destination,
     void Function(int received, int? total)? onProgress,
   }) async {
-    final expected = await _expectedSha256(release, asset);
+    final settings = _proxySettings();
+    final expected = await _expectedSha256(release, asset, settings);
     if (expected == null || expected.isEmpty) {
       throw const AppUpdateException(
-        '这次发布没有提供 SHA-256 校验值，已拒绝下载安装。'
-        '可以打开 Release 页面手动核对文件。',
+        '这次发布没有提供 SHA-256 校验值，已拒绝下载安装。可以打开 Release 页面手动核对文件。',
       );
     }
     final safeName = p.basename(asset.name);
@@ -279,49 +535,97 @@ class AppUpdateService {
     await destination.create(recursive: true);
     final target = File(p.join(destination.path, safeName));
     final part = File('${target.path}.part');
-    if (part.existsSync()) part.deleteSync();
-
-    final request = http.Request('GET', asset.downloadUri)
-      ..headers.addAll(const {'User-Agent': appUpdateUserAgent});
-    final streamed = await _client.send(request).timeout(timeout);
-    if (streamed.statusCode != 200) {
-      throw AppUpdateException(_httpMessage('下载更新包', streamed.statusCode));
+    final errors = <String>[];
+    for (final route in settings.routesFor(asset.downloadUri)) {
+      try {
+        if (await part.exists()) await part.delete();
+        return await _downloadCandidate(
+          release,
+          asset,
+          route,
+          expected,
+          target,
+          part,
+          onProgress,
+        );
+      } on Object catch (error) {
+        errors.add(
+          '${route == asset.downloadUri ? '直连' : '代理'}：${_transportMessage(error)}',
+        );
+      } finally {
+        if (await part.exists()) await part.delete();
+      }
     }
-    final total =
-        streamed.contentLength ?? (asset.size > 0 ? asset.size : null);
+    throw AppUpdateException(errors.join('；'));
+  }
+
+  Future<AppUpdateDownload> _downloadCandidate(
+    AppRelease release,
+    AppReleaseAsset asset,
+    Uri uri,
+    String expected,
+    File target,
+    File part,
+    void Function(int received, int? total)? onProgress,
+  ) async {
+    final response = await _send(uri, {'User-Agent': userAgent}, timeout);
+    if (response.statusCode != 200) {
+      await response.stream.listen(null).cancel();
+      throw AppUpdateException(_httpMessage('下载更新包', response.statusCode));
+    }
+    final contentLength = response.contentLength;
+    if (asset.size > 0 &&
+        contentLength != null &&
+        contentLength != asset.size) {
+      await response.stream.listen(null).cancel();
+      throw const AppUpdateException('更新包大小与发布信息不符');
+    }
+    final total = asset.size > 0 ? asset.size : contentLength;
     final fileSink = part.openWrite();
     final digestAccumulator = _DigestAccumulator();
     final digestSink = sha256.startChunkedConversion(digestAccumulator);
     var received = 0;
+    final prefix = <int>[];
     try {
-      await for (final chunk in streamed.stream.timeout(timeout)) {
+      await for (final chunk in response.stream.timeout(timeout)) {
+        received += chunk.length;
+        if ((asset.size > 0 && received > asset.size) ||
+            (contentLength != null && received > contentLength)) {
+          throw const AppUpdateException('更新包超过声明大小');
+        }
+        if (prefix.length < 512) prefix.addAll(chunk.take(512 - prefix.length));
         fileSink.add(chunk);
         digestSink.add(chunk);
-        received += chunk.length;
         onProgress?.call(received, total);
       }
       await fileSink.flush();
       await fileSink.close();
+    } finally {
       digestSink.close();
-    } on Object catch (error) {
       try {
         await fileSink.close();
       } on Object {
-        // 已经坏了，关不上也不影响下面的清理。
+        /* Preserve the original transfer error. */
       }
-      if (part.existsSync()) part.deleteSync();
-      throw AppUpdateException('下载中断：$error');
     }
-
+    if ((asset.size > 0 && received != asset.size) ||
+        (contentLength != null && received != contentLength)) {
+      throw const AppUpdateException('更新包不完整，实际大小与声明大小不符');
+    }
+    if (RegExp(
+      r'^\s*(?:<!doctype\s+html|<html|<head|<body)',
+      caseSensitive: false,
+    ).hasMatch(latin1.decode(prefix))) {
+      throw const AppUpdateException('更新服务返回了 HTML 页面而非更新包');
+    }
     final actual = digestAccumulator.digest?.toString();
     if (actual == null || actual != expected) {
-      if (part.existsSync()) part.deleteSync();
       throw AppUpdateException(
         'SHA-256 校验失败（期望 $expected，实际 ${actual ?? '未知'}），文件已删除',
       );
     }
-    if (target.existsSync()) target.deleteSync();
-    part.renameSync(target.path);
+    if (await target.exists()) await target.delete();
+    await part.rename(target.path);
     onProgress?.call(received, total ?? received);
     return AppUpdateDownload(
       release: release,
@@ -486,6 +790,7 @@ class AppUpdateService {
   Future<String?> _expectedSha256(
     AppRelease release,
     AppReleaseAsset asset,
+    AppUpdateProxySettings settings,
   ) async {
     final direct = asset.sha256?.trim().toLowerCase();
     if (direct != null && RegExp(r'^[0-9a-f]{64}$').hasMatch(direct)) {
@@ -493,15 +798,21 @@ class AppUpdateService {
     }
     final checksumAsset = release.checksumAsset;
     if (checksumAsset == null) return null;
-    try {
-      final response = await _client
-          .get(checksumAsset.downloadUri, headers: _headers)
-          .timeout(timeout);
-      if (response.statusCode != 200) return null;
-      return parseSha256Sums(response.body)[asset.name];
-    } on Object {
-      return null;
+    for (final uri in settings.routesFor(checksumAsset.downloadUri)) {
+      try {
+        final response = await _readResponse(
+          uri,
+          headers: {'User-Agent': userAgent},
+          limit: _shorter(timeout, const Duration(seconds: 6)),
+        );
+        if (response.statusCode != 200) continue;
+        final digest = parseSha256Sums(response.body)[asset.name];
+        if (digest != null) return digest;
+      } on Object {
+        // Invalid checksum candidates get the same single direct fallback.
+      }
     }
+    return null;
   }
 
   AppRelease? _newestRelease(List<AppRelease> releases) {
@@ -555,7 +866,9 @@ class AppUpdateService {
       if (item is! Map) continue;
       if (item['draft'] == true) continue;
       final tag = _asString(item['tag_name']);
-      if (tag.isEmpty) continue;
+      if (tag == appUpdateIndexTag || AppReleaseTag.tryParse(tag) == null) {
+        continue;
+      }
       final assets = <AppReleaseAsset>[];
       final rawAssets = item['assets'];
       if (rawAssets is List) {
@@ -565,7 +878,12 @@ class AppUpdateService {
           final url = _asString(rawAsset['browser_download_url']);
           if (name.isEmpty || url.isEmpty) continue;
           final uri = Uri.tryParse(url);
-          if (uri == null) continue;
+          if (uri == null ||
+              !uri.hasAuthority ||
+              (uri.scheme != 'https' && uri.scheme != 'http') ||
+              uri.userInfo.isNotEmpty) {
+            continue;
+          }
           final digest = _asString(rawAsset['digest']);
           final sha = digest.startsWith('sha256:')
               ? digest.substring('sha256:'.length).toLowerCase()
@@ -596,13 +914,15 @@ class AppUpdateService {
         ),
       );
     }
+    if (releases.isEmpty) throw const AppUpdateException('更新服务没有返回有效的普通发布');
     return releases;
   }
 
   String _httpMessage(String action, int statusCode) {
-    if (statusCode == 403 || statusCode == 429) {
+    if (statusCode == 429) {
       return '$action被限流（HTTP $statusCode），请稍后再试';
     }
+    if (statusCode == 403) return '$action被拒绝访问（HTTP 403），请检查网络或访问权限';
     if (statusCode == 404) {
       return '$action失败：找不到发布（HTTP 404）';
     }

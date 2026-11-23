@@ -16,8 +16,17 @@
 ///   -windows-x64.zip / -linux-x64.AppImage / -linux-x64.deb 命名。
 library;
 
+import 'app_update_network.dart';
+export 'app_update_network.dart';
+
 /// 唯一的发布仓库（与 README 的下载入口一致）。
 const String appUpdateRepository = 'Silent1566/webhtv-pc';
+const String appUpdateIndexAssetName = 'releases.json';
+const String appUpdateIndexTag = 'update-channel';
+final Uri appUpdateIndexUri = Uri.parse(
+  'https://github.com/$appUpdateRepository/releases/download/'
+  '$appUpdateIndexTag/$appUpdateIndexAssetName',
+);
 
 /// GitHub REST API 根地址（单测用它换成假服务器）。
 const String appUpdateApiBaseUrl = 'https://api.github.com';
@@ -330,6 +339,10 @@ class AppUpdateCheck {
     required this.checkedAt,
     this.release,
     this.message,
+    this.fromCache = false,
+    this.cachedAt,
+    this.retryAt,
+    this.source,
   });
 
   final AppUpdateVerdict verdict;
@@ -341,6 +354,12 @@ class AppUpdateCheck {
 
   /// 失败原因（[AppUpdateVerdict.failed] 才有值）。
   final String? message;
+
+  /// 304 复用或离线回退；失败回退仍为 failed，不允许按旧缓存安装。
+  final bool fromCache;
+  final DateTime? cachedAt;
+  final DateTime? retryAt;
+  final String? source;
 
   bool get hasUpdate => verdict == AppUpdateVerdict.updateAvailable;
 
@@ -358,6 +377,7 @@ class AppUpdatePreferences {
   const AppUpdatePreferences({
     this.autoCheck = false,
     this.channel = AppUpdateChannel.stable,
+    this.githubProxy = AppUpdateProxySettings.defaults,
     this.lastCheckedAt,
     this.lastCheckError,
   });
@@ -371,6 +391,7 @@ class AppUpdatePreferences {
 
   final bool autoCheck;
   final AppUpdateChannel channel;
+  final AppUpdateProxySettings githubProxy;
   final DateTime? lastCheckedAt;
   final String? lastCheckError;
 
@@ -379,11 +400,13 @@ class AppUpdatePreferences {
   AppUpdatePreferences copyWith({
     bool? autoCheck,
     AppUpdateChannel? channel,
+    AppUpdateProxySettings? githubProxy,
     Object? lastCheckedAt = _unset,
     Object? lastCheckError = _unset,
   }) => AppUpdatePreferences(
     autoCheck: autoCheck ?? this.autoCheck,
     channel: channel ?? this.channel,
+    githubProxy: githubProxy ?? this.githubProxy,
     lastCheckedAt: identical(lastCheckedAt, _unset)
         ? this.lastCheckedAt
         : lastCheckedAt as DateTime?,
@@ -403,6 +426,7 @@ class AppUpdatePreferences {
   Map<String, Object?> toJson() => {
     'autoCheck': autoCheck,
     'channel': channel.value,
+    'githubProxy': githubProxy.toJson(),
     if (lastCheckedAt != null)
       'lastCheckedAt': lastCheckedAt!.toIso8601String(),
     if (lastCheckError != null && lastCheckError!.isNotEmpty)
@@ -417,6 +441,7 @@ class AppUpdatePreferences {
     return AppUpdatePreferences(
       autoCheck: autoCheck == true,
       channel: AppUpdateChannel.fromValue(raw['channel']),
+      githubProxy: AppUpdateProxySettings.fromJson(raw['githubProxy']),
       lastCheckedAt: lastCheckedAt is String
           ? DateTime.tryParse(lastCheckedAt)
           : null,
@@ -431,12 +456,18 @@ class AppUpdatePreferences {
       other is AppUpdatePreferences &&
       other.autoCheck == autoCheck &&
       other.channel == channel &&
+      other.githubProxy == githubProxy &&
       other.lastCheckedAt == lastCheckedAt &&
       other.lastCheckError == lastCheckError;
 
   @override
-  int get hashCode =>
-      Object.hash(autoCheck, channel, lastCheckedAt, lastCheckError);
+  int get hashCode => Object.hash(
+    autoCheck,
+    channel,
+    githubProxy,
+    lastCheckedAt,
+    lastCheckError,
+  );
 
   @override
   String toString() {

@@ -840,6 +840,7 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
+        id: publish_release
         if: ${{ inputs.publish_release }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -865,3 +866,23 @@ jobs:
             if [[ "$RELEASE_PRERELEASE" == true ]]; then args+=(--prerelease); fi
             gh "${args[@]}" "${assets[@]}"
           fi
+
+      - name: Publish static update index
+        if: ${{ inputs.publish_release && steps.publish_release.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |-
+          set -euo pipefail
+          mkdir -p build/update-index
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > build/update-index/source.json
+          python3 scripts/generate_update_index.py \
+            --releases-json build/update-index/source.json \
+            --output build/update-index/releases.json --repository "$GH_REPO"
+          # Validate locally before any mutation of the fixed channel release.
+          if ! gh release view update-channel >/dev/null 2>&1; then
+            gh release create update-channel --target "$GITHUB_SHA" \
+              --title "Desktop update index" --notes "Machine-readable desktop release index; use versioned releases for packages." \
+              --prerelease --latest=false
+          fi
+          gh release upload update-channel build/update-index/releases.json --clobber

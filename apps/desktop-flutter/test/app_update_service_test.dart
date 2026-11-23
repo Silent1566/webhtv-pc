@@ -71,6 +71,8 @@ void main() {
     final service = AppUpdateService(
       client: client,
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     final check = await service.check(
       identity: identity,
@@ -93,6 +95,8 @@ void main() {
     final service = AppUpdateService(
       client: client,
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     final check = await service.check(
       identity: identity,
@@ -112,6 +116,8 @@ void main() {
     final service = AppUpdateService(
       client: client,
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     final check = await service.check(
       identity: const AppUpdateIdentity(version: '0.1.0'),
@@ -132,6 +138,8 @@ void main() {
     final service = AppUpdateService(
       client: client,
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     final check = await service.check(
       identity: identity,
@@ -142,8 +150,10 @@ void main() {
 
   test('限流与坏响应都落成可读失败，而不是抛异常', () async {
     var service = AppUpdateService(
-      client: MockClient((request) async => http.Response('rate limited', 403)),
+      client: MockClient((request) async => http.Response('rate limited', 403, headers: {'x-ratelimit-remaining': '0'})),
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     var check = await service.check(
       identity: identity,
@@ -155,6 +165,8 @@ void main() {
     service = AppUpdateService(
       client: MockClient((request) async => http.Response('not json', 200)),
       apiBaseUri: Uri.parse('https://api.test'),
+      useStaticIndex: false,
+      proxySettings: () => const AppUpdateProxySettings(enabled: false),
     );
     check = await service.check(
       identity: identity,

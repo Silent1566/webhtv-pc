@@ -5385,8 +5385,29 @@ AiContentCompletion? aiContentCompletion,
     if (enabled) unawaited(checkForUpdates());
   }
 
+  Future<bool> setUpdateGithubProxy(AppUpdateProxySettings settings) async {
+    if (_updateChecking || _updateDownloading || _updateInstalling) return false;
+    final baseUrl = AppUpdateProxySettings.normalizeBaseUrl(settings.baseUrl);
+    if (baseUrl == null) return false;
+    final normalized = AppUpdateProxySettings(
+      enabled: settings.enabled,
+      baseUrl: baseUrl,
+    );
+    if (normalized == _updatePreferences.githubProxy) return true;
+    final store = _updatePreferencesStore;
+    if (store == null) return false;
+    final saved = await store.persist(
+      _updatePreferences.copyWith(githubProxy: normalized),
+    );
+    if (!saved) return false;
+    _updatePreferences = _updatePreferences.copyWith(githubProxy: normalized);
+    _notifyIfAlive();
+    return true;
+  }
+
   /// 切换更新通道；切完清掉上一次结果，免得把别的通道的版本当成「可更新」。
   Future<void> setUpdateChannel(AppUpdateChannel channel) async {
+    if (_updateChecking || _updateDownloading || _updateInstalling) return;
     if (_updatePreferences.channel == channel) return;
     await _saveUpdatePreferences(
       _updatePreferences.copyWith(
@@ -5409,6 +5430,9 @@ AiContentCompletion? aiContentCompletion,
   Future<AppUpdateCheck> checkForUpdates() {
     final pending = _updateCheckFuture;
     if (pending != null) return pending;
+    if ((_updateDownloading || _updateInstalling) && _updateCheck != null) {
+      return Future.value(_updateCheck);
+    }
     final future = _runUpdateCheck();
     _updateCheckFuture = future;
     return future;
@@ -5435,6 +5459,26 @@ AiContentCompletion? aiContentCompletion,
       _updateCheckFuture = null;
     }
     if (_disposed) return check;
+    if (channel != _updatePreferences.channel) {
+      _notifyIfAlive();
+      return check;
+    }
+    final downloaded = _updateDownload;
+    final asset = check.release?.preferredAsset(
+      operatingSystem: Platform.operatingSystem,
+      runningAsAppImage: (Platform.environment['APPIMAGE'] ?? '').isNotEmpty,
+    );
+    if (check.failed ||
+        downloaded?.release.tag != check.release?.tag ||
+        (downloaded != null &&
+            (downloaded.asset.name != asset?.name ||
+                downloaded.asset.downloadUri != asset?.downloadUri ||
+                downloaded.asset.sha256 != asset?.sha256 ||
+                downloaded.asset.size != asset?.size))) {
+      _updateDownload = null;
+      _updateDownloadError = null;
+      _updateInstallResult = null;
+    }
     _updateCheck = check;
     _updateNotice = check.hasUpdate ? check.release?.tag : null;
     final failure = check.message;
@@ -5465,8 +5509,13 @@ AiContentCompletion? aiContentCompletion,
   /// 下载并校验当前可用的安装包；失败返回 null，原因进 [updateDownloadError]。
   Future<AppUpdateDownload?> downloadUpdate() async {
     if (_updateDownloading) return _updateDownload;
-    final release = _updateCheck?.release;
-    if (release == null) {
+    final check = _updateCheck;
+    final release = check?.release;
+    if (_updateChecking ||
+        _updateInstalling ||
+        release == null ||
+        !(check!.hasUpdate ||
+            check.verdict == AppUpdateVerdict.developmentBuild)) {
       _updateDownloadError = '还没有可安装的版本，请先检查更新';
       _notifyIfAlive();
       return null;
@@ -5535,7 +5584,14 @@ AiContentCompletion? aiContentCompletion,
   /// 安装已下载的更新包（AppImage 原地替换 / Windows 换装脚本 / 仅下载）。
   Future<AppUpdateInstallResult?> applyDownloadedUpdate() async {
     final download = _updateDownload;
-    if (download == null) return null;
+    final check = _updateCheck;
+    if (download == null ||
+        _updateChecking ||
+        check == null ||
+        !(check.hasUpdate || check.verdict == AppUpdateVerdict.developmentBuild) ||
+        download.release.tag != check.release?.tag) {
+      return null;
+    }
     if (_updateInstalling) return _updateInstallResult;
     _updateInstalling = true;
     _notifyIfAlive();
@@ -5571,6 +5627,9 @@ AiContentCompletion? aiContentCompletion,
     if (injected != null) return injected;
     return _updateService ??= AppUpdateService(
       client: createOutboundHttpClient(outboundProxy, doh: _dohResolver),
+      cacheDirectory: Directory(p.join(paths.cacheDir, 'updates', 'metadata')),
+      proxySettings: () => updatePreferences.githubProxy,
+      ownsClient: true,
     );
   }
 
