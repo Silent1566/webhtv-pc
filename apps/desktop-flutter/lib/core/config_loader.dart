@@ -5,6 +5,7 @@
 /// - HTTP 3xx 最多跟随 5 次，且每次跳转都必须仍是 http(s)；
 /// - 响应大小上限默认 8 MiB，超限拒绝并保留原配置；
 /// - 支持 gzip / br / UTF-8 BOM / 明确声明的 GBK、GB18030；
+/// - URL 内容在明文 JSON 无法解析时，兜底识别「前缀**Base64」或纯 Base64；
 /// - 解析失败或 `msg` 非空时不得覆盖最后一个可用配置（由调用方保证）；
 /// - `urls` 仓库按条目展开，默认第一项，失败回退（§7.4.2）；
 /// - **增量刷新**：带上上一轮的 `ETag`/`Last-Modified` 发条件请求，服务端
@@ -159,7 +160,7 @@ class ConfigLoader {
 
   void close() => _client.close(force: true);
 
-  /// 读取来源文本。不做解析，便于“抓取”和“解析”分别测试。
+  /// 读取来源文本并解包 URL 混淆内容；不做配置结构校验。
   ///
   /// [validators] 非空时按 HTTP 条件请求发送：服务端答 304 就直接结束，
   /// 连响应体都不读。本地文件与内联 JSON 没有条件请求语义，[validators] 被忽略。
@@ -317,7 +318,7 @@ class ConfigLoader {
         declaredCharset: charsetFromContentType(contentType),
       );
       return FetchedConfigText(
-        text: text,
+        text: _decodeUrlConfigContent(text),
         origin: current.toString(),
         contentType: contentType,
         contentEncoding: decoded.encoding,
@@ -434,6 +435,34 @@ class ConfigLoader {
     );
     await completer.future;
     return builder.takeBytes();
+  }
+}
+
+/// 只解包一层，且明文与候选内容都以 JSON 语法为准；结构与凭据仍由解析器校验。
+String _decodeUrlConfigContent(String text) {
+  try {
+    jsonDecode(text);
+    return text;
+  } on FormatException {
+    // 不把合法 JSON 中的 ** 或 Base64 字段误当作包裹。
+  }
+
+  final separator = text.lastIndexOf('**');
+  final payload = (separator < 0 ? text : text.substring(separator + 2))
+      .trim()
+      .replaceAll(RegExp(r'\s+'), '');
+  if (!RegExp(r'^[A-Za-z0-9+/_-]+={0,2}$').hasMatch(payload)) {
+    return text;
+  }
+  try {
+    var decoded = utf8.decode(base64.decode(base64.normalize(payload)));
+    if (decoded.startsWith('\ufeff')) {
+      decoded = decoded.substring(1);
+    }
+    jsonDecode(decoded);
+    return decoded;
+  } on FormatException {
+    return text;
   }
 }
 

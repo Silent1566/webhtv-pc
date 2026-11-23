@@ -15,6 +15,7 @@
 /// 6. 用户已经走进详情页时，当前配置的后台更新不打断页面。
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -199,6 +200,58 @@ void main() {
       expect(after.lastCheckError, isNull);
       expect(after.updatedAt.isAfter(before.updatedAt), isTrue);
       expect(state.lastError, isNull, reason: '后台刷新不占用全局错误位');
+    });
+
+    test('混淆 URL 可后台更新，前缀变化不重写，解码失败保留已有配置', () async {
+      var body = 'prefix01**${base64Encode(utf8.encode(jsonEncode({
+        'name': '混淆更新',
+        'sites': [
+          {
+            'key': 'updated-site',
+            'name': '更新站点',
+            'type': 1,
+            'api': '${server.baseUrl}/api/type1/',
+          },
+        ],
+      })))}';
+      final httpServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => httpServer.close(force: true));
+      httpServer.listen((request) async {
+        request.response.write(body);
+        await request.response.close();
+      });
+      final id = seedRecord(
+        name: '旧配置',
+        origin: 'http://127.0.0.1:${httpServer.port}/config',
+      );
+      final before = state.database!.listConfigs().single;
+
+      await state.refreshConfigsInBackground();
+
+      final refreshed = state.database!.listConfigs().single;
+      expect(refreshed.id, id);
+      expect(refreshed.json['name'], '混淆更新');
+      expect(refreshed.name, before.name, reason: '后台更新保留用户的配置名称');
+      expect(refreshed.contentHash, isNot(before.contentHash));
+      expect(refreshed.lastCheckError, isNull);
+      expect(refreshed.lastCheckedAt, isNotNull);
+
+      body = body.replaceFirst('prefix01**', 'new-prefix**');
+      await state.refreshConfigsInBackground();
+      final unchanged = state.database!.listConfigs().single;
+      expect(unchanged.contentHash, refreshed.contentHash);
+      expect(unchanged.updatedAt, refreshed.updatedAt);
+      expect(unchanged.lastCheckError, isNull);
+
+      body = 'broken**not!base64';
+      await state.refreshConfigsInBackground();
+      final failed = state.database!.listConfigs().single;
+      expect(failed.id, id);
+      expect(failed.json['name'], '混淆更新');
+      expect(failed.name, before.name);
+      expect(failed.contentHash, refreshed.contentHash);
+      expect(failed.updatedAt, refreshed.updatedAt);
+      expect(failed.lastCheckError, isNotNull);
     });
 
     test('第二轮内容一致：不写库，只把检查时间往后推', () async {
