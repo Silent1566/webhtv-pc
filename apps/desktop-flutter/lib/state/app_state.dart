@@ -9482,7 +9482,7 @@ AiContentCompletion? aiContentCompletion,
     vodName: row.vodName,
   );
 
-  /// 按站点读一次详情（只读，不切站点）：续播与追剧共用的取数口。
+  /// 按站点读一次详情（只读，不切站点）：历史元数据与追剧共用的取数口。
   ///
   /// [expandFolder] 为 true 时按目录条目（`t=<vod_id>`）展开成合并后的普通
   /// 详情：网盘聚合的 `atvp_detail:` 壳拿 `ids=` 去问只会得到没有线路的空壳
@@ -9509,6 +9509,14 @@ AiContentCompletion? aiContentCompletion,
             vodId,
             identity: VodIdentityHint(vodId: vodId, vodName: vodName),
           );
+    // 部分线路失败只出现在 warnings 里：详情页据此报错并可重试，这条路径以前
+    // 整段吞掉，追剧就会「静默换源」，日志里也查不到原因。
+    for (final warning in result.warnings) {
+      log.warning(
+        '站源详情部分线路加载失败 vod=$vodId ${warning.logLine}',
+        scope: 'site',
+      );
+    }
     return result.value.list.firstOrNull;
   }
 
@@ -9523,8 +9531,21 @@ AiContentCompletion? aiContentCompletion,
   ) async {
     final vod = await followingVod(item);
     if (vod == null) return null;
+    final lines = playLinesOf(vod);
+    // 追的那条线路不在最新详情里（换 provider 或重命名）时不再完全静默：
+    // followingSnapshotFromLines 会退回第一条线路，日志必须留下这次换源。
+    if (lines.isNotEmpty &&
+        (item.flag.isNotEmpty || item.sourceFlag.isNotEmpty) &&
+        !lines.any((line) => _isFollowedLine(item, line))) {
+      log.warning(
+        '追剧取数：追的线路已不在详情里 ${item.vodName} '
+        'flag="${item.flag}" sourceFlag="${item.sourceFlag}" '
+        'lines=${lines.map((line) => line.flag).join('|')}',
+        scope: 'following',
+      );
+    }
     return [
-      for (final line in playLinesOf(vod))
+      for (final line in lines)
         FollowingLineEpisodes(
           flag: line.flag,
           sourceFlag: line.sourceFlag ?? line.playbackFlag,
@@ -9538,6 +9559,11 @@ AiContentCompletion? aiContentCompletion,
         ),
     ];
   }
+
+  /// 该线路是否就是追剧记录里的那一条（展示名精确匹配优先，退回原始 flag）。
+  bool _isFollowedLine(Following item, VodPlayLine line) =>
+      (item.flag.isNotEmpty && line.flag == item.flag) ||
+      (item.sourceFlag.isNotEmpty && line.sourceFlag == item.sourceFlag);
 
   /// 重启追番调度：应用运行期间按设置间隔检查到期条目。
   ///

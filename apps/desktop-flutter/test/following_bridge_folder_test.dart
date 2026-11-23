@@ -12,6 +12,9 @@
 ///
 /// 两条取数路径共用同一入口（`AppState.followingVod`），所以一起钉住：
 /// 检查更新（线路/集数）与家页/追剧卡片的站源元数据都必须走 `t=`。
+///
+/// 另外钉住线路归属：目录展开后「展示名」唯一、「原始 flag」可能被多条分享链
+/// 共用（同一网盘 provider），追第二条时不能按原始 flag 认成第一条。
 library;
 
 import 'dart:convert';
@@ -31,69 +34,94 @@ void main() {
   late AppState state;
   final calls = <Uri>[];
 
+  /// 目录展开（`t=`）返回的分享链条目。
+  late List<Map<String, Object?>> entries;
+
+  /// 每条分享链的详情（按 `ids=` 查）。
+  late Map<String, Map<String, Object?>> shares;
+
   http.Response body(Object json) => http.Response(
     jsonEncode(json),
     200,
     headers: {'content-type': 'application/json; charset=utf-8'},
   );
 
-  /// 真机网关对 `ids=atvp_detail:…` 的回应：能解析成条目，但没有线路。
-  http.Response folderShell() => body({
-    'list': [
-      {'vod_id': 'atvp_detail:2132', 'vod_name': '你也有今天'},
-    ],
-  });
+  String episodesOf(List<String> targets) => [
+    for (var index = 0; index < targets.length; index++)
+      'E${index + 1}\$${targets[index]}',
+  ].join('#');
 
-  /// `t=<folder>` 展开出的分享链条目。
-  http.Response folderEntries() => body({
-    'list': [
+  Map<String, Object?> shareVod({
+    required String vodId,
+    required String vodName,
+    required String flag,
+    required List<String> targets,
+  }) => {
+    'vod_id': vodId,
+    'vod_name': vodName,
+    'vod_tag': 'file',
+    'vod_play_from': flag,
+    'vod_play_url': episodesOf(targets),
+  };
+
+  Map<String, Object?> normalVod() => {
+    'vod_id': 'normal_123',
+    'vod_name': '普通剧',
+    'vod_play_from': '线路1',
+    'vod_play_url': episodesOf([
+      'http://media.example/1',
+      'http://media.example/2',
+    ]),
+  };
+
+  /// 单条分享链：provider 名 baidu、原始 flag 丫仙女、两集。
+  void seedSingleShare() {
+    entries = [
       {
         'vod_id': 'https://share.example/baidu',
         'vod_name': 'baidu',
         'vod_tag': 'file',
       },
-    ],
-  });
-
-  /// 分享链详情：两条分集的普通影片。
-  http.Response shareDetail() => body({
-    'list': [
-      {
-        'vod_id': 'atvp_resume:baidu',
-        'vod_name': '分享资源标题',
-        'vod_tag': 'file',
-        'vod_play_from': '丫仙女',
-        'vod_play_url':
-            '第1集\$https://share.example/baidu/1'
-            '#第2集\$https://share.example/baidu/2',
-      },
-    ],
-  });
-
-  /// 普通（非目录）条目的详情：一条线路两集。
-  http.Response normalDetail() => body({
-    'list': [
-      {
-        'vod_id': 'normal_123',
-        'vod_name': '普通剧',
-        'vod_play_from': '线路1',
-        'vod_play_url':
-            '第1集\$http://media.example/1#第2集\$http://media.example/2',
-      },
-    ],
-  });
+    ];
+    shares = {
+      'https://share.example/baidu': shareVod(
+        vodId: 'atvp_resume:baidu',
+        vodName: '分享资源标题',
+        flag: '丫仙女',
+        targets: [
+          'https://share.example/baidu/1',
+          'https://share.example/baidu/2',
+        ],
+      ),
+    };
+  }
 
   setUp(() async {
     calls.clear();
+    seedSingleShare();
     temp = Directory.systemTemp.createTempSync('webhtv-following-folder');
     final client = MockClient((request) async {
       calls.add(request.url);
       final query = request.url.queryParameters;
-      if (query.containsKey('t')) return folderEntries();
+      if (query.containsKey('t')) return body({'list': entries});
       final ids = query['ids'] ?? '';
-      if (ids.startsWith('atvp_detail:')) return folderShell();
-      if (ids.startsWith('https://share.example')) return shareDetail();
-      return normalDetail();
+      if (ids.startsWith('atvp_detail:')) {
+        // 真机网关对目录壳走 ids= 的回应：能解析成条目，但没有线路。
+        return body({
+          'list': [
+            {'vod_id': ids, 'vod_name': '你也有今天'},
+          ],
+        });
+      }
+      final shared = shares[ids];
+      if (shared != null) {
+        return body({
+          'list': [shared],
+        });
+      }
+      return body({
+        'list': [normalVod()],
+      });
     });
     state = AppState(
       paths: AppPaths.resolve(
@@ -136,7 +164,8 @@ void main() {
     final item = state.followFromDetail(
       site: site,
       vod: Vod(vodId: 'atvp_detail:2132', vodName: '你也有今天'),
-      flag: '丫仙女',
+      // 与详情页按钮同一口径：flag = 展开后的展示名，sourceFlag = 原始 flag。
+      flag: 'baidu',
       sourceFlag: '丫仙女',
       releasedEpisode: 2,
     );
@@ -152,7 +181,7 @@ void main() {
       'https://share.example/baidu/2',
       reason: '「播放最新集」的入口必须落在展开后的分集上，而不是目录壳',
     );
-    expect(outcome.following.latestEpisodeName, '第2集');
+    expect(outcome.following.latestEpisodeName, 'E2');
     expect(
       calls.where((url) => url.queryParameters['t'] == 'atvp_detail:2132'),
       isNotEmpty,
@@ -197,7 +226,7 @@ void main() {
     final item = state.followFromDetail(
       site: site,
       vod: Vod(vodId: 'atvp_detail:2132', vodName: '你也有今天'),
-      flag: '丫仙女',
+      flag: 'baidu',
       sourceFlag: '丫仙女',
       releasedEpisode: 2,
     );
@@ -220,5 +249,58 @@ void main() {
       isEmpty,
       reason: '拿目录壳去 ids= 详情只能拿到没有线路的空壳',
     );
+  });
+
+  test('多条分享链共用同一原始 flag：检查要认展示名，不能拿第一条兜底', () async {
+    entries = [
+      {'vod_id': 'https://share.example/a', 'vod_name': 'A', 'vod_tag': 'file'},
+      {'vod_id': 'https://share.example/b', 'vod_name': 'B', 'vod_tag': 'file'},
+    ];
+    // 两条分享链的 vod_play_from 都是 baidu（真机常见）：展示名 A / B 唯一，
+    // 原始 flag 相同；追的是 B，集数必须取 B 的 5 集而不是 A 的 3 集。
+    shares = {
+      'https://share.example/a': shareVod(
+        vodId: 'atvp_resume:a',
+        vodName: 'A 的分享',
+        flag: 'baidu',
+        targets: [
+          'https://share.example/a/1',
+          'https://share.example/a/2',
+          'https://share.example/a/3',
+        ],
+      ),
+      'https://share.example/b': shareVod(
+        vodId: 'atvp_resume:b',
+        vodName: 'B 的分享',
+        flag: 'baidu',
+        targets: [
+          'https://share.example/b/1',
+          'https://share.example/b/2',
+          'https://share.example/b/3',
+          'https://share.example/b/4',
+          'https://share.example/b/5',
+        ],
+      ),
+    };
+    final site = state.effectiveConfig!.sites.first;
+    final item = state.followFromDetail(
+      site: site,
+      vod: Vod(vodId: 'atvp_detail:2132', vodName: '你也有今天'),
+      flag: 'B',
+      sourceFlag: 'baidu',
+      releasedEpisode: 5,
+    );
+    expect(item, isNotNull);
+
+    final outcome = await state.checkFollowing(item!);
+
+    expect(outcome!.ok, isTrue, reason: '检查更新不得失败：${outcome.error}');
+    expect(
+      outcome.following.releasedEpisode,
+      5,
+      reason: '集数必须来自追的 B（5 集），不是同 flag 的 A（3 集）',
+    );
+    expect(outcome.following.latestEpisodeTarget, 'https://share.example/b/5');
+    expect(outcome.following.latestEpisodeName, 'E5');
   });
 }
