@@ -6,7 +6,7 @@
 ///
 /// 安全边界：
 /// - 只接受相对路径，拒绝绝对路径、盘符、`..`、反斜杠与符号链接；
-/// - 恢复只认白名单里的两个文件，zip 里的其它条目最多被校验、不会被写盘；
+/// - 恢复只认白名单文件，zip 里的其它条目最多被校验、不会被写盘；
 /// - 清单声明 `databaseSchema` 高于当前版本时拒绝（旧程序读不了新库）。
 library;
 
@@ -262,7 +262,7 @@ BackupCheck validateBackup({
       return BackupCheck.failed('备份缺少文件：${entry.path}');
     }
     if (bytes.length != entry.size) {
-      return BackupCheck.failed('文件大小不符：${entry.path}');
+      return BackupCheck.failed('文件大小校验失败：${entry.path}');
     }
     if (sha256Hex(bytes) != entry.sha256) {
       return BackupCheck.failed('文件校验失败：${entry.path}');
@@ -270,6 +270,11 @@ BackupCheck validateBackup({
   }
   if (!files.containsKey(backupDatabaseFile)) {
     return const BackupCheck.failed('备份缺少数据库快照');
+  }
+  for (final name in backupRestorableFiles) {
+    if (files.containsKey(name) && !seen.contains(name)) {
+      return BackupCheck.failed('恢复文件未列入清单，校验失败：$name');
+    }
   }
   return const BackupCheck.ok();
 }
