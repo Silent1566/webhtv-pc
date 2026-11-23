@@ -30,6 +30,12 @@ AppRelease releaseOf(String tag) => AppRelease(
       downloadUri: Uri.parse('https://download.test/app.AppImage'),
       sha256: 'a' * 64,
     ),
+    AppReleaseAsset(
+      name: 'webhtv-pc-0.2.0-windows-x64.zip',
+      size: 10,
+      downloadUri: Uri.parse('https://download.test/app.zip'),
+      sha256: 'a' * 64,
+    ),
   ],
   tagInfo: AppReleaseTag.tryParse(tag),
 );

@@ -16,6 +16,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../core/app_error.dart';
 import '../core/danmaku.dart';
+import '../core/danmaku_style.dart';
 import '../core/danmaku_match.dart';
 import '../core/danmaku_settings.dart';
 import '../core/history_view.dart';
@@ -69,7 +70,7 @@ import '../services/karaoke/karaoke_controller.dart';
 import '../core/audio_ai/audio_ai.dart';
 import '../services/subtitle_service.dart';
 import '../core/ai_content/recommendation.dart';
-import 'danmaku_overlay.dart';
+import 'danmaku_engine_view.dart';
 import 'danmaku_settings_page.dart';
 import 'danmaku_settings_sheet.dart';
 import 'player_button_config_page.dart';
@@ -539,6 +540,20 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 当前集已加载的弹幕（按时间排序）。
   List<DanmakuItem> _danmakuItems = const [];
 
+  ({int revision, Duration target})? _danmakuSeek;
+
+  void _onDanmakuSeek(Duration position) {
+    if (mounted) {
+      setState(() {
+        _danmakuSeek = (
+          revision: (_danmakuSeek?.revision ?? 0) + 1,
+          target: position,
+        );
+      });
+    }
+    _audioAi?.seek(position);
+  }
+
   /// 播放器**正在使用**的那条弹幕地址（对应 [_danmakuItems] 的来源）。
   ///
   /// 搜索对话框靠它标出「当前」：用户重开搜索时最想知道的是「我现在这条是从哪
@@ -659,7 +674,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           : null,
       initialResumeVolume: widget.state.playerResumeVolume,
       onVolumeChanged: _rememberVolume,
-      onSeek: (position) => _audioAi?.seek(position),
+      onSeek: _onDanmakuSeek,
     )..addListener(_onControllerChanged);
     _bindGesturePlaybackStream();
     windowManager.addListener(this);
@@ -3193,7 +3208,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         initialVolume: volume.volume,
         initialResumeVolume: volume.resumeVolume,
         onVolumeChanged: _rememberVolume,
-        onSeek: (position) => _audioAi?.seek(position),
+        onSeek: _onDanmakuSeek,
       )..addListener(_onControllerChanged);
       _bindGesturePlaybackStream();
       final replacement = _controller;
@@ -3219,6 +3234,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 换媒体（换集/换线路/重试）＝上一条弹幕的来源失效：留着它会让下一次
     // 搜索把「上一集的源」标成当前。
     _danmakuSourceUrl = null;
+    _danmakuSeek = null;
     return ++_mediaGeneration;
   }
 
@@ -4212,6 +4228,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
   }
 
+  /// 画面是否停滞到「弹幕应该原地不动」：加载、缓冲、定位都算。
+  ///
+  /// 它**不等于**缓冲提示用的 `showBufferingIndicator`：那个判据刻意在 loading
+  /// 时返回 false（已有全屏 LoadingBlock，不再叠第二个圈），而弹幕在 loading
+  /// 期间同样不该推进，所以这里是两者的**并集**。改动任一判据时两处要一起看。
+  bool get _pictureStalled =>
+      _controller.isLoading ||
+      showBufferingIndicator(
+        isBuffering: _controller.isBuffering,
+        isSeeking: _controller.isSeeking,
+        isLoading: _controller.isLoading,
+      );
+
   @override
   Widget build(BuildContext context) {
     final audioInputGeneration = _mediaGeneration;
@@ -4369,18 +4398,22 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                     _subtitleStyle.configuration,
                               ),
                             ),
-                            // 弹幕叠加层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
-                            // 控制层下方。关闭时（style.enabled=false）不绘制任何内容。
+                            // 弹幕层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
+                            // 控制层下方。关闭时（style.enabled=false）不渲染任何内容。
                             //
-                            // 位置只给「最近一次上报」：逐帧插值由叠加层自己的渲染时钟做，
-                            // 播放状态与倍速决定它还动不动、动多快。
+                            // 运动由 canvas_danmaku 自己的动画时钟推进；播放位置只决定
+                            // 「此刻该投放哪几条」。位置上报迟到/重复/倒退因此不再影响画面，
+                            // 见 ADR-0013 修订 5。
                             Positioned.fill(
-                              child: DanmakuOverlay(
+                              child: DanmakuEngineView(
                                 items: _danmakuItems,
                                 position: _controller.position,
                                 style: _danmakuStyle,
                                 playing: _controller.isPlaying,
                                 rate: _controller.rate,
+                                held: _pictureStalled,
+                                seek: _danmakuSeek,
+                                seeking: _controller.isSeeking,
                                 liveItems: _liveItems,
                               ),
                             ),

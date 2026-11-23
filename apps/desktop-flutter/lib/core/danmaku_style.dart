@@ -20,15 +20,15 @@ import 'dart:math' as math;
 class DanmakuStyle {
   const DanmakuStyle({
     this.enabled = true,
-    this.opacity = 0.9,
+    this.opacity = 0.8,
     this.textScale = 1.0,
     this.showScroll = true,
     this.showTop = true,
     this.showBottom = true,
     this.strokeWidth = 1.2,
-    this.scrollDurationMs = 12000,
+    this.scrollDurationMs = 20000,
     this.fixedDurationMs = 4000,
-    this.areaRatio = 0.6,
+    this.areaRatio = 0.5,
     this.maxTracks = 0,
     this.timeOffsetMs = 0,
   });
@@ -40,6 +40,7 @@ class DanmakuStyle {
   final bool enabled;
 
   /// 整体不透明度（0.1..1）。
+  /// 不透明度。默认 0.8，与 B 站网页播放器弹幕元素的 `--opacity: 0.8` 一致。
   final double opacity;
 
   /// 字号缩放（0.5..2.5）。
@@ -52,7 +53,10 @@ class DanmakuStyle {
   /// 描边宽度（0..3，0 = 关闭描边）。
   final double strokeWidth;
 
-  /// 滚动弹幕时长（2000..60000 ms）；缺字段/类型不对时回落到 12000。
+  /// 滚动弹幕时长（2000..60000 ms）；缺字段/类型不对时回落到 20000。
+  ///
+  /// 默认从 12s 放到 20s：1264 宽的窗口里，每帧位移从 2.1px 降到 1.26px。
+  /// 60Hz 下 2.1px/帧 的取整/采样误差在观感上最刺眼，放慢是代价最小的手段。
   final int scrollDurationMs;
 
   /// 顶部/底部弹幕停留时长（1000..10000 ms）。

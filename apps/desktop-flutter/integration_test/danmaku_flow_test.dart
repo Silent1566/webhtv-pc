@@ -15,6 +15,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:canvas_danmaku/base_danmaku_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -24,8 +25,9 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/danmaku_overlay.dart';
+import 'package:webhtv_pc/ui/danmaku_engine_view.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../test/fixture_support.dart';
@@ -40,6 +42,9 @@ void main() {
   setUpAll(() async {
     await windowManager.ensureInitialized();
   });
+
+  setUp(() => toastCenter.dismissAll());
+  tearDown(() => toastCenter.dismissAll());
 
   Future<AppState> bootstrapState() async {
     final temp = await Directory.systemTemp.createTemp('webhtv-danmaku-e2e');
@@ -104,19 +109,25 @@ void main() {
   Future<bool> waitForDanmakuRendered(WidgetTester tester) async {
     for (var attempt = 0; attempt < 40; attempt++) {
       await tester.pump(const Duration(milliseconds: 250));
-      if (find.byType(DanmakuOverlay).evaluate().isEmpty) continue;
-      final overlay = tester.widget<DanmakuOverlay>(
-        find.byType(DanmakuOverlay).first,
+      if (find.byType(DanmakuEngineView).evaluate().isEmpty) continue;
+      final overlay = tester.widget<DanmakuEngineView>(
+        find.byType(DanmakuEngineView).first,
       );
       if (overlay.items.isEmpty) continue;
-      // 真实渲染判据：本层产生了 CustomPaint 子节点（即确实在绘制）。
+      // 必须有真实引擎条目及已生成的渲染图；空画布本身不能证明弹幕出画。
       final painted = find
           .descendant(
-            of: find.byType(DanmakuOverlay),
+            of: find.byType(DanmakuEngineView),
             matching: find.byType(CustomPaint),
           )
           .evaluate()
-          .isNotEmpty;
+          .any((element) {
+            final painter = (element.widget as CustomPaint).painter;
+            return painter is BaseDanmakuPainter &&
+                painter.danmakuItems.any(
+                  (item) => !item.expired && item.image != null,
+                );
+          });
       if (painted && overlay.style.enabled) return true;
     }
     return false;
@@ -136,15 +147,23 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PlayerPage(state: state, request: request))),
+      MaterialApp(
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            Scaffold(body: PlayerPage(state: state, request: request)),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     await pumpUntilFirstFrame(tester);
 
     // 1) 弹幕被拉取并渲染。
     final rendered = await waitForDanmakuRendered(tester);
     expect(rendered, isTrue, reason: '弹幕应被加载并在叠加层上真实绘制');
-    final overlay = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    final overlay = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     expect(overlay.items, isNotEmpty);
     expect(overlay.style.enabled, isTrue);
@@ -162,15 +181,15 @@ void main() {
     // 这个开关只改本地状态，没有真实异步，一帧即生效。
     // 带时长的 `pumpAndSettle` 在播放器页上永不返回（见 support 文件头）。
     await tester.pump();
-    final paused = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    final paused = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     expect(paused.style.enabled, isFalse);
     // 关闭后本层不绘制任何内容。
     expect(
       find
           .descendant(
-            of: find.byType(DanmakuOverlay),
+            of: find.byType(DanmakuEngineView),
             matching: find.byType(CustomPaint),
           )
           .evaluate(),
@@ -182,8 +201,8 @@ void main() {
     await revealPlayerControls(tester);
     await tester.tap(find.byTooltip('弹幕（关闭）'));
     await tester.pump();
-    final resumed = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    final resumed = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     expect(resumed.style.enabled, isTrue);
     evidence('danmaku-resumed enabled=${resumed.style.enabled}');
@@ -208,7 +227,15 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PlayerPage(state: state, request: request))),
+      MaterialApp(
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            Scaffold(body: PlayerPage(state: state, request: request)),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     final player = await pumpUntilFirstFrame(tester);
 
@@ -220,8 +247,8 @@ void main() {
       if (find.textContaining('弹幕加载失败').evaluate().isNotEmpty) break;
     }
     expect(find.textContaining('弹幕加载失败'), findsWidgets);
-    final overlay = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    final overlay = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     expect(overlay.items, isEmpty);
     expect(player.state.position > Duration.zero, isTrue);

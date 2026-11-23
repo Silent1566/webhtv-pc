@@ -478,7 +478,7 @@ void main() {
     final slider = find.byKey(const ValueKey('settings-danmaku-opacity'));
     await tester.ensureVisible(slider);
     await tester.pumpAndSettle();
-    expect(state.danmakuStyle.opacity, 0.9);
+    expect(state.danmakuStyle.opacity, 0.8);
 
     await tester.drag(slider, const Offset(-120, 0));
     await settleWrites(tester);
@@ -513,15 +513,15 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('速度档位：默认 12s，下拉含 30s/60s 与「自定义…」', (tester) async {
+  testWidgets('速度档位：默认 20s，下拉含 30s/60s 与「自定义…」', (tester) async {
     final state = await isolatedState(tester);
     await openPage(tester, state);
 
     final dropdown = find.byKey(const ValueKey('settings-danmaku-duration'));
     await tester.ensureVisible(dropdown);
     await tester.pumpAndSettle();
-    expect(tester.widget<DropdownButton<int>>(dropdown).value, 12000);
-    expect(find.text('12s'), findsOneWidget);
+    expect(tester.widget<DropdownButton<int>>(dropdown).value, 20000);
+    expect(find.text('20s'), findsOneWidget);
     expect(find.textContaining('越大越慢'), findsOneWidget);
 
     await tester.tap(dropdown);
@@ -596,7 +596,7 @@ void main() {
         reason: '$text 秒越界必须就地报错',
       );
       expect(find.byType(AlertDialog), findsOneWidget, reason: '错了别关，让人改');
-      expect(state.danmakuStyle.scrollDurationMs, 12000);
+      expect(state.danmakuStyle.scrollDurationMs, 20000);
       expect(readSettings(state), before, reason: '非法输入不得写盘');
     }
 

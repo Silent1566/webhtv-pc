@@ -9,9 +9,13 @@ library;
 import 'dart:ui' show PictureRecorder;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/danmaku.dart';
+import 'package:webhtv_pc/ui/danmaku_engine_view.dart';
 import 'package:webhtv_pc/ui/danmaku_overlay.dart';
+
+import 'support/player_page_harness.dart';
 
 void main() {
   group('弹幕渲染层与开关（Phase 3）', () {
@@ -232,6 +236,135 @@ void main() {
         reason: '排版缓存要是每次 rebuild 都新建，等于没缓存',
       );
       await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('重复上报同一位置不会让弹幕倒退，也不刷新断流截止时间', (tester) async {
+      var now = DateTime(2026, 1, 1);
+      Widget build(Duration position) => host(
+        DanmakuOverlay(
+          items: items,
+          position: position,
+          style: const DanmakuStyle(),
+          playing: true,
+          clockNow: () => now,
+        ),
+      );
+
+      await tester.pumpWidget(build(const Duration(seconds: 2)));
+      expect(painterOf(tester).debugPositionMs, 2000);
+
+      // 播放器每次通知都会把同一个 position 再传一遍（页面 setState → 本层重建）。
+      now = now.add(const Duration(milliseconds: 160));
+      await tester.pump(const Duration(milliseconds: 160));
+      await tester.pumpWidget(build(const Duration(seconds: 2)));
+      expect(
+        painterOf(tester).debugPositionMs,
+        greaterThanOrEqualTo(2160),
+        reason: '重复上报不能把已经在动的弹幕拉回 2000ms',
+      );
+
+      // 一直重复到 800ms：断流外插的 600ms 上限不该被这些上报续期。
+      for (var ms = 320; ms <= 800; ms += 160) {
+        now = now.add(const Duration(milliseconds: 160));
+        await tester.pump(const Duration(milliseconds: 160));
+        await tester.pumpWidget(build(const Duration(seconds: 2)));
+      }
+      now = now.add(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(painterOf(tester).debugPositionMs, 2600);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('迟到的旧上报不会让弹幕倒退（大幅后退先冻结待确认）', (tester) async {
+      var now = DateTime(2026, 1, 1);
+      Widget build(Duration position) => host(
+        DanmakuOverlay(
+          items: items,
+          position: position,
+          style: const DanmakuStyle(),
+          playing: true,
+          clockNow: () => now,
+        ),
+      );
+
+      await tester.pumpWidget(build(const Duration(seconds: 2)));
+      now = now.add(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      // 播放器迟到的上报值比插值落后 300ms（重缓冲/断点）：重建不能让弹幕倒退。
+      await tester.pumpWidget(build(const Duration(milliseconds: 1700)));
+      expect(
+        painterOf(tester).debugPositionMs,
+        2400,
+        reason: '落后 300ms 的上报不是拖拽，画面应停在当前轨迹上',
+      );
+      // 追赶确认期间画面钉住不动。
+      now = now.add(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(painterOf(tester).debugPositionMs, 2400);
+
+      // 下一条上报又跳回原处 ⇒ 刚才那条只是迟到的旧上报：取消重置，继续前进。
+      now = now.add(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pumpWidget(build(const Duration(milliseconds: 2400)));
+      now = now.add(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(painterOf(tester).debugPositionMs, 2416);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('held overlay stops repaint notifications and resumes aligned', (tester) async {
+      var now = DateTime(2026, 1, 1);
+      Widget build({required bool held, required int positionMs}) => host(
+        DanmakuOverlay(items: items, position: Duration(milliseconds: positionMs),
+          style: const DanmakuStyle(), playing: true, held: held, clockNow: () => now),
+      );
+      await tester.pumpWidget(build(held: false, positionMs: 2000));
+      now = now.add(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpWidget(build(held: true, positionMs: 1900));
+      final frozen = painterOf(tester);
+      var repaints = 0;
+      void onRepaint() => repaints++;
+      frozen.addListener(onRepaint);
+      for (var frame = 0; frame < 5; frame++) {
+        now = now.add(const Duration(milliseconds: 16));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(repaints, 0, reason: 'held pictures need no per-frame repaint requests');
+      expect(frozen.debugPositionMs, 2200);
+      frozen.removeListener(onRepaint);
+      now = now.add(const Duration(seconds: 12));
+      await tester.pumpWidget(build(held: false, positionMs: 2200));
+      final resumed = painterOf(tester);
+      expect(resumed.debugPositionMs, 2200);
+      resumed.addListener(onRepaint);
+      now = now.add(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(resumed.debugPositionMs, 2216);
+      expect(repaints, greaterThan(0));
+      resumed.removeListener(onRepaint);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('player page holds danmaku while loading', (tester) async {
+      await pumpPlayerPage(tester);
+      // 页面把「加载/缓冲/定位」合并成一个 held 交给弹幕层（ADR-0013 修订 3/5）。
+      final view = tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView));
+      expect(view.held, isTrue, reason: 'loading belongs to the merged stall input');
+      expect(view.seek, isNull);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      final forward = tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView));
+      expect(forward.seek, (revision: 1, target: const Duration(seconds: 10)));
+      expect(forward.seeking, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      final backward = tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView));
+      expect(backward.seek?.revision, 2);
+      expect(backward.seek?.target, Duration.zero);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async => Future<void>.delayed(const Duration(milliseconds: 100)));
     });
 
     test('同一批弹幕每帧复用文本排版（不在 paint 里重新排一遍）', () {

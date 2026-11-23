@@ -51,6 +51,7 @@ dependencies:
   local_notifier: ^0.1.6
   file_picker: ^13.3.3
   webview_windows: ^0.4.0
+  canvas_danmaku: ^0.3.4
   flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
