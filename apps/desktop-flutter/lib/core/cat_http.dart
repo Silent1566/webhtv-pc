@@ -21,6 +21,7 @@ import '../services/spider_process.dart';
 import 'http_api.dart';
 import 'ipc_protocol.dart';
 import 'protocol.dart';
+import 'request_cancellation.dart';
 
 /// CatSpider HTTP 路由（§9.4）。
 abstract final class CatHttpRoute {
@@ -211,7 +212,9 @@ class CatHttpClient {
     CatHttpCall call, {
     required String siteKey,
     VodIdentityHint? identity,
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     if (debugLog?.enabled ?? false) {
       debugLog!.httpOutbound(
         method: 'POST',
@@ -223,11 +226,29 @@ class CatHttpClient {
       );
     }
     final http.Response response;
+    final abort = Completer<void>();
+    var finished = false;
+    cancellation?.whenCancelled.then((_) {
+      if (!finished && !abort.isCompleted) abort.complete();
+    });
     try {
-      response = await _client
-          .post(call.uri, headers: call.headers, body: jsonEncode(call.body))
-          .timeout(timeout);
+      final request = http.AbortableRequest(
+        'POST',
+        call.uri,
+        abortTrigger: abort.future,
+      )..headers.addAll(call.headers);
+      request.body = jsonEncode(call.body);
+      cancellation?.throwIfCancelled();
+      final operation = _client.send(request).then(http.Response.fromStream);
+      response = await (cancellation?.bind(operation) ?? operation).timeout(
+        timeout,
+        onTimeout: () {
+          if (!abort.isCompleted) abort.complete();
+          throw TimeoutException('Request timed out', timeout);
+        },
+      );
     } on TimeoutException catch (error) {
+      cancellation?.throwIfCancelled();
       if (debugLog?.enabled ?? false) {
         debugLog!.httpFailure(
           method: 'POST',
@@ -243,6 +264,7 @@ class CatHttpClient {
         requestId: call.route,
       );
     } catch (error) {
+      cancellation?.throwIfCancelled();
       if (debugLog?.enabled ?? false) {
         debugLog!.httpFailure(
           method: 'POST',
@@ -257,7 +279,10 @@ class CatHttpClient {
         siteKey: siteKey,
         details: {'route': call.route},
       );
+    } finally {
+      finished = true;
     }
+    cancellation?.throwIfCancelled();
 
     if (debugLog?.enabled ?? false) {
       debugLog!.httpInbound(

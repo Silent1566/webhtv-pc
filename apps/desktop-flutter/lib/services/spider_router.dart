@@ -34,6 +34,7 @@ import '../core/cat_http.dart';
 import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
+import '../core/request_cancellation.dart';
 import 'csp_jar_probe.dart';
 import 'direct_spider_registrar.dart';
 import 'jar_intake.dart';
@@ -91,6 +92,17 @@ abstract class SiteRuntime {
     required String episodeTarget,
     String? flag,
     String? vodId,
+  });
+}
+
+/// Optional capability; legacy runtimes keep their existing search contract.
+abstract interface class CancellableSearchRuntime {
+  Future<SiteResult> searchCancellable(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+    required RequestCancellation cancellation,
   });
 }
 
@@ -153,7 +165,7 @@ class UnsupportedRuntime implements SiteRuntime {
 }
 
 /// HTTP API 运行时（`type=0/1/2/4`）。
-class HttpApiRuntime implements SiteRuntime {
+class HttpApiRuntime implements SiteRuntime, CancellableSearchRuntime {
   HttpApiRuntime({
     required this.client,
     required this.globalHeaders,
@@ -231,7 +243,31 @@ class HttpApiRuntime implements SiteRuntime {
     required String keyword,
     int page = 1,
     bool quick = false,
+  }) => _search(site, keyword: keyword, page: page, quick: quick);
+
+  @override
+  Future<SiteResult> searchCancellable(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+    required RequestCancellation cancellation,
+  }) => _search(
+    site,
+    keyword: keyword,
+    page: page,
+    quick: quick,
+    cancellation: cancellation,
+  );
+
+  Future<SiteResult> _search(
+    Site site, {
+    required String keyword,
+    required int page,
+    required bool quick,
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     // 站点不支持搜索时必须明确报错，而不是返回空列表（§8.4）。
     // 声明为 async 让错误以 Future 失败的形式暴露，调用方 `await` 即可捕获。
     if (!site.searchable) {
@@ -249,7 +285,7 @@ class HttpApiRuntime implements SiteRuntime {
       page: page,
       quick: effectiveQuick,
     );
-    return client.execute(call, siteKey: site.key);
+    return client.execute(call, siteKey: site.key, cancellation: cancellation);
   }
 
   @override
@@ -597,7 +633,9 @@ class SpiderRouter {
     // 解包产物（payload）里 `assets/*.so` 是 payload 自己的原生依赖：按**payload
     // 口径**判定，否则一个已经装好、能跑的壳站点会被报成「含原生库」。
     final unpackedPayload =
-        JarIntake.intakeRecord(binding.directoryFor(site.key))?['unpackedPayload'] ==
+        JarIntake.intakeRecord(
+          binding.directoryFor(site.key),
+        )?['unpackedPayload'] ==
         true;
     final inspection = unpackedPayload
         ? JarIntake.inspectUnpackedPayload(
@@ -665,7 +703,7 @@ class SpiderRouter {
     if (inspection.verdict == JarVerdict.translatableDex) {
       final unpackedNote = inspection.unpackedPayload
           ? '该站点是加固壳的解包产物（含原生库，依赖 native 的调用会如实抛 '
-              'UnsatisfiedLinkError，不静默降级）；'
+                'UnsatisfiedLinkError，不静默降级）；'
           : '';
       final translation = JarIntake.intakeRecord(
         binding.directoryFor(site.key),
@@ -752,7 +790,13 @@ class SpiderRouter {
     try {
       final raw = jsonDecode(File(manifestPath).readAsStringSync());
       if (raw is Map && !raw.containsKey('capabilities')) {
-        raw['capabilities'] = const ['home', 'category', 'detail', 'search', 'play'];
+        raw['capabilities'] = const [
+          'home',
+          'category',
+          'detail',
+          'search',
+          'play',
+        ];
       }
       launch = SpiderManifest.fromJson(raw);
     } catch (_) {}
@@ -889,31 +933,49 @@ class SpiderRouter {
     return _cache.putIfAbsent(_cacheKey(site), () => _create(site));
   }
 
-  /// 执行一次站点搜索，可选择用**调用方给的**客户端发请求。
-  ///
-  /// 为什么需要它而不是直接 [runtimeFor]：缓存的运行时在构造时就把客户端
-  /// 引用拷了进去，而并发搜索需要一个批次专属的客户端——批次结束/取消时
-  /// 关掉它能立刻掐断在途连接。绝不能替换缓存里那份，否则详情页等其它
-  /// 请求会跟着被掐断。
-  ///
-  /// 只有 HTTP API 运行时能被换客户端：sidecar（js/py/jvm）与 cat-http 走
-  /// 各自的常驻进程或专属通道，换客户端对它们没有意义。
+  /// Search with request-local cancellation and optional caller-owned HTTP client.
   Future<SiteResult> search(
     Site site, {
     required String keyword,
     int page = 1,
     bool quick = false,
     HttpApiClient? client,
-  }) {
-    final runtime = runtimeFor(site);
-    if (client == null || runtime is! HttpApiRuntime) {
+    RequestCancellation? cancellation,
+  }) async {
+    cancellation?.throwIfCancelled();
+    var runtime = runtimeFor(site);
+    if (client != null && runtime is HttpApiRuntime) {
+      runtime = HttpApiRuntime(
+        client: client,
+        globalHeaders: globalHeaders,
+        userAgent: userAgent,
+      );
+    }
+    if (cancellation == null) {
       return runtime.search(site, keyword: keyword, page: page, quick: quick);
     }
-    return HttpApiRuntime(
-      client: client,
-      globalHeaders: globalHeaders,
-      userAgent: userAgent,
-    ).search(site, keyword: keyword, page: page, quick: quick);
+    if (runtime is CancellableSearchRuntime) {
+      return (runtime as CancellableSearchRuntime).searchCancellable(
+        site,
+        keyword: keyword,
+        page: page,
+        quick: quick,
+        cancellation: cancellation,
+      );
+    }
+    try {
+      return await cancellation.bind(
+        runtime.search(site, keyword: keyword, page: page, quick: quick),
+      );
+    } catch (_) {
+      if (cancellation.isCancelled) {
+        log?.warning(
+          '搜索已停止等待 site=${site.key} runtime=${runtime.name}；运行时不支持终止，底层工作可能继续',
+          scope: 'spider',
+        );
+      }
+      rethrow;
+    }
   }
 
   SiteRuntime _create(Site site) {

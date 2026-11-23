@@ -258,7 +258,8 @@ String externalTerminationMessage(
 /// 所有输出先抹掉敏感键、再经 [redactLogText]，并且吞掉写入异常——日志是旁路，
 /// 既不能改变 IPC 帧，也不能影响主流程。
 String redactSpiderProxyText(String value) => value.replaceAll(
-  RegExp(r'/s/[A-Za-z0-9_-]+/proxy(?:\?[^\s"<>]*)?'), '/s/<redacted>/proxy',
+  RegExp(r'/s/[A-Za-z0-9_-]+/proxy(?:\?[^\s"<>]*)?'),
+  '/s/<redacted>/proxy',
 );
 
 class SpiderDebugLog {
@@ -275,7 +276,8 @@ class SpiderDebugLog {
     if (!enabled) return;
     final method = '${envelope['method'] ?? "-"}';
     final params = privatePlayback && envelope['method'] == SpiderMethod.play
-        ? '<proxyHttp playback redacted>' : envelope['params'];
+        ? '<proxyHttp playback redacted>'
+        : envelope['params'];
     final id = envelope['id'];
     // `$/cancelRequest` 是通知帧：自身没有 id，被取消的 id 在 params 里。
     final target = id == null
@@ -285,9 +287,16 @@ class SpiderDebugLog {
   }
 
   /// 记录一条成功的响应出参（result 全量，不截断）。
-  void inboundOk(String method, String requestId, Object? result, {bool privatePlayback = false}) {
+  void inboundOk(
+    String method,
+    String requestId,
+    Object? result, {
+    bool privatePlayback = false,
+  }) {
     if (!enabled) return;
-    final safe = privatePlayback && method == SpiderMethod.play ? '<proxyHttp playback redacted>' : result;
+    final safe = privatePlayback && method == SpiderMethod.play
+        ? '<proxyHttp playback redacted>'
+        : result;
     _write('rpc← method=$method id=$requestId ok result=${_encode(safe)}');
   }
 
@@ -456,7 +465,10 @@ class SpiderDebugLog {
     final target = log;
     if (target == null) return;
     try {
-      target.debug(redactLogText(redactSpiderProxyText(message)), scope: 'spider');
+      target.debug(
+        redactLogText(redactSpiderProxyText(message)),
+        scope: 'spider',
+      );
     } catch (_) {
       // 日志写入失败不得影响主流程。
     }
@@ -483,7 +495,13 @@ class SpiderDebugLog {
     if (value is Map) {
       return <String, Object?>{
         for (final entry in value.entries)
-          '${entry.key}': (isSensitiveHeaderKey('${entry.key}') || const {'token', 'entryUrl', 'sessionId'}.contains('${entry.key}'))
+          '${entry.key}':
+              (isSensitiveHeaderKey('${entry.key}') ||
+                  const {
+                    'token',
+                    'entryUrl',
+                    'sessionId',
+                  }.contains('${entry.key}'))
               ? '<redacted>'
               : _sanitize(entry.value),
       };
@@ -810,7 +828,12 @@ class SidecarProcess {
         // SPIDER_RESOURCE_LIMIT（§9.3.1「限制单响应大小」）。
         if (!_checkResponseSize(response.result, pending)) {
           // 出参日志只记真正交付给调用方的那份结果，与下面的 complete 同条件。
-          _debugLog?.inboundOk(pending.method, pending.id, response.result, privatePlayback: _proxyHttpNegotiated);
+          _debugLog?.inboundOk(
+            pending.method,
+            pending.id,
+            response.result,
+            privatePlayback: _proxyHttpNegotiated,
+          );
           if (playbackMethods.contains(pending.method) &&
               _carriesLoopbackAddress(response.result)) {
             _hasPlaybackDependency = true;
@@ -1080,6 +1103,27 @@ class SidecarProcess {
     );
     pending.timer = Timer(deadline, () => _onTimeout(pending));
     return completer.future;
+  }
+
+  /// Stop waiting for only this request; remote blocking code may continue.
+  bool abandon(String id) {
+    final pending = _pending.remove(id);
+    if (pending == null) return false;
+    pending.timer?.cancel();
+    pending.graceTimer?.cancel();
+    _send(IpcEnvelope.cancel(id));
+    if (!pending.completer.isCompleted) {
+      pending.completer.completeError(
+        SpiderError(
+          code: SpiderErrorCode.cancelled,
+          message: '已停止等待并发送取消通知，宿主仍运行',
+          siteKey: _spec.siteKey,
+          requestId: id,
+        ),
+      );
+    }
+    _activityChanged?.call();
+    return true;
   }
 
   /// 取消一次在途请求（§9.3.1、§9.5）。
@@ -1503,6 +1547,8 @@ class SpiderHost {
       requestId: requestId,
     );
   }
+
+  bool abandon(String id) => process.abandon(id);
 
   bool cancel(String id) => process.cancel(id);
 
@@ -1938,8 +1984,9 @@ class SpiderHostSupervisor {
         !process._stopping &&
         process._pending.isEmpty &&
         (host.proxyHttp != null
-          ? host.activePlaybackLeaseCount == 0
-          : !process.hasPlaybackDependency && !host.manifest.permissions.localProxy);
+            ? host.activePlaybackLeaseCount == 0
+            : !process.hasPlaybackDependency &&
+                  !host.manifest.permissions.localProxy);
   }
 
   void _updateIdleTimer(_SiteRuntime runtime) {
