@@ -15,6 +15,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/app_update.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
@@ -151,6 +153,23 @@ class _FakeUpdateService extends AppUpdateService {
   }
 }
 
+class _LinkRecordingAppState extends AppState {
+  _LinkRecordingAppState({
+    required super.paths,
+    required super.log,
+    required super.updateService,
+  }) : super(externalPlayerDetector: () => const []);
+
+  final openedLinks = <String>[];
+  bool linkOpenSucceeds = true;
+
+  @override
+  Future<bool> openExternalUrl(String url) async {
+    openedLinks.add(url);
+    return linkOpenSucceeds;
+  }
+}
+
 void main() {
   late Directory temp;
   late AppState state;
@@ -162,7 +181,7 @@ void main() {
     service = _FakeUpdateService(
       result: _check(AppUpdateVerdict.updateAvailable, release: _release()),
     );
-    state = AppState(
+    state = _LinkRecordingAppState(
       paths: AppPaths.resolve(
         overrides: {
           'config': '${temp.path}/config',
@@ -172,7 +191,6 @@ void main() {
         },
       ),
       log: LogService(),
-      externalPlayerDetector: () => const [],
       updateService: service,
     );
     await state.bootstrap();
@@ -431,6 +449,228 @@ void main() {
           .onPressed,
       isNotNull,
       reason: '有可用版本后安装按钮必须可点',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Markdown 标题列表与重点渲染成可选择正文，不加载图片或 HTML', (tester) async {
+    service.result = _check(
+      AppUpdateVerdict.updateAvailable,
+      release: _release(
+        body: '''### 改进
+
+- 支持 **加粗重点** 与 `settings.json`
+- 第二项说明
+
+![远程截图](https://example.test/tracking.png)
+
+<img src="https://example.test/html.png">
+<script>alert(1)</script>
+''',
+      ),
+    );
+    await state.checkForUpdates();
+    await pumpPage(tester);
+    final notes = find.byKey(const ValueKey('settings-update-notes'));
+    final renderer = find.descendant(
+      of: notes,
+      matching: find.byType(MarkdownBody),
+    );
+    expect(renderer, findsOneWidget);
+    final markdown = tester.widget<MarkdownBody>(renderer);
+    expect(markdown.selectable, isTrue);
+    expect(
+      markdown.styleSheet!.p!.fontSize,
+      Theme.of(tester.element(notes)).textTheme.bodyMedium!.fontSize,
+    );
+    expect(
+      find.descendant(of: notes, matching: find.text('改进')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: notes, matching: find.textContaining('### 改进')),
+      findsNothing,
+    );
+    final spans = tester
+        .widgetList<SelectableText>(
+          find.descendant(of: notes, matching: find.byType(SelectableText)),
+        )
+        .map((text) => text.textSpan?.toPlainText() ?? text.data ?? '')
+        .join('\n');
+    expect(spans, contains('加粗重点'));
+    expect(spans, isNot(contains('**加粗重点**')));
+    expect(spans, contains('settings.json'));
+    expect(spans, isNot(contains('`settings.json`')));
+    expect(
+      find.descendant(of: notes, matching: find.byType(Image)),
+      findsNothing,
+    );
+    expect(
+      markdown.imageBuilder!(Uri.parse('file:///tmp/test.png'), null, '本地图片'),
+      isNot(isA<Image>()),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Markdown 危险链接不会交给系统浏览器', (tester) async {
+    service.result = _check(
+      AppUpdateVerdict.updateAvailable,
+      release: _release(body: '[说明](https://example.test/notes)'),
+    );
+    await state.checkForUpdates();
+    await pumpPage(tester);
+    final markdown = tester.widget<MarkdownBody>(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-update-notes')),
+        matching: find.byType(MarkdownBody),
+      ),
+    );
+    for (final href in [
+      'javascript:alert(1)',
+      'file:///tmp/test',
+      'data:text/html,bad',
+      '//example.test/no-scheme',
+      'https://user:secret@example.test/',
+      'https://example.test:99999/',
+      'https://example.test/a b',
+    ]) {
+      dismissAllToasts();
+      markdown.onTapLink!('说明', href, '');
+      await tester.pump();
+      expect(toastCenter.toasts.single.message, contains('链接'));
+      expect(toastCenter.toasts.single.kind, ToastKind.error);
+    }
+    expect((state as _LinkRecordingAppState).openedLinks, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Markdown 安全网页链接交给既有系统浏览器入口，失败可见', (tester) async {
+    service.result = _check(
+      AppUpdateVerdict.updateAvailable,
+      release: _release(body: '[发行说明](https://example.test/notes)'),
+    );
+    await state.checkForUpdates();
+    await pumpPage(tester);
+    final markdown = tester.widget<MarkdownBody>(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-update-notes')),
+        matching: find.byType(MarkdownBody),
+      ),
+    );
+    final links = state as _LinkRecordingAppState;
+    expect(links.openedLinks, isEmpty);
+    markdown.onTapLink!('发行说明', 'https://example.test/notes', '');
+    await tester.pump();
+    markdown.onTapLink!('旧网页', 'http://example.test/help', '');
+    await tester.pump();
+    expect(links.openedLinks, [
+      'https://example.test/notes',
+      'http://example.test/help',
+    ]);
+    expect(toastCenter.toasts, isEmpty);
+    links.linkOpenSucceeds = false;
+    markdown.onTapLink!('失败网页', 'https://example.test/failed', '');
+    await tester.pump();
+    expect(toastCenter.toasts.single.message, '打开链接失败');
+  });
+
+  for (final size in const [Size(480, 640), Size(1440, 900)]) {
+    testWidgets('完整说明弹窗可读可关闭且在 $size 内无溢出', (tester) async {
+      String? copiedText;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map)['text'] as String?;
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      service.result = _check(
+        AppUpdateVerdict.updateAvailable,
+        release: _release(
+          body:
+              '## 本次更新\n\n${List.generate(70, (i) => '- 更新条目 $i：保留配置与历史，优化设置体验。').join('\n')}',
+        ),
+      );
+      await state.checkForUpdates();
+      await pumpPage(tester, size: size);
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('settings-update-notes-expand')),
+        160,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tapKey(tester, 'settings-update-notes-expand');
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const ValueKey('settings-update-notes-dialog'));
+      expect(dialog, findsOneWidget);
+      expect(find.text('完整更新说明'), findsOneWidget);
+      expect(
+        find.descendant(of: dialog, matching: find.byType(MarkdownBody)),
+        findsOneWidget,
+      );
+      expect(tester.getRect(dialog).left, greaterThanOrEqualTo(0));
+      expect(tester.getRect(dialog).right, lessThanOrEqualTo(size.width));
+      expect(tester.getRect(dialog).bottom, lessThanOrEqualTo(size.height));
+      final beforeResize = tester.getSize(dialog);
+      await tester.drag(
+        find.byKey(const ValueKey('settings-update-notes-resize')),
+        const Offset(-70, -55),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.getSize(dialog).width, lessThan(beforeResize.width));
+      expect(tester.getSize(dialog).height, lessThan(beforeResize.height));
+      await tester.tap(
+        find.byKey(const ValueKey('settings-update-notes-copy')),
+      );
+      await tester.pumpAndSettle();
+      expect(copiedText, service.result.release!.body);
+      expect(tester.takeException(), isNull);
+      await tester.tap(
+        find.byKey(const ValueKey('settings-update-notes-close')),
+      );
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('复制说明遇到系统剪贴板错误时显示失败而非成功', (tester) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        throw PlatformException(code: 'denied');
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    await state.checkForUpdates();
+    await pumpPage(tester);
+    await tapKey(tester, 'settings-update-notes-expand');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-update-notes-copy')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(toastCenter.toasts.single.message, '复制更新说明失败');
+    expect(toastCenter.toasts.single.kind, ToastKind.error);
+  });
+
+  testWidgets('空发布说明显示占位文案且不提供空白展开入口', (tester) async {
+    service.result = _check(
+      AppUpdateVerdict.updateAvailable,
+      release: _release(body: '  '),
+    );
+    await state.checkForUpdates();
+    await pumpPage(tester);
+    expect(find.text('这条发布没有填写说明。'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-update-notes-expand')),
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
   });

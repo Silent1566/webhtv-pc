@@ -12,8 +12,11 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../core/app_update.dart';
 import '../state/app_state.dart';
@@ -180,7 +183,10 @@ class AppUpdatePage extends StatelessWidget {
                   release: release,
                   historical: state.updateCheck!.failed,
                 ),
-                _ReleaseNotes(release: release),
+                _ReleaseNotes(
+                  release: release,
+                  onOpenLink: state.openExternalUrl,
+                ),
               ],
             ),
           SettingsSection(
@@ -543,36 +549,262 @@ class _NewVersionBlock extends StatelessWidget {
   }
 }
 
-/// 发布说明：可选择复制，但高度封顶 —— 一条 Release 的正文可以有几百行，
-/// 让它按内容撑开会把「下载并安装」按钮挤出几屏之外。
+/// 正文保留阅读上限；完整说明独立展开，不把安装动作挤到长文之后。
 class _ReleaseNotes extends StatelessWidget {
-  const _ReleaseNotes({required this.release});
+  const _ReleaseNotes({required this.release, required this.onOpenLink});
 
   final AppRelease release;
-
-  /// 说明区高度上限（逻辑像素）。
+  final Future<bool> Function(String) onOpenLink;
   static const double maxHeight = 240;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final body = release.body.trim();
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.md,
-        vertical: AppSpace.sm,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.md,
+            vertical: AppSpace.sm,
+          ),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: AppRadius.mdAll,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: maxHeight),
+            child: SingleChildScrollView(
+              primary: false,
+              child: _ReleaseNotesMarkdown(
+                key: const ValueKey('settings-update-notes'),
+                body: body,
+                onOpenLink: onOpenLink,
+              ),
+            ),
+          ),
+        ),
+        if (body.isNotEmpty)
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton.icon(
+              key: const ValueKey('settings-update-notes-expand'),
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => _ReleaseNotesDialog(
+                  release: release,
+                  onOpenLink: onOpenLink,
+                ),
+              ),
+              icon: const Icon(Icons.open_in_full, size: 18),
+              label: const Text('展开完整更新说明'),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ReleaseNotesMarkdown extends StatelessWidget {
+  const _ReleaseNotesMarkdown({
+    super.key,
+    required this.body,
+    required this.onOpenLink,
+  });
+
+  final String body;
+  final Future<bool> Function(String) onOpenLink;
+
+  Future<void> _openLink(String? href) async {
+    final text = href?.trim() ?? '';
+    final uri = Uri.tryParse(text);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.port <= 0 ||
+        uri.port > 65535 ||
+        RegExp(r'[\s\x00-\x1f\x7f\\]|%(?![0-9a-fA-F]{2})').hasMatch(text)) {
+      showToast(
+        '无法打开此链接',
+        detail: '只支持不含账号信息的 HTTP(S) 网页地址',
+        kind: ToastKind.error,
+      );
+      return;
+    }
+    if (!await onOpenLink(text)) {
+      showToast(
+        '打开链接失败',
+        detail: '请复制地址，或打开 Release 页面查看',
+        kind: ToastKind.error,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return MarkdownBody(
+      data: body.isEmpty ? '这条发布没有填写说明。' : body,
+      selectable: true,
+      fitContent: false,
+      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+        p: theme.textTheme.bodyMedium,
+        h1: theme.textTheme.titleLarge,
+        h2: theme.textTheme.titleMedium,
+        h3: theme.textTheme.titleSmall,
+        h4: theme.textTheme.titleSmall,
+        h5: theme.textTheme.titleSmall,
+        h6: theme.textTheme.titleSmall,
+        h1Padding: const EdgeInsets.only(top: AppSpace.sm, bottom: AppSpace.xs),
+        h2Padding: const EdgeInsets.only(top: AppSpace.sm, bottom: AppSpace.xs),
+        h3Padding: const EdgeInsets.only(top: AppSpace.sm, bottom: AppSpace.xs),
+        strong: const TextStyle(fontWeight: FontWeight.w700),
+        a: TextStyle(
+          color: theme.colorScheme.primary,
+          decoration: TextDecoration.underline,
+        ),
+        code: theme.textTheme.bodyMedium?.copyWith(
+          fontFamily: 'monospace',
+          backgroundColor: theme.colorScheme.surfaceContainer,
+        ),
+        blockSpacing: AppSpace.md,
+        listIndent: AppSpace.xl,
+        listBullet: theme.textTheme.bodyMedium,
       ),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: AppRadius.mdAll,
+      // 覆盖默认 Image.network/Image.file：发布说明不因图片触发额外 I/O。
+      imageBuilder: (_, _, alt) => Text(
+        alt == null || alt.isEmpty ? '［图片已省略］' : '［图片已省略：$alt］',
+        style: theme.textTheme.bodySmall,
       ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: maxHeight),
-        child: SingleChildScrollView(
-          child: SelectableText(
-            body.isEmpty ? '这条发布没有填写说明。' : body,
-            key: const ValueKey('settings-update-notes'),
-            style: theme.textTheme.bodySmall,
+      onTapLink: (_, href, _) => unawaited(_openLink(href)),
+    );
+  }
+}
+
+class _ReleaseNotesDialog extends StatefulWidget {
+  const _ReleaseNotesDialog({required this.release, required this.onOpenLink});
+  final AppRelease release;
+  final Future<bool> Function(String) onOpenLink;
+
+  @override
+  State<_ReleaseNotesDialog> createState() => _ReleaseNotesDialogState();
+}
+
+class _ReleaseNotesDialogState extends State<_ReleaseNotesDialog> {
+  final _scroll = ScrollController();
+  Size? _size;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final window = MediaQuery.sizeOf(context);
+    final maxWidth = math.max(0.0, window.width - AppSpace.xxl);
+    final maxHeight = math.max(0.0, window.height - AppSpace.xxl);
+    final minWidth = math.min(320.0, maxWidth);
+    final minHeight = math.min(320.0, maxHeight);
+    final width = (_size?.width ?? 900).clamp(minWidth, maxWidth).toDouble();
+    final height = (_size?.height ?? window.height * 0.85)
+        .clamp(minHeight, maxHeight)
+        .toDouble();
+    return Dialog(
+      insetPadding: const EdgeInsets.all(AppSpace.lg),
+      child: SizedBox(
+        key: const ValueKey('settings-update-notes-dialog'),
+        width: width,
+        height: height,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpace.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('完整更新说明', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: AppSpace.xs),
+              Text(
+                widget.release.tag,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: AppSpace.lg),
+              Expanded(
+                child: Scrollbar(
+                  controller: _scroll,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    padding: const EdgeInsetsDirectional.only(end: AppSpace.md),
+                    child: _ReleaseNotesMarkdown(
+                      body: widget.release.body.trim(),
+                      onOpenLink: widget.onOpenLink,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              Wrap(
+                spacing: AppSpace.sm,
+                runSpacing: AppSpace.sm,
+                alignment: WrapAlignment.end,
+                children: [
+                  TextButton.icon(
+                    key: const ValueKey('settings-update-notes-copy'),
+                    onPressed: () async {
+                      try {
+                        await Clipboard.setData(
+                          ClipboardData(text: widget.release.body),
+                        );
+                        if (!mounted) return;
+                        showToast('已复制更新说明原文', kind: ToastKind.success);
+                      } on PlatformException {
+                        if (!mounted) return;
+                        showToast(
+                          '复制更新说明失败',
+                          detail: '系统剪贴板暂不可用，请稍后重试',
+                          kind: ToastKind.error,
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    label: const Text('复制原文'),
+                  ),
+                  FilledButton.tonal(
+                    key: const ValueKey('settings-update-notes-close'),
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('关闭'),
+                  ),
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                    child: Tooltip(
+                      message: '拖动调整阅读窗口大小',
+                      child: GestureDetector(
+                        key: const ValueKey('settings-update-notes-resize'),
+                        behavior: HitTestBehavior.opaque,
+                        onPanUpdate: (details) => setState(() {
+                          _size = Size(
+                            (width + details.delta.dx)
+                                .clamp(minWidth, maxWidth)
+                                .toDouble(),
+                            (height + details.delta.dy)
+                                .clamp(minHeight, maxHeight)
+                                .toDouble(),
+                          );
+                        }),
+                        child: const SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: Icon(Icons.drag_handle, size: 20),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),

@@ -3,7 +3,7 @@
 /// 用法（在 apps/desktop-flutter 下）：
 ///   ../../.tools/flutter/bin/flutter test tool/app_update_capture_test.dart \
 ///     --dart-define=APP_TAG=v0.1.0-202611231630
-/// 输出：<仓库根>/.local/update-network-visual/after/update-<亮度>-<宽>x<高>.png
+/// 输出：<仓库根>/.local/update-md-visual/after/update-<亮度>-<宽>x<高>.png
 ///
 /// 为什么带 APP_TAG：它是编译期注入的构建身份，缺省为空 = 开发构建，而开发
 /// 构建永远不会得到「发现新版本」这个结论。截图要拍的是**发布构建看到新版本**
@@ -199,9 +199,7 @@ class _OfflineHttpClient implements HttpClient {
 }
 
 void main() {
-  final output = Directory(
-    '${_repoRoot().path}/.local/update-network-visual/after',
-  );
+  final output = Directory('${_repoRoot().path}/.local/update-md-visual/after');
   final previousHttpOverrides = HttpOverrides.current;
 
   setUpAll(() async {
@@ -282,14 +280,35 @@ void main() {
       expect(find.byType(ErrorWidget), findsNothing);
       expect(tester.takeException(), isNull, reason: '渲染异常（含布局溢出）时不出图');
       await _writePng(tester, File('${output.path}/$file.png'));
-      await tester.scrollUntilVisible(
+      final pageScroll = tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position;
+      pageScroll.jumpTo(pageScroll.maxScrollExtent);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
         find.byKey(const ValueKey('settings-update-proxy-url')),
-        160,
-        scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       await _writePng(tester, File('${output.path}/$file-proxy.png'));
+      tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position
+          .jumpTo(0);
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('settings-update-notes-expand')),
+        160,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await _writePng(tester, File('${output.path}/$file-notes.png'));
+      await tester.tap(
+        find.byKey(const ValueKey('settings-update-notes-expand')),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await _writePng(tester, File('${output.path}/$file-full-notes.png'));
     });
   }
 }
