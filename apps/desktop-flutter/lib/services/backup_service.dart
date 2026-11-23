@@ -12,10 +12,13 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/backup_manifest.dart';
+import 'backup_archive_reader.dart';
 import 'app_paths.dart';
 import 'log_service.dart';
 import 'storage.dart';
 import 'ai_integration.dart';
+
+export 'backup_archive_reader.dart' show BackupReadLimits;
 
 class BackupCreateResult {
   const BackupCreateResult({
@@ -60,9 +63,14 @@ class BackupContents {
 
 class BackupService {
   // 命名参数用 `log`、字段用 `_log`：与仓库其它 service 一致。
-  // ignore: prefer_initializing_formals
-  BackupService({required this.paths, LogService? log}) : _log = log;
+  BackupService({
+    required this.paths,
+    LogService? log,
+    this.readLimits = const BackupReadLimits(),
+    // ignore: prefer_initializing_formals
+  }) : _log = log;
 
+  final BackupReadLimits readLimits;
   final AppPaths paths;
   final LogService? _log;
 
@@ -196,24 +204,11 @@ class BackupService {
     if (!await file.exists()) {
       return const _DecodedBackup(issue: '备份文件不存在');
     }
-    final bytes = await file.readAsBytes();
-    if (bytes.length > 512 * 1024 * 1024) {
-      return const _DecodedBackup(issue: '备份文件过大（>512 MiB）');
-    }
-    final Archive archive;
+    final Map<String, Uint8List> files;
     try {
-      archive = ZipDecoder().decodeBytes(bytes);
+      files = await BackupArchiveReader(limits: readLimits).read(file);
     } catch (error) {
-      return _DecodedBackup(issue: '不是有效的 zip：$error');
-    }
-    final files = <String, Uint8List>{};
-    for (final entry in archive) {
-      if (!entry.isFile) continue;
-      // 重复条目会让「校验的是 A、写盘的是 B」：直接拒绝。
-      if (files.containsKey(entry.name)) {
-        return _DecodedBackup(issue: 'zip 包含重复条目：${entry.name}');
-      }
-      files[entry.name] = Uint8List.fromList(entry.content);
+      return _DecodedBackup(issue: '备份 ZIP 校验失败：$error');
     }
     final manifestBytes = files[backupManifestFile];
     if (manifestBytes == null) {
@@ -242,8 +237,7 @@ class BackupService {
         aiBackupReaderFile,
         karaokeBackupUserDataFile,
       ])
-        if (files[name] != null && manifest.entries.any((e) => e.path == name))
-          name: files[name]!,
+        if (files[name] != null) name: files[name]!,
     };
     try {
       if (auxiliary[karaokeBackupUserDataFile] case final bytes?) {
