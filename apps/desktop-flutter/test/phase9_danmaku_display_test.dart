@@ -11,13 +11,13 @@ void main() {
     test('默认值等价 Phase 3–8 的显示行为', () {
       const style = DanmakuStyle.defaults;
       expect(style.enabled, isTrue);
-      expect(style.opacity, 0.9);
+      expect(style.opacity, 0.8);
       expect(style.textScale, 1.0);
       expect(style.strokeWidth, 1.2);
       // 默认放慢到 12s：8s 是「看不清就飞过去了」的默认值。
-      expect(style.scrollDurationMs, 12000);
+      expect(style.scrollDurationMs, 20000);
       expect(style.fixedDurationMs, 4000);
-      expect(style.areaRatio, 0.6);
+      expect(style.areaRatio, 0.5);
       expect(style.maxTracks, 0);
       expect(style.timeOffsetMs, 0);
       expect(style.isDefault, isTrue);
@@ -72,9 +72,9 @@ void main() {
         'maxTracks': -3,
         'enabled': 1,
       });
-      expect(dirty.opacity, 0.9);
+      expect(dirty.opacity, 0.8);
       expect(dirty.textScale, 2.5);
-      expect(dirty.scrollDurationMs, 12000);
+      expect(dirty.scrollDurationMs, 20000);
       expect(dirty.maxTracks, 0);
       expect(dirty.enabled, isTrue);
     });

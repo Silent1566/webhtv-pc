@@ -22,7 +22,7 @@ import 'package:webhtv_pc/services/danmaku_service.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/danmaku_overlay.dart';
+import 'package:webhtv_pc/ui/danmaku_engine_view.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -806,7 +806,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       expect(find.text('字幕A'), findsNothing);
       expect(
-        tester.widget<DanmakuOverlay>(find.byType(DanmakuOverlay)).items,
+        tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView)).items,
         isEmpty,
       );
       expect(
@@ -1016,7 +1016,7 @@ void main() {
     );
     await settleQueue(tester);
     expect(
-      tester.widget<DanmakuOverlay>(find.byType(DanmakuOverlay)).items,
+      tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView)).items,
       isEmpty,
     );
     expect(fixture.media.opened.last.uri, 'https://media.test/resolved-B.m3u8');

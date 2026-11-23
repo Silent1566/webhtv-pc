@@ -67,7 +67,7 @@ class LiveDanmakuFrame {
   final int generation;
 
   /// 醒目弹幕字号是普通弹幕的 1.2 倍（普通弹幕用 16sp，与静态弹幕默认一致）。
-  double get textSizeSp => 16 * (type == LiveDanmakuMessageType.superChat ? 1.2 : 1.0);
+  double get textSizeSp => 25 * (type == LiveDanmakuMessageType.superChat ? 1.2 : 1.0);
 
   Map<String, Object?> toJson() => {
     'type': type.name,

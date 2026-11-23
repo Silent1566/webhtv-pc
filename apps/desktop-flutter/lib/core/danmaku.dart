@@ -107,14 +107,19 @@ class DanmakuItem {
   /// 默认白色，与 media3 `ParserUtil` 的默认色一致。
   static const int defaultColor = 0xFFFFFFFF;
 
-  /// 默认字号，与 media3 `ParserUtil.DEFAULT_SP` 一致。
-  static const double defaultTextSizeSp = 16;
+  /// 默认字号（px）。
+  ///
+  /// 对齐 **B 站网页播放器**的默认值，而不是 media3 的移动端 sp 档位：
+  /// B 站播放器里普通弹幕元素的真实样式是 `--fontSize: 25px`，而 media3 的
+  /// `DEFAULT_SP = 16` 是给手机 dp 用的——照搬到桌面会小一号（16px 对 25px）。
+  /// 桌面端按像素对齐用户在 B 站看到的大小。
+  static const double defaultTextSizeSp = 25;
 
-  /// Bili 字号小档（media3 `ParserUtil.SMALL_SP = 12`）。
-  static const double smallTextSizeSp = 12;
+  /// Bili 字号小档（B 站 `p` 属性 18 → 18px）。
+  static const double smallTextSizeSp = 18;
 
-  /// Bili 字号大档（media3 `ParserUtil.LARGE_SP = 18`）。
-  static const double largeTextSizeSp = 18;
+  /// Bili 字号大档（B 站 `p` 属性 36 → 36px）。
+  static const double largeTextSizeSp = 36;
 
   Duration get time => Duration(milliseconds: timeMs);
 
@@ -140,8 +145,8 @@ class DanmakuItem {
     );
   }
 
-  /// Bili 字号档位映射（对齐 media3 `ParserUtil.mapBiliTextSize`）：
-  /// `<= 18` → 12；`>= 36` → 18；其余（一般 25）→ 默认。
+  /// Bili 字号档位映射：`<= 18` → 小档；`>= 36` → 大档；其余（一般 25）→ 默认。
+  /// 档位数值按 B 站网页端的 18 / 25 / 36 px 取，不再沿用 media3 的 12/16/18 sp。
   static double textSizeForBiliSize(int size) {
     if (size <= 18) return smallTextSizeSp;
     if (size >= 36) return largeTextSizeSp;

@@ -19,6 +19,8 @@
 /// 于是弹幕每帧都有位移，而播放器页不必为此重建。
 library;
 
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -49,7 +51,10 @@ List<DanmakuItem> filterDanmakuItems(
 }
 
 /// 单条弹幕占用的轨道高度（基准值，会按字号缩放）。
-const double danmakuTrackHeight = 28;
+///
+/// 从默认字号推导（行高 1.2 + 上下各 2px 呼吸），避免改了默认字号而轨道高度
+/// 停在旧常数上，导致相邻轨道重叠。
+const double danmakuTrackHeight = DanmakuItem.defaultTextSizeSp * 1.2 + 4;
 
 /// 轨道内相邻弹幕的水平间距。
 const double danmakuTrackGap = 12;
@@ -70,6 +75,8 @@ class DanmakuOverlay extends StatefulWidget {
     this.liveItems = const [],
     this.liveNowMs,
     this.playing = false,
+    this.held = false,
+    this.seeking = false,
     this.rate = 1,
     this.clockNow,
   });
@@ -93,6 +100,15 @@ class DanmakuOverlay extends StatefulWidget {
 
   /// 播放器是否正在播放：只有播放中才逐帧推进，暂停时弹幕停在原地。
   final bool playing;
+
+  /// 画面是否停滞（加载、缓冲）：冻结弹幕，恢复后等上报追齐再对齐。
+  final bool held;
+
+  /// 播放器是否正在定位（拖动进度条 / 快进快退）。
+  ///
+  /// 与 [held] 分开：定位同样要冻结，但它的**结束**是权威信号——
+  /// 上报值就是拖到的位置，立刻对表，不需要「等上报追上」。
+  final bool seeking;
 
   /// 播放倍速（1.0 = 原速）。倍速下弹幕位移按同一倍率放大。
   final double rate;
@@ -139,6 +155,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay>
   void dispose() {
     _ticker.dispose();
     _frame.dispose();
+    _layoutCache.dispose();
     super.dispose();
   }
 
@@ -150,6 +167,8 @@ class _DanmakuOverlayState extends State<DanmakuOverlay>
       playing: widget.playing,
       rate: widget.rate,
       at: _now(),
+      held: widget.held,
+      seeking: widget.seeking,
     );
   }
 
@@ -160,6 +179,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay>
 
   bool get _wantsTicker =>
       widget.playing &&
+      !widget.held &&
       widget.style.enabled &&
       (widget.items.isNotEmpty || widget.liveItems.isNotEmpty);
 
@@ -259,19 +279,46 @@ class _DanmakuOverlayState extends State<DanmakuOverlay>
   }
 }
 
-/// 文本排版缓存：按「文本 + 字号 + 颜色 + 描边」复用 [TextPainter]。
+/// 文本排版 + 位图缓存。
 ///
 /// 必须挂在叠加层的 State 上（而不是每帧新建的 [DanmakuPainter]）：位置上报
 /// 会导致整层重建，绘制器跟着换新，缓存若跟着绘制器走就等于没有缓存。
+///
+/// **为什么要缓存成位图，而不是每帧重画文字**：弹幕每帧都在动，文字若按小数
+/// 坐标逐帧重新栅格化，字边抗锯齿的相位每帧都不一样，观感就是「字在闪、发虚、
+/// 看着眼花」——这与位置是否连续无关（位置可以是完全线性的）。文字只栅格化
+/// 一次，之后按**整数设备像素**平移同一张位图，边缘就彻底稳定了。
+/// 做法与 weizhenye/Danmaku 的「离屏预渲染 + drawImage」、字节
+/// DanmakuRenderEngine 的 `DrawCachePool` 一致。
 class DanmakuTextLayoutCache {
   /// 缓存条数上限；超出就整体清空（弹幕文本天然高重复，命中率足够）。
   static const int maxEntries = 512;
 
+  /// 位图缓存上限（位图比排版权重大，单独给一个更小的上限）。
+  static const int maxGlyphs = 160;
+
+  /// 位图按 2 倍栅格化，再按**小数坐标**缩小绘制。
+  ///
+  /// 两条约束同时成立才不花眼，缺一就会退化成其中一种毛病：
+  /// - **位置必须连续**：1264 宽的窗口、25px、12s，理想速度是 2.1px/帧；
+  ///   若把绘制位置取整，实际会变成 1/2/3px 交替，瞬时速度在 0.6×–1.3× 之间抖，
+  ///   调慢速度后更糟（出现 2px 帧 = 双倍速，甚至 0px 帧 = 停住）。
+  ///   这就是「字很清但看着花」的来源，所以位置一律不取整。
+  /// - **字形不能每帧重排**：按小数坐标直接画文字，Impeller 每帧重新栅格化字形，
+  ///   边缘相位逐帧变化（闪）。所以文字只栅格化一次成位图，之后只做平移。
+  /// 2 倍栅格化 + 缩小一半绘制，是为了让平移后的位图仍然锐利（1 倍缩放会糊）。
+  static const double glyphScale = 2;
+
   final Map<(String, double, double, int, double), TextPainter> _layouts = {};
+  final Map<(String, double, double, int, double), DanmakuGlyphs> _glyphs = {};
   int _layoutCount = 0;
+  int _rasterCount = 0;
 
   /// 累计真正做过的排版次数（测试用来确认命中缓存）。
   int get layoutCount => _layoutCount;
+
+  /// 累计真正把文字栅格化成位图的次数（远小于帧数）。
+  int get rasterCount => _rasterCount;
 
   TextPainter resolve({
     required (String, double, double, int, double) key,
@@ -285,6 +332,74 @@ class DanmakuTextLayoutCache {
     _layoutCount++;
     return painter;
   }
+
+  /// 取（或生成）这一条弹幕的位图：描边与填充在**同一张图**里合成，
+  /// 之后每帧只做一次整数平移的 drawImage。
+  DanmakuGlyphs glyphs({
+    required (String, double, double, int, double) key,
+    required TextPainter Function() fillBuilder,
+    TextPainter Function()? strokeBuilder,
+  }) {
+    final cached = _glyphs[key];
+    if (cached != null) return cached;
+    // 只淘汰最旧的几条，不能整体清空：清空会让**当前屏幕上所有可见弹幕**在下一帧
+    // 一起重新栅格化（paint 里做 PictureRecorder + toImageSync），表现为周期性顿挫。
+    while (_glyphs.length >= maxGlyphs) {
+      final oldest = _glyphs.keys.first;
+      _glyphs.remove(oldest)?.image.dispose();
+    }
+    final fill = resolve(key: key, build: fillBuilder);
+    final stroke = strokeBuilder?.call();
+    // 内边距取整，保证文字在位图内部的相位固定（否则位图本身就带小数相位）。
+    final padding = stroke == null ? 1.0 : 4.0;
+    final width = ((fill.width + padding * 2) * glyphScale).ceil();
+    final height = ((fill.height + padding * 2) * glyphScale).ceil();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.scale(glyphScale);
+    final at = Offset(padding, padding);
+    stroke?.paint(canvas, at);
+    fill.paint(canvas, at);
+    final picture = recorder.endRecording();
+    final image = picture.toImageSync(width, height);
+    picture.dispose();
+    _rasterCount++;
+    final glyphs = DanmakuGlyphs(
+      image: image,
+      padding: padding,
+      width: fill.width,
+      scale: glyphScale,
+    );
+    _glyphs[key] = glyphs;
+    return glyphs;
+  }
+
+  /// 释放位图（叠加层销毁时调用；位图持有原生内存）。
+  void dispose() {
+    for (final glyph in _glyphs.values) {
+      glyph.image.dispose();
+    }
+    _glyphs.clear();
+  }
+}
+
+/// 一条弹幕预渲染后的位图与其内边距。
+class DanmakuGlyphs {
+  const DanmakuGlyphs({
+    required this.image,
+    required this.padding,
+    required this.width,
+    required this.scale,
+  });
+
+  final ui.Image image;
+  final double padding;
+
+  /// 位图相对逻辑像素的放大倍数（见 [DanmakuTextLayoutCache.glyphScale]）。
+  final double scale;
+
+  /// 文字本身的宽度（排版用，不含内边距）。
+  final double width;
 }
 
 /// 弹幕绘制器。
@@ -302,6 +417,7 @@ class DanmakuPainter extends CustomPainter {
     this.layoutCache,
     super.repaint,
   });
+
 
   /// 静态弹幕场景（按播放位置查询）。
   final DanmakuScene scene;
@@ -358,19 +474,43 @@ class DanmakuPainter extends CustomPainter {
     Size size,
     List<VisibleDanmaku> entries,
   ) {
+    final paint = Paint()..filterQuality = FilterQuality.low;
     for (final entry in entries) {
       final item = entry.item;
       final fontSize = item.textSizeSp * style.textScale;
-      final fill = _fillPainter(item, fontSize);
-      final offset = _offsetFor(entry, size, fill.width);
+      final glyphs = _glyphsFor(item, fontSize);
+      final offset = _offsetFor(entry, size, glyphs.width);
       if (offset == null) continue;
-      // 描边用真正的 stroke 画笔一次画完：旧实现沿 8 个方向各叠一遍文字，
-      // 既贵（每条每帧多排 6 次版）又会在字边留下重影般的虚边。
-      if (style.strokeWidth > 0) {
-        _strokePainter(item, fontSize).paint(canvas, offset);
-      }
-      fill.paint(canvas, offset);
+      // **小数坐标**绘制：速度连续，不做整像素取整（取整是速度量化的来源）。
+      // 位图是 2 倍栅格化的，这里按一半尺寸绘制，所以不会因为小数位移而发虚。
+      final dst = Rect.fromLTWH(
+        offset.dx - glyphs.padding,
+        offset.dy - glyphs.padding,
+        glyphs.image.width / glyphs.scale,
+        glyphs.image.height / glyphs.scale,
+      );
+      canvas.drawImageRect(
+        glyphs.image,
+        Rect.fromLTWH(
+          0,
+          0,
+          glyphs.image.width.toDouble(),
+          glyphs.image.height.toDouble(),
+        ),
+        dst,
+        paint,
+      );
     }
+  }
+
+  DanmakuGlyphs _glyphsFor(DanmakuItem item, double fontSize) {
+    return _cache.glyphs(
+      key: (item.text, fontSize, style.strokeWidth * 2, item.color, style.opacity),
+      fillBuilder: () => _fillPainter(item, fontSize),
+      strokeBuilder: style.strokeWidth > 0
+          ? () => _strokePainter(item, fontSize)
+          : null,
+    );
   }
 
   TextPainter _fillPainter(DanmakuItem item, double fontSize) {
@@ -384,7 +524,7 @@ class DanmakuPainter extends CustomPainter {
           style: TextStyle(
             fontSize: fontSize,
             color: color,
-            fontWeight: FontWeight.w500,
+            fontWeight: FontWeight.w400,
             height: 1.2,
           ),
         ),
@@ -402,7 +542,7 @@ class DanmakuPainter extends CustomPainter {
           text: item.text,
           style: TextStyle(
             fontSize: fontSize,
-            fontWeight: FontWeight.w500,
+            fontWeight: FontWeight.w400,
             height: 1.2,
             foreground: Paint()
               ..style = PaintingStyle.stroke

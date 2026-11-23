@@ -27,8 +27,9 @@ import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
-import 'package:webhtv_pc/ui/danmaku_overlay.dart';
+import 'package:webhtv_pc/ui/danmaku_engine_view.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../test/fixture_support.dart';
@@ -50,6 +51,9 @@ void main() {
   tearDownAll(() async {
     await wsServer.close();
   });
+
+  setUp(() => toastCenter.dismissAll());
+  tearDown(() => toastCenter.dismissAll());
 
   Future<AppState> bootstrapState() async {
     final temp = await Directory.systemTemp.createTemp('webhtv-live-danmaku-e2e');
@@ -121,7 +125,15 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PlayerPage(state: state, request: request))),
+      MaterialApp(
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            Scaffold(body: PlayerPage(state: state, request: request)),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     await pumpUntilFirstFrame(tester);
 
@@ -129,9 +141,9 @@ void main() {
     var sawChat = false;
     for (var attempt = 0; attempt < 60; attempt++) {
       await tester.pump(const Duration(milliseconds: 250));
-      if (find.byType(DanmakuOverlay).evaluate().isEmpty) continue;
-      final overlay = tester.widget<DanmakuOverlay>(
-        find.byType(DanmakuOverlay).first,
+      if (find.byType(DanmakuEngineView).evaluate().isEmpty) continue;
+      final overlay = tester.widget<DanmakuEngineView>(
+        find.byType(DanmakuEngineView).first,
       );
       if (overlay.liveItems.any((item) => item.text.contains('直播弹幕'))) {
         sawChat = true;
@@ -142,8 +154,8 @@ void main() {
     evidence('live-danmaku-received chat=yes');
 
     //  在线人数更新（online 帧）。
-    final overlay = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    final overlay = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     expect(overlay.liveItems.length, greaterThan(0));
     // 非法帧被丢弃：不会出现在 liveItems 里。
@@ -167,12 +179,12 @@ void main() {
     // 待处理帧，`pumpAndSettle` 不可能 settle —— 实测会耗满 **10 分钟**默认
     // 超时后抛 `pumpAndSettle timed out`。这条用例因此长期是红的，
     // 而且掩盖了它真正要断言的东西。
-    var off = tester.widget<DanmakuOverlay>(
-      find.byType(DanmakuOverlay).first,
+    var off = tester.widget<DanmakuEngineView>(
+      find.byType(DanmakuEngineView).first,
     );
     for (var attempt = 0; attempt < 40 && off.style.enabled; attempt++) {
       await tester.pump(const Duration(milliseconds: 250));
-      off = tester.widget<DanmakuOverlay>(find.byType(DanmakuOverlay).first);
+      off = tester.widget<DanmakuEngineView>(find.byType(DanmakuEngineView).first);
     }
     expect(off.style.enabled, isFalse, reason: '点击弹幕按钮后应关闭弹幕');
     evidence('live-danmaku-off enabled=${off.style.enabled}');
@@ -207,7 +219,15 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PlayerPage(state: state, request: request))),
+      MaterialApp(
+        home: Stack(
+          fit: StackFit.expand,
+          children: [
+            Scaffold(body: PlayerPage(state: state, request: request)),
+            const ToastHost(),
+          ],
+        ),
+      ),
     );
     final player = await pumpUntilFirstFrame(tester);
 
