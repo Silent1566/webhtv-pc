@@ -97,6 +97,7 @@ class MultiSiteSearchOutcome {
     this.group = '',
     this.skippedUnsupported = 0,
     this.skippedNotSearchable = 0,
+    this.totalSites = 0,
   }) : _results = List.of(results);
 
   final int runId;
@@ -115,6 +116,12 @@ class MultiSiteSearchOutcome {
 
   /// 因未声明 `searchable` 而跳过的站点数（只统计范围内的站点）。
   final int skippedNotSearchable;
+
+  /// 本批次实际要搜索的站点总数（不含跳过项）。
+  ///
+  /// [results] 是逐站点投递的完成快照，搜索期间用它除以本值即可得到进度；
+  /// 旧批次/测试快照没有这个信息时保持 0，界面退化为不确定进度。
+  final int totalSites;
 
   List<SiteSearchEntry> _results;
 
@@ -136,8 +143,7 @@ class MultiSiteSearchOutcome {
 
   int get failedCount => _results.where((entry) => !entry.succeeded).length;
 
-  int get totalItems =>
-      _results.fold(0, (sum, entry) => sum + entry.itemCount);
+  int get totalItems => _results.fold(0, (sum, entry) => sum + entry.itemCount);
 
   /// 是否存在「成功但零结果」的站点，用于给出准确提示（§14.3）。
   bool get hasEmptyResult =>
@@ -284,13 +290,10 @@ class SearchPagingState {
   /// 记录内容指纹；返回 false 表示「这一页和之前某页内容完全相同」。
   bool _recordPageToken(String siteKey, String pageToken) {
     if (pageToken.isEmpty) return true;
-    return _pageTokens
-        .putIfAbsent(siteKey, () => <String>{})
-        .add(pageToken);
+    return _pageTokens.putIfAbsent(siteKey, () => <String>{}).add(pageToken);
   }
 
-  static bool _isSite(String siteKey) =>
-      siteKey.isNotEmpty && siteKey != 'all';
+  static bool _isSite(String siteKey) => siteKey.isNotEmpty && siteKey != 'all';
 
   /// 页内容指纹：对条目按 (id, 名称) 排序后做长度前缀拼接，与顺序无关
   /// （上游 `SearchPageState.pageToken` 同算法；PC 端的条目已按站点分桶，

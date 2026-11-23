@@ -99,6 +99,9 @@ void main() {
     await tester.runAsync(() async {
       final ok = await state.importConfig(_configJson);
       expect(ok, isTrue, reason: '配置导入应成功');
+      // 本用例的候选名与详情片名刻意不同（「同名站候选 A」对「同名健康色目标影片」），
+      // 而换源现在与搜索页共用相似度筛选：不清零会把两行都滤掉，测不到健康色。
+      await state.setSearchSimilarity(0);
       final database = state.database!;
       for (var i = 0; i < 3; i += 1) {
         database.recordHealth(
@@ -120,9 +123,7 @@ void main() {
   Map<String, SourceStatus> statusByKey() => {
     for (final magnitude in buildMagnitudes(
       items: state.siteItems,
-      health: {
-        for (final row in state.siteHealth()) row.siteKey: row,
-      },
+      health: {for (final row in state.siteHealth()) row.siteKey: row},
     ))
       magnitude.siteKey: magnitude.status,
   };
@@ -172,13 +173,12 @@ void main() {
     await prepare(tester);
 
     // 前置条件（与 UI 无关）：两站名称相同、key 不同，健康态必须已经分成两态。
-    expect(state.siteItems.where((item) => item.site.name == _dupName), hasLength(2));
-    final seeded = statusByKey();
     expect(
-      seeded['dup-a'],
-      SourceStatus.failed,
-      reason: 'dup-a 连错 3 次 → 失效',
+      state.siteItems.where((item) => item.site.name == _dupName),
+      hasLength(2),
     );
+    final seeded = statusByKey();
+    expect(seeded['dup-a'], SourceStatus.failed, reason: 'dup-a 连错 3 次 → 失效');
     expect(seeded['dup-b'], SourceStatus.ok, reason: 'dup-b 连成 3 次 → 可用');
 
     await pumpDetail(tester);

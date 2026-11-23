@@ -13,6 +13,7 @@ import 'support/test_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
+import 'package:webhtv_pc/core/playback_lines.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
@@ -239,18 +240,21 @@ class _BackState extends fixtures.SourceState {
   }
 
   @override
-  Future<List<VodPlayLine>> swapProbe({
+  Future<PlaybackLines> swapProbe({
     required String siteKey,
     required String vodId,
     String vodName = '',
-  }) async => [
-    VodPlayLine(
-      flag: '真实线路',
-      episodes: [
-        VodEpisode(name: '第1集', url: 'https://fixture.invalid/real.mp4'),
-      ],
-    ),
-  ];
+    Vod? listing,
+  }) async => PlaybackLines(
+    lines: [
+      VodPlayLine(
+        flag: '真实线路',
+        episodes: [
+          VodEpisode(name: '第1集', url: 'https://fixture.invalid/real.mp4'),
+        ],
+      ),
+    ],
+  );
 }
 
 Future<void> _settle(WidgetTester tester) async {

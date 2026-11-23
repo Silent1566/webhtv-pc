@@ -244,8 +244,8 @@ Future<int?> showSimilaritySliderDialog(
 ///
 /// 视觉与交互完全由这里决定；两个宿主只负责「结果从哪来」和「点开一条做什么」：
 /// - 搜索页：`keyPrefix: 'search'`，相似度可见，分页接 `AppState.loadMoreSearch`；
-/// - 换源浮层：`keyPrefix: 'source-swap'`，相似度隐藏（阈值恒 0 = 不过滤，
-///   否则同一部剧在别的站的条目会被滤掉），分页关闭（quick 搜索只取首页），
+/// - 换源浮层：`keyPrefix: 'source-swap'`，相似度与搜索页共用，
+///   分页关闭（quick 搜索只取首页），
 ///   每张卡上多一层勾选/解析角标。
 ///
 /// 分组筛选由宿主持有（`group` + [onGroupChanged]）：两个宿主都会在「新一次
@@ -325,6 +325,7 @@ class _SearchResultViewState extends State<SearchResultView> {
   String _activeSiteKey = _allSitesKey;
   bool _autoPaging = false;
   final ScrollController _resultScroll = ScrollController();
+  final ScrollController _groupScroll = ScrollController();
 
   @override
   void initState() {
@@ -337,6 +338,7 @@ class _SearchResultViewState extends State<SearchResultView> {
   void dispose() {
     _resultScroll.removeListener(_onResultScroll);
     _resultScroll.dispose();
+    _groupScroll.dispose();
     super.dispose();
   }
 
@@ -505,7 +507,9 @@ class _SearchResultViewState extends State<SearchResultView> {
       parts.add('范围 分组：${outcome.group}');
     }
     parts
-      ..add('命中站点 ${outcome.succeededCount}/${outcome.results.length}')
+      ..add(
+        '命中站点 ${outcome.succeededCount}/${outcome.totalSites > 0 ? outcome.totalSites : outcome.results.length}',
+      )
       ..add('条目 $visibleTotal/${outcome.totalItems}');
     if (outcome.failedCount > 0) parts.add('失败 ${outcome.failedCount}');
     if (outcome.skippedUnsupported > 0) {
@@ -521,7 +525,10 @@ class _SearchResultViewState extends State<SearchResultView> {
     } else {
       parts.add('搜索中…');
     }
-    return Text(parts.join(' · '), style: Theme.of(context).textTheme.bodySmall);
+    return Text(
+      parts.join(' · '),
+      style: Theme.of(context).textTheme.bodySmall,
+    );
   }
 
   Widget? _buildFilterBar() {
@@ -529,48 +536,80 @@ class _SearchResultViewState extends State<SearchResultView> {
     final custom = !_similarityPresets.contains(_similarity);
     final showGroups = groups.isNotEmpty;
     if (!showGroups && !widget.showSimilarity) return null;
-    return Wrap(
-      spacing: AppSpace.sm,
-      runSpacing: AppSpace.sm,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        if (showGroups) ...[
-          const Text('分组:', style: TextStyle(fontWeight: FontWeight.w500)),
-          TagChip(
-            key: ValueKey('${widget.keyPrefix}-group-all'),
-            label: '全部',
-            selected: widget.group.isEmpty,
-            onTap: () => widget.onGroupChanged?.call(''),
-            selectable: true,
-          ),
-          for (final group in groups)
-            TagChip(
-              key: ValueKey('${widget.keyPrefix}-group-$group'),
-              label: group,
-              selected: widget.group == group,
-              onTap: () => widget.onGroupChanged?.call(group),
-              selectable: true,
+        if (showGroups)
+          ConstrainedBox(
+            key: ValueKey('${widget.keyPrefix}-filter-groups'),
+            constraints: const BoxConstraints(maxHeight: 96),
+            child: Scrollbar(
+              controller: _groupScroll,
+              thumbVisibility: true,
+              thickness: 3,
+              child: ListView(
+                controller: _groupScroll,
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(right: AppSpace.sm),
+                children: [
+                  Wrap(
+                    spacing: AppSpace.sm,
+                    runSpacing: AppSpace.sm,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      const Text(
+                        '分组:',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      TagChip(
+                        key: ValueKey('${widget.keyPrefix}-group-all'),
+                        label: '全部',
+                        selected: widget.group.isEmpty,
+                        onTap: () => widget.onGroupChanged?.call(''),
+                        selectable: true,
+                      ),
+                      for (final group in groups)
+                        TagChip(
+                          key: ValueKey('${widget.keyPrefix}-group-$group'),
+                          label: group,
+                          selected: widget.group == group,
+                          onTap: () => widget.onGroupChanged?.call(group),
+                          selectable: true,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-        ],
-        if (widget.showSimilarity) ...[
-          if (showGroups) const SizedBox(width: AppSpace.md),
-          const Text('相似度:', style: TextStyle(fontWeight: FontWeight.w500)),
-          for (final value in _similarityPresets)
-            TagChip(
-              key: ValueKey('${widget.keyPrefix}-similarity-$value'),
-              label: _similarityLabel(value),
-              selected: _similarity == value,
-              onTap: () => _applySimilarity(value),
-              selectable: true,
-            ),
-          TagChip(
-            key: ValueKey('${widget.keyPrefix}-similarity-custom'),
-            label: custom ? '≥$_similarity%' : '自定义…',
-            selected: custom,
-            onTap: _openSimilaritySlider,
-            selectable: true,
           ),
-        ],
+        if (showGroups && widget.showSimilarity)
+          const SizedBox(height: AppSpace.xs),
+        if (widget.showSimilarity)
+          Wrap(
+            key: ValueKey('${widget.keyPrefix}-filter-similarity'),
+            spacing: AppSpace.sm,
+            runSpacing: AppSpace.sm,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('相似度:', style: TextStyle(fontWeight: FontWeight.w500)),
+              for (final value in _similarityPresets)
+                TagChip(
+                  key: ValueKey('${widget.keyPrefix}-similarity-$value'),
+                  label: _similarityLabel(value),
+                  selected: _similarity == value,
+                  onTap: () => _applySimilarity(value),
+                  selectable: true,
+                ),
+              TagChip(
+                key: ValueKey('${widget.keyPrefix}-similarity-custom'),
+                label: custom ? '≥$_similarity%' : '自定义…',
+                selected: custom,
+                onTap: _openSimilaritySlider,
+                selectable: true,
+              ),
+            ],
+          ),
       ],
     );
   }

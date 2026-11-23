@@ -20,6 +20,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:webhtv_pc/core/playback_lines.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
@@ -179,11 +180,12 @@ class _TestAppState extends AppState with ExternalMetaOff {
   MultiSiteSearchOutcome? get activeSearch => _searchOutcome ?? super.activeSearch;
 
   @override
-  Future<List<VodPlayLine>> swapProbe({
+  Future<PlaybackLines> swapProbe({
     required String siteKey,
     required String vodId,
     String vodName = '',
-  }) async => _probeLines;
+    Vod? listing,
+  }) async => PlaybackLines(lines: _probeLines);
 
   /// 详情请求置空：用例以 `widget.vod` 的线路（空）为事实来源。
   @override
