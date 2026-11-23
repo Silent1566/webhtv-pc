@@ -546,11 +546,46 @@ void main() {
     expect(mounted.state.targets.last.target, 'target-2');
     expect(mounted.state.targets.last.flag, 'backend-a');
     await openHistoryEpisodes(tester);
+    final resolveCount = mounted.state.targets.length;
+    final openCount = mounted.media.opened.length;
     await tester.tap(find.byKey(const ValueKey('player-episode-line-1')));
     await settleHistory(tester);
+    expect(find.byKey(const ValueKey('player-episode-panel')), findsOneWidget);
+    expect(mounted.state.targets, hasLength(resolveCount));
+    expect(mounted.media.opened, hasLength(openCount));
+    expect(find.textContaining('线路二 · 共 2 集'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-episode-card-0')),
+        matching: find.text('第1集 另一段旅程'),
+      ),
+      findsOneWidget,
+    );
+    final secondEpisode = find.byKey(const ValueKey('player-episode-card-1'));
+    expect(
+      find.descendant(of: secondEpisode, matching: find.text('第2集 再次相遇')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('player-episode-card-2')), findsNothing);
+    await tester.tap(secondEpisode);
+    await settleHistory(tester);
+    expect(find.byKey(const ValueKey('player-episode-panel')), findsNothing);
+    expect(mounted.state.targets, hasLength(resolveCount + 1));
     expect(mounted.state.targets.last.target, 'alt-target-2');
     expect(mounted.state.targets.last.flag, 'backend-b');
     expect(mounted.state.targets.last.source, 'original-config');
+    expect(mounted.state.forSource.last, (
+      sourceKey: 'original-config',
+      siteKey: 'history-site',
+      vodId: 'history-vod',
+      flag: 'backend-b',
+      target: 'alt-target-2',
+    ));
+    expect(mounted.media.opened, hasLength(openCount + 1));
+    expect(
+      mounted.media.opened.last.uri,
+      'https://proxy.test/alt-target-2/q0.m3u8',
+    );
     expect(mounted.state.lineCalls, hasLength(1));
     await closeHistory(tester);
   });
