@@ -178,7 +178,12 @@ void main() {
     temp = Directory.systemTemp.createTempSync('backup-validation-');
     service = BackupService(
       paths: AppPaths.resolve(
-        overrides: {'roaming': temp.path, 'local': temp.path},
+        overrides: {
+          'config': '${temp.path}/config',
+          'data': '${temp.path}/data',
+          'cache': '${temp.path}/cache',
+          'state': '${temp.path}/state',
+        },
       ),
     );
   });

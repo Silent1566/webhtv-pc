@@ -11,6 +11,8 @@ library;
 import 'dart:convert';
 
 import 'app_error.dart';
+import 'config_carrier_decoder.dart';
+import 'config_lenient_json.dart';
 import 'protocol.dart';
 import 'tmdb_credential_ingress.dart';
 
@@ -46,7 +48,19 @@ class ConfigDocument {
 /// 抛出 [AppError]，其中 `msg` 非空配置使用 [AppErrorKind.configMsg]，
 /// 以便 UI 展示配置自带的原始错误文本（§7.4.3）。
 ConfigDocument parseConfigDocument(String text) {
-  final ingress = TmdbCredentialIngress.extractRootAndStrip(text);
+  // Carriers are unwrapped exactly once here; the loader only fetches text.
+  final carrierText = ConfigCarrierDecoder.decode(text);
+  var sourceText = carrierText;
+  try {
+    jsonDecode(sourceText);
+  } on FormatException {
+    try {
+      sourceText = ConfigLenientJson.normalize(sourceText);
+    } on FormatException {
+      // Keep the strict text so the existing JSON error classification holds.
+    }
+  }
+  final ingress = TmdbCredentialIngress.extractRootAndStrip(sourceText);
   Object? decoded;
   try {
     decoded = jsonDecode(ingress.sanitizedJson);
@@ -192,9 +206,10 @@ AppConfig _buildConfig(
     parses.add(entry);
   }
 
-  final flags = asList(
-    map['flags'],
-  ).map(asNonEmptyString).whereType<String>().toList();
+  final flags = asList(map['flags'])
+      .map(asNonEmptyString)
+      .whereType<String>()
+      .toList();
 
   final known = <String>{
     'name',

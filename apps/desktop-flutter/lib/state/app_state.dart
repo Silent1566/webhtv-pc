@@ -48,6 +48,7 @@ import '../services/episode_manual_match_service.dart';
 import '../services/ai_content_title_bridge.dart';
 import '../services/ai_episode_season_service.dart';
 import '../core/app_error.dart';
+import '../core/request_cancellation.dart';
 import '../core/app_update.dart';
 import '../core/cat_http.dart';
 import '../core/cat_source.dart';
@@ -765,6 +766,7 @@ AiContentCompletion? aiContentCompletion,
   /// 保留请求目标，只有本页发起的详情才认领，避免上一部剧串入。
   String _detailRequestVodId = '';
   MultiSiteSearchOutcome? _activeSearch;
+  final Set<RequestCancellation> _searchRequests = {};
   List<String> _searchHistory = const [];
 
   /// 分页状态：站点 key → 已加载页数 / 总页数 / 已见页指纹（§14.1 分页搜索）。
@@ -3982,6 +3984,7 @@ AiContentCompletion? aiContentCompletion,
 
   /// 数据交换前清空所有引用旧库/旧配置的内存状态。
   Future<void> _prepareForDataSwap() async {
+    _cancelSearchWork();
     _tmdbSubscription.clear();
     _configMutationEpoch++;
     _followingTimer?.cancel();
@@ -4637,6 +4640,7 @@ AiContentCompletion? aiContentCompletion,
   }
 
   void _attachSiteService() {
+    _cancelSearchWork();
     revokeProxySession();
     // 配置/注入变化后重新合并（缓存只在同一次装配内有效）。
     _effectiveConfigCache = null;
@@ -6089,6 +6093,7 @@ AiContentCompletion? aiContentCompletion,
         _detailResult = null;
         _detailError = null;
       } else {
+        _cancelSearchWork();
         _config = null;
         _siteService = null;
         _selectedSite = null;
@@ -6618,6 +6623,7 @@ AiContentCompletion? aiContentCompletion,
       totalSites: sites.length,
     );
     // 新批次从第 1 页开始：分页状态必须清空，否则会沿用上一批次的页码。
+    _cancelSearchWork(markCancelled: false);
     _searchPaging.clear();
     _activeSearch = outcome;
     _searchHistory = [
@@ -6656,9 +6662,13 @@ AiContentCompletion? aiContentCompletion,
         if (outcome.cancelled || !identical(_activeSearch, outcome)) return;
         final site = sites[index];
         try {
-          final value = await service
-              .search(site, keyword: keyword, quick: quick, useCache: true)
-              .timeout(timeout);
+          final value = await _searchRequest(
+            service,
+            site,
+            keyword: keyword,
+            quick: quick,
+            timeout: timeout,
+          );
           // 记录初始页的页数与内容指纹（上游 CollectFragment 的
           // `mPaging.recordInitial`）。批次已被取代时不得污染新批次的
           // 分页状态——`_searchPaging` 是跨批次共享的。
@@ -6685,6 +6695,7 @@ AiContentCompletion? aiContentCompletion,
             ),
           );
         } catch (error) {
+          if (outcome.cancelled || !identical(_activeSearch, outcome)) return;
           final failure = error is AppError
               ? error
               : AppError(AppErrorKind.unknown, '$error', cause: error);
@@ -6752,15 +6763,66 @@ AiContentCompletion? aiContentCompletion,
     return outcome;
   }
 
-  /// 取消当前并发搜索（§14.1「可取消搜索」）。
-  ///
-  /// 只让批次失效；在途请求由各自的 timeout 兜底，且其完成结果不再投递。
-  /// 保留 [_activeSearch] 指针，UI 才能显示“已取消”而不是退回空白提示。
+  Future<SiteCallResult<SiteResult>> _searchRequest(
+    SiteService service,
+    Site site, {
+    required String keyword,
+    required Duration timeout,
+    int page = 1,
+    bool quick = false,
+    bool cache = true,
+  }) async {
+    final cancellation = RequestCancellation();
+    _searchRequests.add(cancellation);
+    final timer = Timer(timeout, () {
+      cancellation.cancel(
+        AppError(AppErrorKind.siteTimeout, '搜索超时 site=${site.key}'),
+      );
+    });
+    try {
+      return await service.search(
+        site,
+        keyword: keyword,
+        page: page,
+        quick: quick,
+        useCache: true,
+        cache: cache,
+        cancellation: cancellation,
+      );
+    } finally {
+      timer.cancel();
+      _searchRequests.remove(cancellation);
+    }
+  }
+
+  void _cancelSearchWork({bool markCancelled = true}) {
+    final active = _activeSearch;
+    if (active != null) {
+      if (markCancelled) active.cancelled = true;
+      active.finished = true;
+      for (final entry in active.results) {
+        if (entry.loadingMore) {
+          active.replaceEntry(entry.copyWith(loadingMore: false));
+        }
+      }
+    }
+    for (final cancellation in _searchRequests.toList()) {
+      cancellation.cancel();
+    }
+    _searchRequests.clear();
+    _searchPaging.cancelPending();
+  }
+
+  /// 取消首轮和分页在途请求，保留已发布结果快照。
   void cancelSearch() {
     final active = _activeSearch;
-    if (active == null || active.finished) return;
-    active.cancelled = true;
-    active.finished = true;
+    if (active == null ||
+        (active.finished &&
+            _searchRequests.isEmpty &&
+            !_searchPaging.hasPending)) {
+      return;
+    }
+    _cancelSearchWork();
     log.info('并发搜索已取消 run=${active.runId}', scope: 'search');
     notifyListeners();
   }
@@ -6779,6 +6841,7 @@ AiContentCompletion? aiContentCompletion,
     // 递增运行号：在途批次的结果即便返回也不再投递（否则清空后又被写回）。
     _searchRunId++;
     final runId = _activeSearch?.runId;
+    _cancelSearchWork();
     _activeSearch = null;
     _searchPaging.clear();
     log.info('已清空搜索结果 run=${runId ?? "-"}', scope: 'search');
@@ -6831,24 +6894,21 @@ AiContentCompletion? aiContentCompletion,
 
     outcome.replaceEntry(entry.copyWith(loadingMore: true));
     notifyListeners();
+    if (outcome.cancelled || !identical(_activeSearch, outcome)) return false;
 
     try {
-      final value = await service
-          .search(
-            site,
-            keyword: outcome.keyword,
-            page: requestedPage,
-            useCache: true,
-            // 分页请求**不得**参与 `(关键词, 站点)` 搜索缓存：那个键只代表第 1 页。
-            // 走缓存时实测两个真缺陷：命中第 1 页缓存 → 内容指纹重复被误判
-            // 「已耗尽」；以及把第 N 页结果写进第 1 页的缓存键。
-            cache: false,
-          )
-          .timeout(timeout);
-      // 批次被取代 / 取消：丢弃结果，但**必须**把在途登记清掉，
-      // 否则该站点永远被当成「有在途请求」而无法再翻页。
+      final value = await _searchRequest(
+        service,
+        site,
+        keyword: outcome.keyword,
+        page: requestedPage,
+        timeout: timeout,
+        // 分页请求**不得**参与 `(关键词, 站点)` 搜索缓存：那个键只代表第 1 页。
+        // 走缓存时实测两个真缺陷：命中第 1 页缓存 → 内容指纹重复被误判
+        // 「已耗尽」；以及把第 N 页结果写进第 1 页的缓存键。
+        cache: false,
+      );
       if (outcome.cancelled || !identical(_activeSearch, outcome)) {
-        _searchPaging.cancelPending();
         return false;
       }
       final completion = _searchPaging.complete(
@@ -6899,6 +6959,7 @@ AiContentCompletion? aiContentCompletion,
       _notifyIfAlive();
       return true;
     } catch (error) {
+      if (outcome.cancelled || !identical(_activeSearch, outcome)) return false;
       _searchPaging.cancelPending();
       final failure = error is AppError
           ? error
@@ -10045,6 +10106,7 @@ AiContentCompletion? aiContentCompletion,
 
   @override
   void dispose() {
+    _cancelSearchWork();
     _disposed = true;
     progressRevision.dispose();
     revokeProxySession();

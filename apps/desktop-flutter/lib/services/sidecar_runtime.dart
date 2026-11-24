@@ -15,6 +15,8 @@ import '../core/cat_http.dart';
 import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
+import '../core/request_cancellation.dart';
+import 'cancellable_probe_runtime.dart';
 import 'log_service.dart';
 import 'spider_process.dart';
 import 'spider_proxy_session.dart';
@@ -22,7 +24,8 @@ import 'spider_registry.dart';
 import 'spider_router.dart';
 
 /// 本地 sidecar 支持的站点运行时。
-class SidecarRuntime implements SiteRuntime {
+class SidecarRuntime
+    implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   SidecarRuntime({
     required this.site,
     required this.spider,
@@ -73,12 +76,12 @@ class SidecarRuntime implements SiteRuntime {
   ) => runZoned(action, zoneValues: {this: owner});
 
   /// 每次调用递增，用于生成不重复的 requestId（§9.3.1）。
-  int _sequence = 0;
+  static int _sequence = 0;
 
   /// 在途调用：requestId → 主机，供取消。
   final Map<String, SpiderHost> _inflight = {};
 
-  String _nextRequestId() => '${site.key}-${++_sequence}';
+  String _nextRequestId() => '${site.key}-runtime-${++_sequence}';
 
   /// 确保运行时已启动并完成 `initialize` 握手。
   Future<SpiderHost> _ensureHost() {
@@ -139,16 +142,31 @@ class SidecarRuntime implements SiteRuntime {
     String method,
     Map<String, Object?> params, {
     VodIdentityHint? identity,
+    RequestCancellation? cancellation,
   }) async {
-    final host = await _ensureHost();
+    cancellation?.throwIfCancelled();
+    final starting = _ensureHost();
+    final host = await (cancellation == null
+        ? starting
+        : cancellation.bind(starting));
+    cancellation?.throwIfCancelled();
     final requestId = _nextRequestId();
     _inflight[requestId] = host;
+    var waiting = true;
     try {
-      final result = await host.call(
-        method,
-        params: params,
-        requestId: requestId,
-      );
+      final operation = host.call(method, params: params, requestId: requestId);
+      cancellation?.whenCancelled.then((_) {
+        if (waiting && host.abandon(requestId)) {
+          log?.info(
+            '调用已停止等待并发送取消通知 site=${site.key} method=$method id=$requestId；宿主仍运行，底层工作不保证终止',
+            scope: 'spider',
+          );
+        }
+      });
+      final result = await (cancellation == null
+          ? operation
+          : cancellation.bind(operation));
+      cancellation?.throwIfCancelled();
       return _toSiteResult(result, method: method, identity: identity);
     } on SpiderError catch (error) {
       log?.warning(
@@ -157,6 +175,7 @@ class SidecarRuntime implements SiteRuntime {
       );
       throw error.toAppError(detail: '方法=$method site=${site.key}');
     } finally {
+      waiting = false;
       _inflight.remove(requestId);
     }
   }
@@ -203,6 +222,12 @@ class SidecarRuntime implements SiteRuntime {
   Future<SiteResult> home(Site site) => _invoke(SpiderMethod.home, const {});
 
   @override
+  Future<SiteResult> homeCancellable(
+    Site site, {
+    required RequestCancellation cancellation,
+  }) => _invoke(SpiderMethod.home, const {}, cancellation: cancellation);
+
+  @override
   Future<SiteResult> category(
     Site site, {
     required String typeId,
@@ -232,6 +257,32 @@ class SidecarRuntime implements SiteRuntime {
     'page': page,
     'quick': quick,
   });
+
+  @override
+  Future<SiteResult> searchCancellable(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+    required RequestCancellation cancellation,
+  }) => _invoke(SpiderMethod.search, {
+    'keyword': keyword,
+    'page': page,
+    'quick': quick,
+  }, cancellation: cancellation);
+
+  @override
+  Future<SiteResult> categoryCancellable(
+    Site site, {
+    required String typeId,
+    required int page,
+    Map<String, String> filters = const {},
+    required RequestCancellation cancellation,
+  }) => _invoke(SpiderMethod.category, {
+    'id': typeId,
+    'page': page,
+    'filters': filters,
+  }, cancellation: cancellation);
 
   @override
   Future<SiteResult> play(
@@ -284,7 +335,8 @@ class SidecarRuntime implements SiteRuntime {
 }
 
 /// 把 `webhtv-cat-http-v1` 接到站点运行时接口（§8.1、§9.4）。
-class CatHttpSiteRuntime implements SiteRuntime {
+class CatHttpSiteRuntime
+    implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   CatHttpSiteRuntime({
     required this.client,
     required this.siteKey,
@@ -311,7 +363,9 @@ class CatHttpSiteRuntime implements SiteRuntime {
     Map<String, String> filters = const {},
     String? flag,
     VodIdentityHint? identity,
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     final builder = CatHttpRequestBuilder(
       api: site.api,
       globalHeaders: globalHeaders,
@@ -337,7 +391,12 @@ class CatHttpSiteRuntime implements SiteRuntime {
       }
     }
     try {
-      return await client.call(call, siteKey: site.key, identity: identity);
+      return await client.call(
+        call,
+        siteKey: site.key,
+        identity: identity,
+        cancellation: cancellation,
+      );
     } on SpiderError catch (error) {
       throw error.toAppError(detail: 'route=$route site=${site.key}');
     }
@@ -345,6 +404,28 @@ class CatHttpSiteRuntime implements SiteRuntime {
 
   @override
   Future<SiteResult> home(Site site) => _call(site, CatHttpRoute.home);
+
+  @override
+  Future<SiteResult> homeCancellable(
+    Site site, {
+    required RequestCancellation cancellation,
+  }) => _call(site, CatHttpRoute.home, cancellation: cancellation);
+
+  @override
+  Future<SiteResult> categoryCancellable(
+    Site site, {
+    required String typeId,
+    required int page,
+    Map<String, String> filters = const {},
+    required RequestCancellation cancellation,
+  }) => _call(
+    site,
+    CatHttpRoute.category,
+    typeId: typeId,
+    page: page,
+    filters: filters,
+    cancellation: cancellation,
+  );
 
   @override
   Future<SiteResult> category(
@@ -373,11 +454,21 @@ class CatHttpSiteRuntime implements SiteRuntime {
     required String keyword,
     int page = 1,
     bool quick = false,
+  }) => _call(site, CatHttpRoute.search, keyword: keyword, page: page);
+
+  @override
+  Future<SiteResult> searchCancellable(
+    Site site, {
+    required String keyword,
+    int page = 1,
+    bool quick = false,
+    required RequestCancellation cancellation,
   }) => _call(
     site,
     CatHttpRoute.search,
     keyword: keyword,
     page: page,
+    cancellation: cancellation,
   );
 
   @override
