@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/csp_jar_probe.dart';
 import '../services/unidbg_runtime.dart';
 import '../state/app_state.dart';
 import 'settings_layout.dart';
+import 'shell_unpack_dialogs.dart';
 import 'tokens.dart';
 
 /// 加固壳解包运行时（unidbg 0.9.9）的设置页。
@@ -25,8 +28,15 @@ class _ShellRuntimePageState extends State<ShellRuntimePage> {
   bool _busy = false;
   String _note = '';
   String? _message;
+  StreamController<ShellUnpackTick>? _probeTicks;
 
   AppState get _state => widget.state;
+
+  @override
+  void dispose() {
+    unawaited(_probeTicks?.close());
+    super.dispose();
+  }
 
   Future<void> _install() async {
     setState(() {
@@ -70,21 +80,53 @@ class _ShellRuntimePageState extends State<ShellRuntimePage> {
   }
 
   Future<void> _probe() async {
+    if (_busy) return;
+    final ticks = StreamController<ShellUnpackTick>();
+    _probeTicks = ticks;
     setState(() {
       _busy = true;
       _note = '正在重新探测配置里的 jar…';
       _message = null;
     });
-    final report = await _state.probeCspJars();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _note = '';
-      _message = report.isEmpty
-          ? '没有需要探测的 csp_* 站点。'
-          : '探测完成：解包装好 ${report.unpacked} 个、需运行时 ${report.needsShellRuntime} 个、'
-                '解包失败 ${report.unpackFailed} 个、直接装入 ${report.installed} 个。';
-    });
+    unawaited(
+      showShellUnpackProgress(
+        context,
+        jarCount: 0,
+        ticks: ticks.stream,
+        title: '正在重新探测 jar',
+        failureTitle: '重新探测失败',
+        itemLabel: '站点',
+      ),
+    );
+    try {
+      final report = await _state.probeCspJars(
+        onProgress: (tick) {
+          if (mounted && !ticks.isClosed) ticks.add(tick);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _message = report.isEmpty
+            ? '没有需要探测的 csp_* 站点。'
+            : '探测完成：解包装好 ${report.unpacked} 个、需运行时 ${report.needsShellRuntime} 个、'
+                  '解包失败 ${report.unpackFailed} 个、直接装入 ${report.installed} 个、失败 ${report.failed} 个。';
+      });
+    } catch (_) {
+      const message = '重新探测失败，请在日志页查看脱敏后的诊断并重试。';
+      if (mounted) {
+        setState(() => _message = message);
+        if (!ticks.isClosed) ticks.addError(message);
+      }
+    } finally {
+      if (!ticks.isClosed) unawaited(ticks.close());
+      if (identical(_probeTicks, ticks)) _probeTicks = null;
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _note = '';
+        });
+      }
+    }
   }
 
   @override
@@ -106,7 +148,9 @@ class _ShellRuntimePageState extends State<ShellRuntimePage> {
               children: [
                 ListTile(
                   leading: Icon(
-                    installed ? Icons.check_circle_outline : Icons.cloud_download_outlined,
+                    installed
+                        ? Icons.check_circle_outline
+                        : Icons.cloud_download_outlined,
                   ),
                   title: Text(installed ? '已安装' : '未安装'),
                   subtitle: Text(

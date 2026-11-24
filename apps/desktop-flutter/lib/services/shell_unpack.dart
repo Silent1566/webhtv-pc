@@ -70,11 +70,13 @@ class ShellUnpackInvocation {
     required this.arguments,
     required this.timeout,
     this.onStderrLine,
+    this.cancelled,
   });
 
   final String executable;
   final List<String> arguments;
   final Duration timeout;
+  final Future<void>? cancelled;
 
   /// 子进程 stderr 的**逐行**入口：真进程边读边回调，注入的假 runner 直接调它。
   ///
@@ -98,8 +100,9 @@ class ShellUnpackOutput {
 }
 
 /// 进程抽象：缺省真的 `Process.start`；单测注入假实现（不联网、不起 java）。
-typedef ShellUnpackRunner =
-    Future<ShellUnpackOutput> Function(ShellUnpackInvocation invocation);
+typedef ShellUnpackRunner = Future<ShellUnpackOutput> Function(
+  ShellUnpackInvocation invocation,
+);
 
 /// 加固壳解包服务（无状态；同一壳 jar 的重复解包由调用方按 SHA-256 缓存）。
 class ShellUnpack {
@@ -181,16 +184,25 @@ class ShellUnpack {
     JavaRuntimeProbe? javaProbe,
     ShellUnpackRunner? runner,
     void Function(ShellUnpackProgress)? onProgress,
+    Future<void>? cancelled,
   }) async {
     // 进度解析只影响「看得见」，不影响「结论」：坏行、乱序、回调抛异常都在 [_StderrTap] 内部消化。
-    final tap = _StderrTap(onProgress);
+    final clock = Stopwatch()..start();
+    final tap = _StderrTap((progress) {
+      log?.info(
+        '加固壳解包阶段 stage=${progress.stage} elapsed=${clock.elapsedMilliseconds}ms',
+        scope: 'spider',
+      );
+      onProgress?.call(progress);
+    });
     try {
       final classpath = (unidbgClasspath ?? '').trim();
       if (classpath.isEmpty) {
         return <String, Object?>{
           'ok': false,
           'stage': stageEmulator,
-          'message': '未安装 ARM 解包运行时（unidbg）：无法启动壳的模拟器进程，'
+          'message':
+              '未安装 ARM 解包运行时（unidbg）：无法启动壳的模拟器进程，'
               '请先下载解包运行时。',
         };
       }
@@ -201,8 +213,7 @@ class ShellUnpack {
         return <String, Object?>{
           'ok': false,
           'stage': stageEmulator,
-          'message':
-              '未找到可用 Java 运行时（需要 JDK/JRE 17+）：${probe.issue ?? '原因未知'}',
+          'message': '未找到可用 Java 运行时（需要 JDK/JRE 17+）：${probe.issue ?? '原因未知'}',
         };
       }
 
@@ -215,7 +226,11 @@ class ShellUnpack {
           'message': '未找到 spider-host-jvm/host.jar（无法定位 shell-unpack/ShellUnpack.java）',
         };
       }
-      final cli = p.join(p.dirname(hostJar), 'shell-unpack', 'ShellUnpack.java');
+      final cli = p.join(
+        p.dirname(hostJar),
+        'shell-unpack',
+        'ShellUnpack.java',
+      );
       if (!File(cli).existsSync()) {
         return <String, Object?>{
           'ok': false,
@@ -242,11 +257,15 @@ class ShellUnpack {
         ],
         timeout: timeout,
         onStderrLine: tap.addLine,
+        cancelled: cancelled,
       );
 
-      final output = await (runner ?? _runProcess)(invocation);
+      final output = await (runner ?? runProcess)(invocation);
       // 尾部优先来自「边读边收」的 tap；假 runner 只填 stderr 字段时照样兜住。
-      final stderrText = _suffix('${tap.tail}${output.stderr}', stderrTailChars);
+      final stderrText = _suffix(
+        '${tap.tail}${output.stderr}',
+        stderrTailChars,
+      );
       if (stderrText.trim().isNotEmpty) {
         log?.info(
           '加固壳解包日志（exit=${output.exitCode}，stderr 尾 $stderrTailChars 字）：'
@@ -282,39 +301,50 @@ class ShellUnpack {
       };
     } catch (error) {
       // 注入点的最终兜底：异常一律转成结论，不让导入因解包崩掉。
-      return <String, Object?>{'ok': false, 'stage': stageInvoke, 'message': '$error'};
+      return <String, Object?>{
+        'ok': false,
+        'stage': stageInvoke,
+        'message': '$error',
+      };
     }
   }
 
   /// 缺省进程实现：真的起 java，超时则杀进程并让 [run] 统一转成结论。
-  static Future<ShellUnpackOutput> _runProcess(
+  static Future<ShellUnpackOutput> runProcess(
     ShellUnpackInvocation invocation,
   ) async {
     final process = await Process.start(
       invocation.executable,
       invocation.arguments,
     );
-    // stderr 与 stdout 必须**同时**读：任一管道写满就会把子进程堵死，
-    // 表现为「看起来在解包、其实谁也没动」。stderr 逐行回调出去，进度才不必等进程结束。
+    final stdoutDone = process.stdout
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join();
     final stderrDone = _pumpStderr(process.stderr, invocation.onStderrLine);
+    final exitDone = process.exitCode;
     try {
-      final stdoutText = await process.stdout
-          .transform(utf8.decoder)
-          .join()
-          .timeout(invocation.timeout);
-      final exitCode = await process.exitCode.timeout(
-        const Duration(seconds: 10),
-      );
-      await stderrDone.timeout(const Duration(seconds: 5), onTimeout: () {});
+      final completed = Future.wait<Object>([stdoutDone, exitDone]);
+      final cancelled = invocation.cancelled;
+      final result =
+          await (cancelled == null
+                  ? completed
+                  : Future.any<List<Object>>([
+                      completed,
+                      cancelled.then<List<Object>>(
+                        (_) => throw StateError('解包已取消'),
+                      ),
+                    ]))
+              .timeout(invocation.timeout);
+      await stderrDone;
       return ShellUnpackOutput(
-        stdout: stdoutText,
-        // stderr 已经逐行交给 onStderrLine（尾部由 run() 自己收），这里不再重复交一份全文，
-        // 否则同一批日志会被记两遍。
+        stdout: result[0] as String,
         stderr: '',
-        exitCode: exitCode,
+        exitCode: result[1] as int,
       );
-    } on TimeoutException {
+    } catch (_) {
       process.kill();
+      await exitDone.timeout(const Duration(seconds: 5), onTimeout: () => -1);
+      await Future.wait<Object?>([stdoutDone, stderrDone]).timeout(const Duration(seconds: 2), onTimeout: () => []);
       rethrow;
     }
   }
@@ -330,7 +360,9 @@ class ShellUnpack {
     try {
       // allowMalformed：壳/unidbg 偶尔会往 stderr 吐非 UTF-8 字节，按默认的严格解码
       // 会在那一块直接抛异常、把后面的进度与日志全带走——解码错字总好过看不见进度。
-      await for (final chunk in stream.transform(const Utf8Decoder(allowMalformed: true))) {
+      await for (final chunk in stream.transform(
+        const Utf8Decoder(allowMalformed: true),
+      )) {
         // 没人关心进度时也要把管道读空，否则子进程会因写满 stderr 而卡死。
         if (onLine == null) continue;
         pending += chunk;

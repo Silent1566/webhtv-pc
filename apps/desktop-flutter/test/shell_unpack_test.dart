@@ -48,10 +48,7 @@ void main() {
 
   /// 假 java：带一个 JVM 自有参数，用来断言它排在 `-cp` 之前。
   final javaProbe = JavaRuntimeProbe(
-    command: const SidecarCommand(
-      executable: 'java',
-      arguments: ['-Xmx256m'],
-    ),
+    command: const SidecarCommand(executable: 'java', arguments: ['-Xmx256m']),
     major: 21,
     hasCompiler: true,
   );
@@ -73,6 +70,61 @@ void main() {
     onProgress: onProgress,
   );
 
+  test('real timeout drains output and terminates child', () async {
+    final pid = Completer<int>();
+    final invocation = ShellUnpackInvocation(
+      executable: 'powershell.exe',
+      arguments: [
+        '-NoProfile',
+        '-Command',
+        r'[Console]::Error.WriteLine($PID); [Console]::In.ReadToEnd()',
+      ],
+      timeout: const Duration(seconds: 2),
+      onStderrLine: (line) {
+        final value = int.tryParse(line.trim());
+        if (value != null && !pid.isCompleted) pid.complete(value);
+      },
+    );
+    await expectLater(
+      ShellUnpack.runProcess(invocation),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(pid.isCompleted, isTrue);
+    expect(
+      Process.killPid(await pid.future),
+      isFalse,
+      reason: 'timeout returns only after child exit',
+    );
+  }, skip: !Platform.isWindows);
+
+  test('real cancellation drains output and terminates child', () async {
+    final pid = Completer<int>();
+    final cancel = Completer<void>();
+    final invocation = ShellUnpackInvocation(
+      executable: 'powershell.exe',
+      arguments: [
+        '-NoProfile',
+        '-Command',
+        r'[Console]::Error.WriteLine($PID); [Console]::In.ReadToEnd()',
+      ],
+      timeout: const Duration(seconds: 10),
+      cancelled: cancel.future,
+      onStderrLine: (line) {
+        final value = int.tryParse(line.trim());
+        if (value != null && !pid.isCompleted) {
+          pid.complete(value);
+          cancel.complete();
+        }
+      },
+    );
+    await expectLater(
+      ShellUnpack.runProcess(invocation),
+      throwsA(isA<StateError>()),
+    );
+    expect(pid.isCompleted, isTrue);
+    expect(Process.killPid(await pid.future), isFalse);
+  }, skip: !Platform.isWindows);
+
   /// 假 runner 的「stderr 推送器」：真进程逐行回调，假进程直接调同一个入口，
   /// 所以进度解析与 ETA 的数据流都能在不启 java 的前提下被验证。
   ShellUnpackRunner emitting(
@@ -91,8 +143,7 @@ void main() {
     final result = await runWith((invocation) async {
       seen = invocation;
       return const ShellUnpackOutput(
-        stdout:
-            '{"ok":true,"payload":"payload.jar","sha256":"abc","bytes":12,"recipe":"wex","asset":"assets/wexshinidie.guard","elapsedMs":7}',
+        stdout: '{"ok":true,"payload":"payload.jar","sha256":"abc","bytes":12,"recipe":"wex","asset":"assets/wexshinidie.guard","elapsedMs":7}',
         stderr: 'unidbg 启动日志',
         exitCode: 0,
       );
@@ -121,8 +172,7 @@ void main() {
   test('失败原样保留 stage：CLI 说卡在哪就报哪一阶段', () async {
     final result = await runWith(
       (_) async => const ShellUnpackOutput(
-        stdout:
-            '{"ok":false,"stage":"native-注册","message":"未找到 libwex.so"}',
+        stdout: '{"ok":false,"stage":"native-注册","message":"未找到 libwex.so"}',
         stderr: '',
         exitCode: 1,
       ),
@@ -163,8 +213,7 @@ void main() {
   test('只看最后一行 JSON（前面的噪音行不影响结论）', () async {
     final result = await runWith(
       (_) async => const ShellUnpackOutput(
-        stdout:
-            'unidbg: loading libc\n{"ok":false,"stage":"payload-落盘","message":"磁盘满"}\n',
+        stdout: 'unidbg: loading libc\n{"ok":false,"stage":"payload-落盘","message":"磁盘满"}\n',
         stderr: '',
         exitCode: 1,
       ),
@@ -261,7 +310,9 @@ void main() {
     Future<ShellUnpackOutput> runner(ShellUnpackInvocation invocation) async {
       invocation.onStderrLine?.call('unidbg: loading libc');
       invocation.onStderrLine?.call('[progress] 0/7 shell-读取');
-      invocation.onStderrLine?.call('[shell-unpack] RegisterNatives proxyInvoke');
+      invocation.onStderrLine?.call(
+        '[shell-unpack] RegisterNatives proxyInvoke',
+      );
       invocation.onStderrLine?.call('[progress] 2/7 emulator-启动');
       return const ShellUnpackOutput(
         stdout: '{"ok":true,"bytes":1}',
@@ -269,6 +320,7 @@ void main() {
         exitCode: 0,
       );
     }
+
     final result = await runWith(runner, onProgress: events.add);
 
     expect(result['ok'], isTrue);
@@ -283,10 +335,7 @@ void main() {
   test('乱序进度行原样上报：解析层不做单调裁剪（平滑留给 UI/ETA）', () async {
     final events = <ShellUnpackProgress>[];
     final result = await runWith(
-      emitting([
-        '[progress] 3/7 native-注册',
-        '[progress] 1/7 recipe-识别',
-      ]),
+      emitting(['[progress] 3/7 native-注册', '[progress] 1/7 recipe-识别']),
       onProgress: events.add,
     );
 
@@ -351,10 +400,7 @@ void main() {
   test('进度回调自己抛异常也不影响 run()（解析失败不改结论）', () async {
     var calls = 0;
     final result = await runWith(
-      emitting([
-        '[progress] 0/7 shell-读取',
-        '[progress] 1/7 recipe-识别',
-      ]),
+      emitting(['[progress] 0/7 shell-读取', '[progress] 1/7 recipe-识别']),
       onProgress: (_) {
         calls++;
         throw StateError('UI 侧炸了');
@@ -370,10 +416,7 @@ void main() {
     var events = <ShellUnpackProgress>[];
     final result = await runWith(
       emitting(
-        [
-          '[progress] 0/7 shell-读取',
-          '[progress] 2/7 emulator-启动',
-        ],
+        ['[progress] 0/7 shell-读取', '[progress] 2/7 emulator-启动'],
         stdout: '{"ok":false,"stage":"emulator-启动","message":"没有 unidbg"}',
         exitCode: 1,
       ),

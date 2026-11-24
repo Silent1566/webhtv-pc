@@ -851,6 +851,10 @@ class SpiderRouter {
       manifestPath: p.join(binding.directoryFor(site.key), 'manifest.json'),
       rootDir: binding.directoryFor(site.key),
       entryPath: entryPath,
+      // csp 根是 <spidersroot>/csp，账号文件与 manifest 扫描结果同根。
+      accountStorePath: p.normalize(
+        p.absolute(p.join(p.dirname(binding.root), 'accounts.json')),
+      ),
     );
   }
 

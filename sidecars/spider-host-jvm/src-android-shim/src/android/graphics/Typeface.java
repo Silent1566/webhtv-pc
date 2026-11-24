@@ -1,10 +1,18 @@
 package android.graphics;
 
-// 为什么是空壳：现有垫片只把它当作 Paint.mTypeface 的静态类型来声明字段与参数，
-// 一个成员都没被调用；补齐常量/工厂只会引入需要长期维护的假值。
-// 真机上构造器是包私有的，这里放宽成 public，保证即便有人 new 也不会抛。
-public class Typeface {
+import java.awt.Font;
 
-    public Typeface() {
-    }
+/** Fixed Java logical families; never probes installed font names. */
+public class Typeface {
+    public static final Typeface DEFAULT = new Typeface(Font.SANS_SERIF,Font.PLAIN);
+    public static final Typeface DEFAULT_BOLD = new Typeface(Font.SANS_SERIF,Font.BOLD);
+    public static final Typeface SANS_SERIF = DEFAULT;
+    public static final Typeface SERIF = new Typeface(Font.SERIF,Font.PLAIN);
+    public static final Typeface MONOSPACE = new Typeface(Font.MONOSPACED,Font.PLAIN);
+    private final String family;
+    private final int style;
+    public Typeface() { this(Font.SANS_SERIF,Font.PLAIN); }
+    private Typeface(String family,int style) { this.family=family; this.style=style & 3; }
+    public static Typeface create(Typeface family,int style) { return new Typeface(family==null?Font.SANS_SERIF:family.family,style); }
+    Font font(float size) { return new Font(family,style,1).deriveFont(Math.max(0.01f,size)); }
 }

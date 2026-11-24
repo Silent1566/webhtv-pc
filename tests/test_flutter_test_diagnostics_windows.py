@@ -106,7 +106,10 @@ class WindowsDiagnosticWorkflowTests(unittest.TestCase):
             commands[-2:],
         )
         self.assertNotIn("continue-on-error", unit_tests)
-        self.assertEqual("30", unit_tests["timeout-minutes"])
+        # 预算要跟实测走：2026-11-24 的 beta 绿跑里 Windows 全量单测 29.3 分钟，
+        # 30 分钟上限只剩 0.7 分钟余量，新增任何用例都会直接超时。这条断言仍保持
+        # 精确值（改动必须同时改这里），只是把值调到按实测留足余量的 45 分钟。
+        self.assertEqual("45", unit_tests["timeout-minutes"])
 
     def test_diagnostics_upload_even_on_failure_without_changing_test_outcome(self):
         uploads = [step for step in self.steps

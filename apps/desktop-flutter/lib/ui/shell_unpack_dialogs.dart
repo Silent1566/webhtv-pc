@@ -9,6 +9,9 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../core/protocol.dart' show redactLogText;
+
 import 'package:webhtv_pc/services/csp_jar_probe.dart' show ShellUnpackTick;
 
 /// 一个待解包 jar 的展示条目（探测结果 → UI 的桥）。
@@ -248,6 +251,9 @@ Future<void> showShellUnpackProgress(
   BuildContext context, {
   required int jarCount,
   required Stream<ShellUnpackTick> ticks,
+  String title = '正在解包加固壳',
+  String failureTitle = '加固壳解包失败',
+  String itemLabel = '壳',
 }) {
   return showDialog<void>(
     context: context,
@@ -255,17 +261,20 @@ Future<void> showShellUnpackProgress(
     builder: (context) => ShellUnpackProgressDialog(
       jarCount: jarCount,
       ticks: ticks.map(_tickViewOf),
+      title: title,
+      failureTitle: failureTitle,
+      itemLabel: itemLabel,
     ),
   );
 }
 
 ShellUnpackTickView _tickViewOf(ShellUnpackTick tick) => ShellUnpackTickView(
-      jarIndex: tick.jarIndex,
-      jarCount: tick.jarCount,
-      stage: tick.stage,
-      fraction: tick.fraction,
-      eta: tick.eta,
-    );
+  jarIndex: tick.jarIndex,
+  jarCount: tick.jarCount,
+  stage: tick.stage,
+  fraction: tick.fraction,
+  eta: tick.eta,
+);
 
 /// 进度对话框本体（吃展示模型，便于单独渲染验证）。
 class ShellUnpackProgressDialog extends StatefulWidget {
@@ -273,10 +282,16 @@ class ShellUnpackProgressDialog extends StatefulWidget {
     super.key,
     required this.jarCount,
     required this.ticks,
+    this.title = '正在解包加固壳',
+    this.failureTitle = '加固壳解包失败',
+    this.itemLabel = '壳',
   });
 
   final int jarCount;
   final Stream<ShellUnpackTickView> ticks;
+  final String title;
+  final String failureTitle;
+  final String itemLabel;
 
   @override
   State<ShellUnpackProgressDialog> createState() =>
@@ -288,24 +303,38 @@ class _ShellUnpackProgressDialogState extends State<ShellUnpackProgressDialog> {
   ShellUnpackTickView? _tick;
   bool _done = false;
   String? _failure;
+  Timer? _elapsedTimer;
+  Duration _elapsed = Duration.zero;
 
   @override
   void initState() {
     super.initState();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) setState(() => _elapsed = Duration(seconds: timer.tick));
+    });
     _subscription = widget.ticks.listen(
-      (tick) => setState(() => _tick = tick),
-      onError: (Object error) => setState(() => _failure = '$error'),
-      onDone: () => setState(() => _done = true),
+      (tick) {
+        if (mounted) setState(() => _tick = tick);
+      },
+      onError: (Object error) {
+        _elapsedTimer?.cancel();
+        if (mounted) setState(() => _failure = redactProgressText('$error'));
+      },
+      onDone: () {
+        _elapsedTimer?.cancel();
+        if (mounted) setState(() => _done = true);
+      },
     );
   }
 
   @override
   void dispose() {
+    _elapsedTimer?.cancel();
     unawaited(_subscription?.cancel());
     super.dispose();
   }
 
-  String get _stageLabel => _tick?.stage ?? '准备中';
+  String get _stageLabel => redactProgressText(_tick?.stage ?? '准备中');
 
   @override
   Widget build(BuildContext context) {
@@ -318,70 +347,88 @@ class _ShellUnpackProgressDialogState extends State<ShellUnpackProgressDialog> {
     final percent = (fraction * 100).round();
     final failed = _failure != null;
     final running = !failed && !_done;
-    return AlertDialog(
-      key: const ValueKey('shell-unpack-progress'),
-      title: Text(failed ? '加固壳解包失败' : '正在解包加固壳'),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              tick == null
-                  ? '第 1/$jarCount 个壳'
-                  : '第 ${tick.jarIndex + 1}/$jarCount 个壳',
-              key: const ValueKey('shell-unpack-progress-counter'),
-              style: theme.textTheme.titleSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '阶段：$_stageLabel',
-              key: const ValueKey('shell-unpack-progress-stage'),
-            ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              key: const ValueKey('shell-unpack-progress-bar'),
-              value: running && fraction == 0 ? null : fraction,
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('$percent%'),
-                Text(
-                  _etaLabel(tick?.eta),
-                  key: const ValueKey('shell-unpack-progress-eta'),
-                ),
-              ],
-            ),
-            if (failed) ...[
-              const SizedBox(height: 12),
+    return PopScope(
+      canPop: !running,
+      child: AlertDialog(
+        key: const ValueKey('shell-unpack-progress'),
+        title: Text(failed ? widget.failureTitle : widget.title),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text(
-                '失败于阶段「$_stageLabel」：$_failure',
-                key: const ValueKey('shell-unpack-progress-failure'),
+                jarCount <= 0
+                    ? '正在确认 jar 数量…'
+                    : '第 ${(tick?.jarIndex ?? 0) + 1}/$jarCount 个${widget.itemLabel}',
+                key: const ValueKey('shell-unpack-progress-counter'),
+                style: theme.textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '阶段：$_stageLabel',
+                key: const ValueKey('shell-unpack-progress-stage'),
+              ),
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                key: const ValueKey('shell-unpack-progress-bar'),
+                value: running && fraction == 0 ? null : fraction,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('$percent%'),
+                  Text(
+                    _etaLabel(_done && !failed ? Duration.zero : tick?.eta),
+                    key: const ValueKey('shell-unpack-progress-eta'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '已用时：${_durationLabel(_elapsed)}',
+                key: const ValueKey('shell-unpack-progress-elapsed'),
                 style: theme.textTheme.bodySmall,
               ),
+              if (failed) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '失败于阶段「$_stageLabel」：$_failure',
+                  key: const ValueKey('shell-unpack-progress-failure'),
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
             ],
-          ],
-        ),
-      ),
-      actions: [
-        if (!running)
-          TextButton(
-            key: const ValueKey('shell-unpack-progress-close'),
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(failed ? '关闭' : '完成'),
           ),
-      ],
+        ),
+        actions: [
+          if (!running)
+            TextButton(
+              key: const ValueKey('shell-unpack-progress-close'),
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(failed ? '关闭' : '完成'),
+            ),
+        ],
+      ),
     );
   }
 }
 
+/// 进度和结论只展示诊断标签，不展示地址、凭据或签名。
+String redactProgressText(String text) => redactLogText(
+  text.replaceAll(RegExp(r'https?://[^\s]+', caseSensitive: false), '[地址已隐藏]'),
+);
+
 String _etaLabel(Duration? eta) {
   if (eta == null) return '预计剩余：计算中…';
-  final total = eta.inSeconds;
+  return '预计剩余：${_durationLabel(eta)}';
+}
+
+String _durationLabel(Duration duration) {
+  final total = duration.inSeconds;
   final minutes = (total ~/ 60).toString().padLeft(2, '0');
   final seconds = (total % 60).toString().padLeft(2, '0');
-  return '预计剩余：$minutes:$seconds';
+  return '$minutes:$seconds';
 }

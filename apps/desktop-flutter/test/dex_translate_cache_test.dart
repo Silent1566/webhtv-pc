@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/services/dex_translate.dart';
 
@@ -25,7 +26,7 @@ void main() {
   });
 
   final sha = 'a' * 64;
-  final bundleSha = 'b' * 64;
+  final bundleSha = crypto.sha256.convert(const [0x50, 0x4b, 3, 4]).toString();
 
   Map<String, Object?> record({
     int classCount = 1227,
@@ -47,7 +48,8 @@ void main() {
   }) {
     final dir = Directory(p.join(root.path, sha))..createSync(recursive: true);
     if (withJar) {
-      File(p.join(dir.path, 'classes.jar')).writeAsBytesSync(const [0x50, 0x4b, 3, 4]);
+      File(p.join(dir.path, 'classes.jar'))
+          .writeAsBytesSync(const [0x50, 0x4b, 3, 4]);
     }
     File(p.join(dir.path, 'intake-dex.json')).writeAsStringSync(
       recordJson ?? jsonEncode(data ?? record()),
@@ -75,7 +77,8 @@ void main() {
     expect(File(jar).existsSync(), isTrue);
     expect(reused['bundle'], jar);
     final written = jsonDecode(
-      File(p.join(target.path, 'dexBundles', 'intake-dex.json')).readAsStringSync(),
+      File(p.join(target.path, 'dexBundles', 'intake-dex.json'))
+          .readAsStringSync(),
     ) as Map<String, Object?>;
     expect(written['bundle'], jar);
     expect(written['cached'], isTrue);
@@ -98,7 +101,11 @@ void main() {
     final target = site('site-a');
 
     expect(
-      DexTranslate.copySharedBundle(sharedDir: shared, sha: sha, siteDir: target.path),
+      DexTranslate.copySharedBundle(
+        sharedDir: shared,
+        sha: sha,
+        siteDir: target.path,
+      ),
       isNull,
     );
     expect(
@@ -112,6 +119,34 @@ void main() {
       reason: '缓存准入是跳过，不是删用户缓存',
     );
   });
+
+  for (final version in [4, 5]) {
+    test('v$version 共享产物必须重新转译，原始缓存文件和记录保留', () {
+      final old = record()..['repairVersion'] = version;
+      final shared = seed(data: old);
+      final originalJar = File(p.join(shared, sha, 'classes.jar'));
+      final originalRecord = File(p.join(shared, sha, 'intake-dex.json'));
+      final jarBytes = originalJar.readAsBytesSync();
+      final recordText = originalRecord.readAsStringSync();
+      final target = site('site-v$version');
+
+      expect(DexTranslate.recordUsable(originalRecord.path), isFalse);
+      expect(
+        DexTranslate.copySharedBundle(
+          sharedDir: shared,
+          sha: sha,
+          siteDir: target.path,
+        ),
+        isNull,
+      );
+      expect(
+        File(p.join(target.path, 'dexBundles', 'classes.jar')).existsSync(),
+        isFalse,
+      );
+      expect(originalJar.readAsBytesSync(), jarBytes);
+      expect(originalRecord.readAsStringSync(), recordText);
+    });
+  }
 
   test('缺失 repairVersion / 类数为 0 / 缺 SHA / 畸形 JSON 都不被复用', () {
     final cases = <String, String>{
@@ -127,7 +162,11 @@ void main() {
       final shared = seed(recordJson: entry.value);
       final target = site('site-${index++}');
       expect(
-        DexTranslate.copySharedBundle(sharedDir: shared, sha: sha, siteDir: target.path),
+        DexTranslate.copySharedBundle(
+          sharedDir: shared,
+          sha: sha,
+          siteDir: target.path,
+        ),
         isNull,
         reason: entry.key,
       );
@@ -149,7 +188,35 @@ void main() {
   test('recordUsable 只看口径与自洽性，不看文件是否存在', () {
     final good = File(p.join(seed(), sha, 'intake-dex.json')).path;
     expect(DexTranslate.recordUsable(good), isTrue);
-    expect(DexTranslate.recordUsable(p.join(root.path, 'missing.json')), isFalse);
-    expect(DexTranslate.repairVersion, 4);
+    expect(
+      DexTranslate.recordUsable(p.join(root.path, 'missing.json')),
+      isFalse,
+    );
+    expect(DexTranslate.repairVersion, 6);
+  });
+
+  test('shared record must belong to requested source SHA', () {
+    final shared = seed(data: {...record(), 'sourceSha256': 'c' * 64});
+    expect(
+      DexTranslate.copySharedBundle(
+        sharedDir: shared,
+        sha: sha,
+        siteDir: site('mismatch').path,
+      ),
+      isNull,
+    );
+  });
+
+  test('shared bundle hash must match actual bytes', () {
+    final shared = seed();
+    File(p.join(shared, sha, 'classes.jar')).writeAsBytesSync([9]);
+    expect(
+      DexTranslate.copySharedBundle(
+        sharedDir: shared,
+        sha: sha,
+        siteDir: site('corrupt').path,
+      ),
+      isNull,
+    );
   });
 }

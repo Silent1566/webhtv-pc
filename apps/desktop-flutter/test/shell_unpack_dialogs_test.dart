@@ -292,6 +292,47 @@ void main() {
       expect(find.byKey(_progressKey), findsNothing);
     });
 
+    for (final previousEta in <Duration?>[null, const Duration(seconds: 83)]) {
+      testWidgets('探测成功结束清零剩余时间（${previousEta == null ? "未知估计" : "旧估计"}）', (
+        tester,
+      ) async {
+        final ticks = StreamController<ShellUnpackTick>();
+        addTearDown(() {
+          if (!ticks.isClosed) ticks.close();
+        });
+        await tester.pumpWidget(
+          _host(
+            (context) => showShellUnpackProgress(
+              context,
+              jarCount: 95,
+              ticks: ticks.stream,
+            ),
+          ),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pump();
+        ticks.add(
+          ShellUnpackTick(
+            jarIndex: 94,
+            jarCount: 95,
+            jarUrl: 'https://example.test/source.jar',
+            fraction: 1,
+            stage: '探测-完成',
+            eta: previousEta,
+          ),
+        );
+        await tester.pump();
+        await ticks.close();
+        await tester.pump();
+        expect(find.text('100%'), findsOneWidget);
+        expect(find.byKey(_progressCloseKey), findsOneWidget);
+        expect(find.text('预计剩余：00:00'), findsOneWidget);
+        expect(find.text('预计剩余：计算中…'), findsNothing);
+        await tester.tap(find.byKey(_progressCloseKey));
+        await tester.pumpAndSettle();
+      });
+    }
+
     testWidgets('失败停在失败态，显示阶段与原因且不会被静默关掉', (tester) async {
       final ticks = StreamController<ShellUnpackTick>();
       addTearDown(() {
@@ -338,11 +379,7 @@ void main() {
     test('同一站点重复登记只留一个', () {
       final pending = PendingShellUnpack();
       expect(pending.stageSite('csp_AT'), isTrue);
-      expect(
-        pending.stageSite('csp_AT'),
-        isFalse,
-        reason: '幂等：不叠加第二个弹框',
-      );
+      expect(pending.stageSite('csp_AT'), isFalse, reason: '幂等：不叠加第二个弹框');
       expect(pending.siteKey, 'csp_AT');
       expect(pending.takeSite(), 'csp_AT');
       expect(pending.siteKey, isNull);

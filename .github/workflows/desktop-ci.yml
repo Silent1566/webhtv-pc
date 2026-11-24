@@ -180,7 +180,11 @@ jobs:
       - name: Unit tests
         working-directory: apps/desktop-flutter
         shell: pwsh
-        timeout-minutes: 30
+        # 实测（2026-11-24 的 beta 绿跑）Windows 全量单测 29.3 分钟，离 30 分钟上限只剩
+        # 0.7 分钟；再新增任何用例都会直接顶到上限并触发「The action 'Unit tests' has timed
+        # out after 30 minutes」。这里按实测给足余量（作业总上限仍是 60 分钟），
+        # 不跳过、不排除任何用例。若日后再次逼近 45 分钟，正确做法是拆分分片而不是继续加时。
+        timeout-minutes: 45
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -420,7 +424,9 @@ jobs:
       - name: Unit tests
         run: xvfb-run -a flutter test --coverage
         working-directory: apps/desktop-flutter
-        timeout-minutes: 30
+        # 与 Windows 同步：Linux 实测 19.1 分钟，留出与 Windows 相同的余量口径，
+        # 保持两个平台「跑的是同一套全量用例、只有超时预算一致」这一对称性。
+        timeout-minutes: 45
         env:
           GDK_BACKEND: x11
           LIBGL_ALWAYS_SOFTWARE: '1'

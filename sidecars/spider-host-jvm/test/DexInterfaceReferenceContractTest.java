@@ -93,14 +93,14 @@ public final class DexInterfaceReferenceContractTest {
         Path record = cacheSite.resolve("dexBundles").resolve("intake-dex.json");
         String sourceSha = sha256(archive);
         String bundleSha = sha256(bundle);
-        writeRecord(record, sourceSha, bundleSha, 3);
+        writeRecord(record, sourceSha, bundleSha, 5);
         check(!cacheHit(archive, cacheSite), "old repairVersion retranslates instead of reusing bundle");
         writeRecord(record, sourceSha, bundleSha, DexRepair.VERSION);
         DexIntake.Result reused = DexIntake.translate(archive, cacheSite);
         check(reused.cached(), "current repairVersion reuses bundle");
         writeRecord(record, sourceSha, bundleSha, -1);
         check(!cacheHit(archive, cacheSite), "record without repairVersion retranslates");
-        check(DexRepair.VERSION == 4, "repair semantics version bumped: " + DexRepair.VERSION);
+        check(DexRepair.VERSION == 6, "repair semantics version bumped: " + DexRepair.VERSION);
         System.out.println("DexInterfaceReferenceContractTest assertions=" + assertions + " failures=0");
     }
 

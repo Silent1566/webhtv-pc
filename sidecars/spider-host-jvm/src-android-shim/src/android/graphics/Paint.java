@@ -1,5 +1,8 @@
 package android.graphics;
 
+import java.awt.font.FontRenderContext;
+import java.awt.geom.AffineTransform;
+
 // 为什么 Paint 要真实存值：站点在字段初始化里配好颜色/字号/线宽，后续即便走
 // 自绘降级路径也会读回这些值；空壳会让样式全丢，且 null 会传到下游。
 public class Paint {
@@ -111,7 +114,7 @@ public class Paint {
     private int mColor = 0xFF000000;
     private int mAlpha = 255;
     private float mStrokeWidth;
-    private float mTextSize;
+    private float mTextSize = 16;
     private float mTextScaleX = 1.0f;
     private float mTextSkewX;
     private float mLetterSpacing;
@@ -121,7 +124,8 @@ public class Paint {
     private Cap mStrokeCap = Cap.BUTT;
     private Join mStrokeJoin = Join.MITER;
     private Align mTextAlign = Align.LEFT;
-    private Typeface mTypeface;
+    private Typeface mTypeface = Typeface.DEFAULT;
+    private Shader mShader;
     private int mFlags;
 
     public Paint() {
@@ -131,7 +135,7 @@ public class Paint {
         mFlags = flags;
     }
 
-    // 拷贝构造只搬本垫片保存的标量字段；Shader/PathEffect 等一律不支持，天然为 null。
+    // Copy owned drawing state; shaders are immutable.
     public Paint(Paint p) {
         if (p == null) {
             return;
@@ -150,6 +154,7 @@ public class Paint {
         mStrokeJoin = p.mStrokeJoin;
         mTextAlign = p.mTextAlign;
         mTypeface = p.mTypeface;
+        mShader = p.mShader;
         mFlags = p.mFlags;
     }
 
@@ -171,6 +176,7 @@ public class Paint {
         mStrokeJoin = src.mStrokeJoin;
         mTextAlign = src.mTextAlign;
         mTypeface = src.mTypeface;
+        mShader = src.mShader;
         mFlags = src.mFlags;
     }
 
@@ -188,7 +194,8 @@ public class Paint {
     }
 
     public void setAlpha(int alpha) {
-        mAlpha = alpha;
+        mAlpha = Math.max(0, Math.min(255, alpha));
+        mColor = (mColor & 0xffffff) | (mAlpha << 24);
     }
 
     public int getAlpha() {
@@ -371,149 +378,57 @@ public class Paint {
         return mTypeface;
     }
 
-    public void setShadowLayer(float radius, float dx, float dy, int color) {
-    }
+    public void setShadowLayer(float radius, float dx, float dy, int color) { throw uiUnsupported("setShadowLayer"); }
+    public void setShadowLayer(float radius, float dx, float dy, long color) { throw uiUnsupported("setShadowLayer"); }
+    public void clearShadowLayer() { throw uiUnsupported("clearShadowLayer"); }
 
-    public void setShadowLayer(float radius, float dx, float dy, long color) {
+    java.awt.Font font() {
+        Typeface face=mTypeface==null?Typeface.DEFAULT:mTypeface;
+        java.awt.Font font=face.font(mTextSize);
+        if(isFakeBoldText()) font=font.deriveFont(font.getStyle() | java.awt.Font.BOLD);
+        return font.deriveFont(new AffineTransform(mTextScaleX,0,mTextSkewX,1,0,0));
     }
-
-    public void clearShadowLayer() {
-    }
-
-    // 没有字体引擎，只能按「字符数 × 字号 × 平均字宽系数」估算；
-    // 该值仅用于布局占位，站点若据此做像素级对齐会偏差，故注释标明是估算。
-    public float measureText(String text) {
-        if (text == null || text.isEmpty()) {
-            return 0.0f;
+    private FontRenderContext fontContext() { return new FontRenderContext(null,isAntiAlias(),true); }
+    private java.awt.font.LineMetrics lineMetrics() { return font().getLineMetrics("Ag",fontContext()); }
+    public float measureText(String text) { return (float)font().getStringBounds(java.util.Objects.requireNonNull(text),fontContext()).getWidth(); }
+    public float measureText(String text,int start,int end) { return measureText(text.substring(start,end)); }
+    public float measureText(char[] text,int index,int count) { return measureText(new String(text,index,count)); }
+    public float measureText(CharSequence text,int start,int end) { return measureText(text.subSequence(start,end).toString()); }
+    public int breakText(String text,boolean forwards,float maxWidth,float[] measuredWidth) {
+        java.util.Objects.requireNonNull(text); int count=0; float measured=0;
+        for(int n=1;n<=text.length();n++) {
+            float width=forwards?measureText(text,0,n):measureText(text,text.length()-n,text.length());
+            if(width>maxWidth) break; count=n; measured=width;
         }
-        return text.length() * mTextSize * 0.5f;
-    }
-
-    public float measureText(String text, int start, int end) {
-        if (text == null || start < 0 || end > text.length() || start >= end) {
-            return 0.0f;
-        }
-        return (end - start) * mTextSize * 0.5f;
-    }
-
-    public float measureText(char[] text, int index, int count) {
-        if (text == null || index < 0 || count <= 0 || index + count > text.length) {
-            return 0.0f;
-        }
-        return count * mTextSize * 0.5f;
-    }
-
-    public float measureText(CharSequence text, int start, int end) {
-        if (text == null || start < 0 || end > text.length() || start >= end) {
-            return 0.0f;
-        }
-        return (end - start) * mTextSize * 0.5f;
-    }
-
-    public int breakText(String text, boolean measureForwards, float maxWidth, float[] measuredWidth) {
-        if (text == null || mTextSize <= 0.0f) {
-            if (measuredWidth != null && measuredWidth.length > 0) {
-                measuredWidth[0] = 0.0f;
-            }
-            return 0;
-        }
-        float perChar = mTextSize * 0.5f;
-        int count = Math.min(text.length(), (int) (maxWidth / perChar));
-        if (count < 0) {
-            count = 0;
-        }
-        if (measuredWidth != null && measuredWidth.length > 0) {
-            measuredWidth[0] = count * perChar;
-        }
+        if(measuredWidth!=null && measuredWidth.length>0) measuredWidth[0]=measured;
         return count;
     }
-
-    public int getTextWidths(String text, float[] widths) {
-        if (text == null || widths == null) {
-            return 0;
-        }
-        int n = Math.min(text.length(), widths.length);
-        for (int i = 0; i < n; i++) {
-            widths[i] = mTextSize * 0.5f;
-        }
-        return n;
+    public int getTextWidths(String text,float[] widths) {
+        if(widths.length<text.length()) throw new ArrayIndexOutOfBoundsException("Paint#getTextWidths");
+        for(int i=0;i<text.length();i++) widths[i]=measureText(text,i,i+1);
+        return text.length();
     }
-
-    // 度量值按字号比例给出（与常见字体的比例接近），供基线计算使用。
-    public float ascent() {
-        return -mTextSize * 0.8f;
-    }
-
-    public float descent() {
-        return mTextSize * 0.2f;
-    }
-
-    public float getFontSpacing() {
-        return descent() - ascent();
-    }
-
-    public Paint$FontMetrics getFontMetrics() {
-        Paint$FontMetrics fm = new Paint$FontMetrics();
-        getFontMetrics(fm);
-        return fm;
-    }
-
-    // 返回值是行间距，Android 原实现如此（不是 void），调用方常直接用。
+    public float ascent() { return -lineMetrics().getAscent(); }
+    public float descent() { return lineMetrics().getDescent(); }
+    public float getFontSpacing() { return lineMetrics().getHeight(); }
+    public Paint$FontMetrics getFontMetrics() { Paint$FontMetrics result=new Paint$FontMetrics();getFontMetrics(result);return result; }
     public float getFontMetrics(Paint$FontMetrics metrics) {
-        if (metrics != null) {
-            metrics.ascent = ascent();
-            metrics.descent = descent();
-            metrics.top = -mTextSize;
-            metrics.bottom = mTextSize * 0.25f;
-            metrics.leading = 0.0f;
-        }
-        return getFontSpacing();
+        var line=lineMetrics();
+        if(metrics!=null) { metrics.ascent=-line.getAscent();metrics.descent=line.getDescent();metrics.top=metrics.ascent;metrics.bottom=metrics.descent;metrics.leading=line.getLeading(); }
+        return line.getHeight();
     }
-
-    public FontMetricsInt getFontMetricsInt() {
-        FontMetricsInt fm = new FontMetricsInt();
-        getFontMetricsInt(fm);
-        return fm;
-    }
-
+    public FontMetricsInt getFontMetricsInt() { FontMetricsInt result=new FontMetricsInt();getFontMetricsInt(result);return result; }
     public int getFontMetricsInt(FontMetricsInt metrics) {
-        if (metrics != null) {
-            metrics.ascent = (int) Math.floor(ascent());
-            metrics.descent = (int) Math.ceil(descent());
-            metrics.top = (int) Math.floor(-mTextSize);
-            metrics.bottom = (int) Math.ceil(mTextSize * 0.25f);
-            metrics.leading = 0;
-        }
-        return (int) getFontSpacing();
+        Paint$FontMetrics fm=getFontMetrics();if(metrics!=null) metrics.set(fm);
+        return (int)Math.ceil(fm.descent-fm.ascent+fm.leading);
     }
-
-    public boolean hasGlyph(String string) {
-        return false;
-    }
-
-    public void setShader(Shader shader) {
-        throw uiUnsupported("setShader");
-    }
-
-    public Shader getShader() {
-        return null;
-    }
-
-    public void setPathEffect(PathEffect effect) {
-        throw uiUnsupported("setPathEffect");
-    }
-
-    public PathEffect getPathEffect() {
-        return null;
-    }
-
-    public void setMaskFilter(MaskFilter maskfilter) {
-        throw uiUnsupported("setMaskFilter");
-    }
-
-    public MaskFilter getMaskFilter() {
-        return null;
-    }
+    public boolean hasGlyph(String string) { return font().canDisplayUpTo(string)==-1; }
+    public Shader setShader(Shader shader) { mShader=shader;return shader; }
+    public Shader getShader() { return mShader; }
+    public void setPathEffect(PathEffect effect) { throw uiUnsupported("setPathEffect"); }
+    public PathEffect getPathEffect() { throw uiUnsupported("getPathEffect"); }
+    public void setMaskFilter(MaskFilter maskfilter) { throw uiUnsupported("setMaskFilter"); }
+    public MaskFilter getMaskFilter() { throw uiUnsupported("getMaskFilter"); }
 
     public void getTextPath(char[] text, int index, int count, float x, float y, Path path) {
         throw uiUnsupported("getTextPath");

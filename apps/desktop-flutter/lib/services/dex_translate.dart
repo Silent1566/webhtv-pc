@@ -38,7 +38,7 @@ class DexTranslate {
   ///
   /// 它只用于**缓存准入**：旧口径产出的 classes.jar 即使文件还在、SHA 还能对上，也不能
   /// 复用（否则新修复永远跑不到真实 payload 上）。版本不一致一律重新转译，绝不删用户缓存。
-  static const int repairVersion = 4;
+  static const int repairVersion = 6;
 
   /// stderr 日志只保留**尾部**这么多字符：CLI 会打大量人类日志，整段塞进日志会
   /// 淹掉真正的原因，也撑爆日志文件。
@@ -58,6 +58,20 @@ class DexTranslate {
     String? sharedDir,
   }) async {
     try {
+      final shared = sharedDir?.trim() ?? '';
+      final payloadSha = _sha256OfFile(archive);
+      if (shared.isNotEmpty && payloadSha != null) {
+        final cached = copySharedBundle(
+          sharedDir: shared,
+          sha: payloadSha,
+          siteDir: siteDir,
+        );
+        if (cached != null) {
+          log?.info('dex 预转译命中共享缓存 sha256=$payloadSha', scope: 'spider');
+          return cached;
+        }
+      }
+
       final probe = LocalSpiderCommand.probeJavaRuntime(log: log);
       final java = probe.command;
       if (java == null) {
@@ -86,16 +100,6 @@ class DexTranslate {
       // 十分钟级的持续重活，界面直接「未响应」。这里按 payload 的 SHA-256 复用
       // 「与 sidecar 完全相同的两个产物文件」（classes.jar + intake-dex.json），
       // 命中时只做一次 1 MB 级复制。
-      final shared = sharedDir?.trim() ?? '';
-      final payloadSha = _sha256OfFile(archive);
-      if (shared.isNotEmpty && payloadSha != null) {
-        final cached = copySharedBundle(sharedDir: shared, sha: payloadSha, siteDir: siteDir);
-        if (cached != null) {
-          log?.info('dex 预转译命中共享缓存 sha256=$payloadSha', scope: 'spider');
-          return cached;
-        }
-      }
-
       final separator = Platform.isWindows ? ';' : ':';
       final classpath = <String>[
         hostJar,
@@ -117,16 +121,28 @@ class DexTranslate {
       // stderr 与 stdout 必须**同时**读：任一管道写满就会把子进程堵死，
       // 表现为「看起来在转译、其实谁也没动」。
       final stderrTail = _collectStderrTail(process.stderr);
+      final stdoutDone = process.stdout
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
       String stdoutText;
       int exitCode;
       try {
-        stdoutText = await process.stdout
-            .transform(utf8.decoder)
-            .join()
-            .timeout(timeout);
+        stdoutText = await stdoutDone.timeout(timeout);
         exitCode = await process.exitCode.timeout(const Duration(seconds: 10));
       } on TimeoutException {
         process.kill();
+        await process.exitCode.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => -1,
+        );
+        await stdoutDone.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => '',
+        );
+        await stderrTail.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => '',
+        );
         return <String, Object?>{
           'ok': false,
           'stage': 'dex-转译',
@@ -150,7 +166,7 @@ class DexTranslate {
         // 退出码非 0 时**以 JSON 为准**：CLI 的失败路径就是 ok:false + stage，
         // 那比退出码本身信息量大得多。
         if (decoded['ok'] == true && shared.isNotEmpty && payloadSha != null) {
-          _storeSharedBundle(shared, payloadSha, siteDir);
+          storeSharedBundle(shared, payloadSha, siteDir);
         }
         return decoded;
       }
@@ -190,12 +206,16 @@ class DexTranslate {
       final srcJar = File(p.join(srcDir.path, 'classes.jar'));
       final srcRecord = File(p.join(srcDir.path, 'intake-dex.json'));
       if (!srcJar.existsSync() || !recordUsable(srcRecord.path)) return null;
+      final raw = jsonDecode(srcRecord.readAsStringSync());
+      if (raw is! Map ||
+          raw['sourceSha256'] != sha ||
+          raw['bundleSha256'] != _sha256OfFile(srcJar.path)) {
+        return null;
+      }
       final targetDir = Directory(p.join(siteDir, 'dexBundles'))
         ..createSync(recursive: true);
       final targetJar = p.join(targetDir.path, 'classes.jar');
       srcJar.copySync(targetJar);
-      final raw = jsonDecode(srcRecord.readAsStringSync());
-      if (raw is! Map) return null;
       final record = Map<String, Object?>.from(raw)
         ..['bundle'] = targetJar
         ..['cached'] = true;
@@ -235,11 +255,17 @@ class DexTranslate {
     }
   }
 
-  static void _storeSharedBundle(String sharedDir, String sha, String siteDir) {
+  static void storeSharedBundle(String sharedDir, String sha, String siteDir) {
     try {
       final bundle = File(p.join(siteDir, 'dexBundles', 'classes.jar'));
       final record = File(p.join(siteDir, 'dexBundles', 'intake-dex.json'));
       if (!bundle.existsSync() || !recordUsable(record.path)) return;
+      final raw = jsonDecode(record.readAsStringSync());
+      if (raw is! Map ||
+          raw['sourceSha256'] != sha ||
+          raw['bundleSha256'] != _sha256OfFile(bundle.path)) {
+        return;
+      }
       final target = Directory(p.join(sharedDir, sha))
         ..createSync(recursive: true);
       bundle.copySync(p.join(target.path, 'classes.jar'));
