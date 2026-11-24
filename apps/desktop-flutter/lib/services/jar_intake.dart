@@ -343,6 +343,7 @@ class JarIntake {
       }
     }
     if (changed > 0) {
+      notifySiteFilesChanged();
       log?.info(
         '站点限额已迁移：$changed 个抬到 memoryMiB>=$memoryMiB / cpuSeconds>=$cpuSeconds',
         scope: 'spider',
@@ -363,10 +364,7 @@ class JarIntake {
   /// 重建、每次分类都调一次），而每次都要打开 zip 读中央目录。实测上百个站点连着
   /// 做一遍是几百毫秒的同步 I/O，全压在 UI isolate 上——点开站点列表会明显顿一下。
   /// 只缓存**文件**入口：目录入口的 mtime 不随内容变化，缓存会给出过期结论。
-  static final Map<
-    String,
-    ({int size, int mtimeMs, JarInspection result})
-  >
+  static final Map<String, ({int size, int mtimeMs, JarInspection result})>
   _inspectCache = {};
 
   static JarInspection inspectPath(
@@ -415,11 +413,7 @@ class JarIntake {
   static JarInspection inspectUnpackedPayload(
     String path, {
     String? expectedClass,
-  }) => inspectPath(
-    path,
-    expectedClass: expectedClass,
-    unpackedPayload: true,
-  );
+  }) => inspectPath(path, expectedClass: expectedClass, unpackedPayload: true);
 
   // ---------------------------------------------------------------------------
   // 检测
@@ -624,7 +618,7 @@ class JarIntake {
         entryClassFound: found,
         note: allowNativeEntries && native.isNotEmpty
             ? '该入口是加固壳的解包产物：含原生库条目（${native.take(3).join('、')}），'
-            '依赖 native 的调用会如实抛 UnsatisfiedLinkError，不静默降级'
+                  '依赖 native 的调用会如实抛 UnsatisfiedLinkError，不静默降级'
             : '',
         unpackedPayload: allowNativeEntries,
       );
@@ -1236,6 +1230,7 @@ class JarIntake {
         'entries=${inspection.entryCount} sha256=${digest.substring(0, 12)}',
         scope: 'spider',
       );
+      notifySiteFilesChanged();
       return JarInstallResult(
         ok: true,
         siteKey: siteKey,
@@ -1356,6 +1351,7 @@ class JarIntake {
         }),
         flush: true,
       );
+      notifySiteFilesChanged();
       _authorizeGeneratedShell(targetDir, siteKey, log);
     } catch (_) {
       // 写失败不阻断判定：让后续启动照旧报出可诊断的错误，而不是在这里静默改状态。
@@ -1402,6 +1398,7 @@ class JarIntake {
         const JsonEncoder.withIndent('  ').convert(data),
         flush: true,
       );
+      notifySiteFilesChanged();
       log?.info(
         'generated-shell proxyHttp authorization site=$siteKey',
         scope: 'spider',
@@ -1468,6 +1465,7 @@ class JarIntake {
     if (!directory.existsSync()) return false;
     try {
       await directory.delete(recursive: true);
+      notifySiteFilesChanged();
       log?.info('T3 桌面站源已移除 $targetDir', scope: 'spider');
       return true;
     } catch (error) {
@@ -1476,22 +1474,70 @@ class JarIntake {
     }
   }
 
+  /// 站点文件代次：`probe.json`/`intake.json`/入口 jar 变一次就 +1。
+  ///
+  /// 谁在用：`SpiderRouter.siteRevision` 把它并进自己的代次，`AppState.siteItems`
+  /// 再按代次缓存整张站点表。加固壳配置里 111 个站点的可用性判定要逐个读盘
+  /// （本机实测一遍 350 ms），而这份表在一次 build 里会被读 2–3 遍——不缓存就是
+  /// 主 isolate 上 0.7–2.8 s 的阻塞。反过来，只要写入都经过这里，缓存就不会
+  /// 落后于磁盘。
+  static int siteFilesRevision = 0;
+
+  /// 磁盘上的站点文件变了：代次 +1 并丢掉记录缓存。
+  static void notifySiteFilesChanged() {
+    siteFilesRevision++;
+    _recordCache.clear();
+  }
+
+  /// 结论文件读缓存（`probe.json` / `intake.json`）。
+  ///
+  /// 按「大小 + 修改时间」自校验：同一次判定里 [probeRecord] 与 [intakeRecord]
+  /// 各被读 1–3 次，同步读 + `jsonDecode` 放大成了站点数 × 次数。
+  static final Map<
+    String,
+    ({int size, int mtimeMs, Map<String, Object?>? value})
+  >
+  _recordCache = {};
+
   /// 读取自动探测结论 probe.json（不存在或损坏时返回 null）。
   ///
   /// 与 intake.json 分工：intake.json 记录**已导入**的入口；probe.json 记录
   /// 「配置声明的 jar 被静态检测后是什么、为什么没导入」（方案 3，见
   /// `docs/reference/win-box-borrowings.md` §12.9）。后者只描述结论，不落任何
   /// 可执行内容——含 dex 的 Android jar 依然拒绝落盘（§12.6.4）。
-  static Map<String, Object?>? probeRecord(String targetDir) {
-    final file = File(p.join(targetDir, 'probe.json'));
-    if (!file.existsSync()) return null;
+  static Map<String, Object?>? probeRecord(String targetDir) =>
+      _cachedRecord(p.join(targetDir, 'probe.json'));
+
+  /// 读一份结论文件；按「大小 + 修改时间」判断是否还能复用上次的解码结果。
+  ///
+  /// 返回值可能是缓存里的同一份 Map：调用方**只读**，不要改写。
+  static Map<String, Object?>? _cachedRecord(String path) {
+    final file = File(path);
+    int size;
+    int mtimeMs;
     try {
-      final decoded = jsonDecode(file.readAsStringSync());
-      return decoded is Map<String, Object?> ? decoded : null;
+      final stat = file.statSync();
+      if (stat.type == FileSystemEntityType.notFound) return null;
+      size = stat.size;
+      mtimeMs = stat.modified.millisecondsSinceEpoch;
     } catch (_) {
-      // 结论文件损坏时按「未探测」处理，下次启动重试。
       return null;
     }
+    final cached = _recordCache[path];
+    if (cached != null && cached.size == size && cached.mtimeMs == mtimeMs) {
+      return cached.value;
+    }
+    Map<String, Object?>? value;
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      value = decoded is Map<String, Object?> ? decoded : null;
+    } catch (_) {
+      // 结论文件损坏时按「未探测」处理，下次启动重试。
+      value = null;
+    }
+    if (_recordCache.length > 512) _recordCache.clear();
+    _recordCache[path] = (size: size, mtimeMs: mtimeMs, value: value);
+    return value;
   }
 
   /// 写入自动探测结论（建目录 + flush 落盘）。
@@ -1505,19 +1551,12 @@ class JarIntake {
       const JsonEncoder.withIndent('  ').convert(record),
       flush: true,
     );
+    notifySiteFilesChanged();
   }
 
   /// 读取 intake.json（不存在或损坏时返回 null）。
-  static Map<String, Object?>? intakeRecord(String targetDir) {
-    final file = File(p.join(targetDir, 'intake.json'));
-    if (!file.existsSync()) return null;
-    try {
-      final decoded = jsonDecode(file.readAsStringSync());
-      return decoded is Map<String, Object?> ? decoded : null;
-    } catch (_) {
-      return null;
-    }
-  }
+  static Map<String, Object?>? intakeRecord(String targetDir) =>
+      _cachedRecord(p.join(targetDir, 'intake.json'));
 
   static Future<void> _copyTree(Directory from, Directory to) async {
     await for (final entity in from.list(recursive: true, followLinks: false)) {
