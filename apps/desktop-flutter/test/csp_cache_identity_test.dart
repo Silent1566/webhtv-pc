@@ -36,6 +36,18 @@ void main() {
     file.writeAsStringSync(jsonEncode(value));
   }
 
+  /// 「别的 key 不得占用这条旧目录」这条断言依赖**文件系统是否区分大小写**：
+  /// Windows 上 `csp_demo` 会解析到已存在的 `csp_Demo`（真实的别名风险），
+  /// 而 Linux 上二者本来就是两个不同目录，拿小写形式比较会把正常结果判成失败。
+  /// 所以精确路径在两个平台都比，忽略大小写的形式只在 Windows 比。
+  void expectNotLegacyDirectory(String key, String legacyDirectory) {
+    final resolved = binding.directoryFor(key);
+    expect(resolved, isNot(legacyDirectory));
+    if (Platform.isWindows) {
+      expect(resolved.toLowerCase(), isNot(legacyDirectory.toLowerCase()));
+    }
+  }
+
   void expectContained(String path) {
     expect(p.isWithin(binding.root, path), isTrue);
     final segment = p.relative(path, from: binding.root);
@@ -259,10 +271,7 @@ void main() {
     expect(binding.entryFor('csp_Demo'), jar);
     expect(binding.entryFor('CSP_DEMO'), isNull);
     expect(binding.entryFor('csp_demo'), isNull);
-    expect(
-      binding.directoryFor('csp_demo').toLowerCase(),
-      isNot(p.dirname(jar).toLowerCase()),
-    );
+    expectNotLegacyDirectory('csp_demo', p.dirname(jar));
   });
 
   test('existing lowercase legacy cache does not bind mixed-case keys', () {
@@ -271,10 +280,7 @@ void main() {
     expect(binding.entryFor('csp_demo'), jar);
     for (final key in ['csp_Demo', 'CSP_DEMO']) {
       expect(binding.entryFor(key), isNull);
-      expect(
-        binding.directoryFor(key).toLowerCase(),
-        isNot(p.dirname(jar).toLowerCase()),
-      );
+      expectNotLegacyDirectory(key, p.dirname(jar));
     }
   });
 
