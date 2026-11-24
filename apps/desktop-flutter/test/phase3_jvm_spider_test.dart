@@ -89,7 +89,7 @@ void main() {
     /// manifest 位于 `manifests/`，`entry` 相对 sidecar 根目录解析为
     /// `spiders/fixture/FixtureSpider.java`（源码入口，宿主用 JDK 自带编译器编译）。
     /// 类名由 manifest `config.className` 给出（`fixture.FixtureSpider`）。
-    LocalSpider jvmFixtureSpider() {
+    LocalSpider jvmFixtureSpider({String? accountStorePath}) {
       final manifestPath = p.join(
         repositoryRoot.path,
         'sidecars',
@@ -112,6 +112,7 @@ void main() {
           'fixture',
           'FixtureSpider.java',
         ),
+        accountStorePath: accountStorePath,
       );
     }
 
@@ -182,6 +183,191 @@ void main() {
         command!.arguments,
         contains(endsWith(p.join('spider-host-jvm', 'host.jar'))),
       );
+    });
+
+    test('resolve：JVM 账号文件以 -Dwebhtv.accountStore=<绝对路径> 插在 -jar 之前', () {
+      final accountFile = p.join(
+        repositoryRoot.path,
+        'tmp-account-core',
+        'accounts.json',
+      );
+      final spider = jvmFixtureSpider(accountStorePath: accountFile);
+      final command = LocalSpiderCommand.resolve(
+        spider: spider,
+        hostPath: pythonHostPath,
+        jvmHostPath: jvmHostPath,
+      )!;
+      final property =
+          '-Dwebhtv.accountStore=${p.normalize(p.absolute(accountFile))}';
+      expect(p.isAbsolute(accountFile), isTrue);
+      expect(command.arguments, contains(property));
+      expect(
+        command.arguments.where((arg) => arg.startsWith('-Dwebhtv.accountStore=')),
+        hasLength(1),
+      );
+      expect(
+        command.arguments.indexOf(property),
+        lessThan(command.arguments.indexOf('-jar')),
+      );
+      // 只传路径：命令行里不得出现任何 Cookie 值。
+      expect(
+        command.arguments.any(
+          (arg) => arg.contains('SESSDATA') || arg.contains('BDUSS'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('resolve：相对账号路径规范化为同一个绝对全局文件', () {
+      final relative = p.join('.', 'conf', '..', 'spiders', 'accounts.json');
+      final spider = jvmFixtureSpider(accountStorePath: relative);
+      final command = LocalSpiderCommand.resolve(
+        spider: spider,
+        hostPath: pythonHostPath,
+        jvmHostPath: jvmHostPath,
+      )!;
+      final normalized = p.normalize(p.absolute(relative));
+      expect(p.isAbsolute(normalized), isTrue);
+      expect(command.arguments, contains('-Dwebhtv.accountStore=$normalized'));
+    });
+
+    test('resolve：未提供账号文件时不加任何 JVM 账号参数', () {
+      final spider = jvmFixtureSpider();
+      final command = LocalSpiderCommand.resolve(
+        spider: spider,
+        hostPath: pythonHostPath,
+        jvmHostPath: jvmHostPath,
+      )!;
+      expect(
+        command.arguments.any((arg) => arg.contains('webhtv.accountStore')),
+        isFalse,
+      );
+    });
+
+    test('registry：JVM 站源挂应用级 accounts.json，Python 站源不挂', () async {
+      final spidersRoot = p.join(tempRoot.path, 'config', 'spiders');
+      final fixtureManifest =
+          jsonDecode(
+                File(
+                  p.join(
+                    repositoryRoot.path,
+                    'sidecars',
+                    'spider-host-jvm',
+                    'manifests',
+                    'fixture.json',
+                  ),
+                ).readAsStringSync(),
+              )
+              as Map<String, Object?>;
+
+      final jvmDir = Directory(p.join(spidersRoot, 'jvm-fixture'))
+        ..createSync(recursive: true);
+      File(
+        p.join(jvmDir.path, 'FixtureSpider.java'),
+      ).writeAsStringSync('class FixtureSpider {}');
+      File(p.join(jvmDir.path, 'manifest.json')).writeAsStringSync(
+        jsonEncode({...fixtureManifest, 'entry': 'FixtureSpider.java'}),
+      );
+
+      final pythonDir = Directory(p.join(spidersRoot, 'py-fixture'))
+        ..createSync(recursive: true);
+      File(p.join(pythonDir.path, 'spider.py')).writeAsStringSync('');
+      File(p.join(pythonDir.path, 'manifest.json')).writeAsStringSync(
+        jsonEncode({
+          ...fixtureManifest,
+          'key': 'py-fixture',
+          'name': 'Py Fixture',
+          'runtime': 'python3',
+          'entry': 'spider.py',
+          'capabilities': const [
+            'home',
+            'category',
+            'detail',
+            'search',
+            'play',
+          ],
+        }),
+      );
+
+      final registry = SpiderManifestRegistry(
+        root: spidersRoot,
+        log: LogService(),
+      );
+      final spiders = await registry.scan();
+      expect(
+        spiders.map((spider) => spider.key),
+        containsAll(<String>['jvm-fixture', 'py-fixture']),
+      );
+      final jvm = registry.byKey('jvm-fixture')!;
+      final python = registry.byKey('py-fixture')!;
+      final expected = p.normalize(
+        p.absolute(p.join(spidersRoot, 'accounts.json')),
+      );
+      expect(jvm.accountStorePath, expected);
+      expect(python.accountStorePath, isNull);
+
+      final command = LocalSpiderCommand.resolve(
+        spider: jvm,
+        hostPath: pythonHostPath,
+        jvmHostPath: jvmHostPath,
+      )!;
+      expect(command.arguments, contains('-Dwebhtv.accountStore=$expected'));
+    });
+
+    test('csp 合成 JVM 站源挂 <spidersroot>/accounts.json', () {
+      final spidersRoot = p.join(tempRoot.path, 'config', 'spiders');
+      final binding = CspJvmBinding(root: p.join(spidersRoot, 'csp'));
+      final entry = File(p.join(tempRoot.path, 'Spider.jar'))
+        ..writeAsBytesSync(const [0]);
+      final site = Site(
+        key: 'csp_demo',
+        name: 'csp_demo',
+        type: 3,
+        api: 'csp_demo',
+        jar: '',
+      );
+      final local = SpiderRouter.cspLocalSpider(
+        site: site,
+        entryPath: entry.path,
+        binding: binding,
+      );
+      expect(
+        local.accountStorePath,
+        p.normalize(p.absolute(p.join(spidersRoot, 'accounts.json'))),
+      );
+    });
+
+    test('resolve：Python/JS 站源命令不携带账号参数', () {
+      LocalSpider localSpider(String runtime) {
+        final manifest = SpiderManifest(
+          key: '$runtime-fixture',
+          name: '$runtime Fixture',
+          runtime: runtime,
+          entry: 'spider.src',
+          capabilities: const ['home', 'category', 'detail', 'search', 'play'],
+        );
+        return LocalSpider(
+          manifest: manifest,
+          manifestPath: p.join(tempRoot.path, 'manifest.json'),
+          rootDir: tempRoot.path,
+          entryPath: p.join(tempRoot.path, 'spider.src'),
+          accountStorePath: p.join(repositoryRoot.path, 'accounts.json'),
+        );
+      }
+
+      for (final runtime in const ['python3', 'node']) {
+        final command = LocalSpiderCommand.resolve(
+          spider: localSpider(runtime),
+          hostPath: pythonHostPath,
+          jvmHostPath: jvmHostPath,
+        );
+        if (command == null) continue;
+        expect(
+          command.arguments.any((arg) => arg.contains('webhtv.accountStore')),
+          isFalse,
+          reason: '$runtime 站源命令必须保持不变',
+        );
+      }
     });
 
     test('defaultJvmSidecarHostPath 指向已构建的 host.jar', () {
@@ -619,7 +805,8 @@ public class TimingSpider extends com.github.catvod.crawler.Spider {
       expect(availability.available, isFalse);
       expect(availability.runtimeName, 'PC Java Spider');
       expect(availability.reason, contains('classes.dex'));
-      expect(availability.reason, contains(p.join('csp', 'csp_Demo')));
+      final binding = CspJvmBinding(root: p.join(spidersRoot, 'csp'));
+      expect(availability.reason, contains(binding.directoryFor('csp_Demo')));
     });
 
     test('可转译 dex（无原生库、无转译记录）判定为可用，并说明首次加载会转译', () async {
@@ -744,10 +931,14 @@ public class TimingSpider extends com.github.catvod.crawler.Spider {
       expect(CspJvmBinding.classNameOf('csp_Demo'), 'Demo');
       expect(CspJvmBinding.classNameOf('demo'), 'demo');
       final binding = CspJvmBinding(root: p.join(spidersRoot, 'csp'));
+      final directory = binding.directoryFor('csp_a/b');
+      expect(p.isWithin(binding.root, directory), isTrue);
+      expect(p.dirname(directory), binding.root);
+      expect(p.basename(directory), matches(RegExp(r'^csp~[a-f0-9]{64}$')));
       expect(
-        binding.directoryFor('csp_a/b'),
-        p.join(spidersRoot, 'csp', 'csp_a_b'),
-        reason: '站点 key 含路径分隔符时必须净化，不得越出缓存目录',
+        directory,
+        isNot(binding.directoryFor('csp_a_b')),
+        reason: '含路径分隔符的 key 不得与净化后的字面 key 共用缓存',
       );
     });
 

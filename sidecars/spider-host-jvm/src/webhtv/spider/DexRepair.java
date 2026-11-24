@@ -15,7 +15,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -39,6 +38,12 @@ import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.Frame;
+import org.objectweb.asm.tree.analysis.SourceInterpreter;
+import org.objectweb.asm.tree.analysis.SourceValue;
 
 /**
  * dex2jar 2.4.28 产物的**语义**修复（帧修复之后、落盘之前）。
@@ -62,9 +67,9 @@ import org.objectweb.asm.tree.TypeInsnNode;
  *       误译机制始终是 dex2jar 拿**构造器的声明类**当 {@code new-instance} 的类型，而声明类必是
  *       真实类型的祖先，因此这一条覆盖了全部实测形态（抽象父类、{@code java/lang/Object}、以及
  *       {@code ThreadLocal} 这种继承了构造器的普通父类），既不是放宽猜测，也不允许反向或无关替换。
- *       收窄对任何消费方都仍类型安全。而对位有**两档**，先走保守的下标档、失败再走描述符链档：
+ *       收窄对任何消费方都仍类型安全。对位保留既有下标档，失败后才用描述符链档：
  *       <ol>
- *         <li><b>下标档</b>：dex 的 {@code new-instance} 序列与产物的 {@code NEW} 序列逐条同序；</li>
+ *         <li><b>下标档</b>：dex 的 {@code new-instance} 序列与产物的 {@code NEW} 序列逐条同序且差异均为收窄；</li>
  *         <li><b>描述符链档</b>：dex2jar 会重排指令，序号不可信时改用「每个 {@code NEW} 各自
  *             配到的构造器描述符」当指纹（两侧多重集必须一致，且配对必须唯一）。
  *             只修「收窄」这一种差异的机制不变——换档只是换了对位方式，不是放宽判据。</li>
@@ -84,7 +89,7 @@ public final class DexRepair {
      * 修复口径的版本号。产物内容会随修复规则变化，因此把它写进 {@code intake-dex.json}：
      * 版本不一致说明缓存是旧规则生成的，必须重新转译（否则修复永远跑不到真实 payload 上）。
      */
-    public static final int VERSION = 4;
+    public static final int VERSION = 6;
 
     /**
      * 2：{@code NEW} 重定位从「抽象父类 → 具体子类」放宽为「dex 类型是产物类型的子类且具体」，
@@ -101,6 +106,8 @@ public final class DexRepair {
      * 时，按「owner 确是接口」改回 {@code InterfaceMethodref}——否则 JVM 解析即抛
      * {@code IncompatibleClassChangeError: … must be InterfaceMethodref constant}（实测
      * AnimeAiGongHeGuo 的 {@code Comparator.comparing}）。
+     *
+     * <p>5：只扩展下标档失败后的描述符链档：混合类型组也可在完整匹配的目标类型唯一时修复。
      */
 
     /**
@@ -117,6 +124,7 @@ public final class DexRepair {
 
     /** 继承链回溯的深度上限：畸形 super 链会让循环不终止，宁可按「不是子类」处理。 */
     private static final int SUPER_CHAIN_LIMIT = 64;
+    private static final int ALIGNMENT_GROUP_LIMIT = 256;
 
     /**
      * 修复结果。
@@ -365,7 +373,7 @@ public final class DexRepair {
 
                                     @Override
                                     public void visitMethodStmt(Op op, int[] args, Method callee) {
-                                        if (op != Op.INVOKE_DIRECT
+                                        if ((op != Op.INVOKE_DIRECT && op != Op.INVOKE_DIRECT_RANGE)
                                                 || !callee.getName().equals("<init>")
                                                 || args == null
                                                 || args.length == 0) {
@@ -496,7 +504,7 @@ public final class DexRepair {
         // a) NEW 类型误译：dex 的 new-instance 类型被译成了「构造器的声明类」——抽象父类、Object、
         //    或任一个继承了构造器的普通父类。
         //
-        //    对位分两档，先试判据更强的下标档，失败了再试描述符链档：
+        //    对位分两档，保留既有下标判据，失败后才尝试描述符链唯一性证明：
         //      1) 下标档：产物的 NEW 序列与 dex 的 new-instance 序列逐条同序（绝大多数方法如此）；
         //      2) 描述符链档：dex2jar 会重排指令——实测 z3/o.a(C)V 里 dex 是 a,r,a,r…、产物是
         //         r,a,r,a…，序号对不上，但「每个 NEW + 它自己的构造器描述符」这条链两侧一致。用描述符
@@ -690,7 +698,7 @@ public final class DexRepair {
     /**
      * 下标档：dex 的 new-instance 序列与产物的 NEW 序列逐条同序，且每处差异都是收窄。
      *
-     * <p>这是判据最强的一档（位置与类型同时对上），能过就不必动用描述符链档。
+     * <p>保持既有位置判据：各位置类型一致或为收窄时采用该序列；不再额外要求描述符唯一。
      */
     private static Alignment alignByIndex(
             Map<String, DexClass> index, List<TypeInsnNode> news, List<DexNewSite> dexSites) {
@@ -718,9 +726,8 @@ public final class DexRepair {
      * <ol>
      *   <li>两侧的描述符集合与每组数量都必须一致——这是「在构造同一批对象、只是顺序不同」的指纹，
      *       少一条多一条都说明形状超出这里的认知；</li>
-     *   <li>同一描述符出现多次时，要求「该描述符下两侧的类型各自唯一」：此时无论怎么配，目标类型都
-     *       一样，配对是良定义的。若同一描述符下出现不同类型（例如两次 {@code (I)V} 分别 new 了 r
-     *       和 s），顺序已不可信、目标不唯一，放弃——这里绝不用「猜一个最像的」；</li>
+     *   <li>同一描述符内建立「相同类型或祖先→具体子类」的二分图；必须存在完整匹配，且每处 NEW
+     *       在所有完整匹配里的目标类型相同（同类型的多次出现可互换）。无法证明唯一就整条放弃；</li>
      *   <li>每处差异仍必须是收窄（与下标档同一条判据）。档位只换对位方式，不放宽判据。</li>
      * </ol>
      */
@@ -748,6 +755,10 @@ public final class DexRepair {
             return Alignment.rejected("构造器描述符集合不一致（jar=" + jarGroups.keySet()
                     + " dex=" + dexGroups.keySet() + "）");
         }
+        Map<TypeInsnNode, Set<String>> fieldOwners = allocationFieldOwners(method, news);
+        if (fieldOwners == null) {
+            return Alignment.rejected("分配使用分析超过上限");
+        }
         List<String> targets = new ArrayList<>(news.size());
         for (int i = 0; i < news.size(); i++) {
             targets.add(null);
@@ -759,29 +770,153 @@ public final class DexRepair {
                 return Alignment.rejected("描述符 " + group.getKey() + " 两侧数量不一致（jar="
                         + jarIndexes.size() + " dex=" + dexSame.size() + "）");
             }
-            Set<String> jarTypes = new HashSet<>();
-            for (int i : jarIndexes) {
-                jarTypes.add(news.get(i).desc);
+            Alignment groupAlignment = alignDescriptorGroup(index, news, jarIndexes, dexSame, group.getKey(), fieldOwners);
+            if (!groupAlignment.ok()) {
+                return groupAlignment;
             }
-            Set<String> dexTypes = new HashSet<>();
-            for (DexNewSite site : dexSame) {
-                dexTypes.add(site.type);
-            }
-            if (jarTypes.size() != 1 || dexTypes.size() != 1) {
-                return Alignment.rejected("描述符链不唯一（" + group.getKey() + " 在 jar 侧是 " + jarTypes
-                        + "、dex 侧是 " + dexTypes + "）");
-            }
-            String jarType = jarTypes.iterator().next();
-            String dexType = dexTypes.iterator().next();
-            if (!dexType.equals(jarType) && !isNarrowingToConcrete(index, jarType, dexType)) {
-                return Alignment.rejected("NEW " + jarType + " 与 dex 的 " + dexType
-                        + "（描述符 " + group.getKey() + "）不是「祖先→具体子类」的收窄");
-            }
-            for (int i : jarIndexes) {
-                targets.set(i, dexType);
+            for (int i = 0; i < jarIndexes.size(); i++) {
+                targets.set(jarIndexes.get(i), groupAlignment.targets().get(i));
             }
         }
         return new Alignment(targets, null);
+    }
+
+    private static Alignment alignDescriptorGroup(
+            Map<String, DexClass> index, List<TypeInsnNode> news, List<Integer> jarIndexes,
+            List<DexNewSite> dexSites, String descriptor, Map<TypeInsnNode, Set<String>> fieldOwners) {
+        int size = jarIndexes.size();
+        if (size > ALIGNMENT_GROUP_LIMIT) {
+            return Alignment.rejected("描述符组超过匹配上限（" + descriptor + " size=" + size + "）");
+        }
+        boolean[][] compatible = new boolean[size][size];
+        for (int jar = 0; jar < size; jar++) {
+            String jarType = news.get(jarIndexes.get(jar)).desc;
+            for (int dex = 0; dex < size; dex++) {
+                String dexType = dexSites.get(dex).type;
+                compatible[jar][dex] = (jarType.equals(dexType)
+                        || isNarrowingToConcrete(index, jarType, dexType))
+                        && fieldOwners.getOrDefault(news.get(jarIndexes.get(jar)), Set.of()).stream()
+                                .allMatch(owner -> isDexSubclass(index, dexType, owner));
+            }
+        }
+        int[] matchedJar = new int[size];
+        java.util.Arrays.fill(matchedJar, -1);
+        for (int jar = 0; jar < size; jar++) {
+            if (!augmentMatching(jar, compatible, matchedJar, new boolean[size])) {
+                return Alignment.rejected("描述符组不存在完整的祖先→具体子类收窄匹配（" + descriptor + "）");
+            }
+        }
+        // Collapse each matched pair to one vertex. An alternative edge belongs to some
+        // complete matching exactly when it closes an alternating cycle.
+        boolean[][] reachable = new boolean[size][size];
+        for (int jar = 0; jar < size; jar++) {
+            reachable[jar][jar] = true;
+            for (int dex = 0; dex < size; dex++) {
+                if (compatible[jar][dex]) reachable[jar][matchedJar[dex]] = true;
+            }
+        }
+        for (int via = 0; via < size; via++) {
+            for (int from = 0; from < size; from++) {
+                if (!reachable[from][via]) continue;
+                for (int to = 0; to < size; to++) {
+                    reachable[from][to] |= reachable[via][to];
+                }
+            }
+        }
+        List<String> targets = new ArrayList<>(size);
+        for (int jar = 0; jar < size; jar++) {
+            String target = null;
+            for (int dex = 0; dex < size; dex++) {
+                if (!compatible[jar][dex] || !reachable[matchedJar[dex]][jar]) continue;
+                String candidate = dexSites.get(dex).type;
+                if (target != null && !target.equals(candidate)) {
+                    return Alignment.rejected("描述符链目标类型不唯一（" + descriptor + " NEW "
+                            + news.get(jarIndexes.get(jar)).desc + " 可配 " + target + " 或 " + candidate + "）");
+                }
+                target = candidate;
+            }
+            targets.add(target);
+        }
+        return new Alignment(targets, null);
+    }
+
+    private static final int ALLOCATION_USE_INSTRUCTION_LIMIT = 4096;
+    private static final int ALLOCATION_USE_FRAME_SLOT_LIMIT = 262144;
+
+    /** Only a single proven allocation receiver can exclude a dex candidate. */
+    private static Map<TypeInsnNode, Set<String>> allocationFieldOwners(MethodNode method, List<TypeInsnNode> news) {
+        boolean hasFields = false;
+        for (AbstractInsnNode insn : method.instructions) {
+            if (insn.getOpcode() == Opcodes.PUTFIELD) { hasFields = true; break; }
+        }
+        if (!hasFields) return Map.of();
+        int instructions = method.instructions.size();
+        if (instructions > ALLOCATION_USE_INSTRUCTION_LIMIT || news.size() > ALIGNMENT_GROUP_LIMIT
+                || (long) instructions * (method.maxLocals + method.maxStack) > ALLOCATION_USE_FRAME_SLOT_LIMIT) {
+            return null;
+        }
+        Map<TypeInsnNode, Set<String>> owners = new IdentityHashMap<>();
+        try {
+            Frame<SourceValue>[] frames = new Analyzer<>(new AllocationSources()).analyze("java/lang/Object", method);
+            int offset = 0;
+            for (AbstractInsnNode insn : method.instructions) {
+                Frame<SourceValue> frame = frames[offset++];
+                if (!(insn instanceof FieldInsnNode field) || insn.getOpcode() != Opcodes.PUTFIELD
+                        || frame == null || frame.getStackSize() < 2) continue;
+                SourceValue receiver = frame.getStack(frame.getStackSize() - 2);
+                if (receiver.insns.size() != 1) continue;
+                AbstractInsnNode origin = receiver.insns.iterator().next();
+                if (origin instanceof TypeInsnNode created && origin.getOpcode() == Opcodes.NEW) {
+                    owners.computeIfAbsent(created, ignored -> new HashSet<>()).add(field.owner);
+                }
+            }
+        } catch (AnalyzerException | IllegalArgumentException unsupported) {
+            // An unsupported shape supplies no proof, not a guessed receiver origin.
+            return Map.of();
+        }
+        return owners;
+    }
+
+    private static final class AllocationSources extends SourceInterpreter {
+        private final AbstractInsnNode unknown = new InsnNode(Opcodes.NOP);
+
+        AllocationSources() { super(Opcodes.ASM9); }
+
+        private SourceValue unknown(SourceValue value) {
+            return value == null ? null : new SourceValue(value.getSize(), unknown);
+        }
+
+        @Override public SourceValue newValue(org.objectweb.asm.Type type) { return unknown(super.newValue(type)); }
+        @Override public SourceValue newOperation(AbstractInsnNode insn) {
+            SourceValue value = super.newOperation(insn);
+            return insn.getOpcode() == Opcodes.NEW ? value : unknown(value);
+        }
+        @Override public SourceValue copyOperation(AbstractInsnNode insn, SourceValue value) { return value; }
+        @Override public SourceValue unaryOperation(AbstractInsnNode insn, SourceValue value) {
+            return insn.getOpcode() == Opcodes.CHECKCAST ? value : unknown(super.unaryOperation(insn, value));
+        }
+        @Override public SourceValue binaryOperation(AbstractInsnNode insn, SourceValue left, SourceValue right) {
+            return unknown(super.binaryOperation(insn, left, right));
+        }
+        @Override public SourceValue ternaryOperation(AbstractInsnNode insn, SourceValue first, SourceValue second, SourceValue third) {
+            return unknown(super.ternaryOperation(insn, first, second, third));
+        }
+        @Override public SourceValue naryOperation(AbstractInsnNode insn, List<? extends SourceValue> values) {
+            return unknown(super.naryOperation(insn, values));
+        }
+    }
+
+    private static boolean augmentMatching(
+            int jar, boolean[][] compatible, int[] matchedJar, boolean[] seenDex) {
+        for (int dex = 0; dex < matchedJar.length; dex++) {
+            if (!compatible[jar][dex] || seenDex[dex]) continue;
+            seenDex[dex] = true;
+            if (matchedJar[dex] == -1 || augmentMatching(matchedJar[dex], compatible, matchedJar, seenDex)) {
+                matchedJar[dex] = jar;
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -25,6 +25,7 @@ import '../core/playback_platform.dart';
 import '../core/protocol.dart';
 import '../core/push_parser.dart';
 import '../core/recommendation_target.dart';
+import '../core/spider_account.dart';
 import '../core/source_meta_resolver.dart';
 import '../core/source_swap.dart';
 import '../core/tmdb_detail_model.dart';
@@ -65,6 +66,7 @@ import 'meta_match_dialog.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'source_swap_sheet.dart';
+import 'spider_account_page.dart';
 import 'tmdb_widgets.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -1296,6 +1298,13 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  /// 手动账号动作条目（JVM 标记 + 核心校验）。
+  ///
+  /// 命中时本页**不是**媒体详情：不加载详情/元数据，只渲染账号配置页。
+  /// 未知或不合法的标记恒为 `null`，条目照旧走普通媒体路径。
+  late final SpiderAccountAction? _accountAction =
+      SpiderAccountAction.fromVod(widget.vod);
+
   Widget? _folderPage;
   Widget? _detailView;
   bool _holdingRecommendationDetail = false;
@@ -1537,6 +1546,8 @@ class _DetailPageState extends State<DetailPage> {
   @override
   void initState() {
     super.initState();
+    // 账号条目没有媒体详情：不发详情请求，也不注册详情相关的监听。
+    if (_accountAction != null) return;
     if (widget.vod.isFolder && !isBridgeFolderVodId(widget.vod.vodId)) {
       final state = widget.state;
       final source =
@@ -1896,6 +1907,10 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   void dispose() {
+    if (_accountAction != null) {
+      super.dispose();
+      return;
+    }
     if (_folderPage != null) {
       super.dispose();
       return;
@@ -3516,6 +3531,10 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final accountAction = _accountAction;
+    if (accountAction != null) {
+      return SpiderAccountPage(state: widget.state, action: accountAction);
+    }
     if (_folderPage != null) return _folderPage!;
     // 推荐页共用全局详情槽；保留本页布局直到自己的详情恢复，避免滚动位置被短布局夹断。
     if (_holdingRecommendationDetail && _detailView != null) {

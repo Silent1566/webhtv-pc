@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/ipc_protocol.dart';
@@ -27,6 +28,7 @@ class LocalSpider {
     required this.manifestPath,
     required this.rootDir,
     required this.entryPath,
+    this.accountStorePath,
   });
 
   final SpiderManifest manifest;
@@ -35,6 +37,12 @@ class LocalSpider {
   /// manifest 所在目录；`entry` 相对该目录解析。
   final String rootDir;
   final String entryPath;
+
+  /// 应用级账号文件；只有兼容的 JVM 站源会带上它。
+  ///
+  /// 值为绝对路径，启动时经 `-Dwebhtv.accountStore` 传给 JVM 宿主；
+  /// Python/Node 站源保持 null，命令参数不变。
+  final String? accountStorePath;
 
   String get key => manifest.key;
 
@@ -177,11 +185,17 @@ class SpiderManifestRegistry {
       return null;
     }
 
+    final runtime = manifest.runtime.toLowerCase();
+    final compatibleJvm =
+        runtime.startsWith('jvm') || runtime.startsWith('java');
     return LocalSpider(
       manifest: manifest,
       manifestPath: file.path,
       rootDir: rootDir,
       entryPath: entryPath,
+      accountStorePath: compatibleJvm
+          ? p.normalize(p.absolute(p.join(root, 'accounts.json')))
+          : null,
     );
   }
 }
@@ -244,12 +258,85 @@ class CspJvmBinding {
     return trimmed.substring(4);
   }
 
-  /// 站点 key 对应的缓存目录。
-  ///
-  /// siteKey 来自 manifest（不可信）：先净化成单个路径段再拼，与 sidecar 工作目录
-  /// 共用 [sanitizePathSegment] 的同一套规则。
-  String directoryFor(String siteKey) =>
-      p.join(root, sanitizePathSegment(siteKey));
+  /// 缓存身份保留原始 key；哈希命名空间与旧净化规则的字符集不相交。
+  /// 仅小写、安全且有界的 ASCII key 可直接作为新目录名，避免 Windows 大小写别名。
+  String directoryFor(String siteKey) {
+    final hashed = p.join(root, 'csp~${sha256.convert(utf8.encode(siteKey))}');
+    if (Directory(hashed).existsSync()) return hashed;
+
+    final legacySegment = sanitizePathSegment(siteKey);
+    if (!_safeCacheSegment(legacySegment)) return hashed;
+    final legacy = p.join(root, legacySegment);
+    try {
+      final candidate = Directory(legacy);
+      if (candidate.existsSync()) {
+        final resolved = candidate.resolveSymbolicLinksSync();
+        if (p.basename(resolved) == legacySegment &&
+            p.equals(
+              p.dirname(resolved),
+              Directory(root).resolveSymbolicLinksSync(),
+            ) &&
+            _legacyOwnerMatches(
+              legacy,
+              siteKey,
+              allowMissing: siteKey == legacySegment,
+            )) {
+          return legacy;
+        }
+        return hashed;
+      }
+      if (FileSystemEntity.typeSync(legacy, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+        return hashed;
+      }
+    } on FileSystemException {
+      return hashed;
+    }
+    if (siteKey == legacySegment && siteKey == siteKey.toLowerCase()) {
+      return legacy;
+    }
+    return hashed;
+  }
+
+  static bool _safeCacheSegment(String value) =>
+      value.isNotEmpty &&
+      value.length <= 120 &&
+      value != '.' &&
+      value != '..' &&
+      !value.endsWith('.') &&
+      RegExp(r'^[A-Za-z0-9_.-]+$').hasMatch(value) &&
+      !RegExp(
+        r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$',
+        caseSensitive: false,
+      ).hasMatch(value);
+
+  static bool _legacyOwnerMatches(
+    String directory,
+    String siteKey, {
+    required bool allowMissing,
+  }) {
+    var found = false;
+    try {
+      for (final entry in const {
+        'manifest.json': 'key',
+        'intake.json': 'siteKey',
+        'probe.json': 'siteKey',
+      }.entries) {
+        final file = File(p.join(directory, entry.key));
+        if (!file.existsSync()) continue;
+        final decoded = jsonDecode(file.readAsStringSync());
+        if (decoded is! Map) return false;
+        if (!decoded.containsKey(entry.value)) continue;
+        if (decoded[entry.value] != siteKey) return false;
+        found = true;
+      }
+    } on FileSystemException {
+      return false;
+    } on FormatException {
+      return false;
+    }
+    return found || allowMissing;
+  }
 
   /// 在缓存目录内定位入口：优先 `index.jar`，其次唯一的一个 jar，最后类目录。
   String? entryFor(String siteKey) {
@@ -443,6 +530,11 @@ class LocalSpiderCommand {
               ? minimumSidecarMemoryMiB
               : spider.manifest.limits.memoryMiB,
         ),
+          // 只传文件路径，绝不把 Cookie 值放进命令行/环境变量。
+          if (spider.accountStorePath != null &&
+              spider.accountStorePath!.isNotEmpty)
+            '-Dwebhtv.accountStore='
+                '${p.normalize(p.absolute(spider.accountStorePath!))}',
           '-jar',
           resolvedJvmHost,
           '--entry',

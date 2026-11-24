@@ -1,10 +1,14 @@
 package android.graphics;
 
-// 为什么是空壳：Path 仅在 Paint.getTextPath 的参数位出现，而那个方法本身就是直接抛
-// UnsupportedOperationException 的桩，路径数据绝不会流到这里。
-// 因此 moveTo/lineTo 等绘制成员一律不声明——声明了反而会诱导上层写出走不通的代码。
-public class Path {
+import java.awt.geom.Path2D;
 
-    public Path() {
-    }
+public class Path {
+    final Path2D.Float geometry = new Path2D.Float(Path2D.WIND_NON_ZERO);
+    public Path() { }
+    public void moveTo(float x,float y) { geometry.moveTo(x,y); }
+    private void current() { if(geometry.getCurrentPoint()==null) geometry.moveTo(0,0); }
+    public void lineTo(float x,float y) { current(); geometry.lineTo(x,y); }
+    public void quadTo(float x1,float y1,float x2,float y2) { current(); geometry.quadTo(x1,y1,x2,y2); }
+    public void cubicTo(float x1,float y1,float x2,float y2,float x3,float y3) { current(); geometry.curveTo(x1,y1,x2,y2,x3,y3); }
+    public void close() { if(geometry.getCurrentPoint()!=null) geometry.closePath(); }
 }

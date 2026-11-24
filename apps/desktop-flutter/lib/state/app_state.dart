@@ -93,6 +93,7 @@ import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/proxy_policy.dart';
 import '../core/realtime_sync.dart';
+import '../core/spider_account.dart';
 import '../core/source_key.dart';
 import '../core/source_swap.dart';
 import '../core/site_group.dart';
@@ -143,6 +144,7 @@ import '../services/site_service.dart';
 import '../services/spider_process.dart';
 import '../services/spider_proxy_session.dart';
 import '../services/sidecar_runtime.dart';
+import '../services/spider_account_store.dart';
 import '../services/spider_registry.dart';
 import '../services/unidbg_runtime.dart';
 import '../services/spider_router.dart';
@@ -385,6 +387,9 @@ AiContentCompletion? aiContentCompletion,
       path: p.join(this.paths.configDir, 'local_sources.json'),
       log: this.log,
     );
+    _spiderAccounts = SpiderAccountStore(
+      path: p.join(this.paths.configDir, 'spiders', 'accounts.json'),
+    );
     _proxy = LocalProxyServer(log: this.log);
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
@@ -613,6 +618,11 @@ AiContentCompletion? aiContentCompletion,
   /// HTML 源的启用状态不在这里：它是 `webhome/registry.json` 的一部分。
   /// 两套存储由 [localSourceEnabled]/[setLocalSourceEnabled] 统一成一个接缝。
   late final LocalSourceEnableStore _localSourceEnable;
+
+  /// 应用级手动网盘账号：`<configDir>/spiders/accounts.json`。
+  ///
+  /// 与 JVM 站源启动参数 `-Dwebhtv.accountStore` 指向同一文件。
+  late final SpiderAccountStore _spiderAccounts;
 
   /// 本地源扫描器（只读、不执行）。无状态，参数取自 [LocalSpiderScanner] 默认值。
   final LocalSpiderScanner _localScanner = const LocalSpiderScanner();
@@ -2152,6 +2162,9 @@ AiContentCompletion? aiContentCompletion,
   String get detailRequestVodId => _detailRequestVodId;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
+
+  /// 应用级手动网盘账号存储（显式 UI 保存/清除的唯一入口）。
+  SpiderAccountStore get spiderAccounts => _spiderAccounts;
 
   /// 当前生效的分类筛选条件（供 UI 高亮选中项）。
   Map<String, String> get categoryFilters => _categoryFilters;
@@ -6235,6 +6248,36 @@ AiContentCompletion? aiContentCompletion,
     _categoryLoadingMore = false;
   }
 
+  /// 显式保存/清除账号后刷新「当前选中的分类」。
+  ///
+  /// 只重跑当前分类列表：不切站点/配置、不进入详情、不触发 TMDB/AI。
+  /// 未选中分类或已卸载时什么都不做（迟到写入不得改界面）。
+  /// 失败时抛 [SpiderAccountRefreshException]：`loadCategory` 自己只把失败写进
+  /// [contentPhase]/[lastError]（普通分类页的错误横幅，语义不变），UI 从这次
+  /// 调用的返回值分不清「刷新完成」和「刷新失败」，会误报刷新成功。
+  /// 只有当源与分类仍是发起时那一个（且没有新的分类加载顶替）才抛；否则视为
+  /// 过期请求，静默返回。
+  Future<void> refreshSpiderAccountCategory() async {
+    if (_disposed) return;
+    final site = _selectedSite;
+    final typeId = _selectedTypeId;
+    if (site == null || typeId == null) return;
+    final runIdBefore = _categoryRunId;
+    await loadCategory(typeId);
+    if (_disposed) return;
+    final current = _selectedSite;
+    final sameContext =
+        current != null &&
+        current.key == site.key &&
+        current.api == site.api &&
+        _selectedTypeId == typeId &&
+        _categoryRunId == runIdBefore + 1;
+    if (!sameContext) return;
+    if (_contentPhase == LoadPhase.failed && _lastError != null) {
+      throw const SpiderAccountRefreshException();
+    }
+  }
+
   /// 加载分类（§7.4.7 分页与筛选）。
   ///
   /// 这是「重新开始」路径（[page] 默认 1）：**清空并替换**已有结果。用户实际翻页
@@ -8790,10 +8833,12 @@ AiContentCompletion? aiContentCompletion,
   /// 导入期字节码预转译（[DexTranslate]，独立进程、不加载类、不调用站源方法、不联网；
   /// 因此不违反 PRODUCT.md 的「UI 层不得直接执行网络请求、Spider 或代理逻辑」）。
   /// 依据：PRODUCT.md、ADR-0002。
-  Future<CspProbeReport> probeCspJars() async {
+  Future<CspProbeReport> probeCspJars({
+    void Function(ShellUnpackTick)? onProgress,
+  }) async {
     final config = effectiveConfig;
     if (config == null) return const CspProbeReport();
-    final report = await _cspProbe().materialize(config);
+    final report = await _cspProbe().materialize(config, onProgress: onProgress);
     if (!report.isEmpty) _notifyIfAlive();
     return report;
   }

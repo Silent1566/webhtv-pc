@@ -39,7 +39,9 @@ public class WebhtvContext extends Context {
         String safe = name == null || name.isEmpty()
                 ? "default"
                 : UNSAFE.matcher(name).replaceAll("_");
-        return new WebhtvPreferences(new File(prefsDir, safe + ".properties"));
+        // 账号读穿透只挂在精确名字上：其余 preferences（含站源自己的其它文件）保持站点隔离的旧语义。
+        return SharedAccountPreferences.wrap(name,
+                new WebhtvPreferences(new File(prefsDir, safe + ".properties")));
     }
 
     @Override

@@ -134,14 +134,18 @@ public final class CatVodSpiderAdapter extends Spider {
         context.checkCancelled();
         boolean filter = flag(params, "filter");
         Object raw = call("homeContent", new Class<?>[]{boolean.class}, filter);
-        return Result.normalizeHome(asJsonObject("homeContent", raw));
+        Map<String, Object> home = Result.normalizeHome(asJsonObject("homeContent", raw));
+        PanConfigAccountActions.sanitize(home);
+        return home;
     }
 
     @Override
     public Map<String, Object> homeVod(Map<String, Object> params, CallContext context) {
         context.checkCancelled();
         Object raw = call("homeVideoContent", new Class<?>[0]);
-        return Result.normalizeList(asJsonObject("homeVideoContent", raw));
+        Map<String, Object> homeVod = Result.normalizeList(asJsonObject("homeVideoContent", raw));
+        PanConfigAccountActions.sanitize(homeVod);
+        return homeVod;
     }
 
     @Override
@@ -163,7 +167,10 @@ public final class CatVodSpiderAdapter extends Spider {
                 "categoryContent",
                 new Class<?>[]{String.class, String.class, boolean.class, HashMap.class},
                 typeId, page, filter, extend);
-        return Result.normalizeCategory(asJsonObject("categoryContent", raw), page);
+        Map<String, Object> category = Result.normalizeCategory(asJsonObject("categoryContent", raw), page);
+        // 只按**站源类身份**加账号动作标记：同样的条目 ID 出现在别的站源上仍是普通媒体条目。
+        PanConfigAccountActions.decorate(targetClassName, category);
+        return category;
     }
 
     @Override
@@ -186,7 +193,9 @@ public final class CatVodSpiderAdapter extends Spider {
             throw new IllegalArgumentException("缺少 id/ids");
         }
         Object result = call("detailContent", new Class<?>[]{List.class}, ids);
-        return Result.normalizeList(asJsonObject("detailContent", result));
+        Map<String, Object> detail = Result.normalizeList(asJsonObject("detailContent", result));
+        PanConfigAccountActions.sanitize(detail);
+        return detail;
     }
 
     @Override
@@ -199,7 +208,9 @@ public final class CatVodSpiderAdapter extends Spider {
         boolean quick = flag(params, "quick");
         Object raw = call("searchContent", new Class<?>[]{String.class, boolean.class}, keyword, quick);
         String page = text(params, "page", "1");
-        return Result.normalizeCategory(asJsonObject("searchContent", raw), page);
+        Map<String, Object> search = Result.normalizeCategory(asJsonObject("searchContent", raw), page);
+        PanConfigAccountActions.sanitize(search);
+        return search;
     }
 
     @Override

@@ -9,6 +9,8 @@
 /// - 本地 Spider 来源与权限在启用前必须可见（§18.1、§18.2）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/csp_jar_probe.dart';
@@ -18,6 +20,7 @@ import '../services/spider_registry.dart';
 import '../state/app_state.dart';
 import 'common.dart';
 import 'local_sources_page.dart';
+import 'shell_unpack_dialogs.dart';
 
 /// 从设置页 push 打开 Spider 管理页。
 ///
@@ -455,9 +458,11 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
 
   /// `_busy` 期间的可见提示：让用户知道在做什么（导入含 dex 的入口会预转译数秒）。
   String _busyNote = '';
+  StreamController<ShellUnpackTick>? _probeTicks;
 
   @override
   void dispose() {
+    unawaited(_probeTicks?.close());
     _path.dispose();
     _siteKey.dispose();
     super.dispose();
@@ -525,23 +530,51 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
 
   /// 自动探测：配置里声明的 csp_* jar 由程序取回 + 静态检测（§12.9）。
   Future<void> _onProbe() async {
+    if (_busy) return;
+    final ticks = StreamController<ShellUnpackTick>();
+    _probeTicks = ticks;
     setState(() {
       _busy = true;
       _busyNote = '正在取回并静态检测配置里的 jar…';
       _message = null;
     });
-    final report = await _state.probeCspJars();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _report = report;
-      _message = report.isEmpty
-          ? '没有需要自动探测的 csp_* 站点（配置里未声明 jar，或已全部导入）。'
-          : '自动探测完成：已装 ${report.installed} 个（其中解包 ${report.unpacked} 个）、'
-                '拒绝 ${report.rejected} 个、失败 ${report.failed} 个'
-                '${report.needsShellRuntime > 0 ? '、需先下载解包运行时 ${report.needsShellRuntime} 个' : ''}'
-                '${report.unpackFailed > 0 ? '、解包失败 ${report.unpackFailed} 个' : ''}。';
-    });
+    unawaited(
+      showShellUnpackProgress(
+        context,
+        jarCount: 0,
+        ticks: ticks.stream,
+        title: '正在自动探测 jar',
+        failureTitle: '自动探测失败',
+        itemLabel: '站点',
+      ),
+    );
+    try {
+      final report = await _state.probeCspJars(
+        onProgress: (tick) {
+          if (mounted && !ticks.isClosed) ticks.add(tick);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _report = report;
+        _message = report.isEmpty
+            ? '没有需要自动探测的 csp_* 站点（配置里未声明 jar，或已全部导入）。'
+            : '自动探测完成：已装 ${report.installed} 个（其中解包 ${report.unpacked} 个）、'
+                  '拒绝 ${report.rejected} 个、失败 ${report.failed} 个'
+                  '${report.needsShellRuntime > 0 ? '、需先下载解包运行时 ${report.needsShellRuntime} 个' : ''}'
+                  '${report.unpackFailed > 0 ? '、解包失败 ${report.unpackFailed} 个' : ''}。';
+      });
+    } catch (_) {
+      const message = '自动探测失败，请在日志页查看脱敏后的诊断并重试。';
+      if (mounted) {
+        setState(() => _message = message);
+        if (!ticks.isClosed) ticks.addError(message);
+      }
+    } finally {
+      if (!ticks.isClosed) unawaited(ticks.close());
+      if (identical(_probeTicks, ticks)) _probeTicks = null;
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _onRemove(String siteKey) async {
@@ -774,7 +807,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                       ),
                       if (entry.message.isNotEmpty)
                         Text(
-                          entry.message,
+                          redactProgressText(entry.message),
                           style: theme.textTheme.bodySmall,
                         ),
                     ],

@@ -364,6 +364,7 @@ class CspJarProbe {
 
   /// 单轮探测的下载缓存（URL → 字节或 null=失败）。
   final Map<String, List<int>?> _downloadCache = {};
+  final Map<String, List<Map<String, Object?>>> _shellAttempts = {};
 
   /// 懒建的运行时实例：只有真的碰到加固壳入口才会用到它。
   late final UnidbgRuntime _runtime = unidbgRuntime ?? UnidbgRuntime(log: log);
@@ -407,25 +408,99 @@ class CspJarProbe {
   ///
   /// 同一轮内按 URL 去重下载：AT 这类配置有 90+ 个站点共用同一个 `spring.jar`，
   /// 若逐站点独立取回会产生上百次请求，也会放大上游压力。
-  Future<CspProbeReport> materialize(AppConfig config) async {
+  Future<CspProbeReport> materialize(
+    AppConfig config, {
+    void Function(ShellUnpackTick)? onProgress,
+  }) async {
     final entries = <CspProbeEntry>[];
     final probeClock = Stopwatch()..start();
     _downloadCache.clear();
+    _shellAttempts.clear();
+    final sites = config.sites
+        .where(
+          (site) =>
+              CspJvmBinding.matches(site.api) && directSpiderKind(site) == null,
+        )
+        .toList();
+    final eta = _UnpackEtaEstimator(jarCount: sites.length);
+    // 只有站点边界适合报整体速率估算；装配/翻译阶段如实报「计算中」。
+    const estimatedStages = {'站点-探测', '站点-完成'};
+    var lastFraction = -1.0;
+    var siteIndex = 0;
+    var siteStartMs = 0;
+    void emit(double fraction, String stage, {double? inside, int? completed}) {
+      if (fraction < lastFraction) return;
+      lastFraction = fraction;
+      // 只有站点边界才报估算：壳内阶段权重只在真解包时攒得够样本，缓存命中的站点
+      // 永远走不到那里，只靠它预计时间会一直空着；而装配/翻译阶段的实际耗时由另一
+      // 条路径按「不可估」上报，不能被这里的整体速率盖掉。
+      final measured = estimatedStages.contains(stage)
+          ? eta.measuredEta(
+              completed: completed ?? siteIndex,
+              total: sites.length,
+              elapsedMs: probeClock.elapsedMilliseconds,
+            )
+          : null;
+      try {
+        onProgress?.call(
+          ShellUnpackTick(
+            jarIndex: sites.isEmpty ? 0 : siteIndex,
+            jarCount: sites.length,
+            jarUrl: sites.isEmpty
+                ? ''
+                : JarSourceSpec.parse(
+                        sites[siteIndex].effectiveJar(config.spider),
+                      )?.url ??
+                      '',
+            fraction: fraction,
+            stage: stage,
+            eta:
+                (inside == null
+                    ? null
+                    : eta.eta(
+                        jarIndex: siteIndex,
+                        jarElapsedMs:
+                            probeClock.elapsedMilliseconds - siteStartMs,
+                        fractionInside: inside,
+                      )) ??
+                measured,
+          ),
+        );
+      } catch (_) {}
+    }
+
+    emit(0, '探测-开始');
     // 入口类名按 `api` 推导并登记：这份配置的 key 是中文标签，按 key 推必然 ClassNotFound。
     _entryClassByKey
       ..clear()
       ..addEntries(
         config.sites.map((site) => MapEntry(site.key, entryClassNameOf(site))),
       );
-    for (final site in config.sites) {
-      if (!CspJvmBinding.matches(site.api)) continue;
+    for (final site in sites) {
       // 已有自己运行时的站点（direct js/py、CatVod 壳）不参与 JVM 探测：
       // 它们的 api 只是壳名，**没有**声明 jar 的语义；若配置顶层有全局
       // `spider`，`effectiveJar` 会把那份 jar 也算到它们头上（AT 的顶层
       // spider 就是 spring.jar），探测结果对它们毫无意义，纯属白下白写。
       if (directSpiderKind(site) != null) continue;
       try {
-        final entry = await _probeSite(site, config.spider);
+        siteStartMs = probeClock.elapsedMilliseconds;
+        emit(siteIndex / sites.length * 0.99, '站点-探测');
+        final entry = await _probeSite(
+          site,
+          config.spider,
+          onStage: (index) {
+            final inside = ShellUnpack.fractionAt(index).clamp(0.0, 0.97);
+            emit(
+              (siteIndex + inside) / sites.length * 0.99,
+              ShellUnpackStages.nameOf(index),
+              inside: inside,
+            );
+          },
+          // Assembly/translation has no trustworthy rate: report the phase with a
+          // null ETA instead of letting the unpack curve extrapolate a fake countdown.
+          onAssembly: (stage) =>
+              emit(((siteIndex + 0.97) / sites.length) * 0.99, stage),
+        );
         if (entry != null) entries.add(entry);
         // 命中缓存时 `_probeSite` 可能一路同步跑完，这里显式让出一次事件循环，
         // 否则一百来个站点会在首帧之后连成一段几百毫秒的卡顿。
@@ -433,8 +508,40 @@ class CspJarProbe {
       } catch (error) {
         // 单个站点失败不得影响其它站点与启动。
         log?.warning('CSP jar 自动探测失败 site=${site.key} $error', scope: 'spider');
+        entries.add(
+          CspProbeEntry(
+            siteKey: site.key,
+            outcome: CspProbeOutcome.failed,
+            message: '$error',
+          ),
+        );
       }
+      eta.markJarDone(probeClock.elapsedMilliseconds - siteStartMs);
+      emit(
+        (siteIndex + 1) / sites.length * 0.99,
+        '站点-完成',
+        completed: siteIndex + 1,
+      );
+      siteIndex++;
     }
+    // A later success for identical shell content repairs the earlier site without another emulation.
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.outcome != CspProbeOutcome.unpackFailed) continue;
+      final record = JarIntake.probeRecord(binding.directoryFor(entry.siteKey));
+      final sha = record?['sha256'];
+      if (sha is! String || !_nonEmpty(_payloadFileFor(sha))) continue;
+      final site = sites.firstWhere((site) => site.key == entry.siteKey);
+      try {
+        final repaired = await _probeSite(site, config.spider);
+        if (repaired != null) entries[i] = repaired;
+      } catch (error) {
+        log?.warning('CSP 缓存恢复失败 site=${site.key} $error', scope: 'spider');
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
+    siteIndex = sites.isEmpty ? 0 : sites.length - 1;
+    emit(1, '探测-完成');
     if (entries.isNotEmpty) {
       final report = CspProbeReport(entries: entries);
       log?.info(
@@ -505,6 +612,7 @@ class CspJarProbe {
     void Function(ShellUnpackTick)? onProgress,
   }) async {
     _downloadCache.clear();
+    _shellAttempts.clear();
     _entryClassByKey
       ..clear()
       ..addEntries(
@@ -542,20 +650,22 @@ class CspJarProbe {
       final overall = (index + fractionInside) / jarCount;
       if (overall <= lastFraction) return;
       lastFraction = overall;
-      onProgress?.call(
-        ShellUnpackTick(
-          jarIndex: index,
-          jarCount: jarCount,
-          jarUrl: groups[index].spec.url,
-          fraction: (index + fractionInside) / jarCount,
-          stage: ShellUnpackStages.nameOf(stageIndex),
-          eta: eta.eta(
+      try {
+        onProgress?.call(
+          ShellUnpackTick(
             jarIndex: index,
-            jarElapsedMs: clock.elapsedMilliseconds - jarStartMs,
-            fractionInside: fractionInside,
+            jarCount: jarCount,
+            jarUrl: groups[index].spec.url,
+            fraction: (index + fractionInside) / jarCount,
+            stage: ShellUnpackStages.nameOf(stageIndex),
+            eta: eta.eta(
+              jarIndex: index,
+              jarElapsedMs: clock.elapsedMilliseconds - jarStartMs,
+              fractionInside: fractionInside,
+            ),
           ),
-        ),
-      );
+        );
+      } catch (_) {}
     }
 
     final entries = <CspProbeEntry>[];
@@ -565,10 +675,7 @@ class CspJarProbe {
       emitTick(index, ShellUnpackStages.read);
       try {
         entries.addAll(
-          await _unpackJar(
-            group,
-            (stageIndex) => emitTick(index, stageIndex),
-          ),
+          await _unpackJar(group, (stageIndex) => emitTick(index, stageIndex)),
         );
       } catch (error) {
         // 单个 jar 的意外异常同样只落在自己的结论上：其它选中项照常继续。
@@ -756,7 +863,8 @@ class CspJarProbe {
         group,
         outcome: CspProbeOutcome.unsupportedShell,
         verdict: inspection.verdict.name,
-        summary: '本地暂存的 jar 已不是加固壳（${inspection.summary}）：'
+        summary:
+            '本地暂存的 jar 已不是加固壳（${inspection.summary}）：'
             '跳过解包，请重新探测后再决定。',
         inspection: inspection,
       );
@@ -805,7 +913,12 @@ class CspJarProbe {
         outJar: payload.path,
         onProgress: (progress) {
           final index = ShellUnpackStages.indexOf(progress.stage);
-          if (index >= 0) emit(index);
+          if (index >= 0)
+            emit(
+              index == ShellUnpackStages.store
+                  ? ShellUnpackStages.verify
+                  : index,
+            );
         },
       );
       final stage = '${unpack['stage'] ?? ''}'.trim();
@@ -843,6 +956,7 @@ class CspJarProbe {
     final payloadInfo = _payloadInfo(payload, unpack);
     final entries = <CspProbeEntry>[];
     for (final site in group.sites) {
+      await Future<void>.delayed(Duration.zero);
       if (binding.entryFor(site.key) != null) {
         // 已导入（含用户手工导入）的站点不被覆盖：多选解包不是「重装」。
         entries.add(
@@ -907,7 +1021,6 @@ class CspJarProbe {
     return entries;
   }
 
-
   /// `probe.json` 的结论是否按**当前判定口径**得出（否则一律当不存在）。
   static bool _isCurrentRecord(Map<String, Object?> record) {
     final version = record['semanticsVersion'];
@@ -956,7 +1069,12 @@ class CspJarProbe {
     ),
   );
 
-  Future<CspProbeEntry?> _probeSite(Site site, String? globalSpider) async {
+  Future<CspProbeEntry?> _probeSite(
+    Site site,
+    String? globalSpider, {
+    void Function(int)? onStage,
+    void Function(String)? onAssembly,
+  }) async {
     final siteKey = site.key;
     final targetDir = binding.directoryFor(siteKey);
 
@@ -969,11 +1087,26 @@ class CspJarProbe {
     // code=3，用户只能手动删站点目录——那是把内部实现变更的成本转嫁给用户
     // （与 semanticsVersion 同一条教训）。用户手工放的 jar 没有 probe.json，不受影响。
     final record = JarIntake.probeRecord(targetDir);
-    final staleShellEntry = record != null &&
+    final staleShellEntry =
+        record != null &&
         record['sourceUrl'] == spec.url &&
         !_isCurrentRecord(record) &&
         _shellFeatures(record);
-    if (binding.entryFor(siteKey) != null && !staleShellEntry) {
+    final deferredAssembly =
+        record != null &&
+        record['sourceUrl'] == spec.url &&
+        (record['pretranslationDeferred'] == true ||
+            (_shellFeatures(record) &&
+                (!_nonEmpty(File(p.join(targetDir, 'index.jar'))) ||
+                    !_nonEmpty(File(p.join(targetDir, 'payload.jar'))) ||
+                    (!record.containsKey('pretranslationDeferred') &&
+                        (!_dexBundlePresent(targetDir) ||
+                            !_dexBundlePresent(
+                              p.join(targetDir, payloadDexDirName),
+                            ))))));
+    if (binding.entryFor(siteKey) != null &&
+        !staleShellEntry &&
+        !deferredAssembly) {
       return CspProbeEntry(
         siteKey: siteKey,
         outcome: CspProbeOutcome.skippedInstalled,
@@ -990,7 +1123,9 @@ class CspJarProbe {
     }
     if (current != null &&
         current['sourceUrl'] == spec.url &&
-        _shouldSkip(current, spec.url)) {
+        _shouldSkip(current, spec.url) &&
+        !deferredAssembly &&
+        current['installed'] != true) {
       return CspProbeEntry(
         siteKey: siteKey,
         outcome:
@@ -1001,7 +1136,21 @@ class CspJarProbe {
       );
     }
 
-    final bytes = spec.url.isEmpty ? null : await _download(spec.url);
+    onStage?.call(ShellUnpackStages.read);
+    final stagedCache = _stagedFileFor(spec.url);
+    final recordedSha = current != null && current['sourceUrl'] == spec.url
+        ? current['sha256']
+        : null;
+    final recoverCached =
+        recordedSha is String &&
+        recordedSha.isNotEmpty &&
+        _nonEmpty(stagedCache) &&
+        stagedCache.lengthSync() <= maxBytes &&
+        _sha256Of(stagedCache) == recordedSha &&
+        _nonEmpty(_payloadFileFor(recordedSha));
+    final bytes = recoverCached
+        ? await stagedCache.readAsBytes()
+        : await _download(spec.url);
     if (bytes == null) {
       await _writeRecord(
         targetDir,
@@ -1060,6 +1209,8 @@ class CspJarProbe {
         inspection: inspection,
         md5Note: md5Note,
         actualMd5: actualMd5,
+        onStage: onStage,
+        onAssembly: onAssembly,
       );
     }
 
@@ -1147,7 +1298,10 @@ class CspJarProbe {
     required JarInspection inspection,
     String? md5Note,
     String? actualMd5,
+    void Function(int)? onStage,
+    void Function(String)? onAssembly,
   }) async {
+    onStage?.call(ShellUnpackStages.identify);
     // payload 按**壳 jar 的内容**缓存：同一份壳 jar 被 90+ 个 csp_ 站点共用时，
     // 解包只做一次（解包要起 ARM 模拟器，是整条链里最贵的一步）。
     final shellSha = _sha256Of(staged) ?? '';
@@ -1188,7 +1342,17 @@ class CspJarProbe {
       } catch (error) {
         log?.warning('创建解包缓存目录失败 site=$siteKey $error', scope: 'spider');
       }
-      unpack = await _runShellUnpack(shellJar: staged.path, outJar: payload.path);
+      final attempts = _shellAttempts.putIfAbsent(shellSha, () => []);
+      if (attempts.length >= 2) {
+        unpack = attempts.last;
+      } else {
+        unpack = await _runShellUnpack(
+          shellJar: staged.path,
+          outJar: payload.path,
+          onProgress: (progress) => onStage?.call(progress.stageIndex),
+        );
+        attempts.add(unpack);
+      }
       final stage = '${unpack['stage'] ?? ''}'.trim();
       final message = '${unpack['message'] ?? ''}'.trim();
       // 失败一律带阶段：用户要看的是「卡在哪」，不是「解包失败」四个字。
@@ -1220,6 +1384,10 @@ class CspJarProbe {
       }
     }
 
+    // The CLI's payload write is done; translation/import still runs, so the ETA
+    // basis above no longer holds.
+    onAssembly?.call('装配-翻译');
+    onStage?.call(ShellUnpackStages.verify);
     return _installPayload(
       siteKey: siteKey,
       targetDir: targetDir,
@@ -1261,8 +1429,7 @@ class CspJarProbe {
     if (!payloadInspection.installable) {
       // 解包成功但产物仍不可加载（仍带壳特征 / 结构损坏 / 没有可转译的 dex）：
       // 这是**壳族未支持**，不是「再试一次就好」，因此不重试、不猜。
-      final summary =
-          '解包出的 payload 仍无法在桌面 JVM 加载：${payloadInspection.summary}';
+      final summary = '解包出的 payload 仍无法在桌面 JVM 加载：${payloadInspection.summary}';
       await _writeRecord(
         targetDir,
         siteKey,
@@ -1322,6 +1489,7 @@ class CspJarProbe {
 
     final payloadSha = '${payloadInfo['sha256'] ?? ''}'.trim();
     final sitePayload = File(p.join(targetDir, 'payload.jar'));
+    final deferred = <String>[];
     try {
       // 1) 站点入口换成**壳 jar**：install 刚把 payload 写成了 index.jar，那只是借用它的
       //    落盘纪律，必须被壳顶掉——payload 里没有壳类，拿它当入口必然 ClassNotFound。
@@ -1333,7 +1501,8 @@ class CspJarProbe {
 
       // 2) payload 落到同目录的 payload.jar。同一份 payload（按 SHA-256）已经就位就不再
       //    复制：90+ 个站点共用同一份解包产物是常态，逐站点重写只是白占 IO。
-      final payloadPresent = _nonEmpty(sitePayload) &&
+      final payloadPresent =
+          _nonEmpty(sitePayload) &&
           (payloadSha.isEmpty || _sha256Of(sitePayload) == payloadSha);
       if (!payloadPresent) {
         final staging = File(p.join(targetDir, 'payload.jar.staging'));
@@ -1344,17 +1513,29 @@ class CspJarProbe {
 
       // 3) 壳与 payload **各转译各的**：两者都是 classes.dex，共用 dexBundles/ 会互相
       //    顶掉（壳的入口类就没了）。payload 的产物目录必须与 DexNative 的约定一致。
-      await _translateStep(siteKey, siteDir: targetDir, archive: entry.path);
+      final shellTranslation = await _translateStep(
+        siteKey,
+        siteDir: targetDir,
+        archive: entry.path,
+      );
+      if (shellTranslation['ok'] != true)
+        deferred.add(
+          '壳：${shellTranslation['stage']} ${shellTranslation['message']}',
+        );
       // payload 的预转译是**幂等**的：DexNative 在运行期就是「payload-dex/dexBundles/
       // classes.jar 在就直接用」，装配期重跑（probe.json 被删、口径重判）没必要再起一次
       // 5-9 s 的 dex2jar——99 个站点叠起来就是一次「界面未响应」。
       final payloadDexDir = p.join(targetDir, payloadDexDirName);
       if (!_dexBundlePresent(payloadDexDir)) {
-        await _translateStep(
+        final payloadTranslation = await _translateStep(
           siteKey,
           siteDir: payloadDexDir,
           archive: sitePayload.path,
         );
+        if (payloadTranslation['ok'] != true)
+          deferred.add(
+            'payload：${payloadTranslation['stage']} ${payloadTranslation['message']}',
+          );
       }
       await _patchIntake(
         targetDir,
@@ -1390,7 +1571,8 @@ class CspJarProbe {
 
     final payloadBytes = payloadInfo['bytes'];
     final payloadSummary =
-        '已解包并导入（壳入口 $shellEntryClass，payload $payloadBytes 字节）';
+        '已解包并导入（壳入口 $shellEntryClass，payload $payloadBytes 字节）'
+        '${deferred.isEmpty ? '' : '；预转译未完成，加载时重试：${deferred.join('；')}'}';
     await _writeRecord(
       targetDir,
       siteKey,
@@ -1398,13 +1580,18 @@ class CspJarProbe {
       verdict: payloadInspection.verdict.name,
       outcome: CspProbeOutcome.unpacked.name,
       summary: _withMd5Note(payloadSummary, md5Note),
+      pretranslationReasons: deferred,
       shellPayload: payloadInfo,
       installed: true,
       sha256: shellSha,
       entryCount: payloadInspection.entryCount,
       actualMd5: actualMd5,
     );
-    JarIntake.ensureLaunchManifest(targetDir: targetDir, siteKey: siteKey, log: log);
+    JarIntake.ensureLaunchManifest(
+      targetDir: targetDir,
+      siteKey: siteKey,
+      log: log,
+    );
     return CspProbeEntry(
       siteKey: siteKey,
       outcome: CspProbeOutcome.unpacked,
@@ -1418,12 +1605,13 @@ class CspJarProbe {
   ///
   /// 为什么允许失败：宿主 DexNative 在加载期找不到产物时会自己再转译一次（只是把
   /// 5-9 s 的 dex2jar 挤进侧车握手窗口）；这里预转译只是把那段时间挪到导入期。
-  Future<void> _translateStep(
+  Future<Map<String, Object?>> _translateStep(
     String siteKey, {
     required String siteDir,
     required String archive,
   }) async {
     try {
+      await Directory(siteDir).create(recursive: true);
       final result = await _translateDex(siteDir: siteDir, archive: archive);
       if (result['ok'] != true) {
         log?.warning(
@@ -1432,6 +1620,7 @@ class CspJarProbe {
           scope: 'spider',
         );
       }
+      return result;
     } catch (error) {
       // 抛异常也算预转译失败：这一步是**加速**而不是装配前提（运行期 DexNative 还会
       // 自己再译一次），因此只记 warning——否则一次缓存目录不可写就会把整个站点装失败。
@@ -1439,6 +1628,7 @@ class CspJarProbe {
         '壳入口装配的预转译异常 site=$siteKey archive=$archive $error',
         scope: 'spider',
       );
+      return {'ok': false, 'stage': 'dex-转译', 'message': '$error'};
     }
   }
 
@@ -1465,7 +1655,10 @@ class CspJarProbe {
       if (payloadSha.isNotEmpty) map['payloadSha256'] = payloadSha;
       await file.writeAsString(jsonEncode(map), flush: true);
     } catch (error) {
-      log?.warning('更新 intake.json 失败 target=$targetDir $error', scope: 'spider');
+      log?.warning(
+        '更新 intake.json 失败 target=$targetDir $error',
+        scope: 'spider',
+      );
     }
   }
 
@@ -1482,7 +1675,10 @@ class CspJarProbe {
     String? md5Note,
   }) async {
     final summary = _shellFailureSummary(stage, message);
-    log?.warning('加固壳解包失败 site=$siteKey stage=$stage $message', scope: 'spider');
+    log?.warning(
+      '加固壳解包失败 site=$siteKey stage=$stage $message',
+      scope: 'spider',
+    );
     await _writeRecord(
       targetDir,
       siteKey,
@@ -1573,7 +1769,10 @@ class CspJarProbe {
       'payload 未生成，站点仍未导入。下一步：核对解包运行时是否完整、'
       'JDK 是否为 17+，或先通过「安卓设备接入」交给安卓端运行。';
 
-  Map<String, Object?> _payloadInfo(File payload, Map<String, Object?>? unpack) {
+  Map<String, Object?> _payloadInfo(
+    File payload,
+    Map<String, Object?>? unpack,
+  ) {
     var bytes = 0;
     try {
       bytes = payload.lengthSync();
@@ -1587,7 +1786,10 @@ class CspJarProbe {
   }
 
   static String _shellLabel(JarInspection inspection) {
-    final named = <String>[...inspection.shellEntries, ...inspection.dexEntries];
+    final named = <String>[
+      ...inspection.shellEntries,
+      ...inspection.dexEntries,
+    ];
     if (named.isEmpty) return 'Guard / DexNative';
     return named.take(3).join('、');
   }
@@ -1609,7 +1811,9 @@ class CspJarProbe {
   /// 不会被当成永久失败。
   static bool _dexBundlePresent(String siteDir) =>
       _nonEmpty(File(p.join(siteDir, 'dexBundles', 'classes.jar'))) &&
-      DexTranslate.recordUsable(p.join(siteDir, 'dexBundles', 'intake-dex.json'));
+      DexTranslate.recordUsable(
+        p.join(siteDir, 'dexBundles', 'intake-dex.json'),
+      );
 
   static String _shortSha(String value) =>
       value.length <= 12 ? value : value.substring(0, 12);
@@ -1621,9 +1825,24 @@ class CspJarProbe {
   Future<Map<String, Object?>> _translateDex({
     required String siteDir,
     required String archive,
-  }) {
+  }) async {
     final injected = dexTranslate;
-    if (injected != null) return injected(siteDir: siteDir, archive: archive);
+    if (injected != null) {
+      final shared = p.join(root, 'probe-cache', 'dex');
+      final sha = _sha256Of(File(archive));
+      if (sha != null) {
+        final cached = DexTranslate.copySharedBundle(
+          sharedDir: shared,
+          sha: sha,
+          siteDir: siteDir,
+        );
+        if (cached != null) return cached;
+      }
+      final result = await injected(siteDir: siteDir, archive: archive);
+      if (result['ok'] == true && sha != null)
+        DexTranslate.storeSharedBundle(shared, sha, siteDir);
+      return result;
+    }
     return DexTranslate.run(
       siteDir: siteDir,
       archive: archive,
@@ -1647,7 +1866,8 @@ class CspJarProbe {
     Map<String, Object?> record,
   ) async {
     final outcome = '${record['outcome'] ?? ''}'.trim();
-    final installed = outcome == CspProbeOutcome.installed.name ||
+    final installed =
+        outcome == CspProbeOutcome.installed.name ||
         outcome == CspProbeOutcome.unpacked.name;
     if (!installed) return false;
     if (binding.entryFor(siteKey) == null) return false;
@@ -1674,10 +1894,7 @@ class CspJarProbe {
             configMap['className'] = resolved;
             map['config'] = configMap;
             manifest.writeAsStringSync(jsonEncode(map), flush: true);
-            log?.info(
-              '就地升级入口类名 site=$siteKey -> $resolved',
-              scope: 'spider',
-            );
+            log?.info('就地升级入口类名 site=$siteKey -> $resolved', scope: 'spider');
           }
         }
       }
@@ -1775,6 +1992,7 @@ class CspJarProbe {
     // 失败阶段（`stage`）。缺省 null 表示「与壳无关」，不写空字段混淆诊断。
     Map<String, Object?>? shellPayload,
     String? shellStage,
+    List<String>? pretranslationReasons,
   }) async {
     try {
       await JarIntake.writeProbe(targetDir, {
@@ -1792,6 +2010,9 @@ class CspJarProbe {
         'installed': installed,
         'shellPayload': ?shellPayload,
         'shellStage': ?shellStage,
+        if (pretranslationReasons != null)
+          'pretranslationDeferred': pretranslationReasons.isNotEmpty,
+        'pretranslationReasons': ?pretranslationReasons,
       });
     } catch (error) {
       log?.warning('写入 CSP 探测结论失败 site=$siteKey $error', scope: 'spider');
@@ -1822,14 +2043,17 @@ class CspJarProbe {
   /// 为什么需要：解包链路里同一份 payload / 壳 jar 会被反复问（探测、装每个站点、
   /// 写 records），每次都「读整份 + 哈希」会在 UI isolate 上连着烧几百毫秒——
   /// 实测 94 个 1 MB 级的 jar 全量哈希约 0.85 s。
-  static final Map<String, ({int size, int mtimeMs, String sha})> _shaCache = {};
+  static final Map<String, ({int size, int mtimeMs, String sha})> _shaCache =
+      {};
 
   static String? _sha256Of(File file) {
     try {
       final stat = file.statSync();
       final mtime = stat.modified.millisecondsSinceEpoch;
       final cached = _shaCache[file.path];
-      if (cached != null && cached.size == stat.size && cached.mtimeMs == mtime) {
+      if (cached != null &&
+          cached.size == stat.size &&
+          cached.mtimeMs == mtime) {
         return cached.sha;
       }
       final sha = sha256.convert(file.readAsBytesSync()).toString();
@@ -1872,6 +2096,26 @@ class _UnpackEtaEstimator {
   /// 记下一个 jar 的实测耗时，供「未开始 jar」折算。
   void markJarDone(int elapsedMs) => _completedMs.add(elapsedMs);
 
+  /// 整轮剩余时间：按**本轮已用墙钟时间 ÷ 已完成站点数**外推。
+  ///
+  /// 与 [eta] 的分工：那个按壳内阶段权重算，只有真解包时才攒得够样本；而自动探测
+  /// 绝大多数站点是缓存命中，阶段权重永远停在「读壳」附近，于是预计时间会一直显示
+  /// 「计算中」——用户实测 95 站 16 秒跑完，全程没有过一个数字。
+  ///
+  /// 这里改用可观测的整体速率：第一个站点结束就有值，并且会**自我修正**——开头那个
+  /// 需要真解包的站点把估计抬得很高，随后一批缓存命中的站点会在几十个之内把它压回
+  /// 真值。剩余不足 1 秒时不报 0，而是报 1 秒（宁可略保守，也不假装已经结束）。
+  Duration? measuredEta({
+    required int completed,
+    required int total,
+    required int elapsedMs,
+  }) {
+    if (completed <= 0 || total <= completed) return null;
+    final remaining = elapsedMs / completed * (total - completed);
+    final millis = remaining.round();
+    return Duration(milliseconds: millis < 1000 ? 1000 : millis);
+  }
+
   /// [jarElapsedMs] 是**当前 jar** 已用的墙钟时间（不是整轮）。
   Duration? eta({
     required int jarIndex,
@@ -1890,9 +2134,7 @@ class _UnpackEtaEstimator {
         : _completedMs.reduce((a, b) => a + b) / _completedMs.length;
     final remainingMs =
         smoothed * (1 - fractionInside) + perJarRef * remainingJars;
-    return Duration(
-      milliseconds: remainingMs <= 0 ? 0 : remainingMs.round(),
-    );
+    return Duration(milliseconds: remainingMs <= 0 ? 0 : remainingMs.round());
   }
 }
 
