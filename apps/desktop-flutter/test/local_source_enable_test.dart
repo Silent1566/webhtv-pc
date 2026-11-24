@@ -24,7 +24,6 @@ import 'package:webhtv_pc/services/local_source_enable_store.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/python_environment.dart';
 import 'package:webhtv_pc/services/spider_registry.dart';
-import 'package:webhtv_pc/services/spider_process.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
 import 'local_source_sites_test.dart'
@@ -36,6 +35,8 @@ import 'local_source_sites_test.dart'
         writeManifest;
 
 import 'python_environment_test.dart' show fixtureBundle, fixtureProbe;
+
+import 'support/python_lifecycle_fixture.dart';
 
 Future<void> waitForFile(File file) async {
   final deadline = DateTime.now().add(const Duration(seconds: 10));
@@ -160,9 +161,14 @@ pathlib.Path(${jsonEncode(marker.path)}).write_text(str(os.getpid()))
 time.sleep(3)
 pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
 ''');
-      final python = SidecarRuntimeResolver.pythonCandidates(
-        queryLauncher: false,
-      ).firstWhere((command) => File(command.executable).existsSync());
+      // 只按文件存在挑候选会把「解释器坏了」误报成「取消没生效」：本机 `py.exe`
+      // 指向已删除的 3.15（`py -3` 以 101 退出）。夹具用真实子进程验证解释器
+      // 真的执行 Python 3 并读取 PYTHONPATH。
+      final python = await firstRunnablePython();
+      if (python == null) {
+        fail('本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
+            '缺解释器不能被当成取消行为通过');
+      }
       final env = PythonEnvironment(
         paths: paths,
         bundleDirectory: p.join(temp.path, 'absent-bundle'),
@@ -192,7 +198,9 @@ pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
       await state.pythonEnvironmentIdle;
       stopwatch.stop();
       debugPrint(
-        '[local-lifecycle] probe cancellation idle=${stopwatch.elapsedMilliseconds}ms pid=${marker.readAsStringSync()}',
+        '[local-lifecycle] probe cancellation exe=${python.executable} '
+        'args=${python.arguments} idle=${stopwatch.elapsedMilliseconds}ms '
+        'pid=${marker.readAsStringSync()}',
       );
       expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
       expect(env.status, isNull, reason: '取消后不得发布 probe 结果');
@@ -520,7 +528,24 @@ pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
     });
 
     test('握手期间停用会立即取消正在启动的 Python 进程', () async {
-      final state = AppState(paths: tempPaths(temp), log: LogService());
+      // 默认环境会先把 runtime/python 解包进 temp（本机约 25s，逼近 30s 用例上限），
+      // 与「握手期间停用」这条断言无关：注入不存在的 bundle + 已验证解释器，
+      // 让环境只做一次真实探测，sidecar 仍是真实 Python 进程。
+      final python = await firstRunnablePython();
+      if (python == null) {
+        fail('本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
+            '缺解释器不能被当成取消行为通过');
+      }
+      final paths = tempPaths(temp);
+      final state = AppState(
+        paths: paths,
+        pythonEnvironment: PythonEnvironment(
+          paths: paths,
+          bundleDirectory: p.join(temp.path, 'absent-bundle'),
+          systemCandidates: [python.executable],
+        ),
+        log: LogService(),
+      );
       addTearDown(() async {
         state.dispose();
         await state.pythonEnvironmentIdle;

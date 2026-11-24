@@ -394,6 +394,21 @@ class SpiderRouter {
 
   final Map<String, SiteRuntime> _cache = {};
 
+  /// 站点判定代次：任何会改变**可用性结论**的变化（运行时就绪、直连注册、
+  /// 出站/换配置、csp 落盘与解包）都必须 +1。
+  ///
+  /// 为什么不做判定缓存：`classifySite` 的结论来自磁盘（probe.json/intake.json/
+  /// 入口 jar），写入方分散在 [JarIntake] 与探测流程里，隐式缓存很容易读到旧
+  /// 结论。这里只提供**代次**，由调用方（`AppState.siteItems`）按代次缓存整张
+  /// 站点表——判定本身始终如实反映磁盘。
+  /// 并上 [JarIntake.siteFilesRevision]：导入/解包/探测结论刷新都算换代，
+  /// 即使调用方忘了通知也不会读到旧结论。
+  int get siteRevision => _siteRevision + JarIntake.siteFilesRevision;
+  int _siteRevision = 0;
+
+  /// 磁盘上的站点文件变了（导入/移除/解包/探测结论刷新）。
+  void notifySiteFilesChanged() => _siteRevision++;
+
   /// 运行时缓存键：同一 `type` 可能有不同 ABI，不能只用 type 做键。
   ///
   /// 还必须带 `site.key`：CatVod 壳站点（如几十个 `csp_PyProxy`）的 api 完全相同，
@@ -410,6 +425,7 @@ class SpiderRouter {
   void setDirectSpiders(Map<String, LocalSpider> spiders) {
     directSpiders = spiders;
     _cache.clear();
+    _siteRevision++;
   }
 
   /// 运行时缓存失效（解释器就绪后调用）。
@@ -422,6 +438,7 @@ class SpiderRouter {
   /// 在途调用仍持有它，宿主进程由 supervisor 按 siteKey 复用。
   void invalidateRuntimes() {
     _cache.clear();
+    _siteRevision++;
   }
 
   /// 更新 HTTP 传输（出站代理 / DoH / 配置换源后调用）。
@@ -443,6 +460,7 @@ class SpiderRouter {
       this.globalHeaders = globalHeaders;
     }
     _cache.clear();
+    _siteRevision++;
   }
 
   /// 带注册表的可用性判定（§8.1）。
@@ -1049,6 +1067,14 @@ class SpiderRouter {
           stage: 'Phase 3',
         );
       }
+      // 开 JVM **之前**先备齐 payload 预转译产物：产物口径过期时 JVM 会在
+      // handshake 里现场转译（实测 5–9 s，用户看到「第一次进站点 10–13 s」）。
+      // 命中共享产物缓存就是毫秒级复制，JVM 直接跳过转译。
+      CspJarProbe.preparePayloadDex(
+        siteDir: binding.directoryFor(site.key),
+        sharedDir: CspJarProbe.sharedPayloadDexDir(p.dirname(binding.root)),
+        log: log,
+      );
       final local = cspLocalSpider(
         site: site,
         entryPath: entry,

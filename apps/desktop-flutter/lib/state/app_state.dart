@@ -3570,6 +3570,14 @@ AiContentCompletion? aiContentCompletion,
   List<SiteListItem> get siteItems {
     final config = effectiveConfig;
     if (config == null) return const [];
+    final order = siteListOverrides.order;
+    final cached = _siteItemsCache;
+    if (cached != null &&
+        identical(_siteItemsCacheConfig, config) &&
+        _siteItemsCacheRevision == _router.siteRevision &&
+        _sameSiteOrder(_siteItemsCacheOrder, order)) {
+      return cached;
+    }
     final items = <SiteListItem>[
       for (final site in config.sites)
         if (!site.hide)
@@ -3586,16 +3594,54 @@ AiContentCompletion? aiContentCompletion,
     ];
     // 手动顺序是**本地覆盖**，不改配置文件：未列入顺序的站点保持配置顺序
     // 追加在后，所以新增站点不会插队，列表也不会每次打开都换位置。
-    final order = siteListOverrides.order;
+    _rememberSiteItems(config, order, items);
     if (order.isEmpty || items.length <= 1) return items;
     final byKey = {for (final item in items) item.site.key: item};
-    return [
+    final ordered = [
       for (final key in orderSiteKeysByManual(
         keys: [for (final item in items) item.site.key],
         savedOrder: order,
       ))
         byKey[key]!,
     ];
+    _rememberSiteItems(config, order, ordered);
+    return ordered;
+  }
+
+  /// 站点表缓存（按配置实例 + 手动顺序 + [SpiderRouter.siteRevision] 失效）。
+  ///
+  /// 为什么必须缓存：`csp_*`（加固壳）站点的可用性判定要读磁盘——
+  /// `probeRecord`/`intakeRecord` 各一次同步读 + `jsonDecode`，再按入口 jar
+  /// 做静态检测。本机实测 111 个加固壳站点**一遍 350 ms（冷 927 ms，单站
+  /// 3.2–8.4 ms）**；而搜索页一次 build 会读 2–3 遍（`searchScopeGroups`、
+  /// `_siteNameOf`、站点选择器），于是每次重建都要在主 isolate 上烧
+  /// 0.7–2.8 s——用户看到的就是「首页和搜索来回点都卡、整个 App 都卡」。
+  ///
+  /// 与判定本身的分工：磁盘状态一改，写入方调
+  /// [SpiderRouter.notifySiteFilesChanged]；运行时/直连/换配置由路由自己 +1。
+  /// 因此缓存**不会**让判定落后于磁盘。
+  List<SiteListItem>? _siteItemsCache;
+  AppConfig? _siteItemsCacheConfig;
+  int _siteItemsCacheRevision = -1;
+  List<String>? _siteItemsCacheOrder;
+
+  void _rememberSiteItems(
+    AppConfig config,
+    List<String> order,
+    List<SiteListItem> items,
+  ) {
+    _siteItemsCache = items;
+    _siteItemsCacheConfig = config;
+    _siteItemsCacheOrder = List<String>.of(order);
+    _siteItemsCacheRevision = _router.siteRevision;
+  }
+
+  static bool _sameSiteOrder(List<String>? a, List<String> b) {
+    if (a == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// 当前配置里可用于**搜索范围限定**的分组（按站点顺序去重）。
@@ -9143,6 +9189,10 @@ AiContentCompletion? aiContentCompletion,
         '启动阶段加固壳发现完成 elapsed=${clock.elapsedMilliseconds}ms',
         scope: 'spider',
       );
+      // 这里**不做**批量预热：JVM 只认同它自己口径的 payload 产物，启动阶段
+      // 再起一次 CLI 转译会让同一份产物被写两遍（2026-11-24 实测：同一 Douban
+      // 产物 17.1 s + 16.7 s，叠加前台首页 elapsed 24.8 s）。转译仍由 JVM 首次
+      // 开站时做一次，成功后由 SidecarRuntime 收进共享缓存（毫秒级复制）。
     } catch (error) {
       log.warning('启动阶段加固壳发现失败：$error', scope: 'spider');
     }

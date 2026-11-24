@@ -28,7 +28,7 @@ on:
       - beta
       - 'dev*'
   pull_request:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:

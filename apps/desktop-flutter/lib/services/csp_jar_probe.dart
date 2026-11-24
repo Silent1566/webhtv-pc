@@ -28,6 +28,7 @@
 /// 自动说清原因（含**卡在哪个阶段**），而不是让用户对着一句「缺少 jar」反复试。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -322,6 +323,93 @@ class CspJarProbe {
   final CspJvmBinding binding;
 
   final LogService? log;
+
+  /// 加固壳 payload 预转译产物的共享缓存目录（`<spiderRoot>/probe-cache/dex`）。
+  static String sharedPayloadDexDir(String spiderRoot) =>
+      p.join(spiderRoot, 'probe-cache', 'dex');
+
+  /// **开 JVM 之前**把 payload 的预转译产物备齐。
+  ///
+  /// 为什么需要：JVM 侧只认「口径与它自己一致」的产物（`DexRepair.VERSION`），
+  /// 口径一变旧产物全部作废，于是**每次冷启动**都在 handshake 里现场转译
+  /// （实测 5–9 s；用户看到的是「第一次进加固壳站点 10–13 s」）。这台机器
+  /// 35 份 payload 产物里只有 3 份是当前口径，所以这条路径天天都在走。
+  ///
+  /// 做法：命中共享产物缓存就同步补一份（1 MB 级复制，毫秒级，JVM 直接跳过转译）；
+  /// 未命中**不在这里转译**——JVM 自己会转一次，转完由 [rememberPayloadBundle]
+  /// 收进共享缓存，供同 payload 的其余站点复用。
+  static void preparePayloadDex({
+    required String siteDir,
+    required String sharedDir,
+    LogService? log,
+  }) {
+    try {
+      final payload = File(p.join(siteDir, 'payload.jar'));
+      if (!payload.existsSync() || payload.lengthSync() == 0) return;
+      final bundleDir = p.join(siteDir, 'payload-dex');
+      final sha = _sha256OfFile(payload.path);
+      if (sha == null) return;
+      final recordPath = p.join(bundleDir, 'dexBundles', 'intake-dex.json');
+      if (DexTranslate.recordUsable(recordPath)) {
+        final record = jsonDecode(File(recordPath).readAsStringSync());
+        final bundlePath = p.join(bundleDir, 'dexBundles', 'classes.jar');
+        if (record is Map &&
+            record['sourceSha256'] == sha &&
+            record['bundleSha256'] == _sha256OfFile(bundlePath)) {
+          return;
+        }
+      }
+      if (DexTranslate.copySharedBundle(
+            sharedDir: sharedDir,
+            sha: sha,
+            siteDir: bundleDir,
+          ) !=
+          null) {
+        log?.info('加固壳 payload 产物命中共享缓存 sha256=$sha', scope: 'spider');
+        return;
+      }
+      // 不在这里起 CLI 转译：JVM 侧本来就会现场转译一次，再起一个就是同一份
+      // payload 同时写两遍（2026-11-24 实测：同一产物被转两次 17.1 s + 16.7 s，
+      // 首页 elapsed 24.8 s）。命中共享缓存才复制，否则交给 JVM，事后再收。
+      Directory(bundleDir).createSync(recursive: true);
+    } catch (_) {
+      // 这里只是加速手段：失败不影响开站点，JVM 仍会自己现场转译。
+    }
+  }
+
+  /// JVM 启动成功后，把它**自己转译出来的** payload 产物收进共享缓存。
+  ///
+  /// 为什么是「事后收」而不是「事前转」：JVM 只认同它自己口径的产物，首次开站
+  /// 它必然现场转译一次；事前再起一个 CLI 等于同一份 payload 同时写两遍——
+  /// 2026-11-24 实测就是这样（同一产物 17.1 s + 16.7 s，首页 elapsed 24.8 s）。
+  /// 这里只做一次 1 MB 级复制，让同 payload 的其余站点下一次直接命中。
+  static void rememberPayloadBundle(
+    String siteDir, {
+    required String sharedDir,
+    LogService? log,
+  }) {
+    try {
+      final payload = File(p.join(siteDir, 'payload.jar'));
+      if (!payload.existsSync() || payload.lengthSync() == 0) return;
+      final bundleDir = p.join(siteDir, 'payload-dex');
+      if (!DexTranslate.recordUsable(
+        p.join(bundleDir, 'dexBundles', 'intake-dex.json'),
+      )) {
+        return;
+      }
+      final sha = _sha256OfFile(payload.path);
+      if (sha == null) return;
+      DexTranslate.storeSharedBundle(sharedDir, sha, bundleDir);
+    } catch (_) {}
+  }
+
+  static String? _sha256OfFile(String path) {
+    try {
+      return sha256.convert(File(path).readAsBytesSync()).toString();
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// 单个 jar 的上限；真实配置里的 spring.jar 约 450 KiB。
   final int maxBytes;
@@ -1898,6 +1986,7 @@ class CspJarProbe {
             configMap['className'] = resolved;
             map['config'] = configMap;
             manifest.writeAsStringSync(jsonEncode(map), flush: true);
+            JarIntake.notifySiteFilesChanged();
             log?.info('就地升级入口类名 site=$siteKey -> $resolved', scope: 'spider');
           }
         }
@@ -1909,6 +1998,7 @@ class CspJarProbe {
           final map = Map<String, Object?>.from(raw);
           map['semanticsVersion'] = probeSemanticsVersion;
           probeFile.writeAsStringSync(jsonEncode(map), flush: true);
+          JarIntake.notifySiteFilesChanged();
         }
       }
       return true;

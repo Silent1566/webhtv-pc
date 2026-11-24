@@ -10,6 +10,8 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:path/path.dart' as p;
+
 import '../core/app_error.dart';
 import '../core/cat_http.dart';
 import '../core/http_api.dart';
@@ -17,6 +19,7 @@ import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import '../core/request_cancellation.dart';
 import 'cancellable_probe_runtime.dart';
+import 'csp_jar_probe.dart';
 import 'log_service.dart';
 import 'spider_process.dart';
 import 'spider_proxy_session.dart';
@@ -122,6 +125,18 @@ class SidecarRuntime
       extend: _extendFor(site),
     );
     _hostContexts[_host!] = this;
+    // 加固壳站点：JVM 在握手期已经把它自己口径的 payload 产物转译落盘。这里
+    // 只做一次 1 MB 级复制收进共享缓存，让同 payload 的其余站点下次直接命中
+    // （事前另起一次 CLI 转译会让同一份产物被写两遍，实测首页拖到 24.8 s）。
+    if (spider.manifest.runtime == 'jvm') {
+      CspJarProbe.rememberPayloadBundle(
+        spider.rootDir,
+        sharedDir: CspJarProbe.sharedPayloadDexDir(
+          p.dirname(p.dirname(spider.rootDir)),
+        ),
+        log: log,
+      );
+    }
     return _host!;
   }
 
