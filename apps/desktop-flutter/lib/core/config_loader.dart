@@ -5,7 +5,8 @@
 /// - HTTP 3xx 最多跟随 5 次，且每次跳转都必须仍是 http(s)；
 /// - 响应大小上限默认 8 MiB，超限拒绝并保留原配置；
 /// - 支持 gzip / br / UTF-8 BOM / 明确声明的 GBK、GB18030；
-/// - URL 内容在明文 JSON 无法解析时，兜底识别「前缀**Base64」或纯 Base64；
+/// - 所有入口的正文载体（`<pre>`、Base64、2423 AES、受限宽松 JSON）统一由
+///   `parseConfigDocument` 有界解码；loader 不预先解包，避免绕过多层预算；
 /// - 解析失败或 `msg` 非空时不得覆盖最后一个可用配置（由调用方保证）；
 /// - `urls` 仓库按条目展开，默认第一项，失败回退（§7.4.2）；
 /// - **增量刷新**：带上上一轮的 `ETag`/`Last-Modified` 发条件请求，服务端
@@ -22,6 +23,7 @@ import 'package:crypto/crypto.dart';
 
 import 'app_error.dart';
 import 'cat_source.dart';
+import 'config_carrier_decoder.dart';
 import 'config_parser.dart';
 import 'protocol.dart';
 import 'text_codec.dart';
@@ -53,7 +55,7 @@ class ConfigSource {
     if (trimmed.isEmpty) {
       throw AppError(AppErrorKind.configInvalid, '配置输入为空');
     }
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    if (ConfigCarrierDecoder.looksLikeInlineCarrier(trimmed)) {
       return ConfigSource(kind: ConfigSourceKind.inlineJson, value: trimmed);
     }
     final uri = Uri.tryParse(trimmed);
@@ -133,8 +135,7 @@ class ConfigLoader {
     this.maxBytes = 8 * 1024 * 1024,
     this.maxRedirects = 5,
     this.timeout = const Duration(seconds: 20),
-  }) : _client = httpClient ??
-           (HttpClient()..userAgent = configUserAgent) {
+  }) : _client = httpClient ?? (HttpClient()..userAgent = configUserAgent) {
     _client.autoUncompress = false;
     _client.connectionTimeout = timeout;
   }
@@ -185,11 +186,7 @@ class ConfigLoader {
   Future<FetchedConfigText> _readFile(String path) async {
     final file = File(path);
     if (!await file.exists()) {
-      throw AppError(
-        AppErrorKind.configNotFound,
-        '配置文件不存在',
-        detail: path,
-      );
+      throw AppError(AppErrorKind.configNotFound, '配置文件不存在', detail: path);
     }
     final bytes = await file.readAsBytes();
     if (bytes.length > maxBytes) {
@@ -293,8 +290,7 @@ class ConfigLoader {
         );
       }
 
-      final declaredLength =
-          response.headers.contentLength;
+      final declaredLength = response.headers.contentLength;
       if (declaredLength > maxBytes) {
         await response.drain<void>();
         throw AppError(
@@ -318,7 +314,7 @@ class ConfigLoader {
         declaredCharset: charsetFromContentType(contentType),
       );
       return FetchedConfigText(
-        text: _decodeUrlConfigContent(text),
+        text: text,
         origin: current.toString(),
         contentType: contentType,
         contentEncoding: decoded.encoding,
@@ -386,7 +382,8 @@ class ConfigLoader {
       throw AppError(
         AppErrorKind.configNetwork,
         '配置下载失败：DNS 解析或连接失败',
-        detail: '${redactUrl(uri.toString())} (${error.osError?.message ?? error.message})',
+        detail:
+            '${redactUrl(uri.toString())} (${error.osError?.message ?? error.message})',
         retryable: true,
         cause: error,
       );
@@ -435,34 +432,6 @@ class ConfigLoader {
     );
     await completer.future;
     return builder.takeBytes();
-  }
-}
-
-/// 只解包一层，且明文与候选内容都以 JSON 语法为准；结构与凭据仍由解析器校验。
-String _decodeUrlConfigContent(String text) {
-  try {
-    jsonDecode(text);
-    return text;
-  } on FormatException {
-    // 不把合法 JSON 中的 ** 或 Base64 字段误当作包裹。
-  }
-
-  final separator = text.lastIndexOf('**');
-  final payload = (separator < 0 ? text : text.substring(separator + 2))
-      .trim()
-      .replaceAll(RegExp(r'\s+'), '');
-  if (!RegExp(r'^[A-Za-z0-9+/_-]+={0,2}$').hasMatch(payload)) {
-    return text;
-  }
-  try {
-    var decoded = utf8.decode(base64.decode(base64.normalize(payload)));
-    if (decoded.startsWith('\ufeff')) {
-      decoded = decoded.substring(1);
-    }
-    jsonDecode(decoded);
-    return decoded;
-  } on FormatException {
-    return text;
   }
 }
 
@@ -528,11 +497,10 @@ class ResolvedCatConfig {
 /// 猫源 bundle 解析钩子：把 `.../index.js.md5` 一类地址变成可解析的配置文本。
 ///
 /// 返回 `null` 表示该地址不是猫源 bundle（回退常规配置抓取）。
-typedef CatConfigResolver =
-    Future<ResolvedCatConfig?> Function(
-      String url, {
-      void Function(String message)? onProgress,
-    });
+typedef CatConfigResolver = Future<ResolvedCatConfig?> Function(
+  String url, {
+  void Function(String message)? onProgress,
+});
 
 /// 配置导入服务：抓取 + 解析，并在仓库形态下展开默认条目。
 class ConfigImportService {
@@ -570,7 +538,8 @@ class ConfigImportService {
         throw AppError(
           AppErrorKind.configCatRuntimeMissing,
           '未检测到随包 Node 运行时，无法导入猫源',
-          detail: '该地址是猫源 JS bundle（index.js / index.js.md5）；普通 JSON / T4 '
+          detail:
+              '该地址是猫源 JS bundle（index.js / index.js.md5）；普通 JSON / T4 '
               '配置无需 Node。发行包自带 Node，缺失说明安装不完整：请重新下载/重新'
               '解压完整发行包（应含 runtime\\node\\node.exe），或用环境变量 '
               'WEBHTV_NODE_RUNTIME 指定 node.exe 的绝对路径后重启应用',

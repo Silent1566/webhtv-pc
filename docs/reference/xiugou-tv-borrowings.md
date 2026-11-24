@@ -16,10 +16,10 @@
 | # | 主题 | 分类 | 成本 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | 常规配置导入、仓库展开、失败保护 | 已等价具备（核心能力） | 小：复用已有链路 | 不重复 |
-| 2 | 非标准配置载体解码 | 确认缺口 | 中：解码、入口识别、限额、凭据清理与负例测试 | P1 |
+| 2 | 非标准配置载体解码 | 已实施（受限，见 §9） | 中：解码、入口识别、限额、凭据清理与负例测试 | 已完成 |
 | 3 | 全局搜索增量、并发、失败与批次隔离 | 已等价具备（核心能力） | 小：保留现有实现与测试 | 不重复 |
 | 4 | 搜索取消下传、超时终止与运行时分档预算 | 按请求取消已接通（§8）；分档预算未调整 | 中：跨状态/服务/HTTP/sidecar 契约 | 已实施取消部分 |
-| 5 | 用户触发的分阶段站点体检 | 确认缺口（不是缺诊断） | 中：复用路由，新增调度与结果模型 | P1 |
+| 5 | 用户触发的分阶段站点体检 | 已实施（受限，见 §10） | 中：复用路由，新增调度与结果模型 | 已完成 |
 | 6 | XPTV/NowShowTime 与 PHP 脚本适配 | 上游路径可核实，本地收益待验证 | 大：新 ABI/宿主能力或解释器 | P2 |
 | 7 | 自动换线的唯一同集确认与显式进度传递 | 现有换线之上的增量 | 中：区分换集/同集恢复 | P1 |
 | 8 | seek 失败恢复、播放错误确认 | 具体恢复出口缺口/策略增强 | 中：位置、暂停、代际状态 | P1 |
@@ -45,6 +45,7 @@
 - **本地逐行差异**：`core/config_loader.dart:581 ConfigImportService.import` 将抓取文本直接送 `core/config_parser.dart:48-68 parseConfigDocument`；后者 `:52` 严格 `jsonDecode`，非 Map 在 `:62-68` 拒绝。`core/tmdb_credential_ingress.dart:27-33 extractRootAndStrip` 同样先严格 JSON。BOM/GBK/gzip 支持是传输解码，不等于上述正文载体支持。
 - **收益/成本**：允许用户已有的部分非标准数据载体进入现有配置校验，而不引入 Spider 执行；中，需同时处理粘贴入口（`ConfigSource.parse:55-77` 把非 JSON 字面量视作路径）、解码大小/深度与凭据剥离。
 - **风险/优先级**：宽松解析可能掩盖错误；上游 `LenientJson.parse:13-17` 解析一个值后未检查 EOF，不宜照搬容错边界。须保留原始错误、msg 拒绝、失败不覆盖，并使用合成正/负例验证。P1，先定义允许的载体与严格失败规则。
+- **实施状态（2026-11-24）**：已按受限数据载体实施，见 §9；未复制上游代码，仍不承诺真实源兼容率。
 
 ### 2.3 全局搜索核心：已经具备，不用重写一个 SearchEngine
 
@@ -68,6 +69,7 @@
 - **本地**：`services/site_service.dart:70-125 SiteService._record/_call/home` 是真实调用后的被动统计；`ui/diagnostics_pages.dart:904-912 _healthSummary` 明确浏览/搜索/播放后开始累计。`services/csp_jar_probe.dart:410 CspJarProbe.materialize` 是导入材料化/静态兼容预检，不是对每站主动跑首页与分类的体检。
 - **收益/成本**：用户可主动发现“有分类却无内容”、启动/加载失败，且得到每站结构化结果；中，可复用 `SiteService` 与现有进程隔离路由，新增调度和报告，不要再建另一套执行引擎。
 - **风险/优先级**：体检会执行用户 Spider 并联网，不能默认导入即跑；需用户主动触发，具备范围/预算、取消和原始分阶段错误。上游只证明首页/分类，未检查详情/播放，不能标签为“已验证能播”。P1；本次没有执行任何体检。
+- **实施状态（2026-11-24）**：已按用户主动、分阶段、可取消范围实施，见 §10；仍不检查详情/播放，不能据此宣称“已验证能播”。
 
 ### 2.6 新格式：有实现路径，不等于生态全面兼容
 
@@ -184,6 +186,32 @@
 - **独立验证**：主审执行 23 个风险相关测试文件，**460/460 通过**，其中新增取消行为测试 61 项（信号 4、HTTP 27、运行时/IPC 8、状态/服务 22）；覆盖既有协议、站点、缓存、分页、并发、搜索 UI、空闲回收、日志和 JS/JVM 集成回归。全量 `flutter analyze --no-pub` 为 **No issues found**，`git diff --check` 通过。独立只读复审的 Spec / Standards 均为 0 项发现，另行复跑 99 项通过，核对冻结源码摘要一致。命令输出见 `/tmp/search-lead-final-regression.log`、`/tmp/search-lead-final-analyze.log`；任务与验收记录见 `docs/superpowers/plans/2026-11-23-search-inflight-cancellation.md`。
 - **审查发现与修正**：同步 listener 内取消后仍发送分页、取代批次被误标为用户取消均补行为红测后修正；最终回归基于冻结后的源码重新运行，不使用并行编辑中间态通过记录。测试环境原有依赖解析缺少已声明的 canvas_danmaku，以 `flutter pub get --enforce-lockfile` 恢复，未变更依赖或锁文件。
 - **验证边界**：实际 Python 宿主证明仅目标收到取消标记、另一请求跨越 2200ms 后成功且无 killTree/kill guard；JS/JVM 取消处理器只读核对为按 id 标记，其既有集成测试已回归，但新增取消 fixture 未逐宿主重复。新增 Python fixture 在 Windows 跳过，本轮原生执行环境为 Linux；没有请求真实影视源或验证任意第三方脚本可中断。
+
+## 9. 后续实施：有界配置载体解码
+
+**状态：已实施并独立验收（2026-11-24）。** 用户明确选择同时加入 AES 与受限宽松 JSON；独立实现，未复制上游 GPL 代码。仍不承诺真实源兼容率。
+
+- **单点入口**：`core/config_parser.dart` 的 `parseConfigDocument` 统一解码，URL/文件/粘贴三入口共用；`core/config_loader.dart` 不再预解包，避免 loader+parser 双层绕过预算。`ConfigSource.parse` 识别显式载体（包括残缺的 `2423`／`<pre`，据此报告载体错误而不是“文件不存在”），正常路径/URL 仍按原方式处理。
+- **允许载体**：严格 JSON；完整单一 `<pre ...>...</pre>`；2423 AES-128-CBC（hex(`$#key#$`) + hex(ciphertext) + hex(13-byte IV)，key/IV UTF-8 右补 ASCII `0` 至 16 字节）；Base64 标准/url-safe/缺 padding/任意 `**` 前缀；受限宽松 JSON 的 `//`、`/* */`、单引号、identifier 键、尾逗号。
+- **预算与失败**：每层/输入 UTF-8 8 MiB、最多 3 层、JSON 容器深度 64；完整消费 EOF；无 eval/JS/表达式；坏 hex/分隔符/块长/PKCS7/UTF-8、超限、超深/尾随内容均拒绝。错误不含明文或原始载体。
+- **保留语义**：严格 JSON 优先，不把合法 JSON 字段中的 Base64/`**` 当包裹；`msg` 仍拒绝；TMDB 根凭据在解码后剥离，重复/转义根键仍视为多值而不产生候选；解析失败/`msg` 不覆盖原配置；仓库展开与手动/后台刷新兼容。
+- **依赖**：`pointycastle ^4.0.0`（MIT，纯 Dart）提供 AES 原语；新增 `convert` 传递依赖。未复制上游 AES 实现。
+- **证据**：新增 `apps/desktop-flutter/test/config_carrier_decoder_test.dart`、`config_carrier_import_test.dart`（48 项）；主审独立复跑配置/凭据/刷新 8 文件 **138/138**，最终跨模块统一回归 21 文件 **280/280**；`flutter analyze` 无问题，格式与 whitespace 检查通过。日志 `.local/config-carriers-lead-review.log`、`.local/final-consolidated-tests.log`、`.local/final-analyze.log`。
+- **边界**：粘贴纯 Base64 需解码后像 JSON/载体且长度 ≥16 才识别为内联；`<pre>` 支持引号属性，不承诺无引号属性值内含 `>`；AES 只解声明格式，不是任意密文破解。未请求真实影视源验证。
+
+## 10. 后续实施：手动分阶段站点体检
+
+**状态：已实施并独立验收（2026-11-24）。** 用户主动触发；复用现有运行时/隔离路由，不新建执行引擎；不检查详情、搜索或播放。
+
+- **入口与范围**：站点健康页顶栏固定「手动体检」入口，点击打开独立检查页，无需翻过长表格；仅当前配置站点，显式选择（单站/全选/清空），每批最多 100 站、同站去重；默认并发 2、每站总预算 30 秒；最多检查 2 个非“配置/设置/登录”分类。
+- **阶段**：运行时可用性 → 首页 → 分类（最多 2 个，首个有内容即停止）；每站/每阶段保留成功、空内容、失败、超时、取消、条目数/分类数与耗时。
+- **结论口径**：首页和分类都有内容才算“内容检查通过”；部分阶段有内容为“有限可用”；有分类无内容不算成功；空内容与失败分开；文案明确不验证播放。结果不等于已添加站点，也不改变当前浏览/播放站。
+- **取消与隔离**：用户取消停止排队与在途等待；每个未完成站进入取消终态；旧批次 generation 作废，迟到结果不写入；页面销毁/服务身份变更取消旧批次。HTTP/Cat HTTP 按请求 abort，sidecar 只对目标 rpcId 发 `$/cancelRequest`，不杀共享宿主；第三方阻塞代码仍可能继续，UI 如实显示。
+- **统计**：体检调用真实写入被动健康统计；返回健康页立即重新读取统计。健康页/面板文案已标明“手动体检”也是累计来源，并说明批次结果与历史统计口径不同。
+- **布局修正（2026-11-24）**：健康诊断取消 900px 表单限宽，以 24px 边距使用窗口空间；逐站明细按列宽分配，宽窗显示全部七列，窄窗顶部常显横向滚动条并支持鼠标拖拽。站点显示名称，完整标识/名称与错误可悬停查看。98 站场景有 1280×806 暗色、640×720 亮色 Before/After 对照，位于 `.local/health-layout-{before,after}-{dark-wide,light-narrow}.png`。新增 `site_health_layout_test.dart` 验证入口始终可达、列宽/滚动、真实 SQLite 统计刷新。
+- **筛选（2026-11-24）**：逐站明细支持名称/站点标识模糊搜索（忽略大小写）与首页、分类、详情、播放四个环节的组合筛选；累计记录按“有成功 / 有失败 / 全部成功 / 全部失败 / 暂无数据”区分，混合成败不会被误判为纯成功或纯失败。手动体检结果支持名称、总体结论与运行时/首页/分类阶段状态组合筛选（成功、失败、空内容、超时、取消、进行中、未检查），不虚构详情/播放结果。两处显示匹配数并在筛选生效时提供一键重置；筛选只作用于结果行，源场仍为全局概览，不改变选站、进度、重跑/重试范围或健康统计。
+- **证据**：新增 `apps/desktop-flutter/lib/services/site_self_check.dart`、`lib/ui/site_self_check_panel.dart`、`lib/ui/health_filter_controls.dart` 与 `site_health_layout_test.dart`、`health_filters_test.dart`；健康页/体检专项主审独立复跑 **40/40**，最终跨模块统一回归 22 文件 **290/290**，`flutter analyze` 无问题。截图 `.local/site-self-check-after-dark-results.png`（1024×900 dark）、`.local/site-self-check-after-narrow-long-error.png`（420×860 dark）、`.local/health-layout-after-{dark-wide,light-narrow}.png` 均已包含筛选条；首轮失效截图与重拍口径见布局修正条目。
+- **边界**：截图来自 Flutter 测试渲染而非真实桌面窗口；未做真实站点端到端联网；未扩展详情/搜索/播放探测。旧运行时不支持请求级取消时只能停止等待。
 
 [u-license]: https://github.com/qfw66/xiugou-tv/blob/d57c239d23081e4902068d2081515fa1ac85ff8e/LICENSE#L1-L2
 [u-input]: https://github.com/qfw66/xiugou-tv/blob/d57c239d23081e4902068d2081515fa1ac85ff8e/lib/core/config/config_repository.dart#L782-L827

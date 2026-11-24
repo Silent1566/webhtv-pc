@@ -10,13 +10,13 @@
 
 ## 主要功能
 
-- **配置管理**：通过 HTTP(S) 地址、本地文件或 JSON 文本导入配置，支持多配置保存与切换。
+- **配置管理**：通过 HTTP(S) 地址、本地文件或 JSON 文本导入配置，支持多配置保存与切换；支持严格 JSON、完整 `<pre>` 包裹、Base64 与 2423 AES-128-CBC 数据载体，解码只处理数据，不执行配置中的代码。
 - **浏览与搜索**：站点浏览、分类筛选、搜索、站点排序与屏蔽，以及详情页、多线路和多剧集选择。
 - **桌面播放**：倍速、全屏、进度恢复、线路切换、画面比例、字幕、弹幕、快捷键及右键菜单。
 - **直播**：直播频道、线路切换与 EPG 节目单。
 - **元数据与识别**：TMDB 详情、季集、演员与相关推荐，以及 AI 辅助集季识别；相关能力需按需配置。
 - **安卓互通**：安卓设备桥接、同步授权与推送。
-- **外观与诊断**：暗色 / 亮色 / 跟随系统主题，配置壁纸与 Logo，以及诊断、日志和解析轨迹。
+- **外观与诊断**：暗色 / 亮色 / 跟随系统主题，配置壁纸与 Logo，以及诊断、日志、解析轨迹和手动站点体检（只检查首页/分类，不验证播放）；健康明细与体检结果支持按站点名称和环节状态筛选。
 - **解析能力**：支持多类型解析器；Web 嗅探 / Super 解析使用本机 Chromium 内核浏览器，缺失时可从用户提供的本地目录或 ZIP 安装浏览器组件。
 - **应用更新**：手动检查更新，可开启「启动时自动检查」（默认关闭，每 24 小时最多一次）；常规检查读发布侧静态索引，失败才回退 GitHub API；下载可选 GitHub 加速（默认开启，可关闭/自定义），校验 SHA-256 后按发行形态安装。
 
@@ -156,6 +156,7 @@ docs/                     设计、ADR、发布说明与验收记录
 | 项目 | 用途 | GitHub 地址 |
 | --- | --- | --- |
 | **Flutter** | 桌面客户端框架 | [https://github.com/flutter/flutter](https://github.com/flutter/flutter) |
+| **PointyCastle** | 2423 AES-128-CBC 配置载体的纯 Dart 密码原语 | [https://github.com/bcgit/pc-dart](https://github.com/bcgit/pc-dart) |
 | **media-kit** | Flutter / Dart 音视频播放接口 | [https://github.com/media-kit/media-kit](https://github.com/media-kit/media-kit) |
 | **mpv** | 音视频播放内核 | [https://github.com/mpv-player/mpv](https://github.com/mpv-player/mpv) |
 | **Node.js** | JS Spider 宿主运行时 | [https://github.com/nodejs/node](https://github.com/nodejs/node) |

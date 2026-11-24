@@ -35,6 +35,7 @@ import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import '../core/request_cancellation.dart';
+import 'cancellable_probe_runtime.dart';
 import 'csp_jar_probe.dart';
 import 'direct_spider_registrar.dart';
 import 'jar_intake.dart';
@@ -165,7 +166,8 @@ class UnsupportedRuntime implements SiteRuntime {
 }
 
 /// HTTP API 运行时（`type=0/1/2/4`）。
-class HttpApiRuntime implements SiteRuntime, CancellableSearchRuntime {
+class HttpApiRuntime
+    implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   HttpApiRuntime({
     required this.client,
     required this.globalHeaders,
@@ -205,9 +207,18 @@ class HttpApiRuntime implements SiteRuntime, CancellableSearchRuntime {
   }
 
   @override
-  Future<SiteResult> home(Site site) {
+  Future<SiteResult> home(Site site) => _home(site);
+
+  @override
+  Future<SiteResult> homeCancellable(
+    Site site, {
+    required RequestCancellation cancellation,
+  }) async => _home(site, cancellation: cancellation);
+
+  Future<SiteResult> _home(Site site, {RequestCancellation? cancellation}) {
+    cancellation?.throwIfCancelled();
     final call = _build(site, HttpApiAction.home);
-    return client.execute(call, siteKey: site.key);
+    return client.execute(call, siteKey: site.key, cancellation: cancellation);
   }
 
   @override
@@ -216,7 +227,31 @@ class HttpApiRuntime implements SiteRuntime, CancellableSearchRuntime {
     required String typeId,
     required int page,
     Map<String, String> filters = const {},
+  }) => _category(site, typeId: typeId, page: page, filters: filters);
+
+  @override
+  Future<SiteResult> categoryCancellable(
+    Site site, {
+    required String typeId,
+    required int page,
+    Map<String, String> filters = const {},
+    required RequestCancellation cancellation,
+  }) async => _category(
+    site,
+    typeId: typeId,
+    page: page,
+    filters: filters,
+    cancellation: cancellation,
+  );
+
+  Future<SiteResult> _category(
+    Site site, {
+    required String typeId,
+    required int page,
+    required Map<String, String> filters,
+    RequestCancellation? cancellation,
   }) {
+    cancellation?.throwIfCancelled();
     final call = _build(
       site,
       HttpApiAction.category,
@@ -224,7 +259,7 @@ class HttpApiRuntime implements SiteRuntime, CancellableSearchRuntime {
       page: page,
       filters: filters,
     );
-    return client.execute(call, siteKey: site.key);
+    return client.execute(call, siteKey: site.key, cancellation: cancellation);
   }
 
   @override

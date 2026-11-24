@@ -16,6 +16,7 @@ import '../core/http_api.dart';
 import '../core/ipc_protocol.dart';
 import '../core/protocol.dart';
 import '../core/request_cancellation.dart';
+import 'cancellable_probe_runtime.dart';
 import 'log_service.dart';
 import 'spider_process.dart';
 import 'spider_proxy_session.dart';
@@ -23,7 +24,8 @@ import 'spider_registry.dart';
 import 'spider_router.dart';
 
 /// 本地 sidecar 支持的站点运行时。
-class SidecarRuntime implements SiteRuntime, CancellableSearchRuntime {
+class SidecarRuntime
+    implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   SidecarRuntime({
     required this.site,
     required this.spider,
@@ -156,7 +158,7 @@ class SidecarRuntime implements SiteRuntime, CancellableSearchRuntime {
       cancellation?.whenCancelled.then((_) {
         if (waiting && host.abandon(requestId)) {
           log?.info(
-            '搜索已停止等待并发送取消通知 site=${site.key} id=$requestId；宿主仍运行，底层工作不保证终止',
+            '调用已停止等待并发送取消通知 site=${site.key} method=$method id=$requestId；宿主仍运行，底层工作不保证终止',
             scope: 'spider',
           );
         }
@@ -220,6 +222,12 @@ class SidecarRuntime implements SiteRuntime, CancellableSearchRuntime {
   Future<SiteResult> home(Site site) => _invoke(SpiderMethod.home, const {});
 
   @override
+  Future<SiteResult> homeCancellable(
+    Site site, {
+    required RequestCancellation cancellation,
+  }) => _invoke(SpiderMethod.home, const {}, cancellation: cancellation);
+
+  @override
   Future<SiteResult> category(
     Site site, {
     required String typeId,
@@ -261,6 +269,19 @@ class SidecarRuntime implements SiteRuntime, CancellableSearchRuntime {
     'keyword': keyword,
     'page': page,
     'quick': quick,
+  }, cancellation: cancellation);
+
+  @override
+  Future<SiteResult> categoryCancellable(
+    Site site, {
+    required String typeId,
+    required int page,
+    Map<String, String> filters = const {},
+    required RequestCancellation cancellation,
+  }) => _invoke(SpiderMethod.category, {
+    'id': typeId,
+    'page': page,
+    'filters': filters,
   }, cancellation: cancellation);
 
   @override
@@ -314,7 +335,8 @@ class SidecarRuntime implements SiteRuntime, CancellableSearchRuntime {
 }
 
 /// 把 `webhtv-cat-http-v1` 接到站点运行时接口（§8.1、§9.4）。
-class CatHttpSiteRuntime implements SiteRuntime, CancellableSearchRuntime {
+class CatHttpSiteRuntime
+    implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   CatHttpSiteRuntime({
     required this.client,
     required this.siteKey,
@@ -382,6 +404,28 @@ class CatHttpSiteRuntime implements SiteRuntime, CancellableSearchRuntime {
 
   @override
   Future<SiteResult> home(Site site) => _call(site, CatHttpRoute.home);
+
+  @override
+  Future<SiteResult> homeCancellable(
+    Site site, {
+    required RequestCancellation cancellation,
+  }) => _call(site, CatHttpRoute.home, cancellation: cancellation);
+
+  @override
+  Future<SiteResult> categoryCancellable(
+    Site site, {
+    required String typeId,
+    required int page,
+    Map<String, String> filters = const {},
+    required RequestCancellation cancellation,
+  }) => _call(
+    site,
+    CatHttpRoute.category,
+    typeId: typeId,
+    page: page,
+    filters: filters,
+    cancellation: cancellation,
+  );
 
   @override
   Future<SiteResult> category(

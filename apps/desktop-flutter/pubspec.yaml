@@ -53,6 +53,8 @@ dependencies:
   webview_windows: ^0.4.0
   canvas_danmaku: ^0.3.4
   flutter_markdown_plus: ^1.0.12
+  # 2423 AES-128-CBC 载体：使用维护中的纯 Dart 密码库，不复制上游算法。
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:

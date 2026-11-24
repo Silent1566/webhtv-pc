@@ -311,7 +311,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text('还没有调用记录。浏览、搜索或播放后会累计成功率与耗时。'), findsOneWidget);
+        expect(find.text('还没有调用记录。浏览、搜索、播放或手动体检后会累计成功率与耗时。'), findsOneWidget);
         expect(find.text('逐站明细'), findsOneWidget);
         expect(tester.takeException(), isNull);
       }
