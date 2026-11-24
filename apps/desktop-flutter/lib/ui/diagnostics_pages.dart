@@ -22,6 +22,7 @@ import 'common.dart';
 import 'config_pages.dart';
 import 'danmaku_settings_page.dart';
 import 'meta_sources_page.dart';
+import 'health_filter_controls.dart';
 import 'injected_sites_page.dart';
 import 'intro_skip_options_page.dart';
 import 'lut_presets_page.dart';
@@ -36,6 +37,7 @@ import 'spider_page.dart';
 import 'subtitle_settings_page.dart';
 import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
+import 'site_self_check_panel.dart';
 import 'runtime_dependencies_page.dart';
 import 'tokens.dart';
 import 'toast.dart';
@@ -753,9 +755,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   /// 分类页这一行只负责让用户看出「这里有没有东西要处理」。
   String _runtimeDependenciesSummary() {
     final status = state.pythonEnvironmentStatus;
-    final python = status == null
-        ? '未检测'
-        : (status.ready ? '已就绪' : '不可用');
+    final python = status == null ? '未检测' : (status.ready ? '已就绪' : '不可用');
     return '加固壳解包运行时（${state.shellRuntimeInstalled ? '已装' : '未装'}）'
         ' · Python 运行时（$python）';
   }
@@ -907,7 +907,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     final sites = state.siteItems;
     if (sites.isEmpty) return '当前配置没有站点';
     if (records.isEmpty) {
-      return '${sites.length} 个站点 · 尚无实测记录（浏览、搜索或播放后开始累计）';
+      return '${sites.length} 个站点 · 尚无实测记录（浏览、搜索、播放或手动体检后开始累计）';
     }
     return '${sites.length} 个站点 · 已有 ${records.length} 个站点的实测记录';
   }
@@ -949,15 +949,143 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
 /// 实测 170 个站源里 **160 个没有采样记录**，于是一大片灰点占了首屏近三分之一
 /// 高度，既没有信息量又把海报内容挤了下去。健康度是**按需查看的诊断信息**，
 /// 不是每次打开都要读的首页主角。
-class SiteHealthPage extends StatelessWidget {
+enum _HealthStageFilter {
+  any,
+  hasSuccess,
+  hasFailure,
+  allSuccess,
+  allFailure,
+  noData,
+}
+
+const Map<_HealthStageFilter, String> _healthStageFilterLabels = {
+  _HealthStageFilter.any: '全部状态',
+  _HealthStageFilter.hasSuccess: '有成功',
+  _HealthStageFilter.hasFailure: '有失败',
+  _HealthStageFilter.allSuccess: '全部成功',
+  _HealthStageFilter.allFailure: '全部失败',
+  _HealthStageFilter.noData: '暂无数据',
+};
+
+String _healthStageLabel(HealthAction action) => switch (action) {
+  HealthAction.home => '首页',
+  HealthAction.category => '分类',
+  HealthAction.detail => '详情',
+  HealthAction.play => '播放',
+};
+
+_HealthStageFilter _healthStageFilterFrom(String label) =>
+    _healthStageFilterLabels.entries
+        .firstWhere((entry) => entry.value == label)
+        .key;
+
+class SiteHealthPage extends StatefulWidget {
   const SiteHealthPage({super.key, required this.state});
 
   final AppState state;
 
   @override
-  Widget build(BuildContext context) {
+  State<SiteHealthPage> createState() => _SiteHealthPageState();
+}
+
+class _SiteHealthPageState extends State<SiteHealthPage> {
+  AppState get state => widget.state;
+  final TextEditingController _nameFilter = TextEditingController();
+  final Map<HealthAction, _HealthStageFilter> _stageFilters = {
+    for (final action in HealthAction.values) action: _HealthStageFilter.any,
+  };
+
+  @override
+  void dispose() {
+    _nameFilter.dispose();
+    super.dispose();
+  }
+
+  bool get _hasHealthFilters =>
+      _nameFilter.text.trim().isNotEmpty ||
+      _stageFilters.values.any((filter) => filter != _HealthStageFilter.any);
+
+  Map<String, String> get _siteNames => {
+    for (final item in state.siteItems) item.site.key: item.site.name,
+  };
+
+  bool _stageMatches(
+    SiteHealth record,
+    HealthAction action,
+    _HealthStageFilter filter,
+  ) {
+    final (ok, total) = switch (action) {
+      HealthAction.home => (record.homeOk, record.homeTotal),
+      HealthAction.category => (record.categoryOk, record.categoryTotal),
+      HealthAction.detail => (record.detailOk, record.detailTotal),
+      HealthAction.play => (record.playOk, record.playTotal),
+    };
+    return switch (filter) {
+      _HealthStageFilter.any => true,
+      _HealthStageFilter.hasSuccess => ok > 0,
+      _HealthStageFilter.hasFailure => total > 0 && ok < total,
+      _HealthStageFilter.allSuccess => total > 0 && ok == total,
+      _HealthStageFilter.allFailure => total > 0 && ok == 0,
+      _HealthStageFilter.noData => total == 0,
+    };
+  }
+
+  List<SiteHealth> _visibleHealth(List<SiteHealth> records) {
+    final query = _nameFilter.text.trim().toLowerCase();
+    final names = _siteNames;
+    return records.where((record) {
+      final name = names[record.siteKey] ?? record.siteKey;
+      final nameMatches =
+          query.isEmpty ||
+          name.toLowerCase().contains(query) ||
+          record.siteKey.toLowerCase().contains(query);
+      return nameMatches &&
+          _stageFilters.entries.every(
+            (entry) => _stageMatches(record, entry.key, entry.value),
+          );
+    }).toList();
+  }
+
+  void _resetHealthFilters() {
+    _nameFilter.clear();
+    _stageFilters.updateAll((_, _) => _HealthStageFilter.any);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: state,
+    builder: (context, _) => _build(context),
+  );
+
+  Future<void> _openSelfCheck(BuildContext context) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => AnimatedBuilder(
+          animation: state,
+          builder: (context, _) => Scaffold(
+            appBar: AppBar(title: const Text('手动站点体检')),
+            body: ListView(
+              padding: formPagePadding(context),
+              children: [
+                SiteSelfCheckPanel(
+                  service: state.siteService,
+                  sites: [for (final item in state.siteItems) item.site],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     final records = state.siteHealth();
+    final visibleRecords = _visibleHealth(records);
+    final siteNames = _siteNames;
     final magnitudes = buildMagnitudes(
       items: state.siteItems,
       health: {for (final record in records) record.siteKey: record},
@@ -967,13 +1095,28 @@ class SiteHealthPage extends StatelessWidget {
         .length;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('站点健康')),
+      appBar: AppBar(
+        title: const Text('站点健康'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpace.lg),
+            child: Center(
+              child: FilledButton.icon(
+                key: const ValueKey('site-health-self-check-open'),
+                onPressed: () => _openSelfCheck(context),
+                icon: const Icon(Icons.fact_check_outlined),
+                label: const Text('手动体检'),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
-        padding: formPagePadding(context),
+        padding: const EdgeInsets.all(AppSpace.xl),
         children: [
           const Padding(
             padding: EdgeInsets.only(bottom: AppSpace.xl),
-            child: Text('浏览、搜索或播放之后会开始累计成功率。'),
+            child: Text('浏览、搜索、播放或手动体检之后会开始累计成功率。'),
           ),
           if (magnitudes.isNotEmpty) ...[
             SourceField(magnitudes: magnitudes),
@@ -986,7 +1129,7 @@ class SiteHealthPage extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: AppSpace.lg),
               child: Text(
                 '其中 $unknown 个站点尚无实测记录：它们是还没调用过的站点，'
-                '不代表不可用。浏览、搜索或播放之后会开始累计成功率。',
+                '不代表不可用。浏览、搜索、播放或手动体检之后会开始累计成功率。',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -994,7 +1137,51 @@ class SiteHealthPage extends StatelessWidget {
             ),
           SettingsSection(
             title: '逐站明细',
-            children: [_HealthTable(items: records)],
+            children: [
+              if (records.isEmpty)
+                const Text('还没有调用记录。浏览、搜索、播放或手动体检后会累计成功率与耗时。')
+              else ...[
+                HealthFilterBar(
+                  summary:
+                      '显示 ${visibleRecords.length} / ${records.length} 条记录',
+                  children: [
+                    healthFilterNameField(
+                      key: const ValueKey('health-filter-name'),
+                      controller: _nameFilter,
+                      hint: '搜索站点名称或标识',
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    for (final action in HealthAction.values)
+                      healthFilterSelect(
+                        context: context,
+                        key: ValueKey('health-filter-${action.name}'),
+                        label: _healthStageLabel(action),
+                        value: _healthStageFilterLabels[_stageFilters[action]]!,
+                        options: _healthStageFilterLabels.values.toList(),
+                        onChanged: (value) => setState(
+                          () => _stageFilters[action] = _healthStageFilterFrom(
+                            value,
+                          ),
+                        ),
+                      ),
+                    if (_hasHealthFilters)
+                      TextButton.icon(
+                        key: const ValueKey('health-filter-reset'),
+                        onPressed: _resetHealthFilters,
+                        icon: const Icon(
+                          Icons.filter_alt_off_outlined,
+                          size: 18,
+                        ),
+                        label: const Text('重置筛选'),
+                      ),
+                  ],
+                ),
+                if (visibleRecords.isEmpty)
+                  const Text('没有匹配的站点记录。')
+                else
+                  _HealthTable(items: visibleRecords, siteNames: siteNames),
+              ],
+            ],
           ),
         ],
       ),
@@ -1002,10 +1189,24 @@ class SiteHealthPage extends StatelessWidget {
   }
 }
 
-class _HealthTable extends StatelessWidget {
-  const _HealthTable({required this.items});
+class _HealthTable extends StatefulWidget {
+  const _HealthTable({required this.items, required this.siteNames});
 
   final List<SiteHealth> items;
+  final Map<String, String> siteNames;
+
+  @override
+  State<_HealthTable> createState() => _HealthTableState();
+}
+
+class _HealthTableState extends State<_HealthTable> {
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   String _rate(int ok, int total) {
     if (total == 0) return '暂无数据';
@@ -1014,47 +1215,96 @@ class _HealthTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const Text('还没有调用记录。浏览、搜索或播放后会累计成功率与耗时。');
+    if (widget.items.isEmpty) {
+      return const Text('还没有调用记录。浏览、搜索、播放或手动体检后会累计成功率与耗时。');
     }
-    return HorizontalMouseDrag(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          columns: const [
-            DataColumn(label: Text('站点')),
-            DataColumn(label: Text('首页')),
-            DataColumn(label: Text('分类')),
-            DataColumn(label: Text('详情')),
-            DataColumn(label: Text('播放')),
-            DataColumn(label: Text('平均耗时')),
-            DataColumn(label: Text('最近错误')),
-          ],
-          rows: [
-            for (final item in items)
-              DataRow(
-                cells: [
-                  DataCell(Text(item.siteKey)),
-                  DataCell(Text(_rate(item.homeOk, item.homeTotal))),
-                  DataCell(Text(_rate(item.categoryOk, item.categoryTotal))),
-                  DataCell(Text(_rate(item.detailOk, item.detailTotal))),
-                  DataCell(Text(_rate(item.playOk, item.playTotal))),
-                  DataCell(Text('${item.avgLatencyMs}ms')),
-                  DataCell(
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 320),
-                      child: Text(
-                        item.lastError ?? '-',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth < 1120
+            ? 1120.0
+            : constraints.maxWidth;
+        final contentWidth = width - AppSpace.lg * 2 - AppSpace.lg * 6;
+        final widths = [
+          contentWidth * 0.22,
+          for (var i = 0; i < 4; i++) contentWidth * 0.11,
+          contentWidth * 0.08,
+          contentWidth * 0.26,
+        ];
+        Widget cell(
+          String text,
+          int column, {
+          String? tooltip,
+          int maxLines = 1,
+        }) => SizedBox(
+          width: widths[column],
+          child: Tooltip(
+            message: tooltip ?? text,
+            child: Text(
+              text,
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        );
+        const headers = ['站点', '首页', '分类', '详情', '播放', '平均耗时', '最近错误'];
+        return HorizontalMouseDrag(
+          child: Scrollbar(
+            key: const ValueKey('site-health-table-scrollbar'),
+            controller: _scroll,
+            thumbVisibility: true,
+            trackVisibility: true,
+            scrollbarOrientation: ScrollbarOrientation.top,
+            notificationPredicate: (notification) =>
+                notification.metrics.axis == Axis.horizontal,
+            child: SingleChildScrollView(
+              controller: _scroll,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(top: AppSpace.md),
+              child: DataTable(
+                columnSpacing: AppSpace.lg,
+                horizontalMargin: AppSpace.lg,
+                dataRowMinHeight: 48,
+                dataRowMaxHeight: 48,
+                columns: [
+                  for (var i = 0; i < headers.length; i++)
+                    DataColumn(
+                      label: SizedBox(
+                        width: widths[i],
+                        child: Text(headers[i]),
                       ),
                     ),
-                  ),
+                ],
+                rows: [
+                  for (final item in widget.items)
+                    DataRow(
+                      cells: [
+                        DataCell(
+                          cell(
+                            widget.siteNames[item.siteKey] ?? item.siteKey,
+                            0,
+                            tooltip:
+                                '${widget.siteNames[item.siteKey] ?? item.siteKey}\n站点标识：${item.siteKey}',
+                            maxLines: 2,
+                          ),
+                        ),
+                        DataCell(cell(_rate(item.homeOk, item.homeTotal), 1)),
+                        DataCell(
+                          cell(_rate(item.categoryOk, item.categoryTotal), 2),
+                        ),
+                        DataCell(
+                          cell(_rate(item.detailOk, item.detailTotal), 3),
+                        ),
+                        DataCell(cell(_rate(item.playOk, item.playTotal), 4)),
+                        DataCell(cell('${item.avgLatencyMs} ms', 5)),
+                        DataCell(cell(item.lastError ?? '-', 6, maxLines: 2)),
+                      ],
+                    ),
                 ],
               ),
-          ],
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

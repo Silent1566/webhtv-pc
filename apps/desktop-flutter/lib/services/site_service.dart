@@ -19,6 +19,7 @@ import '../core/protocol.dart';
 import '../core/request_cancellation.dart';
 import '../core/source_swap.dart';
 import 'android_playback_bridge.dart';
+import 'cancellable_probe_runtime.dart';
 import 'parse_service.dart';
 import 'spider_router.dart';
 import 'storage.dart';
@@ -128,9 +129,23 @@ class SiteService {
   }
 
   /// 首页：`class` + `list`（§8.3）。
-  Future<SiteCallResult<SiteResult>> home(Site site) async {
+  Future<SiteCallResult<SiteResult>> home(
+    Site site, {
+    RequestCancellation? cancellation,
+  }) async {
+    cancellation?.throwIfCancelled();
     final runtime = router.runtimeFor(site);
-    return _call(site.key, HealthAction.home, () => runtime.home(site));
+    return _call(
+      site.key,
+      HealthAction.home,
+      () => cancellation != null && runtime is CancellableProbeRuntime
+          ? (runtime as CancellableProbeRuntime).homeCancellable(
+              site,
+              cancellation: cancellation,
+            )
+          : runtime.home(site),
+      cancellation: cancellation,
+    );
   }
 
   /// 分类：支持分页与筛选（§7.4.7）。
@@ -139,13 +154,28 @@ class SiteService {
     required String typeId,
     int page = 1,
     Map<String, String> filters = const {},
+    RequestCancellation? cancellation,
   }) async {
+    cancellation?.throwIfCancelled();
     final runtime = router.runtimeFor(site);
     return _call(
       site.key,
       HealthAction.category,
-      () =>
-          runtime.category(site, typeId: typeId, page: page, filters: filters),
+      () => cancellation != null && runtime is CancellableProbeRuntime
+          ? (runtime as CancellableProbeRuntime).categoryCancellable(
+              site,
+              typeId: typeId,
+              page: page,
+              filters: filters,
+              cancellation: cancellation,
+            )
+          : runtime.category(
+              site,
+              typeId: typeId,
+              page: page,
+              filters: filters,
+            ),
+      cancellation: cancellation,
     );
   }
 
@@ -171,11 +201,7 @@ class SiteService {
   }) async {
     var warnings = const <AppError>[];
     final outcome = await _call(site.key, HealthAction.detail, () async {
-      final expanded = await _expandFolder(
-        site,
-        parent,
-        isCurrent: isCurrent,
-      );
+      final expanded = await _expandFolder(site, parent, isCurrent: isCurrent);
       warnings = expanded.warnings;
       final merged = mergeFolderDisplay(
         parent: parent,
@@ -215,11 +241,7 @@ class SiteService {
     bool Function()? isCurrent,
   }) async {
     final outcome = await _call(site.key, HealthAction.detail, () async {
-      final expanded = await _expandFolder(
-        site,
-        parent,
-        isCurrent: isCurrent,
-      );
+      final expanded = await _expandFolder(site, parent, isCurrent: isCurrent);
       final routes = <String, SwapLineRoute>{};
       final lines = <VodPlayLine>[];
       for (var index = 0; index < expanded.names.length; index++) {
@@ -293,11 +315,7 @@ class SiteService {
                       : '$providerName · ${line.displayName}')
                   .replaceAll(r'$$$', ' ');
           var name = label;
-          for (
-            var duplicate = 2;
-            sourceFlags.containsKey(name);
-            duplicate++
-          ) {
+          for (var duplicate = 2; sourceFlags.containsKey(name); duplicate++) {
             name = '$label ($duplicate)';
           }
           names.add(name);
@@ -861,6 +879,7 @@ ParseTargetSpec resolveParseTarget({
   required List<ParseEntry> parses,
   String? targetSuffix,
   String? flag,
+
   /// 用户本次播放手动指定的解析源名称（解析源切换栏，仅本次播放生效）。
   ///
   /// 为 null 时按默认优先级（flag 命中 → 超级解析 → 第一个可用）。
@@ -946,4 +965,3 @@ class _FolderExpansion {
   /// 单条线路展开失败的原因（详情页把它们作为重试提示显示）。
   final List<AppError> warnings;
 }
-

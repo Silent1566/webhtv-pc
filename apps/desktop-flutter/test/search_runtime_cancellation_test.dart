@@ -72,13 +72,10 @@ void main() {
         keyword: 'old',
         cancellation: scope,
       );
-      final stopped = expectLater(
-        result.timeout(const Duration(milliseconds: 300)),
-        throwsA(_cancelled),
-      );
+      final stopped = expectLater(result, throwsA(_cancelled));
       await runtime.started.future;
       scope.cancel();
-      await stopped;
+      await stopped.timeout(const Duration(seconds: 2));
       expect(runtime.result.isCompleted, isFalse);
       expect(log.export(), contains('不支持终止'));
       runtime.result.completeError(StateError('late failure is consumed'));
@@ -218,14 +215,11 @@ void main() {
           keyword: 'obsolete',
           cancellation: scope,
         );
-        final stopped = expectLater(
-          result.timeout(const Duration(milliseconds: 300)),
-          throwsA(_cancelled),
-        );
+        final stopped = expectLater(result, throwsA(_cancelled));
         await fixture.until(() => fixture.gates.containsKey('initialize'));
         final survivor = peer.search(fixture.site, keyword: 'current');
         scope.cancel();
-        await stopped;
+        await stopped.timeout(const Duration(seconds: 2));
         await fixture.reply('initialize');
         final frame = await fixture.searchFrame('current');
         await fixture.reply(frame['id'] as String);
