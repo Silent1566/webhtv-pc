@@ -913,12 +913,13 @@ class CspJarProbe {
         outJar: payload.path,
         onProgress: (progress) {
           final index = ShellUnpackStages.indexOf(progress.stage);
-          if (index >= 0)
+          if (index >= 0) {
             emit(
               index == ShellUnpackStages.store
                   ? ShellUnpackStages.verify
                   : index,
             );
+          }
         },
       );
       final stage = '${unpack['stage'] ?? ''}'.trim();
@@ -1518,10 +1519,11 @@ class CspJarProbe {
         siteDir: targetDir,
         archive: entry.path,
       );
-      if (shellTranslation['ok'] != true)
+      if (shellTranslation['ok'] != true) {
         deferred.add(
           '壳：${shellTranslation['stage']} ${shellTranslation['message']}',
         );
+      }
       // payload 的预转译是**幂等**的：DexNative 在运行期就是「payload-dex/dexBundles/
       // classes.jar 在就直接用」，装配期重跑（probe.json 被删、口径重判）没必要再起一次
       // 5-9 s 的 dex2jar——99 个站点叠起来就是一次「界面未响应」。
@@ -1532,10 +1534,11 @@ class CspJarProbe {
           siteDir: payloadDexDir,
           archive: sitePayload.path,
         );
-        if (payloadTranslation['ok'] != true)
+        if (payloadTranslation['ok'] != true) {
           deferred.add(
             'payload：${payloadTranslation['stage']} ${payloadTranslation['message']}',
           );
+        }
       }
       await _patchIntake(
         targetDir,
@@ -1839,8 +1842,9 @@ class CspJarProbe {
         if (cached != null) return cached;
       }
       final result = await injected(siteDir: siteDir, archive: archive);
-      if (result['ok'] == true && sha != null)
+      if (result['ok'] == true && sha != null) {
         DexTranslate.storeSharedBundle(shared, sha, siteDir);
+      }
       return result;
     }
     return DexTranslate.run(

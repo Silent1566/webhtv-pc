@@ -73,8 +73,9 @@ void main() {
     required String siteDir,
     required String archive,
   }) async {
-    if (!Directory(siteDir).existsSync())
+    if (!Directory(siteDir).existsSync()) {
       return {'ok': false, 'stage': 'dex-读取', 'message': '站点目录不存在：$siteDir'};
+    }
     final dir = Directory(p.join(siteDir, 'dexBundles'))
       ..createSync(recursive: true);
     final bundle = File(p.join(dir.path, 'classes.jar'))
@@ -139,8 +140,9 @@ void main() {
       var calls = 0;
       final report = await probe(
         runner: ({required shellJar, required outJar}) async {
-          if (++calls == 1)
+          if (++calls == 1) {
             return {'ok': false, 'stage': '解包-调用', 'message': 'timeout'};
+          }
           return unpack(shellJar: shellJar, outJar: outJar);
         },
       ).materialize(config);
