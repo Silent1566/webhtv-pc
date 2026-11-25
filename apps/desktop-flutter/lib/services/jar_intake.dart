@@ -1122,6 +1122,7 @@ class JarIntake {
     })?
     translateDex,
     bool unpackedPayload = false,
+    bool manualOverride = false,
   }) async {
     final expected = className?.trim().isNotEmpty == true
         ? className!.trim()
@@ -1209,6 +1210,7 @@ class JarIntake {
           'entryCount': inspection.entryCount,
           'note': inspection.note,
           'unpackedPayload': ?unpackedMarker,
+          if (manualOverride) 'manualOverride': true,
           'dexTranslation': ?dexTranslation,
         }),
         flush: true,
@@ -1293,6 +1295,57 @@ class JarIntake {
   /// 实现变更的成本转嫁给用户。
   ///
   /// 已有内容只允许按已安装的 generated-shell 证据补授权；普通 manifest 不覆盖。
+  /// 把已装入口的 manifest.config.className 对齐到 api 推导的类名。
+  ///
+  /// 旧版本按站点 key 推类名（中文标签会变成 com.github.catvod.spider.金牌影视），
+  /// 站点直接 ClassNotFoundException；缓存复用分支必须先改这行再复用，否则升级
+  /// 救不回旧目录，用户只能手删。只改 className，不动其它字段。
+  static bool alignLaunchClassName({
+    required String targetDir,
+    required String siteKey,
+    required String className,
+  }) {
+    final record = probeRecord(targetDir);
+    if (record?['siteKey'] != siteKey ||
+        record?['installed'] != true ||
+        record?['sourceUrl'] is! String ||
+        (record?['sourceUrl'] as String).isEmpty ||
+        record?['shellPayload'] != null ||
+        record?['verdict'] == JarVerdict.shellGuard.name) {
+      return false;
+    }
+    final intake = intakeRecord(targetDir);
+    if (intake?['unpackedPayload'] == true ||
+        intake?['manualOverride'] == true) {
+      return false;
+    }
+    final automaticSha = record?['sha256'];
+    final installedSha = intake?['sourceSha256'];
+    if (automaticSha is String &&
+        installedSha is String &&
+        automaticSha != installedSha) {
+      return false;
+    }
+    final file = File(p.join(targetDir, 'manifest.json'));
+    if (!file.existsSync()) return false;
+    try {
+      final raw = jsonDecode(file.readAsStringSync());
+      if (raw is! Map || raw['key'] != siteKey) return false;
+      final config = raw['config'];
+      if (config is! Map) return false;
+      if (config['className'] == className) return false;
+      config['className'] = className;
+      file.writeAsStringSync(
+        const JsonEncoder.withIndent('  ').convert(raw),
+        flush: true,
+      );
+      notifySiteFilesChanged();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static void ensureLaunchManifest({
     required String targetDir,
     required String siteKey,

@@ -187,16 +187,14 @@ const String appVersion = String.fromEnvironment(
 
 /// 发布 tag：CI 用 --dart-define=APP_TAG=「v0.1.0-202611231630」注入，
 /// 更新检查靠它判断「本机是发布构建」还是「开发构建」（ADR-0015）。
-const String appBuildTag = String.fromEnvironment(
-  'APP_TAG',
-  defaultValue: '',
-);
-final String appBuildFlavor = 'MVP-A (${switch (Platform.operatingSystem) {
-  'windows' => 'Windows',
-  'linux' => 'Linux',
-  'macos' => 'macOS',
-  final other => other,
-}})';
+const String appBuildTag = String.fromEnvironment('APP_TAG', defaultValue: '');
+final String appBuildFlavor =
+    'MVP-A (${switch (Platform.operatingSystem) {
+      'windows' => 'Windows',
+      'linux' => 'Linux',
+      'macos' => 'macOS',
+      final other => other,
+    }})';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
 /// 架构、播放器引擎和运行时版本”）。
@@ -279,6 +277,89 @@ enum _ConfigRefreshOutcome {
   skipped,
 }
 
+typedef CspProbeRunner = Future<CspProbeReport> Function(AppConfig config);
+
+/// 后台自动安装 runner：除报告外还要把逐 jar 的 [onProgress]、逐站点的 [onEntry]
+/// 交回状态层（导入页据此显示真实进度）。
+typedef CspProvisionRunner =
+    Future<CspProbeReport> Function(
+      AppConfig config, {
+      void Function(ShellUnpackTick tick)? onProgress,
+      void Function(CspProbeEntry entry)? onEntry,
+    });
+
+/// 后台自动安装的**只读**进度（导入页按它显示「正在自动安装站源 12/78」）。
+///
+/// 为什么单独一个值类型：UI 只读、状态层只在站点结论或阶段变化时换一个新实例，
+/// 于是「每 tick 都 notify」这种会打爆重建的写法从类型上就被挡住了。
+class CspProvisionProgress {
+  const CspProvisionProgress({
+    this.active = false,
+    this.done = 0,
+    this.total = 0,
+    this.stage = '',
+    this.installed = 0,
+    this.rejected = 0,
+    this.failed = 0,
+    this.label = '',
+  });
+
+  /// 本轮是否仍在安装。
+  final bool active;
+
+  /// 已得出结论的站点数（按 [onEntry] 递增）。
+  final int done;
+
+  /// 本轮要装的站点数（即本轮 selected 站点数）。
+  final int total;
+
+  /// 当前阶段（来自 [ShellUnpackTick.stage]）；未知时为空串。
+  final String stage;
+
+  /// 已装好（含解包装好）的站点数。
+  final int installed;
+
+  /// 被拒（静态检测不通过等）的站点数。
+  final int rejected;
+
+  /// 失败（取回/解包）的站点数。
+  final int failed;
+
+  /// 给用户看的整行文案：含进度与阶段/估算时由状态层拼好，UI 原样显示。
+  final String label;
+
+  /// 进度条取值；[total] 为 0 时返回 null（UI 走 indeterminate）。
+  double? get fraction => total <= 0 ? null : (done / total).clamp(0.0, 1.0);
+
+  @override
+  bool operator ==(Object other) =>
+      other is CspProvisionProgress &&
+      other.active == active &&
+      other.done == done &&
+      other.total == total &&
+      other.stage == stage &&
+      other.installed == installed &&
+      other.rejected == rejected &&
+      other.failed == failed &&
+      other.label == label;
+
+  @override
+  int get hashCode => Object.hash(
+    active,
+    done,
+    total,
+    stage,
+    installed,
+    rejected,
+    failed,
+    label,
+  );
+}
+
+typedef DirectProbeRunner = Future<Map<String, LocalSpider>> Function(
+  AppConfig config,
+);
+
 /// 应用状态。
 class AppState extends ChangeNotifier implements SyncStateHost {
   AppState({
@@ -317,7 +398,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
     FollowingNotifier? followingNotifier,
-AiContentCompletion? aiContentCompletion,
+    AiContentCompletion? aiContentCompletion,
     AiCompletionClient? aiSeasonClient,
     TmdbService? tmdbService,
     this.warmAutoRoutes = true,
@@ -650,12 +731,7 @@ AiContentCompletion? aiContentCompletion,
 
   /// 扫描配置里的直连 js/py 站点并注册（幂等；哈希一致不重复下载）。
   Future<int> registerDirectSpiders() async {
-    final config = effectiveConfig;
-    if (config == null) return 0;
-    final result = await _directRegistrar().materialize(config);
-    _router.setDirectSpiders(result);
-    _attachSiteService();
-    _notifyIfAlive();
+    final result = await _kickDirectRegistration();
     return result.length;
   }
 
@@ -818,7 +894,8 @@ AiContentCompletion? aiContentCompletion,
   );
 
   /// 订阅级 TMDB 凭据（仅进程内存，按配置身份/代际隔离）。
-  final TmdbSubscriptionCredentials _tmdbSubscription = TmdbSubscriptionCredentials();
+  final TmdbSubscriptionCredentials _tmdbSubscription =
+      TmdbSubscriptionCredentials();
   int _configMutationEpoch = 0;
 
   /// 启动后台刷新的「同一进程只跑一轮」闸门（null = 还没发起）。
@@ -997,13 +1074,17 @@ AiContentCompletion? aiContentCompletion,
     final now = DateTime.now();
     final failures = _imageRouteFailures.putIfAbsent(route, () => <DateTime>[]);
     failures.add(now);
-    failures.removeWhere((at) => now.difference(at) > const Duration(seconds: 60));
+    failures.removeWhere(
+      (at) => now.difference(at) > const Duration(seconds: 60),
+    );
     if (failures.length < 2) return;
     failures.clear();
     _tmdbRoutes.failure(TmdbRouteKind.image, route);
     _notifyIfAlive();
     final last = _lastAutoProbeAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 30)) return;
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
     unawaited(refreshTmdbAutoRoutes());
   }
 
@@ -1016,7 +1097,11 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只在配置已成功提交后接收候选；写入相同作用域后才对外可见。
-  void _acceptImportedTmdbCredential(ImportedConfig imported, int configId, String sourceKey) {
+  void _acceptImportedTmdbCredential(
+    ImportedConfig imported,
+    int configId,
+    String sourceKey,
+  ) {
     final epoch = _tmdbSubscription.beginScope(configId, sourceKey);
     final accepted = _tmdbSubscription.accept(
       imported.tmdbApiKeyCandidate,
@@ -1025,7 +1110,10 @@ AiContentCompletion? aiContentCompletion,
       epoch,
     );
     if (imported.tmdbApiKeyCandidate.isNotEmpty) {
-      log.info('TMDB 订阅凭据已接收 accepted=$accepted scope=$configId', scope: 'tmdb');
+      log.info(
+        'TMDB 订阅凭据已接收 accepted=$accepted scope=$configId',
+        scope: 'tmdb',
+      );
     }
   }
 
@@ -1039,11 +1127,8 @@ AiContentCompletion? aiContentCompletion,
     _activeRecord = current;
   }
 
-  AppError _staleConfigMutation() => AppError(
-    AppErrorKind.configInvalid,
-    '配置操作已被更新的操作取代',
-    retryable: true,
-  );
+  AppError _staleConfigMutation() =>
+      AppError(AppErrorKind.configInvalid, '配置操作已被更新的操作取代', retryable: true);
 
   /// AI 配置（`docs/phase6/design/04` §4）。
   AiConfig get aiConfig => _aiConfigStore.config;
@@ -1336,6 +1421,7 @@ AiContentCompletion? aiContentCompletion,
 
   String _aiLineKey(Vod vod, VodPlayLine line) =>
       '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
+
   /// 原始线路的聚合组：手动锚点的**身份口径**。
   ///
   /// 必须用未套任何绑定的线路算：锚点靠 `sourceName` 定位，先写 extra 再算组
@@ -1343,10 +1429,8 @@ AiContentCompletion? aiContentCompletion,
   List<EpisodeGroup> _rawGroupsOf(VodPlayLine line) =>
       EpisodeAggregation.build(line.episodes, scope: line.flag);
 
-  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(
-    Vod vod,
-    VodPlayLine line,
-  ) => _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
+  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(Vod vod, VodPlayLine line) =>
+      _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
 
   int manualEpisodeDroppedFor(Vod vod, VodPlayLine line) =>
       _manualEpisodeDropped[_aiLineKey(vod, line)] ?? 0;
@@ -1564,9 +1648,8 @@ AiContentCompletion? aiContentCompletion,
   }) async {
     final groups = _rawGroupsOf(line);
     final position = groups.indexWhere(
-      (group) => group.versions.any(
-        (version) => version.sourceIndex == sourceIndex,
-      ),
+      (group) =>
+          group.versions.any((version) => version.sourceIndex == sourceIndex),
     );
     if (position < 0) return;
     // 同一组只留一个锚点：整组替换（组内多版本共享一条结论）。
@@ -1602,9 +1685,8 @@ AiContentCompletion? aiContentCompletion,
     }
     final groups = _rawGroupsOf(line);
     final position = groups.indexWhere(
-      (group) => group.versions.any(
-        (version) => version.sourceIndex == sourceIndex,
-      ),
+      (group) =>
+          group.versions.any((version) => version.sourceIndex == sourceIndex),
     );
     if (position < 0) return;
     final groupIndexes = {
@@ -1775,7 +1857,8 @@ AiContentCompletion? aiContentCompletion,
     if (siteKey == pushSiteKey && !shouldAutoMatchPushTitle(vod.vodName)) {
       var manual = false;
       try {
-        manual = _database != null &&
+        manual =
+            _database != null &&
             _ensureTmdbIdentityService().cachedManual(
                   siteKey: siteKey,
                   vodId: vod.vodId,
@@ -1950,7 +2033,8 @@ AiContentCompletion? aiContentCompletion,
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
 
   /// 多来源元数据管线（逐字段优先/聚合）。
-  MetaPipeline get metaPipeline => _uiPreferences?.metaPipeline ?? MetaPipeline.defaults;
+  MetaPipeline get metaPipeline =>
+      _uiPreferences?.metaPipeline ?? MetaPipeline.defaults;
 
   /// 用户手动钉住的来源身份（vod → MetaIdentity）。
   MetaOverrideStore get metaOverrides =>
@@ -1978,7 +2062,8 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> setMetaPipeline(MetaPipeline pipeline) async {
     final store = _uiPreferences;
     if (store == null) return false;
-    final commentsChanged = metaPipeline.ruleOf(MetaField.comments) !=
+    final commentsChanged =
+        metaPipeline.ruleOf(MetaField.comments) !=
         pipeline.ruleOf(MetaField.comments);
     final saved = store.rememberMetaPipeline(pipeline);
     _externalMetaService?.clearCache(preserveComments: !commentsChanged);
@@ -2087,6 +2172,17 @@ AiContentCompletion? aiContentCompletion,
   LoadPhase get detailPhase => _detailPhase;
   AppError? get lastError => _lastError;
   String? get notice => _notice;
+
+  /// 后台自动安装的只读进度；[CspProvisionProgress.active] 为 false 时导入页只显示
+  /// [cspProvisionSummary]。
+  CspProvisionProgress get cspProvisionProgress =>
+      identical(_cspProvisionConfig, effectiveConfig)
+          ? _cspProvisionProgress
+          : const CspProvisionProgress();
+
+  /// 最近一轮自动安装的结果摘要（结束后保留一条，下一轮开始时覆盖）。
+  String? get cspProvisionSummary =>
+      identical(_cspProvisionConfig, effectiveConfig) ? _cspProvisionSummary : null;
   AppConfig? get config => _config;
   SiteService? get siteService => _siteService;
 
@@ -2100,10 +2196,14 @@ AiContentCompletion? aiContentCompletion,
   /// EPG 服务（§13.1）。缓存落在 `paths.cacheDir/epg/`，与直播服务同域。
   EpgService get epgService => _epgService ??=
       _injectedEpgService ?? EpgService(cacheDir: paths.cacheDir);
+
   /// Offline only; the provider tolerates absent stores and damaged cache rows.
-  Map<int, ViewingMetadata> viewingReportMetadata(List<PlaybackHistory> records) =>
-      ViewingReportMetadata(database: _database, tmdbService: _tmdbService)
-          .forRecords(records);
+  Map<int, ViewingMetadata> viewingReportMetadata(
+    List<PlaybackHistory> records,
+  ) => ViewingReportMetadata(
+    database: _database,
+    tmdbService: _tmdbService,
+  ).forRecords(records);
 
   AppDatabase? get database => _database;
   ConfigRecord? get activeRecord => _activeRecord;
@@ -2459,12 +2559,46 @@ AiContentCompletion? aiContentCompletion,
   /// 用户看到一次红横幅，而注册完成后**没有任何代码重放首页**。
   /// 修复：注册发起时保存 Future，首页在这类站点上等它落定（等待是顺序问题，
   /// 不是耗时问题——实测注册只要 116 ms 也照样抢跑）。
-  Future<void>? _directReady;
+  Future<Map<String, LocalSpider>>? _directReady;
+  AppConfig? _directReadyConfig;
+  final Expando<Future<Map<String, LocalSpider>>> _directRegistrationFlights =
+      Expando();
+  AppConfig? _directHomeRetryConfig;
+  Site? _directHomeRetrySite;
+
+  @visibleForTesting
+  DirectProbeRunner? debugDirectProbeOverride;
+
+  @visibleForTesting
+  Duration? debugDirectReadyTimeout;
+
+  @visibleForTesting
+  Map<String, LocalSpider> get debugDirectSpiders =>
+      Map.unmodifiable(_router.directSpiders);
+
+  @visibleForTesting
+  Future<void> debugRegisterDirectSpidersFor(
+    AppConfig config,
+    SpiderRouter router,
+  ) => _registerDirectSpidersFor(config, router);
 
   /// 等待直连站源注册的上限。超时后按现状继续（不得把真实崩溃伪装成等待）。
   static const Duration _directReadyTimeout = Duration(seconds: 8);
 
   bool _disposed = false;
+  final Map<Timer, Completer<void>> _backgroundYields = {};
+
+  Future<void> _yieldBackgroundWork() {
+    if (_disposed) return Future<void>.value();
+    final ready = Completer<void>();
+    late final Timer timer;
+    timer = Timer(Duration.zero, () {
+      _backgroundYields.remove(timer);
+      ready.complete();
+    });
+    _backgroundYields[timer] = ready;
+    return ready.future;
+  }
 
   /// 播放进度写库的修订号：每次 [recordProgress] 成功落库后自增。
   ///
@@ -2486,16 +2620,59 @@ AiContentCompletion? aiContentCompletion,
     notifyListeners();
   }
 
-  /// 发起直连站源注册并保存 Future（幂等：已有进行中的注册沿用同一 Future）。
-  void _kickDirectRegistration() {
-    final pending = _directReady;
-    if (pending != null) {
-      unawaited(pending);
-      return;
+  /// 同一配置实例共享注册，换配置则允许新一轮并清掉旧路由映射。
+  Future<Map<String, LocalSpider>> _kickDirectRegistration() {
+    final config = effectiveConfig;
+    if (_disposed) return Future.value(const {});
+    if (config == null ||
+        !config.sites.any((site) => directSpiderKind(site) != null)) {
+      _directReady = null;
+      _directReadyConfig = config;
+      _router.setDirectSpiders(const {});
+      _directHomeRetryConfig = null;
+      _directHomeRetrySite = null;
+      return Future.value(const {});
     }
-    final future = _registerDirectSpidersQuietly();
+    final pending = _directReady;
+    if (pending != null && identical(_directReadyConfig, config)) {
+      return pending;
+    }
+    if (!identical(_directReadyConfig, config)) {
+      _router.setDirectSpiders(const {});
+      _directHomeRetryConfig = null;
+      _directHomeRetrySite = null;
+    }
+    _directReadyConfig = config;
+    final future = _registerDirectSpidersQuietly(config);
     _directReady = future;
     unawaited(future);
+    return future;
+  }
+
+  /// 三个注册入口共用这把闸门；只缓存进行中的工作，不改变手动重探测语义。
+  Future<Map<String, LocalSpider>> _materializeDirectSpiders(AppConfig config) {
+    if (_disposed ||
+        !config.sites.any((site) => directSpiderKind(site) != null)) {
+      return Future.value(const {});
+    }
+    final pending = _directRegistrationFlights[config];
+    if (pending != null) return pending;
+    late final Future<Map<String, LocalSpider>> future;
+    future = () async {
+      try {
+        await _yieldBackgroundWork();
+        if (_disposed) return <String, LocalSpider>{};
+        final runner =
+            debugDirectProbeOverride ?? _directRegistrar().materialize;
+        return await runner(config);
+      } finally {
+        if (identical(_directRegistrationFlights[config], future)) {
+          _directRegistrationFlights[config] = null;
+        }
+      }
+    }();
+    _directRegistrationFlights[config] = future;
+    return future;
   }
 
   /// 等直连站源注册落定（仅当该站点确实依赖注册结果时调用）。
@@ -2503,7 +2680,7 @@ AiContentCompletion? aiContentCompletion,
     final pending = _directReady;
     if (pending == null) return;
     try {
-      await pending.timeout(_directReadyTimeout);
+      await pending.timeout(debugDirectReadyTimeout ?? _directReadyTimeout);
     } on TimeoutException {
       log.warning('直连站源注册超时，按当前状态继续', scope: 'spider');
     } catch (_) {
@@ -2516,7 +2693,7 @@ AiContentCompletion? aiContentCompletion,
   /// 壳在**模块顶层**就 import 它们（实测 C:/dev/Atvp.py:18-23 的 requests /
   /// Crypto / lxml），因此缺依赖不是「某个方法不可用」而是**启动即失败**：
   /// host.py 记一行 stderr 后 return 3；宿主现在会把它读成「站源初始化失败：<缺的模块>」
-/// 并直接判定为确定性失败（不重试）。
+  /// 并直接判定为确定性失败（不重试）。
   static const List<String> catVodPythonModules = <String>[
     'requests',
     'Crypto',
@@ -2641,27 +2818,43 @@ AiContentCompletion? aiContentCompletion,
     if (pythonEnvironmentBusy) await _pythonEnvironment.refresh();
   }
 
-  Future<void> _registerDirectSpidersQuietly() async {
+  Future<Map<String, LocalSpider>> _registerDirectSpidersQuietly(
+    AppConfig config,
+  ) async {
     try {
-      final config = effectiveConfig;
-      if (config == null) return;
-      final hasDirect = config.sites.any(
-        (site) => directSpiderKind(site) != null,
-      );
-      if (!hasDirect) {
-        _router.setDirectSpiders(const {});
-        return;
-      }
-      final result = await _directRegistrar().materialize(config);
+      final result = await _materializeDirectSpiders(config);
+      if (_disposed || !identical(effectiveConfig, config)) return result;
       _router.setDirectSpiders(result);
-      // 站点可用性变了：重算列表（不重建路由缓存之外的状态）。
       _notifyIfAlive();
+      final retrySite = _directHomeRetrySite;
+      final selected = _selectedSite;
+      if (identical(_directHomeRetryConfig, config) &&
+          retrySite != null &&
+          selected != null &&
+          selected.key == retrySite.key &&
+          selected.api == retrySite.api &&
+          result.containsKey(selected.key)) {
+        // 冷注册实测 37.3 秒：8 秒首屏等待只是让行，完成后补回一次抢跑的首页。
+        _directHomeRetryConfig = null;
+        _directHomeRetrySite = null;
+        unawaited(
+          loadHome(selected).catchError((Object error) {
+            if (!_disposed && identical(effectiveConfig, config)) {
+              log.warning('直连站源注册后首页重载失败：$error', scope: 'spider');
+            }
+          }),
+        );
+      }
+      return result;
     } catch (error) {
-      log.warning('直连站源注册失败：$error', scope: 'spider');
+      if (!_disposed && identical(effectiveConfig, config)) {
+        log.warning('直连站源注册失败：$error', scope: 'spider');
+      }
+      return const {};
     } finally {
-      // 注册落定后清空：下一次配置装配/数据交换要能重新发起（幂等缓存由注册器
-      // 自己的哈希比对保证），同时让首屏等待者立刻放行。
-      _directReady = null;
+      if (identical(_directReadyConfig, config)) {
+        _directReady = null;
+      }
     }
   }
 
@@ -4070,6 +4263,11 @@ AiContentCompletion? aiContentCompletion,
     _router.setDirectSpiders(const {});
     // 换代必须让首屏等待者看到「没有进行中的注册」，否则会一直等到超时。
     _directReady = null;
+    _directReadyConfig = null;
+    _directHomeRetryConfig = null;
+    _directHomeRetrySite = null;
+    _cspHomeRetryConfig = null;
+    _cspHomeRetrySite = null;
     _applyAdRulesToProxy();
     notifyListeners();
   }
@@ -4258,14 +4456,13 @@ AiContentCompletion? aiContentCompletion,
     if (database == null || row.vodId.trim().isEmpty) return null;
     TmdbItem? item;
     try {
-      item = DatabaseTmdbMatchStore(
-        database: database,
-        configId: tmdbConfigId,
-      ).find(
-        siteKey: row.siteKey,
-        vodId: row.vodId,
-        sourceTitle: row.vodName,
-      )?.toItem();
+      item = DatabaseTmdbMatchStore(database: database, configId: tmdbConfigId)
+          .find(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+          )
+          ?.toItem();
     } catch (_) {
       // 读匹配表失败不算错误：继续走按片名匹配。
     }
@@ -4694,6 +4891,8 @@ AiContentCompletion? aiContentCompletion,
     _applyOutboundProxy();
     final config = effectiveConfig;
     if (config == null) {
+      _kickDirectRegistration();
+      _kickCspProvisioning(null);
       _siteService = null;
       _proxy.setAdRules(const AdRuleSet.empty());
       return;
@@ -4707,12 +4906,10 @@ AiContentCompletion? aiContentCompletion,
     // 自己做嘛？」——让程序自己把带依赖的解释器准备好（本机已有就直接用，否则
     // 从离线 ZIP 准备专用环境），而不是让用户撞一句 code=3。同样不阻塞首屏。
     unawaited(_preparePythonRuntimeQuietly());
-    // csp_* 站点：启动**只做只读的加固壳发现**，不做全量探测。
-    //
-    // 为什么改（2026-11-21 实测）：全量探测会对配置里每个 csp_* 站点做下载/检测/装配，
-    // 上百个站点连起来是几十秒的同步 I/O + 每站一次 JVM，开屏必然「未响应」。
-    // 迁移/修复改为按需：用户在站点页点「自动探测」，或点某个源时触发。
+    // 加固壳发现保持只读；缺失的 CSP jar 则按配置实例在后台限量安装。
     unawaited(_probeShellTargetsQuietlyForStartup());
+    // 不 await：实测 jar 下载/转译可能耗时数十秒，不能阻塞导入或首屏。
+    _kickCspProvisioning(config);
     // 站点服务必须复用**同一个** [_router] 实例。
     //
     // 缺陷（2026-10-24 实测）：这里曾每次新建一个匿名 SpiderRouter 交给
@@ -4724,6 +4921,7 @@ AiContentCompletion? aiContentCompletion,
     // 换代（出站代理/DoH/换配置）通过 [SpiderRouter.updateTransport] 完成，
     // 它会清空 runtime 缓存，等价于过去「新建 Router」的效果。
     _router.updateTransport(client: _httpClient, globalHeaders: config.headers);
+    _router.setCspConfig(config);
     _siteService = SiteService(
       appConfig: config,
       playbackBridge: _androidPlaybackBridge,
@@ -4986,7 +5184,8 @@ AiContentCompletion? aiContentCompletion,
       // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
       // 以为导入即可用，实际整份配置可能没有一个站点能跑。
       final usableSites = usableSiteCount;
-      _notice = config.notice ??
+      _notice =
+          config.notice ??
           '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
       _configPhase = LoadPhase.ready;
       log.info(
@@ -5006,6 +5205,7 @@ AiContentCompletion? aiContentCompletion,
       // 句柄留给 UI：导入页要在「导入成功」这一刻弹提示，必须能等到探测 settle。
       _shellTargetsProbe = _probeShellTargetsQuietly(config);
       unawaited(_shellTargetsProbe!);
+      _kickCspProvisioning(effectiveConfig ?? config);
 
       // 导入后自动加载默认站点首页，形成“导入 → 首页”的闭环。
       final site = _selectedSite;
@@ -5449,7 +5649,9 @@ AiContentCompletion? aiContentCompletion,
   }
 
   Future<bool> setUpdateGithubProxy(AppUpdateProxySettings settings) async {
-    if (_updateChecking || _updateDownloading || _updateInstalling) return false;
+    if (_updateChecking || _updateDownloading || _updateInstalling) {
+      return false;
+    }
     final baseUrl = AppUpdateProxySettings.normalizeBaseUrl(settings.baseUrl);
     if (baseUrl == null) return false;
     final normalized = AppUpdateProxySettings(
@@ -5554,10 +5756,7 @@ AiContentCompletion? aiContentCompletion,
     final tag = check.release?.tag ?? '-';
     final channelName = channel.name;
     final verdictName = check.verdict.name;
-    log.info(
-      '检查更新：通道=$channelName 结论=$verdictName 最新=$tag',
-      scope: 'update',
-    );
+    log.info('检查更新：通道=$channelName 结论=$verdictName 最新=$tag', scope: 'update');
     _notifyIfAlive();
     return check;
   }
@@ -5651,7 +5850,8 @@ AiContentCompletion? aiContentCompletion,
     if (download == null ||
         _updateChecking ||
         check == null ||
-        !(check.hasUpdate || check.verdict == AppUpdateVerdict.developmentBuild) ||
+        !(check.hasUpdate ||
+            check.verdict == AppUpdateVerdict.developmentBuild) ||
         download.release.tag != check.release?.tag) {
       return null;
     }
@@ -6141,6 +6341,9 @@ AiContentCompletion? aiContentCompletion,
       } else {
         _cancelSearchWork();
         _config = null;
+        _effectiveConfigCache = null;
+        _kickDirectRegistration();
+        _kickCspProvisioning(effectiveConfig);
         _siteService = null;
         _selectedSite = null;
         _homeResult = null;
@@ -6228,9 +6431,39 @@ AiContentCompletion? aiContentCompletion,
   /// 给了分类列表，帮用户选第一个是零风险的行为。
   Future<void> loadHome(Site site) async {
     if (webHomeKeyOfSite(site) != null) return;
+    final config = effectiveConfig;
+    final missingCsp = CspJvmBinding.matches(site.api) &&
+        directSpiderKind(site) == null &&
+        JarSourceSpec.parse(site.effectiveJar(config?.spider)) != null &&
+        _router.cspBinding?.entryFor(site.key) == null;
+    final provisioningCurrent = identical(_cspProvisionConfig, config);
+    if (missingCsp && provisioningCurrent && _cspProvisionInFlight &&
+        (_cspProvisionPreparing || _router.provisioningSiteKeys.contains(site.key))) {
+      ++_homeRunId;
+      _cspHomeRetryConfig = config;
+      _cspHomeRetrySite = site;
+      _contentPhase = LoadPhase.loading;
+      _lastError = null;
+      _notice = '站点正在后台安装站源，完成后会自动加载';
+      _notifyIfAlive();
+      return;
+    }
+    if (missingCsp && provisioningCurrent && _cspDeferredSiteKeys.contains(site.key)) {
+      ++_homeRunId;
+      _contentPhase = LoadPhase.failed;
+      _lastError = AppError(AppErrorKind.siteUnsupported, _cspDeferredReason);
+      _notifyIfAlive();
+      return;
+    }
     final service = _siteService;
     if (service == null) return;
     final runId = ++_homeRunId;
+    if (CspJvmBinding.matches(site.api) &&
+        directSpiderKind(site) == null &&
+        _router.cspBinding?.entryFor(site.key) == null) {
+      _cspHomeRetryConfig = effectiveConfig;
+      _cspHomeRetrySite = site;
+    }
     bool current() =>
         !_disposed &&
         runId == _homeRunId &&
@@ -6243,8 +6476,18 @@ AiContentCompletion? aiContentCompletion,
     // 这一集合里，仍然立即如实报「不支持」。
     if (directSpiderKind(site) != null &&
         _router.directSpiders[site.key] == null) {
+      // 先登记补载：8 秒只是让行上限，注册可能在此后才完成。
+      if (_directReady != null && _router.directSpiders[site.key] == null) {
+        _directHomeRetryConfig = effectiveConfig;
+        _directHomeRetrySite = site;
+      }
       await _waitForDirectRegistration();
       if (!current()) return;
+      // 等待期间已就绪：本次请求自己会加载成功，撤掉补载避免重复请求。
+      if (_router.directSpiders[site.key] != null) {
+        _directHomeRetryConfig = null;
+        _directHomeRetrySite = null;
+      }
     }
     await _waitForPythonSite(site);
     if (!current()) return;
@@ -7119,7 +7362,8 @@ AiContentCompletion? aiContentCompletion,
         .where((context) => identical(context.service, service))
         .firstOrNull;
     final captureSource = identical(service, _siteService)
-        ? activeSourceAtStart : originalContext?.sourceKey ?? '';
+        ? activeSourceAtStart
+        : originalContext?.sourceKey ?? '';
     // 先清状态，**再**等站点运行时：python/catVod 的运行时重刷可能要几秒，
     // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
     // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
@@ -7233,15 +7477,20 @@ AiContentCompletion? aiContentCompletion,
         );
       }
       _selectedVod = effective;
-      if (!_disposed && captureAllowed && !incognito &&
-          activeSourceAtStart == activeSourceKey && captureSource.isNotEmpty &&
-          returnedDetail != null && effective.vodId == vod.vodId &&
-          effective.vodName.trim().toLowerCase() == vod.vodName.trim().toLowerCase() &&
+      if (!_disposed &&
+          captureAllowed &&
+          !incognito &&
+          activeSourceAtStart == activeSourceKey &&
+          captureSource.isNotEmpty &&
+          returnedDetail != null &&
+          effective.vodId == vod.vodId &&
+          effective.vodName.trim().toLowerCase() ==
+              vod.vodName.trim().toLowerCase() &&
           (identical(service, _siteService) ||
               identical(_playbackContexts[captureSource], originalContext))) {
-        ViewingReportMetadata(database: _database).capture(
-          sourceKey: captureSource, siteKey: site.key, vod: effective,
-        );
+        ViewingReportMetadata(
+          database: _database,
+        ).capture(sourceKey: captureSource, siteKey: site.key, vod: effective);
       }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
@@ -7706,7 +7955,7 @@ AiContentCompletion? aiContentCompletion,
       hostPath: _sidecarHostPath,
       jsHostPath: _jsSidecarHostPath,
       jvmHostPath: _jvmSidecarHostPath,
-      cspBinding: _cspBinding,
+      cspBinding: _cspBinding.forConfig(config),
     );
     final context = PlaybackSourceContext(
       sourceKey: key,
@@ -7737,7 +7986,11 @@ AiContentCompletion? aiContentCompletion,
         (site) => directSpiderKind(site) != null,
       );
       if (!hasDirect) return;
-      final result = await _directRegistrar().materialize(config);
+      final result = await _materializeDirectSpiders(config);
+      if (_disposed ||
+          (identical(router, _router) && !identical(effectiveConfig, config))) {
+        return;
+      }
       router.setDirectSpiders(result);
     } catch (error) {
       log.warning('原来源配置的直连站源注册失败：$error', scope: 'spider');
@@ -7784,9 +8037,14 @@ AiContentCompletion? aiContentCompletion,
     final site = context?.siteByKey(siteKey);
     if (context == null || site == null) return null;
     return resolvePlayback(
-      episodeTarget: episodeTarget, flag: flag, vodId: vodId, qualityIndex: qualityIndex,
-      isCurrent: isCurrent, preferredParseName: preferredParseName,
-      siteOverride: site, serviceOverride: context.service,
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      qualityIndex: qualityIndex,
+      isCurrent: isCurrent,
+      preferredParseName: preferredParseName,
+      siteOverride: site,
+      serviceOverride: context.service,
     );
   }
 
@@ -7827,7 +8085,8 @@ AiContentCompletion? aiContentCompletion,
     }
     ViewingReportMetadata(database: database).capture(
       sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
-          ? sourceKey.trim() : activeSourceKey,
+          ? sourceKey.trim()
+          : activeSourceKey,
       siteKey: effectiveSiteKey,
       vod: vod,
     );
@@ -8149,7 +8408,10 @@ AiContentCompletion? aiContentCompletion,
 
   /// 本机「推送…」（地址 + 剧名）：与局域网推送走同一条链路。
   Future<bool> submitPush({required String url, String title = ''}) =>
-      _acceptPush(parsePushFields(url: url, title: title), from: '本机输入');
+      _acceptPush(
+        parsePushFields(url: url, title: title),
+        from: '本机输入',
+      );
 
   /// 局域网推送到达（`SyncStateHost` 的宿主能力，由 `SyncState` 调用）。
   @override
@@ -8160,10 +8422,7 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> _acceptPush(PushParsed parsed, {required String from}) async {
     final raw = parsed.url.trim();
     if (raw.isEmpty) {
-      _lastError = AppError(
-        AppErrorKind.playbackUrlMissing,
-        '推送需要一个播放地址',
-      );
+      _lastError = AppError(AppErrorKind.playbackUrlMissing, '推送需要一个播放地址');
       notifyListeners();
       return false;
     }
@@ -8173,10 +8432,7 @@ AiContentCompletion? aiContentCompletion,
           ? (Uri.tryParse(raw)?.toFilePath() ?? raw)
           : raw;
       if (!File(path).existsSync()) {
-        _lastError = AppError(
-          AppErrorKind.playbackUrlMissing,
-          '本地文件不存在：$path',
-        );
+        _lastError = AppError(AppErrorKind.playbackUrlMissing, '本地文件不存在：$path');
         notifyListeners();
         return false;
       }
@@ -8259,10 +8515,7 @@ AiContentCompletion? aiContentCompletion,
       final matched = outcome.item ?? item;
       _applyPushMatch(vodId: vodId, item: matched);
       _notice = '已匹配元数据：${matched.title}';
-      log.info(
-        '推送手动匹配已写入 tmdbId=${matched.tmdbId}',
-        scope: 'tmdb',
-      );
+      log.info('推送手动匹配已写入 tmdbId=${matched.tmdbId}', scope: 'tmdb');
       notifyListeners();
     } catch (error) {
       log.warning('推送手动匹配失败：$error', scope: 'tmdb');
@@ -8885,11 +9138,41 @@ AiContentCompletion? aiContentCompletion,
   String get cspRoot => _cspBinding.root;
 
   /// 站点 key 对应的缓存目录。
-  String cspDirectoryFor(String siteKey) => _cspBinding.directoryFor(siteKey);
+  CspJvmBinding get _currentCspBinding =>
+      _cspBinding.forConfig(effectiveConfig ?? AppConfig());
+
+  String cspDirectoryFor(String siteKey) =>
+      _currentCspBinding.directoryFor(siteKey);
 
   /// 已导入的 T3 桌面站源（含静态检测结论，供设置页回显）。
-  List<InstalledJar> get installedCspJars =>
-      JarIntake.describeInstalled(_cspBinding.root);
+  List<InstalledJar> get installedCspJars {
+    final config = effectiveConfig;
+    if (config == null) {
+      return JarIntake.describeInstalled(_currentCspBinding.root);
+    }
+    final binding = _currentCspBinding;
+    final installed = <InstalledJar>[];
+    for (final site in config.sites) {
+      if (!CspJvmBinding.matches(site.api) || directSpiderKind(site) != null) {
+        continue;
+      }
+      final entry = binding.entryFor(site.key);
+      if (entry == null) continue;
+      installed.add(
+        InstalledJar(
+          siteKey: site.key,
+          directory: binding.directoryFor(site.key),
+          entryPath: entry,
+          inspection: JarIntake.inspectPath(
+            entry,
+            expectedClass: CspJarProbe.entryClassNameOf(site),
+          ),
+        ),
+      );
+    }
+    installed.sort((a, b) => a.siteKey.compareTo(b.siteKey));
+    return installed;
+  }
 
   /// 静态检测一个候选入口，**不落盘**（设置页在导入前预览结论）。
   JarInspection inspectCspSource(String sourcePath, {String? siteKey}) =>
@@ -8916,6 +9199,7 @@ AiContentCompletion? aiContentCompletion,
       sourcePath: sourcePath,
       targetDir: _cspBinding.directoryFor(siteKey),
       siteKey: siteKey,
+      manualOverride: true,
       log: log,
       // 转译失败不影响落盘结论（`ok` 只表示落盘）：结论写进 intake.json 的
       // `dexTranslation`，可用性文案由 spider_router 的 `_classifyCsp` 决定。
@@ -8945,17 +9229,368 @@ AiContentCompletion? aiContentCompletion,
   }) async {
     final config = effectiveConfig;
     if (config == null) return const CspProbeReport();
-    final report = await _cspProbe().materialize(config, onProgress: onProgress);
+    final report = await _cspProbe().materialize(
+      config,
+      onProgress: onProgress,
+    );
     if (!report.isEmpty) _notifyIfAlive();
     return report;
   }
 
+  @visibleForTesting
+  CspProbeRunner? debugCspProbeOverride;
+
+  @visibleForTesting
+  CspJarProbe Function(CspJvmBinding binding, bool allowShellUnpack)?
+  debugCspProbeFactoryOverride;
+
+  final Expando<bool> _cspAutoProvisionRuns = Expando<bool>();
+  AppConfig? _cspHomeRetryConfig;
+  Site? _cspHomeRetrySite;
+
+  /// 本轮自动安装的只读进度；[CspProvisionProgress.active] 为 false 时导出摘要。
+  CspProvisionProgress _cspProvisionProgress = const CspProvisionProgress();
+  String? _cspProvisionSummary;
+
+  /// 本轮运行号：迟到的回调与收尾不得改写新一代的进度，也不得清掉新一代登记
+  /// 的 provisioning key。
+  int _cspProvisionRunId = 0;
+  AppConfig? _cspProvisionConfig;
+  bool _cspProvisionInFlight = false;
+  bool _cspProvisionPreparing = false;
+  Set<String> _cspDeferredSiteKeys = const {};
+
+  @visibleForTesting
+  CspProvisionRunner? debugCspProvisionOverride;
+
+  @visibleForTesting
+  Set<String> get debugProvisioningSiteKeys => _router.provisioningSiteKeys;
+
+  void _resetCspProvisionContext(AppConfig? config) {
+    ++_cspProvisionRunId;
+    _cspProvisionConfig = config;
+    _cspProvisionInFlight = false;
+    _cspProvisionPreparing = false;
+    _cspDeferredSiteKeys = const {};
+    _router.setProvisioningSiteKeys(const {});
+    _cspProvisionProgress = const CspProvisionProgress();
+    _cspProvisionSummary = null;
+    _cspHomeRetryConfig = null;
+    _cspHomeRetrySite = null;
+  }
+
+  void _kickCspProvisioning(AppConfig? config) {
+    if (_disposed) return;
+    final eligible = config?.sites.any(
+      (site) =>
+          CspJvmBinding.matches(site.api) &&
+          directSpiderKind(site) == null &&
+          JarSourceSpec.parse(site.effectiveJar(config.spider)) != null,
+    ) ?? false;
+    if (!eligible) {
+      _resetCspProvisionContext(config);
+      return;
+    }
+    unawaited(provisionCspJarsQuietly(config!));
+  }
+
+  /// 导入/装配后的后台安装；同一配置实例只尝试一轮，失败不影响前台。
+  ///
+  /// 进度契约（用户实测 2026-11-24：后台在装，界面只报「缺少 jar」）：安装期间
+  /// 界面必须看得见进度，这些站点在装好之前也不得被说成「缺少桌面 JVM 站源」。
+  Future<void> provisionCspJarsQuietly(AppConfig config) async {
+    if (_disposed) return;
+    if (!identical(_cspProvisionConfig, config)) {
+      _resetCspProvisionContext(config);
+    }
+    if (_cspAutoProvisionRuns[config] == true) return;
+    _cspAutoProvisionRuns[config] = true;
+    final runId = ++_cspProvisionRunId;
+    _cspProvisionInFlight = true;
+    _cspProvisionPreparing = true;
+    _cspProvisionSummary = null;
+    _cspProvisionProgress = const CspProvisionProgress(
+      active: true, stage: '检查站源', label: '正在检查站源（后台进行中）',
+    );
+    bool current() => !_disposed && runId == _cspProvisionRunId &&
+        identical(_cspProvisionConfig, config) && identical(effectiveConfig, config);
+    if (current()) _notifyIfAlive();
+    final selected = <Site>[];
+    var started = false;
+    var installed = 0;
+    var rejected = 0;
+    var failed = 0;
+    var needsRuntime = 0;
+    var done = 0;
+    var accepted = 0;
+    var refused = 0;
+    var broken = 0;
+    String? failure;
+    final entriesByKey = <String, CspProbeEntry>{};
+    try {
+      // 扫描也有同步读盘：先让出调用栈，再处理配置与站点目录。
+      await _yieldBackgroundWork();
+      if (!current()) return;
+      final binding = _cspBinding.forConfig(config);
+      final missing = config.sites
+          .where(
+            (site) =>
+                CspJvmBinding.matches(site.api) &&
+                directSpiderKind(site) == null &&
+                JarSourceSpec.parse(site.effectiveJar(config.spider)) != null &&
+                binding.entryFor(site.key) == null,
+          )
+          .toList();
+      if (!current() || missing.isEmpty) return;
+      started = true;
+      final urls = <String>{};
+      var deferredSites = 0;
+      final deferredKeys = <String>{};
+      // 限 4 个唯一 URL：实测 78 站共享 1 jar，限量覆盖常见配置并避免后台批量下载失控。
+      for (final site in missing) {
+        final spec = JarSourceSpec.parse(site.effectiveJar(config.spider));
+        if (spec == null) continue;
+        if (!urls.contains(spec.url)) {
+          if (urls.length >= 4) {
+            deferredSites++;
+            deferredKeys.add(site.key);
+            continue;
+          }
+          urls.add(spec.url);
+        }
+        selected.add(site);
+      }
+      if (deferredSites > 0) {
+        log.info(
+          'CSP 自动安装：本轮仅处理前 4 个 jar，剩余 $deferredSites 个站点，其余请用站点页自动探测',
+          scope: 'spider',
+        );
+      }
+      // 先登记「这些站点正在装」，再启动：站点列表/首页据此给出如实文案，而不是
+      // 「缺少桌面 JVM 站源」——那是装完仍然失败才成立的结论。
+      _cspProvisionPreparing = false;
+      _cspDeferredSiteKeys = Set.unmodifiable(deferredKeys);
+      _router.setProvisioningSiteKeys(<String>{
+        for (final site in selected) site.key,
+      });
+      final waiting = _cspHomeRetrySite;
+      if (identical(_cspHomeRetryConfig, config) && waiting != null &&
+          deferredKeys.contains(waiting.key)) {
+        _finishCspHomeWaiting(config, reason: _cspDeferredReason);
+      }
+      _cspProvisionSummary = null;
+      _cspProvisionProgress = CspProvisionProgress(
+        active: true,
+        total: selected.length,
+        label: _cspProvisionLabel(0, selected.length, ''),
+      );
+      // 开轮通知一次：导入结果行要立刻换成「站源正在后台安装」，不能等首个
+      // 站点结论回来才更新（首站转译实测十几秒）。
+      _notifyIfAlive();
+      void onProgress(ShellUnpackTick tick) {
+        if (!current()) return;
+        final progress = _cspProvisionProgress;
+        final stageChanged = tick.stage != progress.stage;
+        _cspProvisionProgress = CspProvisionProgress(
+          active: true,
+          done: progress.done,
+          total: progress.total,
+          stage: tick.stage,
+          installed: progress.installed,
+          rejected: progress.rejected,
+          failed: progress.failed,
+          label: _cspProvisionLabel(
+            progress.done,
+            progress.total,
+            tick.stage,
+            eta: tick.eta,
+          ),
+        );
+        // 节流：逐 jar 的 tick 只更新阶段，不每次都把整页重建推一遍。
+        if (stageChanged) _notifyIfAlive();
+      }
+
+      void onEntry(CspProbeEntry entry) {
+        if (_disposed || runId != _cspProvisionRunId) return;
+        final progress = _cspProvisionProgress;
+        entriesByKey[entry.siteKey] = entry;
+        done = progress.done + 1;
+        switch (entry.outcome) {
+          case CspProbeOutcome.installed:
+          case CspProbeOutcome.unpacked:
+            accepted++;
+          case CspProbeOutcome.rejected:
+            refused++;
+          case CspProbeOutcome.failed:
+          case CspProbeOutcome.unpackFailed:
+            broken++;
+          case CspProbeOutcome.skippedInstalled:
+          case CspProbeOutcome.noSource:
+          case CspProbeOutcome.needsShellRuntime:
+          case CspProbeOutcome.unsupportedShell:
+            break;
+        }
+        _cspProvisionProgress = CspProvisionProgress(
+          active: true,
+          done: done,
+          total: progress.total,
+          stage: progress.stage,
+          installed: accepted,
+          rejected: refused,
+          failed: broken,
+          label: _cspProvisionLabel(done, progress.total, progress.stage),
+        );
+        // 站点结论是用户最关心的刻度：每站通知一次，tick 才节流。
+        _notifyIfAlive();
+      }
+
+      final legacyOverride = debugCspProbeOverride;
+      final CspProvisionRunner runner =
+          debugCspProvisionOverride ??
+          (legacyOverride != null
+              ? (config, {onProgress, onEntry}) => legacyOverride(config)
+              : _cspProbe(config: config, allowShellUnpack: false).materialize);
+      final report = await runner(
+        config.copyWith(sites: selected),
+        onProgress: onProgress,
+        onEntry: onEntry,
+      );
+      if (!current()) return;
+      entriesByKey.addEntries(report.entries.map((entry) => MapEntry(entry.siteKey, entry)));
+      installed = report.installed + report.unpacked;
+      rejected = report.rejected;
+      failed = report.failed + report.unpackFailed;
+      needsRuntime = report.needsShellRuntime;
+    } catch (error) {
+      started = true;
+      failed = selected.isEmpty ? 1 : selected.length;
+      failure = '$error';
+    } finally {
+      if (!_disposed && runId == _cspProvisionRunId && identical(_cspProvisionConfig, config)) {
+        _cspProvisionInFlight = false;
+        _cspProvisionPreparing = false;
+        _router.setProvisioningSiteKeys(const {});
+      }
+      if (current()) {
+        final settled = started
+            ? _cspProvisionSummaryLine(installed: installed, rejected: rejected,
+                failed: failed, needsRuntime: needsRuntime)
+            : '站源检查完成，无需自动安装';
+        _cspProvisionSummary = settled;
+        _cspProvisionProgress = CspProvisionProgress(
+          done: done, total: selected.length, installed: installed,
+          rejected: rejected, failed: failed, label: settled,
+        );
+        if (started) {
+          final summary = 'CSP 自动安装：已装 $installed 个、拒绝 $rejected、失败 $failed、需解包运行时 $needsRuntime';
+          if (failed > 0) {
+            log.warning(failure == null ? summary : '$summary（$failure）', scope: 'spider');
+          } else {
+            log.info(summary, scope: 'spider');
+          }
+        }
+        final waiting = _cspHomeRetrySite;
+        _finishCspHomeWaiting(config,
+          entry: waiting == null ? null : entriesByKey[waiting.key],
+          reason: failure,
+        );
+        _notifyIfAlive();
+      }
+    }
+  }
+
+  static const _cspDeferredReason =
+      '本轮仅自动安装前 4 个 jar，本站点未参与；请在站点页运行自动探测';
+
+  void _finishCspHomeWaiting(AppConfig config, {CspProbeEntry? entry, String? reason}) {
+    if (!identical(_cspHomeRetryConfig, config)) return;
+    final waiting = _cspHomeRetrySite;
+    final selected = _selectedSite;
+    _cspHomeRetryConfig = null;
+    _cspHomeRetrySite = null;
+    if (waiting == null || selected == null || selected.key != waiting.key ||
+        selected.api != waiting.api || !identical(effectiveConfig, config)) {
+      return;
+    }
+    if (_currentCspBinding.entryFor(selected.key) != null) {
+      unawaited(loadHome(selected).catchError((Object error) {
+        if (!_disposed && identical(effectiveConfig, config)) {
+          log.warning('CSP 自动安装后首页重载失败：$error', scope: 'spider');
+        }
+      }));
+      return;
+    }
+    final message = reason ?? (entry?.message.isNotEmpty == true ? entry!.message : null) ??
+        _cspTerminalReason(selected, entry);
+    _contentPhase = LoadPhase.failed;
+    _lastError = AppError(AppErrorKind.siteUnsupported, message);
+    if (_notice?.contains('正在后台安装站源') == true) _notice = null;
+  }
+
+  String _cspTerminalReason(Site site, CspProbeEntry? entry) {
+    if (_cspDeferredSiteKeys.contains(site.key)) return _cspDeferredReason;
+    final record = cspProbeRecordFor(site.key);
+    final recordedReason = record == null ? null : _router.classifySite(site).reason;
+    if (recordedReason != null) return recordedReason;
+    return switch (entry?.outcome) {
+      CspProbeOutcome.needsShellRuntime => '本站源需要解包运行时，请在站点页显式确认解包',
+      CspProbeOutcome.rejected => '本站源未通过桌面兼容性检测，请在站点页查看自动探测结论',
+      CspProbeOutcome.unsupportedShell => '本站源的加固壳尚未支持，请使用其他站源',
+      _ => '本站源自动安装未完成，请在站点页运行自动探测查看原因',
+    };
+  }
+
+  /// 安装进度整行文案：进度 + 阶段 + 可信时才给的估算剩余时间。
+  static String _cspProvisionLabel(
+    int done,
+    int total,
+    String stage, {
+    Duration? eta,
+  }) {
+    final buffer = StringBuffer(
+      total <= 0 ? '正在检查站源' : '正在自动安装站源 $done/$total',
+    );
+    // 阶段与上面那句前缀重复时不再拼一遍（准备阶段的服务层阶段也叫「检查站源」）。
+    if (stage.isNotEmpty && !buffer.toString().endsWith(stage)) {
+      buffer.write(' · $stage');
+    }
+    final seconds = eta?.inSeconds ?? 0;
+    if (seconds > 0) buffer.write(' · 预计剩余约 $seconds 秒');
+    return buffer.toString();
+  }
+
+  /// 结束后的摘要（保留到下一轮开始）：已装多少，以及失败时如实报数量。
+  static String _cspProvisionSummaryLine({
+    required int installed,
+    required int rejected,
+    required int failed,
+    int needsRuntime = 0,
+  }) {
+    final buffer = StringBuffer('已自动安装 $installed 个站源');
+    if (rejected > 0) buffer.write('，拒绝 $rejected 个');
+    if (failed > 0) buffer.write('，失败 $failed 个');
+    if (needsRuntime > 0) buffer.write('，$needsRuntime 个需在站点页确认解包');
+    return buffer.toString();
+  }
+
   /// 某站点上次的自动探测结论（设置页/站点页回显）；未探测过为 null。
   Map<String, Object?>? cspProbeRecordFor(String siteKey) =>
-      CspJarProbe.recordFor(_cspBinding, siteKey);
+      CspJarProbe.recordFor(_currentCspBinding, siteKey);
 
-  CspJarProbe _cspProbe() =>
-      CspJarProbe(root: _spiderRegistry.root, binding: _cspBinding, log: log);
+  CspJarProbe _cspProbe({AppConfig? config, bool allowShellUnpack = true}) {
+    final scoped = config ?? effectiveConfig;
+    final binding = scoped == null
+        ? _cspBinding
+        : _cspBinding.forConfig(scoped);
+    final factory = debugCspProbeFactoryOverride;
+    if (factory != null) return factory(binding, allowShellUnpack);
+    return CspJarProbe(
+      root: _spiderRegistry.root,
+      binding: binding,
+      allowShellUnpack: allowShellUnpack,
+      log: log,
+    );
+  }
 
   UnidbgRuntime? _unidbgRuntime;
 
@@ -9013,28 +9648,28 @@ AiContentCompletion? aiContentCompletion,
   String? takePendingShellUnpackForSite() => _pendingShellUnpack.takeSite();
 
   /// 对话框顶部那一行运行时状态文案。
-  String? get shellUnpackRuntimeStateLabel => shellRuntimeInstalled
-      ? '解包运行时已安装。'
-      : '解包运行时未安装：开始解包时会先下载约 40.7 MB。';
+  String? get shellUnpackRuntimeStateLabel =>
+      shellRuntimeInstalled ? '解包运行时已安装。' : '解包运行时未安装：开始解包时会先下载约 40.7 MB。';
 
   /// 探测结论 → 对话框条目。
   ///
   /// 已解包的条目置灰、不勾选（重解没有意义）；给了 [preferSiteKey] 就只勾选它
   /// 所属的 jar——用户点的是某个站点，不是整份配置。
   List<ShellTargetItem> shellUnpackItems({String? preferSiteKey}) => [
-        for (final target in _shellTargets)
-          if (target.state != ShellTargetState.installed)
-            ShellTargetItem(
-              jarUrl: target.jarUrl,
-              label: _shellTargetLabel(target),
-              siteCount: target.siteKeys.length,
-              stateLabel: _shellTargetStateLabel(target),
-              selected: target.state != ShellTargetState.unpacked &&
-                  (preferSiteKey == null ||
-                      target.siteKeys.contains(preferSiteKey)),
-              disabled: target.state == ShellTargetState.unpacked,
-            ),
-      ];
+    for (final target in _shellTargets)
+      if (target.state != ShellTargetState.installed)
+        ShellTargetItem(
+          jarUrl: target.jarUrl,
+          label: _shellTargetLabel(target),
+          siteCount: target.siteKeys.length,
+          stateLabel: _shellTargetStateLabel(target),
+          selected:
+              target.state != ShellTargetState.unpacked &&
+              (preferSiteKey == null ||
+                  target.siteKeys.contains(preferSiteKey)),
+          disabled: target.state == ShellTargetState.unpacked,
+        ),
+  ];
 
   /// 导入/切配置后异步探测加固壳。
   ///
@@ -9064,10 +9699,7 @@ AiContentCompletion? aiContentCompletion,
         return;
       }
       if (stagePrompt && _pendingShellUnpack.stagePrompt(shellUnpackItems())) {
-        log.info(
-          '加固壳探测：${pending.length} 个 jar 待解包，已登记导入提示',
-          scope: 'spider',
-        );
+        log.info('加固壳探测：${pending.length} 个 jar 待解包，已登记导入提示', scope: 'spider');
         _notifyIfAlive();
       }
     } catch (error) {
@@ -9107,7 +9739,11 @@ AiContentCompletion? aiContentCompletion,
         throw AppError(AppErrorKind.unknown, '解包运行时安装失败：$reason');
       }
     }
-    await _cspProbe().unpackSelected(config, jarUrls: jarUrls, onProgress: onTick);
+    await _cspProbe().unpackSelected(
+      config,
+      jarUrls: jarUrls,
+      onProgress: onTick,
+    );
     log.info('加固壳解包完成：${jarUrls.length} 个 jar', scope: 'spider');
     // 结论刷新 + 清掉待弹信号：解完再点同一个站点不该再被问一次。
     await _probeShellTargetsQuietly(config, stagePrompt: false);
@@ -9153,8 +9789,7 @@ AiContentCompletion? aiContentCompletion,
   void _stageShellUnpackForSiteKey(String siteKey) {
     final needs = _shellTargets.any(
       (target) =>
-          target.siteKeys.contains(siteKey) &&
-          _shellTargetNeedsUnpack(target),
+          target.siteKeys.contains(siteKey) && _shellTargetNeedsUnpack(target),
     );
     if (!needs) return;
     if (_pendingShellUnpack.stageSite(siteKey)) _notifyIfAlive();
@@ -9175,8 +9810,7 @@ AiContentCompletion? aiContentCompletion,
   /// 启动/换配置后异步探测（不阻塞首屏；失败只记日志）。
   /// 启动阶段的加固壳发现：**只读**，不下载、不装配、不起 JVM。
   ///
-  /// 与 [_probeCspJarsQuietly] 的分工：后者是全量探测（会装站点），只在用户显式
-  /// 点「自动探测」时才跑。启动去掉全量探测，是为了不再出现「开屏卡死」。
+  /// 与 [provisionCspJarsQuietly] 的分工：后者限量安装缺失 jar，这里只发现加固壳。
   Future<void> _probeShellTargetsQuietlyForStartup() async {
     try {
       final config = effectiveConfig;
@@ -9199,11 +9833,23 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 移除已导入的 T3 桌面站源（回滚到「缺少桌面 JVM 站源」）。
-  Future<bool> removeCspJar(String siteKey) async {
-    final removed = await JarIntake.remove(
-      targetDir: _cspBinding.directoryFor(siteKey),
-      log: log,
-    );
+  Future<bool> removeCspJar(String siteKey, {String? directory}) async {
+    final targetDir = directory ?? _currentCspBinding.directoryFor(siteKey);
+    final root = p.normalize(p.absolute(_currentCspBinding.root));
+    final target = p.normalize(p.absolute(targetDir));
+    if (!p.equals(p.dirname(target), root)) return false;
+    try {
+      if (Directory(target).existsSync() &&
+          !p.equals(
+            p.dirname(Directory(target).resolveSymbolicLinksSync()),
+            Directory(root).resolveSymbolicLinksSync(),
+          )) {
+        return false;
+      }
+    } on FileSystemException {
+      return false;
+    }
+    final removed = await JarIntake.remove(targetDir: targetDir, log: log);
     if (removed) _notifyIfAlive();
     return removed;
   }
@@ -9642,9 +10288,17 @@ AiContentCompletion? aiContentCompletion,
   /// Capture exact authorization now; a stale page cannot release its successor.
   VoidCallback captureProxySessionRelease(String mediaUrl) {
     final owner = _jvmProxySession;
-    final jvm = owner != null && (owner.ownsUrl(mediaUrl) || _lastDecision?.url == mediaUrl) ? owner : null;
+    final jvm =
+        owner != null &&
+            (owner.ownsUrl(mediaUrl) || _lastDecision?.url == mediaUrl)
+        ? owner
+        : null;
     final session = _proxySession;
-    final http = session != null && mediaUrl.startsWith('${_proxy.baseUrl}/p/${session.token}/') ? session : null;
+    final http =
+        session != null &&
+            mediaUrl.startsWith('${_proxy.baseUrl}/p/${session.token}/')
+        ? session
+        : null;
     return () {
       var released = false;
       if (jvm != null && identical(_jvmProxySession, jvm)) {
@@ -10078,10 +10732,7 @@ AiContentCompletion? aiContentCompletion,
     // 部分线路失败只出现在 warnings 里：详情页据此报错并可重试，这条路径以前
     // 整段吞掉，追剧就会「静默换源」，日志里也查不到原因。
     for (final warning in result.warnings) {
-      log.warning(
-        '站源详情部分线路加载失败 vod=$vodId ${warning.logLine}',
-        scope: 'site',
-      );
+      log.warning('站源详情部分线路加载失败 vod=$vodId ${warning.logLine}', scope: 'site');
     }
     return result.value.list.firstOrNull;
   }
@@ -10158,6 +10809,11 @@ AiContentCompletion? aiContentCompletion,
   void dispose() {
     _cancelSearchWork();
     _disposed = true;
+    for (final entry in _backgroundYields.entries) {
+      entry.key.cancel();
+      entry.value.complete();
+    }
+    _backgroundYields.clear();
     progressRevision.dispose();
     revokeProxySession();
     unawaited(_pythonEnvironment.close());
@@ -10198,6 +10854,7 @@ AiContentCompletion? aiContentCompletion,
     super.dispose();
   }
 }
+
 /// 两处「待弹框」信号的单槽登记簿。
 ///
 /// 单槽而不是队列：同一站点重复点击、同一批结果重复登记都只该剩下一个待弹框；

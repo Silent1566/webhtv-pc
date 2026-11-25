@@ -1,4 +1,9 @@
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -49,6 +54,18 @@ class FlutterTestDiagnosticsWindowsTests(unittest.TestCase):
     def test_native_exit_is_captured_immediately_and_is_the_only_exit(self):
         check_execution_contract(self, self.source)
 
+    def test_optional_shards_use_only_sdk_flags_and_validate_before_execution(self):
+        self.assertIn("[ValidateRange(1, 2147483647)]", self.source)
+        self.assertIn("[ValidateRange(0, 2147483647)]", self.source)
+        self.assertIn("$PSBoundParameters.ContainsKey('TotalShards') -ne $PSBoundParameters.ContainsKey('ShardIndex')",
+                      self.source)
+        self.assertIn("$ShardIndex -ge $TotalShards", self.source)
+        self.assertIn('$shardArguments = @()', self.source)
+        self.assertIn('$shardArguments = @("--total-shards=$TotalShards", "--shard-index=$ShardIndex")',
+                      self.source)
+        self.assertLess(self.source.index("$ShardIndex -ge $TotalShards"), self.source.index("& flutter test"))
+        self.assertNotRegex(self.source, r"(?i)--(?:name|plain-name|exclude|tags|skip)")
+
     def test_artifacts_are_relative_to_app_working_directory(self):
         self.assertRegex(self.source, r"\[string\]\$DiagnosticsDirectory = 'ci-test-diagnostics'")
         self.assertIn("Join-Path (Get-Location).Path $DiagnosticsDirectory", self.source)
@@ -90,6 +107,98 @@ class FlutterTestDiagnosticsWindowsTests(unittest.TestCase):
                 check_execution_contract(self, mutant)
 
 
+@unittest.skipUnless(os.name == "nt" and shutil.which("pwsh"), "Windows PowerShell interface test")
+class WindowsDiagnosticScriptInterfaceTests(unittest.TestCase):
+    def run_script(self, arguments, native_exit=0, break_postprocessing=False):
+        with tempfile.TemporaryDirectory() as directory:
+            command = """
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+function flutter {
+    ConvertTo-Json -InputObject @($args) -Compress | Set-Content -LiteralPath 'arguments.json'
+    New-Item -ItemType Directory -Path 'coverage' -Force | Out-Null
+    Set-Content -LiteralPath 'coverage/lcov.info' -Value 'TN:fixture'
+    $reporter = $args | Where-Object { $_ -like '--file-reporter=json:*' }
+    Set-Content -LiteralPath $reporter.Substring('--file-reporter=json:'.Length) -Value '{"type":"done"}'
+    Write-Output 'fixture stdout'
+    [Console]::Error.WriteLine('fixture stderr')
+    if (BREAK_POSTPROCESSING) {
+        New-Item -ItemType Directory -Path 'ci-test-diagnostics/summary.json' | Out-Null
+    }
+    & $env:ComSpec /c exit NATIVE_EXIT
+}
+& 'SCRIPT' ARGUMENTS
+exit $LASTEXITCODE
+""".replace("NATIVE_EXIT", str(native_exit)).replace(
+                "BREAK_POSTPROCESSING", "$true" if break_postprocessing else "$false"
+            ).replace("SCRIPT", str(SCRIPT).replace("'", "''")).replace(
+                "ARGUMENTS", " ".join(arguments)
+            )
+            result = subprocess.run(
+                [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+                cwd=directory, capture_output=True, text=True, encoding="utf-8", timeout=30,
+            )
+            root = Path(directory)
+            native_arguments = root / "arguments.json"
+            summary = root / "ci-test-diagnostics/summary.json"
+            artifacts = {name: (root / "ci-test-diagnostics" / name).is_file()
+                         for name in ("stdout.log", "stderr.log", "events.json")}
+            return (result, json.loads(native_arguments.read_text(encoding="utf-8-sig"))
+                    if native_arguments.exists() else None,
+                    json.loads(summary.read_text(encoding="utf-8-sig")) if summary.is_file() else None,
+                    artifacts)
+
+    def test_native_failure_survives_diagnostics_and_postprocessing_failure(self):
+        for arguments in ([], ["-TotalShards", "4", "-ShardIndex", "3"]):
+            for break_postprocessing in (False, True):
+                with self.subTest(arguments=arguments, break_postprocessing=break_postprocessing):
+                    result, actual, summary, artifacts = self.run_script(
+                        arguments, native_exit=7, break_postprocessing=break_postprocessing,
+                    )
+                    self.assertEqual(7, result.returncode, result.stderr)
+                    self.assertIsNotNone(actual)
+                    self.assertTrue(all(artifacts.values()))
+                    if break_postprocessing:
+                        self.assertIsNone(summary)
+                        self.assertIn("Diagnostic post-processing failed", result.stdout)
+                    else:
+                        self.assertEqual(7, summary["flutterExitCode"])
+                        self.assertTrue(summary["coverageExists"])
+
+    def test_invalid_shard_parameters_fail_before_native_execution(self):
+        invalid = [
+            ["-TotalShards", "4"], ["-ShardIndex", "0"],
+            ["-TotalShards", "0", "-ShardIndex", "0"],
+            ["-TotalShards", "-1", "-ShardIndex", "0"],
+            ["-TotalShards", "4", "-ShardIndex", "-1"],
+            ["-TotalShards", "4", "-ShardIndex", "4"],
+            ["-TotalShards", "4", "-ShardIndex", "5"],
+            ["-TotalShards", "2147483648", "-ShardIndex", "0"],
+        ]
+        for arguments in invalid:
+            with self.subTest(arguments=arguments):
+                result, actual, summary, artifacts = self.run_script(arguments)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIsNone(actual, "Invalid shards must not run any tests")
+                self.assertIsNone(summary)
+                self.assertFalse(any(artifacts.values()))
+
+    def test_native_shards_are_optional_paired_and_cover_all_four_indices(self):
+        for arguments, expected in [([], []), *[
+            (["-TotalShards", "4", "-ShardIndex", str(index)],
+             ["--total-shards=4", f"--shard-index={index}"]) for index in range(4)
+        ]]:
+            with self.subTest(arguments=arguments):
+                result, actual, summary, artifacts = self.run_script(arguments)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["test", "--coverage", "--verbose"], actual[:3])
+                self.assertRegex(actual[3], r"^--file-reporter=json:.*events\.json$")
+                self.assertEqual(expected, actual[4:], "Only SDK shards may narrow discovery")
+                self.assertEqual(0, summary["flutterExitCode"])
+                self.assertTrue(summary["coverageExists"])
+                self.assertTrue(all(artifacts.values()))
+
+
 class WindowsDiagnosticWorkflowTests(unittest.TestCase):
     def setUp(self):
         document = yaml.load(
@@ -102,7 +211,8 @@ class WindowsDiagnosticWorkflowTests(unittest.TestCase):
         unit_tests = next(step for step in self.steps if step["name"] == "Unit tests")
         commands = statements(unit_tests["run"])
         self.assertEqual(
-            ["& ../../scripts/flutter_test_diagnostics_windows.ps1", "exit $LASTEXITCODE"],
+            ["& ../../scripts/flutter_test_diagnostics_windows.ps1 -TotalShards 4 -ShardIndex ${{ matrix.shardIndex }}",
+             "exit $LASTEXITCODE"],
             commands[-2:],
         )
         self.assertNotIn("continue-on-error", unit_tests)

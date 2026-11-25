@@ -89,7 +89,7 @@ public final class DexRepair {
      * 修复口径的版本号。产物内容会随修复规则变化，因此把它写进 {@code intake-dex.json}：
      * 版本不一致说明缓存是旧规则生成的，必须重新转译（否则修复永远跑不到真实 payload 上）。
      */
-    public static final int VERSION = 6;
+    public static final int VERSION = 7;
 
     /**
      * 2：{@code NEW} 重定位从「抽象父类 → 具体子类」放宽为「dex 类型是产物类型的子类且具体」，
