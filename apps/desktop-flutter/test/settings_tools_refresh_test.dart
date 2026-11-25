@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/core/ai_assist.dart';
 import 'package:webhtv_pc/core/ai_config.dart';
 import 'package:webhtv_pc/core/app_error.dart';
@@ -73,7 +76,7 @@ void main() {
   tearDown(() async {
     dismissAllToasts();
     if (stateCreated) state.dispose();
-    await temp.delete(recursive: true);
+    await deleteTempWhenReleased(temp);
   });
 
   Future<void> open(

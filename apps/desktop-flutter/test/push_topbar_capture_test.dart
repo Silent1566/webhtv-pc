@@ -15,6 +15,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/storage.dart';
@@ -27,7 +30,6 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'support/detail_test_seams.dart';
 import 'support/test_fonts.dart';
 import 'support/widget_settle.dart';
-
 
 /// 采集用状态：给一份空配置，让推送走"合成推送站点详情"（普通详情页）。
 class _CapturePushState extends AppState with ExternalMetaOff {
@@ -75,16 +77,16 @@ void main() {
         'Microsoft YaHei UI',
         'Noto Sans CJK SC',
       ]) {
-        await (FontLoader(family)
-              ..addFont(cjk.readAsBytes().then(ByteData.sublistView)))
-            .load();
+        await (FontLoader(
+          family,
+        )..addFont(cjk.readAsBytes().then(ByteData.sublistView))).load();
       }
     }
     final icons = firstExisting(iconFontCandidates());
     if (icons != null) {
-      await (FontLoader('MaterialIcons')
-            ..addFont(icons.readAsBytes().then(ByteData.sublistView)))
-          .load();
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(icons.readAsBytes().then(ByteData.sublistView))).load();
     }
   });
 
@@ -111,7 +113,7 @@ void main() {
   tearDown(() async {
     state.dispose();
     try {
-      await tempDir.delete(recursive: true);
+      await deleteTempWhenReleased(tempDir);
     } catch (_) {}
   });
 
@@ -127,21 +129,20 @@ void main() {
       RepaintBoundary(
         key: boundary,
         child: MaterialApp(
-        theme: theme.copyWith(
-          textTheme: theme.textTheme.apply(fontFamily: 'FixtureCJK'),
-          primaryTextTheme: theme.primaryTextTheme.apply(
-            fontFamily: 'FixtureCJK',
-          ),
-          listTileTheme: theme.listTileTheme.copyWith(
-            titleTextStyle: theme.listTileTheme.titleTextStyle?.copyWith(
+          theme: theme.copyWith(
+            textTheme: theme.textTheme.apply(fontFamily: 'FixtureCJK'),
+            primaryTextTheme: theme.primaryTextTheme.apply(
               fontFamily: 'FixtureCJK',
             ),
-            subtitleTextStyle: theme.listTileTheme.subtitleTextStyle?.copyWith(
-              fontFamily: 'FixtureCJK',
+            listTileTheme: theme.listTileTheme.copyWith(
+              titleTextStyle: theme.listTileTheme.titleTextStyle?.copyWith(
+                fontFamily: 'FixtureCJK',
+              ),
+              subtitleTextStyle: theme.listTileTheme.subtitleTextStyle
+                  ?.copyWith(fontFamily: 'FixtureCJK'),
             ),
           ),
-        ),
-        home: AppShell(state: state, startup: const StartupArguments()),
+          home: AppShell(state: state, startup: const StartupArguments()),
         ),
       ),
     );
@@ -162,7 +163,8 @@ void main() {
       if (phase == null) return;
       await tester.runAsync(() async {
         final render =
-            boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+            boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
         final image = await render.toImage(pixelRatio: 1);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         final file = File('$evidenceRoot/$phase-$scenario.png');

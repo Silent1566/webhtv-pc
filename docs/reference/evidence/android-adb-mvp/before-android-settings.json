@@ -1,0 +1,389 @@
+{
+  "status": "ready",
+  "scope": "visual BEFORE only：HEAD 上现有 AndroidSettingsPage 的空闲首屏；不含任何 MVP/ADB 代码",
+  "run_count": 1,
+  "generated_utc": "2026-11-24T06:43:22.020955Z",
+  "kind": "before",
+  "feature": "android-adb-mvp / existing ADB environment",
+  "purpose": "现有 AndroidSettingsPage 空闲首屏的 BEFORE 对照证据；AFTER 必须复用同一场景",
+  "capturedBy": "adb-ui-before (delegated subagent)",
+  "source": {
+    "repo": "/home/maple/.dsh/worktrees/webhtv-pc-d700b86c/dev3",
+    "package": "apps/desktop-flutter",
+    "gitHead": "e25e8b854328d5f6d3d5063cec044ad98328280e",
+    "gitHeadSubject": "合并：同步 beta 分支最新代码",
+    "workingTreeDirty": true,
+    "sha256": {
+      "apps/desktop-flutter/lib/ui/config_pages.dart": "69dd71fd1494f0ca147dfac477302a9bc69c01b6ca6d4bf4a0a61c5c2ed0498e",
+      "apps/desktop-flutter/lib/ui/theme.dart": "e4d72fcedc9eb46408b24cda64d1f27f811bd2fb7d8ec4930767134a38bf76ef",
+      "apps/desktop-flutter/lib/state/app_state.dart": "296ce1d0f7327b18467e2ca77e038fed83b0ea3d87b46233925d1768617f4504"
+    },
+    "flutter": "Flutter 3.47.5 (stable, framework 6a19cca56475dbfba1478ee68d7bd0c2ef891da1)"
+  },
+  "widgetUnderTest": {
+    "class": "AndroidSettingsPage",
+    "file": "apps/desktop-flutter/lib/ui/config_pages.dart:1673",
+    "buildMethod": "apps/desktop-flutter/lib/ui/config_pages.dart:1913",
+    "host": "MaterialApp(themeMode: dark) + MaterialPageRoute(AndroidSettingsPage(state: appState))",
+    "route": "DiagnosticsPage -> MaterialPageRoute (lib/ui/diagnostics_pages.dart:538)：同样 push，AppBar 返回箭头可见",
+    "replica": false
+  },
+  "scenario": {
+    "state": "idle（无 busy / 无 error / 无 notice / 未扫描 / 未滚动）",
+    "deviceHistory": "empty",
+    "devices": "empty",
+    "peers": "empty",
+    "syncSwitches": "all off (defaults)",
+    "visibleForm": "HTTP 手动地址表单（android-device-input / 接入设备 / 扫描局域网）",
+    "dataSource": "temp AppPaths（空 settings.json，无本人数据/数据库）",
+    "network": "none（warmAutoRoutes=false；SyncServer 只绑 127.0.0.1 且未开启）"
+  },
+  "viewport": {
+    "logicalSize": {
+      "width": 1280.0,
+      "height": 800.0
+    },
+    "physicalSize": {
+      "width": 1280,
+      "height": 800
+    },
+    "devicePixelRatio": 1.0,
+    "textScaleFactor": 1.0,
+    "platform": "TargetPlatform.linux (debugDefaultTargetPlatformOverride)",
+    "windowChrome": "none（纯 Flutter 渲染，不含 OS 标题栏/边框）"
+  },
+  "theme": {
+    "builder": "buildAppTheme(Brightness.dark)",
+    "file": "apps/desktop-flutter/lib/ui/theme.dart:175",
+    "themeMode": "dark（AppState 默认 themeMode 也是 dark）",
+    "overrides": "仅字体族替换为夹具 FixtureCJK（Noto Sans CJK）；同一字体也注册到生产 fallback 族名，颜色/间距/字重不变",
+    "iconFont": "Flutter SDK MaterialIcons-Regular.otf",
+    "shadows": "debugDisableShadows=false（保留真实阴影）"
+  },
+  "artifacts": {
+    "primary": {
+      "path": "docs/reference/evidence/android-adb-mvp/before-android-settings.png",
+      "width": 1280,
+      "height": 800,
+      "bytes": 126355,
+      "sha256": "a2352e6c5fb09e257c65f0a72b53b167456e6ec78d6d8f3ebca63d3024f573f6"
+    },
+    "supplementaryPrivate": {
+      "path": ".superpowers/sdd/2026-11-24-android-adb-mvp/visual/supplementary-full-content-1280x2600.png",
+      "width": 1280,
+      "height": 2600,
+      "bytes": 267467,
+      "sha256": "453744e1cff24e7042ab312a028582b697c99e9b3054f3c042c3432076265fc8",
+      "note": "非交付视图；只用于整页溢出/旧控件存在性核对，随同一命令重新生成"
+    }
+  },
+  "checks": {
+    "renderExceptions": "none（两段视口各断言 tester.takeException() == null）",
+    "overflow": "none（任何 RenderFlex overflow 都会作为异常让用例失败）",
+    "keyControlsInViewport": [
+      {
+        "label": "AppBar 返回箭头",
+        "offset": {
+          "dx": 8.0,
+          "dy": 8.0
+        },
+        "size": {
+          "width": 40.0,
+          "height": 40.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "AppBar 标题「安卓设备接入」",
+        "offset": {
+          "dx": 72.0,
+          "dy": 18.0
+        },
+        "size": {
+          "width": 83.9996337890625,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "页面滚动体 android-bridge",
+        "offset": {
+          "dx": 0.0,
+          "dy": 56.0
+        },
+        "size": {
+          "width": 1280.0,
+          "height": 744.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "分区标题「设备接入」",
+        "offset": {
+          "dx": 206.0,
+          "dy": 72.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 24.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "HTTP 表单 android-device-input",
+        "offset": {
+          "dx": 206.0,
+          "dy": 140.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 48.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "字段标签「手动输入地址」",
+        "offset": {
+          "dx": 224.0,
+          "dy": 156.0
+        },
+        "size": {
+          "width": 99.00018310546875,
+          "height": 16.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "按钮 android-device-add",
+        "offset": {
+          "dx": 206.0,
+          "dy": 200.0
+        },
+        "size": {
+          "width": 117.999755859375,
+          "height": 34.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "按钮 android-scan",
+        "offset": {
+          "dx": 335.999755859375,
+          "dy": 200.0
+        },
+        "size": {
+          "width": 127.99969482421875,
+          "height": 34.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "按钮文案「接入设备」",
+        "offset": {
+          "dx": 250.0,
+          "dy": 207.0
+        },
+        "size": {
+          "width": 55.999755859375,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "按钮文案「扫描局域网」",
+        "offset": {
+          "dx": 377.999755859375,
+          "dy": 207.0
+        },
+        "size": {
+          "width": 69.99969482421875,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      }
+    ],
+    "emptyStateInViewport": [
+      {
+        "label": "空状态「还没有接入过设备。」",
+        "offset": {
+          "dx": 206.0,
+          "dy": 314.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "空状态「尚未接入设备…」",
+        "offset": {
+          "dx": 206.0,
+          "dy": 394.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      }
+    ],
+    "fullPageContent": {
+      "viewport": {
+        "width": 1280.0,
+        "height": 2600.0
+      },
+      "controls": [
+        {
+          "label": "分区「最近接入」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 258.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 24.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "空状态「还没有接入过设备。」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 314.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 20.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "空状态「尚未接入设备…」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 394.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 20.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "分区「同步设置」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 438.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 24.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "开关 android-sync-server",
+          "offset": {
+            "dx": 206.0,
+            "dy": 474.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 72.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "开关 android-receive-push",
+          "offset": {
+            "dx": 206.0,
+            "dy": 546.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 84.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "开关 android-sync-push",
+          "offset": {
+            "dx": 206.0,
+            "dy": 630.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 72.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "开关 android-sync-settings",
+          "offset": {
+            "dx": 206.0,
+            "dy": 702.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 72.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "分区「实时同步」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 798.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 24.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "分区「手动操作」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 1274.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 24.0
+          },
+          "fullyInsideViewport": true
+        },
+        {
+          "label": "分区「已授权对端」",
+          "offset": {
+            "dx": 206.0,
+            "dy": 1384.0
+          },
+          "size": {
+            "width": 868.0,
+            "height": 24.0
+          },
+          "fullyInsideViewport": true
+        }
+      ]
+    }
+  },
+  "reproduction": {
+    "cwd": "apps/desktop-flutter",
+    "command": "../../.tools/flutter/bin/flutter test ../../.superpowers/sdd/2026-11-24-android-adb-mvp/visual/android_settings_before_capture_test.dart",
+    "outputs": [
+      "docs/reference/evidence/android-adb-mvp/before-android-settings.png",
+      "docs/reference/evidence/android-adb-mvp/before-android-settings.json"
+    ]
+  },
+  "beforeLimitations": [
+    "文本用 Noto Sans CJK 夹具渲染：字形/度量与生产 fallback 链一致，但不是 Windows 雅黑本体。",
+    "纯 Flutter 渲染，不含 OS 窗口标题栏/边框；测试视口无安全区内边距。",
+    "返回箭头来自 MaterialPageRoute push（下层是空白 Scaffold 占位，不参与截图）。",
+    "运行在 Flutter 测试渲染器（无平台合成器/系统字体服务），阴影已恢复但抗锯齿与真机可能略异。",
+    "仅空闲首屏（未点击/未探测/未扫描/未滚动）；1280×800 视口只到「同步设置」开头，更靠下的区块见私有补充整页图。",
+    "私有补充整页图底部含平台生成的「本机设备标识（已打码）/主机名/临时设置路径」；不进公开证据，也不含凭据。",
+    "本次不涉及任何 MVP/ADB 新代码：页面即 HEAD 上的现有实现。"
+  ]
+}

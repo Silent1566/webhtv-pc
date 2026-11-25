@@ -108,6 +108,32 @@ abstract class SyncStateHost {
   Future<bool> onPushReceived(PushParsed parsed);
 }
 
+/// 可选扩展：宿主能把**内部传输标记**（`configs.bridge_transport`）一并落库。
+///
+/// 为什么单独声明，而不是给 [SyncStateHost.saveBridgeConfig] 加一个可选命名参数：
+/// Dart 不允许实现方「少写」基类的命名参数，给基类方法加参数会让唯一的生产实现
+/// （`AppState`）立刻编译失败——那是另一条改动边界。单独声明之后：
+/// - 只实现 [SyncStateHost] 的老宿主源码与行为完全不变（标记不落库 + 一条日志）；
+/// - 实现本接口的宿主才把标记写进数据库（一次 `saveConfig` 完成，不做二次写）。
+abstract interface class SyncBridgeTransportHost implements SyncStateHost {
+  /// 与 [SyncStateHost.saveBridgeConfig] 相同，外加内部传输标记。
+  ///
+  /// [bridgeTransport]：`''` = 老 HTTP 桥接（默认，等价于老签名），
+  /// `'adb'` = 管理型（网关/转发由 runtime 拥有）。实现方原样交给
+  /// `AppDatabase.saveConfig(bridgeTransport: …)`，不要改写 `source_key`。
+  @override
+  Future<int?> saveBridgeConfig({
+    required String name,
+    required String origin,
+    required AppConfig config,
+    required List<String> diagnostics,
+    String deviceUuid = '',
+    String interfaceKey = '',
+    String configUrl = '',
+    String bridgeTransport = '',
+  });
+}
+
 /// 一条设备接入历史（用户反馈 2026-10-09：设备接入需要历史记录方便再次使用）。
 ///
 /// 与 [SyncPeer]（白名单，管**同步**授权）分开：设备历史记的是**接入过哪些地址**
@@ -1385,18 +1411,41 @@ class SyncState extends ChangeNotifier {
   /// `bridge|http://192.168.50.9:9978|a`——设备换个 IP 就与自己的历史断链，
   /// 而且和 UI 先探测再导入的路径产生两套标识（同一台设备两条记录）。
   /// 探测失败仍退回地址，保证「设备能连但 /device 不可用」的旧形态不被打断。
-  Future<AndroidDevice> _deviceForImport(String base) async {
+  /// 管理型（`bridgeTransport` 非空）导入是**严格**的：探测失败不许拿地址当
+  /// 设备身份，[pinnedUuid] 非空时还不许换成另一台设备。原因：管理型记录的网关
+  /// 端口每次连接都会变，一旦 identity 退化成 `bridge|http://127.0.0.1:<port>|key`，
+  /// 同一条源重启一次就换一个身份（历史/收藏全断），而且「随便哪台设备」都会被
+  /// 当成已保存的那台。老 HTTP 路径的宽松回退保持不变。
+  Future<AndroidDevice> _deviceForImport(
+    String base, {
+    bool strictDeviceIdentity = false,
+    String pinnedUuid = '',
+  }) async {
+    final pinned = pinnedUuid.trim();
     for (final item in _devices) {
-      if (item.reachableBase == base) return item;
+      if (item.reachableBase != base) continue;
+      // 地址相同不等于同一台设备：管理型导入连缓存条目也要过 uuid 校验。
+      if (strictDeviceIdentity && pinned.isNotEmpty && item.uuid != pinned) {
+        continue;
+      }
+      return item;
     }
     AndroidDevice device;
     try {
       device = await _bridge.probeDevice(base);
     } on AppError {
+      if (strictDeviceIdentity) rethrow;
       device = AndroidDevice(
         uuid: base,
         name: Uri.parse(base).host,
         reachableBase: base,
+      );
+    }
+    if (pinned.isNotEmpty && device.uuid != pinned) {
+      throw AppError(
+        AppErrorKind.bridgeNotAndroid,
+        '该地址上的 WebHTV 与已保存的安卓设备不一致，已拒绝导入',
+        detail: '${device.maskedUuid} ≠ 期望设备',
       );
     }
     if (!_devices.any((item) => item.uuid == device.uuid)) {
@@ -1406,9 +1455,16 @@ class SyncState extends ChangeNotifier {
   }
 
   /// [interfaceKey] 非空时只导入该源（单源重拉）。
+  ///
+  /// [bridgeTransport] 是记录的**内部传输标记**：`''` = 老 HTTP 桥接
+  /// （默认，既有调用方行为逐字节不变），`'adb'` = 管理型（网关/转发由
+  /// `AndroidAdbRuntime` 拥有）。它只落到 `configs.bridge_transport`，
+  /// 不参与 `source_key`（`bridge|<uuid>|<interfaceKey>` 保持不变）。
   Future<bool> importSites(
     String address, {
     String? interfaceKey,
+    String bridgeTransport = '',
+    String expectedDeviceUuid = '',
     bool Function()? isCurrent,
     void Function(int recordId, String candidate)? onSaved,
   }) async {
@@ -1424,7 +1480,11 @@ class SyncState extends ChangeNotifier {
     notifyListeners();
     try {
       final base = normalizeBase(address);
-      final device = await _deviceForImport(base);
+      final device = await _deviceForImport(
+        base,
+        strictDeviceIdentity: bridgeTransport.trim().isNotEmpty,
+        pinnedUuid: expectedDeviceUuid,
+      );
       final selfBase = serverRunning ? _server!.baseUrl : null;
 
       // 1) 源清单：拿不到（老安卓）就退化为"只导入当前激活源"的老路径。
@@ -1462,6 +1522,7 @@ class SyncState extends ChangeNotifier {
           catalog,
           current,
           saved,
+          bridgeTransport: bridgeTransport,
         );
       }
 
@@ -1504,7 +1565,7 @@ class SyncState extends ChangeNotifier {
             bridgedConfig = bridgedConfig.copyWith(lives: liveSources);
           }
           if (!current()) return false;
-          final recordId = await host.saveBridgeConfig(
+          final recordId = await _saveBridgeConfig(
             name: source.displayName,
             origin: base,
             config: bridgedConfig,
@@ -1515,6 +1576,7 @@ class SyncState extends ChangeNotifier {
             deviceUuid: device.uuid,
             interfaceKey: source.interfaceKey,
             configUrl: source.url,
+            bridgeTransport: bridgeTransport,
           );
           if (!current()) return false;
           if (recordId == null) {
@@ -1604,6 +1666,53 @@ class SyncState extends ChangeNotifier {
     }
   }
 
+  /// 落一条桥接配置记录；宿主支持 [SyncBridgeTransportHost] 时连同内部传输标记。
+  ///
+  /// 老宿主（只实现 [SyncStateHost]）走原签名：行为与加这个标记之前逐字节一致，
+  /// 但标记会被丢弃——必须留下一条可查的日志，否则「管理型记录被当成老 HTTP
+  /// 桥接」这种归类错误在运行时完全看不见。
+  Future<int?> _saveBridgeConfig({
+    required String name,
+    required String origin,
+    required AppConfig config,
+    required List<String> diagnostics,
+    String deviceUuid = '',
+    String interfaceKey = '',
+    String configUrl = '',
+    String bridgeTransport = '',
+  }) {
+    final host = this.host;
+    final marker = bridgeTransport.trim();
+    if (marker.isNotEmpty && host is SyncBridgeTransportHost) {
+      return host.saveBridgeConfig(
+        name: name,
+        origin: origin,
+        config: config,
+        diagnostics: diagnostics,
+        deviceUuid: deviceUuid,
+        interfaceKey: interfaceKey,
+        configUrl: configUrl,
+        bridgeTransport: marker,
+      );
+    }
+    if (marker.isNotEmpty) {
+      log.warning(
+        '宿主未实现 SyncBridgeTransportHost：bridge_transport='
+        '$marker 未落库（该记录仍按老 HTTP 桥接处理）',
+        scope: 'bridge',
+      );
+    }
+    return host.saveBridgeConfig(
+      name: name,
+      origin: origin,
+      config: config,
+      diagnostics: diagnostics,
+      deviceUuid: deviceUuid,
+      interfaceKey: interfaceKey,
+      configUrl: configUrl,
+    );
+  }
+
   /// 老安卓退路：没有 `/manage/configs` 时只能拉当前激活源。
   Future<bool> _importActiveSourceOnly(
     String base,
@@ -1611,8 +1720,9 @@ class SyncState extends ChangeNotifier {
     String? selfBase,
     AndroidSourceCatalog catalog,
     bool Function() isCurrent,
-    void Function(int recordId, String candidate)? onSaved,
-  ) async {
+    void Function(int recordId, String candidate)? onSaved, {
+    String bridgeTransport = '',
+  }) async {
     _stage = BridgeStage.fetchingConfig;
     notifyListeners();
     final conversion = await _bridge.fetchGatewayConfig(
@@ -1634,11 +1744,12 @@ class SyncState extends ChangeNotifier {
         : conversion.config.copyWith(lives: liveSources);
     // 老安卓拿不到 interfaceKey：记录不带 sourceKey，去重退回按 origin（老语义）。
     if (!isCurrent()) return false;
-    final recordId = await host.saveBridgeConfig(
+    final recordId = await _saveBridgeConfig(
       name: bridgedConfig.name ?? '安卓桥接（${_hostOf(base)}）',
       origin: base,
       config: bridgedConfig,
       diagnostics: [...catalog.diagnostics, ...conversion.diagnostics],
+      bridgeTransport: bridgeTransport,
     );
     if (!isCurrent()) return false;
     if (recordId == null) {
