@@ -10646,8 +10646,6 @@ class AppState extends ChangeNotifier
         );
       } finally {
         _ownedAdbBridge?.close();
-        log.flush();
-        await log.dispose();
       }
     }
   }
@@ -11801,6 +11799,10 @@ class AppState extends ChangeNotifier
     syncState.dispose();
     _database?.dispose();
     if (_injectedUpdateService == null) _updateService?.close();
+    // 与原有退出契约一致：日志必须**同步**收尾，不能留到上文的异步清理里——
+    // 否则 dispose 返回后定时刷盘仍会写进调用方马上要删除的临时目录。
+    log.flush();
+    log.dispose();
     super.dispose();
   }
 }
