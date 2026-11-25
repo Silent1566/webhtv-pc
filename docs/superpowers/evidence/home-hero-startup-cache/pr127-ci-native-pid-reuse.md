@@ -27,3 +27,11 @@ media_kit1.2.6在系统临时目录按PID保存NativeReferenceHolder裸指针，
 - 本机旧Debug/Release DLL SHA d5f0694b08c124e785d858d00082f3e3b158dd9138bfc48c0382bf1eb443a5fc不属于CI pin；其AC3等待失败不归为产品回归，未据此改native测试。
 
 后续：推送新head后重新跟进PR和push两条完整DesktopCI，最终远端结论以新headchecks为准。
+
+## 监听期间最新 beta 的集成回归
+
+beta在首轮CI监听时推进至0fd7e5a（PR126：原PC配置安卓执行与受管媒体），dev2已无冲突合入97672f1。静态复核确认20个beta新增/更新lib模块中仅AppState保留预期的首页直播关键词与历史TMDB差异，其余语义完整保留。
+
+独立运行新beta的android_managed_environment_startup_test.dart，描述缺失场景出现Duration.zero pending timer，堆栈LogService._enqueue→HomePage._restoreStartup。外层tearDown在testWidgets检查之后才dispose，新增首页日志暴露了夹具未在测试体内释放所有者的集成缺口。最小修法仅该测试文件：三个case改用同一try/finally包装，先卸载真实AppShell，再dispose拥有的AppState；外层只删除临时目录。原横幅/重试/UUID/保留配置/不访问旧端口断言不变，不pump固定时间掩盖问题，不改productionlogger。原版独立2pass1fail，包装版3pass通过；四分片与分析结果另由最终验收记录。
+
+最终刷新beta后的本地验收：测试清理helper3case独立通过；非空分片0/1/3各1case通过，分片2本文件无分配返回79（仅三case不可能覆盖四片，不算通过冒称）；27断言/原三testbody保留。Lead独立执行最新合并树11套首页/原生/安卓执行/状态回归89项通过、零失败，完整dart analyze --fatal-infos为0issue。
