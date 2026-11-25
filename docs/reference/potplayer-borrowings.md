@@ -2,7 +2,7 @@
 
 - 作用：把对 **PotPlayer 最新版（261021 / 1.7.23164）** 的功能调研，落成**可执行**的借鉴清单——
   每一项都给出「PotPlayer 怎么做 → 本仓库落在哪个文件 → 优先级 → 前置条件/风险 → 验收口径」。
-- 性质：以分析为主，**除 P1-4（§4.1）与 P1-8（§5.4）已实现外，P0/P1/P2 都是 backlog**，是否实施由产品决策。
+- 性质：以分析为主，**除 P0-2（§3.2）、P0-3（§3.3）、P1-4（§4.1）与 P1-8（§5.4）已实现外，其余未标实施状态的 P0/P1/P2 为 backlog**，是否实施由产品决策。
   P1-4 的落地推翻了本节原来的建议（用 mpv `sub-*` 属性落盘），账记在 §12。
 - **要清单不要论证？** 直接看 [potplayer-checklist.md](potplayer-checklist.md)（39 条全量清单，
   按 P0/P1/P2/已具备/不做/待确认分组，带编号可逐条勾选）。本文与它是同一份结论的两种视图：
@@ -63,7 +63,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | 双击左/右半屏分别配置动作 | 260819「Added the ability to individually configure actions for the left and right areas upon double-clicking」 | `ui/player_page.dart:82-123`、`:4902-4925` | **P0 借鉴** |
 | 2 | 拖动进度条时暂停 | 260622「Added pause function when navigating via the navigation bar」 | **已实现**：`ui/player_overlay.dart:212-238,489-509`、`ui/player_page.dart:161-185,4903-4919`、`core/player_options.dart:137,207`（默认开、可关） | **P0 借鉴 → 已实现**（§3.2） |
-| 3 | 播放列表过滤式搜索 | 261021「customize the playlist search method」；260819「playlist search function to operate as a filter」 | `ui/player_queue_panel.dart`、`ui/player_episode_panel.dart`（TextField 0 命中） | **P0 借鉴** |
+| 3 | 播放列表过滤式搜索 | 261021「customize the playlist search method」；260819「playlist search function to operate as a filter」 | `ui/player_queue_panel.dart`、`ui/player_episode_panel.dart`；回归 `test/player_episode_search_test.dart` | **P0 借鉴 → 已实现**（§3.3） |
 | 4 | 字幕/OSD 样式落盘 | 240618 OSD 字体可设；250514 字幕字体处理；260401 用 libass 输出字幕 | `core/subtitle_style.dart`、`core/osd_style.dart`；落盘 `services/ui_preferences_store.dart:1216-1224`（`ui.subtitleStyle` / `ui.osdStyle`） | **P1 已实现**（§4.1：样式落在 Flutter 侧 `SubtitleViewConfiguration`，零新增 mpv 属性） |
 | 5 | HDR 色调映射可调 | 250625「select HDR tone mapping type」；241211 HDR2084 显示器亮度 | `core/player_options.dart:164-170`（固定 5 个 mpv 属性） | **P1 借鉴** |
 | 6 | 字幕字符集处理 | 260114「Improved subtitle character set handling」 | `core/text_codec.dart`（utf-8/utf-16/gbk/latin1，无 Big5/Shift-JIS） | **P1 借鉴** |
@@ -246,32 +246,18 @@ PlayerGestureAction resolvePlayerGesture({required bool doubleClick}) =>
 修订是「Modified the playlist search function to operate as a filter」——**先做搜索、再改成过滤**。
 这条修订本身就是最有价值的信息：用户要的是**列表收缩**，不是「跳转并高亮」。
 
-**本仓库现状（逐行核实）**
+**已落地**
 
-- `apps/desktop-flutter/lib/ui/player_queue_panel.dart`：`PlayerQueuePanel({title, queue,
-  currentKey, onSelect, playLines, lineFlag, onSelectLine})`，只有 `_loadMore()` 与滚动，
-  **`TextField` 命中数 = 0**。
-- `apps/desktop-flutter/lib/ui/player_episode_panel.dart`：同样 **`TextField` 命中数 = 0**。
-- `apps/desktop-flutter/lib/core/playback_queue.dart`：队列是**懒加载**的
-  （`PlaybackQueueSnapshot{items, hasMore, loading, error}` + `Future<void> loadMore()`），
-  所以「过滤」天然只能作用于**已加载**的项。
+- 两种面板均有「搜索选集」输入框和清空按钮，忽略首尾空格、不区分大小写，不自动播放。
+- 选集在当前预览线路的全部区间匹配原集名与可信卡片标题/集号；有查询时隐藏区间行，清空后恢复原区间。保留倒序、卡片映射与原始绝对下标；预览线路切换保留查询、不起播。
+- 目录队列只按标题过滤已加载项。还有更多时显示「仅搜索已加载」及数量；不自动请求下一页、不解析播放地址，用户可手动加载，新增项继续按原查询过滤。
+- 无匹配有空态；加载错误与重试不被过滤隐藏。文件 key、当前项高亮和底层队列顺序不变。
 
-**建议**
+**验收入口**
 
-1. 面板顶部加过滤输入框，作用于 `snapshot.items`（按 `title` 做大小写不敏感的子串匹配）。
-2. `hasMore == true` 时**必须如实标注边界**：例如「仅过滤已加载的 40 / 共更多」，
-   或在输入非空时自动 `loadMore()` 直到无更多（**要设上限**，比如 3 页）。
-3. 不做「跳转高亮」式搜索——理由见上面的 PotPlayer 修订记录，也符合产品原则 2
-   （边界必须如实，不能假装搜完了）。
-
-**前置条件 / 风险**
-
-- 懒加载队列上做全量搜索会连打站点接口，必须限页并能在弹窗关闭时取消。
-- 过滤只影响展示，**不能影响 `itemKey`**（`onSelect` 依赖原始 key），也不能重置 `currentKey` 的高亮。
-
-**验收**
-
-- 输入即收缩、清空即恢复；`hasMore` 为真时边界提示可见；`onSelect` 传出的 key 与过滤前一致。
+- `test/player_episode_search_test.dart`：跨区间、清空、倒序、卡片标题/集号、错误元数据回退、线路预览、原始回调、队列加载/失败重试。
+- 与 `player_episode_panel_test.dart`、`player_queue_test.dart`、`player_queue_history_test.dart` 组合复验；全包 `dart analyze --fatal-infos`。
+- 同场景暗色截图：`EPISODE_SEARCH_CAPTURE=before/after`，输出到忽略目录 `.local/episode-search/`，覆盖 1280×800 与 640×480；不是发布包或真实站源验收。
 
 ---
 
