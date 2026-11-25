@@ -1,10 +1,21 @@
 [CmdletBinding()]
 param(
-    [string]$DiagnosticsDirectory = 'ci-test-diagnostics'
+    [string]$DiagnosticsDirectory = 'ci-test-diagnostics',
+    [ValidateRange(1, 2147483647)]
+    [int]$TotalShards,
+    [ValidateRange(0, 2147483647)]
+    [int]$ShardIndex
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+
+if ($PSBoundParameters.ContainsKey('TotalShards') -ne $PSBoundParameters.ContainsKey('ShardIndex')) {
+    Write-Error 'TotalShards and ShardIndex must be supplied together.'
+}
+if ($PSBoundParameters.ContainsKey('TotalShards') -and $ShardIndex -ge $TotalShards) {
+    Write-Error 'ShardIndex must be less than TotalShards.'
+}
 
 $diagnosticsPath = Join-Path (Get-Location).Path $DiagnosticsDirectory
 New-Item -ItemType Directory -Force -Path $diagnosticsPath | Out-Null
@@ -13,7 +24,12 @@ $stderrPath = Join-Path $diagnosticsPath 'stderr.log'
 $eventsPath = Join-Path $diagnosticsPath 'events.json'
 $summaryPath = Join-Path $diagnosticsPath 'summary.json'
 
-& flutter test --coverage --verbose "--file-reporter=json:$eventsPath" 1> $stdoutPath 2> $stderrPath
+$shardArguments = @()
+if ($PSBoundParameters.ContainsKey('TotalShards')) {
+    $shardArguments = @("--total-shards=$TotalShards", "--shard-index=$ShardIndex")
+}
+
+& flutter test --coverage --verbose "--file-reporter=json:$eventsPath" @shardArguments 1> $stdoutPath 2> $stderrPath
 $flutterExitCode = $LASTEXITCODE
 
 try {

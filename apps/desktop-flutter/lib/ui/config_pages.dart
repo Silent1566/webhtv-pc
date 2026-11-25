@@ -41,6 +41,7 @@ class _ConfigPageState extends State<ConfigPage> {
   bool _pickingLocal = false;
   String? _resultMessage;
   bool _resultIsError = false;
+  Object? _resultConfig;
 
   /// 加固壳解包引导是否正在跑：导入成功后自动弹，用户再点导入不能叠第二条。
   bool _shellUnpackFlowOpen = false;
@@ -63,18 +64,48 @@ class _ConfigPageState extends State<ConfigPage> {
   final Set<int> _busyIds = <int>{};
   bool _busyAll = false;
 
+  /// 已渲染过的自动安装进度，用来过滤重复的进度通知。
+  CspProvisionProgress _cspProgressSeen = const CspProvisionProgress();
+
   @override
   void initState() {
     super.initState();
     _importExpanded = widget.state.savedConfigs.isEmpty;
+    _cspProgressSeen = widget.state.cspProvisionProgress;
+    widget.state.addListener(_onStateChanged);
+  }
+
+  /// [AppState] 的通知很密集；只有进度或当前导入结果真的变了才重建。
+  void _onStateChanged() {
+    if (!mounted) return;
+    final next = widget.state.cspProvisionProgress;
+    var changed = next != _cspProgressSeen;
+    _cspProgressSeen = next;
+    if (_resultMessage != null &&
+        !_resultIsError &&
+        identical(_resultConfig, widget.state.config)) {
+      // 可用数来自按配置/路由代次缓存的 siteItems，不重复遍历磁盘。
+      final message = _successfulImportMessage;
+      if (message != _resultMessage) {
+        _resultMessage = message;
+        changed = true;
+      }
+    }
+    if (changed) setState(() {});
   }
 
   @override
   void dispose() {
+    widget.state.removeListener(_onStateChanged);
     _input.dispose();
     _name.dispose();
     super.dispose();
   }
+
+  String get _successfulImportMessage =>
+      '导入成功：${widget.state.config?.sites.length ?? 0} 个站点'
+      '（可用 ${widget.state.usableSiteCount} 个），'
+      '${widget.state.config?.lives.length ?? 0} 个直播源';
 
   Future<void> _import() async {
     final value = _input.text.trim();
@@ -88,6 +119,7 @@ class _ConfigPageState extends State<ConfigPage> {
     setState(() {
       _busy = true;
       _resultMessage = null;
+      _resultConfig = null;
     });
     final name = _name.text.trim();
     final succeeded = await widget.state.importConfig(
@@ -98,10 +130,9 @@ class _ConfigPageState extends State<ConfigPage> {
     setState(() {
       _busy = false;
       _resultIsError = !succeeded;
+      _resultConfig = succeeded ? widget.state.config : null;
       _resultMessage = succeeded
-          ? '导入成功：${widget.state.config?.sites.length ?? 0} 个站点'
-                '（可用 ${widget.state.usableSiteCount} 个），'
-                '${widget.state.config?.lives.length ?? 0} 个直播源'
+          ? _successfulImportMessage
           : widget.state.lastError?.userMessage ?? '导入失败';
     });
 
@@ -325,12 +356,24 @@ class _ConfigPageState extends State<ConfigPage> {
             if (_resultMessage != null) ...[
               const SizedBox(height: 8),
               Text(
-                _resultMessage!,
+                !_resultIsError && state.cspProvisionProgress.active
+                    ? '$_resultMessage（站源正在后台准备，准备完成后刷新可用状态并自动加载首页）'
+                    : _resultMessage!,
                 style: TextStyle(
                   color: _resultIsError
                       ? Theme.of(context).colorScheme.error
                       : Theme.of(context).colorScheme.primary,
                 ),
+              ),
+            ],
+            // 后台自动安装的进度/摘要：就贴在导入按钮与结果行下方，用户不必去
+            // 站点页逐条猜「到底在装还是缺 jar」。
+            if (state.cspProvisionProgress.active ||
+                (state.cspProvisionSummary ?? '').isNotEmpty) ...[
+              const SizedBox(height: 8),
+              CspProvisionProgressLine(
+                progress: state.cspProvisionProgress,
+                summary: state.cspProvisionSummary,
               ),
             ],
 
@@ -623,9 +666,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       );
       return;
     }
-    _commit(
-      _draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text),
-    );
+    _commit(_draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text));
   }
 
   /// 当前 API 地址命中哪条内置线路；未命中算「自定义」。
@@ -656,9 +697,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   /// 不缓存：解析结果随测速与失败切换变化，每帧从 state 反查才不会显示过期地址。
   String _routeStatusLine() {
     final status = widget.state.tmdbRouteStatus();
-    final suffix = status.apiAuto || status.imageAuto
-        ? '（自动，测速后可能变化）'
-        : '';
+    final suffix = status.apiAuto || status.imageAuto ? '（自动，测速后可能变化）' : '';
     return '当前 API：${status.apiHost}　·　图片：${status.imageHost}$suffix';
   }
 
@@ -945,8 +984,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
               _routeDropdown(
                 fieldKey: 'tmdb-image-route',
                 label: '图片线路',
-                value: (_imageCustom ? null : _imageRoute)?.value ??
-                    _customRoute,
+                value:
+                    (_imageCustom ? null : _imageRoute)?.value ?? _customRoute,
                 items: _routeItems(tmdbImageRoutes),
                 onChanged: _pickImageRoute,
               ),
@@ -1308,7 +1347,8 @@ class ConfigSwitcherDialog extends StatelessWidget {
                     subtitle: ConfigSourceStatusView(
                       key: ValueKey('config-switch-source-${record.id}'),
                       record: record,
-                      metadata: '站点 ${record.siteCount} · 直播 ${record.liveCount}'
+                      metadata:
+                          '站点 ${record.siteCount} · 直播 ${record.liveCount}'
                           '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
                     ),
                     trailing: isActive
@@ -2484,11 +2524,59 @@ String _configRowMetadata(ConfigRecord record, {required int nowMs}) {
   if (error.isNotEmpty) {
     parts.add('检查失败：$error');
   } else if (checkedAt != null) {
-    final ago = watchedAgoLabel(
-      checkedAt.millisecondsSinceEpoch,
-      nowMs: nowMs,
-    );
+    final ago = watchedAgoLabel(checkedAt.millisecondsSinceEpoch, nowMs: nowMs);
     parts.add(ago.isEmpty ? '已检查' : '$ago检查过');
   }
   return parts.join(' · ');
+}
+
+/// 导入页的「自动安装站源」进度行（用户实测 2026-11-24：后台在装，界面只报
+/// 「缺少桌面 JVM 站源」）。
+///
+/// 只读：数据全部来自 [AppState.cspProvisionProgress] / [AppState.cspProvisionSummary]。
+class CspProvisionProgressLine extends StatelessWidget {
+  const CspProvisionProgressLine({
+    super.key,
+    required this.progress,
+    this.summary,
+  });
+
+  final CspProvisionProgress progress;
+
+  /// 结束后保留一次的摘要；[progress.active] 为真时不显示。
+  final String? summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (progress.active) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LinearProgressIndicator(
+            key: const ValueKey('csp-provision-progress-bar'),
+            value: progress.done == 0 ? null : progress.fraction,
+            semanticsLabel: progress.label,
+            semanticsValue: progress.done == 0 || progress.total == 0
+                ? '正在准备站源'
+                : '${(progress.fraction! * 100).round()}',
+            minHeight: 3,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            progress.label,
+            key: const ValueKey('csp-provision-progress-label'),
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      );
+    }
+    final text = summary ?? '';
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Text(
+      text,
+      key: const ValueKey('csp-provision-summary'),
+      style: theme.textTheme.bodySmall,
+    );
+  }
 }

@@ -62,7 +62,7 @@ class _FakeUpdateService extends AppUpdateService {
     return AppUpdateCheck(
       verdict: verdict,
       identity: identity,
-      checkedAt: DateTime.utc(2026, 11, 23, 16, 30),
+      checkedAt: DateTime.now(),
       release: release,
       message: failure,
     );

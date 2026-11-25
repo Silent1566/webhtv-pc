@@ -16,6 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/ipc_protocol.dart';
+import '../core/protocol.dart';
 import 'jar_intake.dart';
 import 'log_service.dart';
 import 'node_runtime.dart';
@@ -69,13 +70,12 @@ class SpiderManifestRegistry {
 
   /// 扫描根目录。每次调用都会重读 manifest，使手工编辑后无需重启。
   ///
-  /// 两条路径，**根级优先**：
-  /// 1. 根部第一层目录的 `manifest.json` 与根部直接放的 `.json`（手工添加、
-  ///    远端直连注册的产物）；
-  /// 2. `root/local/<key>/manifest.json`——本地文件夹导入的落点
-  ///    （见 `LocalSourceImporter`）。
+  /// 三条路径，**根级与本地导入优先**：
+  /// 1. 根部第一层目录的 `manifest.json` 与根部直接放的 manifest `.json`；
+  /// 2. `root/local/<key>/manifest.json`——本地文件夹导入；
+  /// 3. `root/direct/<hash>/manifest.json`——配置直连注册。
   ///
-  /// 只多这一层，**不递归整棵树**：整树遍历会把 `local/<key>/` 里的资源目录、
+  /// 只扫已知容器的一层，**不递归整棵树**：整树遍历会把站点资源目录、
   /// 用户随手放的备份 JSON 也当成站点，扫出用户没导入过的东西。
   Future<List<LocalSpider>> scan() async {
     _spiders.clear();
@@ -85,6 +85,7 @@ class SpiderManifestRegistry {
     // 先扫根级：同 key 时根级占用，`local/` 里的重复项被拒绝（见 [_scanDirectory]）。
     await _scanDirectory(directory);
     await _scanDirectory(Directory(p.join(root, 'local')));
+    await _scanDirectory(Directory(p.join(root, 'direct')));
     log.info(
       'Spider manifest 扫描完成 root=$root found=${_spiders.length}',
       scope: 'spider',
@@ -96,6 +97,11 @@ class SpiderManifestRegistry {
   Future<void> _scanDirectory(Directory directory) async {
     if (!await directory.exists()) return;
     await for (final entity in directory.list(followLinks: false)) {
+      if (entity is File &&
+          p.equals(directory.path, root) &&
+          p.basename(entity.path).toLowerCase() == 'accounts.json') {
+        continue;
+      }
       final manifestFile = entity is Directory
           ? File(p.join(entity.path, 'manifest.json'))
           : (entity is File && p.basename(entity.path).endsWith('.json')
@@ -242,7 +248,31 @@ class SpiderLocalBinding {
 ///
 /// 缓存位置：`<configDir>/spiders/csp/<key>/`，由用户在设置页导入桌面 jar。
 class CspJvmBinding {
-  const CspJvmBinding({required this.root});
+  const CspJvmBinding({required this.root}) : sources = const {};
+
+  const CspJvmBinding._scoped({required this.root, required this.sources});
+
+  /// 站点 key → 当前配置里该站点的 jar 来源与 api（按来源隔离缓存时用）。
+  final Map<String, ({String url, String api})> sources;
+
+  /// 自动安装按来源与入口隔离；手工导入仍是用户的显式覆盖。
+  CspJvmBinding forConfig(AppConfig config) {
+    final local = <String, ({String url, String api})>{};
+    for (final site in config.sites) {
+      if (!matches(site.api)) continue;
+      final raw = site.effectiveJar(config.spider);
+      if (raw == null) continue;
+      final url = raw.split(';').first.trim();
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https') ||
+          !uri.hasAuthority) {
+        continue;
+      }
+      local[site.key] = (url: url, api: site.api.trim());
+    }
+    return CspJvmBinding._scoped(root: root, sources: Map.unmodifiable(local));
+  }
 
   /// `<configDir>/spiders/csp`。
   final String root;
@@ -261,6 +291,26 @@ class CspJvmBinding {
   /// 缓存身份保留原始 key；哈希命名空间与旧净化规则的字符集不相交。
   /// 仅小写、安全且有界的 ASCII key 可直接作为新目录名，避免 Windows 大小写别名。
   String directoryFor(String siteKey) {
+    final source = sources[siteKey];
+    if (source != null) {
+      final legacyBinding = CspJvmBinding(root: root);
+      final legacy = legacyBinding.directoryFor(siteKey);
+      final record = JarIntake.probeRecord(legacy);
+      final recordedUrl = record?['sourceUrl'];
+      if (_entryInDirectory(legacy) != null &&
+          (JarIntake.intakeRecord(legacy)?['manualOverride'] == true ||
+              recordedUrl == null ||
+              recordedUrl == '')) {
+        return legacy;
+      }
+      if (recordedUrl == source.url &&
+          (record?['sourceApi'] == null ||
+              record?['sourceApi'] == source.api)) {
+        return legacy;
+      }
+      final identity = '$siteKey\n${source.api}\n${source.url}';
+      return p.join(root, 'src~${sha256.convert(utf8.encode(identity))}');
+    }
     final hashed = p.join(root, 'csp~${sha256.convert(utf8.encode(siteKey))}');
     if (Directory(hashed).existsSync()) return hashed;
 
@@ -339,8 +389,10 @@ class CspJvmBinding {
   }
 
   /// 在缓存目录内定位入口：优先 `index.jar`，其次唯一的一个 jar，最后类目录。
-  String? entryFor(String siteKey) {
-    final directory = Directory(directoryFor(siteKey));
+  String? entryFor(String siteKey) => _entryInDirectory(directoryFor(siteKey));
+
+  static String? _entryInDirectory(String path) {
+    final directory = Directory(path);
     if (!directory.existsSync()) return null;
 
     final index = File(p.join(directory.path, 'index.jar'));
@@ -524,12 +576,12 @@ class LocalSpiderCommand {
           // 会直接 `os::commit_memory failed (DOS error 1455)` 退出，表现为
           // 「sidecar 启动即崩」而不是可诊断的错误（§18.2.1 资源限制）。
           // 堆上限也按同一个下限兜底：manifest 里的 256 可能是旧值（缓存的扫描结果），
-        // 用它推导出来的 -Xmx 会让首译直接 Java OOM——那至少还看得见栈，但依然是坏体验。
-        ...jvmHeapFlags(
-          spider.manifest.limits.memoryMiB < minimumSidecarMemoryMiB
-              ? minimumSidecarMemoryMiB
-              : spider.manifest.limits.memoryMiB,
-        ),
+          // 用它推导出来的 -Xmx 会让首译直接 Java OOM——那至少还看得见栈，但依然是坏体验。
+          ...jvmHeapFlags(
+            spider.manifest.limits.memoryMiB < minimumSidecarMemoryMiB
+                ? minimumSidecarMemoryMiB
+                : spider.manifest.limits.memoryMiB,
+          ),
           // 只传文件路径，绝不把 Cookie 值放进命令行/环境变量。
           if (spider.accountStorePath != null &&
               spider.accountStorePath!.isNotEmpty)

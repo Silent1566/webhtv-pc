@@ -15,6 +15,8 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -89,7 +91,7 @@ public final class DexIntake {
     }
 
     private static final String STAGE_READ = "dex-读取";
-    private static final String STAGE_TRANSLATE = "dex-转译";
+    static final String STAGE_TRANSLATE = "dex-转译";
     private static final String STAGE_FRAMES = "dex-帧修复";
 
     /** 语义修复阶段名；{@link DexRepair} 也用它，因此不是 private。 */
@@ -184,30 +186,49 @@ public final class DexIntake {
             // 中间产物放在目标同目录的临时目录里：后续 move 才可能真正原子（同卷）。
             work = Files.createTempDirectory(bundleDir, ".dex-intake-");
             Path raw = work.resolve("raw.jar");
-            Path fixed = work.resolve("fixed.jar");
-            Path repaired = work.resolve("repaired.jar");
-            translateDex(dex, archive, raw);
-            int classCount = fixFrames(raw, fixed);
-            // 语义修复必须排在帧修复之后：帧修复重算的是 dex2jar 原样的方法体，而修复会新增/改写
-            // 方法体（桩体、调用点改指向），只有把它放在最后，产物的帧才与最终字节码一致。
-            DexRepair.Report repair = DexRepair.repair(fixed, repaired, dex);
-            moveAtomically(repaired, bundle);
-            String bundleSha = sha256(bundle, STAGE_WRITE);
-            writeRecord(record, sourceSha, bundleSha, classCount, dexSize, repair);
-            Ipc.log("dex 转译完成 bundle=" + bundle + " classes=" + classCount
-                    + " repairedClasses=" + repair.repairedClasses()
-                    + " stubbedMethods=" + repair.stubbedMethods()
-                    + " retargetedCalls=" + repair.retargetedCalls()
-                    + " retypedInstantiations=" + repair.retypedInstantiations()
-                    + " dexEntrySize=" + dexSize);
-            return new Result(bundle, false, classCount, sourceSha,
-                    repair.repairedClasses(), repair.stubbedMethods(), repair.retargetedCalls(),
-                    repair.retypedInstantiations(), repair.records());
+            List<String> rebuiltMethods = translateDex(dex, archive, raw);
+            return finishTranslation(dex, raw, work, bundle, record, sourceSha, dexSize, rebuiltMethods);
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_WRITE, "写入产物失败：" + error, error);
         } finally {
             deleteQuietly(work);
         }
+    }
+
+    static Result finishTranslation(byte[] dex, Path raw, Path work, Path bundle, Path record,
+            String sourceSha, long dexSize, List<String> rebuiltMethods) throws IOException, DexIntakeException {
+        Path fixed = work.resolve("fixed.jar");
+        Path repaired = work.resolve("repaired.jar");
+        FrameReport frames = fixFrames(raw, fixed);
+        Set<String> failedRebuilt = new LinkedHashSet<>();
+        for (String owner : frames.failedClasses()) {
+            if (rebuiltMethods.stream().anyMatch(method -> method.contains("：" + owner + "#"))) failedRebuilt.add(owner);
+        }
+        if (!failedRebuilt.isEmpty()) {
+            throw new DexIntakeException(STAGE_TRANSLATE, "重建类帧计算失败，拒绝整包：" + failedRebuilt);
+        }
+        int classCount = frames.classCount();
+        if (classCount > 0 && frames.failedClasses().size() == classCount) {
+            throw new DexIntakeException(STAGE_FRAMES,
+                    "没有任何类重写成功（classes=" + classCount + " failed=" + frames.failedClasses().size() + "），asm 是否在类路径上？");
+        }
+        // 语义修复必须排在帧修复之后：帧修复重算的是 dex2jar 原样的方法体，而修复会新增/改写
+        // 方法体（桩体、调用点改指向），只有把它放在最后，产物的帧才与最终字节码一致。
+        DexRepair.Report repair = DexRepair.repair(fixed, repaired, dex);
+        List<String> records = new ArrayList<>(rebuiltMethods);
+        records.addAll(repair.records());
+        moveAtomically(repaired, bundle);
+        String bundleSha = sha256(bundle, STAGE_WRITE);
+        records = writeRecord(record, sourceSha, bundleSha, classCount, dexSize, repair, records);
+        Ipc.log("dex 转译完成 bundle=" + bundle + " classes=" + classCount
+                + " repairedClasses=" + repair.repairedClasses()
+                + " stubbedMethods=" + repair.stubbedMethods()
+                + " retargetedCalls=" + repair.retargetedCalls()
+                + " retypedInstantiations=" + repair.retypedInstantiations()
+                + " dexEntrySize=" + dexSize);
+        return new Result(bundle, false, classCount, sourceSha,
+                repair.repairedClasses(), repair.stubbedMethods(), repair.retargetedCalls(),
+                repair.retypedInstantiations(), records);
     }
 
     // ---------------------------------------------------------------- 转译
@@ -220,15 +241,14 @@ public final class DexIntake {
      * 给出更准确的原始异常，不该丢给子进程的退出码。子进程的 java 由 {@code java.home}
      * 推导，绝不使用 PATH 上的 java（本机 PATH 上的 java 是 Java 8）。
      */
-    private static void translateDex(byte[] dex, Path archive, Path out) throws DexIntakeException {
+    private static List<String> translateDex(byte[] dex, Path archive, Path out) throws DexIntakeException {
         try {
             Files.deleteIfExists(out);
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_TRANSLATE, "清理中间产物失败 " + out + "：" + error, error);
         }
         try {
-            translateInProcess(dex, out);
-            return;
+            return translateInProcess(dex, out);
         } catch (LinkageError | ClassNotFoundException missing) {
             Ipc.log(STAGE_TRANSLATE + ": 进程内 dex2jar 不可用（" + missing + "），改用子进程");
         } catch (DexIntakeException error) {
@@ -241,7 +261,7 @@ public final class DexIntake {
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_TRANSLATE, "清理中间产物失败 " + out + "：" + error, error);
         }
-        translateInSubprocess(archive, out);
+        return translateInSubprocess(archive, out);
     }
 
     /**
@@ -249,15 +269,18 @@ public final class DexIntake {
      * 推迟到本方法首次执行——依赖缺失时抛出的是可捕获的 {@link LinkageError}，
      * 而不是让整个 {@link DexIntake} 类加载失败。
      */
-    private static void translateInProcess(byte[] dex, Path out) throws Exception {
-        com.googlecode.d2j.dex.Dex2jar.from(dex).to(out);
+    private static List<String> translateInProcess(byte[] dex, Path out) throws Exception {
+        return DexMethodRecovery.translate(dex, out);
     }
 
-    private static void translateInSubprocess(Path archive, Path out) throws DexIntakeException {
+    private static List<String> translateInSubprocess(Path archive, Path out) throws DexIntakeException {
         String classpath = dex2jarClasspath();
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        List<String> command = List.of(java, "-cp", classpath, DEX2JAR_MAIN,
-                "-f", "-o", out.toString(), archive.toString());
+        Path report = out.resolveSibling(out.getFileName() + ".methods.json");
+        Path own = ownLocation();
+        if (own != null) classpath = own + System.getProperty("path.separator") + classpath;
+        List<String> command = List.of(java, "-cp", classpath, "webhtv.spider.DexMethodRecovery",
+                archive.toString(), out.toString(), report.toString());
         try {
             Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -266,9 +289,16 @@ public final class DexIntake {
                 throw new DexIntakeException(STAGE_TRANSLATE,
                         "子进程 dex2jar 退出码 " + code + "：" + output.strip());
             }
-            if (!Files.isRegularFile(out)) {
-                throw new DexIntakeException(STAGE_TRANSLATE, "子进程 dex2jar 未产出 " + out + "：" + output.strip());
+            if (!Files.isRegularFile(out) || !Files.isRegularFile(report)) {
+                throw new DexIntakeException(STAGE_TRANSLATE, "子进程 dex2jar 未产出完整结果 " + out + "：" + output.strip());
             }
+            Object parsed = Json.parse(Files.readString(report, StandardCharsets.UTF_8));
+            if (!(parsed instanceof List<?> list) || list.stream().anyMatch(item -> !(item instanceof String))) {
+                throw new DexIntakeException(STAGE_TRANSLATE, "子进程方法重建报告无效：" + report);
+            }
+            List<String> records = new ArrayList<>();
+            for (Object item : list) records.add((String) item);
+            return List.copyOf(records);
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_TRANSLATE, "启动子进程 dex2jar 失败（" + java + "）：" + error, error);
         } catch (InterruptedException error) {
@@ -358,11 +388,13 @@ public final class DexIntake {
      * <p>单类重写失败**不中断**：该条目原样写出并计数（由调用方按 failed 数判断产物是否可信）。
      * 只有「整个 jar 读不出来/写不下去」这种无法继续的 I/O 失败才抛 {@code dex-帧修复}。
      *
-     * @return jar 内的 class 条目数
+     * @return jar 内的 class 条目数与帧计算失败类集合
      */
-    private static int fixFrames(Path raw, Path fixed) throws DexIntakeException {
+    private record FrameReport(int classCount, Set<String> failedClasses) {}
+
+    private static FrameReport fixFrames(Path raw, Path fixed) throws DexIntakeException {
         int rewritten = 0;
-        int failed = 0;
+        Set<String> failed = new LinkedHashSet<>();
         int classes = 0;
         try (ZipFile in = new ZipFile(raw.toFile());
                 ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(fixed))) {
@@ -379,7 +411,7 @@ public final class DexIntake {
                         data = rewriteClass(data);
                         rewritten++;
                     } catch (Throwable error) {
-                        failed++;
+                        failed.add(entry.getName().substring(0, entry.getName().length() - ".class".length()));
                         Ipc.log(STAGE_FRAMES + ": 重写失败 " + entry.getName() + "（" + error + "），原样保留");
                     }
                 }
@@ -394,14 +426,8 @@ public final class DexIntake {
         } catch (IOException error) {
             throw new DexIntakeException(STAGE_FRAMES, "重写 " + raw + " 失败：" + error, error);
         }
-        if (classes > 0 && rewritten == 0) {
-            // 全部类都重写失败通常意味着 asm 本身不在类路径上：此时产物一定 VerifyError，
-            // 报错比交出一个「看起来成功」的坏 jar 好。
-            throw new DexIntakeException(STAGE_FRAMES,
-                    "没有任何类重写成功（classes=" + classes + " failed=" + failed + "），asm 是否在类路径上？");
-        }
-        Ipc.log(STAGE_FRAMES + ": rewritten=" + rewritten + " failed=" + failed + " classes=" + classes);
-        return classes;
+        Ipc.log(STAGE_FRAMES + ": rewritten=" + rewritten + " failed=" + failed.size() + " classes=" + classes);
+        return new FrameReport(classes, Set.copyOf(failed));
     }
 
     private static byte[] rewriteClass(byte[] data) {
@@ -488,11 +514,6 @@ public final class DexIntake {
             List<String> records = new ArrayList<>();
             if (map.get("records") instanceof List<?> list) {
                 for (Object item : list) {
-                    // 与 DexRepair.RECORD_LIMIT 同一口径：缓存命中和当场转译必须报出同样多的记录，
-                    // 否则「为什么没修」的记录会在第二次导入时凭空消失。
-                    if (records.size() >= DexRepair.RECORD_LIMIT) {
-                        break;
-                    }
                     records.add(String.valueOf(item));
                 }
             }
@@ -509,14 +530,20 @@ public final class DexIntake {
         return value instanceof Number number ? number.intValue() : 0;
     }
 
-    private static void writeRecord(
+    private static List<String> writeRecord(
             Path record,
             String sourceSha,
             String bundleSha,
             int classCount,
             long dexSize,
-            DexRepair.Report repair)
+            DexRepair.Report repair,
+            List<String> records)
             throws IOException {
+        if (records.size() > DexRepair.RECORD_LIMIT) {
+            records = new ArrayList<>(records.subList(0, DexRepair.RECORD_LIMIT - 1));
+            records.add("……记录超过 " + DexRepair.RECORD_LIMIT + " 条，其余已省略");
+        }
+        records = List.copyOf(records);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("sourceSha256", sourceSha);
         data.put("bundleSha256", bundleSha);
@@ -527,10 +554,11 @@ public final class DexIntake {
         data.put("stubbedMethods", repair.stubbedMethods());
         data.put("retargetedCalls", repair.retargetedCalls());
         data.put("retypedInstantiations", repair.retypedInstantiations());
-        data.put("records", repair.records());
+        data.put("records", records);
         data.put("translatedAt", Instant.now().toString());
         data.put("dexEntrySize", dexSize);
         writeAtomically(record, Json.write(data).getBytes(StandardCharsets.UTF_8));
+        return records;
     }
 
     private static void writeAtomically(Path target, byte[] bytes) throws IOException {
