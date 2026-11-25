@@ -109,7 +109,19 @@ class MvpFixtureEnvironment {
         await disposeState(state);
       }
       LogService.logDirectoryOverride = _previousLogDirectory;
-      await directory.delete(recursive: true);
+      // AppState.dispose() 是同步的：sidecar / 日志 / 运行时收尾仍可能在跑，
+      // 立刻递归删除会撞上 ENOTEMPTY 或「另一个程序正在使用此文件」。
+      // 与仓库既有约定一致：有界重试（10s），用尽仍失败就原样抛出。
+      for (var attempt = 1; ; attempt++) {
+        if (!directory.existsSync()) break;
+        try {
+          directory.deleteSync(recursive: true);
+          break;
+        } on FileSystemException {
+          if (attempt >= 100) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
       _disposed = true;
     }
 
