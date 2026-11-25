@@ -41,15 +41,16 @@ void main() {
   late SiteService service;
   late _RuntimeRouter router;
   setUp(() async {
+    currentTester = null;
     temp = await Directory.systemTemp.createTemp('player-proxy-lifecycle-');
     final log = LogService();
     app = AppState(
       paths: AppPaths.resolve(
         overrides: {
-            'config': p.join(temp.path, 'config'),
-            'data': p.join(temp.path, 'data'),
-            'cache': p.join(temp.path, 'cache'),
-            'state': p.join(temp.path, 'state'),
+          'config': p.join(temp.path, 'config'),
+          'data': p.join(temp.path, 'data'),
+          'cache': p.join(temp.path, 'cache'),
+          'state': p.join(temp.path, 'state'),
         },
       ),
       log: log,
@@ -205,6 +206,7 @@ void main() {
   testWidgets(
     'widget dispose releases JVM owner even for a public returned media URL',
     (tester) async {
+      currentTester = tester;
       final script = File(p.join(temp.path, 'host.cjs'));
       await tester.runAsync(
         () => script.writeAsString(
@@ -227,6 +229,7 @@ void main() {
   testWidgets('old page dispose cannot revoke replacement playback owner', (
     tester,
   ) async {
+    currentTester = tester;
     final old = await resolve(tester);
     await mount(tester, old.url!);
     final next = await resolve(tester);

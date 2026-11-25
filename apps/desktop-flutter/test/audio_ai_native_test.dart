@@ -43,6 +43,15 @@ Uint8List _wav() {
   return data.buffer.asUint8List();
 }
 
+/// 真实采集的异步唤醒有上限等待；与原先 5s 帧超时保持一致。
+Future<void> _poll(bool Function() done) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (!done()) {
+    if (!DateTime.now().isBefore(deadline)) fail('等待真实采集帧超时');
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
+
 void main() {
   late Directory temp;
   setUp(() async {
@@ -76,22 +85,46 @@ void main() {
   test('真实采集组件输出时钟会话帧，暂停不读取/不堆积', () async {
     final wav = File('${temp.path}/tone.wav');
     await wav.writeAsBytes(_wav());
-    final clock = AudioSessionClock(sessionId: 99, playing: true);
-    final capture = WindowsAudioCapture();
-    final first = capture.frames.first.timeout(const Duration(seconds: 5));
-    expect(
-      await capture.start(clock: clock, mediaUri: wav.uri),
-      isTrue,
-      reason: capture.lastError,
+    // 媒体时钟锚点固定：native start 的墙钟耗时不得计入首帧 PTS。
+    var now = DateTime.utc(2026);
+    final clock = AudioSessionClock(
+      sessionId: 99,
+      playing: true,
+      now: () => now,
     );
-    final frame = await first;
-    expect(frame.sampleRate, 16000);
-    expect(frame.sessionId, 99);
-    expect(frame.mediaStart.inMilliseconds, lessThan(250));
-    clock.update(playing: false);
-    await capture.stop();
-    expect(capture.state, AudioCaptureState.off);
-    await capture.dispose();
+    final capture = WindowsAudioCapture();
+    final frames = <PcmFrame>[];
+    final pcm = capture.frames.listen(frames.add);
+    try {
+      expect(
+        await capture.start(clock: clock, mediaUri: wav.uri),
+        isTrue,
+        reason: capture.lastError,
+      );
+      await _poll(() => frames.isNotEmpty);
+      final frame = frames.first;
+      expect(frame.sampleRate, 16000);
+      expect(frame.sessionId, 99);
+      expect(frame.mediaStart, Duration.zero);
+      expect(frame.mediaStart.inMilliseconds, lessThan(250));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      clock.update(playing: false);
+      // 先排空暂停前已在途的帧，再冻结观察窗口。
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final playing = frames.length;
+      expect(playing, greaterThan(0));
+      final paused = clock.position;
+      now = now.add(const Duration(seconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(frames.length, playing, reason: '暂停后不得再输出帧');
+      expect(clock.position, paused, reason: '暂停时媒体时钟冻结');
+      await capture.stop();
+      expect(capture.state, AudioCaptureState.off);
+    } finally {
+      await pcm.cancel();
+      await capture.dispose();
+      await clock.dispose();
+    }
   });
   test('真实非法URL/native错误不回退系统混音', () {
     final api = NativeAudioApi(WindowsAudioCapture.resolveLibrary());
