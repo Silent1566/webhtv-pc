@@ -222,10 +222,41 @@ void main() {
     expect(lines, isNot(contains(_snapshot.toString())));
   });
 
+  test(
+    'cancellable fixture handles a disconnected partial request body',
+    () async {
+      final requestStarted = Completer<void>();
+      final requestDisconnected = Completer<void>();
+      final fixture = await _fixture(
+        _receipt(),
+        allowDisconnect: true,
+        requestStarted: requestStarted,
+        requestDisconnected: requestDisconnected,
+      );
+      final uri = Uri.parse(fixture.base);
+      final socket = await Socket.connect(uri.host, uri.port);
+      addTearDown(socket.destroy);
+      socket.write(
+        'POST /manage/config/import HTTP/1.1\r\n'
+        'Host: 127.0.0.1:${uri.port}\r\n'
+        'X-WebHTV-PC-Import: 1\r\n'
+        'Content-Type: application/x-www-form-urlencoded\r\n'
+        'Content-Length: 4096\r\n'
+        '\r\n'
+        'url=partial',
+      );
+      await socket.flush();
+      await requestStarted.future.timeout(const Duration(seconds: 2));
+      socket.destroy();
+      await requestDisconnected.future.timeout(const Duration(seconds: 2));
+    },
+  );
+
   test('timeout override maps to retryable transport error', () async {
     final fixture = await _fixture(
       _receipt(),
       delay: const Duration(milliseconds: 100),
+      allowDisconnect: true,
     );
     await expectLater(
       fixture.service.importPcConfig(
@@ -561,6 +592,9 @@ _fixture(
   Object body, {
   int status = 200,
   Duration delay = Duration.zero,
+  bool allowDisconnect = false,
+  Completer<void>? requestStarted,
+  Completer<void>? requestDisconnected,
 }) async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   final log = LogService();
@@ -575,14 +609,23 @@ _fixture(
       request.headers.contentType?.mimeType,
       'application/x-www-form-urlencoded',
     );
-    fields.complete(
-      Uri.splitQueryString(await utf8.decoder.bind(request).join()),
-    );
-    if (delay != Duration.zero) await Future<void>.delayed(delay);
-    request.response.statusCode = status;
-    request.response.headers.contentType = ContentType.json;
-    request.response.write(body is String ? body : jsonEncode(body));
-    await request.response.close();
+    requestStarted?.complete();
+    try {
+      fields.complete(
+        Uri.splitQueryString(await utf8.decoder.bind(request).join()),
+      );
+      if (delay != Duration.zero) await Future<void>.delayed(delay);
+      request.response.statusCode = status;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(body is String ? body : jsonEncode(body));
+      await request.response.close();
+    } on HttpException {
+      if (!allowDisconnect) rethrow;
+      requestDisconnected?.complete();
+    } on SocketException {
+      if (!allowDisconnect) rethrow;
+      requestDisconnected?.complete();
+    }
   });
   addTearDown(() async {
     service.close();
