@@ -1,0 +1,48 @@
+{
+  "verification": "accepted",
+  "regression": {
+    "passed": 721,
+    "defaultGatedSkipped": 1,
+    "analyze": "No issues found",
+    "diffCheck": 0
+  },
+  "artifact": {
+    "path": "apps/desktop-flutter/build/android_execution_final/linux/x64/release/bundle",
+    "libappSha256": "87eed71ef172bcd0327990227f3be1636d468d2a7d9ed5df32a3bccbd3ed21e3",
+    "oldBundleOverwritten": false
+  },
+  "real": {
+    "sites": 93,
+    "csp": 78,
+    "originalJsonUnchanged": true,
+    "originalSourceKeyUnchanged": true,
+    "transportMime": "text/html",
+    "hlsUris": 488,
+    "proxiedUris": 488,
+    "segmentStatus": 200,
+    "segmentMime": "video/mp2t",
+    "sampleBytes": 65536,
+    "pngPrefixRemovedBytes": 69,
+    "video": "h264",
+    "audio": "aac",
+    "videoWidth": 1920,
+    "videoHeight": 818,
+    "nativeDecoderExit": 0,
+    "decodedFrames": 1,
+    "restartBindingSame": true,
+    "androidActiveSites": 204,
+    "androidActiveKeysDigest": "aa4e383ae4ebf5055882ae83ff04eb2e7c5578537872e325dbacb3a1a8fe7a06"
+  },
+  "scopedReview": {
+    "findingsResolved": 3,
+    "reproTestsPassed": 9,
+    "pngRelatedTestsPassed": 242
+  },
+  "notClaimed": [
+    "whole-film error-free playback",
+    "all78CSP/nativeJAR compatibility",
+    "Windows",
+    "AVD boot",
+    "source-side 404 repair"
+  ]
+}

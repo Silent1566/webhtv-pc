@@ -7,7 +7,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/android_adb_profile.dart';
 import '../core/android_bridge.dart';
+import '../core/app_error.dart';
+import '../core/android_config_execution.dart';
 import '../core/history_cross_site.dart';
 import '../core/realtime_sync.dart';
 import '../core/tmdb_config.dart';
@@ -15,6 +18,7 @@ import '../services/csp_jar_probe.dart';
 import '../core/tmdb_route.dart';
 import '../services/realtime_sync_engine.dart';
 import '../services/storage.dart';
+import '../services/android_connection_store.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'common.dart';
@@ -35,6 +39,146 @@ class ConfigPage extends StatefulWidget {
 }
 
 class _ConfigPageState extends State<ConfigPage> {
+  Future<void> _chooseAndroidExecution(int id) async {
+    if (_busyIds.contains(id)) return;
+    final record = widget.state.configRecordById(id);
+    if (record == null) return;
+    final connections = widget.state.androidConnections;
+    String? selected = widget.state
+        .androidExecutionForRecord(record)
+        ?.profileConnectionKey;
+    bool busy = false;
+    AppError? error;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          key: const ValueKey('config-android-execution-dialog'),
+          title: Text('运行配置：${record.name}'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '默认：桌面运行；当前：${widget.state.androidExecutionLabelForRecord(record)}',
+                ),
+                const SizedBox(height: AppSpace.md),
+                const Text('PC 展示/播放；安卓新增非激活副本，不切换安卓当前配置。此功能不支持本地 JAR/bundle。'),
+                const SizedBox(height: AppSpace.md),
+                if (connections.isEmpty)
+                  const Text('先到安卓设备接入连接环境，再回来运行此配置。')
+                else
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: RadioGroup<String>(
+                        groupValue: selected,
+                        onChanged: (value) {
+                          if (!busy) update(() => selected = value);
+                        },
+                        child: Column(
+                          children: [
+                            for (final connection in connections)
+                              RadioListTile<String>(
+                                key: ValueKey(
+                                  'config-android-environment-${connection.connectionKey}',
+                                ),
+                                title: Text(
+                                  connection.name.isEmpty
+                                      ? connection.profile.target
+                                      : connection.name,
+                                ),
+                                subtitle: Text(connection.profile.target),
+                                value: connection.connectionKey,
+                                enabled: !busy,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (busy)
+                  const Padding(
+                    padding: EdgeInsets.only(top: AppSpace.md),
+                    child: Text('正在准备安卓执行副本…'),
+                  ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpace.md),
+                    child: Text(
+                      error!.userMessage,
+                      key: const ValueKey('config-android-execution-error'),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const ValueKey('config-android-execution-prepare'),
+              onPressed: busy || selected == null || connections.isEmpty
+                  ? null
+                  : () async {
+                      update(() {
+                        busy = true;
+                        error = null;
+                      });
+                      setState(() => _busyIds.add(id));
+                      try {
+                        await widget.state.runConfigOnAndroid(id, selected!);
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                      } catch (failure) {
+                        if (dialogContext.mounted) {
+                          update(() {
+                            error = failure is AppError
+                                ? failure
+                                : AppError(
+                                    AppErrorKind.bridgeUnreachable,
+                                    '安卓执行准备失败',
+                                    cause: failure,
+                                  );
+                            busy = false;
+                          });
+                        }
+                      } finally {
+                        if (mounted) setState(() => _busyIds.remove(id));
+                      }
+                    },
+              child: const Text('在所选环境运行'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _runOnPc(int id) async {
+    if (_busyIds.contains(id)) return;
+    setState(() => _busyIds.add(id));
+    try {
+      await widget.state.runConfigOnPc(id);
+    } catch (error) {
+      showToast(
+        error is AppError ? error.userMessage : '切回桌面运行失败',
+        kind: ToastKind.error,
+      );
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(id));
+    }
+  }
+
   final TextEditingController _input = TextEditingController();
   final TextEditingController _name = TextEditingController();
   bool _busy = false;
@@ -429,6 +573,8 @@ class _ConfigPageState extends State<ConfigPage> {
                 );
                 setState(() {});
               },
+              onRunOnAndroid: _chooseAndroidExecution,
+              onRunOnPc: _runOnPc,
               onCopyOrigin: (value) async {
                 await Clipboard.setData(ClipboardData(text: value));
               },
@@ -623,9 +769,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
       );
       return;
     }
-    _commit(
-      _draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text),
-    );
+    _commit(_draft.copyWith(apiBase: text.isEmpty ? tmdbDefaultApiBase : text));
   }
 
   /// 当前 API 地址命中哪条内置线路；未命中算「自定义」。
@@ -656,9 +800,7 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   /// 不缓存：解析结果随测速与失败切换变化，每帧从 state 反查才不会显示过期地址。
   String _routeStatusLine() {
     final status = widget.state.tmdbRouteStatus();
-    final suffix = status.apiAuto || status.imageAuto
-        ? '（自动，测速后可能变化）'
-        : '';
+    final suffix = status.apiAuto || status.imageAuto ? '（自动，测速后可能变化）' : '';
     return '当前 API：${status.apiHost}　·　图片：${status.imageHost}$suffix';
   }
 
@@ -945,8 +1087,8 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
               _routeDropdown(
                 fieldKey: 'tmdb-image-route',
                 label: '图片线路',
-                value: (_imageCustom ? null : _imageRoute)?.value ??
-                    _customRoute,
+                value:
+                    (_imageCustom ? null : _imageRoute)?.value ?? _customRoute,
                 items: _routeItems(tmdbImageRoutes),
                 onChanged: _pickImageRoute,
               ),
@@ -1308,7 +1450,8 @@ class ConfigSwitcherDialog extends StatelessWidget {
                     subtitle: ConfigSourceStatusView(
                       key: ValueKey('config-switch-source-${record.id}'),
                       record: record,
-                      metadata: '站点 ${record.siteCount} · 直播 ${record.liveCount}'
+                      metadata:
+                          '站点 ${record.siteCount} · 直播 ${record.liveCount}'
                           '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
                     ),
                     trailing: isActive
@@ -1518,6 +1661,8 @@ class _SavedConfigs extends StatelessWidget {
     required this.onRefresh,
     required this.onRefreshAll,
     required this.onCopyOrigin,
+    required this.onRunOnAndroid,
+    required this.onRunOnPc,
   });
 
   final AppState state;
@@ -1534,6 +1679,25 @@ class _SavedConfigs extends StatelessWidget {
   final Future<void> Function(int id) onRefresh;
   final Future<void> Function() onRefreshAll;
   final Future<void> Function(String value) onCopyOrigin;
+  final Future<void> Function(int id) onRunOnAndroid;
+  final Future<void> Function(int id) onRunOnPc;
+
+  bool _canExecute(ConfigRecord record) {
+    if (record.bridgeDevice.isNotEmpty ||
+        record.bridgeInterfaceKey.isNotEmpty) {
+      return false;
+    }
+    try {
+      androidExecutionSnapshot(
+        record.json,
+        origin: record.origin,
+        contentType: record.contentType ?? '',
+      );
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1591,6 +1755,16 @@ class _SavedConfigs extends StatelessWidget {
                   title: Row(
                     children: [
                       Flexible(child: Text(record.name)),
+                      if (state.androidExecutionLabelForRecord(record) !=
+                          '桌面运行') ...[
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: TagChip(
+                            keyValue: 'config-android-badge-${record.id}',
+                            label: state.androidExecutionLabelForRecord(record),
+                          ),
+                        ),
+                      ],
                       if (record.isActive) ...[
                         const SizedBox(width: 8),
                         TagChip(
@@ -1645,11 +1819,31 @@ class _SavedConfigs extends StatelessWidget {
                               onCopyOrigin(record.origin);
                             case 'delete':
                               onDelete(record.id);
+                            case 'android':
+                              onRunOnAndroid(record.id);
+                            case 'pc':
+                              onRunOnPc(record.id);
                           }
                         },
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(value: 'copy', child: Text('复制来源地址')),
-                          PopupMenuItem(value: 'delete', child: Text('删除')),
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'copy',
+                            child: Text('复制来源地址'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('删除'),
+                          ),
+                          if (_canExecute(record))
+                            const PopupMenuItem(
+                              value: 'android',
+                              child: Text('在安卓环境运行此配置'),
+                            ),
+                          if (state.androidExecutionForRecord(record) != null)
+                            const PopupMenuItem(
+                              value: 'pc',
+                              child: Text('切回桌面运行'),
+                            ),
                         ],
                       ),
                     ],
@@ -1682,6 +1876,19 @@ class AndroidSettingsPage extends StatefulWidget {
 class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   final TextEditingController _address = TextEditingController();
 
+  // ---- 已连接安卓环境（ADB）-----------------------------------------------
+  //
+  // 错误/提示是**页面本地**的：同步层的 `lastError`/`notice` 是私有的、且语义
+  // 属于「设备接入/同步」，把 ADB 表单的失败塞进去会让两种操作互相顶掉。
+  final TextEditingController _adbTarget = TextEditingController();
+  final TextEditingController _adbPath = TextEditingController();
+  final TextEditingController _adbEmulatorPath = TextEditingController();
+  final TextEditingController _adbAvdHome = TextEditingController();
+  AndroidAdbMode _adbMode = AndroidAdbMode.network;
+  bool _adbBusy = false;
+  AppError? _adbError;
+  String? _adbNotice;
+
   SyncState get _sync => widget.state.syncState;
 
   @override
@@ -1698,6 +1905,10 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   void dispose() {
     _sync.removeListener(_onSyncChanged);
     _address.dispose();
+    _adbTarget.dispose();
+    _adbPath.dispose();
+    _adbEmulatorPath.dispose();
+    _adbAvdHome.dispose();
     super.dispose();
   }
 
@@ -1711,6 +1922,150 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   }
 
   Future<void> _scan() => _sync.scan();
+
+  // ---- 已连接安卓环境（ADB）：表单动作 ------------------------------------
+
+  String get _adbTargetHint => switch (_adbMode) {
+    AndroidAdbMode.network => '例如 192.168.50.3:5555（缺端口按 5555）',
+    AndroidAdbMode.device => 'adb devices 里的序列号，例如 emulator-5554',
+    AndroidAdbMode.avd => '已安装 AVD 的精确名称，例如 Pixel_7_API_34',
+  };
+
+  static String _adbModeLabel(AndroidAdbMode mode) => switch (mode) {
+    AndroidAdbMode.network => '网络',
+    AndroidAdbMode.device => '设备序列号',
+    AndroidAdbMode.avd => '已有 AVD',
+  };
+
+  static String _adbConnectionLabel(AndroidConnectionRecord record) {
+    final name = record.name.trim();
+    final target = record.profile.target;
+    return name.isEmpty ? target : '$name（$target）';
+  }
+
+  void _setAdbMode(AndroidAdbMode mode) {
+    if (_adbMode == mode) return;
+    setState(() {
+      _adbMode = mode;
+      _adbError = null;
+      _adbNotice = null;
+    });
+  }
+
+  /// 跑一次 ADB 表单动作：失败分类留在页面本地，绝不动同步层的错误位。
+  Future<void> _runAdb(Future<void> Function() action) async {
+    if (_adbBusy) return;
+    setState(() {
+      _adbBusy = true;
+      _adbError = null;
+      _adbNotice = null;
+    });
+    try {
+      await action();
+    } on AppError catch (error) {
+      if (mounted) setState(() => _adbError = error);
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _adbError = AppError(
+            AppErrorKind.bridgeUnreachable,
+            '$error',
+            cause: error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _adbBusy = false);
+    }
+  }
+
+  Future<void> _adbConnect() => _runAdb(() async {
+    final target = _adbTarget.text.trim();
+    if (target.isEmpty) {
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '请先填写 ADB 目标（网络地址 / 设备序列号 / AVD 名称）',
+      );
+    }
+    if (_adbMode == AndroidAdbMode.network && target.contains('://')) {
+      // 上面那个输入框收的就是 HTTP 网关地址，两个框挨着，写错几乎必然发生；
+      // 这里给出定向文案，而不是让描述层抛一句「名称无效」。
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '这里要填安卓的 ADB 地址（主机:端口，例如 192.168.50.3:5555），'
+        '不是 HTTP 网关地址；已有的 HTTP 地址请用上面的「接入设备」',
+      );
+    }
+    final AndroidAdbProfile profile;
+    try {
+      profile = AndroidAdbProfile(
+        mode: _adbMode,
+        target: target,
+        adbPath: _adbPath.text.trim(),
+        emulatorPath: _adbEmulatorPath.text.trim(),
+        avdHome: _adbAvdHome.text.trim(),
+      );
+    } on FormatException catch (error) {
+      throw AppError(AppErrorKind.bridgeUnreachable, error.message);
+    }
+    final device = await widget.state.connectAndroidEnvironment(profile);
+    if (!mounted) return;
+    setState(() => _adbNotice = '已连接 ${device.name}，并按管理型导入该设备的安卓源');
+  });
+
+  Future<void> _adbListDevices() => _runAdb(() async {
+    final devices = await widget.state.listAndroidAdbDevices(
+      adbPath: _adbPath.text.trim(),
+    );
+    if (!mounted) return;
+    if (devices.isEmpty) {
+      setState(() => _adbNotice = '没有发现已连接的设备。列表只读已运行的 ADB 服务，不会替你启动它。');
+      return;
+    }
+    setState(() {
+      _adbMode = AndroidAdbMode.device;
+      _adbTarget.text = devices.first;
+      _adbNotice = '发现 ${devices.length} 台设备：${devices.join('、')}';
+    });
+  });
+
+  Future<void> _adbListAvds() => _runAdb(() async {
+    final avds = await widget.state.listAndroidAdbAvds(
+      adbPath: _adbPath.text.trim(),
+      emulatorPath: _adbEmulatorPath.text.trim(),
+      avdHome: _adbAvdHome.text.trim(),
+    );
+    if (!mounted) return;
+    if (avds.isEmpty) {
+      setState(() => _adbNotice = '没有找到已安装的 AVD（需要本机已有的 emulator 与 AVD 目录）');
+      return;
+    }
+    setState(() {
+      _adbMode = AndroidAdbMode.avd;
+      _adbTarget.text = avds.first;
+      _adbNotice = '发现 ${avds.length} 个 AVD：${avds.join('、')}';
+    });
+  });
+
+  Future<void> _adbReconnect(AndroidConnectionRecord record) =>
+      _runAdb(() async {
+        final ok = await widget.state.reconnectAndroidEnvironment(
+          record.connectionKey,
+        );
+        if (!mounted) return;
+        setState(() {
+          _adbNotice = ok
+              ? '已重连 ${_adbConnectionLabel(record)}，并刷新该设备的安卓源'
+              : '已重连，但刷新安卓源失败：'
+                    '${widget.state.syncState.lastError?.message ?? '未知原因'}';
+        });
+      });
+
+  Future<void> _adbForget(AndroidConnectionRecord record) => _runAdb(() async {
+    await widget.state.forgetAndroidConnection(record.connectionKey);
+    if (!mounted) return;
+    setState(() => _adbNotice = '已忘记该环境（已导入的记录不受影响）');
+  });
 
   /// 从历史一键重连：先探测，探到就自动导入站点（用户点「接入」就是想用上）。
   Future<void> _reconnect(DeviceHistoryEntry entry) async {
@@ -1909,6 +2264,173 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
     ];
   }
 
+  /// 「已连接安卓环境」分区：用本机已有的 ADB/SDK 接入现成的模拟器/真机/AVD。
+  ///
+  /// 与上下两个分区同构（SettingsSection / SettingsActions / 同样的 busy 行与
+  /// Card+ListTile 提示），不新增设计 token；刻意不用不确定进度条——无限动画会
+  /// 让 widget 测试的 `pumpAndSettle` 永不收敛（见上方 busy 行的注释）。
+  Widget _adbSection(ThemeData theme) {
+    final records = widget.state.androidConnections;
+    return SettingsSection(
+      title: '已连接安卓环境',
+      description: '（用本机已有的 ADB 接入现成的模拟器/真机/AVD；连接成功后按管理型导入它的安卓源）',
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SegmentedButton<AndroidAdbMode>(
+              key: const ValueKey('android-adb-mode'),
+              segments: [
+                for (final mode in AndroidAdbMode.values)
+                  ButtonSegment<AndroidAdbMode>(
+                    value: mode,
+                    label: Text(_adbModeLabel(mode)),
+                  ),
+              ],
+              selected: {_adbMode},
+              onSelectionChanged: _adbBusy
+                  ? null
+                  : (selection) => _setAdbMode(selection.first),
+            ),
+            const SizedBox(height: AppSpace.md),
+            TextField(
+              key: const ValueKey('android-adb-target'),
+              controller: _adbTarget,
+              decoration: InputDecoration(
+                labelText: 'ADB 目标',
+                hintText: _adbTargetHint,
+                border: const OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _adbConnect(),
+            ),
+            const SizedBox(height: AppSpace.md),
+            TextField(
+              key: const ValueKey('android-adb-path'),
+              controller: _adbPath,
+              decoration: const InputDecoration(
+                labelText: 'ADB 可执行文件（可选）',
+                hintText: '留空则用已安装的 platform-tools',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_adbMode == AndroidAdbMode.avd) ...[
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('android-adb-emulator-path'),
+                controller: _adbEmulatorPath,
+                decoration: const InputDecoration(
+                  labelText: 'emulator 可执行文件（可选）',
+                  hintText: '留空则按 SDK 目录查找',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              TextField(
+                key: const ValueKey('android-adb-avd-home'),
+                controller: _adbAvdHome,
+                decoration: const InputDecoration(
+                  labelText: 'AVD 目录（可选）',
+                  hintText: '留空则用 ANDROID_AVD_HOME / 默认目录',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: AppSpace.md),
+            SettingsActions(
+              children: [
+                OutlinedButton.icon(
+                  key: const ValueKey('android-adb-list-devices'),
+                  onPressed: _adbBusy ? null : _adbListDevices,
+                  icon: const Icon(Icons.usb_outlined),
+                  label: const Text('列出设备'),
+                ),
+                OutlinedButton.icon(
+                  key: const ValueKey('android-adb-list-avds'),
+                  onPressed: _adbBusy ? null : _adbListAvds,
+                  icon: const Icon(Icons.devices_other_outlined),
+                  label: const Text('列出 AVD'),
+                ),
+                FilledButton.icon(
+                  key: const ValueKey('android-adb-connect'),
+                  onPressed: _adbBusy ? null : _adbConnect,
+                  icon: const Icon(Icons.link_outlined),
+                  label: const Text('连接并导入'),
+                ),
+              ],
+            ),
+          ],
+        ),
+        if (_adbBusy) ...[
+          const SizedBox(height: 8),
+          const Row(
+            children: [
+              Icon(Icons.hourglass_top_outlined, size: 16),
+              SizedBox(width: 8),
+              Text('正在处理…'),
+            ],
+          ),
+        ],
+        if (_adbError != null) ...[
+          const SizedBox(height: 8),
+          Card(
+            key: const ValueKey('android-adb-error'),
+            color: theme.colorScheme.errorContainer,
+            child: ListTile(
+              leading: const Icon(Icons.error_outline),
+              title: Text(_adbError!.userMessage),
+              subtitle: Text('类别：${_adbError!.kind.name}'),
+            ),
+          ),
+        ],
+        if (_adbNotice != null) ...[
+          const SizedBox(height: 8),
+          Card(
+            key: const ValueKey('android-adb-notice'),
+            child: ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: Text(_adbNotice!),
+            ),
+          ),
+        ],
+        const SizedBox(height: AppSpace.sm),
+        if (records.isEmpty)
+          const Text('还没有保存的安卓环境。')
+        else
+          for (final record in records)
+            ListTile(
+              key: ValueKey('android-adb-saved-${record.connectionKey}'),
+              dense: true,
+              leading: const Icon(Icons.phonelink_setup_outlined),
+              title: Text(_adbConnectionLabel(record)),
+              subtitle: Text(
+                '${_adbModeLabel(record.profile.mode)}'
+                '${record.deviceUuid.isEmpty ? '' : ' · 已绑定设备'}',
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    key: ValueKey(
+                      'android-adb-saved-reconnect-${record.connectionKey}',
+                    ),
+                    onPressed: _adbBusy ? null : () => _adbReconnect(record),
+                    child: const Text('重连'),
+                  ),
+                  IconButton(
+                    key: ValueKey(
+                      'android-adb-saved-forget-${record.connectionKey}',
+                    ),
+                    tooltip: '忘记该环境',
+                    onPressed: _adbBusy ? null : () => _adbForget(record),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2003,6 +2525,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
               ],
             ],
           ),
+          _adbSection(theme),
           SettingsSection(
             title: '最近接入',
             description: '（点一下就重新接入，不用再输地址）',
@@ -2484,10 +3007,7 @@ String _configRowMetadata(ConfigRecord record, {required int nowMs}) {
   if (error.isNotEmpty) {
     parts.add('检查失败：$error');
   } else if (checkedAt != null) {
-    final ago = watchedAgoLabel(
-      checkedAt.millisecondsSinceEpoch,
-      nowMs: nowMs,
-    );
+    final ago = watchedAgoLabel(checkedAt.millisecondsSinceEpoch, nowMs: nowMs);
     parts.add(ago.isEmpty ? '已检查' : '$ago检查过');
   }
   return parts.join(' · ');

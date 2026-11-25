@@ -13,6 +13,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -42,11 +43,7 @@ enum BridgeStage {
 
 /// 一次扫描中发现的设备。
 class BridgeDiscovery {
-  const BridgeDiscovery({
-    required this.base,
-    this.device,
-    this.error,
-  });
+  const BridgeDiscovery({required this.base, this.device, this.error});
 
   final String base;
 
@@ -57,6 +54,24 @@ class BridgeDiscovery {
   final AppError? error;
 
   bool get isDevice => device != null;
+}
+
+class AndroidPcConfigImportResult {
+  const AndroidPcConfigImportResult({
+    required this.id,
+    required this.interfaceKey,
+    required this.url,
+    required this.name,
+    required this.created,
+    required this.active,
+  });
+
+  final int id;
+  final String interfaceKey;
+  final String url;
+  final String name;
+  final bool created;
+  final bool active;
 }
 
 /// 安卓桥接服务（`design/01` §2 的「服务」层）。
@@ -103,6 +118,266 @@ class AndroidBridgeService {
     );
     final decoded = _decodeJson(body, normalized);
     return AndroidDevice.fromJson(decoded, reachableBase: normalized);
+  }
+
+  /// 创建或复用 PC 快照的安卓配置副本，不切换设备的激活配置。
+  Future<AndroidPcConfigImportResult> importPcConfig(
+    String base, {
+    required Uri snapshotUrl,
+    String name = '',
+    int type = 0,
+    Duration? timeout,
+  }) async {
+    final normalized = normalizeBase(base);
+    final hostPort = hostPortOf(normalized);
+    final controlHost = Uri.parse(normalized).host;
+    final controlAddress = InternetAddress.tryParse(controlHost);
+    final loopbackControl =
+        controlAddress?.isLoopback ?? controlHost.toLowerCase() == 'localhost';
+    if (!loopbackControl) {
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        'PC 配置导入仅允许通过本机回环地址访问安卓设备',
+      );
+    }
+    if (type < 0 ||
+        type > 2 ||
+        (snapshotUrl.scheme != 'http' && snapshotUrl.scheme != 'https') ||
+        !snapshotUrl.hasAuthority ||
+        snapshotUrl.host.isEmpty ||
+        snapshotUrl.userInfo.isNotEmpty ||
+        snapshotUrl.hasFragment ||
+        snapshotUrl.port <= 0 ||
+        snapshotUrl.port > 65535) {
+      throw AppError(
+        AppErrorKind.bridgeNotAndroid,
+        'PC 配置导入参数无效：需要合法的 HTTP 快照地址和 type 0/1/2',
+      );
+    }
+    const maxBytes = 16 * 1024;
+    final snapshotText = snapshotUrl.toString().trim();
+    if (snapshotText.length + name.length > maxBytes) {
+      throw AppError(AppErrorKind.bridgeNotAndroid, 'PC 配置导入表单超过 16KiB 上限');
+    }
+    final form = utf8.encode(
+      Uri(
+        queryParameters: {
+          'url': snapshotText,
+          if (name.isNotEmpty) 'name': name,
+          'type': type.toString(),
+        },
+      ).query,
+    );
+    if (form.length > maxBytes) {
+      throw AppError(AppErrorKind.bridgeNotAndroid, 'PC 配置导入表单超过 16KiB 上限');
+    }
+    final requestTimeout = timeout ?? this.timeout;
+    _logInfo('安卓桥接：导入 PC 配置 base=$hostPort');
+
+    String sanitize(String message) {
+      var text = message;
+      final secrets = <String>{
+        snapshotUrl.toString(),
+        ...snapshotUrl.pathSegments.where((part) => part.isNotEmpty),
+        ...snapshotUrl.pathSegments
+            .where((part) => part.endsWith('.json'))
+            .map((part) => part.substring(0, part.length - 5))
+            .where((part) => part.isNotEmpty),
+        ...snapshotUrl.queryParametersAll.values
+            .expand((values) => values)
+            .where((value) => value.isNotEmpty),
+      }.toList()..sort((a, b) => b.length.compareTo(a.length));
+      for (final secret in secrets) {
+        text = text
+            .replaceAll(secret, '<redacted>')
+            .replaceAll(Uri.encodeComponent(secret), '<redacted>')
+            .replaceAll(Uri.encodeQueryComponent(secret), '<redacted>');
+      }
+      return text.replaceAllMapped(RegExp(r'https?://[^\s<>]+'), (match) {
+        final uri = Uri.tryParse(match.group(0)!);
+        return uri == null
+            ? '<redacted-url>'
+            : redactUrl(
+                Uri(
+                  scheme: uri.scheme,
+                  host: uri.host,
+                  port: uri.hasPort ? uri.port : null,
+                ).toString(),
+              );
+      });
+    }
+
+    final endpoint = Uri.parse('$normalized/manage/config/import');
+    final abort = Completer<void>();
+    final request =
+        http.AbortableRequest('POST', endpoint, abortTrigger: abort.future)
+          ..followRedirects = false
+          ..headers.addAll({
+            'Host': hostPort,
+            'Accept': 'application/json',
+            'X-WebHTV-PC-Import': '1',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          })
+          ..bodyBytes = form;
+    final collected = BytesBuilder(copy: false);
+    final readDone = Completer<void>();
+    var timedOut = false;
+    var tooLarge = false;
+    StreamSubscription<List<int>>? subscription;
+    final deadline = Timer(requestTimeout, () {
+      timedOut = true;
+      if (!abort.isCompleted) abort.complete();
+    });
+    void finish([Object? error]) {
+      if (!readDone.isCompleted) {
+        error == null ? readDone.complete() : readDone.completeError(error);
+      }
+    }
+
+    final http.StreamedResponse streamed;
+    try {
+      streamed = await _client.send(request);
+      subscription = streamed.stream.listen(
+        (chunk) {
+          if (collected.length + chunk.length > maxBytes) {
+            tooLarge = true;
+            finish();
+            if (!abort.isCompleted) abort.complete();
+          } else {
+            collected.add(chunk);
+          }
+        },
+        onDone: finish,
+        onError: finish,
+        cancelOnError: true,
+      );
+      await readDone.future;
+    } on SocketException catch (error) {
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '安卓设备不可达：${sanitize(error.osError?.message ?? '连接失败')}',
+        detail: hostPort,
+        retryable: true,
+        cause: error,
+      );
+    } catch (error) {
+      if (timedOut) {
+        throw AppError(
+          AppErrorKind.bridgeUnreachable,
+          '安卓设备响应超时（${requestTimeout.inMilliseconds}ms）',
+          detail: hostPort,
+          retryable: true,
+          cause: error,
+        );
+      }
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '安卓设备不可达：${sanitize(error.toString())}',
+        detail: hostPort,
+        retryable: true,
+        cause: error,
+      );
+    } finally {
+      deadline.cancel();
+      await subscription?.cancel();
+      if (!abort.isCompleted) abort.complete();
+    }
+    if (tooLarge) {
+      final status = streamed.statusCode;
+      final httpFailure = status < 200 || status >= 300;
+      throw AppError(
+        status == 404
+            ? AppErrorKind.bridgeNoGateway
+            : httpFailure
+            ? AppErrorKind.bridgeUnreachable
+            : AppErrorKind.bridgeNotAndroid,
+        '安卓设备 PC 配置导入响应超过 16KiB 上限'
+        '${httpFailure ? '（HTTP $status）' : ''}',
+        detail: hostPort,
+        statusCode: httpFailure ? status : null,
+        retryable: status >= 500,
+      );
+    }
+
+    final response = http.Response.bytes(
+      collected.takeBytes(),
+      streamed.statusCode,
+      headers: streamed.headers,
+      request: request,
+    );
+    final body = _decodeBody(response, hostPort);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      var deviceMessage = body.trim();
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map) {
+          final message = decoded['msg'] ?? decoded['message'];
+          deviceMessage = message is String ? message : '';
+        }
+      } on FormatException {
+        // 老设备可能返回纯文本的 HTTP 拒绝原因。
+      }
+      _logWarning('安卓桥接：PC 配置导入 HTTP ${response.statusCode} base=$hostPort');
+      throw AppError(
+        response.statusCode == 404
+            ? AppErrorKind.bridgeNoGateway
+            : AppErrorKind.bridgeUnreachable,
+        '安卓设备返回 HTTP ${response.statusCode}'
+        '${deviceMessage.isEmpty ? '' : '：${sanitize(deviceMessage)}'}',
+        detail: hostPort,
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+
+    final decoded = _decodeJson(body, hostPort);
+    if (decoded is! Map || decoded['code'] != 0) {
+      final message = decoded is Map
+          ? decoded['msg'] ?? decoded['message']
+          : null;
+      throw AppError(
+        AppErrorKind.bridgeNotAndroid,
+        '安卓设备未确认 PC 配置导入成功'
+        '${message is String && message.isNotEmpty ? '：${sanitize(message)}' : ''}',
+        detail: hostPort,
+      );
+    }
+    final data = decoded['data'];
+    if (data is! Map ||
+        data['id'] is! int ||
+        (data['id'] as int) <= 0 ||
+        data['interfaceKey'] is! String ||
+        (data['interfaceKey'] as String).trim().isEmpty ||
+        data['url'] is! String ||
+        data['name'] is! String ||
+        data['created'] is! bool ||
+        data['active'] is! bool) {
+      throw AppError(
+        AppErrorKind.bridgeNotAndroid,
+        '安卓设备 PC 配置导入响应缺少有效 id、interfaceKey 或结果字段',
+        detail: hostPort,
+      );
+    }
+    if ((data['url'] as String).trim() != snapshotText) {
+      throw AppError(
+        AppErrorKind.bridgeNotAndroid,
+        '安卓设备 PC 配置导入返回的 URL 与请求快照不一致（身份不匹配）',
+        detail: hostPort,
+      );
+    }
+    final result = AndroidPcConfigImportResult(
+      id: data['id'] as int,
+      interfaceKey: data['interfaceKey'] as String,
+      url: data['url'] as String,
+      name: data['name'] as String,
+      created: data['created'] as bool,
+      active: data['active'] as bool,
+    );
+    _logInfo(
+      '安卓桥接：PC 配置导入成功 base=$hostPort '
+      'created=${result.created} active=${result.active}',
+    );
+    return result;
   }
 
   /// 拉取并转换 T4 站点清单（`design/01` §5）。

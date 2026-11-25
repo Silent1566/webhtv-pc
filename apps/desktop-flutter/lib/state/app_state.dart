@@ -32,7 +32,9 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart' show Row;
 
 import '../core/ad_rules.dart';
+import '../core/android_adb_profile.dart';
 import '../core/android_bridge.dart';
+import '../core/android_config_execution.dart';
 import '../core/android_sync.dart';
 import '../core/ai_config.dart';
 import '../core/ai_content/ad_rule_validation.dart';
@@ -119,7 +121,12 @@ import '../core/tmdb_season.dart';
 import '../services/app_paths.dart';
 import '../services/lut_store.dart';
 import '../services/config_source_status.dart';
+import '../services/android_adb_runtime.dart';
 import '../services/android_bridge_service.dart';
+import '../services/android_connection_store.dart';
+import '../services/android_config_execution_service.dart';
+import '../services/android_config_execution_store.dart';
+import '../services/pc_config_snapshot_server.dart';
 import '../services/android_playback_bridge.dart';
 import '../services/android_read_client.dart';
 import '../services/cat_bundle.dart';
@@ -187,16 +194,14 @@ const String appVersion = String.fromEnvironment(
 
 /// 发布 tag：CI 用 --dart-define=APP_TAG=「v0.1.0-202611231630」注入，
 /// 更新检查靠它判断「本机是发布构建」还是「开发构建」（ADR-0015）。
-const String appBuildTag = String.fromEnvironment(
-  'APP_TAG',
-  defaultValue: '',
-);
-final String appBuildFlavor = 'MVP-A (${switch (Platform.operatingSystem) {
-  'windows' => 'Windows',
-  'linux' => 'Linux',
-  'macos' => 'macOS',
-  final other => other,
-}})';
+const String appBuildTag = String.fromEnvironment('APP_TAG', defaultValue: '');
+final String appBuildFlavor =
+    'MVP-A (${switch (Platform.operatingSystem) {
+      'windows' => 'Windows',
+      'linux' => 'Linux',
+      'macos' => 'macOS',
+      final other => other,
+    }})';
 
 /// 启动诊断信息，用于日志页与验收证据（§20.3 “启动日志记录版本、平台、
 /// 架构、播放器引擎和运行时版本”）。
@@ -279,8 +284,15 @@ enum _ConfigRefreshOutcome {
   skipped,
 }
 
+/// 管理型（ADB）记录的内部传输标记（`configs.bridge_transport`）。
+///
+/// 它是**内部**标记：`source_key` 仍是 `bridge|<uuid>|<interfaceKey>`，
+/// 与老 HTTP 桥接记录逐字节同构，因此历史/收藏/上次配置都不受影响。
+const String androidManagedBridgeTransport = 'adb';
+
 /// 应用状态。
-class AppState extends ChangeNotifier implements SyncStateHost {
+class AppState extends ChangeNotifier
+    implements SyncStateHost, SyncBridgeTransportHost {
   AppState({
     AppPaths? paths,
     LogService? log,
@@ -291,6 +303,13 @@ class AppState extends ChangeNotifier implements SyncStateHost {
     EpgService? epgService,
     AndroidBridgeService? androidBridgeService,
     AndroidPlaybackBridge? androidPlaybackBridge,
+
+    /// 测试注入的安卓 ADB 运行时（`null` = 真实 SDK/进程/回环 socket）。
+    ///
+    /// 与 `androidBridgeService` 同一模式：widget/单测不得执行真实 ADB 命令。
+    AndroidAdbRuntime? androidAdbRuntime,
+    AndroidConfigExecutionStore? androidExecutionStore,
+    AndroidConfigExecutionService? androidExecutionService,
     SyncClient? syncClient,
     SyncServer Function(SyncServerHost host)? syncServerFactory,
 
@@ -317,7 +336,7 @@ class AppState extends ChangeNotifier implements SyncStateHost {
 
     /// 测试注入的追番通知器（`null` = 真实 Windows 系统通知）。
     FollowingNotifier? followingNotifier,
-AiContentCompletion? aiContentCompletion,
+    AiContentCompletion? aiContentCompletion,
     AiCompletionClient? aiSeasonClient,
     TmdbService? tmdbService,
     this.warmAutoRoutes = true,
@@ -394,6 +413,47 @@ AiContentCompletion? aiContentCompletion,
     _proxy = LocalProxyServer(log: this.log);
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
+    // 已连接安卓环境（ADB）：运行时拥有进程/转发，连接描述自己单独一个文件。
+    //
+    // 运行时需要一个探测网关用的桥接服务；注入的桥接服务被同步层共用，
+    // 未注入时自建一个并随 dispose 关闭（避免泄漏 http.Client）。
+    final injectedBridge = _injectedBridgeService;
+    final adbBridge = androidAdbRuntime == null
+        ? (injectedBridge ?? AndroidBridgeService(log: this.log))
+        : null;
+    // 只关自己建的那个：注入的桥接服务归调用方（同步层也在用）。
+    _ownedAdbBridge = androidAdbRuntime == null && injectedBridge == null
+        ? adbBridge
+        : null;
+    _androidAdbRuntime =
+        androidAdbRuntime ??
+        AndroidAdbRuntime(bridge: adbBridge!, log: this.log);
+    _androidConnections = AndroidConnectionStore(
+      path: p.join(this.paths.configDir, androidConnectionsFileName),
+      log: this.log,
+    );
+    _androidExecutionStore =
+        androidExecutionStore ??
+        AndroidConfigExecutionStore(
+          path: p.join(this.paths.configDir, 'android_config_executions.json'),
+          log: this.log,
+        );
+    _ownsAndroidExecutionService = androidExecutionService == null;
+    _executionBridge = androidExecutionService == null
+        ? (_injectedBridgeService ?? AndroidBridgeService(log: this.log))
+        : null;
+    _ownsExecutionBridge =
+        _executionBridge != null && _injectedBridgeService == null;
+    _androidExecutionService =
+        androidExecutionService ??
+        AndroidConfigExecutionService(
+          runtime: _androidAdbRuntime,
+          bridge: _executionBridge!,
+          store: _androidExecutionStore,
+          connections: _androidConnections,
+          publisher: PcConfigSnapshotServer(log: this.log),
+          log: this.log,
+        );
     // 安卓接入与同步（Phase 5）：只装配，不自动启动服务端（P3 默认关闭）。
     syncState = SyncState(
       log: this.log,
@@ -571,6 +631,33 @@ AiContentCompletion? aiContentCompletion,
   );
   late final SpiderRouter _router;
   late final AndroidPlaybackBridge _androidPlaybackBridge;
+
+  /// 已连接安卓环境（ADB）运行时：自有/借用的 ADB 服务、转发租约与网关归属。
+  late final AndroidAdbRuntime _androidAdbRuntime;
+
+  /// 未注入桥接服务时自建的那一个（随 dispose 关闭）。
+  AndroidBridgeService? _ownedAdbBridge;
+
+  late final AndroidConfigExecutionStore _androidExecutionStore;
+  late final AndroidConfigExecutionService _androidExecutionService;
+  late final bool _ownsAndroidExecutionService;
+  AndroidBridgeService? _executionBridge;
+  bool _ownsExecutionBridge = false;
+  final Map<String, AndroidConfigExecutionResult> _androidExecutionReady = {};
+  final Map<String, int> _androidExecutionEpochs = {};
+  final Map<String, int> _androidExecutionRequestEpochs = {};
+  final Map<String, bool> _androidExecutionIntents = {};
+  final Map<String, AppError> _androidExecutionFailures = {};
+  int _configSelectionEpoch = 0;
+  final Map<String, Future<void>> _androidExecutionPreparing = {};
+  // 与 _sidecarShutdown 同一口径：未关闭时不持有 Future，避免 AppState 因为
+  // 总是带着一个 _Future 而无法作为 isolate 消息的一部分被发送（测试夹具会捕获它）。
+  Future<void>? _androidExecutionShutdownFuture;
+  Future<void> get androidExecutionShutdown =>
+      _androidExecutionShutdownFuture ?? Future<void>.value();
+
+  /// 已保存的连接描述（`configDir/android_connections.json`）。
+  late final AndroidConnectionStore _androidConnections;
 
   /// 测试注入的直播服务（用于避免 UI 测试在 fake-async 区做真实 socket I/O）。
   final LiveService? _injectedLiveService;
@@ -818,7 +905,8 @@ AiContentCompletion? aiContentCompletion,
   );
 
   /// 订阅级 TMDB 凭据（仅进程内存，按配置身份/代际隔离）。
-  final TmdbSubscriptionCredentials _tmdbSubscription = TmdbSubscriptionCredentials();
+  final TmdbSubscriptionCredentials _tmdbSubscription =
+      TmdbSubscriptionCredentials();
   int _configMutationEpoch = 0;
 
   /// 启动后台刷新的「同一进程只跑一轮」闸门（null = 还没发起）。
@@ -997,13 +1085,17 @@ AiContentCompletion? aiContentCompletion,
     final now = DateTime.now();
     final failures = _imageRouteFailures.putIfAbsent(route, () => <DateTime>[]);
     failures.add(now);
-    failures.removeWhere((at) => now.difference(at) > const Duration(seconds: 60));
+    failures.removeWhere(
+      (at) => now.difference(at) > const Duration(seconds: 60),
+    );
     if (failures.length < 2) return;
     failures.clear();
     _tmdbRoutes.failure(TmdbRouteKind.image, route);
     _notifyIfAlive();
     final last = _lastAutoProbeAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 30)) return;
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
     unawaited(refreshTmdbAutoRoutes());
   }
 
@@ -1016,7 +1108,11 @@ AiContentCompletion? aiContentCompletion,
   }
 
   /// 只在配置已成功提交后接收候选；写入相同作用域后才对外可见。
-  void _acceptImportedTmdbCredential(ImportedConfig imported, int configId, String sourceKey) {
+  void _acceptImportedTmdbCredential(
+    ImportedConfig imported,
+    int configId,
+    String sourceKey,
+  ) {
     final epoch = _tmdbSubscription.beginScope(configId, sourceKey);
     final accepted = _tmdbSubscription.accept(
       imported.tmdbApiKeyCandidate,
@@ -1025,7 +1121,10 @@ AiContentCompletion? aiContentCompletion,
       epoch,
     );
     if (imported.tmdbApiKeyCandidate.isNotEmpty) {
-      log.info('TMDB 订阅凭据已接收 accepted=$accepted scope=$configId', scope: 'tmdb');
+      log.info(
+        'TMDB 订阅凭据已接收 accepted=$accepted scope=$configId',
+        scope: 'tmdb',
+      );
     }
   }
 
@@ -1039,11 +1138,8 @@ AiContentCompletion? aiContentCompletion,
     _activeRecord = current;
   }
 
-  AppError _staleConfigMutation() => AppError(
-    AppErrorKind.configInvalid,
-    '配置操作已被更新的操作取代',
-    retryable: true,
-  );
+  AppError _staleConfigMutation() =>
+      AppError(AppErrorKind.configInvalid, '配置操作已被更新的操作取代', retryable: true);
 
   /// AI 配置（`docs/phase6/design/04` §4）。
   AiConfig get aiConfig => _aiConfigStore.config;
@@ -1336,6 +1432,7 @@ AiContentCompletion? aiContentCompletion,
 
   String _aiLineKey(Vod vod, VodPlayLine line) =>
       '$tmdbConfigId|$_aiTmdbSiteKey|${vod.vodId}|${vod.vodName}|${line.flag}';
+
   /// 原始线路的聚合组：手动锚点的**身份口径**。
   ///
   /// 必须用未套任何绑定的线路算：锚点靠 `sourceName` 定位，先写 extra 再算组
@@ -1343,10 +1440,8 @@ AiContentCompletion? aiContentCompletion,
   List<EpisodeGroup> _rawGroupsOf(VodPlayLine line) =>
       EpisodeAggregation.build(line.episodes, scope: line.flag);
 
-  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(
-    Vod vod,
-    VodPlayLine line,
-  ) => _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
+  List<EpisodeMatchAnchor> manualEpisodeAnchorsFor(Vod vod, VodPlayLine line) =>
+      _manualEpisodeAnchors[_aiLineKey(vod, line)] ?? const [];
 
   int manualEpisodeDroppedFor(Vod vod, VodPlayLine line) =>
       _manualEpisodeDropped[_aiLineKey(vod, line)] ?? 0;
@@ -1564,9 +1659,8 @@ AiContentCompletion? aiContentCompletion,
   }) async {
     final groups = _rawGroupsOf(line);
     final position = groups.indexWhere(
-      (group) => group.versions.any(
-        (version) => version.sourceIndex == sourceIndex,
-      ),
+      (group) =>
+          group.versions.any((version) => version.sourceIndex == sourceIndex),
     );
     if (position < 0) return;
     // 同一组只留一个锚点：整组替换（组内多版本共享一条结论）。
@@ -1602,9 +1696,8 @@ AiContentCompletion? aiContentCompletion,
     }
     final groups = _rawGroupsOf(line);
     final position = groups.indexWhere(
-      (group) => group.versions.any(
-        (version) => version.sourceIndex == sourceIndex,
-      ),
+      (group) =>
+          group.versions.any((version) => version.sourceIndex == sourceIndex),
     );
     if (position < 0) return;
     final groupIndexes = {
@@ -1775,7 +1868,8 @@ AiContentCompletion? aiContentCompletion,
     if (siteKey == pushSiteKey && !shouldAutoMatchPushTitle(vod.vodName)) {
       var manual = false;
       try {
-        manual = _database != null &&
+        manual =
+            _database != null &&
             _ensureTmdbIdentityService().cachedManual(
                   siteKey: siteKey,
                   vodId: vod.vodId,
@@ -1950,7 +2044,8 @@ AiContentCompletion? aiContentCompletion,
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
 
   /// 多来源元数据管线（逐字段优先/聚合）。
-  MetaPipeline get metaPipeline => _uiPreferences?.metaPipeline ?? MetaPipeline.defaults;
+  MetaPipeline get metaPipeline =>
+      _uiPreferences?.metaPipeline ?? MetaPipeline.defaults;
 
   /// 用户手动钉住的来源身份（vod → MetaIdentity）。
   MetaOverrideStore get metaOverrides =>
@@ -1978,7 +2073,8 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> setMetaPipeline(MetaPipeline pipeline) async {
     final store = _uiPreferences;
     if (store == null) return false;
-    final commentsChanged = metaPipeline.ruleOf(MetaField.comments) !=
+    final commentsChanged =
+        metaPipeline.ruleOf(MetaField.comments) !=
         pipeline.ruleOf(MetaField.comments);
     final saved = store.rememberMetaPipeline(pipeline);
     _externalMetaService?.clearCache(preserveComments: !commentsChanged);
@@ -2100,10 +2196,14 @@ AiContentCompletion? aiContentCompletion,
   /// EPG 服务（§13.1）。缓存落在 `paths.cacheDir/epg/`，与直播服务同域。
   EpgService get epgService => _epgService ??=
       _injectedEpgService ?? EpgService(cacheDir: paths.cacheDir);
+
   /// Offline only; the provider tolerates absent stores and damaged cache rows.
-  Map<int, ViewingMetadata> viewingReportMetadata(List<PlaybackHistory> records) =>
-      ViewingReportMetadata(database: _database, tmdbService: _tmdbService)
-          .forRecords(records);
+  Map<int, ViewingMetadata> viewingReportMetadata(
+    List<PlaybackHistory> records,
+  ) => ViewingReportMetadata(
+    database: _database,
+    tmdbService: _tmdbService,
+  ).forRecords(records);
 
   AppDatabase? get database => _database;
   ConfigRecord? get activeRecord => _activeRecord;
@@ -2516,7 +2616,7 @@ AiContentCompletion? aiContentCompletion,
   /// 壳在**模块顶层**就 import 它们（实测 C:/dev/Atvp.py:18-23 的 requests /
   /// Crypto / lxml），因此缺依赖不是「某个方法不可用」而是**启动即失败**：
   /// host.py 记一行 stderr 后 return 3；宿主现在会把它读成「站源初始化失败：<缺的模块>」
-/// 并直接判定为确定性失败（不重试）。
+  /// 并直接判定为确定性失败（不重试）。
   static const List<String> catVodPythonModules = <String>[
     'requests',
     'Crypto',
@@ -2912,7 +3012,13 @@ AiContentCompletion? aiContentCompletion,
   /// 注意：**不是** `_config`。任何需要“用户配置 + 注入”的地方都用它；
   /// 写回配置记录时必须用 [_config]，否则会把注入固化进用户配置。
   AppConfig? get effectiveConfig {
-    final config = _config;
+    final original = _config;
+    final record = _activeRecord;
+    final requiresAndroid = record != null && _requiresAndroidExecution(record);
+    final config = requiresAndroid ? _executionOverlay(record) : original;
+    if (requiresAndroid && config == null) {
+      return null;
+    }
     final local = localSourceSites;
     // 没有任何配置、也没有本地源：保持既有语义（null = 还没配置）。
     if (config == null && local.isEmpty) return null;
@@ -3741,6 +3847,11 @@ AiContentCompletion? aiContentCompletion,
     _lastConfigStore = LastConfigStore(dataDir: paths.dataDir, log: log);
     _lastConfigRecord = _lastConfigStore!.read();
 
+    // 已连接安卓环境（ADB）的连接描述：文件缺失/损坏都只记日志，
+    // 退回「没有记录」，绝不阻塞启动（存储层自己已按该口径实现）。
+    await _androidConnections.load();
+    await _androidExecutionStore.load();
+
     // 安卓接入与同步设置（Phase 5）：读取失败不阻塞启动，退回默认（全关）。
     await syncState.load();
 
@@ -3829,7 +3940,9 @@ AiContentCompletion? aiContentCompletion,
         if (record != null && record.json.isNotEmpty) {
           // 猫源配置的站点 `api` 指向本机随机端口，重启后端口已变；必须按保存的
           // 原始猫源地址重新拉起 bundle，而不是直接复用旧 JSON。
-          final reserved = await _reserveCatConfig(record.origin);
+          final reserved = androidExecutionForRecord(record) != null
+              ? null
+              : await _reserveCatConfig(record.origin);
           _config = reserved ?? parseConfigRecord(record.json);
           _attachSiteService();
           log.info(
@@ -4258,14 +4371,13 @@ AiContentCompletion? aiContentCompletion,
     if (database == null || row.vodId.trim().isEmpty) return null;
     TmdbItem? item;
     try {
-      item = DatabaseTmdbMatchStore(
-        database: database,
-        configId: tmdbConfigId,
-      ).find(
-        siteKey: row.siteKey,
-        vodId: row.vodId,
-        sourceTitle: row.vodName,
-      )?.toItem();
+      item = DatabaseTmdbMatchStore(database: database, configId: tmdbConfigId)
+          .find(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+          )
+          ?.toItem();
     } catch (_) {
       // 读匹配表失败不算错误：继续走按片名匹配。
     }
@@ -4726,7 +4838,8 @@ AiContentCompletion? aiContentCompletion,
     _router.updateTransport(client: _httpClient, globalHeaders: config.headers);
     _siteService = SiteService(
       appConfig: config,
-      playbackBridge: _androidPlaybackBridge,
+      // 管理型记录不挂老播放桥接：转发所有者是 ADB 运行时的会话解析器。
+      playbackBridge: _playbackBridgeFor(_activeRecord),
       router: _router,
       database: _database,
     );
@@ -4737,6 +4850,11 @@ AiContentCompletion? aiContentCompletion,
     final selected = _selectedSite;
     if (selected != null && !_configContainsSite(config, selected)) {
       _selectedSite = null;
+    } else if (selected != null) {
+      // 同一个站点 key 在新配置里可能带着**新的 api 主机/端口**（管理型记录换端口、
+      // 刷新时主机修正）：必须换成新配置里的那个实例，否则首页与播放会一直打
+      // 旧地址（实测：重连后首页仍请求上一个回环端口）。
+      _selectedSite = _siteByKey(config, selected.key) ?? selected;
     }
     // 恢复**最近一次使用的站点**（用户需求 2026-10-10）：重启后默认回到它，
     // 而不是每次都被重置到配置里的第一个站点。
@@ -4986,7 +5104,8 @@ AiContentCompletion? aiContentCompletion,
       // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
       // 以为导入即可用，实际整份配置可能没有一个站点能跑。
       final usableSites = usableSiteCount;
-      _notice = config.notice ??
+      _notice =
+          config.notice ??
           '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
       _configPhase = LoadPhase.ready;
       log.info(
@@ -5034,6 +5153,24 @@ AiContentCompletion? aiContentCompletion,
       return false;
     }
     try {
+      final selectionEpoch = ++_configSelectionEpoch;
+      final target = configRecordById(id);
+      final targetKey = target == null ? '' : sourceKeyOfRecord(target);
+      final requestEpoch = _androidExecutionRequestEpochs[targetKey] ?? 0;
+      if (target != null &&
+          target.bridgeTransport.trim() == androidManagedBridgeTransport) {
+        // 管理型记录的 `origin` 是上次连接时的本机转发端口，重启/断连后必然
+        // 失效：先按已保存描述重连并刷新端点，再走激活；没有描述或连不上就
+        // 显式失败（绝不拿旧端口重试）。
+        await _reattachManaged(target);
+      }
+      if (target != null && androidExecutionForRecord(target) != null) {
+        await refreshAndroidConfigExecution(id);
+      }
+      if (selectionEpoch != _configSelectionEpoch ||
+          requestEpoch != (_androidExecutionRequestEpochs[targetKey] ?? 0)) {
+        return false;
+      }
       final mutationEpoch = ++_configMutationEpoch;
       database.activateConfig(id);
       _configs = database.listConfigs();
@@ -5045,7 +5182,9 @@ AiContentCompletion? aiContentCompletion,
       // 换源时先终止上一个猫源进程树，再按新记录的原始地址重拉（§9）。
       await _catPipeline?.stop();
       _selectedSite = null;
-      final reserved = await _reserveCatConfig(record.origin);
+      final reserved = androidExecutionForRecord(record) != null
+          ? null
+          : await _reserveCatConfig(record.origin);
       if (mutationEpoch != _configMutationEpoch) throw _staleConfigMutation();
       _clearRestoredConfigSourceWarning();
       _config = reserved ?? parseConfigRecord(record.json);
@@ -5257,6 +5396,21 @@ AiContentCompletion? aiContentCompletion,
     if (interfaceKey.isNotEmpty || record.contentType == 'android-t4-gateway') {
       // 桥接源的内容在安卓设备上：先找设备地址，再按 interfaceKey 精确重拉。
       // 不探测整台设备的全部源，否则刷新一条会顺带改写别的源。
+      final managed =
+          record.bridgeTransport.trim() == androidManagedBridgeTransport;
+      if (managed) {
+        // 管理型记录的地址是「随连接存在的本机转发端口」：先按已保存描述重连
+        // 并刷新端点（不启动 AVD），失败的分类原样上抛——绝不读那个必然失效
+        // 的缓存地址，也绝不把管理型记录降级成老 HTTP 桥接。
+        try {
+          await _reattachManaged(record);
+        } on AppError catch (error) {
+          _lastError = error;
+          _notifyIfAlive();
+          return false;
+        }
+        return true;
+      }
       final deviceUuid = record.bridgeDevice.trim();
       final address = deviceUuid.isEmpty
           ? record.origin
@@ -5333,6 +5487,18 @@ AiContentCompletion? aiContentCompletion,
     database.saveConfigSites(id, config.sites);
     _configs = database.listConfigs();
     _activeRecord = database.activeConfig();
+    final refreshedExecutionRecord = _configs
+        .where((r) => r.id == id)
+        .firstOrNull;
+    if (refreshedExecutionRecord != null &&
+        androidExecutionForRecord(refreshedExecutionRecord) != null) {
+      try {
+        await refreshAndroidConfigExecution(id);
+      } on AppError catch (error) {
+        _lastError = error;
+        return false;
+      }
+    }
     if (_activeRecord?.id == id) {
       final active = _activeRecord!;
       _acceptImportedTmdbCredential(
@@ -5449,7 +5615,9 @@ AiContentCompletion? aiContentCompletion,
   }
 
   Future<bool> setUpdateGithubProxy(AppUpdateProxySettings settings) async {
-    if (_updateChecking || _updateDownloading || _updateInstalling) return false;
+    if (_updateChecking || _updateDownloading || _updateInstalling) {
+      return false;
+    }
     final baseUrl = AppUpdateProxySettings.normalizeBaseUrl(settings.baseUrl);
     if (baseUrl == null) return false;
     final normalized = AppUpdateProxySettings(
@@ -5554,10 +5722,7 @@ AiContentCompletion? aiContentCompletion,
     final tag = check.release?.tag ?? '-';
     final channelName = channel.name;
     final verdictName = check.verdict.name;
-    log.info(
-      '检查更新：通道=$channelName 结论=$verdictName 最新=$tag',
-      scope: 'update',
-    );
+    log.info('检查更新：通道=$channelName 结论=$verdictName 最新=$tag', scope: 'update');
     _notifyIfAlive();
     return check;
   }
@@ -5651,7 +5816,8 @@ AiContentCompletion? aiContentCompletion,
     if (download == null ||
         _updateChecking ||
         check == null ||
-        !(check.hasUpdate || check.verdict == AppUpdateVerdict.developmentBuild) ||
+        !(check.hasUpdate ||
+            check.verdict == AppUpdateVerdict.developmentBuild) ||
         download.release.tag != check.release?.tag) {
       return null;
     }
@@ -5931,6 +6097,10 @@ AiContentCompletion? aiContentCompletion,
   /// 只在**改动打到生效记录**时调用——否则会把用户正在看的站点列表清空。
   Future<void> _reloadActiveConfigContent(AppConfig config) async {
     _clearRestoredConfigSourceWarning(recordId: _activeRecord?.id);
+    final record = _activeRecord;
+    if (record != null && androidExecutionForRecord(record) != null) {
+      await refreshAndroidConfigExecution(record.id);
+    }
     _config = config;
     // 交给 _attachSiteService 收尾：它会按 key 校验选中站点仍属于新配置，
     // 并优先恢复用户上次使用的站点，找不到才退回默认站点。
@@ -6124,6 +6294,26 @@ AiContentCompletion? aiContentCompletion,
   Future<void> deleteConfigRecord(int id) async {
     final database = _database;
     if (database == null) return;
+    final removed = database.listConfigs().where((r) => r.id == id).firstOrNull;
+    if (removed != null) {
+      final key = sourceKeyOfRecord(removed);
+      _beginExecutionRequest(key, android: false);
+      _androidExecutionFailures.remove(key);
+      _androidExecutionReady.remove(key);
+      _invalidateExecution(key);
+      for (final binding
+          in _androidExecutionStore.bindings
+              .where((b) => b.sourceKey == key)
+              .toList()) {
+        await _androidExecutionService.forget(
+          key,
+          binding.profileConnectionKey,
+        );
+      }
+      _androidExecutionReady.remove(key);
+      _invalidateExecution(key);
+      _playbackContexts.remove(key);
+    }
     _configMutationEpoch++;
     database.deleteConfig(id);
     _clearRestoredConfigSourceWarning(recordId: id);
@@ -7119,7 +7309,8 @@ AiContentCompletion? aiContentCompletion,
         .where((context) => identical(context.service, service))
         .firstOrNull;
     final captureSource = identical(service, _siteService)
-        ? activeSourceAtStart : originalContext?.sourceKey ?? '';
+        ? activeSourceAtStart
+        : originalContext?.sourceKey ?? '';
     // 先清状态，**再**等站点运行时：python/catVod 的运行时重刷可能要几秒，
     // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
     // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
@@ -7233,15 +7424,20 @@ AiContentCompletion? aiContentCompletion,
         );
       }
       _selectedVod = effective;
-      if (!_disposed && captureAllowed && !incognito &&
-          activeSourceAtStart == activeSourceKey && captureSource.isNotEmpty &&
-          returnedDetail != null && effective.vodId == vod.vodId &&
-          effective.vodName.trim().toLowerCase() == vod.vodName.trim().toLowerCase() &&
+      if (!_disposed &&
+          captureAllowed &&
+          !incognito &&
+          activeSourceAtStart == activeSourceKey &&
+          captureSource.isNotEmpty &&
+          returnedDetail != null &&
+          effective.vodId == vod.vodId &&
+          effective.vodName.trim().toLowerCase() ==
+              vod.vodName.trim().toLowerCase() &&
           (identical(service, _siteService) ||
               identical(_playbackContexts[captureSource], originalContext))) {
-        ViewingReportMetadata(database: _database).capture(
-          sourceKey: captureSource, siteKey: site.key, vod: effective,
-        );
+        ViewingReportMetadata(
+          database: _database,
+        ).capture(sourceKey: captureSource, siteKey: site.key, vod: effective);
       }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
@@ -7420,12 +7616,25 @@ AiContentCompletion? aiContentCompletion,
     if (service == null || site == null || _disposed || _isStale(isCurrent)) {
       return null;
     }
+    final sourceRecord = _recordForPlaybackService(service);
+    final inspectPlaylistContent =
+        sourceRecord != null &&
+        (sourceRecord.bridgeTransport.trim() == androidManagedBridgeTransport ||
+            _requiresAndroidExecution(sourceRecord));
     final epoch = ++_proxyPlaybackEpoch;
     final previousOwner = _jvmProxySession;
     _jvmProxySession = null;
     unawaited(previousOwner?.close());
     bool current() =>
-        !_disposed && epoch == _proxyPlaybackEpoch && !_isStale(isCurrent);
+        !_disposed &&
+        epoch == _proxyPlaybackEpoch &&
+        !_isStale(isCurrent) &&
+        (sourceRecord == null ||
+            _playbackSourceIsCurrent(
+              service,
+              sourceRecord,
+              requireAndroid: inspectPlaylistContent,
+            ));
     await _waitForPythonSite(site);
     if (!current()) return null;
     SpiderProxySession? owner;
@@ -7459,11 +7668,32 @@ AiContentCompletion? aiContentCompletion,
         return null;
       }
       _revokeHttpProxySession();
-      final decision = await proxyDecision(
+      // 逻辑起点取自**本次决策返回的 URL**；归属记录取自这次解析的播放上下文
+      // （`serviceOverride`），所以历史续播/跨配置播放也能映射到自己那台设备。
+      final managedResolver = _managedResolverForDecision(
         outcome.value,
-        siteKey: site.key,
-        isCurrent: current,
+        service: serviceOverride,
       );
+      final decision = inspectPlaylistContent
+          ? await _proxyDecision(
+              outcome.value,
+              siteKey: site.key,
+              isCurrent: current,
+              managedResolver: managedResolver,
+              inspectPlaylistContent: true,
+            )
+          : managedResolver == null
+          ? await proxyDecision(
+              outcome.value,
+              siteKey: site.key,
+              isCurrent: current,
+            )
+          : await proxyManagedDecision(
+              outcome.value,
+              siteKey: site.key,
+              isCurrent: current,
+              managedResolver: managedResolver,
+            );
       if (!current()) {
         unawaited(owner?.close());
         return null;
@@ -7584,7 +7814,11 @@ AiContentCompletion? aiContentCompletion,
     final active = effectiveConfig;
     if (key.isEmpty || key == activeSourceKey) return active;
     try {
-      final config = _database?.configBySourceKey(key)?.config;
+      final record = _database?.configBySourceKey(key);
+      if (record == null) return null;
+      final config = _requiresAndroidExecution(record)
+          ? _executionOverlay(record)
+          : record.config;
       if (config == null) return null;
       return _withLocalSources(config);
     } catch (_) {
@@ -7675,8 +7909,12 @@ AiContentCompletion? aiContentCompletion,
       return null;
     }
     // 记录签名 + 合并源签名：本地源导入/启停/删除不改记录，必须靠后者才失效。
+    if (_requiresAndroidExecution(record) &&
+        _executionOverlay(record) == null) {
+      return null;
+    }
     final signature =
-        '${record.id}\n${record.updatedAt}\n$_mergedSourcesSignature';
+        '${record.id}\n${record.updatedAt}\n$_mergedSourcesSignature\n${_androidExecutionEpochs[key] ?? 0}';
     final cached = _playbackContexts[key];
     if (cached != null &&
         cached.record.id == record.id &&
@@ -7714,7 +7952,7 @@ AiContentCompletion? aiContentCompletion,
       config: config,
       service: SiteService(
         appConfig: config,
-        playbackBridge: _androidPlaybackBridge,
+        playbackBridge: _playbackBridgeFor(record),
         router: router,
         database: _database,
       ),
@@ -7780,13 +8018,26 @@ AiContentCompletion? aiContentCompletion,
     bool Function()? isCurrent,
     String? preferredParseName,
   }) async {
+    final originRecord = _database?.configBySourceKey(sourceKey);
+    if (originRecord != null && _requiresAndroidExecution(originRecord)) {
+      try {
+        await refreshAndroidConfigExecution(originRecord.id);
+      } on AppError {
+        return null;
+      }
+    }
     final context = playbackContextFor(sourceKey);
     final site = context?.siteByKey(siteKey);
     if (context == null || site == null) return null;
     return resolvePlayback(
-      episodeTarget: episodeTarget, flag: flag, vodId: vodId, qualityIndex: qualityIndex,
-      isCurrent: isCurrent, preferredParseName: preferredParseName,
-      siteOverride: site, serviceOverride: context.service,
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      qualityIndex: qualityIndex,
+      isCurrent: isCurrent,
+      preferredParseName: preferredParseName,
+      siteOverride: site,
+      serviceOverride: context.service,
     );
   }
 
@@ -7827,7 +8078,8 @@ AiContentCompletion? aiContentCompletion,
     }
     ViewingReportMetadata(database: database).capture(
       sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
-          ? sourceKey.trim() : activeSourceKey,
+          ? sourceKey.trim()
+          : activeSourceKey,
       siteKey: effectiveSiteKey,
       vod: vod,
     );
@@ -8149,7 +8401,10 @@ AiContentCompletion? aiContentCompletion,
 
   /// 本机「推送…」（地址 + 剧名）：与局域网推送走同一条链路。
   Future<bool> submitPush({required String url, String title = ''}) =>
-      _acceptPush(parsePushFields(url: url, title: title), from: '本机输入');
+      _acceptPush(
+        parsePushFields(url: url, title: title),
+        from: '本机输入',
+      );
 
   /// 局域网推送到达（`SyncStateHost` 的宿主能力，由 `SyncState` 调用）。
   @override
@@ -8160,10 +8415,7 @@ AiContentCompletion? aiContentCompletion,
   Future<bool> _acceptPush(PushParsed parsed, {required String from}) async {
     final raw = parsed.url.trim();
     if (raw.isEmpty) {
-      _lastError = AppError(
-        AppErrorKind.playbackUrlMissing,
-        '推送需要一个播放地址',
-      );
+      _lastError = AppError(AppErrorKind.playbackUrlMissing, '推送需要一个播放地址');
       notifyListeners();
       return false;
     }
@@ -8173,10 +8425,7 @@ AiContentCompletion? aiContentCompletion,
           ? (Uri.tryParse(raw)?.toFilePath() ?? raw)
           : raw;
       if (!File(path).existsSync()) {
-        _lastError = AppError(
-          AppErrorKind.playbackUrlMissing,
-          '本地文件不存在：$path',
-        );
+        _lastError = AppError(AppErrorKind.playbackUrlMissing, '本地文件不存在：$path');
         notifyListeners();
         return false;
       }
@@ -8259,10 +8508,7 @@ AiContentCompletion? aiContentCompletion,
       final matched = outcome.item ?? item;
       _applyPushMatch(vodId: vodId, item: matched);
       _notice = '已匹配元数据：${matched.title}';
-      log.info(
-        '推送手动匹配已写入 tmdbId=${matched.tmdbId}',
-        scope: 'tmdb',
-      );
+      log.info('推送手动匹配已写入 tmdbId=${matched.tmdbId}', scope: 'tmdb');
       notifyListeners();
     } catch (error) {
       log.warning('推送手动匹配失败：$error', scope: 'tmdb');
@@ -8389,6 +8635,7 @@ AiContentCompletion? aiContentCompletion,
     String deviceUuid = '',
     String interfaceKey = '',
     String configUrl = '',
+    String bridgeTransport = '',
   }) async {
     final database = _database;
     if (database == null) return null;
@@ -8411,6 +8658,8 @@ AiContentCompletion? aiContentCompletion,
         bridgeDevice: deviceUuid,
         bridgeInterfaceKey: interfaceKey,
         bridgeConfigUrl: configUrl,
+        // 内部传输标记（`configs.bridge_transport`）：`'adb'` = 管理型。
+        bridgeTransport: bridgeTransport.trim(),
       );
       database.saveConfigSites(id, config.sites);
       _configs = database.listConfigs();
@@ -8444,6 +8693,16 @@ AiContentCompletion? aiContentCompletion,
   String? syncConfigJson() {
     final record = _activeRecord;
     if (record == null) return null;
+    final execution = androidExecutionForRecord(record);
+    if (execution != null) {
+      return jsonEncode({
+        'id': record.id,
+        'type': 0,
+        'name': record.name,
+        'configKey': execution.interfaceKey,
+        'url': record.origin,
+      });
+    }
     final origin = record.origin.trim();
     if (!origin.startsWith('http://') && !origin.startsWith('https://')) {
       return null;
@@ -8945,7 +9204,10 @@ AiContentCompletion? aiContentCompletion,
   }) async {
     final config = effectiveConfig;
     if (config == null) return const CspProbeReport();
-    final report = await _cspProbe().materialize(config, onProgress: onProgress);
+    final report = await _cspProbe().materialize(
+      config,
+      onProgress: onProgress,
+    );
     if (!report.isEmpty) _notifyIfAlive();
     return report;
   }
@@ -9013,28 +9275,28 @@ AiContentCompletion? aiContentCompletion,
   String? takePendingShellUnpackForSite() => _pendingShellUnpack.takeSite();
 
   /// 对话框顶部那一行运行时状态文案。
-  String? get shellUnpackRuntimeStateLabel => shellRuntimeInstalled
-      ? '解包运行时已安装。'
-      : '解包运行时未安装：开始解包时会先下载约 40.7 MB。';
+  String? get shellUnpackRuntimeStateLabel =>
+      shellRuntimeInstalled ? '解包运行时已安装。' : '解包运行时未安装：开始解包时会先下载约 40.7 MB。';
 
   /// 探测结论 → 对话框条目。
   ///
   /// 已解包的条目置灰、不勾选（重解没有意义）；给了 [preferSiteKey] 就只勾选它
   /// 所属的 jar——用户点的是某个站点，不是整份配置。
   List<ShellTargetItem> shellUnpackItems({String? preferSiteKey}) => [
-        for (final target in _shellTargets)
-          if (target.state != ShellTargetState.installed)
-            ShellTargetItem(
-              jarUrl: target.jarUrl,
-              label: _shellTargetLabel(target),
-              siteCount: target.siteKeys.length,
-              stateLabel: _shellTargetStateLabel(target),
-              selected: target.state != ShellTargetState.unpacked &&
-                  (preferSiteKey == null ||
-                      target.siteKeys.contains(preferSiteKey)),
-              disabled: target.state == ShellTargetState.unpacked,
-            ),
-      ];
+    for (final target in _shellTargets)
+      if (target.state != ShellTargetState.installed)
+        ShellTargetItem(
+          jarUrl: target.jarUrl,
+          label: _shellTargetLabel(target),
+          siteCount: target.siteKeys.length,
+          stateLabel: _shellTargetStateLabel(target),
+          selected:
+              target.state != ShellTargetState.unpacked &&
+              (preferSiteKey == null ||
+                  target.siteKeys.contains(preferSiteKey)),
+          disabled: target.state == ShellTargetState.unpacked,
+        ),
+  ];
 
   /// 导入/切配置后异步探测加固壳。
   ///
@@ -9064,10 +9326,7 @@ AiContentCompletion? aiContentCompletion,
         return;
       }
       if (stagePrompt && _pendingShellUnpack.stagePrompt(shellUnpackItems())) {
-        log.info(
-          '加固壳探测：${pending.length} 个 jar 待解包，已登记导入提示',
-          scope: 'spider',
-        );
+        log.info('加固壳探测：${pending.length} 个 jar 待解包，已登记导入提示', scope: 'spider');
         _notifyIfAlive();
       }
     } catch (error) {
@@ -9107,7 +9366,11 @@ AiContentCompletion? aiContentCompletion,
         throw AppError(AppErrorKind.unknown, '解包运行时安装失败：$reason');
       }
     }
-    await _cspProbe().unpackSelected(config, jarUrls: jarUrls, onProgress: onTick);
+    await _cspProbe().unpackSelected(
+      config,
+      jarUrls: jarUrls,
+      onProgress: onTick,
+    );
     log.info('加固壳解包完成：${jarUrls.length} 个 jar', scope: 'spider');
     // 结论刷新 + 清掉待弹信号：解完再点同一个站点不该再被问一次。
     await _probeShellTargetsQuietly(config, stagePrompt: false);
@@ -9153,8 +9416,7 @@ AiContentCompletion? aiContentCompletion,
   void _stageShellUnpackForSiteKey(String siteKey) {
     final needs = _shellTargets.any(
       (target) =>
-          target.siteKeys.contains(siteKey) &&
-          _shellTargetNeedsUnpack(target),
+          target.siteKeys.contains(siteKey) && _shellTargetNeedsUnpack(target),
     );
     if (!needs) return;
     if (_pendingShellUnpack.stageSite(siteKey)) _notifyIfAlive();
@@ -9493,6 +9755,667 @@ AiContentCompletion? aiContentCompletion,
   }
 
   // -------------------------------------------------------------------------
+  // 已连接安卓环境（ADB）：连接描述 / 管理型导入 / 受控播放解析
+  // -------------------------------------------------------------------------
+
+  AndroidConfigExecutionBinding? androidExecutionForRecord(
+    ConfigRecord record,
+  ) => _androidExecutionStore.enabledFor(sourceKeyOfRecord(record));
+
+  String androidExecutionLabelForRecord(ConfigRecord record) {
+    final binding = androidExecutionForRecord(record);
+    if (_androidExecutionIntents[sourceKeyOfRecord(record)] == true &&
+        _androidExecutionFailures.containsKey(sourceKeyOfRecord(record))) {
+      return '安卓执行：准备失败，请重试或切回桌面';
+    }
+    if (binding == null) {
+      return _requiresAndroidExecution(record) ? '安卓执行：准备失败，请重试或切回桌面' : '桌面运行';
+    }
+    final saved = _androidConnections.forKey(binding.profileConnectionKey);
+    return '安卓执行：${saved == null ? '环境已丢失，请重新连接' : (saved.name.isEmpty ? saved.profile.target : saved.name)}';
+  }
+
+  bool _requiresAndroidExecution(ConfigRecord record) {
+    final key = sourceKeyOfRecord(record);
+    return androidExecutionForRecord(record) != null ||
+        (_androidExecutionIntents[key] == true &&
+            _androidExecutionFailures.containsKey(key));
+  }
+
+  void _failExecution(ConfigRecord record, AppError failure) {
+    final key = sourceKeyOfRecord(record);
+    _androidExecutionFailures[key] = failure;
+    _androidExecutionReady.remove(key);
+    _invalidateExecution(key);
+    if (_activeRecord?.id == record.id) {
+      _lastError = failure;
+      _attachSiteService();
+    }
+    _notifyIfAlive();
+  }
+
+  AppConfig? _executionOverlay(ConfigRecord record) {
+    final key = sourceKeyOfRecord(record);
+    final binding = androidExecutionForRecord(record);
+    final ready = _androidExecutionReady[key];
+    if (binding == null ||
+        ready == null ||
+        binding.bindingKey != ready.binding.bindingKey ||
+        _androidConnections.forKey(binding.profileConnectionKey) == null) {
+      return null;
+    }
+    final live = _androidAdbRuntime.deviceForUuid(binding.deviceUuid);
+    if (live == null || live.reachableBase != ready.device.reachableBase) {
+      return null;
+    }
+    return ready.overlay;
+  }
+
+  void _invalidateExecution(String sourceKey) {
+    _androidExecutionEpochs[sourceKey] =
+        (_androidExecutionEpochs[sourceKey] ?? 0) + 1;
+    _effectiveConfigCache = null;
+    _playbackContextSignatures.remove(sourceKey);
+  }
+
+  int _beginExecutionRequest(String sourceKey, {required bool android}) {
+    final epoch = (_androidExecutionRequestEpochs[sourceKey] ?? 0) + 1;
+    _androidExecutionRequestEpochs[sourceKey] = epoch;
+    _androidExecutionIntents[sourceKey] = android;
+    return epoch;
+  }
+
+  bool _executionResultIsCurrent(
+    ConfigRecord record,
+    AndroidConfigExecutionResult result,
+    int requestEpoch,
+  ) {
+    if (_disposed ||
+        _androidExecutionRequestEpochs[result.binding.sourceKey] !=
+            requestEpoch ||
+        _androidExecutionIntents[result.binding.sourceKey] != true) {
+      return false;
+    }
+    final current = _database
+        ?.listConfigs()
+        .where((r) => r.id == record.id)
+        .firstOrNull;
+    if (current == null ||
+        sourceKeyOfRecord(current) != result.binding.sourceKey ||
+        configRecordContentHash(current.json) !=
+            configRecordContentHash(record.json)) {
+      return false;
+    }
+    final enabled = _androidExecutionStore.enabledFor(result.binding.sourceKey);
+    return enabled != null &&
+        enabled.isReady &&
+        enabled.bindingKey == result.binding.bindingKey &&
+        enabled.profileConnectionKey == result.binding.profileConnectionKey &&
+        enabled.configHash == result.binding.configHash;
+  }
+
+  ConfigRecord _executionRecord(int id) {
+    final record = _database
+        ?.listConfigs()
+        .where((r) => r.id == id)
+        .firstOrNull;
+    if (record == null) {
+      throw AppError(AppErrorKind.configNotFound, '该配置记录已不存在');
+    }
+    if (record.bridgeDevice.isNotEmpty ||
+        record.bridgeInterfaceKey.isNotEmpty ||
+        record.contentType == 'android-t4-gateway') {
+      throw AppError(
+        AppErrorKind.configInvalid,
+        '安卓导入记录不需要再次创建执行副本，请选择原 PC 配置',
+      );
+    }
+    return record;
+  }
+
+  Future<void> runConfigOnAndroid(
+    int recordId,
+    String profileConnectionKey, {
+    bool launchAvd = false,
+  }) async {
+    final record = _executionRecord(recordId);
+    final profile = _androidConnections.forKey(profileConnectionKey)?.profile;
+    if (profile == null) {
+      throw AppError(AppErrorKind.storage, '安卓环境连接描述已丢失，请先到安卓设备接入连接环境');
+    }
+    final key = sourceKeyOfRecord(record);
+    final requestEpoch = _beginExecutionRequest(key, android: true);
+    final selectionEpoch = _configSelectionEpoch;
+    final original = parseConfigRecord(record.json);
+    late final AndroidConfigExecutionResult result;
+    try {
+      result = await _androidExecutionService.prepare(
+        sourceKey: key,
+        record: record,
+        originalConfig: original,
+        profile: profile,
+        launchAvd: launchAvd,
+      );
+    } catch (error) {
+      if (_disposed ||
+          _androidExecutionRequestEpochs[key] != requestEpoch ||
+          _androidExecutionIntents[key] != true) {
+        return;
+      }
+      final failure = error is AppError
+          ? error
+          : AppError(
+              AppErrorKind.configInvalid,
+              '安卓执行准备失败，请重试或切回桌面运行',
+              cause: error,
+            );
+      _failExecution(record, failure);
+      throw failure;
+    }
+    if (!_executionResultIsCurrent(record, result, requestEpoch) ||
+        selectionEpoch != _configSelectionEpoch) {
+      return;
+    }
+    _androidExecutionFailures.remove(key);
+    _androidExecutionReady[key] = result;
+    _invalidateExecution(key);
+    if (_activeRecord?.id == recordId) {
+      await _reloadActiveConfigContent(original);
+    } else {
+      final ok = await activateConfigRecord(recordId);
+      if (!ok) {
+        throw _lastError ??
+            AppError(AppErrorKind.bridgeUnreachable, '配置执行准备失败');
+      }
+    }
+    _notifyIfAlive();
+  }
+
+  Future<void> runConfigOnPc(int recordId) async {
+    final record = _executionRecord(recordId);
+    final key = sourceKeyOfRecord(record);
+    _beginExecutionRequest(key, android: false);
+    _androidExecutionFailures.remove(key);
+    _androidExecutionReady.remove(key);
+    _invalidateExecution(key);
+    await _androidExecutionService.disable(key);
+    if (_activeRecord?.id == recordId) {
+      await _reloadActiveConfigContent(parseConfigRecord(record.json));
+    }
+    _notifyIfAlive();
+  }
+
+  Future<void> refreshAndroidConfigExecution(int recordId) {
+    final record = _executionRecord(recordId);
+    final key = sourceKeyOfRecord(record);
+    final pending = _androidExecutionPreparing[key];
+    if (pending != null) return pending;
+    final future = _refreshAndroidExecution(record).whenComplete(() {
+      _androidExecutionPreparing.remove(key);
+    });
+    _androidExecutionPreparing[key] = future;
+    return future;
+  }
+
+  Future<void> _refreshAndroidExecution(ConfigRecord record) async {
+    final binding = androidExecutionForRecord(record);
+    if (binding == null) return;
+    final key = sourceKeyOfRecord(record);
+    final requestEpoch = _androidExecutionRequestEpochs.putIfAbsent(
+      key,
+      () => 0,
+    );
+    _androidExecutionIntents.putIfAbsent(key, () => true);
+    try {
+      final result = await _androidExecutionService.refresh(
+        binding,
+        record: record,
+        originalConfig: parseConfigRecord(record.json),
+      );
+      if (!_executionResultIsCurrent(record, result, requestEpoch)) return;
+      _androidExecutionFailures.remove(key);
+      _androidExecutionReady[key] = result;
+      _invalidateExecution(key);
+      if (_activeRecord?.id == record.id) {
+        _activeRecord = record;
+        _config = parseConfigRecord(record.json);
+        _attachSiteService();
+        _homeResult = null;
+      }
+      _notifyIfAlive();
+    } catch (error) {
+      // An obsolete refresh no longer owns this source's visible state. Its
+      // cancellation/failure must not replace the newer desktop service/error.
+      if (_disposed ||
+          _androidExecutionRequestEpochs[key] != requestEpoch ||
+          _androidExecutionIntents[key] != true) {
+        return;
+      }
+      _androidExecutionReady.remove(key);
+      _invalidateExecution(key);
+      final failure = error is AppError
+          ? error
+          : AppError(AppErrorKind.bridgeUnreachable, '安卓执行准备失败', cause: error);
+      _failExecution(record, failure);
+      throw failure;
+    }
+  }
+
+  Future<void> _closeAndroidExecution() async {
+    try {
+      if (_ownsAndroidExecutionService) await _androidExecutionService.close();
+    } catch (error) {
+      log.warning(
+        '安卓执行资源清理未确认完成：${error is AppError ? error.userMessage : '请检查连接状态后重试'}',
+        scope: 'android',
+      );
+    } finally {
+      if (_ownsExecutionBridge) _executionBridge?.close();
+      try {
+        await _androidAdbRuntime.close();
+      } catch (error) {
+        log.warning(
+          'ADB 资源清理未确认完成：${error is AppError ? error.userMessage : '请检查连接状态后重试'}',
+          scope: 'adb',
+        );
+      } finally {
+        _ownedAdbBridge?.close();
+        log.flush();
+        await log.dispose();
+      }
+    }
+  }
+
+  /// 已保存的连接描述，最近使用在前。
+  List<AndroidConnectionRecord> get androidConnections =>
+      _androidConnections.records;
+
+  /// 列出**已运行** ADB 服务上的设备序列号（服务不存在就返回空表，绝不启动）。
+  Future<List<String>> listAndroidAdbDevices({
+    String adbPath = '',
+    int serverPort = 5037,
+  }) =>
+      _androidAdbRuntime.listDevices(adbPath: adbPath, serverPort: serverPort);
+
+  /// 用已安装 SDK 列出精确的 AVD 名称（`emulator -list-avds`）。
+  Future<List<String>> listAndroidAdbAvds({
+    String adbPath = '',
+    String emulatorPath = '',
+    String avdHome = '',
+  }) => _androidAdbRuntime.listAvds(
+    adbPath: adbPath,
+    emulatorPath: emulatorPath,
+    avdHome: avdHome,
+  );
+
+  /// 连接一个**已有的**安卓环境，并把该设备的源按管理型（`adb`）导入。
+  ///
+  /// 顺序是「先连接、再记住描述、最后导入」：
+  /// - 连接失败 → 抛 [AppError]（带运行时原因），什么都不留下；
+  /// - 导入失败 → 抛 [AppError]，但不会留下任何 `bridge_transport='adb'` 记录
+  ///   （标记只在导入链路里由 [saveBridgeConfig] 写）。
+  Future<AndroidDevice> connectAndroidEnvironment(
+    AndroidAdbProfile profile, {
+    bool launchAvd = false,
+  }) async {
+    final device = await _connectManaged(profile, launchAvd: launchAvd);
+    await _rememberConnection(profile, device);
+    await _importManagedSources(device);
+    return device;
+  }
+
+  /// 用已保存的描述重连，并按管理型刷新该设备的源。
+  ///
+  /// 返回 `false` = 连接成功但源没能导入（[syncState] 的 `lastError` 里有原因）；
+  /// 连接失败照 [connectAndroidEnvironment] 抛 [AppError]。
+  /// `expectedUuid` 取自已保存记录的 `deviceUuid`：同一个 ADB 目标换了设备时
+  /// 必须拦下，而不是把别的设备的源导进来。
+  Future<bool> reconnectAndroidEnvironment(
+    String connectionKey, {
+    bool launchAvd = false,
+  }) async {
+    final record = _androidConnections.forKey(connectionKey);
+    if (record == null) {
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '找不到已保存的安卓环境，请重新选择设备后连接一次',
+      );
+    }
+    final device = await _connectManaged(
+      record.profile,
+      expectedUuid: record.deviceUuid.isEmpty ? null : record.deviceUuid,
+      launchAvd: launchAvd,
+    );
+    await _rememberConnection(record.profile, device);
+    return _importManagedSources(device, reconnect: true);
+  }
+
+  /// 忘记一条已保存的连接描述（已导入的记录原样保留，可继续播放/删除）。
+  Future<void> forgetAndroidConnection(String connectionKey) async {
+    await _androidConnections.forget(connectionKey);
+    // 存储层 `forget` 写盘失败时记录仍留在内存里：不能报「已忘记」。
+    if (_androidConnections.forKey(connectionKey) != null) {
+      throw AppError(AppErrorKind.storage, '无法忘记该安卓环境（本机设置目录不可写），它仍会被当作已保存环境');
+    }
+    _notifyIfAlive();
+  }
+
+  /// 记住一次成功连接的描述；落盘失败时抛存储错误。
+  ///
+  /// 为什么必须**阻断导入**：记录只落在内存里的话，用户以为「已保存」，重启后
+  /// 却找不到描述——管理型记录就永久无法重连（它的地址是随会话存在的转发端口）。
+  /// 所以落盘失败一律不导入、不标记管理型，并把原因如实抛出。
+  Future<bool> _rememberConnection(
+    AndroidAdbProfile profile,
+    AndroidDevice device,
+  ) async {
+    final saved = await _androidConnections.remember(
+      profile,
+      deviceUuid: device.uuid,
+      name: device.name,
+    );
+    if (saved != null) return true;
+    throw AppError(
+      AppErrorKind.storage,
+      '已连接安卓环境，但无法保存这次连接描述（本机设置目录不可写）；'
+      '为避免重启后无法重连，本次没有导入任何源',
+      detail: profile.target,
+    );
+  }
+
+  Future<AndroidDevice> _connectManaged(
+    AndroidAdbProfile profile, {
+    String? expectedUuid,
+    bool launchAvd = false,
+  }) async {
+    try {
+      return await _androidAdbRuntime.connect(
+        profile,
+        expectedUuid: expectedUuid,
+        launchAvd: launchAvd,
+      );
+    } on AppError {
+      // 运行时已经给出了分类与可定位原因：原样上抛，不要折叠成笼统文案。
+      rethrow;
+    } catch (error) {
+      throw AppError(
+        AppErrorKind.bridgeUnreachable,
+        '连接安卓环境失败：$error',
+        cause: error,
+      );
+    }
+  }
+
+  Future<bool> _importManagedSources(
+    AndroidDevice device, {
+    bool reconnect = false,
+  }) async {
+    final ok = await syncState.importSites(
+      device.reachableBase,
+      bridgeTransport: androidManagedBridgeTransport,
+      // 管理型导入必须落到**连接时证明过的那台设备**：导入链路自己会再探一次
+      // /device，探测失败或换了设备都不许落记录（否则 source_key 会以地址/
+      // 别的 uuid 分叉）。
+      expectedDeviceUuid: device.uuid,
+    );
+    if (!ok) {
+      final failure = syncState.lastError;
+      _notifyIfAlive();
+      throw AppError(
+        failure?.kind ?? AppErrorKind.bridgeUnreachable,
+        '${reconnect ? '已重连安卓环境' : '已连接安卓环境'}，'
+        '但导入该设备的源失败：${failure?.message ?? '未知原因'}',
+        detail: redactUrl(device.reachableBase),
+        cause: failure?.cause,
+      );
+    }
+    _notice =
+        '${reconnect ? '已重连' : '已连接'} ${device.name}，'
+        '并按管理型导入该设备的安卓源';
+    _notifyIfAlive();
+    return true;
+  }
+
+  /// 按已保存的连接描述重连这条管理型记录，并按它的 `interfaceKey` 重导入。
+  ///
+  /// 语义：**永远先 connect() 再用**（spec 的 Integration decisions）。不启动
+  /// 用户 AVD（`launchAvd: false`）；找不到已保存描述就显式失败——绝不拿记录里
+  /// 那个上次连接的旧回环端口重试，也不静默沿用缓存的转发端口。
+  Future<ConfigRecord> _reattachManaged(ConfigRecord record) async {
+    final uuid = record.bridgeDevice.trim();
+    final saved = uuid.isEmpty ? null : _androidConnections.forUuid(uuid);
+    final profile = saved?.profile;
+    if (profile == null) throw _managedReconnectRequired(record);
+    final device = await _connectManaged(
+      profile,
+      expectedUuid: uuid.isEmpty ? null : uuid,
+    );
+    final interfaceKey = record.bridgeInterfaceKey.trim();
+    final ok = await syncState.importSites(
+      device.reachableBase,
+      interfaceKey: interfaceKey.isEmpty ? null : interfaceKey,
+      bridgeTransport: androidManagedBridgeTransport,
+      expectedDeviceUuid: device.uuid,
+    );
+    if (!ok) {
+      final failure = syncState.lastError;
+      throw AppError(
+        failure?.kind ?? AppErrorKind.bridgeUnreachable,
+        '已重连安卓环境，但刷新该播放源失败：${failure?.message ?? '未知原因'}',
+        detail: redactUrl(device.reachableBase),
+        cause: failure?.cause,
+      );
+    }
+    // 内存视图必须跟上新端点：否则当前站点服务仍在打旧网关端口（数据库已经
+    // 是新的，界面/播放还是旧的）。
+    _configs = _database?.listConfigs() ?? _configs;
+    _activeRecord = _database?.activeConfig() ?? _activeRecord;
+    final fresh = configRecordById(record.id) ?? record;
+    if (fresh.id == _activeRecord?.id && fresh.json.isNotEmpty) {
+      _config = parseConfigRecord(fresh.json);
+      // `_attachSiteService` 按 key 校验选中站点归属：站点还在就沿用选中项。
+      _attachSiteService();
+    }
+    _notifyIfAlive();
+    return fresh;
+  }
+
+  /// 启动/激活/刷新前的管理型重接入口（`false` = 失败，原因在 [lastError]）。
+  ///
+  /// 给 UI 的启动恢复用：它只有「上次使用的配置」坐标，没有当前页面上下文。
+  Future<bool> reattachManagedRecord(int recordId) async {
+    final record = configRecordById(recordId);
+    if (record == null ||
+        record.bridgeTransport.trim() != androidManagedBridgeTransport) {
+      _lastError = AppError(AppErrorKind.configNotFound, '该配置记录已不存在或不是管理型记录');
+      _notifyIfAlive();
+      return false;
+    }
+    try {
+      await _reattachManaged(record);
+      return true;
+    } on AppError catch (error) {
+      _lastError = error;
+      log.warning('管理型记录重接失败：${error.logLine}', scope: 'bridge');
+      _notifyIfAlive();
+      return false;
+    } catch (error) {
+      _lastError = AppError(
+        AppErrorKind.bridgeUnreachable,
+        '重连已保存的安卓环境失败：$error',
+        cause: error,
+      );
+      _notifyIfAlive();
+      return false;
+    }
+  }
+
+  /// 启动恢复要用：记忆坐标对应的配置记录是不是管理型；不是则 `null`。
+  ConfigRecord? managedRecordFor({int recordId = 0, String sourceKey = ''}) {
+    final key = sourceKey.trim();
+    final record = recordId != 0
+        ? configRecordById(recordId)
+        : (key.isEmpty ? null : _database?.configBySourceKey(key));
+    if (record == null ||
+        record.bridgeTransport.trim() != androidManagedBridgeTransport) {
+      return null;
+    }
+    return record;
+  }
+
+  /// 该设备 uuid 已保存的连接记录（横幅/诊断展示设备名用）。
+  AndroidConnectionRecord? androidConnectionForUuid(String uuid) =>
+      _androidConnections.forUuid(uuid);
+
+  /// 记录对应的**在役**设备；没有会话（或 `bridgeDevice` 为空）时为 `null`。
+  AndroidDevice? _liveManagedDevice(ConfigRecord record) {
+    final uuid = record.bridgeDevice.trim();
+    if (uuid.isEmpty) return null;
+    return _androidAdbRuntime.deviceForUuid(uuid);
+  }
+
+  /// 管理型记录没有在役会话时的统一失败：显式让用户重连，绝不复用缓存端口。
+  AppError _managedReconnectRequired(ConfigRecord record) => AppError(
+    AppErrorKind.bridgeUnreachable,
+    '该播放源来自已保存的安卓环境，但当前没有可用连接。'
+    '请在上方「已连接安卓环境」里重新连接已保存的安卓环境后再试',
+    detail: redactUrl(record.origin),
+  );
+
+  /// 某次播放的受控解析闭包：`logicalTarget` 就是这次播放决策**实际返回**的
+  /// URL（guest 回环 + 它自己的端口），网关来自该记录的在役会话。
+  ///
+  /// 为什么逻辑起点必须取自实际 URL 而不是 profile 的 `gatewayPort`：媒体/网盘
+  /// 源在 guest 上是 `127.0.0.1:5000`（安卓代理端口），成片网关是 9978；拿猜的
+  /// 端口当起点，运行时会拒绝同一部片子的媒体地址（`_authorized` 要求端口相等），
+  /// 管理型播放会整片失效。这里只授权**这一次**的实际端口，别的 guest 端口仍交回
+  /// 普通策略（不做「放行所有 guest 端口」）。
+  ProxyTargetResolver? managedPlaybackResolverFor(
+    Uri logicalTarget, {
+    ConfigRecord? record,
+  }) {
+    final target = record ?? _activeRecord;
+    if (target == null) return null;
+    final execution = androidExecutionForRecord(target);
+    if (execution == null && _requiresAndroidExecution(target)) {
+      return (_) => Future<int?>.error(
+        _androidExecutionFailures[sourceKeyOfRecord(target)]!,
+      );
+    }
+    if (execution != null) {
+      final ready = _androidExecutionReady[sourceKeyOfRecord(target)];
+      final live = _androidAdbRuntime.deviceForUuid(execution.deviceUuid);
+      if (ready == null || live == null || _executionOverlay(target) == null) {
+        return (_) => Future<int?>.error(
+          AppError(AppErrorKind.bridgeUnreachable, '安卓执行连接已失效，请重新准备该配置'),
+        );
+      }
+      return _androidAdbRuntime.resolverForGateway(
+        Uri.parse(ready.device.reachableBase),
+        logicalOrigin: logicalTarget,
+      );
+    }
+    if (target.bridgeTransport.trim() != androidManagedBridgeTransport) {
+      return null;
+    }
+    final live = _liveManagedDevice(target);
+    // 在役时用运行时刚刚证明过的网关；没有会话时只能看记录里的那个地址。
+    final gateway = Uri.tryParse(live?.reachableBase ?? target.origin);
+    if (gateway == null) return null;
+    if (live == null && !_androidAdbRuntime.recognizesGateway(gateway)) {
+      // 会话已消失、又不是本运行时建立过的网关：这不是本模块能负责的目标，
+      // 交回普通策略（普通回环/公网目标本来就有自己的判断）。
+      return null;
+    }
+    // 在役 → 可用的受控映射；已退役 → 运行时给出**必定抛错**的闭包，于是代理
+    // 返回 401/403/502，而不是回退到本机端口读到别的东西（失败关闭）。
+    return _androidAdbRuntime.resolverForGateway(
+      gateway,
+      logicalOrigin: logicalTarget,
+    );
+  }
+
+  /// 按解析服务身份回查来源记录；未知服务不借用当前配置的来源。
+  ///
+  /// `service` 为空表示「生效配置」；非空时按**服务身份**回查它所属的播放上下文
+  /// （历史续播 / 来自另一份配置的播放）——绝不能回退到当前生效记录：那是另一台
+  /// 设备的会话，媒体会被映射到错误的网关。
+  ConfigRecord? _recordForPlaybackService(SiteService? service) =>
+      service == null || identical(service, _siteService)
+      ? _activeRecord
+      : _playbackContexts.values
+            .where((context) => identical(context.service, service))
+            .map((context) => context.record)
+            .firstOrNull;
+
+  bool _playbackSourceIsCurrent(
+    SiteService service,
+    ConfigRecord record, {
+    required bool requireAndroid,
+  }) {
+    final stored = configRecordById(record.id);
+    if (stored == null ||
+        stored.sourceKey != record.sourceKey ||
+        stored.updatedAt != record.updatedAt) {
+      return false;
+    }
+    final ownsService =
+        identical(service, _siteService) && _activeRecord?.id == stored.id ||
+        identical(
+          playbackContextFor(sourceKeyOfRecord(stored))?.service,
+          service,
+        );
+    if (!ownsService) return false;
+    if (!requireAndroid) return true;
+    if (_requiresAndroidExecution(stored)) {
+      return _executionOverlay(stored) != null;
+    }
+    if (stored.bridgeTransport.trim() != androidManagedBridgeTransport) {
+      return false;
+    }
+    final live = _liveManagedDevice(stored);
+    return live != null &&
+        live.reachableBase == stored.origin &&
+        _androidConnections.forUuid(stored.bridgeDevice.trim()) != null;
+  }
+
+  ConfigRecord? managedRecordForPlaybackService(SiteService? service) {
+    final record = _recordForPlaybackService(service);
+    if (record == null ||
+        (record.bridgeTransport.trim() != androidManagedBridgeTransport &&
+            !_requiresAndroidExecution(record))) {
+      return null;
+    }
+    return record;
+  }
+
+  /// 一次播放决策对应的受控解析闭包（`null` = 走普通代理策略）。
+  ProxyTargetResolver? _managedResolverForDecision(
+    PlaybackDecision decision, {
+    SiteService? service,
+  }) {
+    final url = decision.url;
+    if (url == null || url.isEmpty) return null;
+    final target = Uri.tryParse(url);
+    if (target == null) return null;
+    final record = managedRecordForPlaybackService(service);
+    if (record == null) return null;
+    return managedPlaybackResolverFor(target, record: record);
+  }
+
+  /// 该记录应该挂哪个播放桥接：管理型记录必须为 `null`。
+  ///
+  /// 理由：老 [AndroidPlaybackBridge] 自己会 `adb forward` 并改写顶层 URL，
+  /// 与运行时的网关/租约是**两个转发所有者**；管理型记录的顶层与子级 URI 映射
+  /// 全部由 [managedPlaybackResolver] 的会话负责（一个转发所有者）。
+  AndroidPlaybackBridge? _playbackBridgeFor(ConfigRecord? record) =>
+      record != null &&
+          (record.bridgeTransport.trim() == androidManagedBridgeTransport ||
+              _requiresAndroidExecution(record))
+      ? null
+      : _androidPlaybackBridge;
+
+  // -------------------------------------------------------------------------
   // 本地代理（§11）
   // -------------------------------------------------------------------------
 
@@ -9522,6 +10445,10 @@ AiContentCompletion? aiContentCompletion,
   ///
   /// 9978 被占用时退回随机端口，并**如实记一条日志**：这种情况下壳源播放会失败，
   /// 不要静默降级成「能点但没画面」。
+  ///
+  /// **与 ADB 网关无关**：管理型（ADB）记录的网关端口由 adb `forward tcp:0` 在
+  /// 每次连接时随机分配，本函数抢不抢得到 9978 都不影响它；guest 侧的 9978 只是
+  /// 一次会话内的**逻辑**起点，绝不是本机承诺的端口（也不影响管理型播放）。
   Future<void> startProxy({int port = 9978}) async {
     if (_proxy.isRunning) return;
     try {
@@ -9555,6 +10482,34 @@ AiContentCompletion? aiContentCompletion,
     PlaybackDecision decision, {
     required String siteKey,
     bool Function()? isCurrent,
+  }) => _proxyDecision(decision, siteKey: siteKey, isCurrent: isCurrent);
+
+  /// 管理型（ADB）记录的一次播放决策：解析闭包由 [managedPlaybackResolverFor]
+  /// 按本次决策**实际**的 URL 构造（guest 回环 + 它自己的端口）。
+  ///
+  /// 为什么单独一个入口、而不是给 [proxyDecision] 加可选参数：`proxyDecision`
+  /// 是可覆写的公共虚方法（测试用它注入播放时序），加参数会立刻打断既有覆写。
+  Future<PlaybackDecision> proxyManagedDecision(
+    PlaybackDecision decision, {
+    required String siteKey,
+    bool Function()? isCurrent,
+    required ProxyTargetResolver managedResolver,
+  }) => _proxyDecision(
+    decision,
+    siteKey: siteKey,
+    isCurrent: isCurrent,
+    managedResolver: managedResolver,
+  );
+
+  /// [managedResolver] 非空才提供 guest 传输授权；来源检查提示不授权地址。
+  /// [inspectPlaylistContent] 仅强制 Android 来源 HTTP 媒体经代理补判清单；
+  /// 未映射的目标仍必须通过普通策略，且不准对被拒目标退回直连。
+  Future<PlaybackDecision> _proxyDecision(
+    PlaybackDecision decision, {
+    required String siteKey,
+    bool Function()? isCurrent,
+    ProxyTargetResolver? managedResolver,
+    bool inspectPlaylistContent = false,
   }) async {
     final url = decision.url;
     if (url == null || url.isEmpty) return decision;
@@ -9565,22 +10520,28 @@ AiContentCompletion? aiContentCompletion,
       return decision;
     }
 
-    final headers = decision.headers;
-    if (headers == null || headers.isEmpty) return decision;
+    final headers = decision.headers ?? HeaderMap();
+    final resolver = managedResolver;
+    if (resolver == null) {
+      if (headers.isEmpty && !inspectPlaylistContent) return decision;
 
-    // 代理只应接管它**确实能代理**的目标：
-    // - 策略会拒绝的目标（本机回环、私网、链路本地、云元数据）直接保持直连，
-    //   否则会把本来可播放的地址换成永远 403 的地址，造成播放彻底失败；
-    // - 会话主机白名单只放行该目标主机，防止被当成任意目标代理。
-    final policyDecision = _proxy.policy.evaluateStatic(target);
-    if (!policyDecision.allowed) {
-      log.info(
-        '目标不在代理策略允许范围内，保持直连 '
-        'target=${LocalProxyServer.redactProxyTarget(target)} '
-        'reason=${policyDecision.reason}',
-        scope: 'proxy',
-      );
-      return decision;
+      // 代理只应接管它**确实能代理**的目标：
+      // - 策略会拒绝的目标（本机回环、私网、链路本地、云元数据）直接保持直连，
+      //   否则会把本来可播放的地址换成永远 403 的地址，造成播放彻底失败；
+      // - 会话主机白名单只放行该目标主机，防止被当成任意目标代理。
+      final policyDecision = _proxy.policy.evaluateStatic(target);
+      if (!policyDecision.allowed) {
+        if (inspectPlaylistContent) {
+          throw AppError(AppErrorKind.siteNetwork, '安卓来源媒体目标不在代理策略允许范围内');
+        }
+        log.info(
+          '目标不在代理策略允许范围内，保持直连 '
+          'target=${LocalProxyServer.redactProxyTarget(target)} '
+          'reason=${policyDecision.reason}',
+          scope: 'proxy',
+        );
+        return decision;
+      }
     }
 
     try {
@@ -9596,7 +10557,11 @@ AiContentCompletion? aiContentCompletion,
     if (_isStale(isCurrent)) return decision;
     final session = _proxy.sessions.create(
       siteKey: siteKey,
-      allowedHosts: {target.host},
+      // Android 来源沿用受管清单的公共 CDN 范围；空会话名单仍受全局策略约束。
+      // 只有 resolver 可授权映射跳，来源提示不放行未映射的私网/回环。
+      allowedHosts: resolver == null && !inspectPlaylistContent
+          ? {target.host}
+          : const <String>{},
       userAgent: headers['User-Agent'] ?? headers['user-agent'],
       referer: headers['Referer'] ?? headers['referer'],
       cookie: headers['Cookie'] ?? headers['cookie'],
@@ -9606,6 +10571,8 @@ AiContentCompletion? aiContentCompletion,
           if (!credentialKeys.contains(entry.key.toLowerCase()))
             entry.key: entry.value,
       },
+      targetResolver: resolver,
+      inspectPlaylistContent: inspectPlaylistContent,
     );
     _proxySession = session;
     final proxied = _proxy.urlFor(session, target);
@@ -9642,9 +10609,17 @@ AiContentCompletion? aiContentCompletion,
   /// Capture exact authorization now; a stale page cannot release its successor.
   VoidCallback captureProxySessionRelease(String mediaUrl) {
     final owner = _jvmProxySession;
-    final jvm = owner != null && (owner.ownsUrl(mediaUrl) || _lastDecision?.url == mediaUrl) ? owner : null;
+    final jvm =
+        owner != null &&
+            (owner.ownsUrl(mediaUrl) || _lastDecision?.url == mediaUrl)
+        ? owner
+        : null;
     final session = _proxySession;
-    final http = session != null && mediaUrl.startsWith('${_proxy.baseUrl}/p/${session.token}/') ? session : null;
+    final http =
+        session != null &&
+            mediaUrl.startsWith('${_proxy.baseUrl}/p/${session.token}/')
+        ? session
+        : null;
     return () {
       var released = false;
       if (jvm != null && identical(_jvmProxySession, jvm)) {
@@ -10078,10 +11053,7 @@ AiContentCompletion? aiContentCompletion,
     // 部分线路失败只出现在 warnings 里：详情页据此报错并可重试，这条路径以前
     // 整段吞掉，追剧就会「静默换源」，日志里也查不到原因。
     for (final warning in result.warnings) {
-      log.warning(
-        '站源详情部分线路加载失败 vod=$vodId ${warning.logLine}',
-        scope: 'site',
-      );
+      log.warning('站源详情部分线路加载失败 vod=$vodId ${warning.logLine}', scope: 'site');
     }
     return result.value.list.firstOrNull;
   }
@@ -10185,6 +11157,10 @@ AiContentCompletion? aiContentCompletion,
     _sidecarShutdown = _supervisor.shutdownAll();
     unawaited(_sidecarShutdown);
     unawaited(_androidPlaybackBridge.close());
+    // ADB 运行时只回收自己拥有的服务/转发：借用服务与用户的 AVD 原样保留。
+    // 收尾日志会排一次 0 延迟刷盘；这里同步收口，退出路径上不残留定时器。
+    _androidExecutionShutdownFuture = _closeAndroidExecution();
+    unawaited(_androidExecutionShutdownFuture);
     unawaited(_proxy.stop());
     // 猫源 Node 进程树与 bundle 句柄同样必须随退出释放（§9.8）。
     _catPipeline?.close();
@@ -10194,10 +11170,10 @@ AiContentCompletion? aiContentCompletion,
     syncState.dispose();
     _database?.dispose();
     if (_injectedUpdateService == null) _updateService?.close();
-    log.dispose();
     super.dispose();
   }
 }
+
 /// 两处「待弹框」信号的单槽登记簿。
 ///
 /// 单槽而不是队列：同一站点重复点击、同一批结果重复登记都只该剩下一个待弹框；

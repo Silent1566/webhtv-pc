@@ -1,0 +1,256 @@
+{
+  "status": "ready",
+  "run_count": 1,
+  "kind": "after",
+  "scope": "visual AFTER: actual ConfigPage saved-config list and first-row More popup with the Android execution entry; no menu item selected, no dialog opened",
+  "generated_utc": "2026-11-24T17:27:32.865806Z",
+  "feature": "PC original config -> Android execution",
+  "source": {
+    "gitHead": "e25e8b854328d5f6d3d5063cec044ad98328280e",
+    "workingTreeDirty": true,
+    "sha256": {
+      "apps/desktop-flutter/lib/ui/config_pages.dart": "7f4279568fdae4bb2fceb0677c056bfe593ec16613eeaadf93a22c78dd4e50d8",
+      "apps/desktop-flutter/lib/ui/config_source_status_view.dart": "b30425e086d4fa2da74435bc99b49da054c825ca9b30dd9ddb57df2be19f1fb7",
+      "apps/desktop-flutter/lib/ui/theme.dart": "e4d72fcedc9eb46408b24cda64d1f27f811bd2fb7d8ec4930767134a38bf76ef",
+      "apps/desktop-flutter/lib/state/app_state.dart": "625b11998382868a14936a99b6f09c89bb3533f4baacee0fc0e1f99fae9da60d",
+      "apps/desktop-flutter/lib/services/storage.dart": "2ec3bd5c39cdb00a7750468035930259f2e645101403174410001cb36014f2ee"
+    },
+    "flutter": "Flutter 3.47.5 ([user-branch], framework 6a19cca56475dbfba1478ee68d7bd0c2ef891da1)"
+  },
+  "baseline": {
+    "kind": "before",
+    "path": "docs/reference/evidence/pc-config-android-2026-11-24/before-config-execution.png",
+    "harness": ".superpowers/sdd/2026-11-24-pc-config-android-execution/visual/config_execution_before_capture_test.dart"
+  },
+  "widgetUnderTest": {
+    "class": "ConfigPage",
+    "file": "apps/desktop-flutter/lib/ui/config_pages.dart:31",
+    "savedList": "apps/desktop-flutter/lib/ui/config_pages.dart _SavedConfigs",
+    "host": "MaterialApp + pushed MaterialPageRoute(ConfigPage), blank underlying Scaffold",
+    "replica": false
+  },
+  "scenario": {
+    "state": "idle; import area collapsed automatically; no active config; no loading/error/status notices",
+    "sqliteSeed": "real AppState.database.saveConfig(makeActive:false), two synthetic records after bootstrap",
+    "records": [
+      {
+        "id": 1,
+        "name": "混淆订阅测试",
+        "slug": "obfuscated",
+        "siteCount": 1,
+        "liveCount": 0,
+        "isActive": false
+      },
+      {
+        "id": 2,
+        "name": "示例配置",
+        "slug": "secondary",
+        "siteCount": 1,
+        "liveCount": 0,
+        "isActive": false
+      }
+    ],
+    "recordSchema": {
+      "originPattern": "https://example.test/{slug}.json",
+      "json": {
+        "sites": [
+          {
+            "key": "fixture-{slug}",
+            "name": "示例站点",
+            "type": 0,
+            "api": "https://example.test/sites/{slug}/"
+          }
+        ]
+      }
+    },
+    "timestamp": "configs.updated_at fixed to 2026-11-24T12:00:00.000Z; TZ=UTC; last_checked_at/last_check_error=NULL",
+    "popup": {
+      "anchorKey": "config-menu-1",
+      "record": "混淆订阅测试",
+      "open": true,
+      "items": [
+        "复制来源地址",
+        "删除",
+        "在安卓环境运行此配置"
+      ],
+      "itemSelected": false
+    },
+    "dataIsolation": "temporary AppPaths/SQLite under own private visual prefix; no actual PC settings/config/database",
+    "networkOrDeviceActions": "none: no import URL/JAR fetch, activation, browse, refresh, SDK/ADB/device operations; only saveConfig and opening More popup"
+  },
+  "viewport": {
+    "logicalSize": {
+      "width": 1280,
+      "height": 800
+    },
+    "physicalSize": {
+      "width": 1280,
+      "height": 800
+    },
+    "devicePixelRatio": 1.0,
+    "textScaleFactor": 1.0,
+    "platform": "TargetPlatform.linux",
+    "windowChrome": "none"
+  },
+  "theme": {
+    "builder": "buildAppTheme(Brightness.dark)",
+    "fontFixture": "NotoSansCJK-Regular.ttc registered as FixtureCJK and production fallback family names",
+    "icons": "SDK MaterialIcons-Regular.otf",
+    "shadows": "debugDisableShadows=false",
+    "otherOverrides": "font family only, no color/spacing/weight changes"
+  },
+  "artifacts": {
+    "primary": {
+      "path": "docs/reference/evidence/pc-config-android-2026-11-24/after-config-execution.png",
+      "width": 1280,
+      "height": 800,
+      "bytes": 48307,
+      "sha256": "059c40b6d4eea846b4cb72e9d9f8b7cf071924a948219f6997c71eb2e37bc3f1"
+    }
+  },
+  "checks": {
+    "renderExceptions": "none: tester.takeException()==null before and after popup",
+    "overflow": "none: Flutter overflow produces test exception",
+    "geometry": [
+      {
+        "label": "AppBar 配置导入与管理",
+        "offset": {
+          "dx": 72.0,
+          "dy": 18.0
+        },
+        "size": {
+          "width": 97.99957275390625,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "导入新配置（收起）",
+        "offset": {
+          "dx": 206.0,
+          "dy": 78.0
+        },
+        "size": {
+          "width": 80.75015258789062,
+          "height": 24.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "已保存的配置",
+        "offset": {
+          "dx": 206.0,
+          "dy": 144.0
+        },
+        "size": {
+          "width": 96.90018463134766,
+          "height": 24.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "全部刷新",
+        "offset": {
+          "dx": 964.000244140625,
+          "dy": 140.0
+        },
+        "size": {
+          "width": 109.999755859375,
+          "height": 32.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "首行 混淆订阅测试",
+        "offset": {
+          "dx": 206.0,
+          "dy": 200.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 77.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "第二行 示例配置",
+        "offset": {
+          "dx": 206.0,
+          "dy": 277.0
+        },
+        "size": {
+          "width": 868.0,
+          "height": 77.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "首行 更多锚点",
+        "offset": {
+          "dx": 1020.0,
+          "dy": 218.5
+        },
+        "size": {
+          "width": 40.0,
+          "height": 40.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "复制来源地址（打开的菜单）",
+        "offset": {
+          "dx": 904.0,
+          "dy": 240.5
+        },
+        "size": {
+          "width": 84.5996322631836,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "删除（打开的菜单）",
+        "offset": {
+          "dx": 904.0,
+          "dy": 288.5
+        },
+        "size": {
+          "width": 28.199878692626953,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      },
+      {
+        "label": "在安卓环境运行此配置（打开的菜单）",
+        "offset": {
+          "dx": 904.0,
+          "dy": 336.5
+        },
+        "size": {
+          "width": 140.9993896484375,
+          "height": 20.0
+        },
+        "fullyInsideViewport": true
+      }
+    ],
+    "menuItemCount": 3,
+    "activeConfig": false,
+    "savedConfigCount": 2
+  },
+  "reproduction": {
+    "cwd": "apps/desktop-flutter",
+    "command": "TZ=UTC ../../.tools/flutter/bin/flutter test --no-pub ../../.superpowers/sdd/2026-11-24-pc-config-android-execution/visual/config_execution_before_capture_test.dart",
+    "openAction": "tap ValueKey(config-menu-1), pumpAndSettle; choose no item",
+    "outputs": [
+      "docs/reference/evidence/pc-config-android-2026-11-24/after-config-execution.png",
+      "docs/reference/evidence/pc-config-android-2026-11-24/after-config-execution.json"
+    ]
+  },
+  "limitations": [
+    "Noto CJK fixture, not Windows Microsoft YaHei system font.",
+    "Pure Flutter widget renderer, no OS titlebar/chrome or platform compositor; AA may differ from desktop native window.",
+    "Blank underlying route is not painted; ConfigPage and popup are real production widgets.",
+    "Synthetic records intentionally inactive; no user config, real URL, credential, hostname, UUID or temp path appears in PNG.",
+    "Only saved-list idle + first-record More menu; no new execution UI exists in this BEFORE capture."
+  ]
+}

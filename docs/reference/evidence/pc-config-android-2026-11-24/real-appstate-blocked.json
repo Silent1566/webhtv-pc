@@ -1,0 +1,20 @@
+{
+  "result": "FAIL",
+  "original_sites": 93,
+  "overlay_sites": 93,
+  "all_type4": true,
+  "record_json_unchanged": true,
+  "record_source_key_unchanged": true,
+  "home_classes": 6,
+  "category_items": 12,
+  "play_flags": 3,
+  "proxied": true,
+  "media_status": 206,
+  "media_bytes": 45460,
+  "media_content_type": "application/octet-stream",
+  "sample_kind": "hls",
+  "hls_uris": 488,
+  "uri_abs_proxy": 0,
+  "uri_abs_other": 488,
+  "blocking": "playlist served as application/octet-stream is streamed without child-URI rewrite"
+}
