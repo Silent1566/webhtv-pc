@@ -44,9 +44,13 @@ env:
 
 jobs:
   build-windows:
-    name: Analyze, test, build and package (Windows x64)
+    name: Windows x64 shard ${{ matrix.shardIndex }}
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex: [0, 1, 2, 3]
 
     steps:
       - name: Checkout
@@ -180,10 +184,9 @@ jobs:
       - name: Unit tests
         working-directory: apps/desktop-flutter
         shell: pwsh
-        # 实测（2026-11-24 的 beta 绿跑）Windows 全量单测 29.3 分钟，离 30 分钟上限只剩
-        # 0.7 分钟；再新增任何用例都会直接顶到上限并触发「The action 'Unit tests' has timed
-        # out after 30 minutes」。这里按实测给足余量（作业总上限仍是 60 分钟），
-        # 不跳过、不排除任何用例。若日后再次逼近 45 分钟，正确做法是拆分分片而不是继续加时。
+        # Windows 完整 suite 实测 8073 pass / 11 fail、耗时 72 分钟，已超过 45 分钟预算。
+        # 使用 Flutter SDK 原生四分片：每片发现完整 suite，再由 SDK 分配用例，不跳过、不排除。
+        # 单测 45 分钟、作业 60 分钟预算不增加；逼近预算应分片而不是继续加时。
         timeout-minutes: 45
         run: |
           $ErrorActionPreference = 'Stop'
@@ -230,16 +233,16 @@ jobs:
           Write-Host "audio_ai native：$nativeDir"
           Write-Host "libLiteRt：$litertDir"
           # --coverage 的固定产物是 apps/desktop-flutter/coverage/lcov.info，
-          # 下面单独上传，artifact 名按 OS 区分。
+          # 下面单独上传，artifact 名按 OS 与 shard 序号区分。
           # 汇总显示 passed 仍可能在 runner/coverage 收尾返回非零；保留原码并旁路留档。
-          & ../../scripts/flutter_test_diagnostics_windows.ps1
+          & ../../scripts/flutter_test_diagnostics_windows.ps1 -TotalShards 4 -ShardIndex ${{ matrix.shardIndex }}
           exit $LASTEXITCODE
 
       - name: Upload Windows unit test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webhtv-pc-test-diagnostics-windows-x64
+          name: webhtv-pc-test-diagnostics-windows-x64-shard-${{ matrix.shardIndex }}
           path: |
             apps/desktop-flutter/ci-test-diagnostics/
             apps/desktop-flutter/coverage/lcov.info
@@ -247,14 +250,16 @@ jobs:
           retention-days: 7
 
       - name: Upload Windows unit test coverage
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webhtv-pc-coverage-windows-x64
+          name: webhtv-pc-coverage-windows-x64-shard-${{ matrix.shardIndex }}
           path: apps/desktop-flutter/coverage/lcov.info
           if-no-files-found: error
           retention-days: 7
 
       - name: Package portable zip
+        if: matrix.shardIndex == 0
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -269,6 +274,7 @@ jobs:
             -FlutterVersion "$env:FLUTTER_VERSION"
 
       - name: Smoke test packaged client
+        if: matrix.shardIndex == 0
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -281,12 +287,26 @@ jobs:
           ./scripts/smoke_windows.ps1 -ExePath $exe.FullName -ExpectedVersion '${{ steps.meta.outputs.version }}'
 
       - name: Upload dev artifact
+        if: matrix.shardIndex == 0
         uses: actions/upload-artifact@v4
         with:
           name: webhtv-pc-${{ steps.meta.outputs.version }}-dev-${{ steps.meta.outputs.short_sha }}-windows-x64
           path: dist/*
           if-no-files-found: error
           retention-days: 7
+
+  windows-gate:
+    name: Analyze, test, build and package (Windows x64)
+    needs: [build-windows]
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Require all Windows shards to succeed
+        shell: pwsh
+        run: |
+          if ('${{ needs.build-windows.result }}' -ne 'success') {
+            throw 'Windows matrix did not succeed: ${{ needs.build-windows.result }}'
+          }
 
   build-linux:
     name: Analyze, test, build and package (Linux x64)

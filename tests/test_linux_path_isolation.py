@@ -156,7 +156,7 @@ class FlutterTestPathIsolationTests(unittest.TestCase):
         violations = []
         for tree in ('test', 'integration_test'):
             for path in sorted((APP / tree).rglob('*.dart')):
-                relative = str(path.relative_to(ROOT))
+                relative = path.relative_to(ROOT).as_posix()
                 if relative in SEMANTIC_EXEMPTIONS:
                     continue
                 for line, reason in unsafe_overrides(path.read_text()):

@@ -62,8 +62,7 @@ class _FakeUpdateService extends AppUpdateService {
     return AppUpdateCheck(
       verdict: verdict,
       identity: identity,
-      // 用相对当前时间的结果：写死日期会让「24 小时内不再查」在几天后自然过期。
-      checkedAt: DateTime.now().toUtc(),
+      checkedAt: DateTime.now(),
       release: release,
       message: failure,
     );
