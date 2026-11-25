@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -112,7 +115,7 @@ void main() {
 
   tearDown(() async {
     state.dispose();
-    await temp.delete(recursive: true);
+    await deleteTempWhenReleased(temp);
   });
 
   test(

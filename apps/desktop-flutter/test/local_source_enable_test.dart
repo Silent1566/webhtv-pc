@@ -20,6 +20,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ipc_protocol.dart';
+import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/local_source_enable_store.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/python_environment.dart';
@@ -45,6 +46,24 @@ Future<void> waitForFile(File file) async {
   }
   expect(file.existsSync(), isTrue, reason: file.path);
 }
+
+/// 带标记的探测桩：只捕获路径，绝不能与被测 AppState 共享闭包上下文——
+/// AppState 持有运行期服务（含 Future），而 PythonEnvironment 会把探测闭包
+/// 送进 isolate，捕获到 AppState 就会因不可发送而失败。
+PythonEnvironment markerProbeEnvironment({
+  required AppPaths paths,
+  required String bundle,
+  required String markerPath,
+}) => PythonEnvironment(
+  paths: paths,
+  bundleDirectory: bundle,
+  systemCandidates: const [],
+  probe: (executable, arguments, source, environment) async {
+    File(markerPath).writeAsStringSync('started');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    return fixtureProbe(executable, arguments, source, environment);
+  },
+);
 
 void main() {
   late Directory temp;
@@ -166,8 +185,10 @@ pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
       // 真的执行 Python 3 并读取 PYTHONPATH。
       final python = await firstRunnablePython();
       if (python == null) {
-        fail('本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
-            '缺解释器不能被当成取消行为通过');
+        fail(
+          '本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
+          '缺解释器不能被当成取消行为通过',
+        );
       }
       final env = PythonEnvironment(
         paths: paths,
@@ -286,15 +307,10 @@ pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
       final marker = File(p.join(temp.path, 'bundle-probe-started'));
       final paths = tempPaths(temp);
       final markerPath = marker.path;
-      final env = PythonEnvironment(
+      final env = markerProbeEnvironment(
         paths: paths,
-        bundleDirectory: bundle,
-        systemCandidates: const [],
-        probe: (executable, arguments, source, environment) async {
-          File(markerPath).writeAsStringSync('started');
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          return fixtureProbe(executable, arguments, source, environment);
-        },
+        bundle: bundle,
+        markerPath: markerPath,
       );
       final state = AppState(
         paths: paths,
@@ -533,8 +549,10 @@ pathlib.Path(${jsonEncode(lateWrite.path)}).write_text('not cancelled')
       // 让环境只做一次真实探测，sidecar 仍是真实 Python 进程。
       final python = await firstRunnablePython();
       if (python == null) {
-        fail('本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
-            '缺解释器不能被当成取消行为通过');
+        fail(
+          '本机没有能真正执行 Python 3 并读取 PYTHONPATH 的解释器；'
+          '缺解释器不能被当成取消行为通过',
+        );
       }
       final paths = tempPaths(temp);
       final state = AppState(

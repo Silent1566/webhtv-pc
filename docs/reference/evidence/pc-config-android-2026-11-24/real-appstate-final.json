@@ -1,0 +1,83 @@
+{
+  "record_transport_mime": "text/html",
+  "original_sites": 93,
+  "overlay_sites": 93,
+  "all_type4": true,
+  "record_json_unchanged": true,
+  "record_source_key_unchanged": true,
+  "movie_sample_ordinal": 0,
+  "sample_content_range": null,
+  "sample_has_length": true,
+  "home_classes": 6,
+  "category_items": 12,
+  "play_flags": 3,
+  "proxied": true,
+  "media_status": 200,
+  "media_bytes": 45825,
+  "media_content_type": "application/vnd.apple.mpegurl",
+  "sample_kind": "hls",
+  "hls_uris": 488,
+  "uri_abs_proxy": 488,
+  "uri_abs_other": 0,
+  "uri_relative": 0,
+  "uri_first_shape": "proxy",
+  "original_child_extension_categories": {
+    "none": 10,
+    "png": 478
+  },
+  "normalized_segment_uri_suffix": "ts",
+  "normalized_prefix_offset": 0,
+  "segment_attempts": [
+    {
+      "ordinal": 0,
+      "status": 404,
+      "bytes": 468,
+      "type": "application/xml",
+      "upstream_error_code": "NoSuchKey"
+    },
+    {
+      "ordinal": 10,
+      "status": 404,
+      "bytes": 0,
+      "type": "application/xml",
+      "upstream_error_code": null
+    },
+    {
+      "ordinal": 20,
+      "status": 404,
+      "bytes": 0,
+      "type": "application/xml",
+      "upstream_error_code": null
+    },
+    {
+      "ordinal": 40,
+      "status": 200,
+      "bytes": 65536,
+      "type": "video/mp2t",
+      "magic": "mpegts"
+    }
+  ],
+  "segment_status": 200,
+  "segment_bytes": 65536,
+  "segment_type": "video/mp2t",
+  "segment_magic": "mpegts",
+  "native_codecs": [
+    {
+      "codec_name": "h264",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 818
+    },
+    {
+      "codec_name": "aac",
+      "codec_type": "audio"
+    }
+  ],
+  "native_probe_exit": 0,
+  "native_decoder_exit": 0,
+  "native_decoded_frames": 1,
+  "restart_binding_same": true,
+  "restart_overlay_all_type4": true,
+  "restart_record_json_unchanged": true,
+  "result": "PASS"
+}

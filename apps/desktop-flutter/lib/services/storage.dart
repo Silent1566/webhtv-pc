@@ -175,6 +175,7 @@ class ConfigRecord {
     this.bridgeDevice = '',
     this.bridgeInterfaceKey = '',
     this.bridgeConfigUrl = '',
+    this.bridgeTransport = '',
     this.etag = '',
     this.lastModified = '',
     this.contentHash = '',
@@ -212,6 +213,13 @@ class ConfigRecord {
   /// 宁可不推送也不能发设备网关地址——安卓 Config.find 查不到就会 insert，
   /// 凭空多出一行「桥接源」。
   final String bridgeConfigUrl;
+
+  /// 内部传输标记：`''` = 老 HTTP 桥接，`'adb'` = 管理型（runtime 拥有网关）。
+  ///
+  /// 不是用户可见身份：`source_key` 仍是唯一的来源身份；这一列只回答
+  /// 「这条记录的网关/转发归谁拥有」，决定播放路径要不要经过老的
+  /// `AndroidPlaybackBridge`（它会自己 `adb forward`，与 runtime 抢转发所有权）。
+  final String bridgeTransport;
 
   /// 上一轮刷新拿到的条件请求校验值：下一轮原样带回，服务端答 304 就省掉下载。
   final String etag;
@@ -263,6 +271,7 @@ class ConfigRecord {
       bridgeDevice: (row['bridge_device'] as String?) ?? '',
       bridgeInterfaceKey: (row['bridge_interface_key'] as String?) ?? '',
       bridgeConfigUrl: (row['bridge_config_url'] as String?) ?? '',
+      bridgeTransport: (row['bridge_transport'] as String?) ?? '',
       etag: (row['etag'] as String?) ?? '',
       lastModified: (row['last_modified'] as String?) ?? '',
       contentHash: (row['content_hash'] as String?) ?? '',
@@ -364,11 +373,15 @@ class AppDatabase {
   ///   （`configs.etag`、`last_modified`、`content_hash`、`last_checked_at`、
   ///   `last_check_error`）。**纯加法式**：旧库按现有内容回填摘要，
   ///   因此升级后的第一次后台刷新不会把「没变」误判成「变了」。
+  /// - 12 → 13：桥接记录的**内部传输标记**（`configs.bridge_transport`）。
+  ///   纯加法式：旧行读回 `''` = 老 HTTP 桥接，`'adb'` 只由管理型
+  ///   （runtime 拥有网关/转发的）导入写入。`source_key` 语义不动
+  ///   （`parseSourceKey` 把第 3 段之后折叠进 `interfaceKey`，加段就是改身份）。
   ///
   /// 除 v7 的两张表之外，升级都是**加法式**（`CREATE TABLE IF NOT EXISTS` 或
   /// `ALTER TABLE ADD COLUMN`）：旧库打开后自动获得新表/新列且不丢数据，
   /// 无需分支式升级逻辑。
-  static const int schemaVersion = 12;
+  static const int schemaVersion = 13;
 
   /// 打开数据库；失败返回错误原因而不是抛出，保证启动不被阻塞（§16.3）。
   static StoreOpenResult open(String path) {
@@ -509,6 +522,7 @@ class AppDatabase {
     _migrateHistoryIdentity();
     _migrateFavorites();
     _migrateConfigRefreshState();
+    _migrateBridgeTransport();
     _db.execute('''
       CREATE TABLE IF NOT EXISTS viewing_metadata (
         source_key TEXT NOT NULL,
@@ -935,6 +949,16 @@ class AppDatabase {
     }
   }
 
+  /// v12 → v13：桥接记录的内部传输标记（`configs.bridge_transport`）。
+  ///
+  /// 为什么是「配置上的列」而不是「按连接描述查表判断」：标记必须跟着记录走。
+  /// 只靠新的连接描述文件推断的话，用户删掉/换掉描述后这条记录会被**静默**
+  /// 重新归类成老 HTTP 桥接，播放路径就会走老 `adb forward`（与 runtime 争夺
+  /// 转发所有权）。空串 = 老 HTTP 桥接，正是旧行该有的解释。
+  void _migrateBridgeTransport() {
+    _addConfigColumn('bridge_transport', "TEXT NOT NULL DEFAULT ''");
+  }
+
   /// `history` 重建：唯一键加入 `source_key`。
   void _rebuildHistoryWithSourceKey() {
     if (_columnsOf('history').contains('source_key')) return;
@@ -1250,6 +1274,8 @@ class AppDatabase {
     String bridgeDevice = '',
     String bridgeInterfaceKey = '',
     String bridgeConfigUrl = '',
+    // 内部传输标记（'' = 老 HTTP 桥接，'adb' = 管理型）。不参与去重键。
+    String bridgeTransport = '',
   }) {
     final safeJson = TmdbCredentialIngress.stripRootField(json);
     final contentHash = configRecordContentHash(safeJson);
@@ -1271,7 +1297,8 @@ class AppDatabase {
           // `local|<origin>`，任何一次「按 origin 覆盖写」都不该把这层身份抹回去。
           'source_key=COALESCE(NULLIF(?, \'\'), source_key), '
           'bridge_device=?, '
-          'bridge_interface_key=?, bridge_config_url=? WHERE id=?;',
+          'bridge_interface_key=?, bridge_config_url=?, bridge_transport=? '
+          'WHERE id=?;',
           [
             name,
             origin,
@@ -1291,6 +1318,7 @@ class AppDatabase {
             bridgeDevice,
             bridgeInterfaceKey,
             bridgeConfigUrl,
+            bridgeTransport,
             id,
           ],
         );
@@ -1299,8 +1327,8 @@ class AppDatabase {
           'INSERT INTO configs(name, origin, content_type, repository_index, '
           'repository_entries, json, site_count, live_count, content_hash, '
           'is_active, updated_at, source_key, bridge_device, '
-          'bridge_interface_key, bridge_config_url) '
-          'VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?);',
+          'bridge_interface_key, bridge_config_url, bridge_transport) '
+          'VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?);',
           [
             name,
             origin,
@@ -1320,6 +1348,7 @@ class AppDatabase {
             bridgeDevice,
             bridgeInterfaceKey,
             bridgeConfigUrl,
+            bridgeTransport,
           ],
         );
         id = _db.lastInsertRowId;

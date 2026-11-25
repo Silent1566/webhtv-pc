@@ -108,7 +108,10 @@ class ProxyTargetPolicy {
   }
 
   /// 校验全部解析结果；任一地址被拒绝即整体拒绝（防 DNS 重绑定）。
-  ProxyTargetDecision evaluateAll(List<InternetAddress> addresses, String host) {
+  ProxyTargetDecision evaluateAll(
+    List<InternetAddress> addresses,
+    String host,
+  ) {
     if (addresses.isEmpty) {
       return const ProxyTargetDecision.deny('DNS 未返回任何地址', code: 502);
     }
@@ -178,9 +181,7 @@ class ProxyTargetPolicy {
       return bytes[0] == 169 && bytes[1] == 254;
     }
     // IPv6 fe80::/10
-    return bytes.length == 16 &&
-        bytes[0] == 0xfe &&
-        (bytes[1] & 0xc0) == 0x80;
+    return bytes.length == 16 && bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80;
   }
 
   static bool _isPrivate(InternetAddress address) {
@@ -202,9 +203,7 @@ class ProxyTargetPolicy {
       if (bytes.sublist(0, 10).every((byte) => byte == 0) &&
           bytes[10] == 0xff &&
           bytes[11] == 0xff) {
-        return _isPrivate(
-          InternetAddress.fromRawAddress(bytes.sublist(12)),
-        );
+        return _isPrivate(InternetAddress.fromRawAddress(bytes.sublist(12)));
       }
     }
     return false;
@@ -213,6 +212,12 @@ class ProxyTargetPolicy {
 
 /// 代理会话（§11.3.1「每次播放创建独立 sessionId 和高熵随机 token」）。
 typedef ProxyTrafficSnapshot = ({String sessionId, int receivedBytes});
+
+/// 可选会话级传输授权：把逻辑目标映射到已由适配器建立的回环转发端口。
+///
+/// 返回 null 表示本会话不授权该目标，调用方必须继续走普通 HTTP 策略；
+/// 返回端口只授权 `127.0.0.1:<port>`，不得返回任意主机或 URL。
+typedef ProxyTargetResolver = Future<int?> Function(Uri logicalTarget);
 
 class ProxySession {
   ProxySession({
@@ -229,6 +234,8 @@ class ProxySession {
     this.cookie,
     this.authorization,
     this.extraHeaders = const {},
+    this.targetResolver,
+    this.inspectPlaylistContent = false,
   });
 
   /// 单会话累计字节上限默认值。
@@ -267,6 +274,7 @@ class ProxySession {
   void recordReceivedBytes(int count) {
     if (count > 0 && !revoked) _receivedBytes += count;
   }
+
   bool revoked = false;
 
   /// 会话内允许继承的 `User-Agent`；不得用于覆盖宿主的安全/诊断 Header（§11.3.1）。
@@ -281,6 +289,13 @@ class ProxySession {
 
   /// 站点声明的额外 Header（例如自定义签名头），同样仅同源传播。
   final Map<String, String> extraHeaders;
+
+  /// 仅本会话生效的 Android/ADB 传输授权；null 保持普通代理行为。
+  final ProxyTargetResolver? targetResolver;
+
+  /// 来源已在 Android 执行：未知类型的成功媒体 GET 可按内容补判清单。
+  /// 仅影响有界清单检查，绝不授权地址或改变目标策略/传输映射。
+  final bool inspectPlaylistContent;
 
   /// 该会话已确立的来源（首次请求的目标 host:port），用于同源凭据传播。
   String? establishedOrigin;
@@ -299,6 +314,9 @@ class ProxySession {
   static const int maxChildTargets = 4096;
 
   final List<Uri> _childTargets = <Uri>[];
+  final Set<int> _pngTsMediaAliases = {};
+  final Set<int> _pngTsExcludedChildren = {};
+  bool _pngTsManifestObserved = false;
   final Map<String, int> _childIndexes = <String, int>{};
 
   /// 子资源的短码（同一目标复用同一个编号）；表满返回 null。
@@ -318,6 +336,46 @@ class ProxySession {
   /// 短码还原；越界或负数返回 null（调用方必须以 4xx 拒绝）。
   Uri? childTargetAt(int index) =>
       index >= 0 && index < _childTargets.length ? _childTargets[index] : null;
+
+  /// Format hints share the registered child table's bound and token lifetime.
+  bool registerPngTsMediaAlias(int index) {
+    final source = childTargetAt(index);
+    if (!(targetResolver != null || inspectPlaylistContent) ||
+        !usable ||
+        _pngTsExcludedChildren.contains(index) ||
+        source == null ||
+        !source.path.toLowerCase().endsWith('.png')) {
+      return false;
+    }
+    _pngTsMediaAliases.add(index);
+    return true;
+  }
+
+  Uri? pngTsMediaAliasTargetAt(int index) =>
+      usable &&
+          _pngTsMediaAliases.contains(index) &&
+          !_pngTsExcludedChildren.contains(index)
+      ? childTargetAt(index)
+      : null;
+
+  void recordPngTsManifest() {
+    _pngTsManifestObserved = true;
+  }
+
+  void excludePngTsChild(int index) {
+    if (childTargetAt(index) != null) _pngTsExcludedChildren.add(index);
+  }
+
+  bool allowsPngTsNormalization(Uri target) {
+    final index = _childIndexes[target.toString()];
+    if (!usable || (index != null && _pngTsExcludedChildren.contains(index))) {
+      return false;
+    }
+    // Direct approved media can be inspected before a playlist assigns roles.
+    // Thereafter only a positively registered media alias is eligible.
+    return !_pngTsManifestObserved ||
+        (index != null && _pngTsMediaAliases.contains(index));
+  }
 
   bool get expired => DateTime.now().isAfter(expiresAt);
 
@@ -364,6 +422,8 @@ class ProxySessionManager {
     String? cookie,
     String? authorization,
     Map<String, String> extraHeaders = const {},
+    ProxyTargetResolver? targetResolver,
+    bool inspectPlaylistContent = false,
   }) {
     _sequence += 1;
     final token = _newToken();
@@ -382,6 +442,8 @@ class ProxySessionManager {
       cookie: cookie,
       authorization: authorization,
       extraHeaders: extraHeaders,
+      targetResolver: targetResolver,
+      inspectPlaylistContent: inspectPlaylistContent,
     );
     _byToken[token] = session;
     return session;
@@ -490,10 +552,7 @@ abstract final class HlsPlaylistRewriter {
 
     // 重写 URI="..." 属性。
     var rewritten = line;
-    final pattern = RegExp(
-      r'URI\s*=\s*"([^"]*)"',
-      caseSensitive: false,
-    );
+    final pattern = RegExp(r'URI\s*=\s*"([^"]*)"', caseSensitive: false);
     rewritten = rewritten.replaceAllMapped(pattern, (match) {
       final target = _resolve(match.group(1)!, baseUri);
       final proxied = target == null ? null : proxify(target);

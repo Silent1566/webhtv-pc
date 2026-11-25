@@ -1,0 +1,37 @@
+{
+  "stage": "HLS content rewriting fixed; redirect host policy correction pending",
+  "record_transport_mime": "text/html",
+  "original_sites": 93,
+  "overlay_sites": 93,
+  "record_json_unchanged": true,
+  "record_source_key_unchanged": true,
+  "media_status": 200,
+  "media_content_type": "application/vnd.apple.mpegurl",
+  "media_bytes": 44391,
+  "hls_uris": 488,
+  "uri_abs_proxy": 488,
+  "uri_abs_other": 0,
+  "segment_attempts": [
+    {
+      "ordinal": 0,
+      "status": 404,
+      "bytes": 468,
+      "type": "application/xml",
+      "upstream_error_code": "NoSuchKey"
+    },
+    {
+      "ordinal": 10,
+      "status": 403,
+      "bytes": 65,
+      "type": "application/json",
+      "proxy_error": "主机不在授权列表：hw.a.yximgs.com"
+    },
+    {
+      "ordinal": 20,
+      "status": 403,
+      "bytes": 65,
+      "type": "application/json",
+      "proxy_error": "主机不在授权列表：bd.a.yximgs.com"
+    }
+  ]
+}

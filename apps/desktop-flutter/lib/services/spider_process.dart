@@ -1298,7 +1298,10 @@ class SidecarProcess {
     String? directory,
     LogService? log,
   }) async {
-    final target = directory ?? LogService.logDirectoryOverride;
+    // 优先后侧车所属 AppState 的日志目录（实例值），避免依赖全局覆写：
+    // 测试里多个 AppState 并发引导时，全局会互相覆盖，把日志写进别人的临时目录。
+    final target =
+        directory ?? log?.directory ?? LogService.logDirectoryOverride;
     // 日志目录尚未初始化（未开放落盘/纯单测）：没有可写的地方，也就无从保留。
     if (target == null) return null;
     // 轮转文件编号越大越旧（[_rotateStderr] 每次把 .1 往后挪），因此从大号往

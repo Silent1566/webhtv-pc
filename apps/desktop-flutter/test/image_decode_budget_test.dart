@@ -3,15 +3,15 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart'
-    show
-        imageCacheBudgetBytes,
-        imageCacheBudgetCount,
-        installImageCacheBudget;
+    show imageCacheBudgetBytes, imageCacheBudgetCount, installImageCacheBudget;
 import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/layout_scale.dart';
@@ -96,7 +96,7 @@ void main() {
 
     tearDown(() async {
       state.dispose();
-      if (await temp.exists()) await temp.delete(recursive: true);
+      if (await temp.exists()) await deleteTempWhenReleased(temp);
     });
 
     Future<void> pumpGrid(
@@ -108,7 +108,9 @@ void main() {
         ..devicePixelRatio = dpr
         ..physicalSize = logicalSize * dpr;
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: BrowsePage(state: state))),
+        MaterialApp(
+          home: Scaffold(body: BrowsePage(state: state)),
+        ),
       );
       await tester.pump();
     }
@@ -126,9 +128,7 @@ void main() {
       return image.image as ResizeImage;
     }
 
-    testWidgets('实际 provider 是带列宽的 ResizeImage，保留图片地址和 2:3 比例', (
-      tester,
-    ) async {
+    testWidgets('实际 provider 是带列宽的 ResizeImage，保留图片地址和 2:3 比例', (tester) async {
       addTearDown(tester.view.reset);
       await pumpGrid(tester, logicalSize: const Size(1280, 800));
       final provider = providerOf(tester);
@@ -146,12 +146,13 @@ void main() {
       expect(provider.height, isNull);
       expect(provider.imageProvider, isA<NetworkImage>());
       expect((provider.imageProvider as NetworkImage).url, _posterUrl);
-      expect(tester.widget<PosterImage>(posterFinder()).cacheWidth, provider.width);
+      expect(
+        tester.widget<PosterImage>(posterFinder()).cacheWidth,
+        provider.width,
+      );
     });
 
-    testWidgets('同一逻辑视口中 DPR 1 → 1.5 → 2，解码宽度变而布局不变', (
-      tester,
-    ) async {
+    testWidgets('同一逻辑视口中 DPR 1 → 1.5 → 2，解码宽度变而布局不变', (tester) async {
       addTearDown(tester.view.reset);
       await pumpGrid(tester, logicalSize: const Size(1280, 800));
       final originalSize = tester.getSize(posterFinder());
@@ -167,9 +168,7 @@ void main() {
       }
     });
 
-    testWidgets('窗口短边从 800 升到 1440，卡片密度升档后解码宽度增大', (
-      tester,
-    ) async {
+    testWidgets('窗口短边从 800 升到 1440，卡片密度升档后解码宽度增大', (tester) async {
       addTearDown(tester.view.reset);
       await pumpGrid(tester, logicalSize: const Size(1280, 800));
       final smallWidth = providerOf(tester).width!;

@@ -1,0 +1,61 @@
+{
+  "task": "pc-config-copy-import",
+  "date": "2026-11-24",
+  "device": {
+    "model": "LIO-AN00",
+    "os": "Android 9 / API 28",
+    "abi": "arm64-v8a",
+    "package": "com.silent.android.webhtv",
+    "version": "5.6.0 / 560",
+    "install": "adb install -r with unchanged local debug signature (user data preserved)"
+  },
+  "endpoint": {
+    "path": "/manage/config/import",
+    "method": "POST",
+    "content_type": "application/x-www-form-urlencoded",
+    "required_header": "X-WebHTV-PC-Import: 1",
+    "params": ["url (required)", "name (optional, capped 100)", "type (optional, 0/1/2 default 0)"],
+    "response": {"code": 0, "data": {"id": "int cid", "interfaceKey": "T4 config key", "url": "string", "name": "string", "created": "bool", "active": "bool"}},
+    "side_effects": "Config row insert on first call only; no download, no parse, no activation"
+  },
+  "security_receipts": [
+    {"case": "GET", "status": 405, "message": "Use POST"},
+    {"case": "POST without PC header", "status": 403, "message": "Missing X-WebHTV-PC-Import: 1"},
+    {"case": "POST with browser Origin", "status": 403, "message": "Browser or forwarded requests are not allowed"},
+    {"case": "POST with ?target= forwarding", "status": 403, "message": "target forwarding is not allowed"},
+    {"case": "POST wrong content-type", "status": 415, "message": "Content-Type must be application/x-www-form-urlencoded"},
+    {"case": "POST body 17 KB", "status": 413, "message": "Request body too large"},
+    {"case": "logcat for import path", "url_token_matches": 0, "note": "only method, path and bodyLength metadata emitted"}
+  ],
+  "import_receipts": [
+    {"id": 34, "created": true, "key_uuid": true, "key_fp_sha256_12": "d2a40b4adb77", "fields": 6},
+    {"id": 34, "created": false, "key_uuid": true, "key_fp_sha256_12": "d2a40b4adb77", "fields": 6}
+  ],
+  "identity": {
+    "numeric_cid_as_configKey": "rejected: unknown config identifier",
+    "concurrent_create_guard": "process-local critical section around find+create; unit test 8 threads -> 1 row, 1 cid"
+  },
+  "catalog": {"pc_record25_declared_sites": 93, "android_isolated_sites": 94, "latency_ms": 40, "active_config_untouched": true},
+  "representative_normal_source": {
+    "key": "代表性影视源A",
+    "home": {"classes": 6, "latency_ms": 1442},
+    "category": {"params": "configKey,key,t,pg=1,f=1", "items": 12, "latency_ms": 54},
+    "detail": {"params": "configKey,key,ac=detail,ids=<returned vod_id>,f=1", "items": 1, "play_flags": 3, "episodes_first_flag": 143, "latency_ms": 99},
+    "note": "vod_id came from the returned list; no guessed ids. 配置 was excluded as menu data; 金牌影视 first category returned 0 items."
+  },
+  "active_config": {
+    "type0_plus_type1_plus_type2_site_keys_before": 204,
+    "after": 204,
+    "key_digest_before": "92148fed915fa37b31a7121a5d8393f776b43910512077396821b1f87688e166",
+    "digest_unchanged": true,
+    "imported_rows_active": false
+  },
+  "limitations": [
+    "Rows 32/33/34 are non-active spike artifacts; their loopback source URLs are offline after cleanup and the feature is not PC-product-ready.",
+    "Import is loopback/ADB-only and relies on a non-simple header plus absent browser Origin; this is not cryptographic pairing and other local apps are inside the trusted device boundary.",
+    "Verification covers the non-active main-app catalog path only: no account/worker isolation, no execution of all 78 CSP sources.",
+    "POST body must be application/x-www-form-urlencoded; JSON bodies are out of scope.",
+    "Process-local serialization does not coordinate the separate origin worker process."
+  ],
+  "cleanup": {"adb_reverse_removed": true, "adb_forwards_removed": true, "http_server_stopped": true, "temp_files_removed": true, "app_left_running": true}
+}
