@@ -80,6 +80,7 @@ import '../core/history_grouping.dart';
 import '../core/history_scope.dart';
 import '../core/history_view.dart';
 import '../core/live_settings.dart';
+import '../core/live_site_keywords.dart';
 import '../core/http_api.dart';
 import '../core/osd_config.dart';
 import '../core/osd_style.dart';
@@ -2597,6 +2598,9 @@ class AppState extends ChangeNotifier
   LiveSettings get liveSettings =>
       _uiPreferences?.liveSettings ?? const LiveSettings.defaults();
 
+  List<String> get liveSiteKeywords =>
+      _uiPreferences?.liveSiteKeywords ?? liveSiteDefaultKeywords;
+
   /// 生效的字幕源设置（Phase 9）。
   SubtitleSettings get subtitleSettings =>
       _uiPreferences?.subtitleSettings ?? SubtitleSettings();
@@ -3486,6 +3490,13 @@ class AppState extends ChangeNotifier
     final ok = await store.rememberSubtitleSettings(settings);
     _notifyIfAlive();
     return ok;
+  }
+
+  Future<void> setLiveSiteKeywords(List<String> value) async {
+    final store = _uiPreferences;
+    if (store == null) return;
+    await store.setLiveSiteKeywords(value);
+    _notifyIfAlive();
   }
 
   /// 持久化直播设置。
@@ -4554,49 +4565,57 @@ class AppState extends ChangeNotifier
   /// 于是下一次读历史（首页取图、历史页聚合）直接就有身份，不必再匹配。
   ///
   /// 匹配不到返回 `null`，调用方保留站点海报，不编造元数据。
-  Future<TmdbItem?> historyTmdbItem(PlaybackHistory row) async {
+  Future<TmdbItem?> historyTmdbItem(
+    PlaybackHistory row, {
+    bool Function()? isCurrent,
+  }) async {
     final database = _database;
     if (database == null || row.vodId.trim().isEmpty) return null;
+    bool current() {
+      if (_disposed || !(isCurrent?.call() ?? true)) return false;
+      final latest = database.findHistory(
+        siteKey: row.siteKey, vodId: row.vodId, sourceKey: row.sourceKey,
+        flag: row.flag, episodeId: row.episodeId,
+      );
+      // UI尚未重建时generation可能没变，数据库中的新身份仍必须优先。
+      return latest == null ||
+          (latest.tmdbId == row.tmdbId && latest.mediaType == row.mediaType);
+    }
+    if (!current()) return null;
+    final sourceKey = row.sourceKey.trim();
+    final record = sourceKey.isEmpty || sourceKey == activeSourceKey
+        ? activeRecord
+        : database.configBySourceKey(sourceKey);
+    final TmdbMatchStore store = record == null && sourceKey.isNotEmpty
+        ? InMemoryTmdbMatchStore()
+        : DatabaseTmdbMatchStore(database: database, configId: record?.id ?? tmdbConfigId);
+    final scoped = configForSourceKey(sourceKey);
+    final siteName = scoped?.sites.where((site) => site.key == row.siteKey).firstOrNull?.name ?? '';
     TmdbItem? item;
     try {
-      item = DatabaseTmdbMatchStore(database: database, configId: tmdbConfigId)
-          .find(
-            siteKey: row.siteKey,
-            vodId: row.vodId,
-            sourceTitle: row.vodName,
-          )
-          ?.toItem();
+      item = store.find(siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName)?.toItem();
     } catch (_) {
-      // 读匹配表失败不算错误：继续走按片名匹配。
+      // 读匹配表失败时仍可按标题解析。
     }
     if (item == null) {
       try {
-        final outcome = await _ensureTmdbIdentityService().match(
+        final outcome = await TmdbIdentityService(
+          config: () => tmdbConfig, service: _tmdbService, store: store,
+        ).match(
           TmdbMatchRequest(
-            siteKey: row.siteKey,
-            vodId: row.vodId,
-            sourceTitle: row.vodName,
-            // 站点显示名参与「按来源停用 TMDB」的判定，与追剧同一条闸门。
-            siteName: siteInActiveSource(row.siteKey)?.name ?? '',
-            vodName: row.vodName,
-            vodYear: row.vodYear,
-            // 行里已经写明 movie / tv 时按它匹配；空串交给匹配器自己判。
+            siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName,
+            siteName: siteName, vodName: row.vodName, vodYear: row.vodYear,
             expectedMediaType: TmdbMediaType.parse(row.mediaType),
           ),
+          isCurrent: current,
         );
         item = outcome.item;
       } catch (_) {
-        // 网络或鉴权失败只让这一条没有背景与简介，首页其余内容照常。
         return null;
       }
     }
-    if (item == null) return null;
-    rememberHistoryIdentity(
-      siteKey: row.siteKey,
-      vodId: row.vodId,
-      item: item,
-      sourceKey: row.sourceKey,
-    );
+    if (item == null || !current()) return null;
+    rememberHistoryIdentity(siteKey: row.siteKey, vodId: row.vodId, item: item, sourceKey: row.sourceKey);
     return item;
   }
 

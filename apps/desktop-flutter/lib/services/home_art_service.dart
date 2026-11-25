@@ -19,8 +19,10 @@ library;
 
 import 'dart:convert';
 
+import '../core/detail_recommendation.dart';
 import '../core/external_meta.dart';
 import '../core/following.dart';
+import '../core/home_feed.dart';
 import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/protocol.dart';
@@ -31,6 +33,7 @@ import '../core/tmdb_media.dart';
 import '../core/tmdb_title.dart';
 import 'external_meta_service.dart';
 import 'tmdb_service.dart';
+import 'storage.dart';
 
 /// 一个条目能从**同一次** `detail()` 里拿到的展示元数据。
 ///
@@ -44,6 +47,7 @@ class HomeMeta {
     this.title = '',
     this.poster,
     this.backdrop,
+    this.backdrops = const [],
     this.overview,
     this.genres = const [],
     this.year = '',
@@ -57,6 +61,7 @@ class HomeMeta {
 
   final String? poster;
   final String? backdrop;
+  final List<String> backdrops;
   final String? overview;
 
   /// 类型标签（`genres[].name`，最多 3 个）——详情页同一份数据。
@@ -73,6 +78,40 @@ class HomeMeta {
 typedef HomeArtLoader = Future<Map<String, Object?>> Function(
   TmdbIdentity identity,
 );
+
+class _HomeMetaEntry {
+  const _HomeMetaEntry({
+    required this.key,
+    required this.workKey,
+    required this.siteKey,
+    required this.vodId,
+    required this.title,
+    required this.match,
+    this.poster,
+    this.year = '',
+    this.overview = '',
+    this.mediaType,
+    this.item,
+    this.source,
+    this.siteName = '',
+    this.pinned,
+  });
+
+  final String key;
+  final String workKey;
+  final String siteKey;
+  final String vodId;
+  final String title;
+  final String? poster;
+  final String year;
+  final String overview;
+  final TmdbMediaType? mediaType;
+  final TmdbItem? item;
+  final Future<TmdbItem?> Function() match;
+  final Future<Vod?> Function()? source;
+  final String siteName;
+  final MetaIdentity? pinned;
+}
 
 /// 首页取图服务。
 class HomeMetaService {
@@ -158,8 +197,121 @@ class HomeMetaService {
     int concurrency = 2,
     Duration timeout = const Duration(seconds: 8),
   }) async {
-    final rows = {for (final item in items) item.identityKey: item}.values
-        .toList();
+    return _resolveEntries(
+      [
+        for (final row in items)
+          _HomeMetaEntry(
+            key: row.identityKey,
+            workKey: row.seriesKey,
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            title: row.vodName,
+            poster: row.vodPic,
+            mediaType: TmdbMediaType.tv,
+            match: () => match(row),
+            source: source == null ? null : () => source(row),
+            siteName: siteName?.call(row) ?? '',
+            pinned: pinned?.call(row),
+          ),
+      ],
+      pipeline: pipeline,
+      external: external,
+      isCurrent: isCurrent,
+      concurrency: concurrency,
+      timeout: timeout,
+    );
+  }
+
+  /// 续播保留原始历史身份，复用与追剧/详情相同的逐字段解析。
+  Future<Map<String, HomeMeta>> resolveHistory(
+    Iterable<PlaybackHistory> items, {
+    required Future<TmdbItem?> Function(PlaybackHistory) match,
+    Future<Vod?> Function(PlaybackHistory)? source,
+    String? Function(PlaybackHistory)? siteName,
+    required MetaPipeline pipeline,
+    ExternalMetaService? external,
+    MetaIdentity? Function(PlaybackHistory)? pinned,
+    bool Function()? isCurrent,
+    int concurrency = 2,
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _resolveEntries(
+      [
+        for (final row in items)
+          _HomeMetaEntry(
+            key: homeHistoryKey(row),
+            workKey: homeHistoryKey(row),
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            title: row.vodName,
+            poster: row.vodPic,
+            year: row.vodYear,
+            mediaType: TmdbMediaType.parse(row.mediaType),
+            item: row.hasTmdbIdentity
+                ? TmdbItem(
+                    tmdbId: row.tmdbId,
+                    mediaType: TmdbMediaType.parse(row.mediaType)!,
+                    title: row.vodName,
+                  )
+                : null,
+            match: () => match(row),
+            source: source == null ? null : () => source(row),
+            siteName: siteName?.call(row) ?? '',
+            pinned: pinned?.call(row),
+          ),
+      ],
+      pipeline: pipeline,
+      external: external,
+      isCurrent: isCurrent,
+      concurrency: concurrency,
+      timeout: timeout,
+    );
+  }
+
+  Future<Map<String, HomeMeta>> resolveRecommendations(
+    Iterable<RecommendationEntry> entries, {
+    required MetaPipeline pipeline,
+    ExternalMetaService? external,
+    MetaIdentity? Function(RecommendationEntry)? pinned,
+    bool Function()? isCurrent,
+    int concurrency = 2,
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _resolveEntries(
+      [
+        for (final entry in entries)
+          _HomeMetaEntry(
+            key: entry.key,
+            workKey: entry.key,
+            siteKey: '',
+            vodId: entry.key,
+            title: entry.item.title,
+            poster: entry.item.posterUrl,
+            year: firstYear(entry.item.subtitle) > 0 ? firstYear(entry.item.subtitle).toString() : '',
+            overview: entry.item.overview ?? '',
+            mediaType: entry.item.mediaType,
+            item: entry.item,
+            match: () async => entry.item,
+            pinned: pinned?.call(entry),
+          ),
+      ],
+      pipeline: pipeline,
+      external: external,
+      isCurrent: isCurrent,
+      concurrency: concurrency,
+      timeout: timeout,
+    );
+  }
+
+  Future<Map<String, HomeMeta>> _resolveEntries(
+    Iterable<_HomeMetaEntry> entries, {
+    required MetaPipeline pipeline,
+    ExternalMetaService? external,
+    bool Function()? isCurrent,
+    int concurrency = 2,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final rows = {for (final entry in entries) entry.key: entry}.values.toList();
     if (rows.isEmpty) return const {};
     const fields = {
       // 标题也参与：首页 hero 与卡片要显示**刮削名**，与详情页头部同一条规则；
@@ -186,7 +338,7 @@ class HomeMetaService {
       (field) => rules.orderOf(field).contains(MetaSourceKind.tmdb),
     );
     final usesSource =
-        source != null &&
+        rows.any((row) => row.source != null) &&
         fields.any(
           (field) => rules.orderOf(field).contains(MetaSourceKind.source),
         );
@@ -219,17 +371,23 @@ class HomeMetaService {
         final row = rows[next++];
         var vod = Vod(
           vodId: row.vodId,
-          vodName: row.vodName,
-          vodPic: row.vodPic,
+          vodName: row.title,
+          vodPic: row.poster,
+          vodYear: row.year,
+          vodContent: row.overview,
         );
         var sourceFetched = false;
         Future<Vod> readSource() async {
           try {
-            return await sources.putIfAbsent(
-                  row.seriesKey,
-                  () => source!(row),
-                ) ??
-                vod;
+            final loaded = await sources.putIfAbsent(row.workKey, row.source!);
+            if (loaded == null) return vod;
+            // 部分详情只补简介/线路，不能抹掉历史中已有的来源海报和年份。
+            return Vod.fromJson({
+              ...vod.toJson(),
+              ...loaded.toJson(),
+              'vod_pic': _nonEmpty(loaded.vodPic) ?? vod.vodPic,
+              'vod_year': _nonEmpty(loaded.vodYear) ?? vod.vodYear,
+            }) ?? vod;
           } catch (_) {
             // 站点被删除或离线时仍可按追剧标题匹配外部元数据。
             return vod;
@@ -244,15 +402,18 @@ class HomeMetaService {
         TmdbDetailData? tmdb;
         TmdbIdentity? identity;
         // 持久化匹配命中会先于匹配器的站点闸门返回；禁用站点只能在这里拦。
+        // 推荐/无站点条目没有 siteKey：站点白名单只该拦真实站点，不能把空 key
+        // 判成「未在启用站点里」，否则配了白名单的用户会一次性失去全部推荐元数据。
         final tmdbAllowed =
             usesTmdb &&
             _tmdb.config.isReady &&
-            _tmdb.config.isSiteEnabled(row.siteKey, siteName?.call(row) ?? '');
+            (row.siteKey.isEmpty ||
+                _tmdb.config.isSiteEnabled(row.siteKey, row.siteName));
         if (tmdbAllowed) {
           try {
             final item = await matches.putIfAbsent(
-              row.seriesKey,
-              () => match(row),
+              row.workKey,
+              () async => row.item ?? await row.match(),
             );
             if (stopped()) return;
             identity = item?.identity;
@@ -275,14 +436,15 @@ class HomeMetaService {
         if (stopped()) return;
         MetaFieldSnapshots? snapshots;
         if (usesExternal) {
+          final mediaType = identity?.mediaType ?? row.mediaType;
           final query = MetaQuery(
             title: vod.vodName,
             year: firstYear(vod.vodYear ?? ''),
-            isTv: true,
+            isTv: mediaType == null ? null : mediaType == TmdbMediaType.tv,
           );
-          final pin = pinned?.call(row);
+          final pin = row.pinned;
           final queryKey = jsonEncode([
-            row.seriesKey,
+            row.workKey,
             query.key,
             pin?.key,
             identity?.key,
@@ -351,18 +513,13 @@ class HomeMetaService {
             primary: snapshots?.primary?.data,
           );
         }
-        final backdrop = data.backdropUrls
-            .where(
-              (url) =>
-                  url.trim().isNotEmpty &&
-                  url != data.posterUrl &&
-                  url != vod.vodPic,
-            )
-            .firstOrNull;
-        result[row.identityKey] = HomeMeta(
+        // 详情模型/站源已按背景字段规则提供海报兜底；不能再用宽高猜测将它排除。
+        final backdrop = data.backdropUrls.where((url) => url.trim().isNotEmpty).firstOrNull;
+        result[row.key] = HomeMeta(
           title: _nonEmpty(data.title) ?? '',
           poster: _nonEmpty(data.posterUrl),
           backdrop: backdrop,
+          backdrops: data.backdropUrls.take(6).toList(),
           overview: _nonEmpty(data.overview),
           genres: data.genres.take(3).toList(),
           year: _yearOf({'release_date': data.releaseDate}),
@@ -387,19 +544,18 @@ class HomeMetaService {
   /// 拼地址口径与 `TmdbDetailData.fromDetail` 一致：背景走 `backdropBase`、
   /// 海报走 `imageBase`，各自取排序后的第一张。
   ///
-  /// 不做「无背景时拿海报顶」的回退：竖版海报拉成背景会糊，而且这里返回
-  /// `null` 正好让调用方保留站点自己的背景图。
+  /// 无横图时沿用详情模型的海报兜底，避免同一作品两页取图规则分叉。
   HomeMeta? _artOf(Map<String, Object?> detail) {
     final config = _tmdb.config;
     final title = _titleOf(detail);
     final overview = (detail['overview'] is String)
         ? (detail['overview']! as String).trim()
         : '';
-    final backdrops = TmdbImageSelector.backdrops(
+    final backdrops = TmdbDetailData.fromDetail(
       detail,
-      config.backdropBase,
-      limit: 1,
-    );
+      imageBase: config.imageBase,
+      backdropBase: config.backdropBase,
+    ).backdropUrls;
     final posters = TmdbImageSelector.posters(
       detail,
       config.imageBase,
@@ -422,6 +578,7 @@ class HomeMetaService {
       title: title,
       poster: posters.isEmpty ? null : posters.first,
       backdrop: backdrops.isEmpty ? null : backdrops.first,
+      backdrops: backdrops.take(6).toList(),
       overview: overview.isEmpty ? null : overview,
       genres: genres,
       year: year,

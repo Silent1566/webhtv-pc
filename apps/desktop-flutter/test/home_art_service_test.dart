@@ -185,7 +185,7 @@ void main() {
     expect(calls, 0);
   });
 
-  test('只有 poster_path 时 backdrop 为 null', () async {
+  test('只有 poster_path 时沿用详情模型的背景兜底', () async {
     final service = HomeMetaService(
       tmdb: fakeTmdb(),
       loader: (identity) async => detail(posterPath: '/only-poster.jpg'),
@@ -194,7 +194,7 @@ void main() {
     final art = await service.resolve({'a': tv(1)});
 
     expect(art['a']!.poster, '$imageBase/only-poster.jpg');
-    expect(art['a']!.backdrop, isNull);
+    expect(art['a']!.backdrop, '$imageBase/only-poster.jpg');
   });
 
   test('详情里没有任何图时该键不出现（保留站点海报）', () async {

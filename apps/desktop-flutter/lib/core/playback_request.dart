@@ -41,6 +41,7 @@ class PlaybackRequest {
     this.posterUrl,
     this.vodYear,
     this.directUrl = false,
+    this.isLive = false,
     this.subtitles = const [],
     this.subtitleHeaders = const {},
     this.danmaku = const [],
@@ -255,6 +256,9 @@ class PlaybackRequest {
   /// 同时直播需要「失败按顺序切线路」（§13.3），与点播的剧集切换语义不同。
   final bool directUrl;
 
+  /// 直播没有可续播时间轴，不能写入点播播放历史。
+  final bool isLive;
+
   PlaybackRequest copyWith({
     String? url,
     String? episodeTarget,
@@ -325,6 +329,7 @@ class PlaybackRequest {
       posterUrl: posterUrl,
       vodYear: vodYear ?? this.vodYear,
       directUrl: directUrl,
+      isLive: isLive,
       subtitles: subtitles ?? this.subtitles,
       subtitleHeaders: subtitleHeaders ?? this.subtitleHeaders,
       danmaku: danmaku ?? this.danmaku,

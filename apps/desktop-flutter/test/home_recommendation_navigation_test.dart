@@ -31,6 +31,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
 
 import 'support/detail_test_seams.dart';
+import 'support/home_hd_art_fixture.dart';
 import 'support/test_fonts.dart';
 
 final _capture = Platform.environment['HOME_CARD_CAPTURE'] == '1';
@@ -45,6 +46,7 @@ const _item = TmdbItem(
   mediaType: TmdbMediaType.tv,
   title: '双轨',
   overview: '推荐作品的剧情简介',
+  backdropUrl: 'https://fixture.invalid/recommendation-backdrop.jpg',
 );
 
 /// 当前选中的普通站点（indexs 不为 1）：推荐点击「先按片名搜一次」的目标。
@@ -183,6 +185,7 @@ void main() {
             'id': 1399,
             'name': '双轨',
             'overview': '推荐作品的剧情简介',
+            'backdrop_path': '/recommendation-backdrop.jpg',
             'seasons': [
               {'season_number': 1, 'episode_count': 2},
             ],
@@ -199,6 +202,7 @@ void main() {
             'name': result?['name'] ?? result?['title'] ?? '热门样片',
             'title': result?['title'] ?? result?['name'] ?? '热门样片',
             'overview': '热门作品的完整资料',
+            'backdrop_path': '/hot-backdrop.jpg',
             'seasons': <Object>[],
           });
         }
@@ -264,6 +268,7 @@ void main() {
               mediaType: TmdbMediaType.movie,
               title: '豆瓣独立作品',
               overview: '只有豆瓣资料的简介',
+              backdropUrl: 'https://fixture.invalid/title-only-backdrop.jpg',
             )
           : _item,
       source: titleOnly
@@ -289,6 +294,7 @@ void main() {
                           tmdbId: 2000 + i,
                           mediaType: TmdbMediaType.movie,
                           title: '推荐样片$i',
+                          backdropUrl: 'https://fixture.invalid/extra-backdrop-$i.jpg',
                         ),
                         source: RecommendationSource.tmdb,
                       ),
@@ -343,6 +349,14 @@ void main() {
               secondaryLabelStyle: label,
             ),
           );
+    for (final items in hot.values) {
+      for (final item in items) {
+        final url = item.cover;
+        if (url != null && url.contains('backdrop')) {
+          await loadHdHeroFixture(NetworkImage(url), ImageConfiguration.empty);
+        }
+      }
+    }
     await tester.pumpWidget(
       RepaintBoundary(
         key: _captureRoot,
@@ -351,6 +365,7 @@ void main() {
           theme: theme,
           home: Scaffold(
             body: HomePage(
+              heroImageLoader: loadHdHeroFixture,
               state: state,
               onOpenBrowse: () => browseCalls++,
               onOpenHistory: () {},
@@ -362,6 +377,8 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.pump();
     await tester.pumpAndSettle();
     if (!hotOnly) {
       expect(find.text('查看详情'), findsOneWidget);
@@ -437,6 +454,13 @@ void main() {
       site: _site(),
       siteResults: [_siteVod('site-1399', '双轨')],
     );
+    // hero 占满内容区（2026-11-25 起只有一档高度），轨道落在首屏之外：先滚下来
+    // 它才会被 CustomScrollView 构建出来。
+    await tester.drag(
+      find.byKey(const ValueKey('home-scroll')),
+      const Offset(0, -600),
+    );
+    await tester.pumpAndSettle();
     final card = find.descendant(
       of: find.byType(HomeRailView),
       matching: find.text('双轨'),
@@ -681,6 +705,7 @@ void main() {
     state.recommendations.feedback.block('双轨');
     await tester.pumpAndSettle();
     expect(find.text('双轨'), findsNothing);
+    await revealCard(tester, '热门样片');
     expect(find.text('热门样片'), findsWidgets);
     await unmount(tester);
   });
@@ -911,7 +936,10 @@ void main() {
         site: _site(),
         siteResults: [_siteVod('site-hot', '热门样片')],
         hot: {
-          category: [const SearchSuggestItem(title: '热门样片', rank: 3)],
+          category: [const SearchSuggestItem(
+            title: '热门样片', rank: 3,
+            cover: 'https://fixture.invalid/hot-backdrop.jpg',
+          )],
         },
       );
       expect(find.text('查看详情'), findsOneWidget);

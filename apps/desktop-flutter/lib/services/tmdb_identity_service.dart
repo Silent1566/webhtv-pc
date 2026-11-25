@@ -210,7 +210,11 @@ class TmdbIdentityService {
   ///
   /// 不抛网络异常：失败返回 `TmdbMatchMiss`。
   /// 但**鉴权失败与取消向上传播**（`01` §4 约束）。
-  Future<TmdbMatchOutcome> match(TmdbMatchRequest request) async {
+  Future<TmdbMatchOutcome> match(
+    TmdbMatchRequest request, {
+    bool Function()? isCurrent,
+  }) async {
+    bool live() => isCurrent?.call() ?? true;
     final config = _config();
 
     // 步骤 0：前置检查（零请求）
@@ -235,6 +239,7 @@ class TmdbIdentityService {
       // 缓存命中同样要校验分季变体防护（`01` §4 步骤 1）
       if (!cached.isManual &&
           await _isUnwantedSplitVariant(cached.toItem(), request.matchSourceText)) {
+        if (!live()) throw const TmdbCancelledException();
         _store.remove(siteKey: request.siteKey, vodId: request.vodId);
       } else {
         return TmdbMatchOutcome(
@@ -254,9 +259,12 @@ class TmdbIdentityService {
 
     /// 单次搜索：计数 + 可恢复错误返回 `null`（鉴权失败与取消向上传播）。
     Future<List<TmdbItem>?> search(String query) async {
+      if (!live()) throw const TmdbCancelledException();
       requests++;
       try {
-        return await _service.search(query);
+        final result = await _service.search(query);
+        if (!live()) throw const TmdbCancelledException();
+        return result;
       } on TmdbAuthException {
         rethrow;
       } on TmdbCancelledException {
@@ -273,6 +281,8 @@ class TmdbIdentityService {
 
     /// 命中即落盘并返回（步骤 6，不覆盖手动）。
     TmdbMatchOutcome hitOf(({TmdbItem item, String level}) picked) {
+      // 失效请求不得落盘：否则下一轮读历史会捡起这条陈旧身份并回写。
+      if (!live()) throw const TmdbCancelledException();
       _store.putAuto(
         siteKey: request.siteKey,
         vodId: request.vodId,

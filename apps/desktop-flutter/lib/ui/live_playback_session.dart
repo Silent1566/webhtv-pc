@@ -160,6 +160,7 @@ class LivePlaybackSession extends ChangeNotifier {
       ],
       episodeIndex: program == null ? index : 0,
       directUrl: true,
+      isLive: program == null,
     );
   }
 

@@ -7,10 +7,11 @@ import 'poster_image.dart';
 
 /// 页面级背景只跟随 hero 下标，不单独轮播。
 class HomeBackdrop extends StatelessWidget {
-  const HomeBackdrop({super.key, required this.items, required this.index});
+  const HomeBackdrop({super.key, required this.items, required this.index, this.onImageError});
 
   final List<HomeItem> items;
   final int index;
+  final ValueChanged<HomeItem>? onImageError;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +37,7 @@ class HomeBackdrop extends StatelessWidget {
                   children: [
                     PosterImage(
                       url: backdrop,
+                      onImageError: () => onImageError?.call(items[index % items.length]),
                       fit: BoxFit.cover,
                       alignment: Alignment.topCenter,
                     ),

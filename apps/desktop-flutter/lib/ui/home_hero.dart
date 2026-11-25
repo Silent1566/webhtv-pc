@@ -138,7 +138,7 @@ class _HomeHeroState extends State<HomeHero> {
       if (url == null || !_preloaded.add(url)) continue;
       unawaited(
         precacheImage(
-          NetworkImage(url, headers: imageHeadersOrNull(context, url)),
+          posterImageProvider(url, headers: imageHeadersOrNull(context, url)),
           context,
           // 预载失败**必须**就地吞掉：图本身有 `PosterImage` 的兜底，预载只是
           // 提前暖缓存；不吞的话一次网络抖动会在控制台（以及 widget 测试里）
@@ -152,9 +152,11 @@ class _HomeHeroState extends State<HomeHero> {
   @override
   void didUpdateWidget(HomeHero oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 条目换了（推荐后到、播放返回）就回到第一张：停在旧下标上会指向另一部作品。
-    if (oldWidget.items.length != widget.items.length) {
-      _index = 0;
+    // 后台补充候选时保持正在看的作品，不能每加一张就跳回第一张。
+    if (oldWidget.items.isNotEmpty) {
+      final key = oldWidget.items[_index % oldWidget.items.length].key;
+      final next = widget.items.indexWhere((item) => item.key == key);
+      _index = next < 0 ? 0 : next;
     }
     _syncTimer();
     _preloadAround(_index);
@@ -272,9 +274,13 @@ class _HomeHeroState extends State<HomeHero> {
             ),
           );
 
-    // 竖版海报的尺寸跟 hero 高走：约 52%（夹在 160–320 之间），保证它**不被放大**
-    // ——站点海报常见 300×450，按 320 高的框渲染接近 1:1，看起来才是原图。
-    final double tileHeight = (widget.height * 0.52).clamp(160.0, 320.0);
+    // 竖版海报的尺寸跟 hero 高走：约 62%（夹在 240–560 之间）。
+    //
+    // 下限 240 是用户 2026-11-25 的要求：「每张都是大海报」。旧版 hero 本身只有
+    // 62% 高、海报再取 52%，小窗口下只剩一张 160 高的缩略图。上限 560 仍是「别把
+    // 站点海报放大成糊图」——常见 300×450 的海报按 560 高渲染约 1.9 倍，再多就看得出
+    // 像素了。
+    final double tileHeight = (widget.height * 0.62).clamp(240.0, 560.0);
     final double tileWidth = tileHeight * 2 / 3;
     return GestureDetector(
       // 横向拖/甩切张。必须 opaque：没有背景图时 hero 的 Stack 只有内容块可命中，
@@ -368,6 +374,7 @@ class _HomeHeroState extends State<HomeHero> {
                             child: ClipRRect(
                               borderRadius: AppRadius.mdAll,
                               child: SizedBox(
+                                key: const ValueKey('home-hero-poster-tile'),
                                 width: tileWidth,
                                 height: tileHeight,
                                 child: PosterImage(
