@@ -30,11 +30,15 @@ class PlayerQueuePanel extends StatefulWidget {
 
 class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
   final _scroll = ScrollController();
+  final _searchController = TextEditingController();
+
+  String get _query => _searchController.text.trim().toLowerCase();
   bool _scrolled = false;
   bool _loading = false;
   String? _error;
   @override
   void dispose() {
+    _searchController.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -42,6 +46,11 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
   void _select(String key) {
     Navigator.of(context).pop();
     widget.onSelect(key);
+  }
+
+  void _updateQuery() {
+    setState(() => _scrolled = true);
+    if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
   Future<void> _loadMore() async {
@@ -82,6 +91,12 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
           animation: widget.queue,
           builder: (context, _) {
             final snapshot = widget.queue.snapshot;
+            final query = _query;
+            final items = query.isEmpty
+                ? snapshot.items
+                : snapshot.items
+                      .where((item) => item.title.toLowerCase().contains(query))
+                      .toList();
             final busy = snapshot.loading || _loading;
             final error = snapshot.error?.userMessage ?? _error;
             return Column(
@@ -152,11 +167,61 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                       ),
                     ),
                   ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.lg,
+                    AppSpace.sm,
+                    AppSpace.lg,
+                    AppSpace.xs,
+                  ),
+                  child: TextField(
+                    key: const ValueKey('player-queue-search'),
+                    controller: _searchController,
+                    onChanged: (_) => _updateQuery(),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      labelText: '搜索选集',
+                      hintText: '输入集数或名称',
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: '清空搜索',
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () {
+                                _searchController.clear();
+                                _updateQuery();
+                              },
+                            ),
+                    ),
+                  ),
+                ),
+                if (snapshot.hasMore || query.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.lg,
+                    ),
+                    child: Text(
+                      snapshot.hasMore
+                          ? '仅搜索已加载的 ${snapshot.items.length} 集${query.isEmpty ? '' : ' · 匹配 ${items.length} 集'}'
+                          : '匹配 ${items.length} / ${snapshot.items.length} 集',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(AppSpace.md),
-                    child: snapshot.items.isEmpty
-                        ? Center(child: Text(busy ? '正在读取目录…' : '暂无可播放文件'))
+                    child: items.isEmpty
+                        ? Center(
+                            child: Text(
+                              snapshot.items.isEmpty
+                                  ? (busy ? '正在读取目录…' : '暂无可播放文件')
+                                  : '没有匹配的选集',
+                            ),
+                          )
                         : LayoutBuilder(
                             builder: (context, constraints) {
                               final columns = math.max(
@@ -172,7 +237,11 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                 WidgetsBinding.instance.addPostFrameCallback((
                                   _,
                                 ) {
-                                  if (!mounted || !_scroll.hasClients) return;
+                                  if (!mounted ||
+                                      !_scroll.hasClients ||
+                                      _query.isNotEmpty) {
+                                    return;
+                                  }
                                   final index = widget.queue.snapshot.items
                                       .indexWhere(
                                         (item) => item.key == widget.currentKey,
@@ -196,9 +265,9 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                       mainAxisSpacing: gap,
                                       childAspectRatio: 1.2,
                                     ),
-                                itemCount: snapshot.items.length,
+                                itemCount: items.length,
                                 findChildIndexCallback: (key) {
-                                  final index = snapshot.items.indexWhere(
+                                  final index = items.indexWhere(
                                     (item) =>
                                         ValueKey(
                                           'player-queue-item-${item.key}',
@@ -208,7 +277,7 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                   return index < 0 ? null : index;
                                 },
                                 itemBuilder: (context, index) {
-                                  final item = snapshot.items[index];
+                                  final item = items[index];
                                   final current = item.key == widget.currentKey;
                                   final accent =
                                       context.semanticColors.magnitude;

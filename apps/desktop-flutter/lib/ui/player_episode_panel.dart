@@ -178,6 +178,9 @@ class PlayerEpisodePanel extends StatefulWidget {
 
 class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   final ScrollController _gridScroll = ScrollController();
+  final _searchController = TextEditingController();
+
+  String get _query => _searchController.text.trim().toLowerCase();
 
   /// 正在**预览**的线路（初值 = 正在播放的线路）。
   ///
@@ -210,9 +213,8 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     _resetRanges();
   }
 
-  int _clampEpisodeIndex(int index) => _episodes.isEmpty
-      ? 0
-      : index.clamp(0, _episodes.length - 1);
+  int _clampEpisodeIndex(int index) =>
+      _episodes.isEmpty ? 0 : index.clamp(0, _episodes.length - 1);
 
   /// 按当前预览线路重算区间与选中区间。
   void _resetRanges() {
@@ -245,6 +247,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _gridScroll.dispose();
     super.dispose();
   }
@@ -259,6 +262,13 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   /// 卡会播成第 1 集。两者在正序时恰好相等，所以正序路径的行为一字未变。
   List<(int, VodEpisode)> get _visibleEntries {
     if (_episodes.isEmpty || _ranges.isEmpty) return const [];
+    final query = _query;
+    if (query.isNotEmpty) {
+      return [
+        for (var i = 0; i < _episodes.length; i++)
+          if (_matchesQuery(i, query)) (i, _episodes[_originalIndex(i)]),
+      ];
+    }
     final range = _ranges[_safeRangeIndex];
     // 与 `EpisodeRangePolicy.slice` 同一套夹取规则，保证下标与切片一一对应。
     final start = range.start.clamp(0, _episodes.length);
@@ -266,6 +276,21 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     return [
       for (var i = start; i < end; i++) (i, _episodes[_originalIndex(i)]),
     ];
+  }
+
+  bool _matchesQuery(int displayIndex, String query) {
+    final index = _originalIndex(displayIndex);
+    final episode = _episodes[index];
+    final card = _cardAt(displayIndex);
+    return episode.name.toLowerCase().contains(query) ||
+        (card?.title.toLowerCase().contains(query) ?? false) ||
+        (card != null && card.number > 0 && '${card.number}'.contains(query)) ||
+        (episode.name.isEmpty && '第${index + 1}集'.contains(query));
+  }
+
+  void _updateQuery() {
+    setState(() => _didAutoScroll = true);
+    if (_gridScroll.hasClients) _gridScroll.jumpTo(0);
   }
 
   /// 正在播放那一集的集名（用它在别的线路里定位对应集）。
@@ -328,7 +353,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       );
       _resetRanges();
       // 新区间是另一批集：让下一帧重新把对应集滚进视口。
-      _didAutoScroll = false;
+      _didAutoScroll = _query.isNotEmpty;
     });
     if (_gridScroll.hasClients) _gridScroll.jumpTo(0);
   }
@@ -352,10 +377,13 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     required double rowExtent,
   }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_gridScroll.hasClients) return;
+      if (!mounted || !_gridScroll.hasClients || _query.isNotEmpty) return;
       final range = _ranges[_safeRangeIndex];
       final span = math.max(1, range.end - range.start);
-      final local = (_displayIndex(_focusIndex) - range.start).clamp(0, span - 1);
+      final local = (_displayIndex(_focusIndex) - range.start).clamp(
+        0,
+        span - 1,
+      );
       final row = local ~/ columns;
       // 上留半行余量：贴顶会让人以为面板是从这一集开始的。
       final target = (row * rowExtent - rowExtent * 0.5).clamp(
@@ -374,7 +402,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     final width = math.min(980.0, size.width * 0.86);
     final height = math.min(640.0, size.height * 0.82);
     final showLines = widget.playLines.length > 1;
-    final showRanges = _ranges.length > 1;
+    final showRanges = _ranges.length > 1 && _query.isEmpty;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -395,6 +423,7 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
           children: [
             _buildHeader(theme),
             if (showLines) _buildLineRow(theme),
+            _buildSearch(theme),
             if (showRanges) _buildRangeRow(theme),
             Expanded(
               child: Padding(
@@ -464,6 +493,51 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       ),
     );
   }
+
+  Widget _buildSearch(ThemeData theme) => Padding(
+    padding: const EdgeInsets.fromLTRB(
+      AppSpace.lg,
+      AppSpace.sm,
+      AppSpace.lg,
+      AppSpace.sm,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          key: const ValueKey('player-episode-search'),
+          controller: _searchController,
+          onChanged: (_) => _updateQuery(),
+          decoration: InputDecoration(
+            isDense: true,
+            border: const OutlineInputBorder(),
+            labelText: '搜索选集',
+            hintText: '输入集数或名称',
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _searchController.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: '清空搜索',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _searchController.clear();
+                      _updateQuery();
+                    },
+                  ),
+          ),
+        ),
+        if (_query.isNotEmpty) ...[
+          const SizedBox(height: AppSpace.xs),
+          Text(
+            '匹配 ${_visibleEntries.length} / ${_episodes.length} 集',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
 
   /// 线路行。
   Widget _buildLineRow(ThemeData theme) => SizedBox(
@@ -557,7 +631,9 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
         final entries = _visibleEntries;
         if (entries.isEmpty) {
           // 没有剧集时不抛错也不留白：标题区已经把「共 0 集」说清楚了。
-          return const SizedBox.shrink();
+          return _query.isNotEmpty
+              ? const Center(child: Text('没有匹配的选集'))
+              : const SizedBox.shrink();
         }
         if (!_didAutoScroll) {
           _didAutoScroll = true;
@@ -604,7 +680,8 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     final accent = context.semanticColors.magnitude;
     // 只有「预览的是正在播放的那条线路」时才有当前集：预览别的线路时那一集
     // 并没有在播，强高亮会谎报播放状态。
-    final current = _previewFlag == widget.lineFlag && index == widget.episodeIndex;
+    final current =
+        _previewFlag == widget.lineFlag && index == widget.episodeIndex;
     final title = card != null && card.title.isNotEmpty
         ? card.title
         : (episode.name.isNotEmpty ? episode.name : '第${index + 1}集');
