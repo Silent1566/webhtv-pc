@@ -3980,7 +3980,8 @@ class AppState extends ChangeNotifier
       stderr.writeln('[storage] 数据目录不可写：${writeFailures.join("; ")}');
     }
 
-    LogService.logDirectoryOverride = paths.logDir;
+    // 不再改写全局日志目录：本实例的目录由 log.open(paths.logDir) 记录，
+    // 侧车保留日志时按实例目录取（见 SidecarProcess.preserveStderrLog）。
     await log.open(paths.logDir);
 
     // 解析器 type=0/4 的浏览器组件接线：显式环境变量 → 已安装组件 → 系统浏览器。
