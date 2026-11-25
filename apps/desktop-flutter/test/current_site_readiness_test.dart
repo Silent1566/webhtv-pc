@@ -128,6 +128,20 @@ class _ShellState extends AppState {
   final Zone ioZone = Zone.current;
   int installs = 0;
   int homes = 0;
+  final unpackSettled = Completer<void>();
+
+  @override
+  Future<void> unpackShellTargets(
+    Set<String> jarUrls, {
+    void Function(ShellUnpackTick)? onTick,
+  }) => ioZone.run(() async {
+    try {
+      await super.unpackShellTargets(jarUrls, onTick: onTick);
+    } finally {
+      unpackSettled.complete();
+    }
+  });
+
   @override
   bool get shellRuntimeInstalled => installs > 0;
   @override
@@ -739,17 +753,11 @@ void _shellTests() {
           }
           return;
         }
-        for (var i = 0; i < 80; i++) {
-          await tester.runAsync(() async {
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-          });
-          await tester.pump();
-          if (find.text('加固壳解包失败').evaluate().isNotEmpty ||
-              (shell.homes > before &&
-                  shell.contentPhase != LoadPhase.loading)) {
-            break;
-          }
-        }
+        await tester.pump();
+        await tester.runAsync(
+          () => shell.unpackSettled.future.timeout(const Duration(seconds: 30)),
+        );
+        await tester.pump();
         // ignore: avoid_print
         print('SHELL installed=$installed unpackCalls=$unpackCalls');
         // ignore: avoid_print
