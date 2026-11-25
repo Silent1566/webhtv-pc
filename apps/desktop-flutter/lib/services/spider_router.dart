@@ -365,6 +365,7 @@ class SpiderRouter {
     this.jsHostPath,
     this.jvmHostPath,
     this.cspBinding,
+    this.onAvailabilityChanged,
   });
 
   /// HTTP 客户端。可随出站代理/DoH 设置变化替换（见 [updateTransport]）。
@@ -419,6 +420,8 @@ class SpiderRouter {
   int _availabilityVersion = 0;
   int get availabilityVersion => _availabilityVersion;
 
+  final void Function()? onAvailabilityChanged;
+
   Future<void> get availabilityIdle async {
     await _backgroundAvailability;
     await _foregroundAvailability;
@@ -452,6 +455,7 @@ class SpiderRouter {
       _availabilityRevision = siteRevision;
       _availabilityRuntimeRevision = LocalSpiderCommand.runtimeRevision;
       _availabilityVersion++;
+      onAvailabilityChanged?.call();
       return Future.value();
     }
     if (foreground) {
@@ -593,6 +597,7 @@ class SpiderRouter {
     _availabilityRevision = revision;
     _availabilityRuntimeRevision = runtimeRevision;
     _availabilityVersion++;
+    onAvailabilityChanged?.call();
   }
 
   LocalSpiderCommand? _resolveCommand({

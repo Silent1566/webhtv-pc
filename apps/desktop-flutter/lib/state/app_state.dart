@@ -614,6 +614,7 @@ class AppState extends ChangeNotifier
       jsHostPath: _jsSidecarHostPath,
       jvmHostPath: _jvmSidecarHostPath,
       cspBinding: _cspBinding,
+      onAvailabilityChanged: _onSiteAvailabilityChanged,
     );
   }
 
@@ -4003,6 +4004,27 @@ class AppState extends ChangeNotifier
   /// [SpiderRouter.notifySiteFilesChanged]；运行时/直连/换配置由路由自己 +1。
   /// 因此缓存**不会**让判定落后于磁盘。
   Future<void>? _siteAvailabilityFlight;
+  bool _siteAvailabilityNotificationPending = false;
+  AppConfig? _importAvailabilityConfig;
+  String? _importAvailabilityNotice;
+
+  void _onSiteAvailabilityChanged() {
+    if (_disposed || _siteAvailabilityNotificationPending) return;
+    _siteAvailabilityNotificationPending = true;
+    scheduleMicrotask(() {
+      _siteAvailabilityNotificationPending = false;
+      if (_disposed) return;
+      _siteItemsCache = null;
+      final config = effectiveConfig;
+      if (config != null &&
+          identical(_importAvailabilityConfig, config) &&
+          _notice == _importAvailabilityNotice) {
+        _notice = _importAvailabilityNotice =
+            '配置导入成功：${config.sites.length} 个站点（可用 $usableSiteCount 个）';
+      }
+      _notifyIfAlive();
+    });
+  }
 
   void _prepareSiteAvailability(AppConfig config) {
     if (_disposed ||
@@ -4689,13 +4711,17 @@ class AppState extends ChangeNotifier
     bool current() {
       if (_disposed || !(isCurrent?.call() ?? true)) return false;
       final latest = database.findHistory(
-        siteKey: row.siteKey, vodId: row.vodId, sourceKey: row.sourceKey,
-        flag: row.flag, episodeId: row.episodeId,
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        sourceKey: row.sourceKey,
+        flag: row.flag,
+        episodeId: row.episodeId,
       );
       // UI尚未重建时generation可能没变，数据库中的新身份仍必须优先。
       return latest == null ||
           (latest.tmdbId == row.tmdbId && latest.mediaType == row.mediaType);
     }
+
     if (!current()) return null;
     final sourceKey = row.sourceKey.trim();
     final record = sourceKey.isEmpty || sourceKey == activeSourceKey
@@ -4703,34 +4729,60 @@ class AppState extends ChangeNotifier
         : database.configBySourceKey(sourceKey);
     final TmdbMatchStore store = record == null && sourceKey.isNotEmpty
         ? InMemoryTmdbMatchStore()
-        : DatabaseTmdbMatchStore(database: database, configId: record?.id ?? tmdbConfigId);
+        : DatabaseTmdbMatchStore(
+            database: database,
+            configId: record?.id ?? tmdbConfigId,
+          );
     final scoped = configForSourceKey(sourceKey);
-    final siteName = scoped?.sites.where((site) => site.key == row.siteKey).firstOrNull?.name ?? '';
+    final siteName =
+        scoped?.sites
+            .where((site) => site.key == row.siteKey)
+            .firstOrNull
+            ?.name ??
+        '';
     TmdbItem? item;
     try {
-      item = store.find(siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName)?.toItem();
+      item = store
+          .find(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+          )
+          ?.toItem();
     } catch (_) {
       // 读匹配表失败时仍可按标题解析。
     }
     if (item == null) {
       try {
-        final outcome = await TmdbIdentityService(
-          config: () => tmdbConfig, service: _tmdbService, store: store,
-        ).match(
-          TmdbMatchRequest(
-            siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName,
-            siteName: siteName, vodName: row.vodName, vodYear: row.vodYear,
-            expectedMediaType: TmdbMediaType.parse(row.mediaType),
-          ),
-          isCurrent: current,
-        );
+        final outcome =
+            await TmdbIdentityService(
+              config: () => tmdbConfig,
+              service: _tmdbService,
+              store: store,
+            ).match(
+              TmdbMatchRequest(
+                siteKey: row.siteKey,
+                vodId: row.vodId,
+                sourceTitle: row.vodName,
+                siteName: siteName,
+                vodName: row.vodName,
+                vodYear: row.vodYear,
+                expectedMediaType: TmdbMediaType.parse(row.mediaType),
+              ),
+              isCurrent: current,
+            );
         item = outcome.item;
       } catch (_) {
         return null;
       }
     }
     if (item == null || !current()) return null;
-    rememberHistoryIdentity(siteKey: row.siteKey, vodId: row.vodId, item: item, sourceKey: row.sourceKey);
+    rememberHistoryIdentity(
+      siteKey: row.siteKey,
+      vodId: row.vodId,
+      item: item,
+      sourceKey: row.sourceKey,
+    );
     return item;
   }
 
@@ -5427,11 +5479,15 @@ class AppState extends ChangeNotifier
 
       // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
       // 以为导入即可用，实际整份配置可能没有一个站点能跑。
-      await _router.prepareAvailability(effectiveConfig?.sites ?? config.sites);
+      _prepareSiteAvailability(effectiveConfig ?? config);
       final usableSites = usableSiteCount;
       _notice =
           config.notice ??
           '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
+      _importAvailabilityConfig = config.notice == null
+          ? effectiveConfig
+          : null;
+      _importAvailabilityNotice = config.notice == null ? _notice : null;
       _configPhase = LoadPhase.ready;
       log.info(
         '配置导入成功 name=$name sites=${config.sites.length} '
@@ -5450,7 +5506,6 @@ class AppState extends ChangeNotifier
       // 句柄留给 UI：导入页要在「导入成功」这一刻弹提示，必须能等到探测 settle。
       _shellTargetsProbe = _probeShellTargetsQuietly(config);
       await _shellTargetsProbe;
-      await _siteAvailabilityFlight;
       _kickCspProvisioning(effectiveConfig ?? config);
 
       // 导入后自动加载默认站点首页，形成“导入 → 首页”的闭环。
@@ -9749,14 +9804,18 @@ class AppState extends ChangeNotifier
   final Expando<Map<String, Future<CspProbeReport>>> _cspGroupWork = Expando();
   final Set<Future<CspProbeReport>> _currentCspWork = {};
 
-  void _settleCspSites(AppConfig config, Iterable<String> keys) {
+  void _settleCspSites(
+    AppConfig config,
+    Iterable<String> keys, {
+    bool notify = true,
+  }) {
     if (_disposed || !identical(effectiveConfig, config)) return;
     final remaining = Set<String>.of(_router.provisioningSiteKeys)
       ..removeAll(keys);
     _router.setProvisioningSiteKeys(remaining);
     _router.notifySiteFilesChanged();
     _siteItemsCache = null;
-    _notifyIfAlive();
+    if (notify) _notifyIfAlive();
   }
 
   Future<CspProbeReport> _prepareCspGroup(
@@ -9776,8 +9835,11 @@ class AppState extends ChangeNotifier
           config.copyWith(sites: sites),
           onProgress: onProgress,
           onEntry: (entry) {
-            _settleCspSites(config, [entry.siteKey]);
-            onEntry?.call(entry);
+            if (onEntry != null) {
+              onEntry(entry);
+            } else {
+              _settleCspSites(config, [entry.siteKey]);
+            }
           },
         )
         .then(
@@ -9945,7 +10007,7 @@ class AppState extends ChangeNotifier
 
       void onEntry(CspProbeEntry entry) {
         if (_disposed || runId != _cspProvisionRunId) return;
-        _settleCspSites(config, [entry.siteKey]);
+        _settleCspSites(config, [entry.siteKey], notify: false);
         final progress = _cspProvisionProgress;
         entriesByKey[entry.siteKey] = entry;
         done = progress.done + 1;
@@ -10500,6 +10562,24 @@ class AppState extends ChangeNotifier
     final root = p.normalize(p.absolute(_currentCspBinding.root));
     final target = p.normalize(p.absolute(targetDir));
     if (!p.equals(p.dirname(target), root)) return false;
+    final site = effectiveConfig?.sites
+        .where((site) => site.key == siteKey)
+        .firstOrNull;
+    if (site != null &&
+        p.equals(
+          target,
+          p.normalize(p.absolute(_currentCspBinding.directoryFor(siteKey))),
+        )) {
+      await _router.prepareAvailability([site], foreground: true);
+    }
+    if (!p.equals(root, p.normalize(p.absolute(_currentCspBinding.root))) ||
+        (directory == null &&
+            !p.equals(
+              target,
+              p.normalize(p.absolute(_currentCspBinding.directoryFor(siteKey))),
+            ))) {
+      return false;
+    }
     try {
       if (Directory(target).existsSync() &&
           !p.equals(

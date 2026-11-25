@@ -368,6 +368,119 @@ void main() {
       }
     });
 
+    test('an unexpected upstream prefix error is still reported', () async {
+      final raw = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final handlers = <Future<void>>[];
+      final connections = raw.listen((socket) {
+        handlers.add(() async {
+          final headers = <int>[];
+          await for (final chunk in socket) {
+            headers.addAll(chunk);
+            if (ascii.decode(headers).contains('\r\n\r\n')) break;
+          }
+          socket.add(
+            ascii.encode(
+              'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n'
+              'Content-Length: 8388608\r\nConnection: close\r\n\r\n#',
+            ),
+          );
+          await socket.flush();
+          await socket.close();
+          socket.destroy();
+        }());
+      });
+      try {
+        final target = Uri.parse('http://127.0.0.1:${raw.port}/getM3u8');
+        final request = await client.getUrl(
+          Uri.parse(proxy.urlFor(session, target)),
+        );
+        final response = await request.close();
+        await response.drain<void>();
+        expect(response.statusCode, 500);
+        expect(
+          log.entries.any(
+            (entry) =>
+                entry.level == LogLevel.error &&
+                entry.message.contains('HttpException'),
+          ),
+          isTrue,
+          reason: log.entries.map((entry) => entry.message).join('\n'),
+        );
+        expect(proxy.activeRequests, 0);
+      } finally {
+        await connections.cancel();
+        await raw.close();
+        await Future.wait(handlers);
+      }
+    });
+
+    test('client cancellation owns pending inspected replay errors', () async {
+      final errors = <String>[];
+      final stopped = Completer<void>();
+      final pendingRead = Completer<void>();
+      final release = Completer<void>();
+      var bytesRead = 0;
+      serve = (request) async {
+        request.response.bufferOutput = false;
+        request.response.headers.contentLength = 8 * 1024 * 1024;
+        request.response.add([0x47]);
+        await request.response.flush();
+        await release.future;
+      };
+      await proxy.stop();
+      runZonedGuarded(
+        () async {
+          try {
+            final upstreamClient = _ObservedHttpClient(
+              HttpClient(),
+              onPendingRead: () => pendingRead.complete(),
+              onBytes: (count) => bytesRead += count,
+            );
+            proxy = LocalProxyServer(
+              log: log,
+              upstreamClient: upstreamClient,
+              policy: const ProxyTargetPolicy(allowLoopback: true),
+              requestTimeout: const Duration(seconds: 2),
+            );
+            await proxy.start();
+            session = proxy.sessions.create(
+              siteKey: 'fixture',
+              allowedHosts: {'127.0.0.1'},
+            );
+            final response = await open();
+            final iterator = StreamIterator(response);
+            expect(await iterator.moveNext(), isTrue);
+            expect(iterator.current, [0x47]);
+            await pendingRead.future.timeout(const Duration(seconds: 1));
+            expect(proxy.activeRequests, 1);
+            client.close(force: true);
+            await iterator.cancel();
+            await proxy.stop();
+            await Future<void>(() async {
+              while (proxy.activeRequests != 0) {
+                await Future<void>.delayed(const Duration(milliseconds: 10));
+              }
+            }).timeout(const Duration(seconds: 1));
+          } finally {
+            release.complete();
+            stopped.complete();
+          }
+        },
+        (error, stack) {
+          errors.add('$error\n$stack');
+        },
+      );
+      await stopped.future.timeout(const Duration(seconds: 4));
+      await Future<void>.delayed(Duration.zero);
+      expect(errors, isEmpty);
+      expect(proxy.activeRequests, 0);
+      expect(
+        bytesRead,
+        1,
+        reason: 'Cancellation must not drain the 8 MiB body.',
+      );
+    });
+
     test('client cancellation closes the bounded binary stream and releases request slot', () async {
       var chunksSent = 0;
       serve = (request) async {
@@ -413,4 +526,115 @@ void main() {
       },
     );
   });
+}
+
+class _ObservedHttpClient implements HttpClient {
+  _ObservedHttpClient(
+    this.delegate, {
+    required this.onPendingRead,
+    required this.onBytes,
+  });
+
+  final HttpClient delegate;
+  final void Function() onPendingRead;
+  final void Function(int) onBytes;
+
+  @override
+  set connectionTimeout(Duration? value) => delegate.connectionTimeout = value;
+  @override
+  set idleTimeout(Duration value) => delegate.idleTimeout = value;
+  @override
+  set autoUncompress(bool value) => delegate.autoUncompress = value;
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async =>
+      _ObservedRequest(
+        await delegate.openUrl(method, url),
+        onPendingRead,
+        onBytes,
+      );
+  @override
+  void close({bool force = false}) => delegate.close(force: force);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ObservedRequest implements HttpClientRequest {
+  _ObservedRequest(this.delegate, this.onPendingRead, this.onBytes);
+
+  final HttpClientRequest delegate;
+  final void Function() onPendingRead;
+  final void Function(int) onBytes;
+
+  @override
+  HttpHeaders get headers => delegate.headers;
+  @override
+  set followRedirects(bool value) => delegate.followRedirects = value;
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) =>
+      delegate.abort(exception, stackTrace);
+  @override
+  Future<HttpClientResponse> close() async =>
+      _ObservedResponse(await delegate.close(), onPendingRead, onBytes);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ObservedResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  _ObservedResponse(this.delegate, this.onPendingRead, this.onBytes);
+
+  final HttpClientResponse delegate;
+  final void Function() onPendingRead;
+  final void Function(int) onBytes;
+
+  @override
+  HttpHeaders get headers => delegate.headers;
+  @override
+  int get contentLength => delegate.contentLength;
+  @override
+  int get statusCode => delegate.statusCode;
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int>)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    late StreamSubscription<List<int>> source;
+    var resumed = false;
+    final controller = StreamController<List<int>>(sync: true);
+    controller
+      ..onListen = () {
+        source = delegate.listen(
+          (chunk) {
+            onBytes(chunk.length);
+            controller.add(chunk);
+          },
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      }
+      ..onPause = () {
+        source.pause();
+      }
+      ..onResume = () {
+        source.resume();
+        if (!resumed) {
+          resumed = true;
+          onPendingRead();
+        }
+      }
+      ..onCancel = () {
+        return source.cancel();
+      };
+    return controller.stream.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

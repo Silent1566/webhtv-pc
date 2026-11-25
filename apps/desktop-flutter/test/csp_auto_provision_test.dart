@@ -117,7 +117,7 @@ void main() {
     for (final result in directResults) {
       if (!result.isCompleted) result.complete({});
     }
-    await Future<void>.delayed(Duration.zero);
+    await state.pythonEnvironmentIdle;
     await temp.delete(recursive: true);
   });
 
@@ -555,7 +555,11 @@ void main() {
       );
       final currentDir = await installFixture('remove-key', _jar);
       await importSites([_site('remove-key')]);
-      expect(await state.removeCspJar('remove-key'), isTrue);
+      expect(
+        await state.removeCspJar('remove-key'),
+        isTrue,
+        reason: state.log.entries.map((entry) => entry.message).join('\n'),
+      );
       expect(Directory(currentDir).existsSync(), isFalse);
       expect(Directory(oldDir).existsSync(), isTrue);
     },

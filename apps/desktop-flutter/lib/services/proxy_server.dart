@@ -1907,20 +1907,50 @@ class LocalProxyServer {
     );
   }
 
-  static Stream<List<int>> _replayInspectedBody(
+  Stream<List<int>> _replayInspectedBody(
     List<List<int>> chunks,
     StreamIterator<List<int>> iterator,
-  ) async* {
-    try {
-      for (final chunk in chunks) {
-        yield chunk;
+  ) {
+    Stream<List<int>> replay() async* {
+      try {
+        for (final chunk in chunks) {
+          yield chunk;
+        }
+        while (await iterator.moveNext()) {
+          yield iterator.current;
+        }
+      } finally {
+        await iterator.cancel();
       }
-      while (await iterator.moveNext()) {
-        yield iterator.current;
-      }
-    } finally {
-      await iterator.cancel();
     }
+
+    late StreamSubscription<List<int>> subscription;
+    late StreamController<List<int>> controller;
+    controller = StreamController<List<int>>(
+      onListen: () {
+        subscription = replay().listen(
+          controller.add,
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      },
+      onPause: () => subscription.pause(),
+      onResume: () => subscription.resume(),
+      onCancel: () async {
+        // Cancel moveNext before async* cancellation waits for that same read.
+        try {
+          await iterator.cancel();
+          await subscription.cancel();
+        } catch (error, stackTrace) {
+          if (error is HttpException || error is SocketException) {
+            log.warning('代理流取消中断：${error.runtimeType}', scope: 'proxy');
+          } else {
+            log.error('代理流取消异常：$error\n$stackTrace', scope: 'proxy');
+          }
+        }
+      },
+    );
+    return controller.stream;
   }
 
   static bool _completeManifest(int status, String? range, int length) {
