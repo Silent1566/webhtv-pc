@@ -36,6 +36,8 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
+import 'libmpv_guard.dart';
+
 /// 截图用根边界：`find.byType(RepaintBoundary).first` 会命中视频层，
 /// 拍不到 Dialog/Overlay；取证必须盯住整棵树的这一层。
 const Key playerPageCaptureRootKey = ValueKey<String>('player-page-capture-root');
@@ -100,6 +102,7 @@ void installWindowManagerMocks(
 /// 必须在 `pumpWidget` **之前**调用。`MediaKit.ensureInitialized()` 也要先调，
 /// 否则 `Player()` 构造会抛「must be called before using any API」。
 void installMediaKitMocks(WidgetTester tester) {
+  clearStaleMediaKitNativeReference();
   MediaKit.ensureInitialized();
   tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
     mediaKitVideoChannel,
