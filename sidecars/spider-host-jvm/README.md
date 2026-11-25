@@ -410,3 +410,12 @@ payload 里的站点实现按「名字对得上」的顺序解析：原样全限
 `WexAiHanXiaoQuan`，连续子串包含对它无解）→ payload 里恰好只有一个 `Spider` 实现时用它。
 子序列命中多个就抛异常并列出候选（不猜）；全部落空抛异常并列出已尝试的类名与 payload 里的
 实现清单。
+
+
+### 原始 dex 方法体重建门禁与已知风险
+
+`pwsh -File sidecars/spider-host-jvm/test/run-method-recovery.ps1` 是原始 dex 方法体重建修复的门禁命令（从 `JAVA_HOME` / `javac` 发现并校验 JDK 17+）。
+
+- 重建走 `convertCode` 而非 `convertMethod`；若重建方法体引用 `$d2j$hex$` 助手而该类未声明，重建阶段即 fail-closed 点名方法与缺失 helper，不再发布到调用期。
+- `DexMethodRecovery.main` 子进程分支已覆盖（报告与进程内一致、拒绝保留 stage+method 且不留产物）；`DexIntakeCli` 分支仍无自动化覆盖。
+- 每次转译会两次解析 raw jar。

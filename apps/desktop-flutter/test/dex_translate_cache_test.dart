@@ -192,7 +192,7 @@ void main() {
       DexTranslate.recordUsable(p.join(root.path, 'missing.json')),
       isFalse,
     );
-    expect(DexTranslate.repairVersion, 6);
+    expect(DexTranslate.repairVersion, 7);
   });
 
   test('shared record must belong to requested source SHA', () {

@@ -390,7 +390,13 @@ class SpiderRouter {
   final String? jvmHostPath;
 
   /// `csp_*` 站点的本地缓存绑定；为空时按注册表根目录推导（`<root>/csp`）。
-  final CspJvmBinding? cspBinding;
+  CspJvmBinding? cspBinding;
+
+  /// 换配置时保留旧来源缓存，但不能把同 key 的另一个 jar 当作当前站源。
+  void setCspConfig(AppConfig config) {
+    cspBinding = cspBinding?.forConfig(config);
+    invalidateRuntimes();
+  }
 
   final Map<String, SiteRuntime> _cache = {};
 
@@ -420,6 +426,19 @@ class SpiderRouter {
   ///
   /// 由 `AppState` 在导入配置后填充；为空时直连站点按「未注册」如实报错。
   Map<String, LocalSpider> directSpiders = const {};
+
+  /// 后台自动安装中的 csp 站点。判定用它把「正在装」与「永远装不上」分开：
+  /// 导入那一刻站点还没落盘，如实报「缺少 jar」会把正在进行的安装说成失败。
+  Set<String> provisioningSiteKeys = const {};
+
+  void setProvisioningSiteKeys(Set<String> keys) {
+    if (keys.length == provisioningSiteKeys.length &&
+        keys.containsAll(provisioningSiteKeys)) {
+      return;
+    }
+    provisioningSiteKeys = Set.unmodifiable(keys);
+    _siteRevision++;
+  }
 
   /// 更新直连站点注册结果（并清理旧缓存，使下次判定拿到新结论）。
   void setDirectSpiders(Map<String, LocalSpider> spiders) {
@@ -643,11 +662,22 @@ class SpiderRouter {
       );
     }
     final entry = binding.entryFor(site.key);
+    final siteDir = entry == null
+        ? binding.directoryFor(site.key)
+        : p.dirname(entry);
     if (entry == null) {
+      if (provisioningSiteKeys.contains(site.key)) {
+        return SiteAvailability(
+          available: false,
+          runtimeName: 'PC Java Spider',
+          stage: 'Phase 3',
+          reason: '正在自动安装站源（后台进行中），完成后会自动加载首页或显示检测结果',
+        );
+      }
       // 自动探测（方案 3）给过的结论必须原样带到用户面前：配置声明的 jar 若
       // 含 classes.dex / 原生库，程序已经试过并拒绝落盘，不能再让用户对着
       // 「请把 jar 放到 …」自己去猜（§12.9）。
-      final probed = JarIntake.probeRecord(binding.directoryFor(site.key));
+      final probed = JarIntake.probeRecord(siteDir);
       final shellReason = _shellProbeReason(probed);
       if (shellReason != null) {
         return SiteAvailability(
@@ -676,7 +706,7 @@ class SpiderRouter {
         stage: 'Phase 3',
         reason:
             '缺少桌面 JVM 站源：请把**无 Android Context** 的 jar 放到 '
-            '${binding.directoryFor(site.key)}（Android jar 内含 classes.dex，JVM 无法加载）',
+            '$siteDir（Android jar 内含 classes.dex，JVM 无法加载）',
       );
     }
     // 静态结论只取一次：原生库判定必须显式在这里拒绝——`isAndroidJar` 现在只覆盖
@@ -686,10 +716,7 @@ class SpiderRouter {
     // 解包产物（payload）里 `assets/*.so` 是 payload 自己的原生依赖：按**payload
     // 口径**判定，否则一个已经装好、能跑的壳站点会被报成「含原生库」。
     final unpackedPayload =
-        JarIntake.intakeRecord(
-          binding.directoryFor(site.key),
-        )?['unpackedPayload'] ==
-        true;
+        JarIntake.intakeRecord(siteDir)?['unpackedPayload'] == true;
     final inspection = unpackedPayload
         ? JarIntake.inspectUnpackedPayload(
             entry,
@@ -758,9 +785,7 @@ class SpiderRouter {
           ? '该站点是加固壳的解包产物（含原生库，依赖 native 的调用会如实抛 '
                 'UnsatisfiedLinkError，不静默降级）；'
           : '';
-      final translation = JarIntake.intakeRecord(
-        binding.directoryFor(site.key),
-      )?['dexTranslation'];
+      final translation = JarIntake.intakeRecord(siteDir)?['dexTranslation'];
       if (translation is! Map) {
         dexNote =
             '$unpackedNote'
@@ -790,7 +815,7 @@ class SpiderRouter {
     // intake.json），而 JVM 宿主对缺失的 manifest 直接退出码 2。判定前补写一次，
     // 避免用户必须删目录重导才能恢复。
     JarIntake.ensureLaunchManifest(
-      targetDir: binding.directoryFor(site.key),
+      targetDir: siteDir,
       siteKey: site.key,
       log: log,
     );
@@ -831,14 +856,20 @@ class SpiderRouter {
     required String entryPath,
     required CspJvmBinding binding,
   }) {
-    final manifestPath = p.join(
-      binding.directoryFor(site.key),
-      'manifest.json',
-    );
-    JarIntake.ensureLaunchManifest(
-      targetDir: binding.directoryFor(site.key),
-      siteKey: site.key,
-    );
+    final siteDir = p.dirname(entryPath);
+    final manifestPath = p.join(siteDir, 'manifest.json');
+    JarIntake.ensureLaunchManifest(targetDir: siteDir, siteKey: site.key);
+    final source = binding.sources[site.key];
+    final record = JarIntake.probeRecord(siteDir);
+    if (source != null && record?['sourceUrl'] == source.url) {
+      JarIntake.alignLaunchClassName(
+        targetDir: siteDir,
+        siteKey: site.key,
+        className: CspJarProbe.qualifyClassName(
+          CspJvmBinding.classNameOf(site.api),
+        ),
+      );
+    }
     SpiderManifest? launch;
     try {
       final raw = jsonDecode(File(manifestPath).readAsStringSync());
@@ -866,8 +897,8 @@ class SpiderRouter {
     );
     return LocalSpider(
       manifest: manifest,
-      manifestPath: p.join(binding.directoryFor(site.key), 'manifest.json'),
-      rootDir: binding.directoryFor(site.key),
+      manifestPath: p.join(siteDir, 'manifest.json'),
+      rootDir: siteDir,
       entryPath: entryPath,
       // csp 根是 <spidersroot>/csp，账号文件与 manifest 扫描结果同根。
       accountStorePath: p.normalize(

@@ -313,8 +313,15 @@ class CspJarProbe {
     this.dexTranslate,
     this.shellUnpack,
     this.shellRuntimeInstalled,
+    this.allowShellUnpack = true,
     this.unidbgRuntime,
   }) : _client = client ?? http.Client();
+
+  /// 是否允许探测过程中**直接起 ARM 解包**。
+  ///
+  /// 导入/启动的后台安装必须为 false：解包是 5–30 s 的模拟器开销，属于用户显式
+  /// 动作（站点页/导入确认框），不能因为「运行时早就装好了」就自己跑起来。
+  final bool allowShellUnpack;
 
   /// Spider 根目录（`<configDir>/spiders`）；下载缓存放 `<root>/probe-cache/`。
   final String root;
@@ -499,8 +506,18 @@ class CspJarProbe {
   Future<CspProbeReport> materialize(
     AppConfig config, {
     void Function(ShellUnpackTick)? onProgress,
+    void Function(CspProbeEntry entry)? onEntry,
   }) async {
     final entries = <CspProbeEntry>[];
+    void appendEntry(CspProbeEntry entry) {
+      entries.add(entry);
+      try {
+        onEntry?.call(entry);
+      } catch (_) {
+        log?.warning('站点进度监听失败 site=${entry.siteKey}', scope: 'spider');
+      }
+    }
+
     final probeClock = Stopwatch()..start();
     _downloadCache.clear();
     _shellAttempts.clear();
@@ -559,6 +576,11 @@ class CspJarProbe {
 
     emit(0, '探测-开始');
     // 入口类名按 `api` 推导并登记：这份配置的 key 是中文标签，按 key 推必然 ClassNotFound。
+    _sourceApiByKey
+      ..clear()
+      ..addEntries(
+        config.sites.map((site) => MapEntry(site.key, site.api.trim())),
+      );
     _entryClassByKey
       ..clear()
       ..addEntries(
@@ -586,23 +608,29 @@ class CspJarProbe {
           },
           // Assembly/translation has no trustworthy rate: report the phase with a
           // null ETA instead of letting the unpack curve extrapolate a fake countdown.
-          onAssembly: (stage) =>
-              emit(((siteIndex + 0.97) / sites.length) * 0.99, stage),
+          onAssembly: (stage) {
+            const sourceStages = {'下载站源', '复用站源缓存', '检查站源'};
+            emit(
+              sourceStages.contains(stage)
+                  ? lastFraction
+                  : ((siteIndex + 0.97) / sites.length) * 0.99,
+              stage,
+            );
+          },
         );
-        if (entry != null) entries.add(entry);
+        if (entry != null) appendEntry(entry);
         // 命中缓存时 `_probeSite` 可能一路同步跑完，这里显式让出一次事件循环，
         // 否则一百来个站点会在首帧之后连成一段几百毫秒的卡顿。
         await Future<void>.delayed(Duration.zero);
       } catch (error) {
         // 单个站点失败不得影响其它站点与启动。
         log?.warning('CSP jar 自动探测失败 site=${site.key} $error', scope: 'spider');
-        entries.add(
-          CspProbeEntry(
-            siteKey: site.key,
-            outcome: CspProbeOutcome.failed,
-            message: '$error',
-          ),
+        final failedEntry = CspProbeEntry(
+          siteKey: site.key,
+          outcome: CspProbeOutcome.failed,
+          message: '$error',
         );
+        appendEntry(failedEntry);
       }
       eta.markJarDone(probeClock.elapsedMilliseconds - siteStartMs);
       emit(
@@ -701,6 +729,11 @@ class CspJarProbe {
   }) async {
     _downloadCache.clear();
     _shellAttempts.clear();
+    _sourceApiByKey
+      ..clear()
+      ..addEntries(
+        config.sites.map((site) => MapEntry(site.key, site.api.trim())),
+      );
     _entryClassByKey
       ..clear()
       ..addEntries(
@@ -1176,12 +1209,16 @@ class CspJarProbe {
     // code=3，用户只能手动删站点目录——那是把内部实现变更的成本转嫁给用户
     // （与 semanticsVersion 同一条教训）。用户手工放的 jar 没有 probe.json，不受影响。
     final record = JarIntake.probeRecord(targetDir);
+    final manualOverride =
+        JarIntake.intakeRecord(targetDir)?['manualOverride'] == true;
     final staleShellEntry =
+        !manualOverride &&
         record != null &&
         record['sourceUrl'] == spec.url &&
         !_isCurrentRecord(record) &&
         _shellFeatures(record);
     final deferredAssembly =
+        !manualOverride &&
         record != null &&
         record['sourceUrl'] == spec.url &&
         (record['pretranslationDeferred'] == true ||
@@ -1196,6 +1233,13 @@ class CspJarProbe {
     if (binding.entryFor(siteKey) != null &&
         !staleShellEntry &&
         !deferredAssembly) {
+      // 入口类名曾按站点 key 推导（旧产物），复用前就地改成 api 推导的类名：
+      // 否则中文 key 的站点会一直 ClassNotFoundException。
+      JarIntake.alignLaunchClassName(
+        targetDir: targetDir,
+        siteKey: siteKey,
+        className: qualifyClassName(_entryClassOf(siteKey)),
+      );
       return CspProbeEntry(
         siteKey: siteKey,
         outcome: CspProbeOutcome.skippedInstalled,
@@ -1237,6 +1281,9 @@ class CspJarProbe {
         stagedCache.lengthSync() <= maxBytes &&
         _sha256Of(stagedCache) == recordedSha &&
         _nonEmpty(_payloadFileFor(recordedSha));
+    onAssembly?.call(
+      recoverCached || _downloadCache.containsKey(spec.url) ? '复用站源缓存' : '下载站源',
+    );
     final bytes = recoverCached
         ? await stagedCache.readAsBytes()
         : await _download(spec.url);
@@ -1282,6 +1329,7 @@ class CspJarProbe {
       await staged.writeAsBytes(bytes, flush: true);
     }
 
+    onAssembly?.call('检查站源');
     final inspection = JarIntake.inspectPath(
       staged.path,
       expectedClass: _entryClassOf(siteKey),
@@ -1308,10 +1356,16 @@ class CspJarProbe {
     // 含原生库的入口走下面的拒绝分支——dex 预转译解决不了原生实现只能在
     // Android/ARM 上跑这件事（§12.6.4 ①）。
     if (inspection.installable) {
+      onAssembly?.call(
+        inspection.verdict == JarVerdict.translatableDex
+            ? '转译 Android 站源'
+            : '安装站点',
+      );
       final result = await JarIntake.install(
         sourcePath: staged.path,
         targetDir: targetDir,
         siteKey: siteKey,
+        className: qualifyClassName(_entryClassOf(siteKey)),
         log: log,
         translateDex: inspection.verdict == JarVerdict.translatableDex
             ? _translateDex
@@ -1402,6 +1456,30 @@ class CspJarProbe {
         scope: 'spider',
       );
     } else {
+      if (!allowShellUnpack) {
+        final summary =
+            '该入口是加固壳（${_shellLabel(inspection)}）：解包要起 ARM 桥（unidbg），'
+            '属于用户显式动作，本次自动安装只登记、不解包。下一步：站点页/设置页点'
+            '「解包」并确认后再探测一次。';
+        await _writeRecord(
+          targetDir,
+          siteKey,
+          spec,
+          verdict: inspection.verdict.name,
+          outcome: CspProbeOutcome.needsShellRuntime.name,
+          summary: _withMd5Note(summary, md5Note),
+          sha256: shellSha,
+          entryCount: inspection.entryCount,
+          actualMd5: actualMd5,
+        );
+        return CspProbeEntry(
+          siteKey: siteKey,
+          outcome: CspProbeOutcome.needsShellRuntime,
+          jarUrl: spec.url,
+          inspection: inspection,
+          message: summary,
+        );
+      }
       if (!_shellRuntimeInstalled()) {
         final summary =
             '该入口是加固壳（${_shellLabel(inspection)}）：需要 ARM 解包桥（unidbg，'
@@ -1830,6 +1908,7 @@ class CspJarProbe {
   /// 真正要写 manifest 的地方（`_installPayload`）不在同一层，中间隔着只带 siteKey
   /// 的探测函数；把结论在入口处算一次、存下来，比把 [Site] 透传六层更不容易错。
   final Map<String, String> _entryClassByKey = {};
+  final Map<String, String> _sourceApiByKey = {};
 
   String _entryClassOf(String siteKey) =>
       _entryClassByKey[siteKey] ?? JarIntake.classNameFor(siteKey);
@@ -2092,6 +2171,7 @@ class CspJarProbe {
       await JarIntake.writeProbe(targetDir, {
         'siteKey': siteKey,
         'sourceUrl': spec.url,
+        'sourceApi': ?_sourceApiByKey[siteKey],
         'semanticsVersion': probeSemanticsVersion,
         'declaredMd5': spec.md5,
         'actualMd5': actualMd5,

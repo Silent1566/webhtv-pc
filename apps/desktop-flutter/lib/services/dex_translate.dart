@@ -38,7 +38,7 @@ class DexTranslate {
   ///
   /// 它只用于**缓存准入**：旧口径产出的 classes.jar 即使文件还在、SHA 还能对上，也不能
   /// 复用（否则新修复永远跑不到真实 payload 上）。版本不一致一律重新转译，绝不删用户缓存。
-  static const int repairVersion = 6;
+  static const int repairVersion = 7;
 
   /// stderr 日志只保留**尾部**这么多字符：CLI 会打大量人类日志，整段塞进日志会
   /// 淹掉真正的原因，也撑爆日志文件。
