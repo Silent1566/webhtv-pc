@@ -6,7 +6,7 @@
 /// `docs/phase11/design/00-home-hero-design-index.md` 的取证口径）。
 ///
 /// 海报地址指向不可达主机：`PosterImage` 于是渲染占位块，这**诚实反映"图还没到"**
-/// 的状态，而本次要复核的层级、间距、遮罩、2:3 比例都是真实的。
+/// 的状态；这些图不能冒充高清横图，hero 保留全高占位，下方轨道保留真实占位布局。
 library;
 
 import 'dart:io';
@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/home_page.dart';
+import 'package:webhtv_pc/ui/home_cards.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
@@ -163,7 +164,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   }
 
-  testWidgets('After：hero + 继续观看（有历史）', (tester) async {
+  testWidgets('After：不可达海报保留全高占位，继续观看轨道保留', (tester) async {
     state.database!.upsertHistory(
       siteKey: 'site-a',
       vodId: 'v1',
@@ -202,14 +203,23 @@ void main() {
     );
 
     await pumpHome(tester);
-    expect(find.byKey(const ValueKey('home-hero')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-hero')), findsNothing);
+    final placeholder=find.byKey(const ValueKey('home-hero-startup-placeholder'));
+    expect(placeholder,findsOneWidget);
+    expect(tester.getSize(placeholder).height,800);
+    await _capture(tester, 'home-hero.png');
+    await tester.scrollUntilVisible(find.byType(HomeRailView),400,
+      scrollable:find.descendant(of:find.byKey(const ValueKey('home-scroll')),matching:find.byType(Scrollable)).first);
+    expect(tester.widget<HomeRailView>(find.byType(HomeRailView)).rail.items,
+        hasLength(3));
     await _capture(tester, 'home-hero.png');
     await unmount(tester);
   });
 
   testWidgets('After：空态（没有任何可续播内容）', (tester) async {
     await pumpHome(tester);
-    expect(find.byKey(const ValueKey('home-empty-hero')), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-hero-startup-placeholder')), findsOneWidget);
+    expect(tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,800);
     await _capture(tester, 'home-empty.png');
     await unmount(tester);
   });

@@ -162,19 +162,17 @@ class HomeFeed {
 
 /// 首屏 hero 的高度（`docs/phase11/design/01-home-hero.md` §3.1）。
 ///
-/// 两档而不是一个公式，理由来自实测：
-/// - **有 16:9 背景图**：占满内容区（夹 360–1000）。这就是用户要的「全屏大海报」，
-///   上限 1000 是为了在 4K/超宽屏下让第一条轨道的标题露一条边——整屏纯海报
-///   没有任何「往下还有内容」的线索。
-/// - **没有背景图**（只有竖版海报或什么都没有）：收到 62%（夹 360–640）。
-///   占满一屏的纯渐变是一块空，视觉上像没加载完。
+/// **只有一档**：占满内容区（夹 360–1000）。
 ///
-/// 按「本轮 hero 里有没有任何一条带背景图」判断，而不是按当前这一张：高度随
-/// 轮播跳动会让整页抖。
-double homeHeroHeight(double contentHeight, {required bool hasArt}) {
-  if (hasArt) return contentHeight.clamp(360.0, 1000.0);
-  return (contentHeight * 0.62).clamp(360.0, 640.0);
-}
+/// 旧版按「本轮有没有 16:9 背景图」分两档，没图就收到 62%。用户 2026-11-25 反馈
+/// 「首页风格不统一，有的像右下角一张图」——高度随素材变化，没有背景图的那几张
+/// 就成了半屏海报 + 半屏空。素材不足只该影响「画面里有什么」，不该影响「这一屏
+/// 占多高」；缩图由 hero 自己的版式负责，不是把整条滑块压矮。
+///
+/// 上限 1000 保留：4K/超宽屏下让第一条轨道的标题露一条边，整屏纯图没有任何
+/// 「往下还有内容」的线索。
+double homeHeroHeight(double contentHeight) =>
+    contentHeight.clamp(360.0, 1000.0);
 
 /// 把三类输入折成首页要画的东西。
 ///
@@ -185,13 +183,19 @@ HomeFeed buildHomeFeed({
   required List<Following> followings,
   List<RecommendationEntry> tmdbRecommendations = const [],
   List<RecommendationEntry> doubanRecommendations = const [],
+  /// 直播源名（`LiveSource.name`，与历史行的 `siteKey` 同一命名空间）。
+  ///
+  /// 直播没有可续播的时间轴：它的「继续观看 · 原画1080P30 · 剩 1 分钟」是一句
+  /// 谎话（用户 2026-11-25 图一）。写入侧已改成不落历史，但旧库里已经有这类行，
+  /// 所以投影层再判一次——首页读到的是跨源全量历史，不能指望库里干净。
+  Set<String> liveSiteKeys = const <String>{},
 }) {
   // 认领顺序就是 I4 的优先级：following 带「有新集」信息最值钱，resume 次之，
   // 推荐最便宜。先到的类别留下，后到的整条让位——比「先全排好再逐条比较谁优先」
   // 少一处「同一部作品被判断两次」的机会。
   final claimed = _Claimed();
   final followingRail = _claim(_followingItems(followings), claimed);
-  final resumeRail = _claim(_resumeItems(history), claimed);
+  final resumeRail = _claim(_resumeItems(history, liveSiteKeys), claimed);
   final tmdbRail = _claim(_recommendationItems(tmdbRecommendations), claimed);
   final doubanRail = _claim(
     _recommendationItems(doubanRecommendations),
@@ -263,8 +267,60 @@ const double _resumeCeiling = 0.95;
 /// 两个集合分开记：titles 管「同一部作品只出现一次」；keys 管「同一个 key
 /// 不重复」——源站改名后的两行会得到不同标题却同一个 key，只按标题去重挡不住。
 class _Claimed {
-  final Set<String> titles = <String>{};
-  final Set<String> keys = <String>{};
+  final HomeWorkClaimer claimer = HomeWorkClaimer();
+}
+
+/// 「同一部作品只出现一次」的判据，hero 与轨道共用一份（与 [buildHomeFeed] 的
+/// 认领同源）。
+///
+/// 两个键各管一件事：归一化片名（[homeWorkKey]）管「站名不同、其实是同一部剧」；
+/// TMDB 身份管「站名完全不同、片名也没法比」。页面层在取回 TMDB 图、标题被换成
+/// 刮削名之后还要用**这一个**判据再过一遍——两处各写一份，图到得早晚就会决定
+/// 去重是否生效。
+class HomeWorkClaimer {
+  final Set<String> _keys = <String>{};
+  final Set<String> _identities = <String>{};
+
+  /// 归一化片名 → 认领过它的 TMDB 身份（空集合 = 只被「没有身份」的行认领过）。
+  final Map<String, Set<String>> _works = <String, Set<String>>{};
+
+  /// 第一次见到这部作品返回 true（并认领）；重复返回 false。
+  bool claim(HomeItem item) {
+    if (_keys.contains(item.key)) return false;
+    final work = _workKey(item);
+    final identity = _identityOf(item);
+    if (identity != null && _identities.contains(identity)) {
+      // 同一身份的另一个站名：把它登记成这部作品的别名，否则「A 有身份、B 同身份、
+      // C 只有同名」会留下 A 和 C（A 的标题与 C 的标题不同，单靠片名收不掉 C）。
+      _works.putIfAbsent(work, () => <String>{}).add(identity);
+      return false;
+    }
+    final claimed = _works[work];
+    if (claimed != null) {
+      // 同一片名下已经有**另一个** TMDB 身份 —— 那是两部不同的作品（《三体》动画版
+      // 与电视剧版）。标题归一化替用户判不了这个，宁可都留着。
+      if (identity != null &&
+          claimed.isNotEmpty &&
+          !claimed.contains(identity)) {
+        _keys.add(item.key);
+        _identities.add(identity);
+        return true;
+      }
+      if (identity != null) claimed.add(identity);
+      return false;
+    }
+    _works[work] = <String>{?identity};
+    _keys.add(item.key);
+    if (identity != null) _identities.add(identity);
+    return true;
+  }
+}
+
+/// 按「作品」去重：保留第一次出现的条目。页面层取回元数据后用它把 hero 与轨道
+/// 收一遍（见 [HomeWorkClaimer]）。
+List<HomeItem> unifyHomeItems(Iterable<HomeItem> items) {
+  final claimer = HomeWorkClaimer();
+  return [for (final item in items) if (claimer.claim(item)) item];
 }
 
 /// 按 I4 的优先级认领条目，同时把这一刻的轨道容量（20）用完为止。
@@ -279,12 +335,7 @@ List<HomeItem> _claim(
   final taken = <HomeItem>[];
   for (final item in pool) {
     if (taken.length >= max) break;
-    final work = _workKey(item);
-    if (claimed.titles.contains(work) || claimed.keys.contains(item.key)) {
-      continue;
-    }
-    claimed.titles.add(work);
-    claimed.keys.add(item.key);
+    if (!claimed.claimer.claim(item)) continue;
     taken.add(item);
   }
   return taken;
@@ -295,16 +346,49 @@ List<HomeItem> _claim(
 /// 归一后为空（标题全是标点、或干脆没有名字）时退回条目自己的 key，
 /// 否则所有「没名字」的条目会互相吞掉，只剩一条。
 String _workKey(HomeItem item) {
-  final title = recommendationTitleKey(item.title);
+  final title = homeWorkKey(item.title);
   return title.isEmpty ? item.key : title;
+}
+
+/// 首页判断「这是同一部作品吗」的归一化片名。
+///
+/// 站点片名混着发行方噪声：网盘站写作
+/// `《那一夜，我怀了社长的孩子》百度云网盘夸克下载.阿里云盘.中字.(2026)`，
+/// 另一个站点只写 `那一夜我怀了社长的孩子`。直接比整串标题会把同一部剧当成两部
+/// ——用户 2026-11-25 反馈「同一部剧首页两条」。规则只有一条：**有书名号就取
+/// 书名号里的名字**（资源站/网盘的命名惯例），再按 [recommendationTitleKey]
+/// 去标点、空白与大小写差异。
+///
+/// 公开而不是私有：页面层取回 TMDB 图后会把标题换成刮削名（`_withArt`），
+/// 那时要按**同一个键**再收一次重复，两处各写一份就会漏。
+String homeWorkKey(String title) {
+  final text = title.trim();
+  final bracketed = RegExp(r'《([^》]+)》').firstMatch(text);
+  final name = bracketed == null ? text : bracketed.group(1)!;
+  return recommendationTitleKey(name);
+}
+
+/// 条目的 TMDB 身份键；没有身份时返回 null（续播看历史行，推荐看 TMDB 条目）。
+String? _identityOf(HomeItem item) {
+  final history = item.history;
+  if (history != null && history.hasTmdbIdentity) {
+    return '${history.mediaType}:${history.tmdbId}';
+  }
+  return item.entry?.item.identity?.key;
 }
 
 /// 续播候选：过滤 + 按最近播放降序（02 §2.1-2）。
 ///
 /// 「同标题留哪一条」与「轨道截到几条」都交给 [_claim] 统一处理，
 /// 不在这里写成第二份规则——hero 与轨道对同一件事只会有一个答案。
-List<HomeItem> _resumeItems(List<PlaybackHistory> history) {
-  final rows = history.where(_isResumable).toList()
+List<HomeItem> _resumeItems(
+  List<PlaybackHistory> history,
+  Set<String> liveSiteKeys,
+) {
+  final rows = history
+      .where((row) => !liveSiteKeys.contains(row.siteKey))
+      .where(_isResumable)
+      .toList()
     ..sort((a, b) {
       final byTime = b.updatedAt.compareTo(a.updatedAt);
       // updatedAt 撞车时用行 id 兜底：List.sort 不稳定，同一批输入必须得到
@@ -434,6 +518,20 @@ HomeItem? _recommendationItem(RecommendationEntry entry) {
     reason: entry.reason.trim().isNotEmpty ? entry.reason.trim() : meta,
     entry: entry,
   );
+}
+
+/// 轮播的待检池：保留原首批顺序，再用轨道与热门中的后续作品补位。
+/// 这里只投影候选，图片是否真实高清可用由展示层解码判定；不改轨道。
+List<HomeItem> homeHeroCandidates(HomeFeed feed, {Iterable<HomeItem> hot = const []}) {
+  final claimer = HomeWorkClaimer();
+  return [
+    for (final item in [
+      ...feed.hero,
+      for (final rail in feed.rails) ...rail.items,
+      ...hot,
+    ])
+      if (claimer.claim(item)) item,
+  ].take(120).toList();
 }
 
 /// hero 取哪几张（02 §2.1）。

@@ -23,6 +23,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
 import 'support/test_fonts.dart';
+import 'support/home_hd_art_fixture.dart';
 
 const _font = 'HomeScrollCaptureCJK';
 const _backdrop = '$tmdbDefaultBackdropBase/home-scroll-synthetic-backdrop.png';
@@ -358,6 +359,7 @@ void main() {
             child: Scaffold(
               body: HomePage(
                 state: state,
+                heroImageLoader: loadHdHeroFixture,
                 onOpenBrowse: () {},
                 onOpenHistory: () {},
                 onOpenFollowing: () {},

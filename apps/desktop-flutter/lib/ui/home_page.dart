@@ -14,20 +14,28 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
 import '../core/push_parser.dart';
+import '../core/protocol.dart' show Vod, HeaderRule;
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
 import '../core/home_hot.dart';
+import '../core/image_headers.dart';
+import '../core/live_site_keywords.dart';
 import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_title.dart';
 import '../services/home_art_service.dart';
+import '../services/home_hero_startup_cache.dart';
 import '../services/search_suggest_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
@@ -40,6 +48,9 @@ import 'home_backdrop.dart';
 import 'history_cross_source.dart';
 import 'history_entry_detail.dart';
 import 'home_hero.dart';
+import 'home_hero_image_probe.dart';
+import 'home_hero_startup_image.dart';
+import 'image_header_scope.dart';
 import 'playback_resume.dart';
 import 'recommendation_detail_route.dart';
 import 'recommendation_info_dialog.dart';
@@ -74,9 +85,13 @@ class HomePage extends StatefulWidget {
     required this.onOpenFollowing,
     required this.onImportConfig,
     required this.onSearch,
+    this.heroImageLoader,
   });
 
   final AppState state;
+
+  /// 图片I/O注入点；生产默认验证真实解码像素，测试可供给确定性图像结果。
+  final HomeHeroImageLoader? heroImageLoader;
 
   /// 「去点播逛逛」与推荐卡的去向。
   final VoidCallback onOpenBrowse;
@@ -99,7 +114,29 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final ValueNotifier<int> _heroIndex = ValueNotifier(0);
-  int _heroItemCount = 0;
+  List<String> _heroKeys = const [];
+  final _heroStartupClock = Stopwatch()..start();
+  bool _firstHeroAvailableLogged = false;
+  late final HomeHeroImageProbe _heroProbe;
+  late final HomeHeroStartupCache _startupCache;
+  final _startupEncoder = HomeHeroStartupImageEncoder();
+  List<CachedHomeHero> _startupSnapshots = const [];
+  String _startupScope = '';
+  String _startupSaveKey = '';
+  final Set<String> _failedStartupKeys = {};
+  final Map<String, HomeItem> _lastDisplayedHeroes = {};
+  bool _reserveHeroSlot = true;
+  String _heroScanKey = '';
+  int _heroScanGeneration = 0;
+  final Set<String> _heroInspected = {};
+  final Map<String, HomeMeta> _heroCandidateMeta = {};
+  final Map<String, String> _heroQualified = {};
+  final List<String> _heroAcceptedOrder = [];
+  bool _heroScanRunning = false;
+  final Map<String, Future<TmdbItem?>> _heroMatches = {};
+  final Map<String, Future<Vod?>> _heroSources = {};
+  final Map<String, Future<void>> _railMetaPending = {};
+
   late final _recommendationFeedback =
       _state.recommendationDependencies.feedback;
 
@@ -112,23 +149,21 @@ class _HomePageState extends State<HomePage> {
 
   /// 按 TMDB 身份取回的高清图：HomeItem.key → 图。空表示还没到。
   final Map<String, HomeMeta> _art = {};
+  String _recommendationMetaKey = '';
+  int _recommendationMetaGeneration = 0;
   final Map<String, HomeMeta> _followingMeta = {};
   String _followingMetaKey = '';
   int _followingMetaGeneration = 0;
 
-  /// 没有 TMDB 身份时的站源简介：HomeItem.key → `vod_content`。
-  final Map<String, String> _sourceOverview = {};
-
-  /// 已经问过身份的历史行。hero 每次重建都会走一遍 [_ensureResumeMeta]，
-  /// 不记下来就会对同一行反复匹配。
-  final Set<String> _resumeMetaAsked = {};
+  final Map<String, HomeMeta> _resumeMeta = {};
+  String _resumeMetaKey = '';
+  int _resumeMetaGeneration = 0;
 
   /// 热门榜单：类目 → 条目（360kan，搜索页同一份数据）。
   final Map<HotRankCategory, List<SearchSuggestItem>> _hot = {};
 
   bool _requested = false;
   bool _hotRequested = false;
-  bool _artRequested = false;
   bool _airRequested = false;
   bool _leased = false;
 
@@ -141,11 +176,12 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _heroProbe = HomeHeroImageProbe(loader: widget.heroImageLoader);
+    _startupCache = HomeHeroStartupCache(directory: Directory(_state.paths.cacheDir));
     _recommendationFeedback.addListener(_onRecommendationFeedback);
     // 放到首帧之后：第一帧必须是本地内容，不能被网络挡住（§5「不显示骨架」）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadRecommendations();
-      _loadArt();
       _loadHot();
       _loadAir();
     });
@@ -158,6 +194,9 @@ class _HomePageState extends State<HomePage> {
     if (_leased) _state.recommendationDependencies.release();
     _air?.removeListener(_onAirChanged);
     _air?.dispose();
+    _startupEncoder.dispose();
+    _heroProbe.dispose();
+    _heroScanGeneration++;
     _heroIndex.dispose();
     _recommendationFeedback.removeListener(_onRecommendationFeedback);
     super.dispose();
@@ -256,7 +295,7 @@ class _HomePageState extends State<HomePage> {
         if (result.items.isNotEmpty) {
           setState(() => _recommendations[row] = result.items);
           // 推荐到了才有身份可解析：补一次元数据（已经解析过的键会被跳过）。
-          unawaited(_resolveMeta(_recommendationIdentities()));
+          _ensureRecommendationMeta();
         }
       } catch (_) {
         // 推荐是锦上添花：失败就整块隐藏，不弹 toast、不留红条（§5）。
@@ -264,139 +303,162 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 续播按历史里已存的 TMDB 身份取图（`services/home_art_service.dart`）。
+  /// 直播站的 site key 集合（见 `core/live_site_keywords.dart`）。
   ///
-  /// 推荐条目本来就带 TMDB 图，热门条目来自 360kan 榜单（自带封面）。
-  /// 追剧没有内嵌身份，走 `_ensureFollowingMeta` 的持久化匹配链，只补展示字段。
-  /// 没有身份的续播条目一律保留站点海报——按标题去 TMDB 搜一遍是 N 次请求，
-  /// 首页首屏付不起这个代价。
-  Future<void> _loadArt() async {
-    if (_artRequested || !mounted) return;
-    _artRequested = true;
-    final byKey = <String, TmdbIdentity>{};
-    for (final row in _state.recentHistory(sourceKey: '')) {
-      final identity = TmdbIdentity.of(
-        TmdbMediaType.parse(row.mediaType),
-        row.tmdbId,
-      );
-      if (identity != null) {
-        byKey[homeHistoryKey(row)] = identity;
-        continue;
-      }
-      // 推送行常常没有内嵌身份（旧记录 tmdb_id=0，或播放时详情还没匹配上）：
-      // 用匹配记录补一次，首页才有 16:9 背景与简介（对齐点播条目）。
-      if (row.siteKey == pushSiteKey) {
-        final matched = _state.pushMatchedItem(
-          vodId: row.vodId,
-          title: row.vodName,
-        );
-        final pushed = matched == null
-            ? null
-            : TmdbIdentity.of(matched.mediaType, matched.tmdbId);
-        if (pushed != null) byKey[homeHistoryKey(row)] = pushed;
-      }
+  /// 缓存是必须的：`ConfigRecord.config` 会把整份配置 JSON（最大的那份 300 KB 以上）
+  /// 解一遍，而首页每次 `setState` 都会重建。配置列表与关键词不变时直接复用上一次的
+  /// 结果，只有真的换了配置或在设置里改了关键词才重算。
+  List<ConfigRecord>? _liveKeysConfigs;
+  List<String> _liveKeysKeywords = const [];
+  Set<String> _liveSiteKeysCache = const {};
+
+  Set<String> _liveSiteKeys() {
+    final configs = _state.configs;
+    final keywords = _state.liveSiteKeywords;
+    if (identical(configs, _liveKeysConfigs) &&
+        listEquals(keywords, _liveKeysKeywords)) {
+      return _liveSiteKeysCache;
     }
-    await _resolveMeta(byKey);
+    final keys = liveSiteKeysFor(
+      sourceNames: [for (final source in _state.liveSources) source.name],
+      siteNames: {
+        // 跨配置查名字：历史行可能来自别的配置（`recentHistory(sourceKey: '')`）。
+        for (final record in configs)
+          for (final site in record.config?.sites ?? const [])
+            site.key: site.name,
+      },
+      keywords: keywords,
+    );
+    _liveKeysConfigs = configs;
+    _liveKeysKeywords = keywords;
+    _liveSiteKeysCache = keys;
+    return keys;
   }
 
-  /// 只解析还没解析过的键（历史与推荐可能指向同一部作品，重复解析纯属浪费）。
-  Future<void> _resolveMeta(Map<String, TmdbIdentity> byKey) async {
-    if (byKey.isEmpty) return;
-    final pending = {
-      for (final entry in byKey.entries)
-        if (!_art.containsKey(entry.key)) entry.key: entry.value,
+  /// 输入身份/字段规则变化后重算；详情返回时也失效，不能永久记住首次缺图的结果。
+  void _ensureResumeMeta(HomeFeed feed) {
+    final rows = {
+      // 未绑定身份只匹配 hero 预算；轨道中已有身份的条目仍可复用元数据缓存补图。
+      for (final item in [
+        ...feed.hero,
+        for (final rail in feed.rails)
+          for (final item in rail.items)
+            if (item.history?.hasTmdbIdentity ?? false) item,
+      ])
+        if (item.history != null) item.key: item.history!,
     };
-    if (pending.isEmpty) return;
-    final resolved = await HomeMetaService(tmdb: _state.tmdbService)
-        .resolve(pending);
-    if (!mounted || resolved.isEmpty) return;
-    setState(() => _art.addAll(resolved));
-  }
-
-  /// 续播条目补「大海报 + 简介」的第二档。`_loadArt` 只覆盖历史行里**存了**
-  /// TMDB 身份的行；身份只落在 `tmdb_matches`（详情页匹配过）或干脆没匹配过的
-  /// 记录，历史行仍是 `tmdb_id=0`，首页于是只剩一张站点竖版海报。
-  ///
-  /// 这里对 hero 里的续播条目问一次身份：[AppState.historyTmdbItem] 先读已落盘
-  /// 的匹配结论（详情页匹配过的作品零请求），没有才按片名匹配，命中后回写历史
-  /// 行；命中即沿用 `_art` 那条 `detail()`，仍然匹配不到才退回站源 `vod_content`。
-  ///
-  /// 只处理 hero（续播预算 6 条）而不是整份历史：按标题匹配每条最多 3 次搜索，
-  /// 首页首屏付不起「整份历史搜一遍」的代价（`_loadArt` 的同一条理由）。
-  /// 推送行不在这里处理：它们走 `pushMatchedItem` 的落盘结论。
-  void _ensureResumeMeta(List<HomeItem> items) {
-    final rows = <String, PlaybackHistory>{};
-    for (final item in items) {
-      final row = item.history;
-      if (row == null || row.siteKey == pushSiteKey) continue;
-      // 有身份的行由 `_loadArt` 负责，这里只补「播放时没带上身份」的行。
-      final identity = TmdbIdentity.of(
-        TmdbMediaType.parse(row.mediaType),
-        row.tmdbId,
-      );
-      if (identity != null) continue;
-      if (_resumeMetaAsked.contains(item.key)) continue;
-      rows[item.key] = row;
-    }
+    final state = _state;
+    final pipeline = state.metaPipeline;
+    final enabled = state.externalMetaEnabled;
+    final overrides = state.metaOverrides;
+    final key = jsonEncode([
+      identityHashCode(state),
+      state.activeSourceKey,
+      state.tmdbConfigRevision,
+      pipeline.toJson(),
+      enabled,
+      for (final entry in rows.entries)
+        [
+          entry.key,
+          entry.value.tmdbId,
+          entry.value.mediaType,
+          entry.value.vodName,
+          entry.value.vodPic,
+          entry.value.vodYear,
+          overrides.of(entry.value.vodId)?.key,
+        ],
+    ]);
+    if (key == _resumeMetaKey) return;
+    _resumeMetaKey = key;
+    final generation = ++_resumeMetaGeneration;
+    _resumeMeta.clear();
     if (rows.isEmpty) return;
-    _resumeMetaAsked.addAll(rows.keys);
-    // 放到首帧之后：第一帧必须是本地内容，不能被网络挡住（§5「不显示骨架」）。
+    final completed = Completer<void>();
+    for (final key in rows.keys) { _railMetaPending[key] = completed.future; }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      final byKey = <String, TmdbIdentity>{};
-      final overviews = <String, String>{};
-      final sourceOverviewEnabled = _state.metaPipeline
-          .orderOf(MetaField.overview)
-          .contains(MetaSourceKind.source);
-      for (final entry in rows.entries) {
-        if (!mounted) return;
-        TmdbIdentity? identity;
-        try {
-          final matched = await _state.historyTmdbItem(entry.value);
-          identity = matched == null
-              ? null
-              : TmdbIdentity.of(matched.mediaType, matched.tmdbId);
-        } catch (_) {
-          // 单条匹配失败只丢这一条：其余条目照常补图。
-        }
-        if (!mounted) return;
-        if (identity != null) {
-          byKey[entry.key] = identity;
-          continue;
-        }
-        // 站源简介只在用户把「爬虫源」留在简介来源里时才读：同一条逐字段规则
-        // （`MetaPipeline`），关掉它的用户不该因为首页多出一串站点请求。
-        if (!sourceOverviewEnabled) continue;
-        try {
-          final vod = await _state.historyVod(entry.value);
-          final overview = (vod?.vodContent ?? '').trim();
-          if (overview.isNotEmpty) overviews[entry.key] = overview;
-        } catch (_) {
-          // 站点离线或已删除时连简介都没有：hero 保持「海报 + 标题」。
-        }
-      }
-      if (!mounted) return;
-      if (overviews.isNotEmpty) {
-        setState(() => _sourceOverview.addAll(overviews));
-      }
-      await _resolveMeta(byKey);
+      bool current() => mounted && generation == _resumeMetaGeneration;
+      if (!current()) { if (!completed.isCompleted) completed.complete(); return; }
+      final resolved = await HomeMetaService(tmdb: state.tmdbService).resolveHistory(
+        rows.values,
+        match: (row) async {
+          if (row.siteKey == pushSiteKey) {
+            return _heroHistoryMatch(row, current);
+          }
+          return _heroHistoryMatch(row, current);
+        },
+        source: _heroHistorySource,
+        siteName: (row) =>
+            (state.configForSourceKey(row.sourceKey) ?? state.effectiveConfig)
+                ?.sites.where((site) => site.key == row.siteKey).firstOrNull?.name ?? '',
+        pipeline: pipeline,
+        external: enabled ? state.externalMetaService : null,
+        pinned: (row) => overrides.of(row.vodId),
+        isCurrent: current,
+      );
+      if (!completed.isCompleted) completed.complete();
+      if (!current() || resolved.isEmpty) return;
+      setState(() => _resumeMeta.addAll(resolved));
     });
   }
 
-  /// 推荐条目也走同一套元数据：它们本来就有 TMDB 身份，`detail` 命中缓存时
-  /// 零请求，于是推荐幻灯片同样有类型标签、简介与 16:9 背景（首屏因此能进
-  /// 「占满一屏」那档）。只取两条推荐行各自的**前三张**——那是 hero 的预算，
-  /// 再多就是替一屏都放不下的条目付请求。
-  Map<String, TmdbIdentity> _recommendationIdentities() {
-    final byKey = <String, TmdbIdentity>{};
-    for (final row in _recommendations.values) {
-      for (final entry in row.take(_heroRecommendBudgetForMeta)) {
-        final identity = entry.item.identity;
-        if (identity == null) continue;
-        byKey[entry.key] = identity;
-      }
-    }
-    return byKey;
+  void _invalidateMetadata() {
+    if (!mounted) return;
+    setState(() {
+      _heroScanKey = '';
+      _heroScanGeneration++;
+      _heroProbe.clear();
+      _heroMatches.clear();
+      _heroSources.clear();
+      _railMetaPending.clear();
+      _resumeMetaKey = '';
+      _resumeMetaGeneration++;
+      _resumeMeta.clear();
+      _followingMetaKey = '';
+      _followingMetaGeneration++;
+      _followingMeta.clear();
+      _art.clear();
+      _recommendationMetaKey = '';
+      _recommendationMetaGeneration++;
+    });
+    _ensureRecommendationMeta();
+  }
+
+  void _ensureRecommendationMeta() {
+    final entries = {
+      for (final row in _recommendations.values)
+        for (final entry in row.take(_heroRecommendBudgetForMeta)) entry.key: entry,
+    };
+    final state = _state;
+    final pipeline = state.metaPipeline;
+    final key = jsonEncode([
+      identityHashCode(state), state.activeSourceKey, state.tmdbConfigRevision,
+      pipeline.toJson(),
+      for (final entry in entries.values)
+        [entry.key, entry.item.title, entry.item.posterUrl, entry.item.backdropUrl,
+          entry.item.overview, entry.item.subtitle],
+    ]);
+    if (key == _recommendationMetaKey) return;
+    _recommendationMetaKey = key;
+    final generation = ++_recommendationMetaGeneration;
+    _art.clear();
+    if (entries.isEmpty) return;
+    final completed = Completer<void>();
+    for (final key in entries.keys) { _railMetaPending[key] = completed.future; }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      bool current() => mounted && generation == _recommendationMetaGeneration;
+      if (!current()) { if (!completed.isCompleted) completed.complete(); return; }
+      // 推荐本来自带 TMDB 图：只走 TMDB 字段，不引外部源（豆瓣有 750ms 串行间隔，
+      // 会让 hero 分批到），也不做 pin（pin 以 vodId 为键，推荐没有）。
+      final resolved = await HomeMetaService(tmdb: state.tmdbService)
+          .resolveRecommendations(
+            entries.values,
+            pipeline: pipeline,
+            isCurrent: current,
+          );
+      if (!completed.isCompleted) completed.complete();
+      if (!current() || resolved.isEmpty) return;
+      setState(() => _art.addAll(resolved));
+    });
   }
 
   /// 热门榜单：电影 / 剧集 / 综艺（与搜索页同一份数据与缓存）。
@@ -426,17 +488,316 @@ class _HomePageState extends State<HomePage> {
     if (hot.isEmpty) return const [];
     final pools = [for (final rail in hot) rail.items];
     final items = <HomeItem>[];
-    for (var round = 0; items.length < _heroMax; round++) {
+    for (var round = 0; items.length < 120; round++) {
       var added = false;
       for (final pool in pools) {
         if (round >= pool.length) continue;
         items.add(pool[round]);
         added = true;
-        if (items.length >= _heroMax) break;
+        if (items.length >= 120) break;
       }
       if (!added) break;
     }
     return items;
+  }
+
+  Future<TmdbItem?> _heroHistoryMatch(PlaybackHistory row, bool Function() current) {
+    final key = jsonEncode([homeHistoryKey(row), row.tmdbId, row.mediaType,
+      _state.tmdbConfigRevision, row.vodName]);
+    return _heroMatches.putIfAbsent(key, () async {
+      if (row.siteKey == pushSiteKey) {
+        return _state.pushMatchedItem(vodId: row.vodId, title: row.vodName);
+      }
+      return _state.historyTmdbItem(row, isCurrent: current);
+    });
+  }
+
+  Future<Vod?> _heroHistorySource(PlaybackHistory row) =>
+      _heroSources.putIfAbsent(homeHistoryKey(row), () => _state.historyVod(row));
+
+  bool _hasResolvedMeta(HomeItem item) => _heroCandidateMeta.containsKey(item.key) ||
+      _resumeMeta.containsKey(item.key) || _followingMeta.containsKey(item.key) ||
+      _art.containsKey(item.key);
+
+  Future<void> _loadHeroCandidateMeta(HomeItem item, bool Function() current) async {
+    final pending = _railMetaPending[item.key];
+    if (pending != null) await pending;
+    if (_hasResolvedMeta(item) || !current()) return;
+    final state = _state;
+    final service = HomeMetaService(tmdb: state.tmdbService);
+    final pipeline = state.metaPipeline;
+    final external = state.externalMetaEnabled ? state.externalMetaService : null;
+    final overrides = state.metaOverrides;
+    Map<String, HomeMeta> resolved;
+    if (item.history case final row?) {
+      resolved = await service.resolveHistory(
+        [row], pipeline: pipeline,
+        match: (entry) => _heroHistoryMatch(entry, current), source: _heroHistorySource,
+        siteName: (entry) =>
+            (state.configForSourceKey(entry.sourceKey) ?? state.effectiveConfig)
+                ?.sites.where((site) => site.key == entry.siteKey).firstOrNull?.name ?? '',
+        external: external, pinned: (entry) => overrides.of(entry.vodId),
+        isCurrent: current,
+      );
+    } else if (item.following case final row?) {
+      resolved = await service.resolveFollowings(
+        [row], pipeline: pipeline, match: state.followingTmdbItem,
+        source: state.followingVod,
+        siteName: (entry) => state.siteInActiveSource(entry.siteKey)?.name ?? '',
+        external: external, pinned: (entry) => overrides.of(entry.vodId),
+        timeout: _followingMetaTimeout, isCurrent: current,
+      );
+    } else if (item.entry case final entry?) {
+      resolved = await service.resolveRecommendations(
+        [entry], pipeline: pipeline, isCurrent: current,
+      );
+    } else {
+      return;
+    }
+    if (current()) _heroCandidateMeta.addAll(resolved);
+  }
+
+  String _startupScopeFor(List<HeaderRule> rules) {
+    // 只落盘摘要，不把API密钥、cookie或配置地址写进快照索引。
+    return sha256.convert(utf8.encode(jsonEncode([
+      _state.activeSourceKey, _state.metaPipeline.toJson(), _state.externalMetaEnabled,
+      _state.metaOverrides.toJson(), _state.liveSiteKeywords,
+      _state.tmdbConfig.enabled, _state.tmdbConfig.imageBase, _state.tmdbConfig.backdropBase,
+      _state.tmdbConfig.enabledSites, _state.tmdbConfig.disabledSites, _state.tmdbConfig.allowedSites,
+      for (final rule in rules) [rule.host, rule.header.asRequestHeaders],
+    ]))).toString();
+  }
+
+  void _restoreStartup(String scope) {
+    if (_startupScope == scope) return;
+    _startupEncoder.clear();
+    _startupScope = scope;
+    _startupSaveKey = '';
+    _startupSnapshots = _startupCache.read(scope);
+    _state.log.info(
+      'event=cache_restore usable=${_startupSnapshots.length} '
+      'result=${_startupSnapshots.isEmpty ? 'no_usable_snapshot' : 'hit'} '
+      'elapsedMs=${_heroStartupClock.elapsedMilliseconds}',
+      scope: 'home',
+    );
+    _failedStartupKeys.clear();
+    _lastDisplayedHeroes.clear();
+  }
+
+  String _startupBindingKey(HomeItem item) => sha256.convert(utf8.encode(jsonEncode([
+    item.key, item.history?.tmdbId, item.history?.mediaType,
+  ]))).toString();
+
+  List<HomeItem> _displayHeroItems(List<HomeItem> candidates) {
+    final byBinding = {for (final item in candidates) _startupBindingKey(item): item};
+    final byKey = {for (final item in candidates) item.key: item};
+    final displayed = <HomeItem>[];
+    final claimer = HomeWorkClaimer();
+    final used = <String>{};
+    void add(HomeItem item) {
+      if (displayed.length >= _heroMax || !used.add(item.key) || !claimer.claim(item)) return;
+      displayed.add(item);
+    }
+    // 快照只恢复展示字段，按钮仍使用当前原始历史，不能按缓存中的旧进度起播。
+    for (final snapshot in _startupSnapshots) {
+      final raw = byBinding[snapshot.key];
+      if (raw == null || _failedStartupKeys.contains(raw.key)) continue;
+      final fresh = _heroQualified[raw.key];
+      add(fresh != null ? _withArt(raw).copyWith(backdrop: fresh) : raw.copyWith(
+        title: snapshot.title, subtitle: snapshot.subtitle, overview: snapshot.overview,
+        tags: snapshot.tags, backdrop: Uri.file(snapshot.filePath).toString(),
+      ));
+    }
+    // 后台扫描开始时不清空本会话已显示成功的推荐；只在同高区域替换内容。
+    for (final old in _lastDisplayedHeroes.values) {
+      final raw = byKey[old.key];
+      if (raw == null || _failedStartupKeys.contains(old.key) ||
+          _startupBindingKey(old) != _startupBindingKey(raw)) { continue; }
+      final fresh = _heroQualified[old.key];
+      add(fresh == null ? raw.copyWith(
+        title: old.title, subtitle: old.subtitle, overview: old.overview,
+        tags: old.tags, backdrop: old.backdrop,
+      ) : _withArt(raw).copyWith(backdrop: fresh));
+    }
+    for (final key in _heroAcceptedOrder) {
+      final raw = byKey[key];
+      if (raw != null) add(_withArt(raw).copyWith(backdrop: _heroQualified[key]));
+    }
+    _lastDisplayedHeroes
+      ..clear()
+      ..addEntries(displayed.map((item) => MapEntry(item.key, item)));
+    if (!_firstHeroAvailableLogged && displayed.isNotEmpty) {
+      _firstHeroAvailableLogged = true;
+      final local = Uri.tryParse(displayed.first.backdrop ?? '')?.scheme == 'file';
+      _state.log.info(
+        'event=first_available source=${local ? 'local_cache' : 'verified_image'} '
+        'visible=${displayed.length} elapsedMs=${_heroStartupClock.elapsedMilliseconds}',
+        scope: 'home',
+      );
+    }
+    return displayed;
+  }
+
+  void _saveStartupImages(List<HomeItem> candidates) {
+    final byKey = {for (final item in candidates) item.key: item};
+    final picks = [
+      for (final key in _heroAcceptedOrder.take(3))
+        if (byKey[key] case final item?) _withArt(item).copyWith(backdrop: _heroQualified[key]),
+    ];
+    if (picks.isEmpty) return;
+    final scope = _startupScope;
+    final key = jsonEncode([scope, for (final item in picks)
+      [item.key, item.backdrop, item.title, item.subtitle, item.overview, item.tags]]);
+    if (key == _startupSaveKey) return;
+    _startupSaveKey = key;
+    final generation = _heroScanGeneration;
+    final rules = ImageHeaderScope.maybeRules(context) ?? _state.effectiveConfig?.headers ?? const [];
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      bool current() => mounted && generation == _heroScanGeneration &&
+          scope == _startupScope && key == _startupSaveKey;
+      if (!current()) return;
+      final saved = <HomeHeroStartupCandidate>[];
+      for (final item in picks) {
+        final url = item.backdrop!;
+        final headers = imageHeadersFor(rules, url).asRequestHeaders;
+        final bytes = await _startupEncoder.encode(url, headers: headers.isEmpty ? null : headers);
+        if (!current()) return;
+        if (bytes == null) continue;
+        saved.add(HomeHeroStartupCandidate(
+          key: _startupBindingKey(item), sourceUrl: url, title: item.title, bytes: bytes,
+          subtitle: item.subtitle, overview: item.overview, tags: item.tags,
+        ));
+      }
+      if (current() && saved.isNotEmpty) {
+        try {
+          await _startupCache.save(scope, saved);
+          if (!current()) return;
+          final readable = _startupCache.read(scope).length;
+          _state.log.info(
+            'event=cache_save requested=${picks.length} encoded=${saved.length} '
+            'readable=$readable result=${readable == 0 ? 'no_usable_snapshot' : 'ready'}',
+            scope: 'home',
+          );
+          if (readable == 0) _startupSaveKey = '';
+        } catch (_) {
+          // 可删缓存写入失败不影响已经显示的图片。
+          if (current()) {
+            _startupSaveKey = '';
+            _state.log.warning('event=cache_save result=write_failed', scope: 'home');
+          }
+        }
+      } else if (current()) {
+        // 编码失败不是永久完成；下一次有效重建可以重试，但不制造自动重试循环。
+        _startupSaveKey = '';
+        _state.log.info(
+          'event=cache_save requested=${picks.length} encoded=0 result=no_encoded_image',
+          scope: 'home',
+        );
+      }
+    });
+  }
+
+  /// 图片真正通过解码和像素门槛才进轮播；其余作品仍保留在各自轨道。
+  void _ensureHdHero(List<HomeItem> candidates) {
+    final state = _state;
+    final rules = ImageHeaderScope.maybeRules(context) ?? state.effectiveConfig?.headers ?? const [];
+    final headerIdentity = [for (final rule in rules) [rule.host, rule.header.asRequestHeaders]];
+    _restoreStartup(_startupScopeFor(rules));
+    final key = jsonEncode([
+      identityHashCode(state), state.activeSourceKey, state.tmdbConfigRevision,
+      state.metaPipeline.toJson(), state.externalMetaEnabled, headerIdentity,
+      for (final item in candidates)
+        [item.key, item.title, item.poster, item.backdrop,
+          item.history?.tmdbId, item.history?.mediaType, item.history?.vodYear,
+          item.following?.metadataUpdatedAtMs, item.following?.updatedAtMs,
+          state.metaOverrides.of(item.history?.vodId ?? item.following?.vodId ?? '')?.key],
+    ]);
+    if (key != _heroScanKey) {
+      _heroScanKey = key;
+      _startupSaveKey = '';
+      _heroScanGeneration++;
+      _heroScanRunning = false;
+      _heroInspected.clear();
+      _heroCandidateMeta.clear();
+      _heroQualified.clear();
+      _heroAcceptedOrder.clear();
+      _heroProbe.clear();
+      _heroMatches.clear();
+      _heroSources.clear();
+    }
+    if (_heroScanRunning || _heroAcceptedOrder.length >= _heroMax) return;
+    final queue = candidates.where((item) => !_heroInspected.contains(item.key)).toList();
+    if (queue.isEmpty) return;
+    _heroScanRunning = true;
+    WidgetsBinding.instance.ensureVisualUpdate();
+    final generation = _heroScanGeneration;
+    final scanClock = Stopwatch()..start();
+    _state.log.info(
+      'event=scan_start generation=$generation candidates=${candidates.length} pending=${queue.length}',
+      scope: 'home',
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      bool current() => mounted && generation == _heroScanGeneration;
+      if (!current()) return;
+      var next = 0;
+      Future<(HomeItem, String?)> inspect(HomeItem item) async {
+        _heroInspected.add(item.key);
+        try {
+          await _loadHeroCandidateMeta(item, current);
+          if (!current() || state.metaPipeline.orderOf(MetaField.backdrop).isEmpty) return (item, null);
+          final enriched = _withArt(item);
+          final meta = _heroCandidateMeta[item.key] ?? _resumeMeta[item.key] ??
+              _followingMeta[item.key] ?? _art[item.key];
+          final urls = <String>{
+            if ((enriched.backdrop ?? '').trim().isNotEmpty) enriched.backdrop!.trim(),
+            ...?meta?.backdrops,
+            if ((enriched.poster ?? '').trim().isNotEmpty &&
+                state.metaPipeline.orderOf(MetaField.backdrop).contains(MetaSourceKind.source))
+              enriched.poster!.trim(),
+          };
+          for (final url in urls) {
+            if (!current()) return (item, null);
+            final headers = imageHeadersFor(rules, url).asRequestHeaders;
+            final evidence = await _heroProbe.check(url, headers: headers.isEmpty ? null : headers);
+            if (evidence?.isEligible ?? false) return (item, url);
+          }
+        } catch (_) {
+          // 一张图或一部作品失败不阻断后续候选。
+        }
+        return (item, null);
+      }
+      // 两张并发检查，但按候选原序提交，不能让下载更快的后排作品抢走前排位置。
+      final candidatesByKey = {for (final item in candidates) item.key: item};
+      while (current() && next < queue.length && _heroAcceptedOrder.length < _heroMax) {
+        final remaining = _heroMax - _heroAcceptedOrder.length;
+        final batch = queue.skip(next).take(remaining < 2 ? remaining : 2).toList();
+        next += batch.length;
+        final checked = await Future.wait(batch.map(inspect));
+        if (!current()) return;
+        setState(() {
+          final claimer = HomeWorkClaimer();
+          for (final accepted in _heroAcceptedOrder) {
+            final item = candidatesByKey[accepted];
+            if (item != null) claimer.claim(_withArt(item));
+          }
+          for (final (item, url) in checked) {
+            if (url == null || _heroAcceptedOrder.length >= _heroMax) continue;
+            if (!claimer.claim(_withArt(item))) continue;
+            _heroQualified[item.key] = url;
+            _failedStartupKeys.remove(item.key);
+            _heroAcceptedOrder.add(item.key);
+          }
+        });
+      }
+      if (!current()) return;
+      setState(() => _heroScanRunning = false);
+      _state.log.info(
+        'event=scan_complete generation=$generation inspected=$next '
+        'accepted=${_heroAcceptedOrder.length} elapsedMs=${scanClock.elapsedMilliseconds}',
+        scope: 'home',
+      );
+      WidgetsBinding.instance.ensureVisualUpdate();
+    });
   }
 
   void _ensureFollowingMeta(HomeFeed feed) {
@@ -476,8 +837,13 @@ class _HomePageState extends State<HomePage> {
     final generation = ++_followingMetaGeneration;
     _followingMeta.clear();
     if (items.isEmpty) return;
+    final completed = Completer<void>();
+    for (final item in items) { _railMetaPending[item.identityKey] = completed.future; }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || generation != _followingMetaGeneration) return;
+      if (!mounted || generation != _followingMetaGeneration) {
+        if (!completed.isCompleted) completed.complete();
+        return;
+      }
       final resolved = await HomeMetaService(tmdb: state.tmdbService)
           .resolveFollowings(
             items,
@@ -490,6 +856,7 @@ class _HomePageState extends State<HomePage> {
             timeout: _followingMetaTimeout,
             isCurrent: () => mounted && generation == _followingMetaGeneration,
           );
+      if (!completed.isCompleted) completed.complete();
       if (!mounted ||
           generation != _followingMetaGeneration ||
           resolved.isEmpty) {
@@ -501,24 +868,24 @@ class _HomePageState extends State<HomePage> {
 
   HomeItem _withArt(HomeItem item) {
     final pipeline = _state.metaPipeline;
-    final hidePoster =
-        item.following != null && pipeline.orderOf(MetaField.poster).isEmpty;
-    final hideBackdrop =
-        item.following != null && pipeline.orderOf(MetaField.backdrop).isEmpty;
-    final art = _followingMeta[item.key] ?? _art[item.key];
-    // 简介来源顺序：元数据 → 站源 `vod_content`（没有身份时的兜底）。
-    final overview = _firstNonEmpty([art?.overview, _sourceOverview[item.key]]);
+    final hidePoster = pipeline.orderOf(MetaField.poster).isEmpty;
+    final hideBackdrop = pipeline.orderOf(MetaField.backdrop).isEmpty;
+    final art = _heroCandidateMeta[item.key] ?? _resumeMeta[item.key] ?? _followingMeta[item.key] ?? _art[item.key];
+    final overview = pipeline.orderOf(MetaField.overview).isEmpty
+        ? ''
+        : _firstNonEmpty([art?.overview]);
     if (art == null) {
+      // 没有解析结果时也要按当前规则清掉被停用的字段：站点年份/评分不能借这个
+      // 分支复活（与上面 poster/backdrop 的口径一致）。
       return item.copyWith(
         hidePoster: hidePoster,
         hideBackdrop: hideBackdrop,
         overview: overview,
+        subtitle: pipeline.orderOf(MetaField.releaseDate).isEmpty ? '' : null,
       );
     }
-    // 刮削名：与详情页头部同一条规则——「标题」来源里还留着 TMDB 才用它的名字，
-    // 用户把它移掉时首页保留站点原名（否则会出现同一部剧两个名字）。
-    final metaTitle =
-        pipeline.orderOf(MetaField.title).contains(MetaSourceKind.tmdb)
+    // 来源已由管线选定；不能再要求必须启用 TMDB 才接受豆瓣/站源的标题。
+    final metaTitle = pipeline.orderOf(MetaField.title).isNotEmpty
         ? _firstNonEmpty([art.title])
         : null;
     return item.copyWith(
@@ -529,18 +896,14 @@ class _HomePageState extends State<HomePage> {
       hideBackdrop: hideBackdrop,
       overview: overview,
       tags: art.genres,
-      // 副信息只在站点没给的时候补：站源写的「2024 · 8.1」是它自己的口径，
-      // 两边混着用会出现「2024 · 8.1」和「2024 · 8.6」两种评分来源。
-      subtitle: item.subtitle.trim().isEmpty
-          ? _metaSubtitle(art)
-          : item.subtitle,
+      subtitle: _metaSubtitle(art),
     );
   }
 
   /// 站源没给副信息时，用 TMDB 的年份与评分补一个（同一套「年份 · 评分」口径）。
   String _metaSubtitle(HomeMeta meta) => [
-    if (meta.year.isNotEmpty) meta.year,
-    if (meta.rating > 0) meta.rating.toStringAsFixed(1),
+    if (_state.metaPipeline.orderOf(MetaField.releaseDate).isNotEmpty && meta.year.isNotEmpty) meta.year,
+    if (_state.metaPipeline.orderOf(MetaField.rating).isNotEmpty && meta.rating > 0) meta.rating.toStringAsFixed(1),
   ].join(' · ');
 
   /// 取第一个非空串；都为空时返回 null（`HomeItem.copyWith` 据此保留原值）。
@@ -559,22 +922,20 @@ class _HomePageState extends State<HomePage> {
   }) {
     if (_hot.isEmpty) return const [];
     final known = {
-      for (final item in hero) recommendationTitleKey(item.title),
+      for (final item in hero) homeWorkKey(item.title),
       for (final rail in rails)
-        for (final item in rail.items) recommendationTitleKey(item.title),
+        for (final item in rail.items) homeWorkKey(item.title),
     };
     return [
       for (final rail in hotRails(_hot))
-        if (rail.items.any(
-          (item) => !known.contains(recommendationTitleKey(item.title)),
-        ))
+        if (rail.items.any((item) => !known.contains(homeWorkKey(item.title))))
           HomeRail(
             kind: rail.kind,
             title: rail.title,
             seeAll: rail.seeAll,
             items: [
               for (final item in rail.items)
-                if (!known.contains(recommendationTitleKey(item.title))) item,
+                if (!known.contains(homeWorkKey(item.title))) item,
             ],
           ),
     ];
@@ -585,7 +946,19 @@ class _HomePageState extends State<HomePage> {
     // 全局（跨源）历史：首页要回答的是「我上次看到哪」，不是「这个站点里我看过什么」。
     final history = _state.recentHistory(sourceKey: '');
     final followings = _recentFollowings(_state.followings);
-    final local = buildHomeFeed(history: history, followings: followings);
+    // 直播没有可续播的时间轴（用户 2026-11-25 图一）：写入侧已经不再落历史，但旧库
+    // 里还有这类行，首页读到的是跨源全量历史，所以这里再挡一次。
+    //
+    // 判据不只「直播源名」：真实配置里还有把直播站接成**普通站点**的情况（`Douyu`
+    // 在配置 38 里就是 type 3 的站点，名字「🌇｜斗鱼｜直播」），它的播放走通用详情入口，
+    // 靠 `isLive` 拦不住。站点/历史行都没有「直播」字段，于是按站点名与键匹配可配置的
+    // 关键词（默认「直播」「Live」，设置 → 直播 → 直播站识别里可增删）。
+    final liveSiteKeys = _liveSiteKeys();
+    final local = buildHomeFeed(
+      history: history,
+      followings: followings,
+      liveSiteKeys: liveSiteKeys,
+    );
     final blocked = _recommendationFeedback.blockedTitles;
     List<RecommendationEntry> recommended(RecommendationRow row) => [
       for (final entry
@@ -599,52 +972,68 @@ class _HomePageState extends State<HomePage> {
             buildHomeFeed(
               history: history,
               followings: followings,
+              liveSiteKeys: liveSiteKeys,
               tmdbRecommendations: recommended(RecommendationRow.tmdb),
               doubanRecommendations: recommended(RecommendationRow.douban),
             ),
           );
     _ensureFollowingMeta(feed);
+    _ensureRecommendationMeta();
     // 续播条目没存 TMDB 身份时补一次匹配：否则 hero 只有竖版海报、没有简介。
-    _ensureResumeMeta(feed.hero);
+    _ensureResumeMeta(feed);
     // 元数据优先级的图覆盖站点图（取不到的条目原样保留站点海报）。
-    final hero = [for (final item in feed.hero) _withArt(item)];
-    final rails = [
-      for (final rail in feed.rails)
+    //
+    // 换图会顺手把标题换成刮削名（`_withArt`）：「《那一夜…》百度云网盘…」于是
+    // 变成「那一夜，我怀了社长的孩子」，与另一条更干净的记录撞在一起。投影层收过
+    // 一次，但那一遍比的是站点名，所以这里按**作品**再收一次；hero 与轨道共用同一个
+    // 认领器，跨轨道的重复也一并挡掉（用户 2026-11-25 图三/图四）。
+    // 轨道之间共用一份认领，但**不与 hero 共用**：hero 是轨道的子集，同一部作品允许
+    // 在自己的轨道里再出现一次（02 §1 I4）。共用会把 hero 的条目从它自己的轨道里删掉
+    // ——只有一条续播/推荐时，整条轨道连同「查看全部」入口都会消失。
+    final railClaimer = HomeWorkClaimer();
+    final rails = <HomeRail>[];
+    for (final rail in feed.rails) {
+      final items = <HomeItem>[];
+      for (final item in rail.items) {
+        final art = _withArt(item);
+        if (railClaimer.claim(art)) items.add(art);
+      }
+      // 被去重收空的轨道不画：只剩一个标题的轨道比没有更糟。
+      if (items.isEmpty) continue;
+      rails.add(
         HomeRail(
           kind: rail.kind,
           title: rail.title,
-          items: [for (final item in rail.items) _withArt(item)],
+          items: items,
           seeAll: rail.seeAll,
         ),
-    ];
-    // 首屏兜底（用户 2026-11-19 问「第一次用的时候海报取什么」）：
-    // 没有历史、没有追剧、推荐也还没到时，hero 用**热门榜单**的前 12 条——
-    // 于是第一次打开就看到一组真实的海报轮播，而不是一块只会说「还没有内容」
-    // 的渐变。主按钮查看作品详情，次按钮按标题找片源（与热门卡同一条路）。
-    //
-    // 顺序要紧：先算出 hero，再据此过滤热门轨道——否则首次使用时 hero 里的
-    // 12 部片会立刻在下面三条轨道里**原样再出现一遍**。
-    final heroItems = hero.isNotEmpty ? hero : _hotHeroFallback(hotRails(_hot));
-    if (_heroItemCount != heroItems.length) {
-      _heroItemCount = heroItems.length;
-      _heroIndex.value = 0;
+      );
+    }
+    final candidates = homeHeroCandidates(feed, hot: _hotHeroFallback(hotRails(_hot)));
+    _ensureHdHero(candidates);
+    final heroItems = _displayHeroItems(candidates);
+    _saveStartupImages(candidates);
+    final selectedKey = _heroKeys.isEmpty ? null : _heroKeys[_heroIndex.value % _heroKeys.length];
+    final nextKeys = [for (final item in heroItems) item.key];
+    if (!listEquals(_heroKeys, nextKeys)) {
+      final nextIndex = selectedKey == null ? -1 : nextKeys.indexOf(selectedKey);
+      _heroKeys = nextKeys;
+      _heroIndex.value = nextIndex < 0 ? 0 : nextIndex;
     }
 
     // 热门接在本机轨道之后（用户 2026-11-19：用过也照样要给热门），
     // 并去掉 hero 里已经有的条目。
-    final hot = _hotRails(hero: heroItems, rails: rails);
+    // 只过滤hero：热门轨道也不因作品是否有高清宽图而增删。
+    final hot = _hotRails(hero: const [], rails: rails);
+    final hasRails = rails.isNotEmpty || hot.isNotEmpty;
+    // 冷启动bootstrap尚未恢复历史时也先预留，不能等异步列表出现才加高。
+    if (candidates.isNotEmpty || heroItems.isNotEmpty || hasRails) _reserveHeroSlot = true;
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 首屏高度按「有没有 16:9 背景图」分两档（见 `homeHeroHeight`）：
-        // 有图就占满一屏（用户要的全屏大海报），没图就收到 62%——占满一屏的
-        // 纯渐变只会是一块空。
-        final heroHeight = homeHeroHeight(
-          constraints.maxHeight,
-          hasArt: heroItems.any(
-            (item) => (item.backdrop ?? '').trim().isNotEmpty,
-          ),
-        );
+        // 首屏只有一档高度（见 `homeHeroHeight`）：素材有没有 16:9 都占满内容区。
+        // 用户 2026-11-25 要的是「每张都是大海报」，高度不再随素材缩。
+        final heroHeight = homeHeroHeight(constraints.maxHeight);
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -653,7 +1042,23 @@ class _HomePageState extends State<HomePage> {
                 child: ValueListenableBuilder<int>(
                   valueListenable: _heroIndex,
                   builder: (context, index, _) =>
-                      HomeBackdrop(items: heroItems, index: index),
+                      HomeBackdrop(
+                         items: heroItems, index: index,
+                         onImageError: (item) {
+                           final url = item.backdrop;
+                           WidgetsBinding.instance.addPostFrameCallback((_) {
+                             if (!mounted) return;
+                             if (_lastDisplayedHeroes[item.key]?.backdrop != url) return;
+                             setState(() {
+                               _heroQualified.remove(item.key);
+                               _heroAcceptedOrder.remove(item.key);
+                                _failedStartupKeys.add(item.key);
+                                _lastDisplayedHeroes.remove(item.key);
+                             });
+                           });
+                           WidgetsBinding.instance.ensureVisualUpdate();
+                         },
+                       ),
                 ),
               ),
             ),
@@ -662,12 +1067,20 @@ class _HomePageState extends State<HomePage> {
               slivers: [
                 SliverToBoxAdapter(
                   child: heroItems.isEmpty
-                      ? _HomeEmptyHero(
-                          height: heroHeight,
-                          hasConfig: _state.hasConfig,
-                          onImportConfig: widget.onImportConfig,
-                          onOpenBrowse: widget.onOpenBrowse,
-                        )
+                      ? (_reserveHeroSlot
+                          ? _HomeHeroStartupPlaceholder(
+                              height: heroHeight, loading: _heroScanRunning,
+                              hasCandidates: candidates.isNotEmpty || hasRails,
+                              hasConfig: _state.hasConfig,
+                              onOpenBrowse: widget.onOpenBrowse,
+                              onImportConfig: widget.onImportConfig,
+                            )
+                          : _HomeEmptyHero(
+                              height: 220,
+                              hasConfig: _state.hasConfig,
+                              onImportConfig: widget.onImportConfig,
+                              onOpenBrowse: widget.onOpenBrowse,
+                            ))
                       : HomeHero(
                           items: heroItems,
                           height: heroHeight,
@@ -687,6 +1100,7 @@ class _HomePageState extends State<HomePage> {
                         context,
                         item,
                         primary:
+                            item.kind == HomeItemKind.resume ||
                             item.kind == HomeItemKind.recommend ||
                             item.kind == HomeItemKind.hot,
                       ),
@@ -723,16 +1137,18 @@ class _HomePageState extends State<HomePage> {
   /// 为什么不做 `buildHomeFeed` 里的 I2 替换：那一步只有在「推荐一开始就在」时才
   /// 安全。异步到达时替换会把用户正在看的那一张换掉；而 `take(_heroMax)` 只在末尾
   /// 截断，永远不会动 loca 部分的前缀。
+  /// 推荐后到：只往 hero 尾部追加、不驱逐已有条目（§3「追加不重排」）。
+  ///
+  /// 判据是**作品**而不是 `key`：本站历史里叫「那一夜我怀了社长的孩子」、推荐里
+  /// 叫「那一夜，我怀了社长的孩子」时 `key` 不同，却是同一部剧（用户 2026-11-25）。
   HomeFeed _merge(HomeFeed local, HomeFeed withRecommendations) {
     if (local.hero.isEmpty) return withRecommendations;
-    final known = {for (final item in local.hero) item.key};
-    final appended = withRecommendations.hero.where(
-      (item) => !known.contains(item.key),
-    );
-    return HomeFeed(
-      hero: [...local.hero, ...appended].take(_heroMax).toList(),
-      rails: withRecommendations.rails,
-    );
+    final claimer = HomeWorkClaimer();
+    final hero = [
+      for (final item in [...local.hero, ...withRecommendations.hero])
+        if (claimer.claim(item)) item,
+    ].take(_heroMax).toList();
+    return HomeFeed(hero: hero, rails: withRecommendations.rails);
   }
 
   Future<void> _activate(
@@ -767,6 +1183,7 @@ class _HomePageState extends State<HomePage> {
           // 带着线路/集/进度进去（`history_entry_detail.dart`）。
           await openHistoryDetail(context, _state, record);
         }
+        _invalidateMetadata();
         return;
       case HomeItemKind.following:
         final following = item.following;
@@ -782,6 +1199,7 @@ class _HomePageState extends State<HomePage> {
             syncProgress: true,
           );
         }
+        _invalidateMetadata();
         return;
       case HomeItemKind.hot:
         if (primary) {
@@ -796,6 +1214,7 @@ class _HomePageState extends State<HomePage> {
         } else {
           await _searchRecommendation(item.title, item.entry?.item.identity);
         }
+        _invalidateMetadata();
         return;
     }
   }
@@ -1077,4 +1496,49 @@ class _HomeEmptyHero extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 首次无缓存也固定占好推荐位，加载/失败只替换内容，不移动下方轨道。
+class _HomeHeroStartupPlaceholder extends StatelessWidget {
+  const _HomeHeroStartupPlaceholder({
+    required this.height, required this.loading, required this.hasCandidates,
+    required this.hasConfig, required this.onOpenBrowse, required this.onImportConfig,
+  });
+  final double height;
+  final bool loading;
+  final bool hasCandidates;
+  final bool hasConfig;
+  final VoidCallback onOpenBrowse;
+  final VoidCallback onImportConfig;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    key: const ValueKey('home-hero-startup-placeholder'),
+    height: height,
+    width: double.infinity,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.xl, AppSpace.xl, 44),
+      child: Align(
+        alignment: Alignment.bottomLeft,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(!hasCandidates ? (hasConfig ? '还没有可续播的内容' : '还没有导入配置')
+                : (loading ? '正在准备精选推荐' : '暂无可用的高清推荐'),
+              style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: AppSpace.sm),
+            Text(loading ? '优先恢复本地图片，后台检查新的高清宽图。' : '继续观看和追剧列表仍保留在下方。',
+              style: Theme.of(context).textTheme.bodyMedium),
+            if (!hasCandidates) ...[
+              const SizedBox(height: AppSpace.lg),
+              FilledButton(
+                key: const ValueKey('home-empty-action'),
+                onPressed: hasConfig ? onOpenBrowse : onImportConfig,
+                child: Text(hasConfig ? '去点播逛逛' : '导入配置'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
 }

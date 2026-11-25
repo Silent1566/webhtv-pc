@@ -20,10 +20,12 @@ import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/home_hero.dart';
+import 'package:webhtv_pc/ui/home_cards.dart';
 import 'package:webhtv_pc/ui/home_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
+import 'support/home_hd_art_fixture.dart';
 
 const String imageBase = 'https://image.tmdb.org/t/p/w500';
 const String backdropBase = 'https://image.tmdb.org/t/p/w780';
@@ -120,7 +122,7 @@ class _ResumeHomeState extends AppState {
       rows;
 
   @override
-  Future<TmdbItem?> historyTmdbItem(PlaybackHistory row) async {
+  Future<TmdbItem?> historyTmdbItem(PlaybackHistory row, {bool Function()? isCurrent}) async {
     matchCalls++;
     return matched;
   }
@@ -178,6 +180,7 @@ void main() {
           body: ListenableBuilder(
             listenable: state,
             builder: (_, _) => HomePage(
+              heroImageLoader: loadHdHeroFixture,
               state: state,
               onOpenBrowse: () {},
               onOpenHistory: () {},
@@ -194,6 +197,17 @@ void main() {
 
   HomeItem hero(WidgetTester tester) =>
       tester.widget<HomeHero>(find.byType(HomeHero)).items.first;
+
+  Future<HomeItem> railItem(WidgetTester tester) async {
+    final rail = find.byType(HomeRailView);
+    if (rail.evaluate().isEmpty) {
+      await tester.scrollUntilVisible(rail, 240, scrollable: find.descendant(
+        of: find.byKey(const ValueKey('home-scroll')), matching: find.byType(Scrollable),
+      ).first);
+      await tester.pumpAndSettle();
+    }
+    return tester.widget<HomeRailView>(rail.first).rail.items.first;
+  }
 
   testWidgets('历史行没有 TMDB 身份：按片名匹配后补上背景与简介', (tester) async {
     state.matched = const TmdbItem(
@@ -216,7 +230,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('匹配不到身份：用站源简介兜底，不伪造 16:9 背景', (tester) async {
+  testWidgets('匹配不到身份：简介与背景沿用详情页的站源兜底', (tester) async {
     state.sourceVod = Vod(
       vodId: 'vod0',
       vodName: '一马当先0',
@@ -226,25 +240,25 @@ void main() {
 
     expect(state.matchCalls, 1);
     expect(state.sourceCalls, 1);
-    final item = hero(tester);
+    expect(find.byType(HomeHero), findsNothing);
+    final item = await railItem(tester);
     expect(item.overview, '站源提供的剧情简介');
-    expect(item.backdrop, isNull, reason: '站源只有竖版海报，不能当 16:9 背景');
+    expect(item.backdrop, 'https://source.example/poster0.jpg', reason: '与详情页一样按背景字段兜底，未伪造横版素材');
     expect(item.poster, 'https://source.example/poster0.jpg');
-    expect(find.text('站源提供的剧情简介'), findsOneWidget);
+    expect(find.text('站源提供的剧情简介'), findsNothing,
+        reason: '轨道保留简介数据，但无合格图时顶部hero不渲染简介');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('用户把爬虫源移出简介来源时，不读站点', (tester) async {
+  testWidgets('用户把爬虫源移出展示字段来源时，不读站点', (tester) async {
     var pipeline = MetaPipeline.defaults;
-    final rule = pipeline.ruleOf(MetaField.overview);
-    pipeline = pipeline.withRule(
-      rule.copyWith(
-        order: rule.order
-            .where((kind) => kind != MetaSourceKind.source)
-            .toList(),
-      ),
-    );
+    for (final field in MetaField.values) {
+      final rule = pipeline.ruleOf(field);
+      pipeline = pipeline.withRule(
+        rule.copyWith(order: rule.order.where((kind) => kind != MetaSourceKind.source).toList()),
+      );
+    }
     state.setPipeline(pipeline);
     state.sourceVod = Vod(
       vodId: 'vod0',
@@ -255,7 +269,7 @@ void main() {
 
     expect(state.matchCalls, 1);
     expect(state.sourceCalls, 0, reason: '用户已经关掉了站源简介');
-    expect(hero(tester).overview, isEmpty);
+    expect((await railItem(tester)).overview, isEmpty);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -296,11 +310,53 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('只匹配 hero 的续播预算（6 条），整份历史不跟着搜', (tester) async {
-    replaceState(_ResumeHomeState(dir, metadata, rowCount: 8));
+  testWidgets('详情匹配后历史补上身份，已挂载的首页应重新解析背景', (tester) async {
+    await pumpHome(tester);
+    expect(find.byType(HomeHero), findsNothing);
+    expect((await railItem(tester)).backdrop, 'https://source.example/poster0.jpg');
+    expect(state.matchCalls, 1);
+
+    // 与 AppState.rememberHistoryIdentity 一样：更新历史身份后通知监听器，HomePage
+    // 留在同一棵树里，不能靠销毁页面重开才看到新元数据。
+    state.rows[0] = historyRow(0, tmdbId: 42, mediaType: 'tv');
+    state.matched = const TmdbItem(
+      tmdbId: 42,
+      mediaType: TmdbMediaType.tv,
+      title: '一马当先',
+    );
+    state.notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(hero(tester).backdrop, '$backdropBase/metadata-backdrop.jpg');
+    expect(hero(tester).overview, '元数据提供的剧情简介');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('已加载元数据的续播也必须立即响应背景字段停用', (tester) async {
+    replaceState(_ResumeHomeState(dir, metadata, rowHasIdentity: true));
+    await pumpHome(tester);
+    expect(hero(tester).backdrop, '$backdropBase/metadata-backdrop.jpg');
+
+    final pipeline = MetaPipeline.defaults;
+    state.setPipeline(
+      pipeline.withRule(pipeline.ruleOf(MetaField.backdrop).copyWith(order: [])),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(HomeHero), findsNothing);
+    expect((await railItem(tester)).backdrop, isNull);
+    expect((await railItem(tester)).poster, isNotNull);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('无合格横图时有界补位，受轨道20条上限约束而非整份历史', (tester) async {
+    replaceState(_ResumeHomeState(dir, metadata, rowCount: 140));
     await pumpHome(tester);
 
-    expect(state.matchCalls, 6);
+    expect(state.matchCalls, 20);
+    expect(find.byType(HomeHero), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

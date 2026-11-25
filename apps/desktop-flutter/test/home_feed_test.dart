@@ -15,17 +15,13 @@ import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/services/storage.dart';
 
 void main() {
-  group('homeHeroHeight · 首屏两档高度', () {
-    test('有背景图：占满内容区，夹在 360–1000', () {
-      expect(homeHeroHeight(800, hasArt: true), 800);
-      expect(homeHeroHeight(1440, hasArt: true), 1000);
-      expect(homeHeroHeight(200, hasArt: true), 360);
-    });
-
-    test('没有背景图：收到 62%，夹在 360–640', () {
-      expect(homeHeroHeight(800, hasArt: false), closeTo(496, 0.01));
-      expect(homeHeroHeight(2000, hasArt: false), 640);
-      expect(homeHeroHeight(300, hasArt: false), 360);
+  group('homeHeroHeight · 首屏只有一档高度', () {
+    // 用户 2026-11-25：「首页风格不统一」——旧版没有 16:9 背景图时把整条 hero 收到
+    // 62%，于是那一张成了半屏海报 + 半屏空。高度不再随素材变化。
+    test('不论素材：占满内容区，夹在 360–1000', () {
+      expect(homeHeroHeight(800), 800);
+      expect(homeHeroHeight(1440), 1000);
+      expect(homeHeroHeight(200), 360);
     });
   });
 

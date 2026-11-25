@@ -68,6 +68,7 @@ class LivePage extends StatefulWidget {
       playLines: lines,
       episodeIndex: safeStart,
       directUrl: true,
+      isLive: true,
     );
   }
 
@@ -321,6 +322,7 @@ class _LivePageState extends State<LivePage> {
         (key, value) => MapEntry(key, value.toString()),
       ),
       directUrl: true,
+      isLive: false,
     );
     final result = _states[source.name]?.result;
     if (result == null) return;
