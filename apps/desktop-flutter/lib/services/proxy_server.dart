@@ -21,9 +21,12 @@ import 'dart:io';
 import 'dart:typed_data' show BytesBuilder;
 
 import '../core/ad_rules.dart';
+import '../core/dash_playlist.dart';
 import '../core/proxy_policy.dart';
 import '../core/playback_diagnostics.dart' show MediaFormat;
+import '../core/png_wrapped_transport_stream.dart';
 import 'log_service.dart';
+import 'tolerant_http_reader.dart';
 
 /// 代理请求结果，供调用方断言与诊断。
 class ProxyRequestOutcome {
@@ -76,6 +79,13 @@ class LocalProxyServer {
   final ProxySessionManager sessions;
   final HttpClient _upstream;
   final Duration requestTimeout;
+
+  /// 严格容错读取器：只在**已授权映射端点**上重试一次（见 [_forwardTolerantly]）。
+  /// 连接/空闲超时复用 [requestTimeout]，不引入第二套时间常量。
+  late final TolerantHttpReader _tolerant = TolerantHttpReader(
+    connectTimeout: requestTimeout,
+    idleTimeout: requestTimeout,
+  );
 
   HttpServer? _server;
   int _activeRequests = 0;
@@ -170,6 +180,12 @@ class LocalProxyServer {
     return '$baseUrl$pathPrefix${session.token}/i/$index';
   }
 
+  /// 构造会话内基址代理地址；文件或目录 BaseURL 都按原 URI 保留，
+  /// 播放器可把相对模板/分片追加到末尾，取回时按 URI 解析规则还原。
+  String urlForDirectory(ProxySession session, Uri logicalBase) {
+    return '$baseUrl$pathPrefix${session.token}/d/${encodeTarget(logicalBase)}/';
+  }
+
   /// 目标 URL 编码：base64url 无填充，避免路径分隔符与 query 干扰路由解析。
   static String encodeTarget(Uri target) =>
       base64Url.encode(utf8.encode(target.toString())).replaceAll('=', '');
@@ -249,7 +265,18 @@ class LocalProxyServer {
     final payload = segments.sublist(2);
     final Uri? target;
     if (payload.length == 2 && payload[0] == 'i') {
-      target = session.childTargetAt(int.tryParse(payload[1]) ?? -1);
+      final alias = RegExp(r'^(0|[1-9]\d*)\.ts$').firstMatch(payload[1]);
+      target = alias == null
+          ? session.childTargetAt(int.tryParse(payload[1]) ?? -1)
+          : session.pngTsMediaAliasTargetAt(
+              int.tryParse(alias.group(1)!) ?? -1,
+            );
+    } else if (payload.length >= 2 && payload[0] == 'd') {
+      target = _directoryTarget(
+        decodeTarget(payload[1]),
+        payload.sublist(2),
+        request.uri.query,
+      );
     } else {
       target = decodeTarget(payload.join('/'));
     }
@@ -270,63 +297,175 @@ class LocalProxyServer {
     }
   }
 
+  static Uri? _directoryTarget(Uri? base, List<String> suffix, String query) {
+    if (base == null ||
+        !(base.isScheme('http') || base.isScheme('https')) ||
+        base.host.isEmpty ||
+        base.userInfo.isNotEmpty) {
+      return null;
+    }
+    for (final segment in suffix) {
+      if (segment.isEmpty ||
+          segment == '.' ||
+          segment == '..' ||
+          segment.contains('\\') ||
+          segment.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
+        return null;
+      }
+    }
+    if (suffix.isEmpty) {
+      return base.replace(query: query.isEmpty ? base.query : query);
+    }
+    final relative = Uri(
+      pathSegments: suffix,
+      query: query.isEmpty ? null : query,
+    );
+    // RFC 3986 resolution: a file BaseURL drops its last segment for a
+    // relative child, while a directory BaseURL appends normally.
+    return base.resolveUri(relative);
+  }
+
   Future<void> _forward(
     HttpRequest request,
     ProxySession session,
-    Uri target,
-  ) async {
+    Uri target, {
+    bool fullManifest = false,
+    bool fullTransportStream = false,
+    Uri? transportStreamSource,
+    Uri? verifiedWireTarget,
+  }) async {
     final stopwatch = Stopwatch()..start();
-    final range = request.headers.value(HttpHeaders.rangeHeader);
+    final mediaSource = transportStreamSource ?? target;
+    final fullRepresentation = fullManifest || fullTransportStream;
+    final range = fullRepresentation
+        ? null
+        : request.headers.value(HttpHeaders.rangeHeader);
+    if (!identical(sessions.byToken(session.token), session) ||
+        !session.usable) {
+      await _fail(request, 401, 'token 无效或会话已失效');
+      return;
+    }
     // 会话级白名单优先于全局策略（§11.3.1「token 只授权当前站点与当前播放请求」）。
     // 主机白名单：站点授权主机 + 本次播放已派生的重定向主机（§11.3.1）。
     // 媒资分发常见 302 到 CDN（百度 `d.pcs.baidu.com` → `appall01.baidupcs.com`），
     // 派生主机只在通过 scheme/IP 安全校验后才被授权。
+    final baseHosts = session.allowedHosts.isEmpty
+        ? policy.allowedHosts
+        : session.allowedHosts;
     ProxyTargetPolicy hopPolicy() => ProxyTargetPolicy(
       allowPrivate: policy.allowPrivate,
       allowLoopback: policy.allowLoopback,
-      allowedHosts: {
-        ...(session.allowedHosts.isEmpty
-            ? policy.allowedHosts
-            : session.allowedHosts),
-        ...session.derivedHosts,
-      },
+      // 空名单代表不额外限主机；派生重定向不能反向收紧原有公网范围。
+      allowedHosts: baseHosts.isEmpty
+          ? const <String>{}
+          : {...baseHosts, ...session.derivedHosts},
       allowedSchemes: policy.allowedSchemes,
       maxRedirects: policy.maxRedirects,
     );
 
-    var current = target;
+    var logicalCurrent = target;
     var redirects = 0;
+    Uri? currentWireTarget;
+    ProxyTargetPolicy? currentWirePolicy;
     HttpClientResponse? upstream;
     int? lastUpstreamStatus;
     String? denyReason;
     int denyCode = 403;
 
+    ProxyTargetPolicy mappedPolicy(int mappedPort) => ProxyTargetPolicy(
+      allowLoopback: true,
+      allowPrivate: false,
+      allowedHosts: {'127.0.0.1:$mappedPort'},
+      allowedSchemes: policy.allowedSchemes,
+      maxRedirects: policy.maxRedirects,
+    );
+
     while (true) {
-      final effectivePolicy = hopPolicy();
-      final staticDecision = effectivePolicy.evaluateStatic(current);
+      int? mappedPort;
+      final resolver = session.targetResolver;
+      if (resolver != null) {
+        final logicalDecision = _managedLogicalDecision(logicalCurrent);
+        if (!logicalDecision.allowed) {
+          denyReason = logicalDecision.reason;
+          denyCode = logicalDecision.code;
+          break;
+        }
+        if (adRules.isAdHost(logicalCurrent.host)) {
+          denyReason = '命中广告规则：${logicalCurrent.host}';
+          denyCode = 403;
+          break;
+        }
+        try {
+          mappedPort = await resolver(logicalCurrent).timeout(requestTimeout);
+        } on TimeoutException {
+          denyReason = 'Android 传输授权超时';
+          denyCode = 502;
+          break;
+        } catch (_) {
+          denyReason = 'Android 传输授权失败';
+          denyCode = 502;
+          break;
+        }
+        // 解析可能耗时：撤销/过期后不得继续使用旧 token 打开上游。
+        if (!identical(sessions.byToken(session.token), session) ||
+            !session.usable) {
+          denyReason = 'token 无效或会话已失效';
+          denyCode = 401;
+          break;
+        }
+        if (mappedPort != null &&
+            (mappedPort < 1 || mappedPort > 65535 || mappedPort == port)) {
+          denyReason = 'Android 转发端口无效';
+          denyCode = 502;
+          break;
+        }
+      }
+      final mapped = mappedPort != null;
+      final wireTarget = mapped
+          ? logicalCurrent.replace(
+              host: '127.0.0.1',
+              port: mappedPort,
+              userInfo: '',
+            )
+          : logicalCurrent;
+      if (fullRepresentation && wireTarget != verifiedWireTarget) {
+        denyReason = '清单重试目标发生变化';
+        denyCode = 502;
+        break;
+      }
+      currentWireTarget = wireTarget;
+      final effectivePolicy = mapped ? mappedPolicy(mappedPort) : hopPolicy();
+      currentWirePolicy = effectivePolicy;
+      final staticDecision = effectivePolicy.evaluateStatic(wireTarget);
       if (!staticDecision.allowed) {
         denyReason = staticDecision.reason;
         denyCode = staticDecision.code;
         break;
       }
       // 广告主机：在 DNS 解析前拒绝（避免无谓解析，也避免把广告请求发出去）。
-      if (adRules.isAdHost(current.host)) {
-        denyReason = '命中广告规则：${current.host}';
+      if (adRules.isAdHost(logicalCurrent.host)) {
+        denyReason = '命中广告规则：${logicalCurrent.host}';
         denyCode = 403;
         break;
       }
       // 每次连接前重新解析并复核全部地址，防 DNS 重绑定（§11.3.1）。
       final List<InternetAddress> addresses;
       try {
-        addresses = await InternetAddress.lookup(current.host);
+        addresses = await InternetAddress.lookup(wireTarget.host);
       } catch (error) {
-        denyReason = 'DNS 解析失败：${current.host}';
+        denyReason = 'DNS 解析失败：${wireTarget.host}';
         denyCode = 502;
+        break;
+      }
+      if (!identical(sessions.byToken(session.token), session) ||
+          !session.usable) {
+        denyReason = 'token 无效或会话已失效';
+        denyCode = 401;
         break;
       }
       final addressDecision = effectivePolicy.evaluateAll(
         addresses,
-        current.host,
+        wireTarget.host,
       );
       if (!addressDecision.allowed) {
         denyReason = addressDecision.reason;
@@ -337,7 +476,7 @@ class LocalProxyServer {
       final HttpClientRequest outbound;
       try {
         outbound = await _upstream
-            .openUrl(request.method == 'HEAD' ? 'HEAD' : 'GET', current)
+            .openUrl(request.method == 'HEAD' ? 'HEAD' : 'GET', wireTarget)
             .timeout(requestTimeout);
       } catch (error) {
         denyReason = '连接上游失败：${error.runtimeType}';
@@ -349,30 +488,105 @@ class LocalProxyServer {
       // 导致网盘 CDN（如百度 `appall01.baidupcs.com`）校验 UA 失败而返回
       // 403 `sign error`。手工逐跳跟随才能在每一跳重新注入会话 Header
       // （§11.3.1）。
+      if (!identical(sessions.byToken(session.token), session) ||
+          !session.usable) {
+        outbound.abort();
+        denyReason = 'token 无效或会话已失效';
+        denyCode = 401;
+        break;
+      }
       outbound.followRedirects = false;
 
       // 必须在构造转发 Header **之前**确立来源：否则首跳的 origin 会退化为
       // 代理自身地址（与目标永远不同源），导致站点 Cookie/Authorization
       // 在首跳就被当作跨域凭据剥离（§11.3.1）。
-      if (current == target && session.establishedOrigin == null) {
-        session.establishedOrigin = '${current.host}:${current.port}';
+      if (logicalCurrent == target && session.establishedOrigin == null) {
+        session.establishedOrigin = mapped
+            ? '${logicalCurrent.scheme}://${logicalCurrent.host}:${logicalCurrent.port}'
+            : '${logicalCurrent.host}:${logicalCurrent.port}';
       }
       final forwardHeaders = _forwardHeaders(
         session: session,
         request: request,
-        target: current,
+        target: logicalCurrent,
         range: range,
+        managed: mapped,
       );
+      if (fullRepresentation) {
+        forwardHeaders.removeWhere(
+          (name, _) => {
+            HttpHeaders.rangeHeader,
+            HttpHeaders.ifRangeHeader,
+            HttpHeaders.ifNoneMatchHeader,
+            HttpHeaders.ifModifiedSinceHeader,
+            HttpHeaders.ifMatchHeader,
+            HttpHeaders.ifUnmodifiedSinceHeader,
+          }.contains(name.toLowerCase()),
+        );
+      }
       for (final entry in forwardHeaders.entries) {
         outbound.headers.set(entry.key, entry.value);
       }
 
+      final guard =
+          (session.targetResolver != null || session.inspectPlaylistContent)
+          ? Timer.periodic(const Duration(milliseconds: 25), (_) {
+              if (!session.usable ||
+                  !identical(sessions.byToken(session.token), session)) {
+                outbound.abort();
+              }
+            })
+          : null;
+      unawaited(
+        request.response.done.then(
+          (_) => outbound.abort(),
+          onError: (Object _) => outbound.abort(),
+        ),
+      );
       final HttpClientResponse response;
       try {
         response = await outbound.close().timeout(requestTimeout);
       } catch (error) {
+        if (!identical(sessions.byToken(session.token), session) ||
+            !session.usable) {
+          denyReason = 'token 无效或会话已失效';
+          denyCode = 401;
+          break;
+        }
+        // Dart 的 HttpClient 在解析阶段就拒绝「重复/冲突分帧头」，
+        // 过去只会得到不透明的「请求上游失败：HttpException」。这里把它识别成
+        // 可定位的一类失败；受管会话再对**同一个已核验转发端点**严格重试一次。
+        if (UpstreamFramingFailure.isDuplicateFraming(error)) {
+          _logFramingReject(session, logicalCurrent);
+          if (!fullTransportStream &&
+              mapped &&
+              session.targetResolver != null) {
+            await _forwardTolerantly(
+              request: request,
+              session: session,
+              logicalTarget: logicalCurrent,
+              wireTarget: wireTarget,
+              headers: forwardHeaders,
+              range: range,
+              stopwatch: stopwatch,
+            );
+            return;
+          }
+          denyReason = UpstreamFramingFailure.message;
+          denyCode = 502;
+          break;
+        }
         denyReason = '请求上游失败：${error.runtimeType}';
         denyCode = 502;
+        break;
+      } finally {
+        guard?.cancel();
+      }
+      if (!identical(sessions.byToken(session.token), session) ||
+          !session.usable) {
+        await _abort(response);
+        denyReason = 'token 无效或会话已失效';
+        denyCode = 401;
         break;
       }
 
@@ -380,6 +594,15 @@ class LocalProxyServer {
 
       // 重定向：手工跟随并逐跳复核（§11.3.1）。
       if (_isRedirect(response.statusCode)) {
+        if (fullTransportStream) {
+          final withinQuota = session.accountRequest(
+            response.contentLength >= 0 ? response.contentLength : 0,
+          );
+          await _abort(response);
+          denyReason = '受管媒体重试目标发生变化';
+          denyCode = withinQuota ? 502 : 429;
+          break;
+        }
         final location = response.headers.value(HttpHeaders.locationHeader);
         await response.drain<void>();
         if (location == null) {
@@ -393,9 +616,21 @@ class LocalProxyServer {
           denyCode = 502;
           break;
         }
-        final next = current.resolve(location);
-        // 重定向目标是同一播放请求的派生目标：先做 scheme 与字面 IP 安全校验，
-        // 通过后记入派生主机，使下一跳（含 HLS 子资源）可继续代理（§11.3.1）。
+        // Location 必须按**逻辑**当前地址解析；物理 127.0.0.1:port 只属于
+        // 传输层，不能成为清单/凭据/重定向的来源。
+        final next = logicalCurrent.resolve(location);
+        if (!policy.allowedSchemes.contains(next.scheme.toLowerCase()) ||
+            next.host.isEmpty ||
+            next.userInfo.isNotEmpty ||
+            ProxyTargetPolicy.cloudMetadataHosts.contains(
+              next.host.toLowerCase(),
+            )) {
+          denyReason = '重定向目标不被允许';
+          denyCode = 403;
+          break;
+        }
+        // 普通目标沿用既有全局静态校验与派生主机授权；已授权私网目标
+        // 不在这里放行，交给下一轮 resolver 或普通策略明确拒绝。
         final probePolicy = ProxyTargetPolicy(
           allowPrivate: policy.allowPrivate,
           allowLoopback: policy.allowLoopback,
@@ -403,17 +638,14 @@ class LocalProxyServer {
           maxRedirects: policy.maxRedirects,
         );
         final probe = probePolicy.evaluateStatic(next);
-        if (!probe.allowed) {
-          denyReason = probe.reason;
-          denyCode = probe.code;
-          break;
+        if (probe.allowed) {
+          session.derivedHosts.add(next.host.toLowerCase());
         }
-        session.derivedHosts.add(next.host.toLowerCase());
         log.debug(
           '代理跟随重定向 href=${redactProxyTarget(next)} redirects=$redirects',
           scope: 'proxy',
         );
-        current = next;
+        logicalCurrent = next;
         continue;
       }
 
@@ -476,27 +708,178 @@ class LocalProxyServer {
     final response = request.response;
     response.statusCode = upstream.statusCode;
 
-    // MIME/扩展名不是可靠证据：后缀为空的 text/plain HLS 会被 mpv 当作
-    // 普通播放列表，首个 TS 就成了“整部影片”（例如总时长只剩 6 秒）。
-    // 只探测完整、未压缩的 GET 实体；部分 Range/HEAD 保持上游字节语义。
+    final isDash =
+        !(fullTransportStream && upstream.statusCode >= 400) &&
+        DashPlaylistRewriter.looksLikeManifest(
+          contentType,
+          logicalCurrent.toString(),
+        );
+    if ((fullManifest || fullTransportStream) && isDash) {
+      await _abort(upstream);
+      await _fail(request, 502, '清单重试类型发生变化');
+      return;
+    }
+    if (isDash && upstream.statusCode >= 200 && upstream.statusCode < 300) {
+      final body = await _readAll(upstream, manifestType: 'DASH');
+      session.recordReceivedBytes(body.length);
+      final String rewritten;
+      try {
+        rewritten = DashPlaylistRewriter.rewrite(
+          utf8.decode(body, allowMalformed: true),
+          baseUri: logicalCurrent,
+          childUrl: (child) => _proxifyForManifest(session, child),
+          directoryUrl: (directory) =>
+              _directoryForManifest(session, directory),
+        );
+      } catch (_) {
+        _record(
+          session,
+          target,
+          statusCode: 502,
+          elapsed: stopwatch.elapsed,
+          range: range,
+          note: 'dash-invalid',
+        );
+        await _fail(request, 502, 'DASH 清单无法解析');
+        return;
+      }
+      final bytes = utf8.encode(rewritten);
+      response.statusCode = HttpStatus.ok;
+      _copySafeHeaders(
+        response,
+        upstream,
+        contentLength: bytes.length,
+        synthesizedBody: true,
+        dropCacheMetadata: true,
+      );
+      response.headers.contentType = ContentType(
+        'application',
+        'dash+xml',
+        charset: 'utf-8',
+      );
+      response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
+      response.add(bytes);
+      await response.close();
+      _record(
+        session,
+        target,
+        statusCode: 200,
+        bytes: bytes.length,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'dash-rewrite',
+      );
+      return;
+    }
+
+    final managedInspection =
+        session.targetResolver != null || session.inspectPlaylistContent;
+    final encoding = upstream.headers.value(HttpHeaders.contentEncodingHeader);
+    final uncompressed =
+        encoding == null || encoding.toLowerCase() == 'identity';
+    var isPlaylist =
+        managedInspection &&
+        request.method == 'GET' &&
+        uncompressed &&
+        !(fullTransportStream && upstream.statusCode >= 400) &&
+        HlsPlaylistRewriter.looksLikePlaylist(
+          contentType,
+          logicalCurrent.toString(),
+        );
     var bodyStream = upstream as Stream<List<int>>;
-    var isPlaylist = false;
-    if (request.method != 'HEAD' && _canInspectPlaylist(upstream)) {
+    List<int>? sniffedManifest;
+    Future<void> Function()? hlsCancel;
+    // 仅受管 GET 成功响应按内容补判；普通流遇到非清单前缀立即原样透传。
+    if (managedInspection &&
+        uncompressed &&
+        request.method == 'GET' &&
+        (upstream.statusCode == 200 || upstream.statusCode == 206) &&
+        !isPlaylist) {
+      final _SniffedHls sniffed;
+      try {
+        sniffed = await _sniffHls(bodyStream, session, request);
+      } on _PngFailure catch (error) {
+        await _fail(request, error.status, '受管媒体会话失效');
+        return;
+      } catch (_) {
+        await _fail(request, 502, '受管媒体读取失败');
+        return;
+      }
+      hlsCancel = sniffed.cancel;
+      bodyStream = sniffed.stream;
+      if (sniffed.oversized) {
+        await _fail(request, 502, 'HLS 清单超过 1 MiB');
+        return;
+      }
+      sniffedManifest = sniffed.manifest;
+      isPlaylist = sniffedManifest != null;
+    }
+
+    if (!managedInspection &&
+        request.method == 'GET' &&
+        _canInspectPlaylist(upstream)) {
       final probe = await _inspectPlaylist(bodyStream);
       isPlaylist = probe.isPlaylist;
-      if (!isPlaylist) session.clearHlsPath(request.uri.path);
       bodyStream = probe.body;
+    }
+    if (!isPlaylist &&
+        request.method == 'GET' &&
+        _canInspectPlaylist(upstream)) {
+      session.clearHlsPath(request.uri.path);
+    }
+
+    if (fullTransportStream && isPlaylist) {
+      if (sniffedManifest != null) {
+        session.recordReceivedBytes(sniffedManifest.length);
+      }
+      await _abortBody(bodyStream);
+      await _fail(request, 502, '受管媒体重试类型发生变化');
+      return;
+    }
+
+    if (fullManifest && !isPlaylist) {
+      await _abortBody(bodyStream);
+      await _fail(request, 502, '清单完整响应无法确认');
+      return;
     }
 
     if (isPlaylist) {
       // 清单必须整体读取后重写，保证子清单/分片 URL 走同一会话（§11.4）。
-      final body = await _readAll(bodyStream);
+      final body = sniffedManifest ?? await _readAll(bodyStream);
       session.recordReceivedBytes(body.length);
-      final originalText = utf8.decode(body, allowMalformed: true).trimLeft();
-      final evidence = collectAdPlaylistEvidence(originalText, current);
+      if (managedInspection) {
+        if (!identical(sessions.byToken(session.token), session) ||
+            !session.usable) {
+          await _fail(request, 401, 'token 无效或会话已失效');
+          return;
+        }
+        // 206 必须覆盖完整实体才能合成 200；真正的片段只重试一次，
+        // 去掉 Range/If-Range 与条件缓存头，重新执行授权、DNS 和配额检查。
+        if (!_completeManifest(
+          upstream.statusCode,
+          upstream.headers.value(HttpHeaders.contentRangeHeader),
+          body.length,
+        )) {
+          if (fullManifest) {
+            await _fail(request, 502, '清单重试仍不是完整响应');
+          } else {
+            await _forward(
+              request,
+              session,
+              logicalCurrent,
+              fullManifest: true,
+              verifiedWireTarget: currentWireTarget,
+            );
+          }
+          return;
+        }
+      }
+      final decoded = utf8.decode(body, allowMalformed: true);
+      final originalText = decoded.replaceFirst(RegExp(r'^[\s\uFEFF]*'), '');
+      final evidence = collectAdPlaylistEvidence(originalText, logicalCurrent);
       if (!evidence.isEmpty) {
         _mediaPlaylists[session.fingerprint] = AiPlaylistSnapshot(
-          playlist: current,
+          playlist: logicalCurrent,
           evidence: evidence,
           siteKey: session.siteKey,
           sessionFingerprint: session.fingerprint,
@@ -513,13 +896,16 @@ class LocalProxyServer {
           : adRules;
       final cleaned = cleanHlsPlaylist(
         text: originalText,
-        playlistUri: current,
+        playlistUri: logicalCurrent,
         rules: effectiveRules,
       );
-      final rewritten = HlsPlaylistRewriter.rewrite(
-        cleaned.text,
-        current,
-        (child) => _proxify(session, child),
+      final rewritten = _aliasPngTsMedia(
+        session,
+        HlsPlaylistRewriter.rewrite(
+          cleaned.text,
+          logicalCurrent,
+          (child) => _proxifyForManifest(session, child),
+        ),
       );
       final bytes = utf8.encode(rewritten);
       _logPlaylistShape(
@@ -549,7 +935,14 @@ class LocalProxyServer {
         charset: 'utf-8',
       );
       response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
-      session.recordHlsPath(request.uri.path);
+      final signature = HlsPlaylistRewriter.sniffPlaylistPrefix(
+        body.take(256).toList(),
+      );
+      if (signature == true) {
+        session.recordHlsPath(request.uri.path);
+      } else {
+        session.clearHlsPath(request.uri.path);
+      }
       response.add(bytes);
       await response.close();
       _record(
@@ -568,25 +961,141 @@ class LocalProxyServer {
       return;
     }
 
+    _PngBody? png;
+    final inspectMedia =
+        (session.targetResolver != null || session.inspectPlaylistContent) &&
+        request.method == 'GET' &&
+        session.allowsPngTsNormalization(mediaSource) &&
+        (upstream.statusCode == 200 || upstream.statusCode == 206);
+    if (inspectMedia) {
+      try {
+        final contentRange = upstream.headers.value(
+          HttpHeaders.contentRangeHeader,
+        );
+        final startsAtZero =
+            upstream.statusCode == 200 ||
+            (contentRange != null &&
+                RegExp(r'^bytes 0-').hasMatch(contentRange));
+        png = await _sniffPng(
+          bodyStream,
+          session,
+          request,
+          knownLength: upstream.contentLength >= 0,
+          inspect: startsAtZero,
+          cancelSource: hlsCancel,
+        );
+        bodyStream = png.stream;
+        var proven = png.offset != null;
+        if (!proven &&
+            !startsAtZero &&
+            contentType.toLowerCase().split(';').first.trim() == 'image/png' &&
+            !fullTransportStream) {
+          proven = await _probePngPrefix(
+            request,
+            session,
+            logicalCurrent,
+            currentWireTarget!,
+            currentWirePolicy!,
+          );
+        }
+        _checkPngSession(session);
+        if (!session.allowsPngTsNormalization(mediaSource)) {
+          throw const _PngFailure(502);
+        }
+        final complete =
+            upstream.statusCode == 200 ||
+            (upstream.contentLength >= 0 &&
+                _completeManifest(
+                  upstream.statusCode,
+                  contentRange,
+                  upstream.contentLength,
+                ));
+        if (proven && (!complete || png.offset == null)) {
+          await png.cancel();
+          if (fullTransportStream) throw const _PngFailure(502);
+          await _forward(
+            request,
+            session,
+            logicalCurrent,
+            fullTransportStream: true,
+            transportStreamSource: mediaSource,
+            verifiedWireTarget: currentWireTarget,
+          );
+          return;
+        }
+        if (fullTransportStream && !proven) throw const _PngFailure(502);
+        if (proven) {
+          response.statusCode = 200;
+          _copySafeHeaders(
+            response,
+            upstream,
+            contentLength: -1,
+            synthesizedBody: true,
+            dropCacheMetadata: true,
+          );
+          response.headers.contentType = ContentType('video', 'mp2t');
+          if (upstream.contentLength >= 0) {
+            response.contentLength = upstream.contentLength - png.offset!;
+          }
+          await _copyPngBody(response, png.stream, session);
+          _record(
+            session,
+            target,
+            statusCode: 200,
+            elapsed: stopwatch.elapsed,
+            range: range,
+            note: 'png-ts-normalized',
+          );
+          return;
+        }
+      } on _PngFailure catch (error) {
+        await png?.cancel();
+        await _fail(request, error.status, '受管媒体完整响应无法确认');
+        return;
+      } catch (_) {
+        await png?.cancel();
+        await _fail(request, 502, '受管媒体读取失败');
+        return;
+      }
+    } else if (fullTransportStream && upstream.statusCode < 400) {
+      await _abortBody(bodyStream);
+      await _fail(
+        request,
+        upstream.statusCode >= 400 ? upstream.statusCode : 502,
+        '受管媒体完整响应无法确认',
+      );
+      return;
+    }
+
     _copySafeHeaders(response, upstream, contentLength: upstream.contentLength);
     response.bufferOutput = false;
     var bytes = 0;
     try {
-      await response.addStream(
-        bodyStream.map((chunk) {
+      if (png == null) {
+        await response.addStream(
+          bodyStream.map((chunk) {
+            bytes += chunk.length;
+            session.recordReceivedBytes(chunk.length);
+            return chunk;
+          }),
+        );
+      } else {
+        await for (final chunk in bodyStream) {
           bytes += chunk.length;
-          session.recordReceivedBytes(chunk.length);
-          return chunk;
-        }),
-      );
+          response.add(chunk);
+          await response.flush().timeout(requestTimeout);
+        }
+      }
       await response.close();
     } catch (error) {
       // 异常流必须被关闭（§11.4）。
-      log.warning('代理流转发中断：$error', scope: 'proxy');
+      log.warning('代理流转发中断：${error.runtimeType}', scope: 'proxy');
       try {
         await response.close();
       } catch (_) {}
     }
+    await png?.cancel();
+    await hlsCancel?.call();
     _record(
       session,
       target,
@@ -599,11 +1108,357 @@ class LocalProxyServer {
     );
   }
 
+  /// 只在「严格 HttpClient 因重复/冲突分帧头失败」后调用一次。
+  ///
+  /// 约束：目标必须是本轮已通过策略与 DNS 复核的 `127.0.0.1:<映射端口>`；
+  /// 方法（GET/HEAD）、Range 与会话注入头与严格请求完全一致；不跟随重定向；
+  /// 正文流式转发，不整段缓冲。会话字节/请求配额由 [_serveTolerant] 照常记账。
+  Future<void> _forwardTolerantly({
+    required HttpRequest request,
+    required ProxySession session,
+    required Uri logicalTarget,
+    required Uri wireTarget,
+    required Map<String, String> headers,
+    required String? range,
+    required Stopwatch stopwatch,
+  }) async {
+    final String method = request.method == 'HEAD' ? 'HEAD' : 'GET';
+    final TolerantHttpResponse upstream;
+    try {
+      upstream = await _tolerant.send(
+        wireTarget: wireTarget,
+        method: method,
+        headers: headers,
+        timeout: requestTimeout,
+      );
+    } on TolerantHttpException catch (error) {
+      _record(
+        session,
+        logicalTarget,
+        statusCode: 502,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'tolerant-${error.kind.name}',
+      );
+      await _fail(request, 502, _tolerantFailureMessage(error));
+      return;
+    } catch (error) {
+      _record(
+        session,
+        logicalTarget,
+        statusCode: 502,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'tolerant-error',
+      );
+      await _fail(request, 502, '请求上游失败：${error.runtimeType}');
+      return;
+    }
+
+    try {
+      await _serveTolerant(
+        request: request,
+        session: session,
+        logicalTarget: logicalTarget,
+        upstream: upstream,
+        range: range,
+        stopwatch: stopwatch,
+      );
+    } finally {
+      await upstream.close();
+    }
+  }
+
+  Future<void> _serveTolerant({
+    required HttpRequest request,
+    required ProxySession session,
+    required Uri logicalTarget,
+    required TolerantHttpResponse upstream,
+    required String? range,
+    required Stopwatch stopwatch,
+  }) async {
+    final contentType = upstream.headers[HttpHeaders.contentTypeHeader] ?? '';
+    if (contentType.toLowerCase().contains('text/html') &&
+        upstream.statusCode >= 200 &&
+        upstream.statusCode < 300) {
+      _record(
+        session,
+        logicalTarget,
+        statusCode: 502,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'upstream-html',
+      );
+      await _fail(request, 502, '上游返回 HTML 页面而不是媒体数据');
+      return;
+    }
+    // 清单在本路径不做二次重写：原样转发会把 guest 回环地址泄漏给播放器，
+    // 静默降级比明确失败更危险，所以失败关闭。
+    if (HlsPlaylistRewriter.looksLikePlaylist(
+          contentType,
+          logicalTarget.toString(),
+        ) ||
+        DashPlaylistRewriter.looksLikeManifest(
+          contentType,
+          logicalTarget.toString(),
+        )) {
+      _record(
+        session,
+        logicalTarget,
+        statusCode: 502,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'tolerant-manifest',
+      );
+      await _fail(request, 502, '容错读取路径不接受清单响应：拒绝二次重写');
+      return;
+    }
+    if (!session.accountRequest(
+      upstream.contentLength >= 0 ? upstream.contentLength : 0,
+    )) {
+      _record(
+        session,
+        logicalTarget,
+        statusCode: 429,
+        elapsed: stopwatch.elapsed,
+        range: range,
+        note: 'session-limit',
+      );
+      await _fail(request, 429, '会话累计流量或请求数超过上限');
+      return;
+    }
+
+    var bodyStream = upstream.body;
+    if (request.method == 'GET' &&
+        (upstream.statusCode == 200 || upstream.statusCode == 206)) {
+      final sniffed = await _sniffHls(bodyStream, session, request);
+      bodyStream = sniffed.stream;
+      if (sniffed.oversized || sniffed.manifest != null) {
+        if (sniffed.manifest != null) {
+          session.recordReceivedBytes(sniffed.manifest!.length);
+        }
+        await _fail(request, 502, '容错读取路径不接受清单响应：拒绝二次重写');
+        return;
+      }
+    }
+
+    final response = request.response;
+    response.statusCode = upstream.statusCode;
+    _copyTolerantHeaders(
+      response,
+      upstream,
+      headRequest: request.method == 'HEAD',
+    );
+    var bytes = 0;
+    try {
+      await for (final chunk in bodyStream) {
+        bytes += chunk.length;
+        session.recordReceivedBytes(chunk.length);
+        response.add(chunk);
+      }
+      await response.close();
+    } catch (error) {
+      final failure = error is TolerantHttpException
+          ? error.kind.name
+          : error.runtimeType;
+      log.warning('容错读取正文中断：$failure', scope: 'proxy');
+      try {
+        await response.close();
+      } catch (_) {}
+    }
+    _record(
+      session,
+      logicalTarget,
+      statusCode: upstream.statusCode,
+      bytes: bytes,
+      elapsed: stopwatch.elapsed,
+      range: range,
+      note: 'tolerant-read',
+    );
+  }
+
+  /// 只转发与严格路径同一套白名单头（不含 `Set-Cookie` 等）。
+  void _copyTolerantHeaders(
+    HttpResponse response,
+    TolerantHttpResponse upstream, {
+    required bool headRequest,
+  }) {
+    const forwarded = [
+      HttpHeaders.contentTypeHeader,
+      HttpHeaders.cacheControlHeader,
+      HttpHeaders.contentRangeHeader,
+      HttpHeaders.acceptRangesHeader,
+      HttpHeaders.lastModifiedHeader,
+      HttpHeaders.etagHeader,
+    ];
+    for (final name in forwarded) {
+      final value = upstream.headers[name.toLowerCase()];
+      if (value != null) response.headers.set(name, value);
+    }
+    if (upstream.contentLength >= 0) {
+      if (headRequest) {
+        // HEAD 无正文：显式写头，避免 dart:io 按正文长度校验。
+        response.headers.set(
+          HttpHeaders.contentLengthHeader,
+          '${upstream.contentLength}',
+        );
+      } else {
+        response.contentLength = upstream.contentLength;
+      }
+    }
+    if (upstream.statusCode == 206 &&
+        upstream.contentLength >= 0 &&
+        upstream.headers[HttpHeaders.contentRangeHeader.toLowerCase()] ==
+            null) {
+      response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes */${upstream.contentLength}',
+      );
+    }
+  }
+
+  static String _tolerantFailureMessage(TolerantHttpException error) {
+    switch (error.kind) {
+      case TolerantHttpFailureKind.framing:
+        return UpstreamFramingFailure.message;
+      case TolerantHttpFailureKind.redirect:
+      case TolerantHttpFailureKind.protocol:
+      case TolerantHttpFailureKind.connection:
+      case TolerantHttpFailureKind.timeout:
+        return error.message;
+    }
+  }
+
+  /// 一条脱敏诊断：只写主机、端口与 token 指纹，不写 path/query/头取值。
+  void _logFramingReject(ProxySession session, Uri logicalTarget) {
+    log.warning(
+      '上游响应头不合规（重复或冲突的 Content-Length）：严格解析拒绝 '
+      'host=${_hostPort(logicalTarget)} token=${session.fingerprint}',
+      scope: 'proxy',
+    );
+  }
+
+  static String _hostPort(Uri target) =>
+      target.hasPort ? '${target.host}:${target.port}' : target.host;
+
+  /// 会话级传输授权只接受逻辑 HTTP(S) 目标；物理地址由代理构造。
+  ProxyTargetDecision _managedLogicalDecision(Uri target) {
+    if (!policy.allowedSchemes.contains(target.scheme.toLowerCase())) {
+      return ProxyTargetDecision.deny('scheme 不受支持：${target.scheme}');
+    }
+    if (target.host.isEmpty) {
+      return const ProxyTargetDecision.deny('缺少 host');
+    }
+    if (target.userInfo.isNotEmpty) {
+      return const ProxyTargetDecision.deny('目标不得包含 userinfo');
+    }
+    if (ProxyTargetPolicy.cloudMetadataHosts.contains(
+      target.host.toLowerCase(),
+    )) {
+      return const ProxyTargetDecision.deny('云元数据地址被拒绝');
+    }
+    return const ProxyTargetDecision.allow();
+  }
+
+  /// 会话级授权下，清单中的 HTTP(S) 子资源都必须先回到本会话 token，
+  /// 绝不让 scoped guest 地址直接落到 PC 播放器；实际授权在取回时复核。
+  int? _registeredManifestChild(ProxySession session, String value) {
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasAuthority || uri.origin != baseUrl) return null;
+    final parts = uri.pathSegments;
+    if (parts.length != 4 ||
+        parts[0] != 'p' ||
+        parts[1] != session.token ||
+        parts[2] != 'i') {
+      return null;
+    }
+    final index = int.tryParse(parts[3]);
+    return index != null && session.childTargetAt(index) != null ? index : null;
+  }
+
+  String _aliasPngTsMedia(ProxySession session, String playlist) {
+    if (!(session.targetResolver != null || session.inspectPlaylistContent)) {
+      return playlist;
+    }
+    session.recordPngTsManifest();
+    final lines = const LineSplitter().convert(playlist);
+    final unsupported =
+        lines.any(
+          (line) => RegExp(
+            r'^#EXT-X-(MAP:|BYTERANGE:|STREAM-INF:|SESSION-KEY:)',
+            caseSensitive: false,
+          ).hasMatch(line.trim()),
+        ) ||
+        lines.any(
+          (line) =>
+              line.trim().toUpperCase().startsWith('#EXT-X-KEY:') &&
+              !RegExp(
+                r'(?:[:,])\s*METHOD\s*=\s*NONE(?:,|$)',
+                caseSensitive: false,
+              ).hasMatch(line.trim()),
+        );
+    var media = false;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.toUpperCase().startsWith('#EXTINF:')) {
+        media = true;
+        continue;
+      }
+      if (line.startsWith('#')) {
+        for (final match in RegExp(
+          r'URI\s*=\s*"([^"]*)"',
+          caseSensitive: false,
+        ).allMatches(line)) {
+          final index = _registeredManifestChild(session, match.group(1)!);
+          if (index != null) session.excludePngTsChild(index);
+        }
+        continue;
+      }
+      if (line.isEmpty) continue;
+      final index = _registeredManifestChild(session, line);
+      if (index != null) {
+        if (!unsupported && media && session.registerPngTsMediaAlias(index)) {
+          lines[i] = '$line.ts';
+        } else {
+          session.excludePngTsChild(index);
+        }
+      }
+      media = false;
+    }
+    return "${lines.join('\n')}\n";
+  }
+
+  String? _proxifyForManifest(ProxySession session, Uri child) {
+    if (session.targetResolver != null &&
+        (child.isScheme('http') || child.isScheme('https')) &&
+        child.host.isNotEmpty &&
+        child.userInfo.isEmpty) {
+      return urlForChild(session, child);
+    }
+    return _proxify(session, child);
+  }
+
+  String? _directoryForManifest(ProxySession session, Uri directory) {
+    if (session.targetResolver != null &&
+        (directory.isScheme('http') || directory.isScheme('https')) &&
+        directory.host.isNotEmpty &&
+        directory.userInfo.isEmpty) {
+      return urlForDirectory(session, directory);
+    }
+    if (!_manifestHostAllowed(session, directory)) return null;
+    return urlForDirectory(session, directory);
+  }
+
   /// 允许代理的子资源 URL。
   ///
   /// 只允许当前会话已确立来源的 host（HLS 常见做法是清单与分片同 host），
   /// 或站点显式授权的 host。返回 null 时清单中的该行保持原样。
   String? _proxify(ProxySession session, Uri child) {
+    if (!_manifestHostAllowed(session, child)) return null;
+    return urlForChild(session, child);
+  }
+
+  bool _manifestHostAllowed(ProxySession session, Uri child) {
     final host = child.host.toLowerCase();
     final established = session.establishedOrigin?.split(':').first;
     final allowed =
@@ -617,8 +1472,7 @@ class LocalProxyServer {
           (entry) => entry == host || host.endsWith('.$entry'),
         ) ||
         (established != null && established == host);
-    if (!allowed) return null;
-    return urlForChild(session, child);
+    return allowed;
   }
 
   Map<String, String> _forwardHeaders({
@@ -626,10 +1480,13 @@ class LocalProxyServer {
     required HttpRequest request,
     required Uri target,
     required String? range,
+    bool managed = false,
   }) {
-    final origin =
-        session.establishedOrigin ?? '${request.uri.host}:${request.uri.port}';
-    final targetOrigin = '${target.host}:${target.port}';
+    String credentialOrigin(Uri uri) => managed
+        ? '${uri.scheme}://${uri.host}:${uri.port}'
+        : '${uri.host}:${uri.port}';
+    final origin = session.establishedOrigin ?? credentialOrigin(request.uri);
+    final targetOrigin = credentialOrigin(target);
 
     final headers = <String, String>{
       // 强制 identity：避免压缩后 Content-Range/Content-Length 与实际字节不符。
@@ -686,15 +1543,283 @@ class LocalProxyServer {
   /// `Content-Range`/`Accept-Ranges`/`ETag`/`Last-Modified` 描述的都是**上游
   /// 那份**字节，与合成后的正文无关，一律不转发——否则播放器按上游长度截断，
   /// 合成正文的尾部（例如 `#EXT-X-ENDLIST`）永远读不到。
+  void _checkPngSession(ProxySession session) {
+    if (!identical(sessions.byToken(session.token), session) ||
+        !session.usable) {
+      throw const _PngFailure(401);
+    }
+  }
+
+  Future<bool> _probePngPrefix(
+    HttpRequest request,
+    ProxySession session,
+    Uri logical,
+    Uri wire,
+    ProxyTargetPolicy wirePolicy,
+  ) async {
+    HttpClientResponse? response;
+    _PngBody? prefix;
+    try {
+      response = await _openPngPrefixProbe(
+        request,
+        session,
+        logical,
+        wire,
+        wirePolicy,
+      );
+      if ((response.statusCode != 200 && response.statusCode != 206) ||
+          (response.headers.value(HttpHeaders.contentTypeHeader) ?? '')
+              .toLowerCase()
+              .contains('text/html')) {
+        return false;
+      }
+      final range = response.headers.value(HttpHeaders.contentRangeHeader);
+      if (response.statusCode != 200 &&
+          (range == null || !RegExp(r'^bytes 0-').hasMatch(range))) {
+        return false;
+      }
+      prefix = await _sniffPng(
+        response,
+        session,
+        request,
+        knownLength: response.contentLength >= 0,
+      );
+      return prefix.offset != null;
+    } on TimeoutException {
+      _checkPngSession(session);
+      return false;
+    } on SocketException {
+      _checkPngSession(session);
+      return false;
+    } on HttpException {
+      _checkPngSession(session);
+      return false;
+    } finally {
+      if (prefix != null) {
+        await prefix.cancel();
+      } else if (response != null) {
+        await _abort(response);
+      }
+    }
+  }
+
+  Future<HttpClientResponse> _openPngPrefixProbe(
+    HttpRequest request,
+    ProxySession session,
+    Uri logical,
+    Uri wire,
+    ProxyTargetPolicy wirePolicy,
+  ) async {
+    _checkPngSession(session);
+    final resolver = session.targetResolver;
+    if (resolver != null) {
+      if (!_managedLogicalDecision(logical).allowed) {
+        throw const _PngFailure(403);
+      }
+      final int? mappedPort;
+      try {
+        mappedPort = await resolver(logical).timeout(requestTimeout);
+      } catch (_) {
+        _checkPngSession(session);
+        throw const _PngFailure(502);
+      }
+      _checkPngSession(session);
+      final resolved = mappedPort == null
+          ? logical
+          : logical.replace(host: '127.0.0.1', port: mappedPort, userInfo: '');
+      if (resolved != wire) throw const _PngFailure(502);
+    }
+    if (adRules.isAdHost(logical.host) ||
+        !wirePolicy.evaluateStatic(wire).allowed) {
+      throw const _PngFailure(403);
+    }
+    final addresses = await InternetAddress.lookup(wire.host)
+        .timeout(requestTimeout);
+    _checkPngSession(session);
+    if (!wirePolicy.evaluateAll(addresses, wire.host).allowed) {
+      throw const _PngFailure(403);
+    }
+    if (!session.accountRequest(0)) throw const _PngFailure(429);
+    final outbound = await _upstream
+        .openUrl('GET', wire)
+        .timeout(requestTimeout);
+    try {
+      _checkPngSession(session);
+      outbound.followRedirects = false;
+      final headers = _forwardHeaders(
+        session: session,
+        request: request,
+        target: logical,
+        range: 'bytes=0-16383',
+        managed: wire != logical,
+      );
+      headers.removeWhere(
+        (name, _) => {
+          HttpHeaders.ifRangeHeader,
+          HttpHeaders.ifNoneMatchHeader,
+          HttpHeaders.ifModifiedSinceHeader,
+          HttpHeaders.ifMatchHeader,
+          HttpHeaders.ifUnmodifiedSinceHeader,
+        }.contains(name.toLowerCase()),
+      );
+      for (final entry in headers.entries) {
+        outbound.headers.set(entry.key, entry.value);
+      }
+      final timer = Timer.periodic(const Duration(milliseconds: 25), (_) {
+        if (!session.usable ||
+            !identical(sessions.byToken(session.token), session)) {
+          outbound.abort();
+        }
+      });
+      unawaited(
+        request.response.done.then(
+          (_) => outbound.abort(),
+          onError: (Object _) => outbound.abort(),
+        ),
+      );
+      final HttpClientResponse result;
+      try {
+        result = await outbound.close().timeout(requestTimeout);
+      } finally {
+        timer.cancel();
+      }
+      try {
+        _checkPngSession(session);
+        if (result.contentLength > 0) session.bytes += result.contentLength;
+        if (session.bytes > session.maxBytes) throw const _PngFailure(429);
+        if (_isRedirect(result.statusCode)) throw const _PngFailure(502);
+        return result;
+      } catch (_) {
+        await _abort(result);
+        rethrow;
+      }
+    } catch (_) {
+      outbound.abort();
+      _checkPngSession(session);
+      rethrow;
+    }
+  }
+
+  Future<_PngBody> _sniffPng(
+    Stream<List<int>> source,
+    ProxySession session,
+    HttpRequest request, {
+    required bool knownLength,
+    bool inspect = true,
+    Future<void> Function()? cancelSource,
+  }) async {
+    final iterator = StreamIterator(
+      cancelSource == null ? source.timeout(requestTimeout) : source,
+    );
+    _PngFailure? interrupted;
+    var cancelled = false;
+    late Timer timer;
+    Future<void> cancel() async {
+      if (cancelled) return;
+      cancelled = true;
+      timer.cancel();
+      try {
+        await cancelSource?.call();
+      } catch (_) {}
+      try {
+        await iterator.cancel();
+      } catch (_) {}
+    }
+
+    timer = Timer.periodic(const Duration(milliseconds: 25), (_) {
+      if (!session.usable ||
+          !identical(sessions.byToken(session.token), session)) {
+        interrupted = const _PngFailure(401);
+        unawaited(cancel());
+      }
+    });
+    unawaited(
+      request.response.done.then(
+        (_) => cancel(),
+        onError: (Object _) => cancel(),
+      ),
+    );
+    Future<bool> next() async {
+      final available = await iterator.moveNext();
+      _checkPngSession(session);
+      if (interrupted != null) throw interrupted!;
+      if (!available) return false;
+      final count = iterator.current.length;
+      session.recordReceivedBytes(count);
+      if (!knownLength) {
+        session.bytes += count;
+        if (session.bytes > session.maxBytes) throw const _PngFailure(429);
+      }
+      return true;
+    }
+
+    final buffer = BytesBuilder(copy: false);
+    List<int> pending = const [];
+    final proof = PngWrappedTransportStreamProbe();
+    try {
+      if (inspect) {
+        while (!proof.done && await next()) {
+          final chunk = iterator.current;
+          var consumed = 0;
+          while (consumed < chunk.length && !proof.done) {
+            proof.add(chunk[consumed++]);
+          }
+          buffer.add(chunk.sublist(0, consumed));
+          if (consumed < chunk.length) pending = chunk.sublist(consumed);
+        }
+      }
+      final prefix = buffer.takeBytes();
+      Stream<List<int>> replay() async* {
+        try {
+          _checkPngSession(session);
+          final start = proof.offset ?? 0;
+          if (prefix.length > start) yield prefix.sublist(start);
+          if (pending.isNotEmpty) yield pending;
+          while (await next()) {
+            yield iterator.current;
+          }
+        } finally {
+          await cancel();
+        }
+      }
+
+      return _PngBody(replay(), cancel, proof.offset);
+    } catch (_) {
+      await cancel();
+      rethrow;
+    }
+  }
+
+  Future<void> _copyPngBody(
+    HttpResponse response,
+    Stream<List<int>> source,
+    ProxySession session,
+  ) async {
+    try {
+      await for (final chunk in source) {
+        _checkPngSession(session);
+        response.add(chunk);
+        await response.flush().timeout(requestTimeout);
+      }
+      await response.close();
+    } catch (error) {
+      log.warning('受管媒体流中断：${error.runtimeType}', scope: 'proxy');
+      try {
+        await response.close();
+      } catch (_) {}
+    }
+  }
+
   void _copySafeHeaders(
     HttpResponse response,
     HttpClientResponse upstream, {
     required int contentLength,
     bool synthesizedBody = false,
+    bool dropCacheMetadata = false,
   }) {
-    const alwaysPass = [
+    final alwaysPass = [
       HttpHeaders.contentTypeHeader,
-      HttpHeaders.cacheControlHeader,
+      if (!dropCacheMetadata) HttpHeaders.cacheControlHeader,
     ];
     const upstreamOnly = [
       HttpHeaders.contentRangeHeader,
@@ -778,11 +1903,11 @@ class LocalProxyServer {
     }
     return (
       isPlaylist: isPlaylist == true,
-      body: _replayBody(chunks, iterator),
+      body: _replayInspectedBody(chunks, iterator),
     );
   }
 
-  static Stream<List<int>> _replayBody(
+  static Stream<List<int>> _replayInspectedBody(
     List<List<int>> chunks,
     StreamIterator<List<int>> iterator,
   ) async* {
@@ -798,12 +1923,109 @@ class LocalProxyServer {
     }
   }
 
-  Future<List<int>> _readAll(Stream<List<int>> response) async {
+  static bool _completeManifest(int status, String? range, int length) {
+    if (status == 200) return true;
+    if (status != 206 || range == null) return false;
+    final match = RegExp(r'^bytes 0-(\d+)/(\d+)$').firstMatch(range);
+    if (match == null) return false;
+    final end = int.tryParse(match.group(1)!);
+    final total = int.tryParse(match.group(2)!);
+    return total == length && end == length - 1;
+  }
+
+  /// 未知类型清单最多暂存 1 MiB；未证明前超限则回放原始流，
+  /// 已证明的超大清单失败关闭，绝不把 guest 子 URI 原样泄漏给播放器。
+  Future<_SniffedHls> _sniffHls(
+    Stream<List<int>> source,
+    ProxySession session,
+    HttpRequest request,
+  ) async {
+    const cap = 1024 * 1024;
+    final iterator = StreamIterator(source.timeout(requestTimeout));
+    Timer? timer;
+    Future<void>? cancelling;
+    Future<void> cancel() => cancelling ??= () async {
+      timer?.cancel();
+      try {
+        await iterator.cancel();
+      } catch (_) {}
+    }();
+    timer = Timer.periodic(const Duration(milliseconds: 25), (_) {
+      if (!session.usable ||
+          !identical(sessions.byToken(session.token), session)) {
+        unawaited(cancel());
+      }
+    });
+    unawaited(
+      request.response.done.then(
+        (_) => cancel(),
+        onError: (Object _) => cancel(),
+      ),
+    );
+    final buffer = BytesBuilder(copy: false);
+    final probe = _HlsPrefixProbe();
+    var replay = false;
+    try {
+      while (await iterator.moveNext()) {
+        _checkPngSession(session);
+        final chunk = iterator.current;
+        final remaining = cap - buffer.length;
+        for (final byte in chunk.take(remaining)) {
+          probe.add(byte);
+          if (probe.playlist != null) break;
+        }
+        if (probe.playlist == false || chunk.length > remaining) {
+          if (probe.playlist == true) {
+            session.recordReceivedBytes(buffer.length + chunk.length);
+            return const _SniffedHls(oversized: true);
+          }
+          replay = true;
+          return _SniffedHls(
+            stream: _replayBody(iterator, buffer.takeBytes(), chunk, cancel),
+            cancel: cancel,
+          );
+        }
+        buffer.add(chunk);
+      }
+      _checkPngSession(session);
+      final body = buffer.takeBytes();
+      if (probe.playlist == true) return _SniffedHls(manifest: body);
+      return _SniffedHls(stream: Stream.value(body));
+    } finally {
+      if (!replay) await cancel();
+    }
+  }
+
+  static Stream<List<int>> _replayBody(
+    StreamIterator<List<int>> iterator,
+    List<int> prefix,
+    List<int> pending,
+    Future<void> Function() cancel,
+  ) async* {
+    try {
+      if (prefix.isNotEmpty) yield prefix;
+      yield pending;
+      while (await iterator.moveNext()) {
+        yield iterator.current;
+      }
+    } finally {
+      await cancel();
+    }
+  }
+
+  static Future<void> _abortBody(Stream<List<int>> body) async {
+    await body.listen(null).cancel();
+  }
+
+  Future<List<int>> _readAll(
+    Stream<List<int>> response, {
+    String manifestType = 'HLS',
+  }) async {
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response) {
       builder.add(chunk);
       if (builder.length > 16 * 1024 * 1024) {
-        throw StateError('HLS 清单超过 16 MiB');
+        throw StateError('$manifestType 清单超过 16 MiB');
       }
     }
     return builder.takeBytes();
@@ -912,3 +2134,57 @@ class LocalProxyServer {
 /// 通过 `export` 继续对外暴露同名符号，老测试不用改 import）。
 String restoreHistoryPlaybackTarget(String episodeId) =>
     LocalProxyServer.restoreHistoryPlaybackTarget(episodeId);
+
+class _SniffedHls {
+  const _SniffedHls({
+    this.manifest,
+    this.stream = const Stream.empty(),
+    this.oversized = false,
+    this.cancel,
+  });
+
+  final List<int>? manifest;
+  final Stream<List<int>> stream;
+  final bool oversized;
+  final Future<void> Function()? cancel;
+}
+
+class _HlsPrefixProbe {
+  static const marker = [35, 69, 88, 84, 77, 51, 85]; // #EXTM3U
+  static const bom = [239, 187, 191];
+  int _markerIndex = 0;
+  int _bomIndex = 0;
+  bool? playlist;
+
+  void add(int byte) {
+    if (playlist != null) return;
+    if (_markerIndex == 0) {
+      if (_bomIndex > 0 || byte == bom[0]) {
+        if (byte != bom[_bomIndex]) {
+          playlist = false;
+        } else {
+          _bomIndex = (_bomIndex + 1) % bom.length;
+        }
+        return;
+      }
+      if (byte == 32 || (byte >= 9 && byte <= 13)) return;
+    }
+    if (byte != marker[_markerIndex]) {
+      playlist = false;
+    } else if (++_markerIndex == marker.length) {
+      playlist = true;
+    }
+  }
+}
+
+class _PngFailure implements Exception {
+  const _PngFailure(this.status);
+  final int status;
+}
+
+class _PngBody {
+  const _PngBody(this.stream, this.cancel, this.offset);
+  final Stream<List<int>> stream;
+  final Future<void> Function() cancel;
+  final int? offset;
+}

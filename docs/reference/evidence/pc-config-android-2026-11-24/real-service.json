@@ -1,0 +1,23 @@
+{
+  "record": 25,
+  "original_sites": 93,
+  "overlay_sites": 93,
+  "active_sites_before": 204,
+  "interface_fp": "5c1da49ea4d2",
+  "reuse_created": false,
+  "home_classes": 6,
+  "category_items": 12,
+  "details": 1,
+  "play_flags": 3,
+  "first_line_episodes": 49,
+  "play_has_url": true,
+  "play_parse": 0,
+  "play_jx": 0,
+  "restart_copy_same": true,
+  "restart_interface_same": true,
+  "restart_guest_same": true,
+  "local_port_changed": true,
+  "active_sites_after": 204,
+  "original_raw_unchanged": true,
+  "result": "PASS"
+}

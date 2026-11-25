@@ -13,6 +13,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/core/push_parser.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -51,7 +54,7 @@ void main() {
     tearDown(() async {
       state.dispose();
       try {
-        await tempDir.delete(recursive: true);
+        await deleteTempWhenReleased(tempDir);
       } catch (_) {}
     });
 
@@ -95,10 +98,16 @@ void main() {
       expect(find.text('推送播放'), findsOneWidget);
       expect(find.byKey(const ValueKey('push-dialog-url')), findsOneWidget);
       expect(find.byKey(const ValueKey('push-dialog-title')), findsOneWidget);
-      expect(find.byKey(const ValueKey('push-dialog-pick-file')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('push-dialog-pick-file')),
+        findsOneWidget,
+      );
       expect(find.text('打开详情'), findsOneWidget, reason: '按钮文案随"先详情后播放"改名');
       // 测试环境没起局域网服务：这里必须是「未开启」提示，而不是一个假的可复制地址。
-      expect(find.byKey(const ValueKey('push-dialog-receive-off')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('push-dialog-receive-off')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('push-dialog-copy-url')), findsNothing);
     });
 
@@ -107,7 +116,10 @@ void main() {
       await openDialog(tester);
 
       const url = 'https://cdn.example/庆余年.E01.m3u8';
-      await tester.enterText(find.byKey(const ValueKey('push-dialog-url')), url);
+      await tester.enterText(
+        find.byKey(const ValueKey('push-dialog-url')),
+        url,
+      );
       await tester.enterText(
         find.byKey(const ValueKey('push-dialog-title')),
         '庆余年',
@@ -174,7 +186,9 @@ void main() {
     });
 
     // 真正会构造 PlayerPage（初始化原生解码器）：没有 libmpv 时跳过。
-    testWidgets('详情页点「播放」才构造播放页', skip: libmpvUnavailableReason != null, (tester) async {
+    testWidgets('详情页点「播放」才构造播放页', skip: libmpvUnavailableReason != null, (
+      tester,
+    ) async {
       await mountShell(tester);
       await openDialog(tester);
       await tester.enterText(

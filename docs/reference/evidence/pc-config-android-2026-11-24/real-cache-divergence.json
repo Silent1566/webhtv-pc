@@ -1,0 +1,9 @@
+{
+  "record": 25,
+  "same_url_content_refresh": true,
+  "catalog_stale_after_body_restore": true,
+  "same_interface": true,
+  "immediate_seconds": 0,
+  "original_snapshot_restored": true,
+  "result": "PASS"
+}

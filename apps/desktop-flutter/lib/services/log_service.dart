@@ -236,7 +236,10 @@ class LogService {
   /// 首条（队列原本为空）用 0 延迟：日志落盘的**时效性**与逐条同步写一致，
   /// 验收脚本轮询日志文件、排查播放问题时不必等一个批次周期。
   void _enqueue(String line) {
-    if (_file == null || _fileDisabled) return;
+    // 释放后不再落盘：AppState.dispose() 同步返回后仍有收尾工作在跑，
+    // 此时排定时器会在 widget 测试的 FakeAsync 里留下 pending timer，
+    // 也会把日志写进调用方马上要删除的临时目录。
+    if (_disposed || _file == null || _fileDisabled) return;
     _pending.add(line);
     if (_flushTimer != null) return;
     _flushTimer = Timer(
@@ -352,7 +355,10 @@ class LogService {
     }
   }
 
+  bool _disposed = false;
+
   Future<void> dispose() async {
+    _disposed = true;
     _flushTimer?.cancel();
     _flushTimer = null;
     flush();

@@ -4,6 +4,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'local_source_sites_test.dart' show deleteTempWhenReleased;
+
 import 'package:webhtv_pc/core/subtitle_settings.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
@@ -68,7 +71,7 @@ void main() {
     }
     state.dispose();
     LogService.logDirectoryOverride = null;
-    await temp.delete(recursive: true);
+    await deleteTempWhenReleased(temp);
   });
 
   Finder field(String suffix) => find.byKey(ValueKey('subtitle-$suffix'));

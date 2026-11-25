@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../core/doh.dart';
 import '../core/doh_settings.dart';
+import '../core/live_site_keywords.dart';
 import '../core/outbound_proxy.dart';
 import '../core/player_options.dart';
 import '../core/site_group_rules.dart';
@@ -840,11 +841,34 @@ class BrowserEnginePage extends StatelessWidget {
   );
 }
 
-/// 直播明细页：源与线路各自的回退行为。
-class LiveSettingsPage extends StatelessWidget {
+/// 直播明细页：源与线路回退行为、直播站识别关键词。
+class LiveSettingsPage extends StatefulWidget {
   const LiveSettingsPage({super.key, required this.state});
 
   final AppState state;
+
+  @override
+  State<LiveSettingsPage> createState() => _LiveSettingsPageState();
+}
+
+class _LiveSettingsPageState extends State<LiveSettingsPage> {
+  static const _keyPrefix = 'live-site-keywords';
+  final _keyword = TextEditingController();
+
+  AppState get state => widget.state;
+
+  @override
+  void dispose() {
+    _keyword.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addKeyword() async {
+    final value = _keyword.text.trim();
+    if (value.isEmpty) return;
+    _keyword.clear();
+    await state.setLiveSiteKeywords([...state.liveSiteKeywords, value]);
+  }
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -878,6 +902,64 @@ class LiveSettingsPage extends StatelessWidget {
               state.liveSettings.copyWith(changeLine: value),
             );
           },
+        ),
+        const SizedBox(height: 12),
+        SettingsSection(
+          title: '直播站识别',
+          description: '站点名或站点键命中这些关键词的历史记录不进首页（只影响首页卡片，不影响历史数据）。',
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey('$_keyPrefix-input'),
+                    controller: _keyword,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      hintText: '输入站点 key 或名称关键词',
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _addKeyword(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  key: const ValueKey('$_keyPrefix-add'),
+                  onPressed: _addKeyword,
+                  child: const Text('添加'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            if (state.liveSiteKeywords.isEmpty)
+              const Text('（空：不按关键词识别直播站）')
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final value in state.liveSiteKeywords)
+                    InputChip(
+                      key: ValueKey('$_keyPrefix-chip-$value'),
+                      label: Text(value),
+                      onDeleted: () => state.setLiveSiteKeywords(
+                        [...state.liveSiteKeywords]..remove(value),
+                      ),
+                    ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            SettingsActions(
+              children: [
+                OutlinedButton(
+                  key: const ValueKey('$_keyPrefix-reset'),
+                  onPressed: () =>
+                      state.setLiveSiteKeywords(liveSiteDefaultKeywords),
+                  child: const Text('恢复默认'),
+                ),
+              ],
+            ),
+          ],
         ),
       ],
     ),

@@ -672,6 +672,18 @@ class _AppShellState extends State<AppShell> {
   Future<void> _restoreLastConfig() async {
     if (!mounted) return;
     if (widget.startup.media != null) return;
+    final executionRecord = _state.activeRecord;
+    if (executionRecord != null &&
+        _state.androidExecutionForRecord(executionRecord) != null) {
+      try {
+        await _state.refreshAndroidConfigExecution(executionRecord.id);
+        if (mounted) await _loadInitialHome();
+      } on AppError {
+        // AppState keeps the binding selected and clears the stale service;
+        // its actionable error is shown through the existing toast host.
+      }
+      return;
+    }
     // 兜底推断（不写盘）：没有 last-config.json 不代表「没有上次使用的源」——
     // 旧版本升级上来的用户本来就没有这份文件，而库里的 is_active 仍在指向一条
     // 桥接记录。推断只用于这一次探测，记忆仍只由显式选择写入。
@@ -705,6 +717,19 @@ class _AppShellState extends State<AppShell> {
       // 兜底推断出来的记忆从没落过盘，没有可清的东西。
       if (remembered != null) _state.forgetLastConfig();
       await _loadInitialHome();
+      return;
+    }
+    // 管理型（ADB）记录：它的 origin 是上次连接时 adb 分配的本机转发端口，重启
+    // 后必然失效。绝不能拿它去探测（旧端口 = 静默失败 + 站源地址停在死端口），
+    // 改为按**已保存的连接描述**重连、按 interfaceKey 重导入、再按坐标激活。
+    final managed = _state.managedRecordFor(
+      recordId: memory.recordId,
+      sourceKey: memory.sourceKey,
+    );
+    if (managed != null) {
+      final restored = await _restoreManagedBridge(memory, managed);
+      // 恢复失败时不拉首页：站源 api 还停在旧回环端口，拉只会打向死端口。
+      if (restored) await _loadInitialHome();
       return;
     }
     final address = _state.deviceAddressForUuid(memory.deviceUuid);
@@ -753,6 +778,69 @@ class _AppShellState extends State<AppShell> {
       // 推断记录不入库也不落盘，时间戳只用来满足构造要求。
       savedAt: DateTime.fromMillisecondsSinceEpoch(0),
     );
+  }
+
+  /// 管理型记录启动恢复：重连已保存的安卓环境 + 重导入该源 + 按坐标激活。
+  ///
+  /// 失败（描述缺失 / 设备不符 / 离线）走同一条非阻塞横幅，文案直接用 AppState
+  /// 的分类错误：用户需要的是「去安卓环境里重连那次保存」，不是一句「连不上」。
+  /// 全程不碰记录里的旧回环端口。
+  /// 返回 `true` = 端点已刷新且配置已激活（可以继续拉首页）。
+  Future<bool> _restoreManagedBridge(
+    LastConfigRecord memory,
+    ConfigRecord record,
+  ) async {
+    final saved = _state.androidConnectionForUuid(record.bridgeDevice);
+    final deviceName = (saved?.name.trim().isNotEmpty ?? false)
+        ? saved!.name.trim()
+        : record.name;
+    final address = saved == null ? '' : saved.profile.target;
+    // 1) 先按描述重连并刷新端点。不能只靠 activateConfigBySourceKey：记录可能
+    //    已经是「生效配置」，那条路径会直接返回 true 而一次都不重连。
+    final attached = await _state.reattachManagedRecord(record.id);
+    if (!mounted) return false;
+    if (!attached) {
+      _showBridgeBanner(
+        memory,
+        address: address,
+        deviceName: deviceName,
+        error:
+            _state.lastError ??
+            AppError(
+              AppErrorKind.bridgeUnreachable,
+              '重连已保存的安卓环境失败',
+              detail: record.name,
+            ),
+      );
+      return false;
+    }
+    // 2) 再按坐标激活（已经是生效配置时立即成功，且内容已由重接刷新）。
+    final activated = await _state.activateConfigBySourceKey(
+      memory.sourceKey,
+      recordId: memory.recordId,
+    );
+    if (!mounted) return false;
+    if (!activated) {
+      _showBridgeBanner(
+        memory,
+        address: address,
+        deviceName: deviceName,
+        error:
+            _state.lastError ??
+            AppError(
+              AppErrorKind.bridgeUnreachable,
+              '重连已保存的安卓环境失败',
+              detail: record.name,
+            ),
+      );
+      return false;
+    }
+    setState(() {
+      _bridgeBanner = null;
+      _bannerMemory = null;
+    });
+    _state.log.info('已按已保存的安卓环境恢复管理型配置（${memory.sourceKey}）', scope: 'bridge');
+    return true;
   }
 
   /// 探测 + 重新导入 + 精确激活一条桥接源；失败时置横幅状态。
@@ -855,6 +943,16 @@ class _AppShellState extends State<AppShell> {
     if (banner == null || memory == null || _restoringBridge) return;
     setState(() => _restoringBridge = true);
     try {
+      // 管理型记录的重试是「按描述重连」，不是重探旧地址。
+      final managed = _state.managedRecordFor(
+        recordId: memory.recordId,
+        sourceKey: memory.sourceKey,
+      );
+      if (managed != null) {
+        final restored = await _restoreManagedBridge(memory, managed);
+        if (restored) await _loadInitialHome();
+        return;
+      }
       final address = banner.address.isNotEmpty
           ? banner.address
           : _state.deviceAddressForUuid(memory.deviceUuid);

@@ -1,0 +1,1229 @@
+{
+  "status": "ready",
+  "scope": "desktop real-source validation only; strict uplift gate unverified",
+  "run_count": 1,
+  "generated_utc": "2026-11-24T05:19:21.203Z",
+  "inventory": {
+    "android_export_site_count": 204,
+    "android_site_key_digest": "aa4e383ae4ebf5055882ae83ff04eb2e7c5578537872e325dbacb3a1a8fe7a06",
+    "pc_config_count": 23,
+    "pc_config_sites_rows": 937,
+    "pc_android_union_key_intersection": 203,
+    "pc_csp_directories": 183,
+    "pc_direct_directories": 118,
+    "pc_local_directories": 13,
+    "pc_manifest_count": 140,
+    "pc_jar_count": 25,
+    "pc_unique_jar_hashes": 15,
+    "configs": [
+      {
+        "id": 1,
+        "active": false,
+        "site_count": 199,
+        "android_key_intersection": 199,
+        "intersection_t3_count": 0,
+        "json_sha256": "b490e4014cf44f7344550f085095c8752e636caca5c77db2e6cae4a7a0206556"
+      },
+      {
+        "id": 2,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "18abe31dbb3f6dc76b9554f3b2edefb724a405de8517c2214758565858c2063e"
+      },
+      {
+        "id": 3,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "68379b594452cce551190f5ee3e4dafbe48c3189ab7f77fd84db62a6136564dc"
+      },
+      {
+        "id": 4,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "85f4b3ded4954a1a18195daab2db823cd05ca6da1e324f645624ec18cb802276"
+      },
+      {
+        "id": 5,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "58e227688c941c061a1490a72bd1e9ce9a80ede9c28ae7d2684094873744431c"
+      },
+      {
+        "id": 6,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "bceb6728d29b8408814c359a9d8190af70271b14dfe2a46ef92cb636ef225af1"
+      },
+      {
+        "id": 7,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "4c0a5645159aec4ff2604f65fda834412dc9b7fe340d396dcfb6b3b4d0fe34c7"
+      },
+      {
+        "id": 8,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "a118af7d84397477d1289e0783a8c765f4f3a0adb1a66f309c0d9d3dbfad2d22"
+      },
+      {
+        "id": 9,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "6d5ecf086db4dd50c3fe6d30b1f6400ba7da8c1c1f272626fef7e2dd17a445a6"
+      },
+      {
+        "id": 10,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "a88965fb6db5ebcd440e5a45594846ecc1e95721c528632e6040360ef74e0261"
+      },
+      {
+        "id": 11,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "0987ec128ec5356a55804551c3084133e2287e44abd21ada6be4704a519ba621"
+      },
+      {
+        "id": 12,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "afbb6b27edaeb4a20f8f3807da007813fad74f1a8434b28712d248f8995097a2"
+      },
+      {
+        "id": 13,
+        "active": false,
+        "site_count": 8,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "334d2909a4a8f1dc0ace63d79de3b7d84b052b2037a6b5e5301f68f23d5162d3"
+      },
+      {
+        "id": 14,
+        "active": false,
+        "site_count": 1,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "97d1de5c979c67464e4849a585e2dfca7458577239e2fd357a0e16f661ff1107"
+      },
+      {
+        "id": 15,
+        "active": false,
+        "site_count": 0,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "513fdc8241fade2061d052926a77b70a6fdbde74593d9f3265eb137f5f770d66"
+      },
+      {
+        "id": 16,
+        "active": false,
+        "site_count": 0,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "513fdc8241fade2061d052926a77b70a6fdbde74593d9f3265eb137f5f770d66"
+      },
+      {
+        "id": 19,
+        "active": false,
+        "site_count": 95,
+        "android_key_intersection": 3,
+        "intersection_t3_count": 3,
+        "json_sha256": "f6976cbbfa5864d876e8c43594680f9dd3c9d32301ee3c2a34fbcd33d945feef"
+      },
+      {
+        "id": 20,
+        "active": false,
+        "site_count": 98,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "5152909411c3fdf56d6a8836446218bb494851835298927ceafead1593b11338"
+      },
+      {
+        "id": 21,
+        "active": false,
+        "site_count": 95,
+        "android_key_intersection": 3,
+        "intersection_t3_count": 3,
+        "json_sha256": "f6976cbbfa5864d876e8c43594680f9dd3c9d32301ee3c2a34fbcd33d945feef"
+      },
+      {
+        "id": 22,
+        "active": false,
+        "site_count": 203,
+        "android_key_intersection": 203,
+        "intersection_t3_count": 119,
+        "json_sha256": "46e51df879a7dc3ca59f8a2dc7611e74e545448e61bccb091155e81119542d49"
+      },
+      {
+        "id": 23,
+        "active": false,
+        "site_count": 87,
+        "android_key_intersection": 87,
+        "intersection_t3_count": 2,
+        "json_sha256": "8d133f4cfa8b2873c4b0db6bb9a3aef4a8670b802d203b4c53d5ad4d2db8596d"
+      },
+      {
+        "id": 24,
+        "active": false,
+        "site_count": 58,
+        "android_key_intersection": 0,
+        "intersection_t3_count": 0,
+        "json_sha256": "28cbc03b927dd6268d3cc16a3322ed375442f7031493bd2413d8fcb9156745c2"
+      },
+      {
+        "id": 25,
+        "active": true,
+        "site_count": 93,
+        "android_key_intersection": 4,
+        "intersection_t3_count": 4,
+        "json_sha256": "1921bf98c9946392ffc164f43b543206b47c55ce68860de9dfbc10fb9ca9d532"
+      }
+    ]
+  },
+  "provenance": {
+    "path_contract": "Android catvod Path.java:53-58,86-88; JarLoader.java:185-201,225-244",
+    "run_as_available": true,
+    "android_storage": "observed app-private cache/jar; no guessed private filenames",
+    "fetched_config_raw_sha256": "692b6b80b2914457df382ff064cc523901b77291945508605f74d405bd5703f7",
+    "effective_export_raw_sha256": "979d5bba55786004e0f973383620c740406f237e0728086891ee34eaa6d58af4",
+    "api_jar_ext_descriptor_matches": 110,
+    "descriptor_comparisons": 124,
+    "pc22_candidate_ext_equal": false,
+    "installed_ext_config_equality": "unverified",
+    "reason": "Effective T4 export hides original API/ext. Remote fetched config snapshot is attributable, not proof of installed/in-memory ext. Candidate ext decodes to credential-bearing remote-forward envelope; local scraping/native execution not demonstrated.",
+    "production_file_sha256": {
+      "apps/desktop-flutter/lib/services/jar_intake.dart": "28475d16878fe92f9ed98c594f525d99a15981461341e301d1e9a89fd1c619be",
+      "apps/desktop-flutter/lib/services/csp_jar_probe.dart": "0e8562cdd3b6b69a79c0131d8735b6b1a48dfe0a1e2726a55f57f129579d2eb0",
+      "apps/desktop-flutter/lib/services/spider_router.dart": "079975928d39e5671bba77f38860e35cb5c6f5ab4ed22b8ab08eda7bdf2e4aa5",
+      "apps/desktop-flutter/lib/services/dex_translate.dart": "0b69353e2fa7c86922206b73e6d3600b16efca7a766b077a8eb083d45ca8026e",
+      "sidecars/spider-host-jvm/host.jar": "3efe0eed6e9ad5db418ccaf6f829b0c7aaaa6e3ff594da61b351eeeef40267a2",
+      "sidecars/spider-host-jvm/src/webhtv/spider/EntryLoader.java": "d5841418230b66d54538ff9ea423ac407a3a7f12ff62360aba27853cb0e927d6",
+      "sidecars/spider-host-jvm/src/webhtv/spider/DexIntakeCli.java": "7cf507a5e380a897539d743db267c19a3a63d2ad91a5c38668f8602932692adc"
+    }
+  },
+  "artifacts": [
+    {
+      "sample": "49daf93e564713302ab530cc0be6b027.jar",
+      "sha256": "61e5bfba09c2b880b3b165414501ed82d170c87f486bdb046c669197dc2b9813",
+      "bytes": 454329,
+      "entry_count": 2,
+      "dex_entries": [
+        "classes.dex"
+      ],
+      "native_entries": [],
+      "shell_entries": [],
+      "verdict": "translatableDex",
+      "classifier_elapsed_ms": 78,
+      "pc_cached_same_bytes_count": 11,
+      "configured_original_t3_bindings": 0,
+      "native_entry_hashes": []
+    },
+    {
+      "sample": "83667b5133064fcf1d84040163d3e473.jar",
+      "sha256": "b0b6e8a6402ebfb0d30484f9ec011e531b064d6a03e24bf768dc01245407a564",
+      "bytes": 5617169,
+      "entry_count": 4,
+      "dex_entries": [
+        "classes.dex"
+      ],
+      "native_entries": [
+        "assets/arm64-v8a/libgoproxy.so",
+        "assets/armeabi-v7a/libgoproxy.so"
+      ],
+      "shell_entries": [],
+      "verdict": "nativeLibrary",
+      "classifier_elapsed_ms": 18,
+      "pc_cached_same_bytes_count": 1,
+      "configured_original_t3_bindings": 1,
+      "native_entry_hashes": [
+        {
+          "entry": "assets/arm64-v8a/libgoproxy.so",
+          "bytes": 6791136,
+          "sha256": "0dfe83e07c69ae9b0a4a729d4adf2fd13f268d6e953bac765d6e1c7957f24e24"
+        },
+        {
+          "entry": "assets/armeabi-v7a/libgoproxy.so",
+          "bytes": 6740168,
+          "sha256": "5ef424184b4f2dcd349dd6e960526212a53c62103c88f4d816c37175273f71a6"
+        }
+      ]
+    },
+    {
+      "sample": "de84af4e876edac6d9f2b5161e838763.jar",
+      "sha256": "bf33613870fd3a2cc72747d7cf7ccdba0e6a5b02b460805daff98aef66e42787",
+      "bytes": 193671,
+      "entry_count": 11,
+      "dex_entries": [
+        "classes.dex"
+      ],
+      "native_entries": [
+        "lib/arm64-v8a/libjsc.so",
+        "lib/armeabi-v7a/libjsc.so",
+        "lib/x86/libjsc.so",
+        "lib/x86_64/libjsc.so"
+      ],
+      "shell_entries": [],
+      "verdict": "nativeLibrary",
+      "classifier_elapsed_ms": 16,
+      "pc_cached_same_bytes_count": 0,
+      "configured_original_t3_bindings": 0,
+      "native_entry_hashes": [
+        {
+          "entry": "lib/arm64-v8a/libjsc.so",
+          "bytes": 10712,
+          "sha256": "bbf38cb84e422032602bd1cb38fa96948a93717f253901c8625372f2cef202d8"
+        },
+        {
+          "entry": "lib/armeabi-v7a/libjsc.so",
+          "bytes": 8624,
+          "sha256": "93ccddd586db3e2a57aac0b7dbe953da71edb933b66fc5e398b765ff7d51af43"
+        },
+        {
+          "entry": "lib/x86/libjsc.so",
+          "bytes": 10948,
+          "sha256": "f22e5609a5ecf8f4868633dc3fd7e01981bc744b1d246fb4824021a57a24e8fc"
+        },
+        {
+          "entry": "lib/x86_64/libjsc.so",
+          "bytes": 11360,
+          "sha256": "1815985cba3e5cdfad96ce7b5f6d80f0bed34ae37c85dc8e16759ebd909c6f89"
+        }
+      ],
+      "custom_registry_binding": {
+        "key": "validation-source-D",
+        "api": "validation-source-E",
+        "jar_cache_descriptor_match": true,
+        "installed_ext_equality": "unverified"
+      }
+    },
+    {
+      "sample": "fae79987d00d169ccee0153259d3ae44.jar",
+      "sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "bytes": 455512,
+      "entry_count": 2,
+      "dex_entries": [
+        "classes.dex"
+      ],
+      "native_entries": [],
+      "shell_entries": [],
+      "verdict": "translatableDex",
+      "classifier_elapsed_ms": 46,
+      "pc_cached_same_bytes_count": 0,
+      "configured_original_t3_bindings": 118,
+      "native_entry_hashes": []
+    },
+    {
+      "sample": "pc-shell.jar",
+      "sha256": "620afed882618749e5a9fbb558f8eb847f4a4a4c6f6a5369f6b9099331849138",
+      "bytes": 1047475,
+      "entry_count": 5,
+      "dex_entries": [
+        "classes.dex"
+      ],
+      "native_entries": [
+        "assets/wexguard_v7.so",
+        "assets/wexguard_v8.so"
+      ],
+      "shell_entries": [
+        "assets/wexshinidie.guard"
+      ],
+      "verdict": "shellGuard",
+      "classifier_elapsed_ms": 21,
+      "pc_cached_same_bytes_count": 1,
+      "configured_original_t3_bindings": 0,
+      "native_entry_hashes": [
+        {
+          "entry": "assets/wexguard_v7.so",
+          "bytes": 48364,
+          "sha256": "0614b7b18ca30b41450fed4dd3ed9150cea1c94dc62960e4151a3a87d43a1b5e"
+        },
+        {
+          "entry": "assets/wexguard_v8.so",
+          "bytes": 48680,
+          "sha256": "646f8bb4dda60536f8d71f537892f4631053e9cc2a21d458015bd0bb143a1fb5"
+        }
+      ]
+    }
+  ],
+  "translations": [
+    {
+      "sample": "49daf93e564713302ab530cc0be6b027.jar",
+      "exit_code": 0,
+      "elapsed_ms": 3576,
+      "ok": true,
+      "classCount": 1227,
+      "sourceSha256": "61e5bfba09c2b880b3b165414501ed82d170c87f486bdb046c669197dc2b9813",
+      "repairedClasses": 4,
+      "stubbedMethods": 0,
+      "cached": false,
+      "selfcheck": {
+        "classes": 1227,
+        "failed": 5,
+        "counts": {
+          "VerifyError": 0,
+          "IncompatibleClassChangeError": 0,
+          "NoClassDefFoundError": 5,
+          "UnsupportedClassVersionError": 0,
+          "other": 0
+        },
+        "failures": [
+          {
+            "class": "com.github.catvod.spider.WebHome$1",
+            "error": "NoClassDefFoundError",
+            "message": "android/webkit/WebViewClient"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.A8",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/JSCallFunction"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.GD",
+            "error": "NoClassDefFoundError",
+            "message": "android/content/DialogInterface$OnKeyListener"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.LC",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/MapCreator"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.Vl",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/JSCallFunction"
+          }
+        ]
+      }
+    },
+    {
+      "sample": "fae79987d00d169ccee0153259d3ae44.jar",
+      "exit_code": 0,
+      "elapsed_ms": 3181,
+      "ok": true,
+      "classCount": 1228,
+      "sourceSha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "repairedClasses": 4,
+      "stubbedMethods": 0,
+      "cached": false,
+      "selfcheck": {
+        "classes": 1228,
+        "failed": 5,
+        "counts": {
+          "VerifyError": 0,
+          "IncompatibleClassChangeError": 0,
+          "NoClassDefFoundError": 5,
+          "UnsupportedClassVersionError": 0,
+          "other": 0
+        },
+        "failures": [
+          {
+            "class": "com.github.catvod.spider.WebHome$1",
+            "error": "NoClassDefFoundError",
+            "message": "android/webkit/WebViewClient"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.BH",
+            "error": "NoClassDefFoundError",
+            "message": "android/content/DialogInterface$OnKeyListener"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.OA",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/MapCreator"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.ek",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/JSCallFunction"
+          },
+          {
+            "class": "com.github.catvod.spider.merge.vq",
+            "error": "NoClassDefFoundError",
+            "message": "com/whl/quickjs/wrapper/JSCallFunction"
+          }
+        ]
+      }
+    }
+  ],
+  "refusals": [
+    {
+      "sample": "native-proxy",
+      "ok": false,
+      "verdict": "nativeLibrary",
+      "targetCreated": false,
+      "elapsedMs": 50
+    },
+    {
+      "sample": "native-jsc",
+      "ok": false,
+      "verdict": "nativeLibrary",
+      "targetCreated": false,
+      "elapsedMs": 17
+    },
+    {
+      "sample": "shell",
+      "ok": false,
+      "verdict": "shellGuard",
+      "targetCreated": false,
+      "elapsedMs": 1
+    }
+  ],
+  "business": [
+    {
+      "run": "initial",
+      "key": "validation-source-A",
+      "api": "validation-source-A",
+      "jar_sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "fetched_site_canonical_sha256": "2c2680270c6b58a099fe0253b1d2290346ac0a8fc385d3d8e407eb6c3193149b",
+      "fetched_ext_sha256": "7029f37cfb1e48ca59d1bf491c1494bc7da4548617cdeec17fa9b33b3f4f3440",
+      "comparison": "conditional fetched snapshot; installed ext/config equality unverified",
+      "exit_code": 0,
+      "elapsed_ms": 2028,
+      "stderr_sha256": "313be37dbf1bfc122c44915bd21f9ac3638d904fee5800ec84d0961ab532461b",
+      "business_classification": "wrapper/current-supplied-input business data",
+      "calls": [
+        {
+          "method": "initialize",
+          "request_sha256": "9d877a9475ab0246cfe631a02393ad68ddec8d7f1b017fd16ff1850962a6b25d",
+          "request_bytes": 1068,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "abi",
+            "extend"
+          ],
+          "elapsed_ms": 1196,
+          "response_sha256": "7df09a5550739ed1447603b8115dbb740c6f19383ebca9ab356ca7c3227ccbe8",
+          "response_bytes": 385,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "abi",
+            "abiMinor",
+            "key",
+            "runtime",
+            "capabilities",
+            "permissions",
+            "limits"
+          ]
+        },
+        {
+          "method": "home",
+          "request_sha256": "f82d4eeb64d3ea106ad0db33899674228f8b97bf0c9fe6d06bc549852de0456d",
+          "request_bytes": 86,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "filter"
+          ],
+          "elapsed_ms": 103,
+          "response_sha256": "409568bab3c1c6bb40d4551227198761e2c38045d4af5f57e5f59b5eae39b4b0",
+          "response_bytes": 5949,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 15,
+            "list": 0
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        },
+        {
+          "method": "category",
+          "request_sha256": "723870c20d12c55823c7ee369a6bffcad4f5a2066c684420f1b7809fa0d134c1",
+          "request_bytes": 127,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "page",
+            "filter",
+            "extend"
+          ],
+          "elapsed_ms": 59,
+          "response_sha256": "9aa11ea0dd2a2dd199ac8419bb4f805f2f1bc1148e9acf94cf4c25b9a36a15a6",
+          "response_bytes": 5022,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 20
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        },
+        {
+          "method": "homeVod",
+          "request_sha256": "847ace5ff01f2ee829f15f6442d0aef9c6a77fb6b4a20dadfc3f7894224aeeef",
+          "request_bytes": 76,
+          "deadline_ms": 25000,
+          "params_keys": [],
+          "elapsed_ms": 636,
+          "response_sha256": "37f4d11e2783af108d117fafa5d18fb1aa76b50037d163ea8b99b2e0e47ae3c2",
+          "response_bytes": 16677,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 60
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "initial",
+      "key": "validation-source-B",
+      "api": "validation-source-B",
+      "jar_sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "fetched_site_canonical_sha256": "86a711ea8c01dfd4782976b32c8a9d0f0ae0e2a30ed73aba6a458240a8b5a1e5",
+      "fetched_ext_sha256": "7029f37cfb1e48ca59d1bf491c1494bc7da4548617cdeec17fa9b33b3f4f3440",
+      "comparison": "conditional fetched snapshot; installed ext/config equality unverified",
+      "exit_code": 3,
+      "elapsed_ms": 181,
+      "stderr_sha256": "13856d8524f7f3f244f5d813d67d5033616bb1eff2d6e7175ccf187e6d80014d",
+      "business_classification": "UI initialization failure; missing android/widget/LinearLayout",
+      "calls": [
+        {
+          "method": "initialize",
+          "request_sha256": "9d877a9475ab0246cfe631a02393ad68ddec8d7f1b017fd16ff1850962a6b25d",
+          "request_bytes": 1068,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "abi",
+            "extend"
+          ],
+          "elapsed_ms": 181,
+          "failure_type": "EOFError"
+        }
+      ]
+    },
+    {
+      "run": "initial",
+      "key": "validation-source-C",
+      "api": "validation-source-C",
+      "jar_sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "fetched_site_canonical_sha256": "86ea0afc59d8e13d5a51aeffe37779e34545f31773bb462015fd1ef2f0901656",
+      "fetched_ext_sha256": "7029f37cfb1e48ca59d1bf491c1494bc7da4548617cdeec17fa9b33b3f4f3440",
+      "comparison": "conditional fetched snapshot; installed ext/config equality unverified",
+      "exit_code": 0,
+      "elapsed_ms": 1906,
+      "stderr_sha256": "4807272cf13a3d0a3a1829af03cb5ee88a5954e780e5a015a8b0ff9647a7a787",
+      "business_classification": "wrapper/current-supplied-input business data",
+      "calls": [
+        {
+          "method": "initialize",
+          "request_sha256": "9d877a9475ab0246cfe631a02393ad68ddec8d7f1b017fd16ff1850962a6b25d",
+          "request_bytes": 1068,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "abi",
+            "extend"
+          ],
+          "elapsed_ms": 407,
+          "response_sha256": "42b8683a8c4a1ed0cbd86f37cbe6d11e1f131481ac06edc8b516a259069fdf00",
+          "response_bytes": 388,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "abi",
+            "abiMinor",
+            "key",
+            "runtime",
+            "capabilities",
+            "permissions",
+            "limits"
+          ]
+        },
+        {
+          "method": "home",
+          "request_sha256": "f82d4eeb64d3ea106ad0db33899674228f8b97bf0c9fe6d06bc549852de0456d",
+          "request_bytes": 86,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "filter"
+          ],
+          "elapsed_ms": 429,
+          "response_sha256": "469ccd78848cbce71294d8fb052b1a7739c5f7f7c06faf4f24bb7e8cdcf8762f",
+          "response_bytes": 11373,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 31,
+            "list": 0
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        },
+        {
+          "method": "category",
+          "request_sha256": "ce797ad28c01d2c9c15f1667776cd42df070a83d82d609387dc77dd4e89ef62b",
+          "request_bytes": 133,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "page",
+            "filter",
+            "extend"
+          ],
+          "elapsed_ms": 612,
+          "response_sha256": "b87d66cf8c827866049d0a9fc9e7473bc3b3aee50f20de9d8d0b963ccdd6d161",
+          "response_bytes": 11397,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 28
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        },
+        {
+          "method": "homeVod",
+          "request_sha256": "847ace5ff01f2ee829f15f6442d0aef9c6a77fb6b4a20dadfc3f7894224aeeef",
+          "request_bytes": 76,
+          "deadline_ms": 25000,
+          "params_keys": [],
+          "elapsed_ms": 425,
+          "response_sha256": "b2c26e4721daa5d32c0943af635a5479d09b135fb35ebc2bf0336f275e93af3d",
+          "response_bytes": 8803,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 28
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "peer-aligned",
+      "key": "validation-source-A",
+      "api": "validation-source-A",
+      "jar_sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "fetched_site_canonical_sha256": "2c2680270c6b58a099fe0253b1d2290346ac0a8fc385d3d8e407eb6c3193149b",
+      "fetched_ext_sha256": "7029f37cfb1e48ca59d1bf491c1494bc7da4548617cdeec17fa9b33b3f4f3440",
+      "comparison": "conditional fetched snapshot; installed ext/config equality unverified",
+      "exit_code": 0,
+      "elapsed_ms": 7007,
+      "stderr_sha256": "339ada203dff5374dc883d20ed21fc2d4a1148d14bf35ba26de1f77b24aa616e",
+      "business_classification": "wrapper/current-supplied-input business data",
+      "calls": [
+        {
+          "method": "initialize",
+          "request_sha256": "9d877a9475ab0246cfe631a02393ad68ddec8d7f1b017fd16ff1850962a6b25d",
+          "request_bytes": 1068,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "abi",
+            "extend"
+          ],
+          "elapsed_ms": 586,
+          "response_sha256": "7df09a5550739ed1447603b8115dbb740c6f19383ebca9ab356ca7c3227ccbe8",
+          "response_bytes": 385,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "abi",
+            "abiMinor",
+            "key",
+            "runtime",
+            "capabilities",
+            "permissions",
+            "limits"
+          ]
+        },
+        {
+          "method": "category",
+          "request_sha256": "8cf97aa464b2859c0a09a662276a1244fffa123055e0f7cdc1d0e95d30863b1f",
+          "request_bytes": 126,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "page",
+            "filter",
+            "extend"
+          ],
+          "elapsed_ms": 38,
+          "response_sha256": "cdfb443cdeecfef1d9c3ba90e9a65a8af925d0eae8baf24949a50730b0b1bb1a",
+          "response_bytes": 5022,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 20
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "888ad02a65ecab2b2d93fe0576b71d6cca590893c8dce4b35b7cd441fdbb691b"
+        },
+        {
+          "method": "detail",
+          "request_sha256": "3f29d4bd280c5ad7c032d52e9a70198609bc745795156a5b5671fde01fc1d54b",
+          "request_bytes": 94,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "ids"
+          ],
+          "elapsed_ms": 123,
+          "response_sha256": "fc348ba7f5d5c880d4d4bd7660d590ec6b9c646a17f473d98fba890ce9d979fd",
+          "response_bytes": 386,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 1
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "7d75f76cab9dfc4ecc1c2dc63ff7e6681529afdb64033e4b5915949a420b91e4"
+        },
+        {
+          "method": "search",
+          "request_sha256": "0d1390b6c52c32bab99184b5ba5d7da72858551f23455cb6b11d1d2ae15923a8",
+          "request_bytes": 121,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "keyword",
+            "quick",
+            "page"
+          ],
+          "elapsed_ms": 6205,
+          "response_sha256": "5b987ce017075df80068a503d4b32fd2c5548b2d45ac1b3d22baafd1050e93ea",
+          "response_bytes": 28545,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 60
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "7d538246d60a79e3bbc5426740e9df4e73d815c2b888fb306a034356915b2ae0"
+        },
+        {
+          "method": "play",
+          "request_sha256": "b710b4e3dfb3db045800000da5097b0c00af1dac744454a06c2777e3bf0356d1",
+          "request_bytes": 120,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "flag",
+            "vipFlags"
+          ],
+          "elapsed_ms": 18,
+          "response_sha256": "21d8e3fbda99d696734ff278de63730ecaf98687ee1eec4a58cf145c7aeb7b96",
+          "response_bytes": 77,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "url",
+            "flag",
+            "header"
+          ],
+          "android_request_sha256": "7efb4d1f81680182ef3e9c001e625379186e035b06f39f87b0239abeadd01d7f",
+          "play_url_nonempty": false
+        }
+      ],
+      "playability_note": "AList peer-selected category/detail item is folder, not a verified playable leaf; empty URL is not source playback failure"
+    },
+    {
+      "run": "peer-aligned",
+      "key": "validation-source-C",
+      "api": "validation-source-C",
+      "jar_sha256": "13eb1b6ae4b9203f88564d4e98be830a73dc294a82588a2be537f79176160e67",
+      "fetched_site_canonical_sha256": "86ea0afc59d8e13d5a51aeffe37779e34545f31773bb462015fd1ef2f0901656",
+      "fetched_ext_sha256": "7029f37cfb1e48ca59d1bf491c1494bc7da4548617cdeec17fa9b33b3f4f3440",
+      "comparison": "conditional fetched snapshot; installed ext/config equality unverified",
+      "exit_code": 0,
+      "elapsed_ms": 2741,
+      "stderr_sha256": "770ee0ba8284dcdc9ed343b4bed5f1cbc8aed01e90b42f0af55688c524e3adf9",
+      "business_classification": "wrapper/current-supplied-input business data",
+      "calls": [
+        {
+          "method": "initialize",
+          "request_sha256": "9d877a9475ab0246cfe631a02393ad68ddec8d7f1b017fd16ff1850962a6b25d",
+          "request_bytes": 1068,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "abi",
+            "extend"
+          ],
+          "elapsed_ms": 438,
+          "response_sha256": "42b8683a8c4a1ed0cbd86f37cbe6d11e1f131481ac06edc8b516a259069fdf00",
+          "response_bytes": 388,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "abi",
+            "abiMinor",
+            "key",
+            "runtime",
+            "capabilities",
+            "permissions",
+            "limits"
+          ]
+        },
+        {
+          "method": "category",
+          "request_sha256": "7173aee46d7d998231a98a377e66dc11682731cf93436940495a1c53b20c35f1",
+          "request_bytes": 132,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "page",
+            "filter",
+            "extend"
+          ],
+          "elapsed_ms": 429,
+          "response_sha256": "4c794a853c2d140e3ca5ddf24078058955d2372d1f03973097c821396182eed7",
+          "response_bytes": 12097,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 29
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "342c5dc70c1efee48ebe884e7a8caa80c358d93d35e45b27c5cae07c48ad1eba"
+        },
+        {
+          "method": "detail",
+          "request_sha256": "f7be04c76af2809e8e829993585c497c1bc192f572e6238d415136c6a5039fe7",
+          "request_bytes": 100,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "ids"
+          ],
+          "elapsed_ms": 333,
+          "response_sha256": "c2c0ba90db53d28f96b4c2818233874d526f81381e91c7ffb145631865aa096b",
+          "response_bytes": 2732,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 1
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "db90e189691375334dd001c6145b3ecf6bbabcf1b6f8eeb65c0ae317cfa8a078"
+        },
+        {
+          "method": "search",
+          "request_sha256": "94d00f0a626cc2f23455e15d1ec8668c9c9269eb60f123dd8526b6964c2b4838",
+          "request_bytes": 125,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "keyword",
+            "quick",
+            "page"
+          ],
+          "elapsed_ms": 1303,
+          "response_sha256": "7b04ce4f5e449af127c732cb9dd3d738b7b1d06c5f9be1758919b9a6cefde05a",
+          "response_bytes": 45667,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 110
+          },
+          "result_keys": [
+            "class",
+            "filters",
+            "list",
+            "page",
+            "pagecount",
+            "total"
+          ],
+          "android_request_sha256": "5a6fae316545d40a4e249219ca3312e51944588e0aa9f409b523135fbd0ad891"
+        },
+        {
+          "method": "play",
+          "request_sha256": "58bf1b6692b971b36dad9f2026ec9e23e2f0eb657515a0ee6f81d972247a8e93",
+          "request_bytes": 124,
+          "deadline_ms": 25000,
+          "params_keys": [
+            "id",
+            "flag",
+            "vipFlags"
+          ],
+          "elapsed_ms": 221,
+          "response_sha256": "9a89224fd89d9cba28cd3d01feab6e131e48120f1464e22226d5d5b9da019fd5",
+          "response_bytes": 2019,
+          "envelope_keys": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "payload_counts": {
+            "class": 0,
+            "list": 0
+          },
+          "result_keys": [
+            "url",
+            "flag",
+            "header",
+            "danmaku"
+          ],
+          "android_request_sha256": "afa28965b503d0d9f8f82a16c0de9ac507baeebb4dd4124539b79b2859534b6f",
+          "play_url_nonempty": true
+        }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "sanitized_template": "$ADB -P5038 -s192.168.50.3:5555 shell run-as com.silent.android.webhtv ls -la cache/jar",
+      "template_sha256": "9400c74caaa69ac61448426ede65cc75ef04e49a9a1afea4907584f568c7f4fb"
+    },
+    {
+      "sanitized_template": "$ADB -P5038 -s192.168.50.3:5555 exec-out run-as com.silent.android.webhtv cat cache/jar/<observed-md5>.jar",
+      "template_sha256": "140b8d221a5922bdfe50bc4cdbb342c460f7d72876df92e0b4788243532ef342"
+    },
+    {
+      "sanitized_template": "$ADB -P5038 -s192.168.50.3:5555 shell run-as com.silent.android.webhtv sha256sum cache/jar/<observed-md5>.jar",
+      "template_sha256": "1fc45cf71a203e499614cfff728827ca6a639f20ba9fb63d8faae36b50aa5ed3"
+    },
+    {
+      "sanitized_template": "$DART --packages=apps/desktop-flutter/.dart_tool/package_config.json $SCRATCH/inspect.dart $SCRATCH/android-jars/*.jar",
+      "template_sha256": "1b507f0f872bfd397d80e37581b99ddf863415df084d40da2e209efeae5df588"
+    },
+    {
+      "sanitized_template": "$DART --packages=apps/desktop-flutter/.dart_tool/package_config.json $SCRATCH/refusal.dart",
+      "template_sha256": "859f281b991a7a03e9c2ddbff47c5a55ce8f2b2a6e2e0964db73923f5a3d368c"
+    },
+    {
+      "sanitized_template": "java -Xmx256m -Xms16m -Duser.home=$SCRATCH -Djava.io.tmpdir=$SCRATCH/tmp -cp $HOST:$LIB/* webhtv.spider.DexIntakeCli --site $SCRATCH/dex-<md5> --archive $SCRATCH/android-jars/<md5>.jar --selfcheck",
+      "template_sha256": "510af99130f951df9b30d4568648af4e154439f9a7f2f5eb8c9cdfe1d088c87e"
+    },
+    {
+      "sanitized_template": "python3 $SCRATCH/ipc_probe.py",
+      "template_sha256": "e0df7180a18fdf1522b28576712434d59e37e8b264ab01f8bddf6c36e6ade6d7"
+    },
+    {
+      "sanitized_template": "python3 $SCRATCH/ipc_followup.py",
+      "template_sha256": "1bc578348ebfeaad07dac6d8b20284cd35f896eef281aaacfa2cacc46aa00015"
+    }
+  ],
+  "limits": {
+    "distinct_real_artifacts": 5,
+    "business_entries": 3,
+    "max_jvm_heap_mib_per_process": 256,
+    "selfcheck_child_heap_bounded": true,
+    "business_deadline_ms": 25000,
+    "max_frame_bytes": 8388608,
+    "current_source_total_translation_plus_case_ms": 17044,
+    "source_case_cap_ms": 180000,
+    "native_shell_bypass": false
+  },
+  "verification": {
+    "pc_configs_all_columns_before_after_equal": true,
+    "all_25_pc_jar_hashes_unchanged": true,
+    "all_4_android_jar_after_hashes_equal_copies": true,
+    "production_diff_before_evidence_empty": true,
+    "worker_android_business_calls": 0,
+    "lead_owned_forward35829_server5038_untouched": true,
+    "user_configuration_apk_accounts_untouched_by_worker": true,
+    "tracked_files_written": 2,
+    "private_scratch": ".superpowers/sdd/2026-11-24-android-runtime-validation/desktop/",
+    "actual_refusal_assertions_passed": 3,
+    "unit_suites": {
+      "jar_intake_test.dart": "not-run",
+      "csp_jar_probe_test.dart": "not-run",
+      "reason": "No full Flutter test-suite invocation made in production tree. Existing production classifier/install APIs and CLI/IPC exercised in ignored scratch; not a suite pass claim."
+    }
+  },
+  "failures_unverified": [
+    "Media host exit3 after181ms: android/widget/LinearLayout missing, NoClassDefFoundError wrapped by IllegalArgumentException; initialize stdout EOF.",
+    "Both ordinary archives translate but selfcheck finds5 missing classes each (WebViewClient, DialogInterface.OnKeyListener and QuickJS JSCallFunction/MapCreator). No initialization/business in selfcheck.",
+    "Danmaku native source refused by actual desktop install; no forced JVM/native run. Android needs direct native execution evidence before any uplift claim.",
+    "PC wex shell direct install refused; existing explicit payload preparation support not tested, no matched Android shell.",
+    "AList aligned play URL empty for selected folder/detail route: no valid playable leaf sampled, so playback not tested (not source playback failure). Bili aligned URL nonempty but desktop media reachability/decoding not tested.",
+    "Exact installed ext/config and in-memory JAR binding unverified; same key never source identity.",
+    "Remote-forward wrapper data is not proof of local source scraping/native execution.",
+    "Cold/recovery start, cancellation/reconnect, concurrency/config isolation, throughput/CPU and playback decode/render not tested.",
+    "Custom registry maps validation-source-D/validation-source-E to de84 libjsc archive; class descriptor present and archive references WebView/Activity/UI types. Dynamic Wv not tested under no-UI constraint; no native execution claim."
+  ],
+  "wv_static": {
+    "jar_sha256": "bf33613870fd3a2cc72747d7cf7ccdba0e6a5b02b460805daff98aef66e42787",
+    "wv_class_descriptor_present": true,
+    "archive_ui_types": [
+      "Landroid/app/Activity;",
+      "Landroid/view/View;",
+      "Landroid/webkit/ConsoleMessage$MessageLevel;",
+      "Landroid/webkit/ConsoleMessage;",
+      "Landroid/webkit/CookieManager;",
+      "Landroid/webkit/JavascriptInterface;",
+      "Landroid/webkit/ValueCallback;",
+      "Landroid/webkit/WebChromeClient;",
+      "Landroid/webkit/WebResourceRequest;",
+      "Landroid/webkit/WebResourceResponse;",
+      "Landroid/webkit/WebSettings;",
+      "Landroid/webkit/WebView;",
+      "Landroid/webkit/WebViewClient;",
+      "Landroid/widget/LinearLayout;"
+    ],
+    "interpretation": "archive-scoped DEX type references; not proof that every Wv operation executes UI; current nativeLibrary refusal remains unchanged",
+    "registry_raw_sha256": "cd706d7cd901af4011bf4e83fde9cb36d234d3a2400c6c29b9b68762274d90f6"
+  }
+}

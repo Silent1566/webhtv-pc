@@ -3253,6 +3253,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _persistProgress() {
     if (!_progressReady) return;
+    // 直播没有可续播时间轴，引擎报出的伪时长不能污染点播播放历史。
+    if (_request.isLive) return;
     // 本地文件不写历史：站标识是合成的「local-file」、集 id 就是磁盘路径，
     // 落库只会得到一条历史页点了「续播」回不去的记录。
     if (_request.isLocal) return;

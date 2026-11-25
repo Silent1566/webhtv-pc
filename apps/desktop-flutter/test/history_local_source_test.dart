@@ -39,6 +39,7 @@ import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
 import 'package:webhtv_pc/ui/home_page.dart';
+import 'package:webhtv_pc/ui/home_cards.dart';
 import 'package:webhtv_pc/ui/library_pages.dart';
 import 'package:webhtv_pc/ui/toast.dart';
 
@@ -580,9 +581,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final primary = find.byKey(const ValueKey('home-hero-primary'));
-      expect(primary, findsOneWidget, reason: '前置：hero 主按钮必须渲染出来');
-      expect(find.text('继续播放'), findsOneWidget, reason: '前置：主按钮就是「继续播放」');
+      // 本例的来源图只有竖版/不可达：新规则不进hero，但轨道卡必须保留续播能力。
+      final primary = find.widgetWithText(HomePosterCard, '跨源剧集');
+      await tester.scrollUntilVisible(primary, 240, scrollable: find.descendant(
+        of: find.byKey(const ValueKey('home-scroll')), matching: find.byType(Scrollable),
+      ).first);
+      await tester.pumpAndSettle();
+      expect(primary, findsOneWidget, reason: '缺高清背景不能把跨源续播入口从轨道删掉');
       // 只看点击之后发起的请求。
       client.urls.clear();
 

@@ -133,6 +133,7 @@ void main() {
       source: 'https://first.test/spider.jar',
       api: 'csp_Douban',
     );
+    final installedBytes = File(p.join(legacy, 'index.jar')).readAsBytesSync();
     final first = binding.forConfig(config('https://first.test/spider.jar'));
     final second = binding.forConfig(config('https://second.test/spider.jar'));
     final otherClass = binding.forConfig(
@@ -143,7 +144,7 @@ void main() {
     expect(otherClass.entryFor('Douban'), isNull);
     expect(
       File(p.join(legacy, 'index.jar')).readAsBytesSync(),
-      desktopJar('Douban'),
+      installedBytes,
     );
   });
 

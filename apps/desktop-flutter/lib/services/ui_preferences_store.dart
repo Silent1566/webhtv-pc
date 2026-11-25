@@ -55,6 +55,7 @@ import '../core/danmaku_style.dart';
 import '../core/doh_settings.dart';
 import '../core/following.dart';
 import '../core/live_settings.dart';
+import '../core/live_site_keywords.dart';
 import '../core/subtitle_settings.dart';
 import '../core/subtitle_style.dart';
 import '../core/osd_config.dart';
@@ -168,6 +169,8 @@ class UiPreferencesStore {
 
   /// 历史记录同名聚合模式。`null` = 从未设置过，用默认 [UiHistoryAggregation.tmdb]。
   String? _historyAggregation;
+
+  List<String>? _liveSiteKeywords;
 
   /// 选集视图模式。`null` = 从未设置过，用默认 [UiEpisodeViewMode.fallback]。
   String? _episodeViewMode;
@@ -328,6 +331,11 @@ class UiPreferencesStore {
 
   /// 用户是否显式设置过聚合模式。
   bool get hasExplicitHistoryAggregation => _historyAggregation != null;
+
+  List<String> get liveSiteKeywords =>
+      normalizeLiveSiteKeywords(_liveSiteKeywords ?? liveSiteDefaultKeywords);
+
+  bool get hasExplicitLiveSiteKeywords => _liveSiteKeywords != null;
 
   /// 生效的选集视图模式：用户选过就用选的，否则默认网格。
   String get episodeViewMode => UiEpisodeViewMode.normalize(_episodeViewMode);
@@ -633,6 +641,12 @@ class UiPreferencesStore {
               _historyAggregation = aggregation.trim().toLowerCase();
             }
           }
+          final liveKeywords = ui['liveSiteKeywords'];
+          if (liveKeywords is List) {
+            _liveSiteKeywords = normalizeLiveSiteKeywords(
+              liveKeywords.whereType<String>(),
+            );
+          }
           final externalMeta = ui['externalMetaEnabled'];
           if (externalMeta is bool) _externalMetaEnabled = externalMeta;
           _metaPipeline = MetaPipeline.fromJson(ui['metaPipeline']);
@@ -897,6 +911,11 @@ class UiPreferencesStore {
     final normalized = UiHistoryScope.normalize(scope);
     if (normalized == _historyScope) return Future.value(true);
     _historyScope = normalized;
+    return _persist();
+  }
+
+  Future<bool> setLiveSiteKeywords(Iterable<String> value) {
+    _liveSiteKeywords = normalizeLiveSiteKeywords(value);
     return _persist();
   }
 
@@ -1356,6 +1375,8 @@ class UiPreferencesStore {
         // 历史聚合：只有显式设置过才写，缺席 = 默认 tmdb（优先 TMDB）。
         final aggregation = _historyAggregation;
         if (aggregation != null) ui['historyAggregation'] = aggregation;
+        final liveKeywords = _liveSiteKeywords;
+        if (liveKeywords != null) ui['liveSiteKeywords'] = liveKeywords;
         // 选集视图：只有显式设置过才写，缺席 = 默认 grid。
         final viewMode = _episodeViewMode;
         if (viewMode != null) ui['episodeViewMode'] = viewMode;

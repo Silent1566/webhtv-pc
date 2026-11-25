@@ -5,6 +5,8 @@
 /// 它与外壳的路由/导航无关，唯一依赖是 image_header_scope.dart 里的头规则入口。
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../services/tmdb_route_health.dart';
@@ -21,6 +23,19 @@ import 'image_header_scope.dart';
 Color _posterPlaceholderColor(BuildContext context) =>
     Theme.of(context).colorScheme.surfaceContainerLow;
 
+/// 启动快照使用受控缓存目录下的file URI；网络图继续沿用同一headers/cache key。
+ImageProvider<Object> posterImageProvider(
+  String url, {
+  Map<String, String>? headers,
+  int? cacheWidth,
+}) {
+  final uri = Uri.tryParse(url);
+  final ImageProvider<Object> provider = uri?.scheme == 'file'
+      ? FileImage(File.fromUri(uri!))
+      : NetworkImage(url, headers: headers);
+  return ResizeImage.resizeIfNeeded(cacheWidth, null, provider);
+}
+
 class PosterImage extends StatelessWidget {
   const PosterImage({
     super.key,
@@ -32,6 +47,7 @@ class PosterImage extends StatelessWidget {
     this.cacheWidth,
     this.background = true,
     this.fallbackUrl,
+    this.onImageError,
     this.placeholder,
   });
 
@@ -73,6 +89,8 @@ class PosterImage extends StatelessWidget {
   /// 因此不会出现同址递归。默认 `null`，其余调用方行为不变。
   final String? fallbackUrl;
 
+  final VoidCallback? onImageError;
+
   /// 无图/坏图时替代默认图标的占位内容（人物头像用姓名字标）。
   ///
   /// 默认 `null` → 沿用既有「灰底 + 图标」，其余调用方观感不变。
@@ -113,14 +131,12 @@ class PosterImage extends StatelessWidget {
       color: background ? _posterPlaceholderColor(context) : null,
       child: resolved.isEmpty
           ? _emptyPlaceholder(context)
-          : Image.network(
-              resolved,
+          : Image(
+              image: posterImageProvider(resolved, headers: headers, cacheWidth: cacheWidth),
               width: width,
               height: height,
               fit: fit,
               alignment: alignment,
-              cacheWidth: cacheWidth,
-              headers: headers,
               loadingBuilder: (context, child, progress) => progress == null
                   ? child
                   : Center(child: _placeholderIcon(context, loading: true)),
@@ -130,6 +146,7 @@ class PosterImage extends StatelessWidget {
                 // 自动线路：把「这张图挂了」报给线路选择器。单张 404 不算线路坏，
                 // 是否切换由 AppState 按时间窗判断（这也是唯一的线路反馈入口）。
                 TmdbImageHealth.onFailure?.call(target);
+                onImageError?.call();
                 return canFallback
                     ? _fallbackImage(context, fallback)
                     : _emptyPlaceholder(context);
@@ -144,14 +161,12 @@ class PosterImage extends StatelessWidget {
       placeholder ?? Center(child: _placeholderIcon(context));
 
   Widget _fallbackImage(BuildContext context, String target) {
-    return Image.network(
-      target,
+    return Image(
+      image: posterImageProvider(target, headers: imageHeadersOrNull(context, target), cacheWidth: cacheWidth),
       width: width,
       height: height,
       fit: fit,
       alignment: alignment,
-      cacheWidth: cacheWidth,
-      headers: imageHeadersOrNull(context, target),
       loadingBuilder: (context, child, progress) => progress == null
           ? child
           : Center(child: _placeholderIcon(context, loading: true)),
