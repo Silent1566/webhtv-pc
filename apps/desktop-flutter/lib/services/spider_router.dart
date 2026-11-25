@@ -23,6 +23,7 @@
 library;
 
 import 'dart:async';
+import 'dart:isolate';
 
 import 'dart:io';
 import 'dart:convert';
@@ -51,8 +52,16 @@ class SiteAvailability {
     required this.runtimeName,
     this.reason,
     this.stage,
-  });
+  }) : preparing = false;
 
+  const SiteAvailability.preparing({
+    this.runtimeName = 'Spider',
+    this.reason = '正在准备当前站点运行时',
+    this.stage,
+  }) : available = false,
+       preparing = true;
+
+  final bool preparing;
   final bool available;
   final String runtimeName;
   final String? reason;
@@ -399,6 +408,212 @@ class SpiderRouter {
   }
 
   final Map<String, SiteRuntime> _cache = {};
+  final Map<String, LocalSpiderCommand?> _preparedCommands = {};
+  final Map<String, SiteAvailability> _preparedAvailability = {};
+  final Map<String, Future<void>> _availabilityFlights = {};
+  final Map<String, Future<void>> _runtimeFlights = {};
+  Future<void>? _backgroundAvailability;
+  Future<void> _foregroundAvailability = Future.value();
+  int _availabilityRevision = -1;
+  int _availabilityRuntimeRevision = -1;
+  int _availabilityVersion = 0;
+  int get availabilityVersion => _availabilityVersion;
+
+  Future<void> get availabilityIdle async {
+    await _backgroundAvailability;
+    await _foregroundAvailability;
+    await Future.wait(_availabilityFlights.values.toList());
+    await Future.wait(_runtimeFlights.values.toList());
+  }
+
+  bool _disposed = false;
+
+  bool get availabilityPrepared =>
+      !_disposed &&
+      _availabilityRevision == siteRevision &&
+      _availabilityRuntimeRevision == LocalSpiderCommand.runtimeRevision;
+
+  SiteAvailability? preparedAvailability(Site site) =>
+      availabilityPrepared ? _preparedAvailability[_cacheKey(site)] : null;
+
+  Future<void> prepareAvailability(
+    List<Site> sites, {
+    bool foreground = false,
+  }) {
+    if (_disposed) return Future.value();
+    if (sites.every((site) => site.type != 3)) {
+      if (!availabilityPrepared) {
+        _preparedCommands.clear();
+        _preparedAvailability.clear();
+      }
+      for (final site in sites) {
+        _preparedAvailability[_cacheKey(site)] = classify(site);
+      }
+      _availabilityRevision = siteRevision;
+      _availabilityRuntimeRevision = LocalSpiderCommand.runtimeRevision;
+      _availabilityVersion++;
+      return Future.value();
+    }
+    if (foreground) {
+      final previous = _foregroundAvailability;
+      final result = () async {
+        for (final site in sites) {
+          await _prepareSiteAvailability(site);
+        }
+      }();
+      _foregroundAvailability = Future.wait([previous, result]);
+      return result;
+    }
+    final previous = _backgroundAvailability;
+    late final Future<void> future;
+    future =
+        () async {
+          if (previous != null) await previous;
+          for (final site in sites) {
+            if (_disposed) return;
+            await _prepareSiteAvailability(site);
+          }
+        }().whenComplete(() {
+          if (identical(_backgroundAvailability, future)) {
+            _backgroundAvailability = null;
+          }
+        });
+    _backgroundAvailability = future;
+    return future;
+  }
+
+  Future<void> _prepareSiteAvailability(Site site) async {
+    while (!_disposed) {
+      if (preparedAvailability(site) != null) return;
+      if (site.type != 3) {
+        await prepareAvailability([site]);
+        return;
+      }
+      final revision = siteRevision;
+      final runtimeRevision = LocalSpiderCommand.runtimeRevision;
+      final key = '$revision:$runtimeRevision:${_cacheKey(site)}';
+      final pending = _availabilityFlights[key];
+      if (pending != null) {
+        await pending;
+        continue;
+      }
+      late final Future<void> future;
+      future = _prepareSiteGeneration(site, revision, runtimeRevision)
+          .whenComplete(() {
+            if (identical(_availabilityFlights[key], future)) {
+              _availabilityFlights.remove(key);
+            }
+          });
+      _availabilityFlights[key] = future;
+      await future;
+    }
+  }
+
+  Future<void> _prepareSiteGeneration(
+    Site site,
+    int revision,
+    int runtimeRevision,
+  ) async {
+    final local = SpiderLocalBinding.matches(site.api)
+        ? (registry == null
+              ? null
+              : SpiderLocalBinding(registry: registry!).resolve(site.api))
+        : directSpiders[site.key];
+    // Only command discovery is shared across sites; an entry lookup or JAR
+    // inspection must never own the readiness future of another site.
+    if (local != null) {
+      final runtime = local.manifest.runtime.toLowerCase();
+      final family = runtime.startsWith('python')
+          ? (directSpiderKind(site) == DirectSpiderKind.catVod
+                ? 'catvod'
+                : 'python')
+          : runtime.startsWith('jvm') || runtime.startsWith('java')
+          ? 'java'
+          : null;
+      if (family != null) {
+        final key = '$runtimeRevision:$family';
+        final pending = _runtimeFlights[key];
+        if (pending != null) {
+          await pending;
+        } else {
+          late final Future<void> future;
+          future =
+              _prepareCommandInBackground(
+                    local,
+                    hostPath,
+                    jsHostPath,
+                    jvmHostPath,
+                    LocalSpiderCommand.snapshot(),
+                  )
+                  .then((snapshot) {
+                    if (!_disposed &&
+                        runtimeRevision == LocalSpiderCommand.runtimeRevision) {
+                      LocalSpiderCommand.mergeSnapshot(snapshot);
+                    }
+                  })
+                  .whenComplete(() {
+                    if (identical(_runtimeFlights[key], future)) {
+                      _runtimeFlights.remove(key);
+                    }
+                  });
+          _runtimeFlights[key] = future;
+          await future;
+        }
+      }
+    }
+    if (_disposed ||
+        revision != siteRevision ||
+        runtimeRevision != LocalSpiderCommand.runtimeRevision) {
+      return;
+    }
+    final result = await _prepareAvailabilityInBackground(
+      [site],
+      registry?.root,
+      registry?.spiders.values.toList() ?? <LocalSpider>[],
+      Map.of(directSpiders),
+      Set.of(provisioningSiteKeys),
+      cspBinding,
+      hostPath,
+      jsHostPath,
+      jvmHostPath,
+      LocalSpiderCommand.snapshot(),
+    );
+    if (_disposed ||
+        runtimeRevision != LocalSpiderCommand.runtimeRevision ||
+        revision != siteRevision) {
+      return;
+    }
+    LocalSpiderCommand.mergeSnapshot(result.runtimes);
+    if (!availabilityPrepared) {
+      _preparedCommands.clear();
+      _preparedAvailability.clear();
+    }
+    _preparedCommands.addAll(result.commands);
+    _preparedAvailability.addAll(result.availability);
+    _availabilityRevision = revision;
+    _availabilityRuntimeRevision = runtimeRevision;
+    _availabilityVersion++;
+  }
+
+  LocalSpiderCommand? _resolveCommand({
+    required LocalSpider spider,
+    required String hostPath,
+    String? jsHostPath,
+    String? jvmHostPath,
+    LogService? log,
+  }) {
+    final key = spider.manifestPath;
+    if (_preparedCommands.containsKey(key)) return _preparedCommands[key];
+    final command = LocalSpiderCommand.resolve(
+      spider: spider,
+      hostPath: hostPath,
+      jsHostPath: jsHostPath,
+      jvmHostPath: jvmHostPath,
+      log: log,
+    );
+    _preparedCommands[key] = command;
+    return command;
+  }
 
   /// 站点判定代次：任何会改变**可用性结论**的变化（运行时就绪、直连注册、
   /// 出站/换配置、csp 落盘与解包）都必须 +1。
@@ -413,7 +628,10 @@ class SpiderRouter {
   int _siteRevision = 0;
 
   /// 磁盘上的站点文件变了（导入/移除/解包/探测结论刷新）。
-  void notifySiteFilesChanged() => _siteRevision++;
+  void notifySiteFilesChanged() {
+    _preparedCommands.clear();
+    _siteRevision++;
+  }
 
   /// 运行时缓存键：同一 `type` 可能有不同 ABI，不能只用 type 做键。
   ///
@@ -444,6 +662,7 @@ class SpiderRouter {
   void setDirectSpiders(Map<String, LocalSpider> spiders) {
     directSpiders = spiders;
     _cache.clear();
+    _preparedCommands.clear();
     _siteRevision++;
   }
 
@@ -457,6 +676,7 @@ class SpiderRouter {
   /// 在途调用仍持有它，宿主进程由 supervisor 按 siteKey 复用。
   void invalidateRuntimes() {
     _cache.clear();
+    _preparedCommands.clear();
     _siteRevision++;
   }
 
@@ -528,7 +748,7 @@ class SpiderRouter {
         reason: 'manifest 声明的入口不存在：${local.manifest.entry}',
       );
     }
-    final command = LocalSpiderCommand.resolve(
+    final command = _resolveCommand(
       spider: local,
       hostPath: _hostPath(),
       jsHostPath: jsHostPath,
@@ -579,7 +799,7 @@ class SpiderRouter {
         reason: 'manifest 声明的入口不存在：${local.manifest.entry}',
       );
     }
-    final command = LocalSpiderCommand.resolve(
+    final command = _resolveCommand(
       spider: local,
       hostPath: _hostPath(),
       jsHostPath: jsHostPath,
@@ -667,8 +887,7 @@ class SpiderRouter {
         : p.dirname(entry);
     if (entry == null) {
       if (provisioningSiteKeys.contains(site.key)) {
-        return SiteAvailability(
-          available: false,
+        return SiteAvailability.preparing(
           runtimeName: 'PC Java Spider',
           stage: 'Phase 3',
           reason: '正在自动安装站源（后台进行中），完成后会自动加载首页或显示检测结果',
@@ -824,7 +1043,7 @@ class SpiderRouter {
       entryPath: entry,
       binding: binding,
     );
-    final command = LocalSpiderCommand.resolve(
+    final command = _resolveCommand(
       spider: local,
       hostPath: _hostPath(),
       jsHostPath: jsHostPath,
@@ -1010,7 +1229,7 @@ class SpiderRouter {
 
   /// 获取站点运行时。不可用时返回 [UnsupportedRuntime]，调用后抛出可定位错误。
   SiteRuntime runtimeFor(Site site) {
-    final availability = classifySite(site);
+    final availability = preparedAvailability(site) ?? classifySite(site);
     if (!availability.available) {
       return UnsupportedRuntime(
         runtimeName: availability.runtimeName,
@@ -1070,7 +1289,7 @@ class SpiderRouter {
     // 直连 js/py：已自动注册则复用本地 spider 运行时。
     final direct = directSpiders[site.key];
     if (direct != null && supervisor != null) {
-      final command = LocalSpiderCommand.resolve(
+      final command = _resolveCommand(
         spider: direct,
         hostPath: _hostPath(),
         jsHostPath: jsHostPath,
@@ -1101,17 +1320,19 @@ class SpiderRouter {
       // 开 JVM **之前**先备齐 payload 预转译产物：产物口径过期时 JVM 会在
       // handshake 里现场转译（实测 5–9 s，用户看到「第一次进站点 10–13 s」）。
       // 命中共享产物缓存就是毫秒级复制，JVM 直接跳过转译。
-      CspJarProbe.preparePayloadDex(
-        siteDir: binding.directoryFor(site.key),
-        sharedDir: CspJarProbe.sharedPayloadDexDir(p.dirname(binding.root)),
-        log: log,
-      );
+      if (preparedAvailability(site) == null) {
+        CspJarProbe.preparePayloadDex(
+          siteDir: binding.directoryFor(site.key),
+          sharedDir: CspJarProbe.sharedPayloadDexDir(p.dirname(binding.root)),
+          log: log,
+        );
+      }
       final local = cspLocalSpider(
         site: site,
         entryPath: entry,
         binding: binding,
       );
-      final command = LocalSpiderCommand.resolve(
+      final command = _resolveCommand(
         spider: local,
         hostPath: _hostPath(),
         jsHostPath: jsHostPath,
@@ -1143,7 +1364,7 @@ class SpiderRouter {
           stage: 'MVP-B',
         );
       }
-      final command = LocalSpiderCommand.resolve(
+      final command = _resolveCommand(
         spider: local,
         hostPath: _hostPath(),
         jsHostPath: jsHostPath,
@@ -1194,6 +1415,7 @@ class SpiderRouter {
   int get runnableSiteCount => _cache.length;
 
   void dispose() {
+    _disposed = true;
     client.close();
     catHttpClient?.close();
   }
@@ -1227,3 +1449,106 @@ extension SiteResultCache on SiteResult {
     if (total != null) 'total': total,
   };
 }
+
+class _PreparedAvailability {
+  const _PreparedAvailability(this.availability, this.commands, this.runtimes);
+  final Map<String, SiteAvailability> availability;
+  final Map<String, LocalSpiderCommand?> commands;
+  final RuntimeCommandSnapshot runtimes;
+}
+
+Future<_PreparedAvailability> _prepareAvailabilityInBackground(
+  List<Site> sites,
+  String? root,
+  List<LocalSpider> locals,
+  Map<String, LocalSpider> direct,
+  Set<String> provisioning,
+  CspJvmBinding? binding,
+  String? hostPath,
+  String? jsHostPath,
+  String? jvmHostPath,
+  RuntimeCommandSnapshot runtimes,
+) => Isolate.run(() {
+  LocalSpiderCommand.restoreSnapshot(runtimes);
+  final client = HttpApiClient();
+  final router = SpiderRouter(
+    client: client,
+    globalHeaders: const [],
+    registry: root == null
+        ? null
+        : SpiderManifestRegistry(
+            root: root,
+            log: LogService(),
+            initialSpiders: locals,
+          ),
+    cspBinding: binding,
+    hostPath: hostPath,
+    jsHostPath: jsHostPath,
+    jvmHostPath: jvmHostPath,
+  );
+  router.directSpiders = direct;
+  router.provisioningSiteKeys = provisioning;
+  try {
+    final availability = <String, SiteAvailability>{};
+    for (final site in sites) {
+      final result = router.classifySite(site);
+      availability[router._cacheKey(site)] = result;
+      // Shell + cached payload takes an early classification exit, but opening
+      // it still needs a validated Java command. Resolve that here as well.
+      if (result.available &&
+          CspJvmBinding.matches(site.api) &&
+          !direct.containsKey(site.key)) {
+        final entry = binding?.entryFor(site.key);
+        if (entry != null) {
+          CspJarProbe.preparePayloadDex(
+            siteDir: binding!.directoryFor(site.key),
+            sharedDir: CspJarProbe.sharedPayloadDexDir(p.dirname(binding.root)),
+          );
+          final local = SpiderRouter.cspLocalSpider(
+            site: site,
+            entryPath: entry,
+            binding: binding,
+          );
+          final command = router._resolveCommand(
+            spider: local,
+            hostPath: hostPath ?? '',
+            jsHostPath: jsHostPath,
+            jvmHostPath: jvmHostPath,
+          );
+          if (command == null) {
+            availability[router._cacheKey(site)] = const SiteAvailability(
+              available: false,
+              runtimeName: 'PC Java Spider',
+              stage: 'Phase 3',
+              reason: '未找到 Java 运行时（JDK/JRE）或 spider-host-jvm/host.jar',
+            );
+          }
+        }
+      }
+    }
+    return _PreparedAvailability(
+      availability,
+      router._preparedCommands,
+      LocalSpiderCommand.snapshot(),
+    );
+  } finally {
+    client.close();
+  }
+});
+
+Future<RuntimeCommandSnapshot> _prepareCommandInBackground(
+  LocalSpider local,
+  String? hostPath,
+  String? jsHostPath,
+  String? jvmHostPath,
+  RuntimeCommandSnapshot snapshot,
+) => Isolate.run(() {
+  LocalSpiderCommand.restoreSnapshot(snapshot);
+  LocalSpiderCommand.resolve(
+    spider: local,
+    hostPath: hostPath ?? '',
+    jsHostPath: jsHostPath,
+    jvmHostPath: jvmHostPath,
+  );
+  return LocalSpiderCommand.snapshot();
+});

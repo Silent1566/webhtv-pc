@@ -459,7 +459,6 @@ class _AppShellState extends State<AppShell> {
   /// 加固壳解包流程是否已经开着：同一个站点连点、连选两次不许叠出第二个框。
   bool _shellUnpackFlowOpen = false;
 
-
   /// 两条横幅通道上一次"已经推成通知"的值。
   ///
   /// 状态层是唯一事实来源，通知只是它的投影：拿上一次投影过的值做对比，
@@ -509,6 +508,24 @@ class _AppShellState extends State<AppShell> {
     _consumePendingPush();
     if (mounted) setState(() {});
     _maybeAutoPlayMedia();
+    _scheduleShellUnpackOffer();
+  }
+
+  void _scheduleShellUnpackOffer() {
+    if (_section != ShellSection.browse ||
+        _state.pendingShellUnpackForSite == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _section == ShellSection.browse) {
+        unawaited(_maybeOfferShellUnpack());
+      }
+    });
+  }
+
+  void _enterBrowse() {
+    _state.enterCurrentVod();
+    _scheduleShellUnpackOffer();
   }
 
   /// 把待播推送投影成播放页路由（本机输入与局域网推送共用这一条）。
@@ -559,7 +576,9 @@ class _AppShellState extends State<AppShell> {
           detail:
               '错误码：${lastError.kind.name}'
               '${lastError.retryable ? " · 可重试" : ""}',
-          onDismiss: _state.clearError,
+          onDismiss: () {
+            if (mounted) _state.clearError();
+          },
         );
       }
     }
@@ -567,7 +586,13 @@ class _AppShellState extends State<AppShell> {
     if (notice != _shownNotice) {
       _shownNotice = notice;
       if (notice != null) {
-        showToast(notice, kind: ToastKind.info, onDismiss: _state.clearNotice);
+        showToast(
+          notice,
+          kind: ToastKind.info,
+          onDismiss: () {
+            if (mounted) _state.clearNotice();
+          },
+        );
       }
     }
     // 自动检查发现新版本：只提示一次，动作直达「软件更新」页。
@@ -592,7 +617,9 @@ class _AppShellState extends State<AppShell> {
               );
             },
           ),
-          onDismiss: _state.clearUpdateNotice,
+          onDismiss: () {
+            if (mounted) _state.clearUpdateNotice();
+          },
         );
       }
     }
@@ -888,10 +915,8 @@ class _AppShellState extends State<AppShell> {
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => PlayerPage(
-            state: _state,
-            request: _commandLineRequest(media),
-          ),
+          builder: (_) =>
+              PlayerPage(state: _state, request: _commandLineRequest(media)),
         ),
       );
     });
@@ -905,9 +930,7 @@ class _AppShellState extends State<AppShell> {
   PlaybackRequest _commandLineRequest(String media) {
     final seek = widget.startup.seekSeconds == null
         ? null
-        : Duration(
-            milliseconds: (widget.startup.seekSeconds! * 1000).round(),
-          );
+        : Duration(milliseconds: (widget.startup.seekSeconds! * 1000).round());
     if (widget.startup.mediaIsLocal) {
       final local = PlaybackRequest.localFile(path: media);
       return seek == null ? local : local.copyWith(startPosition: seek);
@@ -1006,7 +1029,9 @@ class _AppShellState extends State<AppShell> {
       return;
     }
     _section = ShellSection.browse;
-    await _state.selectSite(selected);
+    final loading = _state.selectSite(selected);
+    _scheduleShellUnpackOffer();
+    await loading;
     // 加固壳：站点进入后 state 会登记「要不要确认解包」，这里负责问。
     await _maybeOfferShellUnpack();
   }
@@ -1017,7 +1042,10 @@ class _AppShellState extends State<AppShell> {
   Future<void> _maybeOfferShellUnpack() async {
     if (_shellUnpackFlowOpen) return;
     final siteKey = _state.takePendingShellUnpackForSite();
-    if (siteKey == null || !mounted) return;
+    if (siteKey == null || !mounted || _state.selectedSite?.key != siteKey) {
+      return;
+    }
+    final site = _state.selectedSite;
     final items = _state.shellUnpackItems(preferSiteKey: siteKey);
     if (items.isEmpty) return;
     _shellUnpackFlowOpen = true;
@@ -1027,7 +1055,12 @@ class _AppShellState extends State<AppShell> {
         items: items,
         runtimeStateLabel: _state.shellUnpackRuntimeStateLabel,
       );
-      if (selected == null || selected.isEmpty || !mounted) return;
+      if (selected == null ||
+          selected.isEmpty ||
+          !mounted ||
+          !identical(site, _state.selectedSite)) {
+        return;
+      }
       final ticks = StreamController<ShellUnpackTick>();
       final progress = showShellUnpackProgress(
         context,
@@ -1061,10 +1094,8 @@ class _AppShellState extends State<AppShell> {
   Future<void> _openPushDialog() async {
     await showDialog<void>(
       context: context,
-      builder: (_) => PushDialog(
-        state: _state,
-        pickLocalFile: _pickLocalMediaPath,
-      ),
+      builder: (_) =>
+          PushDialog(state: _state, pickLocalFile: _pickLocalMediaPath),
     );
     if (mounted) setState(() {});
   }
@@ -1190,6 +1221,7 @@ class _AppShellState extends State<AppShell> {
                       _pendingSearchKeyword = null;
                     }
                     _section = value;
+                    if (value == ShellSection.browse) _enterBrowse();
                   }),
                 ),
                 const VerticalDivider(width: 1),
@@ -1237,7 +1269,10 @@ class _AppShellState extends State<AppShell> {
       case ShellSection.home:
         return HomePage(
           state: _state,
-          onOpenBrowse: () => setState(() => _section = ShellSection.browse),
+          onOpenBrowse: () => setState(() {
+            _section = ShellSection.browse;
+            _enterBrowse();
+          }),
           onOpenHistory: () => setState(() => _section = ShellSection.history),
           onOpenFollowing: () =>
               setState(() => _section = ShellSection.following),

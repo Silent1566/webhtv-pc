@@ -678,6 +678,7 @@ class AppConfig {
   final List<Object?> proxy;
   final List<Object?> hosts;
   final List<HeaderRule> headers;
+
   /// 播放选解析器时用的列表：头部合成「超级解析」（安卓 `VodConfig.java:609`）。
   ///
   /// 与 [parses] 分开：`parses` 是配置原文（导入/导出/云端同步必须原样回写），
@@ -1606,8 +1607,29 @@ final RegExp _encodedScopedProxyLogPattern = RegExp(
   caseSensitive: false,
 );
 
+// Local media routes hide both bearer credential and encoded upstream target.
+// Match escaped/percent-escaped separators directly; never decode arbitrary logs.
+final RegExp _localProxyLogPattern = RegExp(
+  r'((?:\\*/|\b)(?:p|%70)(?:\\*/))'
+  r'[A-Za-z0-9_%~-]{16,}(?:[A-Za-z0-9_.%~=/\\-]*)'
+  r'(?:[?#][^\s"\x27<>\\)\]}]*)?',
+  caseSensitive: false,
+);
+final RegExp _encodedLocalProxyLogPattern = RegExp(
+  r'((?:%(?:25){0,3}2f|\b)(?:p|%(?:25){0,3}70)%(?:25){0,3}2f)'
+  r'[A-Za-z0-9_.%~=-]{16,}'
+  r'(?:(?:%(?:25){0,3}3f|%(?:25){0,3}23)[^\s"\x27<>\\)\]}]*)?',
+  caseSensitive: false,
+);
+
 String _redactScopedProxyText(String text) {
   var output = text;
+  for (final pattern in [_localProxyLogPattern, _encodedLocalProxyLogPattern]) {
+    output = output.replaceAllMapped(
+      pattern,
+      (match) => '${match.group(1)}REDACTED',
+    );
+  }
   for (final pattern in [
     _scopedProxyLogPattern,
     _escapedScopedProxyLogPattern,
@@ -1615,8 +1637,13 @@ String _redactScopedProxyText(String text) {
   ]) {
     output = output.replaceAllMapped(
       pattern,
-      (match) => '${match.group(1)}REDACTED${match.group(3)}'
-          '${match.group(4) == null ? '' : match.group(4)!.startsWith('%') ? '%3F...' : '?...'}',
+      (match) =>
+          '${match.group(1)}REDACTED${match.group(3)}'
+          '${match.group(4) == null
+              ? ''
+              : match.group(4)!.startsWith('%')
+              ? '%3F...'
+              : '?...'}',
     );
   }
   return output;
@@ -1625,7 +1652,7 @@ String _redactScopedProxyText(String text) {
 /// URL 脱敏：保留 host 与普通 path，隐藏 scoped proxy 凭据、query 与片段。
 String redactUrl(String? url) {
   if (url == null || url.isEmpty) return '';
-  final uri = Uri.tryParse(url);
+  final uri = Uri.tryParse(_redactScopedProxyText(url));
   if (uri == null) return '<invalid-url>';
   final path = _redactScopedProxyText(uri.path);
   if (!uri.hasScheme) return path.isEmpty ? '<relative>' : path;
@@ -1656,7 +1683,7 @@ String redactHeadersForLog(Map<String, String> headers) {
   final parts = <String>[];
   for (final entry in headers.entries) {
     parts.add(
-      '${entry.key}=${isSensitiveHeaderKey(entry.key) ? "<redacted>" : entry.value}',
+      '${entry.key}=${isSensitiveHeaderKey(entry.key) ? "<redacted>" : redactLogText(entry.value)}',
     );
   }
   parts.sort();
@@ -1677,7 +1704,7 @@ String redactLogText(String line) {
   output = output.replaceAllMapped(
     RegExp(
       r'\b((?:cookie|set-cookie|authorization|proxy-authorization)'
-      r'\s*[:=]\s*)([^;\r\n]+)',
+      r'\s*[:=]\s*)(?!<redacted>|&lt;redacted(?:>|&gt;))([^;\r\n]+)',
       caseSensitive: false,
     ),
     (match) => '${match.group(1)}<redacted>',
@@ -1695,7 +1722,9 @@ String redactLogText(String line) {
   // 3) URL query 中的敏感键值（含签名参数）。
   output = output.replaceAllMapped(
     RegExp(
-      r'([?&](?:' + _sensitiveQueryNames + r')=)(?!<redacted>|&lt;redacted(?:>|&gt;))([^&#\s]*)',
+      r'([?&](?:' +
+          _sensitiveQueryNames +
+          r')=)(?!<redacted>|&lt;redacted(?:>|&gt;))([^&#\s]*)',
       caseSensitive: false,
     ),
     (match) => '${match.group(1)}<redacted>',

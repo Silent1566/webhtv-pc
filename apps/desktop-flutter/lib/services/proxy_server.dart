@@ -22,6 +22,7 @@ import 'dart:typed_data' show BytesBuilder;
 
 import '../core/ad_rules.dart';
 import '../core/proxy_policy.dart';
+import '../core/playback_diagnostics.dart' show MediaFormat;
 import 'log_service.dart';
 
 /// 代理请求结果，供调用方断言与诊断。
@@ -146,6 +147,16 @@ class LocalProxyServer {
     final session = sessions.byToken(parts[1]);
     if (session == null) return null;
     return (sessionId: session.id, receivedBytes: session.receivedBytes);
+  }
+
+  /// Signature evidence for exactly this live proxy/session/path, never URL guesses.
+  MediaFormat? observedFormatFor(String playbackUrl) {
+    if (trafficFor(playbackUrl) == null) return null;
+    final uri = Uri.parse(playbackUrl);
+    final session = sessions.byToken(uri.pathSegments[1]);
+    return session?.hasObservedHlsPath(uri.path) == true
+        ? MediaFormat.hls
+        : null;
   }
 
   /// 构造会话内子资源（分片、子清单、密钥）的代理地址。
@@ -286,6 +297,7 @@ class LocalProxyServer {
     var current = target;
     var redirects = 0;
     HttpClientResponse? upstream;
+    int? lastUpstreamStatus;
     String? denyReason;
     int denyCode = 403;
 
@@ -364,6 +376,8 @@ class LocalProxyServer {
         break;
       }
 
+      lastUpstreamStatus = response.statusCode;
+
       // 重定向：手工跟随并逐跳复核（§11.3.1）。
       if (_isRedirect(response.statusCode)) {
         final location = response.headers.value(HttpHeaders.locationHeader);
@@ -412,6 +426,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: denyCode,
+        upstreamStatus: lastUpstreamStatus,
         elapsed: stopwatch.elapsed,
         range: range,
         note: denyReason ?? 'denied',
@@ -430,6 +445,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: 502,
+        upstreamStatus: upstream.statusCode,
         elapsed: stopwatch.elapsed,
         range: range,
         note: 'upstream-html',
@@ -448,6 +464,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: 429,
+        upstreamStatus: upstream.statusCode,
         elapsed: stopwatch.elapsed,
         range: range,
         note: 'session-limit',
@@ -459,16 +476,23 @@ class LocalProxyServer {
     final response = request.response;
     response.statusCode = upstream.statusCode;
 
-    final isPlaylist = HlsPlaylistRewriter.looksLikePlaylist(
-      contentType,
-      target.toString(),
-    );
+    // MIME/扩展名不是可靠证据：后缀为空的 text/plain HLS 会被 mpv 当作
+    // 普通播放列表，首个 TS 就成了“整部影片”（例如总时长只剩 6 秒）。
+    // 只探测完整、未压缩的 GET 实体；部分 Range/HEAD 保持上游字节语义。
+    var bodyStream = upstream as Stream<List<int>>;
+    var isPlaylist = false;
+    if (request.method != 'HEAD' && _canInspectPlaylist(upstream)) {
+      final probe = await _inspectPlaylist(bodyStream);
+      isPlaylist = probe.isPlaylist;
+      if (!isPlaylist) session.clearHlsPath(request.uri.path);
+      bodyStream = probe.body;
+    }
 
     if (isPlaylist) {
       // 清单必须整体读取后重写，保证子清单/分片 URL 走同一会话（§11.4）。
-      final body = await _readAll(upstream);
+      final body = await _readAll(bodyStream);
       session.recordReceivedBytes(body.length);
-      final originalText = utf8.decode(body, allowMalformed: true);
+      final originalText = utf8.decode(body, allowMalformed: true).trimLeft();
       final evidence = collectAdPlaylistEvidence(originalText, current);
       if (!evidence.isEmpty) {
         _mediaPlaylists[session.fingerprint] = AiPlaylistSnapshot(
@@ -494,7 +518,7 @@ class LocalProxyServer {
       );
       final rewritten = HlsPlaylistRewriter.rewrite(
         cleaned.text,
-        target,
+        current,
         (child) => _proxify(session, child),
       );
       final bytes = utf8.encode(rewritten);
@@ -525,12 +549,15 @@ class LocalProxyServer {
         charset: 'utf-8',
       );
       response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
+      session.recordHlsPath(request.uri.path);
       response.add(bytes);
       await response.close();
       _record(
         session,
         target,
         statusCode: upstream.statusCode,
+        upstreamStatus: upstream.statusCode,
+        downstreamStatus: response.statusCode,
         bytes: bytes.length,
         elapsed: stopwatch.elapsed,
         range: range,
@@ -542,13 +569,16 @@ class LocalProxyServer {
     }
 
     _copySafeHeaders(response, upstream, contentLength: upstream.contentLength);
+    response.bufferOutput = false;
     var bytes = 0;
     try {
-      await for (final chunk in upstream) {
-        bytes += chunk.length;
-        session.recordReceivedBytes(chunk.length);
-        response.add(chunk);
-      }
+      await response.addStream(
+        bodyStream.map((chunk) {
+          bytes += chunk.length;
+          session.recordReceivedBytes(chunk.length);
+          return chunk;
+        }),
+      );
       await response.close();
     } catch (error) {
       // 异常流必须被关闭（§11.4）。
@@ -561,6 +591,8 @@ class LocalProxyServer {
       session,
       target,
       statusCode: upstream.statusCode,
+      upstreamStatus: upstream.statusCode,
+      downstreamStatus: response.statusCode,
       bytes: bytes,
       elapsed: stopwatch.elapsed,
       range: range,
@@ -669,12 +701,16 @@ class LocalProxyServer {
       HttpHeaders.acceptRangesHeader,
       HttpHeaders.lastModifiedHeader,
       HttpHeaders.etagHeader,
+      HttpHeaders.contentEncodingHeader,
     ];
     // 只复制已知安全的头，避免把上游 Set-Cookie 等透传给播放器。
     for (final name in [...alwaysPass, if (!synthesizedBody) ...upstreamOnly]) {
       final value = upstream.headers.value(name);
       if (value == null) continue;
       response.headers.set(name, value);
+    }
+    if (!synthesizedBody && contentLength >= 0) {
+      response.contentLength = contentLength;
     }
     if (!synthesizedBody &&
         upstream.statusCode == 206 &&
@@ -706,7 +742,63 @@ class LocalProxyServer {
     }
   }
 
-  Future<List<int>> _readAll(HttpClientResponse response) async {
+  static bool _canInspectPlaylist(HttpClientResponse response) {
+    final encoding = response.headers.value(HttpHeaders.contentEncodingHeader);
+    if (encoding != null && encoding.toLowerCase() != 'identity') return false;
+    if (response.statusCode == HttpStatus.ok) return true;
+    if (response.statusCode != HttpStatus.partialContent) return false;
+    final range = response.headers.value(HttpHeaders.contentRangeHeader) ?? '';
+    final match = RegExp(r'^bytes 0-(\d+)/(\d+)$').firstMatch(range);
+    return match != null &&
+        int.parse(match.group(1)!) + 1 == int.parse(match.group(2)!);
+  }
+
+  Future<({bool isPlaylist, Stream<List<int>> body})> _inspectPlaylist(
+    Stream<List<int>> body,
+  ) async {
+    final iterator = StreamIterator(body);
+    final chunks = <List<int>>[];
+    final prefix = <int>[];
+    bool? isPlaylist;
+    try {
+      while (isPlaylist == null &&
+          prefix.length < 256 &&
+          await iterator.moveNext().timeout(requestTimeout)) {
+        final chunk = iterator.current;
+        chunks.add(chunk);
+        for (final byte in chunk) {
+          prefix.add(byte);
+          isPlaylist = HlsPlaylistRewriter.sniffPlaylistPrefix(prefix);
+          if (isPlaylist != null || prefix.length == 256) break;
+        }
+      }
+    } catch (_) {
+      await iterator.cancel();
+      rethrow;
+    }
+    return (
+      isPlaylist: isPlaylist == true,
+      body: _replayBody(chunks, iterator),
+    );
+  }
+
+  static Stream<List<int>> _replayBody(
+    List<List<int>> chunks,
+    StreamIterator<List<int>> iterator,
+  ) async* {
+    try {
+      for (final chunk in chunks) {
+        yield chunk;
+      }
+      while (await iterator.moveNext()) {
+        yield iterator.current;
+      }
+    } finally {
+      await iterator.cancel();
+    }
+  }
+
+  Future<List<int>> _readAll(Stream<List<int>> response) async {
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response) {
       builder.add(chunk);
@@ -724,6 +816,7 @@ class LocalProxyServer {
   ) async {
     final response = request.response;
     response.statusCode = statusCode;
+    log.debug('代理拒绝 downstreamStatus=$statusCode', scope: 'proxy');
     response.headers.contentType = ContentType(
       'application',
       'json',
@@ -741,6 +834,8 @@ class LocalProxyServer {
     ProxySession session,
     Uri target, {
     required int statusCode,
+    int? upstreamStatus,
+    int? downstreamStatus,
     int bytes = 0,
     Duration elapsed = Duration.zero,
     String? range,
@@ -750,6 +845,8 @@ class LocalProxyServer {
       tokenFingerprint: session.fingerprint,
       targetHost: '${target.host}:${target.port}',
       statusCode: statusCode,
+      upstreamStatus: upstreamStatus,
+      downstreamStatus: downstreamStatus ?? statusCode,
       bytes: bytes,
       elapsed: elapsed,
       range: range,

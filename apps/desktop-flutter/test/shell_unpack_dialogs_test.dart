@@ -450,13 +450,17 @@ void main() {
       expect(items.first.selected, isTrue, reason: '默认勾选用户点的那个站点所属 jar');
       expect(items.last.stateLabel, '已解包');
       expect(items.last.selected, isFalse);
-      expect(items.last.disabled, isTrue);
+      expect(
+        items.last.disabled,
+        isFalse,
+        reason: '缓存 payload 仍需显式导入，但不必下载解包运行时',
+      );
 
-      // 已解包的站点不再被问。
+      // 缓存 payload 但尚未安装的站点仍能显式继续导入。
       state.debugStageShellUnpackForSite('csp_OLD');
-      expect(state.pendingShellUnpackForSite, 'csp_AT');
+      expect(state.pendingShellUnpackForSite, 'csp_OLD');
 
-      expect(state.takePendingShellUnpackForSite(), 'csp_AT');
+      expect(state.takePendingShellUnpackForSite(), 'csp_OLD');
       expect(state.pendingShellUnpackForSite, isNull);
     });
   });
