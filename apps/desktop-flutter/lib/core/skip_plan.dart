@@ -40,7 +40,13 @@ abstract final class SkipKindBits {
   /// 要么依赖社区标注的准确度。开关都在设置页，用户自己开。
   static const int defaults = recap | intro | outro;
   static const int all =
-      recap | intro | outro | preview | postCredits | advertisement | intermission;
+      recap |
+      intro |
+      outro |
+      preview |
+      postCredits |
+      advertisement |
+      intermission;
   static const int none = 0;
 }
 
@@ -128,8 +134,10 @@ enum SkipKind {
       'intro' || 'opening' || 'op' => SkipKind.intro,
       'outro' || 'credits' || 'ending' || 'ed' => SkipKind.outro,
       'preview' || 'next_episode' || 'next' || 'trailer' => SkipKind.preview,
-      'post_credits' || 'post_credit' || 'postcredits' || 'extras' =>
-        SkipKind.postCredits,
+      'post_credits' ||
+      'post_credit' ||
+      'postcredits' ||
+      'extras' => SkipKind.postCredits,
       'advertisement' || 'ad' || 'ads' => SkipKind.advertisement,
       'intermission' || 'interval' => SkipKind.intermission,
       _ => null,
@@ -185,6 +193,7 @@ class RawSkipSegment {
     required this.kind,
     required this.provider,
     this.identity = '',
+    this.versionId = '',
     this.startMs,
     this.endMs,
     this.referenceDurationMs = 0,
@@ -199,6 +208,10 @@ class RawSkipSegment {
 
   /// 数据源内部稳定身份；空则由 [SkipSegment] 按字段拼一个。
   final String identity;
+
+  /// 同一来源中的播放版本；同版的片头、片中段和片尾必须一起选择。
+  /// 空字符串表示来源未提供版本信息，不可仅凭参考时长拆成不同版本。
+  final String versionId;
 
   final int? startMs;
   final int? endMs;
@@ -328,7 +341,7 @@ class SkipPlan {
     if (raw.isEmpty) return empty;
     final openings = <SkipSegment>[];
     final endings = <SkipSegment>[];
-    for (final item in raw) {
+    for (final item in _preferClosestVersion(raw, durationMs)) {
       final segment = _resolveOne(item, durationMs);
       if (segment == null) continue;
       _addDeduped(segment.isEnding ? endings : openings, segment);
@@ -339,6 +352,60 @@ class SkipPlan {
       ..sort((a, b) => a.startMs.compareTo(b.startMs));
     if (all.isEmpty) return empty;
     return SkipPlan._(List<SkipSegment>.unmodifiable(all));
+  }
+
+  /// 多版本按来源及显式版本一起选，不能按每段参考时长拆散片头、广告和片尾。
+  /// 没有版本信息的标记仍按原规则处理；时长未知或两版同样接近时不猜选。
+  static List<RawSkipSegment> _preferClosestVersion(
+    List<RawSkipSegment> raw,
+    int durationMs,
+  ) {
+    final kept = <RawSkipSegment>[];
+    final byProvider = <String, Map<String, List<RawSkipSegment>>>{};
+    for (final item in raw) {
+      final version = item.versionId.trim();
+      if (version.isEmpty) {
+        kept.add(item);
+        continue;
+      }
+      byProvider
+          .putIfAbsent(item.provider, () => {})
+          .putIfAbsent(version, () => [])
+          .add(item);
+    }
+    for (final versions in byProvider.values) {
+      final viable = [
+        for (final group in versions.values)
+          if (group.any((item) => _resolveOne(item, durationMs) != null)) group,
+      ];
+      if (viable.length == 1) {
+        kept.addAll(viable.single);
+        continue;
+      }
+      if (durationMs <= 0) continue;
+      List<RawSkipSegment>? selected;
+      int? closest;
+      var ambiguous = false;
+      for (final group in viable) {
+        final references = {for (final item in group) item.referenceDurationMs};
+        if (references.length != 1 || references.single <= 0) {
+          // 还有一个可用版本无法比较时，不能声称其余版本是唯一最接近。
+          selected = null;
+          ambiguous = true;
+          break;
+        }
+        final distance = (references.single - durationMs).abs();
+        if (closest == null || distance < closest) {
+          selected = group;
+          closest = distance;
+          ambiguous = false;
+        } else if (distance == closest) {
+          ambiguous = true;
+        }
+      }
+      if (selected != null && !ambiguous) kept.addAll(selected);
+    }
+    return kept;
   }
 
   /// 叠上用户的手动标记（手动优先）。
@@ -553,7 +620,14 @@ class SkipPlan {
     for (var i = 0; i < segments.length; i++) {
       final existing = segments[i];
       if (!_overlaps(existing, segment)) continue;
-      if (segment.betterThan(existing)) segments[i] = segment;
+      if (existing.openEnded &&
+          segment.openEnded &&
+          existing.kind == segment.kind &&
+          existing.startMs != segment.startMs) {
+        if (segment.startMs > existing.startMs) segments[i] = segment;
+      } else if (segment.betterThan(existing)) {
+        segments[i] = segment;
+      }
       return;
     }
     segments.add(segment);
@@ -563,8 +637,15 @@ class SkipPlan {
   /// 连跳两次。开头与尾部之间不并——它们物理上相隔整集。
   static bool _overlaps(SkipSegment a, SkipSegment b) {
     if (a.kind.dedupeGroup != b.kind.dedupeGroup) return false;
+    if (a.isEnding && a.kind != b.kind) return false;
     // 无界段的 end 已被拉到文件结尾，拿它算重叠会把紧随其后的段整个吞掉
     //（片尾吞预告）。这种情况只按起点判断。
+    if (a.openEnded && b.openEnded && a.kind == b.kind) {
+      // 两家各自给「一直放到文件末尾」的同一类结尾（片尾对片尾），起点不同也
+      // 描述同一个结尾：并存会画出两条同色带。只取更晚的起点——少跳更安全。
+      // 不同类型（片尾 vs 彩蛋）语义不同，仍按原规则判定。
+      return true;
+    }
     if (a.openEnded || b.openEnded) {
       return _withinDistance(a.startMs, b.startMs, skipSameStartToleranceMs);
     }
@@ -588,6 +669,7 @@ abstract final class SkipSourceBits {
   static const int introdb = 1;
   static const int theintrodb = 1 << 1;
   static const int todb = 1 << 2;
+
   /// 出厂默认启用的源；当前恰好等于「全部已知源」。
   static const int defaults = introdb | theintrodb | todb;
 
@@ -648,8 +730,7 @@ class SkipQuery {
   /// 没有任何可用查询条件：不是失败，是确定的「查不了」。
   bool get canLookup => hasTmdb || hasImdbEpisode;
 
-  String get cacheKey =>
-      '$tmdbId|${imdbId.trim()}|$mediaType|$season|$episode';
+  String get cacheKey => '$tmdbId|${imdbId.trim()}|$mediaType|$season|$episode';
 
   @override
   String toString() =>

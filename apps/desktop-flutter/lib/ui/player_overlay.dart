@@ -18,10 +18,13 @@ library;
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show ClipOp;
 
 import 'package:flutter/material.dart';
 
 import '../core/player_buttons.dart';
+import '../core/skip_plan.dart';
+import '../core/skip_segment_colors.dart';
 import 'common.dart';
 import 'player_controller.dart' show formatByteRate;
 import 'scroll_behavior.dart';
@@ -218,6 +221,9 @@ class PlayerProgressSlider extends StatefulWidget {
     this.thumbnailPreviewEnabled = false,
     this.thumbnailProvider,
     this.previewSourceKey,
+    this.skipSegments = const [],
+    this.skipSegmentColors = const SkipSegmentColors(),
+    this.showSkipSegmentHighlights = true,
   });
 
   final Duration position;
@@ -245,6 +251,9 @@ class PlayerProgressSlider extends StatefulWidget {
   final bool thumbnailPreviewEnabled;
   final Future<Uint8List?> Function(Duration)? thumbnailProvider;
   final Object? previewSourceKey;
+  final List<SkipSegment> skipSegments;
+  final SkipSegmentColors skipSegmentColors;
+  final bool showSkipSegmentHighlights;
 
   @override
   State<PlayerProgressSlider> createState() => _PlayerProgressSliderState();
@@ -266,6 +275,10 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
   Uint8List? _previewBytes;
   bool _previewLoading = false;
   double _previewX = 0;
+  List<_TimelineSegment> _hoveredSegments = const [];
+
+  List<_TimelineSegment> get _timelineSegments =>
+      _TimelineSegment.resolve(widget.skipSegments, widget.duration);
 
   bool get _canPreview =>
       widget.thumbnailPreviewEnabled &&
@@ -278,7 +291,8 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
     if (oldWidget.previewSourceKey != widget.previewSourceKey ||
         oldWidget.thumbnailPreviewEnabled != widget.thumbnailPreviewEnabled ||
         oldWidget.thumbnailProvider != widget.thumbnailProvider ||
-        oldWidget.duration != widget.duration) {
+        oldWidget.duration != widget.duration ||
+        oldWidget.skipSegments != widget.skipSegments) {
       _hidePreview(duringBuild: true);
     }
   }
@@ -294,6 +308,7 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
     _previewDebounce?.cancel();
     _request++;
     _previewTarget = null;
+    _hoveredSegments = const [];
     _previewBytes = null;
     _previewLoading = false;
     if (duringBuild) {
@@ -308,7 +323,14 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
 
   void _hoverPreview(Offset globalPosition) {
     final rect = _trackRect;
-    if (!_canPreview || rect == null || rect.width <= 0) return;
+    if (widget.duration <= Duration.zero || rect == null || rect.width <= 0) {
+      return;
+    }
+    if (!_canPreview &&
+        (globalPosition.dx < rect.left || globalPosition.dx > rect.right)) {
+      _hidePreview();
+      return;
+    }
     var fraction = ((globalPosition.dx - rect.left) / rect.width).clamp(
       0.0,
       1.0,
@@ -325,7 +347,14 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
 
   void _showPreview(Duration target) {
     final rect = _trackRect;
-    if (!_canPreview || rect == null) return;
+    if (widget.duration <= Duration.zero || rect == null) return;
+    final matches = _timelineSegments
+        .where((segment) => segment.contains(target.inMilliseconds))
+        .toList();
+    if (!_canPreview && matches.isEmpty) {
+      _hidePreview();
+      return;
+    }
     var fraction = target.inMilliseconds / widget.duration.inMilliseconds;
     if (Directionality.of(context) == TextDirection.rtl) {
       fraction = 1 - fraction;
@@ -334,17 +363,19 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
     if (_previewTarget == target && _previewPortal.isShowing) return;
     _previewDebounce?.cancel();
     final request = ++_request;
-    final provider = widget.thumbnailProvider!;
+    final provider = widget.thumbnailProvider;
     setState(() {
       _previewTarget = target;
       _previewBytes = null;
-      _previewLoading = true;
+      _previewLoading = _canPreview;
+      _hoveredSegments = matches;
     });
     _previewPortal.show();
+    if (!_canPreview) return;
     _previewDebounce = Timer(const Duration(milliseconds: 200), () async {
       Uint8List? bytes;
       try {
-        bytes = await provider(target);
+        bytes = await provider!(target);
       } catch (_) {
         bytes = null;
       }
@@ -369,7 +400,10 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
       192.0,
       math.max(0.0, overlayBox.size.width - AppSpace.lg),
     );
-    final height = width * 9 / 16 + 28;
+    final segmentHeight = _hoveredSegments.length * 28.0;
+    final height = _canPreview
+        ? width * 9 / 16 + 28 + segmentHeight
+        : segmentHeight + AppSpace.sm;
     final x = overlayBox.globalToLocal(Offset(_previewX, 0)).dx;
     final left = (x - width / 2).clamp(
       0.0,
@@ -377,12 +411,42 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
     );
     final top = math.max(0.0, sliderTop - height - AppSpace.sm);
     final theme = Theme.of(context);
-    final seconds = _previewTarget!.inSeconds;
-    final mm = (seconds ~/ 60 % 60).toString().padLeft(2, '0');
-    final ss = (seconds % 60).toString().padLeft(2, '0');
-    final time = seconds >= 3600
-        ? '${seconds ~/ 3600}:$mm:$ss'
-        : '${(seconds ~/ 60).toString().padLeft(2, '0')}:$ss';
+    final time = _timelineTime(_previewTarget!.inMilliseconds);
+    final segmentRows = [
+      for (final segment in _hoveredSegments)
+        SizedBox(
+          height: 28,
+          child: Center(
+            child: Text(
+              '${segment.kind.label}  '
+              '${_timelineTime(segment.startMs)}–${_timelineTime(segment.endMs)}',
+              style: theme.textTheme.labelSmall,
+            ),
+          ),
+        ),
+    ];
+    if (!_canPreview) {
+      return Positioned(
+        left: left.toDouble(),
+        top: top,
+        width: width,
+        height: height,
+        child: IgnorePointer(
+          child: DecoratedBox(
+            key: const ValueKey('player-skip-segment-preview'),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainer,
+              border: Border.all(color: theme.colorScheme.outline),
+              borderRadius: AppRadius.smAll,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+              child: Column(children: segmentRows),
+            ),
+          ),
+        ),
+      );
+    }
     Widget feedback(String text) => Center(
       child: Text(
         text,
@@ -432,6 +496,7 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
                     ),
                   ),
                 ),
+                ...segmentRows,
               ],
             ),
           ),
@@ -534,6 +599,9 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
             trackShape: _MeasuredPreviewTrack(
               shape,
               (rect) => _trackRect = rect,
+              widget.showSkipSegmentHighlights ? _timelineSegments : const [],
+              widget.skipSegmentColors,
+              Theme.of(context).colorScheme.onSurface,
             ),
           ),
           child: slider,
@@ -543,11 +611,68 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
   }
 }
 
+String _timelineTime(int milliseconds) {
+  final seconds = milliseconds ~/ 1000;
+  final mm = (seconds ~/ 60 % 60).toString().padLeft(2, '0');
+  final ss = (seconds % 60).toString().padLeft(2, '0');
+  return seconds >= 3600
+      ? '${seconds ~/ 3600}:$mm:$ss'
+      : '${(seconds ~/ 60).toString().padLeft(2, '0')}:$ss';
+}
+
+class _TimelineSegment {
+  const _TimelineSegment(this.kind, this.startMs, this.endMs, this.durationMs);
+  final SkipKind kind;
+  final int startMs;
+  final int endMs;
+  final int durationMs;
+  double get startFraction => startMs / durationMs;
+  double get endFraction => endMs / durationMs;
+
+  bool contains(int targetMs) =>
+      targetMs >= startMs &&
+      (targetMs < endMs || targetMs == durationMs && endMs == durationMs);
+
+  static List<_TimelineSegment> resolve(
+    List<SkipSegment> segments,
+    Duration duration,
+  ) {
+    final durationMs = duration.inMilliseconds;
+    if (durationMs <= 0) return const [];
+    return [
+      for (final segment in segments)
+        if ((segment.openEnded ? durationMs : segment.endMs).clamp(
+              0,
+              durationMs,
+            ) >
+            segment.startMs.clamp(0, durationMs))
+          _TimelineSegment(
+            segment.kind,
+            segment.startMs.clamp(0, durationMs),
+            (segment.openEnded ? durationMs : segment.endMs).clamp(
+              0,
+              durationMs,
+            ),
+            durationMs,
+          ),
+    ];
+  }
+}
+
 /// Delegates drawing unchanged and observes the framework's actual track rectangle.
 class _MeasuredPreviewTrack extends SliderTrackShape {
-  const _MeasuredPreviewTrack(this.delegate, this.onRect);
+  const _MeasuredPreviewTrack(
+    this.delegate,
+    this.onRect,
+    this.segments,
+    this.colors,
+    this.outlineColor,
+  );
   final SliderTrackShape delegate;
   final ValueChanged<Rect> onRect;
+  final List<_TimelineSegment> segments;
+  final SkipSegmentColors colors;
+  final Color outlineColor;
 
   @override
   bool get isRounded => delegate.isRounded;
@@ -584,25 +709,138 @@ class _MeasuredPreviewTrack extends SliderTrackShape {
     bool isDiscrete = false,
     required TextDirection textDirection,
   }) {
-    getPreferredRect(
+    final rect = getPreferredRect(
       parentBox: parentBox,
       offset: offset,
       sliderTheme: sliderTheme,
       isEnabled: isEnabled,
       isDiscrete: isDiscrete,
     );
-    delegate.paint(
-      context,
-      offset,
-      parentBox: parentBox,
-      sliderTheme: sliderTheme,
-      enableAnimation: enableAnimation,
-      thumbCenter: thumbCenter,
-      secondaryOffset: secondaryOffset,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-      textDirection: textDirection,
-    );
+    Rect segmentRect(_TimelineSegment segment) {
+      final start = segment.startFraction;
+      final end = segment.endFraction;
+      final left = textDirection == TextDirection.rtl ? 1 - end : start;
+      final right = textDirection == TextDirection.rtl ? 1 - start : end;
+      return Rect.fromLTRB(
+        rect.left + rect.width * left,
+        rect.top,
+        rect.left + rect.width * right,
+        rect.bottom,
+      );
+    }
+
+    final visible = segments;
+    if (visible.isNotEmpty) {
+      context.canvas.save();
+      for (final segment in visible) {
+        final band = segmentRect(segment);
+        context.canvas.clipRect(
+          Rect.fromLTRB(
+            band.left,
+            offset.dy,
+            band.right,
+            offset.dy + parentBox.size.height,
+          ),
+          clipOp: ClipOp.difference,
+          doAntiAlias: false,
+        );
+      }
+    }
+    void paintTrack(SliderThemeData theme, {bool withBuffer = true}) {
+      final nativePainter = switch (delegate) {
+        RoundedRectSliderTrackShape shape => shape.paint,
+        GappedSliderTrackShape shape => shape.paint,
+        _ => null,
+      };
+      if (visible.isNotEmpty && nativePainter != null) {
+        nativePainter(
+          context,
+          offset,
+          parentBox: parentBox,
+          sliderTheme: theme,
+          enableAnimation: enableAnimation,
+          thumbCenter: thumbCenter,
+          secondaryOffset: withBuffer ? secondaryOffset : null,
+          isEnabled: isEnabled,
+          isDiscrete: isDiscrete,
+          textDirection: textDirection,
+          additionalActiveTrackHeight: 0,
+        );
+      } else {
+        delegate.paint(
+          context,
+          offset,
+          parentBox: parentBox,
+          sliderTheme: theme,
+          enableAnimation: enableAnimation,
+          thumbCenter: thumbCenter,
+          secondaryOffset: withBuffer ? secondaryOffset : null,
+          isEnabled: isEnabled,
+          isDiscrete: isDiscrete,
+          textDirection: textDirection,
+        );
+      }
+    }
+
+    paintTrack(sliderTheme);
+    if (visible.isNotEmpty) context.canvas.restore();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    // Native colors must not remain beneath antialiased segment edges.
+    for (final segment in visible) {
+      final band = segmentRect(segment);
+      context.canvas.save();
+      // Only clip horizontally: clipping the rail's fractional Y edges would
+      // apply coverage twice and make highlights thinner than the native rail.
+      context.canvas.clipRect(
+        Rect.fromLTRB(
+          band.left,
+          offset.dy,
+          band.right,
+          offset.dy + parentBox.size.height,
+        ),
+        doAntiAlias: false,
+      );
+      final color = Color(colors.colorFor(segment.kind));
+      // Buffer must not composite with the marker at the band edge.
+      paintTrack(
+        withBuffer: false,
+        sliderTheme.copyWith(
+          activeTrackColor: color,
+          inactiveTrackColor: color,
+          secondaryActiveTrackColor: color,
+          disabledActiveTrackColor: color,
+          disabledInactiveTrackColor: color,
+          disabledSecondaryActiveTrackColor: color,
+        ),
+      );
+      final luminance = color.computeLuminance();
+      final trackLuminance = sliderTheme.inactiveTrackColor!.computeLuminance();
+      final contrast =
+          (math.max(luminance, trackLuminance) + 0.05) /
+          (math.min(luminance, trackLuminance) + 0.05);
+      if (contrast < 3) {
+        final edgePaint = Paint()..color = outlineColor;
+        context.canvas.drawRect(
+          Rect.fromLTRB(
+            band.left,
+            band.top,
+            math.min(band.right, band.left + 1),
+            band.bottom,
+          ),
+          edgePaint,
+        );
+        context.canvas.drawRect(
+          Rect.fromLTRB(
+            math.max(band.left, band.right - 1),
+            band.top,
+            band.right,
+            band.bottom,
+          ),
+          edgePaint,
+        );
+      }
+      context.canvas.restore();
+    }
   }
 }
 

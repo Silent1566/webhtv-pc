@@ -45,6 +45,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 import 'package:webhtv_pc/ui/osd_settings_page.dart';
+import 'package:webhtv_pc/ui/intro_skip_options_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/settings_navigation.dart';
@@ -261,6 +262,23 @@ void main() {
       find.byKey(const ValueKey('settings-search-thread')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('播放分类的跳过片段入口使用新名称并打开同名设置', (tester) async {
+    await pumpSettings(tester);
+    await selectSettingsCategory(tester, 'playback');
+    final entry = find.byKey(const ValueKey('settings-skip-open'));
+    await tester.ensureVisible(entry);
+    expect(
+      find.descendant(of: entry, matching: find.text('跳过片段')),
+      findsOneWidget,
+    );
+    expect(find.text('片头片尾跳过'), findsNothing);
+    await tester.tap(entry);
+    await settle(tester);
+    expect(find.byType(IntroSkipOptionsPage), findsOneWidget);
+    expect(find.text('跳过片段'), findsOneWidget);
+    expect(find.text('远端识别可跳过片段'), findsOneWidget);
   });
 
   testWidgets('点击类别切换：当前类别独占，且选中语义跟着走', (tester) async {
