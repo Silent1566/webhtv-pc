@@ -199,13 +199,6 @@ Future<void> _drag(WidgetTester tester, int target) async {
   await flush(tester);
 }
 
-/// 多推几轮：CI 机器比本地慢，固定 `flush` 次数会把「还没轮到」当成失败。
-Future<void> _pump(WidgetTester tester, int rounds) async {
-  for (var i = 0; i < rounds; i++) {
-    await flush(tester);
-  }
-}
-
 /// 等**真实信号**成立：门控 open 之后还有真实时间的异步收尾（首帧轮询、
 /// 字幕/弹幕装配），按假时钟数 pump 次数在重载 runner 上会先于它就绪。
 /// 这里每轮让出 20ms 真实时间，最多 2s；超时后仍由调用方的断言报失败。
