@@ -669,6 +669,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       vodId: _request.vodId,
     );
     _controller = PlayerController(
+      observedMediaFormatFor: widget.state.proxyObservedFormatFor,
       initialVolume: widget.state.hasExplicitPlayerVolume
           ? widget.state.playerVolume
           : null,
@@ -975,8 +976,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool _isSkipSeekJustNow() {
     final at = _skipSeekAt;
     if (at == null) return false;
-    return DateTime.now().difference(at).inMilliseconds <
-        _skipSeekWindowMs;
+    return DateTime.now().difference(at).inMilliseconds < _skipSeekWindowMs;
   }
 
   /// 记录位置采样是否「跳变」，并在 `completed` 落回 false 时作废伪结束判定。
@@ -1767,7 +1767,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 起播已经定位到 [intent.startPosition]；只有重算结果不同且**落在已缓冲
       // 区间内**时才补一次 seek。跨缓冲的 seek 会新建第二条连接被服务端 429，
       // 表现为「停住 + eof-reached」，绝不能在这里发。
-      final alreadyPositioned = isSameStartPosition(intent.startPosition, start);
+      final alreadyPositioned = isSameStartPosition(
+        intent.startPosition,
+        start,
+      );
       if (alreadyPositioned) {
         // 起播定位写在 mpv 的 `start` 选项里，生效与否只有引擎自己知道：
         // 落地位置明显偏离就说明这次定位没吃上（此时是从头播，而不是跳转失败）。
@@ -2376,9 +2379,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!mounted || generation != _mediaGeneration) return;
     // 阈值仍然前置过滤：低于阈值只说明「标题不像」，不能因为"恰好载得动"
     // 就把无关弹幕记成本集的匹配（记忆一旦写下会一直命中）。
-    final ranked = rankDanmakuEntries(entries: entries, query: matchQuery)
-        .where((entry) => entry.score >= kDanmakuAutoPickThreshold)
-        .toList();
+    final ranked = rankDanmakuEntries(
+      entries: entries,
+      query: matchQuery,
+    ).where((entry) => entry.score >= kDanmakuAutoPickThreshold).toList();
     if (ranked.isEmpty) return;
     var attempted = 0;
     // 多来源候选里可能有空源：依次试到第一条**真的载入到弹幕**的候选，
@@ -2732,8 +2736,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         currentUrl: source.url,
         itemCount: _liveItems.length,
         error: _danmakuError,
-        statusText:
-            _liveStatus ?? (_danmakuError != null ? '连接失败' : '已连接'),
+        statusText: _liveStatus ?? (_danmakuError != null ? '连接失败' : '已连接'),
       );
     }
     // 点播分支不经过直播会话；不先停掉会继续推流并渲染到新弹幕上。
@@ -3205,6 +3208,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final rate = previous.rate;
       previous.removeListener(_onControllerChanged);
       _controller = PlayerController(
+        observedMediaFormatFor: widget.state.proxyObservedFormatFor,
         initialVolume: volume.volume,
         initialResumeVolume: volume.resumeVolume,
         onVolumeChanged: _rememberVolume,
@@ -5892,10 +5896,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 顺序是 seek → play（与 [_replayCurrent] 一致）：先 play 再 seek 会让引擎
   /// 在旧位置先播一帧再跳，观感上是一次"闪回"。
-  Future<void> _commitDragSeek(
-    Duration target, {
-    required bool resume,
-  }) async {
+  Future<void> _commitDragSeek(Duration target, {required bool resume}) async {
     final controller = _controller;
     try {
       // 走统一跳转通道：缓冲内同连接直接 seek；缓冲外必须重开并在打开时定位
@@ -5917,10 +5918,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void _applyDragPausePlayback(Future<void> action) {
     unawaited(
       action.catchError((Object error) {
-        widget.state.log.warning(
-          '拖动进度条时切换播放状态失败：$error',
-          scope: 'player',
-        );
+        widget.state.log.warning('拖动进度条时切换播放状态失败：$error', scope: 'player');
       }),
     );
   }
@@ -6069,10 +6067,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     unawaited(() async {
       if (!mounted) return;
       final applied = await _enqueueWrite(
-        () =>
-            _controller.applyMpvProperties({
-              'af': enabled ? audioNormalizationAf : '',
-            }),
+        () => _controller.applyMpvProperties({
+          'af': enabled ? audioNormalizationAf : '',
+        }),
       );
       if (!mounted) return;
       if (!applied) {
@@ -6535,6 +6532,12 @@ class _PlayerErrorOverlay extends StatelessWidget {
 @visibleForTesting
 bool debugOsdTickerRunning(State<PlayerPage> state) =>
     (state as _PlayerPageState)._osdTimer?.isActive ?? false;
+
+/// 仅供测试：读取当前控制器的格式观测委托，不触发播放。
+@visibleForTesting
+MediaFormat? Function(String)? debugPlayerObservedMediaFormatFor(
+  State<PlayerPage> state,
+) => (state as _PlayerPageState)._controller.observedMediaFormatFor;
 
 /// 仅供测试：控制浮层当前是否可见（`design/01` §4.4）。
 ///

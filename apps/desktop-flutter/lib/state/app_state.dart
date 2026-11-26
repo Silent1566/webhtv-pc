@@ -295,12 +295,11 @@ typedef CspProbeRunner = Future<CspProbeReport> Function(AppConfig config);
 
 /// 后台自动安装 runner：除报告外还要把逐 jar 的 [onProgress]、逐站点的 [onEntry]
 /// 交回状态层（导入页据此显示真实进度）。
-typedef CspProvisionRunner =
-    Future<CspProbeReport> Function(
-      AppConfig config, {
-      void Function(ShellUnpackTick tick)? onProgress,
-      void Function(CspProbeEntry entry)? onEntry,
-    });
+typedef CspProvisionRunner = Future<CspProbeReport> Function(
+  AppConfig config, {
+  void Function(ShellUnpackTick tick)? onProgress,
+  void Function(CspProbeEntry entry)? onEntry,
+});
 
 /// 后台自动安装的**只读**进度（导入页按它显示「正在自动安装站源 12/78」）。
 ///
@@ -615,6 +614,7 @@ class AppState extends ChangeNotifier
       jsHostPath: _jsSidecarHostPath,
       jvmHostPath: _jvmSidecarHostPath,
       cspBinding: _cspBinding,
+      onAvailabilityChanged: _onSiteAvailabilityChanged,
     );
   }
 
@@ -711,6 +711,7 @@ class AppState extends ChangeNotifier
   int followingViewIndex = 0;
 
   late final CatHttpClient _catHttpClient = CatHttpClient(
+    client: _injectedHttpClient,
     debugLog: _spiderDebugLog,
   );
   late final SpiderRouter _router;
@@ -812,12 +813,13 @@ class AppState extends ChangeNotifier
 
   AppDatabase? _database;
 
-  /// 直连 js/py 站点自动注册器（Phase 9 P1-7）。每次调用新建，内部无状态。
-  DirectSpiderRegistrar _directRegistrar() => DirectSpiderRegistrar(
-    root: _spiderRegistry.root,
-    registry: _spiderRegistry,
-    log: log,
-  );
+  late final DirectSpiderRegistrar _directRegistrarInstance =
+      DirectSpiderRegistrar(
+        root: _spiderRegistry.root,
+        registry: _spiderRegistry,
+        log: log,
+        client: _injectedHttpClient,
+      );
 
   /// 扫描配置里的直连 js/py 站点并注册（幂等；哈希一致不重复下载）。
   Future<int> registerDirectSpiders() async {
@@ -2267,12 +2269,14 @@ class AppState extends ChangeNotifier
   /// [cspProvisionSummary]。
   CspProvisionProgress get cspProvisionProgress =>
       identical(_cspProvisionConfig, effectiveConfig)
-          ? _cspProvisionProgress
-          : const CspProvisionProgress();
+      ? _cspProvisionProgress
+      : const CspProvisionProgress();
 
   /// 最近一轮自动安装的结果摘要（结束后保留一条，下一轮开始时覆盖）。
   String? get cspProvisionSummary =>
-      identical(_cspProvisionConfig, effectiveConfig) ? _cspProvisionSummary : null;
+      identical(_cspProvisionConfig, effectiveConfig)
+      ? _cspProvisionSummary
+      : null;
   AppConfig? get config => _config;
   SiteService? get siteService => _siteService;
 
@@ -2756,7 +2760,11 @@ class AppState extends ChangeNotifier
         await _yieldBackgroundWork();
         if (_disposed) return <String, LocalSpider>{};
         final runner =
-            debugDirectProbeOverride ?? _directRegistrar().materialize;
+            debugDirectProbeOverride ??
+            (config) => _directRegistrarInstance.materialize(
+              config,
+              onRegistered: (local) => _publishDirectSite(config, local),
+            );
         return await runner(config);
       } finally {
         if (identical(_directRegistrationFlights[config], future)) {
@@ -2769,15 +2777,61 @@ class AppState extends ChangeNotifier
   }
 
   /// 等直连站源注册落定（仅当该站点确实依赖注册结果时调用）。
-  Future<void> _waitForDirectRegistration() async {
-    final pending = _directReady;
-    if (pending == null) return;
+  void _publishDirectSite(AppConfig config, LocalSpider local) {
+    if (_disposed ||
+        !identical(effectiveConfig, config) ||
+        identical(_router.directSpiders[local.key], local)) {
+      return;
+    }
+    _router.setDirectSpiders({..._router.directSpiders, local.key: local});
+    _siteItemsCache = null;
+    _notifyIfAlive();
+  }
+
+  final Expando<Map<String, Future<Map<String, LocalSpider>>>>
+  _directSiteFlights = Expando();
+
+  Future<Map<String, LocalSpider>>? _directSiteFlight(
+    AppConfig config,
+    Site site,
+  ) {
+    final work = _directSiteFlights[config] ??= {};
+    final pending = work[site.key];
+    if (pending != null) return pending;
+    if (_router.directSpiders.containsKey(site.key)) return null;
+    final source = debugDirectProbeOverride == null
+        ? _directRegistrarInstance.materializeSite(config, site).then((local) {
+            if (local != null) _publishDirectSite(config, local);
+            return <String, LocalSpider>{?local?.key: ?local};
+          })
+        : _directReady;
+    if (source == null) return null;
+    late final Future<Map<String, LocalSpider>> future;
+    future = source.whenComplete(() {
+      if (identical(work[site.key], future)) work.remove(site.key);
+      _siteItemsCache = null;
+      _notifyIfAlive();
+    });
+    work[site.key] = future;
+    _siteItemsCache = null;
+    _notifyIfAlive();
+    return future;
+  }
+
+  Future<bool> _waitForDirectRegistration([Site? site]) async {
+    final config = effectiveConfig;
+    final pending = site != null && config != null
+        ? _directSiteFlight(config, site)
+        : _directReady;
+    if (pending == null) return true;
     try {
       await pending.timeout(debugDirectReadyTimeout ?? _directReadyTimeout);
+      return true;
     } on TimeoutException {
-      log.warning('直连站源注册超时，按当前状态继续', scope: 'spider');
+      log.warning('直连站源注册超时，当前准备仍在后台继续', scope: 'spider');
+      return false;
     } catch (_) {
-      // 注册失败已由 _registerDirectSpidersQuietly 记日志；这里不吞掉后续加载。
+      return true;
     }
   }
 
@@ -2808,6 +2862,11 @@ class AppState extends ChangeNotifier
     if (pending != null) await pending;
     await _pythonEnvironment.idle;
     await _sidecarShutdown;
+    await _siteAvailabilityFlight;
+    await _router.availabilityIdle;
+    await _shellTargetsProbe;
+    await Future.wait(_shellDiscoveryWork);
+    await Future.wait(_currentCspWork.toList());
   }
 
   Future<void> refreshPythonEnvironment() async {
@@ -2897,18 +2956,35 @@ class AppState extends ChangeNotifier
     return future;
   }
 
+  final Map<String, int> _preparingSites = {};
+
   Future<void> _waitForPythonSite(Site site) async {
-    final kind = directSpiderKind(site);
-    final local = SpiderLocalBinding(registry: _spiderRegistry)
-        .resolve(site.api);
-    if (kind != DirectSpiderKind.py &&
-        kind != DirectSpiderKind.catVod &&
-        local?.manifest.runtime.toLowerCase().startsWith('python') != true) {
-      return;
+    _preparingSites.update(site.key, (count) => count + 1, ifAbsent: () => 1);
+    _siteItemsCache = null;
+    _notifyIfAlive();
+    try {
+      final kind = directSpiderKind(site);
+      final local = SpiderLocalBinding(registry: _spiderRegistry)
+          .resolve(site.api);
+      if (kind == DirectSpiderKind.py ||
+          kind == DirectSpiderKind.catVod ||
+          local?.manifest.runtime.toLowerCase().startsWith('python') == true) {
+        if (kind != null) await _waitForDirectRegistration(site);
+        await _preparePythonRuntimeQuietly(force: true);
+        if (pythonEnvironmentBusy) await _pythonEnvironment.refresh();
+      }
+      if (_disposed) return;
+      await _router.prepareAvailability([site], foreground: true);
+    } finally {
+      final count = (_preparingSites[site.key] ?? 1) - 1;
+      if (count == 0) {
+        _preparingSites.remove(site.key);
+      } else {
+        _preparingSites[site.key] = count;
+      }
+      _siteItemsCache = null;
+      _notifyIfAlive();
     }
-    if (kind != null) await _waitForDirectRegistration();
-    await _preparePythonRuntimeQuietly(force: true);
-    if (pythonEnvironmentBusy) await _pythonEnvironment.refresh();
   }
 
   Future<Map<String, LocalSpider>> _registerDirectSpidersQuietly(
@@ -2917,7 +2993,7 @@ class AppState extends ChangeNotifier
     try {
       final result = await _materializeDirectSpiders(config);
       if (_disposed || !identical(effectiveConfig, config)) return result;
-      _router.setDirectSpiders(result);
+      _router.setDirectSpiders({..._router.directSpiders, ...result});
       _notifyIfAlive();
       final retrySite = _directHomeRetrySite;
       final selected = _selectedSite;
@@ -3874,9 +3950,11 @@ class AppState extends ChangeNotifier
     if (cached != null &&
         identical(_siteItemsCacheConfig, config) &&
         _siteItemsCacheRevision == _router.siteRevision &&
+        _siteItemsAvailabilityVersion == _router.availabilityVersion &&
         _sameSiteOrder(_siteItemsCacheOrder, order)) {
       return cached;
     }
+    _prepareSiteAvailability(config);
     final items = <SiteListItem>[
       for (final site in config.sites)
         if (!site.hide)
@@ -3888,7 +3966,13 @@ class AppState extends ChangeNotifier
                 ? webHomeSiteAvailability
                 // §8.1:可用性判定必须区分「运行时未安装」与「站点不可用」,
                 // 因此这里用带注册表的实例方法，而不是静态 `classify`。
-                : _router.classifySite(site),
+                : (_preparingSites.containsKey(site.key) ||
+                      _directSiteFlights[config]?.containsKey(site.key) == true)
+                ? const SiteAvailability.preparing()
+                : _router.preparedAvailability(site) ??
+                      (site.type != 3
+                          ? SpiderRouter.classify(site)
+                          : const SiteAvailability.preparing()),
           ),
     ];
     // 手动顺序是**本地覆盖**，不改配置文件：未列入顺序的站点保持配置顺序
@@ -3919,9 +4003,61 @@ class AppState extends ChangeNotifier
   /// 与判定本身的分工：磁盘状态一改，写入方调
   /// [SpiderRouter.notifySiteFilesChanged]；运行时/直连/换配置由路由自己 +1。
   /// 因此缓存**不会**让判定落后于磁盘。
+  Future<void>? _siteAvailabilityFlight;
+  bool _siteAvailabilityNotificationPending = false;
+  AppConfig? _importAvailabilityConfig;
+  String? _importAvailabilityNotice;
+
+  void _onSiteAvailabilityChanged() {
+    if (_disposed || _siteAvailabilityNotificationPending) return;
+    _siteAvailabilityNotificationPending = true;
+    scheduleMicrotask(() {
+      _siteAvailabilityNotificationPending = false;
+      if (_disposed) return;
+      _siteItemsCache = null;
+      final config = effectiveConfig;
+      if (config != null &&
+          identical(_importAvailabilityConfig, config) &&
+          _notice == _importAvailabilityNotice) {
+        _notice = _importAvailabilityNotice =
+            '配置导入成功：${config.sites.length} 个站点（可用 $usableSiteCount 个）';
+      }
+      _notifyIfAlive();
+    });
+  }
+
+  void _prepareSiteAvailability(AppConfig config) {
+    if (_disposed ||
+        _siteAvailabilityFlight != null ||
+        config.sites.every(
+          (site) => _router.preparedAvailability(site) != null,
+        )) {
+      return;
+    }
+    late final Future<void> future;
+    future = _router
+        .prepareAvailability(config.sites)
+        .catchError((Object error) {
+          if (!_disposed) log.warning('站源运行时后台检查失败：$error', scope: 'spider');
+        })
+        .whenComplete(() {
+          if (!identical(_siteAvailabilityFlight, future)) return;
+          _siteAvailabilityFlight = null;
+          if (_disposed) return;
+          _siteItemsCache = null;
+          final current = effectiveConfig;
+          if (current != null && !identical(current, config)) {
+            _prepareSiteAvailability(current);
+          }
+          _notifyIfAlive();
+        });
+    _siteAvailabilityFlight = future;
+  }
+
   List<SiteListItem>? _siteItemsCache;
   AppConfig? _siteItemsCacheConfig;
   int _siteItemsCacheRevision = -1;
+  int _siteItemsAvailabilityVersion = -1;
   List<String>? _siteItemsCacheOrder;
 
   void _rememberSiteItems(
@@ -3933,6 +4069,7 @@ class AppState extends ChangeNotifier
     _siteItemsCacheConfig = config;
     _siteItemsCacheOrder = List<String>.of(order);
     _siteItemsCacheRevision = _router.siteRevision;
+    _siteItemsAvailabilityVersion = _router.availabilityVersion;
   }
 
   static bool _sameSiteOrder(List<String>? a, List<String> b) {
@@ -4574,13 +4711,17 @@ class AppState extends ChangeNotifier
     bool current() {
       if (_disposed || !(isCurrent?.call() ?? true)) return false;
       final latest = database.findHistory(
-        siteKey: row.siteKey, vodId: row.vodId, sourceKey: row.sourceKey,
-        flag: row.flag, episodeId: row.episodeId,
+        siteKey: row.siteKey,
+        vodId: row.vodId,
+        sourceKey: row.sourceKey,
+        flag: row.flag,
+        episodeId: row.episodeId,
       );
       // UI尚未重建时generation可能没变，数据库中的新身份仍必须优先。
       return latest == null ||
           (latest.tmdbId == row.tmdbId && latest.mediaType == row.mediaType);
     }
+
     if (!current()) return null;
     final sourceKey = row.sourceKey.trim();
     final record = sourceKey.isEmpty || sourceKey == activeSourceKey
@@ -4588,34 +4729,60 @@ class AppState extends ChangeNotifier
         : database.configBySourceKey(sourceKey);
     final TmdbMatchStore store = record == null && sourceKey.isNotEmpty
         ? InMemoryTmdbMatchStore()
-        : DatabaseTmdbMatchStore(database: database, configId: record?.id ?? tmdbConfigId);
+        : DatabaseTmdbMatchStore(
+            database: database,
+            configId: record?.id ?? tmdbConfigId,
+          );
     final scoped = configForSourceKey(sourceKey);
-    final siteName = scoped?.sites.where((site) => site.key == row.siteKey).firstOrNull?.name ?? '';
+    final siteName =
+        scoped?.sites
+            .where((site) => site.key == row.siteKey)
+            .firstOrNull
+            ?.name ??
+        '';
     TmdbItem? item;
     try {
-      item = store.find(siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName)?.toItem();
+      item = store
+          .find(
+            siteKey: row.siteKey,
+            vodId: row.vodId,
+            sourceTitle: row.vodName,
+          )
+          ?.toItem();
     } catch (_) {
       // 读匹配表失败时仍可按标题解析。
     }
     if (item == null) {
       try {
-        final outcome = await TmdbIdentityService(
-          config: () => tmdbConfig, service: _tmdbService, store: store,
-        ).match(
-          TmdbMatchRequest(
-            siteKey: row.siteKey, vodId: row.vodId, sourceTitle: row.vodName,
-            siteName: siteName, vodName: row.vodName, vodYear: row.vodYear,
-            expectedMediaType: TmdbMediaType.parse(row.mediaType),
-          ),
-          isCurrent: current,
-        );
+        final outcome =
+            await TmdbIdentityService(
+              config: () => tmdbConfig,
+              service: _tmdbService,
+              store: store,
+            ).match(
+              TmdbMatchRequest(
+                siteKey: row.siteKey,
+                vodId: row.vodId,
+                sourceTitle: row.vodName,
+                siteName: siteName,
+                vodName: row.vodName,
+                vodYear: row.vodYear,
+                expectedMediaType: TmdbMediaType.parse(row.mediaType),
+              ),
+              isCurrent: current,
+            );
         item = outcome.item;
       } catch (_) {
         return null;
       }
     }
     if (item == null || !current()) return null;
-    rememberHistoryIdentity(siteKey: row.siteKey, vodId: row.vodId, item: item, sourceKey: row.sourceKey);
+    rememberHistoryIdentity(
+      siteKey: row.siteKey,
+      vodId: row.vodId,
+      item: item,
+      sourceKey: row.sourceKey,
+    );
     return item;
   }
 
@@ -5029,7 +5196,8 @@ class AppState extends ChangeNotifier
     // 从离线 ZIP 准备专用环境），而不是让用户撞一句 code=3。同样不阻塞首屏。
     unawaited(_preparePythonRuntimeQuietly());
     // 加固壳发现保持只读；缺失的 CSP jar 则按配置实例在后台限量安装。
-    unawaited(_probeShellTargetsQuietlyForStartup());
+    _shellTargetsProbe = _probeShellTargetsQuietlyForStartup();
+    unawaited(_shellTargetsProbe);
     // 不 await：实测 jar 下载/转译可能耗时数十秒，不能阻塞导入或首屏。
     _kickCspProvisioning(config);
     // 站点服务必须复用**同一个** [_router] 实例。
@@ -5311,10 +5479,15 @@ class AppState extends ChangeNotifier
 
       // 摘要必须同时报「多少个站点」和「多少个真能用」：只报总数会让用户
       // 以为导入即可用，实际整份配置可能没有一个站点能跑。
+      _prepareSiteAvailability(effectiveConfig ?? config);
       final usableSites = usableSiteCount;
       _notice =
           config.notice ??
           '配置导入成功：${config.sites.length} 个站点（可用 $usableSites 个）';
+      _importAvailabilityConfig = config.notice == null
+          ? effectiveConfig
+          : null;
+      _importAvailabilityNotice = config.notice == null ? _notice : null;
       _configPhase = LoadPhase.ready;
       log.info(
         '配置导入成功 name=$name sites=${config.sites.length} '
@@ -5332,7 +5505,7 @@ class AppState extends ChangeNotifier
       // 不下载运行时；弹不弹、什么时候弹由 UI 决定。
       // 句柄留给 UI：导入页要在「导入成功」这一刻弹提示，必须能等到探测 settle。
       _shellTargetsProbe = _probeShellTargetsQuietly(config);
-      unawaited(_shellTargetsProbe!);
+      await _shellTargetsProbe;
       _kickCspProvisioning(effectiveConfig ?? config);
 
       // 导入后自动加载默认站点首页，形成“导入 → 首页”的闭环。
@@ -6563,6 +6736,7 @@ class AppState extends ChangeNotifier
     // 换站点时作废在途详情请求：旧站点的响应不得覆盖新站点的详情（§8.3）。
     _detailRunId++;
     _selectedSite = site;
+    _homeResult = null;
     _categoryResult = null;
     _detailResult = null;
     _detailError = null;
@@ -6631,13 +6805,50 @@ class AppState extends ChangeNotifier
   Future<void> loadHome(Site site) async {
     if (webHomeKeyOfSite(site) != null) return;
     final config = effectiveConfig;
-    final missingCsp = CspJvmBinding.matches(site.api) &&
+    final missingCsp =
+        CspJvmBinding.matches(site.api) &&
         directSpiderKind(site) == null &&
         JarSourceSpec.parse(site.effectiveJar(config?.spider)) != null &&
         _router.cspBinding?.entryFor(site.key) == null;
+    final directedCsp =
+        missingCsp &&
+        config != null &&
+        debugCspProbeOverride == null &&
+        debugCspProvisionOverride == null;
+    if (directedCsp) {
+      final runId = ++_homeRunId;
+      _contentPhase = LoadPhase.loading;
+      _lastError = null;
+      _preparingSites[site.key] = (_preparingSites[site.key] ?? 0) + 1;
+      _siteItemsCache = null;
+      _notifyIfAlive();
+      try {
+        await _prepareCurrentCsp(config, site);
+      } catch (error) {
+        if (!_disposed) log.warning('当前站源准备失败：$error', scope: 'spider');
+      } finally {
+        final count = (_preparingSites[site.key] ?? 1) - 1;
+        if (count == 0) {
+          _preparingSites.remove(site.key);
+        } else {
+          _preparingSites[site.key] = count;
+        }
+        _siteItemsCache = null;
+      }
+      if (_disposed ||
+          runId != _homeRunId ||
+          !identical(effectiveConfig, config) ||
+          !identical(selectedSite, site)) {
+        return;
+      }
+    }
     final provisioningCurrent = identical(_cspProvisionConfig, config);
-    if (missingCsp && provisioningCurrent && _cspProvisionInFlight &&
-        (_cspProvisionPreparing || _router.provisioningSiteKeys.contains(site.key))) {
+    if (missingCsp &&
+        !directedCsp &&
+        provisioningCurrent &&
+        _cspProvisionInFlight &&
+        (_cspProvisionPreparing ||
+            _router.provisioningSiteKeys.contains(site.key))) {
       ++_homeRunId;
       _cspHomeRetryConfig = config;
       _cspHomeRetrySite = site;
@@ -6647,7 +6858,9 @@ class AppState extends ChangeNotifier
       _notifyIfAlive();
       return;
     }
-    if (missingCsp && provisioningCurrent && _cspDeferredSiteKeys.contains(site.key)) {
+    if (missingCsp &&
+        provisioningCurrent &&
+        _cspDeferredSiteKeys.contains(site.key)) {
       ++_homeRunId;
       _contentPhase = LoadPhase.failed;
       _lastError = AppError(AppErrorKind.siteUnsupported, _cspDeferredReason);
@@ -6657,6 +6870,9 @@ class AppState extends ChangeNotifier
     final service = _siteService;
     if (service == null) return;
     final runId = ++_homeRunId;
+    _contentPhase = LoadPhase.loading;
+    _lastError = null;
+    _notifyIfAlive();
     if (CspJvmBinding.matches(site.api) &&
         directSpiderKind(site) == null &&
         _router.cspBinding?.entryFor(site.key) == null) {
@@ -6667,33 +6883,60 @@ class AppState extends ChangeNotifier
         !_disposed &&
         runId == _homeRunId &&
         identical(service, _siteService) &&
+        identical(config, effectiveConfig) &&
         _selectedSite?.key == site.key &&
         _selectedSite?.api == site.api &&
         _selectedSite?.name == site.name;
-    // 直连站源（.js/.py/CatVod 壳）要先等注册落定，否则首页会拿到一次
-    // 假「运行时未支持」（真实原因只是注册还没写完）。真 Android jar 不在
-    // 这一集合里，仍然立即如实报「不支持」。
-    if (directSpiderKind(site) != null &&
-        _router.directSpiders[site.key] == null) {
-      // 先登记补载：8 秒只是让行上限，注册可能在此后才完成。
-      if (_directReady != null && _router.directSpiders[site.key] == null) {
-        _directHomeRetryConfig = effectiveConfig;
-        _directHomeRetrySite = site;
-      }
-      await _waitForDirectRegistration();
-      if (!current()) return;
-      // 等待期间已就绪：本次请求自己会加载成功，撤掉补载避免重复请求。
-      if (_router.directSpiders[site.key] != null) {
-        _directHomeRetryConfig = null;
-        _directHomeRetrySite = null;
-      }
-    }
-    await _waitForPythonSite(site);
-    if (!current()) return;
-    _contentPhase = LoadPhase.loading;
-    _lastError = null;
-    if (current()) _notifyIfAlive();
     try {
+      // 直连站源（.js/.py/CatVod 壳）要先等注册落定，否则首页会拿到一次
+      // 假「运行时未支持」（真实原因只是注册还没写完）。真 Android jar 不在
+      // 这一集合里，仍然立即如实报「不支持」。
+      if (directSpiderKind(site) != null &&
+          _router.directSpiders[site.key] == null) {
+        final settled = await _waitForDirectRegistration(site);
+        if (!current()) return;
+        if (!settled) {
+          _directHomeRetryConfig = null;
+          _directHomeRetrySite = null;
+          final pending = config == null
+              ? null
+              : _directSiteFlights[config]?[site.key];
+          if (pending != null) {
+            Future<void> resume(Map<String, LocalSpider> result) async {
+              if (!current()) return;
+              if (result.containsKey(site.key)) {
+                await loadHome(site);
+              } else {
+                _router.notifySiteFilesChanged();
+                await _router.prepareAvailability([site], foreground: true);
+                if (!current()) return;
+                _contentPhase = LoadPhase.failed;
+                _lastError = AppError(
+                  AppErrorKind.siteUnsupported,
+                  '当前站源注册失败，无法下载或准备站源；请重试',
+                );
+                _siteItemsCache = null;
+                _notifyIfAlive();
+              }
+            }
+
+            unawaited(
+              pending.then(resume, onError: (Object error) => resume(const {})),
+            );
+          }
+          return;
+        }
+        // 等待期间已就绪：本次请求自己会加载成功，撤掉补载避免重复请求。
+        if (_router.directSpiders[site.key] != null) {
+          _directHomeRetryConfig = null;
+          _directHomeRetrySite = null;
+        }
+      }
+      await _waitForPythonSite(site);
+      if (!current()) return;
+      _contentPhase = LoadPhase.loading;
+      _lastError = null;
+      if (current()) _notifyIfAlive();
       final outcome = await service.home(site);
       if (!current()) return;
       _homeResult = outcome.value;
@@ -9543,17 +9786,101 @@ class AppState extends ChangeNotifier
 
   void _kickCspProvisioning(AppConfig? config) {
     if (_disposed) return;
-    final eligible = config?.sites.any(
-      (site) =>
-          CspJvmBinding.matches(site.api) &&
-          directSpiderKind(site) == null &&
-          JarSourceSpec.parse(site.effectiveJar(config.spider)) != null,
-    ) ?? false;
+    final eligible =
+        config?.sites.any(
+          (site) =>
+              CspJvmBinding.matches(site.api) &&
+              directSpiderKind(site) == null &&
+              JarSourceSpec.parse(site.effectiveJar(config.spider)) != null,
+        ) ??
+        false;
     if (!eligible) {
       _resetCspProvisionContext(config);
       return;
     }
     unawaited(provisionCspJarsQuietly(config!));
+  }
+
+  final Expando<Map<String, Future<CspProbeReport>>> _cspGroupWork = Expando();
+  final Set<Future<CspProbeReport>> _currentCspWork = {};
+
+  void _settleCspSites(
+    AppConfig config,
+    Iterable<String> keys, {
+    bool notify = true,
+  }) {
+    if (_disposed || !identical(effectiveConfig, config)) return;
+    final remaining = Set<String>.of(_router.provisioningSiteKeys)
+      ..removeAll(keys);
+    _router.setProvisioningSiteKeys(remaining);
+    _router.notifySiteFilesChanged();
+    _siteItemsCache = null;
+    if (notify) _notifyIfAlive();
+  }
+
+  Future<CspProbeReport> _prepareCspGroup(
+    AppConfig config,
+    List<Site> sites, {
+    void Function(ShellUnpackTick)? onProgress,
+    void Function(CspProbeEntry)? onEntry,
+  }) {
+    final url = JarSourceSpec.parse(sites.first.effectiveJar(config.spider))!
+        .url;
+    final work = _cspGroupWork[config] ??= {};
+    final pending = work[url];
+    if (pending != null) return pending;
+    late final Future<CspProbeReport> future;
+    future = _cspProbe(config: config, allowShellUnpack: false)
+        .materialize(
+          config.copyWith(sites: sites),
+          onProgress: onProgress,
+          onEntry: (entry) {
+            if (onEntry != null) {
+              onEntry(entry);
+            } else {
+              _settleCspSites(config, [entry.siteKey]);
+            }
+          },
+        )
+        .then(
+          (report) {
+            _settleCspSites(config, sites.map((site) => site.key));
+            if (report.entries.any(
+                  (entry) => entry.outcome == CspProbeOutcome.failed,
+                ) &&
+                identical(work[url], future)) {
+              work.remove(url);
+            }
+            return report;
+          },
+          onError: (Object error, StackTrace stack) {
+            _settleCspSites(config, sites.map((site) => site.key));
+            if (identical(work[url], future)) work.remove(url);
+            Error.throwWithStackTrace(error, stack);
+          },
+        )
+        .whenComplete(() => _currentCspWork.remove(future));
+    work[url] = future;
+    _currentCspWork.add(future);
+    return future;
+  }
+
+  Future<void> _prepareCurrentCsp(AppConfig config, Site site) async {
+    final url = JarSourceSpec.parse(site.effectiveJar(config.spider))!.url;
+    final sites = config.sites
+        .where(
+          (candidate) =>
+              directSpiderKind(candidate) == null &&
+              CspJvmBinding.matches(candidate.api) &&
+              JarSourceSpec.parse(candidate.effectiveJar(config.spider))?.url ==
+                  url,
+        )
+        .toList();
+    await _prepareCspGroup(config, sites);
+    if (_disposed || !identical(effectiveConfig, config)) return;
+    _router.notifySiteFilesChanged();
+    _siteItemsCache = null;
+    await _probeShellTargetsQuietly(config, stagePrompt: false);
   }
 
   /// 导入/装配后的后台安装；同一配置实例只尝试一轮，失败不影响前台。
@@ -9572,10 +9899,15 @@ class AppState extends ChangeNotifier
     _cspProvisionPreparing = true;
     _cspProvisionSummary = null;
     _cspProvisionProgress = const CspProvisionProgress(
-      active: true, stage: '检查站源', label: '正在检查站源（后台进行中）',
+      active: true,
+      stage: '检查站源',
+      label: '正在检查站源（后台进行中）',
     );
-    bool current() => !_disposed && runId == _cspProvisionRunId &&
-        identical(_cspProvisionConfig, config) && identical(effectiveConfig, config);
+    bool current() =>
+        !_disposed &&
+        runId == _cspProvisionRunId &&
+        identical(_cspProvisionConfig, config) &&
+        identical(effectiveConfig, config);
     if (current()) _notifyIfAlive();
     final selected = <Site>[];
     var started = false;
@@ -9636,7 +9968,8 @@ class AppState extends ChangeNotifier
         for (final site in selected) site.key,
       });
       final waiting = _cspHomeRetrySite;
-      if (identical(_cspHomeRetryConfig, config) && waiting != null &&
+      if (identical(_cspHomeRetryConfig, config) &&
+          waiting != null &&
           deferredKeys.contains(waiting.key)) {
         _finishCspHomeWaiting(config, reason: _cspDeferredReason);
       }
@@ -9674,6 +10007,7 @@ class AppState extends ChangeNotifier
 
       void onEntry(CspProbeEntry entry) {
         if (_disposed || runId != _cspProvisionRunId) return;
+        _settleCspSites(config, [entry.siteKey], notify: false);
         final progress = _cspProvisionProgress;
         entriesByKey[entry.siteKey] = entry;
         done = progress.done + 1;
@@ -9711,14 +10045,37 @@ class AppState extends ChangeNotifier
           debugCspProvisionOverride ??
           (legacyOverride != null
               ? (config, {onProgress, onEntry}) => legacyOverride(config)
-              : _cspProbe(config: config, allowShellUnpack: false).materialize);
+              : (selectedConfig, {onProgress, onEntry}) async {
+                  final groups = <String, List<Site>>{};
+                  for (final site in selectedConfig.sites) {
+                    final url = JarSourceSpec.parse(
+                      site.effectiveJar(config.spider),
+                    )!.url;
+                    groups.putIfAbsent(url, () => []).add(site);
+                  }
+                  final entries = <CspProbeEntry>[];
+                  for (final sites in groups.values) {
+                    if (!current()) break;
+                    final report = await _prepareCspGroup(
+                      config,
+                      sites,
+                      onProgress: onProgress,
+                      onEntry: onEntry,
+                    );
+                    _settleCspSites(config, sites.map((site) => site.key));
+                    entries.addAll(report.entries);
+                  }
+                  return CspProbeReport(entries: entries);
+                });
       final report = await runner(
         config.copyWith(sites: selected),
         onProgress: onProgress,
         onEntry: onEntry,
       );
       if (!current()) return;
-      entriesByKey.addEntries(report.entries.map((entry) => MapEntry(entry.siteKey, entry)));
+      entriesByKey.addEntries(
+        report.entries.map((entry) => MapEntry(entry.siteKey, entry)),
+      );
       installed = report.installed + report.unpacked;
       rejected = report.rejected;
       failed = report.failed + report.unpackFailed;
@@ -9728,31 +10085,46 @@ class AppState extends ChangeNotifier
       failed = selected.isEmpty ? 1 : selected.length;
       failure = '$error';
     } finally {
-      if (!_disposed && runId == _cspProvisionRunId && identical(_cspProvisionConfig, config)) {
+      if (!_disposed &&
+          runId == _cspProvisionRunId &&
+          identical(_cspProvisionConfig, config)) {
         _cspProvisionInFlight = false;
         _cspProvisionPreparing = false;
         _router.setProvisioningSiteKeys(const {});
       }
       if (current()) {
         final settled = started
-            ? _cspProvisionSummaryLine(installed: installed, rejected: rejected,
-                failed: failed, needsRuntime: needsRuntime)
+            ? _cspProvisionSummaryLine(
+                installed: installed,
+                rejected: rejected,
+                failed: failed,
+                needsRuntime: needsRuntime,
+              )
             : '站源检查完成，无需自动安装';
         _cspProvisionSummary = settled;
         _cspProvisionProgress = CspProvisionProgress(
-          done: done, total: selected.length, installed: installed,
-          rejected: rejected, failed: failed, label: settled,
+          done: done,
+          total: selected.length,
+          installed: installed,
+          rejected: rejected,
+          failed: failed,
+          label: settled,
         );
         if (started) {
-          final summary = 'CSP 自动安装：已装 $installed 个、拒绝 $rejected、失败 $failed、需解包运行时 $needsRuntime';
+          final summary =
+              'CSP 自动安装：已装 $installed 个、拒绝 $rejected、失败 $failed、需解包运行时 $needsRuntime';
           if (failed > 0) {
-            log.warning(failure == null ? summary : '$summary（$failure）', scope: 'spider');
+            log.warning(
+              failure == null ? summary : '$summary（$failure）',
+              scope: 'spider',
+            );
           } else {
             log.info(summary, scope: 'spider');
           }
         }
         final waiting = _cspHomeRetrySite;
-        _finishCspHomeWaiting(config,
+        _finishCspHomeWaiting(
+          config,
           entry: waiting == null ? null : entriesByKey[waiting.key],
           reason: failure,
         );
@@ -9761,28 +10133,38 @@ class AppState extends ChangeNotifier
     }
   }
 
-  static const _cspDeferredReason =
-      '本轮仅自动安装前 4 个 jar，本站点未参与；请在站点页运行自动探测';
+  static const _cspDeferredReason = '本轮仅自动安装前 4 个 jar，本站点未参与；请在站点页运行自动探测';
 
-  void _finishCspHomeWaiting(AppConfig config, {CspProbeEntry? entry, String? reason}) {
+  void _finishCspHomeWaiting(
+    AppConfig config, {
+    CspProbeEntry? entry,
+    String? reason,
+  }) {
     if (!identical(_cspHomeRetryConfig, config)) return;
     final waiting = _cspHomeRetrySite;
     final selected = _selectedSite;
     _cspHomeRetryConfig = null;
     _cspHomeRetrySite = null;
-    if (waiting == null || selected == null || selected.key != waiting.key ||
-        selected.api != waiting.api || !identical(effectiveConfig, config)) {
+    if (waiting == null ||
+        selected == null ||
+        selected.key != waiting.key ||
+        selected.api != waiting.api ||
+        !identical(effectiveConfig, config)) {
       return;
     }
     if (_currentCspBinding.entryFor(selected.key) != null) {
-      unawaited(loadHome(selected).catchError((Object error) {
-        if (!_disposed && identical(effectiveConfig, config)) {
-          log.warning('CSP 自动安装后首页重载失败：$error', scope: 'spider');
-        }
-      }));
+      unawaited(
+        loadHome(selected).catchError((Object error) {
+          if (!_disposed && identical(effectiveConfig, config)) {
+            log.warning('CSP 自动安装后首页重载失败：$error', scope: 'spider');
+          }
+        }),
+      );
       return;
     }
-    final message = reason ?? (entry?.message.isNotEmpty == true ? entry!.message : null) ??
+    final message =
+        reason ??
+        (entry?.message.isNotEmpty == true ? entry!.message : null) ??
         _cspTerminalReason(selected, entry);
     _contentPhase = LoadPhase.failed;
     _lastError = AppError(AppErrorKind.siteUnsupported, message);
@@ -9792,7 +10174,9 @@ class AppState extends ChangeNotifier
   String _cspTerminalReason(Site site, CspProbeEntry? entry) {
     if (_cspDeferredSiteKeys.contains(site.key)) return _cspDeferredReason;
     final record = cspProbeRecordFor(site.key);
-    final recordedReason = record == null ? null : _router.classifySite(site).reason;
+    final recordedReason = record == null
+        ? null
+        : _router.classifySite(site).reason;
     if (recordedReason != null) return recordedReason;
     return switch (entry?.outcome) {
       CspProbeOutcome.needsShellRuntime => '本站源需要解包运行时，请在站点页显式确认解包',
@@ -9907,7 +10291,11 @@ class AppState extends ChangeNotifier
       _pendingShellUnpack.takePrompt();
 
   /// 取走站点级确认：同上。
-  String? takePendingShellUnpackForSite() => _pendingShellUnpack.takeSite();
+  String? takePendingShellUnpackForSite() {
+    final key = _pendingShellUnpack.takeSite();
+    if (key == _shellEntrySite?.key) _shellEntrySite = null;
+    return key;
+  }
 
   /// 对话框顶部那一行运行时状态文案。
   String? get shellUnpackRuntimeStateLabel =>
@@ -9926,10 +10314,7 @@ class AppState extends ChangeNotifier
           siteCount: target.siteKeys.length,
           stateLabel: _shellTargetStateLabel(target),
           selected:
-              target.state != ShellTargetState.unpacked &&
-              (preferSiteKey == null ||
-                  target.siteKeys.contains(preferSiteKey)),
-          disabled: target.state == ShellTargetState.unpacked,
+              preferSiteKey == null || target.siteKeys.contains(preferSiteKey),
         ),
   ];
 
@@ -9938,6 +10323,9 @@ class AppState extends ChangeNotifier
   /// 只探测、只暂存：**不弹 UI、不下载运行时**。命中需要解包的站源时登记一条
   /// 待确认提示，弹不弹、什么时候弹由 UI 决定。
   Future<void>? _shellTargetsProbe;
+  final Expando<Future<List<ShellJarTarget>>> _shellDiscoveryFlights =
+      Expando();
+  final Set<Future<List<ShellJarTarget>>> _shellDiscoveryWork = {};
 
   /// 导入后加固壳探测的句柄（未导入过时为已完成的 Future）。
   ///
@@ -9951,10 +10339,35 @@ class AppState extends ChangeNotifier
     bool stagePrompt = true,
   }) async {
     try {
-      final targets = await _cspProbe().discoverShellTargets(config);
+      var discovery = _shellDiscoveryFlights[config];
+      if (discovery == null) {
+        late final Future<List<ShellJarTarget>> flight;
+        flight = _cspProbe(config: config)
+            .discoverShellTargets(config)
+            .whenComplete(() {
+              if (identical(_shellDiscoveryFlights[config], flight)) {
+                _shellDiscoveryFlights[config] = null;
+              }
+              _shellDiscoveryWork.remove(flight);
+            });
+        _shellDiscoveryFlights[config] = flight;
+        _shellDiscoveryWork.add(flight);
+        discovery = flight;
+      }
+      final targets = await discovery;
       // 探测期间配置又换了：这批结论属于旧配置，丢掉。
-      if (!identical(_config, config)) return;
+      if (_disposed ||
+          (!identical(effectiveConfig, config) &&
+              !identical(_config, config))) {
+        return;
+      }
       _shellTargets = targets;
+      final entry = _shellEntrySite;
+      if (entry != null &&
+          identical(_shellEntryConfig, config) &&
+          identical(entry, selectedSite)) {
+        _stageShellUnpackForSiteKey(entry.key);
+      }
       final pending = targets.where(_shellTargetNeedsUnpack).toList();
       if (pending.isEmpty) {
         log.info('加固壳探测：没有需要解包的站源', scope: 'spider');
@@ -9965,7 +10378,9 @@ class AppState extends ChangeNotifier
         _notifyIfAlive();
       }
     } catch (error) {
-      log.warning('加固壳探测失败：$error', scope: 'spider');
+      if (!_disposed && identical(effectiveConfig, config)) {
+        log.warning('加固壳探测失败：$error', scope: 'spider');
+      }
     }
   }
 
@@ -9982,8 +10397,19 @@ class AppState extends ChangeNotifier
     if (config == null) {
       throw AppError(AppErrorKind.configInvalid, '没有可用配置，无法解包加固壳');
     }
+    final selected = selectedSite;
+    final selectedTarget = _shellTargets.any(
+      (target) =>
+          jarUrls.contains(target.jarUrl) &&
+          target.siteKeys.contains(selected?.key),
+    );
     // 运行时只在用户点了「下载并解包」之后才下载：40.7 MB 不跟着探测走。
-    if (!shellRuntimeInstalled) {
+    final needsRuntime = _shellTargets.any(
+      (target) =>
+          jarUrls.contains(target.jarUrl) &&
+          target.state != ShellTargetState.unpacked,
+    );
+    if (needsRuntime && !shellRuntimeInstalled) {
       // 解包流还没开始，但它同样是用户要等的阶段：先发一条，进度条上不至于
       // 停在「准备中」一动不动（这一段能占掉整个流程的一大半墙钟时间）。
       onTick?.call(
@@ -10001,21 +10427,45 @@ class AppState extends ChangeNotifier
         throw AppError(AppErrorKind.unknown, '解包运行时安装失败：$reason');
       }
     }
-    await _cspProbe().unpackSelected(
-      config,
-      jarUrls: jarUrls,
-      onProgress: onTick,
-    );
+    if (_disposed || !identical(effectiveConfig, config)) return;
+    final report = await _cspProbe(config: config)
+        .unpackSelected(config, jarUrls: jarUrls, onProgress: onTick);
+    if (_disposed || !identical(effectiveConfig, config)) return;
+    _router.notifySiteFilesChanged();
+    _router.invalidateRuntimes();
+    _siteItemsCache = null;
+    final failures = report.entries
+        .where(
+          (entry) =>
+              entry.outcome != CspProbeOutcome.unpacked &&
+              entry.outcome != CspProbeOutcome.installed &&
+              entry.outcome != CspProbeOutcome.skippedInstalled,
+        )
+        .toList();
+    if (failures.isNotEmpty) {
+      _notifyIfAlive();
+      throw AppError(
+        AppErrorKind.siteUnsupported,
+        '加固壳解包失败：${failures.map((entry) => entry.message).join('；')}',
+      );
+    }
     log.info('加固壳解包完成：${jarUrls.length} 个 jar', scope: 'spider');
     // 结论刷新 + 清掉待弹信号：解完再点同一个站点不该再被问一次。
     await _probeShellTargetsQuietly(config, stagePrompt: false);
+    if (_disposed || !identical(effectiveConfig, config)) return;
     _pendingShellUnpack.clear();
     _notifyIfAlive();
+    if (selectedTarget &&
+        selected != null &&
+        identical(selectedSite, selected)) {
+      await loadHome(selected);
+    }
   }
 
   bool _shellTargetNeedsUnpack(ShellJarTarget target) =>
       target.state == ShellTargetState.needsRuntime ||
       target.state == ShellTargetState.needsUnpack ||
+      target.state == ShellTargetState.unpacked ||
       target.state == ShellTargetState.failed;
 
   String _shellTargetStateLabel(ShellJarTarget target) {
@@ -10041,7 +10491,18 @@ class AppState extends ChangeNotifier
   }
 
   /// 站点进入后登记「确认解包」信号。
+  Site? _shellEntrySite;
+  AppConfig? _shellEntryConfig;
+
+  void enterCurrentVod() {
+    final site = selectedSite;
+    if (site != null) _noteShellUnpackForSite(site);
+  }
+
   void _noteShellUnpackForSite(Site site) {
+    _pendingShellUnpack.takeSite();
+    _shellEntrySite = site;
+    _shellEntryConfig = effectiveConfig;
     if (site.key.isEmpty) return;
     _stageShellUnpackForSiteKey(site.key);
   }
@@ -10080,6 +10541,7 @@ class AppState extends ChangeNotifier
       if (!config.sites.any((site) => CspJvmBinding.matches(site.api))) return;
       final clock = Stopwatch()..start();
       await _probeShellTargetsQuietly(config, stagePrompt: false);
+      if (_disposed || !identical(effectiveConfig, config)) return;
       // 可观测：启动阶段只读发现的耗时必须留在日志里，卡顿时才有据可查。
       log.info(
         '启动阶段加固壳发现完成 elapsed=${clock.elapsedMilliseconds}ms',
@@ -10100,6 +10562,24 @@ class AppState extends ChangeNotifier
     final root = p.normalize(p.absolute(_currentCspBinding.root));
     final target = p.normalize(p.absolute(targetDir));
     if (!p.equals(p.dirname(target), root)) return false;
+    final site = effectiveConfig?.sites
+        .where((site) => site.key == siteKey)
+        .firstOrNull;
+    if (site != null &&
+        p.equals(
+          target,
+          p.normalize(p.absolute(_currentCspBinding.directoryFor(siteKey))),
+        )) {
+      await _router.prepareAvailability([site], foreground: true);
+    }
+    if (!p.equals(root, p.normalize(p.absolute(_currentCspBinding.root))) ||
+        (directory == null &&
+            !p.equals(
+              target,
+              p.normalize(p.absolute(_currentCspBinding.directoryFor(siteKey))),
+            ))) {
+      return false;
+    }
     try {
       if (Directory(target).existsSync() &&
           !p.equals(
@@ -11074,6 +11554,10 @@ class AppState extends ChangeNotifier
   /// 播放地址对应的代理会话流量快照；非代理地址返回 null（直连走引擎读数）。
   ProxyTrafficSnapshot? proxyTrafficFor(String playbackUrl) =>
       _proxy.trafficFor(playbackUrl);
+
+  /// Positive signature evidence owned by the active local proxy session/target.
+  MediaFormat? proxyObservedFormatFor(String playbackUrl) =>
+      _proxy.observedFormatFor(playbackUrl);
 
   /// 当前播放会话的代理 token 指纹（供设置页显示，不回显完整 token）。
   String? get proxySessionFingerprint => _proxySession?.fingerprint;

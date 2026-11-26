@@ -117,7 +117,7 @@ void main() {
     for (final result in directResults) {
       if (!result.isCompleted) result.complete({});
     }
-    await Future<void>.delayed(Duration.zero);
+    await state.pythonEnvironmentIdle;
     await temp.delete(recursive: true);
   });
 
@@ -381,7 +381,12 @@ void main() {
     state.runFirstHome = true;
     await importSites([_site('direct', api: 'https://example.test/direct.js')]);
     expect(state.homeCalls, 1);
-    expect(state.lastError, isNotNull);
+    expect(
+      state.lastError,
+      isNull,
+      reason: 'yield timeout is not a terminal registration failure',
+    );
+    expect(state.contentPhase, LoadPhase.loading);
     expect(
       state.log.entries.any((entry) => entry.message.contains('直连站源注册超时')),
       isTrue,
@@ -486,7 +491,10 @@ void main() {
       await importSites([_site('shell')]);
       await completed.future;
       expect(unpackCalls, 0);
-      expect(state.log.entries.last.message, contains('需解包运行时 1'));
+      final summary = state.log.entries.lastWhere(
+        (entry) => entry.message.startsWith('CSP 自动安装：已装'),
+      );
+      expect(summary.message, contains('需解包运行时 1'));
       // Explicit manual probe keeps unpacking enabled, so the spy proves the seam is live.
       await state.probeCspJars();
       expect(unpackCalls, 1);
@@ -547,7 +555,11 @@ void main() {
       );
       final currentDir = await installFixture('remove-key', _jar);
       await importSites([_site('remove-key')]);
-      expect(await state.removeCspJar('remove-key'), isTrue);
+      expect(
+        await state.removeCspJar('remove-key'),
+        isTrue,
+        reason: state.log.entries.map((entry) => entry.message).join('\n'),
+      );
       expect(Directory(currentDir).existsSync(), isFalse);
       expect(Directory(oldDir).existsSync(), isTrue);
     },
