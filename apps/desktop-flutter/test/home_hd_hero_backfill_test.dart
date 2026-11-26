@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/home_hero_art.dart';
+import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
+import 'package:webhtv_pc/state/detail_recommendation_state.dart';
 import 'package:webhtv_pc/core/meta_pipeline.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
@@ -41,6 +43,8 @@ class _State extends AppState {
         }));
   final List<PlaybackHistory> rows;
   final TmdbService metadata;
+  final recommendationFixture = DetailRecommendationDependencies(loaders: const {}, feedback: RecommendationFeedbackStore());
+  @override DetailRecommendationDependencies get recommendationDependencies => recommendationFixture;
   MetaPipeline pipeline = MetaPipeline.defaults;
   @override MetaPipeline get metaPipeline => pipeline;
   @override TmdbService get tmdbService => metadata;
@@ -77,17 +81,19 @@ void main(){
   final dimensions = <String, HomeHeroArtEvidence?>{};
   final inspected = <String>[];
   Completer<HomeHeroArtEvidence?>? delayedImage;
+  final delayedChecks = <String, Completer<HomeHeroArtEvidence?>>{};
+  var metadataVersion = 0;
   setUp((){
-    dimensions.clear(); inspected.clear(); delayedImage = null;
+    dimensions.clear(); inspected.clear(); delayedChecks.clear(); delayedImage = null; metadataVersion = 0;
     dir=Directory.systemTemp.createTempSync('home-hd-backfill');
     metadata=TmdbService(
-      config:()=>const TmdbConfig(apiKey:'fixture'),
+      config:()=>const TmdbConfig(apiKey:'fixture', apiBase:'https://fixture.example/3', imageBase:'https://fixture.example', backdropBase:'https://fixture.example'),
       client:MockClient((request) async {
         final id=int.tryParse(request.url.path.split('/').last)??0;
         return http.Response(jsonEncode({
           'id':id,'name':'作品${id-1}',
           'poster_path':'/poster$id.jpg','backdrop_path':'/backdrop$id.jpg',
-          'overview':'剧情$id','first_air_date':'2026-01-01',
+          'overview': metadataVersion == 0 ? '剧情$id' : '更新剧情$id','first_air_date':'2026-01-01',
         }),200,headers:{'content-type':'application/json; charset=utf-8'});
       }),
     );
@@ -109,15 +115,133 @@ void main(){
         heroImageLoader:(provider,_)async{
           final url=(provider as NetworkImage).url;
           inspected.add(url);
-          final evidence = url.endsWith('/backdrop1.jpg') && delayedImage != null
-              ? await delayedImage!.future
-              : dimensions[url.split('/').last];
+          final imageName = url.split('/').last;
+          final evidence = delayedChecks.containsKey(imageName)
+              ? await delayedChecks[imageName]!.future
+              : url.endsWith('/backdrop1.jpg') && delayedImage != null
+                  ? await delayedImage!.future
+                  : dimensions[imageName];
           if (evidence?.isEligible ?? false) await loadHdHeroFixture(provider, ImageConfiguration.empty);
           return evidence;
         },
       ))))));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('同次运行返回首页立即保留完整12项和第8项，不重新检查图片', (tester) async {
+    for (var n = 1; n <= 13; n++) {
+      dimensions['backdrop$n.jpg'] = const HomeHeroArtEvidence(width: 1920, height: 1080);
+    }
+    await pump(tester);
+    expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.length, 12);
+    await tester.tap(find.byKey(const ValueKey('home-hero-dot-7')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<HomeBackdrop>(find.byType(HomeBackdrop)).index, 7);
+    final checks = inspected.length;
+    await tester.pumpWidget(const SizedBox.shrink());
+    delayedImage = Completer<HomeHeroArtEvidence?>();
+    try {
+      await pump(tester);
+      final hero = find.byType(HomeHero);
+      expect(hero, findsOneWidget, reason: '未重启应用，图片复查不能阻挡已有会话列表');
+      expect(tester.widget<HomeHero>(hero).items.length, 12);
+      expect(tester.widget<HomeBackdrop>(find.byType(HomeBackdrop)).index, 7);
+      expect(inspected.length, checks, reason: '同输入重入不能重新检查已合格图片');
+      await tester.tap(find.byKey(const ValueKey('home-hero-next')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<HomeBackdrop>(find.byType(HomeBackdrop)).index, 8);
+    } finally {
+      if (!delayedImage!.isCompleted) {
+        delayedImage!.complete(const HomeHeroArtEvidence(width: 1920, height: 1080));
+      }
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('正在补齐时切页仍复用当前批次，返回不跳过在途作品', (tester) async {
+    for (var n = 1; n <= 13; n++) {
+      dimensions['backdrop$n.jpg'] = const HomeHeroArtEvidence(width: 1920, height: 1080);
+    }
+    final pending = Completer<HomeHeroArtEvidence?>();
+    delayedChecks['backdrop3.jpg'] = pending;
+    await pump(tester);
+    expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.length, 2);
+    await tester.pumpWidget(const SizedBox.shrink());
+    try {
+      await pump(tester);
+      expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.length, 2);
+      pending.complete(const HomeHeroArtEvidence(width: 1920, height: 1080));
+      await tester.pumpAndSettle();
+      final items = tester.widget<HomeHero>(find.byType(HomeHero)).items;
+      expect(items.map((item) => item.title), [for (var n = 0; n < 12; n++) '作品$n']);
+      // 在途项在切页时被撤销，返回后重查一次；已完成项不再重查。
+      expect(inspected.where((url) => url.endsWith('/backdrop3.jpg')).length, 2);
+      expect(inspected.where((url) => url.endsWith('/backdrop1.jpg')).length, 1);
+    } finally {
+      if (!pending.isCompleted) pending.complete(null);
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('新增候选只检查新增项，保留既有高清资格和观看位置', (tester) async {
+    state.rows.removeRange(4, state.rows.length);
+    for (var n = 1; n <= 5; n++) {
+      dimensions['backdrop$n.jpg'] = const HomeHeroArtEvidence(width: 1920, height: 1080);
+    }
+    await pump(tester);
+    await tester.tap(find.byKey(const ValueKey('home-hero-dot-2')));
+    await tester.pumpAndSettle();
+    final oldChecks = inspected.where((url) => url.endsWith('/backdrop1.jpg')).length;
+    state.rows.add(row(4));
+    state.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.length, 5);
+    expect(tester.widget<HomeBackdrop>(find.byType(HomeBackdrop)).index, 2);
+    expect(inspected.where((url) => url.endsWith('/backdrop1.jpg')).length, oldChecks);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('完整会话图片落盘后清理解码缓存，热返回12张都使用本地图片', (tester) async {
+    for (var n = 1; n <= 12; n++) {
+      dimensions['backdrop$n.jpg'] = const HomeHeroArtEvidence(width: 1920, height: 1080);
+    }
+    await pump(tester);
+    final deadline = Stopwatch()..start();
+    while (!state.log.entries.any((entry) => entry.message.contains('event=session_cache_save') &&
+        entry.message.contains('readable=12')) && deadline.elapsed < const Duration(seconds: 25)) {
+      await tester.runAsync(() => Future<void>(() {}));
+      await tester.pump();
+    }
+    final manifest = File('${dir.path}/home-hero-session-v1/index.json');
+    expect(manifest.existsSync(), isTrue, reason: state.log.entries.where((entry) => entry.scope == 'home').map((entry) => entry.message).join(' | '));
+    expect((jsonDecode(manifest.readAsStringSync()) as Map)['entries'], hasLength(12));
+    await tester.pumpWidget(const SizedBox.shrink());
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    await pump(tester);
+    final items = tester.widget<HomeHero>(find.byType(HomeHero)).items;
+    expect(items, hasLength(12));
+    expect(items.every((item) => Uri.parse(item.backdrop!).scheme == 'file'), isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('后台元数据更新不替换正在阅读的作品，切走后再采用新文案', (tester) async {
+    state.rows.removeRange(2, state.rows.length);
+    for (var n = 1; n <= 2; n++) {
+      dimensions['backdrop$n.jpg'] = const HomeHeroArtEvidence(width: 1920, height: 1080);
+    }
+    await pump(tester);
+    expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.first.overview, '剧情1');
+    metadataVersion = 1;
+    state.homeHeroSession.invalidateMetadata();
+    await tester.pumpAndSettle();
+    final items = tester.widget<HomeHero>(find.byType(HomeHero)).items;
+    expect(items.first.overview, '剧情1', reason: '正在读的这一张不接受后台改写');
+    expect(items[1].overview, '更新剧情2', reason: '没在读的那一张照常换成新内容');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('首批6项都无高清宽图时，第13项仍能补位且低清作品留在轨道', (tester)async{
     // 前面的poster/backdrop低清/竖图，即使URL写w1280也不合格。

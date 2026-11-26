@@ -42,19 +42,49 @@ class CachedHomeHero {
   final List<String> tags;
 }
 
-/// Offline-only startup snapshots, isolated under `<directory>/home-hero-startup-v1`.
+/// Offline-only snapshots, isolated per namespace under `<directory>/<namespace>`.
+///
+/// The default instance keeps the startup contract unchanged:
+/// `home-hero-startup-v1`, three entries, a 64 KiB index. `session` adds a
+/// separate `home-hero-session-v1` namespace holding up to twelve entries.
 class HomeHeroStartupCache {
   HomeHeroStartupCache({required Directory directory})
-    : _directory = Directory(
-        p.join(p.absolute(directory.path), 'home-hero-startup-v1'),
-      ) {
+    : this._(
+        directory: directory,
+        namespace: 'home-hero-startup-v1',
+        maxEntries: 3,
+        maxIndexBytes: 64 * 1024,
+      );
+
+  /// Home session snapshots: twelve entries under `home-hero-session-v1`.
+  ///
+  /// Twelve worst-case entries (256-byte key, 4096-byte public URL, 256-byte
+  /// title, 128-byte subtitle, 2000-byte overview, three 64-byte tags, plus
+  /// file/digest/size/width/height) reach roughly 86 KiB of UTF-8 JSON, so this
+  /// namespace bounds its index at 256 KiB; still bounded, and the default
+  /// instance keeps 64 KiB.
+  HomeHeroStartupCache.session({required Directory directory})
+    : this._(
+        directory: directory,
+        namespace: 'home-hero-session-v1',
+        maxEntries: 12,
+        maxIndexBytes: 256 * 1024,
+      );
+
+  HomeHeroStartupCache._({
+    required Directory directory,
+    required String namespace,
+    required this._maxEntries,
+    required this._maxIndexBytes,
+  }) : _directory = Directory(p.join(p.absolute(directory.path), namespace)) {
     _writer = _writers.putIfAbsent(p.normalize(_directory.path), _Writer.new);
   }
 
   final Directory _directory;
+  final int _maxEntries;
+  final int _maxIndexBytes;
   late final _Writer _writer;
   static final _writers = <String, _Writer>{};
-  static const _maxIndexBytes = 64 * 1024;
   static const _maxImageBytes = 6 * 1024 * 1024;
   static final _digestPattern = RegExp(r'^[a-f0-9]{64}$');
   static final _imagePattern = RegExp(r'^[a-f0-9]{64}\.(png|jpg)$');
@@ -62,7 +92,8 @@ class HomeHeroStartupCache {
     r'^(index\.json|[a-f0-9]{64}\.(png|jpg))\.\d+\.tmp$',
   );
 
-  /// Reads at most 64 KiB of metadata and three images of at most 6 MiB each.
+  /// Reads at most the namespace index bound and [_maxEntries] images of at
+  /// most 6 MiB each.
   /// Image decoding belongs exclusively to save, never the startup read path.
   List<CachedHomeHero> read(String scope) {
     try {
@@ -81,7 +112,7 @@ class HomeHeroStartupCache {
         return [];
       }
       final result = <CachedHomeHero>[];
-      for (final value in (raw['entries'] as List).take(3)) {
+      for (final value in (raw['entries'] as List).take(_maxEntries)) {
         try {
           final item = _readEntry(value, scopeHash);
           if (item != null) result.add(item);
@@ -104,7 +135,10 @@ class HomeHeroStartupCache {
       final keys = <String>{};
       try {
         for (final candidate in entries) {
-          if (generation != _writer.generation || prepared.length == 3) break;
+          if (generation != _writer.generation ||
+              prepared.length == _maxEntries) {
+            break;
+          }
           if (!_validKey(candidate.key) || keys.contains(candidate.key)) {
             continue;
           }
@@ -338,7 +372,7 @@ class HomeHeroStartupCache {
       final raw = jsonDecode(utf8.decode(bytes));
       if (raw is! Map || raw['entries'] is! List) return;
       _prune({
-        for (final item in (raw['entries'] as List).take(3))
+        for (final item in (raw['entries'] as List).take(_maxEntries))
           if (item is Map &&
               item['file'] is String &&
               _imagePattern.hasMatch(item['file'] as String))
