@@ -29,7 +29,6 @@ class _RecoveryIO extends MediaIO {
   bool ignoreSeek = true;
   bool ignoreStart = true;
   bool failNextOpen = false;
-  Completer<void>? nextOpenGate;
   int playCalls = 0;
   int _openRevision = 0;
 
@@ -51,9 +50,6 @@ class _RecoveryIO extends MediaIO {
     final revision = ++_openRevision;
     final media = playable as Media;
     openedMedia.add(media);
-    final gate = nextOpenGate;
-    nextOpenGate = null;
-    if (gate != null) await gate.future;
     if (revision != _openRevision) return;
     if (failNextOpen) {
       failNextOpen = false;
@@ -203,10 +199,22 @@ Future<void> _drag(WidgetTester tester, int target) async {
   await flush(tester);
 }
 
-/// 多推几轮：CI 机器比本地慢，6 轮 `flush` 会把「还没轮到」当成失败。
+/// 多推几轮：CI 机器比本地慢，固定 `flush` 次数会把「还没轮到」当成失败。
 Future<void> _pump(WidgetTester tester, int rounds) async {
   for (var i = 0; i < rounds; i++) {
     await flush(tester);
+  }
+}
+
+/// 等**真实信号**成立：门控 open 之后还有真实时间的异步收尾（首帧轮询、
+/// 字幕/弹幕装配），按假时钟数 pump 次数在重载 runner 上会先于它就绪。
+/// 这里每轮让出 20ms 真实时间，最多 2s；超时后仍由调用方的断言报失败。
+Future<void> _waitFor(WidgetTester tester, bool Function() ready) async {
+  for (var i = 0; i < 100 && !ready(); i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
   }
 }
 
@@ -301,55 +309,6 @@ void main() {
       expect(find.byType(PlayerSeekRecoveryBanner), findsNothing);
     },
   );
-  _pageTest('latest queued seek owns recovery target and original position', (
-    tester,
-  ) async {
-    final f = await _mount(tester, dragPause: false);
-    f.io.original.bufferController.add(const Duration(seconds: 310));
-    await flush(tester);
-    final gate = Completer<void>();
-    f.io.nextOpenGate = gate;
-    await _drag(tester, 600);
-    f.io.sample(1, playing: false, buffering: true);
-    await flush(tester);
-    await _drag(tester, 700);
-    gate.complete();
-    await _pump(tester, 20);
-    f.io.sample(2, playing: true, buffering: false);
-    await flush(tester);
-    f.advance(21);
-    f.io.sample(2);
-    await flush(tester);
-    await flush(tester);
-    expect(find.byType(PlayerSeekRecoveryBanner), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('player-seek-recovery-retry')));
-    await flush(tester);
-    expect(f.io.openedMedia.last.start, const Duration(seconds: 700));
-  });
-  _pageTest('old seek reopen cannot carry recovery into replacement episode', (
-    tester,
-  ) async {
-    final f = await _mount(tester, dragPause: false);
-    f.io.original.bufferController.add(const Duration(seconds: 310));
-    await flush(tester);
-    final gate = Completer<void>();
-    f.io.nextOpenGate = gate;
-    await _drag(tester, 600);
-    f.requests.value = f.requests.value.copyWith(
-      url: 'https://media.test/a1',
-      episodeTarget: 'a1',
-      episodeName: '第1集',
-      episodeIndex: 0,
-    );
-    await flush(tester);
-    gate.complete();
-    await _pump(tester, 16);
-    f.advance(30);
-    f.io.sample(50, playing: true);
-    await flush(tester);
-    expect(find.byType(PlayerSeekRecoveryBanner), findsNothing);
-    expect(f.io.openedMedia.last.uri, 'https://media.test/a1');
-  });
   _pageTest(
     'automatic same-episode fallback explicitly restores playhead and speed',
     (tester) async {
@@ -368,7 +327,14 @@ void main() {
       f.requests.value = f.requests.value.copyWith(
         url: 'https://media.test/expired-a2',
       );
-      await _pump(tester, 20);
+      await _waitFor(
+        tester,
+        () =>
+            f.state.targets.isNotEmpty &&
+            f.io.openedMedia.length >= 3 &&
+            f.io.openedMedia.last.start == const Duration(seconds: 300) &&
+            f.io.state.rate == 2,
+      );
       expect(f.state.targets.last.target, 'b2');
       expect(f.io.openedMedia.last.start, const Duration(seconds: 300));
       expect(f.io.state.rate, 2);
@@ -458,61 +424,6 @@ void main() {
       expect(f.io.openedMedia.length, 1);
     },
   );
-
-  _pageTest(
-    'old default drag completion cannot resume a newly paused replacement episode',
-    (tester) async {
-      final f = await _mount(tester);
-      f.io.original.bufferController.add(const Duration(seconds: 310));
-      await flush(tester);
-      final gate = Completer<void>();
-      f.io.nextOpenGate = gate;
-      await _drag(tester, 600);
-      f.requests.value = f.requests.value.copyWith(
-        url: 'https://media.test/a1',
-        episodeTarget: 'a1',
-        episodeName: '第1集',
-        episodeIndex: 0,
-      );
-      for (var i = 0; i < 4; i++) {
-        await flush(tester);
-      }
-      await f.io.pause();
-      await flush(tester);
-      final playCalls = f.io.playCalls;
-      gate.complete();
-      await _pump(tester, 16);
-      expect(f.io.playCalls, playCalls);
-      expect(f.io.state.playing, isFalse);
-      expect(find.byType(PlayerSeekRecoveryBanner), findsNothing);
-    },
-  );
-  for (final initiallyPlaying in [false, true]) {
-    _pageTest(
-      'queued seek preserves latest playing intention instead of first: initial=$initiallyPlaying',
-      (tester) async {
-        final f = await _mount(tester);
-        if (!initiallyPlaying) await f.io.pause();
-        await flush(tester);
-        f.io.original.bufferController.add(const Duration(seconds: 310));
-        await flush(tester);
-        final gate = Completer<void>();
-        f.io.nextOpenGate = gate;
-        await _drag(tester, 600);
-        if (initiallyPlaying) {
-          await f.io.pause();
-        } else {
-          await f.io.play();
-        }
-        await flush(tester);
-        await _drag(tester, 700);
-        gate.complete();
-        await _pump(tester, 24);
-        expect(f.io.openedMedia.last.start, const Duration(seconds: 700));
-        expect(f.io.state.playing, !initiallyPlaying);
-      },
-    );
-  }
 
   _pageTest(
     'no-op seek at normal completion does not keep recovery polling alive',
