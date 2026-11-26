@@ -17,6 +17,8 @@
 | Windows x64 shard 0 / 1 / 2 / 3 | success |
 | Trial e2e (Linux x64, non-blocking) | success |
 
+同提交的 push 运行 [45826497750](https://github.com/Silent1566/webhtv-pc/actions/runs/45826497750) 首次失败于 Linux「Unit tests」（`sidecar_idle_recycle_test`，见下第 3 条），重跑失败作业后 **completed success**。
+
 同一次运行在成功前有过两次失败尝试，失败项分类如下（用于区分"我的改动"与"既有抖动"）。
 
 ## 本 PR 修掉的真实失败
@@ -51,7 +53,17 @@
 2. **判定是资源还是用例问题**：拿到用例名后，先在本机把该用例重复跑 20 次（\`--concurrency=1\` 与默认并发各一轮）。若只在并发下复现，按"共享资源/时序"处理；若稳定复现，按产品缺陷处理。验收：给出复现率与结论。
 3. **收紧分片并发**：若确认是 runner 资源（内存/进程数）导致 tester 被 -1 终止，把该分片的 \`--concurrency\` 降一档并观察两次全绿后再改回。验收：连续两次运行无 \`did not complete\`。
 
-### 3. 本地跑测试会改写证据图片
+### 3. `sidecar_idle_recycle_test` 的协作取消用例依赖真实 2 秒宽限赛跑
+
+- 现象：push 运行 [45826497750](https://github.com/Silent1566/webhtv-pc/actions/runs/45826497750) 的 Linux 单测失败：`9203 tests passed, 1 failed`，失败为 `test/sidecar_idle_recycle_test.dart:285`「cooperative cancellation remains busy until its response and is not a crash」——`Expected: throws SpiderError with code SPIDER_CANCELLED`，`Actual: emitted {'list': []}`。**同一提交**的 pull_request 运行通过，重跑该作业后也通过。
+- 根因（代码与用例对照）：该用例跑**真实 Python sidecar**，`cancel()` 起的是真实 2 秒宽限定时器（`spider_process.dart:1132-1153`），而响应到达的处理路径（`spider_process.dart:813-861`）**不看 `pending.cancelSent`**：sidecar 在宽限期内回复，调用方就拿到结果；只有超期未回才伪造 `SPIDER_CANCELLED` 并杀进程。用例却在 `cancel` 之后按“一定会拿到取消错误”断言，于是机器快（回复 < 2s）就失败、机器慢（> 2s）才通过。
+- 这说明**实现与文档注释一致**（取消是 best effort，宽限是兜底），需要修的是用例的确定性，不是产品行为。
+- 建议的后续动作（单独任务）：
+  1. 拆成两条确定性用例：①「sidecar 在宽限期内回复 → 返回结果，且槽位保持占用、`failureCount` 不涨」；②「sidecar 不回复 → 超过宽限后得到 `SPIDER_CANCELLED` 且进程被终止」。验收：两条各自重复跑 20 次全绿，且不依赖机器快慢。
+  2. 若希望保留单条用例，把宽限时长做成可注入参数（`cancel(id, grace: Duration.zero)`），别让断言赌真实时钟。
+  3. 顺带确认是否需要给 `cancelSent` 补一条"取消后即使响应到达也按取消结束"的产品决策——那会改变现有语义，需要单独评审，不能顺手改。
+
+### 4. 本地跑测试会改写证据图片
 
 - 现象：本地执行 \`flutter test\` 会重新生成 \`docs/phase9/evidence/hdr-tone-mapping/*.png\`，使工作区出现二进制改动（与代码无关）。
 - 处置：提交前用 \`git checkout -- docs/phase9/evidence\` 还原；本次交付未把这类改动带进提交。
