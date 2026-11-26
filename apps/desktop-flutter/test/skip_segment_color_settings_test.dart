@@ -22,9 +22,11 @@ Future<void> _flush(WidgetTester tester) async {
 void main() {
   late Directory temp;
   late AppState state;
+  late LogService log;
 
   setUp(() async {
     temp = Directory.systemTemp.createTempSync('webhtv-skip-colors');
+    log = LogService();
     state = AppState(
       paths: AppPaths.resolve(
         overrides: {
@@ -34,14 +36,16 @@ void main() {
           'state': '${temp.path}/logs',
         },
       ),
-      log: LogService(),
+      log: log,
     );
     await state.bootstrap();
   });
 
-  tearDown(() {
+  tearDown(() async {
     state.dispose();
-    temp.deleteSync(recursive: true);
+    // Windows 上未释放的文件句柄会让目录删除直接抛错；先等日志落盘收尾。
+    await log.dispose();
+    if (temp.existsSync()) temp.deleteSync(recursive: true);
   });
 
   Future<void> pumpPage(WidgetTester tester) async {
@@ -163,10 +167,12 @@ void main() {
         File(state.paths.settingsPath).readAsStringSync(),
       ) as Map<String, dynamic>;
       expect(raw['player']['skipSegmentColors']['intro'], wanted);
-      final reloaded = AppState(paths: state.paths, log: LogService());
+      final reloadLog = LogService();
+      final reloaded = AppState(paths: state.paths, log: reloadLog);
       await tester.runAsync(() => reloaded.bootstrap());
       expect(reloaded.playerOptions, state.playerOptions);
       reloaded.dispose();
+      await tester.runAsync(reloadLog.dispose);
     });
   }
 

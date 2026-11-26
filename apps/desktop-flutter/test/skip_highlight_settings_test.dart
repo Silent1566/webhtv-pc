@@ -53,10 +53,12 @@ Future<void> _expectPersisted(
   final raw =
       jsonDecode(File(state.paths.settingsPath).readAsStringSync()) as Map;
   expect(raw['player']['showSkipSegmentHighlights'], expected);
-  final reloaded = AppState(paths: state.paths, log: LogService());
+  final reloadLog = LogService();
+  final reloaded = AppState(paths: state.paths, log: reloadLog);
   await tester.runAsync(() => reloaded.bootstrap());
   expect(reloaded.playerOptions, state.playerOptions);
   reloaded.dispose();
+  await tester.runAsync(reloadLog.dispose);
 }
 
 void main() {
@@ -70,6 +72,7 @@ void main() {
       final temp = Directory.systemTemp.createTempSync(
         'webhtv-highlight-settings',
       );
+      final log = LogService();
       final state = AppState(
         paths: AppPaths.resolve(
           overrides: {
@@ -79,11 +82,13 @@ void main() {
             'state': '${temp.path}/logs',
           },
         ),
-        log: LogService(),
+        log: log,
       );
-      addTearDown(() {
+      addTearDown(() async {
         state.dispose();
-        temp.deleteSync(recursive: true);
+        // Windows 上未释放的日志句柄会让目录删除抛错。
+        await log.dispose();
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
       await tester.runAsync(() async {
         await state.bootstrap();

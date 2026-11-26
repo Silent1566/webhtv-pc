@@ -294,6 +294,7 @@ void main() {
         final temp = Directory.systemTemp.createTempSync(
           'prefetch-near-segment',
         );
+        final log = LogService();
         final state = _PrefetchSkipState(
           paths: AppPaths.resolve(
             overrides: {
@@ -303,9 +304,12 @@ void main() {
               'state': '${temp.path}/logs',
             },
           ),
-          log: LogService(),
+          log: log,
         );
-        addTearDown(state.dispose);
+        addTearDown(() async {
+          state.dispose();
+          await log.dispose();
+        });
         await tester.runAsync(() async {
           await state.bootstrap();
           await state.setPlayerOptions(
@@ -433,6 +437,7 @@ void main() {
           return server;
         });
         final temp = Directory.systemTemp.createTempSync('prefetch-full-page');
+        final log = LogService();
         final state = AppState(
           paths: AppPaths.resolve(
             overrides: {
@@ -442,13 +447,14 @@ void main() {
               'state': '${temp.path}/logs',
             },
           ),
-          log: LogService(),
+          log: log,
         );
         final client = HttpClient();
         addTearDown(() async {
           client.close(force: true);
           await state.stopProxy();
           state.dispose();
+          await log.dispose();
           await server!.close(force: true);
         });
         late String proxied;
@@ -542,6 +548,7 @@ void main() {
       tester,
     ) async {
       final temp = Directory.systemTemp.createTempSync('prefetch-page');
+      final log = LogService();
       final state = _PrefetchSkipState(
         paths: AppPaths.resolve(
           overrides: {
@@ -551,9 +558,12 @@ void main() {
             'state': '${temp.path}/logs',
           },
         ),
-        log: LogService(),
+        log: log,
       );
-      addTearDown(state.dispose);
+      addTearDown(() async {
+        state.dispose();
+        await log.dispose();
+      });
       await tester.runAsync(() async {
         await state.bootstrap();
         await state.setPlayerOptions(
@@ -627,6 +637,7 @@ void main() {
       final temp = Directory.systemTemp.createTempSync(
         'skip-prefetch-settings',
       );
+      final log = LogService();
       final state = AppState(
         paths: AppPaths.resolve(
           overrides: {
@@ -636,9 +647,12 @@ void main() {
             'state': '${temp.path}/logs',
           },
         ),
-        log: LogService(),
+        log: log,
       );
-      addTearDown(state.dispose);
+      addTearDown(() async {
+        state.dispose();
+        await log.dispose();
+      });
       await tester.runAsync(state.bootstrap);
       await tester.pumpWidget(
         MaterialApp(home: IntroSkipOptionsPage(state: state)),

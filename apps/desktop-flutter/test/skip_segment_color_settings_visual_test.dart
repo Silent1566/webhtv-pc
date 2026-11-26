@@ -43,6 +43,7 @@ void main() {
   for (final brightness in Brightness.values) {
     testWidgets('片段颜色列表与自定义对话框 ${brightness.name} After', (tester) async {
       final temp = Directory.systemTemp.createTempSync('webhtv-colors-visual');
+      final log = LogService();
       final state = AppState(
         paths: AppPaths.resolve(
           overrides: {
@@ -52,12 +53,14 @@ void main() {
             'state': '${temp.path}/logs',
           },
         ),
-        log: LogService(),
+        log: log,
       );
       await tester.runAsync(() => state.bootstrap());
-      addTearDown(() {
+      addTearDown(() async {
         state.dispose();
-        temp.deleteSync(recursive: true);
+        // Windows 上未释放的日志句柄会让目录删除抛错。
+        await log.dispose();
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
       tester.view.physicalSize = const Size(900, 1100);
       tester.view.devicePixelRatio = 1;

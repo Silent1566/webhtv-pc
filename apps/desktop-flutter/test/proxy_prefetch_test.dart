@@ -184,7 +184,7 @@ class _Upstream {
   Future<void> serve(HttpRequest request) async {
     final path = request.uri.path;
     requests.add(path);
-    arrivals.add(path);
+    if (!arrivals.isClosed) arrivals.add(path);
     active++;
     if (active > maxActive) maxActive = active;
     try {
@@ -236,7 +236,8 @@ class _Upstream {
       } catch (_) {}
     } finally {
       active--;
-      finished.add(path);
+      // 拆除后仍可能有在途响应回来，关闭后再 add 会抛 Bad state。
+      if (!finished.isClosed) finished.add(path);
     }
   }
 }

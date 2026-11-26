@@ -425,12 +425,15 @@ _mountSegments(
       'state': '${dir.path}/logs',
     },
   );
+  final log = LogService();
   final state = metadata == null
-      ? AppState(paths: paths, log: LogService())
-      : _MetadataSkipState(paths: paths, log: LogService(), details: metadata);
-  addTearDown(() {
+      ? AppState(paths: paths, log: log)
+      : _MetadataSkipState(paths: paths, log: log, details: metadata);
+  addTearDown(() async {
     state.dispose();
-    dir.deleteSync(recursive: true);
+    // Windows 上未释放的日志文件句柄会让目录删除直接抛错；先等日志收尾。
+    await log.dispose();
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
   });
   await tester.runAsync(() async {
     await state.bootstrap();
