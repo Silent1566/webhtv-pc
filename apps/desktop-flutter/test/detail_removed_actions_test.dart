@@ -19,6 +19,7 @@ import 'package:webhtv_pc/services/ai_season_mapping_service.dart';
 import 'package:webhtv_pc/services/ai_content/ai_content_completion.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/detail_rating_service.dart';
+import 'package:webhtv_pc/services/external_meta_service.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/tmdb_enrichment_service.dart';
@@ -83,6 +84,7 @@ class _DetailState extends AppState with ExternalMetaOff {
           },
         ),
         log: MemoryOnlyLogService(),
+        externalMetaService: ExternalMetaService(),
         aiContentCompletion: AiContentCompletion(
           complete:
               ({
@@ -102,6 +104,10 @@ class _DetailState extends AppState with ExternalMetaOff {
       );
 
   static int aiRequests = 0;
+  bool fixtureExternalMetaEnabled = false;
+  @override
+  bool get externalMetaEnabled => fixtureExternalMetaEnabled;
+
   final TmdbState fixtureTmdb;
   final TmdbService fixtureService;
   final openedUrls = <String>[];
@@ -345,6 +351,8 @@ void main() {
   testWidgets('layout scores sit above overview while footer only has links', (
     tester,
   ) async {
+    // IMDb 分受元数据开关控制；布局夹具启用开关但不注入任何外部请求客户端。
+    state.fixtureExternalMetaEnabled = true;
     await pumpSource(tester);
     final header = find.byKey(const ValueKey('tmdb-detail-title'));
     expect(header, findsOneWidget);

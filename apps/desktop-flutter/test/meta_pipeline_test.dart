@@ -1,10 +1,90 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/meta_pipeline.dart';
+import 'package:webhtv_pc/core/external_meta.dart';
+import 'package:webhtv_pc/core/tmdb_identity.dart';
 import 'package:webhtv_pc/core/meta_source.dart';
 
 typedef Ctx = List<String>;
 
 void main() {
+  test('IMDb is enabled last for ratings and absent from other fields', () {
+    final imdb = MetaSourceKind.parse('imdb');
+    expect(imdb, isNotNull);
+    expect(MetaPipeline.defaults.orderOf(MetaField.rating), [
+      MetaSourceKind.tmdb,
+      MetaSourceKind.douban,
+      MetaSourceKind.bangumi,
+      imdb,
+    ]);
+    expect(MetaPipeline.defaults.modeOf(MetaField.rating), MetaFieldMode.aggregate);
+    for (final field in MetaField.values.where((f) => f != MetaField.rating)) {
+      expect(MetaPipeline.defaults.orderOf(field), isNot(contains(imdb)));
+    }
+  });
+
+  test('source capabilities preserve old fields and restrict IMDb to rating', () {
+    const sourceFields = {
+      MetaField.title, MetaField.overview, MetaField.poster, MetaField.backdrop,
+      MetaField.cast, MetaField.crew, MetaField.genres, MetaField.countries,
+      MetaField.languages, MetaField.releaseDate,
+    };
+    for (final field in MetaField.values) {
+      expect(MetaPipeline.supports(MetaSourceKind.imdb, field), field == MetaField.rating);
+      expect(MetaPipeline.supportsSource(field), sourceFields.contains(field));
+      expect(MetaPipeline.supports(MetaSourceKind.source, field), sourceFields.contains(field));
+      for (final kind in [MetaSourceKind.tmdb, MetaSourceKind.douban, MetaSourceKind.bangumi, MetaSourceKind.wikidata]) {
+        expect(MetaPipeline.supports(kind, field), isTrue);
+      }
+    }
+    expect(MetaSourceKind.values[2], MetaSourceKind.imdb);
+    expect(MetaSourceKind.imdb.label, 'IMDb');
+    expect(MetaSourceKind.imdb.key, 'imdb');
+    expect(MetaSourceKind.imdb.isFallback, isFalse);
+    expect(MetaPersonRef.of(MetaSourceKind.imdb, 123), isNull);
+    expect(MetaIdentity.of(MetaSourceKind.imdb, TmdbMediaType.movie, 123), isNull);
+  });
+
+  test('IMDb parses only in ratings and toggles without changing other fields', () {
+    final pipeline = MetaPipeline.fromJson({
+      'rating': {'mode': 'aggregate', 'order': ['douban', 'imdb', 'imdb']},
+      'title': {'mode': 'priority', 'order': ['imdb', 'bangumi']},
+      'poster': {'order': ['imdb']},
+    });
+    expect(pipeline.orderOf(MetaField.rating), [MetaSourceKind.douban, MetaSourceKind.imdb]);
+    expect(pipeline.orderOf(MetaField.title), [MetaSourceKind.bangumi]);
+    expect(pipeline.orderOf(MetaField.poster), isNot(contains(MetaSourceKind.imdb)));
+    expect(pipeline.toggleSource(MetaField.title, MetaSourceKind.imdb), same(pipeline));
+    final off = pipeline.toggleSource(MetaField.rating, MetaSourceKind.imdb);
+    expect(off.orderOf(MetaField.rating), [MetaSourceKind.douban]);
+    expect(off.toggleSource(MetaField.rating, MetaSourceKind.imdb).orderOf(MetaField.rating),
+      [MetaSourceKind.douban, MetaSourceKind.imdb]);
+  });
+
+  test('rating may disable its last source and preserve empty order on JSON round trip', () {
+    final onlyImdb = MetaPipeline.fromJson({'rating': {'mode': 'aggregate', 'order': ['imdb']}});
+    final off = onlyImdb.toggleSource(MetaField.rating, MetaSourceKind.imdb);
+    expect(off.orderOf(MetaField.rating), isEmpty);
+    expect(off.isDefault, isFalse);
+    expect(MetaPipeline.fromJson(off.toJson()).orderOf(MetaField.rating), isEmpty);
+    expect(off.toggleSource(MetaField.rating, MetaSourceKind.imdb).orderOf(MetaField.rating), [MetaSourceKind.imdb]);
+    final person = MetaPipeline.fromJson({'personBiography': {'order': ['bangumi']}});
+    expect(person.toggleSource(MetaField.personBiography, MetaSourceKind.bangumi).orderOf(MetaField.personBiography),
+      MetaPipeline.defaults.orderOf(MetaField.personBiography));
+    final title = MetaPipeline.fromJson({'title': {'order': ['tmdb']}});
+    expect(title.toggleSource(MetaField.title, MetaSourceKind.tmdb).orderOf(MetaField.title), isEmpty);
+  });
+
+  test('old custom rating order is preserved without an IMDb migration', () {
+    final old = MetaPipeline.fromJson({
+      'rating': {'mode': 'priority', 'order': ['bangumi', 'douban']},
+    });
+    expect(old.orderOf(MetaField.rating), [MetaSourceKind.bangumi, MetaSourceKind.douban]);
+    expect(old.modeOf(MetaField.rating), MetaFieldMode.priority);
+    expect(old.toggleSource(MetaField.rating, MetaSourceKind.imdb).orderOf(MetaField.rating),
+      [MetaSourceKind.bangumi, MetaSourceKind.douban, MetaSourceKind.imdb]);
+    expect(MetaPipeline.fromJson({}).orderOf(MetaField.rating).last, MetaSourceKind.imdb);
+  });
+
   test('默认：文本字段逐字段优先，照片与评论并行聚合', () {
     final pipeline = MetaPipeline.defaults;
     expect(pipeline.modeOf(MetaField.overview), MetaFieldMode.priority);
@@ -80,7 +160,7 @@ void main() {
           MetaSourceKind.tmdb => ['a.jpg', 'b.jpg'],
           MetaSourceKind.douban => ['b.jpg', 'c.jpg'],
           MetaSourceKind.bangumi => ['d.jpg'],
-          MetaSourceKind.wikidata || MetaSourceKind.source => <String>[],
+          MetaSourceKind.wikidata || MetaSourceKind.source || MetaSourceKind.imdb => <String>[],
         };
       },
     );

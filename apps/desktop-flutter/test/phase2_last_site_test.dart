@@ -211,7 +211,11 @@ void main() {
 
     final decoded = jsonDecode(file.readAsStringSync()) as Map;
     // 元数据版本是显式保存的一部分；仍精确校验，不能只检查站点键而漏掉污染。
-    expect(decoded['ui'], {'lastSiteKey': 'site_b', 'metaPipelineVersion': 1});
+    expect(decoded['ui'], {
+      'lastSiteKey': 'site_b',
+      'metaPipelineVersion': 1,
+      'imdbRatingVersion': 1,
+    });
     expect(
       (decoded['tmdb'] as Map)['apiKey'],
       'KEEP-ME',

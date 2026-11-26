@@ -493,7 +493,8 @@ TmdbVideo = {
 
 **实现约束**：
 
-- 必须使用 `url_launcher`（或等价机制）并处理"无默认浏览器"失败 → 提示 + 复制链接兜底。
+- 必须使用系统默认关联打开（`url_launcher` 或等价机制）并处理"无默认浏览器"失败 → 提示 + 复制链接兜底。
+- **Windows 实现在 2026-11-26 更正为 `ShellExecuteW`**（`apps/desktop-flutter/lib/services/windows_shell_open.dart`）：替换用户报告会打开文件夹的 `explorer.exe <url>` 路径，直接按系统 HTTP(S) 默认关联派发；返回值 <= 32 或异常均视作失败。具体旧路径失效原因未归因于 AppX 注册形态。
 - **不得**在应用内创建 WebView 播放（避免引入浏览器内核与解码路径）。
 
 ---

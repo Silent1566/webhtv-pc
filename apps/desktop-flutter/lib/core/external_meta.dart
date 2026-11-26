@@ -49,6 +49,7 @@ class MetaIdentity {
   ) {
     if (kind == null ||
         kind == MetaSourceKind.source ||
+        kind == MetaSourceKind.imdb ||
         mediaType == null ||
         id == null ||
         id <= 0) {
@@ -73,7 +74,7 @@ class MetaIdentity {
     MetaSourceKind.douban => 'https://movie.douban.com/subject/$id/',
     MetaSourceKind.bangumi => 'https://bgm.tv/subject/$id',
     MetaSourceKind.wikidata => 'https://www.wikidata.org/wiki/Q$id',
-    MetaSourceKind.tmdb || MetaSourceKind.source => '',
+    MetaSourceKind.tmdb || MetaSourceKind.source || MetaSourceKind.imdb => '',
   };
 
   @override
@@ -105,10 +106,12 @@ class MetaQuery {
     this.isTv,
     this.episodeCount = 0,
     this.aliases = const [],
+    this.imdbId = '',
   });
 
   final String title;
   final int year;
+  final String imdbId;
   /// null 表示站源没有可信的电影/剧集类型提示。
   final bool? isTv;
 

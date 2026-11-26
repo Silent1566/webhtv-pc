@@ -75,7 +75,7 @@ class _FieldTile extends StatelessWidget {
     final disabled = [
       for (final source in MetaSourceKind.values)
         if (!enabled.contains(source) &&
-            (source != MetaSourceKind.source || MetaPipeline.supportsSource(field))) source,
+            MetaPipeline.supports(source, field)) source,
     ];
     String keyOf(MetaSourceKind source) =>
         'meta-source-${field.key}-${source.key}';

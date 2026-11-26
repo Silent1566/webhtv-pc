@@ -24,6 +24,7 @@ import 'dart:io';
 
 import '../services/external_player.dart';
 import '../services/external_url.dart';
+import '../services/imdb_rating_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -2081,6 +2082,8 @@ class AppState extends ChangeNotifier
       _detailRatingService ??= DetailRatingService.fromServices(
         cacheDirectory: Directory(paths.cacheDir),
         log: log,
+        imdb: imdbRatingService,
+        imdbEnabled: () => imdbRatingEnabled,
       );
 
   DetailRatingService? _detailRatingService;
@@ -2108,6 +2111,9 @@ class AppState extends ChangeNotifier
           );
         },
         log: (message) => log.info(message, scope: 'metadata'),
+        // IMDb 分只能按 imdb_id 取：本机实测标题页会被 AWS WAF 挑战拦成 202 空
+        // body，服务内部改走 GraphQL；失败一律退化成空值，不影响其它来源。
+        imdbRating: (imdbId) => imdbRatingService.byImdbId(imdbId),
         douban: DoubanRecommendationService(
           cacheDirectory: Directory(
             '${paths.cacheDir}${Platform.pathSeparator}douban_meta',
@@ -2121,6 +2127,15 @@ class AppState extends ChangeNotifier
       );
 
   ExternalMetaService? _externalMetaService;
+
+  /// IMDb 评分查询（无 OMDb Key 时的实际通道，见 `ImdbRatingService`）。
+  ImdbRatingService get imdbRatingService =>
+      _imdbRatingService ??= ImdbRatingService(log: log);
+
+  ImdbRatingService? _imdbRatingService;
+
+  bool get imdbRatingEnabled => externalMetaEnabled &&
+      metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
 
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
 
@@ -4978,9 +4993,9 @@ class AppState extends ChangeNotifier
 
   /// 用系统默认浏览器打开外部链接（相关视频，`04` §7.2）。
   ///
-  /// 平台命令集中在 `ExternalUrl`：Windows `explorer.exe`、Linux `xdg-open`、
+  /// 平台命令集中在 `ExternalUrl`：Windows `ShellExecuteW`、Linux `xdg-open`、
   /// macOS `/usr/bin/open`。不用 `url_launcher` 是为了避开 Windows 插件工程
-  /// 与 CMake 变更（Windows 自带的 `explorer.exe <url>` 已处理默认浏览器）。
+  /// 与 CMake 变更。Windows 直接按系统 URL 关联派发，不经过资源管理器。
   /// 返回是否已交给操作系统，不保证页面已加载；失败时 UI 复制链接兜底。
   Future<bool> openExternalUrl(String url) async {
     final result = await ExternalUrl.open(url);
@@ -12278,6 +12293,7 @@ class AppState extends ChangeNotifier
     _recommendationDependencies?.close();
     _detailRatingService?.close();
     _externalMetaService?.close();
+    _imdbRatingService?.close();
     _tmdbService.close();
     if (identical(TmdbImageHealth.onFailure, _imageHealthSink)) {
       TmdbImageHealth.onFailure = null;

@@ -1,11 +1,13 @@
 /// 相关视频外链的系统浏览器启动（`04` §7.2）。
 ///
-/// Windows 使用 explorer.exe，Linux 使用 xdg-open，macOS 使用 /usr/bin/open。
+/// Windows 使用 ShellExecuteW，Linux 使用 xdg-open，macOS 使用 /usr/bin/open。
 /// 只接受合法 http(s) 地址，作为独立参数交给系统默认浏览器。
 library;
 
 import 'dart:async';
 import 'dart:io';
+
+import 'windows_shell_open.dart';
 
 /// 成功表示已交给操作系统，不代表浏览器已加载页面。
 class ExternalUrlOpenResult {
@@ -19,12 +21,13 @@ class ExternalUrlOpenResult {
 
 /// 用系统默认浏览器打开外链。
 abstract final class ExternalUrl {
-  /// [operatingSystem]、[starter] 可注入，便于在任意宿主上测试平台命令。
+  /// [operatingSystem]、[starter]、[shellOpen] 可注入，便于测试平台交接。
   static Future<ExternalUrlOpenResult> open(
     String url, {
     String? operatingSystem,
     Future<Process> Function(String executable, List<String> arguments)?
     starter,
+    int Function(String url)? shellOpen,
   }) async {
     final target = url.trim();
     final uri = Uri.tryParse(target);
@@ -36,10 +39,23 @@ abstract final class ExternalUrl {
       return const ExternalUrlOpenResult.failure('当前地址不是合法 http(s)，无法打开');
     }
     final os = operatingSystem ?? Platform.operatingSystem;
-    final String executable;
     if (os == 'windows') {
-      executable = 'explorer.exe';
-    } else if (os == 'linux') {
+      try {
+        final code = (shellOpen ?? windowsShellOpen)(target);
+        if (code > 32) return const ExternalUrlOpenResult.success();
+        final reason = switch (code) {
+          0 => '内存或系统资源不足',
+          5 => '系统拒绝访问',
+          31 => '未关联默认浏览器',
+          _ => '系统无法打开链接',
+        };
+        return ExternalUrlOpenResult.failure('浏览器启动失败：$reason（错误码 $code）');
+      } catch (error) {
+        return ExternalUrlOpenResult.failure('打开外部链接失败：$error');
+      }
+    }
+    final String executable;
+    if (os == 'linux') {
       executable = 'xdg-open';
     } else if (os == 'macos') {
       executable = '/usr/bin/open';
@@ -52,12 +68,8 @@ abstract final class ExternalUrl {
               (executable, arguments) => Process.start(
                 executable,
                 arguments,
-                mode: os == 'windows'
-                    ? ProcessStartMode.detached
-                    : ProcessStartMode.normal,
+                mode: ProcessStartMode.normal,
               ))(executable, [target]);
-      if (os == 'windows') return const ExternalUrlOpenResult.success();
-
       final stdout = process.stdout.listen((_) {});
       final stderr = process.stderr.listen((_) {});
       try {

@@ -45,6 +45,7 @@ import 'dart:io';
 import '../core/external_meta.dart';
 import '../core/meta_override.dart';
 import '../core/meta_pipeline.dart';
+import '../core/meta_source.dart';
 import '../core/external_player_catalog.dart';
 import 'external_player.dart';
 import '../core/history_aggregation.dart';
@@ -535,6 +536,7 @@ class UiPreferencesStore {
 
   Future<void> load() async {
     var migrateMetaPipeline = false;
+    var migrateImdbRating = false;
     try {
       final file = File(path);
       if (!await file.exists()) {
@@ -655,6 +657,15 @@ class UiPreferencesStore {
             final migrated = _metaPipeline!.withSourceFallbackAdded();
             migrateMetaPipeline = !identical(migrated, _metaPipeline);
             _metaPipeline = migrated;
+          }
+          migrateImdbRating = _shouldMigrateImdbRating(ui);
+          if (migrateImdbRating) {
+            final rating = _metaPipeline!.ruleOf(MetaField.rating);
+            if (!rating.order.contains(MetaSourceKind.imdb)) {
+              _metaPipeline = _metaPipeline!.withRule(
+                rating.copyWith(order: [...rating.order, MetaSourceKind.imdb]),
+              );
+            }
           }
           _metaOverrides = MetaOverrideStore.fromJson(ui['metaOverrides']);
           final aggregateVersions = ui['episodeAggregateVersions'];
@@ -787,7 +798,9 @@ class UiPreferencesStore {
         if (spiderDebugLog is bool) _spiderDebugLog = spiderDebugLog;
       }
       _loaded = true;
-      if (migrateMetaPipeline) _persistMetaPipelineMigration();
+      if (migrateMetaPipeline || migrateImdbRating) {
+        _persistMetaPipelineMigration();
+      }
     } catch (error) {
       _log?.warning('读取 UI 偏好失败，使用默认值：$error', scope: 'ui');
       _lastSiteKey = '';
@@ -1278,6 +1291,21 @@ class UiPreferencesStore {
     }
   }
 
+  bool _shouldMigrateImdbRating(Map ui) {
+    final version = ui['imdbRatingVersion'];
+    if (version is num && version >= 1) return false;
+    final rules = ui['metaPipeline'];
+    if (rules is! Map) return false;
+    final rating = rules[MetaField.rating.key];
+    if (rating is! Map) return false;
+    final order = rating['order'];
+    if (order is! List) return false;
+    return order.any((value) {
+      final source = MetaSourceKind.parse(value);
+      return source != null && MetaPipeline.supports(source, MetaField.rating);
+    });
+  }
+
   /// Startup migration patches only its owned metadata keys, leaving future
   /// settings and rule extensions intact. A failed write retries next load.
   bool _persistMetaPipelineMigration() {
@@ -1288,23 +1316,42 @@ class UiPreferencesStore {
         final rawUi = root['ui'];
         final ui = rawUi is Map ? Map<String, Object?>.from(rawUi) : <String, Object?>{};
         final version = ui['metaPipelineVersion'];
-        if (version is num && version >= 1) return false;
+        final migrateSource = version is! num || version < 1;
+        final migrateImdb = _shouldMigrateImdbRating(ui);
         final rawRules = ui['metaPipeline'];
         final rules = rawRules is Map
             ? Map<String, Object?>.from(rawRules)
             : <String, Object?>{};
         final pipeline = MetaPipeline.fromJson(rules);
-        final migrated = pipeline.withSourceFallbackAdded();
-        if (identical(migrated, pipeline)) return false;
-        for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
-          final rawRule = rules[field.key];
-          rules[field.key] = {
-            if (rawRule is Map) ...Map<String, Object?>.from(rawRule),
-            ...migrated.ruleOf(field).toJson(),
-          };
+        final migrated = migrateSource
+            ? pipeline.withSourceFallbackAdded()
+            : pipeline;
+        final sourceChanged = !identical(migrated, pipeline);
+        if (!sourceChanged && !migrateImdb) return false;
+        if (sourceChanged) {
+          for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+            final rawRule = rules[field.key];
+            rules[field.key] = {
+              if (rawRule is Map) ...Map<String, Object?>.from(rawRule),
+              ...migrated.ruleOf(field).toJson(),
+            };
+          }
+          ui['metaPipelineVersion'] = 1;
+        }
+        if (migrateImdb) {
+          final rating = Map<String, Object?>.from(
+            rules[MetaField.rating.key] as Map,
+          );
+          final order = rating['order'] as List;
+          if (!order.any(
+            (value) => MetaSourceKind.parse(value) == MetaSourceKind.imdb,
+          )) {
+            rating['order'] = [...order, MetaSourceKind.imdb.key];
+            rules[MetaField.rating.key] = rating;
+          }
+          ui['imdbRatingVersion'] = 1;
         }
         ui['metaPipeline'] = rules;
-        ui['metaPipelineVersion'] = 1;
         root['ui'] = ui;
         return true;
       },
@@ -1391,6 +1438,7 @@ class UiPreferencesStore {
         final externalMeta = _externalMetaEnabled;
         if (externalMeta != null) ui['externalMetaEnabled'] = externalMeta;
         ui['metaPipelineVersion'] = 1;
+        ui['imdbRatingVersion'] = 1;
         final pipeline = _metaPipeline;
         if (pipeline != null) ui['metaPipeline'] = pipeline.toJson();
         final overrides = _metaOverrides;
