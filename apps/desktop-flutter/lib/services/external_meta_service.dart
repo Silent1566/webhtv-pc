@@ -6,6 +6,7 @@ import '../core/external_detail_meta.dart';
 import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_media.dart';
 import '../core/external_meta.dart';
+import '../core/imdb_rating.dart';
 import '../core/meta_pipeline.dart';
 import '../core/protocol.dart';
 import '../core/source_meta_resolver.dart';
@@ -41,6 +42,7 @@ class ExternalMetaService {
     BangumiService? bangumi,
     WikidataService? wikidata,
     TmdbService? tmdb,
+    Future<ImdbRating> Function(String imdbId)? imdbRating,
     MetaPipeline Function()? pipeline,
     TmdbDetailData? Function()? tmdbDetail,
     MetaIdentity? Function()? tmdbIdentity,
@@ -51,6 +53,7 @@ class ExternalMetaService {
        _bangumi = bangumi, // ignore: prefer_initializing_formals
        _wikidata = wikidata, // ignore: prefer_initializing_formals
        _tmdb = tmdb, // ignore: prefer_initializing_formals
+       _imdbRating = imdbRating, // ignore: prefer_initializing_formals
        _pipeline = pipeline, // ignore: prefer_initializing_formals
        _tmdbDetail = tmdbDetail, // ignore: prefer_initializing_formals
        _tmdbIdentity = tmdbIdentity, // ignore: prefer_initializing_formals
@@ -62,6 +65,7 @@ class ExternalMetaService {
 
   /// TMDB 客户端：只用于「按 IMDb 编号确定性映射」，不参与内容抓取。
   final TmdbService? _tmdb;
+  final Future<ImdbRating> Function(String imdbId)? _imdbRating;
 
   /// 当前这趟解析拿到的 IMDb 编号（确定性映射的唯一输入）。
   String _activeImdbId = '';
@@ -114,7 +118,7 @@ class ExternalMetaService {
         MetaSourceKind.douban =>
           await _douban?.searchMeta(query, enrich: enrich) ?? const [],
         MetaSourceKind.bangumi => await _bangumi?.search(query) ?? const [],
-        MetaSourceKind.tmdb || MetaSourceKind.wikidata || MetaSourceKind.source => const [],
+        MetaSourceKind.tmdb || MetaSourceKind.wikidata || MetaSourceKind.source || MetaSourceKind.imdb => const [],
       };
     } catch (_) {
       _note('候选检索失败：${source.label}', warn: true);
@@ -433,6 +437,8 @@ class ExternalMetaService {
     _resolved.clear();
     _details.clear();
     _people.clear();
+    _activeQuery = null;
+    _activeImdbId = '';
   }
 
   void close() {
@@ -484,6 +490,7 @@ class ExternalMetaService {
       case MetaSourceKind.tmdb:
       case MetaSourceKind.wikidata:
       case MetaSourceKind.source:
+      case MetaSourceKind.imdb:
         return null;
     }
   }
@@ -576,6 +583,7 @@ class ExternalMetaService {
           }
         case MetaSourceKind.wikidata:
         case MetaSourceKind.source:
+        case MetaSourceKind.imdb:
           resolved = null;
       }
     } catch (_) {
@@ -790,22 +798,49 @@ class ExternalMetaService {
   /// （TMDB 分与豆瓣分本来就是两件事，不是替代关系）。
   Future<Map<MetaSourceKind, double>> ratingsByTitle(MetaQuery query) async {
     final result = <MetaSourceKind, double>{};
+    final generation = _generation;
+    final explicitImdbId = query.imdbId.trim();
+    final imdbId = explicitImdbId.isNotEmpty
+        ? explicitImdbId
+        : _activeQuery?.key == query.key ? _activeImdbId.trim() : '';
     if (!isEnabled) return result;
     for (final source in pipeline.orderOf(MetaField.rating)) {
+      if (!_current(generation)) return {};
+      if (!pipeline.orderOf(MetaField.rating).contains(source)) continue;
       if (source == MetaSourceKind.tmdb) continue; // TMDB 分由 TmdbState 提供
+      if (source == MetaSourceKind.imdb) {
+        final fetch = _imdbRating;
+        if (fetch == null || imdbId.isEmpty) continue;
+        try {
+          final snapshot = await fetch(imdbId);
+          if (!_current(generation)) return {};
+          final rating = double.tryParse(snapshot.value);
+          if (rating != null && rating.isFinite && rating > 0) {
+            result[MetaSourceKind.imdb] = rating.clamp(0, 10).toDouble();
+          } else {
+            _note('IMDb 评分为空或无效');
+          }
+        } catch (_) {
+          if (!_current(generation)) return {};
+          _note('IMDb 评分获取失败', warn: true);
+        }
+        continue;
+      }
       if (source == MetaSourceKind.bangumi) {
         final bangumi = _bangumi;
         if (bangumi == null) continue;
         try {
           final candidates = await bangumi.search(query);
-          if (!_current(_generation)) return result;
+          if (!_current(generation)) return {};
           final chosen = MetaMatchRules.choose(candidates, query: query);
-          if (chosen == null) continue;
+          if (chosen == null || !pipeline.orderOf(MetaField.rating).contains(source)) continue;
           final subject = await bangumi.subject(chosen.identity.id);
-          if (!_current(_generation) || subject.isEmpty) continue;
+          if (!_current(generation)) return {};
+          if (subject.isEmpty || !pipeline.orderOf(MetaField.rating).contains(source)) continue;
           final rating = _ratingOf(subject);
           if (rating > 0) result[MetaSourceKind.bangumi] = rating;
         } catch (_) {
+          if (!_current(generation)) return {};
           _note('Bangumi 评分获取失败', warn: true);
         }
         continue;
@@ -815,21 +850,24 @@ class ExternalMetaService {
         if (douban == null) continue;
         try {
           final candidates = await douban.searchMeta(query);
-          if (!_current(_generation)) return result;
+          if (!_current(generation)) return {};
           final chosen = MetaMatchRules.choose(candidates, query: query);
-          if (chosen == null) continue;
+          if (chosen == null || !pipeline.orderOf(MetaField.rating).contains(source)) continue;
           final subject = await douban.metaSubject(
             chosen.identity.id,
             isTv: chosen.identity.isTv,
           );
-          if (!_current(_generation) || subject.isEmpty) continue;
+          if (!_current(generation)) return {};
+          if (subject.isEmpty || !pipeline.orderOf(MetaField.rating).contains(source)) continue;
           final rating = _ratingOf(subject);
           if (rating > 0) result[MetaSourceKind.douban] = rating;
         } catch (_) {
+          if (!_current(generation)) return {};
           _note('豆瓣评分获取失败', warn: true);
         }
       }
     }
+    if (!_current(generation)) return {};
     if (result.isNotEmpty) {
       _note('评分：${result.entries.map((e) => '${e.key.label} ${e.value}').join(' / ')}');
     }
@@ -839,7 +877,7 @@ class ExternalMetaService {
   double _ratingOf(Map<String, Object?> subject) {
     final raw = subject['rating'];
     if (raw is! Map) return 0;
-    final value = raw['value'];
+    final value = raw['value'] ?? raw['score'];
     final parsed = value is num ? value.toDouble() : double.tryParse('$value');
     if (parsed == null || !parsed.isFinite || parsed <= 0) return 0;
     return parsed > 10 ? 10 : parsed;

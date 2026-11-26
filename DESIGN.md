@@ -526,6 +526,24 @@ UI 不重排——安卓两处实现曾各自排过一遍，同一部片子出�
 「A Timer is still pending」，推荐行踩过同一个坑）。评分失败只在评分行留空，
 外链照常可用——它们是静态链接，不需要等网络。
 
+### 外链打开与 IMDb 分来源（2026-11-26 更正）
+
+**Windows 打开 HTTP(S) 外链统一走 `ShellExecuteW`，不再启动 `explorer.exe <url>`。** 用户报告旧路径打开文件夹而非浏览器；不能将其归因于未证实的 AppX 注册差异。本机复核存在 Edge 的 URL 打开命令。实现由 `lib/services/windows_shell_open.dart` FFI 调用 `shell32!ShellExecuteW("open", url)`，返回值 > 32 才算系统接收，失败保留复制链接兜底。Linux/macOS 仍是 `xdg-open` / `/usr/bin/open`。真机探针返回 `ok=true` 并观察到新增 Edge 进程；不据此声称页面已加载成功。
+
+**IMDb 分有两条来源，与「外部链接」里能否点开 IMDb 无关：**
+
+- OMDb（要 Key）给 IMDb / 烂番茄 / Metacritic 三家分；
+- 无 Key 时走 IMDb 的 GraphQL（`https://api.graphql.imdb.com/`，`title.ratingsSummary.aggregateRating`）。
+  本机标题页请求返回 202 AWS WAF 挑战页，无法从中取分；GraphQL 对 `tt34852924` 返回 200、7.6 分 / 1,234 票（数据可变）。HTML 仅作为一次失败兜底，不绕过挑战。IMDb 服务非稳定公开 API，按其非商业使用约束使用；请求或结构变化只降级该评分，不影响播放。
+
+解析统一收在 `core/imdb_rating.dart`（纯函数，`parseImdbGraphqlRating` / `parseImdbTitlePage`），
+取不到就返回空值、不抛异常——评分是详情页的增强信息，抓不到只是这个 chip 不出现。
+
+**IMDb 同时是一个元数据源**（`MetaSourceKind.imdb`）：只承担**评分**字段，默认排在 `rating`
+管线末位，卡片/详情兜底走 `ExternalMetaService.ratingsByTitle`。它没有外部作品身份
+（`isFallback` / `MetaIdentity.of` 都拒绝它），所以不会出现在人物或详情身份链里。
+旧管线首次升级在评分顺序末位追加 IMDb，保留原有顺序、模式及未知配置，独立 `ui.imdbRatingVersion=1` 记录一次性迁移。用户手动停用后重启不再追加。两条评分链路共享同一 IMDb 客户端、成功缓存与在途去重；停用评分来源或关闭外部元数据后不再直连取 IMDb 分，评分行同一站名只显示一次。
+
 ### 详情页短评与星级评分（2026-11-22）
 
 用户反馈 2026-11-22：「评论的评分得仔细找文本，一眼看不出高低」。短评的分数从元信息里的

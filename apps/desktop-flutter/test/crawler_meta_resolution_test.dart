@@ -83,7 +83,7 @@ void main() {
     },
   };
   for (final entry in noOpSettings.entries) {
-    test('no-op load preserves settings bytes: ${entry.key}', () async {
+    test('load preserves unrelated settings or migrates rating once: ${entry.key}', () async {
       final dir = Directory.systemTemp.createTempSync('crawler-no-op');
       addTearDown(() => dir.deleteSync(recursive: true));
       final file = File('${dir.path}/settings.json');
@@ -114,12 +114,21 @@ void main() {
       expect(
         store.metaPipeline.orderOf(MetaField.rating),
         entry.key == 'unsupported fields only'
-            ? [MetaSourceKind.bangumi]
-            : [MetaSourceKind.tmdb, MetaSourceKind.douban, MetaSourceKind.bangumi],
+            ? [MetaSourceKind.bangumi, MetaSourceKind.imdb]
+            : [MetaSourceKind.tmdb, MetaSourceKind.douban, MetaSourceKind.bangumi, MetaSourceKind.imdb],
       );
-      expect(file.readAsStringSync(), before);
+      final migratesRating = entry.key == 'unsupported fields only' ||
+          entry.key == 'default rules with old version';
+      if (migratesRating) {
+        final ui = (jsonDecode(file.readAsStringSync()) as Map)['ui'] as Map;
+        expect(ui['imdbRatingVersion'], 1);
+        expect(ui['metaPipelineVersion'], entry.key == 'default rules with old version' ? 0 : isNull);
+      } else {
+        expect(file.readAsStringSync(), before);
+      }
+      final once = file.readAsStringSync();
       await UiPreferencesStore(path: file.path).load();
-      expect(file.readAsStringSync(), before);
+      expect(file.readAsStringSync(), once);
     });
   }
 
@@ -159,6 +168,7 @@ void main() {
     expect(store.metaPipeline.modeOf(MetaField.title), MetaFieldMode.aggregate);
     expect(store.metaPipeline.orderOf(MetaField.rating), [
       MetaSourceKind.bangumi,
+      MetaSourceKind.imdb,
     ]);
     await store.rememberMetaPipeline(
       store.metaPipeline.toggleSource(MetaField.title, MetaSourceKind.source),
@@ -216,7 +226,8 @@ void main() {
     expect(ui['futureOption'], futureOption);
     expect(rules['futureField'], futureField);
     expect(rules['title'], {'mode': 'aggregate', 'order': ['bangumi', 'douban', 'source'], 'futureRuleOption': {'keep': 1}});
-    expect(rules['rating'], {'mode': 'priority', 'order': ['bangumi'], 'futureRatingOption': true});
+    expect(rules['rating'], {'mode': 'priority', 'order': ['bangumi', 'imdb'], 'futureRatingOption': true});
+    expect(ui['imdbRatingVersion'], 1);
     expect(ui['metaPipelineVersion'], 1);
     expect(root['other'], {'keep': 42});
     final once = file.readAsStringSync();
