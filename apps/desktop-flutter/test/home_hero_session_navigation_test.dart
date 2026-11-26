@@ -26,8 +26,12 @@ class _NavigationState extends AppState {
     : super(
         paths: AppPaths.resolve(
           overrides: {
-            for (final path in ['config', 'data', 'cache', 'state'])
-              path: directory.path,
+            // 契约（tests/test_linux_path_isolation.py）：四个平台目录必须逐字列出，
+            // 不允许用计算出来的映射——漏一个键会悄悄把缓存写到默认目录。
+            'config': directory.path,
+            'data': directory.path,
+            'cache': directory.path,
+            'state': directory.path,
           },
         ),
       );

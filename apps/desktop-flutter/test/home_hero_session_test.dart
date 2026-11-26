@@ -21,7 +21,12 @@ import 'package:webhtv_pc/state/home_hero_session.dart';
 class _State extends AppState {
   _State(Directory dir, this.metadata, this.dependencies)
       : super(paths: AppPaths.resolve(overrides: {
-          for (final name in ['config', 'data', 'cache', 'state']) name: dir.path,
+          // 契约（tests/test_linux_path_isolation.py）：四个平台目录必须逐字列出，
+          // 不允许用计算出来的映射——漏一个键会悄悄把缓存写到默认目录。
+          'config': dir.path,
+          'data': dir.path,
+          'cache': dir.path,
+          'state': dir.path,
         }));
   final TmdbService metadata;
   final DetailRecommendationDependencies dependencies;
