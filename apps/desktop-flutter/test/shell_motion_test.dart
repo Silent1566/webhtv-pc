@@ -136,9 +136,9 @@ void main() {
     (tester) async {
       await mount(tester);
       final rail = tester.getRect(find.byType(NavigationRail));
-      final manage = tester.getRect(
-        find.byKey(const ValueKey('topbar-manage-config')),
-      );
+      // 顶栏的稳定参照取「推送」：配置维护已收进设置，顶栏只剩切换入口，
+      // 这条用例要的是"外壳不动"，不是某个具体按钮的语义。
+      final push = tester.getRect(find.byKey(const ValueKey('topbar-push')));
       await select(tester, ShellSection.settings);
       final target = find.byKey(const ValueKey('settings-theme-mode'));
       expect(target, findsOneWidget);
@@ -154,10 +154,7 @@ void main() {
       expect(first.dy, end.dy, reason: '切页不改变净高度');
       expect(_opacity(tester, target), 1);
       expect(tester.getRect(find.byType(NavigationRail)), rail);
-      expect(
-        tester.getRect(find.byKey(const ValueKey('topbar-manage-config'))),
-        manage,
-      );
+      expect(tester.getRect(find.byKey(const ValueKey('topbar-push'))), push);
       expect(tester.takeException(), isNull);
     },
   );

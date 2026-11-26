@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/search_suggest_service.dart';
@@ -86,10 +87,9 @@ void main() {
       paths.cacheDir,
       paths.logDir,
     ]) {
-      expect(
-        directory.startsWith('${tempDir.path}${Platform.pathSeparator}'),
-        isTrue,
-      );
+      // 用 p.isWithin 而不是拼分隔符前缀：Windows 上临时目录返回的路径与
+      // AppPaths.resolve 归一化后的分隔符写法可以不同，前缀比较会误判。
+      expect(p.isWithin(tempDir.path, directory), isTrue);
     }
     state = _EntryTestState(paths: paths);
     await state.bootstrap();
