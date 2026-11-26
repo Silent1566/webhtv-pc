@@ -119,6 +119,9 @@ class HomeHeroSession extends ChangeNotifier {
   /// 本次挂载是否优先用磁盘副本：只有「已经在看这一页」的返回才这么选，第一次
   /// 进入仍走网络（第一帧不该被一串磁盘解码拖住）。
   bool _preferLocalArt = false;
+  /// 只有**后台**刷新才推迟「正在读的这一张」的文案；用户自己从详情页回来时，
+  /// 他要的就是更新后的信息，不能被这条保护挡住。
+  bool _deferReadingText = false;
   String _startupScope = '';
   String _startupSaveKey = '';
   final Set<String> _failedStartupKeys = {};
@@ -254,6 +257,8 @@ class HomeHeroSession extends ChangeNotifier {
   /// 详情/播放返回后：已解析的字段可能变了，重算一次（不清空已完成的高清资格）。
   void invalidateMetadata() {
     if (_disposed) return;
+    // 主动失效（详情/播放返回）优先于阅读保护：文案立即采用新结果。
+    _deferReadingText = false;
     _commit(() {
       _heroScanKey = '';
       _candidateSignatures.clear();
@@ -272,7 +277,7 @@ class HomeHeroSession extends ChangeNotifier {
       _art.clear();
       _recommendationMetaKey = '';
       _recommendationMetaGeneration++;
-      _metaCheckedAt = null;
+      _deferReadingText = false;
     });
     _ensureRecommendationMeta();
   }
@@ -987,7 +992,9 @@ class HomeHeroSession extends ChangeNotifier {
     }
     // 正在读的这一张不接受后台改写：新文案等用户切走之后再采用。
     // 放在所有来源之后统一处理，避免哪条分支先到就漏掉这条约束。
-    final reading = readingKey == null ? null : _lastDisplayedHeroes[readingKey];
+    final reading = (!_deferReadingText || readingKey == null)
+        ? null
+        : _lastDisplayedHeroes[readingKey];
     if (reading != null) {
       final at = displayed.indexWhere((item) => item.key == readingKey);
       if (at >= 0) {
@@ -1470,6 +1477,7 @@ class HomeHeroSession extends ChangeNotifier {
     final now = _clock();
     if (_metaCheckedAt != null && now.difference(_metaCheckedAt!) < _revalidateAfter) return;
     _metaCheckedAt = now;
+    _deferReadingText = true;
     _resumeMetaKey = '';
     _followingMetaKey = '';
     _recommendationMetaKey = '';

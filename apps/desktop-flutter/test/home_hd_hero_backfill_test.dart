@@ -43,6 +43,9 @@ class _State extends AppState {
         }));
   final List<PlaybackHistory> rows;
   final TmdbService metadata;
+  DateTime now = DateTime(2026, 1, 1);
+  @override
+  DateTime Function() get heroSessionClock => () => now;
   final recommendationFixture = DetailRecommendationDependencies(loaders: const {}, feedback: RecommendationFeedbackStore());
   @override DetailRecommendationDependencies get recommendationDependencies => recommendationFixture;
   MetaPipeline pipeline = MetaPipeline.defaults;
@@ -235,8 +238,10 @@ void main(){
     await pump(tester);
     expect(tester.widget<HomeHero>(find.byType(HomeHero)).items.first.overview, '剧情1');
     metadataVersion = 1;
-    state.homeHeroSession.invalidateMetadata();
-    await tester.pumpAndSettle();
+    // 后台复核（6 小时窗口）走 detach/attach，而不是用户主动从详情页返回。
+    state.now = state.now.add(const Duration(hours: 7));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pump(tester);
     final items = tester.widget<HomeHero>(find.byType(HomeHero)).items;
     expect(items.first.overview, '剧情1', reason: '正在读的这一张不接受后台改写');
     expect(items[1].overview, '更新剧情2', reason: '没在读的那一张照常换成新内容');

@@ -2210,7 +2210,11 @@ class AppState extends ChangeNotifier
   /// `HomePage` 页面的。页面销毁只解除订阅，在途任务照常收尾。
   HomeHeroSession? _homeHeroSession;
   HomeHeroSession get homeHeroSession =>
-      _homeHeroSession ??= HomeHeroSession(this);
+      _homeHeroSession ??= HomeHeroSession(this, clock: heroSessionClock);
+
+  /// 会话的时钟来源：默认取真实时间，测试可覆盖以确定性地验证过期复核。
+  @protected
+  DateTime Function() get heroSessionClock => DateTime.now;
 
   /// 把一条历史行映射成推荐种子。
   ///
