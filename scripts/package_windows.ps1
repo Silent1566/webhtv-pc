@@ -112,6 +112,7 @@ function Assert-PackageBuildTree([string]$Root, [switch]$Staging) {
             if (-not $Staging -and $path -cmatch '^[^/]+\.(exp|lib|ilk)$') { $allowed = $true }
             if ($path.StartsWith('data/flutter_assets/',[StringComparison]::Ordinal) -and $item.Extension -match '(?i)^\.(py|pyc|jar)$') { $allowed = $false }
             if ($Staging -and $path -cin @('BUILD_INFO.txt','THIRD_PARTY.txt','libmpv-SOURCE.txt')) { $allowed = $true }
+            if ($Staging -and $path -ceq $mediaLicenseName) { $allowed = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $mediaLicenseSha256 }
             if ($path.StartsWith('sidecars/',[StringComparison]::Ordinal)) {
                 $allowed = $path -cin $sidecarFiles
                 foreach ($dir in $sidecarDependencyDirs.Keys) { if ($path.StartsWith($dir+'/',[StringComparison]::Ordinal)) { $allowed = $true } }
@@ -330,6 +331,15 @@ $pythonLock = Read-RuntimeLock (Join-Path $PSScriptRoot 'python-runtime.lock.jso
 $pythonBundle = Test-PythonRuntimeBundle $PythonRuntimeDir $pythonLock
 Assert-PackageBuildTree $BuildDir
 
+$mediaLicenseName = 'mpv-FFmpeg-LICENSES.txt'
+$mediaLicenseSource = Join-Path $RepoRoot 'third_party/mpv-ffmpeg-LICENSES.txt'
+$mediaLicenseSha256 = '1f922589448bddab88928730c89274444683a41bd985fcf3266d98306e3786fd'
+if (-not (Test-Path -LiteralPath $mediaLicenseSource -PathType Leaf)) { Fail "缺少 mpv/FFmpeg 许可全文：$mediaLicenseSource" }
+try { Assert-PackageWorkspacePath $mediaLicenseSource | Out-Null } catch { Fail "mpv/FFmpeg 许可路径不可信：$($_.Exception.Message)" }
+if ((Get-FileHash -LiteralPath $mediaLicenseSource -Algorithm SHA256).Hash.ToLowerInvariant() -cne $mediaLicenseSha256) {
+    Fail 'mpv/FFmpeg 许可全文 SHA256 不匹配：请恢复仓库中的完整上游原文。'
+}
+
 # Node 运行时：Windows 发行包随包内置 node.exe（用户无需自备 Node）。
 if ($NodeVersion -notmatch '^v\d+\.\d+\.\d+$') {
     Fail "非法 Node 版本号 '$NodeVersion'，期望 vX.Y.Z（如 v22.23.4）。"
@@ -377,6 +387,7 @@ try {
 
     # 1. 主程序与播放器 native 库
     Copy-Item -Path (Join-Path $BuildDir '*') -Destination $staging -Recurse -Force
+    Copy-Item -LiteralPath $mediaLicenseSource -Destination (Join-Path $staging $mediaLicenseName)
     # MSVC 链接自定义 DLL target 会生成 .exp/.lib/.ilk：它们是构建中间产物，随整目录
     # 复制一起过来了，发行包不带它们（staging 校验同样会拒绝，这里先清干净）。
     foreach ($intermediate in @(Get-ChildItem -LiteralPath $staging -Recurse -File |
@@ -548,7 +559,8 @@ Sidecar 宿主（随包）：Python / Node / JVM
   - 用户机器无需自行安装 Node。
 - Python $($pythonBundle.pythonVersion) 离线运行时随包：runtime/python/python-runtime.zip（许可证与 dist-info 在压缩包内）；无需本机安装，运行/修复不联网。
 - JVM 解释器仍需本机安装 JDK 17+。
-- 第三方许可见 data/flutter_assets/NOTICES.Z。
+- mpv/FFmpeg 许可全文见 $mediaLicenseName；来源与版本见 libmpv-SOURCE.txt。
+- Flutter 第三方许可见 data/flutter_assets/NOTICES.Z。
 "@
     [IO.File]::WriteAllText((Join-Path $staging 'BUILD_INFO.txt'), $buildInfo + "`n", $utf8)
 
@@ -557,6 +569,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
     $inventory.Add('随包文件清单（主程序 / 动态库 / Sidecar 宿主 / 内置 Node / Python 运行时）')
     $inventory.Add("完整性标签：$integritySummary；网络锁定：$unblockSummary")
     $inventory.Add('flutter_assets 内的资源与第三方许可不逐项列出；许可见 data/flutter_assets/NOTICES.Z。')
+    $inventory.Add("mpv/FFmpeg 许可全文：$mediaLicenseName；来源、版本与二进制哈希：libmpv-SOURCE.txt。")
     $inventory.Add('')
 
     $targets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
@@ -616,6 +629,7 @@ Sidecar 宿主（随包）：Python / Node / JVM
             "ffmpeg        $($libmpvManifest.ffmpegVersion)"
             ''
             $libmpvManifest.license
+            "许可全文      $mediaLicenseName（mpv/FFmpeg 上游说明 + GPLv2/GPLv3/LGPLv2.1/LGPLv3）"
             ''
             '为什么不用 media_kit 归档里那一份：它的 libavfilter 没有编进滤镜表，连 lavfi=[anull] 都建不起来，'
             '音量归一在 Windows 上不可能生效（裸名被拒 rc=-9；lavfi 形态会让 mpv 丢掉整条音轨）。'

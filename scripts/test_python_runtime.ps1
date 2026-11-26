@@ -227,6 +227,66 @@ if ($Review) {
             Write-Host "PASS rejected $($case.path) without output or input mutation"
         }
     }
+    function Invoke-ReviewMediaPackage([string]$out) {
+        $fixture = $script:packageFixture
+        & (Join-Path $PSScriptRoot 'package_windows.ps1') -RepoRoot $fixture -BuildDir (Join-Path $fixture 'build') -OutputDir $out -NodeRuntimeDir (Join-Path $fixture 'node') -PythonRuntimeDir (Join-Path $repo 'runtime/python') -Version 0.1.0 -Commit ('0'*40) -SkipNativeAiAssetChecks 6>$null
+    }
+    Review-Check 'F8 missing or corrupt mpv/FFmpeg licenses rejected before publishing' {
+        $fixture = $script:packageFixture
+        $source = Join-Path $fixture 'third_party/mpv-ffmpeg-LICENSES.txt'
+        New-Item -ItemType Directory (Split-Path -Parent $source) -Force | Out-Null
+        foreach ($case in @('missing','empty','truncated')) {
+            Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
+            if ($case -ne 'missing') { [IO.File]::WriteAllText($source, $(if ($case -eq 'empty') { '' } else { 'GNU GENERAL PUBLIC LICENSE' })) }
+            $out = Join-Path $fixture ('media-license-' + $case + '-' + [guid]::NewGuid().ToString('N'))
+            Must-Fail { Invoke-ReviewMediaPackage $out } 'mpv/FFmpeg 许可'
+            if (Test-Path $out) { throw "Rejected $case license created output" }
+            if ($case -ne 'missing' -and -not (Test-Path $source)) { throw 'License rejection removed input' }
+        }
+    }
+    Review-Check 'F9 official mpv/FFmpeg full license texts preserved in portable ZIP' {
+        $original = Join-Path $repo 'third_party/mpv-ffmpeg-LICENSES.txt'
+        if (-not (Test-Path -LiteralPath $original -PathType Leaf)) { throw 'Missing vendored mpv/FFmpeg license full texts' }
+        $text = [IO.File]::ReadAllText($original)
+        $sections = [ordered]@{
+            'mpv/Copyright' = 'bfe9ee4cceabcb8ecbfadf208d04156f73d801e6a57369a5606bb8341e204a23'
+            'mpv/LICENSE.GPL' = 'edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6'
+            'mpv/LICENSE.LGPL' = '72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9'
+            'FFmpeg/LICENSE.md' = 'e6dc72d5665a1ebd6dcc841de59278dad4ca77ecc47b03f1064a55c3e9ea8bb8'
+            'FFmpeg/COPYING.GPLv2' = '8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643'
+            'FFmpeg/COPYING.GPLv3' = '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+            'FFmpeg/COPYING.LGPLv2.1' = '246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30'
+            'FFmpeg/COPYING.LGPLv3' = 'da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768'
+        }
+        foreach ($name in $sections.Keys) {
+            $section = [regex]::Match($text, '(?s)----- BEGIN ' + [regex]::Escape($name) + " -----`n(?<body>.*?)----- END " + [regex]::Escape($name) + ' -----')
+            if (-not $section.Success) { throw "Missing full license section: $name" }
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($section.Groups['body'].Value))).ToLowerInvariant()
+            if ($hash -cne $sections[$name]) { throw "Changed/truncated upstream license text: $name" }
+        }
+        $source = Join-Path $script:packageFixture 'third_party/mpv-ffmpeg-LICENSES.txt'
+        Copy-Item -LiteralPath $original -Destination $source -Force
+        $manifest = Join-Path $script:packageFixture '.local/libmpv-windows/manifest.json'
+        New-Item -ItemType Directory (Split-Path -Parent $manifest) -Force | Out-Null
+        @{ source='fixture'; mpvVersion='fixture'; ffmpegVersion='fixture'; license='fixture' } | ConvertTo-Json | Set-Content $manifest
+        $out = Join-Path $script:packageFixture 'media-license-valid-dist'
+        Invoke-ReviewMediaPackage $out
+        $release = Get-ChildItem $out -Filter '*.zip' | Select-Object -First 1
+        $zip = [IO.Compression.ZipFile]::OpenRead($release.FullName)
+        try {
+            $entries = @($zip.Entries | Where-Object { $_.FullName.EndsWith('/mpv-FFmpeg-LICENSES.txt', [StringComparison]::Ordinal) })
+            if ($entries.Count -ne 1) { throw 'ZIP must contain exactly one mpv/FFmpeg full license bundle' }
+            $stream = $entries[0].Open()
+            try { $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() } finally { $stream.Dispose() }
+            if ($hash -cne (Get-FileHash $original -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'ZIP changed full license bytes' }
+            foreach ($name in @('BUILD_INFO.txt','THIRD_PARTY.txt','libmpv-SOURCE.txt')) {
+                $entry = @($zip.Entries | Where-Object { $_.FullName.EndsWith('/' + $name) })[0]
+                $reader = [IO.StreamReader]::new($entry.Open())
+                try { if ($reader.ReadToEnd() -notmatch 'mpv-FFmpeg-LICENSES\.txt') { throw "$name omits full license location" } } finally { $reader.Dispose() }
+            }
+        } finally { $zip.Dispose() }
+        if ((Get-FileHash $source -Algorithm SHA256).Hash -cne (Get-FileHash $original -Algorithm SHA256).Hash) { throw 'Packaging changed license input' }
+    }
     if($reviewFailures.Count){throw "Review RED: $($reviewFailures.Count) cases failed: $($reviewFailures -join '; ')"}
 }
 if ($Integration) {
@@ -251,6 +311,9 @@ if ($Integration) {
         Expand-RuntimeArchive (Join-Path $output 'python-runtime.zip') $nativeDir @{files=0;bytes=0}
         Invoke-RuntimeProbe $nativeDir (Read-RuntimeLock (Join-Path $PSScriptRoot 'python-runtime.lock.json'))
         $fixture = $script:packageFixture
+        $mediaLicense = Join-Path $fixture 'third_party/mpv-ffmpeg-LICENSES.txt'
+        New-Item -ItemType Directory (Split-Path -Parent $mediaLicense) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repo 'third_party/mpv-ffmpeg-LICENSES.txt') -Destination $mediaLicense -Force
         $jar = Join-Path $fixture 'valid-host.jar'
         $jvm = [IO.Compression.ZipFile]::Open($jar, [IO.Compression.ZipArchiveMode]::Create)
         try {
@@ -269,7 +332,7 @@ if ($Integration) {
         $release = Get-ChildItem (Join-Path $fixture 'dist') -Filter '*.zip' | Select-Object -First 1
         $zip = [IO.Compression.ZipFile]::OpenRead($release.FullName)
         try {
-            foreach ($relative in @('runtime/python/python-runtime.zip','runtime/python/bundle.json','runtime/node/node.exe','sidecars/spider-host-python/host.py','sidecars/spider-host-js/host.js','sidecars/spider-host-jvm/host.jar','data/audio_ai/LiteRT-LICENSE.txt')) {
+            foreach ($relative in @('mpv-FFmpeg-LICENSES.txt','runtime/python/python-runtime.zip','runtime/python/bundle.json','runtime/node/node.exe','sidecars/spider-host-python/host.py','sidecars/spider-host-js/host.js','sidecars/spider-host-jvm/host.jar','data/audio_ai/LiteRT-LICENSE.txt')) {
                 if (-not @($zip.Entries | Where-Object {$_.FullName.EndsWith('/' + $relative)}).Count) { throw "Package omitted $relative" }
             }
             $licenseEntry = @($zip.Entries | Where-Object {$_.FullName.EndsWith('/data/audio_ai/LiteRT-LICENSE.txt')})
