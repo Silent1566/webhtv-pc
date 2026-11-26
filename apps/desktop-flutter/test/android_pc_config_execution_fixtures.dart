@@ -15,6 +15,7 @@ import 'package:webhtv_pc/services/pc_config_snapshot_server.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
 import 'android_adb_runtime_fixtures.dart';
+import 'support/temp_dirs.dart';
 
 const pcExecutionSource = 'local|https://pc.example.test/config/original.json';
 const pcExecutionRaw = <String, Object?>{
@@ -232,7 +233,7 @@ class PcExecutionFixture {
     state.dispose();
     await state.androidExecutionShutdown;
     client.close();
-    if (root.existsSync()) root.deleteSync(recursive: true);
+    await deleteTempDirBestEffort(root);
   }
 }
 

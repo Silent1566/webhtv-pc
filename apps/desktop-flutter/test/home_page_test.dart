@@ -6,7 +6,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
+
 import 'support/home_hd_art_fixture.dart';
+
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/home_backdrop.dart';
 import 'package:webhtv_pc/ui/home_hero.dart';
@@ -106,7 +108,9 @@ void main() {
     tester.view.physicalSize = const Size(1024, 560);
     await tester.pumpAndSettle();
     expect(
-      tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,
+      tester
+          .getSize(find.byKey(const ValueKey('home-hero-startup-placeholder')))
+          .height,
       closeTo(560, 0.5),
       reason: '高度不再随素材缩：560 高的窗口里 hero 就是 560',
     );
@@ -115,17 +119,21 @@ void main() {
     tester.view.physicalSize = const Size(1024, 300);
     await tester.pumpAndSettle();
     expect(
-      tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,
+      tester
+          .getSize(find.byKey(const ValueKey('home-hero-startup-placeholder')))
+          .height,
       closeTo(360, 0.5),
     );
   });
 
   testWidgets('有配置但没看过任何东西：空态给出「去点播逛逛」这一条出路', (tester) async {
-    await state.importConfig(
-      '{"sites":[{"key":"demo","name":"示例","type":3,"api":"c1","searchable":1,'
-      '"quickSearch":1,"filter":0}]}',
-      displayName: 'demo',
-    );
+    await tester.runAsync(() async {
+      await state.importConfig(
+        '{"sites":[{"key":"demo","name":"示例","type":3,"api":"c1","searchable":1,'
+        '"quickSearch":1,"filter":0}]}',
+        displayName: 'demo',
+      );
+    });
     var browsed = false;
     await pumpHome(
       tester,
@@ -142,12 +150,14 @@ void main() {
     // 用户 2026-11-25 图一：直播卡进了 hero。真实数据里那行来自 `site_key=Douyu`
     // 的**站点**（配置里叫「🌇｜斗鱼｜直播」，type 3，和点播站同一种），所以按站点名
     // 与键匹配可配置的关键词（默认「直播」「Live」）。
-    await state.importConfig(
-      '{"sites":[{"key":"demo","name":"示例影视","type":3,"api":"c1","searchable":1,'
-      '"quickSearch":1,"filter":0},{"key":"Douyu","name":"🌇｜斗鱼｜直播","type":3,'
-      '"api":"c2","searchable":1,"quickSearch":1,"filter":0}]}',
-      displayName: 'demo',
-    );
+    await tester.runAsync(() async {
+      await state.importConfig(
+        '{"sites":[{"key":"demo","name":"示例影视","type":3,"api":"c1","searchable":1,'
+        '"quickSearch":1,"filter":0},{"key":"Douyu","name":"🌇｜斗鱼｜直播","type":3,'
+        '"api":"c2","searchable":1,"quickSearch":1,"filter":0}]}',
+        displayName: 'demo',
+      );
+    });
     final now = DateTime.now().millisecondsSinceEpoch;
     state.database!.upsertHistory(
       siteKey: 'demo',
@@ -173,11 +183,28 @@ void main() {
     );
     await pumpHome(tester, onOpenBrowse: () {}, onImportConfig: () {});
 
-    expect(tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,800);
-    await tester.scrollUntilVisible(find.text('点播剧'),400,
-      scrollable:find.descendant(of:find.byKey(const ValueKey('home-scroll')),matching:find.byType(Scrollable)).first);
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('home-hero-startup-placeholder')))
+          .height,
+      800,
+    );
+    await tester.scrollUntilVisible(
+      find.text('点播剧'),
+      400,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('home-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     expect(find.text('点播剧'), findsOneWidget);
-    expect(find.textContaining('该上分了'), findsNothing, reason: '直播行的站点名命中关键词，不进首页');
+    expect(
+      find.textContaining('该上分了'),
+      findsNothing,
+      reason: '直播行的站点名命中关键词，不进首页',
+    );
   });
 
   testWidgets('背景层在滚动视图之外：滚下去它不动，轨道从它上面滑过', (tester) async {
@@ -276,8 +303,11 @@ void main() {
       findsOneWidget,
     );
     final updatedItems = tester.widget<HomeHero>(find.byType(HomeHero)).items;
-    expect(updatedItems.map((item) => item.title), contains('作品3'),
-        reason: '保持当前选择不能靠丢弃新候选实现');
+    expect(
+      updatedItems.map((item) => item.title),
+      contains('作品3'),
+      reason: '保持当前选择不能靠丢弃新候选实现',
+    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

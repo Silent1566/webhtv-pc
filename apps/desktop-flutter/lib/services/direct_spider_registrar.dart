@@ -55,14 +55,44 @@ class DirectSpiderRegistrar {
   /// 扫描配置里的直连 js/py 站点并完成注册。
   ///
   /// 返回「站点 key → LocalSpider」；失败/不支持的站点不出现在结果里。
-  Future<Map<String, LocalSpider>> materialize(AppConfig config) async {
+  final Expando<Map<String, Future<LocalSpider?>>> _siteWork = Expando();
+
+  Future<LocalSpider?> materializeSite(AppConfig config, Site site) {
+    final kind = directSpiderKind(site);
+    if (kind == null) return Future.value();
+    final work = _siteWork[config] ??= {};
+    return work.putIfAbsent(site.key, () {
+      late final Future<LocalSpider?> future;
+      future = _materializeSite(site, kind).then(
+        (local) {
+          if (local == null && identical(work[site.key], future)) {
+            work.remove(site.key);
+          }
+          return local;
+        },
+        onError: (Object error, StackTrace stack) {
+          if (identical(work[site.key], future)) work.remove(site.key);
+          Error.throwWithStackTrace(error, stack);
+        },
+      );
+      return future;
+    });
+  }
+
+  Future<Map<String, LocalSpider>> materialize(
+    AppConfig config, {
+    void Function(LocalSpider)? onRegistered,
+  }) async {
     final result = <String, LocalSpider>{};
     for (final site in config.sites) {
       final kind = directSpiderKind(site);
       if (kind == null) continue;
       try {
-        final local = await _materializeSite(site, kind);
-        if (local != null) result[site.key] = local;
+        final local = await materializeSite(config, site);
+        if (local != null) {
+          result[site.key] = local;
+          onRegistered?.call(local);
+        }
       } catch (error) {
         log?.warning(
           '直连站源注册失败 site=${site.key} api=${redactUrl(site.api)} $error',
@@ -73,10 +103,14 @@ class DirectSpiderRegistrar {
     if (result.isNotEmpty) {
       log?.info('直连站源已注册 ${result.length} 个', scope: 'spider');
     }
+    _siteWork[config] = null;
     return result;
   }
 
-  Future<LocalSpider?> _materializeSite(Site site, DirectSpiderKind kind) async {
+  Future<LocalSpider?> _materializeSite(
+    Site site,
+    DirectSpiderKind kind,
+  ) async {
     if (kind == DirectSpiderKind.catVod) {
       return _materializeCatVod(site);
     }
@@ -151,7 +185,8 @@ class DirectSpiderRegistrar {
     final metaSha256 = _nonEmpty((await _readJson(metaFile))['loaderSha256']);
     final manifestSha256 = await _recordedEntrySha256(manifestPath);
     final existingSha256 = await _fileSha256(loaderFile);
-    final reusable = existingSha256 != null &&
+    final reusable =
+        existingSha256 != null &&
         (existingSha256 == metaSha256 || existingSha256 == manifestSha256);
 
     final List<int> bytes;

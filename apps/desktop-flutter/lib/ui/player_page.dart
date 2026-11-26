@@ -690,6 +690,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       vodId: _request.vodId,
     );
     _controller = PlayerController(
+      observedMediaFormatFor: widget.state.proxyObservedFormatFor,
       initialVolume: widget.state.hasExplicitPlayerVolume
           ? widget.state.playerVolume
           : null,
@@ -3447,6 +3448,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final rate = previous.rate;
       previous.removeListener(_onControllerChanged);
       _controller = PlayerController(
+        observedMediaFormatFor: widget.state.proxyObservedFormatFor,
         initialVolume: volume.volume,
         initialResumeVolume: volume.resumeVolume,
         onVolumeChanged: _rememberVolume,
@@ -6881,6 +6883,12 @@ class _PlayerErrorOverlay extends StatelessWidget {
 @visibleForTesting
 bool debugOsdTickerRunning(State<PlayerPage> state) =>
     (state as _PlayerPageState)._osdTimer?.isActive ?? false;
+
+/// 仅供测试：读取当前控制器的格式观测委托，不触发播放。
+@visibleForTesting
+MediaFormat? Function(String)? debugPlayerObservedMediaFormatFor(
+  State<PlayerPage> state,
+) => (state as _PlayerPageState)._controller.observedMediaFormatFor;
 
 /// 仅供测试：控制浮层当前是否可见（`design/01` §4.4）。
 ///

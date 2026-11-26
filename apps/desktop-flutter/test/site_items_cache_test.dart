@@ -8,6 +8,7 @@
 /// 缓存必须跟着 SpiderRouter.siteRevision 换代，否则用户装完 jar 仍看到旧结论。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -57,8 +58,9 @@ void main() {
     expect(await state.importConfig(_shellConfigJson()), isTrue);
   });
 
-  tearDown(() {
+  tearDown(() async {
     state.dispose();
+    await state.pythonEnvironmentIdle;
     try {
       tempDir.deleteSync(recursive: true);
     } catch (_) {}
@@ -74,27 +76,47 @@ void main() {
     );
   });
 
-  test('写入探测结论后必须更新站点可用性文案', () async {
+  test('写入探测结论后后台重判并通知更新站点可用性文案', () async {
     final first = state.siteItems;
-    final binding = CspJvmBinding(
-      root: p.join(state.paths.configDir, 'spiders', 'csp'),
-    );
-    await JarIntake.writeProbe(binding.directoryFor('csp_S0'), {
-      'siteKey': 'csp_S0',
-      'summary': '测试入口不可加载',
-    });
-    final second = state.siteItems;
-    expect(second.first.availability.reason, contains('测试入口不可加载'));
-    expect(
-      identical(second, first),
-      isFalse,
-      reason: '磁盘变了必须重判，否则装完 jar 仍显示「缺少桌面 JVM 站源」',
-    );
-    expect(
-      second.map((item) => item.site.key).toList(),
-      first.map((item) => item.site.key).toList(),
-      reason: '重建只换结论，站点顺序不变',
-    );
+    final refreshed = Completer<void>();
+    void onStateChanged() {
+      if (!refreshed.isCompleted &&
+          (state.siteItems.first.availability.reason ?? '').contains(
+            '测试入口不可加载',
+          )) {
+        refreshed.complete();
+      }
+    }
+
+    state.addListener(onStateChanged);
+    try {
+      final binding = CspJvmBinding(
+        root: p.join(state.paths.configDir, 'spiders', 'csp'),
+      );
+      await JarIntake.writeProbe(binding.directoryFor('csp_S0'), {
+        'siteKey': 'csp_S0',
+        'summary': '测试入口不可加载',
+      });
+      final checking = state.siteItems;
+      expect(identical(checking, first), isFalse);
+      await refreshed.future.timeout(const Duration(seconds: 10));
+
+      final second = state.siteItems;
+      expect(second.first.availability.reason, contains('测试入口不可加载'));
+      expect(
+        identical(second, checking),
+        isFalse,
+        reason: '后台重判完成后必须通知并替换检查中的列表，不能永久停在旧结论',
+      );
+      expect(identical(state.siteItems, second), isTrue);
+      expect(
+        second.map((item) => item.site.key).toList(),
+        first.map((item) => item.site.key).toList(),
+        reason: '重建只换结论，站点顺序不变',
+      );
+    } finally {
+      state.removeListener(onStateChanged);
+    }
   });
 
   test('JarIntake 记录缓存按文件大小/修改时间失效', () async {

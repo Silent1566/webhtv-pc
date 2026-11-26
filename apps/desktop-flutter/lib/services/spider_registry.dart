@@ -52,7 +52,15 @@ class LocalSpider {
 
 /// 注册表：扫描 Spider 目录，加载并校验 manifest（§9.7）。
 class SpiderManifestRegistry {
-  SpiderManifestRegistry({required this.root, required this.log});
+  SpiderManifestRegistry({
+    required this.root,
+    required this.log,
+    Iterable<LocalSpider> initialSpiders = const [],
+  }) {
+    for (final spider in initialSpiders) {
+      _spiders[spider.key] = spider;
+    }
+  }
 
   /// Spider 根目录（`%APPDATA%/webhtv-pc/spiders`）。
   final String root;
@@ -473,12 +481,71 @@ class JavaRuntimeProbe {
   bool get available => command != null;
 }
 
+/// 可发送到后台判定 isolate 的运行时探测快照，不包含进程或服务句柄。
+class RuntimeCommandSnapshot {
+  const RuntimeCommandSnapshot({
+    required this.preferredPython,
+    required this.pythonProbed,
+    required this.python,
+    required this.catVodProbed,
+    required this.catVod,
+    required this.java,
+  });
+
+  final SidecarCommand? preferredPython;
+  final bool pythonProbed;
+  final SidecarCommand? python;
+  final bool catVodProbed;
+  final SidecarCommand? catVod;
+  final Map<String, JavaRuntimeProbe> java;
+}
+
 /// 本地 Spider 的运行命令解析（§9.7 `runtime` 字段）。
 class LocalSpiderCommand {
   const LocalSpiderCommand({required this.executable, required this.arguments});
 
   final String executable;
   final List<String> arguments;
+
+  static SidecarCommand? _preferredPythonCommand;
+  static int runtimeRevision = 0;
+
+  static RuntimeCommandSnapshot snapshot() => RuntimeCommandSnapshot(
+    preferredPython: _preferredPythonCommand,
+    pythonProbed: _pythonProbed,
+    python: _pythonResolved,
+    catVodProbed: _pythonCatVodProbed,
+    catVod: _pythonCatVodResolved,
+    java: Map.of(_javaProbeCache),
+  );
+
+  static void restoreSnapshot(RuntimeCommandSnapshot snapshot) {
+    final preferred = snapshot.preferredPython;
+    SidecarRuntimeResolver.preferPythonExecutable(
+      preferred?.executable,
+      arguments: preferred?.arguments ?? const [],
+    );
+    _preferredPythonCommand = preferred;
+    _pythonProbed = snapshot.pythonProbed;
+    _pythonResolved = snapshot.python;
+    _pythonCatVodProbed = snapshot.catVodProbed;
+    _pythonCatVodResolved = snapshot.catVod;
+    _javaProbeCache.addAll(snapshot.java);
+  }
+
+  static void mergeSnapshot(RuntimeCommandSnapshot snapshot) {
+    if (!_pythonProbed && snapshot.pythonProbed) {
+      _pythonProbed = true;
+      _pythonResolved = snapshot.python;
+    }
+    if (!_pythonCatVodProbed && snapshot.catVodProbed) {
+      _pythonCatVodProbed = true;
+      _pythonCatVodResolved = snapshot.catVod;
+    }
+    for (final entry in snapshot.java.entries) {
+      _javaProbeCache.putIfAbsent(entry.key, () => entry.value);
+    }
+  }
 
   static const String _hostRelative = 'host.py';
 
@@ -855,6 +922,7 @@ class LocalSpiderCommand {
   /// 生产路径上只有「托管运行时刚建好、解释器集合变了」才需要调用；其余情况
   /// 缓存与进程同生命周期。
   static void invalidatePythonCache() {
+    runtimeRevision++;
     _pythonProbed = false;
     _pythonResolved = null;
     _pythonCatVodProbed = false;
@@ -883,6 +951,12 @@ class LocalSpiderCommand {
     bool verified = false,
     bool catVodReady = false,
   }) {
+    _preferredPythonCommand = path == null
+        ? null
+        : SidecarCommand(
+            executable: path,
+            arguments: List.unmodifiable(arguments),
+          );
     SidecarRuntimeResolver.preferPythonExecutable(
       path,
       arguments: arguments,

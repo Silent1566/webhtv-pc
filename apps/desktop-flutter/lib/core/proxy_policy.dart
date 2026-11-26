@@ -275,6 +275,20 @@ class ProxySession {
     if (count > 0 && !revoked) _receivedBytes += count;
   }
 
+  final Set<String> _observedHlsPaths = {};
+
+  /// Positive signature evidence only, bounded and owned by this session.
+  void recordHlsPath(String path) {
+    if (usable && _observedHlsPaths.length < maxChildTargets) {
+      _observedHlsPaths.add(path);
+    }
+  }
+
+  void clearHlsPath(String path) => _observedHlsPaths.remove(path);
+
+  bool hasObservedHlsPath(String path) =>
+      usable && _observedHlsPaths.contains(path);
+
   bool revoked = false;
 
   /// 会话内允许继承的 `User-Agent`；不得用于覆盖宿主的安全/诊断 Header（§11.3.1）。
@@ -585,6 +599,31 @@ abstract final class HlsPlaylistRewriter {
     return baseUri.resolveUri(uri);
   }
 
+  /// true/false 表示签名已确定，null 表示仍需少量前缀字节。
+  static bool? sniffPlaylistPrefix(List<int> bytes) {
+    var offset = 0;
+    if (bytes.isNotEmpty && bytes.first == 0xef) {
+      const bom = [0xef, 0xbb, 0xbf];
+      for (var i = 0; i < bom.length; i++) {
+        if (i >= bytes.length) return null;
+        if (bytes[i] != bom[i]) return false;
+      }
+      offset = bom.length;
+    }
+    while (offset < bytes.length &&
+        const [0x20, 0x09, 0x0a, 0x0d].contains(bytes[offset])) {
+      offset++;
+    }
+    const signature = [0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55]; // #EXTM3U
+    for (var i = 0; i < signature.length; i++) {
+      if (offset + i >= bytes.length) return null;
+      if (bytes[offset + i] != signature[i]) return false;
+    }
+    offset += signature.length;
+    if (offset >= bytes.length) return null;
+    return bytes[offset] == 0x0a || bytes[offset] == 0x0d;
+  }
+
   /// 判断响应是否是需要重写的 HLS 清单。
   static bool looksLikePlaylist(String? contentType, String url) {
     final type = (contentType ?? '').toLowerCase();
@@ -747,6 +786,8 @@ class ProxyLogRecord {
     required this.tokenFingerprint,
     required this.targetHost,
     this.statusCode,
+    this.upstreamStatus,
+    this.downstreamStatus,
     this.bytes = 0,
     this.elapsed = Duration.zero,
     this.range,
@@ -756,7 +797,11 @@ class ProxyLogRecord {
 
   final String tokenFingerprint;
   final String targetHost;
+
+  /// Legacy status: upstream for forwarded bodies, local rejection otherwise.
   final int? statusCode;
+  final int? upstreamStatus;
+  final int? downstreamStatus;
   final int bytes;
   final Duration elapsed;
   final String? range;
@@ -768,6 +813,8 @@ class ProxyLogRecord {
       'token=$tokenFingerprint',
       'host=$targetHost',
       if (statusCode != null) 'status=$statusCode',
+      if (upstreamStatus != null) 'upstreamStatus=$upstreamStatus',
+      if (downstreamStatus != null) 'downstreamStatus=$downstreamStatus',
       'bytes=$bytes',
       'elapsed=${elapsed.inMilliseconds}ms',
       if (range != null) 'range=$range',

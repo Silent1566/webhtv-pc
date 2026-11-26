@@ -70,7 +70,7 @@ class PlayerLoadOutcome {
       'load=${loadElapsed.inMilliseconds}ms '
       'firstFrame=${firstFrame == null ? "unobserved" : "${firstFrame!.inMilliseconds}ms"} '
       '${failureKind == null ? "" : "failure=${failureKind!.name} "}'
-      '${errorMessage == null ? "" : "error=${errorMessage!.length > 160 ? errorMessage!.substring(0, 160) : errorMessage!}"}';
+      '${errorMessage == null ? "" : "error=${redactLogText(errorMessage!).length > 160 ? redactLogText(errorMessage!).substring(0, 160) : redactLogText(errorMessage!)}"}';
 }
 
 /// 一次 mpv 属性写入的结果（[writeMpvPropertyValue] 的输出）。
@@ -195,6 +195,7 @@ class PlayerController extends ChangeNotifier {
     this.onVolumeChanged,
     Duration Function()? networkClock,
     this.prefetchProbe,
+    this.observedMediaFormatFor,
   }) : _networkClockOverride = networkClock,
        _player = player ?? Player(),
        _thumbnails = thumbnailService ?? PlayerThumbnailService(),
@@ -210,7 +211,11 @@ class PlayerController extends ChangeNotifier {
     unawaited(_observeSeeking());
   }
 
+  /// Reads positive proxy evidence at load completion; failures stay diagnostic-only.
+  final MediaFormat? Function(String url)? observedMediaFormatFor;
+
   final Player _player;
+
   /// 「打开时定位」通道（见 [MpvStartOption]）。
   final MpvStartOption _startOption = MpvStartOption();
   final PlayerThumbnailService _thumbnails;
@@ -270,7 +275,6 @@ class PlayerController extends ChangeNotifier {
   Timer? _nativeOpenTimer;
   Completer<void>? _liveOpenCancellation;
   bool get hasPendingNativeOpen => _nativeOpenPending;
-
 
   @override
   void notifyListeners() {
@@ -647,9 +651,7 @@ class PlayerController extends ChangeNotifier {
     );
     final platform = _player.platform;
     if (platform is! NativePlayer) {
-      debugPrint(
-        'mpv 次字幕未生效：当前平台不是 NativePlayer（secondary-sid=$target）',
-      );
+      debugPrint('mpv 次字幕未生效：当前平台不是 NativePlayer（secondary-sid=$target）');
       return false;
     }
     final result = await writeMpvPropertyValue(
@@ -1430,11 +1432,13 @@ class PlayerController extends ChangeNotifier {
       // 同一个定位意图也挂在 [Media] 上：真正生效的是上面那条 option，
       // 这一条是给测试假件模拟内核行为用的（当前内核上它不生效）。
       final nativeOpen = _player
-          .open(Media(
-            url,
-            httpHeaders: Map<String, String>.unmodifiable(headers),
-            start: startAt,
-          ))
+          .open(
+            Media(
+              url,
+              httpHeaders: Map<String, String>.unmodifiable(headers),
+              start: startAt,
+            ),
+          )
           .whenComplete(() => _nativeOpenPending = false);
       if (isCurrent == null) {
         await nativeOpen;
@@ -1554,6 +1558,18 @@ class PlayerController extends ChangeNotifier {
     );
   }
 
+  void _captureObservedFormat(PlaybackDiagnosticsBuilder builder) {
+    builder.observedFormat = null;
+    try {
+      final url = _currentUrl;
+      if (url != null) {
+        builder.observedFormat = observedMediaFormatFor?.call(url);
+      }
+    } catch (_) {
+      // Diagnostics must never change playback success or failure.
+    }
+  }
+
   /// 成功时补齐阶段耗时并落定诊断快照（§23）。
   void _finishDiagnostics({
     required bool succeeded,
@@ -1570,6 +1586,7 @@ class PlayerController extends ChangeNotifier {
     }
     builder.addStage(PlaybackStage.playing, Duration.zero);
     builder.succeed();
+    _captureObservedFormat(builder);
     _diagnostics = builder.build();
   }
 
@@ -1585,6 +1602,7 @@ class PlayerController extends ChangeNotifier {
       message: outcome.errorMessage,
       hint: kind == null ? null : describePlayerFailure(kind),
     );
+    _captureObservedFormat(builder);
     _diagnostics = builder.build();
   }
 
