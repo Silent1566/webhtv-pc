@@ -13,6 +13,7 @@ import '../core/episode_range.dart';
 import '../core/episode_aggregation.dart';
 import 'episode_version_dialog.dart';
 import 'history_progress_picker.dart';
+import 'history_resume_seed.dart';
 import '../core/history_cross_site.dart';
 import '../core/history_view.dart';
 import '../core/poster_badge.dart';
@@ -1354,6 +1355,38 @@ class _DetailPageState extends State<DetailPage> {
   /// 上面，重建这页纯属浪费；等返回后补一次重建即可（见 [_play] 的 await 之后）。
   bool _playerRouteOpen = false;
 
+  PlaybackHistory? _writtenHistory;
+
+  ResumeSeed? get _entryResumeSeed =>
+      _writtenHistory == null ? widget.resumeSeed : null;
+
+  ResumeSeed? _resumeSeedFor(
+    VodPlayLine line,
+    int index,
+    ResumeSeed? override,
+  ) {
+    if (override != null) return override;
+    final written = _writtenHistory;
+    if (written == null) return widget.resumeSeed;
+    final route = _externalRoutes[line.flag];
+    final source = route == null
+        ? (_pageSourceKey ?? widget.state.activeSourceKey)
+        : widget.state.activeSourceKey;
+    return written.sourceKey == source &&
+            written.siteKey == (route?.siteKey ?? _pageSite?.key) &&
+            written.vodId == (route?.vodId ?? _currentVod?.vodId) &&
+            written.flag == line.playbackFlag &&
+            written.episodeId == line.episodes[index].url
+        ? resumeSeedOf(written)
+        : null;
+  }
+
+  bool get _usingEntryHistory =>
+      _writtenHistory == null &&
+      (widget.resumeSeed != null ||
+          widget.historyFlag.isNotEmpty ||
+          widget.historyEpisodeId.isNotEmpty);
+
   /// 当前选中线路的 `flag`（`04` §3.1 ④）。
   ///
   /// 点击线路条即切换，下方剧集卡片随之变成该线路的集（对齐上游 `@id/flag`）。
@@ -2041,6 +2074,29 @@ class _DetailPageState extends State<DetailPage> {
   /// 只失效缓存并重建：历史数据在库里，重建时 [_history] 会重新查。播放器开着时
   /// 跳过重建（[_playerRouteOpen]），返回时由 [_play] 的 await 之后补一次。
   void _onProgressWritten() {
+    final write = widget.state.lastProgressWrite;
+    if (write != null) {
+      final local =
+          write.sourceKey == (_pageSourceKey ?? widget.state.activeSourceKey) &&
+          write.siteKey == _pageSite?.key &&
+          (write.vodId == widget.vod.vodId ||
+              write.vodId == _currentVod?.vodId);
+      final external =
+          write.sourceKey == widget.state.activeSourceKey &&
+          _externalRoutes.values.any(
+            (route) =>
+                route.siteKey == write.siteKey && route.vodId == write.vodId,
+          );
+      if (local || external) {
+        _writtenHistory = widget.state.findHistory(
+          sourceKey: write.sourceKey,
+          siteKey: write.siteKey,
+          vodId: write.vodId,
+          flag: write.flag,
+          episodeId: write.episodeId,
+        );
+      }
+    }
     _crossSiteCandidatesKey = '';
     _historyResolution = null;
     _historyResolutionKey = '';
@@ -2458,9 +2514,11 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 本页要用的历史记录。
   ///
-  /// 优先级：**构造参数 > 自己查**（`docs/phase6/design/02` §7.1）。
+  /// 初次尊重入口选中的记录；本片产生新进度后改为查库。
   PlaybackHistory? get _history {
-    final seed = widget.resumeSeed;
+    final written = _writtenHistory;
+    if (written != null) return written;
+    final seed = _entryResumeSeed;
     if (seed != null) {
       // 跨源续播：线路/集/进度全部来自原记录。`episodeName` 也要带上——
       // 原记录的 `episodeId` 可能是安卓哈希，只有集名还能对上目标站点。
@@ -2479,7 +2537,7 @@ class _DetailPageState extends State<DetailPage> {
         completed: seed.completed,
       );
     }
-    if (widget.historyFlag.isNotEmpty || widget.historyEpisodeId.isNotEmpty) {
+    if (_usingEntryHistory) {
       return PlaybackHistory(
         id: 0,
         siteKey: _pageSite?.key ?? '',
@@ -2554,11 +2612,7 @@ class _DetailPageState extends State<DetailPage> {
   /// - **身份/同名匹配跟随聚合偏好**：由
   ///   `AppState.findHistoryCandidatesAcrossSites` 统一处理，本页不重复判定。
   List<PlaybackHistory> _crossSiteHistoryCandidates(Vod vod) {
-    if (widget.resumeSeed != null ||
-        widget.historyFlag.isNotEmpty ||
-        widget.historyEpisodeId.isNotEmpty) {
-      return const [];
-    }
+    if (_usingEntryHistory) return const [];
     final siteKey = _pageSite?.key ?? '';
     if (siteKey.isEmpty) return const [];
     final tmdb = _ownedTmdb;
@@ -2653,7 +2707,8 @@ class _DetailPageState extends State<DetailPage> {
     // 3. 两边可续播性相同 → 谁更新用谁，并列时本站优先（既有行为）；
     // 4. 两边都不可续播 → 谁更新标谁（保持「上次看到这里」的语义）。
     final bool useForeign;
-    if (primaryForeign == null) {
+    if ((_writtenHistory != null && ownTarget.matched) ||
+        primaryForeign == null) {
       useForeign = false;
     } else if (!ownTarget.matched) {
       useForeign = true;
@@ -2829,7 +2884,7 @@ class _DetailPageState extends State<DetailPage> {
     final resolution = _resolveDetailHistory(widget.vod, lines);
     // 两条以上可续播记录：按钮不再暗示「就续那一集」——点下去先让用户选
     // （用户 2026-11-29 选型）。数字进文案，用户点之前就知道会看到选择框。
-    if (resolution.options.length >= 2) {
+    if (_writtenHistory == null && resolution.options.length >= 2) {
       return '继续播放（${resolution.options.length} 条记录）';
     }
     final target = resolution.target;
@@ -2910,7 +2965,7 @@ class _DetailPageState extends State<DetailPage> {
     //
     // 反过来，种子对**别的集**也非空（详情页由 seed 打开时一直带着它）：那时
     // 本站那一集自己的记录才是精确答案，压掉它会让「点另一集」从 0 开始。
-    final seed = widget.resumeSeed ?? seedOverride;
+    final seed = _resumeSeedFor(line, episodeIndex, seedOverride);
     final seedWins =
         seed != null &&
         seedOverridesExactHistory(
@@ -3202,7 +3257,11 @@ class _DetailPageState extends State<DetailPage> {
               tmdb: identity.hasIdentity ? identity : null,
               // 种子随请求一起下去，由播放器拿到目标集真实时长后重算比例
               // （见 `_resumeStartFor` 注释与 `PlaybackRequest.resumeSeed`）。
-              resumeSeed: widget.resumeSeed ?? resumeSeedOverride,
+              resumeSeed: _resumeSeedFor(
+                line,
+                episodeIndex,
+                resumeSeedOverride,
+              ),
               // 播放源归属：原来源播放时进度要写回那条记录自己的源。
               //
               // 外部并入线路例外：那条线路的站点属于**当前配置**，把它们记到
