@@ -435,6 +435,8 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   // 启动落在首页（用户 2026-11-19 决策）：第一屏回答「今晚看什么」，不是「挑分类」。
   ShellSection _section = ShellSection.home;
+  String _settingsInitialCategory = SettingsCategory.preferences;
+  Key _settingsEntryKey = UniqueKey();
 
   /// 首页「热门」点进来的搜索词。
   ///
@@ -1058,19 +1060,35 @@ class _AppShellState extends State<AppShell> {
   /// 原来它直接冲进配置管理页，而那一页首屏是一大块导入表单，换配置的列表
   /// 被压到下面——想做最常做的事，反而要先在管理页里找到列表。
   ///
-  /// 只有一条配置时没有可换的东西，直接进管理页（那里才有「导入」）。
+  /// 单条配置仍展示当前项与管理入口；无配置时直接进入导入与管理。
   Future<void> _openConfigSwitcher() async {
-    if (_state.savedConfigs.length <= 1) {
+    if (_state.savedConfigs.isEmpty) {
       await _openConfigPage();
       return;
     }
-    final targetId = await showDialog<int>(
+    var manageRequested = false;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final route = DialogRoute<int>(
       context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      barrierColor:
+          DialogTheme.of(context).barrierColor ??
+          Theme.of(context).dialogTheme.barrierColor ??
+          Colors.black54,
+      traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
       builder: (_) => ConfigSwitcherDialog(
         records: _state.savedConfigs,
         activeId: _state.activeRecord?.id,
+        onManage: () => manageRequested = true,
       ),
     );
+    final targetId = await navigator.push(route);
+    if (manageRequested) {
+      // 等遮罩与退出动画真正移除，再让管理页成为新的前景路由。
+      await route.completed;
+      if (mounted) await _openConfigPage();
+      return;
+    }
     if (targetId == null || !mounted) return;
     if (targetId == _state.activeRecord?.id) return;
     await _state.activateConfigRecord(targetId);
@@ -1089,6 +1107,11 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openConfigPage() async {
+    setState(() {
+      _section = ShellSection.settings;
+      _settingsInitialCategory = SettingsCategory.sites;
+      _settingsEntryKey = UniqueKey();
+    });
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => ConfigPage(state: _state)));
@@ -1303,7 +1326,6 @@ class _AppShellState extends State<AppShell> {
           _TopBar(
             state: _state,
             onOpenConfig: _openConfigSwitcher,
-            onManageConfig: _openConfigPage,
             onOpenSitePicker: _openSitePicker,
             onOpenPush: _openPushDialog,
           ),
@@ -1317,6 +1339,11 @@ class _AppShellState extends State<AppShell> {
                     // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
                     if (value == ShellSection.search) {
                       _pendingSearchKeyword = null;
+                    }
+                    if (value == ShellSection.settings &&
+                        _section != ShellSection.settings) {
+                      _settingsInitialCategory = SettingsCategory.preferences;
+                      _settingsEntryKey = UniqueKey();
                     }
                     _section = value;
                     if (value == ShellSection.browse) _enterBrowse();
@@ -1395,7 +1422,11 @@ class _AppShellState extends State<AppShell> {
       case ShellSection.following:
         return FollowingPage(state: _state);
       case ShellSection.settings:
-        return SettingsPage(state: _state);
+        return SettingsPage(
+          key: _settingsEntryKey,
+          state: _state,
+          initialCategory: _settingsInitialCategory,
+        );
     }
   }
 }
@@ -1548,14 +1579,12 @@ class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.state,
     required this.onOpenConfig,
-    required this.onManageConfig,
     required this.onOpenSitePicker,
     required this.onOpenPush,
   });
 
   final AppState state;
   final VoidCallback onOpenConfig;
-  final VoidCallback onManageConfig;
   final VoidCallback onOpenSitePicker;
   final VoidCallback onOpenPush;
 
@@ -1599,18 +1628,6 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
             ),
-          ),
-          // 管理（导入/编辑/刷新/删除）与换配置分开两个入口：前者低频且是
-          // 「维护」心智，后者高频且是「使用」心智，混在一个按钮里必然有一方
-          // 被埋（用户反馈 2026-11-05）。
-          //
-          // 这里**必须带文字**：初版只放了一个无标签图标，用户截图反馈
-          // 「不太明显」——纯图标在顶栏一排字形中间分不出它是入口还是装饰。
-          TextButton.icon(
-            key: const ValueKey('topbar-manage-config'),
-            onPressed: onManageConfig,
-            icon: const Icon(Icons.settings_ethernet, size: 18),
-            label: const Text('管理'),
           ),
           const SizedBox(width: AppSpace.xs),
           TextButton.icon(

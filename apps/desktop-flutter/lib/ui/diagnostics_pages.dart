@@ -98,12 +98,18 @@ class SettingsCategory {
 /// [SettingsCategoriesBody]，播放器右键菜单 push 出来的 `SettingsOverviewPage`
 /// 用的是同一个 body，两处不会分叉。
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.state});
+  const SettingsPage({
+    super.key,
+    required this.state,
+    this.initialCategory = SettingsCategory.preferences,
+  });
 
   final AppState state;
+  final String initialCategory;
 
   @override
-  Widget build(BuildContext context) => SettingsCategoriesBody(state: state);
+  Widget build(BuildContext context) =>
+      SettingsCategoriesBody(state: state, initialCategory: initialCategory);
 }
 
 /// 分类中枢本体：[SettingsPage] 与「全部设置」页共用。
@@ -121,6 +127,7 @@ class SettingsCategoriesBody extends StatefulWidget {
     super.key,
     required this.state,
     this.showHeader = true,
+    this.initialCategory = SettingsCategory.preferences,
   });
 
   final AppState state;
@@ -129,6 +136,9 @@ class SettingsCategoriesBody extends StatefulWidget {
   ///
   /// 独立路由（「全部设置」页）已有 AppBar 标题，再画一次就是同屏两个标题。
   final bool showHeader;
+
+  /// 仅决定首次展示的分类；普通设置入口仍从偏好开始。
+  final String initialCategory;
 
   @override
   State<SettingsCategoriesBody> createState() => _SettingsCategoriesBodyState();
@@ -145,7 +155,13 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   /// 左侧分类栏宽度（设计稿 180–200）。
   static const double _navWidth = 196;
 
-  String _category = SettingsCategory.preferences;
+  late String _category;
+
+  @override
+  void initState() {
+    super.initState();
+    _category = widget.initialCategory;
+  }
 
   /// 每类别一个滚动控制器：切走再回来时用它恢复位置。
   final Map<String, ScrollController> _scrollControllers = {};
@@ -376,6 +392,14 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     // 单个开关就地生效：一个开关再套一层页面只是多一次点击。
     final sites = SettingsRowList(
       children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-config-management-open'),
+          icon: Icons.settings_outlined,
+          title: '配置管理',
+          subtitleKey: const ValueKey('settings-config-management-summary'),
+          subtitle: _configSummary(),
+          onTap: () => _push(context, ConfigPage(state: state)),
+        ),
         SettingsNavRow(
           key: const ValueKey('settings-site-health-open'),
           icon: Icons.monitor_heart_outlined,
@@ -739,6 +763,14 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
       value: value,
       onChanged: onChanged,
     );
+  }
+
+  String _configSummary() {
+    final count = state.savedConfigs.length;
+    if (count == 0) return '尚未保存配置 · 导入 URL、本地文件或 JSON';
+    final current = state.activeRecord;
+    final active = current == null ? '未启用配置' : '当前：${current.name}';
+    return '$active · 已保存 $count 个配置';
   }
 
   String _onOff(bool value) => value ? '开' : '关';

@@ -16,10 +16,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
-import 'package:webhtv_pc/services/log_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/detail_test_seams.dart';
+import 'support/widget_settle.dart';
 
 void main() {
   late Directory tempDir;
@@ -36,7 +40,8 @@ void main() {
           'state': '${tempDir.path}/webhtv-pc/logs',
         },
       ),
-      log: LogService(),
+      log: MemoryOnlyLogService(),
+      httpClient: MockClient((_) async => http.Response('{"list":[]}', 200)),
     );
     await state.bootstrap();
   });
@@ -84,7 +89,7 @@ void main() {
         home: ConfigPage(state: state),
       ),
     );
-    await tester.pumpAndSettle();
+    await settle(tester);
   }
 
   testWidgets('列表项不再有装饰性单选图标', (tester) async {
@@ -108,7 +113,7 @@ void main() {
     expect(find.byKey(ValueKey('config-active-badge-$first')), findsNothing);
 
     await tester.tap(find.byKey(ValueKey('config-row-$first')));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(state.activeRecord?.id, first, reason: '整行点击就该切换');
     expect(
@@ -118,7 +123,7 @@ void main() {
     );
 
     await tester.tap(find.byKey(ValueKey('config-row-$second')));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(state.activeRecord?.id, second);
     expect(find.byKey(ValueKey('config-active-badge-$second')), findsOneWidget);
@@ -130,9 +135,9 @@ void main() {
     await openPage(tester);
 
     await tester.tap(find.byKey(ValueKey('config-menu-$id')));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(
       find.byKey(const ValueKey('config-delete-confirm')),
@@ -140,15 +145,15 @@ void main() {
       reason: '删除是破坏性操作，必须先确认',
     );
     await tester.tap(find.byKey(const ValueKey('config-delete-cancel')));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(state.database!.listConfigs(), hasLength(1), reason: '取消不得删除');
 
     await tester.tap(find.byKey(ValueKey('config-menu-$id')));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.byKey(const ValueKey('config-delete-ok')));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(state.database!.listConfigs(), isEmpty, reason: '确认后才删');
   });
 
@@ -157,7 +162,7 @@ void main() {
     await openPage(tester);
 
     await tester.tap(find.byKey(ValueKey('config-edit-$local')));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.byKey(const ValueKey('config-edit-dialog')), findsOneWidget);
     expect(
@@ -168,7 +173,7 @@ void main() {
       reason: '本地源的地址是用户的，必须能改',
     );
     await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.byKey(const ValueKey('config-edit-dialog')), findsNothing);
   });
 
@@ -177,7 +182,7 @@ void main() {
     await openPage(tester);
 
     await tester.tap(find.byKey(ValueKey('config-edit-$bridge')));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(
       tester
@@ -188,7 +193,7 @@ void main() {
     );
     expect(find.textContaining('由安卓设备决定'), findsOneWidget);
     await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
+    await settle(tester);
   });
 
   testWidgets('刷新入口：顶部「全部刷新」与每行单条刷新都在', (tester) async {
@@ -209,15 +214,11 @@ void main() {
       findsOneWidget,
       reason: '收起的入口必须还在，否则用户找不到怎么导入',
     );
-    expect(
-      find.text('选择本地文件'),
-      findsNothing,
-      reason: '导入区收起后三个导入按钮都不该上屏',
-    );
+    expect(find.text('选择本地文件'), findsNothing, reason: '导入区收起后三个导入按钮都不该上屏');
     expect(find.text('使用仓库 fixture'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('config-import-toggle')));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.text('选择本地文件'), findsOneWidget);
     expect(find.text('使用仓库 fixture'), findsOneWidget);
   });
@@ -228,15 +229,11 @@ void main() {
 
     // 点的是**文字**，不是右侧那个展开按钮：整行可点才是用户要的形态。
     await tester.tap(find.text('导入新配置'));
-    await tester.pumpAndSettle();
-    expect(
-      find.text('选择本地文件'),
-      findsOneWidget,
-      reason: '点标题行任意位置都应展开导入区',
-    );
+    await settle(tester);
+    expect(find.text('选择本地文件'), findsOneWidget, reason: '点标题行任意位置都应展开导入区');
 
     await tester.tap(find.text('导入新配置'));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.text('选择本地文件'), findsNothing, reason: '再点一次应收起');
   });
 
@@ -270,26 +267,34 @@ void main() {
     ///
     /// 数据取自数据库的**同步**接口，不重新 `bootstrap()`：那个调用有真实
     /// 文件 I/O，在 widget 测试的 fake-async 区里永远等不到完成。
+    int? switchResult;
+    bool switchCompleted = false;
+
     Future<void> openSwitcher(WidgetTester tester) async {
+      switchResult = null;
+      switchCompleted = false;
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
           home: Builder(
             builder: (context) => ElevatedButton(
-              onPressed: () => showDialog<int>(
-                context: context,
-                builder: (_) => ConfigSwitcherDialog(
-                  records: state.database!.listConfigs(),
-                  activeId: state.database!.activeConfig()?.id,
-                ),
-              ),
+              onPressed: () async {
+                switchResult = await showDialog<int>(
+                  context: context,
+                  builder: (_) => ConfigSwitcherDialog(
+                    records: state.database!.listConfigs(),
+                    activeId: state.database!.activeConfig()?.id,
+                  ),
+                );
+                switchCompleted = true;
+              },
               child: const Text('打开'),
             ),
           ),
         ),
       );
       await tester.tap(find.text('打开'));
-      await tester.pumpAndSettle();
+      await settle(tester);
     }
 
     testWidgets('列出全部配置并标出当前项，点非当前项才返回 id', (tester) async {
@@ -318,12 +323,81 @@ void main() {
       );
 
       await tester.tap(find.byKey(ValueKey('config-switch-option-$second')));
-      await tester.pumpAndSettle();
+      await settle(tester);
       expect(
         find.byKey(const ValueKey('config-switcher')),
         findsNothing,
         reason: '选中非当前项后对话框应关闭并把 id 交给调用方',
       );
+      expect(switchCompleted, isTrue);
+      expect(switchResult, second, reason: '既有 int/null 契约必须返回真实记录 id');
+      expect(state.database!.activeConfig()?.id, first, reason: '选择器自身不负责激活');
+    });
+
+    testWidgets('取消返回 null，不改数据库当前项', (tester) async {
+      final first = seed('甲');
+      state.database!.activateConfig(first);
+      await openSwitcher(tester);
+      await tester.tap(find.byKey(const ValueKey('config-switcher-cancel')));
+      await settle(tester);
+      expect(switchCompleted, isTrue);
+      expect(switchResult, isNull);
+      expect(state.database!.activeConfig()?.id, first);
+    });
+
+    testWidgets('可选管理入口关闭弹窗返回 null 并通知宿主', (tester) async {
+      final only = seed('唯一');
+      state.database!.activateConfig(only);
+      var managed = false;
+      switchCompleted = false;
+      switchResult = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(Brightness.dark),
+          home: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                switchResult = await showDialog<int>(
+                  context: context,
+                  builder: (_) => ConfigSwitcherDialog(
+                    records: state.database!.listConfigs(),
+                    activeId: only,
+                    onManage: () {
+                      managed = true;
+                      // 回调发生在 pop(route) 之前：此时切换框仍应挂在树上。
+                      expect(find.byType(ConfigSwitcherDialog), findsOneWidget);
+                    },
+                  ),
+                );
+                switchCompleted = true;
+              },
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('config-switcher-manage')));
+      await settle(tester);
+      expect(managed, isTrue);
+      expect(switchCompleted, isTrue);
+      expect(switchResult, isNull, reason: '管理不是选择，不能伪造记录 id');
+      expect(find.byType(ConfigSwitcherDialog), findsNothing);
+      expect(state.database!.activeConfig()?.id, only);
+    });
+
+    testWidgets('未提供管理回调时不渲染管理入口，取消仍返回 null', (tester) async {
+      seed('甲');
+      await openSwitcher(tester);
+      expect(
+        find.byKey(const ValueKey('config-switcher-manage')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('config-switcher-cancel')));
+      await settle(tester);
+      expect(switchCompleted, isTrue);
+      expect(switchResult, isNull);
     });
 
     testWidgets('当前项不可点：点它不会关闭对话框', (tester) async {
@@ -332,13 +406,15 @@ void main() {
 
       await openSwitcher(tester);
       await tester.tap(find.byKey(ValueKey('config-switch-option-$only')));
-      await tester.pumpAndSettle();
+      await settle(tester);
 
       expect(
         find.byKey(const ValueKey('config-switcher')),
         findsOneWidget,
         reason: '点当前项应当无反应，而不是把对话框关掉',
       );
+      expect(switchCompleted, isFalse);
+      expect(state.database!.activeConfig()?.id, only);
     });
   });
 }
