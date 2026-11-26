@@ -13,134 +13,218 @@ import 'package:webhtv_pc/core/skip_segments.dart';
 void main() {
   const hour = 60 * 60 * 1000;
 
+  group('跨源片尾合并', () {
+    test('两家都标到文件末尾时只留起点更晚的一条，避免两条片尾', () {
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro',
+          startMs: 3012000,
+          endMs: 3162000,
+          referenceDurationMs: 3162000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          identity: 'theintrodb|outro',
+          startMs: 3100000,
+          endMs: 3213120,
+          referenceDurationMs: 3213120,
+        ),
+      ], durationMs: 3213120);
+      expect(plan.endings, hasLength(1));
+      expect(plan.endings.single.startMs, greaterThanOrEqualTo(3100000));
+    });
+
+    test('片尾与彩蛋仍不互相吞并', () {
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro',
+          startMs: 3012000,
+          endMs: 3162000,
+          referenceDurationMs: 3162000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.postCredits,
+          provider: 'theintrodb',
+          identity: 'theintrodb|post',
+          startMs: 3180000,
+          endMs: 3213000,
+          referenceDurationMs: 3213000,
+        ),
+      ], durationMs: 3213120);
+      expect(plan.endings, hasLength(2));
+    });
+  });
+
+  group('多播放版本按片长择优', () {
+    test('同一源的多个片尾版本只保留与片长最接近的一版', () {
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro|3000',
+          versionId: '3000',
+          startMs: 2900000,
+          endMs: 3000000,
+          referenceDurationMs: 3000000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro|3213',
+          versionId: '3213',
+          startMs: 3100000,
+          endMs: 3213000,
+          referenceDurationMs: 3213000,
+        ),
+      ], durationMs: 3213120);
+      expect(plan.endings, hasLength(1));
+      expect(plan.endings.single.startMs, 3100000);
+    });
+
+    test('跨源各自保留，不因另一源版本多而互相吞并', () {
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro|3000',
+          versionId: '3000',
+          startMs: 2900000,
+          endMs: 3000000,
+          referenceDurationMs: 3000000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'todb',
+          identity: 'todb|outro|3213',
+          versionId: '3213',
+          startMs: 3100000,
+          endMs: 3213000,
+          referenceDurationMs: 3213000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          identity: 'theintrodb|outro',
+          startMs: 3150000,
+          endMs: 3213000,
+        ),
+      ], durationMs: 3213120);
+      expect(plan.endings.map((s) => s.provider).toSet(), {
+        'todb',
+        'theintrodb',
+      });
+    });
+  });
+
   group('开头段折算', () {
     test('start=null 视为 0（TheIntroDB 的 intro 常只给 end_ms）', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'theintrodb',
-            startMs: null,
-            endMs: 90000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'theintrodb',
+          startMs: null,
+          endMs: 90000,
+        ),
+      ], durationMs: hour);
       expect(plan.segments, hasLength(1));
       expect(plan.segments.single.startMs, 0);
       expect(plan.segments.single.endMs, 90000);
     });
 
     test('end 超出本集时长时被钳到时长', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.recap,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: hour + 5000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.recap,
+          provider: 'introdb',
+          startMs: 0,
+          endMs: hour + 5000,
+        ),
+      ], durationMs: hour);
       expect(plan.segments.single.endMs, hour);
     });
 
     test('end <= start 的非法区间被丢弃', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: 50000,
-            endMs: 50000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'introdb',
+          startMs: 50000,
+          endMs: 50000,
+        ),
+      ], durationMs: hour);
       expect(plan.isEmpty, isTrue);
     });
 
     test('起点已超过本集时长的段被丢弃', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: hour + 1,
-            endMs: hour + 30000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'introdb',
+          startMs: hour + 1,
+          endMs: hour + 30000,
+        ),
+      ], durationMs: hour);
       expect(plan.isEmpty, isTrue);
     });
   });
 
   group('尾部段时间轴折算', () {
     test('片源比参考版本长 60s 时，片尾整体后移 60s', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3300000,
-            endMs: 3360000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour + 60000,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3300000,
+          endMs: 3360000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour + 60000);
       expect(plan.segments.single.startMs, 3300000 + 60000);
       expect(plan.segments.single.endMs, 3360000 + 60000);
       expect(plan.segments.single.openEnded, isFalse);
     });
 
     test('时长差在容差内不折算（几百毫秒抖动不该挪片尾）', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3300000,
-            endMs: 3360000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour + 900,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3300000,
+          endMs: 3360000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour + 900);
       expect(plan.segments.single.startMs, 3300000);
     });
 
     test('参考时长与本集差超过 5 分钟时放弃折算，保留原始时间戳', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3300000,
-            endMs: 3360000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour + 6 * 60 * 1000,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3300000,
+          endMs: 3360000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour + 6 * 60 * 1000);
       expect(plan.segments.single.startMs, 3300000);
     });
 
     test('end 落在参考结尾 5s 内 => 无界段，目标就是文件结尾', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3500000,
-            endMs: 3599000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3500000,
+          endMs: 3599000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       final outro = plan.segments.single;
       expect(outro.openEnded, isTrue);
       expect(outro.endMs, hour);
@@ -156,131 +240,90 @@ void main() {
     });
 
     test('end=null 且无参考时长时按有界处理（无界会误切集）', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'introdb',
-            startMs: 3300000,
-            endMs: null,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'introdb',
+          startMs: 3300000,
+          endMs: null,
+        ),
+      ], durationMs: hour);
       expect(plan.segments.single.openEnded, isFalse);
     });
 
     test('end 超过参考结尾 5s 以上视为错配，整段丢弃', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3300000,
-            endMs: 3700000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3300000,
+          endMs: 3700000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       expect(plan.isEmpty, isTrue);
     });
 
     test('尾部段起点为 0 必是错配（整集当片尾），丢弃', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 0,
-            endMs: 30000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 0,
+          endMs: 30000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       expect(plan.isEmpty, isTrue);
     });
   });
 
   group('去重与优先级', () {
     test('两家标同一段（起点差 1s）只留一个，取有界段', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'theintrodb',
-            startMs: 3300000,
-            endMs: null,
-            referenceDurationMs: hour,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'introdb',
-            startMs: 3301000,
-            endMs: 3360000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'theintrodb',
+          startMs: 3300000,
+          endMs: null,
+          referenceDurationMs: hour,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'introdb',
+          startMs: 3301000,
+          endMs: 3360000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       expect(plan.segments, hasLength(1));
       expect(plan.segments.single.provider, 'introdb');
       expect(plan.segments.single.openEnded, isFalse);
     });
 
     test('跨类型的同段标注合并（回顾 vs 片头），不连跳两次', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.recap,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: 60000,
-            confidence: 0.9,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'todb',
-            startMs: 0,
-            endMs: 60000,
-            confidence: 0.5,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.recap,
+          provider: 'introdb',
+          startMs: 0,
+          endMs: 60000,
+          confidence: 0.9,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'todb',
+          startMs: 0,
+          endMs: 60000,
+          confidence: 0.5,
+        ),
+      ], durationMs: hour);
       expect(plan.segments, hasLength(1));
       expect(plan.segments.single.provider, 'introdb');
     });
 
     test('开头段与尾部段绝不合并（物理上相隔整集）', () {
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: 90000,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'introdb',
-            startMs: 90000,
-            endMs: 120000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
-      expect(plan.segments, hasLength(2));
-      expect(plan.openings, hasLength(1));
-      expect(plan.endings, hasLength(1));
-    });
-  });
-
-  group('播放决策', () {
-    SkipPlan plan() => SkipPlan.resolve(
-      const [
+      final plan = SkipPlan.resolve(const [
         RawSkipSegment(
           kind: SkipKind.intro,
           provider: 'introdb',
@@ -289,14 +332,34 @@ void main() {
         ),
         RawSkipSegment(
           kind: SkipKind.outro,
-          provider: 'theintrodb',
-          startMs: 3400000,
-          endMs: null,
+          provider: 'introdb',
+          startMs: 90000,
+          endMs: 120000,
           referenceDurationMs: hour,
         ),
-      ],
-      durationMs: hour,
-    );
+      ], durationMs: hour);
+      expect(plan.segments, hasLength(2));
+      expect(plan.openings, hasLength(1));
+      expect(plan.endings, hasLength(1));
+    });
+  });
+
+  group('播放决策', () {
+    SkipPlan plan() => SkipPlan.resolve(const [
+      RawSkipSegment(
+        kind: SkipKind.intro,
+        provider: 'introdb',
+        startMs: 0,
+        endMs: 90000,
+      ),
+      RawSkipSegment(
+        kind: SkipKind.outro,
+        provider: 'theintrodb',
+        startMs: 3400000,
+        endMs: null,
+        referenceDurationMs: hour,
+      ),
+    ], durationMs: hour);
 
     test('off 模式一律不跳', () {
       expect(
@@ -432,23 +495,20 @@ void main() {
 
   group('手动标记优先', () {
     test('手动片头覆盖远端片头，但远端的回顾段保留', () {
-      final remote = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.recap,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: 30000,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: 30000,
-            endMs: 120000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final remote = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.recap,
+          provider: 'introdb',
+          startMs: 0,
+          endMs: 30000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'introdb',
+          startMs: 30000,
+          endMs: 120000,
+        ),
+      ], durationMs: hour);
       final merged = remote.withManualOverride(
         manual: const SkipSegments(introEndMs: 95000),
         durationMs: hour,
@@ -477,17 +537,14 @@ void main() {
     });
 
     test('无手动标记时原样返回（不复制、不改动）', () {
-      final remote = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: 90000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final remote = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'introdb',
+          startMs: 0,
+          endMs: 90000,
+        ),
+      ], durationMs: hour);
       final merged = remote.withManualOverride(
         manual: const SkipSegments.none(),
         durationMs: hour,
@@ -531,43 +588,37 @@ void main() {
 
     test('彩蛋按尾部段折算：片源长 60s 时整体后移 60s', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.postCredits,
-            provider: 'introdb',
-            startMs: 3500000,
-            endMs: 3550000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour + 60000,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.postCredits,
+          provider: 'introdb',
+          startMs: 3500000,
+          endMs: 3550000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour + 60000);
       expect(plan.segments.single.startMs, 3500000 + 60000);
       expect(plan.segments.single.endMs, 3550000 + 60000);
     });
 
     test('关掉彩蛋位就不跳，打开才跳（与预告互不影响）', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'introdb',
-            startMs: 3300000,
-            endMs: 3480000,
-            referenceDurationMs: hour,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.postCredits,
-            provider: 'introdb',
-            startMs: 3500000,
-            endMs: 3550000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'introdb',
+          startMs: 3300000,
+          endMs: 3480000,
+          referenceDurationMs: hour,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.postCredits,
+          provider: 'introdb',
+          startMs: 3500000,
+          endMs: 3550000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       const at = 3500000;
       final onlyOutro = plan.decide(
         positionMs: at,
@@ -588,25 +639,22 @@ void main() {
 
     test('片尾与彩蛋不互相吞并（起点相差 20s，超出合并容差）', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.outro,
-            provider: 'introdb',
-            startMs: 3300000,
-            endMs: 3480000,
-            referenceDurationMs: hour,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.postCredits,
-            provider: 'introdb',
-            startMs: 3500000,
-            endMs: 3550000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.outro,
+          provider: 'introdb',
+          startMs: 3300000,
+          endMs: 3480000,
+          referenceDurationMs: hour,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.postCredits,
+          provider: 'introdb',
+          startMs: 3500000,
+          endMs: 3550000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour);
       expect(plan.endings, hasLength(2));
     });
   });
@@ -659,56 +707,47 @@ void main() {
 
     test('中场休息同样走绝对时间轴', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.intermission,
-            provider: 'todb',
-            startMs: 2400000,
-            endMs: 2430000,
-            referenceDurationMs: hour,
-          ),
-        ],
-        durationMs: hour + 60000,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.intermission,
+          provider: 'todb',
+          startMs: 2400000,
+          endMs: 2430000,
+          referenceDurationMs: hour,
+        ),
+      ], durationMs: hour + 60000);
       expect(plan.segments.single.startMs, 2400000);
     });
 
     test('广告与片头不互相吞并（同起点也不同分组）', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.advertisement,
-            provider: 'todb',
-            startMs: 0,
-            endMs: 30000,
-          ),
-          RawSkipSegment(
-            kind: SkipKind.intro,
-            provider: 'introdb',
-            startMs: 0,
-            endMs: 90000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.advertisement,
+          provider: 'todb',
+          startMs: 0,
+          endMs: 30000,
+        ),
+        RawSkipSegment(
+          kind: SkipKind.intro,
+          provider: 'introdb',
+          startMs: 0,
+          endMs: 90000,
+        ),
+      ], durationMs: hour);
       expect(plan.segments, hasLength(2));
     });
 
     test('片中广告：位置落进段内才跳，目标为段末', () {
       const hour = 60 * 60 * 1000;
-      final plan = SkipPlan.resolve(
-        const [
-          RawSkipSegment(
-            kind: SkipKind.advertisement,
-            provider: 'todb',
-            startMs: 1800000,
-            endMs: 1830000,
-          ),
-        ],
-        durationMs: hour,
-      );
+      final plan = SkipPlan.resolve(const [
+        RawSkipSegment(
+          kind: SkipKind.advertisement,
+          provider: 'todb',
+          startMs: 1800000,
+          endMs: 1830000,
+        ),
+      ], durationMs: hour);
       expect(
         plan
             .decide(

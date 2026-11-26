@@ -11577,6 +11577,23 @@ class AppState extends ChangeNotifier
   /// 当前播放会话的代理 token 指纹（供设置页显示，不回显完整 token）。
   String? get proxySessionFingerprint => _proxySession?.fingerprint;
 
+  /// 把「下一步可能要跳去的目标」交给本地代理预取。
+  ///
+  /// 代理是 AppState 私有持有的，播放页只能通过这里下单；没有代理进程时静默
+  /// 忽略——预取只是加速手段，任何调用都不该影响播放本身。
+  void primeSkipPrefetch(Iterable<Uri> targets) {
+    if (!_proxy.isRunning) return;
+    _proxy.primePrefetch(targets);
+  }
+
+  /// 取消跳段预取；换媒体或关闭开关时清缓存。
+  ///
+  /// 同媒体安全跳转只取消排队/在途取数，保留已下载分片供后续打开命中。
+  void cancelSkipPrefetch({bool clearCache = true}) {
+    if (!_proxy.isRunning) return;
+    _proxy.cancelPrefetch(clearCache: clearCache);
+  }
+
   /// 启动本地代理（只监听 127.0.0.1）。
   ///
   /// 端口**优先用 9978**，与 Android 宿主一致：安卓参考实现就是

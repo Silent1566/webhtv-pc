@@ -14,6 +14,7 @@ import 'mpv_properties.dart';
 import 'playback_open_policy.dart';
 import 'player_tracks.dart';
 import 'skip_plan.dart';
+import 'skip_segment_colors.dart';
 
 /// 失败回退阶梯。
 ///
@@ -160,6 +161,9 @@ class PlayerOptions {
     int skipKinds = SkipKindBits.defaults,
     this.skipRemoteEnabled = true,
     this.skipSources = defaultSkipSources,
+    this.skipSegmentColors = const SkipSegmentColors(),
+    this.showSkipSegmentHighlights = true,
+    this.skipPrefetch = true,
     bool? autoSkipIntro,
     bool? autoSkipOutro,
     this.longPressSpeed = defaultLongPressSpeed,
@@ -296,6 +300,13 @@ class PlayerOptions {
   /// 启用的远端数据源位图（见 [SkipSourceBits]）。
   final int skipSources;
 
+  /// 用户自定义的进度条片段颜色；与跳过模式和类型开关独立。
+  final SkipSegmentColors skipSegmentColors;
+
+  /// 仅控制进度条分类颜色，不影响片段识别、提示或自动跳过。
+  final bool showSkipSegmentHighlights;
+  final bool skipPrefetch;
+
   /// 旧字段的派生态：模式开着且类型位包含片头。
   bool get autoSkipIntro =>
       skipMode != SkipMode.off && (skipKinds & SkipKindBits.intro) != 0;
@@ -425,6 +436,9 @@ class PlayerOptions {
         SkipKindBits.defaults,
       ),
       skipRemoteEnabled: skipRemoteEnabled,
+      skipSegmentColors: skipSegmentColors.normalized(),
+      showSkipSegmentHighlights: showSkipSegmentHighlights,
+      skipPrefetch: skipPrefetch,
       // 上界是「全部已知源位」，不是「出厂默认源位」：新增第 4 个源时
       // [SkipSourceBits.allBits] 会跟着长，[SkipSourceBits.defaults] 不会。
       skipSources: clamp(
@@ -482,6 +496,9 @@ class PlayerOptions {
     int? skipKinds,
     bool? skipRemoteEnabled,
     int? skipSources,
+    SkipSegmentColors? skipSegmentColors,
+    bool? showSkipSegmentHighlights,
+    bool? skipPrefetch,
     bool? autoSkipIntro,
     bool? autoSkipOutro,
     double? longPressSpeed,
@@ -511,6 +528,10 @@ class PlayerOptions {
     skipKinds: skipKinds ?? this.skipKinds,
     skipRemoteEnabled: skipRemoteEnabled ?? this.skipRemoteEnabled,
     skipSources: skipSources ?? this.skipSources,
+    skipSegmentColors: skipSegmentColors ?? this.skipSegmentColors,
+    showSkipSegmentHighlights:
+        showSkipSegmentHighlights ?? this.showSkipSegmentHighlights,
+    skipPrefetch: skipPrefetch ?? this.skipPrefetch,
     autoSkipIntro: autoSkipIntro,
     autoSkipOutro: autoSkipOutro,
     longPressSpeed: longPressSpeed ?? this.longPressSpeed,
@@ -541,6 +562,9 @@ class PlayerOptions {
     'skipKinds': skipKinds,
     'skipRemoteEnabled': skipRemoteEnabled,
     'skipSources': skipSources,
+    'skipSegmentColors': skipSegmentColors.toJson(),
+    'showSkipSegmentHighlights': showSkipSegmentHighlights,
+    'skipPrefetch': skipPrefetch,
     // 旧键照写派生值：老版本读新配置时仍能认出「跳过片头/片尾」。
     'autoSkipIntro': autoSkipIntro,
     'autoSkipOutro': autoSkipOutro,
@@ -612,6 +636,9 @@ class PlayerOptions {
           : (legacyKinds == 0 ? SkipKindBits.defaults : legacyKinds),
       skipRemoteEnabled: boolOf('skipRemoteEnabled', true),
       skipSources: intOf('skipSources', defaultSkipSources),
+      skipSegmentColors: SkipSegmentColors.fromJson(map['skipSegmentColors']),
+      showSkipSegmentHighlights: boolOf('showSkipSegmentHighlights', true),
+      skipPrefetch: boolOf('skipPrefetch', true),
       longPressSpeed: doubleOf('longPressSpeed', defaultLongPressSpeed),
       doubleClickLeft: PlayerDoubleClickAction.fromId(map['doubleClickLeft']),
       doubleClickRight: PlayerDoubleClickAction.fromId(map['doubleClickRight']),
@@ -654,6 +681,9 @@ class PlayerOptions {
       other.skipKinds == skipKinds &&
       other.skipRemoteEnabled == skipRemoteEnabled &&
       other.skipSources == skipSources &&
+      other.skipSegmentColors == skipSegmentColors &&
+      other.showSkipSegmentHighlights == showSkipSegmentHighlights &&
+      other.skipPrefetch == skipPrefetch &&
       other.longPressSpeed == longPressSpeed &&
       other.doubleClickLeft == doubleClickLeft &&
       other.doubleClickRight == doubleClickRight &&
@@ -682,6 +712,9 @@ class PlayerOptions {
     skipKinds,
     skipRemoteEnabled,
     skipSources,
+    skipSegmentColors,
+    showSkipSegmentHighlights,
+    skipPrefetch,
     longPressSpeed,
     doubleClickLeft,
     doubleClickRight,

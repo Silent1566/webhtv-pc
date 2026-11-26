@@ -321,7 +321,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
         SettingsNavRow(
           key: const ValueKey('settings-skip-open'),
           icon: Icons.skip_next_outlined,
-          title: '片头片尾跳过',
+          title: '跳过片段',
           subtitle: IntroSkipOptionsPage.summary(state.playerOptions),
           onTap: () => _push(context, IntroSkipOptionsPage(state: state)),
         ),

@@ -121,7 +121,7 @@ void main() {
         '声音',
         '轨道',
         '显示',
-        '片头片尾',
+        '跳过片段',
         '信息',
         '设置',
       ];
@@ -254,7 +254,7 @@ void main() {
       await mouse.moveTo(Offset.zero);
     });
 
-    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 50 项）', (tester) async {
+    testWidgets('逐个展开每个分组：第 2 列的行数与内容表一致（共 51 项）', (tester) async {
       await _openMenu(tester);
 
       // 计数口径是「该组飞出列的行数」：基线 44，加屏显样式 1 项、HDR 两项，
@@ -263,6 +263,7 @@ void main() {
       //
       // P2 的增减（相对 51）：弹幕三项从「轨道」挪进新的「弹幕」组 → 轨道
       // -3、弹幕 +3；「设置 → 弹幕库」子菜单删除 → 设置 -1。净 -1，即 50。
+      // 新增「显示片段高亮」开关后共 51。
       const expected = <String, int>{
         '播放': 11,
         '速度': 6,
@@ -275,7 +276,7 @@ void main() {
         '轨道': 2,
         // 「显示」组多了「屏显样式」（字号 / 不透明度 / 恢复默认，P1-4）。
         '显示': 3,
-        '片头片尾': 7,
+        '跳过片段': 8,
         '信息': 3,
         // 设置组已从「3 个跳转入口」改造成下钻树：播放参数 / 字幕源 /
         // 控制栏按钮 / 完整设置页。弹幕库已被「弹幕 → 弹幕设置…」整页吸收。
@@ -286,12 +287,12 @@ void main() {
       }
       expect(
         expected.values.reduce((a, b) => a + b),
-        50,
+        51,
         reason:
-            '十一个分组的项数之和必须是 50：P2 前是 51（基线 44 + 屏显样式 1 + '
+            '十一个分组的项数之和必须是 51：P2 前是 51（基线 44 + 屏显样式 1 + '
             'HDR 2 + 关键帧与缩略图 3 + 拖动暂停 1），'
             'P2 把弹幕三项从「轨道」挪进「弹幕」组（-3 +3），'
-            '并删除「设置 → 弹幕库」子菜单（-1）',
+            '并删除「设置 → 弹幕库」子菜单（-1），新增片段高亮开关（+1）',
       );
       for (final entry in expected.entries) {
         await _drill(tester, entry.key);
@@ -316,7 +317,7 @@ void main() {
         '声音',
         '轨道',
         '显示',
-        '片头片尾',
+        '跳过片段',
         '信息',
         '设置',
       ];
@@ -352,14 +353,12 @@ void main() {
       }
       // 反向锁：不可点的项必须是**已知的、条件不满足**的那几个，
       // 而且它们不许从菜单里消失（用「隐藏」代替「灰掉」也算失败）。
-      // 本用例的环境：单一音轨、本集无片头片尾标记、还没拿到播放诊断。
+      // 本用例的环境：单一音轨、本集无跳过片段标记、还没拿到播放诊断。
       expect(disabled, [
         // 播放分组先遍历；时长未知时，关键帧入口按设计置灰而不是隐藏。
         '前一个关键帧  Ctrl+Shift+←',
         '后一个关键帧  Ctrl+Shift+→',
         '音轨…',
-        '跳过片头',
-        '跳过片尾',
         '清除本片标记',
         '播放诊断',
       ], reason: '不可点项集合变了：要么新增了死项，要么「该灰的」被藏起来了');
@@ -549,27 +548,25 @@ void main() {
 
     testWidgets('禁用项保状态：不可点但仍留在菜单里', (tester) async {
       await _openMenu(tester);
-      // 这三项在「片头片尾」组的飞出列里，先把组点开。
-      await _drill(tester, '片头片尾');
-      // 本集没有任何标记时，「跳过片头 / 跳过片尾 / 清除本片标记」三项禁用。
-      for (final entry in {
-        'skip_intro': '跳过片头',
-        'skip_outro': '跳过片尾',
-        'clear_skip': '清除本片标记',
-      }.entries) {
-        expect(
-          find.text(entry.value),
-          findsWidgets,
-          reason: '「${entry.value}」被隐藏了，而不是灰掉',
-        );
+      await _drill(tester, '跳过片段');
+      final clear = tester.widget<InkWell>(
+        find.byKey(const ValueKey('player-menu-item-clear_skip')),
+      );
+      expect(_isDisabled(tester, clear), isTrue);
+      await _drill(tester, '立即跳过');
+      for (final kind in [
+        'recap',
+        'intro',
+        'outro',
+        'preview',
+        'postCredits',
+        'advertisement',
+        'intermission',
+      ]) {
         final row = tester.widget<InkWell>(
-          find.byKey(ValueKey('player-menu-item-${entry.key}')),
+          find.byKey(ValueKey('player-menu-item-skip_$kind')),
         );
-        expect(
-          _isDisabled(tester, row),
-          isTrue,
-          reason: '「${entry.value}」当前没有标记，应不可点',
-        );
+        expect(_isDisabled(tester, row), isTrue);
       }
       // 同一分组里的可用项必须仍可点（不是整组被禁）。
       expect(

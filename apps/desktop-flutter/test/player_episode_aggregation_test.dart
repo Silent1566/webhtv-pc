@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/core/player_options.dart';
+import 'package:webhtv_pc/core/skip_plan.dart';
 import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/source_swap.dart';
 import 'package:webhtv_pc/core/tmdb_playback.dart';
@@ -140,6 +142,8 @@ Future<({_ResolveState state, _MediaIO media, PlaybackRequest request})> _mount(
   Duration? startPosition,
   ResumeSeed? resumeSeed,
   Map<String, SwapLineRoute> lineRoutes = const {},
+  PlayerOptions? options,
+  bool markOutro = false,
 }) async {
   final scratch = Directory('../../.local/episode-aggregation/player').absolute;
   scratch.createSync(recursive: true);
@@ -159,6 +163,14 @@ Future<({_ResolveState state, _MediaIO media, PlaybackRequest request})> _mount(
   await tester.runAsync(() async {
     await state.bootstrap();
     await state.setEpisodeAggregateVersions(enabled);
+    if (options != null) await state.setPlayerOptions(options);
+    if (markOutro) {
+      await state.saveSkipSegments(
+        siteKey: 'fixture',
+        vodId: 'episode-aggregation',
+        outroStartMs: 800000,
+      );
+    }
   });
   tester.view.physicalSize = const Size(1280, 720);
   tester.view.devicePixelRatio = 1;
@@ -243,7 +255,307 @@ Future<void> _finish(WidgetTester tester, _MediaIO media) async {
   await _settle(tester);
 }
 
+List<VodEpisode> _contentEditions() => [
+  VodEpisode(name: '第1集', url: 'https://fixture.test/normal-1'),
+  VodEpisode(name: '番综第1期', url: 'https://fixture.test/variety-1'),
+  VodEpisode(name: '番综第2期', url: 'https://fixture.test/variety-2'),
+  VodEpisode(name: '第2集', url: 'https://fixture.test/normal-2'),
+  VodEpisode(name: '第3集', url: 'https://fixture.test/normal-3'),
+  VodEpisode(name: '番综第3期', url: 'https://fixture.test/variety-3'),
+];
+
+List<VodEpisode> _titledEditions() => [
+  VodEpisode(name: '第1集 星空初遇', url: 'https://fixture.test/titled-normal-1'),
+  VodEpisode(name: '番综第1期 星空初遇', url: 'https://fixture.test/titled-variety-1'),
+  VodEpisode(name: '番综第2期 月下重逢', url: 'https://fixture.test/titled-variety-2'),
+  VodEpisode(name: '第2集 月下重逢', url: 'https://fixture.test/titled-normal-2'),
+];
+
 void main() {
+  for (final previous in ['第1集 星空初遇 [正片] [番综]1080p', '正片第1集 [番综]1080p']) {
+    _testPlayer('conflicting edition current asks before open: $previous', (
+      tester,
+    ) async {
+      final episodes = [
+        VodEpisode(
+          name: previous,
+          url: 'https://fixture.test/conflict-current',
+        ),
+        VodEpisode(
+          name: '第1集 星空初遇2160p',
+          url: 'https://fixture.test/first-other',
+        ),
+        VodEpisode(
+          name: '第2集 月下重逢1080p',
+          url: 'https://fixture.test/normal-next',
+        ),
+        VodEpisode(
+          name: '番综第2期 月下重逢1080p',
+          url: 'https://fixture.test/variety-next',
+        ),
+      ];
+      final f = await _mount(tester, episodes: episodes);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(f.media.opened.map((m) => m.uri), [episodes.first.url]);
+      await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
+      await _settle(tester);
+      expect(f.media.opened, hasLength(1));
+      expect(f.media.state.playing, isTrue);
+    });
+  }
+  _testPlayer(
+    'conflicting edition candidate never automatically opens despite unique technical profile',
+    (tester) async {
+      final episodes = [
+        VodEpisode(
+          name: '番综第1期 星空初遇1080p',
+          url: 'https://fixture.test/variety-current',
+        ),
+        VodEpisode(
+          name: '第1集 星空初遇1080p',
+          url: 'https://fixture.test/normal-current',
+        ),
+        VodEpisode(
+          name: '正片第2集 月下重逢 [番综]1080p',
+          url: 'https://fixture.test/conflict-next',
+        ),
+        VodEpisode(
+          name: '番综第2期 月下重逢2160p',
+          url: 'https://fixture.test/other-next',
+        ),
+      ];
+      final f = await _mount(tester, episodes: episodes);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(f.media.opened, hasLength(1));
+      await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
+      await _settle(tester);
+      expect(f.media.opened, hasLength(1));
+      expect(f.media.state.playing, isTrue);
+    },
+  );
+
+  for (final variety in [false, true]) {
+    for (final action in ['previous', 'natural', 'outro']) {
+      _testPlayer('titled edition $action uses stable content variety=$variety', (
+        tester,
+      ) async {
+        final episodes = _titledEditions();
+        final current = action == 'previous'
+            ? (variety ? 2 : 3)
+            : (variety ? 1 : 0);
+        final f = await _mount(
+          tester,
+          episodes: episodes,
+          current: current,
+          options: action == 'outro'
+              ? const PlayerOptions(
+                  skipMode: SkipMode.auto,
+                  skipKinds: SkipKindBits.outro,
+                  autoNext: true,
+                )
+              : null,
+          markOutro: action == 'outro',
+        );
+        if (action == 'previous') {
+          await _step(tester, previous: true);
+        } else if (action == 'natural') {
+          await _finish(tester, f.media);
+        } else {
+          f.media.progress(805);
+          await _settle(tester);
+        }
+        expect(find.byType(AlertDialog), findsNothing);
+        final target = action == 'previous'
+            ? (variety ? 1 : 0)
+            : (variety ? 2 : 3);
+        expect(f.media.opened.map((m) => m.uri), [
+          episodes[current].url,
+          episodes[target].url,
+        ]);
+        // ignore: avoid_print
+        print(
+          'titled edition $action variety=$variety opens=${f.media.opened.map((m) => m.uri).toList()}',
+        );
+      });
+    }
+  }
+
+  _testPlayer(
+    'titled edition technical continuation opens exact next URL without selector',
+    (tester) async {
+      final episodes = [
+        VodEpisode(name: '第1集 星空初遇 1080p', url: 'https://fixture.test/title-1'),
+        VodEpisode(
+          name: '第1集 星空初遇 2160p',
+          url: 'https://fixture.test/title-1high',
+        ),
+        VodEpisode(
+          name: '第2集 月下重逢2160p',
+          url: 'https://fixture.test/title-2high',
+        ),
+        VodEpisode(name: '第2集 月下重逢1080p', url: 'https://fixture.test/title-2'),
+      ];
+      final f = await _mount(tester, episodes: episodes);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.media.opened.map((m) => m.uri), [
+        episodes.first.url,
+        episodes.last.url,
+      ]);
+    },
+  );
+  for (final variety in [false, true]) {
+    _testPlayer('titled edition plain content continuation variety=$variety', (
+      tester,
+    ) async {
+      final episodes = [
+        VodEpisode(
+          name: '第1集 星空初遇',
+          url: 'https://fixture.test/normal-title-1',
+        ),
+        VodEpisode(
+          name: '番综第1期 星空初遇',
+          url: 'https://fixture.test/variety-title-1',
+        ),
+        VodEpisode(
+          name: '番综第2期 月下重逢',
+          url: 'https://fixture.test/variety-title-2',
+        ),
+        VodEpisode(
+          name: '第2集 月下重逢',
+          url: 'https://fixture.test/normal-title-2',
+        ),
+      ];
+      final f = await _mount(
+        tester,
+        episodes: episodes,
+        current: variety ? 1 : 0,
+      );
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.media.opened.map((m) => m.uri), [
+        episodes[variety ? 1 : 0].url,
+        episodes[variety ? 2 : 3].url,
+      ]);
+    });
+  }
+
+  for (final variety in [false, true]) {
+    for (final action in ['previous', 'natural', 'outro']) {
+      _testPlayer(
+        'edition continuity $action preserves content variety=$variety',
+        (tester) async {
+          final episodes = _contentEditions();
+          final current = action == 'previous'
+              ? (variety ? 2 : 3)
+              : (variety ? 1 : 0);
+          final f = await _mount(
+            tester,
+            episodes: episodes,
+            current: current,
+            options: action == 'outro'
+                ? const PlayerOptions(
+                    skipMode: SkipMode.auto,
+                    skipKinds: SkipKindBits.outro,
+                    autoNext: true,
+                  )
+                : null,
+            markOutro: action == 'outro',
+          );
+          if (action == 'previous') {
+            await _step(tester, previous: true);
+          } else if (action == 'natural') {
+            await _finish(tester, f.media);
+          } else {
+            f.media.progress(805);
+            await _settle(tester);
+          }
+          expect(find.byType(AlertDialog), findsNothing);
+          final target = action == 'previous'
+              ? (variety ? 1 : 0)
+              : (variety ? 2 : 3);
+          expect(f.media.opened.map((m) => m.uri), [
+            episodes[current].url,
+            episodes[target].url,
+          ]);
+          // ignore: avoid_print
+          print(
+            'edition $action variety=$variety opens=${f.media.opened.map((m) => m.uri).toList()}',
+          );
+        },
+      );
+    }
+  }
+  _testPlayer(
+    'edition different sole candidate confirms and cancellation resumes current',
+    (tester) async {
+      final episodes = [
+        VodEpisode(name: '第1集', url: 'https://fixture.test/normal-1'),
+        VodEpisode(name: '番综第1期', url: 'https://fixture.test/variety-1'),
+        VodEpisode(name: '番综第2期', url: 'https://fixture.test/variety-2'),
+      ];
+      final f = await _mount(tester, episodes: episodes);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(f.media.opened, hasLength(1));
+      expect(f.media.state.playing, isFalse);
+      await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
+      await _settle(tester);
+      expect(f.media.opened, hasLength(1));
+      expect(f.media.state.playing, isTrue);
+    },
+  );
+  _testPlayer(
+    'edition no unique match asks and manual choice drives following continuity',
+    (tester) async {
+      final episodes = [
+        VodEpisode(name: '第1集', url: 'https://fixture.test/normal-1'),
+        VodEpisode(name: '番综第1期', url: 'https://fixture.test/variety-1'),
+        VodEpisode(name: '番综第2期', url: 'https://fixture.test/variety-2a'),
+        VodEpisode(name: '番综第2期', url: 'https://fixture.test/variety-2b'),
+        VodEpisode(name: '第3集', url: 'https://fixture.test/normal-3'),
+        VodEpisode(name: '番综第3期', url: 'https://fixture.test/variety-3'),
+      ];
+      final f = await _mount(tester, episodes: episodes);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('episode-version-option-3')));
+      await tester.tap(find.byKey(const ValueKey('episode-version-confirm')));
+      await _settle(tester);
+      expect(f.media.opened.last.uri, episodes[3].url);
+      await _step(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.media.opened.last.uri, episodes[5].url);
+    },
+  );
+
+  for (final variety in [false, true]) {
+    _testPlayer(
+      'edition continuity opens exact $variety next without selector',
+      (tester) async {
+        final episodes = [
+          VodEpisode(name: '第1集', url: 'https://fixture.test/normal-1'),
+          VodEpisode(name: '番综第1期', url: 'https://fixture.test/variety-1'),
+          VodEpisode(name: '番综第2期', url: 'https://fixture.test/variety-2'),
+          VodEpisode(name: '第2集', url: 'https://fixture.test/normal-2'),
+        ];
+        final f = await _mount(
+          tester,
+          episodes: episodes,
+          current: variety ? 1 : 0,
+        );
+        await _step(tester);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(f.media.opened.map((m) => m.uri), [
+          episodes[variety ? 1 : 0].url,
+          episodes[variety ? 2 : 3].url,
+        ]);
+      },
+    );
+  }
+
   _testPlayer(
     'next skips same-episode variants and preserves unique selected profile',
     (tester) async {

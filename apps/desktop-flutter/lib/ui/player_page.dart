@@ -63,6 +63,7 @@ import '../state/app_state.dart';
 import 'app.dart';
 import 'danmaku_search_dialog.dart';
 import 'settings_overview_page.dart';
+import 'intro_skip_options_page.dart';
 import 'subtitle_search_dialog.dart';
 import 'subtitle_settings_page.dart';
 import 'ai_integration_widgets.dart';
@@ -418,6 +419,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 一次连播未完成时忽略后续所有控制器通知，避免「一次播完连跳多集」。
   bool _advanceInFlight = false;
+  ({int generation, Duration duration})? _skippedProgress;
+  bool _completionPaused = false;
+  bool _sleepStoppedAtCompletion = false;
+
+  void _clearCompletionProgress() {
+    _skippedProgress = null;
+    _completionPaused = false;
+    _sleepStoppedAtCompletion = false;
+  }
 
   /// 「跳过片尾」afterwards 多久内算同一次跳转（我们自己的跳转不该被当成伪结束）。
   static const int _skipSeekWindowMs = 5000;
@@ -526,8 +536,26 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 片头、片尾、预告四段，布尔表达不了「哪一段处理过」。
   final Set<String> _skipHandled = <String>{};
 
-  /// 远端标定的进程内缓存：同一部剧各集共用一份，切集不重打请求。
-  final IntroSkipCache _skipCache = IntroSkipCache();
+  /// 同一媒体的重开共用缓存；换集/版本后不能沿用旧时间轴。
+  IntroSkipCache _skipCache = IntroSkipCache();
+  Object? _skipMediaIdentity;
+  int _skipLookupEpoch = 0;
+
+  Object _skipIdentityFor(PlaybackRequest request) => (
+    request.sourceKey,
+    request.siteKey,
+    request.vodId,
+    request.episodeTarget,
+    request.episodeName,
+    request.flag,
+    request.url,
+    request.qualityIndex,
+    request.tmdb?.tmdbId,
+    request.tmdb?.imdbId,
+    request.tmdb?.mediaType,
+    request.tmdb?.seasonNumber,
+    request.tmdb?.episodeNumber,
+  );
 
   /// 本集是否已发起过远端查询（每集一次；失败也不重试，免得拖慢播放）。
   bool _skipLookupStarted = false;
@@ -564,6 +592,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ({int revision, Duration target})? _danmakuSeek;
 
   void _onDanmakuSeek(Duration position) {
+    _clearCompletionProgress();
     if (mounted) {
       setState(() {
         _danmakuSeek = (
@@ -876,6 +905,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       );
       return;
     }
+    final preservesSkipSession =
+        _skipMediaIdentity == _skipIdentityFor(current);
     setState(() {
       // 合并到当前请求，保住详情等待期间更新过的字幕、画质与起播状态。
       // 路由必须跟着线路一起采纳：目录条目补出来的线路各自属于**不同条目**，
@@ -888,6 +919,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         episodeIndex: target.episodeIndex,
         tmdb: current.tmdb,
       );
+      if (preservesSkipSession) {
+        // 已确认同一在播媒体的metadata规范化不使pending标定失效。
+        _skipMediaIdentity = _skipIdentityFor(_request);
+      }
     });
     widget.state.log.debug(
       '选集入口已补齐 vod="${request.vodId}" lines=${lines.length} '
@@ -1072,6 +1107,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _observePlaybackError();
     _syncSkipPlanWithDuration();
     _maybeStartSkipLookup();
+    _primeSkipPrefetch();
     _maybeAutoSkip();
     _maybeAdvanceOnGenuineEnd();
     _applyRememberedTrackChoices();
@@ -1119,7 +1155,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 只读控制器状态，不重建播放器；`_skipArmed` 保证续播 seek 完成之前不判定。
   void _maybeAutoSkip() {
-    if (!_skipArmed || _loadError != null) return;
+    if (_isLive || !_skipArmed || _loadError != null) return;
     if (_skipPlan.isEmpty) return;
     final duration = _controller.duration;
     if (duration <= Duration.zero) return;
@@ -1155,11 +1191,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       '已跳过${segment.kind.label} → ${_formatMs(decision.targetMs)}',
       kind: ToastKind.success,
     );
+    if (decision.openEnd &&
+        decision.targetMs >= _controller.duration.inMilliseconds &&
+        !_isLive &&
+        !_isCatchup) {
+      unawaited(_finishSkippedEpisode());
+      return;
+    }
     // 这一步是应用自己发起的「跳到片尾」：跳完若紧接着 EOF，那就是本集真的
     // 看完了，不能按「seek 伪结束」挡掉连播。
     _skipSeekAt = DateTime.now();
     // 走同一条跳转通道：片尾段可能在缓冲之外，同样只能靠重开定位。
     unawaited(_seekFromUser(Duration(milliseconds: decision.targetMs)));
+  }
+
+  Future<void> _finishSkippedEpisode() async {
+    if (_advanceInFlight) return;
+    if (_isLive || _isCatchup || !_progressReady) return;
+    final generation = _mediaGeneration;
+    _advanceInFlight = true;
+    _skipArmed = false;
+    _skippedProgress = (generation: generation, duration: _controller.duration);
+    _completionPaused = false;
+    _persistProgress();
+    try {
+      await _controller.pause();
+      if (!mounted || generation != _mediaGeneration) return;
+    } finally {
+      _advanceInFlight = false;
+    }
+    _advanceAfterCompletion();
   }
 
   /// `confirm` 模式先问用户（安卓 `INTRO_SKIP_CONFIRM`）。
@@ -1192,6 +1253,46 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     if (!mounted || confirmed != true) return;
     _applySkip(segment, decision);
+  }
+
+  void _primeSkipPrefetch() {
+    if (!widget.state.playerOptions.skipPrefetch ||
+        !_options.skipPrefetch ||
+        _isLive ||
+        _isCatchup ||
+        _controller.duration <= Duration.zero) {
+      widget.state.cancelSkipPrefetch();
+      return;
+    }
+    final position = _controller.position.inMilliseconds;
+    final ordered = _skipPlan.segments.toList()
+      ..sort((left, right) => left.startMs.compareTo(right.startMs));
+    for (final segment in ordered) {
+      if ((_options.skipKinds & segment.kind.bit) == 0 ||
+          _skipHandled.contains(segment.identity)) {
+        continue;
+      }
+      final target = segment.openEnded
+          ? _controller.duration.inMilliseconds
+          : segment.endMs;
+      if (target <= position || target >= _controller.duration.inMilliseconds) {
+        continue;
+      }
+      // Keep preparation close in wall time even at slow/fast playback rates.
+      final leadMs = (15000 * _controller.rate.clamp(0.25, 4.0)).round();
+      if (segment.startMs - position > leadMs) {
+        widget.state.cancelSkipPrefetch(clearCache: false);
+        return;
+      }
+      final uri = Uri.tryParse(_request.url);
+      if (uri != null) {
+        widget.state.primeSkipPrefetch([
+          uri.replace(fragment: 't=${target / 1000}'),
+        ]);
+      }
+      return;
+    }
+    widget.state.cancelSkipPrefetch(clearCache: false);
   }
 
   /// 时长首次已知或被精化时重算一次计划（尾部段折算依赖时长）。
@@ -1237,6 +1338,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           durationMs: durationMs > 0 ? durationMs : 0,
         ),
         providers,
+        _skipLookupEpoch,
       ),
     );
   }
@@ -1244,45 +1346,60 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<void> _loadRemoteSkipSegments(
     SkipQuery query,
     List<IntroSkipProvider> providers,
+    int epoch,
   ) async {
     final result = await lookupIntroSkip(
       query: query,
       providers: providers,
       cache: _skipCache,
     );
-    if (!mounted) return;
-    _skipRawSegments = result.segments;
-    _rebuildSkipPlan();
+    if (!mounted ||
+        epoch != _skipLookupEpoch ||
+        _skipIdentityFor(_request) != _skipMediaIdentity) {
+      return;
+    }
+    setState(() {
+      _skipRawSegments = result.segments;
+      _rebuildSkipPlan();
+    });
     widget.state.log.info(
       '片头片尾标定 ${result.segments.length} 段 '
       'cacheable=${result.cacheable} episode=${_request.episodeName}',
       scope: 'player',
     );
     // 标定到位时可能已经播过点了，立刻按当前位置判一次。
+    _primeSkipPrefetch();
     _maybeAutoSkip();
   }
 
-  /// 手动跳过片头/片尾（不依赖开关；没有可用段时如实提示）。
-  Future<void> _manualSkip(SkipAction action) async {
-    final targetKind = action == SkipAction.intro
-        ? SkipKind.intro
-        : SkipKind.outro;
+  SkipSegment? _manualSkipSegment(SkipKind kind) {
     final durationMs = _controller.duration.inMilliseconds;
-    SkipSegment? segment;
-    for (final candidate in _skipPlan.segments) {
-      if (candidate.kind != targetKind) continue;
-      segment = candidate;
-      break;
+    if (_isLive || durationMs <= 0) return null;
+    final positionMs = _controller.position.inMilliseconds;
+    SkipSegment? next;
+    for (final segment in _skipPlan.segments) {
+      if (segment.kind != kind) continue;
+      final endMs = segment.openEnded ? durationMs : segment.endMs;
+      if (endMs <= positionMs || endMs > durationMs) continue;
+      if (segment.startMs <= positionMs) return segment;
+      if (next == null || segment.startMs < next.startMs) next = segment;
     }
+    return next;
+  }
+
+  Future<void> _manualSkip(SkipAction action) => _manualSkipKind(
+    action == SkipAction.intro ? SkipKind.intro : SkipKind.outro,
+  );
+
+  Future<void> _manualSkipKind(SkipKind kind) async {
+    final segment = _manualSkipSegment(kind);
     if (segment == null) {
-      _showPlayerMessage(action == SkipAction.intro ? '本集未识别到片头' : '本集未识别到片尾');
+      _showPlayerMessage('本集暂无可跳过的${kind.label}');
       return;
     }
-    final target = action == SkipAction.intro
-        ? segment.endMs
-        : (segment.openEnded || segment.endMs >= durationMs
-              ? durationMs
-              : segment.endMs);
+    final target = segment.openEnded
+        ? _controller.duration.inMilliseconds
+        : segment.endMs;
     _skipHandled.add(segment.identity);
     await _controller.seek(Duration(milliseconds: target));
     widget.state.log.info(
@@ -1400,6 +1517,22 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
 
+    _advanceAfterCompletion();
+  }
+
+  void _advanceAfterCompletion() {
+    if (_advanceInFlight ||
+        _isLive ||
+        _isCatchup ||
+        !_progressReady ||
+        _sleepStoppedAtCompletion) {
+      return;
+    }
+    if (_sleepTimer.shouldStopOnEpisodeEnd()) {
+      _sleepStoppedAtCompletion = true;
+      _stopBySleepTimer();
+      return;
+    }
     if (_hasQueue) {
       if (_repeat == PlaybackRepeat.off && !_options.autoNext) return;
       _advanceInFlight = true;
@@ -1427,13 +1560,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       genuineEnd: true,
     );
 
-    if (decision.action == PlaybackAdvanceAction.stop) {
-      // 「本集结束」定时到点：停在当前画面，不前进。
-      if (_sleepTimer.shouldStopOnEpisodeEnd()) {
-        _stopBySleepTimer();
-      }
-      return;
-    }
+    if (decision.action == PlaybackAdvanceAction.stop) return;
 
     _advanceInFlight = true;
     unawaited(
@@ -1578,6 +1705,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     bool? restorePlaying,
     Duration? recoveryOrigin,
   }) async {
+    widget.state.cancelSkipPrefetch(clearCache: false);
+    _clearCompletionProgress();
     if (_isLive || _isCatchup || _hasQueue) {
       await _controller.seek(target);
       return;
@@ -1632,6 +1761,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         final next = _queuedSeekTarget!;
         final nextPlaying = _queuedSeekPlaying;
         _queuedSeekTarget = null;
+        // 诊断要能回答「为什么卡了一下」：beta 的重写移除了这条日志，但用户
+        // 反馈跨缓冲重开时它是唯一的现场证据，保留它不改变跳转机制。
+        widget.state.log.info(
+          '跨缓冲跳转：重开本集并在打开时定位 '
+          'target=${next.inMilliseconds}ms '
+          'buffered=${buffered.inMilliseconds}ms '
+          'episode=${_request.episodeName}',
+          scope: 'player',
+        );
         final attempt =
             _seekRecovery ??
             SeekRecovery(
@@ -1647,6 +1785,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         _seekRecovery = attempt;
         setState(
           () => _request = _request.copyWith(
+            // 同媒体重开必须原样保留 TMDB 身份，否则跳段标定会整集丢失。
+            tmdb: _request.tmdb,
             startPosition: next,
             clearResumeSeed: true,
           ),
@@ -1849,12 +1989,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 轨道记忆的键里含线路与集，换集/换线路后必须重读，上一集的记忆绝不能带过来。
     _loadRememberedTrackChoices();
     _skipArmed = false;
-    _skipHandled.clear();
-    // 换集/换线路：上一集的远端标定与计划一律作废，重新查一次。
-    _skipRawSegments = const <RawSkipSegment>[];
-    _skipPlan = SkipPlan.empty;
+    final skipIdentity = _skipIdentityFor(intent);
+    if (skipIdentity != _skipMediaIdentity) {
+      _skipMediaIdentity = skipIdentity;
+      _skipLookupEpoch++;
+      _skipHandled.clear();
+      _skipRawSegments = const <RawSkipSegment>[];
+      _skipPlan = SkipPlan.empty;
+      _skipLookupStarted = false;
+      _skipCache = IntroSkipCache();
+      _skipSegments = widget.state.skipSegmentsFor(
+        siteKey: intent.siteKey,
+        vodId: intent.vodId,
+      );
+    }
     _skipPlanDurationMs = -1;
-    _skipLookupStarted = false;
     setState(() => _loadError = null);
     final controller = _controller;
     if (widget.liveSession != null) _liveOpenInFlight = true;
@@ -1967,28 +2116,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted || generation != _mediaGeneration) return;
     }
     widget.liveSession?.confirmPlayback(sessionRevision);
-    // Phase 9：注入 mpv 播放参数与 LUT。失败不阻断播放，只提示能力不可用。
-    await _applyPlaybackEnhancements();
-    if (!mounted || generation != _mediaGeneration) return;
-    // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
-    // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
-    await _configureSubtitles();
-    await _audioAi?.karaoke.bindMedia(
-      _karaokeMedia,
-      lyrics: _currentSrtForAi == null
-          ? const []
-          : lyricLinesFromSrt(_currentSrtForAi!),
-    );
-    if (!mounted || generation != _mediaGeneration) return;
-    // 弹幕（§21 Phase 3）：拉取并启用弹幕。同样不得阻断播放。
-    await _configureDanmaku();
-    if (!mounted || generation != _mediaGeneration) return;
     // 进度恢复：仅对同一剧集且位置有效时执行（§10.3 播放恢复）。
     final start = _effectiveStartPosition();
     // 种子是**一次性交接**：无论重算成功与否，落定后都要清掉，否则下一次
     // `_load()`（失败重试、换线路）会把同一颗种子再套一遍，甚至套到别的集上。
     if (_request.resumeSeed != null || start != _request.startPosition) {
       _request = _request.copyWith(
+        tmdb: _request.tmdb,
         startPosition: start,
         clearStartPosition: start == null,
         clearResumeSeed: true,
@@ -2049,7 +2183,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _skipArmed = true;
 
     if (restorePlaying == null) _maybeAutoSkip();
+    if (!mounted || generation != _mediaGeneration) return;
     _startProgressSaver();
+    // 视频与续播已就绪：辅助能力仍按原顺序等待，不阻塞自动跳段。
+    // Phase 9：注入 mpv 播放参数与 LUT。失败不阻断播放，只提示能力不可用。
+    await _applyPlaybackEnhancements();
+    if (!mounted || generation != _mediaGeneration) return;
+    // 字幕（§10.3）：装配外挂字幕候选并自动启用默认/强制字幕。
+    // 字幕失败不得阻断播放，因此整段吞掉错误，只落日志与提示。
+    await _configureSubtitles();
+    if (!mounted || generation != _mediaGeneration) return;
+    await _audioAi?.karaoke.bindMedia(
+      _karaokeMedia,
+      lyrics: _currentSrtForAi == null
+          ? const []
+          : lyricLinesFromSrt(_currentSrtForAi!),
+    );
+    if (!mounted || generation != _mediaGeneration) return;
+    // 弹幕（§21 Phase 3）：拉取并启用弹幕。同样不得阻断播放。
+    await _configureDanmaku();
   }
 
   /// 本次加载实际要 seek 的位置：优先用「待迁移种子 + 目标集真实时长」重算。
@@ -3382,12 +3534,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   // `_persistOptions` 已搬到 `player_playback_params.dart`（`part` 里的 `_PlayerPageState` 扩展）。
 
-  /// 菜单里那两个「自动跳过」开关改的是**类型位**，不是模式。
-  ///
-  /// 打开任一类型却仍是 off 模式，等于装了个没反应的开关：顺手把模式拉到
-  /// auto，用户点一下就能看到效果（想把模式设回 off 走设置页或右键菜单）。
-  Future<void> _toggleAutoSkip({required bool intro}) async {
-    final bit = intro ? SkipKindBits.intro : SkipKindBits.outro;
+  Future<void> _setSkipMode(SkipMode mode) async {
+    await _persistOptions(_options.copyWith(skipMode: mode));
+    if (!mounted) return;
+    setState(() {});
+    _maybeAutoSkip();
+  }
+
+  /// 沿用既有行为：off 时打开一个类型，将模式升为 auto。
+  Future<void> _toggleAutoSkip(SkipKind kind) async {
+    final bit = kind.bit;
     final on = (_options.skipKinds & bit) != 0;
     final kinds = on ? _options.skipKinds & ~bit : _options.skipKinds | bit;
     final mode = !on && _options.skipMode == SkipMode.off
@@ -3396,6 +3552,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await _persistOptions(_options.copyWith(skipKinds: kinds, skipMode: mode));
     if (!mounted) return;
     setState(() => _rebuildSkipPlan());
+    _maybeAutoSkip();
+  }
+
+  Future<void> _showSkipOptions() =>
+      _showSettingsAndSyncOptions(IntroSkipOptionsPage(state: widget.state));
+
+  Future<void> _showSettingsAndSyncOptions(Widget page) async {
+    await Navigator.of(context)
+        .push<void>(MaterialPageRoute(builder: (_) => page));
+    if (!mounted) return;
+    setState(() {
+      _options = widget.state.playerOptions;
+      _rebuildSkipPlan();
+    });
+    _primeSkipPrefetch();
   }
 
   // `_showSubtitleMenu` 已搬到 `player_subtitle_menu.dart`（`part` 里的 `_PlayerPageState` 扩展）。
@@ -3410,6 +3581,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   int _beginMediaTransition({SeekRecovery? seekRecovery}) {
+    widget.state.cancelSkipPrefetch(
+      clearCache: _skipMediaIdentity != _skipIdentityFor(_request),
+    );
     _clearGesturePlaybackIntent();
     _clickGate.dispose();
     _playingBeforeFirstTap = null;
@@ -3435,6 +3609,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (_audioAi != null) unawaited(_audioAi!.stop());
     // 在替换请求或打开媒体前，最后一次用仍配对的旧标识保存。
     _persistProgress();
+    _clearCompletionProgress();
     _progressReady = false;
     _skipArmed = false;
     _saveTimer?.cancel();
@@ -3526,9 +3701,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // seek 伪结束期间的位置是假的（引擎把 time-pos 报成了 duration），
     // 落库会把「点了一下进度条」写成「这一集已看完」，下次续播直接失效。
     if (_spuriousCompletion) return;
-    if (_controller.duration <= Duration.zero) return;
-    final position = _controller.position;
-    final duration = _controller.duration;
+    // 显式跳至文件末尾的完成快照：位置按本集总长记录，离开本媒体后作废。
+    final skipped = _skippedProgress;
+    final completedDuration = skipped?.generation == _mediaGeneration
+        ? skipped?.duration
+        : null;
+    final duration = completedDuration ?? _controller.duration;
+    if (duration <= Duration.zero) return;
+    final position = completedDuration ?? _controller.position;
     widget.state.recordProgress(
       vod: Vod(
         vodId: _request.vodId,
@@ -3578,6 +3758,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   @override
   void dispose() {
+    widget.state.cancelSkipPrefetch();
     _releaseProxySession?.call();
     _releaseProxySession = null;
     windowManager.removeListener(this);
@@ -3925,6 +4106,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (decision!.parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
         _request = intent.copyWith(
+          tmdb: intent.tmdb,
           url: decision.url!,
           headers: decision.headers?.asRequestHeaders ?? const {},
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
@@ -4335,6 +4517,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 这里查到的就是**这一集**的最新进度，比种子更准；种子必须清掉，
       // 否则 `_load()` 会拿种子再算一次把它覆盖掉。
       _request = _request.copyWith(
+        tmdb: _request.tmdb,
         startPosition: latest,
         clearResumeSeed: true,
       );
@@ -5241,7 +5424,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await file.parent.create(recursive: true);
     await file.writeAsString(result.translatedSrt, flush: true);
     if (!mounted || generation != _mediaGeneration) return;
-    _request = _request.copyWith(subtitles: [..._request.subtitles, sub]);
+    _request = _request.copyWith(
+      tmdb: _request.tmdb,
+      subtitles: [..._request.subtitles, sub],
+    );
     _controller.setExternalSubtitles(_request.subtitles);
     final option = _controller.externalOptions.last;
     await _controller.selectSubtitle(option);
@@ -5502,6 +5688,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             position: _dragSeekTarget ?? _controller.position,
             duration: duration,
             buffered: _controller.buffered,
+            skipSegments: _skipPlan.segments,
+            skipSegmentColors: _options.skipSegmentColors,
+            showSkipSegmentHighlights: _options.showSkipSegmentHighlights,
             // 拖动期间**只记录、不 seek**（见 [_dragSeekTarget]）。
             onSeek: (target) {
               // 直播不 seek：页面其它 seek 入口（快捷键、右键菜单、
@@ -5832,6 +6021,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _beginMediaTransition();
       setState(() {
         _request = intent.copyWith(
+          tmdb: intent.tmdb,
           url: decision.url!,
           headers: decision.headers?.asRequestHeaders ?? const {},
           subtitleHeaders: decision.assetHeaders?.asRequestHeaders ?? const {},
@@ -6203,7 +6393,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         .player
         .stream
         .playing
-        .listen((_) => _clearGesturePlaybackIntent());
+        .listen((playing) {
+          _clearGesturePlaybackIntent();
+          if (_skippedProgress == null && !_sleepStoppedAtCompletion) return;
+          if (!playing) {
+            _completionPaused = true;
+          } else if (_completionPaused) {
+            _clearCompletionProgress();
+            _skipArmed = true;
+          }
+        });
   }
 
   /// 显式应用点击目标；仅在双击窗口内保留未获引擎确认的意图。
