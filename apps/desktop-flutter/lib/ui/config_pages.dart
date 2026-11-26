@@ -1444,16 +1444,18 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
 /// 而用户点顶栏「配置：xxx」想要的是"换一个源"。两件事混在一页时，换配置这个
 /// 高频动作会被 180px 的导入表单挤到首屏之外（用户反馈 2026-11-05）。
 ///
-/// 返回被选中的记录 id；取消返回 `null`。
+/// 返回被选中的记录 id；取消与管理返回 `null`。管理通过可选回调通知宿主。
 class ConfigSwitcherDialog extends StatelessWidget {
   const ConfigSwitcherDialog({
     super.key,
     required this.records,
     required this.activeId,
+    this.onManage,
   });
 
   final List<ConfigRecord> records;
   final int? activeId;
+  final VoidCallback? onManage;
 
   @override
   Widget build(BuildContext context) {
@@ -1512,6 +1514,16 @@ class ConfigSwitcherDialog extends StatelessWidget {
         ),
       ),
       actions: [
+        if (onManage != null)
+          TextButton.icon(
+            key: const ValueKey('config-switcher-manage'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              onManage!();
+            },
+            icon: const Icon(Icons.settings_outlined, size: 18),
+            label: const Text('配置管理'),
+          ),
         TextButton(
           key: const ValueKey('config-switcher-cancel'),
           onPressed: () => Navigator.of(context).pop(),

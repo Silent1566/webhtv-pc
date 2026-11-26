@@ -433,7 +433,17 @@ _mountSegments(
     state.dispose();
     // Windows 上未释放的日志文件句柄会让目录删除直接抛错；先等日志收尾。
     await log.dispose();
-    if (dir.existsSync()) dir.deleteSync(recursive: true);
+    // 句柄释放与删除之间存在竞态：真实见过 PathAccessException 让整条用例
+    // 在 teardown 里变红（与断言无关）。重试几次后放弃——临时目录残留不该
+    // 决定这条 UI 用例的成败。
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+        return;
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
   });
   await tester.runAsync(() async {
     await state.bootstrap();
