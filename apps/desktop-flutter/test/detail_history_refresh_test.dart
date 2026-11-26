@@ -17,12 +17,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/player_page.dart';
 
 import 'support/detail_test_seams.dart';
+import 'support/player_page_harness.dart';
 
 /// 假的播放页：只在 `dispose()` 里写进度，与 `PlayerPage` 的真实时序一致。
 class _FakePlayerPage extends StatefulWidget {
@@ -78,8 +81,10 @@ void main() {
         },
       ),
       log: MemoryOnlyLogService(),
-      httpClient: MockClient((request) async =>
-          http.Response(jsonEncode(<String, Object?>{'list': []}), 200)),
+      httpClient: MockClient(
+        (request) async =>
+            http.Response(jsonEncode(<String, Object?>{'list': []}), 200),
+      ),
     );
     await bootstrapWithoutExternalMeta(state);
     final ok = await state.importConfig(
@@ -88,8 +93,8 @@ void main() {
           <String, Object?>{
             'key': 'site-a',
             'name': '甲站',
-            'type': 3,
-            'api': 'c1',
+            'type': 1,
+            'api': 'http://127.0.0.1:1/api/type1/',
             'searchable': 1,
             'quickSearch': 1,
             'filter': 0,
@@ -117,18 +122,37 @@ void main() {
     vodPlayUrl: '第1集\$http://x/e1#第2集\$http://x/e2',
   );
 
-  Future<void> pumpDetail(WidgetTester tester) async {
+  Future<void> pumpDetail(
+    WidgetTester tester, {
+    ResumeSeed? resumeSeed,
+    Vod? target,
+    bool withHistoryHints = false,
+  }) async {
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
-    state.seedDetailForTest(vod: vod);
-    await tester.pumpWidget(MaterialApp(home: DetailPage(state: state, vod: vod)));
+    final pageVod = target ?? vod;
+    state.seedDetailForTest(vod: pageVod);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DetailPage(
+          state: state,
+          vod: pageVod,
+          resumeSeed: resumeSeed,
+          historyFlag: withHistoryHints ? '线路一' : '',
+          historyEpisodeId: withHistoryHints ? 'http://x/e1' : '',
+        ),
+      ),
+    );
     await tester.pump();
     for (var attempt = 0; attempt < 20; attempt++) {
-      if (find.byKey(const ValueKey('tmdb-episode-card-线路一-0')).evaluate().isNotEmpty) {
+      if (find
+          .byKey(const ValueKey('tmdb-episode-card-线路一-0'))
+          .evaluate()
+          .isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
@@ -136,53 +160,201 @@ void main() {
     }
   }
 
-  testWidgets('从播放页返回后，详情页的历史标记与首屏文案立刻更新', (tester) async {
+  const entrySeed = ResumeSeed(
+    flag: '线路一',
+    episodeName: '第1集',
+    episodeId: 'http://x/e1',
+    positionMs: 30000,
+    durationMs: 100000,
+  );
+
+  for (final entry in ['无', '续播种子', '线路与集提示']) {
+    testWidgets('从播放页返回后，详情页的历史标记与首屏文案立刻更新（入口记录：$entry）', (tester) async {
+      state.database!.upsertHistory(
+        siteKey: 'site-a',
+        vodId: vod.vodId,
+        vodName: vod.vodName,
+        flag: '线路一',
+        episodeName: '第1集',
+        episodeId: 'http://x/e1',
+        positionMs: 30000,
+        durationMs: 100000,
+        updatedAt: 100,
+        sourceKey: sourceKey,
+      );
+      await pumpDetail(
+        tester,
+        resumeSeed: entry == '续播种子' ? entrySeed : null,
+        withHistoryHints: entry == '线路与集提示',
+      );
+      expect(find.text('继续播放 · 第1集'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路一-recent-0')),
+        findsOneWidget,
+      );
+
+      // 进播放页再返回：播放页在 dispose 里写第 2 集的进度（pop 之后才发生）。
+      final navigator = tester.state<NavigatorState>(
+        find.byType(Navigator).first,
+      );
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              _FakePlayerPage(state: state, vod: vod, sourceKey: sourceKey),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('播放器'), findsOneWidget);
+
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('继续播放 · 第2集'),
+        findsOneWidget,
+        reason: '播放页退出时写的那条进度必须反映到首屏文案上',
+      );
+      expect(
+        find.byKey(const ValueKey('tmdb-episode-card-线路一-recent-1')),
+        findsOneWidget,
+        reason: '角标要挪到第 2 集',
+      );
+    });
+  }
+
+  testWidgets('入口选中的旧记录不会被既有新记录或无关进度顶掉', (tester) async {
     state.database!.upsertHistory(
       siteKey: 'site-a',
       vodId: vod.vodId,
       vodName: vod.vodName,
       flag: '线路一',
+      episodeName: '第2集',
+      episodeId: 'http://x/e2',
+      positionMs: 40000,
+      durationMs: 100000,
+      updatedAt: 200,
+      sourceKey: sourceKey,
+    );
+    await pumpDetail(tester, resumeSeed: entrySeed);
+    expect(find.text('继续播放 · 第1集'), findsOneWidget);
+
+    // 别的作品、别的来源：都不属于本页这部戏。
+    for (final unrelated in [
+      ('site-a', 'other-1', '另一部剧', sourceKey),
+      ('site-a', 'other-2', vod.vodName, 'another-source'),
+      ('same-name-site', 'different-work', vod.vodName, sourceKey),
+    ]) {
+      state.recordProgress(
+        vod: Vod(vodId: unrelated.$2, vodName: unrelated.$3),
+        flag: '线路一',
+        episodeName: '第2集',
+        episodeId: 'http://x/e2',
+        position: const Duration(seconds: 50),
+        duration: const Duration(seconds: 100),
+        siteKey: unrelated.$1,
+        sourceKey: unrelated.$4,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('继续播放 · 第1集'), findsOneWidget);
+    }
+  });
+
+  testWidgets('写入本线进度后，切到另一线路仍优先使用那条线路的精确进度', (tester) async {
+    installMediaKitMocks(tester);
+    installWindowManagerMocks(tester);
+    final multi = Vod(
+      vodId: vod.vodId,
+      vodName: vod.vodName,
+      vodPlayFrom: r'线路一$$$线路二',
+      vodPlayUrl: r'第1集$http://x/a1.mp4$$$第1集$http://x/b1.mp4',
+    );
+    state.database!.upsertHistory(
+      siteKey: 'site-a',
+      vodId: multi.vodId,
+      vodName: multi.vodName,
+      flag: '线路二',
       episodeName: '第1集',
-      episodeId: 'http://x/e1',
-      positionMs: 30000,
+      episodeId: 'http://x/b1.mp4',
+      positionMs: 60000,
+      durationMs: 100000,
+      updatedAt: 100,
+      sourceKey: sourceKey,
+    );
+    await pumpDetail(tester, target: multi);
+    state.recordProgress(
+      vod: multi,
+      flag: '线路一',
+      episodeName: '第1集',
+      episodeId: 'http://x/a1.mp4',
+      position: const Duration(seconds: 30),
+      duration: const Duration(seconds: 100),
+      siteKey: 'site-a',
+      sourceKey: sourceKey,
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('tmdb-line-线路二')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('tmdb-episode-card-线路二-0')));
+    await settlePlayerPage(tester);
+    final page = tester.widget<PlayerPage>(find.byType(PlayerPage));
+    expect(page.request.startPosition, const Duration(seconds: 60));
+    expect(page.request.resumeSeed, isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await settlePlayerPage(tester);
+  });
+
+  testWidgets('写入本站进度后仍保留其他集的跨站续播角标', (tester) async {
+    state.database!.upsertHistory(
+      siteKey: 'site-b',
+      vodId: 'b-1',
+      vodName: vod.vodName,
+      flag: '乙站线路',
+      episodeName: '第2集',
+      episodeId: 'http://b/e2',
+      positionMs: 40000,
       durationMs: 100000,
       updatedAt: 100,
       sourceKey: sourceKey,
     );
     await pumpDetail(tester);
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路一-foreign-1')),
+      findsOneWidget,
+    );
+    state.recordProgress(
+      vod: vod,
+      flag: '线路一',
+      episodeName: '第1集',
+      episodeId: 'http://x/e1',
+      position: const Duration(seconds: 30),
+      duration: const Duration(seconds: 100),
+      siteKey: 'site-a',
+      sourceKey: sourceKey,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-线路一-foreign-1')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('同一集的新进度已播完时，不再被入口种子的旧进度覆盖', (tester) async {
+    await pumpDetail(tester, resumeSeed: entrySeed);
     expect(find.text('继续播放 · 第1集'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('tmdb-episode-card-线路一-recent-0')),
-      findsOneWidget,
-    );
 
-    // 进播放页再返回：播放页在 dispose 里写第 2 集的进度（pop 之后才发生）。
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator).first);
-    navigator.push(
-      MaterialPageRoute<void>(
-        builder: (_) => _FakePlayerPage(
-          state: state,
-          vod: vod,
-          sourceKey: sourceKey,
-        ),
-      ),
+    state.recordProgress(
+      vod: vod,
+      flag: '线路一',
+      episodeName: '第1集',
+      episodeId: 'http://x/e1',
+      position: const Duration(seconds: 99),
+      duration: const Duration(seconds: 100),
+      siteKey: 'site-a',
+      sourceKey: sourceKey,
     );
     await tester.pumpAndSettle();
-    expect(find.text('播放器'), findsOneWidget);
-
-    navigator.pop();
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('继续播放 · 第2集'),
-      findsOneWidget,
-      reason: '播放页退出时写的那条进度必须反映到首屏文案上',
-    );
-    expect(
-      find.byKey(const ValueKey('tmdb-episode-card-线路一-recent-1')),
-      findsOneWidget,
-      reason: '角标要挪到第 2 集',
-    );
+    expect(find.text('继续播放 · 第1集'), findsNothing);
+    expect(find.text('播放第一集'), findsOneWidget);
   });
 
   testWidgets('详情页可见时写进度，角标与文案立刻更新（不依赖离开页面）', (tester) async {

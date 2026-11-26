@@ -2706,6 +2706,24 @@ class AppState extends ChangeNotifier
   /// 订阅方必须**重新查库**而不是缓存上一次的结果：写入与通知之间有微小窗口。
   final ValueNotifier<int> progressRevision = ValueNotifier<int>(0);
 
+  /// 已成功落库的进度身份，在 [progressRevision] 通知之前更新。
+  ({
+    String sourceKey,
+    String siteKey,
+    String vodId,
+    String flag,
+    String episodeId,
+  })?
+  get lastProgressWrite => _lastProgressWrite;
+  ({
+    String sourceKey,
+    String siteKey,
+    String vodId,
+    String flag,
+    String episodeId,
+  })?
+  _lastProgressWrite;
+
   /// 通知监听者的**统一出口**：已 dispose 就安静返回。
   ///
   /// 为什么要有它：`await` 之后回到同步段时，widget 树可能已经拆掉
@@ -8565,6 +8583,9 @@ class AppState extends ChangeNotifier
   }) {
     final database = _database;
     final effectiveSiteKey = siteKey ?? _selectedSite?.key ?? 'cli';
+    final effectiveSourceKey = sourceKey != null && sourceKey.trim().isNotEmpty
+        ? sourceKey.trim()
+        : activeSourceKey;
     if (database == null) return;
     // 隐身模式（Phase 9 P2-8）：不写任何播放历史（对齐安卓
     // `PlaybackProgressWriter` 的 `isIncognito` 闸门）。
@@ -8607,9 +8628,7 @@ class AppState extends ChangeNotifier
         // 写入永远带**具体源**：全局历史只是读视图，不能把新进度写成
         // "无源"的老记录（否则切回按源隔离时就看不见了）。
         // 用原来源配置播放时以调用方给的 sourceKey 为准（见参数注释）。
-        sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
-            ? sourceKey.trim()
-            : activeSourceKey,
+        sourceKey: effectiveSourceKey,
         // 作品身份：年份来自站点条目（可能为空），TMDB 身份来自播放请求。
         // 三者都「有值才生效」：upsert 的 ON CONFLICT 分支只在非空/非 0 时
         // 覆盖，因此同步来的无身份记录不会抹掉这里刚写好的身份。
@@ -8619,6 +8638,13 @@ class AppState extends ChangeNotifier
       );
       // 写库成功：通知订阅者（详情页角标/首屏文案）。放在这里而不是方法末尾，
       // 是为了让「恢复上下文 / 追番回写」这些副作用不挡住界面刷新。
+      _lastProgressWrite = (
+        sourceKey: effectiveSourceKey,
+        siteKey: effectiveSiteKey,
+        vodId: vod.vodId,
+        flag: flag,
+        episodeId: episodeId,
+      );
       if (!_disposed) progressRevision.value++;
       // 崩溃恢复上下文（P2-8）：与历史同源，但只存标识与进度。
       _recordRecoveryPlayback(
