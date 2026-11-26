@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:webhtv_pc/core/history_view.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -92,7 +93,7 @@ void main() {
     vodPlayUrl: '原第1集\$http://127.0.0.1:1/media/o1.mp4',
   );
 
-  Future<void> pumpDetail(WidgetTester tester) async {
+  Future<void> pumpDetail(WidgetTester tester, {ResumeSeed? seed}) async {
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
@@ -108,7 +109,7 @@ void main() {
           fit: StackFit.expand,
           children: [child ?? const SizedBox.shrink(), const ToastHost()],
         ),
-        home: DetailPage(state: state, vod: detailVod()),
+        home: DetailPage(state: state, vod: detailVod(), resumeSeed: seed),
       ),
     );
     await pumpFrames(tester);
@@ -139,14 +140,77 @@ void main() {
     await pumpFrames(tester);
     await tester.tap(find.byKey(const ValueKey('source-swap-commit')));
     await pumpFrames(tester);
-    expect(
-      find.textContaining('2 集'),
-      findsWidgets,
-      reason: '解析后该候选显示集数',
-    );
+    expect(find.textContaining('2 集'), findsWidgets, reason: '解析后该候选显示集数');
     await tester.tap(find.byKey(const ValueKey('source-swap-commit')));
     await pumpFrames(tester);
   }
+
+  testWidgets('入口续播经真实换源并入后，新进度不受同名历史数量和未来时间戳影响', (tester) async {
+    await prepare(tester);
+    for (var i = 0; i < 45; i++) {
+      state.database!.upsertHistory(
+        siteKey: 'old-site-$i',
+        vodId: 'old-$i',
+        vodName: detailVod().vodName,
+        flag: 'old',
+        episodeName: '第1集',
+        episodeId: 'old-$i',
+        positionMs: 30000,
+        durationMs: 100000,
+        updatedAt: 9999999999999 + i,
+        sourceKey: state.activeSourceKey,
+      );
+    }
+    await pumpDetail(
+      tester,
+      seed: const ResumeSeed(
+        flag: 'orig',
+        episodeId: 'http://127.0.0.1:1/media/o1.mp4',
+        episodeName: '原第1集',
+        positionMs: 30000,
+        durationMs: 100000,
+      ),
+    );
+    await swapInThroughSheet(tester);
+    state.recordProgress(
+      vod: Vod(vodId: 'swap-1', vodName: '详情别名'),
+      flag: 'ext',
+      episodeName: '第2集',
+      episodeId: 'http://127.0.0.1:1/media/e2.mp4',
+      position: const Duration(seconds: 40),
+      duration: const Duration(seconds: 100),
+      siteKey: 'ui-swap',
+      sourceKey: state.activeSourceKey,
+    );
+    await pumpFrames(tester);
+    expect(find.text('继续播放 · 换源第2集'), findsOneWidget);
+  });
+
+  testWidgets('并入线路的新记录只显示一次，不同时充当本次进度和其他源候选', (tester) async {
+    await prepare(tester);
+    await pumpDetail(tester);
+    await swapInThroughSheet(tester);
+    state.recordProgress(
+      vod: Vod(vodId: 'swap-1', vodName: detailVod().vodName),
+      flag: 'ext',
+      episodeName: '换源第2集',
+      episodeId: 'http://127.0.0.1:1/media/e2.mp4',
+      position: const Duration(seconds: 40),
+      duration: const Duration(seconds: 100),
+      siteKey: 'ui-swap',
+      sourceKey: state.activeSourceKey,
+    );
+    await pumpFrames(tester);
+    await scrollPastHero(tester);
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-换源站[盘] · ext-recent-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('tmdb-episode-card-换源站[盘] · ext-foreign-1')),
+      findsNothing,
+    );
+  });
 
   testWidgets('错误条上有换源主 CTA，点开升起换源浮层', (tester) async {
     await prepare(tester);
@@ -199,10 +263,7 @@ void main() {
       findsWidgets,
       reason: '集数最多的外部线路应被选中（2 集 > 1 集）',
     );
-    expect(
-      find.byKey(const ValueKey('detail-clear-external')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('detail-clear-external')), findsOneWidget);
   });
 
   testWidgets('清空外部线路：外部线路消失并回到默认线路', (tester) async {
@@ -272,8 +333,7 @@ class _SwapSiteClient extends http.BaseClient {
                   'vod_id': 'swap-1',
                   'vod_name': '换源目标影片',
                   'vod_play_from': 'ext',
-                  'vod_play_url':
-                      '换源第1集\$http://127.0.0.1:1/media/e1.mp4#换源第2集\$http://127.0.0.1:1/media/e2.mp4',
+                  'vod_play_url': '换源第1集\$http://127.0.0.1:1/media/e1.mp4#换源第2集\$http://127.0.0.1:1/media/e2.mp4',
                 },
               ],
             }
