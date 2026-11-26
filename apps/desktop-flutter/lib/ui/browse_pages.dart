@@ -92,8 +92,20 @@ class BrowsePage extends StatelessWidget {
         .where((item) => item.site.key == site.key)
         .map((item) => item.availability)
         .firstWhereOrNull();
-    if (availability != null && !availability.available) {
-      return _UnsupportedSiteHint(site: site, availability: availability);
+    if (availability?.preparing == true && state.homeResult == null) {
+      return _EmptyHint(
+        title: '正在准备当前站点',
+        message: availability!.reason ?? '准备完成后会自动加载内容。',
+      );
+    }
+    if (availability != null &&
+        !availability.preparing &&
+        !availability.available) {
+      return _UnsupportedSiteHint(
+        site: site,
+        availability: availability,
+        onRetry: () => state.loadHome(site),
+      );
     }
 
     return Column(
@@ -1092,10 +1104,7 @@ class _VodCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  PosterImage(
-                    url: vod.vodPic,
-                    cacheWidth: posterCacheWidth,
-                  ),
+                  PosterImage(url: vod.vodPic, cacheWidth: posterCacheWidth),
                   if (year != null)
                     Positioned(
                       left: 6,
@@ -1302,8 +1311,9 @@ class _DetailPageState extends State<DetailPage> {
   ///
   /// 命中时本页**不是**媒体详情：不加载详情/元数据，只渲染账号配置页。
   /// 未知或不合法的标记恒为 `null`，条目照旧走普通媒体路径。
-  late final SpiderAccountAction? _accountAction =
-      SpiderAccountAction.fromVod(widget.vod);
+  late final SpiderAccountAction? _accountAction = SpiderAccountAction.fromVod(
+    widget.vod,
+  );
 
   Widget? _folderPage;
   Widget? _detailView;
@@ -1636,7 +1646,10 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   /// 只并剧照；其余可配置字段由原始来源快照逐字段选择。
-  TmdbDetailData _mergeAggregates(TmdbDetailData primary, TmdbDetailData extra) {
+  TmdbDetailData _mergeAggregates(
+    TmdbDetailData primary,
+    TmdbDetailData extra,
+  ) {
     final photos = <String>[...primary.photoUrls];
     for (final url in extra.photoUrls) {
       if (!photos.contains(url)) photos.add(url);
@@ -1719,7 +1732,9 @@ class _DetailPageState extends State<DetailPage> {
     _ratingsKey = key;
     final generation = ++_ratingsGeneration;
     unawaited(() async {
-      final found = await widget.state.externalMetaService.ratingsByTitle(query);
+      final found = await widget.state.externalMetaService.ratingsByTitle(
+        query,
+      );
       if (!mounted || generation != _ratingsGeneration) return;
       setState(() => _extraRatings = found);
     }());
@@ -1761,7 +1776,8 @@ class _DetailPageState extends State<DetailPage> {
   /// 短评与 TMDB 匹配状态**无关**：TMDB 没有短评、豆瓣有，所以单独取。
   void _ensureComments(Vod vod) {
     final rule = widget.state.metaPipeline.ruleOf(MetaField.comments);
-    if (!widget.state.externalMetaEnabled || !rule.order.contains(MetaSourceKind.douban)) {
+    if (!widget.state.externalMetaEnabled ||
+        !rule.order.contains(MetaSourceKind.douban)) {
       _commentsGeneration++;
       _commentsKey = null;
       _commentsQuery = null;
@@ -1784,7 +1800,9 @@ class _DetailPageState extends State<DetailPage> {
     _externalComments = const ExternalCommentPage();
     final generation = ++_commentsGeneration;
     unawaited(() async {
-      final page = await widget.state.externalMetaService.commentsByTitle(query);
+      final page = await widget.state.externalMetaService.commentsByTitle(
+        query,
+      );
       if (!mounted || generation != _commentsGeneration) return;
       setState(() => _externalComments = page);
     }());
@@ -1814,7 +1832,8 @@ class _DetailPageState extends State<DetailPage> {
         if (vod.extra['original_title'] case final String original) original,
       ],
     );
-    final key = '${vod.vodId}|${_pageSite?.key}|${query.key}|${widget.state.metaPipeline.toJson()}|${tmdb?.detail.hashCode}|${tmdb?.identity?.key}|${widget.state.metaOverrides.of(vod.vodId)?.key}';
+    final key =
+        '${vod.vodId}|${_pageSite?.key}|${query.key}|${widget.state.metaPipeline.toJson()}|${tmdb?.detail.hashCode}|${tmdb?.identity?.key}|${widget.state.metaOverrides.of(vod.vodId)?.key}';
     if (_externalMetaKey == key) return;
     _externalMetaKey = key;
     _externalMeta = null;
@@ -1823,10 +1842,17 @@ class _DetailPageState extends State<DetailPage> {
     unawaited(() async {
       final identity = tmdb?.identity;
       final fields = await widget.state.externalMetaService.resolveFields(
-        query, source: vod, pipeline: widget.state.metaPipeline,
+        query,
+        source: vod,
+        pipeline: widget.state.metaPipeline,
         tmdb: tmdb?.detailData,
-        tmdbIdentity: identity == null ? null : MetaIdentity.of(
-          MetaSourceKind.tmdb, identity.mediaType, identity.tmdbId),
+        tmdbIdentity: identity == null
+            ? null
+            : MetaIdentity.of(
+                MetaSourceKind.tmdb,
+                identity.mediaType,
+                identity.tmdbId,
+              ),
         pinned: widget.state.metaOverrides.of(vod.vodId),
       );
       final loaded = fields.primary;
@@ -1854,7 +1880,18 @@ class _DetailPageState extends State<DetailPage> {
   static bool? _tvHintOf(String type) {
     if (type.isEmpty) return null;
     if (type.contains('电影')) return false;
-    const tvHints = ['电视剧', '剧集', '国产剧', '日剧', '美剧', '韩剧', '连续剧', '动漫', '动画', '综艺'];
+    const tvHints = [
+      '电视剧',
+      '剧集',
+      '国产剧',
+      '日剧',
+      '美剧',
+      '韩剧',
+      '连续剧',
+      '动漫',
+      '动画',
+      '综艺',
+    ];
     if (tvHints.any(type.contains)) return true;
     return null;
   }
@@ -2045,7 +2082,9 @@ class _DetailPageState extends State<DetailPage> {
         // 只认本页自己的 TMDB 状态：别的页面/上一条记录的匹配不能当「当前」。
         currentTmdb: _ownedTmdb?.identity,
         onPickTmdb: (item) {
-          unawaited(state.matchTmdbManual(item: item, sourceTitle: vod?.vodName));
+          unawaited(
+            state.matchTmdbManual(item: item, sourceTitle: vod?.vodName),
+          );
         },
       ),
     );
@@ -2456,7 +2495,6 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-
   /// 同源其它站点的历史候选（同一个配置、别的爬虫源）。
   ///
   /// 三条闸门，任一不满足都返回空：
@@ -2704,7 +2742,8 @@ class _DetailPageState extends State<DetailPage> {
     }
     // 单条/无冲突：线路必须跟着目标自己的 flag 走，否则「本站记录在线路二第 1 集」
     // 会被按当前线路的下标播成第 2 集（与选择框分支同一个坑，改造前就有）。
-    final targetLine = _lineOfFlag(lines, resolution.target.flag) ?? _activeLine(lines);
+    final targetLine =
+        _lineOfFlag(lines, resolution.target.flag) ?? _activeLine(lines);
     await _play(
       vod,
       targetLine,
@@ -2831,14 +2870,16 @@ class _DetailPageState extends State<DetailPage> {
           targetEpisodeIndex: episodeIndex,
           targetEpisodeName: episode.name,
         );
-    final fallback = seedWins ? null : widget.state.resumePositionFor(
-      siteKey: _pageSite?.key ?? '',
-      vodId: vod.vodId,
-      flag: line.playbackFlag,
-      episodeId: episode.url,
-      episodeName: episode.name,
-      sourceKey: _pageSourceKey,
-    );
+    final fallback = seedWins
+        ? null
+        : widget.state.resumePositionFor(
+            siteKey: _pageSite?.key ?? '',
+            vodId: vod.vodId,
+            flag: line.playbackFlag,
+            episodeId: episode.url,
+            episodeName: episode.name,
+            sourceKey: _pageSourceKey,
+          );
     // `targetDurationMs` 传 0：详情页拿不到目标集的真实时长（要 `open()` 成功
     // 才有），纯逻辑层对 0 的约定是「走绝对毫秒」。真正的比例换算交给播放器
     // ——种子的副本会随 `PlaybackRequest.resumeSeed` 一起下去，播放器拿到
@@ -2928,7 +2969,6 @@ class _DetailPageState extends State<DetailPage> {
     final rawIndex = rawLine.episodes.indexOf(mark);
     return _sourceEpisodeIndices(rawLine.episodes, ordered).indexOf(rawIndex);
   }
-
 
   Vod? get _currentVod {
     final result = widget.state.detailResult;
@@ -3205,7 +3245,8 @@ class _DetailPageState extends State<DetailPage> {
     final reason = message.isNotEmpty ? message : failure.userMessage;
     // 浏览器内核缺失是**能力缺失**，不是「这一集没地址」：给的动作应该是
     // 「装浏览器」而不是「换源」（换到别的线路同样要解析，照样失败）。
-    final canInstallBrowser = failure.kind == AppErrorKind.parseSniffUnavailable;
+    final canInstallBrowser =
+        failure.kind == AppErrorKind.parseSniffUnavailable;
     final choice = await showDialog<_PlaybackFailureChoice>(
       context: context,
       builder: (dialogContext) => RepaintBoundary(
@@ -3229,21 +3270,22 @@ class _DetailPageState extends State<DetailPage> {
           actions: [
             TextButton(
               key: const ValueKey('detail-playback-failed-dismiss'),
-              onPressed: () => Navigator.of(dialogContext)
-                  .pop(_PlaybackFailureChoice.none),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PlaybackFailureChoice.none),
               child: const Text('知道了'),
             ),
             if (canInstallBrowser)
               FilledButton(
                 key: const ValueKey('detail-playback-failed-install-browser'),
-                onPressed: () => Navigator.of(dialogContext)
-                    .pop(_PlaybackFailureChoice.installBrowser),
+                onPressed: () =>
+                    Navigator.of(dialogContext)
+                        .pop(_PlaybackFailureChoice.installBrowser),
                 child: const Text('安装浏览器内核'),
               ),
             FilledButton(
               key: const ValueKey('detail-playback-failed-swap'),
-              onPressed: () => Navigator.of(dialogContext)
-                  .pop(_PlaybackFailureChoice.swap),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(_PlaybackFailureChoice.swap),
               child: const Text('换源'),
             ),
           ],
@@ -3663,7 +3705,8 @@ class _DetailPageState extends State<DetailPage> {
         : tmdbData;
     final fields = state.externalMetaEnabled ? _externalFields : null;
     final headerData = SourceMetaResolver.resolve(
-      pipeline: fields?.effectivePipeline(state.metaPipeline) ?? state.metaPipeline,
+      pipeline:
+          fields?.effectivePipeline(state.metaPipeline) ?? state.metaPipeline,
       source: vod,
       tmdb: mergedData,
       providers: fields?.providers ?? const {},
@@ -3750,8 +3793,11 @@ class _DetailPageState extends State<DetailPage> {
             tooltip: '刷新详情',
             onPressed: () {
               _refreshExternalMeta();
-              state.loadDetail(widget.vod, siteOverride: _pageSite,
-                serviceOverride: widget.sourceContext?.service);
+              state.loadDetail(
+                widget.vod,
+                siteOverride: _pageSite,
+                serviceOverride: widget.sourceContext?.service,
+              );
             },
             icon: const Icon(Icons.refresh),
           ),
@@ -3765,9 +3811,7 @@ class _DetailPageState extends State<DetailPage> {
           // 整页内容都浮在图上；图片不会随内容滚走、下半页也不会变回纯色。
           // 头部因此不再自己画图（`paintImage: false`）。
           Positioned.fill(
-            child: TmdbDetailBackdrop(
-              urls: headerData.backdropUrls,
-            ),
+            child: TmdbDetailBackdrop(urls: headerData.backdropUrls),
           ),
           if (loading && lines.isEmpty)
             const Positioned.fill(child: Center(child: LoadingBlock()))
@@ -3993,19 +4037,25 @@ class _DetailPageState extends State<DetailPage> {
     TmdbDetailData fallback,
   ) {
     final matched = _ownedTmdb?.detailData;
-    final external = matched == null && widget.state.externalMetaEnabled ? _externalMeta : null;
+    final external = matched == null && widget.state.externalMetaEnabled
+        ? _externalMeta
+        : null;
     final data = fallback;
     final sourceOnly = matched == null && external == null;
     return [
       // 不发丝线（2026-11-12 用户反馈）：那条线让「选集」与「剧照」之间像被
       // 撕开了一道。区块间隔全部由 `SectionHeader` 的上 24 承担。
       if (external != null)
-        Align(alignment: Alignment.centerLeft, child: TextButton.icon(
-          key: const ValueKey('detail-external-meta-source'),
-          onPressed: () => widget.state.openExternalUrl(external.identity.url),
-          icon: const Icon(Icons.open_in_new, size: 16),
-          label: Text('资料来源：${external.sourceLabel}'),
-        )),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const ValueKey('detail-external-meta-source'),
+            onPressed: () =>
+                widget.state.openExternalUrl(external.identity.url),
+            icon: const Icon(Icons.open_in_new, size: 16),
+            label: Text('资料来源：${external.sourceLabel}'),
+          ),
+        ),
       TmdbDetailSections(
         data: data,
         // 新的底部推荐行接管"猜你喜欢 / 个性推荐"，旧的"相关推荐"海报墙
@@ -4029,7 +4079,9 @@ class _DetailPageState extends State<DetailPage> {
   /// 追加下一页短评。
   Future<void> _loadMoreComments() async {
     final query = _commentsQuery;
-    if (query == null || _externalCommentsLoading || !_externalComments.hasMore) {
+    if (query == null ||
+        _externalCommentsLoading ||
+        !_externalComments.hasMore) {
       return;
     }
     final generation = _commentsGeneration;
@@ -4796,9 +4848,7 @@ class _DetailPageState extends State<DetailPage> {
               .manualEpisodeAnchorsFor(vod, rawLine)
               .length,
           droppedCount: widget.state.manualEpisodeDroppedFor(vod, rawLine),
-          onClear: widget.state
-                  .manualEpisodeAnchorsFor(vod, rawLine)
-                  .isEmpty
+          onClear: widget.state.manualEpisodeAnchorsFor(vod, rawLine).isEmpty
               ? null
               : () => widget.state.clearManualEpisodeMatch(
                   vod: vod,
@@ -4923,10 +4973,7 @@ class _DetailPageState extends State<DetailPage> {
         const PopupMenuItem<String>(value: 'details', child: Text('剧集详情')),
         const PopupMenuItem<String>(value: 'match', child: Text('手动匹配…')),
         if (hasManual)
-          const PopupMenuItem<String>(
-            value: 'clear',
-            child: Text('恢复自动匹配'),
-          ),
+          const PopupMenuItem<String>(value: 'clear', child: Text('恢复自动匹配')),
       ],
     );
     if (!mounted || selected == null) return;
@@ -5752,19 +5799,28 @@ class _EmptyHint extends StatelessWidget {
 
 /// 站点运行时未支持时的明确提示（§8.1 “不得显示空列表”）。
 class _UnsupportedSiteHint extends StatelessWidget {
-  const _UnsupportedSiteHint({required this.site, required this.availability});
+  const _UnsupportedSiteHint({
+    required this.site,
+    required this.availability,
+    required this.onRetry,
+  });
 
   final Site site;
   final SiteAvailability availability;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return _EmptyHint(
+    return EmptyState(
       title: '站点运行时未安装或不支持',
       message:
           '站点「${site.name}」需要 ${availability.runtimeName} 运行时。\n'
           '${availability.reason ?? ""}\n'
           '请在站点列表中选择其他可运行站点。',
+      action: TextButton(
+        onPressed: () => unawaited(onRetry()),
+        child: const Text('重试'),
+      ),
     );
   }
 }

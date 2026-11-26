@@ -256,11 +256,23 @@ void main() {
   });
 
   tearDown(() async {
-    env.state.dispose();
     await deleteTempDirBestEffort(tempDir);
   });
 
-  testWidgets('已有描述：启动按它重连刷新，不请求旧端口，标记与源标识保持不变', (tester) async {
+  void testStartup(String description, WidgetTesterCallback body) {
+    testWidgets(description, (tester) async {
+      try {
+        await body(tester);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(() async {
+          env.state.dispose();
+        });
+      }
+    });
+  }
+
+  testStartup('已有描述：启动按它重连刷新，不请求旧端口，标记与源标识保持不变', (tester) async {
     await tester.runAsync(() => env.seed(withProfile: true));
     final before = env.state.activeRecord!;
     expect(before.origin, _oldOrigin);
@@ -310,7 +322,7 @@ void main() {
     );
   });
 
-  testWidgets('描述缺失：给可操作横幅，记录与标记原样保留，不请求旧端口', (tester) async {
+  testStartup('描述缺失：给可操作横幅，记录与标记原样保留，不请求旧端口', (tester) async {
     await tester.runAsync(() => env.seed(withProfile: false));
 
     await _mountShell(tester, env.state);
@@ -344,7 +356,7 @@ void main() {
     );
   });
 
-  testWidgets('设备不符：expectedUuid 拦下，横幅说明不一致，标记不丢', (tester) async {
+  testStartup('设备不符：expectedUuid 拦下，横幅说明不一致，标记不丢', (tester) async {
     await tester.runAsync(() => env.seed(withProfile: true));
     // 已保存的描述属于 uuid-startup-0001，但网关后面换了另一台设备。
     env.gateway.uuid = 'uuid-live-other';

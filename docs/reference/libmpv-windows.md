@@ -14,7 +14,7 @@
 | 下载/校验/解压/缓存 | `scripts/prepare_libmpv_windows.ps1`（归档 SHA256 + DLL SHA256 双钉死，`-Offline` 可离线复用） |
 | 覆盖构建树 | 同一脚本 `-ApplyBuildDir apps/desktop-flutter/build/windows/x64`（`libmpv/` 与 `runner/Release/` 两处） |
 | CI | `desktop-ci.yml` / `desktop-release.yml`：构建前准备、构建后覆盖、单测前 `-VerifyPath` 钉死并显式放进 `PATH` |
-| 打包 | `scripts/package_windows.ps1` 校验随包 `libmpv-2.dll` 的 SHA256，并生成随包 `libmpv-SOURCE.txt`（来源+版本+双哈希+许可） |
+| 打包 | `scripts/package_windows.ps1` 校验随包 `libmpv-2.dll` 与许可全文的 SHA256，生成 `libmpv-SOURCE.txt`（来源+版本+双哈希），并携带 `mpv-FFmpeg-LICENSES.txt`（许可全文） |
 | 代码 | 无需改动：`player_audio_normalization_native_test` 的能力分支在真内核上自动走 `afApplicable=true` |
 
 本地实测（2026-11-19，Windows x64）：
@@ -25,10 +25,28 @@
   烟测输出 `player=media-kit (libmpv)`、startup 518 ms；
 - 随包 `libmpv-SOURCE.txt` 已核对（来源 URL、双哈希、mpv/FFmpeg 版本、许可提示）。
 
-仍未完成（不阻塞本次迁移，但要在下一轮补齐）：
-1. **许可全文**：现在包里只有来源与许可名（`libmpv-SOURCE.txt`）和 `NOTICES.Z`，没有 mpv/FFmpeg 的 GPL/LGPL 正文——这是迁移前就存在的缺口，不是本次引入；
-2. **人工回归清单**（硬解、字幕渲染、HDR 判定、LUT 画面、拖动/倍速体感）本地无法覆盖，需在发布前真机手测：逐项步骤与判据见本文 §5；
-3. LUT（`vf=lavfi=[lut3d=…]`）在真机上确认恢复（headless 无法建视频链）。
+### 许可全文：已补齐离线分发
+
+仓库 [`third_party/mpv-ffmpeg-LICENSES.txt`](../../third_party/mpv-ffmpeg-LICENSES.txt)
+汇集当前 pin 对应的 8 份官方原文，每节保留上游 URL 与原始文件 SHA256：
+
+- mpv `bcde6b93cc`：`Copyright`、`LICENSE.GPL`、`LICENSE.LGPL`；
+- FFmpeg `cd4e96eb3`：`LICENSE.md`、`COPYING.GPLv2`、`COPYING.GPLv3`、`COPYING.LGPLv2.1`、`COPYING.LGPLv3`。
+
+Windows 便携 ZIP 根目录携带同字节的 `mpv-FFmpeg-LICENSES.txt`，
+`BUILD_INFO.txt`、`THIRD_PARTY.txt` 与 `libmpv-SOURCE.txt` 均指向该全文。
+打包从仓库离线复制并校验固定 SHA256；缺失、空文件或删节均在创建输出前失败，
+合成夹具的 `-SkipNativeAiAssetChecks` 也不跳过此检查。`.gitattributes` 固定原文 LF 行尾，
+避免 Windows checkout 改变原文及哈希。
+
+验证命令：`pwsh -File scripts/test_python_runtime.ps1 -Review`，覆盖原文各节哈希、
+ZIP 内容保真与缺失/损坏拒绝场景。收录多种许可不代表二进制可任选 LGPL；
+实际条款受构建和链接库影响。本项仅关闭许可全文缺口，不替代完整对应源码、
+构建材料或其余链接依赖的分发义务；文件中列出精确修订的源码入口与快照链接。
+
+仍需发布前真机手测（不属于本次许可补全）：
+1. **人工回归清单**（硬解、字幕渲染、HDR 判定、LUT 画面、拖动/倍速体感）：逐项步骤与判据见本文 §5；
+2. LUT（`vf=lavfi=[lut3d=…]`）在真机上确认恢复（headless 无法建视频链）。
 
 ## 1. 现状：pin 的是谁的构建
 
@@ -122,7 +140,7 @@ af=lavfi=[dynaudnorm]  同样生效（当前白名单按设计拒收，保持拒
 2. 全量 `flutter test`（Windows + Linux）与新 DLL 一起跑绿（本次只跑了 9 个 NativePlayer 文件）。
 3. 打包产物：`dist/*.zip` 里 `libmpv-2.dll` 的 SHA256 == 期望值；`scripts/smoke_windows.ps1` 启动烟测通过。
 4. 人工回归清单：硬解/软解、LUT、音频直通、字幕（libass 版本变了）、OSD 文案、`demuxer-cache-state`（网速显示）、`video-params`（HDR 判定）、拖动/seek、倍速与音调。
-5. 许可：随包补 `libmpv`/`FFmpeg` 许可与来源说明（当前只有 `data/audio_ai/LiteRT-LICENSE.txt` 一项第三方许可见 `NOTICES.Z`）。
+5. 许可：随包保留 `libmpv-SOURCE.txt` 与 `mpv-FFmpeg-LICENSES.txt`，后者含当前 pin 对应的 mpv/FFmpeg 许可说明及 GPL/LGPL 原文（见 §0）；Flutter 依赖许可另见 `NOTICES.Z`。
 
 ## 4. 风险与未决项
 

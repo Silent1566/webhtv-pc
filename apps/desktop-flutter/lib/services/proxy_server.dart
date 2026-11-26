@@ -24,6 +24,7 @@ import 'dart:typed_data' show BytesBuilder, Uint8List;
 import '../core/ad_rules.dart';
 import '../core/dash_playlist.dart';
 import '../core/proxy_policy.dart';
+import '../core/playback_diagnostics.dart' show MediaFormat;
 import '../core/png_wrapped_transport_stream.dart';
 import 'log_service.dart';
 import 'tolerant_http_reader.dart';
@@ -606,6 +607,16 @@ class LocalProxyServer {
     return (sessionId: session.id, receivedBytes: session.receivedBytes);
   }
 
+  /// Signature evidence for exactly this live proxy/session/path, never URL guesses.
+  MediaFormat? observedFormatFor(String playbackUrl) {
+    if (trafficFor(playbackUrl) == null) return null;
+    final uri = Uri.parse(playbackUrl);
+    final session = sessions.byToken(uri.pathSegments[1]);
+    return session?.hasObservedHlsPath(uri.path) == true
+        ? MediaFormat.hls
+        : null;
+  }
+
   /// 构造会话内子资源（分片、子清单、密钥）的代理地址。
   ///
   /// 先用会话短码 `…/p/<token>/i/<n>`：清单里每一条子资源都要写一个地址，长表
@@ -811,6 +822,7 @@ class LocalProxyServer {
     Uri? currentWireTarget;
     ProxyTargetPolicy? currentWirePolicy;
     HttpClientResponse? upstream;
+    int? lastUpstreamStatus;
     String? denyReason;
     int denyCode = 403;
 
@@ -1032,7 +1044,9 @@ class LocalProxyServer {
         break;
       }
 
-      if (response.statusCode == 429) _disablePrefetchSession(session);
+      lastUpstreamStatus = response.statusCode;
+      if (lastUpstreamStatus == 429) _disablePrefetchSession(session);
+
       // 重定向：手工跟随并逐跳复核（§11.3.1）。
       if (_isRedirect(response.statusCode)) {
         if (fullTransportStream) {
@@ -1099,6 +1113,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: denyCode,
+        upstreamStatus: lastUpstreamStatus,
         elapsed: stopwatch.elapsed,
         range: range,
         note: denyReason ?? 'denied',
@@ -1117,6 +1132,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: 502,
+        upstreamStatus: upstream.statusCode,
         elapsed: stopwatch.elapsed,
         range: range,
         note: 'upstream-html',
@@ -1135,6 +1151,7 @@ class LocalProxyServer {
         session,
         target,
         statusCode: 429,
+        upstreamStatus: upstream.statusCode,
         elapsed: stopwatch.elapsed,
         range: range,
         note: 'session-limit',
@@ -1158,7 +1175,7 @@ class LocalProxyServer {
       return;
     }
     if (isDash && upstream.statusCode >= 200 && upstream.statusCode < 300) {
-      final body = await _readAll(upstream);
+      final body = await _readAll(upstream, manifestType: 'DASH');
       session.recordReceivedBytes(body.length);
       final String rewritten;
       try {
@@ -1210,7 +1227,15 @@ class LocalProxyServer {
       return;
     }
 
+    final managedInspection =
+        session.targetResolver != null || session.inspectPlaylistContent;
+    final encoding = upstream.headers.value(HttpHeaders.contentEncodingHeader);
+    final uncompressed =
+        encoding == null || encoding.toLowerCase() == 'identity';
     var isPlaylist =
+        managedInspection &&
+        request.method == 'GET' &&
+        uncompressed &&
         !(fullTransportStream && upstream.statusCode >= 400) &&
         HlsPlaylistRewriter.looksLikePlaylist(
           contentType,
@@ -1220,7 +1245,8 @@ class LocalProxyServer {
     List<int>? sniffedManifest;
     Future<void> Function()? hlsCancel;
     // 仅受管 GET 成功响应按内容补判；普通流遇到非清单前缀立即原样透传。
-    if ((session.targetResolver != null || session.inspectPlaylistContent) &&
+    if (managedInspection &&
+        uncompressed &&
         request.method == 'GET' &&
         (upstream.statusCode == 200 || upstream.statusCode == 206) &&
         !isPlaylist) {
@@ -1244,6 +1270,19 @@ class LocalProxyServer {
       isPlaylist = sniffedManifest != null;
     }
 
+    if (!managedInspection &&
+        request.method == 'GET' &&
+        _canInspectPlaylist(upstream)) {
+      final probe = await _inspectPlaylist(bodyStream);
+      isPlaylist = probe.isPlaylist;
+      bodyStream = probe.body;
+    }
+    if (!isPlaylist &&
+        request.method == 'GET' &&
+        _canInspectPlaylist(upstream)) {
+      session.clearHlsPath(request.uri.path);
+    }
+
     if (fullTransportStream && isPlaylist) {
       if (sniffedManifest != null) {
         session.recordReceivedBytes(sniffedManifest.length);
@@ -1261,9 +1300,9 @@ class LocalProxyServer {
 
     if (isPlaylist) {
       // 清单必须整体读取后重写，保证子清单/分片 URL 走同一会话（§11.4）。
-      final body = sniffedManifest ?? await _readAll(upstream);
+      final body = sniffedManifest ?? await _readAll(bodyStream);
       session.recordReceivedBytes(body.length);
-      if (sniffedManifest != null || fullManifest) {
+      if (managedInspection) {
         if (!identical(sessions.byToken(session.token), session) ||
             !session.usable) {
           await _fail(request, 401, 'token 无效或会话已失效');
@@ -1291,9 +1330,7 @@ class LocalProxyServer {
         }
       }
       final decoded = utf8.decode(body, allowMalformed: true);
-      final originalText = sniffedManifest == null
-          ? decoded
-          : decoded.replaceFirst(RegExp(r'^[\s\uFEFF]*'), '');
+      final originalText = decoded.replaceFirst(RegExp(r'^[\s\uFEFF]*'), '');
       final evidence = collectAdPlaylistEvidence(originalText, logicalCurrent);
       if (!evidence.isEmpty) {
         _mediaPlaylists[session.fingerprint] = AiPlaylistSnapshot(
@@ -1354,12 +1391,22 @@ class LocalProxyServer {
         charset: 'utf-8',
       );
       response.headers.set(HttpHeaders.contentLengthHeader, '${bytes.length}');
+      final signature = HlsPlaylistRewriter.sniffPlaylistPrefix(
+        body.take(256).toList(),
+      );
+      if (signature == true) {
+        session.recordHlsPath(request.uri.path);
+      } else {
+        session.clearHlsPath(request.uri.path);
+      }
       response.add(bytes);
       await response.close();
       _record(
         session,
         target,
         statusCode: upstream.statusCode,
+        upstreamStatus: upstream.statusCode,
+        downstreamStatus: response.statusCode,
         bytes: bytes.length,
         elapsed: stopwatch.elapsed,
         range: range,
@@ -1477,13 +1524,23 @@ class LocalProxyServer {
     }
 
     _copySafeHeaders(response, upstream, contentLength: upstream.contentLength);
+    response.bufferOutput = false;
     var bytes = 0;
     try {
-      await for (final chunk in bodyStream) {
-        bytes += chunk.length;
-        if (png == null) session.recordReceivedBytes(chunk.length);
-        response.add(chunk);
-        if (png != null) await response.flush().timeout(requestTimeout);
+      if (png == null) {
+        await response.addStream(
+          bodyStream.map((chunk) {
+            bytes += chunk.length;
+            session.recordReceivedBytes(chunk.length);
+            return chunk;
+          }),
+        );
+      } else {
+        await for (final chunk in bodyStream) {
+          bytes += chunk.length;
+          response.add(chunk);
+          await response.flush().timeout(requestTimeout);
+        }
       }
       await response.close();
     } catch (error) {
@@ -1499,6 +1556,8 @@ class LocalProxyServer {
       session,
       target,
       statusCode: upstream.statusCode,
+      upstreamStatus: upstream.statusCode,
+      downstreamStatus: response.statusCode,
       bytes: bytes,
       elapsed: stopwatch.elapsed,
       range: range,
@@ -2234,12 +2293,16 @@ class LocalProxyServer {
       HttpHeaders.acceptRangesHeader,
       HttpHeaders.lastModifiedHeader,
       HttpHeaders.etagHeader,
+      HttpHeaders.contentEncodingHeader,
     ];
     // 只复制已知安全的头，避免把上游 Set-Cookie 等透传给播放器。
     for (final name in [...alwaysPass, if (!synthesizedBody) ...upstreamOnly]) {
       final value = upstream.headers.value(name);
       if (value == null) continue;
       response.headers.set(name, value);
+    }
+    if (!synthesizedBody && contentLength >= 0) {
+      response.contentLength = contentLength;
     }
     if (!synthesizedBody &&
         upstream.statusCode == 206 &&
@@ -2269,6 +2332,92 @@ class LocalProxyServer {
     } catch (_) {
       // 连接可能已关闭。
     }
+  }
+
+  static bool _canInspectPlaylist(HttpClientResponse response) {
+    final encoding = response.headers.value(HttpHeaders.contentEncodingHeader);
+    if (encoding != null && encoding.toLowerCase() != 'identity') return false;
+    if (response.statusCode == HttpStatus.ok) return true;
+    if (response.statusCode != HttpStatus.partialContent) return false;
+    final range = response.headers.value(HttpHeaders.contentRangeHeader) ?? '';
+    final match = RegExp(r'^bytes 0-(\d+)/(\d+)$').firstMatch(range);
+    return match != null &&
+        int.parse(match.group(1)!) + 1 == int.parse(match.group(2)!);
+  }
+
+  Future<({bool isPlaylist, Stream<List<int>> body})> _inspectPlaylist(
+    Stream<List<int>> body,
+  ) async {
+    final iterator = StreamIterator(body);
+    final chunks = <List<int>>[];
+    final prefix = <int>[];
+    bool? isPlaylist;
+    try {
+      while (isPlaylist == null &&
+          prefix.length < 256 &&
+          await iterator.moveNext().timeout(requestTimeout)) {
+        final chunk = iterator.current;
+        chunks.add(chunk);
+        for (final byte in chunk) {
+          prefix.add(byte);
+          isPlaylist = HlsPlaylistRewriter.sniffPlaylistPrefix(prefix);
+          if (isPlaylist != null || prefix.length == 256) break;
+        }
+      }
+    } catch (_) {
+      await iterator.cancel();
+      rethrow;
+    }
+    return (
+      isPlaylist: isPlaylist == true,
+      body: _replayInspectedBody(chunks, iterator),
+    );
+  }
+
+  Stream<List<int>> _replayInspectedBody(
+    List<List<int>> chunks,
+    StreamIterator<List<int>> iterator,
+  ) {
+    Stream<List<int>> replay() async* {
+      try {
+        for (final chunk in chunks) {
+          yield chunk;
+        }
+        while (await iterator.moveNext()) {
+          yield iterator.current;
+        }
+      } finally {
+        await iterator.cancel();
+      }
+    }
+
+    late StreamSubscription<List<int>> subscription;
+    late StreamController<List<int>> controller;
+    controller = StreamController<List<int>>(
+      onListen: () {
+        subscription = replay().listen(
+          controller.add,
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      },
+      onPause: () => subscription.pause(),
+      onResume: () => subscription.resume(),
+      onCancel: () async {
+        // Cancel moveNext before async* cancellation waits for that same read.
+        try {
+          await iterator.cancel();
+          await subscription.cancel();
+        } catch (error, stackTrace) {
+          if (error is HttpException || error is SocketException) {
+            log.warning('代理流取消中断：${error.runtimeType}', scope: 'proxy');
+          } else {
+            log.error('代理流取消异常：$error\n$stackTrace', scope: 'proxy');
+          }
+        }
+      },
+    );
+    return controller.stream;
   }
 
   static bool _completeManifest(int status, String? range, int length) {
@@ -2365,12 +2514,15 @@ class LocalProxyServer {
     await body.listen(null).cancel();
   }
 
-  Future<List<int>> _readAll(HttpClientResponse response) async {
+  Future<List<int>> _readAll(
+    Stream<List<int>> response, {
+    String manifestType = 'HLS',
+  }) async {
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response) {
       builder.add(chunk);
       if (builder.length > 16 * 1024 * 1024) {
-        throw StateError('清单超过 16 MiB');
+        throw StateError('$manifestType 清单超过 16 MiB');
       }
     }
     return builder.takeBytes();
@@ -2383,6 +2535,7 @@ class LocalProxyServer {
   ) async {
     final response = request.response;
     response.statusCode = statusCode;
+    log.debug('代理拒绝 downstreamStatus=$statusCode', scope: 'proxy');
     response.headers.contentType = ContentType(
       'application',
       'json',
@@ -2400,6 +2553,8 @@ class LocalProxyServer {
     ProxySession session,
     Uri target, {
     required int statusCode,
+    int? upstreamStatus,
+    int? downstreamStatus,
     int bytes = 0,
     Duration elapsed = Duration.zero,
     String? range,
@@ -2409,6 +2564,8 @@ class LocalProxyServer {
       tokenFingerprint: session.fingerprint,
       targetHost: '${target.host}:${target.port}',
       statusCode: statusCode,
+      upstreamStatus: upstreamStatus,
+      downstreamStatus: downstreamStatus ?? statusCode,
       bytes: bytes,
       elapsed: elapsed,
       range: range,

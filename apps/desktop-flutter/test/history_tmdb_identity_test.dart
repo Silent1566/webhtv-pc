@@ -2,6 +2,7 @@
 /// 历史行，只落在 `tmdb_matches` 的话「详情页有匹配、首页没有背景与简介」。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -35,10 +36,32 @@ void main() {
   late Directory tempDir;
   late AppState state;
   late List<Uri> calls;
+  Completer<http.Response>? pendingSearch;
+  Completer<void>? searchStarted;
 
   setUp(() async {
     calls = <Uri>[];
+    pendingSearch = null;
+    searchStarted = null;
     tempDir = await Directory.systemTemp.createTemp('webhtv-history-identity');
+    // 任何真实 HTTP 都记下来：本文件的断言核心是「零请求」。
+    Future<http.Response> respond(http.Request request) async {
+      calls.add(request.url);
+      if (pendingSearch != null && request.url.path.contains('/search/')) {
+        if (!(searchStarted?.isCompleted ?? true)) searchStarted!.complete();
+        return pendingSearch!.future;
+      }
+      return http.Response(
+        jsonEncode(<String, Object?>{'page': 1, 'results': <Object?>[]}),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    // 身份匹配走 TmdbService，不是 AppState 的站点客户端：两处都必须注入。
+    final metadata = TmdbService(
+      config: () => state.tmdbConfig,
+      client: MockClient(respond),
+    );
     state = AppState(
       paths: AppPaths.resolve(
         overrides: {
@@ -49,15 +72,8 @@ void main() {
         },
       ),
       log: LogService(),
-      // 任何真实 HTTP 都记下来：本文件的断言核心是「零请求」。
-      httpClient: MockClient((request) async {
-        calls.add(request.url);
-        return http.Response(
-          jsonEncode(<String, Object?>{'page': 1, 'results': <Object?>[]}),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }),
+      httpClient: MockClient(respond),
+      tmdbService: metadata,
     );
     await state.bootstrap();
     final ok = await state.importConfig(
@@ -123,6 +139,71 @@ void main() {
     final after = row(vodName);
     expect(after.tmdbId, 341707, reason: '身份必须回写到历史行，下次读历史就有时它');
     expect(after.mediaType, 'tv');
+  });
+
+  test('跨源同site/vod/title的历史只读自身配置匹配，不读取当前配置结论', () async {
+    final currentSource = state.activeSourceKey;
+    const foreignSource = 'local|https://fixture.example/foreign.json';
+    final foreignId = state.database!.saveConfig(
+      name: '另一来源', origin: 'https://fixture.example/foreign.json',
+      json: {'sites': [{'key': siteKey, 'name': '外源影视', 'type': 3, 'api': 'c1'}]},
+      sourceKey: foreignSource, makeActive: false,
+    );
+    state.database!.upsertHistory(
+      siteKey: siteKey, vodId: vodId, vodName: vodName, flag: '原线路',
+      episodeName: '第1集', episodeId: 'foreign-entry',
+      positionMs: 60000, durationMs: 600000, updatedAt: 2000,
+      sourceKey: foreignSource,
+    );
+    for (final entry in [(state.tmdbConfigId, matchedItem),
+      (foreignId, const TmdbItem(tmdbId: 999, mediaType: TmdbMediaType.tv, title: vodName))]) {
+      DatabaseTmdbMatchStore(database: state.database!, configId: entry.$1).putAuto(
+        siteKey: siteKey, vodId: vodId, item: entry.$2, sourceTitle: vodName, matchedAt: 1,
+      );
+    }
+    final before = state.database!.findHistory(siteKey: siteKey, vodId: vodId, sourceKey: foreignSource)!;
+    final result = await state.historyTmdbItem(before);
+    expect(result?.tmdbId, 999);
+    expect(state.database!.findHistory(siteKey: siteKey, vodId: vodId, sourceKey: foreignSource)!.tmdbId, 999);
+    expect(state.database!.findHistory(siteKey: siteKey, vodId: vodId, sourceKey: currentSource)!.tmdbId, 0);
+    expect(state.activeSourceKey, currentSource);
+    expect(calls, isEmpty);
+  });
+
+  test('已失效的首页请求不能回写缓存命中的身份', () async {
+    final before = row(vodName);
+    DatabaseTmdbMatchStore(database: state.database!, configId: state.tmdbConfigId).putAuto(
+      siteKey: siteKey, vodId: vodId, item: matchedItem, sourceTitle: vodName, matchedAt: 1,
+    );
+    final result = await state.historyTmdbItem(before, isCurrent: () => false);
+    expect(result, isNull);
+    expect(row(vodName).tmdbId, 0);
+    expect(row(vodName).positionMs, before.positionMs);
+  });
+
+  test('请求在飞时历史已换成新身份：旧结论不得回写历史或匹配表', () async {
+    expect(await state.saveTmdbConfig(const TmdbConfig(apiKey: 'fixture')), isTrue);
+    final before = row(vodName);
+    pendingSearch = Completer<http.Response>();
+    searchStarted = Completer<void>();
+    final pending = state.historyTmdbItem(before, isCurrent: () => true);
+    // 等第一条真实搜索发出，再把历史换成更强的结论（模拟详情页/另一轮匹配先落地）。
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(calls, isNotEmpty, reason: '前置：旧请求必须真的在飞');
+    state.rememberHistoryIdentity(
+      siteKey: siteKey, vodId: vodId,
+      item: const TmdbItem(tmdbId: 999, mediaType: TmdbMediaType.tv, title: vodName),
+      sourceKey: before.sourceKey,
+    );
+    pendingSearch!.complete(http.Response(
+      jsonEncode({'results': [{'id': 341707, 'media_type': 'tv', 'name': vodName,
+        'first_air_date': '2026-01-01', 'vote_average': 8.0}]}),
+      200, headers: {'content-type': 'application/json; charset=utf-8'},
+    ));
+    expect(await pending, isNull);
+    expect(row(vodName).tmdbId, 999);
+    expect(row(vodName).positionMs, before.positionMs);
+    expect(row(vodName).updatedAt, before.updatedAt);
   });
 
   test('回写只改身份两列：同一部作品的多行一起更新，进度与时间不动', () async {

@@ -31,6 +31,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -696,20 +697,35 @@ class CspJarProbe {
     AppConfig config, {
     bool refresh = false,
   }) async {
-    // 顺带做一次「只升不降」的限额迁移：老站点目录里还写着 256 MiB / 30 s，而加固壳
-    // 首译峰值约 257 MiB，会被作业对象静默杀掉（2026-11-21 实测三站点 code=1）。
-    // 放在这里是因为它**每次启动都会跑一次**，且不联网、只改 limits 两行。
-    JarIntake.ensureMinimumLimits(root: root, log: log);
-    final targets = <ShellJarTarget>[];
-    for (final group in _jarGroups(config).values) {
-      // 让出事件循环：`_describeTarget` 里是同步文件 I/O（读 probe.json、开壳 jar、
-      // 算 SHA-256），几十上百个站点连着跑会把首帧之后的那一段直接占满。
-      // 每个 group 之间让一次，UI 就不会整段卡住。
-      await Future<void>.delayed(Duration.zero);
-      final target = _describeTarget(group, refresh: refresh);
-      if (target != null) targets.add(target);
+    if (!config.sites.any(
+      (site) =>
+          CspJvmBinding.matches(site.api) && directSpiderKind(site) == null,
+    )) {
+      return const [];
     }
-    return targets;
+    final workerRoot = root;
+    final workerBinding = binding;
+    final runtimeInstalled = shellRuntimeInstalled;
+    final installed = unidbgRuntime?.isInstalledSync;
+    final result = await _discoverShellTargetsInBackground(
+      workerRoot,
+      workerBinding,
+      config,
+      refresh,
+      runtimeInstalled ?? (installed == null ? null : () => installed),
+    );
+    if (result.migrated) JarIntake.notifySiteFilesChanged();
+    return result.targets;
+  }
+
+  List<ShellJarTarget> _discoverShellTargetsSync(
+    AppConfig config, {
+    required bool refresh,
+  }) {
+    return [
+      for (final group in _jarGroups(config).values)
+        ?_describeTarget(group, refresh: refresh),
+    ];
   }
 
   /// 解包**用户选中的** jar（多选语义），每个 jar 成功后导入它名下的**所有**站点。
@@ -2321,3 +2337,27 @@ class _JarGroup {
   /// **按配置顺序**保留的站点；对外聚合结果里的站点 key 另做去重排序。
   final List<Site> sites = [];
 }
+
+Future<({List<ShellJarTarget> targets, bool migrated})>
+_discoverShellTargetsInBackground(
+  String root,
+  CspJvmBinding binding,
+  AppConfig config,
+  bool refresh,
+  bool Function()? runtimeInstalled,
+) => Isolate.run(() {
+  final probe = CspJarProbe(
+    root: root,
+    binding: binding,
+    shellRuntimeInstalled: runtimeInstalled,
+  );
+  try {
+    final migrated = JarIntake.ensureMinimumLimits(root: root) > 0;
+    return (
+      targets: probe._discoverShellTargetsSync(config, refresh: refresh),
+      migrated: migrated,
+    );
+  } finally {
+    probe._client.close();
+  }
+});

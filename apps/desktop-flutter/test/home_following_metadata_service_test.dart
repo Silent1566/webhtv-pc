@@ -247,7 +247,7 @@ void main() {
       );
       expect(
         meta.backdrop,
-        sourceFirst ? isNull : endsWith('/tmdb-backdrop.jpg'),
+        sourceFirst ? 'https://source.example/new.jpg' : endsWith('/tmdb-backdrop.jpg'),
       );
       expect(meta.year, sourceFirst ? '2022' : '2023');
     });

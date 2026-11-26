@@ -28,7 +28,9 @@ import '../core/osd_diagnostics.dart';
 import '../core/osd_style.dart';
 import '../core/playback.dart';
 import '../core/playback_diagnostics.dart';
+import '../core/playback_error_gate.dart';
 import '../core/playback_fallback.dart';
+import '../core/playback_line_match.dart';
 import '../core/playback_request.dart';
 import '../core/playback_queue.dart';
 export '../core/playback_request.dart';
@@ -37,6 +39,7 @@ import '../core/player_buttons.dart';
 import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
+import '../core/seek_recovery.dart';
 import '../core/skip_plan.dart';
 import '../core/skip_segments.dart';
 import '../core/sleep_timer.dart';
@@ -266,10 +269,12 @@ class PlayerPage extends StatefulWidget {
     this.onLiveSourceFallback,
     this.liveSession,
     this.externalPlayerStarter,
+    this.clock,
   });
 
   final AppState state;
   final PlaybackRequest request;
+  final DateTime Function()? clock;
   final PlaybackQueue? queue;
   final String? queueItemKey;
   final LivePlaybackSession? liveSession;
@@ -340,6 +345,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 本次播放是否已经记过「已播时间超过引擎总长」。
   bool _loggedOverrun = false;
   int _mediaGeneration = 0;
+
+  /// 一次跳转尝试（§3.2）：原位置 + 目标，失败时才有「重试目标 / 返回原位置」。
+  SeekRecovery? _seekRecovery;
+  DateTime get _recoveryNow => (widget.clock ?? DateTime.now)();
+
+  /// 已经判定失败的跳转；非 null 时画面上挂恢复出口。
+  SeekRecovery? _seekRecoveryFailure;
+  Duration? _seekRecoveryLastPosition;
+  bool _seekRecoveryExcluded = false;
+  Timer? _recoveryTicker;
+
+  /// 运行中引擎错误的确认闸门（§3.3）：位置真的停住才算播放失败。
+  PlaybackErrorGate _errorGate = PlaybackErrorGate();
+
+  /// 只消费真实引擎错误事件，不把留存文本当成新事件。
+  int _errorGateObservedRevision = 0;
+
+  /// 当前失败提示是不是闸门写进去的：只有它才可以被「错误自愈」撤销。
+  bool _errorGateOwnedLoadError = false;
   PlayerAudioAiSession? _audioAi;
   StreamSubscription<RealtimeSubtitleState>? _audioStateSubscription;
   Future<void> _aiSubtitleQueue = Future<void>.value();
@@ -427,17 +451,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 发生过 seek 且之后还没连续播过：本次 completed 可能是 seek 伪结束。
   bool _seekPending = false;
 
-  /// 非空表示这次换媒体是**用户跳转**（见 [_seekFromUser]）：重开期间到达的
-  /// completed 一律当伪结束，否则定位一旦失败就会把「点了一下进度条」变成
-  /// 「本集播完 → 下一集」。
-  Duration? _reloadStartAt;
-
   /// 同一时刻只允许一个「跳转重开」在跑：并发 `_load` 会在 media_kit 的串行锁上
   /// 互相等（前一次的 open 还没放锁，后一次的 stop 已经排队），实测能把播放卡死。
   bool _reloadInFlight = false;
+  Object? _seekReloadOwner;
 
   /// 重开期间用户又点了别处：只保留最后一次，由进行中的那一轮接力执行。
   Duration? _queuedSeekTarget;
+  bool _queuedSeekPlaying = true;
 
   // ------------------------------------------------- Phase 9 播放增强
 
@@ -698,6 +719,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       vodId: _request.vodId,
     );
     _controller = PlayerController(
+      observedMediaFormatFor: widget.state.proxyObservedFormatFor,
       initialVolume: widget.state.hasExplicitPlayerVolume
           ? widget.state.playerVolume
           : null,
@@ -1046,6 +1068,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 兜底：定位始终没到（线路不支持或媒体异常）时也必须把画面放出来。
     if (_controller.repositionTimedOut) {
       _controller.endReposition();
+      _settleSeekRecovery();
       return;
     }
     final target = _controller.repositionTarget;
@@ -1059,6 +1082,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final enginePosition = _controller.enginePosition;
     if ((enginePosition - target).inMilliseconds.abs() > 3000) return;
     _controller.endReposition();
+    _settleSeekRecovery();
   }
 
   void _onControllerChanged() {
@@ -1079,6 +1103,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 也会立即跳下一集。
     _trackPositionSample();
     _maybeFinishReposition();
+    _settleSeekRecovery();
+    _observePlaybackError();
     _syncSkipPlanWithDuration();
     _maybeStartSkipLookup();
     _primeSkipPrefetch();
@@ -1674,69 +1700,283 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   ///
   /// 正确做法：缓冲内直接 seek（同连接 Range，服务端接受）；缓冲外重开本集，
   /// 让定位发生在**打开时**（`Media.start`），全程只用一条连接。
-  Future<void> _seekFromUser(Duration target) async {
+  Future<void> _seekFromUser(
+    Duration target, {
+    bool? restorePlaying,
+    Duration? recoveryOrigin,
+  }) async {
     widget.state.cancelSkipPrefetch(clearCache: false);
     _clearCompletionProgress();
     if (_isLive || _isCatchup || _hasQueue) {
       await _controller.seek(target);
       return;
     }
-    final duration = _controller.duration;
     var clamped = target < Duration.zero ? Duration.zero : target;
+    final duration = _controller.duration;
     if (duration > Duration.zero && clamped > duration) clamped = duration;
+    final playing = restorePlaying ?? _controller.isPlaying;
+    final origin =
+        recoveryOrigin ??
+        _seekRecovery?.origin ??
+        (_controller.enginePositionSeen
+            ? _controller.enginePosition
+            : _controller.position);
+    final recovery = SeekRecovery(
+      origin: origin,
+      target: clamped,
+      generation: _mediaGeneration,
+      startedAt: _recoveryNow,
+    );
+    // 原位置与目标重合时没有可恢复的差异，不留记录也不启动轮询（§3.2）。
+    _seekRecovery = recovery.recoverable ? recovery : null;
+    _seekRecoveryLastPosition = null;
+    setState(() => _seekRecoveryFailure = null);
+    _startRecoveryTicker();
     final buffered = _controller.buffered;
-    // 引擎没上报缓存（buffered==0）时无从判断，保持旧行为直接 seek：
-    // 对本地文件/不限流的源这是对的，只有「明确知道目标在缓冲之外」才重开。
-    if (buffered <= Duration.zero || clamped <= buffered) {
-      await _controller.seek(clamped);
+    if (!_reloadInFlight &&
+        (buffered <= Duration.zero || clamped <= buffered)) {
+      try {
+        await _controller.seek(clamped);
+      } catch (_) {
+        if (mounted && identical(_seekRecovery, recovery)) {
+          setState(() => _seekRecoveryFailure = recovery);
+        }
+        rethrow;
+      }
       return;
     }
-    widget.state.log.info(
-      '跨缓冲跳转：重开本集并在打开时定位 '
-      'target=${clamped.inMilliseconds}ms '
-      'buffered=${buffered.inMilliseconds}ms '
-      'episode=${_request.episodeName}',
-      scope: 'player',
-    );
     _queuedSeekTarget = clamped;
-    // 已经在重开的：把目标交给那一轮接力，绝不并发第二个 `_load`。
+    _queuedSeekPlaying = playing;
     if (_reloadInFlight) return;
     _reloadInFlight = true;
+    final owner = Object();
+    _seekReloadOwner = owner;
+    final controller = _controller;
+    var ownerGeneration = _mediaGeneration;
     try {
-      while (_queuedSeekTarget != null) {
+      while (_queuedSeekTarget != null &&
+          mounted &&
+          identical(owner, _seekReloadOwner) &&
+          ownerGeneration == _mediaGeneration) {
         final next = _queuedSeekTarget!;
+        final nextPlaying = _queuedSeekPlaying;
         _queuedSeekTarget = null;
-        if (!mounted) break;
-        setState(() {
-          _request = _request.copyWith(
+        // 诊断要能回答「为什么卡了一下」：beta 的重写移除了这条日志，但用户
+        // 反馈跨缓冲重开时它是唯一的现场证据，保留它不改变跳转机制。
+        widget.state.log.info(
+          '跨缓冲跳转：重开本集并在打开时定位 '
+          'target=${next.inMilliseconds}ms '
+          'buffered=${buffered.inMilliseconds}ms '
+          'episode=${_request.episodeName}',
+          scope: 'player',
+        );
+        final attempt =
+            _seekRecovery ??
+            SeekRecovery(
+              origin:
+                  recoveryOrigin ??
+                  (_controller.enginePositionSeen
+                      ? _controller.enginePosition
+                      : _controller.position),
+              target: next,
+              generation: _mediaGeneration,
+              startedAt: _recoveryNow,
+            );
+        _seekRecovery = attempt;
+        setState(
+          () => _request = _request.copyWith(
+            // 同媒体重开必须原样保留 TMDB 身份，否则跳段标定会整集丢失。
             tmdb: _request.tmdb,
             startPosition: next,
             clearResumeSeed: true,
-          );
-        });
-        // 标记这次换媒体是跳转（`_beginMediaTransition` 据此武装伪结束闸门）。
-        _reloadStartAt = next;
-        _controller.beginReposition(next);
-        try {
-          await _load(restorePlaying: _controller.isPlaying);
-        } finally {
-          _reloadStartAt = null;
-          if (!_controller.isRepositioning) _controller.endReposition();
-        }
+          ),
+        );
+        controller.beginReposition(next);
+        final loading = _load(
+          restorePlaying: nextPlaying,
+          seekRecovery: attempt,
+        );
+        ownerGeneration = _mediaGeneration;
+        await loading;
+        if (!mounted || ownerGeneration != _mediaGeneration) break;
       }
     } finally {
-      _reloadInFlight = false;
-      _queuedSeekTarget = null;
-      _controller.endReposition();
+      if (identical(owner, _seekReloadOwner)) {
+        _seekReloadOwner = null;
+        _reloadInFlight = false;
+        _queuedSeekTarget = null;
+      }
+      if (mounted &&
+          ownerGeneration == _mediaGeneration &&
+          identical(controller, _controller)) {
+        _settleSeekRecovery();
+      }
     }
   }
 
-  Future<void> _load({bool? restorePlaying}) async {
+  void _startRecoveryTicker() {
+    _recoveryTicker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      _maybeFinishReposition();
+      _settleSeekRecovery();
+      _observePlaybackError();
+      if (_seekRecovery == null &&
+          !_errorGate.pending &&
+          !_errorGate.committed) {
+        _recoveryTicker?.cancel();
+        _recoveryTicker = null;
+      }
+    });
+  }
+
+  void _settleSeekRecovery() {
+    final recovery = _seekRecovery;
+    if (recovery == null || !mounted || _controller.isLoading) return;
+    if (recovery.generation != _mediaGeneration) return;
+    // 自然片尾：这次跳转已经无所谓失败，记录与轮询一起收掉。
+    if (_controller.isCompleted && _isGenuineEnd()) {
+      _seekRecovery = null;
+      _seekRecoveryLastPosition = null;
+      _recoveryTicker?.cancel();
+      _recoveryTicker = null;
+      return;
+    }
+    final excluded =
+        _controller.isBuffering ||
+        _controller.isSeeking ||
+        !_controller.isPlaying ||
+        _controller.isCompleted;
+    if (excluded) {
+      _seekRecoveryExcluded = true;
+      return;
+    }
+    if (_seekRecoveryExcluded) {
+      // 只累计**可观察的播放时间**：离开暂停/缓冲的第一次采样重新开窗，
+      // 否则「缓冲 30 秒后的第一帧」会被按已过窗口立刻判失败（瞬时误报）。
+      _seekRecoveryExcluded = false;
+      _seekRecovery = recovery.rebased(_recoveryNow);
+      _seekRecoveryLastPosition = null;
+      return;
+    }
+    final position = _controller.enginePosition;
+    final verdict = evaluateSeekRecovery(
+      recovery: recovery,
+      generation: _mediaGeneration,
+      enginePosition: position,
+      previousEnginePosition: _seekRecoveryLastPosition,
+      enginePositionSeen: _controller.enginePositionSeen,
+      playing: _controller.isPlaying,
+      buffering: _controller.isBuffering,
+      isSeeking: _controller.isSeeking,
+      now: _recoveryNow,
+    );
+    _seekRecoveryLastPosition = _controller.enginePositionSeen
+        ? position
+        : null;
+    if (verdict == SeekRecoveryVerdict.pending) return;
+    if (verdict == SeekRecoveryVerdict.settled) {
+      _seekRecovery = null;
+      _seekRecoveryLastPosition = null;
+      _controller.endReposition();
+      if (_seekRecoveryFailure != null) {
+        setState(() => _seekRecoveryFailure = null);
+      }
+      return;
+    }
+    if (_seekRecoveryFailure != null) return;
+    widget.state.log.warning(
+      '跳转未落地 target=${recovery.target.inMilliseconds}ms '
+      'origin=${recovery.origin.inMilliseconds}ms',
+      scope: 'player',
+    );
+    _controller.endReposition();
+    setState(() => _seekRecoveryFailure = recovery);
+  }
+
+  Future<void> _retrySeekTarget() async {
+    final recovery = _seekRecoveryFailure;
+    if (recovery == null || recovery.generation != _mediaGeneration) return;
+    await _seekFromUser(recovery.target, recoveryOrigin: recovery.origin);
+  }
+
+  Future<void> _returnToSeekOrigin() async {
+    final recovery = _seekRecoveryFailure;
+    if (recovery == null || recovery.generation != _mediaGeneration) return;
+    await _seekFromUser(recovery.origin);
+  }
+
+  /// 运行中错误的确认（§3.3）。
+  ///
+  /// 引擎 error 流里混着非致命告警；只有「报错后位置真的停住」并过了观察窗口才
+  /// 升级成播放失败。位置又走起来就撤销——既不让第一条告警锁死播放，也让真正的
+  /// 断流留下可定位的结论。
+  void _observePlaybackError() {
+    if (!mounted) return;
+    final revision = _controller.playbackErrorRevision;
+    final fresh = revision != _errorGateObservedRevision
+        ? _controller.playbackErrorMessage
+        : null;
+    _errorGateObservedRevision = revision;
+    if (_controller.isLoading || !_progressReady) return;
+    final position = _controller.enginePosition;
+    final observingPlayback =
+        _controller.isPlaying || (_controller.isCompleted && !_isGenuineEnd());
+    final action = fresh == null
+        ? _errorGate.observe(
+            generation: _mediaGeneration,
+            position: position,
+            at: _recoveryNow,
+            playing: observingPlayback,
+            buffering: _controller.isBuffering,
+            seeking:
+                _controller.isSeeking ||
+                _controller.isRepositioning ||
+                _seekRecovery != null,
+          )
+        : _errorGate.offer(
+            message: fresh,
+            generation: _mediaGeneration,
+            position: position,
+            at: _recoveryNow,
+            playing: observingPlayback,
+            buffering: _controller.isBuffering,
+            seeking:
+                _controller.isSeeking ||
+                _controller.isRepositioning ||
+                _seekRecovery != null,
+          );
+    if (_errorGate.pending || _errorGate.committed) _startRecoveryTicker();
+    switch (action) {
+      case PlaybackErrorGateAction.committed:
+        if (_loadError != null) return;
+        widget.state.log.warning('引擎错误已确认进度停止', scope: 'player');
+        setState(() {
+          _errorGateOwnedLoadError = true;
+          _loadError = '播放中断：内核报错且进度停止，请重试本集或从最近进度续播';
+        });
+      case PlaybackErrorGateAction.recovered:
+        if (!_errorGateOwnedLoadError) return;
+        widget.state.log.info('引擎错误后进度恢复，撤销失败结论', scope: 'player');
+        setState(() {
+          _errorGateOwnedLoadError = false;
+          _loadError = null;
+        });
+      case PlaybackErrorGateAction.idle:
+      case PlaybackErrorGateAction.pending:
+        return;
+    }
+  }
+
+  Future<void> _load({
+    bool? restorePlaying,
+    SeekRecovery? seekRecovery,
+    double? restoreRate,
+  }) async {
     if (!mounted) return;
     // 回退链上的重开保留次数；其余入口（重试、换集、换线路、续播）都是新一轮。
     if (!_fallbackPending) _fallbackAttempts = 0;
     _fallbackPending = false;
-    final generation = _beginMediaTransition();
+    final generation = _beginMediaTransition(seekRecovery: seekRecovery);
     // 记录本次加载的「意图」，失败时用它回滚 `_request`（`design/03` §4.3 D3）。
     //
     // 为什么必须回滚：`_openTarget` 在调 `_load()` **之前**就已经把 `_request`
@@ -1866,6 +2106,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       });
       _controller.clearCompleted();
       return;
+    }
+    if (restoreRate != null) {
+      await controller.setRate(restoreRate);
+      if (!mounted || generation != _mediaGeneration) return;
     }
     if (restorePlaying == false) {
       await controller.pause();
@@ -2128,7 +2372,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             'attempts=$_fallbackAttempts episode=${_request.episodeName}',
             scope: 'player',
           );
-          await _switchLineResumingEpisode(flag);
+          if (!await _switchLineResumingEpisodeStrict(flag)) {
+            widget.state.log.info(
+              '失败回退放弃：线路 $flag 里没有唯一同集，不猜落点 '
+              'episode=${_request.episodeName}',
+              scope: 'player',
+            );
+            return false;
+          }
         case FallbackStep.nextParseSource:
           final name = _request.parseSources[decision.targetIndex!];
           widget.state.log.info(
@@ -3329,7 +3580,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  int _beginMediaTransition() {
+  int _beginMediaTransition({SeekRecovery? seekRecovery}) {
     widget.state.cancelSkipPrefetch(
       clearCache: _skipMediaIdentity != _skipIdentityFor(_request),
     );
@@ -3372,6 +3623,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       final rate = previous.rate;
       previous.removeListener(_onControllerChanged);
       _controller = PlayerController(
+        observedMediaFormatFor: widget.state.proxyObservedFormatFor,
         initialVolume: volume.volume,
         initialResumeVolume: volume.resumeVolume,
         onVolumeChanged: _rememberVolume,
@@ -3391,7 +3643,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _lastPositionMs = -1;
     _seenSeekCount = _controller.seekCount;
     // 换集本身不是跳转；只有「用户跳转引起的重开」才武装伪结束闸门。
-    _seekPending = _reloadStartAt != null;
+    _seekPending = seekRecovery != null;
     _skipSeekAt = null;
     _spuriousCompletion = false;
     // 每换一次媒体（含重试、换线路）都要换一份诊断基线。
@@ -3402,7 +3654,32 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 搜索把「上一集的源」标成当前。
     _danmakuSourceUrl = null;
     _danmakuSeek = null;
-    return ++_mediaGeneration;
+    _recoveryTicker?.cancel();
+    _recoveryTicker = null;
+    final generation = ++_mediaGeneration;
+    _seekRecovery = seekRecovery == null
+        ? null
+        : SeekRecovery(
+            origin: seekRecovery.origin,
+            target: seekRecovery.target,
+            generation: generation,
+            startedAt: seekRecovery.startedAt,
+          );
+    _queuedSeekPlaying = true;
+    _seekRecoveryLastPosition = null;
+    _seekRecoveryExcluded = false;
+    _seekRecoveryFailure = null;
+    if (seekRecovery == null) {
+      _seekReloadOwner = null;
+      _reloadInFlight = false;
+      _queuedSeekTarget = null;
+      _controller.endReposition();
+    }
+    if (_seekRecovery != null) _startRecoveryTicker();
+    _errorGate = PlaybackErrorGate();
+    _errorGateObservedRevision = _controller.playbackErrorRevision;
+    _errorGateOwnedLoadError = false;
+    return generation;
   }
 
   /// 播放中周期性写入进度（§15.2 “播放中写入进度”）。
@@ -3416,6 +3693,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   void _persistProgress() {
     if (!_progressReady) return;
+    // 直播没有可续播时间轴，引擎报出的伪时长不能污染点播播放历史。
+    if (_request.isLive) return;
     // 本地文件不写历史：站标识是合成的「local-file」、集 id 就是磁盘路径，
     // 落库只会得到一条历史页点了「续播」回不去的记录。
     if (_request.isLocal) return;
@@ -3490,6 +3769,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     widget.queue?.removeListener(_onQueueChanged);
     _playerFocus.dispose();
     _saveTimer?.cancel();
+    _recoveryTicker?.cancel();
     _controlHideTimer?.cancel();
     _clickGate.dispose();
     _clearGesturePlaybackIntent();
@@ -3852,7 +4132,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
   }
 
-  Future<void> _playEpisode(int index, {String? overrideFlag}) async {
+  Future<void> _playEpisode(
+    int index, {
+    String? overrideFlag,
+    Duration? startPosition,
+    bool restorePlaying = true,
+    double? rate,
+  }) async {
     if (_isLive) {
       widget.liveSession!.selectLine(index);
       return;
@@ -3870,7 +4156,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           .episodes;
       if (index < 0 || index >= target.length) return;
       _episodesCache = target;
-      await _openTarget(target[index], flag: overrideFlag, episodeIndex: index);
+      await _openTarget(
+        target[index],
+        flag: overrideFlag,
+        episodeIndex: index,
+        startPosition: startPosition,
+        restorePlaying: restorePlaying,
+        rate: rate,
+      );
       return;
     }
     final episodes = _episodesCache.isNotEmpty ? _episodesCache : _episodes;
@@ -4051,6 +4344,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     VodEpisode episode, {
     required String flag,
     required int episodeIndex,
+    Duration? startPosition,
+    bool restorePlaying = true,
+    double? rate,
   }) async {
     final state = widget.state;
     // 外调播放依赖当前代理会话：换集会重建会话并撤掉 token，外部播放器随即
@@ -4141,7 +4437,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           parseSources: parseSources,
           parseSource: parseSource,
           episodeIndex: episodeIndex,
-          clearStartPosition: true,
+          // 自动恢复换线时把**真实播到的位置**显式带过去（§3.1）：目标线路自己的
+          // 历史不参与决定起点，否则「换线路续播」会变成「从新线路自己的记录续」。
+          startPosition: startPosition,
+          clearStartPosition: startPosition == null,
           // 种子属于**原记录那一集**：换集后必须一起清掉，否则会被当成
           // 「这一集也要按原进度续播」而把用户丢到新集的中段。
           clearResumeSeed: true,
@@ -4163,7 +4462,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       });
       await _teardownLiveSession('episode-change');
       if (!mounted || generation != _mediaGeneration) return;
-      await _load();
+      await _load(restorePlaying: restorePlaying, restoreRate: rate);
     } catch (error) {
       if (!mounted || generation != _mediaGeneration) return;
       final failure = error is AppError
@@ -4730,6 +5029,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                 child: PlayerBufferingIndicator(
                                   percent: _controller.bufferingPercent,
                                   bytesPerSecond: _controller.bytesPerSecond,
+                                ),
+                              ),
+                            // §3.2 恢复出口：跳转没落地时不能只留一个黑画面。
+                            if (_seekRecoveryFailure != null)
+                              Positioned(
+                                left: AppSpace.xl,
+                                right: AppSpace.xl,
+                                // 底栏内容高 92：留出 36 的空隙，横幅压在控制栏上方
+                                // 而不是踩在动作行上。
+                                bottom: 128,
+                                child: Center(
+                                  child: PlayerSeekRecoveryBanner(
+                                    onRetry: _retrySeekTarget,
+                                    onReturn: _returnToSeekOrigin,
+                                  ),
                                 ),
                               ),
                             if (_loadError != null)
@@ -5859,6 +6173,44 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     await _playEpisode(index, overrideFlag: flag);
   }
 
+  /// 自动回退的换线（§3.1）：只有目标线路里**唯一**定位到同一集才换。
+  ///
+  /// 落错集的代价是从头看另一集且不易察觉，所以找不到唯一同集就跳过这条线路，
+  /// 绝不回第 1 集。换线时把真实播放位置与倍速一起显式带过去。
+  Future<bool> _switchLineResumingEpisodeStrict(String flag) async {
+    final line = _lineOf(flag);
+    if (line == null || line.episodes.isEmpty) return false;
+    final match = locateUniqueEpisodeInLine(
+      names: [for (final episode in line.episodes) episode.name],
+      currentName: _request.episodeName,
+    );
+    if (!match.matched) {
+      widget.state.log.info(
+        '自动换线跳过：${match.skippedReason} flag=$flag',
+        scope: 'player',
+      );
+      return false;
+    }
+    final origin = _controller.enginePositionSeen
+        ? _controller.enginePosition
+        : _controller.position;
+    final rate = _controller.rate;
+    final playing = _controller.isPlaying;
+    widget.state.log.info(
+      '自动换线 续同集 flag=$flag target=${match.index} basis=${match.basis} '
+      'position=${origin.inMilliseconds}ms rate=$rate',
+      scope: 'player',
+    );
+    await _playEpisode(
+      match.index!,
+      overrideFlag: flag,
+      startPosition: origin,
+      restorePlaying: playing,
+      rate: rate,
+    );
+    return true;
+  }
+
   /// 屏显诊断主列（`design/02` §3.2）。
   List<OsdDiagnosticsRow> _osdDiagnosticsRows() {
     final video = _controller.selectedVideoTrack;
@@ -6083,16 +6435,29 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 在旧位置先播一帧再跳，观感上是一次"闪回"。
   Future<void> _commitDragSeek(Duration target, {required bool resume}) async {
     final controller = _controller;
+    late final int generation;
     try {
       // 走统一跳转通道：缓冲内同连接直接 seek；缓冲外必须重开并在打开时定位
       // （服务端每客户端只允许 1 条活动流，mid-stream seek 会被回 429）。
-      await _seekFromUser(target);
+      final seeking = _seekFromUser(
+        target,
+        restorePlaying: resume || controller.isPlaying,
+      );
+      generation = _mediaGeneration;
+      await seeking;
     } catch (error) {
       widget.state.log.warning('拖动进度条后跳转失败：$error', scope: 'player');
+      return;
     }
     // seek 在飞的时候可能已经换媒：那份 gate 状态属于上一部片，不许续播。
-    if (!mounted || !identical(controller, _controller)) return;
-    if (resume) _applyDragPausePlayback(controller.play());
+    if (!mounted ||
+        generation != _mediaGeneration ||
+        !identical(controller, _controller)) {
+      return;
+    }
+    if (resume) {
+      _applyDragPausePlayback(controller.play());
+    }
   }
 
   /// 拖动暂停的 pause/play 都走这里。
@@ -6717,6 +7082,12 @@ class _PlayerErrorOverlay extends StatelessWidget {
 @visibleForTesting
 bool debugOsdTickerRunning(State<PlayerPage> state) =>
     (state as _PlayerPageState)._osdTimer?.isActive ?? false;
+
+/// 仅供测试：读取当前控制器的格式观测委托，不触发播放。
+@visibleForTesting
+MediaFormat? Function(String)? debugPlayerObservedMediaFormatFor(
+  State<PlayerPage> state,
+) => (state as _PlayerPageState)._controller.observedMediaFormatFor;
 
 /// 仅供测试：控制浮层当前是否可见（`design/01` §4.4）。
 ///

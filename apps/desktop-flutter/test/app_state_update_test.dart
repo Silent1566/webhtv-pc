@@ -14,6 +14,7 @@ import 'package:webhtv_pc/core/app_update.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/app_update_service.dart';
 import 'package:webhtv_pc/services/log_service.dart';
+import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 
 AppRelease releaseOf(String tag) => AppRelease(
@@ -104,23 +105,55 @@ class _FakeUpdateService extends AppUpdateService {
   }
 }
 
+/// 每个用例的临时目录；suffix 用来把同一用例里的第二个 AppState 隔开。
+AppPaths _pathsIn(Directory root, {String suffix = ''}) => AppPaths.resolve(
+  overrides: {
+    'config': p.join(root.path, 'config$suffix'),
+    'data': p.join(root.path, 'data$suffix'),
+    'cache': p.join(root.path, 'cache$suffix'),
+    'state': p.join(root.path, 'logs$suffix'),
+  },
+);
+
 void main() {
   late Directory temp;
   late AppState state;
   late _FakeUpdateService fake;
 
+  // 首个用例会启动公共 fixture 和 production 两个 AppState，支付两次全新数据库迁移。
+  // 复制已迁移的空 schema，避免重复迁移；每个实例仍使用独立目录和数据库文件。
+  late File migratedSchema;
+  late Directory schemaTemplateRoot;
+
+  setUpAll(() {
+    schemaTemplateRoot = Directory.systemTemp.createTempSync(
+      'webhtv-update-schema-',
+    );
+    final paths = _pathsIn(schemaTemplateRoot, suffix: '-template');
+    Directory(paths.databasePath).parent.createSync(recursive: true);
+    final opened = AppDatabase.open(paths.databasePath);
+    expect(opened.succeeded, isTrue, reason: opened.error);
+    opened.database!.dispose();
+    migratedSchema = File(paths.databasePath);
+  });
+
+  tearDownAll(() {
+    schemaTemplateRoot.deleteSync(recursive: true);
+  });
+
+  void seedMigratedSchema(AppPaths paths) {
+    final database = File(paths.databasePath);
+    database.parent.createSync(recursive: true);
+    migratedSchema.copySync(database.path);
+  }
+
   setUp(() async {
     temp = Directory.systemTemp.createTempSync('webhtv-update-state-');
     fake = _FakeUpdateService();
+    final paths = _pathsIn(temp);
+    seedMigratedSchema(paths);
     state = AppState(
-      paths: AppPaths.resolve(
-        overrides: {
-          'config': p.join(temp.path, 'config'),
-          'data': p.join(temp.path, 'data'),
-          'cache': p.join(temp.path, 'cache'),
-          'state': p.join(temp.path, 'logs'),
-        },
-      ),
+      paths: paths,
       log: LogService(),
       externalPlayerDetector: () => const [],
       updateService: fake,
@@ -153,15 +186,10 @@ void main() {
               );
       });
       await http.runWithClient(() async {
+        final productionPaths = _pathsIn(temp, suffix: '-production');
+        seedMigratedSchema(productionPaths);
         final production = AppState(
-          paths: AppPaths.resolve(
-            overrides: {
-              'config': p.join(temp.path, 'production-config'),
-              'data': p.join(temp.path, 'production-data'),
-              'cache': p.join(temp.path, 'production-cache'),
-              'state': p.join(temp.path, 'production-logs'),
-            },
-          ),
+          paths: productionPaths,
           log: LogService(),
           externalPlayerDetector: () => const [],
         );

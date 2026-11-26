@@ -206,7 +206,7 @@ void main() {
     );
   }
 
-  test('public Android provenance with null resolver rewrites while ordinary PC stays exact', () async {
+  test('public Android provenance and ordinary complete HLS both rewrite without sharing transport privileges', () async {
     final text =
         '#EXTM3U\n#EXT-X-TARGETDURATION:1\n'
         '#EXTINF:1,\nhttp://93.184.216.34/segment.ts\n'
@@ -276,10 +276,22 @@ void main() {
     }
     final pc = proxy.sessions.create(siteKey: 'ordinary-pc');
     expect(pc.inspectPlaylistContent, isFalse);
-    final unchanged = await _get(proxy.urlFor(pc, target));
-    expect(unchanged.status, 206);
-    expect(unchanged.bytes, utf8.encode(text));
-    expect(unchanged.headers.contentType?.mimeType, 'application/octet-stream');
+    final ordinary = await _get(proxy.urlFor(pc, target));
+    expect(ordinary.status, 200);
+    expect(
+      ordinary.headers.contentType?.mimeType,
+      'application/vnd.apple.mpegurl',
+    );
+    expect(ordinary.headers.value(HttpHeaders.contentRangeHeader), isNull);
+    final ordinaryText = utf8.decode(ordinary.bytes);
+    expect(_urls(ordinaryText), hasLength(2));
+    for (final child in _urls(ordinaryText)) {
+      expect(Uri.parse(child).pathSegments.take(2), ['p', pc.token]);
+      expect((await _get(child)).bytes, [0, 1, 2, 3]);
+    }
+    expect(HlsPlaylistShape.parse(ordinaryText).totalSeconds, 2);
+    expect(ordinaryText, contains('#EXT-X-ENDLIST'));
+    expect(pc.targetResolver, isNull);
   });
 
   test(
@@ -503,7 +515,7 @@ void main() {
     expect(utf8.decode(response.bytes), isNot(contains('guest.local')));
   });
 
-  test('non-managed identical octet-stream playlist is byte-exact', () async {
+  test('non-managed complete octet-stream HLS rewrites without Android authorization', () async {
     final direct = Uri.parse('http://127.0.0.1:${origin.port}/media');
     final legacy = LocalProxyServer(
       log: LogService(),
@@ -514,9 +526,46 @@ void main() {
     final session = legacy.sessions.create(siteKey: 'legacy');
     final response = await _get(legacy.urlFor(session, direct));
     expect(response.status, 200);
-    expect(response.bytes, utf8.encode(_media));
-    expect(response.headers.contentType?.mimeType, 'application/octet-stream');
+    expect(
+      response.headers.contentType?.mimeType,
+      'application/vnd.apple.mpegurl',
+    );
+    final text = utf8.decode(response.bytes);
+    final children = _urls(text);
+    expect(children, hasLength(4));
+    for (final child in children) {
+      expect(Uri.parse(child).pathSegments.take(2), ['p', session.token]);
+    }
+    expect(HlsPlaylistShape.parse(text).totalSeconds, 2);
+    expect(text, contains('#EXT-X-ENDLIST'));
+    expect(session.targetResolver, isNull);
+    expect(session.inspectPlaylistContent, isFalse);
   });
+
+  test(
+    'managed MIME hints cannot invent or retain signature-only HLS evidence',
+    () async {
+      final session = managed();
+      final playing = url(session, '/typed-evidence');
+      origin.respond = (socket, _) => _reply(
+        socket,
+        utf8.encode(_media),
+        type: 'application/vnd.apple.mpegurl',
+      );
+      expect((await _get(playing)).status, 200);
+      expect(proxy.observedFormatFor(playing), isNotNull);
+      origin.respond = (socket, _) => _reply(
+        socket,
+        utf8.encode('not a playlist'),
+        type: 'application/vnd.apple.mpegurl',
+      );
+      final hintOnly = await _get(playing);
+      expect(hintOnly.status, 200);
+      expect(_urls(utf8.decode(hintOnly.bytes)), hasLength(1));
+      expect(proxy.observedFormatFor(playing), isNull);
+      expect(origin.requests, hasLength(2));
+    },
+  );
 
   test('managed binary MP4 bytes remain untouched', () async {
     final bytes = [

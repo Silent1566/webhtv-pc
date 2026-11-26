@@ -17,6 +17,19 @@ library;
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:media_kit/src/player/native/utils/native_reference_holder.dart';
+
+// media_kit 1.2.6 persists a hot-restart pointer by PID in the shared temp dir.
+// Windows can reuse that PID for a new test process, where the pointer is invalid.
+// Keep this version-specific seam in sync when upgrading media_kit.
+void clearStaleMediaKitNativeReference() {
+  if (!Platform.isWindows || NativeReferenceHolder.initialized) return;
+  final reference = File(
+    '${Directory.systemTemp.path}/com.alexmercerind.media_kit.NativeReferenceHolder.$pid',
+  );
+  if (reference.existsSync()) reference.deleteSync();
+}
+
 List<String> _candidateNames() {
   if (Platform.isWindows) return const ['libmpv-2.dll'];
   if (Platform.isMacOS) return const ['libmpv.2.dylib', 'libmpv.dylib'];
@@ -33,6 +46,7 @@ bool _loads(String name) {
 }
 
 String? get libmpvUnavailableReason {
+  clearStaleMediaKitNativeReference();
   final declared = Platform.environment['WEBHTV_TEST_LIBMPV'];
   if (declared != null && declared.isNotEmpty) return null;
   final names = _candidateNames();

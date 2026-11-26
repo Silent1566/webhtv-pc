@@ -22,8 +22,7 @@ abstract final class PlaybackEngine {
     mediaKit: 'media-kit (libmpv)',
   };
 
-  static String displayName(String engine) =>
-      displayNames[engine] ?? engine;
+  static String displayName(String engine) => displayNames[engine] ?? engine;
 }
 
 /// 媒体格式分类（§12.2「识别媒体 URL」）。
@@ -84,7 +83,11 @@ MediaFormat detectMediaFormat(String? url) {
 
 /// 网络目标概要：只保留脱敏地址与主机，用于定位 DNS/代理问题而不泄露签名。
 class NetworkTarget {
-  const NetworkTarget({required this.host, required this.scheme, required this.redactedUrl});
+  const NetworkTarget({
+    required this.host,
+    required this.scheme,
+    required this.redactedUrl,
+  });
 
   final String host;
   final String scheme;
@@ -106,9 +109,9 @@ class NetworkTarget {
   bool get isSecure => scheme == 'https' || scheme == 'rtmps';
 
   Map<String, Object?> toJson() => {
-    'host': host,
-    'scheme': scheme,
-    'url': redactedUrl,
+    'host': redactLogText(host),
+    'scheme': redactLogText(scheme),
+    'url': redactUrl(redactedUrl),
   };
 }
 
@@ -129,11 +132,7 @@ enum PlaybackStage {
 
 /// 一次阶段耗时记录。
 class StageTiming {
-  const StageTiming({
-    required this.stage,
-    required this.elapsed,
-    this.note,
-  });
+  const StageTiming({required this.stage, required this.elapsed, this.note});
 
   final PlaybackStage stage;
   final Duration elapsed;
@@ -143,7 +142,7 @@ class StageTiming {
     'stage': stage.name,
     'label': stage.label,
     'elapsedMs': elapsed.inMilliseconds,
-    if (note != null) 'note': note,
+    if (note != null) 'note': redactLogText(note!),
   };
 }
 
@@ -230,7 +229,7 @@ class PlaybackDiagnostics {
       if (succeeded != null) 'succeeded=$succeeded',
       if (failureKind != null) 'failure=$failureKind',
     ];
-    return parts.join(' ');
+    return redactLogText(parts.join(' '));
   }
 
   /// 面向用户的诊断详情（多行，可直接粘贴到问题报告）。
@@ -252,13 +251,17 @@ class PlaybackDiagnostics {
       buffer.writeln('实际：$finalUrl');
     }
     if (requestedHeaders.isNotEmpty) {
-      buffer.writeln('请求头：${requestedHeaders.entries.map((e) => "${e.key}=${e.value}").join(", ")}');
+      buffer.writeln(
+        '请求头：${requestedHeaders.entries.map((e) => "${e.key}=${e.value}").join(", ")}',
+      );
     }
     if (timings.isNotEmpty) {
       buffer.writeln('阶段耗时：');
       for (final timing in timings) {
         final note = timing.note == null ? '' : '（${timing.note}）';
-        buffer.writeln('  · ${timing.stage.label} ${timing.elapsed.inMilliseconds}ms$note');
+        buffer.writeln(
+          '  · ${timing.stage.label} ${timing.elapsed.inMilliseconds}ms$note',
+        );
       }
     }
     if (succeeded == false) {
@@ -271,24 +274,31 @@ class PlaybackDiagnostics {
     } else if (succeeded == true) {
       buffer.writeln('结果：成功');
     }
-    return buffer.toString().trimRight();
+    return redactLogText(buffer.toString().trimRight());
   }
 
   Map<String, Object?> toJson() => {
-    'engine': engine,
+    'engine': redactLogText(engine),
     'format': format.name,
     'network': target.toJson(),
-    if (siteKey != null) 'siteKey': siteKey,
-    if (flag != null) 'flag': flag,
-    if (episodeName != null) 'episodeName': episodeName,
-    if (enterUrl != null) 'enterUrl': enterUrl,
-    if (finalUrl != null) 'finalUrl': finalUrl,
-    if (requestedHeaders.isNotEmpty) 'headers': requestedHeaders,
+    if (siteKey != null) 'siteKey': redactLogText(siteKey!),
+    if (flag != null) 'flag': redactLogText(flag!),
+    if (episodeName != null) 'episodeName': redactLogText(episodeName!),
+    if (enterUrl != null) 'enterUrl': redactUrl(enterUrl),
+    if (finalUrl != null) 'finalUrl': redactUrl(finalUrl),
+    if (requestedHeaders.isNotEmpty)
+      'headers': {
+        for (final entry in requestedHeaders.entries)
+          entry.key: isSensitiveHeaderKey(entry.key)
+              ? '<redacted>'
+              : redactLogText(entry.value),
+      },
     'timings': timings.map((timing) => timing.toJson()).toList(),
     if (succeeded != null) 'succeeded': succeeded,
-    if (failureKind != null) 'failureKind': '$failureKind',
-    if (failureMessage != null) 'failureMessage': failureMessage,
-    if (failureHint != null) 'failureHint': failureHint,
+    if (failureKind != null) 'failureKind': redactLogText('$failureKind'),
+    if (failureMessage != null)
+      'failureMessage': redactLogText(failureMessage!),
+    if (failureHint != null) 'failureHint': redactLogText(failureHint!),
     if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
   };
 }
@@ -318,7 +328,10 @@ class PlaybackDiagnosticsBuilder {
   String? _failureHint;
 
   /// 记录最终交给播放器的地址（保留原文以推断 host，输出时统一脱敏）。
+  MediaFormat? observedFormat;
+
   void setFinalUrl(String? url) {
+    observedFormat = null;
     _rawFinalUrl = (url ?? '').trim().isEmpty ? null : url!.trim();
   }
 
@@ -326,25 +339,32 @@ class PlaybackDiagnosticsBuilder {
   void setHeaders(Map<String, String> headers) {
     _headers = {
       for (final entry in headers.entries)
-        entry.key: isSensitiveHeaderKey(entry.key) ? '<redacted>' : entry.value,
+        entry.key: isSensitiveHeaderKey(entry.key)
+            ? '<redacted>'
+            : redactLogText(entry.value),
     };
   }
 
   /// 记录一个阶段耗时。
   void addStage(PlaybackStage stage, Duration elapsed, {String? note}) {
-    _timings.add(StageTiming(stage: stage, elapsed: elapsed, note: note));
+    _timings.add(
+      StageTiming(
+        stage: stage,
+        elapsed: elapsed,
+        note: note == null ? null : redactLogText(note),
+      ),
+    );
   }
 
   /// 记录失败结果。
-  void fail({
-    required Object kind,
-    String? message,
-    String? hint,
-  }) {
+  void fail({required Object kind, String? message, String? hint}) {
     _succeeded = false;
     _failureKind = kind;
-    _failureMessage = _truncate(message, 300);
-    _failureHint = hint;
+    _failureMessage = _truncate(
+      message == null ? null : redactLogText(message),
+      300,
+    );
+    _failureHint = hint == null ? null : redactLogText(hint);
   }
 
   /// 记录成功结果。
@@ -362,12 +382,12 @@ class PlaybackDiagnosticsBuilder {
     final raw = _rawFinalUrl ?? enterUrl;
     return PlaybackDiagnostics(
       engine: engine,
-      format: detectMediaFormat(raw),
+      format: observedFormat ?? detectMediaFormat(raw),
       target: NetworkTarget.of(raw),
       timings: List.unmodifiable(_timings),
-      siteKey: siteKey,
-      flag: flag,
-      episodeName: episodeName,
+      siteKey: siteKey == null ? null : redactLogText(siteKey!),
+      flag: flag == null ? null : redactLogText(flag!),
+      episodeName: episodeName == null ? null : redactLogText(episodeName!),
       enterUrl: redactUrl(enterUrl),
       finalUrl: redactUrl(raw),
       requestedHeaders: Map.unmodifiable(_headers),

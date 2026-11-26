@@ -12,10 +12,11 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/playback.dart';
 
-String _readSourceCode(String relative) => File(relative)
-    .readAsLinesSync()
-    .where((line) => !line.trimLeft().startsWith('//'))
-    .join('\n');
+String _readSourceCode(String relative) =>
+    File(relative)
+        .readAsLinesSync()
+        .where((line) => !line.trimLeft().startsWith('//'))
+        .join('\n');
 
 void main() {
   final pageSource = _readSourceCode('lib/ui/player_page.dart');
@@ -74,16 +75,11 @@ void main() {
   });
 
   group('跨缓冲跳转必须重开定位（源码契约）', () {
-    test('进度条只记录目标，提交时才走缓冲分流', () {
-      // beta 起拖动期间不 seek，松手由 _commitDragSeek 提交。
-      expect(pageSource.contains('_commitDragSeek('), isTrue);
-      expect(pageSource.contains('await _seekFromUser(target);'), isTrue);
-      expect(pageSource.contains('_controller.buffered'), isTrue);
-    });
-
     test('重开时把定位随 open 下发', () {
       expect(
-        pageSource.contains('startAt: _startPositionForOpen(intent.startPosition)'),
+        pageSource.contains(
+          'startAt: _startPositionForOpen(intent.startPosition)',
+        ),
         isTrue,
       );
       expect(
@@ -119,12 +115,14 @@ void main() {
         isTrue,
         reason: '闸门要靠 seek 时刻判断伪结束',
       );
-      final seekStart = controllerSource.indexOf('Future<void> seek(Duration target) {');
+      final seekStart = controllerSource.indexOf(
+        'Future<void> seek(Duration target) {',
+      );
       expect(seekStart, greaterThan(0));
       expect(
-        controllerSource.substring(seekStart, seekStart + 160).contains(
-          '_lastSeekAt = DateTime.now();',
-        ),
+        controllerSource
+            .substring(seekStart, seekStart + 160)
+            .contains('_lastSeekAt = DateTime.now();'),
         isTrue,
         reason: 'seek 必须先记账再下发，否则闸门看到的是陈旧时刻',
       );
@@ -149,9 +147,9 @@ void main() {
       final start = pageSource.indexOf('void _persistProgress() {');
       expect(start, greaterThan(0));
       expect(
-        pageSource.substring(start, start + 400).contains(
-          'if (_spuriousCompletion) return;',
-        ),
+        pageSource
+            .substring(start, start + 400)
+            .contains('if (_spuriousCompletion) return;'),
         isTrue,
       );
     });
@@ -167,10 +165,7 @@ void main() {
 
     test('completed 复位时作废伪结束判定', () {
       expect(pageSource.contains('_trackPositionSample();'), isTrue);
-      expect(
-        pageSource.contains('_spuriousCompletion = false;'),
-        isTrue,
-      );
+      expect(pageSource.contains('_spuriousCompletion = false;'), isTrue);
     });
   });
 }

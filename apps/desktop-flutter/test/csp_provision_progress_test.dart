@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:collection';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
@@ -108,6 +109,7 @@ class _CaptureState extends _ProgressState {
     };
   }
 
+  final Zone ioZone = Zone.current;
   final runnerStarted = Completer<void>();
   final imported = Completer<void>();
   final result = Completer<CspProbeReport>();
@@ -118,37 +120,35 @@ class _CaptureState extends _ProgressState {
   Future<void> get shellTargetsProbe => Future<void>.value();
 
   @override
-  Future<bool> importConfig(String input, {String? displayName}) async {
-    final fixture = jsonEncode({
-      'name': '东篱',
-      'spider': _jar,
-      'sites': [
-        ...List.generate(78, (i) => _site('dongli-$i')),
-        ...List.generate(
-          15,
-          (i) => {
-            'key': 'http-$i',
-            'name': '在线站点 $i',
-            'type': 1,
-            'api': 'https://example.test/api',
-          },
-        ),
-      ],
-    });
-    final ok = await super.importConfig(
-      input == 'https://16151.kstore.space/' ? fixture : input,
-      displayName: displayName,
-    );
-    if (!imported.isCompleted) imported.complete();
-    return ok;
-  }
+  Future<bool> importConfig(String input, {String? displayName}) =>
+      ioZone.run(() async {
+        final fixture = jsonEncode({
+          'name': '东篱',
+          'spider': _jar,
+          'sites': [
+            ...List.generate(78, (i) => _site('dongli-$i')),
+            ...List.generate(
+              15,
+              (i) => {
+                'key': 'http-$i',
+                'name': '在线站点 $i',
+                'type': 1,
+                'api': 'https://example.test/api',
+              },
+            ),
+          ],
+        });
+        final ok = await super.importConfig(
+          input == 'https://16151.kstore.space/' ? fixture : input,
+          displayName: displayName,
+        );
+        if (!imported.isCompleted) imported.complete();
+        return ok;
+      });
 }
 
 class _CountCaptureState extends _CaptureState {
   _CountCaptureState(super.paths);
-  int reportedReadyCount = 15;
-  @override
-  int get usableSiteCount => reportedReadyCount;
   @override
   Future<void> loadHome(Site site) async {
     if (homeCalls == 0) {
@@ -178,6 +178,7 @@ class _LateDirectState extends AppState {
     };
   }
 
+  final Zone ioZone = Zone.current;
   final imported = Completer<bool>();
   final cspStarted = Completer<void>();
   final directStarted = Completer<void>();
@@ -191,34 +192,69 @@ class _LateDirectState extends AppState {
   Future<void> loadHome(Site site) async {}
 
   @override
-  Future<bool> importConfig(String input, {String? displayName}) async {
-    final ok = await super.importConfig(input, displayName: displayName);
-    if (!imported.isCompleted) imported.complete(ok);
-    return ok;
-  }
+  Future<bool> importConfig(String input, {String? displayName}) =>
+      ioZone.run(() async {
+        final ok = await super.importConfig(input, displayName: displayName);
+        if (!imported.isCompleted) imported.complete(ok);
+        return ok;
+      });
 }
 
 class _ObservedDirectSpider extends LocalSpider {
-  _ObservedDirectSpider(AppPaths paths)
-    : super(
-        manifest: SpiderManifest(
-          key: 'direct',
-          name: 'JS',
-          runtime: 'node-tvbox',
-          entry: 'entry.js',
-          capabilities: ['home'],
-        ),
-        manifestPath: '${paths.dataDir}/manifest.json',
-        rootDir: paths.dataDir,
-        entryPath: '${paths.dataDir}/entry.js',
-      );
+  _ObservedDirectSpider(
+    AppPaths paths,
+    this.entryReads, {
+    String key = 'direct',
+  }) : super(
+         manifest: SpiderManifest(
+           key: key,
+           name: 'JS',
+           runtime: 'node-tvbox',
+           entry: 'entry.js',
+           capabilities: ['home'],
+         ),
+         manifestPath: '${paths.dataDir}/manifest.json',
+         rootDir: paths.dataDir,
+         entryPath: '${paths.dataDir}/entry.js',
+       );
 
-  int entryReads = 0;
+  final SendPort entryReads;
 
   @override
   bool get entryExists {
-    entryReads++;
+    entryReads.send(Isolate.current.hashCode);
     return super.entryExists;
+  }
+}
+
+class _HeldDirectSpider extends _ObservedDirectSpider {
+  _HeldDirectSpider(super.paths, super.entryReads, this.release)
+    : super(key: 'other');
+
+  final String release;
+
+  @override
+  bool get entryExists {
+    final clock = Stopwatch()..start();
+    while (!File(release).existsSync() && clock.elapsedMilliseconds < 20000) {
+      sleep(const Duration(milliseconds: 10));
+    }
+    return super.entryExists;
+  }
+}
+
+Future<void> _whenState(AppState state, bool Function() ready) async {
+  final completed = Completer<void>();
+  void check() {
+    if (!completed.isCompleted && ready()) completed.complete();
+  }
+
+  state.addListener(check);
+  try {
+    check();
+    await completed.future.timeout(const Duration(seconds: 10));
+  } finally {
+    state.removeListener(check);
   }
 }
 
@@ -282,8 +318,8 @@ void main() {
   }
 
   /// 模拟后台真把站点装好：写 index.jar + probe.json（binding.entryFor 读它）。
-  Future<void> installFixture(String key) async {
-    final binding = CspJvmBinding(root: state.cspRoot)
+  Future<void> installFixture(String key, {AppState? target}) async {
+    final binding = CspJvmBinding(root: (target ?? state).cspRoot)
         .forConfig(AppConfig(spider: _jar, sites: [_siteOf(key)]));
     final dir = binding.directoryFor(key);
     await Directory(dir).create(recursive: true);
@@ -728,6 +764,7 @@ void main() {
   Future<_LateDirectState> importDirectPage(
     WidgetTester tester, {
     bool withCsp = false,
+    bool withOther = false,
   }) async {
     final paths = AppPaths.resolve(
       overrides: {
@@ -737,7 +774,7 @@ void main() {
         'state': '${temp.path}/late-direct/logs',
       },
     );
-    final page = _LateDirectState(paths);
+    final page = (await tester.runAsync(() async => _LateDirectState(paths)))!;
     addTearDown(() {
       page.dispose();
       if (!page.cspResult.isCompleted) {
@@ -765,6 +802,7 @@ void main() {
         if (withCsp) 'spider': _jar,
         'sites': [
           directSite,
+          if (withOther) {...directSite, 'key': 'other'},
           if (withCsp) ...[
             {
               'key': 'http',
@@ -777,20 +815,14 @@ void main() {
         ],
       }),
     );
-    await tester.tap(find.text('导入'));
-    for (
-      var i = 0;
-      i < 30 &&
-          (!page.imported.isCompleted ||
-              !page.directStarted.isCompleted ||
-              (withCsp && !page.cspStarted.isCompleted));
-      i++
-    ) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 10)),
-      );
-      await tester.pump(const Duration(milliseconds: 10));
-    }
+    await tester.runAsync(() async {
+      await tester.tap(find.text('导入'));
+      await Future.wait([
+        page.imported.future,
+        page.directStarted.future,
+        if (withCsp) page.cspStarted.future,
+      ]).timeout(const Duration(seconds: 10));
+    });
     expect(page.imported.isCompleted, isTrue);
     expect(await tester.runAsync(() => page.imported.future), isTrue);
     expect(page.cspStarted.isCompleted, withCsp);
@@ -799,18 +831,29 @@ void main() {
     return page;
   }
 
-  Future<_ObservedDirectSpider> finishDirect(
+  Future<List<int>> finishDirect(
     WidgetTester tester,
     _LateDirectState page,
   ) async {
-    final local = _ObservedDirectSpider(page.paths);
+    final reads = <int>[];
+    final port = ReceivePort()..listen((event) => reads.add(event as int));
+    addTearDown(port.close);
+    final local = _ObservedDirectSpider(page.paths, port.sendPort);
     await tester.runAsync(() async {
       page.directResult.complete({'direct': local});
-      await Future<void>.delayed(Duration.zero);
+      await _whenState(
+        page,
+        () => page.siteItems.any(
+          (item) => item.site.key == 'direct' && item.availability.available,
+        ),
+      );
+      await page.pythonEnvironmentIdle;
     });
     await tester.pump();
     expect(page.debugDirectSpiders.keys, ['direct']);
-    return local;
+    expect(reads, isNotEmpty);
+    expect(reads, everyElement(isNot(Isolate.current.hashCode)));
+    return reads;
   }
 
   testWidgets('CSP 已 settled 时直连随后成功仍刷新导入结果可用数', (tester) async {
@@ -838,21 +881,52 @@ void main() {
     final settled = page.cspProvisionProgress;
     expect(settled.active, isFalse);
     expect(settled.total, 0);
-    final local = await finishDirect(tester, page);
+    final reads = await finishDirect(tester, page);
     expect(page.cspProvisionProgress, settled);
     expect(page.usableSiteCount, 1);
     final result = find.textContaining('导入成功：1 个站点（可用 1 个）');
     expect(result, findsOneWidget);
     expect(find.textContaining('可用 0 个'), findsNothing);
     final rendered = tester.widget<Text>(result);
-    final entryReads = local.entryReads;
+    final entryReads = reads.length;
     expect(entryReads, greaterThan(0));
     for (var i = 0; i < 10; i++) {
       page.seedListingForTest(const []);
       await tester.pump();
     }
+    await tester.runAsync(() => page.pythonEnvironmentIdle);
     expect(tester.widget<Text>(result), same(rendered));
-    expect(local.entryReads, entryReads, reason: '无关通知须复用站点表缓存，不能再次查入口文件');
+    expect(reads.length, entryReads, reason: '无关通知须复用站点表缓存，不能再次查入口文件');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('当前站就绪立即刷新导入结果，不等待其他站点后台查盘', (tester) async {
+    final page = await importDirectPage(tester, withOther: true);
+    final release = '${page.paths.dataDir}/release-other';
+    final reads = ReceivePort()..listen((_) {});
+    addTearDown(reads.close);
+    try {
+      await tester.runAsync(() async {
+        final ready = _whenState(
+          page,
+          () => page.siteItems.first.availability.available,
+        );
+        page.directResult.complete({
+          'direct': _ObservedDirectSpider(page.paths, reads.sendPort),
+          'other': _HeldDirectSpider(page.paths, reads.sendPort, release),
+        });
+        await ready;
+      });
+      await tester.pump();
+      expect(find.textContaining('导入成功：2 个站点（可用 1 个）'), findsOneWidget);
+      expect(page.siteItems.last.availability.preparing, isTrue);
+      expect(File(release).existsSync(), isFalse);
+    } finally {
+      await tester.runAsync(() async {
+        await File(release).writeAsString('release');
+        await page.pythonEnvironmentIdle;
+      });
+    }
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -883,16 +957,18 @@ void main() {
   });
 
   testWidgets('安装完成后导入结果更新可用数而不是保留初始快照', (tester) async {
-    final page = _CountCaptureState(
-      AppPaths.resolve(
-        overrides: {
-          'config': '${temp.path}/count',
-          'data': '${temp.path}/count',
-          'cache': '${temp.path}/count/cache',
-          'state': '${temp.path}/count/logs',
-        },
+    final page = (await tester.runAsync(
+      () async => _CountCaptureState(
+        AppPaths.resolve(
+          overrides: {
+            'config': '${temp.path}/count',
+            'data': '${temp.path}/count',
+            'cache': '${temp.path}/count/cache',
+            'state': '${temp.path}/count/logs',
+          },
+        ),
       ),
-    );
+    ))!;
     addTearDown(() {
       page.dispose();
       if (!page.result.isCompleted) {
@@ -912,34 +988,34 @@ void main() {
       find.byType(TextField).last,
       'https://16151.kstore.space/',
     );
-    await tester.tap(find.text('导入'));
-    for (
-      var i = 0;
-      i < 30 && (!page.imported.isCompleted || !page.runnerStarted.isCompleted);
-      i++
-    ) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 10)),
-      );
-      await tester.pump(const Duration(milliseconds: 10));
-    }
+    await tester.runAsync(() async {
+      await tester.tap(find.text('导入'));
+      await Future.wait([page.imported.future, page.runnerStarted.future])
+          .timeout(const Duration(seconds: 10));
+    });
     expect(page.imported.isCompleted, isTrue);
     await tester.pump();
     expect(find.textContaining('可用 15 个'), findsOneWidget);
-    page.reportedReadyCount = 93;
-    page.result.complete(
-      const CspProbeReport(
-        entries: [
-          CspProbeEntry(
-            siteKey: 'dongli-0',
-            outcome: CspProbeOutcome.installed,
-          ),
-        ],
-      ),
-    );
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 30)),
-    );
+    await tester.runAsync(() async {
+      for (var i = 0; i < 78; i++) {
+        await installFixture('dongli-$i', target: page);
+      }
+      page.result.complete(
+        CspProbeReport(
+          entries: [
+            for (var i = 0; i < 78; i++)
+              CspProbeEntry(
+                siteKey: 'dongli-$i',
+                outcome: CspProbeOutcome.installed,
+              ),
+          ],
+        ),
+      );
+      await _whenState(
+        page,
+        () => !page.cspProvisionProgress.active && page.usableSiteCount == 93,
+      );
+    });
     await tester.pump();
     await tester.pump();
     expect(page.cspProvisionProgress.active, isFalse);
@@ -968,16 +1044,18 @@ void main() {
       }
       await loadFixtureFonts();
     });
-    final page = _CaptureState(
-      AppPaths.resolve(
-        overrides: {
-          'config': '${temp.path}/shot',
-          'data': '${temp.path}/shot',
-          'cache': '${temp.path}/shot/cache',
-          'state': '${temp.path}/shot/logs',
-        },
+    final page = (await tester.runAsync(
+      () async => _CaptureState(
+        AppPaths.resolve(
+          overrides: {
+            'config': '${temp.path}/shot',
+            'data': '${temp.path}/shot',
+            'cache': '${temp.path}/shot/cache',
+            'state': '${temp.path}/shot/logs',
+          },
+        ),
       ),
-    );
+    ))!;
     addTearDown(() {
       page.dispose();
       if (!page.result.isCompleted) {
@@ -1012,17 +1090,11 @@ void main() {
       find.byType(TextField).last,
       'https://16151.kstore.space/',
     );
-    await tester.tap(find.text('导入'));
-    for (
-      var i = 0;
-      i < 30 && (!page.imported.isCompleted || !page.runnerStarted.isCompleted);
-      i++
-    ) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 10)),
-      );
-      await tester.pump(const Duration(milliseconds: 10));
-    }
+    await tester.runAsync(() async {
+      await tester.tap(find.text('导入'));
+      await Future.wait([page.imported.future, page.runnerStarted.future])
+          .timeout(const Duration(seconds: 10));
+    });
     expect(page.imported.isCompleted, isTrue);
     expect(page.runnerStarted.isCompleted, isTrue);
     await tester.pump();

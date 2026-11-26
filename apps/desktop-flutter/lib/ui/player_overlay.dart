@@ -1050,3 +1050,94 @@ class PlayerControlOverlay extends StatelessWidget {
     );
   }
 }
+
+/// 跳转失败后的两个恢复出口（`docs/reference/xiugou-tv-borrowings.md` §3.2）。
+///
+/// 位置：盖在画面之上、底栏控制区之上，**不接管整屏输入**——用户仍然可以直接
+/// 再拖一次进度条，或按这里的两个按钮之一。文案必须点明「跳转没成功」，否则
+/// 用户会以为片子本身坏了。
+class PlayerSeekRecoveryBanner extends StatelessWidget {
+  const PlayerSeekRecoveryBanner({
+    super.key,
+    required this.onRetry,
+    required this.onReturn,
+  });
+
+  /// 出口一：再跳一次同一个目标。
+  final VoidCallback onRetry;
+
+  /// 出口二：回到跳转前的位置。
+  final VoidCallback onReturn;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = context.semanticColors;
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 520),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.lg,
+        vertical: AppSpace.md,
+      ),
+      decoration: BoxDecoration(
+        // 画面是视频帧而不是应用底色：固定夜空底 + 设计系统圆角，与
+        // `_PlayerErrorOverlay` 同一套语言，但更轻（不是整屏失败态）。
+        color: AppPalette.nightGround.withValues(alpha: 0.92),
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(
+          color: semantic.statusDegraded.withValues(alpha: 0.7),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 18,
+                color: semantic.statusDegraded,
+              ),
+              const SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: Text(
+                  '跳转没成功',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: AppPalette.nightInk,
+                    fontWeight: AppWeight.title,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpace.xs),
+          Text(
+            '画面没有停在你要的位置。可以再试一次，或回到跳转前的位置。',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AppPalette.nightInkMuted,
+            ),
+          ),
+          const SizedBox(height: AppSpace.sm),
+          Wrap(
+            spacing: AppSpace.sm,
+            runSpacing: AppSpace.xs,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('player-seek-recovery-retry'),
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重试跳转'),
+              ),
+              TextButton(
+                key: const ValueKey('player-seek-recovery-return'),
+                onPressed: onReturn,
+                child: const Text('回到原位置'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

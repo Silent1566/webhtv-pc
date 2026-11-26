@@ -21,6 +21,7 @@ import 'package:webhtv_pc/ui/home_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
+import 'support/home_hd_art_fixture.dart';
 
 class _FollowingHomeState extends AppState {
   _FollowingHomeState(Directory dir, this.metadata, {this.followingCount = 1})
@@ -39,6 +40,7 @@ class _FollowingHomeState extends AppState {
   final TmdbService metadata;
   final int followingCount;
   int matchCalls = 0;
+  final matchedVodIds = <String>{};
   Completer<TmdbItem?>? pendingMatch;
   MetaPipeline _pipeline = MetaPipeline.defaults;
 
@@ -74,6 +76,7 @@ class _FollowingHomeState extends AppState {
   @override
   Future<TmdbItem?> followingTmdbItem(Following item) async {
     matchCalls++;
+    matchedVodIds.add(item.vodId);
     if (pendingMatch != null) return pendingMatch!.future;
     return TmdbItem(
       tmdbId: 42,
@@ -141,6 +144,7 @@ void main() {
           body: ListenableBuilder(
             listenable: state,
             builder: (_, _) => HomePage(
+              heroImageLoader: loadHdHeroFixture,
               state: state,
               onOpenBrowse: () {},
               onOpenHistory: () {},
@@ -158,6 +162,14 @@ void main() {
   HomeItem heroItem(WidgetTester tester) =>
       tester.widget<HomeHero>(find.byType(HomeHero)).items.first;
 
+  HomeItem railItem(WidgetTester tester) =>
+      tester.widget<HomeRailView>(find.byType(HomeRailView).first).rail.items.first;
+
+  Future<void> revealRail(WidgetTester tester) async {
+    await tester.scrollUntilVisible(find.byType(HomeRailView),400,
+      scrollable:find.descendant(of:find.byKey(const ValueKey('home-scroll')),matching:find.byType(Scrollable)).first);
+  }
+
   testWidgets('关闭海报与背景来源时尚未完成匹配也不显示站点图', (tester) async {
     final pending = Completer<TmdbItem?>();
     state.pendingMatch = pending;
@@ -167,9 +179,11 @@ void main() {
     }
     state.setPipeline(pipeline);
     await pumpHome(tester);
-    expect(state.matchCalls, 1);
-    expect(heroItem(tester).poster, isNull);
-    expect(heroItem(tester).backdrop, isNull);
+    expect(tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,800);
+    await revealRail(tester);
+    expect(state.matchCalls, 1, reason: '候选复用进行中的轨道匹配');
+    expect(railItem(tester).poster, isNull);
+    expect(railItem(tester).backdrop, isNull);
     pending.complete(null);
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox.shrink());
@@ -185,14 +199,16 @@ void main() {
     }
     state.setPipeline(pipeline);
     await tester.pumpAndSettle();
-    expect(heroItem(tester).poster, isNull);
+    await revealRail(tester);
+    expect(railItem(tester).poster, isNull);
     pending.complete(
       const TmdbItem(tmdbId: 42, mediaType: TmdbMediaType.tv, title: '今天是太阳雨'),
     );
     await tester.pumpAndSettle();
-    expect(heroItem(tester).poster, isNull);
-    expect(heroItem(tester).backdrop, isNull);
-    expect(heroItem(tester).overview, isEmpty);
+    await revealRail(tester);
+    expect(railItem(tester).poster, isNull);
+    expect(railItem(tester).backdrop, isNull);
+    expect(railItem(tester).overview, isEmpty);
     expect(metadata.requestCount, 0, reason: '过期匹配后不得再发详情请求');
     await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
@@ -213,12 +229,13 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('追剧轨道再长，元数据解析也只覆盖 hero 预算的 12 条', (tester) async {
+  testWidgets('候选补位解析预算有界，全部14条追剧可参与而不遍历整份记录', (tester) async {
     state.dispose();
     state = _FollowingHomeState(dir, metadata, followingCount: 14);
     await pumpHome(tester);
 
-    expect(state.matchCalls, 12);
+    expect(state.matchedVodIds, hasLength(14));
+    expect(state.matchCalls, 14, reason: '每个候选只匹配一次，允许超过原12条预算补位');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -232,11 +249,17 @@ void main() {
     }
     state.setPipeline(pipeline);
     await pumpHome(tester);
+    expect(tester.getSize(find.byKey(const ValueKey('home-hero-startup-placeholder'))).height,800);
+    await revealRail(tester);
     final rail = tester.widget<HomeRailView>(find.byType(HomeRailView)).rail;
-    expect(rail.items.length, 14);
+    // 14 条追剧在夹具里指向**同一个** TMDB 身份：取回刮削名之后它们的标题全变成
+    // 「今天是太阳雨」，首页按作品收敛（2026-11-25），所以这里不再断言 14 张。
+    // 用例要钉的性质不变：预算外那几张（没被解析过的）也不得留着站点海报。
+    expect(rail.items, isNotEmpty);
     expect(rail.items.last.poster, isNull);
     expect(rail.items.every((item) => item.poster == null), isTrue);
-    expect(state.matchCalls, 12);
+    expect(state.matchedVodIds, hasLength(14));
+    expect(state.matchCalls, 14, reason: '即使禁用图像字段，匹配也不重复');
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
