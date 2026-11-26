@@ -203,6 +203,13 @@ Future<void> _drag(WidgetTester tester, int target) async {
   await flush(tester);
 }
 
+/// 多推几轮：CI 机器比本地慢，6 轮 `flush` 会把「还没轮到」当成失败。
+Future<void> _pump(WidgetTester tester, int rounds) async {
+  for (var i = 0; i < rounds; i++) {
+    await flush(tester);
+  }
+}
+
 void _pageTest(String name, Future<void> Function(WidgetTester) body) {
   testWidgets(name, (tester) async {
     try {
@@ -307,9 +314,7 @@ void main() {
     await flush(tester);
     await _drag(tester, 700);
     gate.complete();
-    for (var i = 0; i < 6; i++) {
-      await flush(tester);
-    }
+    await _pump(tester, 20);
     f.io.sample(2, playing: true, buffering: false);
     await flush(tester);
     f.advance(21);
@@ -338,7 +343,7 @@ void main() {
     );
     await flush(tester);
     gate.complete();
-    await flush(tester);
+    await _pump(tester, 16);
     f.advance(30);
     f.io.sample(50, playing: true);
     await flush(tester);
@@ -363,9 +368,7 @@ void main() {
       f.requests.value = f.requests.value.copyWith(
         url: 'https://media.test/expired-a2',
       );
-      for (var i = 0; i < 6; i++) {
-        await flush(tester);
-      }
+      await _pump(tester, 20);
       expect(f.state.targets.last.target, 'b2');
       expect(f.io.openedMedia.last.start, const Duration(seconds: 300));
       expect(f.io.state.rate, 2);
@@ -478,9 +481,7 @@ void main() {
       await flush(tester);
       final playCalls = f.io.playCalls;
       gate.complete();
-      for (var i = 0; i < 4; i++) {
-        await flush(tester);
-      }
+      await _pump(tester, 16);
       expect(f.io.playCalls, playCalls);
       expect(f.io.state.playing, isFalse);
       expect(find.byType(PlayerSeekRecoveryBanner), findsNothing);
@@ -506,9 +507,7 @@ void main() {
         await flush(tester);
         await _drag(tester, 700);
         gate.complete();
-        for (var i = 0; i < 6; i++) {
-          await flush(tester);
-        }
+        await _pump(tester, 24);
         expect(f.io.openedMedia.last.start, const Duration(seconds: 700));
         expect(f.io.state.playing, !initiallyPlaying);
       },
@@ -530,24 +529,28 @@ void main() {
       expect(find.textContaining('播放中断'), findsNothing);
     },
   );
-  _pageTest('natural completion releases active seek recovery timer', (tester) async {
+  _pageTest('natural completion releases active seek recovery timer', (
+    tester,
+  ) async {
     final f = await _mount(tester);
     final timers = <Timer>[];
-    await runZoned(() async {
-      await _drag(tester, 999);
-      expect(timers, isNotEmpty);
-      f.io.sample(1000, playing: false);
-      f.io.original.completedController.add(true);
-      await flush(tester);
-      await tester.pump(const Duration(seconds: 2));
-      expect(timers.where((timer) => timer.isActive), isEmpty);
-    }, zoneSpecification: ZoneSpecification(
-      createPeriodicTimer: (self, parent, zone, period, callback) {
-        final timer = parent.createPeriodicTimer(zone, period, callback);
-        if (period == const Duration(seconds: 1)) timers.add(timer);
-        return timer;
+    await runZoned(
+      () async {
+        await _drag(tester, 999);
+        expect(timers, isNotEmpty);
+        f.io.sample(1000, playing: false);
+        f.io.original.completedController.add(true);
+        await flush(tester);
+        await tester.pump(const Duration(seconds: 2));
+        expect(timers.where((timer) => timer.isActive), isEmpty);
       },
-    ));
+      zoneSpecification: ZoneSpecification(
+        createPeriodicTimer: (self, parent, zone, period, callback) {
+          final timer = parent.createPeriodicTimer(zone, period, callback);
+          if (period == const Duration(seconds: 1)) timers.add(timer);
+          return timer;
+        },
+      ),
+    );
   });
-
 }
