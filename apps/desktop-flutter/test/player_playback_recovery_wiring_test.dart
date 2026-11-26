@@ -117,8 +117,10 @@ Future<_PageFixture> _mount(
   f.state = QueueState(
     paths: AppPaths.resolve(
       overrides: {
-        for (final key in ['config', 'data', 'cache', 'state'])
-          key: '${dir.path}/$key',
+        'config': '${dir.path}/config',
+        'data': '${dir.path}/data',
+        'cache': '${dir.path}/cache',
+        'state': '${dir.path}/state',
       },
     ),
     log: LogService(),
