@@ -228,6 +228,316 @@ void main() {
   });
 
   group('preferred version', () {
+    for (final previous in [
+      '第1集 星空初遇 [正片] [番综]',
+      '正片第1集 [番综]',
+      '番综第1期 [正片]',
+      '特别版第1集 [正片]',
+      '正片第1集 [特别版]',
+      '第1集 [番综] [特别版]',
+    ]) {
+      test(
+        'conflicting edition current is unreliable even with unique technical profile: $previous',
+        () {
+          final group = EpisodeAggregation.build([
+            episode('第2集 月下重逢1080p', url: 'normal'),
+            episode('番综第2期 月下重逢1080p', url: 'variety'),
+            episode('特别版第2集 月下重逢1080p', url: 'special'),
+          ]).single;
+          expect(
+            EpisodeAggregation.preferredVersion(
+              group,
+              episode('$previous 1080p'),
+            ),
+            isNull,
+          );
+        },
+      );
+    }
+    for (final row in <(String, List<String>, String)>[
+      (
+        '正片第1集 星空初遇 [正片]1080p',
+        ['第2集 月下重逢 [正片]1080p', '番综第2期 月下重逢1080p'],
+        '第2集 月下重逢 [正片]1080p',
+      ),
+      (
+        '番綜第1期 星空初遇 [番综]1080p',
+        ['第2集 月下重逢1080p', '番综第2期 月下重逢 [番綜]1080p'],
+        '番综第2期 月下重逢 [番綜]1080p',
+      ),
+      (
+        '特別版第1集 星空初遇 [特别版]1080p',
+        ['特别版第2集 月下重逢1080p', '第2集 月下重逢1080p'],
+        '特别版第2集 月下重逢1080p',
+      ),
+    ]) {
+      test(
+        'equivalent explicit edition aliases are not conflicting ${row.$1}',
+        () {
+          final group = EpisodeAggregation.build(row.$2.map(episode).toList())
+              .single;
+          expect(
+            EpisodeAggregation.preferredVersion(
+              group,
+              episode(row.$1),
+            )?.episode.name,
+            row.$3,
+          );
+        },
+      );
+    }
+    test('unknown content with explicit conflict does not fall back to technical profile', () {
+      final group = EpisodeAggregation.build([
+        episode('第2集1080p'),
+        episode('番综第2期2160p'),
+      ]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(
+          group,
+          episode('opaque1080p [正片] [番综]'),
+        ),
+        isNull,
+      );
+    });
+    test('conflicting candidate without edition identity cannot use technical fallback', () {
+      final group = EpisodeGroup(
+        key: 'unknown',
+        seasonNumber: -1,
+        episodeNumber: 2,
+        versions: [
+          EpisodeVersion(
+            episode: episode('opaque1080p [正片] [番综]'),
+            sourceIndex: 0,
+          ),
+          EpisodeVersion(episode: episode('opaque2160p'), sourceIndex: 1),
+        ],
+      );
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('file.1080p')),
+        isNull,
+      );
+    });
+    test('separate explicit prefix labels cannot hide conflicting content', () {
+      final group = EpisodeAggregation.build([
+        episode('[正片] [番综]第2集 1080p', url: 'conflict'),
+        episode('番综第2期 2160p', url: 'other'),
+      ]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(
+          group,
+          episode('[正片] [番综]第1集1080p'),
+        ),
+        isNull,
+      );
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('番综第1期1080p')),
+        isNull,
+      );
+    });
+    test('conflicting candidate cannot win unique technical profile', () {
+      final group = EpisodeAggregation.build([
+        episode('正片第2集 月下重逢 [番综] 1080p', url: 'conflict'),
+        episode('番综第2期 月下重逢2160p', url: 'other'),
+      ]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('番综第1期 星空初遇1080p')),
+        isNull,
+      );
+    });
+
+    test('episode titles do not block unique prior technical profile', () {
+      final group = EpisodeAggregation.build([
+        episode('第2集 月下重逢1080p', url: 'normal-1080'),
+        episode('第2集 月下重逢2160p', url: 'normal-2160'),
+      ]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(
+          group,
+          episode('第1集 星空初遇 1080p'),
+        )?.episode.url,
+        'normal-1080',
+      );
+    });
+    test(
+      'ordinary and variety titles change without changing stable edition',
+      () {
+        final group = EpisodeAggregation.build([
+          episode('番综第2期 月下重逢', url: 'variety'),
+          episode('第2集 月下重逢', url: 'normal'),
+        ]).single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('第1集 星空初遇'),
+          )?.episode.url,
+          'normal',
+        );
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('番综第1期 星空初遇'),
+          )?.episode.url,
+          'variety',
+        );
+      },
+    );
+
+    for (final row in <(String, List<String>, String?)>[
+      ('特别版第1集 星空初遇', ['第2集 月下重逢', '特别版第2集 月下重逢'], '特别版第2集 月下重逢'),
+      ('第1集 星空初遇 [特别版]', ['第2集 月下重逢', '第2集 月下重逢 [特别版]'], '第2集 月下重逢 [特别版]'),
+      ('第1集 星空初遇 特别版', ['第2集 月下重逢', '番综第2期 月下重逢'], null),
+      ('第1集 星空初遇', ['第2集 月下重逢', '第2集 远方来信'], null),
+      ('番综第1期 星空初遇', ['番综第2期 月下重逢', '番综第2期 远方来信'], null),
+      ('opaque-file 星空初遇', ['第2集 月下重逢', '番综第2期 月下重逢'], null),
+      ('第1集 星空初遇 1080p', ['第2集 月下重逢', '番综第2期 月下重逢 1080p'], null),
+      ('第1集 星空初遇 1080p', ['第2集 月下重逢 1080p 2160p', '番综第2期 月下重逢 1080p'], null),
+    ]) {
+      test('titled edition retains stable labels and ambiguity ${row.$1}', () {
+        final group = EpisodeAggregation.build(row.$2.map(episode).toList())
+            .single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode(row.$1),
+          )?.episode.name,
+          row.$3,
+        );
+      });
+    }
+    test(
+      'content edition selects unique normal or variety independent of order',
+      () {
+        final group = EpisodeAggregation.build([
+          episode('番综第2期 [8GB]', url: 'variety'),
+          episode('第2集 [1GB]', url: 'normal'),
+        ]).single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('第1集 [9GB]'),
+          )?.episode.url,
+          'normal',
+        );
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('番综第1期 [1GB]'),
+          )?.episode.url,
+          'variety',
+        );
+      },
+    );
+    test('matching edition still requires full reliable technical profile', () {
+      final group = EpisodeAggregation.build([
+        episode('番综第2期 1080p 国语 HDR10', url: 'wrong-edition'),
+        episode('第2集 2160p 国语 HDR10', url: 'wrong-resolution'),
+        episode('第2集 1080p 国语 HDR10', url: 'match'),
+      ]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(
+          group,
+          episode('第1集 1080p 国语 HDR10'),
+        )?.episode.url,
+        'match',
+      );
+    });
+    for (final names in [
+      ['第2集', '第2集'],
+      ['番综第2期', '番综第2期'],
+      ['第2集 1080p 2160p', '番综第2期'],
+    ]) {
+      test('ambiguous or conflicting editions $names do not guess', () {
+        final group = EpisodeAggregation.build(names.map(episode).toList())
+            .single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode(names.first.startsWith('番综') ? '番综第1期' : '第1集'),
+          ),
+          isNull,
+        );
+      });
+    }
+    test('unknown prior filename and conflicting prior profile never becomes normal', () {
+      final group = EpisodeAggregation.build([episode('第2集'), episode('番综第2期')])
+          .single;
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('file-01')),
+        isNull,
+      );
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('第1集 1080p 2160p')),
+        isNull,
+      );
+    });
+
+    for (final row in <(String, List<String>, String?)>[
+      ('第1集', ['第2集 1080p', '第2集 2160p'], null),
+      ('番综第1期', ['第2集', '特别版第2集'], null),
+      ('特别版第1集', ['第2集', '特别版第2集'], '特别版第2集'),
+      ('第1集 国语', ['番综第2期 国语', '第2集 粤语'], null),
+      ('第1集 HDR10', ['第2集 HDR', '番综第2期 HDR10'], null),
+      ('第1集 1080p', ['第2集 1080p 2160p', '番综第2期 1080p'], null),
+      ('第1集 国语粤语', ['第2集 国语', '番综第2期 粤语'], null),
+    ]) {
+      test('edition signature respects unknown and conflicts: ${row.$1}', () {
+        final group = EpisodeAggregation.build(row.$2.map(episode).toList())
+            .single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode(row.$1),
+          )?.episode.name,
+          row.$3,
+        );
+      });
+    }
+    test('same edition permutation does not use position or file size', () {
+      for (final names in [
+        ['第2集 [9GB]', '番综第2期 [1GB]'],
+        ['番综第2期 [9GB]', '第2集 [1GB]'],
+      ]) {
+        final group = EpisodeAggregation.build(names.map(episode).toList())
+            .single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('第1集 [9GB]'),
+          )?.episode.name.startsWith('第2集'),
+          isTrue,
+        );
+      }
+    });
+    test('single different known content edition still needs confirmation', () {
+      final group = EpisodeAggregation.build([episode('番综第2期')]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('第1集')),
+        isNull,
+      );
+    });
+    test('unknown prior content without reliable profile never chooses sole candidate', () {
+      final group = EpisodeAggregation.build([episode('第2集')]).single;
+      expect(
+        EpisodeAggregation.preferredVersion(group, episode('opaque-file')),
+        isNull,
+      );
+    });
+    test(
+      'explicit normal edition label continues into plain numbered episode',
+      () {
+        final group = EpisodeAggregation.build([
+          episode('番综第2期'),
+          episode('第2集'),
+        ]).single;
+        expect(
+          EpisodeAggregation.preferredVersion(
+            group,
+            episode('正片第1集'),
+          )?.episode.name,
+          '第2集',
+        );
+      },
+    );
     test('single version returns original despite empty prior profile', () {
       final next = episode('第2集');
       final group = EpisodeAggregation.build([next]).single;

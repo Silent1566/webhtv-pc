@@ -13,6 +13,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/intro_skip_options_page.dart';
+import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 AppPaths _tempPaths(Directory temp) => AppPaths.resolve(
@@ -79,7 +80,11 @@ void main() {
         expect(options.skipMode, SkipMode.off, reason: 'raw=$raw');
         expect(options.skipKinds, SkipKindBits.defaults, reason: 'raw=$raw');
         expect(options.skipRemoteEnabled, isTrue, reason: 'raw=$raw');
-        expect(options.skipSources, SkipSourceBits.defaults, reason: 'raw=$raw');
+        expect(
+          options.skipSources,
+          SkipSourceBits.defaults,
+          reason: 'raw=$raw',
+        );
       }
     });
 
@@ -287,14 +292,41 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets('播放参数中的跳过片段入口打开同名设置页', (tester) async {
+      tester.view.physicalSize = const Size(900, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(Brightness.dark),
+          home: PlaybackOptionsPage(state: state),
+        ),
+      );
+      final entry = find.byKey(const ValueKey('settings-player-skip-open'));
+      await reveal(tester, entry);
+      expect(
+        find.descendant(of: entry, matching: find.text('跳过片段')),
+        findsOneWidget,
+      );
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(find.byType(IntroSkipOptionsPage), findsOneWidget);
+      expect(find.text('跳过片段'), findsOneWidget);
+      expect(find.text('远端识别可跳过片段'), findsOneWidget);
+      expect(find.text('片头片尾跳过'), findsNothing);
+    });
+
     testWidgets('四个控件齐全，候选与默认值正确', (tester) async {
       await pumpPage(tester);
 
       final remote = find.byKey(const ValueKey('settings-player-skip-remote'));
       await reveal(tester, remote);
       expect(tester.widget<SwitchListTile>(remote).value, isTrue);
-      expect(find.text('远端识别片头片尾'), findsOneWidget);
-      expect(find.text('从 IntroDB / TheIntroDB / TODB 自动获取时间轴'), findsOneWidget);
+      expect(find.text('远端识别可跳过片段'), findsOneWidget);
+      expect(
+        find.text('从 IntroDB / TheIntroDB / TODB 获取时间轴；片段类型以远端标定为准'),
+        findsOneWidget,
+      );
 
       final modeTile = find.byKey(const ValueKey('settings-player-skip-mode'));
       await reveal(tester, modeTile);

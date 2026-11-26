@@ -200,7 +200,7 @@ class PlaybackOptionsPage extends StatelessWidget {
                       key: const ValueKey('settings-player-skip-open'),
                       dense: true,
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('片头片尾跳过'),
+                      title: const Text('跳过片段'),
                       subtitle: Text(
                         IntroSkipOptionsPage.summary(state.playerOptions),
                       ),
