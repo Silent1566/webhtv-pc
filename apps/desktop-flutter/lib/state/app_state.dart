@@ -17,6 +17,7 @@ import '../core/detail_source_merge.dart';
 import '../core/episode_aggregation.dart';
 import '../core/episode_manual_match.dart';
 import 'detail_recommendation_state.dart';
+import 'home_hero_session.dart';
 
 import 'dart:convert';
 import 'dart:ffi' show Abi;
@@ -2202,6 +2203,18 @@ class AppState extends ChangeNotifier
                 recommendationSeedForHistory(row),
             ],
           );
+
+  /// 首页的会话级推荐状态：切到别的页面再回来仍要看到同一份已就绪内容。
+  ///
+  /// 惰性创建、随 `AppState` 一起销毁：它是**应用会话**的资源，不是某个
+  /// `HomePage` 页面的。页面销毁只解除订阅，在途任务照常收尾。
+  HomeHeroSession? _homeHeroSession;
+  HomeHeroSession get homeHeroSession =>
+      _homeHeroSession ??= HomeHeroSession(this, clock: heroSessionClock);
+
+  /// 会话的时钟来源：默认取真实时间，测试可覆盖以确定性地验证过期复核。
+  @protected
+  DateTime Function() get heroSessionClock => DateTime.now;
 
   /// 把一条历史行映射成推荐种子。
   ///
@@ -12333,6 +12346,8 @@ class AppState extends ChangeNotifier
     _importService.close();
     _liveService?.close();
     _epgService?.close();
+    _homeHeroSession?.dispose();
+    _homeHeroSession = null;
     _recommendationDependencies?.close();
     _detailRatingService?.close();
     _externalMetaService?.close();
