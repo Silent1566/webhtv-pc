@@ -259,6 +259,52 @@ void main() {
     }
   });
 
+  for (final updated in [false, true]) {
+    testWidgets('详情页将有效续播种子与起点交给真实播放器（写库更新：$updated）', (tester) async {
+      installMediaKitMocks(tester);
+      installWindowManagerMocks(tester);
+      final playable = Vod(
+        vodId: vod.vodId,
+        vodName: vod.vodName,
+        vodPlayFrom: '线路一',
+        vodPlayUrl: r'第1集$http://x/e1.mp4',
+      );
+      const seed = ResumeSeed(
+        flag: '线路一',
+        episodeName: '第1集',
+        episodeId: 'http://x/e1.mp4',
+        positionMs: 30000,
+        durationMs: 100000,
+      );
+      await pumpDetail(tester, target: playable, resumeSeed: seed);
+      if (updated) {
+        state.recordProgress(
+          vod: playable,
+          flag: '线路一',
+          episodeName: '第1集',
+          episodeId: 'http://x/e1.mp4',
+          position: const Duration(seconds: 60),
+          duration: const Duration(seconds: 100),
+          siteKey: 'site-a',
+          sourceKey: sourceKey,
+        );
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const ValueKey('tmdb-episode-card-线路一-0')));
+      await settlePlayerPage(tester);
+      final request = tester
+          .widget<PlayerPage>(find.byType(PlayerPage))
+          .request;
+      expect(request.startPosition, Duration(seconds: updated ? 60 : 30));
+      expect(request.resumeSeed, isNotNull);
+      expect(request.resumeSeed!.positionMs, updated ? 60000 : 30000);
+      expect(request.resumeSeed!.durationMs, 100000);
+      expect(request.resumeSeed!.episodeId, 'http://x/e1.mp4');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await settlePlayerPage(tester);
+    });
+  }
+
   testWidgets('写入本线进度后，切到另一线路仍优先使用那条线路的精确进度', (tester) async {
     installMediaKitMocks(tester);
     installWindowManagerMocks(tester);
