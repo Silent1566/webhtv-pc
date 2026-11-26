@@ -266,6 +266,8 @@ class PlayerController extends ChangeNotifier {
 
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _lastEngineError;
+  int _playbackErrorRevision = 0;
+  String? _playbackErrorMessage;
   Timer? _retryTimer;
   int _retryCount = 0;
   bool _disposed = false;
@@ -468,6 +470,8 @@ class PlayerController extends ChangeNotifier {
   String? get currentUrl => _currentUrl;
   PlayerLoadOutcome? get lastOutcome => _lastOutcome;
   String? get lastEngineError => _lastEngineError;
+  int get playbackErrorRevision => _playbackErrorRevision;
+  String? get playbackErrorMessage => _playbackErrorMessage;
   VideoParams get videoParams => _videoParams;
   AudioParams get audioParams => _audioParams;
   Tracks get tracks => _tracks;
@@ -1176,6 +1180,8 @@ class PlayerController extends ChangeNotifier {
       _player.stream.error.listen((message) {
         if (_disposed) return;
         _lastEngineError = message;
+        _playbackErrorMessage = message;
+        _playbackErrorRevision++;
         // 非致命告警（无声卡/无 GPU）不应被当成加载失败：加载结果以 duration 判定。
         notifyListeners();
       }),
@@ -1327,6 +1333,7 @@ class PlayerController extends ChangeNotifier {
     resetNetworkRate();
     _completed = false;
     _lastEngineError = null;
+    _playbackErrorMessage = null;
     _currentUrl = url;
     _thumbnails.setMedia(url, headers: headers);
 

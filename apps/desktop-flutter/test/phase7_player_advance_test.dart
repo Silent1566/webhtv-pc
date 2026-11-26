@@ -125,7 +125,10 @@ void main() {
       // （进度保存定时器），全局搜索会误命中。
       final start = pageSource.indexOf('bool _isGenuineEnd() =>');
       expect(start, greaterThan(0), reason: '闸门必须委托给 core');
-      final end = pageSource.indexOf('Future<void> _load(');
+      // 只切**这一个表达式**（到紧随其后的 `);` 为止），不能拿「下一个方法定义」
+      // 当右边界：那样之后新增的任何方法都会被算进本方法体，让它们的 Duration
+      // 字面量误判成这里的余量。
+      final end = pageSource.indexOf(');', start);
       expect(end, greaterThan(start));
       final body = pageSource.substring(start, end);
       expect(body.contains('5000'), isFalse, reason: '余量必须来自 core 常量');
