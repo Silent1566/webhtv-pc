@@ -22,6 +22,9 @@ import 'dart:io';
 import 'dart:typed_data' show BytesBuilder, Uint8List;
 
 import '../core/ad_rules.dart';
+import '../core/ad_block_stats.dart';
+import '../core/m3u8_purify.dart';
+import 'ad_block_stats_service.dart';
 import '../core/dash_playlist.dart';
 import '../core/proxy_policy.dart';
 import '../core/playback_diagnostics.dart' show MediaFormat;
@@ -75,6 +78,33 @@ class LocalProxyServer {
   /// 配置切换后更新规则（代理运行中也可安全替换）。
   void setAdRules(AdRuleSet rules) {
     adRules = rules;
+  }
+
+  /// 启发式清洗开关（默认关闭）。
+  ///
+  /// 规则没命中时才用它兜底：五级链会误删，只有用户在设置里显式开启才生效。
+  bool adBlockHeuristic = false;
+
+  void setAdBlockHeuristic(bool enabled) {
+    adBlockHeuristic = enabled;
+  }
+
+  /// 拦截记账入口（由 `AppState` 注入；未注入时只做清洗不记统计）。
+  AdBlockStatsService? adBlockStats;
+
+  /// 拦到广告时的 UI 事件钩子（提示用）；记账仍走 [adBlockStats]。
+  void Function(HlsCleanResult result, String fingerprint)? onAdBlockClean;
+
+  /// 本次播放的归属信息（站点名等）；由 `AppState` 提供。
+  AdBlockContext Function()? adBlockContext;
+
+  final Map<String, AdBlockSessionSummary> _adBlockSummaries = {};
+
+  /// 某个会话到目前为止拦掉的段数与时长；没拦过返回 null。
+  AdBlockSessionSummary? adBlockSummaryFor(String? fingerprint) {
+    final summary = fingerprint == null ? null : _adBlockSummaries[fingerprint];
+    if (summary == null || summary.removedSegments <= 0) return null;
+    return summary;
   }
 
   final ProxySessionManager sessions;
@@ -1349,11 +1379,54 @@ class LocalProxyServer {
               hlsRules: [...adRules.hlsRules, ...aiSessionRules.hlsRules],
             )
           : adRules;
-      final cleaned = cleanHlsPlaylist(
+      var cleaned = cleanHlsPlaylist(
         text: originalText,
         playlistUri: logicalCurrent,
         rules: effectiveRules,
       );
+      var heuristic = false;
+      Map<String, int>? heuristicLevels;
+      // 启发式只在规则一条都没命中时兜底，且默认关闭（会误删，见 m3u8_purify）。
+      if (!cleaned.changed && adBlockHeuristic) {
+        final purified = purifyM3u8Playlist(
+          text: originalText,
+          playlistUri: logicalCurrent,
+        );
+        if (purified.changed) {
+          heuristic = true;
+          heuristicLevels = purified.levelCounts;
+          cleaned = HlsCleanResult(
+            text: purified.text,
+            removedSegments: purified.removedSegments,
+            removedDurationSec: purified.removedDurationSec,
+            ruleCounts: purified.levelCounts,
+            removed: [
+              for (final segment in purified.removed)
+                AdRemovedSegment(
+                  host: segment.host,
+                  ruleId: segment.ruleId,
+                  startSeconds: segment.startSeconds,
+                  durationSec: segment.durationSec,
+                ),
+            ],
+          );
+        }
+      }
+      if (cleaned.changed) {
+        _adBlockSummaries[session.fingerprint] = AdBlockSessionSummary(
+          removedSegments: cleaned.removedSegments,
+          removedDurationSec: cleaned.removedDurationSec,
+          heuristic: heuristic,
+        );
+        while (_adBlockSummaries.length > 32) {
+          _adBlockSummaries.remove(_adBlockSummaries.keys.first);
+        }
+        adBlockStats?.recordClean(
+          result: cleaned,
+          context: adBlockContext?.call() ?? const AdBlockContext(),
+        );
+        onAdBlockClean?.call(cleaned, session.fingerprint);
+      }
       _indexPrefetch(session, logicalCurrent, cleaned.text);
       final rewritten = _aliasPngTsMedia(
         session,
@@ -1370,6 +1443,7 @@ class LocalProxyServer {
         cleaned: cleaned,
         upstreamBytes: body.length,
         bytes: bytes.length,
+        heuristicLevels: heuristicLevels,
       );
       // 重写后的清单是**新的实体**，必须按 200 完整返回。
       //
@@ -1412,6 +1486,7 @@ class LocalProxyServer {
         range: range,
         note: cleaned.changed
             ? 'hls-rewrite ad-block(-${cleaned.removedSegments})'
+                  '${heuristic ? ' heuristic' : ''}'
             : 'hls-rewrite',
       );
       return;
@@ -2588,6 +2663,7 @@ class LocalProxyServer {
     required HlsCleanResult cleaned,
     required int upstreamBytes,
     required int bytes,
+    Map<String, int>? heuristicLevels,
   }) {
     // 引擎真正读的是清洗后的清单，所以形状以它为准：广告被删掉之后，引擎
     // 本该上报的总长是「删完之后」的 Σ `#EXTINF`，不是上游那一份。
@@ -2596,7 +2672,8 @@ class LocalProxyServer {
       '清单形状 token=${session.fingerprint} ${played.summary} '
       'upstreamBytes=$upstreamBytes bytes=$bytes '
       'adBlockRemoved=${cleaned.removedSegments}'
-      '${cleaned.abandoned ? ' adBlockRollback=${cleaned.abandonReason}' : ''}',
+      '${cleaned.abandoned ? ' adBlockRollback=${cleaned.abandonReason}' : ''}'
+      '${heuristicLevels == null ? '' : ' adBlockLevels=${purifyLevelsSummary(heuristicLevels)}'}',
       scope: 'proxy',
     );
     if (!cleaned.changed) return;
@@ -2684,6 +2761,19 @@ class _PngBody {
   final Stream<List<int>> stream;
   final Future<void> Function() cancel;
   final int? offset;
+}
+
+/// 一次播放会话里累计拦截的段数与时长（屏显与去广告页共用）。
+class AdBlockSessionSummary {
+  const AdBlockSessionSummary({
+    required this.removedSegments,
+    required this.removedDurationSec,
+    this.heuristic = false,
+  });
+
+  final int removedSegments;
+  final double removedDurationSec;
+  final bool heuristic;
 }
 
 class _PrefetchFreshness {

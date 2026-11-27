@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../core/ad_block_stats.dart';
+import '../core/ad_rule_library.dart';
 import '../core/ad_rules.dart';
 import '../core/ai_config.dart';
 import '../core/audio_ai/audio_ai.dart';
@@ -522,6 +524,12 @@ Future<BackupRecovery> captureBackupRecovery(
       File(p.join(directory.path, 'ai', name)),
     );
   }
+  for (final name in [adRuleLibraryFileName, adBlockStatsFileName]) {
+    await _copyBytesIfExists(
+      File(p.join(paths.dataDir, name)),
+      File(p.join(directory.path, 'data', name)),
+    );
+  }
   final tracks = Directory(p.join(paths.dataDir, 'karaoke', 'tracks'));
   if (await tracks.exists()) {
     await for (final entry in tracks.list()) {
@@ -605,6 +613,19 @@ Future<List<String>> restoreBackupRecovery(
     for (final name in _aiUserFiles) {
       final source = File(p.join(directory.path, 'ai', name));
       final target = File(p.join(targetDir.path, name));
+      if (await source.exists()) {
+        await _writeAtomic(target, await source.readAsBytes());
+      } else if (await target.exists()) {
+        await target.delete();
+      }
+    }
+  });
+
+  await step('去广告用户数据', () async {
+    // 与 ai/ 同样语义：备份副本里有就写回，没有就删掉——回滚必须回到快照那一刻。
+    for (final name in [adRuleLibraryFileName, adBlockStatsFileName]) {
+      final source = File(p.join(directory.path, 'data', name));
+      final target = File(p.join(paths.dataDir, name));
       if (await source.exists()) {
         await _writeAtomic(target, await source.readAsBytes());
       } else if (await target.exists()) {

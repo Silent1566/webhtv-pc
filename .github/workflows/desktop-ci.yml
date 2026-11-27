@@ -236,6 +236,7 @@ jobs:
           # 下面单独上传，artifact 名按 OS 与 shard 序号区分。
           # 汇总显示 passed 仍可能在 runner/coverage 收尾返回非零；保留原码并旁路留档。
           & ../../scripts/flutter_test_diagnostics_windows.ps1 -TotalShards 4 -ShardIndex ${{ matrix.shardIndex }}
+          if ($LASTEXITCODE -ne 0) { & ../../scripts/flutter_test_retry_load_failures.ps1 }
           exit $LASTEXITCODE
 
       - name: Upload Windows unit test diagnostics

@@ -31,9 +31,9 @@ void main() {
     expect(clean(text).text, text);
     expect(clean(text).removedSegments, 0);
   });
-  test('规则级恰好一半仍可删，清单全局标签与正片侧 KEY/MAP 保留', () {
-    // KEY/MAP 写在**保留的**首个分片之前：它们属于正片，删广告不能带走。
-    final text = manifest(['cdn.good', 'ads.example']).replaceFirst(
+  test('35% 内可删，清单全局标签与正片侧 KEY/MAP 保留', () {
+    // KEY/MAP 属于保留的首段；1/3 命中不超过 35% 安全阈值。
+    final text = manifest(['cdn.good', 'ads.example', 'cdn.good']).replaceFirst(
       '#EXTINF:10,',
       '#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,',
     );

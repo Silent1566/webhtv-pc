@@ -34,6 +34,16 @@ public final class SidecarServer {
     private final Set<String> capabilities;
     private final String siteKey;
     private final int maxWorkers;
+
+    /// 本机代理数据面自己的并发预算：与 IPC 并发**解耦**。
+    ///
+    /// manifest 的 limits.concurrency 管的是「站源方法同时跑几个」（IPC 侧防资源耗尽），
+    /// 而本机代理要同时服务播放器与站源动作（弹幕、字幕等）。直接复用会让
+    /// concurrency=1 的站点把数据面缩成单通道：任何两个重叠请求必有一个被 503 拒绝
+    /// （实测弹幕请求就是这样被拒的）。
+    static int proxyPlaneConcurrency(int declared) {
+        return Math.min(32, Math.max(4, declared));
+    }
     private final java.io.InputStream in;
     private final java.io.OutputStream out;
     private final Object writeLock = new Object();
@@ -365,7 +375,8 @@ public final class SidecarServer {
         try {
             if (capabilities.contains("proxy") && proxyHttp == null) {
                 try {
-                    proxyHttp = new SpiderProxyHttpServer(spider, maxWorkers);
+                    // 数据面用独立预算：manifest 的 concurrency 是站源方法并发，不是代理通道数。
+            proxyHttp = new SpiderProxyHttpServer(spider, proxyPlaneConcurrency(maxWorkers));
                     com.github.catvod.Proxy.bind(proxyHttp);
                     spider.attachProxyHttp();
                 } catch (java.io.IOException error) {

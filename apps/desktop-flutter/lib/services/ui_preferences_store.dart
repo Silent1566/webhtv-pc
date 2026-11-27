@@ -248,6 +248,11 @@ class UiPreferencesStore {
   /// 广告过滤总开关的**显式**设置；null 表示从未设置过（默认开启）。
   bool? _adBlockEnabled;
 
+  /// 启发式清洗的**显式**设置；null 表示从未设置过（默认关闭）。
+  ///
+  /// 与总开关分开存：五级链会误删正片，只有用户自己开过才允许生效。
+  bool? _adBlockHeuristicEnabled;
+
   /// 站点分组规则的**显式**设置；null 表示从未设置过（4 条内置全开）。
   SiteGroupSettings? _siteGroupSettings;
 
@@ -354,8 +359,7 @@ class UiPreferencesStore {
   MetaPipeline get metaPipeline => _metaPipeline ?? MetaPipeline.defaults;
 
   /// 用户手动钉住的来源身份（vod → MetaIdentity）；空表示全部走自动匹配。
-  MetaOverrideStore get metaOverrides =>
-      _metaOverrides ?? MetaOverrideStore();
+  MetaOverrideStore get metaOverrides => _metaOverrides ?? MetaOverrideStore();
 
   /// 钉住某条身份并落盘；返回是否成功。
   Future<bool> pinMetaOverride(String vodId, MetaIdentity identity) async {
@@ -470,6 +474,9 @@ class UiPreferencesStore {
 
   /// 是否显式设置过任意一份配置的站点顺序或屏蔽。
   bool get hasExplicitSiteListOverrides => _siteListOverrides.isNotEmpty;
+
+  /// 启发式清洗开关（默认关闭）。
+  bool get adBlockHeuristicEnabled => _adBlockHeuristicEnabled ?? false;
 
   /// 生效的广告过滤开关（默认开启：配置里写了规则才生效，不写就无效果）。
   bool get adBlockEnabled => _adBlockEnabled ?? true;
@@ -771,8 +778,13 @@ class UiPreferencesStore {
           _parseFailover = ParseFailoverSettings.fromJson(parseFailover);
         }
         final adBlock = decoded['adBlock'];
-        if (adBlock is Map && adBlock['enabled'] is bool) {
-          _adBlockEnabled = adBlock['enabled'] as bool;
+        if (adBlock is Map) {
+          if (adBlock['enabled'] is bool) {
+            _adBlockEnabled = adBlock['enabled'] as bool;
+          }
+          if (adBlock['heuristic'] is bool) {
+            _adBlockHeuristicEnabled = adBlock['heuristic'] as bool;
+          }
         }
         final siteGroup = decoded['siteRules'];
         if (siteGroup is Map && siteGroup.isNotEmpty) {
@@ -1128,6 +1140,13 @@ class UiPreferencesStore {
     return _persist();
   }
 
+  /// 记住启发式清洗开关。
+  Future<bool> rememberAdBlockHeuristicEnabled(bool enabled) {
+    if (_adBlockHeuristicEnabled == enabled) return Future.value(true);
+    _adBlockHeuristicEnabled = enabled;
+    return _persist();
+  }
+
   /// 记住解析接口失败切换设置。
   Future<bool> rememberParseFailover(ParseFailoverSettings settings) {
     final normalized = settings.normalized();
@@ -1314,7 +1333,9 @@ class UiPreferencesStore {
       writer: SettingsWriter.uiPreferences,
       mutate: (root) {
         final rawUi = root['ui'];
-        final ui = rawUi is Map ? Map<String, Object?>.from(rawUi) : <String, Object?>{};
+        final ui = rawUi is Map
+            ? Map<String, Object?>.from(rawUi)
+            : <String, Object?>{};
         final version = ui['metaPipelineVersion'];
         final migrateSource = version is! num || version < 1;
         final migrateImdb = _shouldMigrateImdbRating(ui);
@@ -1329,7 +1350,9 @@ class UiPreferencesStore {
         final sourceChanged = !identical(migrated, pipeline);
         if (!sourceChanged && !migrateImdb) return false;
         if (sourceChanged) {
-          for (final field in MetaField.values.where(MetaPipeline.supportsSource)) {
+          for (final field in MetaField.values.where(
+            MetaPipeline.supportsSource,
+          )) {
             final rawRule = rules[field.key];
             rules[field.key] = {
               if (rawRule is Map) ...Map<String, Object?>.from(rawRule),
@@ -1516,8 +1539,12 @@ class UiPreferencesStore {
           root['parseFailover'] = parseFailover.toJson();
         }
         final adBlockEnabled = _adBlockEnabled;
-        if (adBlockEnabled != null) {
-          root['adBlock'] = <String, Object?>{'enabled': adBlockEnabled};
+        final adBlockHeuristic = _adBlockHeuristicEnabled;
+        if (adBlockEnabled != null || adBlockHeuristic != null) {
+          root['adBlock'] = <String, Object?>{
+            'enabled': ?adBlockEnabled,
+            'heuristic': ?adBlockHeuristic,
+          };
         }
         final siteGroup = _siteGroupSettings;
         if (siteGroup != null) root['siteRules'] = siteGroup.toJson();
