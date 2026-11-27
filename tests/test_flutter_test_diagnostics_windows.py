@@ -210,10 +210,13 @@ class WindowsDiagnosticWorkflowTests(unittest.TestCase):
     def test_test_step_returns_the_diagnostic_scripts_exit_status(self):
         unit_tests = next(step for step in self.steps if step["name"] == "Unit tests")
         commands = statements(unit_tests["run"])
+        # 加载期偶发故障（flutter_tester 握手失败）由独立脚本兜底重试；诊断脚本本身',
+        # 仍然只调用一次 flutter、原样带出退出码，重试不进入它的契约。
         self.assertEqual(
             ["& ../../scripts/flutter_test_diagnostics_windows.ps1 -TotalShards 4 -ShardIndex ${{ matrix.shardIndex }}",
+             "if ($LASTEXITCODE -ne 0) { & ../../scripts/flutter_test_retry_load_failures.ps1 }",
              "exit $LASTEXITCODE"],
-            commands[-2:],
+            commands[-3:],
         )
         self.assertNotIn("continue-on-error", unit_tests)
         # 预算要跟实测走：2026-11-24 的 beta 绿跑里 Windows 全量单测 29.3 分钟，
