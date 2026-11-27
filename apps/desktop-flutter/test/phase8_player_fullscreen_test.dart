@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,7 +7,75 @@ import 'package:webhtv_pc/ui/player_page.dart';
 
 import 'support/player_page_harness.dart';
 
+MouseCursor? _activeMouseCursor(WidgetTester tester) =>
+    tester.binding.mouseTracker.debugDeviceActiveCursor(1);
+
+Future<TestGesture> _mouseOverVideo(WidgetTester tester) async {
+  final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await mouse.addPointer(location: tester.getCenter(find.byType(PlayerPage)));
+  addTearDown(mouse.removePointer);
+  await tester.pump();
+  return mouse;
+}
+
 void main() {
+  testWidgets('全屏光标静止后隐藏，移动或退出全屏立即显示', (tester) async {
+    await pumpPlayerPage(tester, trackFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    expect(windowManagerFullscreen, isTrue);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump();
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    expect(windowManagerFullscreen, isFalse);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+  });
+
+  testWidgets('全屏鼠标移动只延长光标显现，不重置控制栏计时', (tester) async {
+    await pumpPlayerPage(tester, trackFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+    final state = tester.state<State<PlayerPage>>(find.byType(PlayerPage));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump(const Duration(seconds: 1));
+    expect(debugPlayerControlsVisible(state), isFalse);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+  });
+
+  testWidgets('应用已全屏时隐藏光标，返回不退出应用全屏', (tester) async {
+    await pumpPlayerPage(tester, pushRoute: true, initiallyFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump();
+    await tester.tap(find.byType(BackButton));
+    await settlePlayerPage(tester);
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(windowManagerFullscreen, isTrue);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+  });
+
   List<String> methods() =>
       windowManagerCalls.map((c) => c.method).toList(growable: false);
 
