@@ -1009,46 +1009,73 @@ class PlayerControlOverlay extends StatelessWidget {
         // 顶栏。放在两条纱之后 = 画在纱之上。
         Positioned(top: 0, left: 0, right: 0, child: topBar),
         // 底栏：进度行 + 动作行，贴着底边往上排。
+        //
+        // 整块再包一层 [_BottomBarHitArea]：底栏的空白（上下 padding、行间
+        // 留白）也是底栏，点它必须什么都不发生。缺这一层时那些像素会继续
+        // 落到下层画面手势上——画面单击是播放/暂停，用户看到的就是
+        // 「点进度条差几像素 → 没跳进度，反而暂停了」。
         Positioned(
           bottom: 0,
           left: 0,
           right: 0,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.md,
-              vertical: AppSpace.sm,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              // **必须 stretch**：`Column` 的默认 `crossAxisAlignment` 是
-              // `center`，那样两个孩子都只拿到松散宽度——进度行（一个
-              // `SizedBox(height: 32)` 之类的空盒子）会缩成 0 宽并被水平居中。
-              // `design/03` §5.4 要求「进度行是独立的 Row，始终占满宽度」。
-              //
-              // 动作行的**内容**居中是这个 `Column` 之外的事（见
-              // [PlayerOverlayActionRow] 的 `LayoutBuilder` + `minWidth`）：
-              // 靠这里松弛居中做不到——那样动作行的盒子本身会缩成内容宽，
-              // 溢出时连滚动视口都不存在了。所以这里保持 stretch，
-              // 让动作行自己拿到通栏宽度、自己决定内容怎么排。
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (extraRow != null) ...[
-                  extraRow!,
+          child: _BottomBarHitArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.md,
+                vertical: AppSpace.sm,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                // **必须 stretch**：`Column` 的默认 `crossAxisAlignment` 是
+                // `center`，那样两个孩子都只拿到松散宽度——进度行（一个
+                // `SizedBox(height: 32)` 之类的空盒子）会缩成 0 宽并被水平居中。
+                // `design/03` §5.4 要求「进度行是独立的 Row，始终占满宽度」。
+                //
+                // 动作行的**内容**居中是这个 `Column` 之外的事（见
+                // [PlayerOverlayActionRow] 的 `LayoutBuilder` + `minWidth`）：
+                // 靠这里松弛居中做不到——那样动作行的盒子本身会缩成内容宽，
+                // 溢出时连滚动视口都不存在了。所以这里保持 stretch，
+                // 让动作行自己拿到通栏宽度、自己决定内容怎么排。
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (extraRow != null) ...[
+                    extraRow!,
+                    const SizedBox(height: AppSpace.xs),
+                  ],
+                  progressRow,
                   const SizedBox(height: AppSpace.xs),
+                  PlayerOverlayActionRow(
+                    buttons: actionButtons,
+                    groups: actionGroups,
+                  ),
                 ],
-                progressRow,
-                const SizedBox(height: AppSpace.xs),
-                PlayerOverlayActionRow(
-                  buttons: actionButtons,
-                  groups: actionGroups,
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ],
     );
   }
+}
+
+/// 底栏的命中底板：整块吸收指针，但不参与任何手势竞争。
+///
+/// 用 `Listener` 而不是 `GestureDetector(onTap: () {})`：后者会往手势竞技场
+/// 里塞一个 TapRecognizer，滑杆的点击/拖动与按钮的 InkWell 都要先跟它抢；
+/// `Listener` 只做命中测试、不消费事件，子节点语义零变化。
+///
+/// 也不能用 `AbsorbPointer`：它把**子树**一起吃掉，进度条就点不动了。
+///
+/// 只盖底栏自己的盒子，浮层中部仍是空的——`design/01` §7 A3 要求画面上的
+/// 单击/双击能穿过浮层中部打到下层，这条约束不受影响。
+class _BottomBarHitArea extends StatelessWidget {
+  const _BottomBarHitArea({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      Listener(behavior: HitTestBehavior.opaque, child: child);
 }
 
 /// 跳转失败后的两个恢复出口（`docs/reference/xiugou-tv-borrowings.md` §3.2）。
