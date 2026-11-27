@@ -151,9 +151,23 @@ public class DexNative {
     }
 
     public static Method proxyMethod(Class<?> fallback) {
+        return proxyMethod(fallback, null);
+    }
+
+    public static boolean supportsSpiderProxy(Object spider) {
+        return proxyMethod(spider.getClass(), spider) != null;
+    }
+
+    private static Method proxyMethod(Class<?> fallback, Object receiver) {
         Class<?> target = proxyTarget(fallback);
-        Method cached = PROXY_METHODS.get(target);
-        if (cached != null) return cached;
+        Method method = PROXY_METHODS.computeIfAbsent(target, DexNative::findProxyMethod);
+        if (method != null && !Modifier.isStatic(method.getModifiers()) && !target.isInstance(receiver)) {
+            throw new IllegalStateException("实例代理处理器需要匹配的站源实例");
+        }
+        return method;
+    }
+
+    private static Method findProxyMethod(Class<?> target) {
         ClassLoader loader = target.getClassLoader();
         try {
             Class<?> router = Class.forName("com.github.catvod.spider.ProxyOrigin", false, loader);
@@ -161,7 +175,6 @@ public class DexNative {
                 Method method = router.getMethod("proxy", Map.class);
                 if (!Modifier.isStatic(method.getModifiers()) || method.getReturnType() != Object[].class)
                     throw new IllegalStateException("代理路由必须是静态 Object[] 方法");
-                PROXY_METHODS.put(target, method);
                 return method;
             }
         } catch (ClassNotFoundException | NoSuchMethodException absent) {
@@ -169,10 +182,9 @@ public class DexNative {
         }
         try {
             Method method = target.getMethod("proxy", Map.class);
-            if (!Modifier.isStatic(method.getModifiers()) || method.getReturnType() != Object[].class)
-                throw new IllegalStateException("代理处理器必须是静态 Object[] 方法");
+            if (method.getReturnType() != Object[].class)
+                throw new IllegalStateException("代理处理器必须返回 Object[]");
             if (target.getName().equals("com.github.catvod.spider.Proxy")) return null;
-            PROXY_METHODS.put(target, method);
             return method;
         } catch (NoSuchMethodException absent) {
             return null;
@@ -194,10 +206,18 @@ public class DexNative {
     }
 
     public static Object[] invokeProxy(Class<?> fallback, Map<?, ?> arguments) {
-        Method method = proxyMethod(fallback);
+        return invokeProxy(fallback, null, arguments);
+    }
+
+    public static Object[] invokeSpiderProxy(Object spider, Map<?, ?> arguments) {
+        return invokeProxy(spider.getClass(), spider, arguments);
+    }
+
+    private static Object[] invokeProxy(Class<?> fallback, Object receiver, Map<?, ?> arguments) {
+        Method method = proxyMethod(fallback, receiver);
         if (method == null) throw new UnsupportedOperationException("站源没有代理路由");
         try {
-            Object result = method.invoke(null, arguments);
+            Object result = method.invoke(Modifier.isStatic(method.getModifiers()) ? null : receiver, arguments);
             if (result instanceof Object[] array) return array;
             throw new IllegalStateException("代理路由未返回 Object[]");
         } catch (InvocationTargetException error) {

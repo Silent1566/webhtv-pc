@@ -281,15 +281,21 @@ public final class ProxyHttpContractTest {
         Class<?> type=Class.forName("webhtv.spider.SpiderProxyHttpServer");
         AtomicLong clock=new AtomicLong(System.nanoTime());
         Constructor<?> c=type.getDeclaredConstructor(Spider.class,int.class,java.util.function.LongSupplier.class);c.setAccessible(true);
-        Object server=c.newInstance(new Fixture(),1,(java.util.function.LongSupplier)clock::get);
+        // Reserve a worker for the expiry request while the original stream is open.
+        Object server=c.newInstance(new Fixture(),2,(java.util.function.LongSupplier)clock::get);
         type.getMethod("markReady").invoke(server);
         Method control=type.getDeclaredMethod("control",Map.class);control.setAccessible(true);
         String entry=String.valueOf(map(control.invoke(server,Map.of("op","session.open","sessionId","expiry","token",TOKEN,"ttlMs",120000))).get("entryUrl"));
-        try{
-            status(entry,200);int before=closed.get();HttpResponse<InputStream> active=request(entry+"?endless=1","GET",null,null);
-            clock.addAndGet(TimeUnit.SECONDS.toNanos(121));status(entry,403);awaitClosed(before);active.body().close();
-        }
-        finally{((AutoCloseable)server).close();}
+        try {
+            int before = closed.get();
+            HttpResponse<InputStream> active = request(entry + "?endless=1", "GET", null, null);
+            try (InputStream activeBody = active.body()) {
+                check(active.statusCode() == 200, "stream active before expiry");
+                clock.addAndGet(TimeUnit.SECONDS.toNanos(121));
+                status(entry, 403);
+                awaitClosed(before);
+            }
+        } finally { ((AutoCloseable) server).close(); }
     }
     static void shellRouterContract() throws Exception {
         Path root=Path.of(".probe/proxy-bridge/jvm/generated-shell").toAbsolutePath();Files.createDirectories(root);
@@ -317,6 +323,54 @@ public final class ProxyHttpContractTest {
             }
         } finally {if(previous==null)System.clearProperty("webhtv.shellPayload");else System.setProperty("webhtv.shellPayload",previous);}
     }
+    public static final class InstanceProxyFixture extends com.github.catvod.crawler.Spider {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        public Object[] proxy(Map<String, String> params) {
+            calls.incrementAndGet();
+            byte[] payload = ("instance-proxy:" + params.get("id")).getBytes(StandardCharsets.UTF_8);
+            return new Object[]{200, "text/plain", new ByteArrayInputStream(payload)};
+        }
+    }
+
+    static void instanceProxyContract() throws Exception {
+        InstanceProxyFixture source = new InstanceProxyFixture();
+        try (Client client = new Client(new CatVodSpiderAdapter(source, null), true, true)) {
+            Map<String, Object> init = client.init();
+            check(map(init.get("extensions")).containsKey("proxyHttp"), "instance proxy negotiated");
+            String entry = String.valueOf(client.control("session.open", "instance", TOKEN).get("entryUrl"));
+            check(body(request(entry + "?id=fixture", "GET", null, null)).equals("instance-proxy:fixture"),
+                    "proxy request reaches the loaded spider instance");
+            check(source.calls.get() == 1, "the loaded instance handled the request exactly once");
+        }
+        try (Client client = new Client(new CatVodSpiderAdapter(source, null), false, true)) {
+            check(!client.init().containsKey("extensions"), "instance proxy still requires manifest permission");
+        }
+        try (Client client = new Client(new CatVodSpiderAdapter(source, null), true, false)) {
+            check(!client.init().containsKey("extensions"), "instance proxy still requires manifest capability");
+        }
+        try {
+            com.github.catvod.spider.DexNative.proxyInvoke(InstanceProxyFixture.class, Map.of());
+            throw new AssertionError("cached instance method must not be usable without a receiver");
+        } catch (IllegalStateException expected) {
+            check(source.calls.get() == 1, "class-only shell ABI never invokes the cached instance handler");
+        }
+    }
+
+    public static final class StaticProxyFixture extends com.github.catvod.crawler.Spider {
+        public static Object[] proxy(Map<String, String> params) {
+            return new Object[]{200, "text/plain", new ByteArrayInputStream("static-proxy".getBytes(StandardCharsets.UTF_8))};
+        }
+    }
+
+    static void staticProxyContract() throws Exception {
+        try (Client client = new Client(new CatVodSpiderAdapter(new StaticProxyFixture(), null), true, true)) {
+            check(map(client.init().get("extensions")).containsKey("proxyHttp"), "static fallback negotiated");
+            String entry = String.valueOf(client.control("session.open", "static", TOKEN).get("entryUrl"));
+            check(body(request(entry, "GET", null, null)).equals("static-proxy"), "static direct fallback retained");
+        }
+    }
+
     static void routerContract() throws Exception {
         Path root=Path.of(".probe/proxy-bridge/jvm/generated").toAbsolutePath();Files.createDirectories(root);
         Path router=root.resolve("ProxyOrigin.java");Path target=root.resolve("FixtureCat.java");
@@ -338,6 +392,8 @@ public final class ProxyHttpContractTest {
     }
     public static void main(String[] args) throws Exception {
         Thread watchdog=new Thread(()->{try{Thread.sleep(45000);System.err.println("FAIL native fixture exceeded45s");System.exit(9);}catch(InterruptedException done){}},"fixture-deadline");watchdog.setDaemon(true);watchdog.start();
+        instanceProxyContract();
+        staticProxyContract();
         mainContract();stalledConsumerContract();initializationFailureContract();expiryContract();routerContract();logContract();shellRouterContract();
         check(closed.get()==opened.get(),"all acquired source streams closed");
         watchdog.interrupt();
