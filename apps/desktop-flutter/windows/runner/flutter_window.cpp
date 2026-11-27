@@ -50,6 +50,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  FinishWindowTransition();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -61,6 +62,52 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  constexpr UINT begin_transition = WM_APP + 0x481;
+  constexpr UINT finish_transition = WM_APP + 0x482;
+  constexpr UINT request_target_frame = WM_APP + 0x483;
+  constexpr UINT target_frame_presented = WM_APP + 0x484;
+  constexpr UINT_PTR transition_timer = 0x485;
+  if (message == begin_transition) {
+    if (fullscreen_frame_.Begin(hwnd)) {
+      ++frame_transition_generation_;
+      // A recovery bound, not a delay: normal handoff is driven by presented frames.
+      if (!SetTimer(hwnd, transition_timer, 1000, nullptr))
+        FinishWindowTransition();
+    }
+    return fullscreen_frame_.active() ? 1 : 0;
+  }
+  if (message == finish_transition) {
+    if (fullscreen_frame_.active()) {
+      pending_frame_generation_ = frame_transition_generation_;
+      pending_frame_phase_ = 0;
+      RequestWindowTransitionFrame();
+    }
+    return 0;
+  }
+  if (message == request_target_frame || message == target_frame_presented) {
+    frame_callback_pending_ = false;
+    if (fullscreen_frame_.active()) {
+      if (wparam == frame_transition_generation_) {
+        if (message == target_frame_presented) {
+          FinishWindowTransition();
+          return 0;
+        }
+        pending_frame_generation_ = frame_transition_generation_;
+        pending_frame_phase_ = 1;
+      }
+      RequestWindowTransitionFrame();
+    }
+    return 0;
+  }
+  if (message == WM_TIMER && wparam == transition_timer) {
+    FinishWindowTransition();
+    return 0;
+  }
+  if ((message == WM_ACTIVATE && LOWORD(wparam) == WA_INACTIVE) ||
+      (message == WM_SHOWWINDOW && !wparam) ||
+      (message == WM_SIZE && wparam == SIZE_MINIMIZED))
+    FinishWindowTransition();
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -78,4 +125,29 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::FinishWindowTransition() {
+  ++frame_transition_generation_;
+  if (GetHandle())
+    KillTimer(GetHandle(), 0x485);
+  fullscreen_frame_.End();
+  if (GetHandle())
+    SendMessage(GetHandle(), WM_APP + 0x486, 0, 0);
+}
+
+void FlutterWindow::RequestWindowTransitionFrame() {
+  if (frame_callback_pending_ || !fullscreen_frame_.active() ||
+      !flutter_controller_ || pending_frame_generation_ != frame_transition_generation_)
+    return;
+  const HWND hwnd = GetHandle();
+  const auto generation = pending_frame_generation_;
+  const UINT next = WM_APP + (pending_frame_phase_ == 0 ? 0x483 : 0x484);
+  frame_callback_pending_ = true;
+  // The SDK wrapper owns one slot; never replace it until its posted completion
+  // has returned to this window, including after an aborted/overlapped request.
+  flutter_controller_->engine()->SetNextFrameCallback([hwnd, generation, next]() {
+    PostMessage(hwnd, next, generation, 0);
+  });
+  flutter_controller_->ForceRedraw();
 }
