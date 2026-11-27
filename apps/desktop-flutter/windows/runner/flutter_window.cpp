@@ -32,6 +32,8 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   webhtv::NativeTrace::Mark("plugins-registered");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  player_menu_popup_ = std::make_unique<PlayerMenuPopup>(
+      GetHandle(), *flutter_controller_, project_);
   webhtv::NativeTrace::Mark("child-content-set");
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -50,6 +52,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  player_menu_popup_.reset();
   FinishWindowTransition();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -107,6 +110,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       (message == WM_SHOWWINDOW && !wparam) ||
       (message == WM_SIZE && wparam == SIZE_MINIMIZED))
     FinishWindowTransition();
+
+  // Reactivating the player dismisses a native menu without passing that click to playback.
+  if (message == WM_MOUSEACTIVATE && HIWORD(lparam) == WM_LBUTTONDOWN &&
+      player_menu_popup_ && player_menu_popup_->visible()) {
+    webhtv::NativeTrace::Mark("player-menu-outside-click-consumed");
+    return MA_ACTIVATEANDEAT;
+  }
 
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {

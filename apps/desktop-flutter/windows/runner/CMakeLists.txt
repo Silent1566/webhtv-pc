@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "fullscreen_frame.cpp"
   "main.cpp"
   "native_trace.cpp"
+  "player_menu_popup.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
