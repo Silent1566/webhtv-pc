@@ -11,6 +11,8 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/ad_block_stats.dart';
+import '../core/ad_rule_library.dart';
 import '../core/backup_manifest.dart';
 import 'backup_archive_reader.dart';
 import 'app_paths.dart';
@@ -19,6 +21,10 @@ import 'storage.dart';
 import 'ai_integration.dart';
 
 export 'backup_archive_reader.dart' show BackupReadLimits;
+
+/// 去广告用户数据在备份包里的条目名（与磁盘文件名分开：包内是逻辑名）。
+const adRuleLibraryBackupFile = 'ad-rule-library.json';
+const adBlockStatsBackupFile = 'ad-block-stats.json';
 
 class BackupCreateResult {
   const BackupCreateResult({
@@ -99,6 +105,12 @@ class BackupService {
           ? await settingsFile.readAsBytes()
           : Uint8List(0);
       final reader = File(p.join(paths.configDir, 'reader_tts.json'));
+      // 去广告的两份用户数据都落在数据目录根部：规则库丢了用户要重配，
+      // 统计丢了只是历史归零。两者都随备份走，缺文件就不打包（不造空壳）。
+      final adRuleLibrary = File(
+        p.join(paths.dataDir, adRuleLibraryFileName),
+      );
+      final adBlockStats = File(p.join(paths.dataDir, adBlockStatsFileName));
       final auxiliary = <String, Uint8List>{
         karaokeBackupUserDataFile: Uint8List.fromList(
           utf8.encode(await exportKaraokeUserFiles(paths)),
@@ -108,6 +120,10 @@ class BackupService {
         ),
         if (await reader.exists())
           aiBackupReaderFile: await reader.readAsBytes(),
+        if (await adRuleLibrary.exists())
+          adRuleLibraryBackupFile: await adRuleLibrary.readAsBytes(),
+        if (await adBlockStats.exists())
+          adBlockStatsBackupFile: await adBlockStats.readAsBytes(),
       };
       final manifest = buildBackupManifest(
         files: {
@@ -236,6 +252,8 @@ class BackupService {
         aiBackupUserDataFile,
         aiBackupReaderFile,
         karaokeBackupUserDataFile,
+        adRuleLibraryBackupFile,
+        adBlockStatsBackupFile,
       ])
         if (files[name] != null) name: files[name]!,
     };
@@ -249,6 +267,18 @@ class BackupService {
       if (auxiliary[aiBackupReaderFile] case final bytes?) {
         if (jsonDecode(utf8.decode(bytes)) is! Map) {
           throw const FormatException('阅读器偏好损坏');
+        }
+      }
+      // 去广告两份都用同一套判定：必须是 JSON 对象，且规则库要带 entries 列表。
+      if (auxiliary[adRuleLibraryBackupFile] case final bytes?) {
+        final decoded = jsonDecode(utf8.decode(bytes));
+        if (decoded is! Map || decoded['entries'] is! List) {
+          throw const FormatException('本地规则库损坏');
+        }
+      }
+      if (auxiliary[adBlockStatsBackupFile] case final bytes?) {
+        if (jsonDecode(utf8.decode(bytes)) is! Map) {
+          throw const FormatException('拦截统计损坏');
         }
       }
     } catch (error) {

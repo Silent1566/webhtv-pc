@@ -3,9 +3,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/ad_block_stats.dart';
+import 'package:webhtv_pc/core/ad_rule_library.dart';
 import 'package:webhtv_pc/core/backup_manifest.dart';
+import 'package:webhtv_pc/services/backup_service.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
@@ -60,11 +64,7 @@ void main() {
         databaseSchema: 5,
       );
       expect(
-        validateBackup(
-          manifest: manifest,
-          files: files,
-          supportedSchema: 5,
-        ).ok,
+        validateBackup(manifest: manifest, files: files, supportedSchema: 5).ok,
         isTrue,
       );
 
@@ -102,11 +102,7 @@ void main() {
 
     test('清单重复路径/不安全路径被拒绝', () {
       final bytes = Uint8List.fromList([1]);
-      final entry = BackupEntry(
-        path: 'a',
-        size: 1,
-        sha256: sha256Hex(bytes),
-      );
+      final entry = BackupEntry(path: 'a', size: 1, sha256: sha256Hex(bytes));
       final duplicated = BackupManifest(
         format: backupFormatName,
         version: 1,
@@ -131,9 +127,7 @@ void main() {
         createdAt: 1,
         appVersion: 'x',
         databaseSchema: 5,
-        entries: [
-          BackupEntry(path: '../x', size: 1, sha256: sha256Hex(bytes)),
-        ],
+        entries: [BackupEntry(path: '../x', size: 1, sha256: sha256Hex(bytes))],
         stats: BackupStats.empty,
       );
       expect(
@@ -326,6 +320,117 @@ void main() {
         find.byKey(const ValueKey('backup-output-path')),
       );
       expect(field.controller!.text, contains('webhtv-backup-'));
+    });
+  });
+
+  group('去广告用户数据随备份迁移', () {
+    late Directory temp;
+    late AppPaths paths;
+    late AppState state;
+
+    setUp(() async {
+      temp = Directory.systemTemp.createTempSync('webhtv-ad-backup');
+      paths = AppPaths.resolve(
+        overrides: {
+          'config': p.join(temp.path, 'config'),
+          'data': p.join(temp.path, 'data'),
+          'cache': p.join(temp.path, 'cache'),
+          'state': p.join(temp.path, 'logs'),
+        },
+      );
+      state = AppState(paths: paths, log: LogService());
+      await state.bootstrap();
+    });
+
+    tearDown(() {
+      state.dispose();
+      try {
+        temp.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    String backupPath() => p.join(temp.path, 'backup.zip');
+    String libraryPath() => p.join(paths.dataDir, 'ad_rule_library.json');
+    String statsPath() => p.join(paths.dataDir, 'ad_block_stats.json');
+
+    void seed() {
+      expect(
+        state.adRuleLibrary.add(
+          AdRuleEntry(id: 'mine', name: '我的规则', ads: ['ads.example']),
+        ),
+        isTrue,
+      );
+      expect(
+        state.adBlockStats.store.record([
+          AdBlockLog(
+            blockedAt: 1,
+            siteKey: 'demo',
+            siteName: '甲站',
+            pipeline: 'HLS',
+            adDomain: 'ads.example',
+            ruleId: 'ads',
+            segmentStartSeconds: 12,
+            segmentDurationSeconds: 6,
+          ),
+        ]),
+        isTrue,
+      );
+    }
+
+    test('备份包含两份文件；恢复后磁盘与内存都回到备份时的样子', () async {
+      seed();
+      final created = await state.createBackup(outputPath: backupPath());
+      expect(created.ok, isTrue, reason: created.message);
+      final names = ZipDecoder()
+          .decodeBytes(File(backupPath()).readAsBytesSync())
+          .map((file) => file.name)
+          .toSet();
+      expect(names, contains(adRuleLibraryBackupFile));
+      expect(names, contains(adBlockStatsBackupFile));
+
+      // 模拟用户把规则删了、统计清了：磁盘与内存都空。
+      expect(state.adRuleLibrary.remove('mine'), isTrue);
+      expect(state.adBlockStats.store.reset(), isTrue);
+      expect(state.adRuleLibrary.entries, isEmpty);
+      expect(state.adBlockStats.stats.totalBlocked, 0);
+
+      final error = await state.restoreBackup(backupPath());
+      expect(error, isNull, reason: error);
+      expect(File(libraryPath()).readAsStringSync(), contains('我的规则'));
+      expect(state.adRuleLibrary.entries.map((entry) => entry.name), [
+        '我的规则',
+      ], reason: '恢复后必须重建内存里的规则库，否则界面还显示空库');
+      expect(state.adBlockStats.stats.totalBlocked, 1);
+    });
+
+    test('备份时没有这两份文件：恢复成功，本地规则库不被删', () async {
+      // 旧版本应用打出来的备份就长这样：清单里没有这两个条目。
+      final created = await state.createBackup(outputPath: backupPath());
+      expect(created.ok, isTrue, reason: created.message);
+
+      // 备份之后用户才配了规则、攒了统计。
+      seed();
+      final before = File(libraryPath()).readAsStringSync();
+
+      final error = await state.restoreBackup(backupPath());
+      expect(error, isNull, reason: error);
+      expect(
+        File(libraryPath()).readAsStringSync(),
+        before,
+        reason: '备份里没有这一份时不许删除或覆盖本地已有的规则库',
+      );
+    });
+
+    test('重置本地数据会清掉规则库与统计', () async {
+      seed();
+      expect(File(libraryPath()).existsSync(), isTrue);
+      expect(File(statsPath()).existsSync(), isTrue);
+      final error = await state.resetAllData();
+      expect(error, isNull, reason: error);
+      expect(File(libraryPath()).existsSync(), isFalse);
+      expect(File(statsPath()).existsSync(), isFalse);
+      expect(state.adRuleLibrary.entries, isEmpty);
+      expect(state.adBlockStats.stats.totalBlocked, 0);
     });
   });
 }

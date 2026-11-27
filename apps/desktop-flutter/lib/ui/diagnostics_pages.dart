@@ -14,6 +14,7 @@ import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'ai_settings_page.dart';
+import 'ad_block_page.dart';
 import 'ai_integration_widgets.dart';
 import 'app.dart';
 import 'app_update_page.dart';
@@ -439,6 +440,14 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           value: state.adBlockEnabled,
           onChanged: state.setAdBlockEnabled,
         ),
+        SettingsNavRow(
+          key: const ValueKey('settings-ad-block-open'),
+          icon: Icons.shield_outlined,
+          title: '去广告',
+          subtitleKey: const ValueKey('settings-ad-block-summary'),
+          subtitle: _adBlockSummary(state),
+          onTap: () => _push(context, AdBlockPage(state: state)),
+        ),
         _switch(
           key: const ValueKey('settings-parse-failover'),
           icon: Icons.swap_calls,
@@ -742,6 +751,15 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   }
 
   String _onOff(bool value) => value ? '开' : '关';
+
+  /// 「去广告」一行的摘要：只写用户要判断的两件事——开没开、有没有规则。
+  String _adBlockSummary(AppState state) {
+    if (!state.adBlockEnabled) return '已关闭';
+    final library = state.adRuleLibrary;
+    final enabled = library.entries.where((entry) => entry.enabled).length;
+    return '规则 ${library.entries.length} 组（$enabled 启用）'
+        '${state.adBlockHeuristicEnabled ? ' · 启发式开' : ''}';
+  }
 
   /// 直播回退开关的一句话摘要（副标题用）。
   String _liveSummary() {
