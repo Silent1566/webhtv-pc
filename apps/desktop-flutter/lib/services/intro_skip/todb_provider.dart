@@ -84,6 +84,7 @@ class TodbProvider extends IntroSkipProvider {
             kind: kind,
             provider: id,
             identity: 'todb|$versionId|${_idOf(marker['marker_id'])}',
+            versionId: versionId,
             startMs: start,
             endMs: end,
             referenceDurationMs: reference,

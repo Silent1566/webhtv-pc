@@ -94,7 +94,7 @@ class MetaFieldRule {
       for (final item in rawOrder) {
         final kind = MetaSourceKind.parse(item);
         if (kind != null &&
-            (kind != MetaSourceKind.source || MetaPipeline.supportsSource(field)) &&
+            MetaPipeline.supports(kind, field) &&
             !order.contains(kind)) {
           order.add(kind);
         }
@@ -103,9 +103,10 @@ class MetaFieldRule {
     return MetaFieldRule(
       field: field,
       mode: mode,
-      // 作品字段保留显式空顺序，避免重新启用用户停用的来源。
+      // 作品与评分字段保留显式空顺序，避免重新启用用户停用的来源。
       order: order.isEmpty &&
-              !(rawOrder is List && rawOrder.isEmpty && MetaPipeline.supportsSource(field))
+              !(rawOrder is List && rawOrder.isEmpty &&
+                  (MetaPipeline.supportsSource(field) || field == MetaField.rating))
           ? fallback.order
           : order,
     );
@@ -170,6 +171,7 @@ class MetaPipeline {
           MetaSourceKind.tmdb,
           MetaSourceKind.douban,
           MetaSourceKind.bangumi,
+          MetaSourceKind.imdb,
         ]),
         MetaField.comments => _aggregate(field, const [
           MetaSourceKind.douban,
@@ -202,9 +204,15 @@ class MetaPipeline {
   /// 该字段按顺序尝试的来源（聚合模式同样按此顺序拼接）。
   List<MetaSourceKind> orderOf(MetaField field) => ruleOf(field).order;
 
+  /// 来源可用于哪些字段；IMDb 仅提供评分。
+  static bool supports(MetaSourceKind kind, MetaField field) => switch (kind) {
+    MetaSourceKind.imdb => field == MetaField.rating,
+    MetaSourceKind.source => defaults.ruleOf(field).order.contains(kind),
+    _ => true,
+  };
+
   /// 爬虫源只提供当前资源自身的十个作品字段。
-  static bool supportsSource(MetaField field) =>
-      defaults.ruleOf(field).order.contains(MetaSourceKind.source);
+  static bool supportsSource(MetaField field) => supports(MetaSourceKind.source, field);
 
   /// 为新增爬虫源之前保存的规则追加末位兜底；存储层负责仅迁移一次。
   MetaPipeline withSourceFallbackAdded() {
@@ -220,15 +228,15 @@ class MetaPipeline {
     return result;
   }
 
-  /// 勾选/取消一个来源；作品字段允许全部停用，其余字段保留默认顺序。
+  /// 勾选/取消一个来源；作品与评分字段允许全部停用，其余字段保留默认顺序。
   MetaPipeline toggleSource(MetaField field, MetaSourceKind source) {
-    if (source == MetaSourceKind.source && !supportsSource(field)) return this;
+    if (!supports(source, field)) return this;
     final rule = ruleOf(field);
     final order = [...rule.order];
     if (!order.remove(source)) order.add(source);
     return withRule(
       rule.copyWith(
-        order: order.isEmpty && !supportsSource(field)
+        order: order.isEmpty && !supportsSource(field) && field != MetaField.rating
             ? defaults.ruleOf(field).order
             : order,
       ),

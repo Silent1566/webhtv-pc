@@ -17,6 +17,7 @@ import '../core/detail_source_merge.dart';
 import '../core/episode_aggregation.dart';
 import '../core/episode_manual_match.dart';
 import 'detail_recommendation_state.dart';
+import 'home_hero_session.dart';
 
 import 'dart:convert';
 import 'dart:ffi' show Abi;
@@ -24,6 +25,7 @@ import 'dart:io';
 
 import '../services/external_player.dart';
 import '../services/external_url.dart';
+import '../services/imdb_rating_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -2104,6 +2106,8 @@ class AppState extends ChangeNotifier
       _detailRatingService ??= DetailRatingService.fromServices(
         cacheDirectory: Directory(paths.cacheDir),
         log: log,
+        imdb: imdbRatingService,
+        imdbEnabled: () => imdbRatingEnabled,
       );
 
   DetailRatingService? _detailRatingService;
@@ -2131,6 +2135,9 @@ class AppState extends ChangeNotifier
           );
         },
         log: (message) => log.info(message, scope: 'metadata'),
+        // IMDb 分只能按 imdb_id 取：本机实测标题页会被 AWS WAF 挑战拦成 202 空
+        // body，服务内部改走 GraphQL；失败一律退化成空值，不影响其它来源。
+        imdbRating: (imdbId) => imdbRatingService.byImdbId(imdbId),
         douban: DoubanRecommendationService(
           cacheDirectory: Directory(
             '${paths.cacheDir}${Platform.pathSeparator}douban_meta',
@@ -2144,6 +2151,15 @@ class AppState extends ChangeNotifier
       );
 
   ExternalMetaService? _externalMetaService;
+
+  /// IMDb 评分查询（无 OMDb Key 时的实际通道，见 `ImdbRatingService`）。
+  ImdbRatingService get imdbRatingService =>
+      _imdbRatingService ??= ImdbRatingService(log: log);
+
+  ImdbRatingService? _imdbRatingService;
+
+  bool get imdbRatingEnabled => externalMetaEnabled &&
+      metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
 
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
 
@@ -2210,6 +2226,18 @@ class AppState extends ChangeNotifier
                 recommendationSeedForHistory(row),
             ],
           );
+
+  /// 首页的会话级推荐状态：切到别的页面再回来仍要看到同一份已就绪内容。
+  ///
+  /// 惰性创建、随 `AppState` 一起销毁：它是**应用会话**的资源，不是某个
+  /// `HomePage` 页面的。页面销毁只解除订阅，在途任务照常收尾。
+  HomeHeroSession? _homeHeroSession;
+  HomeHeroSession get homeHeroSession =>
+      _homeHeroSession ??= HomeHeroSession(this, clock: heroSessionClock);
+
+  /// 会话的时钟来源：默认取真实时间，测试可覆盖以确定性地验证过期复核。
+  @protected
+  DateTime Function() get heroSessionClock => DateTime.now;
 
   /// 把一条历史行映射成推荐种子。
   ///
@@ -5200,9 +5228,9 @@ class AppState extends ChangeNotifier
 
   /// 用系统默认浏览器打开外部链接（相关视频，`04` §7.2）。
   ///
-  /// 平台命令集中在 `ExternalUrl`：Windows `explorer.exe`、Linux `xdg-open`、
+  /// 平台命令集中在 `ExternalUrl`：Windows `ShellExecuteW`、Linux `xdg-open`、
   /// macOS `/usr/bin/open`。不用 `url_launcher` 是为了避开 Windows 插件工程
-  /// 与 CMake 变更（Windows 自带的 `explorer.exe <url>` 已处理默认浏览器）。
+  /// 与 CMake 变更。Windows 直接按系统 URL 关联派发，不经过资源管理器。
   /// 返回是否已交给操作系统，不保证页面已加载；失败时 UI 复制链接兜底。
   Future<bool> openExternalUrl(String url) async {
     final result = await ExternalUrl.open(url);
@@ -11792,6 +11820,23 @@ class AppState extends ChangeNotifier
   /// 当前播放会话的代理 token 指纹（供设置页显示，不回显完整 token）。
   String? get proxySessionFingerprint => _proxySession?.fingerprint;
 
+  /// 把「下一步可能要跳去的目标」交给本地代理预取。
+  ///
+  /// 代理是 AppState 私有持有的，播放页只能通过这里下单；没有代理进程时静默
+  /// 忽略——预取只是加速手段，任何调用都不该影响播放本身。
+  void primeSkipPrefetch(Iterable<Uri> targets) {
+    if (!_proxy.isRunning) return;
+    _proxy.primePrefetch(targets);
+  }
+
+  /// 取消跳段预取；换媒体或关闭开关时清缓存。
+  ///
+  /// 同媒体安全跳转只取消排队/在途取数，保留已下载分片供后续打开命中。
+  void cancelSkipPrefetch({bool clearCache = true}) {
+    if (!_proxy.isRunning) return;
+    _proxy.cancelPrefetch(clearCache: clearCache);
+  }
+
   /// 启动本地代理（只监听 127.0.0.1）。
   ///
   /// 端口**优先用 9978**，与 Android 宿主一致：安卓参考实现就是
@@ -12510,9 +12555,12 @@ class AppState extends ChangeNotifier
     _importService.close();
     _liveService?.close();
     _epgService?.close();
+    _homeHeroSession?.dispose();
+    _homeHeroSession = null;
     _recommendationDependencies?.close();
     _detailRatingService?.close();
     _externalMetaService?.close();
+    _imdbRatingService?.close();
     _tmdbService.close();
     if (identical(TmdbImageHealth.onFailure, _imageHealthSink)) {
       TmdbImageHealth.onFailure = null;

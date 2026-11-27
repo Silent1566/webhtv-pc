@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/core/external_meta.dart';
+import 'package:webhtv_pc/core/imdb_rating.dart';
 import 'package:webhtv_pc/core/meta_source.dart';
 import 'package:webhtv_pc/core/meta_pipeline.dart';
 import 'package:webhtv_pc/core/protocol.dart';
@@ -26,6 +27,252 @@ const subject = {'id':'35588177','title':'漫长的季节', 'is_tv':true,'type':
   'cover':{'url':'https://img.example/cover.jpg'},'pubdate':['2023-04-22(中国大陆)']};
 
 void main() {
+  test('IMDb rating uses explicit ID and participates in the existing score log', () async {
+    final requested = <String>[];
+    final logs = <String>[];
+    final service = ExternalMetaService(
+      imdbRating: (id) async {
+        requested.add(id);
+        return const ImdbRating(value: '8.1', votes: '12,345');
+      },
+      log: logs.add,
+    );
+    addTearDown(service.close);
+    final ratings = await service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567'));
+    expect(ratings, {MetaSourceKind.imdb: 8.1});
+    expect(requested, ['tt1234567']);
+    expect(logs, contains('外部元数据: 评分：IMDb 8.1'));
+  });
+
+  test('IMDb never searches by title without an ID or an injected fetcher', () async {
+    var calls = 0;
+    final service = ExternalMetaService(imdbRating: (_) async {
+      calls++;
+      return const ImdbRating(value: '8.1');
+    });
+    addTearDown(service.close);
+    expect(await service.ratingsByTitle(const MetaQuery(title: 'fixture')), isEmpty);
+    expect(await service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: '  ')), isEmpty);
+    expect(calls, 0);
+    final noFetcher = ExternalMetaService();
+    addTearDown(noFetcher.close);
+    expect(await noFetcher.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567')), isEmpty);
+  });
+
+  test('IMDb clamps positive scores and notes empty or invalid scores without warning', () async {
+    for (final entry in <String, double?>{'12': 10, '': null, '0': null, '-1': null, 'NaN': null, 'Infinity': null, 'not a score': null}.entries) {
+      final logs = <String>[];
+      final service = ExternalMetaService(imdbRating: (_) async => ImdbRating(value: entry.key), log: logs.add);
+      final ratings = await service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567'));
+      if (entry.value != null) {
+        expect(ratings, {MetaSourceKind.imdb: entry.value});
+      } else {
+        expect(ratings, isEmpty);
+        expect(logs, contains('外部元数据: IMDb 评分为空或无效'));
+        expect(logs.any((message) => message.contains('（已降级）')), isFalse);
+      }
+      service.close();
+    }
+  });
+
+  test('IMDb disabled in rating order never invokes its fetcher', () async {
+    var calls = 0;
+    final service = ExternalMetaService(
+      pipeline: () => MetaPipeline.defaults.toggleSource(MetaField.rating, MetaSourceKind.imdb),
+      imdbRating: (_) async { calls++; return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    expect(await service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567')), isEmpty);
+    expect(calls, 0);
+  });
+
+  test('IMDb is not an external detail or person identity source', () async {
+    final service = ExternalMetaService(imdbRating: (_) async => throw StateError('must not fetch'));
+    addTearDown(service.close);
+    expect(await service.candidates(const MetaQuery(title: 'fixture'), MetaSourceKind.imdb), isEmpty);
+    expect(await service.resolveIdentity(const MetaQuery(title: 'fixture'), MetaSourceKind.imdb, 0), isNull);
+    expect(await service.person(const MetaPersonRef(kind: MetaSourceKind.imdb, id: 123)), isNull);
+  });
+
+  test('IMDb ID falls back to active detail but query ID takes precedence', () async {
+    final dir = Directory.systemTemp.createTempSync('imdb-active');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final requested = <String>[];
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/credits')) return response({'items': []});
+        return response({...subject, 'imdb': 'tt1111111'});
+      })),
+      imdbRating: (id) async { requested.add(id); return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    final detail = await service.detail(const MetaQuery(title: '漫长的季节', year: 2023));
+    expect(detail?.imdbId, 'tt1111111');
+    await service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023));
+    await service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023, imdbId: 'tt2222222'));
+    expect(requested, ['tt1111111', 'tt2222222']);
+  });
+
+  test('IMDb lifecycle never borrows active ID for a different query', () async {
+    final dir = Directory.systemTemp.createTempSync('imdb-query-bound');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final requested = <String>[];
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/credits')) return response({'items': []});
+        return response({...subject, 'imdb': 'tt1111111'});
+      })),
+      imdbRating: (id) async { requested.add(id); return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    expect((await service.detail(const MetaQuery(title: '漫长的季节', year: 2023)))?.imdbId, 'tt1111111');
+    final other = await service.ratingsByTitle(const MetaQuery(title: 'Another movie', year: 2024));
+    expect(other, isNot(contains(MetaSourceKind.imdb)));
+    expect(requested, isEmpty);
+    expect(await service.ratingsByTitle(const MetaQuery(title: 'Another movie', year: 2024, imdbId: 'tt2222222')),
+      containsPair(MetaSourceKind.imdb, 8.1));
+    expect(requested, ['tt2222222']);
+  });
+
+  test('IMDb lifecycle clearCache forgets active ID even for the same query', () async {
+    final dir = Directory.systemTemp.createTempSync('imdb-clear-active');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final requested = <String>[];
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        if (r.url.path.endsWith('/credits')) return response({'items': []});
+        return response({...subject, 'imdb': 'tt1111111'});
+      })),
+      imdbRating: (id) async { requested.add(id); return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    const query = MetaQuery(title: '漫长的季节', year: 2023);
+    expect((await service.detail(query))?.imdbId, 'tt1111111');
+    service.clearCache();
+    expect(await service.ratingsByTitle(query), isNot(contains(MetaSourceKind.imdb)));
+    expect(requested, isEmpty);
+    expect(await service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023, imdbId: 'tt2222222')),
+      containsPair(MetaSourceKind.imdb, 8.1));
+    expect(requested, ['tt2222222']);
+  });
+
+  test('IMDb lifecycle invalidation drops gated IMDb and previously accumulated scores', () async {
+    for (final fails in [false, true]) {
+      final dir = Directory.systemTemp.createTempSync('imdb-invalidation');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final started = Completer<void>();
+      final pending = Completer<ImdbRating>();
+      final service = ExternalMetaService(
+        douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+          if (r.url.path == '/j/subject_suggest') return response(suggestion);
+          return response(subject);
+        })),
+        imdbRating: (_) { started.complete(); return pending.future; },
+      );
+      addTearDown(service.close);
+      final ratings = service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023, imdbId: 'tt1111111'));
+      await started.future;
+      service.clearCache();
+      if (fails) { pending.completeError(StateError('stale failure')); }
+      else { pending.complete(const ImdbRating(value: '8.1')); }
+      expect(await ratings, isEmpty, reason: 'invalidated scores must not publish even after error: $fails');
+    }
+  });
+
+  test('IMDb lifecycle skips a removed source while an earlier source is pending', () async {
+    for (final invalidate in [false, true]) {
+    final dir = Directory.systemTemp.createTempSync('imdb-rule-change');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final started = Completer<void>();
+    final pending = Completer<http.Response>();
+    var calls = 0;
+    var rules = MetaPipeline.defaults.withRule(MetaPipeline.defaults.ruleOf(MetaField.rating).copyWith(order: const [MetaSourceKind.douban, MetaSourceKind.imdb]));
+    final service = ExternalMetaService(
+      pipeline: () => rules,
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((_) {
+        started.complete(); return pending.future;
+      })),
+      imdbRating: (_) async { calls++; return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    final ratings = service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567'));
+    await started.future;
+    rules = rules.toggleSource(MetaField.rating, MetaSourceKind.imdb);
+    if (invalidate) service.clearCache();
+    pending.complete(response([]));
+    expect(await ratings, isEmpty);
+    expect(calls, 0);
+    }
+  });
+
+  test('IMDb lifecycle disabling external metadata drops pending results', () async {
+    final dir = Directory.systemTemp.createTempSync('imdb-disable');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final started = Completer<void>();
+    final pending = Completer<http.Response>();
+    var enabled = true;
+    var calls = 0;
+    final service = ExternalMetaService(
+      enabled: () => enabled,
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((_) {
+        started.complete(); return pending.future;
+      })),
+      imdbRating: (_) async { calls++; return const ImdbRating(value: '8.1'); },
+    );
+    addTearDown(service.close);
+    final ratings = service.ratingsByTitle(const MetaQuery(title: 'fixture', imdbId: 'tt1234567'));
+    await started.future;
+    enabled = false;
+    pending.complete(response(suggestion));
+    expect(await ratings, isEmpty);
+    expect(calls, 0);
+  });
+
+  test('Bangumi score-shaped rating is returned alongside Douban value-shaped rating', () async {
+    final dir = Directory.systemTemp.createTempSync('rating-shapes');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        return response(subject);
+      })),
+      bangumi: BangumiService(minInterval: Duration.zero, client: MockClient((r) async {
+        if (r.method == 'POST') return response({'data': [{'id': 431299, 'name_cn': '漫长的季节', 'platform': '国产剧', 'date': '2023-04-22'}]});
+        return response({'rating': {'score': 7.6}});
+      })),
+    );
+    addTearDown(service.close);
+    expect(await service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023)),
+      {MetaSourceKind.douban: 9.4, MetaSourceKind.bangumi: 7.6});
+  });
+
+  test('IMDb exceptions do not affect Douban or Bangumi scores', () async {
+    final dir = Directory.systemTemp.createTempSync('imdb-failure');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final logs = <String>[];
+    final service = ExternalMetaService(
+      douban: DoubanRecommendationService(cacheDirectory: dir, delay: (_) async {}, client: MockClient((r) async {
+        if (r.url.path == '/j/subject_suggest') return response(suggestion);
+        return response(subject);
+      })),
+      bangumi: BangumiService(minInterval: Duration.zero, client: MockClient((r) async {
+        if (r.method == 'POST') return response({'data': [{'id': 431299, 'name_cn': '漫长的季节', 'platform': '国产剧', 'date': '2023-04-22'}]});
+        return response({'rating': {'value': 8.7}});
+      })),
+      pipeline: () => MetaPipeline.defaults.withRule(MetaPipeline.defaults.ruleOf(MetaField.rating).copyWith(order: const [MetaSourceKind.imdb, MetaSourceKind.douban, MetaSourceKind.bangumi])),
+      imdbRating: (_) async => throw StateError('fixture failure'),
+      log: logs.add,
+    );
+    addTearDown(service.close);
+    final ratings = await service.ratingsByTitle(const MetaQuery(title: '漫长的季节', year: 2023, imdbId: 'tt1234567'));
+    expect(ratings, {MetaSourceKind.douban: 9.4, MetaSourceKind.bangumi: 8.7});
+    expect(logs, contains('外部元数据（已降级）: IMDb 评分获取失败'));
+    expect(logs, contains('外部元数据: 评分：豆瓣 9.4 / Bangumi 8.7'));
+  });
+
   test('raw field resolution obeys external order and never fetches source identity', () async {
     final temp = Directory.systemTemp.createTempSync('crawler-field-service');
     addTearDown(() => temp.deleteSync(recursive: true));

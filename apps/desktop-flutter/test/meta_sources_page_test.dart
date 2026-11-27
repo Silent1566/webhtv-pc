@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/meta_pipeline.dart';
@@ -20,6 +21,65 @@ Future<void> settle(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('IMDb appears checked only in rating and can be enabled and reordered', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('imdb-settings');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final state = AppState(paths: AppPaths.resolve(overrides: {'config': dir.path, 'data': dir.path, 'cache': '${dir.path}/cache', 'state': '${dir.path}/state'}), log: LogService());
+    addTearDown(state.dispose);
+    await tester.runAsync(state.bootstrap);
+    tester.view.physicalSize = const Size(1200, 12000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(theme: buildAppTheme(Brightness.dark), home: MetaSourcesPage(state: state)));
+    await settle(tester);
+    final row = find.byKey(const ValueKey('meta-source-rating-imdb'));
+    final checkbox = find.descendant(of: row, matching: find.byType(Checkbox));
+    expect(row, findsOneWidget);
+    expect(find.descendant(of: row, matching: find.text('IMDb')), findsOneWidget);
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    for (final field in MetaField.values.where((f) => f != MetaField.rating)) {
+      expect(find.byKey(ValueKey('meta-source-${field.key}-imdb')), findsNothing);
+    }
+    await tester.runAsync(() async { await state.setMetaPipeline(MetaPipeline.fromJson({
+      'rating': {'mode': 'aggregate', 'order': ['tmdb', 'douban', 'bangumi']},
+    })); });
+    await settle(tester);
+    expect(row, findsOneWidget);
+    expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+    await tester.tap(checkbox);
+    await settle(tester);
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    expect(state.metaPipeline.orderOf(MetaField.rating).last, MetaSourceKind.imdb);
+    final beforeDrag = state.metaPipeline.orderOf(MetaField.rating).toList();
+    await tester.drag(find.descendant(of: row, matching: find.byType(ReorderableDragStartListener)), const Offset(0, -80));
+    await tester.pump(const Duration(seconds: 1));
+    await settle(tester);
+    final afterDrag = state.metaPipeline.orderOf(MetaField.rating);
+    expect(afterDrag, isNot(equals(beforeDrag)));
+    expect(afterDrag.toSet(), beforeDrag.toSet());
+    await tester.runAsync(() => state.setMetaPipeline(MetaPipeline.fromJson({
+      'rating': {'mode': 'aggregate', 'order': ['imdb']},
+    })));
+    await settle(tester);
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    await tester.tap(checkbox);
+    await settle(tester);
+    expect(state.metaPipeline.orderOf(MetaField.rating), isEmpty);
+    expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+    final store = UiPreferencesStore(path: '${state.paths.configDir}/settings.json');
+    await tester.runAsync(() async {
+      await store.load();
+      final saved = jsonDecode(await File(store.path).readAsString()) as Map;
+      expect((saved['ui'] as Map)['imdbRatingVersion'], 1);
+    });
+    expect(store.metaPipeline.orderOf(MetaField.rating), isEmpty);
+    await tester.tap(checkbox);
+    await settle(tester);
+    expect(state.metaPipeline.orderOf(MetaField.rating), [MetaSourceKind.imdb]);
+    expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('勾掉 Wikidata 后管线立即生效并落盘', (tester) async {
     final dir = Directory.systemTemp.createTempSync('meta-sources');
     addTearDown(() => dir.deleteSync(recursive: true));

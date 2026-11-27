@@ -61,13 +61,14 @@ body: Stack(
 ),
 ```
 
-### 3.1 三条实现纪律
+### 3.1 四条实现纪律
 
 | 纪律 | 理由 |
 | --- | --- |
 | 控制层用 `AnimatedOpacity` 而不是 `if (_controlsVisible)` | 条件插入会让 Flutter 在重建时改变子树结构，且 `Positioned.fill` 的命中测试范围随之跳变；`AnimatedOpacity` 保持结构稳定，只改透明度 |
 | 隐藏时必须 `IgnorePointer` | 透明但仍在树里的按钮**依然可点**，会造成"看不见的按钮吃掉点击" |
 | 屏显层必须 `IgnorePointer` | 屏显是纯信息层，任何情况下都不接收指针（对齐上游 `view_player_osd.xml:6-7` 的 `clickable=false focusable=false`） |
+| 底栏整块吸收指针（`Listener` + `HitTestBehavior.opaque`） | 底栏里的空白（上下 `AppSpace.sm`、行间 `AppSpace.xs`）不属于任何控件，命中不到时会落到下层画面手势上——画面单击是**播放/暂停**，用户看到的就是「点进度条差几像素 → 没跳进度，反而暂停了」。只包底栏自己的盒子，浮层中部仍是空的（§7 A3 不变） |
 
 ### 3.2 为什么不用 `AnimatedSlide` / `AnimatedPositioned`
 
@@ -282,6 +283,7 @@ expect(after, before, reason: '控制栏显隐不得改变视频区几何');
 | A1 | 控制栏显隐前后 `Video` 矩形逐像素相同 | L3 集成（`05` §3.1 V1） |
 | A2 | 进出全屏前后 `Video` 矩形在**同一窗口尺寸**下相同 | L3 集成 |
 | A3 | 隐藏状态下点击控制栏原位置**不触发**任何按钮 | L2 widget 测试（`IgnorePointer` 生效） |
+| A9 | 底栏空白（上下 padding、行间留白）点下去**不暂停也不跳转**，点滑杆仍是一次跳转 | L2 widget 测试（`player_control_bar_hit_test.dart`） |
 | A4 | 指针停在底栏上时控制栏不隐藏 | L2 widget 测试 |
 | A5 | 打开对话框时控制栏不隐藏；关闭后恢复计时 | L2 widget 测试 |
 | A6 | 顶栏 `AppBar` 仍在树里，四个 tooltip 精确串可查 | L3 集成（沿用现有断言） |

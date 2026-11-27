@@ -557,43 +557,74 @@ extension _PlayerPageMenuSections on _PlayerPageState {
         ],
       ),
 
-      // ------------------------------------------------------ 9. 片头片尾
+      // ------------------------------------------------------ 9. 跳过片段
       PlayerMenuSection(
-        title: '片头片尾',
+        title: '跳过片段',
         items: [
           PlayerMenuItem(
-            id: 'auto_skip_intro',
-            label: '自动跳过片头',
+            id: 'skip_mode',
+            label: '跳过模式',
             icon: Icons.fast_forward_outlined,
-            selected: (_options.skipKinds & SkipKindBits.intro) != 0,
-            onSelect: () => _toggleAutoSkip(intro: true),
+            children: [
+              for (final mode in SkipMode.values)
+                PlayerMenuItem(
+                  id: 'skip_mode_${mode.name}',
+                  label: switch (mode) {
+                    SkipMode.off => '关闭',
+                    SkipMode.auto => '自动跳过',
+                    SkipMode.confirm => '先询问',
+                  },
+                  selected: _options.skipMode == mode,
+                  onSelect: () => _setSkipMode(mode),
+                ),
+            ],
           ),
           PlayerMenuItem(
-            id: 'auto_skip_outro',
-            label: '自动跳过片尾',
-            icon: Icons.fast_forward,
-            selected: (_options.skipKinds & SkipKindBits.outro) != 0,
-            onSelect: () => _toggleAutoSkip(intro: false),
+            id: 'skip_kinds',
+            label: '片段类型',
+            icon: Icons.segment,
+            children: [
+              for (final kind in SkipKind.values)
+                PlayerMenuItem(
+                  id: 'skip_kind_${kind.name}',
+                  label: kind.label,
+                  selected: (_options.skipKinds & kind.bit) != 0,
+                  onSelect: () => _toggleAutoSkip(kind),
+                ),
+            ],
           ),
-          // 手动跳过依赖「本集有可用段」（手动标记或远端标定）：没有时
-          // **灰掉但仍然列出**，隐藏会让用户以为功能没了（`DESIGN.md` 同类教训）。
           PlayerMenuItem(
-            id: 'skip_intro',
-            label: '跳过片头',
+            id: 'skip_now',
+            label: '立即跳过',
             icon: Icons.skip_next_outlined,
-            enabled: _skipPlan.segments.any(
-              (segment) => segment.kind == SkipKind.intro,
-            ),
-            onSelect: act(() => _manualSkip(SkipAction.intro)),
+            children: [
+              for (final kind in SkipKind.values)
+                PlayerMenuItem(
+                  id: 'skip_${kind.name}',
+                  label: '跳过${kind.label}',
+                  enabled: _manualSkipSegment(kind) != null,
+                  onSelect: act(() => _manualSkipKind(kind)),
+                ),
+            ],
+          ),
+          _settingsToggle(
+            id: 'skip_highlight',
+            label: '显示片段高亮',
+            value: _options.showSkipSegmentHighlights,
+            onChanged: (value) async {
+              await _persistOptions(
+                _options.copyWith(showSkipSegmentHighlights: value),
+              );
+              // This part extension updates its owning PlayerPage State.
+              // ignore: invalid_use_of_protected_member
+              if (mounted) setState(() {});
+            },
           ),
           PlayerMenuItem(
-            id: 'skip_outro',
-            label: '跳过片尾',
-            icon: Icons.skip_next,
-            enabled: _skipPlan.segments.any(
-              (segment) => segment.kind == SkipKind.outro,
-            ),
-            onSelect: act(() => _manualSkip(SkipAction.outro)),
+            id: 'skip_colors',
+            label: '片段颜色…',
+            icon: Icons.palette_outlined,
+            onSelect: act(_showSkipOptions),
           ),
           PlayerMenuItem(
             id: 'mark_intro',
@@ -663,7 +694,7 @@ extension _PlayerPageMenuSections on _PlayerPageState {
       PlayerMenuSection(
         title: '设置',
         items: [
-  // `_playbackParamsMenuItem` 已搬到 `player_playback_params.dart`（`part` 里的 `_PlayerPageState` 扩展）。
+          // `_playbackParamsMenuItem` 已搬到 `player_playback_params.dart`（`part` 里的 `_PlayerPageState` 扩展）。
           _playbackParamsMenuItem(),
           PlayerMenuItem(
             id: 'settings_subtitle_source',
@@ -757,10 +788,8 @@ extension _PlayerPageMenuSections on _PlayerPageState {
             // 以及需要数字输入的精调）都在那里。落点是**全部设置**页：
             // 它复用设置首页的分类中枢，五个分类都能从这里进。
             onSelect: act(
-              () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => SettingsOverviewPage(state: widget.state),
-                ),
+              () => _showSettingsAndSyncOptions(
+                SettingsOverviewPage(state: widget.state),
               ),
             ),
           ),

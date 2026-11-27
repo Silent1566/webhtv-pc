@@ -7,11 +7,59 @@ import 'package:webhtv_pc/services/external_url.dart';
 void main() {
   group('ExternalUrl.open（04 §7.2）', () {
     const url = 'https://www.youtube.com/watch?v=abc123';
-    const commands = {
-      'windows': 'explorer.exe',
-      'linux': 'xdg-open',
-      'macos': '/usr/bin/open',
-    };
+    for (final code in [33, 42]) {
+      test('windows hands the unchanged URL to ShellExecute ($code)', () async {
+        const target = 'https://example.com/视频/😀?v=abc&name=a%20b#片段';
+        String? openedUrl;
+        var processStarted = false;
+        final result = await ExternalUrl.open(
+          target,
+          operatingSystem: 'windows',
+          starter: (_, _) async {
+            processStarted = true;
+            throw StateError('Windows must not start a process');
+          },
+          shellOpen: (value) {
+            openedUrl = value;
+            return code;
+          },
+        );
+        expect(result.ok, isTrue);
+        expect(result.error, isNull);
+        expect(openedUrl, target);
+        expect(processStarted, isFalse);
+      });
+    }
+
+    for (final code in [31, 0, 5, 32]) {
+      test('windows reports ShellExecute failure code $code', () async {
+        final result = await ExternalUrl.open(
+          url,
+          operatingSystem: 'windows',
+          starter: (_, _) async => throw StateError('must not start a process'),
+          shellOpen: (_) => code,
+        );
+        expect(result.ok, isFalse);
+        expect(result.error, isNotEmpty);
+        expect(result.error, contains('浏览器'));
+        expect(result.error, contains('$code'));
+      });
+    }
+
+    test('windows catches ShellExecute exceptions', () async {
+      final result = await ExternalUrl.open(
+        url,
+        operatingSystem: 'windows',
+        starter: (_, _) async => throw StateError('must not start a process'),
+        shellOpen: (_) => throw StateError('ShellExecuteW unavailable'),
+      );
+      expect(result.ok, isFalse);
+      expect(result.error, isNotEmpty);
+      expect(result.error, contains('打开外部链接失败'));
+      expect(result.error, contains('ShellExecuteW unavailable'));
+    });
+
+    const commands = {'linux': 'xdg-open', 'macos': '/usr/bin/open'};
 
     for (final entry in commands.entries) {
       test('${entry.key} passes URL as one process argument', () async {
@@ -31,11 +79,9 @@ void main() {
         expect(result.ok, isTrue);
         expect(executable, entry.value);
         expect(arguments, [target]);
-        if (entry.key == 'windows') {
-          expect(process.exitRead, isFalse);
-          expect(process.stdoutListened, isFalse);
-          expect(process.stderrListened, isFalse);
-        }
+        expect(process.exitRead, isTrue);
+        expect(process.stdoutListened, isTrue);
+        expect(process.stderrListened, isTrue);
       });
 
       test('${entry.key} reports failure to start', () async {
@@ -112,6 +158,7 @@ void main() {
       'https://exa mple.com',
       'https://example.com/watch\nv=abc',
       'https://example.com/%zz',
+      'https://example.com/back${String.fromCharCode(92)}slash',
       'https://[broken',
       'https://example.com:bad',
       'https://example.com:65536',
@@ -119,17 +166,26 @@ void main() {
       test(
         'rejects malformed/non-http URL ${target.replaceAll('\n', r'\n')}',
         () async {
-          var started = 0;
-          final result = await ExternalUrl.open(
-            target,
-            operatingSystem: 'linux',
-            starter: (_, _) async {
-              started++;
-              return _FakeProcess();
-            },
-          );
-          expect(result.ok, isFalse);
-          expect(started, 0);
+          for (final os in ['linux', 'windows']) {
+            var started = 0;
+            var shellOpened = 0;
+            final result = await ExternalUrl.open(
+              target,
+              operatingSystem: os,
+              starter: (_, _) async {
+                started++;
+                return _FakeProcess();
+              },
+              shellOpen: (_) {
+                shellOpened++;
+                return 33;
+              },
+            );
+            expect(result.ok, isFalse);
+            expect(result.error, isNotEmpty);
+            expect(started, 0);
+            expect(shellOpened, 0);
+          }
         },
       );
     }
@@ -137,35 +193,46 @@ void main() {
     test(
       'accepts uppercase HTTP scheme and trims surrounding whitespace',
       () async {
-        List<String>? arguments;
+        String? openedUrl;
         final result = await ExternalUrl.open(
           '  HTTPS://example.com/watch?v=abc  ',
           operatingSystem: 'windows',
-          starter: (_, args) async {
-            arguments = args;
-            return _FakeProcess();
+          starter: (_, _) async => throw StateError('must not start a process'),
+          shellOpen: (value) {
+            openedUrl = value;
+            return 33;
           },
         );
         expect(result.ok, isTrue);
-        expect(arguments, ['HTTPS://example.com/watch?v=abc']);
+        expect(openedUrl, 'HTTPS://example.com/watch?v=abc');
       },
     );
 
-    test('omitted platform uses the host OS command', () async {
+    test('omitted platform uses the host OS opener', () async {
       String? executable;
+      String? openedUrl;
       final result = await ExternalUrl.open(
         url,
         starter: (exe, _) async {
           executable = exe;
           return _FakeProcess();
         },
+        shellOpen: (value) {
+          openedUrl = value;
+          return 33;
+        },
       );
-      expect(result.ok, commands.containsKey(Platform.operatingSystem));
+      expect(
+        result.ok,
+        Platform.isWindows || commands.containsKey(Platform.operatingSystem),
+      );
       expect(executable, commands[Platform.operatingSystem]);
+      expect(openedUrl, Platform.isWindows ? url : isNull);
     });
 
     test('unsupported platform rejects without starting a process', () async {
       var started = 0;
+      var shellOpened = 0;
       final result = await ExternalUrl.open(
         url,
         operatingSystem: 'android',
@@ -173,9 +240,14 @@ void main() {
           started++;
           return _FakeProcess();
         },
+        shellOpen: (_) {
+          shellOpened++;
+          return 33;
+        },
       );
       expect(result.ok, isFalse);
       expect(started, 0);
+      expect(shellOpened, 0);
     });
 
     test(

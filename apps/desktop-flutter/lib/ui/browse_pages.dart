@@ -1730,39 +1730,86 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  /// 同一来源只保留一个 chip：**管线优先**。
+  /// 同一来源只保留一个 chip：**管线优先，但留在原位**。
   ///
   /// 为什么管线赢：它的来源顺序与启停都在设置页里由用户控制，老链路
-  /// （`DetailRatingService`）的豆瓣分是写死的。老链路负责它独有的
-  /// IMDb / 烂番茄 / Metacritic，那些不受影响。
+  /// （`DetailRatingService`）只是兜底通道。
+  /// 为什么原位：评分行的站名顺序是固定的（TMDB → 豆瓣 → IMDb → 烂番茄 →
+  /// Metacritic）。把管线的豆瓣/IMDb 分挪到行尾，同一个站名的位置会随设置
+  /// 开关漂移——同一个页面出现两种顺序正是这行标签当初要避免的。
   DetailRatings _chipsRatings(DetailRatings ratings) {
-    if (!_extraRatings.containsKey(MetaSourceKind.douban)) return ratings;
-    final kept = [
-      for (final entry in ratings.entries)
-        if (entry.source != RatingSource.douban) entry,
-    ];
-    // 条目没变就别新建对象，避免无谓重建。
-    if (kept.length == ratings.entries.length) return ratings;
+    final imdbEnabled = widget.state.externalMetaEnabled &&
+        widget.state.metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
+    var replaced = false;
+    final entries = <DetailRatingEntry>[];
+    for (final entry in ratings.entries) {
+      if (entry.source == RatingSource.imdb && !imdbEnabled) {
+        replaced = true;
+        continue;
+      }
+      final value = _pipelineRatingOf(entry.source);
+      if (value == null) {
+        entries.add(entry);
+        continue;
+      }
+      entries.add(entry.withValue(value.toStringAsFixed(1)));
+      replaced = true;
+    }
+    if (!replaced) return ratings;
     return DetailRatings(
-      entries: kept,
+      entries: entries,
       loading: ratings.loading,
       failed: ratings.failed,
     );
   }
 
+  /// 管线里该站名的分值（没有则 `null`）。
+  double? _pipelineRatingOf(RatingSource source) {
+    for (final entry in _extraRatings.entries) {
+      if (_ratingSourceOf(entry.key) == source) return entry.value;
+    }
+    return null;
+  }
+
+  /// 元数据来源 → 评分行站名。只有这三个站名两边都有；
+  /// Bangumi / Wikidata / 爬虫源不在评分行里，它们追加在后面。
+  static RatingSource? _ratingSourceOf(MetaSourceKind kind) => switch (kind) {
+    MetaSourceKind.tmdb => RatingSource.tmdb,
+    MetaSourceKind.douban => RatingSource.douban,
+    MetaSourceKind.imdb => RatingSource.imdb,
+    MetaSourceKind.bangumi ||
+    MetaSourceKind.wikidata ||
+    MetaSourceKind.source => null,
+  };
+
   /// 评分按 `rating` 字段的来源管线取，**与 TMDB 是否匹配无关**。
   void _ensureRatings(Vod vod) {
-    if (!widget.state.externalMetaEnabled) return;
+    if (!widget.state.externalMetaEnabled) {
+      if (_ratingsKey != null || _extraRatings.isNotEmpty) {
+        _ratingsGeneration++;
+        _ratingsKey = null;
+        _extraRatings = const {};
+      }
+      return;
+    }
     final title = vod.vodName.trim();
     if (title.isEmpty) return;
+    // IMDb 分只能按 imdb_id 取：TMDB 的 external_ids 最权威，其次是外部元数据
+    // 详情携带的编号。两者都可能晚于本方法到达，所以编号要进去重键——拿到编号
+    // 后自然重跑一趟，而不是拿着旧结果永远补不上 IMDb。
+    var imdbId = externalImdbId(_ownedTmdb?.detail).trim();
+    if (imdbId.isEmpty) imdbId = (_externalMeta?.imdbId ?? '').trim();
     final query = MetaQuery(
       title: title,
       year: firstYear(vod.vodYear ?? ''),
       isTv: _tvHintOf('${vod.extra['type_name'] ?? ''}'.toLowerCase()),
+      imdbId: imdbId,
     );
-    final key = '${vod.vodId}|${query.key}';
+    final rule = widget.state.metaPipeline.ruleOf(MetaField.rating);
+    final key = '${vod.vodId}|${_pageSite?.key}|$imdbId|${query.key}|${rule.toJson()}';
     if (_ratingsKey == key) return;
     _ratingsKey = key;
+    _extraRatings = const {};
     final generation = ++_ratingsGeneration;
     unawaited(() async {
       final found = await widget.state.externalMetaService.ratingsByTitle(
@@ -1947,14 +1994,17 @@ class _DetailPageState extends State<DetailPage> {
 
   /// 评分标签与页尾外链共用这一份查询（页面只发一轮请求）。
   DetailRatingsController? _ratingsController;
+  String? _ratingsOptionsKey;
 
   DetailRatings _syncRatings(DetailRatingRequest request) {
     final controller = _ratingsController ??= DetailRatingsController(
       service: widget.state.detailRatingService,
       omdbApiKey: () => widget.state.tmdbConfig.omdbApiKey,
     )..addListener(_onRatingsChanged);
-    if (controller.requestKey != request.cacheKey) {
-      // 换作品才重查：同一部作品的重建（滚动、主题切换）不得重发请求。
+    final optionsKey = '${widget.state.externalMetaEnabled}|${widget.state.metaPipeline.ruleOf(MetaField.rating).toJson()}|${widget.state.tmdbConfig.omdbApiKey}';
+    if (controller.requestKey != request.cacheKey || _ratingsOptionsKey != optionsKey) {
+      _ratingsOptionsKey = optionsKey;
+      // 换作品或评分设置时重查；滚动、主题切换不得重发请求。
       controller.begin(request);
       unawaited(controller.load());
     }
@@ -3753,6 +3803,12 @@ class _DetailPageState extends State<DetailPage> {
     _ensureExternalMeta(vod, owned ? tmdb : null);
     _ensureComments(vod);
     _ensureRatings(vod);
+    // 评分行站名固定：管线分替换老链路的同位值（[_chipsRatings]），只有评分行
+    // 装不下的来源（Bangumi 等）才在后面追加——同一个站名不允许出现两次。
+    final ratingChips = _chipsRatings(ratings);
+    final renderedRatingSources = {
+      for (final entry in ratingChips.entries) entry.source,
+    };
     // 注意：TMDB 有数据时**也要**保留 external —— 聚合字段（剧照）还要并进来。
     // 之前这里 `&& tmdbData == null` 让合并永远不会发生（用户反馈 2026-11-18：
     // 「照片貌似只看到了 TMDB 的」）。
@@ -3904,7 +3960,7 @@ class _DetailPageState extends State<DetailPage> {
                       // - 都没有：不渲染占位。
                       if (tmdbData != null)
                         DetailRatingTags(
-                          ratings: _chipsRatings(ratings),
+                          ratings: ratingChips,
                           tmdbRating: headerData.rating,
                         )
                       else if (external != null && headerData.rating > 0)
@@ -3915,8 +3971,11 @@ class _DetailPageState extends State<DetailPage> {
                           emphasized: true,
                         ),
                       for (final entry in _extraRatings.entries)
-                        if (external == null ||
-                            external.identity.kind != entry.key)
+                        if ((external == null ||
+                                external.identity.kind != entry.key) &&
+                            !renderedRatingSources.contains(
+                              _ratingSourceOf(entry.key),
+                            ))
                           TagChip(
                             keyValue: 'detail-pipeline-rating-${entry.key.key}',
                             label:

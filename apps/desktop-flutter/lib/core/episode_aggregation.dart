@@ -199,12 +199,22 @@ abstract final class EpisodeAggregation {
     EpisodeGroup group,
     VodEpisode previous,
   ) {
-    if (group.versions.length == 1) return group.versions.single;
-    final previousProfile = _profile(previous.name);
-    if (previousProfile.isEmpty) return null;
+    final previousFeatures = _versionFeatures(previous.name);
+    if (previousFeatures == null) return null;
+    final previousProfile = previousFeatures.profile;
+    final previousEdition = _edition(previous, previousFeatures.remainder);
+    if (previousEdition.conflicting) return null;
+    if (previousProfile.isEmpty && previousEdition.key == null) return null;
     EpisodeVersion? selected;
     for (final version in group.versions) {
-      final profile = _profile(version.episode.name);
+      final features = _versionFeatures(version.episode.name);
+      if (features == null) continue;
+      final edition = _edition(version.episode, features.remainder);
+      if (edition.conflicting ||
+          (previousEdition.key != null && edition.key != previousEdition.key)) {
+        continue;
+      }
+      final profile = features.profile;
       if (!previousProfile.entries.every((e) => profile[e.key] == e.value)) {
         continue;
       }
@@ -381,13 +391,69 @@ Set<String> _parts(String text) {
   return parts;
 }
 
-Map<String, String> _profile(String name) {
+Map<String, String> _profile(String name) =>
+    _versionFeatures(name)?.profile ?? const {};
+
+({String? key, bool conflicting}) _edition(
+  VodEpisode episode,
+  String remainder,
+) {
+  final markers =
+      [
+        ..._seasonEpisode.allMatches(remainder),
+        ..._chineseEpisode.allMatches(remainder),
+        ..._englishEpisode.allMatches(remainder),
+      ]..sort((a, b) {
+        final position = a.start.compareTo(b.start);
+        return position != 0 ? position : b.end.compareTo(a.end);
+      });
+  final prefix = markers.isEmpty
+      ? ''
+      : _editionLabel(
+          remainder.substring(0, markers.first.start).replaceAll(_season, ''),
+        );
+  final explicit = RegExp(
+    r'(?:^|[\s._\-\[\]【】()（）])((?:番综|番綜|特别版|特別版|正片))(?=$|[\s._\-\[\]【】()（）])',
+  ).allMatches(remainder).map((match) => _editionLabel(match.group(1)!)).toSet();
+  if (const {'正片', '番综', '特别版'}.contains(prefix)) explicit.add(prefix);
+  if (explicit.length > 1) return (key: null, conflicting: true);
+  if (_identity(episode) == null) return (key: null, conflicting: false);
+  if (markers.isEmpty) {
+    return (
+      key: RegExp(r'^\d{1,3}$').hasMatch(EpisodeFileSize.strip(episode.name))
+          ? ''
+          : null,
+      conflicting: false,
+    );
+  }
+  // 集号后的自由标题不参与匹配；显式版别先验冲突，再归一正片。
+  final labels = {
+    if (prefix.isNotEmpty && prefix != '正片') prefix,
+    ...explicit.where((label) => label != '正片'),
+  };
+  return (key: labels.join('|'), conflicting: false);
+}
+
+String _editionLabel(String text) {
+  final label = text
+      .replaceAll(RegExp(r'[\s._\-\[\]【】()（）]+'), '')
+      .replaceAll('番綜', '番综')
+      .replaceAll('特別版', '特别版')
+      .toLowerCase();
+  return label;
+}
+
+({Map<String, String> profile, String remainder})? _versionFeatures(
+  String name,
+) {
   final text = EpisodeFileSize.strip(name);
   final profile = <String, String>{};
+  final recognized = <RegExp>[];
   var ambiguous = false;
   void feature(String field, List<(RegExp, String)> patterns) {
     final found = <String>{};
     for (final row in patterns) {
+      recognized.add(row.$1);
       if (row.$1.hasMatch(text)) found.add(row.$2);
     }
     if (found.length == 1) profile[field] = found.single;
@@ -444,16 +510,22 @@ Map<String, String> _profile(String name) {
   ).hasMatch(text)) {
     ambiguous = true;
   }
-  final revisions = RegExp(
+  final revisionPattern = RegExp(
     r'(?<![a-z0-9])v(?:er(?:sion)?)?[ ._-]?(\d{1,2})(?![a-z0-9])',
     caseSensitive: false,
-  ).allMatches(text).map((match) => int.parse(match.group(1)!)).toSet();
+  );
+  recognized.add(revisionPattern);
+  final revisions = revisionPattern
+      .allMatches(text)
+      .map((match) => int.parse(match.group(1)!))
+      .toSet();
   if (revisions.length == 1) profile['revision'] = 'v${revisions.single}';
   if (revisions.length > 1) ambiguous = true;
-  final release = RegExp(
+  final releasePattern = RegExp(
     r'-([a-z][a-z0-9]{1,23})\.(?:mkv|mp4|avi|ts|m2ts|mov|webm)$',
     caseSensitive: false,
-  ).firstMatch(text);
+  );
+  final release = releasePattern.firstMatch(text);
   if (release != null) {
     final name = release.group(1)!.toUpperCase();
     if (!const {
@@ -474,7 +546,13 @@ Map<String, String> _profile(String name) {
       'H265',
     }.contains(name)) {
       profile['release'] = name;
+      recognized.add(releasePattern);
     }
   }
-  return ambiguous ? const {} : profile;
+  if (ambiguous) return null;
+  var remainder = text;
+  for (final pattern in recognized) {
+    remainder = remainder.replaceAll(pattern, ' ');
+  }
+  return (profile: profile, remainder: remainder);
 }

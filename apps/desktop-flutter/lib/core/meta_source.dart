@@ -13,6 +13,7 @@ library;
 enum MetaSourceKind {
   tmdb,
   douban,
+  imdb,
   bangumi,
   wikidata,
   source;
@@ -21,6 +22,7 @@ enum MetaSourceKind {
   String get label => switch (this) {
     MetaSourceKind.tmdb => 'TMDB',
     MetaSourceKind.douban => '豆瓣',
+    MetaSourceKind.imdb => 'IMDb',
     MetaSourceKind.bangumi => 'Bangumi',
     MetaSourceKind.wikidata => 'Wikidata',
     MetaSourceKind.source => '爬虫源',
@@ -30,13 +32,15 @@ enum MetaSourceKind {
   String get key => switch (this) {
     MetaSourceKind.tmdb => 'tmdb',
     MetaSourceKind.douban => 'douban',
+    MetaSourceKind.imdb => 'imdb',
     MetaSourceKind.bangumi => 'bangumi',
     MetaSourceKind.wikidata => 'wikidata',
     MetaSourceKind.source => 'source',
   };
 
   /// 可按外部身份请求的兜底源；爬虫源只读取当前资源，不具备外部身份。
-  bool get isFallback => this != MetaSourceKind.tmdb && this != MetaSourceKind.source;
+  bool get isFallback => this != MetaSourceKind.tmdb &&
+      this != MetaSourceKind.source && this != MetaSourceKind.imdb;
 
   /// 从机器名反解；无法识别返回 `null`。
   static MetaSourceKind? parse(Object? value) {
@@ -46,6 +50,8 @@ enum MetaSourceKind {
         return MetaSourceKind.tmdb;
       case 'douban':
         return MetaSourceKind.douban;
+      case 'imdb':
+        return MetaSourceKind.imdb;
       case 'bangumi':
         return MetaSourceKind.bangumi;
       case 'wikidata':
@@ -101,7 +107,7 @@ class MetaPersonRef {
     MetaSourceKind.douban => 'https://movie.douban.com/celebrity/$id/',
     MetaSourceKind.bangumi => 'https://bgm.tv/person/$id',
     MetaSourceKind.wikidata => 'https://www.wikidata.org/wiki/$id',
-    MetaSourceKind.tmdb || MetaSourceKind.source => '',
+    MetaSourceKind.tmdb || MetaSourceKind.source || MetaSourceKind.imdb => '',
   };
 
   @override

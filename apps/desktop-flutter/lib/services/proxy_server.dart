@@ -16,9 +16,10 @@ library;
 import 'ai_integration.dart';
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data' show BytesBuilder;
+import 'dart:typed_data' show BytesBuilder, Uint8List;
 
 import '../core/ad_rules.dart';
 import '../core/ad_block_stats.dart';
@@ -135,7 +136,451 @@ class LocalProxyServer {
   /// 避免被中间日志把完整 query 记下来（§11.3.1）。
   static const String pathPrefix = '/p/';
 
-  /// 启动服务。只允许回环地址。
+  /// 接收带标准媒体片段 t=秒 的本地播放URL；只保留一个跳段窗口。
+  void primePrefetch(Iterable<Uri> targets) {
+    final target = targets.firstOrNull;
+    if (target == _prefetchTarget) {
+      _queuePrefetch();
+      return;
+    }
+    _prefetchRetryQueued = false;
+    final previous = _background;
+    cancelPrefetch(clearCache: false);
+    if (target == null ||
+        target.scheme != 'http' ||
+        target.host != '127.0.0.1' ||
+        target.port != port) {
+      return;
+    }
+    _prefetchTarget = target;
+    _queuePrefetch();
+    if (previous != null && _background == previous) {
+      _prefetchRetryQueued = true;
+      previous.cancel();
+    }
+  }
+
+  void cancelPrefetch({bool clearCache = true}) {
+    _prefetchTarget = null;
+    _prefetchRetryQueued = false;
+    _prefetchQueue.clear();
+    if (clearCache) {
+      for (final state in _prefetchSessions.values) {
+        state.cache.clear();
+        state.bytes = 0;
+        state.attempts.clear();
+      }
+    }
+    _background?.cancel();
+  }
+
+  static const int prefetchWindowBytes = 24 * 1024 * 1024;
+  static const int prefetchCacheBytes = 64 * 1024 * 1024;
+  final _prefetchSessions = <String, _PrefetchSession>{};
+  final _prefetchQueue = Queue<_PrefetchJob>();
+  Uri? _prefetchTarget;
+  _PrefetchRun? _background;
+  bool _prefetchRetryQueued = false;
+
+  void _indexPrefetch(ProxySession session, Uri playlist, String text) {
+    final existing = _prefetchSessions[session.fingerprint];
+    final state = existing != null && identical(existing.session, session)
+        ? existing
+        : (_prefetchSessions[session.fingerprint] = _PrefetchSession(session));
+    if (text.contains('#EXT-X-STREAM-INF')) state.masterPlaylists.add(playlist);
+    final index = _HlsPrefetchIndex.parse(playlist, text);
+    if (index == null) {
+      if (!text.contains('#EXT-X-STREAM-INF')) {
+        state.disabled = true;
+        state.cache.clear();
+        state.bytes = 0;
+        if (_background?.job.state == state) _background?.cancel();
+      }
+      return;
+    }
+    state.indexes[playlist] = index;
+    _queuePrefetch();
+  }
+
+  void _queuePrefetch() {
+    final target = _prefetchTarget;
+    if (target == null || _prefetchQueue.isNotEmpty || _background != null) {
+      return;
+    }
+    final parts = target.pathSegments;
+    if (parts.length != 3 || parts.first != 'p') return;
+    final session = sessions.byToken(parts[1]);
+    if (session == null) return;
+    final state = _prefetchSessions[session.fingerprint];
+    if (state == null || !identical(state.session, session)) return;
+    if (state.disabled) {
+      log.debug('预取已忽略：会话停用', scope: 'proxy');
+      return;
+    }
+    final seconds = target.fragment.startsWith('t=')
+        ? double.tryParse(target.fragment.substring(2))
+        : null;
+    if (seconds == null || !seconds.isFinite || seconds < 0) return;
+    final source = decodeTarget(parts[2]);
+    final index =
+        state.indexes[source] ??
+        (state.masterPlaylists.contains(source) && state.indexes.length == 1
+            ? state.indexes.values.single
+            : null);
+    if (index == null || seconds >= index.duration) return;
+    for (final uri in state.cache.keys.toList()) {
+      final entry = state.cache[uri]!;
+      if (!entry.freshness.isFresh) {
+        state.cache.remove(uri);
+        state.bytes -= entry.bytes.length;
+      }
+    }
+    final attempt = state.attempts[target];
+    if (attempt != null &&
+        (attempt.count >= 3 ||
+            attempt.sinceStart.elapsed < const Duration(seconds: 1))) {
+      return;
+    }
+    if (attempt == null && state.attempts.length >= 64) return;
+    final window = _PrefetchWindow();
+    final queued = <Uri>{};
+    var mediaSeconds = 0.0;
+    for (final segment in index.segments) {
+      if (segment.start + segment.duration <= seconds) continue;
+      if (mediaSeconds + segment.duration > 30) break;
+      mediaSeconds += segment.duration;
+      for (final uri in [
+        segment.key,
+        segment.initialization,
+        segment.uri,
+      ].whereType<Uri>()) {
+        if (queued.add(uri) && !state.cache.containsKey(uri)) {
+          _prefetchQueue.add(_PrefetchJob(state, uri, window));
+        }
+      }
+    }
+    if (_prefetchQueue.isNotEmpty) {
+      final record = state.attempts.putIfAbsent(target, _PrefetchAttempt.new);
+      record.count += 1;
+      record.sinceStart
+        ..reset()
+        ..start();
+    }
+    _pumpPrefetch();
+  }
+
+  bool _prefetchValid(_PrefetchRun run) =>
+      isRunning &&
+      !run.cancelled &&
+      _activeRequests == 0 &&
+      !run.job.state.disabled &&
+      run.job.state.session.usable &&
+      identical(
+        sessions.byToken(run.job.state.session.token),
+        run.job.state.session,
+      );
+
+  void _pumpPrefetch() {
+    for (final key in _prefetchSessions.keys.toList()) {
+      final state = _prefetchSessions[key]!;
+      if (!state.session.usable ||
+          !identical(sessions.byToken(state.session.token), state.session)) {
+        _prefetchSessions.remove(key);
+        if (_background?.job.state == state) _background!.cancel();
+      }
+    }
+    if (!isRunning || _activeRequests != 0 || _background != null) return;
+    while (_prefetchQueue.isNotEmpty) {
+      final job = _prefetchQueue.removeFirst();
+      if (job.state.disabled ||
+          !job.state.session.usable ||
+          job.window.bytes >= prefetchWindowBytes ||
+          job.state.cache.containsKey(job.uri)) {
+        continue;
+      }
+      final run = _PrefetchRun(job);
+      _background = run;
+      unawaited(
+        _fetchPrefetch(run).whenComplete(() {
+          run.client.close(force: true);
+          if (identical(_background, run)) _background = null;
+          log.debug(
+            '预取任务已释放 fingerprint=${run.job.state.session.fingerprint}',
+            scope: 'proxy',
+          );
+          if (!run.done.isCompleted) run.done.complete();
+          if (!run.cancelled && _prefetchQueue.isEmpty) {
+            log.debug('预取窗口完成 bytes=${run.job.window.bytes}', scope: 'proxy');
+          }
+          if (_prefetchRetryQueued) {
+            _prefetchRetryQueued = false;
+            _queuePrefetch();
+          }
+          _pumpPrefetch();
+        }),
+      );
+      return;
+    }
+  }
+
+  Future<void> _preemptPrefetch() async {
+    final run = _background;
+    if (run == null) return;
+    run.cancel();
+    await run.done.future;
+  }
+
+  Future<void> _fetchPrefetch(_PrefetchRun run) async {
+    final job = run.job;
+    final session = job.state.session;
+    var logical = job.uri;
+    try {
+      for (var redirect = 0; redirect <= policy.maxRedirects; redirect++) {
+        if (!_prefetchValid(run)) return;
+        final resolver = session.targetResolver;
+        int? mapped;
+        if (resolver != null) {
+          if (!_managedLogicalDecision(logical).allowed) return;
+          mapped = await run.wait(resolver(logical).timeout(requestTimeout));
+          if (mapped != null &&
+              (mapped < 1 || mapped > 65535 || mapped == port)) {
+            return;
+          }
+        }
+        final wire = mapped == null
+            ? logical
+            : logical.replace(host: '127.0.0.1', port: mapped, userInfo: '');
+        final base = session.allowedHosts.isEmpty
+            ? policy.allowedHosts
+            : session.allowedHosts;
+        final hop = ProxyTargetPolicy(
+          allowPrivate: mapped == null && policy.allowPrivate,
+          allowLoopback: mapped != null || policy.allowLoopback,
+          allowedHosts: mapped != null
+              ? {'127.0.0.1:$mapped'}
+              : (base.isEmpty ? const {} : {...base, ...session.derivedHosts}),
+          allowedSchemes: policy.allowedSchemes,
+          maxRedirects: policy.maxRedirects,
+        );
+        if (!hop.evaluateStatic(wire).allowed ||
+            adRules.isAdHost(logical.host)) {
+          return;
+        }
+        final addresses = await run.wait(
+          InternetAddress.lookup(wire.host).timeout(requestTimeout),
+        );
+        if (!_prefetchValid(run) ||
+            !hop.evaluateAll(addresses, wire.host).allowed) {
+          return;
+        }
+        final request = await run.client.getUrl(wire).timeout(requestTimeout);
+        if (!_prefetchValid(run)) {
+          request.abort();
+          return;
+        }
+        request.followRedirects = false;
+        final headers = _forwardHeaders(
+          session: session,
+          request: null,
+          target: logical,
+          range: null,
+          managed: mapped != null,
+        );
+        headers.forEach((key, value) => request.headers.set(key, value));
+        final responseStarted = Stopwatch()..start();
+        final response = await request.close().timeout(requestTimeout);
+        if (response.statusCode == 429) {
+          _disablePrefetchSession(session);
+          await _abort(response);
+          return;
+        }
+        if (!_prefetchValid(run)) {
+          await _abort(response);
+          return;
+        }
+        if (!session.accountRequest(response.contentLength)) {
+          await _abort(response);
+          job.state.disabled = true;
+          return;
+        }
+        if (_isRedirect(response.statusCode)) {
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          await _abort(response);
+          if (location == null || redirect == policy.maxRedirects) return;
+          logical = logical.resolve(location);
+          final check = ProxyTargetPolicy(
+            allowPrivate: policy.allowPrivate,
+            allowLoopback: policy.allowLoopback,
+            allowedSchemes: policy.allowedSchemes,
+          );
+          if (!check.evaluateStatic(logical).allowed) return;
+          session.derivedHosts.add(logical.host.toLowerCase());
+          continue;
+        }
+        final type =
+            response.headers.value(HttpHeaders.contentTypeHeader) ??
+            'application/octet-stream';
+        final freshness = _PrefetchFreshness.read(
+          response.headers,
+          responseStarted.elapsed,
+        );
+        final remaining = prefetchWindowBytes - job.window.bytes;
+        if (response.statusCode != 200 ||
+            freshness == null ||
+            type.toLowerCase().contains('text/html') ||
+            response.headers.value(HttpHeaders.contentEncodingHeader) != null ||
+            response.contentLength > remaining) {
+          if (response.contentLength > remaining) {
+            job.window.bytes = prefetchWindowBytes;
+          }
+          await _abort(response);
+          return;
+        }
+        final builder = BytesBuilder(copy: false);
+        await for (final chunk in response.timeout(requestTimeout)) {
+          if (!_prefetchValid(run) ||
+              chunk.length > prefetchWindowBytes - job.window.bytes) {
+            job.window.bytes = prefetchWindowBytes;
+            run.cancel();
+            return;
+          }
+          if (response.contentLength < 0) {
+            if (chunk.length > session.maxBytes - session.bytes) {
+              job.state.disabled = true;
+              run.cancel();
+              return;
+            }
+            session.bytes += chunk.length;
+          }
+          job.window.bytes += chunk.length;
+          session.recordReceivedBytes(chunk.length);
+          builder.add(chunk);
+        }
+        if (!_prefetchValid(run) ||
+            (response.contentLength >= 0 &&
+                builder.length != response.contentLength)) {
+          return;
+        }
+        final bytes = builder.takeBytes();
+        if (bytes.length >= 8 &&
+            bytes[0] == 137 &&
+            bytes[1] == 80 &&
+            bytes[2] == 78 &&
+            bytes[3] == 71) {
+          return;
+        }
+        _cachePrefetch(job.state, job.uri, bytes, type, freshness);
+        return;
+      }
+    } catch (_) {
+      // 取消和后台失败不改变前台播放，也不自动重试。
+    }
+  }
+
+  void _disablePrefetchSession(ProxySession session) {
+    final state = _prefetchSessions.putIfAbsent(
+      session.fingerprint,
+      () => _PrefetchSession(session),
+    );
+    final alreadyDisabled = state.disabled;
+    state.disabled = true;
+    state.cache.clear();
+    state.bytes = 0;
+    _prefetchQueue.removeWhere((job) => identical(job.state.session, session));
+    if (_background?.job.state.session == session) _background!.cancel();
+    if (!alreadyDisabled) {
+      log.info('预取已禁用：上游429 session=${session.fingerprint}', scope: 'proxy');
+    }
+  }
+
+  void _cachePrefetch(
+    _PrefetchSession state,
+    Uri uri,
+    Uint8List bytes,
+    String type,
+    _PrefetchFreshness freshness,
+  ) {
+    if (!freshness.isFresh) return;
+    if (bytes.length > prefetchWindowBytes || !state.session.usable) return;
+    final old = state.cache.remove(uri);
+    state.bytes -= old?.bytes.length ?? 0;
+    while (state.bytes + bytes.length > prefetchCacheBytes &&
+        state.cache.isNotEmpty) {
+      final removed = state.cache.remove(state.cache.keys.first)!;
+      state.bytes -= removed.bytes.length;
+    }
+    state.cache[uri] = _CachedPrefetch(bytes, type, freshness);
+    state.bytes += bytes.length;
+    log.debug(
+      '预取缓存 bytes=${bytes.length} total=${state.bytes} '
+      'fingerprint=${state.session.fingerprint}',
+      scope: 'proxy',
+    );
+  }
+
+  Future<bool> _servePrefetch(
+    HttpRequest request,
+    ProxySession session,
+    Uri target,
+  ) async {
+    final state = _prefetchSessions[session.fingerprint];
+    if (request.method != 'GET' && request.method != 'HEAD') return false;
+    final entry = state?.cache.remove(target);
+    if (entry == null) return false;
+    // A revalidation request invalidates our old copy and uses normal forwarding.
+    if (request.headers[HttpHeaders.cacheControlHeader] != null ||
+        request.headers[HttpHeaders.pragmaHeader] != null ||
+        request.headers.value(HttpHeaders.ifRangeHeader) != null ||
+        request.headers.value(HttpHeaders.ifNoneMatchHeader) != null ||
+        request.headers.value(HttpHeaders.ifModifiedSinceHeader) != null ||
+        !entry.freshness.isFresh) {
+      state!.bytes -= entry.bytes.length;
+      return false;
+    }
+    state!.cache[target] = entry;
+    final length = entry.bytes.length;
+    var start = 0;
+    var end = length - 1;
+    final range = request.headers.value(HttpHeaders.rangeHeader);
+    if (range != null) {
+      final match = RegExp(r'^bytes=(\d*)-(\d*)$').firstMatch(range);
+      if (match == null) return false;
+      if (match[1]!.isEmpty) {
+        final suffix = int.tryParse(match[2]!);
+        if (suffix == null || suffix <= 0) return false;
+        start = length > suffix ? length - suffix : 0;
+      } else {
+        start = int.tryParse(match[1]!) ?? length;
+        end = match[2]!.isEmpty ? length - 1 : int.tryParse(match[2]!) ?? -1;
+        if (end >= length) end = length - 1;
+      }
+    }
+    final response = request.response;
+    response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+    response.headers.set(HttpHeaders.contentTypeHeader, entry.contentType);
+    // Local reuse never grants downstream caches a fresh lifetime of their own.
+    response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+    if (start >= length || start > end) {
+      response.statusCode = 416;
+      response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$length');
+      await response.close();
+      return true;
+    }
+    response.statusCode = range == null ? 200 : 206;
+    if (range != null) {
+      response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/$length',
+      );
+    }
+    response.contentLength = end - start + 1;
+    if (request.method != 'HEAD') {
+      response.add(entry.bytes.sublist(start, end + 1));
+    }
+    await response.close();
+    return true;
+  }
+
   Future<void> start({int port = 0, String host = '127.0.0.1'}) async {
     if (_server != null) return;
     if (host != '127.0.0.1' && host != 'localhost' && host != '::1') {
@@ -161,6 +606,9 @@ class LocalProxyServer {
   Future<void> stop() async {
     final server = _server;
     _server = null;
+    cancelPrefetch();
+    await _preemptPrefetch();
+    _prefetchSessions.clear();
     sessions.revokeAll();
     _upstream.close(force: true);
     if (server != null) {
@@ -321,9 +769,11 @@ class LocalProxyServer {
     }
     _activeRequests += 1;
     try {
+      await _preemptPrefetch();
       await _forward(request, session, target);
     } finally {
       _activeRequests -= 1;
+      _pumpPrefetch();
     }
   }
 
@@ -373,6 +823,10 @@ class LocalProxyServer {
     if (!identical(sessions.byToken(session.token), session) ||
         !session.usable) {
       await _fail(request, 401, 'token 无效或会话已失效');
+      return;
+    }
+    if (!adRules.isAdHost(target.host) &&
+        await _servePrefetch(request, session, target)) {
       return;
     }
     // 会话级白名单优先于全局策略（§11.3.1「token 只授权当前站点与当前播放请求」）。
@@ -621,6 +1075,7 @@ class LocalProxyServer {
       }
 
       lastUpstreamStatus = response.statusCode;
+      if (lastUpstreamStatus == 429) _disablePrefetchSession(session);
 
       // 重定向：手工跟随并逐跳复核（§11.3.1）。
       if (_isRedirect(response.statusCode)) {
@@ -972,6 +1427,7 @@ class LocalProxyServer {
         );
         onAdBlockClean?.call(cleaned, session.fingerprint);
       }
+      _indexPrefetch(session, logicalCurrent, cleaned.text);
       final rewritten = _aliasPngTsMedia(
         session,
         HlsPlaylistRewriter.rewrite(
@@ -1552,7 +2008,7 @@ class LocalProxyServer {
 
   Map<String, String> _forwardHeaders({
     required ProxySession session,
-    required HttpRequest request,
+    required HttpRequest? request,
     required Uri target,
     required String? range,
     bool managed = false,
@@ -1560,28 +2016,38 @@ class LocalProxyServer {
     String credentialOrigin(Uri uri) => managed
         ? '${uri.scheme}://${uri.host}:${uri.port}'
         : '${uri.host}:${uri.port}';
-    final origin = session.establishedOrigin ?? credentialOrigin(request.uri);
+    final origin =
+        session.establishedOrigin ?? credentialOrigin(request?.uri ?? target);
     final targetOrigin = credentialOrigin(target);
 
     final headers = <String, String>{
       // 强制 identity：避免压缩后 Content-Range/Content-Length 与实际字节不符。
       HttpHeaders.acceptEncodingHeader: 'identity',
+      HttpHeaders.cacheControlHeader: ?request?.headers.value(
+        HttpHeaders.cacheControlHeader,
+      ),
+      HttpHeaders.pragmaHeader: ?request?.headers.value(
+        HttpHeaders.pragmaHeader,
+      ),
       'Range': ?range,
-      'If-Range': ?request.headers.value(HttpHeaders.ifRangeHeader),
-      'If-None-Match': ?request.headers.value(HttpHeaders.ifNoneMatchHeader),
-      'If-Modified-Since': ?request.headers.value(
+      'If-Range': ?request?.headers.value(HttpHeaders.ifRangeHeader),
+      'If-None-Match': ?request?.headers.value(HttpHeaders.ifNoneMatchHeader),
+      'If-Modified-Since': ?request?.headers.value(
         HttpHeaders.ifModifiedSinceHeader,
       ),
     };
 
     // User-Agent 可在会话内继承（§11.3.1）。
     final userAgent =
-        session.userAgent ?? request.headers.value(HttpHeaders.userAgentHeader);
+        session.userAgent ??
+        request?.headers.value(HttpHeaders.userAgentHeader);
     if (userAgent != null) headers[HttpHeaders.userAgentHeader] = userAgent;
     // Referer 只在站点显式声明（会话注入）或与目标同主机时传播。
     // 播放器的 Referer 指向本地代理，跨域转发会触发防盗链 CDN 的 403
     // （§11.3.1「Referer 按显式域名授权传播」）。
-    final referer = session.referer ?? _sameHostReferer(request, target);
+    final referer =
+        session.referer ??
+        (request == null ? null : _sameHostReferer(request, target));
     if (referer != null) headers[HttpHeaders.refererHeader] = referer;
 
     // 凭据只同源传播；跨 origin 重定向已由 origin/targetOrigin 差异覆盖。
@@ -1755,6 +2221,7 @@ class LocalProxyServer {
       final HttpClientResponse result;
       try {
         result = await outbound.close().timeout(requestTimeout);
+        if (result.statusCode == 429) _disablePrefetchSession(session);
       } finally {
         timer.cancel();
       }
@@ -2307,4 +2774,216 @@ class AdBlockSessionSummary {
   final int removedSegments;
   final double removedDurationSec;
   final bool heuristic;
+}
+
+class _PrefetchFreshness {
+  _PrefetchFreshness(this.remaining) : clock = Stopwatch()..start();
+  final Duration remaining;
+  final Stopwatch clock;
+  bool get isFresh => clock.elapsed < remaining;
+
+  static _PrefetchFreshness? read(HttpHeaders headers, Duration responseDelay) {
+    if (headers[HttpHeaders.varyHeader] != null ||
+        headers[HttpHeaders.setCookieHeader] != null ||
+        headers[HttpHeaders.pragmaHeader] != null) {
+      return null;
+    }
+    String? value(String name) => headers[name]?.join(',');
+    final directives = <String, String?>{};
+    final control = value(HttpHeaders.cacheControlHeader);
+    if (control != null) {
+      for (final item in control.split(',')) {
+        final separator = item.indexOf('=');
+        final name = (separator < 0 ? item : item.substring(0, separator))
+            .trim()
+            .toLowerCase();
+        if (!const {
+              'public',
+              'immutable',
+              'must-revalidate',
+              'proxy-revalidate',
+              'no-transform',
+              'max-age',
+              's-maxage',
+            }.contains(name) ||
+            directives.containsKey(name)) {
+          return null;
+        }
+        directives[name] = separator < 0
+            ? null
+            : item.substring(separator + 1).trim();
+      }
+    }
+    final now = DateTime.now().toUtc();
+    DateTime? date(String name) {
+      final text = value(name);
+      return text == null ? null : HttpDate.parse(text);
+    }
+
+    try {
+      final sourceDate = date(HttpHeaders.dateHeader);
+      final expires = date(HttpHeaders.expiresHeader);
+      final ageText = value(HttpHeaders.ageHeader);
+      var currentAge = Duration.zero;
+      if (ageText != null) {
+        if (!RegExp(r'^\d+$').hasMatch(ageText)) return null;
+        final seconds = int.tryParse(ageText);
+        if (seconds == null || seconds > 2147483647) return null;
+        currentAge = Duration(seconds: seconds);
+      }
+      if (sourceDate != null && now.difference(sourceDate) > currentAge) {
+        currentAge = now.difference(sourceDate);
+      }
+      currentAge += responseDelay;
+      Duration? lifetime;
+      for (final key in ['max-age', 's-maxage']) {
+        if (!directives.containsKey(key)) continue;
+        var text = directives[key];
+        if (text != null &&
+            text.length > 1 &&
+            text.startsWith('"') &&
+            text.endsWith('"')) {
+          text = text.substring(1, text.length - 1);
+        }
+        if (text == null || !RegExp(r'^\d+$').hasMatch(text)) return null;
+        final seconds = int.tryParse(text);
+        if (seconds == null || seconds > 2147483647) return null;
+        final candidate = Duration(seconds: seconds);
+        if (lifetime == null || candidate < lifetime) lifetime = candidate;
+      }
+      if (expires != null) {
+        final candidate = expires.difference(sourceDate ?? now);
+        if (lifetime == null || candidate < lifetime) lifetime = candidate;
+      }
+      var remaining = (lifetime ?? const Duration(seconds: 30)) - currentAge;
+      if (remaining <= Duration.zero) return null;
+      if (remaining > const Duration(seconds: 30)) {
+        remaining = const Duration(seconds: 30);
+      }
+      return _PrefetchFreshness(remaining);
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+class _CachedPrefetch {
+  _CachedPrefetch(this.bytes, this.contentType, this.freshness);
+  final Uint8List bytes;
+  final String contentType;
+  final _PrefetchFreshness freshness;
+}
+
+class _PrefetchSession {
+  _PrefetchSession(this.session);
+  final ProxySession session;
+  bool disabled = false;
+  int bytes = 0;
+  final indexes = <Uri, _HlsPrefetchIndex>{};
+  final masterPlaylists = <Uri>{};
+  final cache = <Uri, _CachedPrefetch>{};
+  final attempts = <Uri, _PrefetchAttempt>{};
+}
+
+class _PrefetchAttempt {
+  int count = 0;
+  final sinceStart = Stopwatch();
+}
+
+class _PrefetchWindow {
+  int bytes = 0;
+}
+
+class _PrefetchJob {
+  _PrefetchJob(this.state, this.uri, this.window);
+  final _PrefetchSession state;
+  final Uri uri;
+  final _PrefetchWindow window;
+}
+
+class _PrefetchRun {
+  _PrefetchRun(this.job);
+  final _PrefetchJob job;
+  final client = HttpClient()..autoUncompress = false;
+  final done = Completer<void>();
+  final _cancelled = Completer<void>();
+  bool cancelled = false;
+  Future<T> wait<T>(Future<T> pending) => Future.any([
+    pending,
+    _cancelled.future.then<T>((_) => throw const _PrefetchCancelled()),
+  ]);
+  void cancel() {
+    cancelled = true;
+    if (!_cancelled.isCompleted) _cancelled.complete();
+    client.close(force: true);
+  }
+}
+
+class _PrefetchCancelled implements Exception {
+  const _PrefetchCancelled();
+}
+
+class _HlsPrefetchIndex {
+  _HlsPrefetchIndex(this.segments, this.duration);
+  final List<
+    ({Uri uri, double start, double duration, Uri? key, Uri? initialization})
+  >
+  segments;
+  final double duration;
+  static _HlsPrefetchIndex? parse(Uri playlist, String text) {
+    if (!text.startsWith('#EXTM3U') ||
+        !text.contains('#EXT-X-ENDLIST') ||
+        text.contains('#EXT-X-BYTERANGE') ||
+        text.contains('#EXT-X-STREAM-INF')) {
+      return null;
+    }
+    final segments =
+        <
+          ({
+            Uri uri,
+            double start,
+            double duration,
+            Uri? key,
+            Uri? initialization,
+          })
+        >[];
+    double start = 0;
+    double? duration;
+    Uri? key;
+    Uri? initialization;
+    for (final raw in const LineSplitter().convert(text)) {
+      final line = raw.trim();
+      if (line.startsWith('#EXTINF:')) {
+        duration = double.tryParse(line.substring(8).split(',').first);
+      } else if (line.startsWith('#EXT-X-MAP:') ||
+          line.startsWith('#EXT-X-KEY:')) {
+        final value = RegExp('URI="([^"]+)"').firstMatch(line)?.group(1);
+        if (line.startsWith('#EXT-X-MAP:')) {
+          if (value == null || line.contains('BYTERANGE=')) return null;
+          initialization = playlist.resolve(value);
+        } else {
+          if (line.contains('METHOD=NONE')) {
+            key = null;
+          } else {
+            if (value == null) return null;
+            key = playlist.resolve(value);
+          }
+        }
+      } else if (line.isNotEmpty && !line.startsWith('#')) {
+        if (duration == null || !duration.isFinite || duration <= 0) {
+          return null;
+        }
+        segments.add((
+          uri: playlist.resolve(line),
+          start: start,
+          duration: duration,
+          key: key,
+          initialization: initialization,
+        ));
+        start += duration;
+        duration = null;
+      }
+    }
+    return segments.isEmpty ? null : _HlsPrefetchIndex(segments, start);
+  }
 }
