@@ -387,6 +387,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool _controlsVisible = true;
   Timer? _saveTimer;
   Timer? _controlHideTimer;
+  Timer? _cursorHideTimer;
+  bool _fullscreenCursorIdle = false;
+  static const _idleHideDelay = Duration(seconds: 3);
 
   /// 画面双击判定（见 [PlayerDoubleClickGate]）。
   final PlayerDoubleClickGate _clickGate = PlayerDoubleClickGate();
@@ -729,6 +732,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     )..addListener(_onControllerChanged);
     _bindGesturePlaybackStream();
     windowManager.addListener(this);
+    unawaited(_syncInitialFullscreen());
     widget.liveSession?.addListener(_onPlaybackSessionChanged);
     _osdNow = debugOsdClockOverride ?? DateTime.now();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3798,6 +3802,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _saveTimer?.cancel();
     _recoveryTicker?.cancel();
     _controlHideTimer?.cancel();
+    _cursorHideTimer?.cancel();
     _clickGate.dispose();
     _clearGesturePlaybackIntent();
     unawaited(_gesturePlayingSubscription?.cancel());
@@ -3816,6 +3821,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _syncInitialFullscreen() async {
+    try {
+      final actual = await windowManager.isFullScreen();
+      if (!mounted || actual == _fullscreen) return;
+      setState(() => _fullscreen = actual);
+      _touchFullscreenCursor();
+    } catch (error) {
+      debugPrint('查询播放器全屏状态失败：$error');
+    }
   }
 
   @override
@@ -3838,6 +3854,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controlsVisible = true;
     });
     _controlHideTimer?.cancel();
+    _touchFullscreenCursor();
     // 兜住仍需要手动恢复标题栏的平台。
     unawaited(restoreWindowTitleBar());
   }
@@ -3884,6 +3901,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _fullscreen = false;
       _controlsVisible = true;
     });
+    _touchFullscreenCursor();
     // canPop 要等这一帧重建后才生效；postFrame 里再 pop，避免再次被
     // 自己的 PopScope 拦下（那会形成「恢复 → 拦截」的循环）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -4870,7 +4888,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
 
     return PopScope<Object?>(
-      canPop: !_fullscreen,
+      canPop: !_fullscreen || !_enteredFullscreen,
       onPopInvokedWithResult: _onPopInvokedWithResult,
       child: CallbackShortcuts(
         bindings: shortcuts,
@@ -4892,8 +4910,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                     // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
                     // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
                     child: MouseRegion(
+                      cursor:
+                          _fullscreen &&
+                              !_controlsVisible &&
+                              _fullscreenCursorIdle
+                          ? SystemMouseCursors.none
+                          : MouseCursor.defer,
                       onHover: (_) {
-                        if (!_controlsVisible) _touchControls();
+                        if (!_controlsVisible) {
+                          _touchControls();
+                        } else {
+                          _touchFullscreenCursor();
+                        }
                       },
                       child: GestureDetector(
                         key: _videoGestureKey,
@@ -6377,7 +6405,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  void _touchFullscreenCursor() {
+    _cursorHideTimer?.cancel();
+    if (_fullscreenCursorIdle) {
+      setState(() => _fullscreenCursorIdle = false);
+    }
+    if (!_fullscreen) return;
+    _cursorHideTimer = Timer(_idleHideDelay, () {
+      if (mounted) setState(() => _fullscreenCursorIdle = true);
+    });
+  }
+
   void _touchControls() {
+    _touchFullscreenCursor();
     _controlHideTimer?.cancel();
     if (mounted && !_controlsVisible) {
       setState(() => _controlsVisible = true);
@@ -6385,7 +6425,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _syncOsdTimer();
     // 菜单打开期间不排隐藏计时器（`design/04` §5.4）。
     if (_contextMenuAnchor != null || _hasLivePanels) return;
-    _controlHideTimer = Timer(const Duration(seconds: 3), () {
+    _controlHideTimer = Timer(_idleHideDelay, () {
       if (!mounted) return;
       if (_contextMenuAnchor != null || _hasLivePanels) return;
       setState(() => _controlsVisible = false);
