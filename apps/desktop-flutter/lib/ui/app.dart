@@ -469,6 +469,9 @@ class _AppShellState extends State<AppShell> {
   AppError? _shownLastError;
   String? _shownNotice;
 
+  /// 已弹过的去广告提示（按 seq 去重：同文案的两集也要各弹一次）。
+  ({int seq, String message})? _shownAdBlockNotice;
+
   /// 上一次已经推成通知的「发现新版本」tag（见 [_syncToasts]）。
   String? _shownUpdateNotice;
 
@@ -581,6 +584,20 @@ class _AppShellState extends State<AppShell> {
           },
         );
       }
+    }
+    // 去广告：拦到广告就弹一条（文案对齐安卓 HlsAdblockNotice，通道复用上面的 showToast）。
+    // 按 seq 判断而不是按文案：同一句「已跳过 2 个广告片段」在两集里都要能弹。
+    final adBlockNotice = _state.adBlockNotice;
+    if (adBlockNotice != null &&
+        adBlockNotice.seq != _shownAdBlockNotice?.seq) {
+      _shownAdBlockNotice = adBlockNotice;
+      showToast(
+        adBlockNotice.message,
+        kind: ToastKind.info,
+        onDismiss: () {
+          if (mounted) _state.clearAdBlockNotice();
+        },
+      );
     }
     final notice = _state.notice;
     if (notice != _shownNotice) {

@@ -179,6 +179,17 @@ double? _asDouble(Object? value) {
 
 // ------------------------------------------------------------------ 弹幕源解析
 
+/// 把响应开头压成一行，供失败日志分辨「返回的到底是什么」。
+///
+/// 去 URL（可能带 token）、压空白、截断；空内容返回空串。**只用于日志**。
+String danmakuPayloadPreview(String text, {int maxChars = 80}) {
+  var value = text.replaceAll(RegExp(r'https?://\S+'), '[url]');
+  value = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (value.isEmpty) return '';
+  if (value.length <= maxChars) return value;
+  return '${value.substring(0, maxChars)}…';
+}
+
 /// 解析一个弹幕源条目；不可用返回 null。
 ///
 /// 兼容形态（与 Android `Danmaku.arrayFrom` 同语义）：
@@ -312,8 +323,7 @@ class DanmakuParseResult {
   /// 被丢弃的条目数（非法行/不支持的弹幕类型），用于诊断。
   final int skipped;
 
-  String get logLine =>
-      'format=$format items=${items.length} skipped=$skipped';
+  String get logLine => 'format=$format items=${items.length} skipped=$skipped';
 }
 
 /// 弹幕文件格式。
@@ -323,6 +333,25 @@ enum DanmakuFormat {
 
   /// 行式文本：`[时间,模式,字号,颜色]文本`。
   text,
+}
+
+/// 单次弹幕请求该给多久。
+///
+/// 站源脚本弹幕（本机数据面 `/s/<token>/proxy`）的耗时在**站源自己的上游**：
+/// 实测 AppRJ 的 `do=danmu` 要 9.5–27 秒（内部两路搜索 + 上游匹配 + 抓取），
+/// 弹幕库的 15 秒预算会把它砍成「网络不可达或 DNS 失败」。
+/// 弹幕库本身是直连查询，仍然用短预算——不能让一个慢站源拖住用户。
+Duration danmakuRequestTimeout(
+  Uri uri, {
+  required Duration library,
+  required Duration siteSource,
+}) {
+  final host = uri.host.toLowerCase();
+  final loopback = host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  final segments = uri.pathSegments;
+  final siteProxy =
+      segments.length == 3 && segments[0] == 's' && segments[2] == 'proxy';
+  return loopback && siteProxy ? siteSource : library;
 }
 
 /// 判定弹幕文件格式（对齐 media3 各 `Parser.sniff` 的取舍）。
@@ -335,7 +364,13 @@ DanmakuFormat? sniffDanmakuFormat(String content) {
   for (var index = 0; index < lines.length && index < 200; index++) {
     final trimmed = lines[index].trim();
     if (trimmed.isEmpty) continue;
-    if (trimmed.startsWith('<?xml')) continue;
+    if (trimmed.startsWith('<?xml')) {
+      final end = trimmed.indexOf('?>');
+      if (end >= 0 && trimmed.substring(end + 2).trimLeft().startsWith('<')) {
+        return DanmakuFormat.xml;
+      }
+      continue;
+    }
     if (trimmed.startsWith('<')) return DanmakuFormat.xml;
     if (danmakuTextLinePattern.hasMatch(trimmed)) return DanmakuFormat.text;
     return null;
@@ -368,9 +403,7 @@ DanmakuParseResult parseDanmakuContent(
   if (format == null) {
     throw const DanmakuFormatException('无法识别弹幕格式（既不是 Bilibili XML 也不是行式文本）');
   }
-  return format == DanmakuFormat.xml
-      ? _parseXml(content)
-      : _parseText(content);
+  return format == DanmakuFormat.xml ? _parseXml(content) : _parseText(content);
 }
 
 /// 弹幕内容无法解析。
@@ -657,6 +690,7 @@ class DanmakuTrackAllocator {
     ).visibleAt(positionMs);
   }
 }
+
 /// 预排好的弹幕场景：轨道只排一次，按位置查询只碰活跃的那几条。
 ///
 /// 旧的 [DanmakuTrackAllocator.visibleAt] 每次调用都重排全表（排序 + 全量轨道

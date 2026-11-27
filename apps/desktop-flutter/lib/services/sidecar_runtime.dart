@@ -321,7 +321,7 @@ class SidecarRuntime
             requestId: requestId,
           );
           return _toSiteResult(
-            _scopeProxyUrls(raw, owner),
+            _scopeProxyUrls(raw, owner, log: log, siteKey: site.key),
             method: SpiderMethod.play,
           );
         } finally {
@@ -334,15 +334,60 @@ class SidecarRuntime
     }
   }
 
-  static Object? _scopeProxyUrls(Object? value, SpiderProxySession owner) {
-    if (value is String) return owner.scopeUrl(value);
+  static Object? _scopeProxyUrls(
+    Object? value,
+    SpiderProxySession owner, {
+    LogService? log,
+    String siteKey = '',
+  }) {
+    final touched = <String>[];
+    final scoped = scopeProxyUrlsWith(value, owner.scopeUrl, touched: touched);
+    // 一行诊断：映射了几条、落在哪些字段。会话没生效时这里是 0 条，
+    // 与「映射了但站源不实现 do=…」在下一次失败日志里可以直接分开。
+    if (log != null && touched.isNotEmpty) {
+      log.debug(
+        '播放结果本机代理地址映射 ${touched.length} 条 site=$siteKey '
+        'fields=${touched.join(",")}',
+        scope: 'spider',
+      );
+    }
+    return scoped;
+  }
+
+  /// 纯遍历：把每个字符串交给 [scope]，真正发生变化的字段路径记进 [touched]。
+  ///
+  /// 单独抽出来是为了能不起会话就测「哪些字段会被映射」——诊断日志的可读性靠它。
+  static Object? scopeProxyUrlsWith(
+    Object? value,
+    String Function(String) scope, {
+    List<String>? touched,
+    String path = '',
+  }) {
+    if (value is String) {
+      final next = scope(value);
+      if (next != value) touched?.add(path.isEmpty ? '*' : path);
+      return next;
+    }
     if (value is List) {
-      return [for (final item in value) _scopeProxyUrls(item, owner)];
+      return [
+        for (var index = 0; index < value.length; index++)
+          scopeProxyUrlsWith(
+            value[index],
+            scope,
+            touched: touched,
+            path: path.isEmpty ? '$index' : '$path.$index',
+          ),
+      ];
     }
     if (value is Map) {
       return {
         for (final entry in value.entries)
-          entry.key: _scopeProxyUrls(entry.value, owner),
+          entry.key: scopeProxyUrlsWith(
+            entry.value,
+            scope,
+            touched: touched,
+            path: path.isEmpty ? '${entry.key}' : '$path.${entry.key}',
+          ),
       };
     }
     return value;

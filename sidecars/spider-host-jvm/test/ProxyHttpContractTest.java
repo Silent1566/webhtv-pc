@@ -79,10 +79,11 @@ public final class ProxyHttpContractTest {
         final SidecarServer server; final Thread serving; final AtomicInteger ids=new AtomicInteger();
         final AtomicLong ipcBytes=new AtomicLong();
         final AtomicBoolean ended=new AtomicBoolean();
-        Client(Spider spider, boolean authorized, boolean capability) throws Exception {
+        Client(Spider spider, boolean authorized, boolean capability) throws Exception { this(spider,authorized,capability,2); }
+        Client(Spider spider, boolean authorized, boolean capability, int declaredConcurrency) throws Exception {
             stdin=new PipedInputStream(requests,65536);stdout=new PipedOutputStream(responses);
             server=new SidecarServer(spider,Map.of("key","proxy-fixture","capabilities",capability?List.of("play","proxy"):List.of("play"),
-                    "permissions",Map.of("localProxy",authorized),"limits",Map.of("concurrency",2)),stdin,stdout);
+                    "permissions",Map.of("localProxy",authorized),"limits",Map.of("concurrency",declaredConcurrency)),stdin,stdout);
             serving=new Thread(()->server.serve(),"fixture-ipc-server");serving.setDaemon(true);serving.start();
             Thread reader=new Thread(()->{try{Object frame;while((frame=Ipc.readFrame(responses,Ipc.DEFAULT_MAX_FRAME_BYTES))!=null){
                 ipcBytes.addAndGet(Json.write(frame).length());Map<String,Object> value=map(frame);
@@ -138,6 +139,20 @@ public final class ProxyHttpContractTest {
             check(eof,"declared length early EOF fails HTTP body");awaitClosed(eofClosed);
             int before=closed.get();status(entry+"?bad=1",502);awaitClosed(before);
             HttpResponse<InputStream> origin=request(entry,"GET",null,"https://untrusted.invalid");check(origin.statusCode()==403,"browser Origin denied");origin.body().close();
+            // 复用连接的客户端会把 RST 当成本次请求失败（实测 5 次里 2 次 ECONNRESET）：
+            // 代理响应必须显式声明不可复用，而不是让对端凭 HTTP/1.1 默认值去猜。
+            try(Socket raw=new Socket("127.0.0.1",URI.create(base).getPort())) {
+                raw.setSoTimeout(5000);
+                String path=URI.create(entry).getRawPath();
+                raw.getOutputStream().write(("GET "+path+" HTTP/1.1\r\nHost: 127.0.0.1:"+URI.create(base).getPort()+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                ByteArrayOutputStream seen=new ByteArrayOutputStream();
+                try{int b;while((b=raw.getInputStream().read())!=-1)seen.write(b);}
+                catch(SocketTimeoutException blocked){check(false,"proxy must not leave the connection open after a response");}
+                catch(IOException reset){}
+                String head=seen.toString(StandardCharsets.US_ASCII).toLowerCase(Locale.ROOT);
+                check(head.startsWith("http/1.1 200"),"raw entry response served");
+                check(head.contains("\r\nconnection: close"),"proxy advertises Connection: close so clients never reuse");
+            }
             HttpResponse<InputStream> ranged=request(entry+"?range=ignored","GET","bytes=0-3",null);
             check(ranged.statusCode()==206,"206 preserved");check(ranged.headers().firstValue("Content-Type").orElse("").equals("video/mp2t"),"fourth MIME wins");
             check(ranged.headers().firstValue("Content-Range").orElse("").equals("bytes 0-3/16"),"Content-Range preserved");
@@ -165,7 +180,9 @@ public final class ProxyHttpContractTest {
             status(entry2+"?url="+URLEncoder.encode(entry2,StandardCharsets.UTF_8),400);
             HttpResponse<InputStream> busy1=request(entry2+"?endless=1","GET",null,null);
             HttpResponse<InputStream> busy2=request(entry2+"?endless=1","GET",null,null);
-            status(entry2,503);
+            // 数据面预算 = proxyPlaneConcurrency(2) = 4：两条流占不满，第三条应当照常服务。
+            // 「有界」由 planeConcurrencyContract 里的 clamp 断言负责，不再是这里的一刀切 503。
+            status(entry2,200);
             check(client.call("heartbeat",Map.of()).get("ok").equals(true),"bounded HTTP work does not starve IPC");
             busy1.body().close();busy2.body().close();
             playEntered=new CountDownLatch(1);playRelease=new CountDownLatch(1);
@@ -187,6 +204,23 @@ public final class ProxyHttpContractTest {
         try(Client denied=new Client(new Fixture(),true,false)){check(!denied.init().containsKey("extensions"),"capability required");}
         try(Client denied=new Client(new Spider(){},true,true)){check(!denied.init().containsKey("extensions"),"genuine router required");}
     }
+    // 数据面并发不能等于 IPC 并发：站点 manifest 的 limits.concurrency=1 是「站源方法同时跑几个」，
+    // 不是「本机代理能同时服务几个 HTTP」。实测站点 concurrency=1 时，第二个重叠请求直接
+    // 503「代理并发已达上限」——弹幕请求就是这样被拒的。
+    static void planeConcurrencyContract() throws Exception {
+        try(Client client=new Client(new Fixture(),true,true,1)) {
+            client.init();
+            String entry=String.valueOf(client.control("session.open","plane",TOKEN).get("entryUrl"));
+            List<HttpResponse<InputStream>> streams=new ArrayList<>();
+            try {
+                for(int i=0;i<3;i++) streams.add(request(entry+"?endless=1","GET",null,null));
+                for(int i=0;i<streams.size();i++) check(streams.get(i).statusCode()==200,"concurrent plane request "+(i+1)+" served, not rejected");
+                check(SidecarServer.proxyPlaneConcurrency(1)>=3,"plane budget independent of declared IPC concurrency");
+                check(SidecarServer.proxyPlaneConcurrency(64)<=32,"plane budget stays bounded");
+            } finally { for(HttpResponse<InputStream> stream:streams) try{stream.body().close();}catch(IOException ignored){} }
+        }
+    }
+
     static void stalledConsumerContract() throws Exception {
         for(String operation:List.of("close","replace","stop","expire")) {
             AtomicLong clock=new AtomicLong(System.nanoTime());
@@ -338,7 +372,7 @@ public final class ProxyHttpContractTest {
     }
     public static void main(String[] args) throws Exception {
         Thread watchdog=new Thread(()->{try{Thread.sleep(45000);System.err.println("FAIL native fixture exceeded45s");System.exit(9);}catch(InterruptedException done){}},"fixture-deadline");watchdog.setDaemon(true);watchdog.start();
-        mainContract();stalledConsumerContract();initializationFailureContract();expiryContract();routerContract();logContract();shellRouterContract();
+        mainContract();planeConcurrencyContract();stalledConsumerContract();initializationFailureContract();expiryContract();routerContract();logContract();shellRouterContract();
         check(closed.get()==opened.get(),"all acquired source streams closed");
         watchdog.interrupt();
         System.out.println("PASS ProxyHttpContractTest assertions="+assertions+" streamed=73400320 bytes IPC=small closed="+closed.get());

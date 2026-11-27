@@ -352,6 +352,71 @@ class JarIntake {
     return changed;
   }
 
+  /// 给 **jvm** 站源的 manifest 补上本机代理授权（对齐安卓：所有已加载站源
+  /// 都能用 `/proxy?do=…`，应用再把参数转给站源的 `proxy(Map)`）。
+  ///
+  /// 纯函数、幂等；返回是否改动。只碰 `localProxy` 与 `proxy` 能力，
+  /// 其它权限与能力原样保留；非 jvm 运行时一律不动（python/js 站源没有这条数据面）。
+  ///
+  /// **声明 `proxy` 能力不代表一定能用**：宿主在握手时会按站源是否真的实现了
+  /// `proxy(Map)` 重新裁剪能力集（`SidecarServer` 的 `supportsProxyHttp()`），
+  /// 所以这里多声明是安全的，不会给没有该方法的站源凭空开通道。
+  static bool upgradeJvmProxyAuthorization(Map<String, Object?> manifest) {
+    if (manifest['runtime'] != 'jvm') return false;
+    var changed = false;
+    final permissions = manifest['permissions'] is Map
+        ? Map<String, Object?>.from(manifest['permissions'] as Map)
+        : <String, Object?>{};
+    if (permissions['localProxy'] != true) {
+      permissions['localProxy'] = true;
+      changed = true;
+    }
+    final capabilities = manifest['capabilities'] is List
+        ? List<Object?>.from(manifest['capabilities'] as List)
+        : <Object?>[];
+    if (!capabilities.contains('proxy')) {
+      capabilities.add('proxy');
+      changed = true;
+    }
+    if (!changed) return false;
+    manifest['permissions'] = permissions;
+    manifest['capabilities'] = capabilities;
+    return true;
+  }
+
+  /// 启动迁移：把存量 `csp/*/manifest.json` 里 jvm 站源的授权补齐。
+  ///
+  /// 前置条件（2026-11-27 已修）：`CatVodSpiderAdapter.supportsProxyHttp()` 现在把
+  /// 「非静态 proxy」当作**不支持**而不是抛异常——在此之前的真机版本会在能力协商阶段
+  /// 崩掉整个 sidecar（`SPIDER_CRASHED code=1 代理处理器必须是静态 Object[] 方法`）。
+  ///
+  /// 为什么必须有：权限写在每个站点的 manifest 里，改默认值只影响新装站点；
+  /// 存量站点不迁移的话，用户只能逐个删目录重导才用得上弹幕等 `/proxy` 能力。
+  static int ensureJvmLocalProxy({required String root, LogService? log}) {
+    final cspDir = Directory(p.join(root, 'csp'));
+    if (!cspDir.existsSync()) return 0;
+    var changed = 0;
+    for (final site in cspDir.listSync().whereType<Directory>()) {
+      final manifest = File(p.join(site.path, 'manifest.json'));
+      if (!manifest.existsSync()) continue;
+      try {
+        final decoded = jsonDecode(manifest.readAsStringSync());
+        if (decoded is! Map) continue;
+        final map = Map<String, Object?>.from(decoded);
+        if (!upgradeJvmProxyAuthorization(map)) continue;
+        manifest.writeAsStringSync(jsonEncode(map), flush: true);
+        changed++;
+      } catch (error) {
+        log?.warning('迁移本机代理授权失败 ${site.path}：$error', scope: 'spider');
+      }
+    }
+    if (changed > 0) {
+      notifySiteFilesChanged();
+      log?.info('本机代理授权已迁移：$changed 个 jvm 站源', scope: 'spider');
+    }
+    return changed;
+  }
+
   static bool hasAndroidDex(String path) =>
       inspectPath(path).verdict == JarVerdict.androidJar;
 
@@ -1380,7 +1445,9 @@ class JarIntake {
           ],
           'permissions': const {
             'network': true,
-            'localProxy': false,
+            // 对齐安卓：jvm 站源可以用 `/proxy?do=…`（弹幕等），应用再转给站源。
+            // 非静态 proxy 的站源由宿主在能力协商时判为不支持（不会崩，见 ADR-0003）。
+            'localProxy': true,
             'ui': false,
             'storage': 'cache-only',
             'process': false,
@@ -1488,7 +1555,8 @@ class JarIntake {
         'capabilities': const ['home', 'category', 'detail', 'search', 'play'],
         'permissions': const {
           'network': true,
-          'localProxy': false,
+          // 同上：jvm 站源默认授权本机代理。
+          'localProxy': true,
           'ui': false,
           'storage': 'cache-only',
           'process': false,

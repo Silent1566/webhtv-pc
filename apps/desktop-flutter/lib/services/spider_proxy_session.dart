@@ -213,18 +213,56 @@ class SpiderProxySession {
 
   String scopeUrl(String url) {
     if (!active || _entryUrl == null) return url;
+    return scopeLocalProxyUrl(
+      url,
+      entryUrl: entryUrl,
+      ownBase: host.proxyHttp?.baseUrl,
+    );
+  }
+
+  /// 把「指向本应用本地 `/proxy`」的地址映射进本会话的作用域代理。
+  ///
+  /// 判据只看语义、**不看端口**：站点常把端口写成未绑定时的 `0`（安卓那边
+  /// 写死 9978 的同一种写法）。旧实现要求 authority 与 JVM 数据面完全相等，
+  /// 于是这类地址被当成外站地址原样放行，请求最终打到一个不存在的端口，
+  /// 报成「网络不可达或 DNS 失败」——看起来像网络问题，其实是地址没人接。
+  ///
+  /// 只接管回环主机 + `/proxy` 路径 + 无凭据无片段；其它地址一律原样返回，
+  /// 避免把外站地址塞进站点自己的 proxy 通道。
+  static String scopeLocalProxyUrl(
+    String url, {
+    required Uri entryUrl,
+    Uri? ownBase,
+  }) {
     final uri = Uri.tryParse(url);
-    final base = host.proxyHttp!.baseUrl;
     if (uri == null ||
-        uri.scheme != base.scheme ||
-        uri.authority != base.authority ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
         uri.path != '/proxy' ||
         uri.userInfo.isNotEmpty ||
         uri.hasFragment) {
       return url;
     }
+    // 两种形态才接管：
+    // 1) 本会话数据面的精确地址（既有契约，媒体改写走这条）；
+    // 2) 回环主机上的「应用动作」形态 `?do=…`（安卓在 /proxy 上按 do 分发）。
+    // 无 do 的本机 /proxy 可能是用户自己的本地服务，保持不劫持。
+    final exactOwnRoute =
+        ownBase != null &&
+        uri.scheme == ownBase.scheme &&
+        uri.authority == ownBase.authority;
+    final appAction =
+        _isLoopbackHost(uri.host) && uri.queryParameters.containsKey('do');
+    if (!exactOwnRoute && !appAction) return url;
     final queryIndex = url.indexOf('?');
     return entryUrl.toString() +
         (queryIndex < 0 ? '' : url.substring(queryIndex));
+  }
+
+  static bool _isLoopbackHost(String host) {
+    final value = host.trim().toLowerCase();
+    return value == '127.0.0.1' ||
+        value == 'localhost' ||
+        value == '::1' ||
+        value == '[::1]';
   }
 }

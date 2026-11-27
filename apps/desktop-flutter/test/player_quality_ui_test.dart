@@ -78,6 +78,7 @@ class _MediaIO extends PlatformPlayer {
     if (honoured) seeks.add(start);
     progress(honoured ? start : const Duration(seconds: 1), playing: play);
   }
+
   @override
   Future<void> seek(Duration position) async {
     seeks.add(position);
@@ -620,6 +621,38 @@ void main() {
     await _close(tester);
   });
 
+  testWidgets('弹幕装载耗时期间播放推进，不得把续播误报成起播定位失败', (tester) async {
+    final gate = Completer<void>();
+    final f = await _mount(
+      tester,
+      startPosition: const Duration(milliseconds: 123456),
+      danmakuLoader: _BlockingDanmaku(gate.future),
+    );
+    expect(
+      f.current.state.position,
+      const Duration(milliseconds: 123456),
+      reason: '起播定位随 open 下发，落点就是它',
+    );
+
+    // 真实机上是弹幕库装载的那十几秒：这段时间播放器一直在往前走。
+    f.current.progress(const Duration(milliseconds: 123456 + 17000));
+    gate.complete();
+    await _settle(tester);
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(
+      f.state.log.entries.any((entry) => entry.line.contains('起播定位未生效')),
+      isFalse,
+      reason: '校验必须看开播那一刻的落点，而不是装配完弹幕后的播放进度',
+    );
+    expect(
+      find.textContaining('未能跳到该位置'),
+      findsNothing,
+      reason: '定位其实生效了，不能弹假的「已从头播放」',
+    );
+    await _close(tester);
+  });
+
   testWidgets('过期的画质失败不报给新集', (tester) async {
     final f = await _mount(tester);
     final gate = Completer<PlaybackDecision?>();
@@ -748,4 +781,31 @@ void main() {
     expect(tester.takeException(), isNull);
     await _close(tester);
   });
+}
+
+/// 装载完成前一直挂起的弹幕源：用来把「装配期间播放推进」变成可控时序。
+class _BlockingDanmaku implements DanmakuLoader {
+  _BlockingDanmaku(this.gate);
+
+  final Future<void> gate;
+
+  @override
+  Future<DanmakuDocument> load(
+    DanmakuSource source, {
+    Map<String, String> headers = const {},
+    bool useCache = true,
+  }) async {
+    await gate;
+    return DanmakuDocument(
+      items: const [],
+      format: 'xml',
+      encoding: 'utf-8',
+      sourceUrl: source.url,
+      byteLength: 0,
+      skipped: 0,
+    );
+  }
+
+  @override
+  void invalidate([String? url]) {}
 }
