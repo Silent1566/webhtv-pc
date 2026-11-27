@@ -1,0 +1,391 @@
+diff --git a/window_manager.cpp b/window_manager.cpp
+index 1d19490..6320fa3 100644
+--- a/window_manager.cpp
++++ b/window_manager.cpp
+@@ -25,7 +25,6 @@
+ #define STATE_NORMAL 0
+ #define STATE_MAXIMIZED 1
+ #define STATE_MINIMIZED 2
+-#define STATE_FULLSCREEN_ENTERED 3
+ #define STATE_DOCKED 4
+
+ /// Window attribute that enables dark mode window decorations.
+@@ -85,6 +84,7 @@ class WindowManager {
+   bool is_registered_for_docking_ = false;
+   bool is_skip_taskbar_ = true;
+   std::string title_bar_style_ = "normal";
++  bool applying_fullscreen_style_ = false;
+   double opacity_ = 1;
+
+   bool is_resizing_ = false;
+@@ -116,7 +116,8 @@ class WindowManager {
+   void WindowManager::Dock(const flutter::EncodableMap& args);
+   bool WindowManager::Undock();
+   bool WindowManager::IsFullScreen();
+-  void WindowManager::SetFullScreen(const flutter::EncodableMap& args);
++  bool WindowManager::SetFullScreen(bool fullscreen);
++  void WindowManager::UpdateFullscreenStacking(bool active, HWND next_window = nullptr);
+   void WindowManager::SetAspectRatio(const flutter::EncodableMap& args);
+   void WindowManager::SetBackgroundColor(const flutter::EncodableMap& args);
+   flutter::EncodableMap WindowManager::GetBounds(
+@@ -155,12 +156,10 @@ class WindowManager {
+   void WindowManager::StartResizing(const flutter::EncodableMap& args);
+
+  private:
+-  static constexpr auto kFlutterViewWindowClassName = L"FLUTTERVIEW";
+   bool g_is_window_fullscreen = false;
+-  std::string g_title_bar_style_before_fullscreen;
+-  RECT g_frame_before_fullscreen;
+-  bool g_maximized_before_fullscreen;
+-  LONG g_style_before_fullscreen;
++  RECT g_frame_before_fullscreen{};
++  LONG_PTR g_style_before_fullscreen = 0;
++  bool fullscreen_topmost_preference_ = false;
+   ITaskbarList3* taskbar_ = nullptr;
+   double GetDpiForHwnd(HWND hWnd);
+   BOOL WindowManager::RegisterAccessBar(HWND hwnd, BOOL fRegister);
+@@ -565,93 +564,122 @@ bool WindowManager::IsFullScreen() {
+   return g_is_window_fullscreen;
+ }
+
+-void WindowManager::SetFullScreen(const flutter::EncodableMap& args) {
+-  bool isFullScreen =
+-      std::get<bool>(args.at(flutter::EncodableValue("isFullScreen")));
++bool WindowManager::SetFullScreen(bool fullscreen) {
++  if (fullscreen == g_is_window_fullscreen)
++    return true;
+
+-  HWND mainWindow = GetMainWindow();
++  HWND hwnd = GetMainWindow();
++  RECT previous_bounds{};
++  if (!::GetWindowRect(hwnd, &previous_bounds))
++    return false;
+
+-  // Previously inspired by how Chromium does this
+-  // https://src.chromium.org/viewvc/chrome/trunk/src/ui/views/win/fullscreen_handler.cc?revision=247204&view=markup
+-  // Instead, we use a modified implementation of how the media_kit package
+-  // implements this (we got permission from the author, I believe)
+-  // https://github.com/alexmercerind/media_kit/blob/1226bcff36eab27cb17d60c33e9c15ca489c1f06/media_kit_video/windows/utils.cc
+-
+-  // Save current window state if not already fullscreen.
+-  if (!g_is_window_fullscreen) {
+-    // Save current window information.
+-    g_maximized_before_fullscreen = ::IsZoomed(mainWindow);
+-    g_style_before_fullscreen = GetWindowLong(mainWindow, GWL_STYLE);
+-    ::GetWindowRect(mainWindow, &g_frame_before_fullscreen);
+-    g_title_bar_style_before_fullscreen = title_bar_style_;
++  const LONG_PTR previous_style = ::GetWindowLongPtr(hwnd, GWL_STYLE);
++  const bool was_topmost = (::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
++  const bool topmost_preference = fullscreen ? was_topmost : fullscreen_topmost_preference_;
++  const HWND foreground = ::GetForegroundWindow();
++  const bool active = foreground &&
++      ::GetAncestor(foreground, GA_ROOTOWNER) == hwnd;
++  const HWND target_band = (topmost_preference || (fullscreen && active))
++      ? HWND_TOPMOST : HWND_NOTOPMOST;
++  const HWND previous_band = was_topmost ? HWND_TOPMOST : HWND_NOTOPMOST;
++  // Visibility and minimization can change independently while fullscreen.
++  constexpr LONG_PTR transient = WS_VISIBLE | WS_MINIMIZE;
++  LONG_PTR style = (g_style_before_fullscreen & ~transient) |
++                   (previous_style & transient);
++  RECT bounds = g_frame_before_fullscreen;
++  if (fullscreen) {
++    MONITORINFO monitor{};
++    monitor.cbSize = sizeof(monitor);
++    if (!::GetMonitorInfo(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
++                          &monitor))
++      return false;
++    bounds = monitor.rcMonitor;
++    // Keep WS_MAXIMIZE so Windows retains the normal restore placement.
++    style = previous_style & ~(WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX);
+   }
+
+-  g_is_window_fullscreen = isFullScreen;
+-
+-  if (isFullScreen) {  // Set to fullscreen
+-    // ::SendMessage(mainWindow, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+-    if (!is_frameless_) {
+-      auto monitor = MONITORINFO{};
+-      auto placement = WINDOWPLACEMENT{};
+-      monitor.cbSize = sizeof(MONITORINFO);
+-      placement.length = sizeof(WINDOWPLACEMENT);
+-      ::GetWindowPlacement(mainWindow, &placement);
+-      ::GetMonitorInfo(
+-          ::MonitorFromWindow(mainWindow, MONITOR_DEFAULTTONEAREST), &monitor);
+-      if (!g_maximized_before_fullscreen) {
+-        SetAsFrameless();
+-      }
+-      ::SetWindowLongPtr(
+-          mainWindow, GWL_STYLE,
+-          g_style_before_fullscreen & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
+-      ::SetWindowPos(mainWindow, HWND_TOP, monitor.rcMonitor.left,
+-                     monitor.rcMonitor.top, 0, 0,
+-                     SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+-      ::SetWindowPos(mainWindow, HWND_TOP, 0, 0,
+-                     monitor.rcMonitor.right - monitor.rcMonitor.left,
+-                     monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+-                     SWP_NOMOVE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+-    }
+-  } else {  // Restore from fullscreen
+-    // if (!g_maximized_before_fullscreen)
+-    //   Restore();
+-    ::SetWindowLongPtr(
+-        mainWindow, GWL_STYLE,
+-        g_style_before_fullscreen | (WS_THICKFRAME | WS_MAXIMIZEBOX));
+-    if (::IsZoomed(mainWindow)) {
+-      // Refresh the parent mainWindow.
+-      ::SetWindowPos(mainWindow, nullptr, 0, 0, 0, 0,
+-                     SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+-                         SWP_FRAMECHANGED);
+-      auto rect = RECT{};
+-      ::GetClientRect(mainWindow, &rect);
+-      auto flutter_view = ::FindWindowEx(mainWindow, nullptr,
+-                                         kFlutterViewWindowClassName, nullptr);
+-      ::SetWindowPos(flutter_view, nullptr, rect.left, rect.top,
+-                     rect.right - rect.left, rect.bottom - rect.top,
+-                     SWP_NOACTIVATE | SWP_NOZORDER);
+-      if (g_maximized_before_fullscreen)
+-        PostMessage(mainWindow, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+-    } else {
+-      ::SetWindowPos(
+-          mainWindow, nullptr, g_frame_before_fullscreen.left,
+-          g_frame_before_fullscreen.top,
+-          g_frame_before_fullscreen.right - g_frame_before_fullscreen.left,
+-          g_frame_before_fullscreen.bottom - g_frame_before_fullscreen.top,
+-          SWP_NOACTIVATE | SWP_NOZORDER);
+-
+-      // restore titlebar style
+-      title_bar_style_ = g_title_bar_style_before_fullscreen;
+-      is_frameless_ = false;
+-      MARGINS margins = {0, 0, 0, 0};
+-      RECT rect1;
+-      GetWindowRect(mainWindow, &rect1);
+-      DwmExtendFrameIntoClientArea(mainWindow, &margins);
+-      SetWindowPos(mainWindow, nullptr, rect1.left, rect1.top, 0, 0,
+-                   SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE |
+-                       SWP_FRAMECHANGED);
+-    }
++  // Keep a complete old frame visible until the target viewport presents.
++  ::SendMessage(hwnd, WM_APP + 0x481, 0, 0);
++  const auto finish_transition = [hwnd]() {
++    ::SendMessage(hwnd, WM_APP + 0x482, 0, 0);
++  };
++  const auto apply_style = [this, hwnd](LONG_PTR value) {
++    applying_fullscreen_style_ = true;
++    ::SetLastError(ERROR_SUCCESS);
++    const bool applied = ::SetWindowLongPtr(hwnd, GWL_STYLE, value) != 0 ||
++                         ::GetLastError() == ERROR_SUCCESS;
++    applying_fullscreen_style_ = false;
++    return applied;
++  };
++  if (!apply_style(style)) {
++    apply_style(previous_style);
++    ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
++        SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE);
++    finish_transition();
++    return false;
++  }
++
++  g_is_window_fullscreen = fullscreen;
++  constexpr UINT flags = SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
++  // Keep active fullscreen above the taskbar without trapping Alt+Tab targets.
++  if (!::SetWindowPos(hwnd, target_band, bounds.left, bounds.top,
++                      bounds.right - bounds.left, bounds.bottom - bounds.top,
++                      flags)) {
++    g_is_window_fullscreen = !fullscreen;
++    apply_style(previous_style);
++    ::SetWindowPos(hwnd, previous_band, previous_bounds.left, previous_bounds.top,
++        previous_bounds.right - previous_bounds.left,
++        previous_bounds.bottom - previous_bounds.top, flags);
++    finish_transition();
++    return false;
+   }
++
++  // Let Explorer lower its taskbar only while this fullscreen window is active.
++  HRESULT shell_result = S_OK;
++  if (!taskbar_)
++    shell_result = ::CoCreateInstance(CLSID_TaskbarList, nullptr,
++        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbar_));
++  if (SUCCEEDED(shell_result))
++    shell_result = taskbar_->HrInit();
++  if (SUCCEEDED(shell_result))
++    shell_result = taskbar_->MarkFullscreenWindow(hwnd, fullscreen);
++  if (FAILED(shell_result)) {
++    g_is_window_fullscreen = !fullscreen;
++    apply_style(previous_style);
++    ::SetWindowPos(hwnd, previous_band, previous_bounds.left, previous_bounds.top,
++        previous_bounds.right - previous_bounds.left,
++        previous_bounds.bottom - previous_bounds.top, flags);
++    finish_transition();
++    return false;
++  }
++
++  if (fullscreen)
++    fullscreen_topmost_preference_ = topmost_preference;
++  finish_transition();
++  if (fullscreen) {
++    g_style_before_fullscreen = previous_style;
++    g_frame_before_fullscreen = previous_bounds;
++  }
++  return true;
++}
++
++void WindowManager::UpdateFullscreenStacking(bool active, HWND next_window) {
++  if (!g_is_window_fullscreen)
++    return;
++  const HWND hwnd = GetMainWindow();
++  HWND after = HWND_TOPMOST;
++  if (!fullscreen_topmost_preference_ && !active) {
++    after = HWND_NOTOPMOST;
++    const HWND foreground = next_window ? next_window : ::GetForegroundWindow();
++    const HWND target = foreground ? ::GetAncestor(foreground, GA_ROOTOWNER) : nullptr;
++    // A normal foreground target must stay above the demoted fullscreen window,
++    // including when its old WA_INACTIVE arrives after the target activates.
++    if (target && target != hwnd && ::IsWindowVisible(target) &&
++        !(::GetWindowLongPtr(target, GWL_EXSTYLE) & WS_EX_TOPMOST))
++      after = target;
++  }
++  ::SetWindowPos(hwnd, after, 0, 0, 0, 0,
++      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+ }
+
+ void WindowManager::SetAspectRatio(const flutter::EncodableMap& args) {
+@@ -870,6 +898,8 @@ void WindowManager::SetClosable(const flutter::EncodableMap& args) {
+ }
+
+ bool WindowManager::IsAlwaysOnTop() {
++  if (g_is_window_fullscreen)
++    return fullscreen_topmost_preference_;
+   DWORD dwExStyle = GetWindowLong(GetMainWindow(), GWL_EXSTYLE);
+   return (dwExStyle & WS_EX_TOPMOST) != 0;
+ }
+@@ -877,6 +907,13 @@ bool WindowManager::IsAlwaysOnTop() {
+ void WindowManager::SetAlwaysOnTop(const flutter::EncodableMap& args) {
+   bool isAlwaysOnTop =
+       std::get<bool>(args.at(flutter::EncodableValue("isAlwaysOnTop")));
++  if (g_is_window_fullscreen) {
++    fullscreen_topmost_preference_ = isAlwaysOnTop;
++    const HWND foreground = ::GetForegroundWindow();
++    UpdateFullscreenStacking(foreground &&
++        ::GetAncestor(foreground, GA_ROOTOWNER) == GetMainWindow());
++    return;
++  }
+   SetWindowPos(GetMainWindow(), isAlwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST,
+                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+ }
+diff --git a/window_manager_plugin.cpp b/window_manager_plugin.cpp
+index ba7720a..6fc630c 100644
+--- a/window_manager_plugin.cpp
++++ b/window_manager_plugin.cpp
+@@ -50,6 +50,7 @@ class WindowManagerPlugin : public flutter::Plugin {
+
+   // The ID of the WindowProc delegate registration.
+   int window_proc_id = -1;
++  bool changing_fullscreen_ = false;
+
+   void WindowManagerPlugin::_EmitEvent(std::string eventName);
+   // Called for top-level WindowProc delegation.
+@@ -138,6 +139,15 @@ std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(HWND hWnd,
+                                                              LPARAM lParam) {
+   std::optional<LRESULT> result = std::nullopt;
+
++  if (message == WM_ACTIVATE || message == WM_APP + 0x486) {
++    const HWND foreground = ::GetForegroundWindow();
++    const bool active = message == WM_ACTIVATE
++        ? LOWORD(wParam) != WA_INACTIVE
++        : foreground && ::GetAncestor(foreground, GA_ROOTOWNER) == hWnd;
++    window_manager->UpdateFullscreenStacking(active,
++        message == WM_ACTIVATE && !active ? reinterpret_cast<HWND>(lParam) : nullptr);
++  }
++
+   if (message == WM_DPICHANGED) {
+     window_manager->pixel_ratio_ =
+         (float)LOWORD(wParam) / USER_DEFAULT_SCREEN_DPI;
+@@ -145,13 +155,8 @@ std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(HWND hWnd,
+   }
+
+   if (wParam && message == WM_NCCALCSIZE) {
+-    if (window_manager->IsFullScreen() &&
+-        window_manager->title_bar_style_ != "normal") {
+-      if (window_manager->is_frameless_) {
+-        adjustNCCALCSIZE(hWnd, reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam));
+-      }
++    if (window_manager->IsFullScreen())
+       return 0;
+-    }
+     // This must always be before handling title_bar_style_ == "hidden" so
+     // the `if TitleBarStyle.hidden` doesn't get executed.
+     if (window_manager->is_frameless_) {
+@@ -289,31 +294,28 @@ std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(HWND hWnd,
+       rect->bottom = bottom;
+     }
+   } else if (message == WM_SIZE) {
+-    if (window_manager->IsFullScreen() && wParam == SIZE_MAXIMIZED &&
+-        window_manager->last_state != STATE_FULLSCREEN_ENTERED) {
+-      _EmitEvent("enter-full-screen");
+-      window_manager->last_state = STATE_FULLSCREEN_ENTERED;
+-    } else if (!window_manager->IsFullScreen() && wParam == SIZE_RESTORED &&
+-               window_manager->last_state == STATE_FULLSCREEN_ENTERED) {
+-      window_manager->ForceChildRefresh();
+-      _EmitEvent("leave-full-screen");
+-      window_manager->last_state = STATE_NORMAL;
+-    } else if (window_manager->last_state != STATE_FULLSCREEN_ENTERED) {
+-      if (wParam == SIZE_MAXIMIZED) {
+-        _EmitEvent("maximize");
+-        window_manager->last_state = STATE_MAXIMIZED;
+-      } else if (wParam == SIZE_MINIMIZED) {
+-        _EmitEvent("minimize");
+-        window_manager->last_state = STATE_MINIMIZED;
+-        return 0;
+-      } else if (wParam == SIZE_RESTORED) {
+-        if (window_manager->last_state == STATE_MAXIMIZED) {
+-          _EmitEvent("unmaximize");
+-          window_manager->last_state = STATE_NORMAL;
+-        } else if (window_manager->last_state == STATE_MINIMIZED) {
+-          _EmitEvent("restore");
+-          window_manager->last_state = STATE_NORMAL;
+-        }
++    // SetWindowLongPtr can synchronously resize a maximized client at its old
++    // bounds. Leave the child unchanged until SetWindowPos commits the frame.
++    if (window_manager->applying_fullscreen_style_)
++      return 0;
++    // Let the runner resize its Flutter child, without treating this as a
++    // minimize/maximize or forcing an additional child resize on exit.
++    if (changing_fullscreen_)
++      return std::nullopt;
++    if (wParam == SIZE_MAXIMIZED) {
++      _EmitEvent("maximize");
++      window_manager->last_state = STATE_MAXIMIZED;
++    } else if (wParam == SIZE_MINIMIZED) {
++      _EmitEvent("minimize");
++      window_manager->last_state = STATE_MINIMIZED;
++      return 0;
++    } else if (wParam == SIZE_RESTORED) {
++      if (window_manager->last_state == STATE_MAXIMIZED) {
++        _EmitEvent("unmaximize");
++        window_manager->last_state = STATE_NORMAL;
++      } else if (window_manager->last_state == STATE_MINIMIZED) {
++        _EmitEvent("restore");
++        window_manager->last_state = STATE_NORMAL;
+       }
+     }
+   } else if (message == WM_CLOSE) {
+@@ -429,7 +431,18 @@ void WindowManagerPlugin::HandleMethodCall(
+   } else if (method_name.compare("setFullScreen") == 0) {
+     const flutter::EncodableMap& args =
+         std::get<flutter::EncodableMap>(*method_call.arguments());
+-    window_manager->SetFullScreen(args);
++    const bool fullscreen =
++        std::get<bool>(args.at(flutter::EncodableValue("isFullScreen")));
++    if (fullscreen != window_manager->IsFullScreen()) {
++      changing_fullscreen_ = true;
++      const bool success = window_manager->SetFullScreen(fullscreen);
++      changing_fullscreen_ = false;
++      if (!success) {
++        result->Error("window_mode", "Unable to change fullscreen mode");
++        return;
++      }
++      _EmitEvent(fullscreen ? "enter-full-screen" : "leave-full-screen");
++    }
+     result->Success(flutter::EncodableValue(true));
+   } else if (method_name.compare("setAspectRatio") == 0) {
+     const flutter::EncodableMap& args =
