@@ -51,8 +51,8 @@ Win-box 对本项目最有价值的三件事，按可信度排序：
 | 5 | 主动单源诊断 | `src/main/spider/SourceDebugger.ts` 探活+解析计数+真跑 | `ui/diagnostics_pages.dart:464`（仅历史成功率） | **P1 借鉴** |
 | 6 | 请求伪装阶梯 | `src/engine/util/fetchWithDisguise.ts` 五档 + 换协议 | `core/config_loader.dart:257-308` | **P1 借鉴** |
 | 7 | M3U8 启发式去广告 | `src/engine/util/m3u8Purify.ts` 五级 + 三道回退，默认关 | `core/ad_rules.dart:219`（仅规则级） | **P1 借鉴** |
-| 8 | 产物缓存版本化 | `CONVERTED_CACHE_VERSION` 逐版记录 | `services/direct_spider_registrar.dart` 无版本概念 | **P2 纪律** |
-| 9 | 内容哈希复用索引 | `src/engine/spider/jarContentIndex.ts` 内容 md5 换键复用 | 有 SHA-256 但未做缓存键 | **P2 借鉴** |
+| 8 | 产物缓存版本化 | `CONVERTED_CACHE_VERSION` 逐版记录 | `services/dex_translate.dart:41` `repairVersion`（对齐 `DexRepair.VERSION`）+ 共享目录 `<sha>/v<N>`；生成直连壳的 `shellGenerationVersion` 由 `spider_registry` 扫描准入 | **已落地（dex 与直连壳）** |
+| 9 | 内容哈希复用索引 | `src/engine/spider/jarContentIndex.ts` 内容 md5 换键复用 | `services/dex_translate.dart:214`/`:289` 按 payload SHA-256 复用产物；`services/csp_jar_probe.dart` 按内容 SHA-256 存 jar 暂存并维护 URL→内容索引 | **已落地（dex 与 jar 暂存）** |
 | 10 | ext 模板库 | `src/engine/config/extHelper.ts` `EXT_TEMPLATES` | 无（grep 0 命中） | **P2 借鉴** |
 | 11 | 订阅 `#line=N` 选线路 | `src/engine/config/multiRepo.ts` 对齐 `SplitLine` | `core/config_parser.dart:77` 支持多仓但无 `#line` | **P2 借鉴** |
 | 12 | 特殊播放链接识别 | `src/engine/vod/playLink.ts` 解 `thunder://` 等 | `core/tmdb_title.dart:116` 只认前缀 | **P2 借鉴** |
@@ -416,9 +416,35 @@ Win-box `src/engine/spider/JarSpiderBridge.ts` 导出 `CONVERTED_CACHE_VERSION =
 `invokespecial` 导致 `StackOverflowError`；v4 普通 JAR 也执行 `DexJarRepair`；v5 补 `Proxy` stub），
 规则是「**改变了产物内容就必须 +1**」。
 
-本仓库 `services/direct_spider_registrar.dart` 用 SHA-256 去重（`:76`、`:98`、`:106`），
-但**没有「产物格式版本」概念**——一旦生成逻辑变化，旧产物不会失效。
-**建议**：把这条纪律写进设计文档，并在任何「派生文件」缓存上加版本号。
+本仓库的 dex 转译产物已按这条纪律落地，而且是**双端同口径**：
+`services/dex_translate.dart:41` 的 `repairVersion` 必须等于宿主 `sidecars/spider-host-jvm/.../DexRepair.java`
+的 `VERSION`；两侧任何一侧改了修复语义都要同步 +1。落地形态是两层：
+
+- **准入**：`recordUsable()` 要求记录里的 `repairVersion` 等于当前值，否则一律当未命中重新转译，
+  且**不删**用户缓存（删缓存不在服务的权限内）；
+- **隔离**：共享产物目录从 `<shared>/<sha>` 变成 `<shared>/<sha>/v<repairVersion>`，换口径时新产物写进
+  自己的目录，不再就地覆盖上一版。老目录保留**只读**兜底，避免升级多触发一轮全量重译
+  （35 份 payload × 5–9 s）。
+
+回归在 `test/dex_translate_cache_test.dart`：写入落点、历史版本不被改动、老布局仍可复用、
+以及「宿主 `VERSION` 写出的记录必须能通过 Dart 准入」的跨语言一致性用例。
+
+**回收**：`services/spider_cache_retention.dart` 负责 `probe-cache` 的限额回收（默认预算 512 MiB、
+超额按最近使用淘汰；旧口径产物闲置 30 天回收；活动窗口内不动；删除失败只跳过）。
+接在 `AppState.rescanSpiders()` 上——那是启动与手工重扫的公共入口。回收边界只到
+`probe-cache`，不碰 `spiders/csp`、`spiders/direct` 的已安装站点，也不碰 `spiders/local` 的用户源。
+
+**直连站源**也按同一纪律补了口径：CatVod 包壳与 `ext.loader` 两种生成壳在 manifest 顶层写
+`shellGenerationVersion`（单点定义在 `services/spider_registry.dart` 的 `LocalSpider`）。
+`registry.scan()` 只对 `spiders/direct` 下**生成壳**校验该字段：口径缺失或过旧一律不登记、不删文件；
+随后的 `materialize()` 复用已下载的 loader 写回当前模板并恢复登记。
+日志只在扫描末尾汇总一行（数量 + `actual=missing`/`过旧` 分布 + 三个样例目录），**不逐目录写**：
+`LogService` 落盘不按级别过滤，逐目录一行在这台机器上等于每次扫描往日志里写 185 行，会把真正的错误埋掉
+（回归见 `test/phase9_direct_spider_test.dart` 的 `generated shell manifest versions`）。
+原生 `.py`/`.js`，以及手工放进根目录、`local/` 的产物不带该字段，行为不变。
+
+仍未覆盖：`services/direct_spider_registrar.dart` 的 `loaderSha256`/`entrySha256` 仍是幂等校验——
+原始下载物本身没有「格式版本」（它是原始文件，不是派生格式）。
 
 ### 5.2 内容哈希复用索引
 
@@ -427,7 +453,21 @@ Win-box `src/engine/spider/jarContentIndex.ts`：`doConvert()` 的缓存键是 *
 做法是下载后算**内容 md5**（4MB 量级 <10ms），命中即把已有产物 link 成新键产物。
 纪律：索引任何失败都不得影响转换主流程。
 
-本仓库的 `csp_*` jar 缓存可借鉴同一思路（当前按 URL/路径缓存）。
+本仓库的 dex 转译产物已按同一思路落地：键是 **payload.jar 的内容 SHA-256**
+（`services/dex_translate.dart:214` `copySharedBundle` / `:289` `storeSharedBundle`，目录
+`<spiderRoot>/probe-cache/dex/<sha>/v<N>`）。加固壳配置里同一份 payload 被 90+ 站点共用，
+命中就是一次 1 MB 级复制；准入同时核对 `sourceSha256` 与 `bundleSha256`，缺失与损坏都不算命中。
+索引失败只记日志，绝不影响转译主流程。
+
+**jar 暂存**也已换成内容寻址（`services/csp_jar_probe.dart`）：blob 落在 `probe-cache/jar/<sha256(bytes)>.jar`，
+`probe-cache/jar-index.json` 记 URL→内容，最多 200 条、按 `at` 淘汰，只清理不再被引用的 blob
+（正在探测或解包的 blob 延迟到用完再删）。同时修掉一个真实缺陷：原先按「长度不同才重写」判定暂存，
+同 URL、同长度、内容不同时会继续用旧文件检测与安装，而 `probe.json` 又把新字节的 MD5 与旧文件的
+SHA-256 写在一起。现在检测、安装、解包与记录统一使用**本次取回的那批字节**。
+离线复用的条件没有放宽：仍要求同 URL 记录 SHA 匹配且对应 payload 已存在，`needsShellRuntime`
+这类无 payload 的结论照旧重下重试。
+
+仍未覆盖：`csp_*` 的 loader/entry 缓存仍按 URL/路径判定。
 
 ### 5.3 ext 模板库
 

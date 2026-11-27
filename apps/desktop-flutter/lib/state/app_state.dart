@@ -152,6 +152,7 @@ import '../services/realtime_sync_engine.dart';
 import '../services/search_suggest_service.dart';
 import '../services/parse_service.dart';
 import '../services/site_service.dart';
+import '../services/spider_cache_retention.dart';
 import '../services/spider_process.dart';
 import '../services/spider_proxy_session.dart';
 import '../services/sidecar_runtime.dart';
@@ -9665,10 +9666,24 @@ class AppState extends ChangeNotifier
   Future<List<LocalSpider>> rescanSpiders() async {
     final found = await _spiderRegistry.scan();
     await _supervisor.cleanStaleWorkDirs();
+    _pruneSharedSpiderCache();
     log.info('本地 Spider 已扫描：${found.length} 个', scope: 'spider');
     // 手工往 `spiders/local/` 放源后重新扫描，站点列表也要跟着更新。
     _invalidateLocalSites();
     return found;
+  }
+
+  /// `probe-cache` 是唯一**可重建**的共享缓存（jar 暂存、壳 payload、dex 转译产物）。
+  ///
+  /// 扫描是启动与手工重扫的公共入口，顺手按预算回收最省事：失败只记日志，绝不影响
+  /// 扫描结论，也不碰已安装站点、`spiders/local` 用户源与配置。
+  void _pruneSharedSpiderCache() {
+    try {
+      final root = p.join(p.dirname(_cspBinding.root), 'probe-cache');
+      SpiderCacheRetention.prune(root, log: log);
+    } catch (error) {
+      log.warning('共享缓存回收跳过：$error', scope: 'spider');
+    }
   }
 
   /// 本地 Spider 列表（供管理页展示）。

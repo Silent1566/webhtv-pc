@@ -193,18 +193,48 @@ class DexTranslate {
     }
   }
 
+  /// 本口径共享产物目录：`<shared>/<sha>/v<repairVersion>`。
+  ///
+  /// 版本进目录名，是为了让**上一版口径的产物原封不动留着**：换口径时新产物写进自己的
+  /// 目录，不再就地覆盖。删历史目录不在本服务的权限内。
+  static String sharedBundleDir(String sharedDir, String sha) =>
+      p.join(sharedDir, sha, 'v$repairVersion');
+
+  /// 未版本化时代的老目录（`<shared>/<sha>`）：**只读**兜底，不再写入。
+  ///
+  /// 保留读路径是为了升级不额外触发一轮全量重译（35 份 payload × 5–9 s）；老目录里
+  /// 口径不合格的产物照样被 [recordUsable] 挡掉，安全性不变。
+  static String legacyBundleDir(String sharedDir, String sha) =>
+      p.join(sharedDir, sha);
+
   /// 共享产物能否复用，只看 [recordUsable]：存在文件不等于口径对。
   ///
-  /// 命中时按 [sha] 复制 classes.jar + 记录；任何一项不合格都返回 null，交给真实转译。
+  /// 先找本口径目录、再兜底老目录；命中时按 [sha] 复制 classes.jar + 记录，
+  /// 任何一项不合格都返回 null，交给真实转译。
   static Map<String, Object?>? copySharedBundle({
     required String sharedDir,
     required String sha,
     required String siteDir,
   }) {
+    for (final srcDir in <String>[
+      sharedBundleDir(sharedDir, sha),
+      legacyBundleDir(sharedDir, sha),
+    ]) {
+      final copied = _copyFromShared(srcDir, sha, siteDir);
+      if (copied != null) return copied;
+    }
+    return null;
+  }
+
+  /// 从**一个**候选目录复制产物；任何一项不合格都返回 null（不抛异常）。
+  static Map<String, Object?>? _copyFromShared(
+    String srcDirPath,
+    String sha,
+    String siteDir,
+  ) {
     try {
-      final srcDir = Directory(p.join(sharedDir, sha));
-      final srcJar = File(p.join(srcDir.path, 'classes.jar'));
-      final srcRecord = File(p.join(srcDir.path, 'intake-dex.json'));
+      final srcJar = File(p.join(srcDirPath, 'classes.jar'));
+      final srcRecord = File(p.join(srcDirPath, 'intake-dex.json'));
       if (!srcJar.existsSync() || !recordUsable(srcRecord.path)) return null;
       final raw = jsonDecode(srcRecord.readAsStringSync());
       if (raw is! Map ||
@@ -255,6 +285,7 @@ class DexTranslate {
     }
   }
 
+  /// 把站点目录里当前口径的产物收进**本口径**的共享目录。
   static void storeSharedBundle(String sharedDir, String sha, String siteDir) {
     try {
       final bundle = File(p.join(siteDir, 'dexBundles', 'classes.jar'));
@@ -266,7 +297,7 @@ class DexTranslate {
           raw['bundleSha256'] != _sha256OfFile(bundle.path)) {
         return;
       }
-      final target = Directory(p.join(sharedDir, sha))
+      final target = Directory(sharedBundleDir(sharedDir, sha))
         ..createSync(recursive: true);
       bundle.copySync(p.join(target.path, 'classes.jar'));
       record.copySync(p.join(target.path, 'intake-dex.json'));

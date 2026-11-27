@@ -715,6 +715,9 @@ class CspJarProbe {
       runtimeInstalled ?? (installed == null ? null : () => installed),
     );
     if (result.migrated) JarIntake.notifySiteFilesChanged();
+    for (final warning in result.warnings) {
+      log?.warning(warning, scope: 'spider');
+    }
     return result.targets;
   }
 
@@ -722,9 +725,10 @@ class CspJarProbe {
     AppConfig config, {
     required bool refresh,
   }) {
+    final index = _readJarIndex();
     return [
       for (final group in _jarGroups(config).values)
-        ?_describeTarget(group, refresh: refresh),
+        ?_describeTarget(group, refresh: refresh, index: index),
     ];
   }
 
@@ -762,9 +766,10 @@ class CspJarProbe {
         log?.warning('跳过不在配置里的 jar：${redactUrl(url)}', scope: 'spider');
       }
     }
+    final index = _readJarIndex();
     for (final group in known.values) {
       if (!jarUrls.contains(group.spec.url)) continue;
-      if (_describeTarget(group, refresh: false) == null) {
+      if (_describeTarget(group, refresh: false, index: index) == null) {
         log?.warning(
           '跳过非加固壳的选中 jar：${redactUrl(group.spec.url)}',
           scope: 'spider',
@@ -863,14 +868,17 @@ class CspJarProbe {
   /// 已装好 → payload 已缓存 → 缺运行时 → 上次失败 → 待解包。
   /// 缺运行时之所以排在「上次失败」之前：没有运行时，重试只会在同一步再失败一次，
   /// 用户真正该做的是先把运行时装上。
-  ShellJarTarget? _describeTarget(_JarGroup group, {required bool refresh}) {
+  ShellJarTarget? _describeTarget(
+    _JarGroup group, {
+    required bool refresh,
+    required Map<String, _JarIndexEntry> index,
+  }) {
     final url = group.spec.url;
-    final stagedFile = _stagedFileFor(url);
-    final staged = _nonEmpty(stagedFile) ? stagedFile : null;
+    final staged = _findStagedJar(url, _groupRecordedSha(group), index: index);
     JarInspection? fileInspection;
     if (staged != null) {
       fileInspection = JarIntake.inspectPath(
-        staged.path,
+        staged.file.path,
         expectedClass: entryClassNameOf(group.sites.first),
       );
     }
@@ -888,7 +896,7 @@ class CspJarProbe {
 
     final siteKeys = <String>{};
     var allInstalled = true;
-    String? jarSha = staged == null ? null : _sha256Of(staged);
+    String? jarSha = staged?.sha;
     String? payloadSha;
     String? stage;
     String? message;
@@ -960,25 +968,8 @@ class CspJarProbe {
     final spec = group.spec;
     final url = spec.url;
 
-    // 暂存命中就不重下：用户在探测里已经下过一次，多选解包没有理由再打一遍。
-    final staged = _stagedFileFor(url);
-    var jarFile = _nonEmpty(staged) ? staged : null;
-    if (jarFile == null) {
-      final bytes = await _download(url);
-      if (bytes != null) {
-        try {
-          await Directory(p.join(root, 'probe-cache')).create(recursive: true);
-          await staged.writeAsBytes(bytes, flush: true);
-          jarFile = staged;
-        } catch (error) {
-          log?.warning(
-            '写解包暂存 jar 失败 url=${redactUrl(url)} $error',
-            scope: 'spider',
-          );
-        }
-      }
-    }
-    if (jarFile == null) {
+    final source = await _acquireJar(url, _groupRecordedSha(group));
+    if (source == null) {
       // 与 materialize 同一条口径：取回失败写 `fetchFailed`，[retryAfter] 冷却后自动重试。
       return _rejectGroup(
         group,
@@ -988,10 +979,24 @@ class CspJarProbe {
       );
     }
 
+    try {
+      return await _unpackStagedJar(group, source, emit);
+    } finally {
+      _releaseJar(source.file);
+    }
+  }
+
+  Future<List<CspProbeEntry>> _unpackStagedJar(
+    _JarGroup group,
+    _StagedJar source,
+    void Function(int stageIndex) emit,
+  ) async {
+    final spec = group.spec;
+    final url = spec.url;
     // 手上有壳 jar 了才开始「认配方」：没拿到字节的识别是假的。
     emit(ShellUnpackStages.identify);
     final inspection = JarIntake.inspectPath(
-      jarFile.path,
+      source.file.path,
       expectedClass: JarIntake.classNameFor(group.sites.first.key),
     );
     if (inspection.verdict != JarVerdict.shellGuard) {
@@ -1004,10 +1009,11 @@ class CspJarProbe {
             '本地暂存的 jar 已不是加固壳（${inspection.summary}）：'
             '跳过解包，请重新探测后再决定。',
         inspection: inspection,
+        sha256: source.sha,
       );
     }
 
-    final shellSha = _sha256Of(jarFile) ?? '';
+    final shellSha = source.sha;
     final payload = _payloadFileFor(shellSha);
     Map<String, Object?>? unpack;
     if (_nonEmpty(payload)) {
@@ -1046,7 +1052,7 @@ class CspJarProbe {
         emit(ShellUnpackStages.invoke);
       }
       unpack = await _runShellUnpack(
-        shellJar: jarFile.path,
+        shellJar: source.file.path,
         outJar: payload.path,
         onProgress: (progress) {
           final index = ShellUnpackStages.indexOf(progress.stage);
@@ -1111,7 +1117,7 @@ class CspJarProbe {
           siteKey: site.key,
           targetDir: binding.directoryFor(site.key),
           spec: spec,
-          shell: jarFile,
+          shell: source.file,
           payload: payload,
           payloadInfo: payloadInfo,
           shellSha: shellSha,
@@ -1190,10 +1196,279 @@ class CspJarProbe {
     'unsupportedShell',
   ];
 
-  /// 单轮内按 URL 暂存 jar 的路径（`probe-cache/<url 哈希前 16 位>.jar`）。
-  File _stagedFileFor(String url) {
-    final key = sha256.convert(utf8.encode(url)).toString();
-    return File(p.join(root, 'probe-cache', '${key.substring(0, 16)}.jar'));
+  static const _jarIndexLimit = 200;
+  static final _activeJarFiles = <String, int>{};
+  static final _deferredJarDeletes = <String>{};
+  static final _shaPattern = RegExp(r'^[0-9a-f]{64}$');
+
+  String get _jarCachePath => p.join(root, 'probe-cache');
+  File get _jarIndexFile => File(p.join(_jarCachePath, 'jar-index.json'));
+  File _legacyJarFile(String key) =>
+      File(p.join(_jarCachePath, '${key.substring(0, 16)}.jar'));
+  File _jarBlob(String sha) => File(p.join(_jarCachePath, 'jar', '$sha.jar'));
+
+  String _jarUrlKey(String url) => sha256.convert(utf8.encode(url)).toString();
+
+  String? _recordedJarSha(Map<String, Object?>? record, String url) {
+    final sha = record?['sha256'];
+    return record?['sourceUrl'] == url &&
+            sha is String &&
+            _shaPattern.hasMatch(sha)
+        ? sha
+        : null;
+  }
+
+  String? _groupRecordedSha(_JarGroup group) {
+    // Prefer the latest recorded content if older sites sharing the URL disagree.
+    String? latestSha;
+    var latestAt = '';
+    for (final site in group.sites) {
+      final record = JarIntake.probeRecord(binding.directoryFor(site.key));
+      final sha = _recordedJarSha(record, group.spec.url);
+      if (sha == null) continue;
+      final at = '${record?['fetchedAt'] ?? ''}';
+      if (latestSha == null || at.compareTo(latestAt) > 0) {
+        latestSha = sha;
+        latestAt = at;
+      }
+    }
+    return latestSha;
+  }
+
+  Map<String, _JarIndexEntry> _readJarIndex() {
+    try {
+      final file = _jarIndexFile;
+      if (file.statSync().type == FileSystemEntityType.notFound) return {};
+      final json = jsonDecode(file.readAsStringSync());
+      if (json is! Map || json['version'] != 1 || json['entries'] is! Map) {
+        throw const FormatException('invalid jar index');
+      }
+      final entries = <String, _JarIndexEntry>{};
+      for (final MapEntry(:key, :value) in (json['entries'] as Map).entries) {
+        if (key is! String || !_shaPattern.hasMatch(key) || value is! Map) {
+          continue;
+        }
+        final sha = value['sha256'];
+        final size = value['size'];
+        final at = value['at'];
+        if (sha is String &&
+            _shaPattern.hasMatch(sha) &&
+            size is int &&
+            size >= 0 &&
+            at is int) {
+          entries[key] = (sha: sha, size: size, at: at);
+        }
+      }
+      return entries;
+    } catch (error) {
+      log?.warning('读取 jar 暂存索引失败 $error', scope: 'spider');
+      return {};
+    }
+  }
+
+  _StagedJar? _readStagedJar(File file, {int? size, String? sha}) {
+    try {
+      if (!file.existsSync()) return null;
+      final length = file.lengthSync();
+      if (length > maxBytes || (size != null && size != length)) return null;
+      final bytes = file.readAsBytesSync();
+      if (bytes.length != length) return null;
+      // Do not use the path/mtime hash cache for integrity checks.
+      final actualSha = sha256.convert(bytes).toString();
+      if (sha != null && sha != actualSha) return null;
+      return (file: file, bytes: bytes, sha: actualSha);
+    } catch (error) {
+      log?.warning('读取 jar 暂存失败 $error', scope: 'spider');
+      return null;
+    }
+  }
+
+  _StagedJar? _findStagedJar(
+    String url,
+    String? recordedSha, {
+    bool requireRecordedSha = false,
+    Map<String, _JarIndexEntry>? index,
+  }) {
+    final key = _jarUrlKey(url);
+    final entry = (index ?? _readJarIndex())[key];
+    if (requireRecordedSha && entry != null && entry.sha != recordedSha) {
+      return null;
+    }
+    if (entry != null) {
+      final hit = _readStagedJar(
+        _jarBlob(entry.sha),
+        size: entry.size,
+        sha: entry.sha,
+      );
+      if (hit != null) return hit;
+    }
+    final legacy = _readStagedJar(
+      _legacyJarFile(key),
+      sha: entry?.sha ?? recordedSha,
+    );
+    return legacy != null && legacy.bytes.isNotEmpty ? legacy : null;
+  }
+
+  Future<_StagedJar?> _acquireJar(
+    String url,
+    String? recordedSha, {
+    bool requireCachedPayload = false,
+    void Function(String)? onAssembly,
+  }) async {
+    final recoverable =
+        !requireCachedPayload ||
+        (recordedSha != null && _nonEmpty(_payloadFileFor(recordedSha)));
+    final cached = recoverable
+        ? _findStagedJar(
+            url,
+            recordedSha,
+            requireRecordedSha: requireCachedPayload,
+          )
+        : null;
+    onAssembly?.call(
+      cached != null || _downloadCache.containsKey(url) ? '复用站源缓存' : '下载站源',
+    );
+    if (cached != null) {
+      final blob = _jarBlob(cached.sha);
+      if (cached.file.path == blob.path) {
+        _holdJar(cached.file);
+        _publishJar(_jarUrlKey(url), cached);
+        return cached;
+      }
+      try {
+        return await _stageJar(url, cached.bytes, cached.sha);
+      } catch (error) {
+        log?.warning('迁移 jar 暂存失败 $error', scope: 'spider');
+        _holdJar(cached.file);
+        return cached;
+      }
+    }
+    final bytes = await _download(url);
+    if (bytes == null) return null;
+    return _stageJar(url, bytes, sha256.convert(bytes).toString());
+  }
+
+  Future<_StagedJar> _stageJar(String url, List<int> bytes, String sha) async {
+    final file = _jarBlob(sha);
+    _holdJar(file);
+    try {
+      if (_readStagedJar(file, size: bytes.length, sha: sha) == null) {
+        await file.parent.create(recursive: true);
+        final temp = await file.parent.createTemp('.write-');
+        try {
+          final pending = File(p.join(temp.path, 'pending.jar'));
+          await pending.writeAsBytes(bytes, flush: true);
+          await pending.rename(file.path);
+        } finally {
+          try {
+            await temp.delete(recursive: true);
+          } catch (error) {
+            log?.warning('清理 jar 暂存临时文件失败 $error', scope: 'spider');
+          }
+        }
+      }
+      final staged = (file: file, bytes: bytes, sha: sha);
+      _publishJar(_jarUrlKey(url), staged);
+      return staged;
+    } catch (_) {
+      _releaseJar(file);
+      rethrow;
+    }
+  }
+
+  void _holdJar(File file) {
+    _activeJarFiles.update(file.path, (count) => count + 1, ifAbsent: () => 1);
+  }
+
+  void _releaseJar(File file) {
+    final count = _activeJarFiles[file.path]!;
+    if (count > 1) {
+      _activeJarFiles[file.path] = count - 1;
+      return;
+    }
+    _activeJarFiles.remove(file.path);
+    if (_deferredJarDeletes.remove(file.path)) {
+      _deleteCachedJar(file, '裁剪 jar 暂存失败');
+    }
+  }
+
+  void _publishJar(String key, _StagedJar staged) {
+    // Keep read/modify/replace together so parallel probes in this isolate
+    // cannot overwrite each other's URL updates.
+    try {
+      final entries = _readJarIndex();
+      final previous = entries[key];
+      entries[key] = (
+        sha: staged.sha,
+        size: staged.bytes.length,
+        at: DateTime.now().millisecondsSinceEpoch,
+      );
+      final unreferenced = <String>{if (previous != null) previous.sha};
+      if (entries.length > _jarIndexLimit) {
+        final oldest = entries.entries.toList()
+          ..sort((a, b) {
+            final byTime = a.value.at.compareTo(b.value.at);
+            return byTime != 0 ? byTime : a.key.compareTo(b.key);
+          });
+        for (final entry in oldest.take(entries.length - _jarIndexLimit)) {
+          entries.remove(entry.key);
+          unreferenced.add(entry.value.sha);
+        }
+      }
+      final file = _jarIndexFile;
+      final pending = File('${file.path}.tmp');
+      try {
+        pending.writeAsStringSync(
+          jsonEncode({
+            'version': 1,
+            'entries': entries.map(
+              (key, entry) => MapEntry(key, {
+                'sha256': entry.sha,
+                'size': entry.size,
+                'at': entry.at,
+              }),
+            ),
+          }),
+          flush: true,
+        );
+        pending.renameSync(file.path);
+      } finally {
+        _deleteCachedJar(pending, '清理 jar 暂存索引临时文件失败');
+      }
+
+      final referenced = entries.values.map((entry) => entry.sha).toSet();
+      _deferredJarDeletes.remove(staged.file.path);
+      for (final sha in unreferenced.difference(referenced)) {
+        final file = _jarBlob(sha);
+        // Another site may still be copying this blob or passing it to the runner.
+        if (_activeJarFiles.containsKey(file.path)) {
+          _deferredJarDeletes.add(file.path);
+        } else {
+          _deleteCachedJar(file, '裁剪 jar 暂存失败');
+        }
+      }
+      final legacy = _legacyJarFile(key);
+      final recorded = entries[key];
+      if (!_activeJarFiles.containsKey(legacy.path) &&
+          legacy.existsSync() &&
+          recorded != null &&
+          _readStagedJar(staged.file, size: recorded.size, sha: recorded.sha) !=
+              null) {
+        _deleteCachedJar(legacy, '删除旧命名 jar 暂存失败');
+      }
+    } catch (error) {
+      log?.warning('写入 jar 暂存索引失败 $error', scope: 'spider');
+    }
+  }
+
+  void _deleteCachedJar(File file, String warning) {
+    try {
+      if (file.statSync().type != FileSystemEntityType.notFound) {
+        file.deleteSync();
+      }
+    } catch (error) {
+      log?.warning('$warning $error', scope: 'spider');
+    }
   }
 
   /// payload 缓存路径：按**壳 jar 内容**命名，同一份壳 jar 只解包一次。
@@ -1286,24 +1561,13 @@ class CspJarProbe {
     }
 
     onStage?.call(ShellUnpackStages.read);
-    final stagedCache = _stagedFileFor(spec.url);
-    final recordedSha = current != null && current['sourceUrl'] == spec.url
-        ? current['sha256']
-        : null;
-    final recoverCached =
-        recordedSha is String &&
-        recordedSha.isNotEmpty &&
-        _nonEmpty(stagedCache) &&
-        stagedCache.lengthSync() <= maxBytes &&
-        _sha256Of(stagedCache) == recordedSha &&
-        _nonEmpty(_payloadFileFor(recordedSha));
-    onAssembly?.call(
-      recoverCached || _downloadCache.containsKey(spec.url) ? '复用站源缓存' : '下载站源',
+    final source = await _acquireJar(
+      spec.url,
+      _recordedJarSha(current, spec.url),
+      requireCachedPayload: true,
+      onAssembly: onAssembly,
     );
-    final bytes = recoverCached
-        ? await stagedCache.readAsBytes()
-        : await _download(spec.url);
-    if (bytes == null) {
+    if (source == null) {
       await _writeRecord(
         targetDir,
         siteKey,
@@ -1319,6 +1583,28 @@ class CspJarProbe {
       );
     }
 
+    try {
+      return await _probeStagedSite(
+        siteKey,
+        targetDir,
+        spec,
+        source,
+        onStage: onStage,
+        onAssembly: onAssembly,
+      );
+    } finally {
+      _releaseJar(source.file);
+    }
+  }
+
+  Future<CspProbeEntry> _probeStagedSite(
+    String siteKey,
+    String targetDir,
+    JarSourceSpec spec,
+    _StagedJar source, {
+    void Function(int)? onStage,
+    void Function(String)? onAssembly,
+  }) async {
     // md5 **不参与判定**：TVBox 生态里配置声明的 md5 与实际内容不一致非常普遍
     // （服务端重新打包后没更新配置），按它拒绝会白白丢掉本来能用的入口——
     // 游标 2026-10-25 用户原话：「能下载但 md5 不符，这个不校验」。
@@ -1326,7 +1612,7 @@ class CspJarProbe {
     final declaredMd5 = spec.md5;
     final actualMd5 = declaredMd5 == null
         ? null
-        : md5.convert(bytes).toString();
+        : md5.convert(source.bytes).toString();
     final md5Note = (declaredMd5 != null && declaredMd5 != actualMd5)
         ? '配置声明的 md5 与实际内容不一致（期望 $declaredMd5，实际 $actualMd5），已忽略'
         : null;
@@ -1337,14 +1623,7 @@ class CspJarProbe {
       );
     }
 
-    // 暂存文件按 **URL** 命名：同一份 spring.jar 被 90+ 个站点共享，
-    // 按站点各写一份只会白占磁盘（install 自己会复制到各自缓存目录）。
-    await Directory(p.join(root, 'probe-cache')).create(recursive: true);
-    final staged = _stagedFileFor(spec.url);
-    if (!await staged.exists() || await staged.length() != bytes.length) {
-      await staged.writeAsBytes(bytes, flush: true);
-    }
-
+    final staged = source.file;
     onAssembly?.call('检查站源');
     final inspection = JarIntake.inspectPath(
       staged.path,
@@ -1359,6 +1638,7 @@ class CspJarProbe {
         targetDir: targetDir,
         spec: spec,
         staged: staged,
+        shellSha: source.sha,
         inspection: inspection,
         md5Note: md5Note,
         actualMd5: actualMd5,
@@ -1407,7 +1687,7 @@ class CspJarProbe {
             : '${inspection.summary}；$md5Note',
         installed: result.ok,
         entryCount: inspection.entryCount,
-        sha256: _sha256Of(staged),
+        sha256: source.sha,
         actualMd5: actualMd5,
       );
       return CspProbeEntry(
@@ -1432,7 +1712,7 @@ class CspJarProbe {
           ? inspection.summary
           : '${inspection.summary}；$md5Note',
       entryCount: inspection.entryCount,
-      sha256: _sha256Of(staged),
+      sha256: source.sha,
       actualMd5: actualMd5,
     );
     return CspProbeEntry(
@@ -1454,6 +1734,7 @@ class CspJarProbe {
     required String targetDir,
     required JarSourceSpec spec,
     required File staged,
+    required String shellSha,
     required JarInspection inspection,
     String? md5Note,
     String? actualMd5,
@@ -1463,7 +1744,6 @@ class CspJarProbe {
     onStage?.call(ShellUnpackStages.identify);
     // payload 按**壳 jar 的内容**缓存：同一份壳 jar 被 90+ 个 csp_ 站点共用时，
     // 解包只做一次（解包要起 ARM 模拟器，是整条链里最贵的一步）。
-    final shellSha = _sha256Of(staged) ?? '';
     final payload = _payloadFileFor(shellSha);
     Map<String, Object?>? unpack;
     if (_nonEmpty(payload)) {
@@ -2329,6 +2609,9 @@ class _UnpackEtaEstimator {
 }
 
 /// 同一份 jar URL 下的一组 `csp_*` 站点（聚合单位：URL 而不是站点）。
+typedef _JarIndexEntry = ({String sha, int size, int at});
+typedef _StagedJar = ({File file, List<int> bytes, String sha});
+
 class _JarGroup {
   _JarGroup(this.spec);
 
@@ -2338,7 +2621,7 @@ class _JarGroup {
   final List<Site> sites = [];
 }
 
-Future<({List<ShellJarTarget> targets, bool migrated})>
+Future<({List<ShellJarTarget> targets, bool migrated, List<String> warnings})>
 _discoverShellTargetsInBackground(
   String root,
   CspJvmBinding binding,
@@ -2346,9 +2629,11 @@ _discoverShellTargetsInBackground(
   bool refresh,
   bool Function()? runtimeInstalled,
 ) => Isolate.run(() {
+  final log = LogService();
   final probe = CspJarProbe(
     root: root,
     binding: binding,
+    log: log,
     shellRuntimeInstalled: runtimeInstalled,
   );
   try {
@@ -2356,6 +2641,7 @@ _discoverShellTargetsInBackground(
     return (
       targets: probe._discoverShellTargetsSync(config, refresh: refresh),
       migrated: migrated,
+      warnings: log.entries.map((entry) => entry.message).toList(),
     );
   } finally {
     probe._client.close();

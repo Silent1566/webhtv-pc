@@ -93,4 +93,65 @@ void main() {
       expect(registry.byKey('not-imported'), isNull);
     },
   );
+
+  /// 直连生成壳：运行时可被包装、目录里带 `loader.json`，因此要过口径准入。
+  ///
+  /// `generation` 为空表示口径字段缺失——这正是升级现场那 178 个目录的形状。
+  String directShell(String dir, String key, {int? generation}) {
+    final path = Directory(p.join(temp.path, 'direct', dir))
+      ..createSync(recursive: true);
+    File(p.join(path.path, 'loader.py')).writeAsStringSync('pass');
+    File(p.join(path.path, 'loader.json')).writeAsStringSync('{}');
+    File(p.join(path.path, 'spider.py')).writeAsStringSync('pass');
+    final json = SpiderManifest(
+      key: key,
+      name: key,
+      runtime: 'python-catvod',
+      entry: 'spider.py',
+      capabilities: const ['home', 'category', 'detail', 'search', 'play'],
+    ).toJson();
+    if (generation != null) json['shellGenerationVersion'] = generation;
+    File(p.join(path.path, 'manifest.json')).writeAsStringSync(jsonEncode(json));
+    return path.path;
+  }
+
+  test('legacy direct shells collapse into one summary line', () async {
+    for (var i = 0; i < 3; i++) {
+      directShell('abcd00000000000$i', 'legacy-$i');
+    }
+
+    await registry.scan();
+
+    // 准入本身不变：三个旧口径壳都不许登记。
+    expect(registry.spiders, isEmpty);
+    // 每目录一行 WARNING 会把真正的错误埋掉，这台机器上是 178 行。
+    expect(
+      log.entries.where((entry) => entry.level == LogLevel.warning),
+      isEmpty,
+    );
+    // 任何级别都只许有一行：落盘不按级别过滤，逐目录一行会原样进日志文件。
+    final summary = log.entries
+        .where((entry) => entry.message.contains('跳过'))
+        .toList();
+    expect(summary, hasLength(1));
+    expect(summary.single.level, LogLevel.info);
+    expect(summary.single.message, contains('3'));
+  });
+
+  test('a direct shell at the current generation registers without a summary',
+      () async {
+    directShell(
+      'abcd00000000000a',
+      'current-shell',
+      generation: LocalSpider.directShellGenerationVersion,
+    );
+
+    await registry.scan();
+
+    expect(registry.byKey('current-shell'), isNotNull);
+    expect(
+      log.entries.where((entry) => entry.message.contains('跳过')),
+      isEmpty,
+    );
+  });
 }

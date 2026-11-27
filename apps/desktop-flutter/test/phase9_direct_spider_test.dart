@@ -212,6 +212,181 @@ class Spider:
     });
   });
 
+  group('generated shell manifest versions', () {
+    const versionField = 'shellGenerationVersion';
+    late int downloads;
+    late DirectSpiderRegistrar registrar;
+
+    AppConfig shellConfig() => AppConfig(
+      sites: [
+        site('https://x.test/wrapped.py', key: 'wrapped'),
+        site(
+          'csp_PyProxy',
+          key: 'loader',
+          ext: shellExt('https://x.test/loader.py'),
+        ),
+      ],
+    );
+
+    setUp(() {
+      downloads = 0;
+      registrar = DirectSpiderRegistrar(
+        root: temp.path,
+        registry: registry,
+        client: MockClient((request) async {
+          downloads++;
+          return http.Response(
+            request.url.path == '/wrapped.py' ? catVodShellSource : 'pass',
+            200,
+          );
+        }),
+      );
+    });
+
+    Map<String, Object?> readManifest(LocalSpider spider) =>
+        jsonDecode(File(spider.manifestPath).readAsStringSync())
+            as Map<String, Object?>;
+
+    test(
+      'scan registers current wrappers from both shell generators',
+      () async {
+        final generated = await registrar.materialize(shellConfig());
+        expect(generated.keys, unorderedEquals(['wrapped', 'loader']));
+        final version = readManifest(generated['wrapped']!)[versionField];
+        expect(version, isA<int>());
+        expect(readManifest(generated['loader']!)[versionField], version);
+        expect((await registry.scan()).map((spider) => spider.key), [
+          'loader',
+          'wrapped',
+        ]);
+      },
+    );
+
+    test('scan skips stale shells and materialize repairs them', () async {
+      final generated = await registrar.materialize(shellConfig());
+      final currentEntry = File(generated['wrapped']!.entryPath)
+          .readAsStringSync();
+      const staleEntry = '# old shell template\n';
+      for (final spider in generated.values) {
+        final manifest = readManifest(spider)..[versionField] = 0;
+        File(spider.manifestPath).writeAsStringSync(jsonEncode(manifest));
+        File(spider.entryPath).writeAsStringSync(staleEntry);
+      }
+
+      expect(await registry.scan(), isEmpty);
+      for (final spider in generated.values) {
+        expect(readManifest(spider)[versionField], 0);
+        expect(File(spider.entryPath).readAsStringSync(), staleEntry);
+      }
+      final staleLogs = registry.log.entries
+          .where((entry) => entry.message.contains('旧口径直连 Spider 壳'))
+          .toList();
+      expect(
+        staleLogs,
+        hasLength(1),
+        reason: '一次扫描只汇总一行，别给每个目录刷一条',
+      );
+      expect(staleLogs.single.level, LogLevel.info);
+      expect(staleLogs.single.message, contains('2 个'));
+      expect(
+        registry.log.entries.where((e) => e.level == LogLevel.warning),
+        isEmpty,
+        reason: '旧口径是升级后的预期状态，不该用 WARNING 淹没真实错误',
+      );
+
+      final repaired = await registrar.materialize(shellConfig());
+      expect(repaired.keys, unorderedEquals(generated.keys));
+      expect(
+        downloads,
+        2,
+        reason: 'stale shells reuse their downloaded loaders',
+      );
+      for (final spider in repaired.values) {
+        expect(File(spider.entryPath).readAsStringSync(), currentEntry);
+        expect(readManifest(spider)[versionField], isA<int>());
+        expect(readManifest(spider)[versionField], isNot(0));
+      }
+      expect((await registry.scan()).map((spider) => spider.key), [
+        'loader',
+        'wrapped',
+      ]);
+    });
+
+    test('scan skips unversioned historical shells without throwing', () async {
+      final generated = await registrar.materialize(shellConfig());
+      for (final spider in generated.values) {
+        final manifest = readManifest(spider)..remove(versionField);
+        // The first ext.loader implementation used the plain Python runtime.
+        if (spider.key == 'loader') manifest['runtime'] = 'python';
+        File(spider.manifestPath).writeAsStringSync(jsonEncode(manifest));
+      }
+
+      expect(await registry.scan(), isEmpty);
+      expect(
+        registry.log.entries.where((e) => e.level == LogLevel.error),
+        isEmpty,
+      );
+      for (final spider in generated.values) {
+        expect(File(spider.entryPath).existsSync(), isTrue);
+      }
+      final staleLogs = registry.log.entries
+          .where((entry) => entry.message.contains('旧口径直连 Spider 壳'))
+          .toList();
+      expect(staleLogs, hasLength(1));
+      expect(staleLogs.single.level, LogLevel.info);
+      expect(staleLogs.single.message, contains('2 个'));
+      expect(
+        staleLogs.single.message,
+        contains('missing'),
+        reason: '汇总行要能看出是「缺字段」还是「字段过旧」',
+      );
+    });
+
+    test('scan preserves unversioned native Python and JavaScript', () async {
+      AppConfig config() => AppConfig(
+        sites: [
+          site('https://x.test/native.py', key: 'native-py'),
+          site('https://x.test/native.js', key: 'native-js'),
+        ],
+      );
+      final generated = await registrar.materialize(config());
+      expect(generated.keys, unorderedEquals(['native-js', 'native-py']));
+      for (final spider in generated.values) {
+        expect(readManifest(spider), isNot(contains(versionField)));
+      }
+      expect((await registry.scan()).map((spider) => spider.key), [
+        'native-js',
+        'native-py',
+      ]);
+      expect(
+        (await registrar.materialize(config())).keys,
+        unorderedEquals(generated.keys),
+      );
+      expect(downloads, 2, reason: 'both raw downloads remain reusable');
+    });
+
+    test('scan leaves manually placed root and local shells alone', () async {
+      final generated = await registrar.materialize(shellConfig());
+      final shell = generated['wrapped']!;
+      final manifest = readManifest(shell)..remove(versionField);
+      for (final (key, parent) in [
+        ('manual-root', ''),
+        ('manual-local', 'local'),
+      ]) {
+        final dir = Directory(p.join(temp.path, parent, key));
+        dir.createSync(recursive: true);
+        File(shell.entryPath).copySync(p.join(dir.path, 'spider.py'));
+        File(p.join(dir.path, 'manifest.json'))
+            .writeAsStringSync(jsonEncode({...manifest, 'key': key}));
+      }
+
+      expect(
+        (await registry.scan()).map((spider) => spider.key),
+        containsAll(['manual-local', 'manual-root']),
+      );
+    });
+  });
+
   group('P1-7 自动注册（README §4.2）', () {
     test('下载 js → 生成 manifest → 注册成功', () async {
       var downloads = 0;
