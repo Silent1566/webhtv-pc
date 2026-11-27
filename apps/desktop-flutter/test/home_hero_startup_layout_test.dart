@@ -245,8 +245,14 @@ void main(){
       expect(find.byType(HomeHero),findsOneWidget);
       // 产品异步链在widget fake-zone中创建；真实图像/磁盘I/O完成后要推进帧
       // 才能提交下一步。按已观察到的index事件推进，不用固定sleep或假时钟超时。
+      // 读回校验在后台 isolate 里跑，日志会比 index.json 稍晚；两者都到齐才算完成。
+      bool savedAndValidated() =>
+          File('${cacheDir.path}/index.json').existsSync() &&
+          state.log.entries.any((entry)=>entry.scope=='home' &&
+            entry.message.contains('event=cache_save') &&
+            entry.message.contains('readable=1'));
       final deadline=Stopwatch()..start();
-      while(!File('${cacheDir.path}/index.json').existsSync() && deadline.elapsed < const Duration(seconds:8)){
+      while(!savedAndValidated() && deadline.elapsed < const Duration(seconds:8)){
         await tester.runAsync(() => Future<void>((){}));
         await tester.pump();
       }
