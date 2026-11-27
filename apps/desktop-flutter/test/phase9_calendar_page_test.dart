@@ -438,9 +438,14 @@ void main() {
       await tester.pumpAndSettle();
       final position = listPosition(tester);
       final offset = position.pixels;
-      await tester.tap(find.byKey(const ValueKey('calendar-day-2026-11-28')));
+      expect(offset, greaterThan(0));
+      // 夹具仅 1–24 日有更新；避开「今天」的自动定位，即使测试跨午夜。
+      final emptyDay = DateTime.now().isBefore(DateTime(2026, 11, 28))
+          ? DateTime(2026, 11, 30)
+          : DateTime(2026, 11, 25);
+      await tester.tap(find.byKey(ValueKey(_dayKey(emptyDay))));
       await tester.pumpAndSettle();
-      expect(find.text('11月28日 没有更新'), findsOneWidget);
+      expect(find.text('11月${emptyDay.day}日 没有更新'), findsOneWidget);
       expect(find.byKey(const ValueKey('calendar-list')), findsOneWidget);
       expect(listPosition(tester), same(position));
       expect(position.pixels, offset);
