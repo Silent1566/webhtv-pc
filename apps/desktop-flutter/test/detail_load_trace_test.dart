@@ -37,8 +37,10 @@ void main() {
       final state = AppState(
         paths: AppPaths.resolve(
           overrides: {
-            for (final key in ['config', 'data', 'cache', 'state'])
-              key: '${temp.path}/$key',
+            'config': '${temp.path}/config',
+            'data': '${temp.path}/data',
+            'cache': '${temp.path}/cache',
+            'state': '${temp.path}/state',
           },
         ),
         log: log,
