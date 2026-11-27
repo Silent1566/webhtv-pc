@@ -66,8 +66,11 @@ List<OsdDiagnosticsRow> buildOsdDiagnostics({
   required bool? succeeded,
   required Object? failureKind,
 }) {
-  final hasSize = videoWidth != null && videoHeight != null &&
-      videoWidth > 0 && videoHeight > 0;
+  final hasSize =
+      videoWidth != null &&
+      videoHeight != null &&
+      videoWidth > 0 &&
+      videoHeight > 0;
   final video = [
     if (videoCodec != null && videoCodec.isNotEmpty) videoCodec else '未知',
     if (hasSize) '$videoWidth×$videoHeight',
@@ -140,6 +143,7 @@ List<OsdDiagnosticsRow> buildOsdEnvironment({
   required double? devicePixelRatio,
   required String? themeMode,
   required int? proxyPort,
+  String? adBlockSummary,
 }) {
   return [
     if (operatingSystemVersion != null && operatingSystemVersion.isNotEmpty)
@@ -155,5 +159,7 @@ List<OsdDiagnosticsRow> buildOsdEnvironment({
       OsdDiagnosticsRow('主题', themeMode),
     if (proxyPort != null && proxyPort > 0)
       OsdDiagnosticsRow('本地代理', '127.0.0.1:$proxyPort'),
+    if (adBlockSummary != null && adBlockSummary.isNotEmpty)
+      OsdDiagnosticsRow('去广告', adBlockSummary),
   ];
 }

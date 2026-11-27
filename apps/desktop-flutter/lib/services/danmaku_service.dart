@@ -72,6 +72,7 @@ class DanmakuService implements DanmakuLoader {
     HttpClient? httpClient,
     this.maxBytes = maxDanmakuBytes,
     this.timeout = const Duration(seconds: 15),
+    this.siteSourceTimeout = const Duration(seconds: 45),
     this.cacheTtl = const Duration(minutes: 10),
     this.userAgent = 'WebHTV-PC/0.1 (Windows)',
     this.maxRedirects = 3,
@@ -83,6 +84,9 @@ class DanmakuService implements DanmakuLoader {
   /// 单份弹幕大小上限。
   final int maxBytes;
   final Duration timeout;
+
+  /// 站源脚本弹幕（本机数据面）的预算：它要等的是站源自己的上游。
+  final Duration siteSourceTimeout;
   final Duration cacheTtl;
   final String userAgent;
   final int maxRedirects;
@@ -156,7 +160,8 @@ class DanmakuService implements DanmakuLoader {
       throw AppError(
         AppErrorKind.danmakuInvalid,
         '弹幕内容非法：${error.message}',
-        detail: redactUrl(url),
+        // 首段只进日志：站源可能返回 HTML 错误页/JSON，光看「内容非法」分不出来。
+        detail: '${redactUrl(url)} · 首段=${danmakuPayloadPreview(raw.text)}',
         cause: error,
       );
     }
@@ -329,7 +334,12 @@ class DanmakuService implements DanmakuLoader {
     Map<String, String> headers,
   ) async {
     try {
-      final request = await _client.getUrl(uri).timeout(timeout);
+      final budget = danmakuRequestTimeout(
+        uri,
+        library: timeout,
+        siteSource: siteSourceTimeout,
+      );
+      final request = await _client.getUrl(uri).timeout(budget);
       request.headers.set(HttpHeaders.acceptHeader, '*/*');
       if (!headers.keys.any((key) => key.toLowerCase() == 'user-agent')) {
         request.headers.set(HttpHeaders.userAgentHeader, userAgent);
@@ -344,7 +354,7 @@ class DanmakuService implements DanmakuLoader {
       }
       // 自己处理 3xx：便于按状态/大小分类报错。
       request.followRedirects = false;
-      return await request.close().timeout(timeout);
+      return await request.close().timeout(budget);
     } on TimeoutException catch (error) {
       throw AppError(
         AppErrorKind.danmakuNetwork,
@@ -452,8 +462,14 @@ bool isDanmakuError(Object? error) =>
 
 /// 弹幕失败的用户提示文案：必须显式说明“不影响播放”。
 String describeDanmakuFailure(Object? error) {
+  const suffix = '（不影响视频播放）';
+  // 文案必须带**真实原因**：只按类别取文案时，「超时」和「DNS 解析失败」都变成
+  // 同一句「网络不可达或 DNS 失败」，用户和日志都分不清是慢还是断。
   if (error is AppError) {
-    return '弹幕加载失败：${describeErrorKind(error.kind)}';
+    final reason = error.message.trim().isEmpty
+        ? describeErrorKind(error.kind)
+        : error.message.trim();
+    return '弹幕加载失败：${reason.endsWith(suffix) ? reason : '$reason$suffix'}';
   }
-  return '弹幕加载失败：${error ?? "未知错误"}（不影响视频播放）';
+  return '弹幕加载失败：${error ?? "未知错误"}$suffix';
 }

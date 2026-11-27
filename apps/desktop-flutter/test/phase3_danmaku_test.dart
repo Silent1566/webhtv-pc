@@ -371,6 +371,26 @@ void main() {
       );
     });
 
+    test('AppRJ 单行空 XML → danmakuEmpty', () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'webhtv-danmaku-empty',
+      );
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final file = File(p.join(temp.path, 'empty.xml'));
+      await file.writeAsString('<?xml version="1.0" encoding="UTF-8"?><i></i>');
+
+      await expectLater(
+        service.load(DanmakuSource(url: file.path)),
+        throwsA(
+          isA<AppError>().having(
+            (e) => e.kind,
+            'kind',
+            AppErrorKind.danmakuEmpty,
+          ),
+        ),
+      );
+    });
+
     test('空文件 → danmakuEmpty', () async {
       final temp = await Directory.systemTemp.createTemp('webhtv-danmaku-blank');
       addTearDown(() => temp.deleteSync(recursive: true));

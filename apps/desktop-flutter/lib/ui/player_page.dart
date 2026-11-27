@@ -2028,6 +2028,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     if (!mounted || generation != _mediaGeneration) return;
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
+    // 起播落点必须在**这一刻**记下来：后面还要装配字幕与弹幕（实测枚举弹幕库那次
+    // 装配了十几秒），那时再读 controller.position 读到的是播放进度而不是落点，
+    // 会把正常续播误报成「起播定位未生效」，并给用户弹一条假的「已从头播放」。
+    final landingPosition = controller.position;
     final diagnostics = controller.diagnostics;
     if (diagnostics != null) {
       widget.state.log.info(
@@ -2141,7 +2145,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (alreadyPositioned) {
         // 起播定位写在 mpv 的 `start` 选项里，生效与否只有引擎自己知道：
         // 落地位置明显偏离就说明这次定位没吃上（此时是从头播，而不是跳转失败）。
-        final actual = _controller.position;
+        final actual = landingPosition;
         final drift = (actual - start).inMilliseconds.abs();
         if (drift > 5000) {
           widget.state.log.warning(
@@ -2660,20 +2664,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 仍会被当成「当前弹幕」，还会继续往新画面推流。
     await _teardownLiveSession('configure');
     final sources = _request.danmaku;
+    // 一次装载只该装配一次：这条日志让「同一 generation 出现两次」当场可见
+    // （实测同一集会连跑两遍站源弹幕请求，白等 2–4 秒还多一条失败警告）。
+    widget.state.log.debug(
+      '弹幕装配 generation=$_mediaGeneration 源=${sources.length}',
+      scope: 'danmaku',
+    );
     if (sources.isEmpty) {
       await _autoSearchDanmaku();
       return;
     }
-    // 优先用户显式选择的源，其次第一个源（静态或直播均可）。
-    var selected = sources.firstWhere(
-      (source) => source.selected,
-      orElse: () => sources.first,
-    );
-    if (selected.isLive) {
-      await _connectLiveDanmaku(selected);
-      return;
+    // 优先用户显式选择的源，其余按原顺序依次尝试；**全部失败再回退弹幕库**。
+    //
+    // 为什么不能只试第一个：站源给的 `do=danmu` 地址实测时好时坏（一次返回非弹幕
+    // 内容、一次指向已关闭的本机数据面）。站源给了但不可用时只试一个，等于整条
+    // 弹幕链作废——用户看到"这集没弹幕"，而弹幕库其实是好的。
+    final ordered = <DanmakuSource>[
+      ...sources.where((source) => source.selected),
+      ...sources.where((source) => !source.selected),
+    ];
+    for (final source in ordered) {
+      if (source.isLive) {
+        await _connectLiveDanmaku(source);
+        return;
+      }
+      // 中间候选静默失败：不逐条弹提示，交给最终兜底结果统一告知。
+      if (await _loadDanmakuSource(source, quiet: true, origin: 'configure')) {
+        return;
+      }
     }
-    await _loadDanmakuSource(selected);
+    await _autoSearchDanmaku();
   }
 
   /// 构造弹幕库查询。
@@ -2735,6 +2755,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     if (memory != null) {
       await _loadDanmakuSource(
+        origin: 'auto:memory',
         DanmakuSource(
           url: memory.url,
           name: memory.title,
@@ -2790,6 +2811,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             source: entry.providerId,
           ),
           quiet: true,
+          origin: 'auto:candidate',
         );
       },
     );
@@ -2832,6 +2854,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         name: selected.title,
         source: selected.providerId,
       ),
+      origin: 'search:selected',
     );
     await widget.state.learnBusinessTitle(
       rawTitle: _request.vodName,
@@ -2994,6 +3017,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<bool> _loadDanmakuSource(
     DanmakuSource source, {
     bool quiet = false,
+    String origin = 'unknown',
   }) async {
     final generation = _hasQueue ? _mediaGeneration : null;
     bool isCurrent() =>
@@ -3013,7 +3037,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           : null;
       _danmakuError = null;
       widget.state.log.info(
-        '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms',
+        '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms'
+        ' origin=$origin',
         scope: 'danmaku',
       );
       if (mounted) setState(() {});
@@ -3023,8 +3048,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _danmakuItems = const [];
       _danmakuSourceUrl = null;
       _danmakuError = describeDanmakuFailure(error);
+      final detail = error is AppError ? error.detail : null;
       widget.state.log.warning(
-        '弹幕加载失败 source=${source.displayName} $_danmakuError',
+        '弹幕加载失败 origin=$origin source=${source.displayName} $_danmakuError'
+        '${detail == null || detail.isEmpty ? '' : ' detail=$detail'}',
         scope: 'danmaku',
       );
       if (!mounted) return false;
@@ -3134,7 +3161,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 点播分支不经过直播会话；不先停掉会继续推流并渲染到新弹幕上。
     await _teardownLiveSession('danmaku-switch');
     if (mounted) setState(() {});
-    final ok = await _loadDanmakuSource(source);
+    final ok = await _loadDanmakuSource(source, origin: 'sheet:switch');
     return DanmakuSourceLoadOutcome(
       ok: ok,
       currentUrl: _danmakuSourceUrl,
@@ -4225,6 +4252,33 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 请求上的 `siteKey`/`vodId` 是**记录**的身份（目录记录就是父目录 id），
   /// 拿它去问那份配置会解析到别的条目，甚至被站源判为业务错误。
   Future<PlaybackDecision?> _resolvePlayback({
+    required String episodeTarget,
+    required String flag,
+    required String vodId,
+    SwapLineRoute? route,
+    int? qualityIndex,
+    bool Function()? isCurrent,
+  }) async {
+    final labels = _request.adBlockLabelsFor(
+      episodeTarget: episodeTarget,
+      flag: flag,
+    );
+    final decision = await _resolvePlaybackForLabels(
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      route: route,
+      qualityIndex: qualityIndex,
+      isCurrent: isCurrent,
+    );
+    // 解析过程中每次撤销会话都会清空归属，所以只能**成功之后**登记：
+    // 随后的清单请求由代理读取它记账，换集时不会继承上一集的标签。
+    if (decision != null) widget.state.noteAdBlockPlayback(labels);
+    return decision;
+  }
+
+  /// 真正的解析（归属登记见 [_resolvePlayback]）。
+  Future<PlaybackDecision?> _resolvePlaybackForLabels({
     required String episodeTarget,
     required String flag,
     required String vodId,
@@ -6265,7 +6319,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       devicePixelRatio: dpr,
       themeMode: widget.state.themeMode,
       proxyPort: null,
+      adBlockSummary: _adBlockOsdSummary(),
     );
+  }
+
+  /// 本次会话累计拦截摘要；没拦过返回 null（该行不出现）。
+  String? _adBlockOsdSummary() {
+    final summary = widget.state.adBlockSummary;
+    if (summary == null) return null;
+    final seconds = summary.removedDurationSec;
+    return '已拦 ${summary.removedSegments} 段'
+        '${seconds > 0 ? ' · ${seconds.toStringAsFixed(1)} 秒' : ''}'
+        '${summary.heuristic ? ' · 启发式' : ''}';
   }
 
   /// 屏显是否需要刷新循环。

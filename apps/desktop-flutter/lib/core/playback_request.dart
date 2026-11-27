@@ -16,6 +16,16 @@ enum PlaybackSourceKind {
   local,
 }
 
+/// 一次拦截的播放归属标签（去广告记账用）。
+///
+/// 三个字段都只写**已知**的：线路或分集解析不出来就留空，绝不套用别的集名——
+/// 统计里一条错误归属比一条空归属更难发现。
+typedef AdBlockPlaybackLabels = ({
+  String vodName,
+  String lineName,
+  String episodeName,
+});
+
 /// 一次播放请求（由详情页、命令行或「打开本地文件」构造）。
 class PlaybackRequest {
   const PlaybackRequest({
@@ -54,6 +64,34 @@ class PlaybackRequest {
     this.localPath = '',
   }) : episodeTarget = episodeTarget ?? url,
        playbackFlag = playbackFlag ?? flag;
+
+  /// 把「本次要播的地址 + 线路标识」映射成去广告记账用的归属标签。
+  ///
+  /// 片名直接取 [vodName]（换集不影响它）；线路名与分集名必须**同时**匹配
+  /// [flag] 与该线路里某个分集的 url——目录记录、换源并入的线路都可能没有
+  /// 对应条目，那时留空而不是猜。
+  AdBlockPlaybackLabels adBlockLabelsFor({
+    required String episodeTarget,
+    required String flag,
+  }) {
+    final target = episodeTarget.trim();
+    var lineName = '';
+    var episodeName = '';
+    for (final line in playLines) {
+      if (line.flag != flag && line.playbackFlag != flag) continue;
+      lineName = line.displayName;
+      if (target.isNotEmpty) {
+        for (final episode in line.episodes) {
+          if (episode.url.trim() == target) {
+            episodeName = episode.name;
+            break;
+          }
+        }
+      }
+      break;
+    }
+    return (vodName: vodName, lineName: lineName, episodeName: episodeName);
+  }
 
   /// 「打开本地文件」的请求：把一个磁盘路径包成 [PlaybackSourceKind.local]。
   ///

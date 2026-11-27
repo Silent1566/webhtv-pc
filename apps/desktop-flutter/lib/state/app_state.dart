@@ -34,6 +34,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart' show Row;
 
 import '../core/ad_rules.dart';
+import '../core/ad_block_stats.dart';
+import '../core/ad_rule_library.dart';
 import '../core/android_adb_profile.dart';
 import '../core/android_bridge.dart';
 import '../core/android_config_execution.dart';
@@ -121,6 +123,8 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../core/tmdb_season.dart';
+import '../services/ad_block_stats_service.dart';
+import '../services/ad_block_stats_store.dart';
 import '../services/app_paths.dart';
 import '../services/lut_store.dart';
 import '../services/config_source_status.dart';
@@ -496,7 +500,20 @@ class AppState extends ChangeNotifier
     _spiderAccounts = SpiderAccountStore(
       path: p.join(this.paths.configDir, 'spiders', 'accounts.json'),
     );
-    _proxy = LocalProxyServer(log: this.log);
+    // 去广告：用户规则库与统计各自一个文件（都属用户数据，随备份迁移）。
+    _adRuleLibraryStore = _createAdRuleLibraryStore();
+    _adBlockStatsStore = AdBlockStatsStore(
+      path: p.join(this.paths.dataDir, adBlockStatsFileName),
+      log: this.log,
+    );
+    _adBlockStatsService = AdBlockStatsService(
+      store: _adBlockStatsStore,
+      ruleName: _adRuleDisplayName,
+    );
+    _proxy = LocalProxyServer(log: this.log)
+      ..adBlockStats = _adBlockStatsService
+      ..adBlockContext = _adBlockContext
+      ..onAdBlockClean = _onAdBlockClean;
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
     // 已连接安卓环境（ADB）：运行时拥有进程/转发，连接描述自己单独一个文件。
@@ -808,6 +825,12 @@ class AppState extends ChangeNotifier
 
   /// 本地代理(§11)。默认只监听 127.0.0.1,按需启动。
   late final LocalProxyServer _proxy;
+
+  /// 规则库 store 在「恢复备份 / 重置数据」后会重建：它只在构造时读盘，
+  /// 不重建就会继续拿内存里的旧条目去算生效规则。
+  late AdRuleLibraryStore _adRuleLibraryStore;
+  late final AdBlockStatsStore _adBlockStatsStore;
+  late final AdBlockStatsService _adBlockStatsService;
 
   /// 本次播放的代理会话（§11.3.1）。
   ProxySession? _proxySession;
@@ -3316,6 +3339,155 @@ class AppState extends ChangeNotifier
     return ok;
   }
 
+  AdRuleLibraryStore _createAdRuleLibraryStore() => AdRuleLibraryStore(
+    path: p.join(paths.dataDir, adRuleLibraryFileName),
+    log: log,
+  );
+
+  /// 磁盘上的规则库/统计被整体替换后，重建内存视图。
+  ///
+  /// 统计用 `reload()`：service 持有同一个 store 引用，换实例会让记账指向旧对象；
+  /// 规则库没有 reload，只能重建 store——它没有别的持有者，界面每次读
+  /// [adRuleLibrary] 都取当前这一份。
+  void _reloadAdBlockUserData() {
+    _adRuleLibraryStore = _createAdRuleLibraryStore();
+    _adBlockStatsStore.reload();
+  }
+
+  /// 用户规则库（本地文件；不含远程订阅与随包规则）。
+  AdRuleLibraryStore get adRuleLibrary => _adRuleLibraryStore;
+
+  /// 去广告统计入口。
+  AdBlockStatsService get adBlockStats => _adBlockStatsService;
+
+  /// 规则库改动后重新解析生效规则并通知界面。
+  ///
+  /// 规则改的是「下一次清单请求用哪套规则」，不需要重启代理：
+  /// `setAdRules` 在运行中也安全，播放中的会话会在下一次清单请求重读。
+  void adRulesChanged() {
+    _applyAdRulesToProxy();
+    _notifyIfAlive();
+  }
+
+  ({int seq, String message})? _adBlockNotice;
+  int _adBlockNoticeSeq = 0;
+  String? _adBlockNoticeSession;
+
+  /// 最近一次「拦到广告」的提示（seq 递增，界面按 seq 判断要不要新弹一条）。
+  ({int seq, String message})? get adBlockNotice => _adBlockNotice;
+
+  /// 提示被消费/关掉后清空。
+  void clearAdBlockNotice() {
+    _adBlockNotice = null;
+  }
+
+  /// 拦到广告：**同一个播放会话只提示一次**。
+  ///
+  /// 拖动、重取清单、换码率都会反复命中同一份清单；每命中一次弹一条会把播放器糊死。
+  /// 换集/换线路会新建代理会话，届时 [_adBlockNoticeSession] 被重置，于是又能提示。
+  void _onAdBlockClean(HlsCleanResult result, String fingerprint) {
+    if (result.abandoned || !result.changed) return;
+    if (_adBlockNoticeSession == fingerprint) return;
+    final message = adBlockNoticeMessage(
+      segments: result.removedSegments,
+      durationSec: result.removedDurationSec,
+    );
+    if (message == null) return;
+    _adBlockNoticeSession = fingerprint;
+    _adBlockNotice = (seq: ++_adBlockNoticeSeq, message: message);
+    _notifyIfAlive();
+  }
+
+  /// 测试口子：模拟一次拦截上报（生产路径由代理回调触发）。
+  @visibleForTesting
+  void debugReportAdBlockClean({
+    required String sessionKey,
+    required int removedSegments,
+    required double removedDurationSec,
+    bool abandoned = false,
+  }) {
+    _onAdBlockClean(
+      HlsCleanResult(
+        text: '',
+        removedSegments: abandoned ? 0 : removedSegments,
+        removedDurationSec: removedDurationSec,
+        abandonReason: abandoned ? '测试' : null,
+      ),
+      sessionKey,
+    );
+  }
+
+  /// 当前会话累计拦截摘要（屏显与去广告页共用）；没拦过返回 null。
+  AdBlockSessionSummary? get adBlockSummary =>
+      _proxy.adBlockSummaryFor(_proxySession?.fingerprint);
+
+  /// 规则 id → 展示名；规则库条目按内含规则的 id 反查条目名。
+  String _adRuleDisplayName(String ruleId) {
+    if (ruleId == kAdHostRuleId) return '配置广告主机';
+    for (final entry in _adRuleLibraryStore.entries) {
+      for (final rule in entry.hlsRules) {
+        if ((rule['id']?.toString() ?? '') == ruleId) {
+          final name = entry.name.trim();
+          return name.isEmpty ? ruleId : name;
+        }
+      }
+    }
+    return ruleId;
+  }
+
+  /// 本次播放的归属标签（片名/线路/分集）；代理在记账时读取。
+  ///
+  /// 只在**解析播放前**由播放器登记，会话撤销时清零：宁可这条拦截没有归属，
+  /// 也不能让它顶着上一集的名字记进统计。
+  AdBlockPlaybackLabels _adBlockLabels = (
+    vodName: '',
+    lineName: '',
+    episodeName: '',
+  );
+
+  /// 登记本次播放的归属标签（播放器在解析前调用）。
+  void noteAdBlockPlayback(AdBlockPlaybackLabels labels) {
+    _adBlockLabels = labels;
+  }
+
+  /// 记账上下文快照（测试用；生产路径经代理回调读取）。
+  @visibleForTesting
+  AdBlockContext debugAdBlockContext() => _adBlockContext();
+
+  /// 记账归属：站点取自当前代理会话；取不到的字段一律留空，不猜。
+  AdBlockContext _adBlockContext() {
+    final siteKey = _proxySession?.siteKey ?? '';
+    var siteName = '';
+    for (final site in effectiveConfig?.sites ?? const <Site>[]) {
+      if (site.key == siteKey) {
+        siteName = site.name;
+        break;
+      }
+    }
+    return AdBlockContext(
+      siteKey: siteKey,
+      siteName: siteName,
+      pipeline: 'HLS',
+      vodName: _adBlockLabels.vodName,
+      lineName: _adBlockLabels.lineName,
+      episodeName: _adBlockLabels.episodeName,
+    );
+  }
+
+  /// 启发式清洗开关（默认关闭：会误删，宁可让用户自己开）。
+  bool get adBlockHeuristicEnabled =>
+      _uiPreferences?.adBlockHeuristicEnabled ?? false;
+
+  /// 持久化启发式清洗开关，并立即同步给代理。
+  Future<bool> setAdBlockHeuristicEnabled(bool enabled) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.rememberAdBlockHeuristicEnabled(enabled);
+    _proxy.setAdBlockHeuristic(enabled);
+    _notifyIfAlive();
+    return ok;
+  }
+
   /// 合并了注入站点的配置；没有注入时就是原配置对象。
   ///
   /// 注意：**不是** `_config`。任何需要“用户配置 + 注入”的地方都用它；
@@ -3456,11 +3628,14 @@ class AppState extends ChangeNotifier
   }
 
   void _applyAdRulesToProxy() {
-    final config = _config;
-    final manual = config == null || !adBlockEnabled
-        ? const AdRuleSet.empty()
-        : AdRuleSet.fromConfig(config);
+    // 生效规则 = 配置内联 + 本地规则库里启用的条目；总开关关闭时两者都不看。
+    final manual = resolveEffectiveRules(
+      config: _config,
+      library: _adRuleLibraryStore.entries,
+      adBlockEnabled: adBlockEnabled,
+    );
     _proxy.setAdRules(manual);
+    _proxy.setAdBlockHeuristic(adBlockHeuristicEnabled);
     if (!adBlockEnabled || !aiAdDetectionEnabled) {
       _proxy.aiSessionRules = const AdRuleSet.empty();
       _proxy.aiSessionFingerprint = null;
@@ -4215,6 +4390,12 @@ class AppState extends ChangeNotifier
     // 恢复配置**之前**进注册表：`_attachSiteService` 用 effectiveConfig 建站点服务，
     // 晚扫描会让重启后的首屏站点列表缺掉用户上次导入的本地源
     // （用户看到的是「导入的源重启就不见了」）。
+    // jvm 站源默认获得本机代理授权（ADR-0003）。**必须早于 scan**：注册表在 scan
+    // 时就把 manifest 读进内存，晚迁移会让本次运行继续用旧权限。
+    JarIntake.ensureJvmLocalProxy(
+      root: p.join(paths.configDir, 'spiders'),
+      log: log,
+    );
     await _spiderRegistry.scan();
     _localSitesCache = null;
     _webHomeSourcesCache = null;
@@ -4444,6 +4625,21 @@ class AppState extends ChangeNotifier
       if (contents.auxiliaryFiles[aiBackupReaderFile] case final bytes?) {
         await _writeFileAtomic(readerFile, bytes);
       }
+      // 去广告用户数据：备份里没有这两份就不动本地（旧备份照样能恢复）。
+      if (contents.auxiliaryFiles[adRuleLibraryBackupFile] case final bytes?) {
+        await _writeFileAtomic(
+          File(p.join(paths.dataDir, adRuleLibraryFileName)),
+          bytes,
+        );
+      }
+      if (contents.auxiliaryFiles[adBlockStatsBackupFile] case final bytes?) {
+        await _writeFileAtomic(
+          File(p.join(paths.dataDir, adBlockStatsFileName)),
+          bytes,
+        );
+      }
+      // 磁盘已经换成备份里的那一份：内存视图必须跟着换，否则界面还显示旧库。
+      _reloadAdBlockUserData();
     } catch (error) {
       log.error('写入恢复文件失败，尝试回滚：$error', scope: 'backup');
       // 逐域独立回滚：任一域失败（含读不了的旧用户轨）都不阻断其它域，
@@ -4457,6 +4653,8 @@ class AppState extends ChangeNotifier
           scope: 'backup',
         );
       }
+      // 回滚把旧字节写回了盘，内存视图同样要跟着回滚。
+      _reloadAdBlockUserData();
       await bootstrap();
       _notifyIfAlive();
       return failures.isEmpty
@@ -4488,6 +4686,12 @@ class AppState extends ChangeNotifier
       await importKaraokeUserFiles(paths, '{"schemaVersion":1,"files":{}}');
       final reader = File(p.join(paths.configDir, 'reader_tts.json'));
       if (await reader.exists()) await reader.delete();
+      // 去广告的两份也属「本地数据」：重置后用户的规则不该还留在盘上。
+      for (final name in [adRuleLibraryFileName, adBlockStatsFileName]) {
+        final file = File(p.join(paths.dataDir, name));
+        if (await file.exists()) await file.delete();
+      }
+      _reloadAdBlockUserData();
       final dbPath = paths.databasePath;
       for (final path in [
         dbPath,
@@ -11789,6 +11993,8 @@ class AppState extends ChangeNotifier
       inspectPlaylistContent: inspectPlaylistContent,
     );
     _proxySession = session;
+    // 新会话 = 新的一次播放/换集：允许再提示一条。
+    _adBlockNoticeSession = null;
     final proxied = _proxy.urlFor(session, target);
     log.info(
       '播放转为本地代理 token=${session.fingerprint} '
@@ -11851,6 +12057,7 @@ class AppState extends ChangeNotifier
 
   /// 停止当前播放会话的代理授权（§11.3.1「停止播放即失效」）。
   void revokeProxySession() {
+    noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     _proxyPlaybackEpoch++;
     final owner = _jvmProxySession;
     _jvmProxySession = null;
@@ -11859,6 +12066,8 @@ class AppState extends ChangeNotifier
   }
 
   void _revokeHttpProxySession() {
+    // 每次解析都从空白开始：归属只能由这一次解析的调用方显式交付。
+    noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     final session = _proxySession;
     _proxySession = null;
     if (session != null) _proxy.sessions.revoke(session.token);
