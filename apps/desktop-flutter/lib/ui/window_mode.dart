@@ -9,17 +9,20 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
-/// 进入全屏：先隐藏标题栏，再铺满。
-///
-/// 顺序不能反：Windows 上 window_manager 的铺满分支只在标题栏样式已切到
-/// hidden 时执行（见 test/phase8_player_fullscreen_test.dart 的调用序列断言）。
-/// 这里**不能**调 setAsFrameless：它会把插件内的 is_frameless_ 置 true，
-/// 铺满分支整体被跳过，窗口停在原尺寸只是变成无边框小窗。
+bool get _hasNativeFullscreenFrame =>
+    defaultTargetPlatform == TargetPlatform.windows;
+
+/// Windows 原生切换会同时应用边框和窗口矩形；其他平台沿用原有顺序。
 Future<void> enterPlayerFullscreen() async {
+  if (_hasNativeFullscreenFrame) {
+    await windowManager.setFullScreen(true);
+    return;
+  }
   await windowManager.setTitleBarStyle(
     TitleBarStyle.hidden,
     windowButtonVisibility: false,
@@ -46,10 +49,9 @@ Future<void> restoreWindowedMode() async {
 
 /// 只恢复标题栏与窗口按钮，不碰全屏标志。
 ///
-/// 用于「窗口已从别处退出全屏」的场景：window_manager 的
-/// onWindowLeaveFullScreen 只通知状态变化，不会替调用方把
-/// TitleBarStyle.hidden 改回来。
+/// Windows 的原生切换已经恢复边框，不再额外触发一次窗口重绘。
 Future<void> restoreWindowTitleBar() async {
+  if (_hasNativeFullscreenFrame) return;
   try {
     await windowManager.setTitleBarStyle(
       TitleBarStyle.normal,

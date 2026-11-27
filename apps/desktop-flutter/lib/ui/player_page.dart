@@ -3811,9 +3811,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controlsVisible = true;
     });
     _controlHideTimer?.cancel();
-    // 插件只通知「离开全屏」，不会把 hidden 的标题栏改回来；
-    // 若这次离开不是我们自己的 setFullScreen(false) 触发的，
-    // 标题栏会永远消失（与「关不掉窗口」是同一类问题）。
+    // 兜住仍需要手动恢复标题栏的平台。
     unawaited(restoreWindowTitleBar());
   }
 
@@ -3821,16 +3819,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final next = !await windowManager.isFullScreen();
     try {
       if (next) {
-        // 顺序与异常恢复统一交给 window_mode.dart：Windows 上必须先
-        // 把标题栏切到 hidden，铺满分支才会执行。
         await enterPlayerFullscreen();
       } else {
         await restoreWindowedMode();
       }
       _enteredFullscreen = next;
     } catch (error) {
-      // 进入失败时标题栏可能已经被隐藏，必须恢复，否则窗口会变成
-      // 没有标题栏按钮的小窗——用户同样关不掉。
+      // 非 Windows 平台可能已先隐藏标题栏，失败时也要恢复。
       await restoreWindowedMode();
       _enteredFullscreen = false;
       widget.state.log.warning('切换全屏失败：$error', scope: 'player');
