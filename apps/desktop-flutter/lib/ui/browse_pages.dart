@@ -37,6 +37,7 @@ import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../services/ai_episode_season_service.dart';
 import '../services/ai_season_mapping_service.dart';
+import '../services/detail_load_trace.dart';
 import '../services/spider_router.dart';
 import '../services/storage.dart';
 import '../services/ui_preferences_store.dart';
@@ -1318,6 +1319,9 @@ class _DetailPageState extends State<DetailPage> {
 
   Widget? _folderPage;
   Widget? _detailView;
+  DetailLoadTrace? _pageLoadTrace;
+  TimingsCallback? _pageFrameTimings;
+  Timer? _pageFrameDeadline;
   bool _holdingRecommendationDetail = false;
   bool _observingRecommendationExit = false;
 
@@ -1365,6 +1369,7 @@ class _DetailPageState extends State<DetailPage> {
     int index,
     ResumeSeed? override,
   ) {
+    if (widget.state.detailLinesLoading) return null;
     if (override != null) return override;
     final written = _writtenHistory;
     if (written == null) return widget.resumeSeed;
@@ -1620,19 +1625,104 @@ class _DetailPageState extends State<DetailPage> {
     // 播放进度写库单独订阅：它不走全局 notify（播放中每 5 秒一次，全局通知会
     // 把首页/侧栏一起重建），见 [AppState.progressRevision]。
     widget.state.progressRevision.addListener(_onProgressWritten);
+    final mountClock = Stopwatch()..start();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // 详情错误的投影也排在首帧之后：`showToast` 会 `notifyListeners`，在
       // `initState` 里直接推等于把已挂载的全局 `ToastHost` 在构建期标脏
       // （与 `app.dart` 首次投影同样的理由）。
       _syncDetailErrorToast();
-      widget.state.loadDetail(
-        widget.vod,
-        // 原来源记录用那份配置自己的站点与服务（不切生效配置）。
-        siteOverride: _pageSite,
-        serviceOverride: widget.sourceContext?.service,
-      );
+      unawaited(_loadPageDetail(mountToShell: mountClock.elapsed));
     });
+  }
+
+  Future<void> _loadPageDetail({Duration? mountToShell}) {
+    _finishPageFrameTrace('superseded');
+    final state = widget.state;
+    final previous = state.detailLoadTrace;
+    final pending = state.loadDetail(
+      widget.vod,
+      siteOverride: _pageSite,
+      serviceOverride: widget.sourceContext?.service,
+    );
+    final trace = state.detailLoadTrace;
+    if (trace == null || identical(previous, trace)) return pending;
+    _pageLoadTrace = trace;
+    if (mountToShell != null) {
+      trace.mark(
+        'page_shell',
+        fields: 'mountToShellMs=${mountToShell.inMilliseconds}',
+      );
+    }
+    final binding = SchedulerBinding.instance;
+    final frame = binding.platformDispatcher.frameData.frameNumber;
+    if (frame >= 0) {
+      trace.beginFrames(frame + 1);
+      void timings(List<FrameTiming> frames) {
+        trace.recordFrames(frames);
+        if (trace.framesFinished && identical(_pageLoadTrace, trace)) {
+          _finishPageFrameTrace();
+        }
+      }
+
+      _pageFrameTimings = timings;
+      binding.addTimingsCallback(timings);
+    }
+    return pending;
+  }
+
+  void _markFirstDetailFrame(LoadPhase phase, int playableLines) {
+    final trace = _pageLoadTrace;
+    if (trace == null ||
+        !identical(trace, widget.state.detailLoadTrace) ||
+        widget.state.detailRequestVodId != widget.vod.vodId ||
+        (phase != LoadPhase.ready &&
+            phase != LoadPhase.failed &&
+            !(widget.state.detailLinesLoading && playableLines > 0)) ||
+        ModalRoute.isCurrentOf(context) == false) {
+      return;
+    }
+    final stage = phase == LoadPhase.failed
+        ? 'first_error_frame'
+        : 'first_detail_frame';
+    if (trace.hasStage(stage)) return;
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      if (!mounted ||
+          !identical(_pageLoadTrace, trace) ||
+          !identical(widget.state.detailLoadTrace, trace) ||
+          widget.state.detailPhase != phase ||
+          ModalRoute.isCurrentOf(context) == false) {
+        return;
+      }
+      trace.mark(stage, fields: 'playableLines=$playableLines '
+          'partial=${widget.state.detailLinesLoading}');
+      if (_pageFrameTimings == null) {
+        _finishPageFrameTrace('no_engine_frame');
+        return;
+      }
+      trace.endFrames(binding.platformDispatcher.frameData.frameNumber, stage);
+      if (trace.framesFinished) {
+        _finishPageFrameTrace();
+        return;
+      }
+      // Engine timings are batched; don't remove the callback before this frame is reported.
+      _pageFrameDeadline ??= Timer(const Duration(seconds: 2), () {
+        _finishPageFrameTrace('report_timeout');
+      });
+    });
+  }
+
+  void _finishPageFrameTrace([String? reason]) {
+    _pageFrameDeadline?.cancel();
+    _pageFrameDeadline = null;
+    final timings = _pageFrameTimings;
+    if (timings != null) {
+      SchedulerBinding.instance.removeTimingsCallback(timings);
+      _pageFrameTimings = null;
+    }
+    if (reason != null) _pageLoadTrace?.finishFrames(reason);
+    _pageLoadTrace = null;
   }
 
   ExternalDetail? _externalMeta;
@@ -2035,6 +2125,7 @@ class _DetailPageState extends State<DetailPage> {
       super.dispose();
       return;
     }
+    _finishPageFrameTrace('disposed');
     // 评分查询随页面一起收走：控制器会取消还在等限速间隔的请求。
     _externalMetaGeneration++;
     _commentsGeneration++;
@@ -2058,6 +2149,10 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   void _onStateChanged() {
+    final trace = _pageLoadTrace;
+    if (trace != null && !identical(trace, widget.state.detailLoadTrace)) {
+      _finishPageFrameTrace('superseded');
+    }
     // 历史写库、切换站点、TMDB 身份到达都会走到这里：跨站点候选与进度解析
     // 的缓存必须跟着失效，否则卡片角标会停在「上一次播放之前」。失效要放在
     // 早退之前——`_holdingRecommendationDetail` 期间同样会写库/切站点。
@@ -2196,11 +2291,7 @@ class _DetailPageState extends State<DetailPage> {
     );
     if (searched != true || !mounted) return;
     _refreshExternalMeta();
-    await state.loadDetail(
-      widget.vod,
-      siteOverride: _pageSite,
-      serviceOverride: widget.sourceContext?.service,
-    );
+    await _loadPageDetail();
   }
 
   Future<void> _openSeasonDialog() async {
@@ -2571,6 +2662,9 @@ class _DetailPageState extends State<DetailPage> {
   /// 这是**改造前就有的那条路径**：跨爬虫源的候选只在 [_resolveDetailHistory] 里参与
   /// 「谁更新」的比较，本站记录的解析规则一字未改。
   HistoryResumeTarget _ownResumeTarget(List<VodPlayLine> lines) {
+    if (widget.state.detailLinesLoading) {
+      return HistoryResumeTarget.firstEpisodeOf(lines);
+    }
     final history = _history;
     if (history != null &&
         history.episodeId.isNotEmpty &&
@@ -2663,6 +2757,18 @@ class _DetailPageState extends State<DetailPage> {
     Vod vod,
     List<VodPlayLine> lines,
   ) {
+    // An unfinished folder cannot prove a unique history match across all lines.
+    if (widget.state.detailLinesLoading) {
+      return _DetailHistoryResolution(
+        target: HistoryResumeTarget.firstEpisodeOf(
+          lines.isEmpty ? lines : [_activeLine(lines)],
+        ),
+        options: const [],
+        mapped: const [],
+        foreignPrimary: null,
+        foreignSeed: null,
+      );
+    }
     // 先取候选再算键：候选查询自己带缓存键，键必须取到它的最新值，否则每次
     // 候选变化都会先用旧键算一轮、下一轮再重算。
     final candidates = _crossSiteHistoryCandidates(vod);
@@ -2792,6 +2898,7 @@ class _DetailPageState extends State<DetailPage> {
     VodPlayLine line,
     int episodeIndex,
   ) {
+    if (widget.state.detailLinesLoading) return const [];
     final candidates = _crossSiteHistoryCandidates(vod);
     if (candidates.isEmpty) return const [];
     final progress = buildCrossSiteProgress(
@@ -2881,6 +2988,7 @@ class _DetailPageState extends State<DetailPage> {
   /// `matched` 并回落到 `fallback`，在这里再判一次就是重复判定——也正是
   /// §3.1 要避免的那种漂移。
   String _heroPlayLabel(List<VodPlayLine> lines, Vod vod) {
+    if (widget.state.detailLinesLoading) return '播放已加载剧集';
     final resolution = _resolveDetailHistory(widget.vod, lines);
     // 两条以上可续播记录：按钮不再暗示「就续那一集」——点下去先让用户选
     // （用户 2026-11-29 选型）。数字进文案，用户点之前就知道会看到选择框。
@@ -2957,6 +3065,7 @@ class _DetailPageState extends State<DetailPage> {
     VodPlayLine line,
     int episodeIndex, {
     ResumeSeed? seedOverride,
+    bool allowSeed = true,
   }) {
     final episode = line.episodes[episodeIndex];
     // 种子命中**同一集**时不再用本站精确查询做兜底：两者可能指向同一集的不同
@@ -2965,7 +3074,7 @@ class _DetailPageState extends State<DetailPage> {
     //
     // 反过来，种子对**别的集**也非空（详情页由 seed 打开时一直带着它）：那时
     // 本站那一集自己的记录才是精确答案，压掉它会让「点另一集」从 0 开始。
-    final seed = _resumeSeedFor(line, episodeIndex, seedOverride);
+    final seed = allowSeed ? _resumeSeedFor(line, episodeIndex, seedOverride) : null;
     final seedWins =
         seed != null &&
         seedOverridesExactHistory(
@@ -2982,7 +3091,8 @@ class _DetailPageState extends State<DetailPage> {
             vodId: vod.vodId,
             flag: line.playbackFlag,
             episodeId: episode.url,
-            episodeName: episode.name,
+            episodeName: allowSeed && !widget.state.detailLinesLoading
+                ? episode.name : null,
             sourceKey: _pageSourceKey,
           );
     // `targetDurationMs` 传 0：详情页拿不到目标集的真实时长（要 `open()` 成功
@@ -3072,7 +3182,7 @@ class _DetailPageState extends State<DetailPage> {
     }
     if (mark == null) return -1;
     final rawIndex = rawLine.episodes.indexOf(mark);
-    return _sourceEpisodeIndices(rawLine.episodes, ordered).indexOf(rawIndex);
+    return sourceEpisodeIndices(rawLine.episodes, ordered).indexOf(rawIndex);
   }
 
   Vod? get _currentVod {
@@ -3118,7 +3228,9 @@ class _DetailPageState extends State<DetailPage> {
       }
     }
     final selectionEpoch = _episodeSelectionEpoch;
+    final partialAtStart = widget.state.detailLinesLoading;
     final state = widget.state;
+    final detailAtStart = state.detailLoadTrace;
     line = state.applyAiMappingsToLine(vod, line);
     final episode = line.episodes[episodeIndex];
     // 解析是网络往返：在它回来之前不给反馈，用户看到的就是「点了没反应」。
@@ -3130,6 +3242,12 @@ class _DetailPageState extends State<DetailPage> {
     );
     if (feedback == null) return;
     _playFeedback = feedback;
+    bool current() => feedback.isCurrent &&
+        selectionEpoch == _episodeSelectionEpoch &&
+        (!partialAtStart || identical(detailAtStart, state.detailLoadTrace));
+    if (state.detailLinesLoading) {
+      setState(() => _selectedLineFlag = line.flag);
+    }
     try {
       // 外部（换源并入）线路：播放必须**定向**到它自己那一个站点解析。
       //
@@ -3150,9 +3268,10 @@ class _DetailPageState extends State<DetailPage> {
         // 外部并入线路是个例外：那条线路的站点属于**当前配置**，用原配置的
         // 服务去问会拿错请求头/运行时。两条来源不能混着用，按线路各自的归属走。
         serviceOverride: route == null ? widget.sourceContext?.service : null,
+        isCurrent: partialAtStart ? current : null,
       );
       // 离页/被别的路由覆盖：`isCurrent` 会顺手收掉反馈并返回 false。
-      if (!feedback.isCurrent || selectionEpoch != _episodeSelectionEpoch) {
+      if (!current()) {
         return;
       }
       if (decision == null || decision.url == null) {
@@ -3177,6 +3296,7 @@ class _DetailPageState extends State<DetailPage> {
         line,
         episodeIndex,
         seedOverride: resumeSeedOverride,
+        allowSeed: !partialAtStart,
       );
       // TMDB 季度身份（`04` §8.1）：已确证季度时透传；未确证时只传 URL/集名。
       // 归属门：不属于本页影片的 TMDB 数据不得带进播放器身份（会把进度写到错的季集上）。
@@ -3257,7 +3377,7 @@ class _DetailPageState extends State<DetailPage> {
               tmdb: identity.hasIdentity ? identity : null,
               // 种子随请求一起下去，由播放器拿到目标集真实时长后重算比例
               // （见 `_resumeStartFor` 注释与 `PlaybackRequest.resumeSeed`）。
-              resumeSeed: _resumeSeedFor(
+              resumeSeed: partialAtStart ? null : _resumeSeedFor(
                 line,
                 episodeIndex,
                 resumeSeedOverride,
@@ -3289,7 +3409,7 @@ class _DetailPageState extends State<DetailPage> {
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       // 离页/被别的路由覆盖：这里必须放弃——被覆盖的旧页仍 `mounted`，
       // 只看 `mounted` 会放行迟到 push 与迟到通知。
-      if (!feedback.isCurrent || selectionEpoch != _episodeSelectionEpoch) {
+      if (!current()) {
         return;
       }
       // 解析阶段到此结束：收起等待态并**交还 owner**。后面「确认换源 → 并入 →
@@ -3740,7 +3860,8 @@ class _DetailPageState extends State<DetailPage> {
     //
     // 分集完整命中决定能否续播；集入口失效不应阻止恢复仍存在的历史线路。
     // 用户手动切过线路后，历史不得把选择抢回去。
-    if (belongs && lines.isNotEmpty && _selectedLineFlag.isEmpty) {
+    if (belongs && !state.detailLinesLoading &&
+        lines.isNotEmpty && _selectedLineFlag.isEmpty) {
       // 自动选线路**只认本站记录**（改造前的语义）：跨源目标映射到的是当前
       // 线路，拿它选线路会把 `_selectedLineFlag` 钉死在首条线路上并永久锁死
       // （下面的 `isEmpty` 守卫让真详情到达后不再重解析）。
@@ -3828,6 +3949,7 @@ class _DetailPageState extends State<DetailPage> {
       primary: external?.data,
     );
     _traceMetaPhotos(tmdbData, external, mergedData, headerData);
+    _markFirstDetailFrame(state.detailPhase, lines.length);
 
     return Scaffold(
       // 头部是**全幅 hero**（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有
@@ -3908,11 +4030,7 @@ class _DetailPageState extends State<DetailPage> {
             tooltip: '刷新详情',
             onPressed: () {
               _refreshExternalMeta();
-              state.loadDetail(
-                widget.vod,
-                siteOverride: _pageSite,
-                serviceOverride: widget.sourceContext?.service,
-              );
+              unawaited(_loadPageDetail());
             },
             icon: const Icon(Icons.refresh),
           ),
@@ -4060,6 +4178,19 @@ class _DetailPageState extends State<DetailPage> {
                       if (!_navSourceMode && lines.isNotEmpty) ...[
                         // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
                         // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
+                        if (state.detailLinesLoading)
+                          Padding(
+                            key: const ValueKey('detail-lines-loading'),
+                            padding: const EdgeInsets.only(bottom: AppSpace.md),
+                            child: Row(children: [
+                              const LoadingBlock(size: 16, center: false),
+                              const SizedBox(width: AppSpace.sm),
+                              Expanded(child: Text(
+                                '其余线路加载中，已加载剧集可播放',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              )),
+                            ]),
+                          ),
                         TmdbLineSelector(
                           lines: lines,
                           selectedFlag: _activeLine(lines).flag,
@@ -4369,11 +4500,7 @@ class _DetailPageState extends State<DetailPage> {
         ),
       );
       if (!mounted) return;
-      await widget.state.loadDetail(
-        widget.vod,
-        siteOverride: _pageSite,
-        serviceOverride: widget.sourceContext?.service,
-      );
+      await _loadPageDetail();
     } finally {
       if (mounted) {
         setState(() => _holdingRecommendationDetail = false);
@@ -4507,7 +4634,10 @@ class _DetailPageState extends State<DetailPage> {
   /// （例如「线路一 S1+S2」切到「只有 S2 的线路二」），不给意图就会回落到
   /// 默认季（S1），线路二在 S1 下一集都没有 → 剧集区空白。
   void _selectLine(VodPlayLine line, List<VodPlayLine> lines) {
-    if (line.flag == _activeLine(lines).flag) return;
+    if (line.flag == _activeLine(lines).flag &&
+        (!widget.state.detailLinesLoading || _selectedLineFlag == line.flag)) {
+      return;
+    }
     // 归属门：不属于本页影片的 TMDB 数据不参与切线路（否则会把上一部剧的季号
     // 当成「当前季度意图」带进新线路解析）。
     final tmdb = _ownedTmdb;
@@ -4584,38 +4714,6 @@ class _DetailPageState extends State<DetailPage> {
     );
   }
 
-  /// 每集在**原始线路**中的下标（对应上游 `episodes.indexOf(episode)`）。
-  ///
-  /// `rendered` 是季度过滤后（可能还倒序过）的子集，它的下标不能用来推断集号。
-  /// 匹配不上时返回 `-1`，由下游决定如何退化。
-  List<int> _sourceEpisodeIndices(
-    List<VodEpisode> source,
-    List<VodEpisode> rendered,
-  ) {
-    final indices = <int>[];
-    final used = <int>{};
-    for (final episode in rendered) {
-      int find(bool Function(VodEpisode) matches) {
-        for (var i = 0; i < source.length; i++) {
-          if (!used.contains(i) && matches(source[i])) return i;
-        }
-        return -1;
-      }
-
-      var index = find((candidate) => identical(candidate, episode));
-      if (index < 0) {
-        index = find(
-          (candidate) =>
-              candidate.url == episode.url && candidate.name == episode.name,
-        );
-      }
-      if (index < 0) index = find((candidate) => candidate.url == episode.url);
-      if (index >= 0) used.add(index);
-      indices.add(index);
-    }
-    return indices;
-  }
-
   /// 交给播放器的剧集卡片：**每条线路各一份**，按线路展示标识分组。
   ///
   /// 构造规则必须与 [_buildEpisodes] 里的 `cards` **逐条一致**，否则卡片与集对不上：
@@ -4670,7 +4768,7 @@ class _DetailPageState extends State<DetailPage> {
         ordered,
         seasonNumber: seasonNumber,
         includeMetadata: metadataSafe,
-        sourceIndices: _sourceEpisodeIndices(
+        sourceIndices: sourceEpisodeIndices(
           isActive ? enriched.episodes : rawLine.episodes,
           ordered,
         ),
@@ -4739,7 +4837,7 @@ class _DetailPageState extends State<DetailPage> {
       fullLine.episodes,
       scope: rawLine.flag,
     ).any((group) => group.isMultiple);
-    final sourceIndices = _sourceEpisodeIndices(rawLine.episodes, episodes);
+    final sourceIndices = sourceEpisodeIndices(rawLine.episodes, episodes);
     final sourceGroups = _episodeAggregateVersions
         ? EpisodeAggregation.build(
             episodes,

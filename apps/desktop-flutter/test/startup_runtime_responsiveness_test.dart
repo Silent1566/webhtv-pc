@@ -3,14 +3,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ipc_protocol.dart';
 import 'package:webhtv_pc/core/http_api.dart';
+import 'package:webhtv_pc/core/app_error.dart';
 import 'package:webhtv_pc/services/spider_router.dart';
 import 'package:webhtv_pc/services/spider_process.dart';
+import 'package:webhtv_pc/services/sidecar_runtime.dart';
+import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/csp_jar_probe.dart';
@@ -56,7 +60,356 @@ class _ObservedLocal extends LocalSpider {
   }
 }
 
+class _NoLaunchSupervisor extends SpiderHostSupervisor {
+  _NoLaunchSupervisor({required super.workRoot, required super.log});
+  int launchRequests = 0;
+
+  @override
+  Future<SpiderHost> ensureRunning({
+    required String siteKey,
+    required String executable,
+    List<String> arguments = const [],
+    required SpiderManifest manifest,
+    String extend = '',
+    Map<String, String> environment = const {},
+  }) {
+    launchRequests++;
+    return Future.error(StateError('fixture: no process launch'));
+  }
+}
+
+class _ObservedCspBinding extends CspJvmBinding {
+  _ObservedCspBinding({required super.root, required this.port});
+  final SendPort port;
+
+  @override
+  String? entryFor(String siteKey) {
+    port.send(Isolate.current.hashCode);
+    return super.entryFor(siteKey);
+  }
+}
+
 void main() {
+  test(
+    'prepared CSP creation never repeats entry or manifest reads on caller',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'prepared-csp-create-',
+      );
+      final messages = ReceivePort();
+      final observed = <int>[];
+      final subscription = messages.listen(
+        (value) => observed.add(value as int),
+      );
+      final log = LogService();
+      final binding = _ObservedCspBinding(
+        root: p.join(temp.path, 'csp'),
+        port: messages.sendPort,
+      );
+      final directory = Directory(binding.directoryFor('demo'))
+        ..createSync(recursive: true);
+      final jar = Archive()
+        ..addFile(ArchiveFile('com/github/catvod/spider/Demo.class', 1, [1]));
+      File(p.join(directory.path, 'index.jar'))
+          .writeAsBytesSync(ZipEncoder().encode(jar));
+      File(p.join(directory.path, 'manifest.json')).writeAsStringSync(
+        jsonEncode({
+          'key': 'demo',
+          'runtime': 'jvm',
+          'entry': 'index.jar',
+          'capabilities': ['home', 'detail', 'play'],
+          'permissions': {'network': true, 'localProxy': true},
+          'limits': {'memoryMiB': 512},
+          'config': {'className': 'com.github.catvod.spider.Demo'},
+        }),
+      );
+      final host = File(p.join(temp.path, 'host.jar'))..writeAsBytesSync([1]);
+      final supervisor = _NoLaunchSupervisor(
+        workRoot: p.join(temp.path, 'work'),
+        log: log,
+      );
+      final router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        cspBinding: binding,
+        supervisor: supervisor,
+        jvmHostPath: host.path,
+      );
+      final site = Site(key: 'demo', name: 'Demo', type: 3, api: 'csp_Demo');
+      try {
+        await router.prepareAvailability([site], foreground: true);
+        expect(router.preparedAvailability(site)?.available, isTrue);
+        await Future<void>.delayed(Duration.zero);
+        observed.clear();
+        final runtime = router.runtimeFor(site);
+        expect(runtime, isA<SidecarRuntime>());
+        await Future<void>.delayed(Duration.zero);
+        final reads = observed
+            .where((value) => value == Isolate.current.hashCode)
+            .length;
+        // ignore: avoid_print
+        print('CSP_CREATE callerEntryReads=$reads');
+        expect(
+          reads,
+          0,
+          reason:
+              'entry discovery and manifest preparation already ran in worker',
+        );
+        expect(
+          (runtime as SidecarRuntime).spider.manifest.permissions.localProxy,
+          isTrue,
+        );
+        expect(
+          runtime.spider.manifest.capabilities.values.contains('detail'),
+          isTrue,
+        );
+        final pyEntry = File(p.join(temp.path, 'other.py'))
+          ..writeAsStringSync('pass');
+        final other = LocalSpider(
+          manifest: SpiderManifest(
+            key: 'other',
+            name: 'Other',
+            runtime: 'python',
+            entry: 'other.py',
+            capabilities: const ['home', 'detail'],
+          ),
+          manifestPath: p.join(temp.path, 'other-manifest.json'),
+          rootDir: temp.path,
+          entryPath: pyEntry.path,
+        );
+        await Future<void>.delayed(Duration.zero);
+        observed.clear();
+        final preparedBeforeRegistration = router.preparedAvailability(site);
+        router.setDirectSpiders({'other': other});
+        expect(
+          identical(
+            router.preparedAvailability(site),
+            preparedBeforeRegistration,
+          ),
+          isTrue,
+          reason:
+              'registering another site must not invalidate prepared JVM work',
+        );
+        await router.prepareAvailability([site], foreground: true);
+        expect(
+          identical(router.runtimeFor(site), runtime),
+          isTrue,
+          reason:
+              'unrelated direct registration must not recreate the JVM runtime',
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          observed,
+          isEmpty,
+          reason: 'unrelated publication must not start another JAR scan',
+        );
+        final unchangedRevision = router.siteRevision;
+        router.setDirectSpiders({'other': other});
+        expect(
+          router.siteRevision,
+          unchangedRevision,
+          reason: 'publishing identical registered objects is a no-op',
+        );
+        final directJvm = LocalSpider(
+          manifest: SpiderManifest(
+            key: 'demo',
+            name: 'Demo direct',
+            runtime: 'jvm',
+            entry: 'index.jar',
+            capabilities: const ['detail'],
+          ),
+          manifestPath: p.join(directory.path, 'manifest.json'),
+          rootDir: directory.path,
+          entryPath: p.join(directory.path, 'index.jar'),
+        );
+        router.setDirectSpiders({'other': other, 'demo': directJvm});
+        expect(
+          router.preparedAvailability(site),
+          isNull,
+          reason: 'the requested site changing must invalidate its preparation',
+        );
+        await router.prepareAvailability([site], foreground: true);
+        final directRuntime = router.runtimeFor(site) as SidecarRuntime;
+        expect(identical(runtime, directRuntime), isFalse);
+        expect(directRuntime.spider.manifest.name, 'Demo direct');
+        router.setDirectSpiders({'other': other});
+        await router.prepareAvailability([site], foreground: true);
+        expect(
+          (router.runtimeFor(site) as SidecarRuntime).spider.manifest.name,
+          site.name,
+        );
+        final service = SiteService(
+          appConfig: AppConfig(sites: [site]),
+          router: router,
+        );
+        observed.clear();
+        final stageNames = <String>[];
+        final outcome = await service
+            .detail(
+              site,
+              'detail',
+              onStage: (stage) {
+                stageNames.add(stage);
+                if (stage == 'runtime_resolve_start') {
+                  router.invalidateRuntimes();
+                }
+              },
+            )
+            .then<Object>((value) => value, onError: (Object error) => error);
+        expect(outcome, isNotNull);
+        await Future<void>.delayed(Duration.zero);
+        expect(stageNames, ['runtime_resolve_start', 'runtime_resolve_end']);
+        expect(
+          observed.where((value) => value == Isolate.current.hashCode),
+          isEmpty,
+          reason: 'a registration/runtime change before detail must reprepare off caller',
+        );
+        final launchesBeforeCancel = supervisor.launchRequests;
+        var active = true;
+        final cancelled = await service
+            .detail(
+              site,
+              'cancelled',
+              isCurrent: () => active,
+              onStage: (stage) {
+                if (stage == 'runtime_resolve_start') {
+                  router.invalidateRuntimes();
+                  active = false;
+                }
+              },
+            )
+            .then<Object>((value) => value, onError: (Object error) => error);
+        expect(cancelled, isA<AppError>());
+        expect((cancelled as AppError).kind, AppErrorKind.siteCancelled);
+        expect(
+          supervisor.launchRequests,
+          launchesBeforeCancel,
+          reason: 'leaving while preparing must not start a stale sidecar',
+        );
+        final cachedBeforeNotify = router.runtimeFor(site) as SidecarRuntime;
+        expect(cachedBeforeNotify.spider.manifest.limits.memoryMiB, 512);
+        final manifestFile = File(p.join(directory.path, 'manifest.json'));
+        final raw =
+            jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
+        raw['limits'] = {'memoryMiB': 768};
+        manifestFile.writeAsStringSync(jsonEncode(raw));
+        router.notifySiteFilesChanged();
+        await router.prepareAvailability([site], foreground: true);
+        final renewed = router.runtimeFor(site) as SidecarRuntime;
+        expect(renewed.spider.manifest.limits.memoryMiB, 768);
+        expect(identical(cachedBeforeNotify, renewed), isFalse);
+        expect(renewed.command.arguments, contains('-Xmx384m'));
+        host.deleteSync();
+        router.invalidateRuntimes();
+        await router.prepareAvailability([site], foreground: true);
+        expect(
+          router.runtimeFor(site),
+          isA<UnsupportedRuntime>(),
+          reason:
+              'missing JVM host cannot reuse an old prepared launch descriptor',
+        );
+      } finally {
+        router.dispose();
+        await router.availabilityIdle;
+        await supervisor.shutdownAll();
+        await subscription.cancel();
+        messages.close();
+        log.dispose();
+        await temp.delete(recursive: true);
+      }
+    },
+    skip: LocalSpiderCommand.probeJavaRuntime().command == null,
+    tags: ['external'],
+  );
+
+  test(
+    'shared manifest path commands stay bound to their own site entry',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('shared-command-');
+      final log = LogService();
+      final binding = CspJvmBinding(root: p.join(temp.path, 'csp'));
+      final directory = Directory(p.join(binding.root, 'Demo'))
+        ..createSync(recursive: true);
+      final manifestPath = p.join(directory.path, 'shared-manifest.json');
+      File(manifestPath).writeAsStringSync(
+        jsonEncode({
+          'key': 'first',
+          'runtime': 'jvm',
+          'entry': 'first.jar',
+          'capabilities': ['detail'],
+          'permissions': {'network': true},
+          'limits': {'memoryMiB': 512},
+        }),
+      );
+      final firstEntry = File(p.join(directory.path, 'first.jar'))
+        ..writeAsBytesSync([1]);
+      final secondEntry = File(p.join(directory.path, 'second.jar'))
+        ..writeAsBytesSync([2]);
+      final host = File(p.join(temp.path, 'host.jar'))..writeAsBytesSync([1]);
+      LocalSpider spider(String key, File entry) => LocalSpider(
+        manifest: SpiderManifest(
+          key: key,
+          name: key,
+          runtime: 'jvm',
+          entry: p.basename(entry.path),
+          capabilities: const ['detail'],
+        ),
+        manifestPath: manifestPath,
+        rootDir: directory.path,
+        entryPath: entry.path,
+      );
+      final first = spider('first', firstEntry);
+      final second = spider('second', secondEntry);
+      final supervisor = SpiderHostSupervisor(
+        workRoot: p.join(temp.path, 'work'),
+        log: log,
+      );
+      final router = SpiderRouter(
+        client: HttpApiClient(),
+        globalHeaders: const [],
+        registry: SpiderManifestRegistry(root: temp.path, log: log),
+        supervisor: supervisor,
+        cspBinding: binding,
+        jvmHostPath: host.path,
+        log: log,
+      );
+      final firstSite = Site(
+        key: 'first',
+        name: 'first',
+        type: 3,
+        api: 'csp_First',
+      );
+      final secondSite = Site(
+        key: 'second',
+        name: 'second',
+        type: 3,
+        api: 'csp_Second',
+      );
+      try {
+        router.setDirectSpiders({'first': first, 'second': second});
+        await router.prepareAvailability([firstSite], foreground: true);
+        await router.prepareAvailability([secondSite], foreground: true);
+        expect(router.preparedAvailability(firstSite)?.available, isTrue);
+        expect(router.preparedAvailability(secondSite)?.available, isTrue);
+        final firstRuntime = router.runtimeFor(firstSite) as SidecarRuntime;
+        final secondRuntime = router.runtimeFor(secondSite) as SidecarRuntime;
+        expect(
+          firstRuntime.command.arguments,
+          contains(firstEntry.path),
+          reason: 'shared manifest paths must not mix up the entry commands',
+        );
+        expect(secondRuntime.command.arguments, contains(secondEntry.path));
+      } finally {
+        router.dispose();
+        await supervisor.shutdownAll();
+        log.dispose();
+        await temp.delete(recursive: true);
+      }
+    },
+    skip: LocalSpiderCommand.probeJavaRuntime().command == null,
+    tags: ['external'],
+  );
+
   test('cached restore availability yields before probing and shares runtime work', () async {
     final temp = await Directory.systemTemp.createTemp('startup-runtime-');
     final paths = AppPaths.resolve(

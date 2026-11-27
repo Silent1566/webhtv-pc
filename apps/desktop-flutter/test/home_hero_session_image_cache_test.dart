@@ -56,6 +56,14 @@ void main() {
     }
   });
 
+  test('background readback preserves twelve-entry namespace and scope', () async {
+    await session.save('hero', twelve());
+    await startup.save('hero', twelve());
+    expect((await session.readAsync('hero')).map((entry) => entry.key), keys());
+    expect(await session.readAsync('other'), isEmpty);
+    expect((await startup.readAsync('hero')), hasLength(3));
+  });
+
   test('default instance retains only three of the same twelve entries', () async {
     await startup.save('hero', twelve());
     expect(startup.read('hero').map((entry) => entry.key), [

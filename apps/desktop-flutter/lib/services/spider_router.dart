@@ -410,12 +410,20 @@ class SpiderRouter {
 
   final Map<String, SiteRuntime> _cache = {};
   final Map<String, LocalSpiderCommand?> _preparedCommands = {};
+  final Map<String, ({LocalSpider spider, LocalSpiderCommand command})>
+  _preparedSidecars = {};
   final Map<String, SiteAvailability> _preparedAvailability = {};
   final Map<String, Future<void>> _availabilityFlights = {};
   final Map<String, Future<void>> _runtimeFlights = {};
   Future<void>? _backgroundAvailability;
   Future<void> _foregroundAvailability = Future.value();
   int _availabilityRevision = -1;
+  int _preparationEpoch = 0;
+  final Map<String, int> _directSiteRevisions = {};
+  int get _preparationRevision =>
+      _preparationEpoch + JarIntake.siteFilesRevision;
+  String _sitePreparationRevision(Site site) =>
+      '$_preparationRevision:${_directSiteRevisions[site.key] ?? 0}';
   int _availabilityRuntimeRevision = -1;
   int _availabilityVersion = 0;
   int get availabilityVersion => _availabilityVersion;
@@ -433,7 +441,7 @@ class SpiderRouter {
 
   bool get availabilityPrepared =>
       !_disposed &&
-      _availabilityRevision == siteRevision &&
+      _availabilityRevision == _preparationRevision &&
       _availabilityRuntimeRevision == LocalSpiderCommand.runtimeRevision;
 
   SiteAvailability? preparedAvailability(Site site) =>
@@ -447,12 +455,13 @@ class SpiderRouter {
     if (sites.every((site) => site.type != 3)) {
       if (!availabilityPrepared) {
         _preparedCommands.clear();
+        _preparedSidecars.clear();
         _preparedAvailability.clear();
       }
       for (final site in sites) {
         _preparedAvailability[_cacheKey(site)] = classify(site);
       }
-      _availabilityRevision = siteRevision;
+      _availabilityRevision = _preparationRevision;
       _availabilityRuntimeRevision = LocalSpiderCommand.runtimeRevision;
       _availabilityVersion++;
       onAvailabilityChanged?.call();
@@ -493,7 +502,7 @@ class SpiderRouter {
         await prepareAvailability([site]);
         return;
       }
-      final revision = siteRevision;
+      final revision = _sitePreparationRevision(site);
       final runtimeRevision = LocalSpiderCommand.runtimeRevision;
       final key = '$revision:$runtimeRevision:${_cacheKey(site)}';
       final pending = _availabilityFlights[key];
@@ -515,7 +524,7 @@ class SpiderRouter {
 
   Future<void> _prepareSiteGeneration(
     Site site,
-    int revision,
+    String revision,
     int runtimeRevision,
   ) async {
     final local = SpiderLocalBinding.matches(site.api)
@@ -566,7 +575,7 @@ class SpiderRouter {
       }
     }
     if (_disposed ||
-        revision != siteRevision ||
+        revision != _sitePreparationRevision(site) ||
         runtimeRevision != LocalSpiderCommand.runtimeRevision) {
       return;
     }
@@ -584,21 +593,32 @@ class SpiderRouter {
     );
     if (_disposed ||
         runtimeRevision != LocalSpiderCommand.runtimeRevision ||
-        revision != siteRevision) {
+        revision != _sitePreparationRevision(site)) {
       return;
     }
     LocalSpiderCommand.mergeSnapshot(result.runtimes);
     if (!availabilityPrepared) {
       _preparedCommands.clear();
+      _preparedSidecars.clear();
       _preparedAvailability.clear();
     }
     _preparedCommands.addAll(result.commands);
+    _preparedSidecars.addAll(result.sidecars);
     _preparedAvailability.addAll(result.availability);
-    _availabilityRevision = revision;
+    _availabilityRevision = _preparationRevision;
     _availabilityRuntimeRevision = runtimeRevision;
     _availabilityVersion++;
     onAvailabilityChanged?.call();
   }
+
+  static String _commandCacheKey(LocalSpider spider) => jsonEncode([
+    spider.key,
+    spider.manifestPath,
+    spider.entryPath,
+    spider.manifest.runtime,
+    spider.manifest.limits.memoryMiB,
+    spider.accountStorePath,
+  ]);
 
   LocalSpiderCommand? _resolveCommand({
     required LocalSpider spider,
@@ -607,7 +627,7 @@ class SpiderRouter {
     String? jvmHostPath,
     LogService? log,
   }) {
-    final key = spider.manifestPath;
+    final key = _commandCacheKey(spider);
     if (_preparedCommands.containsKey(key)) return _preparedCommands[key];
     final command = LocalSpiderCommand.resolve(
       spider: spider,
@@ -634,8 +654,11 @@ class SpiderRouter {
 
   /// 磁盘上的站点文件变了（导入/移除/解包/探测结论刷新）。
   void notifySiteFilesChanged() {
+    _cache.clear();
     _preparedCommands.clear();
+    _preparedSidecars.clear();
     _siteRevision++;
+    _preparationEpoch++;
   }
 
   /// 运行时缓存键：同一 `type` 可能有不同 ABI，不能只用 type 做键。
@@ -661,13 +684,37 @@ class SpiderRouter {
     }
     provisioningSiteKeys = Set.unmodifiable(keys);
     _siteRevision++;
+    _preparationEpoch++;
   }
 
   /// 更新直连站点注册结果（并清理旧缓存，使下次判定拿到新结论）。
   void setDirectSpiders(Map<String, LocalSpider> spiders) {
-    directSpiders = spiders;
-    _cache.clear();
-    _preparedCommands.clear();
+    final changed = <String>{
+      for (final key in {...directSpiders.keys, ...spiders.keys})
+        if (!identical(directSpiders[key], spiders[key])) key,
+    };
+    if (changed.isEmpty) return;
+    final commandKeys = <String>{
+      for (final key in changed) ...[
+        if (directSpiders[key] case final previous?) _commandCacheKey(previous),
+        if (spiders[key] case final next?) _commandCacheKey(next),
+      ],
+    };
+    bool affected(String cacheKey) =>
+        changed.any((key) => cacheKey.startsWith('${SiteType.spider}:$key:'));
+    for (final entry in _preparedSidecars.entries) {
+      if (affected(entry.key)) {
+        commandKeys.add(_commandCacheKey(entry.value.spider));
+      }
+    }
+    directSpiders = Map.unmodifiable(spiders);
+    _cache.removeWhere((key, _) => affected(key));
+    _preparedAvailability.removeWhere((key, _) => affected(key));
+    _preparedSidecars.removeWhere((key, _) => affected(key));
+    _preparedCommands.removeWhere((key, _) => commandKeys.contains(key));
+    for (final key in changed) {
+      _directSiteRevisions.update(key, (value) => value + 1, ifAbsent: () => 1);
+    }
     _siteRevision++;
   }
 
@@ -682,7 +729,9 @@ class SpiderRouter {
   void invalidateRuntimes() {
     _cache.clear();
     _preparedCommands.clear();
+    _preparedSidecars.clear();
     _siteRevision++;
+    _preparationEpoch++;
   }
 
   /// 更新 HTTP 传输（出站代理 / DoH / 配置换源后调用）。
@@ -705,6 +754,7 @@ class SpiderRouter {
     }
     _cache.clear();
     _siteRevision++;
+    _preparationEpoch++;
   }
 
   /// 带注册表的可用性判定（§8.1）。
@@ -1291,6 +1341,18 @@ class SpiderRouter {
   }
 
   SiteRuntime _create(Site site) {
+    final prepared = availabilityPrepared
+        ? _preparedSidecars[_cacheKey(site)]
+        : null;
+    if (prepared != null && supervisor != null) {
+      return SidecarRuntime(
+        site: site,
+        spider: prepared.spider,
+        command: prepared.command,
+        supervisor: supervisor!,
+        log: log,
+      );
+    }
     // 直连 js/py：已自动注册则复用本地 spider 运行时。
     final direct = directSpiders[site.key];
     if (direct != null && supervisor != null) {
@@ -1456,10 +1518,17 @@ extension SiteResultCache on SiteResult {
 }
 
 class _PreparedAvailability {
-  const _PreparedAvailability(this.availability, this.commands, this.runtimes);
+  const _PreparedAvailability(
+    this.availability,
+    this.commands,
+    this.runtimes,
+    this.sidecars,
+  );
   final Map<String, SiteAvailability> availability;
   final Map<String, LocalSpiderCommand?> commands;
   final RuntimeCommandSnapshot runtimes;
+  final Map<String, ({LocalSpider spider, LocalSpiderCommand command})>
+  sidecars;
 }
 
 Future<_PreparedAvailability> _prepareAvailabilityInBackground(
@@ -1495,6 +1564,8 @@ Future<_PreparedAvailability> _prepareAvailabilityInBackground(
   router.provisioningSiteKeys = provisioning;
   try {
     final availability = <String, SiteAvailability>{};
+    final sidecars =
+        <String, ({LocalSpider spider, LocalSpiderCommand command})>{};
     for (final site in sites) {
       final result = router.classifySite(site);
       availability[router._cacheKey(site)] = result;
@@ -1520,7 +1591,12 @@ Future<_PreparedAvailability> _prepareAvailabilityInBackground(
             jsHostPath: jsHostPath,
             jvmHostPath: jvmHostPath,
           );
-          if (command == null) {
+          if (command != null) {
+            sidecars[router._cacheKey(site)] = (
+              spider: local,
+              command: command,
+            );
+          } else {
             availability[router._cacheKey(site)] = const SiteAvailability(
               available: false,
               runtimeName: 'PC Java Spider',
@@ -1535,6 +1611,7 @@ Future<_PreparedAvailability> _prepareAvailabilityInBackground(
       availability,
       router._preparedCommands,
       LocalSpiderCommand.snapshot(),
+      sidecars,
     );
   } finally {
     client.close();
