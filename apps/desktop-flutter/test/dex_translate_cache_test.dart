@@ -45,8 +45,13 @@ void main() {
     Map<String, Object?>? data,
     String? recordJson,
     bool withJar = true,
+    int? directoryVersion = DexTranslate.repairVersion,
   }) {
-    final dir = Directory(p.join(root.path, sha))..createSync(recursive: true);
+    final dir = Directory(p.joinAll([
+      root.path,
+      sha,
+      if (directoryVersion != null) 'v$directoryVersion',
+    ]))..createSync(recursive: true);
     if (withJar) {
       File(p.join(dir.path, 'classes.jar'))
           .writeAsBytesSync(const [0x50, 0x4b, 3, 4]);
@@ -60,6 +65,17 @@ void main() {
 
   Directory site(String name) =>
       Directory(p.join(root.path, name))..createSync(recursive: true);
+
+  void seedSiteBundle(Directory siteDir) {
+    final dir = Directory(p.join(siteDir.path, 'dexBundles'))
+      ..createSync(recursive: true);
+    File(p.join(dir.path, 'classes.jar'))
+        .writeAsBytesSync(const [0x50, 0x4b, 3, 4]);
+    File(p.join(dir.path, 'intake-dex.json')).writeAsStringSync(
+      jsonEncode(record()),
+      flush: true,
+    );
+  }
 
   test('当前口径的共享产物被复用，且记录里的 bundle 改写成站点路径', () {
     final shared = seed();
@@ -114,7 +130,7 @@ void main() {
       reason: '不合格产物不能落到站点目录',
     );
     expect(
-      File(p.join(shared, sha, 'classes.jar')).existsSync(),
+      File(p.join(shared, sha, 'v${DexTranslate.repairVersion}', 'classes.jar')).existsSync(),
       isTrue,
       reason: '缓存准入是跳过，不是删用户缓存',
     );
@@ -124,8 +140,8 @@ void main() {
     test('v$version 共享产物必须重新转译，原始缓存文件和记录保留', () {
       final old = record()..['repairVersion'] = version;
       final shared = seed(data: old);
-      final originalJar = File(p.join(shared, sha, 'classes.jar'));
-      final originalRecord = File(p.join(shared, sha, 'intake-dex.json'));
+      final originalJar = File(p.join(shared, sha, 'v${DexTranslate.repairVersion}', 'classes.jar'));
+      final originalRecord = File(p.join(shared, sha, 'v${DexTranslate.repairVersion}', 'intake-dex.json'));
       final jarBytes = originalJar.readAsBytesSync();
       final recordText = originalRecord.readAsStringSync();
       final target = site('site-v$version');
@@ -186,13 +202,12 @@ void main() {
   });
 
   test('recordUsable 只看口径与自洽性，不看文件是否存在', () {
-    final good = File(p.join(seed(), sha, 'intake-dex.json')).path;
+    final good = File(p.join(seed(), sha, 'v${DexTranslate.repairVersion}', 'intake-dex.json')).path;
     expect(DexTranslate.recordUsable(good), isTrue);
     expect(
       DexTranslate.recordUsable(p.join(root.path, 'missing.json')),
       isFalse,
     );
-    expect(DexTranslate.repairVersion, 7);
   });
 
   test('shared record must belong to requested source SHA', () {
@@ -209,7 +224,7 @@ void main() {
 
   test('shared bundle hash must match actual bytes', () {
     final shared = seed();
-    File(p.join(shared, sha, 'classes.jar')).writeAsBytesSync([9]);
+    File(p.join(shared, sha, 'v${DexTranslate.repairVersion}', 'classes.jar')).writeAsBytesSync([9]);
     expect(
       DexTranslate.copySharedBundle(
         sharedDir: shared,
@@ -217,6 +232,125 @@ void main() {
         siteDir: site('corrupt').path,
       ),
       isNull,
+    );
+  });
+
+  test('共享产物写入内容哈希和版本目录，并能跨站点复用', () {
+    final source = site('source');
+    seedSiteBundle(source);
+
+    DexTranslate.storeSharedBundle(root.path, sha, source.path);
+
+    final cacheDir = p.join(root.path, sha, 'v${DexTranslate.repairVersion}');
+    expect(
+      File(p.join(cacheDir, 'classes.jar')).readAsBytesSync(),
+      const [0x50, 0x4b, 3, 4],
+    );
+    expect(
+      DexTranslate.recordUsable(p.join(cacheDir, 'intake-dex.json')),
+      isTrue,
+    );
+    final target = site('next');
+    final reused = DexTranslate.copySharedBundle(
+      sharedDir: root.path,
+      sha: sha,
+      siteDir: target.path,
+    );
+    expect(reused, isNotNull);
+    expect(reused!['cached'], isTrue);
+    expect(
+      File(p.join(target.path, 'dexBundles', 'classes.jar')).readAsBytesSync(),
+      const [0x50, 0x4b, 3, 4],
+    );
+  });
+
+  test('写入当前版本时保留历史版本与旧布局', () {
+    final old = record()..['repairVersion'] = 5;
+    seed(data: old, directoryVersion: null);
+    seed(data: old, directoryVersion: 5);
+    final oldDirs = [p.join(root.path, sha), p.join(root.path, sha, 'v5')];
+    final before = <String, List<int>>{
+      for (final dir in oldDirs)
+        for (final name in ['classes.jar', 'intake-dex.json'])
+          p.join(dir, name): File(p.join(dir, name)).readAsBytesSync(),
+    };
+    final source = site('fresh');
+    seedSiteBundle(source);
+
+    DexTranslate.storeSharedBundle(root.path, sha, source.path);
+
+    for (final entry in before.entries) {
+      expect(File(entry.key).readAsBytesSync(), entry.value, reason: entry.key);
+    }
+    expect(
+      DexTranslate.recordUsable(p.join(
+        root.path, sha, 'v${DexTranslate.repairVersion}', 'intake-dex.json',
+      )),
+      isTrue,
+    );
+  });
+
+  test('同口径旧布局仍可复用，且原始缓存不被修改', () {
+    final shared = seed(directoryVersion: null);
+    final original = File(p.join(shared, sha, 'intake-dex.json'));
+    final before = original.readAsBytesSync();
+    expect(
+      DexTranslate.copySharedBundle(
+        sharedDir: shared,
+        sha: sha,
+        siteDir: site('legacy').path,
+      ),
+      isNotNull,
+    );
+    expect(original.readAsBytesSync(), before);
+  });
+
+  test('优先复用当前版本目录，不被旧布局的坏记录遮住', () {
+    seed();
+    seed(data: record(withVersion: false), directoryVersion: null);
+    expect(
+      DexTranslate.copySharedBundle(
+        sharedDir: root.path,
+        sha: sha,
+        siteDir: site('versioned').path,
+      ),
+      isNotNull,
+    );
+  });
+
+  test('共享目录不可写时保留站点产物，不抛异常', () {
+    final blocked = File(p.join(root.path, 'blocked'))..writeAsStringSync('file');
+    final source = site('source');
+    seedSiteBundle(source);
+    DexTranslate.storeSharedBundle(blocked.path, sha, source.path);
+    expect(
+      File(p.join(source.path, 'dexBundles', 'classes.jar')).readAsBytesSync(),
+      const [0x50, 0x4b, 3, 4],
+    );
+    expect(
+      DexTranslate.recordUsable(p.join(source.path, 'dexBundles', 'intake-dex.json')),
+      isTrue,
+    );
+  });
+
+  test('宿主 DexRepair.VERSION 写出的记录能被 Dart 接受', () {
+    final host = File(p.join(
+      '..', '..', 'sidecars', 'spider-host-jvm',
+      'src', 'webhtv', 'spider', 'DexRepair.java',
+    ));
+    final match = RegExp(
+      r'^\s*public\s+static\s+final\s+int\s+VERSION\s*=\s*(\d+)\s*;',
+      multiLine: true,
+    ).firstMatch(host.readAsStringSync());
+    expect(match, isNotNull, reason: '未找到宿主 DexRepair.VERSION 常量');
+    final hostVersion = int.parse(match!.group(1)!);
+    final shared = seed(data: {...record(), 'repairVersion': hostVersion});
+    expect(
+      DexTranslate.recordUsable(p.join(
+        shared, sha, 'v${DexTranslate.repairVersion}', 'intake-dex.json',
+      )),
+      isTrue,
+      reason: '宿主 v$hostVersion 的产物必须能通过 Dart v${DexTranslate.repairVersion} 准入',
     );
   });
 }

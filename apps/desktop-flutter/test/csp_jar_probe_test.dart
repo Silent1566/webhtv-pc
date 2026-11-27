@@ -12,12 +12,13 @@
 /// - 全程不启动 JVM、不加载类：预转译钩子一律注入假实现（`fakeDex`）。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart' show getCrc32;
-import 'package:crypto/crypto.dart' show sha256;
+import 'package:crypto/crypto.dart' show md5, sha256;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -256,6 +257,297 @@ void main() {
     expect(record, isNotNull);
     expect(record!['installed'], isTrue);
     expect(record['verdict'], JarVerdict.desktopReady.name);
+  });
+
+  group('jar 内容暂存', () {
+    const url = 'https://example.test/cache.jar';
+    const alias = 'https://example.test/mirror.jar';
+    String urlKey(String value) =>
+        sha256.convert(utf8.encode(value)).toString();
+    String cachePath() => p.join(tempRoot.path, 'spiders', 'probe-cache');
+    File indexFile() => File(p.join(cachePath(), 'jar-index.json'));
+    File blob(String sha) => File(p.join(cachePath(), 'jar', '$sha.jar'));
+    File legacy(String source) =>
+        File(p.join(cachePath(), '${urlKey(source).substring(0, 16)}.jar'));
+    Map<String, dynamic> entries() =>
+        (jsonDecode(indexFile().readAsStringSync()) as Map)['entries']
+            as Map<String, dynamic>;
+    Map<String, Object> indexEntry(String sha, int size, int at) => {
+      'sha256': sha,
+      'size': size,
+      'at': at,
+    };
+    void seedIndex(Map<String, Object> entries) => indexFile()
+      ..createSync(recursive: true)
+      ..writeAsStringSync(jsonEncode({'version': 1, 'entries': entries}));
+    void seedBlob(File file, List<int> bytes) => file
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(bytes);
+    AppConfig demo(String key, [String source = url]) =>
+        configOf([cspSite('csp_Demo', key: key, jar: source)]);
+    CspJarProbe serving(List<int> bytes) => probeWith(
+      MockClient((request) async {
+        downloads.add(request.url.toString());
+        return http.Response.bytes(bytes, 200);
+      }),
+    );
+
+    Future<void> recoveryRecord(String key, String source, String sha) =>
+        JarIntake.writeProbe(binding().directoryFor(key), {
+          'sourceUrl': source,
+          'semanticsVersion': CspJarProbe.probeSemanticsVersion,
+          'sha256': sha,
+          'outcome': CspProbeOutcome.unpackFailed.name,
+          'verdict': JarVerdict.shellGuard.name,
+        });
+    Future<void> seedPayload(String sha) async {
+      final payload = File(p.join(cachePath(), 'shell', sha, 'payload.jar'));
+      await payload.parent.create(recursive: true);
+      await fakeUnpack()(shellJar: '', outJar: payload.path);
+    }
+
+    test('重取等长新内容：检测、暂存、安装与探测摘要一致', () async {
+      final oldFile = File(p.join(tempRoot.path, 'old.jar'));
+      await _writeZip(oldFile, {
+        'Fake.class': const [1],
+      });
+      final old = await oldFile.readAsBytes();
+      final newFile = File(p.join(tempRoot.path, 'new.jar'));
+      await _writeZip(newFile, {
+        'Demo.class': const [2],
+      });
+      final bytes = await newFile.readAsBytes();
+      final sha = sha256.convert(bytes).toString();
+      final md5Value = md5.convert(bytes).toString();
+      final source = '$url;md5;$md5Value';
+      expect(bytes, hasLength(old.length));
+      final first = await serving(old).materialize(demo('first', source));
+      expect(first.installed, 1);
+      expect(first.entries.single.inspection?.entryClassFound, isFalse);
+      final oldSha = sha256.convert(old).toString();
+      expect(await blob(oldSha).readAsBytes(), old);
+      seedBlob(blob(sha), old); // 新哈希路径上也不能复用错内容的同长度文件。
+
+      final second = await serving(bytes).materialize(demo('second', source));
+      expect(downloads, [url, url]);
+      expect(second.installed, 1);
+      expect(
+        second.entries.single.inspection?.verdict,
+        JarVerdict.desktopReady,
+      );
+      expect(second.entries.single.inspection?.entryClassFound, isTrue);
+      expect(await blob(sha).readAsBytes(), bytes);
+      final installed = await File(binding().entryFor('second')!).readAsBytes();
+      expect(installed, bytes);
+      final record = JarIntake.probeRecord(binding().directoryFor('second'))!;
+      expect(record['sha256'], sha256.convert(installed).toString());
+      expect(record['actualMd5'], md5Value);
+      expect(entries()[urlKey(url)]['sha256'], sha);
+      expect(blob(oldSha).existsSync(), isFalse);
+      expect(await File(binding().entryFor('first')!).readAsBytes(), old);
+    });
+
+    test('两个 URL 共享一个内容 blob，可离线恢复时跨实例均零请求命中', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      expect(
+        (await serving(bytes).materialize(demo('first'))).needsShellRuntime,
+        1,
+      );
+      expect(
+        (await serving(bytes).materialize(demo('mirror', alias)))
+            .needsShellRuntime,
+        1,
+      );
+      expect(downloads, [url, alias]);
+      expect(blob(sha).parent.listSync().map((f) => p.basename(f.path)), [
+        '$sha.jar',
+      ]);
+      expect(entries().keys, unorderedEquals([urlKey(url), urlKey(alias)]));
+      for (final source in [url, alias]) {
+        expect(entries()[urlKey(source)]['sha256'], sha);
+        expect(entries()[urlKey(source)]['size'], bytes.length);
+      }
+
+      await seedPayload(sha);
+      final offline = serving(const []);
+      expect((await offline.materialize(demo('first'))).unpacked, 1);
+      expect((await offline.materialize(demo('mirror', alias))).unpacked, 1);
+      expect(downloads, [url, alias]);
+    });
+
+    for (final fault in ['缺失', '长度不符', '等长 SHA 不符']) {
+      test('blob $fault 按未命中重下', () async {
+        final bytes = await shellJar();
+        final sha = sha256.convert(bytes).toString();
+        await seedPayload(sha);
+        await recoveryRecord('repaired', url, sha);
+        seedIndex({urlKey(url): indexEntry(sha, bytes.length, 1)});
+        if (fault == '长度不符') seedBlob(blob(sha), bytes.sublist(1));
+        if (fault == '等长 SHA 不符') {
+          seedBlob(blob(sha), [...bytes]..[0] ^= 1);
+        }
+        final report = await serving(bytes).materialize(demo('repaired'));
+        expect(downloads, [url]);
+        expect(report.unpacked, 1);
+        expect(await blob(sha).readAsBytes(), bytes);
+      });
+    }
+
+    test('索引按 at 淘汰到 200 条，保留共享 blob 和站点安装件', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      final probe = serving(bytes);
+      await seedPayload(sha);
+      expect((await probe.materialize(demo('first'))).unpacked, 1);
+      await recoveryRecord('redownload', url, sha);
+      final orphanBytes = [0, 1];
+      final orphanSha = sha256.convert(orphanBytes).toString();
+      seedBlob(blob(orphanSha), orphanBytes);
+      final orphanKey = urlKey('https://example.test/orphan.jar');
+      seedIndex({
+        for (var i = 0; i < 199; i++)
+          urlKey('https://example.test/$i.jar'): indexEntry(
+            sha,
+            bytes.length,
+            i + 3,
+          ),
+        urlKey(url): indexEntry(sha, bytes.length, 1),
+        orphanKey: indexEntry(orphanSha, orphanBytes.length, 2),
+      });
+      expect((await probe.materialize(demo('mirror', alias))).unpacked, 1);
+      expect(entries(), hasLength(200));
+      expect(entries(), isNot(contains(urlKey(url))));
+      expect(entries(), isNot(contains(orphanKey)));
+      expect(blob(sha).existsSync(), isTrue);
+      expect(blob(orphanSha).existsSync(), isFalse);
+      expect(binding().entryFor('first'), isNotNull);
+      expect((await probe.materialize(demo('redownload'))).unpacked, 1);
+      expect(downloads, [url, alias, url]);
+      expect(entries(), hasLength(200));
+    });
+
+    test('淘汰 blob 失败只写日志，不影响安装与索引裁剪', () async {
+      final bytes = await desktopJar();
+      final sha = sha256.convert(bytes).toString();
+      final unusableSha = sha256.convert([1]).toString();
+      // 普通 File 删除不能删除目录；不用平台专属的文件锁/权限注入。
+      Directory(blob(unusableSha).path).createSync(recursive: true);
+      final oldest = urlKey('https://example.test/stuck.jar');
+      seedIndex({
+        for (var i = 0; i < 199; i++)
+          urlKey('https://example.test/$i.jar'): indexEntry(
+            sha,
+            bytes.length,
+            i + 2,
+          ),
+        oldest: indexEntry(unusableSha, 1, 1),
+      });
+      final report = await serving(bytes).materialize(demo('with-eviction'));
+      expect(report.installed, 1);
+      expect(entries(), hasLength(200));
+      expect(entries(), isNot(contains(oldest)));
+      expect(
+        log.entries,
+        contains(
+          predicate<LogEntry>(
+            (e) =>
+                e.level == LogLevel.warning &&
+                e.message.contains('裁剪 jar 暂存失败'),
+          ),
+        ),
+      );
+    });
+
+    test('索引读写失败只写日志，不影响主流程', () async {
+      final bytes = await desktopJar();
+      Directory(indexFile().path).createSync(recursive: true);
+      final report = await serving(bytes).materialize(demo('no-index'));
+      expect(report.installed, 1);
+      expect(downloads, [url]);
+      expect(
+        log.entries,
+        contains(
+          predicate<LogEntry>(
+            (e) =>
+                e.level == LogLevel.warning && e.message.contains('jar 暂存索引'),
+          ),
+        ),
+      );
+    });
+
+    test('索引未落盘时保留旧命名暂存', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      await seedPayload(sha);
+      await recoveryRecord('migration-retry', url, sha);
+      seedBlob(legacy(url), bytes);
+      Directory(indexFile().path).createSync(recursive: true);
+
+      final report = await serving(const [])
+          .materialize(demo('migration-retry'));
+      expect(report.unpacked, 1);
+      expect(downloads, isEmpty);
+      expect(await legacy(url).readAsBytes(), bytes);
+    });
+
+    test('索引替换不删除另一个探测正在解包的 blob', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      final started = Completer<void>();
+      final replaced = Completer<void>();
+      final unpack = fakeUnpack();
+      final probe = probeWith(
+        MockClient((_) async => http.Response.bytes(bytes, 200)),
+        shellRuntimeInstalled: () => true,
+        shellUnpack: ({required shellJar, required outJar}) async {
+          started.complete();
+          await replaced.future;
+          expect(await File(shellJar).readAsBytes(), bytes);
+          return unpack(shellJar: shellJar, outJar: outJar);
+        },
+      );
+      final first = probe.materialize(demo('in-flight'));
+      await started.future;
+      try {
+        final newer = await serving(await desktopJar())
+            .materialize(demo('replacement'));
+        expect(newer.installed, 1);
+        expect(entries()[urlKey(url)]['sha256'], isNot(sha));
+        expect(blob(sha).existsSync(), isTrue);
+      } finally {
+        replaced.complete();
+      }
+      expect((await first).unpacked, 1);
+      expect(blob(sha).existsSync(), isFalse);
+    });
+
+    test('仅有旧命名暂存时零请求迁移到内容索引', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      await seedPayload(sha);
+      await recoveryRecord('migrated', url, sha);
+      seedBlob(legacy(url), bytes);
+      expect(indexFile().existsSync(), isFalse);
+      final report = await serving(const []).materialize(demo('migrated'));
+      expect(report.unpacked, 1);
+      expect(downloads, isEmpty);
+      expect(await blob(sha).readAsBytes(), bytes);
+      expect(entries()[urlKey(url)]['sha256'], sha);
+      expect(legacy(url).existsSync(), isFalse);
+    });
+
+    test('旧命名暂存不匹配同站 probe.json 的 SHA 时重下', () async {
+      final bytes = await shellJar();
+      final sha = sha256.convert(bytes).toString();
+      await seedPayload(sha);
+      await recoveryRecord('legacy-mismatch', url, sha);
+      seedBlob(legacy(url), [...bytes]..[0] ^= 1);
+      final report = await serving(bytes).materialize(demo('legacy-mismatch'));
+      expect(report.unpacked, 1);
+      expect(downloads, [url]);
+      expect(await blob(sha).readAsBytes(), bytes);
+    });
   });
 
   test('含 classes.dex 且无原生库的 jar 落盘并预转译，结论写进 intake.json', () async {

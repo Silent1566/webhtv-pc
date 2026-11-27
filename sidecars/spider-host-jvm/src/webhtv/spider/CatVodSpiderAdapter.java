@@ -47,59 +47,18 @@ public final class CatVodSpiderAdapter extends Spider {
 
     @Override
     public boolean supportsProxyHttp() {
-        // 两条形态都算支持：
-        // 1) 静态 Object[] proxy(Map)：加固壳 payload 经 ProxyOrigin 路由的那条；
-        // 2) 实例 Object[] proxy(Map)：CatVod 原生写法（安卓 BaseLoader 就是调实例）。
-        // 判定本身**绝不抛异常**：能力协商阶段抛出去会把整个 sidecar 打死
-        // （2026-11-27 实测 SPIDER_CRASHED「代理处理器必须是静态 Object[] 方法」）。
-        try {
-            return com.github.catvod.spider.DexNative.proxyMethod(target.getClass()) != null;
-        } catch (IllegalStateException ignored) {
-            // 落到实例形态再判一次。
-        }
-        try {
-            java.lang.reflect.Method method = target.getClass().getMethod("proxy", Map.class);
-            return method.getReturnType() == Object[].class;
-        } catch (NoSuchMethodException | RuntimeException absent) {
-            return false;
-        }
+        return com.github.catvod.spider.DexNative.supportsSpiderProxy(target);
     }
 
     @Override
     public void attachProxyHttp() {
-        // attach 只服务「静态 + ProxyOrigin 路由」那条形态；实例形态不需要也不支持它。
-        try {
-            com.github.catvod.spider.DexNative.attachProxy(target.getClass());
-        } catch (RuntimeException ignored) {
-            // 非静态 proxy 的站源走实例调用，这里什么都不用做。
-        }
+        com.github.catvod.spider.DexNative.attachProxy(target.getClass());
     }
 
     @Override
     public Object[] proxy(Map<String, String> params, CallContext context) {
         context.checkCancelled();
-        // 形态先判、异常后传：路由形态在**调用之前**就已确定，不能拿运行时异常当判据。
-        // 用 catch 兜底会把「路由自己抛错」当成「不是静态形态」，于是同一个请求再往实例上
-        // 打一次（实测 routerContract 的 fallbackCalls 变成 1，路由错误被吞成一次静默重试）。
-        java.lang.reflect.Method routed = null;
-        try {
-            routed = com.github.catvod.spider.DexNative.proxyMethod(target.getClass());
-        } catch (IllegalStateException notStatic) {
-            // 抛出来即「不是静态 Object[] 形态」，落到下面的实例调用。
-        }
-        if (routed != null) return com.github.catvod.spider.DexNative.invokeProxy(target.getClass(), params);
-        // 非静态 proxy（CatVod 原生写法）：直接调站源**实例**，与安卓
-        // BaseLoader.get().proxy(params) 同口径。
-        try {
-            java.lang.reflect.Method method = target.getClass().getMethod("proxy", Map.class);
-            Object result = method.invoke(target, params);
-            if (result instanceof Object[] array) return array;
-            throw new IllegalStateException("站源 proxy 未返回 Object[]");
-        } catch (java.lang.reflect.InvocationTargetException error) {
-            throw new IllegalStateException("站源代理执行失败", error.getTargetException());
-        } catch (java.lang.ReflectiveOperationException error) {
-            throw new IllegalStateException("站源代理不可访问", error);
-        }
+        return com.github.catvod.spider.DexNative.invokeSpiderProxy(target, params);
     }
 
     // ------------------------------------------------------------ 生命周期

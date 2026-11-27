@@ -252,7 +252,10 @@ void main() {
     'old config completion cannot notify or report into new config',
     () async {
       await importSites([_site('old')]);
+      // Drain availability notifications, leaving the mocked installers pending.
+      await state.pythonEnvironmentIdle;
       await importSites([_site('new')]);
+      await state.pythonEnvironmentIdle;
       expect(runs, hasLength(2));
       var notifications = 0;
       state.addListener(() => notifications++);
