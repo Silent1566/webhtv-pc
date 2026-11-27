@@ -32,6 +32,10 @@ class LocalSpider {
     this.accountStorePath,
   });
 
+  /// Bump when the generated direct CatVod entry template changes.
+  static const int directShellGenerationVersion = 1;
+  static const String directShellVersionField = 'shellGenerationVersion';
+
   final SpiderManifest manifest;
   final String manifestPath;
 
@@ -48,6 +52,14 @@ class LocalSpider {
   String get key => manifest.key;
 
   bool get entryExists => File(entryPath).existsSync();
+}
+
+/// 一次口径准入拒绝：manifest 路径 + 实际读到的 [actual]（`null` = 缺字段）。
+class _StaleShell {
+  const _StaleShell(this.path, this.actual);
+
+  final String path;
+  final Object? actual;
 }
 
 /// 注册表：扫描 Spider 目录，加载并校验 manifest（§9.7）。
@@ -90,10 +102,16 @@ class SpiderManifestRegistry {
     final directory = Directory(root);
     if (!await directory.exists()) return const [];
 
+    final staleShells = <_StaleShell>[];
     // 先扫根级：同 key 时根级占用，`local/` 里的重复项被拒绝（见 [_scanDirectory]）。
     await _scanDirectory(directory);
     await _scanDirectory(Directory(p.join(root, 'local')));
-    await _scanDirectory(Directory(p.join(root, 'direct')));
+    await _scanDirectory(
+      Directory(p.join(root, 'direct')),
+      directArtifacts: true,
+      staleShells: staleShells,
+    );
+    _reportStaleShells(staleShells);
     log.info(
       'Spider manifest 扫描完成 root=$root found=${_spiders.length}',
       scope: 'spider',
@@ -101,8 +119,36 @@ class SpiderManifestRegistry {
     return sortedSpiders;
   }
 
+  /// 旧口径直连壳汇总成一行。
+  ///
+  /// 为什么不逐目录写 WARNING：这些目录多数是历次配置留下的孤儿（本机 190 个目录
+  /// 里 185 个过闸门且全部缺口径字段），一行一条会淹没真正的错误。
+  /// 为什么不是 error：配置内的壳随后会被 `direct_spider_registrar` 用已下载的
+  /// loader 重写，重写失败另有"直连站源注册失败"那条路径；配置外的目录只是占盘，
+  /// 删不删由用户决定。
+  void _reportStaleShells(List<_StaleShell> shells) {
+    if (shells.isEmpty) return;
+    const sampleLimit = 3;
+    final missing = shells.where((shell) => shell.actual == null).length;
+    final outdated = shells.length - missing;
+    final samples = shells
+        .take(sampleLimit)
+        .map((shell) => p.basename(p.dirname(shell.path)))
+        .join(', ');
+    log.info(
+      '跳过旧口径直连 Spider 壳 ${shells.length} 个'
+      '（actual=missing $missing 个 / actual=过旧 $outdated 个）'
+      ' 例：$samples',
+      scope: 'spider',
+    );
+  }
+
   /// 扫描**一个**目录的第一层；先扫到的 key 占用该 key，后来的同 key 被拒绝。
-  Future<void> _scanDirectory(Directory directory) async {
+  Future<void> _scanDirectory(
+    Directory directory, {
+    bool directArtifacts = false,
+    List<_StaleShell>? staleShells,
+  }) async {
     if (!await directory.exists()) return;
     await for (final entity in directory.list(followLinks: false)) {
       if (entity is File &&
@@ -116,7 +162,11 @@ class SpiderManifestRegistry {
                 ? entity
                 : null);
       if (manifestFile == null || !await manifestFile.exists()) continue;
-      final loaded = await _load(manifestFile);
+      final loaded = await _load(
+        manifestFile,
+        directArtifact: directArtifacts && entity is Directory,
+        staleShells: staleShells,
+      );
       if (loaded == null) continue;
       if (_spiders.containsKey(loaded.key)) {
         log.warning(
@@ -151,7 +201,11 @@ class SpiderManifestRegistry {
 
   LocalSpider? byKey(String key) => _spiders[key];
 
-  Future<LocalSpider?> _load(File file) async {
+  Future<LocalSpider?> _load(
+    File file, {
+    bool directArtifact = false,
+    List<_StaleShell>? staleShells,
+  }) async {
     final String text;
     try {
       text = await file.readAsString();
@@ -187,6 +241,23 @@ class SpiderManifestRegistry {
     }
 
     final rootDir = p.dirname(file.path);
+    final runtime = manifest.runtime.toLowerCase();
+    if (directArtifact &&
+        (runtime == 'python-catvod' ||
+            // Historical ext.loader shells used the plain Python runtime.
+            (runtime == 'python' &&
+                await File(p.join(rootDir, 'loader.json')).exists()))) {
+      const expected = LocalSpider.directShellGenerationVersion;
+      final actual = decoded is Map
+          ? decoded[LocalSpider.directShellVersionField]
+          : null;
+      if (actual is! int || actual != expected) {
+        // 这里不写日志：[LogService] 落盘不按级别过滤，逐目录一行等于每次启动往
+        // 日志里写 178 行（本机实测）。汇总与样例统一由 [_reportStaleShells] 给。
+        staleShells?.add(_StaleShell(file.path, actual));
+        return null;
+      }
+    }
     final entryPath = p.isAbsolute(manifest.entry)
         ? manifest.entry
         : p.normalize(p.join(rootDir, manifest.entry));
@@ -199,7 +270,6 @@ class SpiderManifestRegistry {
       return null;
     }
 
-    final runtime = manifest.runtime.toLowerCase();
     final compatibleJvm =
         runtime.startsWith('jvm') || runtime.startsWith('java');
     return LocalSpider(

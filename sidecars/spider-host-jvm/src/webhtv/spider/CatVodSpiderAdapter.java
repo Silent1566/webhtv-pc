@@ -47,7 +47,7 @@ public final class CatVodSpiderAdapter extends Spider {
 
     @Override
     public boolean supportsProxyHttp() {
-        return com.github.catvod.spider.DexNative.proxyMethod(target.getClass()) != null;
+        return com.github.catvod.spider.DexNative.supportsSpiderProxy(target);
     }
 
     @Override
@@ -58,7 +58,7 @@ public final class CatVodSpiderAdapter extends Spider {
     @Override
     public Object[] proxy(Map<String, String> params, CallContext context) {
         context.checkCancelled();
-        return com.github.catvod.spider.DexNative.invokeProxy(target.getClass(), params);
+        return com.github.catvod.spider.DexNative.invokeSpiderProxy(target, params);
     }
 
     // ------------------------------------------------------------ 生命周期

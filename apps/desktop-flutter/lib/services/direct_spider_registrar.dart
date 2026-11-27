@@ -225,6 +225,7 @@ class DirectSpiderRegistrar {
       runtime: 'python-catvod',
       entry: _catVodEntryName,
       entrySha256: sha256.convert(utf8.encode(_catVodEntry)).toString(),
+      generatedShell: true,
     );
     return registry.register(manifestPath);
   }
@@ -281,6 +282,7 @@ class DirectSpiderRegistrar {
     required String runtime,
     required String entry,
     required String entrySha256,
+    bool generatedShell = false,
   }) async {
     final manifest = SpiderManifest(
       key: site.key,
@@ -290,8 +292,13 @@ class DirectSpiderRegistrar {
       capabilities: const ['home', 'category', 'detail', 'search', 'play'],
       entrySha256: entrySha256,
     );
+    final json = manifest.toJson();
+    if (generatedShell) {
+      json[LocalSpider.directShellVersionField] =
+          LocalSpider.directShellGenerationVersion;
+    }
     await File(manifestPath).writeAsString(
-      const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
+      const JsonEncoder.withIndent('  ').convert(json),
       flush: true,
     );
   }
@@ -351,18 +358,13 @@ class DirectSpiderRegistrar {
       await entry.writeAsString(_catVodEntry, flush: true);
     }
 
-    final hash = sha256.convert(utf8.encode(_catVodEntry)).toString();
-    final manifest = SpiderManifest(
-      key: site.key,
-      name: site.name,
+    await _writeManifest(
+      manifestPath,
+      site: site,
       runtime: 'python-catvod',
       entry: _catVodEntryName,
-      capabilities: const ['home', 'category', 'detail', 'search', 'play'],
-      entrySha256: hash,
-    );
-    await File(manifestPath).writeAsString(
-      const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
-      flush: true,
+      entrySha256: sha256.convert(utf8.encode(_catVodEntry)).toString(),
+      generatedShell: true,
     );
     return registry.register(manifestPath);
   }
