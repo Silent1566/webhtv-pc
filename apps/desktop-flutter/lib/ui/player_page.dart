@@ -6,6 +6,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ import '../core/danmaku_match.dart';
 import '../core/danmaku_settings.dart';
 import '../core/history_view.dart';
 import '../core/episode_aggregation.dart';
+import '../core/episode_preload.dart';
 import '../core/lut.dart';
 import '../core/mpv_properties.dart';
 import '../core/osd_config.dart';
@@ -99,6 +101,7 @@ import 'theme.dart';
 import 'window_mode.dart';
 import 'tokens.dart';
 import 'toast.dart';
+part 'player_episode_preload.dart';
 part 'player_menu_sections.dart';
 part 'player_playback_params.dart';
 part 'player_subtitle_menu.dart';
@@ -358,6 +361,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 已经判定失败的跳转；非 null 时画面上挂恢复出口。
   SeekRecovery? _seekRecoveryFailure;
   Duration? _seekRecoveryLastPosition;
+  _SeekReopenEvidence? _seekReopenEvidence;
   bool _seekRecoveryExcluded = false;
   Timer? _recoveryTicker;
 
@@ -453,6 +457,151 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 上一次位置采样（毫秒）；-1 表示还没有基线（刚换媒体）。
   int _lastPositionMs = -1;
 
+  ui.Image? _episodeSwitchFrame;
+  Timer? _episodeSwitchFrameTimer;
+
+  static const _episodeFrameMaxAge = Duration(seconds: 6);
+  static const _episodeFrameRetryDelay = Duration(seconds: 3);
+  ({ui.Image image, DateTime at, _EpisodePreloadKey target})?
+  _preparedEpisodeFrame;
+  DateTime? _lastEpisodeCapture;
+  bool _episodeFrameCapturePending = false;
+  int _episodeFrameRevision = 0;
+
+  void _invalidatePreparedEpisodeFrame() {
+    _episodeFrameRevision++;
+    _lastEpisodeCapture = null;
+    _preparedEpisodeFrame?.image.dispose();
+    _preparedEpisodeFrame = null;
+  }
+
+  void _maybePrepareEpisodeSwitchFrame() {
+    if (_episodeFrameCapturePending ||
+        !_progressReady ||
+        _loadError != null ||
+        _isLive ||
+        _isCatchup ||
+        _hasQueue ||
+        _request.isLocal ||
+        !_controller.isPlaying ||
+        _controller.isBuffering ||
+        _controller.isLoading ||
+        _controller.isSeeking ||
+        _controller.isRepositioning ||
+        !_controller.enginePositionSeen ||
+        _controller.isCompleted ||
+        _externalPlayerRunning != null ||
+        _repeat == PlaybackRepeat.one) {
+      return;
+    }
+    final key = _nextPreloadKey(_request.episodeIndex);
+    if (key == null) return;
+    final position = _controller.enginePosition.inMilliseconds;
+    final duration = _controller.duration.inMilliseconds;
+    if (position <= 0 || duration <= position) return;
+    final cutoff = episodePreloadTransitionMs(
+      positionMs: position,
+      durationMs: duration,
+      plan: _skipPlan,
+      mode: _options.skipMode,
+      kinds: _options.skipKinds,
+      handled: _skipHandled,
+    );
+    final remaining = cutoff - position;
+    if (remaining <= 0 ||
+        remaining > 4000 * _controller.rate.clamp(0.25, 4.0)) {
+      return;
+    }
+    final now = _recoveryNow;
+    final prepared = _preparedEpisodeFrame;
+    if (prepared != null &&
+        prepared.target == key &&
+        now.difference(prepared.at) < _episodeFrameMaxAge) {
+      return;
+    }
+    final previous = _lastEpisodeCapture;
+    if (previous != null &&
+        now.difference(previous) < _episodeFrameRetryDelay) {
+      return;
+    }
+    _lastEpisodeCapture = now;
+    _episodeFrameCapturePending = true;
+    unawaited(_prepareEpisodeSwitchFrame(key, now, _episodeFrameRevision));
+  }
+
+  Future<void> _prepareEpisodeSwitchFrame(
+    _EpisodePreloadKey key,
+    DateTime at,
+    int revision,
+  ) async {
+    bool current() =>
+        mounted &&
+        _episodeFrameRevision == revision &&
+        _nextPreloadKey(_request.episodeIndex) == key &&
+        _recoveryNow.difference(at) < _episodeFrameMaxAge;
+    try {
+      final bytes = await _controller.captureEpisodeFrame();
+      if (!current() ||
+          bytes == null ||
+          bytes.isEmpty ||
+          bytes.length > 8 << 20) {
+        return;
+      }
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: 1280,
+        allowUpscaling: false,
+      );
+      try {
+        final image = (await codec.getNextFrame()).image;
+        if (!current()) {
+          image.dispose();
+          return;
+        }
+        _preparedEpisodeFrame?.image.dispose();
+        _preparedEpisodeFrame = (image: image, at: at, target: key);
+        widget.state.log.debug('换集过渡旧帧就绪', scope: 'preload');
+      } finally {
+        codec.dispose();
+      }
+    } catch (_) {
+      // The optional snapshot must not change playback.
+    } finally {
+      _episodeFrameCapturePending = false;
+    }
+  }
+
+  ({ui.Image image, DateTime at, _EpisodePreloadKey target})?
+  _takePreparedEpisodeFrame(_EpisodePreloadKey key) {
+    final prepared = _preparedEpisodeFrame;
+    if (prepared == null ||
+        prepared.target != key ||
+        _recoveryNow.difference(prepared.at) >= _episodeFrameMaxAge) {
+      return null;
+    }
+    _preparedEpisodeFrame = null;
+    return prepared;
+  }
+
+  void _clearEpisodeSwitchFrame() {
+    _episodeSwitchFrameTimer?.cancel();
+    _episodeSwitchFrameTimer = null;
+    _episodeSwitchFrame?.dispose();
+    _episodeSwitchFrame = null;
+  }
+
+  void _holdEpisodeSwitchFrame(ui.Image? frame) {
+    _clearEpisodeSwitchFrame();
+    if (frame == null) return;
+    _episodeSwitchFrame = frame;
+    widget.state.log.debug('换集过渡保留旧帧', scope: 'preload');
+    _episodeSwitchFrameTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
+      widget.state.log.debug('换集过渡撤下旧帧 reason=cover_timeout', scope: 'preload');
+      setState(_clearEpisodeSwitchFrame);
+    });
+  }
+
   /// 最近一次 seed 过的 seek 次数（见 [PlayerController.seekCount]）。
   int _seenSeekCount = 0;
 
@@ -546,6 +695,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 同一媒体的重开共用缓存；换集/版本后不能沿用旧时间轴。
   IntroSkipCache _skipCache = IntroSkipCache();
+  final _episodePreloadLeases = <_EpisodePreloadKey, EpisodePreload>{};
+  _EpisodePreloadHints? _episodePreloadHints;
+  int _episodePreloadRevision = 0;
+  bool _episodeEarlyStarted = false;
+  bool _episodeEndingStarted = false;
+  int _preloadedIntroLandedMs = 0;
   Object? _skipMediaIdentity;
   int _skipLookupEpoch = 0;
 
@@ -1119,8 +1274,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _settleSeekRecovery();
     _observePlaybackError();
     _syncSkipPlanWithDuration();
+    _maybePrepareEpisodeSwitchFrame();
     _maybeStartSkipLookup();
     _primeSkipPrefetch();
+    _maybePrimeEpisodePreload();
     _maybeAutoSkip();
     _maybeAdvanceOnGenuineEnd();
     _applyRememberedTrackChoices();
@@ -1178,7 +1335,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       kinds: _options.skipKinds,
       mode: _options.skipMode,
       handled: _skipHandled,
-      resumeMs: _request.startPosition?.inMilliseconds ?? 0,
+      resumeMs:
+          _request.startPosition?.inMilliseconds ?? _preloadedIntroLandedMs,
     );
     if (!decision.shouldSeek) return;
     final segment = decision.segment!;
@@ -1245,27 +1403,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     SkipPlanDecision decision,
   ) async {
     if (!mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => GlassAlertDialog(
-        blurBackdrop: false,
-        title: Text('跳过${segment.kind.label}？'),
-        content: Text(
-          '已识别到${segment.kind.label}，跳到 ${_formatMs(decision.targetMs)}。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('不跳'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('跳过'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirmPlaybackAction(
+      title: '跳过${segment.kind.label}？',
+      message: '已识别到${segment.kind.label}，跳到 ${_formatMs(decision.targetMs)}。',
+      cancelLabel: '不跳',
+      confirmLabel: '跳过',
     );
-    if (!mounted || confirmed != true) return;
+    if (!mounted || !confirmed) return;
     _applySkip(segment, decision);
   }
 
@@ -1383,6 +1527,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     // 标定到位时可能已经播过点了，立刻按当前位置判一次。
     _primeSkipPrefetch();
+    _maybePrimeEpisodePreload();
     _maybeAutoSkip();
   }
 
@@ -1719,7 +1864,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     bool? restorePlaying,
     Duration? recoveryOrigin,
   }) async {
+    _invalidatePreparedEpisodeFrame();
     widget.state.cancelSkipPrefetch(clearCache: false);
+    if (_episodePreloadLeases.isNotEmpty) {
+      widget.state.setEpisodePreloadPaused(true);
+    }
     _clearCompletionProgress();
     if (_isLive || _isCatchup || _hasQueue) {
       await _controller.seek(target);
@@ -1744,6 +1893,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 原位置与目标重合时没有可恢复的差异，不留记录也不启动轮询（§3.2）。
     _seekRecovery = recovery.recoverable ? recovery : null;
     _seekRecoveryLastPosition = null;
+    _seekReopenEvidence = null;
     setState(() => _seekRecoveryFailure = null);
     _startRecoveryTicker();
     final buffered = _controller.buffered;
@@ -1759,6 +1909,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       }
       return;
     }
+    if (playing) _maybePrimeEpisodePreload(seekTarget: clamped);
     _queuedSeekTarget = clamped;
     _queuedSeekPlaying = playing;
     if (_reloadInFlight) return;
@@ -1855,6 +2006,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _recoveryTicker = null;
       return;
     }
+    final reopen = _seekReopenEvidence;
+    final position = _controller.enginePosition;
+    final seen = _controller.enginePositionSeen;
+    final nearTarget =
+        (position - recovery.target).abs() <= seekSettleTolerance;
+    if (reopen != null && seen && position > Duration.zero && nearTarget) {
+      reopen.landing = position;
+    }
     final excluded =
         _controller.isBuffering ||
         _controller.isSeeking ||
@@ -1862,6 +2021,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         _controller.isCompleted;
     if (excluded) {
       _seekRecoveryExcluded = true;
+      if (reopen != null) reopen.excludedPosition = position;
       return;
     }
     if (_seekRecoveryExcluded) {
@@ -1872,25 +2032,37 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _seekRecoveryLastPosition = null;
       return;
     }
-    final position = _controller.enginePosition;
+    if (reopen != null &&
+        seen &&
+        !nearTarget &&
+        (position < recovery.target ||
+            (position - recovery.origin).abs() <= seekSettleTolerance)) {
+      reopen.landing = null;
+    }
     final verdict = evaluateSeekRecovery(
       recovery: recovery,
       generation: _mediaGeneration,
       enginePosition: position,
       previousEnginePosition: _seekRecoveryLastPosition,
-      enginePositionSeen: _controller.enginePositionSeen,
+      reopenLandingPosition: reopen?.landing,
+      enginePositionSeen: seen,
       playing: _controller.isPlaying,
       buffering: _controller.isBuffering,
       isSeeking: _controller.isSeeking,
       now: _recoveryNow,
     );
-    _seekRecoveryLastPosition = _controller.enginePositionSeen
+    // 状态变更通知可能仍携带缓冲/定位中的旧位置，不把它当作推进采样。
+    _seekRecoveryLastPosition = seen && position != reopen?.excludedPosition
         ? position
         : null;
+    if (reopen != null && position != reopen.excludedPosition) {
+      reopen.excludedPosition = null;
+    }
     if (verdict == SeekRecoveryVerdict.pending) return;
     if (verdict == SeekRecoveryVerdict.settled) {
       _seekRecovery = null;
       _seekRecoveryLastPosition = null;
+      _seekReopenEvidence = null;
       _controller.endReposition();
       if (_seekRecoveryFailure != null) {
         setState(() => _seekRecoveryFailure = null);
@@ -1898,6 +2070,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       return;
     }
     if (_seekRecoveryFailure != null) return;
+    final deferredStartWarning = reopen?.deferredStartWarning;
+    if (deferredStartWarning != null) {
+      reopen!.deferredStartWarning = null;
+      _warnMissingStart(
+        deferredStartWarning.wanted,
+        deferredStartWarning.actual,
+      );
+    }
     widget.state.log.warning(
       '跳转未落地 target=${recovery.target.inMilliseconds}ms '
       'origin=${recovery.origin.inMilliseconds}ms',
@@ -1905,6 +2085,25 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     _controller.endReposition();
     setState(() => _seekRecoveryFailure = recovery);
+  }
+
+  void _warnMissingStart(Duration wanted, Duration actual) {
+    widget.state.log.warning(
+      '起播定位未生效：wanted=${wanted.inMilliseconds}ms '
+      'actual=${actual.inMilliseconds}ms episode=${_request.episodeName}',
+      scope: 'player',
+    );
+    _showPlayerMessage('未能跳到该位置，已从头播放');
+  }
+
+  void _dismissSeekRecovery() {
+    if (_seekRecoveryFailure == null) return;
+    setState(() {
+      _seekRecovery = null;
+      _seekRecoveryFailure = null;
+      _seekRecoveryLastPosition = null;
+    });
+    _playerFocus.requestFocus();
   }
 
   Future<void> _retrySeekTarget() async {
@@ -1985,12 +2184,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     bool? restorePlaying,
     SeekRecovery? seekRecovery,
     double? restoreRate,
+    Duration? preloadedStart,
+    int? preloadedDurationMs,
+    _EpisodePreloadKey? keepEpisodePreload,
+    Future<void> Function()? retryWithoutPreload,
+    bool keepEpisodeSwitchFrame = false,
   }) async {
     if (!mounted) return;
     // 回退链上的重开保留次数；其余入口（重试、换集、换线路、续播）都是新一轮。
     if (!_fallbackPending) _fallbackAttempts = 0;
     _fallbackPending = false;
-    final generation = _beginMediaTransition(seekRecovery: seekRecovery);
+    final generation = _beginMediaTransition(
+      seekRecovery: seekRecovery,
+      keepEpisodePreload: keepEpisodePreload,
+      keepEpisodeSwitchFrame: keepEpisodeSwitchFrame,
+    );
     // 记录本次加载的「意图」，失败时用它回滚 `_request`（`design/03` §4.3 D3）。
     //
     // 为什么必须回滚：`_openTarget` 在调 `_load()` **之前**就已经把 `_request`
@@ -2008,6 +2216,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _skipMediaIdentity = skipIdentity;
       _skipLookupEpoch++;
       _skipHandled.clear();
+      _preloadedIntroLandedMs = 0;
       _skipRawSegments = const <RawSkipSegment>[];
       _skipPlan = SkipPlan.empty;
       _skipLookupStarted = false;
@@ -2021,6 +2230,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     setState(() => _loadError = null);
     final controller = _controller;
     if (widget.liveSession != null) _liveOpenInFlight = true;
+    final policy = widget.state.playerOptions.openPolicy;
     late PlayerLoadOutcome outcome;
     try {
       outcome = await controller.openWithRetry(
@@ -2032,20 +2242,53 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         isCurrent: () => mounted && generation == _mediaGeneration,
         // 起播定位跟着 open 一起下发（见 [PlayerController.open] 的 startAt）：
         // 打开后再 seek 会新建第二条连接，服务端只允许 1 条活动流。
-        startAt: _startPositionForOpen(intent.startPosition),
-        // 预取与失败分类的开关来自设置里的播放选项：不传＝历史行为，传了才在
-        // 开播前发一次探测并按失败性质决定能不能重试/回退（PlayerOptions.openPolicy）。
-        policy: widget.state.playerOptions.openPolicy,
+        startAt: _startPositionForOpen(intent.startPosition ?? preloadedStart),
+        policy: retryWithoutPreload == null
+            ? policy
+            : policy.copyWith(retryLimit: 0),
       );
     } finally {
       if (identical(controller, _controller)) _liveOpenInFlight = false;
     }
     if (!mounted || generation != _mediaGeneration) return;
+    if (_episodeSwitchFrame case final frame?) {
+      if (!outcome.succeeded) {
+        setState(_clearEpisodeSwitchFrame);
+      } else if (outcome.firstFrame != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              generation == _mediaGeneration &&
+              identical(_episodeSwitchFrame, frame)) {
+            widget.state.log.debug(
+              '换集过渡撤下旧帧 reason=first_frame',
+              scope: 'preload',
+            );
+            setState(_clearEpisodeSwitchFrame);
+          }
+        });
+      }
+    }
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
     // 起播落点必须在**这一刻**记下来：后面还要装配字幕与弹幕（实测枚举弹幕库那次
     // 装配了十几秒），那时再读 controller.position 读到的是播放进度而不是落点，
     // 会把正常续播误报成「起播定位未生效」，并给用户弹一条假的「已从头播放」。
     final landingPosition = controller.position;
+    final enginePositionAtOpen = controller.enginePositionSeen
+        ? controller.enginePosition
+        : null;
+    final rawStartLanding = outcome.startLandingPosition;
+    _SeekReopenEvidence? reopen;
+    if (seekRecovery != null &&
+        _seekRecovery?.target == seekRecovery.target &&
+        _queuedSeekTarget == null &&
+        outcome.succeeded &&
+        outcome.firstFrame != null) {
+      // 同一代 open 期间采集的原始位置只是落点候选，仍须等真实播放推进。
+      reopen = _seekReopenEvidence = _SeekReopenEvidence(
+        landing: rawStartLanding,
+      );
+      _settleSeekRecovery();
+    }
     final diagnostics = controller.diagnostics;
     if (diagnostics != null) {
       widget.state.log.info(
@@ -2055,7 +2298,28 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _diagnostics = diagnostics;
       widget.state.recordPlaybackDiagnostics(diagnostics);
     }
+    if (preloadedStart != null &&
+        preloadedDurationMs != null &&
+        !preloadedStartFits(
+          startMs: preloadedStart.inMilliseconds,
+          prefetchedDurationMs: preloadedDurationMs,
+          actualDurationMs: controller.duration.inMilliseconds,
+        )) {
+      widget.state.log.warning(
+        '预载清单已变化，改走正常打开 wanted=${preloadedStart.inMilliseconds}ms '
+        'prefetched=${preloadedDurationMs}ms actual=${controller.duration.inMilliseconds}ms',
+        scope: 'player',
+      );
+      if (retryWithoutPreload != null) {
+        await retryWithoutPreload();
+        return;
+      }
+    }
     if (!outcome.succeeded) {
+      if (retryWithoutPreload != null) {
+        await retryWithoutPreload();
+        return;
+      }
       // 本地文件不走这条回退：directUrl 恒为 false，也没有「直播线路」可换。
       if ((_isLive ||
               (_request.directUrl &&
@@ -2162,14 +2426,23 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         final actual = landingPosition;
         final drift = (actual - start).inMilliseconds.abs();
         if (drift > 5000) {
-          widget.state.log.warning(
-            '起播定位未生效：wanted=${start.inMilliseconds}ms '
-            'actual=${actual.inMilliseconds}ms episode=${_request.episodeName}',
-            scope: 'player',
-          );
-          // 定位失败**不会抛异常**（`start` 只是内核选项），所以必须显式告诉
-          // 用户「没跳过去」——否则他只是看到画面从头开始，以为点了没反应。
-          _showPlayerMessage('未能跳到该位置，已从头播放');
+          if (reopen != null &&
+              rawStartLanding != null &&
+              (rawStartLanding - start).abs() <= seekSettleTolerance &&
+              enginePositionAtOpen != null &&
+              enginePositionAtOpen - start > seekSettleTolerance) {
+            // 可能只是已播过落点；等待跳转判据见到真实推进或确认失败。
+            if (identical(reopen, _seekReopenEvidence) &&
+                _seekRecovery != null) {
+              if (_seekRecoveryFailure != null) {
+                _warnMissingStart(start, actual);
+              } else {
+                reopen.deferredStartWarning = (wanted: start, actual: actual);
+              }
+            }
+          } else {
+            _warnMissingStart(start, actual);
+          }
         } else {
           widget.state.log.info(
             '恢复播放进度 episode=${_request.episodeName} '
@@ -2199,6 +2472,16 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 续播 seek 完成之后才允许自动跳片头/片尾（design/01 §3.1）。
     _progressReady = true;
     _skipArmed = true;
+    if (preloadedStart != null &&
+        preloadedStart > Duration.zero &&
+        landingPosition >= preloadedStart) {
+      _preloadedIntroLandedMs = preloadedStart.inMilliseconds;
+      widget.state.log.info(
+        '预载起播已定位 position=${landingPosition.inMilliseconds}ms',
+        scope: 'player',
+      );
+    }
+    _maybePrimeEpisodePreload();
 
     if (restorePlaying == null) _maybeAutoSkip();
     if (!mounted || generation != _mediaGeneration) return;
@@ -3606,6 +3889,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _rebuildSkipPlan();
     });
     _primeSkipPrefetch();
+    _maybePrimeEpisodePreload();
   }
 
   // `_showSubtitleMenu` 已搬到 `player_subtitle_menu.dart`（`part` 里的 `_PlayerPageState` 扩展）。
@@ -3619,7 +3903,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  int _beginMediaTransition({SeekRecovery? seekRecovery}) {
+  int _beginMediaTransition({
+    SeekRecovery? seekRecovery,
+    _EpisodePreloadKey? keepEpisodePreload,
+    bool keepEpisodeSwitchFrame = false,
+  }) {
+    _invalidatePreparedEpisodeFrame();
+    if (!keepEpisodeSwitchFrame) _clearEpisodeSwitchFrame();
+    widget.state.setEpisodePreloadPaused(true);
+    if (seekRecovery == null) {
+      _resetEpisodePreloads(keep: keepEpisodePreload);
+    }
     widget.state.cancelSkipPrefetch(
       clearCache: _skipMediaIdentity != _skipIdentityFor(_request),
     );
@@ -3706,6 +4000,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           );
     _queuedSeekPlaying = true;
     _seekRecoveryLastPosition = null;
+    _seekReopenEvidence = null;
     _seekRecoveryExcluded = false;
     _seekRecoveryFailure = null;
     if (seekRecovery == null) {
@@ -3798,6 +4093,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   @override
   void dispose() {
     _contextMenuPopup?.close();
+    _invalidatePreparedEpisodeFrame();
+    _clearEpisodeSwitchFrame();
+    _resetEpisodePreloads();
     widget.state.cancelSkipPrefetch();
     _releaseProxySession?.call();
     _releaseProxySession = null;
@@ -4330,7 +4628,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       episodeTarget: episodeTarget,
       flag: flag,
       vodId: vodId,
-      siteOverride: route == null ? null : state.siteByKey(route.siteKey),
+      siteOverride: route == null
+          ? state.siteInActiveSource(_request.siteKey)
+          : state.siteByKey(route.siteKey),
       qualityIndex: qualityIndex,
       isCurrent: isCurrent,
       preferredParseName: _parseSourceOverride,
@@ -4394,24 +4694,45 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   /// 换集前确认：外部播放器拿的是本地代理地址，换集会让代理重建会话。
-  Future<bool> _confirmDropExternalPlayback() async {
+  Future<bool> _confirmDropExternalPlayback() => _confirmPlaybackAction(
+    title: '中断外部播放？',
+    message: '换集会切换本地代理会话，外部播放器里的这一集会立即中断。',
+    cancelLabel: '取消',
+    confirmLabel: '继续换集',
+  );
+
+  Future<bool> _confirmPlaybackAction({
+    required String title,
+    required String message,
+    required String cancelLabel,
+    required String confirmLabel,
+  }) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => GlassAlertDialog(
-        blurBackdrop: false,
-        title: const Text('中断外部播放？'),
-        content: const Text('换集会切换本地代理会话，外部播放器里的这一集会立即中断。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
+      builder: (dialogContext) {
+        void dismiss() => Navigator.of(dialogContext).pop(false);
+        return GlassAlertDialog(
+          blurBackdrop: false,
+          title: Row(
+            children: [
+              Expanded(child: Text(title)),
+              IconButton(
+                tooltip: '关闭确认',
+                onPressed: dismiss,
+                icon: const Icon(Icons.close),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('继续换集'),
-          ),
-        ],
-      ),
+          content: Text(message),
+          actions: [
+            TextButton(onPressed: dismiss, child: Text(cancelLabel)),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(confirmLabel),
+            ),
+          ],
+        );
+      },
     );
     return confirmed ?? false;
   }
@@ -4426,6 +4747,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     Duration? startPosition,
     bool restorePlaying = true,
     double? rate,
+    bool allowEpisodePreload = true,
   }) async {
     final state = widget.state;
     // 外调播放依赖当前代理会话：换集会重建会话并撤掉 token，外部播放器随即
@@ -4437,8 +4759,65 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted || !proceed) return;
       setState(() => _externalPlayerRunning = null);
     }
-    final generation = _beginMediaTransition();
+    final key = (flag: flag, index: episodeIndex, target: episode.url);
+    final holdFrame =
+        allowEpisodePreload &&
+        _progressReady &&
+        _loadError == null &&
+        !_isLive &&
+        !_isCatchup &&
+        !_hasQueue &&
+        !_request.isLocal &&
+        _controller.enginePositionSeen &&
+        !_controller.isLoading &&
+        !_controller.isSeeking &&
+        !_controller.isRepositioning &&
+        restorePlaying &&
+        startPosition == null &&
+        key == _nextPreloadKey(_request.episodeIndex);
+    final prepared =
+        allowEpisodePreload &&
+            startPosition == null &&
+            _canPreloadEpisodes &&
+            _episodePreloadHints == _currentEpisodePreloadHints
+        ? _episodePreloadLeases[key]
+        : null;
+    final followupKey = prepared == null ? null : _nextPreloadKey(episodeIndex);
+    final followup = _episodePreloadLeases[followupKey];
+    final handoff = prepared == null
+        ? null
+        : state.takeEpisodePreload(prepared, followup: followup);
+    final keep =
+        handoff != null &&
+            followup != null &&
+            state.episodePreloadReady(followup)
+        ? followupKey
+        : null;
+    if (allowEpisodePreload &&
+        handoff == null &&
+        _options.preloadNext &&
+        key == _nextPreloadKey(_request.episodeIndex)) {
+      final reason = prepared != null
+          ? 'candidate_not_ready'
+          : _episodePreloadBlocker ??
+                (_episodeEarlyStarted || _episodeEndingStarted
+                    ? 'no_candidate'
+                    : 'not_scheduled');
+      state.log.debug(
+        '下一集预载未命中 reason=$reason '
+        'position=${_controller.position.inMilliseconds}ms '
+        'duration=${_controller.duration.inMilliseconds}ms '
+        'buffered=${_controller.buffered.inMilliseconds}ms',
+        scope: 'preload',
+      );
+    }
+    final preparedFrame = holdFrame ? _takePreparedEpisodeFrame(key) : null;
+    var frame = preparedFrame?.image;
+    final generation = _beginMediaTransition(keepEpisodePreload: keep);
     try {
+      if (holdFrame && frame == null) {
+        state.log.debug('换集过渡未取帧 reason=not_prepared', scope: 'preload');
+      }
       // 直播：地址已是最终可播地址，不经站点解析（§13.3）。
       final String url;
       final List<SubtitleInfo> subtitles;
@@ -4468,15 +4847,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         parseSource = '';
       } else {
         // 外部（换源并入）线路：只定向解析到它自己的站点，**不**切全局站源。
-        final decision = await _resolvePlayback(
-          episodeTarget: episode.url,
-          flag: _playbackFlagFor(flag),
-          vodId: route?.vodId ?? _request.vodId,
-          route: route,
-          isCurrent: _hasQueue
-              ? () => mounted && generation == _mediaGeneration
-              : null,
-        );
+        final decision =
+            handoff?.decision ??
+            await _resolvePlayback(
+              episodeTarget: episode.url,
+              flag: _playbackFlagFor(flag),
+              vodId: route?.vodId ?? _request.vodId,
+              route: route,
+              isCurrent: _hasQueue
+                  ? () => mounted && generation == _mediaGeneration
+                  : null,
+            );
         if (decision == null || decision.url == null) {
           throw AppError(
             AppErrorKind.playbackUrlMissing,
@@ -4485,6 +4866,15 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           );
         }
         url = decision.url!;
+        if (handoff != null) {
+          state.noteAdBlockPlayback(
+            _request.adBlockLabelsFor(
+              episodeTarget: episode.url,
+              flag: _playbackFlagFor(flag),
+            ),
+          );
+          state.log.info('下一集预载命中 start=${handoff.startMs}ms', scope: 'player');
+        }
         // 换集后字幕/弹幕也要换成该集结果里的 subs/danmaku（§10.3、Phase 3）。
         subtitles = decision.subs;
         danmaku = decision.danmaku;
@@ -4499,6 +4889,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       // 换集后新结果没有可切换解析源时，手动指定不再成立。
       if (parseSources.isEmpty) _parseSourceOverride = null;
       setState(() {
+        if (preparedFrame != null &&
+            _recoveryNow.difference(preparedFrame.at) >= _episodeFrameMaxAge) {
+          frame?.dispose();
+          frame = null;
+        }
+        _holdEpisodeSwitchFrame(frame);
+        frame = null;
         _loadError = null;
         _request = _request.copyWith(
           url: url,
@@ -4541,14 +4938,39 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       });
       await _teardownLiveSession('episode-change');
       if (!mounted || generation != _mediaGeneration) return;
-      await _load(restorePlaying: restorePlaying, restoreRate: rate);
+      await _load(
+        restorePlaying: restorePlaying,
+        restoreRate: rate,
+        preloadedStart: handoff == null
+            ? null
+            : Duration(milliseconds: handoff.startMs),
+        preloadedDurationMs: handoff?.durationMs,
+        keepEpisodePreload: keep,
+        keepEpisodeSwitchFrame: _episodeSwitchFrame != null,
+        retryWithoutPreload: handoff == null
+            ? null
+            : () => _openTarget(
+                episode,
+                flag: flag,
+                episodeIndex: episodeIndex,
+                startPosition: startPosition,
+                restorePlaying: restorePlaying,
+                rate: rate,
+                allowEpisodePreload: false,
+              ),
+      );
     } catch (error) {
       if (!mounted || generation != _mediaGeneration) return;
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
-      setState(() => _loadError = failure.userMessage);
+      setState(() {
+        _clearEpisodeSwitchFrame();
+        _loadError = failure.userMessage;
+      });
       state.log.error('切换剧集失败 ${failure.logLine}', scope: 'player');
+    } finally {
+      frame?.dispose();
     }
   }
 
@@ -4878,7 +5300,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       });
     }
 
-    // 菜单打开时 Esc 只关菜单，不退出全屏（`design/04` §5.3）。
+    // Esc 先关闭播放器内的浮层，不退出全屏（`design/04` §5.3）。
     //
     // **必须在同一张表里改，不能靠「内层 `CallbackShortcuts` 优先」**：
     // 键盘事件从主焦点节点**沿祖先向上冒泡**，而嵌套的那个
@@ -4890,14 +5312,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // `SingleActivator` 没有重写 `==`/`hashCode`，直接覆盖能否命中
     // 取决于 `const` 规范化这个实现细节；而 `CallbackShortcuts`
     // 取**首个**命中的绑定，漏掉旧绑定就会让 `exitFullscreen` 继续赢。
-    if (_contextMenuAnchor != null || _hasLivePanels) {
+    if (_contextMenuAnchor != null ||
+        _hasLivePanels ||
+        _seekRecoveryFailure != null) {
       shortcuts.removeWhere(
         (activator, _) =>
             activator is SingleActivator &&
             activator.trigger == LogicalKeyboardKey.escape,
       );
-      shortcuts[const SingleActivator(LogicalKeyboardKey.escape)] =
-          _hasLivePanels ? _closeLivePanels : _closeContextMenu;
+      shortcuts[const SingleActivator(
+        LogicalKeyboardKey.escape,
+      )] = _hasLivePanels
+          ? _closeLivePanels
+          : _contextMenuAnchor != null
+          ? _closeContextMenu
+          : _dismissSeekRecovery;
     }
 
     final menuSections = _contextMenuAnchor == null
@@ -4966,6 +5395,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                     _subtitleStyle.configuration,
                               ),
                             ),
+                            if (_episodeSwitchFrame case final frame?)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: ColoredBox(
+                                    color: Colors.black,
+                                    child: RawImage(
+                                      key: const ValueKey('episode-cut-frame'),
+                                      image: frame,
+                                      fit: _videoFitMode.fit,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             // 弹幕层（§21 Phase 3 / §13.1 直播弹幕）：绘制在视频上方、
                             // 控制层下方。关闭时（style.enabled=false）不渲染任何内容。
                             //
@@ -5141,6 +5583,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                   child: PlayerSeekRecoveryBanner(
                                     onRetry: _retrySeekTarget,
                                     onReturn: _returnToSeekOrigin,
+                                    onDismiss: _dismissSeekRecovery,
                                   ),
                                 ),
                               ),
@@ -6795,6 +7238,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void _livePatchOptions(PlayerOptions next) {
     final normalized = next.normalized();
     _options = normalized;
+    _maybePrimeEpisodePreload();
     unawaited(widget.state.setPlayerOptions(normalized));
     unawaited(_queueOptionsApply(normalized));
     setState(() {});
@@ -7198,6 +7642,14 @@ PopupMenuItem<_PlayerMenuAction> _menuItem(
     value: value,
     child: _menuRow(icon, label),
   );
+}
+
+class _SeekReopenEvidence {
+  _SeekReopenEvidence({this.landing});
+
+  Duration? landing;
+  Duration? excludedPosition;
+  ({Duration wanted, Duration actual})? deferredStartWarning;
 }
 
 class _PlayerErrorOverlay extends StatelessWidget {

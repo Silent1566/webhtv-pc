@@ -263,7 +263,7 @@ void main() {
     // 回退阶梯：403/404 恰恰是最该换线路的一类。
     expect(on.allowsFallback(PlayerFailureKind.notFound), true);
 
-    expect(const PlayerOptions(preloadNext: true).openPolicy.preload, true);
+    expect(const PlayerOptions(preloadNext: true).openPolicy.preload, false);
 
     final off = const PlayerOptions(
       failureFallback: PlayerFailureFallback.off,

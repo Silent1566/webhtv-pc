@@ -1,7 +1,7 @@
 /// seek 失败恢复的判据（`docs/reference/xiugou-tv-borrowings.md` §3.2）。
 ///
-/// 三条硬规则：暂停/缓冲/定位中既不算到位也不算失败；只有真的播起来并停在
-/// 目标附近才算成功；旧媒体代际的跳转不得污染新媒体。
+/// 三条硬规则：暂停/缓冲/定位中既不算到位也不算失败；成功必须有目标附近的
+/// 引擎位置和真实播放推进；旧媒体代际的跳转不得污染新媒体。
 library;
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +24,7 @@ SeekRecoveryVerdict _evaluate(
   int generation = 1,
   Duration position = const Duration(minutes: 20),
   Duration? previousPosition,
+  Duration? reopenLanding,
   bool seen = true,
   bool playing = true,
   bool buffering = false,
@@ -34,6 +35,7 @@ SeekRecoveryVerdict _evaluate(
   generation: generation,
   enginePosition: position,
   previousEnginePosition: previousPosition,
+  reopenLandingPosition: reopenLanding,
   enginePositionSeen: seen,
   playing: playing,
   buffering: buffering,
@@ -75,6 +77,64 @@ void main() {
         SeekRecoveryVerdict.pending,
       );
     });
+  });
+
+  group('同集重开的真实推进越过落点容差', () {
+    const target = Duration(milliseconds: 2608864);
+    const first = Duration(milliseconds: 2626343);
+    const second = Duration(milliseconds: 2627383);
+    const elapsed = Duration(seconds: 21);
+
+    test('真实落点已观察到 + 两次容差外向前推进 → settled', () {
+      expect(
+        _evaluate(
+          _recovery(target: target),
+          position: second,
+          previousPosition: first,
+          reopenLanding: target,
+          age: elapsed,
+        ),
+        SeekRecoveryVerdict.settled,
+      );
+    });
+
+    test('两次容差外推进但从未观察到落点 → failed', () {
+      expect(
+        _evaluate(
+          _recovery(target: target),
+          position: second,
+          previousPosition: first,
+          age: elapsed,
+        ),
+        SeekRecoveryVerdict.failed,
+      );
+    });
+
+    for (final state in [
+      'old media',
+      'no engine position',
+      'paused',
+      'buffering',
+      'seeking',
+    ]) {
+      test('同集重开推进也不能绕过 $state 守卫', () {
+        expect(
+          _evaluate(
+            _recovery(target: target),
+            generation: state == 'old media' ? 2 : 1,
+            position: second,
+            previousPosition: first,
+            reopenLanding: target,
+            seen: state != 'no engine position',
+            playing: state != 'paused',
+            buffering: state == 'buffering',
+            seeking: state == 'seeking',
+            age: elapsed,
+          ),
+          SeekRecoveryVerdict.pending,
+        );
+      });
+    }
   });
 
   group('暂停/缓冲/定位中：既不算到位也不算失败', () {

@@ -11,7 +11,7 @@ import 'package:webhtv_pc/services/search_suggest_service.dart';
 
 void main() {
   group('hotRails · 三个类目', () {
-    test('顺序固定为 电影 → 剧集 → 综艺，标题与 kind 对应', () {
+    test('顺序固定为 剧集 → 电影 → 综艺，标题与 kind 对应', () {
       final rails = hotRails({
         HotRankCategory.variety: [_item(title: '综', rank: 1)],
         HotRankCategory.movie: [_item(title: '影', rank: 1)],
@@ -19,19 +19,19 @@ void main() {
       });
 
       expect(rails.map((rail) => rail.kind).toList(), [
-        HomeRailKind.hotMovie,
         HomeRailKind.hotTv,
+        HomeRailKind.hotMovie,
         HomeRailKind.hotVariety,
       ]);
       expect(rails.map((rail) => rail.title).toList(), [
-        '热门电影',
         '热门剧集',
+        '热门电影',
         '热门综艺',
       ]);
       // 每个类目只装自己的条目，不串行。
       expect(rails.map((rail) => rail.items.single.title).toList(), [
-        '影',
         '剧',
+        '影',
         '综',
       ]);
     });
@@ -184,9 +184,9 @@ void main() {
       expect(rails[0].items.length, 30);
       expect(rails[1].items.length, 30);
       // 截断取前 30，不是任意 30 条；名次 40 的那条不该冒进来。
-      expect(rails[0].items.first.title, '影1');
-      expect(rails[0].items.last.title, '影30');
-      expect(rails[0].items.last.key, 'hot:movie:30');
+      expect(rails[1].items.first.title, '影1');
+      expect(rails[1].items.last.title, '影30');
+      expect(rails[1].items.last.key, 'hot:movie:30');
     });
 
     test('保持榜单原序，不按评分或标题重排', () {

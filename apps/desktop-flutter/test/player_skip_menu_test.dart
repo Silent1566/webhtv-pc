@@ -192,6 +192,13 @@ class _SkipMedia implements NativePlayer {
   }
 
   @override
+  Future<Uint8List?> screenshot({
+    String? format = 'image/jpeg',
+    bool synchronized = true,
+    bool includeLibassSubtitles = false,
+  }) async => null;
+
+  @override
   Future<void> seek(Duration position, {bool synchronized = true}) {
     seeks.add(position);
     emit(position: position.inSeconds, playing: state.playing);
@@ -2095,8 +2102,9 @@ void main() {
     await unmount(tester);
   });
 
-  for (final accept in [false, true]) {
-    testWidgets('auto保护：confirm先询问不静默，确认=$accept后只处理一次', (tester) async {
+  for (final action in ['不跳', '跳过', '关闭确认']) {
+    final accept = action == '跳过';
+    testWidgets('auto保护：confirm先询问不静默，$action后只处理一次', (tester) async {
       final fixture = await _mountSegments(
         tester,
         options: const PlayerOptions(
@@ -2108,7 +2116,9 @@ void main() {
       );
       expect(fixture.media.seeks, isEmpty);
       expect(find.text('跳过片头？'), findsOneWidget);
-      await tester.tap(find.text(accept ? '跳过' : '不跳'));
+      await tester.tap(
+        action == '关闭确认' ? find.byTooltip(action) : find.text(action),
+      );
       await flush(tester);
       expect(
         fixture.media.seeks,

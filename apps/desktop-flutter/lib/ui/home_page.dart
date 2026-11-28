@@ -25,6 +25,7 @@ import '../core/tmdb_title.dart';
 import '../core/watched_recommendation.dart';
 import '../services/search_suggest_service.dart' show HotRankCategory;
 import '../state/app_state.dart';
+import '../state/detail_recommendation_state.dart';
 import 'glass_dialog.dart';
 import 'glass_widgets.dart';
 import 'async_action_feedback.dart';
@@ -264,7 +265,52 @@ class _HomePageState extends State<HomePage> {
                 for (final rail in [...rails, ...hot])
                   SliverToBoxAdapter(
                     child: HomeRailView(
+                      key: ValueKey(
+                        'home-rail-${rail.kind.name}-${switch (rail.kind) {
+                          HomeRailKind.recommendTmdb || HomeRailKind.recommendDouban => _session.recommendationPagingKey,
+                          _ => '',
+                        }}',
+                      ),
                       rail: rail,
+                      loadMore: switch (rail.kind) {
+                        HomeRailKind.recommendTmdb =>
+                          () => _session.loadMoreRecommendations(
+                            RecommendationRow.tmdb,
+                          ),
+                        HomeRailKind.recommendDouban =>
+                          () => _session.loadMoreRecommendations(
+                            RecommendationRow.douban,
+                          ),
+                        _ => null,
+                      },
+                      hasMore: switch (rail.kind) {
+                        HomeRailKind.recommendTmdb =>
+                          _session.recommendationHasMore(
+                            RecommendationRow.tmdb,
+                          ),
+                        HomeRailKind.recommendDouban =>
+                          _session.recommendationHasMore(
+                            RecommendationRow.douban,
+                          ),
+                        _ => false,
+                      },
+                      onPagination: (message) =>
+                          _session.recordRailPagination(rail.kind, message),
+                      isLoading: () => switch (rail.kind) {
+                        HomeRailKind.recommendTmdb ||
+                        HomeRailKind.recommendDouban =>
+                          _session.recommendationLoading,
+                        _ => false,
+                      },
+                      paginationError: switch (rail.kind) {
+                        HomeRailKind.recommendTmdb =>
+                          _session.recommendationError(RecommendationRow.tmdb),
+                        HomeRailKind.recommendDouban =>
+                          _session.recommendationError(
+                            RecommendationRow.douban,
+                          ),
+                        _ => null,
+                      },
                       onTap: (item) => _activate(
                         context,
                         item,
@@ -300,6 +346,7 @@ class _HomePageState extends State<HomePage> {
       },
     );
   }
+
   Future<void> _activate(
     BuildContext context,
     HomeItem item, {
@@ -432,7 +479,8 @@ class _HomePageState extends State<HomePage> {
       HomeRailKind.hotVariety => HotRankCategory.variety,
       _ => throw ArgumentError.value(kind),
     };
-    final source = _session.hotRows(category)
+    final source = _session
+        .hotRows(category)
         ?.where(
           (row) => hotItem(row, categoryKey: category.name).key == item.key,
         )

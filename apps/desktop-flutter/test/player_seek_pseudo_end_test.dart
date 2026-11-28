@@ -78,7 +78,7 @@ void main() {
     test('重开时把定位随 open 下发', () {
       expect(
         pageSource.contains(
-          'startAt: _startPositionForOpen(intent.startPosition)',
+          'startAt: _startPositionForOpen(intent.startPosition ?? preloadedStart)',
         ),
         isTrue,
       );

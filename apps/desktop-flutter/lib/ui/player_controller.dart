@@ -22,6 +22,7 @@ import '../core/player_options.dart';
 import '../core/player_tracks.dart';
 import '../core/protocol.dart';
 import '../core/proxy_policy.dart' show ProxyTrafficSnapshot;
+import '../core/seek_recovery.dart' show seekSettleTolerance;
 import '../core/subtitle.dart';
 import '../services/subtitle_service.dart';
 import '../services/player_thumbnail_service.dart';
@@ -52,6 +53,7 @@ class PlayerLoadOutcome {
     this.duration = Duration.zero,
     this.loadElapsed = Duration.zero,
     this.firstFrame,
+    this.startLandingPosition,
   });
 
   final bool succeeded;
@@ -63,6 +65,9 @@ class PlayerLoadOutcome {
 
   /// `position` 首次大于 0 的相对耗时；未观测到为 null。
   final Duration? firstFrame;
+
+  /// 本次 open 的原始位置流中首个接近 start 的正值；单独不代表起播。
+  final Duration? startLandingPosition;
 
   String get summary =>
       'succeeded=$succeeded url=${redactUrl(url)} '
@@ -426,6 +431,24 @@ class PlayerController extends ChangeNotifier {
 
   VideoController get videoController => _videoController;
   Player get player => _player;
+
+  Future<Uint8List?>? _transitionCapture;
+
+  Future<Uint8List?> captureEpisodeFrame() async {
+    if (_disposed || _transitionCapture != null) return null;
+    final platform = _player.platform;
+    // A raw screenshot need not take media-kit's open/stop serialization lock.
+    final capture = platform is NativePlayer
+        ? platform.screenshot(synchronized: false)
+        : _player.screenshot();
+    _transitionCapture = capture;
+    try {
+      return await capture;
+    } finally {
+      _transitionCapture = null;
+    }
+  }
+
   Duration get position => _position;
   Duration get duration => _duration;
   Duration get buffered => _buffered;
@@ -1361,6 +1384,7 @@ class PlayerController extends ChangeNotifier {
     final loadCompleter = Completer<Duration>();
     final localSubscriptions = <StreamSubscription<dynamic>>[];
     Duration? firstFrame;
+    Duration? startLandingPosition;
     var openIssued = false;
     String? loadError;
 
@@ -1431,6 +1455,18 @@ class PlayerController extends ChangeNotifier {
       if (nativeHandle != null) _startOption.apply(nativeHandle, startAt);
       // 同一个定位意图也挂在 [Media] 上：真正生效的是上面那条 option，
       // 这一条是给测试假件模拟内核行为用的（当前内核上它不生效）。
+      if (startAt != null) {
+        // stop 完成后才订阅，避免收到旧媒体的广播；open 返回前也可能已报落点。
+        localSubscriptions.add(
+          _player.stream.position.listen((value) {
+            if (_disposed || (isCurrent != null && !isCurrent())) return;
+            if (value > Duration.zero &&
+                (value - startAt).abs() <= seekSettleTolerance) {
+              startLandingPosition ??= value;
+            }
+          }),
+        );
+      }
       final nativeOpen = _player
           .open(
             Media(
@@ -1477,6 +1513,7 @@ class PlayerController extends ChangeNotifier {
         duration: _player.state.duration,
         loadElapsed: loadElapsed,
         firstFrame: firstFrame,
+        startLandingPosition: startLandingPosition,
       );
       if (!_disposed && (isCurrent == null || isCurrent())) {
         _lastOutcome = outcome;
@@ -1916,7 +1953,19 @@ class PlayerController extends ChangeNotifier {
     }
     // 清理外挂字幕临时文件（§20 资源释放）。
     _pruneSubtitleFiles(null);
-    _player.dispose();
+    final capture = _transitionCapture;
+    if (capture == null) {
+      unawaited(_player.dispose());
+    } else {
+      // Keep the native handle alive until the screenshot isolate releases it.
+      // Normal open/stop can proceed without waiting for the snapshot.
+      unawaited(
+        capture.then<void>(
+          (_) => _player.dispose(),
+          onError: (Object _, StackTrace _) => _player.dispose(),
+        ),
+      );
+    }
     super.dispose();
   }
 }

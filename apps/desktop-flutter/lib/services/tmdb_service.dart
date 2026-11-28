@@ -345,14 +345,7 @@ class TmdbService {
     // 「多」，就会白打一次请求（实测首次进入详情页打两次 `/tv/{id}`）。
     // 因此这里双向回退：任一形态命中即可，缺的 `recommendations`/`similar`
     // 由详情页自行兜底（`_recommendations` 为空时 UI 整块隐藏，不报错）。
-    final keys = <String>[
-      _detailCacheUri(config, url, append),
-      _detailCacheUri(
-        config,
-        url,
-        TmdbAppend.detail(identity.mediaType, includeRelated: !includeRelated),
-      ),
-    ];
+    final keys = _detailCacheKeys(config, identity, includeRelated: includeRelated);
     return _request(
       TmdbCacheType.detail,
       url,
@@ -366,6 +359,16 @@ class TmdbService {
       extraHeaders: _languageHeaders(config, includeImages: true),
     );
   }
+
+  /// Looks up the current route's fresh detail without fetching or scanning the cache.
+  Map<String, Object?>? cachedDetail(TmdbIdentity identity) => _cache
+      ?.readFirstFresh(
+        TmdbCacheType.detail,
+        _detailCacheKeys(_config(), identity, includeRelated: true),
+        _detailTtl,
+        TmdbTtl.detail,
+      )
+      ?.payload;
 
   /// Cached details only: no credentials check, HTTP, refresh or auth circuit.
   Map<TmdbIdentity, List<Map<String, Object?>>> cachedDetails(Set<TmdbIdentity> identities) =>
@@ -756,6 +759,22 @@ class TmdbService {
   }) {
     if (!includeImages) return const {};
     return {'X-Image-Language': '${config.language},null'};
+  }
+
+  List<String> _detailCacheKeys(
+    TmdbConfig config,
+    TmdbIdentity identity, {
+    required bool includeRelated,
+  }) {
+    final url = TmdbEndpoint.detail(identity.mediaType, identity.tmdbId);
+    return [
+      for (final related in [includeRelated, !includeRelated])
+        _detailCacheUri(
+          config,
+          url,
+          TmdbAppend.detail(identity.mediaType, includeRelated: related),
+        ),
+    ];
   }
 
   /// 详情缓存 URI：必须包含 `include_image_language`，与 `_request` 内部一致。

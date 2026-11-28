@@ -32,6 +32,7 @@ import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/protocol.dart' show Vod, HeaderRule;
 import '../core/push_parser.dart';
+import '../core/skip_segments.dart';
 import '../core/tmdb_identity.dart';
 import '../services/home_art_service.dart';
 import '../services/home_hero_startup_cache.dart';
@@ -153,6 +154,11 @@ class HomeHeroSession extends ChangeNotifier {
   final Map<RecommendationRow, List<RecommendationEntry>> _recommendations = {};
   final _recommendationOffsets = <RecommendationRow, int>{};
   final _recommendationRefills = <RecommendationRow, int>{};
+  final _recommendationErrors = <RecommendationRow, Object>{};
+  final _recommendationEndReasons = <RecommendationRow, String>{};
+  final _paginationDecisions = <String, String>{};
+  final _paginationTriggers = <HomeRailKind, String>{};
+  int _paginationRequest = 0;
   List<RecommendationWork> _observedWatched = const [];
 
   /// 按 TMDB 身份取回的高清图：HomeItem.key → 图。空表示还没到。
@@ -299,11 +305,72 @@ class HomeHeroSession extends ChangeNotifier {
         return !marks.any(work.matches);
       }).length;
 
+  void _paginationLog(String message) =>
+      _state.log.info(message, scope: 'home-pagination');
+
+  void _paginationDecision(String key, String state, String message) {
+    if (_paginationDecisions[key] == state) return;
+    _paginationDecisions[key] = state;
+    _paginationLog(message);
+  }
+
+  void recordRailPagination(HomeRailKind kind, String message) {
+    final trigger = RegExp(r'trigger=([a-z_]+)').firstMatch(message)?.group(1);
+    final gesture = RegExp(r'gesture=([0-9]+)').firstMatch(message)?.group(1);
+    if (message.startsWith('event=ui_trigger')) {
+      _paginationTriggers[kind] = 'trigger=$trigger gesture=$gesture';
+    }
+    final provider = switch (kind) {
+      HomeRailKind.recommendTmdb => 'tmdb',
+      HomeRailKind.recommendDouban => 'douban',
+      HomeRailKind.hotTv => 'hot_series',
+      HomeRailKind.hotMovie => 'hot_movie',
+      HomeRailKind.hotVariety => 'hot_variety',
+      _ => kind.name,
+    };
+    _paginationLog(
+      'provider=$provider generation=$_recommendationGeneration $message',
+    );
+  }
+
+  String get recommendationPagingKey => _recommendationRequestKey;
+  bool get recommendationLoading => _recommendationsStarted;
+  bool recommendationHasMore(RecommendationRow row) =>
+      _recommendationOffsets.containsKey(row);
+  Object? recommendationError(RecommendationRow row) =>
+      _recommendationErrors[row];
+
+  Future<void> loadMoreRecommendations(RecommendationRow row) async {
+    if (_disposed ||
+        !_attached ||
+        _recommendationsStarted ||
+        !_recommendationOffsets.containsKey(row)) {
+      final reason = _disposed
+          ? 'disposed'
+          : !_attached
+          ? 'detached'
+          : _recommendationsStarted
+          ? 'loading'
+          : _recommendationEndReasons.containsKey(row)
+          ? 'terminal'
+          : 'no_cursor';
+      _paginationDecision(
+        'more-${row.name}',
+        '$_recommendationGeneration-$reason',
+        'event=request_suppressed provider=${row.name} reason=$reason sourceReason=${_recommendationEndReasons[row] ?? 'unknown'} generation=$_recommendationGeneration',
+      );
+      return;
+    }
+    await _loadRecommendations(more: row);
+  }
+
   void _resetRecommendationPaging() {
     _releaseRecommendation?.call();
     _releaseRecommendation = null;
     _recommendationOffsets.clear();
     _recommendationRefills.clear();
+    _recommendationErrors.clear();
+    _recommendationEndReasons.clear();
   }
 
   /// 详情/播放返回后：已解析的字段可能变了，重算一次（不清空已完成的高清资格）。
@@ -379,7 +446,7 @@ class HomeHeroSession extends ChangeNotifier {
   ///
   /// 种子组是**确定性**的（最近 N 条，按 updatedAt 降序）：只要用户没再看新的一集，
   /// 推导出的缓存键就不变，第二次启动命中磁盘缓存、一条请求都不发。
-  Future<void> _loadRecommendations() async {
+  Future<void> _loadRecommendations({RecommendationRow? more}) async {
     if (_disposed) return;
     final seeds = [
       for (final row in _state.recentHistory(sourceKey: '').take(_seedLimit))
@@ -389,10 +456,18 @@ class HomeHeroSession extends ChangeNotifier {
     final key = jsonEncode([
       _contextKey,
       for (final seed in seeds)
-        [seed.title, seed.year, seed.tmdbId, seed.mediaType?.name, seed.isAudio, seed.isShortDrama],
+        [
+          seed.title,
+          seed.year,
+          seed.tmdbId,
+          seed.mediaType?.name,
+          seed.isAudio,
+          seed.isShortDrama,
+        ],
       blocked,
     ]);
     if (key != _recommendationRequestKey) {
+      more = null;
       _recommendationRequestKey = key;
       _recommendationGeneration++;
       _resetRecommendationPaging();
@@ -401,20 +476,37 @@ class HomeHeroSession extends ChangeNotifier {
       _recommendationRetryAt = null;
     }
     final now = _clock();
-    final refillOnly = _recommendationRefills.isNotEmpty;
+    final refillOnly = more == null && _recommendationRefills.isNotEmpty;
+    final append = more != null || refillOnly;
     if (_recommendationsStarted ||
-        (!refillOnly &&
+        (!append &&
             ((_recommendationRetryAt?.isAfter(now) ?? false) ||
-             (_recommendationFinishedAt != null &&
-              now.difference(_recommendationFinishedAt!) < _revalidateAfter)))) {
+                (_recommendationFinishedAt != null &&
+                    now.difference(_recommendationFinishedAt!) <
+                        _revalidateAfter)))) {
+      final reason = _recommendationsStarted
+          ? 'loading'
+          : (_recommendationRetryAt?.isAfter(now) ?? false)
+          ? 'retry_backoff'
+          : 'session_cache_ttl';
+      _paginationDecision(
+        'personal-background',
+        '$_recommendationGeneration-$reason',
+        'event=request_suppressed provider=personal reason=$reason generation=$_recommendationGeneration',
+      );
       return;
     }
     if (seeds.isEmpty) {
+      _paginationDecision(
+        'no-seeds',
+        '$_recommendationGeneration',
+        'event=request_suppressed provider=personal reason=no_eligible_seeds',
+      );
       _recommendationFinishedAt = now;
       return;
     }
     _recommendationsStarted = true;
-    if (!refillOnly) _recommendationOffsets.clear();
+    if (!append) _recommendationOffsets.clear();
     final generation = ++_recommendationGeneration;
     bool current() => !_disposed && generation == _recommendationGeneration;
     final request = RecommendationRequest(
@@ -429,46 +521,129 @@ class HomeHeroSession extends ChangeNotifier {
         : dependencies.loaders;
     _releaseRecommendation ??= dependencies.release;
     var failed = false;
+    notifyListeners();
     try {
       for (final row in [RecommendationRow.tmdb, RecommendationRow.douban]) {
         if (!current()) return;
         final loader = loaders[row];
-        final offset = refillOnly ? _recommendationOffsets[row] : 0;
-        if (loader == null || offset == null ||
+        if (more != null && more != row) continue;
+        final offset = append ? _recommendationOffsets[row] : 0;
+        if (loader == null ||
+            offset == null ||
             (refillOnly && !_recommendationRefills.containsKey(row))) {
           continue;
         }
-        final previous = refillOnly
+        final previous = append
             ? _recommendations[row] ?? const <RecommendationEntry>[]
             : const <RecommendationEntry>[];
+        _recommendationErrors.remove(row);
+        final requestId = ++_paginationRequest;
+        final elapsed = Stopwatch()..start();
+        final railKind = row == RecommendationRow.tmdb
+            ? HomeRailKind.recommendTmdb
+            : HomeRailKind.recommendDouban;
+        final trigger = more != null
+            ? _paginationTriggers[railKind] ?? 'trigger=manual'
+            : refillOnly
+            ? 'trigger=watched_refill'
+            : 'trigger=initial';
+        final prefix =
+            'provider=${row.name} request=$requestId generation=$generation';
+        var addedCount = 0;
+        _paginationLog(
+          'event=request_start $prefix $trigger offset=$offset pageSize=${request.pageSize} mode=${append
+              ? refillOnly
+                    ? "refill"
+                    : "more"
+              : "initial"}',
+        );
+        final rowRequest = RecommendationRequest(
+          current: request.current,
+          history: request.history,
+          blockedTitles: request.blockedTitles,
+          pageSize: request.pageSize,
+          diagnostic: (message) => _paginationLog(
+            '$prefix elapsedMs=${elapsed.elapsedMilliseconds} $message',
+          ),
+        );
         try {
-          final result = await loadUnwatchedRecommendationPage(
-            loader: loader,
-            request: request.atOffset(offset),
-            watched: watched,
-            isCurrent: current,
-            visibleTarget: refillOnly ? () {
-              final target = _recommendationRefills[row] ?? 0;
-              final stillVisible = _unwatchedCount(previous, watched.works);
-              return target > stillVisible ? target - stillVisible : 0;
-            } : null,
-          );
+          var result = const RecommendationPage();
+          var pageOffset = offset;
+          for (var batch = 0; batch < 8; batch++) {
+            result = await loadUnwatchedRecommendationPage(
+              loader: loader,
+              request: rowRequest.atOffset(pageOffset),
+              watched: watched,
+              isCurrent: current,
+              onPage: (offset, page) => _paginationLog(
+                'event=page_result $prefix offset=$offset rawCount=${page.items.length} nextOffset=${page.nextOffset} hasMore=${page.hasMore} reason=${page.endReason} retryable=${page.retryable} poolCount=${page.poolCount ?? 'unknown'} elapsedMs=${elapsed.elapsedMilliseconds} discarded=${!current()} upstreamLimit=unknown',
+              ),
+              visibleTarget: refillOnly
+                  ? () {
+                      final target = _recommendationRefills[row] ?? 0;
+                      final stillVisible = _unwatchedCount(
+                        previous,
+                        watched.works,
+                      );
+                      return target > stillVisible ? target - stillVisible : 0;
+                    }
+                  : null,
+            );
+            if (!current()) return;
+            if (append ||
+                result.items.isNotEmpty ||
+                !result.hasMore ||
+                result.nextOffset <= pageOffset) {
+              break;
+            }
+            pageOffset = result.nextOffset;
+          }
           if (!current()) return;
-          if (result.hasMore) {
+          _recommendationEndReasons[row] = result.endReason;
+          if (result.retryable) {
+            _recommendationErrors[row] = StateError('provider_retryable');
+          }
+          if (result.retryable && result.items.isEmpty) {
+            _recommendationOffsets[row] = offset;
+          } else if (result.hasMore && result.nextOffset > offset) {
             _recommendationOffsets[row] = result.nextOffset;
           } else {
             _recommendationOffsets.remove(row);
           }
           if (result.items.isNotEmpty) {
-            final keys = previous.map((entry) => recommendationRowKey(row, entry)).toSet();
-            _commit(() => _recommendations[row] = [
-              ...previous,
-              for (final entry in result.items)
-                if (keys.add(recommendationRowKey(row, entry))) entry,
-            ]);
+            final keys = previous
+                .map((entry) => recommendationRowKey(row, entry))
+                .toSet();
+            _commit(
+              () => _recommendations[row] = [
+                ...previous,
+                for (final entry in result.items)
+                  if (keys.add(recommendationRowKey(row, entry))) entry,
+              ],
+            );
+            addedCount = (_recommendations[row]?.length ?? 0) - previous.length;
             _ensureRecommendationMeta();
           }
-        } catch (_) {
+          final candidates =
+              _recommendations[row] ?? const <RecommendationEntry>[];
+          final eligible = candidates
+              .where(
+                (entry) =>
+                    !blocked.contains(
+                      recommendationTitleKey(entry.item.title),
+                    ) &&
+                    !watched.contains(RecommendationWork.fromEntry(entry)),
+              )
+              .length;
+          _paginationLog(
+            'event=page_applied $prefix offset=$offset nextOffset=${_recommendationOffsets[row] ?? result.nextOffset} rawCount=${result.items.length} added=$addedCount eligibleCount=$eligible filteredCount=${candidates.length - eligible} hasMore=${_recommendationOffsets.containsKey(row)} reason=${result.endReason} retryable=${result.retryable} elapsedMs=${elapsed.elapsedMilliseconds} upstreamLimit=unknown',
+          );
+        } catch (error) {
+          _paginationLog(
+            'event=request_error $prefix reason=${current() ? "retryable_error" : "stale_discarded"} errorType=${error.runtimeType} elapsedMs=${elapsed.elapsedMilliseconds} upstreamLimit=unknown',
+          );
+          if (!current()) return;
+          _recommendationErrors[row] = error;
           failed = true;
         } finally {
           if (refillOnly && current()) _recommendationRefills.remove(row);
@@ -477,16 +652,23 @@ class HomeHeroSession extends ChangeNotifier {
     } finally {
       if (current()) {
         _recommendationsStarted = false;
-        if (_recommendationOffsets.isEmpty) _resetRecommendationPaging();
-        _recommendationRefills.removeWhere((row, _) => !_recommendationOffsets.containsKey(row));
-        if (!refillOnly) {
+        if (_recommendationOffsets.isEmpty) {
+          _releaseRecommendation?.call();
+          _releaseRecommendation = null;
+        }
+        _recommendationRefills.removeWhere(
+          (row, _) => !_recommendationOffsets.containsKey(row),
+        );
+        if (!append) {
           _recommendationFinishedAt = failed ? null : _clock();
-          _recommendationRetryAt = failed ? _clock().add(_retryAfterFailure) : null;
+          _recommendationRetryAt = failed
+              ? _clock().add(_retryAfterFailure)
+              : null;
         }
         if (_attached && _recommendationRefills.isNotEmpty) {
           _scheduleBackgroundLoads();
-          notifyListeners();
         }
+        notifyListeners();
       }
     }
   }
@@ -519,8 +701,23 @@ class HomeHeroSession extends ChangeNotifier {
   /// 热门榜单：电影 / 剧集 / 综艺（与搜索页同一份数据与缓存）。
   Future<void> _loadHot() async {
     final now = _clock();
-    if (_hotStarted || _disposed || (_hotRetryAt?.isAfter(now) ?? false) ||
-        (_hotFinishedAt != null && now.difference(_hotFinishedAt!) < _revalidateAfter)) {
+    if (_hotStarted ||
+        _disposed ||
+        (_hotRetryAt?.isAfter(now) ?? false) ||
+        (_hotFinishedAt != null &&
+            now.difference(_hotFinishedAt!) < _revalidateAfter)) {
+      final reason = _disposed
+          ? 'disposed'
+          : _hotStarted
+          ? 'loading'
+          : (_hotRetryAt?.isAfter(now) ?? false)
+          ? 'retry_backoff'
+          : 'session_cache_ttl';
+      _paginationDecision(
+        'hot-background',
+        '$_contextKey-$reason',
+        'event=request_suppressed provider=hot reason=$reason',
+      );
       return;
     }
     _hotStarted = true;
@@ -531,12 +728,47 @@ class HomeHeroSession extends ChangeNotifier {
       for (final category in HotRankCategory.values) {
         if (_disposed || scope != _contextKey) return;
         try {
-          final items = await _state.searchHotRank(category);
-          if (items.isNotEmpty) results[category] = items;
-        } catch (_) { failed = true; }
+          final request = ++_paginationRequest;
+          final elapsed = Stopwatch()..start();
+          _paginationLog(
+            'event=request_start provider=hot_${category.name} request=$request mode=single_snapshot',
+          );
+          final items = await _state.homeHotRank(category);
+          if (_disposed || scope != _contextKey) {
+            _paginationLog(
+              'event=hot_result provider=hot_${category.name} request=$request rawCount=${items.length} reason=stale_discarded discarded=true',
+            );
+            return;
+          }
+          final outcome =
+              _state.searchSuggestService.hotOutcome(category) ?? 'unknown';
+          if ([
+            'fetch_failed',
+            'unknown_response',
+            'closed',
+            'stale_cache',
+          ].contains(outcome)) {
+            failed = true;
+          }
+          _paginationLog(
+            'event=hot_result provider=hot_${category.name} request=$request rawCount=${items.length} poolCount=${items.length} pagination=not_available reason=$outcome elapsedMs=${elapsed.elapsedMilliseconds} discarded=${_disposed || scope != _contextKey} mode=single_snapshot upstreamLimit=unknown',
+          );
+          if (items.isNotEmpty) {
+            results[category] = items;
+          }
+        } catch (error) {
+          final discarded = _disposed || scope != _contextKey;
+          _paginationLog(
+            'event=request_error provider=hot_${category.name} reason=${discarded ? 'stale_discarded' : 'retryable_error'} errorType=${error.runtimeType} upstreamLimit=unknown',
+          );
+          if (discarded) return;
+          failed = true;
+        }
       }
       if (_disposed || scope != _contextKey) return;
-      if (results.isNotEmpty) _commit(() => _hot.addAll(results));
+      if (results.isNotEmpty) {
+        _commit(() => _hot.addAll(results));
+      }
       _hotFinishedAt = failed ? null : _clock();
       _hotRetryAt = failed ? _clock().add(_retryAfterFailure) : null;
     } finally {
@@ -935,19 +1167,27 @@ class HomeHeroSession extends ChangeNotifier {
       for (final rail in rails)
         for (final item in rail.items) homeWorkKey(item.title),
     };
-    return [
-      for (final rail in hotRails(_hot))
-        if (rail.items.any((item) => !known.contains(homeWorkKey(item.title))))
-          HomeRail(
-            kind: rail.kind,
-            title: rail.title,
-            seeAll: rail.seeAll,
-            items: [
-              for (final item in rail.items)
-                if (!known.contains(homeWorkKey(item.title))) item,
-            ],
-          ),
-    ];
+    final output = <HomeRail>[];
+    for (final rail in hotRails(_hot, maxItems: null)) {
+      final category = switch (rail.kind) {
+        HomeRailKind.hotTv => HotRankCategory.series,
+        HomeRailKind.hotMovie => HotRankCategory.movie,
+        _ => HotRankCategory.variety,
+      };
+      final eligible = rail.items
+          .where((item) => !known.contains(homeWorkKey(item.title)))
+          .toList();
+      final items = eligible;
+      _paginationDecision(
+        'projection-hot-${category.name}',
+        '${rail.items.length}-${items.length}',
+        'event=rail_projection provider=hot_${category.name} candidateCount=${rail.items.length} visibleCount=${items.length} filteredCount=${rail.items.length - items.length} pagination=not_available',
+      );
+      if (items.isNotEmpty) {
+        output.add(HomeRail(kind: rail.kind, title: rail.title, items: items));
+      }
+    }
+    return output;
   }
 
   /// 首次使用的首屏：热门三榜**轮流**取，凑到 12 条。
@@ -1509,6 +1749,16 @@ class HomeHeroSession extends ChangeNotifier {
     });
   }
 
+  HomeAiredEpisode? _lastAiredEpisode(TmdbIdentity identity) {
+    final aired = _state.tmdbService.cachedDetail(identity)?['last_episode_to_air'];
+    if (aired is! Map) return null;
+    final season = aired['season_number'];
+    final episode = aired['episode_number'];
+    return season is int && season > 0 && episode is int && episode > 0
+        ? (season: season, episode: episode)
+        : null;
+  }
+
   HomeProjection project({required List<HeaderRule> headerRules}) {
     _syncContext(headerRules);
     if (_entered) {
@@ -1571,9 +1821,20 @@ class HomeHeroSession extends ChangeNotifier {
         ),
       );
     }
+    final onDemandHistory = history.where((row) => !liveSiteKeys.contains(row.siteKey));
+    final skipByWork = <(String, String), SkipSegments>{};
+    final airedByIdentity = <TmdbIdentity, HomeAiredEpisode?>{};
     final candidates = homeHeroCandidates(
       feed,
       hot: _hotHeroFallback(hotRails(_hot)),
+      history: onDemandHistory,
+      followings: _state.followings,
+      lastAiredEpisodeFor: (identity) =>
+          airedByIdentity.putIfAbsent(identity, () => _lastAiredEpisode(identity)),
+      skipSegmentsFor: (row) => skipByWork.putIfAbsent(
+        (row.siteKey, row.vodId),
+        () => _state.skipSegmentsFor(siteKey: row.siteKey, vodId: row.vodId),
+      ),
     );
     _ensureHdHero(candidates, headerRules);
     final selectedKey = _heroKeys.isEmpty
@@ -1592,6 +1853,13 @@ class HomeHeroSession extends ChangeNotifier {
     // 热门接在本机轨道之后（用户 2026-11-19：用过也照样要给热门），并去掉 hero
     // 里已经有的条目。只过滤 hero：热门轨道也不因作品是否有高清宽图而增删。
     final hot = _hotRails(hero: const [], rails: rails);
+    for (final row in [RecommendationRow.tmdb, RecommendationRow.douban]) {
+      final kind = row == RecommendationRow.tmdb ? HomeRailKind.recommendTmdb : HomeRailKind.recommendDouban;
+      final candidateCount = _recommendations[row]?.length ?? 0;
+      final visibleCount = rails.where((rail) => rail.kind == kind).fold<int>(0, (count, rail) => count + rail.items.length);
+      _paginationDecision('projection-${row.name}', '$_recommendationGeneration-$candidateCount-$visibleCount',
+        'event=rail_projection provider=${row.name} generation=$_recommendationGeneration candidateCount=$candidateCount visibleCount=$visibleCount filteredCount=${candidateCount - visibleCount}');
+    }
     final hasRails = rails.isNotEmpty || hot.isNotEmpty;
     // 冷启动bootstrap尚未恢复历史时也先预留，不能等异步列表出现才加高。
     if (candidates.isNotEmpty || heroItems.isNotEmpty || hasRails) {

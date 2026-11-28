@@ -27,6 +27,59 @@ import 'spider_registry.dart';
 import 'spider_router.dart';
 
 /// 本地 sidecar 支持的站点运行时。
+/// Owns one speculative JVM process and the token used by its scoped assets.
+final class JvmPlaybackPreload {
+  JvmPlaybackPreload._(this._source, this._worker);
+
+  final SidecarRuntime _source;
+  final SidecarRuntime _worker;
+  SpiderProxySession? _owner;
+  Future<void>? _closing;
+  bool _started = false;
+  bool _closed = false;
+
+  SpiderProxySession? get owner => _owner;
+
+  bool belongsTo(SiteRuntime runtime) =>
+      identical(runtime, _source) && !_closed;
+
+  Future<SiteResult> play({
+    required String episodeTarget,
+    required String flag,
+    required RequestCancellation cancellation,
+    required bool Function() isCurrent,
+  }) async {
+    bool current() => !_closed && !cancellation.isCancelled && isCurrent();
+    if (_started || !current()) {
+      throw AppError(AppErrorKind.siteCancelled, '预载播放已取消');
+    }
+    _started = true;
+    final owner = await cancellation.bind(
+      _worker.prepareProxySession(this, isCurrent: current),
+    );
+    if (owner == null || !current() || !owner.active) {
+      throw AppError(AppErrorKind.siteCancelled, '预载播放会话不可用');
+    }
+    _owner = owner;
+    return cancellation.bind(
+      _worker.withProxySession(
+        owner,
+        () => _worker.play(
+          _worker.site,
+          episodeTarget: episodeTarget,
+          flag: flag,
+        ),
+      ),
+    );
+  }
+
+  Future<void> close() {
+    _closed = true;
+    _owner?.invalidate();
+    return _closing ??= _worker.supervisor.shutdownAll();
+  }
+}
+
 class SidecarRuntime
     implements SiteRuntime, CancellableSearchRuntime, CancellableProbeRuntime {
   SidecarRuntime({
@@ -56,6 +109,36 @@ class SidecarRuntime
   SpiderProxySession? _proxySession;
   static final _hostContexts = Expando<SidecarRuntime>();
   static final _hostStarts = Expando<Map<String, Future<void>>>();
+
+  JvmPlaybackPreload? createPlaybackPreload() {
+    final manifest = spider.manifest;
+    if (manifest.runtime != 'jvm' ||
+        !manifest.permissions.localProxy ||
+        !manifest.capabilities.supports(SpiderMethod.proxy) ||
+        !(supervisor.isSourceEnabled?.call(manifest.key) ?? true)) {
+      return null;
+    }
+    final isolated = SpiderHostSupervisor(
+      workRoot: p.join(supervisor.workRoot, 'episode-preload'),
+      log: supervisor.log,
+      isSourceEnabled: supervisor.isSourceEnabled,
+      maxFailures: supervisor.maxFailures,
+      baseBackoff: supervisor.baseBackoff,
+      maxBackoff: supervisor.maxBackoff,
+      idleTimeout: supervisor.idleTimeout,
+    );
+    return JvmPlaybackPreload._(
+      this,
+      SidecarRuntime(
+        site: site,
+        spider: spider,
+        command: command,
+        supervisor: isolated,
+        log: log,
+        globalHeaders: globalHeaders,
+      ),
+    );
+  }
 
   Future<SpiderProxySession?> prepareProxySession(
     Object context, {

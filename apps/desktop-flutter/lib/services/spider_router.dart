@@ -338,13 +338,20 @@ class HttpApiRuntime
     required String episodeTarget,
     String? flag,
     String? vodId,
+  }) => playCancellable(site, episodeTarget: episodeTarget, flag: flag);
+
+  Future<SiteResult> playCancellable(
+    Site site, {
+    required String episodeTarget,
+    String? flag,
+    RequestCancellation? cancellation,
   }) {
     final call = HttpApiRequestBuilder(
       site: site,
       globalHeaders: globalHeaders,
       userAgent: userAgent,
     ).buildPlayRequest(episodeTarget, flag: flag);
-    return client.execute(call, siteKey: site.key);
+    return client.execute(call, siteKey: site.key, cancellation: cancellation);
   }
 }
 

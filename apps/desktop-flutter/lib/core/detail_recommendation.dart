@@ -47,11 +47,17 @@ class RecommendationPage {
     this.items = const [],
     this.nextOffset = 0,
     this.hasMore = false,
+    this.endReason = 'unknown',
+    this.poolCount,
+    this.retryable = false,
   });
 
   final List<RecommendationEntry> items;
   final int nextOffset;
   final bool hasMore;
+  final String endReason;
+  final int? poolCount;
+  final bool retryable;
 }
 
 String recommendationTitleKey(String title) => title

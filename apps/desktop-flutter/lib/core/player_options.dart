@@ -265,17 +265,7 @@ class PlayerOptions {
   /// 给出换线路/换解析源。
   final PlayerFailureFallback failureFallback;
 
-  /// 预取开关，**一个开关覆盖两件事**（两者都不下载媒体数据）：
-  ///
-  /// 1. **解析预取**：拿到播放地址后先对目标地址发一次探测（HEAD），提前建连、
-  ///    提前发现失效地址——由 [openPolicy] 的 `preload` 交给
-  ///    `PlayerController.openWithRetry` 执行；
-  /// 2. **下一集预取**：当前集播到接近片尾时，先把下一集的地址解析出来
-  ///    （只解析、不预加载媒体），避免连播时黑屏等待。
-  ///
-  /// 第 2 件发生在页面级的连播路径上（`lib/ui/player_page.dart`），不在本文件的
-  /// 消费范围内；第 1 件由控制器执行（迭代 2 Wave 1 起）。拆成两个开关的收益
-  /// 不明显（都是「提前把地址准备好」），所以保留一个。
+  /// 允许在点播期间预载后续剧集的起播窗口。
   final bool preloadNext;
 
   /// 本次播放要用的打开策略：把设置页的两个开关翻成控制器认的策略对象。
@@ -284,7 +274,6 @@ class PlayerOptions {
   /// 保持历史行为（超时/网络失败原地重试一次），因此这里不给「默认策略」暗开任何开关。
   /// [failureFallback] 为 [PlayerFailureFallback.off] 时策略不含重试，也不含回退。
   PlaybackOpenPolicy get openPolicy => PlaybackOpenPolicy(
-    preload: preloadNext,
     fallbackOnFailure: failureFallback != PlayerFailureFallback.off,
   );
 

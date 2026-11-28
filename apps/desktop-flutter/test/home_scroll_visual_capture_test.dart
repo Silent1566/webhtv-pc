@@ -90,7 +90,7 @@ Directory _evidenceDir() {
   var root = Directory.current;
   for (var hop = 0; hop < 6; hop++) {
     if (Directory('${root.path}/apps/desktop-flutter').existsSync()) {
-      return Directory('${root.path}/.local/home-scroll');
+      return Directory('${root.path}/.local/home-pagination');
     }
     root = root.parent;
   }
@@ -488,6 +488,14 @@ void main() {
           'fixtureSeam': 'MockClient TMDB metadata + primed ImageProvider cache using decoded PNG fixture pixels',
         }),
       );
+    }
+    if (stage != null) {
+      final firstHot = find.byWidgetPredicate(
+        (widget) => widget is HomeRailView && widget.rail.title.startsWith('热门'),
+      ).first;
+      await tester.ensureVisible(firstHot);
+      await tester.pumpAndSettle();
+      await _capture(tester, stage, 'hot-order');
     }
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
