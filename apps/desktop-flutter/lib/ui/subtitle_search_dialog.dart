@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../core/subtitle_provider.dart';
 import '../services/subtitle_match_service.dart';
 import 'common.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 /// 窗口尺寸上限（计划 Task 5：最大 720×520）。
@@ -42,14 +43,16 @@ Future<SubtitleCandidate?> showSubtitleSearchDialog({
   required Future<SubtitleSearchReport> Function(SubtitleQuery query) search,
   List<String> preferredLanguages = kDefaultSubtitleLanguages,
   Future<String?> Function()? pickLocalFile,
+  bool blurBackdrop = true,
 }) {
-  return showDialog<SubtitleCandidate>(
+  return showGlassDialog<SubtitleCandidate>(
     context: context,
     builder: (context) => SubtitleSearchDialog(
       initialQuery: initialQuery,
       search: search,
       preferredLanguages: preferredLanguages,
       pickLocalFile: pickLocalFile,
+      blurBackdrop: blurBackdrop,
     ),
   );
 }
@@ -61,12 +64,14 @@ class SubtitleSearchDialog extends StatefulWidget {
     required this.search,
     this.preferredLanguages = kDefaultSubtitleLanguages,
     this.pickLocalFile,
+    this.blurBackdrop = true,
   });
 
   final SubtitleQuery initialQuery;
   final Future<SubtitleSearchReport> Function(SubtitleQuery query) search;
   final List<String> preferredLanguages;
   final Future<String?> Function()? pickLocalFile;
+  final bool blurBackdrop;
 
   @override
   State<SubtitleSearchDialog> createState() => _SubtitleSearchDialogState();
@@ -227,7 +232,9 @@ class _SubtitleSearchDialogState extends State<SubtitleSearchDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Dialog(
+    return glassDialogShell(
+      context,
+      blurBackdrop: widget.blurBackdrop,
       insetPadding: const EdgeInsets.all(AppSpace.xl),
       child: ConstrainedBox(
         constraints: const BoxConstraints(

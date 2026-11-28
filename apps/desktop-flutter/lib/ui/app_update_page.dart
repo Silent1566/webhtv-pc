@@ -20,6 +20,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../core/app_update.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -292,32 +293,36 @@ class AppUpdatePage extends StatelessWidget {
   }
 
   Future<void> _selectProxy(BuildContext context) async {
-    final selected = await showDialog<String>(
+    final selected = await showGlassDialog<String>(
       context: context,
-      builder: (context) => SimpleDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('下载代理地址'),
-        children: [
-          for (final url in appUpdateProxyPresets)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, url),
-              child: Row(
-                children: [
-                  Expanded(child: Text(Uri.parse(url).host)),
-                  if (url == state.updatePreferences.githubProxy.baseUrl)
-                    const Icon(Icons.check),
-                ],
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final url in appUpdateProxyPresets)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, url),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(Uri.parse(url).host)),
+                    if (url == state.updatePreferences.githubProxy.baseUrl)
+                      const Icon(Icons.check),
+                  ],
+                ),
               ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'custom'),
+              child: const Text('自定义 HTTPS 地址'),
             ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, 'custom'),
-            child: const Text('自定义 HTTPS 地址'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
     if (selected == null || !context.mounted) return;
     if (selected == 'custom') {
-      await showDialog<void>(
+      await showGlassDialog<void>(
         context: context,
         builder: (_) => _UpdateProxyAddressDialog(state: state),
       );
@@ -471,7 +476,7 @@ class _UpdateProxyAddressDialogState extends State<_UpdateProxyAddressDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
     title: const Text('自定义下载代理'),
     content: Column(
       mainAxisSize: MainAxisSize.min,
@@ -590,7 +595,7 @@ class _ReleaseNotes extends StatelessWidget {
             alignment: AlignmentDirectional.centerEnd,
             child: TextButton.icon(
               key: const ValueKey('settings-update-notes-expand'),
-              onPressed: () => showDialog<void>(
+              onPressed: () => showGlassDialog<void>(
                 context: context,
                 builder: (_) => _ReleaseNotesDialog(
                   release: release,
@@ -713,7 +718,8 @@ class _ReleaseNotesDialogState extends State<_ReleaseNotesDialog> {
     final height = (_size?.height ?? window.height * 0.85)
         .clamp(minHeight, maxHeight)
         .toDouble();
-    return Dialog(
+    return glassDialogShell(
+      context,
       insetPadding: const EdgeInsets.all(AppSpace.lg),
       child: SizedBox(
         key: const ValueKey('settings-update-notes-dialog'),

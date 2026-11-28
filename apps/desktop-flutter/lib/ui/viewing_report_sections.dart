@@ -17,13 +17,16 @@ class ViewingReportSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(top: AppSpace.xl),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: AppSpace.sm),
-        child,
-      ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpace.sm),
+          child,
+        ],
+      ),
     ),
   );
 }
@@ -87,52 +90,67 @@ class ViewingReportSummaryGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final columns = width >= 1100
-            ? 6
-            : width >= 700
+        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        final columns = width / scale >= 1100
+            ? 4
+            : width / scale >= 700
             ? 3
-            : width >= 420
+            : width / scale >= 420
             ? 2
             : 1;
-        final itemWidth = (width - AppSpace.md * (columns - 1)) / columns;
-        return Wrap(
-          spacing: AppSpace.md,
-          runSpacing: AppSpace.md,
-          children: [
-            for (final item in items)
-              Container(
-                key: item.key == null
-                    ? null
-                    : ValueKey('viewing-summary-${item.key}'),
-                width: itemWidth,
-                padding: const EdgeInsets.all(AppSpace.lg),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerLow,
-                  borderRadius: AppRadius.lgAll,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.label, style: theme.textTheme.bodySmall),
-                    const SizedBox(height: AppSpace.xs),
-                    Text(
-                      item.value,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontFeatures: kTabularFigures,
+        final rowCount = (items.length / columns).ceil();
+        final rowSize = items.length ~/ rowCount;
+        final extra = items.length % rowCount;
+        var start = 0;
+        final rows = <Widget>[];
+        for (var row = 0; row < rowCount; row++) {
+          final count = rowSize + (row < extra ? 1 : 0);
+          final rowItems = items.sublist(start, start + count);
+          start += count;
+          if (row > 0) rows.add(const SizedBox(height: AppSpace.md));
+          rows.add(
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var index = 0; index < rowItems.length; index++) ...[
+                  if (index > 0) const SizedBox(width: AppSpace.md),
+                  Expanded(
+                    child: Container(
+                      key: rowItems[index].key == null
+                          ? null
+                          : ValueKey('viewing-summary-${rowItems[index].key}'),
+                      padding: const EdgeInsets.all(AppSpace.lg),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            rowItems[index].label,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: AppSpace.xs),
+                          Text(
+                            rowItems[index].value,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontFeatures: kTabularFigures,
+                            ),
+                          ),
+                          const SizedBox(height: AppSpace.xs),
+                          Text(
+                            rowItems[index].hint,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: AppSpace.xs),
-                    Text(
-                      item.hint,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        );
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
+        return Column(children: rows);
       },
     );
   }
@@ -326,7 +344,7 @@ class ViewingReportHeatmap extends StatelessWidget {
         Text(
           '每格为记录数：空格 = 0（无记录） · 有记录才显示数字（最多 $max 条）。按历史最后观看时间统计。',
           style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+            color: theme.colorScheme.onSurface,
           ),
         ),
       ],
@@ -448,7 +466,7 @@ class ViewingReportPreferences extends StatelessWidget {
         Text(
           '缺失信息保留为未知。查看作品详情可增加本地元数据覆盖；已缓存的 TMDB 详情只补缺，打开报告不联网。',
           style: Theme.of(context).textTheme.bodySmall
-              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurface),
         ),
       ],
     ),
@@ -479,7 +497,7 @@ class _PreferenceDimension extends StatelessWidget {
         Text(
           '覆盖 $coverage/$total 条（${total == 0 ? 0 : (coverage / total * 100).round()}%） · 未知 ${total - coverage} 条',
           style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+            color: theme.colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: AppSpace.sm),

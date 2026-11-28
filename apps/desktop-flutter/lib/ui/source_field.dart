@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 
 import '../services/storage.dart';
 import '../state/app_state.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 站源健康状态。四态都是真实可判定的。
@@ -217,24 +218,15 @@ class SourceField extends StatelessWidget {
 
     // 一片"场"需要一个自己的面：第一版把点直接画在页面底色上，
     // 读不出这是一块区域，只是几粒散点。
-    return Container(
+    return GlassPane(
+      blurBackdrop: false,
       padding: const EdgeInsets.all(AppSpace.lg),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.72),
-        ),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Text(
-                '站源健康',
-                style: theme.textTheme.titleMedium,
-              ),
+              Text('站源健康', style: theme.textTheme.titleMedium),
               const SizedBox(width: AppSpace.sm),
               Text(
                 '${magnitudes.length} 个',
@@ -397,7 +389,9 @@ class _Star extends StatelessWidget {
     final size = item.diameter;
     final rate = item.rate;
 
-    final tooltip = StringBuffer('${item.name} · ${sourceStatusLabel(item.status)}');
+    final tooltip = StringBuffer(
+      '${item.name} · ${sourceStatusLabel(item.status)}',
+    );
     if (rate != null) {
       tooltip.write(' · 成功率 ${(rate * 100).round()}%（${item.samples} 次）');
       if (item.latencyMs > 0) tooltip.write(' · 平均 ${item.latencyMs}ms');

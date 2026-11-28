@@ -2,12 +2,18 @@ import 'package:flutter/material.dart';
 
 import '../core/home_feed.dart';
 import 'app_motion.dart' show reducedMotionOf;
+import 'wallpaper_backdrop.dart';
 import 'backdrop_scrim.dart';
 import 'poster_image.dart';
 
 /// 页面级背景只跟随 hero 下标，不单独轮播。
 class HomeBackdrop extends StatelessWidget {
-  const HomeBackdrop({super.key, required this.items, required this.index, this.onImageError});
+  const HomeBackdrop({
+    super.key,
+    required this.items,
+    required this.index,
+    this.onImageError,
+  });
 
   final List<HomeItem> items;
   final int index;
@@ -27,7 +33,7 @@ class HomeBackdrop extends StatelessWidget {
         child: backdrop.isEmpty
             ? SizedBox.expand(
                 key: const ValueKey('home-backdrop-plain'),
-                child: ColoredBox(color: Theme.of(context).colorScheme.surface),
+                child: const DefaultGlassBackdrop(),
               )
             : SizedBox.expand(
                 key: ValueKey(backdrop),
@@ -37,7 +43,9 @@ class HomeBackdrop extends StatelessWidget {
                   children: [
                     PosterImage(
                       url: backdrop,
-                      onImageError: () => onImageError?.call(items[index % items.length]),
+                      placeholder: const DefaultGlassBackdrop(),
+                      onImageError: () =>
+                          onImageError?.call(items[index % items.length]),
                       fit: BoxFit.cover,
                       alignment: Alignment.topCenter,
                     ),

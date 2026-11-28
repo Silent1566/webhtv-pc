@@ -164,7 +164,9 @@ class _TestAppState extends AppState with ExternalMetaOff {
         SiteSearchEntry(
           siteKey: siteKey,
           siteName: siteName,
-          result: SiteResult(list: [Vod(vodId: vodId, vodName: '无线路剧')]),
+          result: SiteResult(
+            list: [Vod(vodId: vodId, vodName: '无线路剧')],
+          ),
         ),
       ],
     )..finished = true;
@@ -177,7 +179,8 @@ class _TestAppState extends AppState with ExternalMetaOff {
   Site? get selectedSite => _fakeSite;
 
   @override
-  MultiSiteSearchOutcome? get activeSearch => _searchOutcome ?? super.activeSearch;
+  MultiSiteSearchOutcome? get activeSearch =>
+      _searchOutcome ?? super.activeSearch;
 
   @override
   Future<PlaybackLines> swapProbe({
@@ -221,11 +224,8 @@ class _TestAppState extends AppState with ExternalMetaOff {
       notifyListeners();
       return installed;
     }
-    return MultiSiteSearchOutcome(
-      runId: 1,
-      keyword: keyword,
-      results: const [],
-    )..finished = true;
+    return MultiSiteSearchOutcome(runId: 1, keyword: keyword, results: const [])
+      ..finished = true;
   }
 }
 
@@ -357,7 +357,9 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: _noLineVod())),
+      MaterialApp(
+        home: DetailPage(state: state, vod: _noLineVod()),
+      ),
     );
     await tester.pump();
   }
@@ -369,21 +371,16 @@ void main() {
     }
   }
 
-  testWidgets('空态是卡片式提示区：边框 + 图标 + 标题 + 弱化说明', (tester) async {
+  testWidgets('空态是无边框提示区：图标 + 标题 + 弱化说明', (tester) async {
     await loadTmdb(unmatchedTmdb);
     await pumpDetail(tester, unmatchedState);
 
     final card = find.byKey(const ValueKey('detail-no-line-empty'));
     await _revealInViewport(tester, card);
-    expect(card, findsOneWidget, reason: '空态必须是一个有边界的提示区，不是裸 Text');
+    expect(card, findsOneWidget);
 
     final decoration = tester.widget<Container>(card).decoration;
-    expect(decoration, isA<BoxDecoration>());
-    expect(
-      (decoration! as BoxDecoration).border,
-      isNotNull,
-      reason: '卡片要有边框（主题色，不硬编码）',
-    );
+    expect(decoration is BoxDecoration ? decoration.border : null, isNull);
     expect(find.byIcon(Icons.play_disabled_outlined), findsOneWidget);
     expect(find.text('本片在当前源没有可播放的剧集'), findsOneWidget);
     expect(
@@ -477,9 +474,7 @@ void main() {
       lines: [
         VodPlayLine(
           flag: 'ext',
-          episodes: [
-            VodEpisode(name: '换源第1集', url: 'http://swap.example/e1'),
-          ],
+          episodes: [VodEpisode(name: '换源第1集', url: 'http://swap.example/e1')],
         ),
       ],
     );

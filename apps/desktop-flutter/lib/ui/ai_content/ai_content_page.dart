@@ -22,6 +22,7 @@ import '../../services/ai_content/recommendation_service.dart';
 import '../../services/ai_content/title_resolution_service.dart';
 import '../../services/ai_content/user_data_store.dart';
 import '../tokens.dart';
+import '../glass_widgets.dart';
 import 'ai_content_widgets.dart';
 
 /// 页面用到的服务集合（一次注入，避免页面自己 new）。
@@ -61,10 +62,7 @@ class AiContentPageSnapshot {
 }
 
 class AiContentPageDeps {
-  const AiContentPageDeps({
-    required this.services,
-    required this.loadSnapshot,
-  });
+  const AiContentPageDeps({required this.services, required this.loadSnapshot});
 
   final AiContentServices services;
   final Future<AiContentPageSnapshot> Function() loadSnapshot;
@@ -149,7 +147,12 @@ class _AiContentPageState extends State<AiContentPage>
     );
     if (!mounted) return;
     if (!result.ok) return _end('取消失败：${result.message}');
-    setState(() => _cards = [for (final item in _cards) if (item.title != card.title) item]);
+    setState(
+      () => _cards = [
+        for (final item in _cards)
+          if (item.title != card.title) item,
+      ],
+    );
     _end('已记录「不感兴趣」');
   }
 
@@ -196,7 +199,9 @@ class _AiContentPageState extends State<AiContentPage>
   Future<void> _approveGroupRules() async {
     final validation = _groupValidation;
     if (validation == null) return;
-    final result = await widget.deps.services.group.approve(validation.accepted);
+    final result = await widget.deps.services.group.approve(
+      validation.accepted,
+    );
     if (!mounted) return;
     if (!result.ok) return _end('应用失败：${result.message}');
     setState(() => _approvedGroupRules = result.value!);
@@ -244,37 +249,42 @@ class _AiContentPageState extends State<AiContentPage>
             horizontal: AppSpace.lg,
             vertical: AppSpace.sm,
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TabBar(
-                  controller: _tabs,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  tabs: const [
-                    Tab(text: '推荐'),
-                    Tab(text: '画像'),
-                    Tab(text: '规则'),
-                    Tab(text: '诊断'),
-                    Tab(text: '数据'),
-                  ],
-                ),
-              ),
-              if (_busy)
-                const Padding(
-                  padding: EdgeInsets.only(right: AppSpace.sm),
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+          child: GlassPane(
+            child: Material(
+              type: MaterialType.transparency,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TabBar(
+                      controller: _tabs,
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      tabs: const [
+                        Tab(text: '推荐'),
+                        Tab(text: '画像'),
+                        Tab(text: '规则'),
+                        Tab(text: '诊断'),
+                        Tab(text: '数据'),
+                      ],
+                    ),
                   ),
-                ),
-              if (_busy)
-                TextButton(
-                  onPressed: () => _cancellation?.cancel(),
-                  child: const Text('取消'),
-                ),
-            ],
+                  if (_busy)
+                    const Padding(
+                      padding: EdgeInsets.only(right: AppSpace.sm),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  if (_busy)
+                    TextButton(
+                      onPressed: () => _cancellation?.cancel(),
+                      child: const Text('取消'),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
         if (_status.isNotEmpty)
@@ -283,15 +293,21 @@ class _AiContentPageState extends State<AiContentPage>
             child: Text(_status, style: theme.textTheme.bodySmall),
           ),
         Expanded(
-          child: TabBarView(
-            controller: _tabs,
-            children: [
-              _recommendationTab(theme),
-              _profileTab(theme),
-              _rulesTab(theme),
-              _diagnosisTab(theme),
-              _dataTab(theme),
-            ],
+          child: GlassPane(
+            blurBackdrop: false,
+            child: Material(
+              type: MaterialType.transparency,
+              child: TabBarView(
+                controller: _tabs,
+                children: [
+                  _recommendationTab(theme),
+                  _profileTab(theme),
+                  _rulesTab(theme),
+                  _diagnosisTab(theme),
+                  _dataTab(theme),
+                ],
+              ),
+            ),
           ),
         ),
       ],
@@ -330,8 +346,7 @@ class _AiContentPageState extends State<AiContentPage>
         ],
       ),
       const SizedBox(height: AppSpace.md),
-      if (_cards.isEmpty)
-        Text('还没有推荐结果', style: theme.textTheme.bodySmall),
+      if (_cards.isEmpty) Text('还没有推荐结果', style: theme.textTheme.bodySmall),
       for (final card in _cards)
         AiRecommendationCardTile(
           card: card,
@@ -453,8 +468,7 @@ class _AiContentPageState extends State<AiContentPage>
       ),
       const SizedBox(height: AppSpace.md),
       if (_diagnosis == null)
-        Text('尚未诊断（日志自动从本机日志读取，发送前脱敏）',
-            style: theme.textTheme.bodySmall)
+        Text('尚未诊断（日志自动从本机日志读取，发送前脱敏）', style: theme.textTheme.bodySmall)
       else
         AiLogDiagnosisView(result: _diagnosis!),
     ],
@@ -471,10 +485,7 @@ class _AiContentPageState extends State<AiContentPage>
       const SizedBox(height: AppSpace.md),
       Row(
         children: [
-          FilledButton(
-            onPressed: _exportUserData,
-            child: const Text('导出用户数据'),
-          ),
+          FilledButton(onPressed: _exportUserData, child: const Text('导出用户数据')),
         ],
       ),
       if (_userDataFileCount > 0)
@@ -485,4 +496,3 @@ class _AiContentPageState extends State<AiContentPage>
     ],
   );
 }
-

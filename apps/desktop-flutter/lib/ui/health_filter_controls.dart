@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// Compact, wrapping filter row shared by the health history table and the
@@ -51,7 +52,6 @@ Widget healthFilterNameField({
       isDense: true,
       hintText: hint,
       prefixIcon: const Icon(Icons.search, size: 18),
-      border: const OutlineInputBorder(),
     ),
     onChanged: onChanged,
   ),
@@ -66,30 +66,58 @@ Widget healthFilterSelect({
   required String value,
   required List<String> options,
   required ValueChanged<String> onChanged,
-}) => PopupMenuButton<String>(
-  key: key,
-  tooltip: '筛选$label',
-  initialValue: value,
-  onSelected: onChanged,
-  itemBuilder: (context) => [
-    for (final option in options)
-      PopupMenuItem<String>(value: option, child: Text(option)),
-  ],
-  child: Container(
-    padding: const EdgeInsets.symmetric(
-      horizontal: AppSpace.sm,
-      vertical: AppSpace.xs,
-    ),
-    decoration: BoxDecoration(
-      borderRadius: AppRadius.smAll,
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('$label：$value', style: Theme.of(context).textTheme.bodySmall),
-        const Icon(Icons.arrow_drop_down, size: 18),
-      ],
+}) => MenuAnchor(
+  style: const MenuStyle(
+    backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+    surfaceTintColor: WidgetStatePropertyAll(Colors.transparent),
+    elevation: WidgetStatePropertyAll(0),
+    padding: WidgetStatePropertyAll(EdgeInsets.zero),
+  ),
+  builder: (context, menu, _) => Tooltip(
+    message: '筛选$label',
+    child: TextButton(
+      key: key,
+      style: TextButton.styleFrom(
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.sm,
+          vertical: AppSpace.xs,
+        ),
+        shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
+      ),
+      onPressed: () {
+        if (menu.isOpen) {
+          menu.close();
+        } else {
+          menu.open();
+        }
+      },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$label：$value', style: Theme.of(context).textTheme.bodySmall),
+          const Icon(Icons.arrow_drop_down, size: 18),
+        ],
+      ),
     ),
   ),
+  menuChildren: [
+    GlassPane(
+      borderRadius: AppRadius.mdAll,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final option in options)
+              MenuItemButton(
+                onPressed: () => onChanged(option),
+                child: Text(option),
+              ),
+          ],
+        ),
+      ),
+    ),
+  ],
 );

@@ -10,8 +10,10 @@
 library;
 
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'local_source_sites_test.dart' show deleteTempWhenReleased;
@@ -28,6 +30,7 @@ import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/libmpv_guard.dart';
 import 'support/player_page_harness.dart';
+import 'support/test_fonts.dart';
 import 'support/widget_settle.dart';
 
 void main() {
@@ -61,6 +64,7 @@ void main() {
     Future<void> mountShell(
       WidgetTester tester, {
       Future<String?> Function()? pickLocalFile,
+      GlobalKey? captureKey,
     }) async {
       if (libmpvUnavailableReason == null) installMediaKitMocks(tester);
       installWindowManagerMocks(tester);
@@ -70,6 +74,9 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
+          builder: captureKey == null
+              ? null
+              : (_, child) => RepaintBoundary(key: captureKey, child: child!),
           home: AppShell(
             state: state,
             startup: const StartupArguments(),
@@ -151,6 +158,80 @@ void main() {
       expect(find.byKey(const ValueKey('push-dialog')), findsOneWidget);
       expect(find.byKey(const ValueKey('push-dialog-error')), findsOneWidget);
       expect(find.textContaining('推送需要一个播放地址'), findsOneWidget);
+      expect(find.byType(PushDetailPage), findsNothing);
+    });
+
+    testWidgets('窄窗大字下长路径错误仍可阅读且操作可达', (tester) async {
+      const capture = String.fromEnvironment('PUSH_ERROR_CAPTURE');
+      final key = capture.isEmpty ? null : GlobalKey();
+      if (key != null) {
+        expect(capture, anyOf('before', 'after'));
+        await tester.runAsync(
+          () => loadFixtureFonts(cjkFamily: 'Noto Sans CJK SC'),
+        );
+      }
+      await mountShell(tester, captureKey: key);
+      tester.view.physicalSize = const Size(1024, 640);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+      await openDialog(tester);
+      final path = [
+        tempDir.path,
+        for (var i = 0; i < 12; i++) List.filled(76, '片').join(),
+        'missing.mkv',
+      ].join(Platform.pathSeparator);
+      final submit = find.byKey(const ValueKey('push-dialog-play'));
+      await tester.enterText(
+        find.byKey(const ValueKey('push-dialog-url')),
+        path,
+      );
+      await tester.tap(submit);
+      await settle(tester);
+
+      final exception = tester.takeException();
+      if (key != null) {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(key),
+        );
+        await tester.runAsync(() async {
+          final image = await boundary.toImage();
+          try {
+            final data = (await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            ))!;
+            await File(
+              '../../.local/ui-quality-sweep/root/push-error-$capture.png',
+            ).writeAsBytes(
+              data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+            );
+          } finally {
+            image.dispose();
+          }
+        });
+      }
+      expect(exception, isNull);
+      final error = find.byKey(const ValueKey('push-dialog-error'));
+      final dialog = find.byKey(const ValueKey('push-dialog'));
+      expect(find.textContaining('本地文件不存在'), findsOneWidget);
+      final errorScroll = find.ancestor(
+        of: error,
+        matching: find.byType(Scrollable),
+      );
+      final position = tester.state<ScrollableState>(errorScroll).position;
+      expect(position.maxScrollExtent, greaterThan(0));
+      expect(
+        tester.getRect(dialog).overlaps(tester.getRect(errorScroll)),
+        isTrue,
+      );
+      await tester.drag(errorScroll, const Offset(0, -90));
+      await settle(tester);
+      expect(position.pixels, greaterThan(0));
+      expect(submit.hitTestable(), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('push-dialog-close')).hitTestable(),
+        findsOneWidget,
+      );
       expect(find.byType(PushDetailPage), findsNothing);
     });
 

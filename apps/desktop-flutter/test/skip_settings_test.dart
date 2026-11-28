@@ -15,6 +15,7 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/intro_skip_options_page.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/settings_layout.dart';
 
 AppPaths _tempPaths(Directory temp) => AppPaths.resolve(
   overrides: {
@@ -332,7 +333,7 @@ void main() {
       await reveal(tester, modeTile);
       final dropdownFinder = find.descendant(
         of: modeTile,
-        matching: find.byType(DropdownButton<SkipMode>),
+        matching: find.byType(SettingsDropdown<SkipMode>),
       );
       final dropdown = tester.widget<DropdownButton<SkipMode>>(dropdownFinder);
       expect(dropdown.value, SkipMode.off);
@@ -397,7 +398,7 @@ void main() {
       await reveal(tester, modeTile);
       final dropdownFinder = find.descendant(
         of: modeTile,
-        matching: find.byType(DropdownButton<SkipMode>),
+        matching: find.byType(SettingsDropdown<SkipMode>),
       );
       await tester.tap(dropdownFinder);
       await tester.pumpAndSettle();

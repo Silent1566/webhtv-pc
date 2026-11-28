@@ -92,6 +92,16 @@ void main(){
     }
   });
 
+  Future<void> restored(WidgetTester tester) async {
+    final deadline = Stopwatch()..start();
+    while (!state.log.entries.any((entry) => entry.message.contains('event=cache_restore')) &&
+        deadline.elapsed < const Duration(seconds: 5)) {
+      await tester.runAsync(() => Future<void>(() {}));
+      await tester.pump();
+    }
+    expect(state.log.entries.any((entry) => entry.message.contains('event=cache_restore')), isTrue);
+  }
+
   Future<void> pump(WidgetTester tester,{bool settle=true})async{
     tester.view.physicalSize=const Size(1280,800);
     tester.view.devicePixelRatio=1;
@@ -111,7 +121,11 @@ void main(){
         });
         },
       )))));
-    if(settle) await tester.pumpAndSettle();
+    if(settle) {
+      await tester.pumpAndSettle();
+      await restored(tester);
+      await tester.pumpAndSettle();
+    }
   }
 
   Finder rail()=>find.byType(HomeRailView,skipOffstage:false);
@@ -154,7 +168,7 @@ void main(){
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('重启离线时第一帧即恢复本地宽图，后台未完成也不退回轨道', (tester)async{
+  testWidgets('重启离线时首帧同高占位，异步本地宽图不等网络也不退回轨道', (tester)async{
     // 与生产scope相同，但不调用任何页面私有方法：这个摘要只绑定当前来源/字段/header。
     final scope=sha256.convert(utf8.encode(jsonEncode([
       state.activeSourceKey,state.metaPipeline.toJson(),state.externalMetaEnabled,
@@ -183,8 +197,23 @@ void main(){
     });
     final cachedImage=PaintingBinding.instance.imageCache;
     cachedImage.clear();cachedImage.clearLiveImages();
-    // 网络验证故意一直未完成；read只依赖已经落盘的图片字节。
-    await tester.runAsync(() => pump(tester,settle:false));
+    // 网络验证故意一直未完成；后台readAsync只依赖已经落盘的图片字节。
+    await pump(tester,settle:false);
+    final placeholder = find.byKey(const ValueKey('home-hero-startup-placeholder'));
+    expect(placeholder, findsOneWidget);
+    expect(tester.getSize(placeholder).height, 800);
+    final placeholderRailY = tester.getTopLeft(rail()).dy;
+    // Decode the real fixture file in the real-I/O zone before the async
+    // projection mounts FileImage; fake-zone pending streams cannot be awaited.
+    await tester.runAsync(() async {
+      final saved = HomeHeroStartupCache(directory: dir).read(scope).single;
+      await precacheImage(FileImage(File(saved.filePath)), tester.element(rail()));
+    });
+    await restored(tester);
+    await tester.pump();
+    expect(tester.getTopLeft(rail()).dy, placeholderRailY,
+      reason: '异步缓存只替换同高占位，不等待网络也不移动轨道');
+    debugPrint('PERF offlinePlaceholderHeight=800 railY=$placeholderRailY cachedRailY=${tester.getTopLeft(rail()).dy}');
     final hero=tester.widget<HomeHero>(find.byType(HomeHero));
     expect(hero.items.single.title,'上次缓存的剧集');
     expect(hero.items.single.backdrop,startsWith('file:'));

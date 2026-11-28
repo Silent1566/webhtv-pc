@@ -271,7 +271,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           onChanged: (_) => _changed(),
           decoration: InputDecoration(
             labelText: '${_promptLabels[key]}提示词',
-            border: const OutlineInputBorder(),
           ),
         ),
         Align(
@@ -313,7 +312,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           decoration: InputDecoration(
             labelText: '模型',
             hintText: 'gpt-4.1-mini',
-            border: const OutlineInputBorder(),
             helperText: _modelOptions.isEmpty
                 ? null
                 : '已拉取 ${_modelOptions.length} 个模型：可下拉选择，也可继续手动输入',
@@ -337,10 +335,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           Container(
             key: const ValueKey('ai-model-options'),
             constraints: const BoxConstraints(maxHeight: 240),
-            decoration: BoxDecoration(
-              border: Border.all(color: theme.dividerColor),
-              borderRadius: BorderRadius.circular(8),
-            ),
+            padding: const EdgeInsets.all(1),
             child: matches.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(AppSpace.md),
@@ -436,22 +431,19 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
+    return SettingsRouteScaffold(
       key: const ValueKey('ai-settings-page'),
-      appBar: AppBar(
-        title: const Text('AI 助手'),
-        actions: [
-          // 对称入口：业务页的齿轮指到本页（ai_integration_widgets.dart），
-          // 本页也必须能回指——否则从设置点进「AI 助手」就再也到不了阅读器。
-          IconButton(
-            key: const ValueKey('ai-settings-open-business'),
-            tooltip: 'AI 业务与阅读器',
-            onPressed: () =>
-                openAiBusiness(context, widget.state, replace: true),
-            icon: const Icon(Icons.auto_awesome_outlined),
-          ),
-        ],
-      ),
+      title: const Text('AI 助手'),
+      actions: [
+        // 对称入口：业务页的齿轮指到本页（ai_integration_widgets.dart），
+        // 本页也必须能回指——否则从设置点进「AI 助手」就再也到不了阅读器。
+        IconButton(
+          key: const ValueKey('ai-settings-open-business'),
+          tooltip: 'AI 业务与阅读器',
+          onPressed: () => openAiBusiness(context, widget.state, replace: true),
+          icon: const Icon(Icons.auto_awesome_outlined),
+        ),
+      ],
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -478,12 +470,11 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 contentPadding: EdgeInsets.zero,
               ),
               const SizedBox(height: AppSpace.md),
-              DropdownButtonFormField<String>(
+              SettingsDropdownField<String>(
                 key: const ValueKey('ai-protocol'),
                 initialValue: _protocol,
                 decoration: const InputDecoration(
                   labelText: '协议',
-                  border: OutlineInputBorder(),
                 ),
                 items: const [
                   DropdownMenuItem(
@@ -516,7 +507,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   errorText: _endpointError,
                   labelText: '端点',
                   hintText: 'https://api.openai.com/v1/responses',
-                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppSpace.md),
@@ -534,7 +524,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 obscureText: !_revealKey,
                 decoration: InputDecoration(
                   labelText: 'API Key',
-                  border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
                     tooltip: _revealKey ? '隐藏' : '显示',
                     onPressed: () => setState(() => _revealKey = !_revealKey),
@@ -551,7 +540,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 onChanged: (_) => _changed(),
                 decoration: const InputDecoration(
                   labelText: 'User-Agent（可选）',
-                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppSpace.md),
@@ -566,7 +554,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   helperText:
                       '默认 300 秒（5 分钟），可设 30–1800。推荐、画像这类长输出'
                       '在小模型或慢中转上容易超时，按需调大。',
-                  border: OutlineInputBorder(),
                 ),
               ),
             ],

@@ -10,6 +10,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -24,10 +25,18 @@ import 'image_header_scope.dart';
 import 'live_playback_session.dart';
 import 'player_page.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 import 'toast.dart';
 
 class LivePage extends StatefulWidget {
-  const LivePage({super.key, required this.state, this.clock});
+  const LivePage({
+    super.key,
+    required this.state,
+    this.clock,
+    this.shellUnderlap = false,
+  });
+
+  final bool shellUnderlap;
 
   final AppState state;
 
@@ -118,6 +127,7 @@ class _LivePageState extends State<LivePage> {
 
   /// 加载指定直播源（带缓存；失败只记录到该源的状态）。
   Future<void> unawaitedLoad(LiveSource source, {bool refresh = false}) async {
+    final previous = _states[source.name]?.result?.playlist;
     setState(() {
       _states[source.name] = _SourceState(loading: true);
     });
@@ -126,6 +136,9 @@ class _LivePageState extends State<LivePage> {
       if (!mounted) return;
       setState(() {
         _states[source.name] = _SourceState(result: result);
+        if (refresh && source.name == _selectedSourceName) {
+          _reconcilePreview(previous, result.playlist);
+        }
       });
       _state.log.info(
         '直播源已加载 name=${source.name} channels=${result.playlist.channelCount} '
@@ -145,6 +158,33 @@ class _LivePageState extends State<LivePage> {
         scope: 'live',
       );
     }
+  }
+
+  void _reconcilePreview(LivePlaylist? previous, LivePlaylist playlist) {
+    final preview = _preview;
+    if (preview == null) return;
+    final channels = playlist.allChannels;
+    if (channels.contains(preview)) return;
+
+    // 沿用 LivePlaylist.channelById 的频道名匹配；同名有歧义时不自动换台。
+    final id = preview.name.trim().toLowerCase();
+    bool matches(LiveChannel channel) => channel.name.toLowerCase() == id;
+    final oldMatch = previous?.allChannels.where(matches).singleOrNull;
+    final replacement = identical(oldMatch, preview)
+        ? channels.where(matches).singleOrNull
+        : null;
+    final oldIndex = _previewLine;
+    _preview = replacement;
+    _previewLine = null;
+    if (replacement == null || oldIndex == null) return;
+
+    final oldUrls = preview.urls.where((url) => url.trim().isNotEmpty).toList();
+    if (oldIndex >= oldUrls.length) return;
+    final index = replacement.urls
+        .where((url) => url.trim().isNotEmpty)
+        .toList()
+        .indexOf(oldUrls[oldIndex]);
+    if (index >= 0) _previewLine = index;
   }
 
   /// EPG 地址：清单 `url-tvg`（M3U）优先，其次直播源声明的 `epg`。
@@ -345,9 +385,14 @@ class _LivePageState extends State<LivePage> {
 
   @override
   Widget build(BuildContext context) {
+    final shellTop = widget.shellUnderlap ? kShellContentTopInset : 0.0;
+    Widget belowBar(Widget child) => Padding(
+      padding: EdgeInsets.only(top: shellTop),
+      child: child,
+    );
     final sources = _sources;
     if (sources.isEmpty) {
-      return const _LiveEmptyState();
+      return belowBar(const _LiveEmptyState());
     }
 
     final selected = sources.firstWhere(
@@ -368,51 +413,67 @@ class _LivePageState extends State<LivePage> {
         children: [
           SizedBox(
             width: (constraints.maxWidth * .22).clamp(176.0, 240.0),
-            child: _SourceList(
-              sources: sources,
-              selected: selected,
-              states: _states,
-              onSelect: (source) {
-                setState(() {
-                  _selectedSourceName = source.name;
-                  _preview = null;
-                  _previewLine = null;
-                });
-                if (_states[source.name]?.result == null) unawaitedLoad(source);
-              },
-              onRefresh: () => unawaitedLoad(selected, refresh: true),
+            child: Material(
+              type: MaterialType.transparency,
+              child: _SourceList(
+                sources: sources,
+                viewportBottom: widget.shellUnderlap
+                    ? constraints.maxHeight
+                    : null,
+                selected: selected,
+                states: _states,
+                onSelect: (source) {
+                  setState(() {
+                    _selectedSourceName = source.name;
+                    _preview = null;
+                    _previewLine = null;
+                  });
+                  if (_states[source.name]?.result == null) {
+                    unawaitedLoad(source);
+                  }
+                },
+                onRefresh: () => unawaitedLoad(selected, refresh: true),
+              ),
             ),
           ),
-          const VerticalDivider(width: 1),
+          belowBar(const SizedBox(width: 1)),
           Expanded(
-            child: switch (state) {
-              null => const LoadingBlock(),
-              _SourceState(loading: true) => const LoadingBlock(),
-              _SourceState(error: final error?) => _LiveErrorView(
-                error: error,
-                onRetry: () => unawaitedLoad(selected, refresh: true),
-              ),
-              _SourceState(result: final result?) => _PlaylistView(
-                playlist: result.playlist,
-                guide: guide,
-                nowMs: _nowMs,
-                epgLoading: guideLoading,
-                epgError: guideError,
-                onRefreshEpg: guideUrl == null
-                    ? null
-                    : () => unawaited(_loadGuideFor(result, refresh: true)),
-                preview: _preview,
-                previewLine: _previewLine,
-                onPreview: (channel) => setState(() {
-                  _preview = channel;
-                  _previewLine = null;
-                }),
-                onPlay: _play,
-                defaultCatchup: selected.catchup,
-                onCatchup: _playCatchup,
-              ),
-              _ => const SizedBox.shrink(),
-            },
+            child: Material(
+              type: MaterialType.transparency,
+              child: switch (state) {
+                null => belowBar(const LoadingBlock()),
+                _SourceState(loading: true) => belowBar(const LoadingBlock()),
+                _SourceState(error: final error?) => belowBar(
+                  _LiveErrorView(
+                    error: error,
+                    onRetry: () => unawaitedLoad(selected, refresh: true),
+                  ),
+                ),
+                _SourceState(result: final result?) => _PlaylistView(
+                  playlist: result.playlist,
+                  viewportBottom: widget.shellUnderlap
+                      ? constraints.maxHeight
+                      : null,
+                  guide: guide,
+                  nowMs: _nowMs,
+                  epgLoading: guideLoading,
+                  epgError: guideError,
+                  onRefreshEpg: guideUrl == null
+                      ? null
+                      : () => unawaited(_loadGuideFor(result, refresh: true)),
+                  preview: _preview,
+                  previewLine: _previewLine,
+                  onPreview: (channel) => setState(() {
+                    _preview = channel;
+                    _previewLine = null;
+                  }),
+                  onPlay: _play,
+                  defaultCatchup: selected.catchup,
+                  onCatchup: _playCatchup,
+                ),
+                _ => const SizedBox.shrink(),
+              },
+            ),
           ),
         ],
       ),
@@ -433,6 +494,7 @@ class _SourceState {
 class _SourceList extends StatelessWidget {
   const _SourceList({
     required this.sources,
+    required this.viewportBottom,
     required this.selected,
     required this.states,
     required this.onSelect,
@@ -440,6 +502,7 @@ class _SourceList extends StatelessWidget {
   });
 
   final List<LiveSource> sources;
+  final double? viewportBottom;
   final LiveSource selected;
   final Map<String, _SourceState> states;
   final ValueChanged<LiveSource> onSelect;
@@ -450,6 +513,8 @@ class _SourceList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (viewportBottom != null)
+          const SizedBox(height: kShellContentTopInset),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 8, 4),
           child: Row(
@@ -465,40 +530,46 @@ class _SourceList extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            itemCount: sources.length,
-            itemBuilder: (context, index) {
-              final source = sources[index];
-              final state = states[source.name];
-              final selectedHere = source.name == selected.name;
-              return ListTile(
-                dense: true,
-                selected: selectedHere,
-                leading: Icon(_iconForType(source.type), size: 18),
-                title: Tooltip(
-                  message: source.name,
-                  child: Text(
-                    source.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+          child: ShellScrollUnderlap(
+            viewportBottom: viewportBottom,
+            builder: (context, _, leading) => ListView.builder(
+              padding: viewportBottom == null
+                  ? null
+                  : EdgeInsets.only(top: leading),
+              itemCount: sources.length,
+              itemBuilder: (context, index) {
+                final source = sources[index];
+                final state = states[source.name];
+                final selectedHere = source.name == selected.name;
+                return ListTile(
+                  dense: true,
+                  selected: selectedHere,
+                  leading: Icon(_iconForType(source.type), size: 18),
+                  title: Tooltip(
+                    message: source.name,
+                    child: Text(
+                      source.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                subtitle: Text(
-                  _subtitleFor(state),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                trailing: state?.loading == true
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: LoadingBlock(center: false),
-                      )
-                    : null,
-                onTap: () => onSelect(source),
-              );
-            },
+                  subtitle: Text(
+                    _subtitleFor(state),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  trailing: state?.loading == true
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: LoadingBlock(center: false),
+                        )
+                      : null,
+                  onTap: () => onSelect(source),
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -530,6 +601,7 @@ class _SourceList extends StatelessWidget {
 class _PlaylistView extends StatefulWidget {
   const _PlaylistView({
     required this.playlist,
+    required this.viewportBottom,
     required this.guide,
     required this.nowMs,
     required this.epgLoading,
@@ -544,6 +616,7 @@ class _PlaylistView extends StatefulWidget {
   });
 
   final LivePlaylist playlist;
+  final double? viewportBottom;
   final EpgGuide? guide;
   final int nowMs;
   final bool epgLoading;
@@ -568,7 +641,45 @@ class _PlaylistViewState extends State<_PlaylistView> {
   /// 分组以抽屉层级展示：点分组名在中间列展开分组列表，
   /// 选完自动收起并定位到该分组的频道。
   bool _groupDrawerOpen = false;
-  static const _rowHeight = 64.0;
+  static const _baseRowHeight = 64.0;
+  double _rowHeight = _baseRowHeight;
+
+  double _measureRowHeight(BuildContext context, TextTheme textTheme) {
+    final scaler = MediaQuery.textScalerOf(context);
+    if (scaler == TextScaler.noScaling) return _baseRowHeight;
+
+    final defaultStyle = DefaultTextStyle.of(context);
+    final boldText = MediaQuery.boldTextOf(context);
+    final painter = TextPainter(
+      textDirection: Directionality.of(context),
+      textScaler: scaler,
+      locale: Localizations.maybeLocaleOf(context),
+      textHeightBehavior: defaultStyle.textHeightBehavior,
+      maxLines: 1,
+    );
+    double lineHeight(String sample, TextStyle? style) {
+      final merged = defaultStyle.style.merge(style);
+      painter.text = TextSpan(
+        text: sample,
+        style: boldText
+            ? merged.merge(const TextStyle(fontWeight: FontWeight.bold))
+            : merged,
+      );
+      painter.layout();
+      return painter.height;
+    }
+
+    // 预留节目行，避免加载节目单后改变滚动位置。
+    final channel =
+        lineHeight('频道 A', textTheme.bodyMedium) +
+        lineHeight('2 线路', textTheme.bodySmall) +
+        lineHeight('00:00 直播节目', textTheme.bodySmall) +
+        AppSpace.sm;
+    final group =
+        lineHeight('分组 A（2）', textTheme.titleSmall) + AppSpace.xl + AppSpace.sm;
+    painter.dispose();
+    return math.max(_baseRowHeight, math.max(channel, group).ceilToDouble());
+  }
 
   @override
   void initState() {
@@ -609,10 +720,11 @@ class _PlaylistViewState extends State<_PlaylistView> {
   }
 
   /// 分组抽屉里的一行：名字 + 频道数，当前分组高亮。
-  Widget _buildGroupDrawer(ThemeData theme) {
+  Widget _buildGroupDrawer(ThemeData theme, EdgeInsets? padding) {
     final groups = widget.playlist.groups;
     return ListView.builder(
       key: const ValueKey('live-group-list'),
+      padding: padding,
       itemExtent: 56,
       itemCount: groups.length,
       itemBuilder: (context, index) {
@@ -677,24 +789,35 @@ class _PlaylistViewState extends State<_PlaylistView> {
   @override
   Widget build(BuildContext context) {
     if (widget.playlist.groups.isEmpty) {
-      return const EmptyState(
-        icon: Icons.tv_off_outlined,
-        title: '该直播源没有解析出任何频道',
+      return Padding(
+        padding: EdgeInsets.only(
+          top: widget.viewportBottom == null ? 0 : kShellContentTopInset,
+        ),
+        child: const EmptyState(
+          icon: Icons.tv_off_outlined,
+          title: '该直播源没有解析出任何频道',
+        ),
       );
     }
     final theme = Theme.of(context);
+    _rowHeight = _measureRowHeight(context, theme.textTheme);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _EpgStatusBar(
-          guide: widget.guide,
-          loading: widget.epgLoading,
-          error: widget.epgError,
-          sourceDeclared:
-              widget.playlist.epg != null || widget.onRefreshEpg != null,
-          onRefresh: widget.onRefreshEpg,
+        if (widget.viewportBottom != null)
+          const SizedBox(height: kShellContentTopInset),
+        Material(
+          type: MaterialType.transparency,
+          child: _EpgStatusBar(
+            guide: widget.guide,
+            loading: widget.epgLoading,
+            error: widget.epgError,
+            sourceDeclared:
+                widget.playlist.epg != null || widget.onRefreshEpg != null,
+            onRefresh: widget.onRefreshEpg,
+          ),
         ),
-        const Divider(height: 1),
+        const SizedBox(height: 1),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) => Row(
@@ -746,55 +869,65 @@ class _PlaylistViewState extends State<_PlaylistView> {
                           ),
                         ),
                       ),
-                      const Divider(height: 1),
+                      const SizedBox(height: 1),
                       Expanded(
-                        child: _groupDrawerOpen
-                            ? _buildGroupDrawer(theme)
-                            : ListView.builder(
-                                key: const ValueKey('live-channel-list'),
-                                controller: _scroll,
-                                itemExtent: _rowHeight,
-                                itemCount: _rows.length,
-                                itemBuilder: (context, index) {
-                                  final row = _rows[index];
-                                  if (row is LiveGroup) {
-                                    return Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        AppSpace.md,
-                                        AppSpace.xl,
-                                        AppSpace.md,
-                                        AppSpace.sm,
-                                      ),
-                                      child: Tooltip(
-                                        message: row.name,
-                                        child: Text(
-                                          '${row.name}（${row.channels.length}）',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: theme.textTheme.titleSmall,
+                        child: ShellScrollUnderlap(
+                          viewportBottom: widget.viewportBottom,
+                          builder: (context, _, leading) {
+                            final padding = widget.viewportBottom == null
+                                ? null
+                                : EdgeInsets.only(top: leading);
+                            return _groupDrawerOpen
+                                ? _buildGroupDrawer(theme, padding)
+                                : ListView.builder(
+                                    padding: padding,
+                                    key: const ValueKey('live-channel-list'),
+                                    controller: _scroll,
+                                    itemExtent: _rowHeight,
+                                    itemCount: _rows.length,
+                                    itemBuilder: (context, index) {
+                                      final row = _rows[index];
+                                      if (row is LiveGroup) {
+                                        return Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            AppSpace.md,
+                                            AppSpace.xl,
+                                            AppSpace.md,
+                                            AppSpace.sm,
+                                          ),
+                                          child: Tooltip(
+                                            message: row.name,
+                                            child: Text(
+                                              '${row.name}（${row.channels.length}）',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: theme.textTheme.titleSmall,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                      final channel = row as LiveChannel;
+                                      return _ChannelRow(
+                                        channel: channel,
+                                        guide: widget.guide,
+                                        nowMs: widget.nowMs,
+                                        selected: identical(
+                                          channel,
+                                          widget.preview,
                                         ),
-                                      ),
-                                    );
-                                  }
-                                  final channel = row as LiveChannel;
-                                  return _ChannelRow(
-                                    channel: channel,
-                                    guide: widget.guide,
-                                    nowMs: widget.nowMs,
-                                    selected: identical(
-                                      channel,
-                                      widget.preview,
-                                    ),
-                                    onPreview: () => widget.onPreview(channel),
-                                    onPlay: () => widget.onPlay(channel),
+                                        onPreview: () =>
+                                            widget.onPreview(channel),
+                                        onPlay: () => widget.onPlay(channel),
+                                      );
+                                    },
                                   );
-                                },
-                              ),
+                          },
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const VerticalDivider(width: 1),
+                const SizedBox(width: 1),
                 SizedBox(
                   width: (constraints.maxWidth * .46).clamp(232.0, 340.0),
                   child: widget.preview == null
@@ -809,6 +942,7 @@ class _PlaylistViewState extends State<_PlaylistView> {
                         )
                       : _ChannelDetail(
                           channel: widget.preview!,
+                          viewportBottom: widget.viewportBottom,
                           guide: widget.guide,
                           nowMs: widget.nowMs,
                           selectedLine: widget.previewLine,
@@ -852,17 +986,17 @@ class _EpgStatusBar extends StatelessWidget {
     final guide = this.guide;
     final error = this.error;
 
-    final (IconData icon, String text) = switch ((error, guide)) {
-      (final AppError failed, _) => (
+    final (IconData icon, String text) = switch ((loading, error, guide)) {
+      (true, _, _) => (Icons.hourglass_empty, '节目单加载中…'),
+      (_, final AppError failed, _) => (
         Icons.info_outline,
         describeEpgFailure(failed),
       ),
-      (_, final EpgGuide loaded) => (
+      (_, _, final EpgGuide loaded) => (
         Icons.event_available,
         '节目单：${loaded.totalPrograms} 条 '
             '(${loaded.channels.length} 个频道)',
       ),
-      _ when loading => (Icons.hourglass_empty, '节目单加载中…'),
       _ when sourceDeclared => (Icons.event_busy, '该直播源声明了 EPG 地址，暂未加载'),
       _ => (Icons.event_busy, '该直播源未声明 EPG 地址'),
     };
@@ -874,10 +1008,15 @@ class _EpgStatusBar extends StatelessWidget {
           Icon(icon, size: 16),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall,
-              overflow: TextOverflow.ellipsis,
+            child: Tooltip(
+              message: text,
+              excludeFromSemantics: true,
+              child: Text(
+                text,
+                style: theme.textTheme.bodySmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
           if (loading)
@@ -1043,6 +1182,7 @@ class _ChannelSubtitle extends StatelessWidget {
 class _ChannelDetail extends StatelessWidget {
   const _ChannelDetail({
     required this.channel,
+    required this.viewportBottom,
     required this.guide,
     required this.nowMs,
     required this.onPlay,
@@ -1052,6 +1192,7 @@ class _ChannelDetail extends StatelessWidget {
   });
 
   final LiveChannel channel;
+  final double? viewportBottom;
   final EpgGuide? guide;
   final int nowMs;
   final ValueChanged<int> onPlay;
@@ -1100,12 +1241,18 @@ class _ChannelDetail extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           header,
-          const Divider(height: 1),
+          const SizedBox(height: 1),
           Expanded(
-            child: _LineList(
-              channel: channel,
-              onPlay: onPlay,
-              selectedLine: selectedLine,
+            child: ShellScrollUnderlap(
+              viewportBottom: viewportBottom,
+              builder: (context, _, leading) => _LineList(
+                channel: channel,
+                onPlay: onPlay,
+                selectedLine: selectedLine,
+                padding: viewportBottom == null
+                    ? null
+                    : EdgeInsets.only(top: leading),
+              ),
             ),
           ),
         ],
@@ -1126,22 +1273,31 @@ class _ChannelDetail extends StatelessWidget {
               Tab(height: 34, text: '线路'),
             ],
           ),
-          const Divider(height: 1),
+          const SizedBox(height: 1),
           Expanded(
-            child: TabBarView(
-              children: [
-                _ProgramList(
-                  programs: programs,
-                  nowMs: nowMs,
-                  catchup: catchup,
-                  onCatchup: onCatchup,
-                ),
-                _LineList(
-                  channel: channel,
-                  onPlay: onPlay,
-                  selectedLine: selectedLine,
-                ),
-              ],
+            child: ShellScrollUnderlap(
+              viewportBottom: viewportBottom,
+              builder: (context, _, leading) => TabBarView(
+                children: [
+                  _ProgramList(
+                    programs: programs,
+                    padding: viewportBottom == null
+                        ? null
+                        : EdgeInsets.only(top: leading),
+                    nowMs: nowMs,
+                    catchup: catchup,
+                    onCatchup: onCatchup,
+                  ),
+                  _LineList(
+                    channel: channel,
+                    padding: viewportBottom == null
+                        ? null
+                        : EdgeInsets.only(top: leading),
+                    onPlay: onPlay,
+                    selectedLine: selectedLine,
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -1153,6 +1309,7 @@ class _ChannelDetail extends StatelessWidget {
 /// 节目单列表：当前节目高亮，已播出置灰（§13.3「显示当前节目」）。
 class _ProgramList extends StatelessWidget {
   const _ProgramList({
+    this.padding,
     required this.programs,
     required this.nowMs,
     required this.catchup,
@@ -1164,10 +1321,13 @@ class _ProgramList extends StatelessWidget {
   final CatchupSpec catchup;
   final ValueChanged<EpgProgram> onCatchup;
 
+  final EdgeInsets? padding;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return ListView.builder(
+      padding: padding,
       itemCount: programs.length,
       itemBuilder: (context, index) {
         final program = programs[index];
@@ -1215,6 +1375,7 @@ class _ProgramList extends StatelessWidget {
 /// 频道线路列表（多线路逐个可选，§13.3）。
 class _LineList extends StatelessWidget {
   const _LineList({
+    this.padding,
     required this.channel,
     required this.onPlay,
     required this.selectedLine,
@@ -1224,10 +1385,13 @@ class _LineList extends StatelessWidget {
   final ValueChanged<int> onPlay;
   final int? selectedLine;
 
+  final EdgeInsets? padding;
+
   @override
   Widget build(BuildContext context) {
     final urls = channel.urls.where((url) => url.trim().isNotEmpty).toList();
     return ListView.builder(
+      padding: padding,
       itemCount: urls.length,
       itemBuilder: (context, index) => Tooltip(
         message: urls[index],

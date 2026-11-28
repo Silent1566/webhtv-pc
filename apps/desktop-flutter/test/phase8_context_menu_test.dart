@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tokens.dart';
@@ -17,7 +18,7 @@ Widget wrap(Widget child) => MaterialApp(
 /// 「这一列多大、落在哪儿」要落在真正的表面上。
 Finder get columnSurfaces => find.descendant(
   of: find.byType(PlayerContextMenu),
-  matching: find.byType(Material),
+  matching: find.byType(GlassPane),
 );
 
 /// 第 1 列（主列）的表面。
@@ -717,9 +718,7 @@ void main() {
       );
     });
 
-    testWidgets('表面与发丝边：nightSurface3 @ 0.96 + 1px outlineVariant @ 0.72', (
-      tester,
-    ) async {
+    testWidgets('表面使用不采样视频的玻璃与原圆角', (tester) async {
       await tester.pumpWidget(
         wrap(
           PlayerContextMenu(
@@ -735,19 +734,10 @@ void main() {
           ),
         ),
       );
-      final material = tester.widget<Material>(menuSurface);
-      expect(material.elevation, 0);
-      // 底色 design/04 §5.6：nightSurface3 @ 0.96。
-      expect(material.color, AppPalette.nightSurface3.withValues(alpha: 0.96));
-      final shape = material.shape! as RoundedRectangleBorder;
-      // 圆角 = AppRadius.mdAll（10px）。
-      expect(shape.borderRadius, AppRadius.mdAll);
-      // 发丝边 1px 且是 outlineVariant @ 0.72（暗色下就是 nightLine）。
-      // 断言的是 `shape` 而不是另包的 DecoratedBox：`Material` 用
-      // `ShapeBorderClipper` 裁内容，边由同一套实现画出，1px 不会被裁掉半像素。
-      expect(shape.side.width, 1.0);
-      expect(shape.side.color, AppPalette.nightLine.withValues(alpha: 0.72));
-      expect(material.shape, isNot(isA<StadiumBorder>()));
+      final pane = tester.widget<GlassPane>(menuSurface);
+      expect(pane.blurBackdrop, isFalse);
+      expect(pane.borderRadius, AppRadius.mdAll);
+      expect(find.byType(BackdropFilter), findsNothing);
     });
 
     testWidgets('图标按 item.icon 渲染', (tester) async {

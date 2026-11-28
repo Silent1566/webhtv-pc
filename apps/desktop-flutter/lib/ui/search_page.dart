@@ -27,6 +27,8 @@ import '../core/hot_rank_layout.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_identity.dart';
 import '../core/ai_content/recommendation.dart';
+import 'glass_widgets.dart';
+import 'tmdb_widgets.dart' show ContentMenuBorder;
 import 'speech_search_button.dart';
 import 'ai_integration_widgets.dart';
 import '../services/search_suggest_service.dart';
@@ -34,6 +36,7 @@ import '../state/app_state.dart';
 import '../state/search_state.dart';
 import 'browse_pages.dart';
 import 'common.dart';
+import 'glass_chrome.dart';
 import 'search_result_view.dart';
 import 'tokens.dart';
 
@@ -52,10 +55,12 @@ class SearchPage extends StatefulWidget {
     this.identityHint,
     this.resumeSeed,
     this.useExistingResults = false,
+    this.shellUnderlap = false,
   });
 
   final AppState state;
   final bool useExistingResults;
+  final bool shellUnderlap;
 
   /// 预填关键词（纯 TMDB 详情页「搜索站源」入口带入标题，`04` §6.2）。
   final String? initialKeyword;
@@ -76,6 +81,7 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
+  final LayerLink _toolbarLink = LayerLink();
 
   /// 联想层可见性：输入非空且获得焦点时展开。
   bool _suggestVisible = false;
@@ -292,7 +298,12 @@ class _SearchPageState extends State<SearchPage> {
     final groups = _state.searchScopeGroups;
     final scoped = _scopeScoped;
     return PopupMenuButton<String>(
+      shape: ContentMenuBorder(Theme.of(context)),
+      color: Theme.of(context).colorScheme.surfaceContainerHigh
+          .withValues(alpha: .97),
+      elevation: 0,
       key: const ValueKey('search-scope'),
+      borderRadius: AppRadius.mdAll,
       tooltip: '搜索范围',
       position: PopupMenuPosition.under,
       onSelected: _onScopeSelected,
@@ -319,17 +330,17 @@ class _SearchPageState extends State<SearchPage> {
             child: Text('分组：$group'),
           ),
       ],
-      child: Container(
+      child: Ink(
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpace.md,
-          vertical: AppSpace.md,
+          horizontal: AppSpace.md + 1,
+          vertical: AppSpace.md + 1,
         ),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: scoped ? scheme.primary : scheme.outlineVariant,
-          ),
-          borderRadius: AppRadius.mdAll,
-        ),
+        decoration: scoped
+            ? BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: AppRadius.mdAll,
+              )
+            : null,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -339,7 +350,14 @@ class _SearchPageState extends State<SearchPage> {
               color: scoped ? scheme.primary : scheme.onSurfaceVariant,
             ),
             const SizedBox(width: AppSpace.sm),
-            Text(_scopeLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+              _scopeLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: scoped
+                  ? TextStyle(color: scheme.onPrimaryContainer)
+                  : null,
+            ),
             const Icon(Icons.arrow_drop_down, size: 20),
           ],
         ),
@@ -403,42 +421,78 @@ class _SearchPageState extends State<SearchPage> {
     // 输入时冒出来。）
     final showLanding = !hasKeyword;
 
-    return Stack(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(AppSpace.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildInputRow(searching, hasKeyword, outcome != null),
-              const SizedBox(height: AppSpace.md),
-              if (searching)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: AppSpace.sm),
-                  child: LinearProgressIndicator(minHeight: 2),
-                ),
-              Expanded(
-                child: showLanding
-                    ? _buildLanding()
-                    : _buildResultsArea(outcome),
+    final shellTop = widget.shellUnderlap ? kShellContentTopInset : 0.0;
+    return LayoutBuilder(
+      builder: (context, page) {
+        final viewportBottom = widget.shellUnderlap
+            ? page.maxHeight - AppSpace.lg
+            : null;
+        return Stack(
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                AppSpace.lg,
+                shellTop + AppSpace.lg,
+                AppSpace.lg,
+                AppSpace.lg,
               ),
-            ],
-          ),
-        ),
-        // 联想下拉层：覆盖在输入框正下方。
-        //
-        // 必须包一层 `TextFieldTapRegion`：它把面板归入输入框的「点击区域组」，
-        // 于是点面板不会被 `TextField.onTapOutside` 当成「点外部」——否则面板会
-        // 在点击的落下与抬起之间被卸载，`ListTile.onTap` 永远收不到
-        // （实测缺陷，用户 2026-10-14）。
-        if (_suggestVisible && _suggestions != null)
-          Positioned(
-            top: AppSpace.lg + 56,
-            left: AppSpace.lg,
-            right: AppSpace.lg,
-            child: TextFieldTapRegion(child: _buildSuggestPanel()),
-          ),
-      ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CompositedTransformTarget(
+                    link: _toolbarLink,
+                    child: Padding(
+                      // 浮动标签要压在输入框上沿，留出半个标签高的空间。
+                      padding: EdgeInsets.only(
+                        top: MediaQuery.textScalerOf(context)
+                            .scale(AppSpace.sm),
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: _buildInputRow(
+                          searching,
+                          hasKeyword,
+                          outcome != null,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpace.md),
+                  if (searching)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: AppSpace.sm),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  Expanded(
+                    child: showLanding
+                        ? _buildLanding(viewportBottom)
+                        : _buildResultsArea(outcome, viewportBottom),
+                  ),
+                ],
+              ),
+            ),
+            // 联想下拉层：覆盖在输入框正下方。
+            //
+            // 必须包一层 `TextFieldTapRegion`：它把面板归入输入框的「点击区域组」，
+            // 于是点面板不会被 `TextField.onTapOutside` 当成「点外部」——否则面板会
+            // 在点击的落下与抬起之间被卸载，`ListTile.onTap` 永远收不到
+            // （实测缺陷，用户 2026-10-14）。
+            if (_suggestVisible && _suggestions != null)
+              Positioned(
+                top: shellTop + AppSpace.lg,
+                left: AppSpace.lg,
+                right: AppSpace.lg,
+                child: CompositedTransformFollower(
+                  link: _toolbarLink,
+                  targetAnchor: Alignment.bottomLeft,
+                  offset: const Offset(0, AppSpace.sm),
+                  showWhenUnlinked: false,
+                  child: TextFieldTapRegion(child: _buildSuggestPanel()),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -455,7 +509,6 @@ class _SearchPageState extends State<SearchPage> {
               labelText: '搜索影片',
               hintText: '输入片名后回车,或点击搜索',
               prefixIcon: const Icon(Icons.search),
-              border: const OutlineInputBorder(),
             ),
             onSubmitted: (value) => _submit(value),
             // 收起联想面板靠**点击外部**，而**不是**靠失焦。
@@ -523,13 +576,27 @@ class _SearchPageState extends State<SearchPage> {
   /// 用 `Column` + `Expanded` 而不是整体 `ListView`：热门区要「按可用宽高恰好
   /// 铺满」，就必须拿到**有限的**高度约束（`LayoutBuilder` 在无限高的滚动列表里
   /// 只能得到 infinity）。因此历史区按自然高度、热门区吃掉剩下全部空间。
-  Widget _buildLanding() {
+  Widget _buildLanding(double? viewportBottom) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildHistorySection(),
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.md,
+            vertical: AppSpace.sm,
+          ),
+          child: _buildHistorySection(),
+        ),
         const SizedBox(height: AppSpace.lg),
-        Expanded(child: _buildHotSection()),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.md,
+              vertical: AppSpace.sm,
+            ),
+            child: _buildHotSection(viewportBottom),
+          ),
+        ),
       ],
     );
   }
@@ -609,7 +676,7 @@ class _SearchPageState extends State<SearchPage> {
   ///
   /// 点击语义**不是播放**：360kan 不是本应用可播放的站源，点卡片执行的是
   /// 「拿这个片名去各站点搜索」——与原来的词 chips 完全一致，只是换了呈现。
-  Widget _buildHotSection() {
+  Widget _buildHotSection(double? viewportBottom) {
     final pool = _hotRanks[_hotTab] ?? const <SearchSuggestItem>[];
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -629,7 +696,13 @@ class _SearchPageState extends State<SearchPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(height: _hotHeaderHeight, child: _buildHotHeader(layout)),
-            Expanded(child: _buildHotGrid(layout, window)),
+            Expanded(
+              child: ShellScrollUnderlap(
+                viewportBottom: viewportBottom,
+                builder: (context, _, leading) =>
+                    _buildHotGrid(layout, window, leading),
+              ),
+            ),
           ],
         );
       },
@@ -702,13 +775,17 @@ class _SearchPageState extends State<SearchPage> {
   /// 行高取 `layout.cardHeight`（不是常量 254）：可用高摊给实际行数得到的高度，
   /// 网格与卡片两边必须用同一个值，否则算出来的行数与实际显示的行数会不一致
   /// （又出现半行/溢出）。
-  Widget _buildHotGrid(HotRankLayout layout, List<SearchSuggestItem> window) {
+  Widget _buildHotGrid(
+    HotRankLayout layout,
+    List<SearchSuggestItem> window,
+    double leading,
+  ) {
     final theme = Theme.of(context);
     if (window.isEmpty) {
       return Align(
         alignment: Alignment.topLeft,
         child: Padding(
-          padding: const EdgeInsets.only(top: AppSpace.sm),
+          padding: EdgeInsets.only(top: AppSpace.sm + leading),
           child: Text(
             '热门榜单加载失败或为空（断网时可稍后重试）',
             style: theme.textTheme.bodySmall?.copyWith(
@@ -719,7 +796,7 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
     return GridView.builder(
-      padding: EdgeInsets.zero,
+      padding: EdgeInsets.only(top: leading),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: layout.columns,
         mainAxisExtent: layout.cardHeight,
@@ -755,13 +832,10 @@ class _SearchPageState extends State<SearchPage> {
   /// 联想下拉面板。
   Widget _buildSuggestPanel() {
     final items = _suggestions ?? const <SearchSuggestItem>[];
-    return Material(
-      elevation: 6,
+    return GlassPane(
       borderRadius: AppRadius.mdAll,
-      // Material 的 borderRadius 只圆化自身背景，**不裁剪子控件**：不套
-      // ClipRRect 时 ListView 的最后一行会画到圆角外面（实测下拉底部有方角残留）。
-      child: ClipRRect(
-        borderRadius: AppRadius.mdAll,
+      child: Material(
+        type: MaterialType.transparency,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 320),
           child: items.isEmpty
@@ -792,7 +866,10 @@ class _SearchPageState extends State<SearchPage> {
   // 结果区
   // ---------------------------------------------------------------------------
 
-  Widget _buildResultsArea(MultiSiteSearchOutcome? outcome) {
+  Widget _buildResultsArea(
+    MultiSiteSearchOutcome? outcome,
+    double? viewportBottom,
+  ) {
     if (outcome == null) {
       // 有关键字但还没触发搜索（例如输入了但没回车）。
       return const EmptyState(
@@ -805,7 +882,9 @@ class _SearchPageState extends State<SearchPage> {
       return const EmptyState(icon: Icons.search_off_outlined, title: '搜索已取消');
     }
     if (outcome.results.isEmpty) {
-      if (!outcome.finished) return const LoadingBlock();
+      if (!outcome.finished) {
+        return const LoadingBlock();
+      }
       return EmptyState(
         icon: Icons.search_off_outlined,
         title: outcome.succeededCount == 0 && outcome.results.isEmpty
@@ -824,6 +903,10 @@ class _SearchPageState extends State<SearchPage> {
       key: ValueKey('search-results-${outcome.runId}'),
       outcome: outcome,
       keyPrefix: 'search',
+      contentPadding: widget.shellUnderlap
+          ? const EdgeInsets.only(top: kShellContentTopInset)
+          : null,
+      underlapViewportBottom: viewportBottom,
       itemKeyOf: (siteKey, vodId) => 'search-result-$siteKey-$vodId',
       subtitleOf: (siteKey, vod) => vod.vodRemarks,
       siteNameOf: _siteNameOf,

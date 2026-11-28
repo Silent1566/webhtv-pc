@@ -6,7 +6,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show PlatformDispatcher;
+import 'dart:ui' show PlatformDispatcher, SemanticsRole;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -36,7 +36,12 @@ import 'common.dart';
 import 'config_pages.dart';
 import 'config_source_status_view.dart';
 import 'diagnostics_pages.dart';
+import 'desktop_window_frame.dart';
+import 'glass_widgets.dart';
 import 'following_page.dart';
+import 'glass_chrome.dart' show GlassChromeSurface, kShellContentTopInset;
+import 'glass_dialog.dart';
+import 'glass_surface.dart';
 import 'home_page.dart';
 import 'image_header_scope.dart';
 import 'library_pages.dart';
@@ -53,6 +58,7 @@ import 'startup_arguments.dart';
 import 'theme.dart';
 import 'toast.dart';
 import 'tokens.dart';
+import 'wallpaper_backdrop.dart';
 import 'web_home_page.dart';
 import 'window_mode.dart';
 
@@ -164,7 +170,8 @@ Future<void> main(List<String> args) async {
     minimumSize: Size(1024, 640),
     center: true,
     title: 'WebHTV PC',
-    titleBarStyle: TitleBarStyle.normal,
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
   // 注意：`window_manager` 的 `waitUntilReadyToShow` 内部会等待 Flutter
   // 首帧回调后再执行 `then`，而原生 runner 的 `Show()` 也挂在首帧回调上。
@@ -232,18 +239,27 @@ class WebHtvApp extends StatefulWidget {
 
 class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
   late final AppState _state;
+  late String _observedThemeMode;
   bool _bootstrapped = false;
 
   @override
   void initState() {
     super.initState();
     _state = widget.stateFactory?.call() ?? AppState();
+    _observedThemeMode = _state.themeMode;
+    _state.addListener(_onThemeModeChanged);
     // 窗口关闭时标记「正常退出」（崩溃恢复靠它区分强杀）。
     windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       StartupTrace.mark('first-frame');
     });
     _bootstrap();
+  }
+
+  void _onThemeModeChanged() {
+    final mode = _state.themeMode;
+    if (mode == _observedThemeMode) return;
+    setState(() => _observedThemeMode = mode);
   }
 
   Future<void> _bootstrap() async {
@@ -260,7 +276,7 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
 
     final startup = widget.startup;
     if (startup.fullscreen) {
-      await windowManager.setFullScreen(true);
+      await enterPlayerFullscreen();
     }
     if (startup.config != null) {
       await _state.importConfig(startup.config!);
@@ -290,6 +306,7 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    _state.removeListener(_onThemeModeChanged);
     // Toast callbacks can retain this root state across the next app session.
     // Finish them while AppState is still alive, before releasing its owner.
     dismissAllToasts();
@@ -322,8 +339,8 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
       // 海报墙、演职人员头像、剧照查看器等图片位才能统一拿到顶层 `headers` 规则。
       //
       // 为什么要再包一层 `ListenableBuilder`：状态变更只会触发 `AppShell`
-      // （它自己 `addListener`）重建，本 State **没有**监听 `_state`；不监听的话
-      // 配置导入后 builder 不会重跑，规则永远是空表，图片依旧 418。
+      // （它自己 `addListener`）重建，本 State 仅对主题值的变化重建；不监听配置的话
+      // 导入后 builder 不会重跑，规则永远是空表，图片依旧 418。
       // 代价可控：`child` 是 MaterialApp 传下来的同一个 Widget 实例，
       // Flutter 对同一实例会跳过子树重建。
       builder: (context, child) => WindowEscapeShortcuts(
@@ -331,18 +348,23 @@ class _WebHtvAppState extends State<WebHtvApp> with WindowListener {
           listenable: _state,
           builder: (context, _) => ImageHeaderScope(
             rules: _state.effectiveConfig?.headers ?? const <HeaderRule>[],
-            child: Stack(
-              // 通知宿主是 `builder` 的第二个孩子：它因此位于 **Navigator 之上**，
-              // 任何 push 出来的路由与弹出层都盖不住它——"浮在所有页面与对话框之上"
-              // 只有这一个位置成立。
-              //
-              // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
-              // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
-              fit: StackFit.expand,
-              children: [
-                AppMotionScope(child: child ?? const SizedBox.shrink()),
-                const ToastHost(),
-              ],
+            child: WallpaperBackdrop(
+              url: _state.config?.wallpaper,
+              builder: (context, _) => DesktopWindowFrame(
+                child: Stack(
+                  // 通知宿主是 `builder` 的第二个孩子：它因此位于 **Navigator 之上**，
+                  // 任何 push 出来的路由与弹出层都盖不住它——"浮在所有页面与对话框之上"
+                  // 只有这一个位置成立。
+                  //
+                  // `StackFit.expand`：`child` 原本拿到的是整屏紧约束，Stack 默认会把
+                  // 非定位子节点放松，那会让 Navigator 的尺寸取决于内容。
+                  fit: StackFit.expand,
+                  children: [
+                    AppMotionScope(child: child ?? const SizedBox.shrink()),
+                    const ToastHost(),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -435,6 +457,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   // 启动落在首页（用户 2026-11-19 决策）：第一屏回答「今晚看什么」，不是「挑分类」。
   ShellSection _section = ShellSection.home;
+  Widget? _homeHeroBackdrop;
   String _settingsInitialCategory = SettingsCategory.preferences;
   Key _settingsEntryKey = UniqueKey();
 
@@ -1088,10 +1111,14 @@ class _AppShellState extends State<AppShell> {
     final route = DialogRoute<int>(
       context: context,
       themes: InheritedTheme.capture(from: context, to: navigator.context),
+      // 第 4 个键：遮罩是玻璃的采样底。Material 默认的 `Colors.black54` 先把
+      // 页面压暗 54%，玻璃再染底，12px 说明文字只剩 2.76:1（pilot-1 §4-1）。
+      // 亮色因此换成 0.18；暗色 `glassBarrierColor` 返回的就是 `Colors.black54`，
+      // 与 Material 默认完全相同 —— 暗色这一处逐像素不变。
       barrierColor:
           DialogTheme.of(context).barrierColor ??
           Theme.of(context).dialogTheme.barrierColor ??
-          Colors.black54,
+          glassBarrierColor(context),
       traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
       builder: (_) => ConfigSwitcherDialog(
         records: _state.savedConfigs,
@@ -1136,8 +1163,15 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openSitePicker() async {
-    final selected = await showDialog<Site>(
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final route = DialogRoute<Site>(
       context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      barrierColor:
+          DialogTheme.of(context).barrierColor ??
+          Theme.of(context).dialogTheme.barrierColor ??
+          glassBarrierColor(context),
+      traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
       builder: (_) => SitePickerDialog(
         items: _state.siteItems,
         log: _state.log,
@@ -1152,6 +1186,7 @@ class _AppShellState extends State<AppShell> {
         onBlockedChanged: _state.setSiteBlocked,
       ),
     );
+    final selected = await navigator.push(route);
     if (selected == null) return;
     // 本地/在线 HTML 首页条目：它不是爬虫，`selectSite` 会走 [AppState.loadHome]
     // 并得到一次假「站点不可用」。这里直接打开页面宿主（WebView2）。
@@ -1232,6 +1267,10 @@ class _AppShellState extends State<AppShell> {
   Future<void> _openPushDialog() async {
     await showDialog<void>(
       context: context,
+      barrierColor:
+          DialogTheme.of(context).barrierColor ??
+          Theme.of(context).dialogTheme.barrierColor ??
+          glassBarrierColor(context),
       builder: (_) =>
           PushDialog(state: _state, pickLocalFile: _pickLocalMediaPath),
     );
@@ -1280,7 +1319,8 @@ class _AppShellState extends State<AppShell> {
     final text = _state.recoveryCrashLog;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        constraints: const BoxConstraints(maxWidth: 688),
         title: const Text('崩溃日志（最近一段）'),
         content: SizedBox(
           width: 640,
@@ -1337,112 +1377,191 @@ class _AppShellState extends State<AppShell> {
         ),
     ];
 
-    return Scaffold(
-      body: Column(
-        children: [
-          _TopBar(
-            state: _state,
-            onOpenConfig: _openConfigSwitcher,
-            onOpenSitePicker: _openSitePicker,
-            onOpenPush: _openPushDialog,
-          ),
-          Expanded(
-            child: Row(
+    if (_section != ShellSection.home) _homeHeroBackdrop = null;
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(
+        bottomSheetTheme: theme.bottomSheetTheme.copyWith(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+        ),
+      ),
+      child: Scaffold(
+        body: WallpaperBackdrop(
+          url: _state.config?.wallpaper,
+          builder: (context, hasWallpaper) {
+            final heroBackdrop = _homeHeroBackdrop;
+            final hasArtwork = heroBackdrop != null || hasWallpaper;
+            const topInset = EdgeInsets.only(top: kShellContentTopInset);
+            return Stack(
               children: [
-                AppSideBar(
-                  section: _section,
-                  updateCount: _state.followingUpdateCount,
-                  onSelect: (value) => setState(() {
-                    // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
-                    if (value == ShellSection.search) {
-                      _pendingSearchKeyword = null;
-                    }
-                    if (value == ShellSection.settings &&
-                        _section != ShellSection.settings) {
-                      _settingsInitialCategory = SettingsCategory.preferences;
-                      _settingsEntryKey = UniqueKey();
-                    }
-                    _section = value;
-                    if (value == ShellSection.browse) _enterBrowse();
-                  }),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: _WallpaperBackdrop(
-                    url: _state.config?.wallpaper,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AppShellTransition(
-                          sectionIndex: _section.index,
-                          child: _buildContent(),
+                // backdrop 和页面先画，顶栏在最后采样并拥有整个条带的命中。
+                Positioned.fill(child: IgnorePointer(child: heroBackdrop)),
+                Positioned.fill(
+                  child: Row(
+                    children: [
+                      Padding(
+                        padding: topInset,
+                        child: AppSideBar(
+                          section: _section,
+                          updateCount: _state.followingUpdateCount,
+                          onSelect: (value) => setState(() {
+                            // 手动进搜索页 = 一次全新的搜索，丢掉首页带过来的词。
+                            if (value == ShellSection.search) {
+                              _pendingSearchKeyword = null;
+                            }
+                            if (value == ShellSection.settings &&
+                                _section != ShellSection.settings) {
+                              _settingsInitialCategory =
+                                  SettingsCategory.preferences;
+                              _settingsEntryKey = UniqueKey();
+                            }
+                            _section = value;
+                            if (value == ShellSection.browse) _enterBrowse();
+                          }),
                         ),
-                        if (startupNotifications.isNotEmpty)
-                          Positioned.fill(
-                            child: Align(
-                              alignment: Alignment.topCenter,
-                              child: SingleChildScrollView(
-                                primary: false,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: startupNotifications,
-                                ),
+                      ),
+                      const SizedBox(width: 1),
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final noticeInset = startupNotifications.isEmpty
+                                ? 0.0
+                                : kShellContentTopInset;
+                            return Padding(
+                              padding: EdgeInsets.only(top: noticeInset),
+                              child: Column(
+                                children: [
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxHeight:
+                                          (constraints.maxHeight -
+                                              noticeInset) /
+                                          3,
+                                    ),
+                                    child: SingleChildScrollView(
+                                      primary: false,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: startupNotifications,
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: ClipRect(
+                                      child: LayoutBuilder(
+                                        builder: (context, page) {
+                                          // Pages retain their own shell inset;
+                                          // reclaim it above this clipped body.
+                                          final height =
+                                              page.maxHeight + noticeInset;
+                                          return OverflowBox(
+                                            alignment: Alignment.bottomCenter,
+                                            minHeight: height,
+                                            maxHeight: height,
+                                            child: AppShellTransition(
+                                              sectionIndex: _section.index,
+                                              child: _buildContent(
+                                                hasArtwork: hasArtwork,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ),
-                      ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: Listener(
+                    key: const ValueKey('shell-top-bar-hit-region'),
+                    behavior: HitTestBehavior.opaque,
+                    child: _TopBar(
+                      state: _state,
+                      backdrop: hasArtwork
+                          ? GlassTopBarBackdrop.content
+                          : GlassTopBarBackdrop.flatSurface,
+                      onOpenConfig: _openConfigSwitcher,
+                      onOpenSitePicker: _openSitePicker,
+                      onOpenPush: _openPushDialog,
                     ),
                   ),
                 ),
               ],
-            ),
-          ),
-        ],
+            );
+          },
+        ),
+        // 首次启动的边界提示不可跳过。
+        bottomSheet: boundaryAccepted
+            ? null
+            : _BoundarySheet(onAccept: _acceptBoundary),
       ),
-      // 首次启动的边界提示不可跳过。
-      bottomSheet: boundaryAccepted
-          ? null
-          : _BoundarySheet(onAccept: _acceptBoundary),
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildContent({required bool hasArtwork}) {
     switch (_section) {
       case ShellSection.home:
-        return HomePage(
-          state: _state,
-          onOpenBrowse: () => setState(() {
-            _section = ShellSection.browse;
-            _enterBrowse();
-          }),
-          onOpenHistory: () => setState(() => _section = ShellSection.history),
-          onOpenFollowing: () =>
-              setState(() => _section = ShellSection.following),
-          onImportConfig: _openConfigPage,
-          onSearch: _searchFor,
+        return Padding(
+          padding: const EdgeInsets.only(top: kShellContentTopInset),
+          child: HomePage(
+            state: _state,
+            hasShellArtwork: hasArtwork,
+            onHeroBackdropChanged: (backdrop) {
+              if (!mounted ||
+                  _section != ShellSection.home ||
+                  _homeHeroBackdrop == backdrop) {
+                return;
+              }
+              setState(() => _homeHeroBackdrop = backdrop);
+            },
+            onOpenBrowse: () => setState(() {
+              _section = ShellSection.browse;
+              _enterBrowse();
+            }),
+            onOpenHistory: () =>
+                setState(() => _section = ShellSection.history),
+            onOpenFollowing: () =>
+                setState(() => _section = ShellSection.following),
+            onImportConfig: _openConfigPage,
+            onSearch: _searchFor,
+          ),
         );
       case ShellSection.browse:
-        return BrowsePage(state: _state);
+        return BrowsePage(state: _state, shellUnderlap: true);
       case ShellSection.live:
-        return LivePage(state: _state);
+        return LivePage(state: _state, shellUnderlap: true);
       case ShellSection.search:
         return SearchPage(
           // 换词必须换 State：`initialKeyword` 只在 initState 读一次。
           key: ValueKey('search-${_pendingSearchKeyword ?? ''}'),
           state: _state,
           initialKeyword: _pendingSearchKeyword,
+          shellUnderlap: true,
         );
       case ShellSection.history:
-        return HistoryPage(state: _state);
+        return HistoryPage(state: _state, shellUnderlap: true);
       case ShellSection.favorites:
-        return FavoritesPage(state: _state);
+        return FavoritesPage(state: _state, shellUnderlap: true);
       case ShellSection.following:
-        return FollowingPage(state: _state);
+        return FollowingPage(state: _state, shellUnderlap: true);
       case ShellSection.settings:
         return SettingsPage(
           key: _settingsEntryKey,
           state: _state,
           initialCategory: _settingsInitialCategory,
+          shellUnderlap: true,
         );
     }
   }
@@ -1595,12 +1714,14 @@ class _StorageWarningBanner extends StatelessWidget {
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.state,
+    required this.backdrop,
     required this.onOpenConfig,
     required this.onOpenSitePicker,
     required this.onOpenPush,
   });
 
   final AppState state;
+  final GlassTopBarBackdrop backdrop;
   final VoidCallback onOpenConfig;
   final VoidCallback onOpenSitePicker;
   final VoidCallback onOpenPush;
@@ -1610,68 +1731,75 @@ class _TopBar extends StatelessWidget {
     final site = state.selectedSite;
     final record = state.activeRecord;
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl),
-      decoration: BoxDecoration(
-        // 顶栏是世界的"外壳"：比内容低一档的表面，靠发丝线分隔。
-        color: scheme.surfaceContainerLowest,
-        border: Border(
-          bottom: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.55),
-          ),
-        ),
-      ),
+    return GlassTopBar(
+      backdrop: backdrop,
       child: Row(
         children: [
           _BrandMark(logo: state.config?.logo),
           const SizedBox(width: AppSpace.md),
           Text('WebHTV', style: theme.textTheme.titleMedium),
           const SizedBox(width: AppSpace.xl),
-          // 配置名可能很长，顶栏不能被它挤爆：限宽 + 省略号，
-          // 完整名字走 Tooltip。
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 320),
-            child: Tooltip(
-              message: record == null ? '未导入配置' : '当前配置：${record.name}',
-              child: TextButton.icon(
-                onPressed: onOpenConfig,
-                icon: const Icon(Icons.swap_horiz, size: 18),
-                label: Text(
-                  record == null ? '导入配置' : '配置：${record.name}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          Expanded(
+            child: Row(
+              children: [
+                // 配置名可能很长，顶栏不能被它挤爆：限宽 + 省略号，
+                // 完整名字走 Tooltip。
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 320),
+                    child: Tooltip(
+                      message: record == null ? '未导入配置' : '当前配置：${record.name}',
+                      child: TextButton.icon(
+                        onPressed: onOpenConfig,
+                        icon: const Icon(Icons.swap_horiz, size: 18),
+                        label: Text(
+                          record == null ? '导入配置' : '配置：${record.name}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: AppSpace.xs),
+                Flexible(
+                  child: Tooltip(
+                    message: site == null ? '选择站点' : '站点：${site.name}',
+                    child: TextButton.icon(
+                      onPressed: state.siteItems.isEmpty
+                          ? null
+                          : onOpenSitePicker,
+                      icon: const Icon(Icons.dns_outlined, size: 18),
+                      label: Text(
+                        site == null ? '选择站点' : '站点：${site.name}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpace.xs),
+                // 本地文件与推送地址是同一件事的两种来源（用户 2026-11-20 决策）：
+                // 合并成一个「推送」，选文件在对话框里。入口仍独立于「站点：xxx」——
+                // 放自己硬盘上的文件或粘贴地址，都不该要求先选站点。
+                TextButton.icon(
+                  key: const ValueKey('topbar-push'),
+                  onPressed: onOpenPush,
+                  icon: const Icon(Icons.send_outlined, size: 18),
+                  label: const Text('推送'),
+                ),
+                if (state.webHomeLoadError != null)
+                  Tooltip(
+                    key: const ValueKey('webhome-load-error'),
+                    message: state.webHomeLoadError!,
+                    child: Text(
+                      '载入HTML源失败',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+              ],
             ),
           ),
-          const SizedBox(width: AppSpace.xs),
-          TextButton.icon(
-            onPressed: state.siteItems.isEmpty ? null : onOpenSitePicker,
-            icon: const Icon(Icons.dns_outlined, size: 18),
-            label: Text(site == null ? '选择站点' : '站点：${site.name}'),
-          ),
-          const SizedBox(width: AppSpace.xs),
-          // 本地文件与推送地址是同一件事的两种来源（用户 2026-11-20 决策）：
-          // 合并成一个「推送」，选文件在对话框里。入口仍独立于「站点：xxx」——
-          // 放自己硬盘上的文件或粘贴地址，都不该要求先选站点。
-          TextButton.icon(
-            key: const ValueKey('topbar-push'),
-            onPressed: onOpenPush,
-            icon: const Icon(Icons.send_outlined, size: 18),
-            label: const Text('推送'),
-          ),
-          if (state.webHomeLoadError != null)
-            Tooltip(
-              key: const ValueKey('webhome-load-error'),
-              message: state.webHomeLoadError!,
-              child: Text(
-                '载入HTML源失败',
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            ),
-          const Spacer(),
           if (state.importDiagnosticsSummary != null)
             Tooltip(
               message: state.importDiagnosticsSummary!,
@@ -1735,44 +1863,6 @@ class _BrandMark extends StatelessWidget {
   }
 }
 
-/// 配置壁纸背景 + 一层纱。
-///
-/// 用户确认「配置提供的 `wallpaper` 必须真的生效」。但壁纸是**任意图片**，
-/// 深浅不可预知，而内容必须始终可读——所以壁纸之上永远有一层由底色染出的纱，
-/// 它的不透明度是设计决定，不是图片的属性。
-///
-/// 只铺在内容区：顶栏与侧栏保持实底，保证导航在任何壁纸上都清晰。
-class _WallpaperBackdrop extends StatelessWidget {
-  const _WallpaperBackdrop({required this.url, required this.child});
-
-  final String? url;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final target = url?.trim() ?? '';
-    if (target.isEmpty) return child;
-    final semantic = context.semanticColors;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image.network(
-          target,
-          fit: BoxFit.cover,
-          // 壁纸同样是外部图片：按 host 注入顶层 `headers` 规则。
-          headers: imageHeadersOrNull(context, target),
-          // 取不到壁纸时安静退回纯底色：它只是背景。
-          errorBuilder: (_, _, _) => const SizedBox.shrink(),
-          loadingBuilder: (context, child, progress) =>
-              progress == null ? child : const SizedBox.shrink(),
-        ),
-        ColoredBox(color: semantic.wallpaperVeil),
-        child,
-      ],
-    );
-  }
-}
-
 /// 侧栏。公开而不是私有：它的容量（8 项能否放进最小窗口）与入口集合都是
 /// 回归风险，必须能单独挂载并断言（test/shell_rail_capacity_test.dart）。
 class AppSideBar extends StatelessWidget {
@@ -1789,55 +1879,59 @@ class AppSideBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
-      selectedIndex: section.index,
-      onDestinationSelected: (index) => onSelect(ShellSection.values[index]),
-      minWidth: 76,
-      groupAlignment: -0.9,
-      labelType: NavigationRailLabelType.all,
-      // 8 个入口在最小窗口（1024×640，内容区 576px）下放得下。`scrollable` 留着
-      // 当兜底：2026-11-19 实测 11 项溢出 72px、10 项也溢出 8px——导航不该因为
-      // 以后再引入口就无声破图。
-      scrollable: true,
-      destinations: [
-        const NavigationRailDestination(
-          icon: Icon(Icons.home_outlined),
-          label: Text('首页'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.grid_view),
-          label: Text('点播'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.live_tv),
-          label: Text('直播'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.search),
-          label: Text('搜索'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.history),
-          label: Text('最近观看'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.bookmark_border),
-          label: Text('收藏'),
-        ),
-        // 追番列表与追剧日历合并成一个入口（页面内用「列表 / 日历」切换）。
-        NavigationRailDestination(
-          icon: Badge(
-            isLabelVisible: updateCount > 0,
-            label: Text('$updateCount'),
-            child: const Icon(Icons.star_border),
+    return GlassChromeSurface(
+      showRim: false,
+      child: NavigationRail(
+        backgroundColor: Colors.transparent,
+        selectedIndex: section.index,
+        onDestinationSelected: (index) => onSelect(ShellSection.values[index]),
+        minWidth: 76,
+        groupAlignment: -0.9,
+        labelType: NavigationRailLabelType.all,
+        // 8 个入口在最小窗口（1024×640，内容区 576px）下放得下。`scrollable` 留着
+        // 当兜底：2026-11-19 实测 11 项溢出 72px、10 项也溢出 8px——导航不该因为
+        // 以后再引入口就无声破图。
+        scrollable: true,
+        destinations: [
+          const NavigationRailDestination(
+            icon: Icon(Icons.home_outlined),
+            label: Text('首页'),
           ),
-          label: const Text('追剧'),
-        ),
-        const NavigationRailDestination(
-          icon: Icon(Icons.tune),
-          label: Text('设置'),
-        ),
-      ],
+          const NavigationRailDestination(
+            icon: Icon(Icons.grid_view),
+            label: Text('点播'),
+          ),
+          const NavigationRailDestination(
+            icon: Icon(Icons.live_tv),
+            label: Text('直播'),
+          ),
+          const NavigationRailDestination(
+            icon: Icon(Icons.search),
+            label: Text('搜索'),
+          ),
+          const NavigationRailDestination(
+            icon: Icon(Icons.history),
+            label: Text('最近观看'),
+          ),
+          const NavigationRailDestination(
+            icon: Icon(Icons.bookmark_border),
+            label: Text('收藏'),
+          ),
+          // 追番列表与追剧日历合并成一个入口（页面内用「列表 / 日历」切换）。
+          NavigationRailDestination(
+            icon: Badge(
+              isLabelVisible: updateCount > 0,
+              label: Text('$updateCount'),
+              child: const Icon(Icons.star_border),
+            ),
+            label: const Text('追剧'),
+          ),
+          const NavigationRailDestination(
+            icon: Icon(Icons.tune),
+            label: Text('设置'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1849,26 +1943,28 @@ class _BoundarySheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      elevation: 8,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('使用边界提示', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            const Text(usageBoundaryNotice),
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: onAccept,
-                child: const Text('我已了解并继续'),
+    return GlassPane(
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('使用边界提示', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              const Text(usageBoundaryNotice),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: onAccept,
+                  child: const Text('我已了解并继续'),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2244,155 +2340,189 @@ class _SitePickerDialogState extends State<SitePickerDialog> {
     final groups = _groups;
     final canSort = widget.onReorder != null;
 
-    return AlertDialog(
-      title: Text(
-        _sorting
-            ? '站点顺序'
-            : _blockedEditing
-            ? '管理屏蔽站点'
-            : '选择站点',
-      ),
-      content: SizedBox(
-        // 宽一点、高一点：站点数实测可达 170+。
-        //
-        // 原来 640x480 + 每行约 54px，一屏只看得见 7 个站点，找第 100 个要滚很久，
-        // 而对话框右侧又空着一大片（截图复核时发现，2026-10-11）。
-        // 桌面端对话框没有移动端那种宽度压力，用两列排布把滚动距离砍半。
-        width: 760,
-        height: 560,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_sorting)
-              Text(
-                '拖动右侧手柄调整顺序，改动自动保存（共 ${_order.length} 个站点）',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              )
-            else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const ValueKey('site-search'),
-                      controller: _keyword,
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        prefixIcon: const Icon(Icons.search, size: 18),
-                        hintText: '搜索站点名称',
-                        suffixIcon: _keyword.text.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: '清空',
-                                icon: const Icon(Icons.close, size: 18),
-                                onPressed: () => setState(_keyword.clear),
-                              ),
-                        border: const OutlineInputBorder(),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  if (canSort) ...[
-                    const SizedBox(width: AppSpace.xs),
-                    IconButton(
-                      key: const ValueKey('site-sort-toggle'),
-                      tooltip: '手动排序',
-                      icon: const Icon(Icons.swap_vert),
-                      onPressed: _toggleSorting,
-                    ),
-                  ],
-                  if (widget.onBlockedChanged != null)
-                    IconButton(
-                      key: const ValueKey('site-block-toggle'),
-                      tooltip: _blockedEditing ? '退出屏蔽管理' : '管理屏蔽站点',
-                      isSelected: _blockedEditing,
-                      icon: Icon(
-                        _blockedEditing
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
-                      ),
-                      onPressed: _toggleBlockedEditing,
-                    ),
-                ],
-              ),
-              if (groups.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                // 分组 chip 行：横向可滚，命中关键字时只列出现存的分组。
-                SizedBox(
-                  height: 34,
-                  child: HorizontalMouseDrag(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _GroupChip(
-                            label: '全部',
-                            selected: _group.isEmpty,
-                            onTap: () => setState(() => _group = ''),
+    final ink = glassSecondaryInkOf(theme);
+    final dialogTheme = DialogTheme.of(context);
+    final actionStyle = TextButton.styleFrom(foregroundColor: ink);
+    final title = _sorting
+        ? '站点顺序'
+        : _blockedEditing
+        ? '管理屏蔽站点'
+        : '选择站点';
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_sorting)
+          Text(
+            '拖动右侧手柄调整顺序，改动自动保存（共 ${_order.length} 个站点）',
+            style: theme.textTheme.bodySmall?.copyWith(color: ink),
+          )
+        else ...[
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('site-search'),
+                  controller: _keyword,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: '搜索站点名称',
+                    suffixIcon: _keyword.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清空',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () => setState(_keyword.clear),
                           ),
-                          for (final group in groups)
-                            _GroupChip(
-                              key: ValueKey('site-group-$group'),
-                              label: group,
-                              selected: _group == group,
-                              onTap: () => setState(() => _group = group),
-                            ),
-                        ],
-                      ),
-                    ),
+                    border: const OutlineInputBorder(),
                   ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              if (canSort) ...[
+                const SizedBox(width: AppSpace.xs),
+                IconButton(
+                  key: const ValueKey('site-sort-toggle'),
+                  tooltip: '手动排序',
+                  icon: const Icon(Icons.swap_vert),
+                  onPressed: _toggleSorting,
                 ),
               ],
-              const SizedBox(height: 8),
+              if (widget.onBlockedChanged != null)
+                IconButton(
+                  key: const ValueKey('site-block-toggle'),
+                  tooltip: _blockedEditing ? '退出屏蔽管理' : '管理屏蔽站点',
+                  isSelected: _blockedEditing,
+                  icon: Icon(
+                    _blockedEditing
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  onPressed: _toggleBlockedEditing,
+                ),
             ],
-            Expanded(
-              child: _sorting
-                  ? _sortPanel(context)
-                  : items.isEmpty
-                  ? Center(
-                      child: Text(
-                        _emptyHint(),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+          ),
+          if (groups.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            // 分组 chip 行：横向可滚，命中关键字时只列出现存的分组。
+            SizedBox(
+              height: 34,
+              child: HorizontalMouseDrag(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _GroupChip(
+                        label: '全部',
+                        selected: _group.isEmpty,
+                        onTap: () => setState(() => _group = ''),
                       ),
-                    )
-                  : GridView.builder(
-                      // **两列**排布：站点数实测可达 170+，单列一屏只看得到 7 个。
-                      // 对话框有 760px 宽，单列时右半边整片空着——两列把滚动距离
-                      // 砍半，也让"扫一眼找站点"成为可能（截图复核时发现，2026-10-11）。
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            mainAxisExtent: 48,
-                            crossAxisSpacing: 8,
-                          ),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) =>
-                          _siteRow(context, items[index]),
-                    ),
+                      for (final group in groups)
+                        _GroupChip(
+                          key: ValueKey('site-group-$group'),
+                          label: group,
+                          selected: _group == group,
+                          onTap: () => setState(() => _group = group),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ],
-        ),
-      ),
-      actions: [
-        if (_sorting)
-          TextButton(
-            key: const ValueKey('site-sort-reset'),
-            onPressed: _resetOrder,
-            child: const Text('恢复默认'),
-          ),
-        TextButton(
-          // 排序模式只退出模式，不关对话框：关闭对话框会把用户刚排好的列表一起
-          // 藏起来，想接着选站点还得重新打开一次（单向门）。
-          onPressed: _sorting
-              ? () => setState(() => _sorting = false)
-              : () => Navigator.of(context).pop(),
-          child: Text(_sorting ? '完成排序' : '关闭'),
+          const SizedBox(height: 8),
+        ],
+        Expanded(
+          child: _sorting
+              ? _sortPanel(context)
+              : items.isEmpty
+              ? Center(
+                  child: Text(
+                    _emptyHint(),
+                    style: theme.textTheme.bodyMedium?.copyWith(color: ink),
+                  ),
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) => GridView.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      // 窄窗保留站点名称和状态标记的可用宽度。
+                      crossAxisCount: constraints.maxWidth < 400 ? 1 : 2,
+                      mainAxisExtent: 48,
+                      crossAxisSpacing: 8,
+                    ),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) =>
+                        _siteRow(context, items[index]),
+                  ),
+                ),
         ),
       ],
+    );
+    final actions = <Widget>[
+      if (_sorting)
+        TextButton(
+          key: const ValueKey('site-sort-reset'),
+          style: actionStyle,
+          onPressed: _resetOrder,
+          child: const Text('恢复默认'),
+        ),
+      TextButton(
+        style: actionStyle,
+        // 排序模式只退出模式，不关对话框：关闭对话框会把用户刚排好的列表一起
+        // 藏起来，想接着选站点还得重新打开一次（单向门）。
+        onPressed: _sorting
+            ? () => setState(() => _sorting = false)
+            : () => Navigator.of(context).pop(),
+        child: Text(_sorting ? '完成排序' : '关闭'),
+      ),
+    ];
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      semanticsRole: SemanticsRole.alertDialog,
+      child: GlassSurface(
+        padding: const EdgeInsets.all(AppSpace.xl),
+        child: Theme(
+          data: theme.copyWith(
+            colorScheme: theme.colorScheme.copyWith(onSurfaceVariant: ink),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: SizedBox(
+              width: 760,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Semantics(
+                    namesRoute: true,
+                    child: Text(
+                      title,
+                      style:
+                          dialogTheme.titleTextStyle ??
+                          (theme.useMaterial3
+                              ? theme.textTheme.headlineSmall
+                              : theme.textTheme.titleLarge),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpace.lg),
+                  // Give the lazy grid a finite height before it lays out.
+                  Flexible(child: SizedBox(height: 560, child: content)),
+                  const SizedBox(height: AppSpace.xl),
+                  OverflowBar(
+                    alignment: MainAxisAlignment.end,
+                    overflowAlignment: OverflowBarAlignment.end,
+                    spacing: AppSpace.sm,
+                    children: actions,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

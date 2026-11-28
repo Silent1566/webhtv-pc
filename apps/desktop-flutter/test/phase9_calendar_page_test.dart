@@ -109,6 +109,7 @@ void main() {
     Future<void> pumpPage(
       WidgetTester tester, {
       Size size = const Size(1100, 800),
+      double textScale = 1,
     }) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1.0;
@@ -116,6 +117,11 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildAppTheme(Brightness.dark),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
           home: Scaffold(body: FollowingCalendarView(state: state)),
         ),
       );
@@ -459,6 +465,71 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('键盘可选日期且今天与选中日分别可辨认', (tester) async {
+      follow(released: 1);
+      await pumpPage(tester, size: const Size(720, 600), textScale: 1.5);
+      final today = selectedToday(tester);
+      final otherDay = DateTime(
+        today.year,
+        today.month,
+        today.day + (today.weekday == DateTime.monday ? 1 : -1),
+      );
+      Finder daySemantics(DateTime day) => find.bySemanticsLabel(
+        RegExp('^${day.year}年${day.month}月${day.day}日，'),
+      );
+      bool isSelected(DateTime day) =>
+          tester
+              .getSemantics(daySemantics(day))
+              .getSemanticsData()
+              .flagsCollection
+              .isSelected ==
+          ui.Tristate.isTrue;
+
+      expect(isSelected(today), isTrue);
+      final todayLabel = find.bySemanticsLabel(RegExp('日，今天，'));
+      expect(todayLabel, findsOneWidget);
+      final target = find.byKey(ValueKey(_dayKey(otherDay)));
+      final dateNumber = find.descendant(
+        of: target,
+        matching: find.text('${otherDay.day}'),
+      );
+      final focus = Focus.of(tester.element(dateNumber));
+      focus.requestFocus();
+      await tester.pump();
+      expect(focus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(isSelected(otherDay), isTrue);
+      expect(isSelected(today), isFalse);
+      expect(todayLabel, findsOneWidget);
+      expect(find.text('今'), findsOneWidget);
+
+      final weekToggle = find.byKey(const ValueKey('calendar-view-week'));
+      await tester.ensureVisible(weekToggle);
+      await tester.pumpAndSettle();
+      await tester.tap(weekToggle);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('calendar-week-title')), findsOneWidget);
+      expect(isSelected(otherDay), isTrue);
+      expect(todayLabel, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('排期按日分组的间距大于日期与所属条目的间距', (tester) async {
+      await pumpDenseCalendar(tester);
+      final first = dayHeader(DateTime(2026, 11, 1));
+      final second = dayHeader(DateTime(2026, 11, 2));
+      final item = state.followings.single;
+      final card = find.byKey(
+        ValueKey('calendar-card-${item.identityKey}-S01E01'),
+      );
+      final gapWithinDay =
+          tester.getTopLeft(card).dy - tester.getBottomLeft(first).dy;
+      final gapBetweenDays =
+          tester.getTopLeft(second).dy - tester.getBottomLeft(card).dy;
+      expect(gapBetweenDays, greaterThan(gapWithinDay));
+    });
+
     testWidgets('月历完整区域不超过视口40%且五周月份更矮', (tester) async {
       await pumpDenseCalendar(tester);
       final grid = find.byKey(const ValueKey('calendar-grid'));
@@ -558,6 +629,29 @@ void main() {
       expect(
         find.byKey(const ValueKey('calendar-day-selected-2026-11-22')),
         findsOneWidget,
+      );
+      final selected = find.byKey(
+        const ValueKey('calendar-week-day-2026-11-22'),
+      );
+      final dateBadge =
+          tester
+                  .widget<Container>(
+                    find.descendant(
+                      of: selected,
+                      matching: find.byWidgetPredicate(
+                        (w) =>
+                            w is Container &&
+                            w.child is Text &&
+                            (w.child as Text).data == '22',
+                      ),
+                    ),
+                  )
+                  .decoration!
+              as BoxDecoration;
+      expect(dateBadge.border, isNull);
+      expect(
+        dateBadge.color,
+        Theme.of(tester.element(selected)).colorScheme.primary,
       );
       await tester.tap(find.byKey(const ValueKey('calendar-next-month')));
       await tester.pumpAndSettle();
@@ -992,7 +1086,7 @@ void main() {
       }
     });
 
-    testWidgets('条目卡片：surfaceContainerLow 底、lg 圆角、发丝边、无阴影', (tester) async {
+    testWidgets('条目卡片：surfaceContainerLow 底、lg 圆角、无边框无阴影', (tester) async {
       final identity = await followOfficial(tester);
       final card = find.byKey(ValueKey('calendar-card-$identity-S01E23'));
       expect(card, findsOneWidget);
@@ -1001,11 +1095,8 @@ void main() {
       final scheme = Theme.of(tester.element(card)).colorScheme;
       expect(decoration.color, scheme.surfaceContainerLow);
       expect(decoration.borderRadius, AppRadius.lgAll);
-      // 全站不用阴影、不用 elevation：层级靠表面阶梯 + 发丝边。
       expect(decoration.boxShadow, isNull);
-      final side = (decoration.border! as Border).top;
-      expect(side.width, 1);
-      expect(side.color.a, closeTo(.72, .01));
+      expect(decoration.border, isNull);
       final material = tester.widget<Material>(
         find.descendant(of: card, matching: find.byType(Material)).first,
       );
@@ -1133,14 +1224,21 @@ void main() {
       final boundaryKey = GlobalKey();
       final font = FontLoader('CalendarFixture');
       await tester.runAsync(() async {
-        for (final name in ['msyh.ttc', 'msyhbd.ttc']) {
-          final bytes = await File(r'C:\Windows\Fonts\' + name).readAsBytes();
+        final fontPath = Platform.environment['CALENDAR_CAPTURE_FONT'];
+        for (final path
+            in fontPath != null
+                ? [fontPath]
+                : [
+                    r'C:\Windows\Fonts\msyh.ttc',
+                    r'C:\Windows\Fonts\msyhbd.ttc',
+                  ]) {
+          final bytes = await File(path).readAsBytes();
           font.addFont(Future.value(ByteData.sublistView(bytes)));
         }
         await font.load();
         final icons = FontLoader('MaterialIcons');
         final iconBytes = await File(
-          r'C:\dev\flutter\bin\cache\artifacts\material_fonts\materialicons-regular.otf',
+          Platform.environment['CALENDAR_CAPTURE_ICONS'] ?? r'C:\dev\flutter\bin\cache\artifacts\material_fonts\materialicons-regular.otf',
         ).readAsBytes();
         icons.addFont(Future.value(ByteData.sublistView(iconBytes)));
         await icons.load();
@@ -1167,10 +1265,16 @@ void main() {
           ],
         ),
       );
-      tester.view.physicalSize = const Size(1280, 800);
+      final compact = Platform.environment['CALENDAR_CAPTURE_COMPACT'] == '1';
+      final size = compact ? const Size(720, 600) : const Size(1280, 800);
+      tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
-      final theme = buildAppTheme(Brightness.dark);
+      final theme = buildAppTheme(
+        Platform.environment['CALENDAR_CAPTURE_LIGHT'] == '1'
+            ? Brightness.light
+            : Brightness.dark,
+      );
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundaryKey,
@@ -1191,7 +1295,10 @@ void main() {
                 ),
               ),
             ),
-            home: Scaffold(body: FollowingCalendarView(state: state)),
+            home: Scaffold(
+              backgroundColor: theme.colorScheme.surface,
+              body: FollowingCalendarView(state: state),
+            ),
           ),
         ),
       );
@@ -1268,11 +1375,14 @@ void main() {
         await tester.runAsync(() async {
           final image = await boundary.toImage(pixelRatio: 1);
           try {
-            expect(image.width, 1280);
-            expect(image.height, 800);
+            expect(image.width, size.width.toInt());
+            expect(image.height, size.height.toInt());
             final png = await image.toByteData(format: ui.ImageByteFormat.png);
             if (png == null) throw StateError('Flutter 未返回 PNG 字节');
-            final output = File('.local/calendar-final-$view.png');
+            final directory = Platform.environment['CALENDAR_CAPTURE_DIR'];
+            final output = File(
+              '${directory ?? '.local'}/calendar-final-$view.png',
+            );
             await output.parent.create(recursive: true);
             await output.writeAsBytes(
               png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),

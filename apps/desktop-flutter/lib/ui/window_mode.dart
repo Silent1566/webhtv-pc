@@ -14,6 +14,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
+final _fullscreenCommandRevision = ValueNotifier(0);
+
+/// Re-read platform state when an app-owned transition finishes. Some native
+/// fullscreen transitions (notably from a normal Win32 window) omit an event.
+ValueListenable<int> get fullscreenCommandRevision =>
+    _fullscreenCommandRevision;
+
 bool get _hasNativeFullscreenFrame =>
     defaultTargetPlatform == TargetPlatform.windows;
 
@@ -21,6 +28,7 @@ bool get _hasNativeFullscreenFrame =>
 Future<void> enterPlayerFullscreen() async {
   if (_hasNativeFullscreenFrame) {
     await windowManager.setFullScreen(true);
+    _fullscreenCommandRevision.value++;
     return;
   }
   await windowManager.setTitleBarStyle(
@@ -28,10 +36,11 @@ Future<void> enterPlayerFullscreen() async {
     windowButtonVisibility: false,
   );
   await windowManager.setFullScreen(true);
+  _fullscreenCommandRevision.value++;
   await windowManager.focus();
 }
 
-/// 恢复「窗口态」：退出原生全屏，并保证标题栏与最小化/最大化/关闭按钮回来。
+/// 恢复「窗口态」：退出原生全屏，由应用标题栏重新显示窗口按钮。
 ///
 /// 幂等：已经处于窗口态时只做标题栏兜底。平台调用失败不向上抛——调用点可能
 /// 是 dispose()，那里没有 UI 可以报错，也绝不能让一次恢复失败挡住其余清理。
@@ -40,6 +49,7 @@ Future<void> restoreWindowedMode() async {
     if (await windowManager.isFullScreen()) {
       await windowManager.setFullScreen(false);
     }
+    _fullscreenCommandRevision.value++;
   } catch (error) {
     debugPrint('恢复窗口态失败（setFullScreen）：$error');
   } finally {
@@ -47,15 +57,15 @@ Future<void> restoreWindowedMode() async {
   }
 }
 
-/// 只恢复标题栏与窗口按钮，不碰全屏标志。
+/// 保持原生标题栏隐藏，不碰全屏标志。
 ///
 /// Windows 的原生切换已经恢复边框，不再额外触发一次窗口重绘。
 Future<void> restoreWindowTitleBar() async {
   if (_hasNativeFullscreenFrame) return;
   try {
     await windowManager.setTitleBarStyle(
-      TitleBarStyle.normal,
-      windowButtonVisibility: true,
+      TitleBarStyle.hidden,
+      windowButtonVisibility: false,
     );
   } catch (error) {
     debugPrint('恢复标题栏失败：$error');
@@ -95,25 +105,31 @@ class _WindowEscapeShortcutsState extends State<WindowEscapeShortcuts>
     with WindowListener {
   bool _fullscreen = false;
   bool _exiting = false;
+  int _fullscreenRead = 0;
 
   @override
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    fullscreenCommandRevision.addListener(_onFullscreenCommand);
     // 启动参数 / 上一帧的窗口状态可能已经是全屏，先回读一次。
     unawaited(_syncFullscreen());
   }
 
   @override
   void dispose() {
+    fullscreenCommandRevision.removeListener(_onFullscreenCommand);
     windowManager.removeListener(this);
     super.dispose();
   }
 
+  void _onFullscreenCommand() => unawaited(_syncFullscreen());
+
   Future<void> _syncFullscreen() async {
+    final read = ++_fullscreenRead;
     try {
       final value = await windowManager.isFullScreen();
-      if (!mounted || value == _fullscreen) return;
+      if (!mounted || read != _fullscreenRead || value == _fullscreen) return;
       setState(() => _fullscreen = value);
     } catch (error) {
       debugPrint('查询全屏状态失败：$error');
@@ -122,13 +138,15 @@ class _WindowEscapeShortcutsState extends State<WindowEscapeShortcuts>
 
   @override
   void onWindowEnterFullScreen() {
-    if (!mounted) return;
+    _fullscreenRead++;
+    if (!mounted || _fullscreen) return;
     setState(() => _fullscreen = true);
   }
 
   @override
   void onWindowLeaveFullScreen() {
-    if (!mounted) return;
+    _fullscreenRead++;
+    if (!mounted || !_fullscreen) return;
     setState(() => _fullscreen = false);
   }
 

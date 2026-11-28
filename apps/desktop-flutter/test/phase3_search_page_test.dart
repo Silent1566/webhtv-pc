@@ -30,6 +30,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/search_suggest_service.dart';
 import 'package:webhtv_pc/services/ui_preferences_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/search_page.dart';
 
 /// 站点配置：`甲站[盘]` / `丁站[盘]` 同属「盘」，`乙站[采]` 属「采」，`丙站` 无分组。
@@ -121,7 +122,9 @@ void main() {
 
   Future<void> pumpPage(WidgetTester tester) async {
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SearchPage(state: state))),
+      MaterialApp(
+        home: Scaffold(body: SearchPage(state: state)),
+      ),
     );
     // 落地页会在 initState 异步拉热门榜单：多 pump 几次让空完成。
     await tester.pump();
@@ -152,7 +155,10 @@ void main() {
     expect(find.text('热门推荐'), findsOneWidget);
     expect(find.byKey(const ValueKey('search-hot-tab-movie')), findsOneWidget);
     expect(find.byKey(const ValueKey('search-hot-tab-series')), findsOneWidget);
-    expect(find.byKey(const ValueKey('search-hot-tab-variety')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-hot-tab-variety')),
+      findsOneWidget,
+    );
     // 热门条目现在是**海报卡片**而不是词条
     // （用户 2026-10-14：「显示成卡片是否更好看点」）。
     expect(find.textContaining('电影热榜第一条'), findsOneWidget);
@@ -230,10 +236,7 @@ void main() {
   });
 
   testWidgets('用户窗口内容区 1196×725：热门推荐铺满两行 14 张（回归：曾只有 7 张）', (tester) async {
-    // 用户窗口 1273×821 扣掉顶栏 64、侧栏 76 + 1px 分隔线后，SearchPage 拿到的
-    // 正是 1196×725（本机复刻 1273×789 视口量到的网格是 1164×453）。
-    // 旧实现按固定卡高 254 数行：floor((453+12)/266) = 1 行 → 7 张，底部空出
-    // 200 多像素；现在按最省卡高 194 数出 2 行，再把可用高摊成 220.5 的卡高。
+    // 1196×725 是该窗口扣除顶栏和侧栏后的搜索内容区。
     tester.view.physicalSize = const Size(1196, 725);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -252,18 +255,15 @@ void main() {
       poolSize: 30,
     );
 
-    expect(delegate.crossAxisCount, 7, reason: '1164 宽按「140 + 12」放得下 7 列');
+    expect(delegate.crossAxisCount, 7);
     expect(
       delegate.mainAxisExtent,
       closeTo(expected.cardHeight, 1e-6),
       reason: '行高必须用布局算出的卡高，而不是常量 254（否则又只剩一行）',
     );
     expect(expected.rows, 2);
-    // 卡高按**实测**网格 rect 算（与 `_buildHotSection` 的入参同源）：本用例
-    // 没挂中文字体，历史区比截图环境矮一点，网格约 1164×493 → 240.5；
-    // 挂 FixtureCJK 的截图环境是 1164×453 → 220.5（见 .local/capture 的打印）。
-    // 真正要锁的是「两行 + 整数条数」，具体像素随文字度量走。
-    expect(rect.width, closeTo(1164, 1), reason: '7 列 × 156 = 1092 + 6 × 12');
+    // 高度随字体度量变化，但必须保留两行完整卡片。
+    expect(rect.width, closeTo(1140, 1), reason: '左右各 16 页边距加 12 面板内距');
     expect(rect.height, greaterThan(400), reason: '两行最省卡高 = 2×194 + 12 = 400');
     expect(rect.height, lessThan(606), reason: '三行要 3×194 + 2×12 = 606');
     expect(
@@ -394,6 +394,12 @@ void main() {
     final suggestion = find.byKey(const ValueKey('search-suggest-0'));
     expect(suggestion, findsOneWidget, reason: '输入后应展示联想词');
     expect(find.text('测试 联想词一'), findsOneWidget);
+    expect(
+      tester.getTopLeft(suggestion).dy,
+      greaterThanOrEqualTo(
+        tester.getBottomLeft(find.byKey(const ValueKey('search-input'))).dy,
+      ),
+    );
 
     await tester.tap(suggestion);
     await tester.pump();
@@ -592,11 +598,10 @@ void main() {
     await tester.pump();
 
     expect(state.activeSearch!.group, '盘');
-    expect(
-      state.activeSearch!.results.map((e) => e.siteKey).toList(),
-      ['ui-a', 'ui-d'],
-      reason: '只有带 [盘] 标记的站点参与',
-    );
+    expect(state.activeSearch!.results.map((e) => e.siteKey).toList(), [
+      'ui-a',
+      'ui-d',
+    ], reason: '只有带 [盘] 标记的站点参与');
   });
 
   testWidgets('范围选择器：选当前站点只搜该站点', (tester) async {
@@ -611,7 +616,9 @@ void main() {
     await tester.pump();
 
     expect(state.activeSearch!.siteKey, 'ui-a', reason: '默认站点为 ui-a');
-    expect(state.activeSearch!.results.map((e) => e.siteKey).toList(), ['ui-a']);
+    expect(state.activeSearch!.results.map((e) => e.siteKey).toList(), [
+      'ui-a',
+    ]);
   });
 
   testWidgets('范围选择器：当前站点被屏蔽时不给「当前站点」选项', (tester) async {
@@ -650,7 +657,10 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('search-site-ui-a')));
     await tester.pump();
-    expect(find.byKey(const ValueKey('search-result-ui-a-demo-1')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-result-ui-a-demo-1')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('search-load-more')),
       findsOneWidget,
@@ -776,7 +786,7 @@ void main() {
     // 页面上的「取消」是取消搜索按钮，必须定位对话框里的那个。
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.text('取消'),
       ),
     );
@@ -857,10 +867,14 @@ void main() {
       reason: '搜索已结束时按钮语义是「返回推荐」而不是「取消」',
     );
     expect(
-      tester.widget<OutlinedButton>(find.ancestor(
-        of: find.text('返回推荐'),
-        matching: find.byType(OutlinedButton),
-      )).onPressed,
+      tester
+          .widget<OutlinedButton>(
+            find.ancestor(
+              of: find.text('返回推荐'),
+              matching: find.byType(OutlinedButton),
+            ),
+          )
+          .onPressed,
       isNotNull,
       reason: '按钮必须可点击（原来搜索结束后是 null）',
     );
@@ -1004,9 +1018,7 @@ class _FakeSuggestService extends SearchSuggestService {
         cover: 'https://p3.qhimg.com/d/${category.name}-$i.jpg',
         subtitle: category == HotRankCategory.variety
             ? '2026-10-13期'
-            : (i == 0
-                  ? '全47集'
-                  : (i == 1 ? '全22集' : '全${40 + i}集')),
+            : (i == 0 ? '全47集' : (i == 1 ? '全22集' : '全${40 + i}集')),
         // 只有第一条有评分：验证「没评分就不画空角标」。
         score: i == 0 ? '5.3' : null,
         detailUrl: 'http://www.360kan.com/tv/${category.name}-$i.html',

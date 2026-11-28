@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/protocol.dart';
+import 'glass_widgets.dart';
 
 /// Explicit file-based episodes; no inferred TV or synthetic TMDB metadata.
 class FolderEpisodeView extends StatelessWidget {
@@ -35,35 +36,39 @@ class FolderEpisodeView extends StatelessWidget {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
             sliver: SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: theme.textTheme.headlineSmall),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${videos.length} 个视频 · 按文件名排序',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+              child: GlassPane(
+                blurBackdrop: false,
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: theme.textTheme.headlineSmall),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${videos.length} 个视频 · 按文件名排序',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                  if (folders.isNotEmpty) ...[
-                    const SizedBox(height: 20),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final folder in folders)
-                          OutlinedButton.icon(
-                            onPressed: openingKey == null
-                                ? () => onOpen(folder)
-                                : null,
-                            icon: const Icon(Icons.folder_outlined, size: 18),
-                            label: Text(folder.vodName),
-                          ),
-                      ],
-                    ),
+                    if (folders.isNotEmpty) ...[
+                      const SizedBox(height: 20),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final folder in folders)
+                            OutlinedButton.icon(
+                              onPressed: openingKey == null
+                                  ? () => onOpen(folder)
+                                  : null,
+                              icon: const Icon(Icons.folder_outlined, size: 18),
+                              label: Text(folder.vodName),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

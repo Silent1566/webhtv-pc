@@ -18,6 +18,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/web_home_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/local_sources_page.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'local_source_sites_test.dart'
@@ -494,8 +495,9 @@ void main() {
       ]) {
         final finder = find.descendant(of: _key('candidate-a'), matching: text);
         final paragraph = tester.renderObject<RenderParagraph>(finder);
-        final background = Theme.of(tester.element(finder))
-            .scaffoldBackgroundColor;
+        // Routes now paint a dense glass pane over artwork; the transparent
+        // Scaffold is not the rendered contrast background.
+        final background = Theme.of(tester.element(finder)).colorScheme.surface;
         final color = Color.alphaBlend(
           paragraph.text.style!.color!,
           background,
@@ -765,7 +767,7 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(
             find.descendant(
-              of: find.byType(AlertDialog),
+              of: find.byType(GlassAlertDialog),
               matching: find.widgetWithText(FilledButton, '删除'),
             ),
           );
@@ -807,7 +809,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(
           find.descendant(
-            of: find.byType(AlertDialog),
+            of: find.byType(GlassAlertDialog),
             matching: find.widgetWithText(FilledButton, '删除'),
           ),
         );
@@ -861,7 +863,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -942,7 +944,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -980,7 +982,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -1004,7 +1006,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -1034,7 +1036,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -1278,7 +1280,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );
@@ -1319,7 +1321,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(GlassAlertDialog),
         matching: find.widgetWithText(FilledButton, '删除'),
       ),
     );

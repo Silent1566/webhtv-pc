@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../core/episode_manual_match.dart';
 import '../core/tmdb_media.dart';
 import 'poster_image.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 /// 用户在弹窗里选中的目标：哪一季哪一集，以及是否从这张卡起顺延。
@@ -51,7 +52,7 @@ Future<EpisodeMatchChoice?> showEpisodeMatchDialog(
   required bool variety,
   required Future<List<TmdbEpisode>?> Function(int season) loadSeason,
 }) {
-  return showDialog<EpisodeMatchChoice>(
+  return showGlassDialog<EpisodeMatchChoice>(
     context: context,
     builder: (_) => _EpisodeMatchDialog(
       title: title,
@@ -118,10 +119,9 @@ class _EpisodeMatchDialogState extends State<_EpisodeMatchDialog> {
   late final List<int> _seasons = _computeSeasons();
 
   List<int> _computeSeasons() {
-    final seasons = widget.seasonEpisodeCounts.keys
-        .where((season) => season >= 0)
-        .toSet()
-      ..add(widget.initialSeason);
+    final seasons =
+        widget.seasonEpisodeCounts.keys.where((season) => season >= 0).toSet()
+          ..add(widget.initialSeason);
     return seasons.toList()..sort();
   }
 
@@ -256,7 +256,8 @@ class _EpisodeMatchDialogState extends State<_EpisodeMatchDialog> {
     final hint = theme.textTheme.bodySmall?.copyWith(
       color: theme.colorScheme.onSurfaceVariant,
     );
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: BoxConstraints(maxWidth: width + 2 * AppSpace.xl),
       key: const ValueKey('episode-match-dialog'),
       title: Text(widget.title),
       content: SizedBox(

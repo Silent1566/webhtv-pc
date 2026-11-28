@@ -7,6 +7,8 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/session_recovery.dart';
+import 'glass_dialog.dart' show glassSecondaryInk;
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 崩溃恢复横幅（Phase 9 · P2-8）。
@@ -33,9 +35,9 @@ class RecoveryBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final playback = marker.playback;
-    return Container(
-      width: double.infinity,
-      color: scheme.tertiaryContainer,
+    return GlassPane(
+      borderRadius: BorderRadius.zero,
+      blurBackdrop: false,
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpace.xl,
         vertical: AppSpace.sm,
@@ -43,17 +45,13 @@ class RecoveryBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(
-            Icons.restart_alt_outlined,
-            size: 18,
-            color: scheme.onTertiaryContainer,
-          ),
+          Icon(Icons.restart_alt_outlined, size: 18, color: scheme.tertiary),
           const SizedBox(width: AppSpace.sm),
           Expanded(
             child: Text(
               describeRecoveredSession(marker, DateTime.now()),
               key: const ValueKey('recovery-banner-text'),
-              style: TextStyle(color: scheme.onTertiaryContainer, fontSize: 12),
+              style: TextStyle(color: glassSecondaryInk(context), fontSize: 12),
             ),
           ),
           if (playback != null)
@@ -78,4 +76,3 @@ class RecoveryBanner extends StatelessWidget {
     );
   }
 }
-

@@ -1,20 +1,31 @@
 // ignore_for_file: invalid_use_of_protected_member
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:webhtv_pc/core/epg.dart';
+import 'package:webhtv_pc/core/osd_config.dart';
 import 'package:webhtv_pc/core/protocol.dart';
+import 'package:webhtv_pc/ui/ai_integration_widgets.dart';
+import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/player_controller.dart';
 import 'package:webhtv_pc/ui/player_osd.dart';
+import 'package:webhtv_pc/ui/player_overlay.dart';
+import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/player_live_panel.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 
 import 'live_playback_session_test.dart' show fixture;
 import 'support/player_page_harness.dart';
+import 'support/test_fonts.dart';
 
 class MediaJournal {
   final opened = <String>[];
@@ -100,6 +111,8 @@ Future<MediaIO> mount(
   PlayerPage page, {
   Size size = const Size(1024, 640),
   Set<String> failed = const {},
+  GlobalKey? capture,
+  ThemeData? theme,
 }) async {
   await tester.runAsync(page.state.bootstrap);
   tester.view.physicalSize = size;
@@ -123,7 +136,14 @@ Future<MediaIO> mount(
     media ??= next;
     player.platform = next;
   });
-  await tester.pumpWidget(MaterialApp(home: page));
+  final app = MaterialApp(
+    theme: theme,
+    debugShowCheckedModeBanner: capture == null,
+    home: page,
+  );
+  await tester.pumpWidget(
+    capture == null ? app : RepaintBoundary(key: capture, child: app),
+  );
   await flush(tester);
   expect(tester.takeException(), isNull);
   return media!;
@@ -142,7 +162,449 @@ Future<void> unmount(WidgetTester tester) async {
   await tester.pump(Duration.zero);
 }
 
+const _liveClockCapture = String.fromEnvironment('LIVE_CLOCK_CAPTURE');
+const _playerTimeCapture = String.fromEnvironment('PLAYER_TIME_CAPTURE');
+const _playerFocusCapture = String.fromEnvironment('PLAYER_FOCUS_CAPTURE');
+
+const _playerIdle = Duration(seconds: 4);
+
+bool _focusWithin(WidgetTester tester, Finder target) {
+  final root = tester.element(target);
+  final focus = FocusManager.instance.primaryFocus?.context;
+  var inside = focus == root;
+  focus?.visitAncestorElements((ancestor) {
+    if (ancestor == root) inside = true;
+    return !inside;
+  });
+  return inside;
+}
+
+Future<void> _capturePlayer(WidgetTester tester, GlobalKey key, String name) async {
+  final boundary = tester.renderObject<RenderRepaintBoundary>(find.byKey(key));
+  await tester.runAsync(() async {
+    final image = await boundary.toImage();
+    final png = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    await File(
+      '../../.local/ui-quality-sweep/$name.png',
+    ).writeAsBytes(png!.buffer.asUint8List());
+  });
+}
+
 void main() {
+  if (_liveClockCapture.isNotEmpty ||
+      _playerTimeCapture.isNotEmpty ||
+      _playerFocusCapture.isNotEmpty) {
+    setUpAll(() async {
+      expect(_liveClockCapture, anyOf('', 'before', 'after'));
+      expect(_playerTimeCapture, anyOf('', 'before', 'after'));
+      expect(_playerFocusCapture, anyOf('', 'before', 'after'));
+      await loadFixtureFonts(cjkFamily: 'Noto Sans CJK SC');
+      await loadFixtureFonts(cjkFamily: 'Roboto');
+      expectFontsAvailableOrSkip();
+    });
+  }
+  for (final isLive in [true, false]) {
+    for (final brightness in Brightness.values) {
+      final mode = isLive ? 'live' : 'non-live';
+      testWidgets(
+        'Seek times are readable for $mode under a ${brightness.name} shell',
+        (tester) async {
+          debugOsdClockOverride = DateTime(2026, 11, 28, 12, 34, 56);
+          addTearDown(() => debugOsdClockOverride = null);
+          final capture =
+              isLive &&
+                  brightness == Brightness.light &&
+                  _playerTimeCapture.isNotEmpty
+              ? GlobalKey()
+              : null;
+          final f = fixture();
+          final media = await mount(
+            tester,
+            PlayerPage(
+              state: f.state,
+              request: f.session.request,
+              liveSession: isLive ? f.session : null,
+            ),
+            capture: capture,
+            theme: buildAppTheme(brightness),
+          );
+          media.progress(83);
+          await tester.pump();
+
+          final page = find.byType(PlayerPage);
+          final overlay = find.byType(PlayerControlOverlay);
+          final playerTheme = Theme.of(tester.element(overlay));
+          expect(Theme.of(tester.element(page)).brightness, brightness);
+          expect(playerTheme.brightness, Brightness.dark);
+          expect(
+            tester
+                .widget<PlayerOsdLayer>(find.byType(PlayerOsdLayer))
+                .controlsVisible,
+            isTrue,
+          );
+          final labels = [
+            for (final time in ['01:23', '16:40'])
+              find.descendant(of: overlay, matching: find.text(time)),
+          ];
+          final elapsed = tester.getRect(labels.first);
+          final total = tester.getRect(labels.last);
+          final slider = tester.getRect(find.byType(PlayerProgressSlider));
+          final video = tester.getRect(find.byType(Video));
+          expect(video, const Rect.fromLTWH(0, 0, 1024, 640));
+          expect(elapsed.right, slider.left);
+          expect(total.left, slider.right);
+          expect(elapsed.center.dy, total.center.dy);
+
+          final surface = playerTheme.colorScheme.surface;
+          final foregrounds = [
+            for (final label in labels)
+              (tester
+                          .renderObject<RenderParagraph>(
+                            find.descendant(
+                              of: label,
+                              matching: find.byType(RichText),
+                            ),
+                          )
+                          .text
+                      as TextSpan)
+                  .style!
+                  .color!,
+          ];
+          final contrasts = [
+            for (final foreground in foregrounds)
+              (foreground.computeLuminance() + 0.05) /
+                  (surface.computeLuminance() + 0.05),
+          ];
+          // ignore: avoid_print
+          print(
+            'seek-times $mode ${brightness.name}: foregrounds=$foregrounds '
+            'surface=$surface contrast=$contrasts elapsed=$elapsed total=$total '
+            'slider=$slider video=$video',
+          );
+          if (capture != null) {
+            await _capturePlayer(
+              tester,
+              capture,
+              'player-time/$_playerTimeCapture',
+            );
+          }
+          await unmount(tester);
+          expect(tester.takeException(), isNull);
+          expect(contrasts, everyElement(greaterThanOrEqualTo(4.5)));
+          expect(
+            foregrounds,
+            everyElement(playerTheme.textTheme.bodyMedium!.color),
+          );
+        },
+      );
+    }
+  }
+
+  for (final startsHidden in [false, true]) {
+    testWidgets(
+      'Player keyboard focus stays visible (startsHidden: $startsHidden)',
+      (tester) async {
+        debugOsdClockOverride = DateTime(2026, 11, 28, 12, 34, 56);
+        addTearDown(() => debugOsdClockOverride = null);
+        final f = fixture();
+        final capture = startsHidden && _playerFocusCapture.isNotEmpty
+            ? GlobalKey()
+            : null;
+        final media = await mount(
+          tester,
+          PlayerPage(state: f.state, request: f.session.request),
+          capture: capture,
+          theme: buildAppTheme(Brightness.dark),
+        );
+        final overlay = find.byType(PlayerControlOverlay);
+        final osd = find.byType(PlayerOsdLayer);
+        bool visible() => tester.widget<PlayerOsdLayer>(osd).controlsVisible;
+        if (startsHidden) {
+          await tester.pump(_playerIdle);
+          await tester.pumpAndSettle();
+        }
+        expect(visible(), !startsHidden);
+        final fullscreen = find.byTooltip('全屏（F11）');
+        windowManagerCalls.clear();
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        expect(_focusWithin(tester, overlay), isTrue);
+        final visibleOnEntry = visible();
+        for (var i = 0; i < 25 && !_focusWithin(tester, fullscreen); i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pump();
+        }
+        expect(_focusWithin(tester, fullscreen), isTrue);
+        await tester.pump(_playerIdle);
+        await tester.pumpAndSettle();
+        if (capture != null) {
+          await _capturePlayer(
+            tester,
+            capture,
+            'player-focus/$_playerFocusCapture',
+          );
+        }
+        expect(
+          visibleOnEntry,
+          isTrue,
+          reason: 'first Tab needs a visible target',
+        );
+        expect(visible(), isTrue, reason: 'focused controls cannot fade away');
+        expect(fullscreen.hitTestable(), findsOneWidget);
+        expect(_focusWithin(tester, fullscreen), isTrue);
+        expect(
+          windowManagerCalls,
+          isEmpty,
+          reason: 'focus alone must not activate',
+        );
+        expect(media.opened, hasLength(1));
+        expect(media.state.position, const Duration(seconds: 1));
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(
+          windowManagerCalls.map((c) => c.method),
+          contains('setFullScreen'),
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.f10);
+        await tester.pump(_playerIdle);
+        await tester.pumpAndSettle();
+        expect(find.byType(PlayerContextMenu), findsOneWidget);
+        expect(visible(), isTrue);
+        windowManagerCalls.clear();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(PlayerContextMenu), findsNothing);
+        expect(windowManagerCalls, isEmpty);
+        expect(_focusWithin(tester, fullscreen), isTrue);
+        await unmount(tester);
+      },
+    );
+  }
+
+  testWidgets('Mouse idle hides player controls and leaves video clickable', (
+    tester,
+  ) async {
+    final f = fixture();
+    await mount(tester, PlayerPage(state: f.state, request: f.session.request));
+    final fullscreen = find.byTooltip('全屏（F11）');
+    final target = tester.getCenter(fullscreen);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: target);
+    addTearDown(mouse.removePointer);
+    await tester.tapAt(target, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(windowManagerCalls.map((c) => c.method), contains('setFullScreen'));
+    expect(fullscreen.hitTestable(), findsOneWidget);
+    await tester.pump(_playerIdle);
+    await tester.pumpAndSettle();
+    expect(fullscreen.hitTestable(), findsNothing);
+    await tester.tapAt(
+      target,
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerContextMenu), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await tester.pump(_playerIdle);
+    await tester.pumpAndSettle();
+    expect(fullscreen.hitTestable(), findsNothing);
+    await mouse.moveTo(const Offset(550, 330));
+    await tester.pumpAndSettle();
+    expect(fullscreen.hitTestable(), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+    expect(_focusWithin(tester, find.byType(PlayerControlOverlay)), isTrue);
+    await tester.tapAt(target, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    await tester.pump(_playerIdle);
+    await tester.pumpAndSettle();
+    expect(fullscreen.hitTestable(), findsNothing);
+    await unmount(tester);
+  });
+
+  testWidgets('Tab can leave player controls for the live chooser', (
+    tester,
+  ) async {
+    final f = fixture();
+    final media = await mount(
+      tester,
+      PlayerPage(
+        state: f.state,
+        request: f.session.request,
+        liveSession: f.session,
+      ),
+    );
+    final fullscreen = find.byTooltip('全屏（F11）');
+    final chooser = find.byKey(const ValueKey('player-live-panel-toggle'));
+    for (final target in [fullscreen, chooser]) {
+      for (var i = 0; i < 25 && !_focusWithin(tester, target); i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(_focusWithin(tester, target), isTrue);
+    }
+    await tester.pump(_playerIdle);
+    await tester.pumpAndSettle();
+    expect(fullscreen.hitTestable(), findsNothing);
+    expect(chooser.hitTestable(), findsOneWidget);
+    expect(media.opened, hasLength(1));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerLivePanel), findsOneWidget);
+    expect(
+      tester
+          .widget<PlayerOsdLayer>(find.byType(PlayerOsdLayer))
+          .controlsVisible,
+      isTrue,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerLivePanel), findsNothing);
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'player');
+    await unmount(tester);
+  });
+
+  testWidgets('Player keyboard focus excludes the collapsed audio AI sheet', (
+    tester,
+  ) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 0.65;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final f = fixture();
+    await mount(tester, PlayerPage(state: f.state, request: f.session.request));
+    await tester.runAsync(
+      () => tester.tap(find.byKey(const ValueKey('player-audio-ai'))),
+    );
+    final panel = find.byType(PlayerAudioAiPanel);
+    for (var i = 0; i < 20 && panel.evaluate().isEmpty; i++) {
+      await flush(tester);
+    }
+    expect(panel, findsOneWidget);
+    final language = find.widgetWithText(TextFormField, '原音语言代码');
+    await tester.enterText(language, 'ja');
+    final editor = find.descendant(
+      of: language,
+      matching: find.byType(EditableText),
+    );
+    expect(tester.widget<EditableText>(editor).controller.text, 'ja');
+    expect(_focusWithin(tester, editor), isTrue);
+
+    final close = find.byTooltip('收起音频AI面板');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    try {
+      for (var i = 0; i < 20 && !_focusWithin(tester, close); i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+    } finally {
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    }
+    expect(_focusWithin(tester, close), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(panel, findsNothing);
+    final collapsedClose = find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == '收起音频AI面板',
+      skipOffstage: false,
+    );
+    final collapsedPanel = find.byType(PlayerAudioAiPanel, skipOffstage: false);
+    expect(collapsedPanel, findsOneWidget);
+    expect(_focusWithin(tester, collapsedClose), isFalse);
+    for (var i = 0; i < 25; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(_focusWithin(tester, collapsedClose), isFalse);
+      expect(_focusWithin(tester, collapsedPanel), isFalse);
+    }
+    await tester.tap(find.byKey(const ValueKey('player-audio-ai')));
+    await tester.pumpAndSettle();
+    expect(panel, findsOneWidget);
+    expect(tester.widget<EditableText>(editor).controller.text, 'ja');
+    await tester.enterText(language, 'ko');
+    expect(tester.widget<EditableText>(editor).controller.text, 'ko');
+    expect(_focusWithin(tester, editor), isTrue);
+    await unmount(tester);
+  });
+
+  testWidgets('Live clock stays clear of the always-available chooser', (
+    tester,
+  ) async {
+    debugOsdClockOverride = DateTime(2026, 11, 28, 12, 34, 56);
+    addTearDown(() => debugOsdClockOverride = null);
+    final f = fixture();
+    final page = PlayerPage(
+      state: f.state,
+      request: f.session.request,
+      liveSession: f.session,
+    );
+    final capture = _liveClockCapture.isEmpty ? null : GlobalKey();
+    await mount(tester, page, capture: capture);
+    expect(
+      await tester.runAsync(() => f.state.setOsdFlag(OsdFlag.time, true)),
+      isTrue,
+    );
+    await tester.pump();
+
+    final osd = find.byType(PlayerOsdLayer);
+    final clock = find.descendant(of: osd, matching: find.text('12:34:56'));
+    final chooser = find.byKey(const ValueKey('player-live-panel-toggle'));
+    final video = find.byType(Video);
+    final videoRect = tester.getRect(video);
+    expect(videoRect, const Rect.fromLTWH(0, 0, 1024, 640));
+    expect(tester.widget<PlayerOsdLayer>(osd).controlsVisible, isTrue);
+    expect(tester.widget<PlayerOsdLayer>(osd).flags[OsdFlag.time], isTrue);
+    expect(clock, findsOneWidget);
+    expect(chooser.hitTestable(), findsOneWidget);
+    if (capture != null) {
+      await _capturePlayer(tester, capture, 'playback-clock/$_liveClockCapture');
+    }
+
+    final clockRect = tester.getRect(clock);
+    final chooserRect = tester.getRect(chooser);
+    // ignore: avoid_print
+    print(
+      'live-clock visible: clock=$clockRect chooser=$chooserRect video=$videoRect',
+    );
+    expect(
+      clockRect.overlaps(chooserRect),
+      isFalse,
+      reason: 'clock=$clockRect chooser=$chooserRect',
+    );
+
+    await tester.tap(chooser);
+    await tester.pump();
+    expect(find.byType(PlayerLivePanel), findsOneWidget);
+    expect(tester.getRect(video), videoRect);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byType(PlayerLivePanel), findsNothing);
+    expect(tester.getRect(video), videoRect);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(tester.widget<PlayerOsdLayer>(osd).controlsVisible, isFalse);
+    expect(tester.getRect(clock).overlaps(tester.getRect(chooser)), isFalse);
+    expect(tester.getRect(chooser), chooserRect);
+    expect(tester.getRect(video), videoRect);
+    expect(chooser.hitTestable(), findsOneWidget);
+
+    expect(
+      await tester.runAsync(() => f.state.setOsdFlag(OsdFlag.time, false)),
+      isTrue,
+    );
+    await tester.pump(const Duration(seconds: 1));
+    expect(clock, findsNothing);
+    expect(tester.getRect(chooser), chooserRect);
+    expect(chooser.hitTestable(), findsOneWidget);
+    expect(tester.getRect(video), videoRect);
+    await unmount(tester);
+    expect(tester.takeException(), isNull);
+  });
   for (final size in [
     const Size(800, 600),
     const Size(1024, 640),
@@ -167,6 +629,13 @@ void main() {
       );
       expect(find.text('线路（2）'), findsOneWidget);
       expect(find.textContaining('选集（'), findsNothing);
+      final launcher = find.byKey(const ValueKey('player-live-panel-toggle'));
+      final launcherPane = find.ancestor(
+        of: launcher,
+        matching: find.byType(GlassPane),
+      );
+      expect(launcherPane, findsOneWidget);
+      expect(tester.widget<GlassPane>(launcherPane).blurBackdrop, isFalse);
       final rect = tester.getRect(find.byType(Video));
       await tester.tap(find.byKey(const ValueKey('player-live-panel-toggle')));
       await tester.pump();
@@ -254,14 +723,23 @@ void main() {
     await unmount(tester);
   });
   testWidgets('没有session的directUrl仍按点播呈现，不自动当直播', (tester) async {
+    debugOsdClockOverride = DateTime(2026, 11, 28, 12, 34, 56);
+    addTearDown(() => debugOsdClockOverride = null);
     final f = fixture();
     await mount(tester, PlayerPage(state: f.state, request: f.session.request));
+    final osd = find.byType(PlayerOsdLayer);
+    final clock = find.descendant(of: osd, matching: find.text('12:34:56'));
+    expect(tester.getRect(clock).topRight, const Offset(1008, 64));
     expect(find.text('选集（2）'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('player-live-panel-toggle')),
       findsNothing,
     );
     expect(find.byTooltip('下一集（]）'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(tester.widget<PlayerOsdLayer>(osd).controlsVisible, isFalse);
+    expect(tester.getRect(clock).topRight, const Offset(1008, 16));
     await unmount(tester);
   });
   testWidgets('回看保持seek，不自动连播，回直播恢复原线路', (tester) async {

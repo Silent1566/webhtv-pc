@@ -15,6 +15,8 @@ library;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'glass_dialog.dart';
+
 import '../core/lut.dart';
 import '../services/lut_store.dart';
 
@@ -171,33 +173,10 @@ class _LutPresetBrowserState extends State<LutPresetBrowser> {
   }
 
   Future<void> _importFromUrl() async {
-    final controller = TextEditingController();
     final url = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('从链接导入 LUT'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'https://…/something.cube',
-            helperText: '直接下载并校验，最多 8 MiB',
-          ),
-          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-            child: const Text('下载'),
-          ),
-        ],
-      ),
+      builder: (_) => const _LutUrlDialog(),
     );
-    controller.dispose();
     if (url == null || url.trim().isEmpty || !mounted) return;
     await _run('正在下载…', () async {
       final preset = await widget.store.download(url);
@@ -375,7 +354,6 @@ class _LutPresetBrowserState extends State<LutPresetBrowser> {
                 decoration: const InputDecoration(
                   isDense: true,
                   hintText: '关键词，例如 film / cyberpunk',
-                  border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => _searchOnline(),
               ),
@@ -464,4 +442,46 @@ class _LutPresetBrowserState extends State<LutPresetBrowser> {
       ),
     );
   }
+}
+
+class _LutUrlDialog extends StatefulWidget {
+  const _LutUrlDialog();
+
+  @override
+  State<_LutUrlDialog> createState() => _LutUrlDialogState();
+}
+
+class _LutUrlDialogState extends State<_LutUrlDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GlassAlertDialog(
+    blurBackdrop: false,
+    title: const Text('从链接导入 LUT'),
+    content: TextField(
+      controller: _controller,
+      autofocus: true,
+      decoration: const InputDecoration(
+        labelText: 'https://…/something.cube',
+        helperText: '直接下载并校验，最多 8 MiB',
+      ),
+      onSubmitted: (value) => Navigator.of(context).pop(value),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.of(context).pop(_controller.text),
+        child: const Text('下载'),
+      ),
+    ],
+  );
 }

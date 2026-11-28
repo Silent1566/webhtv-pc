@@ -62,7 +62,7 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    testWidgets('等待反馈只有一个转圈，没有文字与底色：$brightness', (tester) async {
+    testWidgets('等待反馈只有一个转圈与玻璃边，不显示文字：$brightness', (tester) async {
       AsyncActionFeedback? action;
       await tester.pumpWidget(
         MaterialApp(
@@ -90,7 +90,7 @@ void main() {
       expect(
         find.descendant(of: panel, matching: find.byType(Material)),
         findsNothing,
-        reason: '不要背景底色卡片',
+        reason: '不嵌套实底 Material 卡片',
       );
       final spinner = tester.widget<CircularProgressIndicator>(
         find.descendant(
@@ -101,8 +101,8 @@ void main() {
       expect(spinner.color, isNull, reason: '颜色随主题 primary，不写死');
       expect(
         tester.getSize(panel),
-        const Size(36, 36),
-        reason: '转圈盒子就是转圈本身，不撑满整屏',
+        const Size(52, 52),
+        reason: '玻璃只给 36px 指示器留出 8px 边距，不撑满整屏',
       );
       final semantics = tester.ensureSemantics();
       expect(tester.getSemantics(panel).label, '正在准备播放', reason: '不上屏也要能被屏读出来');

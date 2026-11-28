@@ -11,6 +11,8 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/test_fonts.dart';
@@ -123,6 +125,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('选择文件（JSON / ZIP）'), findsOneWidget);
     expect(find.text('选择文件夹（猫源包）'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.text('选择文件夹（猫源包）'),
+        matching: find.byType(GlassPane),
+      ),
+      findsNWidgets(2),
+    );
     expect(find.byType(MenuItemButton), findsNWidgets(2));
     expect(find.text('输入本地配置文件路径'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -186,7 +195,7 @@ void main() {
     );
     expect(state.config, isNull);
     expect(state.savedConfigs, isEmpty);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

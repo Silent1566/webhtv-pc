@@ -7,12 +7,14 @@
 /// 右下角、从下往上堆叠、带一条倒计时进度条。
 ///
 /// 层级沿用既有的视觉语言（见 `browse_pages.dart` 的 `_NoticeBanner` 注释）：
-/// **错误是实底 `errorContainer`，信息/成功是 `surfaceContainerHigh` + 发丝边**。
+/// 错误用语义色区分，信息/成功沿用中性玻璃面。
 /// 通知是"信息"，不是"警报"，两者的重量必须能一眼分开。
 library;
 
 import 'package:flutter/material.dart';
 
+import 'glass_dialog.dart' show glassSecondaryInkOf;
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 // ---------------------------------------------------------------------------
@@ -183,7 +185,8 @@ class ToastCenter extends ChangeNotifier {
       detail: detail,
       kind: kind,
       action: action,
-      duration: duration ??
+      duration:
+          duration ??
           (kind == ToastKind.error
               ? kToastErrorDuration
               : kToastDefaultDuration),
@@ -410,24 +413,17 @@ class _ToastCardState extends State<_ToastCard> with TickerProviderStateMixin {
     final isError = toast.kind == ToastKind.error;
     final semantic = context.semanticColors;
 
-    // 错误 = 实底 errorContainer；信息/成功 = 浅底 + 发丝边（层级更低一档）。
-    final surface = isError
-        ? scheme.errorContainer
-        : scheme.surfaceContainerHigh;
-    final ink = isError ? scheme.onErrorContainer : scheme.onSurface;
-    // 彩色表面上的次级文字必须从该色相染色，不能用底色的墨。
-    final muted = isError
-        ? scheme.onErrorContainer.withValues(alpha: 0.72)
-        : scheme.onSurfaceVariant;
+    final ink = scheme.onSurface;
+    final muted = glassSecondaryInkOf(theme);
     final icon = switch (toast.kind) {
       ToastKind.info => Icons.info_outline,
       ToastKind.success => Icons.check_circle_outline,
       ToastKind.error => Icons.error_outline,
     };
     final iconColor = switch (toast.kind) {
-      ToastKind.info => scheme.onSurfaceVariant,
+      ToastKind.info => muted,
       ToastKind.success => semantic.statusOk,
-      ToastKind.error => scheme.onErrorContainer,
+      ToastKind.error => scheme.error,
     };
     final barColor = toast.kind == ToastKind.success
         ? semantic.statusOk
@@ -455,108 +451,110 @@ class _ToastCardState extends State<_ToastCard> with TickerProviderStateMixin {
           child: Semantics(
             container: true,
             liveRegion: true,
-            child: Container(
+            child: SizedBox(
               width: kToastMaxWidth,
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                color: surface,
+              child: GlassPane(
                 borderRadius: AppRadius.mdAll,
-                border: isError
-                    ? null
-                    : Border.all(
-                        color: scheme.outlineVariant.withValues(alpha: 0.6),
-                      ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: contentPadding,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(icon, size: AppSpace.lg, color: iconColor),
-                        const SizedBox(width: AppSpace.sm),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                toast.message,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: ink,
-                                ),
-                              ),
-                              if (toast.detail != null) ...[
-                                const SizedBox(height: AppSpace.xs),
-                                Text(
-                                  toast.detail!,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: muted,
-                                  ),
-                                ),
-                              ],
-                              // 动作排在正文与详情之后：先把"怎么了"说完，
-                              // 再给"现在做什么"。
-                              if (toast.action != null) ...[
-                                const SizedBox(height: AppSpace.xs),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: TextButton.icon(
-                                    key: toast.action!.key,
-                                    onPressed: _fireAction,
-                                    icon: toast.action!.icon == null
-                                        ? null
-                                        : Icon(
-                                            toast.action!.icon,
-                                            size: AppSpace.lg,
-                                            color: ink,
-                                          ),
-                                    label: Text(toast.action!.label),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: ink,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: AppSpace.sm,
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                      textStyle: theme.textTheme.labelLarge,
+                blurBackdrop: false,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: isError
+                        ? scheme.errorContainer.withValues(alpha: .28)
+                        : null,
+                    borderRadius: AppRadius.mdAll,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: contentPadding,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(icon, size: AppSpace.lg, color: iconColor),
+                            const SizedBox(width: AppSpace.sm),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    toast.message,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: ink,
                                     ),
                                   ),
-                                ),
-                              ],
-                            ],
-                          ),
+                                  if (toast.detail != null) ...[
+                                    const SizedBox(height: AppSpace.xs),
+                                    Text(
+                                      toast.detail!,
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(color: muted),
+                                    ),
+                                  ],
+                                  // 动作排在正文与详情之后：先把"怎么了"说完，
+                                  // 再给"现在做什么"。
+                                  if (toast.action != null) ...[
+                                    const SizedBox(height: AppSpace.xs),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: TextButton.icon(
+                                        key: toast.action!.key,
+                                        onPressed: _fireAction,
+                                        icon: toast.action!.icon == null
+                                            ? null
+                                            : Icon(
+                                                toast.action!.icon,
+                                                size: AppSpace.lg,
+                                                color: ink,
+                                              ),
+                                        label: Text(toast.action!.label),
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: ink,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: AppSpace.sm,
+                                          ),
+                                          visualDensity: VisualDensity.compact,
+                                          textStyle: theme.textTheme.labelLarge,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              key: ValueKey('app-toast-close-${toast.id}'),
+                              // 这里**不能用 `tooltip:`**：宿主挂在 `MaterialApp.builder`
+                              // 里、与 Navigator 平级，因此位于 Overlay **之外**，而
+                              // `RawTooltip.build` 无条件断言 `debugCheckHasOverlay`——
+                              // 一条 toast 就足以在 debug/profile 构建里抛
+                              // `No Overlay widget found`（release 把断言剥掉才看不见）。
+                              // 无障碍语义用图标自带的 `semanticLabel` 保住：
+                              // Windows 原生通知本来也没有 tooltip。
+                              onPressed: () =>
+                                  _beginExit(notifyDismissal: true),
+                              icon: const Icon(
+                                Icons.close,
+                                size: AppSpace.lg,
+                                semanticLabel: '关闭提示',
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: _kCloseButtonSize,
+                                minHeight: _kCloseButtonSize,
+                              ),
+                              color: muted,
+                            ),
+                          ],
                         ),
-                        IconButton(
-                          key: ValueKey('app-toast-close-${toast.id}'),
-                          // 这里**不能用 `tooltip:`**：宿主挂在 `MaterialApp.builder`
-                          // 里、与 Navigator 平级，因此位于 Overlay **之外**，而
-                          // `RawTooltip.build` 无条件断言 `debugCheckHasOverlay`——
-                          // 一条 toast 就足以在 debug/profile 构建里抛
-                          // `No Overlay widget found`（release 把断言剥掉才看不见）。
-                          // 无障碍语义用图标自带的 `semanticLabel` 保住：
-                          // Windows 原生通知本来也没有 tooltip。
-                          onPressed: () => _beginExit(notifyDismissal: true),
-                          icon: const Icon(
-                            Icons.close,
-                            size: AppSpace.lg,
-                            semanticLabel: '关闭提示',
-                          ),
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: _kCloseButtonSize,
-                            minHeight: _kCloseButtonSize,
-                          ),
-                          color: muted,
-                        ),
-                      ],
-                    ),
+                      ),
+                      if (countdown != null)
+                        _CountdownBar(controller: countdown, color: barColor),
+                    ],
                   ),
-                  if (countdown != null)
-                    _CountdownBar(controller: countdown, color: barColor),
-                ],
+                ),
               ),
             ),
           ),

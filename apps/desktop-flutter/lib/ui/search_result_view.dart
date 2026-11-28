@@ -22,6 +22,7 @@ import '../state/search_state.dart';
 import 'poster_image.dart';
 import 'common.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 
 /// 相似度预设档位（与「自定义…」滑块互补）。
 const List<int> _similarityPresets = [0, 30, 60, 100];
@@ -72,7 +73,7 @@ class PosterCard extends StatelessWidget {
   /// 海报本身的 key（浮层的候选行用它做尺寸/图片来源断言）。
   final Key? posterKey;
 
-  /// 选中态描边（换源浮层勾选后高亮）。
+  /// 选中态填色（换源浮层勾选后高亮）。
   final bool highlighted;
 
   /// 叠在海报上的角标层（需要 `Positioned` 的子节点，父级是一个 `Stack`）。
@@ -133,7 +134,7 @@ class PosterCard extends StatelessWidget {
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             borderRadius: AppRadius.mdAll,
-                            border: Border.all(color: scheme.primary, width: 2),
+                            color: scheme.primary.withValues(alpha: .16),
                           ),
                         ),
                       ),
@@ -269,10 +270,16 @@ class SearchResultView extends StatefulWidget {
     this.showSimilarity = true,
     this.showSummary = true,
     this.emptyState,
+    this.contentPadding,
+    this.underlapViewportBottom,
   });
 
   /// 当前搜索结果快照（同一批次内可变，逐站点投递）。
   final MultiSiteSearchOutcome outcome;
+
+  /// Optional padding for both independently scrolling result columns.
+  final EdgeInsets? contentPadding;
+  final double? underlapViewportBottom;
 
   /// widget key 前缀：`<prefix>-group-all`、`<prefix>-site-<siteKey>` 等。
   final String keyPrefix;
@@ -431,7 +438,9 @@ class _SearchResultViewState extends State<SearchResultView> {
         if (entry == null || entry.loadingMore || !entry.hasMore) return;
         final rawBefore = entry.itemCount;
         final visibleBefore = _visibleOf(entry).length;
-        if (auto && hop == 0 && !(_similarity > 0 && visibleBefore == 0)) return;
+        if (auto && hop == 0 && !(_similarity > 0 && visibleBefore == 0)) {
+          return;
+        }
         final accepted = await loadMore(entry.siteKey);
         if (!mounted || !accepted) return;
         final after = _outcome.entryOf(entry.siteKey);
@@ -536,81 +545,90 @@ class _SearchResultViewState extends State<SearchResultView> {
     final custom = !_similarityPresets.contains(_similarity);
     final showGroups = groups.isNotEmpty;
     if (!showGroups && !widget.showSimilarity) return null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (showGroups)
-          ConstrainedBox(
-            key: ValueKey('${widget.keyPrefix}-filter-groups'),
-            constraints: const BoxConstraints(maxHeight: 96),
-            child: Scrollbar(
-              controller: _groupScroll,
-              thumbVisibility: true,
-              thickness: 3,
-              child: ListView(
-                controller: _groupScroll,
-                shrinkWrap: true,
-                padding: const EdgeInsets.only(right: AppSpace.sm),
-                children: [
-                  Wrap(
-                    spacing: AppSpace.sm,
-                    runSpacing: AppSpace.sm,
-                    crossAxisAlignment: WrapCrossAlignment.center,
+    return Padding(
+      padding: const EdgeInsets.all(AppSpace.md),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showGroups)
+              ConstrainedBox(
+                key: ValueKey('${widget.keyPrefix}-filter-groups'),
+                constraints: const BoxConstraints(maxHeight: 96),
+                child: Scrollbar(
+                  controller: _groupScroll,
+                  thumbVisibility: true,
+                  thickness: 3,
+                  child: ListView(
+                    controller: _groupScroll,
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.only(right: AppSpace.sm),
                     children: [
-                      const Text(
-                        '分组:',
-                        style: TextStyle(fontWeight: FontWeight.w500),
+                      Wrap(
+                        spacing: AppSpace.sm,
+                        runSpacing: AppSpace.sm,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text(
+                            '分组:',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          TagChip(
+                            key: ValueKey('${widget.keyPrefix}-group-all'),
+                            label: '全部',
+                            selected: widget.group.isEmpty,
+                            onTap: () => widget.onGroupChanged?.call(''),
+                            selectable: true,
+                          ),
+                          for (final group in groups)
+                            TagChip(
+                              key: ValueKey('${widget.keyPrefix}-group-$group'),
+                              label: group,
+                              selected: widget.group == group,
+                              onTap: () => widget.onGroupChanged?.call(group),
+                              selectable: true,
+                            ),
+                        ],
                       ),
-                      TagChip(
-                        key: ValueKey('${widget.keyPrefix}-group-all'),
-                        label: '全部',
-                        selected: widget.group.isEmpty,
-                        onTap: () => widget.onGroupChanged?.call(''),
-                        selectable: true,
-                      ),
-                      for (final group in groups)
-                        TagChip(
-                          key: ValueKey('${widget.keyPrefix}-group-$group'),
-                          label: group,
-                          selected: widget.group == group,
-                          onTap: () => widget.onGroupChanged?.call(group),
-                          selectable: true,
-                        ),
                     ],
+                  ),
+                ),
+              ),
+            if (showGroups && widget.showSimilarity)
+              const SizedBox(height: AppSpace.xs),
+            if (widget.showSimilarity)
+              Wrap(
+                key: ValueKey('${widget.keyPrefix}-filter-similarity'),
+                spacing: AppSpace.sm,
+                runSpacing: AppSpace.sm,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  const Text(
+                    '相似度:',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  for (final value in _similarityPresets)
+                    TagChip(
+                      key: ValueKey('${widget.keyPrefix}-similarity-$value'),
+                      label: _similarityLabel(value),
+                      selected: _similarity == value,
+                      onTap: () => _applySimilarity(value),
+                      selectable: true,
+                    ),
+                  TagChip(
+                    key: ValueKey('${widget.keyPrefix}-similarity-custom'),
+                    label: custom ? '≥$_similarity%' : '自定义…',
+                    selected: custom,
+                    onTap: _openSimilaritySlider,
+                    selectable: true,
                   ),
                 ],
               ),
-            ),
-          ),
-        if (showGroups && widget.showSimilarity)
-          const SizedBox(height: AppSpace.xs),
-        if (widget.showSimilarity)
-          Wrap(
-            key: ValueKey('${widget.keyPrefix}-filter-similarity'),
-            spacing: AppSpace.sm,
-            runSpacing: AppSpace.sm,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              const Text('相似度:', style: TextStyle(fontWeight: FontWeight.w500)),
-              for (final value in _similarityPresets)
-                TagChip(
-                  key: ValueKey('${widget.keyPrefix}-similarity-$value'),
-                  label: _similarityLabel(value),
-                  selected: _similarity == value,
-                  onTap: () => _applySimilarity(value),
-                  selectable: true,
-                ),
-              TagChip(
-                key: ValueKey('${widget.keyPrefix}-similarity-custom'),
-                label: custom ? '≥$_similarity%' : '自定义…',
-                selected: custom,
-                onTap: _openSimilaritySlider,
-                selectable: true,
-              ),
-            ],
-          ),
-      ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -622,13 +640,20 @@ class _SearchResultViewState extends State<SearchResultView> {
 
   Widget _buildSiteSplit() {
     final entries = _rawEntries;
-    if (entries.isEmpty) return _buildNoVisibleResults();
+    if (entries.isEmpty) {
+      return _buildNoVisibleResults();
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(width: 200, child: _buildSiteList(entries)),
         const SizedBox(width: AppSpace.md),
-        Expanded(child: _buildActiveResults()),
+        Expanded(
+          child: Material(
+            type: MaterialType.transparency,
+            child: _buildActiveResults(),
+          ),
+        ),
       ],
     );
   }
@@ -639,52 +664,56 @@ class _SearchResultViewState extends State<SearchResultView> {
     // 容器里（换源浮层的容器就是）会触发 assert，所以自己铺一层透明 Material。
     return Material(
       color: Colors.transparent,
-      child: ListView(
-        children: [
-          ListTile(
-            key: ValueKey('${widget.keyPrefix}-site-all'),
-            dense: true,
-            selected: _activeSiteKey == _allSitesKey,
-            title: const Text('全部站点'),
-            trailing: Text('${_allViewVods.length}'),
-            onTap: () => _selectSite(_allSitesKey),
-          ),
-          for (final entry in entries)
-            Builder(
-              builder: (context) {
-                final visible = _visibleOf(entry).length;
-                return ListTile(
-                  key: ValueKey('${widget.keyPrefix}-site-${entry.siteKey}'),
-                  dense: true,
-                  selected: _activeSiteKey == entry.siteKey,
-                  title: Text(
-                    entry.siteName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: entry.fromCache
-                      ? const Text('缓存', style: TextStyle(fontSize: 11))
-                      : null,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (visible == 0 && entry.itemCount > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(right: AppSpace.xs),
-                          child: Icon(
-                            Icons.filter_alt_off_outlined,
-                            size: 14,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      Text('$visible'),
-                    ],
-                  ),
-                  onTap: () => _selectSite(entry.siteKey),
-                );
-              },
+      child: ShellScrollUnderlap(
+        viewportBottom: widget.underlapViewportBottom,
+        builder: (context, _, leading) => ListView(
+          padding: _contentPadding(leading),
+          children: [
+            ListTile(
+              key: ValueKey('${widget.keyPrefix}-site-all'),
+              dense: true,
+              selected: _activeSiteKey == _allSitesKey,
+              title: const Text('全部站点'),
+              trailing: Text('${_allViewVods.length}'),
+              onTap: () => _selectSite(_allSitesKey),
             ),
-        ],
+            for (final entry in entries)
+              Builder(
+                builder: (context) {
+                  final visible = _visibleOf(entry).length;
+                  return ListTile(
+                    key: ValueKey('${widget.keyPrefix}-site-${entry.siteKey}'),
+                    dense: true,
+                    selected: _activeSiteKey == entry.siteKey,
+                    title: Text(
+                      entry.siteName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: entry.fromCache
+                        ? const Text('缓存', style: TextStyle(fontSize: 11))
+                        : null,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (visible == 0 && entry.itemCount > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(right: AppSpace.xs),
+                            child: Icon(
+                              Icons.filter_alt_off_outlined,
+                              size: 14,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        Text('$visible'),
+                      ],
+                    ),
+                    onTap: () => _selectSite(entry.siteKey),
+                  );
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -705,9 +734,7 @@ class _SearchResultViewState extends State<SearchResultView> {
         placeholder: EmptyState(
           icon: Icons.filter_alt_off_outlined,
           title: '该站点当前筛选下没有可见结果',
-          message: _similarity > 0
-              ? '相似度阈值把这一页都过滤掉了，可放宽阈值或继续加载下一页。'
-              : null,
+          message: _similarity > 0 ? '相似度阈值把这一页都过滤掉了，可放宽阈值或继续加载下一页。' : null,
         ),
       );
     }
@@ -724,32 +751,50 @@ class _SearchResultViewState extends State<SearchResultView> {
     Widget? placeholder,
   }) {
     final active = _activeEntry;
-    return Column(
-      children: [
-        Expanded(
-          child: vods.isEmpty
-              ? (placeholder ?? const SizedBox.shrink())
-              : ListView(
-                  key: ValueKey('${widget.keyPrefix}-result-list'),
-                  controller: _resultScroll,
+    if (vods.isEmpty) {
+      return Column(
+        children: [
+          Expanded(child: placeholder ?? const SizedBox.shrink()),
+          footer,
+        ],
+      );
+    }
+    return ShellScrollUnderlap(
+      viewportBottom: widget.underlapViewportBottom,
+      builder: (context, _, leading) => Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: _contentPadding(leading),
+              key: ValueKey('${widget.keyPrefix}-result-list'),
+              controller: _resultScroll,
+              children: [
+                Wrap(
+                  spacing: AppSpace.md,
+                  runSpacing: AppSpace.md,
                   children: [
-                    Wrap(
-                      spacing: AppSpace.md,
-                      runSpacing: AppSpace.md,
-                      children: [
-                        for (final vod in vods)
-                          _buildResultCard(
-                            vod,
-                            active?.siteKey ?? _ownerSiteKeyOf(vod),
-                          ),
-                      ],
-                    ),
+                    for (final vod in vods)
+                      _buildResultCard(
+                        vod,
+                        active?.siteKey ?? _ownerSiteKeyOf(vod),
+                      ),
                   ],
                 ),
-        ),
-        footer,
-      ],
+              ],
+            ),
+          ),
+          footer,
+        ],
+      ),
     );
+  }
+
+  EdgeInsets? _contentPadding(double leading) {
+    if (leading == 0) return widget.contentPadding;
+    final padding =
+        widget.contentPadding ??
+        const EdgeInsets.only(top: kShellContentTopInset);
+    return padding.copyWith(top: padding.top + leading - kShellContentTopInset);
   }
 
   /// 合并视图里这条结果属于哪个站点（`Wrap` 抹掉了站点边界）。
@@ -767,9 +812,7 @@ class _SearchResultViewState extends State<SearchResultView> {
     final overlayOf = widget.overlayOf;
     return PosterCard(
       key: ValueKey(widget.itemKeyOf(siteKey, vod.vodId)),
-      posterKey: ValueKey(
-        '${widget.keyPrefix}-poster-$siteKey-${vod.vodId}',
-      ),
+      posterKey: ValueKey('${widget.keyPrefix}-poster-$siteKey-${vod.vodId}'),
       title: vod.vodName,
       imageUrl: vod.vodPic,
       subtitle: subtitleOf != null ? subtitleOf(siteKey, vod) : vod.vodRemarks,
@@ -816,9 +859,8 @@ class _SearchResultViewState extends State<SearchResultView> {
         entry.pageCount > 0
             ? '已全部加载（${entry.page} 页 · ${entry.itemCount} 条）'
             : '已全部加载（${entry.itemCount} 条）',
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+        style: Theme.of(context).textTheme.bodySmall
+            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -830,9 +872,8 @@ class _SearchResultViewState extends State<SearchResultView> {
       padding: const EdgeInsets.symmetric(vertical: AppSpace.lg),
       child: Text(
         '在左侧选择单个站点可继续加载下一页',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+        style: Theme.of(context).textTheme.bodySmall
+            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
   }

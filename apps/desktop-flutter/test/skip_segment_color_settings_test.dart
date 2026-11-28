@@ -9,6 +9,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/intro_skip_options_page.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 Future<void> _flush(WidgetTester tester) async {
@@ -194,7 +195,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('skip-color-save')));
       await tester.pumpAndSettle();
       expect(find.text('请输入 #RRGGBB 格式的颜色，例如 #38D9A9'), findsOneWidget);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(GlassAlertDialog), findsOneWidget);
       expect(state.playerOptions, before);
       expect(File(state.paths.settingsPath).readAsStringSync(), written);
     }
@@ -204,7 +205,7 @@ void main() {
     );
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(state.playerOptions, before);
     expect(File(state.paths.settingsPath).readAsStringSync(), written);
   });

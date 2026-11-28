@@ -11,6 +11,10 @@ import '../core/app_error.dart';
 import '../core/episode_manual_match.dart';
 import '../core/episode_range.dart';
 import '../core/episode_aggregation.dart';
+import 'glass_dialog.dart';
+import 'glass_widgets.dart';
+import 'wallpaper_backdrop.dart';
+import 'backdrop_scrim.dart';
 import 'episode_version_dialog.dart';
 import 'history_progress_picker.dart';
 import 'history_resume_seed.dart';
@@ -72,50 +76,83 @@ import 'spider_account_page.dart';
 import 'tmdb_widgets.dart';
 import 'toast.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 
 class BrowsePage extends StatelessWidget {
-  const BrowsePage({super.key, required this.state});
+  const BrowsePage({
+    super.key,
+    required this.state,
+    this.shellUnderlap = false,
+  });
+
+  final bool shellUnderlap;
 
   final AppState state;
 
   @override
   Widget build(BuildContext context) {
+    if (!shellUnderlap) return _buildPage(null);
+    return LayoutBuilder(
+      builder: (context, page) => _buildPage(page.maxHeight),
+    );
+  }
+
+  Widget _buildPage(double? viewportBottom) {
+    final shellTop = shellUnderlap ? kShellContentTopInset : 0.0;
+    Widget belowBar(Widget child) => Padding(
+      padding: EdgeInsets.only(top: shellTop),
+      child: child,
+    );
     if (!state.hasConfig) {
-      return const _EmptyHint(
-        title: '还没有导入配置',
-        message: '请点击顶栏「导入配置」，支持 URL、本地文件和 JSON 文本三种方式。',
+      return belowBar(
+        const _EmptyHint(
+          title: '还没有导入配置',
+          message: '请点击顶栏「导入配置」，支持 URL、本地文件和 JSON 文本三种方式。',
+        ),
       );
     }
     final site = state.selectedSite;
     if (site == null) {
-      return const _EmptyHint(title: '请选择站点', message: '点击顶栏「选择站点」挑选一个可运行的站点。');
+      return belowBar(
+        const _EmptyHint(title: '请选择站点', message: '点击顶栏「选择站点」挑选一个可运行的站点。'),
+      );
     }
     final availability = state.siteItems
         .where((item) => item.site.key == site.key)
         .map((item) => item.availability)
         .firstWhereOrNull();
     if (availability?.preparing == true && state.homeResult == null) {
-      return _EmptyHint(
-        title: '正在准备当前站点',
-        message: availability!.reason ?? '准备完成后会自动加载内容。',
+      return belowBar(
+        _EmptyHint(
+          title: '正在准备当前站点',
+          message: availability!.reason ?? '准备完成后会自动加载内容。',
+        ),
       );
     }
     if (availability != null &&
         !availability.preparing &&
         !availability.available) {
-      return _UnsupportedSiteHint(
-        site: site,
-        availability: availability,
-        onRetry: () => state.loadHome(site),
+      return belowBar(
+        _UnsupportedSiteHint(
+          site: site,
+          availability: availability,
+          onRetry: () => state.loadHome(site),
+        ),
       );
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        SizedBox(height: shellTop),
         // 分类条固定（页面级上下文，永远可达），筛选条与网格一起滚动。
         _BrowseTabBar(state: state, site: site),
-        Expanded(child: _VodGrid(state: state)),
+        Expanded(
+          child: Material(
+            type: MaterialType.transparency,
+            child: _VodGrid(state: state, viewportBottom: viewportBottom),
+          ),
+        ),
       ],
     );
   }
@@ -186,75 +223,74 @@ class _BrowseTabBarState extends State<_BrowseTabBar> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          height: 46,
-          padding: const EdgeInsets.only(left: 8, right: 4),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                // 桌面端的竖滚轮在 Flutter 里不驱动横向滚动，需要显式转一次，
-                // 否则分类多到溢出时滚轮推不动这条（§17.4 鼠标可用）。
-                // 鼠标左右拖由 `HorizontalMouseDrag` 打开（同样 §17.4）。
-                child: HorizontalMouseDrag(
-                  child: WheelScroll(
-                    controller: _controller,
-                    child: SingleChildScrollView(
+        Material(
+          type: MaterialType.transparency,
+          child: Container(
+            height: 46,
+            padding: const EdgeInsets.only(left: 8, right: 4, bottom: 1),
+            child: Row(
+              children: [
+                Expanded(
+                  // 桌面端的竖滚轮在 Flutter 里不驱动横向滚动，需要显式转一次，
+                  // 否则分类多到溢出时滚轮推不动这条（§17.4 鼠标可用）。
+                  // 鼠标左右拖由 `HorizontalMouseDrag` 打开（同样 §17.4）。
+                  child: HorizontalMouseDrag(
+                    child: WheelScroll(
                       controller: _controller,
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          // 首页**没有推荐内容**时不显示「默认推荐」标签：那个标签点进去
-                          // 只有空态（实测 126 站点里 40 个如此），留在条上只会误导用户。
-                          if (hasHomeList)
-                            _BrowseTab(
-                              key: const ValueKey('browse-tab-default'),
-                              label: '默认推荐',
-                              selected: selected == null,
-                              onTap: loading
-                                  ? null
-                                  : state.selectDefaultListing,
-                            ),
-                          for (final item in classes)
-                            _BrowseTab(
-                              key: ValueKey('browse-tab-${item.typeId}'),
-                              label: item.typeName,
-                              selected: selected == item.typeId,
-                              onTap: loading
-                                  ? null
-                                  : () => state.loadCategory(item.typeId),
-                            ),
-                        ],
+                      child: SingleChildScrollView(
+                        controller: _controller,
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            // 首页**没有推荐内容**时不显示「默认推荐」标签：那个标签点进去
+                            // 只有空态（实测 126 站点里 40 个如此），留在条上只会误导用户。
+                            if (hasHomeList)
+                              _BrowseTab(
+                                key: const ValueKey('browse-tab-default'),
+                                label: '默认推荐',
+                                selected: selected == null,
+                                onTap: loading
+                                    ? null
+                                    : state.selectDefaultListing,
+                              ),
+                            for (final item in classes)
+                              _BrowseTab(
+                                key: ValueKey('browse-tab-${item.typeId}'),
+                                label: item.typeName,
+                                selected: selected == item.typeId,
+                                onTap: loading
+                                    ? null
+                                    : () => state.loadCategory(item.typeId),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              // 筛选入口：**只有真的有筛选维度时才出现**。
-              //
-              // 「没有筛选的分组就不应该有筛选按钮」（用户反馈 2026-10-13）——
-              // 一个点了什么也没有的按钮比没有按钮更糟。
-              if (filters.isNotEmpty)
-                _FilterToggleButton(
-                  state: state,
-                  open: open,
-                  onToggle: () => setState(() => _filtersOpen = !_filtersOpen),
+                // 筛选入口：**只有真的有筛选维度时才出现**。
+                //
+                // 「没有筛选的分组就不应该有筛选按钮」（用户反馈 2026-10-13）——
+                // 一个点了什么也没有的按钮比没有按钮更糟。
+                if (filters.isNotEmpty)
+                  _FilterToggleButton(
+                    state: state,
+                    open: open,
+                    onToggle: () =>
+                        setState(() => _filtersOpen = !_filtersOpen),
+                  ),
+                IconButton(
+                  key: const ValueKey('browse-refresh'),
+                  tooltip: selected == null ? '刷新首页' : '刷新当前分类',
+                  onPressed: loading
+                      ? null
+                      : () => selected == null
+                            ? state.loadHome(widget.site)
+                            : state.loadCategory(selected),
+                  icon: const Icon(Icons.refresh, size: 18),
                 ),
-              IconButton(
-                key: const ValueKey('browse-refresh'),
-                tooltip: selected == null ? '刷新首页' : '刷新当前分类',
-                onPressed: loading
-                    ? null
-                    : () => selected == null
-                          ? state.loadHome(widget.site)
-                          : state.loadCategory(selected),
-                icon: const Icon(Icons.refresh, size: 18),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         // 面板是**页面内联区**：展开时把下面的海报网格推下去，不遮住它。
@@ -410,9 +446,7 @@ class _FilterToggleButton extends StatelessWidget {
 /// 分类条正下方的**内联筛选面板**容器：贴齐内容区左右内边距、横铺满整个宽度。
 ///
 /// 视觉目标是「媒体库的筛选工作台」而不是一个弹窗：
-/// - 底色 `surfaceContainerLow`（比页面底色亮/暗一档，两套主题都由 ColorScheme
-///   给出），下沿一条发丝线收边，**不投影片阴影**——它是页面的一块区域，不是浮在
-///   页面之上的东西；
+/// - 染底区分层级，不画边线或投影；它是页面的一块区域，不是浮在页面之上的东西；
 /// - 维度多时面板自身纵向滚动，最大高度 = `max(窗口高 × 0.45, 340px)`：宽屏下
 ///   「年份 + 字母」这类大维度排成 1~3 行就够，不需要吃掉半屏；窗口最小尺寸
 ///   （1024×640，见 `app.dart` 的 `minimumSize`）下这也只占 340px，网格仍有余量；
@@ -426,40 +460,34 @@ class _FilterPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final maxHeight = math.max(MediaQuery.sizeOf(context).height * 0.45, 340.0);
     final active = state.categoryFilters;
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        border: Border(
-          // 只有下沿这条线：上沿的分隔线由分类条自己的 bottom border 担任，
-          // 两条贴在一起会变成 2px 的粗线。
-          bottom: BorderSide(color: theme.dividerColor),
-        ),
-      ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        // 只有 chip 区滚动，"已生效 + 重置"这一条钉在面板底部：维度多到要滚动时
-        // 重置按钮不能跟着滚出视野（那是用户筛不出结果时的唯一退路）。
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpace.lg,
-                  AppSpace.md,
-                  AppSpace.lg,
-                  AppSpace.md,
+    return GlassPane(
+      child: Material(
+        type: MaterialType.transparency,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          // 只有 chip 区滚动，"已生效 + 重置"这一条钉在面板底部：维度多到要滚动时
+          // 重置按钮不能跟着滚出视野（那是用户筛不出结果时的唯一退路）。
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.lg,
+                    AppSpace.md,
+                    AppSpace.lg,
+                    AppSpace.md,
+                  ),
+                  child: _FilterPanelBody(state: state, groups: groups),
                 ),
-                child: _FilterPanelBody(state: state, groups: groups),
               ),
-            ),
-            if (active.isNotEmpty)
-              _FilterResetBar(state: state, groups: groups),
-          ],
+              if (active.isNotEmpty)
+                _FilterResetBar(state: state, groups: groups),
+            ],
+          ),
         ),
       ),
     );
@@ -483,12 +511,9 @@ class _FilterResetBar extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.lg,
-        AppSpace.xs,
+        AppSpace.xs + 1,
         AppSpace.md,
         AppSpace.xs,
-      ),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: theme.dividerColor)),
       ),
       child: Row(
         children: [
@@ -820,7 +845,9 @@ class _FilterChip extends StatelessWidget {
 
 /// 海报网格区（§17.1 海报网格）：筛选条 + 海报网格 + 滚动加载页脚。
 class _VodGrid extends StatelessWidget {
-  const _VodGrid({required this.state});
+  const _VodGrid({required this.state, required this.viewportBottom});
+
+  final double? viewportBottom;
 
   final AppState state;
 
@@ -855,8 +882,9 @@ class _VodGrid extends StatelessWidget {
             // 的最后一项（网格之后），网格填满视口时它落在视口外，首页刷新
             // 期间（`loadHome` 保留旧列表）用户看不到任何变化。
             children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
+              ShellScrollUnderlap(
+                viewportBottom: viewportBottom,
+                builder: (context, constraints, leading) {
                   // 整个网格共用一次列宽/DPR 计算，卡片重建时只读取已存的解码宽度。
                   final metrics = _gridMetrics(context, constraints.maxWidth);
                   return NotificationListener<ScrollNotification>(
@@ -870,18 +898,21 @@ class _VodGrid extends StatelessWidget {
                         // 默认展示」）。现在它归分类条上的「筛选」按钮，点击后**悬浮**
                         // 显示——不占布局、不推挤网格。
                         if (vods.isEmpty)
-                          SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: _emptyState(
-                              loading: loading,
-                              hasClasses: hasClasses,
+                          SliverPadding(
+                            padding: EdgeInsets.only(top: leading),
+                            sliver: SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: _emptyState(
+                                loading: loading,
+                                hasClasses: hasClasses,
+                              ),
                             ),
                           )
                         else
                           SliverPadding(
-                            padding: const EdgeInsets.fromLTRB(
+                            padding: EdgeInsets.fromLTRB(
                               _posterGridPadding,
-                              14,
+                              14 + leading,
                               _posterGridPadding,
                               8,
                             ),
@@ -1319,6 +1350,7 @@ class _DetailPageState extends State<DetailPage> {
 
   Widget? _folderPage;
   Widget? _detailView;
+  final _backdropReadiness = TmdbBackdropReadiness();
   DetailLoadTrace? _pageLoadTrace;
   TimingsCallback? _pageFrameTimings;
   Timer? _pageFrameDeadline;
@@ -1828,8 +1860,11 @@ class _DetailPageState extends State<DetailPage> {
   /// Metacritic）。把管线的豆瓣/IMDb 分挪到行尾，同一个站名的位置会随设置
   /// 开关漂移——同一个页面出现两种顺序正是这行标签当初要避免的。
   DetailRatings _chipsRatings(DetailRatings ratings) {
-    final imdbEnabled = widget.state.externalMetaEnabled &&
-        widget.state.metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
+    final imdbEnabled =
+        widget.state.externalMetaEnabled &&
+        widget.state.metaPipeline
+            .orderOf(MetaField.rating)
+            .contains(MetaSourceKind.imdb);
     var replaced = false;
     final entries = <DetailRatingEntry>[];
     for (final entry in ratings.entries) {
@@ -1896,7 +1931,8 @@ class _DetailPageState extends State<DetailPage> {
       imdbId: imdbId,
     );
     final rule = widget.state.metaPipeline.ruleOf(MetaField.rating);
-    final key = '${vod.vodId}|${_pageSite?.key}|$imdbId|${query.key}|${rule.toJson()}';
+    final key =
+        '${vod.vodId}|${_pageSite?.key}|$imdbId|${query.key}|${rule.toJson()}';
     if (_ratingsKey == key) return;
     _ratingsKey = key;
     _extraRatings = const {};
@@ -2091,8 +2127,10 @@ class _DetailPageState extends State<DetailPage> {
       service: widget.state.detailRatingService,
       omdbApiKey: () => widget.state.tmdbConfig.omdbApiKey,
     )..addListener(_onRatingsChanged);
-    final optionsKey = '${widget.state.externalMetaEnabled}|${widget.state.metaPipeline.ruleOf(MetaField.rating).toJson()}|${widget.state.tmdbConfig.omdbApiKey}';
-    if (controller.requestKey != request.cacheKey || _ratingsOptionsKey != optionsKey) {
+    final optionsKey =
+        '${widget.state.externalMetaEnabled}|${widget.state.metaPipeline.ruleOf(MetaField.rating).toJson()}|${widget.state.tmdbConfig.omdbApiKey}';
+    if (controller.requestKey != request.cacheKey ||
+        _ratingsOptionsKey != optionsKey) {
       _ratingsOptionsKey = optionsKey;
       // 换作品或评分设置时重查；滚动、主题切换不得重发请求。
       controller.begin(request);
@@ -2117,6 +2155,7 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   void dispose() {
+    _backdropReadiness.dispose();
     if (_accountAction != null) {
       super.dispose();
       return;
@@ -2274,7 +2313,7 @@ class _DetailPageState extends State<DetailPage> {
     final state = widget.state;
     final vod = _currentVod;
     // 一个入口覆盖三家：TMDB 结论写 `TmdbMatchRecord`，外部来源写 override。
-    final searched = await showDialog<bool>(
+    final searched = await showGlassDialog<bool>(
       context: context,
       builder: (_) => MetaMatchDialog(
         state: state,
@@ -2316,7 +2355,7 @@ class _DetailPageState extends State<DetailPage> {
     // 驱动真实弹窗时揪出）。
     //
     // `decodeSeasonChoice` 本来就是为这一步写的转换函数，此前**从未被接线**。
-    final raw = await showDialog<Object?>(
+    final raw = await showGlassDialog<Object?>(
       context: context,
       builder: (_) => TmdbSeasonDialog(
         tmdbSeasons: seasons,
@@ -2391,10 +2430,10 @@ class _DetailPageState extends State<DetailPage> {
     // （也因此不能用 `Navigator.of(context, ...)` 去做那件事）。
     final navigator = Navigator.of(context, rootNavigator: true);
     unawaited(
-      showDialog<void>(
+      showGlassDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => GlassAlertDialog(
           key: const ValueKey('ai-season-progress'),
           title: const Text('AI 正在分析剧集结构…'),
           content: const Text('分析期间不会改动任何绑定。'),
@@ -2482,12 +2521,13 @@ class _DetailPageState extends State<DetailPage> {
     final canApply =
         proposed.status == AiSeasonApplyStatus.applied ||
         proposed.status == AiSeasonApplyStatus.partial;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
       builder: (context) => RepaintBoundary(
         key: const ValueKey('ai-season-preview-boundary'),
-        child: AlertDialog(
+        child: GlassAlertDialog(
           key: const ValueKey('ai-season-preview'),
+          constraints: const BoxConstraints(maxWidth: 648),
           title: const Text('AI剧集 / 季度分析建议'),
           content: SizedBox(
             width: 600,
@@ -3476,11 +3516,11 @@ class _DetailPageState extends State<DetailPage> {
     // 「装浏览器」而不是「换源」（换到别的线路同样要解析，照样失败）。
     final canInstallBrowser =
         failure.kind == AppErrorKind.parseSniffUnavailable;
-    final choice = await showDialog<_PlaybackFailureChoice>(
+    final choice = await showGlassDialog<_PlaybackFailureChoice>(
       context: context,
       builder: (dialogContext) => RepaintBoundary(
         key: const ValueKey('detail-playback-failed-boundary'),
-        child: AlertDialog(
+        child: GlassAlertDialog(
           key: const ValueKey('detail-playback-failed'),
           title: const Text('这一集没有可播放的地址'),
           content: Column(
@@ -3951,90 +3991,129 @@ class _DetailPageState extends State<DetailPage> {
     _traceMetaPhotos(tmdbData, external, mergedData, headerData);
     _markFirstDetailFrame(state.detailPhase, lines.length);
 
-    return Scaffold(
-      // 头部是**全幅 hero**（用户反馈 2026-10-09：「详情页太简陋，背景海报也没有
-      // 全屏显示」）：背景海报铺满整宽并延伸到 app bar 之下，app bar 自身透明，
-      // 只把返回/收藏/刷新浮在背景上。内容区不再整体加 16 边距（那样 hero 两侧会
-      // 露出底色，就没有「全屏」可言），改由正文各自留边。
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        // 顶部透明：hero 的背景海报能一直铺到屏幕最上边。
-        backgroundColor: Colors.transparent,
-        // 滚动到内容经过 app bar 下方时恢复不透明底色（用页面底色而非主题色
-        // 调），否则标题会与正文文字叠在一起。
-        surfaceTintColor: Theme.of(context).colorScheme.surface,
-        elevation: 0,
-        title: Text(headerData.title),
-        leading: IconButton(
-          tooltip: '返回',
-          onPressed: _closeDetail,
-          icon: const Icon(Icons.arrow_back),
+    // Lift recovery only when settled metadata supplies no artwork candidates.
+    // A pending or failed image decode must not affect layout.
+    final compactWithoutArtwork =
+        lines.isEmpty &&
+        !_navSourceMode &&
+        !_navSourceFallback &&
+        belongs &&
+        state.detailPhase == LoadPhase.ready &&
+        (!state.tmdbConfig.isReady ||
+            (owned &&
+                tmdb.phase != TmdbLoadPhase.idle &&
+                tmdb.phase != TmdbLoadPhase.loading)) &&
+        (!state.externalMetaEnabled || fields != null) &&
+        headerData.backdropUrls.isEmpty &&
+        (headerData.posterUrl ?? '').trim().isEmpty &&
+        !headerData.posterUrls.any((url) => url.trim().isNotEmpty);
+    _backdropReadiness.resetFor(headerData.backdropUrls);
+    final actions = <Widget>[
+      // 合成条目没有站源身份：收藏/追番都以 `vodId` 为键，写进去只会得到一条
+      // 点不开的空记录，因此回退页不给这两个入口（换源后落在真实条目上的页面照旧）。
+      if (!_navSourceFallback)
+        IconButton(
+          tooltip: state.isFavorite(kind: 'vod', targetId: vod.vodId)
+              ? '取消收藏'
+              : '收藏该影片',
+          onPressed: () => state.toggleFavorite(
+            kind: 'vod',
+            targetId: vod.vodId,
+            title: vod.vodName,
+            subtitle: vod.vodRemarks,
+            // 海报取 hero 用的那份（TMDB 补位后），收藏卡片才能和详情页对上。
+            vodPic: display.vodPic ?? '',
+          ),
+          icon: Icon(
+            state.isFavorite(kind: 'vod', targetId: vod.vodId)
+                ? Icons.bookmark
+                : Icons.bookmark_border,
+          ),
         ),
-        actions: [
-          // 合成条目没有站源身份：收藏/追番都以 `vodId` 为键，写进去只会得到一条
-          // 点不开的空记录，因此回退页不给这两个入口（换源后落在真实条目上的页面照旧）。
-          if (!_navSourceFallback)
-            IconButton(
-              tooltip: state.isFavorite(kind: 'vod', targetId: vod.vodId)
-                  ? '取消收藏'
-                  : '收藏该影片',
-              onPressed: () => state.toggleFavorite(
-                kind: 'vod',
-                targetId: vod.vodId,
-                title: vod.vodName,
-                subtitle: vod.vodRemarks,
-                // 海报取 hero 用的那份（TMDB 补位后），收藏卡片才能和详情页对上。
-                vodPic: display.vodPic ?? '',
-              ),
-              icon: Icon(
-                state.isFavorite(kind: 'vod', targetId: vod.vodId)
-                    ? Icons.bookmark
-                    : Icons.bookmark_border,
-              ),
-            ),
-          Builder(
-            builder: (context) {
-              // 同上：合成条目没有站源身份，追番记录只会是一条点不开的空数据。
-              if (_navSourceFallback) return const SizedBox.shrink();
-              final site = state.selectedSite;
-              if (site == null) return const SizedBox.shrink();
-              final existing = state.followingForVod(
-                siteKey: site.key,
-                vodId: vod.vodId,
-              );
-              final followed = existing != null;
-              return IconButton(
-                key: const ValueKey('detail-follow'),
-                tooltip: followed ? '取消追剧' : '追剧',
-                onPressed: () {
-                  if (followed) {
-                    unawaited(state.unfollowFollowing(existing));
-                    showToast('已取消追剧', kind: ToastKind.success);
-                    return;
-                  }
-                  final line = lines.isEmpty ? null : _activeLine(lines);
-                  state.followFromDetail(
-                    site: site,
-                    vod: vod,
-                    flag: line?.flag ?? '',
-                    sourceFlag: line?.sourceFlag ?? line?.playbackFlag ?? '',
-                    releasedEpisode: line?.episodes.length ?? 0,
-                  );
-                  showToast('已加入追剧', kind: ToastKind.success);
-                },
-                icon: Icon(followed ? Icons.star : Icons.star_border),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: '刷新详情',
+      Builder(
+        builder: (context) {
+          // 同上：合成条目没有站源身份，追番记录只会是一条点不开的空数据。
+          if (_navSourceFallback) return const SizedBox.shrink();
+          final site = state.selectedSite;
+          if (site == null) return const SizedBox.shrink();
+          final existing = state.followingForVod(
+            siteKey: site.key,
+            vodId: vod.vodId,
+          );
+          final followed = existing != null;
+          return IconButton(
+            key: const ValueKey('detail-follow'),
+            tooltip: followed ? '取消追剧' : '追剧',
             onPressed: () {
-              _refreshExternalMeta();
-              unawaited(_loadPageDetail());
+              if (followed) {
+                unawaited(state.unfollowFollowing(existing));
+                showToast('已取消追剧', kind: ToastKind.success);
+                return;
+              }
+              final line = lines.isEmpty ? null : _activeLine(lines);
+              state.followFromDetail(
+                site: site,
+                vod: vod,
+                flag: line?.flag ?? '',
+                sourceFlag: line?.sourceFlag ?? line?.playbackFlag ?? '',
+                releasedEpisode: line?.episodes.length ?? 0,
+              );
+              showToast('已加入追剧', kind: ToastKind.success);
             },
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
+            icon: Icon(followed ? Icons.star : Icons.star_border),
+          );
+        },
+      ),
+      IconButton(
+        tooltip: '刷新详情',
+        onPressed: () {
+          _refreshExternalMeta();
+          unawaited(_loadPageDetail());
+        },
+        icon: const Icon(Icons.refresh),
+      ),
+    ];
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(
+          AppBarTheme.of(context).toolbarHeight ?? kToolbarHeight,
+        ),
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _backdropReadiness,
+          builder: (context, hasBackdrop, _) {
+            final theme = Theme.of(context);
+            final hasAppArtwork =
+                context.findAncestorWidgetOfExactType<WallpaperBackdrop>() !=
+                null;
+            return Theme(
+              data: hasBackdrop ? glassChromeControlTheme(theme) : theme,
+              child: AppBar(
+                backgroundColor: hasBackdrop || hasAppArtwork
+                    ? Colors.transparent
+                    : theme.colorScheme.surface,
+                surfaceTintColor: Colors.transparent,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                flexibleSpace: hasBackdrop || hasAppArtwork
+                    ? const IgnorePointer(
+                        child: SizedBox.expand(
+                          child: BackdropScrim(kind: BackdropScrimKind.toolbar),
+                        ),
+                      )
+                    : null,
+                title: Text(headerData.title),
+                leading: IconButton(
+                  tooltip: '返回',
+                  onPressed: _closeDetail,
+                  icon: const Icon(Icons.arrow_back),
+                ),
+                actions: actions,
+              ),
+            );
+          },
+        ),
       ),
       body: Stack(
         children: [
@@ -4044,7 +4123,10 @@ class _DetailPageState extends State<DetailPage> {
           // 整页内容都浮在图上；图片不会随内容滚走、下半页也不会变回纯色。
           // 头部因此不再自己画图（`paintImage: false`）。
           Positioned.fill(
-            child: TmdbDetailBackdrop(urls: headerData.backdropUrls),
+            child: TmdbDetailBackdrop(
+              urls: headerData.backdropUrls,
+              readiness: _backdropReadiness,
+            ),
           ),
           if (loading && lines.isEmpty)
             const Positioned.fill(child: Center(child: LoadingBlock()))
@@ -4062,6 +4144,7 @@ class _DetailPageState extends State<DetailPage> {
                 TmdbDetailHeader(
                   // 图片由页面级背景负责（见本 body 的 Stack），头部只画内容。
                   paintImage: false,
+                  compactWithoutArtwork: compactWithoutArtwork,
                   data: headerData,
                   platformLabel: playbackPlatformLabel(
                     networks: headerData.networks,
@@ -4174,7 +4257,11 @@ class _DetailPageState extends State<DetailPage> {
                       // 无线路、也无 TMDB 剧集可铺：给空态卡片。它必须解释
                       // 「为什么不能播」，并同时给出 TMDB 与换源两条出路。
                       else if (lines.isEmpty)
-                        _buildNoLineEmptyState(context, noLineTmdb),
+                        GlassPane(
+                          blurBackdrop: false,
+                          padding: const EdgeInsets.all(AppSpace.md),
+                          child: _buildNoLineEmptyState(context, noLineTmdb),
+                        ),
                       if (!_navSourceMode && lines.isNotEmpty) ...[
                         // 线路选择（`04` §3.1 ④）：点击即切换，剧集卡片随之切换。
                         // 对齐上游 `@id/flag` —— 上游也只渲染**当前线路**的选集区。
@@ -4404,6 +4491,7 @@ class _DetailPageState extends State<DetailPage> {
       // AI 推荐行排在底部推荐区的最下方，与上面三行同一套卡片与点击去向；
       // 未配置 AI 时区块自身返回 SizedBox.shrink()，不占位也不请求。
       trailing: AiRecommendationSection(
+        framed: false,
         state: widget.state,
         seedTitle: vod.vodName,
         onOpenItem: (item) => _openRecommendation(item, site: _pageSite),
@@ -4417,7 +4505,16 @@ class _DetailPageState extends State<DetailPage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('搜索站源')),
+          appBar: AppBar(
+            title: const Text('搜索站源'),
+            backgroundColor: Colors.transparent,
+            flexibleSpace: const IgnorePointer(
+              child: GlassPane(
+                borderRadius: BorderRadius.zero,
+                child: SizedBox.expand(),
+              ),
+            ),
+          ),
           body: SearchPage(state: widget.state, initialKeyword: title),
         ),
       ),
@@ -4592,6 +4689,7 @@ class _DetailPageState extends State<DetailPage> {
           initialItem: item,
           // 纯 TMDB 页的推荐区同样以 AI 行收尾（种子是这部作品本身）。
           aiRecommendations: AiRecommendationSection(
+            framed: false,
             state: widget.state,
             seedTitle: item.title,
             onOpenItem: _openRecommendationOnSelectedSite,
@@ -4601,7 +4699,16 @@ class _DetailPageState extends State<DetailPage> {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('搜索站源')),
+                  appBar: AppBar(
+                    title: const Text('搜索站源'),
+                    backgroundColor: Colors.transparent,
+                    flexibleSpace: const IgnorePointer(
+                      child: GlassPane(
+                        borderRadius: BorderRadius.zero,
+                        child: SizedBox.expand(),
+                      ),
+                    ),
+                  ),
                   body: SearchPage(
                     state: widget.state,
                     initialKeyword: title,
@@ -5178,8 +5285,12 @@ class _DetailPageState extends State<DetailPage> {
     final overlay = Overlay.of(context).context.findRenderObject();
     final box = overlay is RenderBox ? overlay : null;
     final anchor = position ?? (box?.size.center(Offset.zero) ?? Offset.zero);
+    final theme = Theme.of(context);
     final selected = await showMenu<String>(
       context: context,
+      shape: ContentMenuBorder(theme),
+      color: theme.colorScheme.surfaceContainerHigh.withValues(alpha: .97),
+      elevation: 0,
       position: RelativeRect.fromRect(
         Rect.fromLTWH(anchor.dx, anchor.dy, 1, 1),
         Offset.zero & (box?.size ?? MediaQuery.sizeOf(context)),
@@ -5481,7 +5592,7 @@ class _DetailPageState extends State<DetailPage> {
     onCardTap: _showNoLineSwapDialog,
   );
 
-  /// 「本片没有可播放线路」的空态卡片：边框提示区 = 图标 + 标题 + 弱化说明 +
+  /// 「本片没有可播放线路」的空态提示区：图标 + 标题 + 弱化说明 +
   /// 并列的两条出路（TMDB 动作、换源）。
   ///
   /// 为什么不是一句裸 `Text` + 换源按钮：用户走到这里既不知道为什么不能播，
@@ -5495,11 +5606,7 @@ class _DetailPageState extends State<DetailPage> {
     return Container(
       key: const ValueKey('detail-no-line-empty'),
       width: double.infinity,
-      padding: const EdgeInsets.all(AppSpace.lg),
-      decoration: BoxDecoration(
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: scheme.outlineVariant),
-      ),
+      padding: const EdgeInsets.all(AppSpace.lg + 1),
       child: Row(
         children: [
           Icon(
@@ -5793,11 +5900,11 @@ class _DetailPageState extends State<DetailPage> {
   }) async {
     // `RepaintBoundary` 的 key 与 [DetailPageState._confirmSwapAfterPlayFailure]
     // 同一约定：每个路由各有自己的 RepaintBoundary，截图证据只能按 key 指这一层。
-    final wantsSwap = await showDialog<bool>(
+    final wantsSwap = await showGlassDialog<bool>(
       context: context,
       builder: (dialogContext) => RepaintBoundary(
         key: ValueKey(boundaryKey),
-        child: AlertDialog(
+        child: GlassAlertDialog(
           key: ValueKey(dialogKey),
           title: Text(title),
           content: Column(

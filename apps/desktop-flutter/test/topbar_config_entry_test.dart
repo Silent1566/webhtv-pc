@@ -18,6 +18,7 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/app.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
+import 'package:webhtv_pc/ui/glass_chrome.dart';
 import 'package:webhtv_pc/ui/settings_layout.dart';
 import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -152,7 +153,12 @@ void main() {
   }
 
   Future<void> switcher(WidgetTester tester) async {
-    await tester.tap(find.textContaining('配置：').first);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(GlassTopBar),
+        matching: find.textContaining('配置：'),
+      ),
+    );
     await settle(tester);
   }
 

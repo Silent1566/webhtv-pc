@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'common.dart';
+import 'glass_chrome.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
+import 'wallpaper_backdrop.dart';
 
 class SettingsPageHeader extends StatelessWidget {
   const SettingsPageHeader({super.key, required this.title, this.description});
@@ -235,6 +238,231 @@ class SettingsField extends StatelessWidget {
   }
 }
 
+/// Keeps DropdownButton's data contract while framing its entire overlay once.
+class SettingsDropdown<T> extends DropdownButton<T> {
+  SettingsDropdown({
+    super.key,
+    required super.items,
+    required super.onChanged,
+    super.value,
+    super.underline,
+    super.isExpanded,
+    super.hint,
+  });
+
+  @override
+  State<DropdownButton<T>> createState() => _SettingsDropdownState<T>();
+}
+
+class _SettingsDropdownState<T> extends State<DropdownButton<T>> {
+  final _focus = FocusNode();
+  final _optionFocus = <FocusNode>[];
+
+  @override
+  void dispose() {
+    for (final node in _optionFocus) {
+      node.dispose();
+    }
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.items ?? <DropdownMenuItem<T>>[];
+    Widget? selected;
+    for (final item in items) {
+      if (item.value == widget.value) {
+        selected = item.child;
+        break;
+      }
+    }
+    while (_optionFocus.length < items.length) {
+      _optionFocus.add(FocusNode());
+    }
+    final enabled = widget.onChanged != null && items.isNotEmpty;
+    return MenuAnchor(
+      childFocusNode: _focus,
+      onOpen: () => WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || items.isEmpty) return;
+        final selectedIndex = items.indexWhere(
+          (item) => item.value == widget.value,
+        );
+        _optionFocus[selectedIndex < 0 ? 0 : selectedIndex].requestFocus();
+      }),
+      style: const MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+        surfaceTintColor: WidgetStatePropertyAll(Colors.transparent),
+        elevation: WidgetStatePropertyAll(0),
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+      ),
+      builder: (context, menu, _) => TextButton(
+        focusNode: _focus,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+          minimumSize: const Size(0, 40),
+          foregroundColor: Theme.of(context).colorScheme.onSurface,
+        ),
+        onPressed: !enabled
+            ? null
+            : () {
+                if (menu.isOpen) {
+                  menu.close();
+                } else {
+                  menu.open();
+                }
+              },
+        child: Row(
+          mainAxisSize: widget.isExpanded ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            if (widget.isExpanded)
+              Expanded(
+                child: selected ?? widget.hint ?? const SizedBox.shrink(),
+              )
+            else
+              selected ?? widget.hint ?? const SizedBox.shrink(),
+            const SizedBox(width: AppSpace.xs),
+            const Icon(Icons.arrow_drop_down, size: 20),
+          ],
+        ),
+      ),
+      menuChildren: [
+        GlassPane(
+          borderRadius: AppRadius.mdAll,
+          child: Material(
+            type: MaterialType.transparency,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * .75,
+              ),
+              child: SingleChildScrollView(
+                primary: false,
+                padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var index = 0; index < items.length; index++)
+                      MenuItemButton(
+                        focusNode: _optionFocus[index],
+                        onPressed: !enabled || !items[index].enabled
+                            ? null
+                            : () {
+                                items[index].onTap?.call();
+                                widget.onChanged?.call(items[index].value);
+                              },
+                        child: items[index].child,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class SettingsDropdownField<T> extends StatelessWidget {
+  const SettingsDropdownField({
+    super.key,
+    required this.initialValue,
+    required this.decoration,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final T? initialValue;
+  final InputDecoration decoration;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?>? onChanged;
+
+  @override
+  Widget build(BuildContext context) => InputDecorator(
+    isEmpty: initialValue == null,
+    decoration: decoration,
+    child: SettingsDropdown<T>(
+      value: initialValue,
+      isExpanded: true,
+      items: items,
+      onChanged: onChanged,
+    ),
+  );
+}
+
+/// A secondary card inside a route panel; it never filters again.
+class SettingsGlassCard extends StatelessWidget {
+  const SettingsGlassCard({super.key, this.margin, required this.child});
+
+  final EdgeInsetsGeometry? margin;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: margin ?? CardTheme.of(context).margin ?? EdgeInsets.zero,
+    child: GlassPane(
+      blurBackdrop: false,
+      child: Material(type: MaterialType.transparency, child: child),
+    ),
+  );
+}
+
+/// Shared route chrome; callers with separately framed content opt out of
+/// the body panel (the settings hub and browser host).
+class SettingsRouteScaffold extends StatelessWidget {
+  const SettingsRouteScaffold({
+    super.key,
+    required this.title,
+    required this.body,
+    this.actions,
+    this.wallpaperUrl,
+    this.frameBody = true,
+  });
+
+  final Widget title;
+  final Widget body;
+  final List<Widget>? actions;
+  final String? wallpaperUrl;
+  final bool frameBody;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final height = AppBarTheme.of(context).toolbarHeight ?? kToolbarHeight;
+    final scaffold = Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(height),
+        child: Theme(
+          data: glassChromeControlTheme(theme),
+          child: AppBar(
+            title: title,
+            actions: actions,
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            flexibleSpace: const IgnorePointer(
+              child: GlassChromeSurface(child: SizedBox.expand()),
+            ),
+          ),
+        ),
+      ),
+      body: frameBody
+          ? GlassPane(
+              borderRadius: BorderRadius.zero,
+              child: Material(type: MaterialType.transparency, child: body),
+            )
+          : body,
+    );
+    if (context.findAncestorWidgetOfExactType<WallpaperBackdrop>() != null) {
+      return scaffold;
+    }
+    return WallpaperBackdrop(url: wallpaperUrl, builder: (_, _) => scaffold);
+  }
+}
+
 /// 三级明细页的骨架：AppBar（带返回）+ 可选说明 + 限宽单列。
 ///
 /// 为什么单独抽出来：高级设置拆成明细后会有六七个结构相同的新页面，
@@ -246,17 +474,20 @@ class SettingsDetailScaffold extends StatelessWidget {
     required this.title,
     this.description,
     required this.children,
+    this.wallpaperUrl,
   });
 
   final String title;
   final String? description;
   final List<Widget> children;
+  final String? wallpaperUrl;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
+    return SettingsRouteScaffold(
+      title: Text(title),
+      wallpaperUrl: wallpaperUrl,
       body: ListView(
         padding: formPagePadding(context),
         children: [

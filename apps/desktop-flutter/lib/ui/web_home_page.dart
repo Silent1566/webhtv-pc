@@ -23,7 +23,9 @@ import '../services/web_home_bridge.dart';
 import '../services/web_home_store.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'glass_widgets.dart';
 import 'player_page.dart';
+import 'settings_layout.dart';
 import 'toast.dart';
 
 /// 虚拟主机名（固定，便于页面判断运行环境）。
@@ -208,34 +210,34 @@ class _WebHomePageState extends State<WebHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_title.isEmpty ? widget.source.name : _title),
-        actions: [
-          IconButton(
-            key: const ValueKey('webhome-reload'),
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh),
-            onPressed:
-                !_initializing &&
-                    _controller.value.isInitialized &&
-                    _error == null
-                ? () => unawaited(_controllerAction(_controller.reload))
-                : null,
-          ),
-          IconButton(
-            key: const ValueKey('webhome-devtools'),
-            tooltip: '开发者工具（排查页面问题）',
-            icon: const Icon(Icons.bug_report_outlined),
-            onPressed:
-                !_initializing &&
-                    _controller.value.isInitialized &&
-                    _error == null
-                ? () => unawaited(_controllerAction(_controller.openDevTools))
-                : null,
-          ),
-        ],
-      ),
+    return SettingsRouteScaffold(
+      frameBody: false,
+      wallpaperUrl: widget.state.config?.wallpaper,
+      title: Text(_title.isEmpty ? widget.source.name : _title),
+      actions: [
+        IconButton(
+          key: const ValueKey('webhome-reload'),
+          tooltip: '刷新',
+          icon: const Icon(Icons.refresh),
+          onPressed:
+              !_initializing &&
+                  _controller.value.isInitialized &&
+                  _error == null
+              ? () => unawaited(_controllerAction(_controller.reload))
+              : null,
+        ),
+        IconButton(
+          key: const ValueKey('webhome-devtools'),
+          tooltip: '开发者工具（排查页面问题）',
+          icon: const Icon(Icons.bug_report_outlined),
+          onPressed:
+              !_initializing &&
+                  _controller.value.isInitialized &&
+                  _error == null
+              ? () => unawaited(_controllerAction(_controller.openDevTools))
+              : null,
+        ),
+      ],
       body: Padding(
         padding: formPagePadding(context),
         child: _error != null
@@ -251,7 +253,13 @@ class _WebHomePageState extends State<WebHomePage> {
                 children: [
                   if (!_initializing) Webview(_controller),
                   if (_initializing || _loading)
-                    const Center(child: CircularProgressIndicator()),
+                    const Center(
+                      child: GlassPane(
+                        blurBackdrop: false,
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
                 ],
               ),
       ),
@@ -285,46 +293,44 @@ class _ErrorCard extends StatelessWidget {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 620),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: Colors.orange),
-                    const SizedBox(width: 8),
-                    Text(
-                      'HTML 源无法显示',
-                      style: Theme.of(context).textTheme.titleMedium,
+        child: GlassPane(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  Text(
+                    'HTML 源无法显示',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SelectableText(message),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  FilledButton.icon(
+                    key: const ValueKey('webhome-retry'),
+                    onPressed: () => unawaited(onRetry()),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重试'),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '源 key：$sourceKey · 入口：$entryName',
+                      style: Theme.of(context).textTheme.bodySmall,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SelectableText(message),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    FilledButton.icon(
-                      key: const ValueKey('webhome-retry'),
-                      onPressed: () => unawaited(onRetry()),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('重试'),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        '源 key：$sourceKey · 入口：$entryName',
-                        style: Theme.of(context).textTheme.bodySmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),

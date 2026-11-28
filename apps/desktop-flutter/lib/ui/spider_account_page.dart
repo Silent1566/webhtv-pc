@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../core/spider_account.dart';
 import '../services/spider_account_store.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
 
@@ -105,21 +106,18 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
 
   Future<void> _openEditor() async {
     if (_busy) return;
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (_) => _SecretDialog(provider: _provider, save: _saveValue),
     );
     // 取消/返回：不写、不刷新、不离开。
     if (!mounted || saved != true) return;
-    await _afterWrite(
-      staleNotice:
-          '保存成功，刷新未完成：账号已写入，列表可能仍显示旧状态；返回后可手动刷新。',
-    );
+    await _afterWrite(staleNotice: '保存成功，刷新未完成：账号已写入，列表可能仍显示旧状态；返回后可手动刷新。');
   }
 
   Future<void> _clear() async {
     if (_busy) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
       builder: (_) => _ClearConfirmDialog(provider: _provider),
     );
@@ -142,9 +140,7 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
       });
       return;
     }
-    await _afterWrite(
-      staleNotice: '清除成功，刷新未完成：账号已更新，列表可能仍显示旧状态；返回后可手动刷新。',
-    );
+    await _afterWrite(staleNotice: '清除成功，刷新未完成：账号已更新，列表可能仍显示旧状态；返回后可手动刷新。');
   }
 
   /// 写成功之后：刷新选中分类（配置与站点保持不变），成功就返回；刷新失败只提示，
@@ -198,10 +194,7 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
           _ScanOnlyNotice(provider: _provider),
           const SizedBox(height: AppSpace.xl),
         ],
-        SettingsSection(
-          title: '当前状态',
-          children: [_statusRow(theme, semantic)],
-        ),
+        SettingsSection(title: '当前状态', children: [_statusRow(theme, semantic)]),
         SettingsSection(
           title: '影响范围',
           description:
@@ -217,9 +210,7 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
             ),
           ],
         ),
-        SettingsActions(
-          children: _clearEntry ? [clear, edit] : [edit, clear],
-        ),
+        SettingsActions(children: _clearEntry ? [clear, edit] : [edit, clear]),
         if (_notice != null) ...[
           const SizedBox(height: AppSpace.lg),
           Text(
@@ -251,7 +242,8 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
           Icon(
             Icons.help_outline,
             size: 18,
-            color: semantic?.statusUnknown ?? theme.colorScheme.onSurfaceVariant,
+            color:
+                semantic?.statusUnknown ?? theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: AppSpace.sm),
           Expanded(
@@ -280,14 +272,13 @@ class _SpiderAccountPageState extends State<SpiderAccountPage> {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: AppSpace.sm),
-        Text(
-          _configured ? '已配置' : '未配置',
-          style: theme.textTheme.titleSmall,
-        ),
+        Text(_configured ? '已配置' : '未配置', style: theme.textTheme.titleSmall),
         const SizedBox(width: AppSpace.md),
         Expanded(
           child: Text(
-            _configured ? '应用级 Cookie 已保存，正在兼容站源上生效' : '还没有应用级 Cookie：兼容站源没有这份账号',
+            _configured
+                ? '应用级 Cookie 已保存，正在兼容站源上生效'
+                : '还没有应用级 Cookie：兼容站源没有这份账号',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -315,11 +306,10 @@ class _ScanOnlyNotice extends StatelessWidget {
     final accent = semantic?.statusDegraded ?? theme.colorScheme.tertiary;
     return Container(
       key: const ValueKey('spider-account-scan-only'),
-      padding: const EdgeInsets.all(AppSpace.lg),
+      padding: const EdgeInsets.all(AppSpace.lg + 1),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: AppRadius.mdAll,
-        border: Border.all(color: accent, width: 1),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -330,10 +320,7 @@ class _ScanOnlyNotice extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '桌面端不能完成扫码或注册',
-                  style: theme.textTheme.titleSmall,
-                ),
+                Text('桌面端不能完成扫码或注册', style: theme.textTheme.titleSmall),
                 const SizedBox(height: AppSpace.xs),
                 Text(
                   '这个条目在安卓端打开的是${provider.label}扫码登录/注册（需要 App 的 Activity），'
@@ -402,7 +389,8 @@ class _SecretDialogState extends State<_SecretDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: const BoxConstraints(maxWidth: 568),
       title: Text('${widget.provider.label} Cookie'),
       content: SizedBox(
         width: 520,
@@ -434,15 +422,12 @@ class _SecretDialogState extends State<_SecretDialog> {
               decoration: InputDecoration(
                 labelText: 'Cookie（一行）',
                 hintText: '粘贴后保存',
-                border: const OutlineInputBorder(),
                 errorText: _error,
                 suffixIcon: IconButton(
                   key: const ValueKey('spider-account-reveal'),
                   tooltip: _reveal ? '隐藏' : '显示',
                   onPressed: () => setState(() => _reveal = !_reveal),
-                  icon: Icon(
-                    _reveal ? Icons.visibility_off : Icons.visibility,
-                  ),
+                  icon: Icon(_reveal ? Icons.visibility_off : Icons.visibility),
                 ),
               ),
             ),
@@ -481,7 +466,8 @@ class _ClearConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: const BoxConstraints(maxWidth: 508),
       title: Text('清除${provider.label}账号？'),
       content: SizedBox(
         width: 460,
@@ -506,4 +492,3 @@ class _ClearConfirmDialog extends StatelessWidget {
     );
   }
 }
-

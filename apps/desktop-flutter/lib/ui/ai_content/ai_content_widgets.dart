@@ -40,6 +40,7 @@ class AiRecommendationCardTile extends StatelessWidget {
     ].join(' · ');
     return Card(
       margin: const EdgeInsets.only(bottom: AppSpace.sm),
+      color: Colors.transparent,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onOpen,
@@ -56,10 +57,8 @@ class AiRecommendationCardTile extends StatelessWidget {
                     width: 56,
                     height: 80,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const SizedBox(
-                      width: 56,
-                      height: 80,
-                    ),
+                    errorBuilder: (_, _, _) =>
+                        const SizedBox(width: 56, height: 80),
                   ),
                 ),
               if (card.posterUrl != null) const SizedBox(width: AppSpace.md),
@@ -107,7 +106,9 @@ class AiRecommendationCardTile extends StatelessWidget {
               ),
               if (onNotInterested != null)
                 IconButton(
-                  key: ValueKey('ai-recommendation-not-interested-${card.title}'),
+                  key: ValueKey(
+                    'ai-recommendation-not-interested-${card.title}',
+                  ),
                   tooltip: '不感兴趣',
                   onPressed: onNotInterested,
                   icon: const Icon(Icons.thumb_down_outlined, size: 18),
@@ -137,13 +138,12 @@ class AiConfidenceBadge extends StatelessWidget {
         : (semantic?.statusOk ?? theme.colorScheme.primary);
     return Container(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.sm,
-        vertical: AppSpace.xs,
+        horizontal: AppSpace.sm + 1,
+        vertical: AppSpace.xs + 1,
       ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: AppRadius.pillAll,
-        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
         low ? '低置信 $percent%' : '置信 $percent%',
@@ -185,8 +185,7 @@ class AiGroupRulePreview extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpace.sm),
-            if (rules.isEmpty)
-              Text('没有可用规则', style: theme.textTheme.bodySmall),
+            if (rules.isEmpty) Text('没有可用规则', style: theme.textTheme.bodySmall),
             for (final rule in rules)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppSpace.sm),
@@ -336,10 +335,7 @@ class AiAdRulePreview extends StatelessWidget {
                   TextButton(onPressed: onCancel, child: const Text('取消')),
                 if (canApply) ...[
                   const SizedBox(width: AppSpace.sm),
-                  FilledButton(
-                    onPressed: onConfirm,
-                    child: const Text('应用规则'),
-                  ),
+                  FilledButton(onPressed: onConfirm, child: const Text('应用规则')),
                 ],
               ],
             ),

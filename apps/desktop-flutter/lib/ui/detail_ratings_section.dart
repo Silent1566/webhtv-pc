@@ -102,26 +102,29 @@ class DetailRatingsSection extends StatelessWidget {
   Widget _links(BuildContext context, DetailRatings values) {
     final links = values.entries.where((entry) => entry.canOpen).toList();
     if (links.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 不发丝线（2026-11-12 用户反馈）：它把推荐行与外部链接切成两段。
-        // 间隔由 `SectionHeader` 的上 24 / 下 10 承担，与其它区块同一套节奏。
-        SectionHeader(title: '外部链接', keyValue: '$keyPrefix-section'),
-        Wrap(
-          spacing: AppSpace.sm,
-          runSpacing: AppSpace.sm,
-          children: [
-            for (final entry in links)
-              OutlinedButton.icon(
-                key: ValueKey('$keyPrefix-${entry.source.key}'),
-                onPressed: () => unawaited(_open(context, entry.url)),
-                icon: const Icon(Icons.open_in_new, size: 16),
-                label: Text(entry.source.label),
-              ),
-          ],
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 不发丝线（2026-11-12 用户反馈）：它把推荐行与外部链接切成两段。
+          // 间隔由 `SectionHeader` 的上 24 / 下 10 承担，与其它区块同一套节奏。
+          SectionHeader(title: '外部链接', keyValue: '$keyPrefix-section'),
+          Wrap(
+            spacing: AppSpace.sm,
+            runSpacing: AppSpace.sm,
+            children: [
+              for (final entry in links)
+                OutlinedButton.icon(
+                  key: ValueKey('$keyPrefix-${entry.source.key}'),
+                  onPressed: () => unawaited(_open(context, entry.url)),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: Text(entry.source.label),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

@@ -22,6 +22,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/settings_overview_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/settings_layout.dart';
 
 import 'support/settings_row_navigation.dart';
 
@@ -100,11 +101,7 @@ void main() {
       expect(tile(tester, incognitoKey).value, isFalse);
       await tapSwitch(tester, incognito);
       expect(state.incognito, isTrue);
-      expect(
-        tile(tester, incognitoKey).value,
-        isTrue,
-        reason: '既有开关也必须回显为开',
-      );
+      expect(tile(tester, incognitoKey).value, isTrue, reason: '既有开关也必须回显为开');
 
       // 报障开关：同一分类末尾的「详细调试日志（爬虫入参/出参）」。
       const logKey = 'settings-spider-debug-log';
@@ -113,11 +110,7 @@ void main() {
       expect(tile(tester, logKey).value, isFalse);
       await tapSwitch(tester, logTile);
       expect(state.spiderDebugLog, isTrue);
-      expect(
-        tile(tester, logKey).value,
-        isTrue,
-        reason: '拨动后必须回显为开，不能弹回',
-      );
+      expect(tile(tester, logKey).value, isTrue, reason: '拨动后必须回显为开，不能弹回');
 
       final settingsFile = File(state.paths.settingsPath);
       await tester.runAsync(() async {
@@ -135,11 +128,7 @@ void main() {
         isTrue,
         reason: 'settings.json 的 ui 段必须写入 spiderDebugLog',
       );
-      expect(
-        uiIncognito(settingsFile),
-        isTrue,
-        reason: '隐身模式必须真的落盘（不是只改内存）',
-      );
+      expect(uiIncognito(settingsFile), isTrue, reason: '隐身模式必须真的落盘（不是只改内存）');
 
       await tapSwitch(tester, logTile);
       expect(state.spiderDebugLog, isFalse);
@@ -185,7 +174,7 @@ void main() {
 
       final dropdown = find.descendant(
         of: tile,
-        matching: find.byType(DropdownButton<double>),
+        matching: find.byType(SettingsDropdown<double>),
       );
       expect(dropdown, findsOneWidget);
       expect(

@@ -296,7 +296,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.opened.map((m) => m.uri), [episodes.first.url]);
       await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
       await _settle(tester);
@@ -327,7 +330,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.opened, hasLength(1));
       await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
       await _settle(tester);
@@ -366,7 +372,10 @@ void main() {
           f.media.progress(805);
           await _settle(tester);
         }
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(
+          find.byKey(const ValueKey('episode-version-dialog')),
+          findsNothing,
+        );
         final target = action == 'previous'
             ? (variety ? 1 : 0)
             : (variety ? 2 : 3);
@@ -399,7 +408,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.opened.map((m) => m.uri), [
         episodes.first.url,
         episodes.last.url,
@@ -434,7 +446,10 @@ void main() {
         current: variety ? 1 : 0,
       );
       await _step(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.opened.map((m) => m.uri), [
         episodes[variety ? 1 : 0].url,
         episodes[variety ? 2 : 3].url,
@@ -472,7 +487,10 @@ void main() {
             f.media.progress(805);
             await _settle(tester);
           }
-          expect(find.byType(AlertDialog), findsNothing);
+          expect(
+            find.byKey(const ValueKey('episode-version-dialog')),
+            findsNothing,
+          );
           final target = action == 'previous'
               ? (variety ? 1 : 0)
               : (variety ? 2 : 3);
@@ -498,7 +516,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.opened, hasLength(1));
       expect(f.media.state.playing, isFalse);
       await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
@@ -520,13 +541,19 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const ValueKey('episode-version-option-3')));
       await tester.tap(find.byKey(const ValueKey('episode-version-confirm')));
       await _settle(tester);
       expect(f.media.opened.last.uri, episodes[3].url);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.opened.last.uri, episodes[5].url);
     },
   );
@@ -547,7 +574,10 @@ void main() {
           current: variety ? 1 : 0,
         );
         await _step(tester);
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(
+          find.byKey(const ValueKey('episode-version-dialog')),
+          findsNothing,
+        );
         expect(f.media.opened.map((m) => m.uri), [
           episodes[variety ? 1 : 0].url,
           episodes[variety ? 2 : 3].url,
@@ -602,7 +632,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.state.playing, isFalse);
       expect(f.media.transport, [(action: 'pause', url: f.request.url)]);
       expect(f.media.opened, hasLength(1));
@@ -624,7 +657,10 @@ void main() {
       f.media.progress(120);
       await tester.pump();
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.state.playing, isFalse);
       expect(f.media.transport, [(action: 'pause', url: f.request.url)]);
       await tester.tap(find.text('取消'));
@@ -658,7 +694,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _finish(tester, f.media);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.tap(find.text('取消'));
       await _settle(tester);
       await tester.pump(const Duration(seconds: 6));
@@ -696,7 +735,10 @@ void main() {
       expect(f.media.opened, hasLength(1));
       await _finish(tester, f.media);
       expect(f.media.opened, hasLength(1));
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
     },
   );
 
@@ -736,10 +778,16 @@ void main() {
       next();
       next();
       await _settle(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.tap(find.text('取消'));
       await _settle(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.opened, hasLength(1));
     },
   );
@@ -749,7 +797,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       final other = VodEpisode(
         name: 'S03E01.1080p',
         url: 'https://fixture.test/new-line',
@@ -782,7 +833,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.runAsync(() => f.state.setEpisodeAggregateVersions(false));
       await tester.tap(find.byKey(const ValueKey('episode-version-confirm')));
       await _settle(tester);
@@ -803,7 +857,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.pumpWidget(const SizedBox.shrink());
       await _settle(tester);
       expect(f.media.opened, hasLength(1));
@@ -822,7 +879,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.state.resolved, isEmpty);
       await tester.tap(find.byKey(const ValueKey('episode-version-cancel')));
       await _settle(tester);
@@ -840,7 +900,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.state.resolved, isEmpty);
       await tester.tap(find.byKey(const ValueKey('episode-version-confirm')));
       await _settle(tester);
@@ -880,7 +943,10 @@ void main() {
       final f = await _mount(tester, episodes: episodes);
       await _step(tester);
       expect(f.media.opened.last.uri, episodes[1].url);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
     },
   );
 
@@ -948,7 +1014,10 @@ void main() {
     (tester) async {
       final f = await _mount(tester, episodes: _ambiguous());
       await _finish(tester, f.media);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const ValueKey('episode-version-option-3')));
       await tester.tap(find.byKey(const ValueKey('episode-version-confirm')));
       await _settle(tester);
@@ -1017,7 +1086,10 @@ void main() {
       ];
       final f = await _mount(tester, episodes: episodes, current: 3);
       await _step(tester, previous: true);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.state.playing, isFalse);
       expect(f.media.transport, [(action: 'pause', url: f.request.url)]);
       await tester.tap(find.text('取消'));
@@ -1036,7 +1108,10 @@ void main() {
       await tester.pump();
       f.media.transport.clear();
       await _step(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.state.playing, isFalse);
       await tester.tap(find.text('取消'));
       await _settle(tester);
@@ -1058,11 +1133,17 @@ void main() {
       next();
       next();
       await tester.pump();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.transport, [(action: 'pause', url: f.request.url)]);
       paused.complete();
       await _settle(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsOneWidget,
+      );
       expect(f.media.state.playing, isFalse);
       await tester.tap(find.text('取消'));
       await _settle(tester);
@@ -1070,7 +1151,10 @@ void main() {
         (action: 'pause', url: f.request.url),
         (action: 'play', url: f.request.url),
       ]);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
     },
   );
 
@@ -1085,11 +1169,17 @@ void main() {
           .onPressed!;
       next();
       await tester.pump();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       await tester.runAsync(() => f.state.setEpisodeAggregateVersions(false));
       paused.complete();
       await _settle(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-version-dialog')),
+        findsNothing,
+      );
       expect(f.media.opened.single.uri, f.request.url);
       expect(f.media.state.playing, isTrue);
       expect(f.media.transport, [

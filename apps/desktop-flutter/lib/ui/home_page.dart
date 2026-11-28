@@ -14,7 +14,6 @@ library;
 
 import 'dart:async';
 
-
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
@@ -24,9 +23,11 @@ import '../core/home_hot.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_title.dart';
 import '../core/watched_recommendation.dart';
-import '../services/search_suggest_service.dart';
+import '../services/search_suggest_service.dart' show HotRankCategory;
 import '../state/app_state.dart';
 import '../state/detail_recommendation_state.dart';
+import 'glass_dialog.dart';
+import 'glass_widgets.dart';
 import 'async_action_feedback.dart';
 import 'following_actions.dart';
 import 'home_cards.dart';
@@ -36,12 +37,12 @@ import 'history_entry_detail.dart';
 import 'home_hero.dart';
 import 'home_hero_image_probe.dart';
 import 'image_header_scope.dart';
+import 'poster_image.dart' show posterImageProvider;
 import 'playback_resume.dart';
 import 'recommendation_detail_route.dart';
 import 'recommendation_info_dialog.dart';
 import 'search_page.dart';
 import 'tokens.dart';
-
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -53,12 +54,19 @@ class HomePage extends StatefulWidget {
     required this.onImportConfig,
     required this.onSearch,
     this.heroImageLoader,
+    this.hasShellArtwork = false,
+    this.onHeroBackdropChanged,
   });
 
   final AppState state;
 
   /// 图片I/O注入点；生产默认验证真实解码像素，测试可供给确定性图像结果。
   final HomeHeroImageLoader? heroImageLoader;
+
+  final bool hasShellArtwork;
+
+  /// The shell paints decoded hero art behind chrome, without moving this viewport.
+  final ValueChanged<Widget?>? onHeroBackdropChanged;
 
   /// 「去点播逛逛」与推荐卡的去向。
   final VoidCallback onOpenBrowse;
@@ -83,6 +91,66 @@ class _HomePageState extends State<HomePage> {
   /// 数据与在途任务都在会话里：页面销毁不丢，返回时直接投影。
   late final _session = widget.state.homeHeroSession;
 
+  ImageStream? _heroBackdropStream;
+  ImageStreamListener? _heroBackdropListener;
+  Widget? _shellHeroBackdrop;
+
+  void _watchHeroBackdrop(
+    BuildContext context,
+    HomeItem? item,
+    HomeBackdrop backdrop,
+    ValueChanged<HomeItem> onImageError,
+  ) {
+    final url = item?.backdrop?.trim() ?? '';
+    final stream = url.isEmpty
+        ? null
+        : posterImageProvider(
+            url,
+            headers: imageHeadersOrNull(context, url),
+          ).resolve(createLocalImageConfiguration(context));
+    if (stream?.key == _heroBackdropStream?.key) return;
+    _stopWatchingHeroBackdrop();
+
+    void report(Widget? layer) {
+      if (_shellHeroBackdrop == layer) return;
+      _shellHeroBackdrop = layer;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _shellHeroBackdrop == layer) {
+          widget.onHeroBackdropChanged?.call(layer);
+        }
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
+
+    if (stream == null) {
+      report(null);
+      return;
+    }
+    bool hasFrame = false;
+    final listener = ImageStreamListener(
+      (image, _) {
+        image.dispose();
+        if (!hasFrame) report(backdrop);
+        hasFrame = true;
+      },
+      onError: (_, _) {
+        report(null);
+        onImageError(item!);
+      },
+    );
+    _heroBackdropStream = stream;
+    _heroBackdropListener = listener;
+    stream.addListener(listener);
+    if (!hasFrame) report(null);
+  }
+
+  void _stopWatchingHeroBackdrop() {
+    final listener = _heroBackdropListener;
+    if (listener != null) _heroBackdropStream?.removeListener(listener);
+    _heroBackdropStream = null;
+    _heroBackdropListener = null;
+  }
+
   AppState get _state => widget.state;
 
   @override
@@ -103,10 +171,13 @@ class _HomePageState extends State<HomePage> {
 
   /// 图片请求头来自当前配置；会话按它算快照 scope 与图片地址。
   List<HeaderRule> _headerRules() =>
-      ImageHeaderScope.maybeRules(context) ?? _state.effectiveConfig?.headers ?? const [];
+      ImageHeaderScope.maybeRules(context) ??
+      _state.effectiveConfig?.headers ??
+      const [];
 
   @override
   void dispose() {
+    _stopWatchingHeroBackdrop();
     // 会话归 AppState 所有：退出页面只解除订阅，**不取消在途任务**——否则切到
     // 点播再回来又得从零等一遍，正是这次要修的那个等待。
     _session.removeListener(_onSessionChanged);
@@ -135,11 +206,25 @@ class _HomePageState extends State<HomePage> {
               child: IgnorePointer(
                 child: ValueListenableBuilder<int>(
                   valueListenable: _session.heroIndex,
-                  builder: (context, index, _) =>
-                      HomeBackdrop(
-                         items: heroItems, index: index,
-                          onImageError: _session.onHeroImageError,
-                       ),
+                  builder: (context, index, _) {
+                    final backdrop = HomeBackdrop(
+                      items: heroItems,
+                      index: index,
+                      onImageError: _session.onHeroImageError,
+                    );
+                    if (widget.onHeroBackdropChanged == null) return backdrop;
+                    final item = heroItems.isEmpty
+                        ? null
+                        : heroItems[index % heroItems.length];
+                    _watchHeroBackdrop(
+                      context,
+                      item,
+                      backdrop,
+                      _session.onHeroImageError,
+                    );
+                    if (widget.hasShellArtwork) return const SizedBox.expand();
+                    return const SizedBox.expand();
+                  },
                 ),
               ),
             ),
@@ -149,25 +234,28 @@ class _HomePageState extends State<HomePage> {
                 SliverToBoxAdapter(
                   child: heroItems.isEmpty
                       ? (p.reserveHeroSlot
-                          ? _HomeHeroStartupPlaceholder(
-                              height: heroHeight, loading: p.scanRunning,
-                              hasCandidates: candidates.isNotEmpty || hasRails,
-                              hasConfig: _state.hasConfig,
-                              onOpenBrowse: widget.onOpenBrowse,
-                              onImportConfig: widget.onImportConfig,
-                            )
-                          : _HomeEmptyHero(
-                              height: 220,
-                              hasConfig: _state.hasConfig,
-                              onImportConfig: widget.onImportConfig,
-                              onOpenBrowse: widget.onOpenBrowse,
-                            ))
+                            ? _HomeHeroStartupPlaceholder(
+                                height: heroHeight,
+                                loading: p.scanRunning,
+                                hasCandidates:
+                                    candidates.isNotEmpty || hasRails,
+                                hasConfig: _state.hasConfig,
+                                onOpenBrowse: widget.onOpenBrowse,
+                                onImportConfig: widget.onImportConfig,
+                              )
+                            : _HomeEmptyHero(
+                                height: 220,
+                                hasConfig: _state.hasConfig,
+                                onImportConfig: widget.onImportConfig,
+                                onOpenBrowse: widget.onOpenBrowse,
+                              ))
                       : HomeHero(
                           items: heroItems,
                           height: heroHeight,
                           paintImage: false,
                           initialIndex: _session.heroIndex.value,
-                          onIndexChanged: (index) => _session.heroIndex.value = index,
+                          onIndexChanged: (index) =>
+                              _session.heroIndex.value = index,
                           onPrimary: (item) =>
                               _activate(context, item, primary: true),
                           onSecondary: (item) =>
@@ -258,6 +346,7 @@ class _HomePageState extends State<HomePage> {
       },
     );
   }
+
   Future<void> _activate(
     BuildContext context,
     HomeItem item, {
@@ -330,7 +419,16 @@ class _HomePageState extends State<HomePage> {
     return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('搜索站源')),
+          appBar: AppBar(
+            title: const Text('搜索站源'),
+            backgroundColor: Colors.transparent,
+            flexibleSpace: const IgnorePointer(
+              child: GlassPane(
+                borderRadius: BorderRadius.zero,
+                child: SizedBox.expand(),
+              ),
+            ),
+          ),
           body: SearchPage(
             state: _state,
             initialKeyword: title,
@@ -381,7 +479,8 @@ class _HomePageState extends State<HomePage> {
       HomeRailKind.hotVariety => HotRankCategory.variety,
       _ => throw ArgumentError.value(kind),
     };
-    final source = _session.hotRows(category)
+    final source = _session
+        .hotRows(category)
         ?.where(
           (row) => hotItem(row, categoryKey: category.name).key == item.key,
         )
@@ -479,14 +578,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<TmdbItem?> _chooseHotDetail(HomeItem item, List<TmdbItem> candidates) {
-    return showDialog<TmdbItem>(
+    return showGlassDialog<TmdbItem>(
       context: context,
-      builder: (dialogContext) => SimpleDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         key: const ValueKey('home-hot-details-picker'),
+        constraints: const BoxConstraints(maxWidth: 608),
         title: Text('选择《${item.title}》的详情'),
-        children: [
-          SizedBox(
-            width: 560,
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -505,13 +605,12 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              key: const ValueKey('home-hot-details-cancel'),
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('取消'),
-            ),
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('home-hot-details-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
           ),
         ],
       ),
@@ -519,9 +618,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _hotDetailUnavailable(HomeItem item, String message) async {
-    final search = await showDialog<bool>(
+    final search = await showGlassDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         key: const ValueKey('home-hot-details-unavailable'),
         title: const Text('暂未找到详情'),
         content: Text(message),
@@ -565,50 +664,45 @@ class _HomeEmptyHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Container(
+    return SizedBox(
       key: const ValueKey('home-empty-hero'),
       height: height,
       width: double.infinity,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [scheme.surface, scheme.surfaceContainerLow, scheme.surface],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.xl,
+          AppSpace.xl,
+          AppSpace.xl,
+          44,
         ),
-      ),
-      padding: const EdgeInsets.fromLTRB(
-        AppSpace.xl,
-        AppSpace.xl,
-        AppSpace.xl,
-        44,
-      ),
-      child: Align(
-        alignment: Alignment.bottomLeft,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              hasConfig ? '还没有可续播的内容' : '还没有导入配置',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: AppWeight.title,
-                color: scheme.onSurface,
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                hasConfig ? '还没有可续播的内容' : '还没有导入配置',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: AppWeight.title,
+                  color: scheme.onSurface,
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpace.sm),
-            Text(
-              hasConfig ? '看过一集之后，这里会接着上次的位置。' : '支持 URL、本地文件与 JSON 文本三种方式。',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                hasConfig ? '看过一集之后，这里会接着上次的位置。' : '支持 URL、本地文件与 JSON 文本三种方式。',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpace.lg),
-            FilledButton(
-              key: const ValueKey('home-empty-action'),
-              onPressed: hasConfig ? onOpenBrowse : onImportConfig,
-              child: Text(hasConfig ? '去点播逛逛' : '导入配置'),
-            ),
-          ],
+              const SizedBox(height: AppSpace.lg),
+              FilledButton(
+                key: const ValueKey('home-empty-action'),
+                onPressed: hasConfig ? onOpenBrowse : onImportConfig,
+                child: Text(hasConfig ? '去点播逛逛' : '导入配置'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -618,8 +712,12 @@ class _HomeEmptyHero extends StatelessWidget {
 /// 首次无缓存也固定占好推荐位，加载/失败只替换内容，不移动下方轨道。
 class _HomeHeroStartupPlaceholder extends StatelessWidget {
   const _HomeHeroStartupPlaceholder({
-    required this.height, required this.loading, required this.hasCandidates,
-    required this.hasConfig, required this.onOpenBrowse, required this.onImportConfig,
+    required this.height,
+    required this.loading,
+    required this.hasCandidates,
+    required this.hasConfig,
+    required this.onOpenBrowse,
+    required this.onImportConfig,
   });
   final double height;
   final bool loading;
@@ -634,17 +732,29 @@ class _HomeHeroStartupPlaceholder extends StatelessWidget {
     height: height,
     width: double.infinity,
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.xl, AppSpace.xl, 44),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.xl,
+        AppSpace.xl,
+        AppSpace.xl,
+        44,
+      ),
       child: Align(
         alignment: Alignment.bottomLeft,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(!hasCandidates ? (hasConfig ? '还没有可续播的内容' : '还没有导入配置')
-                : (loading ? '正在准备精选推荐' : '暂无可用的高清推荐'),
-              style: Theme.of(context).textTheme.headlineSmall),
+            Text(
+              !hasCandidates
+                  ? (hasConfig ? '还没有可续播的内容' : '还没有导入配置')
+                  : (loading ? '正在准备精选推荐' : '暂无可用的高清推荐'),
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
             const SizedBox(height: AppSpace.sm),
-            Text(loading ? '优先恢复本地图片，后台检查新的高清宽图。' : '继续观看和追剧列表仍保留在下方。',
-              style: Theme.of(context).textTheme.bodyMedium),
+            Text(
+              loading ? '优先恢复本地图片，后台检查新的高清宽图。' : '继续观看和追剧列表仍保留在下方。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
             if (!hasCandidates) ...[
               const SizedBox(height: AppSpace.lg),
               FilledButton(

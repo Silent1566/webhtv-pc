@@ -10,6 +10,7 @@ import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/danmaku_settings_page.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/following_page.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/core/reader/reader_models.dart';
 import 'package:webhtv_pc/services/reader/reader_preferences_store.dart';
@@ -122,7 +123,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(File(state.paths.settingsPath).readAsStringSync(), before);
         final input = find.descendant(
-          of: find.byType(AlertDialog),
+          of: find.byType(GlassAlertDialog),
           matching: find.byType(TextField),
         );
         final valid = kind == 'proxy'
@@ -137,6 +138,16 @@ void main() {
         expect(
           tester.widget<TextField>(input).decoration!.errorText,
           isNotNull,
+        );
+        final decoration = tester.widget<InputDecorator>(
+          find.descendant(of: input, matching: find.byType(InputDecorator)),
+        );
+        expect(decoration.isFocused, isTrue);
+        final border = decoration.decoration.focusedErrorBorder!;
+        expect(border.borderSide.style, BorderStyle.solid);
+        expect(
+          border.borderSide.color,
+          Theme.of(tester.element(input)).colorScheme.error,
         );
         await tester.enterText(input, '');
         await settleWrites(tester);
@@ -171,7 +182,7 @@ void main() {
         file.deleteSync();
         final blocked = Directory(file.path)..createSync();
         final input = find.descendant(
-          of: find.byType(AlertDialog),
+          of: find.byType(GlassAlertDialog),
           matching: find.byType(TextField),
         );
         final valid = kind == 'proxy'
@@ -234,7 +245,7 @@ void main() {
     await settleWrites(tester);
     expect(state.danmakuSettings.apiUrl, 'https://example.test/service');
     expect(file.readAsStringSync(), contains('https://example.test/service'));
-    expect(find.byType(AlertDialog), findsNothing, reason: '保存成功后关掉对话框');
+    expect(find.byType(GlassAlertDialog), findsNothing, reason: '保存成功后关掉对话框');
     expect(tester.takeException(), isNull);
   });
   testWidgets('danmaku 源对话框：写盘失败留在框里，重试不重复新增', (tester) async {
@@ -257,7 +268,7 @@ void main() {
     await settleWrites(tester);
     expect(find.textContaining('自动保存失败'), findsOneWidget);
     expect(
-      find.byType(AlertDialog),
+      find.byType(GlassAlertDialog),
       findsOneWidget,
       reason: '写盘失败不能把刚填好的内容一起关掉',
     );
@@ -273,7 +284,7 @@ void main() {
     );
     expect(state.danmakuSettings.apiUrl, valid);
     expect(file.readAsStringSync(), contains(valid));
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
   testWidgets('danmaku 源对话框：最后一版输入一次性落盘，重开确认不再改盘', (

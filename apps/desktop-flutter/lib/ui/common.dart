@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 /// 区块标题。
@@ -416,10 +417,11 @@ Future<int?> showNumberSliderDialog(
   if (maxValue < minValue) return Future.value(null);
   final divisions = maxValue - minValue;
   var value = current.clamp(minValue, maxValue).toDouble();
-  return showDialog<int>(
+  return showGlassDialog<int>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setLocal) => AlertDialog(
+      builder: (context, setLocal) => GlassAlertDialog(
+        constraints: const BoxConstraints(maxWidth: 360 + 2 * AppSpace.xl),
         title: Text(title),
         content: SizedBox(
           width: 360,

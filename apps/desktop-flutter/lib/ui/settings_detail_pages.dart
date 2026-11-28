@@ -14,6 +14,7 @@ import '../core/player_options.dart';
 import '../core/site_group_rules.dart';
 import '../services/app_paths.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'app.dart';
 import 'browser_component_settings.dart';
 import 'intro_skip_options_page.dart';
@@ -52,6 +53,7 @@ class PlaybackOptionsPage extends StatelessWidget {
         final theme = Theme.of(context);
         return SettingsDetailScaffold(
           title: '播放参数',
+          wallpaperUrl: state.config?.wallpaper,
           description: '解码、连播、缓存与失败回退；改动即时保存。',
           children: [
             SettingsSection(
@@ -114,7 +116,7 @@ class PlaybackOptionsPage extends StatelessWidget {
                       subtitle: Text(
                         '按住画面期间临时 ${_speedText(state.playerOptions.longPressSpeed)} 播放，松开恢复原速',
                       ),
-                      trailing: DropdownButton<double>(
+                      trailing: SettingsDropdown<double>(
                         value: state.playerOptions.longPressSpeed,
                         underline: const SizedBox.shrink(),
                         items: _speedItems(state.playerOptions.longPressSpeed),
@@ -218,7 +220,7 @@ class PlaybackOptionsPage extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('失败回退'),
                       subtitle: Text(state.playerOptions.failureFallback.label),
-                      trailing: DropdownButton<PlayerFailureFallback>(
+                      trailing: SettingsDropdown<PlayerFailureFallback>(
                         value: state.playerOptions.failureFallback,
                         underline: const SizedBox.shrink(),
                         items: [
@@ -253,7 +255,7 @@ class PlaybackOptionsPage extends StatelessWidget {
                     '把高动态范围压回可用亮度；'
                     '换算法主要影响亮部细节与整体风格，当前为「${state.playerOptions.toneMapping.label}」',
                   ),
-                  trailing: DropdownButton<HdrToneMapping>(
+                  trailing: SettingsDropdown<HdrToneMapping>(
                     key: const ValueKey('settings-player-tone-mapping-menu'),
                     value: state.playerOptions.toneMapping,
                     underline: const SizedBox.shrink(),
@@ -278,7 +280,7 @@ class PlaybackOptionsPage extends StatelessWidget {
                     '按帧统计峰值后再压缩，暗场更干净但更吃性能；'
                     '当前为「${state.playerOptions.hdrPeakCompute.label}」',
                   ),
-                  trailing: DropdownButton<HdrPeakCompute>(
+                  trailing: SettingsDropdown<HdrPeakCompute>(
                     key: const ValueKey('settings-player-hdr-peak-menu'),
                     value: state.playerOptions.hdrPeakCompute,
                     underline: const SizedBox.shrink(),
@@ -361,7 +363,7 @@ class PlaybackOptionsPage extends StatelessWidget {
     title: Text(label),
     trailing: Semantics(
       label: label,
-      child: DropdownButton<PlayerDoubleClickAction>(
+      child: SettingsDropdown<PlayerDoubleClickAction>(
         key: ValueKey('settings-player-double-click-$side-menu'),
         value: value,
         underline: const SizedBox.shrink(),
@@ -478,10 +480,10 @@ class SiteGroupRulesPage extends StatelessWidget {
     final nameController = TextEditingController();
     final patternController = TextEditingController();
     String? error;
-    final result = await showDialog<bool>(
+    final result = await showGlassDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => GlassAlertDialog(
           title: const Text('添加分组规则'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -565,6 +567,7 @@ class OutboundProxyPage extends StatelessWidget {
       listenable: state,
       builder: (context, _) => SettingsDetailScaffold(
         title: '出站代理',
+        wallpaperUrl: state.config?.wallpaper,
         description:
             '按域名把请求转发到 HTTP 代理（如 127.0.0.1:7890）。'
             '只影响站点/解析/字幕等出站请求，不影响本地播放代理。',
@@ -632,7 +635,7 @@ class OutboundProxyPage extends StatelessWidget {
     );
   }
 
-  Future<void> _editDefaultProxy(BuildContext context) => showDialog<void>(
+  Future<void> _editDefaultProxy(BuildContext context) => showGlassDialog<void>(
     context: context,
     builder: (_) => ImmediateAddressDialog(
       title: '默认代理地址',
@@ -653,10 +656,10 @@ class OutboundProxyPage extends StatelessWidget {
     final patterns = TextEditingController();
     final url = TextEditingController();
     String? error;
-    final result = await showDialog<bool>(
+    final result = await showGlassDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => GlassAlertDialog(
           title: const Text('添加出站代理规则'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -761,6 +764,7 @@ class DohSettingsPage extends StatelessWidget {
       listenable: state,
       builder: (context, _) => SettingsDetailScaffold(
         title: '加密 DNS（DoH）',
+        wallpaperUrl: state.config?.wallpaper,
         description: dohStatusText(state),
         children: [
           SwitchListTile(
@@ -812,7 +816,7 @@ class DohSettingsPage extends StatelessWidget {
     return index < 0 ? options[1] : options[(index + 1) % options.length];
   }
 
-  Future<void> _editDohEndpoint(BuildContext context) => showDialog<void>(
+  Future<void> _editDohEndpoint(BuildContext context) => showGlassDialog<void>(
     context: context,
     builder: (_) => ImmediateAddressDialog(
       title: 'DoH 端点',
@@ -875,6 +879,7 @@ class _LiveSettingsPageState extends State<LiveSettingsPage> {
     listenable: state,
     builder: (context, _) => SettingsDetailScaffold(
       title: '直播',
+      wallpaperUrl: state.config?.wallpaper,
       description: '当前源出问题时的回退顺序；改动即时保存。',
       children: [
         SwitchListTile(
@@ -917,7 +922,6 @@ class _LiveSettingsPageState extends State<LiveSettingsPage> {
                     decoration: const InputDecoration(
                       isDense: true,
                       hintText: '输入站点 key 或名称关键词',
-                      border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _addKeyword(),
                   ),
@@ -1083,8 +1087,7 @@ class ImmediateAddressDialog extends StatefulWidget {
   final Future<bool> Function(String) save;
   final bool allowClear;
   @override
-  State<ImmediateAddressDialog> createState() =>
-      ImmediateAddressDialogState();
+  State<ImmediateAddressDialog> createState() => ImmediateAddressDialogState();
 }
 
 class ImmediateAddressDialogState extends State<ImmediateAddressDialog> {
@@ -1134,7 +1137,7 @@ class ImmediateAddressDialogState extends State<ImmediateAddressDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
     title: Text(widget.title),
     content: Column(
       mainAxisSize: MainAxisSize.min,

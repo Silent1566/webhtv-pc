@@ -8,7 +8,7 @@ import 'package:webhtv_pc/ui/window_mode.dart';
 ///
 /// 为什么单独测这个 widget：它挂在 `MaterialApp.builder` 里（Navigator 之上），
 /// 直接 pump 整个 `WebHtvApp` 会拉起真实 bootstrap；这里只验证「快捷键 →
-/// 退出全屏 + 恢复标题栏」这条链路。
+/// 退出全屏 + 保持原生标题栏隐藏」这条链路。
 const MethodChannel _channel = MethodChannel('window_manager');
 
 void main() {
@@ -50,7 +50,7 @@ void main() {
     );
   }
 
-  testWidgets('非播放页按 Esc：退出全屏并恢复标题栏', (tester) async {
+  testWidgets('非播放页按 Esc：退出全屏并保持原生标题栏隐藏', (tester) async {
     installMock(tester);
     // 先让平台处于全屏，壳层 initState 的回读才会把它记下来。
     fullscreen = true;
@@ -67,10 +67,10 @@ void main() {
         .where((call) => call.method == 'setTitleBarStyle')
         .toList();
     expect(styleCalls, isNotEmpty);
-    expect((styleCalls.last.arguments as Map)['titleBarStyle'], 'normal');
+    expect((styleCalls.last.arguments as Map)['titleBarStyle'], 'hidden');
     expect(
       (styleCalls.last.arguments as Map)['windowButtonVisibility'],
-      isTrue,
+      isFalse,
     );
   });
 

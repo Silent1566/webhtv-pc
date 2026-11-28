@@ -11,6 +11,7 @@ import '../core/sniff/sniff_types.dart';
 import '../services/app_paths.dart';
 import '../services/browser_component_store.dart';
 import '../services/sniff_runtime.dart';
+import 'glass_dialog.dart';
 import 'settings_layout.dart';
 import 'toast.dart';
 import 'tokens.dart';
@@ -175,9 +176,9 @@ class _BrowserComponentSettingsSectionState
   }
 
   Future<void> _uninstall(BrowserComponent component) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('browser-component-uninstall-confirm'),
         title: const Text('卸载浏览器内核？'),
         content: Text(
@@ -448,9 +449,10 @@ Future<bool> showBrowserComponentDialog(
       return status;
     }),
   );
-  return await showDialog<bool>(
+  return await showGlassDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => GlassAlertDialog(
+          constraints: const BoxConstraints(maxWidth: 568),
           key: const ValueKey('browser-component-dialog'),
           title: const Text('浏览器内核'),
           content: SizedBox(

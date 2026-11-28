@@ -13,6 +13,8 @@ import '../../services/audio_ai/basic_pitch_service.dart';
 import '../../services/audio_ai/realtime_subtitle_controller.dart';
 import '../../services/audio_ai/srt_translation_service.dart';
 import '../../services/audio_ai/windows_audio_capture.dart';
+import '../glass_dialog.dart';
+import '../player_overlay.dart' show PlayerGlassDropdown;
 import '../tokens.dart';
 
 Widget _error(BuildContext context, String message) => Semantics(
@@ -118,7 +120,8 @@ class _AudioModelControlsState extends State<AudioModelControls> {
   Future<void> _delete() async {
     final yes = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
         title: const Text('删除模型？'),
         content: Text('仅删除 ${_model.name} 的本地文件，不改变播放器。'),
         actions: [
@@ -158,8 +161,8 @@ class _AudioModelControlsState extends State<AudioModelControls> {
       Text('音频AI模型', style: Theme.of(context).textTheme.titleMedium),
       const Text('默认关闭；未配置模型不改变已有播放。权重按需下载或本地导入。'),
       const SizedBox(height: 12),
-      DropdownButtonFormField<String>(
-        initialValue: _model.id,
+      PlayerGlassDropdown<String>(
+        value: _model.id,
         decoration: const InputDecoration(labelText: '识别语言 / 模型'),
         items: [
           for (final model in widget.catalog)
@@ -189,7 +192,9 @@ class _AudioModelControlsState extends State<AudioModelControls> {
           if (!context.mounted) return;
           await showDialog<void>(
             context: context,
-            builder: (context) => AlertDialog(
+            builder: (context) => GlassAlertDialog(
+              blurBackdrop: false,
+              constraints: const BoxConstraints(maxWidth: 680),
               title: const Text('官方资源与权重许可'),
               content: SizedBox(
                 width: 640,
@@ -403,10 +408,7 @@ class _RealtimeSubtitleControlsState extends State<RealtimeSubtitleControls> {
             child: Text(_enabled ? '关闭实时字幕' : '启用实时字幕'),
           ),
           if (_busy)
-            TextButton(
-              onPressed: _cancelToggle,
-              child: const Text('取消启用'),
-            ),
+            TextButton(onPressed: _cancelToggle, child: const Text('取消启用')),
         ],
       ),
       Semantics(
@@ -646,8 +648,8 @@ class _SrtTranslationControlsState extends State<SrtTranslationControls> {
       Row(
         children: [
           Expanded(
-            child: DropdownButtonFormField<int>(
-              initialValue: _concurrency,
+            child: PlayerGlassDropdown<int>(
+              value: _concurrency,
               decoration: const InputDecoration(labelText: '并发请求'),
               items: [
                 for (var i = 1; i <= 8; i++)
@@ -660,8 +662,8 @@ class _SrtTranslationControlsState extends State<SrtTranslationControls> {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: DropdownButtonFormField<int>(
-              initialValue: _chunks,
+            child: PlayerGlassDropdown<int>(
+              value: _chunks,
               decoration: const InputDecoration(labelText: '初始分块'),
               items: [
                 for (var i = 1; i <= 32; i++)
@@ -736,10 +738,11 @@ class _BasicPitchControlsState extends State<BasicPitchControls> {
 
   /// 一次生成所绑定的输入身份：换歌/换歌词/换媒体必须让旧结果不可应用。
   String _fingerprintOf(BasicPitchControls widget) {
-    final headers = (widget.headers.entries.toList()
-          ..sort((a, b) => a.key.compareTo(b.key)))
-        .map((entry) => '${entry.key}=${entry.value}')
-        .join('&');
+    final headers =
+        (widget.headers.entries.toList()
+              ..sort((a, b) => a.key.compareTo(b.key)))
+            .map((entry) => '${entry.key}=${entry.value}')
+            .join('&');
     final lines = widget.lines
         .map(
           (line) =>

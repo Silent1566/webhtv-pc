@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/danmaku_style.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/ui/danmaku_settings_sheet.dart';
+import 'package:webhtv_pc/ui/player_overlay.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 const _sourceAUrl = 'https://a.test/danmaku/ep1.xml';
@@ -200,7 +201,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('player-danmaku-tab-tracks')));
     await tester.pumpAndSettle();
     tester
-        .widget<DropdownButton<int>>(
+        .widget<PlayerGlassDropdown<int>>(
           find.byKey(const ValueKey('player-danmaku-maxTracks')),
         )
         .onChanged!(8);

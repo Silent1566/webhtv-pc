@@ -2,13 +2,8 @@
 ///
 /// 两条约束：
 ///
-/// 1. **背景海报铺满整宽、首屏信息可读**：详情 Hero 延伸到透明 AppBar 下方，
-///    高度约占首屏一半，让标题/简介/播放入口与线路可以更早出现，避免用户先滚过
-///    一整屏空背景。因此锁定：
-///    - `Scaffold.extendBodyBehindAppBar == true`；
-///    - AppBar 背景透明；
-///    - hero 宽度 == 屏幕宽度（左右不留边距）；
-///    - 默认高度为视口的 54%，并限制在 360~500px。
+/// 1. **背景铺满整宽、首屏信息可读**：Hero 延伸到 AppBar 下方，
+///    宽高占满视口；未解码图片时 AppBar 保持实底。
 /// 2. **不得出现无效的背景色块**（用户反馈「大量地方存在这种无效的阴影或背景色
 ///    区域太丑了」）。锁定海报墙的**框比与素材一致**（2:3 竖图用竖框），
 ///    避免竖图被塞进横框后两侧露出大片底色。
@@ -158,7 +153,7 @@ void main() {
       } catch (_) {}
     });
 
-    testWidgets('extendBodyBehindAppBar + 透明 AppBar + 首屏 Hero 无侧边距', (tester) async {
+    testWidgets('实底 AppBar 与全幅 Hero', (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -188,8 +183,8 @@ void main() {
       final appBar = tester.widget<AppBar>(find.byType(AppBar).first);
       expect(
         appBar.backgroundColor,
-        Colors.transparent,
-        reason: 'app bar 必须透明，否则会盖住背景海报',
+        Theme.of(tester.element(find.byType(AppBar))).colorScheme.surface,
+        reason: '未解码图片时 AppBar 必须使用实底',
       );
       final rect = tester.getRect(
         // 真实 `DetailPage` 里图片由**页面级固定背景**负责，头部只画内容，

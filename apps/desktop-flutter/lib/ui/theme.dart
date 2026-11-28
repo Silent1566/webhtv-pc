@@ -175,14 +175,14 @@ TextTheme _textTheme(ThemeData base) {
 ThemeData buildAppTheme(Brightness brightness) {
   final scheme = _scheme(brightness);
   final semantic = defaultSemanticColors(brightness);
-  final hairline = scheme.outlineVariant.withValues(alpha: 0.72);
+  const hairline = Colors.transparent;
 
   // 先建 M3 基线，再从它派生字体阶梯——保证度量与 M3 完全一致（见 _textTheme）。
   final base = ThemeData(
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
-    scaffoldBackgroundColor: scheme.surface,
+    scaffoldBackgroundColor: Colors.transparent,
     extensions: <ThemeExtension<dynamic>>[semantic],
     // 交互态从调色板取色，不用框架默认的黑/白叠加。这些都是非布局属性。
     focusColor: scheme.primary.withValues(alpha: 0.16),
@@ -266,11 +266,15 @@ ThemeData buildAppTheme(Brightness brightness) {
       labelStyle: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
       border: OutlineInputBorder(
         borderRadius: AppRadius.mdAll,
-        borderSide: BorderSide(color: hairline),
+        borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: AppRadius.mdAll,
-        borderSide: BorderSide(color: hairline),
+        borderSide: BorderSide.none,
+      ),
+      disabledBorder: const OutlineInputBorder(
+        borderRadius: AppRadius.mdAll,
+        borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: AppRadius.mdAll,
@@ -301,7 +305,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         foregroundColor: scheme.onSurface,
         textStyle: text.labelLarge,
-        side: BorderSide(color: hairline),
+        side: BorderSide.none,
         shape: const RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
       ),
     ),
@@ -324,7 +328,7 @@ ThemeData buildAppTheme(Brightness brightness) {
     chipTheme: ChipThemeData(
       backgroundColor: scheme.surfaceContainer,
       selectedColor: scheme.primary.withValues(alpha: 0.18),
-      side: BorderSide(color: hairline),
+      side: BorderSide.none,
       labelStyle: text.labelLarge?.copyWith(color: scheme.onSurface),
       secondaryLabelStyle: text.labelLarge?.copyWith(color: scheme.onSurface),
       shape: const RoundedRectangleBorder(
@@ -333,11 +337,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       showCheckmark: false,
     ),
 
-    dividerTheme: DividerThemeData(
-      space: 1,
-      thickness: 1,
-      color: hairline,
-    ),
+    dividerTheme: DividerThemeData(space: 1, thickness: 1, color: hairline),
 
     dialogTheme: DialogThemeData(
       backgroundColor: scheme.surfaceContainerHigh,
@@ -361,7 +361,6 @@ ThemeData buildAppTheme(Brightness brightness) {
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
         borderRadius: AppRadius.smAll,
-        border: Border.all(color: hairline),
       ),
       textStyle: text.bodySmall,
       waitDuration: const Duration(milliseconds: 400),
@@ -382,9 +381,12 @@ ThemeData buildAppTheme(Brightness brightness) {
       radius: const Radius.circular(5),
       crossAxisMargin: 2,
       thumbColor: WidgetStateProperty.resolveWith((states) {
-        final dragging = states.contains(WidgetState.dragged) ||
+        final dragging =
+            states.contains(WidgetState.dragged) ||
             states.contains(WidgetState.hovered);
-        return scheme.onSurfaceVariant.withValues(alpha: dragging ? 0.62 : 0.34);
+        return scheme.onSurfaceVariant.withValues(
+          alpha: dragging ? 0.62 : 0.34,
+        );
       }),
       trackColor: const WidgetStatePropertyAll(Colors.transparent),
       trackBorderColor: const WidgetStatePropertyAll(Colors.transparent),
@@ -400,7 +402,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: AppRadius.mdAll,
-        side: BorderSide(color: hairline),
+        side: BorderSide.none,
       ),
       textStyle: text.bodyMedium,
     ),
@@ -423,7 +425,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       }),
       trackOutlineColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) return scheme.primary;
-        return hairline;
+        return Colors.transparent;
       }),
     ),
     sliderTheme: SliderThemeData(
@@ -438,7 +440,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         selectedBackgroundColor: scheme.primary.withValues(alpha: 0.18),
         selectedForegroundColor: scheme.onSurface,
         foregroundColor: scheme.onSurfaceVariant,
-        side: BorderSide(color: hairline),
+        side: BorderSide.none,
         textStyle: text.labelMedium,
       ),
     ),

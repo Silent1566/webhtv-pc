@@ -26,6 +26,7 @@ import '../services/local_spider_scanner.dart';
 import '../services/spider_registry.dart' show LocalSpider;
 import '../services/web_home_store.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'common.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
@@ -136,18 +137,16 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
         ? _pendingCandidates(importedKeys)
         : const <LocalSourceCandidate>[];
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('本地爬虫源'),
-        actions: [
-          IconButton(
-            key: const ValueKey('local-sources-rescan'),
-            tooltip: '重新载入已导入源',
-            icon: const Icon(Icons.restart_alt),
-            onPressed: _busy ? null : _reload,
-          ),
-        ],
-      ),
+    return SettingsRouteScaffold(
+      title: const Text('本地爬虫源'),
+      actions: [
+        IconButton(
+          key: const ValueKey('local-sources-rescan'),
+          tooltip: '重新载入已导入源',
+          icon: const Icon(Icons.restart_alt),
+          onPressed: _busy ? null : _reload,
+        ),
+      ],
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -163,7 +162,6 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                 decoration: InputDecoration(
                   labelText: '扫描文件夹',
                   hintText: r'例如 D:\spiders',
-                  border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
                     key: const ValueKey('local-sources-pick'),
                     tooltip: '选择文件夹',
@@ -213,7 +211,11 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
           ),
           if (_report != null) ...[
             const Divider(height: AppSpace.xl),
-            _buildCandidates(context, importedKeys, webHomeError ?? _importStateError),
+            _buildCandidates(
+              context,
+              importedKeys,
+              webHomeError ?? _importStateError,
+            ),
           ],
           const Divider(height: AppSpace.xl),
           SettingsSection(
@@ -229,7 +231,6 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                 decoration: InputDecoration(
                   labelText: '网页地址',
                   hintText: 'https://example.com/page',
-                  border: const OutlineInputBorder(),
                   errorText: _urlError,
                 ),
               ),
@@ -241,7 +242,6 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
                 decoration: const InputDecoration(
                   labelText: '名称（可选）',
                   hintText: '留空则用网址本身命名',
-                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppSpace.md),
@@ -493,13 +493,12 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     };
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpace.md),
-      padding: const EdgeInsets.all(AppSpace.md),
+      padding: const EdgeInsets.all(AppSpace.md + 1),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest.withValues(
           alpha: 0.45,
         ),
         borderRadius: AppRadius.mdAll,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -742,7 +741,6 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
           onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
             isDense: true,
-            border: const OutlineInputBorder(),
             labelText: '筛选扫描结果',
             hintText: '名称、key 或路径（支持模糊搜索）',
             prefixIcon: const Icon(Icons.search, size: 18),
@@ -1029,9 +1027,9 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   }
 
   Future<void> _removeLocalSpider(String key, String name) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('删除本地源'),
         content: Text(
           '确定删除「$name」？将永久删除本地源目录及其中的文件。'
@@ -1134,9 +1132,9 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
     Map<String, String> names,
   ) async {
     if (keys.isEmpty) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('批量删除本地源'),
         content: Text(
           '确定删除以下 ${keys.length} 个源？本地源目录及其中的文件会被一并清除，'
@@ -1224,9 +1222,9 @@ class _LocalSourcesPageState extends State<LocalSourcesPage> {
   }
 
   Future<void> _removeWebHome(WebHomeSource source) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('删除本地源'),
         content: Text(
           source.isRemote

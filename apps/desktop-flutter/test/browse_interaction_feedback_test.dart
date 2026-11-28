@@ -183,10 +183,9 @@ void main() {
         // 用 copyWith，避免裸 `MediaQueryData` 把 size 变成 0×0。
         builder: reduce
             ? (context, child) => MediaQuery(
-                data: MediaQuery.of(context).copyWith(
-                  disableAnimations: true,
-                  accessibleNavigation: true,
-                ),
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(disableAnimations: true, accessibleNavigation: true),
                 child: child!,
               )
             : null,
@@ -233,7 +232,8 @@ void main() {
     expect(
       find.byKey(_refreshBusyKey),
       findsOneWidget,
-      reason: '首页刷新必须有**首屏可见**的等待态：原来那条进度条被放在 slivers 末尾'
+      reason:
+          '首页刷新必须有**首屏可见**的等待态：原来那条进度条被放在 slivers 末尾'
           '（网格之后），网格填满视口时落在视口外，用户看不到任何反应',
     );
     // 首屏可见性：控件矩形必须与视口相交。
@@ -250,11 +250,7 @@ void main() {
     );
 
     await release(tester);
-    expect(
-      find.byKey(_refreshBusyKey),
-      findsNothing,
-      reason: '刷新完成后等待态必须消失',
-    );
+    expect(find.byKey(_refreshBusyKey), findsNothing, reason: '刷新完成后等待态必须消失');
     expect(find.text('首页影片一'), findsOneWidget, reason: '刷新完成后内容仍在');
   });
 
@@ -318,17 +314,16 @@ void main() {
     final tagChip = tester.widget<TagChip>(
       find.descendant(of: chip, matching: find.byType(TagChip)),
     );
+    expect(tagChip.onTap, isNotNull, reason: '筛选控件在等待中不得被禁用');
+    expect(state.categoryFilters['class'], '喜剧');
+    expect(tagChip.selected, isTrue);
+    final selectedLabel = find.descendant(of: chip, matching: find.text('喜剧'));
     expect(
-      tagChip.onTap,
-      isNotNull,
-      reason: '筛选控件在等待中不得被禁用',
+      tester.widget<Text>(selectedLabel).style?.color,
+      Theme.of(tester.element(selectedLabel)).colorScheme.primary,
     );
     // 等待态本身仍可见（分类路径清空列表 → 加载块）。
-    expect(
-      find.byType(LoadingBlock),
-      findsWidgets,
-      reason: '筛选等待时必须有可见等待态',
-    );
+    expect(find.byType(LoadingBlock), findsWidgets, reason: '筛选等待时必须有可见等待态');
 
     await release(tester);
     await pumpFrames(tester);

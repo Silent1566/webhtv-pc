@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show KeyDownEvent, LogicalKeyboardKey;
 
 import '../core/home_feed.dart';
+import 'glass_widgets.dart';
 import 'poster_image.dart';
 import 'backdrop_scrim.dart';
 import 'common.dart' show TagChip;
@@ -496,19 +497,22 @@ class _HomeHeroState extends State<HomeHero> {
     return MouseRegion(
       onEnter: (_) => _reportHover(true),
       onExit: (_) => _reportHover(false),
-      child: IconButton(
-        key: key,
-        tooltip: tooltip,
-        iconSize: 22,
-        onPressed: onPressed,
-        icon: Icon(icon),
-        style: IconButton.styleFrom(
-          fixedSize: const Size(44, 44),
-          shape: const CircleBorder(),
-          padding: EdgeInsets.zero,
-          backgroundColor: scheme.surface.withValues(alpha: 0.55),
-          foregroundColor: scheme.onSurface,
-          overlayColor: scheme.onSurface.withValues(alpha: 0.14),
+      child: GlassPane(
+        blurBackdrop: false,
+        borderRadius: BorderRadius.circular(22),
+        child: IconButton(
+          key: key,
+          tooltip: tooltip,
+          iconSize: 22,
+          onPressed: onPressed,
+          icon: Icon(icon),
+          style: IconButton.styleFrom(
+            fixedSize: const Size(44, 44),
+            shape: const CircleBorder(),
+            padding: EdgeInsets.zero,
+            foregroundColor: scheme.onSurface,
+            overlayColor: scheme.onSurface.withValues(alpha: 0.14),
+          ),
         ),
       ),
     );

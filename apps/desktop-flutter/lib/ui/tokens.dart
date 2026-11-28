@@ -137,16 +137,31 @@ abstract final class AppPalette {
   static const Color nightSurface2 = Color(0xFF1B2238);
   static const Color nightSurface3 = Color(0xFF232C46);
   static const Color nightInk = Color(0xFFE8ECF7);
+
   /// 副文本**从底色色相染色**，不是灰——灰会从整个世界里掉出来。
   static const Color nightInkMuted = Color(0xFFA8B2CC);
+
+  /// 暗色**玻璃面板上**的次要文字：nightInkMuted 向 nightInk 走 0.75。
+  ///
+  /// 为什么不直接用 nightInkMuted：玻璃面板的底不是主题表面，而是
+  /// 「采样底（页面内容 × 遮罩）× 染底」——暗色下最坏情况是一张近白的海报
+  /// 透过 0.42 的染底，面板落到 #5a5c61 一带，nightInkMuted 只有 **3.16:1**
+  /// （实测见 .superpowers/sdd/2026-11-26-style-spike/ink-1/probes.json）。
+  /// 混合比例按「同一块实测面板上的候选表」选，不是拍脑袋：
+  /// 0.50 → 4.30、0.75 → **4.90**、1.00（= nightInk）→ 5.67。
+  /// 取 0.75 而不是 1.00，是为了给正文与次要文字留一点层级差。
+  static const Color nightInkOnGlass = Color(0xFFD8DEEC);
+
   static const Color nightLine = Color(0xFF232C46);
 
   // ---- 亮色：昼间星表 ----
   static const Color dayGround = Color(0xFFF4F6FB);
+
   /// 卡片/容器（`surfaceContainerLow`）：纯白，在浅底上"浮起来"。
   static const Color daySurface1 = Color(0xFFFFFFFF);
   static const Color daySurface2 = Color(0xFFEAEEF7);
   static const Color daySurface3 = Color(0xFFDDE3F0);
+
   /// 外壳（`surfaceContainerLowest`：顶栏与侧栏）。
   ///
   /// 比页面底色**更冷更深**，而不是更白——与暗色主题同一个逻辑：
@@ -165,10 +180,13 @@ abstract final class AppPalette {
   // ---- 语义状态色：站源健康 ----
   /// 可用。
   static const Color statusOk = Color(0xFF3DD68C);
+
   /// 降级（间歇超时）。
   static const Color statusDegraded = Color(0xFFF5A623);
+
   /// 失效。
   static const Color statusFailed = Color(0xFFF0526B);
+
   /// 未知（未测过 / 运行时不支持）。
   static const Color statusUnknown = Color(0xFF6B7A99);
 
@@ -193,6 +211,7 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
     required this.statusUnknown,
     required this.wallpaperVeil,
     required this.wallpaperVeilStrong,
+    required this.glassInkSecondary,
   });
 
   /// 星等琥珀：基准星、当前剧集、选中态。
@@ -220,6 +239,17 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
   /// 壁纸之上的强纱：用于承载正文的卡片，保证 4.5:1。
   final Color wallpaperVeilStrong;
 
+  /// 玻璃面板上的**次要文字**色。
+  ///
+  /// 为什么这不是 onSurfaceVariant 的一个 alpha 变体：玻璃面板的底既不是
+  /// colorScheme.surface，也不是壁纸纱的结果，而是「采样底（页面内容 × 遮罩）
+  /// × 染底」——它的亮度取决于玻璃背后恰好是什么内容，所以需要一个**独立的角色**
+  /// 按亮度取值，而不是继续借用「页面上的次要文字」这一档。
+  ///
+  /// 亮色取 onSurface（与 shell-1 的补救值相同：玻璃面板实测 2.95 → 7.79）；
+  /// 暗色取 AppPalette.nightInkOnGlass（3.16 → 4.90，见 ink-1/probes.json）。
+  final Color glassInkSecondary;
+
   @override
   AppSemanticColors copyWith({
     Color? magnitude,
@@ -229,6 +259,7 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
     Color? statusUnknown,
     Color? wallpaperVeil,
     Color? wallpaperVeilStrong,
+    Color? glassInkSecondary,
   }) {
     return AppSemanticColors(
       magnitude: magnitude ?? this.magnitude,
@@ -238,6 +269,7 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
       statusUnknown: statusUnknown ?? this.statusUnknown,
       wallpaperVeil: wallpaperVeil ?? this.wallpaperVeil,
       wallpaperVeilStrong: wallpaperVeilStrong ?? this.wallpaperVeilStrong,
+      glassInkSecondary: glassInkSecondary ?? this.glassInkSecondary,
     );
   }
 
@@ -254,8 +286,16 @@ class AppSemanticColors extends ThemeExtension<AppSemanticColors> {
       statusFailed: Color.lerp(statusFailed, other.statusFailed, t)!,
       statusUnknown: Color.lerp(statusUnknown, other.statusUnknown, t)!,
       wallpaperVeil: Color.lerp(wallpaperVeil, other.wallpaperVeil, t)!,
-      wallpaperVeilStrong:
-          Color.lerp(wallpaperVeilStrong, other.wallpaperVeilStrong, t)!,
+      wallpaperVeilStrong: Color.lerp(
+        wallpaperVeilStrong,
+        other.wallpaperVeilStrong,
+        t,
+      )!,
+      glassInkSecondary: Color.lerp(
+        glassInkSecondary,
+        other.glassInkSecondary,
+        t,
+      )!,
     );
   }
 }
@@ -269,12 +309,15 @@ AppSemanticColors defaultSemanticColors(Brightness brightness) {
   return AppSemanticColors(
     magnitude: dark ? AppPalette.magnitude : AppPalette.magnitudeOnLight,
     statusOk: dark ? AppPalette.statusOk : AppPalette.statusOkOnLight,
-    statusDegraded:
-        dark ? AppPalette.statusDegraded : AppPalette.statusDegradedOnLight,
-    statusFailed:
-        dark ? AppPalette.statusFailed : AppPalette.statusFailedOnLight,
-    statusUnknown:
-        dark ? AppPalette.statusUnknown : AppPalette.statusUnknownOnLight,
+    statusDegraded: dark
+        ? AppPalette.statusDegraded
+        : AppPalette.statusDegradedOnLight,
+    statusFailed: dark
+        ? AppPalette.statusFailed
+        : AppPalette.statusFailedOnLight,
+    statusUnknown: dark
+        ? AppPalette.statusUnknown
+        : AppPalette.statusUnknownOnLight,
     // 配置壁纸之上永远有一层纱：壁纸深浅不可预知，内容必须始终可读。
     // 纱由底色染出，不透明度是设计决定，不是图片的属性。
     wallpaperVeil: dark
@@ -283,6 +326,10 @@ AppSemanticColors defaultSemanticColors(Brightness brightness) {
     wallpaperVeilStrong: dark
         ? AppPalette.nightGround.withValues(alpha: 0.94)
         : AppPalette.dayGround.withValues(alpha: 0.96),
+    // 玻璃面板上的次要文字。亮色沿用 onSurface（shell-1 已验收的补救值，
+    // 亮色因此零回归）；暗色必须换掉 onSurfaceVariant——它在暗玻璃上只有
+    // 2.40–3.56，这是暗色迟迟上不了玻璃的唯一卡点。
+    glassInkSecondary: dark ? AppPalette.nightInkOnGlass : AppPalette.dayInk,
   );
 }
 
@@ -317,3 +364,58 @@ const List<FontFeature> kTabularFigures = [FontFeature.tabularFigures()];
 /// 给样式加上表格数字。
 TextStyle tabular(TextStyle style) =>
     style.copyWith(fontFeatures: kTabularFigures);
+
+// ---------------------------------------------------------------------------
+// 玻璃
+// ---------------------------------------------------------------------------
+
+/// 磨砂材质的明暗取值；默认无装饰描边和扫光。
+///
+/// 模糊、染底与饱和度沿用试点。2026-11-27 的全局无框规则关闭边缘高光；
+/// 历史像素和对比度记录不代表所有壁纸或新版面板的无条件保证。
+abstract final class AppGlass {
+  /// 背景高斯模糊强度（px）：暗色需要更强的模糊才能让背景结构消失。
+  static const double blurSigmaDark = 26;
+
+  /// 背景高斯模糊强度（px）：亮色档。
+  static const double blurSigmaLight = 20;
+
+  /// 染色底不透明度：底色固定取 `colorScheme.surface`，只改透明度，不引入新色相。
+  ///
+  /// 暗色 0.42 = `BackdropScrim.hero` 顶部 alpha；亮色 0.58 落在 hero 顶 0.42
+  /// 与 page 顶 0.62 之间。
+  static const double tintAlphaDark = 0.42;
+
+  /// 染色底不透明度：亮色档。
+  static const double tintAlphaLight = 0.58;
+
+  /// 加密档染色底：直接取 `BackdropScrim.page` 的力度，可读性不够时用。
+  static const double tintAlphaDenseDark = 0.62;
+
+  /// 加密档染色底：亮色档。
+  static const double tintAlphaDenseLight = 0.74;
+
+  /// 全局无框：静态面板不使用边缘高光。
+  static const double rimAlphaDark = 0;
+
+  /// 亮色也不使用装饰边缘。
+  static const double rimAlphaLight = 0;
+
+  /// 全局关闭斜向装饰扫光。
+  static const double sheenAlphaDark = 0;
+
+  /// 亮色与暗色遵循同一无装饰扫光规则。
+  static const double sheenAlphaLight = 0;
+
+  /// 背景饱和度倍率：暗色需要更强的「玻璃下的颜色被放大」，亮色过度提饱和会脏。
+  static const double saturationDark = 1.35;
+
+  /// 背景饱和度倍率：亮色档。
+  static const double saturationLight = 1.15;
+
+  /// 圆角：直接复用既有圆角标度，不新造。
+  static const double radius = AppRadius.lg;
+
+  /// 边缘描边宽度：与既有发丝边同宽。
+  static const double rimWidth = 1;
+}

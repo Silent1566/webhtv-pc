@@ -8,6 +8,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/external_player.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/player_context_menu.dart';
 import 'package:webhtv_pc/ui/player_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -165,13 +166,13 @@ void main() {
     await pump(tester, preset: first);
     for (var attempt = 0; attempt < 2; attempt++) {
       await openExternalPicker(tester);
-      expect(find.widgetWithText(AlertDialog, '外部播放器'), findsOneWidget);
+      expect(find.widgetWithText(GlassAlertDialog, '外部播放器'), findsOneWidget);
       expect(tester.widget<ListTile>(row(first)).selected, isTrue);
       expect(find.text('PotPlayer #1'), findsOneWidget);
       expect(find.text('PotPlayer #2'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, '取消'));
       await settlePlayerPage(tester, times: 2);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(GlassAlertDialog), findsNothing);
       expect(app.externalPlayerPath, first);
       expect(launches, isEmpty);
       expect(tester.takeException(), isNull);
@@ -187,7 +188,7 @@ void main() {
     expect(launches, [second]);
     expect(arguments, ['http://127.0.0.1:9/never.m3u8']);
     await openExternalPicker(tester);
-    expect(find.widgetWithText(AlertDialog, '外部播放器'), findsOneWidget);
+    expect(find.widgetWithText(GlassAlertDialog, '外部播放器'), findsOneWidget);
     expect(tester.widget<ListTile>(row(second)).selected, isTrue);
     await tester.tap(find.widgetWithText(TextButton, '取消'));
     await settlePlayerPage(tester, times: 2);
@@ -319,7 +320,7 @@ void main() {
     expect(launches, [first]);
     expect(find.byTooltip('外部播放器播放中'), findsNothing);
     await openExternalPicker(tester);
-    expect(find.widgetWithText(AlertDialog, '外部播放器'), findsOneWidget);
+    expect(find.widgetWithText(GlassAlertDialog, '外部播放器'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '取消'));
     await settlePlayerPage(tester, times: 2);
     expect(launches, [first]);

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'diagnostics_pages.dart';
+import 'settings_layout.dart';
 
 class SettingsOverviewPage extends StatelessWidget {
   const SettingsOverviewPage({super.key, required this.state});
@@ -19,8 +20,10 @@ class SettingsOverviewPage extends StatelessWidget {
   final AppState state;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('全部设置')),
+  Widget build(BuildContext context) => SettingsRouteScaffold(
+    title: const Text('全部设置'),
+    frameBody: false,
+    wallpaperUrl: state.config?.wallpaper,
     // 本页由 `Navigator.push` 打开，是独立路由；外壳的监听管不到它，所以必须
     // 自己听 `AppState`。不包这一层，拨动开关后整页停在进页那一刻的旧快照
     // （与明细页同一个根因）。标题在 AppBar，正文不再重复页标题。

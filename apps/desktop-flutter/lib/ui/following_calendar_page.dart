@@ -25,6 +25,7 @@ import '../core/tmdb_detail_model.dart';
 import '../core/tmdb_identity.dart';
 import '../services/following_air_time_service.dart';
 import '../state/app_state.dart';
+import 'glass_widgets.dart';
 import 'poster_image.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
@@ -335,7 +336,16 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('搜索站源')),
+          appBar: AppBar(
+            title: const Text('搜索站源'),
+            backgroundColor: Colors.transparent,
+            flexibleSpace: const IgnorePointer(
+              child: GlassPane(
+                borderRadius: BorderRadius.zero,
+                child: SizedBox.expand(),
+              ),
+            ),
+          ),
           body: SearchPage(
             state: _state,
             initialKeyword: title,
@@ -358,6 +368,68 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
       return;
     }
     await playFollowingEntry(context, _state, item, entry);
+  }
+
+  Widget _buildCalendarToolbar(ThemeData theme, CalendarWeek week) {
+    final weekly = _view == _CalendarView.week;
+    final navigationStyle = IconButton.styleFrom(
+      minimumSize: const Size.square(40),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final endYear = week.end.year == week.start.year ? '' : '${week.end.year}年';
+    final title = weekly
+        ? '${week.start.year}年${week.start.month}月${week.start.day}日 - '
+              '$endYear${week.end.month}月${week.end.day}日'
+        : '${_month.year}年${_month.month}月';
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: AppSpace.md,
+      runSpacing: AppSpace.xs,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                title,
+                key: ValueKey(
+                  weekly ? 'calendar-week-title' : 'calendar-title',
+                ),
+                style: theme.textTheme.titleMedium,
+              ),
+            ),
+            const SizedBox(width: AppSpace.sm),
+            IconButton(
+              key: const ValueKey('calendar-prev-month'),
+              style: navigationStyle,
+              tooltip: weekly ? '上一周' : '上一月',
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => weekly ? _shiftWeek(-1) : _shiftMonth(-1),
+            ),
+            IconButton(
+              key: const ValueKey('calendar-next-month'),
+              style: navigationStyle,
+              tooltip: weekly ? '下一周' : '下一月',
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => weekly ? _shiftWeek(1) : _shiftMonth(1),
+            ),
+          ],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextButton(
+              key: const ValueKey('calendar-today-button'),
+              onPressed: _goToday,
+              child: const Text('今日'),
+            ),
+            const SizedBox(width: AppSpace.sm),
+            _ViewToggle(view: _view, onChanged: _setView),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
@@ -421,117 +493,70 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
                 constraints: BoxConstraints(
                   maxHeight: constraints.maxHeight * .4,
                 ),
-                child: SingleChildScrollView(
-                  primary: false,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpace.md,
-                          vertical: AppSpace.xs,
-                        ),
-                        child: SizedBox(
-                          height: 40,
-                          child: Row(
-                            children: [
-                              IconButton(
-                                key: const ValueKey('calendar-prev-month'),
-                                tooltip: _view == _CalendarView.week
-                                    ? '上一周'
-                                    : '上一月',
-                                icon: const Icon(Icons.chevron_left),
-                                onPressed: () => _view == _CalendarView.week
-                                    ? _shiftWeek(-1)
-                                    : _shiftMonth(-1),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SingleChildScrollView(
+                    primary: false,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.md,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildCalendarToolbar(theme, week),
+                        if (items.isNotEmpty) ...[
+                          if (_view == _CalendarView.week)
+                            _CalendarWeekStrip(
+                              week: week,
+                              today: today,
+                              selected: _selected,
+                              onTap: _selectDay,
+                            )
+                          else ...[
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                bottom: AppSpace.xs,
                               ),
-                              Text(
-                                '${_month.year}年${_month.month}月',
-                                key: const ValueKey('calendar-title'),
-                                style: theme.textTheme.titleMedium,
-                              ),
-                              IconButton(
-                                key: const ValueKey('calendar-next-month'),
-                                tooltip: _view == _CalendarView.week
-                                    ? '下一周'
-                                    : '下一月',
-                                icon: const Icon(Icons.chevron_right),
-                                onPressed: () => _view == _CalendarView.week
-                                    ? _shiftWeek(1)
-                                    : _shiftMonth(1),
-                              ),
-                              if (_view == _CalendarView.week) ...[
-                                const SizedBox(width: AppSpace.sm),
-                                Text(
-                                  '${week.start.month}月${week.start.day}日 - '
-                                  '${week.end.month}月${week.end.day}日',
-                                  key: const ValueKey('calendar-week-title'),
-                                  style: theme.textTheme.bodySmall,
-                                ),
-                              ],
-                              const Spacer(),
-                              TextButton(
-                                key: const ValueKey('calendar-today-button'),
-                                onPressed: _goToday,
-                                child: const Text('今日'),
-                              ),
-                              const SizedBox(width: AppSpace.sm),
-                              _ViewToggle(view: _view, onChanged: _setView),
-                            ],
-                          ),
-                        ),
-                      ),
-                      if (items.isNotEmpty) ...[
-                        if (_view == _CalendarView.week)
-                          _CalendarWeekStrip(
-                            week: week,
-                            today: today,
-                            selected: _selected,
-                            onTap: _selectDay,
-                          )
-                        else ...[
-                          // 周一至周日表头。
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Row(
-                              key: const ValueKey('calendar-weekdays'),
-                              children: [
-                                for (final label
-                                    in followingCalendarWeekdayLabels)
-                                  Expanded(
-                                    child: Text(
-                                      label,
-                                      textAlign: TextAlign.center,
-                                      style: theme.textTheme.bodySmall,
+                              child: Row(
+                                key: const ValueKey('calendar-weekdays'),
+                                children: [
+                                  for (final label
+                                      in followingCalendarWeekdayLabels)
+                                    Expanded(
+                                      child: Text(
+                                        label,
+                                        textAlign: TextAlign.center,
+                                        style: theme.textTheme.labelMedium
+                                            ?.copyWith(
+                                              color: theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                      ),
                                     ),
-                                  ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpace.md,
-                              vertical: 2,
-                            ),
-                            child: Column(
+                            Column(
                               key: const ValueKey('calendar-grid'),
                               children: [
-                                for (final week in month.weeks)
+                                for (final row in month.weeks)
                                   Row(
                                     children: [
-                                      for (final cell in week)
+                                      for (final cell in row)
                                         Expanded(
-                                          child: _CalendarDayCell(
+                                          child: _CalendarDateButton(
                                             key:
                                                 _isSameDay(cell.date, _selected)
                                                 ? _selectedCell
                                                 : null,
-                                            cell: cell,
+                                            date: cell.date,
                                             height: cellHeight,
-                                            isToday:
-                                                cell.date.year == today.year &&
-                                                cell.date.month ==
-                                                    today.month &&
-                                                cell.date.day == today.day,
+                                            isToday: _isSameDay(
+                                              cell.date,
+                                              today,
+                                            ),
+                                            inMonth: cell.inMonth,
                                             hasUpdate:
                                                 cell.inMonth &&
                                                 dayUpdates.containsKey(
@@ -541,12 +566,10 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
                                                 cell.inMonth &&
                                                 (dayUpdates[cell.date.day] ??
                                                     false),
-                                            selected:
-                                                cell.date.year ==
-                                                    _selected.year &&
-                                                cell.date.month ==
-                                                    _selected.month &&
-                                                cell.date.day == _selected.day,
+                                            selected: _isSameDay(
+                                              cell.date,
+                                              _selected,
+                                            ),
                                             onTap: () => _selectDay(cell.date),
                                           ),
                                         ),
@@ -554,10 +577,11 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
                                   ),
                               ],
                             ),
-                          ),
+                          ],
+                          const SizedBox(height: AppSpace.xs),
                         ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -565,13 +589,17 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
               // 既不遮挡卡片，也不会像清单首项那样被滚走后看不见（2026-11-18 反馈）。
               if (noUpdates)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.md,
+                    2,
+                    AppSpace.md,
+                    2,
+                  ),
                   child: _selectedEmptyHint(theme),
                 ),
               if (items.isEmpty)
                 const Expanded(child: _CalendarEmpty())
               else ...[
-                const Divider(height: 1),
                 Expanded(
                   child: Stack(
                     fit: StackFit.expand,
@@ -582,23 +610,42 @@ class _FollowingCalendarViewState extends State<FollowingCalendarView> {
                         ListView(
                           key: const ValueKey('calendar-list'),
                           controller: _listController,
-                          padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpace.md,
+                            AppSpace.xs,
+                            AppSpace.md,
+                            AppSpace.lg,
+                          ),
                           children: [
-                            // 各日段完整布局，远端日期也能定位；卡片之间用间隙，不用分隔线。
+                            // 保持所有日期分段可定位，组间距大于组内间距。
                             Column(
-                              spacing: AppSpace.sm,
+                              spacing: AppSpace.md,
                               children: [
-                                for (final day in days) ...[
-                                  _CalendarDayHeader(
-                                    key: _dayHeaders.putIfAbsent(
-                                      day.date,
-                                      GlobalKey.new,
-                                    ),
-                                    day: day,
-                                    selected: _isSameDay(day.date, _selected),
+                                for (final day in days)
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      _CalendarDayHeader(
+                                        key: _dayHeaders.putIfAbsent(
+                                          day.date,
+                                          GlobalKey.new,
+                                        ),
+                                        day: day,
+                                        selected: _isSameDay(
+                                          day.date,
+                                          _selected,
+                                        ),
+                                      ),
+                                      const SizedBox(height: AppSpace.xs),
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        spacing: AppSpace.sm,
+                                        children: _dayCards(day),
+                                      ),
+                                    ],
                                   ),
-                                  for (final card in _dayCards(day)) card,
-                                ],
                               ],
                             ),
                           ],
@@ -624,144 +671,212 @@ class _ViewToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: AppRadius.pillAll,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final option in _CalendarView.values)
-            InkWell(
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    Widget buildOption(_CalendarView option) {
+      final selected = option == view;
+      Color? selectedInk(Color color) =>
+          selected ? scheme.onPrimary.withValues(alpha: color.a) : null;
+      return Semantics(
+        button: true,
+        enabled: true,
+        selected: selected,
+        inMutuallyExclusiveGroup: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: selected ? scheme.primary : null,
+            borderRadius: AppRadius.pillAll,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
               key: ValueKey('calendar-view-${option.name}'),
-              onTap: option == view ? null : () => onChanged(option),
+              onTap: () => onChanged(option),
               borderRadius: AppRadius.pillAll,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: option == view
-                    ? BoxDecoration(
-                        color: scheme.primary,
-                        borderRadius: AppRadius.pillAll,
-                      )
-                    : null,
+              focusColor: selectedInk(theme.focusColor),
+              hoverColor: selectedInk(theme.hoverColor),
+              splashColor: selectedInk(theme.splashColor),
+              highlightColor: selectedInk(theme.highlightColor),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 child: Text(
                   option.label,
                   style: TextStyle(
                     fontSize: 12,
-                    color: option == view
-                        ? scheme.onPrimary
-                        : scheme.onSurfaceVariant,
+                    color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
                   ),
                 ),
               ),
             ),
-        ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: AppRadius.pillAll,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: _CalendarView.values.map(buildOption).toList(),
       ),
     );
   }
 }
 
-/// 一个月历格子。
-class _CalendarDayCell extends StatelessWidget {
-  const _CalendarDayCell({
+class _CalendarDateButton extends StatelessWidget {
+  const _CalendarDateButton({
     super.key,
-    required this.cell,
+    required this.date,
     required this.height,
     required this.isToday,
     required this.hasUpdate,
     required this.hasUnwatched,
     required this.selected,
     required this.onTap,
+    this.inMonth = true,
+    this.showWeekday = false,
   });
 
-  final CalendarCell cell;
+  final DateTime date;
   final double height;
   final bool isToday;
-
-  /// 当天有条目。
   final bool hasUpdate;
-
-  /// 当天存在未看的条目（与 [hasUpdate] 合起来决定圆点颜色）。
   final bool hasUnwatched;
   final bool selected;
   final VoidCallback onTap;
+  final bool inMonth;
+  final bool showWeekday;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final textColor = isToday
+    final scaler = MediaQuery.textScalerOf(context);
+    final dateWidth = scaler.scale(13) * 2;
+    final todayWidth = scaler.scale(12);
+    final textGrowth = (scaler.scale(13) - 13).clamp(0.0, double.infinity);
+    final prefix = showWeekday ? 'calendar-week' : 'calendar';
+    final dateId = '${date.year}-${date.month}-${date.day}';
+    final updateLabel = !inMonth
+        ? '非本月日期'
+        : hasUnwatched
+        ? '有未看更新'
+        : hasUpdate
+        ? '有更新'
+        : '没有更新';
+    final statusLabel = '${isToday ? '，今天' : ''}，$updateLabel';
+    final textColor = selected
         ? scheme.onPrimary
-        : cell.inMonth
+        : isToday
+        ? scheme.primary
+        : inMonth
         ? scheme.onSurface
-        : theme.disabledColor;
-    return InkWell(
-      key: ValueKey(
-        'calendar-day-${cell.date.year}-${cell.date.month}-${cell.date.day}',
-      ),
-      onTap: onTap,
-      borderRadius: AppRadius.smAll,
-      child: SizedBox(
-        height: height,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              key: isToday ? const ValueKey('calendar-today') : null,
-              width: height - 8,
-              height: height - 8,
-              alignment: Alignment.center,
-              decoration: isToday
-                  ? BoxDecoration(color: scheme.primary, shape: BoxShape.circle)
-                  : selected
-                  ? BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: scheme.primary),
-                    )
-                  : null,
-              child: Text(
-                '${cell.dayOfMonth}',
-                style: TextStyle(fontSize: 12, color: textColor),
-              ),
-            ),
-            const SizedBox(height: 2),
-            // 占位高度固定，有更新时才画小圆点，避免整行跳动。
-            // 圆点颜色就是状态：存在未看 → 强调色实心；全部已看 → 弱化色小点。
-            SizedBox(
-              height: 6,
-              child: !hasUpdate
-                  ? null
-                  : Center(
-                      child: Container(
-                        key: ValueKey(
-                          'calendar-dot-${cell.date.year}-'
-                          '${cell.date.month}-${cell.date.day}',
-                        ),
-                        width: hasUnwatched ? 6 : 4,
-                        height: hasUnwatched ? 6 : 4,
-                        decoration: BoxDecoration(
-                          color: hasUnwatched
-                              ? scheme.primary
-                              : scheme.outlineVariant,
-                          shape: BoxShape.circle,
-                        ),
+        : scheme.onSurfaceVariant;
+    return Semantics(
+      label: '${date.year}年${date.month}月${date.day}日$statusLabel',
+      button: true,
+      selected: selected,
+      child: InkWell(
+        key: ValueKey('$prefix-day-$dateId'),
+        onTap: onTap,
+        borderRadius: AppRadius.smAll,
+        child: ExcludeSemantics(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showWeekday)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    top: AppSpace.xs,
+                    bottom: AppSpace.xs,
+                  ),
+                  child: Text(
+                    followingCalendarWeekdayLabel(date),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              SizedBox(
+                height: height + textGrowth,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (isToday) SizedBox(width: todayWidth),
+                          Container(
+                            key: isToday && !showWeekday
+                                ? const ValueKey('calendar-today')
+                                : null,
+                            width: dateWidth,
+                            height: double.infinity,
+                            alignment: Alignment.center,
+                            decoration: selected
+                                ? BoxDecoration(
+                                    color: scheme.primary,
+                                    borderRadius: AppRadius.pillAll,
+                                  )
+                                : null,
+                            child: Text(
+                              '${date.day}',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: textColor,
+                                fontWeight: selected || isToday
+                                    ? FontWeight.w700
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                          if (isToday)
+                            SizedBox(
+                              width: todayWidth,
+                              child: Text(
+                                '今',
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: scheme.primary,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-            ),
-          ],
+                    SizedBox(
+                      height: 8,
+                      child: hasUpdate
+                          ? Center(
+                              child: Container(
+                                key: ValueKey('$prefix-dot-$dateId'),
+                                width: hasUnwatched ? 6 : 4,
+                                height: hasUnwatched ? 6 : 4,
+                                decoration: BoxDecoration(
+                                  color: hasUnwatched
+                                      ? scheme.primary
+                                      : scheme.onSurfaceVariant,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// 「整周」条带：周一 → 周日 7 天。
 class _CalendarWeekStrip extends StatelessWidget {
   const _CalendarWeekStrip({
     required this.week,
@@ -777,134 +892,28 @@ class _CalendarWeekStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      child: Row(
-        key: const ValueKey('calendar-week-strip'),
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final day in week.days)
-            Expanded(
-              child: _CalendarWeekDayCell(
-                day: day,
-                isToday: _isSameDay(day.date, today),
-                selected: _isSameDay(day.date, selected),
-                onTap: () => onTap(day.date),
-              ),
+    return Row(
+      key: const ValueKey('calendar-week-strip'),
+      children: [
+        for (final day in week.days)
+          Expanded(
+            child: _CalendarDateButton(
+              date: day.date,
+              height: 30,
+              isToday: _isSameDay(day.date, today),
+              hasUpdate: day.isNotEmpty,
+              hasUnwatched: day.unwatchedCount > 0,
+              selected: _isSameDay(day.date, selected),
+              onTap: () => onTap(day.date),
+              showWeekday: true,
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 }
 
-/// 条带里的一天：星期字 + 日号 + 有更新时的圆点；今天/选中日左侧一条主题色竖条。
-class _CalendarWeekDayCell extends StatelessWidget {
-  const _CalendarWeekDayCell({
-    required this.day,
-    required this.isToday,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final CalendarDay day;
-  final bool isToday;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final hasUpdate = day.isNotEmpty;
-    final hasUnwatched = day.unwatchedCount > 0;
-    final active = isToday || selected;
-    return InkWell(
-      key: ValueKey(
-        'calendar-week-day-${day.date.year}-'
-        '${day.date.month}-${day.date.day}',
-      ),
-      onTap: onTap,
-      borderRadius: AppRadius.smAll,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-        child: Row(
-          children: [
-            // 参考截图：今天/选中日左侧一条主题色竖条。
-            Container(
-              width: 3,
-              height: 48,
-              decoration: BoxDecoration(
-                color: active ? scheme.primary : Colors.transparent,
-                borderRadius: AppRadius.pillAll,
-              ),
-            ),
-            const SizedBox(width: AppSpace.xs),
-            Expanded(
-              child: Column(
-                children: [
-                  Text(
-                    followingCalendarWeekdayLabel(day.date),
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: AppSpace.xs),
-                  Container(
-                    width: 24,
-                    height: 24,
-                    alignment: Alignment.center,
-                    decoration: isToday
-                        ? BoxDecoration(
-                            color: scheme.primary,
-                            shape: BoxShape.circle,
-                          )
-                        : selected
-                        ? BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: scheme.primary),
-                          )
-                        : null,
-                    child: Text(
-                      '${day.date.day}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isToday ? scheme.onPrimary : scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpace.xs),
-                  // 固定占位，有更新才画圆点，避免整行跳动。
-                  SizedBox(
-                    height: 6,
-                    child: !hasUpdate
-                        ? null
-                        : Center(
-                            child: Container(
-                              key: ValueKey(
-                                'calendar-week-dot-${day.date.year}-'
-                                '${day.date.month}-${day.date.day}',
-                              ),
-                              width: hasUnwatched ? 6 : 4,
-                              height: hasUnwatched ? 6 : 4,
-                              decoration: BoxDecoration(
-                                color: hasUnwatched
-                                    ? scheme.primary
-                                    : scheme.outlineVariant,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 列表分段标题：左侧日期，右侧「N 部更新 · 未看 M 集」。
+/// 列表分段标题：日期与当日更新摘要。
 class _CalendarDayHeader extends StatelessWidget {
   const _CalendarDayHeader({
     super.key,
@@ -947,18 +956,19 @@ class _CalendarDayHeader extends StatelessWidget {
             color: selected ? scheme.primary : scheme.onSurface,
           ),
         ),
-        const Spacer(),
-        Text(
-          summary.label,
-          key: ValueKey(
-            'calendar-day-summary-${day.date.year}-'
-            '${day.date.month}-${day.date.day}',
-          ),
-          style: theme.textTheme.bodySmall?.copyWith(
-            fontSize: 11,
-            color: summary.hasUnwatched
-                ? scheme.primary
-                : scheme.onSurfaceVariant,
+        const SizedBox(width: AppSpace.md),
+        Flexible(
+          child: Text(
+            summary.label,
+            key: ValueKey(
+              'calendar-day-summary-${day.date.year}-'
+              '${day.date.month}-${day.date.day}',
+            ),
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: summary.hasUnwatched
+                  ? scheme.primary
+                  : scheme.onSurfaceVariant,
+            ),
           ),
         ),
       ],
@@ -1007,10 +1017,10 @@ class _CalendarEntryCard extends StatelessWidget {
     final title = entry.episodeTitle.trim();
     return Container(
       key: ValueKey('calendar-card-${entry.identityKey}-$suffix'),
+      padding: const EdgeInsets.all(1),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
         borderRadius: AppRadius.lgAll,
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: .72)),
       ),
       child: Material(
         color: Colors.transparent,

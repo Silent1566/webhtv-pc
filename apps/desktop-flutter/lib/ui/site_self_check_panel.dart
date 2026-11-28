@@ -15,9 +15,13 @@ class SiteSelfCheckPanel extends StatefulWidget {
     super.key,
     required this.service,
     required this.sites,
+    this.showTitle = true,
   });
   final SiteService? service;
   final List<Site> sites;
+
+  /// Omit the section title when the route already provides it.
+  final bool showTitle;
 
   @override
   State<SiteSelfCheckPanel> createState() => _SiteSelfCheckPanelState();
@@ -194,6 +198,34 @@ class _SiteSelfCheckPanelState extends State<SiteSelfCheckPanel> {
     }
   }
 
+  Widget _buildSection({required List<Widget> children}) {
+    const description = '只检查首页和分类，不检查详情、搜索或播放；结果不代表已验证能播。';
+    if (widget.showTitle) {
+      return SettingsSection(
+        title: '手动站点体检',
+        description: description,
+        children: children,
+      );
+    }
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpace.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            description,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: AppSpace.md),
+          ...children,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -206,9 +238,7 @@ class _SiteSelfCheckPanelState extends State<SiteSelfCheckPanel> {
         .where((r) => r.isTerminal && r.status != SiteCheckStatus.success)
         .map((r) => r.site)
         .toList();
-    return SettingsSection(
-      title: '手动站点体检',
-      description: '只检查首页和分类，不检查详情、搜索或播放；结果不代表已验证能播。',
+    return _buildSection(
       children: [
         Text(
           '开始后会联网，并可能运行当前配置提供的用户 Spider。仅在你点击开始后执行，不改变当前浏览或播放站点。',

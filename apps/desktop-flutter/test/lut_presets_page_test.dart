@@ -3,13 +3,17 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show ByteData, CachingAssetBundle;
+import 'package:flutter/services.dart'
+    show ByteData, CachingAssetBundle, LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/lut.dart';
 import 'package:webhtv_pc/core/player_options.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/lut_store.dart';
+import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/diagnostics_pages.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/lut_presets_page.dart';
 
 AppPaths tempPaths(Directory temp) => AppPaths.resolve(
@@ -39,9 +43,42 @@ class _MemoryBundle extends CachingAssetBundle {
 class _FakeStore extends LutStore {
   _FakeStore({required super.paths});
 
+  final downloads = <String>[];
+
+  @override
+  Future<List<LutPreset>> listUserPresets() async => const [];
+
+  @override
+  Future<LutPreset> download(String url) async {
+    downloads.add(url);
+    return const LutPreset(
+      path: '/downloaded/film.cube',
+      name: 'Film',
+      size: 2,
+    );
+  }
+
   @override
   Future<String> materialize(LutPreset preset) async =>
       '/fake/${preset.isBundled ? preset.id : lutIdFromPath(preset.path)}.cube';
+}
+
+class _LutSettingsState extends AppState {
+  _LutSettingsState({required super.paths, required this.lutStore});
+
+  @override
+  final _FakeStore lutStore;
+
+  @override
+  bool get aiReady => false;
+
+  final writes = <PlayerOptions>[];
+
+  @override
+  Future<bool> setPlayerOptions(PlayerOptions options) async {
+    writes.add(options);
+    return true;
+  }
 }
 
 List<int> cube() {
@@ -150,6 +187,106 @@ void main() {
       broken.dispose();
     });
   });
+
+  for (final action in ['Cancel', 'Escape', 'Download']) {
+    testWidgets('Settings LUT link stays usable while dismissing via $action', (
+      tester,
+    ) async {
+      final fake = _FakeStore(paths: paths);
+      final state = _LutSettingsState(paths: paths, lutStore: fake);
+      addTearDown(fake.dispose);
+      addTearDown(state.dispose);
+      await tester.pumpWidget(MaterialApp(home: SettingsPage(state: state)));
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-playback')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('settings-lut-open')));
+      await tester.pumpAndSettle();
+
+      final entry = find.text('从链接导入…');
+      await tester.ensureVisible(entry);
+      await tester.pumpAndSettle();
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+
+      final dialog = find.byType(GlassAlertDialog, skipOffstage: false);
+      final field = find.descendant(
+        of: dialog,
+        matching: find.byType(EditableText, skipOffstage: false),
+      );
+      final route = ModalRoute.of(tester.element(dialog))!;
+      final fieldFocus = tester.widget<EditableText>(field).focusNode;
+      expect(fieldFocus.hasPrimaryFocus, isTrue);
+      const url = 'https://example.invalid/film.cube';
+      await tester.enterText(field, url);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      if (action == 'Escape') {
+        final visited = <FocusNode>{fieldFocus};
+        for (var i = 0; i < 3; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pump();
+          final focused = FocusManager.instance.primaryFocus!;
+          expect(ModalRoute.of(focused.context!), same(route));
+          visited.add(focused);
+        }
+        expect(visited, hasLength(3));
+        expect(fieldFocus.hasPrimaryFocus, isTrue);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      } else {
+        await tester.tap(find.text(action == 'Cancel' ? '取消' : '下载'));
+      }
+      final errors = <String>[];
+      final reverseFrames = <(int, double)>[];
+      final onError = FlutterError.onError!;
+      FlutterError.onError = (details) {
+        errors.add('${details.exceptionAsString()}\n${details.stack}');
+        onError(details);
+      };
+      try {
+        await tester.pump();
+        for (final millis in [16, 32]) {
+          await tester.pump(Duration(milliseconds: millis));
+          reverseFrames.add((field.evaluate().length, route.animation!.value));
+          tester.takeException();
+        }
+        await tester.pumpAndSettle();
+        tester.takeException();
+      } finally {
+        FlutterError.onError = onError;
+      }
+      expect(errors, isEmpty, reason: '$action while reversing');
+      for (final (fields, progress) in reverseFrames) {
+        expect(fields, 1);
+        expect(progress, allOf(greaterThan(0), lessThan(1)));
+      }
+      expect(field, findsNothing);
+      expect(fieldFocus.hasFocus, isFalse);
+      final page = find.byType(LutPresetsPage);
+      expect(page, findsOneWidget);
+      if (action == 'Escape') {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        final focused = FocusManager.instance.primaryFocus!;
+        expect(
+          ModalRoute.of(focused.context!),
+          same(ModalRoute.of(tester.element(page))),
+        );
+        expect(tester.takeException(), isNull);
+      }
+      if (action == 'Download') {
+        expect(fake.downloads, [url]);
+        expect(state.writes.single.lutPath, '/fake/film.cube');
+        expect(state.writes.single.lutPresetId, isEmpty);
+        expect(find.text('清除 LUT'), findsOneWidget);
+      } else {
+        expect(fake.downloads, isEmpty);
+        expect(state.writes, isEmpty);
+      }
+    });
+  }
 
   group('明细页', () {
     Future<void> pump(

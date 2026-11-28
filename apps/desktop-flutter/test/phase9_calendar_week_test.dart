@@ -63,12 +63,13 @@ DateTime _shownMonth(WidgetTester tester) {
   return DateTime(int.parse(match.group(1)!), int.parse(match.group(2)!));
 }
 
-/// 周视图标题 `10月26日 - 11月1日` → `[起月, 起日, 止月, 止日]`。
+/// 周视图标题 `2026年10月26日 - 11月1日` → `[起月, 起日, 止月, 止日]`。
 List<int> _weekRange(WidgetTester tester) {
   final text = tester
       .widget<Text>(find.byKey(const ValueKey('calendar-week-title')))
       .data!;
-  final match = RegExp(r'^(\d+)月(\d+)日 - (\d+)月(\d+)日$').firstMatch(text)!;
+  final match = RegExp(r'^\d+年(\d+)月(\d+)日 - (?:\d+年)?(\d+)月(\d+)日$')
+      .firstMatch(text)!;
   return [
     int.parse(match.group(1)!),
     int.parse(match.group(2)!),
@@ -276,11 +277,16 @@ void main() {
       expect(find.byKey(const ValueKey('calendar-week-strip')), findsOneWidget);
       expect(find.byKey(const ValueKey('calendar-grid')), findsNothing);
       expect(find.byKey(const ValueKey('calendar-week-title')), findsOneWidget);
+      expect(find.byKey(const ValueKey('calendar-title')), findsNothing);
 
       final dates = _weekDates(tester);
       expect(dates.length, 7);
       expect(dates.first.weekday, DateTime.monday);
       expect(dates.last.weekday, DateTime.sunday);
+      final title = tester.widget<Text>(
+        find.byKey(const ValueKey('calendar-week-title')),
+      );
+      expect(title.data, startsWith('${dates.first.year}年'));
       for (final label in followingCalendarWeekdayLabels) {
         expect(find.text(label), findsOneWidget);
       }
@@ -356,7 +362,7 @@ void main() {
       }
 
       expect(dotColor(unwatchedDay), scheme.primary);
-      expect(dotColor(otherDay), scheme.outlineVariant);
+      expect(dotColor(otherDay), scheme.onSurfaceVariant);
     });
 
     testWidgets('周视图翻到跨月那一周：标题跨两个月、7 天连续', (tester) async {

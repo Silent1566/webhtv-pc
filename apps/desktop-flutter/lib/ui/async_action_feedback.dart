@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'common.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 只覆盖入口的异步准备阶段；导航前 dismiss，所有退出路径 close。
@@ -80,11 +81,7 @@ class AsyncActionFeedback {
   }
 }
 
-/// 只有一个转圈：不上屏文字、不加底色面板。
-///
-/// 文案仍留在 [Semantics] 上——屏读要能说出「在准备哪一集」，而这一层
-/// 没有视觉负担。转圈沿用全站同一个 [LoadingBlock]（[AppMotion] 不参与，
-/// 它是真实的进度指示）。
+/// 视觉只保留加载指示，准备中的具体文案仍由屏读播报。
 class _ActionFeedback extends StatelessWidget {
   const _ActionFeedback({required this.message});
   final String message;
@@ -105,16 +102,18 @@ class _ActionFeedback extends StatelessWidget {
         curve: AppMotion.ease,
         builder: (context, value, child) =>
             Opacity(opacity: value, child: child),
-        // 减动态时停掉无限旋转，改成静态沙漏：状态照旧可见。
-        child: reduced
-            ? Icon(
-                Icons.hourglass_top_rounded,
-                size: 36,
-                color: theme.colorScheme.primary,
-              )
-            // `center: false`：转圈的盒子就该是转圈本身那么大，否则它会撑满
-            // 整屏，语义框与命中区都跟着变成整屏。
-            : const LoadingBlock(center: false),
+        child: GlassPane(
+          borderRadius: AppRadius.mdAll,
+          blurBackdrop: false,
+          padding: const EdgeInsets.all(AppSpace.sm),
+          child: reduced
+              ? Icon(
+                  Icons.hourglass_top_rounded,
+                  size: 36,
+                  color: theme.colorScheme.primary,
+                )
+              : const LoadingBlock(center: false),
+        ),
       ),
     );
   }

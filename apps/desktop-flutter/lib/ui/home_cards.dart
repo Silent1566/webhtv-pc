@@ -5,11 +5,12 @@
 /// 与「有没有进度条」——把它们拆成三个私有实现，就会重演改造前
 /// 「同一视觉模式反复重写」的老路（见 `common.dart` 文件头）。
 ///
-/// 尺寸口径（§4）：高度一律由宽度推，海报 2:3 + 固定 40px 文字区；
+/// 尺寸口径（§4）：海报 2:3 + 至少 40px 文字区；文字区随系统字号扩展。
 /// 轨道不做右内边距——卡片溢出到窗口右缘之外，靠滚动暴露"还有更多"。
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -21,11 +22,26 @@ import 'layout_scale.dart';
 import 'scroll_behavior.dart';
 import 'tokens.dart';
 
-/// 卡片文字区高度（§4：`_posterCaptionHeight`，与海报网格同口径）。
-///
-/// 给死高度而不是自适应：卡片总高由「海报 2:3 + 本值」精确算出，文字区一旦
-/// 浮动，海报就会被压成非 2:3。
-const double _captionHeight = 40;
+const double _minCaptionHeight = 40;
+const double _captionTitleSize = 13;
+const double _captionSecondarySize = 11;
+const double _captionLineHeight = 1.2;
+const double _captionLineGap = 2;
+
+// 轨道与卡片共用文字区高度，让海报尺寸始终独立于字号。每行向上取整，
+// 为 Flutter 的段落高度取整留出空间，默认字号仍保留原来的 40px。
+double _captionHeight(BuildContext context) {
+  final scaler = MediaQuery.textScalerOf(context);
+  double lineHeight(double size) =>
+      (scaler.scale(size) * _captionLineHeight).ceilToDouble();
+  return math.max(
+    _minCaptionHeight,
+    AppSpace.sm +
+        lineHeight(_captionTitleSize) +
+        _captionLineGap +
+        lineHeight(_captionSecondarySize),
+  );
+}
 
 /// 一张首页轨道卡片：2:3 海报 + 标题 + 副信息行。
 ///
@@ -56,8 +72,6 @@ class HomePosterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    // 发丝边与主题里 `dividerColor` 同一个口径：层级靠一条线，不靠阴影。
-    final hairline = scheme.outlineVariant.withValues(alpha: 0.72);
     final secondary = _secondaryText(item);
     final resume = item.kind == HomeItemKind.resume;
 
@@ -90,14 +104,6 @@ class HomePosterCard extends StatelessWidget {
                           (width * MediaQuery.devicePixelRatioOf(context))
                               .round(),
                     ),
-                    // 发丝边画在图的**前景**而不是给容器加 padding：后者会把
-                    // 海报缩进 1px，2:3 就不再精确。
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: AppRadius.mdAll,
-                        border: Border.all(color: hairline),
-                      ),
-                    ),
                     if (resume)
                       Positioned(
                         left: 0,
@@ -115,44 +121,36 @@ class HomePosterCard extends StatelessWidget {
               ),
             ),
             SizedBox(
-              height: _captionHeight,
+              height: _captionHeight(context),
               child: Padding(
                 padding: const EdgeInsets.only(top: AppSpace.sm),
-                child: ClipRect(
-                  // `Align` 不做溢出断言 + 外层 `ClipRect`：用户把系统字号调大
-                  // 时超出的部分被裁掉，而不是让整条轨道变成 RenderFlex overflow。
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    heightFactor: 1,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontSize: 13,
-                            height: 1.2,
-                          ),
-                        ),
-                        if (secondary.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            secondary,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontSize: 11,
-                              height: 1.2,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: _captionTitleSize,
+                        height: _captionLineHeight,
+                      ),
                     ),
-                  ),
+                    if (secondary.isNotEmpty) ...[
+                      const SizedBox(height: _captionLineGap),
+                      Text(
+                        secondary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontSize: _captionSecondarySize,
+                          height: _captionLineHeight,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -164,7 +162,7 @@ class HomePosterCard extends StatelessWidget {
 
   /// 副信息行：理由行优先，没有理由时退回「年份 · 评分」。
   ///
-  /// 40px 的文字区只放得下一行副信息，所以必须排优先级：理由行回答的是
+  /// 文字区只保留一行副信息，所以必须排优先级：理由行回答的是
   /// 「这张卡为什么在这儿」（剩多少时间、更新到第几集、因为你看过什么），
   /// 年份与评分只是补充；推荐卡尤其如此（§4 要求那一行放推荐理由）。
   String _secondaryText(HomeItem item) {
@@ -359,92 +357,98 @@ class _HomeRailViewState extends State<HomeRailView> {
     // 标题行单独补右内边距，让「查看全部」与页面右缘对齐。
     return Padding(
       padding: const EdgeInsets.only(left: AppSpace.xl),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: AppSpace.xl),
-            child: SectionHeader(
-              title: rail.title,
-              trailing: seeAll == null
-                  ? null
-                  : TextButton(onPressed: seeAll, child: const Text('查看全部')),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpace.xl),
+              child: SectionHeader(
+                title: rail.title,
+                trailing: seeAll == null
+                    ? null
+                    : TextButton(onPressed: seeAll, child: const Text('查看全部')),
+              ),
             ),
-          ),
-          SizedBox(
-            // 横向列表必须有界高：高度由卡宽推出（海报 2:3 + 文字区），
-            // 所以这里算的是"最高那一列"，不是某一个写死的数字。
-            height: cardWidth * 1.5 + _captionHeight,
-            // 横向条**不接管滚轮**（用户 2026-11-19 反馈：滚页面时这些卡片也在
-            // 往右翻）。指针信号会同时到达外层纵向滚动与这里的横向滚动，两条都动
-            // 就成了双击滚动的观感；浏览器/Netflix 的横向条也只认拖拽与触控板横扫。
-            child: NotificationListener<ScrollMetricsNotification>(
-              onNotification: (notification) {
-                if (notification.depth == 0 &&
-                    notification.metrics.axis == Axis.horizontal) {
-                  final resized =
-                      _lastViewport != null &&
-                      _lastViewport != notification.metrics.viewportDimension;
-                  _lastViewport = notification.metrics.viewportDimension;
-                  _queueLoad(trigger: resized ? 'resize' : 'autofill');
-                }
-                return false;
-              },
-              child: NotificationListener<ScrollNotification>(
-                onNotification: _onScroll,
-                child: Listener(
-                  onPointerSignal: (event) {
-                    if (event is PointerScrollEvent &&
-                        event.scrollDelta.dx > 0 &&
-                        event.scrollDelta.dx.abs() >=
-                            event.scrollDelta.dy.abs()) {
-                      final now = event.timeStamp;
-                      if (_lastWheel == null ||
-                          now - _lastWheel! >
-                              const Duration(milliseconds: 250)) {
-                        _gesture++;
-                        _retryAllowed = true;
-                      }
-                      _lastWheel = now;
-                      _queueLoad(deliberate: true, trigger: 'horizontal_wheel');
-                    }
-                  },
-                  child: HorizontalMouseDrag(
-                    child: ListView.separated(
-                      controller: _controller,
-                      physics: widget.loadMore == null
-                          ? null
-                          : const AlwaysScrollableScrollPhysics(),
-                      scrollDirection: Axis.horizontal,
-                      // 不做右内边距：最后一张卡要能被滚到贴住右缘，而不是永远差一截。
-                      padding: EdgeInsets.zero,
-                      itemCount: rail.items.length,
-                      separatorBuilder: (_, _) =>
-                          SizedBox(width: LayoutScale.gutter(context)),
-                      itemBuilder: (context, index) {
-                        final item = rail.items[index];
-                        // `Align` 把卡片放到行首：横向列表给的是紧高度，卡片比列高矮时
-                        // 不拉伸，点击热区才不会多出一块看不见的空白。
-                        return Align(
-                          alignment: Alignment.topLeft,
-                          child: HomePosterCard(
-                            item: item,
-                            onTap: () => onTap(item),
-                            onLongPress: onLongPress == null
-                                ? null
-                                : () => onLongPress(item),
-                            width: cardWidth,
-                          ),
+            SizedBox(
+              // 横向列表必须有界高：高度由卡宽推出（海报 2:3 + 文字区），
+              // 所以这里算的是"最高那一列"，不是某一个写死的数字。
+              height: cardWidth * 1.5 + _captionHeight(context),
+              // 横向条**不接管滚轮**（用户 2026-11-19 反馈：滚页面时这些卡片也在
+              // 往右翻）。指针信号会同时到达外层纵向滚动与这里的横向滚动，两条都动
+              // 就成了双击滚动的观感；浏览器/Netflix 的横向条也只认拖拽与触控板横扫。
+              child: NotificationListener<ScrollMetricsNotification>(
+                onNotification: (notification) {
+                  if (notification.depth == 0 &&
+                      notification.metrics.axis == Axis.horizontal) {
+                    final resized =
+                        _lastViewport != null &&
+                        _lastViewport != notification.metrics.viewportDimension;
+                    _lastViewport = notification.metrics.viewportDimension;
+                    _queueLoad(trigger: resized ? 'resize' : 'autofill');
+                  }
+                  return false;
+                },
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: _onScroll,
+                  child: Listener(
+                    onPointerSignal: (event) {
+                      if (event is PointerScrollEvent &&
+                          event.scrollDelta.dx > 0 &&
+                          event.scrollDelta.dx.abs() >=
+                              event.scrollDelta.dy.abs()) {
+                        final now = event.timeStamp;
+                        if (_lastWheel == null ||
+                            now - _lastWheel! >
+                                const Duration(milliseconds: 250)) {
+                          _gesture++;
+                          _retryAllowed = true;
+                        }
+                        _lastWheel = now;
+                        _queueLoad(
+                          deliberate: true,
+                          trigger: 'horizontal_wheel',
                         );
-                      },
+                      }
+                    },
+                    child: HorizontalMouseDrag(
+                      child: ListView.separated(
+                        controller: _controller,
+                        physics: widget.loadMore == null
+                            ? null
+                            : const AlwaysScrollableScrollPhysics(),
+                        scrollDirection: Axis.horizontal,
+                        // 不做右内边距：最后一张卡要能被滚到贴住右缘，而不是永远差一截。
+                        padding: EdgeInsets.zero,
+                        itemCount: rail.items.length,
+                        separatorBuilder: (_, _) =>
+                            SizedBox(width: LayoutScale.gutter(context)),
+                        itemBuilder: (context, index) {
+                          final item = rail.items[index];
+                          // `Align` 把卡片放到行首：横向列表给的是紧高度，卡片比列高矮时
+                          // 不拉伸，点击热区才不会多出一块看不见的空白。
+                          return Align(
+                            alignment: Alignment.topLeft,
+                            child: HomePosterCard(
+                              item: item,
+                              onTap: () => onTap(item),
+                              onLongPress: onLongPress == null
+                                  ? null
+                                  : () => onLongPress(item),
+                              width: cardWidth,
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

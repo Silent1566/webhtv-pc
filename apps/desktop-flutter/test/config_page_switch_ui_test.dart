@@ -20,6 +20,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 import 'support/detail_test_seams.dart';
@@ -136,7 +137,12 @@ void main() {
 
     await tester.tap(find.byKey(ValueKey('config-menu-$id')));
     await settle(tester);
-    await tester.tap(find.text('删除'));
+    final option = find.text('删除');
+    expect(
+      find.ancestor(of: option, matching: find.byType(GlassPane)),
+      findsWidgets,
+    );
+    await tester.tap(option);
     await settle(tester);
 
     expect(

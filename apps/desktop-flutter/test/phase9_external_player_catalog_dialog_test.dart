@@ -454,10 +454,7 @@ void main() {
         await open(tester, selectedPath: second);
         expect(find.text('PotPlayer #1'), findsOneWidget);
         expect(find.text('PotPlayer #2'), findsOneWidget);
-        expect(
-          tester.widget<AlertDialog>(find.byType(AlertDialog)).elevation ?? 0,
-          0,
-        );
+        expect(tester.widget<Dialog>(find.byType(Dialog)).elevation ?? 0, 0);
         await capture(
           tester,
           'task-2-${size.width.toInt()}x${size.height.toInt()}-list',

@@ -126,6 +126,9 @@ class HomeHeroSession extends ChangeNotifier {
   /// 他要的就是更新后的信息，不能被这条保护挡住。
   bool _deferReadingText = false;
   String _startupScope = '';
+  int _startupRestoreGeneration = 0;
+  bool _startupRestorePending = false;
+  bool _startupRestoreRetry = false;
   String _startupSaveKey = '';
   final Set<String> _failedStartupKeys = {};
   final Map<String, HomeItem> _lastDisplayedHeroes = {};
@@ -133,6 +136,7 @@ class HomeHeroSession extends ChangeNotifier {
   String _heroScanKey = '';
   String _heroScanScope = '';
   final Map<String, String> _candidateSignatures = {};
+  List<HomeItem> _heroCandidates = const [];
   int _heroScanGeneration = 0;
   final Set<String> _heroInspected = {};
   final Map<String, HomeMeta> _heroCandidateMeta = {};
@@ -213,6 +217,11 @@ class HomeHeroSession extends ChangeNotifier {
   void detach() {
     _attached = false;
     _preferLocalArt = false;
+    if (_startupRestorePending) {
+      _startupRestoreGeneration++;
+      _startupRestorePending = false;
+      _startupRestoreRetry = true;
+    }
     // 页面走了就没人等这两件事：编码与在途检查的超时定时器必须撤销。
     // 没跑完的检查**不标记为已检查**，返回时重新排一次（结果本来也没人收到）。
     _heroScanGeneration++;
@@ -806,6 +815,7 @@ class HomeHeroSession extends ChangeNotifier {
     final pending = _railMetaPending[item.key];
     if (pending != null) await pending;
     if (_hasResolvedMeta(item) || !current()) return;
+    final before = _withArt(item);
     final state = _state;
     final service = HomeMetaService(tmdb: state.tmdbService);
     final pipeline = state.metaPipeline;
@@ -850,7 +860,16 @@ class HomeHeroSession extends ChangeNotifier {
     } else {
       return;
     }
-    if (current()) _heroCandidateMeta.addAll(resolved);
+    if (!current()) return;
+    _heroCandidateMeta.addAll(resolved);
+    final after = _withArt(item);
+    if (before.title != after.title ||
+        before.poster != after.poster ||
+        before.subtitle != after.subtitle ||
+        before.overview != after.overview ||
+        !listEquals(before.tags, after.tags)) {
+      notifyListeners();
+    }
   }
 
   /// 输入身份/字段规则变化后重算；详情返回时也失效，不能永久记住首次缺图的结果。
@@ -1231,23 +1250,42 @@ class HomeHeroSession extends ChangeNotifier {
   }
 
   void _restoreStartup(String scope) {
-    if (_startupScope == scope) return;
-    _startupEncoder.clear();
+    if (_startupScope == scope && !_startupRestoreRetry) return;
+    if (_startupScope != scope) {
+      _startupEncoder.clear();
+      _startupSnapshots = const [];
+      _sessionByBinding = const {};
+      _failedStartupKeys.clear();
+      _lastDisplayedHeroes.clear();
+    }
     _startupScope = scope;
+    _startupRestorePending = true;
+    _startupRestoreRetry = false;
+    final generation = ++_startupRestoreGeneration;
     _startupSaveKey = '';
-    _startupSnapshots = _startupCache.read(scope);
-    _sessionByBinding = {
-      for (final snapshot in _sessionCache.read(scope)) snapshot.key: snapshot,
-    };
     _sessionSaveKey = '';
-    _state.log.info(
-      'event=cache_restore usable=${_startupSnapshots.length} '
-      'result=${_startupSnapshots.isEmpty ? 'no_usable_snapshot' : 'hit'} '
-      'elapsedMs=${_heroStartupClock.elapsedMilliseconds}',
-      scope: 'home',
-    );
-    _failedStartupKeys.clear();
-    _lastDisplayedHeroes.clear();
+    final restoreClock = Stopwatch()..start();
+    unawaited(Future.wait([
+      _startupCache.readAsync(scope),
+      _sessionCache.readAsync(scope),
+    ]).then((snapshots) {
+      if (_disposed || generation != _startupRestoreGeneration) return;
+      _startupRestorePending = false;
+      _startupSnapshots = snapshots[0];
+      _sessionByBinding = {
+        for (final snapshot in snapshots[1]) snapshot.key: snapshot,
+      };
+      _state.log.info(
+        'event=cache_restore usable=${_startupSnapshots.length} '
+        'result=${_startupSnapshots.isEmpty ? 'no_usable_snapshot' : 'hit'} '
+        'restoreMs=${restoreClock.elapsedMilliseconds} '
+        'sessionAgeMs=${_heroStartupClock.elapsedMilliseconds}',
+        scope: 'home',
+      );
+      if (_startupSnapshots.isNotEmpty || _sessionByBinding.isNotEmpty) {
+        notifyListeners();
+      }
+    }));
   }
 
   String _startupBindingKey(HomeItem item) => sha256
@@ -1524,9 +1562,9 @@ class HomeHeroSession extends ChangeNotifier {
       };
       _heroScanKey = key;
       _heroScanScope = scope;
-      _heroScanGeneration++;
-      _heroScanRunning = false;
       if (hardReset) {
+        _heroScanGeneration++;
+        _heroScanRunning = false;
         _heroInspected.clear();
         _heroCandidateMeta.clear();
         _heroQualified.clear();
@@ -1548,6 +1586,7 @@ class HomeHeroSession extends ChangeNotifier {
       _startupSaveKey = '';
       _sessionSaveKey = '';
     }
+    _heroCandidates = candidates;
     if (_heroScanRunning || _heroAcceptedOrder.length >= heroMax) return;
     final queue = candidates
         .where((item) => !_heroInspected.contains(item.key))
@@ -1565,11 +1604,13 @@ class HomeHeroSession extends ChangeNotifier {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       bool current() => !_disposed && generation == _heroScanGeneration;
       if (!current()) return;
-      var next = 0;
       Future<(HomeItem, String?)> inspect(HomeItem item) async {
+        final signature = _candidateSignatures[item.key];
+        bool itemCurrent() => current() &&
+            _candidateSignatures[item.key] == signature;
         try {
-          await _loadHeroCandidateMeta(item, current);
-          if (!current() || state.metaPipeline.orderOf(MetaField.backdrop).isEmpty) {
+          await _loadHeroCandidateMeta(item, itemCurrent);
+          if (!itemCurrent() || state.metaPipeline.orderOf(MetaField.backdrop).isEmpty) {
             return (item, null);
           }
           final enriched = _withArt(item);
@@ -1589,7 +1630,7 @@ class HomeHeroSession extends ChangeNotifier {
               enriched.poster!.trim(),
           };
           for (final url in urls) {
-            if (!current()) return (item, null);
+            if (!itemCurrent()) return (item, null);
             final headers = imageHeadersFor(rules, url).asRequestHeaders;
             final evidence = await _heroProbe.check(
               url,
@@ -1604,34 +1645,48 @@ class HomeHeroSession extends ChangeNotifier {
       }
 
       // 两张并发检查，但按候选原序提交，不能让下载更快的后排作品抢走前排位置。
-      final candidatesByKey = {for (final item in candidates) item.key: item};
-      while (current() &&
-          next < queue.length &&
-          _heroAcceptedOrder.length < heroMax) {
+      while (current() && _heroAcceptedOrder.length < heroMax) {
         final remaining = heroMax - _heroAcceptedOrder.length;
-        final batch = queue
-            .skip(next)
+        final batch = _heroCandidates
+            .where((item) => !_heroInspected.contains(item.key))
             .take(remaining < 2 ? remaining : 2)
             .toList();
-        next += batch.length;
+        if (batch.isEmpty) break;
+        final batchSignatures = {
+          for (final item in batch) item.key: _candidateSignatures[item.key],
+        };
         final checked = await Future.wait(batch.map(inspect));
         if (!current()) return;
-        _commit(() {
-          _heroInspected.addAll(batch.map((item) => item.key));
-
-          final claimer = HomeWorkClaimer();
-          for (final accepted in _heroAcceptedOrder) {
-            final item = candidatesByKey[accepted];
-            if (item != null) claimer.claim(_withArt(item));
-          }
-          for (final (item, url) in checked) {
-            if (url == null || _heroAcceptedOrder.length >= heroMax) continue;
-            if (!claimer.claim(_withArt(item))) continue;
-            _heroQualified[item.key] = url;
-            _failedStartupKeys.remove(item.key);
-            _heroAcceptedOrder.add(item.key);
-          }
-        });
+        final currentKeys = _heroCandidates
+            .where((item) => !_heroInspected.contains(item.key))
+            .take(batch.length)
+            .map((item) => item.key)
+            .toList();
+        if (!listEquals(currentKeys, batch.map((item) => item.key).toList()) ||
+            batch.any((item) =>
+                _candidateSignatures[item.key] != batchSignatures[item.key])) {
+          // Keep probe evidence, but reconsider changed signatures in candidate order.
+          continue;
+        }
+        final candidatesByKey = {for (final item in _heroCandidates) item.key: item};
+        final claimer = HomeWorkClaimer();
+        for (final accepted in _heroAcceptedOrder) {
+          final item = candidatesByKey[accepted];
+          if (item != null) claimer.claim(_withArt(item));
+        }
+        var visibleChange = false;
+        for (final (item, url) in checked) {
+          if (_candidateSignatures[item.key] != batchSignatures[item.key]) continue;
+          _heroInspected.add(item.key);
+          if (url == null || _heroAcceptedOrder.length >= heroMax) continue;
+          final latest = candidatesByKey[item.key];
+          if (latest == null || !claimer.claim(_withArt(latest))) continue;
+          _heroQualified[item.key] = url;
+          _failedStartupKeys.remove(item.key);
+          _heroAcceptedOrder.add(item.key);
+          visibleChange = true;
+        }
+        if (visibleChange) notifyListeners();
       }
       if (!current()) return;
       _state.log.info(

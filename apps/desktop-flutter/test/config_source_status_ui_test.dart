@@ -6,6 +6,7 @@ import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/ui/config_source_status_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/ui/app.dart';
+import 'package:webhtv_pc/ui/glass_chrome.dart' show kShellContentTopInset;
 import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -144,19 +145,26 @@ void main() {
     expect(find.byType(ConfigSwitcherDialog), findsNothing);
   });
 
+  Finder contentViewport() => find.ancestor(
+    of: find.byType(AppShellTransition), matching: find.byType(ClipRect)).first;
+
   testWidgets('startup warning is nonblocking and management uses existing route', (tester) async {
     final state = await mount(tester, shell: true);
     expect(state.config, isNotNull);
     expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
     expect(find.textContaining('刷新不可用'), findsOneWidget);
     final sidebarWithWarning = tester.getRect(find.byType(AppSideBar));
-    final contentWithWarning = tester.getRect(find.byType(AppShellTransition));
+    final contentWithWarning = tester.getRect(contentViewport());
     final warning = tester.getRect(find.byKey(const ValueKey('config-source-restored-warning')));
     expect(warning.left, contentWithWarning.left,
       reason: 'The banner must start at the content edge, not cover the sidebar');
     expect(warning.right, contentWithWarning.right);
-    expect(warning.top, contentWithWarning.top,
-      reason: 'Keep the banner at the top of the content area');
+    expect(warning.overlaps(contentWithWarning), isFalse,
+      reason: 'The banner must reserve space above content, not cover it');
+    expect(contentWithWarning.top, greaterThan(warning.top));
+    final shellTop = tester.getTopLeft(find.byType(Scaffold)).dy;
+    expect(warning.top, shellTop + kShellContentTopInset,
+      reason: 'Keep the banner immediately below the top bar');
     await tester.tap(find.byKey(const ValueKey('config-source-manage')));
     await tester.pumpAndSettle();
     expect(find.byType(ConfigPage), findsOneWidget);
@@ -169,17 +177,25 @@ void main() {
     expect(state.savedConfigs.length, count);
     expect(state.config, isNotNull);
     expect(tester.getRect(find.byType(AppSideBar)), sidebarWithWarning,
-      reason: 'Startup notifications must float without moving or resizing the shell');
-    expect(tester.getRect(find.byType(AppShellTransition)), contentWithWarning);
+      reason: 'Startup notifications must not move or resize the sidebar');
+    expect(tester.getRect(find.byType(AppShellTransition)),
+      Rect.fromLTRB(contentWithWarning.left, shellTop,
+        contentWithWarning.right, contentWithWarning.bottom),
+      reason: 'Dismissing the banner must restore the full content height');
   });
 
   for (final brightness in Brightness.values) {
-    testWidgets('startup overlay preserves content and input at 1024x640 ${brightness.name}', (tester) async {
+    testWidgets('startup warning reserves content space and preserves input at 1024x640 ${brightness.name}', (tester) async {
       await mount(tester, shell: true, size: const Size(1024, 640), brightness: brightness);
       final sidebar = tester.getRect(find.byType(AppSideBar));
-      final content = tester.getRect(find.byType(AppShellTransition));
+      final content = tester.getRect(contentViewport());
+      final shellTop = tester.getTopLeft(find.byType(Scaffold)).dy;
       final section = tester.widget<AppSideBar>(find.byType(AppSideBar)).section;
-      expect(find.byKey(const ValueKey('config-source-restored-warning')), findsOneWidget);
+      final warning = tester.getRect(find.byKey(const ValueKey('config-source-restored-warning')));
+      expect(warning.left, content.left);
+      expect(warning.right, content.right);
+      expect(warning.overlaps(content), isFalse);
+      expect(content.top, greaterThan(warning.top));
       await tester.tap(find.text('去点播逛逛'));
       await tester.pumpAndSettle();
       expect(tester.widget<AppSideBar>(find.byType(AppSideBar)).section, isNot(section),
@@ -194,7 +210,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('config-source-restored-warning')), findsNothing);
       expect(tester.getRect(find.byType(AppSideBar)), sidebar);
-      expect(tester.getRect(find.byType(AppShellTransition)), content);
+      expect(tester.getRect(find.byType(AppShellTransition)),
+        Rect.fromLTRB(content.left, shellTop,
+          content.right, content.bottom),
+        reason: 'Dismissing the banner must restore the full content height');
       expect(tester.takeException(), isNull);
     });
   }

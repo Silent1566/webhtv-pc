@@ -15,6 +15,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/common.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/diagnostics_pages.dart';
 
 void main() {
@@ -55,7 +56,9 @@ void main() {
         tester.view.resetDevicePixelRatio();
       });
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: SettingsPage(state: state))),
+        MaterialApp(
+          home: Scaffold(body: SettingsPage(state: state)),
+        ),
       );
       await tester.pumpAndSettle();
     }
@@ -79,7 +82,10 @@ void main() {
       await tester.tap(entry);
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('search-thread-slider')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('search-thread-slider')),
+        findsOneWidget,
+      );
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('search-thread-value')))
@@ -123,7 +129,7 @@ void main() {
       // 页面上的「取消」是取消搜索按钮，必须定位对话框里的那个。
       await tester.tap(
         find.descendant(
-          of: find.byType(AlertDialog),
+          of: find.byType(GlassAlertDialog),
           matching: find.text('取消'),
         ),
       );
@@ -177,7 +183,7 @@ void main() {
       final captured = <int?>[];
       await openDialog(tester, current: 5, min: 10, max: 1, captured: captured);
 
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(GlassAlertDialog), findsNothing);
       expect(captured, [null]);
     });
 
@@ -203,11 +209,17 @@ void main() {
 
     testWidgets('取消返回 null（调用方据此不写入）', (tester) async {
       final captured = <int?>[];
-      await openDialog(tester, current: 42, min: 0, max: 100, captured: captured);
+      await openDialog(
+        tester,
+        current: 42,
+        min: 0,
+        max: 100,
+        captured: captured,
+      );
 
       await tester.tap(
         find.descendant(
-          of: find.byType(AlertDialog),
+          of: find.byType(GlassAlertDialog),
           matching: find.text('取消'),
         ),
       );

@@ -27,6 +27,7 @@ import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/spider_account_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/spider_account_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -124,8 +125,7 @@ class _TestState extends AppState with ExternalMetaOff {
 /// 截图路径要真正产出 PNG（`toImage`），在 CI/无头环境里它可能卡住整个套件。
 /// 默认只跑行为用例，需要出图时显式：
 ///   WEBHTV_CAPTURE_UI=1 flutter test test/spider_account_page_test.dart
-final bool _captureEnabled =
-    Platform.environment['WEBHTV_CAPTURE_UI'] == '1';
+final bool _captureEnabled = Platform.environment['WEBHTV_CAPTURE_UI'] == '1';
 
 /// 真 store 集成用例：默认不跑。
 ///
@@ -157,8 +157,10 @@ void main() {
   // 字体必须在 setUpAll 里加载：FontLoader 走平台通道，放进 testWidgets 的假异步区会一直不返回。
   setUpAll(() async {
     // 主题的 CJK 走 familyFallback；测试环境没有系统字体，必须按同一个族名加载，
-  // 否则截图里全是豆腐块（这不是产品缺陷，是截图前提）。
-  if (_captureEnabled) await loadFixtureFonts(cjkFamily: 'Microsoft YaHei UI');
+    // 否则截图里全是豆腐块（这不是产品缺陷，是截图前提）。
+    if (_captureEnabled) {
+      await loadFixtureFonts(cjkFamily: 'Microsoft YaHei UI');
+    }
   });
 
   setUp(() async {
@@ -213,7 +215,9 @@ void main() {
   /// 已保存的值既不能出现在文案里，也不能出现在输入框内容里。
   void expectNoSecretRendered(WidgetTester tester, String secret) {
     final rendered = <String>[
-      ...tester.widgetList<Text>(find.byType(Text)).map((text) => text.data ?? ''),
+      ...tester
+          .widgetList<Text>(find.byType(Text))
+          .map((text) => text.data ?? ''),
       ...tester
           .widgetList<EditableText>(find.byType(EditableText))
           .map((field) => field.controller.text),
@@ -290,7 +294,6 @@ void main() {
     await settle(tester);
   }
 
-
   Future<void> pumpAccountPage(
     WidgetTester tester,
     SpiderAccountAction action,
@@ -308,17 +311,17 @@ void main() {
     await settle(tester);
   }
 
-  Finder inDialog(Finder matching) => find.descendant(
-    of: find.byType(AlertDialog),
-    matching: matching,
-  );
-
+  Finder inDialog(Finder matching) =>
+      find.descendant(of: find.byType(GlassAlertDialog), matching: matching);
 
   // 存储层契约：真 store、普通 test（不经过 testWidgets 的假异步区）。
   group('真 store 落盘契约', () {
     test('保存合成 Cookie 写出预期的应用级 JSON', () async {
       final real = SpiderAccountStore(path: accountPath);
-      await real.save(SpiderAccountProvider.quark, '  Cookie: synthetic=abc; token=xyz  ');
+      await real.save(
+        SpiderAccountProvider.quark,
+        '  Cookie: synthetic=abc; token=xyz  ',
+      );
       expect(readAccounts()['version'], 1);
       expect(readValues(), {'Wex_quark_cookie': 'synthetic=abc; token=xyz'});
     });
@@ -372,18 +375,14 @@ void main() {
       findsOneWidget,
       reason: '状态标签与它的解释都要在',
     );
-    expect(
-      state.detailLoads,
-      0,
-      reason: '账号条目不得调用 loadDetail，也就不会发站源/TMDB 请求',
-    );
+    expect(state.detailLoads, 0, reason: '账号条目不得调用 loadDetail，也就不会发站源/TMDB 请求');
   });
 
   testWidgets('未配置时点编辑进入输入框；取消不写文件也不离开', (tester) async {
     await pumpRoutedDetail(tester, markerVod('quarkmanual', 'quark', 'edit'));
     await openEditor(tester);
 
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(GlassAlertDialog), findsOneWidget);
     // 提交之前就要看到后果：这是应用级共享值，不是某个站源的私有设置。
     expect(inDialog(find.textContaining('应用级共享')), findsOneWidget);
     expect(inDialog(find.textContaining('Wex_quark_cookie')), findsOneWidget);
@@ -412,11 +411,7 @@ void main() {
     );
     expect(File(accountPath).existsSync(), isFalse);
     expect(state.categoryRefreshes, 1);
-    expect(
-      find.byType(SpiderAccountPage),
-      findsNothing,
-      reason: '写成功后返回上一层',
-    );
+    expect(find.byType(SpiderAccountPage), findsNothing, reason: '写成功后返回上一层');
     expect(state.detailLoads, 0);
     expectNoSecretRendered(tester, 'synthetic=abc');
   });
@@ -443,7 +438,9 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('spider-account-clear')));
     await settle(tester);
-    await tester.tap(find.byKey(const ValueKey('spider-account-clear-confirm')));
+    await tester.tap(
+      find.byKey(const ValueKey('spider-account-clear-confirm')),
+    );
     await settle(tester);
 
     expect(store.clears, 1);
@@ -640,7 +637,6 @@ void main() {
     expect(store.saves, 0);
   });
 
-
   testWidgets('真 store 集成：界面保存后账号 JSON 落地（runAsync 驱动）', (tester) async {
     final realState = stateWith(SpiderAccountStore(path: accountPath));
     addTearDown(realState.dispose);
@@ -670,7 +666,6 @@ void main() {
     expect(realState.detailLoads, 0);
   }, skip: !_realStoreEnabled);
 
-
   testWidgets('扫码/注册条目明说桌面端不可用，手动入口仍在', (tester) async {
     await pumpAccountPage(
       tester,
@@ -681,7 +676,10 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const ValueKey('spider-account-scan-only')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('spider-account-scan-only')),
+      findsOneWidget,
+    );
     expect(find.textContaining('不能完成扫码或注册'), findsOneWidget);
     expect(find.textContaining('手动填写的 Cookie 是支持的路径'), findsOneWidget);
     expect(find.byKey(const ValueKey('spider-account-edit')), findsOneWidget);
@@ -697,7 +695,10 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const ValueKey('spider-account-scan-only')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('spider-account-scan-only')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('spider-account-edit')), findsOneWidget);
   });
 
@@ -705,7 +706,10 @@ void main() {
     await pumpRoutedDetail(tester, markerVod('quark', 'quark', 'edit'));
 
     expect(find.byType(SpiderAccountPage), findsOneWidget);
-    expect(find.byKey(const ValueKey('spider-account-scan-only')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('spider-account-scan-only')),
+      findsOneWidget,
+    );
     expect(state.detailLoads, 0);
   });
 
@@ -760,14 +764,3 @@ void main() {
   // 出图用法：WEBHTV_CAPTURE_UI=1 flutter test test/spider_account_page_test.dart
   // 默认跳过，截图路径不会拖住行为套件。
 }
-
-
-
-
-
-
-
-
-
-
-

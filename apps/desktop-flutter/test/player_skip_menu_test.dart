@@ -192,6 +192,13 @@ class _SkipMedia implements NativePlayer {
   }
 
   @override
+  Future<Uint8List?> screenshot({
+    String? format = 'image/jpeg',
+    bool synchronized = true,
+    bool includeLibassSubtitles = false,
+  }) async => null;
+
+  @override
   Future<void> seek(Duration position, {bool synchronized = true}) {
     seeks.add(position);
     emit(position: position.inSeconds, playing: state.playing);

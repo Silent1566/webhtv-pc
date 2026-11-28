@@ -17,6 +17,7 @@ import '../core/osd_config.dart';
 import '../core/osd_diagnostics.dart';
 import '../core/osd_style.dart';
 import 'player_controller.dart' show formatByteRate;
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 屏显文本样式。
@@ -67,6 +68,27 @@ class PlayerOsdLayer extends StatelessWidget {
     required this.diagnostics,
     required this.environment,
   });
+
+  static const clockTopWithControls = kToolbarHeight + AppSpace.sm;
+
+  static double clockLineHeight(BuildContext context, OsdStyle style) {
+    final defaults = DefaultTextStyle.of(context);
+    final painter = TextPainter(
+      text: TextSpan(
+        text: '00:00:00',
+        style: defaults.style.merge(_osdTextStyle(style.textScale)),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      textHeightBehavior:
+          defaults.textHeightBehavior ??
+          DefaultTextHeightBehavior.maybeOf(context),
+      locale: Localizations.maybeLocaleOf(context),
+    )..layout();
+    final height = painter.height;
+    painter.dispose();
+    return height;
+  }
 
   final Map<String, bool> flags;
 
@@ -169,7 +191,12 @@ class PlayerOsdLayer extends StatelessWidget {
           Padding(
             // 内边距用 AppSpace.lg（16px）而不是上游的 14dp：
             // 14 会成为全站第 17 个间距值（`docs/phase8/design/02` §3.4）。
-            padding: const EdgeInsets.all(AppSpace.lg),
+            padding: EdgeInsets.fromLTRB(
+              AppSpace.lg,
+              controlsVisible ? clockTopWithControls : AppSpace.lg,
+              AppSpace.lg,
+              AppSpace.lg,
+            ),
             // 竖排而不是「四个 `Positioned` 各占一角」：
             // - 诊断面板也贴顶，若与上左标题都 `top: 0`，两段文字会**互相叠印**
             //   （标题 14px 两行压在「结论」行上）；排在标题之下则不重叠；
@@ -198,7 +225,10 @@ class PlayerOsdLayer extends StatelessWidget {
                       ),
                       if (_clockVisible) ...[
                         const SizedBox(width: AppSpace.xl),
-                        Text(_clockText(), style: _osdTextStyle(style.textScale)),
+                        Text(
+                          _clockText(),
+                          style: _osdTextStyle(style.textScale),
+                        ),
                       ],
                     ],
                   ),
@@ -302,20 +332,15 @@ class _DiagnosticsPanel extends StatelessWidget {
     // 在 Flutter 的 `TextStyle` 里没有对应字段（只有 `letterSpacing`），
     // 用 `letterSpacing` 近似会改变**字距**语义而非压缩**字形宽度**，属于伪造；
     // 因此本层不压字宽，靠 `maxLines` 与省略号兜底。
+    final scheme = Theme.of(context).colorScheme;
     final style = TextStyle(
       fontSize: 10 * textScale,
       height: 1.35,
-      color: Colors.white,
+      color: scheme.onSurface,
       fontFamily: 'monospace',
-      shadows: [
-        Shadow(color: Colors.black, offset: Offset(1.2, 1.2), blurRadius: 1.5),
-      ],
     );
     Widget table(List<OsdDiagnosticsRow> data) => Table(
-      columnWidths: const {
-        0: IntrinsicColumnWidth(),
-        1: FlexColumnWidth(),
-      },
+      columnWidths: const {0: IntrinsicColumnWidth(), 1: FlexColumnWidth()},
       children: [
         for (final row in data)
           TableRow(
@@ -329,15 +354,19 @@ class _DiagnosticsPanel extends StatelessWidget {
           ),
       ],
     );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(flex: 125, child: table(rows)),
-        if (environment.isNotEmpty) ...[
-          const SizedBox(width: AppSpace.sm),
-          Expanded(flex: 100, child: table(environment)),
+    return GlassPane(
+      blurBackdrop: false,
+      padding: const EdgeInsets.all(AppSpace.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(flex: 125, child: table(rows)),
+          if (environment.isNotEmpty) ...[
+            const SizedBox(width: AppSpace.sm),
+            Expanded(flex: 100, child: table(environment)),
+          ],
         ],
-      ],
+      ),
     );
   }
 }

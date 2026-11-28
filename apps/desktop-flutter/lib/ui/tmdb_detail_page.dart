@@ -30,9 +30,13 @@ import '../services/tmdb_service.dart';
 import '../services/ui_preferences_store.dart';
 import '../state/detail_ratings_state.dart';
 import '../state/detail_recommendation_state.dart';
+import 'glass_widgets.dart';
+import 'wallpaper_backdrop.dart';
+import 'backdrop_scrim.dart';
 import 'common.dart';
 import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
+import 'glass_chrome.dart';
 import 'tmdb_detail_view.dart';
 import 'tmdb_episode_detail.dart';
 import 'tmdb_widgets.dart';
@@ -121,6 +125,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   TmdbLoadPhase _phase = TmdbLoadPhase.idle;
   AppError? _error;
   TmdbDetailData? _data;
+  final _backdropReadiness = TmdbBackdropReadiness();
   List<TmdbEpisodeCard> _episodeCards = const [];
   List<TmdbItem> _recommendations = const [];
   List<TmdbVideo> _videos = const [];
@@ -176,6 +181,7 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   @override
   @override
   void dispose() {
+    _backdropReadiness.dispose();
     _ratingsController?.dispose();
     _ratingsController = null;
     // 自建的那份依赖随页面一起关闭，避免遗留速率闸计时器。
@@ -323,65 +329,121 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final data = _data;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(data?.title.isNotEmpty == true ? data!.title : 'TMDB 详情'),
-        actions: [
-          // 「搜索站源」入口（`04` §6.2）：TMDB 详情页没有播放按钮
-          TextButton.icon(
-            key: const ValueKey('tmdb-search-source'),
-            icon: const Icon(Icons.search),
-            label: const Text('搜索站源'),
-            onPressed: data == null || data.title.isEmpty
-                ? null
-                : () =>
-                      widget.onSearchSource?.call(data.title, widget.identity),
+    final backdropUrls = data?.backdropUrls ?? const <String>[];
+    _backdropReadiness.resetFor(backdropUrls, fallbackUrl: data?.posterUrl);
+    final search = TextButton.icon(
+      key: const ValueKey('tmdb-search-source'),
+      icon: const Icon(Icons.search),
+      label: const Text('搜索站源'),
+      onPressed: data == null || data.title.isEmpty
+          ? null
+          : () => widget.onSearchSource?.call(data.title, widget.identity),
+    );
+    final content = switch (_phase) {
+      TmdbLoadPhase.idle || TmdbLoadPhase.loading =>
+        data == null ? const LoadingBlock() : _buildContent(context, data),
+      // 有首屏快照时仍渲染正文：底部推荐行（尤其豆瓣）不依赖 TMDB 凭据。
+      TmdbLoadPhase.disabled when data != null => _buildContent(context, data),
+      TmdbLoadPhase.disabled => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            '未配置 TMDB（不影响站源浏览与播放）',
+            key: const ValueKey('tmdb-only-disabled'),
+            style: theme.textTheme.bodyLarge,
           ),
-        ],
+        ),
       ),
-      body: switch (_phase) {
-        TmdbLoadPhase.idle || TmdbLoadPhase.loading =>
-          data == null ? const LoadingBlock() : _buildContent(context, data),
-        // 有首屏快照时仍渲染正文：底部推荐行（尤其豆瓣）不依赖 TMDB 凭据。
-        TmdbLoadPhase.disabled when data != null => _buildContent(
-          context,
-          data,
-        ),
-        TmdbLoadPhase.disabled => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              '未配置 TMDB（不影响站源浏览与播放）',
-              key: const ValueKey('tmdb-only-disabled'),
-              style: theme.textTheme.bodyLarge,
-            ),
+      TmdbLoadPhase.failed when data != null => _buildContent(context, data),
+      TmdbLoadPhase.failed => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                describeTmdbFailure(_error),
+                key: const ValueKey('tmdb-only-error'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyLarge,
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                key: const ValueKey('tmdb-only-retry'),
+                onPressed: _load,
+                child: const Text('重试'),
+              ),
+            ],
           ),
         ),
-        TmdbLoadPhase.failed when data != null => _buildContent(context, data),
-        TmdbLoadPhase.failed => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  describeTmdbFailure(_error),
-                  key: const ValueKey('tmdb-only-error'),
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  key: const ValueKey('tmdb-only-retry'),
-                  onPressed: _load,
-                  child: const Text('重试'),
-                ),
-              ],
-            ),
-          ),
+      ),
+      TmdbLoadPhase.ready => _buildContent(context, data),
+    };
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(
+          AppBarTheme.of(context).toolbarHeight ?? kToolbarHeight,
         ),
-        TmdbLoadPhase.ready => _buildContent(context, data),
-      },
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _backdropReadiness,
+          builder: (context, hasBackdrop, _) {
+            final theme = Theme.of(context);
+            final hasAppArtwork =
+                context.findAncestorWidgetOfExactType<WallpaperBackdrop>() !=
+                null;
+            return Theme(
+              data: hasBackdrop ? glassChromeControlTheme(theme) : theme,
+              child: AppBar(
+                backgroundColor: hasBackdrop || hasAppArtwork
+                    ? Colors.transparent
+                    : theme.colorScheme.surface,
+                surfaceTintColor: Colors.transparent,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                flexibleSpace: hasBackdrop || hasAppArtwork
+                    ? const IgnorePointer(
+                        child: SizedBox.expand(
+                          child: BackdropScrim(kind: BackdropScrimKind.toolbar),
+                        ),
+                      )
+                    : null,
+                title: Text(
+                  data?.title.isNotEmpty == true ? data!.title : 'TMDB 详情',
+                ),
+                actions: [search],
+              ),
+            );
+          },
+        ),
+      ),
+      body: Builder(
+        builder: (context) => Stack(
+          fit: StackFit.expand,
+          children: [
+            if (data != null)
+              Positioned.fill(
+                child: TmdbDetailBackdrop(
+                  urls: backdropUrls,
+                  fallbackUrl: data.posterUrl,
+                  readiness: _backdropReadiness,
+                ),
+              ),
+            // Extend only the fixed backdrop; foreground keeps the original viewport.
+            Padding(
+              padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+              child: MediaQuery.removePadding(
+                context: context,
+                removeTop: true,
+                child: data == null
+                    ? GlassPane(blurBackdrop: false, child: content)
+                    : content,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -396,102 +458,82 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
     final ratings = widget.ratingService == null
         ? const DetailRatings()
         : _syncRatings(ratingRequest);
-    // 页面级**固定**背景 + 内层滚动（与源详情页 `DetailPage` 同构）。
-    //
-    // 为什么 Stack 放在**调用方**而不是 `TmdbDetailView` 内部：
-    // `Positioned.fill` 固定的是 **Stack 的框**，不是视口。`TmdbDetailView` 自身
-    // 返回不可滚动的 `Column`，如果在那里加 Stack，Stack 会被撑成整个内容那么高，
-    // 背景图跟着被拉成十几比一的框，`cover` 会疯狂裁切放大——比不铺还糟。
-    // 只有把**滚动容器放进 Stack 里**，背景才是视口大小且不随内容滚动。
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: TmdbDetailBackdrop(
-            urls: data.backdropUrls,
-            fallbackUrl: data.posterUrl,
+    return SingleChildScrollView(
+      child: TmdbDetailView(
+        ratingTags: DetailRatingTags(ratings: ratings, tmdbRating: data.rating),
+        // 图片由上面的固定背景负责，视图内部不再画（否则重复解码，
+        // 且两层同图不同框比会在交界处错位）。
+        paintBackdrop: false,
+        data: data,
+        platformLabel: playbackPlatformLabel(networks: data.networks),
+        seasons: data.seasons,
+        selectedSeason: _selectedSeason,
+        selectableSeasons: _tmdbSeasons,
+        onSeasonChanged: (season) => _selectSeason(season),
+        episodeKeyPrefix: 'tmdb-only-episode',
+        episodeTitle: '剧集',
+        reversed: _episodesReversed,
+        gridMode: _episodeGridMode,
+        onToggleReversed: () =>
+            setState(() => _episodesReversed = !_episodesReversed),
+        onToggleGridMode: _toggleEpisodeGridMode,
+        // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
+        episodeActionLabel: '搜索站源',
+        episodeCards: _episodeCards,
+        // 信息表退场（2026-10-22 用户反馈）：`语言` 已进 hero 标签行。
+        // 底部三行推荐（猜你喜欢 / 个性推荐·TMDB / 个性推荐·豆瓣）：
+        // 非空即接管旧的"相关推荐"海报墙，两处不会重复。
+        recommendationBottom: DetailRecommendations(
+          dependencies: _recommendationsDependencies,
+          current: RecommendationSeed(
+            title: data.title,
+            tmdbId: widget.identity.tmdbId,
+            mediaType: widget.identity.mediaType,
           ),
+          detail: _recommendationDetail,
+          onOpenItem: _openItem,
+          onSearchTitle: widget.onSearchTitle,
+          trailing: widget.aiRecommendations,
         ),
-        SingleChildScrollView(
-          child: TmdbDetailView(
-            ratingTags: DetailRatingTags(
-              ratings: ratings,
-              tmdbRating: data.rating,
-            ),
-            // 图片由上面的固定背景负责，视图内部不再画（否则重复解码，
-            // 且两层同图不同框比会在交界处错位）。
-            paintBackdrop: false,
-            data: data,
-            platformLabel: playbackPlatformLabel(networks: data.networks),
-            seasons: data.seasons,
-            selectedSeason: _selectedSeason,
-            selectableSeasons: _tmdbSeasons,
-            onSeasonChanged: (season) => _selectSeason(season),
-            episodeKeyPrefix: 'tmdb-only-episode',
-            episodeTitle: '剧集',
-            reversed: _episodesReversed,
-            gridMode: _episodeGridMode,
-            onToggleReversed: () =>
-                setState(() => _episodesReversed = !_episodesReversed),
-            onToggleGridMode: _toggleEpisodeGridMode,
-            // 纯 TMDB 页没有播放按钮（`04` §6.2）：动作改为「搜索站源」。
-            episodeActionLabel: '搜索站源',
-            episodeCards: _episodeCards,
-            // 信息表退场（2026-10-22 用户反馈）：`语言` 已进 hero 标签行。
-            // 底部三行推荐（猜你喜欢 / 个性推荐·TMDB / 个性推荐·豆瓣）：
-            // 非空即接管旧的"相关推荐"海报墙，两处不会重复。
-            recommendationBottom: DetailRecommendations(
-              dependencies: _recommendationsDependencies,
-              current: RecommendationSeed(
-                title: data.title,
-                tmdbId: widget.identity.tmdbId,
-                mediaType: widget.identity.mediaType,
-              ),
-              detail: _recommendationDetail,
-              onOpenItem: _openItem,
-              onSearchTitle: widget.onSearchTitle,
-              trailing: widget.aiRecommendations,
-            ),
-            recommendations: _recommendations,
-            videos: _videos,
-            metadataBadge: '元数据季度 · 不可直接播放',
-            onEpisodeTap: (_, card) {
-              if (data.title.isEmpty) return;
-              widget.onSearchSource?.call(data.title, widget.identity);
-            },
-            onEpisodeLongPress: (_, card) => showTmdbEpisodeDetails(
-              context,
-              card: card,
-              recommendationDependencies: _recommendationsDependencies,
-              onSearchTitle: widget.onSearchTitle,
-              onSearchSource: widget.onSearchSource,
-              onOpenItem: _openItem,
-              service: widget.service,
-              item: TmdbItem(
-                tmdbId: widget.identity.tmdbId,
-                mediaType: widget.identity.mediaType,
-                title: data.title,
-              ),
-              actionLabel: '搜索站源',
-              onAction: () {
-                if (data.title.isEmpty) return;
-                widget.onSearchSource?.call(data.title, widget.identity);
-              },
-              onPersonTap: _openPerson,
-            ),
-            onPersonTap: (person) => _openPerson(person),
-            onRecommendationTap: (item) => _openItem(item),
-            onOpenVideo: widget.onOpenVideo,
-            onCopyVideo: widget.onCopyVideo,
-            ratingLinks: DetailRatingsSection(
-              request: ratingRequest,
-              ratings: ratings,
-              onOpen: widget.onOpenVideo,
-              onCopy: widget.onCopyVideo,
-              keyPrefix: 'tmdb-only-ratings',
-            ),
+        recommendations: _recommendations,
+        videos: _videos,
+        metadataBadge: '元数据季度 · 不可直接播放',
+        onEpisodeTap: (_, card) {
+          if (data.title.isEmpty) return;
+          widget.onSearchSource?.call(data.title, widget.identity);
+        },
+        onEpisodeLongPress: (_, card) => showTmdbEpisodeDetails(
+          context,
+          card: card,
+          recommendationDependencies: _recommendationsDependencies,
+          onSearchTitle: widget.onSearchTitle,
+          onSearchSource: widget.onSearchSource,
+          onOpenItem: _openItem,
+          service: widget.service,
+          item: TmdbItem(
+            tmdbId: widget.identity.tmdbId,
+            mediaType: widget.identity.mediaType,
+            title: data.title,
           ),
+          actionLabel: '搜索站源',
+          onAction: () {
+            if (data.title.isEmpty) return;
+            widget.onSearchSource?.call(data.title, widget.identity);
+          },
+          onPersonTap: _openPerson,
         ),
-      ],
+        onPersonTap: (person) => _openPerson(person),
+        onRecommendationTap: (item) => _openItem(item),
+        onOpenVideo: widget.onOpenVideo,
+        onCopyVideo: widget.onCopyVideo,
+        ratingLinks: DetailRatingsSection(
+          request: ratingRequest,
+          ratings: ratings,
+          onOpen: widget.onOpenVideo,
+          onCopy: widget.onCopyVideo,
+          keyPrefix: 'tmdb-only-ratings',
+        ),
+      ),
     );
   }
 

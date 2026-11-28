@@ -178,12 +178,12 @@ void main() {
         .toList();
     expect(
       (styleCalls.last.arguments as Map)['titleBarStyle'],
-      'normal',
-      reason: '标题栏必须恢复，否则最小化/最大化/关闭按钮不可见',
+      'hidden',
+      reason: '退出全屏后原生标题栏必须保持隐藏，由应用接管窗口按钮',
     );
     expect(
       (styleCalls.last.arguments as Map)['windowButtonVisibility'],
-      isTrue,
+      isFalse,
     );
   });
 
@@ -210,6 +210,6 @@ void main() {
     final styleCalls = windowManagerCalls
         .where((call) => call.method == 'setTitleBarStyle')
         .toList();
-    expect((styleCalls.last.arguments as Map)['titleBarStyle'], 'normal');
+    expect((styleCalls.last.arguments as Map)['titleBarStyle'], 'hidden');
   });
 }

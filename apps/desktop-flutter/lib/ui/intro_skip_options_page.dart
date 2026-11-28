@@ -11,6 +11,7 @@ import '../core/player_options.dart';
 import '../core/skip_plan.dart';
 import '../core/skip_segment_colors.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'settings_layout.dart';
 
 class IntroSkipOptionsPage extends StatelessWidget {
@@ -59,7 +60,7 @@ class IntroSkipOptionsPage extends StatelessWidget {
       on ? (mask | bit) : (mask & ~bit);
 
   Future<void> _editColor(BuildContext context, SkipKind kind) async {
-    final color = await showDialog<int>(
+    final color = await showGlassDialog<int>(
       context: context,
       builder: (_) => _SkipColorDialog(
         kind: kind,
@@ -109,7 +110,7 @@ class IntroSkipOptionsPage extends StatelessWidget {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('跳过模式'),
                   subtitle: Text(_modeHint(options.skipMode)),
-                  trailing: DropdownButton<SkipMode>(
+                  trailing: SettingsDropdown<SkipMode>(
                     value: options.skipMode,
                     underline: const SizedBox.shrink(),
                     items: [
@@ -334,7 +335,8 @@ class _SkipColorDialogState extends State<_SkipColorDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
+    constraints: const BoxConstraints(maxWidth: 408),
     title: Text('${widget.kind.label}颜色'),
     scrollable: true,
     content: SizedBox(

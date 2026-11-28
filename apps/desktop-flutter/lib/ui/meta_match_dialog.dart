@@ -22,6 +22,7 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_title.dart';
 import '../state/app_state.dart';
 import 'poster_image.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 class MetaMatchDialog extends StatefulWidget {
@@ -268,7 +269,8 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
     final width = math.max(420.0, math.min(900.0, media.width - 120));
     final maxHeight = math.max(320.0, math.min(680.0, media.height - 220));
     final minHeight = math.min(320.0, maxHeight);
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: BoxConstraints(maxWidth: width + 2 * AppSpace.xl),
       title: const Text('匹配元数据'),
       content: SizedBox(
         width: width,
@@ -322,7 +324,6 @@ class _MetaMatchDialogState extends State<MetaMatchDialog> {
                       onSubmitted: (_) => _search(),
                       decoration: const InputDecoration(
                         labelText: '片名',
-                        border: OutlineInputBorder(),
                         isDense: true,
                       ),
                     ),

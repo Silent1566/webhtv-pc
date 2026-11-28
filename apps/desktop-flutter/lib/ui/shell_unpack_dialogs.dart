@@ -12,6 +12,9 @@ import 'package:flutter/material.dart';
 
 import '../core/protocol.dart' show redactLogText;
 
+import 'glass_dialog.dart';
+import 'tokens.dart';
+
 import 'package:webhtv_pc/services/csp_jar_probe.dart' show ShellUnpackTick;
 
 /// 一个待解包 jar 的展示条目（探测结果 → UI 的桥）。
@@ -84,11 +87,11 @@ Future<bool> showShellUnpackPrompt(
   required bool runtimeInstalled,
   required Future<void> Function() onConfirm,
 }) async {
-  final confirmed = await showDialog<bool>(
+  final confirmed = await showGlassDialog<bool>(
     context: context,
     // 取消必须是显式动作（「稍后」）：点遮罩被读成"确认"就会白下一份运行时。
     barrierDismissible: false,
-    builder: (context) => AlertDialog(
+    builder: (context) => GlassAlertDialog(
       key: const ValueKey('shell-unpack-prompt'),
       title: const Text('检测到加固壳站源'),
       content: Column(
@@ -130,7 +133,7 @@ Future<Set<String>?> showShellUnpackSelection(
   required List<ShellTargetItem> items,
   required String? runtimeStateLabel,
 }) {
-  return showDialog<Set<String>>(
+  return showGlassDialog<Set<String>>(
     context: context,
     builder: (context) => _ShellUnpackSelectionDialog(
       items: items,
@@ -174,7 +177,8 @@ class _ShellUnpackSelectionDialogState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final selectable = widget.items.where((item) => !item.disabled).length;
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: const BoxConstraints(maxWidth: 520 + 2 * AppSpace.xl),
       key: const ValueKey('shell-unpack-selection'),
       title: const Text('选择要解包的加固壳'),
       content: SizedBox(
@@ -255,7 +259,7 @@ Future<void> showShellUnpackProgress(
   String failureTitle = '加固壳解包失败',
   String itemLabel = '壳',
 }) {
-  return showDialog<void>(
+  return showGlassDialog<void>(
     context: context,
     barrierDismissible: false,
     builder: (context) => ShellUnpackProgressDialog(
@@ -349,8 +353,10 @@ class _ShellUnpackProgressDialogState extends State<ShellUnpackProgressDialog> {
     final running = !failed && !_done;
     return PopScope(
       canPop: !running,
-      child: AlertDialog(
+      child: GlassAlertDialog(
+        constraints: const BoxConstraints(maxWidth: 420 + 2 * AppSpace.xl),
         key: const ValueKey('shell-unpack-progress'),
+        scrollable: true,
         title: Text(failed ? widget.failureTitle : widget.title),
         content: SizedBox(
           width: 420,

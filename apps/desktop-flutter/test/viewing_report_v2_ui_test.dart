@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -15,6 +18,11 @@ import 'package:webhtv_pc/services/viewing_report_ai.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/viewing_report_page.dart';
+import 'package:webhtv_pc/ui/viewing_report_sections.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
+import 'package:webhtv_pc/ui/wallpaper_backdrop.dart';
+
+import 'support/test_fonts.dart';
 
 import 'viewing_report_v2_fixture.dart';
 
@@ -79,6 +87,203 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  const metricLabels = ['观看时长', '作品', '记录', '完播率', '深夜观影', '周末占比', '平均每条'];
+  final evidenceDir = Platform.environment['VIEWING_POLISH_CAPTURE'];
+  final phase = Platform.environment['VIEWING_POLISH_PHASE'] ?? 'after';
+  const boundaryKey = ValueKey('viewing-polish-capture');
+
+  Future<void> capture(WidgetTester tester, String scenario) async {
+    if (evidenceDir == null) return;
+    await tester.runAsync(() async {
+      final image = await tester
+          .renderObject<RenderRepaintBoundary>(find.byKey(boundaryKey))
+          .toImage();
+      try {
+        final data = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+        await File('$evidenceDir/$scenario-$phase.png').writeAsBytes(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+      } finally {
+        image.dispose();
+      }
+    });
+  }
+
+  Future<void> pumpVisual(
+    WidgetTester tester, {
+    required Size size,
+    required Brightness brightness,
+    double scale = 1,
+    bool empty = false,
+  }) async {
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final theme = buildAppTheme(brightness);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: theme.copyWith(
+          textTheme: theme.textTheme.apply(fontFamily: 'FixtureCJK'),
+          primaryTextTheme: theme.primaryTextTheme.apply(
+            fontFamily: 'FixtureCJK',
+          ),
+          appBarTheme: theme.appBarTheme.copyWith(
+            titleTextStyle: theme.appBarTheme.titleTextStyle?.copyWith(
+              fontFamily: 'FixtureCJK',
+            ),
+          ),
+        ),
+        builder: (context, child) => MediaQuery.withClampedTextScaling(
+          minScaleFactor: scale,
+          maxScaleFactor: scale,
+          child: child!,
+        ),
+        home: RepaintBoundary(
+          key: boundaryKey,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const DefaultGlassBackdrop(),
+              ViewingReportPage(
+                state: state,
+                historyOverride: empty ? const [] : viewingReportFixtureRecords,
+                now: viewingReportFixtureNow,
+                metadataOverride: viewingReportFixtureMetadata,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  void expectBodyUnframed(WidgetTester tester) {
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
+    expect(scaffold.body, isNot(isA<GlassPane>()));
+    expect(
+      find.descendant(
+        of: find.byWidget(scaffold.body!),
+        matching: find.byType(GlassPane),
+      ),
+      findsNothing,
+      reason: 'Report body and its sections must share the page backdrop',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byType(GlassPane),
+      ),
+      findsOneWidget,
+    );
+  }
+
+  setUpAll(loadFixtureFonts);
+
+  testWidgets(
+    'unframed report hint ink meets contrast on exposed light backdrop',
+    (tester) async {
+      await pumpVisual(
+        tester,
+        size: const Size(1280, 800),
+        brightness: Brightness.light,
+      );
+      final summary = find.byType(ViewingReportSummaryGrid);
+      final hint = tester.widget<Text>(
+        find.descendant(of: summary, matching: find.text('按最后观看时间统计')),
+      );
+      final foreground = hint.style!.color!.computeLuminance();
+      final background = const Color(0xFFB7BAC0).computeLuminance();
+      final contrast = (background + .05) / (foreground + .05);
+      expect(contrast, greaterThanOrEqualTo(4.5));
+    },
+  );
+
+  for (final brightness in Brightness.values) {
+    for (final size in [const Size(1280, 800), const Size(1024, 640)]) {
+      testWidgets('unframed report balanced summary ${brightness.name} $size', (
+        tester,
+      ) async {
+        await pumpVisual(tester, size: size, brightness: brightness);
+        expect(tester.takeException(), isNull);
+        await capture(
+          tester,
+          'top-${brightness.name}-${size.width.toInt()}x${size.height.toInt()}',
+        );
+        expectBodyUnframed(tester);
+        final rows = <double, int>{};
+        for (final label in metricLabels) {
+          final rect = tester.getRect(
+            find.descendant(
+              of: find.byType(ViewingReportSummaryGrid),
+              matching: find.text(label),
+            ),
+          );
+          rows.update(rect.top, (value) => value + 1, ifAbsent: () => 1);
+          expect(rect.right, lessThanOrEqualTo(size.width));
+        }
+        expect(
+          rows.values.toList(),
+          size.width >= 1100 ? [4, 3] : [3, 2, 2],
+          reason:
+              'Avoid six-plus-one and three-plus-three-plus-one summary rows',
+        );
+        expect(
+          find.descendant(
+            of: find.byType(ViewingReportSummaryGrid),
+            matching: find.byType(DecoratedBox),
+          ),
+          findsNothing,
+          reason: 'Individual metric plates must not recreate nested dashboard cards',
+        );
+      });
+    }
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'unframed report compact large text and empty ${brightness.name}',
+      (tester) async {
+        await pumpVisual(
+          tester,
+          size: const Size(720, 600),
+          brightness: brightness,
+          scale: 1.6,
+        );
+        expect(tester.takeException(), isNull);
+        await capture(tester, 'large-top-${brightness.name}');
+        final list = find.byKey(const ValueKey('viewing-report-list'));
+        await tester.scrollUntilVisible(
+          find.byKey(const ValueKey('viewing-report-heatmap')),
+          350,
+          scrollable: find
+              .descendant(of: list, matching: find.byType(Scrollable))
+              .first,
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await capture(tester, 'large-heatmap-${brightness.name}');
+        final heatScroll = find.descendant(
+          of: find.byKey(const ValueKey('viewing-report-heatmap')),
+          matching: find.byType(SingleChildScrollView),
+        );
+        await tester.drag(heatScroll, const Offset(-300, 0));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await pumpVisual(
+          tester,
+          size: const Size(720, 600),
+          brightness: brightness,
+          scale: 1.6,
+          empty: true,
+        );
+        await capture(tester, 'empty-${brightness.name}');
+        expectBodyUnframed(tester);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('全未知仍展示四维偏好和各维未知口径', (tester) async {
     await pump(tester);
     for (final name in ['内容偏好', '题材', '地区', '演员', '导演']) {
@@ -133,46 +338,23 @@ void main() {
     );
   });
 
-  testWidgets('780窄屏七张摘要卡换行，不溢出也不加横向滚动', (tester) async {
+  testWidgets('780窄屏七项摘要均衡换行且保持纵向滚动', (tester) async {
     await pump(tester, size: const Size(780, 2600));
-    final cards = find.byWidgetPredicate(
-      (widget) =>
-          widget is Container &&
-          widget.key is ValueKey<String> &&
-          (widget.key as ValueKey<String>).value.startsWith('viewing-summary-'),
-    );
-    expect(cards, findsNWidgets(1), reason: '目前只有平均每条卡有 key，其余卡片无 key');
-    for (final element in find.byType(Wrap).evaluate()) {
-      final wrap = element.widget as Wrap;
-      if (wrap.children.length != 7) continue;
-      for (final child in wrap.children) {
-        final rect = tester.getRect(find.byWidget(child));
-        expect(rect.left, greaterThanOrEqualTo(16));
-        // 允许亚像素误差：3 列宽度 241.33×3 + 12×2 = 764.0000000000001。
-        expect(rect.right, lessThanOrEqualTo(764.01));
-      }
-      final rects = [
-        for (final child in wrap.children) tester.getRect(find.byWidget(child)),
-      ];
-      expect(
-        rects.map((r) => r.top).toSet(),
-        hasLength(3),
-        reason: '780 宽下 7 张卡应为 3+3+1 三行',
-      );
-      expect(
-        tester
-            .widget<Scrollable>(
-              find
-                  .ancestor(
-                    of: find.byWidget(wrap.children.first),
-                    matching: find.byType(Scrollable),
-                  )
-                  .first,
-            )
-            .axisDirection,
-        AxisDirection.down,
-      );
+    final summary = find.byType(ViewingReportSummaryGrid);
+    final rows = <double, int>{};
+    for (final label in metricLabels) {
+      final item = find.descendant(of: summary, matching: find.text(label));
+      expect(item, findsOneWidget);
+      final rect = tester.getRect(item);
+      expect(rect.left, greaterThanOrEqualTo(16));
+      expect(rect.right, lessThanOrEqualTo(764.01));
+      rows.update(rect.top, (value) => value + 1, ifAbsent: () => 1);
     }
+    expect(rows.values.toList(), [3, 2, 2]);
+    final scroll = find
+        .ancestor(of: summary, matching: find.byType(Scrollable))
+        .first;
+    expect(tester.widget<Scrollable>(scroll).axisDirection, AxisDirection.down);
     expect(tester.takeException(), isNull);
   });
 
