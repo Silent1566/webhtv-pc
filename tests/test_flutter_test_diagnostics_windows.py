@@ -240,5 +240,16 @@ class WindowsDiagnosticWorkflowTests(unittest.TestCase):
         self.assertLess(names.index(upload["name"]), names.index("Package portable zip"))
 
 
+class WindowsReleaseWorkflowTests(unittest.TestCase):
+    def test_full_suite_keeps_measured_runtime_headroom(self):
+        document = yaml.load(
+            (ROOT / ".github/workflows/desktop-release.yml").read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        steps = document["jobs"]["build-windows"]["steps"]
+        unit_tests = next(step for step in steps if step["name"] == "Unit tests")
+        self.assertGreaterEqual(int(unit_tests["timeout-minutes"]), 45)
+
+
 if __name__ == "__main__":
     unittest.main()
