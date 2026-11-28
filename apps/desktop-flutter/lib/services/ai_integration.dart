@@ -27,6 +27,7 @@ import 'ai_content/profile_service.dart';
 import 'ai_content/recommendation_service.dart';
 import 'ai_content/title_resolution_service.dart';
 import 'ai_content/user_data_store.dart';
+import 'recommendation_watch_store.dart';
 import 'app_paths.dart';
 import 'log_service.dart';
 
@@ -57,6 +58,7 @@ class AiIntegration {
     required LogService log,
     RecommendationEnricher? enricher,
     AiContentCompletion? completion,
+    RecommendationWatchStore? watched,
   }) {
     final contentPaths = AiContentPaths.of(paths);
     userData = AiContentUserDataStore(paths: contentPaths, log: log);
@@ -65,6 +67,7 @@ class AiIntegration {
       paths: contentPaths,
       userData: userData,
       enricher: enricher,
+      watched: watched,
       completion: completion,
       log: log,
     );

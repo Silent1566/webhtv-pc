@@ -60,15 +60,113 @@ Future<TestGesture> mousePointer(WidgetTester tester) async {
 const Offset blankSpot = Offset(700, 820);
 
 void main() {
+  testWidgets('悬停移到二级叶子只关闭三级列，鼠标下的菜单项不移动', (tester) async {
+    const viewport = Size(1024, 640);
+    setSurface(tester, viewport);
+    var selected = 0;
+    await tester.pumpWidget(
+      wrap(
+        PlayerContextMenu(
+          anchor: const Offset(460, 220),
+          viewport: viewport,
+          sections: [
+            PlayerMenuSection(
+              title: '设置',
+              items: [
+                const PlayerMenuItem(
+                  id: 'params',
+                  label: '播放参数',
+                  children: [PlayerMenuItem(id: 'speed', label: '倍速')],
+                ),
+                PlayerMenuItem(
+                  id: 'log',
+                  label: '诊断日志',
+                  onSelect: () => selected++,
+                ),
+              ],
+            ),
+          ],
+          onDismiss: () {},
+        ),
+      ),
+    );
+    final mouse = await mousePointer(tester);
+    await mouse.moveTo(tester.getCenter(find.text('设置')));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.chevron_left), findsNWidgets(2));
+    final root = columnRect(tester, 0);
+    final settings = columnRect(tester, 1);
+    await mouse.moveTo(tester.getCenter(find.text('播放参数')));
+    await tester.pumpAndSettle();
+    expect(columnSurfaces, findsNWidgets(3));
+    expect(columnRect(tester, 1), settings, reason: '打开三级列也不能挪动二级列');
+    final leaf = tester.getCenter(find.text('诊断日志'));
+    final beforeClose = columnRect(tester, 1);
+    await mouse.moveTo(leaf);
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
+    expect(columnSurfaces, findsNWidgets(2));
+    expect(columnRect(tester, 1), beforeClose, reason: '收起三级列不能挪动二级列');
+    expect(columnRect(tester, 0), root);
+    expect(columnRect(tester, 1), settings);
+    await mouse.down(leaf);
+    await mouse.up();
+    expect(selected, 1);
+  });
+
+  testWidgets('屏幕下方弹出的长子菜单优先上移，显示所有能装下的行', (tester) async {
+    const viewport = Size(1440, 900);
+    setSurface(tester, viewport);
+    await tester.pumpWidget(
+      wrap(
+        PlayerContextMenu(
+          anchor: const Offset(100, 880),
+          viewport: viewport,
+          sections: [
+            PlayerMenuSection(
+              title: '字幕',
+              items: List.generate(
+                12,
+                (i) => PlayerMenuItem(id: 'track_$i', label: '字幕轨 $i'),
+              ),
+            ),
+          ],
+          onDismiss: () {},
+        ),
+      ),
+    );
+    final mouse = await mousePointer(tester);
+    await mouse.moveTo(tester.getCenter(find.text('字幕')));
+    await tester.pumpAndSettle();
+    final scroll = tester.state<ScrollableState>(
+      find.descendant(
+        of: columnSurfaces.at(1),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(scroll.position.maxScrollExtent, 0);
+    expect(
+      columnRect(tester, 1).contains(tester.getCenter(find.text('字幕轨 11'))),
+      isTrue,
+    );
+  });
+
   group('四层飞出菜单水平布局', () {
     for (final size in [const Size(1024, 640), const Size(1280, 720)]) {
-      for (final anchorName in ['center', 'left', 'right', 'bottom-right']) {
+      for (final anchorName in [
+        'center',
+        'left',
+        'right',
+        'bottom-right',
+        'keyboard',
+      ]) {
         testWidgets(
           '${size.width} $anchorName: all four columns fit without overlap and leaf is clickable',
           (tester) async {
             setSurface(tester, size);
             final anchor = switch (anchorName) {
               'center' => size.center(Offset.zero),
+              'keyboard' => size.center(Offset.zero) - const Offset(120, 210),
               'left' => const Offset(60, 100),
               'right' => Offset(size.width - 20, 100),
               _ => Offset(size.width - 20, size.height - 20),
@@ -79,6 +177,7 @@ void main() {
                 PlayerContextMenu(
                   anchor: anchor,
                   viewport: size,
+                  reserveFlyoutSpace: anchorName != 'keyboard',
                   sections: [
                     PlayerMenuSection(
                       title: '设置',
@@ -107,6 +206,9 @@ void main() {
                 ),
               ),
             );
+            if (anchorName == 'keyboard') {
+              expect(columnRect(tester, 0).left, anchor.dx);
+            }
             for (final label in ['设置', '播放参数', '左半屏双击']) {
               await tester.tap(find.text(label));
               await tester.pumpAndSettle();
@@ -599,7 +701,7 @@ void main() {
       // 左上角 = clampMenuOrigin 的结果（不是窗口左上角，也不是锚点原值）。
       // 这一条同时排除「铺一层 Positioned.fill 全屏遮罩」和「进 Overlay」两种
       // 实现：前者左上角是 (0,0)，后者根本不在这个坐标空间。
-      expect(tester.getTopLeft(menuSurface), const Offset(1192, 472));
+      expect(tester.getTopLeft(menuSurface), const Offset(1192, 848));
       expect(tester.getSize(menuSurface).width, 240);
       // 项高 36 只在行上量得到，而行现在都在分组飞出列里。
       await tester.tap(find.text('播放'));
@@ -770,10 +872,7 @@ void main() {
     });
 
     testWidgets('内容比可用空间高时：菜单压到可用高度并在内部滚动，不溢出窗口', (tester) async {
-      // 20 个分组行 ≈ 728px，远超「锚点以下」的 492px——这是主列**可能**变得
-      // 过高的形状（真实内容现在是 10 行，但分组数由调用方决定，本引擎不许
-      // 依赖「恰好 10 个」）。用 420 的估值 clamp 之后如果不把高度压到左上角
-      // 以下，菜单会伸到窗口外沿外且滚不到。
+      // 20 个分组行比视口还高：优先用满视口，超出的部分仍可滚。
       await tester.pumpWidget(
         wrap(
           PlayerContextMenu(
@@ -791,9 +890,8 @@ void main() {
         ),
       );
       final rect = tester.getRect(menuSurface);
-      expect(rect.top, 100);
-      // 上限 = 视口高 - 左上角 - 留白 = 600 - 100 - 8。
-      expect(rect.height, 492);
+      expect(rect.top, 8);
+      expect(rect.height, 584);
       expect(rect.bottom, lessThanOrEqualTo(600 - 8));
       // 超出部分真的可滚：内容高于视口。
       final scrollable = tester.state<ScrollableState>(find.byType(Scrollable));

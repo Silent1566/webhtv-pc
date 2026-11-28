@@ -998,14 +998,28 @@ void main() {
           ]);
         }),
         cacheDirectory: directory,
-        // 故意不注入 delay：要测的正是真实 Timer 这条路径。
+        clock: () => DateTime.utc(2026),
+        // 不注入 delay，仍验证真实 Timer 的取消。
       );
 
       expect(await live.lookupRating(title: '详情电影', mediaType: 'movie'), 8.9);
       expect(requests, hasLength(1));
 
-      final pending = live.lookupRating(title: '详情电影二', mediaType: 'movie');
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final spacingStarted = Completer<void>();
+      final pending = runZoned(
+        () => live.lookupRating(title: '详情电影二', mediaType: 'movie'),
+        zoneSpecification: ZoneSpecification(
+          createTimer: (_, parent, zone, duration, callback) {
+            final timer = parent.createTimer(zone, duration, callback);
+            if (duration == const Duration(milliseconds: 750) &&
+                !spacingStarted.isCompleted) {
+              spacingStarted.complete();
+            }
+            return timer;
+          },
+        ),
+      );
+      await spacingStarted.future.timeout(const Duration(seconds: 5));
       live.cancelPendingSpacing();
       // 取消后的请求按「没拿到」处理，而不是把 750ms 的 Timer 挂到进程结束。
       expect(await pending, 0);

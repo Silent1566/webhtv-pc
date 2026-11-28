@@ -32,6 +32,7 @@ import 'osd_settings_page.dart';
 import 'pan_check_page.dart';
 import 'player_button_config_page.dart';
 import 'python_environment_page.dart';
+import 'recommendation_feedback_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'spider_page.dart';
@@ -206,6 +207,15 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     final preferences = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-recommendation-feedback-open'),
+          icon: Icons.fact_check_outlined,
+          title: '推荐反馈',
+          subtitle: '管理「已看」和「不感兴趣」记录',
+          onTap: () => _push(context, RecommendationFeedbackPage(state: state)),
+        ),
+        const Divider(height: 1),
+        const SizedBox(height: AppSpace.lg),
         SettingsField(
           label: '外观',
           child: SegmentedButton<ThemeMode>(

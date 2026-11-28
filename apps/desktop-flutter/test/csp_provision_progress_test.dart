@@ -47,11 +47,18 @@ class _ProgressState extends AppState {
   AppConfig? get effectiveConfig => probeConfig ?? super.effectiveConfig;
 
   int homeCalls = 0;
+  final _pendingHomeLoads = <Future<void>>{};
 
   @override
   Future<void> loadHome(Site site) async {
     homeCalls++;
-    await super.loadHome(site);
+    final pending = super.loadHome(site);
+    _pendingHomeLoads.add(pending);
+    try {
+      await pending;
+    } finally {
+      _pendingHomeLoads.remove(pending);
+    }
   }
 }
 
@@ -100,7 +107,7 @@ class _SeededProgressState extends _ProgressState {
 }
 
 class _CaptureState extends _ProgressState {
-  _CaptureState(super.paths) {
+  _CaptureState(super.paths, {this.cspCount = 78, this.httpCount = 15}) {
     debugCspProvisionOverride = (config, {onProgress, onEntry}) {
       progressCallback = onProgress;
       entryCallback = onEntry;
@@ -109,6 +116,8 @@ class _CaptureState extends _ProgressState {
     };
   }
 
+  final int cspCount;
+  final int httpCount;
   final Zone ioZone = Zone.current;
   final runnerStarted = Completer<void>();
   final imported = Completer<void>();
@@ -126,9 +135,9 @@ class _CaptureState extends _ProgressState {
           'name': '东篱',
           'spider': _jar,
           'sites': [
-            ...List.generate(78, (i) => _site('dongli-$i')),
+            ...List.generate(cspCount, (i) => _site('dongli-$i')),
             ...List.generate(
-              15,
+              httpCount,
               (i) => {
                 'key': 'http-$i',
                 'name': '在线站点 $i',
@@ -148,7 +157,11 @@ class _CaptureState extends _ProgressState {
 }
 
 class _CountCaptureState extends _CaptureState {
-  _CountCaptureState(super.paths);
+  _CountCaptureState(
+    super.paths, {
+    required super.cspCount,
+    required super.httpCount,
+  });
   @override
   Future<void> loadHome(Site site) async {
     if (homeCalls == 0) {
@@ -293,7 +306,8 @@ void main() {
   tearDown(() async {
     state.dispose();
     if (!report.isCompleted) report.complete(const CspProbeReport());
-    await Future<void>.delayed(Duration.zero);
+    await Future.wait(state._pendingHomeLoads.toList());
+    expect(state._pendingHomeLoads, isEmpty, reason: '删除临时目录前必须等首页补载结束');
     try {
       await temp.delete(recursive: true);
     } catch (_) {
@@ -957,6 +971,9 @@ void main() {
   });
 
   testWidgets('安装完成后导入结果更新可用数而不是保留初始快照', (tester) async {
+    const initialUsable = 2;
+    const installed = 3;
+    const total = initialUsable + installed;
     final page = (await tester.runAsync(
       () async => _CountCaptureState(
         AppPaths.resolve(
@@ -967,6 +984,8 @@ void main() {
             'state': '${temp.path}/count/logs',
           },
         ),
+        cspCount: installed,
+        httpCount: initialUsable,
       ),
     ))!;
     addTearDown(() {
@@ -995,15 +1014,15 @@ void main() {
     });
     expect(page.imported.isCompleted, isTrue);
     await tester.pump();
-    expect(find.textContaining('可用 15 个'), findsOneWidget);
+    expect(find.textContaining('可用 $initialUsable 个'), findsOneWidget);
     await tester.runAsync(() async {
-      for (var i = 0; i < 78; i++) {
+      for (var i = 0; i < installed; i++) {
         await installFixture('dongli-$i', target: page);
       }
       page.result.complete(
         CspProbeReport(
           entries: [
-            for (var i = 0; i < 78; i++)
+            for (var i = 0; i < installed; i++)
               CspProbeEntry(
                 siteKey: 'dongli-$i',
                 outcome: CspProbeOutcome.installed,
@@ -1013,14 +1032,15 @@ void main() {
       );
       await _whenState(
         page,
-        () => !page.cspProvisionProgress.active && page.usableSiteCount == 93,
+        () =>
+            !page.cspProvisionProgress.active && page.usableSiteCount == total,
       );
     });
     await tester.pump();
     await tester.pump();
     expect(page.cspProvisionProgress.active, isFalse);
-    expect(find.textContaining('可用 93 个'), findsOneWidget);
-    expect(find.textContaining('可用 15 个'), findsNothing);
+    expect(find.textContaining('可用 $total 个'), findsOneWidget);
+    expect(find.textContaining('可用 $initialUsable 个'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,7 +10,9 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/detail_recommendation.dart';
+import '../core/watched_recommendation.dart';
 import '../services/recommendation_feedback_store.dart';
+import '../services/recommendation_watch_store.dart';
 
 /// Providers behind the bottom recommendation rows.
 ///
@@ -28,10 +31,16 @@ class DetailRecommendationDependencies {
     this.historyChanges,
     VoidCallback? onClose,
   }) : _fixedBundle = _RecommendationBundle(loaders, null),
-       _finalClose = onClose;
+       watched = RecommendationWatchStore() {
+    _finalClose = () {
+      watched.dispose();
+      onClose?.call();
+    };
+  }
 
   DetailRecommendationDependencies._leased({
     required this.feedback,
+    required this.watched,
     required this.history,
     required this.historyChanges,
     required this._build,
@@ -41,13 +50,16 @@ class DetailRecommendationDependencies {
     required TmdbService service,
     Directory? cacheDirectory,
     File? feedbackFile,
+    File? watchedFile,
     http.Client? doubanClient,
     List<RecommendationSeed> Function()? history,
     Listenable? historyChanges,
   }) {
     final feedback = RecommendationFeedbackStore(file: feedbackFile);
+    final watched = RecommendationWatchStore(file: watchedFile);
     final dependencies = DetailRecommendationDependencies._leased(
       feedback: feedback,
+      watched: watched,
       history: history ?? _emptyHistory,
       historyChanges: historyChanges,
       build: () {
@@ -95,12 +107,16 @@ class DetailRecommendationDependencies {
         );
       },
     );
-    dependencies._finalClose = feedback.dispose;
+    dependencies._finalClose = () {
+      watched.dispose();
+      feedback.dispose();
+    };
     return dependencies;
   }
 
   final _RecommendationBundle? _fixedBundle;
   final RecommendationFeedbackStore feedback;
+  final RecommendationWatchStore watched;
   final List<RecommendationSeed> Function() history;
   final Listenable? historyChanges;
   _RecommendationBundle Function()? _build;
@@ -180,21 +196,79 @@ class RecommendationRequest {
   final bool sourceOnly, embeddedRelated;
   final int offset, pageSize;
   final Set<String> blockedTitles;
+
+  RecommendationRequest atOffset(int value) => RecommendationRequest(
+    current: current,
+    history: history,
+    detail: detail,
+    sourceOnly: sourceOnly,
+    embeddedRelated: embeddedRelated,
+    offset: value,
+    pageSize: pageSize,
+    blockedTitles: blockedTitles,
+  );
+}
+
+/// Skip watched works without moving the provider cursor by a filtered count.
+Future<RecommendationPage> loadUnwatchedRecommendationPage({
+  required RecommendationLoader loader,
+  required RecommendationRequest request,
+  required RecommendationWatchStore? watched,
+  int? Function()? visibleTarget,
+  bool Function()? isCurrent,
+}) async {
+  final items = <RecommendationEntry>[];
+  var offset = request.offset;
+  var hasMore = false;
+  for (var batch = 0; batch < 8; batch++) {
+    final RecommendationPage page;
+    try {
+      page = await loader(request.atOffset(offset));
+    } catch (_) {
+      if (isCurrent?.call() == false) return const RecommendationPage();
+      if (items.isEmpty) rethrow;
+      break;
+    }
+    if (isCurrent?.call() == false) return const RecommendationPage();
+    items.addAll(page.items);
+    hasMore = page.hasMore && page.nextOffset > offset;
+    offset = page.nextOffset;
+    if (!hasMore || watched == null || watched.works.isEmpty) break;
+    final visible = items
+        .where(
+          (entry) => !watched.contains(RecommendationWork.fromEntry(entry)),
+        )
+        .length;
+    final target = visibleTarget?.call();
+    if (visible >= (target ?? request.pageSize) ||
+        (target == null && visible == items.length)) {
+      break;
+    }
+  }
+  return RecommendationPage(items: items, nextOffset: offset, hasMore: hasMore);
 }
 
 class RecommendationRowState {
+  List<RecommendationEntry> _candidates = const [];
   List<RecommendationEntry> items = const [];
   bool loading = false, hasMore = false;
   int nextOffset = 0;
+  int _refillTo = 0;
   Object? error;
 }
 
 class DetailRecommendationState extends ChangeNotifier {
-  DetailRecommendationState({required this.loaders, required this.feedback}) {
+  DetailRecommendationState({
+    required this.loaders,
+    required this.feedback,
+    this.watched,
+  }) {
     feedback.addListener(_filterFeedback);
+    watched?.addListener(_filterWatched);
   }
   final Map<RecommendationRow, RecommendationLoader> loaders;
   final RecommendationFeedbackStore feedback;
+  final RecommendationWatchStore? watched;
   final Map<RecommendationRow, RecommendationRowState> _rows = {
     for (final row in RecommendationRow.values) row: RecommendationRowState(),
   };
@@ -264,8 +338,14 @@ class DetailRecommendationState extends ChangeNotifier {
     notifyListeners();
     final offset = state.nextOffset;
     try {
-      final page = await loader(
-        RecommendationRequest(
+      final page = await loadUnwatchedRecommendationPage(
+        loader: loader,
+        watched: watched,
+        visibleTarget: () => state.items.length < state._refillTo
+            ? state._refillTo - state.items.length
+            : null,
+        isCurrent: () => !_disposed && generation == _generation,
+        request: RecommendationRequest(
           current: request.current,
           history: request.history,
           detail: request.detail,
@@ -281,8 +361,8 @@ class DetailRecommendationState extends ChangeNotifier {
       final keys = <String>{};
       final titles = <String>{};
       final blocked = feedback.blockedTitles;
-      state.items = List.unmodifiable(
-        [...state.items, ...page.items].where((entry) {
+      state._candidates = List.unmodifiable(
+        [...state._candidates, ...page.items].where((entry) {
           final title = recommendationTitleKey(entry.item.title);
           return !blocked.contains(title) &&
               keys.add(recommendationRowKey(key, entry)) &&
@@ -291,6 +371,7 @@ class DetailRecommendationState extends ChangeNotifier {
                   titles.add(title));
         }),
       );
+      _projectWatched(state);
       state.nextOffset = page.nextOffset;
       state.hasMore = page.hasMore && page.nextOffset > offset;
     } catch (error) {
@@ -298,6 +379,7 @@ class DetailRecommendationState extends ChangeNotifier {
     } finally {
       if (!_disposed && generation == _generation) {
         state.loading = false;
+        state._refillTo = 0;
         notifyListeners();
       }
     }
@@ -307,14 +389,45 @@ class DetailRecommendationState extends ChangeNotifier {
     if (_disposed) return;
     final blocked = feedback.blockedTitles;
     for (final state in _rows.values) {
-      state.items = List.unmodifiable(
-        state.items.where(
+      state._candidates = List.unmodifiable(
+        state._candidates.where(
           (entry) =>
               !blocked.contains(recommendationTitleKey(entry.item.title)),
         ),
       );
+      _projectWatched(state);
     }
     notifyListeners();
+  }
+
+  void _projectWatched(RecommendationRowState state) {
+    final watched = this.watched;
+    state.items = watched == null || watched.works.isEmpty
+        ? state._candidates
+        : List.unmodifiable(
+            state._candidates.where(
+              (entry) => !watched.contains(RecommendationWork.fromEntry(entry)),
+            ),
+          );
+  }
+
+  void _filterWatched() {
+    if (_disposed) return;
+    final refills = <RecommendationRow>[];
+    for (final row in _rows.entries) {
+      final state = row.value;
+      final before = state.items.length;
+      _projectWatched(state);
+      if (state.items.length >= state._refillTo) state._refillTo = 0;
+      if (state.items.length < before && state.hasMore) {
+        if (before > state._refillTo) state._refillTo = before;
+        if (!state.loading) refills.add(row.key);
+      }
+    }
+    notifyListeners();
+    for (final key in refills) {
+      if (!row(key).loading) unawaited(_load(key, _generation));
+    }
   }
 
   @override
@@ -322,6 +435,7 @@ class DetailRecommendationState extends ChangeNotifier {
     _disposed = true;
     _generation++;
     feedback.removeListener(_filterFeedback);
+    watched?.removeListener(_filterWatched);
     super.dispose();
   }
 }

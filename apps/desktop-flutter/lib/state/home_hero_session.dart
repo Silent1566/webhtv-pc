@@ -21,6 +21,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../core/detail_recommendation.dart';
+import '../core/watched_recommendation.dart';
 import '../core/following.dart';
 import '../core/following_calendar.dart';
 import '../core/home_feed.dart';
@@ -35,6 +36,7 @@ import '../core/tmdb_identity.dart';
 import '../services/home_art_service.dart';
 import '../services/home_hero_startup_cache.dart';
 import '../services/recommendation_feedback_store.dart';
+import '../services/recommendation_watch_store.dart';
 import '../services/search_suggest_service.dart';
 import '../services/storage.dart';
 import '../ui/home_hero_image_probe.dart';
@@ -145,6 +147,9 @@ class HomeHeroSession extends ChangeNotifier {
 
   /// 已到达的推荐：行 → 条目。空表示还没到（或失败后永远不来）。
   final Map<RecommendationRow, List<RecommendationEntry>> _recommendations = {};
+  final _recommendationOffsets = <RecommendationRow, int>{};
+  final _recommendationRefills = <RecommendationRow, int>{};
+  List<RecommendationWork> _observedWatched = const [];
 
   /// 按 TMDB 身份取回的高清图：HomeItem.key → 图。空表示还没到。
   final Map<String, HomeMeta> _art = {};
@@ -212,10 +217,10 @@ class HomeHeroSession extends ChangeNotifier {
     _sessionSaveKey = '';
     // 推荐请求没人等了：撤销这一次，下次挂载按缓存重来。豆颛 750ms 限速定时器
     // 挂在租约上，留着它会活过页面（也与「最后一个租约释放就关掉 provider」同一纪律）。
-    if (_releaseRecommendation != null) {
+    if (_recommendationsStarted) {
       _recommendationGeneration++;
-      _releaseRecommendation!.call();
-      _releaseRecommendation = null;
+      _resetRecommendationPaging();
+      _recommendationFinishedAt = null;
       _recommendationsStarted = false;
     }
   }
@@ -228,6 +233,8 @@ class HomeHeroSession extends ChangeNotifier {
 
   /// 「不感兴趣」直接落到共享的反馈库；首页只是它的一个读者。
   RecommendationFeedbackStore get feedback => _recommendationFeedback;
+  RecommendationWatchStore get watched =>
+      _state.recommendationDependencies.watched;
 
   /// 一次写入只提交一次通知。
   void _commit(void Function() body) {
@@ -243,6 +250,8 @@ class HomeHeroSession extends ChangeNotifier {
     if (!_listeningFeedback) {
       _listeningFeedback = true;
       _recommendationFeedback.addListener(_onFeedbackChanged);
+      _observedWatched = watched.works;
+      watched.addListener(_onWatchedChanged);
     }
     unawaited(_loadRecommendations());
     unawaited(_loadHot());
@@ -252,6 +261,40 @@ class HomeHeroSession extends ChangeNotifier {
   void _onFeedbackChanged() {
     if (_disposed) return;
     notifyListeners();
+  }
+
+  void _onWatchedChanged() {
+    if (_disposed) return;
+    final marks = watched.works;
+    for (final row in _recommendationOffsets.keys) {
+      final candidates = _recommendations[row] ?? const <RecommendationEntry>[];
+      final before = _unwatchedCount(candidates, _observedWatched);
+      final after = _unwatchedCount(candidates, marks);
+      final target = _recommendationRefills[row] ?? 0;
+      if (after < before && before > target) {
+        _recommendationRefills[row] = before;
+      } else if (after >= target) {
+        _recommendationRefills.remove(row);
+      }
+    }
+    _observedWatched = marks;
+    if (_attached && _recommendationRefills.isNotEmpty) {
+      _scheduleBackgroundLoads();
+    }
+    notifyListeners();
+  }
+
+  int _unwatchedCount(List<RecommendationEntry> entries, List<RecommendationWork> marks) =>
+      marks.isEmpty ? entries.length : entries.where((entry) {
+        final work = RecommendationWork.fromEntry(entry);
+        return !marks.any(work.matches);
+      }).length;
+
+  void _resetRecommendationPaging() {
+    _releaseRecommendation?.call();
+    _releaseRecommendation = null;
+    _recommendationOffsets.clear();
+    _recommendationRefills.clear();
   }
 
   /// 详情/播放返回后：已解析的字段可能变了，重算一次（不清空已完成的高清资格）。
@@ -343,61 +386,98 @@ class HomeHeroSession extends ChangeNotifier {
     if (key != _recommendationRequestKey) {
       _recommendationRequestKey = key;
       _recommendationGeneration++;
-      _releaseRecommendation?.call();
-      _releaseRecommendation = null;
+      _resetRecommendationPaging();
       _recommendationsStarted = false;
       _recommendationFinishedAt = null;
       _recommendationRetryAt = null;
     }
     final now = _clock();
+    final refillOnly = _recommendationRefills.isNotEmpty;
     if (_recommendationsStarted ||
-        (_recommendationRetryAt?.isAfter(now) ?? false) ||
-        (_recommendationFinishedAt != null && now.difference(_recommendationFinishedAt!) < _revalidateAfter)) {
+        (!refillOnly &&
+            ((_recommendationRetryAt?.isAfter(now) ?? false) ||
+             (_recommendationFinishedAt != null &&
+              now.difference(_recommendationFinishedAt!) < _revalidateAfter)))) {
       return;
     }
-    _recommendationsStarted = true;
     if (seeds.isEmpty) {
-      _recommendationsStarted = false;
       _recommendationFinishedAt = now;
       return;
     }
+    _recommendationsStarted = true;
+    if (!refillOnly) _recommendationOffsets.clear();
     final generation = ++_recommendationGeneration;
     bool current() => !_disposed && generation == _recommendationGeneration;
-    final request = RecommendationRequest(current: seeds.first, history: seeds.skip(1).toList(),
-      blockedTitles: blocked.toSet());
+    final request = RecommendationRequest(
+      current: seeds.first,
+      history: seeds.skip(1).toList(),
+      blockedTitles: blocked.toSet(),
+    );
     final dependencies = _state.recommendationDependencies;
-    final loaders = dependencies.acquire();
-    var released = false;
-    void release() {
-      if (released) return;
-      released = true;
-      dependencies.release();
-    }
-    _releaseRecommendation = release;
+    // Keep the provider snapshot leased while its row cursors are usable.
+    final loaders = _releaseRecommendation == null
+        ? dependencies.acquire()
+        : dependencies.loaders;
+    _releaseRecommendation ??= dependencies.release;
     var failed = false;
     try {
       for (final row in [RecommendationRow.tmdb, RecommendationRow.douban]) {
         if (!current()) return;
         final loader = loaders[row];
-        if (loader == null) continue;
+        final offset = refillOnly ? _recommendationOffsets[row] : 0;
+        if (loader == null || offset == null ||
+            (refillOnly && !_recommendationRefills.containsKey(row))) {
+          continue;
+        }
+        final previous = refillOnly
+            ? _recommendations[row] ?? const <RecommendationEntry>[]
+            : const <RecommendationEntry>[];
         try {
-          final result = await loader(request);
+          final result = await loadUnwatchedRecommendationPage(
+            loader: loader,
+            request: request.atOffset(offset),
+            watched: watched,
+            isCurrent: current,
+            visibleTarget: refillOnly ? () {
+              final target = _recommendationRefills[row] ?? 0;
+              final stillVisible = _unwatchedCount(previous, watched.works);
+              return target > stillVisible ? target - stillVisible : 0;
+            } : null,
+          );
           if (!current()) return;
+          if (result.hasMore) {
+            _recommendationOffsets[row] = result.nextOffset;
+          } else {
+            _recommendationOffsets.remove(row);
+          }
           if (result.items.isNotEmpty) {
-            _commit(() => _recommendations[row] = result.items);
+            final keys = previous.map((entry) => recommendationRowKey(row, entry)).toSet();
+            _commit(() => _recommendations[row] = [
+              ...previous,
+              for (final entry in result.items)
+                if (keys.add(recommendationRowKey(row, entry))) entry,
+            ]);
             _ensureRecommendationMeta();
           }
         } catch (_) {
           failed = true;
+        } finally {
+          if (refillOnly && current()) _recommendationRefills.remove(row);
         }
       }
     } finally {
-      release();
       if (current()) {
-        _releaseRecommendation = null;
         _recommendationsStarted = false;
-        _recommendationFinishedAt = failed ? null : _clock();
-        _recommendationRetryAt = failed ? _clock().add(_retryAfterFailure) : null;
+        if (_recommendationOffsets.isEmpty) _resetRecommendationPaging();
+        _recommendationRefills.removeWhere((row, _) => !_recommendationOffsets.containsKey(row));
+        if (!refillOnly) {
+          _recommendationFinishedAt = failed ? null : _clock();
+          _recommendationRetryAt = failed ? _clock().add(_retryAfterFailure) : null;
+        }
+        if (_attached && _recommendationRefills.isNotEmpty) {
+          _scheduleBackgroundLoads();
+          notifyListeners();
+        }
       }
     }
   }
@@ -1336,8 +1416,7 @@ class HomeHeroSession extends ChangeNotifier {
     if (_contextKey == key) return;
     _contextKey = key;
     _recommendationGeneration++;
-    _releaseRecommendation?.call();
-    _releaseRecommendation = null;
+    _resetRecommendationPaging();
     _recommendationsStarted = false;
     _recommendationRequestKey = '';
     _recommendationFinishedAt = null;
@@ -1393,7 +1472,9 @@ class HomeHeroSession extends ChangeNotifier {
     final blocked = _recommendationFeedback.blockedTitles;
     List<RecommendationEntry> recommended(RecommendationRow row) => [
       for (final entry in _recommendations[row] ?? const <RecommendationEntry>[])
-        if (!blocked.contains(recommendationTitleKey(entry.item.title))) entry,
+        if (!blocked.contains(recommendationTitleKey(entry.item.title)) &&
+            !watched.contains(RecommendationWork.fromEntry(entry)))
+          entry,
     ];
     final feed = _recommendations.isEmpty
         ? local
@@ -1499,13 +1580,13 @@ class HomeHeroSession extends ChangeNotifier {
     if (_listeningFeedback) {
       _listeningFeedback = false;
       _recommendationFeedback.removeListener(_onFeedbackChanged);
+      watched.removeListener(_onWatchedChanged);
     }
     // 会话结束时在途扫描不再有人收尾：把标志归位，避免下一次进入永远不启动。
     _heroScanGeneration++;
     _heroScanRunning = false;
     _recommendationGeneration++;
-    _releaseRecommendation?.call();
-    _releaseRecommendation = null;
+    _resetRecommendationPaging();
     _air?.removeListener(_onAirChanged);
     _air?.dispose();
     _air = null;

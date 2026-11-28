@@ -20,7 +20,7 @@ import '../tokens.dart';
 /// - 同一个 [SectionHeader]（上 24 留白）、130 宽海报卡、同样的两行文字；
 /// - 点击交给调用方的 [onOpenItem] / [onSearchTitle]——和其它推荐行走同一个
 ///   「有 TMDB 身份就开详情，没有就按标题搜站源」的去向；
-/// - 长按 / 右键打开同样的「关闭 / 不感兴趣」弹窗，选择后从本行移除。
+/// - 长按 / 右键复用推荐弹窗，支持「标记已看」和「不感兴趣」。
 ///
 /// 数据链路保持原先的缓存策略（对齐安卓 AiRecommendationService.load）：
 /// 1. 进页面先只读缓存（不联网、不花 token），有内容立即上屏；
@@ -122,7 +122,15 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
     setState(() {
       _loading = false;
       if (result.ok) {
-        _cards = result.value ?? const [];
+        final fresh = result.value ?? const <RecommendationCard>[];
+        final watched = widget.state.recommendationDependencies.watched;
+        // Keep locally hidden cards available to Undo while fresh results arrive.
+        _cards = [
+          ...fresh,
+          for (final card in _cards)
+            if (watched.contains(card.work) &&
+                !fresh.any((item) => card.work.matches(item.work))) card,
+        ];
       } else if (!result.cancelled) {
         // 失败不清空：保留缓存内容，只提示失败原因。
         _message = result.message;
@@ -201,6 +209,8 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
       ),
       // 与卡片单击完全一致的去向。
       onOpen: () => _open(card),
+      watched: widget.state.recommendationDependencies.watched,
+      work: card.work,
       onNotInterested: () => _notInterested(card),
     );
   }
@@ -244,8 +254,19 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
   Widget build(BuildContext context) {
     // 未配置 AI：整块不渲染，也不发任何请求。
     if (!widget.state.aiReady) return const SizedBox.shrink();
+    final watched = widget.state.recommendationDependencies.watched;
+    return ListenableBuilder(
+      listenable: watched,
+      builder: (context, _) => _buildCards(context, [
+        for (final card in _cards)
+          if (!watched.contains(card.work)) card,
+      ]),
+    );
+  }
+
+  Widget _buildCards(BuildContext context, List<RecommendationCard> cards) {
     // 与其它推荐行一致：没有内容就不占位（生成中只留一行提示）。
-    if (_cards.isEmpty && !_loading && _message.isEmpty) {
+    if (cards.isEmpty && !_loading && _message.isEmpty) {
       return const SizedBox.shrink();
     }
     final theme = Theme.of(context);
@@ -257,13 +278,13 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
           title: widget.title,
           keyValue: 'recommendation-heading-ai',
         ),
-        if (_cards.isEmpty && _loading)
+        if (cards.isEmpty && _loading)
           Text(
             '正在生成推荐…',
             key: const ValueKey('recommendation-ai-loading'),
             style: theme.textTheme.labelSmall,
           ),
-        if (_cards.isNotEmpty)
+        if (cards.isNotEmpty)
           SizedBox(
             height: detailRecommendationRowHeight(context),
             child: HorizontalMouseDrag(
@@ -271,10 +292,10 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
                 key: const ValueKey('recommendation-row-ai'),
                 scrollDirection: Axis.horizontal,
                 physics: const AlwaysScrollableScrollPhysics(),
-                itemCount: _cards.length,
+                itemCount: cards.length,
                 separatorBuilder: (_, _) => const SizedBox(width: 10),
                 itemBuilder: (context, index) {
-                  final card = _cards[index];
+                  final card = cards[index];
                   return SizedBox(
                     width: 130,
                     child: GestureDetector(

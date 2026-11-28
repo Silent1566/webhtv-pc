@@ -17,6 +17,7 @@ import '../../core/ai_config.dart';
 import '../../core/ai_content/ai_content_contracts.dart';
 import '../../core/ai_content/recommendation.dart';
 import '../../core/ai_content/recommendation_feedback.dart';
+import '../recommendation_watch_store.dart';
 import '../../core/ai_content/title_resolution.dart' show TitleQuery;
 import '../log_service.dart';
 import 'ai_content_completion.dart';
@@ -34,11 +35,13 @@ class RecommendationService {
     AiContentUserDataStore? userData,
     AiContentCompletion? completion,
     RecommendationEnricher? enricher,
+    RecommendationWatchStore? watched,
     LogService? log,
     DateTime Function()? clock,
   }) : _config = config,
        _completion = completion ?? AiContentCompletion(log: log),
        _enricher = enricher,
+       _watched = watched,
        _log = log,
        _clock = clock ?? DateTime.now,
        _userData =
@@ -47,6 +50,7 @@ class RecommendationService {
   final AiConfig Function() _config;
   final AiContentCompletion _completion;
   final RecommendationEnricher? _enricher;
+  final RecommendationWatchStore? _watched;
   final LogService? _log;
   final DateTime Function() _clock;
   final AiContentUserDataStore _userData;
@@ -65,16 +69,33 @@ class RecommendationService {
     ].join('|');
   }
 
-  /// 给请求补上输入指纹（已有时不覆盖），供缓存键与"是否需要刷新"判定使用。
-  RecommendationRequest sealRequest(RecommendationRequest request) =>
-      request.inputFingerprint.isNotEmpty
-      ? request
-      : request.copyWith(
-          inputFingerprint: RecommendationCachePolicy.inputFingerprintOf(
-            providerSignature: _providerSignature(),
-            request: request,
-          ),
-        );
+  /// Snapshot the current marks before building the prompt and cache key.
+  RecommendationRequest sealRequest(RecommendationRequest request) {
+    final marks = _watched?.works;
+    final input =
+        marks != null && (marks.isNotEmpty || request.watched.isNotEmpty)
+        ? request.copyWith(watched: marks, inputFingerprint: '')
+        : request;
+    if (input.inputFingerprint.isNotEmpty) return input;
+    return input.copyWith(
+      inputFingerprint: RecommendationCachePolicy.inputFingerprintOf(
+        providerSignature: _providerSignature(),
+        request: input,
+      ),
+    );
+  }
+
+  List<RecommendationCard> _filterWatched(
+    List<RecommendationCard> cards,
+    RecommendationRequest request,
+  ) {
+    final marks = _watched?.works ?? request.watched;
+    if (marks.isEmpty) return cards;
+    return [
+      for (final card in cards)
+        if (!marks.any(card.work.matches)) card,
+    ];
+  }
 
   /// 缓存优先读取：**只读磁盘、不联网、不消耗 token**。
   ///
@@ -89,7 +110,7 @@ class RecommendationService {
     final own = await _readCacheFile(key);
     if (own != null && own.cards.isNotEmpty) {
       return RecommendationCacheLookup(
-        cards: own.cards,
+        cards: _filterWatched(own.cards, sealed),
         exact: true,
         fresh: own.fresh,
       );
@@ -97,7 +118,7 @@ class RecommendationService {
     final newest = await _readNewestCacheFile();
     if (newest != null && newest.cards.isNotEmpty) {
       return RecommendationCacheLookup(
-        cards: newest.cards,
+        cards: _filterWatched(newest.cards, sealed),
         exact: false,
         fresh: newest.fresh,
       );
@@ -133,13 +154,15 @@ class RecommendationService {
           );
           await _writeCache(key, filtered);
         }
-        return AiContentOutcome<List<RecommendationCard>>.value(filtered);
+        return AiContentOutcome<List<RecommendationCard>>.value(
+          _filterWatched(filtered, sealed),
+        );
       }
     }
 
     final prompt = buildRecommendationPrompt(
       config: _config(),
-      request: request,
+      request: sealed,
     );
     final result = await _completion.run(
       config: _config(),
@@ -177,7 +200,9 @@ class RecommendationService {
       );
     }
     await _writeCache(key, filtered);
-    return AiContentOutcome<List<RecommendationCard>>.value(filtered);
+    return AiContentOutcome<List<RecommendationCard>>.value(
+      _filterWatched(filtered, sealed),
+    );
   }
 
   /// 标记「不感兴趣」：立即落盘为用户数据，并返回新的反馈集合。
@@ -189,8 +214,7 @@ class RecommendationService {
       return const AiContentOutcome<RecommendationFeedbackCollection>.cancelled();
     }
     final now = _clock();
-    final current = await _userData.loadFeedback();
-    final next = current.add(
+    final saved = await _userData.updateFeedback((current) => current.add(
       RecommendationFeedbackEntry(
         title: card.title,
         year: card.year,
@@ -198,15 +222,14 @@ class RecommendationService {
         createdAtMs: now.millisecondsSinceEpoch,
       ),
       now: now,
-    );
-    final saved = await _userData.saveFeedback(next);
-    if (!saved) {
+    ));
+    if (saved == null) {
       return const AiContentOutcome<RecommendationFeedbackCollection>.failed(
         message: '负反馈保存失败（磁盘不可写）',
       );
     }
-    _log?.info('负反馈已记录：${card.title} 共 ${next.length} 条', scope: 'ai');
-    return AiContentOutcome<RecommendationFeedbackCollection>.value(next);
+    _log?.info('负反馈已记录：${card.title} 共 ${saved.length} 条', scope: 'ai');
+    return AiContentOutcome<RecommendationFeedbackCollection>.value(saved);
   }
 
   Future<RecommendationFeedbackCollection> loadFeedback({DateTime? now}) async {

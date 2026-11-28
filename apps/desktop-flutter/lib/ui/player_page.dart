@@ -81,6 +81,7 @@ import 'danmaku_settings_page.dart';
 import 'danmaku_settings_sheet.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
+import 'player_menu_popup.dart';
 import 'external_player_picker_dialog.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
@@ -835,6 +836,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 右键菜单的锚点；null 表示菜单关闭。
   Offset? _contextMenuAnchor;
+  PlayerMenuPopup? _contextMenuPopup;
+  bool _contextMenuFromKeyboard = false;
 
   /// 屏显的时钟基准；由 [_osdTimer] 每秒推进。
   ///
@@ -1152,10 +1155,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     unawaited(session.browse(session.source));
     session.selectGroup(session.channel.group);
+    _contextMenuPopup?.close();
     setState(() {
       _livePanelOpen = true;
       _linePanelChannel = null;
       _contextMenuAnchor = null;
+      _contextMenuPopup = null;
     });
     _touchControls();
   }
@@ -4085,6 +4090,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   @override
   void dispose() {
+    _contextMenuPopup?.close();
     _invalidatePreparedEpisodeFrame();
     _clearEpisodeSwitchFrame();
     _resetEpisodePreloads();
@@ -5317,6 +5323,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           : _dismissSeekRecovery;
     }
 
+    final menuSections = _contextMenuAnchor == null
+        ? null
+        : _contextMenuSections();
+    if (menuSections != null) _contextMenuPopup?.update(menuSections);
+
     return PopScope<Object?>(
       canPop: !_fullscreen || !_enteredFullscreen,
       onPopInvokedWithResult: _onPopInvokedWithResult,
@@ -5362,11 +5373,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         onLongPressStart: (_) => _beginGestureSpeed(),
                         onLongPressEnd: (_) => _endGestureSpeed(),
                         onLongPressCancel: _endGestureSpeed,
-                        // 右键：打开菜单（`design/04` §5.1）。
-                        // 两个回调都指向同一方法，方法内部幂等。
-                        onSecondaryTapDown: (details) =>
+                        // Finish the mouse gesture before a native popup takes focus.
+                        onSecondaryTapUp: (details) =>
                             _openContextMenu(details.globalPosition),
-                        onSecondaryTap: () {},
                         child: Stack(
                           children: [
                             Positioned.fill(
@@ -5692,12 +5701,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         onTap: _closeContextMenu,
                       ),
                     ),
-                    PlayerContextMenu(
-                      anchor: _contextMenuAnchor!,
-                      viewport: MediaQuery.sizeOf(context),
-                      sections: _contextMenuSections(),
-                      onDismiss: _closeContextMenu,
-                    ),
+                    if (_contextMenuPopup == null)
+                      PlayerContextMenu(
+                        anchor: _contextMenuAnchor!,
+                        viewport: MediaQuery.sizeOf(context),
+                        sections: menuSections!,
+                        onDismiss: _closeContextMenu,
+                        reserveFlyoutSpace: !_contextMenuFromKeyboard,
+                      ),
                   ],
                 ],
               ),
@@ -7017,16 +7028,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  /// 打开右键菜单（`design/04` §5.1）。
-  ///
-  /// 幂等：已打开时只移动位置（部分平台只发 `onSecondaryTap` 不发 `onSecondaryTapDown`）。
-  void _openContextMenu(Offset globalPosition) {
+  void _openContextMenu(Offset globalPosition, {bool fromKeyboard = false}) {
     _controlHideTimer?.cancel();
+    _contextMenuPopup?.close();
+    final popup = PlayerMenuPopup.enabled && !_fullscreen
+        ? PlayerMenuPopup(onDismiss: _closeContextMenu)
+        : null;
     setState(() {
       _contextMenuAnchor = globalPosition;
+      _contextMenuFromKeyboard = fromKeyboard;
+      _contextMenuPopup = popup;
       _controlsVisible = true;
     });
     _syncOsdTimer();
+    if (popup != null) unawaited(_showContextMenuPopup(popup, globalPosition));
+  }
+
+  Future<void> _showContextMenuPopup(
+    PlayerMenuPopup popup,
+    Offset anchor,
+  ) async {
+    if (await popup.show(
+      anchor,
+      _contextMenuSections(),
+      reserveFlyoutSpace: !_contextMenuFromKeyboard,
+      pixelRatio: View.of(context).devicePixelRatio,
+    )) {
+      return;
+    }
+    if (!mounted || _contextMenuPopup != popup) return;
+    setState(() => _contextMenuPopup = null);
   }
 
   /// 键盘打开右键菜单的三个激活器：菜单键、Shift+F10（Windows 惯例）、
@@ -7037,29 +7068,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     SingleActivator(LogicalKeyboardKey.f10),
   ];
 
-  /// 在画面中央打开右键菜单（菜单键 / Shift+F10 / F10）。
-  ///
-  /// 复用 [_openContextMenu] 而不是另写一套打开逻辑：它已经幂等（菜单开着时
-  /// 只移动位置），也带着「强制显示控制栏 + 取消隐藏计时器」那套行为，
-  /// 分叉出去这两点就会各自漂移。
-  ///
-  /// 为什么减掉半个菜单尺寸：[_openContextMenu] 的入参是菜单**左上角**
-  /// （`player_context_menu.dart:178-181`），直接传画面中心会让菜单整体落到
-  /// 右下象限、看起来像跑偏了。菜单宽高是 `player_context_menu.dart` 的私有
-  /// 常量（`_menuWidth = 240`、`_estimatedMenuHeight = 420`），外部取不到，
-  /// 这里镜像一份**只用于视觉居中**；镜像值漂移最多让菜单偏几十像素，
-  /// 不改变任何行为。坐标空间沿用既有约定（见 `player_context_menu.dart:17-21`：
-  /// Windows 全屏播放器里 globalPosition 与父 Stack 坐标一致）。
+  /// 在画面中央附近打开右键菜单（菜单键 / Shift+F10 / F10）。
   void _openContextMenuAtCenter() {
     const halfMenu = Offset(120, 210);
     final center = MediaQuery.sizeOf(context).center(Offset.zero);
-    _openContextMenu(center - halfMenu);
+    _openContextMenu(center - halfMenu, fromKeyboard: true);
   }
 
   /// 关闭右键菜单并恢复自动隐藏计时（`design/04` §5.4）。
   void _closeContextMenu() {
     if (_contextMenuAnchor == null) return;
-    setState(() => _contextMenuAnchor = null);
+    _contextMenuPopup?.close();
+    setState(() {
+      _contextMenuAnchor = null;
+      _contextMenuPopup = null;
+    });
     _touchControls();
   }
 
