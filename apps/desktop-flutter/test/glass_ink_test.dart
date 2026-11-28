@@ -348,7 +348,33 @@ Color? _textColor(WidgetTester tester, Finder finder) {
   return rich.text.style?.color;
 }
 
+Future<void> _writeProbeReport(
+  Directory directory,
+  List<Map<String, Object?>> probes,
+) async {
+  await directory.create(recursive: true);
+  final file = File(p.join(directory.path, 'probes.json'));
+  await file.writeAsString(const JsonEncoder.withIndent('  ').convert(probes));
+}
+
 void main() {
+  test('probe report creates its missing output directory', () async {
+    final root = await Directory.systemTemp.createTemp('glass-ink-report-');
+    final directory = Directory(p.join(root.path, 'missing', 'ink-1'));
+    final probes = <Map<String, Object?>>[{'scene': 'owned-fixture', 'ratio': 4.5}];
+    try {
+      expect(await directory.exists(), isFalse);
+      await _writeProbeReport(directory, probes);
+      final report = File(p.join(directory.path, 'probes.json'));
+      expect(jsonDecode(await report.readAsString()), probes);
+      probes.add({'scene': 'second-scene'});
+      await _writeProbeReport(directory, probes);
+      expect(jsonDecode(await report.readAsString()), probes);
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
+
   setUpAll(() async {
     expectFontsAvailableOrSkip();
     await loadFixtureFonts();
@@ -1143,10 +1169,5 @@ void main() {
     expect(shipped['header_glass_ink_ratio'], greaterThanOrEqualTo(4.5));
     expect(shipped['header_body_ink_ratio'], greaterThanOrEqualTo(4.5));
   });
-  tearDownAll(() async {
-    final file = File(p.join(_sddDir().path, 'probes.json'));
-    await file.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(_probes),
-    );
-  });
+  tearDownAll(() => _writeProbeReport(_sddDir(), _probes));
 }

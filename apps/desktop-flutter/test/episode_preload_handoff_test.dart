@@ -194,8 +194,10 @@ void main() {
       httpClient: siteClient,
       paths: AppPaths.resolve(
         overrides: {
-          for (final kind in ['config', 'data', 'cache', 'state'])
-            kind: '${directory.path}/$kind',
+          'config': '${directory.path}/config',
+          'data': '${directory.path}/data',
+          'cache': '${directory.path}/cache',
+          'state': '${directory.path}/state',
         },
       ),
     );
