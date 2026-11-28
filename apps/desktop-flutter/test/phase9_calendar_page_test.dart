@@ -438,9 +438,14 @@ void main() {
       await tester.pumpAndSettle();
       final position = listPosition(tester);
       final offset = position.pixels;
-      await tester.tap(find.byKey(const ValueKey('calendar-day-2026-11-28')));
+      expect(offset, greaterThan(0));
+      // 夹具仅 1–24 日有更新；避开「今天」的自动定位，即使测试跨午夜。
+      final emptyDay = DateTime.now().isBefore(DateTime(2026, 11, 28))
+          ? DateTime(2026, 11, 30)
+          : DateTime(2026, 11, 25);
+      await tester.tap(find.byKey(ValueKey(_dayKey(emptyDay))));
       await tester.pumpAndSettle();
-      expect(find.text('11月28日 没有更新'), findsOneWidget);
+      expect(find.text('11月${emptyDay.day}日 没有更新'), findsOneWidget);
       expect(find.byKey(const ValueKey('calendar-list')), findsOneWidget);
       expect(listPosition(tester), same(position));
       expect(position.pixels, offset);
@@ -452,11 +457,7 @@ void main() {
       final list = tester.getRect(find.byKey(const ValueKey('calendar-list')));
       expect(hint.bottom, lessThanOrEqualTo(list.top));
       expect(tester.takeException(), isNull);
-    },
-    // 既有失败：origin/beta（1487e56）同样失败，与本 PR 无关。日历页选中日期后
-    // 会 Scrollable.ensureVisible 跳到该日，与「保留滚动位置」这条断言冲突；
-    // 产品滚动行为需单独与被测行为对齐后再启回，不阻塞本 PR。
-    skip: true);
+    });
 
     testWidgets('月历完整区域不超过视口40%且五周月份更矮', (tester) async {
       await pumpDenseCalendar(tester);
