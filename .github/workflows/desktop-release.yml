@@ -253,7 +253,8 @@ jobs:
       - name: Unit tests
         working-directory: apps/desktop-flutter
         shell: pwsh
-        timeout-minutes: 30
+        # Windows 全量用例在旧 30 分钟上限到期时仍在执行（run 46097490166）。
+        timeout-minutes: 45
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
