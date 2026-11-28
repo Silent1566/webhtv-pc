@@ -6,7 +6,7 @@
 /// 三条硬规则：
 /// 1. **暂停/缓冲/引擎定位中既不算到位也不算失败**——这三种状态下位置本来就不
 ///    推进，或者引擎报了目标值却没解码出画面；拿它们当证据会得出反向结论。
-/// 2. **只有真的播起来并停在目标附近才算成功**。
+/// 2. **必须观察到目标附近的引擎位置和真实播放推进**；同集重开的推进可晚于落点。
 /// 3. **旧媒体代际的跳转一律作废**：上一部片的未落地跳转不得污染这一部。
 library;
 
@@ -66,6 +66,7 @@ SeekRecoveryVerdict evaluateSeekRecovery({
   required int generation,
   required Duration enginePosition,
   Duration? previousEnginePosition,
+  Duration? reopenLandingPosition,
   required bool enginePositionSeen,
   required bool playing,
   required bool buffering,
@@ -87,6 +88,16 @@ SeekRecoveryVerdict evaluateSeekRecovery({
   final behind = recovery.target - enginePosition;
   final ahead = enginePosition - recovery.target;
   final delta = behind.isNegative ? ahead : behind;
+  // 同集重开的首个可用播放采样可能已超过容差。已知落点后，仍需两次
+  // 非暂停/缓冲/定位期的采样证明越过目标后的继续推进。
+  if (reopenLandingPosition != null &&
+      reopenLandingPosition > Duration.zero &&
+      (reopenLandingPosition - recovery.target).abs() <= seekSettleTolerance &&
+      previousEnginePosition != null &&
+      previousEnginePosition - recovery.target > seekSettleTolerance &&
+      enginePosition > previousEnginePosition) {
+    return SeekRecoveryVerdict.settled;
+  }
   if (delta <= seekSettleTolerance) {
     // 单次上报目标值可能是 seek 前最后一帧的回声，必须看到继续推进才算到位。
     if (previousEnginePosition != null &&

@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:webhtv_pc/core/ipc_protocol.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/http_api.dart';
+import 'package:webhtv_pc/core/request_cancellation.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/site_service.dart';
 import 'package:webhtv_pc/services/spider_router.dart';
@@ -123,6 +124,54 @@ void main() {
       log: log,
     );
   }
+
+  test('speculative JVM play keeps foreground proxy alive and scopes its own assets', () async {
+    final rt = runtime(mode: 'preloadPublic');
+    final active = (await rt.prepareProxySession(Object()))!;
+    final current = await rt.withProxySession(
+      active,
+      () => rt.play(rt.site, episodeTarget: 'one'),
+    );
+    final router = _RuntimeRouter(rt);
+    addTearDown(router.dispose);
+    final service = SiteService(
+      appConfig: AppConfig(sites: [rt.site]),
+      router: router,
+    );
+    final worker = service.createJvmPlaybackPreload(rt.site)!;
+    addTearDown(worker.close);
+    final next = await service.resolvePlaybackForPreload(
+      site: rt.site,
+      episodeTarget: 'two',
+      flag: 'line',
+      vodId: 'series',
+      cancellation: RequestCancellation(),
+      isCurrent: () => true,
+      jvm: worker,
+    );
+    expect(next?.url, 'https://cdn.example.invalid/two.m3u8');
+    final pending = worker.owner!;
+    expect(pending.host, isNot(same(active.host)));
+    final currentAsset = current.danmaku.single.url;
+    final pendingAsset = next!.danmaku.single.url;
+    expect(active.ownsUrl(currentAsset), isTrue);
+    expect(pending.ownsUrl(pendingAsset), isTrue);
+    expect(active.ownsUrl(pendingAsset), isFalse);
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<int> fetch(String url) async {
+      final response = await (await client.getUrl(Uri.parse(url))).close();
+      await response.drain<void>();
+      return response.statusCode;
+    }
+
+    expect(await fetch(currentAsset), 200);
+    expect(await fetch(pendingAsset), 200);
+    await worker.close();
+    expect(pending.active, isFalse);
+    expect(pending.host.process.isRunning, isFalse);
+    expect(await fetch(currentAsset), 200);
+  });
 
   test('genuine frames open before same generation play; close revokes HTTP and lease', () async {
     final rt = runtime();
@@ -595,7 +644,7 @@ const server=http.createServer((req,res)=>{res.statusCode=session&&req.url.start
 function send(id,result,error){const body=Buffer.from(JSON.stringify({jsonrpc:'2.0',id,...(error?{error:typeof error==='object'?error:{code:'SPIDER_INTERNAL',message:'fixture failure'}}:{result})}));const h=Buffer.from('Content-Length: '+body.length+'\r\n\r\n');process.stdout.write(Buffer.concat([h,body]));}
 async function handle(m){const p=m.params||{};if(m.method==='initialize'){mode=p.extend;await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;send(m.id,{abi:'webhtv-ipc-v1',capabilities:['home','category','detail','search','play','proxy'],...(mode==='legacy'?{}:{extensions:{proxyHttp:{version:1,sessionControl:true,baseUrl:base}}})});}
 else if(m.method==='proxy'){ops.push(p.op);if(p.op==='session.open'){session=p;if(mode==='openReject'){send(m.id,null,{code:'SPIDER_BAD_REQUEST',category:'protocol',message:'open denied token='+p.token+'?raw=secret',diagnosticId:'diag-open-rejected'});return;}let entry='http://127.0.0.1:'+server.address().port+'/s/'+p.token+'/proxy';if(mode==='badToken')entry=entry.replace(p.token,'wrong');if(mode==='badPort')entry=entry.replace(':'+server.address().port,':1');if(mode==='badPath')entry+='/other';send(m.id,{sessionId:p.sessionId,entryUrl:entry,expiresInMs:120000});}else if(p.op==='session.close'){if(session?.sessionId===p.sessionId)session=null;send(m.id,{sessionId:p.sessionId,closed:true});}else if(mode==='renewFail')send(m.id,null,true);else send(m.id,{sessionId:p.sessionId,expiresInMs:120000});}
-else if(m.method==='play'){ops.push('play');if(mode==='playFail'){send(m.id,null,true);return;}if(mode==='playEcho'){send(m.id,null,{code:'SPIDER_PARSE_ERROR',category:'site',message:'source failed http://127.0.0.1:'+server.address().port+'/s/'+session.token+'/proxy?opaque=secret',diagnosticId:'diag-play-echo'});return;}send(m.id,{url:session?'http://127.0.0.1:'+server.address().port+'/s/'+session.token+'/proxy?action=media':'https://example.invalid/legacy.mp4',parse:0});}
+else if(m.method==='play'){ops.push('play');if(mode==='playFail'){send(m.id,null,true);return;}if(mode==='playEcho'){send(m.id,null,{code:'SPIDER_PARSE_ERROR',category:'site',message:'source failed http://127.0.0.1:'+server.address().port+'/s/'+session.token+'/proxy?opaque=secret',diagnosticId:'diag-play-echo'});return;}if(mode==='preloadPublic'){send(m.id,{url:'https://cdn.example.invalid/'+p.id+'.m3u8',danmaku:[{name:'fixture',url:'http://127.0.0.1:9978/proxy?do=assets'}],parse:0});return;}send(m.id,{url:session?'http://127.0.0.1:'+server.address().port+'/s/'+session.token+'/proxy?action=media':'https://example.invalid/legacy.mp4',parse:0});}
 else if(m.method==='home')send(m.id,{ops});else if(m.method==='destroy'){session=null;send(m.id,{});server.close();process.stdin.destroy();}else send(m.id,{});}
 process.stdin.on('data',b=>{buf=Buffer.concat([buf,b]);while(true){const end=buf.indexOf('\r\n\r\n');if(end<0)break;const n=Number(/Content-Length: (\d+)/i.exec(buf.subarray(0,end).toString())[1]);if(buf.length<end+4+n)break;const m=JSON.parse(buf.subarray(end+4,end+4+n));buf=buf.subarray(end+4+n);handle(m).catch(()=>send(m.id,null,true));}});
 process.stdin.on('end',()=>{server.close();process.exit(0);});

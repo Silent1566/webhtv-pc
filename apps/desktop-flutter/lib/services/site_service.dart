@@ -21,6 +21,7 @@ import '../core/source_swap.dart';
 import 'android_playback_bridge.dart';
 import 'cancellable_probe_runtime.dart';
 import 'parse_service.dart';
+import 'sidecar_runtime.dart';
 import 'spider_router.dart';
 import 'storage.dart';
 
@@ -533,7 +534,67 @@ class SiteService {
     ParseFailoverSettings? parseFailover,
     String? preferredParseName,
     bool Function()? isCurrent,
+  }) => _resolvePlayback(
+    site: site,
+    episodeTarget: episodeTarget,
+    flag: flag,
+    vodId: vodId,
+    qualityIndex: qualityIndex,
+    parseService: parseService,
+    parseFailover: parseFailover,
+    preferredParseName: preferredParseName,
+    isCurrent: isCurrent,
+  );
+
+  JvmPlaybackPreload? createJvmPlaybackPreload(Site site) {
+    final runtime = router.runtimeFor(site);
+    return runtime is SidecarRuntime ? runtime.createPlaybackPreload() : null;
+  }
+
+  Future<PlaybackDecision?> resolvePlaybackForPreload({
+    required Site site,
+    required String episodeTarget,
+    required String flag,
+    required String vodId,
+    required bool Function() isCurrent,
+    required RequestCancellation cancellation,
+    JvmPlaybackPreload? jvm,
   }) async {
+    final runtime = router.runtimeFor(site);
+    if (!(jvm?.belongsTo(runtime) ?? runtime is HttpApiRuntime) ||
+        _folderRequestTails.containsKey(site.key) ||
+        !isCurrent()) {
+      return null;
+    }
+    try {
+      return (await _resolvePlayback(
+        site: site,
+        episodeTarget: episodeTarget,
+        flag: flag,
+        vodId: vodId,
+        isCurrent: isCurrent,
+        preloadCancellation: cancellation,
+        jvmPreload: jvm,
+      )).value;
+    } on AppError {
+      return null;
+    }
+  }
+
+  Future<SiteCallResult<PlaybackDecision>> _resolvePlayback({
+    required Site site,
+    required String episodeTarget,
+    String? flag,
+    String? vodId,
+    int? qualityIndex,
+    ParseService? parseService,
+    ParseFailoverSettings? parseFailover,
+    String? preferredParseName,
+    bool Function()? isCurrent,
+    RequestCancellation? preloadCancellation,
+    JvmPlaybackPreload? jvmPreload,
+  }) async {
+    final preloadOnly = preloadCancellation != null;
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
 
@@ -586,6 +647,7 @@ class SiteService {
     if (!mustCallPlay && preliminary != null) {
       // §12：parse=1/jx=1 的目标 → 执行解析器；否则直接播放。
       if (preliminary.action == PlaybackAction.needParser) {
+        if (preloadOnly) throw AppError(AppErrorKind.siteCancelled, '预载不执行解析器');
         final resolved = await _runParser(
           site: site,
           target: preliminary.url ?? episodeTarget,
@@ -600,7 +662,9 @@ class SiteService {
         );
         return SiteCallResult(value: resolved, latency: stopwatch.elapsed);
       }
-      _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
+      if (!preloadOnly) {
+        _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
+      }
       return SiteCallResult(value: preliminary, latency: stopwatch.elapsed);
     }
 
@@ -609,6 +673,22 @@ class SiteService {
       Future<SiteResult> requestPlay() {
         if (isCurrent != null && !isCurrent()) {
           throw AppError(AppErrorKind.siteCancelled, '播放请求已取消');
+        }
+        if (jvmPreload != null) {
+          return jvmPreload.play(
+            episodeTarget: episodeTarget,
+            flag: flag ?? '',
+            cancellation: preloadCancellation!,
+            isCurrent: isCurrent!,
+          );
+        }
+        if (preloadCancellation != null && runtime is HttpApiRuntime) {
+          return runtime.playCancellable(
+            site,
+            episodeTarget: episodeTarget,
+            flag: flag,
+            cancellation: preloadCancellation,
+          );
         }
         return runtime.play(
           site,
@@ -669,6 +749,7 @@ class SiteService {
       if (failure != null) throw failure;
       var decision = resolved.decision;
       if (decision.action == PlaybackAction.needParser) {
+        if (preloadOnly) throw AppError(AppErrorKind.siteCancelled, '预载不执行解析器');
         final parseTarget = decision.url ?? episodeTarget;
         decision = await _runParser(
           site: site,
@@ -688,16 +769,18 @@ class SiteService {
           preferredParseName: preferredParseName,
         );
       }
-      if (playbackBridge != null) {
-        decision = await playbackBridge!.resolveDecision(site, decision);
+      if (!preloadOnly) {
+        if (playbackBridge != null) {
+          decision = await playbackBridge!.resolveDecision(site, decision);
+        }
+        _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
       }
-      _record(site.key, HealthAction.play, true, stopwatch.elapsed, null);
       return SiteCallResult(value: decision, latency: stopwatch.elapsed);
     } catch (error) {
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
-      if (failure.kind != AppErrorKind.siteCancelled) {
+      if (!preloadOnly && failure.kind != AppErrorKind.siteCancelled) {
         _record(
           site.key,
           HealthAction.play,
