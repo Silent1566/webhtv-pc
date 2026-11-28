@@ -95,8 +95,23 @@ class AiContentUserDataStore {
     return RecommendationFeedbackCollection.fromJson(raw);
   }
 
+  Future<void> _feedbackWrites = Future<void>.value();
+
+  Future<T> _queueFeedbackWrite<T>(Future<T> Function() write) {
+    final result = _feedbackWrites.then((_) => write());
+    _feedbackWrites = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
+
   Future<bool> saveFeedback(RecommendationFeedbackCollection feedback) =>
-      _writeJson(paths.feedbackPath, feedback.toJson());
+      _queueFeedbackWrite(() => _writeJson(paths.feedbackPath, feedback.toJson()));
+
+  Future<RecommendationFeedbackCollection?> updateFeedback(
+    RecommendationFeedbackCollection Function(RecommendationFeedbackCollection) update,
+  ) => _queueFeedbackWrite(() async {
+    final next = update(await loadFeedback());
+    return await _writeJson(paths.feedbackPath, next.toJson()) ? next : null;
+  });
 
   Future<TitleLearningCollection> loadLearning() async {
     final raw = await _readJson(paths.learningPath);

@@ -8,6 +8,9 @@ import 'package:webhtv_pc/core/ai_content/ai_content_contracts.dart';
 import 'package:webhtv_pc/core/ai_content/group_rule_validation.dart';
 import 'package:webhtv_pc/core/ai_content/recommendation.dart';
 import 'package:webhtv_pc/core/ai_content/recommendation_feedback.dart';
+import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/core/watched_recommendation.dart';
+import 'package:webhtv_pc/services/recommendation_watch_store.dart';
 import 'package:webhtv_pc/core/ai_content/title_resolution.dart';
 import 'package:webhtv_pc/core/ai_content/user_data.dart';
 import 'package:webhtv_pc/core/viewing_report.dart';
@@ -122,6 +125,61 @@ void main() {
       expect(second.value!.length, 2);
       // 缓存命中：没有第二次付费调用。
       expect(model.calls, 1);
+    });
+
+    test('已看过滤旧缓存和生成结果，生成时单独发送作品信息', () async {
+      final model = FakeModel([
+        recommendationPayload(['标记过', '仍可推荐']),
+        recommendationPayload(['标记过', '新片']),
+      ]);
+      final watched = RecommendationWatchStore();
+      addTearDown(watched.dispose);
+      final service = RecommendationService(
+        config: readyConfig,
+        paths: paths,
+        completion: model.completer(),
+        clock: () => now,
+        watched: watched,
+      );
+      const request = RecommendationRequest(
+        source: RecommendationSource.history,
+      );
+      const work = RecommendationWork(
+        title: '标记过',
+        mediaType: TmdbMediaType.movie,
+        year: 2024,
+      );
+      expect((await service.recommend(request: request)).value!.length, 2);
+      watched.setWatched(work, true);
+      final cache = await service.loadCached(request: request);
+      expect(cache.cards.map((card) => card.title), ['仍可推荐']);
+      expect(cache.needsRefresh, isTrue);
+      expect(model.calls, 1);
+      final result = await service.recommend(request: request);
+      expect(result.value!.map((card) => card.title), ['新片']);
+      final prompt = model.prompts.last;
+      final payload = jsonDecode(
+        prompt.substring(prompt.lastIndexOf('输入：') + '输入：'.length),
+      ) as Map;
+      expect(payload['watched'], [
+        {'title': '标记过', 'mediaType': 'movie', 'year': 2024},
+      ]);
+      expect(payload['contexts'], isEmpty);
+      expect(
+        await service.loadFeedback(),
+        isA<RecommendationFeedbackCollection>().having(
+          (f) => f.isEmpty,
+          'empty',
+          true,
+        ),
+      );
+      watched.setWatched(work, false);
+      expect(
+        (await service.loadCached(request: request)).cards
+            .map((card) => card.title),
+        ['标记过', '仍可推荐'],
+      );
+      expect(model.calls, 2);
     });
 
     test('负反馈过滤生效，且「不感兴趣」写入用户数据文件', () async {
