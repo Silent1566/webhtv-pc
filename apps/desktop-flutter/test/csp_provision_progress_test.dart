@@ -47,11 +47,18 @@ class _ProgressState extends AppState {
   AppConfig? get effectiveConfig => probeConfig ?? super.effectiveConfig;
 
   int homeCalls = 0;
+  final _pendingHomeLoads = <Future<void>>{};
 
   @override
   Future<void> loadHome(Site site) async {
     homeCalls++;
-    await super.loadHome(site);
+    final pending = super.loadHome(site);
+    _pendingHomeLoads.add(pending);
+    try {
+      await pending;
+    } finally {
+      _pendingHomeLoads.remove(pending);
+    }
   }
 }
 
@@ -293,7 +300,8 @@ void main() {
   tearDown(() async {
     state.dispose();
     if (!report.isCompleted) report.complete(const CspProbeReport());
-    await Future<void>.delayed(Duration.zero);
+    await Future.wait(state._pendingHomeLoads.toList());
+    expect(state._pendingHomeLoads, isEmpty, reason: '删除临时目录前必须等首页补载结束');
     try {
       await temp.delete(recursive: true);
     } catch (_) {
