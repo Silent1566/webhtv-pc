@@ -136,6 +136,11 @@ class RecommendationFeedbackCollection {
     'entries': [for (final entry in entries) entry.toJson()],
   };
 
+  RecommendationFeedbackCollection withoutKeys(Set<String> keys) =>
+      RecommendationFeedbackCollection._(List.unmodifiable(
+        entries.where((entry) => !keys.contains(entry.key)),
+      ));
+
   bool get isEmpty => entries.isEmpty;
 
   int get length => entries.length;

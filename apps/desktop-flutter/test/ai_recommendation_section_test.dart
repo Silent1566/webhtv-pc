@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/ai_content/ai_recommendation_section.dart';
 import 'package:webhtv_pc/ui/poster_image.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 import 'support/temp_dirs.dart';
 
@@ -25,6 +27,8 @@ class _FakeCompletion {
   _FakeCompletion();
   bool fail = false;
   int calls = 0;
+  Completer<void>? gate;
+  String payload = _payload;
 
   AiContentCompletion build() => AiContentCompletion(
     complete:
@@ -34,6 +38,8 @@ class _FakeCompletion {
           Duration timeout = Duration.zero,
         }) async {
           calls++;
+          final pending = gate;
+          if (pending != null) await pending.future;
           if (fail) {
             return const AiCompletionResult(
               ok: false,
@@ -42,10 +48,10 @@ class _FakeCompletion {
               message: '服务不可用',
             );
           }
-          return const AiCompletionResult(
+          return AiCompletionResult(
             ok: true,
             statusCode: 200,
-            text: _payload,
+            text: payload,
             message: '',
           );
         },
@@ -88,6 +94,7 @@ void main() {
   });
 
   tearDown(() async {
+    dismissAllToasts();
     state.dispose();
     await deleteTempDirBestEffort(temp);
   });
@@ -108,6 +115,10 @@ void main() {
     await tester.runAsync(() async {
       await tester.pumpWidget(
         MaterialApp(
+          builder: (context, child) => Stack(
+            fit: StackFit.expand,
+            children: [child!, const ToastHost()],
+          ),
           home: Scaffold(
             body: SingleChildScrollView(
               child: AiRecommendationSection(
@@ -119,9 +130,20 @@ void main() {
           ),
         ),
       );
-      for (var i = 0; i < 40; i++) {
+      for (var i = 0; i < 200; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
         await tester.pump();
+        if (i >= 39 &&
+            (find
+                    .byKey(const ValueKey('recommendation-row-ai'))
+                    .evaluate()
+                    .isNotEmpty ||
+                find
+                    .byKey(const ValueKey('recommendation-ai-message'))
+                    .evaluate()
+                    .isNotEmpty)) {
+          break;
+        }
       }
     });
     await tester.pump();
@@ -130,10 +152,7 @@ void main() {
   testWidgets('无缓存时自动刷新一次并展示卡片', (tester) async {
     await pump(tester);
     expect(completion.calls, 1, reason: '无缓存 → 进详情页即刷新（B 方案）');
-    expect(
-      find.byKey(const ValueKey('recommendation-ai-新片A')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('recommendation-ai-新片A')), findsOneWidget);
   });
 
   testWidgets('推荐区是横向海报条，与其它推荐行同宽同标题样式', (tester) async {
@@ -200,18 +219,13 @@ void main() {
       find.byKey(const ValueKey('recommendation-info-dialog')),
       findsNothing,
     );
-    expect(
-      find.byKey(const ValueKey('recommendation-ai-新片A')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('recommendation-ai-新片A')), findsOneWidget);
   });
 
   testWidgets('「详情」按钮与卡片单击走同一个去向', (tester) async {
     String? searched;
     await pump(tester, onSearchTitle: (title) => searched = title);
-    await tester.longPress(
-      find.byKey(const ValueKey('recommendation-ai-新片A')),
-    );
+    await tester.longPress(find.byKey(const ValueKey('recommendation-ai-新片A')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('recommendation-info-open')));
     await tester.pumpAndSettle();
@@ -223,18 +237,63 @@ void main() {
     );
   });
 
+  testWidgets('AI 推荐标记已看即时过滤，撤销恢复且不额外生成', (tester) async {
+    await pump(tester);
+    final card = find.byKey(const ValueKey('recommendation-ai-新片A'));
+    final calls = completion.calls;
+    await tester.longPress(card);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('标记已看'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(card, findsNothing);
+    expect(completion.calls, calls);
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    expect(card, findsOneWidget);
+    expect(completion.calls, calls);
+  });
+
+  testWidgets('生成进行中标记，结果到达后仍能撤销恢复卡片', (tester) async {
+    await pump(tester);
+    await tester.pumpWidget(const SizedBox());
+    final gate = Completer<void>();
+    completion.gate = gate;
+    completion.payload = '{"items":[{"title":"新片A","mediaType":"tv","year":2021},{"title":"刷新候选","mediaType":"movie"}]}';
+    await pump(tester, seed: '另一部影片');
+    expect(completion.calls, 2);
+    final oldCard = find.byKey(const ValueKey('recommendation-ai-新片A'));
+    final fresh = find.byKey(const ValueKey('recommendation-ai-刷新候选'));
+    await tester.longPress(oldCard);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('标记已看'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(oldCard, findsNothing);
+    await tester.runAsync(() async {
+      gate.complete();
+      for (var i = 0; i < 200 && fresh.evaluate().isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await tester.pump();
+      }
+    });
+    await tester.pump();
+    expect(fresh, findsOneWidget);
+    expect(oldCard, findsNothing);
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    expect(oldCard, findsOneWidget);
+    expect(completion.calls, 2);
+  });
+
   testWidgets('详情弹窗里的「不感兴趣」会写入负反馈并关闭弹窗', (tester) async {
     await pump(tester);
-    await tester.longPress(
-      find.byKey(const ValueKey('recommendation-ai-新片A')),
-    );
+    await tester.longPress(find.byKey(const ValueKey('recommendation-ai-新片A')));
     await tester.pumpAndSettle();
     // 写负反馈是真实文件 IO：必须在真实时钟里点，否则 FakeAsync 里永不完成。
     RecommendationFeedbackCollection? feedback;
     await tester.runAsync(() async {
-      await tester.tap(
-        find.byKey(const ValueKey('recommendation-info-hide')),
-      );
+      await tester.tap(find.byKey(const ValueKey('recommendation-info-hide')));
       await Future<void>.delayed(const Duration(milliseconds: 400));
       feedback = await state.aiIntegration.recommendation.loadFeedback();
     });
@@ -263,10 +322,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await pump(tester);
     expect(completion.calls, 1, reason: '输入没变 → 直接读缓存，省 token');
-    expect(
-      find.byKey(const ValueKey('recommendation-ai-新片A')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('recommendation-ai-新片A')), findsOneWidget);
   });
 
   testWidgets('上下文变化导致指纹变化时重新刷新', (tester) async {

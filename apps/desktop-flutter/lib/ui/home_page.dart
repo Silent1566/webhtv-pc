@@ -23,6 +23,7 @@ import '../core/home_feed.dart';
 import '../core/home_hot.dart';
 import '../core/tmdb_identity.dart';
 import '../core/tmdb_title.dart';
+import '../core/watched_recommendation.dart';
 import '../services/search_suggest_service.dart';
 import '../state/app_state.dart';
 import 'async_action_feedback.dart';
@@ -312,9 +313,12 @@ class _HomePageState extends State<HomePage> {
   );
 
   Future<void> _showRecommendationInfo(HomeItem item) {
+    final entry = item.entry;
     return showRecommendationInfo(
       context,
       info: _recommendationInfo(item),
+      watched: _session.watched,
+      work: entry == null ? null : RecommendationWork.fromEntry(entry),
       onOpen: () => unawaited(
         item.entry?.item.identity == null
             ? _searchRecommendation(item.title)
@@ -348,6 +352,13 @@ class _HomePageState extends State<HomePage> {
           if (item.subtitle.isNotEmpty) item.subtitle,
           if (item.reason.isNotEmpty && item.reason != '热门') item.reason,
         ],
+      ),
+      watched: _session.watched,
+      work: RecommendationWork(
+        title: item.title,
+        mediaType: category == HotRankCategory.movie
+            ? TmdbMediaType.movie
+            : TmdbMediaType.tv,
       ),
       onOpen: () => unawaited(_openHotDetail(item)),
       onSearchSource: () => widget.onSearch(item.title),

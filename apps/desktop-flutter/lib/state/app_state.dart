@@ -1280,6 +1280,7 @@ class AppState extends ChangeNotifier
     paths: paths,
     config: () => aiConfig,
     titleEnabled: () => aiTitleExtractionEnabled,
+    watched: recommendationDependencies.watched,
     completion: _aiContentCompletion,
     log: log,
     enricher: (items) async {
@@ -2227,6 +2228,7 @@ class AppState extends ChangeNotifier
             feedbackFile: File(
               '${paths.configDir}/recommendation-feedback.json',
             ),
+            watchedFile: File('${paths.configDir}/recommendation-watched.json'),
             historyChanges: this,
             history: () => [
               for (final row in recentHistory(sourceKey: ''))

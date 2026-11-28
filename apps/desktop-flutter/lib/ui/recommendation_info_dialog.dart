@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../core/watched_recommendation.dart';
+import '../services/recommendation_watch_store.dart';
+
 import 'poster_image.dart';
+import 'toast.dart';
 import 'tokens.dart';
 
 enum RecommendationInfoKind { recommendation, hot }
@@ -59,14 +63,45 @@ Future<void> showRecommendationInfo(
   VoidCallback? onOpen,
   VoidCallback? onSearchSource,
   Future<void> Function()? onNotInterested,
+  RecommendationWatchStore? watched,
+  RecommendationWork? work,
 }) {
   return showDialog<void>(
     context: context,
-    builder: (context) => RecommendationInfoDialog(
+    builder: (_) => RecommendationInfoDialog(
       info: info,
       onOpen: onOpen,
       onSearchSource: onSearchSource,
       onNotInterested: onNotInterested,
+      isWatched: work != null && (watched?.contains(work) ?? false),
+      onWatch: watched == null || work == null
+          ? null
+          : () => _toggleWatched(watched, work),
+    ),
+  );
+}
+
+void _toggleWatched(RecommendationWatchStore watched, RecommendationWork work) {
+  final mark = !watched.contains(work);
+  if (!watched.setWatched(work, mark)) {
+    showToast('未能保存已看标记', kind: ToastKind.error);
+    return;
+  }
+  if (!mark) {
+    showToast('已取消已看标记', kind: ToastKind.success);
+    return;
+  }
+  showToast(
+    '已标记为看过',
+    kind: ToastKind.success,
+    duration: const Duration(seconds: 6),
+    action: AppToastAction(
+      label: '撤销',
+      onPressed: () {
+        if (!watched.setWatched(work, false)) {
+          showToast('未能撤销已看标记', kind: ToastKind.error);
+        }
+      },
     ),
   );
 }
@@ -78,12 +113,16 @@ class RecommendationInfoDialog extends StatelessWidget {
     this.onOpen,
     this.onSearchSource,
     this.onNotInterested,
+    this.onWatch,
+    this.isWatched = false,
   });
 
   final RecommendationInfo info;
   final VoidCallback? onOpen;
   final VoidCallback? onSearchSource;
   final Future<void> Function()? onNotInterested;
+  final VoidCallback? onWatch;
+  final bool isWatched;
 
   @override
   Widget build(BuildContext context) {
@@ -159,6 +198,8 @@ class RecommendationInfoDialog extends StatelessWidget {
                 onOpen: onOpen,
                 onSearchSource: onSearchSource,
                 onNotInterested: hot ? null : onNotInterested,
+                onWatch: onWatch,
+                isWatched: isWatched,
                 hot: hot,
                 openLabel: info.openLabel,
               ),
@@ -328,68 +369,91 @@ class _Actions extends StatelessWidget {
     this.onOpen,
     this.onNotInterested,
     this.onSearchSource,
+    this.onWatch,
+    this.isWatched = false,
     this.hot = false,
     this.openLabel = '详情',
   });
 
-  final bool hot;
+  final bool hot, isWatched;
   final String openLabel;
-  final VoidCallback? onOpen;
-  final VoidCallback? onSearchSource;
+  final VoidCallback? onOpen, onSearchSource, onWatch;
   final Future<void> Function()? onNotInterested;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Row(
+    return OverflowBar(
+      alignment: MainAxisAlignment.spaceBetween,
+      overflowAlignment: OverflowBarAlignment.end,
+      overflowSpacing: AppSpace.sm,
+      spacing: AppSpace.sm,
       children: [
-        if (onNotInterested != null)
-          TextButton(
-            key: const ValueKey('recommendation-info-hide'),
-            // 去掉 TextButton 的默认横向内边距：按钮文字与简介/推荐理由同一条左边缘。
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: const Size(0, 42),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              foregroundColor: theme.colorScheme.onSurfaceVariant,
+        if (onWatch != null || onNotInterested != null)
+          Wrap(
+            spacing: AppSpace.sm,
+            children: [
+              if (onWatch != null)
+                TextButton(
+                  key: const ValueKey('recommendation-info-watch'),
+                  style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    onWatch!();
+                  },
+                  child: Text(isWatched ? '取消已看' : '标记已看'),
+                ),
+              if (onNotInterested != null)
+                TextButton(
+                  key: const ValueKey('recommendation-info-hide'),
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 44),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    foregroundColor: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    onNotInterested!();
+                  },
+                  child: const Text('不感兴趣'),
+                ),
+            ],
+          )
+        else
+          const SizedBox.shrink(),
+        Wrap(
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: AppSpace.sm,
+          children: [
+            TextButton(
+              key: const ValueKey('recommendation-info-close'),
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
             ),
-            onPressed: () {
-              // 与卡片单击同一条时序：先关弹窗，再发起负反馈（真实文件 IO）。
-              Navigator.of(context).pop();
-              onNotInterested!.call();
-            },
-            child: const Text('不感兴趣'),
-          ),
-        const Spacer(),
-        TextButton(
-          key: const ValueKey('recommendation-info-close'),
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭'),
-        ),
-        const SizedBox(width: AppSpace.sm),
-        if (onSearchSource != null) ...[
-          TextButton.icon(
-            key: const ValueKey('recommendation-info-search'),
-            onPressed: () {
-              Navigator.of(context).pop();
-              onSearchSource!.call();
-            },
-            icon: const Icon(Icons.search, size: 18),
-            label: const Text('去找片源'),
-          ),
-          const SizedBox(width: AppSpace.sm),
-        ],
-        FilledButton.icon(
-          key: const ValueKey('recommendation-info-open'),
-          onPressed: onOpen == null
-              ? null
-              : () {
-                  // 与推荐卡片单击完全一致的去向：先关弹窗再调用同一回调。
+            if (onSearchSource != null)
+              TextButton.icon(
+                key: const ValueKey('recommendation-info-search'),
+                onPressed: () {
                   Navigator.of(context).pop();
-                  onOpen!.call();
+                  onSearchSource!();
                 },
-          icon: const Icon(Icons.arrow_forward, size: 18),
-          label: Text(hot ? '查看详情' : openLabel),
+                icon: const Icon(Icons.search, size: 18),
+                label: const Text('去找片源'),
+              ),
+            FilledButton.icon(
+              key: const ValueKey('recommendation-info-open'),
+              onPressed: onOpen == null
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      onOpen!();
+                    },
+              icon: const Icon(Icons.arrow_forward, size: 18),
+              label: Text(hot ? '查看详情' : openLabel),
+            ),
+          ],
         ),
       ],
     );
