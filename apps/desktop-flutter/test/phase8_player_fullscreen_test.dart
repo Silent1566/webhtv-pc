@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,25 +7,75 @@ import 'package:webhtv_pc/ui/player_page.dart';
 
 import 'support/player_page_harness.dart';
 
-/// 播放器全屏必须真的铺满显示器。
-///
-/// 缺陷成因（window_manager 0.5.2）：
-/// - `windows/window_manager.cpp:591-614` 里把窗口 `SetWindowPos` 到显示器
-///   `rcMonitor` 的整段铺满逻辑，全部包在 :593 的 `if (!is_frameless_)` 内。
-/// - `SetAsFrameless()`（`window_manager.cpp:214-225`）只置 `is_frameless_ = true`
-///   并 `SetWindowPos(SWP_NOSIZE)`，**不会**改 `GWL_STYLE`、也不会移动窗口。
-/// - 因此旧实现「先 `setAsFrameless()` 再 `setFullScreen(true)`」会让 :593 判定
-///   失败，铺满分支整体跳过，窗口停在原尺寸，只有 `WM_NCCALCSIZE`
-///   （`window_manager_plugin.cpp:147-154`）把它当成无边框——观感是一块
-///   原位不动的无边框小窗，而不是全屏。
-/// - `IsFullScreen()`（`window_manager.cpp:564-566`）只返回内部标志
-///   `g_is_window_fullscreen`，不查询真实窗口状态，所以旧实现的「回读确认」
-///   是同义反复、永远为 true，无法发现铺满失败。
-///
-/// 这些用例断言的不是「看过窗口」，而是**调用序列**：进入全屏的调用里不得出现
-/// `setAsFrameless`，且必须先 `setTitleBarStyle(hidden)` 再 `setFullScreen(true)`。
-/// 序列一旦回到旧样子，铺满分支就必然被跳过。
+MouseCursor? _activeMouseCursor(WidgetTester tester) =>
+    tester.binding.mouseTracker.debugDeviceActiveCursor(1);
+
+Future<TestGesture> _mouseOverVideo(WidgetTester tester) async {
+  final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await mouse.addPointer(location: tester.getCenter(find.byType(PlayerPage)));
+  addTearDown(mouse.removePointer);
+  await tester.pump();
+  return mouse;
+}
+
 void main() {
+  testWidgets('全屏光标静止后隐藏，移动或退出全屏立即显示', (tester) async {
+    await pumpPlayerPage(tester, trackFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    expect(windowManagerFullscreen, isTrue);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump();
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    expect(windowManagerFullscreen, isFalse);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+  });
+
+  testWidgets('全屏鼠标移动只延长光标显现，不重置控制栏计时', (tester) async {
+    await pumpPlayerPage(tester, trackFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+    final state = tester.state<State<PlayerPage>>(find.byType(PlayerPage));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump(const Duration(seconds: 1));
+    expect(debugPlayerControlsVisible(state), isFalse);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+  });
+
+  testWidgets('应用已全屏时隐藏光标，返回不退出应用全屏', (tester) async {
+    await pumpPlayerPage(tester, pushRoute: true, initiallyFullscreen: true);
+    final mouse = await _mouseOverVideo(tester);
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeMouseCursor(tester), SystemMouseCursors.none);
+
+    await mouse.moveBy(const Offset(16, 0));
+    await tester.pump();
+    await tester.tap(find.byType(BackButton));
+    await settlePlayerPage(tester);
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(windowManagerFullscreen, isTrue);
+    expect(_activeMouseCursor(tester), SystemMouseCursors.basic);
+  });
+
   List<String> methods() =>
       windowManagerCalls.map((c) => c.method).toList(growable: false);
 
@@ -53,7 +104,7 @@ void main() {
     );
   });
 
-  testWidgets('F11 快捷键：标题栏先转 hidden，再进全屏', (tester) async {
+  testWidgets('非 Windows 的 F11：标题栏先转 hidden，再进全屏', (tester) async {
     await pumpPlayerPage(tester);
     windowManagerCalls.clear();
 
@@ -81,6 +132,28 @@ void main() {
       reason: 'hidden 必须早于 setFullScreen(true)（实测序列：$sequence）',
     );
   });
+
+  testWidgets('Windows：F11 与返回只提交全屏状态', (tester) async {
+    await pumpPlayerPage(tester, pushRoute: true, trackFullscreen: true);
+    windowManagerCalls.clear();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await settlePlayerPage(tester);
+    expect(windowManagerFullscreen, isTrue);
+    await tester.tap(find.byType(BackButton));
+    await settlePlayerPage(tester);
+
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(windowManagerFullscreen, isFalse);
+    expect(methods(), isNot(contains('setTitleBarStyle')));
+    expect(methods(), isNot(contains('setAsFrameless')));
+    expect(
+      windowManagerCalls
+          .where((c) => c.method == 'setFullScreen')
+          .map((c) => (c.arguments as Map)['isFullScreen']),
+      [true, false],
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
   testWidgets('全屏播放后点返回：先退出全屏再 pop，标题栏恢复', (tester) async {
     await pumpPlayerPage(tester, pushRoute: true, trackFullscreen: true);

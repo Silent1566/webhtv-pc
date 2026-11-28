@@ -48,7 +48,8 @@ void main() {
       log: LogService(),
       httpClient: _NoNetworkClient(),
     );
-    await state.bootstrap();
+    // LogsPage needs only its log sink; bootstrap paths can also match keywords.
+    await state.log.open(state.paths.logDir);
     state.log.info('普通日志 alpha');
     state.log.warning('告警日志 beta');
     state.log.error('错误日志 gamma');
@@ -97,6 +98,7 @@ void main() {
   testWidgets('关键字搜索即时过滤并显示命中条数', (tester) async {
     await pumpLogs(tester);
     final total = state.log.entries.length;
+    expect(total, 3);
     expect(find.text('$total 条'), findsOneWidget);
 
     await tester.enterText(
@@ -108,6 +110,7 @@ void main() {
     expect(logText('告警日志 beta'), findsOneWidget);
     expect(logText('普通日志 alpha'), findsNothing);
     expect(logText('错误日志 gamma'), findsNothing);
+    expect(state.log.entries, hasLength(total));
     expect(find.text('1 / $total 条'), findsOneWidget);
   });
 

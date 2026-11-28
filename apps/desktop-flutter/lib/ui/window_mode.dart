@@ -21,13 +21,16 @@ final _fullscreenCommandRevision = ValueNotifier(0);
 ValueListenable<int> get fullscreenCommandRevision =>
     _fullscreenCommandRevision;
 
-/// 进入全屏：先隐藏标题栏，再铺满。
-///
-/// 顺序不能反：Windows 上 window_manager 的铺满分支只在标题栏样式已切到
-/// hidden 时执行（见 test/phase8_player_fullscreen_test.dart 的调用序列断言）。
-/// 这里**不能**调 setAsFrameless：它会把插件内的 is_frameless_ 置 true，
-/// 铺满分支整体被跳过，窗口停在原尺寸只是变成无边框小窗。
+bool get _hasNativeFullscreenFrame =>
+    defaultTargetPlatform == TargetPlatform.windows;
+
+/// Windows 原生切换会同时应用边框和窗口矩形；其他平台沿用原有顺序。
 Future<void> enterPlayerFullscreen() async {
+  if (_hasNativeFullscreenFrame) {
+    await windowManager.setFullScreen(true);
+    _fullscreenCommandRevision.value++;
+    return;
+  }
   await windowManager.setTitleBarStyle(
     TitleBarStyle.hidden,
     windowButtonVisibility: false,
@@ -56,8 +59,9 @@ Future<void> restoreWindowedMode() async {
 
 /// 保持原生标题栏隐藏，不碰全屏标志。
 ///
-/// 主动重新应用 hidden，确保插件离开全屏后恢复可调整大小的窗口框架。
+/// Windows 的原生切换已经恢复边框，不再额外触发一次窗口重绘。
 Future<void> restoreWindowTitleBar() async {
+  if (_hasNativeFullscreenFrame) return;
   try {
     await windowManager.setTitleBarStyle(
       TitleBarStyle.hidden,

@@ -11,6 +11,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -194,7 +195,7 @@ void main() {
     );
     expect(state.config, isNull);
     expect(state.savedConfigs, isEmpty);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

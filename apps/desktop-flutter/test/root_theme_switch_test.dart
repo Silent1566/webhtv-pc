@@ -51,8 +51,10 @@ void main() {
     temp = Directory.systemTemp.createTempSync('root-theme-switch');
     paths = AppPaths.resolve(
       overrides: {
-        for (final role in ['config', 'data', 'cache', 'state'])
-          role: '${temp.path}/$role',
+        'config': '${temp.path}/config',
+        'data': '${temp.path}/data',
+        'cache': '${temp.path}/cache',
+        'state': '${temp.path}/state',
       },
     );
     Directory(paths.configDir).createSync(recursive: true);

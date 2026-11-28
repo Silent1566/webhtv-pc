@@ -1,5 +1,5 @@
 # Project-level configuration.
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.18)
 project(webhtv_pc LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
@@ -66,6 +66,7 @@ include(runner/native_deps_cache.cmake)
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
+include(window_manager_fullscreen.cmake)
 
 
 # Python is prepared explicitly before CMake; native builds never download it.

@@ -19,6 +19,9 @@ import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/state/detail_recommendation_state.dart';
 import 'package:webhtv_pc/ui/browse_pages.dart';
+import 'package:webhtv_pc/ui/backdrop_scrim.dart';
+import 'package:webhtv_pc/ui/wallpaper_backdrop.dart';
+import 'package:flutter/services.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/poster_image.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
@@ -81,7 +84,7 @@ void main() {
   for (final route in _Route.values) {
     for (final brightness in Brightness.values) {
       detailTest(
-        '${route.name} ${brightness.name}: decoded glass preserves controls and scroll',
+        '${route.name} ${brightness.name}: transparent toolbar preserves controls and scroll',
         (tester) async {
           final detail = await _mount(
             tester,
@@ -104,8 +107,9 @@ void main() {
           final active = _geometry(tester, route);
           await _checkPixels(tester, detail.boundary, route, brightness);
 
-          expect(_filter, findsOneWidget);
-          expect(tester.getRect(_filter), active.bar);
+          expect(_filter, findsNothing);
+          expect(_toolbarScrim, findsOneWidget);
+          expect(tester.getRect(_toolbarScrim), active.bar);
           expect(pendingCount, 0, reason: 'a pending URL is not a frame');
           expect(pendingOpaque, isTrue);
           expect(active, pending);
@@ -121,13 +125,56 @@ void main() {
           expect(scroll.pixels, greaterThan(0));
           expect(tester.getRect(_back(route)), active.back);
           expect(tester.getRect(find.byType(AppBar)), active.bar);
-          expect(_filter, findsOneWidget);
+          expect(_filter, findsNothing);
+          expect(_toolbarScrim, findsOneWidget);
+          await _checkPixels(tester, detail.boundary, route, brightness);
           if (route == _Route.tmdb) {
             final search = find.byKey(_search);
             expect(tester.getRect(search), active.search);
             await tester.tap(search);
             expect(detail.searches, [(_title, _identity)]);
           }
+          await tester.tap(_back(route));
+          await tester.pumpAndSettle();
+          expect(find.text('Route host'), findsOneWidget);
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+      );
+    }
+
+    for (final brightness in Brightness.values) {
+      detailTest(
+        '${route.name} ${brightness.name}: app backdrop fallback is unplated at minimum size',
+        (tester) async {
+          await _mount(
+            tester,
+            route,
+            brightness,
+            source,
+            appBackdrop: true,
+            size: const Size(1024, 640),
+          );
+          expect(_filter, findsNothing);
+          expect(_barIsOpaque(tester), isFalse);
+          expect(_toolbarScrim, findsOneWidget);
+          final scrim = tester.widget<DecoratedBox>(
+            find.descendant(
+              of: _toolbarScrim,
+              matching: find.byType(DecoratedBox),
+            ),
+          );
+          final gradient =
+              (scrim.decoration as BoxDecoration).gradient! as LinearGradient;
+          expect(
+            gradient.colors.last.a,
+            0,
+            reason: 'No opaque bottom edge may recreate the toolbar band',
+          );
+          expect(_back(route).hitTestable(), findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pumpAndSettle();
+          expect(FocusManager.instance.primaryFocus, isNotNull);
+          expect(tester.takeException(), isNull);
           await tester.tap(_back(route));
           await tester.pumpAndSettle();
           expect(find.text('Route host'), findsOneWidget);
@@ -180,39 +227,41 @@ void main() {
     expect(_barIsOpaque(tester), isTrue);
   });
 
-  detailTest('late outgoing frame cannot enable glass during rotation', (
-    tester,
-  ) async {
-    await _mount(
-      tester,
-      _Route.tmdb,
-      Brightness.dark,
-      source,
-      metadata: Future.value(
-        _tmdbResponse(backdrop: _art, preferredBackdrop: _oldArt),
-      ),
-    );
-    expect(_backdropImage(_oldArt), findsOneWidget);
-    expect(_backdropImage(_art), findsNothing);
-    final initial = _geometry(tester, _Route.tmdb);
-    await tester.pump(const Duration(seconds: 5));
-    expect(_backdropImage(_art), findsOneWidget);
-    images.release(_oldArt, artBytes);
-    // Keep the old AnimatedSwitcher child alive long enough to decode.
-    await _until(tester, () => _artIsDecoded(_oldArt), tick: Duration.zero);
-    await tester.pump();
-    expect(_filter, findsNothing);
-    expect(_barIsOpaque(tester), isTrue);
+  detailTest(
+    'late outgoing frame cannot lighten the pending toolbar during rotation',
+    (tester) async {
+      await _mount(
+        tester,
+        _Route.tmdb,
+        Brightness.dark,
+        source,
+        metadata: Future.value(
+          _tmdbResponse(backdrop: _art, preferredBackdrop: _oldArt),
+        ),
+      );
+      expect(_backdropImage(_oldArt), findsOneWidget);
+      expect(_backdropImage(_art), findsNothing);
+      final initial = _geometry(tester, _Route.tmdb);
+      await tester.pump(const Duration(seconds: 5));
+      expect(_backdropImage(_art), findsOneWidget);
+      images.release(_oldArt, artBytes);
+      // Keep the old AnimatedSwitcher child alive long enough to decode.
+      await _until(tester, () => _artIsDecoded(_oldArt), tick: Duration.zero);
+      await tester.pump();
+      expect(_filter, findsNothing);
+      expect(_barIsOpaque(tester), isTrue);
 
-    images.release(_art, artBytes);
-    await _until(tester, () => _artIsDecoded(_art));
-    await tester.pumpAndSettle();
-    expect(_filter, findsOneWidget);
-    expect(_geometry(tester, _Route.tmdb), initial);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+      images.release(_art, artBytes);
+      await _until(tester, () => _artIsDecoded(_art));
+      await tester.pumpAndSettle();
+      expect(_filter, findsNothing);
+      expect(_toolbarScrim, findsOneWidget);
+      expect(_geometry(tester, _Route.tmdb), initial);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
-  detailTest('replacing decoded TMDB art immediately restores the opaque bar', (
+  detailTest('replacing decoded TMDB art keeps a readable pending fallback', (
     tester,
   ) async {
     final metadata = Completer<http.Response>();
@@ -227,7 +276,8 @@ void main() {
     images.release(_art, artBytes);
     await _until(tester, () => _artIsDecoded(_art));
     await tester.pumpAndSettle();
-    expect(_filter, findsOneWidget);
+    expect(_filter, findsNothing);
+    expect(_toolbarScrim, findsOneWidget);
     _verticalPosition(tester).jumpTo(24);
     await tester.pump();
     final initial = _geometry(tester, _Route.tmdb);
@@ -290,8 +340,10 @@ class _SourceState extends AppState with ExternalMetaOff {
     : super(
         paths: AppPaths.resolve(
           overrides: {
-            for (final name in ['config', 'data', 'cache', 'state'])
-              name: dir.path,
+            'config': dir.path,
+            'data': dir.path,
+            'cache': dir.path,
+            'state': dir.path,
           },
         ),
         log: MemoryOnlyLogService(),
@@ -337,8 +389,10 @@ Future<({GlobalKey boundary, List<(String, TmdbIdentity)> searches})> _mount(
   Future<http.Response>? metadata,
   bool withSnapshot = true,
   bool hasPlayLines = true,
+  bool appBackdrop = false,
+  Size size = _size,
 }) async {
-  tester.view.physicalSize = _size;
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final boundary = GlobalKey();
@@ -416,8 +470,12 @@ Future<({GlobalKey boundary, List<(String, TmdbIdentity)> searches})> _mount(
           PageRouteBuilder<void>(
             transitionDuration: Duration.zero,
             reverseTransitionDuration: Duration.zero,
-            pageBuilder: (_, _, _) =>
-                RepaintBoundary(key: boundary, child: page),
+            pageBuilder: (_, _, _) => RepaintBoundary(
+              key: boundary,
+              child: appBackdrop
+                  ? WallpaperBackdrop(url: null, builder: (_, _) => page)
+                  : page,
+            ),
           ),
         ),
   );
@@ -432,6 +490,12 @@ Future<({GlobalKey boundary, List<(String, TmdbIdentity)> searches})> _mount(
 
 Finder get _titleInBar =>
     find.descendant(of: find.byType(AppBar), matching: find.text(_title));
+Finder get _toolbarScrim => find.descendant(
+  of: find.byType(AppBar),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is BackdropScrim && widget.kind.name == 'toolbar',
+  ),
+);
 Finder get _filter => find.descendant(
   of: find.byType(AppBar),
   matching: find.byType(BackdropFilter),
@@ -564,6 +628,7 @@ Future<void> _checkPixels(
       : null;
   final g = _geometry(tester, route);
   final capture = Platform.environment['GLASS_DETAIL_CAPTURE'];
+  final captureDir = Platform.environment['DETAIL_TOOLBAR_CAPTURE_DIR'];
   final samples = (await tester.runAsync(() async {
     final box =
         boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -571,7 +636,7 @@ Future<void> _checkPixels(
     try {
       if (capture == 'before' || capture == 'after') {
         final file = File(
-          '../../.local/glass-rollout-captures/detail/${route.name}-${brightness.name}-$capture.png',
+          '${captureDir ?? '../../.local/glass-rollout-captures/detail'}/${route.name}-${brightness.name}-$capture.png',
         );
         await file.parent.create(recursive: true);
         if (!await file.exists()) {

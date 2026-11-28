@@ -10,7 +10,9 @@ import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/core/watched_recommendation.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
+import 'package:webhtv_pc/services/recommendation_watch_store.dart';
 import 'package:webhtv_pc/state/detail_recommendation_state.dart';
 
 RecommendationEntry entry(int id, [String? title]) => RecommendationEntry(
@@ -27,6 +29,130 @@ const seed = RecommendationSeed(
   mediaType: TmdbMediaType.movie,
 );
 void main() {
+  test(
+    'a failed extra page does not discard candidates already returned',
+    () async {
+      final feedback = RecommendationFeedbackStore();
+      final watched = RecommendationWatchStore();
+      final state = DetailRecommendationState(
+        feedback: feedback,
+        watched: watched,
+        loaders: {
+          RecommendationRow.related: (request) async {
+            if (request.offset != 0) throw StateError('second page offline');
+            return RecommendationPage(
+              items: [entry(2), entry(3)],
+              nextOffset: 2,
+              hasMore: true,
+            );
+          },
+        },
+      );
+      addTearDown(feedback.dispose);
+      addTearDown(watched.dispose);
+      addTearDown(state.dispose);
+      watched.setWatched(RecommendationWork.fromEntry(entry(2)), true);
+      await state.refresh(current: seed, sourceOnly: true);
+      final row = state.row(RecommendationRow.related);
+      expect(row.items.map((entry) => entry.item.title), ['item3']);
+      expect(row.nextOffset, 2);
+      expect(row.hasMore, isTrue);
+    },
+  );
+
+  test(
+    'watched items are skipped across pages, refilled and restored on undo',
+    () async {
+      final feedback = RecommendationFeedbackStore();
+      final watched = RecommendationWatchStore();
+      final offsets = <int>[];
+      final state = DetailRecommendationState(
+        feedback: feedback,
+        watched: watched,
+        loaders: {
+          RecommendationRow.related: (request) async {
+            offsets.add(request.offset);
+            return switch (request.offset) {
+              0 => RecommendationPage(
+                items: [entry(2), entry(3)],
+                nextOffset: 2,
+                hasMore: true,
+              ),
+              2 => RecommendationPage(
+                items: [entry(4)],
+                nextOffset: 3,
+                hasMore: true,
+              ),
+              3 => RecommendationPage(items: [entry(5)], nextOffset: 4),
+              _ => throw StateError('Unexpected offset'),
+            };
+          },
+        },
+      );
+      addTearDown(feedback.dispose);
+      addTearDown(watched.dispose);
+      addTearDown(state.dispose);
+      watched.setWatched(RecommendationWork.fromEntry(entry(4)), true);
+      await state.refresh(current: seed, sourceOnly: true);
+      final row = state.row(RecommendationRow.related);
+      List<String> titles() => row.items.map((e) => e.item.title).toList();
+      expect(titles(), ['item2', 'item3']);
+      final marked = RecommendationWork.fromEntry(entry(2));
+      watched.setWatched(marked, true);
+      expect(titles(), ['item3']);
+      await Future<void>.delayed(Duration.zero);
+      expect(titles(), ['item3', 'item5']);
+      expect(offsets, [0, 2, 3]);
+      expect(feedback.blockedTitles, isEmpty);
+      watched.setWatched(marked, false);
+      expect(titles(), ['item2', 'item3', 'item5']);
+    },
+  );
+
+  test('second watched action during refill also gets a replacement', () async {
+    final feedback = RecommendationFeedbackStore();
+    final watched = RecommendationWatchStore();
+    final gate = Completer<RecommendationPage>();
+    final offsets = <int>[];
+    final state = DetailRecommendationState(
+      feedback: feedback,
+      watched: watched,
+      loaders: {
+        RecommendationRow.related: (request) async {
+          offsets.add(request.offset);
+          return switch (request.offset) {
+            0 => RecommendationPage(
+              items: [entry(2), entry(3), entry(4)],
+              nextOffset: 3,
+              hasMore: true,
+            ),
+            3 => await gate.future,
+            4 => RecommendationPage(items: [entry(6)], nextOffset: 5),
+            _ => throw StateError('Unexpected offset'),
+          };
+        },
+      },
+    );
+    addTearDown(feedback.dispose);
+    addTearDown(watched.dispose);
+    addTearDown(state.dispose);
+    await state.refresh(current: seed, sourceOnly: true);
+    watched.setWatched(RecommendationWork.fromEntry(entry(2)), true);
+    watched.setWatched(RecommendationWork.fromEntry(entry(3)), true);
+    gate.complete(
+      RecommendationPage(items: [entry(5)], nextOffset: 4, hasMore: true),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(offsets, [0, 3, 4]);
+    expect(
+      state
+          .row(RecommendationRow.related)
+          .items
+          .map((entry) => entry.item.title),
+      ['item4', 'item5', 'item6'],
+    );
+  });
+
   test(
     'last lease cancels pending TMDB before history requests start',
     () async {

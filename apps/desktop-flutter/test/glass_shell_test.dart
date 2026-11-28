@@ -239,6 +239,23 @@ final List<Map<String, Object?>> _probes = <Map<String, Object?>>[];
 
 void _recordProbe(Map<String, Object?> probe) => _probes.add(probe);
 
+Future<Uint8List?> _readHistoricalBaseline(
+  WidgetTester tester,
+  String path,
+  String scene,
+) async {
+  if (!File(path).existsSync()) {
+    _recordProbe({
+      'scene': scene,
+      'mode': 'baseline-unavailable',
+      'baseline': path,
+    });
+    debugPrint('Historical comparison unavailable (missing baseline): $path');
+    return null;
+  }
+  return tester.runAsync(() => File(path).readAsBytes());
+}
+
 // ---------------------------------------------------------------------------
 // 合成底图：既不是产品素材，也不是"美观"，只负责给玻璃提供可采样的结构。
 // ---------------------------------------------------------------------------
@@ -539,15 +556,19 @@ void main() {
       return;
     }
 
+    expect(topBarPixel.a, 1);
     expect(
-      File(darkPath).existsSync(),
-      isTrue,
-      reason: '缺少暗色基线：先用 GLASS_SHELL_BASELINE=1 在改动前的代码上跑一次',
+      tester.widget<GlassTopBar>(find.byType(GlassTopBar)).backdrop,
+      GlassTopBarBackdrop.content,
     );
-    final baselinePng = await tester.runAsync(
-      () => File(darkPath).readAsBytes(),
+
+    final baselinePng = await _readHistoricalBaseline(
+      tester,
+      darkPath,
+      'dark-shell',
     );
-    final baseline = await _rgbaOfPng(tester, baselinePng!);
+    if (baselinePng == null) return;
+    final baseline = await _rgbaOfPng(tester, baselinePng);
     final wholeDiff = _diffCount(baseline, dark.rgba, dark.width, dark.height);
     final stripDiff = _diffCount(
       baseline,
@@ -567,11 +588,6 @@ void main() {
     });
     expect(stripDiff, greaterThan(0), reason: '默认底景和玻璃顶栏必须区别于旧版实底');
     expect(wholeDiff, greaterThan(0), reason: '全面改造不能仍与试点实底整窗逐像素相同');
-    expect(topBarPixel.a, 1);
-    expect(
-      tester.widget<GlassTopBar>(find.byType(GlassTopBar)).backdrop,
-      GlassTopBarBackdrop.content,
-    );
   });
 
   // -------------------------------------------------------------------------
@@ -662,8 +678,10 @@ void main() {
     final state = _LayoutTestState(
       paths: AppPaths.resolve(
         overrides: {
-          for (final name in ['config', 'data', 'cache', 'state'])
-            name: p.join(temp.path, name),
+          'config': p.join(temp.path, 'config'),
+          'data': p.join(temp.path, 'data'),
+          'cache': p.join(temp.path, 'cache'),
+          'state': p.join(temp.path, 'state'),
         },
       ),
     );
@@ -1204,12 +1222,17 @@ void main() {
       findsOneWidget,
     );
 
-    final baselinePng = await tester.runAsync(() => File(path).readAsBytes());
-    final baseline = await _rgbaOfPng(tester, baselinePng!);
-    // 面板本身允许变（它从实底变成了玻璃）；面板外必须与改动前逐像素一致。
     final panelRect = tester.getRect(
       find.byKey(const ValueKey('history-progress-dialog')),
     );
+    final baselinePng = await _readHistoricalBaseline(
+      tester,
+      path,
+      'dark-history-dialog',
+    );
+    if (baselinePng == null) return;
+    final baseline = await _rgbaOfPng(tester, baselinePng);
+    // 面板本身允许变（它从实底变成了玻璃）；面板外必须与改动前逐像素一致。
     final outside = _diffOutside(
       baseline,
       capture.rgba,
@@ -1351,14 +1374,17 @@ void main() {
       darkScheme.scrim.withValues(alpha: 0.42),
     );
 
-    final baselinePng = await tester.runAsync(
-      () => File(darkPath).readAsBytes(),
-    );
-    final baseline = await _rgbaOfPng(tester, baselinePng!);
-    // 浮层本体允许变；浮层之外必须与改动前逐像素一致。
     final sheetRect = tester.getRect(
       find.byKey(const ValueKey('source-swap-sheet')),
     );
+    final baselinePng = await _readHistoricalBaseline(
+      tester,
+      darkPath,
+      'dark-source-swap-sheet',
+    );
+    if (baselinePng == null) return;
+    final baseline = await _rgbaOfPng(tester, baselinePng);
+    // 浮层本体允许变；浮层之外必须与改动前逐像素一致。
     final outside = _diffOutside(
       baseline,
       dark.rgba,

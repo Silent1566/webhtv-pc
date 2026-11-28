@@ -276,6 +276,15 @@ void main() {
     int? switchResult;
     bool switchCompleted = false;
 
+    Future<void> settleSwitcher(WidgetTester tester) async {
+      // 这里只等对话框动画，用测试时钟推进，不等待真实 I/O。
+      await tester.pumpAndSettle(
+        const Duration(milliseconds: 100),
+        EnginePhase.sendSemanticsUpdate,
+        const Duration(seconds: 3),
+      );
+    }
+
     Future<void> openSwitcher(WidgetTester tester) async {
       switchResult = null;
       switchCompleted = false;
@@ -300,7 +309,7 @@ void main() {
         ),
       );
       await tester.tap(find.text('打开'));
-      await settle(tester);
+      await settleSwitcher(tester);
     }
 
     testWidgets('列出全部配置并标出当前项，点非当前项才返回 id', (tester) async {
@@ -329,7 +338,7 @@ void main() {
       );
 
       await tester.tap(find.byKey(ValueKey('config-switch-option-$second')));
-      await settle(tester);
+      await settleSwitcher(tester);
       expect(
         find.byKey(const ValueKey('config-switcher')),
         findsNothing,
@@ -345,7 +354,7 @@ void main() {
       state.database!.activateConfig(first);
       await openSwitcher(tester);
       await tester.tap(find.byKey(const ValueKey('config-switcher-cancel')));
-      await settle(tester);
+      await settleSwitcher(tester);
       expect(switchCompleted, isTrue);
       expect(switchResult, isNull);
       expect(state.database!.activeConfig()?.id, first);
@@ -383,9 +392,9 @@ void main() {
         ),
       );
       await tester.tap(find.text('打开'));
-      await settle(tester);
+      await settleSwitcher(tester);
       await tester.tap(find.byKey(const ValueKey('config-switcher-manage')));
-      await settle(tester);
+      await settleSwitcher(tester);
       expect(managed, isTrue);
       expect(switchCompleted, isTrue);
       expect(switchResult, isNull, reason: '管理不是选择，不能伪造记录 id');
@@ -401,7 +410,7 @@ void main() {
         findsNothing,
       );
       await tester.tap(find.byKey(const ValueKey('config-switcher-cancel')));
-      await settle(tester);
+      await settleSwitcher(tester);
       expect(switchCompleted, isTrue);
       expect(switchResult, isNull);
     });
@@ -412,7 +421,7 @@ void main() {
 
       await openSwitcher(tester);
       await tester.tap(find.byKey(ValueKey('config-switch-option-$only')));
-      await settle(tester);
+      await settleSwitcher(tester);
 
       expect(
         find.byKey(const ValueKey('config-switcher')),

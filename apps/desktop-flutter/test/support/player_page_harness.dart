@@ -146,6 +146,7 @@ Future<void> pumpPlayerPage(
   Size size = const Size(1280, 720),
   bool pushRoute = false,
   bool trackFullscreen = false,
+  bool initiallyFullscreen = false,
   Future<void> Function(AppState state)? onStateReady,
   ThemeData? theme,
 }) async {
@@ -195,7 +196,11 @@ Future<void> pumpPlayerPage(
   });
 
   installMediaKitMocks(tester);
-  installWindowManagerMocks(tester, trackFullscreen: trackFullscreen);
+  installWindowManagerMocks(
+    tester,
+    trackFullscreen: trackFullscreen || initiallyFullscreen,
+  );
+  windowManagerFullscreen = initiallyFullscreen;
 
   final player = PlayerPage(
     state: state,

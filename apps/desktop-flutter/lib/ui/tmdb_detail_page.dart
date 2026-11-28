@@ -32,6 +32,7 @@ import '../state/detail_ratings_state.dart';
 import '../state/detail_recommendation_state.dart';
 import 'glass_widgets.dart';
 import 'wallpaper_backdrop.dart';
+import 'backdrop_scrim.dart';
 import 'common.dart';
 import 'detail_ratings_section.dart';
 import 'detail_recommendations.dart';
@@ -401,15 +402,10 @@ class _TmdbDetailPageState extends State<TmdbDetailPage> {
                 surfaceTintColor: Colors.transparent,
                 elevation: 0,
                 scrolledUnderElevation: 0,
-                flexibleSpace: hasBackdrop
+                flexibleSpace: hasBackdrop || hasAppArtwork
                     ? const IgnorePointer(
-                        child: GlassChromeSurface(child: SizedBox.expand()),
-                      )
-                    : hasAppArtwork
-                    ? const IgnorePointer(
-                        child: GlassPane(
-                          borderRadius: BorderRadius.zero,
-                          child: SizedBox.expand(),
+                        child: SizedBox.expand(
+                          child: BackdropScrim(kind: BackdropScrimKind.toolbar),
                         ),
                       )
                     : null,

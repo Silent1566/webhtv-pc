@@ -85,6 +85,48 @@ void main() {
 
   Vod vodOf(String id, String name) => Vod(vodId: id, vodName: name);
 
+  test('详情诊断按同一运行号记录准备、返回和可用阶段', () async {
+    await state.loadDetail(vodOf('demo-1', '诊断影片'));
+    final messages = state.log.entries
+        .where((entry) => entry.scope == 'detail-perf')
+        .map((entry) => entry.message)
+        .toList();
+    expect(messages, isNotEmpty);
+    final run = RegExp(r'run=([0-9]+)').firstMatch(messages.first)!.group(1);
+    final stages = messages
+        .where((message) => message.startsWith('run=$run '))
+        .map(
+          (message) => RegExp(r'stage=([a-z_]+)').firstMatch(message)!.group(1),
+        )
+        .toList();
+    expect(
+      stages,
+      containsAllInOrder([
+        'start',
+        'runtime_ready',
+        'source_start',
+        'source_return',
+        'detail_ready',
+      ]),
+    );
+    expect(stages, contains('tmdb_joined'));
+    // 运行时解析与站点调用必须分开可观测：混在一段里无法判断慢在本地还是远端。
+    expect(
+      stages,
+      containsAllInOrder([
+        'source_start',
+        'runtime_resolve_start',
+        'runtime_resolve_end',
+        'source_return',
+      ]),
+    );
+    expect(messages.every((message) => message.contains('elapsedMs=')), isTrue);
+    expect(
+      messages.any((message) => message.contains(server.baseUrl)),
+      isFalse,
+    );
+  });
+
   group('详情请求运行号（§8.3）', () {
     test('迟到的详情响应不得覆盖更新的请求', () async {
       // A 先发但**后到**（slow 详情延迟 1.2s），B 后发但先到（普通详情即时）。
@@ -129,10 +171,14 @@ void main() {
       await state.selectSite(state.config!.sites.first);
       await pending;
 
+      expect(state.detailResult, isNull, reason: '换站点后，旧站点在途详情的返回必须被丢弃');
       expect(
-        state.detailResult,
-        isNull,
-        reason: '换站点后，旧站点在途详情的返回必须被丢弃',
+        state.log.entries.where(
+          (entry) =>
+              entry.scope == 'detail-perf' &&
+              entry.message.contains('stage=detail_ready '),
+        ),
+        isEmpty,
       );
     });
 
@@ -169,10 +215,14 @@ void main() {
 
       expect(state.detailPhase, LoadPhase.failed);
       expect(state.detailError, isNotNull, reason: '详情错误必须落在 detailError');
+      expect(state.lastError, isNull, reason: '详情错误不得写进浏览页共用的 lastError');
       expect(
-        state.lastError,
-        isNull,
-        reason: '详情错误不得写进浏览页共用的 lastError',
+        state.log.entries.where(
+          (entry) =>
+              entry.scope == 'detail-perf' &&
+              entry.message.contains('stage=failed '),
+        ),
+        hasLength(1),
       );
     });
   });

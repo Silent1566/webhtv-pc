@@ -68,8 +68,9 @@ ThemeData _captureTheme(Brightness brightness) {
     ),
     chipTheme: base.chipTheme.copyWith(
       labelStyle: base.chipTheme.labelStyle?.copyWith(fontFamily: _family),
-      secondaryLabelStyle: base.chipTheme.secondaryLabelStyle
-          ?.copyWith(fontFamily: _family),
+      secondaryLabelStyle: base.chipTheme.secondaryLabelStyle?.copyWith(
+        fontFamily: _family,
+      ),
     ),
   );
 }
@@ -127,11 +128,9 @@ Future<ui.Image> _adversarialBackdrop() async {
   return image;
 }
 
-/// 许可与来源见 task-1/report.md：Unsplash License 的实景照片，只作固定图像输入。
+/// 许可与来源见 fixtures/README.md；照片只作固定图像输入。
 Future<ui.Image> _photoBackdrop() async {
-  final file = File(
-    '${_spikeRoot()}/../../../../apps/desktop-flutter/lib/ui/style_spike/fixtures/background-photo.jpg',
-  );
+  final file = File('lib/ui/style_spike/fixtures/background-photo.jpg');
   expect(file.existsSync(), isTrue, reason: '缺少 fixtures/background-photo.jpg');
   final codec = await ui.instantiateImageCodec(await file.readAsBytes());
   final frame = await codec.getNextFrame();
@@ -193,7 +192,8 @@ double _spread(ByteData rgba, int width, Rect rect) {
   for (var y = rect.top.toInt(); y < rect.bottom.toInt(); y++) {
     for (var x = rect.left.toInt(); x < rect.right.toInt(); x++) {
       final i = (y * width + x) * 4;
-      final lum = 0.2126 * rgba.getUint8(i) +
+      final lum =
+          0.2126 * rgba.getUint8(i) +
           0.7152 * rgba.getUint8(i + 1) +
           0.0722 * rgba.getUint8(i + 2);
       sum += lum;
@@ -207,9 +207,8 @@ double _spread(ByteData rgba, int width, Rect rect) {
 }
 
 double _luminance(Color c) {
-  double channel(double v) => v <= 0.03928
-      ? v / 12.92
-      : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
+  double channel(double v) =>
+      v <= 0.03928 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
   return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
 }
 
@@ -253,7 +252,8 @@ Map<String, Object?> _probe(
   final ratio = _contrast(fg, bg);
   final spread = _spread(capture.rgba, capture.width, rect);
   return <String, Object?>{
-    'probe': '${rect.left.toInt()},${rect.top.toInt()} ${rect.width.toInt()}x${rect.height.toInt()}',
+    'probe':
+        '${rect.left.toInt()},${rect.top.toInt()} ${rect.width.toInt()}x${rect.height.toInt()}',
     'fg': _hex(fg),
     'bg': _hex(bg),
     'ratio': double.parse(ratio.toStringAsFixed(2)),
@@ -304,8 +304,9 @@ void main() {
       final bodyColor = theme.textTheme.bodyMedium!.color!;
       final metaColor = scheme.onSurfaceVariant;
       for (final backdrop in SpikeBackdrop.values) {
-        final ui.Image? backdropImage =
-            backdrop == SpikeBackdrop.solid ? null : adversarial;
+        final ui.Image? backdropImage = backdrop == SpikeBackdrop.solid
+            ? null
+            : adversarial;
         _Capture? currentCapture;
         for (final surface in SpikeSurface.values) {
           final key = GlobalKey();
@@ -408,15 +409,14 @@ void main() {
       'what': 'STYLE-SPIKE task-1 captures',
       'viewport': '1440x900, pixelRatio 1',
       'inputs': <String, Object?>{
-        'adversarial':
-            'generated in test: bright white + high-frequency stripes + hard light/dark split',
+        'adversarial': 'generated in test: bright white + high-frequency stripes + hard light/dark split',
         'photo': 'lib/ui/style_spike/fixtures/background-photo.jpg (Unsplash License)',
       },
       'scenes': scenes,
     };
-    File('${_spikeRoot()}/contrast.json').writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(manifest),
-    );
+    File(
+      '${_spikeRoot()}/contrast.json',
+    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(manifest));
 
     final files = dir.listSync().whereType<File>().toList()
       ..sort((a, b) => a.path.compareTo(b.path));

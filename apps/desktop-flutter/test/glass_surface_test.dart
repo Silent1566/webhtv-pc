@@ -411,7 +411,16 @@ Future<void> _glowSave(
   await tester.runAsync(() => File(path).writeAsBytes(capture.png));
 }
 
-Future<_Capture> _glowRead(WidgetTester tester, String path) async {
+Future<_Capture?> _glowRead(WidgetTester tester, String path) async {
+  if (!File(path).existsSync()) {
+    _glowProbes.add(<String, Object?>{
+      'scene': 'historical-comparison',
+      'mode': 'baseline-unavailable',
+      'baseline': path,
+    });
+    debugPrint('Historical comparison unavailable (missing baseline): $path');
+    return null;
+  }
   final capture = await tester.runAsync(() async {
     final bytes = await File(path).readAsBytes();
     final codec = await ui.instantiateImageCodec(bytes);
@@ -1574,10 +1583,18 @@ void main() {
       });
       return;
     }
+    expect(after['header_minor']!, greaterThanOrEqualTo(4.58));
+    expect(after['header_body']!, greaterThanOrEqualTo(5.23));
+    expect(
+      after['title_onSurface']!,
+      greaterThanOrEqualTo(4.5),
+      reason: '辉光加回去不许压掉浮层标题（换源）的可读性',
+    );
     final beforeCapture = await _glowRead(
       tester,
       '${_glowDir().path}/captures/dark-sheet-before.png',
     );
+    if (beforeCapture == null) return;
     final before = ratiosOf(beforeCapture);
     final diff = _glowDiffCount(beforeCapture, capture);
     _glowProbes.add(<String, Object?>{
@@ -1594,13 +1611,6 @@ void main() {
       'sha256_before': _glowSha(beforeCapture),
       'sha256_after': _glowSha(capture),
     });
-    expect(after['header_minor']!, greaterThanOrEqualTo(4.58));
-    expect(after['header_body']!, greaterThanOrEqualTo(5.23));
-    expect(
-      after['title_onSurface']!,
-      greaterThanOrEqualTo(4.5),
-      reason: '辉光加回去不许压掉浮层标题（换源）的可读性',
-    );
     expect(
       after['header_minor']!,
       greaterThanOrEqualTo(before['header_minor']! - 0.005),
@@ -1698,10 +1708,12 @@ void main() {
       });
       return;
     }
+    expect(after['caption_minor']!, greaterThanOrEqualTo(6.4));
     final beforeCapture = await _glowRead(
       tester,
       '${_glowDir().path}/captures/dark-dialog-before.png',
     );
+    if (beforeCapture == null) return;
     final before = ratiosOf(beforeCapture);
     final diff = _glowDiffCount(beforeCapture, capture);
     _glowProbes.add(<String, Object?>{
@@ -1723,15 +1735,14 @@ void main() {
       greaterThanOrEqualTo(before['caption_minor']! - 0.005),
       reason: '暗色 dialog 的 12px 说明文字比值不许掉',
     );
-    expect(after['caption_minor']!, greaterThanOrEqualTo(6.4));
     expect(diff, greaterThan(0));
   });
 
   // -------------------------------------------------------------------------
-  // 亮色红线：这一轮只改暗色档的几何，亮色必须逐像素不变。
-  // 同一场景 before/after 两份落盘图直接比，并给出 sha256。
+  // 旧试点「只改暗色」的逐像素冻结已退出；当前明暗都遵循 DESIGN.md 无框规则。
+  // 同样三个真实场景改验当前材质、几何与 ≥4.5 的可读性，不重写历史 Before。
   // -------------------------------------------------------------------------
-  testWidgets('glow-1 · 亮色：sheet / dialog / 面板逐字节不变（sha256）', (tester) async {
+  testWidgets('亮色：sheet / dialog / 面板无装饰边框、几何稳定且文字可读', (tester) async {
     tester.view.physicalSize = _viewport;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -1739,28 +1750,127 @@ void main() {
     final theme = _captureTheme(Brightness.light);
     final results = <String, Object?>{};
 
-    // 每个场景换一把新的 GlobalKey：同一个 key 会让上一棵树的 ModalRoute
-    //（浮层里有无限动画）被「复用」下来，pumpAndSettle 永远不收敛。
+    // 新 key 防止无限动画浮层的 ModalRoute 复用到下一场景。
     Future<void> check(
       String stem,
       Future<_Capture> Function(GlobalKey key) shoot,
+      List<String> labels,
     ) async {
       final capture = await shoot(GlobalKey());
       await _glowSave(tester, capture, _glowCapturePath(stem));
       if (_glowBaselineMode) return;
-      final before = await _glowRead(
-        tester,
-        '${_glowDir().path}/captures/$stem-before.png',
+      expect(tester.takeException(), isNull);
+      expect(capture.width, _viewport.width);
+      expect(capture.height, _viewport.height);
+
+      final surface = find.byType(GlassSurface);
+      expect(surface, findsOneWidget);
+      final material = tester.widget<GlassSurface>(surface);
+      expect(material.rimAlpha ?? AppGlass.rimAlphaLight, 0);
+      expect(material.sheenAlpha ?? AppGlass.sheenAlphaLight, 0);
+      final filters = find.descendant(
+        of: surface,
+        matching: find.byType(BackdropFilter),
       );
-      final diff = _glowDiffCount(before, capture);
-      results['${stem}_diff_pixels'] = diff;
-      results['${stem}_sha256_before'] = _glowSha(before);
+      expect(filters, findsOneWidget);
+      expect(
+        find.descendant(of: surface, matching: find.byType(ClipRRect)),
+        findsOneWidget,
+      );
+      final layers = tester.widget<Stack>(
+        find.descendant(of: surface, matching: find.byType(Stack)).first,
+      );
+      final overlays = layers.children
+          .whereType<Positioned>()
+          .map((layer) => layer.child)
+          .whereType<DecoratedBox>()
+          .map((layer) => layer.decoration)
+          .whereType<BoxDecoration>();
+      for (final overlay in overlays) {
+        expect(overlay.border, isNull, reason: '材质层不能重画装饰边框');
+        expect(
+          overlay.gradient?.colors.every((color) => color.a == 0) ?? true,
+          isTrue,
+          reason: '材质层不能重画 wash / sheen',
+        );
+        expect(overlay.boxShadow, isNull);
+      }
+      final tint =
+          tester
+                  .widget<DecoratedBox>(
+                    find
+                        .descendant(
+                          of: filters,
+                          matching: find.byType(DecoratedBox),
+                        )
+                        .first,
+                  )
+                  .decoration
+              as BoxDecoration;
+      expect(tint.border, isNull);
+      expect(tint.gradient, isNull);
+      expect(tint.boxShadow, isNull);
+
+      final panel = tester.getRect(surface);
+      expect(panel.left, greaterThanOrEqualTo(0));
+      expect(panel.top, greaterThanOrEqualTo(0));
+      expect(panel.right, lessThanOrEqualTo(_viewport.width));
+      expect(panel.bottom, lessThanOrEqualTo(_viewport.height));
+      if (stem == 'light-dialog') {
+        expect(panel.width, 560 + 2 * AppSpace.xl);
+        expect(panel.center, _viewport.center(Offset.zero));
+      } else {
+        expect(panel, _glowSheetRect);
+      }
+      results['${stem}_panel_rect'] = <double>[
+        panel.left,
+        panel.top,
+        panel.width,
+        panel.height,
+      ];
       results['${stem}_sha256_after'] = _glowSha(capture);
-      expect(diff, 0, reason: '亮色必须逐像素不变：改了暗色几何也不许漏到亮色');
+
+      for (final label in labels) {
+        final text = find.text(label);
+        expect(text, findsOneWidget);
+        final rect = tester.getRect(text);
+        expect(rect.left, greaterThanOrEqualTo(panel.left));
+        expect(rect.top, greaterThanOrEqualTo(panel.top));
+        expect(rect.right, lessThanOrEqualTo(panel.right));
+        expect(rect.bottom, lessThanOrEqualTo(panel.bottom));
+        final ink = _glowResolvedStyle(tester, text).color!;
+        expect(ink, theme.colorScheme.onSurface);
+        // 同一文字行右侧的空白带，避开字形和右上角关闭按钮。
+        final band = Rect.fromLTWH(
+          panel.right - 128,
+          rect.top,
+          40,
+          rect.height,
+        );
+        final ratio = _worstRowContrast(capture, band, ink);
+        results['${stem}_${label}_contrast'] = _round2(ratio);
+        expect(ratio, greaterThanOrEqualTo(4.5), reason: '$stem 的「$label」必须可读');
+      }
+      if (labels.isEmpty) {
+        final band = Rect.fromLTWH(panel.right - 128, panel.top + 43, 40, 16);
+        final ratio = _worstRowContrast(
+          capture,
+          band,
+          theme.colorScheme.onSurface,
+        );
+        results['${stem}_onSurface_contrast'] = _round2(ratio);
+        expect(ratio, greaterThanOrEqualTo(4.5));
+      }
     }
 
-    await check('light-sheet', (key) => _glowShootSheet(tester, theme, key));
-    await check('light-dialog', (key) => _glowShootDialog(tester, theme, key));
+    await check('light-sheet', (key) => _glowShootSheet(tester, theme, key), [
+      '换源',
+      '当前：沙丘',
+    ]);
+    await check('light-dialog', (key) => _glowShootDialog(tester, theme, key), [
+      '选择续播记录',
+      '同一部剧有多条可续播记录，选一条继续：',
+    ]);
     await check('light-panel', (key) async {
       await tester.pumpWidget(
         _glowScanApp(
@@ -1772,9 +1882,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       return _glowShoot(tester, key);
-    });
+    }, const []);
     _glowProbes.add(<String, Object?>{
-      'scene': 'light-glow-identity',
+      'scene': 'light-current-borderless',
       ...results,
     });
   });

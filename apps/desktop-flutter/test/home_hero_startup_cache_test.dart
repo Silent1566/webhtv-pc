@@ -8,6 +8,24 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/home_hero_startup_cache.dart';
 
+class _ObservedReadFile implements File {
+  _ObservedReadFile(this.file, this.onOpen);
+  final File file;
+  final void Function() onOpen;
+
+  @override
+  String get path => file.path;
+
+  @override
+  RandomAccessFile openSync({FileMode mode = FileMode.read}) {
+    onOpen();
+    return file.openSync(mode: mode);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory root;
@@ -247,6 +265,37 @@ void main() {
     expect(File(restored.filePath).readAsBytesSync(), jpeg);
   });
 
+  test('background readback validates bytes without opening files on the caller', () async {
+    await cache.save('scope-a', [entry('one'), entry('two')]);
+    final files = {
+      for (final file in root.listSync(recursive: true).whereType<File>())
+        file.path: file,
+    };
+    var callerReads = 0;
+    final restored = await IOOverrides.runZoned(
+      () => cache.readAsync('scope-a'),
+      createFile: (path) => _ObservedReadFile(files[path]!, () => callerReads++),
+    );
+    expect(restored.map((item) => item.key), ['one', 'two']);
+    expect(callerReads, 0,
+        reason: 'post-save SHA validation and disk reads must not block UI');
+    final damaged = File(restored.first.filePath);
+    damaged.writeAsBytesSync([1, 2, 3]);
+    expect((await cache.readAsync('scope-a')).map((item) => item.key), ['two']);
+  });
+
+  test('background readback shares the save queue and rejects stale generations', () async {
+    final save = cache.save('scope-a', [entry('one')]);
+    final restored = cache.readAsync('scope-a');
+    await save;
+    expect((await restored).single.key, 'one');
+    final old = cache.readAsync('scope-a');
+    final clear = HomeHeroStartupCache(directory: root).clear();
+    expect(await old, isEmpty);
+    await clear;
+    expect(await cache.readAsync('scope-a'), isEmpty);
+  });
+
   test('three maximum-size images stay within eighteen MiB', () async {
     final padded = Uint8List(6 * 1024 * 1024)..setRange(0, hd.length, hd);
     await cache.save('scope-a', [
@@ -367,6 +416,7 @@ void main() {
     }
     try {
       expect(cache.read('scope-a'), isEmpty);
+      expect(await cache.readAsync('scope-a'), isEmpty);
       await cache.save('scope-a', [entry('two')]);
       await cache.clear();
       for (final original in originals.entries) {

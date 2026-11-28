@@ -183,7 +183,7 @@ void main() {
       final captured = <int?>[];
       await openDialog(tester, current: 5, min: 10, max: 1, captured: captured);
 
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(GlassAlertDialog), findsNothing);
       expect(captured, [null]);
     });
 

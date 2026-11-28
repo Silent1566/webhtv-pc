@@ -15,6 +15,7 @@ import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'glass_dialog.dart';
 import 'ai_settings_page.dart';
+import 'ad_block_page.dart';
 import 'ai_integration_widgets.dart';
 import 'app.dart';
 import 'app_update_page.dart';
@@ -33,6 +34,7 @@ import 'osd_settings_page.dart';
 import 'pan_check_page.dart';
 import 'player_button_config_page.dart';
 import 'python_environment_page.dart';
+import 'recommendation_feedback_page.dart';
 import 'scroll_behavior.dart';
 import 'source_field.dart';
 import 'spider_page.dart';
@@ -215,6 +217,15 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     final preferences = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        SettingsNavRow(
+          key: const ValueKey('settings-recommendation-feedback-open'),
+          icon: Icons.fact_check_outlined,
+          title: '推荐反馈',
+          subtitle: '管理「已看」和「不感兴趣」记录',
+          onTap: () => _push(context, RecommendationFeedbackPage(state: state)),
+        ),
+        const Divider(height: 1),
+        const SizedBox(height: AppSpace.lg),
         SettingsField(
           label: '外观',
           child: SegmentedButton<ThemeMode>(
@@ -472,6 +483,14 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
               '${state.config?.hlsRules.length ?? 0} 条 HLS 规则；规则为空时无效果',
           value: state.adBlockEnabled,
           onChanged: state.setAdBlockEnabled,
+        ),
+        SettingsNavRow(
+          key: const ValueKey('settings-ad-block-open'),
+          icon: Icons.shield_outlined,
+          title: '去广告',
+          subtitleKey: const ValueKey('settings-ad-block-summary'),
+          subtitle: _adBlockSummary(state),
+          onTap: () => _push(context, AdBlockPage(state: state)),
         ),
         _switch(
           key: const ValueKey('settings-parse-failover'),
@@ -790,6 +809,15 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   }
 
   String _onOff(bool value) => value ? '开' : '关';
+
+  /// 「去广告」一行的摘要：只写用户要判断的两件事——开没开、有没有规则。
+  String _adBlockSummary(AppState state) {
+    if (!state.adBlockEnabled) return '已关闭';
+    final library = state.adRuleLibrary;
+    final enabled = library.entries.where((entry) => entry.enabled).length;
+    return '规则 ${library.entries.length} 组（$enabled 启用）'
+        '${state.adBlockHeuristicEnabled ? ' · 启发式开' : ''}';
+  }
 
   /// 直播回退开关的一句话摘要（副标题用）。
   String _liveSummary() {

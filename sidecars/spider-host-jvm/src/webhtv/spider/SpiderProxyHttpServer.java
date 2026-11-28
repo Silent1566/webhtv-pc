@@ -254,6 +254,10 @@ public final class SpiderProxyHttpServer implements AutoCloseable {
             response.headers.forEach((name,value)->exchange.getResponseHeaders().set(name,value));
             if(response.mime!=null)exchange.getResponseHeaders().set("Content-Type",response.mime);
             long length=response.length;
+            // 响应结束后本端会关掉 TCP（Transfer.close → exchange.close）；
+            // 不显式声明的话，对端按 HTTP/1.1 默认 keep-alive 复用这条已死的连接，
+            // 下一次请求直接 RST（实测 5 次里 2 次 ECONNRESET，客户端报成“网络不可达”）。
+            exchange.getResponseHeaders().set("Connection","close");
             if(method.equals("HEAD")) {
                 if(length>=0)exchange.getResponseHeaders().set("Content-Length",Long.toString(length));
                 exchange.sendResponseHeaders(response.status,-1);committed=true;return;
@@ -369,6 +373,7 @@ public final class SpiderProxyHttpServer implements AutoCloseable {
         try {
             byte[] bytes=text.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type","text/plain; charset=utf-8");
+            exchange.getResponseHeaders().set("Connection","close");
             if(exchange.getRequestMethod().equals("HEAD")){exchange.sendResponseHeaders(status,-1);}
             else {exchange.sendResponseHeaders(status,bytes.length);exchange.getResponseBody().write(bytes);}
         } catch(IOException ignored){}finally{exchange.close();}

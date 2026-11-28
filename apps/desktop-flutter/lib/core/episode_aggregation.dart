@@ -1,5 +1,52 @@
+import 'dart:collection';
+
 import 'protocol.dart';
 import 'tmdb_title.dart' show parseChineseNumber;
+
+/// Maps rendered episodes to the first unused source index, preferring object
+/// identity, then URL and name, then URL alone. Missing episodes map to -1.
+List<int> sourceEpisodeIndices(
+  List<VodEpisode> source,
+  List<VodEpisode> rendered,
+) {
+  if (identical(source, rendered)) {
+    return List.generate(source.length, (index) => index, growable: false);
+  }
+  if (rendered.isEmpty) return const [];
+
+  final byIdentity = Map<VodEpisode, Queue<int>>.identity();
+  final byUrlAndName = <(String, String), Queue<int>>{};
+  final byUrl = <String, Queue<int>>{};
+  final length = source.length;
+  for (var i = 0; i < length; i++) {
+    final episode = source[i];
+    final key = (episode.url, episode.name);
+    (byIdentity[episode] ??= Queue<int>()).addLast(i);
+    (byUrlAndName[key] ??= Queue<int>()).addLast(i);
+    (byUrl[episode.url] ??= Queue<int>()).addLast(i);
+  }
+
+  final used = List.filled(length, false);
+  int? take(Queue<int>? indices) {
+    if (indices == null) return null;
+    // A source index may have been consumed through a stronger or weaker key.
+    while (indices.isNotEmpty) {
+      final index = indices.removeFirst();
+      if (used[index]) continue;
+      used[index] = true;
+      return index;
+    }
+    return null;
+  }
+
+  return [
+    for (final episode in rendered)
+      take(byIdentity[episode]) ??
+          take(byUrlAndName[(episode.url, episode.name)]) ??
+          take(byUrl[episode.url]) ??
+          -1,
+  ];
+}
 
 class EpisodeFileSize {
   const EpisodeFileSize({required this.label, required this.bytes});

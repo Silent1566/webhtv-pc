@@ -54,8 +54,10 @@ void main() {
     workspace = await Directory.systemTemp.createTemp('glass-settings');
     final paths = AppPaths.resolve(
       overrides: {
-        for (final name in ['config', 'data', 'cache', 'state'])
-          name: '${workspace.path}/$name',
+        'config': '${workspace.path}/config',
+        'data': '${workspace.path}/data',
+        'cache': '${workspace.path}/cache',
+        'state': '${workspace.path}/state',
       },
     );
     state = AppState(paths: paths, log: LogService());

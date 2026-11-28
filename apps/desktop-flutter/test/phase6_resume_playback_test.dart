@@ -20,9 +20,7 @@ import 'package:webhtv_pc/ui/history_resume_seed.dart';
 /// 只剥整行注释：本仓库注释都是整行风格，行尾注释里出现被断言的语句会误判。
 String _readSourceCode(String relative) {
   final raw = File(relative).readAsLinesSync();
-  return raw
-      .where((line) => !line.trimLeft().startsWith('//'))
-      .join('\n');
+  return raw.where((line) => !line.trimLeft().startsWith('//')).join('\n');
 }
 
 void main() {
@@ -94,10 +92,7 @@ void main() {
     });
 
     test('空线路列表返回 null', () {
-      expect(
-        locateResumeEpisode(lines: const [], seed: seedOfEp2),
-        isNull,
-      );
+      expect(locateResumeEpisode(lines: const [], seed: seedOfEp2), isNull);
     });
   });
 
@@ -175,7 +170,9 @@ void main() {
     });
 
     test('两边都只有一集（电影）→ true', () {
-      final single = [lineOf('线路一', [('正片', 'http://x/movie')])];
+      final single = [
+        lineOf('线路一', [('正片', 'http://x/movie')]),
+      ];
       const seed = ResumeSeed(
         flag: '线路一',
         episodeId: 'http://x/movie',
@@ -375,16 +372,23 @@ void main() {
     });
 
     test('同名片只有第 1 集 → 没有目标集（必须判 false，否则被送去第 1 集）', () {
-      final short = [lineOf('线路一', [('第1集', 'http://q/e1')])];
+      final short = [
+        lineOf('线路一', [('第1集', 'http://q/e1')]),
+      ];
       expect(candidateHasResumeEpisode(lines: short, seed: seedOfEp2), isFalse);
     });
 
     test('空 lines（详情没拿到）→ false', () {
-      expect(candidateHasResumeEpisode(lines: const [], seed: seedOfEp2), isFalse);
+      expect(
+        candidateHasResumeEpisode(lines: const [], seed: seedOfEp2),
+        isFalse,
+      );
     });
 
     test('电影（两边都只有一集）→ 有目标集', () {
-      final movie = [lineOf('线路一', [('正片', 'http://m/movie')])];
+      final movie = [
+        lineOf('线路一', [('正片', 'http://m/movie')]),
+      ];
       const seed = ResumeSeed(
         flag: '线路一',
         episodeId: 'http://other/movie',
@@ -468,7 +472,6 @@ void main() {
   // ---------------------------------------------------------------------------
   group('接线锁（源码级：详情页→播放器的一次性交接）', () {
     final playerSource = _readSourceCode('lib/ui/player_page.dart');
-    final browseSource = _readSourceCode('lib/ui/browse_pages.dart');
     final requestSource = _readSourceCode('lib/core/playback_request.dart');
 
     test('PlaybackRequest 带待迁移种子，且在 copyWith 里可清除', () {
@@ -487,7 +490,9 @@ void main() {
         reason: '恢复位置必须经 _effectiveStartPosition 计算',
       );
       expect(
-        playerSource.contains('targetDurationMs: _controller.duration.inMilliseconds'),
+        playerSource.contains(
+          'targetDurationMs: _controller.duration.inMilliseconds',
+        ),
         isTrue,
         reason: '比例换算的唯一正确时长来源是 open 成功后的 _controller.duration',
       );
@@ -501,12 +506,7 @@ void main() {
       );
     });
 
-    test('详情页把种子透传给播放器', () {
-      expect(
-        browseSource.contains('resumeSeed: widget.resumeSeed'),
-        isTrue,
-        reason: '详情页拿到了种子却没交给播放器，跨源续播就还是从头播',
-      );
-    });
+    // 详情页到播放器的种子交接由 detail_history_refresh_test.dart 实际点击并检查
+    // PlayerPage.request：同时覆盖初次入口与最新写库进度，不绑定源码写法。
   });
 }

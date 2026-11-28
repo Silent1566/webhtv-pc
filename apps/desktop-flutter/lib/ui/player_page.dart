@@ -79,6 +79,7 @@ import 'danmaku_settings_page.dart';
 import 'danmaku_settings_sheet.dart';
 import 'player_button_config_page.dart';
 import 'player_context_menu.dart';
+import 'player_menu_popup.dart';
 import 'external_player_picker_dialog.dart';
 import 'player_controller.dart';
 import 'player_episode_panel.dart';
@@ -391,6 +392,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   bool _controlsVisible = true;
   Timer? _saveTimer;
   Timer? _controlHideTimer;
+  Timer? _cursorHideTimer;
+  bool _fullscreenCursorIdle = false;
+  static const _idleHideDelay = Duration(seconds: 3);
 
   /// 画面双击判定（见 [PlayerDoubleClickGate]）。
   final PlayerDoubleClickGate _clickGate = PlayerDoubleClickGate();
@@ -681,6 +685,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 右键菜单的锚点；null 表示菜单关闭。
   Offset? _contextMenuAnchor;
+  PlayerMenuPopup? _contextMenuPopup;
+  bool _contextMenuFromKeyboard = false;
 
   /// 屏显的时钟基准；由 [_osdTimer] 每秒推进。
   ///
@@ -733,6 +739,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     )..addListener(_onControllerChanged);
     _bindGesturePlaybackStream();
     windowManager.addListener(this);
+    unawaited(_syncInitialFullscreen());
     widget.liveSession?.addListener(_onPlaybackSessionChanged);
     _osdNow = debugOsdClockOverride ?? DateTime.now();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -997,10 +1004,12 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     unawaited(session.browse(session.source));
     session.selectGroup(session.channel.group);
+    _contextMenuPopup?.close();
     setState(() {
       _livePanelOpen = true;
       _linePanelChannel = null;
       _contextMenuAnchor = null;
+      _contextMenuPopup = null;
     });
     _touchControls();
   }
@@ -2033,6 +2042,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     if (!mounted || generation != _mediaGeneration) return;
     widget.state.log.info('播放结果 ${outcome.summary}', scope: 'player');
+    // 起播落点必须在**这一刻**记下来：后面还要装配字幕与弹幕（实测枚举弹幕库那次
+    // 装配了十几秒），那时再读 controller.position 读到的是播放进度而不是落点，
+    // 会把正常续播误报成「起播定位未生效」，并给用户弹一条假的「已从头播放」。
+    final landingPosition = controller.position;
     final diagnostics = controller.diagnostics;
     if (diagnostics != null) {
       widget.state.log.info(
@@ -2146,7 +2159,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (alreadyPositioned) {
         // 起播定位写在 mpv 的 `start` 选项里，生效与否只有引擎自己知道：
         // 落地位置明显偏离就说明这次定位没吃上（此时是从头播，而不是跳转失败）。
-        final actual = _controller.position;
+        final actual = landingPosition;
         final drift = (actual - start).inMilliseconds.abs();
         if (drift > 5000) {
           widget.state.log.warning(
@@ -2665,20 +2678,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 仍会被当成「当前弹幕」，还会继续往新画面推流。
     await _teardownLiveSession('configure');
     final sources = _request.danmaku;
+    // 一次装载只该装配一次：这条日志让「同一 generation 出现两次」当场可见
+    // （实测同一集会连跑两遍站源弹幕请求，白等 2–4 秒还多一条失败警告）。
+    widget.state.log.debug(
+      '弹幕装配 generation=$_mediaGeneration 源=${sources.length}',
+      scope: 'danmaku',
+    );
     if (sources.isEmpty) {
       await _autoSearchDanmaku();
       return;
     }
-    // 优先用户显式选择的源，其次第一个源（静态或直播均可）。
-    var selected = sources.firstWhere(
-      (source) => source.selected,
-      orElse: () => sources.first,
-    );
-    if (selected.isLive) {
-      await _connectLiveDanmaku(selected);
-      return;
+    // 优先用户显式选择的源，其余按原顺序依次尝试；**全部失败再回退弹幕库**。
+    //
+    // 为什么不能只试第一个：站源给的 `do=danmu` 地址实测时好时坏（一次返回非弹幕
+    // 内容、一次指向已关闭的本机数据面）。站源给了但不可用时只试一个，等于整条
+    // 弹幕链作废——用户看到"这集没弹幕"，而弹幕库其实是好的。
+    final ordered = <DanmakuSource>[
+      ...sources.where((source) => source.selected),
+      ...sources.where((source) => !source.selected),
+    ];
+    for (final source in ordered) {
+      if (source.isLive) {
+        await _connectLiveDanmaku(source);
+        return;
+      }
+      // 中间候选静默失败：不逐条弹提示，交给最终兜底结果统一告知。
+      if (await _loadDanmakuSource(source, quiet: true, origin: 'configure')) {
+        return;
+      }
     }
-    await _loadDanmakuSource(selected);
+    await _autoSearchDanmaku();
   }
 
   /// 构造弹幕库查询。
@@ -2740,6 +2769,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
     if (memory != null) {
       await _loadDanmakuSource(
+        origin: 'auto:memory',
         DanmakuSource(
           url: memory.url,
           name: memory.title,
@@ -2795,6 +2825,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             source: entry.providerId,
           ),
           quiet: true,
+          origin: 'auto:candidate',
         );
       },
     );
@@ -2838,6 +2869,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         name: selected.title,
         source: selected.providerId,
       ),
+      origin: 'search:selected',
     );
     await widget.state.learnBusinessTitle(
       rawTitle: _request.vodName,
@@ -3000,6 +3032,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<bool> _loadDanmakuSource(
     DanmakuSource source, {
     bool quiet = false,
+    String origin = 'unknown',
   }) async {
     final generation = _hasQueue ? _mediaGeneration : null;
     bool isCurrent() =>
@@ -3019,7 +3052,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           : null;
       _danmakuError = null;
       widget.state.log.info(
-        '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms',
+        '弹幕已加载 ${document.logLine} elapsed=${stopwatch.elapsed.inMilliseconds}ms'
+        ' origin=$origin',
         scope: 'danmaku',
       );
       if (mounted) setState(() {});
@@ -3029,8 +3063,10 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _danmakuItems = const [];
       _danmakuSourceUrl = null;
       _danmakuError = describeDanmakuFailure(error);
+      final detail = error is AppError ? error.detail : null;
       widget.state.log.warning(
-        '弹幕加载失败 source=${source.displayName} $_danmakuError',
+        '弹幕加载失败 origin=$origin source=${source.displayName} $_danmakuError'
+        '${detail == null || detail.isEmpty ? '' : ' detail=$detail'}',
         scope: 'danmaku',
       );
       if (!mounted) return false;
@@ -3140,7 +3176,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     // 点播分支不经过直播会话；不先停掉会继续推流并渲染到新弹幕上。
     await _teardownLiveSession('danmaku-switch');
     if (mounted) setState(() {});
-    final ok = await _loadDanmakuSource(source);
+    final ok = await _loadDanmakuSource(source, origin: 'sheet:switch');
     return DanmakuSourceLoadOutcome(
       ok: ok,
       currentUrl: _danmakuSourceUrl,
@@ -3761,6 +3797,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   @override
   void dispose() {
+    _contextMenuPopup?.close();
     widget.state.cancelSkipPrefetch();
     _releaseProxySession?.call();
     _releaseProxySession = null;
@@ -3775,6 +3812,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _saveTimer?.cancel();
     _recoveryTicker?.cancel();
     _controlHideTimer?.cancel();
+    _cursorHideTimer?.cancel();
     _clickGate.dispose();
     _clearGesturePlaybackIntent();
     unawaited(_gesturePlayingSubscription?.cancel());
@@ -3793,6 +3831,17 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _syncInitialFullscreen() async {
+    try {
+      final actual = await windowManager.isFullScreen();
+      if (!mounted || actual == _fullscreen) return;
+      setState(() => _fullscreen = actual);
+      _touchFullscreenCursor();
+    } catch (error) {
+      debugPrint('查询播放器全屏状态失败：$error');
+    }
   }
 
   @override
@@ -3815,9 +3864,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _controlsVisible = true;
     });
     _controlHideTimer?.cancel();
-    // 插件只通知「离开全屏」，不会把 hidden 的标题栏改回来；
-    // 若这次离开不是我们自己的 setFullScreen(false) 触发的，
-    // 标题栏会永远消失（与「关不掉窗口」是同一类问题）。
+    _touchFullscreenCursor();
+    // 兜住仍需要手动恢复标题栏的平台。
     unawaited(restoreWindowTitleBar());
   }
 
@@ -3825,16 +3873,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final next = !await windowManager.isFullScreen();
     try {
       if (next) {
-        // 顺序与异常恢复统一交给 window_mode.dart：Windows 上必须先
-        // 把标题栏切到 hidden，铺满分支才会执行。
         await enterPlayerFullscreen();
       } else {
         await restoreWindowedMode();
       }
       _enteredFullscreen = next;
     } catch (error) {
-      // 进入失败时标题栏可能已经被隐藏，必须恢复，否则窗口会变成
-      // 没有标题栏按钮的小窗——用户同样关不掉。
+      // 非 Windows 平台可能已先隐藏标题栏，失败时也要恢复。
       await restoreWindowedMode();
       _enteredFullscreen = false;
       widget.state.log.warning('切换全屏失败：$error', scope: 'player');
@@ -3866,6 +3911,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _fullscreen = false;
       _controlsVisible = true;
     });
+    _touchFullscreenCursor();
     // canPop 要等这一帧重建后才生效；postFrame 里再 pop，避免再次被
     // 自己的 PopScope 拦下（那会形成「恢复 → 拦截」的循环）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -4229,6 +4275,33 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 请求上的 `siteKey`/`vodId` 是**记录**的身份（目录记录就是父目录 id），
   /// 拿它去问那份配置会解析到别的条目，甚至被站源判为业务错误。
   Future<PlaybackDecision?> _resolvePlayback({
+    required String episodeTarget,
+    required String flag,
+    required String vodId,
+    SwapLineRoute? route,
+    int? qualityIndex,
+    bool Function()? isCurrent,
+  }) async {
+    final labels = _request.adBlockLabelsFor(
+      episodeTarget: episodeTarget,
+      flag: flag,
+    );
+    final decision = await _resolvePlaybackForLabels(
+      episodeTarget: episodeTarget,
+      flag: flag,
+      vodId: vodId,
+      route: route,
+      qualityIndex: qualityIndex,
+      isCurrent: isCurrent,
+    );
+    // 解析过程中每次撤销会话都会清空归属，所以只能**成功之后**登记：
+    // 随后的清单请求由代理读取它记账，换集时不会继承上一集的标签。
+    if (decision != null) widget.state.noteAdBlockPlayback(labels);
+    return decision;
+  }
+
+  /// 真正的解析（归属登记见 [_resolvePlayback]）。
+  Future<PlaybackDecision?> _resolvePlaybackForLabels({
     required String episodeTarget,
     required String flag,
     required String vodId,
@@ -4827,8 +4900,13 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           _hasLivePanels ? _closeLivePanels : _closeContextMenu;
     }
 
+    final menuSections = _contextMenuAnchor == null
+        ? null
+        : _contextMenuSections();
+    if (menuSections != null) _contextMenuPopup?.update(menuSections);
+
     final page = PopScope<Object?>(
-      canPop: !_fullscreen,
+      canPop: !_fullscreen || !_enteredFullscreen,
       onPopInvokedWithResult: _onPopInvokedWithResult,
       child: CallbackShortcuts(
         bindings: shortcuts,
@@ -4851,8 +4929,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                     // **只在隐藏态唤醒**：可见时若也调 `_touchControls`，
                     // 指针每动一次都会重置 3 秒计时器，控制栏将永不隐藏。
                     child: MouseRegion(
+                      cursor:
+                          _fullscreen &&
+                              !_controlsVisible &&
+                              _fullscreenCursorIdle
+                          ? SystemMouseCursors.none
+                          : MouseCursor.defer,
                       onHover: (_) {
-                        if (!_controlsVisible) _touchControls();
+                        if (!_controlsVisible) {
+                          _touchControls();
+                        } else {
+                          _touchFullscreenCursor();
+                        }
                       },
                       child: GestureDetector(
                         key: _videoGestureKey,
@@ -4863,11 +4951,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         onLongPressStart: (_) => _beginGestureSpeed(),
                         onLongPressEnd: (_) => _endGestureSpeed(),
                         onLongPressCancel: _endGestureSpeed,
-                        // 右键：打开菜单（`design/04` §5.1）。
-                        // 两个回调都指向同一方法，方法内部幂等。
-                        onSecondaryTapDown: (details) =>
+                        // Finish the mouse gesture before a native popup takes focus.
+                        onSecondaryTapUp: (details) =>
                             _openContextMenu(details.globalPosition),
-                        onSecondaryTap: () {},
                         child: Stack(
                           children: [
                             Positioned.fill(
@@ -5206,12 +5292,14 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                         onTap: _closeContextMenu,
                       ),
                     ),
-                    PlayerContextMenu(
-                      anchor: _contextMenuAnchor!,
-                      viewport: MediaQuery.sizeOf(context),
-                      sections: _contextMenuSections(),
-                      onDismiss: _closeContextMenu,
-                    ),
+                    if (_contextMenuPopup == null)
+                      PlayerContextMenu(
+                        anchor: _contextMenuAnchor!,
+                        viewport: MediaQuery.sizeOf(context),
+                        sections: menuSections!,
+                        onDismiss: _closeContextMenu,
+                        reserveFlyoutSpace: !_contextMenuFromKeyboard,
+                      ),
                   ],
                 ],
               ),
@@ -6320,7 +6408,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       devicePixelRatio: dpr,
       themeMode: widget.state.themeMode,
       proxyPort: null,
+      adBlockSummary: _adBlockOsdSummary(),
     );
+  }
+
+  /// 本次会话累计拦截摘要；没拦过返回 null（该行不出现）。
+  String? _adBlockOsdSummary() {
+    final summary = widget.state.adBlockSummary;
+    if (summary == null) return null;
+    final seconds = summary.removedDurationSec;
+    return '已拦 ${summary.removedSegments} 段'
+        '${seconds > 0 ? ' · ${seconds.toStringAsFixed(1)} 秒' : ''}'
+        '${summary.heuristic ? ' · 启发式' : ''}';
   }
 
   /// 屏显是否需要刷新循环。
@@ -6395,7 +6494,19 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (wasKeepingControls) _touchControls();
   }
 
+  void _touchFullscreenCursor() {
+    _cursorHideTimer?.cancel();
+    if (_fullscreenCursorIdle) {
+      setState(() => _fullscreenCursorIdle = false);
+    }
+    if (!_fullscreen) return;
+    _cursorHideTimer = Timer(_idleHideDelay, () {
+      if (mounted) setState(() => _fullscreenCursorIdle = true);
+    });
+  }
+
   void _touchControls() {
+    _touchFullscreenCursor();
     _controlHideTimer?.cancel();
     if (mounted && !_controlsVisible) {
       setState(() => _controlsVisible = true);
@@ -6407,7 +6518,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         _keepControlsForKeyboard) {
       return;
     }
-    _controlHideTimer = Timer(const Duration(seconds: 3), () {
+    _controlHideTimer = Timer(_idleHideDelay, () {
       if (!mounted) return;
       if (_contextMenuAnchor != null ||
           _hasLivePanels ||
@@ -6559,16 +6670,36 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
-  /// 打开右键菜单（`design/04` §5.1）。
-  ///
-  /// 幂等：已打开时只移动位置（部分平台只发 `onSecondaryTap` 不发 `onSecondaryTapDown`）。
-  void _openContextMenu(Offset globalPosition) {
+  void _openContextMenu(Offset globalPosition, {bool fromKeyboard = false}) {
     _controlHideTimer?.cancel();
+    _contextMenuPopup?.close();
+    final popup = PlayerMenuPopup.enabled && !_fullscreen
+        ? PlayerMenuPopup(onDismiss: _closeContextMenu)
+        : null;
     setState(() {
       _contextMenuAnchor = globalPosition;
+      _contextMenuFromKeyboard = fromKeyboard;
+      _contextMenuPopup = popup;
       _controlsVisible = true;
     });
     _syncOsdTimer();
+    if (popup != null) unawaited(_showContextMenuPopup(popup, globalPosition));
+  }
+
+  Future<void> _showContextMenuPopup(
+    PlayerMenuPopup popup,
+    Offset anchor,
+  ) async {
+    if (await popup.show(
+      anchor,
+      _contextMenuSections(),
+      reserveFlyoutSpace: !_contextMenuFromKeyboard,
+      pixelRatio: View.of(context).devicePixelRatio,
+    )) {
+      return;
+    }
+    if (!mounted || _contextMenuPopup != popup) return;
+    setState(() => _contextMenuPopup = null);
   }
 
   /// 键盘打开右键菜单的三个激活器：菜单键、Shift+F10（Windows 惯例）、
@@ -6579,29 +6710,21 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     SingleActivator(LogicalKeyboardKey.f10),
   ];
 
-  /// 在画面中央打开右键菜单（菜单键 / Shift+F10 / F10）。
-  ///
-  /// 复用 [_openContextMenu] 而不是另写一套打开逻辑：它已经幂等（菜单开着时
-  /// 只移动位置），也带着「强制显示控制栏 + 取消隐藏计时器」那套行为，
-  /// 分叉出去这两点就会各自漂移。
-  ///
-  /// 为什么减掉半个菜单尺寸：[_openContextMenu] 的入参是菜单**左上角**
-  /// （`player_context_menu.dart:178-181`），直接传画面中心会让菜单整体落到
-  /// 右下象限、看起来像跑偏了。菜单宽高是 `player_context_menu.dart` 的私有
-  /// 常量（`_menuWidth = 240`、`_estimatedMenuHeight = 420`），外部取不到，
-  /// 这里镜像一份**只用于视觉居中**；镜像值漂移最多让菜单偏几十像素，
-  /// 不改变任何行为。坐标空间沿用既有约定（见 `player_context_menu.dart:17-21`：
-  /// Windows 全屏播放器里 globalPosition 与父 Stack 坐标一致）。
+  /// 在画面中央附近打开右键菜单（菜单键 / Shift+F10 / F10）。
   void _openContextMenuAtCenter() {
     const halfMenu = Offset(120, 210);
     final center = MediaQuery.sizeOf(context).center(Offset.zero);
-    _openContextMenu(center - halfMenu);
+    _openContextMenu(center - halfMenu, fromKeyboard: true);
   }
 
   /// 关闭右键菜单并恢复自动隐藏计时（`design/04` §5.4）。
   void _closeContextMenu() {
     if (_contextMenuAnchor == null) return;
-    setState(() => _contextMenuAnchor = null);
+    _contextMenuPopup?.close();
+    setState(() {
+      _contextMenuAnchor = null;
+      _contextMenuPopup = null;
+    });
     _touchControls();
   }
 

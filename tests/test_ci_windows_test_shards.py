@@ -34,10 +34,12 @@ def check_matrix_contract(test, job):
     test.assertNotIn("continue-on-error", unit)
     commands = [line.strip() for line in unit["run"].splitlines()
                 if line.strip() and not line.lstrip().startswith("#")]
+    # 加载期偶发故障由独立脚本兜底重试（诊断脚本本身仍只调用一次 flutter）。
     test.assertEqual([
         "& ../../scripts/flutter_test_diagnostics_windows.ps1 -TotalShards 4 -ShardIndex ${{ matrix.shardIndex }}",
+        "if ($LASTEXITCODE -ne 0) { & ../../scripts/flutter_test_retry_load_failures.ps1 }",
         "exit $LASTEXITCODE",
-    ], commands[-2:])
+    ], commands[-3:])
     test.assertNotRegex(unit["run"], r"(?i)--(?:name|plain-name|exclude|tags|skip)|flutter test|Get-ChildItem.*test")
 
 

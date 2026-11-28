@@ -28,9 +28,9 @@ class _FakeAdbRuntime extends AndroidAdbRuntime {
   final AndroidDevice device;
   final List<String> events = <String>[];
   final List<(String, int)> released = <(String, int)>[];
+  final List<AndroidReverseLease> acquiredLeases = <AndroidReverseLease>[];
   final Map<int, ServerSocket> _proxies = <int, ServerSocket>{};
   final Map<int, int> _proxyTargets = <int, int>{};
-  int _nextPort = 39001;
   Completer<void>? connectGate;
   Object? connectFailure;
   Object? reverseFailure;
@@ -68,14 +68,15 @@ class _FakeAdbRuntime extends AndroidAdbRuntime {
     events.add('reverse|$uuid|$localPort|$guestPort');
     final failure = reverseFailure;
     if (failure != null) throw failure;
-    final port = guestPort == 0 ? _nextPort++ : guestPort;
-    final created = !_proxyTargets.containsKey(port);
-    await _forward(port, localPort);
-    return _FakeReverseLease(this, uuid, port, created);
+    final created = !_proxyTargets.containsKey(guestPort);
+    final port = await _forward(guestPort, localPort);
+    final lease = _FakeReverseLease(this, uuid, port, created);
+    acquiredLeases.add(lease);
+    return lease;
   }
 
-  Future<void> _forward(int guestPort, int localPort) async {
-    if (_proxyTargets[guestPort] == localPort) return;
+  Future<int> _forward(int guestPort, int localPort) async {
+    if (_proxyTargets[guestPort] == localPort) return guestPort;
     if (_proxyTargets.containsKey(guestPort)) {
       throw StateError('reverse conflict');
     }
@@ -83,8 +84,9 @@ class _FakeAdbRuntime extends AndroidAdbRuntime {
       InternetAddress.loopbackIPv4,
       guestPort,
     );
-    _proxies[guestPort] = server;
-    _proxyTargets[guestPort] = localPort;
+    final port = server.port;
+    _proxies[port] = server;
+    _proxyTargets[port] = localPort;
     server.listen((client) async {
       try {
         final upstream = await Socket.connect(
@@ -105,6 +107,7 @@ class _FakeAdbRuntime extends AndroidAdbRuntime {
         client.destroy();
       }
     });
+    return port;
   }
 
   Future<void> _releaseProxy(int guestPort) async {
@@ -436,88 +439,153 @@ class _Harness {
 }
 
 void main() {
-  test(
-    'prepare runs publisher, connect, reverse, import, fetch, overlay in order',
-    () async {
-      final h = await _Harness.create();
-      addTearDown(h.dispose);
-      final rawBefore = jsonEncode(h.record.json);
-      h.runtime.publisherRunning = () => h.publisher.running;
-      h.gateway.trace = h.runtime.events;
-      h.gateway.beforeImport = () {
-        final pending = h.store.bindings.single;
-        expect(pending.isReady, isFalse);
-        expect(pending.guestPort, 39001);
-        expect(h.store.enabledFor(h.record.sourceKey), isNull);
-      };
-
-      final result = await h.service.prepare(
-        sourceKey: h.record.sourceKey,
-        record: h.record,
-        originalConfig: h.originalConfig,
-        profile: h.profile,
-      );
-
-      expect(h.publisher.running, isTrue);
-      expect(h.runtime.publisherRunningAtConnect, isTrue);
-      expect(h.runtime.events, <String>[
-        'connect|${h.profile.connectionKey}|-|false',
-        'reverse|uuid-1|${h.publisher.port}|0',
-        'import',
-        'fetch',
-      ]);
-      expect(h.gateway.calls, <String>[
-        'POST /manage/config/import',
-        'GET /vod/api?ac=config&configKey=gateway-key',
-      ]);
-      expect(result.binding.isReady, isTrue);
-      expect(result.binding.guestPort, 39001);
-      expect(result.binding.interfaceKey, 'gateway-key');
-      expect(
-        h.gateway.importedUrls.single,
-        'http://127.0.0.1:39001/${result.binding.snapshotToken}.json',
-      );
-      expect(h.gateway.snapshotBodies.single, contains('"alpha"'));
-      expect(h.store.bindings.single.bindingKey, result.binding.bindingKey);
-      expect(
-        h.store.enabledFor(h.record.sourceKey)?.bindingKey,
-        result.binding.bindingKey,
-      );
-      expect(result.overlay.sites.map((site) => site.key), <String>[
-        'alpha',
-        'beta',
-      ]);
-      expect(
-        result.overlay.sites.every(
-          (site) => site.api.startsWith(h.gateway.base),
+  test('concurrent runtimes isolate guest ports and preserve requested lease reuse', () async {
+    final first = await _Harness.create();
+    addTearDown(first.dispose);
+    final second = await _Harness.create();
+    addTearDown(second.dispose);
+    final results = await Future.wait([
+      for (final h in [first, second])
+        h.service.prepare(
+          sourceKey: h.record.sourceKey,
+          record: h.record,
+          originalConfig: h.originalConfig,
+          profile: h.profile,
         ),
-        isTrue,
-      );
-      expect(result.overlay.sites.first.name, '站点 alpha');
-      final body = jsonDecode(h.gateway.snapshotBodies.single) as Map;
-      expect(body['spider'], 'https://cdn.example/spider.jar;md5;abc123');
-      expect(body['unknown'], {
-        'raw': [1, 'opaque', true],
-      });
-      expect((body['sites'] as List)[0], {
-        'key': 'alpha',
-        'name': '站点 alpha',
-        'type': 3,
-        'api': 'csp_Alpha',
-        'ext': 'opaque-alpha',
-        'futureField': {'raw': 'untouched'},
-      });
-      expect(
-        (body['sites'] as List)[1]['ext'],
-        'https://pc.example/rules/beta.json',
-      );
-      expect(h.originalConfig.sites.every((s) => s.type == 3), isTrue);
-      expect(result.overlay.sites.every((s) => s.type == 4), isTrue);
-      expect((h.record.json['sites'] as List)[1]['ext'], './rules/beta.json');
-      expect(jsonEncode(h.record.json), rawBefore);
-      expect(h.record.sourceKey, 'local|https://pc.example/config.json');
-    },
-  );
+    ]);
+    final firstPort = results[0].binding.guestPort;
+    final secondPort = results[1].binding.guestPort;
+    expect(firstPort, inInclusiveRange(1, 65535));
+    expect(secondPort, inInclusiveRange(1, 65535));
+    expect(firstPort, isNot(secondPort));
+    expect(first.runtime._proxies[firstPort]?.port, firstPort);
+    expect(second.runtime._proxies[secondPort]?.port, secondPort);
+
+    final borrowed = await first.runtime.acquireReverse(
+      'uuid-1',
+      localPort: first.publisher.port,
+      guestPort: firstPort,
+    );
+    expect(borrowed.created, isFalse);
+    expect(borrowed.guestPort, firstPort);
+    await borrowed.release();
+    expect(first.runtime.released, isEmpty);
+    expect(await _statusOf(first.gateway.importedUrls.single), HttpStatus.ok);
+    await expectLater(
+      first.runtime.acquireReverse(
+        'uuid-1',
+        localPort: second.publisher.port,
+        guestPort: firstPort,
+      ),
+      throwsStateError,
+    );
+
+    await first.service.close();
+    expect(first.runtime._proxies, isEmpty);
+    expect(first.runtime.released, [('uuid-1', firstPort)]);
+    expect(await _statusOf(second.gateway.importedUrls.single), HttpStatus.ok);
+    final replacement = await first.runtime.acquireReverse(
+      'uuid-1',
+      localPort: second.publisher.port,
+      guestPort: firstPort,
+    );
+    expect(replacement.created, isTrue);
+    expect(replacement.guestPort, firstPort);
+    expect(first.runtime._proxies[firstPort]?.port, firstPort);
+    expect(
+      await _statusOf(
+        'http://127.0.0.1:$firstPort/${results[1].binding.snapshotToken}.json',
+      ),
+      HttpStatus.ok,
+    );
+    await replacement.release();
+    await replacement.release();
+    expect(first.runtime._proxies, isEmpty);
+    expect(first.runtime.released, [
+      ('uuid-1', firstPort),
+      ('uuid-1', firstPort),
+    ]);
+    expect(await _statusOf(second.gateway.importedUrls.single), HttpStatus.ok);
+  });
+
+  test('prepare runs publisher, connect, reverse, import, fetch, overlay in order', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    final rawBefore = jsonEncode(h.record.json);
+    h.runtime.publisherRunning = () => h.publisher.running;
+    h.gateway.trace = h.runtime.events;
+    h.gateway.beforeImport = () {
+      final pending = h.store.bindings.single;
+      expect(pending.isReady, isFalse);
+      expect(pending.guestPort, h.runtime.acquiredLeases.single.guestPort);
+      expect(h.store.enabledFor(h.record.sourceKey), isNull);
+    };
+
+    final result = await h.service.prepare(
+      sourceKey: h.record.sourceKey,
+      record: h.record,
+      originalConfig: h.originalConfig,
+      profile: h.profile,
+    );
+
+    expect(h.publisher.running, isTrue);
+    expect(h.runtime.publisherRunningAtConnect, isTrue);
+    expect(h.runtime.events, <String>[
+      'connect|${h.profile.connectionKey}|-|false',
+      'reverse|uuid-1|${h.publisher.port}|0',
+      'import',
+      'fetch',
+    ]);
+    expect(h.gateway.calls, <String>[
+      'POST /manage/config/import',
+      'GET /vod/api?ac=config&configKey=gateway-key',
+    ]);
+    expect(result.binding.isReady, isTrue);
+    expect(result.binding.guestPort, inInclusiveRange(1, 65535));
+    expect(result.binding.guestPort, h.runtime.acquiredLeases.single.guestPort);
+    expect(result.binding.interfaceKey, 'gateway-key');
+    expect(
+      h.gateway.importedUrls.single,
+      'http://127.0.0.1:${result.binding.guestPort}/${result.binding.snapshotToken}.json',
+    );
+    expect(h.gateway.snapshotBodies.single, contains('"alpha"'));
+    expect(h.store.bindings.single.bindingKey, result.binding.bindingKey);
+    expect(
+      h.store.enabledFor(h.record.sourceKey)?.bindingKey,
+      result.binding.bindingKey,
+    );
+    expect(result.overlay.sites.map((site) => site.key), <String>[
+      'alpha',
+      'beta',
+    ]);
+    expect(
+      result.overlay.sites.every((site) => site.api.startsWith(h.gateway.base)),
+      isTrue,
+    );
+    expect(result.overlay.sites.first.name, '站点 alpha');
+    final body = jsonDecode(h.gateway.snapshotBodies.single) as Map;
+    expect(body['spider'], 'https://cdn.example/spider.jar;md5;abc123');
+    expect(body['unknown'], {
+      'raw': [1, 'opaque', true],
+    });
+    expect((body['sites'] as List)[0], {
+      'key': 'alpha',
+      'name': '站点 alpha',
+      'type': 3,
+      'api': 'csp_Alpha',
+      'ext': 'opaque-alpha',
+      'futureField': {'raw': 'untouched'},
+    });
+    expect(
+      (body['sites'] as List)[1]['ext'],
+      'https://pc.example/rules/beta.json',
+    );
+    expect(h.originalConfig.sites.every((s) => s.type == 3), isTrue);
+    expect(result.overlay.sites.every((s) => s.type == 4), isTrue);
+    expect((h.record.json['sites'] as List)[1]['ext'], './rules/beta.json');
+    expect(jsonEncode(h.record.json), rawBefore);
+    expect(h.record.sourceKey, 'local|https://pc.example/config.json');
+  });
 
   test('reconnect with a new local publisher port keeps token, guest port, URL and copy', () async {
     final h = await _Harness.create();
@@ -571,8 +639,14 @@ void main() {
     expect(h.gateway.importedUrls.length, 2);
     expect(h.gateway.importedUrls[1], h.gateway.importedUrls[0]);
     expect(store2.bindings.length, 1);
-    expect(h.runtime.events.last, 'reverse|uuid-1|${publisher2.port}|39001');
-    expect(h.runtime.events.last, isNot('reverse|uuid-1|$firstPort|39001'));
+    expect(
+      h.runtime.events.last,
+      'reverse|uuid-1|${publisher2.port}|${first.binding.guestPort}',
+    );
+    expect(
+      h.runtime.events.last,
+      isNot('reverse|uuid-1|$firstPort|${first.binding.guestPort}'),
+    );
   });
 
   test(
@@ -839,7 +913,10 @@ void main() {
     final logs = h.joinedLogs();
     expect(logs, isNot(contains(token)));
     expect(logs, isNot(contains(url)));
-    expect(logs, isNot(contains('39001/${token.substring(0, 8)}')));
+    expect(
+      logs,
+      isNot(contains('${Uri.parse(url).port}/${token.substring(0, 8)}')),
+    );
   });
   test('import succeeds then fetch fails: retry retains reservation and one Android copy', () async {
     final h = await _Harness.create();
@@ -929,7 +1006,13 @@ void main() {
     expect(h.gateway.creations, 0);
     expect(h.gateway.calls, isEmpty);
     expect(h.store.bindings, isEmpty);
-    expect(h.runtime.released, [('uuid-1', 39001)]);
+    expect(
+      h.runtime.acquiredLeases.single.guestPort,
+      inInclusiveRange(1, 65535),
+    );
+    expect(h.runtime.released, [
+      ('uuid-1', h.runtime.acquiredLeases.single.guestPort),
+    ]);
   });
 
   test(
@@ -1338,10 +1421,10 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(finished, isFalse);
       h.runtime.connectGate!.complete();
-      await preparing;
+      final result = await preparing;
       await closing;
       expect(h.publisher.running, isFalse);
-      expect(h.runtime.released, [('uuid-1', 39001)]);
+      expect(h.runtime.released, [('uuid-1', result.binding.guestPort)]);
       await h.service.close();
       expect(h.runtime.released.length, 1);
     },
@@ -1433,7 +1516,9 @@ void main() {
       expect(result.binding.isReady, isTrue);
       expect(h.store.enabledFor(h.record.sourceKey), isNull);
       expect(h.store.bindings.single.isReady, isTrue);
-      expect(h.runtime.released, <(String, int)>[('uuid-1', 39001)]);
+      expect(h.runtime.released, <(String, int)>[
+        ('uuid-1', result.binding.guestPort),
+      ]);
       expect(h.joinedLogs(), contains('已准备但未启用'));
       expect(h.joinedLogs(), isNot(contains('Android 执行已启用')));
     },

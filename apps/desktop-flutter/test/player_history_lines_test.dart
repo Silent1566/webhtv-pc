@@ -1172,14 +1172,18 @@ void main() {
     final otherCard = tester.widget<Container>(
       find.byKey(const ValueKey('player-episode-card-0')),
     );
+    final scheme = Theme.of(tester.element(find.byType(PlayerEpisodePanel)))
+        .colorScheme;
     expect(
-      ((currentCard.decoration as BoxDecoration).border as Border).top.width,
-      2,
+      (currentCard.decoration as BoxDecoration).color,
+      scheme.primaryContainer,
     );
     expect(
-      ((otherCard.decoration as BoxDecoration).border as Border).top.width,
-      1,
+      (otherCard.decoration as BoxDecoration).color,
+      scheme.surfaceContainerHigh,
     );
+    expect((currentCard.decoration as BoxDecoration).border, isNull);
+    expect((otherCard.decoration as BoxDecoration).border, isNull);
     await closeHistory(tester);
   });
 
@@ -1295,7 +1299,14 @@ void main() {
     final card = tester.widget<Container>(
       find.byKey(const ValueKey('player-episode-card-0')),
     );
-    expect(((card.decoration as BoxDecoration).border as Border).top.width, 2);
+    expect(
+      (card.decoration as BoxDecoration).color,
+      Theme.of(tester.element(find.byType(PlayerEpisodePanel)))
+          .colorScheme
+          .primaryContainer,
+      reason: '当前目录文件仍以选中底色标识',
+    );
+    expect((card.decoration as BoxDecoration).border, isNull);
     await closeHistory(tester);
   });
 
@@ -1402,7 +1413,9 @@ void main() {
     await closeHistory(tester);
   });
 
-  testWidgets('目录补齐被取消（siteCancelled）：留一条 debug、不返回线路、不弹 toast', (tester) async {
+  testWidgets('目录补齐被取消（siteCancelled）：留一条 debug、不返回线路、不弹 toast', (
+    tester,
+  ) async {
     var current = true;
     final state = await _mountRecordState(tester, (request) async {
       // 分类请求一回来就模拟「用户已离开」：目录展开随后的 checkCurrent 会抛

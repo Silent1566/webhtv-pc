@@ -214,8 +214,10 @@ void main() {
     state = AppState(
       paths: AppPaths.resolve(
         overrides: {
-          for (final name in ['config', 'data', 'cache', 'state'])
-            name: '${temp.path}/$name',
+          'config': '${temp.path}/config',
+          'data': '${temp.path}/data',
+          'cache': '${temp.path}/cache',
+          'state': '${temp.path}/state',
         },
       ),
       log: MemoryOnlyLogService(),

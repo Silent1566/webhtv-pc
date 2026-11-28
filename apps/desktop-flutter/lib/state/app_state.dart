@@ -17,11 +17,13 @@ import '../core/detail_source_merge.dart';
 import '../core/episode_aggregation.dart';
 import '../core/episode_manual_match.dart';
 import 'detail_recommendation_state.dart';
+import 'home_hero_session.dart';
 
 import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
 
+import '../services/detail_load_trace.dart';
 import '../services/external_player.dart';
 import '../services/external_url.dart';
 import '../services/imdb_rating_service.dart';
@@ -33,6 +35,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart' show Row;
 
 import '../core/ad_rules.dart';
+import '../core/ad_block_stats.dart';
+import '../core/ad_rule_library.dart';
 import '../core/android_adb_profile.dart';
 import '../core/android_bridge.dart';
 import '../core/android_config_execution.dart';
@@ -120,6 +124,8 @@ import '../core/tmdb_identity.dart';
 import '../core/tmdb_playback.dart';
 import '../core/tmdb_title.dart';
 import '../core/tmdb_season.dart';
+import '../services/ad_block_stats_service.dart';
+import '../services/ad_block_stats_store.dart';
 import '../services/app_paths.dart';
 import '../services/lut_store.dart';
 import '../services/config_source_status.dart';
@@ -151,6 +157,7 @@ import '../services/realtime_sync_engine.dart';
 import '../services/search_suggest_service.dart';
 import '../services/parse_service.dart';
 import '../services/site_service.dart';
+import '../services/spider_cache_retention.dart';
 import '../services/spider_process.dart';
 import '../services/spider_proxy_session.dart';
 import '../services/sidecar_runtime.dart';
@@ -494,7 +501,20 @@ class AppState extends ChangeNotifier
     _spiderAccounts = SpiderAccountStore(
       path: p.join(this.paths.configDir, 'spiders', 'accounts.json'),
     );
-    _proxy = LocalProxyServer(log: this.log);
+    // 去广告：用户规则库与统计各自一个文件（都属用户数据，随备份迁移）。
+    _adRuleLibraryStore = _createAdRuleLibraryStore();
+    _adBlockStatsStore = AdBlockStatsStore(
+      path: p.join(this.paths.dataDir, adBlockStatsFileName),
+      log: this.log,
+    );
+    _adBlockStatsService = AdBlockStatsService(
+      store: _adBlockStatsStore,
+      ruleName: _adRuleDisplayName,
+    );
+    _proxy = LocalProxyServer(log: this.log)
+      ..adBlockStats = _adBlockStatsService
+      ..adBlockContext = _adBlockContext
+      ..onAdBlockClean = _onAdBlockClean;
     _androidPlaybackBridge =
         androidPlaybackBridge ?? AndroidPlaybackBridge(log: this.log);
     // 已连接安卓环境（ADB）：运行时拥有进程/转发，连接描述自己单独一个文件。
@@ -807,6 +827,12 @@ class AppState extends ChangeNotifier
   /// 本地代理(§11)。默认只监听 127.0.0.1,按需启动。
   late final LocalProxyServer _proxy;
 
+  /// 规则库 store 在「恢复备份 / 重置数据」后会重建：它只在构造时读盘，
+  /// 不重建就会继续拿内存里的旧条目去算生效规则。
+  late AdRuleLibraryStore _adRuleLibraryStore;
+  late final AdBlockStatsStore _adBlockStatsStore;
+  late final AdBlockStatsService _adBlockStatsService;
+
   /// 本次播放的代理会话（§11.3.1）。
   ProxySession? _proxySession;
   SpiderProxySession? _jvmProxySession;
@@ -930,6 +956,10 @@ class AppState extends ChangeNotifier
   /// 先返回的响应会被后返回的覆盖，而详情页读的是全局结果，用户就会看到
   /// 上一部剧的信息。
   int _detailRunId = 0;
+  DetailLoadTrace? _detailLoadTrace;
+
+  DetailLoadTrace? get detailLoadTrace =>
+      _detailLoadTrace?.runId == _detailRunId ? _detailLoadTrace : null;
 
   /// 站源可能重写 vod_id，返回条目的 ID 不能作为页面归属依据；
   /// 保留请求目标，只有本页发起的详情才认领，避免上一部剧串入。
@@ -1250,6 +1280,7 @@ class AppState extends ChangeNotifier
     paths: paths,
     config: () => aiConfig,
     titleEnabled: () => aiTitleExtractionEnabled,
+    watched: recommendationDependencies.watched,
     completion: _aiContentCompletion,
     log: log,
     enricher: (items) async {
@@ -2134,7 +2165,8 @@ class AppState extends ChangeNotifier
 
   ImdbRatingService? _imdbRatingService;
 
-  bool get imdbRatingEnabled => externalMetaEnabled &&
+  bool get imdbRatingEnabled =>
+      externalMetaEnabled &&
       metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
 
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
@@ -2196,12 +2228,25 @@ class AppState extends ChangeNotifier
             feedbackFile: File(
               '${paths.configDir}/recommendation-feedback.json',
             ),
+            watchedFile: File('${paths.configDir}/recommendation-watched.json'),
             historyChanges: this,
             history: () => [
               for (final row in recentHistory(sourceKey: ''))
                 recommendationSeedForHistory(row),
             ],
           );
+
+  /// 首页的会话级推荐状态：切到别的页面再回来仍要看到同一份已就绪内容。
+  ///
+  /// 惰性创建、随 `AppState` 一起销毁：它是**应用会话**的资源，不是某个
+  /// `HomePage` 页面的。页面销毁只解除订阅，在途任务照常收尾。
+  HomeHeroSession? _homeHeroSession;
+  HomeHeroSession get homeHeroSession =>
+      _homeHeroSession ??= HomeHeroSession(this, clock: heroSessionClock);
+
+  /// 会话的时钟来源：默认取真实时间，测试可覆盖以确定性地验证过期复核。
+  @protected
+  DateTime Function() get heroSessionClock => DateTime.now;
 
   /// 把一条历史行映射成推荐种子。
   ///
@@ -2370,6 +2415,9 @@ class AppState extends ChangeNotifier
   SiteResult? get homeResult => _homeResult;
   SiteResult? get categoryResult => _categoryResult;
   SiteResult? get detailResult => _detailResult;
+  bool get detailLinesLoading =>
+      _detailPhase == LoadPhase.loading &&
+      (_detailResult?.list.isNotEmpty ?? false);
   String get detailRequestVodId => _detailRequestVodId;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
@@ -2720,6 +2768,24 @@ class AppState extends ChangeNotifier
   ///
   /// 订阅方必须**重新查库**而不是缓存上一次的结果：写入与通知之间有微小窗口。
   final ValueNotifier<int> progressRevision = ValueNotifier<int>(0);
+
+  /// 已成功落库的进度身份，在 [progressRevision] 通知之前更新。
+  ({
+    String sourceKey,
+    String siteKey,
+    String vodId,
+    String flag,
+    String episodeId,
+  })?
+  get lastProgressWrite => _lastProgressWrite;
+  ({
+    String sourceKey,
+    String siteKey,
+    String vodId,
+    String flag,
+    String episodeId,
+  })?
+  _lastProgressWrite;
 
   /// 通知监听者的**统一出口**：已 dispose 就安静返回。
   ///
@@ -3284,6 +3350,155 @@ class AppState extends ChangeNotifier
     return ok;
   }
 
+  AdRuleLibraryStore _createAdRuleLibraryStore() => AdRuleLibraryStore(
+    path: p.join(paths.dataDir, adRuleLibraryFileName),
+    log: log,
+  );
+
+  /// 磁盘上的规则库/统计被整体替换后，重建内存视图。
+  ///
+  /// 统计用 `reload()`：service 持有同一个 store 引用，换实例会让记账指向旧对象；
+  /// 规则库没有 reload，只能重建 store——它没有别的持有者，界面每次读
+  /// [adRuleLibrary] 都取当前这一份。
+  void _reloadAdBlockUserData() {
+    _adRuleLibraryStore = _createAdRuleLibraryStore();
+    _adBlockStatsStore.reload();
+  }
+
+  /// 用户规则库（本地文件；不含远程订阅与随包规则）。
+  AdRuleLibraryStore get adRuleLibrary => _adRuleLibraryStore;
+
+  /// 去广告统计入口。
+  AdBlockStatsService get adBlockStats => _adBlockStatsService;
+
+  /// 规则库改动后重新解析生效规则并通知界面。
+  ///
+  /// 规则改的是「下一次清单请求用哪套规则」，不需要重启代理：
+  /// `setAdRules` 在运行中也安全，播放中的会话会在下一次清单请求重读。
+  void adRulesChanged() {
+    _applyAdRulesToProxy();
+    _notifyIfAlive();
+  }
+
+  ({int seq, String message})? _adBlockNotice;
+  int _adBlockNoticeSeq = 0;
+  String? _adBlockNoticeSession;
+
+  /// 最近一次「拦到广告」的提示（seq 递增，界面按 seq 判断要不要新弹一条）。
+  ({int seq, String message})? get adBlockNotice => _adBlockNotice;
+
+  /// 提示被消费/关掉后清空。
+  void clearAdBlockNotice() {
+    _adBlockNotice = null;
+  }
+
+  /// 拦到广告：**同一个播放会话只提示一次**。
+  ///
+  /// 拖动、重取清单、换码率都会反复命中同一份清单；每命中一次弹一条会把播放器糊死。
+  /// 换集/换线路会新建代理会话，届时 [_adBlockNoticeSession] 被重置，于是又能提示。
+  void _onAdBlockClean(HlsCleanResult result, String fingerprint) {
+    if (result.abandoned || !result.changed) return;
+    if (_adBlockNoticeSession == fingerprint) return;
+    final message = adBlockNoticeMessage(
+      segments: result.removedSegments,
+      durationSec: result.removedDurationSec,
+    );
+    if (message == null) return;
+    _adBlockNoticeSession = fingerprint;
+    _adBlockNotice = (seq: ++_adBlockNoticeSeq, message: message);
+    _notifyIfAlive();
+  }
+
+  /// 测试口子：模拟一次拦截上报（生产路径由代理回调触发）。
+  @visibleForTesting
+  void debugReportAdBlockClean({
+    required String sessionKey,
+    required int removedSegments,
+    required double removedDurationSec,
+    bool abandoned = false,
+  }) {
+    _onAdBlockClean(
+      HlsCleanResult(
+        text: '',
+        removedSegments: abandoned ? 0 : removedSegments,
+        removedDurationSec: removedDurationSec,
+        abandonReason: abandoned ? '测试' : null,
+      ),
+      sessionKey,
+    );
+  }
+
+  /// 当前会话累计拦截摘要（屏显与去广告页共用）；没拦过返回 null。
+  AdBlockSessionSummary? get adBlockSummary =>
+      _proxy.adBlockSummaryFor(_proxySession?.fingerprint);
+
+  /// 规则 id → 展示名；规则库条目按内含规则的 id 反查条目名。
+  String _adRuleDisplayName(String ruleId) {
+    if (ruleId == kAdHostRuleId) return '配置广告主机';
+    for (final entry in _adRuleLibraryStore.entries) {
+      for (final rule in entry.hlsRules) {
+        if ((rule['id']?.toString() ?? '') == ruleId) {
+          final name = entry.name.trim();
+          return name.isEmpty ? ruleId : name;
+        }
+      }
+    }
+    return ruleId;
+  }
+
+  /// 本次播放的归属标签（片名/线路/分集）；代理在记账时读取。
+  ///
+  /// 只在**解析播放前**由播放器登记，会话撤销时清零：宁可这条拦截没有归属，
+  /// 也不能让它顶着上一集的名字记进统计。
+  AdBlockPlaybackLabels _adBlockLabels = (
+    vodName: '',
+    lineName: '',
+    episodeName: '',
+  );
+
+  /// 登记本次播放的归属标签（播放器在解析前调用）。
+  void noteAdBlockPlayback(AdBlockPlaybackLabels labels) {
+    _adBlockLabels = labels;
+  }
+
+  /// 记账上下文快照（测试用；生产路径经代理回调读取）。
+  @visibleForTesting
+  AdBlockContext debugAdBlockContext() => _adBlockContext();
+
+  /// 记账归属：站点取自当前代理会话；取不到的字段一律留空，不猜。
+  AdBlockContext _adBlockContext() {
+    final siteKey = _proxySession?.siteKey ?? '';
+    var siteName = '';
+    for (final site in effectiveConfig?.sites ?? const <Site>[]) {
+      if (site.key == siteKey) {
+        siteName = site.name;
+        break;
+      }
+    }
+    return AdBlockContext(
+      siteKey: siteKey,
+      siteName: siteName,
+      pipeline: 'HLS',
+      vodName: _adBlockLabels.vodName,
+      lineName: _adBlockLabels.lineName,
+      episodeName: _adBlockLabels.episodeName,
+    );
+  }
+
+  /// 启发式清洗开关（默认关闭：会误删，宁可让用户自己开）。
+  bool get adBlockHeuristicEnabled =>
+      _uiPreferences?.adBlockHeuristicEnabled ?? false;
+
+  /// 持久化启发式清洗开关，并立即同步给代理。
+  Future<bool> setAdBlockHeuristicEnabled(bool enabled) async {
+    final store = _uiPreferences;
+    if (store == null) return false;
+    final ok = await store.rememberAdBlockHeuristicEnabled(enabled);
+    _proxy.setAdBlockHeuristic(enabled);
+    _notifyIfAlive();
+    return ok;
+  }
+
   /// 合并了注入站点的配置；没有注入时就是原配置对象。
   ///
   /// 注意：**不是** `_config`。任何需要“用户配置 + 注入”的地方都用它；
@@ -3424,11 +3639,14 @@ class AppState extends ChangeNotifier
   }
 
   void _applyAdRulesToProxy() {
-    final config = _config;
-    final manual = config == null || !adBlockEnabled
-        ? const AdRuleSet.empty()
-        : AdRuleSet.fromConfig(config);
+    // 生效规则 = 配置内联 + 本地规则库里启用的条目；总开关关闭时两者都不看。
+    final manual = resolveEffectiveRules(
+      config: _config,
+      library: _adRuleLibraryStore.entries,
+      adBlockEnabled: adBlockEnabled,
+    );
     _proxy.setAdRules(manual);
+    _proxy.setAdBlockHeuristic(adBlockHeuristicEnabled);
     if (!adBlockEnabled || !aiAdDetectionEnabled) {
       _proxy.aiSessionRules = const AdRuleSet.empty();
       _proxy.aiSessionFingerprint = null;
@@ -4183,6 +4401,12 @@ class AppState extends ChangeNotifier
     // 恢复配置**之前**进注册表：`_attachSiteService` 用 effectiveConfig 建站点服务，
     // 晚扫描会让重启后的首屏站点列表缺掉用户上次导入的本地源
     // （用户看到的是「导入的源重启就不见了」）。
+    // jvm 站源默认获得本机代理授权（ADR-0003）。**必须早于 scan**：注册表在 scan
+    // 时就把 manifest 读进内存，晚迁移会让本次运行继续用旧权限。
+    JarIntake.ensureJvmLocalProxy(
+      root: p.join(paths.configDir, 'spiders'),
+      log: log,
+    );
     await _spiderRegistry.scan();
     _localSitesCache = null;
     _webHomeSourcesCache = null;
@@ -4412,6 +4636,21 @@ class AppState extends ChangeNotifier
       if (contents.auxiliaryFiles[aiBackupReaderFile] case final bytes?) {
         await _writeFileAtomic(readerFile, bytes);
       }
+      // 去广告用户数据：备份里没有这两份就不动本地（旧备份照样能恢复）。
+      if (contents.auxiliaryFiles[adRuleLibraryBackupFile] case final bytes?) {
+        await _writeFileAtomic(
+          File(p.join(paths.dataDir, adRuleLibraryFileName)),
+          bytes,
+        );
+      }
+      if (contents.auxiliaryFiles[adBlockStatsBackupFile] case final bytes?) {
+        await _writeFileAtomic(
+          File(p.join(paths.dataDir, adBlockStatsFileName)),
+          bytes,
+        );
+      }
+      // 磁盘已经换成备份里的那一份：内存视图必须跟着换，否则界面还显示旧库。
+      _reloadAdBlockUserData();
     } catch (error) {
       log.error('写入恢复文件失败，尝试回滚：$error', scope: 'backup');
       // 逐域独立回滚：任一域失败（含读不了的旧用户轨）都不阻断其它域，
@@ -4425,6 +4664,8 @@ class AppState extends ChangeNotifier
           scope: 'backup',
         );
       }
+      // 回滚把旧字节写回了盘，内存视图同样要跟着回滚。
+      _reloadAdBlockUserData();
       await bootstrap();
       _notifyIfAlive();
       return failures.isEmpty
@@ -4456,6 +4697,12 @@ class AppState extends ChangeNotifier
       await importKaraokeUserFiles(paths, '{"schemaVersion":1,"files":{}}');
       final reader = File(p.join(paths.configDir, 'reader_tts.json'));
       if (await reader.exists()) await reader.delete();
+      // 去广告的两份也属「本地数据」：重置后用户的规则不该还留在盘上。
+      for (final name in [adRuleLibraryFileName, adBlockStatsFileName]) {
+        final file = File(p.join(paths.dataDir, name));
+        if (await file.exists()) await file.delete();
+      }
+      _reloadAdBlockUserData();
       final dbPath = paths.databasePath;
       for (final path in [
         dbPath,
@@ -7825,6 +8072,17 @@ class AppState extends ChangeNotifier
     // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
     // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
     if (_disposed) return;
+    final trace = _detailLoadTrace = DetailLoadTrace(
+      log: log,
+      runId: runId,
+      context:
+          'first=${_detailLoadTrace == null} siteType=${site?.type ?? '-'} '
+          'kind=${synthetic
+              ? 'synthetic'
+              : vod.isFolder
+              ? 'folder'
+              : 'source'}',
+    );
     _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
@@ -7835,6 +8093,7 @@ class AppState extends ChangeNotifier
     notifyListeners();
     if (site != null) await _waitForPythonSite(site);
     if (_disposed || runId != _detailRunId) return;
+    trace.mark('runtime_ready');
     // TMDB 与站源详情**并行**启动：整条 TMDB 链（匹配→详情→季度→剧集→视频）以前排在
     // 站源详情之后（本机实测站源详情 3.9~7.1s），首屏必然是站源「原始模式」，用户要等
     // 两段时间相加才见到 TMDB 版本。元数据不依赖站源详情的结果，先跑起来。
@@ -7874,19 +8133,35 @@ class AppState extends ChangeNotifier
         }
       }
       if (runId != _detailRunId) return;
+      trace.mark('tmdb_joined');
       _detailPhase = LoadPhase.ready;
+      trace.mark('detail_ready', fields: 'result=synthetic');
       _notifyIfAlive();
       return;
     }
     if (service == null || site == null) return;
     try {
+      trace.mark('source_start');
       // 已知 atvp_detail 桥接协议先取资源，再逐个取分享链分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
       final outcome = vod.isFolder
           ? await service.folderDetail(
               site,
               vod,
-              isCurrent: () => runId == _detailRunId,
+              isCurrent: () => !_disposed && runId == _detailRunId,
+              onProgress: (partial) {
+                if (_disposed || runId != _detailRunId) return;
+                final source = partial.list.first;
+                final effective = mergeSourceDetailDisplay(
+                  detail: source,
+                  listing: vod,
+                  nameOverride: pushNameOverride,
+                );
+                _detailResult = partial.copyWith(list: [effective]);
+                _selectedVod = effective;
+                trace.mark('first_lines');
+                _notifyIfAlive();
+              },
             )
           : await service.detail(
               site,
@@ -7894,6 +8169,9 @@ class AppState extends ChangeNotifier
               // 详情请求自带 ids：上游漏填 vod_id/vod_name 时用它兜底，
               // 否则整条被丢弃、详情页报「列表条目缺少 vod_id/vod_name」。
               identity: VodIdentityHint(vodId: vod.vodId, vodName: vod.vodName),
+              // 运行时解析不计入 callMs，站点调用计入；分开记录才能定位等待。
+              onStage: trace.mark,
+              isCurrent: () => !_disposed && runId == _detailRunId,
             );
       if (runId != _detailRunId) {
         // 已被更新的请求（或已离开详情页）取代：结果直接丢弃，不写回状态。
@@ -7903,6 +8181,10 @@ class AppState extends ChangeNotifier
         );
         return;
       }
+      trace.mark(
+        'source_return',
+        fields: 'callMs=${outcome.latency.inMilliseconds}',
+      );
       final returnedDetail = outcome.value.list.firstOrNull;
       final effective = returnedDetail == null
           ? vod
@@ -7951,6 +8233,10 @@ class AppState extends ChangeNotifier
       }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
+      trace.mark(
+        'detail_ready',
+        fields: 'result=${returnedDetail == null ? 'empty' : 'source'}',
+      );
       _notifyIfAlive();
       // 等并行启动的那一轮 TMDB 收尾，再用权威线路补一次映射。为什么要等而不是
       // 直接发第二次：同一作品换线路会清掉季度解析，两次调用叠在一起会互相覆盖。
@@ -7973,6 +8259,7 @@ class AppState extends ChangeNotifier
       }
       // 等待期间用户可能已经离开详情页或换了作品：runId 被取代就不再写回状态。
       if (runId != _detailRunId) return;
+      trace.mark('tmdb_joined');
       // TMDB 与标准站点共用完整线路；元数据失败不阻塞选集和播放。
       // 这一次用 effective（folder 展开后的条目）的权威线路：季/集映射依赖它。它命中
       // 同一作品 → 保留内存数据复用，详情/视频不会再打一次网络。
@@ -8005,6 +8292,7 @@ class AppState extends ChangeNotifier
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       _detailError = failure;
       _detailPhase = LoadPhase.failed;
+      trace.mark('failed', fields: 'errorKind=${failure.kind.name}');
       log.error(
         // 失败路径用多行诊断（动作 + 脱敏请求 + 堆栈）：只给分类文案时，
         // 用户和开发者都无法判断是哪一次请求、为什么失败（2026-10-20 反馈）。
@@ -8167,6 +8455,7 @@ class AppState extends ChangeNotifier
             qualityIndex: qualityIndex,
             parseFailover: parseFailoverSettings,
             preferredParseName: preferredParseName,
+            isCurrent: current,
           );
       final outcome = runtime is SidecarRuntime
           ? await runtime.withProxySession(owner, resolve)
@@ -8580,6 +8869,9 @@ class AppState extends ChangeNotifier
   }) {
     final database = _database;
     final effectiveSiteKey = siteKey ?? _selectedSite?.key ?? 'cli';
+    final effectiveSourceKey = sourceKey != null && sourceKey.trim().isNotEmpty
+        ? sourceKey.trim()
+        : activeSourceKey;
     if (database == null) return;
     // 隐身模式（Phase 9 P2-8）：不写任何播放历史（对齐安卓
     // `PlaybackProgressWriter` 的 `isIncognito` 闸门）。
@@ -8622,9 +8914,7 @@ class AppState extends ChangeNotifier
         // 写入永远带**具体源**：全局历史只是读视图，不能把新进度写成
         // "无源"的老记录（否则切回按源隔离时就看不见了）。
         // 用原来源配置播放时以调用方给的 sourceKey 为准（见参数注释）。
-        sourceKey: (sourceKey != null && sourceKey.trim().isNotEmpty)
-            ? sourceKey.trim()
-            : activeSourceKey,
+        sourceKey: effectiveSourceKey,
         // 作品身份：年份来自站点条目（可能为空），TMDB 身份来自播放请求。
         // 三者都「有值才生效」：upsert 的 ON CONFLICT 分支只在非空/非 0 时
         // 覆盖，因此同步来的无身份记录不会抹掉这里刚写好的身份。
@@ -8634,6 +8924,13 @@ class AppState extends ChangeNotifier
       );
       // 写库成功：通知订阅者（详情页角标/首屏文案）。放在这里而不是方法末尾，
       // 是为了让「恢复上下文 / 追番回写」这些副作用不挡住界面刷新。
+      _lastProgressWrite = (
+        sourceKey: effectiveSourceKey,
+        siteKey: effectiveSiteKey,
+        vodId: vod.vodId,
+        flag: flag,
+        episodeId: episodeId,
+      );
       if (!_disposed) progressRevision.value++;
       // 崩溃恢复上下文（P2-8）：与历史同源，但只存标识与进度。
       _recordRecoveryPlayback(
@@ -9626,10 +9923,24 @@ class AppState extends ChangeNotifier
   Future<List<LocalSpider>> rescanSpiders() async {
     final found = await _spiderRegistry.scan();
     await _supervisor.cleanStaleWorkDirs();
+    _pruneSharedSpiderCache();
     log.info('本地 Spider 已扫描：${found.length} 个', scope: 'spider');
     // 手工往 `spiders/local/` 放源后重新扫描，站点列表也要跟着更新。
     _invalidateLocalSites();
     return found;
+  }
+
+  /// `probe-cache` 是唯一**可重建**的共享缓存（jar 暂存、壳 payload、dex 转译产物）。
+  ///
+  /// 扫描是启动与手工重扫的公共入口，顺手按预算回收最省事：失败只记日志，绝不影响
+  /// 扫描结论，也不碰已安装站点、`spiders/local` 用户源与配置。
+  void _pruneSharedSpiderCache() {
+    try {
+      final root = p.join(p.dirname(_cspBinding.root), 'probe-cache');
+      SpiderCacheRetention.prune(root, log: log);
+    } catch (error) {
+      log.warning('共享缓存回收跳过：$error', scope: 'spider');
+    }
   }
 
   /// 本地 Spider 列表（供管理页展示）。
@@ -11735,6 +12046,8 @@ class AppState extends ChangeNotifier
       inspectPlaylistContent: inspectPlaylistContent,
     );
     _proxySession = session;
+    // 新会话 = 新的一次播放/换集：允许再提示一条。
+    _adBlockNoticeSession = null;
     final proxied = _proxy.urlFor(session, target);
     log.info(
       '播放转为本地代理 token=${session.fingerprint} '
@@ -11797,6 +12110,7 @@ class AppState extends ChangeNotifier
 
   /// 停止当前播放会话的代理授权（§11.3.1「停止播放即失效」）。
   void revokeProxySession() {
+    noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     _proxyPlaybackEpoch++;
     final owner = _jvmProxySession;
     _jvmProxySession = null;
@@ -11805,6 +12119,8 @@ class AppState extends ChangeNotifier
   }
 
   void _revokeHttpProxySession() {
+    // 每次解析都从空白开始：归属只能由这一次解析的调用方显式交付。
+    noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     final session = _proxySession;
     _proxySession = null;
     if (session != null) _proxy.sessions.revoke(session.token);
@@ -12307,6 +12623,8 @@ class AppState extends ChangeNotifier
     _importService.close();
     _liveService?.close();
     _epgService?.close();
+    _homeHeroSession?.dispose();
+    _homeHeroSession = null;
     _recommendationDependencies?.close();
     _detailRatingService?.close();
     _externalMetaService?.close();

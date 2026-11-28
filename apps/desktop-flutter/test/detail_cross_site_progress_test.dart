@@ -42,8 +42,10 @@ void main() {
         },
       ),
       log: MemoryOnlyLogService(),
-      httpClient: MockClient((request) async =>
-          http.Response(jsonEncode(<String, Object?>{'list': []}), 200)),
+      httpClient: MockClient(
+        (request) async =>
+            http.Response(jsonEncode(<String, Object?>{'list': []}), 200),
+      ),
     );
     await bootstrapWithoutExternalMeta(state);
     final ok = await state.importConfig(
@@ -119,13 +121,21 @@ void main() {
     });
     state.seedDetailForTest(vod: pageVod);
     await tester.pumpWidget(
-      MaterialApp(home: DetailPage(state: state, vod: pageVod)),
+      MaterialApp(
+        home: DetailPage(state: state, vod: pageVod),
+      ),
     );
     await tester.pump();
     // hero 占满首屏，选集区要滚进视口才会挂载。
     for (var attempt = 0; attempt < 20; attempt++) {
-      if (find.byKey(const ValueKey('detail-hero-play')).evaluate().isNotEmpty &&
-          find.byKey(const ValueKey('tmdb-episode-card-线路一-0')).evaluate().isNotEmpty) {
+      if (find
+              .byKey(const ValueKey('detail-hero-play'))
+              .evaluate()
+              .isNotEmpty &&
+          find
+              .byKey(const ValueKey('tmdb-episode-card-线路一-0'))
+              .evaluate()
+              .isNotEmpty) {
         break;
       }
       await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
@@ -160,28 +170,31 @@ void main() {
       reason: '别的源的记录要落在第 2 集那张卡上',
     );
     expect(find.textContaining('其他源'), findsWidgets);
-    expect(find.textContaining('25%'), findsWidgets, reason: '600000/2400000 = 25%');
+    expect(
+      find.textContaining('25%'),
+      findsWidgets,
+      reason: '600000/2400000 = 25%',
+    );
     expect(find.text('继续播放 · 第2集'), findsOneWidget);
-    // 默认续播目标（别的源那条）用第三色描边；本站没有记录，第 1 集不描边。
+    // 默认续播目标用第三色底色；与没有记录的第 1 集保持可辨认。
     final activeCard = tester.widget<OutlinedButton>(
       find.byKey(const ValueKey('tmdb-episode-card-线路一-1')),
     );
     final plainCard = tester.widget<OutlinedButton>(
       find.byKey(const ValueKey('tmdb-episode-card-线路一-0')),
     );
-    expect(activeCard.style?.side?.resolve(<WidgetState>{}), isNotNull);
-    expect(
-      activeCard.style!.side!.resolve(<WidgetState>{})!.width,
-      2,
-      reason: '默认续播目标要能看出是哪一张卡',
-    );
     final theme = Theme.of(tester.element(find.byType(DetailPage)));
     expect(
-      activeCard.style!.side!.resolve(<WidgetState>{})!.color,
-      theme.colorScheme.tertiary,
-      reason: '别的源用第三色，与本的主题色角标区分开',
+      activeCard.style?.backgroundColor?.resolve(<WidgetState>{}),
+      theme.colorScheme.tertiaryContainer,
+      reason: '跨源续播目标用第三色底色，与本站主题色区分',
     );
-    expect(plainCard.style?.side?.resolve(<WidgetState>{}), isNull);
+    expect(
+      plainCard.style?.backgroundColor?.resolve(<WidgetState>{}),
+      isNull,
+      reason: '没有记录的条目不能冒充续播目标',
+    );
+    expect(activeCard.style?.side?.resolve(<WidgetState>{}), isNull);
 
     await tester.tap(find.byKey(const ValueKey('detail-hero-play')));
     expect(await playedEpisodeName(tester), '第2集');
@@ -321,14 +334,8 @@ void main() {
     );
     expect(first.selected, isFalse);
     // 线路 chip 的「最近播放」只标本站那条线路。
-    expect(
-      find.byKey(const ValueKey('tmdb-line-recent-线路二')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('tmdb-line-recent-线路一')),
-      findsNothing,
-    );
+    expect(find.byKey(const ValueKey('tmdb-line-recent-线路二')), findsOneWidget);
+    expect(find.byKey(const ValueKey('tmdb-line-recent-线路一')), findsNothing);
   });
 
   testWidgets('切到别的线路后，选择框里的本站记录仍按它自己的线路播放', (tester) async {

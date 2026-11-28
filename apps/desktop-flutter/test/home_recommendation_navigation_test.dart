@@ -13,6 +13,7 @@ import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/core/watched_recommendation.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
 import 'package:webhtv_pc/services/search_suggest_service.dart';
@@ -29,6 +30,7 @@ import 'package:webhtv_pc/ui/home_page.dart';
 import 'package:webhtv_pc/ui/search_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tmdb_detail_page.dart';
+import 'package:webhtv_pc/ui/toast.dart';
 
 import 'support/detail_test_seams.dart';
 import 'support/home_hd_art_fixture.dart';
@@ -224,6 +226,7 @@ void main() {
   });
 
   tearDown(() {
+    dismissAllToasts();
     state.dispose();
     state.recommendations.close();
     tmdbState.dispose();
@@ -255,6 +258,8 @@ void main() {
     bool titleOnly = false,
     bool hotOnly = false,
     int extraRecommendations = 0,
+    List<int>? recommendationOffsets,
+    int watchedPagesBeforeReplacement = 0,
     Brightness brightness = Brightness.dark,
     Map<HotRankCategory, List<SearchSuggestItem>> hot = const {},
     Site? site,
@@ -284,7 +289,37 @@ void main() {
       ),
       loaders: {
         for (final kind in RecommendationRow.values)
-          kind: (_) async => RecommendationPage(
+          kind: (request) async {
+            if (kind == row && recommendationOffsets != null) {
+              recommendationOffsets.add(request.offset);
+              if (request.offset > 0 && request.offset <= watchedPagesBeforeReplacement) {
+                return RecommendationPage(items: [
+                  RecommendationEntry(item: TmdbItem(tmdbId: 710 + request.offset,
+                    mediaType: TmdbMediaType.movie, title: '之前看过的候选'), source: RecommendationSource.tmdb),
+                ], nextOffset: request.offset + 1, hasMore: true);
+              }
+              if (request.offset != 0) {
+                return const RecommendationPage(
+                  nextOffset: 2,
+                  items: [
+                    RecommendationEntry(
+                      item: TmdbItem(
+                        tmdbId: 700,
+                        mediaType: TmdbMediaType.movie,
+                        title: '补位作品',
+                      ),
+                      source: RecommendationSource.tmdb,
+                    ),
+                  ],
+                );
+              }
+              return RecommendationPage(
+                items: [entry],
+                nextOffset: 1,
+                hasMore: true,
+              );
+            }
+            return RecommendationPage(
             items: kind == row && !hotOnly
                 ? [
                     entry,
@@ -300,9 +335,14 @@ void main() {
                       ),
                   ]
                 : const [],
-          ),
+            );
+          },
       },
     );
+    for (var page = 1; page <= watchedPagesBeforeReplacement; page++) {
+      dependencies.watched.setWatched(RecommendationWork(title: '之前看过的候选',
+        mediaType: TmdbMediaType.movie, tmdbId: 710 + page), true);
+    }
     tmdbState = buildTmdbState();
     state = _HomeRecommendationState(dir, metadata, dependencies, tmdbState)
       ..hot = hot
@@ -363,6 +403,10 @@ void main() {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: theme,
+          builder: (context, child) => Stack(
+            fit: StackFit.expand,
+            children: [child!, const ToastHost()],
+          ),
           home: Scaffold(
             body: HomePage(
               heroImageLoader: loadHdHeroFixture,
@@ -582,7 +626,11 @@ void main() {
     await unmount(tester);
   });
 
-  Future<Finder> revealCard(WidgetTester tester, String title) async {
+  Future<Finder> revealCard(
+    WidgetTester tester,
+    String title, {
+    bool settle = true,
+  }) async {
     final card = find.widgetWithText(HomePosterCard, title);
     if (card.evaluate().isEmpty) {
       await tester.scrollUntilVisible(
@@ -597,7 +645,11 @@ void main() {
       );
     }
     await tester.ensureVisible(card);
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump();
+    }
     return card;
   }
 
@@ -690,6 +742,54 @@ void main() {
     );
     expect(reloaded.blockedTitles, contains(recommendationTitleKey('双轨')));
     reloaded.dispose();
+    await unmount(tester);
+  });
+
+  testWidgets('首页标记后跨页补位，撤销恢复推荐', (tester) async {
+    final offsets = <int>[];
+    lookupResults = [
+      {'id': 700, 'media_type': 'movie', 'title': '补位作品'},
+    ];
+    await pumpHome(tester, recommendationOffsets: offsets, watchedPagesBeforeReplacement: 4);
+    await tester.longPress(await revealCard(tester, '双轨'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('标记已看'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('已标记为看过'), findsOneWidget);
+    expect(find.text('双轨'), findsNothing);
+    expect(offsets, [0, 1, 2, 3, 4, 5], reason: '只沿现有游标跳过已看候选，不从头重新取数');
+    await revealCard(tester, '补位作品', settle: false);
+    expect(state.recommendations.feedback.blockedTitles, isEmpty);
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    await revealCard(tester, '双轨');
+    await unmount(tester);
+  });
+
+  testWidgets('热门可标记，榜单仍保留该作品和原名次', (tester) async {
+    await pumpHome(
+      tester,
+      hot: {
+        HotRankCategory.movie: [
+          const SearchSuggestItem(title: '热门样片', rank: 7),
+        ],
+      },
+    );
+    await tester.longPress(await revealCard(tester, '热门样片'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('标记已看'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.longPress(await revealCard(tester, '热门样片', settle: false));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('第 7 名'), findsOneWidget);
+    expect(find.text('不感兴趣'), findsNothing);
+    await tester.tap(find.text('取消已看'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('已取消已看标记'), findsOneWidget);
     await unmount(tester);
   });
 

@@ -86,7 +86,7 @@ void main() {
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('window_manager'),
       (call) async => switch (call.method) {
-        'isFullScreen' || 'isPreventClose' => false,
+        'isFullScreen' || 'isPreventClose' || 'isMaximized' => false,
         'isFocused' => true,
         _ => null,
       },

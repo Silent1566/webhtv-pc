@@ -71,6 +71,7 @@ class HomeHero extends StatefulWidget {
     this.interval = homeHeroInterval,
     this.paintImage = true,
     this.onIndexChanged,
+    this.initialIndex = 0,
   });
 
   /// 非空。空的情况由页面画空态，不进来。
@@ -84,6 +85,10 @@ class HomeHero extends StatefulWidget {
   /// 页面接管固定背景时，hero 只保留内容；无横图的夜空兜底仍由 hero 绘制。
   final bool paintImage;
   final ValueChanged<int>? onIndexChanged;
+
+  /// 挂载时的默认选中项。首页把「当前作品」存在会话里，返回时必须从这一张开始，
+  /// 否则列表恢复了、轮播却退回第一张。
+  final int initialIndex;
 
   @override
   State<HomeHero> createState() => _HomeHeroState();
@@ -110,6 +115,14 @@ class _HomeHeroState extends State<HomeHero> {
   /// 已经发过预载的图片地址。按 URL 去重：同一张图不会重复预载，
   /// 条目换掉时也不会把整套再拉一遍。
   final Set<String> _preloaded = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialIndex > 0) {
+      _index = widget.initialIndex.clamp(0, widget.items.length - 1);
+    }
+  }
 
   @override
   void didChangeDependencies() {

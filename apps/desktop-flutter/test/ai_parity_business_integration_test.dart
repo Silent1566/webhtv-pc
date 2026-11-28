@@ -62,8 +62,17 @@ void main() {
         excludePatterns: [r'/feature/'],
       ),
     ], Uri.parse('https://media.test/feature/index.m3u8'));
+    // 2 段里删 1 段 = 50%，超出 35% 安全上限；补足正片段让比例回到真实量级，
+    // 这条用例仍然只验证「排除规则优先 + 只作用于确认清单」。
     const playlist =
-        '#EXTM3U\n#EXTINF:10,\nhttps://ads.test/feature/001.ts\n#EXTINF:5,\nhttps://ads.test/advert/002.ts\n#EXT-X-ENDLIST';
+        '#EXTM3U\n#EXTINF:10,\nhttps://ads.test/feature/001.ts\n'
+        '#EXTINF:5,\nhttps://ads.test/advert/002.ts\n'
+        '#EXTINF:10,\nhttps://media.test/feature/003.ts\n'
+        '#EXTINF:10,\nhttps://media.test/feature/004.ts\n'
+        '#EXTINF:10,\nhttps://media.test/feature/005.ts\n'
+        '#EXTINF:10,\nhttps://media.test/feature/006.ts\n'
+        '#EXTINF:10,\nhttps://media.test/feature/007.ts\n'
+        '#EXT-X-ENDLIST';
     final result = cleanHlsPlaylist(
       text: playlist,
       playlistUri: Uri.parse('https://media.test/feature/index.m3u8'),
@@ -503,8 +512,15 @@ void integratedServiceTests() {
   });
 
   test('真实代理切片过滤只在确认会话执行，另一个会话保持原清单', () async {
+    // 同样是 2 段里删 1 段：补足正片段，让本次删除落在 35% 上限内。
     const playlist =
-        '#EXTM3U\n#EXTINF:8,\n/feature/one.ts\n#EXTINF:5,\n/advert/ad.ts\n#EXT-X-ENDLIST';
+        '#EXTM3U\n#EXTINF:8,\n/feature/one.ts\n#EXTINF:5,\n/advert/ad.ts\n'
+        '#EXTINF:8,\n/feature/two.ts\n'
+        '#EXTINF:8,\n/feature/three.ts\n'
+        '#EXTINF:8,\n/feature/four.ts\n'
+        '#EXTINF:8,\n/feature/five.ts\n'
+        '#EXTINF:8,\n/feature/six.ts\n'
+        '#EXT-X-ENDLIST';
     final upstream = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     upstream.listen((request) {
       request.response.headers.contentType = ContentType(
@@ -546,7 +562,7 @@ void integratedServiceTests() {
         ]),
       );
       final captured = proxy.mediaPlaylistFor(a.fingerprint)!;
-      expect(captured.evidence.totalSegments, 2);
+      expect(captured.evidence.totalSegments, 7);
       proxy.aiSessionFingerprint = a.fingerprint;
       proxy.aiSessionRules = mergeAiAdRules(const AdRuleSet.empty(), const [
         AdRuleProposal(
@@ -556,7 +572,14 @@ void integratedServiceTests() {
         ),
       ], target);
       final filtered = mediaUris(a, await read(proxy.urlFor(a, target)));
-      expect(filtered, ['http://127.0.0.1:${upstream.port}/feature/one.ts']);
+      expect(filtered, [
+        'http://127.0.0.1:${upstream.port}/feature/one.ts',
+        'http://127.0.0.1:${upstream.port}/feature/two.ts',
+        'http://127.0.0.1:${upstream.port}/feature/three.ts',
+        'http://127.0.0.1:${upstream.port}/feature/four.ts',
+        'http://127.0.0.1:${upstream.port}/feature/five.ts',
+        'http://127.0.0.1:${upstream.port}/feature/six.ts',
+      ]);
       expect(
         mediaUris(b, await read(proxy.urlFor(b, target))),
         contains('http://127.0.0.1:${upstream.port}/advert/ad.ts'),

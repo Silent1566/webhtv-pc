@@ -74,7 +74,12 @@ void main() {
     CspJarProbe.rememberPayloadBundle(sourceSite.path, sharedDir: shared);
     expect(
       DexTranslate.recordUsable(
-        p.join(shared, _sha([9, 8, 7]), 'intake-dex.json'),
+        p.join(
+          shared,
+          _sha([9, 8, 7]),
+          'v${DexTranslate.repairVersion}',
+          'intake-dex.json',
+        ),
       ),
       isTrue,
       reason: 'JVM 转好的产物必须能被别的站点复用',

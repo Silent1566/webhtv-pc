@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/detail_recommendation.dart';
+import '../core/watched_recommendation.dart';
 import '../core/recommendation_meta.dart';
 import '../core/tmdb_identity.dart';
 import '../state/detail_recommendation_state.dart';
@@ -53,6 +54,7 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
     _state = DetailRecommendationState(
       loaders: widget.dependencies.acquire(),
       feedback: widget.dependencies.feedback,
+      watched: widget.dependencies.watched,
     );
     widget.dependencies.historyChanges?.addListener(_refresh);
     _refresh();
@@ -121,6 +123,8 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
       ),
       // 与卡片单击完全一致的去向。
       onOpen: () => _open(entry),
+      watched: widget.dependencies.watched,
+      work: RecommendationWork.fromEntry(entry),
       onNotInterested: () async =>
           widget.dependencies.feedback.block(item.title),
     );

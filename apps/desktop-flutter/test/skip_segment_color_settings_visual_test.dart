@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/intro_skip_options_page.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
@@ -98,7 +99,7 @@ void main() {
         find.byKey(const ValueKey('skip-color-preset-FFFFEB3B')),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(GlassAlertDialog), findsOneWidget);
       expect(tester.takeException(), isNull);
       await capture(tester, 'dialog-${brightness.name}');
     });

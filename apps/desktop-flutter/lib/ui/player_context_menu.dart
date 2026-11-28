@@ -53,31 +53,8 @@ const double _menuWidth = 240;
 /// 项高（`design/04` §5.6：36，桌面密度）。
 const double _itemHeight = 36;
 
-/// clamp 用的菜单高度估值（`design/04` §5.2）。
-///
-/// 设计文档写明这是估算值、应由 `LayoutBuilder` 实测。这里保留估值只用来推算
-/// **左上角**（菜单最终多高取决于内容，见 [_PlayerContextMenuState.build]），
-/// 同时把「真实高度」交给布局约束：菜单高度上限是 `视口高 - 左上角 - 边距`。
-/// 两者合起来保证 **菜单永远整块落在窗口内**：估值偏小只会让菜单更早开始
-/// 内部滚动，不会让它伸出窗口下沿——这正是 `design/04` §5.2 要防的那个
-/// 「右下角右键 → 部分项不可点」缺陷。
-const double _estimatedMenuHeight = 420;
-
-/// 菜单与窗口边缘的最小留白（`design/04` §5.2 的 `8`）。
+/// 菜单与当前可用区域边缘的最小留白（`design/04` §5.2 的 `8`）。
 const double _viewportMargin = AppSpace.sm;
-
-/// 相邻两列的水平间隙。
-///
-/// 取 0：子列紧贴父列边缘，两列的发丝边并成一条视觉分界；留出间隙会在两级
-/// 之间露出底图，反而像两块不相干的浮动面板。
-const double _columnGap = 0;
-
-/// 子列被竖直方向夹住时仍要保留的最低可用高度（3 项）。
-///
-/// 只按「行顶边以下的空间」给上限，靠近窗口下沿的父项会把子列压成一条缝
-/// （600px 高窗口里的最后一项只剩 30px）——列几乎不可读，还滚不出内容。
-/// 夹到「还剩 3 项」为止，剩下的高度交给列内滚动。
-const double _minColumnViewport = _itemHeight * 3;
 
 /// 飞出层数上限。
 ///
@@ -150,6 +127,9 @@ class PlayerMenuItem {
   final List<PlayerMenuItem> children;
 
   final VoidCallback? onSelect;
+
+  Widget? leadingIcon(Color color) =>
+      icon == null ? null : Icon(icon, size: 18, color: color);
 }
 
 /// 菜单的一个分组。
@@ -202,6 +182,8 @@ class PlayerContextMenu extends StatefulWidget {
     required this.viewport,
     required this.sections,
     required this.onDismiss,
+    this.onColumnBoundsChanged,
+    this.reserveFlyoutSpace = true,
   });
 
   /// 菜单左上角的期望位置（父 `Stack` 坐标，通常是右键的 `globalPosition`）。
@@ -209,7 +191,7 @@ class PlayerContextMenu extends StatefulWidget {
   /// 会被 [clampMenuOrigin] 拉回窗口内。
   final Offset anchor;
 
-  /// 窗口尺寸（`MediaQuery.sizeOf(context)`），用于 clamp 与高度上限。
+  /// 当前承载菜单的可用区域大小，Windows 独立弹窗使用显示器工作区。
   final Size viewport;
 
   final List<PlayerMenuSection> sections;
@@ -222,6 +204,12 @@ class PlayerContextMenu extends StatefulWidget {
   /// （例如未来的键盘导航取消）时不必再改调用方签名。
   final VoidCallback onDismiss;
 
+  /// Layout in logical pixels, for hosts that expose only the visible menu columns.
+  final ValueChanged<List<Rect>>? onColumnBoundsChanged;
+
+  /// Pointer-opened menus reserve the full chain. Keyboard-opened menus stay centered.
+  final bool reserveFlyoutSpace;
+
   @override
   State<PlayerContextMenu> createState() => _PlayerContextMenuState();
 }
@@ -233,6 +221,34 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   /// 无关」是不可能的形状（第 3 列只能由第 2 列的某个项弹出），集合会允许这种
   /// 非法状态存在，路径直接从结构上排除它。
   final List<String> _openIds = [];
+
+  // 锚点未变时，展开路径或轨道列表变化都不需要重新预留列位。
+  late int _reservedDepth = _menuDepth(widget.sections);
+
+  @override
+  void didUpdateWidget(covariant PlayerContextMenu oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.anchor != widget.anchor ||
+        oldWidget.viewport != widget.viewport) {
+      _reservedDepth = _menuDepth(widget.sections);
+    }
+  }
+
+  static int _menuDepth(List<PlayerMenuSection> sections) {
+    var depth = 1;
+    void visit(List<PlayerMenuItem> items, int level) {
+      if (items.isEmpty || level >= _maxFlyoutDepth) return;
+      depth = math.max(depth, level + 1);
+      for (final item in items) {
+        visit(item.children, level + 1);
+      }
+    }
+
+    for (final section in sections) {
+      visit(section.items, 1);
+    }
+    return depth;
+  }
 
   /// 可展开项（有 `children` 的行）实测的行顶边，键是 [_rowKeyOf]。
   ///
@@ -284,8 +300,14 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
     });
   }
 
-  /// 指针离开第 [level] 列里带子列的行：排一次延迟收起。
-  void _scheduleCollapse(PlayerMenuItem item, int level) {
+  void _hoverLeaf(int level) {
+    if (_openIds.length <= level) return;
+    _scheduleCollapse(_openIds[level], level);
+  }
+
+  /// 从父项斜移到子列时，途中掠过叶子行也保留同样的进入宽限。
+  void _scheduleCollapse(String itemId, int level) {
+    if (_openIds.length <= level || _openIds[level] != itemId) return;
     _cancelCollapse();
     _collapseTimer = Timer(_collapseDelay, () {
       _collapseTimer = null;
@@ -293,7 +315,7 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
       // 到点后重新校验，不直接收：这 200ms 里指针可能已经进了子列（子列里的
       // 行会调 [_cancelCollapse]），也可能这一行早已不是展开路径上的那一项。
       // 只有「这一行仍然恰好是第 level 号展开项」才真的收，否则收的是别人。
-      final stillOpen = _openIds.length > level && _openIds[level] == item.id;
+      final stillOpen = _openIds.length > level && _openIds[level] == itemId;
       if (!stillOpen) return;
       setState(() {
         _openIds.removeRange(level, _openIds.length);
@@ -313,42 +335,48 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   @override
   Widget build(BuildContext context) {
     final width = _width;
-    final origin = clampMenuOrigin(
-      anchor: widget.anchor,
-      viewport: widget.viewport,
-      menuSize: Size(width, _estimatedMenuHeight),
-    );
     final levels = _visibleLevels();
-
+    final lefts = _columnLefts(width, levels.length);
+    final next = _columnLefts(width, levels.length + 1);
     final columns = <Widget>[];
-    final lefts = _columnLefts(origin.dx, width, levels.length);
-    var columnTop = origin.dy;
+    final bounds = <Rect>[];
+    var columnTop = widget.anchor.dy;
     for (var level = 0; level < levels.length; level++) {
       if (level > 0) {
-        final parentId = _openIds[level - 1];
-        // 量不到（首帧这一行还没被测量）就先贴父列顶边，下一帧校正。
-        columnTop = _childColumnTop(
-          _rowTops[_rowKeyOf(level - 1, parentId)] ?? columnTop,
-        );
+        columnTop =
+            _rowTops[_rowKeyOf(level - 1, _openIds[level - 1])] ?? columnTop;
       }
-      // 每列高度上限 = 该列左上角以下的可用空间。和主列同一条理由：只按视口高
-      // 给上限时，左上角偏下的列会伸到窗口外沿且滚不到。
-      final maxHeight = math.max(
-        0.0,
-        widget.viewport.height - columnTop - _viewportMargin,
+      final height = math.min(
+        levels[level].length * _itemHeight + 2 * AppSpace.xs,
+        math.max(0.0, widget.viewport.height - 2 * _viewportMargin),
       );
+      columnTop = _clampStart(
+        columnTop,
+        widget.viewport.height - height - _viewportMargin,
+      );
+      if (widget.onColumnBoundsChanged != null) {
+        bounds.add(Rect.fromLTWH(lefts[level], columnTop, width, height));
+      }
       columns.add(
         _column(
           level: level,
           left: lefts[level],
+          opensLeft: level + 1 < lefts.length
+              ? lefts[level + 1] < lefts[level]
+              : next[level + 1] < next[level],
           top: columnTop,
-          maxHeight: maxHeight,
+          maxHeight: height,
           items: levels[level],
         ),
       );
     }
 
     if (_rowKeys.isNotEmpty) _scheduleMeasure();
+    if (widget.onColumnBoundsChanged != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onColumnBoundsChanged?.call(bounds);
+      });
+    }
 
     // 全窗口大小的坐标底板，各列用 `Positioned` 自己摆（理由见库注释）。
     return Positioned.fill(
@@ -446,54 +474,46 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
   GlobalKey _rowKey(int level, String itemId) =>
       _rowKeys.putIfAbsent(_rowKeyOf(level, itemId), GlobalKey.new);
 
-  /// 能装下整条路径时保持同一飞出方向，整体平移留在视口内，避免翻回早先的列。
-  List<double> _columnLefts(double rootLeft, double width, int count) {
-    final step = width + _columnGap;
-    final totalWidth = width + (count - 1) * step;
-    if (totalWidth <= widget.viewport.width - 2 * _viewportMargin) {
-      final flyRight =
-          rootLeft + step + width <= widget.viewport.width - _viewportMargin;
-      final firstLeft = _clampStart(
-        flyRight ? rootLeft : rootLeft - (count - 1) * step,
-        widget.viewport.width - totalWidth - _viewportMargin,
-      );
-      return [
-        for (var level = 0; level < count; level++)
-          firstLeft + (flyRight ? level : count - 1 - level) * step,
-      ];
-    }
-    // 整条路径比窗口宽时维持既有逐列翻转/收窄降级。
-    final lefts = [rootLeft];
-    for (var level = 1; level < count; level++) {
-      lefts.add(_childColumnLeft(lefts.last, width));
+  /// 打开前预留列位，悬停展开或收起时不移动已有的列。
+  List<double> _columnLefts(double width, int count) {
+    final available = widget.viewport.width - 2 * _viewportMargin;
+    final depth = widget.reserveFlyoutSpace ? _reservedDepth : count;
+    final slots = width == 0
+        ? 1
+        : math.min(depth, math.max(1, (available / width).floor()));
+    final offset = (slots - 1) * width;
+    final maxLeft = widget.viewport.width - width - _viewportMargin;
+    final root = _clampStart(widget.anchor.dx, maxLeft);
+    final rightStart = _clampStart(root, maxLeft - offset);
+    final leftStart = math.max(root, _viewportMargin + offset);
+    final goesRight = root - rightStart <= leftStart - root;
+    final start = goesRight ? rightStart : leftStart;
+    final direction = goesRight ? width : -width;
+    final lefts = <double>[];
+    for (var level = 0; level < count; level++) {
+      if (level < slots) {
+        lefts.add(start + level * direction);
+      } else {
+        // 极窄视口无法容纳所有列，仍让新列处于可点击范围内。
+        final next = lefts.last + direction;
+        lefts.add(
+          _clampStart(
+            next < _viewportMargin || next > maxLeft
+                ? lefts.last - direction
+                : next,
+            maxLeft,
+          ),
+        );
+      }
     }
     return lefts;
-  }
-
-  /// 第 N 列的左缘（N >= 2）：默认贴父列右缘，放不下就翻到父列左侧。
-  double _childColumnLeft(double parentLeft, double width) {
-    final maxLeft = widget.viewport.width - width - _viewportMargin;
-    final flyoutLeft = parentLeft + width + _columnGap;
-    final preferred = flyoutLeft > maxLeft
-        ? parentLeft - width - _columnGap
-        : flyoutLeft;
-    // 翻到左侧仍越界（窄窗口）时退回留白——和主列同一条降级规则。
-    return _clampStart(preferred, maxLeft);
-  }
-
-  /// 第 N 列的顶边：贴父项行顶边，但不许整列伸出窗口。
-  double _childColumnTop(double rowTop) {
-    // 上移的下限是「还剩下 [_minColumnViewport] 的可用高度」：再往下就会把子列
-    // 压成一条缝。
-    final maxTop =
-        widget.viewport.height - _viewportMargin - _minColumnViewport;
-    return _clampStart(rowTop, maxTop);
   }
 
   /// 一列。每列都是**独立的** `Column`，不从同一棵树递归渲染。
   Widget _column({
     required int level,
     required double left,
+    required bool opensLeft,
     required double top,
     required double maxHeight,
     required List<PlayerMenuItem> items,
@@ -534,7 +554,9 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
                     // 每一列都只渲染 [items]：分组标题不再是「标题 + 摊平的项」，
                     // 而是第 1 列里的一行（见 [_visibleLevels]）。这里不再需要按
                     // level 分支——第 2..N 列本来就是这个形状。
-                    children: [for (final item in items) _row(item, level)],
+                    children: [
+                      for (final item in items) _row(item, level, opensLeft),
+                    ],
                   ),
                 ),
               ),
@@ -545,7 +567,7 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
     );
   }
 
-  Widget _row(PlayerMenuItem item, int level) {
+  Widget _row(PlayerMenuItem item, int level, bool opensLeft) {
     final theme = Theme.of(context);
     final semantic = context.semanticColors;
     final hasChildren = item.children.isNotEmpty;
@@ -579,6 +601,7 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
               ? theme.colorScheme.onSurface
               : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5));
 
+    final leading = item.leadingIcon(color);
     final row = InkWell(
       key: ValueKey('player-menu-item-${item.id}'),
       onTap: !item.enabled
@@ -604,8 +627,8 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
           padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
           child: Row(
             children: [
-              if (item.icon != null) ...[
-                Icon(item.icon, size: 18, color: color),
+              if (leading != null) ...[
+                leading,
                 const SizedBox(width: AppSpace.sm),
               ],
               Expanded(
@@ -631,45 +654,27 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
                   ),
                 ),
               if (hasChildren)
-                // 飞出式的方向指示：子列在右侧。
-                Icon(Icons.chevron_right, size: 16, color: color),
+                Icon(
+                  opensLeft ? Icons.chevron_left : Icons.chevron_right,
+                  size: 16,
+                  color: color,
+                ),
             ],
           ),
         ),
       ),
     );
-    // 悬停只挂在「带子列」的行上。
-    //
-    // 叶子项**不挂** `MouseRegion`：指针划过菜单不该让任何状态变化（尤其不该
-    // 把别人刚飞出的子列收掉）；叶子项只在点击时执行 `onSelect`。
-    //
-    // **第 1 列的分组行没有另写一套悬停**：它们由 [_sectionRows] 造出来时就带着
-    // `children`（整组的项），所以 `hasChildren` 为真，走的是和「屏显」「画面
-    // 比例」完全相同的这一条分支——同一个 `MouseRegion`、同一个 [_hoverOpen] /
-    // [_scheduleCollapse]、同一个 [_collapseDelay]。分组只是「第 1 列里恰好
-    // 每行都带 children」的普通父项，没有第二套展开机制。
-    //
-    // `onEnter` 即展开：这是桌面播放器的肌肉记忆，不该为了看一眼子菜单先点
-    // 一下。`onExit` 只是**排一次延迟收起**，绝不立即收——理由见
-    // [_collapseDelay] 的注释（斜线移向子列必然经过不属于任何列的空白区）。
-    //
-    // 点击路径（上面的 `onTap`）**保留**：它是唯一的收起手段（悬停没有对称的
-    // 「离开」动作），也是键盘/触屏用户的唯一入口。两者互不冲突——`onTap` 里
-    // 重新读 `isOpen` 而不是用悬停留下的中间状态。
-    //
-    // 测量键挂在 `MouseRegion` 外面（不是里面）：量的是同一块矩形，且
-    // `KeyedSubtree` 仍是 `_rowTops` 取坐标的那一层。
-    return hasChildren
-        ? KeyedSubtree(
-            key: _rowKey(level, item.id),
-            child: MouseRegion(
-              onEnter: (_) => _hoverOpen(item, level),
-              onExit: (_) => _scheduleCollapse(item, level),
-              child: row,
-            ),
-          )
-        // 其余行的顶边没人用，不挂测量键。
-        : row;
+    if (!hasChildren || !item.enabled) {
+      return MouseRegion(onEnter: (_) => _hoverLeaf(level), child: row);
+    }
+    return KeyedSubtree(
+      key: _rowKey(level, item.id),
+      child: MouseRegion(
+        onEnter: (_) => _hoverOpen(item, level),
+        onExit: (_) => _scheduleCollapse(item.id, level),
+        child: row,
+      ),
+    );
   }
 
   /// 帧后量一次可展开项的行顶边（[_rowTops] 的注释说明了为什么量）。

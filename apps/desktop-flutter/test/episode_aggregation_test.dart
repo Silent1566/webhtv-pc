@@ -9,6 +9,28 @@ VodEpisode episode(
 }) => VodEpisode(name: name, url: url ?? name, extra: extra);
 
 void main() {
+  test('maps filtered and renamed episodes without reusing source indices', () {
+    final one = episode('第1集', url: 'shared');
+    final two = episode('第2集', url: 'shared');
+    final sameAsTwo = two.copyWith();
+    final separate = episode('第3集');
+    expect(
+      sourceEpisodeIndices(
+        [one, sameAsTwo, two, separate, two],
+        [
+          separate,
+          two,
+          two.copyWith(),
+          two,
+          one.copyWith(name: '新集名'),
+          one,
+          episode('不存在'),
+        ],
+      ),
+      [3, 2, 1, 4, 0, -1, -1],
+    );
+  });
+
   group('file sizes', () {
     for (final row in <(String, double, String)>[
       ('[5.37G] 01.mkv', 5370000000, '5.37 GB'),

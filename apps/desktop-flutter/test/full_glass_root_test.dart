@@ -28,8 +28,10 @@ class _RootState extends AppState {
     : super(
         paths: AppPaths.resolve(
           overrides: {
-            for (final role in ['config', 'data', 'cache', 'state'])
-              role: '${Directory.systemTemp.path}/glass-root-fixture/$role',
+            'config': '${Directory.systemTemp.path}/glass-root-fixture/config',
+            'data': '${Directory.systemTemp.path}/glass-root-fixture/data',
+            'cache': '${Directory.systemTemp.path}/glass-root-fixture/cache',
+            'state': '${Directory.systemTemp.path}/glass-root-fixture/state',
           },
         ),
         log: MemoryOnlyLogService(),

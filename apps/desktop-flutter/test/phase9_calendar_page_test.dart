@@ -444,11 +444,11 @@ void main() {
       await tester.pumpAndSettle();
       final position = listPosition(tester);
       final offset = position.pixels;
-      // 非今天的空日期不触发「今日无更新时定位最近分段」的规则。
-      final emptyDay =
-          DateUtils.dateOnly(DateTime.now()) == DateTime(2026, 11, 28)
-          ? DateTime(2026, 11, 27)
-          : DateTime(2026, 11, 28);
+      expect(offset, greaterThan(0));
+      // 夹具仅 1–24 日有更新；避开「今天」的自动定位，即使测试跨午夜。
+      final emptyDay = DateTime.now().isBefore(DateTime(2026, 11, 28))
+          ? DateTime(2026, 11, 30)
+          : DateTime(2026, 11, 25);
       await tester.tap(find.byKey(ValueKey(_dayKey(emptyDay))));
       await tester.pumpAndSettle();
       expect(find.text('11月${emptyDay.day}日 没有更新'), findsOneWidget);

@@ -13,6 +13,7 @@
 /// 不属于本页就退回列表页传入的条目，绝不套用别的剧的线路与简介。
 library;
 
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -24,13 +25,58 @@ import 'package:webhtv_pc/ui/browse_pages.dart';
 
 import 'support/detail_test_seams.dart';
 
+class _CountedEpisodes extends ListBase<VodEpisode> {
+  _CountedEpisodes(this.episodes, this.onRead);
+
+  final List<VodEpisode> episodes;
+  final void Function() onRead;
+
+  @override
+  int get length {
+    onRead();
+    return episodes.length;
+  }
+
+  @override
+  set length(int value) => throw UnsupportedError('read-only fixture');
+
+  @override
+  VodEpisode operator [](int index) {
+    onRead();
+    return episodes[index];
+  }
+
+  @override
+  void operator []=(int index, VodEpisode value) =>
+      throw UnsupportedError('read-only fixture');
+}
+
+class _DetailState extends AppState {
+  _DetailState({required super.paths, required super.log});
+
+  int episodeReads = 0;
+  bool countEpisodes = false;
+
+  @override
+  List<VodPlayLine> playLinesOf(Vod vod) {
+    final lines = super.playLinesOf(vod);
+    if (!countEpisodes) return lines;
+    return [
+      for (final line in lines)
+        line.copyWith(
+          episodes: _CountedEpisodes(line.episodes, () => episodeReads++),
+        ),
+    ];
+  }
+}
+
 void main() {
   late Directory tempDir;
-  late AppState state;
+  late _DetailState state;
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('webhtv-detail-ui');
-    state = AppState(
+    state = _DetailState(
       paths: AppPaths.resolve(
         overrides: {
           'config': '${tempDir.path}/webhtv-pc',
@@ -169,6 +215,35 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(find.textContaining('到达的简介'), findsWidgets);
     expect(find.textContaining('到达线路'), findsWidgets);
+  });
+
+  testWidgets('首次载入长线路时不逐集重扫全部原始剧集', (tester) async {
+    const episodeCount = 1200;
+    final listing = vodOf('long-series', '长篇剧集');
+    state.seedDetailForTest(phase: LoadPhase.loading);
+    await pumpDetail(tester, listing);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+
+    state.countEpisodes = true;
+    final detailed = Vod(
+      vodId: listing.vodId,
+      vodName: listing.vodName,
+      vodPlayFrom: '长线路',
+      vodPlayUrl: List.generate(
+        episodeCount,
+        (index) => '第${index + 1}集\$http://127.0.0.1:1/media/$index.mp4',
+      ).join('#'),
+    );
+    state.seedDetailForTest(vod: detailed);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('detail-hero-play')), findsOneWidget);
+    expect(
+      state.episodeReads,
+      lessThan(40 * episodeCount),
+      reason: '首个详情帧的原始剧集列表访问次数应随集数线性增长',
+    );
+    await scrollPastHero(tester);
+    expect(find.textContaining('长线路'), findsWidgets);
   });
 
   testWidgets('返回按钮清空详情状态', (tester) async {
