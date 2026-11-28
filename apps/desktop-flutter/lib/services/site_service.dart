@@ -59,6 +59,20 @@ class SiteService {
   final AppDatabase? database;
   AppDatabase? get _database => database;
   final String userAgent;
+  final Map<String, Future<void>> _folderRequestTails = {};
+
+  Future<T> _folderRequest<T>(Site site, Future<T> Function() body) {
+    final previous = _folderRequestTails[site.key] ?? Future<void>.value();
+    final result = previous.then((_) => body());
+    late final Future<void> tail;
+    tail = result.then<void>((_) {}, onError: (Object _) {}).whenComplete(() {
+      if (identical(_folderRequestTails[site.key], tail)) {
+        _folderRequestTails.remove(site.key);
+      }
+    });
+    _folderRequestTails[site.key] = tail;
+    return result;
+  }
 
   List<HeaderRule> get _globalHeaders => appConfig.headers;
 
@@ -184,13 +198,31 @@ class SiteService {
     Site site,
     String vodId, {
     VodIdentityHint? identity,
+
+    /// 观测回调：只用于详情诊断，区分「解析运行时」与「站点调用」两段。
+    void Function(String stage)? onStage,
+    bool Function()? isCurrent,
   }) async {
+    void checkCurrent() {
+      if (isCurrent != null && !isCurrent()) {
+        throw AppError(AppErrorKind.siteCancelled, '详情请求已取消');
+      }
+    }
+
+    checkCurrent();
+    onStage?.call('runtime_resolve_start');
+    // Registration/runtime changes may invalidate the earlier AppState preflight.
+    // Recheck before synchronous materialization, without redoing JVM discovery.
+    if (site.type == SiteType.spider) {
+      await router.prepareAvailability([site], foreground: true);
+    }
+    checkCurrent();
     final runtime = router.runtimeFor(site);
-    return _call(
-      site.key,
-      HealthAction.detail,
-      () => runtime.detail(site, vodId, identity: identity),
-    );
+    onStage?.call('runtime_resolve_end');
+    return _call(site.key, HealthAction.detail, () {
+      checkCurrent();
+      return runtime.detail(site, vodId, identity: identity);
+    });
   }
 
   /// 目录资源自动展开为普通影片的多线路详情，UI 不需要处理分享链。
@@ -198,32 +230,44 @@ class SiteService {
     Site site,
     Vod parent, {
     bool Function()? isCurrent,
+    void Function(SiteResult result)? onProgress,
   }) async {
     var warnings = const <AppError>[];
     final outcome = await _call(site.key, HealthAction.detail, () async {
-      final expanded = await _expandFolder(site, parent, isCurrent: isCurrent);
-      warnings = expanded.warnings;
-      final merged = mergeFolderDisplay(
-        parent: parent,
-        entries: expanded.displayEntries,
+      final expanded = await _expandFolder(
+        site,
+        parent,
+        isCurrent: isCurrent,
+        onProgress: onProgress == null
+            ? null
+            : (partial) => onProgress(_folderDetailResult(parent, partial)),
       );
-      final vod = Vod.fromJson({
-        ...merged.toJson(),
-        'vod_tag': 'file',
-        'vod_play_from': expanded.names.join(r'$$$'),
-        'vod_play_url': [
-          for (final episodes in expanded.episodes)
-            episodes.map((e) => '${e.name}\$${e.url}').join('#'),
-        ].join(r'$$$'),
-        bridgePlaybackFlagsKey: expanded.sourceFlags,
-      })!;
-      return SiteResult(list: [vod]);
+      warnings = expanded.warnings;
+      return _folderDetailResult(parent, expanded);
     });
     return SiteCallResult(
       value: outcome.value,
       latency: outcome.latency,
       warnings: warnings,
     );
+  }
+
+  SiteResult _folderDetailResult(Vod parent, _FolderExpansion expanded) {
+    final merged = mergeFolderDisplay(
+      parent: parent,
+      entries: expanded.displayEntries,
+    );
+    final vod = Vod.fromJson({
+      ...merged.toJson(),
+      'vod_tag': 'file',
+      'vod_play_from': expanded.names.join(r'$$$'),
+      'vod_play_url': [
+        for (final episodes in expanded.episodes)
+          episodes.map((e) => '${e.name}\$${e.url}').join('#'),
+      ].join(r'$$$'),
+      bridgePlaybackFlagsKey: Map<String, String>.of(expanded.sourceFlags),
+    })!;
+    return SiteResult(list: [vod]);
   }
 
   /// 目录展开成「线路 + 路由」，供播放器从历史补齐选集入口。
@@ -279,6 +323,7 @@ class SiteService {
     Site site,
     Vod parent, {
     bool Function()? isCurrent,
+    void Function(_FolderExpansion expansion)? onProgress,
   }) async {
     void checkCurrent() {
       if (isCurrent != null && !isCurrent()) {
@@ -287,7 +332,10 @@ class SiteService {
     }
 
     checkCurrent();
-    final entries = (await category(site, typeId: parent.vodId)).value.list;
+    final entries = (await _folderRequest(site, () {
+      checkCurrent();
+      return category(site, typeId: parent.vodId);
+    })).value.list;
     final names = <String>[];
     final episodes = <List<VodEpisode>>[];
     final displayEntries = <Vod>[];
@@ -297,10 +345,14 @@ class SiteService {
     // 顺序读取，兼容使用共享 Spider 上下文的网关；离开页面后不再发后续请求。
     for (final entry in entries) {
       checkCurrent();
+      var added = false;
       try {
         final items = playLinesOf(entry).isNotEmpty
             ? [entry]
-            : (await detail(site, entry.vodId)).value.list;
+            : (await _folderRequest(site, () {
+                checkCurrent();
+                return detail(site, entry.vodId, isCurrent: isCurrent);
+              })).value.list;
         checkCurrent();
         displayEntries.addAll(items);
         final lines = items.expand(playLinesOf).toList();
@@ -323,6 +375,7 @@ class SiteService {
           sourceFlags[name] = line.playbackFlag;
           entryVodIds[name] = entry.vodId;
         }
+        added = true;
       } catch (error) {
         checkCurrent();
         final failure = error is AppError
@@ -337,6 +390,23 @@ class SiteService {
             cause: failure,
           ),
         );
+      }
+      if (added && onProgress != null) {
+        checkCurrent();
+        try {
+          onProgress(
+            _FolderExpansion(
+              names: List.of(names),
+              episodes: List.of(episodes),
+              displayEntries: List.of(displayEntries),
+              sourceFlags: Map.of(sourceFlags),
+              entryVodIds: Map.of(entryVodIds),
+              warnings: List.of(warnings),
+            ),
+          );
+        } catch (_) {
+          // Progress observers must not turn usable source results into failure.
+        }
       }
     }
     checkCurrent();
@@ -462,6 +532,7 @@ class SiteService {
     ParseService? parseService,
     ParseFailoverSettings? parseFailover,
     String? preferredParseName,
+    bool Function()? isCurrent,
   }) async {
     final runtime = router.runtimeFor(site);
     final stopwatch = Stopwatch()..start();
@@ -535,12 +606,22 @@ class SiteService {
 
     // 需要向播放入口取回真实地址（站点 playUrl）。
     try {
-      final playResult = await runtime.play(
-        site,
-        episodeTarget: episodeTarget,
-        flag: flag,
-        vodId: vodId,
-      );
+      Future<SiteResult> requestPlay() {
+        if (isCurrent != null && !isCurrent()) {
+          throw AppError(AppErrorKind.siteCancelled, '播放请求已取消');
+        }
+        return runtime.play(
+          site,
+          episodeTarget: episodeTarget,
+          flag: flag,
+          vodId: vodId,
+        );
+      }
+
+      // Early playback must not race a folder detail on a shared gateway context.
+      final playResult = await (_folderRequestTails.containsKey(site.key)
+          ? _folderRequest(site, requestPlay)
+          : requestPlay());
       // `type=3` 的剧集目标是**播放入口的输入**（网盘分享页等），不是媒体地址。
       // 播放入口没给出地址时**不得回退到 episodeTarget**——那会把分享页 HTML
       // 交给播放器（`Failed to recognize file format`）。实测上游对部分网盘线路
@@ -616,13 +697,15 @@ class SiteService {
       final failure = error is AppError
           ? error
           : AppError(AppErrorKind.unknown, '$error', cause: error);
-      _record(
-        site.key,
-        HealthAction.play,
-        false,
-        stopwatch.elapsed,
-        failure.logLine,
-      );
+      if (failure.kind != AppErrorKind.siteCancelled) {
+        _record(
+          site.key,
+          HealthAction.play,
+          false,
+          stopwatch.elapsed,
+          failure.logLine,
+        );
+      }
       throw failure;
     }
   }

@@ -27,7 +27,11 @@ class PushSiteService extends SiteService {
     Site site,
     String vodId, {
     VodIdentityHint? identity,
+    void Function(String stage)? onStage,
+    bool Function()? isCurrent,
   }) async {
+    onStage?.call('runtime_resolve_start');
+    onStage?.call('runtime_resolve_end');
     return SiteCallResult(
       value: pushSiteDetail(parsed),
       latency: Duration.zero,
@@ -44,6 +48,7 @@ class PushSiteService extends SiteService {
     ParseService? parseService,
     ParseFailoverSettings? parseFailover,
     String? preferredParseName,
+    bool Function()? isCurrent,
   }) async {
     // 推送地址已经是可播目标：不做直链初判、不走解析器，直接交给播放器
     // （安卓 `Push` extractor 对 `push://` 也是同一语义）。

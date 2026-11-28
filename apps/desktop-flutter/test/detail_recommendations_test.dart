@@ -161,6 +161,8 @@ class _Task6EmptyService implements SiteService {
     Site site,
     String vodId, {
     VodIdentityHint? identity,
+    void Function(String stage)? onStage,
+    bool Function()? isCurrent,
   }) async => SiteCallResult(
     value: SiteResult(
       list: [
