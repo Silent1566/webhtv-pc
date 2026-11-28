@@ -1085,8 +1085,10 @@ class HomeHeroSession extends ChangeNotifier {
       try {
         await _sessionCache.save(scope, saved);
         if (!current()) return;
+        final snapshots = await _sessionCache.readAsync(scope);
+        if (!current()) return;
         _sessionByBinding = {
-          for (final snapshot in _sessionCache.read(scope)) snapshot.key: snapshot,
+          for (final snapshot in snapshots) snapshot.key: snapshot,
         };
         _state.log.info(
           'event=session_cache_save encoded=${saved.length} readable=${_sessionByBinding.length}',
@@ -1149,7 +1151,8 @@ class HomeHeroSession extends ChangeNotifier {
         try {
           await _startupCache.save(scope, saved);
           if (!current()) return;
-          final readable = _startupCache.read(scope).length;
+          final readable = (await _startupCache.readAsync(scope)).length;
+          if (!current()) return;
           _state.log.info(
             'event=cache_save requested=${picks.length} encoded=${saved.length} '
             'readable=$readable result=${readable == 0 ? 'no_usable_snapshot' : 'ready'}',

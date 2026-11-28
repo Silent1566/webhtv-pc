@@ -631,6 +631,7 @@ class _GatedService extends SiteService {
     dynamic parseService,
     dynamic parseFailover,
     String? preferredParseName,
+    bool Function()? isCurrent,
   }) async {
     final first = ++calls == 1;
     final result = await super.resolvePlayback(
@@ -640,6 +641,7 @@ class _GatedService extends SiteService {
       vodId: vodId,
       qualityIndex: qualityIndex,
       preferredParseName: preferredParseName,
+      isCurrent: isCurrent,
     );
     if (first) {
       firstReturned.complete(result.value);

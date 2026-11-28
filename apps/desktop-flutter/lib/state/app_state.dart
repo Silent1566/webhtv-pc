@@ -23,6 +23,7 @@ import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
 
+import '../services/detail_load_trace.dart';
 import '../services/external_player.dart';
 import '../services/external_url.dart';
 import '../services/imdb_rating_service.dart';
@@ -955,6 +956,10 @@ class AppState extends ChangeNotifier
   /// 先返回的响应会被后返回的覆盖，而详情页读的是全局结果，用户就会看到
   /// 上一部剧的信息。
   int _detailRunId = 0;
+  DetailLoadTrace? _detailLoadTrace;
+
+  DetailLoadTrace? get detailLoadTrace =>
+      _detailLoadTrace?.runId == _detailRunId ? _detailLoadTrace : null;
 
   /// 站源可能重写 vod_id，返回条目的 ID 不能作为页面归属依据；
   /// 保留请求目标，只有本页发起的详情才认领，避免上一部剧串入。
@@ -2159,7 +2164,8 @@ class AppState extends ChangeNotifier
 
   ImdbRatingService? _imdbRatingService;
 
-  bool get imdbRatingEnabled => externalMetaEnabled &&
+  bool get imdbRatingEnabled =>
+      externalMetaEnabled &&
       metaPipeline.orderOf(MetaField.rating).contains(MetaSourceKind.imdb);
 
   bool get externalMetaEnabled => _uiPreferences?.externalMetaEnabled ?? true;
@@ -2407,6 +2413,9 @@ class AppState extends ChangeNotifier
   SiteResult? get homeResult => _homeResult;
   SiteResult? get categoryResult => _categoryResult;
   SiteResult? get detailResult => _detailResult;
+  bool get detailLinesLoading =>
+      _detailPhase == LoadPhase.loading &&
+      (_detailResult?.list.isNotEmpty ?? false);
   String get detailRequestVodId => _detailRequestVodId;
   Vod? get selectedVod => _selectedVod;
   String? get selectedTypeId => _selectedTypeId;
@@ -8061,6 +8070,17 @@ class AppState extends ChangeNotifier
     // 清空排在它后面会让新页面在这段时间里继续拿上一部剧的 `detailResult`
     // 渲染线路（phase 还是 ready）——那正是下面注释说要消灭的串剧。
     if (_disposed) return;
+    final trace = _detailLoadTrace = DetailLoadTrace(
+      log: log,
+      runId: runId,
+      context:
+          'first=${_detailLoadTrace == null} siteType=${site?.type ?? '-'} '
+          'kind=${synthetic
+              ? 'synthetic'
+              : vod.isFolder
+              ? 'folder'
+              : 'source'}',
+    );
     _detailRequestVodId = vod.vodId;
     _selectedVod = vod;
     _detailResult = null;
@@ -8071,6 +8091,7 @@ class AppState extends ChangeNotifier
     notifyListeners();
     if (site != null) await _waitForPythonSite(site);
     if (_disposed || runId != _detailRunId) return;
+    trace.mark('runtime_ready');
     // TMDB 与站源详情**并行**启动：整条 TMDB 链（匹配→详情→季度→剧集→视频）以前排在
     // 站源详情之后（本机实测站源详情 3.9~7.1s），首屏必然是站源「原始模式」，用户要等
     // 两段时间相加才见到 TMDB 版本。元数据不依赖站源详情的结果，先跑起来。
@@ -8110,19 +8131,35 @@ class AppState extends ChangeNotifier
         }
       }
       if (runId != _detailRunId) return;
+      trace.mark('tmdb_joined');
       _detailPhase = LoadPhase.ready;
+      trace.mark('detail_ready', fields: 'result=synthetic');
       _notifyIfAlive();
       return;
     }
     if (service == null || site == null) return;
     try {
+      trace.mark('source_start');
       // 已知 atvp_detail 桥接协议先取资源，再逐个取分享链分集。
       // 在服务层合并成普通详情后，一次交给标准线路 UI 和 TMDB。
       final outcome = vod.isFolder
           ? await service.folderDetail(
               site,
               vod,
-              isCurrent: () => runId == _detailRunId,
+              isCurrent: () => !_disposed && runId == _detailRunId,
+              onProgress: (partial) {
+                if (_disposed || runId != _detailRunId) return;
+                final source = partial.list.first;
+                final effective = mergeSourceDetailDisplay(
+                  detail: source,
+                  listing: vod,
+                  nameOverride: pushNameOverride,
+                );
+                _detailResult = partial.copyWith(list: [effective]);
+                _selectedVod = effective;
+                trace.mark('first_lines');
+                _notifyIfAlive();
+              },
             )
           : await service.detail(
               site,
@@ -8130,6 +8167,9 @@ class AppState extends ChangeNotifier
               // 详情请求自带 ids：上游漏填 vod_id/vod_name 时用它兜底，
               // 否则整条被丢弃、详情页报「列表条目缺少 vod_id/vod_name」。
               identity: VodIdentityHint(vodId: vod.vodId, vodName: vod.vodName),
+              // 运行时解析不计入 callMs，站点调用计入；分开记录才能定位等待。
+              onStage: trace.mark,
+              isCurrent: () => !_disposed && runId == _detailRunId,
             );
       if (runId != _detailRunId) {
         // 已被更新的请求（或已离开详情页）取代：结果直接丢弃，不写回状态。
@@ -8139,6 +8179,10 @@ class AppState extends ChangeNotifier
         );
         return;
       }
+      trace.mark(
+        'source_return',
+        fields: 'callMs=${outcome.latency.inMilliseconds}',
+      );
       final returnedDetail = outcome.value.list.firstOrNull;
       final effective = returnedDetail == null
           ? vod
@@ -8187,6 +8231,10 @@ class AppState extends ChangeNotifier
       }
       // 站源详情已经可用：先推一次通知，让线路/选集立刻渲染出来。后面的 TMDB 收尾
       // 即使要等，也不能把列表压在「加载中」里（那就等于把并行的收益又交回去了）。
+      trace.mark(
+        'detail_ready',
+        fields: 'result=${returnedDetail == null ? 'empty' : 'source'}',
+      );
       _notifyIfAlive();
       // 等并行启动的那一轮 TMDB 收尾，再用权威线路补一次映射。为什么要等而不是
       // 直接发第二次：同一作品换线路会清掉季度解析，两次调用叠在一起会互相覆盖。
@@ -8209,6 +8257,7 @@ class AppState extends ChangeNotifier
       }
       // 等待期间用户可能已经离开详情页或换了作品：runId 被取代就不再写回状态。
       if (runId != _detailRunId) return;
+      trace.mark('tmdb_joined');
       // TMDB 与标准站点共用完整线路；元数据失败不阻塞选集和播放。
       // 这一次用 effective（folder 展开后的条目）的权威线路：季/集映射依赖它。它命中
       // 同一作品 → 保留内存数据复用，详情/视频不会再打一次网络。
@@ -8241,6 +8290,7 @@ class AppState extends ChangeNotifier
           : AppError(AppErrorKind.unknown, '$error', cause: error);
       _detailError = failure;
       _detailPhase = LoadPhase.failed;
+      trace.mark('failed', fields: 'errorKind=${failure.kind.name}');
       log.error(
         // 失败路径用多行诊断（动作 + 脱敏请求 + 堆栈）：只给分类文案时，
         // 用户和开发者都无法判断是哪一次请求、为什么失败（2026-10-20 反馈）。
@@ -8403,6 +8453,7 @@ class AppState extends ChangeNotifier
             qualityIndex: qualityIndex,
             parseFailover: parseFailoverSettings,
             preferredParseName: preferredParseName,
+            isCurrent: current,
           );
       final outcome = runtime is SidecarRuntime
           ? await runtime.withProxySession(owner, resolve)

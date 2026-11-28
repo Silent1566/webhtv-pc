@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -124,6 +125,27 @@ class HomeHeroStartupCache {
     } on Object {
       return [];
     }
+  }
+
+  /// Post-save validation may hash up to 72 MiB; keep it off the UI isolate.
+  /// Queue it with writes so prune/clear cannot race an in-flight validation.
+  Future<List<CachedHomeHero>> readAsync(String scope) {
+    final generation = _writer.generation;
+    final path = _directory.path;
+    final maxEntries = _maxEntries;
+    final maxIndexBytes = _maxIndexBytes;
+    final reading = _writer.tail.then((_) async {
+      if (generation != _writer.generation) return <CachedHomeHero>[];
+      final result = await _readCacheInBackground(
+        path,
+        maxEntries,
+        maxIndexBytes,
+        scope,
+      );
+      return generation == _writer.generation ? result : <CachedHomeHero>[];
+    });
+    _writer.tail = reading.then<void>((_) {}, onError: (Object _) {});
+    return reading.catchError((Object _) => <CachedHomeHero>[]);
   }
 
   Future<void> save(String scope, Iterable<HomeHeroStartupCandidate> entries) {
@@ -541,6 +563,20 @@ class HomeHeroStartupCache {
     }
   }
 }
+
+Future<List<CachedHomeHero>> _readCacheInBackground(
+  String path,
+  int maxEntries,
+  int maxIndexBytes,
+  String scope,
+) => Isolate.run(
+  () => HomeHeroStartupCache._(
+    directory: Directory(p.dirname(path)),
+    namespace: p.basename(path),
+    maxEntries: maxEntries,
+    maxIndexBytes: maxIndexBytes,
+  ).read(scope),
+);
 
 class _Writer {
   Future<void> tail = Future.value();
