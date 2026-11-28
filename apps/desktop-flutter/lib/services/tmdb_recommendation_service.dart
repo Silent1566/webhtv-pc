@@ -129,9 +129,12 @@ class TmdbRecommendationService {
     int offset = 0,
     int pageSize = 12,
     Set<String> blockedTitles = const {},
+    void Function(String)? diagnostic,
   }) async {
     _cancel.throwIfCancelled();
-    if (!_service.config.isReady) return const RecommendationPage();
+    if (!_service.config.isReady) {
+      return const RecommendationPage(endReason: 'disabled');
+    }
     final blocked = {
       ...blockedTitles,
       recommendationTitleKey(current.title),
@@ -146,15 +149,15 @@ class TmdbRecommendationService {
           !blockedTitles.contains(title) &&
           seen.add(title);
     }).toList();
-    final key = _key('personal', current, seeds, detail);
+    final key = _key('personal-paged', current, seeds, detail);
     final pool = await _obtain(key, () async {
       final anchor = current.isAudio || current.isShortDrama
           ? _SeedData(null, const {}, const [], const [])
-          : await _seedData(current, detail: detail);
+          : await _seedData(current, detail: detail, diagnostic: diagnostic);
       final historyData = <_SeedData>[];
       for (final seed in seeds) {
         _cancel.throwIfCancelled();
-        historyData.add(await _seedData(seed));
+        historyData.add(await _seedData(seed, diagnostic: diagnostic));
       }
       final excluded = {
         recommendationTitleKey(current.title),
@@ -209,26 +212,80 @@ class TmdbRecommendationService {
           for (final data in historyData)
             if (data.item?.identity != null) data.item!.identity!.key,
         },
+        streams: [
+          for (final data in [...historyData, anchor])
+            if (data.item != null)
+              _Pool(
+                entries: [],
+                created: _clock(),
+                item: data.item,
+                context: _context(data.detail),
+                recommendationsDone: data.recommendations.isEmpty,
+                similarDone: data.similar.isEmpty,
+                seenKeys: _rank(
+                  data.recommendations,
+                  data.similar,
+                  data.detail,
+                  data.item!.title,
+                ).map((e) => e.key).toSet(),
+              ),
+        ],
         failed: anchor.failed || historyData.any((d) => d.failed),
       );
-    });
-    return _page(
+    }, diagnostic: diagnostic);
+    final blockedIdentities = {
+      ...pool.blockedIdentities,
+      if (current.identity != null) current.identity!.key,
+      for (final seed in history)
+        if (seed.identity != null) seed.identity!.key,
+    };
+    if (offset > 0 && pool.hasMore) {
+      pool.failed = false;
+      final target = offset.clamp(0, 1 << 30) + _size(pageSize);
+      for (
+        var batch = 0;
+        batch < 8 &&
+            !pool.failed &&
+            pool.hasMore &&
+            _visible(
+                  pool.entries,
+                  blocked,
+                  blockedIdentities: blockedIdentities,
+                ).length <
+                target;
+        batch++
+      ) {
+        await _extendPersonal(key, pool, diagnostic);
+      }
+    }
+    final page = _page(
       pool.entries,
       offset,
       pageSize,
       blocked,
-      blockedIdentities: {
-        ...pool.blockedIdentities,
-        if (current.identity != null) current.identity!.key,
-        for (final seed in history)
-          if (seed.identity != null) seed.identity!.key,
-      },
+      blockedIdentities: blockedIdentities,
+      hasMore: pool.hasMore,
+    );
+    return RecommendationPage(
+      items: page.items,
+      nextOffset: page.nextOffset,
+      hasMore: page.hasMore,
+      poolCount: pool.entries.length,
+      retryable: pool.failed,
+      endReason: pool.failed
+          ? 'source_failed_retryable'
+          : page.hasMore
+          ? 'source_available'
+          : pool.entries.isEmpty
+          ? 'source_empty'
+          : 'streams_depleted',
     );
   }
 
   Future<_SeedData> _seedData(
     RecommendationSeed seed, {
     Map<String, Object?>? detail,
+    void Function(String)? diagnostic,
   }) async {
     _cancel.throwIfCancelled();
     var failed = false;
@@ -282,6 +339,7 @@ class TmdbRecommendationService {
 
     final recommendations = await items(true);
     final similar = await items(false);
+    diagnostic?.call('event=source_page sourcePage=1 recommendations=${recommendations.length} similar=${similar.length} failed=$failed upstreamLimit=unknown');
     return _SeedData(item, data, recommendations, similar, failed: failed);
   }
 
@@ -374,7 +432,12 @@ class TmdbRecommendationService {
     }
   }
 
-  Future<void> _extendOnce(String key, _Pool pool) async {
+  Future<void> _extendOnce(
+    String key,
+    _Pool pool, {
+    bool save = true,
+    void Function(String)? diagnostic,
+  }) async {
     _cancel.throwIfCancelled();
     if (pool.item == null || !pool.hasMore) return;
     Future<List<TmdbItem>> fetch(bool recommendations) async {
@@ -405,9 +468,10 @@ class TmdbRecommendationService {
       }
     }
 
+    final sourcePage = pool.nextPage;
     final rec = await fetch(true);
     final sim = await fetch(false);
-    final keys = pool.entries.map((e) => e.key).toSet();
+    final keys = {...pool.seenKeys, ...pool.entries.map((e) => e.key)};
     // Rank each new network batch once; later pages never reorder delivered items.
     final added = _rank(
       rec,
@@ -416,23 +480,72 @@ class TmdbRecommendationService {
       pool.item!.title,
     ).where((e) => keys.add(e.key)).toList();
     pool.entries.addAll(added);
-    if (added.isEmpty) {
+    pool.seenKeys.addAll(keys);
+    if (added.isEmpty && !pool.failed) {
       pool.recommendationsDone = true;
       pool.similarDone = true;
     }
-    pool.nextPage++;
-    if (!pool.failed) await _save(key, pool);
-    if (rec.isEmpty && sim.isEmpty) {
+    diagnostic?.call(
+      'event=source_page sourcePage=$sourcePage recommendations=${rec.length} similar=${sim.length} added=${added.length} failed=${pool.failed} reason=${pool.failed
+          ? "retryable_error"
+          : rec.isEmpty && sim.isEmpty
+          ? "source_empty"
+          : added.isEmpty
+          ? "source_repeated"
+          : "source_available"} upstreamLimit=unknown',
+    );
+    if (!pool.failed) {
+      pool.nextPage++;
+      if (save) await _save(key, pool);
+    }
+    if (rec.isEmpty && sim.isEmpty && !pool.failed) {
       pool.recommendationsDone = true;
       pool.similarDone = true;
     }
   }
 
-  Future<_Pool> _obtain(String key, Future<_Pool> Function() load) async {
+  Future<void> _extendPersonal(
+    String key,
+    _Pool pool,
+    void Function(String)? diagnostic,
+  ) async {
+    if (pool.extending != null) return pool.extending!;
+    Future<void> extend() async {
+      final keys = pool.entries.map((e) => e.key).toSet();
+      for (final stream in pool.streams ?? const <_Pool>[]) {
+        if (!stream.hasMore) continue;
+        stream.failed = false;
+        final before = stream.entries.length;
+        await _extendOnce(key, stream, save: false, diagnostic: diagnostic);
+        pool.entries.addAll(
+          stream.entries.skip(before).where((e) => keys.add(e.key)),
+        );
+        if (stream.failed) {
+          pool.failed = true;
+          break;
+        }
+      }
+      await _save(key, pool);
+    }
+
+    final future = extend();
+    pool.extending = future;
+    try {
+      await future;
+    } finally {
+      pool.extending = null;
+    }
+  }
+
+  Future<_Pool> _obtain(
+    String key,
+    Future<_Pool> Function() load, {
+    void Function(String)? diagnostic,
+  }) async {
     _cancel.throwIfCancelled();
     final pending = _pending[key];
     if (pending != null) return pending;
-    final future = _load(key, load);
+    final future = _load(key, load, diagnostic: diagnostic);
     _pending[key] = future;
     try {
       return await future;
@@ -441,17 +554,33 @@ class TmdbRecommendationService {
     }
   }
 
-  Future<_Pool> _load(String key, Future<_Pool> Function() load) async {
+  Future<_Pool> _load(
+    String key,
+    Future<_Pool> Function() load, {
+    void Function(String)? diagnostic,
+  }) async {
     _cancel.throwIfCancelled();
-    final stale = _memory[key] ?? await _read(key);
+    final memory = _memory[key];
+    final stale = memory ?? await _read(key);
     _cancel.throwIfCancelled();
     if (stale != null && _clock().difference(stale.created) < _ttl) {
       _memory[key] = stale;
+      diagnostic?.call(
+        'event=provider_cache source=${memory != null ? 'memory' : 'disk'} poolCount=${stale.entries.length}',
+      );
       return stale;
     }
     final pool = await load();
     _cancel.throwIfCancelled();
-    if (pool.failed && stale != null) return stale;
+    if (pool.failed && stale != null) {
+      diagnostic?.call(
+        'event=provider_cache source=stale_cache reason=refresh_failed poolCount=${stale.entries.length}',
+      );
+      return stale;
+    }
+    diagnostic?.call(
+      'event=provider_cache source=network poolCount=${pool.entries.length} failed=${pool.failed}',
+    );
     if (!pool.failed) {
       _memory[key] = pool;
       await _save(key, pool);
@@ -525,6 +654,25 @@ class TmdbRecommendationService {
         recommendationsDone: body['recommendationsDone'] as bool,
         similarDone: body['similarDone'] as bool,
         nextPage: body['nextPage'] as int,
+        streams: body['streams'] is List
+            ? [
+                for (final raw in body['streams'] as List)
+                  _Pool(
+                    entries: [],
+                    created: DateTime.parse(body['created'] as String),
+                    item: raw['item'] is Map
+                        ? _decodeItem(raw['item'] as Map)
+                        : null,
+                    context: (raw['context'] as Map).cast<String, Object?>(),
+                    recommendationsDone: raw['recommendationsDone'] as bool,
+                    similarDone: raw['similarDone'] as bool,
+                    nextPage: raw['nextPage'] as int,
+                    seenKeys: (raw['seenKeys'] as List? ?? const [])
+                        .cast<String>()
+                        .toSet(),
+                  ),
+              ]
+            : null,
         blockedIdentities: (body['blockedIdentities'] as List? ?? const [])
             .cast<String>()
             .toSet(),
@@ -556,6 +704,18 @@ class TmdbRecommendationService {
           'similarDone': pool.similarDone,
           'nextPage': pool.nextPage,
           'blockedIdentities': pool.blockedIdentities.toList(),
+          'streams': pool.streams
+              ?.map(
+                (stream) => {
+                  'item': stream.item?.toJson(),
+                  'context': stream.context,
+                  'recommendationsDone': stream.recommendationsDone,
+                  'similarDone': stream.similarDone,
+                  'nextPage': stream.nextPage,
+                  'seenKeys': stream.seenKeys.toList(),
+                },
+              )
+              .toList(),
         }),
       );
     } on TmdbCancelledException {
@@ -592,7 +752,11 @@ class _Pool {
     this.similarDone = true,
     this.nextPage = 2,
     this.failed = false,
-  });
+    this.streams,
+    Set<String>? seenKeys,
+  }) : seenKeys = seenKeys ?? <String>{};
+  final Set<String> seenKeys;
+  final List<_Pool>? streams;
   final List<RecommendationEntry> entries;
   final DateTime created;
   final TmdbItem? item;
@@ -601,7 +765,9 @@ class _Pool {
   bool recommendationsDone, similarDone, failed;
   int nextPage;
   Future<void>? extending;
-  bool get hasMore => item != null && (!recommendationsDone || !similarDone);
+  bool get hasMore => streams != null
+      ? streams!.any((stream) => stream.hasMore)
+      : item != null && (!recommendationsDone || !similarDone);
 }
 
 class _Candidate {

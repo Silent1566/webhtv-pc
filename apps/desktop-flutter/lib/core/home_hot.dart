@@ -13,8 +13,8 @@ import 'home_feed.dart';
 
 /// 单条热门轨道的条目上限。
 ///
-/// 与 `SearchSuggestService.hotPoolLimit`(30) 同口径；这里再截一次，是因为
-/// 轨道长度不该由上游那一个可配常量决定——它哪天被放大，首页不会跟着变长。
+/// 默认投影与 `SearchSuggestService.hotPoolLimit`(30) 同口径。
+/// 首页分页显式传 `maxItems: null`，保留同一次请求已返回的完整榜单快照。
 const int _hotRailMax = 30;
 
 /// 榜单条目 → 首页卡片。
@@ -44,11 +44,16 @@ HomeItem hotItem(SearchSuggestItem item, {required String categoryKey}) {
 /// 空类目不出轨道，全空返回 `const []`：调用方拿到的永远是「能直接铺进列表」
 /// 的东西，不用再过滤一遍空列表（空轨道在页面上就是一条空行）。
 List<HomeRail> hotRails(
-  Map<HotRankCategory, List<SearchSuggestItem>> byCategory,
-) {
+  Map<HotRankCategory, List<SearchSuggestItem>> byCategory, {
+  int? maxItems = _hotRailMax,
+}) {
   final rails = <HomeRail>[];
   for (final spec in _railSpecs) {
-    final items = _hotItems(byCategory[spec.category], spec.category.name);
+    final items = _hotItems(
+      byCategory[spec.category],
+      spec.category.name,
+      maxItems,
+    );
     if (items.isEmpty) continue;
     // seeAll 恒为 null：热门没有独立页，入口点不开就不放（HomeSeeAll 里也没有
     // 对应值），与推荐行同一个理由。
@@ -57,7 +62,7 @@ List<HomeRail> hotRails(
   return rails.isEmpty ? const [] : rails;
 }
 
-/// 类目的固定顺序与文案：电影 → 剧集 → 综艺。
+/// 类目的固定顺序与文案：剧集 → 电影 → 综艺。
 ///
 /// 顺序写死在表里而不是遍历入参 map：map 的迭代顺序由调用方怎么建决定，
 /// 首页三条轨道的先后不该随入参的构造方式变来变去。
@@ -70,20 +75,24 @@ class _RailSpec {
 }
 
 const List<_RailSpec> _railSpecs = [
-  _RailSpec(HotRankCategory.movie, HomeRailKind.hotMovie, '热门电影'),
   _RailSpec(HotRankCategory.series, HomeRailKind.hotTv, '热门剧集'),
+  _RailSpec(HotRankCategory.movie, HomeRailKind.hotMovie, '热门电影'),
   _RailSpec(HotRankCategory.variety, HomeRailKind.hotVariety, '热门综艺'),
 ];
 
 /// 一个类目的条目：**保持榜单原序**，只截断、不去重排。
 ///
 /// 名次本身就是榜单想说的话，按评分或标题再排一次等于替 360kan 重排。
-List<HomeItem> _hotItems(List<SearchSuggestItem>? pool, String categoryKey) {
+List<HomeItem> _hotItems(
+  List<SearchSuggestItem>? pool,
+  String categoryKey,
+  int? maxItems,
+) {
   if (pool == null) return const [];
   final items = <HomeItem>[];
   final seen = <String>{};
   for (final row in pool) {
-    if (items.length >= _hotRailMax) break;
+    if (maxItems != null && items.length >= maxItems) break;
     final item = hotItem(row, categoryKey: categoryKey);
     // 榜单偶尔把同一部作品排两次；key 撞车会让卡片列表出现两个相同 key。
     // 留先出现的那条：名次更靠前，也维持「不重排」。
