@@ -10,8 +10,12 @@ library;
 
 import '../services/storage.dart';
 import 'detail_recommendation.dart';
+import 'episode_aggregation.dart' show EpisodeFileSize;
 import 'following.dart';
 import 'recommendation_meta.dart';
+import 'skip_segments.dart';
+import 'tmdb_identity.dart';
+import 'tmdb_title.dart' show sourceEpisodeNumber, sourceSeasonNumber;
 
 /// 一张卡 / 一张幻灯片的来源类别。
 ///
@@ -520,9 +524,38 @@ HomeItem? _recommendationItem(RecommendationEntry entry) {
   );
 }
 
+typedef HomeAiredEpisode = ({int season, int episode});
+
 /// 轮播的待检池：保留原首批顺序，再用轨道与热门中的后续作品补位。
 /// 这里只投影候选，图片是否真实高清可用由展示层解码判定；不改轨道。
-List<HomeItem> homeHeroCandidates(HomeFeed feed, {Iterable<HomeItem> hot = const []}) {
+List<HomeItem> homeHeroCandidates(
+  HomeFeed feed, {
+  Iterable<HomeItem> hot = const [],
+  Iterable<PlaybackHistory> history = const [],
+  Iterable<Following> followings = const [],
+  HomeAiredEpisode? Function(TmdbIdentity)? lastAiredEpisodeFor,
+  SkipSegments Function(PlaybackHistory)? skipSegmentsFor,
+}) {
+  final latestEpisodes = <PlaybackHistory>[];
+  final finishedMovies = <PlaybackHistory>[];
+  for (final row in history) {
+    if (_isLatestAiredEpisode(row, followings, lastAiredEpisodeFor)) {
+      latestEpisodes.add(row);
+    } else if ((row.mediaType == 'movie' ||
+            (row.mediaType.isEmpty && _heroEpisodeNumber(row.episodeName) <= 0)) &&
+        _isNearContentEnd(row, skipSegmentsFor)) {
+      finishedMovies.add(row);
+    }
+  }
+
+  bool isExcluded(HomeItem item) =>
+      latestEpisodes.any((row) => _matchesHeroHistory(item, row)) ||
+      finishedMovies.any((row) {
+        final isMovie = row.mediaType == 'movie' ||
+            item.entry?.item.mediaType == TmdbMediaType.movie;
+        return item.following == null && isMovie && _matchesHeroHistory(item, row);
+      });
+
   final claimer = HomeWorkClaimer();
   return [
     for (final item in [
@@ -530,8 +563,103 @@ List<HomeItem> homeHeroCandidates(HomeFeed feed, {Iterable<HomeItem> hot = const
       for (final rail in feed.rails) ...rail.items,
       ...hot,
     ])
-      if (claimer.claim(item)) item,
+      if (!isExcluded(item) && claimer.claim(item)) item,
   ].take(120).toList();
+}
+
+bool _isNearContentEnd(
+  PlaybackHistory row,
+  SkipSegments Function(PlaybackHistory)? skipSegmentsFor,
+) {
+  if (row.completed) return true;
+  if (row.durationMs <= 0 || row.positionMs <= 0) return false;
+  final end = skipSegmentsFor?.call(row)
+      .normalizedFor(row.durationMs).outroStartMs ?? row.durationMs;
+  final tolerance = end < 120000 ? end ~/ 2 : 60000;
+  return row.positionMs >= end - tolerance;
+}
+
+final _numberedVideoFile = RegExp(
+  r'^(\d{1,3})(?:\s+(?:4k|8k|2160p|1080p|720p))?\.(?:mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|m4v)$',
+  caseSensitive: false,
+);
+
+int _heroEpisodeNumber(String name) {
+  final label = EpisodeFileSize.strip(name).trim();
+  final fromLabel = sourceEpisodeNumber(label);
+  if (fromLabel > 0) return fromLabel;
+  final fileNumber = _numberedVideoFile.firstMatch(label)?.group(1);
+  return fileNumber == null ? -1 : int.parse(fileNumber);
+}
+
+bool _isLatestAiredEpisode(
+  PlaybackHistory row,
+  Iterable<Following> followings,
+  HomeAiredEpisode? Function(TmdbIdentity)? lastAiredEpisodeFor,
+) {
+  if (row.mediaType == 'movie') return false;
+  final episode = _heroEpisodeNumber(row.episodeName);
+  final episodeSeason = sourceSeasonNumber(row.episodeName);
+  final season = episodeSeason > 0 ? episodeSeason : sourceSeasonNumber(row.vodName);
+  final identity = TmdbIdentity.from(row.mediaType, row.tmdbId);
+  final aired = identity == null ? null : lastAiredEpisodeFor?.call(identity);
+  final sameAiredSeason = aired != null &&
+      (season == aired.season || (season <= 0 && aired.season == 1));
+  if (aired != null &&
+      ((season > 0 && season < aired.season) ||
+          (sameAiredSeason && episode > 0 && episode < aired.episode))) {
+    return false;
+  }
+
+  var matchesFollowing = false;
+  for (final following in followings) {
+    if (following.siteKey != row.siteKey || following.vodId != row.vodId ||
+        following.latestReleasedEpisode <= 0) {
+      continue;
+    }
+    final latestSeason = following.latestReleasedSeason > 0
+        ? following.latestReleasedSeason
+        : sourceSeasonNumber(following.latestEpisodeName);
+    if (latestSeason > 0 && season > 0 && season < latestSeason) return false;
+    final exactEpisode = row.episodeId.isNotEmpty &&
+        row.episodeId == following.latestEpisodeTarget;
+    if (!exactEpisode &&
+        ((latestSeason > 1 && season != latestSeason) ||
+            (latestSeason <= 0 && season > 0))) {
+      continue;
+    }
+    if (!exactEpisode && episode > 0 && episode < following.latestReleasedEpisode) {
+      return false;
+    }
+    matchesFollowing |= exactEpisode || episode == following.latestReleasedEpisode;
+  }
+  return matchesFollowing || (sameAiredSeason && episode == aired.episode);
+}
+
+bool _matchesHeroHistory(HomeItem item, PlaybackHistory row) {
+  if (item.following case final following?) {
+    return following.siteKey == row.siteKey && following.vodId == row.vodId;
+  }
+  final current = item.history;
+  final candidateType = item.entry?.item.mediaType ??
+      TmdbMediaType.parse(current?.mediaType);
+  final historyType = TmdbMediaType.parse(row.mediaType);
+  if (candidateType != null && historyType != null &&
+      candidateType != historyType) {
+    return false;
+  }
+  final identity = _identityOf(item);
+  if (identity != null && row.hasTmdbIdentity) {
+    return identity == '${row.mediaType}:${row.tmdbId}';
+  }
+  if (current != null && homeHistoryKey(current) == homeHistoryKey(row)) {
+    return true;
+  }
+  final title = homeWorkKey(item.title);
+  final year = item.entry?.item.year ?? int.tryParse(current?.vodYear.trim() ?? '') ?? 0;
+  final historyYear = int.tryParse(row.vodYear.trim()) ?? 0;
+  if (year > 0 && historyYear > 0 && year != historyYear) return false;
+  return title.isNotEmpty && title == homeWorkKey(row.vodName);
 }
 
 /// hero 取哪几张（02 §2.1）。

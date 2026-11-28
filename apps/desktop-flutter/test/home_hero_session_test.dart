@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:webhtv_pc/core/detail_recommendation.dart';
+import 'package:webhtv_pc/core/following.dart';
 import 'package:webhtv_pc/core/protocol.dart';
 import 'package:webhtv_pc/core/home_hero_art.dart';
 import 'package:webhtv_pc/core/tmdb_identity.dart';
@@ -13,6 +14,7 @@ import 'package:webhtv_pc/core/tmdb_config.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/services/recommendation_feedback_store.dart';
+import 'package:webhtv_pc/services/tmdb_cache.dart';
 import 'package:webhtv_pc/services/tmdb_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/state/detail_recommendation_state.dart';
@@ -32,6 +34,9 @@ class _State extends AppState {
   final DetailRecommendationDependencies dependencies;
   String source = 'first';
   List<PlaybackHistory> rows = [history(60000)];
+  List<Following> trackedShows = [];
+  @override
+  List<Following> get followings => trackedShows;
   @override String get activeSourceKey => source;
   @override TmdbService get tmdbService => metadata;
   @override DetailRecommendationDependencies get recommendationDependencies => dependencies;
@@ -41,11 +46,23 @@ class _State extends AppState {
   @override Future<Vod?> historyVod(PlaybackHistory row) async => null;
 }
 
-PlaybackHistory history(int position) => PlaybackHistory(
-  id: 1, siteKey: 'site', vodId: 'v0', vodName: 'local',
-  vodPic: 'https://fixture.example/backdrop-local.jpg', flag: 'line',
-  episodeName: 'one', episodeId: 'one', positionMs: position,
-  durationMs: 600000, updatedAt: 1000,
+PlaybackHistory history(
+  int position, {
+  String title = 'local',
+  bool completed = false,
+}) => PlaybackHistory(
+  id: title == 'local' ? 1 : 2,
+  siteKey: 'site',
+  vodId: title == 'local' ? 'v0' : title,
+  vodName: title,
+  vodPic: 'https://fixture.example/backdrop-$title.jpg',
+  flag: 'line',
+  episodeName: 'one',
+  episodeId: 'one',
+  positionMs: position,
+  durationMs: 600000,
+  updatedAt: 1000,
+  completed: completed,
 );
 
 RecommendationPage recommendation(String title) => RecommendationPage(items: [
@@ -117,6 +134,96 @@ void main() {
     now = now.add(const Duration(minutes: 2));
     await pump(tester);
     expect(calls, 4, reason: '退避结束后才重试');
+    await tester.pumpWidget(const SizedBox.shrink());
+    session.detach();
+  });
+
+  testWidgets('完播后从已显示的轮播移除，但保留推荐轨道与其他续播', (tester) async {
+    await pump(tester);
+    expect(find.textContaining('cached'), findsOneWidget);
+
+    state.rows = [
+      history(60000),
+      history(600000, title: 'cached', completed: true),
+    ];
+    await pump(tester);
+    final projection = session.project(headerRules: const []);
+    expect(projection.heroItems.map((item) => item.title), ['local']);
+    expect(
+      projection.rails.expand((rail) => rail.items).map((item) => item.title),
+      contains('cached'),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    session.detach();
+  });
+
+  test('剧集详情按键读取新鲜缓存，不扫描目录或触发请求', () async {
+    var time = DateTime(2026, 1, 1);
+    final cache = TmdbCache(cacheDir: dir.path, clock: () => time);
+    var requests = 0;
+    final service = TmdbService(
+      config: () => const TmdbConfig(apiKey: 'fixture'),
+      cache: cache,
+      client: MockClient((_) async {
+        requests++;
+        return http.Response(
+          '{"id":12,"name":"Series","last_episode_to_air":'
+          '{"season_number":2,"episode_number":3}}',
+          200,
+        );
+      }),
+    );
+    addTearDown(service.close);
+    const series = TmdbItem(tmdbId: 12, mediaType: TmdbMediaType.tv, title: 'Series');
+    await service.detail(series, includeRelated: false);
+    expect(service.cachedDetail(series.identity!)?['last_episode_to_air'], {
+      'season_number': 2,
+      'episode_number': 3,
+    });
+    time = time.add(const Duration(days: 30));
+    expect(service.cachedDetail(series.identity!), isNull);
+    expect(requests, 1);
+    expect(cache.detailScanCount, 0);
+  });
+
+  testWidgets('最新一集刚开始看就退出轮播，新集发布后重新进入', (tester) async {
+    final show = Following(
+      seriesKey: 'show',
+      season: 0,
+      siteKey: 'site',
+      vodId: 'show',
+      vodName: '连载剧',
+      watchedEpisode: 2,
+      latestReleasedEpisode: 2,
+    );
+    state.trackedShows = [show];
+    state.rows = const [
+      PlaybackHistory(
+        id: 2,
+        siteKey: 'site',
+        vodId: 'show',
+        vodName: '连载剧',
+        vodPic: 'https://fixture.example/backdrop-show.jpg',
+        flag: 'line',
+        episodeName: '第2集',
+        episodeId: 'two',
+        positionMs: 5000,
+        durationMs: 600000,
+        updatedAt: 1,
+        mediaType: 'tv',
+      ),
+    ];
+    await pump(tester);
+    final caughtUp = session.project(headerRules: const []);
+    expect(caughtUp.candidates.map((i) => i.title), isNot(contains('连载剧')));
+    expect(caughtUp.rails.expand((rail) => rail.items).map((i) => i.title),
+        contains('连载剧'));
+
+    state.trackedShows = [show.copyWith(latestReleasedEpisode: 3)];
+    await pump(tester);
+    expect(session.project(headerRules: const []).candidates.map((i) => i.title),
+        contains('连载剧'));
     await tester.pumpWidget(const SizedBox.shrink());
     session.detach();
   });

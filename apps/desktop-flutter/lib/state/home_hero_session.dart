@@ -32,6 +32,7 @@ import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../core/protocol.dart' show Vod, HeaderRule;
 import '../core/push_parser.dart';
+import '../core/skip_segments.dart';
 import '../core/tmdb_identity.dart';
 import '../services/home_art_service.dart';
 import '../services/home_hero_startup_cache.dart';
@@ -1454,6 +1455,16 @@ class HomeHeroSession extends ChangeNotifier {
     });
   }
 
+  HomeAiredEpisode? _lastAiredEpisode(TmdbIdentity identity) {
+    final aired = _state.tmdbService.cachedDetail(identity)?['last_episode_to_air'];
+    if (aired is! Map) return null;
+    final season = aired['season_number'];
+    final episode = aired['episode_number'];
+    return season is int && season > 0 && episode is int && episode > 0
+        ? (season: season, episode: episode)
+        : null;
+  }
+
   HomeProjection project({required List<HeaderRule> headerRules}) {
     _syncContext(headerRules);
     if (_entered) {
@@ -1516,9 +1527,20 @@ class HomeHeroSession extends ChangeNotifier {
         ),
       );
     }
+    final onDemandHistory = history.where((row) => !liveSiteKeys.contains(row.siteKey));
+    final skipByWork = <(String, String), SkipSegments>{};
+    final airedByIdentity = <TmdbIdentity, HomeAiredEpisode?>{};
     final candidates = homeHeroCandidates(
       feed,
       hot: _hotHeroFallback(hotRails(_hot)),
+      history: onDemandHistory,
+      followings: _state.followings,
+      lastAiredEpisodeFor: (identity) =>
+          airedByIdentity.putIfAbsent(identity, () => _lastAiredEpisode(identity)),
+      skipSegmentsFor: (row) => skipByWork.putIfAbsent(
+        (row.siteKey, row.vodId),
+        () => _state.skipSegmentsFor(siteKey: row.siteKey, vodId: row.vodId),
+      ),
     );
     _ensureHdHero(candidates, headerRules);
     final selectedKey = _heroKeys.isEmpty
