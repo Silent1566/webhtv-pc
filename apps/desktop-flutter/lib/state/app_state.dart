@@ -382,6 +382,29 @@ typedef DirectProbeRunner = Future<Map<String, LocalSpider>> Function(
 );
 
 /// 应用状态。
+final class EpisodePreload {
+  EpisodePreload._(
+    this._service,
+    this._site,
+    this._epoch,
+    this._jvm,
+    this._sourceKey,
+  );
+
+  final SiteService _service;
+  final Site _site;
+  final JvmPlaybackPreload? _jvm;
+  final String _sourceKey;
+  Timer? _jvmExpiry;
+  int _epoch;
+  late final Future<void> prepared;
+  final _cancellation = RequestCancellation();
+  ProxySession? _session;
+  PlaybackDecision? _decision;
+  int _startMs = 0;
+  int _durationMs = 0;
+}
+
 class AppState extends ChangeNotifier
     implements SyncStateHost, SyncBridgeTransportHost {
   AppState({
@@ -394,6 +417,7 @@ class AppState extends ChangeNotifier
     EpgService? epgService,
     AndroidBridgeService? androidBridgeService,
     AndroidPlaybackBridge? androidPlaybackBridge,
+    LocalProxyServer? proxyServer,
 
     /// 测试注入的安卓 ADB 运行时（`null` = 真实 SDK/进程/回环 socket）。
     ///
@@ -511,7 +535,7 @@ class AppState extends ChangeNotifier
       store: _adBlockStatsStore,
       ruleName: _adRuleDisplayName,
     );
-    _proxy = LocalProxyServer(log: this.log)
+    _proxy = (proxyServer ?? LocalProxyServer(log: this.log))
       ..adBlockStats = _adBlockStatsService
       ..adBlockContext = _adBlockContext
       ..onAdBlockClean = _onAdBlockClean;
@@ -837,6 +861,11 @@ class AppState extends ChangeNotifier
   ProxySession? _proxySession;
   SpiderProxySession? _jvmProxySession;
   int _proxyPlaybackEpoch = 0;
+  final _episodePreloads = <EpisodePreload>{};
+  JvmPlaybackPreload? _promotedJvmPreload;
+  Site? _lastPlaybackSite;
+  SiteService? _lastPlaybackService;
+  int _closingJvmPreloads = 0;
 
   AppDatabase? _database;
 
@@ -1405,7 +1434,6 @@ class AppState extends ChangeNotifier
     _sessionAiAdRules = const [];
     _proxy.aiSessionFingerprint = null;
     _proxy.aiSessionRules = const AdRuleSet.empty();
-    _applyAdRulesToProxy();
   }
 
   int _aiAdApplyTicket = 0;
@@ -3821,6 +3849,7 @@ class AppState extends ChangeNotifier
   Future<bool> setPlayerOptions(PlayerOptions options) async {
     final store = _uiPreferences;
     if (store == null) return false;
+    if (!options.preloadNext) _cancelEpisodePreloads();
     final ok = await store.rememberPlayerOptions(options);
     _notifyIfAlive();
     return ok;
@@ -5474,6 +5503,7 @@ class AppState extends ChangeNotifier
     // 它会清空 runtime 缓存，等价于过去「新建 Router」的效果。
     _router.updateTransport(client: _httpClient, globalHeaders: config.headers);
     _router.setCspConfig(config);
+    _cancelEpisodePreloads();
     _siteService = SiteService(
       appConfig: config,
       // 管理型记录不挂老播放桥接：转发所有者是 ADB 运行时的会话解析器。
@@ -6997,6 +7027,7 @@ class AppState extends ChangeNotifier
     _homeRunId++;
     // 换站点时作废在途详情请求：旧站点的响应不得覆盖新站点的详情（§8.3）。
     _detailRunId++;
+    if (!identical(_selectedSite, site)) _cancelEpisodePreloads();
     _selectedSite = site;
     _homeResult = null;
     _categoryResult = null;
@@ -8420,9 +8451,8 @@ class AppState extends ChangeNotifier
         (sourceRecord.bridgeTransport.trim() == androidManagedBridgeTransport ||
             _requiresAndroidExecution(sourceRecord));
     final epoch = ++_proxyPlaybackEpoch;
-    final previousOwner = _jvmProxySession;
-    _jvmProxySession = null;
-    unawaited(previousOwner?.close());
+    _cancelEpisodePreloads();
+    _revokeJvmProxySession();
     bool current() =>
         !_disposed &&
         epoch == _proxyPlaybackEpoch &&
@@ -8499,6 +8529,8 @@ class AppState extends ChangeNotifier
       }
       _lastDecision = decision;
       _lastError = null;
+      _lastPlaybackSite = site;
+      _lastPlaybackService = service;
       log.info(
         '播放决策 ${SpiderProxySession.redact(decision.logLine)} site=${site.key} '
         'elapsed=${outcome.latency.inMilliseconds}ms',
@@ -11885,6 +11917,263 @@ class AppState extends ChangeNotifier
   MediaFormat? proxyObservedFormatFor(String playbackUrl) =>
       _proxy.observedFormatFor(playbackUrl);
 
+  /// A prospective session owns its own token until the foreground consumes it.
+  EpisodePreload? prepareEpisodePreload({
+    required String currentMediaUrl,
+    String sourceKey = '',
+    required String siteKey,
+    required String episodeTarget,
+    required String flag,
+    required String vodId,
+    required bool immediateNext,
+    required bool Function() isCurrent,
+    required Future<int> Function(int durationMs) startAt,
+  }) {
+    if (_disposed || !playerOptions.preloadNext || !isCurrent()) return null;
+    final site = _lastPlaybackSite;
+    final service = _lastPlaybackService;
+    final active = _proxySession;
+    final requestedSource = sourceKey.trim();
+    EpisodePreload? reject(String reason) {
+      log.debug('下一集预载未启动 reason=$reason', scope: 'preload');
+      return null;
+    }
+
+    if (active == null ||
+        !active.usable ||
+        active.siteKey != siteKey ||
+        currentMediaUrl != _lastDecision?.url ||
+        !currentMediaUrl.startsWith('${_proxy.baseUrl}/p/${active.token}/')) {
+      return reject('no_owned_media');
+    }
+    if (site == null ||
+        site.key != siteKey ||
+        service == null ||
+        !_isOwnedPreloadSite(site, service, requestedSource)) {
+      return reject('playback_context_mismatch');
+    }
+    if (active.targetResolver != null ||
+        managedRecordForPlaybackService(service) != null) {
+      return reject('managed_route');
+    }
+    if (_episodePreloads.length >= 2) return reject('candidate_limit');
+    JvmPlaybackPreload? jvm;
+    if (_jvmProxySession case final activeJvm?) {
+      if (_episodePreloads.isNotEmpty) return reject('jvm_candidate_exists');
+      if (_closingJvmPreloads != 0) return reject('jvm_candidate_closing');
+      jvm = service.createJvmPlaybackPreload(site);
+      if (jvm == null) return reject('jvm_preload_unavailable');
+      if (!activeJvm.active) {
+        log.debug(
+          '下一集预载使用独立 JVM reason=foreground_jvm_inactive',
+          scope: 'preload',
+        );
+      }
+    }
+    final preload = EpisodePreload._(
+      service,
+      site,
+      _proxyPlaybackEpoch,
+      jvm,
+      requestedSource,
+    );
+    _episodePreloads.add(preload);
+    if (jvm != null) {
+      preload._jvmExpiry = Timer(const Duration(seconds: 45), () {
+        if (!episodePreloadReady(preload)) discardEpisodePreload(preload);
+      });
+    }
+    preload.prepared = _warmEpisodePreload(
+      preload,
+      episodeTarget,
+      flag,
+      vodId,
+      immediateNext,
+      isCurrent,
+      startAt,
+    );
+    return preload;
+  }
+
+  bool _isOwnedPreloadSite(Site site, SiteService service, String sourceKey) {
+    if (identical(service, _siteService)) {
+      return (sourceKey.isEmpty || sourceKey == activeSourceKey) &&
+          identical(site, siteInActiveSource(site.key));
+    }
+    if (sourceKey.isEmpty) return false;
+    final original = playbackContextFor(sourceKey);
+    return original != null &&
+        identical(original.service, service) &&
+        identical(original.siteByKey(site.key), site);
+  }
+
+  bool _ownsEpisodePreload(EpisodePreload preload) =>
+      !_disposed &&
+      playerOptions.preloadNext &&
+      preload._epoch == _proxyPlaybackEpoch &&
+      _episodePreloads.contains(preload) &&
+      _isOwnedPreloadSite(preload._site, preload._service, preload._sourceKey);
+
+  Future<void> _warmEpisodePreload(
+    EpisodePreload preload,
+    String episodeTarget,
+    String flag,
+    String vodId,
+    bool immediateNext,
+    bool Function() isCurrent,
+    Future<int> Function(int) startAt,
+  ) async {
+    bool current() => _ownsEpisodePreload(preload) && isCurrent();
+    var stage = 'resolve';
+    var reason = 'unavailable';
+    try {
+      final decision = await preload._service
+          .resolvePlaybackForPreload(
+            site: preload._site,
+            episodeTarget: episodeTarget,
+            flag: flag,
+            vodId: vodId,
+            isCurrent: current,
+            cancellation: preload._cancellation,
+            jvm: preload._jvm,
+          )
+          .timeout(const Duration(seconds: 5));
+      final target = Uri.tryParse(decision?.url ?? '')?.removeFragment();
+      if (!current() ||
+          decision == null ||
+          target == null ||
+          decision.action != PlaybackAction.direct ||
+          !HlsPlaylistRewriter.looksLikePlaylist(
+            decision.format,
+            target.path,
+          ) ||
+          !_proxy.policy.evaluateStatic(target).allowed) {
+        return;
+      }
+      stage = 'manifest';
+      await _proxy.start();
+      if (!current()) return;
+      final session = _createPlaybackProxySession(
+        siteKey: preload._site.key,
+        target: target,
+        headers: decision.headers ?? HeaderMap(),
+      );
+      preload._session = session;
+      final durationMs = await _proxy.inspectEpisodePrefetch(session, target);
+      if (!current() || durationMs == null) return;
+      stage = 'opening_mark';
+      final point = await startAt(durationMs);
+      if (!current() || point < 0 || point >= durationMs) return;
+      preload._startMs = point;
+      preload._durationMs = durationMs;
+      preload._decision = _proxiedPlaybackDecision(
+        decision,
+        _proxy.urlFor(session, target),
+      );
+      log.debug(
+        '下一集预载清单就绪 duration=${durationMs}ms start=${point}ms',
+        scope: 'preload',
+      );
+      _proxy.primeEpisodePrefetch(
+        session,
+        startMs: point,
+        immediateNext: immediateNext,
+      );
+    } on TimeoutException {
+      reason = 'timeout';
+    } catch (_) {
+      reason = 'error';
+    } finally {
+      if (preload._decision == null) {
+        if (current()) {
+          log.debug('下一集预载未就绪 stage=$stage reason=$reason', scope: 'preload');
+        }
+        discardEpisodePreload(preload);
+      }
+    }
+  }
+
+  bool episodePreloadReady(EpisodePreload preload) {
+    final session = preload._session;
+    return session != null &&
+        preload._decision != null &&
+        (preload._jvm == null || (preload._jvm.owner?.active ?? false)) &&
+        _ownsEpisodePreload(preload) &&
+        _proxy.episodePrefetchReady(session);
+  }
+
+  ({PlaybackDecision decision, int startMs, int durationMs})?
+  takeEpisodePreload(EpisodePreload preload, {EpisodePreload? followup}) {
+    if (!episodePreloadReady(preload)) {
+      discardEpisodePreload(preload);
+      return null;
+    }
+    final session = preload._session!;
+    final decision = preload._decision!;
+    _episodePreloads.remove(preload);
+    preload._jvmExpiry?.cancel();
+    final keep = followup != null && episodePreloadReady(followup)
+        ? followup
+        : null;
+    if (keep != null) _episodePreloads.remove(keep);
+    _proxy.finishEpisodePrefetch(session, keepCache: true);
+    _proxyPlaybackEpoch++;
+    _revokeJvmProxySession();
+    _revokeHttpProxySession();
+    _promotedJvmPreload = preload._jvm;
+    _jvmProxySession = preload._jvm?.owner;
+    if (keep != null) {
+      keep._epoch = _proxyPlaybackEpoch;
+      _episodePreloads.add(keep);
+    }
+    _proxySession = session;
+    _lastDecision = decision;
+    _lastError = null;
+    _adBlockNoticeSession = null;
+    _notifyIfAlive();
+    return (
+      decision: decision,
+      startMs: preload._startMs,
+      durationMs: preload._durationMs,
+    );
+  }
+
+  void discardEpisodePreload(EpisodePreload preload) {
+    if (!_episodePreloads.remove(preload)) return;
+    preload._jvmExpiry?.cancel();
+    preload._cancellation.cancel();
+    _closeJvmPreload(preload._jvm);
+    final session = preload._session;
+    if (session == null) return;
+    _proxy.finishEpisodePrefetch(session);
+    _proxy.sessions.revoke(session.token);
+  }
+
+  void _closeJvmPreload(JvmPlaybackPreload? jvm) {
+    if (jvm == null) return;
+    _closingJvmPreloads++;
+    unawaited(
+      jvm.close().then<void>(
+        (_) => _closingJvmPreloads--,
+        onError: (Object _, StackTrace _) => _closingJvmPreloads--,
+      ),
+    );
+  }
+
+  void _cancelEpisodePreloads() {
+    for (final preload in _episodePreloads.toList()) {
+      discardEpisodePreload(preload);
+    }
+  }
+
+  void setEpisodePreloadPaused(
+    bool paused, {
+    bool allowManifestOverlap = false,
+  }) => _proxy.setEpisodePrefetchPaused(
+    paused,
+    allowManifestOverlap: allowManifestOverlap,
+  );
+
   /// 当前播放会话的代理 token 指纹（供设置页显示，不回显完整 token）。
   String? get proxySessionFingerprint => _proxySession?.fingerprint;
 
@@ -12022,11 +12311,36 @@ class AppState extends ChangeNotifier
       return decision;
     }
 
-    const credentialKeys = {'user-agent', 'referer', 'cookie', 'authorization'};
-    // 启动代理是真实 await：期间用户可能已切画质，此时建会话会让新会话的 token
-    // 被后续 revoke 顶掉，且 notify 会把播放器指回旧画质。
+    // 启动代理是真实 await：期间用户可能已切画质。
     if (_isStale(isCurrent)) return decision;
-    final session = _proxy.sessions.create(
+    final session = _createPlaybackProxySession(
+      siteKey: siteKey,
+      target: target,
+      headers: headers,
+      resolver: resolver,
+      inspectPlaylistContent: inspectPlaylistContent,
+    );
+    _proxySession = session;
+    _adBlockNoticeSession = null;
+    final proxied = _proxy.urlFor(session, target);
+    log.info(
+      '播放转为本地代理 token=${session.fingerprint} '
+      'target=${LocalProxyServer.redactProxyTarget(target)}',
+      scope: 'proxy',
+    );
+    _notifyIfAlive();
+    return _proxiedPlaybackDecision(decision, proxied);
+  }
+
+  ProxySession _createPlaybackProxySession({
+    required String siteKey,
+    required Uri target,
+    required HeaderMap headers,
+    ProxyTargetResolver? resolver,
+    bool inspectPlaylistContent = false,
+  }) {
+    const credentialKeys = {'user-agent', 'referer', 'cookie', 'authorization'};
+    return _proxy.sessions.create(
       siteKey: siteKey,
       // Android 来源沿用受管清单的公共 CDN 范围；空会话名单仍受全局策略约束。
       // 只有 resolver 可授权映射跳，来源提示不放行未映射的私网/回环。
@@ -12045,39 +12359,33 @@ class AppState extends ChangeNotifier
       targetResolver: resolver,
       inspectPlaylistContent: inspectPlaylistContent,
     );
-    _proxySession = session;
-    // 新会话 = 新的一次播放/换集：允许再提示一条。
-    _adBlockNoticeSession = null;
-    final proxied = _proxy.urlFor(session, target);
-    log.info(
-      '播放转为本地代理 token=${session.fingerprint} '
-      'target=${LocalProxyServer.redactProxyTarget(target)}',
-      scope: 'proxy',
-    );
-    _notifyIfAlive();
-    // 走代理后 Header 由代理注入，播放器不再重复携带（避免 Header 泄漏到直连请求）。
-    return PlaybackDecision(
-      action: decision.action,
-      url: proxied,
-      headers: HeaderMap(),
-      format: decision.format,
-      reason: decision.reason,
-      flag: decision.flag,
-      // 解析选项不是地址的一部分，代理换 url 后必须原样带过：丢了它，
-      // 走代理的解析播放就再也没有解析入口。
-      parseSources: decision.parseSources,
-      parseSource: decision.parseSource,
-      // 字幕不随代理地址变化：原样透传（§10.3）。
-      subs: decision.subs,
-      // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。
-      danmaku: decision.danmaku,
-      // 候选画质是**未代理**原始列表，代理换 url 后仍保留，供 UI 切画质。
-      qualities: decision.qualities,
-      qualityIndex: decision.qualityIndex,
-      // 代理前的原始 Header 留给宿主自己的附加请求（外挂字幕/弹幕）使用。
-      upstreamHeaders: decision.headers,
-    );
   }
+
+  // 走代理后 Header 由代理注入，播放器不再重复携带。
+  PlaybackDecision _proxiedPlaybackDecision(
+    PlaybackDecision decision,
+    String proxied,
+  ) => PlaybackDecision(
+    action: decision.action,
+    url: proxied,
+    headers: HeaderMap(),
+    format: decision.format,
+    reason: decision.reason,
+    flag: decision.flag,
+    // 解析选项不是地址的一部分，代理换 url 后必须原样带过：丢了它，
+    // 走代理的解析播放就再也没有解析入口。
+    parseSources: decision.parseSources,
+    parseSource: decision.parseSource,
+    // 字幕不随代理地址变化：原样透传（§10.3）。
+    subs: decision.subs,
+    // 弹幕不随代理地址变化：原样透传（§21 Phase 3）。
+    danmaku: decision.danmaku,
+    // 候选画质是**未代理**原始列表，代理换 url 后仍保留，供 UI 切画质。
+    qualities: decision.qualities,
+    qualityIndex: decision.qualityIndex,
+    // 代理前的原始 Header 留给宿主自己的附加请求（外挂字幕/弹幕）使用。
+    upstreamHeaders: decision.headers,
+  );
 
   /// Capture exact authorization now; a stale page cannot release its successor.
   VoidCallback captureProxySessionRelease(String mediaUrl) {
@@ -12096,8 +12404,7 @@ class AppState extends ChangeNotifier
     return () {
       var released = false;
       if (jvm != null && identical(_jvmProxySession, jvm)) {
-        _jvmProxySession = null;
-        unawaited(jvm.close());
+        _revokeJvmProxySession();
         released = true;
       }
       if (http != null && identical(_proxySession, http)) {
@@ -12112,13 +12419,24 @@ class AppState extends ChangeNotifier
   void revokeProxySession() {
     noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     _proxyPlaybackEpoch++;
-    final owner = _jvmProxySession;
-    _jvmProxySession = null;
-    unawaited(owner?.close());
+    _revokeJvmProxySession();
     _revokeHttpProxySession();
   }
 
+  void _revokeJvmProxySession() {
+    final owner = _jvmProxySession;
+    final promoted = _promotedJvmPreload;
+    _jvmProxySession = null;
+    _promotedJvmPreload = null;
+    if (promoted == null) {
+      unawaited(owner?.close());
+    } else {
+      _closeJvmPreload(promoted);
+    }
+  }
+
   void _revokeHttpProxySession() {
+    _cancelEpisodePreloads();
     // 每次解析都从空白开始：归属只能由这一次解析的调用方显式交付。
     noteAdBlockPlayback((vodName: '', lineName: '', episodeName: ''));
     final session = _proxySession;
@@ -12127,6 +12445,8 @@ class AppState extends ChangeNotifier
   }
 
   Future<void> resetCache() async {
+    _cancelEpisodePreloads();
+    _proxy.clearPrefetchCache();
     try {
       await resetCacheDirectory(paths.cacheDir);
       log.info('缓存目录已重建：${paths.cacheDir}', scope: 'storage');

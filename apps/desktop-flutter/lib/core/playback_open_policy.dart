@@ -1,9 +1,6 @@
 /// 播放打开策略：预取、失败回退与失败分类（迭代 2 Wave 1）。
 ///
-/// 为什么单列一层：设置页那两个开关——`PlayerOptions.preloadNext` 与
-/// `PlayerOptions.failureFallback`——此前只落盘、没有消费者。本文件把「怎么打开
-/// 一次播放地址」（要不要先发探测请求、失败能不能重试/回退）从
-/// `lib/ui/player_controller.dart` 的固定代码里提出来，控制器只执行判断结果。
+/// 控制一次打开的显式探测、失败重试与回退；下一集的媒体预载不经过此策略。
 ///
 /// 依赖方向：`player_options.dart` → 本文件（[PlayerOptions.openPolicy]）。
 /// 本文件不依赖 Flutter，也不依赖播放器；HTTP 探测走注入的
@@ -186,7 +183,7 @@ const Duration defaultPrefetchTimeout = Duration(seconds: 8);
 /// 一次「打开播放地址」的策略。
 ///
 /// 三个字段各自对应一个真实决定，没有多余的开关：
-/// - [preload]：开播前是否先发一次探测（`PlayerOptions.preloadNext`）；
+/// - [preload]：调用方是否显式要求开播前探测；
 /// - [fallbackOnFailure]：失败后是否允许重试/回退（`PlayerOptions.failureFallback`
 ///   不是「不自动回退」时为真）；
 /// - [retryLimit]：同 URL 原地重试的上限，默认 1（= 历史行为「重试一次」）。

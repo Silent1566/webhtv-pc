@@ -163,8 +163,8 @@ class PlaybackOptionsPage extends StatelessWidget {
                     ),
                     _switch(
                       'settings-player-preload-next',
-                      '预解析下一集地址',
-                      '只提前解析播放地址，不下载媒体数据',
+                      '预加载下一集',
+                      '提前缓存支持的点播视频起播片段；短集可预载后两集',
                       state.playerOptions.preloadNext,
                       (value) async {
                         await state.setPlayerOptions(

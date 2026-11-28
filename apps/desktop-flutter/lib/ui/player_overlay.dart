@@ -1081,13 +1081,14 @@ class _BottomBarHitArea extends StatelessWidget {
 /// 跳转失败后的两个恢复出口（`docs/reference/xiugou-tv-borrowings.md` §3.2）。
 ///
 /// 位置：盖在画面之上、底栏控制区之上，**不接管整屏输入**——用户仍然可以直接
-/// 再拖一次进度条，或按这里的两个按钮之一。文案必须点明「跳转没成功」，否则
+/// 再拖一次进度条、使用恢复操作，或关闭提示继续播放。文案必须点明「跳转没成功」，否则
 /// 用户会以为片子本身坏了。
 class PlayerSeekRecoveryBanner extends StatelessWidget {
   const PlayerSeekRecoveryBanner({
     super.key,
     required this.onRetry,
     required this.onReturn,
+    required this.onDismiss,
   });
 
   /// 出口一：再跳一次同一个目标。
@@ -1095,6 +1096,7 @@ class PlayerSeekRecoveryBanner extends StatelessWidget {
 
   /// 出口二：回到跳转前的位置。
   final VoidCallback onReturn;
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -1134,6 +1136,17 @@ class PlayerSeekRecoveryBanner extends StatelessWidget {
                     color: AppPalette.nightInk,
                     fontWeight: AppWeight.title,
                   ),
+                ),
+              ),
+              IconButton(
+                tooltip: '关闭跳转提示（Esc）',
+                onPressed: onDismiss,
+                icon: const Icon(Icons.close, size: 18),
+                style: IconButton.styleFrom(
+                  foregroundColor: AppPalette.nightInkMuted,
+                  minimumSize: const Size.square(36),
+                  padding: EdgeInsets.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
               ),
             ],
