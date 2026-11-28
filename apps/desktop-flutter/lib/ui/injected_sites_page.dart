@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'common.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
@@ -29,8 +30,8 @@ class _InjectedSitesPageState extends State<InjectedSitesPage> {
   @override
   Widget build(BuildContext context) {
     final entries = _state.injectedSites;
-    return Scaffold(
-      appBar: AppBar(title: const Text('站点注入')),
+    return SettingsRouteScaffold(
+      title: const Text('站点注入'),
       body: Padding(
         padding: formPagePadding(context),
         child: Column(
@@ -99,9 +100,9 @@ class _InjectedSitesPageState extends State<InjectedSitesPage> {
                                 tooltip: '删除注入 ${entry.site.name}',
                                 icon: const Icon(Icons.delete_outline),
                                 onPressed: () async {
-                                  final confirmed = await showDialog<bool>(
+                                  final confirmed = await showGlassDialog<bool>(
                                     context: context,
-                                    builder: (context) => AlertDialog(
+                                    builder: (context) => GlassAlertDialog(
                                       title: const Text('删除注入站点'),
                                       content: Text(
                                         '确定删除「${entry.site.name}」？'
@@ -139,7 +140,7 @@ class _InjectedSitesPageState extends State<InjectedSitesPage> {
   }
 
   Future<void> _add() async {
-    final text = await showDialog<String>(
+    final text = await showGlassDialog<String>(
       context: context,
       builder: (context) => const _InjectedSiteDialog(),
     );
@@ -175,7 +176,8 @@ class _InjectedSiteDialogState extends State<_InjectedSiteDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
+    constraints: const BoxConstraints(maxWidth: 688),
     title: const Text('粘贴站点 JSON'),
     content: SizedBox(
       width: 640,
@@ -186,7 +188,6 @@ class _InjectedSiteDialogState extends State<_InjectedSiteDialog> {
         minLines: 8,
         maxLines: 16,
         decoration: const InputDecoration(
-          border: OutlineInputBorder(),
           hintText: '{"key":"demo","name":"示例","type":1,"api":"https://..."}',
         ),
       ),

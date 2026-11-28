@@ -228,7 +228,7 @@ components:
 - **星表墨 Night Ink** (#E8ECF7)：正文与标题。
 - **染色副文本 Night Ink Muted** (#A8B2CC)：次要信息靠**颜色**降级，不靠字重（因为雅黑没有可用的中间字重）。
 - **发丝线 Hairline** (#232C46 暗 / #D3DAE8 亮)：`outlineVariant`，实际以 0.72 不透明度使用，是全站唯一的分隔手段。
-- **轮廓 Outline** (#3A4560 暗 / #97A3BC 亮)：比发丝线更重的一档，用于输入框聚焦前的可辨边界。
+- **轮廓 Outline**：历史层级色，2026-11-27 全局无框规则后不再用于输入框常态边界；焦点与错误仍使用主题语义色。
 - **昼间星表 Day Ladder** (#F4F6FB / #FFFFFF / #EAEEF7 / #DDE3F0 / #CBD4E6)：亮色的底与三级表面。
 - **昼间墨 Day Ink** (#101427 / #4E5A75)。
 
@@ -238,13 +238,15 @@ components:
 
 **The Never-Grey Rule.** 禁止中性灰。副文本、发丝线、表面阶梯全部从夜空底色按色相偏移取得。需要一个新的层级时，**偏移底色**，不要加一档灰。
 
+> 唯一例外是**玻璃面**：它把表面色交给身下的那张图，无彩高亮底必然混出冷灰。边界与实测值见 `## Glass（玻璃材质）` → 「与世界规则的接缝」。
+
 **The Unknown-Is-Not-Available Rule.** 「未知」有它自己的颜色、自己的图例计数、自己的星等（最小中性尺寸）。没有采样记录的源永远不可以被算进「可用」，也不可以借用「可用」的绿色。对外只承诺「以实测为准」，界面必须守同一条线。
 
 **The Explicit-Color Rule.** 状态色只能经 `context.semanticColors` 取得。`AppSemanticColors` 在扩展缺失时**按当前亮度回落到默认值，而不是抛异常**——测试大量用裸 `MaterialApp(home: ...)`（不传 `theme:`）pump 单个页面，此时扩展根本不存在，一个用 `!` 硬断言的取色器会让所有页面级测试直接崩掉。
 
 ### Open Items
 
-- 亮色主题里 `surfaceContainerLowest` 与 `surfaceContainerLow` **同为 #FFFFFF**（顶栏与卡片同色），所以亮色的阶梯实际上少了一级，分隔完全依赖发丝线。这是待复核项，不是已确认的设计决定（见 `lib/ui/theme.dart` 亮色分支）。
+- 亮色主题里 `surfaceContainerLowest` 与 `surfaceContainerLow` 曾同为 #FFFFFF；全局无框后分组改由间距、标题和轻度染底承担，不再依赖发丝线。
 
 ## Typography
 
@@ -287,7 +289,7 @@ components:
   **顺序即枚举顺序**：`ShellSection` 的值顺序与 `destinations` 一一对应（`selectedIndex` 直接取 `section.index`）。第 1 项是**首页**（首屏），第 2 项是**点播**（按站点浏览，原「首页」只改名）。
   **侧栏只放看片链路 + 设置**（2026-11-22 用户决策，11 → 8 项）：首页 / 点播 / 直播 / 搜索 / 最近观看 / 收藏 / 追剧 / 设置。Spider 运行时、日志与 AI·阅读器不是又一个「要看什么」，而是「怎么把它弄好」——一律进设置的六个分类，任何设置仍最多两级可达（设置 → 类 → 行）。Spider 运行时与日志落在「维护」（`settings-spider-open` / `settings-logs-open`），AI·阅读器落在「连接与服务」（`settings-ai-business-open` 本来就在，撤掉侧栏入口不丢功能：上下文入口实测有四处——搜索页的 AI 按钮、最近观看页「观影报告」旁的 AI 按钮（`history-ai-business`）、日志页「AI 日志诊断」、播放器右键；详情页的季集 AI 走的是「AI 助手」，两跳可达）。
   **为什么要 `scrollable`（2026-11-19 实测）**：`minimumSize` 1024×640 下顶栏吃掉 64px、内容区只剩 576px，**10 项时就已经溢出 8px**（默认窗口 1280×800 撞不到，所以一直没被发现），加到 11 项溢出 72px。8 项已放得下，但保留可滚动当兜底——导航的信息架构不该被一屏的高度决定。
-- **顶栏**：`height: 64px`，水平内边距 `AppSpace.xl` (24px)。承载品牌标记、配置名与导入、选站、版本号。背景同为阶梯最低一级，靠一条 0.55 不透明度的发丝线与内容分隔——**与内容同底，不靠 elevation**。
+- **顶栏**：`height: 64px`，水平内边距 `AppSpace.xl` (24px)。承载品牌标记、配置名与导入、选站、版本号。与内容同底，不画常驻分隔线、不靠 elevation；层级由布局和内容承担。
 - **窗口最小尺寸**：`Size(1024, 640)`。桌面键鼠是唯一输入假设。
 - **横向条用鼠标拖**：剧集卡片、剧照/海报、演职人员、相关推荐、线路/区间/季度 chip 条，都包一层 `HorizontalMouseDrag`（`apps/desktop-flutter/lib/ui/scroll_behavior.dart`）。Flutter 默认 `dragDevices` 不含鼠标，不包的话横向条用鼠标拖不动（用户反馈 2026-10-20）。**只包横向条、不挂全局**：全局启用会抢走 `SelectableText` 的文字选中与排序手柄（实测）。
 - **首页（观测台）**：hero 高度**只有一档**（`homeHeroHeight`）——**占满内容区**（夹 360–1000，上限是为了超宽屏下让第一条轨道露出标题）。**2026-11-25 收口**：旧版按「本轮有没有 16:9 背景图」分两档，没图收到 62%，用户判为「风格不统一」（一半滑块的画面是一张缩略海报 + 半屏空）。高度不再随素材变化；素材不足只影响「画面里有什么」——2026-11-25 后续修正：解析完成后的背景按详情模型兜底，只有 2:3 海报也可铺满；不再因排除海报导致首页与详情取图分叉。尚未取得任何可用图片时才保留夜空空态。其余轨道靠滚动出现。
@@ -332,7 +334,7 @@ components:
 
 **区块节奏**：`SectionHeader` 上方 `AppSpace.xl` (24px)、下方 10px。**标题上方的留白大于下方**，这是层级最省力的来源（原实现只有 `bottom: 8`、上方为零，整页读起来是平的）。
 
-**区块间隔只有一个来源**（2026-11-11 收敛）：区块之间**不加**额外的 `SizedBox`，间隔全部由 `SectionHeader` 的 24px 上留白承担；边界线是 `Divider(height: 1)` 的 1px 发丝线，**不占高度**。收敛前是 `Divider(height: 32)`（上下各 16）加上推荐行尾巴的 `SizedBox(16)`，与标题的 24 叠加成 40——同一页里并存 24 与 40 两种间隔，看上去就是「有的地方很大、有的很小」（用户反馈 2026-11-11）。
+**区块间隔只有一个来源**（2026-11-11 收敛）：区块之间**不加**额外的 `SizedBox`，间隔全部由 `SectionHeader` 的 24px 上留白承担；默认 `Divider` 仅保留原空间占位、不绘制线条。收敛前是 `Divider(height: 32)`（上下各 16）加上推荐行尾巴的 `SizedBox(16)`，与标题的 24 叠加成 40——同一页里并存 24 与 40 两种间隔，看上去就是「有的地方很大、有的很小」（用户反馈 2026-11-11）。
 
 ### Open Items
 
@@ -358,15 +360,15 @@ components:
 
 **这套系统不用阴影。** 全站 `elevation: 0`（顶栏 `scrolledUnderElevation: 0` 亦然），`surfaceTintColor` 一律 `Colors.transparent`。
 
-深度完全由**色调阶梯 + 发丝边**表达：外壳（顶栏、侧栏）落在阶梯最低一级，内容卡片落在 `surfaceContainerLow`，输入框与标签底落在 `surfaceContainer`，对话框、SnackBar、弹出菜单落在 `surfaceContainerHigh`。层级差来自**表面本身的明度**，加上一条 0.72 不透明度的发丝边。
+深度由**色调阶梯 + 间距**表达：外壳（顶栏、侧栏）落在阶梯最低一级，内容卡片落在 `surfaceContainerLow`，输入框与标签底落在 `surfaceContainer`，对话框、SnackBar、弹出菜单落在 `surfaceContainerHigh`。不再用常驻发丝边补足层级。
 
 这不是省略，是世界的必然：星等星表是**一片平坦的场**，阴影堆叠会把点阵场的平度破坏掉。
 
 ### Named Rules
 
-**The Flat-Field Rule.** 不使用阴影，不使用 `surfaceTint`。需要层级时，移动到表面阶梯的下一级，或加一条发丝边。
+**The Flat-Field Rule.** 不使用阴影，不使用 `surfaceTint`，也不使用装饰边线。需要层级时移动到表面阶梯的下一级，或用间距和标题分组。
 
-**The Hairline Rule.** 分隔一律用 `outlineVariant @ 0.72`。发丝线是全站唯一的分隔语言——不用灰色、不用更粗的线、不用背景色块去「框住」东西。
+**The Borderless Rule（2026-11-27 用户确认）.** 全应用不画装饰性面板轮廓、边缘洗光、扫光或普通控件常驻边线；靠间距、标题和轻微染底分组。默认 Divider 保留布局空间但不绘制线条。焦点、错误、选中/当前播放、悬停/按压仍须有明确反馈，信息型进度/波形/图表不删除。
 
 **The Zero-Elevation Rule.** 新组件若需要「浮起来」，先问它是不是真的需要浮起来。对话框与菜单浮起来靠的是**更亮的表面**，不是投影。
 
@@ -385,6 +387,85 @@ components:
 
 **固定比例**是这个世界的一条纪律（借自 `challenger-botanical-folio` 的「固定比例可比」）：海报 2:3、剧照 16:9，全站共用同一比例与尺度，源与源、集与集之间才可直接比较。测试断言这些比例（海报 ±0.05、剧照 ±0.1）。
 
+## Glass（玻璃材质）
+
+玻璃作为可读的磨砂染底，不再靠白边、高光或阴影证明材质。**全应用采用无装饰边框规则**；不透明面与玻璃面都用色调、间距和信息层级分组。模糊仅在有界面板中按既有性能规则启用。
+
+材质定义在 `lib/ui/tokens.dart` 的 `AppGlass` 与 `lib/ui/glass_surface.dart` 的 `GlassSurface`，默认结构：`ClipRRect → 可选 BackdropFilter(模糊 + 提饱和) → 染底 → child`。普通面板没有 rim/sheen 绘制层；视频上的低成本面板不创建滤镜。
+
+| 参数 | 暗色 | 亮色 | 说明 |
+|---|---|---|---|
+| `blurSigma` | 26 | 20 | 模糊强度（px） |
+| `tintAlpha` | 0.42 | 0.58 | 染底不透明度，底色固定取 `colorScheme.surface`，**不引入新色相** |
+| `tintAlphaDense` | 0.62 | 0.74 | 加密档，直接取 `BackdropScrim.page` 的力度 |
+| `rimAlpha` | 0 | 0 | 全局默认无边缘描边，装饰层不绘制 |
+| `rimWash` | 0.34 | 0.55 | 仅保留历史探针参数；默认 rim=0，不绘制洗光 |
+| `rimWashSpan` | 0.05 | 0.50 | 仅历史探针使用，默认不绘制 |
+| `sheenAlpha` | 0 | 0 | 全局不使用斜向装饰扫光 |
+| `saturation` | 1.35 | 1.15 | 背景饱和度倍率 |
+| `radius` / `rimWidth` | 14 / 1 | 同 | 保留裁剪几何；默认 rim=0，不绘制边线 |
+
+`GlassPane` 的采样染底暗色0.62/亮色0.78；无采样染底暗色0.88/亮色0.92，减少整块面板厚重感。输入框普通/禁用边线为none，焦点与错误仍用主题语义色；普通按钮、chip、分段控件和菜单不画常驻轮廓，状态反馈保留。
+
+**全应用玻璃覆盖**（2026-11-27 用户扩展范围；下列材质规则覆盖旧版试点边界）：
+
+1. **已接入的 dialog / sheet 面板**：换源、续播记录、版本选择、选择站点、切换配置、推送播放。明暗均可；共享 GlassSurface、遮罩和次要文字规则，按各面板保留原有布局和交互。
+2. **共享外壳顶栏与左侧导航**：八个主页面共用，明暗均可。采样已解码配置壁纸或首页横幅；无壁纸、待加载和失败时都有静态默认底景，不再回退试点旧版实底。
+3. **普通影片详情 / TMDB 及子详情**：AppBar 对实际解码的详情底图保持原有就绪门控；缺图使用可读的致密栏。正文遵循下述页面内容无底板规则，关联控件与浮层保留共享材质。不能因为首帧或图片错误移动前景。
+4. **全部设置、管理、诊断及阅读器路由**：顶栏、分组正文和局部菜单均接入共享材质，配置壁纸优先，否则使用静态默认底景。保留表单、卡片外边距和键鼠操作；不用局部顶栏代替正文迁移。
+
+5. **全应用导航、内容面板、设置/管理/诊断子页与浮层**：左侧导航、页面内工具栏/筛选、主要正文容器、确认框、菜单、选择器和通知均按共享材质统一；不能用“共享顶栏已改”代表整页已改。卡片、表单、列表文字采用可读的致密染底，不给每张海报或每行单独叠模糊。
+6. **播放器与桌面标题区**：播放器所有应用控件、菜单和面板采用性能优先的低成本玻璃材质（染底、边缘和状态），明确不对视频纹理做实时 BackdropFilter；字幕/弹幕文字和视频本体保持原有可读性。桌面标题区自绘并使用现有窗口命令，原生标题栏隐藏；全屏隐藏自绘标题区，退出后不恢复旧版实底窗框。
+7. **应用内网页外壳**：标题、操作、加载与错误状态统一，第三方网页正文、DevTools 和操作系统文件选择器不属于 Flutter 材质的控制范围。
+
+**页面内容无底板规则（优先于上述内容面板覆盖范围）**：首页、点播、搜索落地及结果、最近观看、收藏、追剧、直播、作品与人物详情、观影报告的页面级外壳、页头、分区与整栏不再包裹玻璃底板、描边或高光；内容直接置于共用背景与既有可读性遮罩上，以标题、留白和对齐分组。左右栏职责不同也不等于需要覆盖整栏的底板。详情短评、推荐、外部链接、线路与状态条同样遵循此规则。首页首屏标题/简介/动作区、续播/追剧/推荐横向栏与首次导入提示继续保持无底板。
+
+保留海报等内容卡片、输入框、按钮、选择/焦点/悬停反馈，以及真正的菜单、通知、对话框和浮层；相关视频使用「缩略图＋正文＋操作」的无底板条目，不再铺整行 Card 底色；观影报告的七项摘要不再各套卡片，按可用宽度与文字缩放均衡排布，保留条形图轨道与热力图格子的数据信息色；不将设置表单或带恢复操作的功能卡一律拍平。去面时保留原内边距与必要的透明 Material 祖先，并复验明暗主题的文字对比度与键鼠命中。玻璃留给有明确功能的表面，不为追求覆盖率把内容页切成大卡片。
+
+**背景和性能约束**：无配置壁纸、加载中或失败时使用随明暗主题变化的静态内置底景；已解码配置壁纸优先。Material 颜色键不能承载 BackdropFilter，不能把半透明颜色冒称为真实背景模糊。每个主要栏/面板至多一个裁剪采样滤镜，播放器/实时纹理使用无滤镜材质并如实标记。禁止逐列表项模糊或全窗持续动画。
+
+### 明暗两档的分工
+
+亮色与暗色**不是同一套参数的深浅**，因为玻璃上的文字受采样底支配：
+
+- **亮色**：玻璃面板上的文字沿用 `onSurface`（实测 2.95 → 7.79）。
+- **暗色**：玻璃面板上的次要文字必须用 `AppSemanticColors.glassInkSecondary`（= `AppPalette.nightInkOnGlass` `#D8DEEC`，由 `nightInkMuted` 向 `nightInk` 走 0.75）。用 `onSurfaceVariant` 时实测只有 2.40–3.56。
+
+**玻璃顶栏**复用同一材质：暗色用加密染底 0.62；栏启用玻璃时，普通按钮、标题与动作图标用前景墨色 onSurface，保留禁用态与原有反馈。实底分支继续用原有前景策略。
+
+### 第 4 个键：遮罩
+
+遮罩**是玻璃的采样底**，不是背景装饰。所以 `barrierColor` 与玻璃同批定义（`AppGlassBarrier`）：暗色 `Colors.black54`（与 Material `DialogRoute` 默认逐值相同，暗色因此零变化）、亮色 `Color(0x2E000000)`（0.18）。显式局部 DialogTheme 遮罩优先。改遮罩等于改面板亮度，等于改文字对比度——不要单独调它。
+
+### 布局前提：先有底图，不移动前景
+
+- **外壳**在 64px 应用顶栏下共享配置底图或静态内置底景；自绘桌面标题区位于 Navigator 之上，另占窗口客户区高度，全屏时隐藏。首页滚动视图的上边保持 64px；其余主页面的滚动内容可经过栏后，固定搜索、分类和设置控件由页面自身留边，不全局注入 MediaQuery。壁纸首帧只切换材质，不移动内容。
+- **详情**只让固定背景延伸到 AppBar 下方，不随解码改变标题、按钮、正文起点或滚动偏移。复用原有图片解码；切换底图不使用迟到的旧帧开启玻璃。
+- **配置管理及全部设置子页**复用壁纸解码、请求头和纱层；缺图使用静态默认底景。共享路由骨架与分组正文容器统一材质，表单仍从原位置开始，输入/文字区采用致密染底保证可读性。解码状态不能移动返回按钮、正文或滚动位置。
+
+### 与世界规则的接缝
+
+**The Never-Grey Rule 的例外（唯一一处）。** 不透明面照旧禁止中性灰。**玻璃面不受此限**：它把表面色交给身下那张图，高亮无彩的海报经模糊与染底后必然落到冷灰（实测饱和度 3.6%–11.8%，而夜空阶梯是 34.9%–40.5%）。这是透明度的物理结果，不是参数没调好。因此玻璃面只要求「偏向底色色相」而非「保持底色饱和度」。
+
+**Flat-Field / Zero-Elevation 不变。** 玻璃不引入 `elevation` 或装饰阴影；层次由染底、间距和内容建立，不再依赖边缘高光。
+
+**全局 Borderless Rule 优先。** 历史发丝线与玻璃外沿高光退出默认视觉，不能在页面局部重新画回。必要的交互/信息线条按真实状态保留，不通过清零全部outline颜色掩盖状态。
+
+### 已测域与未测项
+
+以下为历史试点测量（可复算，证据在 `.superpowers/sdd/2026-11-26-style-spike/`），不能作为全局无框版的逐像素不变或任意底图保证；当前验收另见 `.local/global-borderless-captures/`：
+
+- 暗色浮层头部行 12px 次要 **4.74**、正文 **5.41**；暗色 dialog 12px 说明 **6.58**、标题 **7.51**（阈值均 4.5）。
+- 跨度矩阵 3 视口 × 3 字号（1024×640 / 1440×900 / 1440×1200）9 组全部 ≥4.5，最坏余量 **2.0px**（面板撞 820px 高度封顶那一档）。
+- 历史试点的**无图**暗色外壳与试点基线曾为 **0 px**；这不是全面改造的当前约束。加入默认底景、左栏和内容容器后，像素应与旧版不同，几何/交互由现行回归单独验证。
+- 本轮在黑白对照底上测得顶栏普通前景文字的最低对比度：暗色 **4.57:1**、亮色 **5.50:1**。两个新弹窗与详情页另有同视口的明暗对照与断言；比例只适用于所测底图。
+- 亮色顶栏在「纯色 vs 条纹」两种身下内容之间像素差 **78 688 px**（真采样，不是染色）。
+
+**未测（不要在文档或对外表述里声称已达标）**：
+
+- Windows 真机 GPU 帧时间、以及 `BackdropFilter` 采样**逐帧纹理**（`player_page.dart:4866` 的视频、`web_home_page.dart:252` 的 WebView2 —— 两者都是 `Texture` 层，不是平台视图）的实际代价。既有软件光栅基准只反映相对趋势，判定阈值与套件在 `.superpowers/.../task-2/`。
+- 任意壁纸下的对比度：玻璃上的文字只在「纯白海报 × 遮罩」这一最坏底上验过。
+
 ## Components
 
 整体性格是**精确、平坦、信息优先**：控件保持平台标准（Material 3），世界只借走字体、配色、密度与一个 signature move。控件不重写形状与交互模型。
@@ -393,7 +474,7 @@ components:
 
 - **Shape:** 常规容器圆角 (10px)；文字按钮用内联圆角 (6px)。
 - **Primary (`FilledButton`):** 底色星等琥珀、文字星等墨，最小高度 42px，内边距 `11px 18px`，文字用 `labelLarge` 但**字重提到 700**（按钮文字是唯一被允许加重的一般文字）。
-- **Secondary (`OutlinedButton`):** 无底色，前景 `onSurface`，1px 发丝边，最小高度 42px，内边距 `10px 16px`，文字 `labelLarge` (400)。剧集卡就是 `OutlinedButton`——这是测试锁死的结构，不可替换。
+- **Secondary (`OutlinedButton`):** 无底色，前景 `onSurface`，无常驻描边（悬停/焦点/按压反馈保留），最小高度 42px，内边距 `10px 16px`，文字 `labelLarge` (400)。剧集卡就是 `OutlinedButton`——这是测试锁死的结构，不可替换。
 - **Text / Icon:** 文字按钮前景用 `onSurfaceVariant`（靠颜色降级），内边距走默认，圆角 6px。图标按钮的按下底色是 `primary @ 0.10`。
 - **Hover / Focus:** 全站交互态从调色板取色，不用框架默认的黑/白叠加——`focusColor` = `primary @ 0.16`，`hoverColor` = `onSurface @ 0.045`，`splashColor` = `primary @ 0.09`，`highlightColor` = `primary @ 0.06`。这些都是非布局属性。
 
@@ -406,7 +487,7 @@ components:
     **禁用（`onTap == null`）时整体降到 0.5 透明度，但选中态必须照常渲染。** 禁用只降低强调，**不能抹掉状态**。初版把 `onTap == null` 一律当成静态标签，于是筛选请求在途时整排 chip 掉进静态分支：选中态被抹掉、`InkWell` 也没了，一排长得一模一样且点不动（用户反馈 2026-10-11「全是选中状态，点击没反应」）。
   - **静态标签**（详情页年份/时长）：底 `surfaceContainerHighest`，强调态 `primaryContainer`，不可点、无 `InkWell`。
   文字 `bodySmall`，选中时字重 `700`、颜色 `primary`。内边距 `5px 11px`，图标 14px。它替换了三套圆角写死 14、内边距 11/5、12/6、10/4 各不相同的私有实现。
-- **`ChipTheme`（Material `ChoiceChip` / `FilterChip`）:** 未选中底 `surfaceContainer`，选中底 `primary @ 0.18`，1px 发丝边，胶囊形，`showCheckmark: false`，文字 `labelLarge`。线路 chip 就是 `ChoiceChip`——同样测试锁死。
+- **`ChipTheme`（Material `ChoiceChip` / `FilterChip`）:** 未选中底 `surfaceContainer`，选中底 `primary @ 0.18`，无静态描边，胶囊形，`showCheckmark: false`，文字 `labelLarge`；选中靠底色、文字和图标。线路 chip 就是 `ChoiceChip`——同样测试锁死。
 
 ### Player control bars
 
@@ -676,13 +757,13 @@ UI 不重排——安卓两处实现曾各自排过一遍，同一部片子出�
 - **Corner Style:** 大容器圆角 (14px)。
 - **Background:** `surfaceContainerLow` (#141A2E)。
 - **Shadow Strategy:** 无阴影，见 Elevation & Depth。
-- **Border:** 需要边界时用 1px 发丝边 `outlineVariant @ 0.72`。
+- **Border:** 默认不画装饰边；焦点、错误、选中或当前状态才显示语义反馈，信息型进度/图表线保留。
 - **Internal Padding:** `AppSpace.lg` (16px)。
 - **Margin:** `EdgeInsets.zero`——间距由父级用 `AppSpace` 控制，卡片自身不带外边距。
 
 ### Inputs / Fields
 
-- **Style:** 填充式，底 `surfaceContainer` (#1B2238)，圆角 10px，1px 发丝边，内边距 `12px 14px`。提示与标签文字用 `bodyMedium` + `onSurfaceVariant`。
+- **Style:** 填充式，底 `surfaceContainer` (#1B2238)，圆角 10px，无常态描边，内边距 `12px 14px`。提示与标签文字用 `bodyMedium` + `onSurfaceVariant`。
 - **Focus:** 边线换成 `primary` 且加粗到 **1.5px**。没有发光、没有外扩——平坦的场上不允许光晕。
 - **Error:** 边线换成 `error`；聚焦时同样是 `error` + 1.5px。
 - **Selection:** 选区 `primary @ 0.28`，光标与选择手柄为 `primary`。
@@ -726,8 +807,8 @@ UI 不重排——安卓两处实现曾各自排过一遍，同一部片子出�
 
 - **Dialog:** 底 `surfaceContainerHigh` (#232C46)，圆角 14px，**elevation 0**，标题 `titleLarge`、内容 `bodyMedium`。
 - **SnackBar:** 浮动式，带关闭图标，底 `surfaceContainerHigh`，圆角 10px，elevation 0。
-- **PopupMenu:** 底 `surfaceContainerHigh`，圆角 10px，1px 发丝边，elevation 0。
-- **Tooltip:** 底 `surfaceContainerHighest`，圆角 6px，1px 发丝边，文字 `bodySmall`，延迟 400ms。
+- **PopupMenu:** 底 `surfaceContainerHigh`，圆角 10px，无描边，elevation 0。
+- **Tooltip:** 底 `surfaceContainerHighest`，圆角 6px，无描边，文字 `bodySmall`，延迟 400ms。
 - **BottomSheet:** 底 `surfaceContainerHigh`，只圆上方两角 (14px)，elevation 0。
 - **Loading (`LoadingBlock`):** 26×26 的 `CircularProgressIndicator`，`strokeWidth: 2.4`（收敛前有默认 / 2 / 2.4 四种没有一个是故意的风格），内边距 24px，进度条 `primary`。
 - **开关 / 滑轨:** 选中轨与滑块用 `primary`，未选中用 `surfaceContainerHighest` / `onSurfaceVariant`；滑轨高 3px，overlay `primary @ 0.14`。
@@ -741,7 +822,7 @@ UI 不重排——安卓两处实现曾各自排过一遍，同一部片子出�
 ### Do:
 
 - **Do** 从 `context.semanticColors` 取状态色与星等琥珀，永不写死十六进制值。
-- **Do** 需要层级时移动表面阶梯（`surfaceContainerLow` → `surfaceContainer` → `surfaceContainerHigh`）或加一条 `outlineVariant @ 0.72` 发丝边。
+- **Do** 需要层级时移动表面阶梯（`surfaceContainerLow` → `surfaceContainer` → `surfaceContainerHigh`），用间距和标题分组；不要加装饰边线。
 - **Do** 用 `AppSpace`（4/8/12/16/24/32/48）与 `AppRadius`（6/10/14/999）的标度值，不要引入新的散值。
 - **Do** 字重只用 `AppWeight.body`/`label` (400) 与 `AppWeight.title`/`display` (700)。
 - **Do** 只在数字成列处用 `tabular(style)` 套表格字形。

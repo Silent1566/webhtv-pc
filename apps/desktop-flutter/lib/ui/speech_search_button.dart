@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../services/speech_search_service.dart';
 
+import 'glass_dialog.dart';
+
 /// 可嵌入语音搜索按钮：回调首条识别文本；不可用时显示系统真实错误，不虚构离线。
 class SpeechSearchButton extends StatefulWidget {
   const SpeechSearchButton({
@@ -30,7 +32,7 @@ class _SpeechSearchButtonState extends State<SpeechSearchButton> {
   }
 
   Future<void> _start() async {
-    final text = await showDialog<String>(
+    final text = await showGlassDialog<String>(
       context: context,
       builder: (dialogContext) =>
           _SpeechSearchDialog(service: service, language: widget.language),
@@ -70,7 +72,7 @@ class _SpeechSearchDialogState extends State<_SpeechSearchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('语音搜索'),
       content: FutureBuilder<String?>(
         future: _pending,

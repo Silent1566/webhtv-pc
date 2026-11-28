@@ -227,6 +227,11 @@ void main() {
       200,
       scrollable: find.byType(Scrollable).first,
     );
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).decoration?.border,
+      isNull,
+      reason: 'LUT search must defer normal/focused/error border state to the theme',
+    );
     await tester.enterText(find.byType(TextField), 'film');
     await tester.tap(find.text('搜索'));
     await tester.pumpAndSettle();
@@ -249,4 +254,3 @@ void main() {
     expect(find.text('looks/cine.cube'), findsOneWidget);
   });
 }
-

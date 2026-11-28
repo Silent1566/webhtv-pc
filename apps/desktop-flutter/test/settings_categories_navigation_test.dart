@@ -390,6 +390,23 @@ void main() {
     }
   });
 
+  testWidgets('本地源摘要说明爬虫源和在线 HTML，并打开对应设置页', (tester) async {
+    await pumpSettings(tester);
+    await tester.tap(categoryFinder('settings-category-sites'));
+    await settle(tester);
+
+    final row = find.byKey(const ValueKey('settings-local-sources-open'));
+    await tester.ensureVisible(row);
+    expect(
+      find.descendant(of: row, matching: find.text('管理本地爬虫源，添加在线 HTML 源')),
+      findsOneWidget,
+    );
+    await tester.tap(row);
+    await settle(tester);
+    expect(find.widgetWithText(AppBar, '本地爬虫源'), findsOneWidget);
+    expect(find.text('添加在线 HTML 网址'), findsOneWidget);
+  });
+
   testWidgets('切类别不写盘：分类是纯 UI 状态', (tester) async {
     await pumpSettings(tester);
     final before = File(state.paths.settingsPath).readAsBytesSync();

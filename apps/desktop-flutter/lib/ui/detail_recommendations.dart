@@ -6,6 +6,7 @@ import '../core/detail_recommendation.dart';
 import '../core/recommendation_meta.dart';
 import '../core/tmdb_identity.dart';
 import '../state/detail_recommendation_state.dart';
+import 'tokens.dart';
 import 'poster_image.dart';
 import 'common.dart';
 import 'recommendation_info_dialog.dart';
@@ -136,91 +137,100 @@ class _DetailRecommendationsState extends State<DetailRecommendations> {
             Offstage(
               key: ValueKey('recommendation-section-${row.name}'),
               offstage: _state.row(row).items.isEmpty,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SectionHeader(
-                    title: switch (row) {
-                      RecommendationRow.related => '猜你喜欢',
-                      RecommendationRow.tmdb => '个性推荐·TMDB',
-                      RecommendationRow.douban => '个性推荐·豆瓣',
-                    },
-                    keyValue: 'recommendation-heading-${row.name}',
-                  ),
-                  SizedBox(
-                    height: detailRecommendationRowHeight(context),
-                    child: _RecommendationPagination(
-                      key: ObjectKey(_state.row(row)),
-                      row: _state.row(row),
-                      loadMore: () => _state.loadMore(row),
-                      builder: (controller) => HorizontalMouseDrag(
-                        child: ListView.separated(
-                          controller: controller,
-                          key: ValueKey('recommendation-row-${row.name}'),
-                          scrollDirection: Axis.horizontal,
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: _state.row(row).items.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 10),
-                          itemBuilder: (context, index) {
-                            final entry = _state.row(row).items[index];
-                            final item = entry.item;
-                            return SizedBox(
-                              width: 130,
-                              child: GestureDetector(
-                                onSecondaryTap: () => _info(entry),
-                                child: InkWell(
-                                  key: ValueKey(
-                                    'recommendation-${row.name}-${recommendationRowKey(row, entry)}',
-                                  ),
-                                  onTap: () => _open(entry),
-                                  onLongPress: () => _info(entry),
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: SizedBox(
-                                          height: 180,
-                                          child: PosterImage(
-                                            url: item.posterUrl,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpace.md),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SectionHeader(
+                        title: switch (row) {
+                          RecommendationRow.related => '猜你喜欢',
+                          RecommendationRow.tmdb => '个性推荐·TMDB',
+                          RecommendationRow.douban => '个性推荐·豆瓣',
+                        },
+                        keyValue: 'recommendation-heading-${row.name}',
+                      ),
+                      SizedBox(
+                        height: detailRecommendationRowHeight(context),
+                        child: _RecommendationPagination(
+                          key: ObjectKey(_state.row(row)),
+                          row: _state.row(row),
+                          loadMore: () => _state.loadMore(row),
+                          builder: (controller) => HorizontalMouseDrag(
+                            child: ListView.separated(
+                              controller: controller,
+                              key: ValueKey('recommendation-row-${row.name}'),
+                              scrollDirection: Axis.horizontal,
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              itemCount: _state.row(row).items.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(width: 10),
+                              itemBuilder: (context, index) {
+                                final entry = _state.row(row).items[index];
+                                final item = entry.item;
+                                return SizedBox(
+                                  width: 130,
+                                  child: GestureDetector(
+                                    onSecondaryTap: () => _info(entry),
+                                    child: InkWell(
+                                      key: ValueKey(
+                                        'recommendation-${row.name}-${recommendationRowKey(row, entry)}',
+                                      ),
+                                      onTap: () => _open(entry),
+                                      onLongPress: () => _info(entry),
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            child: SizedBox(
+                                              height: 180,
+                                              child: PosterImage(
+                                                url: item.posterUrl,
+                                              ),
+                                            ),
                                           ),
-                                        ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            item.title,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          Text(
+                                            // 三条推荐行统一「年份 · 评分」；来源由区块
+                                            // 标题承担（见 core/recommendation_meta.dart）。
+                                            recommendationMeta(
+                                              item.subtitle,
+                                              doubanRating: entry.doubanRating,
+                                            ),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelSmall,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
                                       ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        item.title,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      Text(
-                                        // 三条推荐行统一「年份 · 评分」；来源由区块
-                                        // 标题承担（见 core/recommendation_meta.dart）。
-                                        recommendationMeta(
-                                          item.subtitle,
-                                          doubanRating: entry.doubanRating,
-                                        ),
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelSmall,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
+                                    ),
                                   ),
-                                ),
-                              ),
-                            );
-                          },
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
         ?widget.trailing,

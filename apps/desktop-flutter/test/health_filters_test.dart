@@ -59,9 +59,17 @@ Future<void> search(WidgetTester tester, String text) async {
 }
 
 Future<void> pick(WidgetTester tester, String dropdownKey, String label) async {
-  await tester.tap(find.byKey(ValueKey(dropdownKey)));
+  final anchor = find.byKey(ValueKey(dropdownKey));
+  await Scrollable.ensureVisible(tester.element(anchor), alignment: 0.1);
   await tester.pumpAndSettle();
-  await tester.tap(find.text(label).last);
+  await tester.tap(anchor);
+  await tester.pumpAndSettle();
+  final option = find.descendant(
+    of: find.byType(MenuItemButton),
+    matching: find.text(label),
+  );
+  expect(option.hitTestable(), findsOneWidget);
+  await tester.tap(option);
   await tester.pumpAndSettle();
 }
 
@@ -69,6 +77,9 @@ void main() {
   testWidgets(
     'health history filters by fuzzy name and cumulative success/failure',
     (tester) async {
+      tester.view.physicalSize = const Size(1024, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final sites = [
         Site(
           key: 'alpha',
@@ -184,6 +195,9 @@ void main() {
   testWidgets(
     'manual check filters result rows by conclusion and stage outcome',
     (tester) async {
+      tester.view.physicalSize = const Size(1024, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final runtime = ProbeRuntime();
       runtime.onHome = (site, _) async {
         if (site.key == 'bad') {

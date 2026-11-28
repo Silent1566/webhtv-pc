@@ -1,16 +1,26 @@
 /// 首页轨道卡片与轨道的**视觉契约**门禁（`docs/phase11/design/01-home-hero.md` §4）。
 ///
-/// 只钉住"写死就会退回原样"的那几项：海报 2:3 由宽度推、文字区固定 40、
+/// 只钉住"写死就会退回原样"的那几项：海报 2:3 由宽度推、默认文字区为 40、
 /// 续播才有进度条、空轨道不占位、推荐行的"查看全部"入口不存在。
 ///
 /// 全部用假 [HomeItem] 直接构造：卡片只读模型字段，不需要 `AppState`，
 /// 也就不该为了测一张卡片把网络与配置拖进来。
 library;
 
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:webhtv_pc/core/detail_recommendation.dart';
 import 'package:webhtv_pc/core/home_feed.dart';
+import 'package:webhtv_pc/core/tmdb_identity.dart';
+import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/ui/home_cards.dart';
+import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/test_fonts.dart';
 
 HomeItem _item({
   required HomeItemKind kind,
@@ -55,23 +65,178 @@ Future<void> _pumpRail(
   HomeRail rail, {
   VoidCallback? onSeeAll,
   ValueChanged<HomeItem>? onTap,
+  double textScale = 1,
+  ThemeData? theme,
+  GlobalKey? captureKey,
 }) async {
-  await tester.pumpWidget(
-    MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: HomeRailView(
-            rail: rail,
-            onTap: onTap ?? (_) {},
-            onSeeAll: onSeeAll,
-          ),
+  final app = MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: theme,
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context)
+          .copyWith(textScaler: TextScaler.linear(textScale)),
+      child: child!,
+    ),
+    home: Scaffold(
+      backgroundColor: theme?.colorScheme.surface,
+      body: Align(
+        alignment: Alignment.topLeft,
+        child: HomeRailView(
+          rail: rail,
+          onTap: onTap ?? (_) {},
+          onSeeAll: onSeeAll,
         ),
       ),
     ),
   );
+  await tester.pumpWidget(
+    captureKey == null ? app : RepaintBoundary(key: captureKey, child: app),
+  );
+}
+
+HomeFeed _captionFixture() => buildHomeFeed(
+  history: const [
+    PlaybackHistory(
+      id: 1,
+      siteKey: 'site-a',
+      vodId: 'v1',
+      vodName: '漫长的季节',
+      flag: '线路一',
+      episodeName: '第08集',
+      episodeId: 'e1',
+      positionMs: 1400000,
+      durationMs: 2700000,
+      updatedAt: 1,
+    ),
+  ],
+  followings: const [],
+  tmdbRecommendations: const [
+    RecommendationEntry(
+      item: TmdbItem(
+        tmdbId: 2,
+        mediaType: TmdbMediaType.tv,
+        title: '隐秘的角落',
+        subtitle: '2020 · 8.8',
+      ),
+      source: RecommendationSource.tmdb,
+      reason: '因为你看过《漫长的季节》',
+    ),
+  ],
+);
+
+Future<void> _captureRail(
+  WidgetTester tester,
+  GlobalKey key,
+  String path,
+) async {
+  await tester.runAsync(() async {
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage(pixelRatio: 1);
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    File(path).writeAsBytesSync(
+      data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
+  });
 }
 
 void main() {
+  const capturePath = String.fromEnvironment('HOME_CAPTION_CAPTURE');
+  const captureFont = 'Noto Sans CJK SC';
+  if (capturePath.isNotEmpty) {
+    setUpAll(() async {
+      expectFontsAvailableOrSkip();
+      await loadFixtureFonts(cjkFamily: captureFont);
+    });
+  }
+
+  for (final scale in [1.0, 1.5, 2.0]) {
+    for (final kind in [HomeRailKind.resume, HomeRailKind.recommendTmdb]) {
+      testWidgets('rail caption fits at $scale× (${kind.name})', (
+        tester,
+      ) async {
+        tester.view.physicalSize = const Size(1024, 640);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+
+        final resume = kind == HomeRailKind.resume;
+        final rail = _captionFixture().rails.singleWhere(
+          (rail) => rail.kind == kind,
+        );
+        final theme = buildAppTheme(
+          resume ? Brightness.dark : Brightness.light,
+        );
+        final captureKey = capturePath.isNotEmpty && resume && scale == 2
+            ? GlobalKey()
+            : null;
+        HomeItem? tapped;
+        await _pumpRail(
+          tester,
+          rail,
+          onTap: (item) => tapped = item,
+          textScale: scale,
+          theme: capturePath.isEmpty
+              ? theme
+              : theme.copyWith(
+                  textTheme: theme.textTheme.apply(fontFamily: captureFont),
+                ),
+          captureKey: captureKey,
+        );
+        if (captureKey != null) {
+          await _captureRail(tester, captureKey, capturePath);
+        }
+
+        expect(tester.takeException(), isNull);
+        final poster = tester.getRect(
+          find.byKey(HomePosterCard.posterFrameKey),
+        );
+        final viewport = tester.getRect(find.byType(ListView));
+        final card = tester.getRect(find.byType(HomePosterCard));
+        expect(poster.width, closeTo(185.25, 0.001));
+        expect(poster.height, closeTo(poster.width * 1.5, 0.001));
+        if (scale == 1) expect(card.bottom - poster.bottom, closeTo(40, 0.001));
+        final title = find.text(resume ? '漫长的季节' : '隐秘的角落');
+        final metadata = find.text(
+          resume ? '继续观看 · 第08集 · 剩 22 分钟' : '因为你看过《漫长的季节》',
+        );
+        expect(tester.getRect(title).top, greaterThan(poster.bottom));
+        expect(
+          tester.getRect(metadata).top,
+          greaterThan(tester.getRect(title).bottom),
+        );
+        for (final line in [title, metadata]) {
+          final text = tester.widget<Text>(line);
+          expect(text.maxLines, 1);
+          expect(text.overflow, TextOverflow.ellipsis);
+          final bounds = tester.getRect(line);
+          expect(
+            bounds.bottom,
+            lessThanOrEqualTo(card.bottom),
+            reason: '${text.data}: $bounds vs card $card',
+          );
+          expect(
+            bounds.bottom,
+            lessThanOrEqualTo(viewport.bottom),
+            reason: '${text.data}: $bounds vs rail $viewport',
+          );
+        }
+        final progress = find.byKey(HomePosterCard.progressKey);
+        if (resume) {
+          expect(
+            tester.getSize(progress).width,
+            closeTo(poster.width * 1400000 / 2700000, 0.001),
+          );
+        } else {
+          expect(progress, findsNothing);
+          expect(find.text('2020 · 8.8'), findsNothing);
+        }
+        await tester.tap(metadata);
+        expect(tapped, same(rail.items.single));
+      });
+    }
+  }
+
   testWidgets('海报保持 2:3：高 = 宽 × 1.5', (tester) async {
     await _pumpCard(
       tester,

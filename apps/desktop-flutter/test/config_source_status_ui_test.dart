@@ -6,6 +6,7 @@ import 'package:webhtv_pc/services/storage.dart';
 import 'package:webhtv_pc/ui/config_source_status_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/ui/app.dart';
+import 'package:webhtv_pc/ui/glass_chrome.dart' show kShellContentTopInset;
 import 'package:webhtv_pc/ui/startup_arguments.dart';
 import 'package:webhtv_pc/ui/config_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
@@ -155,8 +156,9 @@ void main() {
     expect(warning.left, contentWithWarning.left,
       reason: 'The banner must start at the content edge, not cover the sidebar');
     expect(warning.right, contentWithWarning.right);
-    expect(warning.top, contentWithWarning.top,
-      reason: 'Keep the banner at the top of the content area');
+    final shellTop = tester.getTopLeft(find.byType(Scaffold)).dy;
+    expect(warning.top, shellTop + kShellContentTopInset,
+      reason: 'Keep the banner immediately below the top bar');
     await tester.tap(find.byKey(const ValueKey('config-source-manage')));
     await tester.pumpAndSettle();
     expect(find.byType(ConfigPage), findsOneWidget);

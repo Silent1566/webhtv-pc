@@ -20,10 +20,12 @@ import '../services/ai_content/ad_rule_service.dart';
 import '../services/ai_integration.dart';
 import '../state/app_state.dart';
 import 'ai_content/ai_content_widgets.dart';
+import 'glass_dialog.dart';
 import 'ai_settings_page.dart';
 import 'reader/reader_page.dart';
 import '../services/reader/reader_tts_controller.dart';
 import 'search_page.dart';
+import 'settings_layout.dart';
 import 'tokens.dart';
 
 Future<void> openAiBusiness(
@@ -55,8 +57,8 @@ Widget aiSearchRouteHost(
   String keyword, {
   bool useExistingResults = true,
   ResumeSeed? resumeSeed,
-}) => Scaffold(
-  appBar: AppBar(title: const Text('搜索')),
+}) => SettingsRouteScaffold(
+  title: const Text('搜索'),
   body: SearchPage(
     state: state,
     initialKeyword: keyword,
@@ -236,9 +238,9 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
   });
   Future<void> _applyGroups() async {
     if (_groups == null || _groups!.accepted.isEmpty) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('确认应用分组规则'),
         content: const Text('只替换AI分组规则；手工规则与内置开关保留。'),
         actions: [
@@ -294,33 +296,13 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
   });
 
   Future<String?> _pickPath(String label) async {
-    final controller = TextEditingController(
-      text: '${state.paths.dataDir}${Platform.pathSeparator}ai-user-data.json',
-    );
-    final path = await showDialog<String>(
+    final initialPath =
+        '${state.paths.dataDir}${Platform.pathSeparator}ai-user-data.json';
+    final path = await showGlassDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(label),
-        content: SizedBox(
-          width: 600,
-          child: TextField(
-            controller: controller,
-            decoration: InputDecoration(labelText: label),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (_) =>
+          _AiUserDataPathDialog(label: label, initialPath: initialPath),
     );
-    controller.dispose();
     return path == null || path.isEmpty ? null : path;
   }
 
@@ -342,9 +324,9 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
     final path = await _pickPath('导入路径');
     final file = path == null ? null : File(path);
     if (file == null || !mounted) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('导入AI用户数据'),
         content: const Text('替换文件中的用户域。广告规则仅导入候选，播放时仍须重新校验并确认。'),
         actions: [
@@ -377,17 +359,15 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI 业务与阅读器'),
-        actions: [
-          IconButton(
-            tooltip: 'AI 助手',
-            onPressed: () => openAiSettingsPage(context, state, replace: true),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
+    return SettingsRouteScaffold(
+      title: const Text('AI 业务与阅读器'),
+      actions: [
+        IconButton(
+          tooltip: 'AI 助手',
+          onPressed: () => openAiSettingsPage(context, state, replace: true),
+          icon: const Icon(Icons.settings_outlined),
+        ),
+      ],
       body: ListView(
         padding: const EdgeInsets.all(AppSpace.lg),
         children: [
@@ -414,8 +394,10 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
             children: [
               OutlinedButton.icon(
                 key: const ValueKey('ai-reader-open'),
-                onPressed: () =>
-              openReaderInput(context, readerController: widget.readerController),
+                onPressed: () => openReaderInput(
+                  context,
+                  readerController: widget.readerController,
+                ),
                 icon: const Icon(Icons.menu_book_outlined),
                 label: const Text('阅读器'),
               ),
@@ -486,7 +468,7 @@ class _AiBusinessPageState extends State<AiBusinessPage> {
           ),
           if (_diagnosis != null) AiLogDiagnosisView(result: _diagnosis!),
           const Divider(height: 32),
-          DropdownButton<ViewingReportRange>(
+          SettingsDropdown<ViewingReportRange>(
             value: _range,
             items: [
               for (final range in ViewingReportRange.values)
@@ -529,7 +511,7 @@ Future<void> openReaderInput(
   String title = '阅读器',
   ReaderTtsController? readerController,
 }) async {
-  final text = await showDialog<String>(
+  final text = await showGlassDialog<String>(
     context: context,
     builder: (context) =>
         _ReaderTextDialog(initialText: initialText, title: title),
@@ -544,6 +526,49 @@ Future<void> openReaderInput(
         controller: readerController,
       ),
     ),
+  );
+}
+
+class _AiUserDataPathDialog extends StatefulWidget {
+  const _AiUserDataPathDialog({required this.label, required this.initialPath});
+
+  final String label;
+  final String initialPath;
+
+  @override
+  State<_AiUserDataPathDialog> createState() => _AiUserDataPathDialogState();
+}
+
+class _AiUserDataPathDialogState extends State<_AiUserDataPathDialog> {
+  late final _controller = TextEditingController(text: widget.initialPath);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => GlassAlertDialog(
+    constraints: const BoxConstraints(maxWidth: 648),
+    title: Text(widget.label),
+    content: SizedBox(
+      width: 600,
+      child: TextField(
+        controller: _controller,
+        decoration: InputDecoration(labelText: widget.label),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _controller.text.trim()),
+        child: const Text('确定'),
+      ),
+    ],
   );
 }
 
@@ -573,7 +598,8 @@ class _ReaderTextDialogState extends State<_ReaderTextDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
+    constraints: const BoxConstraints(maxWidth: 608),
     title: Text(widget.title),
     content: SizedBox(
       width: 560,
@@ -612,9 +638,9 @@ Future<void> openAiAdReview(
 }) async {
   final evidence = state.aiPlaylistFor(siteKey);
   if (evidence == null) {
-    await showDialog<void>(
+    await showGlassDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('无法应用AI广告规则'),
         content: const Text('当前播放没有真实HLS媒体切片证据；不分析、不安装导入候选。'),
         actions: [
@@ -627,7 +653,7 @@ Future<void> openAiAdReview(
     );
     return;
   }
-  await showDialog<void>(
+  await showGlassDialog<void>(
     context: context,
     builder: (_) => _AiAdReviewDialog(
       state: state,
@@ -746,7 +772,8 @@ class _AiAdReviewDialogState extends State<_AiAdReviewDialog> {
     ],
   );
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassAlertDialog(
+    constraints: const BoxConstraints(maxWidth: 688),
     title: const Text('AI广告规则 · 当前播放证据'),
     content: SizedBox(
       width: 640,
@@ -840,9 +867,10 @@ class _PlayerAudioAiPanelState extends State<PlayerAudioAiPanel> {
 
   Future<void> _importKaraokeText() async {
     final input = TextEditingController();
-    final text = await showDialog<String>(
+    final text = await showGlassDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        constraints: const BoxConstraints(maxWidth: 608),
         title: const Text('导入UltraStar参考评分轨'),
         content: SizedBox(
           width: 560,
@@ -881,9 +909,9 @@ class _PlayerAudioAiPanelState extends State<PlayerAudioAiPanel> {
 
   Future<void> _importKaraokeFile() async {
     final input = TextEditingController();
-    final path = await showDialog<String>(
+    final path = await showGlassDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('导入本地TXT / MIDI评分轨'),
         content: TextField(
           controller: input,
@@ -967,7 +995,7 @@ class _PlayerAudioAiPanelState extends State<PlayerAudioAiPanel> {
       Row(
         children: [
           const Text('并发'),
-          DropdownButton<int>(
+          SettingsDropdown<int>(
             value: _concurrency,
             items: [
               for (var i = 1; i <= 8; i++)
@@ -976,7 +1004,7 @@ class _PlayerAudioAiPanelState extends State<PlayerAudioAiPanel> {
             onChanged: (value) => setState(() => _concurrency = value ?? 2),
           ),
           const Text('分块'),
-          DropdownButton<int>(
+          SettingsDropdown<int>(
             value: _chunks,
             items: [
               for (var i = 1; i <= 32; i++)

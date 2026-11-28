@@ -25,6 +25,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
@@ -39,6 +40,8 @@ import '../core/tmdb_identity.dart';
 import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../services/tmdb_service.dart';
+import 'glass_dialog.dart';
+import 'glass_widgets.dart';
 import 'poster_image.dart';
 import 'backdrop_scrim.dart';
 import 'common.dart';
@@ -63,6 +66,7 @@ class TmdbBackdropSlideshow extends StatefulWidget {
     this.scrim = TmdbBackdropScrim.hero,
     this.interval = TmdbBackdropRotation.interval,
     this.fallbackUrl,
+    this.readiness,
     this.child,
   });
 
@@ -100,6 +104,8 @@ class TmdbBackdropSlideshow extends StatefulWidget {
   /// 无背景图时使用的兜底图（通常是海报）。
   final String? fallbackUrl;
 
+  final TmdbBackdropReadiness? readiness;
+
   /// 覆盖在背景之上的内容（标题、简介等）。
   final Widget? child;
 
@@ -110,12 +116,23 @@ class TmdbBackdropSlideshow extends StatefulWidget {
 class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
   Timer? _timer;
   int _index = 0;
+  String? _frameUrl;
+  bool _frameDecoded = false;
+  Object _frameToken = Object();
 
-  List<String> get _effective {
-    if (widget.urls.isNotEmpty) return widget.urls;
-    final fallback = widget.fallbackUrl;
-    if (fallback != null && fallback.isNotEmpty) return [fallback];
-    return const [];
+  List<String> get _effective => _backdropUrls(widget.urls, widget.fallbackUrl);
+
+  void _selectFrame(String? url) {
+    if (_frameUrl == url) return;
+    _frameUrl = url;
+    _frameDecoded = false;
+    _frameToken = Object();
+  }
+
+  void _reportFrame(Object token, bool decoded) {
+    if (!mounted || !identical(token, _frameToken)) return;
+    _frameDecoded = decoded;
+    widget.readiness?.value = decoded;
   }
 
   @override
@@ -127,7 +144,7 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
   @override
   void didUpdateWidget(TmdbBackdropSlideshow oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.urls != widget.urls) {
+    if (!listEquals(oldWidget.urls, widget.urls)) {
       _index = 0;
     }
     _syncTimer();
@@ -162,7 +179,12 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
         _timer = null;
         return;
       }
-      setState(() => _index = TmdbBackdropRotation.next(_index, urls.length));
+      final next = TmdbBackdropRotation.next(_index, urls.length);
+      if (widget.readiness != null && _frameUrl != urls[next]) {
+        _selectFrame(urls[next]);
+        widget.readiness!.value = false;
+      }
+      setState(() => _index = next);
     });
   }
 
@@ -172,6 +194,15 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
     final urls = _effective;
     final index = TmdbBackdropRotation.clamp(_index, urls.length);
     final current = index < 0 ? null : urls[index];
+    final readiness = widget.readiness;
+    _selectFrame(current);
+    final token = _frameToken;
+    // A metadata update may keep the same already-decoded slide.
+    if (_frameDecoded && readiness?.value == false) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _reportFrame(token, true);
+      });
+    }
     return SizedBox(
       // 键名如实反映"这块是什么"：画图时它是**背景轮播**；只画内容时
       // （页面级固定背景接管了图片）它是**头部内容块**。
@@ -195,13 +226,7 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 600),
               child: current == null
-                  ? SizedBox.expand(
-                      key: const ValueKey('tmdb-backdrop-empty'),
-                      // 无背景图时用**页面底色**而不是 `surfaceContainerHighest`：
-                      // 后者会在头部留一大块比页面亮得多的灰底（用户反馈
-                      // 「无效的背景色区域太丑」）。页面底色下直接与内容融为一体。
-                      child: ColoredBox(color: theme.colorScheme.surface),
-                    )
+                  ? SizedBox.expand(key: const ValueKey('tmdb-backdrop-empty'))
                   : SizedBox.expand(
                       key: ValueKey('tmdb-backdrop-$index'),
                       // V1（用户选型 2026-10-13）：`cover` 铺满 + 渐变遮罩。
@@ -224,8 +249,25 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
                       // 而下方本来就被渐变遮罩压到不透明、被标题/简介盖住。
                       child: PosterImage(
                         url: current,
+                        background: false,
+                        placeholder: const SizedBox.expand(),
                         fit: BoxFit.cover,
                         alignment: Alignment.topCenter,
+                        onFirstFrame: readiness == null
+                            ? null
+                            : () => _reportFrame(token, true),
+                        onImageError: readiness == null
+                            ? null
+                            : () {
+                                if (!_frameDecoded || token != _frameToken) {
+                                  return;
+                                }
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) {
+                                  _reportFrame(token, false);
+                                });
+                              },
                       ),
                     ),
             ),
@@ -237,7 +279,7 @@ class _TmdbBackdropSlideshowState extends State<TmdbBackdropSlideshow> {
           // 那里必须够暗才能保证白字可读。
           // 两档力度与首页 hero 共用同一份实现（`backdrop_scrim.dart`），
           // 数值不在两个页面各写一遍。
-          if (widget.paintImage)
+          if (widget.paintImage && current != null)
             BackdropScrim(
               kind: widget.scrim == TmdbBackdropScrim.hero
                   ? BackdropScrimKind.hero
@@ -308,6 +350,26 @@ enum TmdbBackdropScrim {
   page,
 }
 
+List<String> _backdropUrls(List<String> urls, String? fallback) {
+  if (urls.isNotEmpty) return urls;
+  if (fallback != null && fallback.isNotEmpty) return [fallback];
+  return const [];
+}
+
+/// Gates the bar on the currently displayed decoded slide, independently of page rebuilds.
+class TmdbBackdropReadiness extends ValueNotifier<bool> {
+  TmdbBackdropReadiness() : super(false);
+
+  List<String> _urls = const [];
+
+  void resetFor(List<String> urls, {String? fallbackUrl}) {
+    final effective = _backdropUrls(urls, fallbackUrl);
+    if (listEquals(_urls, effective)) return;
+    _urls = effective;
+    value = false;
+  }
+}
+
 /// 详情页的**页面级固定背景**：整页内容都浮在它上面。
 ///
 /// 为什么单独一个组件（用户反馈 2026-10-13：「后续内容也应该显示在图片上」）：
@@ -319,9 +381,15 @@ enum TmdbBackdropScrim {
 /// 尺寸取整个视口：`Positioned.fill` 给的是紧约束，但
 /// [TmdbBackdropSlideshow] 需要一个显式高度来决定内容带位置，所以这里传视口高。
 class TmdbDetailBackdrop extends StatelessWidget {
-  const TmdbDetailBackdrop({super.key, required this.urls, this.fallbackUrl});
+  const TmdbDetailBackdrop({
+    super.key,
+    required this.urls,
+    this.fallbackUrl,
+    this.readiness,
+  });
 
   final List<String> urls;
+  final TmdbBackdropReadiness? readiness;
 
   /// 无背景图时的兜底（通常是海报）。
   final String? fallbackUrl;
@@ -330,6 +398,7 @@ class TmdbDetailBackdrop extends StatelessWidget {
   Widget build(BuildContext context) => TmdbBackdropSlideshow(
     urls: urls,
     fallbackUrl: fallbackUrl,
+    readiness: readiness,
     height: MediaQuery.sizeOf(context).height,
     scrim: TmdbBackdropScrim.page,
   );
@@ -350,6 +419,7 @@ class TmdbDetailHeader extends StatelessWidget {
     this.ratingTags,
     this.platformLabel = '',
     this.paintImage = true,
+    this.compactWithoutArtwork = false,
   });
 
   final TmdbDetailData data;
@@ -384,6 +454,9 @@ class TmdbDetailHeader extends StatelessWidget {
   /// 「我要的是全屏」）。
   final double? height;
 
+  /// A source detail with settled metadata and no artwork candidates.
+  final bool compactWithoutArtwork;
+
   @override
   Widget build(BuildContext context) =>
       // 在**本 widget 自身**拿到父级约束（而不是在 Column 的子项里）。
@@ -402,24 +475,37 @@ class TmdbDetailHeader extends StatelessWidget {
           final frame = available.isFinite && available < target
               ? available
               : target;
+          final content = _HeaderContent(
+            data: data,
+            metadataBadge: metadataBadge,
+            overview: heroOverview,
+            actions: heroActions,
+            ratingTags: ratingTags,
+            platformLabel: platformLabel,
+            withoutArtwork: compactWithoutArtwork,
+          );
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               ?statusBar,
-              TmdbBackdropSlideshow(
-                urls: data.backdropUrls,
-                fallbackUrl: data.posterUrl,
-                height: frame,
-                paintImage: paintImage,
-                child: _HeaderContent(
-                  data: data,
-                  metadataBadge: metadataBadge,
-                  overview: heroOverview,
-                  actions: heroActions,
-                  ratingTags: ratingTags,
-                  platformLabel: platformLabel,
+              if (compactWithoutArtwork)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    AppSpace.lg,
+                    MediaQuery.paddingOf(context).top + AppSpace.xl,
+                    AppSpace.lg,
+                    AppSpace.xs,
+                  ),
+                  child: content,
+                )
+              else
+                TmdbBackdropSlideshow(
+                  urls: data.backdropUrls,
+                  fallbackUrl: data.posterUrl,
+                  height: frame,
+                  paintImage: paintImage,
+                  child: content,
                 ),
-              ),
             ],
           );
         },
@@ -460,88 +546,92 @@ class TmdbDetailSections extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (data.photoUrls.isNotEmpty) ...[
-          SectionHeader(
-            title: '剧照（${data.photoUrls.length}）',
-            keyValue: 'tmdb-section-photos',
-          ),
-          _PhotoWall(urls: data.photoUrls, title: data.title),
-        ],
-        // 海报墙（对齐上游 `@id/tmdbPosters` 的 Posters 区块）。
-        // 与剧照是**不同语义**的两组图：剧照是剧中画面，海报是宣发图。
-        if (data.posterUrls.length > 1) ...[
-          SectionHeader(
-            title: '海报（${data.posterUrls.length}）',
-            keyValue: 'tmdb-section-posters',
-          ),
-          _PhotoWall(
-            urls: data.posterUrls,
-            title: data.title,
-            keyPrefix: 'tmdb-poster',
-            // 海报是 2:3 竖图：用窄框装竖图，避免横框里两侧露灰底。
-            // 110 → 132：与海报网格、选集卡同一档密度，避免同屏三种尺寸。
-            itemWidth: 132,
-            aspectRatio: 2 / 3,
-          ),
-        ],
-        if (data.allPeople.isNotEmpty || data.directors.isNotEmpty) ...[
-          SectionHeader(
-            title: '演职人员（${data.allPeople.length}）',
-            keyValue: 'tmdb-section-people',
-          ),
-          _PeopleWall(
-            people: data.allPeople.take(20).toList(),
-            onTap: onPersonTap,
-          ),
-        ],
-        // 制作团队**紧跟演职人员**（用户反馈 2026-10-10：「制作团队应该放在演员
-        // 下方」）。对齐默影视 `activity_tmdb_detail.xml` 的区块顺序：
-        // `castTitle`（演员）→ `creatorTitle`（制作团队）→ `relatedTitle`（相关推荐）。
-        // 原先它排在相关视频之后，被两个大区块隔开，用户要滚很久才看得到。
-        if (data.creatorTeam.isNotEmpty) ...[
-          SectionHeader(
-            title: '制作团队（${data.creatorTeam.length}）',
-            keyValue: 'tmdb-section-crew',
-          ),
-          _PeopleWall(
-            people: data.creatorTeam,
-            onTap: onPersonTap,
-            keyPrefix: 'tmdb-crew',
-            keyValue: 'tmdb-crew-wall',
-          ),
-        ],
-        if (recommendationBottom == null && recommendations.isNotEmpty) ...[
-          SectionHeader(
-            title: '相关推荐（${recommendations.length}）',
-            keyValue: 'tmdb-section-recommendations',
-          ),
-          _RecommendationWall(
-            items: recommendations,
-            onTap: onRecommendationTap,
-          ),
-        ],
-        if (videos.isNotEmpty) ...[
-          SectionHeader(
-            title: '相关视频（${videos.length}）',
-            keyValue: 'tmdb-section-videos',
-          ),
-          // 卡片自己不带外边距：`Card` 默认 `margin: 4` 会让这一栏比
-          // 其它区块左右各缩 4px，也与「区块间距只有一种」冲突。
-          // 卡片之间的 8px 由这里显式给，最后一张不留尾巴。
-          for (final (index, video) in videos.take(8).indexed) ...[
-            if (index > 0) const SizedBox(height: AppSpace.sm),
-            TmdbVideoTile(
-              video: video,
-              onOpen: onOpenVideo,
-              onCopy: onCopyVideo,
-            ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (data.photoUrls.isNotEmpty) ...[
+              SectionHeader(
+                title: '剧照（${data.photoUrls.length}）',
+                keyValue: 'tmdb-section-photos',
+              ),
+              _PhotoWall(urls: data.photoUrls, title: data.title),
+            ],
+            // 海报墙（对齐上游 `@id/tmdbPosters` 的 Posters 区块）。
+            // 与剧照是**不同语义**的两组图：剧照是剧中画面，海报是宣发图。
+            if (data.posterUrls.length > 1) ...[
+              SectionHeader(
+                title: '海报（${data.posterUrls.length}）',
+                keyValue: 'tmdb-section-posters',
+              ),
+              _PhotoWall(
+                urls: data.posterUrls,
+                title: data.title,
+                keyPrefix: 'tmdb-poster',
+                // 海报是 2:3 竖图：用窄框装竖图，避免横框里两侧露灰底。
+                // 110 → 132：与海报网格、选集卡同一档密度，避免同屏三种尺寸。
+                itemWidth: 132,
+                aspectRatio: 2 / 3,
+              ),
+            ],
+            if (data.allPeople.isNotEmpty || data.directors.isNotEmpty) ...[
+              SectionHeader(
+                title: '演职人员（${data.allPeople.length}）',
+                keyValue: 'tmdb-section-people',
+              ),
+              _PeopleWall(
+                people: data.allPeople.take(20).toList(),
+                onTap: onPersonTap,
+              ),
+            ],
+            // 制作团队**紧跟演职人员**（用户反馈 2026-10-10：「制作团队应该放在演员
+            // 下方」）。对齐默影视 `activity_tmdb_detail.xml` 的区块顺序：
+            // `castTitle`（演员）→ `creatorTitle`（制作团队）→ `relatedTitle`（相关推荐）。
+            // 原先它排在相关视频之后，被两个大区块隔开，用户要滚很久才看得到。
+            if (data.creatorTeam.isNotEmpty) ...[
+              SectionHeader(
+                title: '制作团队（${data.creatorTeam.length}）',
+                keyValue: 'tmdb-section-crew',
+              ),
+              _PeopleWall(
+                people: data.creatorTeam,
+                onTap: onPersonTap,
+                keyPrefix: 'tmdb-crew',
+                keyValue: 'tmdb-crew-wall',
+              ),
+            ],
+            if (recommendationBottom == null && recommendations.isNotEmpty) ...[
+              SectionHeader(
+                title: '相关推荐（${recommendations.length}）',
+                keyValue: 'tmdb-section-recommendations',
+              ),
+              _RecommendationWall(
+                items: recommendations,
+                onTap: onRecommendationTap,
+              ),
+            ],
+            if (videos.isNotEmpty) ...[
+              SectionHeader(
+                title: '相关视频（${videos.length}）',
+                keyValue: 'tmdb-section-videos',
+              ),
+              // 条目间距由这里统一提供，最后一条不留尾部间距。
+              for (final (index, video) in videos.take(8).indexed) ...[
+                if (index > 0) const SizedBox(height: AppSpace.sm),
+                TmdbVideoTile(
+                  video: video,
+                  onOpen: onOpenVideo,
+                  onCopy: onCopyVideo,
+                ),
+              ],
+            ],
+            ?recommendationBottom,
           ],
-        ],
-        ?recommendationBottom,
-      ],
+        ),
+      ),
     );
   }
 }
@@ -613,106 +703,114 @@ class TmdbLineSelector extends StatelessWidget {
       // 线路与选集**不是**一组：线路是一行，选集是下一区块，所以两者的缝
       // 与其它区块一致为 24（用户 2026-11-12 反馈「这部分的间距和其他的不一样」）。
       padding: const EdgeInsets.only(bottom: AppSpace.xl),
-      child: Row(
-        children: [
-          Text(
-            '线路',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            // 线路多到溢出时用鼠标左右拖（`scroll_behavior.dart`）。
-            child: HorizontalMouseDrag(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final line in lines) ...[
-                      Tooltip(
-                        // `message` 是字符串，**不**产生 `Text` widget，
-                        // 因此不会干扰按文本断言的既有门禁。
-                        //
-                        // 优先级：最近播放 > 外部来源 > 线路名。「最近播放」优先
-                        // 是因为它回答的是"我上次看到哪"这个更急的问题；来源
-                        // 已经在色点旁边，不必再抢一次 Tooltip。
-                        message: line.flag == recentFlag
-                            ? '最近播放'
-                            : externalOrigins.containsKey(line.flag)
-                            ? '来自 ${externalOrigins[line.flag]}'
-                            : line.displayName,
-                        child: ChoiceChip(
-                          key: ValueKey('tmdb-line-${line.flag}'),
-                          label: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // 「最近播放」标记（`design/02` §5）：在标签**前**加
-                              // 14px 图标。标记**不抢**选中态——用户手动切走后
-                              // 标记仍在，能切回来。key 挂在 `Icon` 上（不是
-                              // `ChoiceChip` 上），既有的 `tmdb-line-*` 门禁
-                              // 按「chip 本身是 ChoiceChip」计数，不受影响。
-                              if (line.flag == recentFlag) ...[
-                                Icon(
-                                  Icons.history,
-                                  key: ValueKey(
-                                    'tmdb-line-recent-${line.flag}',
-                                  ),
-                                  size: 14,
-                                ),
-                                const SizedBox(width: AppSpace.xs),
-                              ],
-                              // 外部来源色点：6px 方点，颜色是站点实测健康态。
-                              // key 挂在 `Container` 上（不是 `ChoiceChip` 上），
-                              // 与上面 `tmdb-line-recent-*` 同一套做法——既有
-                              // `tmdb-line-*` 门禁按「chip 本身是 ChoiceChip」计数。
-                              if (externalOrigins.containsKey(line.flag)) ...[
-                                Container(
-                                  key: ValueKey(
-                                    'tmdb-line-external-${line.flag}',
-                                  ),
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(
-                                    color: sourceStatusColor(
-                                      context,
-                                      externalStatus[line.flag] ??
-                                          SourceStatus.unknown,
-                                    ),
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                                const SizedBox(width: AppSpace.xs),
-                              ],
-                              Text(
-                                episodeCounts.containsKey(line.flag)
-                                    ? '${line.displayName}（${episodeCounts[line.flag]} 集）'
-                                    : line.displayName,
-                              ),
-                            ],
-                          ),
-                          selected: line.flag == selectedFlag,
-                          onSelected: onChanged == null
-                              ? null
-                              : (_) => onChanged!.call(line),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                  ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Row(
+            children: [
+              Text(
+                '线路',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                // 线路多到溢出时用鼠标左右拖（`scroll_behavior.dart`）。
+                child: HorizontalMouseDrag(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final line in lines) ...[
+                          Tooltip(
+                            // `message` 是字符串，**不**产生 `Text` widget，
+                            // 因此不会干扰按文本断言的既有门禁。
+                            //
+                            // 优先级：最近播放 > 外部来源 > 线路名。「最近播放」优先
+                            // 是因为它回答的是"我上次看到哪"这个更急的问题；来源
+                            // 已经在色点旁边，不必再抢一次 Tooltip。
+                            message: line.flag == recentFlag
+                                ? '最近播放'
+                                : externalOrigins.containsKey(line.flag)
+                                ? '来自 ${externalOrigins[line.flag]}'
+                                : line.displayName,
+                            child: ChoiceChip(
+                              key: ValueKey('tmdb-line-${line.flag}'),
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // 「最近播放」标记（`design/02` §5）：在标签**前**加
+                                  // 14px 图标。标记**不抢**选中态——用户手动切走后
+                                  // 标记仍在，能切回来。key 挂在 `Icon` 上（不是
+                                  // `ChoiceChip` 上），既有的 `tmdb-line-*` 门禁
+                                  // 按「chip 本身是 ChoiceChip」计数，不受影响。
+                                  if (line.flag == recentFlag) ...[
+                                    Icon(
+                                      Icons.history,
+                                      key: ValueKey(
+                                        'tmdb-line-recent-${line.flag}',
+                                      ),
+                                      size: 14,
+                                    ),
+                                    const SizedBox(width: AppSpace.xs),
+                                  ],
+                                  // 外部来源色点：6px 方点，颜色是站点实测健康态。
+                                  // key 挂在 `Container` 上（不是 `ChoiceChip` 上），
+                                  // 与上面 `tmdb-line-recent-*` 同一套做法——既有
+                                  // `tmdb-line-*` 门禁按「chip 本身是 ChoiceChip」计数。
+                                  if (externalOrigins.containsKey(
+                                    line.flag,
+                                  )) ...[
+                                    Container(
+                                      key: ValueKey(
+                                        'tmdb-line-external-${line.flag}',
+                                      ),
+                                      width: 6,
+                                      height: 6,
+                                      decoration: BoxDecoration(
+                                        color: sourceStatusColor(
+                                          context,
+                                          externalStatus[line.flag] ??
+                                              SourceStatus.unknown,
+                                        ),
+                                        borderRadius: BorderRadius.circular(2),
+                                      ),
+                                    ),
+                                    const SizedBox(width: AppSpace.xs),
+                                  ],
+                                  Text(
+                                    episodeCounts.containsKey(line.flag)
+                                        ? '${line.displayName}（${episodeCounts[line.flag]} 集）'
+                                        : line.displayName,
+                                  ),
+                                ],
+                              ),
+                              selected: line.flag == selectedFlag,
+                              onSelected: onChanged == null
+                                  ? null
+                                  : (_) => onChanged!.call(line),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // 换源入口：只在调用方给了回调时出现，因此既有调用点零改动。
+              if (onSwapSource != null)
+                TextButton.icon(
+                  key: const ValueKey('tmdb-line-swap'),
+                  onPressed: onSwapSource,
+                  icon: const Icon(Icons.swap_horiz, size: 16),
+                  label: const Text('换源'),
+                ),
+            ],
           ),
-          // 换源入口：只在调用方给了回调时出现，因此既有调用点零改动。
-          if (onSwapSource != null)
-            TextButton.icon(
-              key: const ValueKey('tmdb-line-swap'),
-              onPressed: onSwapSource,
-              icon: const Icon(Icons.swap_horiz, size: 16),
-              label: const Text('换源'),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -974,34 +1072,40 @@ class TmdbEpisodeSection extends StatelessWidget {
   final Set<int> duplicateIndexes;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      TmdbEpisodeHeader(
-        title: title,
-        episodeCount: cards.length,
-        reversed: reversed,
-        gridMode: gridMode,
-        lineName: lineName,
-        onToggleReversed: onToggleReversed,
-        onToggleGridMode: onToggleGridMode,
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TmdbEpisodeHeader(
+            title: title,
+            episodeCount: cards.length,
+            reversed: reversed,
+            gridMode: gridMode,
+            lineName: lineName,
+            onToggleReversed: onToggleReversed,
+            onToggleGridMode: onToggleGridMode,
+          ),
+          TmdbEpisodeStrip(
+            key: ValueKey('$keyPrefix-section'),
+            cards: cards,
+            keyPrefix: keyPrefix,
+            actionLabel: actionLabel,
+            cardWidth: cardWidth,
+            gridMode: gridMode,
+            posterUrl: posterUrl,
+            variety: variety,
+            manualIndexes: manualIndexes,
+            duplicateIndexes: duplicateIndexes,
+            onEpisodeMenu: onEpisodeMenu,
+            onTap: onTap,
+            onLongPress: onLongPress,
+          ),
+        ],
       ),
-      TmdbEpisodeStrip(
-        key: ValueKey('$keyPrefix-section'),
-        cards: cards,
-        keyPrefix: keyPrefix,
-        actionLabel: actionLabel,
-        cardWidth: cardWidth,
-        gridMode: gridMode,
-        posterUrl: posterUrl,
-        variety: variety,
-        manualIndexes: manualIndexes,
-        duplicateIndexes: duplicateIndexes,
-        onEpisodeMenu: onEpisodeMenu,
-        onTap: onTap,
-        onLongPress: onLongPress,
-      ),
-    ],
+    ),
   );
 }
 
@@ -1029,7 +1133,7 @@ class EpisodeForeignProgressMark {
   /// Tooltip：来源站名 + 集名 + 位置 + 观看时间（多来源逐行）。
   final String detail;
 
-  /// 是否是默认续播目标（决定描边颜色：用户点首屏按钮时优先去那一条）。
+  /// 是否是默认续播目标（决定底色：用户点首屏按钮时优先去那一条）。
   final bool active;
 
   /// 最近那条记录是否已看完（角标改用「已看完」，避免把 100% 当作进度）。
@@ -1254,7 +1358,11 @@ class _TmdbEpisodeStripState extends State<TmdbEpisodeStrip> {
     if (widget.ranges.length <= 1) return strip;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [_buildRangeBar(context), const SizedBox(height: AppSpace.xs), strip],
+      children: [
+        _buildRangeBar(context),
+        const SizedBox(height: AppSpace.xs),
+        strip,
+      ],
     );
   }
 
@@ -1530,14 +1638,21 @@ class TmdbDetailView extends StatelessWidget {
                 //
                 // `padding: EdgeInsets.zero`：本视图的外层已用 `padding`（`AppSpace.lg`）
                 // 缩进过，这里再缩一次会与上方 `SectionHeader` 不对齐。
-                SeasonChipStrip(
-                  seasons: [for (final season in seasons) season.number],
-                  selectedSeason: selectedSeason,
-                  selectableSeasons: selectableSeasons,
-                  onChanged: onSeasonChanged,
-                  padding: EdgeInsets.zero,
-                  switcherKey: 'tmdb-detail-season-switcher',
-                  chipKeyPrefix: 'tmdb-detail-season',
+
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: SeasonChipStrip(
+                      seasons: [for (final season in seasons) season.number],
+                      selectedSeason: selectedSeason,
+                      selectableSeasons: selectableSeasons,
+                      onChanged: onSeasonChanged,
+                      padding: EdgeInsets.zero,
+                      switcherKey: 'tmdb-detail-season-switcher',
+                      chipKeyPrefix: 'tmdb-detail-season',
+                    ),
+                  ),
                 ),
               ],
               if (infoRows.isNotEmpty) ...[
@@ -1617,6 +1732,7 @@ class _HeaderContent extends StatelessWidget {
     this.actions,
     this.ratingTags,
     this.platformLabel = '',
+    this.withoutArtwork = false,
   });
 
   final TmdbDetailData data;
@@ -1625,6 +1741,7 @@ class _HeaderContent extends StatelessWidget {
   final Widget? actions;
   final Widget? ratingTags;
   final String platformLabel;
+  final bool withoutArtwork;
 
   @override
   Widget build(BuildContext context) {
@@ -1632,19 +1749,8 @@ class _HeaderContent extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 720;
-        // 头图海报跟着密度档放大（只放大不缩小）：全屏下这块固定 150 的小海报
-        // 是全页最扎眼的「没跟上分辨率」的地方。
-        final posterWidth = LayoutScale.upscale(context, 150);
-        final poster = ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: SizedBox(
-            key: const ValueKey('tmdb-detail-poster'),
-            width: posterWidth,
-            height: posterWidth * 1.5,
-            child: PosterImage(url: data.posterUrl),
-          ),
-        );
-        final info = Expanded(
+        final info = Material(
+          type: MaterialType.transparency,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -1735,9 +1841,32 @@ class _HeaderContent extends StatelessWidget {
             ],
           ),
         );
+        if (withoutArtwork) return info;
+        // 头图海报跟着密度档放大（只放大不缩小）：全屏下这块固定 150 的小海报
+        // 是全页最扎眼的「没跟上分辨率」的地方。
+        final posterWidth = LayoutScale.upscale(context, 150);
+        final poster = ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            key: const ValueKey('tmdb-detail-poster'),
+            width: posterWidth,
+            height: posterWidth * 1.5,
+            child: PosterImage(url: data.posterUrl),
+          ),
+        );
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [poster, const SizedBox(width: 16), info],
+          children: [
+            poster,
+            const SizedBox(width: 16),
+            Expanded(
+              // 文字块直接铺在背景上，只保留原来的左右内边距。
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
+                child: info,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1865,7 +1994,6 @@ class TmdbInfoTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final visible = [
       for (final (label, value) in rows)
         if ((value ?? '').trim().isNotEmpty) (label, value!.trim()),
@@ -1876,13 +2004,9 @@ class TmdbInfoTable extends StatelessWidget {
     for (var i = 0; i < visible.length; i += 2) {
       pairs.add([visible[i], if (i + 1 < visible.length) visible[i + 1]]);
     }
-    return Container(
+    return Padding(
       key: const ValueKey('tmdb-info-table'),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(10),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2184,12 +2308,10 @@ class TmdbEpisodeCardTile extends StatelessWidget {
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           alignment: Alignment.centerLeft,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          // 描边只给「这一个」目标：本站记录优先（既有语义），没有本站记录时
-          // 才轮到别的源的默认目标（第三色，与角标同色，用户能对上号）。
-          side: isRecent
-              ? BorderSide(color: theme.colorScheme.primary, width: 2)
+          backgroundColor: isRecent
+              ? theme.colorScheme.primaryContainer
               : foreign?.active == true
-              ? BorderSide(color: theme.colorScheme.tertiary, width: 2)
+              ? theme.colorScheme.tertiaryContainer
               : null,
         ),
         child: Column(
@@ -2328,7 +2450,8 @@ class TmdbEpisodeCardTile extends StatelessWidget {
                                 Text(
                                   foreign.label,
                                   style: theme.textTheme.labelSmall?.copyWith(
-                                    color: theme.colorScheme.onTertiaryContainer,
+                                    color:
+                                        theme.colorScheme.onTertiaryContainer,
                                   ),
                                 ),
                               ],
@@ -2441,11 +2564,11 @@ double _episodeCardHeight(BuildContext context, double cardWidth) {
   // 出现过「卡片内容比分配高度多 1.00 px」的 RenderFlex overflow（Column 报错、
   // 用例整条失败）。向上取整并留 1px 余量，保证分配高度不小于真实排版高度。
   return (cardWidth * 9 / 16 +
-          6 +
-          _lineHeight(context, text.bodyMedium) +
-          _lineHeight(context, text.bodySmall) +
-          6)
-      .ceilToDouble() +
+              6 +
+              _lineHeight(context, text.bodyMedium) +
+              _lineHeight(context, text.bodySmall) +
+              6)
+          .ceilToDouble() +
       1;
 }
 
@@ -2553,7 +2676,7 @@ Future<void> showTmdbPhotoViewer(
 }) {
   final viewer = TmdbPhotoViewer.open(urls: urls, url: url, title: title);
   if (viewer.isEmpty) return Future<void>.value();
-  return showDialog<void>(
+  return showGlassDialog<void>(
     context: context,
     barrierColor: Colors.black87,
     builder: (_) => TmdbPhotoViewerDialog(viewer: viewer),
@@ -2578,7 +2701,8 @@ class _TmdbPhotoViewerDialogState extends State<TmdbPhotoViewerDialog> {
     final theme = Theme.of(context);
     return Dialog(
       key: const ValueKey('tmdb-photo-viewer'),
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.all(24),
       // 独立 `RepaintBoundary`：使查看器可以被单独光栅化（截图证据需要
       // 「只拍对话框」；对话框在 overlay 里，取整窗会拍到被压在下面的页面）。
@@ -2587,102 +2711,118 @@ class _TmdbPhotoViewerDialogState extends State<TmdbPhotoViewerDialog> {
         // 显式限定尺寸：`Dialog` 只给宽松约束，不限高会让查看器铺满整屏高度
         // （截图证据里就是一张 1552x5952 的怪图）。这里给一个「大图窗口」的
         // 合理上限，既符合桌面观感，也让证据可读。
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1100, maxHeight: 820),
-          child: Shortcuts(
-            shortcuts: const {
-              SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
-              SingleActivator(LogicalKeyboardKey.arrowLeft): _PreviousIntent(),
-              SingleActivator(LogicalKeyboardKey.escape): _CloseIntent(),
-            },
-            child: Actions(
-              actions: {
-                _NextIntent: CallbackAction<_NextIntent>(
-                  onInvoke: (_) {
-                    setState(() => _viewer = _viewer.next());
-                    return null;
-                  },
-                ),
-                _PreviousIntent: CallbackAction<_PreviousIntent>(
-                  onInvoke: (_) {
-                    setState(() => _viewer = _viewer.previous());
-                    return null;
-                  },
-                ),
-                _CloseIntent: CallbackAction<_CloseIntent>(
-                  onInvoke: (_) {
-                    Navigator.of(context).pop();
-                    return null;
-                  },
-                ),
-              },
-              child: Focus(
-                autofocus: true,
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${_viewer.title.isEmpty ? '图片' : _viewer.title}'
-                              ' · ${_viewer.index + 1}/${_viewer.count}',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: Colors.white,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          IconButton(
-                            key: const ValueKey('tmdb-photo-viewer-close'),
-                            tooltip: '关闭',
-                            onPressed: () => Navigator.of(context).pop(),
-                            icon: const Icon(Icons.close, color: Colors.white),
-                          ),
-                        ],
-                      ),
+        child: GlassPane(
+          child: Material(
+            type: MaterialType.transparency,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1100, maxHeight: 820),
+              child: Shortcuts(
+                shortcuts: const {
+                  SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowLeft):
+                      _PreviousIntent(),
+                  SingleActivator(LogicalKeyboardKey.escape): _CloseIntent(),
+                },
+                child: Actions(
+                  actions: {
+                    _NextIntent: CallbackAction<_NextIntent>(
+                      onInvoke: (_) {
+                        setState(() => _viewer = _viewer.next());
+                        return null;
+                      },
                     ),
-                    Expanded(
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          InteractiveViewer(
-                            child: PosterImage(
-                              key: const ValueKey('tmdb-photo-viewer-image'),
-                              url: _viewer.currentUrl,
-                              fit: BoxFit.contain,
-                            ),
-                          ),
-                          if (_viewer.hasPrevious)
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: IconButton.filledTonal(
-                                key: const ValueKey('tmdb-photo-viewer-prev'),
-                                tooltip: '上一张',
-                                onPressed: () => setState(
-                                  () => _viewer = _viewer.previous(),
+                    _PreviousIntent: CallbackAction<_PreviousIntent>(
+                      onInvoke: (_) {
+                        setState(() => _viewer = _viewer.previous());
+                        return null;
+                      },
+                    ),
+                    _CloseIntent: CallbackAction<_CloseIntent>(
+                      onInvoke: (_) {
+                        Navigator.of(context).pop();
+                        return null;
+                      },
+                    ),
+                  },
+                  child: Focus(
+                    autofocus: true,
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${_viewer.title.isEmpty ? '图片' : _viewer.title}'
+                                  ' · ${_viewer.index + 1}/${_viewer.count}',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: Colors.white,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                icon: const Icon(Icons.chevron_left),
                               ),
-                            ),
-                          if (_viewer.hasNext)
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: IconButton.filledTonal(
-                                key: const ValueKey('tmdb-photo-viewer-next'),
-                                tooltip: '下一张',
-                                onPressed: () =>
-                                    setState(() => _viewer = _viewer.next()),
-                                icon: const Icon(Icons.chevron_right),
+                              IconButton(
+                                key: const ValueKey('tmdb-photo-viewer-close'),
+                                tooltip: '关闭',
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                ),
                               ),
-                            ),
-                        ],
-                      ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              InteractiveViewer(
+                                child: PosterImage(
+                                  key: const ValueKey(
+                                    'tmdb-photo-viewer-image',
+                                  ),
+                                  url: _viewer.currentUrl,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                              if (_viewer.hasPrevious)
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: IconButton.filledTonal(
+                                    key: const ValueKey(
+                                      'tmdb-photo-viewer-prev',
+                                    ),
+                                    tooltip: '上一张',
+                                    onPressed: () => setState(
+                                      () => _viewer = _viewer.previous(),
+                                    ),
+                                    icon: const Icon(Icons.chevron_left),
+                                  ),
+                                ),
+                              if (_viewer.hasNext)
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: IconButton.filledTonal(
+                                    key: const ValueKey(
+                                      'tmdb-photo-viewer-next',
+                                    ),
+                                    tooltip: '下一张',
+                                    onPressed: () => setState(
+                                      () => _viewer = _viewer.next(),
+                                    ),
+                                    icon: const Icon(Icons.chevron_right),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -2879,7 +3019,8 @@ class _RecommendationWall extends StatelessWidget {
     final cardWidth = LayoutScale.upscale(context, 168);
     final posterHeight = cardWidth * 3 / 2;
     return SizedBox(
-      height: posterHeight +
+      height:
+          posterHeight +
           4 +
           _lineHeight(context, theme.textTheme.bodySmall) +
           _lineHeight(context, theme.textTheme.labelSmall),
@@ -2950,6 +3091,9 @@ Future<void> showTmdbEpisodeSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    barrierColor: glassSheetBarrierColor(context),
     builder: (_) => TmdbEpisodeSheet(
       card: card,
       actionLabel: actionLabel,
@@ -2976,73 +3120,79 @@ class TmdbEpisodeSheet extends StatelessWidget {
     final theme = Theme.of(context);
     return SafeArea(
       key: const ValueKey('tmdb-episode-sheet'),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: SizedBox(
-                  height: 260,
-                  width: double.infinity,
-                  child: PosterImage(
-                    key: const ValueKey('tmdb-episode-sheet-still'),
-                    url: card.stillUrl,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                card.title,
-                key: const ValueKey('tmdb-episode-sheet-title'),
-                style: theme.textTheme.titleLarge,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                [
-                  card.subtitle,
-                  if (card.runtime > 0) '${card.runtime} 分钟',
-                  if (card.rating > 0) '★ ${card.rating.toStringAsFixed(1)}',
-                ].join(' · '),
-                style: theme.textTheme.bodySmall,
-              ),
-              if (card.overview != null &&
-                  card.overview!.trim().isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  card.overview!.trim(),
-                  key: const ValueKey('tmdb-episode-sheet-overview'),
-                  style: theme.textTheme.bodyMedium,
-                ),
-              ],
-              const SizedBox(height: 16),
-              Row(
+      child: GlassPane(
+        child: Material(
+          type: MaterialType.transparency,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 900),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (actionLabel.isNotEmpty)
-                    FilledButton.icon(
-                      key: const ValueKey('tmdb-episode-sheet-action'),
-                      onPressed: onAction == null
-                          ? null
-                          : () {
-                              Navigator.of(context).pop();
-                              onAction!.call();
-                            },
-                      icon: const Icon(Icons.play_arrow),
-                      label: Text(actionLabel),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      height: 260,
+                      width: double.infinity,
+                      child: PosterImage(
+                        key: const ValueKey('tmdb-episode-sheet-still'),
+                        url: card.stillUrl,
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('关闭'),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    card.title,
+                    key: const ValueKey('tmdb-episode-sheet-title'),
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    [
+                      card.subtitle,
+                      if (card.runtime > 0) '${card.runtime} 分钟',
+                      if (card.rating > 0)
+                        '★ ${card.rating.toStringAsFixed(1)}',
+                    ].join(' · '),
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  if (card.overview != null &&
+                      card.overview!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      card.overview!.trim(),
+                      key: const ValueKey('tmdb-episode-sheet-overview'),
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      if (actionLabel.isNotEmpty)
+                        FilledButton.icon(
+                          key: const ValueKey('tmdb-episode-sheet-action'),
+                          onPressed: onAction == null
+                              ? null
+                              : () {
+                                  Navigator.of(context).pop();
+                                  onAction!.call();
+                                },
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text(actionLabel),
+                        ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('关闭'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -3119,7 +3269,9 @@ class PersonWorkFilterRow extends StatelessWidget {
   }
 }
 
-typedef ExternalPersonLoader = Future<ExternalPersonDetail?> Function(MetaPersonRef ref);
+typedef ExternalPersonLoader = Future<ExternalPersonDetail?> Function(
+  MetaPersonRef ref,
+);
 
 /// 人物页：简介 + 照片 + 作品列表（`04` §6.1 的演职人员作品入口）。
 class TmdbPersonPage extends StatefulWidget {
@@ -3223,11 +3375,7 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
       setState(() {
         _detail = detail;
         _photos = [
-          ...TmdbImageSelector.profiles(
-            detail,
-            config.imageBase,
-            limit: 12,
-          ),
+          ...TmdbImageSelector.profiles(detail, config.imageBase, limit: 12),
           ..._extraPhotos,
         ];
         _works = works;
@@ -3267,14 +3415,21 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
 
   Future<void> _loadExternal(MetaPersonRef ref) async {
     ExternalPersonDetail? loaded;
-    try { loaded = await widget.externalLoader?.call(ref); } catch (_) { /* 保留已有资料。 */ }
+    try {
+      loaded = await widget.externalLoader?.call(ref);
+    } catch (_) {
+      /* 保留已有资料。 */
+    }
     if (!mounted) return;
     setState(() {
       _externalUnavailable = loaded == null;
       _detail = {
         'name': loaded?.name ?? widget.person.name,
-        'biography': (loaded?.biography ?? '').isNotEmpty ? loaded!.biography : widget.person.biography,
-        'known_for_department': loaded?.department ?? widget.person.knownForDepartment,
+        'biography': (loaded?.biography ?? '').isNotEmpty
+            ? loaded!.biography
+            : widget.person.biography,
+        'known_for_department':
+            loaded?.department ?? widget.person.knownForDepartment,
       };
       _photos = loaded?.photos ?? const [];
       final cast = loaded?.castWorks ?? const <TmdbPersonWork>[];
@@ -3322,11 +3477,23 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
     final person = widget.person;
     return Scaffold(
       key: const ValueKey('tmdb-person-page'),
-      appBar: AppBar(title: Text(person.name)),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: const IgnorePointer(
+          child: GlassPane(
+            borderRadius: BorderRadius.zero,
+            child: SizedBox.expand(),
+          ),
+        ),
+        title: Text(person.name),
+      ),
       body: switch (_phase) {
         TmdbLoadPhase.idle || TmdbLoadPhase.loading => const LoadingBlock(),
         TmdbLoadPhase.disabled => Center(
-          child: Text('未配置 TMDB（不影响站源浏览与播放）', style: theme.textTheme.bodyLarge),
+          child: Text(
+            '未配置 TMDB（不影响站源浏览与播放）',
+            style: theme.textTheme.bodyLarge,
+          ),
         ),
         TmdbLoadPhase.failed => Center(
           child: Column(
@@ -3362,193 +3529,204 @@ class _TmdbPersonPageState extends State<TmdbPersonPage> {
       detail['known_for_department'],
       widget.person.knownForDepartment,
     ]);
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SizedBox(
-                width: 150,
-                height: 225,
-                child: PosterImage(url: _photos.firstOrNull ?? widget.person.profileUrl),
+    return Material(
+      type: MaterialType.transparency,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 150,
+                  height: 225,
+                  child: PosterImage(
+                    url: _photos.firstOrNull ?? widget.person.profileUrl,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tmdbFirstNonEmpty([detail['name'], widget.person.name]),
+                      key: const ValueKey('tmdb-person-name'),
+                      style: theme.textTheme.headlineSmall,
+                    ),
+                    if (department.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(department, style: theme.textTheme.bodyMedium),
+                    ],
+                    if (widget.person.subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.person.subtitle,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (_externalUnavailable)
+            Row(
+              children: [
+                const Expanded(child: Text('暂未取得更多资料，已保留现有信息。')),
+                TextButton(onPressed: _load, child: const Text('重试')),
+              ],
+            ),
+          if (biography.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              '简介',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    tmdbFirstNonEmpty([detail['name'], widget.person.name]),
-                    key: const ValueKey('tmdb-person-name'),
-                    style: theme.textTheme.headlineSmall,
-                  ),
-                  if (department.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(department, style: theme.textTheme.bodyMedium),
-                  ],
-                  if (widget.person.subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      widget.person.subtitle,
-                      style: theme.textTheme.bodySmall,
+            const SizedBox(height: 6),
+            // 简介整段铺开，不折叠（用户反馈 2026-11-18：「人员介绍页简介下面的
+            // 展开去掉，正常是要全部显示」）。人物页是纯阅读页，没有首屏高度压力。
+            Text(
+              biography,
+              key: const ValueKey('tmdb-person-biography'),
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+          if (_photos.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '照片（${_photos.length}）',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 150,
+              // 人物照片条：鼠标左右拖。
+              child: HorizontalMouseDrag(
+                child: ListView.separated(
+                  key: const ValueKey('tmdb-person-photos'),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photos.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) => InkWell(
+                    key: ValueKey('tmdb-person-photo-$index'),
+                    onTap: () {
+                      if (widget.onOpenPhoto != null) {
+                        widget.onOpenPhoto!(_photos, _photos[index]);
+                        return;
+                      }
+                      showTmdbPhotoViewer(
+                        context,
+                        urls: _photos,
+                        url: _photos[index],
+                        title: widget.person.name,
+                      );
+                    },
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: SizedBox(
+                        // 人物照片是 2:3 竖图：框比与素材一致，不让两侧露灰底。
+                        width: 100,
+                        height: 150,
+                        child: PosterImage(
+                          url: _photos[index],
+                          fit: BoxFit.cover,
+                        ),
+                      ),
                     ),
-                  ],
-                ],
+                  ),
+                ),
               ),
             ),
           ],
-        ),
-        if (_externalUnavailable)
-          Row(children: [
-            const Expanded(child: Text('暂未取得更多资料，已保留现有信息。')),
-            TextButton(onPressed: _load, child: const Text('重试')),
-          ]),
-        if (biography.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text(
-            '简介',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+          if (_works.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              '作品（${_filteredWorks.length}'
+              '${_filteredWorks.length == _works.length ? '' : ' / ${_works.length}'}）',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          // 简介整段铺开，不折叠（用户反馈 2026-11-18：「人员介绍页简介下面的
-          // 展开去掉，正常是要全部显示」）。人物页是纯阅读页，没有首屏高度压力。
-          Text(
-            biography,
-            key: const ValueKey('tmdb-person-biography'),
-            style: theme.textTheme.bodyMedium,
-          ),
-        ],
-        if (_photos.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text(
-            '照片（${_photos.length}）',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 150,
-            // 人物照片条：鼠标左右拖。
-            child: HorizontalMouseDrag(
-              child: ListView.separated(
-                key: const ValueKey('tmdb-person-photos'),
-                scrollDirection: Axis.horizontal,
-                itemCount: _photos.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, index) => InkWell(
-                  key: ValueKey('tmdb-person-photo-$index'),
-                  onTap: () {
-                    if (widget.onOpenPhoto != null) {
-                      widget.onOpenPhoto!(_photos, _photos[index]);
-                      return;
-                    }
-                    showTmdbPhotoViewer(
-                      context,
-                      urls: _photos,
-                      url: _photos[index],
-                      title: widget.person.name,
-                    );
-                  },
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: SizedBox(
-                      // 人物照片是 2:3 竖图：框比与素材一致，不让两侧露灰底。
-                      width: 100,
-                      height: 150,
-                      child: PosterImage(
-                        url: _photos[index],
-                        fit: BoxFit.cover,
-                      ),
-                    ),
+            // 筛选条（对齐默影视 `activity_tmdb_person.xml` 的 `filterGroup`）：
+            // 两行 chip——部门（全部部门/出演/导演/编剧/…）与类型（全部类型/电影/剧集）。
+            // 每个选项带计数，无作品的选项不出现（避免选了没结果）。
+            if (_workFilters != null) ..._buildWorkFilters(context),
+            const SizedBox(height: 8),
+            if (_filteredWorks.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    '该筛选下没有作品',
+                    key: const ValueKey('tmdb-person-works-empty'),
+                    style: theme.textTheme.bodySmall,
                   ),
                 ),
-              ),
-            ),
-          ),
-        ],
-        if (_works.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text(
-            '作品（${_filteredWorks.length}'
-            '${_filteredWorks.length == _works.length ? '' : ' / ${_works.length}'}）',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          // 筛选条（对齐默影视 `activity_tmdb_person.xml` 的 `filterGroup`）：
-          // 两行 chip——部门（全部部门/出演/导演/编剧/…）与类型（全部类型/电影/剧集）。
-          // 每个选项带计数，无作品的选项不出现（避免选了没结果）。
-          if (_workFilters != null) ..._buildWorkFilters(context),
-          const SizedBox(height: 8),
-          if (_filteredWorks.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text(
-                  '该筛选下没有作品',
-                  key: const ValueKey('tmdb-person-works-empty'),
-                  style: theme.textTheme.bodySmall,
+              )
+            else
+              GridView.builder(
+                key: const ValueKey('tmdb-person-works'),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 220,
+                  mainAxisExtent: 280,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
                 ),
-              ),
-            )
-          else
-            GridView.builder(
-              key: const ValueKey('tmdb-person-works'),
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 220,
-                mainAxisExtent: 280,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-              ),
-              itemCount: _filteredWorks.length,
-              itemBuilder: (context, index) {
-                final work = _filteredWorks[index];
-                final key = work.item.identity?.key ?? 'work-$index';
-                return InkWell(
-                  key: ValueKey('tmdb-person-work-$key'),
-                  onTap: work.item.identity == null && widget.onSearchTitle != null
-                      ? () => widget.onSearchTitle!(work.item.title)
-                      : widget.onOpenItem == null ? null : () => widget.onOpenItem!(work.item),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: SizedBox(
-                          height: 220,
-                          child: PosterImage(url: work.item.posterUrl),
+                itemCount: _filteredWorks.length,
+                itemBuilder: (context, index) {
+                  final work = _filteredWorks[index];
+                  final key = work.item.identity?.key ?? 'work-$index';
+                  return InkWell(
+                    key: ValueKey('tmdb-person-work-$key'),
+                    onTap:
+                        work.item.identity == null &&
+                            widget.onSearchTitle != null
+                        ? () => widget.onSearchTitle!(work.item.title)
+                        : widget.onOpenItem == null
+                        ? null
+                        : () => widget.onOpenItem!(work.item),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            height: 220,
+                            child: PosterImage(url: work.item.posterUrl),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        work.item.title,
-                        style: theme.textTheme.bodyMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        work.subtitle,
-                        style: theme.textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+                        const SizedBox(height: 4),
+                        Text(
+                          work.item.title,
+                          style: theme.textTheme.bodyMedium,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          work.subtitle,
+                          style: theme.textTheme.bodySmall,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }

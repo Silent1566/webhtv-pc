@@ -13,12 +13,15 @@ import 'package:flutter/material.dart';
 import '../core/following.dart';
 import '../core/playback_platform.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
+import 'tmdb_widgets.dart' show ContentMenuBorder;
 import 'poster_image.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
 import 'following_badge.dart';
 import 'following_calendar_page.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 
 /// 追剧页的两个视角：系列列表 / 日历。
 enum _FollowingView {
@@ -31,7 +34,13 @@ enum _FollowingView {
 }
 
 class FollowingPage extends StatefulWidget {
-  const FollowingPage({super.key, required this.state});
+  const FollowingPage({
+    super.key,
+    required this.state,
+    this.shellUnderlap = false,
+  });
+
+  final bool shellUnderlap;
 
   final AppState state;
 
@@ -136,6 +145,10 @@ class _FollowingPageState extends State<FollowingPage> {
   /// 收进菜单里；写入口与生效开关（[AppState.setFollowingSettings]）不变。
   Widget _followingMenu(FollowingSettings settings) {
     return PopupMenuButton<String>(
+      shape: ContentMenuBorder(Theme.of(context)),
+      color: Theme.of(context).colorScheme.surfaceContainerHigh
+          .withValues(alpha: .97),
+      elevation: 0,
       key: const ValueKey('following-more'),
       tooltip: '追剧设置',
       icon: const Icon(Icons.more_horiz),
@@ -236,7 +249,8 @@ class _FollowingPageState extends State<FollowingPage> {
 
     final route = DialogRoute<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      barrierColor: glassBarrierColor(context),
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('following-interval-dialog'),
         title: const Text('自动检查间隔'),
         content: StatefulBuilder(
@@ -307,9 +321,9 @@ class _FollowingPageState extends State<FollowingPage> {
   }
 
   Future<void> _remove(Following item) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('取消追剧？'),
         content: Text('不再检查《${item.vodName}》的更新。已下载/已看的记录不受影响。'),
         actions: [
@@ -339,122 +353,143 @@ class _FollowingPageState extends State<FollowingPage> {
     final settings = _state.followingSettings;
     // 页面自身结果优先，其次是通知降级/发送结果。
     final notice = _message.isNotEmpty ? _message : _state.followingNotice;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 12,
-                  runSpacing: 8,
-                  children: [
-                    Text(
-                      '追剧（${items.length}）',
-                      style: theme.textTheme.titleMedium,
-                    ),
-                    if (unwatchedCount > 0)
-                      Container(
-                        key: const ValueKey('following-update-summary'),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                        ),
-                        child: Text(
-                          '$unwatchedCount 部有未看',
-                          style: TextStyle(
-                            color: theme.colorScheme.onPrimaryContainer,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    const SizedBox(width: 8),
-                    FilledButton.tonalIcon(
-                      key: const ValueKey('following-check-all'),
-                      onPressed: _checking || items.isEmpty ? null : _checkAll,
-                      icon: _checking
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh, size: 18),
-                      label: Text(_checking ? '检查中…' : '检查更新'),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppSpace.md),
-              _FollowingViewToggle(view: _view, onChanged: _setView),
-              _followingMenu(settings),
-            ],
-          ),
-        ),
-        if (notice.isNotEmpty)
+    return LayoutBuilder(
+      builder: (context, page) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.shellUnderlap)
+            const SizedBox(height: kShellContentTopInset),
           Padding(
-            key: const ValueKey('following-notice'),
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-            child: Text(notice, style: theme.textTheme.bodySmall),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        Text(
+                          '追剧（${items.length}）',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        if (unwatchedCount > 0)
+                          Container(
+                            key: const ValueKey('following-update-summary'),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(AppRadius.sm),
+                            ),
+                            child: Text(
+                              '$unwatchedCount 部有未看',
+                              style: TextStyle(
+                                color: theme.colorScheme.onPrimaryContainer,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(width: 8),
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('following-check-all'),
+                          onPressed: _checking || items.isEmpty
+                              ? null
+                              : _checkAll,
+                          icon: _checking
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh, size: 18),
+                          label: Text(_checking ? '检查中…' : '检查更新'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: AppSpace.md),
+                  _FollowingViewToggle(view: _view, onChanged: _setView),
+                  _followingMenu(settings),
+                ],
+              ),
+            ),
           ),
-        const SizedBox(height: 4),
-        Expanded(
-          child: IndexedStack(
-            index: _view.index,
-            sizing: StackFit.expand,
-            children: [
-              if (items.isEmpty)
-                const _FollowingEmpty()
-              else
-                ListView.separated(
-                  key: const ValueKey('following-list'),
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const Divider(height: 12),
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    return FollowingCard(
-                      episodeLabel: _airData.episodeLabelFor(item),
-                      airSummary: _airData.airSummaryFor(item),
-                      platformLabel: playbackPlatformLabel(
-                        networks:
-                            _airData.networks[item.identityKey] ?? const [],
+          if (notice.isNotEmpty)
+            Padding(
+              key: const ValueKey('following-notice'),
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+              child: Text(notice, style: theme.textTheme.bodySmall),
+            ),
+          const SizedBox(height: 4),
+          Expanded(
+            child: Material(
+              type: MaterialType.transparency,
+              child: IndexedStack(
+                index: _view.index,
+                sizing: StackFit.expand,
+                children: [
+                  if (items.isEmpty)
+                    const _FollowingEmpty()
+                  else
+                    ShellScrollUnderlap(
+                      viewportBottom: widget.shellUnderlap
+                          ? page.maxHeight
+                          : null,
+                      builder: (context, _, leading) => ListView.separated(
+                        key: const ValueKey('following-list'),
+                        padding: EdgeInsets.fromLTRB(12, 4 + leading, 12, 16),
+                        itemCount: items.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          return FollowingCard(
+                            episodeLabel: _airData.episodeLabelFor(item),
+                            airSummary: _airData.airSummaryFor(item),
+                            platformLabel: playbackPlatformLabel(
+                              networks:
+                                  _airData.networks[item.identityKey] ??
+                                  const [],
+                            ),
+                            item: item,
+                            checking: _checking,
+                            globalNotifyEnabled: settings.notifyEnabled,
+                            onPlay: (item) =>
+                                playFollowingLatest(context, _state, item),
+                            onOpenDetail: (item) => openFollowingDetail(
+                              context,
+                              _state,
+                              item,
+                              markRead: true,
+                              syncProgress: true,
+                            ),
+                            onCheck: _checkOne,
+                            onMarkRead: (item) =>
+                                _state.markFollowingRead(item),
+                            onSetNotify: (enabled) =>
+                                _state.setFollowingNotifyEnabled(item, enabled),
+                            onRemove: _remove,
+                          );
+                        },
                       ),
-                      item: item,
-                      checking: _checking,
-                      globalNotifyEnabled: settings.notifyEnabled,
-                      onPlay: (item) =>
-                          playFollowingLatest(context, _state, item),
-                      onOpenDetail: (item) => openFollowingDetail(
-                        context,
-                        _state,
-                        item,
-                        markRead: true,
-                        syncProgress: true,
-                      ),
-                      onCheck: _checkOne,
-                      onMarkRead: (item) => _state.markFollowingRead(item),
-                      onSetNotify: (enabled) =>
-                          _state.setFollowingNotifyEnabled(item, enabled),
-                      onRemove: _remove,
-                    );
-                  },
-                ),
-              // 日历首次进入才创建；之后由 IndexedStack 保活（月份/选中日/滚动位置）。
-              if (_calendarBuilt)
-                FollowingCalendarView(state: _state, airData: _airData)
-              else
-                const SizedBox.shrink(),
-            ],
+                    ),
+                  // 日历首次进入才创建；之后由 IndexedStack 保活（月份/选中日/滚动位置）。
+                  if (_calendarBuilt)
+                    FollowingCalendarView(state: _state, airData: _airData)
+                  else
+                    const SizedBox.shrink(),
+                ],
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -468,7 +503,49 @@ class _FollowingViewToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    Widget buildOption(_FollowingView option) {
+      final selected = option == view;
+      Color? selectedInk(Color color) =>
+          selected ? scheme.onPrimary.withValues(alpha: color.a) : null;
+      return Semantics(
+        button: true,
+        enabled: true,
+        selected: selected,
+        inMutuallyExclusiveGroup: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: selected ? scheme.primary : null,
+            borderRadius: AppRadius.pillAll,
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              key: ValueKey('following-view-${option.name}'),
+              onTap: () => onChanged(option),
+              borderRadius: AppRadius.pillAll,
+              focusColor: selectedInk(theme.focusColor),
+              hoverColor: selectedInk(theme.hoverColor),
+              splashColor: selectedInk(theme.splashColor),
+              highlightColor: selectedInk(theme.highlightColor),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: selected ? scheme.onPrimary : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
@@ -477,35 +554,7 @@ class _FollowingViewToggle extends StatelessWidget {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final option in _FollowingView.values)
-            InkWell(
-              key: ValueKey('following-view-${option.name}'),
-              onTap: option == view ? null : () => onChanged(option),
-              borderRadius: AppRadius.pillAll,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: option == view
-                    ? BoxDecoration(
-                        color: scheme.primary,
-                        borderRadius: AppRadius.pillAll,
-                      )
-                    : null,
-                child: Text(
-                  option.label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: option == view
-                        ? scheme.onPrimary
-                        : scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-        ],
+        children: _FollowingView.values.map(buildOption).toList(),
       ),
     );
   }
@@ -759,6 +808,10 @@ class FollowingCard extends StatelessWidget {
               ),
             ),
             PopupMenuButton<String>(
+              shape: ContentMenuBorder(Theme.of(context)),
+              color: Theme.of(context).colorScheme.surfaceContainerHigh
+                  .withValues(alpha: .97),
+              elevation: 0,
               key: ValueKey('following-menu-${item.identityKey}'),
               tooltip: '更多',
               onSelected: (value) {

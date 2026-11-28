@@ -77,11 +77,12 @@ class PlayerParseSourceStrip extends StatelessWidget {
       key: key,
       label: Text(label),
       selected: selected,
-      // 勾选标记会把 chip 撑宽并推挤整排，选中态已经由描边与底色表达。
+      // 勾选标记会把 chip 撑宽并推挤整排，选中态由底色与文字表达。
       showCheckmark: false,
       backgroundColor: scheme.surfaceContainer,
       selectedColor: accent.withValues(alpha: 0.18),
-      side: BorderSide(color: selected ? accent : scheme.outlineVariant),
+      // 保留旧边宽的布局量，但不绘制边线。
+      side: const BorderSide(width: 1, style: BorderStyle.none),
       labelStyle: theme.textTheme.labelLarge?.copyWith(
         color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
       ),

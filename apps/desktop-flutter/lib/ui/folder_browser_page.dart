@@ -9,6 +9,8 @@ import '../state/app_state.dart';
 import '../state/folder_browser_state.dart';
 import '../state/folder_playback_queue.dart';
 import '../state/playback_source_context.dart';
+import 'glass_widgets.dart';
+import 'tokens.dart';
 import 'browse_pages.dart';
 import 'async_action_feedback.dart';
 import 'folder_episode_view.dart';
@@ -172,6 +174,13 @@ class _FolderBrowserPageState extends State<FolderBrowserPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: const IgnorePointer(
+          child: GlassPane(
+            borderRadius: BorderRadius.zero,
+            child: SizedBox.expand(),
+          ),
+        ),
         leading: BackButton(onPressed: () => Navigator.of(context).maybePop()),
         title: Text(widget.folder.vodName),
         actions: [
@@ -206,47 +215,58 @@ class _FolderBrowserPageState extends State<FolderBrowserPage> {
         ],
       ),
       body: browser == null
-          ? const Center(child: Text('来源站点不可用，请返回列表重新选择。'))
+          ? const GlassPane(child: Center(child: Text('来源站点不可用，请返回列表重新选择。')))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        [
-                          browser.site.name,
-                          ...widget.ancestors,
-                          widget.folder.vodName,
-                        ].join(' / '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                  child: GlassPane(
+                    padding: const EdgeInsets.all(AppSpace.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          [
+                            browser.site.name,
+                            ...widget.ancestors,
+                            widget.folder.vodName,
+                          ].join(' / '),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
-                      ),
-                      if (browser.filters.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final filter in browser.filters.entries)
-                              Chip(
-                                label: Text('${filter.key}：${filter.value}'),
-                              ),
-                          ],
-                        ),
+                        if (browser.filters.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final filter in browser.filters.entries)
+                                Chip(
+                                  label: Text('${filter.key}：${filter.value}'),
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
                 if (browser.loading)
                   const LinearProgressIndicator(minHeight: 2),
-                const Divider(height: 1),
-                Expanded(child: _content(browser)),
+                const SizedBox(height: 1),
+                Expanded(
+                  child: GlassPane(
+                    blurBackdrop: false,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: _content(browser),
+                    ),
+                  ),
+                ),
               ],
             ),
     );

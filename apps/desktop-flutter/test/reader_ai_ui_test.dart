@@ -10,6 +10,9 @@ import 'package:webhtv_pc/services/reader/reader_tts_controller.dart';
 import 'package:webhtv_pc/services/reader/tts_engines.dart';
 import 'package:webhtv_pc/services/speech_search_service.dart';
 import 'package:webhtv_pc/ui/reader/reader_page.dart';
+import 'package:webhtv_pc/ui/glass_chrome.dart';
+import 'package:webhtv_pc/ui/glass_surface.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/speech_search_button.dart';
 
 class _Engine implements TtsEngine {
@@ -84,6 +87,24 @@ void main() {
     );
     expect(find.text('第一段'), findsOneWidget);
     expect(find.text('测试书'), findsOneWidget);
+    final paragraph = find.text('第一段');
+    expect(
+      find.ancestor(of: paragraph, matching: find.byType(GlassPane)),
+      findsOneWidget,
+    );
+    expect(find.byType(GlassChromeSurface), findsOneWidget);
+    expect(
+      find.descendant(of: paragraph, matching: find.byType(BackdropFilter)),
+      findsNothing,
+    );
+    await tester.tap(find.byTooltip('朗读设置'));
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(of: find.text('朗读设置'), matching: find.byType(GlassSurface)),
+      findsOneWidget,
+    );
+    Navigator.of(tester.element(find.byType(ReaderTtsSettingsDialog))).pop();
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('开始朗读'));
     await tester.pump();
     expect(engine.calls, greaterThanOrEqualTo(1));

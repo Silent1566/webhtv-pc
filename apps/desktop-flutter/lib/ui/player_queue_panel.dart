@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/playback_queue.dart';
 import '../core/protocol.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 class PlayerQueuePanel extends StatefulWidget {
@@ -77,313 +78,322 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.all(AppSpace.lg),
-      child: Container(
+      child: SizedBox(
         key: const ValueKey('player-queue-panel'),
         width: math.min(980, size.width * 0.86),
         height: math.min(640, size.height * 0.82),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
-          borderRadius: AppRadius.lgAll,
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: AnimatedBuilder(
-          animation: widget.queue,
-          builder: (context, _) {
-            final snapshot = widget.queue.snapshot;
-            final query = _query;
-            final items = query.isEmpty
-                ? snapshot.items
-                : snapshot.items
-                      .where((item) => item.title.toLowerCase().contains(query))
-                      .toList();
-            final busy = snapshot.loading || _loading;
-            final error = snapshot.error?.userMessage ?? _error;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.lg,
-                    AppSpace.md,
-                    AppSpace.sm,
-                    AppSpace.xs,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '同目录 · ${snapshot.items.length} 集${snapshot.hasMore ? ' · 还有更多' : ''}',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
+        child: GlassPane(
+          blurBackdrop: false,
+          child: Material(
+            type: MaterialType.transparency,
+            child: AnimatedBuilder(
+              animation: widget.queue,
+              builder: (context, _) {
+                final snapshot = widget.queue.snapshot;
+                final query = _query;
+                final items = query.isEmpty
+                    ? snapshot.items
+                    : snapshot.items
+                          .where(
+                            (item) => item.title.toLowerCase().contains(query),
+                          )
+                          .toList();
+                final busy = snapshot.loading || _loading;
+                final error = snapshot.error?.userMessage ?? _error;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpace.lg,
+                        AppSpace.md,
+                        AppSpace.sm,
+                        AppSpace.xs,
                       ),
-                      IconButton(
-                        tooltip: '关闭',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                ),
-                if (widget.playLines.length > 1)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpace.lg,
-                    ),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          for (final line in widget.playLines)
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                right: AppSpace.sm,
-                              ),
-                              child: ChoiceChip(
-                                label: Text(line.displayName),
-                                selected: line.flag == widget.lineFlag,
-                                onSelected: (_) {
-                                  if (line.flag == widget.lineFlag) return;
-                                  Navigator.of(context).pop();
-                                  widget.onSelectLine(line.flag);
-                                },
-                              ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '同目录 · ${snapshot.items.length} 集${snapshot.hasMore ? ' · 还有更多' : ''}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
                             ),
+                          ),
+                          IconButton(
+                            tooltip: '关闭',
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close),
+                          ),
                         ],
                       ),
                     ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.lg,
-                    AppSpace.sm,
-                    AppSpace.lg,
-                    AppSpace.xs,
-                  ),
-                  child: TextField(
-                    key: const ValueKey('player-queue-search'),
-                    controller: _searchController,
-                    onChanged: (_) => _updateQuery(),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: const OutlineInputBorder(),
-                      labelText: '搜索选集',
-                      hintText: '输入集数或名称',
-                      prefixIcon: const Icon(Icons.search, size: 18),
-                      suffixIcon: _searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: '清空搜索',
-                              icon: const Icon(Icons.close, size: 18),
-                              onPressed: () {
-                                _searchController.clear();
-                                _updateQuery();
-                              },
-                            ),
-                    ),
-                  ),
-                ),
-                if (snapshot.hasMore || query.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpace.lg,
-                    ),
-                    child: Text(
-                      snapshot.hasMore
-                          ? '仅搜索已加载的 ${snapshot.items.length} 集${query.isEmpty ? '' : ' · 匹配 ${items.length} 集'}'
-                          : '匹配 ${items.length} / ${snapshot.items.length} 集',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpace.md),
-                    child: items.isEmpty
-                        ? Center(
-                            child: Text(
-                              snapshot.items.isEmpty
-                                  ? (busy ? '正在读取目录…' : '暂无可播放文件')
-                                  : '没有匹配的选集',
-                            ),
-                          )
-                        : LayoutBuilder(
-                            builder: (context, constraints) {
-                              final columns = math.max(
-                                1,
-                                (constraints.maxWidth / 240).ceil(),
-                              );
-                              const gap = AppSpace.sm;
-                              final width =
-                                  (constraints.maxWidth - gap * (columns - 1)) /
-                                  columns;
-                              if (!_scrolled) {
-                                _scrolled = true;
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  if (!mounted ||
-                                      !_scroll.hasClients ||
-                                      _query.isNotEmpty) {
-                                    return;
-                                  }
-                                  final index = widget.queue.snapshot.items
-                                      .indexWhere(
-                                        (item) => item.key == widget.currentKey,
-                                      );
-                                  if (index < 0) return;
-                                  final target =
-                                      ((index ~/ columns) * (width / 1.2 + gap))
-                                          .clamp(
-                                            0.0,
-                                            _scroll.position.maxScrollExtent,
-                                          );
-                                  _scroll.jumpTo(target);
-                                });
-                              }
-                              return GridView.builder(
-                                controller: _scroll,
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: columns,
-                                      crossAxisSpacing: gap,
-                                      mainAxisSpacing: gap,
-                                      childAspectRatio: 1.2,
-                                    ),
-                                itemCount: items.length,
-                                findChildIndexCallback: (key) {
-                                  final index = items.indexWhere(
-                                    (item) =>
-                                        ValueKey(
-                                          'player-queue-item-${item.key}',
-                                        ) ==
-                                        key,
-                                  );
-                                  return index < 0 ? null : index;
-                                },
-                                itemBuilder: (context, index) {
-                                  final item = items[index];
-                                  final current = item.key == widget.currentKey;
-                                  final accent =
-                                      context.semanticColors.magnitude;
-                                  return Semantics(
-                                    key: ValueKey(
-                                      'player-queue-item-${item.key}',
-                                    ),
-                                    selected: current,
-                                    button: true,
-                                    label: item.title,
-                                    child: Material(
-                                      color: scheme.surfaceContainerHigh,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: AppRadius.mdAll,
-                                        side: BorderSide(
-                                          color: current
-                                              ? accent
-                                              : scheme.outlineVariant,
-                                          width: current ? 2 : 1,
-                                        ),
-                                      ),
-                                      clipBehavior: Clip.antiAlias,
-                                      child: InkWell(
-                                        onTap: () => _select(item.key),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(
-                                            AppSpace.md,
-                                          ),
-                                          child: Center(
-                                            child: Text(
-                                              item.title,
-                                              maxLines: 3,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                              style: theme.textTheme.bodyMedium
-                                                  ?.copyWith(
-                                                    color: current
-                                                        ? accent
-                                                        : scheme.onSurface,
-                                                    fontWeight: current
-                                                        ? AppWeight.title
-                                                        : AppWeight.body,
-                                                  ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                  ),
-                ),
-                if (error != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpace.lg,
-                    ),
-                    child: Text(
-                      error,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: scheme.error,
-                      ),
-                    ),
-                  ),
-                if (snapshot.hasMore || busy || error != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpace.lg,
-                      AppSpace.sm,
-                      AppSpace.lg,
-                      AppSpace.md,
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        key: const ValueKey('player-queue-load-more'),
-                        onPressed: busy ? null : _loadMore,
-                        icon: busy
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                    if (widget.playLines.length > 1)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.lg,
+                        ),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (final line in widget.playLines)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    right: AppSpace.sm,
+                                  ),
+                                  child: ChoiceChip(
+                                    label: Text(line.displayName),
+                                    selected: line.flag == widget.lineFlag,
+                                    onSelected: (_) {
+                                      if (line.flag == widget.lineFlag) return;
+                                      Navigator.of(context).pop();
+                                      widget.onSelectLine(line.flag);
+                                    },
+                                  ),
                                 ),
-                              )
-                            : Icon(
-                                error == null
-                                    ? Icons.expand_more
-                                    : Icons.refresh,
-                              ),
-                        label: Text(
-                          busy
-                              ? '正在加载…'
-                              : error == null
-                              ? '加载更多'
-                              : '重试加载',
+                            ],
+                          ),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpace.lg,
+                        AppSpace.sm,
+                        AppSpace.lg,
+                        AppSpace.xs,
+                      ),
+                      child: TextField(
+                        key: const ValueKey('player-queue-search'),
+                        controller: _searchController,
+                        onChanged: (_) => _updateQuery(),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          labelText: '搜索选集',
+                          hintText: '输入集数或名称',
+                          prefixIcon: const Icon(Icons.search, size: 18),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: '清空搜索',
+                                  icon: const Icon(Icons.close, size: 18),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    _updateQuery();
+                                  },
+                                ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            );
-          },
+                    if (snapshot.hasMore || query.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.lg,
+                        ),
+                        child: Text(
+                          snapshot.hasMore
+                              ? '仅搜索已加载的 ${snapshot.items.length} 集${query.isEmpty ? '' : ' · 匹配 ${items.length} 集'}'
+                              : '匹配 ${items.length} / ${snapshot.items.length} 集',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpace.md),
+                        child: items.isEmpty
+                            ? Center(
+                                child: Text(
+                                  snapshot.items.isEmpty
+                                      ? (busy ? '正在读取目录…' : '暂无可播放文件')
+                                      : '没有匹配的选集',
+                                ),
+                              )
+                            : LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final columns = math.max(
+                                    1,
+                                    (constraints.maxWidth / 240).ceil(),
+                                  );
+                                  const gap = AppSpace.sm;
+                                  final width =
+                                      (constraints.maxWidth -
+                                          gap * (columns - 1)) /
+                                      columns;
+                                  if (!_scrolled) {
+                                    _scrolled = true;
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (!mounted ||
+                                              !_scroll.hasClients ||
+                                              _query.isNotEmpty) {
+                                            return;
+                                          }
+                                          final index = widget
+                                              .queue
+                                              .snapshot
+                                              .items
+                                              .indexWhere(
+                                                (item) =>
+                                                    item.key ==
+                                                    widget.currentKey,
+                                              );
+                                          if (index < 0) return;
+                                          final target =
+                                              ((index ~/ columns) *
+                                                      (width / 1.2 + gap))
+                                                  .clamp(
+                                                    0.0,
+                                                    _scroll
+                                                        .position
+                                                        .maxScrollExtent,
+                                                  );
+                                          _scroll.jumpTo(target);
+                                        });
+                                  }
+                                  return GridView.builder(
+                                    controller: _scroll,
+                                    gridDelegate:
+                                        SliverGridDelegateWithFixedCrossAxisCount(
+                                          crossAxisCount: columns,
+                                          crossAxisSpacing: gap,
+                                          mainAxisSpacing: gap,
+                                          childAspectRatio: 1.2,
+                                        ),
+                                    itemCount: items.length,
+                                    findChildIndexCallback: (key) {
+                                      final index = items.indexWhere(
+                                        (item) =>
+                                            ValueKey(
+                                              'player-queue-item-${item.key}',
+                                            ) ==
+                                            key,
+                                      );
+                                      return index < 0 ? null : index;
+                                    },
+                                    itemBuilder: (context, index) {
+                                      final item = items[index];
+                                      final current =
+                                          item.key == widget.currentKey;
+                                      final accent =
+                                          context.semanticColors.magnitude;
+                                      return Semantics(
+                                        key: ValueKey(
+                                          'player-queue-item-${item.key}',
+                                        ),
+                                        selected: current,
+                                        button: true,
+                                        label: item.title,
+                                        child: Material(
+                                          color: current
+                                              ? scheme.primaryContainer
+                                              : scheme.surfaceContainerHigh,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: AppRadius.mdAll,
+                                          ),
+                                          clipBehavior: Clip.antiAlias,
+                                          child: InkWell(
+                                            onTap: () => _select(item.key),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(
+                                                AppSpace.md,
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  item.title,
+                                                  maxLines: 3,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  textAlign: TextAlign.center,
+                                                  style: theme
+                                                      .textTheme
+                                                      .bodyMedium
+                                                      ?.copyWith(
+                                                        color: current
+                                                            ? accent
+                                                            : scheme.onSurface,
+                                                        fontWeight: current
+                                                            ? AppWeight.title
+                                                            : AppWeight.body,
+                                                      ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                      ),
+                    ),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.lg,
+                        ),
+                        child: Text(
+                          error,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.error,
+                          ),
+                        ),
+                      ),
+                    if (snapshot.hasMore || busy || error != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpace.lg,
+                          AppSpace.sm,
+                          AppSpace.lg,
+                          AppSpace.md,
+                        ),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('player-queue-load-more'),
+                            onPressed: busy ? null : _loadMore,
+                            icon: busy
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    error == null
+                                        ? Icons.expand_more
+                                        : Icons.refresh,
+                                  ),
+                            label: Text(
+                              busy
+                                  ? '正在加载…'
+                                  : error == null
+                                  ? '加载更多'
+                                  : '重试加载',
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );

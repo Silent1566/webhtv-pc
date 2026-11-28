@@ -48,6 +48,7 @@ class PosterImage extends StatelessWidget {
     this.background = true,
     this.fallbackUrl,
     this.onImageError,
+    this.onFirstFrame,
     this.placeholder,
   });
 
@@ -91,6 +92,9 @@ class PosterImage extends StatelessWidget {
 
   final VoidCallback? onImageError;
 
+  /// Reports the first decoded frame of the displayed image, after painting.
+  final VoidCallback? onFirstFrame;
+
   /// 无图/坏图时替代默认图标的占位内容（人物头像用姓名字标）。
   ///
   /// 默认 `null` → 沿用既有「灰底 + 图标」，其余调用方观感不变。
@@ -125,14 +129,22 @@ class PosterImage extends StatelessWidget {
     final resolved = target.isEmpty ? fallback : target;
     final canFallback = fallback.isNotEmpty && fallback != resolved;
     final headers = imageHeadersOrNull(context, resolved);
+    final image = resolved.isEmpty
+        ? null
+        : posterImageProvider(
+            resolved,
+            headers: headers,
+            cacheWidth: cacheWidth,
+          );
     return Container(
       width: width,
       height: height,
       color: background ? _posterPlaceholderColor(context) : null,
-      child: resolved.isEmpty
+      child: image == null
           ? _emptyPlaceholder(context)
           : Image(
-              image: posterImageProvider(resolved, headers: headers, cacheWidth: cacheWidth),
+              image: image,
+              frameBuilder: _firstFrameOf(image),
               width: width,
               height: height,
               fit: fit,
@@ -161,8 +173,14 @@ class PosterImage extends StatelessWidget {
       placeholder ?? Center(child: _placeholderIcon(context));
 
   Widget _fallbackImage(BuildContext context, String target) {
+    final image = posterImageProvider(
+      target,
+      headers: imageHeadersOrNull(context, target),
+      cacheWidth: cacheWidth,
+    );
     return Image(
-      image: posterImageProvider(target, headers: imageHeadersOrNull(context, target), cacheWidth: cacheWidth),
+      image: image,
+      frameBuilder: _firstFrameOf(image),
       width: width,
       height: height,
       fit: fit,
@@ -174,6 +192,18 @@ class PosterImage extends StatelessWidget {
     );
   }
 
+  ImageFrameBuilder? _firstFrameOf(ImageProvider<Object> image) {
+    final callback = onFirstFrame;
+    if (callback == null) return null;
+    return (context, child, frame, wasSynchronouslyLoaded) => frame == null
+        ? child
+        : _PosterFirstFrame(
+            key: ValueKey(image),
+            onFirstFrame: callback,
+            child: child,
+          );
+  }
+
   Widget _placeholderIcon(BuildContext context, {bool loading = false}) {
     return Icon(
       loading ? Icons.downloading : Icons.image_not_supported_outlined,
@@ -181,4 +211,31 @@ class PosterImage extends StatelessWidget {
       color: Theme.of(context).disabledColor,
     );
   }
+}
+
+class _PosterFirstFrame extends StatefulWidget {
+  const _PosterFirstFrame({
+    super.key,
+    required this.onFirstFrame,
+    required this.child,
+  });
+
+  final VoidCallback onFirstFrame;
+  final Widget child;
+
+  @override
+  State<_PosterFirstFrame> createState() => _PosterFirstFrameState();
+}
+
+class _PosterFirstFrameState extends State<_PosterFirstFrame> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onFirstFrame();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

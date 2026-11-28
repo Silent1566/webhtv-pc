@@ -29,7 +29,7 @@
 ///
 /// 配色全部取自 `tokens.dart` 的星等星表：底色 `surfaceContainerLow`
 /// （暗色 = `#141A2E`）、卡片 `surfaceContainerHigh`（`#232C46`）、
-/// 分隔线 `outlineVariant`（`#232C46`）、强调色 `semanticColors.magnitude`
+/// 当前卡片 `primaryContainer`、强调色 `semanticColors.magnitude`
 /// （`#F0B429`）。这里**不写死任何色值**，亮色主题自动跟着走。
 library;
 
@@ -43,6 +43,7 @@ import '../core/tmdb_detail_model.dart';
 import 'layout_scale.dart';
 import 'poster_image.dart';
 import 'scroll_behavior.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 从集名里取出**集号**（取最后一个数字段）。
@@ -397,7 +398,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final size = MediaQuery.sizeOf(context);
     final width = math.min(980.0, size.width * 0.86);
     final height = math.min(640.0, size.height * 0.82);
@@ -408,35 +408,35 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.all(AppSpace.lg),
-      child: Container(
+      child: SizedBox(
         key: const ValueKey('player-episode-panel'),
         width: width,
         height: height,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerLow,
-          borderRadius: AppRadius.lgAll,
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildHeader(theme),
-            if (showLines) _buildLineRow(theme),
-            _buildSearch(theme),
-            if (showRanges) _buildRangeRow(theme),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpace.md,
-                  AppSpace.sm,
-                  AppSpace.md,
-                  AppSpace.md,
+        child: GlassPane(
+          blurBackdrop: false,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildHeader(theme),
+                if (showLines) _buildLineRow(theme),
+                _buildSearch(theme),
+                if (showRanges) _buildRangeRow(theme),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.md,
+                      AppSpace.sm,
+                      AppSpace.md,
+                      AppSpace.md,
+                    ),
+                    child: _buildGrid(theme),
+                  ),
                 ),
-                child: _buildGrid(theme),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -510,7 +510,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
           onChanged: (_) => _updateQuery(),
           decoration: InputDecoration(
             isDense: true,
-            border: const OutlineInputBorder(),
             labelText: '搜索选集',
             hintText: '输入集数或名称',
             prefixIcon: const Icon(Icons.search, size: 18),
@@ -599,11 +598,12 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
       key: key,
       label: Text(label),
       selected: selected,
-      // 勾选标记会把 chip 撑宽并推挤整排，选中态已经由描边与底色表达。
+      // 勾选标记会把 chip 撑宽并推挤整排，选中态由底色与文字表达。
       showCheckmark: false,
       backgroundColor: scheme.surfaceContainer,
       selectedColor: accent.withValues(alpha: 0.18),
-      side: BorderSide(color: selected ? accent : scheme.outlineVariant),
+      // 保留旧边宽的布局量，但不绘制边线。
+      side: const BorderSide(width: 1, style: BorderStyle.none),
       labelStyle: theme.textTheme.labelLarge?.copyWith(
         color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
       ),
@@ -677,7 +677,6 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
     required TmdbEpisodeCard? card,
   }) {
     final scheme = theme.colorScheme;
-    final accent = context.semanticColors.magnitude;
     // 只有「预览的是正在播放的那条线路」时才有当前集：预览别的线路时那一集
     // 并没有在播，强高亮会谎报播放状态。
     final current =
@@ -692,14 +691,11 @@ class _PlayerEpisodePanelState extends State<PlayerEpisodePanel> {
 
     return Container(
       key: ValueKey('player-episode-card-$index'),
+      padding: EdgeInsets.all(current ? 2 : 1),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh,
+        color: current ? scheme.primaryContainer : scheme.surfaceContainerHigh,
         borderRadius: AppRadius.mdAll,
-        border: Border.all(
-          color: current ? accent : scheme.outlineVariant,
-          width: current ? 2 : 1,
-        ),
       ),
       child: Material(
         type: MaterialType.transparency,

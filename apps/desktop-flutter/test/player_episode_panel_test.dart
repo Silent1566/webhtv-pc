@@ -163,8 +163,13 @@ void main() {
     final tile = tester.widget<Container>(
       find.byKey(const ValueKey('player-episode-card-25')),
     );
-    final border = (tile.decoration! as BoxDecoration).border! as Border;
-    expect(border.top.width, 2, reason: '当前集用强调色描边强高亮');
+    expect((tile.decoration! as BoxDecoration).border, isNull);
+    final currentTitle = tester.widget<Text>(
+      find
+          .descendant(of: find.byWidget(tile), matching: find.byType(Text))
+          .first,
+    );
+    expect(currentTitle.style?.fontWeight, FontWeight.w700);
   });
 
   testWidgets('线路只有 1 条时不渲染线路行，多线路时渲染', (tester) async {
@@ -245,8 +250,7 @@ void main() {
     final tile = tester.widget<Container>(
       find.byKey(const ValueKey('player-episode-card-25')),
     );
-    final border = (tile.decoration! as BoxDecoration).border! as Border;
-    expect(border.top.width, 1);
+    expect((tile.decoration! as BoxDecoration).border, isNull);
   });
 
   testWidgets('没有 TMDB 卡片时退化为集名文字卡，不崩', (tester) async {
@@ -396,8 +400,13 @@ void main() {
     final tile = tester.widget<Container>(
       find.byKey(const ValueKey('player-episode-card-44')),
     );
-    final border = (tile.decoration! as BoxDecoration).border! as Border;
-    expect(border.top.width, 2, reason: '当前集在倒序下也必须强高亮');
+    expect((tile.decoration! as BoxDecoration).border, isNull);
+    final currentTitle = tester.widget<Text>(
+      find
+          .descendant(of: find.byWidget(tile), matching: find.byType(Text))
+          .first,
+    );
+    expect(currentTitle.style?.fontWeight, FontWeight.w700);
   });
 
   testWidgets('倒序：点第一张卡，回调拿到的是原始下标（length-1）而不是 0', (tester) async {

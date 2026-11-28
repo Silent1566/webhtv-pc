@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../core/backup_manifest.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'common.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
@@ -80,9 +81,9 @@ class _BackupPageState extends State<BackupPage> {
 
   Future<void> _restore() async {
     if (_busy) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('恢复备份？'),
         content: const Text(
           '当前设置与播放历史/收藏会被备份内容替换。\n'
@@ -118,9 +119,9 @@ class _BackupPageState extends State<BackupPage> {
 
   Future<void> _reset() async {
     if (_busy) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('重置全部本地数据？'),
         content: const Text(
           '会删除本机设置、配置记录、播放历史与收藏，且不可撤销。\n'
@@ -168,8 +169,8 @@ class _BackupPageState extends State<BackupPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('备份与恢复')),
+    return SettingsRouteScaffold(
+      title: const Text('备份与恢复'),
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -182,7 +183,6 @@ class _BackupPageState extends State<BackupPage> {
                 controller: _backupPath,
                 decoration: const InputDecoration(
                   labelText: '备份文件路径',
-                  border: OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -208,7 +208,6 @@ class _BackupPageState extends State<BackupPage> {
                 controller: _restorePath,
                 decoration: const InputDecoration(
                   labelText: '备份文件路径',
-                  border: OutlineInputBorder(),
                   isDense: true,
                 ),
               ),

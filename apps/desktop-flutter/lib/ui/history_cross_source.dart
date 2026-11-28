@@ -37,6 +37,7 @@ import '../services/site_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/playback_source_context.dart';
+import 'glass_dialog.dart';
 import 'ai_integration_widgets.dart';
 import 'async_action_feedback.dart';
 import 'browse_pages.dart';
@@ -50,6 +51,7 @@ Future<void> openHistoryFromOtherSource(
   BuildContext context,
   AppState state,
   PlaybackHistory item, {
+
   /// 显式指定「要播还是要看详情」。
   ///
   /// `null` = 依用户设置（历史页的整卡点击就是这个语义）。首页的「查看详情」
@@ -209,11 +211,7 @@ Future<void> _openDetailFromSource(
     MaterialPageRoute<void>(
       builder: (_) => DetailPage(
         state: state,
-        vod: Vod(
-          vodId: item.vodId,
-          vodName: item.vodName,
-          vodPic: item.vodPic,
-        ),
+        vod: Vod(vodId: item.vodId, vodName: item.vodName, vodPic: item.vodPic),
         historyFlag: item.flag,
         historyEpisodeId: item.episodeId,
         resumeSeed: resumeSeedOf(item),
@@ -539,9 +537,9 @@ Future<void> _offerGlobalSearch(
   PlaybackHistory item,
 ) async {
   if (!context.mounted) return;
-  final confirmed = await showDialog<bool>(
+  final confirmed = await showGlassDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (context) => GlassAlertDialog(
       key: const ValueKey('history-cross-source-dialog'),
       title: const Text('未找到可可靠续播的播放源'),
       content: Text(

@@ -26,6 +26,7 @@ import '../core/source_swap.dart';
 import '../core/search_result_filter.dart';
 import '../state/search_state.dart';
 import 'common.dart';
+import 'glass_dialog.dart';
 import 'search_result_view.dart';
 import 'source_field.dart';
 import 'toast.dart';
@@ -171,17 +172,12 @@ Future<List<SwapRow>?> showSourceSwapSheet(
   // 哪怕只活 30 秒，也够把按钮盖住一整轮操作。用户既然已经在处理这个错误，
   // 通知的使命就结束了，开浮层时先收走。
   dismissAllToasts();
-  return showModalBottomSheet<List<SwapRow>>(
+  // 透明底 + 零阴影 + 不钉宽这三条在 `showGlassSheet` 里（DESIGN.md 的层级只靠
+  // 表面阶梯与发丝边表达；Material 默认把宽度钉在 640，窗口越宽浮层越像挤在
+  // 中间的一小条 —— 用户反馈「全屏的时候点击会显得很小」，宽度交给根 Container
+  // 按窗口自适应）。遮罩按明暗分档：亮色 0.18，暗色仍是 scrim@0.42。
+  return showGlassSheet<List<SwapRow>>(
     context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    // 零阴影：层级只靠表面阶梯与发丝边表达（DESIGN.md）。
-    elevation: 0,
-    // Material 的底部浮层默认把宽度钉在 640 逻辑像素：窗口越宽，浮层越像
-    // 挤在中间的一小条（用户反馈「全屏的时候点击会显得很小」）。清空默认
-    // 约束，宽度交给根 Container 按窗口自适应（见 source-swap-sheet）。
-    constraints: const BoxConstraints(),
-    barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.42),
     builder: (_) => SourceSwapSheet(
       keyword: keyword,
       searchListenable: searchListenable,
@@ -607,12 +603,13 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     setState(() => _confirming = true);
     bool? confirmed;
     try {
-      confirmed = await showDialog<bool>(
+      confirmed = await showGlassDialog<bool>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) {
           final theme = Theme.of(dialogContext);
-          return AlertDialog(
+          return GlassAlertDialog(
+            constraints: const BoxConstraints(maxWidth: 520 + 2 * AppSpace.xl),
             key: const ValueKey('source-swap-partial-dialog'),
             title: const Text('部分来源未完整解析'),
             content: SizedBox(
@@ -707,7 +704,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
       for (final row in selected)
         if (row.ready) row,
     ];
-    final hairline = scheme.outlineVariant.withValues(alpha: 0.72);
+    // 明暗都把浮层本体换成玻璃（背后是页面内容，模糊有东西可采）。
     // 证据采集锚点：浮层是独立路由，默认取树里第一个 RepaintBoundary 只会拍到
     // 页面本身；与 ai-season-preview-boundary / tmdb-photo-viewer-boundary 同一约定。
     return RepaintBoundary(
@@ -721,41 +718,42 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            key: const ValueKey('source-swap-sheet'),
-            width: math.min(
-              MediaQuery.sizeOf(context).width - AppSpace.xxl * 2,
-              1120.0,
-            ),
-            // 高度按 0.86 视口 + 820 封顶：结果区要与搜索页同尺寸的 140×190
-            // 标准海报卡（一屏能摆下多行多列），640 的老高度只够单列小行。
-            height: math.min(MediaQuery.sizeOf(context).height * 0.86, 820),
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerLow,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(AppRadius.lg),
+          glassSheetShell(
+            context,
+            child: Container(
+              key: const ValueKey('source-swap-sheet'),
+              width: math.min(
+                MediaQuery.sizeOf(context).width - AppSpace.xxl * 2,
+                1120.0,
               ),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 顶部发丝线：1px，把浮层与页面切开，不靠阴影。
-                  Container(height: 1, color: hairline),
-                  _header(theme, scheme),
-                  _queryField(theme, scheme),
-                  Expanded(child: _body(theme, scheme)),
-                  if (selected.isNotEmpty)
-                    _actionBar(
-                      theme,
-                      scheme,
-                      selected,
-                      readySelected,
-                      hairline,
-                    ),
-                ],
+              // 高度按 0.86 视口 + 820 封顶：结果区要与搜索页同尺寸的 140×190
+              // 标准海报卡（一屏能摆下多行多列），640 的老高度只够单列小行。
+              height: math.min(MediaQuery.sizeOf(context).height * 0.86, 820),
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                // 不填色：实底会把玻璃盖住（那才是"假玻璃"）。
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(AppRadius.lg),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 1),
+                    _header(theme, scheme),
+                    _queryField(theme, scheme),
+                    Expanded(child: _body(theme, scheme)),
+                    if (selected.isNotEmpty)
+                      _actionBar(
+                        theme,
+                        scheme,
+                        selected,
+                        readySelected,
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -791,7 +789,9 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                    // 这一行直接贴在玻璃浮层上：明暗都走玻璃专用角色
+                    // （亮色 onSurface 9.02、暗色 nightInkOnGlass，见 tokens.dart）。
+                    color: glassSecondaryInkOf(theme),
                   ),
                 ),
               ],
@@ -1175,7 +1175,6 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
     ColorScheme scheme,
     List<SwapRow> selected,
     List<SwapRow> readySelected,
-    Color hairline,
   ) {
     final failedCount = selected
         .where((row) => row.stage == SwapStage.failed)
@@ -1251,7 +1250,7 @@ class _SourceSwapSheetState extends State<SourceSwapSheet> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(height: 1, color: hairline),
+        const SizedBox(height: 1),
         if (probing)
           LinearProgressIndicator(
             key: const ValueKey('source-swap-probe-progress'),

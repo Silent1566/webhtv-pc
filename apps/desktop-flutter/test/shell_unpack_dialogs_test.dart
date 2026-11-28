@@ -7,8 +7,10 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/csp_jar_probe.dart';
@@ -16,6 +18,9 @@ import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/services/shell_unpack.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/shell_unpack_dialogs.dart';
+import 'package:webhtv_pc/ui/theme.dart';
+
+import 'support/test_fonts.dart';
 
 /// 阶段名与 CLI 同源（`ShellUnpack.stages`），不在这里另抄一份。
 final String _readStage = ShellUnpack.stages[0];
@@ -47,6 +52,21 @@ const ValueKey<String> _progressCloseKey = ValueKey(
 );
 
 void main() {
+  final captureStage = Platform.environment['GLASS_UNPACK_CAPTURE_STAGE'];
+  if (captureStage != null) {
+    setUpAll(() async {
+      expectFontsAvailableOrSkip();
+      expect(firstExisting(iconFontCandidates()), isNotNull);
+      for (final family in [
+        'Roboto',
+        'Noto Sans CJK SC',
+        'Microsoft YaHei UI',
+      ]) {
+        await loadFixtureFonts(cjkFamily: family);
+      }
+    });
+  }
+
   group('导入后的确认框', () {
     testWidgets('未装运行时说明体积，点「稍后」不回调', (tester) async {
       var confirmations = 0;
@@ -330,6 +350,143 @@ void main() {
         expect(find.text('预计剩余：计算中…'), findsNothing);
         await tester.tap(find.byKey(_progressCloseKey));
         await tester.pumpAndSettle();
+      });
+    }
+
+    for (final brightness in Brightness.values) {
+      testWidgets('实际解包适配器长错误可滚动且关闭可达 $brightness', (tester) async {
+        tester.view.physicalSize = const Size(1024, 640);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final boundary = GlobalKey();
+        final ticks = StreamController<ShellUnpackTick>();
+        addTearDown(() async {
+          if (!ticks.isClosed) await ticks.close();
+        });
+        var closed = false;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildAppTheme(brightness),
+            builder: (context, child) => RepaintBoundary(
+              key: boundary,
+              child: MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(1.5)),
+                child: child!,
+              ),
+            ),
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () async {
+                    await showShellUnpackProgress(
+                      context,
+                      jarCount: 1,
+                      ticks: ticks.stream,
+                    );
+                    closed = true;
+                  },
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pump(const Duration(milliseconds: 400));
+        ticks.add(
+          const ShellUnpackTick(
+            jarIndex: 0,
+            jarCount: 1,
+            jarUrl: 'https://example.test/source.jar',
+            fraction: .8,
+            stage: '调用入口，校验适配器返回\n准备合并索引 https://example.test/stage?token=stage-secret',
+          ),
+        );
+        await tester.pump();
+        final dialogContext = tester.element(find.byKey(_progressKey));
+        expect(await Navigator.of(dialogContext).maybePop(), isTrue);
+        await tester.pump();
+        expect(closed, isFalse, reason: '运行中的 PopScope 必须保留，返回不能终止任务');
+        expect(find.byKey(_progressCloseKey), findsNothing);
+        ticks.addError(
+          StateError(
+            [
+              '解包适配器返回错误 https://example.test/archive?token=trace-secret',
+              for (var i = 0; i < 32; i++) '  诊断帧 $i：等待远端运行时入口返回，重试后仍未得到可用结果。',
+              '诊断结束标记',
+            ].join('\n'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        if (captureStage != null) {
+          await tester.runAsync(() async {
+            final render =
+                boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary;
+            final image = await render.toImage(pixelRatio: 1);
+            try {
+              final png = (await image.toByteData(
+                format: ui.ImageByteFormat.png,
+              ))!;
+              final directory = Directory(
+                '../../.local/glass-full-captures/glass-dialogs',
+              );
+              await directory.create(recursive: true);
+              await File(
+                '${directory.path}/unpack-$captureStage-${brightness.name}.png',
+              ).writeAsBytes(png.buffer.asUint8List());
+            } finally {
+              image.dispose();
+            }
+          });
+        }
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: '实际流错误必须能在小窗和放大字号下完整滚动，不溢出',
+        );
+        expect(find.text('加固壳解包失败'), findsOneWidget);
+        final failure = tester
+            .widget<Text>(
+              find.byKey(const ValueKey('shell-unpack-progress-failure')),
+            )
+            .data!;
+        final stage = tester
+            .widget<Text>(
+              find.byKey(const ValueKey('shell-unpack-progress-stage')),
+            )
+            .data!;
+        expect(failure, contains('诊断结束标记'));
+        expect(failure, contains('[地址已隐藏]'));
+        expect('$failure $stage', isNot(contains('example.test')));
+        expect('$failure $stage', isNot(contains('stage-secret')));
+        expect(failure, isNot(contains('trace-secret')));
+        final closeRect = tester.getRect(find.byKey(_progressCloseKey));
+        expect(
+          (Offset.zero & const Size(1024, 640)).contains(closeRect.bottomRight),
+          isTrue,
+        );
+        expect(find.byKey(_progressCloseKey).hitTestable(), findsOneWidget);
+        final scrollable = find.descendant(
+          of: find.byKey(_progressKey),
+          matching: find.byType(Scrollable),
+        );
+        expect(scrollable, findsOneWidget);
+        await tester.drag(scrollable, const Offset(0, -10000));
+        await tester.pumpAndSettle();
+        final position = tester.state<ScrollableState>(scrollable).position;
+        expect(position.pixels, closeTo(position.maxScrollExtent, 1));
+        expect(
+          tester.getRect(find.byKey(_progressCloseKey)),
+          closeRect,
+          reason: '动作条不随错误正文滚动',
+        );
+        await tester.tap(find.byKey(_progressCloseKey));
+        await tester.pumpAndSettle();
+        expect(closed, isTrue);
+        expect(find.byKey(_progressKey), findsNothing);
+        expect(tester.takeException(), isNull);
       });
     }
 

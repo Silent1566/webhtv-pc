@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 
 import '../core/danmaku_style.dart';
 import '../core/protocol.dart';
+import 'player_overlay.dart' show PlayerGlassDropdown, showPlayerGlassSheet;
 import 'tokens.dart';
 
 /// 弹层关闭后要播放器做的事。
@@ -80,9 +81,8 @@ Future<DanmakuSheetAction> showDanmakuSettingsSheet(
   required Future<DanmakuSourceLoadOutcome> Function(DanmakuSource)
   onSelectSource,
 }) async {
-  final result = await showModalBottomSheet<DanmakuSheetAction>(
+  final result = await showPlayerGlassSheet<DanmakuSheetAction>(
     context: context,
-    showDragHandle: true,
     isScrollControlled: true,
     constraints: const BoxConstraints(maxWidth: _sheetMaxWidth),
     builder: (context) => DanmakuSettingsSheet(
@@ -828,11 +828,9 @@ class _DanmakuSettingsSheetState extends State<DanmakuSettingsSheet> {
           color: theme.colorScheme.onSurfaceVariant,
         ),
       ),
-      trailing: DropdownButton<int>(
+      trailing: PlayerGlassDropdown<int>(
         key: const ValueKey('player-danmaku-maxTracks'),
         value: _style.maxTracks,
-        underline: const SizedBox.shrink(),
-        borderRadius: AppRadius.mdAll,
         items: [
           for (final option in options)
             DropdownMenuItem(

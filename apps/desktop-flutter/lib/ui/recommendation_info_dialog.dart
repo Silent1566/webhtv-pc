@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'poster_image.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 enum RecommendationInfoKind { recommendation, hot }
@@ -60,7 +61,7 @@ Future<void> showRecommendationInfo(
   VoidCallback? onSearchSource,
   Future<void> Function()? onNotInterested,
 }) {
-  return showDialog<void>(
+  return showGlassDialog<void>(
     context: context,
     builder: (context) => RecommendationInfoDialog(
       info: info,
@@ -92,10 +93,9 @@ class RecommendationInfoDialog extends StatelessWidget {
     final overview = (info.overview ?? '').trim();
     final reason = (info.reason ?? '').trim();
     final hot = info.kind == RecommendationInfoKind.hot;
-    return Dialog(
+    return glassDialogShell(
+      context,
       key: const ValueKey('recommendation-info-dialog'),
-      clipBehavior: Clip.antiAlias,
-      insetPadding: const EdgeInsets.all(AppSpace.xl),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 720,
@@ -218,26 +218,14 @@ class _Hero extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-            boxShadow: [
-              BoxShadow(
-                color: theme.colorScheme.shadow.withValues(alpha: 0.18),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-            child: PosterImage(
-              key: const ValueKey('recommendation-info-poster'),
-              url: info.posterUrl,
-              width: 140,
-              height: 210,
-              cacheWidth: 360,
-            ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          child: PosterImage(
+            key: const ValueKey('recommendation-info-poster'),
+            url: info.posterUrl,
+            width: 140,
+            height: 210,
+            cacheWidth: 360,
           ),
         ),
         const SizedBox(width: AppSpace.lg),

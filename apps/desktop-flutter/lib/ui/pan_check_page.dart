@@ -53,10 +53,7 @@ class _PanCheckPageState extends State<PanCheckPage> {
       _busy = true;
       _message = null;
     });
-    final results = await _service.checkAll(
-      links,
-      forceRefresh: forceRefresh,
-    );
+    final results = await _service.checkAll(links, forceRefresh: forceRefresh);
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -68,8 +65,8 @@ class _PanCheckPageState extends State<PanCheckPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('网盘链接检测')),
+    return SettingsRouteScaffold(
+      title: const Text('网盘链接检测'),
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -85,7 +82,6 @@ class _PanCheckPageState extends State<PanCheckPage> {
                 minLines: 4,
                 maxLines: 8,
                 decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
                   hintText: 'https://pan.quark.cn/s/xxxx 提取码: abcd',
                 ),
               ),

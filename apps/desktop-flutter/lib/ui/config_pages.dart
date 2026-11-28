@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:ui' show SemanticsRole;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +24,9 @@ import '../state/app_state.dart';
 import '../state/sync_state.dart';
 import 'common.dart';
 import 'config_source_status_view.dart';
+import 'glass_dialog.dart';
+import 'glass_surface.dart';
+import 'glass_widgets.dart';
 import 'settings_layout.dart';
 import 'shell_unpack_dialogs.dart';
 import 'toast.dart';
@@ -49,11 +53,12 @@ class _ConfigPageState extends State<ConfigPage> {
         ?.profileConnectionKey;
     bool busy = false;
     AppError? error;
-    await showDialog<void>(
+    await showGlassDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
+        builder: (context, update) => GlassAlertDialog(
+          constraints: const BoxConstraints(maxWidth: 528),
           key: const ValueKey('config-android-execution-dialog'),
           title: Text('运行配置：${record.name}'),
           content: SizedBox(
@@ -382,8 +387,9 @@ class _ConfigPageState extends State<ConfigPage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    return Scaffold(
-      appBar: AppBar(title: const Text('配置导入与管理')),
+    return SettingsRouteScaffold(
+      title: const Text('配置导入与管理'),
+      wallpaperUrl: widget.state.config?.wallpaper,
       body: Padding(
         // 表单收进限宽内容列（见 `formPagePadding`）。
         padding: formPagePadding(context),
@@ -412,7 +418,6 @@ class _ConfigPageState extends State<ConfigPage> {
                 controller: _name,
                 decoration: const InputDecoration(
                   labelText: '配置名称（可选）',
-                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 12),
@@ -431,7 +436,6 @@ class _ConfigPageState extends State<ConfigPage> {
                   textAlignVertical: TextAlignVertical.top,
                   decoration: const InputDecoration(
                     labelText: '配置 URL / 本地路径 / JSON 文本',
-                    border: OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
                 ),
@@ -459,14 +463,36 @@ class _ConfigPageState extends State<ConfigPage> {
                     label: const Text('导入'),
                   ),
                   MenuAnchor(
-                    menuChildren: [
-                      MenuItemButton(
-                        onPressed: () => _pickLocal(),
-                        child: const Text('选择文件（JSON / ZIP）'),
+                    style: const MenuStyle(
+                      backgroundColor: WidgetStatePropertyAll(
+                        Colors.transparent,
                       ),
-                      MenuItemButton(
-                        onPressed: () => _pickLocal(folder: true),
-                        child: const Text('选择文件夹（猫源包）'),
+                      surfaceTintColor: WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      elevation: WidgetStatePropertyAll(0),
+                      padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                    ),
+                    menuChildren: [
+                      GlassPane(
+                        borderRadius: AppRadius.mdAll,
+                        child: Material(
+                          type: MaterialType.transparency,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              MenuItemButton(
+                                onPressed: () => _pickLocal(),
+                                child: const Text('选择文件（JSON / ZIP）'),
+                              ),
+                              MenuItemButton(
+                                onPressed: () => _pickLocal(folder: true),
+                                child: const Text('选择文件夹（猫源包）'),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                     builder: (context, controller, child) =>
@@ -532,9 +558,9 @@ class _ConfigPageState extends State<ConfigPage> {
               },
               onDelete: (id) async {
                 final record = state.configRecordById(id);
-                final confirmed = await showDialog<bool>(
+                final confirmed = await showGlassDialog<bool>(
                   context: context,
-                  builder: (dialogContext) => AlertDialog(
+                  builder: (dialogContext) => GlassAlertDialog(
                     key: const ValueKey('config-delete-confirm'),
                     title: const Text('删除配置记录'),
                     content: Text(
@@ -958,9 +984,9 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   }
 
   Future<void> _resetRules() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('tmdb-reset-confirm'),
         title: const Text('重置为默认站点规则'),
         content: const Text('将把「禁用站点」恢复为默认的 11 条规则，并清空自定义的启用/白名单规则。'),
@@ -1000,8 +1026,9 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('TMDB 设置')),
+    return SettingsRouteScaffold(
+      title: const Text('TMDB 设置'),
+      wallpaperUrl: widget.state.config?.wallpaper,
       body: ListView(
         // 表单收进限宽内容列（见 `formPagePadding`）。
         padding: formPagePadding(context),
@@ -1027,7 +1054,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                       obscureText: !_showApiKey,
                       decoration: const InputDecoration(
                         labelText: 'API Key（v3）',
-                        border: OutlineInputBorder(),
                       ),
                     ),
                   ),
@@ -1051,7 +1077,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                       obscureText: !_showAccessToken,
                       decoration: const InputDecoration(
                         labelText: 'Access Token（v4）',
-                        border: OutlineInputBorder(),
                       ),
                     ),
                   ),
@@ -1078,7 +1103,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                         labelText: 'OMDB API Key（可选）',
                         helperText:
                             '用于详情页 IMDb / 烂番茄 / Metacritic 评分；留空则不请求 OMDb',
-                        border: OutlineInputBorder(),
                       ),
                     ),
                   ),
@@ -1123,7 +1147,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                   // 选中内置线路时用线路说明代替提示语；自定义时只有 hintText。
                   helperText: _apiRoute?.note,
                   helperMaxLines: 2,
-                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 12),
@@ -1147,7 +1170,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                   hintText: 'https://images.tmdb.org/t/p/w342',
                   helperText: _imageRoute?.note,
                   helperMaxLines: 2,
-                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1204,7 +1226,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 decoration: const InputDecoration(
                   labelText: '语言',
                   hintText: 'zh-CN',
-                  border: OutlineInputBorder(),
                 ),
               ),
             ],
@@ -1367,11 +1388,10 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
   }) => InputDecorator(
     decoration: InputDecoration(
       labelText: label,
-      border: const OutlineInputBorder(),
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpace.md),
     ),
     child: DropdownButtonHideUnderline(
-      child: DropdownButton<String>(
+      child: SettingsDropdown<String>(
         key: ValueKey(fieldKey),
         value: value,
         isExpanded: true,
@@ -1403,7 +1423,6 @@ class _TmdbSettingsPageState extends State<TmdbSettingsPage> {
                 decoration: const InputDecoration(
                   isDense: true,
                   hintText: '输入站点 key 或名称',
-                  border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => onAdd(),
               ),
@@ -1460,76 +1479,118 @@ class ConfigSwitcherDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
-      key: const ValueKey('config-switcher'),
-      title: const Text('切换配置'),
-      content: SizedBox(
-        width: 560,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '选择一个配置后，浏览与直播会改用它的站点。当前配置不会被删除。',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: records.length,
-                itemBuilder: (context, index) {
-                  final record = records[index];
-                  final isActive = record.id == activeId;
-                  return ListTile(
-                    key: ValueKey('config-switch-option-${record.id}'),
-                    dense: true,
-                    selected: isActive,
-                    // 已经是它就没有可切的，直接禁用；这与列表页保持一致。
-                    onTap: isActive
-                        ? null
-                        : () => Navigator.of(context).pop(record.id),
-                    title: Text(record.name),
-                    subtitle: ConfigSourceStatusView(
-                      key: ValueKey('config-switch-source-${record.id}'),
-                      record: record,
-                      metadata:
-                          '站点 ${record.siteCount} · 直播 ${record.liveCount}'
-                          '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
-                    ),
-                    trailing: isActive
-                        ? TagChip(
-                            keyValue: 'config-switch-current-${record.id}',
-                            label: '使用中',
-                            emphasized: true,
-                          )
-                        : const Icon(Icons.chevron_right, size: 18),
-                  );
-                },
-              ),
-            ),
-          ],
+    final dialogTheme = DialogTheme.of(context);
+    final ink = glassSecondaryInkOf(theme);
+    final actionStyle = TextButton.styleFrom(foregroundColor: ink);
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '选择一个配置后，浏览与直播会改用它的站点。当前配置不会被删除。',
+          style: theme.textTheme.bodySmall?.copyWith(color: ink),
         ),
-      ),
-      actions: [
-        if (onManage != null)
-          TextButton.icon(
-            key: const ValueKey('config-switcher-manage'),
-            onPressed: () {
-              Navigator.of(context).pop();
-              onManage!();
+        const SizedBox(height: 8),
+        Flexible(
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: records.length,
+            itemBuilder: (context, index) {
+              final record = records[index];
+              final isActive = record.id == activeId;
+              return ListTile(
+                key: ValueKey('config-switch-option-${record.id}'),
+                dense: true,
+                selected: isActive,
+                // 已经是它就没有可切的，直接禁用；这与列表页保持一致。
+                onTap: isActive
+                    ? null
+                    : () => Navigator.of(context).pop(record.id),
+                title: Text(record.name),
+                subtitle: DefaultTextStyle.merge(
+                  style: TextStyle(color: ink),
+                  child: ConfigSourceStatusView(
+                    key: ValueKey('config-switch-source-${record.id}'),
+                    record: record,
+                    metadata:
+                        '站点 ${record.siteCount} · 直播 ${record.liveCount}'
+                        '${record.bridgeInterfaceKey.isEmpty ? '' : ' · 安卓设备源'}',
+                  ),
+                ),
+                trailing: isActive
+                    ? TagChip(
+                        keyValue: 'config-switch-current-${record.id}',
+                        label: '使用中',
+                        emphasized: true,
+                      )
+                    : const Icon(Icons.chevron_right, size: 18),
+              );
             },
-            icon: const Icon(Icons.settings_outlined, size: 18),
-            label: const Text('配置管理'),
           ),
-        TextButton(
-          key: const ValueKey('config-switcher-cancel'),
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
         ),
       ],
+    );
+    final actions = <Widget>[
+      if (onManage != null)
+        TextButton.icon(
+          key: const ValueKey('config-switcher-manage'),
+          style: actionStyle,
+          onPressed: () {
+            Navigator.of(context).pop();
+            onManage!();
+          },
+          icon: const Icon(Icons.settings_outlined, size: 18),
+          label: const Text('配置管理'),
+        ),
+      TextButton(
+        key: const ValueKey('config-switcher-cancel'),
+        style: actionStyle,
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+    ];
+    return Dialog(
+      key: const ValueKey('config-switcher'),
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      semanticsRole: SemanticsRole.alertDialog,
+      child: GlassSurface(
+        padding: const EdgeInsets.all(AppSpace.xl),
+        child: Material(
+          type: MaterialType.transparency,
+          child: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Semantics(
+                  namesRoute: true,
+                  child: Text(
+                    '切换配置',
+                    style:
+                        dialogTheme.titleTextStyle ??
+                        (theme.useMaterial3
+                            ? theme.textTheme.headlineSmall
+                            : theme.textTheme.titleLarge),
+                  ),
+                ),
+                const SizedBox(height: AppSpace.lg),
+                // A finite height lets long lists scroll without intrinsic sizing.
+                Flexible(child: content),
+                const SizedBox(height: AppSpace.xl),
+                OverflowBar(
+                  alignment: MainAxisAlignment.end,
+                  overflowAlignment: OverflowBarAlignment.end,
+                  spacing: AppSpace.sm,
+                  children: actions,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1611,7 +1672,7 @@ Future<_EditResult?> _showEditConfigDialog(
   BuildContext context,
   ConfigRecord record,
 ) {
-  return showDialog<_EditResult>(
+  return showGlassDialog<_EditResult>(
     context: context,
     builder: (dialogContext) => _EditConfigDialog(record: record),
   );
@@ -1653,7 +1714,8 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: const BoxConstraints(maxWidth: 568),
       key: const ValueKey('config-edit-dialog'),
       title: const Text('编辑配置'),
       content: SizedBox(
@@ -1668,7 +1730,6 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
               autofocus: true,
               decoration: const InputDecoration(
                 labelText: '配置名称',
-                border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
@@ -1680,7 +1741,6 @@ class _EditConfigDialogState extends State<_EditConfigDialog> {
               minLines: 1,
               decoration: InputDecoration(
                 labelText: '配置源地址',
-                border: const OutlineInputBorder(),
                 helperText: _isBridge
                     ? '地址由安卓设备决定，不能在这里修改'
                     : '改地址会立即按新地址重新拉取，失败则保留原配置',
@@ -1864,41 +1924,68 @@ class _SavedConfigs extends StatelessWidget {
                           icon: const Icon(Icons.refresh, size: 18),
                         ),
                       ],
-                      PopupMenuButton<String>(
-                        key: ValueKey('config-menu-${record.id}'),
-                        tooltip: '更多',
-                        enabled: !busy,
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'copy':
-                              onCopyOrigin(record.origin);
-                            case 'delete':
-                              onDelete(record.id);
-                            case 'android':
-                              onRunOnAndroid(record.id);
-                            case 'pc':
-                              onRunOnPc(record.id);
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'copy',
-                            child: Text('复制来源地址'),
+                      MenuAnchor(
+                        style: const MenuStyle(
+                          backgroundColor: WidgetStatePropertyAll(
+                            Colors.transparent,
                           ),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Text('删除'),
+                          surfaceTintColor: WidgetStatePropertyAll(
+                            Colors.transparent,
                           ),
-                          if (_canExecute(record))
-                            const PopupMenuItem(
-                              value: 'android',
-                              child: Text('在安卓环境运行此配置'),
+                          elevation: WidgetStatePropertyAll(0),
+                          padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                        ),
+                        builder: (context, menu, _) => IconButton(
+                          key: ValueKey('config-menu-${record.id}'),
+                          tooltip: '更多',
+                          icon: const Icon(Icons.more_vert),
+                          onPressed: busy
+                              ? null
+                              : () {
+                                  if (menu.isOpen) {
+                                    menu.close();
+                                  } else {
+                                    menu.open();
+                                  }
+                                },
+                        ),
+                        menuChildren: [
+                          GlassPane(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: AppSpace.xs,
                             ),
-                          if (state.androidExecutionForRecord(record) != null)
-                            const PopupMenuItem(
-                              value: 'pc',
-                              child: Text('切回桌面运行'),
+                            borderRadius: AppRadius.mdAll,
+                            child: Material(
+                              type: MaterialType.transparency,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  MenuItemButton(
+                                    onPressed: () =>
+                                        onCopyOrigin(record.origin),
+                                    child: const Text('复制来源地址'),
+                                  ),
+                                  MenuItemButton(
+                                    onPressed: () => onDelete(record.id),
+                                    child: const Text('删除'),
+                                  ),
+                                  if (_canExecute(record))
+                                    MenuItemButton(
+                                      onPressed: () =>
+                                          onRunOnAndroid(record.id),
+                                      child: const Text('在安卓环境运行此配置'),
+                                    ),
+                                  if (state.androidExecutionForRecord(record) !=
+                                      null)
+                                    MenuItemButton(
+                                      onPressed: () => onRunOnPc(record.id),
+                                      child: const Text('切回桌面运行'),
+                                    ),
+                                ],
+                              ),
                             ),
+                          ),
                         ],
                       ),
                     ],
@@ -2165,9 +2252,9 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         .where((item) => item.id == recordId)
         .firstOrNull;
     final siteCount = record?.siteCount ?? 0;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('bridge-switch-confirm'),
         title: const Text('已导入站点，是否切换到该配置？'),
         content: Text(
@@ -2208,9 +2295,10 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         ...state.configs.where((item) => item.id == id),
     ];
     if (records.isEmpty) return null;
-    return showDialog<int>(
+    return showGlassDialog<int>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        constraints: const BoxConstraints(maxWidth: 468),
         key: const ValueKey('bridge-source-picker'),
         title: Text('${device.name} 上有 ${records.length} 个播放源'),
         content: SizedBox(
@@ -2252,9 +2340,9 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
 
   Future<void> _toggleServer(bool value) async {
     if (value) {
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showGlassDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => GlassAlertDialog(
           title: const Text('开启局域网同步服务'),
           // 只说"可以再开"，不能说成"推送已开启"：这一步只动同步服务语义。
           content: Text(
@@ -2354,7 +2442,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
               decoration: InputDecoration(
                 labelText: 'ADB 目标',
                 hintText: _adbTargetHint,
-                border: const OutlineInputBorder(),
               ),
               onSubmitted: (_) => _adbConnect(),
             ),
@@ -2365,7 +2452,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
               decoration: const InputDecoration(
                 labelText: 'ADB 可执行文件（可选）',
                 hintText: '留空则用已安装的 platform-tools',
-                border: OutlineInputBorder(),
               ),
             ),
             if (_adbMode == AndroidAdbMode.avd) ...[
@@ -2376,7 +2462,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                 decoration: const InputDecoration(
                   labelText: 'emulator 可执行文件（可选）',
                   hintText: '留空则按 SDK 目录查找',
-                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppSpace.md),
@@ -2386,7 +2471,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                 decoration: const InputDecoration(
                   labelText: 'AVD 目录（可选）',
                   hintText: '留空则用 ANDROID_AVD_HOME / 默认目录',
-                  border: OutlineInputBorder(),
                 ),
               ),
             ],
@@ -2439,7 +2523,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
         ],
         if (_adbNotice != null) ...[
           const SizedBox(height: 8),
-          Card(
+          SettingsGlassCard(
             key: const ValueKey('android-adb-notice'),
             child: ListTile(
               leading: const Icon(Icons.info_outline),
@@ -2490,8 +2574,9 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final sync = _sync;
-    return Scaffold(
-      appBar: AppBar(title: const Text('安卓设备接入')),
+    return SettingsRouteScaffold(
+      title: const Text('安卓设备接入'),
+      wallpaperUrl: widget.state.config?.wallpaper,
       body: ListView(
         key: const ValueKey('android-bridge'),
         padding: formPagePadding(context),
@@ -2514,7 +2599,6 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
                     decoration: const InputDecoration(
                       labelText: '手动输入地址',
                       hintText: '例如 192.168.50.9:9978',
-                      border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _probe(),
                   ),
@@ -2570,7 +2654,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
               ],
               if (sync.notice != null) ...[
                 const SizedBox(height: 8),
-                Card(
+                SettingsGlassCard(
                   key: const ValueKey('android-notice'),
                   child: ListTile(
                     leading: const Icon(Icons.info_outline),
@@ -2763,7 +2847,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text('轮询周期'),
-            DropdownButton<int>(
+            SettingsDropdown<int>(
               key: const ValueKey('realtime-interval'),
               value: realtime.intervalSeconds,
               onChanged: subDisabled
@@ -2967,7 +3051,7 @@ class _AndroidSettingsPageState extends State<AndroidSettingsPage> {
 
   Widget _deviceCard(ThemeData theme, AndroidDevice device) {
     final conversion = _sync.conversionFor(device.reachableBase);
-    return Card(
+    return SettingsGlassCard(
       key: ValueKey('android-device-${device.uuid}'),
       child: Padding(
         padding: const EdgeInsets.all(12),

@@ -10,6 +10,7 @@ import '../core/meta_pipeline.dart';
 import '../core/meta_source.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'settings_layout.dart';
 
 class MetaSourcesPage extends StatelessWidget {
   const MetaSourcesPage({super.key, required this.state});
@@ -18,38 +19,40 @@ class MetaSourcesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('元数据来源'),
-        actions: [
-          TextButton(
-            key: const ValueKey('meta-sources-reset'),
-            onPressed: () => state.setMetaPipeline(MetaPipeline.defaults),
-            child: const Text('恢复默认'),
-          ),
-        ],
-      ),
+    return SettingsRouteScaffold(
+      title: const Text('元数据来源'),
+      actions: [
+        TextButton(
+          key: const ValueKey('meta-sources-reset'),
+          onPressed: () => state.setMetaPipeline(MetaPipeline.defaults),
+          child: const Text('恢复默认'),
+        ),
+      ],
       body: ListenableBuilder(
         listenable: state,
         builder: (context, _) => ListView(
-        padding: formPagePadding(context),
-        children: [
-          SwitchListTile(
-            key: const ValueKey('external-meta-enabled'),
-            contentPadding: EdgeInsets.zero,
-            title: const Text('外部元数据兜底'),
-            subtitle: const Text('关闭后停止外部请求，仍按规则使用 TMDB 与爬虫源'),
-            value: state.externalMetaEnabled,
-            onChanged: (value) => state.setExternalMetaEnabled(value),
-          ),
-          Text(
-            '「优先」按顺序取、取到即停；「聚合」全部并行取并合并。拖动手柄排序，勾选框启用或停用来源。爬虫源是当前资源自身字段，默认最后兜底。',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 16),
-          for (final field in MetaField.values)
-            _FieldTile(state: state, pipeline: state.metaPipeline, field: field),
-        ],
+          padding: formPagePadding(context),
+          children: [
+            SwitchListTile(
+              key: const ValueKey('external-meta-enabled'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('外部元数据兜底'),
+              subtitle: const Text('关闭后停止外部请求，仍按规则使用 TMDB 与爬虫源'),
+              value: state.externalMetaEnabled,
+              onChanged: (value) => state.setExternalMetaEnabled(value),
+            ),
+            Text(
+              '「优先」按顺序取、取到即停；「聚合」全部并行取并合并。拖动手柄排序，勾选框启用或停用来源。爬虫源是当前资源自身字段，默认最后兜底。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            for (final field in MetaField.values)
+              _FieldTile(
+                state: state,
+                pipeline: state.metaPipeline,
+                field: field,
+              ),
+          ],
         ),
       ),
     );
@@ -74,14 +77,14 @@ class _FieldTile extends StatelessWidget {
     final enabled = rule.order;
     final disabled = [
       for (final source in MetaSourceKind.values)
-        if (!enabled.contains(source) &&
-            MetaPipeline.supports(source, field)) source,
+        if (!enabled.contains(source) && MetaPipeline.supports(source, field))
+          source,
     ];
     String keyOf(MetaSourceKind source) =>
         'meta-source-${field.key}-${source.key}';
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Card(
+      child: SettingsGlassCard(
         margin: EdgeInsets.zero,
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -120,9 +123,8 @@ class _FieldTile extends StatelessWidget {
                 physics: const NeverScrollableScrollPhysics(),
                 buildDefaultDragHandles: false,
                 itemCount: enabled.length,
-                onReorderItem: (from, to) => state.setMetaPipeline(
-                  pipeline.moveSource(field, from, to),
-                ),
+                onReorderItem: (from, to) =>
+                    state.setMetaPipeline(pipeline.moveSource(field, from, to)),
                 itemBuilder: (context, index) {
                   final source = enabled[index];
                   return ListTile(

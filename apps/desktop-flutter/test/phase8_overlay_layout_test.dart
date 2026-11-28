@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:webhtv_pc/core/player_buttons.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 import 'package:webhtv_pc/ui/player_overlay.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 import 'package:webhtv_pc/ui/tokens.dart';
@@ -50,7 +51,10 @@ void main() {
           Stack(
             children: [
               Positioned.fill(
-                child: Container(key: const ValueKey('video'), color: Colors.red),
+                child: Container(
+                  key: const ValueKey('video'),
+                  color: Colors.red,
+                ),
               ),
               Positioned.fill(child: buildOverlay()),
             ],
@@ -58,11 +62,19 @@ void main() {
         ),
       );
       final video = tester.getRect(find.byKey(const ValueKey('video')));
-      expect(video, Rect.fromLTWH(0, 0, viewport.width, viewport.height), reason: '视频区必须占满整个 body');
+      expect(
+        video,
+        Rect.fromLTWH(0, 0, viewport.width, viewport.height),
+        reason: '视频区必须占满整个 body',
+      );
 
       // 正向断言：浮层不是"按内容高度自适应"的盒子，它就是 body 那么大。
       final overlay = tester.getRect(find.byType(PlayerControlOverlay));
-      expect(overlay, Rect.fromLTWH(0, 0, viewport.width, viewport.height), reason: '浮层应吃掉 body 的全部约束');
+      expect(
+        overlay,
+        Rect.fromLTWH(0, 0, viewport.width, viewport.height),
+        reason: '浮层应吃掉 body 的全部约束',
+      );
     });
 
     testWidgets('内容再高也不改变视频区：视频矩形与浮层内容无关', (tester) async {
@@ -79,7 +91,10 @@ void main() {
           Stack(
             children: [
               Positioned.fill(
-                child: Container(key: const ValueKey('video'), color: Colors.red),
+                child: Container(
+                  key: const ValueKey('video'),
+                  color: Colors.red,
+                ),
               ),
               Positioned.fill(
                 child: buildOverlay(
@@ -181,10 +196,26 @@ void main() {
             topBar: AppBar(
               title: const Text('片名 · 第 1 集'),
               actions: [
-                IconButton(tooltip: '字幕轨', onPressed: () {}, icon: const Icon(Icons.subtitles)),
-                IconButton(tooltip: '弹幕（开启）', onPressed: () {}, icon: const Icon(Icons.forum)),
-                IconButton(tooltip: '全屏（F11）', onPressed: () {}, icon: const Icon(Icons.fullscreen)),
-                IconButton(tooltip: '更多', onPressed: () {}, icon: const Icon(Icons.more_vert)),
+                IconButton(
+                  tooltip: '字幕轨',
+                  onPressed: () {},
+                  icon: const Icon(Icons.subtitles),
+                ),
+                IconButton(
+                  tooltip: '弹幕（开启）',
+                  onPressed: () {},
+                  icon: const Icon(Icons.forum),
+                ),
+                IconButton(
+                  tooltip: '全屏（F11）',
+                  onPressed: () {},
+                  icon: const Icon(Icons.fullscreen),
+                ),
+                IconButton(
+                  tooltip: '更多',
+                  onPressed: () {},
+                  icon: const Icon(Icons.more_vert),
+                ),
               ],
             ),
           ),
@@ -230,7 +261,10 @@ void main() {
       ]);
 
       // 底栏纱：贴底、高 160、从下往上渐隐、最浓处 0.86（更高对比度）。
-      expect(tester.getRect(scrims.at(1)), const Rect.fromLTWH(0, 440, 800, 160));
+      expect(
+        tester.getRect(scrims.at(1)),
+        const Rect.fromLTWH(0, 440, 800, 160),
+      );
       final bottom = tester.widget<PlayerOverlayScrim>(scrims.at(1));
       expect(bottom.opacity, 0.86);
       expect(bottom.alignment, Alignment.bottomCenter);
@@ -296,7 +330,7 @@ void main() {
   });
 
   group('分组分隔线（design/03 §5.1）', () {
-    testWidgets('分组边界插入分隔线：数量、位置、尺寸与颜色精确', (tester) async {
+    testWidgets('分组边界保留间距：数量、位置、尺寸精确且不绘线', (tester) async {
       await tester.pumpWidget(
         wrap(
           buildOverlay(
@@ -323,17 +357,9 @@ void main() {
       final divider = find.byType(PlayerOverlayDivider);
       expect(tester.getRect(divider), const Rect.fromLTWH(419.5, 562, 9, 20));
 
-      // 尺寸与颜色：1px 宽、20px 高、由主题的 outline 角色染出。
-      final line = find.descendant(of: divider, matching: find.byType(Container));
       expect(
-        tester.getRect(line),
-        const Rect.fromLTWH(423.5, 562, 1, 20),
-        reason: '发丝线必须是 1×20 的实心线（尺寸为 0 等于没画）',
-      );
-      expect(
-        tester.widget<Container>(line).color,
-        buildAppTheme(Brightness.dark).colorScheme.outline,
-        reason: '线的颜色取主题 outline 角色（不是 dividerColor，见实现注释的对比度）',
+        find.descendant(of: divider, matching: find.byType(DecoratedBox)),
+        findsNothing,
       );
     });
 
@@ -395,9 +421,7 @@ void main() {
       // renderObject 的坐标，不能按 widget 反查。
       final xs = [
         for (final element in find.byType(PlayerOverlayDivider).evaluate())
-          (element.renderObject! as RenderBox)
-              .localToGlobal(Offset.zero)
-              .dx,
+          (element.renderObject! as RenderBox).localToGlobal(Offset.zero).dx,
       ];
       expect(xs, [314.5, 371.5, 524.5], reason: '分隔线必须落在每个分组边界上（随居中整体平移）');
     });
@@ -465,7 +489,10 @@ void main() {
       // 未滚动时最后一个是屏幕外的——「不可达」是缺陷，要被下面这一步区分出来。
       expect(tester.getRect(find.byKey(lastKey)).left, greaterThan(800));
 
-      await tester.drag(find.byType(PlayerOverlayActionRow), const Offset(-2000, 0));
+      await tester.drag(
+        find.byType(PlayerOverlayActionRow),
+        const Offset(-2000, 0),
+      );
       await tester.pumpAndSettle();
 
       final last = tester.getRect(find.byKey(lastKey));
@@ -489,11 +516,7 @@ void main() {
           buildOverlay(
             actionButtons: [
               for (var i = 0; i < 20; i++)
-                SizedBox(
-                  width: 120,
-                  height: 40,
-                  key: ValueKey('ov$i'),
-                ),
+                SizedBox(width: 120, height: 40, key: ValueKey('ov$i')),
             ],
             actionGroups: [
               for (var i = 0; i < 20; i++) PlayerButtonGroup.transport,
@@ -523,7 +546,7 @@ void main() {
     });
   });
 
-  group('平坦场（DESIGN.md The Flat-Field Rule / design/05 §4 G9）', () {
+  group('性能优先玻璃（无阴影、无视频滤镜）', () {
     testWidgets('无阴影、无 elevation：任何 Material / 装饰盒都不例外', (tester) async {
       await tester.pumpWidget(
         wrap(
@@ -540,7 +563,9 @@ void main() {
         ),
       );
 
-      for (final material in tester.widgetList<Material>(find.byType(Material))) {
+      for (final material in tester.widgetList<Material>(
+        find.byType(Material),
+      )) {
         expect(material.elevation, 0, reason: 'elevation 必须为 0');
       }
       expect(find.byType(Card), findsNothing);
@@ -562,10 +587,19 @@ void main() {
       expect(
         decorations.where((d) => d.gradient != null).length,
         2,
-        reason: '两条纱的渐变必须在扫描范围内',
+        reason: '只保留可读性纱；共享玻璃壳不再绘制装饰高光',
       );
+      expect(find.byType(GlassPane), findsNWidgets(2));
+      for (final pane in tester.widgetList<GlassPane>(find.byType(GlassPane))) {
+        expect(pane.blurBackdrop, isFalse);
+      }
+      expect(find.byType(BackdropFilter), findsNothing);
       for (final decoration in decorations) {
-        expect(decoration.boxShadow, isNull, reason: 'BoxDecoration 不得带 boxShadow');
+        expect(
+          decoration.boxShadow,
+          isNull,
+          reason: 'BoxDecoration 不得带 boxShadow',
+        );
       }
       // 文字描边（DESIGN.md 明确允许的那一类）不是盒子阴影；
       // 上面扫 `boxShadow` 已经覆盖全部「浮层自己画的投影」。
@@ -573,7 +607,9 @@ void main() {
   });
 
   group('契约守卫', () {
-    testWidgets('actionButtons 与 actionGroups 数量不等时在 build 期断言失败', (tester) async {
+    testWidgets('actionButtons 与 actionGroups 数量不等时在 build 期断言失败', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         wrap(
           buildOverlay(

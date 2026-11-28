@@ -29,6 +29,7 @@ import '../core/danmaku_catalog.dart';
 import '../core/danmaku_match.dart';
 import '../core/danmaku_settings.dart';
 import '../services/danmaku_library_service.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 /// 设计尺寸：居中大对话框，不是全屏页、不是底部弹层（用户已确认）。
@@ -59,17 +60,16 @@ const double _kFilterLabelWidth = 32;
 /// [onSourceResult] 与 `DanmakuLibraryService.searchSources` 同名同义：逐源完成
 /// 即回调，窗口据此增量渲染。它是可选的——只返回总结果的实现（测试替身、未来的
 /// 其它后端）照样能用，窗口会在总结果回来时把状态补齐。
-typedef DanmakuSearchRunner =
-    Future<DanmakuLibraryQueryResult> Function({
-      required List<DanmakuSourceConfig> sources,
-      required String title,
-      String? episode,
-      void Function(
-        DanmakuLibrarySourceResult result,
-        List<DanmakuLibraryEntry> entries,
-      )?
-      onSourceResult,
-    });
+typedef DanmakuSearchRunner = Future<DanmakuLibraryQueryResult> Function({
+  required List<DanmakuSourceConfig> sources,
+  required String title,
+  String? episode,
+  void Function(
+    DanmakuLibrarySourceResult result,
+    List<DanmakuLibraryEntry> entries,
+  )?
+  onSourceResult,
+});
 
 /// 打开搜索对话框；选中条目返回它，取消返回 null。
 ///
@@ -82,8 +82,9 @@ Future<DanmakuLibraryEntry?> showDanmakuSearchDialog({
   String? initialKeyword,
   DanmakuSearchRunner? runner,
   String? currentUrl,
+  bool blurBackdrop = true,
 }) {
-  return showDialog<DanmakuLibraryEntry>(
+  return showGlassDialog<DanmakuLibraryEntry>(
     context: context,
     builder: (context) => DanmakuSearchDialog(
       sources: sources,
@@ -91,6 +92,7 @@ Future<DanmakuLibraryEntry?> showDanmakuSearchDialog({
       initialKeyword: initialKeyword,
       runner: runner ?? _serviceRunner(),
       currentUrl: currentUrl,
+      blurBackdrop: blurBackdrop,
     ),
   );
 }
@@ -133,6 +135,7 @@ class DanmakuSearchDialog extends StatefulWidget {
     required this.runner,
     this.initialKeyword,
     this.currentUrl,
+    this.blurBackdrop = true,
   });
 
   /// 参与搜索的源（调用方已过滤 enabled + 地址合法）。
@@ -146,6 +149,7 @@ class DanmakuSearchDialog extends StatefulWidget {
 
   /// 播放器当前已加载的那条弹幕地址；命中就标「当前」。空 = 没有正在使用的弹幕。
   final String? currentUrl;
+  final bool blurBackdrop;
 
   @override
   State<DanmakuSearchDialog> createState() => _DanmakuSearchDialogState();
@@ -440,7 +444,8 @@ class _DanmakuSearchDialogState extends State<DanmakuSearchDialog> {
     final failures = _failedSources;
     if (failures.isEmpty) return null;
     final items = [
-      for (final source in failures) '${source.name}（${source.error ?? '未知原因'}）',
+      for (final source in failures)
+        '${source.name}（${source.error ?? '未知原因'}）',
     ];
     return '失败的源：${items.join('、')}';
   }
@@ -467,7 +472,9 @@ class _DanmakuSearchDialogState extends State<DanmakuSearchDialog> {
             // 看到的就该是最像本集的那部剧，而不是先到的源先占位。
             query: widget.query,
           );
-    return Dialog(
+    return glassDialogShell(
+      context,
+      blurBackdrop: widget.blurBackdrop,
       insetPadding: const EdgeInsets.all(AppSpace.xl),
       child: SizedBox(
         width: width,
@@ -1047,7 +1054,7 @@ class _DanmakuSearchDialogState extends State<DanmakuSearchDialog> {
       }
       for (var i = 0; i < group.entries.length; i++) {
         // 1px 分隔线：行高 56 已经够松，靠线而不是靠更多空白维持每行一档的节奏。
-        if (i > 0) children.add(_rowDivider(context));
+        if (i > 0) children.add(const SizedBox(height: 1));
         // 传整组而不是单条：集名清洗要靠组名剥掉重复的剧名前缀。
         children.add(_entryRow(context, index++, group, group.entries[i]));
       }
@@ -1056,18 +1063,6 @@ class _DanmakuSearchDialogState extends State<DanmakuSearchDialog> {
       key: const ValueKey('danmaku-search-results'),
       padding: const EdgeInsets.only(bottom: AppSpace.sm),
       children: children,
-    );
-  }
-
-  Widget _rowDivider(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: AppSpace.md,
-      endIndent: AppSpace.md,
-      color: Theme.of(
-        context,
-      ).colorScheme.outlineVariant.withValues(alpha: 0.5),
     );
   }
 
@@ -1329,11 +1324,7 @@ final RegExp _episodeMarkPattern = RegExp(
 /// 两处回退都是为了「不要把有意义的名字剥空」：
 /// - 整行都是标签 → 回退原值（宁可重复，也不要一行空白）；
 /// - 剥掉剧名后不含任何数字 → 回退剥之前（`幕后花絮` 剥成空串反而看不懂）。
-String _cleanEpisode(
-  String raw, {
-  String? groupTitle,
-  String? entryTitle,
-}) {
+String _cleanEpisode(String raw, {String? groupTitle, String? entryTitle}) {
   final original = raw.trim();
   var text = _stripLeadingMarks(original);
   if (text.isEmpty) return original;

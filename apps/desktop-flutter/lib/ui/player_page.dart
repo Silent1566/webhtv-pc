@@ -90,6 +90,8 @@ import 'lut_picker_sheet.dart';
 import 'player_live_panel.dart';
 import 'player_osd.dart';
 import 'player_overlay.dart';
+import 'glass_dialog.dart';
+import 'glass_widgets.dart';
 import 'player_parse_source_strip.dart';
 import 'player_quality_panel.dart';
 import 'theme.dart';
@@ -323,6 +325,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   }
 
   final FocusNode _playerFocus = FocusNode(debugLabel: 'player');
+  final FocusNode _controlsFocus = FocusNode(debugLabel: 'player controls');
+  bool _keyboardTraversingControls = false;
   bool _livePanelOpen = false;
   LiveChannel? _linePanelChannel;
   bool _linePanelFollowsPlaying = false;
@@ -1234,7 +1238,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (!mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
         title: Text('跳过${segment.kind.label}？'),
         content: Text(
           '已识别到${segment.kind.label}，跳到 ${_formatMs(decision.targetMs)}。',
@@ -2819,6 +2824,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 「把当前在用的源和本集查询递进去」以及「选中之后的那条链」。
   Future<void> _showDanmakuSearch() async {
     final selected = await showDanmakuSearchDialog(
+      blurBackdrop: false,
       context: context,
       sources: widget.state.resolvedDanmakuSources.sources,
       query: _danmakuQuery(),
@@ -3353,9 +3359,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       _showPlayerMessage('当前只有一条${kind.label}，无需切换');
       return;
     }
-    final selected = await showModalBottomSheet<String>(
+    final selected = await showPlayerGlassSheet<String>(
       context: context,
-      showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView(
           shrinkWrap: true,
@@ -3400,9 +3405,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// 循环与定时关闭。
   Future<void> _showPlaybackModeSheet() async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showPlayerGlassSheet<String>(
       context: context,
-      showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView(
           shrinkWrap: true,
@@ -3473,9 +3477,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   /// LUT 选择/清除：内置 / 我的 / 在线。
   Future<void> _showLutSettings() async {
-    final result = await showModalBottomSheet<LutPickerResult>(
+    final result = await showPlayerGlassSheet<LutPickerResult>(
       context: context,
-      showDragHandle: true,
       isScrollControlled: true,
       builder: (context) => LutPickerSheet(
         store: _lutStore,
@@ -3768,6 +3771,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     widget.liveSession?.removeListener(_onPlaybackSessionChanged);
     widget.queue?.removeListener(_onQueueChanged);
     _playerFocus.dispose();
+    _controlsFocus.dispose();
     _saveTimer?.cancel();
     _recoveryTicker?.cancel();
     _controlHideTimer?.cancel();
@@ -4299,6 +4303,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final chosen = await showDialog<String>(
       context: context,
       builder: (_) => ExternalPlayerPickerDialog(
+        blurBackdrop: false,
         loadPlayers: widget.state.listExternalPlayers,
         savePlayer: widget.state.saveExternalPlayer,
         selectedPath: widget.state.externalPlayerPath,
@@ -4319,7 +4324,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   Future<bool> _confirmDropExternalPlayback() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
+        blurBackdrop: false,
         title: const Text('中断外部播放？'),
         content: const Text('换集会切换本地代理会话，外部播放器里的这一集会立即中断。'),
         actions: [
@@ -4600,6 +4606,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         }
         version = await showEpisodeVersionDialog(
           context,
+          blurBackdrop: false,
           group: group,
           lineName: request.flag,
         );
@@ -4820,7 +4827,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           _hasLivePanels ? _closeLivePanels : _closeContextMenu;
     }
 
-    return PopScope<Object?>(
+    final page = PopScope<Object?>(
       canPop: !_fullscreen,
       onPopInvokedWithResult: _onPopInvokedWithResult,
       child: CallbackShortcuts(
@@ -4828,6 +4835,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         child: Focus(
           focusNode: _playerFocus,
           autofocus: true,
+          onKeyEvent: _onPlayerFocusKey,
           child: Scaffold(
             backgroundColor: Colors.black,
             // 顶栏改由浮层承载（`design/01` §4.2）：全屏时不再置 null，
@@ -4923,67 +4931,71 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                                 top: 16,
                                 right: 16,
                                 width: 480,
-                                child: Offstage(
-                                  offstage: !_audioPanelVisible,
-                                  child: Material(
-                                    elevation: 8,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainer,
-                                    child: SizedBox(
-                                      height: 580,
-                                      child: Column(
-                                        children: [
-                                          Row(
-                                            children: [
-                                              const Expanded(
-                                                child: Padding(
-                                                  padding: EdgeInsets.all(8),
-                                                  child: Text('音频AI控制'),
-                                                ),
-                                              ),
-                                              IconButton(
-                                                tooltip: '收起音频AI面板',
-                                                onPressed: () => setState(
-                                                  () => _audioPanelVisible =
-                                                      false,
-                                                ),
-                                                icon: const Icon(Icons.close),
-                                              ),
-                                            ],
-                                          ),
-                                          Expanded(
-                                            child: PlayerAudioAiPanel(
-                                              key: ValueKey(
-                                                '${identityHashCode(_audioAi)}-$audioInputGeneration',
-                                              ),
-                                              state: widget.state,
-                                              session: _audioAi!,
-                                              mediaUri: Uri.parse(_request.url),
-                                              headers: _request.headers,
-                                              title: _request.vodName,
-                                              language: _audioLanguage,
-                                              karaokeMedia: _karaokeMedia,
-                                              currentSrt: _currentSrtForAi,
-                                              onSettingsChanged:
-                                                  _configureAudioAi,
-                                              onPickSrt: _pickSrtForAi,
-                                              onTranslated: (result) =>
-                                                  _applyAiTranslation(
-                                                    result,
-                                                    inputGeneration:
-                                                        audioInputGeneration,
+                                child: Visibility(
+                                  visible: _audioPanelVisible,
+                                  maintainState: true,
+                                  maintainAnimation: true,
+                                  child: GlassPane(
+                                    blurBackdrop: false,
+                                    child: Material(
+                                      type: MaterialType.transparency,
+                                      child: SizedBox(
+                                        height: 580,
+                                        child: Column(
+                                          children: [
+                                            Row(
+                                              children: [
+                                                const Expanded(
+                                                  child: Padding(
+                                                    padding: EdgeInsets.all(8),
+                                                    child: Text('音频AI控制'),
                                                   ),
-                                              onTrack: (track, lines) =>
-                                                  _applyKaraokeTrack(
-                                                    track,
-                                                    lines,
-                                                    inputGeneration:
-                                                        audioInputGeneration,
+                                                ),
+                                                IconButton(
+                                                  tooltip: '收起音频AI面板',
+                                                  onPressed: () => setState(
+                                                    () => _audioPanelVisible =
+                                                        false,
                                                   ),
+                                                  icon: const Icon(Icons.close),
+                                                ),
+                                              ],
                                             ),
-                                          ),
-                                        ],
+                                            Expanded(
+                                              child: PlayerAudioAiPanel(
+                                                key: ValueKey(
+                                                  '${identityHashCode(_audioAi)}-$audioInputGeneration',
+                                                ),
+                                                state: widget.state,
+                                                session: _audioAi!,
+                                                mediaUri: Uri.parse(
+                                                  _request.url,
+                                                ),
+                                                headers: _request.headers,
+                                                title: _request.vodName,
+                                                language: _audioLanguage,
+                                                karaokeMedia: _karaokeMedia,
+                                                currentSrt: _currentSrtForAi,
+                                                onSettingsChanged:
+                                                    _configureAudioAi,
+                                                onPickSrt: _pickSrtForAi,
+                                                onTranslated: (result) =>
+                                                    _applyAiTranslation(
+                                                      result,
+                                                      inputGeneration:
+                                                          audioInputGeneration,
+                                                    ),
+                                                onTrack: (track, lines) =>
+                                                    _applyKaraokeTrack(
+                                                      track,
+                                                      lines,
+                                                      inputGeneration:
+                                                          audioInputGeneration,
+                                                    ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -5103,35 +5115,58 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
                   // 条件插入会改变子树结构，且 Positioned.fill 的命中测试范围
                   // 会随之跳变。隐藏时必须 IgnorePointer，否则透明按钮仍可点。
                   Positioned.fill(
-                    child: IgnorePointer(
-                      ignoring: !_controlsVisible,
-                      child: AnimatedOpacity(
-                        opacity: _controlsVisible ? 1 : 0,
-                        duration: AppMotion.fast,
-                        curve: AppMotion.ease,
-                        child: PlayerControlOverlay(
-                          topBar: _buildPlayerAppBar(),
-                          progressRow: _buildProgressRow(),
-                          actionButtons: _buildActionButtons(),
-                          actionGroups: _actionGroups(),
-                          extraRow: _buildParseSourceStrip(),
+                    child: Focus(
+                      focusNode: _controlsFocus,
+                      canRequestFocus: false,
+                      skipTraversal: true,
+                      includeSemantics: false,
+                      onFocusChange: (_) {
+                        if (_keyboardTraversingControls) _touchControls();
+                      },
+                      child: IgnorePointer(
+                        ignoring: !_controlsVisible,
+                        child: AnimatedOpacity(
+                          opacity: _controlsVisible ? 1 : 0,
+                          duration: AppMotion.fast,
+                          curve: AppMotion.ease,
+                          child: PlayerControlOverlay(
+                            topBar: _buildPlayerAppBar(),
+                            progressRow: Builder(
+                              builder: (context) => _buildProgressRow(
+                                tabular(
+                                  Theme.of(context).textTheme.bodyMedium!,
+                                ),
+                              ),
+                            ),
+                            actionButtons: _buildActionButtons(),
+                            actionGroups: _actionGroups(),
+                            extraRow: _buildParseSourceStrip(),
+                          ),
                         ),
                       ),
                     ),
                   ),
                   if (widget.liveSession != null)
-                    Positioned(
-                      right: AppSpace.lg,
-                      top: kToolbarHeight + AppSpace.sm,
-                      child: OutlinedButton.icon(
-                        key: const ValueKey('player-live-panel-toggle'),
-                        onPressed: _openLivePanel,
-                        icon: const Icon(Icons.live_tv, size: 18),
-                        label: const Text('直播源 / 频道'),
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerLow,
+                    Builder(
+                      builder: (context) => Positioned(
+                        right: AppSpace.lg,
+                        // Keep the launch target stable when the OSD moves or hides.
+                        top:
+                            PlayerOsdLayer.clockTopWithControls +
+                            PlayerOsdLayer.clockLineHeight(context, _osdStyle) +
+                            AppSpace.sm,
+                        child: GlassPane(
+                          blurBackdrop: false,
+                          borderRadius: AppRadius.mdAll,
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('player-live-panel-toggle'),
+                            onPressed: _openLivePanel,
+                            icon: const Icon(Icons.live_tv, size: 18),
+                            label: const Text('直播源 / 频道'),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -5185,6 +5220,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         ),
       ),
     );
+    return Listener(onPointerDown: _onPlayerPointerDown, child: page);
   }
 
   String _formatDuration(Duration value) {
@@ -5326,19 +5362,26 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final generation = _mediaGeneration;
     final choice = await showDialog<Object>(
       context: context,
-      builder: (context) => SimpleDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
+        scrollable: true,
         title: const Text('选择原SRT（仅读取，不切换字幕轨）'),
-        children: [
-          for (final option in _controller.externalOptions)
+        contentPadding: EdgeInsets.zero,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final option in _controller.externalOptions)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, option),
+                child: Text(option.label),
+              ),
             SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, option),
-              child: Text(option.label),
+              onPressed: () => Navigator.pop(context, 'search'),
+              child: const Text('搜索字幕候选…'),
             ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, 'search'),
-            child: const Text('搜索字幕候选…'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
     if (choice == null || !mounted || generation != _mediaGeneration) {
@@ -5360,20 +5403,27 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
       if (!mounted || generation != _mediaGeneration) return null;
       final candidate = await showDialog<SubtitleCandidate>(
         context: context,
-        builder: (context) => SimpleDialog(
+        builder: (context) => GlassAlertDialog(
+          blurBackdrop: false,
+          scrollable: true,
           title: const Text('选择用于翻译的搜索候选'),
-          children: [
-            for (final item in candidates)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, item),
-                child: Text(item.title),
-              ),
-            if (candidates.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('没有真实字幕候选'),
-              ),
-          ],
+          contentPadding: EdgeInsets.zero,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final item in candidates)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, item),
+                  child: Text(item.title),
+                ),
+              if (candidates.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('没有真实字幕候选'),
+                ),
+            ],
+          ),
         ),
       );
       if (candidate == null) return null;
@@ -5478,11 +5528,11 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     final lines = _karaokeLines.where(
       (line) => line.startMs <= position && line.endMs >= position,
     );
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainer
-          .withValues(alpha: .9),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
+    return GlassPane(
+      blurBackdrop: false,
+      padding: const EdgeInsets.all(AppSpace.md),
+      child: Material(
+        type: MaterialType.transparency,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -5509,7 +5559,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
 
   Future<void> _showAiBusinessMenu() => showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (context) => GlassAlertDialog(
+      blurBackdrop: false,
       title: const Text('当前播放AI业务'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -5624,6 +5675,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
         ),
         PopupMenuButton<_PlayerMenuAction>(
           tooltip: '更多',
+          color: Colors.transparent,
+          elevation: 0,
+          menuPadding: EdgeInsets.zero,
           icon: const Icon(Icons.more_vert),
           onSelected: (action) {
             switch (action) {
@@ -5641,23 +5695,31 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             }
           },
           itemBuilder: (context) => [
-            _menuItem(
-              _PlayerMenuAction.subtitleStyle,
-              Icons.format_color_text_outlined,
-              '字幕样式',
+            _PlayerOverflowMenu(
+              items: [
+                _menuItem(
+                  _PlayerMenuAction.subtitleStyle,
+                  Icons.format_color_text_outlined,
+                  '字幕样式',
+                ),
+                _menuItem(
+                  _PlayerMenuAction.danmakuSettings,
+                  Icons.comment_outlined,
+                  '弹幕设置',
+                ),
+                _menuItem(
+                  _PlayerMenuAction.videoFit,
+                  Icons.aspect_ratio_outlined,
+                  '画面比例与缩放',
+                ),
+                _menuItem(
+                  _PlayerMenuAction.mediaInfo,
+                  Icons.info_outline,
+                  '媒体信息',
+                ),
+                _menuItem(_PlayerMenuAction.shortcuts, Icons.keyboard, '快捷键说明'),
+              ],
             ),
-            _menuItem(
-              _PlayerMenuAction.danmakuSettings,
-              Icons.comment_outlined,
-              '弹幕设置',
-            ),
-            _menuItem(
-              _PlayerMenuAction.videoFit,
-              Icons.aspect_ratio_outlined,
-              '画面比例与缩放',
-            ),
-            _menuItem(_PlayerMenuAction.mediaInfo, Icons.info_outline, '媒体信息'),
-            _menuItem(_PlayerMenuAction.shortcuts, Icons.keyboard, '快捷键说明'),
           ],
         ),
       ],
@@ -5669,7 +5731,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   /// 滑杆用 [PlayerProgressSlider] 而不是裸 `Slider`：缓冲区间要画在同一根
   /// 轨道上。行高仍由滑杆决定，没有新增一层——进度行的 32 是浮层几何断言
   /// 的一部分（`phase8_overlay_layout_test.dart`）。
-  Widget _buildProgressRow() {
+  Widget _buildProgressRow(TextStyle timeStyle) {
     final duration = _controller.duration;
     return Row(
       children: [
@@ -5679,7 +5741,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
           // 拖动期间显示拖动目标：这一次拖动还没落引擎，读数只能来自
           // `_dragSeekTarget`，否则时间会停在按下那一刻不动。
           _formatDuration(_dragSeekTarget ?? _controller.position),
-          style: tabular(Theme.of(context).textTheme.bodyMedium!),
+          style: timeStyle,
         ),
         Expanded(
           child: PlayerProgressSlider(
@@ -5755,10 +5817,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             },
           ),
         ),
-        Text(
-          _formatDuration(duration),
-          style: tabular(Theme.of(context).textTheme.bodyMedium!),
-        ),
+        Text(_formatDuration(duration), style: timeStyle),
         // 直播弹幕连接状态。
         //
         // **它必须留在这里**：改造前它是 `_ControlBar` 末尾的一段，
@@ -5840,11 +5899,7 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text('倍速'),
-              DropdownButton<double>(
-                // 去掉框架默认下划线：那是 Material 2 的遗留装饰，
-                // 在已经设计过的深色纱上像一条莫名的横线。
-                // craft-floor 点名的正是这一类"你没画的那些部分也在承载设计"。
-                underline: const SizedBox.shrink(),
+              PlayerGlassDropdown<double>(
                 // value 必须落在 items 里，否则 DropdownButton 直接断言。
                 // 长按快进会把速率临时抬到 3×（默认，可配置），那一档不在常规
                 // 档位表里：把当前真实速率并进候选，控制栏才不会把 3× 谎报成 2.0x。
@@ -6317,6 +6372,29 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     );
   }
 
+  bool get _keepControlsForKeyboard =>
+      _keyboardTraversingControls && _controlsFocus.hasFocus;
+
+  KeyEventResult _onPlayerFocusKey(FocusNode node, KeyEvent event) {
+    final keyboard = HardwareKeyboard.instance;
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.tab &&
+        !keyboard.isControlPressed &&
+        !keyboard.isAltPressed &&
+        !keyboard.isMetaPressed &&
+        !_keyboardTraversingControls) {
+      _keyboardTraversingControls = true;
+      if (_controlsFocus.hasFocus) _touchControls();
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _onPlayerPointerDown(PointerDownEvent event) {
+    final wasKeepingControls = _keepControlsForKeyboard;
+    _keyboardTraversingControls = false;
+    if (wasKeepingControls) _touchControls();
+  }
+
   void _touchControls() {
     _controlHideTimer?.cancel();
     if (mounted && !_controlsVisible) {
@@ -6324,10 +6402,18 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     }
     _syncOsdTimer();
     // 菜单打开期间不排隐藏计时器（`design/04` §5.4）。
-    if (_contextMenuAnchor != null || _hasLivePanels) return;
+    if (_contextMenuAnchor != null ||
+        _hasLivePanels ||
+        _keepControlsForKeyboard) {
+      return;
+    }
     _controlHideTimer = Timer(const Duration(seconds: 3), () {
       if (!mounted) return;
-      if (_contextMenuAnchor != null || _hasLivePanels) return;
+      if (_contextMenuAnchor != null ||
+          _hasLivePanels ||
+          _keepControlsForKeyboard) {
+        return;
+      }
       setState(() => _controlsVisible = false);
       _syncOsdTimer();
     });
@@ -6716,9 +6802,8 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   // `_showSubtitleStyleSettings` 已搬到 `player_subtitle_menu.dart`（`part` 里的 `_PlayerPageState` 扩展）。
 
   Future<void> _showVideoFitSettings() async {
-    final selected = await showModalBottomSheet<PlayerVideoFitMode>(
+    final selected = await showPlayerGlassSheet<PlayerVideoFitMode>(
       context: context,
-      showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView(
           shrinkWrap: true,
@@ -6783,7 +6868,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     ];
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
+        constraints: const BoxConstraints(maxWidth: 520),
         title: const Text('媒体信息'),
         content: SizedBox(
           width: 480,
@@ -6827,7 +6914,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
     if (diagnostics == null) return;
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
+        constraints: const BoxConstraints(maxWidth: 560),
         title: const Text('播放诊断'),
         content: SizedBox(
           width: 520,
@@ -6858,7 +6947,9 @@ class _PlayerPageState extends State<PlayerPage> with WindowListener {
   void _showShortcutHelp() {
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
+        scrollable: true,
         title: const Text('快捷键'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -6943,6 +7034,38 @@ Widget _menuRow(IconData icon, String label) {
   );
 }
 
+class _PlayerOverflowMenu extends PopupMenuEntry<_PlayerMenuAction> {
+  const _PlayerOverflowMenu({required this.items});
+
+  final List<PopupMenuItem<_PlayerMenuAction>> items;
+
+  @override
+  double get height => items.length * kMinInteractiveDimension;
+
+  @override
+  bool represents(_PlayerMenuAction? value) =>
+      items.any((item) => item.represents(value));
+
+  @override
+  State<_PlayerOverflowMenu> createState() => _PlayerOverflowMenuState();
+}
+
+class _PlayerOverflowMenuState extends State<_PlayerOverflowMenu> {
+  @override
+  Widget build(BuildContext context) => GlassPane(
+    blurBackdrop: false,
+    padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: widget.items,
+      ),
+    ),
+  );
+}
+
 PopupMenuItem<_PlayerMenuAction> _menuItem(
   _PlayerMenuAction value,
   IconData icon,
@@ -6984,80 +7107,78 @@ class _PlayerErrorOverlay extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(maxWidth: 520),
       margin: const EdgeInsets.all(AppSpace.xl),
-      padding: const EdgeInsets.all(AppSpace.lg),
-      decoration: BoxDecoration(
-        // 这是盖在**视频画面**上的浮层，必须始终够暗才读得清——
-        // 但用设计系统的夜空底（带色相）而不是裸 `Colors.black`：
-        // 纯黑会从整个世界（深靛夜空）里掉出来。
-        color: AppPalette.nightGround.withValues(alpha: 0.92),
-        borderRadius: AppRadius.mdAll,
-        border: Border.all(color: semantic.statusFailed),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+      child: GlassPane(
+        blurBackdrop: false,
+        padding: const EdgeInsets.all(AppSpace.lg),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.error_outline, color: semantic.statusFailed),
-              const SizedBox(width: AppSpace.sm),
+              Row(
+                children: [
+                  Icon(Icons.error_outline, color: semantic.statusFailed),
+                  const SizedBox(width: AppSpace.sm),
+                  Text(
+                    '播放失败',
+                    // 用真实存在的 w700，不用 w600：雅黑没有真 Medium，
+                    // w600 会走合成加粗（笔画粘连、小字号发糊）。
+                    // 这是全站统一修过的同一类缺陷，浮层这里漏了。
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: AppPalette.nightInk,
+                      fontWeight: AppWeight.title,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpace.md),
               Text(
-                '播放失败',
-                // 用真实存在的 w700，不用 w600：雅黑没有真 Medium，
-                // w600 会走合成加粗（笔画粘连、小字号发糊）。
-                // 这是全站统一修过的同一类缺陷，浮层这里漏了。
-                style: theme.textTheme.titleMedium?.copyWith(
+                message,
+                style: theme.textTheme.bodyMedium?.copyWith(
                   color: AppPalette.nightInk,
-                  fontWeight: AppWeight.title,
                 ),
+              ),
+              const SizedBox(height: AppSpace.sm),
+              SelectableText(
+                '地址：${redactUrl(url)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  // 从底色色相染出的副文本，不是 `Colors.white70`。
+                  color: AppPalette.nightInkMuted,
+                ),
+              ),
+              const SizedBox(height: AppSpace.lg),
+              // 失败态必须提供三个明确出口（`design/03` §4.4）：
+              // 只给一行错误会让用户只能反复点「重试」，而真正的诉求往往是
+              // 「从刚才的位置接着看」。
+              Wrap(
+                spacing: AppSpace.sm,
+                runSpacing: AppSpace.xs,
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('player-error-retry'),
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('重试本集'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('player-error-resume'),
+                    onPressed: onResume,
+                    icon: const Icon(Icons.play_arrow, size: 18),
+                    label: const Text('从最近进度续播'),
+                  ),
+                  if (canGoNext)
+                    OutlinedButton.icon(
+                      key: const ValueKey('player-error-next'),
+                      onPressed: onNext,
+                      icon: const Icon(Icons.skip_next, size: 18),
+                      label: const Text('播放下一集'),
+                    ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: AppSpace.md),
-          Text(
-            message,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: AppPalette.nightInk,
-            ),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          SelectableText(
-            '地址：${redactUrl(url)}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              // 从底色色相染出的副文本，不是 `Colors.white70`。
-              color: AppPalette.nightInkMuted,
-            ),
-          ),
-          const SizedBox(height: AppSpace.lg),
-          // 失败态必须提供三个明确出口（`design/03` §4.4）：
-          // 只给一行错误会让用户只能反复点「重试」，而真正的诉求往往是
-          // 「从刚才的位置接着看」。
-          Wrap(
-            spacing: AppSpace.sm,
-            runSpacing: AppSpace.xs,
-            children: [
-              OutlinedButton.icon(
-                key: const ValueKey('player-error-retry'),
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('重试本集'),
-              ),
-              OutlinedButton.icon(
-                key: const ValueKey('player-error-resume'),
-                onPressed: onResume,
-                icon: const Icon(Icons.play_arrow, size: 18),
-                label: const Text('从最近进度续播'),
-              ),
-              if (canGoNext)
-                OutlinedButton.icon(
-                  key: const ValueKey('player-error-next'),
-                  onPressed: onNext,
-                  icon: const Icon(Icons.skip_next, size: 18),
-                  label: const Text('播放下一集'),
-                ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }

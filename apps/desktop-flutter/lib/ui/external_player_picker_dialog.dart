@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../services/external_player.dart';
+import 'glass_dialog.dart';
 import 'tokens.dart';
 
 class ExternalPlayerPickerDialog extends StatefulWidget {
@@ -12,6 +13,7 @@ class ExternalPlayerPickerDialog extends StatefulWidget {
     required this.savePlayer,
     this.selectedPath,
     this.pathMissing = false,
+    this.blurBackdrop = true,
   });
 
   final Future<List<ExternalPlayer>> Function() loadPlayers;
@@ -23,6 +25,7 @@ class ExternalPlayerPickerDialog extends StatefulWidget {
   savePlayer;
   final String? selectedPath;
   final bool pathMissing;
+  final bool blurBackdrop;
 
   @override
   State<ExternalPlayerPickerDialog> createState() =>
@@ -182,7 +185,9 @@ class _ExternalPlayerPickerDialogState
     for (final player in _players) {
       counts.update(player.name, (count) => count + 1, ifAbsent: () => 1);
     }
-    return AlertDialog(
+    return GlassAlertDialog(
+      blurBackdrop: widget.blurBackdrop,
+      constraints: const BoxConstraints(maxWidth: 600 + 2 * AppSpace.xl),
       title: Text(
         _editing ? (_originalExecutable == null ? '新增播放器' : '编辑播放器') : '外部播放器',
       ),

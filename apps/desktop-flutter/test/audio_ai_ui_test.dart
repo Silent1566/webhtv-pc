@@ -12,6 +12,7 @@ import 'package:webhtv_pc/services/audio_ai/basic_pitch_service.dart';
 import 'package:webhtv_pc/services/audio_ai/realtime_subtitle_controller.dart';
 import 'package:webhtv_pc/services/audio_ai/windows_audio_capture.dart';
 import 'package:webhtv_pc/ui/audio_ai/audio_ai_controls.dart';
+import 'package:webhtv_pc/ui/glass_widgets.dart';
 
 /// 记录调用、不碰 FFI 的采集替身：widget 断言不依赖 native DLL。
 class _FakeCapture extends WindowsAudioCapture {
@@ -162,6 +163,34 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('model delete confirmation keeps cancel and no video sampling', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: AudioModelControls(manager: manager, onSelected: (_) {}),
+          ),
+        ),
+      ),
+    );
+    await tester.ensureVisible(find.text('删除模型'));
+    await tester.tap(find.text('删除模型'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除模型？'), findsOneWidget);
+    expect(find.byType(GlassPane), findsOneWidget);
+    expect(
+      tester.widget<GlassPane>(find.byType(GlassPane)).blurBackdrop,
+      isFalse,
+    );
+    expect(find.byType(BackdropFilter), findsNothing);
+    await tester.tap(find.text('保留'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除模型？'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('F6 取消启用后阻塞 verify 迟到返回不重新开启也不拉流', (tester) async {
     final delayed = _DelayedManager(root);
     final controller = RealtimeSubtitleController(
@@ -221,7 +250,9 @@ void main() {
       now: () => now,
     );
     expect(
-      await tester.runAsync(() => controller.start(spec: _spec, pcm: pcm.stream, clock: clock)),
+      await tester.runAsync(
+        () => controller.start(spec: _spec, pcm: pcm.stream, clock: clock),
+      ),
       isTrue,
     );
     await tester.pumpWidget(
@@ -253,9 +284,17 @@ void main() {
     now = now.add(const Duration(milliseconds: 1200));
     await tester.pump(const Duration(milliseconds: 40));
     expect(_cueText(tester), 'hello');
-    clock.update(position: const Duration(milliseconds: 1300), playing: false, rate: 1.5);
+    clock.update(
+      position: const Duration(milliseconds: 1300),
+      playing: false,
+      rate: 1.5,
+    );
     await tester.pump(const Duration(milliseconds: 40));
-    expect(_cueText(tester), 'hello', reason: '同代际position/playing/rate更新不是seek');
+    expect(
+      _cueText(tester),
+      'hello',
+      reason: '同代际position/playing/rate更新不是seek',
+    );
     clock.update(playing: true);
     await tester.pump(const Duration(milliseconds: 40));
     expect(_cueText(tester), 'hello');
@@ -311,4 +350,3 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 }
-

@@ -100,8 +100,8 @@ class _PythonEnvironmentPageState extends State<PythonEnvironmentPage> {
   @override
   Widget build(BuildContext context) {
     final status = _state.pythonEnvironmentStatus;
-    return Scaffold(
-      appBar: AppBar(title: const Text('运行环境')),
+    return SettingsRouteScaffold(
+      title: const Text('运行环境'),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: kFormMaxWidth),

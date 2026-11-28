@@ -27,7 +27,8 @@ class AiAssistPage extends StatefulWidget {
 
 class _AiAssistPageState extends State<AiAssistPage> {
   late final AiAssistService _service =
-      widget.service ?? AiAssistService(config: widget.state.aiConfig, log: widget.state.log);
+      widget.service ??
+      AiAssistService(config: widget.state.aiConfig, log: widget.state.log);
 
   AiAssistTask _task = AiAssistTask.titleClean;
   final TextEditingController _input = TextEditingController();
@@ -56,8 +57,8 @@ class _AiAssistPageState extends State<AiAssistPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('AI 辅助')),
+    return SettingsRouteScaffold(
+      title: const Text('AI 辅助'),
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -104,7 +105,6 @@ class _AiAssistPageState extends State<AiAssistPage> {
                 minLines: 5,
                 maxLines: 12,
                 decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
                   labelText: '输入',
                   hintText: _hintFor(_task),
                 ),

@@ -19,6 +19,7 @@ import '../core/tmdb_identity.dart';
 import '../state/app_state.dart';
 import 'browse_pages.dart';
 import 'search_page.dart';
+import 'glass_widgets.dart';
 
 /// 打开 [item] 的详情页。
 ///
@@ -52,7 +53,16 @@ Future<void> openRecommendationDetail(
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => Scaffold(
-            appBar: AppBar(title: const Text('搜索站源')),
+            appBar: AppBar(
+              title: const Text('搜索站源'),
+              backgroundColor: Colors.transparent,
+              flexibleSpace: const IgnorePointer(
+                child: GlassPane(
+                  borderRadius: BorderRadius.zero,
+                  child: SizedBox.expand(),
+                ),
+              ),
+            ),
             body: SearchPage(state: state, initialKeyword: title),
           ),
         ),

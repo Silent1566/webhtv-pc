@@ -21,6 +21,9 @@ import '../core/protocol.dart';
 import '../core/tmdb_media.dart';
 import '../core/tmdb_season.dart';
 import '../state/tmdb_state.dart';
+import 'glass_dialog.dart';
+import 'glass_chrome.dart';
+import 'glass_widgets.dart';
 import 'poster_image.dart';
 import 'common.dart';
 import 'tokens.dart';
@@ -109,26 +112,37 @@ class TmdbStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     // 仅「站点被规则禁用」时整块不渲染（`04` §3.1）。
     // 「未配置」必须渲染——否则用户没有进入 TMDB 设置页的入口。
     if (!state.shouldRender) return const SizedBox.shrink();
 
-    return SizedBox(
-      height: tmdbStatusBarHeight,
-      child: Padding(
-        // 左右不再缩进：外层已经是正文的 16，再缩一次会让这一行的文字与
-        // 右侧按钮比「线路」「选集」右移 16px（用户 2026-11-12 反馈
-        // 「切换季度这一行开头和其他行没对齐」）。
-        //
-        // 行首的 `movie_filter` 图标也去掉（用户同一条反馈）：这一行要读的是
-        // 「片名 + 第几季」，图标既不增加信息量，又占掉 32px 的起始位。
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Expanded(child: _buildBody(context)),
-            const SizedBox(width: AppSpace.sm),
-            ..._buildActions(context),
-          ],
+    // 状态行现在直接铺在背景图上（本轮去掉页面级玻璃面）。它右侧的动作是
+    // 文本按钮，主题里的 primary 压在任意底图上会掉对比度，所以套上与顶栏
+    // 同一份 glassChromeControlTheme（控件墨色取 onSurface），而不是把面板
+    // 加回来。
+    return Theme(
+      data: glassChromeControlTheme(theme),
+      child: SizedBox(
+        height: tmdbStatusBarHeight,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Padding(
+            // 左右不再缩进：外层已经是正文的 16，再缩一次会让这一行的文字与
+            // 右侧按钮比「线路」「选集」右移 16px（用户 2026-11-12 反馈
+            // 「切换季度这一行开头和其他行没对齐」）。
+            //
+            // 行首的 `movie_filter` 图标也去掉（用户同一条反馈）：这一行要读的是
+            // 「片名 + 第几季」，图标既不增加信息量，又占掉 32px 的起始位。
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Expanded(child: _buildBody(context)),
+                const SizedBox(width: AppSpace.sm),
+                ..._buildActions(context),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -557,80 +571,83 @@ class TmdbSeasonDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return GlassAlertDialog(
       key: const ValueKey('tmdb-season-dialog'),
+      constraints: const BoxConstraints(maxWidth: 528),
       title: const Text('选择 TMDB 季度'),
       content: SizedBox(
         width: 480,
-        child: ListView(
-          // 高度由内容决定，并由 `AlertDialog` 的可用空间封顶（两者取小）。
-          //
-          // 【为什么不再写死 360】`docs/phase6/design/04` §7.1 要求在「保持原始
-          // 集列表」与「各季」之间插入 AI 项，固定 360 会把「各季」顶出可视区：
-          // phase4 的「选择季度返回语义化结果」正是靠「不用滚动就能点到第 2 季」
-          // 锁住季度选择的语义。改成按内容定高后，空间够就全展开，不够才滚动。
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              key: const ValueKey('tmdb-season-auto'),
-              title: const Text('自动（清除手动绑定）'),
-              selected: currentSeason == null,
-              onTap: () => Navigator.of(context).pop(_SeasonChoice.auto),
-            ),
-            ListTile(
-              key: const ValueKey('tmdb-season-auto-slice'),
-              title: const Text('按集号自动切片'),
-              subtitle: canAutoSlice
-                  ? null
-                  : const Text('当前线路集数与 TMDB 季集数不匹配，无法安全自动切分'),
-              enabled: canAutoSlice,
-              onTap: canAutoSlice
-                  ? () => Navigator.of(context).pop(_SeasonChoice.autoSlice)
-                  : null,
-            ),
-            ListTile(
-              key: const ValueKey('tmdb-season-keep-original'),
-              title: const Text('保持原始集列表'),
-              onTap: () =>
-                  Navigator.of(context).pop(_SeasonChoice.keepOriginal),
-            ),
-            // AI 项（`docs/phase6/design/04` §7.1）。
-            //
-            // 位置：在「保持原始集列表」之后、「各季」之前——AI 是**另一条**
-            // 取得绑定的途径（结果仍需预览确认），与上面三个手动项同组，
-            // 而不属于下面那一列“直接选定某一季”。
-            //
-            // 未配置时不隐藏这一项而是引导去设置：隐藏会让用户永远不知道
-            // 有 AI 能力（Phase 4 的 TMDB 入口就是在这一点上踩过坑）。
-            ListTile(
-              key: const ValueKey('tmdb-season-ai'),
-              leading: const Icon(Icons.auto_awesome),
-              title: const Text('AI 识别剧集/季度'),
-              subtitle: aiReady ? null : const Text('未配置 AI 服务，点击前往设置'),
-              onTap: () => Navigator.of(context)
-                  .pop(aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings),
-            ),
-            const Divider(),
-            for (final season in tmdbSeasons)
-              ListTile(
-                key: ValueKey('tmdb-season-option-$season'),
-                title: Text(season == 0 ? '特别篇' : '第 $season 季'),
-                subtitle: Text(
-                  '${seasonCounts[season] ?? 0} 集'
-                  '${needsRiskWarning(seasonEpisodeCount: seasonCounts[season] ?? 0, sourceEpisodeCount: sourceEpisodeCount) ? ' · ⚠ 与线路集数差异较大，请确认' : ''}',
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .64,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  key: const ValueKey('tmdb-season-auto'),
+                  title: const Text('自动（清除手动绑定）'),
+                  selected: currentSeason == null,
+                  onTap: () => Navigator.of(context).pop(_SeasonChoice.auto),
                 ),
-                selected: currentSeason == season,
-                onTap: () => Navigator.of(context).pop(season),
-              ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                '当前线路：$sourceEpisodeCount 集',
-                style: theme.textTheme.bodySmall,
-              ),
+                ListTile(
+                  key: const ValueKey('tmdb-season-auto-slice'),
+                  title: const Text('按集号自动切片'),
+                  subtitle: canAutoSlice
+                      ? null
+                      : const Text('当前线路集数与 TMDB 季集数不匹配，无法安全自动切分'),
+                  enabled: canAutoSlice,
+                  onTap: canAutoSlice
+                      ? () => Navigator.of(context).pop(_SeasonChoice.autoSlice)
+                      : null,
+                ),
+                ListTile(
+                  key: const ValueKey('tmdb-season-keep-original'),
+                  title: const Text('保持原始集列表'),
+                  onTap: () =>
+                      Navigator.of(context).pop(_SeasonChoice.keepOriginal),
+                ),
+                // AI 项（`docs/phase6/design/04` §7.1）。
+                //
+                // 位置：在「保持原始集列表」之后、「各季」之前——AI 是**另一条**
+                // 取得绑定的途径（结果仍需预览确认），与上面三个手动项同组，
+                // 而不属于下面那一列“直接选定某一季”。
+                //
+                // 未配置时不隐藏这一项而是引导去设置：隐藏会让用户永远不知道
+                // 有 AI 能力（Phase 4 的 TMDB 入口就是在这一点上踩过坑）。
+                ListTile(
+                  key: const ValueKey('tmdb-season-ai'),
+                  leading: const Icon(Icons.auto_awesome),
+                  title: const Text('AI 识别剧集/季度'),
+                  subtitle: aiReady ? null : const Text('未配置 AI 服务，点击前往设置'),
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pop(aiReady ? _SeasonChoice.ai : _SeasonChoice.aiSettings),
+                ),
+                const SizedBox(height: 1),
+                for (final season in tmdbSeasons)
+                  ListTile(
+                    key: ValueKey('tmdb-season-option-$season'),
+                    title: Text(season == 0 ? '特别篇' : '第 $season 季'),
+                    subtitle: Text(
+                      '${seasonCounts[season] ?? 0} 集'
+                      '${needsRiskWarning(seasonEpisodeCount: seasonCounts[season] ?? 0, sourceEpisodeCount: sourceEpisodeCount) ? ' · ⚠ 与线路集数差异较大，请确认' : ''}',
+                    ),
+                    selected: currentSeason == season,
+                    onTap: () => Navigator.of(context).pop(season),
+                  ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    '当前线路：$sourceEpisodeCount 集',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
       actions: [
@@ -664,7 +681,7 @@ TmdbSeasonChoice? decodeSeasonChoice(Object? value) {
   return null;
 }
 
-/// 相关视频卡片（`04` §7.2）。
+/// 相关视频条目（`04` §7.2）。
 ///
 /// 点击用系统默认浏览器打开；打开失败时提供「复制链接」兜底。
 /// **不做应用内播放**。
@@ -685,17 +702,14 @@ class TmdbVideoTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
+    return Material(
       key: ValueKey('tmdb-video-${video.identity}'),
-      // 默认 `margin` 是 4：会让「相关视频」比其它区块左右各缩 4px。
-      margin: EdgeInsets.zero,
+      type: MaterialType.transparency,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            // 96×54 是初版的缩略图尺寸：比全站任何一张卡片都小一个量级，
-            // 整行 Card 成了详情页里唯一的「列表行」形态。放大到 16:9 的 168×95，
-            // 读起来才和上面的剧照墙是同一套语言。
+            // 缩略图保持 168×94.5，与详情页原有密度一致。
             SizedBox(
               width: 168,
               height: 168 * 9 / 16,
@@ -764,3 +778,40 @@ class TmdbVideoTile extends StatelessWidget {
 /// 复制文本到剪贴板（默认实现，供 [TmdbVideoTile] 使用）。
 Future<void> copyToClipboard(String text) =>
     Clipboard.setData(ClipboardData(text: text));
+
+/// Rounded silhouette for native Material popup routes.
+class ContentMenuBorder extends RoundedRectangleBorder {
+  const ContentMenuBorder(ThemeData _) : super(borderRadius: AppRadius.lgAll);
+}
+
+class ContentGlassViewport extends StatelessWidget {
+  const ContentGlassViewport({
+    super.key,
+    required this.child,
+    this.underlap = false,
+    this.padding = EdgeInsets.zero,
+  });
+
+  final Widget child;
+  final bool underlap;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!underlap) {
+      return GlassPane(blurBackdrop: false, padding: padding, child: child);
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.passthrough,
+      children: [
+        const Positioned.fill(
+          child: IgnorePointer(
+            child: GlassPane(blurBackdrop: false, child: SizedBox.expand()),
+          ),
+        ),
+        Padding(padding: padding, child: child),
+      ],
+    );
+  }
+}

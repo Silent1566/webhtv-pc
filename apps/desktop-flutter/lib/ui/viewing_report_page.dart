@@ -9,6 +9,8 @@ import '../core/viewing_report.dart';
 import '../services/storage.dart';
 import '../services/viewing_report_ai.dart';
 import '../state/app_state.dart';
+import 'glass_widgets.dart';
+import 'tmdb_widgets.dart' show ContentMenuBorder;
 import 'tokens.dart';
 import 'viewing_report_ai_view.dart';
 import 'viewing_report_sections.dart';
@@ -103,33 +105,48 @@ class _ViewingReportPageState extends State<ViewingReportPage> {
     });
   }
 
+  String _rangeLabel(ViewingReportRange range) =>
+      widget.now == null ? range.label : range.displayLabel(widget.now!);
+
   @override
   Widget build(BuildContext context) {
     final report = _report;
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: const IgnorePointer(
+          child: GlassPane(
+            borderRadius: BorderRadius.zero,
+            child: SizedBox.expand(),
+          ),
+        ),
         title: const Text('观影报告'),
         actions: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<ViewingReportRange>(
-                key: const ValueKey('viewing-report-range'),
-                value: _range,
-                dropdownColor: theme.colorScheme.surfaceContainerHigh,
-                items: [
-                  for (final range in ViewingReportRange.values)
-                    DropdownMenuItem(
-                      value: range,
-                      child: Text(
-                        widget.now == null
-                            ? range.label
-                            : range.displayLabel(widget.now!),
-                      ),
-                    ),
+            child: PopupMenuButton<ViewingReportRange>(
+              key: const ValueKey('viewing-report-range'),
+              initialValue: _range,
+              position: PopupMenuPosition.under,
+              popUpAnimationStyle: AnimationStyle.noAnimation,
+              tooltip: '',
+              shape: ContentMenuBorder(theme),
+              color: theme.colorScheme.surfaceContainerHigh.withValues(
+                alpha: .97,
+              ),
+              elevation: 0,
+              itemBuilder: (_) => [
+                for (final range in ViewingReportRange.values)
+                  PopupMenuItem(value: range, child: Text(_rangeLabel(range))),
+              ],
+              onSelected: _changeRange,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_rangeLabel(_range)),
+                  const Icon(Icons.arrow_drop_down),
                 ],
-                onChanged: _changeRange,
               ),
             ),
           ),
@@ -146,7 +163,7 @@ class _ViewingReportPageState extends State<ViewingReportPage> {
                 Text(
                   '统计口径：时长累计历史记录的播放位置，并非实际观看会话计时；时段与周末按最后观看时间统计。',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: theme.colorScheme.onSurface,
                   ),
                 ),
                 ViewingReportComparisonSection(report: report),

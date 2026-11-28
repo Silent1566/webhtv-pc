@@ -28,7 +28,174 @@ import '../core/skip_segment_colors.dart';
 import 'common.dart';
 import 'player_controller.dart' show formatByteRate;
 import 'scroll_behavior.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
+
+/// Keeps the native modal route, focus, drag and outside-dismiss behavior,
+/// without letting the route's fill conceal the player pane.
+Future<T?> showPlayerGlassSheet<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool isScrollControlled = false,
+  BoxConstraints? constraints,
+}) => showModalBottomSheet<T>(
+  context: context,
+  isScrollControlled: isScrollControlled,
+  constraints: constraints,
+  backgroundColor: Colors.transparent,
+  elevation: 0,
+  showDragHandle: false,
+  builder: (context) => GlassPane(
+    blurBackdrop: false,
+    borderRadius: const BorderRadius.vertical(
+      top: Radius.circular(AppRadius.lg),
+    ),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Semantics(
+            label: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+            onTap: () => Navigator.of(context).maybePop(),
+            child: SizedBox(
+              height: kMinInteractiveDimension,
+              child: Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant
+                        .withValues(alpha: .4),
+                    borderRadius: AppRadius.smAll,
+                  ),
+                  child: const SizedBox(width: 32, height: 4),
+                ),
+              ),
+            ),
+          ),
+          Flexible(child: Builder(builder: builder)),
+        ],
+      ),
+    ),
+  ),
+);
+
+/// An anchored Material menu with one non-sampling pane for the whole list.
+class PlayerGlassDropdown<T> extends StatelessWidget {
+  const PlayerGlassDropdown({
+    super.key,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.decoration,
+  });
+
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?>? onChanged;
+  final InputDecoration? decoration;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = items.where((item) => item.value == value).first;
+    final button = PopupMenuButton<T>(
+      enabled: onChanged != null,
+      initialValue: value,
+      onSelected: onChanged,
+      color: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      elevation: 0,
+      menuPadding: EdgeInsets.zero,
+      itemBuilder: (context) => [
+        _PlayerDropdownEntry(items: items, value: value),
+      ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: kMinInteractiveDimension),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(child: current.child),
+            const SizedBox(width: AppSpace.xs),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
+    );
+    return decoration == null
+        ? button
+        : InputDecorator(
+            decoration: decoration!,
+            isEmpty: false,
+            child: button,
+          );
+  }
+}
+
+class _PlayerDropdownEntry<T> extends PopupMenuEntry<T> {
+  const _PlayerDropdownEntry({required this.items, required this.value});
+  final List<DropdownMenuItem<T>> items;
+  final T value;
+
+  @override
+  double get height => items.length * kMinInteractiveDimension;
+
+  @override
+  bool represents(T? value) => items.any((item) => item.value == value);
+
+  @override
+  State<_PlayerDropdownEntry<T>> createState() =>
+      _PlayerDropdownEntryState<T>();
+}
+
+class _PlayerDropdownEntryState<T> extends State<_PlayerDropdownEntry<T>> {
+  final _selectedKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final selected = _selectedKey.currentContext;
+      if (selected != null) Scrollable.ensureVisible(selected, alignment: .5);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => GlassPane(
+    blurBackdrop: false,
+    padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final item in widget.items)
+            MenuItemButton(
+              key: item.value == widget.value ? _selectedKey : null,
+              autofocus: item.enabled && item.value == widget.value,
+              requestFocusOnHover: false,
+              style: const ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(
+                  Size(0, kMinInteractiveDimension),
+                ),
+              ),
+              onPressed: item.enabled
+                  ? () {
+                      Navigator.pop<T>(context, item.value);
+                      item.onTap?.call();
+                    }
+                  : null,
+              trailingIcon: item.value == widget.value
+                  ? const Icon(Icons.check, size: 18)
+                  : null,
+              child: item.child,
+            ),
+        ],
+      ),
+    ),
+  );
+}
 
 /// 顶栏纱的高度。
 ///
@@ -87,39 +254,13 @@ class PlayerOverlayScrim extends StatelessWidget {
   }
 }
 
-/// 分组之间的发丝竖线。
-///
-/// 不是按钮，不可配置、不可隐藏——它由分组边界自动插入
-/// （`design/03` §5.1）。用户能隐藏的是按钮，不是分组本身。
+/// 分组之间的留白，保留既有动作行几何。
 class PlayerOverlayDivider extends StatelessWidget {
   const PlayerOverlayDivider({super.key});
 
-  /// 发丝线的粗细与长度。
-  static const double _thickness = 1;
-  static const double _height = 20;
-
   @override
-  Widget build(BuildContext context) {
-    // 颜色取 `colorScheme.outline` 而**不是** `Theme.of(context).dividerColor`。
-    //
-    // 两者在本仓里是不同角色：`dividerColor` 被设成 `outlineVariant.withValues(alpha: 0.72)`
-    // = `#232C46 @ 0.72`，那是「深色表面上再压一层更深的线」——在应用卡片里没问题，
-    // 但这根线画在**视频**上：底栏纱到分隔线所在高度（约 y=552，纱从 440 开始渐变）
-    // 只剩约 0.2 的不透明度，画面透出 80%。影片常见的黑边/暗场在这条位置接近纯黑，
-    // 深色线压上去实测对比度约 1.2:1 ——**等于没画**。
-    //
-    // `outline`（暗色下 `#3A4560`）是调色板里「深色底上提亮一档」的那个角色，
-    // 压在 `nightGround` 上约 1.9:1：仍是一条发丝线，但在暗场里读得出来。
-    // 与亮场也兼容（浅色的线在亮画面上同样可见），所以两种画面都成立。
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
-      child: Container(
-        width: _thickness,
-        height: _height,
-        color: Theme.of(context).colorScheme.outline,
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      const SizedBox(width: 1 + 2 * AppSpace.xs, height: 20);
 }
 
 /// 动作行：单行 + 有富余宽度时**居中**，溢出时退回左对齐 + 横向拖动（`design/03` §5.4）。
@@ -432,13 +573,10 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
         width: width,
         height: height,
         child: IgnorePointer(
-          child: DecoratedBox(
+          child: GlassPane(
             key: const ValueKey('player-skip-segment-preview'),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainer,
-              border: Border.all(color: theme.colorScheme.outline),
-              borderRadius: AppRadius.smAll,
-            ),
+            blurBackdrop: false,
+            borderRadius: AppRadius.smAll,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
               child: Column(children: segmentRows),
@@ -461,13 +599,10 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
       width: width,
       height: height,
       child: IgnorePointer(
-        child: DecoratedBox(
+        child: GlassPane(
           key: const ValueKey('player-thumbnail-preview'),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainer,
-            border: Border.all(color: theme.colorScheme.outline),
-            borderRadius: AppRadius.smAll,
-          ),
+          blurBackdrop: false,
+          borderRadius: AppRadius.smAll,
           child: ClipRRect(
             borderRadius: AppRadius.smAll,
             child: Column(
@@ -543,9 +678,6 @@ class _PlayerProgressSliderState extends State<PlayerProgressSlider> {
       // 压在未播放轨道上仍读得出来"。**这个判断被实测推翻了**：`outline`
       // (#3A4560) 画在 `surfaceContainerHighest` (#2C3654) 上算出来只有
       // **1.25:1**——比一条发丝线还难分辨，用户反馈"基本看不清"。
-      // 分隔线用 `outline` 能成立是因为它画在**视频帧**上（见
-      // [PlayerOverlayDivider] 的对比度论证），而这里是**深色轨道**之上，
-      // 底色不同，结论不能照搬。
       //
       // `tertiary` (#9BB8E0) 对同底色是 **5.86:1**，过 WCAG AA 的 4.5:1；
       // 同时它与 `primary` 的琥珀在色相上明确分离，不会被读成"已经放到
@@ -892,44 +1024,43 @@ class PlayerBufferingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = percent;
     final theme = Theme.of(context);
-    const shadows = [
-      Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 2),
-    ];
     return IgnorePointer(
       child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: size,
-              height: size,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  LoadingBlock(size: size),
-                  if (label != null)
-                    Text(
-                      '${label.round()}%',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontFeatures: kTabularFigures,
-                        shadows: shadows,
+        child: GlassPane(
+          blurBackdrop: false,
+          padding: const EdgeInsets.all(AppSpace.md),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: size,
+                height: size,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    LoadingBlock(size: size),
+                    if (label != null)
+                      Text(
+                        '${label.round()}%',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontFeatures: kTabularFigures,
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpace.sm),
-            Text(
-              formatByteRate(bytesPerSecond),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurface,
-                fontFeatures: kTabularFigures,
-                shadows: shadows,
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                formatByteRate(bytesPerSecond),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                  fontFeatures: kTabularFigures,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1007,42 +1138,60 @@ class PlayerControlOverlay extends StatelessWidget {
           ),
         ),
         // 顶栏。放在两条纱之后 = 画在纱之上。
-        Positioned(top: 0, left: 0, right: 0, child: topBar),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: GlassPane(
+            blurBackdrop: false,
+            borderRadius: const BorderRadius.vertical(
+              bottom: Radius.circular(AppRadius.lg),
+            ),
+            child: SizedBox(width: double.infinity, child: topBar),
+          ),
+        ),
         // 底栏：进度行 + 动作行，贴着底边往上排。
         Positioned(
           bottom: 0,
           left: 0,
           right: 0,
-          child: Padding(
+          child: GlassPane(
+            blurBackdrop: false,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(AppRadius.lg),
+            ),
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpace.md,
               vertical: AppSpace.sm,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              // **必须 stretch**：`Column` 的默认 `crossAxisAlignment` 是
-              // `center`，那样两个孩子都只拿到松散宽度——进度行（一个
-              // `SizedBox(height: 32)` 之类的空盒子）会缩成 0 宽并被水平居中。
-              // `design/03` §5.4 要求「进度行是独立的 Row，始终占满宽度」。
-              //
-              // 动作行的**内容**居中是这个 `Column` 之外的事（见
-              // [PlayerOverlayActionRow] 的 `LayoutBuilder` + `minWidth`）：
-              // 靠这里松弛居中做不到——那样动作行的盒子本身会缩成内容宽，
-              // 溢出时连滚动视口都不存在了。所以这里保持 stretch，
-              // 让动作行自己拿到通栏宽度、自己决定内容怎么排。
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (extraRow != null) ...[
-                  extraRow!,
+            child: Material(
+              type: MaterialType.transparency,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                // **必须 stretch**：`Column` 的默认 `crossAxisAlignment` 是
+                // `center`，那样两个孩子都只拿到松散宽度——进度行（一个
+                // `SizedBox(height: 32)` 之类的空盒子）会缩成 0 宽并被水平居中。
+                // `design/03` §5.4 要求「进度行是独立的 Row，始终占满宽度」。
+                //
+                // 动作行的**内容**居中是这个 `Column` 之外的事（见
+                // [PlayerOverlayActionRow] 的 `LayoutBuilder` + `minWidth`）：
+                // 靠这里松弛居中做不到——那样动作行的盒子本身会缩成内容宽，
+                // 溢出时连滚动视口都不存在了。所以这里保持 stretch，
+                // 让动作行自己拿到通栏宽度、自己决定内容怎么排。
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (extraRow != null) ...[
+                    extraRow!,
+                    const SizedBox(height: AppSpace.xs),
+                  ],
+                  progressRow,
                   const SizedBox(height: AppSpace.xs),
+                  PlayerOverlayActionRow(
+                    buttons: actionButtons,
+                    groups: actionGroups,
+                  ),
                 ],
-                progressRow,
-                const SizedBox(height: AppSpace.xs),
-                PlayerOverlayActionRow(
-                  buttons: actionButtons,
-                  groups: actionGroups,
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -1073,70 +1222,67 @@ class PlayerSeekRecoveryBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final semantic = context.semanticColors;
-    return Container(
+    return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.lg,
-        vertical: AppSpace.md,
-      ),
-      decoration: BoxDecoration(
-        // 画面是视频帧而不是应用底色：固定夜空底 + 设计系统圆角，与
-        // `_PlayerErrorOverlay` 同一套语言，但更轻（不是整屏失败态）。
-        color: AppPalette.nightGround.withValues(alpha: 0.92),
-        borderRadius: AppRadius.mdAll,
-        border: Border.all(
-          color: semantic.statusDegraded.withValues(alpha: 0.7),
+      child: GlassPane(
+        blurBackdrop: false,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.lg,
+          vertical: AppSpace.md,
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.error_outline,
-                size: 18,
-                color: semantic.statusDegraded,
-              ),
-              const SizedBox(width: AppSpace.sm),
-              Expanded(
-                child: Text(
-                  '跳转没成功',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: AppPalette.nightInk,
-                    fontWeight: AppWeight.title,
+              Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 18,
+                    color: semantic.statusDegraded,
                   ),
+                  const SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Text(
+                      '跳转没成功',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        fontWeight: AppWeight.title,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpace.xs),
+              Text(
+                '画面没有停在你要的位置。可以再试一次，或回到跳转前的位置。',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpace.xs),
-          Text(
-            '画面没有停在你要的位置。可以再试一次，或回到跳转前的位置。',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: AppPalette.nightInkMuted,
-            ),
-          ),
-          const SizedBox(height: AppSpace.sm),
-          Wrap(
-            spacing: AppSpace.sm,
-            runSpacing: AppSpace.xs,
-            children: [
-              OutlinedButton.icon(
-                key: const ValueKey('player-seek-recovery-retry'),
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('重试跳转'),
-              ),
-              TextButton(
-                key: const ValueKey('player-seek-recovery-return'),
-                onPressed: onReturn,
-                child: const Text('回到原位置'),
+              const SizedBox(height: AppSpace.sm),
+              Wrap(
+                spacing: AppSpace.sm,
+                runSpacing: AppSpace.xs,
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('player-seek-recovery-retry'),
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('重试跳转'),
+                  ),
+                  TextButton(
+                    key: const ValueKey('player-seek-recovery-return'),
+                    onPressed: onReturn,
+                    child: const Text('回到原位置'),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

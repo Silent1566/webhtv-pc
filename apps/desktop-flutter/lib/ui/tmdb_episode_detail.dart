@@ -13,6 +13,7 @@ import '../core/tmdb_source_payload.dart';
 import 'tmdb_widgets.dart' show TmdbVideoTile;
 import '../services/tmdb_service.dart';
 import '../state/detail_recommendation_state.dart';
+import 'glass_widgets.dart';
 import 'poster_image.dart';
 import 'tmdb_detail_page.dart';
 import 'tokens.dart';
@@ -620,6 +621,13 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
         child: Scaffold(
           key: const ValueKey('tmdb-episode-details'),
           appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            flexibleSpace: const IgnorePointer(
+              child: GlassPane(
+                borderRadius: BorderRadius.zero,
+                child: SizedBox.expand(),
+              ),
+            ),
             leading: IconButton(
               key: const ValueKey('tmdb-episode-close'),
               autofocus: true,
@@ -636,129 +644,139 @@ class _EpisodeDetailsPageState extends State<_EpisodeDetailsPage> {
                 key: const ValueKey('tmdb-episode-scroll'),
                 controller: _scroll,
                 padding: const EdgeInsets.all(AppSpace.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHeader(context),
-                    const SizedBox(height: AppSpace.lg),
-                    Text('简介', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: AppSpace.sm),
-                    Text(
-                      _overview,
-                      key: const ValueKey('tmdb-episode-overview'),
-                      style: theme.textTheme.bodyLarge,
-                    ),
-                    if (_loading) ...[
-                      const SizedBox(height: 16),
-                      const LinearProgressIndicator(),
-                      const SizedBox(height: 8),
-                      const Text('正在加载详情与媒体…'),
-                    ],
-                    if (_videos.isNotEmpty) ...[
-                      const SizedBox(height: AppSpace.lg),
-                      Text('相关视频', style: theme.textTheme.titleMedium),
-                      const SizedBox(height: AppSpace.sm),
-                      for (final video in _videos)
-                        TmdbVideoTile(
-                          video: video,
-                          onCopy: (url) =>
-                              Clipboard.setData(ClipboardData(text: url)),
+                child: GlassPane(
+                  blurBackdrop: false,
+                  padding: const EdgeInsets.all(AppSpace.md),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildHeader(context),
+                        const SizedBox(height: AppSpace.lg),
+                        Text('简介', style: theme.textTheme.titleMedium),
+                        const SizedBox(height: AppSpace.sm),
+                        Text(
+                          _overview,
+                          key: const ValueKey('tmdb-episode-overview'),
+                          style: theme.textTheme.bodyLarge,
                         ),
-                    ],
-                    if (_photos.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      Text('剧照', style: theme.textTheme.titleMedium),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          for (var i = 0; i < _photos.length; i++)
-                            SizedBox(
-                              width: 200,
-                              height: 112,
-                              child: _imageButton(
-                                key: ValueKey('tmdb-episode-photo-$i'),
-                                url: _photos[i],
-                                label: '查看第 ${i + 1} 张剧照',
-                                onTap: () => _openPhoto(_photos[i], _photos),
-                              ),
+                        if (_loading) ...[
+                          const SizedBox(height: 16),
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 8),
+                          const Text('正在加载详情与媒体…'),
+                        ],
+                        if (_videos.isNotEmpty) ...[
+                          const SizedBox(height: AppSpace.lg),
+                          Text('相关视频', style: theme.textTheme.titleMedium),
+                          const SizedBox(height: AppSpace.sm),
+                          for (final video in _videos)
+                            TmdbVideoTile(
+                              video: video,
+                              onCopy: (url) =>
+                                  Clipboard.setData(ClipboardData(text: url)),
                             ),
                         ],
-                      ),
-                    ],
-                    if (_guests.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      Text(
-                        _isMovie ? '演员' : '客串',
-                        style: theme.textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          for (final person in _guests)
-                            SizedBox(
-                              width: 140,
-                              child: Card(
-                                margin: EdgeInsets.zero,
-                                clipBehavior: Clip.antiAlias,
-                                child: _MediaFocusFrame(
-                                  focusKey: ValueKey(
-                                    'tmdb-episode-person-${person.personId}-focus',
+                        if (_photos.isNotEmpty) ...[
+                          const SizedBox(height: 24),
+                          Text('剧照', style: theme.textTheme.titleMedium),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              for (var i = 0; i < _photos.length; i++)
+                                SizedBox(
+                                  width: 200,
+                                  height: 112,
+                                  child: _imageButton(
+                                    key: ValueKey('tmdb-episode-photo-$i'),
+                                    url: _photos[i],
+                                    label: '查看第 ${i + 1} 张剧照',
+                                    onTap: () =>
+                                        _openPhoto(_photos[i], _photos),
                                   ),
-                                  child: InkWell(
-                                    key: ValueKey(
-                                      'tmdb-episode-person-${person.personId}',
-                                    ),
-                                    onTap: () => _openPerson(person),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          AspectRatio(
-                                            aspectRatio: 2 / 3,
-                                            child: PosterImage(
-                                              url: person.profileUrl,
-                                            ),
+                                ),
+                            ],
+                          ),
+                        ],
+                        if (_guests.isNotEmpty) ...[
+                          const SizedBox(height: 24),
+                          Text(
+                            _isMovie ? '演员' : '客串',
+                            style: theme.textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              for (final person in _guests)
+                                SizedBox(
+                                  width: 140,
+                                  child: Card(
+                                    margin: EdgeInsets.zero,
+                                    clipBehavior: Clip.antiAlias,
+                                    child: _MediaFocusFrame(
+                                      focusKey: ValueKey(
+                                        'tmdb-episode-person-${person.personId}-focus',
+                                      ),
+                                      child: InkWell(
+                                        key: ValueKey(
+                                          'tmdb-episode-person-${person.personId}',
+                                        ),
+                                        onTap: () => _openPerson(person),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(8),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              AspectRatio(
+                                                aspectRatio: 2 / 3,
+                                                child: PosterImage(
+                                                  url: person.profileUrl,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                person.name,
+                                                style:
+                                                    theme.textTheme.titleSmall,
+                                              ),
+                                              if (person.subtitle.isNotEmpty)
+                                                Text(
+                                                  person.subtitle,
+                                                  style:
+                                                      theme.textTheme.bodySmall,
+                                                ),
+                                            ],
                                           ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            person.name,
-                                            style: theme.textTheme.titleSmall,
-                                          ),
-                                          if (person.subtitle.isNotEmpty)
-                                            Text(
-                                              person.subtitle,
-                                              style: theme.textTheme.bodySmall,
-                                            ),
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
+                            ],
+                          ),
                         ],
-                      ),
-                    ],
-                    if (widget.actionLabel.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      FilledButton(
-                        key: const ValueKey('tmdb-episode-action'),
-                        onPressed: widget.onAction == null
-                            ? null
-                            : () => _close(action: true),
-                        child: Text(
-                          widget.actionLabel,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                  ],
+                        if (widget.actionLabel.isNotEmpty) ...[
+                          const SizedBox(height: 24),
+                          FilledButton(
+                            key: const ValueKey('tmdb-episode-action'),
+                            onPressed: widget.onAction == null
+                                ? null
+                                : () => _close(action: true),
+                            child: Text(
+                              widget.actionLabel,
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),

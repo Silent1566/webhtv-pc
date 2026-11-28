@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 import '../core/player_buttons.dart';
 import '../state/app_state.dart';
 import 'common.dart';
+import 'glass_dialog.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
 
@@ -82,9 +83,9 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
   /// 恢复默认**必须二次确认**（`00` §5 第 9 条：「一个『改乱了回不去』的配置是
   /// 不可接受的」）。第一次点击只弹确认框，不碰任何状态。
   Future<void> _confirmReset() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('恢复默认'),
         content: const Text('将按钮顺序与显示状态恢复为默认值。'),
         actions: [
@@ -136,8 +137,8 @@ class _PlayerButtonConfigPageState extends State<PlayerButtonConfigPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final byId = _byId;
-    return Scaffold(
-      appBar: AppBar(title: const Text('播放器按钮')),
+    return SettingsRouteScaffold(
+      title: const Text('播放器按钮'),
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(

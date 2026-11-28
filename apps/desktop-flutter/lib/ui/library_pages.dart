@@ -17,6 +17,7 @@ import '../services/tmdb_history.dart';
 import '../state/app_state.dart';
 import '../core/protocol.dart';
 import '../core/push_parser.dart';
+import 'glass_dialog.dart';
 import 'poster_image.dart';
 import 'browse_pages.dart';
 import 'common.dart';
@@ -24,6 +25,7 @@ import 'history_cross_source.dart';
 import 'history_entry_detail.dart';
 import 'playback_resume.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 import 'viewing_report_page.dart';
 import 'ai_integration_widgets.dart';
 import 'toast.dart';
@@ -186,7 +188,13 @@ class _HistorySourceChip extends StatelessWidget {
 }
 
 class HistoryPage extends StatefulWidget {
-  const HistoryPage({super.key, required this.state});
+  const HistoryPage({
+    super.key,
+    required this.state,
+    this.shellUnderlap = false,
+  });
+
+  final bool shellUnderlap;
 
   final AppState state;
 
@@ -343,214 +351,236 @@ class _HistoryPageState extends State<HistoryPage> {
       },
       child: Focus(
         autofocus: true,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        prefixIcon: Icon(Icons.search),
-                        hintText: '搜索片名或剧集名',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (value) => setState(() {
-                        final next = value.trim();
-                        _keyword = next;
-                        // 搜索词变化**不退出**模式，但多选态下必须清空已选
-                        // （否则会删到看不见的条目，`design/01` §3.2）。
-                        // `withKeyword` 在值未变时返回同一实例，所以这里
-                        // 无条件调用是安全的——它不会把用户刚勾的项清掉。
-                        _view = _view.withKeyword(next);
-                      }),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // 工具栏按模式渲染（`design/01` §3.1）：
-                  // 多选态下只留「取消」在工具栏，其余动作在下面的多选工具栏里。
-                  if (_view.mode == HistoryViewMode.none) ...[
-                    // 列表为空时**两个删除入口都不渲染**（§3.2）。
-                    // 历史范围开关（对齐安卓 `global_history_mode`）：默认只看
-                    // **当前播放源**，开了才看全部源。
-                    _HistoryScopeSwitch(
-                      state: _state,
-                      onChanged: () => setState(() {}),
-                    ),
-                    const SizedBox(width: 8),
-                    _HistoryAggregationSwitch(
-                      state: _state,
-                      onChanged: () => setState(() {}),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      key: const ValueKey('history-viewing-report'),
-                      onPressed: _openViewingReport,
-                      icon: const Icon(Icons.insights_outlined),
-                      label: const Text('观影报告'),
-                    ),
-                    IconButton(
-                      key: const ValueKey('history-ai-business'),
-                      tooltip: 'AI历史推荐与画像',
-                      onPressed: () => openAiBusiness(context, _state),
-                      icon: const Icon(Icons.auto_awesome_outlined),
-                    ),
-                    const SizedBox(width: 8),
-                    if (items.isNotEmpty)
-                      OutlinedButton.icon(
-                        key: const ValueKey('history-bulk-delete'),
-                        onPressed: () =>
-                            setState(() => _view = _view.enterMultiSelect()),
-                        icon: const Icon(Icons.checklist_outlined),
-                        label: const Text('批量删除'),
-                      ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      key: const ValueKey('history-clear-all'),
-                      onPressed: _confirmClearAll,
-                      icon: const Icon(Icons.delete_sweep_outlined),
-                      label: const Text('清空历史'),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (_state.database == null)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text('本地存储不可用，播放历史暂不记录。'),
-              ),
-            // 删除态提示条（`design/01` §3.1）。
-            //
-            // 删掉最后一条 → 列表为空 → 自动回到 `none`（§3.2），提示条随之消失。
-            if (_view.mode == HistoryViewMode.singleDelete)
+        child: LayoutBuilder(
+          builder: (context, page) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.shellUnderlap)
+                const SizedBox(height: kShellContentTopInset),
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Row(
-                  children: [
-                    const Expanded(child: Text('删除模式：点击卡片即删除该条记录')),
-                    TextButton(
-                      key: const ValueKey('history-delete-done'),
-                      onPressed: _exitDeleteMode,
-                      child: const Text('完成'),
-                    ),
-                  ],
-                ),
-              ),
-            // 多选态工具栏（`design/01` §3.1、§3.3）。
-            if (_view.mode == HistoryViewMode.multiSelect)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _view.selectedIds.isEmpty
-                            ? '批量删除：勾选要删除的记录'
-                            : '已选 ${_view.selectedIds.length} 条',
-                      ),
-                    ),
-                    TextButton(
-                      key: const ValueKey('history-select-all'),
-                      // 只勾**当前可见**的（§3.2）：搜索后被挡住的不得被勾。
-                      onPressed: () => setState(
-                        () => _view = _view.selectAll([
-                          for (final item in items) item.id,
-                        ]),
-                      ),
-                      child: const Text('全选'),
-                    ),
-                    TextButton(
-                      key: const ValueKey('history-delete-selected'),
-                      // 未勾选时**禁用**（`DESIGN.md`：一个点了什么也没有的
-                      // 按钮比没有按钮更糟）。
-                      onPressed: _view.canDeleteSelected
-                          ? _confirmDeleteSelected
-                          : null,
-                      child: Text('删除选中(${_view.selectedIds.length})'),
-                    ),
-                    TextButton(
-                      key: const ValueKey('history-cancel-select'),
-                      onPressed: () => setState(() => _view = _view.exitMode()),
-                      child: const Text('取消'),
-                    ),
-                  ],
-                ),
-              ),
-            const Divider(height: 1),
-            // 季度历史卡片（`02` §7.1）：同一节目的每季一张卡片。
-            // 删除语义按 §7.4 分级：删季度卡片不删同节目其他季度；
-            // 「删除整部节目」是独立二级操作，需二次确认。
-            if (_state.seasonHistoryCards().isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
-                child: Text('季度进度'),
-              ),
-              for (final card in _state.seasonHistoryCards())
-                ListTile(
-                  key: ValueKey('season-card-${card.displayKey}'),
-                  dense: true,
-                  leading: const Icon(Icons.playlist_play),
-                  title: Text(
-                    '${card.identity?.key ?? '?'} · ${card.seasonLabel} · '
-                    '第 ${card.episodeNumber} 集',
-                  ),
-                  subtitle: Text(
-                    '${card.representative.sourceEpisodeName} · '
-                    '${card.progressPercent}% · 来源 ${card.representative.sourceFlag}'
-                    '${card.sources.length > 1 ? ' （共 ${card.sources.length} 个来源）' : ''}',
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+                padding: const EdgeInsets.all(12),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Row(
                     children: [
-                      IconButton(
-                        tooltip: '删除该季度进度（不影响同节目其他季度）',
-                        onPressed: () {
-                          final identity = card.identity;
-                          if (identity == null) return;
-                          _state.deleteSeasonProgress(
-                            media: identity,
-                            seasonNumber: card.seasonNumber,
-                          );
-                          setState(() {});
-                        },
-                        icon: const Icon(Icons.delete_outline, size: 18),
-                      ),
-                      IconButton(
-                        tooltip: '删除整部节目的全部季度进度（二级操作）',
-                        onPressed: () => _confirmDeleteMedia(card),
-                        icon: const Icon(
-                          Icons.delete_forever_outlined,
-                          size: 18,
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            prefixIcon: Icon(Icons.search),
+                            hintText: '搜索片名或剧集名',
+                          ),
+                          onChanged: (value) => setState(() {
+                            final next = value.trim();
+                            _keyword = next;
+                            // 搜索词变化**不退出**模式，但多选态下必须清空已选
+                            // （否则会删到看不见的条目，`design/01` §3.2）。
+                            // `withKeyword` 在值未变时返回同一实例，所以这里
+                            // 无条件调用是安全的——它不会把用户刚勾的项清掉。
+                            _view = _view.withKeyword(next);
+                          }),
                         ),
+                      ),
+                      const SizedBox(width: 12),
+                      // 工具栏按模式渲染（`design/01` §3.1）：
+                      // 多选态下只留「取消」在工具栏，其余动作在下面的多选工具栏里。
+                      if (_view.mode == HistoryViewMode.none) ...[
+                        // 列表为空时**两个删除入口都不渲染**（§3.2）。
+                        // 历史范围开关（对齐安卓 `global_history_mode`）：默认只看
+                        // **当前播放源**，开了才看全部源。
+                        _HistoryScopeSwitch(
+                          state: _state,
+                          onChanged: () => setState(() {}),
+                        ),
+                        const SizedBox(width: 8),
+                        _HistoryAggregationSwitch(
+                          state: _state,
+                          onChanged: () => setState(() {}),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          key: const ValueKey('history-viewing-report'),
+                          onPressed: _openViewingReport,
+                          icon: const Icon(Icons.insights_outlined),
+                          label: const Text('观影报告'),
+                        ),
+                        IconButton(
+                          key: const ValueKey('history-ai-business'),
+                          tooltip: 'AI历史推荐与画像',
+                          onPressed: () => openAiBusiness(context, _state),
+                          icon: const Icon(Icons.auto_awesome_outlined),
+                        ),
+                        const SizedBox(width: 8),
+                        if (items.isNotEmpty)
+                          OutlinedButton.icon(
+                            key: const ValueKey('history-bulk-delete'),
+                            onPressed: () => setState(
+                              () => _view = _view.enterMultiSelect(),
+                            ),
+                            icon: const Icon(Icons.checklist_outlined),
+                            label: const Text('批量删除'),
+                          ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          key: const ValueKey('history-clear-all'),
+                          onPressed: _confirmClearAll,
+                          icon: const Icon(Icons.delete_sweep_outlined),
+                          label: const Text('清空历史'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              if (_state.database == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('本地存储不可用，播放历史暂不记录。'),
+                ),
+              // 删除态提示条（`design/01` §3.1）。
+              //
+              // 删掉最后一条 → 列表为空 → 自动回到 `none`（§3.2），提示条随之消失。
+              if (_view.mode == HistoryViewMode.singleDelete)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Row(
+                    children: [
+                      const Expanded(child: Text('删除模式：点击卡片即删除该条记录')),
+                      TextButton(
+                        key: const ValueKey('history-delete-done'),
+                        onPressed: _exitDeleteMode,
+                        child: const Text('完成'),
                       ),
                     ],
                   ),
                 ),
-              const Divider(height: 1),
-            ],
-            Expanded(
-              child: groups.isEmpty
-                  ? _emptyHistory()
-                  // 列数必须由**内容区**宽度推出，而不是 `MediaQuery` 的整窗宽：
-                  // 壳层左侧有 `NavigationRail`(76) + `VerticalDivider`(1)，整窗宽
-                  // 会比内容区宽 77px，列数就会比首页海报墙多算（`design/01` §2.2
-                  // 要求两处共用同一套尺度）。
-                  : LayoutBuilder(
-                      builder: (context, constraints) => GridView.builder(
-                        key: const ValueKey('history-grid'),
-                        padding: const EdgeInsets.all(AppSpace.lg),
-                        gridDelegate: _posterGridDelegate(constraints.maxWidth),
-                        itemCount: groups.length,
-                        itemBuilder: (context, index) =>
-                            _buildHistoryCard(context, groups[index]),
+              // 多选态工具栏（`design/01` §3.1、§3.3）。
+              if (_view.mode == HistoryViewMode.multiSelect)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _view.selectedIds.isEmpty
+                              ? '批量删除：勾选要删除的记录'
+                              : '已选 ${_view.selectedIds.length} 条',
+                        ),
                       ),
+                      TextButton(
+                        key: const ValueKey('history-select-all'),
+                        // 只勾**当前可见**的（§3.2）：搜索后被挡住的不得被勾。
+                        onPressed: () => setState(
+                          () => _view = _view.selectAll([
+                            for (final item in items) item.id,
+                          ]),
+                        ),
+                        child: const Text('全选'),
+                      ),
+                      TextButton(
+                        key: const ValueKey('history-delete-selected'),
+                        // 未勾选时**禁用**（`DESIGN.md`：一个点了什么也没有的
+                        // 按钮比没有按钮更糟）。
+                        onPressed: _view.canDeleteSelected
+                            ? _confirmDeleteSelected
+                            : null,
+                        child: Text('删除选中(${_view.selectedIds.length})'),
+                      ),
+                      TextButton(
+                        key: const ValueKey('history-cancel-select'),
+                        onPressed: () =>
+                            setState(() => _view = _view.exitMode()),
+                        child: const Text('取消'),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 1),
+              // 季度历史卡片（`02` §7.1）：同一节目的每季一张卡片。
+              // 删除语义按 §7.4 分级：删季度卡片不删同节目其他季度；
+              // 「删除整部节目」是独立二级操作，需二次确认。
+              if (_state.seasonHistoryCards().isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
+                  child: Text('季度进度'),
+                ),
+                for (final card in _state.seasonHistoryCards())
+                  ListTile(
+                    key: ValueKey('season-card-${card.displayKey}'),
+                    dense: true,
+                    leading: const Icon(Icons.playlist_play),
+                    title: Text(
+                      '${card.identity?.key ?? '?'} · ${card.seasonLabel} · '
+                      '第 ${card.episodeNumber} 集',
                     ),
-            ),
-          ],
+                    subtitle: Text(
+                      '${card.representative.sourceEpisodeName} · '
+                      '${card.progressPercent}% · 来源 ${card.representative.sourceFlag}'
+                      '${card.sources.length > 1 ? ' （共 ${card.sources.length} 个来源）' : ''}',
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: '删除该季度进度（不影响同节目其他季度）',
+                          onPressed: () {
+                            final identity = card.identity;
+                            if (identity == null) return;
+                            _state.deleteSeasonProgress(
+                              media: identity,
+                              seasonNumber: card.seasonNumber,
+                            );
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                        ),
+                        IconButton(
+                          tooltip: '删除整部节目的全部季度进度（二级操作）',
+                          onPressed: () => _confirmDeleteMedia(card),
+                          icon: const Icon(
+                            Icons.delete_forever_outlined,
+                            size: 18,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 1),
+              ],
+              Expanded(
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: groups.isEmpty
+                      ? _emptyHistory()
+                      // 列数必须由**内容区**宽度推出，而不是 `MediaQuery` 的整窗宽：
+                      // 壳层左侧有 `NavigationRail`(76) + `VerticalDivider`(1)，整窗宽
+                      // 会比内容区宽 77px，列数就会比首页海报墙多算（`design/01` §2.2
+                      // 要求两处共用同一套尺度）。
+                      : ShellScrollUnderlap(
+                          viewportBottom: widget.shellUnderlap
+                              ? page.maxHeight
+                              : null,
+                          builder: (context, constraints, leading) =>
+                              GridView.builder(
+                                key: const ValueKey('history-grid'),
+                                padding: EdgeInsets.fromLTRB(
+                                  AppSpace.lg,
+                                  AppSpace.lg + leading,
+                                  AppSpace.lg,
+                                  AppSpace.lg,
+                                ),
+                                gridDelegate: _posterGridDelegate(
+                                  constraints.maxWidth,
+                                ),
+                                itemCount: groups.length,
+                                itemBuilder: (context, index) =>
+                                    _buildHistoryCard(context, groups[index]),
+                              ),
+                        ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -801,9 +831,9 @@ class _HistoryPageState extends State<HistoryPage> {
   Future<void> _confirmDeleteSelected() async {
     final ids = _view.selectedInOrder;
     if (ids.isEmpty) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('history-bulk-confirm-dialog'),
         title: const Text('批量删除播放历史'),
         content: Text(
@@ -847,9 +877,9 @@ class _HistoryPageState extends State<HistoryPage> {
   /// 文案与逻辑**与既有实现一字不差**（`mvp_a_flow_test` 锁定「清空历史」），
   /// 只是从 `onPressed` 内联搬到方法里。
   Future<void> _confirmClearAll() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('清空播放历史'),
         content: const Text('该操作只清空播放历史，不会删除配置。'),
         actions: [
@@ -875,9 +905,9 @@ class _HistoryPageState extends State<HistoryPage> {
     final identity = card.identity;
     if (identity == null) return;
     final count = _state.seasonProgressFor(identity).length;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         key: const ValueKey('season-delete-media-confirm'),
         title: const Text('删除整部节目的播放进度'),
         content: Text(
@@ -957,7 +987,13 @@ class _HistoryBadge extends StatelessWidget {
 /// 交互对齐安卓 `KeepActivity`：点击打开影片详情，长按（或标题栏按钮）进入
 /// 删除态，删除态下「点谁删谁」。
 class FavoritesPage extends StatefulWidget {
-  const FavoritesPage({super.key, required this.state});
+  const FavoritesPage({
+    super.key,
+    required this.state,
+    this.shellUnderlap = false,
+  });
+
+  final bool shellUnderlap;
 
   final AppState state;
 
@@ -1044,51 +1080,72 @@ class _FavoritesPageState extends State<FavoritesPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final items = _items;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              Text('收藏（${items.length}）', style: theme.textTheme.titleMedium),
-              const Text('点击打开影片详情；长按可进入删除模式。'),
-              if (items.isNotEmpty)
-                OutlinedButton.icon(
-                  key: const ValueKey('favorites-delete-switch'),
-                  onPressed: () => setState(() => _deleteMode = !_deleteMode),
-                  icon: Icon(
-                    _deleteMode ? Icons.done : Icons.delete_outline,
-                    size: 18,
+    final shellTop = widget.shellUnderlap ? kShellContentTopInset : 0.0;
+    return LayoutBuilder(
+      builder: (context, page) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(height: shellTop),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  Text(
+                    '收藏（${items.length}）',
+                    style: theme.textTheme.titleMedium,
                   ),
-                  label: Text(_deleteMode ? '完成' : '删除'),
-                ),
-            ],
+                  const Text('点击打开影片详情；长按可进入删除模式。'),
+                  if (items.isNotEmpty)
+                    OutlinedButton.icon(
+                      key: const ValueKey('favorites-delete-switch'),
+                      onPressed: () =>
+                          setState(() => _deleteMode = !_deleteMode),
+                      icon: Icon(
+                        _deleteMode ? Icons.done : Icons.delete_outline,
+                        size: 18,
+                      ),
+                      label: Text(_deleteMode ? '完成' : '删除'),
+                    ),
+                ],
+              ),
+            ),
           ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: items.isEmpty
-              ? const EmptyState(
-                  icon: Icons.bookmark_border,
-                  title: '暂无收藏',
-                  message: '在详情页右上角可以收藏影片。',
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) => GridView.builder(
-                    key: const ValueKey('favorites-grid'),
-                    padding: const EdgeInsets.all(AppSpace.lg),
-                    gridDelegate: _posterGridDelegate(constraints.maxWidth),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) =>
-                        _buildCard(context, items[index]),
-                  ),
-                ),
-        ),
-      ],
+          const SizedBox(height: 1),
+          Expanded(
+            child: Material(
+              type: MaterialType.transparency,
+              child: items.isEmpty
+                  ? const EmptyState(
+                      icon: Icons.bookmark_border,
+                      title: '暂无收藏',
+                      message: '在详情页右上角可以收藏影片。',
+                    )
+                  : ShellScrollUnderlap(
+                      viewportBottom: widget.shellUnderlap
+                          ? page.maxHeight
+                          : null,
+                      builder: (context, constraints, leading) =>
+                          GridView.builder(
+                            key: const ValueKey('favorites-grid'),
+                            padding: EdgeInsets.all(AppSpace.lg)
+                                .copyWith(top: AppSpace.lg + leading),
+                            gridDelegate: _posterGridDelegate(
+                              constraints.maxWidth,
+                            ),
+                            itemCount: items.length,
+                            itemBuilder: (context, index) =>
+                                _buildCard(context, items[index]),
+                          ),
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

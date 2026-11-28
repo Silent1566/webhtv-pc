@@ -40,6 +40,8 @@ import '../services/search_suggest_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/detail_recommendation_state.dart';
+import 'glass_dialog.dart';
+import 'glass_widgets.dart';
 import 'async_action_feedback.dart';
 import 'following_actions.dart';
 import 'following_air_data.dart';
@@ -51,6 +53,7 @@ import 'home_hero.dart';
 import 'home_hero_image_probe.dart';
 import 'home_hero_startup_image.dart';
 import 'image_header_scope.dart';
+import 'poster_image.dart' show posterImageProvider;
 import 'playback_resume.dart';
 import 'recommendation_detail_route.dart';
 import 'recommendation_info_dialog.dart';
@@ -86,12 +89,19 @@ class HomePage extends StatefulWidget {
     required this.onImportConfig,
     required this.onSearch,
     this.heroImageLoader,
+    this.hasShellArtwork = false,
+    this.onHeroBackdropChanged,
   });
 
   final AppState state;
 
   /// 图片I/O注入点；生产默认验证真实解码像素，测试可供给确定性图像结果。
   final HomeHeroImageLoader? heroImageLoader;
+
+  final bool hasShellArtwork;
+
+  /// The shell paints decoded hero art behind chrome, without moving this viewport.
+  final ValueChanged<Widget?>? onHeroBackdropChanged;
 
   /// 「去点播逛逛」与推荐卡的去向。
   final VoidCallback onOpenBrowse;
@@ -114,6 +124,66 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final ValueNotifier<int> _heroIndex = ValueNotifier(0);
+  ImageStream? _heroBackdropStream;
+  ImageStreamListener? _heroBackdropListener;
+  Widget? _shellHeroBackdrop;
+
+  void _watchHeroBackdrop(
+    BuildContext context,
+    HomeItem? item,
+    HomeBackdrop backdrop,
+    ValueChanged<HomeItem> onImageError,
+  ) {
+    final url = item?.backdrop?.trim() ?? '';
+    final stream = url.isEmpty
+        ? null
+        : posterImageProvider(
+            url,
+            headers: imageHeadersOrNull(context, url),
+          ).resolve(createLocalImageConfiguration(context));
+    if (stream?.key == _heroBackdropStream?.key) return;
+    _stopWatchingHeroBackdrop();
+
+    void report(Widget? layer) {
+      if (_shellHeroBackdrop == layer) return;
+      _shellHeroBackdrop = layer;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _shellHeroBackdrop == layer) {
+          widget.onHeroBackdropChanged?.call(layer);
+        }
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
+
+    if (stream == null) {
+      report(null);
+      return;
+    }
+    bool hasFrame = false;
+    final listener = ImageStreamListener(
+      (image, _) {
+        image.dispose();
+        if (!hasFrame) report(backdrop);
+        hasFrame = true;
+      },
+      onError: (_, _) {
+        report(null);
+        onImageError(item!);
+      },
+    );
+    _heroBackdropStream = stream;
+    _heroBackdropListener = listener;
+    stream.addListener(listener);
+    if (!hasFrame) report(null);
+  }
+
+  void _stopWatchingHeroBackdrop() {
+    final listener = _heroBackdropListener;
+    if (listener != null) _heroBackdropStream?.removeListener(listener);
+    _heroBackdropStream = null;
+    _heroBackdropListener = null;
+  }
+
   List<String> _heroKeys = const [];
   final _heroStartupClock = Stopwatch()..start();
   bool _firstHeroAvailableLogged = false;
@@ -177,7 +247,9 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _heroProbe = HomeHeroImageProbe(loader: widget.heroImageLoader);
-    _startupCache = HomeHeroStartupCache(directory: Directory(_state.paths.cacheDir));
+    _startupCache = HomeHeroStartupCache(
+      directory: Directory(_state.paths.cacheDir),
+    );
     _recommendationFeedback.addListener(_onRecommendationFeedback);
     // 放到首帧之后：第一帧必须是本地内容，不能被网络挡住（§5「不显示骨架」）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -197,6 +269,7 @@ class _HomePageState extends State<HomePage> {
     _startupEncoder.dispose();
     _heroProbe.dispose();
     _heroScanGeneration++;
+    _stopWatchingHeroBackdrop();
     _heroIndex.dispose();
     _recommendationFeedback.removeListener(_onRecommendationFeedback);
     super.dispose();
@@ -374,27 +447,38 @@ class _HomePageState extends State<HomePage> {
     _resumeMeta.clear();
     if (rows.isEmpty) return;
     final completed = Completer<void>();
-    for (final key in rows.keys) { _railMetaPending[key] = completed.future; }
+    for (final key in rows.keys) {
+      _railMetaPending[key] = completed.future;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       bool current() => mounted && generation == _resumeMetaGeneration;
-      if (!current()) { if (!completed.isCompleted) completed.complete(); return; }
-      final resolved = await HomeMetaService(tmdb: state.tmdbService).resolveHistory(
-        rows.values,
-        match: (row) async {
-          if (row.siteKey == pushSiteKey) {
-            return _heroHistoryMatch(row, current);
-          }
-          return _heroHistoryMatch(row, current);
-        },
-        source: _heroHistorySource,
-        siteName: (row) =>
-            (state.configForSourceKey(row.sourceKey) ?? state.effectiveConfig)
-                ?.sites.where((site) => site.key == row.siteKey).firstOrNull?.name ?? '',
-        pipeline: pipeline,
-        external: enabled ? state.externalMetaService : null,
-        pinned: (row) => overrides.of(row.vodId),
-        isCurrent: current,
-      );
+      if (!current()) {
+        if (!completed.isCompleted) completed.complete();
+        return;
+      }
+      final resolved = await HomeMetaService(tmdb: state.tmdbService)
+          .resolveHistory(
+            rows.values,
+            match: (row) async {
+              if (row.siteKey == pushSiteKey) {
+                return _heroHistoryMatch(row, current);
+              }
+              return _heroHistoryMatch(row, current);
+            },
+            source: _heroHistorySource,
+            siteName: (row) =>
+                (state.configForSourceKey(row.sourceKey) ??
+                        state.effectiveConfig)
+                    ?.sites
+                    .where((site) => site.key == row.siteKey)
+                    .firstOrNull
+                    ?.name ??
+                '',
+            pipeline: pipeline,
+            external: enabled ? state.externalMetaService : null,
+            pinned: (row) => overrides.of(row.vodId),
+            isCurrent: current,
+          );
       if (!completed.isCompleted) completed.complete();
       if (!current() || resolved.isEmpty) return;
       setState(() => _resumeMeta.addAll(resolved));
@@ -426,16 +510,25 @@ class _HomePageState extends State<HomePage> {
   void _ensureRecommendationMeta() {
     final entries = {
       for (final row in _recommendations.values)
-        for (final entry in row.take(_heroRecommendBudgetForMeta)) entry.key: entry,
+        for (final entry in row.take(_heroRecommendBudgetForMeta))
+          entry.key: entry,
     };
     final state = _state;
     final pipeline = state.metaPipeline;
     final key = jsonEncode([
-      identityHashCode(state), state.activeSourceKey, state.tmdbConfigRevision,
+      identityHashCode(state),
+      state.activeSourceKey,
+      state.tmdbConfigRevision,
       pipeline.toJson(),
       for (final entry in entries.values)
-        [entry.key, entry.item.title, entry.item.posterUrl, entry.item.backdropUrl,
-          entry.item.overview, entry.item.subtitle],
+        [
+          entry.key,
+          entry.item.title,
+          entry.item.posterUrl,
+          entry.item.backdropUrl,
+          entry.item.overview,
+          entry.item.subtitle,
+        ],
     ]);
     if (key == _recommendationMetaKey) return;
     _recommendationMetaKey = key;
@@ -443,10 +536,15 @@ class _HomePageState extends State<HomePage> {
     _art.clear();
     if (entries.isEmpty) return;
     final completed = Completer<void>();
-    for (final key in entries.keys) { _railMetaPending[key] = completed.future; }
+    for (final key in entries.keys) {
+      _railMetaPending[key] = completed.future;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       bool current() => mounted && generation == _recommendationMetaGeneration;
-      if (!current()) { if (!completed.isCompleted) completed.complete(); return; }
+      if (!current()) {
+        if (!completed.isCompleted) completed.complete();
+        return;
+      }
       // 推荐本来自带 TMDB 图：只走 TMDB 字段，不引外部源（豆瓣有 750ms 串行间隔，
       // 会让 hero 分批到），也不做 pin（pin 以 vodId 为键，推荐没有）。
       final resolved = await HomeMetaService(tmdb: state.tmdbService)
@@ -501,9 +599,17 @@ class _HomePageState extends State<HomePage> {
     return items;
   }
 
-  Future<TmdbItem?> _heroHistoryMatch(PlaybackHistory row, bool Function() current) {
-    final key = jsonEncode([homeHistoryKey(row), row.tmdbId, row.mediaType,
-      _state.tmdbConfigRevision, row.vodName]);
+  Future<TmdbItem?> _heroHistoryMatch(
+    PlaybackHistory row,
+    bool Function() current,
+  ) {
+    final key = jsonEncode([
+      homeHistoryKey(row),
+      row.tmdbId,
+      row.mediaType,
+      _state.tmdbConfigRevision,
+      row.vodName,
+    ]);
     return _heroMatches.putIfAbsent(key, () async {
       if (row.siteKey == pushSiteKey) {
         return _state.pushMatchedItem(vodId: row.vodId, title: row.vodName);
@@ -512,44 +618,65 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Future<Vod?> _heroHistorySource(PlaybackHistory row) =>
-      _heroSources.putIfAbsent(homeHistoryKey(row), () => _state.historyVod(row));
+  Future<Vod?> _heroHistorySource(PlaybackHistory row) => _heroSources
+      .putIfAbsent(homeHistoryKey(row), () => _state.historyVod(row));
 
-  bool _hasResolvedMeta(HomeItem item) => _heroCandidateMeta.containsKey(item.key) ||
-      _resumeMeta.containsKey(item.key) || _followingMeta.containsKey(item.key) ||
+  bool _hasResolvedMeta(HomeItem item) =>
+      _heroCandidateMeta.containsKey(item.key) ||
+      _resumeMeta.containsKey(item.key) ||
+      _followingMeta.containsKey(item.key) ||
       _art.containsKey(item.key);
 
-  Future<void> _loadHeroCandidateMeta(HomeItem item, bool Function() current) async {
+  Future<void> _loadHeroCandidateMeta(
+    HomeItem item,
+    bool Function() current,
+  ) async {
     final pending = _railMetaPending[item.key];
     if (pending != null) await pending;
     if (_hasResolvedMeta(item) || !current()) return;
     final state = _state;
     final service = HomeMetaService(tmdb: state.tmdbService);
     final pipeline = state.metaPipeline;
-    final external = state.externalMetaEnabled ? state.externalMetaService : null;
+    final external = state.externalMetaEnabled
+        ? state.externalMetaService
+        : null;
     final overrides = state.metaOverrides;
     Map<String, HomeMeta> resolved;
     if (item.history case final row?) {
       resolved = await service.resolveHistory(
-        [row], pipeline: pipeline,
-        match: (entry) => _heroHistoryMatch(entry, current), source: _heroHistorySource,
+        [row],
+        pipeline: pipeline,
+        match: (entry) => _heroHistoryMatch(entry, current),
+        source: _heroHistorySource,
         siteName: (entry) =>
             (state.configForSourceKey(entry.sourceKey) ?? state.effectiveConfig)
-                ?.sites.where((site) => site.key == entry.siteKey).firstOrNull?.name ?? '',
-        external: external, pinned: (entry) => overrides.of(entry.vodId),
+                ?.sites
+                .where((site) => site.key == entry.siteKey)
+                .firstOrNull
+                ?.name ??
+            '',
+        external: external,
+        pinned: (entry) => overrides.of(entry.vodId),
         isCurrent: current,
       );
     } else if (item.following case final row?) {
       resolved = await service.resolveFollowings(
-        [row], pipeline: pipeline, match: state.followingTmdbItem,
+        [row],
+        pipeline: pipeline,
+        match: state.followingTmdbItem,
         source: state.followingVod,
-        siteName: (entry) => state.siteInActiveSource(entry.siteKey)?.name ?? '',
-        external: external, pinned: (entry) => overrides.of(entry.vodId),
-        timeout: _followingMetaTimeout, isCurrent: current,
+        siteName: (entry) =>
+            state.siteInActiveSource(entry.siteKey)?.name ?? '',
+        external: external,
+        pinned: (entry) => overrides.of(entry.vodId),
+        timeout: _followingMetaTimeout,
+        isCurrent: current,
       );
     } else if (item.entry case final entry?) {
       resolved = await service.resolveRecommendations(
-        [entry], pipeline: pipeline, isCurrent: current,
+        [entry],
+        pipeline: pipeline,
+        isCurrent: current,
       );
     } else {
       return;
@@ -559,13 +686,27 @@ class _HomePageState extends State<HomePage> {
 
   String _startupScopeFor(List<HeaderRule> rules) {
     // 只落盘摘要，不把API密钥、cookie或配置地址写进快照索引。
-    return sha256.convert(utf8.encode(jsonEncode([
-      _state.activeSourceKey, _state.metaPipeline.toJson(), _state.externalMetaEnabled,
-      _state.metaOverrides.toJson(), _state.liveSiteKeywords,
-      _state.tmdbConfig.enabled, _state.tmdbConfig.imageBase, _state.tmdbConfig.backdropBase,
-      _state.tmdbConfig.enabledSites, _state.tmdbConfig.disabledSites, _state.tmdbConfig.allowedSites,
-      for (final rule in rules) [rule.host, rule.header.asRequestHeaders],
-    ]))).toString();
+    return sha256
+        .convert(
+          utf8.encode(
+            jsonEncode([
+              _state.activeSourceKey,
+              _state.metaPipeline.toJson(),
+              _state.externalMetaEnabled,
+              _state.metaOverrides.toJson(),
+              _state.liveSiteKeywords,
+              _state.tmdbConfig.enabled,
+              _state.tmdbConfig.imageBase,
+              _state.tmdbConfig.backdropBase,
+              _state.tmdbConfig.enabledSites,
+              _state.tmdbConfig.disabledSites,
+              _state.tmdbConfig.allowedSites,
+              for (final rule in rules)
+                [rule.host, rule.header.asRequestHeaders],
+            ]),
+          ),
+        )
+        .toString();
   }
 
   void _restoreStartup(String scope) {
@@ -584,51 +725,82 @@ class _HomePageState extends State<HomePage> {
     _lastDisplayedHeroes.clear();
   }
 
-  String _startupBindingKey(HomeItem item) => sha256.convert(utf8.encode(jsonEncode([
-    item.key, item.history?.tmdbId, item.history?.mediaType,
-  ]))).toString();
+  String _startupBindingKey(HomeItem item) => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([item.key, item.history?.tmdbId, item.history?.mediaType]),
+        ),
+      )
+      .toString();
 
   List<HomeItem> _displayHeroItems(List<HomeItem> candidates) {
-    final byBinding = {for (final item in candidates) _startupBindingKey(item): item};
+    final byBinding = {
+      for (final item in candidates) _startupBindingKey(item): item,
+    };
     final byKey = {for (final item in candidates) item.key: item};
     final displayed = <HomeItem>[];
     final claimer = HomeWorkClaimer();
     final used = <String>{};
     void add(HomeItem item) {
-      if (displayed.length >= _heroMax || !used.add(item.key) || !claimer.claim(item)) return;
+      if (displayed.length >= _heroMax ||
+          !used.add(item.key) ||
+          !claimer.claim(item)) {
+        return;
+      }
       displayed.add(item);
     }
+
     // 快照只恢复展示字段，按钮仍使用当前原始历史，不能按缓存中的旧进度起播。
     for (final snapshot in _startupSnapshots) {
       final raw = byBinding[snapshot.key];
       if (raw == null || _failedStartupKeys.contains(raw.key)) continue;
       final fresh = _heroQualified[raw.key];
-      add(fresh != null ? _withArt(raw).copyWith(backdrop: fresh) : raw.copyWith(
-        title: snapshot.title, subtitle: snapshot.subtitle, overview: snapshot.overview,
-        tags: snapshot.tags, backdrop: Uri.file(snapshot.filePath).toString(),
-      ));
+      add(
+        fresh != null
+            ? _withArt(raw).copyWith(backdrop: fresh)
+            : raw.copyWith(
+                title: snapshot.title,
+                subtitle: snapshot.subtitle,
+                overview: snapshot.overview,
+                tags: snapshot.tags,
+                backdrop: Uri.file(snapshot.filePath).toString(),
+              ),
+      );
     }
     // 后台扫描开始时不清空本会话已显示成功的推荐；只在同高区域替换内容。
     for (final old in _lastDisplayedHeroes.values) {
       final raw = byKey[old.key];
-      if (raw == null || _failedStartupKeys.contains(old.key) ||
-          _startupBindingKey(old) != _startupBindingKey(raw)) { continue; }
+      if (raw == null ||
+          _failedStartupKeys.contains(old.key) ||
+          _startupBindingKey(old) != _startupBindingKey(raw)) {
+        continue;
+      }
       final fresh = _heroQualified[old.key];
-      add(fresh == null ? raw.copyWith(
-        title: old.title, subtitle: old.subtitle, overview: old.overview,
-        tags: old.tags, backdrop: old.backdrop,
-      ) : _withArt(raw).copyWith(backdrop: fresh));
+      add(
+        fresh == null
+            ? raw.copyWith(
+                title: old.title,
+                subtitle: old.subtitle,
+                overview: old.overview,
+                tags: old.tags,
+                backdrop: old.backdrop,
+              )
+            : _withArt(raw).copyWith(backdrop: fresh),
+      );
     }
     for (final key in _heroAcceptedOrder) {
       final raw = byKey[key];
-      if (raw != null) add(_withArt(raw).copyWith(backdrop: _heroQualified[key]));
+      if (raw != null) {
+        add(_withArt(raw).copyWith(backdrop: _heroQualified[key]));
+      }
     }
     _lastDisplayedHeroes
       ..clear()
       ..addEntries(displayed.map((item) => MapEntry(item.key, item)));
     if (!_firstHeroAvailableLogged && displayed.isNotEmpty) {
       _firstHeroAvailableLogged = true;
-      final local = Uri.tryParse(displayed.first.backdrop ?? '')?.scheme == 'file';
+      final local =
+          Uri.tryParse(displayed.first.backdrop ?? '')?.scheme == 'file';
       _state.log.info(
         'event=first_available source=${local ? 'local_cache' : 'verified_image'} '
         'visible=${displayed.length} elapsedMs=${_heroStartupClock.elapsedMilliseconds}',
@@ -642,31 +814,58 @@ class _HomePageState extends State<HomePage> {
     final byKey = {for (final item in candidates) item.key: item};
     final picks = [
       for (final key in _heroAcceptedOrder.take(3))
-        if (byKey[key] case final item?) _withArt(item).copyWith(backdrop: _heroQualified[key]),
+        if (byKey[key] case final item?)
+          _withArt(item).copyWith(backdrop: _heroQualified[key]),
     ];
     if (picks.isEmpty) return;
     final scope = _startupScope;
-    final key = jsonEncode([scope, for (final item in picks)
-      [item.key, item.backdrop, item.title, item.subtitle, item.overview, item.tags]]);
+    final key = jsonEncode([
+      scope,
+      for (final item in picks)
+        [
+          item.key,
+          item.backdrop,
+          item.title,
+          item.subtitle,
+          item.overview,
+          item.tags,
+        ],
+    ]);
     if (key == _startupSaveKey) return;
     _startupSaveKey = key;
     final generation = _heroScanGeneration;
-    final rules = ImageHeaderScope.maybeRules(context) ?? _state.effectiveConfig?.headers ?? const [];
+    final rules =
+        ImageHeaderScope.maybeRules(context) ??
+        _state.effectiveConfig?.headers ??
+        const [];
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      bool current() => mounted && generation == _heroScanGeneration &&
-          scope == _startupScope && key == _startupSaveKey;
+      bool current() =>
+          mounted &&
+          generation == _heroScanGeneration &&
+          scope == _startupScope &&
+          key == _startupSaveKey;
       if (!current()) return;
       final saved = <HomeHeroStartupCandidate>[];
       for (final item in picks) {
         final url = item.backdrop!;
         final headers = imageHeadersFor(rules, url).asRequestHeaders;
-        final bytes = await _startupEncoder.encode(url, headers: headers.isEmpty ? null : headers);
+        final bytes = await _startupEncoder.encode(
+          url,
+          headers: headers.isEmpty ? null : headers,
+        );
         if (!current()) return;
         if (bytes == null) continue;
-        saved.add(HomeHeroStartupCandidate(
-          key: _startupBindingKey(item), sourceUrl: url, title: item.title, bytes: bytes,
-          subtitle: item.subtitle, overview: item.overview, tags: item.tags,
-        ));
+        saved.add(
+          HomeHeroStartupCandidate(
+            key: _startupBindingKey(item),
+            sourceUrl: url,
+            title: item.title,
+            bytes: bytes,
+            subtitle: item.subtitle,
+            overview: item.overview,
+            tags: item.tags,
+          ),
+        );
       }
       if (current() && saved.isNotEmpty) {
         try {
@@ -683,7 +882,10 @@ class _HomePageState extends State<HomePage> {
           // 可删缓存写入失败不影响已经显示的图片。
           if (current()) {
             _startupSaveKey = '';
-            _state.log.warning('event=cache_save result=write_failed', scope: 'home');
+            _state.log.warning(
+              'event=cache_save result=write_failed',
+              scope: 'home',
+            );
           }
         }
       } else if (current()) {
@@ -700,17 +902,36 @@ class _HomePageState extends State<HomePage> {
   /// 图片真正通过解码和像素门槛才进轮播；其余作品仍保留在各自轨道。
   void _ensureHdHero(List<HomeItem> candidates) {
     final state = _state;
-    final rules = ImageHeaderScope.maybeRules(context) ?? state.effectiveConfig?.headers ?? const [];
-    final headerIdentity = [for (final rule in rules) [rule.host, rule.header.asRequestHeaders]];
+    final rules =
+        ImageHeaderScope.maybeRules(context) ??
+        state.effectiveConfig?.headers ??
+        const [];
+    final headerIdentity = [
+      for (final rule in rules) [rule.host, rule.header.asRequestHeaders],
+    ];
     _restoreStartup(_startupScopeFor(rules));
     final key = jsonEncode([
-      identityHashCode(state), state.activeSourceKey, state.tmdbConfigRevision,
-      state.metaPipeline.toJson(), state.externalMetaEnabled, headerIdentity,
+      identityHashCode(state),
+      state.activeSourceKey,
+      state.tmdbConfigRevision,
+      state.metaPipeline.toJson(),
+      state.externalMetaEnabled,
+      headerIdentity,
       for (final item in candidates)
-        [item.key, item.title, item.poster, item.backdrop,
-          item.history?.tmdbId, item.history?.mediaType, item.history?.vodYear,
-          item.following?.metadataUpdatedAtMs, item.following?.updatedAtMs,
-          state.metaOverrides.of(item.history?.vodId ?? item.following?.vodId ?? '')?.key],
+        [
+          item.key,
+          item.title,
+          item.poster,
+          item.backdrop,
+          item.history?.tmdbId,
+          item.history?.mediaType,
+          item.history?.vodYear,
+          item.following?.metadataUpdatedAtMs,
+          item.following?.updatedAtMs,
+          state.metaOverrides
+              .of(item.history?.vodId ?? item.following?.vodId ?? '')
+              ?.key,
+        ],
     ]);
     if (key != _heroScanKey) {
       _heroScanKey = key;
@@ -726,7 +947,9 @@ class _HomePageState extends State<HomePage> {
       _heroSources.clear();
     }
     if (_heroScanRunning || _heroAcceptedOrder.length >= _heroMax) return;
-    final queue = candidates.where((item) => !_heroInspected.contains(item.key)).toList();
+    final queue = candidates
+        .where((item) => !_heroInspected.contains(item.key))
+        .toList();
     if (queue.isEmpty) return;
     _heroScanRunning = true;
     WidgetsBinding.instance.ensureVisualUpdate();
@@ -744,21 +967,33 @@ class _HomePageState extends State<HomePage> {
         _heroInspected.add(item.key);
         try {
           await _loadHeroCandidateMeta(item, current);
-          if (!current() || state.metaPipeline.orderOf(MetaField.backdrop).isEmpty) return (item, null);
+          if (!current() ||
+              state.metaPipeline.orderOf(MetaField.backdrop).isEmpty) {
+            return (item, null);
+          }
           final enriched = _withArt(item);
-          final meta = _heroCandidateMeta[item.key] ?? _resumeMeta[item.key] ??
-              _followingMeta[item.key] ?? _art[item.key];
+          final meta =
+              _heroCandidateMeta[item.key] ??
+              _resumeMeta[item.key] ??
+              _followingMeta[item.key] ??
+              _art[item.key];
           final urls = <String>{
-            if ((enriched.backdrop ?? '').trim().isNotEmpty) enriched.backdrop!.trim(),
+            if ((enriched.backdrop ?? '').trim().isNotEmpty)
+              enriched.backdrop!.trim(),
             ...?meta?.backdrops,
             if ((enriched.poster ?? '').trim().isNotEmpty &&
-                state.metaPipeline.orderOf(MetaField.backdrop).contains(MetaSourceKind.source))
+                state.metaPipeline
+                    .orderOf(MetaField.backdrop)
+                    .contains(MetaSourceKind.source))
               enriched.poster!.trim(),
           };
           for (final url in urls) {
             if (!current()) return (item, null);
             final headers = imageHeadersFor(rules, url).asRequestHeaders;
-            final evidence = await _heroProbe.check(url, headers: headers.isEmpty ? null : headers);
+            final evidence = await _heroProbe.check(
+              url,
+              headers: headers.isEmpty ? null : headers,
+            );
             if (evidence?.isEligible ?? false) return (item, url);
           }
         } catch (_) {
@@ -766,11 +1001,17 @@ class _HomePageState extends State<HomePage> {
         }
         return (item, null);
       }
+
       // 两张并发检查，但按候选原序提交，不能让下载更快的后排作品抢走前排位置。
       final candidatesByKey = {for (final item in candidates) item.key: item};
-      while (current() && next < queue.length && _heroAcceptedOrder.length < _heroMax) {
+      while (current() &&
+          next < queue.length &&
+          _heroAcceptedOrder.length < _heroMax) {
         final remaining = _heroMax - _heroAcceptedOrder.length;
-        final batch = queue.skip(next).take(remaining < 2 ? remaining : 2).toList();
+        final batch = queue
+            .skip(next)
+            .take(remaining < 2 ? remaining : 2)
+            .toList();
         next += batch.length;
         final checked = await Future.wait(batch.map(inspect));
         if (!current()) return;
@@ -838,7 +1079,9 @@ class _HomePageState extends State<HomePage> {
     _followingMeta.clear();
     if (items.isEmpty) return;
     final completed = Completer<void>();
-    for (final item in items) { _railMetaPending[item.identityKey] = completed.future; }
+    for (final item in items) {
+      _railMetaPending[item.identityKey] = completed.future;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || generation != _followingMetaGeneration) {
         if (!completed.isCompleted) completed.complete();
@@ -870,7 +1113,11 @@ class _HomePageState extends State<HomePage> {
     final pipeline = _state.metaPipeline;
     final hidePoster = pipeline.orderOf(MetaField.poster).isEmpty;
     final hideBackdrop = pipeline.orderOf(MetaField.backdrop).isEmpty;
-    final art = _heroCandidateMeta[item.key] ?? _resumeMeta[item.key] ?? _followingMeta[item.key] ?? _art[item.key];
+    final art =
+        _heroCandidateMeta[item.key] ??
+        _resumeMeta[item.key] ??
+        _followingMeta[item.key] ??
+        _art[item.key];
     final overview = pipeline.orderOf(MetaField.overview).isEmpty
         ? ''
         : _firstNonEmpty([art?.overview]);
@@ -902,8 +1149,12 @@ class _HomePageState extends State<HomePage> {
 
   /// 站源没给副信息时，用 TMDB 的年份与评分补一个（同一套「年份 · 评分」口径）。
   String _metaSubtitle(HomeMeta meta) => [
-    if (_state.metaPipeline.orderOf(MetaField.releaseDate).isNotEmpty && meta.year.isNotEmpty) meta.year,
-    if (_state.metaPipeline.orderOf(MetaField.rating).isNotEmpty && meta.rating > 0) meta.rating.toStringAsFixed(1),
+    if (_state.metaPipeline.orderOf(MetaField.releaseDate).isNotEmpty &&
+        meta.year.isNotEmpty)
+      meta.year,
+    if (_state.metaPipeline.orderOf(MetaField.rating).isNotEmpty &&
+        meta.rating > 0)
+      meta.rating.toStringAsFixed(1),
   ].join(' · ');
 
   /// 取第一个非空串；都为空时返回 null（`HomeItem.copyWith` 据此保留原值）。
@@ -1009,14 +1260,21 @@ class _HomePageState extends State<HomePage> {
         ),
       );
     }
-    final candidates = homeHeroCandidates(feed, hot: _hotHeroFallback(hotRails(_hot)));
+    final candidates = homeHeroCandidates(
+      feed,
+      hot: _hotHeroFallback(hotRails(_hot)),
+    );
     _ensureHdHero(candidates);
     final heroItems = _displayHeroItems(candidates);
     _saveStartupImages(candidates);
-    final selectedKey = _heroKeys.isEmpty ? null : _heroKeys[_heroIndex.value % _heroKeys.length];
+    final selectedKey = _heroKeys.isEmpty
+        ? null
+        : _heroKeys[_heroIndex.value % _heroKeys.length];
     final nextKeys = [for (final item in heroItems) item.key];
     if (!listEquals(_heroKeys, nextKeys)) {
-      final nextIndex = selectedKey == null ? -1 : nextKeys.indexOf(selectedKey);
+      final nextIndex = selectedKey == null
+          ? -1
+          : nextKeys.indexOf(selectedKey);
       _heroKeys = nextKeys;
       _heroIndex.value = nextIndex < 0 ? 0 : nextIndex;
     }
@@ -1027,7 +1285,9 @@ class _HomePageState extends State<HomePage> {
     final hot = _hotRails(hero: const [], rails: rails);
     final hasRails = rails.isNotEmpty || hot.isNotEmpty;
     // 冷启动bootstrap尚未恢复历史时也先预留，不能等异步列表出现才加高。
-    if (candidates.isNotEmpty || heroItems.isNotEmpty || hasRails) _reserveHeroSlot = true;
+    if (candidates.isNotEmpty || heroItems.isNotEmpty || hasRails) {
+      _reserveHeroSlot = true;
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1041,24 +1301,37 @@ class _HomePageState extends State<HomePage> {
               child: IgnorePointer(
                 child: ValueListenableBuilder<int>(
                   valueListenable: _heroIndex,
-                  builder: (context, index, _) =>
-                      HomeBackdrop(
-                         items: heroItems, index: index,
-                         onImageError: (item) {
-                           final url = item.backdrop;
-                           WidgetsBinding.instance.addPostFrameCallback((_) {
-                             if (!mounted) return;
-                             if (_lastDisplayedHeroes[item.key]?.backdrop != url) return;
-                             setState(() {
-                               _heroQualified.remove(item.key);
-                               _heroAcceptedOrder.remove(item.key);
-                                _failedStartupKeys.add(item.key);
-                                _lastDisplayedHeroes.remove(item.key);
-                             });
-                           });
-                           WidgetsBinding.instance.ensureVisualUpdate();
-                         },
-                       ),
+                  builder: (context, index, _) {
+                    void onImageError(HomeItem item) {
+                      final url = item.backdrop;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted ||
+                            _lastDisplayedHeroes[item.key]?.backdrop != url) {
+                          return;
+                        }
+                        setState(() {
+                          _heroQualified.remove(item.key);
+                          _heroAcceptedOrder.remove(item.key);
+                          _failedStartupKeys.add(item.key);
+                          _lastDisplayedHeroes.remove(item.key);
+                        });
+                      });
+                      WidgetsBinding.instance.ensureVisualUpdate();
+                    }
+
+                    final backdrop = HomeBackdrop(
+                      items: heroItems,
+                      index: index,
+                      onImageError: onImageError,
+                    );
+                    if (widget.onHeroBackdropChanged == null) return backdrop;
+                    final item = heroItems.isEmpty
+                        ? null
+                        : heroItems[index % heroItems.length];
+                    _watchHeroBackdrop(context, item, backdrop, onImageError);
+                    if (widget.hasShellArtwork) return const SizedBox.expand();
+                    return const SizedBox.expand();
+                  },
                 ),
               ),
             ),
@@ -1068,19 +1341,21 @@ class _HomePageState extends State<HomePage> {
                 SliverToBoxAdapter(
                   child: heroItems.isEmpty
                       ? (_reserveHeroSlot
-                          ? _HomeHeroStartupPlaceholder(
-                              height: heroHeight, loading: _heroScanRunning,
-                              hasCandidates: candidates.isNotEmpty || hasRails,
-                              hasConfig: _state.hasConfig,
-                              onOpenBrowse: widget.onOpenBrowse,
-                              onImportConfig: widget.onImportConfig,
-                            )
-                          : _HomeEmptyHero(
-                              height: 220,
-                              hasConfig: _state.hasConfig,
-                              onImportConfig: widget.onImportConfig,
-                              onOpenBrowse: widget.onOpenBrowse,
-                            ))
+                            ? _HomeHeroStartupPlaceholder(
+                                height: heroHeight,
+                                loading: _heroScanRunning,
+                                hasCandidates:
+                                    candidates.isNotEmpty || hasRails,
+                                hasConfig: _state.hasConfig,
+                                onOpenBrowse: widget.onOpenBrowse,
+                                onImportConfig: widget.onImportConfig,
+                              )
+                            : _HomeEmptyHero(
+                                height: 220,
+                                hasConfig: _state.hasConfig,
+                                onImportConfig: widget.onImportConfig,
+                                onOpenBrowse: widget.onOpenBrowse,
+                              ))
                       : HomeHero(
                           items: heroItems,
                           height: heroHeight,
@@ -1223,7 +1498,16 @@ class _HomePageState extends State<HomePage> {
     return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('搜索站源')),
+          appBar: AppBar(
+            title: const Text('搜索站源'),
+            backgroundColor: Colors.transparent,
+            flexibleSpace: const IgnorePointer(
+              child: GlassPane(
+                borderRadius: BorderRadius.zero,
+                child: SizedBox.expand(),
+              ),
+            ),
+          ),
           body: SearchPage(
             state: _state,
             initialKeyword: title,
@@ -1362,14 +1646,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<TmdbItem?> _chooseHotDetail(HomeItem item, List<TmdbItem> candidates) {
-    return showDialog<TmdbItem>(
+    return showGlassDialog<TmdbItem>(
       context: context,
-      builder: (dialogContext) => SimpleDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         key: const ValueKey('home-hot-details-picker'),
+        constraints: const BoxConstraints(maxWidth: 608),
         title: Text('选择《${item.title}》的详情'),
-        children: [
-          SizedBox(
-            width: 560,
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1388,13 +1673,12 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              key: const ValueKey('home-hot-details-cancel'),
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('取消'),
-            ),
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('home-hot-details-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
           ),
         ],
       ),
@@ -1402,9 +1686,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _hotDetailUnavailable(HomeItem item, String message) async {
-    final search = await showDialog<bool>(
+    final search = await showGlassDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         key: const ValueKey('home-hot-details-unavailable'),
         title: const Text('暂未找到详情'),
         content: Text(message),
@@ -1448,50 +1732,45 @@ class _HomeEmptyHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Container(
+    return SizedBox(
       key: const ValueKey('home-empty-hero'),
       height: height,
       width: double.infinity,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [scheme.surface, scheme.surfaceContainerLow, scheme.surface],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.xl,
+          AppSpace.xl,
+          AppSpace.xl,
+          44,
         ),
-      ),
-      padding: const EdgeInsets.fromLTRB(
-        AppSpace.xl,
-        AppSpace.xl,
-        AppSpace.xl,
-        44,
-      ),
-      child: Align(
-        alignment: Alignment.bottomLeft,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              hasConfig ? '还没有可续播的内容' : '还没有导入配置',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: AppWeight.title,
-                color: scheme.onSurface,
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                hasConfig ? '还没有可续播的内容' : '还没有导入配置',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: AppWeight.title,
+                  color: scheme.onSurface,
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpace.sm),
-            Text(
-              hasConfig ? '看过一集之后，这里会接着上次的位置。' : '支持 URL、本地文件与 JSON 文本三种方式。',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                hasConfig ? '看过一集之后，这里会接着上次的位置。' : '支持 URL、本地文件与 JSON 文本三种方式。',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpace.lg),
-            FilledButton(
-              key: const ValueKey('home-empty-action'),
-              onPressed: hasConfig ? onOpenBrowse : onImportConfig,
-              child: Text(hasConfig ? '去点播逛逛' : '导入配置'),
-            ),
-          ],
+              const SizedBox(height: AppSpace.lg),
+              FilledButton(
+                key: const ValueKey('home-empty-action'),
+                onPressed: hasConfig ? onOpenBrowse : onImportConfig,
+                child: Text(hasConfig ? '去点播逛逛' : '导入配置'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1501,8 +1780,12 @@ class _HomeEmptyHero extends StatelessWidget {
 /// 首次无缓存也固定占好推荐位，加载/失败只替换内容，不移动下方轨道。
 class _HomeHeroStartupPlaceholder extends StatelessWidget {
   const _HomeHeroStartupPlaceholder({
-    required this.height, required this.loading, required this.hasCandidates,
-    required this.hasConfig, required this.onOpenBrowse, required this.onImportConfig,
+    required this.height,
+    required this.loading,
+    required this.hasCandidates,
+    required this.hasConfig,
+    required this.onOpenBrowse,
+    required this.onImportConfig,
   });
   final double height;
   final bool loading;
@@ -1517,17 +1800,29 @@ class _HomeHeroStartupPlaceholder extends StatelessWidget {
     height: height,
     width: double.infinity,
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpace.xl, AppSpace.xl, AppSpace.xl, 44),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.xl,
+        AppSpace.xl,
+        AppSpace.xl,
+        44,
+      ),
       child: Align(
         alignment: Alignment.bottomLeft,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(!hasCandidates ? (hasConfig ? '还没有可续播的内容' : '还没有导入配置')
-                : (loading ? '正在准备精选推荐' : '暂无可用的高清推荐'),
-              style: Theme.of(context).textTheme.headlineSmall),
+            Text(
+              !hasCandidates
+                  ? (hasConfig ? '还没有可续播的内容' : '还没有导入配置')
+                  : (loading ? '正在准备精选推荐' : '暂无可用的高清推荐'),
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
             const SizedBox(height: AppSpace.sm),
-            Text(loading ? '优先恢复本地图片，后台检查新的高清宽图。' : '继续观看和追剧列表仍保留在下方。',
-              style: Theme.of(context).textTheme.bodyMedium),
+            Text(
+              loading ? '优先恢复本地图片，后台检查新的高清宽图。' : '继续观看和追剧列表仍保留在下方。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
             if (!hasCandidates) ...[
               const SizedBox(height: AppSpace.lg),
               FilledButton(

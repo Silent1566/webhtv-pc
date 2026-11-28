@@ -13,6 +13,7 @@ import '../services/log_service.dart';
 import '../services/storage.dart';
 import '../state/app_state.dart';
 import '../state/sync_state.dart';
+import 'glass_dialog.dart';
 import 'ai_settings_page.dart';
 import 'ai_integration_widgets.dart';
 import 'app.dart';
@@ -21,6 +22,7 @@ import 'backup_page.dart';
 import 'common.dart';
 import 'config_pages.dart';
 import 'danmaku_settings_page.dart';
+import 'glass_widgets.dart';
 import 'meta_sources_page.dart';
 import 'health_filter_controls.dart';
 import 'injected_sites_page.dart';
@@ -40,6 +42,7 @@ import 'settings_layout.dart';
 import 'site_self_check_panel.dart';
 import 'runtime_dependencies_page.dart';
 import 'tokens.dart';
+import 'glass_chrome.dart';
 import 'toast.dart';
 
 /// 设置分类的稳定标识与显示名。
@@ -102,14 +105,19 @@ class SettingsPage extends StatelessWidget {
     super.key,
     required this.state,
     this.initialCategory = SettingsCategory.preferences,
+    this.shellUnderlap = false,
   });
 
   final AppState state;
+  final bool shellUnderlap;
   final String initialCategory;
 
   @override
-  Widget build(BuildContext context) =>
-      SettingsCategoriesBody(state: state, initialCategory: initialCategory);
+  Widget build(BuildContext context) => SettingsCategoriesBody(
+    state: state,
+    initialCategory: initialCategory,
+    shellUnderlap: shellUnderlap,
+  );
 }
 
 /// 分类中枢本体：[SettingsPage] 与「全部设置」页共用。
@@ -128,9 +136,11 @@ class SettingsCategoriesBody extends StatefulWidget {
     required this.state,
     this.showHeader = true,
     this.initialCategory = SettingsCategory.preferences,
+    this.shellUnderlap = false,
   });
 
   final AppState state;
+  final bool shellUnderlap;
 
   /// 是否渲染页标题（「设置 + 一句说明」）。
   ///
@@ -443,7 +453,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
           key: const ValueKey('settings-local-sources-open'),
           icon: Icons.folder_open_outlined,
           title: '本地源',
-          subtitle: '扫描本机媒体目录，按文件名匹配剧集',
+          subtitle: '管理本地爬虫源，添加在线 HTML 源',
           onTap: () => _push(context, LocalSourcesPage(state: state)),
         ),
         SettingsNavRow(
@@ -681,14 +691,19 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
     return LayoutBuilder(
       builder: (context, constraints) => Padding(
         // 表单列限宽：宽窗下正文居中，与明细页同一个 900 宽度口径。
-        padding: EdgeInsets.symmetric(
-          horizontal:
-              AppSpace.lg +
-              (constraints.maxWidth > kFormMaxWidth
-                  ? (constraints.maxWidth - kFormMaxWidth) / 2
-                  : 0),
-          vertical: AppSpace.lg,
-        ),
+        padding:
+            EdgeInsets.symmetric(
+              horizontal:
+                  AppSpace.lg +
+                  (constraints.maxWidth > kFormMaxWidth
+                      ? (constraints.maxWidth - kFormMaxWidth) / 2
+                      : 0),
+              vertical: AppSpace.lg,
+            ).copyWith(
+              top:
+                  AppSpace.lg +
+                  (widget.shellUnderlap ? kShellContentTopInset : 0),
+            ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -702,14 +717,17 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
                 builder: (context, inner) {
                   // 只把**当前类别**放进树里：其余类别的内容不渲染，
                   // 于是「两列内容同时展开」这个旧形态在结构上不可能出现。
-                  final body = _categoryContent(contents[_category]!);
+                  final body = _categoryContent(
+                    contents[_category]!,
+                    viewportBottom: widget.shellUnderlap
+                        ? constraints.maxHeight - AppSpace.lg
+                        : null,
+                  );
                   if (inner.maxWidth < _navMinWidth) {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _categoryStrip(context),
-                        const SizedBox(height: AppSpace.md),
-                        const Divider(height: 1),
                         const SizedBox(height: AppSpace.md),
                         Expanded(child: body),
                       ],
@@ -719,8 +737,6 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       SizedBox(width: _navWidth, child: _categoryRail(context)),
-                      const SizedBox(width: AppSpace.lg),
-                      const VerticalDivider(width: 1, thickness: 1),
                       const SizedBox(width: AppSpace.lg),
                       Expanded(child: body),
                     ],
@@ -806,7 +822,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   }
 
   /// 当前类别的单列内容区（滚动位置按类别恢复）。
-  Widget _categoryContent(Widget section) {
+  Widget _categoryContent(Widget section, {required double? viewportBottom}) {
     final id = _category;
     final saved = _scrollOffsets[id] ?? 0;
     final controller = _controllerFor(id);
@@ -824,11 +840,33 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
         }
       });
     }
-    return ListView(
-      key: ValueKey('settings-category-content-$id'),
-      controller: controller,
-      padding: EdgeInsets.zero,
-      children: [section],
+    Widget content(double leading) => Material(
+      type: MaterialType.transparency,
+      child: ListView(
+        key: ValueKey('settings-category-content-$id'),
+        controller: controller,
+        padding: EdgeInsets.fromLTRB(
+          AppSpace.lg,
+          leading + AppSpace.lg,
+          AppSpace.lg,
+          AppSpace.lg,
+        ),
+        children: [section],
+      ),
+    );
+    if (viewportBottom == null) return GlassPane(child: content(0));
+    return Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.expand,
+      children: [
+        const Positioned.fill(
+          child: IgnorePointer(child: GlassPane(child: SizedBox.expand())),
+        ),
+        ShellScrollUnderlap(
+          viewportBottom: viewportBottom,
+          builder: (context, _, leading) => content(leading),
+        ),
+      ],
     );
   }
 
@@ -837,27 +875,33 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
   /// 可滚动：分类从 4 类增到 5 类后，「16 上内边距 + 页标题 + 5×(48 行 + 4 间距)」
   /// 在矮窗里放不下，直接 Column 会 RenderFlex overflow（480×340 即可复现）。
   /// 让栏自己滚比隐藏第 5 类或压字号更诚实：每个分类都还在，滚一下就看得到。
-  Widget _categoryRail(BuildContext context) => SingleChildScrollView(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final category in kSettingsCategories)
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpace.xs),
-            child: _categoryControl(context, category, compact: false),
-          ),
-      ],
+  Widget _categoryRail(BuildContext context) => GlassPane(
+    padding: const EdgeInsets.all(AppSpace.sm),
+    child: SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final category in kSettingsCategories)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpace.xs),
+              child: _categoryControl(context, category, compact: false),
+            ),
+        ],
+      ),
     ),
   );
 
   /// 窄窗：顶部分类条（横向换行，仍用同一组 key）。
-  Widget _categoryStrip(BuildContext context) => Wrap(
-    spacing: AppSpace.sm,
-    runSpacing: AppSpace.sm,
-    children: [
-      for (final category in kSettingsCategories)
-        _categoryControl(context, category, compact: true),
-    ],
+  Widget _categoryStrip(BuildContext context) => GlassPane(
+    padding: const EdgeInsets.all(AppSpace.sm),
+    child: Wrap(
+      spacing: AppSpace.sm,
+      runSpacing: AppSpace.sm,
+      children: [
+        for (final category in kSettingsCategories)
+          _categoryControl(context, category, compact: true),
+      ],
+    ),
   );
 
   /// 一个分类控件：原生可聚焦控件（Tab 可达、回车/空格激活），
@@ -890,12 +934,7 @@ class _SettingsCategoriesBodyState extends State<SettingsCategoriesBody> {
       child: Material(
         color: selected ? scheme.surfaceContainerHigh : Colors.transparent,
         shape: compact
-            ? RoundedRectangleBorder(
-                borderRadius: AppRadius.pillAll,
-                side: BorderSide(
-                  color: scheme.outlineVariant.withValues(alpha: 0.72),
-                ),
-              )
+            ? const RoundedRectangleBorder(borderRadius: AppRadius.pillAll)
             : const RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -1095,14 +1134,15 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       MaterialPageRoute<void>(
         builder: (_) => AnimatedBuilder(
           animation: state,
-          builder: (context, _) => Scaffold(
-            appBar: AppBar(title: const Text('手动站点体检')),
+          builder: (context, _) => SettingsRouteScaffold(
+            title: const Text('手动站点体检'),
             body: ListView(
               padding: formPagePadding(context),
               children: [
                 SiteSelfCheckPanel(
                   service: state.siteService,
                   sites: [for (final item in state.siteItems) item.site],
+                  showTitle: false,
                 ),
               ],
             ),
@@ -1126,23 +1166,21 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
         .where((item) => item.status == SourceStatus.unknown)
         .length;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('站点健康'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: AppSpace.lg),
-            child: Center(
-              child: FilledButton.icon(
-                key: const ValueKey('site-health-self-check-open'),
-                onPressed: () => _openSelfCheck(context),
-                icon: const Icon(Icons.fact_check_outlined),
-                label: const Text('手动体检'),
-              ),
+    return SettingsRouteScaffold(
+      title: const Text('站点健康'),
+      actions: [
+        Padding(
+          padding: const EdgeInsets.only(right: AppSpace.lg),
+          child: Center(
+            child: FilledButton.icon(
+              key: const ValueKey('site-health-self-check-open'),
+              onPressed: () => _openSelfCheck(context),
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('手动体检'),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
       body: ListView(
         padding: const EdgeInsets.all(AppSpace.xl),
         children: [
@@ -1348,8 +1386,8 @@ class _HealthTableState extends State<_HealthTable> {
 Future<void> openLogsPage(BuildContext context, AppState state) =>
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('日志与诊断')),
+        builder: (_) => SettingsRouteScaffold(
+          title: const Text('日志与诊断'),
           body: LogsPage(state: state),
         ),
       ),
@@ -1411,7 +1449,7 @@ class _LogsPageState extends State<LogsPage> {
             children: [
               const Text('级别过滤：'),
               const SizedBox(width: 8),
-              DropdownButton<LogLevel?>(
+              SettingsDropdown<LogLevel?>(
                 underline: const SizedBox.shrink(),
                 value: _filter,
                 items: [
@@ -1439,7 +1477,6 @@ class _LogsPageState extends State<LogsPage> {
                         isDense: true,
                         hintText: '搜索关键字',
                         prefixIcon: Icon(Icons.search, size: 18),
-                        border: OutlineInputBorder(),
                       ),
                       onChanged: (_) => setState(() {}),
                     ),
@@ -1594,9 +1631,9 @@ class _LogsPageState extends State<LogsPage> {
   }
 
   Future<void> _clear() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
         title: const Text('清理日志？'),
         content: const Text('会删除内存中的日志与已落盘的日志文件（含轮转历史），无法撤销。'),
         actions: [
@@ -1639,86 +1676,79 @@ class _PlaybackDiagnosticsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final failed = diagnostics.succeeded == false;
-    return Container(
+    return SettingsGlassCard(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: failed
-              ? theme.colorScheme.error
-              : theme.colorScheme.outlineVariant,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                failed ? Icons.error_outline : Icons.monitor_heart_outlined,
-                size: 18,
-                color: failed ? theme.colorScheme.error : null,
-              ),
-              const SizedBox(width: 8),
-              Text('最近播放诊断', style: theme.textTheme.titleSmall),
-              const Spacer(),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await Clipboard.setData(
-                    ClipboardData(text: diagnostics.report),
-                  );
-                  if (context.mounted) {
-                    showToast('已复制播放诊断', kind: ToastKind.success);
-                  }
-                },
-                icon: const Icon(Icons.copy_all_outlined, size: 16),
-                label: const Text('复制'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 16,
-            runSpacing: 4,
-            children: [
-              _chip('引擎', PlaybackEngine.displayName(diagnostics.engine)),
-              _chip('格式', diagnostics.format.label),
-              if (diagnostics.target.host.isNotEmpty)
-                _chip('主机', diagnostics.target.host),
-              if (diagnostics.flag != null && diagnostics.flag!.isNotEmpty)
-                _chip('线路', diagnostics.flag!),
-              _chip(
-                '网络',
-                diagnostics.target.scheme.isEmpty
-                    ? '未知'
-                    : '${diagnostics.target.scheme}'
-                          '${diagnostics.target.isSecure ? '（加密）' : ''}',
-              ),
-              _chip('结果', switch (diagnostics.succeeded) {
-                true => '成功',
-                false => '失败',
-                null => '进行中',
-              }),
-              for (final stage in PlaybackStage.values)
-                if (diagnostics.elapsedOf(stage) != null)
-                  _chip(
-                    stage.label,
-                    '${diagnostics.elapsedOf(stage)!.inMilliseconds}ms',
-                  ),
-            ],
-          ),
-          if (failed) ...[
-            const SizedBox(height: 8),
-            Text(
-              diagnostics.failureHint ?? '播放失败',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.error,
-              ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  failed ? Icons.error_outline : Icons.monitor_heart_outlined,
+                  size: 18,
+                  color: failed ? theme.colorScheme.error : null,
+                ),
+                const SizedBox(width: 8),
+                Text('最近播放诊断', style: theme.textTheme.titleSmall),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: diagnostics.report),
+                    );
+                    if (context.mounted) {
+                      showToast('已复制播放诊断', kind: ToastKind.success);
+                    }
+                  },
+                  icon: const Icon(Icons.copy_all_outlined, size: 16),
+                  label: const Text('复制'),
+                ),
+              ],
             ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 16,
+              runSpacing: 4,
+              children: [
+                _chip('引擎', PlaybackEngine.displayName(diagnostics.engine)),
+                _chip('格式', diagnostics.format.label),
+                if (diagnostics.target.host.isNotEmpty)
+                  _chip('主机', diagnostics.target.host),
+                if (diagnostics.flag != null && diagnostics.flag!.isNotEmpty)
+                  _chip('线路', diagnostics.flag!),
+                _chip(
+                  '网络',
+                  diagnostics.target.scheme.isEmpty
+                      ? '未知'
+                      : '${diagnostics.target.scheme}'
+                            '${diagnostics.target.isSecure ? '（加密）' : ''}',
+                ),
+                _chip('结果', switch (diagnostics.succeeded) {
+                  true => '成功',
+                  false => '失败',
+                  null => '进行中',
+                }),
+                for (final stage in PlaybackStage.values)
+                  if (diagnostics.elapsedOf(stage) != null)
+                    _chip(
+                      stage.label,
+                      '${diagnostics.elapsedOf(stage)!.inMilliseconds}ms',
+                    ),
+              ],
+            ),
+            if (failed) ...[
+              const SizedBox(height: 8),
+              Text(
+                diagnostics.failureHint ?? '播放失败',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

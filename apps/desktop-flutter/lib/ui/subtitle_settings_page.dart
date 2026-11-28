@@ -179,8 +179,9 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('字幕源')),
+    return SettingsRouteScaffold(
+      title: const Text('字幕源'),
+      wallpaperUrl: widget.state.config?.wallpaper,
       body: ListView(
         padding: formPagePadding(context),
         children: [
@@ -215,7 +216,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 obscureText: !_revealAssrtToken,
                 decoration: InputDecoration(
                   labelText: 'ASSRT token',
-                  border: const OutlineInputBorder(),
                   // tooltip 不能与 HTTP 源的「显示令牌」同名，否则一个
                   // find.byTooltip 会同时命中两个按钮。
                   suffixIcon: IconButton(
@@ -282,7 +282,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 minLines: 3,
                 maxLines: 6,
                 decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
                   hintText: r'C:\Users\you\Videos\subtitles',
                 ),
               ),
@@ -316,7 +315,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 decoration: InputDecoration(
                   errorText: _endpointError,
                   labelText: '搜索地址',
-                  border: OutlineInputBorder(),
                   hintText: 'https://example.test/subtitles/search',
                 ),
               ),
@@ -328,7 +326,6 @@ class _SubtitleSettingsPageState extends State<SubtitleSettingsPage> {
                 obscureText: !_revealToken,
                 decoration: InputDecoration(
                   labelText: '令牌（可选）',
-                  border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
                     tooltip: _revealToken ? '隐藏令牌' : '显示令牌',
                     icon: Icon(

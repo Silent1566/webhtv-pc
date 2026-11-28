@@ -16,6 +16,8 @@ import 'package:flutter/services.dart';
 import '../core/protocol.dart';
 import '../core/push_parser.dart';
 import '../state/app_state.dart';
+import 'glass_widgets.dart';
+import 'glass_dialog.dart' show showGlassDialog;
 import 'browse_pages.dart';
 import 'common.dart';
 import 'meta_match_dialog.dart';
@@ -164,7 +166,16 @@ Future<void> openSearchRoute(
   return Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => Scaffold(
-        appBar: AppBar(title: Text('搜索：$text')),
+        appBar: AppBar(
+          title: Text('搜索：$text'),
+          backgroundColor: Colors.transparent,
+          flexibleSpace: const IgnorePointer(
+            child: GlassPane(
+              borderRadius: BorderRadius.zero,
+              child: SizedBox.expand(),
+            ),
+          ),
+        ),
         body: SearchPage(state: state, initialKeyword: text),
       ),
     ),
@@ -201,7 +212,7 @@ class PushDetailPage extends StatelessWidget {
       showToast('TMDB 未配置，无法匹配元数据', kind: ToastKind.error);
       return;
     }
-    await showDialog<bool>(
+    await showGlassDialog<bool>(
       context: context,
       builder: (_) => MetaMatchDialog(
         state: state,
@@ -235,13 +246,22 @@ class PushDetailPage extends StatelessWidget {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        flexibleSpace: const IgnorePointer(
+          child: GlassPane(
+            borderRadius: BorderRadius.zero,
+            child: SizedBox.expand(),
+          ),
+        ),
         title: const Text('推送详情'),
         actions: [
           IconButton(
             key: const ValueKey('push-detail-copy-url'),
             tooltip: '复制地址',
             onPressed: () => Clipboard.setData(
-              ClipboardData(text: request.isLocal ? request.localPath : request.url),
+              ClipboardData(
+                text: request.isLocal ? request.localPath : request.url,
+              ),
             ),
             icon: const Icon(Icons.copy, size: 18),
           ),
@@ -257,8 +277,7 @@ class PushDetailPage extends StatelessWidget {
             title: request.vodName,
           );
           final title = _title;
-          final poster =
-              matched?.posterUrl?.trim().isNotEmpty == true
+          final poster = matched?.posterUrl?.trim().isNotEmpty == true
               ? matched!.posterUrl
               : state.cachedTmdbPosterUrl(
                   siteKey: pushSiteKey,
@@ -267,130 +286,134 @@ class PushDetailPage extends StatelessWidget {
           final location = request.isLocal ? request.localPath : request.url;
           return SingleChildScrollView(
             padding: formPagePadding(context),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: AppRadius.lgAll,
-                  child: PosterImage(
-                    url: poster,
-                    width: 180,
-                    height: 270,
-                    placeholder: const Center(
-                      child: Icon(Icons.send_outlined, size: 36),
+            child: GlassPane(
+              padding: const EdgeInsets.all(AppSpace.lg),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: AppRadius.lgAll,
+                    child: PosterImage(
+                      url: poster,
+                      width: 180,
+                      height: 270,
+                      placeholder: const Center(
+                        child: Icon(Icons.send_outlined, size: 36),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: AppSpace.xl),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title, style: theme.textTheme.headlineSmall),
-                      if (matched != null && matched.subtitle.trim().isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: AppSpace.xs),
-                          child: Text(
-                            matched.subtitle,
-                            style: theme.textTheme.bodySmall,
+                  const SizedBox(width: AppSpace.xl),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: theme.textTheme.headlineSmall),
+                        if (matched != null &&
+                            matched.subtitle.trim().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: AppSpace.xs),
+                            child: Text(
+                              matched.subtitle,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        if (matched?.overview?.trim().isNotEmpty == true)
+                          Padding(
+                            padding: const EdgeInsets.only(top: AppSpace.sm),
+                            child: Text(
+                              matched!.overview!.trim(),
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                          ),
+                        const SizedBox(height: AppSpace.lg),
+                        Text(
+                          request.isLocal ? '本地文件' : '播放地址',
+                          style: theme.textTheme.labelMedium,
+                        ),
+                        const SizedBox(height: AppSpace.xs),
+                        SelectableText(
+                          location,
+                          key: const ValueKey('push-detail-location'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontFamily: 'monospace',
                           ),
                         ),
-                      if (matched?.overview?.trim().isNotEmpty == true)
-                        Padding(
-                          padding: const EdgeInsets.only(top: AppSpace.sm),
-                          child: Text(
-                            matched!.overview!.trim(),
-                            maxLines: 4,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodyMedium,
-                          ),
-                        ),
-                      const SizedBox(height: AppSpace.lg),
-                      Text(
-                        request.isLocal ? '本地文件' : '播放地址',
-                        style: theme.textTheme.labelMedium,
-                      ),
-                      const SizedBox(height: AppSpace.xs),
-                      SelectableText(
-                        location,
-                        key: const ValueKey('push-detail-location'),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                      if (!request.isLocal && isPanShareLink(request.url))
-                        Padding(
-                          padding: const EdgeInsets.only(top: AppSpace.sm),
-                          child: Row(
-                            key: const ValueKey('push-detail-pan-hint'),
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                Icons.info_outline,
-                                size: 16,
-                                color: theme.colorScheme.error,
-                              ),
-                              const SizedBox(width: AppSpace.xs),
-                              Expanded(
-                                child: Text(
-                                  '这是网盘分享链接，PC 不能把分享页直接当视频播放。'
-                                  '建议先匹配元数据，再用剧名到站点里搜。',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.error,
+                        if (!request.isLocal && isPanShareLink(request.url))
+                          Padding(
+                            padding: const EdgeInsets.only(top: AppSpace.sm),
+                            child: Row(
+                              key: const ValueKey('push-detail-pan-hint'),
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: 16,
+                                  color: theme.colorScheme.error,
+                                ),
+                                const SizedBox(width: AppSpace.xs),
+                                Expanded(
+                                  child: Text(
+                                    '这是网盘分享链接，PC 不能把分享页直接当视频播放。'
+                                    '建议先匹配元数据，再用剧名到站点里搜。',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.error,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
+                        if (state.siteInActiveSource(pushSiteKey) == null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: AppSpace.sm),
+                            child: Text(
+                              '当前配置里没有可用的「推送」源（push_agent）：'
+                              '没法像普通点播那样取线路，只能直接播这条地址，'
+                              '或用剧名到站点里搜同名资源。',
+                              key: const ValueKey('push-detail-no-site-hint'),
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        if (matched == null && state.tmdbConfig.isReady)
+                          Padding(
+                            padding: const EdgeInsets.only(top: AppSpace.sm),
+                            child: Text(
+                              '还没有匹配到元数据；可以在下面手动指定，或用剧名到站点里搜。',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        const SizedBox(height: AppSpace.xl),
+                        Wrap(
+                          spacing: AppSpace.sm,
+                          runSpacing: AppSpace.sm,
+                          children: [
+                            FilledButton.icon(
+                              key: const ValueKey('push-detail-play'),
+                              onPressed: () => _play(context),
+                              icon: const Icon(Icons.play_arrow, size: 18),
+                              label: const Text('播放'),
+                            ),
+                            OutlinedButton.icon(
+                              key: const ValueKey('push-detail-match'),
+                              onPressed: () => _match(context),
+                              icon: const Icon(Icons.manage_search, size: 18),
+                              label: Text(matched == null ? '匹配元数据' : '修改匹配'),
+                            ),
+                            TextButton.icon(
+                              key: const ValueKey('push-detail-search'),
+                              onPressed: () => _searchSites(context),
+                              icon: const Icon(Icons.search, size: 18),
+                              label: const Text('用剧名搜索站点'),
+                            ),
+                          ],
                         ),
-                      if (state.siteInActiveSource(pushSiteKey) == null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: AppSpace.sm),
-                          child: Text(
-                            '当前配置里没有可用的「推送」源（push_agent）：'
-                            '没法像普通点播那样取线路，只能直接播这条地址，'
-                            '或用剧名到站点里搜同名资源。',
-                            key: const ValueKey('push-detail-no-site-hint'),
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ),
-                      if (matched == null && state.tmdbConfig.isReady)
-                        Padding(
-                          padding: const EdgeInsets.only(top: AppSpace.sm),
-                          child: Text(
-                            '还没有匹配到元数据；可以在下面手动指定，或用剧名到站点里搜。',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ),
-                      const SizedBox(height: AppSpace.xl),
-                      Wrap(
-                        spacing: AppSpace.sm,
-                        runSpacing: AppSpace.sm,
-                        children: [
-                          FilledButton.icon(
-                            key: const ValueKey('push-detail-play'),
-                            onPressed: () => _play(context),
-                            icon: const Icon(Icons.play_arrow, size: 18),
-                            label: const Text('播放'),
-                          ),
-                          OutlinedButton.icon(
-                            key: const ValueKey('push-detail-match'),
-                            onPressed: () => _match(context),
-                            icon: const Icon(Icons.manage_search, size: 18),
-                            label: Text(matched == null ? '匹配元数据' : '修改匹配'),
-                          ),
-                          TextButton.icon(
-                            key: const ValueKey('push-detail-search'),
-                            onPressed: () => _searchSites(context),
-                            icon: const Icon(Icons.search, size: 18),
-                            label: const Text('用剧名搜索站点'),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         },

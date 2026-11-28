@@ -6,6 +6,7 @@ import '../core/epg.dart';
 import '../core/protocol.dart';
 import 'live_playback_session.dart';
 import 'player_live_line_panel.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 class PlayerLivePanel extends StatefulWidget {
@@ -93,7 +94,6 @@ class _PlayerLivePanelState extends State<PlayerLivePanel> {
     listenable: widget.session,
     builder: (context, _) {
       final session = widget.session;
-      final colors = Theme.of(context).colorScheme;
       return Actions(
         actions: <Type, Action<Intent>>{
           DismissIntent: CallbackAction<DismissIntent>(
@@ -103,102 +103,105 @@ class _PlayerLivePanelState extends State<PlayerLivePanel> {
             },
           ),
         },
-        child: Material(
-          // 半透明：面板贴右覆盖在画面上，透过它要能看见左侧还在播什么。
-          // 只用透明度、不加模糊——星等星表是平坦的场，玻璃/模糊属于装饰。
-          color: colors.surfaceContainerLow.withValues(alpha: 0.90),
-          elevation: 0,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpace.lg,
-                  AppSpace.sm,
-                  AppSpace.sm,
-                  AppSpace.sm,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '直播源 / 频道',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: AppSpace.xs),
-                          Tooltip(
-                            message:
-                                '${session.source.name} · ${session.channel.name}',
-                            child: Text(
-                              '正在播放 · ${session.source.name}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          if (session.program != null)
+        child: GlassPane(
+          blurBackdrop: false,
+          borderRadius: const BorderRadius.horizontal(
+            left: Radius.circular(AppRadius.lg),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.lg,
+                    AppSpace.sm,
+                    AppSpace.sm,
+                    AppSpace.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Text(
-                              '回看 · ${session.program!.title}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
+                              '直播源 / 频道',
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
+                            const SizedBox(height: AppSpace.xs),
+                            Tooltip(
+                              message:
+                                  '${session.source.name} · ${session.channel.name}',
+                              child: Text(
+                                '正在播放 · ${session.source.name}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                            if (session.program != null)
+                              Text(
+                                '回看 · ${session.program!.title}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (session.program != null)
+                        TextButton.icon(
+                          onPressed: session.returnToLive,
+                          icon: const Icon(Icons.live_tv, size: 18),
+                          label: const Text('回到直播'),
+                        ),
+                      IconButton(
+                        tooltip: '关闭直播抽屉（Esc）',
+                        onPressed: widget.onDismiss,
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 面板贴右后宽度收窄（520–720），三列必须共用这点宽度：
+                      // 源列固定窄栏，详情列按比例但有下限，剩下的留给频道，
+                      // 保证窄面板里频道名仍有可读宽度。
+                      final sourceWidth = (constraints.maxWidth * .2).clamp(
+                        124.0,
+                        176.0,
+                      );
+                      final detailWidth = (constraints.maxWidth * .36).clamp(
+                        200.0,
+                        280.0,
+                      );
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                            width: sourceWidth,
+                            child: _buildSources(context),
+                          ),
+                          const VerticalDivider(width: 1),
+                          Expanded(child: _buildChannels(context)),
+                          const VerticalDivider(width: 1),
+                          SizedBox(
+                            key: const ValueKey('player-live-channel-detail'),
+                            width: detailWidth,
+                            child: _buildDetail(context),
+                          ),
                         ],
-                      ),
-                    ),
-                    if (session.program != null)
-                      TextButton.icon(
-                        onPressed: session.returnToLive,
-                        icon: const Icon(Icons.live_tv, size: 18),
-                        label: const Text('回到直播'),
-                      ),
-                    IconButton(
-                      tooltip: '关闭直播抽屉（Esc）',
-                      onPressed: widget.onDismiss,
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
+                      );
+                    },
+                  ),
                 ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    // 面板贴右后宽度收窄（520–720），三列必须共用这点宽度：
-                    // 源列固定窄栏，详情列按比例但有下限，剩下的留给频道，
-                    // 保证窄面板里频道名仍有可读宽度。
-                    final sourceWidth = (constraints.maxWidth * .2).clamp(
-                      124.0,
-                      176.0,
-                    );
-                    final detailWidth = (constraints.maxWidth * .36).clamp(
-                      200.0,
-                      280.0,
-                    );
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(
-                          width: sourceWidth,
-                          child: _buildSources(context),
-                        ),
-                        const VerticalDivider(width: 1),
-                        Expanded(child: _buildChannels(context)),
-                        const VerticalDivider(width: 1),
-                        SizedBox(
-                          key: const ValueKey('player-live-channel-detail'),
-                          width: detailWidth,
-                          child: _buildDetail(context),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );

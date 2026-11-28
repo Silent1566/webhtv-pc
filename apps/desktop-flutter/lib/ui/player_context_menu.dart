@@ -44,6 +44,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 /// 菜单宽度（`design/04` §5.6：240，与 `DESIGN.md` 的对话框量级一致）。
@@ -497,7 +498,6 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
     required double maxHeight,
     required List<PlayerMenuItem> items,
   }) {
-    final theme = Theme.of(context);
     return Positioned(
       left: left,
       top: top,
@@ -513,44 +513,29 @@ class _PlayerContextMenuState extends State<PlayerContextMenu> {
         onEnter: (_) => _cancelCollapse(),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxHeight),
-          child: Material(
-            // elevation 0 + 无阴影：`DESIGN.md` 的 The Zero-Elevation Rule。
-            // 层级靠更亮的表面 + 发丝边表达，不靠投影。
-            elevation: 0,
-            color: AppPalette.nightSurface3.withValues(alpha: 0.96),
-            // 发丝边画在 `shape` 上而不是另包一层 `DecoratedBox`。
-            //
-            // 如实说明：**这不是在修一个视觉缺陷**。实测两种写法在相同整数偏移下
-            // 渲染结果逐像素相同（115200 个通道无一不同，边缘均为 `(35,43,69)`），
-            // 所以我先前的「会被裁成半像素」猜想是**错的**。
-            //
-            // 保留 `shape` 的真实理由是可断言性：圆角、边宽、边色变成
-            // `Material.shape` 上可直接读的属性，测试不必去翻内层 `DecoratedBox`。
-            // （`BorderSide` 默认 `strokeAlignInside = -1.0`，边落在内测。）
-            // `DESIGN.md` The Hairline Rule。
-            shape: RoundedRectangleBorder(
-              borderRadius: AppRadius.mdAll,
-              side: BorderSide(
-                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.72),
-              ),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: NotificationListener<ScrollNotification>(
-              // 父列滚动后行顶边会变，子列必须跟着走；滚动通知在布局阶段发出，
-              // 只能排到帧后再量。
-              onNotification: (_) {
-                _scheduleMeasure();
-                return false;
-              },
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  // 每一列都只渲染 [items]：分组标题不再是「标题 + 摊平的项」，
-                  // 而是第 1 列里的一行（见 [_visibleLevels]）。这里不再需要按
-                  // level 分支——第 2..N 列本来就是这个形状。
-                  children: [for (final item in items) _row(item, level)],
+          child: GlassPane(
+            key: ValueKey('player-menu-column-$level'),
+            blurBackdrop: false,
+            borderRadius: AppRadius.mdAll,
+            child: Material(
+              type: MaterialType.transparency,
+              child: NotificationListener<ScrollNotification>(
+                // 父列滚动后行顶边会变，子列必须跟着走；滚动通知在布局阶段发出，
+                // 只能排到帧后再量。
+                onNotification: (_) {
+                  _scheduleMeasure();
+                  return false;
+                },
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    // 每一列都只渲染 [items]：分组标题不再是「标题 + 摊平的项」，
+                    // 而是第 1 列里的一行（见 [_visibleLevels]）。这里不再需要按
+                    // level 分支——第 2..N 列本来就是这个形状。
+                    children: [for (final item in items) _row(item, level)],
+                  ),
                 ),
               ),
             ),

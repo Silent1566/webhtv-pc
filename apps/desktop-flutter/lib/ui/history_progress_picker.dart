@@ -15,6 +15,8 @@ import 'package:flutter/services.dart';
 
 import '../core/history_cross_site.dart';
 import '../core/history_view.dart';
+import 'glass_dialog.dart';
+import 'tokens.dart';
 
 /// 一条可续播记录：展示信息 + 播放所需身份。
 class HistoryProgressChoice {
@@ -67,7 +69,7 @@ Future<HistoryProgressChoice?> showHistoryProgressPicker(
   int? nowMs,
 }) {
   if (choices.isEmpty) return Future.value();
-  return showDialog<HistoryProgressChoice>(
+  return showGlassDialog<HistoryProgressChoice>(
     context: context,
     builder: (_) => _HistoryProgressPickerDialog(
       choices: choices,
@@ -77,7 +79,10 @@ Future<HistoryProgressChoice?> showHistoryProgressPicker(
 }
 
 class _HistoryProgressPickerDialog extends StatefulWidget {
-  const _HistoryProgressPickerDialog({required this.choices, required this.nowMs});
+  const _HistoryProgressPickerDialog({
+    required this.choices,
+    required this.nowMs,
+  });
 
   final List<HistoryProgressChoice> choices;
   final int nowMs;
@@ -102,6 +107,43 @@ class _HistoryProgressPickerDialogState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    const panelKey = ValueKey('history-progress-dialog');
+    final title = const Text('选择续播记录');
+    final content = SizedBox(
+      width: 560,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .55,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('同一部剧有多条可续播记录，选一条继续：', style: theme.textTheme.bodySmall),
+              const SizedBox(height: 12),
+              for (var i = 0; i < widget.choices.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _optionTile(context, i, widget.choices[i]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final actions = <Widget>[
+      TextButton(
+        key: const ValueKey('history-progress-cancel'),
+        onPressed: _cancel,
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        key: const ValueKey('history-progress-confirm'),
+        onPressed: _confirm,
+        child: const Text('播放'),
+      ),
+    ];
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): _cancel,
@@ -114,47 +156,15 @@ class _HistoryProgressPickerDialogState
       },
       child: Focus(
         autofocus: true,
-        child: AlertDialog(
-          key: const ValueKey('history-progress-dialog'),
-          title: const Text('选择续播记录'),
-          content: SizedBox(
-            width: 560,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.sizeOf(context).height * .55,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '同一部剧有多条可续播记录，选一条继续：',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: 12),
-                    for (var i = 0; i < widget.choices.length; i++)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: _optionTile(context, i, widget.choices[i]),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              key: const ValueKey('history-progress-cancel'),
-              onPressed: _cancel,
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              key: const ValueKey('history-progress-confirm'),
-              onPressed: _confirm,
-              child: const Text('播放'),
-            ),
-          ],
+        // 明暗都是玻璃面板（材质 = AppGlass，按亮度分档）。
+        // 面板的 key 不变，测试仍然按键找得到；面板外的遮罩按亮度分档，
+        // 暗色仍是 Material 默认的 black54，所以面板外像素不变。
+        child: GlassAlertDialog(
+          constraints: const BoxConstraints(maxWidth: 560 + 2 * AppSpace.xl),
+          key: panelKey,
+          title: title,
+          content: content,
+          actions: actions,
         ),
       ),
     );
@@ -239,7 +249,9 @@ class _HistoryProgressPickerDialogState
                     Text(
                       meta,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                        // 玻璃面板上的 12px 说明文字：明暗都走玻璃专用角色
+                        // （亮色 onSurface / 暗色 nightInkOnGlass，见 tokens.dart）。
+                        color: glassSecondaryInk(context),
                       ),
                     ),
                   ],

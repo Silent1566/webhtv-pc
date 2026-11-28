@@ -232,6 +232,32 @@ void main() {
   });
 
   group('showSourceSwapSheet', () {
+    testWidgets('sheet edges are unpainted with a selected source', (tester) async {
+      _useViewport(tester, 1024, 640);
+      final popped = await _openSheet(
+        tester,
+        snapshot: _twoEntriesSnapshot(),
+        onProbe: (_) async => [_line('线路')],
+      );
+      await _tapKey(tester, 'source-swap-check-site-a-100');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('source-swap-commit')), findsOneWidget);
+      final sheet = find.byKey(const ValueKey('source-swap-sheet'));
+      final lines = find.descendant(
+        of: sheet,
+        matching: find.byWidgetPredicate((widget) {
+          if (widget is! Container || widget.constraints?.maxHeight != 1) {
+            return false;
+          }
+          return widget.color != null && widget.color != Colors.transparent;
+        }),
+      );
+      expect(lines, findsNothing);
+      await _tapKey(tester, 'source-swap-close');
+      await tester.pumpAndSettle();
+      expect(await popped, isNull);
+    });
+
     testWidgets('打开就发起一次全局搜索，不等它返回', (tester) async {
       _useTallViewport(tester);
       final calls = <String>[];
@@ -293,7 +319,7 @@ void main() {
       expect(size.height, 820);
     });
 
-    testWidgets('表面色 night-surface-1、顶圆角 14、顶部一条发丝线', (tester) async {
+    testWidgets('不填实底（玻璃本体）、顶圆角 14、顶部保留 1px 间距', (tester) async {
       _useTallViewport(tester);
       await _openSheet(
         tester,
@@ -304,20 +330,21 @@ void main() {
       final sheet = find.byKey(const ValueKey('source-swap-sheet'));
       final container = tester.widget<Container>(sheet);
       final decoration = container.decoration! as BoxDecoration;
-      // 默认暗色主题下 surfaceContainerLow 就是 night-surface-1。
-      expect(decoration.color, AppPalette.nightSurface1);
+      // 暗色也是玻璃（ink-1）：本体不填实底 —— 实底会把玻璃盖住。
+      expect(decoration.color, isNull);
+      expect(
+        find.ancestor(of: sheet, matching: find.byType(BackdropFilter)),
+        findsOneWidget,
+      );
       expect(
         decoration.borderRadius,
         const BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
       );
 
-      final hairline = tester
-          .widgetList<Container>(
-            find.descendant(of: sheet, matching: find.byType(Container)),
-          )
-          .first;
-      expect(hairline.color, AppPalette.nightLine.withValues(alpha: 0.72));
-      expect(tester.getSize(find.byWidget(hairline)).height, 1);
+      final column = tester.widget<Column>(
+        find.descendant(of: sheet, matching: find.byType(Column)).first,
+      );
+      expect(tester.getSize(find.byWidget(column.children.first)).height, 1);
     });
 
     testWidgets('矮窗口按 0.86 缩放', (tester) async {

@@ -2,20 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/episode_aggregation.dart';
+import 'glass_dialog.dart';
+import 'tokens.dart';
 
 Future<EpisodeVersion?> showEpisodeVersionDialog(
   BuildContext context, {
   required EpisodeGroup group,
   String lineName = '',
   String? preferredUrl,
+  bool blurBackdrop = true,
 }) {
   if (group.versions.isEmpty) return Future.value();
-  return showDialog<EpisodeVersion>(
+  return showGlassDialog<EpisodeVersion>(
     context: context,
     builder: (_) => _EpisodeVersionDialog(
       group: group,
       lineName: lineName,
       preferredUrl: preferredUrl,
+      blurBackdrop: blurBackdrop,
     ),
   );
 }
@@ -25,10 +29,12 @@ class _EpisodeVersionDialog extends StatefulWidget {
     required this.group,
     required this.lineName,
     this.preferredUrl,
+    this.blurBackdrop = true,
   });
   final EpisodeGroup group;
   final String lineName;
   final String? preferredUrl;
+  final bool blurBackdrop;
 
   @override
   State<_EpisodeVersionDialog> createState() => _EpisodeVersionDialogState();
@@ -93,6 +99,46 @@ class _EpisodeVersionDialogState extends State<_EpisodeVersionDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    const panelKey = ValueKey('episode-version-dialog');
+    final title = Text('选择播放版本 · ${widget.group.label}');
+    final content = SizedBox(
+      width: 600,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .55,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.lineName.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    widget.lineName,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              for (var i = 0; i < widget.group.versions.length; i++)
+                _option(theme, widget.group.versions[i], i),
+            ],
+          ),
+        ),
+      ),
+    );
+    final actions = <Widget>[
+      TextButton(
+        key: const ValueKey('episode-version-cancel'),
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        key: const ValueKey('episode-version-confirm'),
+        onPressed: _confirm,
+        child: const Text('播放所选版本'),
+      ),
+    ];
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): () =>
@@ -107,47 +153,15 @@ class _EpisodeVersionDialogState extends State<_EpisodeVersionDialog> {
       },
       child: Focus(
         autofocus: true,
-        child: AlertDialog(
-          key: const ValueKey('episode-version-dialog'),
-          title: Text('选择播放版本 · ${widget.group.label}'),
-          content: SizedBox(
-            width: 600,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.sizeOf(context).height * .55,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (widget.lineName.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Text(
-                          widget.lineName,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ),
-                    for (var i = 0; i < widget.group.versions.length; i++)
-                      _option(theme, widget.group.versions[i], i),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              key: const ValueKey('episode-version-cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              key: const ValueKey('episode-version-confirm'),
-              onPressed: _confirm,
-              child: const Text('播放所选版本'),
-            ),
-          ],
+        // 明暗都是玻璃面板（材质 = AppGlass，按亮度分档）。面板的 key 不变，
+        // 测试仍然按键找得到；面板外的遮罩按亮度分档，暗色仍是 black54。
+        child: GlassAlertDialog(
+          blurBackdrop: widget.blurBackdrop,
+          constraints: const BoxConstraints(maxWidth: 600 + 2 * AppSpace.xl),
+          key: panelKey,
+          title: title,
+          content: content,
+          actions: actions,
         ),
       ),
     );

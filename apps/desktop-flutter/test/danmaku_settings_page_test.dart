@@ -27,6 +27,7 @@ import 'package:webhtv_pc/services/app_paths.dart';
 import 'package:webhtv_pc/services/log_service.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/danmaku_settings_page.dart';
+import 'package:webhtv_pc/ui/glass_dialog.dart';
 import 'package:webhtv_pc/ui/theme.dart';
 
 Future<AppState> isolatedState(WidgetTester tester) async {
@@ -162,11 +163,7 @@ void main() {
     final state = await isolatedState(tester);
     await openPage(tester, state);
 
-    await addSource(
-      tester,
-      name: '备用源',
-      url: 'https://example.test/danmaku',
-    );
+    await addSource(tester, name: '备用源', url: 'https://example.test/danmaku');
 
     expect(state.danmakuSettings.sources, hasLength(1));
     final source = state.danmakuSettings.sources.single;
@@ -201,7 +198,9 @@ void main() {
       find.byKey(const ValueKey('settings-danmaku-source-url')),
       'https://',
     );
-    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await tester.tap(
+      find.byKey(const ValueKey('settings-danmaku-source-save')),
+    );
     await settleWrites(tester);
 
     expect(state.danmakuSettings.sources, isEmpty);
@@ -215,13 +214,13 @@ void main() {
           .errorText,
       isNotNull,
     );
-    expect(find.byType(AlertDialog), findsOneWidget, reason: '错了别关，让人改');
+    expect(find.byType(GlassAlertDialog), findsOneWidget, reason: '错了别关，让人改');
 
     await tester.tap(
       find.byKey(const ValueKey('settings-danmaku-source-cancel')),
     );
     await settleWrites(tester);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(state.danmakuSettings.sources, isEmpty);
     expect(tester.takeException(), isNull);
   });
@@ -285,15 +284,14 @@ void main() {
       find.byKey(ValueKey('settings-danmaku-source-up-${ids[1]}')),
     );
     await settleWrites(tester);
-    expect(
-      state.danmakuSettings.sources.map((s) => s.name).toList(),
-      ['B', 'A'],
-      reason: '顺序即搜索顺序，上移必须真的换位',
-    );
-    expect(
-      readSources(state).map((s) => (s! as Map)['name']).toList(),
-      ['B', 'A'],
-    );
+    expect(state.danmakuSettings.sources.map((s) => s.name).toList(), [
+      'B',
+      'A',
+    ], reason: '顺序即搜索顺序，上移必须真的换位');
+    expect(readSources(state).map((s) => (s! as Map)['name']).toList(), [
+      'B',
+      'A',
+    ]);
 
     // 换位后 first 变成 B（原第二条），再把它下移必须是「移动这一条」而不是
     // 「按下标移动」：改回去的就是 A 的顺序。
@@ -305,10 +303,10 @@ void main() {
       'A',
       'B',
     ]);
-    expect(
-      readSources(state).map((s) => (s! as Map)['name']).toList(),
-      ['A', 'B'],
-    );
+    expect(readSources(state).map((s) => (s! as Map)['name']).toList(), [
+      'A',
+      'B',
+    ]);
     expect(tester.takeException(), isNull);
   });
 
@@ -357,7 +355,9 @@ void main() {
       find.byKey(const ValueKey('settings-danmaku-source-url')),
       'https://c.test/danmaku',
     );
-    await tester.tap(find.byKey(const ValueKey('settings-danmaku-source-save')));
+    await tester.tap(
+      find.byKey(const ValueKey('settings-danmaku-source-save')),
+    );
     await settleWrites(tester);
 
     expect(state.danmakuSettings.sources, hasLength(1), reason: '编辑不得新增一条');
@@ -365,7 +365,10 @@ void main() {
     expect(source.id, id, reason: 'id 是结果归属标识，改名不能换 id');
     expect(source.name, '改名');
     expect(source.url, 'https://c.test/danmaku');
-    expect((readSources(state).single! as Map)['url'], 'https://c.test/danmaku');
+    expect(
+      (readSources(state).single! as Map)['url'],
+      'https://c.test/danmaku',
+    );
     expect(find.text('改名'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -431,10 +434,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('来自本地猫源'), findsOneWidget);
-    expect(
-      DanmakuSettingsPage.summary(state),
-      '自动搜索已关 · 1 个源（本地猫源）',
-    );
+    expect(DanmakuSettingsPage.summary(state), '自动搜索已关 · 1 个源（本地猫源）');
 
     // 添加一条手填源后手填档胜出，外部来源提示必须消失（否则用户会以为两档都在搜）。
     await addSource(tester, name: '手填', url: 'https://mine.test/danmaku');
@@ -483,11 +483,7 @@ void main() {
     await tester.drag(slider, const Offset(-120, 0));
     await settleWrites(tester);
 
-    expect(
-      state.danmakuStyle.opacity,
-      lessThan(0.9),
-      reason: '向左拖必须把透明度调低',
-    );
+    expect(state.danmakuStyle.opacity, lessThan(0.9), reason: '向左拖必须把透明度调低');
     expect(state.danmakuStyle.opacity, greaterThanOrEqualTo(0.1));
     expect(tester.takeException(), isNull);
   });
@@ -560,7 +556,7 @@ void main() {
     );
     await settleWrites(tester);
 
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(state.danmakuStyle.scrollDurationMs, 25000);
     final display = readSettings(state)['danmakuDisplay'] as Map?;
     expect(display?['scrollDurationMs'], 25000, reason: '自定义值必须落盘');
@@ -595,7 +591,7 @@ void main() {
         isNotNull,
         reason: '$text 秒越界必须就地报错',
       );
-      expect(find.byType(AlertDialog), findsOneWidget, reason: '错了别关，让人改');
+      expect(find.byType(GlassAlertDialog), findsOneWidget, reason: '错了别关，让人改');
       expect(state.danmakuStyle.scrollDurationMs, 20000);
       expect(readSettings(state), before, reason: '非法输入不得写盘');
     }
@@ -604,7 +600,7 @@ void main() {
       find.byKey(const ValueKey('settings-danmaku-duration-cancel')),
     );
     await settleWrites(tester);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(GlassAlertDialog), findsNothing);
     expect(readSettings(state), before);
     expect(tester.takeException(), isNull);
   });

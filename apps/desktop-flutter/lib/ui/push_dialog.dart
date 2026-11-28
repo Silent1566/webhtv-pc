@@ -10,10 +10,14 @@
 /// 「本机输入」与「手机推来」的行为不会有分叉。
 library;
 
+import 'dart:ui' show SemanticsRole;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
+import 'glass_surface.dart';
 import 'tokens.dart';
 
 class PushDialog extends StatefulWidget {
@@ -49,7 +53,7 @@ class _PushDialogState extends State<PushDialog> {
     super.dispose();
   }
 
-  /// 落地一次推送；失败**不关窗**，原因留在按钮下方。
+  /// 落地一次推送；失败**不关窗**，原因留在窗内。
   ///
   /// 为什么不关窗再弹 toast：地址打错是常态，关窗等于让用户重开对话框、
   /// 重新粘贴；而失败原因（本地文件不存在 / 地址缺失）必须和刚填的地址同屏。
@@ -95,105 +99,144 @@ class _PushDialogState extends State<PushDialog> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.state,
+    builder: (context, _) => _buildPanel(context),
+  );
+
+  Widget _buildPanel(BuildContext context) {
     final theme = Theme.of(context);
-    // 设置里刚打开「接收推送」时地址才出现：对话框开着也要跟着刷新，
-    // 否则用户得关窗重开才能看到本机地址。
-    return ListenableBuilder(
-      listenable: widget.state,
-      builder: (context, _) => AlertDialog(
-        key: const ValueKey('push-dialog'),
-        title: const Text('推送播放'),
-        content: SizedBox(
-          width: 520,
-          child: SingleChildScrollView(
+    final ink = glassSecondaryInkOf(theme);
+    final supportingText = theme.textTheme.bodySmall?.copyWith(color: ink);
+    final actionStyle = TextButton.styleFrom(foregroundColor: ink);
+    final content = SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '手机/安卓 App 经局域网推来的地址、或本机粘贴的地址/本地文件，'
+            '都从这里起播。',
+            style: supportingText,
+          ),
+          const SizedBox(height: AppSpace.lg),
+          _receiveAddress(context),
+          const SizedBox(height: AppSpace.lg),
+          TextField(
+            key: const ValueKey('push-dialog-url'),
+            controller: _url,
+            autofocus: true,
+            onSubmitted: (_) => _submit(_url.text.trim(), _title.text.trim()),
+            decoration: const InputDecoration(
+              labelText: '播放地址',
+              hintText: 'http / magnet / 本地路径',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: AppSpace.md),
+          TextField(
+            key: const ValueKey('push-dialog-title'),
+            controller: _title,
+            onSubmitted: (_) => _submit(_url.text.trim(), _title.text.trim()),
+            decoration: const InputDecoration(
+              labelText: '剧名（可选）',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: AppSpace.sm),
+          Text(
+            '推送后先进入「推送详情」页：核对剧名与元数据，确认后再点播放；'
+            '没匹配上可以在那一页手动指定，或用剧名到站点里搜。',
+            style: supportingText,
+          ),
+        ],
+      ),
+    );
+    final actions = Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpace.sm),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height / 4,
+              ),
+              child: SingleChildScrollView(
+                primary: false,
+                child: Text(
+                  _error!,
+                  key: const ValueKey('push-dialog-error'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: AppSpace.xs,
+          children: [
+            TextButton(
+              key: const ValueKey('push-dialog-pick-file'),
+              style: actionStyle,
+              onPressed: _busy ? null : _pickLocal,
+              child: const Text('选择本地文件…'),
+            ),
+            TextButton(
+              key: const ValueKey('push-dialog-close'),
+              style: actionStyle,
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
+            ),
+            FilledButton(
+              key: const ValueKey('push-dialog-play'),
+              onPressed: _busy
+                  ? null
+                  : () => _submit(_url.text.trim(), _title.text.trim()),
+              child: Text(_busy ? '打开中…' : '打开详情'),
+            ),
+          ],
+        ),
+      ],
+    );
+    return Dialog(
+      key: const ValueKey('push-dialog'),
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      semanticsRole: SemanticsRole.alertDialog,
+      child: GlassSurface(
+        padding: const EdgeInsets.all(AppSpace.xl),
+        child: Material(
+          type: MaterialType.transparency,
+          child: SizedBox(
+            width: 520,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '手机/安卓 App 经局域网推来的地址、或本机粘贴的地址/本地文件，'
-                  '都从这里起播。',
-                  style: theme.textTheme.bodySmall,
-                ),
-                const SizedBox(height: AppSpace.lg),
-                _receiveAddress(context),
-                const SizedBox(height: AppSpace.lg),
-                TextField(
-                  key: const ValueKey('push-dialog-url'),
-                  controller: _url,
-                  autofocus: true,
-                  onSubmitted: (_) => _submit(_url.text.trim(), _title.text.trim()),
-                  decoration: const InputDecoration(
-                    labelText: '播放地址',
-                    hintText: 'http / magnet / 本地路径',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+                Semantics(
+                  namesRoute: true,
+                  child: Text(
+                    '推送播放',
+                    style:
+                        DialogTheme.of(context).titleTextStyle ??
+                        (theme.useMaterial3
+                            ? theme.textTheme.headlineSmall
+                            : theme.textTheme.titleLarge),
                   ),
                 ),
-                const SizedBox(height: AppSpace.md),
-                TextField(
-                  key: const ValueKey('push-dialog-title'),
-                  controller: _title,
-                  onSubmitted: (_) => _submit(_url.text.trim(), _title.text.trim()),
-                  decoration: const InputDecoration(
-                    labelText: '剧名（可选）',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: AppSpace.sm),
-                Text(
-                  '推送后先进入「推送详情」页：核对剧名与元数据，确认后再点播放；'
-                  '没匹配上可以在那一页手动指定，或用剧名到站点里搜。',
-                  style: theme.textTheme.bodySmall,
-                ),
+                const SizedBox(height: AppSpace.lg),
+                Flexible(child: content),
+                const SizedBox(height: AppSpace.xl),
+                actions,
               ],
             ),
           ),
         ),
-        actions: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpace.sm),
-                  child: Text(
-                    _error!,
-                    key: const ValueKey('push-dialog-error'),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.error,
-                    ),
-                  ),
-                ),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: AppSpace.xs,
-                children: [
-                  TextButton(
-                    key: const ValueKey('push-dialog-pick-file'),
-                    onPressed: _busy ? null : _pickLocal,
-                    child: const Text('选择本地文件…'),
-                  ),
-                  TextButton(
-                    key: const ValueKey('push-dialog-close'),
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('关闭'),
-                  ),
-                  FilledButton(
-                    key: const ValueKey('push-dialog-play'),
-                    onPressed: _busy
-                        ? null
-                        : () => _submit(_url.text.trim(), _title.text.trim()),
-                    child: Text(_busy ? '打开中…' : '打开详情'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }
@@ -204,12 +247,14 @@ class _PushDialogState extends State<PushDialog> {
   /// 按钮，只会让用户以为功能坏了。这里直接把去哪个开关打开写清楚。
   Widget _receiveAddress(BuildContext context) {
     final theme = Theme.of(context);
+    final ink = glassSecondaryInkOf(theme);
+    final supportingText = theme.textTheme.bodySmall?.copyWith(color: ink);
     final address = widget.state.syncState.pushPageUrl?.trim() ?? '';
     if (address.isEmpty) {
       return Text(
         '未开启接收推送：设置 · 连接 → 安卓设备接入 → 开启接收推送播放',
         key: const ValueKey('push-dialog-receive-off'),
-        style: theme.textTheme.bodySmall,
+        style: supportingText,
       );
     }
     return Column(
@@ -232,6 +277,7 @@ class _PushDialogState extends State<PushDialog> {
             const SizedBox(width: AppSpace.sm),
             TextButton.icon(
               key: const ValueKey('push-dialog-copy-url'),
+              style: TextButton.styleFrom(foregroundColor: ink),
               onPressed: () => _copy(address),
               icon: Icon(_copied ? Icons.check : Icons.copy, size: 16),
               label: Text(_copied ? '已复制' : '复制'),
@@ -239,10 +285,7 @@ class _PushDialogState extends State<PushDialog> {
           ],
         ),
         const SizedBox(height: AppSpace.xs),
-        Text(
-          '手机浏览器打开它即可推送；安卓端也可直接推送到这台 PC',
-          style: theme.textTheme.bodySmall,
-        ),
+        Text('手机浏览器打开它即可推送；安卓端也可直接推送到这台 PC', style: supportingText),
       ],
     );
   }

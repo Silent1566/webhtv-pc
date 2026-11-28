@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../core/danmaku_settings.dart';
 import '../core/danmaku_style.dart';
 import '../state/app_state.dart';
+import 'glass_dialog.dart';
 import 'settings_detail_pages.dart';
 import 'settings_layout.dart';
 import 'tokens.dart';
@@ -94,6 +95,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
       final style = state.danmakuStyle;
       return SettingsDetailScaffold(
         title: '弹幕设置',
+        wallpaperUrl: widget.state.config?.wallpaper,
         description: '显示参数与弹幕库搜索都在这里；改动即时保存。',
         children: [
           SettingsSection(title: '弹幕库', children: _librarySection(context)),
@@ -240,11 +242,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(
-        source.url,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      subtitle: Text(source.url, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -355,7 +353,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     // id 在**打开对话框时**就定下来：写盘失败后用户点第二次「确定」必须还是同
     // 一条源，否则会凭空多出一条重复地址。编辑沿用原 id，新增取一个空位 id。
     final id = editing?.id ?? _nextSourceId(state.danmakuSettings.sources);
-    await showDialog<void>(
+    await showGlassDialog<void>(
       context: context,
       builder: (_) => _DanmakuSourceDialog(
         title: editing == null ? '添加弹幕源' : '编辑弹幕源',
@@ -550,9 +548,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
         children: [
           Row(
             children: [
-              Expanded(
-                child: Text(label, style: theme.textTheme.bodyLarge),
-              ),
+              Expanded(child: Text(label, style: theme.textTheme.bodyLarge)),
               Text(
                 valueText,
                 style: theme.textTheme.bodyMedium?.copyWith(
@@ -597,7 +593,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
       contentPadding: EdgeInsets.zero,
       title: Text(title),
       subtitle: Text(subtitle),
-      trailing: DropdownButton<int>(
+      trailing: SettingsDropdown<int>(
         key: key,
         value: value,
         underline: const SizedBox.shrink(),
@@ -632,16 +628,16 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     // 当前值必须进候选（理由同 [_dropdownTile]），但哨兵不能被当成当前值：
     // 与「自定义…」项同值时，DropdownButton 会因为两个同值 item 直接断言。
     final current = style.scrollDurationMs;
-    final options = <int>{...presets, current}
-        .where((ms) => ms != _customDurationOption)
-        .toList()
-      ..sort();
+    final options = <int>{
+      ...presets,
+      current,
+    }.where((ms) => ms != _customDurationOption).toList()..sort();
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
       title: const Text('速度'),
       subtitle: const Text('滚动弹幕穿过画面的时长（越大越慢）'),
-      trailing: DropdownButton<int>(
+      trailing: SettingsDropdown<int>(
         key: const ValueKey('settings-danmaku-duration'),
         value: options.contains(current) ? current : null,
         underline: const SizedBox.shrink(),
@@ -670,7 +666,7 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
     BuildContext context,
     DanmakuStyle style,
   ) async {
-    final seconds = await showDialog<int>(
+    final seconds = await showGlassDialog<int>(
       context: context,
       builder: (context) => _DanmakuDurationDialog(
         // 预填一个合法值：手改 settings.json 写到区间外时，一打开就报红更费解。
@@ -738,9 +734,7 @@ class _DanmakuDurationDialogState extends State<_DanmakuDurationDialog> {
   void _submit() {
     final seconds = _parse();
     if (seconds == null) {
-      setState(
-        () => _error = '请输入 $_customMinSeconds–$_customMaxSeconds 的整数秒',
-      );
+      setState(() => _error = '请输入 $_customMinSeconds–$_customMaxSeconds 的整数秒');
       return;
     }
     Navigator.of(context).pop(seconds);
@@ -749,7 +743,7 @@ class _DanmakuDurationDialogState extends State<_DanmakuDurationDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('自定义时长'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -862,7 +856,7 @@ class _DanmakuSourceDialogState extends State<_DanmakuSourceDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
+    return GlassAlertDialog(
       title: Text(widget.title),
       content: Column(
         mainAxisSize: MainAxisSize.min,

@@ -822,7 +822,7 @@ void main() {
     expect(tester.getSize(banner).height, 28);
   });
 
-  testWidgets('视觉规格：分组头 36 / 条目 56 / 渠道徽章 18 / 筛选标签 32 / 行间分隔线', (
+  testWidgets('视觉规格：分组头 36 / 条目 56 / 渠道徽章 18 / 筛选标签 32 / 行间距 1', (
     tester,
   ) async {
     await _open(
@@ -851,13 +851,14 @@ void main() {
     expect(tester.getSize(_row(1)).height, 56);
     expect(tester.widget<InkWell>(_row(0)).hoverColor, scheme.surfaceContainerHighest);
 
-    // 两条目之间恰好一条分隔线。
+    // 去掉装饰线，保留原来 1px 行间距。
+    expect(tester.getRect(_row(1)).top - tester.getRect(_row(0)).bottom, 1);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('danmaku-search-results')),
         matching: find.byType(Divider),
       ),
-      findsOneWidget,
+      findsNothing,
     );
 
     // 渠道徽章：18 高、胶囊圆角 9。

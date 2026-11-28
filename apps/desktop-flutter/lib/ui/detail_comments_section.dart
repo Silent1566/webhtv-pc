@@ -45,62 +45,65 @@ class ExternalCommentsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     if (page.isEmpty) return const SizedBox.shrink();
-    return Column(
-      key: const ValueKey('detail-external-comments'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(
-          title: page.total > page.comments.length
-              ? '短评（${page.comments.length}/${page.total}）'
-              : '短评（${page.comments.length}）',
-          // 整页同源时徽标只出现一次：每条都挂一遍「豆瓣」纯属视觉噪音，
-          // 只有**混源**（以后接了第二家评论源）才需要逐条标注。
-          trailing: mixedSources
-              ? null
-              : TagChip(
-                  keyValue: 'detail-comments-source',
-                  label: page.comments.first.sourceLabel,
-                  icon: Icons.forum_outlined,
-                ),
-        ),
-        for (var i = 0; i < page.comments.length; i++)
-          Padding(
-            // 现状是 sm；多出一条星级行后，条与条之间需要更多呼吸感。
-            padding: const EdgeInsets.only(bottom: AppSpace.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _ratingLine(context, page.comments[i], i),
-                const SizedBox(height: AppSpace.xs),
-                Text(
-                  page.comments[i].text,
-                  key: ValueKey('detail-comment-text-$i'),
-                  style: theme.textTheme.bodyMedium,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: AppSpace.xs),
-                _metaLine(context, page.comments[i], i),
-              ],
-            ),
+    return Padding(
+      padding: const EdgeInsets.all(AppSpace.md),
+      child: Column(
+        key: const ValueKey('detail-external-comments'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionHeader(
+            title: page.total > page.comments.length
+                ? '短评（${page.comments.length}/${page.total}）'
+                : '短评（${page.comments.length}）',
+            // 整页同源时徽标只出现一次：每条都挂一遍「豆瓣」纯属视觉噪音，
+            // 只有**混源**（以后接了第二家评论源）才需要逐条标注。
+            trailing: mixedSources
+                ? null
+                : TagChip(
+                    keyValue: 'detail-comments-source',
+                    label: page.comments.first.sourceLabel,
+                    icon: Icons.forum_outlined,
+                  ),
           ),
-        if (page.hasMore)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              key: const ValueKey('detail-comments-more'),
-              onPressed: loadingMore ? null : onLoadMore,
-              icon: loadingMore
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.expand_more, size: 18),
-              label: Text(loadingMore ? '加载中…' : '加载更多短评'),
+          for (var i = 0; i < page.comments.length; i++)
+            Padding(
+              // 现状是 sm；多出一条星级行后，条与条之间需要更多呼吸感。
+              padding: const EdgeInsets.only(bottom: AppSpace.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _ratingLine(context, page.comments[i], i),
+                  const SizedBox(height: AppSpace.xs),
+                  Text(
+                    page.comments[i].text,
+                    key: ValueKey('detail-comment-text-$i'),
+                    style: theme.textTheme.bodyMedium,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: AppSpace.xs),
+                  _metaLine(context, page.comments[i], i),
+                ],
+              ),
             ),
-          ),
-      ],
+          if (page.hasMore)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const ValueKey('detail-comments-more'),
+                onPressed: loadingMore ? null : onLoadMore,
+                icon: loadingMore
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.expand_more, size: 18),
+                label: Text(loadingMore ? '加载中…' : '加载更多短评'),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -121,7 +124,7 @@ class ExternalCommentsSection extends StatelessWidget {
             '未评分',
             key: ValueKey('detail-comment-unrated-$index'),
             style: theme.textTheme.labelLarge?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              color: theme.colorScheme.onSurface,
             ),
           ),
         ),
@@ -162,9 +165,8 @@ class ExternalCommentsSection extends StatelessWidget {
             Text(
               score,
               key: ValueKey('detail-comment-score-$index'),
-              style: tabular(
-                theme.textTheme.labelLarge!,
-              ).copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: tabular(theme.textTheme.labelLarge!)
+                  .copyWith(color: theme.colorScheme.onSurface),
             ),
           ],
         ),
@@ -195,7 +197,7 @@ class ExternalCommentsSection extends StatelessWidget {
               if (comment.date.isNotEmpty) comment.date.split(' ').first,
             ].join(' · '),
             style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              color: theme.colorScheme.onSurface,
             ),
           ),
         ),

@@ -61,6 +61,7 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
     final generation = _mediaGeneration;
     final service = _subtitleService(timeout: const Duration(seconds: 15));
     final selected = await showSubtitleSearchDialog(
+      blurBackdrop: false,
       context: context,
       initialQuery: _subtitleQuery(),
       search: (query) => service.searchReport(query: query, settings: settings),
@@ -100,7 +101,8 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
     var input = '';
     final path = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassAlertDialog(
+        blurBackdrop: false,
         title: const Text('本地字幕文件'),
         content: TextField(
           onChanged: (value) => input = value,
@@ -166,9 +168,8 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
             excludeId: primaryId,
           )
         : const <PlayerTrackOption>[];
-    final selected = await showModalBottomSheet<Object>(
+    final selected = await showPlayerGlassSheet<Object>(
       context: context,
-      showDragHandle: true,
       builder: (context) => SafeArea(
         child: ListView(
           shrinkWrap: true,
@@ -481,9 +482,8 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
 
   Future<void> _showSubtitleStyleSettings() async {
     var draft = _subtitleStyle;
-    final result = await showModalBottomSheet<SubtitleStyle>(
+    final result = await showPlayerGlassSheet<SubtitleStyle>(
       context: context,
-      showDragHandle: true,
       isScrollControlled: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => SafeArea(
@@ -518,15 +518,18 @@ extension _PlayerPageSubtitleMenu on _PlayerPageState {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: Color(choice.value),
-                            border: Border.all(
-                              color: draft.textColorValue == choice.value
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.white54,
-                              width: draft.textColorValue == choice.value
-                                  ? 3
-                                  : 1,
-                            ),
                           ),
+                          child: draft.textColorValue == choice.value
+                              ? Icon(
+                                  Icons.check,
+                                  size: 20,
+                                  color:
+                                      Color(choice.value).computeLuminance() >
+                                          0.5
+                                      ? Colors.black
+                                      : Colors.white,
+                                )
+                              : null,
                         ),
                       ),
                   ],

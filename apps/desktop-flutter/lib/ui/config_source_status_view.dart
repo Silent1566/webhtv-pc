@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import '../core/protocol.dart';
 import '../services/config_source_status.dart';
 import '../services/storage.dart';
+import 'glass_widgets.dart';
 import 'tokens.dart';
 
 String _reason(ConfigSourceStatus status) =>
     status.availability == ConfigSourceAvailability.unreadable
-        ? '来源文件无法读取'
-        : '来源文件已丢失';
+    ? '来源文件无法读取'
+    : '来源文件已丢失';
 
 const _recovery = '刷新不可用；请恢复来源文件、编辑来源地址或切换配置。';
 
@@ -67,7 +68,9 @@ class _ConfigSourceStatusViewState extends State<ConfigSourceStatusView> {
             final status = snapshot.connectionState == ConnectionState.done
                 ? snapshot.data
                 : null;
-            if (status == null || !status.needsAttention || status.recordId != record.id) {
+            if (status == null ||
+                !status.needsAttention ||
+                status.recordId != record.id) {
               return const SizedBox.shrink();
             }
             final color = context.semanticColors.statusDegraded;
@@ -79,11 +82,14 @@ class _ConfigSourceStatusViewState extends State<ConfigSourceStatusView> {
                   children: [
                     Icon(Icons.warning_amber_rounded, color: color, size: 16),
                     const SizedBox(width: AppSpace.xs),
-                    Expanded(child: Text(
-                      '${_reason(status)} · 使用缓存',
-                      key: ValueKey('config-source-warning-${record.id}'),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
-                    )),
+                    Expanded(
+                      child: Text(
+                        '${_reason(status)} · 使用缓存',
+                        key: ValueKey('config-source-warning-${record.id}'),
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: color),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -115,39 +121,66 @@ class RestoredConfigSourceBanner extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('${status.name}：${_reason(status)} · 使用缓存',
-          style: theme.textTheme.bodyMedium?.copyWith(color: color)),
+        Text(
+          '${status.name}：${_reason(status)} · 使用缓存',
+          style: theme.textTheme.bodyMedium?.copyWith(color: color),
+        ),
         Text(_recovery, style: theme.textTheme.bodySmall),
       ],
     );
     final actions = Wrap(
       spacing: AppSpace.xs,
       children: [
-        TextButton(key: const ValueKey('config-source-manage'),
-          onPressed: onManage, child: const Text('管理配置')),
-        TextButton(key: const ValueKey('config-source-dismiss'),
-          onPressed: onDismiss, child: const Text('关闭提示')),
+        TextButton(
+          key: const ValueKey('config-source-manage'),
+          onPressed: onManage,
+          child: const Text('管理配置'),
+        ),
+        TextButton(
+          key: const ValueKey('config-source-dismiss'),
+          onPressed: onDismiss,
+          child: const Text('关闭提示'),
+        ),
       ],
     );
-    return Container(
+    return GlassPane(
       key: const ValueKey('config-source-restored-warning'),
-      width: double.infinity,
-      color: theme.colorScheme.surfaceContainerLow,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl, vertical: AppSpace.sm),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final content = constraints.maxWidth < 720
-            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [text, actions])
-            : Row(children: [Expanded(child: text), const SizedBox(width: AppSpace.sm), actions]);
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(padding: const EdgeInsets.only(top: AppSpace.xs),
-              child: Icon(Icons.warning_amber_rounded, size: 18, color: color)),
-            const SizedBox(width: AppSpace.sm),
-            Expanded(child: content),
-          ],
-        );
-      }),
+      blurBackdrop: false,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.xl,
+        vertical: AppSpace.sm,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final content = constraints.maxWidth < 720
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [text, actions],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: text),
+                    const SizedBox(width: AppSpace.sm),
+                    actions,
+                  ],
+                );
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: AppSpace.xs),
+                child: Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: AppSpace.sm),
+              Expanded(child: content),
+            ],
+          );
+        },
+      ),
     );
   }
 }

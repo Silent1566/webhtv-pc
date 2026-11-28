@@ -11,6 +11,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../core/protocol.dart';
+import 'glass_widgets.dart';
 
 /// 画质面板的稳定标识（测试与语义断言用）。
 const Key playerQualityPanelKey = ValueKey('player-quality-panel');
@@ -65,59 +66,68 @@ class PlayerQualityPanel extends StatelessWidget {
     final theme = Theme.of(context);
     return Dialog(
       key: playerQualityPanelKey,
-      backgroundColor: const Color(0xFF16181D),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 360, maxHeight: 480),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 12, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+        child: GlassPane(
+          blurBackdrop: false,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
-                    ),
+                      IconButton(
+                        tooltip: '关闭',
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    tooltip: '关闭',
-                    icon: const Icon(Icons.close, size: 20),
-                    onPressed: () => Navigator.of(context).pop(),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: qualities.length,
+                    itemBuilder: (context, index) {
+                      final selected = index == selectedIndex;
+                      return ListTile(
+                        key: playerQualityOptionKey(index),
+                        selected: selected,
+                        title: Text(
+                          playbackQualityLabel(qualities[index], index),
+                        ),
+                        // 标选定项：勾选图标 + 强调色，不靠颜色单独区分。
+                        trailing: selected
+                            ? Icon(
+                                Icons.check,
+                                size: 20,
+                                color: theme.colorScheme.primary,
+                              )
+                            : null,
+                        onTap: () => Navigator.of(context).pop(index),
+                      );
+                    },
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const Divider(height: 1),
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: qualities.length,
-                itemBuilder: (context, index) {
-                  final selected = index == selectedIndex;
-                  return ListTile(
-                    key: playerQualityOptionKey(index),
-                    selected: selected,
-                    title: Text(playbackQualityLabel(qualities[index], index)),
-                    // 标选定项：勾选图标 + 强调色，不靠颜色单独区分。
-                    trailing: selected
-                        ? Icon(
-                            Icons.check,
-                            size: 20,
-                            color: theme.colorScheme.primary,
-                          )
-                        : null,
-                    onTap: () => Navigator.of(context).pop(index),
-                  );
-                },
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

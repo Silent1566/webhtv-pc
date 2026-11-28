@@ -20,6 +20,7 @@ import '../services/spider_registry.dart';
 import '../state/app_state.dart';
 import 'common.dart';
 import 'local_sources_page.dart';
+import 'settings_layout.dart';
 import 'shell_unpack_dialogs.dart';
 
 /// 从设置页 push 打开 Spider 管理页。
@@ -29,8 +30,8 @@ import 'shell_unpack_dialogs.dart';
 Future<void> openSpiderPage(BuildContext context, AppState state) =>
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('Spider')),
+        builder: (_) => SettingsRouteScaffold(
+          title: const Text('Spider'),
           body: SpiderPage(state: state),
         ),
       ),
@@ -88,16 +89,14 @@ class _SpiderPageState extends State<SpiderPage> {
         children: [
           Row(
             children: [
-              Text(
-                'Spider 运行时',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text('Spider 运行时', style: Theme.of(context).textTheme.titleLarge),
               const Spacer(),
-              if (_scanning) const SizedBox(
-                width: 16,
-                height: 16,
-                child: LoadingBlock(center: false, size: 16),
-              ),
+              if (_scanning)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: LoadingBlock(center: false, size: 16),
+                ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 key: const ValueKey('spider-local-sources-open'),
@@ -172,8 +171,7 @@ class _IsolationNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.surfaceContainerHighest,
+    return SettingsGlassCard(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -217,7 +215,7 @@ class _LocalSpiderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final manifest = spider.manifest;
-    return Card(
+    return SettingsGlassCard(
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -242,7 +240,9 @@ class _LocalSpiderCard extends StatelessWidget {
                     child: Chip(
                       label: const Text('入口缺失'),
                       visualDensity: VisualDensity.compact,
-                      backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .errorContainer,
                     ),
                   ),
               ],
@@ -268,9 +268,7 @@ class _LocalSpiderCard extends StatelessWidget {
             if (manifest.permissions.violations.isNotEmpty)
               Text(
                 '权限越界:${manifest.permissions.violations.join(", ")}（该 manifest 会被拒绝加载）',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                ),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             const SizedBox(height: 4),
             Text(
@@ -299,7 +297,7 @@ class _RuntimeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final running = status.state == SpiderRuntimeState.running;
-    return Card(
+    return SettingsGlassCard(
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -346,8 +344,10 @@ class _RuntimeCard extends StatelessWidget {
                 '已协商能力:${(status.initResult!.capabilities.toList()..sort()).join(", ")}',
               ),
             if (status.isolation != null)
-              Text('隔离:${status.isolation!.level} '
-                  '机制=${status.isolation!.mechanisms.join("+")}'),
+              Text(
+                '隔离:${status.isolation!.level} '
+                '机制=${status.isolation!.mechanisms.join("+")}',
+              ),
             if (status.isolation != null)
               for (final limitation in status.isolation!.limitations)
                 Text(
@@ -355,8 +355,10 @@ class _RuntimeCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
             if (status.failureCount > 0)
-              Text('失败次数:${status.failureCount} '
-                  '退避=${status.restartDelay.inMilliseconds}ms'),
+              Text(
+                '失败次数:${status.failureCount} '
+                '退避=${status.restartDelay.inMilliseconds}ms',
+              ),
             if (status.lastError != null)
               Text(
                 '最近错误:${status.lastError}',
@@ -385,7 +387,7 @@ class _ProxyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return SettingsGlassCard(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -403,12 +405,16 @@ class _ProxyCard extends StatelessWidget {
             Row(
               children: [
                 FilledButton(
-                  onPressed: state.proxyRunning ? null : () => state.startProxy(),
+                  onPressed: state.proxyRunning
+                      ? null
+                      : () => state.startProxy(),
                   child: const Text('启动代理'),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton(
-                  onPressed: state.proxyRunning ? () => state.stopProxy() : null,
+                  onPressed: state.proxyRunning
+                      ? () => state.stopProxy()
+                      : null,
                   child: const Text('停止并释放端口'),
                 ),
               ],
@@ -651,7 +657,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final installed = _state.installedCspJars;
-    return Card(
+    return SettingsGlassCard(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -710,7 +716,6 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
               controller: _path,
               decoration: const InputDecoration(
                 labelText: '入口路径（jar 文件或含 .class 的目录）',
-                border: OutlineInputBorder(),
                 isDense: true,
               ),
             ),
@@ -720,7 +725,6 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
               controller: _siteKey,
               decoration: const InputDecoration(
                 labelText: '站点 key（例 csp_Demo，须与配置里的 api 一致）',
-                border: OutlineInputBorder(),
                 isDense: true,
               ),
             ),
@@ -750,10 +754,7 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                   if (_busyNote.isNotEmpty) ...[
                     const SizedBox(width: 8),
                     Flexible(
-                      child: Text(
-                        _busyNote,
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      child: Text(_busyNote, style: theme.textTheme.bodySmall),
                     ),
                   ],
                 ],
@@ -815,15 +816,9 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                 ),
             ],
             const SizedBox(height: 12),
-            Text(
-              '已导入（${installed.length}）',
-              style: theme.textTheme.titleSmall,
-            ),
+            Text('已导入（${installed.length}）', style: theme.textTheme.titleSmall),
             if (installed.isEmpty)
-              Text(
-                '还没有导入任何 T3 桌面站源。',
-                style: theme.textTheme.bodySmall,
-              ),
+              Text('还没有导入任何 T3 桌面站源。', style: theme.textTheme.bodySmall),
             for (final jar in installed)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -850,7 +845,9 @@ class _CspJarIntakeCardState extends State<_CspJarIntakeCard> {
                         const SizedBox(width: 8),
                         TextButton(
                           key: ValueKey('csp-jar-remove-${jar.siteKey}'),
-                          onPressed: _busy ? null : () => _onRemove(jar.siteKey),
+                          onPressed: _busy
+                              ? null
+                              : () => _onRemove(jar.siteKey),
                           child: const Text('移除'),
                         ),
                       ],

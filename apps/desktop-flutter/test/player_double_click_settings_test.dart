@@ -13,6 +13,7 @@ import 'package:webhtv_pc/services/ui_preferences_store.dart';
 import 'package:webhtv_pc/state/app_state.dart';
 import 'package:webhtv_pc/ui/settings_detail_pages.dart';
 import 'package:webhtv_pc/ui/theme.dart';
+import 'package:webhtv_pc/ui/settings_layout.dart';
 
 const _captureKey = ValueKey('double-click-settings-capture');
 const _labels = <PlayerDoubleClickAction, String>{
@@ -275,7 +276,7 @@ void main() {
         await tester.pumpAndSettle();
         final focused = FocusManager.instance.primaryFocus?.context
             ?.findAncestorWidgetOfExactType<
-              DropdownButton<PlayerDoubleClickAction>
+              SettingsDropdown<PlayerDoubleClickAction>
             >();
         if (focused?.key ==
             const ValueKey('settings-player-double-click-left-menu')) {
@@ -284,7 +285,7 @@ void main() {
       }
       final focused = FocusManager.instance.primaryFocus?.context
           ?.findAncestorWidgetOfExactType<
-            DropdownButton<PlayerDoubleClickAction>
+            SettingsDropdown<PlayerDoubleClickAction>
           >();
       expect(
         focused?.key,

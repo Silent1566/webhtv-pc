@@ -4,6 +4,8 @@ import '../../core/reader/reader_models.dart';
 import '../../services/app_paths.dart';
 import '../../services/reader/reader_tts_controller.dart';
 import '../../services/reader/tts_engines.dart';
+import '../glass_dialog.dart';
+import '../settings_layout.dart';
 
 /// 音源显示名（面板与状态栏共用，避免两处文案漂移）。
 String readerSourceLabel(TtsSource source) => switch (source) {
@@ -63,61 +65,57 @@ class _ReaderPageState extends State<ReaderPage> {
   Widget build(BuildContext context) {
     final controller = _controller;
     final paragraphs = _paragraphs;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.play_arrow),
-            tooltip: '开始朗读',
-            onPressed: paragraphs.isEmpty
-                ? null
-                : () => controller.start(
-                    paragraphs: paragraphs,
-                    title: widget.title,
-                  ),
-          ),
-          AnimatedBuilder(
-            animation: controller,
-            builder: (context, _) => IconButton(
-              icon: Icon(
-                controller.state == ReaderTtsState.paused
-                    ? Icons.play_arrow
-                    : Icons.pause,
-              ),
-              tooltip: controller.state == ReaderTtsState.paused
-                  ? '继续朗读'
-                  : '暂停',
-              onPressed: controller.isActive ? controller.toggle : null,
+    return SettingsRouteScaffold(
+      title: Text(widget.title),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.play_arrow),
+          tooltip: '开始朗读',
+          onPressed: paragraphs.isEmpty
+              ? null
+              : () => controller.start(
+                  paragraphs: paragraphs,
+                  title: widget.title,
+                ),
+        ),
+        AnimatedBuilder(
+          animation: controller,
+          builder: (context, _) => IconButton(
+            icon: Icon(
+              controller.state == ReaderTtsState.paused
+                  ? Icons.play_arrow
+                  : Icons.pause,
             ),
+            tooltip: controller.state == ReaderTtsState.paused ? '继续朗读' : '暂停',
+            onPressed: controller.isActive ? controller.toggle : null,
           ),
-          IconButton(
-            icon: const Icon(Icons.stop),
-            tooltip: '停止',
-            onPressed: () => controller.stop(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.skip_previous),
-            tooltip: '上一段',
-            onPressed: controller.previous,
-          ),
-          IconButton(
-            icon: const Icon(Icons.skip_next),
-            tooltip: '下一段',
-            onPressed: controller.next,
-          ),
-          IconButton(
-            icon: const Icon(Icons.timer_outlined),
-            tooltip: '定时朗读',
-            onPressed: _pickTimer,
-          ),
-          IconButton(
-            icon: const Icon(Icons.tune),
-            tooltip: '朗读设置',
-            onPressed: _openSettings,
-          ),
-        ],
-      ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.stop),
+          tooltip: '停止',
+          onPressed: () => controller.stop(),
+        ),
+        IconButton(
+          icon: const Icon(Icons.skip_previous),
+          tooltip: '上一段',
+          onPressed: controller.previous,
+        ),
+        IconButton(
+          icon: const Icon(Icons.skip_next),
+          tooltip: '下一段',
+          onPressed: controller.next,
+        ),
+        IconButton(
+          icon: const Icon(Icons.timer_outlined),
+          tooltip: '定时朗读',
+          onPressed: _pickTimer,
+        ),
+        IconButton(
+          icon: const Icon(Icons.tune),
+          tooltip: '朗读设置',
+          onPressed: _openSettings,
+        ),
+      ],
       body: AnimatedBuilder(
         animation: controller,
         builder: (context, _) => Column(
@@ -156,9 +154,9 @@ class _ReaderPageState extends State<ReaderPage> {
 
   Future<void> _pickTimer() async {
     var minutes = _controller.timerMinutes == 0 ? 15 : _controller.timerMinutes;
-    final selected = await showDialog<int>(
+    final selected = await showGlassDialog<int>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         title: const Text('定时朗读'),
         content: StatefulBuilder(
           builder: (context, setDialogState) => RadioGroup<int>(
@@ -189,7 +187,7 @@ class _ReaderPageState extends State<ReaderPage> {
     if (selected != null) await _controller.setTimer(selected);
   }
 
-  Future<void> _openSettings() => showDialog<void>(
+  Future<void> _openSettings() => showGlassDialog<void>(
     context: context,
     builder: (dialogContext) =>
         ReaderTtsSettingsDialog(controller: _controller),
@@ -274,7 +272,8 @@ class _ReaderTtsSettingsDialogState extends State<ReaderTtsSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     final options = controller.options;
-    return AlertDialog(
+    return GlassAlertDialog(
+      constraints: const BoxConstraints(maxWidth: 528),
       title: const Text('朗读设置'),
       content: SizedBox(
         width: 480,
@@ -315,7 +314,7 @@ class _ReaderTtsSettingsDialogState extends State<ReaderTtsSettingsDialog> {
                 ),
               ],
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
+              SettingsDropdownField<String>(
                 initialValue: _voices.any((voice) => voice.id == options.voice)
                     ? options.voice
                     : null,

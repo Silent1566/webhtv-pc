@@ -13,6 +13,7 @@ import '../detail_recommendations.dart' show detailRecommendationRowHeight;
 import '../recommendation_info_dialog.dart';
 import '../scroll_behavior.dart';
 import '../tokens.dart';
+import '../glass_widgets.dart';
 
 /// 详情页推荐区**最下面一行**的 AI 推荐：缓存优先 + 需要时自动刷新。
 ///
@@ -34,6 +35,7 @@ class AiRecommendationSection extends StatefulWidget {
     this.onOpenItem,
     this.onSearchTitle,
     this.title = 'AI 推荐',
+    this.framed = true,
   });
 
   final AppState state;
@@ -50,8 +52,11 @@ class AiRecommendationSection extends StatefulWidget {
   /// 区块标题。带来源前缀，避免和其它推荐行的「推荐」混淆。
   final String title;
 
+  final bool framed;
+
   @override
-  State<AiRecommendationSection> createState() => _AiRecommendationSectionState();
+  State<AiRecommendationSection> createState() =>
+      _AiRecommendationSectionState();
 }
 
 class _AiRecommendationSectionState extends State<AiRecommendationSection> {
@@ -249,83 +254,87 @@ class _AiRecommendationSectionState extends State<AiRecommendationSection> {
       return const SizedBox.shrink();
     }
     final theme = Theme.of(context);
-    return Column(
-      key: const ValueKey('recommendation-section-ai'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SectionHeader(
-          title: widget.title,
-          keyValue: 'recommendation-heading-ai',
-        ),
-        if (_cards.isEmpty && _loading)
-          Text(
-            '正在生成推荐…',
-            key: const ValueKey('recommendation-ai-loading'),
-            style: theme.textTheme.labelSmall,
+    final content = Material(
+      type: MaterialType.transparency,
+      child: Column(
+        key: const ValueKey('recommendation-section-ai'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(
+            title: widget.title,
+            keyValue: 'recommendation-heading-ai',
           ),
-        if (_cards.isNotEmpty)
-          SizedBox(
-            height: detailRecommendationRowHeight(context),
-            child: HorizontalMouseDrag(
-              child: ListView.separated(
-                key: const ValueKey('recommendation-row-ai'),
-                scrollDirection: Axis.horizontal,
-                physics: const AlwaysScrollableScrollPhysics(),
-                itemCount: _cards.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 10),
-                itemBuilder: (context, index) {
-                  final card = _cards[index];
-                  return SizedBox(
-                    width: 130,
-                    child: GestureDetector(
-                      onSecondaryTap: () => _info(card),
-                      child: InkWell(
-                        key: ValueKey('recommendation-ai-${card.title}'),
-                        onTap: () => _open(card),
-                        onLongPress: () => _info(card),
-                        borderRadius: BorderRadius.circular(8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: SizedBox(
-                                height: 180,
-                                child: PosterImage(url: card.posterUrl),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              card.title,
-                              style: theme.textTheme.bodySmall,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              _meta(card),
-                              style: theme.textTheme.labelSmall,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        if (_message.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpace.xs),
-            child: Text(
-              _message,
-              key: const ValueKey('recommendation-ai-message'),
+          if (_cards.isEmpty && _loading)
+            Text(
+              '正在生成推荐…',
+              key: const ValueKey('recommendation-ai-loading'),
               style: theme.textTheme.labelSmall,
             ),
-          ),
-      ],
+          if (_cards.isNotEmpty)
+            SizedBox(
+              height: detailRecommendationRowHeight(context),
+              child: HorizontalMouseDrag(
+                child: ListView.separated(
+                  key: const ValueKey('recommendation-row-ai'),
+                  scrollDirection: Axis.horizontal,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  itemCount: _cards.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) {
+                    final card = _cards[index];
+                    return SizedBox(
+                      width: 130,
+                      child: GestureDetector(
+                        onSecondaryTap: () => _info(card),
+                        child: InkWell(
+                          key: ValueKey('recommendation-ai-${card.title}'),
+                          onTap: () => _open(card),
+                          onLongPress: () => _info(card),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: SizedBox(
+                                  height: 180,
+                                  child: PosterImage(url: card.posterUrl),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                card.title,
+                                style: theme.textTheme.bodySmall,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                _meta(card),
+                                style: theme.textTheme.labelSmall,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          if (_message.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.xs),
+              child: Text(
+                _message,
+                key: const ValueKey('recommendation-ai-message'),
+                style: theme.textTheme.labelSmall,
+              ),
+            ),
+        ],
+      ),
     );
+    return widget.framed ? GlassPane(blurBackdrop: false, child: content) : content;
   }
 }
