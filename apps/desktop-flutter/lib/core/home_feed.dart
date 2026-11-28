@@ -200,10 +200,15 @@ HomeFeed buildHomeFeed({
   final claimed = _Claimed();
   final followingRail = _claim(_followingItems(followings), claimed);
   final resumeRail = _claim(_resumeItems(history, liveSiteKeys), claimed);
-  final tmdbRail = _claim(_recommendationItems(tmdbRecommendations), claimed);
+  final tmdbRail = _claim(
+    _recommendationItems(tmdbRecommendations),
+    claimed,
+    max: tmdbRecommendations.length,
+  );
   final doubanRail = _claim(
     _recommendationItems(doubanRecommendations),
     claimed,
+    max: doubanRecommendations.length,
   );
 
   return HomeFeed(

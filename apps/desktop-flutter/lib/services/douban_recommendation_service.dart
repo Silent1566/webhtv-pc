@@ -61,8 +61,11 @@ class DoubanRecommendationService {
     int offset = 0,
     int pageSize = 12,
     Set<String> blockedTitles = const {},
+    void Function(String)? diagnostic,
   }) async {
-    if (_closed) return const RecommendationPage();
+    if (_closed) return const RecommendationPage(endReason: 'closed');
+    final outcomes = <String>{};
+    void outcome(String value) => outcomes.add(value);
     final start = math.max(0, offset);
     final limit = pageSize <= 0 ? 12 : pageSize;
     final excluded = <String>{
@@ -106,6 +109,7 @@ class DoubanRecommendationService {
           Uri.https('movie.douban.com', '/j/subject_suggest', {
             'q': seed.title.trim(),
           }),
+          outcome: outcome,
         ),
       );
       final isCurrent =
@@ -123,9 +127,13 @@ class DoubanRecommendationService {
       for (final subject
           in wantsFallback ? const <_Subject>[] : _matches(seed, suggestions)) {
         if (subject.id.isEmpty || !lookedUp.add(subject.key)) continue;
-        var subjects = _subjects(await _related('movie', subject.id));
+        var subjects = _subjects(
+          await _related('movie', subject.id, outcome: outcome),
+        );
         if (subjects.isEmpty) {
-          subjects = _subjects(await _related('tv', subject.id));
+          subjects = _subjects(
+            await _related('tv', subject.id, outcome: outcome),
+          );
         }
         if (subjects.isEmpty) continue;
         _add(
@@ -150,6 +158,22 @@ class DoubanRecommendationService {
     // call for the same fingerprint may have committed the other pool kind
     // while this call was awaiting HTTP, so re-select the committed pool here
     // instead of appending whatever this call ranked on its own.
+    final retryable = outcomes.any(
+      (v) => v == 'blocked' || v == 'failed' || v == 'unknown_response',
+    );
+    if (retryable && related.isEmpty && fallback.isEmpty) {
+      diagnostic?.call(
+        'event=source_pool source=douban outcomes=${outcomes.join(',')} reason=source_failed_retryable poolCount=0 upstreamLimit=unknown',
+      );
+      return RecommendationPage(
+        nextOffset: start,
+        hasMore: true,
+        retryable: true,
+        endReason: outcomes.contains('blocked')
+            ? 'blocked_retryable'
+            : 'source_failed_retryable',
+      );
+    }
     final snapshot = _snapshot(snapshotKey, usesFallback: related.isEmpty)!;
     for (final candidate in _rank(snapshot.usesFallback ? fallback : related)) {
       if (snapshot.keys.add(_rowKey(candidate.entry))) {
@@ -188,10 +212,26 @@ class DoubanRecommendationService {
         entries.add(entry);
       }
     }
+    final hasMore = end < ranked.length || loadedSeeds < seeds.length;
+    final reason = retryable
+        ? outcomes.contains('blocked')
+              ? 'blocked_retryable'
+              : 'source_failed_retryable'
+        : hasMore
+        ? 'source_available'
+        : ranked.isEmpty
+        ? 'source_empty'
+        : 'subject_pool_depleted';
+    diagnostic?.call(
+      'event=source_pool source=douban seedCount=${seeds.length} seedsLoaded=$loadedSeeds poolCount=${ranked.length} selected=${selected.length} returned=${entries.length} filteredCount=${selected.length - entries.length} outcomes=${outcomes.join(',')} hasMore=$hasMore reason=$reason upstreamLimit=unknown',
+    );
     return RecommendationPage(
       items: entries,
       nextOffset: start + selected.length,
-      hasMore: end < ranked.length || loadedSeeds < seeds.length,
+      hasMore: hasMore || retryable,
+      endReason: reason,
+      poolCount: ranked.length,
+      retryable: retryable,
     );
   }
 
@@ -269,11 +309,16 @@ class DoubanRecommendationService {
     return [for (final item in scored) item.subject];
   }
 
-  Future<Object?> _related(String type, String id) => _request(
+  Future<Object?> _related(
+    String type,
+    String id, {
+    void Function(String)? outcome,
+  }) => _request(
     Uri.https('m.douban.com', '/rexxar/api/v2/$type/$id/related_items', {
       'start': '0',
       'count': '10',
     }),
+    outcome: outcome,
     referer: 'https://m.douban.com/movie/subject/$id/',
   );
 
@@ -717,23 +762,36 @@ class DoubanRecommendationService {
   Future<Object?> _request(
     Uri uri, {
     String referer = 'https://movie.douban.com/',
+    void Function(String)? outcome,
   }) {
-    final result = _queue.then((_) => _requestSerial(uri, referer));
+    final result = _queue.then((_) => _requestSerial(uri, referer, outcome));
     _queue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
 
-  Future<Object?> _requestSerial(Uri uri, String referer) async {
-    if (_closed) return null;
+  Future<Object?> _requestSerial(
+    Uri uri,
+    String referer,
+    void Function(String)? outcome,
+  ) async {
+    if (_closed) {
+      outcome?.call('closed');
+      return null;
+    }
     final key = uri.toString();
+    final memory = _memory.containsKey(key);
     final cached = _read(key);
     if (cached != null &&
         !_clock().isBefore(cached.time) &&
         _clock().difference(cached.time) < const Duration(days: 7)) {
+      outcome?.call(memory ? 'memory_cache' : 'disk_cache');
       return cached.body;
     }
     _loadCooldown();
-    if (_blockedUntil?.isAfter(_clock()) ?? false) return cached?.body;
+    if (_blockedUntil?.isAfter(_clock()) ?? false) {
+      outcome?.call('blocked');
+      return cached?.body;
+    }
     try {
       final last = _lastRequest;
       if (last != null) {
@@ -765,6 +823,7 @@ class DoubanRecommendationService {
       if ([403, 418, 429].contains(response.statusCode) ||
           _challenge(response.body)) {
         _blockedUntil = _clock().add(const Duration(minutes: 30));
+        outcome?.call('blocked');
         _writeFile('request_cooldown.json', {
           'until': _blockedUntil!.millisecondsSinceEpoch,
         });
@@ -773,16 +832,22 @@ class DoubanRecommendationService {
       if (response.statusCode < 200 ||
           response.statusCode >= 300 ||
           response.bodyBytes.length > 2 * 1024 * 1024) {
+        outcome?.call('failed');
         return cached?.body;
       }
       final body = jsonDecode(utf8.decode(response.bodyBytes));
-      if (body is! List && body is! Map) return cached?.body;
+      if (body is! List && body is! Map) {
+        outcome?.call('unknown_response');
+        return cached?.body;
+      }
       if (body is Map &&
           (body.containsKey('error') ||
               body.containsKey('msg') ||
               body.containsKey('message'))) {
+        outcome?.call('unknown_response');
         return cached?.body;
       }
+      outcome?.call('network');
       final saved = _CachedResponse(_clock(), body);
       _memory[key] = saved;
       _writeFile(_fileName(key), {
@@ -792,6 +857,7 @@ class DoubanRecommendationService {
       });
       return body;
     } catch (_) {
+      outcome?.call('failed');
       return cached?.body;
     }
   }

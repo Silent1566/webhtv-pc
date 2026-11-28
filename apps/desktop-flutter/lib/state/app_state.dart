@@ -7984,6 +7984,12 @@ class AppState extends ChangeNotifier
   Future<List<SearchSuggestItem>> searchHotRank(HotRankCategory category) =>
       searchSuggestService.hotRank(category);
 
+  Future<List<SearchSuggestItem>> homeHotRank(HotRankCategory category) async {
+    final items = await searchHotRank(category);
+    if (items.isEmpty) return items;
+    return searchSuggestService.hotSnapshot(category) ?? items;
+  }
+
   /// 删除单条搜索历史（未 bootstrap 时安静跳过）。
   ///
   /// 先通知、后落盘（乐观更新）：内存是唯一真相，写盘只影响下次启动。

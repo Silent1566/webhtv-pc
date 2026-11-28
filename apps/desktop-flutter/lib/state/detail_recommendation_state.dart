@@ -91,6 +91,7 @@ class DetailRecommendationDependencies {
               offset: r.offset,
               pageSize: r.pageSize,
               blockedTitles: r.blockedTitles,
+              diagnostic: r.diagnostic,
             ),
             RecommendationRow.douban: (r) => douban.personal(
               current: r.current,
@@ -98,6 +99,7 @@ class DetailRecommendationDependencies {
               offset: r.offset,
               pageSize: r.pageSize,
               blockedTitles: r.blockedTitles,
+              diagnostic: r.diagnostic,
             ),
           },
           () {
@@ -189,6 +191,7 @@ class RecommendationRequest {
     this.offset = 0,
     this.pageSize = 12,
     this.blockedTitles = const {},
+    this.diagnostic,
   });
   final RecommendationSeed current;
   final List<RecommendationSeed> history;
@@ -196,6 +199,7 @@ class RecommendationRequest {
   final bool sourceOnly, embeddedRelated;
   final int offset, pageSize;
   final Set<String> blockedTitles;
+  final void Function(String)? diagnostic;
 
   RecommendationRequest atOffset(int value) => RecommendationRequest(
     current: current,
@@ -206,6 +210,7 @@ class RecommendationRequest {
     offset: value,
     pageSize: pageSize,
     blockedTitles: blockedTitles,
+    diagnostic: diagnostic,
   );
 }
 
@@ -216,10 +221,13 @@ Future<RecommendationPage> loadUnwatchedRecommendationPage({
   required RecommendationWatchStore? watched,
   int? Function()? visibleTarget,
   bool Function()? isCurrent,
+  void Function(int, RecommendationPage)? onPage,
 }) async {
   final items = <RecommendationEntry>[];
   var offset = request.offset;
   var hasMore = false;
+  var last = const RecommendationPage();
+  var partialFailure = false;
   for (var batch = 0; batch < 8; batch++) {
     final RecommendationPage page;
     try {
@@ -227,9 +235,12 @@ Future<RecommendationPage> loadUnwatchedRecommendationPage({
     } catch (_) {
       if (isCurrent?.call() == false) return const RecommendationPage();
       if (items.isEmpty) rethrow;
+      partialFailure = true;
       break;
     }
+    onPage?.call(offset, page);
     if (isCurrent?.call() == false) return const RecommendationPage();
+    last = page;
     items.addAll(page.items);
     hasMore = page.hasMore && page.nextOffset > offset;
     offset = page.nextOffset;
@@ -245,7 +256,14 @@ Future<RecommendationPage> loadUnwatchedRecommendationPage({
       break;
     }
   }
-  return RecommendationPage(items: items, nextOffset: offset, hasMore: hasMore);
+  return RecommendationPage(
+    items: items,
+    nextOffset: offset,
+    hasMore: hasMore,
+    endReason: partialFailure ? 'partial_failure' : last.endReason,
+    poolCount: last.poolCount,
+    retryable: partialFailure || last.retryable,
+  );
 }
 
 class RecommendationRowState {

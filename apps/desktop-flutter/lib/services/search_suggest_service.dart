@@ -102,6 +102,10 @@ class SearchSuggestService {
   /// 且需要比一屏更多的候选才能轮换出**新**条目。360kan 单类目实测返回 30 条，
   /// 这里就取全量 30；显示几条由 `HotRankLayout` 算。
   final int hotPoolLimit;
+  final _hotSnapshots = <HotRankCategory, List<SearchSuggestItem>>{};
+  final _hotOutcomes = <HotRankCategory, String>{};
+  String? hotOutcome(HotRankCategory category) => _hotOutcomes[category];
+  List<SearchSuggestItem>? hotSnapshot(HotRankCategory category) => _hotSnapshots[category];
 
   /// 联想合并上限（上游 `SearchSuggest.LIMIT = 20`）。
   static const int suggestLimit = 20;
@@ -233,33 +237,59 @@ class SearchSuggestService {
   /// 失败链路：请求失败 → 尝试**过期缓存**兜底（上游 Setting 缓存正是这个语义，
   /// 断网时上次榜单仍可用）→ 仍无则空表。
   Future<List<SearchSuggestItem>> hotRank(HotRankCategory category) async {
-    if (_closed) return const [];
+    if (_closed) {
+      _hotOutcomes[category] = 'closed';
+      return const [];
+    }
+    _hotOutcomes[category] = 'loading';
     final cacheFile = _hotCacheFile(category);
-    final cached = await _readHotCache(cacheFile, allowExpired: false);
+    final cached = await _readHotCache(
+      cacheFile,
+      category: category,
+      allowExpired: false,
+    );
     if (cached != null) return cached;
     final uri = Uri.https('api.web.360kan.com', '/v1/rank', {
       'cat': '${category.remoteValue}',
     });
-    final body = await _getJson(uri, headers: {
-      'Referer': 'https://www.360kan.com/rank/general',
-    });
+    final body = await _getJson(
+      uri,
+      headers: {'Referer': 'https://www.360kan.com/rank/general'},
+    );
     if (body != null) {
-      final items = _parseHotRank(body);
+      final items = _parseHotRank(body, category: category, source: 'network');
       if (items.isNotEmpty) {
         await _writeHotCache(cacheFile, body);
         return items;
       }
     }
     // 断网兜底：过期缓存总比空榜好（上游一样：缓存只在拿到新结果时覆盖）。
-    return await _readHotCache(cacheFile, allowExpired: true) ?? const [];
+    final fallback = await _readHotCache(
+      cacheFile,
+      category: category,
+      allowExpired: true,
+    );
+    if (fallback != null) return fallback;
+    if (body == null) _hotOutcomes[category] = 'fetch_failed';
+    return const [];
   }
 
-  List<SearchSuggestItem> _parseHotRank(String body) {
+  List<SearchSuggestItem> _parseHotRank(
+    String body, {
+    required HotRankCategory category,
+    required String source,
+  }) {
     try {
       final decoded = jsonDecode(body);
-      if (decoded is! Map) return const [];
+      if (decoded is! Map) {
+        _hotOutcomes[category] = 'unknown_response';
+        return const [];
+      }
       final data = decoded['data'];
-      if (data is! List) return const [];
+      if (data is! List) {
+        _hotOutcomes[category] = 'unknown_response';
+        return const [];
+      }
       final items = <SearchSuggestItem>[];
       for (final item in data) {
         if (item is! Map) continue;
@@ -275,11 +305,20 @@ class SearchSuggestService {
             rank: items.length + 1,
           ),
         );
-        if (items.length >= hotPoolLimit) break;
       }
-      return items;
+      _hotSnapshots[category] = List.unmodifiable(items);
+      _hotOutcomes[category] = items.isEmpty ? 'snapshot_empty' : source;
+      final selected = items
+          .take(hotPoolLimit <= 0 ? 1 : hotPoolLimit)
+          .toList();
+      _log?.info(
+        'event=hot_snapshot provider=hot_${category.name} source=$source rawCount=${data.length} validCount=${items.length} returned=${selected.length} localLimit=$hotPoolLimit truncated=${items.length > selected.length ? 'local_limit' : 'none'} mode=single_snapshot upstreamLimit=unknown',
+        scope: 'home-pagination',
+      );
+      return selected;
     } catch (error) {
-      _log?.debug('热门榜单解析失败：$error', scope: 'search');
+      _hotOutcomes[category] = 'unknown_response';
+      _log?.debug('热门榜单解析失败 errorType=${error.runtimeType}', scope: 'search');
       return const [];
     }
   }
@@ -306,6 +345,7 @@ class SearchSuggestService {
   Future<List<SearchSuggestItem>?> _readHotCache(
     String? file, {
     required bool allowExpired,
+    required HotRankCategory category,
   }) async {
     if (file == null) return null;
     try {
@@ -320,7 +360,11 @@ class SearchSuggestService {
       if (fetchedTime == null) return null;
       final age = DateTime.now().difference(fetchedTime);
       if (!allowExpired && (age.isNegative || age > hotCacheTtl)) return null;
-      final items = _parseHotRank(body);
+      final items = _parseHotRank(
+        body,
+        category: category,
+        source: allowExpired ? 'stale_cache' : 'fresh_cache',
+      );
       return items.isEmpty ? null : items;
     } catch (_) {
       // 缓存损坏按 miss 处理。
@@ -342,7 +386,7 @@ class SearchSuggestService {
       );
     } catch (error) {
       // 缓存写失败不影响结果。
-      _log?.debug('热门榜单缓存写入失败：$error', scope: 'search');
+      _log?.debug('热门榜单缓存写入失败 errorType=${error.runtimeType}', scope: 'search');
     }
   }
 
@@ -364,7 +408,7 @@ class SearchSuggestService {
       }
       return utf8.decode(response.bodyBytes, allowMalformed: true);
     } catch (error) {
-      _log?.debug('联想/热搜请求失败 ${uri.host}：$error', scope: 'search');
+      _log?.debug('联想/热搜请求失败 ${uri.host} errorType=${error.runtimeType}', scope: 'search');
       return null;
     }
   }
